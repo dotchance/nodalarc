@@ -6,9 +6,11 @@
  */
 
 import type { NodeState, LinkState } from "../types";
+import { isGroundLinkState, nodeDisplayLabel } from "../networkIdentity";
 
 export interface LayoutNode {
   id: string;
+  label: string;
   x: number;
   y: number;
   type: string;
@@ -91,6 +93,7 @@ export function computeLayout(
         const sat = planeSats[i]!;
         layoutNodes.push({
           id: sat.node_id,
+          label: nodeDisplayLabel(sat),
           x: bandX,
           y: MARGIN + i * NODE_SPACING_Y,
           type: "satellite",
@@ -129,6 +132,7 @@ export function computeLayout(
           const y = MARGIN + i * NODE_SPACING_Y;
           layoutNodes.push({
             id: sat.node_id,
+            label: nodeDisplayLabel(sat),
             x,
             y,
             type: "satellite",
@@ -165,6 +169,7 @@ export function computeLayout(
     const gs = gss[i]!;
     layoutNodes.push({
       id: gs.node_id,
+      label: nodeDisplayLabel(gs),
       x: gsStartX + i * GS_SPACING,
       y: gsY,
       type: "ground_station",
@@ -199,7 +204,7 @@ export function computeLayout(
     nodeA: l.node_a,
     nodeB: l.node_b,
     state: l.state,
-    isGround: l.node_a.startsWith("gs-") || l.node_b.startsWith("gs-"),
+    isGround: isGroundLinkState(l),
     isCrossArea: nodeAreaMap.get(l.node_a) !== nodeAreaMap.get(l.node_b),
   }));
 

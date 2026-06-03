@@ -10,8 +10,8 @@
  * 1 straight segment, NaN = hidden segment, in-place interleaved-buffer upload (no
  * per-frame allocation), 2x-headroom capacity with deterministic growth, fail-flash
  * (hold FAIL_HOLD_MS red, fade FAIL_FADE_MS to inactive, then hide), classification by
- * `gs-` prefix, sorted link key. Endpoints are re-resolved every frame, so a beam tracks
- * a propagating satellite with zero lag.
+ * LinkState.link_type, sorted link key. Endpoints are re-resolved every frame, so a beam
+ * tracks a propagating satellite with zero lag.
  */
 
 import * as THREE from "three";
@@ -29,6 +29,7 @@ import {
   FAIL_FADE_MS,
 } from "../../config";
 import type { LinkState } from "../../types";
+import { isGroundLinkState } from "../../networkIdentity";
 
 const SEGMENTS_PER_ISL = 16;
 const MIN_ISL_SLOTS = 200;
@@ -56,10 +57,6 @@ const _posB = new THREE.Vector3();
 
 export function linkKey(a: string, b: string): string {
   return a < b ? `${a}:${b}` : `${b}:${a}`;
-}
-
-export function isGroundLink(nodeA: string, nodeB: string): boolean {
-  return nodeA.startsWith("gs-") || nodeB.startsWith("gs-");
 }
 
 function writeBowedSegments(buffer: Float32Array, offset: number, a: THREE.Vector3, b: THREE.Vector3): void {
@@ -201,11 +198,13 @@ export class LinkBatch {
     this.growBuffers(requiredIslSlots, requiredGndSlots);
   }
 
-  private addLinkEntry(nodeA: string, nodeB: string): LinkEntry {
+  private addLinkEntry(link: LinkState): LinkEntry {
+    const nodeA = link.node_a;
+    const nodeB = link.node_b;
     const key = linkKey(nodeA, nodeB);
     const existing = this.links.get(key);
     if (existing) return existing;
-    const ground = isGroundLink(nodeA, nodeB);
+    const ground = isGroundLinkState(link);
     let bi: number;
     if (ground) {
       if (this.usedGndSlots >= this.maxGndSlots) this.ensureCapacity(this.usedIslSlots, this.usedGndSlots + 1);
@@ -233,7 +232,7 @@ export class LinkBatch {
     const gndKeys = new Set<string>();
     for (const ls of linkStates) {
       const key = linkKey(ls.node_a, ls.node_b);
-      if (isGroundLink(ls.node_a, ls.node_b)) gndKeys.add(key);
+      if (isGroundLinkState(ls)) gndKeys.add(key);
       else islKeys.add(key);
     }
     this.maxIslSlots = Math.max(islKeys.size * 2, MIN_ISL_SLOTS);
@@ -247,7 +246,7 @@ export class LinkBatch {
     this.colorBuffer.fill(0);
     this.usedIslSlots = 0;
     this.usedGndSlots = 0;
-    for (const ls of linkStates) this.addLinkEntry(ls.node_a, ls.node_b);
+    for (const ls of linkStates) this.addLinkEntry(ls);
     this.geometry = this.createGeometry(this.positionBuffer, this.colorBuffer);
     this.material = new LineMaterial({
       color: 0xffffff,
@@ -271,7 +270,7 @@ export class LinkBatch {
     for (const ls of linkStates) {
       const key = linkKey(ls.node_a, ls.node_b);
       active.add(key);
-      const entry = this.links.get(key) ?? this.addLinkEntry(ls.node_a, ls.node_b);
+      const entry = this.links.get(key) ?? this.addLinkEntry(ls);
       if (entry.state !== "active" && ls.state === "active") {
         entry.upTime = now;
         entry.failTime = null;

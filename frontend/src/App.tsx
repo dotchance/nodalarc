@@ -25,6 +25,7 @@ import { useSessionSwitcher } from "./hooks/useSessionSwitcher";
 import { usePlayback } from "./hooks/usePlayback";
 import { useAppState } from "./hooks/useAppState";
 import { filterSnapshotForRender, nodeSegmentId } from "./filters/renderSnapshot";
+import { selectionTypeForNode } from "./networkIdentity";
 import { SessionWizard } from "./catalog/SessionWizard";
 import { WS_URL, fetchApiKey } from "./config";
 import { setLabelsEnabled, getLabelsEnabled } from "./globe/labels";
@@ -61,15 +62,21 @@ function AppInner() {
   const { snapshot, ephemeris, playbackState, connected, hasEverConnected, kicked, sessionTransitioning, sessionError, switchDetail, historicalMode, setHistoricalMode, fetchHistorical, historicalError, sendMessage } =
     useSnapshot();
   const { selection, select, clearSelection, anchorGsId } = useSelection();
+  const preselectedAppliedRef = useRef(false);
 
   useEffect(() => {
+    if (preselectedAppliedRef.current || !snapshot) return;
     const params = new URLSearchParams(window.location.search);
     const preselected = params.get("selected");
-    if (preselected) {
-      const type = preselected.startsWith("gs-") ? "ground_station" as const : "satellite" as const;
-      select({ type, id: preselected });
+    if (!preselected) {
+      preselectedAppliedRef.current = true;
+      return;
     }
-  }, [select]);
+    const node = snapshot.nodes.find((candidate) => candidate.node_id === preselected);
+    if (!node) return;
+    select({ type: selectionTypeForNode(node), id: preselected });
+    preselectedAppliedRef.current = true;
+  }, [snapshot, select]);
 
   const { switching } = useSessionSwitcher(snapshot?.session_status ?? null);
   const playback = usePlayback(snapshot?.playback_paused, snapshot?.playback_speed);

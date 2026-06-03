@@ -65,7 +65,7 @@ export function drawNode(
   ctx.font = "9px monospace";
   ctx.textAlign = "center";
   const label = node.type === "ground_station"
-    ? node.id.replace("gs-", "")
+    ? node.label
     : `P${String(node.plane ?? 0).padStart(2, "0")}S${String(node.slot ?? 0).padStart(2, "0")}`;
   ctx.fillText(label, node.x, node.y + radius + 12);
 }

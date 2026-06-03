@@ -7,6 +7,7 @@
 
 import { useMemo } from "react";
 import type { StateSnapshot } from "../types";
+import { isGroundLinkState } from "../networkIdentity";
 
 interface DashboardProps {
   snapshot: StateSnapshot | null;
@@ -18,8 +19,8 @@ export function Dashboard({ snapshot }: DashboardProps) {
 
     const satCount = snapshot.nodes.filter((n) => n.node_type === "satellite").length;
     const gsCount = snapshot.nodes.filter((n) => n.node_type === "ground_station").length;
-    const islLinks = snapshot.links.filter((l) => !l.node_a.startsWith("gs-") && !l.node_b.startsWith("gs-")).length;
-    const gsLinks = snapshot.links.filter((l) => l.node_a.startsWith("gs-") || l.node_b.startsWith("gs-")).length;
+    const gsLinks = snapshot.links.filter((l) => isGroundLinkState(l)).length;
+    const islLinks = snapshot.links.length - gsLinks;
     const activeLinks = snapshot.links.filter((l) => l.state === "active").length;
 
     let simTimeStr = "";

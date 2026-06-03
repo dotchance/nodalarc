@@ -12,6 +12,7 @@ import { candidateStatus } from "../explain/derive";
 import { CandidateRow } from "../explain/components/CandidateRow";
 import { GroundStationCard } from "../explain/components/GroundStationCard";
 import { PairInspectorView } from "../explain/components/PairInspectorView";
+import { selectionTypeForNodeId } from "../networkIdentity";
 
 interface GroundStationDetailProps {
   node: NodeState;
@@ -25,6 +26,7 @@ export function GroundStationDetail({ node, snapshot, onSelect }: GroundStationD
   const [tracingFlow, setTracingFlow] = useState<string | null>(null);
   const [inspectedSat, setInspectedSat] = useState<string | null>(null);
   const [decisions, setDecisions] = useState<GroundDecisionsSnapshot | null>(null);
+  const [candidateError, setCandidateError] = useState<string | null>(null);
   const [timelineLimit, setTimelineLimit] = useState(120);
   const explanation = useDecisionExplanation(node.node_id);
   const decisionTimeline = useDecisionTimeline(node.node_id, timelineLimit);
@@ -35,12 +37,18 @@ export function GroundStationDetail({ node, snapshot, onSelect }: GroundStationD
     // Clear the previous GS's slice immediately so a stale cross-node candidate never
     // renders for a moment after switching stations.
     setDecisions(null);
+    setCandidateError(null);
     const load = async () => {
       try {
         const snap = await fetchGroundDecisions(node.node_id, controller.signal);
-        if (alive) setDecisions(snap);
-      } catch {
-        // candidate list is non-essential; leave prior state on transient errors
+        if (alive) {
+          setDecisions(snap);
+          setCandidateError(null);
+        }
+      } catch (err) {
+        if (!alive || (err instanceof DOMException && err.name === "AbortError")) return;
+        setDecisions(null);
+        setCandidateError(err instanceof Error ? err.message : "ground-link-decisions request failed");
       }
     };
     void load();
@@ -69,7 +77,8 @@ export function GroundStationDetail({ node, snapshot, onSelect }: GroundStationD
   const terminalCount = connectedLinks.length;
 
   const selectPeer = (peerId: string) => {
-    const type = peerId.startsWith("gs-") ? "ground_station" : "satellite";
+    const type = selectionTypeForNodeId(peerId, snapshot.nodes);
+    if (type === null) return;
     onSelect({ type, id: peerId });
   };
 
@@ -146,6 +155,12 @@ export function GroundStationDetail({ node, snapshot, onSelect }: GroundStationD
             />
           ))}
         </>
+      ) : null}
+      {candidateError ? (
+        <div className="detail-row">
+          <span className="detail-label">Candidates</span>
+          <span className="detail-value">Unavailable: {candidateError}</span>
+        </div>
       ) : null}
       <div className="detail-row">
         <span className="detail-label">Role</span>

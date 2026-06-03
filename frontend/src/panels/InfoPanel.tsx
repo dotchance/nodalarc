@@ -116,7 +116,12 @@ export function InfoPanel({
         onMouseDown={handleDragStart}
       />
       <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column", minHeight: 0 }}>
-        <EventLog events={snapshot.recent_events} onSelect={onSelect} onFlyTo={onFlyTo} />
+        <EventLog
+          events={snapshot.recent_events}
+          nodes={snapshot.nodes}
+          onSelect={onSelect}
+          onFlyTo={onFlyTo}
+        />
       </div>
     </div>
   );

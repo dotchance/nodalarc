@@ -3,20 +3,11 @@
 /** Network summary — shown when nothing is selected. */
 
 import type { StateSnapshot, Selection } from "../types";
+import { isGroundLinkState } from "../networkIdentity";
 
 interface NetworkSummaryProps {
   snapshot: StateSnapshot;
   onSelect: (sel: Selection | null) => void;
-}
-
-/** Classify a link by its endpoint node IDs. */
-function classifyLink(nodeA: string, nodeB: string): "ground" | "intra_plane" | "cross_plane" {
-  if (nodeA.startsWith("gs-") || nodeB.startsWith("gs-")) return "ground";
-  // Parse plane from sat-P00S05 format
-  const planeA = nodeA.match(/sat-P(\d+)/)?.[1];
-  const planeB = nodeB.match(/sat-P(\d+)/)?.[1];
-  if (planeA != null && planeB != null && planeA === planeB) return "intra_plane";
-  return "cross_plane";
 }
 
 export function NetworkSummary({ snapshot, onSelect: _onSelect }: NetworkSummaryProps) {
@@ -24,15 +15,14 @@ export function NetworkSummary({ snapshot, onSelect: _onSelect }: NetworkSummary
   const gss = snapshot.nodes.filter((n) => n.node_type === "ground_station");
   const activeLinks = snapshot.links.filter((l) => l.state === "active");
 
-  // Link breakdown by type (derived from node IDs)
+  // Link breakdown by authoritative link_type.
   let intraCount = 0;
   let crossCount = 0;
   let groundCount = 0;
   for (const l of activeLinks) {
-    const cls = classifyLink(l.node_a, l.node_b);
-    if (cls === "intra_plane") intraCount++;
-    else if (cls === "cross_plane") crossCount++;
-    else groundCount++;
+    if (isGroundLinkState(l)) groundCount++;
+    else if (l.link_type === "intra_plane_isl") intraCount++;
+    else crossCount++;
   }
 
   // Area breakdown: count nodes and links per area

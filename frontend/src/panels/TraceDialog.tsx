@@ -4,9 +4,10 @@
  *  per-hop latency, netem delays, and path validity countdown.
  */
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { REST_URL, authHeaders } from "../config";
 import type { NodeState, TracedPath, StateSnapshot } from "../types";
+import { isGroundNode } from "../networkIdentity";
 
 interface TraceDialogProps {
   nodes: NodeState[];
@@ -32,6 +33,7 @@ export function TraceDialog({ nodes, selectedNodeId, onTraceResult, snapshot }: 
     if (a.node_type !== b.node_type) return a.node_type === "ground_station" ? -1 : 1;
     return a.node_id.localeCompare(b.node_id);
   });
+  const nodesById = useMemo(() => new Map(nodes.map((node) => [node.node_id, node])), [nodes]);
 
   // Get continuous trace result from WebSocket snapshot
   const tp = snapshot?.traced_paths?.find(p => p.flow_id === "__continuous_trace__") ?? null;
@@ -151,12 +153,12 @@ export function TraceDialog({ nodes, selectedNodeId, onTraceResult, snapshot }: 
           <div style={{ display: "flex", gap: 12 }}>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontSize: 9, fontWeight: 600, color: "var(--text-dim)", textTransform: "uppercase" as const, letterSpacing: "0.05em", marginBottom: 4 }}>Forward</div>
-              <HopList hops={tp.hops} hopRtts={tp.hop_rtts} />
+              <HopList hops={tp.hops} hopRtts={tp.hop_rtts} nodesById={nodesById} />
             </div>
             {tp.reverse_hops && tp.reverse_hops.length > 0 && (
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: 9, fontWeight: 600, color: "var(--text-dim)", textTransform: "uppercase" as const, letterSpacing: "0.05em", marginBottom: 4 }}>Reverse</div>
-                <HopList hops={tp.reverse_hops} hopRtts={tp.reverse_hop_rtts} />
+                <HopList hops={tp.reverse_hops} hopRtts={tp.reverse_hop_rtts} nodesById={nodesById} />
               </div>
             )}
           </div>
@@ -187,14 +189,23 @@ export function TraceDialog({ nodes, selectedNodeId, onTraceResult, snapshot }: 
 }
 
 /** Render a hop list with per-hop latency from real cumulative RTT data. */
-function HopList({ hops, hopRtts }: { hops: string[]; hopRtts?: (number | null)[] }) {
+function HopList({
+  hops,
+  hopRtts,
+  nodesById,
+}: {
+  hops: string[];
+  hopRtts?: (number | null)[];
+  nodesById: ReadonlyMap<string, NodeState>;
+}) {
   return (
     <div style={{
       fontFamily: "JetBrains Mono, monospace", fontSize: 10, lineHeight: 1.8,
       background: "rgba(0,0,0,0.25)", borderRadius: 4, padding: "6px 8px",
     }}>
       {hops.map((hop, i) => {
-        const isGS = hop.startsWith("gs-");
+        const node = nodesById.get(hop);
+        const isGS = node ? isGroundNode(node) : false;
         const rtt = hopRtts?.[i] ?? null;
         const prevRtt = i > 0 ? (hopRtts?.[i - 1] ?? null) : null;
         // Per-hop delay = delta between consecutive cumulative RTTs from tracepath

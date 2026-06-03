@@ -25,9 +25,10 @@
 import { useEffect, useRef, type MutableRefObject } from "react";
 import * as THREE from "three";
 import { useThree } from "@react-three/fiber";
-import { linkKey, isGroundLink } from "./linkBatch";
+import { linkKey } from "./linkBatch";
 import { getNodeWorldPosition } from "./positions";
 import type { LinkState, Selection } from "../../types";
+import { isGroundLinkState } from "../../networkIdentity";
 
 // Legacy gpuPicker.ts LINK_HIT_THRESHOLD (NDC units).
 const LINK_HIT_THRESHOLD = 0.02;
@@ -66,7 +67,7 @@ function hitTestLinks(
   let bestKey: string | null = null;
   for (const ls of links) {
     if (ls.state !== "active") continue;
-    const ground = isGroundLink(ls.node_a, ls.node_b);
+    const ground = isGroundLinkState(ls);
     if (ground ? !showGnd : !showIsl) continue;
     if (!getNodeWorldPosition(ls.node_a, _a)) continue;
     if (!getNodeWorldPosition(ls.node_b, _b)) continue;

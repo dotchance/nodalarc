@@ -1,7 +1,7 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
 /** LinkBatch buffer behaviour: ISL = 16-segment bowed arc, ground = 1 straight segment,
- *  NaN = hidden (inactive / toggled-off / unresolved), classification by gs- prefix. The
+ *  NaN = hidden (inactive / toggled-off / unresolved), classification by link_type. The
  *  injectable position source lets us assert exact buffer contents without a renderer. */
 
 import { describe, it, expect, beforeEach } from "vitest";
@@ -12,7 +12,7 @@ import type { LinkState } from "../../../types";
 const POS: Record<string, [number, number, number]> = {
   "sat-a": [100, 0, 0],
   "sat-b": [0, 100, 0],
-  "gs-x": [70, 70, 10],
+  "ground-gs-x": [70, 70, 10],
 };
 const getPos = (id: string, t: THREE.Vector3): boolean => {
   const p = POS[id];
@@ -28,12 +28,17 @@ const getPos = (id: string, t: THREE.Vector3): boolean => {
   return true;
 };
 
-function link(node_a: string, node_b: string, state: string): LinkState {
+function link(
+  node_a: string,
+  node_b: string,
+  state: string,
+  link_type: LinkState["link_type"] = "intra_plane_isl",
+): LinkState {
   return {
     node_a,
     node_b,
     state,
-    link_type: null,
+    link_type,
     link_reason: null,
     latency_ms: 1,
     bandwidth_mbps: 1,
@@ -63,28 +68,37 @@ describe("LinkBatch", () => {
     batch = new LinkBatch(getPos);
   });
 
-  it("classifies links: ISL = 16 segments, ground (gs- prefix) = 1 segment", () => {
-    batch.update([link("sat-a", "sat-b", "active"), link("gs-x", "sat-a", "active")], parent, 0);
+  it("classifies links: ISL = 16 segments, ground link_type = 1 segment", () => {
+    batch.update([
+      link("sat-a", "sat-b", "active"),
+      link("ground-gs-x", "sat-a", "active", "ground"),
+    ], parent, 0);
     expect(batch._debugEntry("sat-a", "sat-b")?.segmentCount).toBe(16);
-    expect(batch._debugEntry("gs-x", "sat-a")?.segmentCount).toBe(1);
+    expect(batch._debugEntry("ground-gs-x", "sat-a")?.segmentCount).toBe(1);
   });
 
   it("renders an active ISL as finite bowed segments and an inactive link as NaN", () => {
-    batch.update([link("sat-a", "sat-b", "active"), link("sat-a", "gs-x", "inactive")], parent, 0);
+    batch.update([
+      link("sat-a", "sat-b", "active"),
+      link("sat-a", "ground-gs-x", "inactive", "ground"),
+    ], parent, 0);
     batch.animate(true, true, 0);
     const buf = batch._debugPositions()!;
     const isl = batch._debugEntry("sat-a", "sat-b")!;
-    const inactive = batch._debugEntry("sat-a", "gs-x")!;
+    const inactive = batch._debugEntry("sat-a", "ground-gs-x")!;
     expect(segIsFinite(buf, isl.bufferIndex, 16)).toBe(true);
     expect(segIsNaN(buf, inactive.bufferIndex, 1)).toBe(true);
   });
 
   it("hides ISL links when showIslLinks is false but keeps ground links", () => {
-    batch.update([link("sat-a", "sat-b", "active"), link("gs-x", "sat-a", "active")], parent, 0);
+    batch.update([
+      link("sat-a", "sat-b", "active"),
+      link("ground-gs-x", "sat-a", "active", "ground"),
+    ], parent, 0);
     batch.animate(false, true, 0);
     const buf = batch._debugPositions()!;
     const isl = batch._debugEntry("sat-a", "sat-b")!;
-    const gnd = batch._debugEntry("gs-x", "sat-a")!;
+    const gnd = batch._debugEntry("ground-gs-x", "sat-a")!;
     expect(segIsNaN(buf, isl.bufferIndex, 16)).toBe(true);
     expect(segIsFinite(buf, gnd.bufferIndex, 1)).toBe(true);
   });

@@ -5,10 +5,12 @@
 import React, { useRef, useEffect, useState, useMemo, useCallback } from "react";
 import { EventFilter } from "./EventFilter";
 import { formatTimeShort } from "../translate";
-import type { RecentEvent, Selection } from "../types";
+import type { NodeState, RecentEvent, Selection } from "../types";
+import { isGroundNode, selectionTypeForNode } from "../networkIdentity";
 
 interface EventLogProps {
   events: RecentEvent[];
+  nodes: NodeState[];
   onSelect: (sel: Selection | null) => void;
   onFlyTo?: (nodeId: string) => void;
 }
@@ -30,8 +32,8 @@ function abbreviateType(eventType: string): string {
   return TYPE_ABBREV[eventType] ?? eventType.toUpperCase().replace(/_/g, " ");
 }
 
-function abbreviateNodeId(nodeId: string): string {
-  if (nodeId.startsWith("gs-")) return nodeId.replace("gs-", "");
+function abbreviateNodeId(nodeId: string, node?: NodeState): string {
+  if (node && isGroundNode(node)) return node.local_node_id ?? node.node_id;
   const match = nodeId.match(/P(\d+)S(\d+)/);
   if (match) return `P${match[1]}S${match[2]}`;
   return nodeId;
@@ -77,7 +79,11 @@ const COLUMN_DEFS: Record<ColKey, ColDef> = {
 
 const DEFAULT_COL_ORDER: ColKey[] = ["time", "node", "type", "summary"];
 
-function renderCell(e: RecentEvent, col: ColKey): React.ReactNode {
+function renderCell(
+  e: RecentEvent,
+  col: ColKey,
+  nodesById: ReadonlyMap<string, NodeState>,
+): React.ReactNode {
   switch (col) {
     case "time":
       return <span className="event-time">{formatTimeShort(e.sim_time)}</span>;
@@ -88,7 +94,7 @@ function renderCell(e: RecentEvent, col: ColKey): React.ReactNode {
         </span>
       );
     case "node":
-      return <span className="event-node">{abbreviateNodeId(e.node_id)}</span>;
+      return <span className="event-node">{abbreviateNodeId(e.node_id, nodesById.get(e.node_id))}</span>;
     case "summary":
       return <span className="event-summary">{e.summary}</span>;
   }
@@ -103,7 +109,7 @@ function sortValue(e: RecentEvent, col: ColKey): string {
   }
 }
 
-export function EventLog({ events, onSelect, onFlyTo }: EventLogProps) {
+export function EventLog({ events, nodes, onSelect, onFlyTo }: EventLogProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [autoScroll, setAutoScroll] = useState(true);
   const [filters, setFilters] = useState(DEFAULT_FILTERS);
@@ -112,6 +118,7 @@ export function EventLog({ events, onSelect, onFlyTo }: EventLogProps) {
   const [colOrder, setColOrder] = useState<ColKey[]>(DEFAULT_COL_ORDER);
   const dragColRef = useRef<ColKey | null>(null);
   const [dragOverCol, setDragOverCol] = useState<ColKey | null>(null);
+  const nodesById = useMemo(() => new Map(nodes.map((node) => [node.node_id, node])), [nodes]);
 
   const handleColumnClick = useCallback((key: ColKey) => {
     if (sortKey === key) {
@@ -188,7 +195,9 @@ export function EventLog({ events, onSelect, onFlyTo }: EventLogProps) {
 
   const handleEventClick = (event: RecentEvent) => {
     if (event.node_id) {
-      const type = event.node_id.startsWith("gs-") ? "ground_station" : "satellite";
+      const node = nodesById.get(event.node_id);
+      if (!node) return;
+      const type = selectionTypeForNode(node);
       onSelect({ type, id: event.node_id });
       onFlyTo?.(event.node_id);
     }
@@ -239,7 +248,7 @@ export function EventLog({ events, onSelect, onFlyTo }: EventLogProps) {
           <div className="event-entry" key={i} onClick={() => handleEventClick(e)}>
             {colOrder.map((col) => (
               <span key={col} className={COLUMN_DEFS[col].cssClass}>
-                {renderCell(e, col)}
+                {renderCell(e, col, nodesById)}
               </span>
             ))}
           </div>

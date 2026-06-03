@@ -8,6 +8,8 @@ Three formats are supported:
 - Monolithic legacy file (top-level keys: 'default_terminals', 'stations', etc.)
 """
 
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from nodalarc.body_frames import SupportedSurfaceBody
@@ -41,6 +43,55 @@ class HysteresisParameters(BaseModel):
         return v
 
 
+class GroundHandoverDefaultSurface(BaseModel):
+    """Ground-source defaults for station handover behavior.
+
+    These fields live with a ground station file or station set, not with the
+    session. They are still only defaults: station-specific fields override
+    them, and runtime resolution applies terminal capacity as the final truth
+    constraint.
+    """
+
+    default_handover_mode: Literal["bbm", "mbb"] | None = None
+    default_mbb_overlap_ticks: int | None = None
+    default_mbb_reserve: int | None = None
+
+    @field_validator("default_mbb_overlap_ticks")
+    @classmethod
+    def _valid_default_mbb_overlap_ticks(cls, v: int | None) -> int | None:
+        if v is not None and v < 0:
+            raise ValueError(f"default_mbb_overlap_ticks must be >= 0, got {v}")
+        return v
+
+    @field_validator("default_mbb_reserve")
+    @classmethod
+    def _valid_default_mbb_reserve(cls, v: int | None) -> int | None:
+        if v is not None and v not in (0, 1):
+            raise ValueError(
+                "default_mbb_reserve must be 0 or 1; higher values require future "
+                "MBB-002 multi-overlap support"
+            )
+        return v
+
+    @model_validator(mode="after")
+    def _validate_default_handover_surface(self):
+        if self.default_handover_mode == "mbb":
+            if self.default_mbb_overlap_ticks is not None and self.default_mbb_overlap_ticks <= 0:
+                raise ValueError(
+                    "default_handover_mode='mbb' requires default_mbb_overlap_ticks > 0"
+                )
+            if self.default_mbb_reserve is not None and self.default_mbb_reserve <= 0:
+                raise ValueError("default_handover_mode='mbb' requires default_mbb_reserve > 0")
+        if self.default_handover_mode == "bbm":
+            if self.default_mbb_overlap_ticks not in (None, 0):
+                raise ValueError(
+                    "default_handover_mode='bbm' must not set default_mbb_overlap_ticks"
+                )
+            if self.default_mbb_reserve not in (None, 0):
+                raise ValueError("default_handover_mode='bbm' must not reserve MBB terminals")
+        return self
+
+
 class GroundSegment(BaseModel):
     """Base class for all ground segment entities (Ground Stations, UTs).
 
@@ -55,6 +106,9 @@ class GroundSegment(BaseModel):
     service_priority: int = 10  # Lower = higher priority. Headroom: 1, 5, 10, 20...
     selection_policy: SelectionPolicySpec | None = None
     handover_policy: HandoverPolicySpec | None = None
+    handover_mode: Literal["bbm", "mbb"] | None = None
+    mbb_overlap_ticks: int | None = None
+    mbb_reserve: int | None = None
 
     @field_validator("service_priority")
     @classmethod
@@ -70,6 +124,34 @@ class GroundSegment(BaseModel):
         if v not in valid_classes:
             raise ValueError(f"mobility must be one of {valid_classes}, got {v!r}")
         return v
+
+    @field_validator("mbb_overlap_ticks")
+    @classmethod
+    def _valid_mbb_overlap_ticks(cls, v: int | None) -> int | None:
+        if v is not None and v < 0:
+            raise ValueError(f"mbb_overlap_ticks must be >= 0, got {v}")
+        return v
+
+    @field_validator("mbb_reserve")
+    @classmethod
+    def _valid_mbb_reserve(cls, v: int | None) -> int | None:
+        if v is not None and not 0 <= v <= 1:
+            raise ValueError(
+                "mbb_reserve must be 0 or 1; higher values require future MBB-002 "
+                "multi-overlap allocator support"
+            )
+        return v
+
+    @model_validator(mode="after")
+    def _valid_mbb_surface(self):
+        if self.handover_mode == "mbb":
+            if self.mbb_overlap_ticks is not None and self.mbb_overlap_ticks <= 0:
+                raise ValueError("handover_mode='mbb' requires mbb_overlap_ticks > 0")
+            if self.mbb_reserve is not None and self.mbb_reserve <= 0:
+                raise ValueError("handover_mode='mbb' requires mbb_reserve > 0")
+        if self.handover_mode == "bbm" and self.mbb_reserve not in (None, 0):
+            raise ValueError("handover_mode='bbm' must not reserve MBB terminals")
+        return self
 
 
 class TerrestrialPrefix(BaseModel):
@@ -230,7 +312,7 @@ class GroundStationConfig(GroundSegment):
         return v
 
 
-class GroundStationFile(BaseModel):
+class GroundStationFile(GroundHandoverDefaultSurface):
     """Top-level ground station configuration file."""
 
     default_terminals: list[GroundTerminalDef]
@@ -263,7 +345,7 @@ class GroundStationIndividualFile(BaseModel):
     ground_station: GroundStationConfig
 
 
-class GroundStationSetConfig(BaseModel):
+class GroundStationSetConfig(GroundHandoverDefaultSurface):
     """Ground station set — a named collection of station references.
 
     Station names resolve to configs/ground-stations/stations/{name}.yaml.

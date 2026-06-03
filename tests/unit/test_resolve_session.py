@@ -139,6 +139,73 @@ def test_terminal_inventory_is_materialized_from_source_satellite_type():
     assert sat_ground_bandwidths(starlink) != sat_ground_bandwidths(rf)
 
 
+def test_resolved_ground_nodes_carry_effective_station_handover_policy():
+    data = _segment_session()
+    data.pop("scheduling")
+    data["segments"][1]["scheduling"] = {
+        "selection_policy": {"name": "highest-elevation", "params": {}},
+        "handover_policy": {
+            "name": "hysteresis",
+            "params": {"discount_factor": 1.15, "mask_fade_range_deg": 5.0},
+        },
+    }
+    data["segments"][1]["source"] = {
+        "default_terminals": [
+            {
+                "type": "rf",
+                "count": 1,
+                "bandwidth_mbps": 1000,
+                "tracking_capacity": 1,
+                "max_range_km": 2000,
+                "field_of_regard_deg": 120,
+                "max_tracking_rate_deg_s": 1.5,
+                "boresight": {"mode": "local_vertical"},
+            }
+        ],
+        "default_handover_mode": "mbb",
+        "default_mbb_overlap_ticks": 3,
+        "default_mbb_reserve": 1,
+        "stations": [
+            {"name": "single", "lat_deg": 10.0, "lon_deg": 20.0},
+            {
+                "name": "multi",
+                "lat_deg": 11.0,
+                "lon_deg": 21.0,
+                "terminals": [
+                    {
+                        "type": "rf",
+                        "count": 2,
+                        "bandwidth_mbps": 1000,
+                        "tracking_capacity": 1,
+                        "max_range_km": 2000,
+                        "field_of_regard_deg": 120,
+                        "max_tracking_rate_deg_s": 1.5,
+                        "boresight": {"mode": "local_vertical"},
+                    }
+                ],
+            },
+        ],
+    }
+    data["simulation"]["candidate_limits"] = {"max_pairs_per_rule": 72}
+
+    resolution = resolve_session_with_assets(data)
+    modes = {
+        node.local_node_id: node.ground_scheduling.handover_mode
+        for node in resolution.resolved.nodes
+        if node.kind == "ground_station"
+    }
+
+    assert modes == {"gs-single": "bbm", "gs-multi": "mbb"}
+
+
+def test_segment_session_without_ground_scheduling_fails_loud():
+    data = _segment_session()
+    data.pop("scheduling")
+
+    with pytest.raises(SessionResolutionError, match="must declare scheduling"):
+        resolve_session(data)
+
+
 def test_m1_rejects_access_terminal_media_mismatch_at_resolve_boundary():
     data = _segment_session()
     data["segments"][0]["satellite_type"] = "generic-4isl"

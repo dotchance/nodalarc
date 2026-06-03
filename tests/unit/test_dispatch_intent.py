@@ -122,6 +122,7 @@ def _make_dispatcher(mbb=False):
         wiring_generation="sha256:" + "a" * 64,
         max_latency_age_s=1.0,
         gs_terminal_capacities={"gs-ashburn": 2},
+        gs_handover_modes={"gs-ashburn": "mbb" if mbb else "bbm"},
         sat_ground_terminal_capacities={"sat-P00S00": 1, "sat-P00S01": 1},
         mbb_dispatch=mbb,
     )

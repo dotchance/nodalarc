@@ -772,42 +772,9 @@ class TestE022:
 
 
 class TestE010:
-    def test_mbb_requires_capacity_for_steady_link_plus_reserve(self):
+    def test_default_mbb_single_terminal_station_resolves_to_bbm_warning(self):
         session = _make_session()
         session = _with_ground(session, handover_mode="mbb", mbb_overlap_ticks=3, mbb_reserve=1)
-        gs = _make_gs_file(
-            stations=[
-                GroundStationConfig(
-                    name="single-terminal",
-                    lat_deg=34.0,
-                    lon_deg=-118.0,
-                    terminals=[
-                        GroundTerminalDef(
-                            type="rf",
-                            count=1,
-                            bandwidth_mbps=1000,
-                            tracking_capacity=1,
-                            **GROUND_PHYSICAL_TERMINAL_FIELDS,
-                        )
-                    ],
-                )
-            ]
-        )
-        sats = _make_satellites()
-        constellation = _make_constellation()
-        stack = _make_resolved_stack()
-
-        results = validate_session_readiness(session, constellation, sats, gs, stack)
-
-        errors = [r for r in results if r.level == "error" and r.code == "E010"]
-        assert len(errors) == 1
-        assert "capacity 1" in errors[0].message
-        assert "requires capacity >= 2" in errors[0].message
-
-    def test_mbb_incapable_session_can_only_run_degraded_with_explicit_acknowledgement(self):
-        session = _make_session()
-        session = _with_ground(session, handover_mode="mbb", mbb_overlap_ticks=3, mbb_reserve=1)
-        session = _with_simulation(session, acknowledge_bbm_handover_gap=True)
         gs = _make_gs_file(
             stations=[
                 GroundStationConfig(
@@ -835,10 +802,10 @@ class TestE010:
         assert [r for r in results if r.level == "error" and r.code == "E010"] == []
         warnings = [r for r in results if r.level == "warning" and r.code == "W011"]
         assert len(warnings) == 1
-        assert "explicitly acknowledges degraded BBM behavior" in warnings[0].message
-        assert warnings[0].field_path == "simulation.acknowledge_bbm_handover_gap"
+        assert "effective handover_mode is BBM" in warnings[0].message
+        assert warnings[0].field_path == "ground_stations.stations.single-terminal.terminals"
 
-    def test_ome_runtime_rejects_unacknowledged_mbb_capacity_shortfall(self):
+    def test_explicit_station_mbb_requires_capacity_for_steady_link_plus_reserve(self):
         session = _make_session()
         session = _with_ground(session, handover_mode="mbb", mbb_overlap_ticks=3, mbb_reserve=1)
         gs = _make_gs_file(
@@ -847,6 +814,9 @@ class TestE010:
                     name="single-terminal",
                     lat_deg=34.0,
                     lon_deg=-118.0,
+                    handover_mode="mbb",
+                    mbb_overlap_ticks=3,
+                    mbb_reserve=1,
                     terminals=[
                         GroundTerminalDef(
                             type="rf",
@@ -859,37 +829,33 @@ class TestE010:
                 )
             ]
         )
+        sats = _make_satellites()
+        constellation = _make_constellation()
+        stack = _make_resolved_stack()
 
-        with pytest.raises(RuntimeError, match="Refusing to degrade silently"):
-            _effective_ground_scheduling_for_runtime(session, gs)
+        results = validate_session_readiness(session, constellation, sats, gs, stack)
 
-    def test_ome_runtime_converts_acknowledged_mbb_shortfall_to_bbm(self):
+        errors = [r for r in results if r.level == "error" and r.code == "E010"]
+        assert len(errors) == 1
+        assert "capacity 1" in errors[0].message
+        assert "requires capacity > 1" in errors[0].message
+        assert errors[0].field_path == "ground_stations.stations.single-terminal.handover_mode"
+
+    def test_ome_runtime_keeps_session_default_template_for_per_station_resolution(self):
         session = _make_session()
         session = _with_ground(session, handover_mode="mbb", mbb_overlap_ticks=3, mbb_reserve=1)
-        session = _with_simulation(session, acknowledge_bbm_handover_gap=True)
-        gs = _make_gs_file(
-            stations=[
-                GroundStationConfig(
-                    name="single-terminal",
-                    lat_deg=34.0,
-                    lon_deg=-118.0,
-                    terminals=[
-                        GroundTerminalDef(
-                            type="rf",
-                            count=1,
-                            bandwidth_mbps=1000,
-                            tracking_capacity=1,
-                            **GROUND_PHYSICAL_TERMINAL_FIELDS,
-                        )
-                    ],
-                )
-            ]
-        )
 
-        effective = _effective_ground_scheduling_for_runtime(session, gs)
+        effective = _effective_ground_scheduling_for_runtime(session)
 
-        assert effective.handover_mode == "bbm"
-        assert effective.mbb_reserve == 0
+        assert effective.handover_mode == "mbb"
+        assert effective.mbb_reserve == 1
+
+    def test_ome_runtime_rejects_unimplemented_multi_overlap_reserve(self):
+        session = _make_session()
+        session = _with_ground(session, handover_mode="mbb", mbb_overlap_ticks=3, mbb_reserve=2)
+
+        with pytest.raises(RuntimeError, match="MBB-002 multi-overlap"):
+            _effective_ground_scheduling_for_runtime(session)
 
     def test_mbb_capacity_uses_terminal_count_times_tracking_capacity(self):
         session = _make_session()

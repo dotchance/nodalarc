@@ -159,6 +159,7 @@ def _make_dispatcher(interface_map=None):
         wiring_generation="sha256:" + "a" * 64,
         max_latency_age_s=1.0,
         gs_terminal_capacities={"gs-ashburn": 1},
+        gs_handover_modes={"gs-ashburn": "bbm"},
         sat_ground_terminal_capacities={"sat-P00S00": 1, "sat-P00S01": 1},
     )
     d._js = AsyncMock()

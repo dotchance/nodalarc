@@ -180,12 +180,17 @@ class GroundPolicyAudit(BaseModel):
     handover_policies: dict[str, str]
     handover_policy_params: dict[str, dict[str, Any]]
     ranking_order: tuple[str, ...]
+    # Summary only: "mixed" when stations use different handover modes.
+    # handover_modes is the authoritative per-GS policy surface.
     handover_mode: str
+    handover_modes: dict[str, str]
     mbb_preemption: str
     successor_abort_policy: str
     cross_tenant_displacement: str
     mbb_overlap_ticks: int
+    mbb_overlap_ticks_by_gs: dict[str, int]
     mbb_reserve: int
+    mbb_reserve_by_gs: dict[str, int]
     bbm_acquire_timeout_ticks: int
     ignored_capacity_fields: tuple[str, ...]
 

@@ -22,7 +22,6 @@ from pathlib import Path
 from typing import Any
 
 from nodal.logging import configure as _configure_logging
-from nodalarc.ground_terminals import station_ground_terminal_capacity
 from nodalarc.link_metadata import build_link_metadata_maps
 from nodalarc.models.addressing import (
     AddressingScheme,
@@ -315,22 +314,35 @@ def main() -> None:
     # Agent pool
     pool = AgentPool()
 
-    # Build capacity maps for MBB dispatch ordering from resolver assets.
-
+    # Build capacity and handover maps from ResolvedSession. MBB/BBM is a
+    # per-ground-station policy/capability, not a session-wide dispatch flag.
     gs_terminal_capacities: dict[str, int] = {}
-    for station in gs_file.stations:
-        gs_id = addressing.gs_id(station.name)
-        gs_terminal_capacities[gs_id] = station_ground_terminal_capacity(gs_file, station)
-
+    gs_handover_modes: dict[str, str] = {}
     sat_ground_terminal_capacities: dict[str, int] = {}
-    for sat in satellites:
-        sat_id = addressing.sat_id(sat.plane, sat.slot)
-        sat_ground_terminal_capacities[sat_id] = sat.ground_terminal_count
+    for node in resolution.resolved.nodes:
+        if node.kind == "ground_station":
+            capacity = sum(
+                block.count * (block.tracking_capacity or 0)
+                for block in node.terminal_inventory
+                if block.endpoint_role == "ground"
+            )
+            if capacity <= 0:
+                raise RuntimeError(f"Resolved ground station {node.node_id} has no capacity")
+            if node.ground_scheduling is None:
+                raise RuntimeError(
+                    f"Resolved ground station {node.node_id} is missing ground_scheduling"
+                )
+            gs_terminal_capacities[node.node_id] = capacity
+            gs_handover_modes[node.node_id] = node.ground_scheduling.handover_mode
+        elif node.kind == "satellite":
+            sat_ground_terminal_capacities[node.node_id] = sum(
+                block.count for block in node.terminal_inventory if block.endpoint_role == "ground"
+            )
 
-    mbb_dispatch = session.scheduling.ground.handover_mode == "mbb"
+    mbb_dispatch = any(mode == "mbb" for mode in gs_handover_modes.values())
     log.info(
-        "Ground handover: %s (protocol=%s)",
-        session.scheduling.ground.handover_mode,
+        "Ground handover by station: %s (protocol=%s)",
+        ", ".join(f"{gs}={mode}" for gs, mode in sorted(gs_handover_modes.items())),
         session.routing.protocol,
     )
 
@@ -354,6 +366,7 @@ def main() -> None:
         max_latency_age_s=session.dispatch.max_latency_age_ticks * session.time.step_seconds,
         compression_factor=session.time.compression,
         gs_terminal_capacities=gs_terminal_capacities,
+        gs_handover_modes=gs_handover_modes,
         sat_ground_terminal_capacities=sat_ground_terminal_capacities,
         mbb_dispatch=mbb_dispatch,
         rtt_to_one_way_policy=session.dispatch.substrate_compensation.rtt_to_one_way,

@@ -17,11 +17,11 @@ from pathlib import Path
 from typing import Any, Literal
 
 from nodalarc.constellation_loader import SatelliteNode, isl_terminal_for_interface
+from nodalarc.ground_handover import resolve_station_ground_scheduling
 from nodalarc.ground_terminals import (
     TerminalPhysicsProfile,
     ground_terminal_type,
     satellite_terminal_index_pools_by_target_body,
-    station_ground_terminal_capacity,
     station_ground_terminal_type,
     terminal_physics_profile,
     terminal_physics_profiles,
@@ -161,7 +161,9 @@ class StepContext:
     gs_handover_policies: dict[str, HandoverPolicySpec]
     gs_service_priorities: dict[str, int]
     ground_ranking_order: tuple[RankingComponent, ...]
-    ground_handover_mode: Literal["bbm", "mbb"]
+    gs_handover_modes: dict[str, Literal["bbm", "mbb"]]
+    gs_mbb_overlap_ticks: dict[str, int]
+    gs_mbb_reserve: dict[str, int]
     ground_mbb_preemption: str
     ground_successor_abort_policy: str
     ground_cross_tenant_displacement: str
@@ -186,8 +188,6 @@ class StepContext:
     propagator_id: PropagatorId
     polar_seam_enabled: bool
     latitude_threshold_deg: float
-    mbb_overlap_ticks: int = 3
-    mbb_reserve: int = 0
     ground_policy_lookahead_horizon_ticks: int = 0
     ground_policy_lookahead_horizon_ticks_by_gs: dict[str, int] = field(default_factory=dict)
 
@@ -271,7 +271,9 @@ def _build_policy_audit(
     gs_selection_policies: dict[str, SelectionPolicySpec],
     gs_handover_policies: dict[str, HandoverPolicySpec],
     ground_scheduling: GroundSchedulingConfig,
-    mbb_reserve: int,
+    gs_handover_modes: dict[str, Literal["bbm", "mbb"]],
+    gs_mbb_overlap_ticks: dict[str, int],
+    gs_mbb_reserve: dict[str, int],
     ignored_capacity_fields: tuple[str, ...],
 ) -> GroundPolicyAudit:
     return GroundPolicyAudit(
@@ -282,12 +284,19 @@ def _build_policy_audit(
         handover_policies={k: v.name for k, v in sorted(gs_handover_policies.items())},
         handover_policy_params={k: dict(v.params) for k, v in sorted(gs_handover_policies.items())},
         ranking_order=tuple(ground_scheduling.ranking_order),
-        handover_mode=ground_scheduling.handover_mode,
+        handover_mode=(
+            next(iter(set(gs_handover_modes.values())))
+            if len(set(gs_handover_modes.values())) == 1
+            else "mixed"
+        ),
+        handover_modes=dict(sorted(gs_handover_modes.items())),
         mbb_preemption=ground_scheduling.mbb_preemption,
         successor_abort_policy=ground_scheduling.successor_abort_policy,
         cross_tenant_displacement=ground_scheduling.cross_tenant_displacement,
-        mbb_overlap_ticks=ground_scheduling.mbb_overlap_ticks,
-        mbb_reserve=mbb_reserve,
+        mbb_overlap_ticks=max(gs_mbb_overlap_ticks.values(), default=0),
+        mbb_overlap_ticks_by_gs=dict(sorted(gs_mbb_overlap_ticks.items())),
+        mbb_reserve=max(gs_mbb_reserve.values(), default=0),
+        mbb_reserve_by_gs=dict(sorted(gs_mbb_reserve.items())),
         bbm_acquire_timeout_ticks=ground_scheduling.bbm_acquire_timeout_ticks,
         ignored_capacity_fields=ignored_capacity_fields,
     )
@@ -313,10 +322,6 @@ def build_step_context(
             "exist; Phase 3 does not silently choose selection or handover policy"
         )
     ground_scheduling = ground_scheduling or GroundSchedulingConfig()
-    effective_mbb_reserve = (
-        ground_scheduling.mbb_reserve if ground_scheduling.handover_mode == "mbb" else 0
-    )
-
     sat_isl_terminals: dict[str, int] = {}
     sat_isl_terminal_constraints: dict[str, dict[str, IslTerminalConstraints]] = {}
     sat_ground_terminals: dict[str, int] = {}
@@ -370,6 +375,9 @@ def build_step_context(
     gs_selection_policies: dict[str, SelectionPolicySpec] = {}
     gs_selection_policy_names: dict[str, str] = {}
     gs_handover_policies: dict[str, HandoverPolicySpec] = {}
+    gs_handover_modes: dict[str, Literal["bbm", "mbb"]] = {}
+    gs_mbb_overlap_ticks: dict[str, int] = {}
+    gs_mbb_reserve: dict[str, int] = {}
     gs_service_priorities: dict[str, int] = {}
     gs_tenant_ids: dict[str, str] = {}
     gs_reference_bodies: dict[str, str] = {}
@@ -377,12 +385,6 @@ def build_step_context(
     gs_terminal_profiles: dict[str, TerminalPhysicsProfile] = {}
     ground_pair_terminal_types: dict[tuple[str, str], str] = {}
     if gs_file:
-        default_selection_policy = (
-            gs_file.default_selection_policy or ground_scheduling.selection_policy
-        ).model_copy(deep=True)
-        default_handover_policy = _normalize_handover_policy(
-            gs_file.default_handover_policy or ground_scheduling.handover_policy
-        )
         ignored_capacity_fields.extend(
             _future_capacity_field_paths(
                 tuple(gs_file.default_terminals),
@@ -399,7 +401,11 @@ def build_step_context(
                 if station.min_elevation_deg is not None
                 else gs_file.default_min_elevation_deg
             )
-            gs_terminal_counts[node_id] = station_ground_terminal_capacity(gs_file, station)
+            station_resolution = resolve_station_ground_scheduling(
+                ground_scheduling, gs_file, station
+            )
+            station_scheduling = station_resolution.scheduling
+            gs_terminal_counts[node_id] = station_resolution.terminal_capacity
             gs_terminal_types[node_id] = station_ground_terminal_type(gs_file, station)
             effective_terminals = station.terminals or gs_file.default_terminals
             if station.terminals is not None:
@@ -415,15 +421,20 @@ def build_step_context(
                 endpoint="ground",
                 require_constraints=require_ground_physics,
             )
-            selection_policy = (station.selection_policy or default_selection_policy).model_copy(
-                deep=True
-            )
-            handover_policy = _normalize_handover_policy(
-                station.handover_policy or default_handover_policy
-            )
+            selection_policy = station_scheduling.selection_policy.model_copy(deep=True)
+            handover_policy = _normalize_handover_policy(station_scheduling.handover_policy)
             gs_selection_policies[node_id] = selection_policy
             gs_selection_policy_names[node_id] = selection_policy.name
             gs_handover_policies[node_id] = handover_policy
+            gs_handover_modes[node_id] = station_scheduling.handover_mode
+            gs_mbb_overlap_ticks[node_id] = (
+                station_scheduling.mbb_overlap_ticks
+                if station_scheduling.handover_mode == "mbb"
+                else 0
+            )
+            gs_mbb_reserve[node_id] = (
+                station_scheduling.mbb_reserve if station_scheduling.handover_mode == "mbb" else 0
+            )
             gs_service_priorities[node_id] = station.service_priority
             gs_tenant_ids[node_id] = station.tenant_id
             gs_reference_bodies[node_id] = station.reference_body
@@ -457,7 +468,9 @@ def build_step_context(
         gs_selection_policies=gs_selection_policies,
         gs_handover_policies=gs_handover_policies,
         ground_scheduling=ground_scheduling,
-        mbb_reserve=effective_mbb_reserve,
+        gs_handover_modes=gs_handover_modes,
+        gs_mbb_overlap_ticks=gs_mbb_overlap_ticks,
+        gs_mbb_reserve=gs_mbb_reserve,
         ignored_capacity_fields=ignored_capacity_tuple,
     )
 
@@ -472,7 +485,9 @@ def build_step_context(
         gs_handover_policies=gs_handover_policies,
         gs_service_priorities=gs_service_priorities,
         ground_ranking_order=tuple(ground_scheduling.ranking_order),
-        ground_handover_mode=ground_scheduling.handover_mode,
+        gs_handover_modes=gs_handover_modes,
+        gs_mbb_overlap_ticks=gs_mbb_overlap_ticks,
+        gs_mbb_reserve=gs_mbb_reserve,
         ground_mbb_preemption=ground_scheduling.mbb_preemption,
         ground_successor_abort_policy=ground_scheduling.successor_abort_policy,
         ground_cross_tenant_displacement=ground_scheduling.cross_tenant_displacement,
@@ -493,8 +508,6 @@ def build_step_context(
         propagator_id=propagator_id,
         polar_seam_enabled=polar_seam_enabled,
         latitude_threshold_deg=latitude_threshold_deg,
-        mbb_overlap_ticks=ground_scheduling.mbb_overlap_ticks,
-        mbb_reserve=effective_mbb_reserve,
         ground_policy_lookahead_horizon_ticks=lookahead_horizon_ticks,
         ground_policy_lookahead_horizon_ticks_by_gs=lookahead_horizon_ticks_by_gs,
     )
@@ -681,9 +694,9 @@ def compute_step(
         sat_ground_terminals=ctx.sat_ground_terminals,
         sat_ground_terminal_indices_by_body=ctx.sat_ground_terminal_indices_by_body,
         ranking_order=ctx.ground_ranking_order,
-        handover_mode=ctx.ground_handover_mode,
-        mbb_overlap_ticks=ctx.mbb_overlap_ticks,
-        mbb_reserve=ctx.mbb_reserve,
+        gs_handover_modes=ctx.gs_handover_modes,
+        gs_mbb_overlap_ticks=ctx.gs_mbb_overlap_ticks,
+        gs_mbb_reserve=ctx.gs_mbb_reserve,
         mbb_preemption=ctx.ground_mbb_preemption,
         successor_abort_policy=ctx.ground_successor_abort_policy,
         cross_tenant_displacement=ctx.ground_cross_tenant_displacement,

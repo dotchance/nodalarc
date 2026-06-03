@@ -8,9 +8,11 @@ No K8s, no NATS, no file system access, no imports from services/.
 
 from __future__ import annotations
 
+from pydantic import ValidationError
+
+from nodalarc.ground_handover import resolve_station_ground_scheduling
 from nodalarc.ground_terminals import (
     ground_terminal_type,
-    station_ground_terminal_capacity,
     station_ground_terminal_type,
     terminal_collection_missing_physics,
     terminal_physics_profiles,
@@ -448,60 +450,51 @@ def _check_e010(
     session: SessionConfig,
     ground_stations: GroundStationFile,
 ) -> list[ValidationResult]:
-    """E010: MBB handover requires station capacity for steady + reserve links."""
-    ground = session.scheduling.ground
-    if ground.handover_mode != "mbb":
-        return []
-
-    required_capacity = ground.mbb_reserve + 1
-    shortfalls: list[tuple[str, int]] = []
+    """E010/W011: MBB capability is resolved per ground station."""
+    results: list[ValidationResult] = []
     for station in ground_stations.stations:
-        capacity = station_ground_terminal_capacity(ground_stations, station)
-        if capacity < required_capacity:
-            shortfalls.append((station.name, capacity))
-    if not shortfalls:
-        return []
-
-    details = ", ".join(f"{name}(capacity={cap})" for name, cap in shortfalls)
-    if session.simulation.acknowledge_bbm_handover_gap:
-        return [
-            ValidationResult(
-                level="warning",
-                code="W011",
-                message=(
-                    "MBB handover requested, but one or more ground stations cannot "
-                    f"support physical overlap: {details}. The session explicitly "
-                    "acknowledges degraded BBM behavior and must run with effective "
-                    "handover_mode='bbm'."
-                ),
-                remediation=(
-                    "For zero-loss MBB, increase terminal count/tracking_capacity or "
-                    "lower mbb_reserve. For degraded BBM, keep "
-                    "simulation.acknowledge_bbm_handover_gap: true and expect a typed gap."
-                ),
-                field_path="simulation.acknowledge_bbm_handover_gap",
+        try:
+            resolution = resolve_station_ground_scheduling(
+                session.scheduling.ground, ground_stations, station
             )
-        ]
+        except (ValueError, ValidationError) as exc:
+            message = str(exc)
+            if "explicitly requests MBB" not in message:
+                continue
+            results.append(
+                ValidationResult(
+                    level="error",
+                    code="E010",
+                    message=message,
+                    remediation=(
+                        f"Give station '{station.name}' enough terminal capacity for MBB, "
+                        "or set that station's handover_mode to 'bbm'. MBB/BBM is a "
+                        "ground-station policy, not a session-wide fallback."
+                    ),
+                    field_path=f"ground_stations.stations.{station.name}.handover_mode",
+                )
+            )
+            continue
 
-    name, capacity = shortfalls[0]
-    return [
-        ValidationResult(
-            level="error",
-            code="E010",
-            message=(
-                f"MBB handover requested, but station '{name}' has ground terminal "
-                f"capacity {capacity}. With mbb_reserve={ground.mbb_reserve}, MBB "
-                f"requires capacity >= {required_capacity} so one steady link can "
-                "exist while the reserved terminal is held for make-before-break overlap."
-            ),
-            remediation=(
-                f"Increase terminal count/tracking_capacity for station '{name}', lower "
-                "mbb_reserve, set scheduling.ground.handover_mode to 'bbm', or explicitly "
-                "set simulation.acknowledge_bbm_handover_gap: true to run degraded BBM."
-            ),
-            field_path="scheduling.ground.handover_mode",
-        )
-    ]
+        if resolution.capability_forced_bbm:
+            results.append(
+                ValidationResult(
+                    level="warning",
+                    code="W011",
+                    message=(
+                        f"Ground station '{station.name}' has terminal capacity "
+                        f"{resolution.terminal_capacity}, so its effective handover_mode is "
+                        "BBM even though the default ground scheduling mode is MBB."
+                    ),
+                    remediation=(
+                        f"To make '{station.name}' MBB-capable, configure at least two "
+                        "simultaneous ground terminal slots and leave mbb_reserve=1. "
+                        "Otherwise this is the correct effective station policy."
+                    ),
+                    field_path=f"ground_stations.stations.{station.name}.terminals",
+                )
+            )
+    return results
 
 
 def _check_e023(session: SessionConfig) -> list[ValidationResult]:

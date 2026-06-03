@@ -13,6 +13,9 @@ default_terminals:
   boresight:
     mode: local_vertical
   band: Ka
+default_handover_mode: mbb
+default_mbb_overlap_ticks: 3
+default_mbb_reserve: 1
 default_min_elevation_deg: 25
 default_terrestrial_prefixes:
   ipv4_template: 172.16.{gs_index}.0/24

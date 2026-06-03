@@ -132,7 +132,13 @@ class TestComputeStepMatchesWindow:
         assert gs_state == window.gs_state
 
     def test_context_precompute_uses_exact_context_configuration(self):
-        """Context-based precompute shares live OME scheduling parameters."""
+        """Context precompute resolves ground-source handover defaults.
+
+        The base scheduling object is only the session/segment default. The
+        demo ground set is MBB-capable and declares MBB as its own default, so
+        the effective per-station context must be MBB even if the caller's base
+        object is BBM.
+        """
         session, cc, gs_file, sats, addressing, neighbors = _load_test_session()
         epoch_unix = 1704067200.0
         step_seconds = session.time.step_seconds
@@ -160,8 +166,9 @@ class TestComputeStepMatchesWindow:
         )
 
         assert window.predictive is True
-        assert ctx.mbb_overlap_ticks == 7
-        assert ctx.mbb_reserve == 0
+        assert set(ctx.gs_handover_modes.values()) == {"mbb"}
+        assert set(ctx.gs_mbb_overlap_ticks.values()) == {3}
+        assert set(ctx.gs_mbb_reserve.values()) == {1}
         assert ctx.propagator_id == "j2-mean-elements"
         assert len(window.events) > 0
 

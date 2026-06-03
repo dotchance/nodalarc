@@ -29,6 +29,7 @@ from nodalarc.constellation_loader import (
     load_constellation,
     load_ground_stations,
 )
+from nodalarc.ground_handover import resolve_station_ground_scheduling
 from nodalarc.ground_terminals import ground_terminal_type, station_ground_terminal_type
 from nodalarc.models.addressing import AddressingScheme
 from nodalarc.models.constellation import ConstellationConfig
@@ -200,11 +201,13 @@ def resolve_session_with_assets(
             f"ground_set segment {ground_set.segment.id!r} expands to 0 stations"
         )
 
-    runtime_session = _build_runtime_session_projection(cfg, constellation, ground_set)
+    effective_ground = _effective_ground_scheduling(cfg, ground_set.segment, ground_set.config)
+    runtime_session = _build_runtime_session_projection(
+        cfg, constellation, ground_set, effective_ground
+    )
     addressing = AddressingScheme(
         runtime_session.addressing, list(constellation.satellites), ground_set.config
     )
-    effective_ground = _effective_ground_scheduling(cfg, ground_set.segment, ground_set.config)
 
     nodes, node_meta = _materialize_nodes(
         constellation, ground_set, runtime_session, addressing, effective_ground
@@ -340,11 +343,8 @@ def _build_runtime_session_projection(
     cfg: SegmentSessionConfig,
     constellation: ResolvedConstellationAssets,
     ground_set: ResolvedGroundAssets,
+    effective_ground: GroundSchedulingConfig,
 ) -> SessionConfig:
-    if cfg.scheduling is None:
-        raise SessionResolutionError(
-            "segment sessions must declare session-root scheduling defaults for the current runtime"
-        )
     sat_namespace = constellation.segment.namespace
     gs_namespace = ground_set.segment.namespace
     addressing = AddressingConfig(
@@ -361,7 +361,7 @@ def _build_runtime_session_projection(
         "ground_stations": ground_set.source,
         "simulation": cfg.simulation.model_dump(mode="python"),
         "orbit": cfg.orbit.model_dump(mode="python"),
-        "scheduling": cfg.scheduling.model_dump(mode="python"),
+        "scheduling": {"ground": effective_ground.model_dump(mode="python")},
         "dispatch": cfg.dispatch.model_dump(mode="python"),
         "observability": cfg.observability.model_dump(mode="python"),
         "addressing": addressing.model_dump(mode="python"),
@@ -382,13 +382,26 @@ def _effective_ground_scheduling(
     segment: GroundSegment,
     gs_file: GroundStationFile,
 ) -> GroundSchedulingConfig:
-    if cfg.scheduling is None:
-        raise SessionResolutionError("session scheduling defaults are required")
-    data = cfg.scheduling.ground.model_dump(mode="python")
+    if cfg.scheduling is None and segment.scheduling is None:
+        raise SessionResolutionError(
+            f"ground segment {segment.id!r} must declare scheduling, or the session "
+            "must declare explicit scheduling defaults"
+        )
+    data = (
+        cfg.scheduling.ground.model_dump(mode="python")
+        if cfg.scheduling is not None
+        else GroundSchedulingConfig().model_dump(mode="python")
+    )
     if gs_file.default_selection_policy is not None:
         data["selection_policy"] = gs_file.default_selection_policy.model_dump(mode="python")
     if gs_file.default_handover_policy is not None:
         data["handover_policy"] = gs_file.default_handover_policy.model_dump(mode="python")
+    if gs_file.default_handover_mode is not None:
+        data["handover_mode"] = gs_file.default_handover_mode
+    if gs_file.default_mbb_overlap_ticks is not None:
+        data["mbb_overlap_ticks"] = gs_file.default_mbb_overlap_ticks
+    if gs_file.default_mbb_reserve is not None:
+        data["mbb_reserve"] = gs_file.default_mbb_reserve
     if segment.scheduling is not None:
         data.update(segment.scheduling.model_dump(mode="python", exclude_none=True))
     return GroundSchedulingConfig.model_validate(data)
@@ -440,7 +453,7 @@ def _materialize_nodes(
         local_id = f"gs-{station.name}"
         node_id = addressing.gs_id(station.name)
         tags = tuple(ground_segment.tags or ())
-        station_policy = _station_ground_scheduling(effective_ground, station)
+        station_policy = _station_ground_scheduling(effective_ground, ground_set.config, station)
         node = ResolvedNode(
             node_id=node_id,
             local_node_id=local_id,
@@ -474,14 +487,9 @@ def cfg_clock_default():
 
 
 def _station_ground_scheduling(
-    base: GroundSchedulingConfig, station: Any
+    base: GroundSchedulingConfig, gs_file: GroundStationFile, station: Any
 ) -> GroundSchedulingConfig:
-    data = base.model_dump(mode="python")
-    if station.selection_policy is not None:
-        data["selection_policy"] = station.selection_policy.model_dump(mode="python")
-    if station.handover_policy is not None:
-        data["handover_policy"] = station.handover_policy.model_dump(mode="python")
-    return GroundSchedulingConfig.model_validate(data)
+    return resolve_station_ground_scheduling(base, gs_file, station).scheduling
 
 
 def _satellite_terminal_blocks(node_id: str, sat: SatelliteNode, segment_id: str):

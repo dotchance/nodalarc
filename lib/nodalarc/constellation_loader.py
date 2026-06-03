@@ -324,6 +324,9 @@ def _build_gs_file_from_stations(
     default_min_elevation_deg: float | None = None,
     default_selection_policy: SelectionPolicySpec | None = None,
     default_handover_policy: HandoverPolicySpec | None = None,
+    default_handover_mode: str | None = None,
+    default_mbb_overlap_ticks: int | None = None,
+    default_mbb_reserve: int | None = None,
 ) -> GroundStationFile:
     """Build a GroundStationFile from a list of individual station configs.
 
@@ -340,6 +343,9 @@ def _build_gs_file_from_stations(
         ),
         default_selection_policy=default_selection_policy,
         default_handover_policy=default_handover_policy,
+        default_handover_mode=default_handover_mode,
+        default_mbb_overlap_ticks=default_mbb_overlap_ticks,
+        default_mbb_reserve=default_mbb_reserve,
         default_terrestrial_prefixes=default_terrestrial_prefixes,
         stations=stations,
     )
@@ -364,6 +370,9 @@ def load_ground_stations_from_set(
         default_min_elevation_deg=gs_set.default_min_elevation_deg,
         default_selection_policy=gs_set.default_selection_policy,
         default_handover_policy=gs_set.default_handover_policy,
+        default_handover_mode=gs_set.default_handover_mode,
+        default_mbb_overlap_ticks=gs_set.default_mbb_overlap_ticks,
+        default_mbb_reserve=gs_set.default_mbb_reserve,
     )
 
 
@@ -416,6 +425,9 @@ def load_ground_stations(source: str | Path | list[str] | dict) -> GroundStation
                 default_min_elevation_deg=gs_set.default_min_elevation_deg,
                 default_selection_policy=gs_set.default_selection_policy,
                 default_handover_policy=gs_set.default_handover_policy,
+                default_handover_mode=gs_set.default_handover_mode,
+                default_mbb_overlap_ticks=gs_set.default_mbb_overlap_ticks,
+                default_mbb_reserve=gs_set.default_mbb_reserve,
             )
         if "set" in data:
             gs_file = load_ground_stations(data["set"])

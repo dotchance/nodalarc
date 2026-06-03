@@ -239,7 +239,7 @@ def generate_session_yaml(
             area_assignment["gs_area_id"] = "0.0.0.0"
 
     routing_overrides = dict(routing_config or {})
-    mbb_requested = bool(routing_overrides.pop("mbb_dispatch", protocol == "nodalpath"))
+    mbb_requested = bool(routing_overrides.pop("mbb_dispatch", True))
     mbb_overlap_ticks = int(routing_overrides.pop("mbb_overlap_ticks", 3 if mbb_requested else 0))
     supported_propagators = {"keplerian-circular", "j2-mean-elements", "sgp4-tle"}
     if orbit_propagator not in supported_propagators:
@@ -275,6 +275,19 @@ def generate_session_yaml(
     satellite_count = len(expand_constellation(load_constellation(constellation_value)))
     ground_count = len(load_ground_stations(ground_source).stations)
     static_candidate_bound = max(1, satellite_count * ground_count)
+    ground_scheduling: dict[str, Any] = {
+        "selection_policy": selection_policy,
+        "handover_policy": {
+            "name": "hysteresis",
+            "params": {
+                "discount_factor": 1.15,
+                "mask_fade_range_deg": 5.0,
+            },
+        },
+        "handover_mode": "mbb" if mbb_requested else "bbm",
+        "mbb_overlap_ticks": mbb_overlap_ticks,
+        "mbb_reserve": 1 if mbb_requested else 0,
+    }
 
     # Build segment-grammar session dict. The wizard emits the same product
     # grammar that upload/deploy accepts; SessionConfig is only an internal
@@ -299,6 +312,7 @@ def generate_session_yaml(
                 "namespace": "ground",
                 "reference_body": "earth",
                 "tags": ["earth", "ground"],
+                "scheduling": ground_scheduling,
             },
         ],
         "link_rules": [
@@ -318,21 +332,6 @@ def generate_session_yaml(
         },
         "orbit": {
             "propagator": orbit_propagator,
-        },
-        "scheduling": {
-            "ground": {
-                "selection_policy": selection_policy,
-                "handover_policy": {
-                    "name": "hysteresis",
-                    "params": {
-                        "discount_factor": 1.15,
-                        "mask_fade_range_deg": 5.0,
-                    },
-                },
-                "handover_mode": "mbb" if mbb_requested else "bbm",
-                "mbb_overlap_ticks": mbb_overlap_ticks,
-                "mbb_reserve": 1 if mbb_requested else 0,
-            }
         },
         "dispatch": {
             "latency_authority": "ome",

@@ -21,7 +21,6 @@ from nodal.logging import configure as _configure_logging
 from nodal.logging import connect as _connect_logging
 from nodalarc.constants import EARTH_RADIUS_KM
 from nodalarc.constellation_loader import SatelliteNode
-from nodalarc.ground_terminals import station_ground_terminal_capacity
 from nodalarc.link_metadata import build_link_metadata_maps
 from nodalarc.models.addressing import AddressingScheme, assign_isl_neighbors
 from nodalarc.models.constellation import ConstellationConfig
@@ -148,64 +147,27 @@ def _enforce_ground_link_model_contract(session: SessionConfig) -> None:
     )
 
 
-def _mbb_capacity_shortfalls(
-    ground_scheduling: GroundSchedulingConfig,
-    gs_file: GroundStationFile | None,
-) -> list[str]:
-    if gs_file is None or ground_scheduling.handover_mode != "mbb":
-        return []
-    required_capacity = ground_scheduling.mbb_reserve + 1
-    shortfalls: list[str] = []
-    for station in gs_file.stations:
-        capacity = station_ground_terminal_capacity(gs_file, station)
-        if capacity < required_capacity:
-            shortfalls.append(
-                f"gs-{station.name}(capacity={capacity}, required>={required_capacity})"
-            )
-    return shortfalls
+def _effective_ground_scheduling_for_runtime(session: SessionConfig) -> GroundSchedulingConfig:
+    """Return the session-root ground scheduling defaults used by OME.
 
-
-def _effective_ground_scheduling_for_runtime(
-    session: SessionConfig,
-    gs_file: GroundStationFile | None,
-) -> GroundSchedulingConfig:
-    """Return the OME runtime ground scheduling policy after explicit acknowledgements.
-
-    Physical MBB on insufficient terminal capacity is impossible. If the operator
-    explicitly acknowledges a BBM gap, OME runs BBM as the effective runtime mode
-    and surfaces the degraded behavior; otherwise startup fails before publishing
-    false authority.
+    MBB/BBM capability is resolved per ground station. A single-terminal station
+    is BBM even when the session default is MBB; a multi-terminal station can
+    still explicitly choose BBM. This helper only keeps the fail-loud global guard
+    for future multi-overlap MBB values that the current allocator cannot honor.
     """
     ground = session.scheduling.ground
     # BIG HONESTY NOTE / MBB-002:
-    # The runtime must not "helpfully" accept a reserve value that the allocator
-    # cannot honor. `mbb_reserve > 1` means multi-overlap MBB; today we only
-    # support one overlap per GS. Schema validation normally catches this, but OME
-    # keeps a runtime guard because SessionConfig can be mutated in tests/tools.
+    # The runtime must not accept a reserve value that the allocator cannot honor.
+    # `mbb_reserve > 1` means multi-overlap MBB; today we only support one overlap
+    # per GS. Remove this guard only when MBB-002 adds multi-overlap allocator state
+    # and proves it.
     if ground.mbb_reserve > 1:
         raise RuntimeError(
             "scheduling.ground.mbb_reserve > 1 requires future MBB-002 multi-overlap "
             "allocator support; current OME supports at most one concurrent MBB "
             "overlap per ground station"
         )
-    shortfalls = _mbb_capacity_shortfalls(ground, gs_file)
-    if not shortfalls:
-        return ground
-    if not session.simulation.acknowledge_bbm_handover_gap:
-        raise RuntimeError(
-            "MBB handover requested but these ground stations do not have enough "
-            "terminal capacity for physical overlap: "
-            + ", ".join(shortfalls)
-            + ". Refusing to degrade silently; fix the model, select "
-            "scheduling.ground.handover_mode='bbm', or explicitly set "
-            "simulation.acknowledge_bbm_handover_gap: true."
-        )
-    logging.warning(
-        "MBB handover requested but physical overlap is impossible for %s; "
-        "simulation.acknowledge_bbm_handover_gap=true, running effective BBM/degraded mode",
-        ", ".join(shortfalls),
-    )
-    return ground.model_copy(update={"handover_mode": "bbm", "mbb_reserve": 0})
+    return ground
 
 
 def _validate_sgp4_tle_freshness(cfg: _SessionBundle, epoch_unix: float) -> None:
@@ -370,7 +332,7 @@ def run(session_path: str, output_dir: str | None = None) -> Path:
     _enforce_ground_link_model_contract(cfg.session)
     epoch_unix = resolve_session_epoch(cfg.session.time)
     _validate_sgp4_tle_freshness(cfg, epoch_unix)
-    effective_ground_scheduling = _effective_ground_scheduling_for_runtime(cfg.session, cfg.gs_file)
+    effective_ground_scheduling = _effective_ground_scheduling_for_runtime(cfg.session)
     events = precompute_timeline(
         satellites=cfg.satellites,
         addressing=cfg.addressing,
@@ -704,7 +666,7 @@ def _run_pacing(
         step: int,
         associations: dict[tuple[str, str], tuple[int, int]],
         teardowns: MbbTeardownState,
-        mbb_overlap_ticks: int,
+        mbb_overlap_ticks_by_gs: dict[str, int],
     ) -> SchedulingCheckpoint:
         """Convert OME internal association/teardown state to SchedulingCheckpoint."""
         if snapshot_seq <= 0:
@@ -727,7 +689,12 @@ def _run_pacing(
         # no-time-advanced restart preserved MBB overlap semantics exactly.
         td_flat: dict[str, TeardownEntry] = {}
         for (gs_id, sat_id), teardown in teardowns.items():
-            remaining_ticks = max(0, mbb_overlap_ticks - (step - teardown.start_step))
+            if gs_id not in mbb_overlap_ticks_by_gs:
+                raise ValueError(
+                    f"Cannot build SchedulingCheckpoint for pending teardown {gs_id}:{sat_id}: "
+                    "missing per-ground-station MBB overlap policy"
+                )
+            remaining_ticks = max(0, mbb_overlap_ticks_by_gs[gs_id] - (step - teardown.start_step))
             td_flat[f"{gs_id}:{sat_id}"] = TeardownEntry(
                 start_step=teardown.start_step,
                 remaining_ticks=remaining_ticks,
@@ -968,8 +935,7 @@ def _run_pacing(
 
     from ome.event_stream import build_step_context, compute_step
 
-    effective_ground_scheduling = _effective_ground_scheduling_for_runtime(session, cfg.gs_file)
-    mbb_overlap_ticks = effective_ground_scheduling.mbb_overlap_ticks
+    effective_ground_scheduling = _effective_ground_scheduling_for_runtime(session)
 
     step_ctx = build_step_context(
         satellites=cfg.satellites,
@@ -1039,7 +1005,7 @@ def _run_pacing(
             interval_s=snapshot_interval_s,
             fixed_positions=step_ctx.gs_positions,
             epoch_id=epoch_id,
-            mbb_overlap_ticks=mbb_overlap_ticks,
+            mbb_overlap_ticks_by_gs=step_ctx.gs_mbb_overlap_ticks,
             current_step=step_result.step,
         )
         _enqueue(subj_link_snapshot, snap.model_dump_json().encode())
@@ -1065,7 +1031,7 @@ def _run_pacing(
             step=step_result.step,
             associations=step_result.associations,
             teardowns=step_result.pending_teardowns,
-            mbb_overlap_ticks=mbb_overlap_ticks,
+            mbb_overlap_ticks_by_gs=step_ctx.gs_mbb_overlap_ticks,
         )
         _enqueue(
             subj_checkpoint,

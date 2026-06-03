@@ -8,6 +8,9 @@ ground_station_set:
     - punta-arenas
     - frankfurt
     - hawthorne
+  default_handover_mode: mbb
+  default_mbb_overlap_ticks: 3
+  default_mbb_reserve: 1
   default_terrestrial_prefixes:
     ipv4_template: "172.16.{gs_index}.0/24"
     ipv6_template: "fd10::{gs_index}:0/112"

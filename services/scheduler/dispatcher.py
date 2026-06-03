@@ -201,6 +201,7 @@ class Dispatcher:
         compression_factor: int = 1,
         epsilon_ms: float = 100.0,
         gs_terminal_capacities: dict[str, int] | None = None,
+        gs_handover_modes: dict[str, Literal["bbm", "mbb"]] | None = None,
         sat_ground_terminal_capacities: dict[str, int] | None = None,
         mbb_dispatch: bool = False,
         rtt_to_one_way_policy: Literal["half-rtt"] = "half-rtt",
@@ -229,10 +230,26 @@ class Dispatcher:
         if gs_terminal_capacities is None:
             log.error("FATAL: Dispatcher created with no gs_terminal_capacities")
             raise ValueError("gs_terminal_capacities is required")
+        if gs_handover_modes is None:
+            log.error("FATAL: Dispatcher created with no gs_handover_modes")
+            raise ValueError("gs_handover_modes is required")
         if sat_ground_terminal_capacities is None:
             log.error("FATAL: Dispatcher created with no sat_ground_terminal_capacities")
             raise ValueError("sat_ground_terminal_capacities is required")
+        if set(gs_handover_modes) != set(gs_terminal_capacities):
+            missing = sorted(set(gs_terminal_capacities) - set(gs_handover_modes))
+            extra = sorted(set(gs_handover_modes) - set(gs_terminal_capacities))
+            raise ValueError(
+                "gs_handover_modes must match gs_terminal_capacities; "
+                f"missing={missing}, extra={extra}"
+            )
+        invalid_modes = {
+            gs: mode for gs, mode in gs_handover_modes.items() if mode not in ("bbm", "mbb")
+        }
+        if invalid_modes:
+            raise ValueError(f"Invalid GS handover modes: {invalid_modes}")
         self._gs_capacities = gs_terminal_capacities
+        self._gs_handover_modes = dict(gs_handover_modes)
         self._sat_capacities = sat_ground_terminal_capacities
         self._mbb_dispatch = mbb_dispatch
         self._session_id = session_id
@@ -3072,6 +3089,18 @@ class Dispatcher:
             down_reasons = {}
         if forced_bbm_pairs is None:
             forced_bbm_pairs = frozenset()
+
+        policy_forced_bbm = set(forced_bbm_pairs)
+        for pair in to_remove | to_add:
+            gs_id = gs_id_for_pair(pair, self._gs_capacities)
+            if gs_id is None:
+                continue
+            mode = self._gs_handover_modes.get(gs_id)
+            if mode is None:
+                raise ValueError(f"Missing handover mode for ground station {gs_id}")
+            if mode == "bbm":
+                policy_forced_bbm.add(pair)
+        forced_bbm_pairs = frozenset(policy_forced_bbm)
 
         # --- Classify changes ---
         classification = classify_mbb_changes(

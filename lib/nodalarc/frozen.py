@@ -40,7 +40,7 @@ class FrozenDict(dict):
     setdefault = _immutable
     update = _immutable
 
-    def __ior__(self, other: Any):
+    def __ior__(self, _other: Any):
         self._immutable()
 
     def __copy__(self) -> FrozenDict:

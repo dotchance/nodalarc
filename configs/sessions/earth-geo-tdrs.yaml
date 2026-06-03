@@ -22,6 +22,15 @@ segments:
   - earth
   - ground
   - tdrs
+  scheduling:
+    selection_policy:
+      name: highest-elevation
+      params: {}
+    handover_policy:
+      name: hysteresis
+      params:
+        discount_factor: 1.15
+        mask_fade_range_deg: 5.0
 link_rules:
 - id: ground-access
   kind: access
@@ -41,19 +50,6 @@ simulation:
     max_pairs_per_rule: 24
 orbit:
   propagator: j2-mean-elements
-scheduling:
-  ground:
-    selection_policy:
-      name: highest-elevation
-      params: {}
-    handover_policy:
-      name: hysteresis
-      params:
-        discount_factor: 1.15
-        mask_fade_range_deg: 5.0
-    handover_mode: bbm
-    mbb_overlap_ticks: 0
-    mbb_reserve: 0
 dispatch:
   latency_authority: ome
   max_latency_age_ticks: 1

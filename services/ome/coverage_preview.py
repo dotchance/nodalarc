@@ -18,6 +18,7 @@ import logging
 import time
 from collections import defaultdict
 
+from nodalarc.body_frames import body_frame_for
 from nodalarc.catalog_paths import CatalogRoots
 from nodalarc.constants import EARTH_RADIUS_KM
 from nodalarc.constellation_loader import (
@@ -484,6 +485,7 @@ def _scan_isl_failure_reasons(
                     max_range_km=max_range,
                     max_tracking_rate_deg_s=max_tracking if is_cross else None,
                     field_of_regard_deg=fov,
+                    body_frame=body_frame_for(getattr(sat_map[nid], "central_body", "earth")),
                     polar_seam_enabled=seam_enabled and is_cross,
                     latitude_threshold_deg=lat_threshold,
                     geo_a=geo_a,

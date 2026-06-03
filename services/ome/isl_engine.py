@@ -347,6 +347,7 @@ def evaluate_isl_feasibility(
                     max_range_km=max_range_km,
                     max_tracking_rate_deg_s=applied_tracking_rate,
                     field_of_regard_deg=field_of_regard_deg,
+                    body_frame=body_frame_for(state_a.central_body),
                     polar_seam_enabled=polar_seam_enabled
                     and assignment_a.link_type == "cross_plane_isl",
                     latitude_threshold_deg=latitude_threshold_deg,

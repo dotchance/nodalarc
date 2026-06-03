@@ -7,6 +7,7 @@ from __future__ import annotations
 import math
 
 import pytest
+from nodalarc.body_frames import LUNA_BODY_FRAME
 from nodalarc.models.addressing import NeighborAssignment
 from ome.isl_engine import (
     IslFeasibilityResult,
@@ -18,7 +19,13 @@ from ome.propagation_engine import PropagatedState
 from ome.propagator import EcefVec3, GeoPosition, Vec3
 
 
-def _state(node_id: str, position: Vec3, velocity: Vec3) -> PropagatedState:
+def _state(
+    node_id: str,
+    position: Vec3,
+    velocity: Vec3,
+    *,
+    central_body: str = "earth",
+) -> PropagatedState:
     return PropagatedState(
         node_id=node_id,
         sim_time_unix=1735689600.0,
@@ -26,6 +33,7 @@ def _state(node_id: str, position: Vec3, velocity: Vec3) -> PropagatedState:
         velocity_ecef_km_s=EcefVec3(velocity),
         geodetic=GeoPosition(0.0, 0.0, 550.0),
         propagator_id="test-fixture",
+        central_body=central_body,
     )
 
 
@@ -38,10 +46,15 @@ def _assignment(interface: str, peer: str, link_type: str, priority: int) -> Nei
     )
 
 
-def _constraints(role: str, tracking: float = 4.0) -> IslTerminalConstraints:
+def _constraints(
+    role: str,
+    tracking: float = 4.0,
+    *,
+    max_range_km: float = 4400.0,
+) -> IslTerminalConstraints:
     return IslTerminalConstraints(
         role=role,
-        max_range_km=4400.0,
+        max_range_km=max_range_km,
         max_tracking_rate_deg_s=tracking,
         field_of_regard_deg=360.0,
         terminal_type="rf",
@@ -137,6 +150,35 @@ def test_terminal_role_mismatch_is_auditable_rejection():
     assert result.interface_b == "isl0"
     assert result.range_km > 0.0
     assert result.orbital_one_way_ms > 0.0
+
+
+def test_lunar_same_body_isl_uses_lunar_occluder_not_earth_default():
+    radius_km = LUNA_BODY_FRAME.equatorial_radius_km + 2000.0
+    theta = math.radians(60.0)
+    sat_a = Vec3(radius_km, 0.0, 0.0)
+    sat_b = Vec3(radius_km * math.cos(theta), radius_km * math.sin(theta), 0.0)
+
+    feasibility = evaluate_isl_feasibility(
+        node_order=["luna-a", "luna-b"],
+        sat_states={
+            "luna-a": _state("luna-a", sat_a, Vec3(0.0, 1.0, 0.0), central_body="luna"),
+            "luna-b": _state("luna-b", sat_b, Vec3(-1.0, 0.5, 0.0), central_body="luna"),
+        },
+        by_node={
+            "luna-a": [_assignment("isl0", "luna-b", "intra_plane_isl", 1)],
+            "luna-b": [_assignment("isl0", "luna-a", "intra_plane_isl", 1)],
+        },
+        terminal_constraints={
+            "luna-a": {"isl0": _constraints("intra-plane", max_range_km=5000.0)},
+            "luna-b": {"isl0": _constraints("intra-plane", max_range_km=5000.0)},
+        },
+        polar_seam_enabled=False,
+        latitude_threshold_deg=70.0,
+    )
+
+    result = feasibility[("luna-a", "luna-b")]
+    assert result.feasible
+    assert result.reject_reason == "ok"
 
 
 def test_symmetric_isl_scheduling_respects_terminal_capacity_and_priority():

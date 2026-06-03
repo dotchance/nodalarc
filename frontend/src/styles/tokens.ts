@@ -169,9 +169,9 @@ export const tokens = {
 
   // --- Scene constants (Three.js units, not CSS) ---
   earthRadius: 100,
-  satRadius: 0.6,
+  satRadius: 0.9,
   satSegments: 12,
-  gsSize: 1.6,
+  gsSize: 2.1,
   cameraFov: 45,
   cameraDistance: 250,
   cameraMinDistance: 105,

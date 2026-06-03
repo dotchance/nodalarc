@@ -52,6 +52,7 @@ import { EARTH_RADIUS_KM, kmToRender } from "./units";
 import {
   cameraDistanceForSceneRadius,
   cameraFarForMaxDistance,
+  sceneFrameForCamera,
   sceneRadiusForCamera,
 } from "./cameraBounds";
 
@@ -103,13 +104,15 @@ export function Scene({
   const starGroupRef = useRef<THREE.Group>(null);
   const labelContainerRef = useRef<HTMLDivElement>(null);
   const controlsRef = useRef<OrbitControls | null>(null);
-  // The LinkPicker (inside the Canvas) publishes its hit-test-and-select here; the Canvas-level
-  // onPointerMissed below invokes it on a background click. No-op until the LinkPicker mounts.
+  // The screen-space picker (inside the Canvas) publishes its hit-test-and-select here; the
+  // Canvas-level onPointerMissed below invokes it when physical geometry is missed. No-op until
+  // the picker mounts.
   const missedRef = useRef<(event: MouseEvent) => void>(() => {});
 
   // ctrl/cmd-click orbit pins (capped, oldest evicted) + hover tooltip state.
   const [pinnedIds, setPinnedIds] = useState<string[]>([]);
   const [hover, setHover] = useState<HoverInfo | null>(null);
+  const [cameraFocusLabel, setCameraFocusLabel] = useState("Scene");
   const togglePin = useCallback((id: string) => {
     setPinnedIds((prev) =>
       prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id].slice(-MAX_PINS),
@@ -154,9 +157,19 @@ export function Scene({
     () => cameraDistanceForSceneRadius(sceneRadiusForCamera(bodies, nodes)),
     [bodies, nodes],
   );
+  const sceneFrame = useMemo(() => sceneFrameForCamera(bodies, nodes), [bodies, nodes]);
   const cameraFar = useMemo(
     () => cameraFarForMaxDistance(controlsMaxDistance),
     [controlsMaxDistance],
+  );
+  const bodyPickTargets = useMemo(
+    () =>
+      bodies.map((body) => ({
+        id: body.id,
+        center: new THREE.Vector3(body.position[0], body.position[1], body.position[2]),
+        radius: kmToRender(body.radiusKm),
+      })),
+    [bodies],
   );
 
   // On-select decision data, lifted here so the globe is internally single-sourced: the GS
@@ -173,6 +186,24 @@ export function Scene({
     () =>
       selectedGsId ? gsCandidateRelations(selectedGsId, candidates, snapshot?.links ?? []) : null,
     [selectedGsId, candidates, snapshot?.links],
+  );
+  const focusNode = useCallback(
+    (nodeId: string) => {
+      actionsRef?.current?.focusNode(nodeId);
+    },
+    [actionsRef],
+  );
+  const focusLink = useCallback(
+    (nodeA: string, nodeB: string) => {
+      actionsRef?.current?.focusLink(nodeA, nodeB);
+    },
+    [actionsRef],
+  );
+  const focusBody = useCallback(
+    (bodyId: string) => {
+      actionsRef?.current?.focusBody(bodyId);
+    },
+    [actionsRef],
   );
   useEffect(() => {
     setPinnedIds([]);
@@ -236,15 +267,22 @@ export function Scene({
             actionsRef={actionsRef}
             controlsRef={controlsRef}
             sceneFitDistance={controlsMaxDistance}
+            sceneFrame={sceneFrame}
+            onFocusChange={setCameraFocusLabel}
           />
         )}
-        {/* Click a beam to select the link; click empty space / Earth to deselect (legacy
-            gpuPicker link path + onSelect(null)-on-miss). Sats/GS are picked by their own handlers. */}
+        {/* Missed physical hits get a screen-space pass: nodes first, then beams, then bodies.
+            This keeps MEO/GEO/cislunar objects usable without visually inflating the scene. */}
         <LinkPicker
+          nodes={nodes}
           links={snapshot?.links ?? []}
+          bodies={bodyPickTargets}
           showIslLinks={showIslLinks}
           showGroundLinks={showGroundLinks}
           onSelect={onSelect}
+          onFocusNode={focusNode}
+          onFocusLink={focusLink}
+          onFocusBody={focusBody}
           handlerRef={missedRef}
         />
         <FrameDriver
@@ -293,6 +331,7 @@ export function Scene({
               id={body.id}
               radiusKm={body.radiusKm}
               position={body.position}
+              onFocusBody={focusBody}
               ref={body.id === "earth" ? earthGroupRef : undefined}
             >
               {body.id === "earth" ? (
@@ -305,6 +344,7 @@ export function Scene({
                 ephemeris={ephemeris}
                 colorMode={colorMode}
                 onSelect={onSelect}
+                onFocusNode={focusNode}
                 onTogglePin={togglePin}
                 onHover={setHover}
                 relations={relations}
@@ -316,6 +356,7 @@ export function Scene({
                 actuationNotices={snapshot?.actuation_notices ?? []}
                 envelope={envelope}
                 onSelect={onSelect}
+                onFocusNode={focusNode}
                 onHover={setHover}
               />
               <GroundTracks nodes={bodyNodes} enabled={false} />
@@ -339,6 +380,28 @@ export function Scene({
         }}
       />
       <Tooltip hover={hover} />
+      <div
+        style={{
+          position: "absolute",
+          left: 90,
+          top: 14,
+          zIndex: 8,
+          padding: "4px 8px",
+          border: "1px solid rgba(90, 124, 255, 0.35)",
+          borderRadius: 4,
+          background: "rgba(12, 14, 28, 0.72)",
+          color: "#aeb8ff",
+          fontSize: 11,
+          fontFamily: "monospace",
+          pointerEvents: "none",
+          maxWidth: "min(520px, calc(100vw - 180px))",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+        }}
+      >
+        Focus: {cameraFocusLabel}
+      </div>
       {/* Epoch-suspension overlay during a seek (PRD seek protocol) — legacy "Recalculating Epoch". */}
       {seeking && (
         <div

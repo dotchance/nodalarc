@@ -31,6 +31,7 @@ import { WS_URL, fetchApiKey } from "./config";
 import { setLabelsEnabled, getLabelsEnabled } from "./globe/labels";
 import { setGsLabelsEnabled, getGsLabelsEnabled } from "./globe/groundStations";
 import type { TracedPath } from "./types";
+import type { GlobeActions } from "./globe/actions";
 
 import "./styles/variables.css";
 import "./styles/reset.css";
@@ -115,14 +116,7 @@ function AppInner() {
   const [userTrace, setUserTrace] = useState<TracedPath | null>(null);
   const [visiblePlanes, setVisiblePlanes] = useState<Set<number> | null>(null);
   const [visibleSegments, setVisibleSegments] = useState<Set<string> | null>(null);
-  const globeActionsRef = useRef<{
-    flyToTopView: () => void;
-    setFollowTarget: (nodeId: string | null) => void;
-    captureScreenshot: () => void;
-    flyToNode: (nodeId: string) => void;
-    flyToSegment: (nodeIds: string[]) => void;
-    getNodeScreenPosition: (nodeId: string) => { x: number; y: number; visible: boolean } | null;
-  } | null>(null);
+  const globeActionsRef = useRef<GlobeActions | null>(null);
 
   const handleTogglePlane = useCallback((plane: number) => {
     setVisiblePlanes((prev) => {
@@ -202,21 +196,40 @@ function AppInner() {
     setHistoricalMode(next);
   }, [historicalMode, setHistoricalMode, snapshot?.sim_time]);
 
+  const focusCurrentSelection = useCallback((follow = false): boolean => {
+    if (!selection) {
+      if (!follow) globeActionsRef.current?.frameScene();
+      return !follow;
+    }
+    if (selection.type === "link") {
+      const link = snapshot?.links.find(
+        (candidate) => `${[candidate.node_a, candidate.node_b].sort().join(":")}` === selection.id,
+      );
+      if (!link) return false;
+      globeActionsRef.current?.focusLink(link.node_a, link.node_b, { follow });
+      return true;
+    }
+    globeActionsRef.current?.focusNode(selection.id, { follow });
+    return true;
+  }, [selection, snapshot?.links]);
+
   const handleFollowNode = useCallback(() => {
     setFollowNode((prev: boolean) => {
       if (prev) {
         globeActionsRef.current?.setFollowTarget(null);
         return false;
       }
-      if (!selection || selection.type === "link") return false;
-      globeActionsRef.current?.setFollowTarget(selection.id);
-      return true;
+      return focusCurrentSelection(true);
     });
-  }, [selection, setFollowNode]);
+  }, [focusCurrentSelection, setFollowNode]);
 
   const handleTopView = useCallback(() => { globeActionsRef.current?.flyToTopView(); }, []);
+  const handleFrameScene = useCallback(() => { globeActionsRef.current?.frameScene(); }, []);
+  const handleFrameSelection = useCallback(() => {
+    focusCurrentSelection(false);
+  }, [focusCurrentSelection]);
   const handleScreenshot = useCallback(() => { globeActionsRef.current?.captureScreenshot(); }, []);
-  const handleFlyToNode = useCallback((nodeId: string) => { globeActionsRef.current?.flyToNode(nodeId); }, []);
+  const handleFlyToNode = useCallback((nodeId: string) => { globeActionsRef.current?.focusNode(nodeId); }, []);
   const handleVisualizationFatalError = useCallback((message: string) => {
     setVisualizationError(message);
   }, []);
@@ -242,6 +255,8 @@ function AppInner() {
       onToggleGlobeMode: () => setGlobeMode((m: string) => m === "blue-marble" ? "day-night" : m === "day-night" ? "political" : "blue-marble"),
       onToggleReferenceFrame: toggleReferenceFrame,
       onFollowNode: handleFollowNode,
+      onFrameSelection: handleFrameSelection,
+      onFrameScene: handleFrameScene,
       onTopView: handleTopView,
       onToggleCli: () => setCliDrawerOpen((v: boolean) => !v),
       onTogglePanel: handlePanelToggle,
@@ -249,7 +264,7 @@ function AppInner() {
       onToggleLabels: () => setLabelsEnabled(!getLabelsEnabled()),
       onToggleGsLabels: () => setGsLabelsEnabled(!getGsLabelsEnabled()),
     }),
-    [clearSelection, closeCatalog, showCatalog, hasEverDeployed, toggleView, toggleHistorical, handleFollowNode, handleTopView, historicalMode, playback, handlePanelToggle, toggleReferenceFrame, setColorMode, setShowGroundLinks, setShowIslLinks, setShowSatPaths, setShowTrails, setGlobeMode, setCliDrawerOpen, setFilterOpen],
+    [clearSelection, closeCatalog, showCatalog, hasEverDeployed, toggleView, toggleHistorical, handleFollowNode, handleFrameSelection, handleFrameScene, handleTopView, historicalMode, playback, handlePanelToggle, toggleReferenceFrame, setColorMode, setShowGroundLinks, setShowIslLinks, setShowSatPaths, setShowTrails, setGlobeMode, setCliDrawerOpen, setFilterOpen],
   );
 
   useKeyboard(keyboardActions);
@@ -259,9 +274,9 @@ function AppInner() {
     const prev = prevViewModeRef.current;
     prevViewModeRef.current = viewMode;
     if (viewMode !== prev && (viewMode === "globe" || viewMode === "split") && selection) {
-      globeActionsRef.current?.flyToNode(selection.id);
+      focusCurrentSelection(false);
     }
-  }, [viewMode, selection]);
+  }, [viewMode, selection, focusCurrentSelection]);
 
   const augmentedSnapshot = useMemo(() => {
     if (!snapshot) return snapshot;

@@ -39,6 +39,19 @@ own license or usage terms.
 - NASA media usage guidelines: <https://www.nasa.gov/multimedia/guidelines/index.html>
 - Local file hash: `sha256:230aac448ae68c358be433dd518888cccb3a85ccf66f7b44326441c324ad6725`
 
+### Moon Color Texture
+
+- Path: `frontend/public/moon-lroc-color.jpg`
+- Work: CGI Moon Kit 2025 LROC color map, converted from the 4096x2048
+  16-bit sRGB TIFF to a 4096x2048 JPEG for application packaging
+- Source: NASA's Scientific Visualization Studio
+- Source URL: <https://svs.gsfc.nasa.gov/4720>
+- Direct source file: <https://svs.gsfc.nasa.gov/vis/a000000/a004700/a004720/lroc_color_16bit_srgb_4k.tif>
+- NASA media usage guidelines: <https://www.nasa.gov/multimedia/guidelines/index.html>
+- Local file hash: `sha256:021d1ae5daa7466b3d177f62c618aea6eb8b3f27d245e59b8637936deca6ffb9`
+- Changes in NodalArc: converted from TIFF to JPEG and renamed for
+  application packaging; no other image content changes.
+
 NASA content is generally not subject to copyright in the United States when used
 factually, but NASA should be acknowledged as the source and use must not imply
 NASA endorsement of NodalArc, its authors, or any related product or service.

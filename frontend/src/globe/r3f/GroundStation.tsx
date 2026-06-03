@@ -78,6 +78,7 @@ interface GroundStationProps {
   /** Default-state canonical family (snapshot-derived) — drives glyph tone + fault pulse. */
   family: GsFamily;
   onSelect: (sel: Selection | null) => void;
+  onFocusNode: (nodeId: string) => void;
   onHover: (info: HoverInfo | null) => void;
 }
 
@@ -90,6 +91,7 @@ function GroundStation({
   configuredMinElevDeg,
   family,
   onSelect,
+  onFocusNode,
   onHover,
 }: GroundStationProps) {
   const spriteRef = useRef<THREE.Sprite>(null);
@@ -166,6 +168,12 @@ function GroundStation({
     onSelect({ type: "ground_station", id: node.node_id });
   };
 
+  const handleDoubleClick = (e: ThreeEvent<MouseEvent>) => {
+    e.stopPropagation();
+    onSelect({ type: "ground_station", id: node.node_id });
+    onFocusNode(node.node_id);
+  };
+
   return (
     <group>
       <sprite
@@ -173,6 +181,7 @@ function GroundStation({
         scale={[GS_SIZE, GS_SIZE, 1]}
         position={geom.position}
         onClick={handleClick}
+        onDoubleClick={handleDoubleClick}
         onPointerMove={(e) =>
           onHover({ node, x: e.nativeEvent.clientX, y: e.nativeEvent.clientY, caption })
         }
@@ -224,6 +233,7 @@ interface GroundStationsProps {
    *  so the cone, the lead-line, and the sat tinting share ONE decision-explanation fetch. */
   envelope: EffectiveEnvelopeFacts | null;
   onSelect: (sel: Selection | null) => void;
+  onFocusNode: (nodeId: string) => void;
   onHover: (info: HoverInfo | null) => void;
 }
 
@@ -234,6 +244,7 @@ export function GroundStations({
   actuationNotices,
   envelope,
   onSelect,
+  onFocusNode,
   onHover,
 }: GroundStationsProps) {
   const texture = useMemo(() => makeGsTexture(), []);
@@ -259,6 +270,7 @@ export function GroundStations({
             configuredMinElevDeg={isSelected ? (envelope?.configured_min_elevation_deg ?? null) : null}
             family={groundStationFamily(node.node_id, links, actuationNotices)}
             onSelect={onSelect}
+            onFocusNode={onFocusNode}
             onHover={onHover}
           />
         );

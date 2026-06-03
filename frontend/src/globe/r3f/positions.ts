@@ -121,3 +121,17 @@ export function getNodeBodySphere(
   frame.localToWorld(centerTarget);
   return { body: e.body, radius };
 }
+
+/** Resolve a body's world-space center and render radius. */
+export function getBodyWorldSphere(
+  bodyId: string,
+  centerTarget: THREE.Vector3,
+): { body: string; radius: number } | null {
+  const frame = bodyFrames.get(bodyId);
+  const radius = bodyRadii.get(bodyId);
+  if (!frame || radius === undefined) return null;
+  frame.updateWorldMatrix(true, false);
+  centerTarget.set(0, 0, 0);
+  frame.localToWorld(centerTarget);
+  return { body: bodyId, radius };
+}

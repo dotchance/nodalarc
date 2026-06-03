@@ -4,8 +4,8 @@
  * Earth visuals: three globe modes
  * (blue-marble | day-night | political) selected by `globeMode`:
  *   blue-marble: Phong-lit textured sphere (sun directional + ambient), boundaries shown.
- *   day-night:   custom terminator shader (city lights on the night side), sun light off
- *                (the shader does its own lighting), boundaries shown.
+ *   day-night:   custom terminator shader (city lights on the night side),
+ *                boundaries shown.
  *   political:   both Earth meshes hidden; country boundaries over the scene background.
  * Atmosphere (backside rim glow) is always on; the starfield is inertial (scene root).
  *
@@ -291,8 +291,8 @@ export function Earth({
   const showBlueMarble = globeMode === "blue-marble";
   const showDayNight = globeMode === "day-night";
   const showBoundaries = globeMode === "blue-marble" || globeMode === "political" || globeMode === "day-night";
-  // Day-night mode does its own lighting in the shader; other modes use the sun directional.
-  const sunIntensity = showDayNight ? 0.0 : 1.0;
+  // Earth day-night mode does its own shader lighting; the directional remains for other bodies.
+  const sunIntensity = 1.0;
 
   return (
     <>
@@ -313,10 +313,15 @@ export function Earth({
 
 export function Moon() {
   const { radiusRender } = useBodyFrame();
+  const moonTexture = useLoader(THREE.TextureLoader, "/moon-lroc-color.jpg");
+  useMemo(() => {
+    moonTexture.colorSpace = THREE.SRGBColorSpace;
+    moonTexture.anisotropy = 4;
+  }, [moonTexture]);
   return (
     <mesh>
-      <sphereGeometry args={[radiusRender, 48, 48]} />
-      <meshStandardMaterial color={0xb8b4aa} roughness={0.9} metalness={0.0} />
+      <sphereGeometry args={[radiusRender, 96, 96]} />
+      <meshStandardMaterial map={moonTexture} roughness={1.0} metalness={0.0} />
     </mesh>
   );
 }

@@ -7,6 +7,7 @@ import { EARTH_RADIUS_KM, kmToRender } from "../units";
 import {
   cameraDistanceForSceneRadius,
   cameraFarForMaxDistance,
+  sceneFrameForCamera,
   sceneRadiusForCamera,
   type CameraBoundsBody,
   type CameraBoundsNode,
@@ -34,6 +35,20 @@ describe("scene-aware camera bounds", () => {
 
     expect(maxDistance).toBeGreaterThan(CAMERA_MAX_DISTANCE);
     expect(cameraFarForMaxDistance(maxDistance)).toBeGreaterThan(maxDistance);
+  });
+
+  it("centers Frame All on the active multi-body scene, not Earth origin", () => {
+    const moonDistanceRender = kmToRender(384_400);
+    const bodies: CameraBoundsBody[] = [
+      { id: "earth", radiusKm: EARTH_RADIUS_KM, position: [0, 0, 0] },
+      { id: "luna", radiusKm: 1737.4, position: [moonDistanceRender, 0, 0] },
+    ];
+
+    const frame = sceneFrameForCamera(bodies, []);
+
+    expect(frame.center[0]).toBeGreaterThan(0);
+    expect(frame.center[0]).toBeLessThan(moonDistanceRender);
+    expect(frame.radius).toBeGreaterThan(moonDistanceRender * 0.4);
   });
 
   it("includes high-altitude nodes when fitting a single-body scene", () => {

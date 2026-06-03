@@ -124,8 +124,8 @@ export function Toolbar({
         onClick={onToggleReferenceFrame}
       />
       <div className="toolbar-separator" />
-      <ToolBtn label="Top View (T)" icon="⊙" onClick={onTopView} />
-      <ToolBtn label="Follow Node (F)" icon="⊕" active={followNode} onClick={onFollowNode} />
+      <ToolBtn label="Top View (V)" icon="⊙" onClick={onTopView} />
+      <ToolBtn label="Follow Selection (Shift+F)" icon="⊕" active={followNode} onClick={onFollowNode} />
       <ToolBtn label="Screenshot" icon="📷" onClick={onScreenshot} />
     </div>
   );

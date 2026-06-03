@@ -46,6 +46,7 @@ interface ConstellationProps {
   ephemeris: SessionEphemeris | null;
   colorMode: ColorMode;
   onSelect: (sel: Selection | null) => void;
+  onFocusNode: (nodeId: string) => void;
   /** ctrl/cmd-click toggles an orbit pin for the satellite instead of selecting it. */
   onTogglePin: (id: string) => void;
   /** Hover a satellite -> tooltip; null clears it. */
@@ -59,6 +60,7 @@ export function Constellation({
   ephemeris,
   colorMode,
   onSelect,
+  onFocusNode,
   onTogglePin,
   onHover,
   relations,
@@ -182,6 +184,15 @@ export function Constellation({
     else onSelect({ type: "satellite", id });
   };
 
+  const handleDoubleClick = (e: ThreeEvent<MouseEvent>) => {
+    if (e.instanceId === undefined) return;
+    const id = indexToId.current[e.instanceId];
+    if (!id) return;
+    e.stopPropagation();
+    onSelect({ type: "satellite", id });
+    onFocusNode(id);
+  };
+
   const handlePointerMove = (e: ThreeEvent<PointerEvent>) => {
     if (e.instanceId === undefined) return;
     const id = indexToId.current[e.instanceId];
@@ -202,6 +213,7 @@ export function Constellation({
       args={[geometry, material, MAX_SATELLITES]}
       name="satellites"
       onClick={handleClick}
+      onDoubleClick={handleDoubleClick}
       onPointerMove={handlePointerMove}
       onPointerOut={() => onHover(null)}
     />

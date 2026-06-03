@@ -17,6 +17,8 @@ interface KeyboardActions {
   onToggleHistorical: () => void;
   onPlayPause: () => void;
   onFollowNode: () => void;
+  onFrameSelection: () => void;
+  onFrameScene: () => void;
   onTopView: () => void;
   onToggleGlobeMode?: () => void;
   onToggleReferenceFrame?: () => void;
@@ -74,7 +76,11 @@ export function useKeyboard(actions: KeyboardActions): void {
           break;
         case "f":
         case "F":
-          actions.onFollowNode();
+          if (e.shiftKey) actions.onFollowNode();
+          else actions.onFrameSelection();
+          break;
+        case "Home":
+          actions.onFrameScene();
           break;
         case "t":
         case "T":

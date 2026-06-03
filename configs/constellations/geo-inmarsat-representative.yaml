@@ -1,0 +1,37 @@
+# GEO-INMARSAT-REPRESENTATIVE — commercial GEO mobile-satellite style slots.
+#
+# Demo building block, not a live fleet assertion. The slots are intentionally
+# explicit instead of a uniform ring so an Inmarsat-style demo has its own
+# geometry and node count while still using the shared GEO RF terminal model.
+mode: explicit
+name: geo-inmarsat-representative
+satellite_type: meo-geo-rf
+satellites:
+- plane: 0
+  slot: 0
+  orbit:
+    altitude_km: 35786
+    inclination_deg: 0
+    raan_deg: 0
+    true_anomaly_deg: 262.0   # Approx. 98W service region
+- plane: 0
+  slot: 1
+  orbit:
+    altitude_km: 35786
+    inclination_deg: 0
+    raan_deg: 0
+    true_anomaly_deg: 306.0   # Approx. 54W service region
+- plane: 0
+  slot: 2
+  orbit:
+    altitude_km: 35786
+    inclination_deg: 0
+    raan_deg: 0
+    true_anomaly_deg: 25.0    # Approx. 25E service region
+- plane: 0
+  slot: 3
+  orbit:
+    altitude_km: 35786
+    inclination_deg: 0
+    raan_deg: 0
+    true_anomaly_deg: 143.5   # Approx. 143.5E service region

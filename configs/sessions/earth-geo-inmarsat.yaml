@@ -6,7 +6,7 @@ identity:
 segments:
 - id: space
   kind: constellation
-  source: configs/constellations/geo-ring-8.yaml
+  source: configs/constellations/geo-inmarsat-representative.yaml
   namespace: space
   central_body: earth
   tags:

@@ -1,17 +1,20 @@
 # Adding Routing Stacks
 
-NodalArc uses FRRouting as the routing engine inside every session pod. Adding a new routing protocol means either:
+NodalArc uses FRRouting as the routing engine inside every session pod today.
+Adding a new routing protocol means either:
 
-1. **Enabling an FRR daemon** that's already in the image but not yet templated (e.g., `bgpd`, `ldpd`, `eigrpd`)
+1. **Enabling an FRR daemon** that is in the image but not yet templated
+   end-to-end
 2. **Integrating a different routing daemon** (e.g., BIRD, OpenBGPd, cRPD)
 
 ## How Routing Stacks Work
 
 Each session pod runs FRR with a configuration generated from Jinja2 templates at session creation time. The template system:
 
-1. Session YAML specifies `routing.protocol` and `routing.extensions`
-2. The Operator's `frr_renderer.py` resolves which template to use
-3. The template receives variables: loopback IPs, interface IPs, area assignments, SID indexes, ground station prefixes
+1. Segment session YAML specifies `routing.protocol` and `routing.extensions`
+2. The shared resolver builds the frozen runtime session
+3. The Operator's `frr_renderer.py` resolves which template to use
+4. The template receives variables: loopback IPs, interface IPs, area assignments, SID indexes, ground prefixes, segment metadata, and terminal-derived interface facts
 4. Rendered output is `frr.conf` + `daemons` file delivered to the pod
 
 ## Adding an FRR Protocol (Simplest Path)
@@ -26,14 +29,14 @@ The template has access to:
 
 | Variable | Type | Content |
 |----------|------|---------|
-| `node_id` | str | e.g., `space-sat-p00s00` or `ground-gs-hawthorne` |
+| `node_id` | str | e.g., `space-sat-p00s00`, `leo-sat-p00s00`, or `earth-site-gs-santiago-leo-router` |
 | `node_type` | str | `satellite` or `ground_station` |
 | `loopback_ip` | str | Node's loopback address |
 | `interfaces` | list | All interfaces with peer info, IP, bandwidth |
 | `area_id` | str | Routing area this node belongs to |
 | `plane` | int | Orbital plane index |
 | `slot` | int | Slot within plane |
-| `terrestrial_prefixes` | list | Ground station prefix advertisements |
+| `terrestrial_prefixes` | list | Ground-node prefix advertisements |
 | `extensions` | list | Enabled extensions (e.g., `traffic-engineering`, `sr`) |
 | `config_overrides` | dict | User-provided key-value overrides |
 
@@ -96,10 +99,12 @@ This requires a new container image and changes to the session pod spec.
 ### What you need:
 
 1. **Container image** - your routing daemon packaged as a Docker image in `images/`
-2. **Interface compatibility** - must work with the existing interface model (isl0-3, gnd0, lo, terr0)
+2. **Interface compatibility** - must work with generated terminal interfaces
+   (`islX`, `gndX`, `lo`, `terr0`)
 3. **Carrier detection** - must detect link carrier state on interfaces (UP/DOWN/LOWERLAYERDOWN)
 4. **Config delivery** - mechanism to inject configuration at session start
-5. **Operator integration** - pod spec generation in `session_deployer.py`
+5. **Operator integration** - pod spec generation and config delivery in
+   `session_deployer.py`
 
 ### Constraints:
 
@@ -117,6 +122,11 @@ Extensions modify an existing protocol's behavior without replacing it:
 | `sr` | Segment routing SID advertisement, SRGB/SRLB |
 | `mpls` | MPLS forwarding, label tables, LDP or SR label distribution |
 
+BGP and DSN/DTN-style adapters are future routing families. They should be
+added as explicit runtime-supported protocols with templates, resolver
+validation, and tests; do not expose them as selectable working modes before
+that path exists.
+
 Extensions are handled in the Jinja2 template via conditional blocks:
 
 ```jinja2
@@ -128,7 +138,7 @@ Extensions are handled in the Jinja2 template via conditional blocks:
 
 ## Testing a New Stack
 
-1. Deploy a small constellation (demo-36)
+1. Deploy a small curated session, such as `earth-leo-simple.yaml`
 2. Verify adjacencies form: `show {protocol} neighbor` on multiple nodes
 3. Verify routing works: ping between non-adjacent nodes
 4. Verify ground station reachability: ping from GS to satellite loopback

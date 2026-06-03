@@ -6,7 +6,15 @@
 
 ## Responsibility
 
-The OME is the physics engine. It takes a constellation definition and ground station set, propagates satellite positions via Keplerian orbital mechanics, determines visibility between all pairs, and paces events out at simulation speed.
+The OME is the physics engine. It consumes the resolved session, propagates
+space nodes in their body frames, resolves body ephemeris when present,
+determines visibility for the declared link-rule candidate universe, and paces
+events out at simulation speed.
+
+For Earth-only LEO sessions this behaves like the original single-body orbital
+engine. For multi-segment sessions, the OME still owns the same truth: which
+candidate links are geometrically and physically valid at the current simulation
+time.
 
 ## Threading Model
 
@@ -46,13 +54,31 @@ The OME is the physics engine. It takes a constellation definition and ground st
 
 The OME computes in windows. One window covers one orbital period (~95 minutes at 550 km LEO). For each window:
 
-1. Propagate all satellite positions at discrete time steps
-2. Check line-of-sight visibility for every satellite pair and satellite-ground station pair
+1. Propagate body positions and all space-node positions at discrete time steps
+2. Check line-of-sight, range, body occlusion, terminal geometry, and ground
+   scheduling for the resolved candidate links
 3. Compute the exact time each link becomes visible and invisible
 4. Build a timeline of all events in chronological order
 5. Pace the timeline out at simulation speed
 
-Window computation happens once, then events are paced in real time. For 176 satellites, computation takes ~46 seconds. This is startup/epoch-boundary cost, not runtime cost.
+Window computation happens once, then events are paced in real time. For the
+176-satellite LEO session, computation takes roughly tens of seconds on the
+reference development hardware. This is startup/epoch-boundary cost, not
+runtime cost.
+
+## Segment and Body Model
+
+The OME does not infer cross-segment connectivity from proximity alone.
+`link_rules` declare the candidate universe:
+
+- `access` is body-local ground-to-space access
+- `inter_constellation` links connect space segments in the same body frame
+- `inter_body_relay` links connect space segments across body frames and carry
+  an explicit protocol boundary
+
+Earth/Luna sessions use a local BSP ephemeris kernel for body positions. The
+session resolver rejects unsupported body/frame grammar before OME startup
+instead of letting OME approximate it silently.
 
 ## Playback Controls
 
@@ -83,6 +109,7 @@ The OME has an init container that creates all NATS JetStream streams before the
 | `main.py` | Entry point, thread setup, checkpoint logic |
 | `pacing.py` | Pacing thread, time controls, event timeline |
 | `publisher.py` | Async NATS publisher thread |
-| `propagator.py` | Keplerian orbital propagation |
+| `propagator.py` / `propagation_engine.py` | Mean-element orbital propagation and common-frame transforms |
+| `lib/nodalarc/ephemeris_runtime.py` | Body ephemeris loading and validation for local BSP kernels |
 | `visibility.py` | Line-of-sight computation, ground scheduling |
 | `event_stream.py` | Timeline builder, window computation |

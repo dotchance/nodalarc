@@ -184,14 +184,17 @@ sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl exec -it deploy/nodalarc-sched
 ### Inspect Session Pods
 
 ```bash
-# Check a satellite's interfaces
-sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl exec space-sat-p00s00 -n nodalarc -c frr -- ip -br link show
+NODE=$(sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl get pods -n nodalarc \
+  -o name | sed 's#pod/##' | grep -E -- '-sat-|-gs-' | head -1)
+
+# Check a session node's interfaces
+sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl exec "$NODE" -n nodalarc -c frr -- ip -br link show
 
 # Check routing state
-sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl exec space-sat-p00s00 -n nodalarc -c frr -- vtysh -c "show isis neighbor"
+sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl exec "$NODE" -n nodalarc -c frr -- vtysh -c "show isis neighbor"
 
 # Check latency shaping
-sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl exec space-sat-p00s00 -n nodalarc -c frr -- tc qdisc show dev isl0
+sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl exec "$NODE" -n nodalarc -c frr -- tc qdisc show dev isl0
 ```
 
 ## Multi-Node Development

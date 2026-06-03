@@ -10,7 +10,10 @@ It gives network engineers a lab where satellites move, links appear and disappe
 
 NodalArc is an emulator, not a packet-level simulator.
 
-Each satellite and ground station becomes a real Linux network namespace running a real routing stack. IS-IS hellos, OSPF LSAs, BGP updates, MPLS labels, kernel interfaces, carrier transitions, VXLAN links, and `tc` shaping all happen in the system that Linux actually runs.
+Each satellite, relay, and ground node becomes a real Linux network namespace
+running a real routing stack. IS-IS hellos, OSPF LSAs, supported MPLS labels,
+kernel interfaces, carrier transitions, VXLAN links, and `tc` shaping all
+happen in the system that Linux actually runs.
 
 The orbital mechanics are not decoration around a static lab. They drive the lab. When two satellites move out of range, the interface drops. When a ground station hands off to a new satellite, the router sees the carrier event. When the distance between two endpoints changes, the link latency changes with it.
 
@@ -77,7 +80,7 @@ NodalArc is built so a platform operator can install it, and a network engineer 
 
 From the browser you can:
 
-- choose constellations, satellite types, ground-station sets, and routing stacks
+- choose constellations, satellite types, ground-site sets, relay segments, and routing stacks
 - preview coverage before deploying a bad session
 - deploy and switch sessions
 - watch satellites, ISLs, ground links, handoffs, and convergence events
@@ -157,7 +160,10 @@ Once the system is running, you can:
 - script experiments through the REST and WebSocket APIs
 - connect external systems to the emulation and watch how they behave
 
-Start small. Demo-36 is enough to see the machinery. Starlink-176 and Iridium-66 start to show why the geometry matters. A Walker Delta gives you a steady backbone and access handoffs. A Walker Star gives you global reach and a polar seam that tears through the backbone on schedule.
+Start small. `earth-leo-simple.yaml` is enough to see the machinery. The Walker
+and polar LEO sessions show why geometry matters. MEO/GEO sessions show the
+longer-range gateway regime. The Earth-Luna sessions show how the same
+building-block model extends into cislunar experiments.
 
 That is where the interesting questions start.
 
@@ -165,7 +171,10 @@ That is where the interesting questions start.
 
 ### Real Routing Stacks
 
-NodalArc starts with FRR because FRR is practical, scriptable, open, and already gives us IS-IS, OSPF, BGP, SR-MPLS, LDP, and traffic engineering.
+NodalArc starts with FRR because FRR is practical, scriptable, open, and already
+gives us IS-IS, OSPF, SR-MPLS, LDP, and traffic engineering. BGP and deeper-space
+protocol adapters belong on the roadmap as explicit routing families, not as
+silent approximations.
 
 But NodalArc is not an FRR simulator.
 
@@ -185,14 +194,16 @@ NodalArc sessions are built from primitives:
 
 - satellite types describe hardware: terminals, ranges, bandwidth, tracking limits
 - constellation geometry describes where the satellites move
-- ground stations describe where the network touches Earth and what prefixes enter there
+- ground sites and ground nodes describe where the network touches a body and
+  what prefixes enter there
 - routing stacks describe what runs inside each node
 
 Change one primitive and leave the others alone. Same sky, different routing. Same routing, different sky. Same constellation, different ground exits. A clean comparison has one deliberate difference.
 
 ### Time Control
 
-Pause, resume, change speed, and seek. If a failure happens at a certain point in the orbit, move time there and inspect the state while the system is still.
+Pause, resume, and change speed. If a failure happens during a pass, pause the
+system and inspect the state while the topology is still.
 
 ### Multi-Node Scale
 

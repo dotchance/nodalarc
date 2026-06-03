@@ -1,83 +1,105 @@
 # Extending Propagators
 
-The OME uses Keplerian orbital mechanics to compute satellite positions and velocities. The propagator is the function that maps `(orbital_elements, time)` → `(position, velocity)`.
+The OME propagates node positions and velocities, then evaluates visibility and
+latency from those positions. A propagator maps a node's orbital state and
+simulation time to a common-frame position and velocity.
 
 ## Current Implementation
 
-The default propagator in `services/ome/propagator.py` implements two-body Keplerian propagation:
+NodalArc currently supports:
 
-- Input: semi-major axis, eccentricity, inclination, RAAN, argument of perigee, mean anomaly at epoch
-- Output: ECEF position (x, y, z) and velocity (vx, vy, vz) at any time t
-- Coordinate frame: ECEF (Earth-Centered Earth-Fixed) for position, ECI for internal computation
+- Mean-element propagation for catalog constellations
+- Body-parameterized propagation for Earth and Luna sessions
+- Local Skyfield/JPL BSP ephemeris for body positions in Earth-Luna sessions
+- TLE/SGP4 parsing support in the model layer, with runtime use gated by the
+  resolver until the full workflow is ready
 
-This is sufficient for LEO/MEO circular orbits where J2 perturbation effects are acceptable over one orbital period (~95 minutes). The OME recomputes each window, so perturbation drift doesn't accumulate.
+Earth-only LEO/MEO/GEO sessions do not need a body ephemeris manifest. Lunar
+sessions do: the session declares a local BSP kernel, and the resolver validates
+path, checksum, coverage, provider, and required body targets before OME starts.
+Runtime network fetch of ephemeris kernels is forbidden.
+
+## Frames
+
+The physics contract is common-frame first:
+
+1. Propagate the node in its segment/body frame.
+2. Add the body's common-frame position and velocity when the central body is
+   not the common origin.
+3. Publish enough ephemeris and frame metadata for clients to render positions
+   locally.
+
+For Earth-Luna sessions, the common frame is Earth-centered GCRS. A lunar node's
+common-frame velocity must include the Moon's velocity, not only the node's
+velocity around Luna.
 
 ## When You'd Want a Different Propagator
 
-- **High-fidelity requirements** - J2, J4, atmospheric drag, solar radiation pressure
-- **GEO orbits** - station-keeping effects matter over longer periods
-- **TLE/SGP4 input** - using real satellite TLEs instead of parametric constellation definitions
-- **Interplanetary** - different gravity models entirely
+- **High-fidelity Earth orbit** - J2/J4, drag, solar radiation pressure,
+  station-keeping
+- **TLE/SGP4 input** - real satellite TLE catalogs rather than parametric
+  constellations
+- **Lagrange or deep-space relays** - explicit external ephemeris or SPK-backed
+  state vectors
+- **Mars or other bodies** - additional body constants, body frames, surface
+  models, and ephemeris targets
+
+Unsupported propagation grammar must fail validation. Do not approximate a
+future propagator with the nearest current one.
 
 ## Propagator Interface
 
-The propagator must implement:
+At the runtime boundary, propagation needs:
 
 ```python
 def propagate(
     orbital_elements: OrbitalElements,
-    epoch: datetime,
-    target_time: datetime
+    epoch_unix: float,
+    target_unix: float,
+    *,
+    central_body: str,
+    body_state: CommonBodyState | None,
 ) -> tuple[Position, Velocity]:
     """
-    Compute position and velocity at target_time.
-
-    Returns:
-        position: (x, y, z) in km, ECEF frame
-        velocity: (vx, vy, vz) in km/s, ECEF frame
+    Compute common-frame position and velocity at target_unix.
     """
 ```
 
-And for batch computation (all satellites at one time):
-
-```python
-def propagate_batch(
-    elements: list[OrbitalElements],
-    epoch: datetime,
-    target_time: datetime
-) -> list[tuple[Position, Velocity]]:
-    """Propagate all satellites to target_time."""
-```
+Batch propagation should keep the same contract and return deterministic output
+for the same session, epoch, and target time.
 
 ## Integration Points
 
-### OME (window computation)
+### Resolver
 
-`services/ome/event_stream.py` calls the propagator at discrete time steps to compute all satellite positions, then checks visibility between pairs. Replace the propagator call here.
+`lib/nodalarc/resolve_session.py` validates whether the requested propagator,
+body, and ephemeris provider are runtime-supported. It also materializes the
+body ephemeris provider for the OME when required.
 
-### Scheduler (latency authority)
+### OME
 
-The live Scheduler does not recompute geometry for dispatch latency. OME
-VisibilityEvents and LinkStateSnapshots carry authoritative `range_km` and
-`latency_ms`; the Scheduler preserves them and applies substrate compensation
-before sending Node Agent requests. Keep any new propagator reflected in the OME
-snapshot/event payloads.
+`services/ome/event_stream.py`, `services/ome/propagation_engine.py`, and the
+visibility engines use the propagated positions to build link authority. OME
+payloads carry authoritative range and latency. The Scheduler does not invent
+geometry if OME did not provide it.
 
-### VS-API and VF (position display)
+### VS-API and VF
 
-The `SessionEphemeris` published by the OME contains Keplerian orbital elements. The VF and VS-API run local propagation from these elements. If you use a non-Keplerian propagator, you need to either:
-- Publish position data per-tick (expensive, changes the architecture)
-- Provide a JavaScript implementation of your propagator for the VF
-- Accept lower-fidelity Keplerian positions in the UI while the backend uses your propagator
+The frontend receives `SessionEphemeris` and computes render positions locally.
+Any new runtime propagator needs a matching frontend propagation path or a new
+wire contract. Publishing per-frame positions is a different architecture and
+should not be added as a hidden fallback.
 
 ## Adding SGP4/TLE Support
 
-The most common extension: use NORAD TLEs as input instead of parametric constellation definitions.
+TLE/SGP4 support should be added as a complete workflow:
 
-1. Add a constellation mode `tle` that accepts a TLE file
-2. Parse TLEs into `OrbitalElements` for the existing pipeline, OR
-3. Replace the propagator with SGP4 (via `sgp4` Python library, already common)
-4. Update `SessionEphemeris` to carry TLE data instead of Keplerian elements
-5. Update the VF's `simClock.ts` to use `satellite.js` (JavaScript SGP4) for local propagation
+1. Accept a TLE constellation source in the segment grammar
+2. Validate TLE file presence, epoch, body, and runtime support in the resolver
+3. Use SGP4 in the OME for authority
+4. Publish TLE-backed ephemeris records to clients
+5. Use a matching client-side SGP4 implementation for visualization
 
-The sgp4 library is a clean swap - same input/output contract, higher fidelity for real satellite tracking.
+Until those pieces are present, TLE controls in the UI should be disabled or
+marked as coming soon. They should not generate YAML that the runtime cannot
+execute.

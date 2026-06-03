@@ -81,7 +81,8 @@ make nuke && make all
 3. Build all Docker images (6 services + base images)
 4. Load images into the cluster (K3s import or registry push)
 5. Install the Helm chart
-6. Deploy a default session (36 satellites, OSPF, 7 ground stations)
+6. Deploy the default session (`earth-leo-simple.yaml`: 36 LEO satellites,
+   OSPF, and MBB-capable Earth ground nodes)
 7. Print status
 
 Total time: 3-5 minutes from a fresh checkout on a single machine.
@@ -94,7 +95,7 @@ If the platform is already installed, `make all` is the wrong transition because
 - ConstellationSpec CRD (cluster-scoped)
 - Platform services: OME, Scheduler, Node Agent (DaemonSet), VS-API, Operator, NATS
 - Frontend: VF (nginx serving the React app)
-- Session: 36 satellite pods + 7 ground station pods
+- Session: 36 satellite pods + 7 Earth ground-node pods
 - ConfigMaps: FRR configs, topology wiring manifest, platform config
 - Secrets: SSH terminal keys
 - PVC: NATS JetStream file storage
@@ -118,7 +119,10 @@ Open http://localhost:3000 to see the visualization. If deploying on a remote ma
 
 ```bash
 # Quick check: do satellites have routing neighbors?
-sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl exec space-sat-p00s00 -n nodalarc -c frr -- vtysh -c "show ip ospf neighbor"
+NODE=$(sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl get pods -n nodalarc \
+  -o name | sed 's#pod/##' | grep '^space-sat-' | head -1)
+sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl exec "$NODE" -n nodalarc -c frr -- \
+  vtysh -c "show ip ospf neighbor"
 ```
 
 You should see adjacent satellites listed as FULL neighbors. If running IS-IS instead of OSPF, use `show isis neighbor`.
@@ -134,14 +138,17 @@ Or users can deploy sessions from the browser wizard at http://localhost:3000.
 
 Available session configs:
 
-| Session | Satellites | Routing | Description |
-|---------|-----------|---------|-------------|
-| `earth-leo-simple.yaml` | 36 | OSPF | Default. MBB-capable single-shell LEO starter with two GS terminals per station |
+| Session | Space Nodes | Routing | Description |
+|---------|------------:|---------|-------------|
+| `earth-leo-simple.yaml` | 36 | OSPF | Default. MBB-capable single-shell LEO starter |
 | `earth-leo-walker.yaml` | 176 | IS-IS + TE | Walker-delta LEO starter |
 | `earth-leo-polar.yaml` | 36 | IS-IS + TE | Polar LEO starter with high-latitude ground stations |
 | `earth-meo-gps.yaml` | 24 | IS-IS | GPS-like MEO starter with long-range RF gateways |
 | `earth-geo-inmarsat.yaml` | 4 | IS-IS | Representative GEO commercial-relay-style starter |
 | `earth-geo-tdrs.yaml` | 6 | IS-IS | Representative GEO relay/TDRS-style starter |
+| `earth-leo-meo-geo.yaml` | 68 | IS-IS + TE | Earth LEO/MEO/GEO multi-regime session |
+| `earth-luna-relay.yaml` | 9 | IS-IS + TE | Earth relay plus lunar relay and lunar ground access |
+| `earth-luna-gateway-site.yaml` | 69 | IS-IS + TE | Cislunar gateway-site demonstrator |
 
 ## Step 5: Teardown
 

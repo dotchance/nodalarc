@@ -4,7 +4,7 @@
 
 The Dispatcher owns event ordering and state mutation. This module owns the
 side-effectful boundary to Node Agent BatchLinkUp/Down, SetLatency, and
-read-only KernelInventory verification. Phase 5 keeps proof details instead of
+read-only KernelInventory verification. Proof details are preserved instead of
 collapsing Node Agent responses to a bare success set.
 """
 

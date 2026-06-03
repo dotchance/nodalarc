@@ -93,12 +93,15 @@ kernel or manifest problem before expecting the Scheduler gate to open.
 ### Check Interface State
 
 ```bash
-sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl exec space-sat-p00s00 -n nodalarc -c frr -- \
+NODE=$(sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl get pods -n nodalarc \
+  -o name | sed 's#pod/##' | grep -E -- '-sat-|-gs-' | head -1)
+sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl exec "$NODE" -n nodalarc -c frr -- \
   ip -br link show
 ```
 
 - ISL interfaces should show `UP` state
-- `gnd0` shows `UP` when a ground link is active, `LOWERLAYERDOWN` when no satellite overhead
+- `gnd0`, `gnd1`, ... show `UP` when a compatible ground link is active and
+  `LOWERLAYERDOWN` when no link is active
 - If interfaces show `DOWN`, check Scheduler logs first. A stale substrate
   measurement, unverified ACK, or dirty Node Agent response stops dispatch by
   design.
@@ -106,14 +109,14 @@ sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl exec space-sat-p00s00 -n nodal
 ### Check FRR is Running
 
 ```bash
-sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl exec space-sat-p00s00 -n nodalarc -c frr -- \
+sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl exec "$NODE" -n nodalarc -c frr -- \
   vtysh -c "show daemons"
 ```
 
 Should list `zebra`, `isisd` (or `ospfd`), and possibly `staticd`. If daemons aren't running, check the FRR config delivery:
 
 ```bash
-sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl exec space-sat-p00s00 -n nodalarc -c frr -- \
+sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl exec "$NODE" -n nodalarc -c frr -- \
   cat /etc/frr/frr.conf
 ```
 

@@ -215,7 +215,7 @@ def resolve_session_with_assets(
         )
 
     roots = catalog_roots or default_catalog_roots()
-    support = runtime_support or RuntimeSupport.mvp_m3()
+    support = runtime_support or RuntimeSupport.earth_luna()
     context = source_context or SourceContext(origin="resolve_session")
 
     try:
@@ -251,7 +251,7 @@ def resolve_session_with_assets(
 
     if not const_assets or not ground_assets:
         raise SessionResolutionError(
-            "M3 runtime supports one or more satellite-producing segments and at least one ground_set segment; "
+            "the selected runtime supports one or more satellite-producing segments and at least one ground_set segment; "
             f"got {len(const_assets)} constellation segment(s), {len(ground_assets)} ground_set segment(s)"
         )
 
@@ -483,7 +483,7 @@ def _load_space_node_segment(segment: SpaceNodeSegment) -> ResolvedConstellation
 
     if isinstance(segment.node.state, StateVector):
         raise SessionResolutionError(
-            f"space_node segment {segment.id!r} uses StateVector; M3 runtime supports "
+            f"space_node segment {segment.id!r} uses StateVector; the current runtime supports "
             "orbital-elements space nodes only so propagation remains authoritative"
         )
     if segment.central_body is None:
@@ -830,7 +830,7 @@ def _build_runtime_constellation_source(
     if cfg.orbit.propagator == "sgp4-tle":
         raise SessionResolutionError(
             "multi-segment runtime projection does not support orbit.propagator='sgp4-tle' yet; "
-            "use j2-mean-elements for M2 Earth multi-regime sessions"
+            "use j2-mean-elements for Earth multi-regime sessions"
         )
     return {
         "mode": "explicit",
@@ -1241,7 +1241,7 @@ def _validate_link_rule_runtime_shape(
             if any(endpoint.terminal_role != "isl" for endpoint in rule.endpoints):
                 raise SessionResolutionError(
                     f"inter_body_relay link_rule {rule.rule_id!r} requires terminal_role='isl' "
-                    "on both endpoints for M3"
+                    "on both endpoints for the current runtime"
                 )
             if len(endpoint_bodies[0]) != 1 or len(endpoint_bodies[1]) != 1:
                 raise SessionResolutionError(
@@ -1415,7 +1415,7 @@ def _rank_pairs_by_epoch_range(
 ) -> FrozenDict:
     """Rank satellite pairs by physical range at the session epoch.
 
-    ``nearest_n`` is a static M2 topology because ISL interfaces are wired at pod
+    ``nearest_n`` is a static topology because ISL interfaces are wired at pod
     creation. The ranking source is still physical: range at the configured
     epoch using the selected OME propagator. Dynamic nearest-visible rewiring is
     a later runtime capability and remains fail-loud until implemented.
@@ -1635,7 +1635,7 @@ def _validate_declared_candidate_constraints(
     ``max_links_per_node`` is a static graph constraint and is enforceable at
     resolve time. Range/mutual-visibility/scheduling constraints are dynamic OME
     semantics; accepting them before OME consumes them would be a lie, so they
-    are rejected loudly for M3.
+    are rejected loudly until OME consumes them directly.
     """
     nodes = {node.node_id: node for node in resolved.nodes}
     degree_by_rule_node: dict[tuple[str, str], int] = {}

@@ -149,10 +149,9 @@ class VisibilityEvent(BaseModel):
 
     node_a is always alphabetically < node_b (enforced by validator).
 
-    Reason fields (Phase 1, C-foundation-5): every transition must carry
-    both axes of the typed reason taxonomy so consumers can explain
-    the transition from the event stream alone — without correlating
-    against the decision snapshot.
+    Reason fields: every transition must carry both axes of the typed reason
+    taxonomy so consumers can explain the transition from the event stream
+    alone — without correlating against the decision snapshot.
 
     - ``visibility_reject_reason``: physical / geometric attribution.
       ``"ok"`` when the pair is visible; one of the typed rejection
@@ -250,8 +249,8 @@ class VisibilityEvent(BaseModel):
 
     @model_validator(mode="after")
     def _reasons_consistent_with_state(self) -> VisibilityEvent:
-        """Phase 1 (C-foundation-5): both axes of the reason taxonomy must be
-        consistent with (visible, scheduled). The four states are:
+        """Both axes of the reason taxonomy must be consistent with
+        (visible, scheduled). The four states are:
 
         - visible=True,  scheduled=True  → reject='ok',     unscheduled=None
         - visible=True,  scheduled=False → reject='ok',     unscheduled=<set>

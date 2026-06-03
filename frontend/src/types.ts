@@ -33,10 +33,9 @@ export interface NodeState {
   addresses?: NodeAddress[];
   min_elevation_deg: number | null;
   beam_falloff_exponent: number | null;
-  /** Celestial body this node is anchored to (earth | luna | mars). Optional for forward-compat
-   *  with pre-parameterization snapshots; consumers default to "earth". */
+  /** Celestial body this node is anchored to (earth | luna | mars). */
   reference_body?: string;
-  /** Placement frame id from the resolved session. Defaults to the reference body for old payloads. */
+  /** Placement frame id from the resolved session. */
   frame_id?: string;
   /** Owning tenant (multi-tenant from day one). Optional; consumers default to "default". */
   tenant_id?: string;
@@ -257,6 +256,6 @@ export type GlobeMode = "blue-marble" | "day-night" | "political";
  *  - "earth-inertial": observer fixed in inertial space, Earth visibly rotates
  *    at sidereal rate, satellites visibly traverse orbits, stars stationary.
  *
- *  Namespace reserves "earth-*" prefix for future "moon-*", "sun-*", and
- *  rotating-barycenter-frame values. See specs/eci-view-plan.md §9. */
+ *  Namespace reserves the "earth-*" prefix so future body and barycenter
+ *  reference frames can be added without renaming existing values. */
 export type ReferenceFrame = "earth-fixed" | "earth-inertial";

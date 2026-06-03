@@ -42,8 +42,8 @@ class LinkDecisionProvenance(BaseModel):
     "what latency?" but not "why does this link exist?" For commercial
     audit, every LinkUp should also carry: terminal_role_a, terminal_role_b,
     propagator_id, visibility_checks_applied (tuple of check names),
-    scheduling policy and score, dispatch_mode ("bbm" | "mbb_phase2" |
-    "mbb_phase3"), epoch_id, and snapshot_seq. Every LinkDown should carry
+    scheduling policy and score, dispatch stage, epoch_id, and snapshot_seq.
+    Every LinkDown should carry
     rejection_reason. This makes each event self-contained — an auditor
     can reconstruct the decision from the event alone.
     """

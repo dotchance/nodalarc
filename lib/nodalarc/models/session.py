@@ -347,7 +347,7 @@ class OrbitConfig(BaseModel):
 class GroundSchedulingConfig(BaseModel):
     """Ground handover and allocation behavior.
 
-    Phase 3 keeps mechanism and policy separate. This model is only the
+    Ground scheduling keeps mechanism and policy separate. This model is only the
     operator-configured policy surface; the OME allocator consumes the resolved
     specs and dispatches to registered pure policy hooks.
     """
@@ -412,7 +412,7 @@ class GroundSchedulingConfig(BaseModel):
         if value != 1:
             raise ValueError(
                 "scheduling.ground.bbm_acquire_timeout_ticks values other than 1 are "
-                "reserved extension points; Phase 3 has no specified multi-tick BBMGap "
+                "reserved extension points; the current implementation has no specified multi-tick BBMGap "
                 "wait-state algorithm"
             )
         return value
@@ -720,7 +720,7 @@ class SessionConfig(BaseModel):
             raise ValueError(
                 "Ground scheduling policy must be explicit; missing "
                 + ", ".join(missing)
-                + ". Phase 3 does not silently choose candidate selection or "
+                + ". NodalArc does not silently choose candidate selection or "
                 "incumbent handover policy."
             )
         return self

@@ -5,7 +5,7 @@ This guide is for infrastructure engineers who deploy and maintain NodalArc on K
 ## Contents
 
 1. [Getting Started](getting-started.md) - Prerequisites, installation, and first deployment
-2. [Configuration](configuration.md) - Session YAML, constellations, ground stations, satellite types
+2. [Configuration](configuration.md) - Segment session YAML, link rules, constellations, ground sites, satellite types
 3. [Multi-Node Deployment](multi-node.md) - Registry setup, pod placement, VXLAN tunnels
 4. [Scaling](scaling.md) - Resource requirements, capacity planning, performance characteristics
 5. [Operations](operations.md) - Teardown, session switching, upgrades, health monitoring
@@ -18,9 +18,13 @@ NodalArc deploys as a Helm chart on Kubernetes. The platform consists of:
 
 - **6 backend services** - OME (orbital mechanics), Scheduler (topology dispatch), Node Agent (kernel ops), VS-API (API server), Operator (session lifecycle), NATS (messaging)
 - **1 frontend** - VF (visualization), served by nginx
-- **N session pods** - one per satellite and ground station, each running FRR
+- **N session pods** - one per satellite, relay, or ground node, each running FRR
 
-A session with 176 satellites and 7 ground stations creates approximately 192 pods total (183 session pods + 9 platform pods). The platform services are always running; session pods are created/destroyed as sessions are deployed/torn down.
+A session with 176 satellites and 7 ground nodes creates approximately 192 pods
+total (183 session pods + 9 platform pods). Multi-segment sessions add one pod
+per resolved satellite, relay, or ground node. The platform services are always
+running; session pods are created and destroyed as sessions are deployed or
+torn down.
 
 All inter-service communication uses NATS JetStream. There is no direct HTTP between backend services.
 

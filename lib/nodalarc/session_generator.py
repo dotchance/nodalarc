@@ -205,7 +205,7 @@ def generate_session_yaml(
     if orbit_propagator == "sgp4-tle":
         raise ValueError(
             "orbit_propagator='sgp4-tle' is structurally valid future grammar, "
-            "but the M2 runtime supports only keplerian-circular and j2-mean-elements"
+            "but the current runtime supports only keplerian-circular and j2-mean-elements"
         )
 
     # --- Resolve ground stations ---

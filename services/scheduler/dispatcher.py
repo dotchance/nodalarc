@@ -282,9 +282,8 @@ class Dispatcher:
         # incrementally. The queue carries copies to the dispatch worker.
         self._desired_links: dict[tuple[str, str], ActiveLinkInfo] = {}
 
-        # Latest GroundLinkDecisionSnapshot from OME (Phase 1.3.b). Passive
-        # storage in this sub-phase; Phase 1.4 reads it to construct
-        # ``_ome_view`` and detect divergence from ``_desired_links``.
+        # Latest GroundLinkDecisionSnapshot from OME. Stored passively and
+        # paired with LinkStateSnapshot to explain divergence from OME authority.
         # Reset to None on each Scheduler start; rebuilt from NATS
         # subscription (Direction 4: state derived from authority, not
         # local invention).
@@ -294,18 +293,14 @@ class Dispatcher:
         # the OME has spoken about. Used by the C-A subset invariant
         # repro test to detect divergence from ``_desired_links``.
         #
-        # Lifecycle (Phase 1.4 introduces the dict; Phase 5 promotes
-        # the divergence check to a production fail-loud RuntimeError
-        # and graduates ``_ome_view`` to the authoritative model
-        # replacing ``_desired_links`` after the safety-net override
-        # is removed):
+        # Lifecycle:
         #   - Construction: incremental from VisibilityEvent; full
         #     replacement from LinkStateSnapshot.
         #   - Reset: cleared on Scheduler SUSPENDED → playing
         #     transition; rebuilt from the first post-resume snapshot.
         #   - Memory bound: per-pair, bounded by the constellation's
         #     pair count (configured at session start).
-        #   - Multi-replica (Direction 4): each Scheduler replica
+        #   - Multi-replica: each Scheduler replica
         #     computes ``_ome_view`` from its own NATS subscription.
         #     Replicas see the same events and converge to the same
         #     view. The C-A repro asserts per-replica.
@@ -899,20 +894,11 @@ class Dispatcher:
             await self._handle_link_state_snapshot(snapshot)
 
         async def _on_ground_link_decision_snapshot(msg):
-            """Phase 1.3.b passive receiver — validate and store the
-            decision snapshot. The Scheduler does not yet act on it.
+            """Validate and store the latest OME ground-decision snapshot.
 
-            Phase 1.4 introduces ``_ome_view`` (the parallel divergence
-            detector); Phase 5 promotes the subset invariant to a
-            production ``RuntimeError`` and removes the safety-net
-            override at ``dispatcher.py:835-857``.
-
-            For now: validate the payload structure (fail-loud on any
-            schema mismatch), retain the most recent snapshot for the
-            ``_ome_view`` consumer in 1.4, and log a debug summary.
-            Direction 4 (multi-compute-node): each Scheduler replica
-            receives this independently from NATS — no replica-local
-            state that does not survive failover.
+            The Scheduler does not mutate desired state from this payload; it
+            pairs it with LinkStateSnapshot for authority checks and operator
+            diagnostics. Schema mismatch is fail-loud at the payload boundary.
             """
             try:
                 decision_snapshot = GroundLinkDecisionSnapshot.model_validate_json(msg.data)
@@ -1042,22 +1028,16 @@ class Dispatcher:
     # ------------------------------------------------------------------
     # C-A subset invariant: _desired_links ⊆ OME's stated truth.
     #
-    # Phase 1.4 introduces this as a pure-observation helper. The C-A
-    # repro test calls it to assert divergence between _desired_links
-    # and _ome_view when the safety-net override at lines 926-932 (in
-    # _apply_events_to_desired) fires. Phase 5 promotes the check to a
-    # production-time fail-loud RuntimeError in the same change set
-    # that removes the override and adds the fail-loud
-    # replacement-LinkUp-failure handling.
+    # Pure-observation helper for the production authority invariant:
+    # desired Scheduler links must be a subset of OME's stated truth.
     # ------------------------------------------------------------------
 
     def paired_decision_snapshot(self) -> GroundLinkDecisionSnapshot | None:
         """Return the latest decision snapshot ONLY if it pairs with
         the latest applied LinkStateSnapshot — else None.
 
-        The plan's contract claims decision and state snapshots share
-        fate via the same stream + retention policy. Sharing a stream
-        does NOT prove pairing: NATS delivery is async and per-subject;
+        Decision and state snapshots share stream + retention policy, but
+        sharing a stream does NOT prove pairing: NATS delivery is async and per-subject;
         a Scheduler may receive the state snapshot for seq=N before
         the decision snapshot for seq=N (or vice versa), or one may
         be entirely missing during a stream restart.
@@ -1071,7 +1051,7 @@ class Dispatcher:
         consumer must treat diagnostics as unavailable for the current
         state.
 
-        Multi-replica (Direction 4): each Scheduler replica enforces
+        Multi-replica: each Scheduler replica enforces
         pairing against its own observed snapshots. Replicas may pair
         at slightly different seqs during catch-up; that is correct.
         """
@@ -1093,9 +1073,7 @@ class Dispatcher:
         OME has NOT marked (visible AND scheduled).
 
         A non-empty result means the Scheduler's desired state diverges
-        from the OME's stated truth — the safety-net override is the
-        primary known cause today (line 926-932). Phase 5 will fail
-        loud on any non-empty result.
+        from the OME's stated truth.
 
         Pure observation. No state mutation. Multi-replica safe — each
         replica's view is derived from its own NATS subscription.
@@ -1114,7 +1092,7 @@ class Dispatcher:
         return violations
 
     # ------------------------------------------------------------------
-    # Phase 5 actuation trust helpers
+    # Actuation trust helpers
     # ------------------------------------------------------------------
 
     @staticmethod
@@ -1895,8 +1873,8 @@ class Dispatcher:
     ) -> dict[str, bool]:
         """Read-only reconciliation audit for GSes currently believed clean.
 
-        Phase 5's KernelInventory path proved dirty recovery. Phase 6 uses the same
-        non-mutating proof boundary to audit the *clean* claim: every actual ground
+        The same non-mutating proof boundary used for dirty recovery audits the
+        *clean* claim: every actual ground
         link the Scheduler believes the kernel has up must still be provable, and
         every tracked stale footprint must still be provably down. A mismatch does
         not self-heal and does not clear by inference; it transitions the GS to
@@ -2115,7 +2093,7 @@ class Dispatcher:
         ground_station_ids = frozenset(self._gs_capacities)
 
         # Snapshot is replace-not-merge for both _desired_links and
-        # _ome_view (Phase 1.4). _ome_view captures the OME's stated
+        # _ome_view captures the OME's stated
         # truth derived from the snapshot's carrier and scheduling_state
         # fields, independent of any safety-net override applied later
         # via _apply_events_to_desired. The C-A repro test compares
@@ -2157,8 +2135,8 @@ class Dispatcher:
                 self._teardown_pairs.discard(pair)
 
         # Replace _desired_links entirely — snapshot is authoritative.
-        # Replace _ome_view entirely for the same reason — Phase 1.4
-        # tests assert this is the OME's stated truth at snapshot time.
+        # Replace _ome_view entirely for the same reason: it is the OME's
+        # stated truth at snapshot time.
         self._desired_links = desired
         self._ome_view = new_ome_view
 
@@ -2895,11 +2873,11 @@ class Dispatcher:
 
         THE SINGLE PATH TO THE NODE AGENT FOR LINK STATE.
 
-        When mbb_dispatch is enabled, uses three-phase capacity-aware
+        When mbb_dispatch is enabled, uses staged capacity-aware
         dispatch for ground links:
-          Phase 1: BBM downs + ISL downs (frees capacity)
-          Phase 2: All ups (MBB + BBM, using freed + existing spare)
-          Phase 3: MBB downs (only where Phase 2 up succeeded)
+          - Pre-release downs: BBM downs + ISL downs (frees capacity)
+          - Acquires: all ups (MBB + BBM, using freed + existing spare)
+          - Final releases: MBB downs where the replacement up succeeded
         When mbb_dispatch is disabled, uses original two-phase BBM
         (all downs then all ups).
         """
@@ -2909,7 +2887,7 @@ class Dispatcher:
             forced_bbm_pairs = frozenset()
 
         # Kernel-actual membership at entry. Captured before any mutation so the
-        # finally below publishes the corrected set on EVERY exit — including a phase
+        # finally below publishes the corrected set on EVERY exit — including a stage
         # that popped/added _actual_links and then hit a fatal dispatch failure that
         # raised (via _handle_actuation_result -> _halt_dispatcher). Without the
         # finally, that raise would skip the publish and leave the retained snapshot
@@ -2956,7 +2934,7 @@ class Dispatcher:
 
             # Publish-before-await: stamp the in_flight->faulted clock for the pairs we are
             # about to bring up and publish it BEFORE the dispatch awaits. A slow or hung
-            # BatchLinkUp / MBB phase-2 up otherwise leaves VS-API with no Scheduler-owned
+            # BatchLinkUp / MBB acquire otherwise leaves VS-API with no Scheduler-owned
             # elapsed for the whole duration of the await, and a diverged pair with no
             # elapsed reads as calm in_flight on the client — so a stuck up would never fault
             # at fault_after_ms (the exact masking the divergence clock exists to prevent).
@@ -3090,11 +3068,11 @@ class Dispatcher:
         down_reasons: dict[tuple[str, str], str] | None = None,
         forced_bbm_pairs: frozenset[tuple[str, str]] | None = None,
     ) -> None:
-        """Three-phase capacity-aware MBB dispatch for ground links.
+        """Staged capacity-aware MBB dispatch for ground links.
 
-        Phase 1: BBM downs + ISL downs (free capacity)
-        Phase 2: All ups (greedy-reserved, no over-subscription)
-        Phase 3: MBB downs (where Phase 2 up succeeded)
+        Pre-release downs: BBM downs + ISL downs (free capacity)
+        Acquires: all ups (greedy-reserved, no over-subscription)
+        Final releases: MBB downs where the replacement up succeeded
 
         forced_bbm_pairs escalates to GS-segment level: if ANY pair
         under a GS is forced, the entire segment goes BBM.
@@ -3133,22 +3111,22 @@ class Dispatcher:
         mbb_segments = classification.mbb_segments
         bbm_segments = classification.bbm_segments
 
-        # --- PHASE 1: Free capacity (BBM downs + ISL downs) ---
+        # --- Pre-release downs: free capacity (BBM downs + ISL downs) ---
         # Sorted for deterministic dispatch ordering — two runs with different
         # PYTHONHASHSEED must produce identical link-event sequences.
-        phase1_downs: set[tuple[str, str]] = set(isl_downs)
+        pre_release_downs: set[tuple[str, str]] = set(isl_downs)
         for gs_id in sorted(bbm_segments):
-            phase1_downs.update(gs_downs.get(gs_id, set()))
+            pre_release_downs.update(gs_downs.get(gs_id, set()))
 
-        if phase1_downs:
+        if pre_release_downs:
             down_result = await self._send_batch_down(
-                phase1_downs, sim_iso, sim_time, nc, down_reasons
+                pre_release_downs, sim_iso, sim_time, nc, down_reasons
             )
             await self._handle_actuation_result(
-                down_result, sim_time=sim_time, operation_context="phase1_down"
+                down_result, sim_time=sim_time, operation_context="pre_release_down"
             )
             failed_bbm_gs: set[str] = set()
-            for pair in sorted(phase1_downs):
+            for pair in sorted(pre_release_downs):
                 gs_id = gs_id_for_pair(pair, self._gs_capacities)
                 if pair in down_result.succeeded_pairs:
                     info = self._actual_links.pop(pair, None)
@@ -3160,14 +3138,14 @@ class Dispatcher:
             down_result = None
             failed_bbm_gs = set()
 
-        # --- INTER-PHASE: Greedy reservation for Phase 2 ups ---
-        # Work with post-Phase-1 capacity (real, not projected).
+        # --- Between down and up stages: greedy reservation for acquires ---
+        # Work with post-pre-release capacity (real, not projected).
         # Sorted iteration ensures greedy reservation winner is
         # deterministic when multiple pairs compete for one terminal.
-        phase2_ups: set[tuple[str, str]] = set(isl_ups)
+        acquire_ups: set[tuple[str, str]] = set(isl_ups)
 
         for gs_id in sorted(mbb_segments):
-            phase2_ups.update(gs_ups.get(gs_id, set()))
+            acquire_ups.update(gs_ups.get(gs_id, set()))
 
         for gs_id in sorted(bbm_segments):
             if gs_id in failed_bbm_gs:
@@ -3179,7 +3157,7 @@ class Dispatcher:
                 gs_spare = self._gs_capacities[gs_id] - self._gs_active_count.get(gs_id, 0)
                 sat_spare = self._sat_capacities[sat_id] - self._sat_active_count.get(sat_id, 0)
                 if gs_spare > 0 and sat_spare > 0:
-                    phase2_ups.add(pair)
+                    acquire_ups.add(pair)
                 else:
                     log.debug(
                         "Greedy skip: %s→%s (gs_spare=%d, sat_spare=%d)",
@@ -3189,9 +3167,9 @@ class Dispatcher:
                         sat_spare,
                     )
 
-        # --- PHASE 2: All ups ---
-        if phase2_ups:
-            up_result = await self._send_batch_up(phase2_ups, desired, sim_iso, sim_time, nc)
+        # --- Acquires: all ups ---
+        if acquire_ups:
+            up_result = await self._send_batch_up(acquire_ups, desired, sim_iso, sim_time, nc)
             await self._handle_actuation_result(
                 up_result, sim_time=sim_time, operation_context="replacement_up"
             )
@@ -3203,19 +3181,19 @@ class Dispatcher:
         else:
             added = set()
 
-        # --- PHASE 3: MBB downs (only where Phase 2 up succeeded) ---
-        phase3_downs: set[tuple[str, str]] = set()
+        # --- Final releases: MBB downs where the replacement up succeeded ---
+        final_release_downs: set[tuple[str, str]] = set()
         for gs_id in sorted(mbb_segments):
             ups_for_gs = gs_ups.get(gs_id, set())
             if ups_for_gs & added:
-                phase3_downs.update(gs_downs.get(gs_id, set()))
+                final_release_downs.update(gs_downs.get(gs_id, set()))
 
-        if phase3_downs:
+        if final_release_downs:
             down3_result = await self._send_batch_down(
-                phase3_downs, sim_iso, sim_time, nc, down_reasons
+                final_release_downs, sim_iso, sim_time, nc, down_reasons
             )
             await self._handle_actuation_result(
-                down3_result, sim_time=sim_time, operation_context="phase3_down"
+                down3_result, sim_time=sim_time, operation_context="final_release_down"
             )
             for pair in sorted(down3_result.succeeded_pairs):
                 info = self._actual_links.pop(pair, None)

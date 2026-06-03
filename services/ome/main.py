@@ -1389,8 +1389,8 @@ def _run_pacing(
                 lookahead.cancel()
                 lookahead_launched_for_epoch = None
 
-                # Compute first, publish after commit. This is the Phase 4
-                # ordering boundary; no empty new-epoch snapshot is allowed.
+                # Compute first, publish after commit. No empty new-epoch
+                # snapshot is allowed.
                 try:
                     seek_result = compute_step(
                         step_ctx,

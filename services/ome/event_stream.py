@@ -376,7 +376,7 @@ def build_step_context(
     if has_ground_stations and ground_scheduling is None:
         raise ValueError(
             "build_step_context requires explicit ground_scheduling when ground stations "
-            "exist; Phase 3 does not silently choose selection or handover policy"
+            "exist; NodalArc does not silently choose selection or handover policy"
         )
     ground_scheduling = ground_scheduling or GroundSchedulingConfig()
     sat_isl_terminals: dict[str, int] = {}

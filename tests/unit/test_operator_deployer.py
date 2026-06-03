@@ -564,7 +564,7 @@ class TestExpectedPlacementNodeCount:
 
 
 # ---------------------------------------------------------------------------
-# Inline config fixtures for Phase 2 (fully self-contained, no external files)
+# Inline config fixtures (fully self-contained, no external files)
 # ---------------------------------------------------------------------------
 
 # Constellation with inline default_terminals - no satellite_type file reference.

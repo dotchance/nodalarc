@@ -582,8 +582,8 @@ class SessionContext:
     async def _on_ground_link_decision_snapshot(self, msg) -> None:
         """Retain the latest OME GroundLinkDecisionSnapshot.
 
-        Phase 1 (C-foundation-5): every pair the OME considered carries a
-        typed `visibility_reject_reason` and, for visible-but-unscheduled
+        Every pair the OME considered carries a typed
+        `visibility_reject_reason` and, for visible-but-unscheduled
         pairs, an `unscheduled_reason`. Operators query the decision
         surface via `/api/v1/ground-link-decisions` to attribute "why isn't
         this link up?" without reading scheduler logs.

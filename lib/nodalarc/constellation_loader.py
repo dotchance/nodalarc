@@ -284,7 +284,7 @@ def satellite_local_plane_slot(sat: SatelliteNode) -> tuple[int, int]:
 def satellite_node_id(sat: SatelliteNode, addressing) -> str:
     """Return the resolver-assigned runtime node ID for a satellite.
 
-    M2 makes runtime identity resolver-owned. Plane/slot remain orbital-local
+    Runtime identity is resolver-owned. Plane/slot remain orbital-local
     metadata and are not globally identifying once multiple segments are loaded.
     The addressing fallback exists for low-level structural tests that construct
     ``SatelliteNode`` directly without a resolver.

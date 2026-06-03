@@ -86,8 +86,8 @@ def lock_down_cni0(pid: int, node_id: str) -> str | None:
         return f"{node_id}: {exc}"
 
 
-def finalize_pod_phases(pid: int, node_id: str) -> tuple[str | None, str | None]:
-    """Run Phase 7 route finalization and Phase 8 cni0 security."""
+def finalize_pod_network(pid: int, node_id: str) -> tuple[str | None, str | None]:
+    """Remove the default route and lock down cni0."""
     route_err = remove_default_route(pid, node_id)
     security_err = lock_down_cni0(pid, node_id)
     return route_err, security_err
@@ -95,19 +95,19 @@ def finalize_pod_phases(pid: int, node_id: str) -> tuple[str | None, str | None]
 
 def finalize_pod(pid: int, node_id: str) -> str | None:
     """Remove default route and lock down cni0. Returns combined error or None."""
-    errors = [err for err in finalize_pod_phases(pid, node_id) if err]
+    errors = [err for err in finalize_pod_network(pid, node_id) if err]
     return "; ".join(errors) if errors else None
 
 
 log = logging.getLogger(__name__)
 
 
-def _phase0_cleanup(
+def _cleanup_stale_interfaces(
     pid_map: dict[str, int],
     nodes: dict,
     progress_fn: Callable[[str], None] | None = None,
 ) -> None:
-    """Phase 0: Clean stale interfaces from host and pod namespaces.
+    """Clean stale interfaces from host and pod namespaces.
 
     Must run synchronously BEFORE the ThreadPoolExecutor starts.
     Prevents EEXIST race conditions when 32 threads create interfaces
@@ -136,7 +136,7 @@ def _phase0_cleanup(
     finally:
         ipr.close()
     if host_cleaned:
-        log.info("Phase 0: cleaned %d stale host interfaces", host_cleaned)
+        log.info("Cleaned %d stale host interfaces", host_cleaned)
 
     # Pod namespaces: remove stale isl* and gnd0 interfaces
     pod_cleaned = 0
@@ -164,7 +164,7 @@ def _phase0_cleanup(
             pod_cleaned += _in_namespace(pid, _clean_stale_pod_ifaces)
     if pod_cleaned:
         log.info(
-            "Phase 0: cleaned %d stale pod interfaces across %d pods",
+            "Cleaned %d stale pod interfaces across %d pods",
             pod_cleaned,
             len(pid_map),
         )
@@ -293,14 +293,14 @@ def execute_wiring(
         except Exception:
             pass  # Non-fatal
 
-    # Phase 0: Clean stale interfaces from host and pod namespaces.
+    # Clean stale interfaces from host and pod namespaces.
     # Must run BEFORE the ThreadPoolExecutor starts creating interfaces.
     # Without this, 8 concurrent threads racing to create and clean
     # interfaces produce EEXIST race conditions.
     _write_progress(f"Cleaning stale interfaces for {total_nodes} nodes")
-    _phase0_cleanup(pid_map, nodes, progress_fn=progress_fn)
+    _cleanup_stale_interfaces(pid_map, nodes, progress_fn=progress_fn)
 
-    # Phase 1: Set sysctls in each pod namespace (via os.setns)
+    # Configure sysctls in each pod namespace (via os.setns).
     sysctl_ok = 0
     sysctl_skipped = []
     for node_id, node_spec in nodes.items():
@@ -324,7 +324,7 @@ def execute_wiring(
         log.info("Sysctls applied to all %d nodes", sysctl_ok)
     _write_progress(f"Sysctls configured for {total_nodes} nodes. Creating ISL interfaces...")
 
-    # Phase 2: Create ISL veth pairs (deduplicate A→B and B→A, parallelized)
+    # Create ISL veth pairs (deduplicate A→B and B→A, parallelized).
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
     isl_tasks: list[tuple[int, int, str, str, str, str]] = []
@@ -386,7 +386,7 @@ def execute_wiring(
             except Exception as exc:
                 _record_failure(nid_a, "isl_interfaces", f"mediated ISL to {nid_b}: {exc}")
                 _record_failure(nid_b, "isl_interfaces", f"mediated ISL to {nid_a}: {exc}")
-    log.info("Phase 2: created %d host-mediated ISL pairs", len(created_links))
+    log.info("Created %d host-mediated ISL pairs", len(created_links))
     requires_mpls = any(bool(node_spec.get("mpls_enable")) for node_spec in nodes.values())
     if requires_mpls:
         load_mpls_kernel_modules()
@@ -394,7 +394,7 @@ def execute_wiring(
     else:
         _write_progress(f"Created {len(created_links)} ISL pairs. MPLS not requested.")
 
-    # Phase 3: Enable MPLS input on ISL interfaces (parallelized)
+    # Enable MPLS input on ISL interfaces (parallelized).
     mpls_tasks = []
     for node_id, node_spec in nodes.items():
         pid = pid_map.get(node_id, 0)
@@ -414,7 +414,7 @@ def execute_wiring(
                 fut.result()
             except Exception as exc:
                 _record_failure(nid, "mpls", f"MPLS enable failed {ifname}: {exc}")
-    log.info("Phase 3: MPLS input enabled on %d ISL interfaces", len(mpls_tasks))
+    log.info("MPLS input enabled on %d ISL interfaces", len(mpls_tasks))
     if requires_mpls:
         _write_progress(
             f"MPLS enabled on {len(mpls_tasks)} interfaces. Creating ground infrastructure..."
@@ -422,7 +422,7 @@ def execute_wiring(
     else:
         _write_progress("Creating ground infrastructure...")
 
-    # Phase 4+5: Create ground infrastructure (parallelized)
+    # Create ground infrastructure (parallelized).
     # Ground bridges (GS-side) and satellite ground veths are independent
     # and can be created concurrently. gnd0 starts admin DOWN; FRR zebra
     # brings it admin UP (no `shutdown` in config). With no host-side veth
@@ -483,7 +483,7 @@ def execute_wiring(
             except Exception as exc:
                 _record_failure(nid, "ground_infrastructure", str(exc))
     log.info(
-        "Phase 4+5: %d ground bridges, %d satellite ground veths",
+        "Created %d ground bridges and %d satellite ground veths",
         gs_created,
         sat_gnd_created,
     )
@@ -491,7 +491,7 @@ def execute_wiring(
         f"Ground infrastructure ready: {gs_created} GS, {sat_gnd_created} satellites. Creating terrestrial interfaces..."
     )
 
-    # Phase 6: Create terr0 dummy interfaces for ground stations (parallelized)
+    # Create terr0 dummy interfaces for ground stations (parallelized).
     terr0_tasks = []
     for node_id, node_spec in nodes.items():
         if node_spec.get("node_type") != "ground_station":
@@ -514,12 +514,12 @@ def execute_wiring(
                 fut.result()
             except Exception as exc:
                 _record_failure(nid, "terrestrial_interfaces", f"terr0 creation failed: {exc}")
-    log.info("Phase 6: %d terr0 dummy interfaces created", len(terr0_tasks))
+    log.info("%d terr0 dummy interfaces created", len(terr0_tasks))
     _write_progress(
         f"Terrestrial interfaces created. Finalizing {total_nodes} pods (routes + security)..."
     )
 
-    # Phase 7+8: Per-pod finalization — default route removal + cni0 lockdown.
+    # Per-pod finalization: default route removal + cni0 lockdown.
     finalized = 0
     with ThreadPoolExecutor(max_workers=8) as pool:
         fin_futures = {}
@@ -527,7 +527,7 @@ def execute_wiring(
             pid = pid_map.get(node_id, 0)
             if pid == 0:
                 continue
-            fin_futures[pool.submit(finalize_pod_phases, pid, node_id)] = node_id
+            fin_futures[pool.submit(finalize_pod_network, pid, node_id)] = node_id
         total_to_finalize = len(fin_futures)
         for fut in as_completed(fin_futures):
             nid = fin_futures[fut]
@@ -545,10 +545,10 @@ def execute_wiring(
                     )
             except Exception as exc:
                 _record_failure(nid, "pod_security", str(exc))
-    log.info("Phase 7+8: finalized %d pods (default route + cni0 lockdown)", finalized)
+    log.info("Finalized %d pods (default route + cni0 lockdown)", finalized)
     _write_progress(f"Finalized {finalized}/{total_nodes} pods. Wiring complete.")
 
-    # Mark only nodes with all required phases successful as ready.
+    # Mark only nodes with all required wiring phases successful as ready.
     for node_id in nodes:
         if pid_map.get(node_id, 0) > 0:
             if node_id in node_failures:

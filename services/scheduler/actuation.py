@@ -1,6 +1,6 @@
 # Copyright 2024-2026 .chance (dotchance)
 # Licensed under the Apache License, Version 2.0. See LICENSE file.
-"""Scheduler actuation result contracts for Phase 5."""
+"""Scheduler actuation result contracts."""
 
 from __future__ import annotations
 

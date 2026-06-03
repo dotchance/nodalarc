@@ -96,8 +96,8 @@ class GroundTerminal(BaseModel):
     )
     max_tracking_rate_deg_s: float | None = None
     boresight: SatGroundTerminalBoresight | None = None
-    gateway_beam_quota: int | None = None  # Accepted in Phase 3, not enforced.
-    user_terminal_beam_quota: int | None = None  # Accepted in Phase 3, not enforced.
+    gateway_beam_quota: int | None = None  # Declared for future per-beam allocation.
+    user_terminal_beam_quota: int | None = None  # Declared for future per-beam allocation.
 
     @field_validator("count")
     @classmethod

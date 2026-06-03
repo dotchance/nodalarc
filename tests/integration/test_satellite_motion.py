@@ -19,7 +19,9 @@ import requests
 
 pytestmark = pytest.mark.integration
 
-VS_API_HOST = os.environ.get("VS_API_HOST", "192.168.10.201:8080")
+# Default assumes a local port-forward. Set VS_API_HOST to any reachable LAN
+# address or service DNS name when testing a distributed deployment.
+VS_API_HOST = os.environ.get("VS_API_HOST", "127.0.0.1:8080")
 VS_API_BASE = f"http://{VS_API_HOST}"
 
 

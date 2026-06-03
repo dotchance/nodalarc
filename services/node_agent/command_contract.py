@@ -175,7 +175,7 @@ def validate_kernel_inventory_request(request, *, fence: RuntimeFence) -> None:
         if entry.link_type != node_agent_pb2.LINK_TYPE_GROUND:
             raise CommandContractError(
                 node_agent_pb2.NODE_AGENT_INVALID_FIELD,
-                "KernelInventory in Phase 5 supports ground entries only",
+                "KernelInventory supports ground entries only",
             )
         _require_nonempty(entry.gs_id, "gs_id")
         _require_nonempty(entry.sat_id, "sat_id")

@@ -187,5 +187,5 @@ _GROUND_REJECTING_ENDPOINTS: frozenset[str] = frozenset(get_args(GroundVisibilit
 
 GroundVisibilityDecisionMap = dict[tuple[str, str], GroundVisibilityDecision]
 """Per-pair decision map. Replaced the legacy positional tuple alias
-``GroundVisibilityDetails`` in Phase 1.2.b — no positional unpacking, no
+``GroundVisibilityDetails`` — no positional unpacking, no
 sentinel-value heuristics, every field named and typed."""

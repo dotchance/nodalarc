@@ -28,7 +28,7 @@ class GroundVisibilityEvaluation:
 
     `decisions` carries the typed per-pair decision (visibility,
     range, elevation, applied constraints, reject reason). Replaces
-    the legacy positional `details` tuple alias in Phase 1.2.b.
+    the legacy positional `details` tuple alias.
     """
 
     decisions: GroundVisibilityDecisionMap

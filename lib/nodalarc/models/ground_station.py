@@ -205,8 +205,8 @@ class GroundTerminalDef(BaseModel):
     frequency_band: NonEmptyReference | None = None  # For future environmental modeling
     band: NonEmptyReference | None = None  # Shorthand band identifier (Ka, Ku, E, V)
     tags: list[NonEmptyReference] | None = None
-    gateway_beam_quota: int | None = None  # Accepted in Phase 3, not enforced yet.
-    user_terminal_beam_quota: int | None = None  # Accepted in Phase 3, not enforced yet.
+    gateway_beam_quota: int | None = None  # Declared for future per-beam allocation.
+    user_terminal_beam_quota: int | None = None  # Declared for future per-beam allocation.
 
     @field_validator("count")
     @classmethod

@@ -4,7 +4,7 @@
 
 Ground station terminal definitions describe groups of identical terminals.
 The emulation capacity is therefore `count * tracking_capacity` for each
-terminal block. Keeping this arithmetic and the Phase 2 physics-profile
+terminal block. Keeping this arithmetic and the terminal-physics-profile
 selection in one shared helper prevents the OME, Scheduler, Operator, and
 template renderer from silently disagreeing about terminal capabilities.
 """
@@ -189,7 +189,7 @@ def station_ground_terminal_type(
 
 
 def terminal_physics_missing_fields(term: TerminalPhysicsLike) -> tuple[str, ...]:
-    """Return Phase 2 terminal_physics fields missing from a terminal definition."""
+    """Return terminal_physics fields missing from a terminal definition."""
     missing: list[str] = []
     if term.max_range_km is None:
         missing.append("max_range_km")

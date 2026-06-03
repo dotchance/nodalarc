@@ -1075,7 +1075,7 @@ def _check_w010(
             level="warning",
             code="W010",
             message=(
-                "Ground capacity beam quota fields are declared but Phase 3 "
+                "Ground capacity beam quota fields are declared but the current allocator "
                 "enforces only total simultaneous ground links. Ignored fields: "
                 f"{', '.join(sorted(paths))}"
             ),

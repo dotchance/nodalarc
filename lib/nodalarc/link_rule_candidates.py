@@ -111,7 +111,7 @@ def _apply_static_topology(
     if isinstance(topology, NearestVisibleTopology):
         raise ValueError(
             f"link_rule {rule.rule_id!r} uses topology.mode='nearest_visible', which is "
-            "a dynamic per-tick topology. M2 only supports static declared graphs; use "
+            "a dynamic per-tick topology. The current runtime supports static declared graphs; use "
             "visible_candidates, nearest_n, or explicit_pairs."
         )
     if isinstance(topology, NearestNTopology):

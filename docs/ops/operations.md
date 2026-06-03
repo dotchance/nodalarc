@@ -6,7 +6,10 @@ Day-to-day management of a running NodalArc deployment.
 
 ### From the UI
 
-Users can switch sessions from the browser wizard. They select a new constellation, routing stack, and ground station set, then deploy. The platform handles the transition automatically - tears down the old session and brings up the new one.
+Users can switch sessions from the browser wizard. They select or build a
+segment session, choose routing options, and deploy. The platform handles the
+transition automatically: it tears down the old session and brings up the new
+one.
 
 ### From the Command Line
 
@@ -139,17 +142,21 @@ sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl logs -l app=nodalarc-vs-api -n
 ### Routing Verification
 
 ```bash
-# Check IS-IS adjacencies on a random satellite
-sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl exec space-sat-p00s00 -n nodalarc -c frr -- \
+# Check IS-IS adjacencies on a satellite in the current session
+SAT=$(sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl get pods -n nodalarc \
+  -o name | sed 's#pod/##' | grep -- '-sat-' | head -1)
+sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl exec "$SAT" -n nodalarc -c frr -- \
   vtysh -c "show isis neighbor"
 
-# Check a ground station has adjacencies
-sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl exec ground-gs-hawthorne -n nodalarc -c frr -- \
+# Check a ground node has adjacencies
+GS=$(sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl get pods -n nodalarc \
+  -o name | sed 's#pod/##' | grep -- '-gs-' | head -1)
+sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl exec "$GS" -n nodalarc -c frr -- \
   vtysh -c "show isis neighbor"
 
-# End-to-end ping through the constellation
-sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl exec ground-gs-hawthorne -n nodalarc -c frr -- \
-  ping -c 3 -W 5 10.255.4.1
+# End-to-end ping through the current routing table
+sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl exec "$GS" -n nodalarc -c frr -- \
+  ping -c 3 -W 5 <destination-loopback-or-prefix>
 ```
 
 ## SSH Terminal Key Management
@@ -176,7 +183,9 @@ chmod 600 nodalarc-ssh-key
 Then SSH to any pod:
 
 ```bash
-POD_IP=$(sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl get pod space-sat-p00s00 -n nodalarc \
+NODE=$(sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl get pods -n nodalarc \
+  -o name | sed 's#pod/##' | grep -- '-sat-' | head -1)
+POD_IP=$(sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl get pod "$NODE" -n nodalarc \
   -o jsonpath='{.status.podIP}')
 ssh -i nodalarc-ssh-key -o StrictHostKeyChecking=no operator@$POD_IP
 ```

@@ -4,7 +4,7 @@
 
 Selection policies score physically visible GS/satellite candidates. They do
 not inspect incumbent state, terminal occupancy, or pending handovers. That
-separation is the Phase 3 contract: selection answers "which candidate is
+separation is the allocator contract: selection answers "which candidate is
 best on its own merits?"; handover policy answers "may that candidate
 displace the current incumbent?"
 """

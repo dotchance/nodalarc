@@ -1,6 +1,6 @@
 # Copyright 2024-2026 .chance (dotchance)
 # Licensed under the Apache License, Version 2.0. See LICENSE file.
-"""Runtime-support matrix — the third validation layer (CDR-6).
+"""Runtime-support matrix for structurally-valid session grammar.
 
 Structural schema may accept future grammar; semantic validation checks
 cross-object rules; this layer checks that every structurally-valid feature is
@@ -8,7 +8,7 @@ actually implemented by the current backend. Unsupported future grammar fails
 here with a typed ``UnsupportedFeature`` reason — never silently ignored.
 
 The matrix is data, not code branches: ``resolve_session`` takes a
-``RuntimeSupport`` so a later milestone flips a feature on by widening the
+``RuntimeSupport`` so a future runtime can enable a feature by widening the
 supported sets, with no change to call sites.
 """
 
@@ -28,26 +28,26 @@ class FeatureCategory(StrEnum):
     EPHEMERIS_PROVIDER = "ephemeris_provider"
 
 
-# Informational: which milestone a structurally-valid future feature is planned for.
-PLANNED_MILESTONE: dict[tuple[FeatureCategory, str], str] = {
-    (FeatureCategory.SEGMENT_KIND, "space_node"): "M3 (Luna)",
-    (FeatureCategory.SEGMENT_KIND, "space_node_set"): "post-MVP",
-    (FeatureCategory.SEGMENT_KIND, "lagrange_point"): "post-MVP",
-    (FeatureCategory.CENTRAL_BODY, "luna"): "M3 (Luna)",
-    (FeatureCategory.CENTRAL_BODY, "mars"): "post-MVP",
-    (FeatureCategory.CENTRAL_BODY, "sun"): "post-MVP",
-    (FeatureCategory.REFERENCE_BODY, "luna"): "M3 (Luna)",
-    (FeatureCategory.REFERENCE_BODY, "mars"): "post-MVP",
-    (FeatureCategory.FRAME_BODY, "luna"): "M3 (Luna)",
-    (FeatureCategory.FRAME_BODY, "mars"): "post-MVP",
-    (FeatureCategory.FRAME_BODY, "sun"): "post-MVP",
-    (FeatureCategory.PROTOCOL_ADAPTER, "static_ip"): "M3 (Luna)",
-    (FeatureCategory.PROTOCOL_ADAPTER, "bgp"): "post-MVP",
-    (FeatureCategory.PROTOCOL_ADAPTER, "dtn_bundle"): "post-MVP",
-    (FeatureCategory.PROTOCOL_ADAPTER, "custom"): "post-MVP",
-    (FeatureCategory.EPHEMERIS_PROVIDER, "skyfield_bsp"): "M3 (Luna)",
-    (FeatureCategory.EPHEMERIS_PROVIDER, "spice_kernel_stack"): "post-MVP",
-    (FeatureCategory.EPHEMERIS_PROVIDER, "operator_supplied_spk"): "post-MVP",
+# Informational notes shown with unsupported features.
+FEATURE_SUPPORT_NOTES: dict[tuple[FeatureCategory, str], str] = {
+    (FeatureCategory.SEGMENT_KIND, "space_node"): "supported by the Earth-Luna runtime",
+    (FeatureCategory.SEGMENT_KIND, "space_node_set"): "future runtime capability",
+    (FeatureCategory.SEGMENT_KIND, "lagrange_point"): "future runtime capability",
+    (FeatureCategory.CENTRAL_BODY, "luna"): "supported by the Earth-Luna runtime",
+    (FeatureCategory.CENTRAL_BODY, "mars"): "future runtime capability",
+    (FeatureCategory.CENTRAL_BODY, "sun"): "future runtime capability",
+    (FeatureCategory.REFERENCE_BODY, "luna"): "supported by the Earth-Luna runtime",
+    (FeatureCategory.REFERENCE_BODY, "mars"): "future runtime capability",
+    (FeatureCategory.FRAME_BODY, "luna"): "supported by the Earth-Luna runtime",
+    (FeatureCategory.FRAME_BODY, "mars"): "future runtime capability",
+    (FeatureCategory.FRAME_BODY, "sun"): "future runtime capability",
+    (FeatureCategory.PROTOCOL_ADAPTER, "static_ip"): "supported by the Earth-Luna runtime",
+    (FeatureCategory.PROTOCOL_ADAPTER, "bgp"): "future runtime capability",
+    (FeatureCategory.PROTOCOL_ADAPTER, "dtn_bundle"): "future runtime capability",
+    (FeatureCategory.PROTOCOL_ADAPTER, "custom"): "future runtime capability",
+    (FeatureCategory.EPHEMERIS_PROVIDER, "skyfield_bsp"): "supported by the Earth-Luna runtime",
+    (FeatureCategory.EPHEMERIS_PROVIDER, "spice_kernel_stack"): "future runtime capability",
+    (FeatureCategory.EPHEMERIS_PROVIDER, "operator_supplied_spk"): "future runtime capability",
 }
 
 
@@ -59,7 +59,7 @@ class UnsupportedFeature(BaseModel):
     category: FeatureCategory
     value: str
     message: str
-    planned_milestone: str | None = None
+    support_note: str | None = None
 
 
 class UnsupportedFeatureError(ValueError):
@@ -86,13 +86,12 @@ class RuntimeSupport(BaseModel):
     ephemeris_required_bodies: frozenset[str]
 
     @classmethod
-    def mvp_m1(cls) -> RuntimeSupport:
-        """M1: Earth-only LEO/MEO/GEO. constellation + ground_set, earth only.
+    def earth_multi_regime(cls) -> RuntimeSupport:
+        """Earth-only LEO/MEO/GEO support.
 
-        space_node, static_ip protocol boundaries, ephemeris, and the luna body
-        are the M3 (Luna) milestone; mars/sun and the future segment kinds are
-        post-MVP. They parse structurally and are rejected here with a typed
-        reason until their milestone implements them.
+        Space relays, static protocol boundaries, ephemeris providers, and
+        non-Earth bodies parse structurally and are rejected here with a typed
+        reason until the selected runtime supports them.
         """
         return cls(
             supported_segment_kinds=frozenset({"constellation", "ground_set"}),
@@ -105,8 +104,8 @@ class RuntimeSupport(BaseModel):
         )
 
     @classmethod
-    def mvp_m3(cls) -> RuntimeSupport:
-        """M3: Earth + Luna demonstrator with explicit cislunar relay support."""
+    def earth_luna(cls) -> RuntimeSupport:
+        """Earth + Luna runtime with explicit cislunar relay support."""
         return cls(
             supported_segment_kinds=frozenset({"constellation", "ground_set", "space_node"}),
             supported_central_bodies=frozenset({"earth", "luna"}),
@@ -118,13 +117,13 @@ class RuntimeSupport(BaseModel):
         )
 
     def _unsupported(self, category: FeatureCategory, value: str, what: str) -> UnsupportedFeature:
-        milestone = PLANNED_MILESTONE.get((category, value))
-        suffix = f" Planned for {milestone}." if milestone else ""
+        support_note = FEATURE_SUPPORT_NOTES.get((category, value))
+        suffix = f" Support note: {support_note}." if support_note else ""
         return UnsupportedFeature(
             category=category,
             value=value,
             message=f"{what} {value!r} is not supported by the current runtime.{suffix}",
-            planned_milestone=milestone,
+            support_note=support_note,
         )
 
     def check_segment_kind(self, kind: str) -> UnsupportedFeature | None:

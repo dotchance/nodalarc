@@ -1,6 +1,8 @@
 # Terminal Access
 
-Every satellite and ground station in NodalArc runs a real FRRouting daemon. You can open an interactive terminal to any node and run the same CLI commands you'd use on a physical Cisco, Juniper, or Arista router.
+Every satellite, relay, and ground node in NodalArc runs a real FRRouting
+daemon. You can open an interactive terminal to any node and run the same CLI
+commands you would use on a physical router.
 
 ## Opening a Terminal from the Browser
 
@@ -13,6 +15,10 @@ You land directly in the FRR CLI prompt:
 ```
 space-sat-p00s00#
 ```
+
+The exact prompt depends on the session namespace. In a multi-regime session
+you may see nodes such as `leo-sat-p00s00`, `geo-sat-p00s02`, or
+`lunar-site-gs-artemis-surface-router`.
 
 ![Browser Terminal](../images/user-terminal.png)
 
@@ -29,7 +35,9 @@ show isis neighbor          # IS-IS sessions
 show ip ospf neighbor       # OSPF sessions
 ```
 
-This shows which adjacent nodes have formed routing adjacencies. You'll see ISL neighbors (connected satellites) and ground station neighbors (when a ground link is active).
+This shows which adjacent nodes have formed routing adjacencies. You will see
+ISL neighbors, relay neighbors, and ground access neighbors when those links
+are active and the routing protocol is scoped to that domain.
 
 ### View the routing table
 
@@ -37,7 +45,9 @@ This shows which adjacent nodes have formed routing adjacencies. You'll see ISL 
 show ip route
 ```
 
-The full IP routing table. Routes learned via the IGP (IS-IS or OSPF) show the next-hop interface and metric. On satellites with active ground connections, you'll see a default route pointing toward the ground station.
+The full IP routing table. Routes learned via the IGP show the next-hop
+interface and metric. Static routes appear when a session uses a protocol
+boundary, such as a cislunar relay demo.
 
 ### Check a specific route
 
@@ -57,11 +67,10 @@ Lists all interfaces with their admin state and link state:
 
 | Interface | What it connects to |
 |-----------|-------------------|
-| `isl0`, `isl1` | Intra-plane ISL links (forward/backward in the orbital ring) |
-| `isl2`, `isl3` | Cross-plane ISL links (to adjacent orbital planes) |
-| `gnd0` | Ground station link (active only when overhead a ground station) |
+| `isl0`, `isl1`, ... | ISL or relay interfaces assigned from the node's terminal inventory |
+| `gnd0`, `gnd1`, ... | Ground access terminal interfaces, active when a compatible ground link is up |
 | `lo` | Loopback (always UP, carries the node's stable address) |
-| `terr0` | Terrestrial network stub (ground stations only) |
+| `terr0` | Terrestrial or local site network stub on ground nodes |
 | `cni0` | Infrastructure interface (ignore - not a data path) |
 
 Interfaces that are **UP** have active routing adjacencies. Interfaces that are **DOWN** or **LOWERLAYERDOWN** don't currently have a connected peer (the satellite hasn't formed that link yet, or the ground station connection hasn't been established).
@@ -97,7 +106,10 @@ ping 10.0.0.5
 traceroute 10.255.1.1
 ```
 
-Real ICMP ping and traceroute through the emulated constellation. Packets traverse real kernel interfaces with real latency shaping. The round-trip time you see is the actual emulated propagation delay based on orbital geometry.
+Real ICMP ping and traceroute through the emulated network. Packets traverse
+real kernel interfaces with real latency shaping. For long-delay links, such as
+cislunar relay paths, use command-line timeout options; default ping or
+traceroute settings may expire before the emulated path can respond.
 
 ## What You're Actually Seeing
 
@@ -117,5 +129,7 @@ If you prefer a native SSH client (PuTTY, iTerm, SecureCRT), you can SSH directl
 
 - Run `show isis neighbor` or `show ip ospf neighbor` repeatedly to watch adjacencies form and break as the constellation moves
 - Compare routing tables on two adjacent satellites to understand how traffic flows between them
-- On a ground station, run `show ip route 0.0.0.0/0` to see which satellite is currently the preferred gateway
-- Use `show interface gnd0` on a satellite to see if it currently has a ground connection (carrier UP means connected)
+- On a ground node, run `show ip route` to see which prefixes are reachable and
+  which protocol installed them
+- Use `show interface brief` to see which terminal interfaces currently have
+  carrier

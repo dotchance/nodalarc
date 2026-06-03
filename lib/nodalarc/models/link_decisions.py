@@ -9,7 +9,7 @@ why the pair is or is not scheduled. The decision is distinct from the
 describes what the forwarding plane is doing right now; `GroundLinkDecisionSnapshot`
 describes what the OME decided and why.
 
-Two layers per the foundational trust plan:
+Two layers keep the wire boundary strict without slowing the OME hot path:
 
 - `GroundVisibilityDecisionWire` — Pydantic frozen, used at the NATS
   publish/parse boundary. Crosses component boundaries.
@@ -18,12 +18,10 @@ Two layers per the foundational trust plan:
   time. Inside the OME compute loop we never instantiate Pydantic
   models per pair — that would cost too much at constellation scale.
 
-Direction 2 (multi-tenant from day one): every entity carries `tenant_id`.
-Direction 3 (multi-body from day one): every decision carries the
-`reference_body` it is anchored to and the `observer_frame` used to
-compute the geometry. A future cislunar relay serving Earth and Luna
-GSes will carry decisions for both bodies; the consumer reads the
-field rather than assuming Earth.
+Every entity carries `tenant_id`. Every decision carries the `reference_body`
+it is anchored to and the `observer_frame` used to compute the geometry. A
+cislunar relay serving Earth and Luna ground sites carries decisions for both
+bodies; consumers read the field rather than assuming Earth.
 
 These models are intentionally strict: every constructor argument is
 required. There are no permissive defaults. A field that "could be
@@ -130,9 +128,9 @@ allocation events. `mbb_overlap_started` is the per-tick diagnostic for MBB
 overlap entry. `teardown_completed` and `teardown_invalidated_by_epoch` are
 terminal MBB lifecycle categories; the durable terminal record is emitted as an
 OME OpsEvent, while this allocation-event vocabulary remains the shared reason
-source. `bbm_gap` is emitted on every BBM displacement; Phase 3 represents it
-as an immediate one-tick release/acquire transition, not a multi-tick wait
-state. MBB preemption is not an event category until `MbbPreemptionPolicy`
+source. `bbm_gap` is emitted on every BBM displacement as an immediate
+one-tick release/acquire transition, not a multi-tick wait state. MBB
+preemption is not an event category until `MbbPreemptionPolicy`
 widens beyond `off`; when that policy exists, add `mbb_preempted` here and emit
 it from the preemption decision path.
 """
@@ -235,11 +233,11 @@ class GroundAllocationEvent(BaseModel):
 ObserverFrame = Literal["body_local"]
 """Reference frame for `elevation_deg` / `azimuth_deg`.
 
-Phase 2 computes ground-link look angles in the body-local topocentric
-frame anchored to the observer's `reference_body` (ENU at Earth,
-MCMF-local-vertical at Luna, etc.). Configured boresights are expressed
-in that same topocentric frame; no inertial observer-frame mode exists
-in terminal_physics."""
+Ground-link look angles are computed in the body-local topocentric frame
+anchored to the observer's `reference_body` (ENU at Earth,
+MCMF-local-vertical at Luna, etc.). Configured boresights are expressed in
+that same topocentric frame; no inertial observer-frame mode exists in
+terminal_physics."""
 
 
 class GroundVisibilityDecisionWire(BaseModel):
@@ -487,8 +485,7 @@ class GroundLinkDecisionSnapshot(BaseModel):
     state snapshot; consumers asking "why isn't this ground link up?"
     read this decision snapshot.
 
-    Internal consistency invariants (enforced at construction —
-    Phase 1.1 boundary correctness):
+    Internal consistency invariants (enforced at construction):
 
     1. `decisions` has no duplicate pairs. Each (gs, sat) pair gets
        exactly one decision per snapshot.
@@ -503,8 +500,8 @@ class GroundLinkDecisionSnapshot(BaseModel):
        tenant/body owns the pair — a fatal contract break.
     4. `unscheduled_pairs` has no duplicate pairs.
 
-    Producers that fail any of these are wrong. Phase 1.1 demands
-    foundational types reject impossible states at construction.
+    Producers that fail any of these are wrong. Foundational types reject
+    impossible states at construction.
     """
 
     model_config = ConfigDict(frozen=True)

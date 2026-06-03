@@ -2030,7 +2030,7 @@ def _create_session_pod(
             name="var-log",
             empty_dir=kubernetes.client.V1EmptyDirVolumeSource(medium="Memory"),
         ),
-        # Forward-compatible mounts for SSH terminal (Phase 1)
+        # Forward-compatible mounts for interactive SSH terminal support.
         kubernetes.client.V1Volume(
             name="ssh-config",
             empty_dir=kubernetes.client.V1EmptyDirVolumeSource(medium="Memory"),

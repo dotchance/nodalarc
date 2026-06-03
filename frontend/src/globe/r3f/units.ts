@@ -1,14 +1,13 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
 /**
- * Render-space units for the R3F scene. The scene shares ONE scale with the legacy
- * globe and its truth layer: 1 Earth radius = SCENE_EARTH_RADIUS (100) render units,
- * sourced from sim/orbitalMath so there is a single scale constant. This lets the R3F
- * components reuse the legacy propagation/position math (propagateToSceneXYZ, the SGP4
- * worker, geoToWorld, positionLookup) VERBATIM with no rescale factor — the lowest-risk
- * path to faithful parity (see specs/plans/ux2-r3f-migration.md, "Scale decision").
+ * Render-space units for the R3F scene. The scene shares one authoritative scale
+ * with the simulation truth layer: 1 Earth radius = SCENE_EARTH_RADIUS (100)
+ * render units, sourced from sim/orbitalMath so there is a single scale constant.
+ * This lets render components reuse the shared propagation and position helpers
+ * without hidden rescale factors.
  *
- * M3 keeps node coordinates local to each body and places the body frame in the shared
+ * Node coordinates stay local to each body and the body frame is placed in the shared
  * universe. Cislunar distances are still small enough at this scale for the demonstrator;
  * the future Mars/Lagrange fidelity layer should add camera-relative/floating-origin render
  * coordinates without changing these truth units.

@@ -7,7 +7,9 @@
 
 ## Responsibility
 
-The VS-API aggregates constellation state from all backend components and serves it to the VF and external clients via REST and WebSocket. It also manages session lifecycle (create, switch, teardown).
+The VS-API aggregates session state from all backend components and serves it to
+the VF and external clients via REST and WebSocket. It also manages session
+lifecycle: create, switch, upload, and teardown.
 
 ## Architecture
 
@@ -62,10 +64,13 @@ Also broadcasts:
 
 ### Deploy (from wizard)
 
-1. Validate config (expand constellation, load ground stations)
+1. Resolve segment session YAML through the shared resolver
 2. Create ConstellationSpec CR
 3. Return immediately - Operator handles pod creation async
 4. WebSocket broadcasts progress as session deploys
+
+The wizard generator emits the same segment grammar accepted by YAML upload.
+There is no separate wizard-only session format.
 
 ### Switch
 
@@ -97,7 +102,7 @@ Fixed token: set `NODAL_API_KEY` environment variable.
 
 On startup, VS-API:
 1. Polls for a ConstellationSpec CR every 5 seconds until one appears
-2. Reads session config from the CR's `sessionYaml` field
+2. Reads and resolves session config from the CR's `sessionYaml` field
 3. Subscribes to NATS streams
 4. Begins serving clients
 

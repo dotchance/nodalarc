@@ -468,13 +468,13 @@ def allocate_ground_links(
         raise ValueError("Ground allocator step must be non-negative")
     if mbb_preemption != "off":
         raise ValueError(
-            f"mbb_preemption={mbb_preemption!r} is not implemented in Phase 3; "
+            f"mbb_preemption={mbb_preemption!r} is not implemented; "
             "the schema must reject unsupported preemption policies"
         )
     if cross_tenant_displacement != "off":
         raise ValueError(
             f"cross_tenant_displacement={cross_tenant_displacement!r} is not implemented "
-            "in Phase 3; cross-tenant preemption needs an explicit priority policy"
+            "yet; cross-tenant preemption needs an explicit priority policy"
         )
     if successor_abort_policy not in ("hard_release", "soft_retain"):
         raise ValueError(f"Unknown successor_abort_policy={successor_abort_policy!r}")
@@ -762,7 +762,7 @@ def allocate_ground_links(
                 message=(
                     f"BBM released incumbent {incumbent.pair!r} before acquiring "
                     f"challenger {challenger.pair!r}; timeout_ticks={bbm_acquire_timeout_ticks}. "
-                    "Phase 3 BBMGap is an immediate one-tick release/acquire transition."
+                    "BBMGap is an immediate one-tick release/acquire transition."
                 ),
                 successor_pair=challenger.pair,
                 challenger_pair=challenger.pair,

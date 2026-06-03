@@ -946,7 +946,7 @@ async def _nats_subscriber() -> None:
         log.info("CR phase=%s — waiting for Ready before activating SessionContext", _cr_phase)
         if _session_manager:
             _session_manager._status = "wiring"
-            _session_manager.status_detail = _cr_message or f"Phase: {_cr_phase}"
+            _session_manager.status_detail = _cr_message or f"Status: {_cr_phase}"
             for _s in _session_manager._available:
                 if _s.get("name") == _cr_session.session_name:
                     _session_manager.set_active(_s["file"])
@@ -1726,8 +1726,8 @@ def get_decision_explanation(
 ) -> dict | JSONResponse:
     """Composed decision-explanation FACTS for one ground station, or one pair.
 
-    Phase A of the link-explainability UX. VS-API composes the funnel ladder,
-    effective envelope, best-candidate, and actuation/divergence facts from the
+    VS-API composes the funnel ladder, effective envelope, best-candidate,
+    and actuation/divergence facts from the
     committed ground-decision snapshot, the kernel-actual link set, the actuation
     roster, and the Scheduler-owned pending clock (divergence timing, recovered from
     the retained ActualLinkSnapshot). The client registry assigns family/severity/text.
@@ -1828,8 +1828,8 @@ def get_ground_link_decisions(
     ISL-only pair (sat-sat) returns 404 — not because the OME has no
     opinion, but because the ISL decision surface does not exist yet.
 
-    Phase 1 (C-foundation-5): the operator-facing surface for "why isn't
-    this ground pair up?" Every ground pair the OME considered carries
+    Operator-facing surface for "why isn't this ground pair up?" Every
+    ground pair the OME considered carries
     ``visibility_reject_reason``; visible-but-unscheduled pairs
     additionally carry ``unscheduled_reason`` plus the incumbent or
     capacity constraint the allocator chose them over.
@@ -3117,7 +3117,7 @@ async def _poll_cr_until_ready() -> None:
             if _session_manager and phase != "Wiring" and status_is_current:
                 # During Wiring, Node Agent NATS progress owns _status_detail.
                 # Only update from CR for non-Wiring phases.
-                _session_manager.status_detail = message or f"Phase: {phase}"
+                _session_manager.status_detail = message or f"Status: {phase}"
             if phase == "Ready":
                 ready = _extract_ready_cr_session(cr)
                 if ready is None:
@@ -3296,7 +3296,7 @@ def main() -> None:
             elif _cr_phase in ("Pending", "Wiring", "Creating"):
                 log.info(f"Session config loaded but CR phase={_cr_phase} — wiring in progress")
                 _session_manager._status = "wiring"
-                _session_manager.status_detail = _cr_message or f"Phase: {_cr_phase}"
+                _session_manager.status_detail = _cr_message or f"Status: {_cr_phase}"
                 _pending_cr_poll = True
             elif _cr_phase == "Error":
                 _session_manager._status = "error"
@@ -3334,7 +3334,7 @@ def main() -> None:
                         f"Active ConstellationSpec CR found (phase={phase}) — wiring in progress"
                     )
                     _session_manager._status = "wiring"
-                    _session_manager.status_detail = message or f"Phase: {phase}"
+                    _session_manager.status_detail = message or f"Status: {phase}"
                     _pending_cr_poll = True
                 elif phase == "Error":
                     _session_manager._status = "error"

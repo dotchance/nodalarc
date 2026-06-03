@@ -55,28 +55,28 @@ status:
 
 When a ConstellationSpec CR is created:
 
-1. **Parse session config** from `spec.sessionYaml`
-2. **Expand constellation** - resolve satellite type, compute orbital elements
-3. **Load ground stations** - resolve station set, compute terrestrial prefixes
-4. **Compute pod placement** - assign pods to nodes using the configured policy
-5. **Render FRR configs** - Jinja2 templates → per-node frr.conf + daemons file
-6. **Create ConfigMaps** - one per node with rendered FRR config
-7. **Create session pods** - with ownerReference to CR (enables GC cascade)
-8. **Wait for pods Running** - poll until all pods reach Running state
-9. **Deliver FRR config** - exec into each pod, copy configs, touch startup sentinel
-10. **Write wiring manifest** - `nodalarc-topology-wiring` ConfigMap
-11. **Wait for wiring complete** - Node Agent signals via `nodalarc-wiring-status`
-12. **Advance phase to Ready**
+1. **Resolve session config** from `spec.sessionYaml` through the shared resolver
+2. **Validate runtime support** - reject unsupported future grammar before pods are valid
+3. **Compute pod placement** - assign resolved nodes to Kubernetes nodes
+4. **Render FRR configs** - Jinja2 templates receive resolved node, terminal, routing, SID, and prefix facts
+5. **Create ConfigMaps** - one per node with rendered FRR config
+6. **Create session pods** - with ownerReference to CR (enables GC cascade)
+7. **Wait for pods Running** - poll until all pods reach Running state
+8. **Deliver FRR config** - exec into each pod, copy configs, touch startup sentinel
+9. **Write wiring manifest** - `nodalarc-topology-wiring` ConfigMap
+10. **Wait for wiring complete** - Node Agent signals via `nodalarc-wiring-status`
+11. **Advance phase to Ready**
 
 ## Pod Placement
 
-`compute_pod_placement(constellation, ground_stations, policy, nodes)` assigns each pod to a K8s node:
+Pod placement assigns each resolved session node to a Kubernetes node:
 
 - **allOnOne** - all pods on the first available node
 - **planePerNode** - round-robin orbital planes across nodes
 - **planeGroupPerNode** - groups of adjacent planes per node
 
-Ground stations are distributed across nodes regardless of policy.
+Ground nodes and explicit relay nodes are distributed across nodes regardless of
+orbital-plane policy.
 
 ## FRR Config Delivery
 
@@ -94,11 +94,14 @@ FRR's stock entrypoint (`docker-start`) waits for a sentinel file before startin
 
 `compute_platform_hash()` resolves `spec.sessionYaml` through the shared session resolver and hashes the resolved runtime model plus referenced catalog assets that affect platform services. If the hash differs between old and new session, platform services (OME, Scheduler) are restarted to pick up the new configuration.
 
-The hash intentionally excludes only operator-owned runtime lineage such as `session.run_id`; changes to constellation, ground station, routing, scheduling, simulation, addressing, placement, or referenced asset contents trigger a platform restart.
+The hash intentionally excludes only operator-owned runtime lineage such as `session.run_id`; changes to constellation, ground-site, routing, scheduling, simulation, addressing, placement, or referenced asset contents trigger a platform restart.
 
 ## Error Propagation
 
-`compute_expected_pod_count()` raises on validation errors (invalid constellation, missing ground stations). The handler catches the exception and sets CR `status.phase = "Error"` with the error message. This surfaces bad configs immediately instead of silently deploying zero pods.
+`compute_expected_pod_count()` raises on validation errors (invalid segment,
+missing catalog asset, unsupported runtime feature). The handler catches the
+exception and sets CR `status.phase = "Error"` with the error message. This
+surfaces bad configs immediately instead of silently deploying zero pods.
 
 ## Session Teardown
 

@@ -51,11 +51,11 @@ gathers what happened. VF shows it to a human.
                       veth pairs|   |tc netem/tbf
                                 v   v
     +----------+ +----------+ +----------+ +----------+
-    | space-sat-p00s00| space-sat-p00s01| space-sat-p01s00| ground-gs-hawthorne|
+    | space-sat-p00s00| space-sat-p00s01| geo-sat-p00s00| ground-gs-hawthorne|
     |  FRR     | |  FRR     | |  FRR     | |  FRR     |
     |  IS-IS   | |  IS-IS   | |  IS-IS   | |  IS-IS   |
     +----------+ +----------+ +----------+ +----------+
-        Session pods - one per satellite and ground station
+        Session pods - one per satellite, relay, or ground node
 ```
 
 ## How One Link Becomes Real
@@ -76,8 +76,9 @@ with it.
 
 The full cycle looks like this:
 
-1. **OME** propagates satellite positions, computes line-of-sight visibility,
-   and publishes visibility, clock, heartbeat, ephemeris, and playback events.
+1. **OME** consumes the resolved session, propagates body and node positions,
+   computes line-of-sight visibility, and publishes visibility, clock,
+   heartbeat, ephemeris, and playback events.
 
 2. **Scheduler** consumes visibility and snapshot state, builds desired link
    state, reconciles it against active link state, and dispatches
@@ -90,8 +91,9 @@ The full cycle looks like this:
    checking the kernel postcondition for each requested entry.
 
 4. **FRR** inside each session pod reacts to interface state. IS-IS sends
-   hellos, OSPF floods LSAs, BGP updates neighbors, MPLS labels enter the
-   kernel. The behavior is protocol implementation behavior, not a model of it.
+   hellos, OSPF floods LSAs, supported MPLS labels enter the kernel, and future
+   protocol daemons can be added behind the same interface model. The behavior
+   is protocol implementation behavior, not a model of it.
 
 5. **VS-API** subscribes to NATS, aggregates state for clients, serves REST
    requests, and pushes WebSocket updates to browsers.
@@ -107,12 +109,34 @@ component to reach through another component's boundary, stop and rethink it.
 
 | Component | Owns | Publishes | Subscribes |
 | --- | --- | --- | --- |
-| OME | Orbital state, visibility, clock | VisibilityEvent, ClockTick, HeartbeatTick, LinkStateSnapshot, SessionEphemeris, PlaybackState | Playback control requests |
+| OME | Orbital state, body frames, visibility, clock | VisibilityEvent, ClockTick, HeartbeatTick, LinkStateSnapshot, SessionEphemeris, PlaybackState | Playback control requests |
 | Scheduler | Desired links, active links, dispatch ordering | LinkUp, LinkDown, LatencyUpdate | VisibilityEvent, LinkStateSnapshot, SessionEphemeris |
 | Node Agent | Host kernel network state | Request replies, wiring progress, substrate measurements, OpsEvents | Scheduler requests, wiring manifest |
 | VS-API | Aggregated state for clients | WebSocket broadcasts | OME, link, session, ops, and debug streams |
 | Operator | Session pod lifecycle and generated configs | Kubernetes resources | ConstellationSpec CR watch |
 | VF | Rendering and user interaction | None | VS-API WebSocket |
+
+## Session Resolution
+
+Session YAML is not interpreted separately by each service. Product sessions use
+the segment grammar and are resolved once through the shared resolver into a
+frozen runtime view.
+
+The resolver owns:
+
+- structural validation of `segments`, `link_rules`, routing, time, and
+  ephemeris fields
+- catalog loading for constellation, satellite type, and ground-site assets
+- runtime node ID allocation from `{namespace}-{local_node_id}`
+- terminal inventory materialization
+- link-rule endpoint and candidate validation
+- per-segment SID allocation
+- fail-loud rejection of future grammar that the runtime cannot execute yet
+
+VS-API, the Operator, OME, Scheduler, Measurement Interface, coverage preview,
+and session generation all use that resolved view. Production code should not
+construct its own divergent view by independently validating old session shapes
+or expanding a constellation outside the resolver boundary.
 
 ## NATS Streams
 
@@ -231,22 +255,24 @@ latency is a dispatch blocker, not a zero-delay default.
 
 ## Session Lifecycle
 
-A session joins the primitives: constellation geometry, satellite type, ground
-station set, routing stack, placement policy, and time model.
+A session joins the primitives: constellation geometry, explicit space nodes,
+ground sites, ground nodes, terminal inventories, declared link rules, routing
+stack, placement policy, time model, and optional body ephemeris.
 
 The path from a button click to routing looks like this:
 
 ```text
 User clicks Deploy in the wizard
-    -> VS-API validates config and creates a ConstellationSpec CR
-    -> Operator watches the CR and creates session pods
-    -> Operator renders FRR configs from templates
+    -> VS-API resolves the segment session and creates a ConstellationSpec CR
+    -> Operator watches the CR and resolves the same session runtime view
+    -> Operator creates session pods
+    -> Operator renders FRR configs from templates and resolved node facts
     -> Operator writes the topology wiring manifest
     -> Node Agent detects the manifest and wires interfaces
     -> Node Agent writes typed wiring status for the same session/generation
     -> Operator advances the session to Ready
     -> Scheduler opens its wiring gate for that session/generation
-    -> OME begins publishing orbital events
+    -> OME begins publishing body, clock, and link-authority events
     -> Scheduler activates visible links
     -> FRR forms adjacencies and converges
     -> VS-API pushes state to VF

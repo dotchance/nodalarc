@@ -15,7 +15,7 @@ The Node Agent is the only component that touches the Linux kernel's network sta
 2. Discover all session pod PIDs on this node
 3. Wire base infrastructure for every pod:
    - Create host-mediated veth pairs for ISL interfaces
-   - Create `gnd0` interface
+   - Create generated terminal interfaces such as `islX`, `gndX`, and `terr0`
    - Set sysctls (forwarding, rp_filter, MPLS input)
    - Remove default K8s route
 4. Write typed `nodalarc-wiring-status` with session ID, wiring generation,
@@ -81,7 +81,7 @@ ISL and ground links use different CROSS_NODE paths:
 1. Bring host-side veth admin DOWN → carrier drops on pod-side
 2. For VXLAN links: remove VXLAN interface and host-side veth
 3. For ground links: remove tc mirred redirect rules and bring the satellite
-   pod-side `gndX` DOWN; the ground-station pod interface remains
+   pod-side `gndX` DOWN; the ground-node pod interface remains
    carrier-driven by the host-side veth
 
 ### SetLatency

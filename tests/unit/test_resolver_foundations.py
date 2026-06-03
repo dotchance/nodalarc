@@ -365,40 +365,40 @@ def test_link_rule_endpoint_referencing_unknown_node_rejected():
 # --- Runtime-support matrix ---
 
 
-def test_m1_supports_earth_constellation_and_ground():
-    rs = RuntimeSupport.mvp_m1()
+def test_earth_multi_regime_supports_earth_constellation_and_ground():
+    rs = RuntimeSupport.earth_multi_regime()
     assert rs.check_segment_kind("constellation") is None
     assert rs.check_segment_kind("ground_set") is None
     assert rs.check_central_body("earth") is None
     assert rs.check_reference_body("earth") is None
 
 
-def test_m1_rejects_space_node_with_milestone():
-    rs = RuntimeSupport.mvp_m1()
+def test_earth_multi_regime_rejects_space_node_with_support_note():
+    rs = RuntimeSupport.earth_multi_regime()
     feat = rs.check_segment_kind("space_node")
     assert isinstance(feat, UnsupportedFeature)
     assert feat.category is FeatureCategory.SEGMENT_KIND
-    assert feat.planned_milestone == "M3 (Luna)"
+    assert feat.support_note == "supported by the Earth-Luna runtime"
 
 
-def test_m1_rejects_future_kinds_and_bodies():
-    rs = RuntimeSupport.mvp_m1()
-    assert rs.check_segment_kind("lagrange_point").planned_milestone == "post-MVP"
-    assert rs.check_central_body("luna").planned_milestone == "M3 (Luna)"
-    assert rs.check_central_body("mars").planned_milestone == "post-MVP"
-    assert rs.check_frame_body("sun").planned_milestone == "post-MVP"
+def test_earth_multi_regime_rejects_future_kinds_and_bodies():
+    rs = RuntimeSupport.earth_multi_regime()
+    assert rs.check_segment_kind("lagrange_point").support_note == "future runtime capability"
+    assert rs.check_central_body("luna").support_note == "supported by the Earth-Luna runtime"
+    assert rs.check_central_body("mars").support_note == "future runtime capability"
+    assert rs.check_frame_body("sun").support_note == "future runtime capability"
 
 
-def test_m1_rejects_protocol_adapters_and_ephemeris():
-    rs = RuntimeSupport.mvp_m1()
-    # static_ip is structurally valid but M3; not yet runtime-supported in M1.
+def test_earth_multi_regime_rejects_protocol_adapters_and_ephemeris():
+    rs = RuntimeSupport.earth_multi_regime()
+    # static_ip is structurally valid but not supported by this runtime profile.
     assert rs.check_protocol_adapter("static_ip") is not None
     assert rs.check_protocol_adapter("bgp") is not None
     assert rs.check_ephemeris_provider("skyfield_bsp") is not None
 
 
 def test_unsupported_feature_error_message():
-    rs = RuntimeSupport.mvp_m1()
+    rs = RuntimeSupport.earth_multi_regime()
     feats = [rs.check_segment_kind("space_node_set"), rs.check_central_body("mars")]
     err = UnsupportedFeatureError([f for f in feats if f])
     assert "space_node_set" in str(err)

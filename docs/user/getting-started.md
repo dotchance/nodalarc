@@ -1,64 +1,105 @@
 # Getting Started
 
-Open your browser to the NodalArc URL (typically http://localhost:3000). You'll see a 3D globe with satellites orbiting Earth.
+Open your browser to the NodalArc URL, typically:
+
+```text
+http://localhost:3000
+```
+
+You will see a 3D view of the running session. Most users start with an Earth
+LEO session because it is small enough to understand while still exercising the
+full stack: orbital motion, link changes, ground handoff, real routing, and
+kernel actuation.
 
 ![NodalArc Initial View](../images/user-initial-view.png)
 
 ## What You're Looking At
 
-When NodalArc starts, a constellation session is already running. The default session deploys 36 satellites in a single orbital ring at 550 km altitude with OSPF routing and 7 ground stations.
+When NodalArc starts, a session is already running. The default session is
+`earth-leo-simple.yaml`: a 36-satellite Earth LEO starter with OSPF routing and
+MBB-capable Earth ground nodes.
 
-On the globe you'll see:
+On the globe you will see:
 
-- **Satellites** - dots moving along their orbital paths
-- **ISL links** - lines connecting satellites that can currently see each other (inter-satellite links via optical laser terminals)
-- **Ground stations** - fixed points on the Earth's surface
-- **Ground links** - lines connecting ground stations to overhead satellites
+- **Satellites** - moving nodes in orbital segments
+- **ISL links** - inter-satellite links that are currently active
+- **Ground sites and ground nodes** - fixed nodes on a body surface
+- **Ground links** - active links from ground terminals to visible satellites
+- **Segments** - the configured groups that organize the session, such as LEO,
+  MEO, GEO, lunar relay, or ground access
 
-Everything moves in real time. As satellites orbit, links appear when satellites enter line-of-sight range and disappear when they move out of range. Ground stations hand off between satellites as the constellation passes overhead.
+Everything moves in simulation time. As satellites orbit, links appear when the
+declared link rule and geometry allow them, and disappear when visibility or
+policy no longer supports them. Ground nodes hand off between satellites
+according to their own terminal capacity and handoff policy.
 
 ## First Things to Try
 
-### 1. Watch a ground station handoff
+### 1. Watch a ground handoff
 
-Ground stations connect to whichever satellite is currently overhead with the best elevation angle. As the constellation moves, the connected satellite changes. Watch a ground station (fixed point on the surface) - you'll see its link disconnect from one satellite and connect to the next one passing overhead.
+Select a ground node and watch which satellite it is connected to. If the ground
+node has enough compatible terminals, it can use make-before-break behavior. If
+it only has one compatible terminal, break-before-make is the honest behavior.
 
-### 2. Click a satellite
+### 2. Click a satellite or ground node
 
-Click any satellite to select it. The detail panel shows its current state: position, active links, connected neighbors. You can see which ISLs are active and whether it has a ground station connection.
+Click any node to open the detail panel. The panel shows its runtime node ID,
+position, active links, candidates, segment metadata, and explainability details
+for why links are up, down, expected, or faulted.
 
 ### 3. Open a terminal
 
-With a satellite selected, open the terminal panel (bottom of screen). You land in a router CLI - the same interface network engineers use on physical routers. Try:
+With a node selected, open the terminal panel. You land in a router CLI on that
+node. Try:
 
 - `show ip route` - see the routing table
-- `show ip ospf neighbor` - see which neighbors this satellite has formed adjacencies with
-- `show interface brief` - see all interfaces and their state (UP/DOWN)
+- `show isis neighbor` or `show ip ospf neighbor` - see routing adjacencies
+- `show interface brief` - see interface state
+
+This is not a simulated CLI. It is the FRR process running inside that node's
+container.
 
 ### 4. Trace a path
 
-Select a source node and a destination node, then use the path trace feature to see the hop-by-hop forwarding path between them. The trace shows each router the packet passes through and the per-hop latency.
+Select a source and destination, then use path trace to inspect the forwarding
+path. The result reflects the routing and kernel state that exists at that
+moment. If a route is missing, that is useful information; NodalArc should show
+you the failure instead of hiding it.
 
-### 5. Switch to topology view
+### 5. Switch sessions
 
-Press **Tab** to switch from the 3D globe to a 2D network topology graph. This shows the constellation as a traditional network diagram with nodes and links, making it easier to see the overall structure and routing relationships.
+Use the session picker or command line to deploy a different curated session:
 
-### 6. Try a different constellation
+```bash
+make session DEFAULT_SESSION=configs/sessions/earth-leo-meo-geo.yaml
+```
 
-Open the session wizard to deploy a different constellation. You can change the number of satellites, the orbital geometry, the routing protocol, and the ground station set. See [Sessions](sessions.md) for details.
+Try `earth-leo-meo-geo.yaml` to see multiple Earth orbital regimes in one
+session, or `earth-luna-gateway-site.yaml` to see Earth, Luna, and a cislunar
+relay path in the same visualization.
 
 ## Navigation
 
-### Globe Controls
+### 3D Controls
 
-- **Left-click drag** - rotate the globe
-- **Scroll wheel** - zoom in/out
-- **Right-click drag** - pan
-- **Click a satellite/ground station** - select it, show details
+| Action | Control |
+|--------|---------|
+| Rotate around focus | Left-click + drag |
+| Zoom toward focus | Scroll wheel |
+| Pan | Right-click + drag |
+| Select node | Click a satellite or ground node |
+| Fly to selected node/body | Double-click, or use the segment drawer |
+| Deselect | Escape |
+| Follow selected node | F |
+
+The camera has a focus point. When you select or fly to an object, zoom and
+rotation use that object as the reference instead of always using Earth as the
+center. That matters for GEO, cislunar, and lunar views where Earth may be far
+off-screen.
 
 ### Keyboard
 
-Press any of these keys (when not typing in an input field):
+Press these keys when not typing in a terminal or input field:
 
 | Key | Action |
 |-----|--------|
@@ -70,8 +111,8 @@ Press any of these keys (when not typing in an input field):
 | L | Toggle ISL links |
 | G | Toggle ground links |
 | F | Follow selected node |
-| H | Toggle historical mode |
-| N | Toggle globe rendering mode |
+| N | Toggle rendering mode |
+| Q | Toggle filter drawer |
 | 1 | Color by area |
 | 2 | Color by plane |
 
@@ -79,28 +120,35 @@ See [Keyboard Shortcuts](keyboard-shortcuts.md) for the full reference.
 
 ## Understanding What You See
 
-### Link Colors
+### Expected No-Link vs Faulted
 
-ISL links are colored to convey information at a glance:
+The most important visual distinction is:
 
-- **Color by plane** (press 2) - each orbital plane gets a distinct color, making it easy to see intra-plane vs cross-plane links
-- **Color by area** (press 1) - links colored by routing area assignment
+- **Expected no-link** - the model says no connection should exist right now
+  because of geometry, terminal limits, capacity, policy, or handoff state.
+- **Faulted** - the model expected a link or proof, but kernel state,
+  actuation, or authority checks failed.
 
-### Satellite Trails
+Those states should look different. A ground node that is below the elevation
+mask should not look like a ground node with dirty kernel state.
 
-Press **T** to toggle satellite trails. Trails show the recent path each satellite has traveled, making orbital motion visible. The trail fades from bright to transparent as it ages.
+### Segment Filters
 
-### Orbital Paths
+Press **Q** to open the filter drawer. Segments and tags let you focus on one
+part of the session, such as Earth LEO, Earth GEO, lunar relay, or ground access
+nodes. Filtering changes what you inspect; it does not change the running
+network.
 
-Press **P** to toggle full orbital paths. These show the complete orbital ring for each satellite, colored by orbital plane.
+### Orbital and Body Scale
 
-### Link State Changes
-
-When a link comes up or goes down, it appears/disappears in the visualization. The event log (bottom panel) shows a timestamped record of every link state change, ground station handoff, and convergence event.
+LEO, MEO, GEO, and lunar distances differ by orders of magnitude. The
+visualization preserves the relationships needed for navigation and
+explainability, but rendering scale is still a view. The authoritative physics
+lives in the OME and the session ephemeris.
 
 ## Next Steps
 
-- [Sessions](sessions.md) - deploy different constellations and routing stacks
+- [Sessions](sessions.md) - session grammar, curated demos, and building blocks
 - [Globe View](globe-view.md) - detailed guide to the 3D visualization
-- [Terminal Access](terminal.md) - using the browser terminal to inspect routing state
-- [Time Controls](time-controls.md) - pause, speed up, and seek through the simulation
+- [Terminal Access](terminal.md) - using the browser terminal to inspect routers
+- [Time Controls](time-controls.md) - pause and speed controls

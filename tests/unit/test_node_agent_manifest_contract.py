@@ -71,7 +71,7 @@ def test_manifest_contract_enforces_ground_station_identity_fields() -> None:
         WiringManifest.model_validate(data)
 
 
-def test_manifest_contract_requires_security_phase() -> None:
+def test_manifest_contract_requires_security_stage() -> None:
     assert "pod_security" in REQUIRED_WIRING_PHASES
     data = _manifest()
     data["required_phases"].remove("pod_security")

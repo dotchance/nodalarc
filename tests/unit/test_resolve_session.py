@@ -8,6 +8,7 @@ import pytest
 import yaml
 from nodalarc.link_metadata import build_link_metadata_maps
 from nodalarc.models.identity import IdentityMode
+from nodalarc.models.session import resolve_session_epoch
 from nodalarc.resolve_session import (
     SessionResolutionError,
     load_session_resolution_from_file,
@@ -747,6 +748,7 @@ def test_earth_luna_gateway_site_demo_resolves_ground_site_primitives():
     assert by_rule == {
         "santiago-leo-access": 36,
         "santiago-geo-access": 8,
+        "santiago-earth-cislunar-gateway-access": 1,
         "artemis-lunar-access": 8,
         "leo-to-meo-backbone": 24,
         "meo-to-geo-backbone": 8,
@@ -756,9 +758,13 @@ def test_earth_luna_gateway_site_demo_resolves_ground_site_primitives():
 
     earth_leo = resolution.resolved.node_by_id("earth-site-gs-santiago-leo-router")
     earth_geo = resolution.resolved.node_by_id("earth-site-gs-santiago-geo-gateway-router")
+    earth_cislunar = resolution.resolved.node_by_id(
+        "earth-site-gs-santiago-cislunar-gateway-router"
+    )
     lunar = resolution.resolved.node_by_id("lunar-site-gs-artemis-surface-router")
     assert earth_leo is not None
     assert earth_geo is not None
+    assert earth_cislunar is not None
     assert lunar is not None
 
     assert earth_leo.local_node_id == "gs-santiago-leo-router"
@@ -773,6 +779,11 @@ def test_earth_luna_gateway_site_demo_resolves_ground_site_primitives():
     assert earth_geo.ground_scheduling.handover_mode == "bbm"
     assert earth_geo.terminal_inventory[0].source_terminal_id == "geo-c"
     assert earth_geo.terminal_inventory[0].bandwidth_mbps == 250
+
+    assert earth_cislunar.segment_id == "earth-site"
+    assert earth_cislunar.ground_scheduling.handover_mode == "bbm"
+    assert earth_cislunar.terminal_inventory[0].source_terminal_id == "cislunar-c"
+    assert earth_cislunar.terminal_inventory[0].bandwidth_mbps == 250
 
     assert lunar.segment_id == "lunar-site"
     assert lunar.reference_body == "luna"
@@ -812,7 +823,7 @@ def test_earth_luna_gateway_site_demo_resolves_ground_site_primitives():
     )
     result = compute_step(
         ctx,
-        1704067200.0,
+        resolve_session_epoch(resolution.runtime_session.time),
         0,
         resolution.runtime_session.time.step_seconds,
         0.0,
@@ -832,6 +843,12 @@ def test_earth_luna_gateway_site_demo_resolves_ground_site_primitives():
     assert feasibility.reject_reason == "ok"
     assert feasibility.range_km > 300_000
     assert feasibility.orbital_one_way_ms > 1_000
+
+    earth_gateway_pair = ("earth-relay-gateway", earth_cislunar.node_id)
+    assert earth_gateway_pair in result.ground_allocation.associations
+
+    geo_gateway_pair = ("earth-site-gs-santiago-geo-gateway-router", "geo-sat-p00s02")
+    assert geo_gateway_pair in result.ground_allocation.associations
 
 
 def test_non_earth_session_requires_ephemeris_manifest():

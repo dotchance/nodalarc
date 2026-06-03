@@ -45,7 +45,7 @@ segments:
   kind: space_node
   namespace: earth-relay
   central_body: earth
-  satellite_type: cislunar-relay-rf
+  satellite_type: earth-cislunar-gateway-rf
   tags:
   - earth
   - geo
@@ -57,7 +57,7 @@ segments:
       altitude_km: 35786
       inclination_deg: 0
       raan_deg: 0
-      true_anomaly_deg: 22.5
+      true_anomaly_deg: 85.0
     tags:
     - gateway
     - cislunar
@@ -172,6 +172,39 @@ segments:
           tags:
           - geo
           - c-band
+      - id: cislunar-gateway-router
+        display_name: Santiago Cislunar Gateway Router
+        tags:
+        - cislunar-gateway
+        handover_mode: bbm
+        mbb_overlap_ticks: 0
+        mbb_reserve: 0
+        selection_policy:
+          name: highest-elevation
+          params: {}
+        handover_policy:
+          name: hysteresis
+          params:
+            discount_factor: 1.05
+            mask_fade_range_deg: 2.5
+        terrestrial_prefixes:
+        - prefix: 172.61.30.0/24
+          metric: 10
+        terminals:
+        - id: cislunar-c
+          type: rf
+          band: C
+          count: 1
+          bandwidth_mbps: 250
+          tracking_capacity: 1
+          max_range_km: 45000
+          field_of_regard_deg: 110
+          max_tracking_rate_deg_s: 0.05
+          boresight:
+            mode: local_vertical
+          tags:
+          - cislunar
+          - c-band
 
 - id: lunar-site
   kind: ground_set
@@ -276,6 +309,23 @@ link_rules:
   topology:
     mode: visible_candidates
 
+- id: santiago-earth-cislunar-gateway-access
+  kind: access
+  endpoints:
+  - selector:
+      segment: earth-site
+      node_tags:
+      - cislunar-gateway
+    terminal_role: ground
+    terminal_medium: rf
+    terminal_id: cislunar-c
+  - selector:
+      segment: earth-cislunar-relay
+    terminal_role: ground
+    terminal_medium: rf
+  topology:
+    mode: visible_candidates
+
 - id: artemis-lunar-access
   kind: access
   endpoints:
@@ -328,6 +378,8 @@ link_rules:
   endpoints:
   - selector:
       segment: geo
+      node_ids:
+      - sat-P00S02
     terminal_role: isl
     terminal_medium: optical
   - selector:
@@ -365,6 +417,11 @@ simulation:
     max_pairs_per_rule: 128
     max_pairs_per_tick: 512
 
+time:
+  start_time: "2026-06-03T17:20:00Z"
+  step_seconds: 5
+  compression: 1
+
 ephemeris:
   provider: skyfield_bsp
   quality_tier: jpl_de_bsp
@@ -395,6 +452,3 @@ routing:
   - traffic-engineering
   area_assignment:
     strategy: per-plane
-
-time:
-  step_seconds: 5

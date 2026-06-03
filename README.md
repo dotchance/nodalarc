@@ -133,6 +133,14 @@ The terminal is not decorative. This is one shell into one real routing instance
 
 ![FRR terminal showing show isis neighbor output](docs/images/readme-router-cli.png)
 
+### 6. Route Across Orbital And Lunar Segments
+
+Sessions can assemble independent building blocks into one emulated network: LEO, MEO, GEO, cislunar relay, lunar relay, and surface ground nodes all keep their own segment identity while sharing one live routing experiment.
+
+![Cislunar routing session with lunar relay mesh and router terminal](docs/images/readme-cislunar-routing.png)
+
+The screenshot above is a running `earth-luna-gateway-site` session. The globe is focused on Luna, the lunar relay mesh is active, the cislunar relay spans back toward Earth, the side panel explains why the selected Earth ground terminal is not currently linked, and the terminal is a live shell inside the Artemis surface router.
+
 ## What You Can Test
 
 Once the system is running, you can:
@@ -143,6 +151,7 @@ Once the system is running, you can:
 - change altitude, inclination, plane count, phase offset, and satellite terminal models
 - move ground stations and see what reachability you bought or lost
 - run `ping`, `traceroute`, and `iperf` through the emulated constellation
+- trace paths across multi-segment sessions such as Earth LEO/MEO/GEO through a cislunar relay to a lunar relay and lunar surface node
 - open a browser terminal to any satellite or ground station and use `vtysh`
 - script experiments through the REST and WebSocket APIs
 - connect external systems to the emulation and watch how they behave

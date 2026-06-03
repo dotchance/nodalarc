@@ -25,12 +25,11 @@ from nodalarc.constellation_loader import (
     load_ground_stations,
 )
 from nodalarc.models.addressing import (
-    assign_isl_neighbors,
     neighbors_by_node,
     topology_summary,
     unique_isl_pairs,
 )
-from nodalarc.models.constellation import ParametricConstellation, TLEConstellation
+from nodalarc.models.constellation import ParametricConstellation
 from nodalarc.models.coverage import (
     CoveragePreviewResult,
     GsPreview,
@@ -147,17 +146,19 @@ def compute_coverage_preview(
         source_context=SourceContext(origin="coverage_preview"),
     )
 
-    constellation = resolution.primary_constellation.config
+    constellation = resolution.runtime_constellation
     gs_file = resolution.primary_ground_set.config
-    satellites = list(resolution.primary_constellation.satellites)
+    satellites = list(resolution.satellites)
     if not satellites:
         raise ValueError("No satellites in constellation")
 
     addressing = resolution.addressing
-    neighbors = assign_isl_neighbors(constellation, addressing)
+    neighbors = resolution.neighbors
 
     first_alt = satellites[0].elements.semi_major_axis_km - EARTH_RADIUS_KM
-    period = orbital_period(first_alt)
+    period = max(
+        orbital_period(sat.elements.semi_major_axis_km - EARTH_RADIUS_KM) for sat in satellites
+    )
 
     # Extract visibility parameters from resolved constellation
     vis_params = _extract_visibility_params(constellation, gs_file)
@@ -170,13 +171,12 @@ def compute_coverage_preview(
         neighbors=neighbors,
         epoch_unix=0.0,
         duration_s=period,
-        propagator_id="sgp4-tle"
-        if isinstance(constellation, TLEConstellation)
-        else "keplerian-circular",
+        propagator_id=resolution.runtime_session.orbit.propagator,
         step_seconds=_PREVIEW_STEP_SECONDS,
         ground_scheduling=resolution.runtime_session.scheduling.ground,
         ground_link_model="geometry_only",
         ground_defaults_applied=True,
+        ground_candidate_satellites_by_gs=resolution.ground_candidate_satellites_by_gs,
         **vis_params,
     )
     events = window.events
@@ -205,9 +205,14 @@ def compute_coverage_preview(
     inclination_deg = 0.0
     altitude_km = first_alt
     plane_count = 1
-    if isinstance(constellation, ParametricConstellation):
-        inclination_deg = constellation.orbit.inclination_deg
-        plane_count = constellation.planes.count
+    parametric_assets = [
+        asset.config
+        for asset in resolution.constellations
+        if isinstance(asset.config, ParametricConstellation)
+    ]
+    if parametric_assets:
+        inclination_deg = parametric_assets[0].orbit.inclination_deg
+        plane_count = sum(asset.planes.count for asset in parametric_assets)
 
     isl_terminal_count = satellites[0].isl_terminal_count if satellites else 4
     topo = topology_summary(neighbors)

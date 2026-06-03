@@ -39,6 +39,10 @@ export interface EphemerisNodeKeplerian {
   true_anomaly_deg: number;
   plane: number;
   slot: number;
+  segment_id?: string | null;
+  local_node_id?: string | null;
+  namespace?: string | null;
+  tags?: string[];
 }
 
 export interface EphemerisNodeFixed {
@@ -46,6 +50,10 @@ export interface EphemerisNodeFixed {
   lat_deg: number;
   lon_deg: number;
   alt_km: number;
+  segment_id?: string | null;
+  local_node_id?: string | null;
+  namespace?: string | null;
+  tags?: string[];
 }
 
 export type EphemerisNode = EphemerisNodeKeplerian | EphemerisNodeFixed;

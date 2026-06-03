@@ -1,0 +1,147 @@
+session:
+  name: earth-leo-meo-geo
+identity:
+  mode: segment_namespaced
+segments:
+- id: leo
+  kind: constellation
+  source: configs/constellations/demo-36.yaml
+  namespace: leo
+  central_body: earth
+  internal_links:
+    isl:
+      enabled: false
+  tags:
+  - earth
+  - leo
+- id: meo
+  kind: constellation
+  source: configs/constellations/meo-gps-24.yaml
+  namespace: meo
+  central_body: earth
+  internal_links:
+    isl:
+      enabled: false
+  tags:
+  - earth
+  - meo
+  - gps
+- id: geo
+  kind: constellation
+  source: configs/constellations/geo-ring-8.yaml
+  namespace: geo
+  central_body: earth
+  internal_links:
+    isl:
+      enabled: false
+  tags:
+  - earth
+  - geo
+- id: ground
+  kind: ground_set
+  source: configs/ground-stations/sets/meo-gps.yaml
+  namespace: ground
+  reference_body: earth
+  tags:
+  - earth
+  - ground
+  - multi-regime
+  scheduling:
+    selection_policy:
+      name: highest-elevation
+      params: {}
+    handover_policy:
+      name: hysteresis
+      params:
+        discount_factor: 1.15
+        mask_fade_range_deg: 5.0
+link_rules:
+- id: ground-to-leo
+  kind: access
+  endpoints:
+  - selector:
+      segment: ground
+    terminal_role: ground
+    terminal_medium: rf
+  - selector:
+      segment: leo
+    terminal_role: ground
+    terminal_medium: rf
+  topology:
+    mode: visible_candidates
+- id: ground-to-meo
+  kind: access
+  endpoints:
+  - selector:
+      segment: ground
+    terminal_role: ground
+    terminal_medium: rf
+  - selector:
+      segment: meo
+    terminal_role: ground
+    terminal_medium: rf
+  topology:
+    mode: visible_candidates
+- id: ground-to-geo
+  kind: access
+  endpoints:
+  - selector:
+      segment: ground
+    terminal_role: ground
+    terminal_medium: rf
+  - selector:
+      segment: geo
+    terminal_role: ground
+    terminal_medium: rf
+  topology:
+    mode: visible_candidates
+- id: leo-to-meo-relay-candidates
+  kind: inter_constellation
+  endpoints:
+  - selector:
+      segment: leo
+    terminal_role: isl
+    terminal_medium: optical
+  - selector:
+      segment: meo
+    terminal_role: isl
+    terminal_medium: optical
+  topology:
+    mode: nearest_n
+    n: 1
+- id: meo-to-geo-relay-candidates
+  kind: inter_constellation
+  endpoints:
+  - selector:
+      segment: meo
+    terminal_role: isl
+    terminal_medium: optical
+  - selector:
+      segment: geo
+    terminal_role: isl
+    terminal_medium: optical
+  topology:
+    mode: nearest_n
+    n: 1
+simulation:
+  schema_version: 2
+  ground_link_model: terminal_physics
+  candidate_limits:
+    max_pairs_per_rule: 256
+    max_pairs_per_tick: 512
+orbit:
+  propagator: j2-mean-elements
+dispatch:
+  latency_authority: ome
+  max_latency_age_ticks: 1
+  substrate_compensation:
+    measurement_source: node-agent-rtt
+    rtt_to_one_way: half-rtt
+routing:
+  protocol: isis
+  extensions:
+  - traffic-engineering
+  area_assignment:
+    strategy: per-plane
+time:
+  step_seconds: 5

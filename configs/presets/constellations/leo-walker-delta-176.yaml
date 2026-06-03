@@ -1,0 +1,7 @@
+name: leo-walker-delta-176
+description: "16 planes x 11 satellites, 550 km / 53 deg Walker-delta LEO. Multi-plane inclined shell for handover and routing experiments."
+satellite_count: 176
+constellation: configs/constellations/starlink-176.yaml
+ground_stations: configs/ground-stations/sets/starlink-176.yaml
+time:
+  step_seconds: 1

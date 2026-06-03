@@ -12,6 +12,8 @@ from nodalarc.constellation_loader import (
     expand_constellation,
     load_constellation,
 )
+from nodalarc.frames import EcefVec3, GeoPosition, Vec3
+from nodalarc.link_metadata import LinkRuleMetadata
 from nodalarc.models.addressing import AddressingScheme, assign_isl_neighbors
 from nodalarc.models.events import (
     EphemerisNodeFixed,
@@ -140,6 +142,48 @@ class TestBuildSessionEphemeris:
         assert -90 <= gs.lat_deg <= 90
         assert -180 <= gs.lon_deg <= 180
 
+    def test_node_metadata_carried_into_session_ephemeris(self):
+        ctx, sats, gs_file = _load_test_ctx()
+        sat_id = ctx.addressing.sat_id(sats[0].plane, sats[0].slot)
+        gs_id = next(iter(ctx.gs_positions))
+        ctx = build_step_context(
+            satellites=sats,
+            addressing=ctx.addressing,
+            gs_file=gs_file,
+            neighbors=frozenset(),
+            propagator_id=ctx.propagator_id,
+            ground_scheduling=_ground_scheduling(),
+            node_metadata={
+                sat_id: {
+                    "segment_id": "leo",
+                    "local_node_id": "sat-P00S00",
+                    "namespace": "leo",
+                    "tags": ("earth", "leo", "access"),
+                },
+                gs_id: {
+                    "segment_id": "ground",
+                    "local_node_id": "gs-denver",
+                    "namespace": "ground",
+                    "tags": ("earth", "ground"),
+                },
+            },
+        )
+
+        eph = build_session_ephemeris(ctx, EPOCH, epoch_id=0)
+
+        sat = eph.nodes[sat_id]
+        gs = eph.nodes[gs_id]
+        assert isinstance(sat, EphemerisNodeKeplerian)
+        assert sat.segment_id == "leo"
+        assert sat.local_node_id == "sat-P00S00"
+        assert sat.namespace == "leo"
+        assert sat.tags == ("earth", "leo", "access")
+        assert isinstance(gs, EphemerisNodeFixed)
+        assert gs.segment_id == "ground"
+        assert gs.local_node_id == "gs-denver"
+        assert gs.namespace == "ground"
+        assert gs.tags == ("earth", "ground")
+
     def test_epoch_id_preserved(self):
         ctx, _, _ = _load_test_ctx()
         eph = build_session_ephemeris(ctx, EPOCH, epoch_id=7)
@@ -216,3 +260,37 @@ class TestLinkStateSnapshotEpochId:
             interval_s=5.0,
         )
         assert snap.epoch_id == 0
+
+    def test_snapshot_carries_declared_link_rule_metadata(self):
+        pair = ("leo-sat-p00s00", "meo-sat-p00s00")
+        snap = build_link_state_snapshot(
+            LinkSnapshotSource(
+                isl_state={pair: (True, True)},
+                ground_state={},
+                associations={},
+                pending_teardowns={},
+                propagated_states={},
+            ),
+            interface_map={pair: ("isl0", "isl1")},
+            bandwidth_map={pair: 1000.0},
+            sim_time=datetime(2025, 1, 1, tzinfo=UTC),
+            seq=1,
+            interval_s=5.0,
+            fixed_positions={
+                pair[0]: (EcefVec3(Vec3(7000.0, 0.0, 0.0)), GeoPosition(0.0, 0.0, 0.0)),
+                pair[1]: (EcefVec3(Vec3(9000.0, 0.0, 0.0)), GeoPosition(0.0, 0.0, 0.0)),
+            },
+            rule_map={
+                pair: LinkRuleMetadata(
+                    link_rule_id="leo-to-meo-relay-candidates",
+                    topology_mode="nearest_n",
+                    endpoint_segments=("leo", "meo"),
+                )
+            },
+        )
+
+        restored = type(snap).model_validate_json(snap.model_dump_json())
+        link = restored.links[0]
+        assert link.link_rule_id == "leo-to-meo-relay-candidates"
+        assert link.topology_mode == "nearest_n"
+        assert link.endpoint_segments == ("leo", "meo")

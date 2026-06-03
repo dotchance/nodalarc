@@ -13,6 +13,7 @@ import json
 import logging
 import os
 from collections.abc import Mapping
+from dataclasses import fields, is_dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -20,8 +21,9 @@ from typing import Any
 import kubernetes
 import yaml
 from jinja2 import Environment, FileSystemLoader
+from nodalarc.constellation_loader import satellite_node_id
 from nodalarc.ground_terminals import station_ground_terminal_capacity
-from nodalarc.models.addressing import assign_isl_neighbors, neighbors_by_node
+from nodalarc.models.addressing import neighbors_by_node
 from nodalarc.models.resolved_session import SourceContext
 from nodalarc.models.session import PlacementConfig, SessionConfig
 from nodalarc.nats_channels import sanitize_session_id
@@ -352,6 +354,7 @@ def _required_substrate_pairs(
     isl_pairs: set[tuple[str, str]],
     pod_placement: dict[str, str],
     node_ips: dict[str, str],
+    ground_candidate_satellites_by_gs: Mapping[str, tuple[str, ...]] | None = None,
 ) -> list[dict[str, Any]]:
     """Collapse possible cross-node links into required directional node pairs."""
     from nodalarc.substrate.measurement_contract import RequiredSubstratePair
@@ -369,14 +372,20 @@ def _required_substrate_pairs(
     for node_a, node_b in isl_pairs:
         _add_reason(node_a, node_b, "isl")
 
-    satellite_ids = sorted(
-        node_id for node_id, spec in nodes.items() if spec["node_type"] == "satellite"
-    )
     ground_ids = sorted(
         node_id for node_id, spec in nodes.items() if spec["node_type"] == "ground_station"
     )
     for gs_id in ground_ids:
-        for sat_id in satellite_ids:
+        candidate_sat_ids = (
+            ground_candidate_satellites_by_gs.get(gs_id, ())
+            if ground_candidate_satellites_by_gs is not None
+            else tuple(
+                node_id for node_id, spec in nodes.items() if spec["node_type"] == "satellite"
+            )
+        )
+        if not candidate_sat_ids:
+            raise ValueError(f"ground station {gs_id!r} has no substrate candidate satellites")
+        for sat_id in sorted(candidate_sat_ids):
             _add_reason(gs_id, sat_id, "ground")
 
     pairs = [
@@ -523,9 +532,9 @@ def ensure_session_configmaps(
 
     # --- Step 2: Use resolver-owned constellation and ground assets ---
     _progress("Using resolved constellation and ground station definitions")
-    constellation = resolution.primary_constellation.config
+    constellation = resolution.runtime_constellation
     gs_file = resolution.primary_ground_set.config
-    satellites = list(resolution.primary_constellation.satellites)
+    satellites = list(resolution.satellites)
     num_planes = max((s.plane for s in satellites), default=0) + 1
     _progress(
         f"Expanded {len(satellites)} satellites across {num_planes} planes, {len(gs_file.stations)} ground stations"
@@ -534,7 +543,7 @@ def ensure_session_configmaps(
         raise ValueError("No satellites in constellation")
 
     addressing = resolution.addressing
-    assign_isl_neighbors(constellation, addressing)
+    neighbors = resolution.neighbors
 
     # --- Step 3: Resolve routing stack ---
     _progress(f"Resolving routing stack: {session.routing.protocol}")
@@ -574,7 +583,7 @@ def ensure_session_configmaps(
     _progress(f"Building template variables for {total_nodes} nodes")
     node_vars: dict[str, dict] = {}
     for sat in satellites:
-        node_id = addressing.sat_id(sat.plane, sat.slot)
+        node_id = satellite_node_id(sat, addressing)
         node_vars[node_id] = build_template_vars(
             session=session,
             constellation=constellation,
@@ -583,7 +592,10 @@ def ensure_session_configmaps(
             node_type="satellite",
             plane=sat.plane,
             slot=sat.slot,
+            sat_node_id=node_id,
+            sat_ground_terminal_count=sat.ground_terminal_count,
             config_overrides=config_overrides,
+            neighbors=neighbors,
         )
     for i, station in enumerate(gs_file.stations):
         node_id = addressing.gs_id(station.name)
@@ -596,6 +608,7 @@ def ensure_session_configmaps(
             gs_name=station.name,
             gs_index=i,
             config_overrides=config_overrides,
+            neighbors=neighbors,
         )
 
     # --- Step 5: Render FRR configs (parallelized) ---
@@ -915,11 +928,10 @@ def write_wiring_manifest(
     except kubernetes.client.rest.ApiException as e:
         if e.status != 404:
             raise
-    constellation = resolution.primary_constellation.config
     gs_file = resolution.primary_ground_set.config
-    satellites = list(resolution.primary_constellation.satellites)
+    satellites = list(resolution.satellites)
     addressing = resolution.addressing
-    neighbors = assign_isl_neighbors(constellation, addressing)
+    neighbors = resolution.neighbors
     by_node = neighbors_by_node(neighbors)
 
     resolved = resolve_stack(session.routing.protocol, session.routing.extensions)
@@ -954,7 +966,7 @@ def write_wiring_manifest(
 
     # Satellites
     for sat in satellites:
-        node_id = addressing.sat_id(sat.plane, sat.slot)
+        node_id = satellite_node_id(sat, addressing)
         node_assignments = by_node.get(node_id, [])
         isl_interfaces = []
         for na in node_assignments:
@@ -1042,6 +1054,7 @@ def write_wiring_manifest(
         isl_pairs=isl_pairs,
         pod_placement=pod_placement,
         node_ips=node_ips,
+        ground_candidate_satellites_by_gs=resolution.ground_candidate_satellites_by_gs,
     )
     _delete_stale_substrate_status_configmaps(v1, namespace)
 
@@ -1494,10 +1507,19 @@ def _canonical_hash_value(value: Any) -> Any:
     """Convert resolved runtime objects into deterministic JSON primitives."""
     if hasattr(value, "model_dump"):
         return _canonical_hash_value(value.model_dump(mode="json"))
+    if is_dataclass(value) and not isinstance(value, type):
+        return {
+            field.name: _canonical_hash_value(getattr(value, field.name)) for field in fields(value)
+        }
     if hasattr(value, "_asdict"):
         return {str(k): _canonical_hash_value(v) for k, v in value._asdict().items()}
     if isinstance(value, Mapping):
         return {str(k): _canonical_hash_value(v) for k, v in sorted(value.items())}
+    if isinstance(value, set | frozenset):
+        items = [_canonical_hash_value(v) for v in value]
+        return sorted(
+            items, key=lambda item: json.dumps(item, sort_keys=True, separators=(",", ":"))
+        )
     if isinstance(value, tuple | list):
         return [_canonical_hash_value(v) for v in value]
     return value
@@ -1553,12 +1575,14 @@ def compute_platform_hash(spec: dict) -> str:
             mode="json",
             exclude={"session": {"run_id"}, "source_context": True},
         ),
-        "primary_constellation": _canonical_hash_value(resolution.primary_constellation.config),
-        "primary_ground_set": _canonical_hash_value(resolution.primary_ground_set.config),
-        "satellites": [
-            _canonical_satellite_for_hash(sat)
-            for sat in resolution.primary_constellation.satellites
+        "runtime_constellation": _canonical_hash_value(resolution.runtime_constellation),
+        "constellations": [
+            _canonical_hash_value(asset.config) for asset in resolution.constellations
         ],
+        "primary_ground_set": _canonical_hash_value(resolution.primary_ground_set.config),
+        "satellites": [_canonical_satellite_for_hash(sat) for sat in resolution.satellites],
+        "declared_candidates": _canonical_hash_value(resolution.declared_candidates),
+        "neighbors": _canonical_hash_value(resolution.neighbors),
     }
     canonical = json.dumps(canonical_obj, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode()).hexdigest()

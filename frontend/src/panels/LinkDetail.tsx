@@ -80,6 +80,24 @@ export function LinkDetail({ link, snapshot }: LinkDetailProps) {
         <span className="detail-label">Type</span>
         <span className="detail-value">{translateLinkType(link.link_type)}</span>
       </div>
+      {link.link_rule_id && (
+        <div className="detail-row">
+          <span className="detail-label">Rule</span>
+          <span className="detail-value">{link.link_rule_id}</span>
+        </div>
+      )}
+      {link.topology_mode && (
+        <div className="detail-row">
+          <span className="detail-label">Topology</span>
+          <span className="detail-value">{link.topology_mode}</span>
+        </div>
+      )}
+      {link.endpoint_segments && (
+        <div className="detail-row">
+          <span className="detail-label">Segments</span>
+          <span className="detail-value">{link.endpoint_segments.join(" ↔ ")}</span>
+        </div>
+      )}
 
       <h3>Metrics</h3>
       <div className="detail-row">

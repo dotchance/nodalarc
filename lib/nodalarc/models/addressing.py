@@ -41,10 +41,15 @@ class AddressingScheme:
         self._ipv6_sat_tpl = cfg.ipv6_sat_template
         self._ipv6_gs_tpl = cfg.ipv6_gs_template
         self._node_types: dict[str, str] = {}
+        self._sat_node_ids_by_location: dict[tuple[int, int], str] = {}
 
         if satellites:
             for sat in satellites:
-                nid = self.sat_id(sat.plane, sat.slot)
+                nid = getattr(sat, "node_id", None) or self._sat_id_tpl.format(
+                    plane=sat.plane,
+                    slot=sat.slot,
+                )
+                self._sat_node_ids_by_location[(sat.plane, sat.slot)] = nid
                 self._node_types[nid] = "satellite"
         if gs_file and hasattr(gs_file, "stations"):
             for station in gs_file.stations:
@@ -73,6 +78,8 @@ class AddressingScheme:
     # -- Node IDs --
 
     def sat_id(self, plane: int, slot: int) -> str:
+        if (plane, slot) in self._sat_node_ids_by_location:
+            return self._sat_node_ids_by_location[(plane, slot)]
         return self._sat_id_tpl.format(plane=plane, slot=slot)
 
     def gs_id(self, name: str) -> str:

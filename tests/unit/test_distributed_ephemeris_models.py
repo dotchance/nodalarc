@@ -176,6 +176,50 @@ class TestSessionEphemeris:
         restored = SessionEphemeris.model_validate_json(json_str)
         assert restored == eph
 
+    def test_segment_metadata_round_trip_json(self):
+        eph = SessionEphemeris(
+            epoch_id=0,
+            sim_time=datetime(2025, 1, 1, tzinfo=UTC),
+            epoch_unix=1735689600.0,
+            nodes={
+                "leo-sat-p00s00": EphemerisNodeKeplerian(
+                    propagator="j2-mean-elements",
+                    altitude_km=550.0,
+                    inclination_deg=53.0,
+                    raan_deg=0.0,
+                    true_anomaly_deg=0.0,
+                    plane=0,
+                    slot=0,
+                    segment_id="leo",
+                    local_node_id="sat-P00S00",
+                    namespace="leo",
+                    tags=("earth", "leo", "access"),
+                ),
+                "ground-gs-denver": EphemerisNodeFixed(
+                    lat_deg=39.74,
+                    lon_deg=-104.99,
+                    alt_km=1.61,
+                    segment_id="ground",
+                    local_node_id="gs-denver",
+                    namespace="ground",
+                    tags=("earth", "ground"),
+                ),
+            },
+        )
+
+        restored = SessionEphemeris.model_validate_json(eph.model_dump_json())
+
+        sat = restored.nodes["leo-sat-p00s00"]
+        gs = restored.nodes["ground-gs-denver"]
+        assert isinstance(sat, EphemerisNodeKeplerian)
+        assert sat.segment_id == "leo"
+        assert sat.local_node_id == "sat-P00S00"
+        assert sat.namespace == "leo"
+        assert sat.tags == ("earth", "leo", "access")
+        assert isinstance(gs, EphemerisNodeFixed)
+        assert gs.segment_id == "ground"
+        assert gs.tags == ("earth", "ground")
+
     def test_discriminated_union_keplerian(self):
         eph = self._make()
         sat = eph.nodes["sat-P00S00"]

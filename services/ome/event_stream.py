@@ -16,7 +16,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
-from nodalarc.constellation_loader import SatelliteNode, isl_terminal_for_interface
+from nodalarc.constellation_loader import (
+    SatelliteNode,
+    isl_terminal_for_interface,
+    satellite_node_id,
+)
 from nodalarc.ground_handover import resolve_station_ground_scheduling
 from nodalarc.ground_terminals import (
     TerminalPhysicsProfile,
@@ -89,8 +93,16 @@ def build_session_ephemeris(
 
     nodes: dict[str, EphemerisNodeKeplerian | EphemerisNodeTLE | EphemerisNodeFixed] = {}
 
+    def _meta(node_id: str) -> dict[str, object]:
+        raw = ctx.node_metadata.get(node_id, {})
+        return {
+            key: raw[key]
+            for key in ("segment_id", "local_node_id", "namespace", "tags")
+            if key in raw and raw[key] is not None
+        }
+
     for sat in ctx.satellites:
-        node_id = ctx.addressing.sat_id(sat.plane, sat.slot)
+        node_id = satellite_node_id(sat, ctx.addressing)
         if ctx.propagator_id == "sgp4-tle":
             if sat.tle_line_1 is None or sat.tle_line_2 is None:
                 raise ValueError(
@@ -102,6 +114,7 @@ def build_session_ephemeris(
                 plane=sat.plane,
                 slot=sat.slot,
                 norad_id=sat.norad_id,
+                **_meta(node_id),
             )
         else:
             nodes[node_id] = EphemerisNodeKeplerian(
@@ -112,6 +125,7 @@ def build_session_ephemeris(
                 true_anomaly_deg=math.degrees(sat.elements.true_anomaly_rad),
                 plane=sat.plane,
                 slot=sat.slot,
+                **_meta(node_id),
             )
 
     for gs_id, (_ecef, geo) in ctx.gs_positions.items():
@@ -119,6 +133,7 @@ def build_session_ephemeris(
             lat_deg=geo.lat_deg,
             lon_deg=geo.lon_deg,
             alt_km=geo.alt_km,
+            **_meta(gs_id),
         )
 
     return SessionEphemeris(
@@ -180,7 +195,9 @@ class StepContext:
     # so every visibility decision is tenant- and body-attributable.
     gs_tenant_ids: dict[str, str]
     gs_reference_bodies: dict[str, str]
+    ground_candidate_satellites_by_gs: dict[str, tuple[str, ...]]
     ground_pair_terminal_types: dict[tuple[str, str], str]
+    node_metadata: dict[str, dict[str, object]]
     by_node: dict[str, list[NeighborAssignment]]
     sat_isl_terminals: dict[str, int]
     sat_isl_terminal_constraints: dict[str, dict[str, IslTerminalConstraints]]
@@ -313,9 +330,12 @@ def build_step_context(
     latitude_threshold_deg: float = 70.0,
     ground_link_model: Literal["geometry_only", "terminal_physics"] = "terminal_physics",
     ground_defaults_applied: bool = False,
+    ground_candidate_satellites_by_gs: Mapping[str, tuple[str, ...]] | None = None,
+    node_metadata: Mapping[str, Mapping[str, object]] | None = None,
 ) -> StepContext:
     """Build the per-session-constant context for compute_step()."""
     by_node = neighbors_by_node(neighbors)
+    node_metadata_map = {node_id: dict(value) for node_id, value in (node_metadata or {}).items()}
     has_ground_stations = gs_file is not None and bool(gs_file.stations)
     if has_ground_stations and ground_scheduling is None:
         raise ValueError(
@@ -335,7 +355,7 @@ def build_step_context(
         "terminal_physics" if require_ground_physics else "geometry_only"
     )
     for sat in satellites:
-        nid = addressing.sat_id(sat.plane, sat.slot)
+        nid = satellite_node_id(sat, addressing)
         sat_isl_terminals[nid] = sat.isl_terminal_count
         sat_ground_terminals[nid] = sat.ground_terminal_count
         sat_ground_terminal_indices_by_body[nid] = satellite_terminal_index_pools_by_target_body(
@@ -382,6 +402,7 @@ def build_step_context(
     gs_service_priorities: dict[str, int] = {}
     gs_tenant_ids: dict[str, str] = {}
     gs_reference_bodies: dict[str, str] = {}
+    declared_ground_candidates: dict[str, tuple[str, ...]] = {}
     gs_terminal_types: dict[str, str] = {}
     gs_terminal_profiles: dict[str, TerminalPhysicsProfile] = {}
     ground_pair_terminal_types: dict[tuple[str, str], str] = {}
@@ -442,8 +463,30 @@ def build_step_context(
             gs_service_priorities[node_id] = station.service_priority
             gs_tenant_ids[node_id] = station.tenant_id
             gs_reference_bodies[node_id] = station.reference_body
+
+        all_sat_ids = tuple(sorted(sat_ground_terminal_types))
+        if ground_candidate_satellites_by_gs is None:
+            declared_ground_candidates = dict.fromkeys(sorted(gs_terminal_types), all_sat_ids)
+        else:
+            missing = sorted(set(gs_terminal_types) - set(ground_candidate_satellites_by_gs))
+            extra = sorted(set(ground_candidate_satellites_by_gs) - set(gs_terminal_types))
+            if missing or extra:
+                raise ValueError(
+                    "Ground candidate map does not match ground station universe: "
+                    f"missing={missing}, extra={extra}"
+                )
+            for gs_id in sorted(gs_terminal_types):
+                candidates = tuple(ground_candidate_satellites_by_gs[gs_id])
+                unknown = sorted(set(candidates) - set(sat_ground_terminal_types))
+                if unknown:
+                    raise ValueError(
+                        f"Ground station {gs_id} declares unknown access candidate(s): "
+                        f"{', '.join(unknown)}"
+                    )
+                declared_ground_candidates[gs_id] = tuple(sorted(candidates))
         for gs_id, gs_type in gs_terminal_types.items():
-            for sat_id, sat_type in sat_ground_terminal_types.items():
+            for sat_id in declared_ground_candidates[gs_id]:
+                sat_type = sat_ground_terminal_types[sat_id]
                 if gs_type != sat_type:
                     raise ValueError(
                         f"Ground terminal type mismatch for {gs_id}<->{sat_id}: "
@@ -504,7 +547,9 @@ def build_step_context(
         sat_ground_terminal_indices_by_body=sat_ground_terminal_indices_by_body,
         gs_tenant_ids=gs_tenant_ids,
         gs_reference_bodies=gs_reference_bodies,
+        ground_candidate_satellites_by_gs=declared_ground_candidates,
         ground_pair_terminal_types=ground_pair_terminal_types,
+        node_metadata=node_metadata_map,
         by_node=by_node,
         sat_isl_terminals=sat_isl_terminals,
         sat_isl_terminal_constraints=sat_isl_terminal_constraints,
@@ -622,7 +667,7 @@ def compute_step(
     ]
 
     # 3-4. Evaluate ISL physics and allocate ISL terminals.
-    node_order = [ctx.addressing.sat_id(sat.plane, sat.slot) for sat in ctx.satellites]
+    node_order = [satellite_node_id(sat, ctx.addressing) for sat in ctx.satellites]
     isl_feasibility = evaluate_isl_feasibility(
         node_order=node_order,
         sat_states=sat_states,
@@ -679,6 +724,7 @@ def compute_step(
         ground_link_model=ctx.ground_link_model,
         gs_terminal_profiles=ctx.gs_terminal_profiles,
         sat_ground_terminal_profiles=ctx.sat_ground_terminal_profiles,
+        candidate_satellite_ids_by_gs=ctx.ground_candidate_satellites_by_gs,
     )
 
     # 7. Scored, hysteresis-aware ground link allocation.
@@ -826,6 +872,7 @@ def precompute_timeline_window(
     latitude_threshold_deg: float = 70.0,
     ground_link_model: Literal["geometry_only", "terminal_physics"] = "terminal_physics",
     ground_defaults_applied: bool = False,
+    ground_candidate_satellites_by_gs: Mapping[str, tuple[str, ...]] | None = None,
     initial_isl_state: dict[tuple[str, str], tuple[bool, bool]] | None = None,
     initial_gs_state: dict[tuple[str, str], tuple[bool, bool, str]] | None = None,
     initial_associations: dict[tuple[str, str], tuple[int, int]] | None = None,
@@ -850,6 +897,7 @@ def precompute_timeline_window(
         latitude_threshold_deg=latitude_threshold_deg,
         ground_link_model=ground_link_model,
         ground_defaults_applied=ground_defaults_applied,
+        ground_candidate_satellites_by_gs=ground_candidate_satellites_by_gs,
     )
     return precompute_timeline_window_from_context(
         ctx,
@@ -879,6 +927,7 @@ def precompute_timeline(
     latitude_threshold_deg: float = 70.0,
     ground_link_model: Literal["geometry_only", "terminal_physics"] = "terminal_physics",
     ground_defaults_applied: bool = False,
+    ground_candidate_satellites_by_gs: Mapping[str, tuple[str, ...]] | None = None,
 ) -> list[TimelineEvent]:
     """Single-window convenience wrapper.
 
@@ -898,6 +947,7 @@ def precompute_timeline(
         latitude_threshold_deg=latitude_threshold_deg,
         ground_link_model=ground_link_model,
         ground_defaults_applied=ground_defaults_applied,
+        ground_candidate_satellites_by_gs=ground_candidate_satellites_by_gs,
     )
     return result.events
 

@@ -13,7 +13,7 @@ from nodalarc.db.queries import (
     query_nearest_snapshot,
 )
 from nodalarc.db.schema import create_tables
-from nodalarc.models.events import EphemerisNodeTLE, SessionEphemeris
+from nodalarc.models.events import EphemerisNodeFixed, EphemerisNodeTLE, SessionEphemeris
 from nodalarc.models.link_events import LinkUp
 from nodalarc.models.metrics import ConvergenceResult
 from nodalarc.models.vs_api import (
@@ -590,6 +590,34 @@ class TestEphemerisPositionPropagation:
         assert node.lat_deg == pytest.approx(44.4565, abs=1e-3)
         assert node.lon_deg == pytest.approx(152.9363, abs=1e-3)
         assert node.alt_km > 400.0
+
+    def test_ephemeris_metadata_updates_node_state(self):
+        ctx = SessionContext.__new__(SessionContext)
+        ctx._init_state_only()
+        ctx.cached_ephemeris_obj = SessionEphemeris(
+            epoch_id=0,
+            sim_time=datetime(2025, 1, 1, tzinfo=UTC),
+            epoch_unix=1735689600.0,
+            nodes={
+                "ground-gs-denver": EphemerisNodeFixed(
+                    lat_deg=39.74,
+                    lon_deg=-104.99,
+                    alt_km=1.61,
+                    segment_id="ground",
+                    local_node_id="gs-denver",
+                    namespace="ground",
+                    tags=("earth", "ground", "demo"),
+                )
+            },
+        )
+
+        ctx._propagate_positions_from_time(datetime(2025, 1, 1, tzinfo=UTC).isoformat())
+
+        node = ctx.nodes["ground-gs-denver"]
+        assert node.segment_id == "ground"
+        assert node.local_node_id == "gs-denver"
+        assert node.namespace == "ground"
+        assert node.tags == ("earth", "ground", "demo")
 
 
 class TestLinkDecisionTraceState:

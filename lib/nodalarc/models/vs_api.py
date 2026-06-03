@@ -42,6 +42,10 @@ class NodeState(BaseModel):
     # sessions unchanged; multi-shell / lunar sessions set them per node.
     reference_body: SupportedSurfaceBody = "earth"
     tenant_id: str = "default"
+    segment_id: str | None = None
+    local_node_id: str | None = None
+    namespace: str | None = None
+    tags: tuple[str, ...] = ()
 
 
 class LinkState(BaseModel):
@@ -60,6 +64,9 @@ class LinkState(BaseModel):
     traffic_load_pct: float | None  # None = no probe data (distinct from 0)
     interface_a: str = ""
     interface_b: str = ""
+    link_rule_id: str | None = None
+    topology_mode: str | None = None
+    endpoint_segments: tuple[str, str] | None = None
     scheduling_state: str = "active"
     teardown_remaining_ticks: int | None = None
     successor_pair: tuple[str, str] | None = None
@@ -88,6 +95,9 @@ class LinkDecisionTrace(BaseModel):
     substrate_one_way_ms: float | None
     netem_one_way_ms: float | None
     rtt_to_one_way_policy: str | None
+    link_rule_id: str | None = None
+    topology_mode: str | None = None
+    endpoint_segments: tuple[str, str] | None = None
 
 
 class TracedPath(BaseModel):

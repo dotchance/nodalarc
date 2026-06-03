@@ -2,14 +2,19 @@
 # Licensed under the Apache License, Version 2.0. See LICENSE file.
 """Resolver acceptance tests for segment-session product grammar."""
 
+from pathlib import Path
+
 import pytest
+from nodalarc.link_metadata import build_link_metadata_maps
 from nodalarc.models.identity import IdentityMode
 from nodalarc.resolve_session import (
     SessionResolutionError,
+    load_session_resolution_from_file,
     resolve_session,
     resolve_session_with_assets,
 )
 from nodalarc.runtime_support import UnsupportedFeatureError
+from ome.event_stream import build_step_context, compute_step
 from pydantic import ValidationError
 
 
@@ -86,10 +91,11 @@ def test_segment_session_resolves_namespaced_nodes_and_runtime_projection():
     assert resolved.identity_mode is IdentityMode.SEGMENT_NAMESPACED
     assert "leo-sat-p00s00" in resolved.node_ids()
     assert "gnd-gs-denver" in resolved.node_ids()
-    assert resolution.runtime_session.addressing.sat_id_template.startswith("leo-")
-    assert resolution.runtime_session.addressing.gs_id_template.startswith("gnd-")
+    assert resolution.addressing.sat_id(0, 0) == "leo-sat-p00s00"
+    assert resolution.addressing.gs_id("denver") == "gnd-gs-denver"
     assert len(resolved.link_rules[0].endpoints[0].node_ids) == 7
     assert len(resolved.link_rules[0].endpoints[1].node_ids) == 36
+    assert len(resolution.declared_candidates) == 252
 
 
 def test_node_producing_segments_require_namespace():
@@ -137,6 +143,11 @@ def test_terminal_inventory_is_materialized_from_source_satellite_type():
         )
 
     assert sat_ground_bandwidths(starlink) != sat_ground_bandwidths(rf)
+    first_sat_ifaces = sorted(
+        assignment.interface for node_id, assignment in rf.neighbors if node_id == "leo-sat-p00s00"
+    )
+    assert len(first_sat_ifaces) == len(set(first_sat_ifaces))
+    assert set(first_sat_ifaces).issubset({"isl0", "isl1", "isl2", "isl3"})
 
 
 def test_resolved_ground_nodes_carry_effective_station_handover_policy():
@@ -234,14 +245,14 @@ def test_ground_segment_handover_override_beats_source_default():
 def test_m1_rejects_access_terminal_media_mismatch_at_resolve_boundary():
     data = _segment_session()
     data["segments"][0]["satellite_type"] = "generic-4isl"
-    with pytest.raises(SessionResolutionError, match="terminal media mismatch"):
+    with pytest.raises(SessionResolutionError, match="no compatible 'ground' terminal medium"):
         resolve_session(data)
 
 
-def test_m1_rejects_narrowed_selector_before_candidate_generation():
+def test_selector_matching_zero_nodes_fails_before_candidate_generation():
     data = _segment_session()
     data["link_rules"][0]["endpoints"][1]["selector"]["planes"] = [99]
-    with pytest.raises(SessionResolutionError, match="narrowed link_rule selectors"):
+    with pytest.raises(SessionResolutionError, match="matched zero nodes"):
         resolve_session(data)
 
 
@@ -252,45 +263,165 @@ def test_candidate_budget_overflow_fails_before_runtime():
         resolve_session(data)
 
 
-def test_m1_rejects_narrowed_link_rule_selector_until_runtime_honors_it():
+def test_narrowed_link_rule_selector_limits_declared_candidate_universe():
     data = _segment_session()
-    data["link_rules"][0]["endpoints"][1]["selector"]["planes"] = [0]
-    with pytest.raises(SessionResolutionError, match="narrowed link_rule selectors"):
-        resolve_session(data)
+    data["link_rules"][0]["endpoints"][1]["selector"]["slots"] = [0]
+
+    resolution = resolve_session_with_assets(data)
+
+    assert len(resolution.declared_candidates) == 7
+    assert set(resolution.ground_candidate_satellites_by_gs) == {
+        "gnd-gs-ashburn",
+        "gnd-gs-denver",
+        "gnd-gs-frankfurt",
+        "gnd-gs-hartebeesthoek",
+        "gnd-gs-hawthorne",
+        "gnd-gs-singapore",
+        "gnd-gs-tokyo",
+    }
+    assert set(resolution.ground_candidate_satellites_by_gs.values()) == {("leo-sat-p00s00",)}
 
 
-def test_m1_rejects_disabled_link_rule_until_runtime_honors_it():
+def test_disabled_access_link_rule_leaves_no_implicit_ground_candidates():
     data = _segment_session()
     data["link_rules"][0]["enabled"] = False
-    with pytest.raises(SessionResolutionError, match="disabled link_rule"):
+    with pytest.raises(SessionResolutionError, match="no declared access candidates"):
         resolve_session(data)
 
 
-def test_m1_rejects_unsupported_link_rule_topology_until_runtime_honors_it():
+def test_nearest_n_topology_limits_declared_candidates_by_static_physical_rank():
     data = _segment_session()
     data["link_rules"][0]["topology"] = {"mode": "nearest_n", "n": 1}
-    with pytest.raises(SessionResolutionError, match="visible_candidates"):
+
+    resolution = resolve_session_with_assets(data)
+    degree: dict[str, int] = {}
+    for candidate in resolution.declared_candidates:
+        for node_id in candidate.pair:
+            degree[node_id] = degree.get(node_id, 0) + 1
+
+    assert 0 < len(resolution.declared_candidates) < 252
+    assert max(degree.values()) == 1
+    assert all(
+        len(sat_ids) >= 1 for sat_ids in resolution.ground_candidate_satellites_by_gs.values()
+    )
+
+
+def test_nearest_visible_topology_fails_until_ome_can_apply_it_per_tick():
+    data = _segment_session()
+    data["link_rules"][0]["topology"] = {"mode": "nearest_visible"}
+    with pytest.raises(SessionResolutionError, match="nearest_visible"):
         resolve_session(data)
 
 
 def test_m1_rejects_terminal_role_runtime_cannot_honor():
     data = _segment_session()
     data["link_rules"][0]["endpoints"][0]["terminal_role"] = "isl"
-    with pytest.raises(SessionResolutionError, match="terminal_role='ground'"):
+    with pytest.raises(SessionResolutionError, match="terminal_role='isl'"):
         resolve_session(data)
 
 
-def test_m1_rejects_terminal_medium_filter_until_runtime_honors_it():
+def test_terminal_medium_filter_is_carried_on_declared_candidates():
     data = _segment_session()
     data["link_rules"][0]["endpoints"][0]["terminal_medium"] = "rf"
-    with pytest.raises(SessionResolutionError, match="terminal_medium filtering"):
+
+    resolution = resolve_session_with_assets(data)
+
+    assert len(resolution.declared_candidates) == 252
+    assert {candidate.terminal_medium for candidate in resolution.declared_candidates} == {"rf"}
+
+
+def test_explicit_pairs_declare_permission_not_actual_connectivity():
+    data = _segment_session()
+    data["link_rules"][0]["endpoints"][0]["selector"]["names"] = ["denver"]
+    data["link_rules"][0]["endpoints"][1]["selector"]["slots"] = [0]
+    data["link_rules"][0]["topology"] = {
+        "mode": "explicit_pairs",
+        "pairs": [{"a": "gs-denver", "b": "sat-P00S00"}],
+    }
+
+    resolution = resolve_session_with_assets(data)
+
+    assert tuple(candidate.pair for candidate in resolution.declared_candidates) == (
+        ("gnd-gs-denver", "leo-sat-p00s00"),
+    )
+    assert resolution.declared_candidates[0].rule_id == "access"
+    assert resolution.ground_candidate_satellites_by_gs["gnd-gs-denver"] == ("leo-sat-p00s00",)
+    assert resolution.ground_candidate_satellites_by_gs["gnd-gs-ashburn"] == ()
+
+
+def test_declared_candidate_rule_metadata_feeds_link_metadata_maps():
+    data = _segment_session()
+    data["link_rules"][0]["endpoints"][0]["selector"]["names"] = ["denver"]
+    data["link_rules"][0]["endpoints"][1]["selector"]["slots"] = [0]
+    data["link_rules"][0]["topology"] = {
+        "mode": "explicit_pairs",
+        "pairs": [{"a": "gs-denver", "b": "sat-P00S00"}],
+    }
+    resolution = resolve_session_with_assets(data)
+    metadata = build_link_metadata_maps(
+        resolution.runtime_session,
+        resolution.addressing,
+        constellation=resolution.runtime_constellation,
+        satellites=resolution.satellites,
+        gs_file=resolution.primary_ground_set.config,
+        neighbors=resolution.neighbors,
+        ground_candidate_satellites_by_gs=resolution.ground_candidate_satellites_by_gs,
+        declared_candidates=resolution.declared_candidates,
+    )
+
+    pair = ("gnd-gs-denver", "leo-sat-p00s00")
+    assert metadata.rule_map[pair].link_rule_id == "access"
+    assert metadata.rule_map[pair].topology_mode == "explicit_pairs"
+    assert metadata.rule_map[pair].endpoint_segments == ("ground", "leo")
+
+
+def test_declared_access_candidates_are_the_only_pairs_ome_evaluates():
+    data = _segment_session()
+    data["link_rules"][0]["endpoints"][0]["selector"]["names"] = ["denver"]
+    data["link_rules"][0]["endpoints"][1]["selector"]["slots"] = [0]
+    data["link_rules"][0]["topology"] = {
+        "mode": "explicit_pairs",
+        "pairs": [{"a": "gs-denver", "b": "sat-P00S00"}],
+    }
+    resolution = resolve_session_with_assets(data)
+
+    ctx = build_step_context(
+        satellites=list(resolution.satellites),
+        addressing=resolution.addressing,
+        gs_file=resolution.primary_ground_set.config,
+        neighbors=resolution.neighbors,
+        propagator_id=resolution.runtime_session.orbit.propagator,
+        ground_scheduling=resolution.runtime_session.scheduling.ground,
+        ground_link_model=resolution.runtime_session.simulation.ground_link_model,
+        ground_defaults_applied=True,
+        ground_candidate_satellites_by_gs=resolution.ground_candidate_satellites_by_gs,
+    )
+
+    result = compute_step(
+        ctx,
+        1704067200.0,
+        0,
+        resolution.runtime_session.time.step_seconds,
+        0.0,
+        {},
+        {},
+    )
+
+    assert set(result.ground_decisions) == {("gnd-gs-denver", "leo-sat-p00s00")}
+    assert result.associations == {}
+
+
+def test_static_max_links_per_node_constraint_is_enforced_at_resolve_time():
+    data = _segment_session()
+    data["link_rules"][0]["constraints"] = {"max_links_per_node": 1}
+    with pytest.raises(SessionResolutionError, match="exceeding max_links_per_node=1"):
         resolve_session(data)
 
 
-def test_m1_rejects_link_rule_constraints_until_runtime_honors_them():
+def test_dynamic_link_rule_constraints_fail_until_ome_consumes_them():
     data = _segment_session()
-    data["link_rules"][0]["constraints"] = {"max_links_per_node": 1}
-    with pytest.raises(SessionResolutionError, match="link_rule constraints"):
+    data["link_rules"][0]["constraints"] = {"max_range_km": 1000.0}
+    with pytest.raises(SessionResolutionError, match="unsupported M2 constraint"):
         resolve_session(data)
 
 
@@ -304,14 +435,14 @@ def test_m1_rejects_protocol_boundary_until_runtime_honors_it():
 def test_m1_rejects_multiple_link_rules_until_runtime_honors_them():
     data = _segment_session()
     data["link_rules"].append(dict(data["link_rules"][0], id="second-access"))
-    with pytest.raises(SessionResolutionError, match="exactly one link_rule"):
+    with pytest.raises(SessionResolutionError, match="declared by multiple link_rules"):
         resolve_session(data)
 
 
 def test_m1_rejects_non_access_link_rule_until_runtime_honors_it():
     data = _segment_session()
     data["link_rules"][0]["kind"] = "relay"
-    with pytest.raises(SessionResolutionError, match="only access"):
+    with pytest.raises(SessionResolutionError, match="must connect satellite nodes"):
         resolve_session(data)
 
 
@@ -320,3 +451,40 @@ def test_runtime_node_id_length_fails_before_kubernetes():
     data["segments"][0]["namespace"] = "n" * 60
     with pytest.raises(SessionResolutionError, match="Kubernetes label value limit"):
         resolve_session(data)
+
+
+def test_earth_leo_meo_geo_demo_resolves_stitched_candidate_graph():
+    resolution = load_session_resolution_from_file(
+        Path("configs/sessions/earth-leo-meo-geo.yaml"),
+        origin="test.resolve_session",
+    )
+
+    assert {node.segment_id for node in resolution.resolved.nodes} == {
+        "leo",
+        "meo",
+        "geo",
+        "ground",
+    }
+    assert {"leo-sat-p00s00", "meo-sat-p00s00", "geo-sat-p00s00"}.issubset(
+        set(resolution.resolved.node_ids())
+    )
+    by_rule: dict[str, int] = {}
+    for candidate in resolution.declared_candidates:
+        by_rule[candidate.rule_id] = by_rule.get(candidate.rule_id, 0) + 1
+
+    assert by_rule == {
+        "ground-to-leo": 216,
+        "ground-to-meo": 144,
+        "ground-to-geo": 48,
+        "leo-to-meo-relay-candidates": 24,
+        "meo-to-geo-relay-candidates": 8,
+    }
+    assert all(
+        len(sat_ids) == 68 for sat_ids in resolution.ground_candidate_satellites_by_gs.values()
+    )
+    leo_meo_pairs = [
+        candidate.pair
+        for candidate in resolution.declared_candidates
+        if candidate.rule_id == "leo-to-meo-relay-candidates"
+    ]
+    assert not any(node_id.startswith("geo-") for pair in leo_meo_pairs for node_id in pair)

@@ -112,7 +112,7 @@ class SessionContext:
         session = resolution.runtime_session
         ext_str = "-".join(session.routing.extensions) if session.routing.extensions else "plain"
         self.routing_stack = f"{session.routing.protocol}-{ext_str}"
-        self.constellation_name = resolution.primary_constellation.segment.id
+        self.constellation_name = session.session.name
 
         # Load GS elevation map and beam falloff
         self.gs_elevation_map: dict[str, float] = self._load_gs_elevation_map(
@@ -540,6 +540,9 @@ class SessionContext:
                     traffic_load_pct=None,
                     interface_a=link.interface_a,
                     interface_b=link.interface_b,
+                    link_rule_id=link.link_rule_id,
+                    topology_mode=link.topology_mode,
+                    endpoint_segments=link.endpoint_segments,
                     scheduling_state=link.scheduling_state,
                     teardown_remaining_ticks=link.teardown_remaining_ticks,
                     successor_pair=link.successor_pair,
@@ -671,6 +674,9 @@ class SessionContext:
                 traffic_load_pct=None,
                 interface_a=data["interface_a"],
                 interface_b=data["interface_b"],
+                link_rule_id=data.get("link_rule_id"),
+                topology_mode=data.get("topology_mode"),
+                endpoint_segments=data.get("endpoint_segments"),
             )
             self.link_decision_traces[key] = trace
         self._notify_topology_change(node_a, node_b)
@@ -1085,6 +1091,12 @@ class SessionContext:
                         neighbor_count=existing.neighbor_count if existing else 0,
                         prefix=existing.prefix if existing else None,
                         beam_falloff_exponent=self.beam_falloff_exponent,
+                        reference_body=existing.reference_body if existing else "earth",
+                        tenant_id=existing.tenant_id if existing else "default",
+                        segment_id=node.segment_id,
+                        local_node_id=node.local_node_id,
+                        namespace=node.namespace,
+                        tags=tuple(node.tags),
                     )
 
                 elif isinstance(node, EphemerisNodeTLE):
@@ -1112,6 +1124,12 @@ class SessionContext:
                         neighbor_count=existing.neighbor_count if existing else 0,
                         prefix=existing.prefix if existing else None,
                         beam_falloff_exponent=self.beam_falloff_exponent,
+                        reference_body=existing.reference_body if existing else "earth",
+                        tenant_id=existing.tenant_id if existing else "default",
+                        segment_id=node.segment_id,
+                        local_node_id=node.local_node_id,
+                        namespace=node.namespace,
+                        tags=tuple(node.tags),
                     )
 
                 elif isinstance(node, EphemerisNodeFixed):
@@ -1131,6 +1149,12 @@ class SessionContext:
                         neighbor_count=existing.neighbor_count if existing else 0,
                         prefix=existing.prefix if existing else None,
                         min_elevation_deg=self.gs_elevation_map.get(node_id),
+                        reference_body=existing.reference_body if existing else "earth",
+                        tenant_id=existing.tenant_id if existing else "default",
+                        segment_id=node.segment_id,
+                        local_node_id=node.local_node_id,
+                        namespace=node.namespace,
+                        tags=tuple(node.tags),
                     )
 
     def _add_recent_event(self, event_data: dict, event_type: str) -> None:
@@ -1187,6 +1211,9 @@ class SessionContext:
             substrate_one_way_ms=None,
             netem_one_way_ms=None,
             rtt_to_one_way_policy=None,
+            link_rule_id=link.link_rule_id,
+            topology_mode=link.topology_mode,
+            endpoint_segments=link.endpoint_segments,
         )
 
     @staticmethod
@@ -1248,6 +1275,9 @@ class SessionContext:
             substrate_one_way_ms=provenance["substrate_one_way_ms"],
             netem_one_way_ms=provenance["netem_one_way_ms"],
             rtt_to_one_way_policy=provenance["rtt_to_one_way_policy"],
+            link_rule_id=data.get("link_rule_id"),
+            topology_mode=data.get("topology_mode"),
+            endpoint_segments=data.get("endpoint_segments"),
         )
 
     def _trace_from_latency_update(self, data: dict) -> LinkDecisionTrace:
@@ -1279,6 +1309,9 @@ class SessionContext:
             substrate_one_way_ms=provenance["substrate_one_way_ms"],
             netem_one_way_ms=provenance["netem_one_way_ms"],
             rtt_to_one_way_policy=provenance["rtt_to_one_way_policy"],
+            link_rule_id=existing.link_rule_id,
+            topology_mode=existing.topology_mode,
+            endpoint_segments=existing.endpoint_segments,
         )
 
     def compute_convergence_state(self) -> None:

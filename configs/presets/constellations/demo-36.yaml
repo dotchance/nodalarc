@@ -1,0 +1,7 @@
+name: demo-36
+description: "1 plane x 36 satellites, 550 km / 53 deg LEO. Fast simple-orbit demo with MBB-capable ground sets."
+satellite_count: 36
+constellation: configs/constellations/demo-36.yaml
+ground_stations: configs/ground-stations/sets/demo-mbb.yaml
+time:
+  step_seconds: 1

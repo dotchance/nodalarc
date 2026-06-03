@@ -67,6 +67,12 @@ def test_constellation_presets_expose_constellation_mode_for_wizard_gating():
 
     assert response.status_code == 200
     presets = {item["name"]: item for item in response.json()}
+    assert presets["demo-36"]["mode"] == "parametric"
+    assert presets["leo-simple-36"]["mode"] == "parametric"
+    assert presets["leo-walker-delta-176"]["mode"] == "parametric"
+    assert presets["leo-polar-36"]["mode"] == "parametric"
+    assert presets["geo-inmarsat-representative"]["mode"] == "explicit"
+    assert presets["geo-tdrs-representative"]["mode"] == "explicit"
     assert presets["starlink-176"]["mode"] == "parametric"
 
 

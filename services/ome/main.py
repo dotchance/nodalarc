@@ -20,9 +20,9 @@ from typing import TYPE_CHECKING, NamedTuple
 from nodal.logging import configure as _configure_logging
 from nodal.logging import connect as _connect_logging
 from nodalarc.constants import EARTH_RADIUS_KM
-from nodalarc.constellation_loader import SatelliteNode
-from nodalarc.link_metadata import build_link_metadata_maps
-from nodalarc.models.addressing import AddressingScheme, assign_isl_neighbors
+from nodalarc.constellation_loader import SatelliteNode, satellite_node_id
+from nodalarc.link_metadata import LinkRuleMetadata, build_link_metadata_maps
+from nodalarc.models.addressing import AddressingScheme
 from nodalarc.models.constellation import ConstellationConfig
 from nodalarc.models.events import OpsEvent, PlaybackControlCommand
 from nodalarc.models.ground_station import GroundStationFile
@@ -63,6 +63,9 @@ class _SessionBundle(NamedTuple):
     propagator_id: str
     interface_map: dict[tuple[str, str], tuple[str, str]]
     bandwidth_map: dict[tuple[str, str], float]
+    rule_map: dict[tuple[str, str], LinkRuleMetadata]
+    ground_candidate_satellites_by_gs: dict[str, tuple[str, ...]]
+    node_metadata: dict[str, dict[str, object]]
 
 
 def _load_session_config(session_path: str | Path) -> _SessionBundle:
@@ -71,9 +74,9 @@ def _load_session_config(session_path: str | Path) -> _SessionBundle:
 
     resolution = load_session_resolution_from_file(session_path, origin="ome")
     session = resolution.runtime_session
-    constellation_config = resolution.primary_constellation.config
+    constellation_config = resolution.runtime_constellation
     gs_file = resolution.primary_ground_set.config
-    satellites = list(resolution.primary_constellation.satellites)
+    satellites = list(resolution.satellites)
     if not satellites:
         raise ValueError("No satellites in constellation")
     if session.orbit.propagator == "sgp4-tle" and not isinstance(
@@ -92,20 +95,22 @@ def _load_session_config(session_path: str | Path) -> _SessionBundle:
             "OME will not downgrade TLEs into circular elements"
         )
 
-    first_alt = satellites[0].elements.semi_major_axis_km - EARTH_RADIUS_KM
-    period = orbital_period(first_alt)
+    period = max(
+        orbital_period(sat.elements.semi_major_axis_km - EARTH_RADIUS_KM) for sat in satellites
+    )
     addressing = resolution.addressing
-    neighbors = assign_isl_neighbors(constellation_config, addressing)
+    neighbors = resolution.neighbors
 
     polar_seam_enabled = False
     latitude_threshold_deg = 70.0
 
-    if (
-        isinstance(constellation_config, ParametricConstellation)
-        and constellation_config.polar_seam
-    ):
-        polar_seam_enabled = constellation_config.polar_seam.enabled
-        latitude_threshold_deg = constellation_config.polar_seam.latitude_threshold_deg
+    for asset in resolution.constellations:
+        if isinstance(asset.config, ParametricConstellation) and asset.config.polar_seam:
+            polar_seam_enabled = polar_seam_enabled or asset.config.polar_seam.enabled
+            latitude_threshold_deg = max(
+                latitude_threshold_deg,
+                asset.config.polar_seam.latitude_threshold_deg,
+            )
 
     metadata = build_link_metadata_maps(
         session,
@@ -113,6 +118,9 @@ def _load_session_config(session_path: str | Path) -> _SessionBundle:
         constellation=constellation_config,
         satellites=satellites,
         gs_file=gs_file,
+        neighbors=neighbors,
+        ground_candidate_satellites_by_gs=resolution.ground_candidate_satellites_by_gs,
+        declared_candidates=resolution.declared_candidates,
     )
 
     return _SessionBundle(
@@ -128,6 +136,17 @@ def _load_session_config(session_path: str | Path) -> _SessionBundle:
         propagator_id=session.orbit.propagator,
         interface_map=metadata.interface_map,
         bandwidth_map=metadata.bandwidth_map,
+        rule_map=metadata.rule_map,
+        ground_candidate_satellites_by_gs=dict(resolution.ground_candidate_satellites_by_gs),
+        node_metadata={
+            node.node_id: {
+                "segment_id": node.segment_id,
+                "local_node_id": node.local_node_id,
+                "namespace": node.namespace,
+                "tags": tuple(node.tags),
+            }
+            for node in resolution.resolved.nodes
+        },
     )
 
 
@@ -181,7 +200,7 @@ def _validate_sgp4_tle_freshness(cfg: _SessionBundle, epoch_unix: float) -> None
 
     stale: list[str] = []
     for sat in cfg.satellites:
-        node_id = cfg.addressing.sat_id(sat.plane, sat.slot)
+        node_id = satellite_node_id(sat, cfg.addressing)
         if sat.tle_line_1 is None or sat.tle_line_2 is None:
             raise ValueError(f"Satellite {node_id} has no TLE record for SGP4 propagation")
         age_days = tle_age_days(sat.tle_line_1, epoch_unix)
@@ -346,6 +365,7 @@ def run(session_path: str, output_dir: str | None = None) -> Path:
         polar_seam_enabled=cfg.polar_seam_enabled,
         latitude_threshold_deg=cfg.latitude_threshold_deg,
         ground_link_model=cfg.session.simulation.ground_link_model,
+        ground_candidate_satellites_by_gs=cfg.ground_candidate_satellites_by_gs,
     )
 
     out_dir = Path(output_dir) if output_dir else Path("output")
@@ -764,6 +784,7 @@ def _run_pacing(
 
     interface_map = cfg.interface_map
     bandwidth_map = cfg.bandwidth_map
+    rule_map = cfg.rule_map
 
     # Optional file output
     out_path = None
@@ -948,6 +969,8 @@ def _run_pacing(
         ground_scheduling=effective_ground_scheduling,
         ground_link_model=session.simulation.ground_link_model,
         ground_defaults_applied=True,
+        ground_candidate_satellites_by_gs=cfg.ground_candidate_satellites_by_gs,
+        node_metadata=cfg.node_metadata,
     )
 
     step_seconds = session.time.step_seconds
@@ -1001,6 +1024,7 @@ def _run_pacing(
             step_result.link_snapshot_source,
             interface_map=interface_map,
             bandwidth_map=bandwidth_map,
+            rule_map=rule_map,
             sim_time=step_result.sim_time,
             seq=snapshot_seq,
             interval_s=snapshot_interval_s,

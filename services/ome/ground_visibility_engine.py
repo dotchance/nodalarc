@@ -242,6 +242,7 @@ def evaluate_ground_visibility(
     ground_link_model: Literal["geometry_only", "terminal_physics"] = "terminal_physics",
     gs_terminal_profiles: Mapping[str, TerminalPhysicsProfile] | None = None,
     sat_ground_terminal_profiles: Mapping[str, TerminalPhysicsProfileSet] | None = None,
+    candidate_satellite_ids_by_gs: Mapping[str, Iterable[str]] | None = None,
 ) -> GroundVisibilityEvaluation:
     """Evaluate geometric GS/satellite visibility for one tick.
 
@@ -260,6 +261,27 @@ def evaluate_ground_visibility(
     must have passed the explicit session-level acknowledgement gate.
     """
     ordered_satellite_ids = tuple(satellite_ids)
+    all_satellite_ids = set(ordered_satellite_ids)
+    if candidate_satellite_ids_by_gs is None:
+        candidates_by_gs = dict.fromkeys(sorted(gs_positions), ordered_satellite_ids)
+    else:
+        candidates_by_gs = {}
+        missing_candidates = sorted(set(gs_positions) - set(candidate_satellite_ids_by_gs))
+        if missing_candidates:
+            raise ValueError(
+                "Ground visibility is missing declared access candidates for "
+                f"{', '.join(missing_candidates)}"
+            )
+        for gs_id in sorted(gs_positions):
+            candidates = tuple(candidate_satellite_ids_by_gs[gs_id])
+            unknown = sorted(set(candidates) - all_satellite_ids)
+            if unknown:
+                raise ValueError(
+                    f"Ground visibility candidates for {gs_id} reference unknown "
+                    f"satellite id(s): {', '.join(unknown)}"
+                )
+            candidates_by_gs[gs_id] = candidates
+    declared_satellite_ids = sorted({sat_id for ids in candidates_by_gs.values() for sat_id in ids})
     decisions: dict[tuple[str, str], GroundVisibilityDecision] = {}
     visible_per_station: dict[str, list[GroundVisibility]] = {}
 
@@ -298,7 +320,7 @@ def evaluate_ground_visibility(
                 f"{', '.join(missing_gs_profiles)}"
             )
         missing_sat_profiles = sorted(
-            set(ordered_satellite_ids) - set(sat_ground_terminal_profiles or {})
+            set(declared_satellite_ids) - set(sat_ground_terminal_profiles or {})
         )
         if missing_sat_profiles:
             raise ValueError(
@@ -322,7 +344,7 @@ def evaluate_ground_visibility(
         tenant_id = gs_tenant_ids[gs_id]
         reference_body = gs_reference_bodies[gs_id]
         visible_sats: list[GroundVisibility] = []
-        for sat_id in ordered_satellite_ids:
+        for sat_id in candidates_by_gs[gs_id]:
             state = sat_states.get(sat_id)
             if state is None:
                 raise ValueError(

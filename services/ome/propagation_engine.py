@@ -14,7 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from nodalarc.constellation_loader import SatelliteNode
+from nodalarc.constellation_loader import SatelliteNode, satellite_node_id
 from nodalarc.models.addressing import AddressingScheme
 from nodalarc.models.events import NodePosition
 
@@ -61,7 +61,7 @@ def propagate_satellites(
     sim_time_unix = epoch_unix + dt
     states: dict[str, PropagatedState] = {}
     for sat in satellites:
-        node_id = addressing.sat_id(sat.plane, sat.slot)
+        node_id = satellite_node_id(sat, addressing)
         if propagator_id == "keplerian-circular":
             pos_ecef, vel_ecef, geo = propagate_keplerian(sat.elements, epoch_unix, dt)
         elif propagator_id == "j2-mean-elements":

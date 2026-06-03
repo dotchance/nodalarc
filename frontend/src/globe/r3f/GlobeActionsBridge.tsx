@@ -28,6 +28,8 @@ const _ndc = new THREE.Vector3();
 const _dirA = new THREE.Vector3();
 const _dirB = new THREE.Vector3();
 const _camDir = new THREE.Vector3();
+const _centroid = new THREE.Vector3();
+const _fallback = new THREE.Vector3();
 
 interface GlobeActionsBridgeProps {
   actionsRef: MutableRefObject<GlobeActions | null>;
@@ -88,6 +90,30 @@ export function GlobeActionsBridge({ actionsRef, controlsRef }: GlobeActionsBrid
           camera.position.copy(_world.multiplyScalar(dist));
           controls?.update();
         }
+      },
+      flyToSegment: (nodeIds: string[]) => {
+        const controls = controlsRef.current;
+        _centroid.set(0, 0, 0);
+        _fallback.set(0, 0, 0);
+        let count = 0;
+        for (const nodeId of nodeIds) {
+          if (getNodeWorldPosition(nodeId, _world)) {
+            if (count === 0 || _world.lengthSq() > _fallback.lengthSq()) {
+              _fallback.copy(_world);
+            }
+            _centroid.add(_world);
+            count += 1;
+          }
+        }
+        if (count === 0) return;
+        _centroid.multiplyScalar(1 / count);
+        if (_centroid.lengthSq() < 1e-6) _centroid.copy(_fallback);
+        if (_centroid.lengthSq() === 0) return;
+        controls?.target.set(0, 0, 0);
+        const dist = camera.position.length();
+        _centroid.normalize();
+        camera.position.copy(_centroid.multiplyScalar(dist));
+        controls?.update();
       },
       getNodeScreenPosition: (nodeId: string) => {
         if (!getNodeWorldPosition(nodeId, _world)) return null;

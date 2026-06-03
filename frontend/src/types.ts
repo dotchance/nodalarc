@@ -29,6 +29,11 @@ export interface NodeState {
   reference_body?: string;
   /** Owning tenant (multi-tenant from day one). Optional; consumers default to "default". */
   tenant_id?: string;
+  /** Segment metadata from the resolved session. Used for grouping/filtering, not runtime identity. */
+  segment_id?: string | null;
+  local_node_id?: string | null;
+  namespace?: string | null;
+  tags?: string[];
 }
 
 export interface LinkState {
@@ -43,6 +48,9 @@ export interface LinkState {
   traffic_load_pct: number | null;
   interface_a: string;
   interface_b: string;
+  link_rule_id?: string | null;
+  topology_mode?: string | null;
+  endpoint_segments?: [string, string] | null;
   scheduling_state?: string;
   teardown_remaining_ticks?: number | null;
   successor_pair?: [string, string] | null;
@@ -67,6 +75,9 @@ export interface LinkDecisionTrace {
   substrate_one_way_ms: number | null;
   netem_one_way_ms: number | null;
   rtt_to_one_way_policy: string | null;
+  link_rule_id?: string | null;
+  topology_mode?: string | null;
+  endpoint_segments?: [string, string] | null;
 }
 
 export interface TracedPath {

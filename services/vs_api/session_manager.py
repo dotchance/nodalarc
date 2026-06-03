@@ -123,7 +123,11 @@ class SessionManager:
                     "-".join(session.routing.extensions) if session.routing.extensions else "plain"
                 )
                 routing_label = f"{session.routing.protocol}-{ext_str}"
-                const_label = resolution.primary_constellation.config.name
+                const_label = (
+                    resolution.primary_constellation.config.name
+                    if len(resolution.constellations) == 1
+                    else " + ".join(asset.segment.id for asset in resolution.constellations)
+                )
                 results.append(
                     {
                         "name": session.session.name,

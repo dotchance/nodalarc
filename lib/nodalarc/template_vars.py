@@ -184,9 +184,12 @@ def build_template_vars(
     node_type: str,
     plane: int | None = None,
     slot: int | None = None,
+    sat_node_id: str | None = None,
+    sat_ground_terminal_count: int | None = None,
     gs_name: str | None = None,
     gs_index: int | None = None,
     config_overrides: dict[str, Any] | None = None,
+    neighbors: frozenset[tuple[str, NeighborAssignment]] | None = None,
 ) -> dict[str, Any]:
     """Build complete Jinja2 template variable namespace for a node.
 
@@ -222,9 +225,11 @@ def build_template_vars(
             protocol=session.routing.protocol or "isis",
         )
 
-    # Compute ISL neighbors
-    neighbors = assign_isl_neighbors(constellation, addressing)
-    by_node = neighbors_by_node(neighbors)
+    # Compute ISL neighbors unless the resolver provided the declared graph.
+    neighbor_assignments = (
+        neighbors if neighbors is not None else assign_isl_neighbors(constellation, addressing)
+    )
+    by_node = neighbors_by_node(neighbor_assignments)
 
     # Build loopback map for peer IP resolution (used by static routes)
     loopback_map = _build_loopback_map(
@@ -236,7 +241,7 @@ def build_template_vars(
     # Derive node_id
     if node_type == "satellite":
         assert plane is not None and slot is not None
-        node_id = addressing.sat_id(plane, slot)
+        node_id = sat_node_id or addressing.sat_id(plane, slot)
     elif node_type == "ground_station":
         assert gs_name is not None and gs_index is not None
         node_id = addressing.gs_id(gs_name)
@@ -285,7 +290,11 @@ def build_template_vars(
     )
 
     bandwidth = _isl_bandwidth(constellation)
-    gnd_count = _ground_terminal_count(constellation)
+    gnd_count = (
+        sat_ground_terminal_count
+        if sat_ground_terminal_count is not None
+        else _ground_terminal_count(constellation)
+    )
 
     if node_type == "satellite":
         node_neighbors = by_node.get(node_id, [])

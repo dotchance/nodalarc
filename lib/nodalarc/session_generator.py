@@ -202,6 +202,11 @@ def generate_session_yaml(
         raise ValueError("orbit_propagator='sgp4-tle' requires a TLE constellation source")
     if constellation_mode == "tle" and orbit_propagator != "sgp4-tle":
         raise ValueError("TLE constellation sources require orbit_propagator='sgp4-tle'")
+    if orbit_propagator == "sgp4-tle":
+        raise ValueError(
+            "orbit_propagator='sgp4-tle' is structurally valid future grammar, "
+            "but the M2 runtime supports only keplerian-circular and j2-mean-elements"
+        )
 
     # --- Resolve ground stations ---
     if custom_ground_stations is not None:

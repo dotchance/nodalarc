@@ -365,6 +365,10 @@ class EphemerisNodeKeplerian(BaseModel):
     true_anomaly_deg: float
     plane: int
     slot: int
+    segment_id: str | None = None
+    local_node_id: str | None = None
+    namespace: str | None = None
+    tags: tuple[str, ...] = ()
 
 
 class EphemerisNodeTLE(BaseModel):
@@ -378,6 +382,10 @@ class EphemerisNodeTLE(BaseModel):
     plane: int
     slot: int
     norad_id: int | None = None
+    segment_id: str | None = None
+    local_node_id: str | None = None
+    namespace: str | None = None
+    tags: tuple[str, ...] = ()
 
     @model_validator(mode="after")
     def _validate_tle_pair(self):
@@ -396,6 +404,10 @@ class EphemerisNodeFixed(BaseModel):
     lat_deg: float
     lon_deg: float
     alt_km: float
+    segment_id: str | None = None
+    local_node_id: str | None = None
+    namespace: str | None = None
+    tags: tuple[str, ...] = ()
 
 
 EphemerisNode = Annotated[

@@ -23,6 +23,11 @@ interface FilterPanelProps {
   onTogglePlane: (plane: number) => void;
   onShowAllPlanes: () => void;
   onHideAllPlanes: () => void;
+  visibleSegments: Set<string> | null;
+  onToggleSegment: (segmentId: string) => void;
+  onShowAllSegments: () => void;
+  onHideAllSegments: () => void;
+  onFlyToSegment: (segmentId: string) => void;
 }
 
 function hexToCSS(hex: number): string {
@@ -43,7 +48,34 @@ export function FilterPanel({
   onTogglePlane,
   onShowAllPlanes,
   onHideAllPlanes,
+  visibleSegments,
+  onToggleSegment,
+  onShowAllSegments,
+  onHideAllSegments,
+  onFlyToSegment,
 }: FilterPanelProps) {
+  const segments = useMemo(() => {
+    if (!snapshot) return [];
+    const bySegment = new Map<string, { id: string; count: number; tags: Set<string> }>();
+    for (const node of snapshot.nodes) {
+      const id = node.segment_id ?? "unsegmented";
+      let segment = bySegment.get(id);
+      if (!segment) {
+        segment = { id, count: 0, tags: new Set<string>() };
+        bySegment.set(id, segment);
+      }
+      segment.count += 1;
+      for (const tag of node.tags ?? []) segment.tags.add(tag);
+    }
+    return [...bySegment.values()]
+      .map((segment) => ({
+        id: segment.id,
+        count: segment.count,
+        tags: [...segment.tags].sort(),
+      }))
+      .sort((a, b) => a.id.localeCompare(b.id));
+  }, [snapshot]);
+
   const planes = useMemo(() => {
     if (!snapshot) return [];
     const planeSet = new Set<number>();
@@ -57,6 +89,47 @@ export function FilterPanel({
 
   return (
     <div className="filter-panel">
+      {segments.length > 0 && (
+        <div className="filter-section">
+          <h3 className="filter-section-title">Segments</h3>
+          <div className="filter-plane-actions">
+            <button className="filter-quick-btn" onClick={onShowAllSegments}>All</button>
+            <button className="filter-quick-btn" onClick={onHideAllSegments}>None</button>
+          </div>
+          <div className="filter-segment-list">
+            {segments.map((segment) => {
+              const isVisible = visibleSegments === null || visibleSegments.has(segment.id);
+              return (
+                <div key={segment.id} className="filter-segment-item">
+                  <label className="filter-segment-toggle">
+                    <input
+                      type="checkbox"
+                      checked={isVisible}
+                      onChange={() => onToggleSegment(segment.id)}
+                    />
+                    <span className="filter-segment-main">
+                      <span className="filter-segment-name">{segment.id}</span>
+                      <span className="filter-segment-meta">
+                        {segment.count} node{segment.count === 1 ? "" : "s"}
+                        {segment.tags.length > 0 ? ` · ${segment.tags.join(", ")}` : ""}
+                      </span>
+                    </span>
+                  </label>
+                  <button
+                    className="filter-fly-btn"
+                    onClick={() => onFlyToSegment(segment.id)}
+                    title={`Fly to ${segment.id}`}
+                    aria-label={`Fly to segment ${segment.id}`}
+                  >
+                    Go
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       <div className="filter-section">
         <h3 className="filter-section-title">Platforms</h3>
         <div className="filter-plane-actions">

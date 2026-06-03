@@ -84,7 +84,9 @@ def test_cross_plane_isl_uses_cross_plane_tracking_limit(monkeypatch):
         sat_ground_terminal_indices_by_body={node_a: {}, node_b: {}},
         gs_tenant_ids={},
         gs_reference_bodies={},
+        ground_candidate_satellites_by_gs={},
         ground_pair_terminal_types={},
+        node_metadata={},
         by_node={
             node_a: [
                 NeighborAssignment(

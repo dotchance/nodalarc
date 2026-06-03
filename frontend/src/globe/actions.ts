@@ -7,5 +7,6 @@ export interface GlobeActions {
   setFollowTarget: (nodeId: string | null) => void;
   captureScreenshot: () => void;
   flyToNode: (nodeId: string) => void;
+  flyToSegment: (nodeIds: string[]) => void;
   getNodeScreenPosition: (nodeId: string) => { x: number; y: number; visible: boolean } | null;
 }

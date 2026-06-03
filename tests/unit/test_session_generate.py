@@ -34,7 +34,13 @@ class TestLoadPresets:
     def test_loads_all_presets(self):
         presets = load_constellation_presets()
         assert len(presets) >= 5
+        assert "demo-36" in presets
+        assert "geo-inmarsat-representative" in presets
+        assert "geo-tdrs-representative" in presets
         assert "iridium-66" in presets
+        assert "leo-simple-36" in presets
+        assert "leo-walker-delta-176" in presets
+        assert "leo-polar-36" in presets
         assert "starlink-early-44" in presets
 
     def test_preset_fields(self):
@@ -203,52 +209,48 @@ class TestOrbitPropagatorGeneration:
                 orbit_propagator="sgp4-tle",
             )
 
-    def test_sgp4_tle_custom_constellation_sets_matching_fidelity(self):
-        yaml_str, _ = generate_session_yaml(
-            "custom-tle",
-            "ospf",
-            [],
-            custom_constellation={
-                "mode": "tle",
-                "name": "sample-tle",
-                "tle_file": str(FIXTURES_DIR / "tles/sample.tle"),
-                "filter": {"max_count": 1},
-                "default_terminals": {
-                    "isl": [
-                        {
-                            "type": "optical",
-                            "count": 2,
-                            "max_range_km": 5000,
-                            "bandwidth_mbps": 1000,
-                            "max_tracking_rate_deg_s": 3.0,
-                        }
-                    ],
-                    "ground": [{"type": "rf", "count": 1, "bandwidth_mbps": 1000}],
+    def test_sgp4_tle_custom_constellation_fails_until_runtime_supports_it(self):
+        with pytest.raises(ValueError, match="M2 runtime supports only"):
+            generate_session_yaml(
+                "custom-tle",
+                "ospf",
+                [],
+                custom_constellation={
+                    "mode": "tle",
+                    "name": "sample-tle",
+                    "tle_file": str(FIXTURES_DIR / "tles/sample.tle"),
+                    "filter": {"max_count": 1},
+                    "default_terminals": {
+                        "isl": [
+                            {
+                                "type": "optical",
+                                "count": 2,
+                                "max_range_km": 5000,
+                                "bandwidth_mbps": 1000,
+                                "max_tracking_rate_deg_s": 3.0,
+                            }
+                        ],
+                        "ground": [{"type": "rf", "count": 1, "bandwidth_mbps": 1000}],
+                    },
                 },
-            },
-            custom_ground_stations=[
-                {
-                    "name": "ashburn",
-                    "lat_deg": 39.04,
-                    "lon_deg": -77.49,
-                    "alt_km": 0.095,
-                    "terminals": [
-                        {
-                            "type": "rf",
-                            "count": 1,
-                            "bandwidth_mbps": 1000,
-                            "tracking_capacity": 1,
-                        }
-                    ],
-                }
-            ],
-            orbit_propagator="sgp4-tle",
-        )
-        raw, resolution, session = _resolve_generated(yaml_str)
-
-        assert session.orbit.propagator == "sgp4-tle"
-        assert session.orbit.fidelity_label == "sgp4-tle"
-        assert session.orbit.tle_max_age_days == 7.0
+                custom_ground_stations=[
+                    {
+                        "name": "ashburn",
+                        "lat_deg": 39.04,
+                        "lon_deg": -77.49,
+                        "alt_km": 0.095,
+                        "terminals": [
+                            {
+                                "type": "rf",
+                                "count": 1,
+                                "bandwidth_mbps": 1000,
+                                "tracking_capacity": 1,
+                            }
+                        ],
+                    }
+                ],
+                orbit_propagator="sgp4-tle",
+            )
 
 
 class TestRoutingConfigRoundtrip:

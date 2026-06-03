@@ -9,18 +9,35 @@ ground-terminal models once, instead of letting services invent defaults.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 from nodalarc.constellation_loader import (
     SatelliteNode,
     ground_link_bandwidth_mbps,
     isl_link_bandwidth_mbps,
+    satellite_node_id,
 )
 from nodalarc.ground_terminals import ground_terminal_type, station_ground_terminal_type
-from nodalarc.models.addressing import AddressingScheme, assign_isl_neighbors, neighbors_by_node
+from nodalarc.link_rule_candidates import DeclaredLinkCandidate
+from nodalarc.models.addressing import (
+    AddressingScheme,
+    NeighborAssignment,
+    assign_isl_neighbors,
+    neighbors_by_node,
+)
 from nodalarc.models.constellation import ConstellationConfig
 from nodalarc.models.ground_station import GroundStationFile
 from nodalarc.models.session import SessionConfig
+
+
+@dataclass(frozen=True)
+class LinkRuleMetadata:
+    """Declaration metadata for one wireable link pair."""
+
+    link_rule_id: str
+    topology_mode: str
+    endpoint_segments: tuple[str, str]
 
 
 @dataclass(frozen=True)
@@ -29,6 +46,7 @@ class LinkMetadataMaps:
 
     interface_map: dict[tuple[str, str], tuple[str, str]]
     bandwidth_map: dict[tuple[str, str], float]
+    rule_map: dict[tuple[str, str], LinkRuleMetadata]
 
 
 def build_link_metadata_maps(
@@ -38,25 +56,47 @@ def build_link_metadata_maps(
     constellation: ConstellationConfig,
     satellites: list[SatelliteNode] | tuple[SatelliteNode, ...],
     gs_file: GroundStationFile,
+    neighbors: frozenset[tuple[str, NeighborAssignment]] | None = None,
+    ground_candidate_satellites_by_gs: Mapping[str, tuple[str, ...]] | None = None,
+    declared_candidates: tuple[DeclaredLinkCandidate, ...] = (),
 ) -> LinkMetadataMaps:
     """Build interface and bandwidth maps from physical terminal config.
 
     Bandwidth comes from terminal models. Missing bandwidth for any wireable
     link is a configuration error; callers must not substitute a nominal rate.
     """
-    neighbors = assign_isl_neighbors(constellation, addressing)
-    by_node = neighbors_by_node(neighbors)
+    neighbor_assignments = (
+        neighbors if neighbors is not None else assign_isl_neighbors(constellation, addressing)
+    )
+    by_node = neighbors_by_node(neighbor_assignments)
 
     sat_location: dict[str, tuple[int, int]] = {
-        addressing.sat_id(sat.plane, sat.slot): (sat.plane, sat.slot) for sat in satellites
+        satellite_node_id(sat, addressing): (sat.plane, sat.slot) for sat in satellites
     }
-    sat_ground_types: dict[str, str] = {
-        addressing.sat_id(sat.plane, sat.slot): ground_terminal_type(sat.ground_terminals)
-        for sat in satellites
-    }
+    sats_by_id = {satellite_node_id(sat, addressing): sat for sat in satellites}
 
     interface_map: dict[tuple[str, str], tuple[str, str]] = {}
     bandwidth_map: dict[tuple[str, str], float] = {}
+    rule_map: dict[tuple[str, str], LinkRuleMetadata] = {}
+    node_segments: dict[str, str] = {}
+    for sat in satellites:
+        sat_id = satellite_node_id(sat, addressing)
+        segment_id = getattr(sat, "segment_id", None)
+        if segment_id is not None:
+            node_segments[sat_id] = segment_id
+    for station in gs_file.stations:
+        # Ground stations currently come from one resolved ground segment. The
+        # declared candidates below carry the authoritative segment pair for
+        # access links, so this map is only a fallback for structural metadata.
+        gs_id = addressing.gs_id(station.name)
+        node_segments.setdefault(gs_id, "ground")
+
+    for candidate in declared_candidates:
+        rule_map[candidate.pair] = LinkRuleMetadata(
+            link_rule_id=candidate.rule_id,
+            topology_mode=candidate.topology_mode,
+            endpoint_segments=candidate.endpoint_segments,
+        )
 
     for node_id, assignments in by_node.items():
         for assignment in assignments:
@@ -66,6 +106,27 @@ def build_link_metadata_maps(
                 interface_map[pair] = (assignment.interface, existing[1])
             else:
                 interface_map[pair] = (existing[0], assignment.interface)
+            if pair not in rule_map:
+                segment_a = node_segments.get(pair[0])
+                segment_b = node_segments.get(pair[1])
+                if assignment.link_type.startswith("link_rule:"):
+                    rule_id = assignment.link_type.removeprefix("link_rule:")
+                    topology_mode = "declared"
+                elif segment_a is not None and segment_a == segment_b:
+                    rule_id = f"{segment_a}.internal_isl"
+                    topology_mode = "structural"
+                else:
+                    rule_id = assignment.link_type
+                    topology_mode = "structural"
+                endpoint_segments = (
+                    segment_a or "unknown",
+                    segment_b or "unknown",
+                )
+                rule_map[pair] = LinkRuleMetadata(
+                    link_rule_id=rule_id,
+                    topology_mode=topology_mode,
+                    endpoint_segments=endpoint_segments,
+                )
 
     for pair, (iface_a, iface_b) in interface_map.items():
         if not iface_a or not iface_b:
@@ -87,10 +148,24 @@ def build_link_metadata_maps(
 
     for station in gs_file.stations:
         gs_id = addressing.gs_id(station.name)
+        if ground_candidate_satellites_by_gs is None:
+            candidate_sat_ids = tuple(satellite_node_id(sat, addressing) for sat in satellites)
+        else:
+            if gs_id not in ground_candidate_satellites_by_gs:
+                raise ValueError(
+                    f"Ground station {gs_id!r} missing from declared ground-link candidate map"
+                )
+            candidate_sat_ids = tuple(ground_candidate_satellites_by_gs[gs_id])
+            if not candidate_sat_ids:
+                continue
         gs_type = station_ground_terminal_type(gs_file, station)
-        for sat in satellites:
-            sat_id = addressing.sat_id(sat.plane, sat.slot)
-            sat_type = sat_ground_types[sat_id]
+        for sat_id in candidate_sat_ids:
+            if sat_id not in sats_by_id:
+                raise ValueError(
+                    f"Ground station {gs_id!r} declares unknown satellite candidate {sat_id!r}"
+                )
+            sat = sats_by_id[sat_id]
+            sat_type = ground_terminal_type(sat.ground_terminals)
             if gs_type != sat_type:
                 raise ValueError(
                     f"Ground terminal type mismatch for {gs_id}<->{sat_id}: "
@@ -107,4 +182,8 @@ def build_link_metadata_maps(
                 station.name,
             )
 
-    return LinkMetadataMaps(interface_map=interface_map, bandwidth_map=bandwidth_map)
+    return LinkMetadataMaps(
+        interface_map=interface_map,
+        bandwidth_map=bandwidth_map,
+        rule_map=rule_map,
+    )

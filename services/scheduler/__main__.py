@@ -50,6 +50,8 @@ def _build_interface_map(
     constellation,
     satellites,
     gs_file,
+    neighbors,
+    ground_candidate_satellites_by_gs,
 ) -> tuple[dict[tuple[str, str], tuple[str, str]], dict[tuple[str, str], float]]:
     """Build shared interface and bandwidth maps from resolver-owned assets."""
     metadata = build_link_metadata_maps(
@@ -58,6 +60,8 @@ def _build_interface_map(
         constellation=constellation,
         satellites=satellites,
         gs_file=gs_file,
+        neighbors=neighbors,
+        ground_candidate_satellites_by_gs=ground_candidate_satellites_by_gs,
     )
     return metadata.interface_map, metadata.bandwidth_map
 
@@ -256,14 +260,16 @@ def main() -> None:
     resolution = load_session_resolution_from_file(session_file, origin="scheduler")
     session = resolution.runtime_session
     addressing = resolution.addressing
-    satellites = list(resolution.primary_constellation.satellites)
+    satellites = list(resolution.satellites)
     gs_file = resolution.primary_ground_set.config
     interface_map, bandwidth_map = _build_interface_map(
         session,
         addressing,
-        constellation=resolution.primary_constellation.config,
+        constellation=resolution.runtime_constellation,
         satellites=satellites,
         gs_file=gs_file,
+        neighbors=resolution.neighbors,
+        ground_candidate_satellites_by_gs=resolution.ground_candidate_satellites_by_gs,
     )
     log.debug("Interface map: %d link pairs", len(interface_map))
     session_id = require_session_run_id(session)

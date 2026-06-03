@@ -24,6 +24,7 @@ import { useKeyboard } from "./hooks/useKeyboard";
 import { useSessionSwitcher } from "./hooks/useSessionSwitcher";
 import { usePlayback } from "./hooks/usePlayback";
 import { useAppState } from "./hooks/useAppState";
+import { filterSnapshotForRender, nodeSegmentId } from "./filters/renderSnapshot";
 import { SessionWizard } from "./catalog/SessionWizard";
 import { WS_URL, fetchApiKey } from "./config";
 import { setLabelsEnabled, getLabelsEnabled } from "./globe/labels";
@@ -106,6 +107,15 @@ function AppInner() {
 
   const [userTrace, setUserTrace] = useState<TracedPath | null>(null);
   const [visiblePlanes, setVisiblePlanes] = useState<Set<number> | null>(null);
+  const [visibleSegments, setVisibleSegments] = useState<Set<string> | null>(null);
+  const globeActionsRef = useRef<{
+    flyToTopView: () => void;
+    setFollowTarget: (nodeId: string | null) => void;
+    captureScreenshot: () => void;
+    flyToNode: (nodeId: string) => void;
+    flyToSegment: (nodeIds: string[]) => void;
+    getNodeScreenPosition: (nodeId: string) => { x: number; y: number; visible: boolean } | null;
+  } | null>(null);
 
   const handleTogglePlane = useCallback((plane: number) => {
     setVisiblePlanes((prev) => {
@@ -129,6 +139,32 @@ function AppInner() {
   const handleShowAllPlanes = useCallback(() => setVisiblePlanes(null), []);
   const handleHideAllPlanes = useCallback(() => setVisiblePlanes(new Set()), []);
 
+  const handleToggleSegment = useCallback((segmentId: string) => {
+    setVisibleSegments((prev) => {
+      if (prev === null) {
+        const allSegments = new Set<string>();
+        if (snapshot) {
+          for (const node of snapshot.nodes) allSegments.add(nodeSegmentId(node));
+        }
+        allSegments.delete(segmentId);
+        return allSegments;
+      }
+      const next = new Set(prev);
+      if (next.has(segmentId)) next.delete(segmentId);
+      else next.add(segmentId);
+      return next;
+    });
+  }, [snapshot]);
+
+  const handleShowAllSegments = useCallback(() => setVisibleSegments(null), []);
+  const handleHideAllSegments = useCallback(() => setVisibleSegments(new Set()), []);
+  const handleFlyToSegment = useCallback((segmentId: string) => {
+    const nodeIds = (snapshot?.nodes ?? [])
+      .filter((node) => nodeSegmentId(node) === segmentId)
+      .map((node) => node.node_id);
+    globeActionsRef.current?.flyToSegment(nodeIds);
+  }, [snapshot]);
+
   const [panelOpen, setPanelOpen] = useState(true);
   const panelManualRef = useRef(false);
   const [panelWidth, setPanelWidth] = useState<number>(() => {
@@ -149,14 +185,6 @@ function AppInner() {
     setPanelOpen((v) => !v);
     panelManualRef.current = true;
   }, []);
-
-  const globeActionsRef = useRef<{
-    flyToTopView: () => void;
-    setFollowTarget: (nodeId: string | null) => void;
-    captureScreenshot: () => void;
-    flyToNode: (nodeId: string) => void;
-    getNodeScreenPosition: (nodeId: string) => { x: number; y: number; visible: boolean } | null;
-  } | null>(null);
 
   const toggleHistorical = useCallback(() => {
     const next = !historicalMode;
@@ -236,6 +264,11 @@ function AppInner() {
     const serverPaths = snapshot.traced_paths.filter(p => p.flow_id !== "__user_trace__");
     return { ...snapshot, traced_paths: [...serverPaths, userTrace] };
   }, [snapshot, userTrace]);
+
+  const renderedSnapshot = useMemo(
+    () => filterSnapshotForRender(augmentedSnapshot, visibleSegments, visiblePlanes),
+    [augmentedSnapshot, visibleSegments, visiblePlanes],
+  );
 
   // --- Build zone content ---
 
@@ -328,7 +361,7 @@ function AppInner() {
       >
         <VisualizationErrorBoundary onError={handleVisualizationFatalError}>
           <R3FScene
-            snapshot={augmentedSnapshot}
+            snapshot={renderedSnapshot}
             ephemeris={ephemeris}
             colorMode={colorMode}
             globeMode={globeMode}
@@ -350,7 +383,7 @@ function AppInner() {
         style={{ display: (viewMode === "globe" || viewMode === "dashboard") ? "none" : undefined }}
       >
         <TopologyView
-          snapshot={augmentedSnapshot}
+          snapshot={renderedSnapshot}
           selection={selection}
           onSelect={select}
           onFlyTo={handleFlyToNode}
@@ -428,6 +461,11 @@ function AppInner() {
               onTogglePlane={handleTogglePlane}
               onShowAllPlanes={handleShowAllPlanes}
               onHideAllPlanes={handleHideAllPlanes}
+              visibleSegments={visibleSegments}
+              onToggleSegment={handleToggleSegment}
+              onShowAllSegments={handleShowAllSegments}
+              onHideAllSegments={handleHideAllSegments}
+              onFlyToSegment={handleFlyToSegment}
             />
           </div>
         </div>

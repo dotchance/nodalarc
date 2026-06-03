@@ -61,6 +61,21 @@ class TestSessionCatalog:
         assert sessions[0]["constellation"] == "demo-36"
         assert sessions[0]["routing_stack"] == "isis-plain"
 
+    def test_scan_sessions_reports_multi_segment_label(self, tmp_path):
+        sessions_dir = tmp_path / "sessions"
+        sessions_dir.mkdir()
+        source = Path("configs/sessions/earth-leo-meo-geo.yaml")
+        if not source.exists():
+            pytest.skip("earth-leo-meo-geo.yaml not available")
+        (sessions_dir / "earth-leo-meo-geo.yaml").write_text(source.read_text())
+        mgr = SessionManager(str(sessions_dir))
+
+        sessions = mgr.list_sessions()
+
+        assert len(sessions) == 1
+        assert sessions[0]["name"] == "earth-leo-meo-geo"
+        assert sessions[0]["constellation"] == "leo + meo + geo"
+
 
 def _make_session_dir(data_dir: Path, session_id: str, mi_pid: int = 0, orch_pid: int = 0) -> Path:
     """Create a session directory with session-state.json."""

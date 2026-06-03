@@ -273,13 +273,14 @@ def main() -> None:
     )
     log.debug("Interface map: %d link pairs", len(interface_map))
     session_id = require_session_run_id(session)
+    expected_nodes = set(resolution.resolved.node_ids())
 
     # Pod location map — canonical node IDs from K8s labels
     loc = PodLocationMap()
     if args.pid_map:
         loc.load_from_pid_map_file(args.pid_map)
     else:
-        loc.load_from_k8s_api()
+        loc.load_from_k8s_api(expected_node_ids=expected_nodes, session_id=session_id)
     log.debug("Pod locations:\n%s", loc.summary())
 
     # --- Wiring gate: wait for Node Agent to complete wiring ---
@@ -291,7 +292,6 @@ def main() -> None:
     from nodalarc.platform_config import get_platform_config
 
     k8s_v1 = kubernetes.client.CoreV1Api()
-    expected_nodes = set(loc.node_ids)
     ns = get_platform_config().kubernetes_namespace
     wiring_manifest = wait_for_wiring_manifest_identity(k8s_v1=k8s_v1, namespace=ns)
     if wiring_manifest.session_id != session_id:

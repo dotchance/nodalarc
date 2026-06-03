@@ -373,6 +373,8 @@ def run(session_path: str, output_dir: str | None = None) -> Path:
         latitude_threshold_deg=cfg.latitude_threshold_deg,
         ground_link_model=cfg.session.simulation.ground_link_model,
         ground_candidate_satellites_by_gs=cfg.ground_candidate_satellites_by_gs,
+        body_ephemeris=cfg.body_ephemeris,
+        active_bodies=cfg.active_bodies,
     )
 
     out_dir = Path(output_dir) if output_dir else Path("output")

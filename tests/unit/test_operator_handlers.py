@@ -113,6 +113,11 @@ class _ReconcilerHarness:
             "nodalarc_operator.handlers.current_session_pod_node_ids",
             return_value=self.expected_ids(),
         )
+        self._p(
+            "delete_obsolete",
+            "nodalarc_operator.handlers._delete_obsolete_pods",
+            return_value=0,
+        )
         self._p("ensure_cm", "nodalarc_operator.handlers.ensure_session_configmaps")
         self._p("ensure_pods", "nodalarc_operator.handlers.ensure_session_pods")
         self._p("write_wiring", "nodalarc_operator.handlers.write_wiring_manifest")
@@ -194,11 +199,19 @@ class TestReconcileStateMachine:
         with _ReconcilerHarness(expected_count=2) as h:
             h.mock("current_ids").return_value = frozenset({"p0", "p1", "p2"})
             h.mock("check_ready").return_value = (2, 2)
-            with patch(
-                "nodalarc_operator.handlers._delete_obsolete_pods", return_value=1
-            ) as mock_del:
-                _run(_reconcile(h, phase="Creating"))
-                mock_del.assert_called_once()
+            h.mock("delete_obsolete").return_value = 1
+            _run(_reconcile(h, phase="Creating"))
+            h.mock("delete_obsolete").assert_called_once()
+
+    def test_obsolete_old_session_pods_are_pruned_before_readiness(self):
+        with _ReconcilerHarness(expected_count=2) as h:
+            h.mock("delete_obsolete").return_value = 4
+            _run(_reconcile(h, phase="Ready"))
+            h.mock("ensure_pod_identity").assert_not_called()
+            h.mock("check_ready").assert_not_called()
+            status = _last_status(h)
+            assert status["phase"] == "Creating"
+            assert status["message"] == "Pruning 4 pod(s) from a previous session"
 
     def test_all_running_writes_wiring(self):
         with _ReconcilerHarness(expected_count=7) as h:

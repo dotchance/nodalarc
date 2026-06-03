@@ -15,7 +15,12 @@ from nodalarc.resolve_session import (
     resolve_session_with_assets,
 )
 from nodalarc.runtime_support import UnsupportedFeatureError
-from ome.event_stream import build_session_ephemeris, build_step_context, compute_step
+from ome.event_stream import (
+    build_session_ephemeris,
+    build_step_context,
+    compute_step,
+    precompute_timeline_window,
+)
 from pydantic import ValidationError
 
 
@@ -583,6 +588,24 @@ def test_earth_luna_relay_demo_resolves_and_computes_common_frame_relay():
     assert feasibility.reject_reason == "ok"
     assert feasibility.range_km > 300_000
     assert feasibility.orbital_one_way_ms > 1_000
+
+    window = precompute_timeline_window(
+        satellites=list(resolution.satellites),
+        addressing=resolution.addressing,
+        gs_file=resolution.primary_ground_set.config,
+        neighbors=resolution.neighbors,
+        epoch_unix=epoch_unix,
+        duration_s=resolution.runtime_session.time.step_seconds,
+        propagator_id=resolution.runtime_session.orbit.propagator,
+        step_seconds=resolution.runtime_session.time.step_seconds,
+        ground_scheduling=resolution.runtime_session.scheduling.ground,
+        ground_link_model=resolution.runtime_session.simulation.ground_link_model,
+        ground_defaults_applied=True,
+        ground_candidate_satellites_by_gs=resolution.ground_candidate_satellites_by_gs,
+        body_ephemeris=resolution.body_ephemeris,
+        active_bodies=resolution.active_bodies,
+    )
+    assert window.isl_state
 
 
 def test_non_earth_session_requires_ephemeris_manifest():

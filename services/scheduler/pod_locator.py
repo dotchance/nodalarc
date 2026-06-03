@@ -110,12 +110,20 @@ class PodLocationMap:
     def load_from_k8s_api(
         self,
         namespace: str | None = None,
+        *,
+        expected_node_ids: set[str] | frozenset[str] | None = None,
+        session_id: str | None = None,
     ) -> None:
         """Load pod locations from K8s API.
 
         Reads canonical node IDs from nodalarc.io/node-id label and
         K3s node from pod.spec.nodeName. Node Agent NATS subjects are
         the K3s node name (e.g. nodalarc.agent.{node_name}).
+
+        When expected_node_ids/session_id are supplied, this loader is
+        intentionally strict: the Scheduler is only allowed to locate pods for
+        the resolved active session. Namespace-wide pod discovery would let
+        stale pods from a previous session enter the dispatch/wiring authority.
         """
         import kubernetes
         import kubernetes.client
@@ -133,15 +141,32 @@ class PodLocationMap:
 
         v1 = kubernetes.client.CoreV1Api()
         pods = v1.list_namespaced_pod(namespace, label_selector="nodalarc.io/node-id")
+        expected = set(expected_node_ids or ())
+        if expected_node_ids is not None and not expected:
+            raise ValueError("expected_node_ids must not be empty")
 
         for pod in pods.items:
             # Canonical node ID from label — NOT from pod.metadata.name
-            node_id = pod.metadata.labels.get("nodalarc.io/node-id")
+            labels = dict(getattr(pod.metadata, "labels", None) or {})
+            node_id = labels.get("nodalarc.io/node-id")
             if not node_id:
                 continue
+            if expected_node_ids is not None and node_id not in expected:
+                continue
+            if session_id is not None and labels.get("nodalarc.io/session-run-id") != session_id:
+                continue
+            if node_id in self._node_of:
+                raise RuntimeError(f"Duplicate active session pod location for node {node_id}")
 
             k3s_node = pod.spec.node_name or ""
             self._node_of[node_id] = k3s_node
+
+        if expected_node_ids is not None:
+            missing = sorted(expected - set(self._node_of))
+            if missing:
+                raise RuntimeError(
+                    "Missing active session pod location(s): " + ", ".join(missing[:20])
+                )
 
         # Build agent addresses — NATS uses K8s node name as subject
         k3s_nodes = set(self._node_of.values())

@@ -392,6 +392,29 @@ async def _reconcile_session(spec, name, namespace, meta, status):
         )
         return
 
+    deleted_obsolete = await loop.run_in_executor(
+        None, _delete_obsolete_pods, expected_ids, namespace
+    )
+    if deleted_obsolete:
+        log.info(
+            "Reconcile: deleted %d obsolete pods before readiness evaluation",
+            deleted_obsolete,
+        )
+        _update_status(
+            name,
+            namespace,
+            _with_observed_generation(
+                meta,
+                {
+                    "phase": "Creating",
+                    "message": f"Pruning {deleted_obsolete} pod(s) from a previous session",
+                    "podCount": expected_count,
+                    **identity_fields,
+                },
+            ),
+        )
+        return
+
     await loop.run_in_executor(
         None,
         ensure_session_pod_identity,

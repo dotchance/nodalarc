@@ -922,6 +922,8 @@ def precompute_timeline_window(
     initial_pending_teardowns: MbbTeardownState | None = None,
     timestamp_offset: float = 0.0,
     predictive: bool = False,
+    body_ephemeris: SkyfieldBspEphemeris | None = None,
+    active_bodies: frozenset[str] | None = None,
 ) -> TimelineWindowResult:
     """Precompute a single window of the timeline (batch mode).
 
@@ -941,6 +943,8 @@ def precompute_timeline_window(
         ground_link_model=ground_link_model,
         ground_defaults_applied=ground_defaults_applied,
         ground_candidate_satellites_by_gs=ground_candidate_satellites_by_gs,
+        body_ephemeris=body_ephemeris,
+        active_bodies=active_bodies,
     )
     return precompute_timeline_window_from_context(
         ctx,
@@ -971,6 +975,8 @@ def precompute_timeline(
     ground_link_model: Literal["geometry_only", "terminal_physics"] = "terminal_physics",
     ground_defaults_applied: bool = False,
     ground_candidate_satellites_by_gs: Mapping[str, tuple[str, ...]] | None = None,
+    body_ephemeris: SkyfieldBspEphemeris | None = None,
+    active_bodies: frozenset[str] | None = None,
 ) -> list[TimelineEvent]:
     """Single-window convenience wrapper.
 
@@ -991,6 +997,8 @@ def precompute_timeline(
         ground_link_model=ground_link_model,
         ground_defaults_applied=ground_defaults_applied,
         ground_candidate_satellites_by_gs=ground_candidate_satellites_by_gs,
+        body_ephemeris=body_ephemeris,
+        active_bodies=active_bodies,
     )
     return result.events
 

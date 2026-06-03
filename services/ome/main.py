@@ -446,19 +446,21 @@ def _start_health_server(port: int = 8081) -> None:
     isolated and called from one place so it can be trivially removed
     when the sidecar pattern is adopted.
     """
+    import contextlib
     import threading
-    from http.server import BaseHTTPRequestHandler, HTTPServer
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
     class _Handler(BaseHTTPRequestHandler):
         def do_GET(self):
             self.send_response(200)
             self.end_headers()
-            self.wfile.write(b'{"status":"ok"}')
+            with contextlib.suppress(BrokenPipeError, ConnectionResetError):
+                self.wfile.write(b'{"status":"ok"}')
 
         def log_message(self, *args):
             pass
 
-    server = HTTPServer(("0.0.0.0", port), _Handler)
+    server = ThreadingHTTPServer(("0.0.0.0", port), _Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     logging.debug("Health server listening on :%d", port)

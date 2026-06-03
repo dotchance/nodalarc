@@ -404,6 +404,7 @@ function AppInner() {
         showIslLinks={showIslLinks}
         showSatPaths={showSatPaths}
         followNode={followNode}
+        filterOpen={filterOpen}
         canSplit={canSplit}
         referenceFrame={referenceFrame}
         onViewMode={setViewMode}
@@ -411,6 +412,7 @@ function AppInner() {
         onToggleGroundLinks={() => setShowGroundLinks((v: boolean) => !v)}
         onToggleIslLinks={() => setShowIslLinks((v: boolean) => !v)}
         onToggleSatPaths={() => setShowSatPaths((v: boolean) => !v)}
+        onToggleFilter={() => setFilterOpen((v: boolean) => !v)}
         globeMode={globeMode}
         onToggleGlobeMode={() => setGlobeMode((m: string) => m === "blue-marble" ? "day-night" : "blue-marble")}
         onToggleReferenceFrame={toggleReferenceFrame}

@@ -11,6 +11,7 @@ interface ToolbarProps {
   showIslLinks: boolean;
   showSatPaths: boolean;
   followNode: boolean;
+  filterOpen: boolean;
   canSplit: boolean;
   referenceFrame: ReferenceFrame;
   onViewMode: (mode: ViewMode) => void;
@@ -18,6 +19,7 @@ interface ToolbarProps {
   onToggleGroundLinks: () => void;
   onToggleIslLinks: () => void;
   onToggleSatPaths: () => void;
+  onToggleFilter: () => void;
   globeMode: GlobeMode;
   onToggleGlobeMode: () => void;
   onToggleReferenceFrame: () => void;
@@ -56,6 +58,7 @@ export function Toolbar({
   showIslLinks,
   showSatPaths,
   followNode,
+  filterOpen,
   canSplit,
   referenceFrame,
   onViewMode,
@@ -63,6 +66,7 @@ export function Toolbar({
   onToggleGroundLinks,
   onToggleIslLinks,
   onToggleSatPaths,
+  onToggleFilter,
   globeMode,
   onToggleGlobeMode,
   onToggleReferenceFrame,
@@ -100,6 +104,12 @@ export function Toolbar({
         icon="⭕"
         active={showSatPaths}
         onClick={onToggleSatPaths}
+      />
+      <ToolBtn
+        label="Segments / Filters (Q)"
+        icon="▦"
+        active={filterOpen}
+        onClick={onToggleFilter}
       />
       <ToolBtn
         label={`Globe: ${globeMode === "day-night" ? "Day/Night (N)" : "Blue Marble (N)"}`}

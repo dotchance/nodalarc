@@ -46,6 +46,8 @@ from nodalarc_operator.session_deployer import (
 )
 from pydantic import TypeAdapter, ValidationError
 
+from tests.conftest import build_segment_session_dict
+
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 
 
@@ -87,27 +89,16 @@ def _make_session_yaml(
     step_seconds=1,
     placement_policy=None,
 ):
-    """Build a session YAML string with configurable fields."""
-    d = {
-        "session": {"name": "test-session"},
-        "constellation": constellation_path,
-        "ground_stations": gs_path,
-        "orbit": {"propagator": "keplerian-circular"},
-        "routing": {
-            "protocol": protocol,
-            "area_assignment": {"strategy": strategy},
-        },
-        "time": {"step_seconds": step_seconds},
-        "scheduling": {
-            "ground": {
-                "selection_policy": {"name": "highest-elevation", "params": {}},
-                "handover_policy": {"name": "none", "params": {}},
-                "handover_mode": "bbm",
-                "mbb_overlap_ticks": 3,
-                "mbb_reserve": 0,
-            }
-        },
-    }
+    """Build a segment-session YAML string with configurable fields."""
+    d = build_segment_session_dict(
+        name="test-session",
+        constellation=constellation_path,
+        ground_stations=gs_path,
+        protocol=protocol,
+        extensions=[],
+        routing={"area_assignment": {"strategy": strategy}},
+        time={"step_seconds": step_seconds},
+    )
     if placement_policy:
         d["placement"] = {"policy": placement_policy}
     return yaml.dump(d, default_flow_style=False)
@@ -502,8 +493,12 @@ class TestExpectedPodCount:
         assert count > 0
 
     def test_demo_36_regression(self):
-        session_yaml = (PROJECT_ROOT / "configs/sessions/demo-36-ospf.yaml").read_text()
-        spec = {"sessionYaml": session_yaml}
+        spec = {
+            "sessionYaml": _make_session_yaml(
+                constellation_path="configs/constellations/demo-36.yaml",
+                gs_path="configs/ground-stations/sets/demo.yaml",
+            )
+        }
         assert compute_expected_pod_count(spec) == 43
 
     def test_missing_session_yaml_raises(self):
@@ -602,33 +597,14 @@ def _make_inline_spec(
     const = constellation or _INLINE_CONSTELLATION
     gs = ground_stations or _INLINE_GROUND_STATIONS
 
-    const_path = tmp_path / "constellation.yaml"
-    const_path.write_text(yaml.dump(const, default_flow_style=False))
-
-    gs_path = tmp_path / "ground_stations.yaml"
-    gs_path.write_text(yaml.dump(gs, default_flow_style=False))
-
-    session = {
-        "session": {"name": "test-session"},
-        "constellation": str(const_path),
-        "ground_stations": str(gs_path),
-        "orbit": {"propagator": "keplerian-circular"},
-        "routing": {
-            "protocol": protocol,
-            "extensions": extensions or [],
-            "area_assignment": {"strategy": "flat"},
-        },
-        "time": {"step_seconds": 1},
-        "scheduling": {
-            "ground": {
-                "selection_policy": {"name": "highest-elevation", "params": {}},
-                "handover_policy": {"name": "none", "params": {}},
-                "handover_mode": "bbm",
-                "mbb_overlap_ticks": 3,
-                "mbb_reserve": 0,
-            }
-        },
-    }
+    session = build_segment_session_dict(
+        name="test-session",
+        constellation=const,
+        ground_stations=gs,
+        protocol=protocol,
+        extensions=extensions or [],
+        time={"step_seconds": 1},
+    )
     return {"sessionYaml": yaml.dump(session, default_flow_style=False)}
 
 

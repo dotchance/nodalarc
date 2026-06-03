@@ -21,19 +21,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-import yaml
 from nodal.logging import configure as _configure_logging
-from nodalarc.constellation_loader import (
-    expand_constellation,
-    load_constellation,
-    load_ground_stations,
-)
 from nodalarc.ground_terminals import station_ground_terminal_capacity
 from nodalarc.link_metadata import build_link_metadata_maps
 from nodalarc.models.addressing import (
     AddressingScheme,
 )
 from nodalarc.models.session import SessionConfig
+from nodalarc.resolve_session import load_session_resolution_from_file
 from nodalarc.session_identity import require_session_run_id
 from nodalarc.substrate.manifest_contract import WiringManifest
 from nodalarc.substrate.wiring_status import failed_status_summary, parse_status_configmap
@@ -249,9 +244,9 @@ def main() -> None:
     while not session_file.is_file():
         log.debug("Waiting for session config at %s...", args.session)
         _time.sleep(5)
-    data = yaml.safe_load(session_file.read_text())
-    session = SessionConfig.model_validate(data)
-    addressing = AddressingScheme(session.addressing)
+    resolution = load_session_resolution_from_file(session_file, origin="scheduler")
+    session = resolution.runtime_session
+    addressing = resolution.addressing
     interface_map, bandwidth_map = _build_interface_map(session, addressing)
     log.debug("Interface map: %d link pairs", len(interface_map))
     session_id = require_session_run_id(session)
@@ -302,10 +297,9 @@ def main() -> None:
     # Agent pool
     pool = AgentPool()
 
-    # Build capacity maps for MBB dispatch ordering
-    constellation = load_constellation(session.constellation)
-    satellites = expand_constellation(constellation)
-    gs_file = load_ground_stations(session.ground_stations)
+    # Build capacity maps for MBB dispatch ordering from resolver assets.
+    satellites = resolution.primary_constellation.satellites
+    gs_file = resolution.primary_ground_set.config
 
     gs_terminal_capacities: dict[str, int] = {}
     for station in gs_file.stations:

@@ -17,16 +17,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple
 
-import yaml
 from nodal.logging import configure as _configure_logging
 from nodal.logging import connect as _connect_logging
 from nodalarc.constants import EARTH_RADIUS_KM
-from nodalarc.constellation_loader import (
-    SatelliteNode,
-    expand_constellation,
-    load_constellation,
-    load_ground_stations,
-)
+from nodalarc.constellation_loader import SatelliteNode
 from nodalarc.ground_terminals import station_ground_terminal_capacity
 from nodalarc.link_metadata import build_link_metadata_maps
 from nodalarc.models.addressing import AddressingScheme, assign_isl_neighbors
@@ -40,6 +34,7 @@ from nodalarc.models.ome_lifecycle import (
 )
 from nodalarc.models.session import GroundSchedulingConfig, SessionConfig, resolve_session_epoch
 from nodalarc.nats_channels import MAX_TIME_ACCEL, MIN_TIME_ACCEL
+from nodalarc.resolve_session import load_session_resolution_from_file
 from nodalarc.session_identity import require_session_run_id
 from nodalarc.tle import tle_age_days
 
@@ -75,12 +70,11 @@ def _load_session_config(session_path: str | Path) -> _SessionBundle:
     """Load and validate all session config. Pure — no side effects."""
     from nodalarc.models.constellation import ParametricConstellation, TLEConstellation
 
-    data = yaml.safe_load(Path(session_path).read_text())
-    session = SessionConfig.model_validate(data)
-
-    constellation_config = load_constellation(session.constellation)
-    gs_file = load_ground_stations(session.ground_stations)
-    satellites = expand_constellation(constellation_config)
+    resolution = load_session_resolution_from_file(session_path, origin="ome")
+    session = resolution.runtime_session
+    constellation_config = resolution.primary_constellation.config
+    gs_file = resolution.primary_ground_set.config
+    satellites = list(resolution.primary_constellation.satellites)
     if not satellites:
         raise ValueError("No satellites in constellation")
     if session.orbit.propagator == "sgp4-tle" and not isinstance(
@@ -101,7 +95,7 @@ def _load_session_config(session_path: str | Path) -> _SessionBundle:
 
     first_alt = satellites[0].elements.semi_major_axis_km - EARTH_RADIUS_KM
     period = orbital_period(first_alt)
-    addressing = AddressingScheme(session.addressing)
+    addressing = resolution.addressing
     neighbors = assign_isl_neighbors(constellation_config, addressing)
 
     polar_seam_enabled = False

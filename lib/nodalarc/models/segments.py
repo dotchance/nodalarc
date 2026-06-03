@@ -109,9 +109,7 @@ class ConstellationSegment(BaseModel):
     # inline form is the typed ConstellationConfig union so JSON Schema validates
     # its shape; catalog/cross-file checks remain resolver semantics.
     source: NonEmptyReference | ConstellationConfig
-    # Required in segment_namespaced; forbidden in legacy_compatible. Enforced by
-    # the resolver per the session identity mode, not at this structural layer.
-    namespace: Namespace | None = None
+    namespace: Namespace
     # Required after resolution in multi-segment sessions (semantic validation).
     central_body: FrameBodyName | None = None
     satellite_type: Identifier | None = None
@@ -190,9 +188,10 @@ class GroundSegment(BaseModel):
     # resolver-owned (the single ground-loading authority) rather than expressed
     # as one lossy structural union here. See the grammar doc, "Ground Segment".
     source: NonEmptyReference | dict
-    # Required after resolution in multi-body sessions (semantic validation).
+    # Required for every node-producing segment; runtime node IDs are
+    # namespace-prefixed by the resolver.
     reference_body: SupportedSurfaceBody | None = None
-    namespace: Namespace | None = None
+    namespace: Namespace
     display_name: str | None = None
     tags: list[Identifier] | None = None
     scheduling: GroundSchedulingPolicy | None = None

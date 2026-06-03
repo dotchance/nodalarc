@@ -22,8 +22,9 @@ from pathlib import Path
 
 import yaml
 from nodalarc.catalog_paths import CatalogPathError
-from nodalarc.models.session import SessionConfig
+from nodalarc.models.resolved_session import SourceContext
 from nodalarc.platform_config import get_platform_config
+from nodalarc.resolve_session import resolve_session_with_assets
 
 log = logging.getLogger(__name__)
 
@@ -113,15 +114,16 @@ class SessionManager:
 
             try:
                 raw = yaml.safe_load(resolved_path.read_text())
-                session = SessionConfig.model_validate(raw)
+                resolution = resolve_session_with_assets(
+                    raw,
+                    source_context=SourceContext(origin="vs_api.session_manager"),
+                )
+                session = resolution.runtime_session
                 ext_str = (
                     "-".join(session.routing.extensions) if session.routing.extensions else "plain"
                 )
                 routing_label = f"{session.routing.protocol}-{ext_str}"
-                if isinstance(session.constellation, dict):
-                    const_label = session.constellation.get("name", "custom")
-                else:
-                    const_label = Path(session.constellation).stem
+                const_label = resolution.primary_constellation.segment.id
                 results.append(
                     {
                         "name": session.session.name,
@@ -181,8 +183,11 @@ class SessionManager:
         for s in self._available:
             try:
                 raw = yaml.safe_load(Path(s["file"]).read_text())
-                cfg = SessionConfig.model_validate(raw)
-                dirs.add(cfg.session.data_dir)
+                resolution = resolve_session_with_assets(
+                    raw,
+                    source_context=SourceContext(origin="vs_api.session_manager.data_dirs"),
+                )
+                dirs.add(resolution.runtime_session.session.data_dir)
             except Exception:
                 pass
         return [Path(d) for d in dirs]

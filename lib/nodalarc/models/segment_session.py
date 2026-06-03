@@ -40,9 +40,9 @@ from nodalarc.models.session import (
 class SegmentSessionConfig(BaseModel):
     """Top-level segment-based session YAML.
 
-    Distinguished from the legacy ``SessionConfig`` by the presence of
-    ``segments``. The resolver accepts either shape and produces one
-    ``ResolvedSession``.
+    This is the only product session grammar. ``SessionConfig`` remains an
+    internal runtime projection produced by the resolver for mature engines;
+    old top-level ``constellation`` / ``ground_stations`` YAML is rejected.
     """
 
     model_config = ConfigDict(extra="forbid")

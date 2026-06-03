@@ -16,6 +16,8 @@ from nodalarc.models.events import (
     VisibilityEvent,
 )
 
+from tests.conftest import build_segment_session_dict
+
 pytestmark = pytest.mark.integration
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent
@@ -56,30 +58,14 @@ def four_node_session_path():
 
     import yaml
 
-    session = {
-        "session": {"name": "custom-example-test"},
-        "orbit": {"propagator": "keplerian-circular"},
-        "constellation": "configs/constellations/custom-example.yaml",
-        "ground_stations": _optical_ground_stations(),
-        "scheduling": {
-            "ground": {
-                "selection_policy": {"name": "highest-elevation", "params": {}},
-                "handover_policy": {
-                    "name": "hysteresis",
-                    "params": {"discount_factor": 1.15, "mask_fade_range_deg": 5.0},
-                },
-                "handover_mode": "bbm",
-                "mbb_overlap_ticks": 3,
-                "mbb_reserve": 0,
-            }
-        },
-        "routing": {
-            "protocol": "isis",
-            "extensions": ["sr"],
-            "area_assignment": {"strategy": "flat", "gs_area_id": "49.0001"},
-        },
-        "time": {"step_seconds": 10},
-    }
+    session = build_segment_session_dict(
+        name="custom-example-test",
+        constellation="configs/constellations/custom-example.yaml",
+        ground_stations=_optical_ground_stations(),
+        protocol="isis",
+        extensions=["sr"],
+        time={"step_seconds": 10},
+    )
     with tempfile.NamedTemporaryFile(
         mode="w",
         suffix=".yaml",
@@ -92,10 +78,27 @@ def four_node_session_path():
 
 @pytest.fixture
 def sample_session_path():
-    path = PROJECT_ROOT / "configs/sessions/iridium-small-36-isis-flat.yaml"
-    if not path.exists():
-        pytest.skip("iridium-small-36-isis-flat not available")
-    return str(path)
+    """Create a segment-session fixture for the sample timeline."""
+    import tempfile
+
+    import yaml
+
+    session = build_segment_session_dict(
+        name="starlink-176-global-isis-flat",
+        constellation="configs/constellations/starlink-176.yaml",
+        ground_stations="configs/ground-stations/sets/global-8.yaml",
+        protocol="isis",
+        extensions=[],
+        time={"step_seconds": 10},
+    )
+    with tempfile.NamedTemporaryFile(
+        mode="w",
+        suffix=".yaml",
+        dir=str(PROJECT_ROOT),
+        delete=False,
+    ) as f:
+        yaml.dump(session, f)
+        return f.name
 
 
 @pytest.fixture
@@ -105,30 +108,14 @@ def polar_seam_session_path():
 
     import yaml
 
-    session = {
-        "session": {"name": "iridium-66-test"},
-        "orbit": {"propagator": "keplerian-circular"},
-        "constellation": "configs/constellations/iridium-66.yaml",
-        "ground_stations": "configs/ground-stations/sets/us-conus.yaml",
-        "scheduling": {
-            "ground": {
-                "selection_policy": {"name": "highest-elevation", "params": {}},
-                "handover_policy": {
-                    "name": "hysteresis",
-                    "params": {"discount_factor": 1.15, "mask_fade_range_deg": 5.0},
-                },
-                "handover_mode": "bbm",
-                "mbb_overlap_ticks": 3,
-                "mbb_reserve": 0,
-            }
-        },
-        "routing": {
-            "protocol": "isis",
-            "extensions": ["sr"],
-            "area_assignment": {"strategy": "flat", "gs_area_id": "49.0001"},
-        },
-        "time": {"step_seconds": 10},
-    }
+    session = build_segment_session_dict(
+        name="iridium-66-test",
+        constellation="configs/constellations/iridium-66.yaml",
+        ground_stations="configs/ground-stations/sets/us-conus.yaml",
+        protocol="isis",
+        extensions=["sr"],
+        time={"step_seconds": 10},
+    )
     with tempfile.NamedTemporaryFile(
         mode="w",
         suffix=".yaml",
@@ -152,7 +139,9 @@ def four_node_timeline(four_node_session_path, tmp_path):
 def sample_timeline(sample_session_path, tmp_path):
     from ome.main import run as ome_run
 
-    return ome_run(sample_session_path, str(tmp_path))
+    path = ome_run(sample_session_path, str(tmp_path))
+    Path(sample_session_path).unlink(missing_ok=True)
+    return path
 
 
 @pytest.fixture
@@ -229,10 +218,10 @@ class TestFourNodePipeline:
 
 class TestStarlinkMiniTerminalExhaustion:
     def test_ground_terminal_exhaustion(self, sample_timeline):
-        """Starlink-mini produces visible=True, scheduled=False ground events.
+        """Dense LEO access produces visible=True, scheduled=False ground events.
 
-        With 60 sats and 7 ground stations (1 terminal each), multiple sats
-        will be visible to a GS simultaneously, producing terminal exhaustion.
+        The fixture uses a denser constellation and multi-station ground set so at
+        least one station has more visible candidates than scheduled terminals.
         """
         events = _load_events(sample_timeline)
         gs_exhaustion = [

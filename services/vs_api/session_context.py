@@ -44,6 +44,7 @@ from nodalarc.models.decision_explanation import (
     PendingActuation,
 )
 from nodalarc.models.link_decisions import GroundLinkDecisionSnapshot
+from nodalarc.models.resolved_session import SourceContext
 from nodalarc.models.scheduler_ops import ActualLinkSnapshot, ActuationState, parse_actuation_state
 from nodalarc.models.session import SessionConfig
 from nodalarc.models.vs_api import (
@@ -72,6 +73,7 @@ from nodalarc.nats_channels import (
     playback_state_subject,
     session_ephemeris_subject,
 )
+from nodalarc.resolve_session import resolve_session_with_assets
 from pydantic import ValidationError
 
 log = logging.getLogger(__name__)
@@ -101,18 +103,21 @@ class SessionContext:
         self.session_id = session_id
         self.session_file = session_config_path
 
-        # Parse session config for metadata
+        # Parse session config for metadata through the resolver.
         session_data = yaml.safe_load(Path(session_config_path).read_text())
-        session = SessionConfig.model_validate(session_data)
+        resolution = resolve_session_with_assets(
+            session_data,
+            source_context=SourceContext(origin="vs_api.session_context"),
+        )
+        session = resolution.runtime_session
         ext_str = "-".join(session.routing.extensions) if session.routing.extensions else "plain"
         self.routing_stack = f"{session.routing.protocol}-{ext_str}"
-        if isinstance(session.constellation, dict):
-            self.constellation_name: str = session.constellation.get("name", "custom")
-        else:
-            self.constellation_name = Path(session.constellation).stem
+        self.constellation_name = resolution.primary_constellation.segment.id
 
         # Load GS elevation map and beam falloff
-        self.gs_elevation_map: dict[str, float] = self._load_gs_elevation_map(session)
+        self.gs_elevation_map: dict[str, float] = self._load_gs_elevation_map(
+            resolution.primary_ground_set.config, resolution.addressing
+        )
         self.beam_falloff_exponent: float = self._load_beam_falloff_exponent(session)
 
         # Wall-clock actuation-latency contract (simulation.actuation) — the
@@ -1305,12 +1310,7 @@ class SessionContext:
             self.network_health = self.network_health.model_copy(update={"status": "converged"})
 
     @staticmethod
-    def _load_gs_elevation_map(session: SessionConfig) -> dict[str, float]:
-        from nodalarc.constellation_loader import load_ground_stations
-        from nodalarc.models.addressing import AddressingScheme
-
-        gs_file = load_ground_stations(session.ground_stations)
-        addressing = AddressingScheme(session.addressing)
+    def _load_gs_elevation_map(gs_file, addressing) -> dict[str, float]:
         result: dict[str, float] = {}
         for station in gs_file.stations:
             gs_id = addressing.gs_id(station.name)

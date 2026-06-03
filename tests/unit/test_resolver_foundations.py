@@ -68,7 +68,7 @@ def _node(node_id: str = "sat-p00s00") -> ResolvedNode:
 
 def _resolved_session(**overrides) -> ResolvedSession:
     base = {
-        "identity_mode": IdentityMode.LEGACY_IDENTITY,
+        "identity_mode": IdentityMode.SEGMENT_NAMESPACED,
         "session": SessionMeta(name="demo"),
         "nodes": (_node(),),
         "link_rules": (),
@@ -94,7 +94,7 @@ def _resolved_session(**overrides) -> ResolvedSession:
 
 def test_resolved_session_constructs_and_helpers():
     rs = _resolved_session()
-    assert rs.identity_mode is IdentityMode.LEGACY_IDENTITY
+    assert rs.identity_mode is IdentityMode.SEGMENT_NAMESPACED
     assert rs.node_ids() == ("sat-p00s00",)
     assert rs.node_by_id("sat-p00s00").local_node_id == "sat-P00S00"
     assert rs.node_by_id("missing") is None

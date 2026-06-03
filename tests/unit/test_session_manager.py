@@ -9,8 +9,25 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
+import yaml
 from nodalarc.catalog_paths import CatalogPathError
 from vs_api.session_manager import SessionManager, _pid_alive
+
+from tests.conftest import build_segment_session_dict
+
+
+def _segment_session_yaml(name: str, data_dir: Path) -> str:
+    return yaml.dump(
+        build_segment_session_dict(
+            name=name,
+            data_dir=str(data_dir),
+            constellation="configs/constellations/custom-example.yaml",
+            ground_stations="configs/ground-stations/sets/demo.yaml",
+            protocol="isis",
+            orbit_propagator="keplerian-circular",
+        ),
+        sort_keys=False,
+    )
 
 
 @pytest.fixture
@@ -24,30 +41,7 @@ def tmp_sessions(tmp_path):
 
     # Write a minimal valid session YAML
     session_yaml = sessions_dir / "test-session.yaml"
-    session_yaml.write_text(f"""
-session:
-  name: Test Session
-  data_dir: {data_dir}
-constellation: configs/constellations/custom-example.yaml
-ground_stations: configs/ground-stations/default.yaml
-orbit:
-  propagator: keplerian-circular
-routing:
-  protocol: isis
-  area_assignment:
-    strategy: flat
-scheduling:
-  ground:
-    selection_policy:
-      name: highest-elevation
-      params: {{}}
-    handover_policy:
-      name: none
-      params: {{}}
-    handover_mode: bbm
-    mbb_overlap_ticks: 3
-    mbb_reserve: 0
-""")
+    session_yaml.write_text(_segment_session_yaml("Test Session", data_dir))
 
     return {
         "sessions_dir": sessions_dir,
@@ -200,29 +194,7 @@ class TestSessionPathContainment:
         sessions_dir = tmp_path / "sessions"
         sessions_dir.mkdir()
         outside = tmp_path / "outside.yaml"
-        outside.write_text("""
-session:
-  name: Outside
-constellation: configs/constellations/custom-example.yaml
-ground_stations: configs/ground-stations/default.yaml
-orbit:
-  propagator: keplerian-circular
-routing:
-  protocol: isis
-  area_assignment:
-    strategy: flat
-scheduling:
-  ground:
-    selection_policy:
-      name: highest-elevation
-      params: {{}}
-    handover_policy:
-      name: none
-      params: {{}}
-    handover_mode: bbm
-    mbb_overlap_ticks: 3
-    mbb_reserve: 0
-""")
+        outside.write_text(_segment_session_yaml("Outside", tmp_path))
         try:
             (sessions_dir / "escape.yaml").symlink_to(outside)
         except OSError as exc:
@@ -353,30 +325,7 @@ class TestCollectDataDirs:
         """Multiple YAMLs with same data_dir produce one entry."""
         # Add second session with same data_dir
         yaml2 = tmp_sessions["sessions_dir"] / "test-session-2.yaml"
-        yaml2.write_text(f"""
-session:
-  name: Test Session 2
-  data_dir: {tmp_sessions["data_dir"]}
-constellation: configs/constellations/custom-example.yaml
-ground_stations: configs/ground-stations/default.yaml
-orbit:
-  propagator: keplerian-circular
-routing:
-  protocol: isis
-  area_assignment:
-    strategy: flat
-scheduling:
-  ground:
-    selection_policy:
-      name: highest-elevation
-      params: {{}}
-    handover_policy:
-      name: none
-      params: {{}}
-    handover_mode: bbm
-    mbb_overlap_ticks: 3
-    mbb_reserve: 0
-""")
+        yaml2.write_text(_segment_session_yaml("Test Session 2", tmp_sessions["data_dir"]))
         mgr = SessionManager(str(tmp_sessions["sessions_dir"]))
         dirs = mgr._collect_data_dirs()
         assert len(dirs) == 1

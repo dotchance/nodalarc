@@ -37,6 +37,7 @@ from nodalarc.models.metrics import (
     TraceRequest,
     TraceResponse,
 )
+from nodalarc.models.resolved_session import SourceContext
 from nodalarc.models.routing_stack import RoutingStackConfig
 from nodalarc.models.session import SessionConfig
 from nodalarc.nats_channels import (
@@ -49,6 +50,7 @@ from nodalarc.nats_channels import (
     probe_result_subject,
 )
 from nodalarc.platform_config import get_platform_config
+from nodalarc.resolve_session import resolve_session_with_assets
 from nodalarc.session_identity import require_session_run_id
 
 from measurement.adapters import create_adapter
@@ -386,13 +388,15 @@ def main() -> None:
 
     init_platform_config(Path(args.platform_config))
 
-    # Load configs
+    # Load configs through the resolver so MI observes the same runtime view as
+    # OME/Scheduler/Operator.
     raw = yaml.safe_load(Path(args.session).read_text())
-    session = SessionConfig.model_validate(raw)
-
-    from nodalarc.constellation_loader import load_ground_stations
-
-    gs_file = load_ground_stations(session.ground_stations)
+    resolution = resolve_session_with_assets(
+        raw,
+        source_context=SourceContext(origin="mi"),
+    )
+    session = resolution.runtime_session
+    gs_file = resolution.primary_ground_set.config
 
     from nodalarc.stack_resolver import resolve_stack
 

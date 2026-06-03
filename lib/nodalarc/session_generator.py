@@ -26,7 +26,13 @@ from nodalarc.catalog_paths import (
     validate_catalog_name,
     validate_station_names,
 )
-from nodalarc.models.session import SessionConfig
+from nodalarc.constellation_loader import (
+    expand_constellation,
+    load_constellation,
+    load_ground_stations,
+)
+from nodalarc.models.resolved_session import SourceContext
+from nodalarc.resolve_session import resolve_session
 from nodalarc.stack_resolver import resolve_stack
 
 
@@ -255,13 +261,60 @@ def generate_session_yaml(
             "'longest-remaining-pass'"
         )
 
-    # Build session dict
+    ground_source: str | dict[str, Any]
+    if isinstance(gs_value, list):
+        # The segment grammar has no top-level station-name-list shortcut.
+        # Selected catalog stations are materialized into a real inline station
+        # set so the generated YAML is self-contained and structurally honest.
+        ground_source = load_ground_stations(gs_value).model_dump(mode="python")
+    elif isinstance(gs_value, dict):
+        ground_source = gs_value
+    else:
+        ground_source = gs_value
+
+    satellite_count = len(expand_constellation(load_constellation(constellation_value)))
+    ground_count = len(load_ground_stations(ground_source).stations)
+    static_candidate_bound = max(1, satellite_count * ground_count)
+
+    # Build segment-grammar session dict. The wizard emits the same product
+    # grammar that upload/deploy accepts; SessionConfig is only an internal
+    # resolver projection and is never the user-facing output.
     session_dict: dict[str, Any] = {
         "session": {"name": session_name},
-        "constellation": constellation_value,
-        "ground_stations": gs_value,
+        "identity": {"mode": "segment_namespaced"},
+        "segments": [
+            {
+                "id": "space",
+                "kind": "constellation",
+                "source": constellation_value,
+                "namespace": "space",
+                "central_body": "earth",
+                **({"satellite_type": satellite_type} if satellite_type else {}),
+                "tags": ["earth", "orbit"],
+            },
+            {
+                "id": "ground",
+                "kind": "ground_set",
+                "source": ground_source,
+                "namespace": "ground",
+                "reference_body": "earth",
+                "tags": ["earth", "ground"],
+            },
+        ],
+        "link_rules": [
+            {
+                "id": "ground-access",
+                "kind": "access",
+                "endpoints": [
+                    {"selector": {"segment": "ground"}, "terminal_role": "ground"},
+                    {"selector": {"segment": "space"}, "terminal_role": "ground"},
+                ],
+                "topology": {"mode": "visible_candidates"},
+            }
+        ],
         "simulation": {
             "schema_version": 2,
+            "candidate_limits": {"max_pairs_per_rule": static_candidate_bound},
         },
         "orbit": {
             "propagator": orbit_propagator,
@@ -297,9 +350,6 @@ def generate_session_yaml(
     if orbit_propagator == "sgp4-tle":
         session_dict["orbit"]["tle_max_age_days"] = 7.0
 
-    if satellite_type:
-        session_dict["satellite_type"] = satellite_type
-
     if area_assignment:
         session_dict["routing"]["area_assignment"] = area_assignment
     if routing_overrides:
@@ -310,10 +360,13 @@ def generate_session_yaml(
     if preset and preset.traffic_flows:
         session_dict["traffic_flows"] = preset.traffic_flows
     if preset and preset.convergence:
-        session_dict["convergence"] = preset.convergence
+        session_dict["mi"] = {"convergence": preset.convergence}
 
-    # Validate through Pydantic
-    SessionConfig.model_validate(session_dict)
+    resolve_session(
+        session_dict,
+        catalog_roots=roots,
+        source_context=SourceContext(origin="session_generator"),
+    )
 
     yaml_str = yaml.dump(session_dict, default_flow_style=False, sort_keys=False)
     return yaml_str, warnings

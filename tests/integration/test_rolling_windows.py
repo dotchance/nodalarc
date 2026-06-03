@@ -15,6 +15,8 @@ from pathlib import Path
 import pytest
 from ome.propagator import orbital_period
 
+from tests.conftest import build_segment_session_dict
+
 pytestmark = pytest.mark.integration
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent
@@ -56,30 +58,14 @@ def four_node_timeline(tmp_path):
     import yaml
     from ome.main import run as ome_run
 
-    session = {
-        "session": {"name": "rolling-window-test"},
-        "orbit": {"propagator": "keplerian-circular"},
-        "constellation": "configs/constellations/custom-example.yaml",
-        "ground_stations": _optical_ground_stations(),
-        "scheduling": {
-            "ground": {
-                "selection_policy": {"name": "highest-elevation", "params": {}},
-                "handover_policy": {
-                    "name": "hysteresis",
-                    "params": {"discount_factor": 1.15, "mask_fade_range_deg": 5.0},
-                },
-                "handover_mode": "bbm",
-                "mbb_overlap_ticks": 3,
-                "mbb_reserve": 0,
-            }
-        },
-        "routing": {
-            "protocol": "isis",
-            "extensions": ["sr"],
-            "area_assignment": {"strategy": "flat", "gs_area_id": "49.0001"},
-        },
-        "time": {"step_seconds": 1},
-    }
+    session = build_segment_session_dict(
+        name="rolling-window-test",
+        constellation="configs/constellations/custom-example.yaml",
+        ground_stations=_optical_ground_stations(),
+        protocol="isis",
+        extensions=["sr"],
+        time={"step_seconds": 1},
+    )
     with tempfile.NamedTemporaryFile(
         mode="w",
         suffix=".yaml",

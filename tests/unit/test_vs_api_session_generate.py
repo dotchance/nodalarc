@@ -1,18 +1,25 @@
 """Tests for VS-API session generation contract."""
 
-from pathlib import Path
-
 import yaml
 from fastapi.testclient import TestClient
 from vs_api.main import app
+
+from tests.conftest import build_segment_session_dict
 
 client = TestClient(app)
 
 
 def _demo_session_with_name(name: str) -> str:
-    raw = yaml.safe_load(Path("configs/sessions/demo-36-ospf.yaml").read_text())
-    raw["session"]["name"] = name
-    return yaml.dump(raw, default_flow_style=False)
+    return yaml.dump(
+        build_segment_session_dict(
+            name=name,
+            constellation="configs/constellations/demo-36.yaml",
+            ground_stations="configs/ground-stations/sets/demo.yaml",
+            protocol="ospf",
+        ),
+        default_flow_style=False,
+        sort_keys=False,
+    )
 
 
 def test_generate_session_requires_orbit_propagator():
@@ -45,6 +52,11 @@ def test_generate_session_writes_selected_orbit_propagator():
 
     assert response.status_code == 200
     session = yaml.safe_load(response.json()["yaml"])
+    assert "constellation" not in session
+    assert "ground_stations" not in session
+    assert session["identity"]["mode"] == "segment_namespaced"
+    assert session["segments"][0]["kind"] == "constellation"
+    assert session["segments"][1]["kind"] == "ground_set"
     assert session["orbit"]["propagator"] == "j2-mean-elements"
     assert session["routing"]["protocol"] == "isis"
     assert session["routing"]["area_assignment"]["strategy"] == "per-plane"

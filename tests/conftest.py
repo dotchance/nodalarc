@@ -62,3 +62,80 @@ def _init_platform_config():
 def _node_agent_ops_spool_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     """Keep Node Agent pre-init OpsEvent spooling inside the test temp dir."""
     monkeypatch.setenv("NODE_AGENT_OPS_SPOOL", str(tmp_path / "node-agent-ops-events.jsonl"))
+
+
+def build_segment_session_dict(
+    *,
+    name: str,
+    constellation,
+    ground_stations,
+    data_dir: str | None = None,
+    protocol: str = "isis",
+    extensions: list[str] | None = None,
+    orbit_propagator: str = "keplerian-circular",
+    routing: dict | None = None,
+    scheduling: dict | None = None,
+    time: dict | None = None,
+    candidate_limit: int = 100000,
+) -> dict:
+    """Build a segment-grammar session for product/runtime tests."""
+    routing_data = {
+        "protocol": protocol,
+        "extensions": list(extensions or []),
+        "area_assignment": {"strategy": "flat", "gs_area_id": "49.0001"},
+    }
+    if routing:
+        routing_data.update(routing)
+    scheduling_data = scheduling or {
+        "ground": {
+            "selection_policy": {"name": "highest-elevation", "params": {}},
+            "handover_policy": {
+                "name": "hysteresis",
+                "params": {"discount_factor": 1.15, "mask_fade_range_deg": 5.0},
+            },
+            "handover_mode": "bbm",
+            "mbb_overlap_ticks": 0,
+            "mbb_reserve": 0,
+        }
+    }
+    session_data = {"name": name}
+    if data_dir is not None:
+        session_data["data_dir"] = data_dir
+    data = {
+        "session": session_data,
+        "identity": {"mode": "segment_namespaced"},
+        "segments": [
+            {
+                "id": "space",
+                "kind": "constellation",
+                "source": constellation,
+                "namespace": "space",
+                "central_body": "earth",
+            },
+            {
+                "id": "ground",
+                "kind": "ground_set",
+                "source": ground_stations,
+                "namespace": "ground",
+                "reference_body": "earth",
+            },
+        ],
+        "link_rules": [
+            {
+                "id": "ground-access",
+                "kind": "access",
+                "endpoints": [
+                    {"selector": {"segment": "ground"}, "terminal_role": "ground"},
+                    {"selector": {"segment": "space"}, "terminal_role": "ground"},
+                ],
+                "topology": {"mode": "visible_candidates"},
+            }
+        ],
+        "simulation": {"candidate_limits": {"max_pairs_per_rule": candidate_limit}},
+        "orbit": {"propagator": orbit_propagator},
+        "scheduling": scheduling_data,
+        "routing": routing_data,
+    }
+    if time is not None:
+        data["time"] = time
+    return data

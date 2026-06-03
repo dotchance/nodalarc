@@ -51,6 +51,7 @@ def _minimal_session(**overrides) -> dict:
                 "kind": "ground_set",
                 "source": "configs/ground-stations/sets/demo.yaml",
                 "reference_body": "earth",
+                "namespace": "gnd",
             },
         ],
         "link_rules": [
@@ -108,16 +109,10 @@ def test_identity_defaults_to_segment_namespaced():
     assert s.identity.mode is IdentityMode.SEGMENT_NAMESPACED
 
 
-def test_identity_legacy_compatible_declarable():
-    s = SegmentSessionConfig.model_validate(
-        _minimal_session(identity={"mode": "legacy_compatible"})
-    )
-    assert s.identity.mode is IdentityMode.LEGACY_COMPATIBLE
-
-
-def test_identity_legacy_identity_not_declarable():
-    with pytest.raises(ValidationError, match="cannot be declared explicitly"):
-        IdentityConfig.model_validate({"mode": "legacy_identity"})
+def test_legacy_identity_modes_rejected():
+    for mode in ("legacy_compatible", "legacy_identity"):
+        with pytest.raises(ValidationError, match="segment_namespaced"):
+            IdentityConfig.model_validate({"mode": mode})
 
 
 def test_identity_unknown_mode_rejected():

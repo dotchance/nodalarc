@@ -188,9 +188,8 @@ class ResolvedLinkRule(BaseModel):
 class SidBlock(BaseModel):
     """The disjoint segment-routing SID block allocated to one segment.
 
-    Legacy/legacy-compatible sessions use one session-global block
-    (``plane*100+slot+1``); segment_namespaced sessions get one disjoint block per
-    segment so plane/slot are no longer globally meaningful.
+    Every supported session uses segment-namespaced identity, so each segment
+    owns a disjoint SID block and plane/slot are no longer globally meaningful.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -247,6 +246,9 @@ class ResolvedSession(BaseModel):
 
     @model_validator(mode="after")
     def _validate_consistency(self) -> ResolvedSession:
+        if self.identity_mode is not IdentityMode.SEGMENT_NAMESPACED:
+            raise ValueError("ResolvedSession identity_mode must be segment_namespaced")
+
         ids = [n.node_id for n in self.nodes]
         if len(set(ids)) != len(ids):
             dupes = sorted({i for i in ids if ids.count(i) > 1})

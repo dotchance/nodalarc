@@ -16,7 +16,7 @@ from pathlib import Path
 from time import perf_counter
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
+import yaml
 from nodalarc.models.events import (
     ClockTick,
     EphemerisNodeFixed,
@@ -49,6 +49,8 @@ from scheduler.actuation import (
 )
 from scheduler.dispatcher import ActiveLinkInfo, Dispatcher
 from scheduler.pod_locator import PodLocationMap
+
+from tests.conftest import build_segment_session_dict
 
 BASE = datetime(2026, 5, 27, 12, 0, 0, tzinfo=UTC)
 OLD = ("gs-multi", "sat-old")
@@ -573,10 +575,25 @@ def _reset_ome_playback_globals() -> None:
     ome_main._initial_epoch_committed = False
 
 
-def _capture_ome_seek_stream(monkeypatch) -> tuple[str, list[tuple[str, bytes]]]:
-    session_path = Path("configs/sessions/demo-36-ospf.yaml")
-    if not session_path.exists():
-        pytest.skip("demo-36-ospf.yaml not available")
+def _demo_phase6_session_path(tmp_path: Path) -> Path:
+    session_path = tmp_path / "demo-36-ospf.yaml"
+    session_path.write_text(
+        yaml.dump(
+            build_segment_session_dict(
+                name="demo-36-ospf",
+                constellation="configs/constellations/demo-36.yaml",
+                ground_stations="configs/ground-stations/sets/demo.yaml",
+                protocol="ospf",
+                orbit_propagator="j2-mean-elements",
+            ),
+            sort_keys=False,
+        )
+    )
+    return session_path
+
+
+def _capture_ome_seek_stream(monkeypatch, tmp_path: Path) -> tuple[str, list[tuple[str, bytes]]]:
+    session_path = _demo_phase6_session_path(tmp_path)
 
     import nats
     import ome.event_stream as ome_event_stream
@@ -760,7 +777,7 @@ def _replay_ome_records(
     }
 
 
-def test_p6_h_captured_ome_stream_replay_is_wall_clock_independent(monkeypatch) -> None:
+def test_p6_h_captured_ome_stream_replay_is_wall_clock_independent(monkeypatch, tmp_path) -> None:
     """C-H layer 2: captured OME wire stream replays deterministically.
 
     The fixture is produced by the real OME pacing loop from demo-36 across an
@@ -769,7 +786,7 @@ def test_p6_h_captured_ome_stream_replay_is_wall_clock_independent(monkeypatch) 
     is intentionally stronger than comparing two Scheduler helpers: it crosses
     the OME Publisher boundary, Scheduler epoch handlers, and dispatch fold.
     """
-    session_id, records = _capture_ome_seek_stream(monkeypatch)
+    session_id, records = _capture_ome_seek_stream(monkeypatch, tmp_path)
 
     first = _replay_ome_records(
         session_id=session_id,

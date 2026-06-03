@@ -3,9 +3,9 @@
 import json
 import sqlite3
 from datetime import UTC, datetime
-from pathlib import Path
 
 import pytest
+import yaml
 from nodalarc.db.queries import (
     insert_convergence_result,
     insert_link_up,
@@ -25,6 +25,8 @@ from nodalarc.models.vs_api import (
 )
 from nodalarc.nats_channels import STREAM_OME_EVENTS
 from vs_api.session_context import SessionContext, _link_key
+
+from tests.conftest import build_segment_session_dict
 
 ISS_TLE_EPOCH = 1615896900.000275
 ISS_TLE_LINE_1 = "1 25544U 98067A   21075.51041667  .00001264  00000-0  29660-4 0  9993"
@@ -67,8 +69,16 @@ class TestOpsEventVisibility:
         assert visible == events[2:]
 
 
-def _session_yaml_text(name: str = "demo-36-ospf.yaml") -> str:
-    return Path("configs/sessions", name).read_text(encoding="utf-8")
+def _session_yaml_text(name: str = "demo-36-ospf") -> str:
+    return yaml.dump(
+        build_segment_session_dict(
+            name=name,
+            constellation="configs/constellations/demo-36.yaml",
+            ground_stations="configs/ground-stations/sets/demo.yaml",
+            protocol="ospf",
+        ),
+        sort_keys=False,
+    )
 
 
 def _constellation_cr(

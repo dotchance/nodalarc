@@ -495,6 +495,12 @@ def test_earth_leo_meo_geo_demo_resolves_stitched_candidate_graph():
     assert all(
         len(sat_ids) == 68 for sat_ids in resolution.ground_candidate_satellites_by_gs.values()
     )
+    neighbor_types: dict[str, int] = {}
+    for _node_id, assignment in resolution.neighbors:
+        neighbor_types[assignment.link_type] = neighbor_types.get(assignment.link_type, 0) + 1
+    assert neighbor_types["intra_plane_isl"] == 72
+    assert neighbor_types["link_rule:leo-to-meo-relay-candidates"] == 48
+    assert neighbor_types["link_rule:meo-to-geo-relay-candidates"] == 16
     leo_meo_pairs = [
         candidate.pair
         for candidate in resolution.declared_candidates

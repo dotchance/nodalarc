@@ -8,7 +8,8 @@ import {
   LINK_ISL_WIDTH, LINK_GROUND_WIDTH, LINK_FLOW_WIDTH,
   GS_COLOR, SELECTION_COLOR, FAIL_HOLD_MS, FAIL_FADE_MS,
   EARTH_RADIUS, SAT_RADIUS, SAT_SEGMENTS, GS_SIZE,
-  CAMERA_FOV, AREA_COLORS, PLANE_COLORS, getPlaneColor,
+  CAMERA_FOV, CAMERA_DISTANCE, CAMERA_MIN_DISTANCE, CAMERA_MAX_DISTANCE,
+  AREA_COLORS, PLANE_COLORS, getPlaneColor,
 } from "../../config";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore -- Node built-ins available at vitest runtime
@@ -59,6 +60,9 @@ describe("token system", () => {
       expect(SAT_SEGMENTS).toBe(tokens.satSegments);
       expect(GS_SIZE).toBe(tokens.gsSize);
       expect(CAMERA_FOV).toBe(tokens.cameraFov);
+      expect(CAMERA_DISTANCE).toBe(tokens.cameraDistance);
+      expect(CAMERA_MIN_DISTANCE).toBe(tokens.cameraMinDistance);
+      expect(CAMERA_MAX_DISTANCE).toBe(tokens.cameraMaxDistance);
     });
 
     it("area colors use token values", () => {

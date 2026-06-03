@@ -8,9 +8,6 @@ segments:
   source: configs/constellations/demo-36.yaml
   namespace: leo
   central_body: earth
-  internal_links:
-    isl:
-      enabled: false
   tags:
   - earth
   - leo

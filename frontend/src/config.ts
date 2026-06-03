@@ -99,9 +99,9 @@ export const GS_SIZE = tokens.gsSize;
 
 /** Camera defaults */
 export const CAMERA_FOV = tokens.cameraFov;
-export const CAMERA_DISTANCE = EARTH_RADIUS * 2.5;
-export const CAMERA_MIN_DISTANCE = EARTH_RADIUS * 1.05;
-export const CAMERA_MAX_DISTANCE = EARTH_RADIUS * 6;
+export const CAMERA_DISTANCE = tokens.cameraDistance;
+export const CAMERA_MIN_DISTANCE = tokens.cameraMinDistance;
+export const CAMERA_MAX_DISTANCE = tokens.cameraMaxDistance;
 
 /** Link colors — sourced from tokens */
 export const LINK_ISL_COLOR = tokens.colorLinkIsl;

@@ -136,12 +136,12 @@ Available session configs:
 
 | Session | Satellites | Routing | Description |
 |---------|-----------|---------|-------------|
-| `earth-leo-simple.yaml` | 36 | OSPF | Default. Small single-shell LEO starter |
+| `earth-leo-simple.yaml` | 36 | OSPF | Default. MBB-capable single-shell LEO starter with two GS terminals per station |
 | `earth-leo-walker.yaml` | 176 | IS-IS + TE | Walker-delta LEO starter |
 | `earth-leo-polar.yaml` | 36 | IS-IS + TE | Polar LEO starter with high-latitude ground stations |
 | `earth-meo-gps.yaml` | 24 | IS-IS | GPS-like MEO starter with long-range RF gateways |
-| `earth-geo-inmarsat.yaml` | 8 | IS-IS | GEO commercial-relay-style starter |
-| `earth-geo-tdrs.yaml` | 8 | IS-IS | GEO relay/TDRS-style starter |
+| `earth-geo-inmarsat.yaml` | 4 | IS-IS | Representative GEO commercial-relay-style starter |
+| `earth-geo-tdrs.yaml` | 6 | IS-IS | Representative GEO relay/TDRS-style starter |
 
 ## Step 5: Teardown
 

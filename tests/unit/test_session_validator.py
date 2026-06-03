@@ -9,6 +9,7 @@ import yaml
 from nodalarc.constellation_loader import (
     SatelliteNode,
 )
+from nodalarc.ground_terminals import station_ground_terminal_capacity
 from nodalarc.models.constellation import (
     GroundTerminal,
     IslTerminal,
@@ -1735,6 +1736,28 @@ def test_checked_in_sessions_include_non_default_ground_policy_example():
     assert examples, (
         "checked-in sessions must include at least one non-default ground policy example"
     )
+
+
+def test_checked_in_simple_leo_demo_is_mbb_capable():
+    path = CONFIGS_DIR / "sessions" / "earth-leo-simple.yaml"
+    resolution = resolve_session_with_assets(
+        yaml.safe_load(path.read_text()),
+        source_context=SourceContext(origin="test.simple_leo_mbb"),
+    )
+
+    ground = resolution.runtime_session.scheduling.ground
+    assert ground.handover_mode == "mbb"
+    assert ground.mbb_overlap_ticks > 0
+    assert ground.mbb_reserve == 1
+
+    required_capacity = ground.mbb_reserve + 1
+    gs_file = resolution.primary_ground_set.config
+    capacities = {
+        station.name: station_ground_terminal_capacity(gs_file, station)
+        for station in gs_file.stations
+    }
+    assert capacities
+    assert all(capacity >= required_capacity for capacity in capacities.values())
 
 
 # ---------------------------------------------------------------------------

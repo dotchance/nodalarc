@@ -226,9 +226,23 @@ fi
 desired_yaml="$(cat "$DEFAULT_SESSION")"
 previous_generation=""
 previous_yaml=""
+previous_phase=""
+previous_observed_generation=""
 if kubectl get constellationspec current-session -n "$NAMESPACE" >/dev/null 2>&1; then
     previous_generation="$(kubectl get constellationspec current-session -n "$NAMESPACE" -o jsonpath='{.metadata.generation}')"
     previous_yaml="$(kubectl get constellationspec current-session -n "$NAMESPACE" -o jsonpath='{.spec.sessionYaml}')"
+    previous_phase="$(kubectl get constellationspec current-session -n "$NAMESPACE" -o jsonpath='{.status.phase}' 2>/dev/null || true)"
+    previous_observed_generation="$(kubectl get constellationspec current-session -n "$NAMESPACE" -o jsonpath='{.status.observedGeneration}' 2>/dev/null || true)"
+    if [ "$previous_yaml" = "$desired_yaml" ] \
+        && [ "$previous_phase" = "Error" ] \
+        && [ "$previous_observed_generation" = "$previous_generation" ]; then
+        echo "[session] Previous attempt is terminal Error for the same YAML; recreating CR for fresh reconciliation."
+        kubectl delete constellationspec current-session -n "$NAMESPACE" --wait=true
+        previous_generation=""
+        previous_yaml=""
+        previous_phase=""
+        previous_observed_generation=""
+    fi
 fi
 
 tmp_file="$(mktemp)"

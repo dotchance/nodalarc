@@ -114,13 +114,15 @@ function GroundStation({
     const outward = p.clone().normalize();
     const surface = outward.clone().multiplyScalar(bodyFrame.radiusRender * 1.001);
     const quat = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, -1), outward);
-    // Only the selected GS has resolved envelope floors; others (cone hidden) fall back to
-    // the configured mask. Effective is the binding floor; configured is the wider mask.
-    const fallback = node.min_elevation_deg ?? 25;
-    const effElev = (selected ? effectiveMinElevDeg : null) ?? fallback;
-    const confElev = (selected ? configuredMinElevDeg : null) ?? fallback;
-    const effRadius = computeConeRadius(effElev, orbitalAltKm, bodyFrame.radiusKm);
-    const confRadius = computeConeRadius(confElev, orbitalAltKm, bodyFrame.radiusKm);
+    // Only the selected GS has resolved envelope floors. If the explanation feed is
+    // missing, hide the cone instead of inventing an Earth-default mask.
+    const effElev = selected ? effectiveMinElevDeg : null;
+    const confElev = selected ? configuredMinElevDeg : null;
+    const hasEnvelope = effElev !== null && confElev !== null;
+    const effRadius = hasEnvelope ? computeConeRadius(effElev, orbitalAltKm, bodyFrame.radiusKm) : 0;
+    const confRadius = hasEnvelope
+      ? computeConeRadius(confElev, orbitalAltKm, bodyFrame.radiusKm)
+      : 0;
     // Show the configured reference only when the mask is genuinely non-binding (the
     // effective floor is higher → a tighter cone), i.e. the FoR-bound / dead-knob case.
     const showConfigured = confRadius - effRadius > 0.5;
@@ -133,12 +135,12 @@ function GroundStation({
       effRing: ringGeometry(effRadius),
       confRing: showConfigured ? ringGeometry(confRadius) : null,
       showConfigured,
+      hasEnvelope,
     };
   }, [
     node.lat_deg,
     node.lon_deg,
     node.alt_km,
-    node.min_elevation_deg,
     orbitalAltKm,
     selected,
     effectiveMinElevDeg,
@@ -190,7 +192,11 @@ function GroundStation({
         <spriteMaterial map={texture} color={FAMILY_TONE[family.family].hex} sizeAttenuation />
       </sprite>
       {/* Effective coverage cone (the binding floor) — filled disc + strong outline. */}
-      <mesh position={geom.conePosition} quaternion={geom.coneQuaternion} visible={selected}>
+      <mesh
+        position={geom.conePosition}
+        quaternion={geom.coneQuaternion}
+        visible={selected && geom.hasEnvelope}
+      >
         <ringGeometry args={[0, geom.effRadius, 48]} />
         <meshBasicMaterial
           color={GS_COLOR}
@@ -203,7 +209,7 @@ function GroundStation({
       <lineLoop
         position={geom.conePosition}
         quaternion={geom.coneQuaternion}
-        visible={selected}
+        visible={selected && geom.hasEnvelope}
         geometry={geom.effRing}
       >
         <lineBasicMaterial color={GS_COLOR} transparent opacity={0.3} depthWrite={false} />

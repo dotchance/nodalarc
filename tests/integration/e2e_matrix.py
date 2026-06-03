@@ -17,6 +17,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import requests
+from nodalarc.runtime_naming import gs_bridge_port_name
 
 VS_API_HOST = os.environ.get("VS_API_HOST", "192.168.10.201:8080")
 BASE_URL = f"http://{VS_API_HOST}"
@@ -267,6 +268,79 @@ def request_json(method: str, path: str, *, token: str | None = None, retries: i
     )
 
 
+def _node_type(node: dict) -> str | None:
+    value = node.get("node_type") or node.get("kind")
+    return str(value) if value is not None else None
+
+
+def _is_satellite_node(node: dict) -> bool:
+    return _node_type(node) == "satellite"
+
+
+def _is_ground_node(node: dict) -> bool:
+    return _node_type(node) == "ground_station"
+
+
+def _satellite_nodes(nodes: list[dict]) -> list[dict]:
+    return [node for node in nodes if _is_satellite_node(node)]
+
+
+def _ground_nodes(nodes: list[dict]) -> list[dict]:
+    return [node for node in nodes if _is_ground_node(node)]
+
+
+def _nodes_by_id(nodes: list[dict]) -> dict[str, dict]:
+    return {str(node["node_id"]): node for node in nodes if node.get("node_id") is not None}
+
+
+def _node_id_has_type(node_id: str, nodes_by_id: dict[str, dict], node_type: str) -> bool:
+    node = nodes_by_id.get(node_id)
+    return node is not None and _node_type(node) == node_type
+
+
+def _router_loopback_from_node(node: dict | None) -> str | None:
+    if not node:
+        return None
+    for address in node.get("addresses") or []:
+        if not isinstance(address, dict):
+            continue
+        if address.get("purpose") == "router_loopback" and address.get("family") == "ipv4":
+            raw = str(address.get("address") or "").strip()
+            if raw:
+                return raw.split("/", 1)[0]
+    return None
+
+
+def _link_as_ground_sat(
+    link: dict,
+    nodes_by_id: dict[str, dict],
+) -> tuple[str, str] | None:
+    a = str(link.get("node_a", ""))
+    b = str(link.get("node_b", ""))
+    if _node_id_has_type(a, nodes_by_id, "ground_station") and _node_id_has_type(
+        b, nodes_by_id, "satellite"
+    ):
+        return a, b
+    if _node_id_has_type(b, nodes_by_id, "ground_station") and _node_id_has_type(
+        a, nodes_by_id, "satellite"
+    ):
+        return b, a
+    return None
+
+
+def _link_as_sat_sat(
+    link: dict,
+    nodes_by_id: dict[str, dict],
+) -> tuple[str, str] | None:
+    a = str(link.get("node_a", ""))
+    b = str(link.get("node_b", ""))
+    if _node_id_has_type(a, nodes_by_id, "satellite") and _node_id_has_type(
+        b, nodes_by_id, "satellite"
+    ):
+        return a, b
+    return None
+
+
 def generate_session(token: str, perm: dict) -> str:
     """Generate session YAML via wizard API."""
     body = {
@@ -378,9 +452,8 @@ def check_routing(token: str, perm: dict) -> dict:
             "reason": "MPLS table checked in ping step",
         }
 
-    # Pick first satellite
     nodes = request_json("GET", "/api/v1/state", token=token).get("nodes", [])
-    sat = next((n for n in nodes if n.get("node_id", "").startswith("sat-")), None)
+    sat = next(iter(_satellite_nodes(nodes)), None)
     if not sat:
         return {"error": "no satellites found"}
 
@@ -422,7 +495,7 @@ def check_websocket(token: str) -> dict:
     state2 = request_json("GET", "/api/v1/state", token=token)
     t2 = state2.get("sim_time", "")
     nodes = state2.get("nodes", [])
-    sats = [n for n in nodes if n.get("node_id", "").startswith("sat-")]
+    sats = _satellite_nodes(nodes)
     plane_ok = all(isinstance(s.get("plane"), int) for s in sats)
 
     # Retry plane/slot check — PositionEvents may not have reached all nodes yet
@@ -430,7 +503,7 @@ def check_websocket(token: str) -> dict:
     while not plane_ok and retries < 3:
         time.sleep(10)
         nodes = request_json("GET", "/api/v1/state", token=token).get("nodes", [])
-        sats = [n for n in nodes if n.get("node_id", "").startswith("sat-")]
+        sats = _satellite_nodes(nodes)
         plane_ok = all(isinstance(s.get("plane"), int) for s in sats)
         retries += 1
 
@@ -444,20 +517,21 @@ def check_websocket(token: str) -> dict:
     }
 
 
-def _derive_loopback_ip(node_id: str, gs_nodes: list) -> str | None:
-    """Derive loopback IP from node_id using addressing scheme."""
-    import re
+def _node_loopback_ip(node_id: str, nodes_by_id: dict[str, dict] | None = None) -> str | None:
+    """Return the configured loopback IP without deriving identity from node_id text."""
 
-    sat_match = re.match(r"sat-P(\d+)S(\d+)", node_id, re.IGNORECASE)
-    if sat_match:
-        return f"10.{int(sat_match.group(1))}.{int(sat_match.group(2))}.1"
-    # GS — find index from position in sorted gs list
-    gs_ids = sorted(n["node_id"] for n in gs_nodes)
-    try:
-        gs_idx = gs_ids.index(node_id)
-        return f"10.255.{gs_idx + 1}.1"
-    except ValueError:
+    if nodes_by_id is not None:
+        configured = _router_loopback_from_node(nodes_by_id.get(node_id))
+        if configured:
+            return configured
+
+    out = _kubectl_exec(node_id, "ip -4 -o addr show lo", timeout=10)
+    if out["rc"] != 0:
         return None
+    for part in out["stdout"].split():
+        if part.startswith("10.") and "/" in part:
+            return part.split("/", 1)[0]
+    return None
 
 
 def check_ping(token: str, perm: dict) -> dict:
@@ -479,8 +553,9 @@ def check_ping(token: str, perm: dict) -> dict:
     if isinstance(links, dict):
         links = list(links.values())
 
-    gs_nodes = [n for n in nodes if n.get("node_id", "").startswith("gs-")]
-    sat_nodes = [n for n in nodes if n.get("node_id", "").startswith("sat-")]
+    nodes_by_id = _nodes_by_id(nodes)
+    gs_nodes = _ground_nodes(nodes)
+    sat_nodes = _satellite_nodes(nodes)
     declares_ground = _perm_declares_ground(perm)
 
     if declares_ground or gs_nodes:
@@ -517,23 +592,18 @@ def check_ping(token: str, perm: dict) -> dict:
     src = None
     dst = None
     for link in active_links:
-        a = link.get("node_a", "")
-        b = link.get("node_b", "")
-        if a.startswith("sat-") and b.startswith("sat-"):
-            src = a
-            dst = b
+        sat_pair = _link_as_sat_sat(link, nodes_by_id)
+        if sat_pair is not None:
+            src, dst = sat_pair
             break
 
     # Strategy 2: If no ISL link, find a satellite connected to a GS
     if not src:
         for link in active_links:
-            a = link.get("node_a", "")
-            b = link.get("node_b", "")
-            if a.startswith("gs-") and b.startswith("sat-"):
-                src, dst = b, a
-                break
-            if a.startswith("sat-") and b.startswith("gs-"):
-                src, dst = a, b
+            ground_sat_pair = _link_as_ground_sat(link, nodes_by_id)
+            if ground_sat_pair is not None:
+                gs_id, sat_id = ground_sat_pair
+                src, dst = sat_id, gs_id
                 break
 
     if not src or not dst:
@@ -544,7 +614,7 @@ def check_ping(token: str, perm: dict) -> dict:
             "active_link_count": len(active_links),
         }
 
-    dst_ip = _derive_loopback_ip(dst, gs_nodes)
+    dst_ip = _node_loopback_ip(dst, nodes_by_id)
     if not dst_ip:
         return {"result": "FAIL", "reason": f"Cannot derive IP for {dst}", "src": src, "dst": dst}
 
@@ -602,9 +672,14 @@ def check_nodalpath_mpls(token: str, perm: dict) -> dict:
     deadline = time.monotonic() + 120
     attempts = 0
     output = ""
+    nodes = request_json("GET", "/api/v1/state", token=token).get("nodes", [])
+    sat = next(iter(_satellite_nodes(nodes)), None)
+    if sat is None:
+        return {"result": "FAIL", "protocol": "nodalpath", "reason": "no satellites found"}
+    pod_name = sat["node_id"].lower()
     while time.monotonic() < deadline:
         result = subprocess.run(
-            f"{KUBECTL} exec -n nodalarc sat-p00s00 -c frr -- ip -f mpls route show",
+            f"{KUBECTL} exec -n nodalarc {pod_name} -c frr -- ip -f mpls route show",
             capture_output=True,
             text=True,
             timeout=10,
@@ -634,23 +709,20 @@ def check_nodalpath_mpls(token: str, perm: dict) -> dict:
 def _active_ground_pair(token: str) -> tuple[str, str, str] | None:
     state = request_json("GET", "/api/v1/state", token=token)
     nodes = state.get("nodes", [])
+    nodes_by_id = _nodes_by_id(nodes)
     links = state.get("links", [])
     if isinstance(links, dict):
         links = list(links.values())
-    gs_nodes = [n for n in nodes if n.get("node_id", "").startswith("gs-")]
     for link in links:
         if link.get("state") != "active":
             continue
-        a = link.get("node_a", "")
-        b = link.get("node_b", "")
-        if a.startswith("gs-") and b.startswith("sat-"):
-            dst_ip = _derive_loopback_ip(b, gs_nodes)
-            if dst_ip:
-                return a, b, dst_ip
-        if a.startswith("sat-") and b.startswith("gs-"):
-            dst_ip = _derive_loopback_ip(a, gs_nodes)
-            if dst_ip:
-                return b, a, dst_ip
+        pair = _link_as_ground_sat(link, nodes_by_id)
+        if pair is None:
+            continue
+        gs_id, sat_id = pair
+        dst_ip = _node_loopback_ip(sat_id, nodes_by_id)
+        if dst_ip:
+            return gs_id, sat_id, dst_ip
     return None
 
 
@@ -691,7 +763,7 @@ def _run_shell(command: str, *, timeout: int = 20) -> dict:
 def _host_ground_ifname(gs_id: str, gs_ifname: str) -> str:
     if not gs_ifname.startswith("term") or not gs_ifname[4:].isdigit():
         raise ValueError(f"Unsupported ground terminal interface name: {gs_ifname}")
-    return f"_g{int(gs_ifname[4:])}-{gs_id.removeprefix('gs-')}"
+    return gs_bridge_port_name(gs_id, int(gs_ifname[4:]))
 
 
 def _force_ground_host_interface_down(gs_id: str, gs_ifname: str, *, timeout: int = 20) -> dict:
@@ -789,37 +861,21 @@ def _ground_links_by_gs(state: dict) -> dict[str, list[dict]]:
     links = state.get("links", [])
     if isinstance(links, dict):
         links = list(links.values())
+    nodes_by_id = _nodes_by_id(state.get("nodes", []))
     by_gs: dict[str, list[dict]] = {}
     for link in links:
         if link.get("state") != "active":
             continue
-        a = link.get("node_a", "")
-        b = link.get("node_b", "")
-        if a.startswith("gs-") and b.startswith("sat-"):
-            by_gs.setdefault(a, []).append(link)
-        elif b.startswith("gs-") and a.startswith("sat-"):
-            by_gs.setdefault(b, []).append(link)
+        pair = _link_as_ground_sat(link, nodes_by_id)
+        if pair is None:
+            continue
+        gs_id, _sat_id = pair
+        by_gs.setdefault(gs_id, []).append(link)
     return by_gs
 
 
-def _node_loopback_ip(node_id: str) -> str | None:
-    if node_id.startswith("sat-"):
-        return _derive_loopback_ip(node_id, [])
-    out = _kubectl_exec(node_id, "ip -4 -o addr show lo", timeout=10)
-    if out["rc"] != 0:
-        return None
-    for part in out["stdout"].split():
-        if part.startswith("10.255.") and "/" in part:
-            return part.split("/", 1)[0]
-    return None
-
-
 def _ground_node_ids(state: dict) -> list[str]:
-    return sorted(
-        n.get("node_id", "")
-        for n in state.get("nodes", [])
-        if n.get("node_id", "").startswith("gs-")
-    )
+    return sorted(n.get("node_id", "") for n in state.get("nodes", []) if _is_ground_node(n))
 
 
 def _find_routed_ground_probe(
@@ -1343,6 +1399,7 @@ def _active_ground_link_with_interfaces(token: str, *, wait_s: int = 180) -> dic
     deadline = time.monotonic() + wait_s
     while time.monotonic() < deadline:
         state = request_json("GET", "/api/v1/state", token=token)
+        nodes_by_id = _nodes_by_id(state.get("nodes", []))
         decision_snapshot = request_json("GET", "/api/v1/ground-link-decisions", token=token)
         decision_by_pair = {
             tuple(decision.get("pair", [])): decision
@@ -1362,9 +1419,13 @@ def _active_ground_link_with_interfaces(token: str, *, wait_s: int = 180) -> dic
             ib = link.get("interface_b") or ""
             if not ia or not ib:
                 continue
-            if a.startswith("gs-") and b.startswith("sat-"):
+            if _node_id_has_type(a, nodes_by_id, "ground_station") and _node_id_has_type(
+                b, nodes_by_id, "satellite"
+            ):
                 row = {"gs_id": a, "sat_id": b, "gs_ifname": ia, "sat_ifname": ib}
-            elif a.startswith("sat-") and b.startswith("gs-"):
+            elif _node_id_has_type(a, nodes_by_id, "satellite") and _node_id_has_type(
+                b, nodes_by_id, "ground_station"
+            ):
                 row = {"gs_id": b, "sat_id": a, "gs_ifname": ib, "sat_ifname": ia}
             else:
                 continue
@@ -1445,9 +1506,7 @@ def _wait_for_scheduler_actuation_roster(token: str, *, wait_s: int = 180) -> di
     while time.monotonic() < deadline:
         state = request_json("GET", "/api/v1/state", token=token)
         ground_ids = {
-            node.get("node_id")
-            for node in state.get("nodes", [])
-            if str(node.get("node_id", "")).startswith("gs-")
+            node.get("node_id") for node in state.get("nodes", []) if _is_ground_node(node)
         }
         health = request_json("GET", "/api/v1/ops/health", token=token)
         instances = health.get("scheduler_instances", [])
@@ -1648,12 +1707,12 @@ def _wait_for_mbb_overlap(token: str, *, wait_s: int = 600) -> dict:
     next_progress = time.monotonic() + 30
     last_summary: dict = {}
 
-    def pair_for_gs(link: dict, gs_id: str) -> list[str] | None:
+    def pair_for_gs(link: dict, gs_id: str, nodes_by_id: dict[str, dict]) -> list[str] | None:
         a = link.get("node_a", "")
         b = link.get("node_b", "")
-        if a == gs_id and b.startswith("sat-"):
+        if a == gs_id and _node_id_has_type(b, nodes_by_id, "satellite"):
             return [gs_id, b]
-        if b == gs_id and a.startswith("sat-"):
+        if b == gs_id and _node_id_has_type(a, nodes_by_id, "satellite"):
             return [gs_id, a]
         return None
 
@@ -1668,6 +1727,7 @@ def _wait_for_mbb_overlap(token: str, *, wait_s: int = 600) -> dict:
             and len(event.get("successor_pair") or []) == 2
         ]
         state = request_json("GET", "/api/v1/state", token=token)
+        nodes_by_id = _nodes_by_id(state.get("nodes", []))
         by_gs = _ground_links_by_gs(state)
         teardown_candidates = []
         multi_link_candidates = []
@@ -1675,7 +1735,7 @@ def _wait_for_mbb_overlap(token: str, *, wait_s: int = 600) -> dict:
             links_by_pair = {
                 tuple(pair): link
                 for link in links
-                if (pair := pair_for_gs(link, gs_id)) is not None
+                if (pair := pair_for_gs(link, gs_id, nodes_by_id)) is not None
             }
             for link in links:
                 is_teardown = (
@@ -1685,7 +1745,7 @@ def _wait_for_mbb_overlap(token: str, *, wait_s: int = 600) -> dict:
                 )
                 if not is_teardown:
                     continue
-                old_pair = pair_for_gs(link, gs_id)
+                old_pair = pair_for_gs(link, gs_id, nodes_by_id)
                 successor_pair = link.get("successor_pair") or []
                 successor_link = (
                     links_by_pair.get(tuple(successor_pair)) if len(successor_pair) == 2 else None
@@ -1712,7 +1772,12 @@ def _wait_for_mbb_overlap(token: str, *, wait_s: int = 600) -> dict:
             event = overlap_events[0]
             old_pair = list(event["pair"])
             successor_pair = list(event["successor_pair"])
-            gs_id = old_pair[0] if str(old_pair[0]).startswith("gs-") else old_pair[1]
+            if _node_id_has_type(old_pair[0], nodes_by_id, "ground_station"):
+                gs_id = old_pair[0]
+            elif _node_id_has_type(old_pair[1], nodes_by_id, "ground_station"):
+                gs_id = old_pair[1]
+            else:
+                continue
             return {
                 "result": "PASS",
                 "gs_id": gs_id,

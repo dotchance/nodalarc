@@ -13,6 +13,51 @@ export const KM_PER_UNIT = 6371 / EARTH_RADIUS;
 // Vite build-time env vars, then auto-derive from browser hostname.
 const _cfg = (window as any).NODALARC_CONFIG || {};
 const _host = typeof window !== "undefined" ? window.location.hostname : "localhost";
+
+function _numberConfig(name: string, raw: unknown, defaultValue: number): number {
+  if (raw === undefined || raw === null || raw === "") return defaultValue;
+  const parsed = typeof raw === "number" ? raw : Number(raw);
+  if (!Number.isFinite(parsed)) {
+    throw new Error(`invalid numeric UI config ${name}: ${String(raw)}`);
+  }
+  return parsed;
+}
+
+function _booleanConfig(raw: unknown, defaultValue: boolean): boolean {
+  if (raw === undefined || raw === null || raw === "") return defaultValue;
+  if (typeof raw === "boolean") return raw;
+  if (raw === "true") return true;
+  if (raw === "false") return false;
+  throw new Error(`invalid boolean UI config cameraFlyToInstant: ${String(raw)}`);
+}
+
+export const CAMERA_FLY_TO_SPEED_UNITS_PER_SECOND = _numberConfig(
+  "cameraFlyToSpeedUnitsPerSecond",
+  _cfg.cameraFlyToSpeedUnitsPerSecond ?? import.meta.env.VITE_CAMERA_FLY_TO_SPEED_UNITS_PER_SECOND,
+  1800,
+);
+export const CAMERA_FLY_TO_MIN_MS = _numberConfig(
+  "cameraFlyToMinMs",
+  _cfg.cameraFlyToMinMs ?? import.meta.env.VITE_CAMERA_FLY_TO_MIN_MS,
+  450,
+);
+export const CAMERA_FLY_TO_MAX_MS = _numberConfig(
+  "cameraFlyToMaxMs",
+  _cfg.cameraFlyToMaxMs ?? import.meta.env.VITE_CAMERA_FLY_TO_MAX_MS,
+  2200,
+);
+export const CAMERA_FLY_TO_INSTANT = _booleanConfig(
+  _cfg.cameraFlyToInstant ?? import.meta.env.VITE_CAMERA_FLY_TO_INSTANT,
+  false,
+);
+
+if (CAMERA_FLY_TO_SPEED_UNITS_PER_SECOND <= 0) {
+  throw new Error("cameraFlyToSpeedUnitsPerSecond must be > 0");
+}
+if (CAMERA_FLY_TO_MIN_MS < 0 || CAMERA_FLY_TO_MAX_MS < CAMERA_FLY_TO_MIN_MS) {
+  throw new Error("camera fly-to timing must satisfy 0 <= min <= max");
+}
+
 // Dev server (vite): route REST/WS through the page origin so the dev proxy
 // (VITE_DEV_PROXY_TARGET in vite.config.ts) forwards to a live VS-API — same-origin, no
 // CORS, full HMR, no container rebuild. Production keeps host:8080 / NODALARC_CONFIG.

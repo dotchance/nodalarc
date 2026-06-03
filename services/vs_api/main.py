@@ -3212,8 +3212,8 @@ def main() -> None:
         from nodalpath.platform import init_nodalpath_config
 
         init_nodalpath_config(Path("configs/nodalpath.yaml"))
-    except Exception:
-        pass  # Non-fatal — CSPF fallback still works
+    except Exception as exc:
+        raise RuntimeError("failed to initialize NodalPath config") from exc
 
     if args.port is None:
         args.port = get_platform_config().vs_api_http_port

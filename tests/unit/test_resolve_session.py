@@ -155,6 +155,22 @@ def test_terminal_inventory_is_materialized_from_source_satellite_type():
     assert set(first_sat_ifaces).issubset({"isl0", "isl1", "isl2", "isl3"})
 
 
+def test_internal_isl_assignment_respects_source_terminal_roles():
+    data = _segment_session()
+    data["segments"][0]["source"] = "configs/constellations/iridium-66.yaml"
+    data["simulation"]["candidate_limits"] = {"max_pairs_per_rule": 500}
+
+    resolution = resolve_session_with_assets(data)
+    by_type: dict[str, set[str]] = {}
+    for _node_id, assignment in resolution.neighbors:
+        by_type.setdefault(assignment.link_type, set()).add(assignment.interface)
+
+    assert by_type["intra_plane_isl"] <= {"isl0", "isl1"}
+    assert by_type["cross_plane_isl"] <= {"isl2", "isl3"}
+    assert by_type["intra_plane_isl"]
+    assert by_type["cross_plane_isl"]
+
+
 def _site_terminal_session():
     data = _segment_session()
     data["segments"][1]["source"] = {
@@ -362,6 +378,25 @@ def test_ground_segment_handover_override_beats_source_default():
     }
 
     assert set(modes.values()) == {"bbm"}
+
+
+def test_mixed_ground_segments_reject_incompatible_global_scheduling_fields():
+    data = _segment_session()
+    data.pop("scheduling")
+    data["segments"][1]["scheduling"] = {"successor_abort_policy": "hard_release"}
+    data["segments"].append(
+        {
+            "id": "ground-soft",
+            "kind": "ground_set",
+            "source": "configs/ground-stations/sets/demo.yaml",
+            "namespace": "gnd-soft",
+            "reference_body": "earth",
+            "scheduling": {"successor_abort_policy": "soft_retain"},
+        }
+    )
+
+    with pytest.raises(SessionResolutionError, match="incompatible global scheduling fields"):
+        resolve_session_with_assets(data)
 
 
 def test_m1_rejects_access_terminal_media_mismatch_at_resolve_boundary():

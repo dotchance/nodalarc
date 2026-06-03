@@ -376,7 +376,7 @@ def _build_gs_previews(gs_file, gs_stats, addressing, inclination_deg, altitude_
 
     total_steps = gs_stats["total_steps"]
     coverage_steps = gs_stats["coverage_steps"]
-    default_min_elev = gs_file.default_min_elevation_deg or 25.0
+    default_min_elev = gs_file.default_min_elevation_deg
 
     for station in gs_file.stations:
         gs_id = addressing.gs_id(station.name)

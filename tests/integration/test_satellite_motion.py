@@ -48,6 +48,10 @@ def _get_state():
     return resp.json()
 
 
+def _is_satellite(node: dict) -> bool:
+    return node.get("node_type") == "satellite" or node.get("kind") == "satellite"
+
+
 def _wait_for_changed_snapshot(
     changed: Callable[[dict, dict], bool],
     failure_message: str,
@@ -91,7 +95,7 @@ def test_satellite_positions_change(vs_api_available):
             nodes1[nid]["lat_deg"] != nodes2[nid]["lat_deg"]
             or nodes1[nid]["lon_deg"] != nodes2[nid]["lon_deg"]
             for nid in nodes1
-            if nid in nodes2 and nid.startswith("sat-")
+            if nid in nodes2 and _is_satellite(nodes1[nid])
         )
 
     _wait_for_changed_snapshot(
@@ -103,7 +107,7 @@ def test_satellite_positions_change(vs_api_available):
 def test_satellite_plane_slot_populated(vs_api_available):
     """Every satellite must have integer plane and slot; topology view depends on it."""
     snap = _get_state()
-    satellites = [node for node in snap["nodes"] if node["node_id"].startswith("sat-")]
+    satellites = [node for node in snap["nodes"] if _is_satellite(node)]
 
     assert satellites, "state snapshot contained no satellite nodes"
     for node in satellites:

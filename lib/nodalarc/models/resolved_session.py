@@ -66,6 +66,7 @@ class ResolvedTerminalBlock(BaseModel):
     endpoint_role: TerminalRole  # ground | isl | relay
     medium: TerminalMediumLiteral  # rf | optical
     source_terminal_id: NonEmptyReference | None = None
+    link_role: NonEmptyReference | None = None
     count: int = Field(gt=0)
     tracking_capacity: int | None = Field(default=None, gt=0)
     max_range_km: float | None = Field(default=None, gt=0, allow_inf_nan=False)

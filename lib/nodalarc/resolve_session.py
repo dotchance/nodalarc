@@ -94,6 +94,15 @@ from nodalarc.runtime_naming import (
 from nodalarc.runtime_support import RuntimeSupport, UnsupportedFeature, UnsupportedFeatureError
 
 _NORMALIZE_RE = re.compile(r"[^a-z0-9-]+")
+_STATION_SCOPED_GROUND_SCHEDULING_FIELDS = frozenset(
+    {
+        "selection_policy",
+        "handover_policy",
+        "handover_mode",
+        "mbb_overlap_ticks",
+        "mbb_reserve",
+    }
+)
 
 
 class SessionResolutionError(ValueError):
@@ -113,6 +122,7 @@ class ResolvedGroundAssets:
     segment: GroundSegment
     source: str | dict[str, Any]
     config: GroundStationFile
+    default_scheduling: GroundSchedulingConfig | None = None
     station_meta: dict[str, dict[str, Any]] | None = None
     station_scheduling: dict[str, GroundSchedulingConfig] | None = None
 
@@ -620,12 +630,14 @@ def _combine_ground_segments(
     station_meta: dict[str, dict[str, Any]] = {}
     station_scheduling: dict[str, GroundSchedulingConfig] = {}
     seen_runtime_names: set[str] = set()
+    segment_defaults: list[GroundSchedulingConfig] = []
     for asset in ground_assets:
         if not asset.config.stations:
             raise SessionResolutionError(
                 f"ground_set segment {asset.segment.id!r} expands to 0 stations"
             )
         segment_default = _effective_ground_scheduling(cfg, asset.segment, asset.config)
+        segment_defaults.append(segment_default)
         for station in asset.config.stations:
             original_name = str(station.name)
             runtime_name = f"{asset.segment.namespace}-gs-{_normalize_runtime_token(original_name)}"
@@ -697,6 +709,7 @@ def _combine_ground_segments(
         segment=combined_segment,
         source=source,
         config=combined_config,
+        default_scheduling=_runtime_ground_default_from_segments(cfg, tuple(segment_defaults)),
         station_meta=station_meta,
         station_scheduling=station_scheduling,
     )
@@ -706,9 +719,48 @@ def _runtime_ground_default_scheduling(
     cfg: SegmentSessionConfig,
     ground_set: ResolvedGroundAssets,
 ) -> GroundSchedulingConfig:
-    if ground_set.station_scheduling:
-        return next(iter(ground_set.station_scheduling.values()))
+    if ground_set.default_scheduling is not None:
+        return ground_set.default_scheduling
     return _effective_ground_scheduling(cfg, ground_set.segment, ground_set.config)
+
+
+def _runtime_ground_default_from_segments(
+    cfg: SegmentSessionConfig,
+    segment_defaults: tuple[GroundSchedulingConfig, ...],
+) -> GroundSchedulingConfig:
+    """Return the deterministic base policy for the legacy runtime projection.
+
+    Per-ground-node scheduling is the authoritative truth. The old
+    ``SessionConfig`` projection still has a single ``scheduling.ground`` field,
+    so mixed segment defaults are allowed only when they differ in fields that
+    were materialized onto every runtime ground station above. If the mature OME
+    runtime still consumes a field globally, heterogeneous segment values fail
+    loudly here instead of being hidden behind an arbitrary first segment.
+    """
+
+    if cfg.scheduling is not None:
+        return cfg.scheduling.ground
+    if not segment_defaults:
+        raise SessionResolutionError("ground runtime projection has no ground scheduling")
+    if all(default == segment_defaults[0] for default in segment_defaults):
+        return segment_defaults[0]
+    global_signatures = {
+        tuple(
+            sorted(
+                (key, repr(value))
+                for key, value in default.model_dump(mode="python").items()
+                if key not in _STATION_SCOPED_GROUND_SCHEDULING_FIELDS
+            )
+        )
+        for default in segment_defaults
+    }
+    if len(global_signatures) != 1:
+        raise SessionResolutionError(
+            "ground segments declare incompatible global scheduling fields; "
+            "move shared allocator-wide settings to top-level scheduling.ground "
+            "or make them identical across ground segments"
+        )
+    return segment_defaults[0]
 
 
 def _terminal_config_from_satellite(sat: SatelliteNode) -> TerminalConfig:
@@ -938,6 +990,7 @@ def _satellite_terminal_blocks(node_id: str, sat: SatelliteNode, segment_id: str
             endpoint_role="isl",
             medium=terminal.type,
             source_terminal_id=getattr(terminal, "id", None),
+            link_role=getattr(terminal, "role", None),
             count=terminal.count,
             max_range_km=terminal.max_range_km,
             field_of_regard_deg=getattr(terminal, "field_of_regard_deg", None),
@@ -1579,6 +1632,7 @@ def _next_free_interface(
     role: str,
     medium: str | None,
     terminal_id: str | None = None,
+    link_type: str,
     rule_id: str,
 ) -> str:
     blocks = _blocks_for_role(node, role, medium, terminal_id)
@@ -1586,7 +1640,7 @@ def _next_free_interface(
     allowed_indices = {
         index
         for block, index in _concrete_terminal_indices(node, role=role, medium=medium)
-        if block in blocks
+        if block in blocks and _terminal_block_allows_link_type(block, link_type)
     }
     for index in sorted(allowed_indices):
         if index not in taken:
@@ -1596,6 +1650,16 @@ def _next_free_interface(
         f"link_rule {rule_id!r} requires more {role!r} terminals on "
         f"{node.node_id!r} than the resolved terminal inventory provides"
     )
+
+
+def _terminal_block_allows_link_type(block: ResolvedTerminalBlock, link_type: str) -> bool:
+    if block.link_role is None:
+        return True
+    if link_type == "intra_plane_isl":
+        return block.link_role == "intra-plane"
+    if link_type == "cross_plane_isl":
+        return block.link_role == "cross-plane"
+    return True
 
 
 def _add_neighbor_pair(
@@ -1626,6 +1690,7 @@ def _add_neighbor_pair(
         role="isl",
         medium=actual_medium,
         terminal_id=terminal_id_a,
+        link_type=link_type,
         rule_id=rule_id,
     )
     iface_b = _next_free_interface(
@@ -1634,6 +1699,7 @@ def _add_neighbor_pair(
         role="isl",
         medium=actual_medium,
         terminal_id=terminal_id_b,
+        link_type=link_type,
         rule_id=rule_id,
     )
     assignments.append(

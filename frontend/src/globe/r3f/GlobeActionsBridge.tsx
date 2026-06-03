@@ -18,7 +18,13 @@ import { useEffect, useRef, type MutableRefObject } from "react";
 import * as THREE from "three";
 import { useFrame, useThree } from "@react-three/fiber";
 import type { OrbitControls } from "three/addons/controls/OrbitControls.js";
-import { CAMERA_MIN_DISTANCE } from "../../config";
+import {
+  CAMERA_FLY_TO_INSTANT,
+  CAMERA_FLY_TO_MAX_MS,
+  CAMERA_FLY_TO_MIN_MS,
+  CAMERA_FLY_TO_SPEED_UNITS_PER_SECOND,
+  CAMERA_MIN_DISTANCE,
+} from "../../config";
 import { isOccludedBySphere } from "../labels";
 import { getBodyWorldSphere, getNodeBodySphere, getNodeWorldPosition } from "./positions";
 import { EARTH_RADIUS_RENDER } from "./units";
@@ -42,17 +48,38 @@ const _linkA = new THREE.Vector3();
 const _linkB = new THREE.Vector3();
 const _followDir = new THREE.Vector3();
 const _sceneCenter = new THREE.Vector3();
+const _flightPos = new THREE.Vector3();
+const _flightTarget = new THREE.Vector3();
 
 type ActiveFocus =
   | { kind: "body"; bodyId: string; follow: true }
   | { kind: "node"; nodeId: string; follow: boolean }
   | { kind: "link"; nodeA: string; nodeB: string; follow: boolean };
 
+interface CameraFlight {
+  startedAtMs: number;
+  durationMs: number;
+  startPosition: THREE.Vector3;
+  startTarget: THREE.Vector3;
+  endPosition: THREE.Vector3;
+  endTarget: THREE.Vector3;
+}
+
 function focusLabel(focus: ActiveFocus | null): string {
   if (!focus) return "Free";
   if (focus.kind === "body") return focus.bodyId;
   if (focus.kind === "node") return `${focus.nodeId}${focus.follow ? " (follow)" : ""}`;
   return `${focus.nodeA} ↔ ${focus.nodeB}${focus.follow ? " (follow)" : ""}`;
+}
+
+function easeInOutCubic(t: number): number {
+  return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+}
+
+function flightDurationMs(start: THREE.Vector3, end: THREE.Vector3): number {
+  const distance = start.distanceTo(end);
+  const bySpeed = (distance / CAMERA_FLY_TO_SPEED_UNITS_PER_SECOND) * 1000;
+  return Math.min(CAMERA_FLY_TO_MAX_MS, Math.max(CAMERA_FLY_TO_MIN_MS, bySpeed));
 }
 
 function sceneFrameToFocusFrame(sceneFrame: CameraSceneFrame): FocusFrame {
@@ -82,6 +109,7 @@ export function GlobeActionsBridge({
   const sizeRef = useRef(size);
   sizeRef.current = size;
   const focusRef = useRef<ActiveFocus | null>(null);
+  const flightRef = useRef<CameraFlight | null>(null);
   const sceneFrameRef = useRef(sceneFrame);
   sceneFrameRef.current = sceneFrame;
 
@@ -111,9 +139,23 @@ export function GlobeActionsBridge({
     const target = frame.center.clone();
     const dist = distance ?? focusDistanceForFrame(frame, floor);
     cameraDirectionFromTarget(camera.position, target, _dirA);
-    controls?.target.copy(target);
-    camera.position.copy(target).add(_dirA.multiplyScalar(dist));
-    controls?.update();
+    const endPosition = target.clone().add(_dirA.multiplyScalar(dist));
+    const startTarget = controls?.target.clone() ?? target.clone();
+    if (CAMERA_FLY_TO_INSTANT) {
+      flightRef.current = null;
+      controls?.target.copy(target);
+      camera.position.copy(endPosition);
+      controls?.update();
+      return;
+    }
+    flightRef.current = {
+      startedAtMs: performance.now(),
+      durationMs: flightDurationMs(camera.position, endPosition),
+      startPosition: camera.position.clone(),
+      startTarget,
+      endPosition,
+      endTarget: target,
+    };
   };
 
   const setFocus = (
@@ -173,10 +215,28 @@ export function GlobeActionsBridge({
         onFocusChange?.("Scene");
         const controls = controlsRef.current;
         const frame = sceneFrameToFocusFrame(sceneFrameRef.current);
-        camera.position.set(frame.center.x, frame.center.y + sceneFitDistance, frame.center.z);
-        camera.lookAt(frame.center);
-        controls?.target.copy(frame.center);
-        controls?.update();
+        const target = frame.center.clone();
+        const endPosition = new THREE.Vector3(
+          frame.center.x,
+          frame.center.y + sceneFitDistance,
+          frame.center.z,
+        );
+        if (CAMERA_FLY_TO_INSTANT) {
+          flightRef.current = null;
+          camera.position.copy(endPosition);
+          camera.lookAt(target);
+          controls?.target.copy(target);
+          controls?.update();
+        } else {
+          flightRef.current = {
+            startedAtMs: performance.now(),
+            durationMs: flightDurationMs(camera.position, endPosition),
+            startPosition: camera.position.clone(),
+            startTarget: controls?.target.clone() ?? target.clone(),
+            endPosition,
+            endTarget: target,
+          };
+        }
       },
       setFollowTarget: (nodeId: string | null) => {
         if (nodeId === null) {
@@ -259,6 +319,28 @@ export function GlobeActionsBridge({
   // operator's current orbit direction and dolly distance. This is the STK-style "reference
   // point" behavior; free/orbit views keep whatever OrbitControls target the operator panned to.
   useFrame(() => {
+    const flight = flightRef.current;
+    if (flight) {
+      const controls = controlsRef.current;
+      const elapsed = performance.now() - flight.startedAtMs;
+      const raw = flight.durationMs <= 0 ? 1 : Math.min(1, elapsed / flight.durationMs);
+      const t = easeInOutCubic(raw);
+      _flightTarget.lerpVectors(flight.startTarget, flight.endTarget, t);
+      _flightPos.lerpVectors(flight.startPosition, flight.endPosition, t);
+      controls?.target.copy(_flightTarget);
+      camera.position.copy(_flightPos);
+      camera.lookAt(_flightTarget);
+      controls?.update();
+      if (raw >= 1) {
+        controls?.target.copy(flight.endTarget);
+        camera.position.copy(flight.endPosition);
+        camera.lookAt(flight.endTarget);
+        controls?.update();
+        flightRef.current = null;
+      }
+      return;
+    }
+
     const focus = focusRef.current;
     if (!focus?.follow) return;
     const frame = resolveFocusFrame(focus);

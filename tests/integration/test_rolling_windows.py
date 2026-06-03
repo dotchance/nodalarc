@@ -13,13 +13,27 @@ import json
 from pathlib import Path
 
 import pytest
-from ome.propagator import orbital_period
+from nodalarc.body_frames import body_frame_for
+from nodalarc.orbital import elements_from_params_for_radius
+from nodalarc.propagator import orbital_period_for_body
 
 from tests.conftest import build_segment_session_dict
 
 pytestmark = pytest.mark.integration
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent
+
+
+def _custom_example_period_s() -> float:
+    body_frame = body_frame_for("earth")
+    elements = elements_from_params_for_radius(
+        altitude_km=550.0,
+        inclination_deg=53.0,
+        raan_deg=0.0,
+        true_anomaly_deg=0.0,
+        radius_km=body_frame.equatorial_radius_km,
+    )
+    return orbital_period_for_body(elements, body_frame)
 
 
 def _optical_ground_stations() -> dict:
@@ -96,9 +110,9 @@ class TestSingleWindowCoverage:
         assert events[0]["timestamp_s"] == 0.0
 
     def test_timeline_ends_at_orbital_period(self, four_node_timeline):
-        """Timeline duration matches orbital_period() for 550 km altitude."""
+        """Timeline duration matches the resolved body-frame orbital period."""
         events = _load_events(four_node_timeline)
-        expected_period = orbital_period(550.0)
+        expected_period = _custom_example_period_s()
         last_timestamp = max(e["timestamp_s"] for e in events)
         # Allow ±1 step tolerance (step_seconds=1 for custom-example)
         assert abs(last_timestamp - expected_period) < 2.0, (
@@ -122,7 +136,7 @@ class TestSingleWindowCoverage:
     def test_events_span_full_duration(self, four_node_timeline):
         """All event types occur across the full timeline duration."""
         events = _load_events(four_node_timeline)
-        period = orbital_period(550.0)
+        period = _custom_example_period_s()
 
         # Clock ticks should span from 0 to ~period
         clock_ts = [e["timestamp_s"] for e in events if e["event_type"] == "ClockTick"]

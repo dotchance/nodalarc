@@ -133,7 +133,7 @@ The terminal is not decorative. This is one shell into one real routing instance
 
 ![FRR terminal showing show isis neighbor output](docs/images/readme-router-cli.png)
 
-### 6. Route Across Orbital And Lunar Segments
+### 6. Experiment Across Orbital And Lunar Segments
 
 Sessions can assemble independent building blocks into one emulated network: LEO, MEO, GEO, cislunar relay, lunar relay, and surface ground nodes all keep their own segment identity while sharing one live routing experiment.
 
@@ -151,7 +151,8 @@ Once the system is running, you can:
 - change altitude, inclination, plane count, phase offset, and satellite terminal models
 - move ground stations and see what reachability you bought or lost
 - run `ping`, `traceroute`, and `iperf` through the emulated constellation
-- trace paths across multi-segment sessions such as Earth LEO/MEO/GEO through a cislunar relay to a lunar relay and lunar surface node
+- inspect routing attempts across multi-segment sessions such as Earth LEO/MEO/GEO,
+  cislunar relay, lunar relay, and lunar surface nodes
 - open a browser terminal to any satellite or ground station and use `vtysh`
 - script experiments through the REST and WebSocket APIs
 - connect external systems to the emulation and watch how they behave

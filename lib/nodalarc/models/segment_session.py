@@ -2,7 +2,7 @@
 # Licensed under the Apache License, Version 2.0. See LICENSE file.
 """Segment-based session grammar — the new top-level session shape.
 
-``segments`` + ``link_rules`` replace the legacy single ``constellation`` +
+``segments`` + ``link_rules`` replace the old single ``constellation`` +
 ``ground_stations`` fields. This module is the structural envelope only; it
 reuses the existing session config models (``SimulationConfig``, ``OrbitConfig``,
 ``RoutingConfig``, …) verbatim so there is one simulation/orbit/routing contract.

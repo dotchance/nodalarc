@@ -7,7 +7,8 @@ Scheduler, Operator, VS-API, MI, and coverage preview. The model self-defends th
 runtime truth it can validate locally: immutable config, concrete node identity,
 materialized terminal inventory, disjoint SID blocks, and resolved link-rule
 node sets. Consumer cutover happens in the resolver implementation; until that
-lands, existing services still consume legacy ``SessionConfig`` paths.
+lands, existing services still consume the resolver's internal ``SessionConfig``
+runtime projection.
 """
 
 from typing import Literal

@@ -182,7 +182,7 @@ class RoutingConfig(BaseModel):
     # known long-form aliases are accepted, unknown values rejected (never
     # silently dropped). See _normalize_extensions.
     extensions: tuple[str, ...] = ()
-    stack: NonEmptyReference | None = None  # Unsupported legacy path; rejected below.
+    stack: NonEmptyReference | None = None  # Unsupported split routing path; rejected below.
     compression_factor: int = Field(default=1, gt=0)
     config_overrides: ImmutableStrDict = Field(default_factory=FrozenDict)
     area_assignment: AreaAssignmentConfig | None = None
@@ -302,7 +302,7 @@ class SimulationConfig(BaseModel):
     acknowledge_geometry_only: bool = False
     acknowledge_bbm_handover_gap: bool = False
     actuation: ActuationConfig = Field(default_factory=ActuationConfig)
-    # Required for multi-segment sessions; unused (None) on legacy single-constellation.
+    # Required for segment sessions; optional on internal one-constellation projections.
     candidate_limits: CandidateLimits | None = None
 
     @field_validator("schema_version")
@@ -667,9 +667,9 @@ class SessionConfig(BaseModel):
     contain the intended satellite type and this field is ignored.
     """
 
-    # Not frozen: this is the legacy session-input model that tests/tools mutate
-    # and that the resolver only consumes as a migration input. The resolved
-    # runtime contract is ResolvedSession (frozen), not this model.
+    # Not frozen: this is the resolver's internal runtime projection. Product
+    # session YAML uses SegmentSessionConfig; the authoritative frozen runtime
+    # contract is ResolvedSession, not this model.
     model_config = ConfigDict(extra="forbid")
 
     session: SessionMeta

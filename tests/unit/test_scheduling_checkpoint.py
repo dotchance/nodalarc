@@ -214,3 +214,38 @@ def test_incompatible_retained_checkpoint_decodes_as_clean_start():
 
     payload = gzip.compress(json.dumps(old_schema).encode())
     assert decode_retained_scheduling_checkpoint(payload) is None
+
+
+def test_recovered_checkpoint_accepts_extended_wall_clock_gap():
+    """A valid checkpoint remains the simulation-lineage authority after downtime."""
+    from ome.main import _validate_recovered_checkpoint
+
+    ckpt = _checkpoint(written_at=1_000.0, step=4, snapshot_seq=8)
+
+    assert _validate_recovered_checkpoint(ckpt, now_wall_s=1_900.0) == 900.0
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "match"),
+    [
+        ("written_at", 0.0, "invalid written_at"),
+        ("step", -1, "negative step"),
+        ("snapshot_seq", 0, "invalid snapshot_seq"),
+    ],
+)
+def test_recovered_checkpoint_rejects_invalid_lineage_fields(field, value, match):
+    from ome.main import _validate_recovered_checkpoint
+
+    ckpt = _checkpoint(**{field: value})
+
+    with pytest.raises(RuntimeError, match=match):
+        _validate_recovered_checkpoint(ckpt, now_wall_s=2_000.0)
+
+
+def test_recovered_checkpoint_rejects_future_written_at():
+    from ome.main import _validate_recovered_checkpoint
+
+    ckpt = _checkpoint(written_at=2_000.0)
+
+    with pytest.raises(RuntimeError, match="future"):
+        _validate_recovered_checkpoint(ckpt, now_wall_s=1_999.0)

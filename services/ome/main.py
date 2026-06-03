@@ -24,7 +24,7 @@ from nodalarc.constellation_loader import SatelliteNode, satellite_node_id
 from nodalarc.link_metadata import LinkRuleMetadata, build_link_metadata_maps
 from nodalarc.models.addressing import AddressingScheme
 from nodalarc.models.constellation import ConstellationConfig
-from nodalarc.models.events import OpsEvent, PlaybackControlCommand
+from nodalarc.models.events import OpsEvent, PlaybackControlCommand, SchedulingCheckpoint
 from nodalarc.models.ground_station import GroundStationFile
 from nodalarc.models.ome_lifecycle import (
     MbbPairAuthority,
@@ -68,6 +68,33 @@ class _SessionBundle(NamedTuple):
     node_metadata: dict[str, dict[str, object]]
     body_ephemeris: object | None
     active_bodies: frozenset[str]
+
+
+def _validate_recovered_checkpoint(
+    checkpoint: SchedulingCheckpoint,
+    *,
+    now_wall_s: float,
+) -> float:
+    """Validate retained checkpoint metadata and return its wall-clock age.
+
+    Wall-clock age is diagnostic, not an authority boundary. The checkpoint's
+    sim_time/step/seq are the retained session lineage; if the service was down
+    for a long period, OME resumes from that lineage and logs the gap instead of
+    inventing elapsed simulation time.
+    """
+
+    written_at = float(checkpoint.written_at)
+    if written_at <= 0:
+        raise RuntimeError("Recovered checkpoint has invalid written_at; refusing recovery")
+    if int(checkpoint.step) < 0:
+        raise RuntimeError("Recovered checkpoint has negative step; refusing recovery")
+    if int(checkpoint.snapshot_seq) <= 0:
+        raise RuntimeError("Recovered checkpoint has invalid snapshot_seq; refusing recovery")
+
+    checkpoint_age = now_wall_s - written_at
+    if checkpoint_age < 0:
+        raise RuntimeError("Recovered checkpoint written_at is in the future; refusing recovery")
+    return checkpoint_age
 
 
 def _load_session_config(session_path: str | Path) -> _SessionBundle:
@@ -1106,8 +1133,10 @@ def _run_pacing(
     # Try to read the retained SchedulingCheckpoint from JetStream.
     # If a checkpoint exists, it is the session-lineage authority for epoch,
     # snapshot sequence, simulation step, and playback state. We do not ignore
-    # malformed or stale retained state because that can make the event stream
-    # look healthy while silently regressing simulation state.
+    # malformed retained state because that can make the event stream look
+    # healthy while silently regressing simulation state. A valid checkpoint
+    # remains authoritative across wall-clock gaps; recovery resumes from it
+    # instead of inventing elapsed sim_time while the service was down.
     recovered_checkpoint = None
     try:
         import asyncio as _aio
@@ -1155,32 +1184,11 @@ def _run_pacing(
             "OME checkpoint recovery failed; refusing to start from unknown state"
         ) from exc
 
-    # Checkpoint staleness threshold: if the OME was down for more than 30
-    # seconds (measured by wall clock, not sim_time), fail loudly. Starting
-    # fresh on the same retained subjects would reset session-lineage sequence
-    # state and make downstream consumers distinguish truth from restart luck.
-    _CHECKPOINT_STALENESS_THRESHOLD_S = 30.0
-
     if recovered_checkpoint:
-        if recovered_checkpoint.written_at <= 0:
-            raise RuntimeError("Recovered checkpoint has invalid written_at; refusing recovery")
-        if recovered_checkpoint.step < 0:
-            raise RuntimeError("Recovered checkpoint has negative step; refusing recovery")
-        if recovered_checkpoint.snapshot_seq <= 0:
-            raise RuntimeError("Recovered checkpoint has invalid snapshot_seq; refusing recovery")
-
-        checkpoint_age = time.time() - recovered_checkpoint.written_at
-        if checkpoint_age < 0:
-            raise RuntimeError(
-                "Recovered checkpoint written_at is in the future; refusing recovery"
-            )
-        if checkpoint_age > _CHECKPOINT_STALENESS_THRESHOLD_S:
-            raise RuntimeError(
-                "Recovered checkpoint is stale "
-                f"(age={checkpoint_age:.1f}s > {_CHECKPOINT_STALENESS_THRESHOLD_S:.1f}s); "
-                "refusing to reset session state"
-            )
-
+        checkpoint_age = _validate_recovered_checkpoint(
+            recovered_checkpoint,
+            now_wall_s=time.time(),
+        )
         step = recovered_checkpoint.step
         snapshot_seq = recovered_checkpoint.snapshot_seq
         _epoch_id = recovered_checkpoint.epoch_id
@@ -1195,6 +1203,25 @@ def _run_pacing(
             snapshot_seq,
             recovered_checkpoint.sim_time.isoformat(),
         )
+        if checkpoint_age > 30.0:
+            logging.warning(
+                "Recovered checkpoint after extended wall-clock gap "
+                "(age=%.1fs, step=%d, seq=%d, sim=%s); simulation resumes from "
+                "the retained checkpoint instead of inventing elapsed sim_time",
+                checkpoint_age,
+                step,
+                snapshot_seq,
+                recovered_checkpoint.sim_time.isoformat(),
+                extra={
+                    "code": "CHECKPOINT_RECOVERY_DELAY",
+                    "details": {
+                        "age_s": checkpoint_age,
+                        "step": step,
+                        "snapshot_seq": snapshot_seq,
+                        "sim_time": recovered_checkpoint.sim_time.isoformat(),
+                    },
+                },
+            )
     else:
         logging.info("No checkpoint found — starting from epoch")
 

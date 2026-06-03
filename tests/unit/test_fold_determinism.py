@@ -28,7 +28,15 @@ def _load_test_session():
     satellites = list(resolution.primary_constellation.satellites)
     addressing = resolution.addressing
     neighbors = assign_isl_neighbors(constellation_config, addressing)
-    return session, constellation_config, gs_file, satellites, addressing, neighbors
+    return (
+        session,
+        constellation_config,
+        gs_file,
+        satellites,
+        addressing,
+        neighbors,
+        dict(resolution.ground_candidate_satellites_by_gs),
+    )
 
 
 class TestFoldDeterminism:
@@ -36,7 +44,7 @@ class TestFoldDeterminism:
 
     def test_fold_determinism_60s(self):
         """60 sim-seconds: batch window vs tick-by-tick produce identical events."""
-        session, _cc, gs_file, sats, addressing, neighbors = _load_test_session()
+        session, _cc, gs_file, sats, addressing, neighbors, ground_candidates = _load_test_session()
         epoch_unix = 1704067200.0
         n_steps = 60
         step_seconds = session.time.step_seconds
@@ -50,6 +58,7 @@ class TestFoldDeterminism:
             duration_s=n_steps * step_seconds,
             propagator_id=session.orbit.propagator,
             ground_scheduling=session.scheduling.ground,
+            ground_candidate_satellites_by_gs=ground_candidates,
             step_seconds=step_seconds,
         )
         window_events = window.events
@@ -61,6 +70,7 @@ class TestFoldDeterminism:
             neighbors=neighbors,
             propagator_id=session.orbit.propagator,
             ground_scheduling=session.scheduling.ground,
+            ground_candidate_satellites_by_gs=ground_candidates,
         )
         isl_state: dict = {}
         gs_state: dict = {}
@@ -91,7 +101,7 @@ class TestFoldDeterminism:
 
     def test_seek_resets_associations(self):
         """After simulating a seek (clearing state), first tick has no discount."""
-        session, _cc, gs_file, sats, addressing, neighbors = _load_test_session()
+        session, _cc, gs_file, sats, addressing, neighbors, ground_candidates = _load_test_session()
         epoch_unix = 1704067200.0
         step_seconds = session.time.step_seconds
 
@@ -102,6 +112,7 @@ class TestFoldDeterminism:
             neighbors=neighbors,
             propagator_id=session.orbit.propagator,
             ground_scheduling=session.scheduling.ground,
+            ground_candidate_satellites_by_gs=ground_candidates,
         )
 
         # Run 10 ticks to build up association state
@@ -160,7 +171,7 @@ class TestFoldDeterminism:
     def test_look_ahead_matches_realtime(self):
         """NON-NEGOTIABLE GATE: look-ahead window and tick-by-tick produce
         bit-for-bit identical event sequences from the same seed."""
-        session, _cc, gs_file, sats, addressing, neighbors = _load_test_session()
+        session, _cc, gs_file, sats, addressing, neighbors, ground_candidates = _load_test_session()
         epoch_unix = 1704067200.0
         n_steps = 120
         step_seconds = session.time.step_seconds
@@ -173,6 +184,7 @@ class TestFoldDeterminism:
             neighbors=neighbors,
             propagator_id=session.orbit.propagator,
             ground_scheduling=session.scheduling.ground,
+            ground_candidate_satellites_by_gs=ground_candidates,
         )
         seed_isl: dict = {}
         seed_gs: dict = {}
@@ -202,6 +214,7 @@ class TestFoldDeterminism:
             duration_s=n_steps * step_seconds,
             propagator_id=session.orbit.propagator,
             ground_scheduling=session.scheduling.ground,
+            ground_candidate_satellites_by_gs=ground_candidates,
             step_seconds=step_seconds,
             initial_isl_state=dict(seed_isl),
             initial_gs_state=dict(seed_gs),
@@ -247,7 +260,7 @@ class TestFoldDeterminism:
         identical events to a continuous run; (c) hysteresis discount
         survives the boundary.
         """
-        session, _cc, gs_file, sats, addressing, neighbors = _load_test_session()
+        session, _cc, gs_file, sats, addressing, neighbors, ground_candidates = _load_test_session()
         epoch_unix = 1704067200.0
         step_seconds = session.time.step_seconds
         boundary = 30
@@ -259,6 +272,7 @@ class TestFoldDeterminism:
             neighbors=neighbors,
             propagator_id=session.orbit.propagator,
             ground_scheduling=session.scheduling.ground,
+            ground_candidate_satellites_by_gs=ground_candidates,
         )
 
         # --- Path A: continuous 60 ticks ---

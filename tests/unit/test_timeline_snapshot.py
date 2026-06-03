@@ -78,6 +78,9 @@ def four_node_timeline():
         propagator_id="keplerian-circular",
         step_seconds=10,
         ground_scheduling=_ground_scheduling(),
+        ground_candidate_satellites_by_gs={
+            "gs-equator": tuple(addressing.sat_id(sat.plane, sat.slot) for sat in sats)
+        },
     )
     return events
 

@@ -31,14 +31,21 @@ def _load_test_session():
     satellites = list(resolution.primary_constellation.satellites)
     addressing = resolution.addressing
     neighbors = assign_isl_neighbors(constellation_config, addressing)
-    return session, gs_file, satellites, addressing, neighbors
+    return (
+        session,
+        gs_file,
+        satellites,
+        addressing,
+        neighbors,
+        dict(resolution.ground_candidate_satellites_by_gs),
+    )
 
 
 class TestAllocationContractInvariants:
     """Run 120 ticks with hysteresis and verify invariants on every tick."""
 
     def test_capacity_invariants_120_ticks(self):
-        session, gs_file, sats, addressing, neighbors = _load_test_session()
+        session, gs_file, sats, addressing, neighbors, ground_candidates = _load_test_session()
         epoch_unix = 1704067200.0
         step_seconds = session.time.step_seconds
 
@@ -49,6 +56,7 @@ class TestAllocationContractInvariants:
             neighbors=neighbors,
             propagator_id=session.orbit.propagator,
             ground_scheduling=session.scheduling.ground,
+            ground_candidate_satellites_by_gs=ground_candidates,
         )
 
         isl_state: dict = {}
@@ -93,7 +101,7 @@ class TestAllocationContractInvariants:
 
     def test_associations_are_feasible(self):
         """Every allocated pair must be geometrically visible at that tick."""
-        session, gs_file, sats, addressing, neighbors = _load_test_session()
+        session, gs_file, sats, addressing, neighbors, ground_candidates = _load_test_session()
         epoch_unix = 1704067200.0
         step_seconds = session.time.step_seconds
 
@@ -104,6 +112,7 @@ class TestAllocationContractInvariants:
             neighbors=neighbors,
             propagator_id=session.orbit.propagator,
             ground_scheduling=session.scheduling.ground,
+            ground_candidate_satellites_by_gs=ground_candidates,
         )
 
         isl_state: dict = {}
@@ -135,7 +144,7 @@ class TestAllocationContractInvariants:
     def test_hysteresis_reduces_flapping(self):
         """With hysteresis active, there should be fewer handover events
         than without (amnesiac). This is a statistical check, not absolute."""
-        session, gs_file, sats, addressing, neighbors = _load_test_session()
+        session, gs_file, sats, addressing, neighbors, ground_candidates = _load_test_session()
         epoch_unix = 1704067200.0
         step_seconds = session.time.step_seconds
         n_steps = 120
@@ -147,6 +156,7 @@ class TestAllocationContractInvariants:
             neighbors=neighbors,
             propagator_id=session.orbit.propagator,
             ground_scheduling=session.scheduling.ground,
+            ground_candidate_satellites_by_gs=ground_candidates,
         )
 
         # Run with hysteresis (stateful fold)

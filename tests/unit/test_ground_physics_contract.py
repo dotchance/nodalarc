@@ -250,6 +250,7 @@ def test_compute_step_schedules_only_pairs_that_pass_applied_ground_physics():
         propagator_id="keplerian-circular",
         ground_scheduling=_ground_scheduling(),
         ground_link_model="terminal_physics",
+        ground_candidate_satellites_by_gs={"gs-overhead": ("sat-P00S00",)},
     )
 
     pair = ("gs-overhead", "sat-P00S00")

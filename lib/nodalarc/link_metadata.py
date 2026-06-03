@@ -143,15 +143,17 @@ def build_link_metadata_maps(
     for station in gs_file.stations:
         gs_id = addressing.gs_id(station.name)
         if ground_candidate_satellites_by_gs is None:
-            candidate_sat_ids = tuple(satellite_node_id(sat, addressing) for sat in satellites)
-        else:
-            if gs_id not in ground_candidate_satellites_by_gs:
-                raise ValueError(
-                    f"Ground station {gs_id!r} missing from declared ground-link candidate map"
-                )
-            candidate_sat_ids = tuple(ground_candidate_satellites_by_gs[gs_id])
-            if not candidate_sat_ids:
-                continue
+            raise ValueError(
+                "Link metadata requires a declared ground-link candidate map "
+                "when ground stations exist"
+            )
+        if gs_id not in ground_candidate_satellites_by_gs:
+            raise ValueError(
+                f"Ground station {gs_id!r} missing from declared ground-link candidate map"
+            )
+        candidate_sat_ids = tuple(ground_candidate_satellites_by_gs[gs_id])
+        if not candidate_sat_ids:
+            continue
         gs_type = station_ground_terminal_type(gs_file, station)
         for sat_id in candidate_sat_ids:
             if sat_id not in sats_by_id:

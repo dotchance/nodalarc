@@ -56,7 +56,7 @@ def test_lookahead_submit_and_get_result():
     # Use a trivial computation via the real precompute_timeline_window
     from tests.unit.test_compute_step import _load_test_session
 
-    session, cc, gs_file, sats, addressing, neighbors = _load_test_session()
+    session, cc, gs_file, sats, addressing, neighbors, ground_candidates = _load_test_session()
 
     from ome.event_stream import build_step_context
 
@@ -67,6 +67,7 @@ def test_lookahead_submit_and_get_result():
         neighbors=neighbors,
         propagator_id=session.orbit.propagator,
         ground_scheduling=session.scheduling.ground,
+        ground_candidate_satellites_by_gs=ground_candidates,
     )
 
     la.submit(
@@ -95,7 +96,7 @@ def test_lookahead_cancel_discards_result():
 
     from tests.unit.test_compute_step import _load_test_session
 
-    session, cc, gs_file, sats, addressing, neighbors = _load_test_session()
+    session, cc, gs_file, sats, addressing, neighbors, ground_candidates = _load_test_session()
 
     from ome.event_stream import build_step_context
 
@@ -106,6 +107,7 @@ def test_lookahead_cancel_discards_result():
         neighbors=neighbors,
         propagator_id=session.orbit.propagator,
         ground_scheduling=session.scheduling.ground,
+        ground_candidate_satellites_by_gs=ground_candidates,
     )
 
     la.submit(
@@ -133,7 +135,7 @@ def test_lookahead_is_ready():
 
     from tests.unit.test_compute_step import _load_test_session
 
-    session, cc, gs_file, sats, addressing, neighbors = _load_test_session()
+    session, cc, gs_file, sats, addressing, neighbors, ground_candidates = _load_test_session()
 
     from ome.event_stream import build_step_context
 
@@ -144,6 +146,7 @@ def test_lookahead_is_ready():
         neighbors=neighbors,
         propagator_id=session.orbit.propagator,
         ground_scheduling=session.scheduling.ground,
+        ground_candidate_satellites_by_gs=ground_candidates,
     )
 
     assert not la.is_ready()

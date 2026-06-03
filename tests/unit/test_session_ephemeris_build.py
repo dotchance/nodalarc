@@ -58,6 +58,7 @@ def _load_test_ctx():
         neighbors=neighbors,
         propagator_id=session.orbit.propagator,
         ground_scheduling=session.scheduling.ground,
+        ground_candidate_satellites_by_gs=resolution.ground_candidate_satellites_by_gs,
     )
     return ctx, sats, gs_file
 
@@ -87,6 +88,7 @@ class TestBuildSessionEphemeris:
             neighbors=frozenset(),
             propagator_id="j2-mean-elements",
             ground_scheduling=_ground_scheduling(),
+            ground_candidate_satellites_by_gs=ctx.ground_candidate_satellites_by_gs,
         )
         eph = build_session_ephemeris(ctx, EPOCH, epoch_id=0)
         sat = eph.nodes["space-sat-p00s00"]
@@ -153,6 +155,7 @@ class TestBuildSessionEphemeris:
             neighbors=frozenset(),
             propagator_id=ctx.propagator_id,
             ground_scheduling=_ground_scheduling(),
+            ground_candidate_satellites_by_gs=ctx.ground_candidate_satellites_by_gs,
             node_metadata={
                 sat_id: {
                     "segment_id": "leo",

@@ -40,11 +40,15 @@ def _state(node_id: str, geo: GeoPosition, velocity: Vec3 | None = None) -> Prop
     )
 
 
-def _gs_default_kwargs(gs_id: str = "gs-equator") -> dict:
+def _gs_default_kwargs(
+    gs_id: str = "gs-equator",
+    sat_ids: tuple[str, ...] = ("sat-a",),
+) -> dict:
     """Minimum per-GS context required by Direction 2 + Direction 3."""
     return {
         "gs_tenant_ids": {gs_id: "default"},
         "gs_reference_bodies": {gs_id: "earth"},
+        "candidate_satellite_ids_by_gs": {gs_id: sat_ids},
     }
 
 
@@ -194,7 +198,7 @@ def test_ground_visibility_missing_propagated_state_fails_loudly():
             sat_states={},
             gs_positions={"gs-equator": (geodetic_to_ecef(gs_geo), gs_geo)},
             gs_min_elevations={"gs-equator": 25.0},
-            **_gs_default_kwargs(),
+            **_gs_default_kwargs(sat_ids=("sat-missing",)),
             **_physical_kwargs(sat_id="sat-missing"),
         )
 
@@ -210,6 +214,7 @@ def test_ground_visibility_missing_tenant_fails_loudly():
             gs_min_elevations={"gs-equator": 25.0},
             gs_tenant_ids={},
             gs_reference_bodies={"gs-equator": "earth"},
+            candidate_satellite_ids_by_gs={"gs-equator": ("sat-a",)},
         )
 
 
@@ -224,6 +229,7 @@ def test_ground_visibility_missing_reference_body_fails_loudly():
             gs_min_elevations={"gs-equator": 25.0},
             gs_tenant_ids={"gs-equator": "default"},
             gs_reference_bodies={},
+            candidate_satellite_ids_by_gs={"gs-equator": ("sat-a",)},
         )
 
 
@@ -288,7 +294,7 @@ def test_longest_remaining_pass_lookahead_uses_real_propagation():
             ground_link_model="geometry_only",
         ),
         ground_link_model="geometry_only",
-        **_gs_default_kwargs(gs_id),
+        **_gs_default_kwargs(gs_id, sat_ids=(sat_id,)),
     )
 
     pair = (gs_id, sat_id)
@@ -382,7 +388,7 @@ def test_longest_remaining_pass_populates_sampled_dwell(monkeypatch):
             ground_link_model="geometry_only",
         ),
         ground_link_model="geometry_only",
-        **_gs_default_kwargs(),
+        **_gs_default_kwargs(sat_ids=("sat-short", "sat-long")),
     )
 
     remaining = {
@@ -469,6 +475,10 @@ def test_longest_remaining_pass_uses_each_ground_station_horizon(monkeypatch):
             ground_link_model="geometry_only",
         ),
         ground_link_model="geometry_only",
+        candidate_satellite_ids_by_gs={
+            "gs-short": ("sat-a",),
+            "gs-long": ("sat-a",),
+        },
     )
 
     assert result.visible_per_station["gs-short"][0].remaining_visible_s == 1.0
@@ -575,6 +585,7 @@ def test_satellite_profiles_select_matching_target_body_for_cislunar_relay():
                 ),
             )
         },
+        candidate_satellite_ids_by_gs={gs_id: (sat_id,)},
     )
 
     decision = result.decisions[(gs_id, sat_id)]
@@ -673,6 +684,7 @@ satellite_type:
         propagator_id="keplerian-circular",
         ground_scheduling=_ground_scheduling(),
         ground_link_model="terminal_physics",
+        ground_candidate_satellites_by_gs={addressing.gs_id("luna"): (addressing.sat_id(0, 0),)},
     )
 
     sat_id = addressing.sat_id(0, 0)
@@ -698,6 +710,7 @@ satellite_type:
         ground_link_model="terminal_physics",
         gs_terminal_profiles=ctx.gs_terminal_profiles,
         sat_ground_terminal_profiles=ctx.sat_ground_terminal_profiles,
+        candidate_satellite_ids_by_gs=ctx.ground_candidate_satellites_by_gs,
     )
 
     decision = result.decisions[(gs_id, sat_id)]

@@ -464,26 +464,27 @@ def build_step_context(
             gs_tenant_ids[node_id] = station.tenant_id
             gs_reference_bodies[node_id] = station.reference_body
 
-        all_sat_ids = tuple(sorted(sat_ground_terminal_types))
         if ground_candidate_satellites_by_gs is None:
-            declared_ground_candidates = dict.fromkeys(sorted(gs_terminal_types), all_sat_ids)
-        else:
-            missing = sorted(set(gs_terminal_types) - set(ground_candidate_satellites_by_gs))
-            extra = sorted(set(ground_candidate_satellites_by_gs) - set(gs_terminal_types))
-            if missing or extra:
+            raise ValueError(
+                "build_step_context requires a declared ground-link candidate map "
+                "when ground stations exist"
+            )
+        missing = sorted(set(gs_terminal_types) - set(ground_candidate_satellites_by_gs))
+        extra = sorted(set(ground_candidate_satellites_by_gs) - set(gs_terminal_types))
+        if missing or extra:
+            raise ValueError(
+                "Ground candidate map does not match ground station universe: "
+                f"missing={missing}, extra={extra}"
+            )
+        for gs_id in sorted(gs_terminal_types):
+            candidates = tuple(ground_candidate_satellites_by_gs[gs_id])
+            unknown = sorted(set(candidates) - set(sat_ground_terminal_types))
+            if unknown:
                 raise ValueError(
-                    "Ground candidate map does not match ground station universe: "
-                    f"missing={missing}, extra={extra}"
+                    f"Ground station {gs_id} declares unknown access candidate(s): "
+                    f"{', '.join(unknown)}"
                 )
-            for gs_id in sorted(gs_terminal_types):
-                candidates = tuple(ground_candidate_satellites_by_gs[gs_id])
-                unknown = sorted(set(candidates) - set(sat_ground_terminal_types))
-                if unknown:
-                    raise ValueError(
-                        f"Ground station {gs_id} declares unknown access candidate(s): "
-                        f"{', '.join(unknown)}"
-                    )
-                declared_ground_candidates[gs_id] = tuple(sorted(candidates))
+            declared_ground_candidates[gs_id] = tuple(sorted(candidates))
         for gs_id, gs_type in gs_terminal_types.items():
             for sat_id in declared_ground_candidates[gs_id]:
                 sat_type = sat_ground_terminal_types[sat_id]

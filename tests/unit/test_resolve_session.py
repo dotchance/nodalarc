@@ -601,3 +601,13 @@ def test_ephemeris_manifest_must_cover_session_epoch():
 
     with pytest.raises(SessionResolutionError, match="does not cover session epoch"):
         resolve_session_with_assets(data)
+
+
+def test_m3_ephemeris_rejects_multi_kernel_stack_until_supported():
+    data = yaml.safe_load(Path("configs/sessions/earth-luna-relay.yaml").read_text())
+    second = dict(data["ephemeris"]["kernels"][0])
+    second["id"] = "second-kernel"
+    data["ephemeris"]["kernels"].append(second)
+
+    with pytest.raises(SessionResolutionError, match="exactly one kernel"):
+        resolve_session_with_assets(data)

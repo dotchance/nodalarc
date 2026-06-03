@@ -92,6 +92,11 @@ def validate_ephemeris_manifest(
         raise EphemerisValidationError(
             f"ephemeris provider {config.provider!r} is structurally valid but not runtime-supported"
         )
+    if len(config.kernels) != 1:
+        raise EphemerisValidationError(
+            "skyfield_bsp runtime support currently requires exactly one kernel; "
+            "multi-kernel stacks are a future ephemeris capability"
+        )
 
     epoch = _epoch_datetime(epoch_unix)
     paths: dict[str, Path] = {}
@@ -132,6 +137,11 @@ class SkyfieldBspEphemeris:
     ) -> None:
         if config.provider != "skyfield_bsp":
             raise EphemerisValidationError(f"unsupported ephemeris provider {config.provider!r}")
+        if len(config.kernels) != 1:
+            raise EphemerisValidationError(
+                "skyfield_bsp runtime support currently requires exactly one kernel; "
+                "multi-kernel stacks are a future ephemeris capability"
+            )
         if not kernel_paths:
             raise EphemerisValidationError("skyfield_bsp ephemeris requires at least one kernel")
         from skyfield.api import load, load_file

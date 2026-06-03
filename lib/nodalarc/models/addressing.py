@@ -42,6 +42,8 @@ class AddressingScheme:
         self._ipv6_gs_tpl = cfg.ipv6_gs_template
         self._node_types: dict[str, str] = {}
         self._sat_node_ids_by_location: dict[tuple[int, int], str] = {}
+        self._gs_node_ids_by_source_name: dict[str, str] = {}
+        self._ambiguous_gs_source_names: set[str] = set()
 
         if satellites:
             for sat in satellites:
@@ -55,6 +57,15 @@ class AddressingScheme:
             for station in gs_file.stations:
                 nid = self.gs_id(station.name)
                 self._node_types[nid] = "ground_station"
+                source_name = getattr(station, "source_name", None)
+                if source_name:
+                    key = str(source_name)
+                    existing = self._gs_node_ids_by_source_name.get(key)
+                    if existing is not None and existing != nid:
+                        self._ambiguous_gs_source_names.add(key)
+                        self._gs_node_ids_by_source_name.pop(key, None)
+                    elif key not in self._ambiguous_gs_source_names:
+                        self._gs_node_ids_by_source_name[key] = nid
 
     def node_type(self, node_id: str) -> str:
         if node_id not in self._node_types:
@@ -83,6 +94,13 @@ class AddressingScheme:
         return self._sat_id_tpl.format(plane=plane, slot=slot)
 
     def gs_id(self, name: str) -> str:
+        if name in self._ambiguous_gs_source_names:
+            raise KeyError(
+                f"ground station source name {name!r} is ambiguous across segments; "
+                "use the resolved runtime node_id instead"
+            )
+        if name in self._gs_node_ids_by_source_name:
+            return self._gs_node_ids_by_source_name[name]
         return self._gs_id_tpl.format(name=name)
 
     # -- IP addresses --

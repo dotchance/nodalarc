@@ -59,7 +59,7 @@ from nodalarc.models.constellation import (
 from nodalarc.models.constellation import (
     OrbitalElements as ConfigOrbitalElements,
 )
-from nodalarc.models.ground_station import GroundStationFile
+from nodalarc.models.ground_station import GroundStationConfig, GroundStationFile
 from nodalarc.models.identity import IdentityMode
 from nodalarc.models.link_rules import LinkRule, NodeSelector
 from nodalarc.models.resolved_session import (
@@ -113,6 +113,8 @@ class ResolvedGroundAssets:
     segment: GroundSegment
     source: str | dict[str, Any]
     config: GroundStationFile
+    station_meta: dict[str, dict[str, Any]] | None = None
+    station_scheduling: dict[str, GroundSchedulingConfig] | None = None
 
 
 @dataclass(frozen=True)
@@ -232,13 +234,13 @@ def resolve_session_with_assets(
             # fail-loud so a future matrix bug does not silently skip a segment.
             raise SessionResolutionError(f"segment kind {segment.kind!r} is not runtime-supported")
 
-    if not const_assets or len(ground_assets) != 1:
+    if not const_assets or not ground_assets:
         raise SessionResolutionError(
-            "M3 runtime supports one or more satellite-producing segments and exactly one ground_set segment; "
+            "M3 runtime supports one or more satellite-producing segments and at least one ground_set segment; "
             f"got {len(const_assets)} constellation segment(s), {len(ground_assets)} ground_set segment(s)"
         )
 
-    ground_set = ground_assets[0]
+    ground_set = _combine_ground_segments(cfg, tuple(ground_assets))
     const_assets = list(_assign_constellation_runtime_identities([*const_assets, *space_assets]))
     for constellation in const_assets:
         if not constellation.satellites:
@@ -250,7 +252,7 @@ def resolve_session_with_assets(
             f"ground_set segment {ground_set.segment.id!r} expands to 0 stations"
         )
 
-    effective_ground = _effective_ground_scheduling(cfg, ground_set.segment, ground_set.config)
+    effective_ground = _runtime_ground_default_scheduling(cfg, ground_set)
     all_satellites = tuple(sat for asset in const_assets for sat in asset.satellites)
     runtime_constellation_source = _build_runtime_constellation_source(cfg, all_satellites)
     runtime_constellation = load_constellation(runtime_constellation_source)
@@ -316,7 +318,7 @@ def resolve_session_with_assets(
         runtime_constellation=runtime_constellation,
         satellites=all_satellites,
         constellations=tuple(const_assets),
-        ground_sets=tuple(ground_assets),
+        ground_sets=(ground_set,),
         addressing=addressing,
         declared_candidates=declared_candidates,
         neighbors=neighbors,
@@ -581,6 +583,134 @@ def _dump_model(value: Any) -> Any:
     return value
 
 
+def _materialize_terrestrial_prefixes(
+    station: GroundStationConfig,
+    gs_file: GroundStationFile,
+    *,
+    gs_index: int,
+) -> list[dict[str, Any]] | None:
+    if station.terrestrial_prefixes is not None:
+        return [prefix.model_dump(mode="python") for prefix in station.terrestrial_prefixes]
+    tpl = gs_file.default_terrestrial_prefixes
+    if tpl is None:
+        return None
+    prefixes = [
+        {"prefix": tpl.ipv4_template.format(gs_index=gs_index), "metric": tpl.metric},
+        {"prefix": tpl.ipv6_template.format(gs_index=gs_index), "metric": tpl.metric},
+    ]
+    if tpl.default_route:
+        prefixes.append({"prefix": "0.0.0.0/0", "metric": tpl.default_route_metric})
+    return prefixes
+
+
+def _combine_ground_segments(
+    cfg: SegmentSessionConfig,
+    ground_assets: tuple[ResolvedGroundAssets, ...],
+) -> ResolvedGroundAssets:
+    """Project one or more ground segments into the mature single-file runtime shape.
+
+    The resolver owns this projection. Each runtime station name is already the
+    final ground node ID, and per-station metadata records the original segment,
+    local node ID, and resolved policy. This avoids a one-namespace ground
+    ``gs_id_template`` while keeping existing OME/Scheduler/Operator internals on
+    the shared ``GroundStationFile`` contract.
+    """
+
+    stations: list[dict[str, Any]] = []
+    station_meta: dict[str, dict[str, Any]] = {}
+    station_scheduling: dict[str, GroundSchedulingConfig] = {}
+    seen_runtime_names: set[str] = set()
+    for asset in ground_assets:
+        if not asset.config.stations:
+            raise SessionResolutionError(
+                f"ground_set segment {asset.segment.id!r} expands to 0 stations"
+            )
+        segment_default = _effective_ground_scheduling(cfg, asset.segment, asset.config)
+        for station in asset.config.stations:
+            original_name = str(station.name)
+            runtime_name = f"{asset.segment.namespace}-gs-{_normalize_runtime_token(original_name)}"
+            if runtime_name in seen_runtime_names:
+                raise SessionResolutionError(f"duplicate runtime ground node_id {runtime_name!r}")
+            seen_runtime_names.add(runtime_name)
+
+            effective = _station_ground_scheduling(segment_default, asset.config, station)
+            terminals = station.terminals or asset.config.default_terminals
+            if not terminals:
+                raise SessionResolutionError(
+                    f"ground node {original_name!r} in segment {asset.segment.id!r} "
+                    "has no terminal definitions"
+                )
+            station_tags = (
+                *(asset.segment.tags or ()),
+                *(station.tags or ()),
+            )
+            data = station.model_dump(mode="python")
+            data.update(
+                {
+                    "name": runtime_name,
+                    "source_name": original_name,
+                    "display_name": station.display_name or original_name,
+                    "min_elevation_deg": (
+                        station.min_elevation_deg
+                        if station.min_elevation_deg is not None
+                        else asset.config.default_min_elevation_deg
+                    ),
+                    "terminals": [_dump_model(terminal) for terminal in terminals],
+                    "terrestrial_prefixes": _materialize_terrestrial_prefixes(
+                        station, asset.config, gs_index=len(stations)
+                    ),
+                    "selection_policy": effective.selection_policy.model_dump(mode="python"),
+                    "handover_policy": effective.handover_policy.model_dump(mode="python"),
+                    "handover_mode": effective.handover_mode,
+                    "mbb_overlap_ticks": effective.mbb_overlap_ticks,
+                    "mbb_reserve": effective.mbb_reserve,
+                    "tags": list(station_tags),
+                }
+            )
+            stations.append(data)
+            station_meta[runtime_name] = {
+                "segment_id": asset.segment.id,
+                "namespace": asset.segment.namespace,
+                "local_node_id": f"gs-{original_name}",
+                "source_name": original_name,
+                "tags": tuple(station_tags),
+                "site_id": station.site_id,
+                "site_node_id": station.site_node_id,
+            }
+            station_scheduling[runtime_name] = effective
+
+    source = {
+        "default_terminals": [],
+        "default_min_elevation_deg": 0,
+        "stations": stations,
+    }
+    combined_config = GroundStationFile.model_validate(source)
+    combined_segment = GroundSegment.model_validate(
+        {
+            "id": "ground-runtime",
+            "kind": "ground_set",
+            "source": source,
+            "namespace": "ground-runtime",
+        }
+    )
+    return ResolvedGroundAssets(
+        segment=combined_segment,
+        source=source,
+        config=combined_config,
+        station_meta=station_meta,
+        station_scheduling=station_scheduling,
+    )
+
+
+def _runtime_ground_default_scheduling(
+    cfg: SegmentSessionConfig,
+    ground_set: ResolvedGroundAssets,
+) -> GroundSchedulingConfig:
+    if ground_set.station_scheduling:
+        return next(iter(ground_set.station_scheduling.values()))
+    return _effective_ground_scheduling(cfg, ground_set.segment, ground_set.config)
+
+
 def _terminal_config_from_satellite(sat: SatelliteNode) -> TerminalConfig:
     return TerminalConfig.model_validate(
         {
@@ -631,10 +761,9 @@ def _build_runtime_session_projection(
     ground_set: ResolvedGroundAssets,
     effective_ground: GroundSchedulingConfig,
 ) -> SessionConfig:
-    gs_namespace = ground_set.segment.namespace
     addressing = AddressingConfig(
         sat_id_template="sat-p{plane:04d}s{slot:02d}",
-        gs_id_template=f"{gs_namespace}-gs-{{name}}",
+        gs_id_template="{name}",
         ipv4_sat_template=cfg.addressing.ipv4_sat_template,
         ipv4_gs_template=cfg.addressing.ipv4_gs_template,
         ipv6_sat_template=cfg.addressing.ipv6_sat_template,
@@ -748,18 +877,25 @@ def _materialize_nodes(
             }
 
     for station in ground_set.config.stations:
-        local_id = f"gs-{station.name}"
+        runtime_meta = (ground_set.station_meta or {}).get(station.name, {})
+        local_id = runtime_meta.get("local_node_id", f"gs-{station.name}")
         node_id = addressing.gs_id(station.name)
-        tags = tuple(ground_segment.tags or ())
-        station_policy = _station_ground_scheduling(effective_ground, ground_set.config, station)
+        tags = tuple(
+            runtime_meta.get("tags", (*(ground_segment.tags or ()), *(station.tags or ())))
+        )
+        station_policy = (ground_set.station_scheduling or {}).get(station.name)
+        if station_policy is None:
+            station_policy = _station_ground_scheduling(
+                effective_ground, ground_set.config, station
+            )
         node = ResolvedNode(
             node_id=node_id,
             local_node_id=local_id,
-            segment_id=ground_segment.id,
-            namespace=ground_segment.namespace,
+            segment_id=runtime_meta.get("segment_id", ground_segment.id),
+            namespace=runtime_meta.get("namespace", ground_segment.namespace),
             kind="ground_station",
-            frame_id=str(ground_segment.reference_body),
-            reference_body=ground_segment.reference_body,
+            frame_id=str(station.reference_body),
+            reference_body=station.reference_body,
             tags=tags,
             tenant_id=station.tenant_id,
             terminal_inventory=tuple(_ground_terminal_blocks(node_id, station, ground_set.config)),
@@ -773,7 +909,9 @@ def _materialize_nodes(
             "kind": "ground_station",
             "plane": None,
             "slot": None,
-            "name": station.name,
+            "name": runtime_meta.get("source_name", station.name),
+            "site_id": runtime_meta.get("site_id", station.site_id),
+            "site_node_id": runtime_meta.get("site_node_id", station.site_node_id),
         }
     return nodes, meta
 
@@ -799,6 +937,7 @@ def _satellite_terminal_blocks(node_id: str, sat: SatelliteNode, segment_id: str
             owner_node_id=node_id,
             endpoint_role="isl",
             medium=terminal.type,
+            source_terminal_id=getattr(terminal, "id", None),
             count=terminal.count,
             max_range_km=terminal.max_range_km,
             field_of_regard_deg=getattr(terminal, "field_of_regard_deg", None),
@@ -812,6 +951,7 @@ def _satellite_terminal_blocks(node_id: str, sat: SatelliteNode, segment_id: str
             owner_node_id=node_id,
             endpoint_role="ground",
             medium=terminal.type,
+            source_terminal_id=getattr(terminal, "id", None),
             count=terminal.count,
             max_range_km=getattr(terminal, "max_range_km", None),
             field_of_regard_deg=getattr(terminal, "field_of_regard_deg", None),
@@ -831,6 +971,7 @@ def _ground_terminal_blocks(node_id: str, station: Any, gs_file: GroundStationFi
             owner_node_id=node_id,
             endpoint_role="ground",
             medium=terminal.type,
+            source_terminal_id=terminal.id,
             count=terminal.count,
             tracking_capacity=terminal.tracking_capacity,
             max_range_km=terminal.max_range_km,
@@ -1033,13 +1174,15 @@ def _validate_endpoint_terminal_compatibility(
             for block in node.terminal_inventory
             if block.endpoint_role == endpoint.terminal_role
             and (endpoint.terminal_medium is None or block.medium == endpoint.terminal_medium)
+            and (endpoint.terminal_id is None or block.source_terminal_id == endpoint.terminal_id)
         ]
         if not matches:
             medium = f" medium={endpoint.terminal_medium!r}" if endpoint.terminal_medium else ""
+            terminal_id = f" terminal_id={endpoint.terminal_id!r}" if endpoint.terminal_id else ""
             raise SessionResolutionError(
                 f"link_rule {rule.id!r} endpoint segment {endpoint.selector.segment!r} "
                 f"selects node {node.node_id!r}, but that node has no "
-                f"terminal_role={endpoint.terminal_role!r}{medium} terminal"
+                f"terminal_role={endpoint.terminal_role!r}{medium}{terminal_id} terminal"
             )
 
 
@@ -1065,6 +1208,7 @@ def _resolve_link_rules(
                     segment_id=endpoint.selector.segment,
                     terminal_role=endpoint.terminal_role,
                     terminal_medium=endpoint.terminal_medium,
+                    terminal_id=endpoint.terminal_id,
                     node_ids=tuple(node.node_id for node in selected),
                 )
             )
@@ -1255,11 +1399,14 @@ def _blocks_for_role(
     node: ResolvedNode,
     role: str,
     medium: str | None,
+    terminal_id: str | None = None,
 ) -> tuple[ResolvedTerminalBlock, ...]:
     return tuple(
         block
         for block in node.terminal_inventory
-        if block.endpoint_role == role and (medium is None or block.medium == medium)
+        if block.endpoint_role == role
+        and (medium is None or block.medium == medium)
+        and (terminal_id is None or block.source_terminal_id == terminal_id)
     )
 
 
@@ -1269,10 +1416,12 @@ def _compatible_medium(
     *,
     role: str,
     medium: str | None,
+    terminal_id_a: str | None = None,
+    terminal_id_b: str | None = None,
     rule_id: str,
 ) -> str:
-    blocks_a = _blocks_for_role(node_a, role, medium)
-    blocks_b = _blocks_for_role(node_b, role, medium)
+    blocks_a = _blocks_for_role(node_a, role, medium, terminal_id_a)
+    blocks_b = _blocks_for_role(node_b, role, medium, terminal_id_b)
     media_a = {block.medium for block in blocks_a}
     media_b = {block.medium for block in blocks_b}
     common = sorted(media_a & media_b)
@@ -1297,17 +1446,38 @@ def _validate_declared_candidate_terminal_compatibility(
     for candidate in candidates:
         node_a = nodes[candidate.pair[0]]
         node_b = nodes[candidate.pair[1]]
+        terminal_id_a = _candidate_terminal_id_for_node(candidate, node_a)
+        terminal_id_b = _candidate_terminal_id_for_node(candidate, node_b)
         medium = _compatible_medium(
             node_a,
             node_b,
             role=candidate.terminal_role,
             medium=candidate.terminal_medium,
+            terminal_id_a=terminal_id_a,
+            terminal_id_b=terminal_id_b,
             rule_id=candidate.rule_id,
         )
         if candidate.terminal_medium is not None and medium != candidate.terminal_medium:
             raise SessionResolutionError(
                 f"link_rule {candidate.rule_id!r} terminal_medium changed during validation"
             )
+
+
+def _candidate_terminal_id_for_node(
+    candidate: DeclaredLinkCandidate,
+    node: ResolvedNode,
+) -> str | None:
+    matches = [
+        idx
+        for idx, segment_id in enumerate(candidate.endpoint_segments)
+        if segment_id == node.segment_id
+    ]
+    if len(matches) != 1:
+        raise SessionResolutionError(
+            f"link_rule {candidate.rule_id!r} cannot map terminal selector to "
+            f"node {node.node_id!r}; endpoint_segments={candidate.endpoint_segments}"
+        )
+    return candidate.endpoint_terminal_ids[matches[0]]
 
 
 def _constraint_limit_for_node(
@@ -1408,9 +1578,10 @@ def _next_free_interface(
     *,
     role: str,
     medium: str | None,
+    terminal_id: str | None = None,
     rule_id: str,
 ) -> str:
-    blocks = _blocks_for_role(node, role, medium)
+    blocks = _blocks_for_role(node, role, medium, terminal_id)
     taken = used.setdefault(node.node_id, set())
     allowed_indices = {
         index
@@ -1437,12 +1608,16 @@ def _add_neighbor_pair(
     priority: int,
     rule_id: str,
     medium: str | None = None,
+    terminal_id_a: str | None = None,
+    terminal_id_b: str | None = None,
 ) -> None:
     actual_medium = _compatible_medium(
         node_a,
         node_b,
         role="isl",
         medium=medium,
+        terminal_id_a=terminal_id_a,
+        terminal_id_b=terminal_id_b,
         rule_id=rule_id,
     )
     iface_a = _next_free_interface(
@@ -1450,6 +1625,7 @@ def _add_neighbor_pair(
         node_a,
         role="isl",
         medium=actual_medium,
+        terminal_id=terminal_id_a,
         rule_id=rule_id,
     )
     iface_b = _next_free_interface(
@@ -1457,6 +1633,7 @@ def _add_neighbor_pair(
         node_b,
         role="isl",
         medium=actual_medium,
+        terminal_id=terminal_id_b,
         rule_id=rule_id,
     )
     assignments.append(
@@ -1544,6 +1721,8 @@ def _build_isl_neighbors_from_resolved_rules(
             continue
         node_a = node_by_id[candidate.pair[0]]
         node_b = node_by_id[candidate.pair[1]]
+        terminal_id_a = _candidate_terminal_id_for_node(candidate, node_a)
+        terminal_id_b = _candidate_terminal_id_for_node(candidate, node_b)
         if candidate.pair in seen_pairs:
             raise SessionResolutionError(
                 f"declared ISL candidate {candidate.pair} from link_rule "
@@ -1564,6 +1743,8 @@ def _build_isl_neighbors_from_resolved_rules(
             priority=base_priority + candidate.priority,
             rule_id=candidate.rule_id,
             medium=candidate.terminal_medium,
+            terminal_id_a=terminal_id_a,
+            terminal_id_b=terminal_id_b,
         )
 
     return frozenset(assignments)

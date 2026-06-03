@@ -1,0 +1,400 @@
+session:
+  name: earth-luna-gateway-site
+
+identity:
+  mode: segment_namespaced
+
+segments:
+- id: leo
+  kind: constellation
+  source: configs/constellations/demo-36.yaml
+  namespace: leo
+  central_body: earth
+  tags:
+  - earth
+  - leo
+  - access
+
+- id: meo
+  kind: constellation
+  source: configs/constellations/meo-gps-24.yaml
+  namespace: meo
+  central_body: earth
+  internal_links:
+    isl:
+      enabled: false
+  tags:
+  - earth
+  - meo
+  - backbone
+
+- id: geo
+  kind: constellation
+  source: configs/constellations/geo-ring-8.yaml
+  namespace: geo
+  central_body: earth
+  internal_links:
+    isl:
+      enabled: false
+  tags:
+  - earth
+  - geo
+  - relay
+
+- id: earth-cislunar-relay
+  kind: space_node
+  namespace: earth-relay
+  central_body: earth
+  satellite_type: cislunar-relay-rf
+  tags:
+  - earth
+  - geo
+  - cislunar
+  - relay
+  node:
+    id: gateway
+    state:
+      altitude_km: 35786
+      inclination_deg: 0
+      raan_deg: 0
+      true_anomaly_deg: 22.5
+    tags:
+    - gateway
+    - cislunar
+
+- id: luna-relay
+  kind: constellation
+  source: configs/constellations/luna-polar-8.yaml
+  namespace: luna
+  central_body: luna
+  tags:
+  - luna
+  - polar
+  - relay
+
+- id: earth-site
+  kind: ground_set
+  namespace: earth-site
+  reference_body: earth
+  tags:
+  - earth
+  - ground
+  - gateway-site
+  scheduling:
+    selection_policy:
+      name: highest-elevation
+      params: {}
+    handover_policy:
+      name: hysteresis
+      params:
+        discount_factor: 1.10
+        mask_fade_range_deg: 3.0
+    handover_mode: bbm
+    mbb_overlap_ticks: 0
+    mbb_reserve: 0
+  source:
+    default_min_elevation_deg: 10
+    ground_sites:
+    - id: santiago
+      display_name: Santiago Gateway Site
+      reference_body: earth
+      lat_deg: -33.45
+      lon_deg: -70.66
+      alt_m: 520
+      tags:
+      - santiago
+      - gateway
+      nodes:
+      - id: leo-router
+        display_name: Santiago LEO Access Router
+        tags:
+        - leo-access
+        handover_mode: mbb
+        mbb_overlap_ticks: 3
+        mbb_reserve: 1
+        selection_policy:
+          name: highest-elevation
+          params: {}
+        handover_policy:
+          name: hysteresis
+          params:
+            discount_factor: 1.15
+            mask_fade_range_deg: 5.0
+        terrestrial_prefixes:
+        - prefix: 172.61.10.0/24
+          metric: 10
+        terminals:
+        - id: leo-ka
+          type: rf
+          band: Ka
+          count: 2
+          bandwidth_mbps: 1200
+          tracking_capacity: 1
+          max_range_km: 2500
+          field_of_regard_deg: 140
+          max_tracking_rate_deg_s: 2.0
+          boresight:
+            mode: local_vertical
+          tags:
+          - leo
+          - ka
+          - mbb-capable
+      - id: geo-gateway-router
+        display_name: Santiago GEO Gateway Router
+        tags:
+        - geo-gateway
+        handover_mode: bbm
+        mbb_overlap_ticks: 0
+        mbb_reserve: 0
+        selection_policy:
+          name: highest-elevation
+          params: {}
+        handover_policy:
+          name: hysteresis
+          params:
+            discount_factor: 1.05
+            mask_fade_range_deg: 2.5
+        terrestrial_prefixes:
+        - prefix: 172.61.20.0/24
+          metric: 10
+        terminals:
+        - id: geo-c
+          type: rf
+          band: C
+          count: 1
+          bandwidth_mbps: 250
+          tracking_capacity: 1
+          max_range_km: 45000
+          field_of_regard_deg: 110
+          max_tracking_rate_deg_s: 0.05
+          boresight:
+            mode: local_vertical
+          tags:
+          - geo
+          - c-band
+
+- id: lunar-site
+  kind: ground_set
+  namespace: lunar-site
+  reference_body: luna
+  tags:
+  - luna
+  - ground
+  - gateway-site
+  scheduling:
+    selection_policy:
+      name: highest-elevation
+      params: {}
+    handover_policy:
+      name: hysteresis
+      params:
+        discount_factor: 1.10
+        mask_fade_range_deg: 2.5
+    handover_mode: mbb
+    mbb_overlap_ticks: 3
+    mbb_reserve: 1
+  source:
+    default_min_elevation_deg: 5
+    ground_sites:
+    - id: artemis
+      display_name: Artemis Surface Site
+      reference_body: luna
+      lat_deg: -89.9
+      lon_deg: 0.0
+      alt_m: 0.0
+      tags:
+      - artemis
+      - lunar-base
+      nodes:
+      - id: surface-router
+        display_name: Artemis Surface Router
+        tags:
+        - lunar-access
+        handover_mode: mbb
+        mbb_overlap_ticks: 3
+        mbb_reserve: 1
+        selection_policy:
+          name: highest-elevation
+          params: {}
+        handover_policy:
+          name: hysteresis
+          params:
+            discount_factor: 1.10
+            mask_fade_range_deg: 2.5
+        terrestrial_prefixes:
+        - prefix: 172.62.10.0/24
+          metric: 10
+        terminals:
+        - id: lunar-s-band
+          type: rf
+          band: S
+          count: 2
+          bandwidth_mbps: 100
+          tracking_capacity: 1
+          max_range_km: 12000
+          field_of_regard_deg: 160
+          max_tracking_rate_deg_s: 2.0
+          boresight:
+            mode: local_vertical
+          tags:
+          - luna
+          - s-band
+          - mbb-capable
+
+link_rules:
+- id: santiago-leo-access
+  kind: access
+  endpoints:
+  - selector:
+      segment: earth-site
+      node_tags:
+      - leo-access
+    terminal_role: ground
+    terminal_medium: rf
+    terminal_id: leo-ka
+  - selector:
+      segment: leo
+    terminal_role: ground
+    terminal_medium: rf
+  topology:
+    mode: visible_candidates
+
+- id: santiago-geo-access
+  kind: access
+  endpoints:
+  - selector:
+      segment: earth-site
+      node_tags:
+      - geo-gateway
+    terminal_role: ground
+    terminal_medium: rf
+    terminal_id: geo-c
+  - selector:
+      segment: geo
+    terminal_role: ground
+    terminal_medium: rf
+  topology:
+    mode: visible_candidates
+
+- id: artemis-lunar-access
+  kind: access
+  endpoints:
+  - selector:
+      segment: lunar-site
+      node_tags:
+      - lunar-access
+    terminal_role: ground
+    terminal_medium: rf
+    terminal_id: lunar-s-band
+  - selector:
+      segment: luna-relay
+    terminal_role: ground
+    terminal_medium: rf
+  topology:
+    mode: visible_candidates
+
+- id: leo-to-meo-backbone
+  kind: inter_constellation
+  endpoints:
+  - selector:
+      segment: leo
+    terminal_role: isl
+    terminal_medium: optical
+  - selector:
+      segment: meo
+    terminal_role: isl
+    terminal_medium: optical
+  topology:
+    mode: nearest_n
+    n: 1
+
+- id: meo-to-geo-backbone
+  kind: inter_constellation
+  endpoints:
+  - selector:
+      segment: meo
+    terminal_role: isl
+    terminal_medium: optical
+  - selector:
+      segment: geo
+    terminal_role: isl
+    terminal_medium: optical
+  topology:
+    mode: nearest_n
+    n: 1
+
+- id: geo-to-earth-cislunar-relay
+  kind: inter_constellation
+  endpoints:
+  - selector:
+      segment: geo
+    terminal_role: isl
+    terminal_medium: optical
+  - selector:
+      segment: earth-cislunar-relay
+    terminal_role: isl
+    terminal_medium: optical
+  topology:
+    mode: nearest_n
+    n: 1
+
+- id: earth-to-luna-static-relay
+  kind: inter_body_relay
+  endpoints:
+  - selector:
+      segment: earth-cislunar-relay
+    terminal_role: isl
+    terminal_medium: optical
+  - selector:
+      segment: luna-relay
+    terminal_role: isl
+    terminal_medium: optical
+  topology:
+    mode: nearest_n
+    n: 1
+  protocol_boundary:
+    enabled: true
+    adapter: static_ip
+    routing_domain_a: earth-domain
+    routing_domain_b: luna-domain
+
+simulation:
+  schema_version: 2
+  ground_link_model: terminal_physics
+  candidate_limits:
+    max_pairs_per_rule: 128
+    max_pairs_per_tick: 512
+
+ephemeris:
+  provider: skyfield_bsp
+  quality_tier: jpl_de_bsp
+  kernels:
+  - id: de440s
+    path: configs/ephemerides/de440s.bsp
+    checksum: sha256:c1c7feeab882263fc493a9d5a5b2ddd71b54826cdf65d8d17a76126b260a49f2
+    targets:
+    - earth
+    - luna
+    frame: gcrs
+    coverage_start: 1850-01-01T00:00:00Z
+    coverage_end: 2150-01-01T00:00:00Z
+
+orbit:
+  propagator: j2-mean-elements
+
+dispatch:
+  latency_authority: ome
+  max_latency_age_ticks: 1
+  substrate_compensation:
+    measurement_source: node-agent-rtt
+    rtt_to_one_way: half-rtt
+
+routing:
+  protocol: isis
+  extensions:
+  - traffic-engineering
+  area_assignment:
+    strategy: per-plane
+
+time:
+  step_seconds: 5

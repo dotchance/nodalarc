@@ -65,6 +65,7 @@ class ResolvedTerminalBlock(BaseModel):
     owner_node_id: NonEmptyReference
     endpoint_role: TerminalRole  # ground | isl | relay
     medium: TerminalMediumLiteral  # rf | optical
+    source_terminal_id: NonEmptyReference | None = None
     count: int = Field(gt=0)
     tracking_capacity: int | None = Field(default=None, gt=0)
     max_range_km: float | None = Field(default=None, gt=0, allow_inf_nan=False)
@@ -151,6 +152,7 @@ class ResolvedEndpoint(BaseModel):
     segment_id: NonEmptyReference
     terminal_role: TerminalRole
     terminal_medium: TerminalMediumLiteral | None = None
+    terminal_id: NonEmptyReference | None = None
     # Resolved runtime node IDs; a selector that matched zero nodes is invalid.
     node_ids: tuple[NonEmptyReference, ...] = Field(min_length=1)
 

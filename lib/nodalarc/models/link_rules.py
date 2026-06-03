@@ -69,6 +69,7 @@ class Endpoint(BaseModel):
     selector: NodeSelector
     terminal_role: TerminalRole
     terminal_medium: TerminalMedium | None = None
+    terminal_id: Identifier | None = None
 
 
 # --- Topology (discriminated on ``mode``) ---

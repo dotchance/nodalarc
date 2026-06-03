@@ -35,6 +35,7 @@ class DeclaredLinkCandidate:
     kind: str
     terminal_role: str
     terminal_medium: str | None
+    endpoint_terminal_ids: tuple[str | None, str | None]
     topology_mode: str
     priority: int
     endpoint_segments: tuple[str, str]
@@ -211,6 +212,10 @@ def generate_declared_link_candidates(
                     kind=rule.kind,
                     terminal_role=rule.endpoints[0].terminal_role,
                     terminal_medium=candidate_medium,
+                    endpoint_terminal_ids=(
+                        rule.endpoints[0].terminal_id,
+                        rule.endpoints[1].terminal_id,
+                    ),
                     topology_mode=rule.topology.mode,
                     priority=priority,
                     endpoint_segments=(

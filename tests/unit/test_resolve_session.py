@@ -154,6 +154,123 @@ def test_terminal_inventory_is_materialized_from_source_satellite_type():
     assert set(first_sat_ifaces).issubset({"isl0", "isl1", "isl2", "isl3"})
 
 
+def _site_terminal_session():
+    data = _segment_session()
+    data["segments"][1]["source"] = {
+        "default_min_elevation_deg": 10,
+        "ground_sites": [
+            {
+                "id": "santiago",
+                "display_name": "Santiago Gateway",
+                "lat_deg": -33.45,
+                "lon_deg": -70.66,
+                "tags": ["gateway"],
+                "nodes": [
+                    {
+                        "id": "leo-router",
+                        "tags": ["leo-access"],
+                        "handover_mode": "mbb",
+                        "mbb_overlap_ticks": 2,
+                        "mbb_reserve": 1,
+                        "terminals": [
+                            {
+                                "id": "leo-ka",
+                                "type": "rf",
+                                "band": "Ka",
+                                "count": 2,
+                                "bandwidth_mbps": 1200,
+                                "tracking_capacity": 2,
+                                "max_range_km": 2500,
+                                "field_of_regard_deg": 140,
+                                "max_tracking_rate_deg_s": 2.0,
+                                "boresight": {"mode": "local_vertical"},
+                                "tags": ["leo", "ka"],
+                            }
+                        ],
+                    },
+                    {
+                        "id": "geo-router",
+                        "tags": ["geo-gateway"],
+                        "handover_mode": "bbm",
+                        "mbb_overlap_ticks": 0,
+                        "mbb_reserve": 0,
+                        "terminals": [
+                            {
+                                "id": "geo-c",
+                                "type": "rf",
+                                "band": "C",
+                                "count": 1,
+                                "bandwidth_mbps": 250,
+                                "tracking_capacity": 1,
+                                "max_range_km": 45000,
+                                "field_of_regard_deg": 80,
+                                "max_tracking_rate_deg_s": 0.05,
+                                "boresight": {"mode": "local_vertical"},
+                                "tags": ["geo", "c-band"],
+                            }
+                        ],
+                    },
+                ],
+            }
+        ],
+    }
+    data["link_rules"][0]["endpoints"][0] = {
+        "selector": {"segment": "ground", "node_tags": ["leo-access"]},
+        "terminal_role": "ground",
+        "terminal_medium": "rf",
+        "terminal_id": "leo-ka",
+    }
+    data["simulation"]["candidate_limits"] = {"max_pairs_per_rule": 36}
+    return data
+
+
+def test_ground_site_expands_to_independent_ground_nodes_with_terminal_blocks():
+    resolution = resolve_session_with_assets(_site_terminal_session())
+    ground_nodes = {
+        node.local_node_id: node
+        for node in resolution.resolved.nodes
+        if node.kind == "ground_station"
+    }
+
+    assert set(ground_nodes) == {"gs-santiago-leo-router", "gs-santiago-geo-router"}
+    leo = ground_nodes["gs-santiago-leo-router"]
+    geo = ground_nodes["gs-santiago-geo-router"]
+
+    assert leo.node_id == "gnd-gs-santiago-leo-router"
+    assert geo.node_id == "gnd-gs-santiago-geo-router"
+    assert leo.tags == (
+        "earth",
+        "ground",
+        "gateway",
+        "leo-access",
+        "leo",
+        "ka",
+        "santiago",
+        "leo-router",
+        "leo-ka",
+    )
+    assert leo.ground_scheduling.handover_mode == "mbb"
+    assert leo.ground_scheduling.mbb_overlap_ticks == 2
+    assert geo.ground_scheduling.handover_mode == "bbm"
+    assert leo.terminal_inventory[0].source_terminal_id == "leo-ka"
+    assert leo.terminal_inventory[0].count == 2
+    assert leo.terminal_inventory[0].tracking_capacity == 2
+    assert leo.terminal_inventory[0].bandwidth_mbps == 1200
+    assert geo.terminal_inventory[0].source_terminal_id == "geo-c"
+    assert geo.terminal_inventory[0].bandwidth_mbps == 250
+    assert len(resolution.declared_candidates) == 36
+    assert len(resolution.ground_candidate_satellites_by_gs["gnd-gs-santiago-leo-router"]) == 36
+    assert resolution.ground_candidate_satellites_by_gs["gnd-gs-santiago-geo-router"] == ()
+
+
+def test_link_rule_terminal_id_mismatch_fails_before_runtime():
+    data = _site_terminal_session()
+    data["link_rules"][0]["endpoints"][0]["terminal_id"] = "geo-c"
+
+    with pytest.raises(SessionResolutionError, match="terminal_id='geo-c'"):
+        resolve_session_with_assets(data)
+
+
 def test_resolved_ground_nodes_carry_effective_station_handover_policy():
     data = _segment_session()
     data.pop("scheduling")
@@ -606,6 +723,115 @@ def test_earth_luna_relay_demo_resolves_and_computes_common_frame_relay():
         active_bodies=resolution.active_bodies,
     )
     assert window.isl_state
+
+
+def test_earth_luna_gateway_site_demo_resolves_ground_site_primitives():
+    resolution = load_session_resolution_from_file(
+        Path("configs/sessions/earth-luna-gateway-site.yaml"),
+        origin="test.resolve_session",
+    )
+
+    assert {node.segment_id for node in resolution.resolved.nodes} == {
+        "leo",
+        "meo",
+        "geo",
+        "earth-cislunar-relay",
+        "luna-relay",
+        "earth-site",
+        "lunar-site",
+    }
+
+    by_rule: dict[str, int] = {}
+    for candidate in resolution.declared_candidates:
+        by_rule[candidate.rule_id] = by_rule.get(candidate.rule_id, 0) + 1
+    assert by_rule == {
+        "santiago-leo-access": 36,
+        "santiago-geo-access": 8,
+        "artemis-lunar-access": 8,
+        "leo-to-meo-backbone": 24,
+        "meo-to-geo-backbone": 8,
+        "geo-to-earth-cislunar-relay": 1,
+        "earth-to-luna-static-relay": 1,
+    }
+
+    earth_leo = resolution.resolved.node_by_id("earth-site-gs-santiago-leo-router")
+    earth_geo = resolution.resolved.node_by_id("earth-site-gs-santiago-geo-gateway-router")
+    lunar = resolution.resolved.node_by_id("lunar-site-gs-artemis-surface-router")
+    assert earth_leo is not None
+    assert earth_geo is not None
+    assert lunar is not None
+
+    assert earth_leo.local_node_id == "gs-santiago-leo-router"
+    assert earth_leo.segment_id == "earth-site"
+    assert earth_leo.reference_body == "earth"
+    assert earth_leo.ground_scheduling.handover_mode == "mbb"
+    assert earth_leo.terminal_inventory[0].source_terminal_id == "leo-ka"
+    assert earth_leo.terminal_inventory[0].count == 2
+    assert earth_leo.terminal_inventory[0].bandwidth_mbps == 1200
+
+    assert earth_geo.segment_id == "earth-site"
+    assert earth_geo.ground_scheduling.handover_mode == "bbm"
+    assert earth_geo.terminal_inventory[0].source_terminal_id == "geo-c"
+    assert earth_geo.terminal_inventory[0].bandwidth_mbps == 250
+
+    assert lunar.segment_id == "lunar-site"
+    assert lunar.reference_body == "luna"
+    assert lunar.terminal_inventory[0].source_terminal_id == "lunar-s-band"
+
+    static_neighbors = [
+        assignment
+        for _node_id, assignment in resolution.neighbors
+        if assignment.link_type == "static_ip:earth-to-luna-static-relay"
+    ]
+    assert len(static_neighbors) == 2
+
+    node_metadata = {
+        node.node_id: {
+            "segment_id": node.segment_id,
+            "local_node_id": node.local_node_id,
+            "namespace": node.namespace,
+            "tags": tuple(node.tags),
+            "reference_body": node.reference_body or node.central_body or "earth",
+            "frame_id": node.frame_id,
+        }
+        for node in resolution.resolved.nodes
+    }
+    ctx = build_step_context(
+        satellites=list(resolution.satellites),
+        addressing=resolution.addressing,
+        gs_file=resolution.primary_ground_set.config,
+        neighbors=resolution.neighbors,
+        propagator_id=resolution.runtime_session.orbit.propagator,
+        ground_scheduling=resolution.runtime_session.scheduling.ground,
+        ground_link_model=resolution.runtime_session.simulation.ground_link_model,
+        ground_defaults_applied=True,
+        ground_candidate_satellites_by_gs=resolution.ground_candidate_satellites_by_gs,
+        node_metadata=node_metadata,
+        body_ephemeris=resolution.body_ephemeris,
+        active_bodies=resolution.active_bodies,
+    )
+    result = compute_step(
+        ctx,
+        1704067200.0,
+        0,
+        resolution.runtime_session.time.step_seconds,
+        0.0,
+        {},
+        {},
+    )
+    static_pair = next(
+        candidate.pair
+        for candidate in resolution.declared_candidates
+        if candidate.rule_id == "earth-to-luna-static-relay"
+    )
+    feasibility = result.isl_feasibility.get(static_pair) or result.isl_feasibility.get(
+        (static_pair[1], static_pair[0])
+    )
+    assert feasibility is not None
+    assert feasibility.feasible
+    assert feasibility.reject_reason == "ok"
+    assert feasibility.range_km > 300_000
+    assert feasibility.orbital_one_way_ms > 1_000
 
 
 def test_non_earth_session_requires_ephemeris_manifest():

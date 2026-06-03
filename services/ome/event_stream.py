@@ -312,6 +312,7 @@ def build_step_context(
     polar_seam_enabled: bool = False,
     latitude_threshold_deg: float = 70.0,
     ground_link_model: Literal["geometry_only", "terminal_physics"] = "terminal_physics",
+    ground_defaults_applied: bool = False,
 ) -> StepContext:
     """Build the per-session-constant context for compute_step()."""
     by_node = neighbors_by_node(neighbors)
@@ -402,7 +403,10 @@ def build_step_context(
                 else gs_file.default_min_elevation_deg
             )
             station_resolution = resolve_station_ground_scheduling(
-                ground_scheduling, gs_file, station
+                ground_scheduling,
+                gs_file,
+                station,
+                apply_ground_defaults=not ground_defaults_applied,
             )
             station_scheduling = station_resolution.scheduling
             gs_terminal_counts[node_id] = station_resolution.terminal_capacity
@@ -821,6 +825,7 @@ def precompute_timeline_window(
     polar_seam_enabled: bool = False,
     latitude_threshold_deg: float = 70.0,
     ground_link_model: Literal["geometry_only", "terminal_physics"] = "terminal_physics",
+    ground_defaults_applied: bool = False,
     initial_isl_state: dict[tuple[str, str], tuple[bool, bool]] | None = None,
     initial_gs_state: dict[tuple[str, str], tuple[bool, bool, str]] | None = None,
     initial_associations: dict[tuple[str, str], tuple[int, int]] | None = None,
@@ -844,6 +849,7 @@ def precompute_timeline_window(
         polar_seam_enabled=polar_seam_enabled,
         latitude_threshold_deg=latitude_threshold_deg,
         ground_link_model=ground_link_model,
+        ground_defaults_applied=ground_defaults_applied,
     )
     return precompute_timeline_window_from_context(
         ctx,
@@ -872,6 +878,7 @@ def precompute_timeline(
     polar_seam_enabled: bool = False,
     latitude_threshold_deg: float = 70.0,
     ground_link_model: Literal["geometry_only", "terminal_physics"] = "terminal_physics",
+    ground_defaults_applied: bool = False,
 ) -> list[TimelineEvent]:
     """Single-window convenience wrapper.
 
@@ -890,6 +897,7 @@ def precompute_timeline(
         polar_seam_enabled=polar_seam_enabled,
         latitude_threshold_deg=latitude_threshold_deg,
         ground_link_model=ground_link_model,
+        ground_defaults_applied=ground_defaults_applied,
     )
     return result.events
 

@@ -206,6 +206,31 @@ def test_segment_session_without_ground_scheduling_fails_loud():
         resolve_session(data)
 
 
+def test_ground_segment_handover_override_beats_source_default():
+    data = _segment_session()
+    data.pop("scheduling")
+    data["segments"][1]["source"] = "configs/ground-stations/sets/demo-mbb.yaml"
+    data["segments"][1]["scheduling"] = {
+        "selection_policy": {"name": "highest-elevation", "params": {}},
+        "handover_policy": {
+            "name": "hysteresis",
+            "params": {"discount_factor": 1.15, "mask_fade_range_deg": 5.0},
+        },
+        "handover_mode": "bbm",
+        "mbb_overlap_ticks": 0,
+        "mbb_reserve": 0,
+    }
+
+    resolution = resolve_session_with_assets(data)
+    modes = {
+        node.local_node_id: node.ground_scheduling.handover_mode
+        for node in resolution.resolved.nodes
+        if node.kind == "ground_station"
+    }
+
+    assert set(modes.values()) == {"bbm"}
+
+
 def test_m1_rejects_access_terminal_media_mismatch_at_resolve_boundary():
     data = _segment_session()
     data["segments"][0]["satellite_type"] = "generic-4isl"

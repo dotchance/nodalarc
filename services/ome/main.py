@@ -947,6 +947,7 @@ def _run_pacing(
         latitude_threshold_deg=cfg.latitude_threshold_deg,
         ground_scheduling=effective_ground_scheduling,
         ground_link_model=session.simulation.ground_link_model,
+        ground_defaults_applied=True,
     )
 
     step_seconds = session.time.step_seconds

@@ -176,6 +176,7 @@ def compute_coverage_preview(
         step_seconds=_PREVIEW_STEP_SECONDS,
         ground_scheduling=resolution.runtime_session.scheduling.ground,
         ground_link_model="geometry_only",
+        ground_defaults_applied=True,
         **vis_params,
     )
     events = window.events

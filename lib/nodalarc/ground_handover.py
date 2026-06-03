@@ -42,6 +42,8 @@ def resolve_station_ground_scheduling(
     base: GroundSchedulingConfig,
     gs_file: GroundStationFile,
     station: GroundStationConfig,
+    *,
+    apply_ground_defaults: bool = True,
 ) -> StationHandoverResolution:
     """Resolve the effective scheduling policy for one ground station.
 
@@ -55,15 +57,15 @@ def resolve_station_ground_scheduling(
     """
 
     data = base.model_dump(mode="python")
-    if gs_file.default_selection_policy is not None:
+    if apply_ground_defaults and gs_file.default_selection_policy is not None:
         data["selection_policy"] = gs_file.default_selection_policy.model_dump(mode="python")
-    if gs_file.default_handover_policy is not None:
+    if apply_ground_defaults and gs_file.default_handover_policy is not None:
         data["handover_policy"] = gs_file.default_handover_policy.model_dump(mode="python")
-    if gs_file.default_handover_mode is not None:
+    if apply_ground_defaults and gs_file.default_handover_mode is not None:
         data["handover_mode"] = gs_file.default_handover_mode
-    if gs_file.default_mbb_overlap_ticks is not None:
+    if apply_ground_defaults and gs_file.default_mbb_overlap_ticks is not None:
         data["mbb_overlap_ticks"] = gs_file.default_mbb_overlap_ticks
-    if gs_file.default_mbb_reserve is not None:
+    if apply_ground_defaults and gs_file.default_mbb_reserve is not None:
         data["mbb_reserve"] = gs_file.default_mbb_reserve
     if station.selection_policy is not None:
         data["selection_policy"] = station.selection_policy.model_dump(mode="python")

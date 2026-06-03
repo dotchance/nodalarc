@@ -489,7 +489,9 @@ def cfg_clock_default():
 def _station_ground_scheduling(
     base: GroundSchedulingConfig, gs_file: GroundStationFile, station: Any
 ) -> GroundSchedulingConfig:
-    return resolve_station_ground_scheduling(base, gs_file, station).scheduling
+    return resolve_station_ground_scheduling(
+        base, gs_file, station, apply_ground_defaults=False
+    ).scheduling
 
 
 def _satellite_terminal_blocks(node_id: str, sat: SatelliteNode, segment_id: str):

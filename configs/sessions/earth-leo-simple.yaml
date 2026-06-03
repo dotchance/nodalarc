@@ -1,26 +1,27 @@
+
 session:
-  name: earth-leo-polar
+  name: earth-leo-simple
 identity:
   mode: segment_namespaced
 segments:
 - id: space
   kind: constellation
-  source: configs/constellations/iridium-small-36.yaml
+  source: configs/constellations/demo-36.yaml
   namespace: space
   central_body: earth
   tags:
   - earth
   - leo
-  - polar
+  - simple
 - id: ground
   kind: ground_set
-  source: configs/ground-stations/sets/polar-emphasis.yaml
+  source: configs/ground-stations/sets/demo.yaml
   namespace: ground
   reference_body: earth
   tags:
   - earth
   - ground
-  - polar
+  - simple
 link_rules:
 - id: ground-access
   kind: access
@@ -37,13 +38,13 @@ simulation:
   schema_version: 2
   ground_link_model: terminal_physics
   candidate_limits:
-    max_pairs_per_rule: 216
+    max_pairs_per_rule: 252
 orbit:
   propagator: j2-mean-elements
 scheduling:
   ground:
     selection_policy:
-      name: lowest-elevation
+      name: highest-elevation
       params: {}
     handover_policy:
       name: hysteresis
@@ -60,10 +61,8 @@ dispatch:
     measurement_source: node-agent-rtt
     rtt_to_one_way: half-rtt
 routing:
-  protocol: isis
-  extensions:
-  - traffic-engineering
+  protocol: ospf
   area_assignment:
-    strategy: per-plane
+    strategy: flat
 time:
   step_seconds: 1

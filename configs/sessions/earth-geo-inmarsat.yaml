@@ -1,26 +1,27 @@
+
 session:
-  name: earth-leo-scale-576
+  name: earth-geo-inmarsat
 identity:
   mode: segment_namespaced
 segments:
 - id: space
   kind: constellation
-  source: configs/constellations/starlink-576.yaml
+  source: configs/constellations/geo-ring-8.yaml
   namespace: space
   central_body: earth
   tags:
   - earth
-  - leo
-  - scale
+  - geo
+  - inmarsat
 - id: ground
   kind: ground_set
-  source: configs/ground-stations/sets/starlink-scale.yaml
+  source: configs/ground-stations/sets/geo-inmarsat.yaml
   namespace: ground
   reference_body: earth
   tags:
   - earth
   - ground
-  - scale
+  - inmarsat
 link_rules:
 - id: ground-access
   kind: access
@@ -37,7 +38,7 @@ simulation:
   schema_version: 2
   ground_link_model: terminal_physics
   candidate_limits:
-    max_pairs_per_rule: 8640
+    max_pairs_per_rule: 40
 orbit:
   propagator: j2-mean-elements
 scheduling:
@@ -61,11 +62,7 @@ dispatch:
     rtt_to_one_way: half-rtt
 routing:
   protocol: isis
-  extensions:
-  - traffic-engineering
   area_assignment:
-    strategy: per-plane
-placement:
-  policy: planePerNode
+    strategy: flat
 time:
-  step_seconds: 1
+  step_seconds: 10

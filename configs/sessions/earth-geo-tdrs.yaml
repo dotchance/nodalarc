@@ -1,26 +1,27 @@
+
 session:
-  name: earth-leo-quickstart
+  name: earth-geo-tdrs
 identity:
   mode: segment_namespaced
 segments:
 - id: space
   kind: constellation
-  source: configs/constellations/demo-36.yaml
+  source: configs/constellations/geo-ring-8.yaml
   namespace: space
   central_body: earth
   tags:
   - earth
-  - leo
-  - quickstart
+  - geo
+  - tdrs
 - id: ground
   kind: ground_set
-  source: configs/ground-stations/sets/demo.yaml
+  source: configs/ground-stations/sets/geo-tdrs.yaml
   namespace: ground
   reference_body: earth
   tags:
   - earth
   - ground
-  - quickstart
+  - tdrs
 link_rules:
 - id: ground-access
   kind: access
@@ -37,7 +38,7 @@ simulation:
   schema_version: 2
   ground_link_model: terminal_physics
   candidate_limits:
-    max_pairs_per_rule: 252
+    max_pairs_per_rule: 24
 orbit:
   propagator: j2-mean-elements
 scheduling:
@@ -60,8 +61,8 @@ dispatch:
     measurement_source: node-agent-rtt
     rtt_to_one_way: half-rtt
 routing:
-  protocol: ospf
+  protocol: isis
   area_assignment:
     strategy: flat
 time:
-  step_seconds: 1
+  step_seconds: 10

@@ -37,9 +37,9 @@ def _ground_scheduling() -> GroundSchedulingConfig:
 
 def _load_test_ctx():
     """Load a small test constellation and build StepContext."""
-    session_path = Path("configs/sessions/earth-leo-quickstart.yaml")
+    session_path = Path("configs/sessions/earth-leo-simple.yaml")
     if not session_path.exists():
-        pytest.skip("earth-leo-quickstart.yaml not available")
+        pytest.skip("earth-leo-simple.yaml not available")
 
     resolution = load_session_resolution_from_file(session_path, origin="test.session_ephemeris")
     session = resolution.runtime_session

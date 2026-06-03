@@ -20,11 +20,11 @@ def _load_test_session():
     """Load a small test constellation for step comparison."""
     from pathlib import Path
 
-    session_path = Path("configs/sessions/earth-leo-quickstart.yaml")
+    session_path = Path("configs/sessions/earth-leo-simple.yaml")
     if not session_path.exists():
         import pytest
 
-        pytest.skip("earth-leo-quickstart.yaml not available")
+        pytest.skip("earth-leo-simple.yaml not available")
 
     from nodalarc.resolve_session import load_session_resolution_from_file
 

@@ -197,11 +197,11 @@ def _fixed_step_result(
 
 
 def _demo_phase4_session_path(tmp_path: Path) -> Path:
-    session_path = tmp_path / "earth-leo-quickstart.yaml"
+    session_path = tmp_path / "earth-leo-simple.yaml"
     session_path.write_text(
         yaml.dump(
             build_segment_session_dict(
-                name="earth-leo-quickstart",
+                name="earth-leo-simple",
                 constellation="configs/constellations/demo-36.yaml",
                 ground_stations="configs/ground-stations/sets/demo.yaml",
                 protocol="ospf",

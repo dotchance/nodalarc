@@ -20,7 +20,7 @@ metadata:
 spec:
   sessionYaml: |
     session:
-      name: earth-leo-quickstart
+      name: earth-leo-simple
     identity:
       mode: segment_namespaced
     segments:

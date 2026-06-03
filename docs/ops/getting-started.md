@@ -136,12 +136,12 @@ Available session configs:
 
 | Session | Satellites | Routing | Description |
 |---------|-----------|---------|-------------|
-| `earth-leo-quickstart.yaml` | 36 | OSPF | Default. Single LEO ring, fast deploy |
+| `earth-leo-simple.yaml` | 36 | OSPF | Default. Small single-shell LEO starter |
 | `earth-leo-walker.yaml` | 176 | IS-IS + TE | Walker-delta LEO starter |
-| `earth-leo-handover-bbm.yaml` | 176 | IS-IS + TE | Break-before-make handover observation |
-| `earth-leo-handover-mbb.yaml` | 176 | IS-IS + TE + BFD | Make-before-break handover observation |
 | `earth-leo-polar.yaml` | 36 | IS-IS + TE | Polar LEO starter with high-latitude ground stations |
-| `earth-leo-scale-576.yaml` | 576 | IS-IS + TE | Large LEO scale run |
+| `earth-meo-gps.yaml` | 24 | IS-IS | GPS-like MEO starter with long-range RF gateways |
+| `earth-geo-inmarsat.yaml` | 8 | IS-IS | GEO commercial-relay-style starter |
+| `earth-geo-tdrs.yaml` | 8 | IS-IS | GEO relay/TDRS-style starter |
 
 ## Step 5: Teardown
 

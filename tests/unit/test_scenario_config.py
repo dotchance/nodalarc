@@ -33,21 +33,21 @@ class TestActionTypeValidation:
         step = step_adapter.validate_python(
             {
                 "action": "inject_link_down",
-                "node_a": "sat-P00S00",
-                "node_b": "sat-P00S01",
+                "node_a": "space-sat-p00s00",
+                "node_b": "space-sat-p00s01",
             }
         )
         assert isinstance(step, InjectLinkDownStep)
-        assert step.node_a == "sat-P00S00"
-        assert step.node_b == "sat-P00S01"
+        assert step.node_a == "space-sat-p00s00"
+        assert step.node_b == "space-sat-p00s01"
         assert step.reason == "scenario_inject_down"
 
     def test_inject_link_up_step(self):
         step = step_adapter.validate_python(
             {
                 "action": "inject_link_up",
-                "node_a": "sat-P00S00",
-                "node_b": "sat-P00S01",
+                "node_a": "space-sat-p00s00",
+                "node_b": "space-sat-p00s01",
             }
         )
         assert isinstance(step, InjectLinkUpStep)
@@ -56,21 +56,21 @@ class TestActionTypeValidation:
         step = step_adapter.validate_python(
             {
                 "action": "inject_satellite_loss",
-                "node": "sat-P02S03",
+                "node": "space-sat-p02s03",
             }
         )
         assert isinstance(step, InjectSatelliteLossStep)
-        assert step.node == "sat-P02S03"
+        assert step.node == "space-sat-p02s03"
 
     def test_restore_satellite_step(self):
         step = step_adapter.validate_python(
             {
                 "action": "restore_satellite",
-                "node": "sat-P02S03",
+                "node": "space-sat-p02s03",
             }
         )
         assert isinstance(step, RestoreSatelliteStep)
-        assert step.node == "sat-P02S03"
+        assert step.node == "space-sat-p02s03"
 
     def test_wait_converge_step(self):
         step = step_adapter.validate_python({"action": "wait_converge"})
@@ -120,7 +120,7 @@ class TestMissingRequiredFields:
             step_adapter.validate_python(
                 {
                     "action": "inject_link_down",
-                    "node_b": "sat-P00S01",
+                    "node_b": "space-sat-p00s01",
                 }
             )
 
@@ -129,7 +129,7 @@ class TestMissingRequiredFields:
             step_adapter.validate_python(
                 {
                     "action": "inject_link_down",
-                    "node_a": "sat-P00S00",
+                    "node_a": "space-sat-p00s00",
                 }
             )
 
@@ -159,23 +159,23 @@ class TestScenarioConfigRoundTrip:
                 WaitStep(action="wait", duration_s=10.0),
                 InjectLinkDownStep(
                     action="inject_link_down",
-                    node_a="sat-P00S00",
-                    node_b="sat-P01S00",
+                    node_a="space-sat-p00s00",
+                    node_b="space-sat-p01s00",
                 ),
                 WaitConvergeStep(action="wait_converge", timeout_s=60.0),
                 MeasureStep(action="measure", duration_s=30.0),
                 InjectLinkUpStep(
                     action="inject_link_up",
-                    node_a="sat-P00S00",
-                    node_b="sat-P01S00",
+                    node_a="space-sat-p00s00",
+                    node_b="space-sat-p01s00",
                 ),
                 InjectSatelliteLossStep(
                     action="inject_satellite_loss",
-                    node="sat-P02S03",
+                    node="space-sat-p02s03",
                 ),
                 RestoreSatelliteStep(
                     action="restore_satellite",
-                    node="sat-P02S03",
+                    node="space-sat-p02s03",
                 ),
                 ReconfigStep(
                     action="reconfig",
@@ -224,13 +224,15 @@ class TestDiscriminatedUnionDispatch:
 
         import yaml
 
-        fixture = Path(__file__).parent.parent.parent / "configs/scenarios/isl-failure.yaml"
+        fixture = (
+            Path(__file__).parent.parent.parent / "configs/scenarios/earth-leo-isl-failure.yaml"
+        )
         if not fixture.exists():
             pytest.skip("isl-failure.yaml not available")
 
         data = yaml.safe_load(fixture.read_text())
         config = ScenarioConfig.model_validate(data["scenario"])
-        assert len(config.steps) == 7
+        assert len(config.steps) == 6
 
         expected_types = [
             WaitStep,
@@ -239,7 +241,6 @@ class TestDiscriminatedUnionDispatch:
             MeasureStep,
             InjectLinkUpStep,
             WaitConvergeStep,
-            MeasureStep,
         ]
         for step, expected in zip(config.steps, expected_types):
             assert isinstance(step, expected)

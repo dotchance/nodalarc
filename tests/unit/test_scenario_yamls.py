@@ -62,15 +62,14 @@ class TestScenarioYAMLValidation:
 
 
 class TestExpectedScenarioFiles:
-    """Verify all 6 expected scenario files exist."""
+    """Verify the concise shipped scenario catalog exists."""
 
     EXPECTED = [
-        "isl-failure.yaml",
         "steady-state.yaml",
-        "ground-handover.yaml",
-        "satellite-loss.yaml",
-        "polar-seam.yaml",
-        "time-mode-validation.yaml",
+        "earth-leo-isl-failure.yaml",
+        "earth-leo-ground-handover.yaml",
+        "earth-leo-satellite-loss.yaml",
+        "earth-leo-polar-seam.yaml",
     ]
 
     @pytest.mark.parametrize("filename", EXPECTED)
@@ -79,5 +78,5 @@ class TestExpectedScenarioFiles:
         assert path.exists(), f"Missing scenario file: {filename}"
 
     def test_total_scenario_count(self):
-        """At least 6 scenario files should exist."""
-        assert len(SCENARIO_FILES) >= 6
+        """Only the intentional shipped scenario catalog is present."""
+        assert len(SCENARIO_FILES) == len(self.EXPECTED)

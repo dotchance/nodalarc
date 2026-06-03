@@ -1,5 +1,6 @@
+
 session:
-  name: earth-leo-handover-mbb
+  name: earth-leo-mbb-acceptance
 identity:
   mode: segment_namespaced
 segments:

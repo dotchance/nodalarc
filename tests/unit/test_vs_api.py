@@ -69,7 +69,7 @@ class TestOpsEventVisibility:
         assert visible == events[2:]
 
 
-def _session_yaml_text(name: str = "earth-leo-quickstart") -> str:
+def _session_yaml_text(name: str = "earth-leo-simple") -> str:
     return yaml.dump(
         build_segment_session_dict(
             name=name,
@@ -91,7 +91,7 @@ def _constellation_cr(
     wired_pods: int = 43,
     session_yaml: str | None = None,
     session_run_id: str = "run-test-0001",
-    session_name: str | None = "earth-leo-quickstart",
+    session_name: str | None = "earth-leo-simple",
 ) -> dict:
     status = {
         "phase": phase,
@@ -213,9 +213,9 @@ class TestConstellationCRReadiness:
 
         assert ready is not None
         assert ready.session_id == "run-test-0001"
-        assert ready.session_name == "earth-leo-quickstart"
+        assert ready.session_name == "earth-leo-simple"
         assert ready.generation == 2
-        assert ready.session.session.name == "earth-leo-quickstart"
+        assert ready.session.session.name == "earth-leo-simple"
 
     def test_extract_ready_cr_session_requires_runtime_identity(self):
         import vs_api.main as m

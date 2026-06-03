@@ -1,0 +1,24 @@
+
+scenario:
+  name: earth-leo-satellite-loss
+  description: "Remove and restore one satellite in the namespaced simple LEO demo."
+  traffic_flows:
+    - flow_id: simple-ground-flow
+      src: ground-gs-hawthorne
+      dst: ground-gs-ashburn
+      protocol: udp
+      bandwidth_kbps: 1000
+      probe_type: continuous
+  steps:
+    - action: wait
+      duration_s: 30
+    - action: inject_satellite_loss
+      node: space-sat-p01s05
+    - action: wait_converge
+      timeout_s: 60
+    - action: measure
+      duration_s: 30
+    - action: restore_satellite
+      node: space-sat-p01s05
+    - action: wait_converge
+      timeout_s: 60

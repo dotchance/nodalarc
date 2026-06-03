@@ -4,7 +4,7 @@
 set -euo pipefail
 
 NAMESPACE="${NAMESPACE:-nodalarc}"
-DEFAULT_SESSION="${DEFAULT_SESSION:-configs/sessions/earth-leo-quickstart.yaml}"
+DEFAULT_SESSION="${DEFAULT_SESSION:-configs/sessions/earth-leo-simple.yaml}"
 KUBECONFIG="${KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}"
 export KUBECONFIG
 

@@ -2,7 +2,7 @@
 
 Tests pure-logic functions and K8s-mocked deploy pipeline. All test inputs
 are inline - no dependency on production config files except one regression
-test per class that explicitly references earth-leo-quickstart.yaml.
+test per class that explicitly references earth-leo-simple.yaml.
 
 Uses create_autospec for K8s client mocks to catch signature drift.
 """

@@ -2266,6 +2266,29 @@ class Dispatcher:
     # Control Plane: scenario command handling
     # ------------------------------------------------------------------
 
+    def _scenario_known_node_ids(self) -> set[str]:
+        """Runtime node IDs accepted by scenario commands.
+
+        Scenario commands are operator/debug controls over the active runtime
+        graph. Unknown IDs must fail explicitly; accepting stale fixture names
+        would create overrides that silently match nothing.
+        """
+        nodes: set[str] = set(self._gs_capacities) | set(self._sat_capacities)
+        for maps in (
+            self._interface_map,
+            self._desired_links,
+            self._actual_links,
+            self._ome_view,
+        ):
+            for node_a, node_b in maps:
+                nodes.add(node_a)
+                nodes.add(node_b)
+        return nodes
+
+    def _unknown_scenario_node_ids(self, *node_ids: str) -> list[str]:
+        known = self._scenario_known_node_ids()
+        return sorted({node_id for node_id in node_ids if node_id not in known})
+
     async def _on_scenario_command(self, msg) -> None:
         """Handle a scenario injection command (core NATS request/reply).
 
@@ -2289,6 +2312,29 @@ class Dispatcher:
             await msg.respond(_json.dumps({"status": "error", "msg": str(exc)}).encode())
             return
 
+        node_ids: tuple[str, ...] = ()
+        if isinstance(cmd, (InjectLinkDown, ReleaseLinkOverride)):
+            node_ids = (cmd.node_a, cmd.node_b)
+        elif isinstance(cmd, (InjectSatelliteLoss, RestoreSatellite)):
+            node_ids = (cmd.node,)
+
+        unknown = self._unknown_scenario_node_ids(*node_ids)
+        if unknown:
+            await msg.respond(
+                _json.dumps(
+                    {
+                        "status": "error",
+                        "msg": "unknown scenario node_id(s): " + ", ".join(unknown),
+                    }
+                ).encode()
+            )
+            return
+
+        if not self._suspended and self._current_sim_time is None:
+            raise RuntimeError(
+                "Cannot dispatch scenario override before receiving OME simulation time"
+            )
+
         if isinstance(cmd, InjectLinkDown):
             pair = (min(cmd.node_a, cmd.node_b), max(cmd.node_a, cmd.node_b))
             self._override_pairs[pair] = cmd.reason
@@ -2311,10 +2357,6 @@ class Dispatcher:
             )
             return
 
-        if self._current_sim_time is None:
-            raise RuntimeError(
-                "Cannot dispatch scenario override before receiving OME simulation time"
-            )
         sim_time = self._current_sim_time
         intent = self._build_dispatch_intent(sim_time=sim_time, source="scenario")
         await self._dispatch_queue.put(intent)

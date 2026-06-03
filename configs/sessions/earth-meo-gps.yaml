@@ -1,26 +1,27 @@
+
 session:
-  name: earth-leo-handover-bbm
+  name: earth-meo-gps
 identity:
   mode: segment_namespaced
 segments:
 - id: space
   kind: constellation
-  source: configs/constellations/starlink-176.yaml
+  source: configs/constellations/meo-gps-24.yaml
   namespace: space
   central_body: earth
   tags:
   - earth
-  - leo
-  - handover
+  - meo
+  - gps
 - id: ground
   kind: ground_set
-  source: configs/ground-stations/sets/handover-test.yaml
+  source: configs/ground-stations/sets/meo-gps.yaml
   namespace: ground
   reference_body: earth
   tags:
   - earth
   - ground
-  - handover
+  - gps
 link_rules:
 - id: ground-access
   kind: access
@@ -37,7 +38,7 @@ simulation:
   schema_version: 2
   ground_link_model: terminal_physics
   candidate_limits:
-    max_pairs_per_rule: 352
+    max_pairs_per_rule: 144
 orbit:
   propagator: j2-mean-elements
 scheduling:
@@ -46,8 +47,10 @@ scheduling:
       name: highest-elevation
       params: {}
     handover_policy:
-      name: none
-      params: {}
+      name: hysteresis
+      params:
+        discount_factor: 1.15
+        mask_fade_range_deg: 5.0
     handover_mode: bbm
     mbb_overlap_ticks: 0
     mbb_reserve: 0
@@ -59,9 +62,7 @@ dispatch:
     rtt_to_one_way: half-rtt
 routing:
   protocol: isis
-  extensions:
-  - traffic-engineering
   area_assignment:
     strategy: per-plane
 time:
-  step_seconds: 1
+  step_seconds: 5

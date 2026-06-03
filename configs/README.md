@@ -12,7 +12,7 @@ Runtime configuration files mounted into containers or read at deploy time.
 | `ground-stations/sets/` | Named sets of ground stations (e.g., `global-8.yaml` = 8 stations worldwide). |
 | `satellite-types/` | Satellite hardware definitions — ISL terminal count, bandwidth, tracking rate. |
 | `scenarios/` | Failure injection scenarios (link failure, satellite loss, compound). |
-| `sessions/` | Curated segment-session YAMLs for manual deployment (e.g., `earth-leo-walker.yaml`). |
+| `sessions/` | Curated segment-session YAMLs for manual deployment (e.g., `earth-leo-simple.yaml`). |
 | `templates/frr/` | Jinja2 templates for FRR daemon configuration files. |
 | `platform.yaml` | Platform-level settings (NATS URL, service ports, system tuning). |
 

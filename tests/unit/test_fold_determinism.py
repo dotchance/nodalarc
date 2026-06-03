@@ -18,9 +18,9 @@ from ome.event_stream import build_step_context, compute_step, precompute_timeli
 
 
 def _load_test_session():
-    session_path = Path("configs/sessions/earth-leo-quickstart.yaml")
+    session_path = Path("configs/sessions/earth-leo-simple.yaml")
     if not session_path.exists():
-        pytest.skip("earth-leo-quickstart.yaml not available")
+        pytest.skip("earth-leo-simple.yaml not available")
     resolution = load_session_resolution_from_file(session_path, origin="test.fold_determinism")
     session = resolution.runtime_session
     constellation_config = resolution.primary_constellation.config

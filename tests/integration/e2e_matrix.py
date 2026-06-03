@@ -186,7 +186,7 @@ MATRIX = [
     },
 ]
 
-MBB_ACCEPTANCE_SESSION = Path("configs/sessions/earth-leo-handover-mbb.yaml")
+MBB_ACCEPTANCE_SESSION = Path("tests/fixtures/sessions/earth-leo-mbb-acceptance.yaml")
 MBB_BAD_OPS_CODES = {
     "KERNEL_DIRTY",
     "ACTUATION_BLOCKED",

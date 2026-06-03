@@ -249,3 +249,31 @@ def test_recovered_checkpoint_rejects_future_written_at():
 
     with pytest.raises(RuntimeError, match="future"):
         _validate_recovered_checkpoint(ckpt, now_wall_s=1_999.0)
+
+
+def test_checkpoint_pair_roles_are_derived_from_ground_universe():
+    """Allocator-normalized pairs can be sat-first; checkpoint roles cannot."""
+    from ome.main import _checkpoint_ground_sat_pair
+
+    assert _checkpoint_ground_sat_pair(
+        ("luna-sat-p01s00", "lunar-ground-gs-nearside-relay-site"),
+        {"lunar-ground-gs-nearside-relay-site"},
+    ) == ("lunar-ground-gs-nearside-relay-site", "luna-sat-p01s00")
+    assert _checkpoint_ground_sat_pair(("gs-denver", "sat-p00s00"), {"gs-denver"}) == (
+        "gs-denver",
+        "sat-p00s00",
+    )
+
+
+@pytest.mark.parametrize(
+    "pair",
+    [
+        ("sat-a", "sat-b"),
+        ("gs-a", "gs-b"),
+    ],
+)
+def test_checkpoint_pair_roles_reject_non_ground_or_double_ground_pairs(pair):
+    from ome.main import _checkpoint_ground_sat_pair
+
+    with pytest.raises(ValueError, match="expected exactly one ground station"):
+        _checkpoint_ground_sat_pair(pair, {"gs-a", "gs-b"})

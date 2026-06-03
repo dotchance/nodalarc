@@ -97,6 +97,27 @@ def _validate_recovered_checkpoint(
     return checkpoint_age
 
 
+def _checkpoint_ground_sat_pair(
+    pair: tuple[str, str],
+    ground_station_ids: set[str] | frozenset[str],
+) -> tuple[str, str]:
+    """Return `(ground_id, satellite_id)` for a checkpoint pair.
+
+    OME stores ground pairs in allocator-normalized endpoint order for stable
+    comparisons. Checkpoint payloads are semantic and must name the ground and
+    satellite roles explicitly, so serialization cannot assume tuple position.
+    """
+
+    a_is_ground = pair[0] in ground_station_ids
+    b_is_ground = pair[1] in ground_station_ids
+    if a_is_ground == b_is_ground:
+        raise ValueError(
+            f"Cannot serialize checkpoint pair {pair!r}: expected exactly one ground station "
+            f"endpoint from {sorted(ground_station_ids)!r}"
+        )
+    return pair if a_is_ground else (pair[1], pair[0])
+
+
 def _load_session_config(session_path: str | Path) -> _SessionBundle:
     """Load and validate all session config. Pure — no side effects."""
     from nodalarc.models.constellation import ParametricConstellation, TLEConstellation
@@ -730,8 +751,10 @@ def _run_pacing(
         if step < 0:
             raise ValueError("SchedulingCheckpoint step must be non-negative")
 
+        ground_station_ids = frozenset(mbb_overlap_ticks_by_gs)
         assoc_flat: dict[str, CheckpointAssociation] = {}
-        for (gs_id, sat_id), (gs_ti, sat_ti) in associations.items():
+        for pair, (gs_ti, sat_ti) in associations.items():
+            gs_id, sat_id = _checkpoint_ground_sat_pair(pair, ground_station_ids)
             assoc_flat[f"{gs_id}:{sat_id}"] = CheckpointAssociation(
                 gs_id=gs_id,
                 sat_id=sat_id,
@@ -744,7 +767,8 @@ def _run_pacing(
         # remaining_ticks as an audit value so recovery tests can prove that a
         # no-time-advanced restart preserved MBB overlap semantics exactly.
         td_flat: dict[str, TeardownEntry] = {}
-        for (gs_id, sat_id), teardown in teardowns.items():
+        for pair, teardown in teardowns.items():
+            gs_id, sat_id = _checkpoint_ground_sat_pair(pair, ground_station_ids)
             if gs_id not in mbb_overlap_ticks_by_gs:
                 raise ValueError(
                     f"Cannot build SchedulingCheckpoint for pending teardown {gs_id}:{sat_id}: "

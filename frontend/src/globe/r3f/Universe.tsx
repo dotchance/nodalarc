@@ -25,16 +25,26 @@ import {
  * subscribers so `controls.update()` runs after the follow-cam and projection consumers have
  * had their say this frame — reproducing the legacy loop order (controls.update at the end).
  */
-function Controls({ controlsRef }: { controlsRef?: MutableRefObject<OrbitControls | null> }) {
+function Controls({
+  controlsRef,
+  maxDistance,
+}: {
+  controlsRef?: MutableRefObject<OrbitControls | null>;
+  maxDistance: number;
+}) {
   const camera = useThree((s) => s.camera);
   const gl = useThree((s) => s.gl);
   const localRef = useRef<OrbitControls | null>(null);
+  const maxDistanceRef = useRef(maxDistance);
+  useEffect(() => {
+    maxDistanceRef.current = maxDistance;
+  }, [maxDistance]);
   useEffect(() => {
     const controls = new OrbitControls(camera, gl.domElement);
     controls.enableDamping = true;
     controls.dampingFactor = 0.05;
     controls.minDistance = CAMERA_MIN_DISTANCE;
-    controls.maxDistance = CAMERA_MAX_DISTANCE;
+    controls.maxDistance = maxDistanceRef.current;
     localRef.current = controls;
     if (controlsRef) controlsRef.current = controls;
     return () => {
@@ -43,7 +53,22 @@ function Controls({ controlsRef }: { controlsRef?: MutableRefObject<OrbitControl
       if (controlsRef && controlsRef.current === controls) controlsRef.current = null;
     };
   }, [camera, gl, controlsRef]);
+  useEffect(() => {
+    const controls = localRef.current;
+    if (!controls) return;
+    controls.maxDistance = maxDistance;
+    controls.update();
+  }, [maxDistance]);
   useFrame(() => localRef.current?.update());
+  return null;
+}
+
+function CameraClip({ far }: { far: number }) {
+  const camera = useThree((s) => s.camera);
+  useEffect(() => {
+    camera.far = far;
+    camera.updateProjectionMatrix();
+  }, [camera, far]);
   return null;
 }
 
@@ -52,6 +77,8 @@ export function Universe({
   afterControls,
   controlsRef,
   onPointerMissed,
+  controlsMaxDistance = CAMERA_MAX_DISTANCE,
+  cameraFar = 10000,
 }: {
   children?: ReactNode;
   afterControls?: ReactNode;
@@ -59,6 +86,8 @@ export function Universe({
   /** Canvas-level miss handler: fires on a click that hit no interactive object (empty space /
    *  Earth / a non-pickable beam) — the hook the LinkPicker uses for link-select + deselect. */
   onPointerMissed?: (event: MouseEvent) => void;
+  controlsMaxDistance?: number;
+  cameraFar?: number;
 }) {
   return (
     <Canvas
@@ -67,7 +96,7 @@ export function Universe({
         fov: CAMERA_FOV,
         position: [0, CAMERA_DISTANCE * 0.5, CAMERA_DISTANCE * 0.87],
         near: 0.1,
-        far: 10000,
+        far: cameraFar,
       }}
       gl={{ antialias: true, preserveDrawingBuffer: true }}
       dpr={[1, 2]}
@@ -77,9 +106,10 @@ export function Universe({
       {/* Ambient fill only; the sun directional lives in <Earth> (earth frame), positioned by
           the sim-time sun model so the terminator tracks the frame rotation. */}
       <ambientLight intensity={0.5} />
+      <CameraClip far={cameraFar} />
       <Suspense fallback={null}>{children}</Suspense>
       {/* Controls run after scene writers/follow-cam; projection consumers mount after this. */}
-      <Controls controlsRef={controlsRef} />
+      <Controls controlsRef={controlsRef} maxDistance={controlsMaxDistance} />
       <Suspense fallback={null}>{afterControls}</Suspense>
     </Canvas>
   );

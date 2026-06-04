@@ -1,0 +1,7 @@
+name: geo-tdrs-representative
+description: "6 representative GEO relay slots. TDRS-style relay geometry for GEO access and relay demonstrations."
+satellite_count: 6
+constellation: configs/constellations/geo-tdrs-representative.yaml
+ground_stations: configs/ground-stations/sets/geo-tdrs.yaml
+time:
+  step_seconds: 10

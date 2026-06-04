@@ -10,7 +10,7 @@
  * reimplemented declaratively. Positions are mirrored into the shared registry so links,
  * selection, labels, and the camera read the same per-frame truth.
  *
- * Lives inside <Body id="earth">, so its instances are in the Earth local frame.
+ * Lives inside a <Body>, so its instances are in that body's local frame.
  */
 
 import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
@@ -21,7 +21,7 @@ import { geoToWorld } from "../geo";
 import { interpolatedSimTimeMs } from "../../sim/simClock";
 import { isWorkerReady, readPosition, requestPropagate } from "../../sim/workerBridge";
 import { propagateToSceneXYZ } from "../../sim/orbitalMath";
-import type { SessionEphemeris } from "../../sim/ephemeris";
+import type { EphemerisNodeKeplerian, SessionEphemeris } from "../../sim/ephemeris";
 import type { ColorMode, NodeState, Selection } from "../../types";
 import { FAMILY_TONE } from "../../explain/families";
 import type { SatRelation } from "../../explain/gsCandidateRelations";
@@ -46,6 +46,7 @@ interface ConstellationProps {
   ephemeris: SessionEphemeris | null;
   colorMode: ColorMode;
   onSelect: (sel: Selection | null) => void;
+  onFocusNode: (nodeId: string) => void;
   /** ctrl/cmd-click toggles an orbit pin for the satellite instead of selecting it. */
   onTogglePin: (id: string) => void;
   /** Hover a satellite -> tooltip; null clears it. */
@@ -59,6 +60,7 @@ export function Constellation({
   ephemeris,
   colorMode,
   onSelect,
+  onFocusNode,
   onTogglePin,
   onHover,
   relations,
@@ -70,7 +72,8 @@ export function Constellation({
   const lastPropagateRef = useRef(0);
   // The body these satellites live in — written with each position so the registry resolves them
   // through this body's frame (no Earth assumption). Read via a ref so the useFrame closure is stable.
-  const bodyId = useBodyFrame().id;
+  const bodyFrame = useBodyFrame();
+  const bodyId = bodyFrame.id;
   const bodyIdRef = useRef(bodyId);
   bodyIdRef.current = bodyId;
 
@@ -104,7 +107,7 @@ export function Constellation({
         idx = countRef.current++;
         satIndex.current.set(node.node_id, idx);
         indexToId.current[idx] = node.node_id;
-        const p = geoToWorld(node.lat_deg, node.lon_deg, node.alt_km);
+        const p = geoToWorld(node.lat_deg, node.lon_deg, node.alt_km, bodyFrame.radiusRender);
         _tmpMatrix.makeTranslation(p.x, p.y, p.z);
         mesh.setMatrixAt(idx, _tmpMatrix);
         setNodeLocalPosition(node.node_id, bodyId, p.x, p.y, p.z);
@@ -134,7 +137,7 @@ export function Constellation({
     mesh.count = countRef.current;
     mesh.instanceMatrix.needsUpdate = true;
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
-  }, [nodes, colorMode, relations, bodyId]);
+  }, [nodes, colorMode, relations, bodyId, bodyFrame.radiusRender]);
 
   // Per-frame propagation from the latest ephemeris and sim clock.
   useFrame(() => {
@@ -153,13 +156,22 @@ export function Constellation({
     for (const [nodeId, idx] of satIndex.current) {
       const ephNode = ephemeris.nodes[nodeId];
       if (!ephNode || ephNode.type !== "keplerian") continue;
+      const keplerianNode: EphemerisNodeKeplerian = ephNode;
+      const nodeBody = keplerianNode.reference_body ?? "earth";
       let x: number, y: number, z: number;
-      if (workerReady && readPosition(nodeId, simTimeUnix, _workerPos)) {
+      if (workerReady && nodeBody === "earth" && readPosition(nodeId, simTimeUnix, _workerPos)) {
         x = _workerPos.x;
         y = _workerPos.y;
         z = _workerPos.z;
       } else {
-        [x, y, z] = propagateToSceneXYZ(ephNode, epochUnix, simTimeUnix);
+        [x, y, z] = propagateToSceneXYZ(
+          {
+            ...keplerianNode,
+            reference_radius_km: ephemeris.body_frames?.[nodeBody]?.radius_km,
+          },
+          epochUnix,
+          simTimeUnix,
+        );
       }
       _tmpMatrix.makeTranslation(x, y, z);
       mesh.setMatrixAt(idx, _tmpMatrix);
@@ -178,6 +190,15 @@ export function Constellation({
     // ctrl/cmd-click toggles an orbit pin (legacy gpuPicker behavior); plain click selects.
     if (e.nativeEvent.ctrlKey || e.nativeEvent.metaKey) onTogglePin(id);
     else onSelect({ type: "satellite", id });
+  };
+
+  const handleDoubleClick = (e: ThreeEvent<MouseEvent>) => {
+    if (e.instanceId === undefined) return;
+    const id = indexToId.current[e.instanceId];
+    if (!id) return;
+    e.stopPropagation();
+    onSelect({ type: "satellite", id });
+    onFocusNode(id);
   };
 
   const handlePointerMove = (e: ThreeEvent<PointerEvent>) => {
@@ -200,6 +221,7 @@ export function Constellation({
       args={[geometry, material, MAX_SATELLITES]}
       name="satellites"
       onClick={handleClick}
+      onDoubleClick={handleDoubleClick}
       onPointerMove={handlePointerMove}
       onPointerOut={() => onHover(null)}
     />

@@ -2,10 +2,20 @@
 # Licensed under the Apache License, Version 2.0. See LICENSE file.
 """Session configuration models — top-level YAML schema."""
 
-from typing import Any, Literal
+from collections.abc import Mapping
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    NonNegativeInt,
+    field_validator,
+    model_validator,
+)
 
+from nodalarc.frozen import FrozenDict, ImmutableStrDict
+from nodalarc.model_validation import NonEmptyReference, NonEmptyString, nonempty_unique
 from nodalarc.models.ground_policy import (
     CrossTenantDisplacementPolicy,
     HandoverPolicySpec,
@@ -20,11 +30,11 @@ from nodalarc.models.ground_station import HysteresisParameters, TerrestrialPref
 class SessionMeta(BaseModel):
     """Session metadata."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
 
-    name: str
-    run_id: str | None = None
-    data_dir: str = "/var/nodalarc/sessions"
+    name: NonEmptyString
+    run_id: NonEmptyReference | None = None
+    data_dir: NonEmptyReference = "/var/nodalarc/sessions"
 
     @field_validator("run_id")
     @classmethod
@@ -42,89 +52,184 @@ class SessionMeta(BaseModel):
 class AddressingConfig(BaseModel):
     """Addressing scheme overrides — all have defaults."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
 
-    sat_id_template: str = "sat-P{plane:02d}S{slot:02d}"
-    gs_id_template: str = "gs-{name}"
-    ipv4_sat_template: str = "10.{plane}.{slot}.1"
-    ipv4_gs_template: str = "10.255.{gs_index}.1"
-    ipv6_sat_template: str = "fd00::{plane}:{slot}:1"
-    ipv6_gs_template: str = "fd00::ff:{gs_index}:1"
+    sat_id_template: NonEmptyReference = "sat-P{plane:02d}S{slot:02d}"
+    gs_id_template: NonEmptyReference = "gs-{name}"
+    ipv4_sat_template: NonEmptyReference = "10.{plane}.{slot}.1"
+    ipv4_gs_template: NonEmptyReference = "10.255.{gs_index}.1"
+    ipv6_sat_template: NonEmptyReference = "fd00::{plane}:{slot}:1"
+    ipv6_gs_template: NonEmptyReference = "fd00::ff:{gs_index}:1"
 
 
 class AreaMapping(BaseModel):
-    """Area assignment for explicit strategy."""
+    """One explicit area mapping. Only explicit strategy owns this shape."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
 
-    planes: list[int] | None = None
-    ground_stations: str | list[str] | None = None  # "all" or list of names
-    area_id: str
+    planes: tuple[NonNegativeInt, ...] | None = None
+    ground_stations: Literal["all"] | tuple[NonEmptyReference, ...] | None = None
+    area_id: NonEmptyReference
 
+    @field_validator("planes")
+    @classmethod
+    def _valid_planes(cls, v: tuple[int, ...] | None) -> tuple[int, ...] | None:
+        return nonempty_unique(v)
 
-class AreaAssignmentConfig(BaseModel):
-    """Routing area assignment configuration."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    strategy: str  # "stripe", "per-plane", "flat", "explicit"
-    planes_per_stripe: int | None = None  # Required for "stripe"
-    assignments: list[AreaMapping] | None = None  # Required for "explicit"
-    gs_area_id: str | None = None  # Area for ground stations
+    @field_validator("ground_stations")
+    @classmethod
+    def _valid_ground_stations(cls, v):
+        # "all" is the only scalar keyword; specific stations must be a non-empty
+        # list/tuple so a lone typo cannot masquerade as a keyword.
+        if isinstance(v, (list, tuple)):
+            return nonempty_unique(v)
+        return v
 
     @model_validator(mode="after")
-    def _validate_strategy_fields(self):
-        if self.strategy == "stripe" and (
-            self.planes_per_stripe is None or self.planes_per_stripe <= 0
-        ):
-            raise ValueError("strategy 'stripe' requires planes_per_stripe > 0")
-        if self.strategy == "explicit" and not self.assignments:
-            raise ValueError("strategy 'explicit' requires assignments list")
+    def _targets_something(self):
+        if self.planes is None and self.ground_stations is None:
+            raise ValueError("AreaMapping must target planes and/or ground_stations")
         return self
+
+
+class FlatAreaAssignmentConfig(BaseModel):
+    """All nodes share one routing area."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
+
+    strategy: Literal["flat"]
+    gs_area_id: NonEmptyReference | None = None
+
+
+class PerPlaneAreaAssignmentConfig(BaseModel):
+    """Each orbital plane gets a deterministic routing area."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
+
+    strategy: Literal["per-plane"]
+    gs_area_id: NonEmptyReference | None = None
+
+
+class StripeAreaAssignmentConfig(BaseModel):
+    """Adjacent planes are grouped into fixed-size area stripes."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
+
+    strategy: Literal["stripe"]
+    planes_per_stripe: int = Field(gt=0)
+    gs_area_id: NonEmptyReference | None = None
+
+
+class ExplicitAreaAssignmentConfig(BaseModel):
+    """Only explicit strategy may carry per-plane/per-GS mappings."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
+
+    strategy: Literal["explicit"]
+    assignments: tuple[AreaMapping, ...] = Field(min_length=1)
+    gs_area_id: NonEmptyReference | None = None
+
+    @model_validator(mode="after")
+    def _validate_unique_targets(self):
+        seen_planes: set[int] = set()
+        seen_gs: set[str] = set()
+        has_all_gs = False
+        for mapping in self.assignments:
+            for plane in mapping.planes or ():
+                if plane in seen_planes:
+                    raise ValueError(f"plane {plane} is mapped by more than one assignment")
+                seen_planes.add(plane)
+            if mapping.ground_stations == "all":
+                if has_all_gs:
+                    raise ValueError("ground_stations='all' is mapped by more than one assignment")
+                has_all_gs = True
+            elif mapping.ground_stations is not None:
+                for name in mapping.ground_stations:
+                    if name in seen_gs:
+                        raise ValueError(
+                            f"ground station {name!r} is mapped by more than one assignment"
+                        )
+                    seen_gs.add(name)
+        if has_all_gs and seen_gs:
+            raise ValueError(
+                "explicit area assignment mixes ground_stations='all' with specific "
+                "station mappings (ambiguous)"
+            )
+        return self
+
+
+AreaAssignmentConfig = Annotated[
+    FlatAreaAssignmentConfig
+    | PerPlaneAreaAssignmentConfig
+    | StripeAreaAssignmentConfig
+    | ExplicitAreaAssignmentConfig,
+    Field(discriminator="strategy"),
+]
 
 
 class RoutingConfig(BaseModel):
     """Routing configuration.
 
-    Either ``stack`` (legacy path to a routing-stack directory) or
-    ``protocol`` (resolved via stack_resolver) must be set.
+    Runtime routing authority is ``protocol`` plus normalized ``extensions``.
+    ``stack`` is rejected because it creates divergent routing truth across
+    services.
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
 
-    protocol: str | None = None  # "ospf" | "isis" | "static" | "nodalpath"
-    extensions: list[str] = []  # ["te", "mpls", "sr"]
-    stack: str | None = None  # Legacy path — bypass resolution
-    compression_factor: int = 1
-    config_overrides: dict[str, Any] = {}
+    protocol: NonEmptyReference | None = None  # resolved by stack_resolver
+    # Normalized to the canonical {te, sr, mpls} the stack resolver consumes;
+    # known long-form aliases are accepted, unknown values rejected (never
+    # silently dropped). See _normalize_extensions.
+    extensions: tuple[str, ...] = ()
+    stack: NonEmptyReference | None = None  # Unsupported split routing path; rejected below.
+    compression_factor: int = Field(default=1, gt=0)
+    config_overrides: ImmutableStrDict = Field(default_factory=FrozenDict)
     area_assignment: AreaAssignmentConfig | None = None
 
     # BFD — cross-protocol, independent of IS-IS/OSPF choice
     bfd: bool = False
-    bfd_detect_multiplier: int = 3
-    bfd_rx_interval: int = 300  # ms
-    bfd_tx_interval: int = 300  # ms
+    bfd_detect_multiplier: int = Field(default=3, gt=0)
+    bfd_rx_interval: int = Field(default=300, gt=0)  # ms
+    bfd_tx_interval: int = Field(default=300, gt=0)  # ms
 
     # IS-IS timers (used when protocol=isis)
-    isis_hello_interval: int = 1  # seconds
-    isis_hello_multiplier: int = 3
-    spf_init_delay: int = 50  # ms — IETF SPF backoff algorithm
-    spf_short_delay: int = 200  # ms
-    spf_long_delay: int = 1000  # ms
-    spf_holddown: int = 2000  # ms
-    spf_time_to_learn: int = 500  # ms
+    isis_hello_interval: int = Field(default=1, gt=0)  # seconds
+    isis_hello_multiplier: int = Field(default=3, gt=0)
+    spf_init_delay: int = Field(default=50, ge=0)  # ms — IETF SPF backoff algorithm
+    spf_short_delay: int = Field(default=200, ge=0)  # ms
+    spf_long_delay: int = Field(default=1000, ge=0)  # ms
+    spf_holddown: int = Field(default=2000, ge=0)  # ms
+    spf_time_to_learn: int = Field(default=500, ge=0)  # ms
 
     # OSPF timers (used when protocol=ospf)
-    ospf_hello_interval: int = 1  # seconds
-    ospf_dead_interval: int = 3  # seconds
-    ospf_spf_delay: int = 50  # ms — SPF throttle
-    ospf_spf_initial_hold: int = 200  # ms
-    ospf_spf_max_hold: int = 1000  # ms
+    ospf_hello_interval: int = Field(default=1, gt=0)  # seconds
+    ospf_dead_interval: int = Field(default=3, gt=0)  # seconds
+    ospf_spf_delay: int = Field(default=50, ge=0)  # ms — SPF throttle
+    ospf_spf_initial_hold: int = Field(default=200, ge=0)  # ms
+    ospf_spf_max_hold: int = Field(default=1000, ge=0)  # ms
+
+    @field_validator("extensions")
+    @classmethod
+    def _normalize_extensions(cls, v: tuple[str, ...]) -> tuple[str, ...]:
+        # Single source of truth for the extension vocabulary lives in the stack
+        # resolver, which is the API that actually consumes these.
+        from nodalarc.stack_resolver import normalize_extensions
+
+        return normalize_extensions(v)
 
     @model_validator(mode="after")
-    def _require_stack_or_protocol(self):
-        if self.stack is None and self.protocol is None:
-            raise ValueError("Either 'stack' or 'protocol' must be set")
+    def _require_single_runtime_authority(self):
+        # The current Operator/Scheduler runtime resolves protocol/extensions and does
+        # not honor routing.stack. Accepting stack would create different routing truth
+        # in different services, so fail here instead of preserving a split-brain path.
+        if self.stack is not None:
+            raise ValueError(
+                "routing.stack is not supported by the current runtime; use "
+                "routing.protocol with routing.extensions"
+            )
+        if self.protocol is None:
+            raise ValueError("routing.protocol must be set")
         return self
 
 
@@ -140,7 +245,7 @@ class ActuationConfig(BaseModel):
     against measured single-pair actuation (~25-37 ms p99 on the reference cluster).
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
 
     expected_latency_ms: float = 250.0
     fault_after_ms: float = 1200.0
@@ -159,16 +264,46 @@ class ActuationConfig(BaseModel):
         return self
 
 
+class CandidateLimits(BaseModel):
+    """Bounds on link-rule candidate generation (segment grammar).
+
+    Multi-segment sessions must declare ``candidate_limits`` so a link rule whose
+    static endpoint-pair upper bound exceeds the limit fails semantic validation
+    before OME starts, rather than materializing an unbounded all-by-all matrix.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
+
+    max_pairs_per_rule: int
+    max_pairs_per_tick: int | None = None
+
+    @field_validator("max_pairs_per_rule")
+    @classmethod
+    def _positive_per_rule(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("simulation.candidate_limits.max_pairs_per_rule must be > 0")
+        return value
+
+    @field_validator("max_pairs_per_tick")
+    @classmethod
+    def _positive_per_tick(cls, value: int | None) -> int | None:
+        if value is not None and value <= 0:
+            raise ValueError("simulation.candidate_limits.max_pairs_per_tick must be > 0")
+        return value
+
+
 class SimulationConfig(BaseModel):
     """Simulation contract fields exposed to session YAML."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
 
     schema_version: int = 2
     ground_link_model: Literal["geometry_only", "terminal_physics"] = "terminal_physics"
     acknowledge_geometry_only: bool = False
     acknowledge_bbm_handover_gap: bool = False
     actuation: ActuationConfig = Field(default_factory=ActuationConfig)
+    # Required for segment sessions; optional on internal one-constellation projections.
+    candidate_limits: CandidateLimits | None = None
 
     @field_validator("schema_version")
     @classmethod
@@ -181,7 +316,7 @@ class SimulationConfig(BaseModel):
 class OrbitConfig(BaseModel):
     """Orbit propagation model selection."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
 
     propagator: Literal["keplerian-circular", "j2-mean-elements", "sgp4-tle"]
     tle_max_age_days: float | None = None
@@ -212,12 +347,12 @@ class OrbitConfig(BaseModel):
 class GroundSchedulingConfig(BaseModel):
     """Ground handover and allocation behavior.
 
-    Phase 3 keeps mechanism and policy separate. This model is only the
+    Ground scheduling keeps mechanism and policy separate. This model is only the
     operator-configured policy surface; the OME allocator consumes the resolved
     specs and dispatches to registered pure policy hooks.
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
 
     selection_policy: SelectionPolicySpec = Field(default_factory=SelectionPolicySpec)
     handover_policy: HandoverPolicySpec = Field(
@@ -226,13 +361,13 @@ class GroundSchedulingConfig(BaseModel):
             params=HysteresisParameters().model_dump(),
         )
     )
-    ranking_order: list[RankingComponent] = Field(
-        default_factory=lambda: [
+    ranking_order: tuple[RankingComponent, ...] = Field(
+        default_factory=lambda: (
             "service_priority",
             "selection_score",
             "satellite_ground_terminal_capacity",
             "lex_pair",
-        ]
+        )
     )
 
     handover_mode: Literal["bbm", "mbb"] = "bbm"
@@ -277,47 +412,31 @@ class GroundSchedulingConfig(BaseModel):
         if value != 1:
             raise ValueError(
                 "scheduling.ground.bbm_acquire_timeout_ticks values other than 1 are "
-                "reserved extension points; Phase 3 has no specified multi-tick BBMGap "
+                "reserved extension points; the current implementation has no specified multi-tick BBMGap "
                 "wait-state algorithm"
             )
         return value
 
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_handover_params(cls, data):
+        # Fill hysteresis defaults before the frozen HandoverPolicySpec is built,
+        # so the spec is never mutated after construction. SelectionPolicySpec
+        # self-normalizes its own params.
+        if not isinstance(data, dict):
+            return data
+        handover = data.get("handover_policy")
+        if isinstance(handover, HandoverPolicySpec):
+            handover = handover.model_dump()
+        if isinstance(handover, Mapping) and handover.get("name") == "hysteresis":
+            normalized = HysteresisParameters(**dict(handover.get("params") or {})).model_dump()
+            data = {**data, "handover_policy": {**handover, "params": normalized}}
+        return data
+
     @model_validator(mode="after")
     def _resolve_policy_surface(self):
-        selection_params = dict(self.selection_policy.params)
-        if self.selection_policy.name in ("highest-elevation", "lowest-elevation"):
-            if selection_params:
-                raise ValueError(
-                    f"selection_policy.name={self.selection_policy.name!r} requires empty params"
-                )
-        elif self.selection_policy.name == "longest-remaining-pass":
-            extra = sorted(set(selection_params) - {"lookahead_horizon_ticks"})
-            if extra:
-                raise ValueError(
-                    "selection_policy.name='longest-remaining-pass' received unsupported "
-                    f"params: {', '.join(extra)}"
-                )
-            horizon = selection_params.get("lookahead_horizon_ticks")
-            if horizon is None or int(horizon) <= 0:
-                raise ValueError(
-                    "longest-remaining-pass requires "
-                    "scheduling.ground.selection_policy.params.lookahead_horizon_ticks > 0"
-                )
-            selection_params["lookahead_horizon_ticks"] = int(horizon)
-            self.selection_policy.params = selection_params
-        else:  # pragma: no cover - Literal should make this unreachable.
-            raise ValueError(f"Unknown selection_policy.name={self.selection_policy.name!r}")
-
-        if self.handover_policy.name == "none":
-            if self.handover_policy.params:
-                raise ValueError("handover_policy.name='none' requires empty params")
-        elif self.handover_policy.name == "hysteresis":
-            self.handover_policy.params = HysteresisParameters(
-                **self.handover_policy.params
-            ).model_dump()
-        else:  # pragma: no cover - Literal should make this unreachable.
-            raise ValueError(f"Unknown handover_policy.name={self.handover_policy.name!r}")
-
+        # selection_policy and handover_policy validate/normalize themselves; this
+        # enforces only the cross-field ground-scheduling rules.
         if not self.ranking_order:
             raise ValueError("scheduling.ground.ranking_order must not be empty")
         if self.ranking_order[-1] != "lex_pair":
@@ -341,7 +460,7 @@ class GroundSchedulingConfig(BaseModel):
 class SchedulingConfig(BaseModel):
     """Scheduling policy surface."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
 
     ground: GroundSchedulingConfig = Field(default_factory=GroundSchedulingConfig)
 
@@ -349,7 +468,7 @@ class SchedulingConfig(BaseModel):
 class SubstrateCompensationConfig(BaseModel):
     """Substrate latency compensation settings."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
 
     measurement_source: Literal["node-agent-rtt"] = "node-agent-rtt"
     rtt_to_one_way: Literal["half-rtt"] = "half-rtt"
@@ -358,7 +477,7 @@ class SubstrateCompensationConfig(BaseModel):
 class DispatchConfig(BaseModel):
     """Dispatch authority, latency freshness, and kernel-proof cadence."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
 
     latency_authority: Literal["ome"] = "ome"
     max_latency_age_ticks: int = 1
@@ -385,7 +504,7 @@ class DispatchConfig(BaseModel):
 class TimeConfig(BaseModel):
     """Time configuration."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
 
     compression: int = 1
     start_time: str | None = None  # ISO 8601 (default: now per R-OME-005)
@@ -418,24 +537,30 @@ def resolve_session_epoch(time_config: TimeConfig) -> float:
 class TrafficFlowConfig(BaseModel):
     """Traffic flow configuration."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
 
-    flow_id: str
-    src: str
-    dst: str
-    protocol: str  # "udp" or "tcp"
-    bandwidth_kbps: float
-    probe_type: str  # "continuous" or "burst"
+    flow_id: NonEmptyReference
+    src: NonEmptyReference
+    dst: NonEmptyReference
+    protocol: Literal["udp", "tcp"]
+    bandwidth_kbps: float = Field(gt=0)
+    probe_type: Literal["continuous", "burst"]
+
+    @model_validator(mode="after")
+    def _distinct_endpoints(self):
+        if self.src == self.dst:
+            raise ValueError("traffic flow src and dst must differ")
+        return self
 
 
 class ConvergenceConfig(BaseModel):
     """Convergence detection settings for MI probe measurement."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
 
-    stability_period_s: float = 2.0
-    timeout_s: float = 30.0
-    probe_interval_ms: int = 100
+    stability_period_s: float = Field(default=2.0, gt=0)
+    timeout_s: float = Field(default=30.0, gt=0)
+    probe_interval_ms: int = Field(default=100, gt=0)
 
 
 class MiConfig(BaseModel):
@@ -446,29 +571,35 @@ class MiConfig(BaseModel):
     When disabled (default), no MI processes start and no MI ports bind.
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
 
     enabled: bool = False
-    adapter: str | None = None  # e.g. "frr_isis_adapter"
+    adapter: NonEmptyReference | None = None  # e.g. "frr_isis_adapter"
     convergence: ConvergenceConfig = ConvergenceConfig()
 
 
 class TerrestrialLinkConfig(BaseModel):
     """A static terrestrial link between two ground stations."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
 
-    station_a: str
-    station_b: str
-    bandwidth_mbps: float = 10000.0
-    latency_ms: float = 5.0
-    loss_pct: float = 0.0
+    station_a: NonEmptyReference
+    station_b: NonEmptyReference
+    bandwidth_mbps: float = Field(default=10000.0, gt=0)
+    latency_ms: float = Field(default=5.0, ge=0)
+    loss_pct: float = Field(default=0.0, ge=0, le=100)
+
+    @model_validator(mode="after")
+    def _distinct_endpoints(self):
+        if self.station_a == self.station_b:
+            raise ValueError("terrestrial link endpoints must be distinct stations")
+        return self
 
 
 class DecisionTraceConfig(BaseModel):
     """User-facing audit trace retention settings."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
 
     active_links: Literal["always"] = "always"
     rejected_candidates_retention: Literal["none", "bounded", "full"] = "bounded"
@@ -485,25 +616,40 @@ class DecisionTraceConfig(BaseModel):
 class ObservabilityConfig(BaseModel):
     """Observability and provenance knobs exposed in session YAML."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
 
     decision_trace: DecisionTraceConfig = Field(default_factory=DecisionTraceConfig)
 
 
-class PlacementConfig(BaseModel):
-    """Pod placement policy for multi-node deployment.
+class AllOnOnePlacementConfig(BaseModel):
+    """All pods land on the first available K3s node."""
 
-    allOnOne: all pods on the first available node; explicit single-node/debug policy.
-    planePerNode: one orbital plane per K3s node. Intra-plane ISLs are
-        LOCAL (direct veth), cross-plane ISLs are CROSS_NODE (VXLAN). This is
-        the default so multi-node deployments exercise the real substrate.
-    planeGroupPerNode: multiple adjacent planes per node, round-robin.
-    """
+    model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    policy: Literal["allOnOne"]
 
-    policy: str = "planePerNode"  # allOnOne | planePerNode | planeGroupPerNode
-    planes_per_group: int | None = None  # For planeGroupPerNode
+
+class PlanePerNodePlacementConfig(BaseModel):
+    """One orbital plane per K3s node; ground stations use deterministic spread."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
+
+    policy: Literal["planePerNode"] = "planePerNode"
+
+
+class PlaneGroupPerNodePlacementConfig(BaseModel):
+    """Adjacent planes grouped by an explicit group size."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
+
+    policy: Literal["planeGroupPerNode"]
+    planes_per_group: int = Field(gt=0)
+
+
+PlacementConfig = Annotated[
+    AllOnOnePlacementConfig | PlanePerNodePlacementConfig | PlaneGroupPerNodePlacementConfig,
+    Field(discriminator="policy"),
+]
 
 
 class SessionConfig(BaseModel):
@@ -521,12 +667,19 @@ class SessionConfig(BaseModel):
     contain the intended satellite type and this field is ignored.
     """
 
+    # Not frozen: this is the resolver's internal runtime projection. Product
+    # session YAML uses SegmentSessionConfig; the authoritative frozen runtime
+    # contract is ResolvedSession, not this model.
     model_config = ConfigDict(extra="forbid")
 
     session: SessionMeta
-    constellation: str | dict  # Path to constellation file OR inline definition
-    ground_stations: str | list[str] | dict  # Set name, path, station list, OR inline GS definition
-    satellite_type: str | None = None  # Override satellite type (independent of constellation)
+    constellation: NonEmptyReference | dict  # Path to constellation file OR inline definition
+    ground_stations: (
+        NonEmptyReference | list[NonEmptyReference] | dict
+    )  # Set name, path, station list, OR inline GS definition
+    satellite_type: NonEmptyReference | None = (
+        None  # Override satellite type (independent of constellation)
+    )
     default_terrestrial_prefixes: TerrestrialPrefixTemplate | None = (
         None  # For direct station lists
     )
@@ -540,7 +693,7 @@ class SessionConfig(BaseModel):
     time: TimeConfig = TimeConfig()
     traffic_flows: list[TrafficFlowConfig] | None = None
     terrestrial_links: list[TerrestrialLinkConfig] | None = None
-    placement: PlacementConfig = PlacementConfig()
+    placement: PlacementConfig = Field(default_factory=PlanePerNodePlacementConfig)
     mi: MiConfig = MiConfig()
     convergence: ConvergenceConfig = ConvergenceConfig()  # backward compat — use mi.convergence
 
@@ -567,7 +720,7 @@ class SessionConfig(BaseModel):
             raise ValueError(
                 "Ground scheduling policy must be explicit; missing "
                 + ", ".join(missing)
-                + ". Phase 3 does not silently choose candidate selection or "
+                + ". NodalArc does not silently choose candidate selection or "
                 "incumbent handover policy."
             )
         return self

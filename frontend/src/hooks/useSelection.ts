@@ -8,7 +8,7 @@ import type { Selection } from "../types";
 export function useSelection() {
   const [selection, setSelection] = useState<Selection | null>(null);
   // The "anchor" ground station for Selected Pair Mode: when a GS is selected and the user then
-  // clicks a satellite, the sat panel opens straight to the GS<->sat pair decision (spec UX-1 §3).
+  // clicks a satellite, the sat panel opens straight to the GS<->sat pair decision.
   // The anchor persists while exploring satellites; selecting a new GS replaces it; clearing drops it.
   const [anchorGsId, setAnchorGsId] = useState<string | null>(null);
 

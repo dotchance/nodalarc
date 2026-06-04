@@ -10,6 +10,11 @@
 const LINK_TYPE_MAP: Record<string, string> = {
   intra_plane_isl: "Intra-area ISL",
   cross_plane_isl: "Cross-area ISL (ABR link)",
+  isl: "ISL",
+  inter_constellation: "Inter-constellation ISL",
+  inter_body_relay: "Inter-body relay",
+  relay: "Relay link",
+  ground: "Ground Link",
   ground_uplink: "Ground Uplink",
   ground_downlink: "Ground Downlink",
 };

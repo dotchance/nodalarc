@@ -12,29 +12,31 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-import yaml
-from nodalarc.constellation_loader import (
-    expand_constellation,
-    load_constellation,
-    load_ground_stations,
-)
-from nodalarc.models.addressing import AddressingScheme, assign_isl_neighbors
-from nodalarc.models.session import SessionConfig
+from nodalarc.models.addressing import assign_isl_neighbors
+from nodalarc.resolve_session import load_session_resolution_from_file
 from ome.event_stream import build_step_context, compute_step, precompute_timeline_window
 
 
 def _load_test_session():
-    session_path = Path("configs/sessions/demo-36-ospf.yaml")
+    session_path = Path("configs/sessions/earth-leo-simple.yaml")
     if not session_path.exists():
-        pytest.skip("demo-36-ospf.yaml not available")
-    data = yaml.safe_load(session_path.read_text())
-    session = SessionConfig.model_validate(data)
-    constellation_config = load_constellation(session.constellation)
-    gs_file = load_ground_stations(session.ground_stations)
-    satellites = expand_constellation(constellation_config)
-    addressing = AddressingScheme(session.addressing)
+        pytest.skip("earth-leo-simple.yaml not available")
+    resolution = load_session_resolution_from_file(session_path, origin="test.fold_determinism")
+    session = resolution.runtime_session
+    constellation_config = resolution.primary_constellation.config
+    gs_file = resolution.primary_ground_set.config
+    satellites = list(resolution.primary_constellation.satellites)
+    addressing = resolution.addressing
     neighbors = assign_isl_neighbors(constellation_config, addressing)
-    return session, constellation_config, gs_file, satellites, addressing, neighbors
+    return (
+        session,
+        constellation_config,
+        gs_file,
+        satellites,
+        addressing,
+        neighbors,
+        dict(resolution.ground_candidate_satellites_by_gs),
+    )
 
 
 class TestFoldDeterminism:
@@ -42,7 +44,7 @@ class TestFoldDeterminism:
 
     def test_fold_determinism_60s(self):
         """60 sim-seconds: batch window vs tick-by-tick produce identical events."""
-        session, _cc, gs_file, sats, addressing, neighbors = _load_test_session()
+        session, _cc, gs_file, sats, addressing, neighbors, ground_candidates = _load_test_session()
         epoch_unix = 1704067200.0
         n_steps = 60
         step_seconds = session.time.step_seconds
@@ -56,6 +58,7 @@ class TestFoldDeterminism:
             duration_s=n_steps * step_seconds,
             propagator_id=session.orbit.propagator,
             ground_scheduling=session.scheduling.ground,
+            ground_candidate_satellites_by_gs=ground_candidates,
             step_seconds=step_seconds,
         )
         window_events = window.events
@@ -67,6 +70,7 @@ class TestFoldDeterminism:
             neighbors=neighbors,
             propagator_id=session.orbit.propagator,
             ground_scheduling=session.scheduling.ground,
+            ground_candidate_satellites_by_gs=ground_candidates,
         )
         isl_state: dict = {}
         gs_state: dict = {}
@@ -97,7 +101,7 @@ class TestFoldDeterminism:
 
     def test_seek_resets_associations(self):
         """After simulating a seek (clearing state), first tick has no discount."""
-        session, _cc, gs_file, sats, addressing, neighbors = _load_test_session()
+        session, _cc, gs_file, sats, addressing, neighbors, ground_candidates = _load_test_session()
         epoch_unix = 1704067200.0
         step_seconds = session.time.step_seconds
 
@@ -108,6 +112,7 @@ class TestFoldDeterminism:
             neighbors=neighbors,
             propagator_id=session.orbit.propagator,
             ground_scheduling=session.scheduling.ground,
+            ground_candidate_satellites_by_gs=ground_candidates,
         )
 
         # Run 10 ticks to build up association state
@@ -166,7 +171,7 @@ class TestFoldDeterminism:
     def test_look_ahead_matches_realtime(self):
         """NON-NEGOTIABLE GATE: look-ahead window and tick-by-tick produce
         bit-for-bit identical event sequences from the same seed."""
-        session, _cc, gs_file, sats, addressing, neighbors = _load_test_session()
+        session, _cc, gs_file, sats, addressing, neighbors, ground_candidates = _load_test_session()
         epoch_unix = 1704067200.0
         n_steps = 120
         step_seconds = session.time.step_seconds
@@ -179,6 +184,7 @@ class TestFoldDeterminism:
             neighbors=neighbors,
             propagator_id=session.orbit.propagator,
             ground_scheduling=session.scheduling.ground,
+            ground_candidate_satellites_by_gs=ground_candidates,
         )
         seed_isl: dict = {}
         seed_gs: dict = {}
@@ -208,6 +214,7 @@ class TestFoldDeterminism:
             duration_s=n_steps * step_seconds,
             propagator_id=session.orbit.propagator,
             ground_scheduling=session.scheduling.ground,
+            ground_candidate_satellites_by_gs=ground_candidates,
             step_seconds=step_seconds,
             initial_isl_state=dict(seed_isl),
             initial_gs_state=dict(seed_gs),
@@ -253,7 +260,7 @@ class TestFoldDeterminism:
         identical events to a continuous run; (c) hysteresis discount
         survives the boundary.
         """
-        session, _cc, gs_file, sats, addressing, neighbors = _load_test_session()
+        session, _cc, gs_file, sats, addressing, neighbors, ground_candidates = _load_test_session()
         epoch_unix = 1704067200.0
         step_seconds = session.time.step_seconds
         boundary = 30
@@ -265,6 +272,7 @@ class TestFoldDeterminism:
             neighbors=neighbors,
             propagator_id=session.orbit.propagator,
             ground_scheduling=session.scheduling.ground,
+            ground_candidate_satellites_by_gs=ground_candidates,
         )
 
         # --- Path A: continuous 60 ticks ---

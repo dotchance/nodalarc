@@ -27,12 +27,13 @@ interface BodyProps {
   radiusKm: number;
   /** Body centre in the universe frame (render units). Earth sits at origin today. */
   position?: [number, number, number];
+  onFocusBody?: (bodyId: string) => void;
   children?: ReactNode;
 }
 
 /** ref exposes the body's group so the render loop can drive its frame rotation. */
 export const Body = forwardRef<THREE.Group, BodyProps>(function Body(
-  { id, radiusKm, position = [0, 0, 0], children },
+  { id, radiusKm, position = [0, 0, 0], onFocusBody, children },
   ref,
 ) {
   const radiusRender = kmToRender(radiusKm);
@@ -40,16 +41,25 @@ export const Body = forwardRef<THREE.Group, BodyProps>(function Body(
 
   const attach = useCallback(
     (group: THREE.Group | null) => {
-      setBodyFrame(id, group);
+      setBodyFrame(id, group, radiusRender);
       if (typeof ref === "function") ref(group);
       else if (ref) ref.current = group;
     },
-    [id, ref],
+    [id, radiusRender, ref],
   );
 
   return (
     <BodyFrameProvider value={frame}>
-      <group ref={attach} name={`body-${id}`} position={position}>
+      <group
+        ref={attach}
+        name={`body-${id}`}
+        position={position}
+        onDoubleClick={(e) => {
+          if (!onFocusBody) return;
+          e.stopPropagation();
+          onFocusBody(id);
+        }}
+      >
         {children}
       </group>
     </BodyFrameProvider>

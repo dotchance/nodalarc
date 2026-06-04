@@ -47,6 +47,13 @@ describe("rendering invariants", () => {
       expect(tokens.cameraMaxDistance).toBeGreaterThan(satOrbitRadius * 3);
     });
 
+    it("max camera distance allows framing a GEO shell", () => {
+      const geoOrbitRadius = SCENE_EARTH_RADIUS + 35786 / SCENE_KM_PER_UNIT;
+      const halfFovRad = (tokens.cameraFov * Math.PI) / 360;
+      const requiredDistance = geoOrbitRadius / Math.sin(halfFovRad);
+      expect(tokens.cameraMaxDistance).toBeGreaterThan(requiredDistance * 1.25);
+    });
+
     it("min camera distance is above the earth surface", () => {
       expect(tokens.cameraMinDistance).toBeGreaterThan(SCENE_EARTH_RADIUS);
     });

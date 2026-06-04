@@ -22,7 +22,7 @@ import type {
 import { DEFAULT_ROUTING_TIMERS } from "../catalog/wizardTypes";
 import {
   DEFAULT_ORBIT_PROPAGATOR,
-  constellationSupportsSgp4Tle,
+  constellationUnsupportedReason,
   defaultOrbitPropagatorForConstellation,
   supportedOrbitModelsForConstellation,
 } from "../catalog/orbitModels";
@@ -75,12 +75,14 @@ export function useWizard() {
   }, [api]);
 
   const selectConstellation = useCallback((preset: ConstellationPreset) => {
+    if (constellationUnsupportedReason(preset)) {
+      return;
+    }
     setState((s) => {
-      const orbitPropagator = constellationSupportsSgp4Tle(preset)
-        ? defaultOrbitPropagatorForConstellation(preset)
-        : s.orbitPropagator === "sgp4-tle"
-          ? DEFAULT_ORBIT_PROPAGATOR
-          : s.orbitPropagator;
+      const supported = supportedOrbitModelsForConstellation(preset).map((option) => option.id);
+      const orbitPropagator = supported.includes(s.orbitPropagator)
+        ? s.orbitPropagator
+        : defaultOrbitPropagatorForConstellation(preset);
       return { ...s, constellation: preset, orbitPropagator };
     });
     api.clearYaml();

@@ -25,7 +25,7 @@ All keyboard shortcuts are active when the cursor is not in a text input field. 
 | G | Toggle ground links | On |
 | P | Toggle orbital paths | Off |
 | T | Toggle satellite trails | Off |
-| H | Toggle historical mode | Off |
+| H | Historical mode toggle, experimental during development | Off |
 | N | Toggle globe rendering mode | Standard |
 | ; | Toggle satellite labels | Off |
 | ' | Toggle ground station labels | Off |
@@ -49,4 +49,4 @@ All keyboard shortcuts are active when the cursor is not in a text input field. 
 
 | Key | Action |
 |-----|--------|
-| I | Toggle inertial / Earth-fixed reference frame |
+| I | Toggle inertial / active body-fixed reference frame |

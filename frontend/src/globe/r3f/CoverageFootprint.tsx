@@ -1,7 +1,7 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
 /**
- * CoverageFootprint — the radial-falloff coverage disc on Earth's surface beneath the
+ * CoverageFootprint — the radial-falloff coverage disc on the current body's surface beneath the
  * SELECTED satellite only (ground stations get the elevation cone in <GroundStations>,
  * never this). Renders a CircleGeometry(radius, 96)
  * whose radius = computeConeRadius(MIN_ELEV_DEG=25, satAltKm) — reused verbatim from
@@ -11,7 +11,7 @@
  * (0xff44aa). u_falloff is the satellite's beam_falloff_exponent (higher → tighter center,
  * e.g. Iridium 3.5; lower → broader, e.g. Starlink 2.0), defaulting to 2.0.
  *
- * Lives inside <Body id="earth"> (body-child), so its position is in the Earth local frame.
+ * Lives inside a <Body> (body-child), so its position is in that body's local frame.
  * Each frame it reads the satellite's body-LOCAL position from the shared registry (after
  * <Constellation> at priority -1 has written it) and places the disc at the sub-satellite
  * point on the surface, oriented so its local -Z faces outward. Geometry is rebuilt only when
@@ -24,8 +24,8 @@ import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { useFrame } from "@react-three/fiber";
 import { computeConeRadius } from "../groundStations";
-import { EARTH_RADIUS_RENDER } from "./units";
 import { getNodeLocalPosition } from "./positions";
+import { useBodyFrame } from "./BodyFrame";
 import type { NodeState, Selection } from "../../types";
 
 const FOOTPRINT_COLOR = new THREE.Color(0xff44aa);
@@ -72,6 +72,7 @@ interface CoverageFootprintProps {
 
 export function CoverageFootprint({ selection, nodes }: CoverageFootprintProps) {
   const meshRef = useRef<THREE.Mesh>(null);
+  const bodyFrame = useBodyFrame();
 
   // The selected satellite's node (only satellites get the footprint).
   const sat = useMemo(() => {
@@ -87,10 +88,16 @@ export function CoverageFootprint({ selection, nodes }: CoverageFootprintProps) 
   // sub-km orbital drift never thrashes the geometry — only the u_falloff uniform updates.
   const altKmQuant = sat ? Math.round(altKm) : 0;
   const geometry = useMemo(
-    () => (sat ? new THREE.CircleGeometry(computeConeRadius(MIN_ELEV_DEG, altKm), SEGMENTS) : null),
+    () =>
+      sat
+        ? new THREE.CircleGeometry(
+            computeConeRadius(MIN_ELEV_DEG, altKm, bodyFrame.radiusKm),
+            SEGMENTS,
+          )
+        : null,
     // altKm intentionally excluded; altKmQuant is the >1km-change gate.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [sat?.node_id, altKmQuant],
+    [sat?.node_id, altKmQuant, bodyFrame.radiusKm],
   );
 
   const material = useMemo(
@@ -132,7 +139,7 @@ export function CoverageFootprint({ selection, nodes }: CoverageFootprintProps) 
       return;
     }
     _outward.copy(_localPos).normalize();
-    _surfacePos.copy(_outward).multiplyScalar(EARTH_RADIUS_RENDER * 1.002);
+    _surfacePos.copy(_outward).multiplyScalar(bodyFrame.radiusRender * 1.002);
 
     mesh.position.copy(_surfacePos);
     mesh.quaternion.setFromUnitVectors(_FOOTPRINT_LOCAL_Z_AXIS, _outward);

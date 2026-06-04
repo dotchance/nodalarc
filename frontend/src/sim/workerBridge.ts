@@ -94,13 +94,18 @@ export function sendEphemeris(ephemeris: SessionEphemeris): void {
   for (const [id, node] of Object.entries(ephemeris.nodes)) {
     if (node.type !== "keplerian") continue;
     const kep = node as EphemerisNodeKeplerian;
+    const referenceBody = kep.reference_body ?? "earth";
+    if (referenceBody !== "earth") continue;
     sats.push({
       id,
       elements: {
+        propagator: kep.propagator,
         altitude_km: kep.altitude_km,
         inclination_deg: kep.inclination_deg,
         raan_deg: kep.raan_deg,
         true_anomaly_deg: kep.true_anomaly_deg,
+        reference_body: referenceBody,
+        reference_radius_km: ephemeris.body_frames?.[referenceBody]?.radius_km,
       },
     });
   }

@@ -4,7 +4,7 @@
 set -euo pipefail
 
 NAMESPACE="${NAMESPACE:-nodalarc}"
-DEFAULT_SESSION="${DEFAULT_SESSION:-configs/sessions/demo-36-ospf.yaml}"
+DEFAULT_SESSION="${DEFAULT_SESSION:-configs/sessions/earth-leo-simple.yaml}"
 KUBECONFIG="${KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}"
 export KUBECONFIG
 
@@ -25,7 +25,7 @@ fi
 echo "[session] Expected session pods: $expected_pods"
 
 echo "[session] Computing placement policy..."
-if ! placement_policy="$(PYTHONPATH=lib uv run python -c 'import sys, yaml; from pathlib import Path; from nodalarc.models.session import SessionConfig; session = SessionConfig.model_validate(yaml.safe_load(Path(sys.argv[1]).read_text(encoding="utf-8"))); print(session.placement.policy)' "$DEFAULT_SESSION")"; then
+if ! placement_policy="$(PYTHONPATH=lib uv run python -c 'import sys; from nodalarc.resolve_session import load_session_resolution_from_file; print(load_session_resolution_from_file(sys.argv[1], origin="na-session").runtime_session.placement.policy)' "$DEFAULT_SESSION")"; then
     echo "[session] ERROR: failed to compute placement policy for $DEFAULT_SESSION" >&2
     exit 1
 fi
@@ -160,37 +160,17 @@ verify_session_placement() {
     if ! expected_placement_nodes="$(
         PYTHONPATH=lib uv run python -c '
 import sys
-import yaml
 import importlib.util
-from pathlib import Path
-
-from nodalarc.constellation_loader import expand_constellation, load_constellation, load_ground_stations
-from nodalarc.models.addressing import AddressingScheme
-from nodalarc.models.session import SessionConfig
 
 spec = importlib.util.spec_from_file_location("session_deployer", "services/nodalarc_operator/session_deployer.py")
 session_deployer = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(session_deployer)
 
-session = SessionConfig.model_validate(yaml.safe_load(Path(sys.argv[1]).read_text(encoding="utf-8")))
 available_nodes = [n for n in sys.argv[2].split(",") if n]
-constellation = load_constellation(session.constellation)
-ground_stations = load_ground_stations(session.ground_stations)
-addressing = AddressingScheme(session.addressing)
-node_vars = {}
-for sat in expand_constellation(constellation):
-    node_vars[addressing.sat_id(sat.plane, sat.slot)] = {
-        "node_type": "satellite",
-        "plane": sat.plane,
-    }
-for index, station in enumerate(ground_stations.stations):
-    node_vars[addressing.gs_id(station.name)] = {
-        "node_type": "ground_station",
-        "gs_name": station.name,
-        "gs_index": index,
-    }
-placement = session_deployer.compute_pod_placement(session.placement, node_vars, available_nodes)
-print(len(set(placement.values())))
+print(session_deployer.compute_expected_placement_node_count(
+    {"sessionYaml": open(sys.argv[1], encoding="utf-8").read()},
+    available_nodes,
+))
 ' "$DEFAULT_SESSION" "$ready_node_csv"
     )"; then
         echo "[session] ERROR: failed to compute expected placement for $DEFAULT_SESSION" >&2
@@ -246,9 +226,23 @@ fi
 desired_yaml="$(cat "$DEFAULT_SESSION")"
 previous_generation=""
 previous_yaml=""
+previous_phase=""
+previous_observed_generation=""
 if kubectl get constellationspec current-session -n "$NAMESPACE" >/dev/null 2>&1; then
     previous_generation="$(kubectl get constellationspec current-session -n "$NAMESPACE" -o jsonpath='{.metadata.generation}')"
     previous_yaml="$(kubectl get constellationspec current-session -n "$NAMESPACE" -o jsonpath='{.spec.sessionYaml}')"
+    previous_phase="$(kubectl get constellationspec current-session -n "$NAMESPACE" -o jsonpath='{.status.phase}' 2>/dev/null || true)"
+    previous_observed_generation="$(kubectl get constellationspec current-session -n "$NAMESPACE" -o jsonpath='{.status.observedGeneration}' 2>/dev/null || true)"
+    if [ "$previous_yaml" = "$desired_yaml" ] \
+        && [ "$previous_phase" = "Error" ] \
+        && [ "$previous_observed_generation" = "$previous_generation" ]; then
+        echo "[session] Previous attempt is terminal Error for the same YAML; recreating CR for fresh reconciliation."
+        kubectl delete constellationspec current-session -n "$NAMESPACE" --wait=true
+        previous_generation=""
+        previous_yaml=""
+        previous_phase=""
+        previous_observed_generation=""
+    fi
 fi
 
 tmp_file="$(mktemp)"

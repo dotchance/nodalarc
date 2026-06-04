@@ -10,8 +10,8 @@
  *
  * Glyph/cone geometry (GS_COLOR, GS_SIZE, R*1.001 surface offset, (0,0,-1)->outward
  * orientation, computeConeRadius) reproduce globe/groundStations.ts. GS are static in the
- * Earth local frame; each registers its local position so the selection ring / links /
- * camera can find it. Rendered inside <Body id="earth">; one sprite/cone per GS (few GS).
+ * current body local frame; each registers its local position so the selection ring / links /
+ * camera can find it. Rendered inside a <Body>; one sprite/cone per GS (few GS).
  */
 
 import { useEffect, useMemo, useRef } from "react";
@@ -23,7 +23,6 @@ import { computeConeRadius } from "../groundStations";
 import { FAMILY_TONE } from "../../explain/families";
 import { groundStationFamily, type GsFamily } from "../../explain/groundStationFamily";
 import type { EffectiveEnvelopeFacts } from "../../explain/types";
-import { EARTH_RADIUS_RENDER } from "./units";
 import { removeNode, setNodeLocalPosition } from "./positions";
 import { useBodyFrame } from "./BodyFrame";
 import type { HoverInfo } from "./Tooltip";
@@ -79,6 +78,7 @@ interface GroundStationProps {
   /** Default-state canonical family (snapshot-derived) — drives glyph tone + fault pulse. */
   family: GsFamily;
   onSelect: (sel: Selection | null) => void;
+  onFocusNode: (nodeId: string) => void;
   onHover: (info: HoverInfo | null) => void;
 }
 
@@ -91,10 +91,12 @@ function GroundStation({
   configuredMinElevDeg,
   family,
   onSelect,
+  onFocusNode,
   onHover,
 }: GroundStationProps) {
   const spriteRef = useRef<THREE.Sprite>(null);
-  const bodyId = useBodyFrame().id;
+  const bodyFrame = useBodyFrame();
+  const bodyId = bodyFrame.id;
   const faulted = family.family === "faulted";
   // Pulse the glyph only for a true fault (spec: "Fault pulse only for real faults"). Driven by
   // the R3F render clock (wall-clock), so it keeps alerting even when the sim is paused.
@@ -108,17 +110,19 @@ function GroundStation({
   // Taxonomy caption for the hover tooltip — same family label the inspector/logs use.
   const caption = `${FAMILY_TONE[family.family].label}${family.reason ? `. ${family.reason}` : ""}`;
   const geom = useMemo(() => {
-    const p = geoToWorld(node.lat_deg, node.lon_deg, node.alt_km);
+    const p = geoToWorld(node.lat_deg, node.lon_deg, node.alt_km, bodyFrame.radiusRender);
     const outward = p.clone().normalize();
-    const surface = outward.clone().multiplyScalar(EARTH_RADIUS_RENDER * 1.001);
+    const surface = outward.clone().multiplyScalar(bodyFrame.radiusRender * 1.001);
     const quat = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, -1), outward);
-    // Only the selected GS has resolved envelope floors; others (cone hidden) fall back to
-    // the configured mask. Effective is the binding floor; configured is the wider mask.
-    const fallback = node.min_elevation_deg ?? 25;
-    const effElev = (selected ? effectiveMinElevDeg : null) ?? fallback;
-    const confElev = (selected ? configuredMinElevDeg : null) ?? fallback;
-    const effRadius = computeConeRadius(effElev, orbitalAltKm);
-    const confRadius = computeConeRadius(confElev, orbitalAltKm);
+    // Only the selected GS has resolved envelope floors. If the explanation feed is
+    // missing, hide the cone instead of inventing an Earth-default mask.
+    const effElev = selected ? effectiveMinElevDeg : null;
+    const confElev = selected ? configuredMinElevDeg : null;
+    const hasEnvelope = effElev !== null && confElev !== null;
+    const effRadius = hasEnvelope ? computeConeRadius(effElev, orbitalAltKm, bodyFrame.radiusKm) : 0;
+    const confRadius = hasEnvelope
+      ? computeConeRadius(confElev, orbitalAltKm, bodyFrame.radiusKm)
+      : 0;
     // Show the configured reference only when the mask is genuinely non-binding (the
     // effective floor is higher → a tighter cone), i.e. the FoR-bound / dead-knob case.
     const showConfigured = confRadius - effRadius > 0.5;
@@ -131,16 +135,18 @@ function GroundStation({
       effRing: ringGeometry(effRadius),
       confRing: showConfigured ? ringGeometry(confRadius) : null,
       showConfigured,
+      hasEnvelope,
     };
   }, [
     node.lat_deg,
     node.lon_deg,
     node.alt_km,
-    node.min_elevation_deg,
     orbitalAltKm,
     selected,
     effectiveMinElevDeg,
     configuredMinElevDeg,
+    bodyFrame.radiusRender,
+    bodyFrame.radiusKm,
   ]);
 
   useEffect(
@@ -164,6 +170,12 @@ function GroundStation({
     onSelect({ type: "ground_station", id: node.node_id });
   };
 
+  const handleDoubleClick = (e: ThreeEvent<MouseEvent>) => {
+    e.stopPropagation();
+    onSelect({ type: "ground_station", id: node.node_id });
+    onFocusNode(node.node_id);
+  };
+
   return (
     <group>
       <sprite
@@ -171,6 +183,7 @@ function GroundStation({
         scale={[GS_SIZE, GS_SIZE, 1]}
         position={geom.position}
         onClick={handleClick}
+        onDoubleClick={handleDoubleClick}
         onPointerMove={(e) =>
           onHover({ node, x: e.nativeEvent.clientX, y: e.nativeEvent.clientY, caption })
         }
@@ -179,7 +192,11 @@ function GroundStation({
         <spriteMaterial map={texture} color={FAMILY_TONE[family.family].hex} sizeAttenuation />
       </sprite>
       {/* Effective coverage cone (the binding floor) — filled disc + strong outline. */}
-      <mesh position={geom.conePosition} quaternion={geom.coneQuaternion} visible={selected}>
+      <mesh
+        position={geom.conePosition}
+        quaternion={geom.coneQuaternion}
+        visible={selected && geom.hasEnvelope}
+      >
         <ringGeometry args={[0, geom.effRadius, 48]} />
         <meshBasicMaterial
           color={GS_COLOR}
@@ -192,7 +209,7 @@ function GroundStation({
       <lineLoop
         position={geom.conePosition}
         quaternion={geom.coneQuaternion}
-        visible={selected}
+        visible={selected && geom.hasEnvelope}
         geometry={geom.effRing}
       >
         <lineBasicMaterial color={GS_COLOR} transparent opacity={0.3} depthWrite={false} />
@@ -222,6 +239,7 @@ interface GroundStationsProps {
    *  so the cone, the lead-line, and the sat tinting share ONE decision-explanation fetch. */
   envelope: EffectiveEnvelopeFacts | null;
   onSelect: (sel: Selection | null) => void;
+  onFocusNode: (nodeId: string) => void;
   onHover: (info: HoverInfo | null) => void;
 }
 
@@ -232,6 +250,7 @@ export function GroundStations({
   actuationNotices,
   envelope,
   onSelect,
+  onFocusNode,
   onHover,
 }: GroundStationsProps) {
   const texture = useMemo(() => makeGsTexture(), []);
@@ -257,6 +276,7 @@ export function GroundStations({
             configuredMinElevDeg={isSelected ? (envelope?.configured_min_elevation_deg ?? null) : null}
             family={groundStationFamily(node.node_id, links, actuationNotices)}
             onSelect={onSelect}
+            onFocusNode={onFocusNode}
             onHover={onHover}
           />
         );

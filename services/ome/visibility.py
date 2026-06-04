@@ -404,6 +404,7 @@ def check_isl_visibility(
     max_range_km: float,
     max_tracking_rate_deg_s: float | None = None,
     field_of_regard_deg: float = 360.0,
+    body_frame: BodyFrame = EARTH_BODY_FRAME,
     polar_seam_enabled: bool = False,
     latitude_threshold_deg: float = 70.0,
     geo_a: GeoPosition | None = None,
@@ -416,7 +417,7 @@ def check_isl_visibility(
     range_km = compute_range_km(pos_a, pos_b)
 
     # 1. Line of sight
-    if not has_line_of_sight(pos_a, pos_b):
+    if not has_line_of_sight(pos_a, pos_b, body_frame):
         return IslVisibility("", "", False, range_km, 0.0, "los_blocked")
 
     # 2. Range

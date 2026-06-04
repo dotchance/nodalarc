@@ -38,10 +38,10 @@ default_terrestrial_prefixes:
   metric: 10
 
 # Ground station definitions.
-# Each station gets a node_id of gs-{name} (e.g., gs-new-york).
+# Each station gets a node_id of {namespace}-gs-{name} (e.g., ground-gs-new-york).
 # Names must be unique and use lowercase with hyphens.
 stations:
-  - name: new-york          # Station name (used in node_id: gs-new-york)
+  - name: new-york          # Station name (used in node_id: ground-gs-new-york)
     lat_deg: 40.71           # Latitude in degrees (-90 to 90)
     lon_deg: -74.01          # Longitude in degrees (-180 to 180)
     alt_m: 10                # Altitude above sea level in meters

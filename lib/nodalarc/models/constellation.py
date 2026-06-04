@@ -10,16 +10,31 @@ Supports three modes via discriminated union on the `mode` field:
 
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, Discriminator, Field, Tag, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Discriminator,
+    Field,
+    NonNegativeInt,
+    PositiveInt,
+    Tag,
+    field_validator,
+    model_validator,
+)
 
+from nodalarc.model_validation import NonEmptyReference, NonEmptyString, nonempty, nonempty_unique
 from nodalarc.models.terminal_physics import SatGroundTerminalBoresight
 
 
 class OrbitalElements(BaseModel):
     """Orbital elements for explicit-mode satellites."""
 
+    model_config = ConfigDict(allow_inf_nan=False)
+
     altitude_km: float
-    inclination_deg: float
+    inclination_deg: float = Field(ge=0, le=180)
+    # raan/true-anomaly are finite (allow_inf_nan=False); not range-bounded because
+    # callers may pass non-canonical or computed (pre-mod-360) angles.
     raan_deg: float
     true_anomaly_deg: float
 
@@ -34,13 +49,15 @@ class OrbitalElements(BaseModel):
 class IslTerminal(BaseModel):
     """ISL terminal specification."""
 
+    model_config = ConfigDict(allow_inf_nan=False)
+
     type: str  # "optical" or "rf"
     count: int
     role: str | None = None  # "intra-plane", "cross-plane", or None for pooled terminals
-    max_range_km: float
-    bandwidth_mbps: float
+    max_range_km: float = Field(gt=0)
+    bandwidth_mbps: float = Field(gt=0)
     max_tracking_rate_deg_s: float
-    field_of_regard_deg: float = 360.0
+    field_of_regard_deg: float = Field(default=360.0, ge=0, le=360)
 
     @field_validator("count")
     @classmethod
@@ -67,6 +84,8 @@ class IslTerminal(BaseModel):
 class GroundTerminal(BaseModel):
     """Ground-link terminal specification for satellites."""
 
+    model_config = ConfigDict(allow_inf_nan=False)
+
     type: str  # "optical" or "rf"
     count: int
     bandwidth_mbps: float
@@ -77,8 +96,8 @@ class GroundTerminal(BaseModel):
     )
     max_tracking_rate_deg_s: float | None = None
     boresight: SatGroundTerminalBoresight | None = None
-    gateway_beam_quota: int | None = None  # Accepted in Phase 3, not enforced.
-    user_terminal_beam_quota: int | None = None  # Accepted in Phase 3, not enforced.
+    gateway_beam_quota: int | None = None  # Declared for future per-beam allocation.
+    user_terminal_beam_quota: int | None = None  # Declared for future per-beam allocation.
 
     @field_validator("count")
     @classmethod
@@ -133,6 +152,8 @@ class TerminalConfig(BaseModel):
 class OrbitParams(BaseModel):
     """Orbital parameters for parametric mode."""
 
+    model_config = ConfigDict(allow_inf_nan=False)
+
     altitude_km: float
     inclination_deg: float
     pattern: str  # "walker-delta" or "walker-star"
@@ -155,14 +176,18 @@ class OrbitParams(BaseModel):
 class PlaneParams(BaseModel):
     """Orbital plane parameters for parametric mode."""
 
-    count: int
-    raan_spacing_deg: float
-    sats_per_plane: int
+    model_config = ConfigDict(allow_inf_nan=False)
+
+    count: int = Field(gt=0)
+    raan_spacing_deg: float = Field(ge=0)
+    sats_per_plane: int = Field(gt=0)
     phase_offset_deg: float
 
 
 class PolarSeamConfig(BaseModel):
     """Polar seam configuration — hard latitude cutoff for cross-plane ISLs."""
+
+    model_config = ConfigDict(allow_inf_nan=False)
 
     enabled: bool = False
     latitude_threshold_deg: float = 70.0
@@ -178,15 +203,25 @@ class PolarSeamConfig(BaseModel):
 class IslLink(BaseModel):
     """Single ISL terminal-to-peer mapping within an override."""
 
-    terminal: str  # e.g. "isl0"
-    peer: str  # e.g. "sat-P01S00"
+    terminal: NonEmptyReference  # e.g. "isl0"
+    peer: NonEmptyReference  # e.g. "sat-P01S00"
 
 
 class IslOverride(BaseModel):
     """ISL override for a specific node — manually assigns terminals to peers."""
 
-    node: str
+    node: NonEmptyReference
     links: list[IslLink]
+
+    @field_validator("links")
+    @classmethod
+    def _valid_links(cls, v: list[IslLink]) -> list[IslLink]:
+        nonempty(v)
+        terminals = [link.terminal for link in v]
+        if len(set(terminals)) != len(terminals):
+            dupes = sorted({t for t in terminals if terminals.count(t) > 1})
+            raise ValueError(f"IslOverride assigns the same terminal more than once: {dupes}")
+        return v
 
 
 class PlaneOverride(BaseModel):
@@ -195,9 +230,14 @@ class PlaneOverride(BaseModel):
     Can reference a satellite type by name or provide inline terminals.
     """
 
-    planes: list[int]
-    satellite_type: str | None = None  # Reference to satellite type file
+    planes: list[NonNegativeInt]
+    satellite_type: NonEmptyReference | None = None  # Reference to satellite type file
     terminals: TerminalConfig | None = None  # Deprecated: inline terminals
+
+    @field_validator("planes")
+    @classmethod
+    def _valid_planes(cls, v: list[int]) -> list[int]:
+        return nonempty_unique(v)
 
     @model_validator(mode="after")
     def _require_one_source(self):
@@ -212,28 +252,33 @@ class SatelliteConfig(BaseModel):
     Node ID is derived from plane/slot via AddressingScheme — never stored here.
     """
 
-    plane: int
-    slot: int
+    plane: int = Field(ge=0)
+    slot: int = Field(ge=0)
     orbit: OrbitalElements
-    satellite_type: str | None = None  # Override satellite type for this node
+    satellite_type: NonEmptyReference | None = None  # Override satellite type for this node
     terminals: TerminalConfig | None = None  # Deprecated: inline terminals
 
 
 class TLEFilter(BaseModel):
     """Filter for TLE mode — select satellites from TLE file."""
 
-    norad_ids: list[int] | None = None
-    max_count: int | None = None
+    norad_ids: list[PositiveInt] | None = None
+    max_count: int | None = Field(default=None, gt=0)
+
+    @field_validator("norad_ids")
+    @classmethod
+    def _valid_norad_ids(cls, v: list[int] | None) -> list[int] | None:
+        return nonempty_unique(v)
 
 
 class ParametricConstellation(BaseModel):
     """Constellation defined by Walker-delta/star orbital parameters."""
 
     mode: Literal["parametric"]
-    name: str
+    name: NonEmptyString
     orbit: OrbitParams
     planes: PlaneParams
-    satellite_type: str | None = None  # Reference to satellite type file
+    satellite_type: NonEmptyReference | None = None  # Reference to satellite type file
     default_terminals: TerminalConfig | None = None  # Deprecated: inline terminals
     polar_seam: PolarSeamConfig | None = None
     plane_overrides: list[PlaneOverride] | None = None
@@ -250,11 +295,16 @@ class ExplicitConstellation(BaseModel):
     """Constellation with per-satellite orbital elements."""
 
     mode: Literal["explicit"]
-    name: str
+    name: NonEmptyString
     satellites: list[SatelliteConfig]
-    satellite_type: str | None = None  # Reference to satellite type file
+    satellite_type: NonEmptyReference | None = None  # Reference to satellite type file
     default_terminals: TerminalConfig | None = None  # Deprecated: inline terminals
     isl_overrides: list[IslOverride] | None = None
+
+    @field_validator("satellites")
+    @classmethod
+    def _nonempty_satellites(cls, v: list[SatelliteConfig]) -> list[SatelliteConfig]:
+        return nonempty(v)
 
     @model_validator(mode="after")
     def _validate(self):
@@ -270,10 +320,10 @@ class TLEConstellation(BaseModel):
     """Constellation defined by a TLE file."""
 
     mode: Literal["tle"]
-    name: str
-    tle_file: str
+    name: NonEmptyString
+    tle_file: NonEmptyReference
     filter: TLEFilter | None = None
-    satellite_type: str | None = None  # Reference to satellite type file
+    satellite_type: NonEmptyReference | None = None  # Reference to satellite type file
     default_terminals: TerminalConfig | None = None  # Deprecated: inline terminals
     isl_overrides: list[IslOverride] | None = None
 

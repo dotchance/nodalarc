@@ -6,8 +6,8 @@
  * globe/flowPaths.ts into the R3F lifecycle. The legacy module kept its flow Map and a
  * window `resize` listener at module scope and mutated a caller-supplied earthFrame; this
  * port owns the Map in a ref, mounts its Line2 objects into this component's <group> (a
- * child of the Earth body frame, so hop positions are correct in the earth-LOCAL frame),
- * and tracks the material resolution off the actual canvas size (useThree().size) rather
+ * scene-root child, so hop positions can cross body frames), and tracks the material resolution
+ * off the actual canvas size (useThree().size) rather
  * than the window. The legacy flowPaths.ts is left untouched for the live globe and deleted
  * at cutover — only one renders at a time.
  *
@@ -17,7 +17,8 @@
  * write, dashOffset decremented -0.01/frame (the "flow" animation), a path hidden when any
  * hop is unresolved (or fewer than two resolvable hops), and a reverse polyline drawn only
  * when reverse_hops.length > 0 && asymmetry_detected. Hop endpoints are re-resolved from the
- * registry every frame, so a flow tracks its propagating satellites with zero lag.
+ * registry every frame in WORLD space, so a flow tracks propagating satellites and inter-body
+ * paths with zero lag.
  *
  * Default useFrame priority (after FrameDriver -2 and Constellation -1) so the hop positions
  * it reads from the registry are this frame's.
@@ -30,7 +31,7 @@ import { Line2 } from "three/addons/lines/Line2.js";
 import { LineGeometry } from "three/addons/lines/LineGeometry.js";
 import { LineMaterial } from "three/addons/lines/LineMaterial.js";
 import { LINK_FLOW_COLOR, LINK_FLOW_SECONDARY_COLOR, LINK_FLOW_WIDTH } from "../../config";
-import { getNodeLocalPosition } from "./positions";
+import { getNodeWorldPosition } from "./positions";
 import type { TracedPath } from "../../types";
 
 const DASH_SCALE = 3;
@@ -100,7 +101,7 @@ function hasReverse(path: TracedPath): boolean {
 }
 
 /**
- * Fill `buffer` (sized to hops.length*3) with each hop's earth-LOCAL position. Returns true
+ * Fill `buffer` (sized to hops.length*3) with each hop's world position. Returns true
  * when the path should render, false when it must hide: any hop unresolved, or fewer than two
  * hops (no segment). Mirrors globe/flowPaths.ts collectHopPositions (which required
  * positions.length >= 6, i.e. >= 2 hops).
@@ -109,7 +110,7 @@ function collectHopPositions(hops: string[], buffer: Float32Array): boolean {
   if (hops.length < 2) return false;
   let off = 0;
   for (const hop of hops) {
-    if (!getNodeLocalPosition(hop, _flowHopPos)) return false;
+    if (!getNodeWorldPosition(hop, _flowHopPos)) return false;
     buffer[off++] = _flowHopPos.x;
     buffer[off++] = _flowHopPos.y;
     buffer[off++] = _flowHopPos.z;

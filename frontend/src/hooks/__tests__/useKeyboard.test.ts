@@ -17,6 +17,8 @@ function makeActions() {
     onToggleHistorical: vi.fn(),
     onPlayPause: vi.fn(),
     onFollowNode: vi.fn(),
+    onFrameSelection: vi.fn(),
+    onFrameScene: vi.fn(),
     onTopView: vi.fn(),
     onToggleGlobeMode: vi.fn(),
     onToggleReferenceFrame: vi.fn(),
@@ -28,8 +30,11 @@ function makeActions() {
   };
 }
 
-function fireKey(key: string, opts?: { target?: EventTarget; preventDefault?: () => void }) {
-  const event = new KeyboardEvent("keydown", { key, bubbles: true });
+function fireKey(
+  key: string,
+  opts?: { target?: EventTarget; preventDefault?: () => void; shiftKey?: boolean },
+) {
+  const event = new KeyboardEvent("keydown", { key, bubbles: true, shiftKey: opts?.shiftKey });
   if (opts?.preventDefault) {
     Object.defineProperty(event, "preventDefault", { value: opts.preventDefault });
   }
@@ -59,8 +64,9 @@ describe("useKeyboard", () => {
     ["P", "onToggleSatPaths"],
     ["h", "onToggleHistorical"],
     ["H", "onToggleHistorical"],
-    ["f", "onFollowNode"],
-    ["F", "onFollowNode"],
+    ["f", "onFrameSelection"],
+    ["F", "onFrameSelection"],
+    ["Home", "onFrameScene"],
     ["n", "onToggleGlobeMode"],
     ["i", "onToggleReferenceFrame"],
     ["]", "onTogglePanel"],
@@ -87,6 +93,13 @@ describe("useKeyboard", () => {
     act(() => fireKey("Tab", { preventDefault: pd }));
     expect(actions.onToggleView).toHaveBeenCalledWith("topology");
     expect(pd).toHaveBeenCalled();
+  });
+
+  it("Shift+F follows the selected item instead of framing it", () => {
+    renderHook(() => useKeyboard(actions));
+    act(() => fireKey("F", { shiftKey: true }));
+    expect(actions.onFollowNode).toHaveBeenCalled();
+    expect(actions.onFrameSelection).not.toHaveBeenCalled();
   });
 
   it("1 sets area color mode, 2 sets plane", () => {
@@ -144,6 +157,8 @@ describe("useKeyboard", () => {
       onToggleHistorical: vi.fn(),
       onPlayPause: vi.fn(),
       onFollowNode: vi.fn(),
+      onFrameSelection: vi.fn(),
+      onFrameScene: vi.fn(),
       onTopView: vi.fn(),
     };
     renderHook(() => useKeyboard(minimal));

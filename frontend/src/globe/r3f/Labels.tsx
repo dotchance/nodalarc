@@ -23,11 +23,11 @@
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { useFrame, useThree } from "@react-three/fiber";
-import { isOccludedByEarth, getLabelsEnabled } from "../labels";
+import { isOccludedBySphere, getLabelsEnabled } from "../labels";
 import { getGsLabelsEnabled } from "../groundStations";
-import { getNodeWorldPosition } from "./positions";
-import { EARTH_RADIUS_RENDER } from "./units";
+import { getNodeBodySphere, getNodeWorldPosition } from "./positions";
 import type { NodeState } from "../../types";
+import { nodeDisplayLabel } from "../../networkIdentity";
 
 // Satellite-label distance fade (globe/labels.ts FADE_IN_DIST / FADE_OUT_DIST).
 const SAT_FADE_IN_DIST = 200;
@@ -37,21 +37,16 @@ const SAT_FADE_OUT_DIST = 500;
 const GS_FADE_IN_DIST = 200;
 const GS_FADE_OUT_DIST = 500;
 
-// Occlusion radius passed to isOccludedByEarth. EARTH_RADIUS_RENDER (= SCENE_EARTH_RADIUS = 100,
-// one Earth radius) equals the legacy config EARTH_RADIUS at this shared scale; isOccludedByEarth
-// applies its own 0.985 OCC_RADIUS_FACTOR internally, so we pass the FULL radius here exactly as
-// the legacy animateLabels / updateGSLabels do (the effective occluder is EARTH_RADIUS_RENDER*0.985).
-const OCC_EARTH_RADIUS = EARTH_RADIUS_RENDER;
-
 // Per-frame projection temporaries — hoisted to module scope (zero useFrame heap alloc).
 const _worldPos = new THREE.Vector3();
 const _ndc = new THREE.Vector3();
+const _bodyCenter = new THREE.Vector3();
 
 /** Build the satellite label div (globe/labels.ts updateLabels — cssText copied so CSS vars resolve). */
-function createSatLabel(nodeId: string): HTMLDivElement {
+function createSatLabel(label: string): HTMLDivElement {
   const div = document.createElement("div");
   div.className = "sat-label";
-  div.textContent = nodeId.replace("sat-", "");
+  div.textContent = label;
   div.style.cssText = `
     position: absolute;
     color: var(--text-primary);
@@ -65,10 +60,10 @@ function createSatLabel(nodeId: string): HTMLDivElement {
 }
 
 /** Build the ground-station label div (globe/groundStations.ts updateGroundStations — cssText copied). */
-function createGsLabel(nodeId: string): HTMLDivElement {
+function createGsLabel(label: string): HTMLDivElement {
   const div = document.createElement("div");
   div.className = "gs-label";
-  div.textContent = nodeId.replace("gs-", "");
+  div.textContent = label;
   div.style.cssText = `
     position: absolute;
     color: var(--accent-teal);
@@ -135,17 +130,23 @@ export function Labels({ nodes, containerRef }: LabelsProps) {
     for (const node of nodeList) {
       if (node.node_type === "satellite") {
         seenSats.add(node.node_id);
+        const label = nodeDisplayLabel(node);
         if (!satLabels.current.has(node.node_id)) {
-          const div = createSatLabel(node.node_id);
+          const div = createSatLabel(label);
           container.appendChild(div);
           satLabels.current.set(node.node_id, div);
+        } else {
+          satLabels.current.get(node.node_id)!.textContent = label;
         }
       } else if (node.node_type === "ground_station") {
         seenGs.add(node.node_id);
+        const label = nodeDisplayLabel(node);
         if (!gsLabels.current.has(node.node_id)) {
-          const div = createGsLabel(node.node_id);
+          const div = createGsLabel(label);
           container.appendChild(div);
           gsLabels.current.set(node.node_id, div);
+        } else {
+          gsLabels.current.get(node.node_id)!.textContent = label;
         }
       }
     }
@@ -181,13 +182,13 @@ export function Labels({ nodes, containerRef }: LabelsProps) {
           div.style.display = "none";
           continue;
         }
-        if (
-          isOccludedByEarth(
-            _worldPos.x, _worldPos.y, _worldPos.z,
-            cameraPos.x, cameraPos.y, cameraPos.z,
-            OCC_EARTH_RADIUS,
-          )
-        ) {
+        const bodySphere = getNodeBodySphere(id, _bodyCenter);
+        if (bodySphere && isOccludedBySphere(
+          _worldPos.x, _worldPos.y, _worldPos.z,
+          cameraPos.x, cameraPos.y, cameraPos.z,
+          _bodyCenter.x, _bodyCenter.y, _bodyCenter.z,
+          bodySphere.radius,
+        )) {
           div.style.display = "none";
           continue;
         }
@@ -238,13 +239,13 @@ export function Labels({ nodes, containerRef }: LabelsProps) {
           div.style.display = "none";
           continue;
         }
-        if (
-          isOccludedByEarth(
-            _worldPos.x, _worldPos.y, _worldPos.z,
-            cameraPos.x, cameraPos.y, cameraPos.z,
-            OCC_EARTH_RADIUS,
-          )
-        ) {
+        const bodySphere = getNodeBodySphere(id, _bodyCenter);
+        if (bodySphere && isOccludedBySphere(
+          _worldPos.x, _worldPos.y, _worldPos.z,
+          cameraPos.x, cameraPos.y, cameraPos.z,
+          _bodyCenter.x, _bodyCenter.y, _bodyCenter.z,
+          bodySphere.radius,
+        )) {
           div.style.display = "none";
           continue;
         }

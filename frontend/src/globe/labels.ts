@@ -23,18 +23,47 @@ export function isOccludedByEarth(
   camZ: number,
   earthRadius: number,
 ): boolean {
-  const occR = earthRadius * OCC_RADIUS_FACTOR;
-  const dx = satWorldX - camX;
-  const dy = satWorldY - camY;
-  const dz = satWorldZ - camZ;
+  return isOccludedBySphere(
+    satWorldX,
+    satWorldY,
+    satWorldZ,
+    camX,
+    camY,
+    camZ,
+    0,
+    0,
+    0,
+    earthRadius,
+  );
+}
+
+export function isOccludedBySphere(
+  pointWorldX: number,
+  pointWorldY: number,
+  pointWorldZ: number,
+  camX: number,
+  camY: number,
+  camZ: number,
+  centerWorldX: number,
+  centerWorldY: number,
+  centerWorldZ: number,
+  radius: number,
+): boolean {
+  const occR = radius * OCC_RADIUS_FACTOR;
+  const relCamX = camX - centerWorldX;
+  const relCamY = camY - centerWorldY;
+  const relCamZ = camZ - centerWorldZ;
+  const dx = pointWorldX - camX;
+  const dy = pointWorldY - camY;
+  const dz = pointWorldZ - camZ;
   const len = Math.sqrt(dx * dx + dy * dy + dz * dz);
   if (len < 0.001) return false;
   const dirX = dx / len;
   const dirY = dy / len;
   const dirZ = dz / len;
 
-  const bHalf = camX * dirX + camY * dirY + camZ * dirZ;
-  const c = camX * camX + camY * camY + camZ * camZ - occR * occR;
+  const bHalf = relCamX * dirX + relCamY * dirY + relCamZ * dirZ;
+  const c = relCamX * relCamX + relCamY * relCamY + relCamZ * relCamZ - occR * occR;
   const discrim = bHalf * bHalf - c;
   if (discrim <= 0) return false;
 

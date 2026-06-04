@@ -68,6 +68,9 @@ class LinkState(BaseModel):
     latency_ms: float | None  # None when carrier is not UP
     bandwidth_mbps: float | None  # None when carrier is not UP
     link_type: Literal["isl", "ground"]
+    link_rule_id: str | None = None
+    topology_mode: str | None = None
+    endpoint_segments: tuple[str, str] | None = None
     gs_terminal_index: int | None = None
     sat_terminal_index: int | None = None
     scheduling_state: str = "active"

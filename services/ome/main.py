@@ -17,21 +17,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple
 
-import yaml
 from nodal.logging import configure as _configure_logging
 from nodal.logging import connect as _connect_logging
-from nodalarc.constants import EARTH_RADIUS_KM
-from nodalarc.constellation_loader import (
-    SatelliteNode,
-    expand_constellation,
-    load_constellation,
-    load_ground_stations,
-)
-from nodalarc.ground_terminals import station_ground_terminal_capacity
-from nodalarc.link_metadata import build_link_metadata_maps
-from nodalarc.models.addressing import AddressingScheme, assign_isl_neighbors
+from nodalarc.body_frames import body_frame_for
+from nodalarc.constellation_loader import SatelliteNode, satellite_node_id
+from nodalarc.link_metadata import LinkRuleMetadata, build_link_metadata_maps
+from nodalarc.models.addressing import AddressingScheme
 from nodalarc.models.constellation import ConstellationConfig
-from nodalarc.models.events import OpsEvent, PlaybackControlCommand
+from nodalarc.models.events import OpsEvent, PlaybackControlCommand, SchedulingCheckpoint
 from nodalarc.models.ground_station import GroundStationFile
 from nodalarc.models.ome_lifecycle import (
     MbbPairAuthority,
@@ -40,6 +33,7 @@ from nodalarc.models.ome_lifecycle import (
 )
 from nodalarc.models.session import GroundSchedulingConfig, SessionConfig, resolve_session_epoch
 from nodalarc.nats_channels import MAX_TIME_ACCEL, MIN_TIME_ACCEL
+from nodalarc.resolve_session import load_session_resolution_from_file
 from nodalarc.session_identity import require_session_run_id
 from nodalarc.tle import tle_age_days
 
@@ -47,7 +41,7 @@ from ome.event_stream import (
     precompute_timeline,
     write_timeline_jsonl,
 )
-from ome.propagator import orbital_period
+from ome.propagator import orbital_period_for_body
 from ome.types import MbbTeardownLifecycleEvent, MbbTeardownState
 
 if TYPE_CHECKING:
@@ -69,18 +63,70 @@ class _SessionBundle(NamedTuple):
     propagator_id: str
     interface_map: dict[tuple[str, str], tuple[str, str]]
     bandwidth_map: dict[tuple[str, str], float]
+    rule_map: dict[tuple[str, str], LinkRuleMetadata]
+    ground_candidate_satellites_by_gs: dict[str, tuple[str, ...]]
+    node_metadata: dict[str, dict[str, object]]
+    body_ephemeris: object | None
+    active_bodies: frozenset[str]
+
+
+def _validate_recovered_checkpoint(
+    checkpoint: SchedulingCheckpoint,
+    *,
+    now_wall_s: float,
+) -> float:
+    """Validate retained checkpoint metadata and return its wall-clock age.
+
+    Wall-clock age is diagnostic, not an authority boundary. The checkpoint's
+    sim_time/step/seq are the retained session lineage; if the service was down
+    for a long period, OME resumes from that lineage and logs the gap instead of
+    inventing elapsed simulation time.
+    """
+
+    written_at = float(checkpoint.written_at)
+    if written_at <= 0:
+        raise RuntimeError("Recovered checkpoint has invalid written_at; refusing recovery")
+    if int(checkpoint.step) < 0:
+        raise RuntimeError("Recovered checkpoint has negative step; refusing recovery")
+    if int(checkpoint.snapshot_seq) <= 0:
+        raise RuntimeError("Recovered checkpoint has invalid snapshot_seq; refusing recovery")
+
+    checkpoint_age = now_wall_s - written_at
+    if checkpoint_age < 0:
+        raise RuntimeError("Recovered checkpoint written_at is in the future; refusing recovery")
+    return checkpoint_age
+
+
+def _checkpoint_ground_sat_pair(
+    pair: tuple[str, str],
+    ground_station_ids: set[str] | frozenset[str],
+) -> tuple[str, str]:
+    """Return `(ground_id, satellite_id)` for a checkpoint pair.
+
+    OME stores ground pairs in allocator-normalized endpoint order for stable
+    comparisons. Checkpoint payloads are semantic and must name the ground and
+    satellite roles explicitly, so serialization cannot assume tuple position.
+    """
+
+    a_is_ground = pair[0] in ground_station_ids
+    b_is_ground = pair[1] in ground_station_ids
+    if a_is_ground == b_is_ground:
+        raise ValueError(
+            f"Cannot serialize checkpoint pair {pair!r}: expected exactly one ground station "
+            f"endpoint from {sorted(ground_station_ids)!r}"
+        )
+    return pair if a_is_ground else (pair[1], pair[0])
 
 
 def _load_session_config(session_path: str | Path) -> _SessionBundle:
     """Load and validate all session config. Pure — no side effects."""
     from nodalarc.models.constellation import ParametricConstellation, TLEConstellation
 
-    data = yaml.safe_load(Path(session_path).read_text())
-    session = SessionConfig.model_validate(data)
-
-    constellation_config = load_constellation(session.constellation)
-    gs_file = load_ground_stations(session.ground_stations)
-    satellites = expand_constellation(constellation_config)
+    resolution = load_session_resolution_from_file(session_path, origin="ome")
+    session = resolution.runtime_session
+    constellation_config = resolution.runtime_constellation
+    gs_file = resolution.primary_ground_set.config
+    satellites = list(resolution.satellites)
     if not satellites:
         raise ValueError("No satellites in constellation")
     if session.orbit.propagator == "sgp4-tle" and not isinstance(
@@ -99,22 +145,34 @@ def _load_session_config(session_path: str | Path) -> _SessionBundle:
             "OME will not downgrade TLEs into circular elements"
         )
 
-    first_alt = satellites[0].elements.semi_major_axis_km - EARTH_RADIUS_KM
-    period = orbital_period(first_alt)
-    addressing = AddressingScheme(session.addressing)
-    neighbors = assign_isl_neighbors(constellation_config, addressing)
+    period = max(
+        orbital_period_for_body(sat.elements, body_frame_for(getattr(sat, "central_body", "earth")))
+        for sat in satellites
+    )
+    addressing = resolution.addressing
+    neighbors = resolution.neighbors
 
     polar_seam_enabled = False
     latitude_threshold_deg = 70.0
 
-    if (
-        isinstance(constellation_config, ParametricConstellation)
-        and constellation_config.polar_seam
-    ):
-        polar_seam_enabled = constellation_config.polar_seam.enabled
-        latitude_threshold_deg = constellation_config.polar_seam.latitude_threshold_deg
+    for asset in resolution.constellations:
+        if isinstance(asset.config, ParametricConstellation) and asset.config.polar_seam:
+            polar_seam_enabled = polar_seam_enabled or asset.config.polar_seam.enabled
+            latitude_threshold_deg = max(
+                latitude_threshold_deg,
+                asset.config.polar_seam.latitude_threshold_deg,
+            )
 
-    metadata = build_link_metadata_maps(session, addressing)
+    metadata = build_link_metadata_maps(
+        session,
+        addressing,
+        constellation=constellation_config,
+        satellites=satellites,
+        gs_file=gs_file,
+        neighbors=neighbors,
+        ground_candidate_satellites_by_gs=resolution.ground_candidate_satellites_by_gs,
+        declared_candidates=resolution.declared_candidates,
+    )
 
     return _SessionBundle(
         session=session,
@@ -129,6 +187,21 @@ def _load_session_config(session_path: str | Path) -> _SessionBundle:
         propagator_id=session.orbit.propagator,
         interface_map=metadata.interface_map,
         bandwidth_map=metadata.bandwidth_map,
+        rule_map=metadata.rule_map,
+        ground_candidate_satellites_by_gs=dict(resolution.ground_candidate_satellites_by_gs),
+        node_metadata={
+            node.node_id: {
+                "segment_id": node.segment_id,
+                "local_node_id": node.local_node_id,
+                "namespace": node.namespace,
+                "tags": tuple(node.tags),
+                "reference_body": node.reference_body or node.central_body or "earth",
+                "frame_id": node.frame_id,
+            }
+            for node in resolution.resolved.nodes
+        },
+        body_ephemeris=resolution.body_ephemeris,
+        active_bodies=resolution.active_bodies,
     )
 
 
@@ -148,64 +221,27 @@ def _enforce_ground_link_model_contract(session: SessionConfig) -> None:
     )
 
 
-def _mbb_capacity_shortfalls(
-    ground_scheduling: GroundSchedulingConfig,
-    gs_file: GroundStationFile | None,
-) -> list[str]:
-    if gs_file is None or ground_scheduling.handover_mode != "mbb":
-        return []
-    required_capacity = ground_scheduling.mbb_reserve + 1
-    shortfalls: list[str] = []
-    for station in gs_file.stations:
-        capacity = station_ground_terminal_capacity(gs_file, station)
-        if capacity < required_capacity:
-            shortfalls.append(
-                f"gs-{station.name}(capacity={capacity}, required>={required_capacity})"
-            )
-    return shortfalls
+def _effective_ground_scheduling_for_runtime(session: SessionConfig) -> GroundSchedulingConfig:
+    """Return the session-root ground scheduling defaults used by OME.
 
-
-def _effective_ground_scheduling_for_runtime(
-    session: SessionConfig,
-    gs_file: GroundStationFile | None,
-) -> GroundSchedulingConfig:
-    """Return the OME runtime ground scheduling policy after explicit acknowledgements.
-
-    Physical MBB on insufficient terminal capacity is impossible. If the operator
-    explicitly acknowledges a BBM gap, OME runs BBM as the effective runtime mode
-    and surfaces the degraded behavior; otherwise startup fails before publishing
-    false authority.
+    MBB/BBM capability is resolved per ground station. A single-terminal station
+    is BBM even when the session default is MBB; a multi-terminal station can
+    still explicitly choose BBM. This helper only keeps the fail-loud global guard
+    for future multi-overlap MBB values that the current allocator cannot honor.
     """
     ground = session.scheduling.ground
     # BIG HONESTY NOTE / MBB-002:
-    # The runtime must not "helpfully" accept a reserve value that the allocator
-    # cannot honor. `mbb_reserve > 1` means multi-overlap MBB; today we only
-    # support one overlap per GS. Schema validation normally catches this, but OME
-    # keeps a runtime guard because SessionConfig can be mutated in tests/tools.
+    # The runtime must not accept a reserve value that the allocator cannot honor.
+    # `mbb_reserve > 1` means multi-overlap MBB; today we only support one overlap
+    # per GS. Remove this guard only when MBB-002 adds multi-overlap allocator state
+    # and proves it.
     if ground.mbb_reserve > 1:
         raise RuntimeError(
             "scheduling.ground.mbb_reserve > 1 requires future MBB-002 multi-overlap "
             "allocator support; current OME supports at most one concurrent MBB "
             "overlap per ground station"
         )
-    shortfalls = _mbb_capacity_shortfalls(ground, gs_file)
-    if not shortfalls:
-        return ground
-    if not session.simulation.acknowledge_bbm_handover_gap:
-        raise RuntimeError(
-            "MBB handover requested but these ground stations do not have enough "
-            "terminal capacity for physical overlap: "
-            + ", ".join(shortfalls)
-            + ". Refusing to degrade silently; fix the model, select "
-            "scheduling.ground.handover_mode='bbm', or explicitly set "
-            "simulation.acknowledge_bbm_handover_gap: true."
-        )
-    logging.warning(
-        "MBB handover requested but physical overlap is impossible for %s; "
-        "simulation.acknowledge_bbm_handover_gap=true, running effective BBM/degraded mode",
-        ", ".join(shortfalls),
-    )
-    return ground.model_copy(update={"handover_mode": "bbm", "mbb_reserve": 0})
+    return ground
 
 
 def _validate_sgp4_tle_freshness(cfg: _SessionBundle, epoch_unix: float) -> None:
@@ -219,7 +255,7 @@ def _validate_sgp4_tle_freshness(cfg: _SessionBundle, epoch_unix: float) -> None
 
     stale: list[str] = []
     for sat in cfg.satellites:
-        node_id = cfg.addressing.sat_id(sat.plane, sat.slot)
+        node_id = satellite_node_id(sat, cfg.addressing)
         if sat.tle_line_1 is None or sat.tle_line_2 is None:
             raise ValueError(f"Satellite {node_id} has no TLE record for SGP4 propagation")
         age_days = tle_age_days(sat.tle_line_1, epoch_unix)
@@ -370,7 +406,7 @@ def run(session_path: str, output_dir: str | None = None) -> Path:
     _enforce_ground_link_model_contract(cfg.session)
     epoch_unix = resolve_session_epoch(cfg.session.time)
     _validate_sgp4_tle_freshness(cfg, epoch_unix)
-    effective_ground_scheduling = _effective_ground_scheduling_for_runtime(cfg.session, cfg.gs_file)
+    effective_ground_scheduling = _effective_ground_scheduling_for_runtime(cfg.session)
     events = precompute_timeline(
         satellites=cfg.satellites,
         addressing=cfg.addressing,
@@ -384,6 +420,9 @@ def run(session_path: str, output_dir: str | None = None) -> Path:
         polar_seam_enabled=cfg.polar_seam_enabled,
         latitude_threshold_deg=cfg.latitude_threshold_deg,
         ground_link_model=cfg.session.simulation.ground_link_model,
+        ground_candidate_satellites_by_gs=cfg.ground_candidate_satellites_by_gs,
+        body_ephemeris=cfg.body_ephemeris,
+        active_bodies=cfg.active_bodies,
     )
 
     out_dir = Path(output_dir) if output_dir else Path("output")
@@ -407,19 +446,21 @@ def _start_health_server(port: int = 8081) -> None:
     isolated and called from one place so it can be trivially removed
     when the sidecar pattern is adopted.
     """
+    import contextlib
     import threading
-    from http.server import BaseHTTPRequestHandler, HTTPServer
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
     class _Handler(BaseHTTPRequestHandler):
         def do_GET(self):
             self.send_response(200)
             self.end_headers()
-            self.wfile.write(b'{"status":"ok"}')
+            with contextlib.suppress(BrokenPipeError, ConnectionResetError):
+                self.wfile.write(b'{"status":"ok"}')
 
         def log_message(self, *args):
             pass
 
-    server = HTTPServer(("0.0.0.0", port), _Handler)
+    server = ThreadingHTTPServer(("0.0.0.0", port), _Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     logging.debug("Health server listening on :%d", port)
@@ -704,7 +745,7 @@ def _run_pacing(
         step: int,
         associations: dict[tuple[str, str], tuple[int, int]],
         teardowns: MbbTeardownState,
-        mbb_overlap_ticks: int,
+        mbb_overlap_ticks_by_gs: dict[str, int],
     ) -> SchedulingCheckpoint:
         """Convert OME internal association/teardown state to SchedulingCheckpoint."""
         if snapshot_seq <= 0:
@@ -712,8 +753,10 @@ def _run_pacing(
         if step < 0:
             raise ValueError("SchedulingCheckpoint step must be non-negative")
 
+        ground_station_ids = frozenset(mbb_overlap_ticks_by_gs)
         assoc_flat: dict[str, CheckpointAssociation] = {}
-        for (gs_id, sat_id), (gs_ti, sat_ti) in associations.items():
+        for pair, (gs_ti, sat_ti) in associations.items():
+            gs_id, sat_id = _checkpoint_ground_sat_pair(pair, ground_station_ids)
             assoc_flat[f"{gs_id}:{sat_id}"] = CheckpointAssociation(
                 gs_id=gs_id,
                 sat_id=sat_id,
@@ -726,8 +769,14 @@ def _run_pacing(
         # remaining_ticks as an audit value so recovery tests can prove that a
         # no-time-advanced restart preserved MBB overlap semantics exactly.
         td_flat: dict[str, TeardownEntry] = {}
-        for (gs_id, sat_id), teardown in teardowns.items():
-            remaining_ticks = max(0, mbb_overlap_ticks - (step - teardown.start_step))
+        for pair, teardown in teardowns.items():
+            gs_id, sat_id = _checkpoint_ground_sat_pair(pair, ground_station_ids)
+            if gs_id not in mbb_overlap_ticks_by_gs:
+                raise ValueError(
+                    f"Cannot build SchedulingCheckpoint for pending teardown {gs_id}:{sat_id}: "
+                    "missing per-ground-station MBB overlap policy"
+                )
+            remaining_ticks = max(0, mbb_overlap_ticks_by_gs[gs_id] - (step - teardown.start_step))
             td_flat[f"{gs_id}:{sat_id}"] = TeardownEntry(
                 start_step=teardown.start_step,
                 remaining_ticks=remaining_ticks,
@@ -797,6 +846,7 @@ def _run_pacing(
 
     interface_map = cfg.interface_map
     bandwidth_map = cfg.bandwidth_map
+    rule_map = cfg.rule_map
 
     # Optional file output
     out_path = None
@@ -968,8 +1018,7 @@ def _run_pacing(
 
     from ome.event_stream import build_step_context, compute_step
 
-    effective_ground_scheduling = _effective_ground_scheduling_for_runtime(session, cfg.gs_file)
-    mbb_overlap_ticks = effective_ground_scheduling.mbb_overlap_ticks
+    effective_ground_scheduling = _effective_ground_scheduling_for_runtime(session)
 
     step_ctx = build_step_context(
         satellites=cfg.satellites,
@@ -981,6 +1030,11 @@ def _run_pacing(
         latitude_threshold_deg=cfg.latitude_threshold_deg,
         ground_scheduling=effective_ground_scheduling,
         ground_link_model=session.simulation.ground_link_model,
+        ground_defaults_applied=True,
+        ground_candidate_satellites_by_gs=cfg.ground_candidate_satellites_by_gs,
+        node_metadata=cfg.node_metadata,
+        body_ephemeris=cfg.body_ephemeris,
+        active_bodies=cfg.active_bodies,
     )
 
     step_seconds = session.time.step_seconds
@@ -1034,12 +1088,13 @@ def _run_pacing(
             step_result.link_snapshot_source,
             interface_map=interface_map,
             bandwidth_map=bandwidth_map,
+            rule_map=rule_map,
             sim_time=step_result.sim_time,
             seq=snapshot_seq,
             interval_s=snapshot_interval_s,
             fixed_positions=step_ctx.gs_positions,
             epoch_id=epoch_id,
-            mbb_overlap_ticks=mbb_overlap_ticks,
+            mbb_overlap_ticks_by_gs=step_ctx.gs_mbb_overlap_ticks,
             current_step=step_result.step,
         )
         _enqueue(subj_link_snapshot, snap.model_dump_json().encode())
@@ -1065,7 +1120,7 @@ def _run_pacing(
             step=step_result.step,
             associations=step_result.associations,
             teardowns=step_result.pending_teardowns,
-            mbb_overlap_ticks=mbb_overlap_ticks,
+            mbb_overlap_ticks_by_gs=step_ctx.gs_mbb_overlap_ticks,
         )
         _enqueue(
             subj_checkpoint,
@@ -1104,8 +1159,10 @@ def _run_pacing(
     # Try to read the retained SchedulingCheckpoint from JetStream.
     # If a checkpoint exists, it is the session-lineage authority for epoch,
     # snapshot sequence, simulation step, and playback state. We do not ignore
-    # malformed or stale retained state because that can make the event stream
-    # look healthy while silently regressing simulation state.
+    # malformed retained state because that can make the event stream look
+    # healthy while silently regressing simulation state. A valid checkpoint
+    # remains authoritative across wall-clock gaps; recovery resumes from it
+    # instead of inventing elapsed sim_time while the service was down.
     recovered_checkpoint = None
     try:
         import asyncio as _aio
@@ -1153,32 +1210,11 @@ def _run_pacing(
             "OME checkpoint recovery failed; refusing to start from unknown state"
         ) from exc
 
-    # Checkpoint staleness threshold: if the OME was down for more than 30
-    # seconds (measured by wall clock, not sim_time), fail loudly. Starting
-    # fresh on the same retained subjects would reset session-lineage sequence
-    # state and make downstream consumers distinguish truth from restart luck.
-    _CHECKPOINT_STALENESS_THRESHOLD_S = 30.0
-
     if recovered_checkpoint:
-        if recovered_checkpoint.written_at <= 0:
-            raise RuntimeError("Recovered checkpoint has invalid written_at; refusing recovery")
-        if recovered_checkpoint.step < 0:
-            raise RuntimeError("Recovered checkpoint has negative step; refusing recovery")
-        if recovered_checkpoint.snapshot_seq <= 0:
-            raise RuntimeError("Recovered checkpoint has invalid snapshot_seq; refusing recovery")
-
-        checkpoint_age = time.time() - recovered_checkpoint.written_at
-        if checkpoint_age < 0:
-            raise RuntimeError(
-                "Recovered checkpoint written_at is in the future; refusing recovery"
-            )
-        if checkpoint_age > _CHECKPOINT_STALENESS_THRESHOLD_S:
-            raise RuntimeError(
-                "Recovered checkpoint is stale "
-                f"(age={checkpoint_age:.1f}s > {_CHECKPOINT_STALENESS_THRESHOLD_S:.1f}s); "
-                "refusing to reset session state"
-            )
-
+        checkpoint_age = _validate_recovered_checkpoint(
+            recovered_checkpoint,
+            now_wall_s=time.time(),
+        )
         step = recovered_checkpoint.step
         snapshot_seq = recovered_checkpoint.snapshot_seq
         _epoch_id = recovered_checkpoint.epoch_id
@@ -1193,6 +1229,25 @@ def _run_pacing(
             snapshot_seq,
             recovered_checkpoint.sim_time.isoformat(),
         )
+        if checkpoint_age > 30.0:
+            logging.warning(
+                "Recovered checkpoint after extended wall-clock gap "
+                "(age=%.1fs, step=%d, seq=%d, sim=%s); simulation resumes from "
+                "the retained checkpoint instead of inventing elapsed sim_time",
+                checkpoint_age,
+                step,
+                snapshot_seq,
+                recovered_checkpoint.sim_time.isoformat(),
+                extra={
+                    "code": "CHECKPOINT_RECOVERY_DELAY",
+                    "details": {
+                        "age_s": checkpoint_age,
+                        "step": step,
+                        "snapshot_seq": snapshot_seq,
+                        "sim_time": recovered_checkpoint.sim_time.isoformat(),
+                    },
+                },
+            )
     else:
         logging.info("No checkpoint found — starting from epoch")
 
@@ -1334,8 +1389,8 @@ def _run_pacing(
                 lookahead.cancel()
                 lookahead_launched_for_epoch = None
 
-                # Compute first, publish after commit. This is the Phase 4
-                # ordering boundary; no empty new-epoch snapshot is allowed.
+                # Compute first, publish after commit. No empty new-epoch
+                # snapshot is allowed.
                 try:
                     seek_result = compute_step(
                         step_ctx,

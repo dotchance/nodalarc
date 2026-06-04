@@ -1,0 +1,64 @@
+
+session:
+  name: earth-meo-gps
+identity:
+  mode: segment_namespaced
+segments:
+- id: space
+  kind: constellation
+  source: configs/constellations/meo-gps-24.yaml
+  namespace: space
+  central_body: earth
+  tags:
+  - earth
+  - meo
+  - gps
+- id: ground
+  kind: ground_set
+  source: configs/ground-stations/sets/meo-gps.yaml
+  namespace: ground
+  reference_body: earth
+  tags:
+  - earth
+  - ground
+  - gps
+  scheduling:
+    selection_policy:
+      name: highest-elevation
+      params: {}
+    handover_policy:
+      name: hysteresis
+      params:
+        discount_factor: 1.15
+        mask_fade_range_deg: 5.0
+link_rules:
+- id: ground-access
+  kind: access
+  endpoints:
+  - selector:
+      segment: ground
+    terminal_role: ground
+  - selector:
+      segment: space
+    terminal_role: ground
+  topology:
+    mode: visible_candidates
+simulation:
+  schema_version: 2
+  ground_link_model: terminal_physics
+  candidate_limits:
+    max_pairs_per_rule: 144
+orbit:
+  propagator: j2-mean-elements
+dispatch:
+  latency_authority: ome
+  max_latency_age_ticks: 1
+  substrate_compensation:
+    measurement_source: node-agent-rtt
+    rtt_to_one_way: half-rtt
+routing:
+  protocol: isis
+  area_assignment:
+    strategy: per-plane
+time:
+  step_seconds: 5

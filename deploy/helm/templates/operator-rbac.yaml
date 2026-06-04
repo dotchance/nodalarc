@@ -41,7 +41,7 @@ rules:
   # Pod and ConfigMap management
   - apiGroups: [""]
     resources: ["pods"]
-    verbs: ["create", "delete", "get", "list", "watch"]
+    verbs: ["create", "delete", "get", "list", "patch", "watch"]
   # Pod exec — Operator touches /etc/frr/.config-ready sentinel in each pod
   - apiGroups: [""]
     resources: ["pods/exec"]

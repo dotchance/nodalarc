@@ -8,6 +8,7 @@ to a concrete scheduler agent subject.
 from __future__ import annotations
 
 import pytest
+from nodalarc.runtime_naming import validate_runtime_node_id
 from scheduler.pod_locator import PodLocationMap
 
 pytestmark = pytest.mark.integration
@@ -21,10 +22,7 @@ def test_k8s_pod_location_map_preserves_canonical_node_ids(k3s_available):
     assert loc.all_agent_addrs(), "scheduler cannot dispatch without agent subjects"
 
     for nid in sorted(loc.node_ids):
-        if nid.startswith("sat-"):
-            assert nid[4:] == nid[4:].upper(), (
-                f"{nid} is not canonical case from nodalarc.io/node-id"
-            )
+        validate_runtime_node_id(nid)
 
         k3s = loc.k3s_node(nid)
         assert k3s, f"{nid} is not assigned to a Kubernetes node"

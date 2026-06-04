@@ -6,6 +6,7 @@ export interface OrbitModelOption {
   id: OrbitPropagator;
   label: string;
   description: string;
+  comingSoon?: boolean;
 }
 
 export const DEFAULT_ORBIT_PROPAGATOR: OrbitPropagator = "j2-mean-elements";
@@ -24,7 +25,8 @@ export const ORBIT_MODEL_OPTIONS: OrbitModelOption[] = [
   {
     id: "sgp4-tle",
     label: "SGP4 / TLE",
-    description: "Real TLE propagation. Available only when the selected constellation is TLE-backed.",
+    description: "Real TLE propagation.",
+    comingSoon: true,
   },
 ];
 
@@ -44,17 +46,35 @@ export function constellationSupportsSgp4Tle(preset: ConstellationPreset | null)
   return constellationMode(preset) === "tle";
 }
 
+export function constellationUnsupportedReason(preset: ConstellationPreset | null): string | null {
+  if (constellationSupportsSgp4Tle(preset)) {
+    return "TLE-backed constellations require SGP4/TLE runtime support, which is coming soon.";
+  }
+  return null;
+}
+
+export function orbitModelDisabledReason(
+  option: OrbitModelOption,
+  preset: ConstellationPreset | null,
+): string | null {
+  if (option.comingSoon) {
+    return "Coming soon";
+  }
+  if (constellationSupportsSgp4Tle(preset)) {
+    return "TLE-backed constellations require SGP4/TLE runtime support.";
+  }
+  return null;
+}
+
 export function supportedOrbitModelsForConstellation(
   preset: ConstellationPreset | null,
 ): OrbitModelOption[] {
-  if (constellationSupportsSgp4Tle(preset)) {
-    return ORBIT_MODEL_OPTIONS.filter((option) => option.id === "sgp4-tle");
-  }
-  return ORBIT_MODEL_OPTIONS.filter((option) => option.id !== "sgp4-tle");
+  return ORBIT_MODEL_OPTIONS.filter((option) => orbitModelDisabledReason(option, preset) === null);
 }
 
 export function defaultOrbitPropagatorForConstellation(
   preset: ConstellationPreset | null,
 ): OrbitPropagator {
-  return constellationSupportsSgp4Tle(preset) ? "sgp4-tle" : DEFAULT_ORBIT_PROPAGATOR;
+  const supported = supportedOrbitModelsForConstellation(preset);
+  return supported[0]?.id ?? DEFAULT_ORBIT_PROPAGATOR;
 }

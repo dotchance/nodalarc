@@ -13,12 +13,15 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
+from nodalarc.body_frames import body_frame_for
+from nodalarc.frames import Vec3
 from nodalarc.geo import compute_latency_ms, compute_range_km
 from nodalarc.models.addressing import NeighborAssignment
 
 from ome.propagation_engine import PropagatedState
 from ome.visibility import (
     check_isl_visibility,
+    compute_angular_velocity,
     enforce_symmetric_scheduling,
     schedule_isl_terminals,
 )
@@ -83,6 +86,119 @@ def _role_allows_link(role: str | None, link_type: str) -> bool:
     if link_type == "cross_plane_isl":
         return role == "cross-plane"
     return True
+
+
+def _state_vectors(
+    state_a: PropagatedState,
+    state_b: PropagatedState,
+) -> tuple[Vec3, Vec3, Vec3, Vec3]:
+    """Return position/velocity vectors in the frame appropriate for this pair."""
+    if state_a.central_body == state_b.central_body:
+        return (
+            state_a.position_ecef_km,
+            state_a.velocity_ecef_km_s,
+            state_b.position_ecef_km,
+            state_b.velocity_ecef_km_s,
+        )
+    return (
+        state_a.position_common_km,
+        state_a.velocity_common_km_s,
+        state_b.position_common_km,
+        state_b.velocity_common_km_s,
+    )
+
+
+def _segment_intersects_sphere(
+    a: Vec3,
+    b: Vec3,
+    *,
+    center: Vec3,
+    radius_km: float,
+) -> bool:
+    dx = b.x - a.x
+    dy = b.y - a.y
+    dz = b.z - a.z
+    dd = dx * dx + dy * dy + dz * dz
+    if dd == 0.0:
+        return False
+    ax = a.x - center.x
+    ay = a.y - center.y
+    az = a.z - center.z
+    t = max(0.0, min(1.0, -(ax * dx + ay * dy + az * dz) / dd))
+    cx = ax + t * dx
+    cy = ay + t * dy
+    cz = az + t * dz
+    return cx * cx + cy * cy + cz * cz < radius_km * radius_km
+
+
+def _inter_body_occluded(state_a: PropagatedState, state_b: PropagatedState) -> bool:
+    """Return whether the common-frame segment is blocked by either endpoint body."""
+    bodies = {
+        state_a.central_body: state_a.body_origin_common_km,
+        state_b.central_body: state_b.body_origin_common_km,
+    }
+    for body_id, origin in bodies.items():
+        radius = body_frame_for(body_id).equatorial_radius_km
+        if _segment_intersects_sphere(
+            state_a.position_common_km,
+            state_b.position_common_km,
+            center=origin,
+            radius_km=radius,
+        ):
+            return True
+    return False
+
+
+def _off_local_horizontal_rad(pos_common: Vec3, other_common: Vec3, origin_common: Vec3) -> float:
+    los = Vec3(
+        other_common.x - pos_common.x,
+        other_common.y - pos_common.y,
+        other_common.z - pos_common.z,
+    )
+    los_mag = (los.x * los.x + los.y * los.y + los.z * los.z) ** 0.5
+    if los_mag < 1e-10:
+        return 0.0
+    radial = Vec3(
+        pos_common.x - origin_common.x,
+        pos_common.y - origin_common.y,
+        pos_common.z - origin_common.z,
+    )
+    radial_mag = (radial.x * radial.x + radial.y * radial.y + radial.z * radial.z) ** 0.5
+    if radial_mag < 1e-10:
+        return 0.0
+    cos_zenith = max(
+        -1.0,
+        min(
+            1.0,
+            (los.x * radial.x + los.y * radial.y + los.z * radial.z) / (los_mag * radial_mag),
+        ),
+    )
+    import math
+
+    return abs(math.acos(cos_zenith) - math.pi / 2.0)
+
+
+def _inter_body_field_of_regard_allows(
+    state_a: PropagatedState,
+    state_b: PropagatedState,
+    field_of_regard_deg: float,
+) -> bool:
+    if field_of_regard_deg >= 360.0:
+        return True
+    import math
+
+    half_angle = math.radians(field_of_regard_deg / 2.0)
+    off_a = _off_local_horizontal_rad(
+        state_a.position_common_km,
+        state_b.position_common_km,
+        state_a.body_origin_common_km,
+    )
+    off_b = _off_local_horizontal_rad(
+        state_b.position_common_km,
+        state_a.position_common_km,
+        state_b.body_origin_common_km,
+    )
+    return off_a <= half_angle and off_b <= half_angle
 
 
 def evaluate_isl_feasibility(
@@ -154,9 +270,11 @@ def evaluate_isl_feasibility(
                 max_tracking_rate_deg_s if assignment_a.link_type == "cross_plane_isl" else None
             )
             terminal_type = constraints_a.terminal_type
+            pos_a, vel_a, pos_b, vel_b = _state_vectors(state_a, state_b)
+            cross_body = state_a.central_body != state_b.central_body
 
             if constraints_a.terminal_type != constraints_b.terminal_type:
-                range_km = compute_range_km(state_a.position_ecef_km, state_b.position_ecef_km)
+                range_km = compute_range_km(pos_a, pos_b)
                 results[pair] = IslFeasibilityResult(
                     pair=pair,
                     link_type=assignment_a.link_type,
@@ -178,7 +296,7 @@ def evaluate_isl_feasibility(
             if not _role_allows_link(
                 constraints_a.role, assignment_a.link_type
             ) or not _role_allows_link(constraints_b.role, assignment_a.link_type):
-                range_km = compute_range_km(state_a.position_ecef_km, state_b.position_ecef_km)
+                range_km = compute_range_km(pos_a, pos_b)
                 results[pair] = IslFeasibilityResult(
                     pair=pair,
                     link_type=assignment_a.link_type,
@@ -197,28 +315,56 @@ def evaluate_isl_feasibility(
                 )
                 continue
 
-            visibility = check_isl_visibility(
-                state_a.position_ecef_km,
-                state_a.velocity_ecef_km_s,
-                state_b.position_ecef_km,
-                state_b.velocity_ecef_km_s,
-                max_range_km=max_range_km,
-                max_tracking_rate_deg_s=applied_tracking_rate,
-                field_of_regard_deg=field_of_regard_deg,
-                polar_seam_enabled=polar_seam_enabled
-                and assignment_a.link_type == "cross_plane_isl",
-                latitude_threshold_deg=latitude_threshold_deg,
-                geo_a=state_a.geodetic,
-                geo_b=state_b.geodetic,
-            )
+            if cross_body:
+                range_km = compute_range_km(pos_a, pos_b)
+                angular_velocity = compute_angular_velocity(pos_a, vel_a, pos_b, vel_b)
+                if _inter_body_occluded(state_a, state_b):
+                    visible = False
+                    reason = "los_blocked"
+                elif range_km > max_range_km:
+                    visible = False
+                    reason = "range_exceeded"
+                elif not _inter_body_field_of_regard_allows(
+                    state_a,
+                    state_b,
+                    field_of_regard_deg,
+                ):
+                    visible = False
+                    reason = "field_of_regard"
+                elif applied_tracking_rate is not None and angular_velocity > applied_tracking_rate:
+                    visible = False
+                    reason = "tracking_exceeded"
+                else:
+                    visible = True
+                    reason = "ok"
+                visibility_range = range_km
+            else:
+                visibility = check_isl_visibility(
+                    pos_a,
+                    vel_a,
+                    pos_b,
+                    vel_b,
+                    max_range_km=max_range_km,
+                    max_tracking_rate_deg_s=applied_tracking_rate,
+                    field_of_regard_deg=field_of_regard_deg,
+                    body_frame=body_frame_for(state_a.central_body),
+                    polar_seam_enabled=polar_seam_enabled
+                    and assignment_a.link_type == "cross_plane_isl",
+                    latitude_threshold_deg=latitude_threshold_deg,
+                    geo_a=state_a.geodetic,
+                    geo_b=state_b.geodetic,
+                )
+                visible = visibility.visible
+                reason = visibility.reason
+                visibility_range = visibility.range_km
 
             results[pair] = IslFeasibilityResult(
                 pair=pair,
                 link_type=assignment_a.link_type,
-                feasible=visibility.visible,
-                range_km=visibility.range_km,
-                orbital_one_way_ms=compute_latency_ms(visibility.range_km),
-                reject_reason=visibility.reason,
+                feasible=visible,
+                range_km=visibility_range,
+                orbital_one_way_ms=compute_latency_ms(visibility_range),
+                reject_reason=reason,
                 terminal_role_a=constraints_a.role,
                 terminal_role_b=constraints_b.role,
                 terminal_type=terminal_type,

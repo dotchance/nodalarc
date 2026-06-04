@@ -21,19 +21,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-import yaml
 from nodal.logging import configure as _configure_logging
-from nodalarc.constellation_loader import (
-    expand_constellation,
-    load_constellation,
-    load_ground_stations,
-)
-from nodalarc.ground_terminals import station_ground_terminal_capacity
 from nodalarc.link_metadata import build_link_metadata_maps
 from nodalarc.models.addressing import (
     AddressingScheme,
 )
 from nodalarc.models.session import SessionConfig
+from nodalarc.resolve_session import load_session_resolution_from_file
 from nodalarc.session_identity import require_session_run_id
 from nodalarc.substrate.manifest_contract import WiringManifest
 from nodalarc.substrate.wiring_status import failed_status_summary, parse_status_configmap
@@ -52,9 +46,23 @@ log = logging.getLogger(__name__)
 def _build_interface_map(
     session: SessionConfig,
     addressing: AddressingScheme,
+    *,
+    constellation,
+    satellites,
+    gs_file,
+    neighbors,
+    ground_candidate_satellites_by_gs,
 ) -> tuple[dict[tuple[str, str], tuple[str, str]], dict[tuple[str, str], float]]:
-    """Build shared interface and bandwidth maps from physical terminal config."""
-    metadata = build_link_metadata_maps(session, addressing)
+    """Build shared interface and bandwidth maps from resolver-owned assets."""
+    metadata = build_link_metadata_maps(
+        session,
+        addressing,
+        constellation=constellation,
+        satellites=satellites,
+        gs_file=gs_file,
+        neighbors=neighbors,
+        ground_candidate_satellites_by_gs=ground_candidate_satellites_by_gs,
+    )
     return metadata.interface_map, metadata.bandwidth_map
 
 
@@ -249,19 +257,30 @@ def main() -> None:
     while not session_file.is_file():
         log.debug("Waiting for session config at %s...", args.session)
         _time.sleep(5)
-    data = yaml.safe_load(session_file.read_text())
-    session = SessionConfig.model_validate(data)
-    addressing = AddressingScheme(session.addressing)
-    interface_map, bandwidth_map = _build_interface_map(session, addressing)
+    resolution = load_session_resolution_from_file(session_file, origin="scheduler")
+    session = resolution.runtime_session
+    addressing = resolution.addressing
+    satellites = list(resolution.satellites)
+    gs_file = resolution.primary_ground_set.config
+    interface_map, bandwidth_map = _build_interface_map(
+        session,
+        addressing,
+        constellation=resolution.runtime_constellation,
+        satellites=satellites,
+        gs_file=gs_file,
+        neighbors=resolution.neighbors,
+        ground_candidate_satellites_by_gs=resolution.ground_candidate_satellites_by_gs,
+    )
     log.debug("Interface map: %d link pairs", len(interface_map))
     session_id = require_session_run_id(session)
+    expected_nodes = set(resolution.resolved.node_ids())
 
     # Pod location map — canonical node IDs from K8s labels
     loc = PodLocationMap()
     if args.pid_map:
         loc.load_from_pid_map_file(args.pid_map)
     else:
-        loc.load_from_k8s_api()
+        loc.load_from_k8s_api(expected_node_ids=expected_nodes, session_id=session_id)
     log.debug("Pod locations:\n%s", loc.summary())
 
     # --- Wiring gate: wait for Node Agent to complete wiring ---
@@ -273,7 +292,6 @@ def main() -> None:
     from nodalarc.platform_config import get_platform_config
 
     k8s_v1 = kubernetes.client.CoreV1Api()
-    expected_nodes = set(loc.node_ids)
     ns = get_platform_config().kubernetes_namespace
     wiring_manifest = wait_for_wiring_manifest_identity(k8s_v1=k8s_v1, namespace=ns)
     if wiring_manifest.session_id != session_id:
@@ -302,25 +320,35 @@ def main() -> None:
     # Agent pool
     pool = AgentPool()
 
-    # Build capacity maps for MBB dispatch ordering
-    constellation = load_constellation(session.constellation)
-    satellites = expand_constellation(constellation)
-    gs_file = load_ground_stations(session.ground_stations)
-
+    # Build capacity and handover maps from ResolvedSession. MBB/BBM is a
+    # per-ground-station policy/capability, not a session-wide dispatch flag.
     gs_terminal_capacities: dict[str, int] = {}
-    for station in gs_file.stations:
-        gs_id = addressing.gs_id(station.name)
-        gs_terminal_capacities[gs_id] = station_ground_terminal_capacity(gs_file, station)
-
+    gs_handover_modes: dict[str, str] = {}
     sat_ground_terminal_capacities: dict[str, int] = {}
-    for sat in satellites:
-        sat_id = addressing.sat_id(sat.plane, sat.slot)
-        sat_ground_terminal_capacities[sat_id] = sat.ground_terminal_count
+    for node in resolution.resolved.nodes:
+        if node.kind == "ground_station":
+            capacity = sum(
+                block.count * (block.tracking_capacity or 0)
+                for block in node.terminal_inventory
+                if block.endpoint_role == "ground"
+            )
+            if capacity <= 0:
+                raise RuntimeError(f"Resolved ground station {node.node_id} has no capacity")
+            if node.ground_scheduling is None:
+                raise RuntimeError(
+                    f"Resolved ground station {node.node_id} is missing ground_scheduling"
+                )
+            gs_terminal_capacities[node.node_id] = capacity
+            gs_handover_modes[node.node_id] = node.ground_scheduling.handover_mode
+        elif node.kind == "satellite":
+            sat_ground_terminal_capacities[node.node_id] = sum(
+                block.count for block in node.terminal_inventory if block.endpoint_role == "ground"
+            )
 
-    mbb_dispatch = session.scheduling.ground.handover_mode == "mbb"
+    mbb_dispatch = any(mode == "mbb" for mode in gs_handover_modes.values())
     log.info(
-        "Ground handover: %s (protocol=%s)",
-        session.scheduling.ground.handover_mode,
+        "Ground handover by station: %s (protocol=%s)",
+        ", ".join(f"{gs}={mode}" for gs, mode in sorted(gs_handover_modes.items())),
         session.routing.protocol,
     )
 
@@ -344,6 +372,7 @@ def main() -> None:
         max_latency_age_s=session.dispatch.max_latency_age_ticks * session.time.step_seconds,
         compression_factor=session.time.compression,
         gs_terminal_capacities=gs_terminal_capacities,
+        gs_handover_modes=gs_handover_modes,
         sat_ground_terminal_capacities=sat_ground_terminal_capacities,
         mbb_dispatch=mbb_dispatch,
         rtt_to_one_way_policy=session.dispatch.substrate_compensation.rtt_to_one_way,

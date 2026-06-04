@@ -7,17 +7,21 @@
 
 ## Responsibility
 
-The VF renders the constellation visualization in the browser: 3D globe with satellite positions, ISL links, ground stations, topology graph, event log, terminal access, and session wizard.
+The VF renders the session visualization in the browser: 3D body view with
+satellite positions, relay nodes, ISL and ground links, body frames, topology
+graph, event log, terminal access, and session wizard.
 
 ## Architecture
 
 ```
 VS-API WebSocket (~1 Hz) ──→ React state ──→ React Three Fiber scene
                                 │
-SessionEphemeris ──→ simClock ──→ Keplerian propagation ──→ satellite positions (60fps)
+SessionEphemeris + body frames ──→ simClock ──→ local propagation ──→ node positions (60fps)
 ```
 
-Key principle: the VF computes satellite positions locally from orbital elements. It does NOT receive per-frame position data from the server. This means:
+Key principle: the VF computes render positions locally from OME-published
+ephemeris and body/frame facts. It does NOT receive per-frame position data from
+the server. This means:
 - 60fps rendering with 1 Hz server updates
 - Zero bandwidth for position data regardless of constellation size
 - Smooth interpolation between server ticks
@@ -35,7 +39,7 @@ All visual elements are batched into shared geometries. Draw call count is const
 | Orbital paths | Single `LineSegments2` batch (per-plane colors) | 1 |
 | Satellites | `InstancedMesh` | 1 |
 | Ground stations | `InstancedMesh` | 1 |
-| Globe | Standard mesh | ~10 |
+| Bodies | Standard meshes | ~10 |
 | UI overlays | HTML/CSS | ~30 |
 | **Total** | | **~47** |
 
@@ -47,7 +51,8 @@ The deleted legacy renderer used per-link `Line2` objects, per-satellite trails,
 |------|---------|
 | `src/globe/r3f/Links.tsx` + `linkBatch.ts` | ISL + ground link batch (LineSegments2, bowed arcs, NaN masking) |
 | `src/globe/r3f/Trails.tsx` | Trail batch (ring buffer, zero-alloc, per-vertex fade) |
-| `src/globe/r3f/Earth.tsx` | Earth, country borders, atmosphere, and starfield |
+| `src/globe/r3f/Body.tsx` / `BodyFrame.tsx` | Body meshes, frames, and local transforms |
+| `src/globe/r3f/Earth.tsx` | Earth-specific texture, country borders, atmosphere, and starfield |
 | `src/globe/r3f/AllOrbits.tsx` | Orbital path batch (per-plane vertex colors) |
 
 ### NaN Masking
@@ -60,7 +65,8 @@ Link and trail buffers grow dynamically (2x headroom) when more elements appear 
 
 ## simClock
 
-`src/sim/simClock.ts` - single authoritative clock consumed by satellite interpolation and Earth rotation.
+`src/sim/simClock.ts` - single authoritative clock consumed by local
+propagation, body rendering, and interpolation.
 
 - Adaptive EMA filter smooths server-reported sim_time
 - Outlier detection: if 3 consecutive snapshots are clamped as outliers, re-seed the clock
@@ -98,9 +104,9 @@ The R3F scene owns Three.js objects through React lifecycles. Module registries 
 | L | Toggle ISL links |
 | G | Toggle ground links |
 | F | Follow selected node |
-| H | Toggle historical mode |
+| H | Historical mode toggle, experimental during development |
 | N | Toggle globe mode |
-| I | Toggle reference frame |
+| I | Toggle inertial / active body-fixed reference frame |
 | 1/2 | Color modes |
 
 ## Development
@@ -132,7 +138,9 @@ src/
 │       ├── Links.tsx   ISL/ground link batch
 │       ├── Trails.tsx  Trail ring buffer batch
 │       ├── AllOrbits.tsx  Orbital path batch
-│       └── Earth.tsx   Earth, borders, atmosphere, starfield
+│       ├── Body.tsx    Body mesh and material selection
+│       ├── BodyFrame.tsx  Segment/body frame registration
+│       └── Earth.tsx   Earth-specific borders, atmosphere, starfield
 ├── topology/           2D topology graph view
 ├── sim/                Simulation clock, Keplerian propagation
 ├── hooks/              React hooks (WebSocket, keyboard, etc.)

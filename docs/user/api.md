@@ -1,6 +1,8 @@
 # API for Power Users
 
-NodalArc exposes a REST and WebSocket API that gives you programmatic access to all constellation state. You can use it to automate experiments, build custom dashboards, or integrate NodalArc with other tools.
+NodalArc exposes a REST and WebSocket API that gives you programmatic access to
+the current session state. You can use it to automate experiments, build custom
+dashboards, or integrate NodalArc with other tools.
 
 ## Getting a Token
 
@@ -27,15 +29,15 @@ curl -s -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/v1/state | p
 
 Returns a JSON snapshot with all nodes (positions, link counts), all links (latency, bandwidth, type), recent events, and network health status.
 
-### Count satellites, ground stations, and links
+### Count satellites, ground nodes, and links
 
 ```bash
 curl -s -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/v1/state | python3 -c "
 import json, sys
 s = json.load(sys.stdin)
 sats = sum(1 for n in s['nodes'] if n['node_type'] == 'satellite')
-gs = sum(1 for n in s['nodes'] if n['node_type'] == 'ground_station')
-print(f'{sats} satellites, {gs} ground stations, {len(s[\"links\"])} active links')
+ground = sum(1 for n in s['nodes'] if n['node_type'] == 'ground_station')
+print(f'{sats} satellites, {ground} ground nodes, {len(s[\"links\"])} active links')
 "
 ```
 
@@ -56,14 +58,14 @@ for link in s['links']:
 ```bash
 curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   http://localhost:8080/api/v1/trace \
-  -d '{"src_node": "gs-hawthorne", "dst_node": "gs-frankfurt"}'
+  -d '{"src_node": "ground-gs-hawthorne", "dst_node": "ground-gs-frankfurt"}'
 ```
 
 Returns the hop-by-hop path and total latency:
 
 ```json
 {
-  "hops": ["gs-hawthorne", "sat-P02S03", "sat-P02S04", "sat-P03S04", "gs-frankfurt"],
+  "hops": ["ground-gs-hawthorne", "space-sat-p02s03", "space-sat-p02s04", "space-sat-p03s04", "ground-gs-frankfurt"],
   "success": true,
   "total_latency_ms": 42.3
 }
@@ -87,7 +89,9 @@ async def main():
 asyncio.run(main())
 ```
 
-The WebSocket pushes a full state snapshot at ~1 Hz. On connect, you first receive the orbital ephemeris (for local position computation), then continuous state updates.
+The WebSocket pushes a full state snapshot at ~1 Hz. On connect, you first
+receive the session ephemeris and body/frame metadata used for local position
+computation, then continuous state updates.
 
 ## Available Endpoints
 
@@ -105,12 +109,18 @@ The WebSocket pushes a full state snapshot at ~1 Hz. On connect, you first recei
 
 The state snapshot contains:
 
-- **nodes** - array of all satellites and ground stations with position, link counts, and metadata
-- **links** - array of all active links with latency, bandwidth, and type (intra_plane_isl, cross_plane_isl, ground)
+- **nodes** - array of all satellites, relay nodes, and ground nodes with position, link counts, segment metadata, and body/frame metadata
+- **links** - array of all active links with latency, bandwidth, type, and rule-derived relationship where available
 - **recent_events** - last 50 link state changes and handoffs
 - **network_health** - convergence status
 - **sim_time** / **wall_time** - current simulation and wall-clock time
 - **playback_paused** / **playback_speed** - time control state
+
+Runtime node IDs are session namespaced. A simple LEO session may use
+`space-sat-p00s00`; a multi-regime session may use `leo-sat-p00s00`,
+`meo-sat-p00s00`, `geo-sat-p00s00`, or
+`lunar-site-gs-artemis-surface-router`. Query `/api/v1/state` first and use the
+node IDs it returns.
 
 For the full schema with field descriptions, see the [VS-API Reference](../dev/components/vs-api.md) in the developer documentation.
 

@@ -1,0 +1,53 @@
+
+# GPS/MEO demo gateways. Inline station records intentionally omit per-station
+# terminals so the set-level long-range RF terminal is the source of truth.
+
+default_terminals:
+- type: rf
+  count: 2
+  bandwidth_mbps: 1000
+  tracking_capacity: 1
+  max_range_km: 45000
+  field_of_regard_deg: 170
+  max_tracking_rate_deg_s: 1.5
+  boresight:
+    mode: local_vertical
+  band: Ka
+default_handover_mode: mbb
+default_mbb_overlap_ticks: 3
+default_mbb_reserve: 1
+
+default_min_elevation_deg: 10
+
+default_terrestrial_prefixes:
+  ipv4_template: "172.16.{gs_index}.0/24"
+  ipv6_template: "fd10::{gs_index}:0/112"
+  metric: 10
+  default_route: true
+  default_route_metric: 100
+
+stations:
+- name: hawthorne
+  lat_deg: 33.917500
+  lon_deg: -118.328111
+  alt_m: 20
+- name: ashburn
+  lat_deg: 39.04
+  lon_deg: -77.49
+  alt_m: 100
+- name: frankfurt
+  lat_deg: 50.11
+  lon_deg: 8.68
+  alt_m: 112
+- name: singapore
+  lat_deg: 1.35
+  lon_deg: 103.82
+  alt_m: 15
+- name: santiago
+  lat_deg: -33.45
+  lon_deg: -70.66
+  alt_m: 520
+- name: sydney
+  lat_deg: -33.87
+  lon_deg: 151.21
+  alt_m: 58

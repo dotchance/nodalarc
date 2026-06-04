@@ -488,7 +488,7 @@ def _retry_missed_nodes(
     Called from the wiring watcher thread when some pods didn't have PIDs
     at wiring time. Polls for PIDs every 5 seconds up to 60 seconds.
     Once a PID appears, applies sysctls, removes default route, and locks
-    down cni0 — the same operations as wiring Phases 1, 7, and 8.
+    down cni0 — the same operations as the sysctl and finalization stages.
 
     Does NOT create veths or ISL interfaces — those are handled by the
     Scheduler via BatchLinkUp when the OME makes them visible.
@@ -497,7 +497,7 @@ def _retry_missed_nodes(
 
     from node_agent.namespace_ops import _write_sysctl_in_netns
     from node_agent.pid_discovery import discover_local_pod_pids
-    from node_agent.wiring import finalize_pod_phases
+    from node_agent.wiring import finalize_pod_network
 
     nodes = manifest.get("nodes", {})
     remaining = set(missed)
@@ -519,7 +519,7 @@ def _retry_missed_nodes(
                 err = _write_sysctl_in_netns(pid, key, str(value))
                 if err:
                     log.warning("Retry sysctl %s=%s failed for %s: %s", key, value, node_id, err)
-            route_err, security_err = finalize_pod_phases(pid, node_id)
+            route_err, security_err = finalize_pod_network(pid, node_id)
             if route_err or security_err:
                 log.warning(
                     "Retry finalization failed for %s: route=%s security=%s",

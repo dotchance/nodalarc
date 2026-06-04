@@ -2,7 +2,7 @@
 
 Tests pure-logic functions and K8s-mocked deploy pipeline. All test inputs
 are inline - no dependency on production config files except one regression
-test per class that explicitly references demo-36-ospf.yaml.
+test per class that explicitly references earth-leo-simple.yaml.
 
 Uses create_autospec for K8s client mocks to catch signature drift.
 """
@@ -20,7 +20,12 @@ from unittest.mock import MagicMock, create_autospec, patch
 import kubernetes.client
 import pytest
 import yaml
-from nodalarc.models.session import PlacementConfig
+from nodalarc.models.session import (
+    AllOnOnePlacementConfig,
+    PlacementConfig,
+    PlaneGroupPerNodePlacementConfig,
+    PlanePerNodePlacementConfig,
+)
 from nodalarc.substrate.manifest_contract import REQUIRED_WIRING_PHASES, WiringManifest
 from nodalarc.substrate.wiring_status import failed_status, ready_status, status_configmap_data
 from nodalarc_operator.session_deployer import (
@@ -28,6 +33,7 @@ from nodalarc_operator.session_deployer import (
     _deterministic_node,
     _required_substrate_pairs,
     check_wiring_complete,
+    compute_expected_placement_node_count,
     compute_expected_pod_count,
     compute_platform_hash,
     compute_pod_placement,
@@ -39,6 +45,9 @@ from nodalarc_operator.session_deployer import (
     teardown_session,
     write_wiring_manifest,
 )
+from pydantic import TypeAdapter, ValidationError
+
+from tests.conftest import build_segment_session_dict
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 
@@ -74,34 +83,23 @@ def _make_node_vars(planes=4, sats_per_plane=3, gs_count=2):
 
 
 def _make_session_yaml(
-    constellation_path="configs/constellations/custom-example.yaml",
+    constellation_path="configs/constellations/demo-36.yaml",
     gs_path="configs/ground-stations/sets/demo.yaml",
     protocol="ospf",
     strategy="flat",
     step_seconds=1,
     placement_policy=None,
 ):
-    """Build a session YAML string with configurable fields."""
-    d = {
-        "session": {"name": "test-session"},
-        "constellation": constellation_path,
-        "ground_stations": gs_path,
-        "orbit": {"propagator": "keplerian-circular"},
-        "routing": {
-            "protocol": protocol,
-            "area_assignment": {"strategy": strategy},
-        },
-        "time": {"step_seconds": step_seconds},
-        "scheduling": {
-            "ground": {
-                "selection_policy": {"name": "highest-elevation", "params": {}},
-                "handover_policy": {"name": "none", "params": {}},
-                "handover_mode": "bbm",
-                "mbb_overlap_ticks": 3,
-                "mbb_reserve": 0,
-            }
-        },
-    }
+    """Build a segment-session YAML string with configurable fields."""
+    d = build_segment_session_dict(
+        name="test-session",
+        constellation=constellation_path,
+        ground_stations=gs_path,
+        protocol=protocol,
+        extensions=[],
+        routing={"area_assignment": {"strategy": strategy}},
+        time={"step_seconds": step_seconds},
+    )
     if placement_policy:
         d["placement"] = {"policy": placement_policy}
     return yaml.dump(d, default_flow_style=False)
@@ -166,20 +164,20 @@ class TestPodPlacement:
 
     def test_all_on_one_single_node(self):
         nv = _make_node_vars(planes=2, sats_per_plane=3, gs_count=2)
-        placement = PlacementConfig(policy="allOnOne")
+        placement = AllOnOnePlacementConfig(policy="allOnOne")
         result = compute_pod_placement(placement, nv, ["node01"])
         assert all(v == "node01" for v in result.values())
         assert len(result) == len(nv)
 
     def test_all_on_one_ignores_extra_nodes(self):
         nv = _make_node_vars(planes=2, sats_per_plane=3, gs_count=2)
-        placement = PlacementConfig(policy="allOnOne")
+        placement = AllOnOnePlacementConfig(policy="allOnOne")
         result = compute_pod_placement(placement, nv, ["node01", "node02", "node03", "node04"])
         assert all(v == "node01" for v in result.values())
 
     def test_plane_per_node_same_plane_same_node(self):
         nv = _make_node_vars(planes=4, sats_per_plane=3, gs_count=0)
-        placement = PlacementConfig(policy="planePerNode")
+        placement = PlanePerNodePlacementConfig(policy="planePerNode")
         nodes = ["node01", "node02", "node03", "node04"]
         result = compute_pod_placement(placement, nv, nodes)
         plane0_nodes = {result[nid] for nid, v in nv.items() if v["plane"] == 0}
@@ -190,7 +188,7 @@ class TestPodPlacement:
 
     def test_plane_per_node_wraps_modulo(self):
         nv = _make_node_vars(planes=6, sats_per_plane=2, gs_count=0)
-        placement = PlacementConfig(policy="planePerNode")
+        placement = PlanePerNodePlacementConfig(policy="planePerNode")
         nodes = ["node01", "node02", "node03", "node04"]
         result = compute_pod_placement(placement, nv, nodes)
         plane0_node = result["sat-P00S00"]
@@ -199,7 +197,7 @@ class TestPodPlacement:
 
     def test_plane_per_node_gs_uses_hrw(self):
         nv = _make_node_vars(planes=2, sats_per_plane=2, gs_count=7)
-        placement = PlacementConfig(policy="planePerNode")
+        placement = PlanePerNodePlacementConfig(policy="planePerNode")
         nodes = ["node01", "node02", "node03", "node04"]
         result = compute_pod_placement(placement, nv, nodes)
         gs_nodes = {result[nid] for nid in nv if nid.startswith("gs-")}
@@ -207,31 +205,26 @@ class TestPodPlacement:
 
     def test_plane_group_per_node_groups(self):
         nv = _make_node_vars(planes=4, sats_per_plane=2, gs_count=0)
-        placement = PlacementConfig(policy="planeGroupPerNode", planes_per_group=2)
+        placement = PlaneGroupPerNodePlacementConfig(policy="planeGroupPerNode", planes_per_group=2)
         nodes = ["node01", "node02", "node03", "node04"]
         result = compute_pod_placement(placement, nv, nodes)
         assert result["sat-P00S00"] == result["sat-P01S00"]
         assert result["sat-P02S00"] == result["sat-P03S00"]
         assert result["sat-P00S00"] != result["sat-P02S00"]
 
-    def test_plane_group_per_node_default_ppg(self):
-        nv = _make_node_vars(planes=8, sats_per_plane=1, gs_count=0)
-        placement = PlacementConfig(policy="planeGroupPerNode")
-        nodes = ["node01", "node02", "node03", "node04"]
-        result = compute_pod_placement(placement, nv, nodes)
-        assert len(set(result.values())) <= len(nodes)
+    def test_plane_group_per_node_requires_explicit_group_size(self):
+        with pytest.raises(ValidationError, match="planes_per_group"):
+            TypeAdapter(PlacementConfig).validate_python({"policy": "planeGroupPerNode"})
 
     def test_no_nodes_raises(self):
         nv = _make_node_vars(planes=1, sats_per_plane=1, gs_count=0)
-        placement = PlacementConfig(policy="allOnOne")
+        placement = AllOnOnePlacementConfig(policy="allOnOne")
         with pytest.raises(ValueError, match="No available"):
             compute_pod_placement(placement, nv, [])
 
-    def test_unknown_policy_raises(self):
-        nv = _make_node_vars(planes=1, sats_per_plane=1, gs_count=0)
-        placement = PlacementConfig(policy="bogus")
-        with pytest.raises(ValueError, match="Unknown placement policy"):
-            compute_pod_placement(placement, nv, ["node01"])
+    def test_unknown_policy_rejected_at_parse_boundary(self):
+        with pytest.raises(ValidationError):
+            TypeAdapter(PlacementConfig).validate_python({"policy": "bogus"})
 
     def test_tainted_node_excluded(self):
         """discover_available_nodes filters out tainted nodes."""
@@ -430,10 +423,43 @@ class TestPlatformHash:
         spec2 = {"sessionYaml": _make_session_yaml(step_seconds=5)}
         assert compute_platform_hash(spec1) != compute_platform_hash(spec2)
 
-    def test_placement_change_same_hash(self):
+    def test_placement_change_changes_hash(self):
         spec1 = {"sessionYaml": _make_session_yaml()}
-        spec2 = {"sessionYaml": _make_session_yaml(placement_policy="planePerNode")}
-        assert compute_platform_hash(spec1) == compute_platform_hash(spec2)
+        spec2 = {"sessionYaml": _make_session_yaml(placement_policy="allOnOne")}
+        assert compute_platform_hash(spec1) != compute_platform_hash(spec2)
+
+    def test_runtime_semantics_change_hash(self):
+        base = yaml.safe_load(_make_session_yaml())
+
+        scheduling = yaml.safe_load(_make_session_yaml())
+        scheduling["scheduling"]["ground"]["selection_policy"] = {
+            "name": "longest-remaining-pass",
+            "params": {"lookahead_horizon_ticks": 4},
+        }
+
+        simulation = yaml.safe_load(_make_session_yaml())
+        simulation["simulation"]["ground_link_model"] = "geometry_only"
+        simulation["simulation"]["acknowledge_geometry_only"] = True
+
+        dispatch = yaml.safe_load(_make_session_yaml())
+        dispatch["dispatch"] = {"max_latency_age_ticks": 7}
+
+        addressing = yaml.safe_load(_make_session_yaml())
+        addressing["addressing"] = {"ipv4_sat_template": "10.{plane}.{slot}.9"}
+
+        hashes = {
+            compute_platform_hash({"sessionYaml": yaml.dump(candidate, default_flow_style=False)})
+            for candidate in (base, scheduling, simulation, dispatch, addressing)
+        }
+        assert len(hashes) == 5
+
+    def test_operator_injected_run_id_does_not_change_hash(self):
+        base = yaml.safe_load(_make_session_yaml())
+        with_run_id = yaml.safe_load(_make_session_yaml())
+        with_run_id["session"]["run_id"] = "operator-owned-run"
+        assert compute_platform_hash({"sessionYaml": yaml.dump(base)}) == compute_platform_hash(
+            {"sessionYaml": yaml.dump(with_run_id)}
+        )
 
     def test_empty_session_yaml(self):
         h1 = compute_platform_hash({"sessionYaml": ""})
@@ -493,7 +519,7 @@ class TestExpectedPodCount:
     def test_inline_config_count(self):
         spec = {
             "sessionYaml": _make_session_yaml(
-                constellation_path="configs/constellations/custom-example.yaml",
+                constellation_path="configs/constellations/demo-36.yaml",
                 gs_path="configs/ground-stations/sets/demo.yaml",
             )
         }
@@ -501,8 +527,12 @@ class TestExpectedPodCount:
         assert count > 0
 
     def test_demo_36_regression(self):
-        session_yaml = (PROJECT_ROOT / "configs/sessions/demo-36-ospf.yaml").read_text()
-        spec = {"sessionYaml": session_yaml}
+        spec = {
+            "sessionYaml": _make_session_yaml(
+                constellation_path="configs/constellations/demo-36.yaml",
+                gs_path="configs/ground-stations/sets/demo.yaml",
+            )
+        }
         assert compute_expected_pod_count(spec) == 43
 
     def test_missing_session_yaml_raises(self):
@@ -515,8 +545,26 @@ class TestExpectedPodCount:
             compute_expected_pod_count(spec)
 
 
+class TestExpectedPlacementNodeCount:
+    """Expected placement must use all resolved segments, not only the primary constellation."""
+
+    def test_earth_luna_relay_counts_relay_segment_placement(self):
+        session_yaml = (PROJECT_ROOT / "configs/sessions/earth-luna-relay.yaml").read_text()
+
+        count = compute_expected_placement_node_count(
+            {"sessionYaml": session_yaml},
+            ["node01", "node02", "node03"],
+        )
+
+        assert count == 3
+
+    def test_missing_session_yaml_raises(self):
+        with pytest.raises(ValueError, match="sessionYaml"):
+            compute_expected_placement_node_count({}, ["node01"])
+
+
 # ---------------------------------------------------------------------------
-# Inline config fixtures for Phase 2 (fully self-contained, no external files)
+# Inline config fixtures (fully self-contained, no external files)
 # ---------------------------------------------------------------------------
 
 # Constellation with inline default_terminals - no satellite_type file reference.
@@ -601,33 +649,14 @@ def _make_inline_spec(
     const = constellation or _INLINE_CONSTELLATION
     gs = ground_stations or _INLINE_GROUND_STATIONS
 
-    const_path = tmp_path / "constellation.yaml"
-    const_path.write_text(yaml.dump(const, default_flow_style=False))
-
-    gs_path = tmp_path / "ground_stations.yaml"
-    gs_path.write_text(yaml.dump(gs, default_flow_style=False))
-
-    session = {
-        "session": {"name": "test-session"},
-        "constellation": str(const_path),
-        "ground_stations": str(gs_path),
-        "orbit": {"propagator": "keplerian-circular"},
-        "routing": {
-            "protocol": protocol,
-            "extensions": extensions or [],
-            "area_assignment": {"strategy": "flat"},
-        },
-        "time": {"step_seconds": 1},
-        "scheduling": {
-            "ground": {
-                "selection_policy": {"name": "highest-elevation", "params": {}},
-                "handover_policy": {"name": "none", "params": {}},
-                "handover_mode": "bbm",
-                "mbb_overlap_ticks": 3,
-                "mbb_reserve": 0,
-            }
-        },
-    }
+    session = build_segment_session_dict(
+        name="test-session",
+        constellation=const,
+        ground_stations=gs,
+        protocol=protocol,
+        extensions=extensions or [],
+        time={"step_seconds": 1},
+    )
     return {"sessionYaml": yaml.dump(session, default_flow_style=False)}
 
 
@@ -791,6 +820,16 @@ class TestWiringManifest:
             for isl in node["isl_interfaces"]:
                 assert isl["peer_node"], f"{node_id}/{isl['name']} has empty peer_node"
                 assert isl["peer_iface"], f"{node_id}/{isl['name']} has empty peer_iface"
+
+    def test_isl_interfaces_emit_in_deterministic_order(self, tmp_path):
+        manifest = self._build_and_extract(tmp_path)
+        for node in manifest["nodes"].values():
+            interfaces = node["isl_interfaces"]
+            ordered = sorted(
+                interfaces,
+                key=lambda iface: (iface["name"], iface["peer_node"], iface["peer_iface"]),
+            )
+            assert interfaces == ordered
 
     def test_ground_station_has_term_interfaces(self, tmp_path):
         manifest = self._build_and_extract(tmp_path)

@@ -24,6 +24,7 @@ This class is the building block for multi-tenant support:
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import json
 import logging
 import sqlite3
@@ -44,6 +45,7 @@ from nodalarc.models.decision_explanation import (
     PendingActuation,
 )
 from nodalarc.models.link_decisions import GroundLinkDecisionSnapshot
+from nodalarc.models.resolved_session import SourceContext
 from nodalarc.models.scheduler_ops import ActualLinkSnapshot, ActuationState, parse_actuation_state
 from nodalarc.models.session import SessionConfig
 from nodalarc.models.vs_api import (
@@ -51,6 +53,7 @@ from nodalarc.models.vs_api import (
     LinkDecisionTrace,
     LinkState,
     NetworkHealth,
+    NodeAddress,
     NodeState,
     RecentEvent,
 )
@@ -72,6 +75,7 @@ from nodalarc.nats_channels import (
     playback_state_subject,
     session_ephemeris_subject,
 )
+from nodalarc.resolve_session import resolve_session_with_assets
 from pydantic import ValidationError
 
 log = logging.getLogger(__name__)
@@ -101,23 +105,25 @@ class SessionContext:
         self.session_id = session_id
         self.session_file = session_config_path
 
-        # Parse session config for metadata
+        # Parse session config for metadata through the resolver.
         session_data = yaml.safe_load(Path(session_config_path).read_text())
-        session = SessionConfig.model_validate(session_data)
-        if session.routing.stack is not None:
-            self.routing_stack: str = Path(session.routing.stack).name
-        else:
-            ext_str = (
-                "-".join(session.routing.extensions) if session.routing.extensions else "plain"
-            )
-            self.routing_stack = f"{session.routing.protocol}-{ext_str}"
-        if isinstance(session.constellation, dict):
-            self.constellation_name: str = session.constellation.get("name", "custom")
-        else:
-            self.constellation_name = Path(session.constellation).stem
+        resolution = resolve_session_with_assets(
+            session_data,
+            source_context=SourceContext(origin="vs_api.session_context"),
+        )
+        session = resolution.runtime_session
+        ext_str = "-".join(session.routing.extensions) if session.routing.extensions else "plain"
+        self.routing_stack = f"{session.routing.protocol}-{ext_str}"
+        self.constellation_name = session.session.name
 
         # Load GS elevation map and beam falloff
-        self.gs_elevation_map: dict[str, float] = self._load_gs_elevation_map(session)
+        self.gs_elevation_map: dict[str, float] = self._load_gs_elevation_map(
+            resolution.primary_ground_set.config, resolution.addressing
+        )
+        (
+            self._node_addresses_by_id,
+            self._node_primary_prefix_by_id,
+        ) = self._build_node_network_identity_map(resolution)
         self.beam_falloff_exponent: float = self._load_beam_falloff_exponent(session)
 
         # Wall-clock actuation-latency contract (simulation.actuation) — the
@@ -134,6 +140,10 @@ class SessionContext:
         """
         self.db_path: str = ""
         self.state_lock = threading.Lock()
+        if not hasattr(self, "_node_addresses_by_id"):
+            self._node_addresses_by_id = {}
+        if not hasattr(self, "_node_primary_prefix_by_id"):
+            self._node_primary_prefix_by_id = {}
         self.nodes: dict[str, NodeState] = {}
         self.links: dict[str, LinkState] = {}
         self.link_decision_traces: dict[str, LinkDecisionTrace] = {}
@@ -196,6 +206,8 @@ class SessionContext:
         self.routing_stack = "test"
         self.constellation_name = "test"
         self.gs_elevation_map = {}
+        self._node_addresses_by_id = {}
+        self._node_primary_prefix_by_id = {}
         self.beam_falloff_exponent = 2.0
         self.actuation_expected_latency_ms = 250.0
         self.actuation_fault_after_ms = 1200.0
@@ -532,7 +544,12 @@ class SessionContext:
                     node_a=link.node_a,
                     node_b=link.node_b,
                     state="active",
-                    link_type=_derive_link_type(link.node_a, link.node_b, link.link_type),
+                    link_type=_derive_link_type(
+                        link.link_type,
+                        link_rule_id=link.link_rule_id,
+                        topology_mode=link.topology_mode,
+                        endpoint_segments=link.endpoint_segments,
+                    ),
                     link_reason="",
                     latency_ms=link.latency_ms,
                     bandwidth_mbps=link.bandwidth_mbps,
@@ -540,6 +557,9 @@ class SessionContext:
                     traffic_load_pct=None,
                     interface_a=link.interface_a,
                     interface_b=link.interface_b,
+                    link_rule_id=link.link_rule_id,
+                    topology_mode=link.topology_mode,
+                    endpoint_segments=link.endpoint_segments,
                     scheduling_state=link.scheduling_state,
                     teardown_remaining_ticks=link.teardown_remaining_ticks,
                     successor_pair=link.successor_pair,
@@ -567,8 +587,8 @@ class SessionContext:
     async def _on_ground_link_decision_snapshot(self, msg) -> None:
         """Retain the latest OME GroundLinkDecisionSnapshot.
 
-        Phase 1 (C-foundation-5): every pair the OME considered carries a
-        typed `visibility_reject_reason` and, for visible-but-unscheduled
+        Every pair the OME considered carries a typed
+        `visibility_reject_reason` and, for visible-but-unscheduled
         pairs, an `unscheduled_reason`. Operators query the decision
         surface via `/api/v1/ground-link-decisions` to attribute "why isn't
         this link up?" without reading scheduler logs.
@@ -595,14 +615,7 @@ class SessionContext:
             if current is not None and snapshot.epoch_id != current.epoch_id:
                 self.ground_decision_samples_by_gs.clear()
             self.latest_ground_link_decision_snapshot = snapshot
-            gs_ids = sorted(
-                {
-                    node
-                    for decision in snapshot.decisions
-                    for node in decision.pair
-                    if node.startswith("gs-")
-                }
-            )
+            gs_ids = sorted(snapshot.policy_audit.selection_policies)
             for gs_id in gs_ids:
                 sample = compose_gs_decision_timeline_sample(gs_id=gs_id, snapshot=snapshot)
                 if sample is None:
@@ -670,7 +683,12 @@ class SessionContext:
                 node_a=node_a,
                 node_b=node_b,
                 state="active",
-                link_type=_derive_link_type(node_a, node_b, data["link_type"]),
+                link_type=_derive_link_type(
+                    data["link_type"],
+                    link_rule_id=data.get("link_rule_id"),
+                    topology_mode=data.get("topology_mode"),
+                    endpoint_segments=data.get("endpoint_segments"),
+                ),
                 link_reason=data["reason"],
                 latency_ms=data["latency_ms"],
                 bandwidth_mbps=data["bandwidth_mbps"],
@@ -678,6 +696,9 @@ class SessionContext:
                 traffic_load_pct=None,
                 interface_a=data["interface_a"],
                 interface_b=data["interface_b"],
+                link_rule_id=data.get("link_rule_id"),
+                topology_mode=data.get("topology_mode"),
+                endpoint_segments=data.get("endpoint_segments"),
             )
             self.link_decision_traces[key] = trace
         self._notify_topology_change(node_a, node_b)
@@ -1031,15 +1052,16 @@ class SessionContext:
         Called on each ClockTick. Propagates satellite positions using the
         ephemeris model published by OME. Ground station positions are static.
         """
+        from nodalarc.body_frames import body_frame_for
         from nodalarc.models.events import (
             EphemerisNodeFixed,
             EphemerisNodeKeplerian,
             EphemerisNodeTLE,
         )
-        from nodalarc.orbital import elements_from_params
+        from nodalarc.orbital import elements_from_params_for_radius
         from nodalarc.propagator import (
-            propagate_j2_mean_elements,
-            propagate_keplerian,
+            propagate_j2_mean_elements_for_body,
+            propagate_keplerian_for_body,
             propagate_sgp4_tle,
         )
 
@@ -1056,27 +1078,41 @@ class SessionContext:
 
             for node_id, node in self.cached_ephemeris_obj.nodes.items():
                 if isinstance(node, EphemerisNodeKeplerian):
-                    elements = elements_from_params(
+                    body_frame = body_frame_for(node.reference_body)
+                    elements = elements_from_params_for_radius(
                         node.altitude_km,
                         node.inclination_deg,
                         node.raan_deg,
                         node.true_anomaly_deg,
+                        body_frame.equatorial_radius_km,
                     )
                     dt = sim_time_unix - self.cached_ephemeris_obj.epoch_unix
                     if node.propagator == "j2-mean-elements":
-                        _pos_ecef, vel_ecef, geo = propagate_j2_mean_elements(
-                            elements,
-                            self.cached_ephemeris_obj.epoch_unix,
-                            dt,
+                        _pos_ecef, vel_ecef, geo, _pos_inertial, _vel_inertial = (
+                            propagate_j2_mean_elements_for_body(
+                                elements,
+                                self.cached_ephemeris_obj.epoch_unix,
+                                dt,
+                                body_frame=body_frame,
+                            )
                         )
                     else:
-                        _pos_ecef, vel_ecef, geo = propagate_keplerian(
-                            elements,
-                            self.cached_ephemeris_obj.epoch_unix,
-                            dt,
+                        _pos_ecef, vel_ecef, geo, _pos_inertial, _vel_inertial = (
+                            propagate_keplerian_for_body(
+                                elements,
+                                self.cached_ephemeris_obj.epoch_unix,
+                                dt,
+                                body_frame=body_frame,
+                            )
                         )
 
                     existing = self.nodes.get(node_id)
+                    prefix = self._node_primary_prefix_by_id.get(
+                        node_id, existing.prefix if existing else None
+                    )
+                    addresses = self._node_addresses_by_id.get(
+                        node_id, existing.addresses if existing else ()
+                    )
                     self.nodes[node_id] = NodeState(
                         node_id=node_id,
                         node_type="satellite",
@@ -1090,11 +1126,24 @@ class SessionContext:
                         slot=node.slot,
                         routing_area=existing.routing_area if existing else None,
                         neighbor_count=existing.neighbor_count if existing else 0,
-                        prefix=existing.prefix if existing else None,
+                        prefix=prefix,
+                        addresses=addresses,
                         beam_falloff_exponent=self.beam_falloff_exponent,
+                        reference_body=node.reference_body,
+                        frame_id=node.frame_id,
+                        tenant_id=existing.tenant_id if existing else "default",
+                        segment_id=node.segment_id,
+                        local_node_id=node.local_node_id,
+                        namespace=node.namespace,
+                        tags=tuple(node.tags),
                     )
 
                 elif isinstance(node, EphemerisNodeTLE):
+                    if node.reference_body != "earth":
+                        raise ValueError(
+                            f"Ephemeris node {node_id!r} uses TLE propagation with "
+                            f"reference_body={node.reference_body!r}; SGP4/TLE is Earth-only"
+                        )
                     dt = sim_time_unix - self.cached_ephemeris_obj.epoch_unix
                     _pos_ecef, vel_ecef, geo = propagate_sgp4_tle(
                         node.tle_line_1,
@@ -1104,6 +1153,12 @@ class SessionContext:
                     )
 
                     existing = self.nodes.get(node_id)
+                    prefix = self._node_primary_prefix_by_id.get(
+                        node_id, existing.prefix if existing else None
+                    )
+                    addresses = self._node_addresses_by_id.get(
+                        node_id, existing.addresses if existing else ()
+                    )
                     self.nodes[node_id] = NodeState(
                         node_id=node_id,
                         node_type="satellite",
@@ -1117,12 +1172,26 @@ class SessionContext:
                         slot=node.slot,
                         routing_area=existing.routing_area if existing else None,
                         neighbor_count=existing.neighbor_count if existing else 0,
-                        prefix=existing.prefix if existing else None,
+                        prefix=prefix,
+                        addresses=addresses,
                         beam_falloff_exponent=self.beam_falloff_exponent,
+                        reference_body=node.reference_body,
+                        frame_id=node.frame_id,
+                        tenant_id=existing.tenant_id if existing else "default",
+                        segment_id=node.segment_id,
+                        local_node_id=node.local_node_id,
+                        namespace=node.namespace,
+                        tags=tuple(node.tags),
                     )
 
                 elif isinstance(node, EphemerisNodeFixed):
                     existing = self.nodes.get(node_id)
+                    prefix = self._node_primary_prefix_by_id.get(
+                        node_id, existing.prefix if existing else None
+                    )
+                    addresses = self._node_addresses_by_id.get(
+                        node_id, existing.addresses if existing else ()
+                    )
                     self.nodes[node_id] = NodeState(
                         node_id=node_id,
                         node_type="ground_station",
@@ -1136,8 +1205,16 @@ class SessionContext:
                         slot=None,
                         routing_area=existing.routing_area if existing else None,
                         neighbor_count=existing.neighbor_count if existing else 0,
-                        prefix=existing.prefix if existing else None,
+                        prefix=prefix,
+                        addresses=addresses,
                         min_elevation_deg=self.gs_elevation_map.get(node_id),
+                        reference_body=node.reference_body,
+                        frame_id=node.frame_id,
+                        tenant_id=existing.tenant_id if existing else "default",
+                        segment_id=node.segment_id,
+                        local_node_id=node.local_node_id,
+                        namespace=node.namespace,
+                        tags=tuple(node.tags),
                     )
 
     def _add_recent_event(self, event_data: dict, event_type: str) -> None:
@@ -1194,6 +1271,9 @@ class SessionContext:
             substrate_one_way_ms=None,
             netem_one_way_ms=None,
             rtt_to_one_way_policy=None,
+            link_rule_id=link.link_rule_id,
+            topology_mode=link.topology_mode,
+            endpoint_segments=link.endpoint_segments,
         )
 
     @staticmethod
@@ -1255,6 +1335,9 @@ class SessionContext:
             substrate_one_way_ms=provenance["substrate_one_way_ms"],
             netem_one_way_ms=provenance["netem_one_way_ms"],
             rtt_to_one_way_policy=provenance["rtt_to_one_way_policy"],
+            link_rule_id=data.get("link_rule_id"),
+            topology_mode=data.get("topology_mode"),
+            endpoint_segments=data.get("endpoint_segments"),
         )
 
     def _trace_from_latency_update(self, data: dict) -> LinkDecisionTrace:
@@ -1286,6 +1369,9 @@ class SessionContext:
             substrate_one_way_ms=provenance["substrate_one_way_ms"],
             netem_one_way_ms=provenance["netem_one_way_ms"],
             rtt_to_one_way_policy=provenance["rtt_to_one_way_policy"],
+            link_rule_id=existing.link_rule_id,
+            topology_mode=existing.topology_mode,
+            endpoint_segments=existing.endpoint_segments,
         )
 
     def compute_convergence_state(self) -> None:
@@ -1310,12 +1396,7 @@ class SessionContext:
             self.network_health = self.network_health.model_copy(update={"status": "converged"})
 
     @staticmethod
-    def _load_gs_elevation_map(session: SessionConfig) -> dict[str, float]:
-        from nodalarc.constellation_loader import load_ground_stations
-        from nodalarc.models.addressing import AddressingScheme
-
-        gs_file = load_ground_stations(session.ground_stations)
-        addressing = AddressingScheme(session.addressing)
+    def _load_gs_elevation_map(gs_file, addressing) -> dict[str, float]:
         result: dict[str, float] = {}
         for station in gs_file.stations:
             gs_id = addressing.gs_id(station.name)
@@ -1330,6 +1411,102 @@ class SessionContext:
                 raise ValueError(f"No min_elevation_deg for {station.name}")
             result[gs_id] = elev
         return result
+
+    @staticmethod
+    def _node_addr(
+        *,
+        purpose: Literal["router_loopback", "site_interface", "site_prefix"],
+        address: str,
+        interface: str | None = None,
+        metric: int | None = None,
+    ) -> NodeAddress:
+        net = ipaddress.ip_network(address, strict=False)
+        family = "ipv4" if net.version == 4 else "ipv6"
+        return NodeAddress(
+            purpose=purpose,
+            family=family,
+            address=address,
+            interface=interface,
+            metric=metric,
+        )
+
+    @staticmethod
+    def _host_address_from_prefix(prefix: str) -> str:
+        net = ipaddress.ip_network(prefix, strict=False)
+        return f"{net.network_address + 1}/{net.prefixlen}"
+
+    @classmethod
+    def _build_node_network_identity_map(
+        cls, resolution
+    ) -> tuple[dict[str, tuple[NodeAddress, ...]], dict[str, str]]:
+        """Build configured network identities for the node detail panels.
+
+        These are configured addresses, not reachability claims. A route table or
+        live probe is still authoritative for whether one node can reach another.
+        """
+
+        addresses_by_id: dict[str, tuple[NodeAddress, ...]] = {}
+        primary_prefix_by_id: dict[str, str] = {}
+        addressing = resolution.addressing
+
+        for sat in resolution.satellites:
+            node_id = addressing.sat_id(sat.plane, sat.slot)
+            addresses_by_id[node_id] = (
+                cls._node_addr(
+                    purpose="router_loopback",
+                    address=f"{addressing.sat_ipv4(sat.plane, sat.slot)}/32",
+                    interface="lo",
+                ),
+                cls._node_addr(
+                    purpose="router_loopback",
+                    address=f"{addressing.sat_ipv6(sat.plane, sat.slot)}/128",
+                    interface="lo",
+                ),
+            )
+
+        gs_file = resolution.primary_ground_set.config
+        for index, station in enumerate(gs_file.stations):
+            node_id = addressing.gs_id(station.name)
+            node_addresses: list[NodeAddress] = [
+                cls._node_addr(
+                    purpose="router_loopback",
+                    address=f"{addressing.gs_ipv4(index)}/32",
+                    interface="lo",
+                ),
+                cls._node_addr(
+                    purpose="router_loopback",
+                    address=f"{addressing.gs_ipv6(index)}/128",
+                    interface="lo",
+                ),
+            ]
+            primary_prefix: str | None = None
+            for prefix_cfg in station.terrestrial_prefixes or ():
+                prefix = str(prefix_cfg.prefix)
+                net = ipaddress.ip_network(prefix, strict=False)
+                if net.prefixlen == 0:
+                    continue
+                node_addresses.append(
+                    cls._node_addr(
+                        purpose="site_prefix",
+                        address=prefix,
+                        metric=prefix_cfg.metric,
+                    )
+                )
+                node_addresses.append(
+                    cls._node_addr(
+                        purpose="site_interface",
+                        address=cls._host_address_from_prefix(prefix),
+                        interface="terr0",
+                        metric=prefix_cfg.metric,
+                    )
+                )
+                if primary_prefix is None and net.version == 4:
+                    primary_prefix = prefix
+            addresses_by_id[node_id] = tuple(node_addresses)
+            if primary_prefix is not None:
+                primary_prefix_by_id[node_id] = primary_prefix
+
+        return addresses_by_id, primary_prefix_by_id
 
     @staticmethod
     def _load_beam_falloff_exponent(session: SessionConfig) -> float:
@@ -1349,17 +1526,23 @@ def _link_key(node_a: str, node_b: str) -> str:
     return f"{min(node_a, node_b)}:{max(node_a, node_b)}"
 
 
-def _derive_link_type(node_a: str, node_b: str, raw_type: str | None = None) -> str:
-    import re
-
+def _derive_link_type(
+    raw_type: str | None,
+    *,
+    link_rule_id: str | None = None,
+    topology_mode: str | None = None,
+    endpoint_segments: tuple[str, str] | list[str] | None = None,
+) -> str:
     if raw_type and raw_type != "isl":
         return raw_type
-    if node_a.startswith("gs-") or node_b.startswith("gs-"):
-        return "ground"
-    ma = re.match(r"sat-[Pp](\d+)[Ss]\d+", node_a)
-    mb = re.match(r"sat-[Pp](\d+)[Ss]\d+", node_b)
-    if ma and mb:
-        if ma.group(1) == mb.group(1):
-            return "intra_plane_isl"
-        return "cross_plane_isl"
+    if raw_type is None:
+        raise ValueError("link_type is required; VS-API does not infer ground links from node IDs")
+    if endpoint_segments is not None and len(endpoint_segments) == 2:
+        a, b = endpoint_segments
+        if a != b:
+            if topology_mode == "static_ip":
+                return "inter_body_relay"
+            return "inter_constellation"
+    if link_rule_id and link_rule_id.endswith(".internal_isl"):
+        return "isl"
     return "isl"

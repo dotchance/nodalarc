@@ -14,8 +14,29 @@ metadata:
 spec:
   sessionYaml: |
     session:
-      name: my-session
-    constellation: configs/constellations/starlink-176.yaml
+      name: earth-leo-walker
+    identity:
+      mode: segment_namespaced
+    segments:
+      - id: space
+        kind: constellation
+        source: configs/constellations/starlink-176.yaml
+        namespace: space
+        central_body: earth
+      - id: ground
+        kind: ground_set
+        source: configs/ground-stations/sets/starlink-176.yaml
+        namespace: ground
+        reference_body: earth
+    link_rules:
+      - id: ground-access
+        kind: access
+        endpoints:
+          - selector: {segment: ground}
+            terminal_role: ground
+          - selector: {segment: space}
+            terminal_role: ground
+        topology: {mode: visible_candidates}
     ...
 ```
 

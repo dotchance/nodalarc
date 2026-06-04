@@ -7,11 +7,12 @@ from jinja2 import Environment, FileSystemLoader
 from nodalarc.constellation_loader import load_constellation
 from nodalarc.models.addressing import AddressingScheme
 from nodalarc.models.session import (
-    AreaAssignmentConfig,
+    FlatAreaAssignmentConfig,
     OrbitConfig,
     RoutingConfig,
     SessionConfig,
     SessionMeta,
+    StripeAreaAssignmentConfig,
     TimeConfig,
 )
 from nodalarc.stack_resolver import resolve_stack
@@ -67,7 +68,7 @@ def flat_session():
         routing=RoutingConfig(
             protocol="isis",
             extensions=["sr"],
-            area_assignment=AreaAssignmentConfig(strategy="flat", gs_area_id="49.0001"),
+            area_assignment=FlatAreaAssignmentConfig(strategy="flat", gs_area_id="49.0001"),
         ),
         time=TimeConfig(compression=1),
         scheduling=_EXPLICIT_SCHEDULING,
@@ -84,7 +85,7 @@ def stripe_session():
         routing=RoutingConfig(
             protocol="isis",
             extensions=["sr"],
-            area_assignment=AreaAssignmentConfig(
+            area_assignment=StripeAreaAssignmentConfig(
                 strategy="stripe",
                 planes_per_stripe=2,
                 gs_area_id="49.0000",
@@ -112,11 +113,21 @@ def _render_template(_stack_dir: str, template_name: str, vars: dict) -> str:
     return tpl.render(**vars)
 
 
+def _test_sid_index(**kwargs) -> int:
+    if kwargs.get("node_type") == "satellite":
+        return 200 + int(kwargs["plane"]) * 10 + int(kwargs["slot"])
+    if kwargs.get("node_type") == "ground_station":
+        return 700 + int(kwargs["gs_index"])
+    return 1
+
+
 def _get_vars(session, constellation, gs_file, addressing, isis_stack, **kwargs):
     """Build template vars with stack template_variables merged."""
     overrides = dict(isis_stack.template_variables)
     if "config_overrides" in kwargs:
         overrides.update(kwargs.pop("config_overrides"))
+    if overrides.get("sr_enabled") and "node_sid_index" not in kwargs:
+        kwargs["node_sid_index"] = _test_sid_index(**kwargs)
     return build_template_vars(
         session=session,
         constellation=constellation,
@@ -381,7 +392,7 @@ class TestSrMpls:
         )
         rendered = _render_template("frr-isis-sr", "isisd.conf.j2", vars)
         assert "segment-routing prefix" in rendered
-        assert "index 1" in rendered
+        assert "index 200" in rendered
 
 
 class TestTimerScaling:
@@ -757,8 +768,7 @@ class TestIsisGroundStation:
             gs_index=0,
         )
         rendered = _render_template("frr-isis-sr", "isisd.conf.j2", vars)
-        # GS SID index = gs_sid_offset + gs_index = 7900 + 0 = 7900
-        assert "index 7900" in rendered
+        assert "index 700" in rendered
 
     def test_gs_terrestrial_interface_passive(
         self, flat_session, four_node_config, gs_file, addressing, isis_stack

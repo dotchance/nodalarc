@@ -1,6 +1,6 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
-/** Types for the M8 session wizard.
+/** Types for the session wizard.
  *
  * Step model: Group A (selections — any order, preview gates on all three)
  * followed by Group B (protocol, extensions) after preview.

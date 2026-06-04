@@ -6,12 +6,12 @@ PRD line 822: flow management via --add-flow / --remove-flow.
 Usage:
   python -m tools.na_reconfig --session <path> --target all
   python -m tools.na_reconfig --session <path> --target plane:3
-  python -m tools.na_reconfig --session <path> --target node:sat-P03S07
+  python -m tools.na_reconfig --session <path> --target node:space-sat-p03s07
   python -m tools.na_reconfig --session <path> --target area:1
   python -m tools.na_reconfig --session <path> --target type:satellite
   python -m tools.na_reconfig --session <path> --target type:ground_station
   python -m tools.na_reconfig --session <path> --target all --set metric_type=wide
-  python -m tools.na_reconfig --session <path> --add-flow test1:gs-hawthorne:gs-frankfurt:udp:100:continuous
+  python -m tools.na_reconfig --session <path> --add-flow test1:ground-gs-hawthorne:ground-gs-frankfurt:udp:100:continuous
   python -m tools.na_reconfig --session <path> --remove-flow test1
 """
 
@@ -27,14 +27,9 @@ from pathlib import Path
 import yaml
 from jinja2 import Environment, FileSystemLoader
 from nodalarc.constants import LOG_FORMAT
-from nodalarc.constellation_loader import (
-    expand_constellation,
-    load_constellation,
-    load_ground_stations,
-)
-from nodalarc.models.addressing import AddressingScheme, compute_area_assignments
-from nodalarc.models.routing_stack import RoutingStackConfig
-from nodalarc.models.session import SessionConfig
+from nodalarc.models.addressing import compute_area_assignments
+from nodalarc.resolve_session import load_session_resolution_from_file
+from nodalarc.stack_resolver import resolve_stack
 from nodalarc.template_vars import _constellation_dims, build_template_vars
 
 log = logging.getLogger(__name__)
@@ -83,19 +78,22 @@ def reconfig(
     session_path: str, target: str, set_args: list[str] | None = None, vars_file: str | None = None
 ) -> None:
     """Re-render and push configs to targeted nodes."""
-    raw = yaml.safe_load(Path(session_path).read_text())
-    session = SessionConfig.model_validate(raw)
-    constellation = load_constellation(session.constellation)
-    gs_file = load_ground_stations(session.ground_stations)
-    addressing = AddressingScheme(session.addressing)
-    satellites = expand_constellation(constellation)
-
-    stack_dir = Path(session.routing.stack)
-    stack_yaml = yaml.safe_load((stack_dir / "stack.yaml").read_text())
-    stack_config = RoutingStackConfig.model_validate(stack_yaml["stack"])
+    resolution = load_session_resolution_from_file(session_path, origin="na-reconfig")
+    if len(resolution.constellations) != 1:
+        raise RuntimeError(
+            "na_reconfig does not support multi-constellation sessions yet; "
+            "refusing partial config push"
+        )
+    session = resolution.runtime_session
+    constellation = resolution.primary_constellation.config
+    gs_file = resolution.primary_ground_set.config
+    addressing = resolution.addressing
+    satellites = list(resolution.primary_constellation.satellites)
+    resolved_stack = resolve_stack(session.routing.protocol, session.routing.extensions)
+    sid_by_node = resolution.resolved.sid_index_by_node_id()
 
     # Build config overrides from stack + session + --set + --vars-file
-    config_overrides = dict(stack_config.template_variables)
+    config_overrides = dict(resolved_stack.template_variables)
     config_overrides.update(session.routing.config_overrides)
     config_overrides.update(_parse_set_args(set_args))
     if vars_file:
@@ -115,7 +113,7 @@ def reconfig(
         )
 
     env = Environment(
-        loader=FileSystemLoader(str(stack_dir)),
+        loader=FileSystemLoader(str(Path("configs/templates/frr").resolve())),
         keep_trailing_newline=True,
     )
 
@@ -137,8 +135,10 @@ def reconfig(
             plane=sat.plane,
             slot=sat.slot,
             config_overrides=config_overrides,
+            neighbors=resolution.neighbors,
+            node_sid_index=sid_by_node[node_id],
         )
-        _render_and_push(env, stack_config, node_id, vars)
+        _render_and_push(env, resolved_stack, node_id, vars)
         reconfigured += 1
 
     # Process ground stations
@@ -157,14 +157,16 @@ def reconfig(
             gs_name=station.name,
             gs_index=i,
             config_overrides=config_overrides,
+            neighbors=resolution.neighbors,
+            node_sid_index=sid_by_node[node_id],
         )
-        _render_and_push(env, stack_config, node_id, vars)
+        _render_and_push(env, resolved_stack, node_id, vars)
         reconfigured += 1
 
     log.info(f"Reconfigured {reconfigured} nodes")
 
 
-def _render_and_push(env, stack_config, node_id, vars):
+def _render_and_push(env, resolved_stack, node_id, vars):
     """Render templates and push to pod.
 
     Uses the stack's reconfigure_command with {config_path} placeholder
@@ -174,7 +176,7 @@ def _render_and_push(env, stack_config, node_id, vars):
 
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
-        for tpl_config in stack_config.config_templates:
+        for tpl_config in resolved_stack.template_files:
             tpl = env.get_template(tpl_config.src)
             rendered = tpl.render(**vars)
             dest_name = Path(tpl_config.dst).name
@@ -182,7 +184,7 @@ def _render_and_push(env, stack_config, node_id, vars):
 
         # kubectl cp into pod — copy to the directory containing the config files
         # Derive the common config directory from the first template's dst
-        config_dirs = {str(Path(tc.dst).parent) for tc in stack_config.config_templates}
+        config_dirs = {str(Path(tc.dst).parent) for tc in resolved_stack.template_files}
         for config_dir in config_dirs:
             result = subprocess.run(
                 [
@@ -201,8 +203,10 @@ def _render_and_push(env, stack_config, node_id, vars):
                 sys.exit(1)
 
         # Apply using reconfigure_command from stack.yaml (PRD 13.19)
-        for tpl_config in stack_config.config_templates:
-            cmd = stack_config.reconfigure_command.format(
+        if not resolved_stack.reconfigure_command:
+            raise RuntimeError("resolved routing stack has no reconfigure_command")
+        for tpl_config in resolved_stack.template_files:
+            cmd = resolved_stack.reconfigure_command.format(
                 config_path=tpl_config.dst,
             )
             result = subprocess.run(
@@ -240,15 +244,16 @@ def add_flow(session_path: str, flow_spec: str) -> None:
     Configures the probe daemon on the source GS pod directly and
     records the flow in the session database.
     """
-    raw = yaml.safe_load(Path(session_path).read_text())
-    session = SessionConfig.model_validate(raw)
-    gs_file = load_ground_stations(session.ground_stations)
+    resolution = load_session_resolution_from_file(session_path, origin="na-reconfig")
+    session = resolution.runtime_session
+    gs_file = resolution.primary_ground_set.config
+    addressing = resolution.addressing
 
     spec = _parse_flow_spec(flow_spec)
     from measurement import probe_client
     from measurement.flow_manager import resolve_dst_ip, resolve_src_pod_ip
 
-    dst_ip = resolve_dst_ip(spec["dst"], gs_file, session)
+    dst_ip = resolve_dst_ip(spec["dst"], gs_file, session, addressing)
     src_pod_ip = resolve_src_pod_ip(spec["src"])
     if src_pod_ip is None:
         log.error(f"Cannot resolve pod IP for {spec['src']}")
@@ -267,9 +272,9 @@ def add_flow(session_path: str, flow_spec: str) -> None:
 
 def remove_flow(session_path: str, flow_id: str) -> None:
     """Remove a probe flow from a running session."""
-    raw = yaml.safe_load(Path(session_path).read_text())
-    session = SessionConfig.model_validate(raw)
-    gs_file = load_ground_stations(session.ground_stations)
+    resolution = load_session_resolution_from_file(session_path, origin="na-reconfig")
+    gs_file = resolution.primary_ground_set.config
+    addressing = resolution.addressing
 
     # We need to find which GS pod this flow runs on.
     # Check all GS pods for the flow.
@@ -277,7 +282,7 @@ def remove_flow(session_path: str, flow_id: str) -> None:
     from measurement.flow_manager import resolve_src_pod_ip
 
     for station in gs_file.stations:
-        gs_id = f"gs-{station.name}"
+        gs_id = addressing.gs_id(station.name)
         pod_ip = resolve_src_pod_ip(gs_id)
         if pod_ip is None:
             continue

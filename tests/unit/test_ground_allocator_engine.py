@@ -34,17 +34,27 @@ def _policy_kwargs(
     policy: str = "highest-elevation",
     handover_policy: str = "hysteresis",
     handover_mode: str = "bbm",
+    mbb_overlap_ticks: int | None = None,
+    mbb_reserve: int | None = None,
 ) -> dict:
+    overlap = 3 if handover_mode == "mbb" else 0
+    reserve = 1 if handover_mode == "mbb" else 0
+    if mbb_overlap_ticks is not None:
+        overlap = mbb_overlap_ticks
+    if mbb_reserve is not None:
+        reserve = mbb_reserve
     return {
         "gs_selection_policies": {gs_id: _selection_policy(policy) for gs_id in gs_ids},
         "gs_handover_policies": {gs_id: _handover_policy(handover_policy) for gs_id in gs_ids},
+        "gs_handover_modes": dict.fromkeys(gs_ids, handover_mode),
+        "gs_mbb_overlap_ticks": dict.fromkeys(gs_ids, overlap),
+        "gs_mbb_reserve": dict.fromkeys(gs_ids, reserve),
         "ranking_order": (
             "service_priority",
             "selection_score",
             "satellite_ground_terminal_capacity",
             "lex_pair",
         ),
-        "handover_mode": handover_mode,
         "mbb_preemption": "off",
         "successor_abort_policy": "hard_release",
         "cross_tenant_displacement": "off",
@@ -95,8 +105,6 @@ def _allocate(
         gs_reference_bodies={"gs-A": "earth"},
         sat_ground_terminals=sat_caps,
         sat_ground_terminal_indices_by_body=_sat_body_pools(sat_caps),
-        mbb_overlap_ticks=mbb_overlap_ticks,
-        mbb_reserve=mbb_reserve,
     )
 
 
@@ -265,8 +273,6 @@ def test_pending_teardown_expires_after_overlap_window():
         gs_reference_bodies={"gs-A": "earth"},
         sat_ground_terminals={"sat-old": 1, "sat-new": 1},
         sat_ground_terminal_indices_by_body=_sat_body_pools({"sat-old": 1, "sat-new": 1}),
-        mbb_overlap_ticks=3,
-        mbb_reserve=1,
     )
 
     assert result.associations == {new_pair: (1, 0)}
@@ -336,8 +342,6 @@ def test_unscheduled_pair_sat_capacity_exhausted():
         gs_reference_bodies={"gs-A": "earth", "gs-B": "earth"},
         sat_ground_terminals={"sat-shared": 1},
         sat_ground_terminal_indices_by_body=_sat_body_pools({"sat-shared": 1}),
-        mbb_overlap_ticks=3,
-        mbb_reserve=0,
     )
 
     # Exactly one of the two pairs wins; the other carries the reason.
@@ -472,8 +476,6 @@ def test_unscheduled_pair_replaced_by_successor_when_teardown_expires():
         gs_reference_bodies={"gs-A": "earth"},
         sat_ground_terminals={"sat-old": 1, "sat-new": 1},
         sat_ground_terminal_indices_by_body=_sat_body_pools({"sat-old": 1, "sat-new": 1}),
-        mbb_overlap_ticks=3,
-        mbb_reserve=1,
     )
 
     # Successor is now the sole steady-state association.
@@ -568,15 +570,13 @@ def test_allocator_rejects_unsupported_multi_overlap_mbb_reserve():
             current_associations={},
             pending_teardowns={},
             gs_terminal_counts={"gs-A": 4},
-            **_policy_kwargs({"gs-A"}, handover_mode="mbb"),
+            **_policy_kwargs({"gs-A"}, handover_mode="mbb", mbb_reserve=2),
             gs_min_elevations={"gs-A": 25.0},
             gs_service_priorities={"gs-A": 10},
             gs_tenant_ids={"gs-A": "default"},
             gs_reference_bodies={"gs-A": "earth"},
             sat_ground_terminals={"sat-a": 4},
             sat_ground_terminal_indices_by_body=_sat_body_pools({"sat-a": 4}),
-            mbb_overlap_ticks=3,
-            mbb_reserve=2,
         )
 
 
@@ -611,8 +611,6 @@ def test_missing_tenant_id_fails_loudly():
             gs_reference_bodies={"gs-A": "earth"},
             sat_ground_terminals={"sat-a": 1},
             sat_ground_terminal_indices_by_body=_sat_body_pools({"sat-a": 1}),
-            mbb_overlap_ticks=3,
-            mbb_reserve=0,
         )
 
 
@@ -647,8 +645,6 @@ def test_missing_reference_body_fails_loudly():
             gs_reference_bodies={},  # empty — must fail
             sat_ground_terminals={"sat-a": 1},
             sat_ground_terminal_indices_by_body=_sat_body_pools({"sat-a": 1}),
-            mbb_overlap_ticks=3,
-            mbb_reserve=0,
         )
 
 
@@ -726,8 +722,6 @@ def test_default_ranking_order_prefers_candidate_specific_scarce_satellite_capac
             "sat-a-wide": {"earth": (0, 1), "luna": (2,)},
             "sat-z-scarce": {"earth": (0,), "luna": (1, 2)},
         },
-        mbb_overlap_ticks=3,
-        mbb_reserve=0,
     )
 
     assert result.associations == {("gs-A", "sat-z-scarce"): (0, 0)}
@@ -779,8 +773,6 @@ def test_configured_ranking_order_can_prioritize_per_gs_rank_before_service_prio
         gs_reference_bodies={"gs-A": "earth", "gs-B": "earth"},
         sat_ground_terminals={"sat-shared": 1},
         sat_ground_terminal_indices_by_body=_sat_body_pools({"sat-shared": 1}),
-        mbb_overlap_ticks=3,
-        mbb_reserve=0,
     )
 
     assert result.associations == {("gs-A", "sat-shared"): (0, 0)}
@@ -817,8 +809,6 @@ def test_mbb_failed_successor_hard_release_drops_visible_old_pair():
         gs_reference_bodies={"gs-A": "earth"},
         sat_ground_terminals={"sat-old": 1, "sat-missing": 1},
         sat_ground_terminal_indices_by_body=_sat_body_pools({"sat-old": 1, "sat-missing": 1}),
-        mbb_overlap_ticks=3,
-        mbb_reserve=1,
     )
 
     assert result.associations == {}
@@ -868,8 +858,6 @@ def test_mbb_visible_successor_missing_from_current_emits_failed_acquire_event()
         gs_reference_bodies={"gs-A": "earth"},
         sat_ground_terminals={"sat-old": 1, "sat-successor": 1},
         sat_ground_terminal_indices_by_body=_sat_body_pools({"sat-old": 1, "sat-successor": 1}),
-        mbb_overlap_ticks=3,
-        mbb_reserve=1,
     )
 
     categories = [event.category for event in result.allocation_events]
@@ -916,8 +904,6 @@ def test_mbb_failed_successor_soft_retain_keeps_visible_old_pair():
         gs_reference_bodies={"gs-A": "earth"},
         sat_ground_terminals={"sat-old": 1, "sat-missing": 1},
         sat_ground_terminal_indices_by_body=_sat_body_pools({"sat-old": 1, "sat-missing": 1}),
-        mbb_overlap_ticks=3,
-        mbb_reserve=1,
     )
 
     assert result.associations == {old_pair: (0, 0)}
@@ -984,8 +970,6 @@ def test_sat_capacity_rechecked_after_same_tick_release_from_other_partition():
         gs_reference_bodies={"gs-A": "earth", "gs-B": "earth"},
         sat_ground_terminals={"sat-shared": 1, "sat-new": 1},
         sat_ground_terminal_indices_by_body=_sat_body_pools({"sat-shared": 1, "sat-new": 1}),
-        mbb_overlap_ticks=3,
-        mbb_reserve=0,
     )
 
     assert result.associations == {new_pair: (0, 0), b_pair: (0, 0)}
@@ -1023,8 +1007,6 @@ def test_sat_capacity_arbitration_can_displace_lower_rank_same_partition_incumbe
         gs_reference_bodies={"gs-A": "earth", "gs-B": "earth"},
         sat_ground_terminals={"sat-shared": 1},
         sat_ground_terminal_indices_by_body=_sat_body_pools({"sat-shared": 1}),
-        mbb_overlap_ticks=3,
-        mbb_reserve=0,
     )
 
     assert result.associations == {challenger: (0, 0)}
@@ -1112,8 +1094,6 @@ def test_satellite_terminal_indices_are_allocated_from_matching_reference_body_p
         sat_ground_terminal_indices_by_body={
             "sat-relay": {"earth": (0,), "luna": (1,)},
         },
-        mbb_overlap_ticks=3,
-        mbb_reserve=0,
     )
 
     assert result.associations[("gs-luna", "sat-relay")] == (0, 1)
@@ -1154,8 +1134,6 @@ def test_existing_association_with_wrong_body_terminal_index_fails_loudly():
             sat_ground_terminal_indices_by_body={
                 "sat-relay": {"earth": (0,), "luna": (1,)},
             },
-            mbb_overlap_ticks=3,
-            mbb_reserve=0,
         )
 
 
@@ -1191,6 +1169,4 @@ def test_allocator_rejects_unimplemented_multi_tick_bbm_gap_timeout():
             gs_reference_bodies={"gs-A": "earth"},
             sat_ground_terminals={"sat-a": 1},
             sat_ground_terminal_indices_by_body=_sat_body_pools({"sat-a": 1}),
-            mbb_overlap_ticks=3,
-            mbb_reserve=0,
         )

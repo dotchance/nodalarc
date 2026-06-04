@@ -31,12 +31,14 @@ from nodalarc.db.queries import (
     insert_probe_result,
 )
 from nodalarc.db.schema import create_tables
+from nodalarc.models.addressing import AddressingScheme
 from nodalarc.models.metrics import (
     ConvergenceResult,
     ProbeResult,
     TraceRequest,
     TraceResponse,
 )
+from nodalarc.models.resolved_session import SourceContext
 from nodalarc.models.routing_stack import RoutingStackConfig
 from nodalarc.models.session import SessionConfig
 from nodalarc.nats_channels import (
@@ -49,6 +51,7 @@ from nodalarc.nats_channels import (
     probe_result_subject,
 )
 from nodalarc.platform_config import get_platform_config
+from nodalarc.resolve_session import resolve_session_with_assets
 from nodalarc.session_identity import require_session_run_id
 
 from measurement.adapters import create_adapter
@@ -114,12 +117,14 @@ class MIService:
         stack_config: RoutingStackConfig,
         db_path: str,
         namespace: str | None = None,
+        addressing: AddressingScheme | None = None,
     ) -> None:
         if namespace is None:
             namespace = get_platform_config().kubernetes_namespace
         self._session = session
         self._session_id = require_session_run_id(session)
         self._gs_file = gs_file
+        self._addressing = addressing or AddressingScheme(session.addressing, gs_file=gs_file)
         self._stack_config = stack_config
         self._db_path = db_path
         self._namespace = namespace
@@ -175,6 +180,7 @@ class MIService:
             session=self._session,
             gs_file=self._gs_file,
             namespace=self._namespace,
+            addressing=self._addressing,
         )
         try:
             self._flow_manager.load_initial_flows()
@@ -386,40 +392,38 @@ def main() -> None:
 
     init_platform_config(Path(args.platform_config))
 
-    # Load configs
+    # Load configs through the resolver so MI observes the same runtime view as
+    # OME/Scheduler/Operator.
     raw = yaml.safe_load(Path(args.session).read_text())
-    session = SessionConfig.model_validate(raw)
+    resolution = resolve_session_with_assets(
+        raw,
+        source_context=SourceContext(origin="mi"),
+    )
+    session = resolution.runtime_session
+    gs_file = resolution.primary_ground_set.config
 
-    from nodalarc.constellation_loader import load_ground_stations
+    from nodalarc.stack_resolver import resolve_stack
 
-    gs_file = load_ground_stations(session.ground_stations)
-
-    if session.routing.stack is not None:
-        stack_dir = Path(session.routing.stack)
-        stack_yaml = yaml.safe_load((stack_dir / "stack.yaml").read_text())
-        stack_config = RoutingStackConfig.model_validate(stack_yaml["stack"])
-    else:
-        from nodalarc.stack_resolver import resolve_stack
-
-        resolved = resolve_stack(session.routing.protocol, session.routing.extensions)
-        stack_config = RoutingStackConfig(
-            name=f"{session.routing.protocol}-{'-'.join(session.routing.extensions) or 'plain'}",
-            image=resolved.image,
-            daemons=resolved.daemons or None,
-            config_templates=[],
-            template_variables=resolved.template_variables,
-            mi_adapter=resolved.mi_adapter,
-            segment_routing=resolved.segment_routing,
-            ttl_propagation=resolved.ttl_propagation,
-            max_compression=resolved.max_compression,
-            reconfigure_command=resolved.reconfigure_command,
-        )
+    resolved = resolve_stack(session.routing.protocol, session.routing.extensions)
+    stack_config = RoutingStackConfig(
+        name=f"{session.routing.protocol}-{'-'.join(session.routing.extensions) or 'plain'}",
+        image=resolved.image,
+        daemons=resolved.daemons or None,
+        config_templates=[],
+        template_variables=resolved.template_variables,
+        mi_adapter=resolved.mi_adapter,
+        segment_routing=resolved.segment_routing,
+        ttl_propagation=resolved.ttl_propagation,
+        max_compression=resolved.max_compression,
+        reconfigure_command=resolved.reconfigure_command,
+    )
 
     service = MIService(
         session=session,
         gs_file=gs_file,
         stack_config=stack_config,
         db_path=args.db,
+        addressing=resolution.addressing,
     )
     service.run()
 

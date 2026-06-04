@@ -94,6 +94,8 @@ def _make_dispatcher(
     stub.async_batch_link_up = AsyncMock(side_effect=resp_up)
     pool.get_stub.return_value = stub
 
+    gs_caps = gs_caps or {}
+    gs_modes = {gs: ("mbb" if mbb and cap > 1 else "bbm") for gs, cap in gs_caps.items()}
     d = Dispatcher(
         interface_map=imap,
         bandwidth_map=bmap,
@@ -102,7 +104,8 @@ def _make_dispatcher(
         session_id="test-session",
         wiring_generation="sha256:" + "a" * 64,
         max_latency_age_s=60.0,
-        gs_terminal_capacities=gs_caps or {},
+        gs_terminal_capacities=gs_caps,
+        gs_handover_modes=gs_modes,
         sat_ground_terminal_capacities=sat_caps or {},
         mbb_dispatch=mbb,
     )

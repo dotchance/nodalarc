@@ -9,9 +9,12 @@ the resolved canonical shapes and dispatches to registered policy functions.
 
 from __future__ import annotations
 
-from typing import Any, Literal, get_args
+from collections.abc import Mapping
+from typing import Literal, get_args
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from nodalarc.frozen import FrozenDict, ImmutableStrDict
 
 SelectionPolicyName = Literal[
     "highest-elevation",
@@ -51,59 +54,56 @@ def selection_policy_score_scale(policy_name: str) -> str:
 
 
 class SelectionPolicySpec(BaseModel):
-    """Operator-selected pure candidate scoring policy."""
+    """Operator-selected pure candidate scoring policy. Frozen runtime truth."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     name: SelectionPolicyName = "highest-elevation"
-    params: dict[str, Any] = Field(default_factory=dict)
+    params: ImmutableStrDict = Field(default_factory=FrozenDict)
 
-    @field_validator("params")
+    @model_validator(mode="before")
     @classmethod
-    def _string_keys(cls, value: dict[str, Any]) -> dict[str, Any]:
-        for key in value:
-            if not isinstance(key, str):
-                raise ValueError("selection_policy.params keys must be strings")
-        return value
+    def _coerce_params(cls, data):
+        # Normalize before construction so the frozen model is never mutated.
+        if isinstance(data, dict) and data.get("name") == "longest-remaining-pass":
+            params = data.get("params")
+            if isinstance(params, Mapping):
+                horizon = params.get("lookahead_horizon_ticks")
+                if horizon is not None:
+                    data = {
+                        **data,
+                        "params": {**params, "lookahead_horizon_ticks": int(horizon)},
+                    }
+        return data
 
     @model_validator(mode="after")
     def _validate_policy_params(self):
-        params = dict(self.params)
         if self.name in ("highest-elevation", "lowest-elevation"):
-            if params:
+            if self.params:
                 raise ValueError(f"selection_policy.name={self.name!r} requires empty params")
         elif self.name == "longest-remaining-pass":
-            extra = sorted(set(params) - {"lookahead_horizon_ticks"})
+            extra = sorted(set(self.params) - {"lookahead_horizon_ticks"})
             if extra:
                 raise ValueError(
                     "selection_policy.name='longest-remaining-pass' received unsupported "
                     f"params: {', '.join(extra)}"
                 )
-            horizon = params.get("lookahead_horizon_ticks")
+            horizon = self.params.get("lookahead_horizon_ticks")
             if horizon is None or int(horizon) <= 0:
                 raise ValueError(
                     "selection_policy.name='longest-remaining-pass' requires "
                     "params.lookahead_horizon_ticks > 0"
                 )
-            self.params["lookahead_horizon_ticks"] = int(horizon)
         return self
 
 
 class HandoverPolicySpec(BaseModel):
-    """Operator-selected incumbent displacement policy."""
+    """Operator-selected incumbent displacement policy. Frozen runtime truth."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     name: HandoverPolicyName = "hysteresis"
-    params: dict[str, Any] = Field(default_factory=dict)
-
-    @field_validator("params")
-    @classmethod
-    def _string_keys(cls, value: dict[str, Any]) -> dict[str, Any]:
-        for key in value:
-            if not isinstance(key, str):
-                raise ValueError("handover_policy.params keys must be strings")
-        return value
+    params: ImmutableStrDict = Field(default_factory=FrozenDict)
 
     @model_validator(mode="after")
     def _validate_none_params(self):

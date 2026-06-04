@@ -53,6 +53,7 @@ from nodalarc.db.queries import (
     query_probe_results,
 )
 from nodalarc.db.schema import create_tables
+from nodalarc.models.resolved_session import SourceContext
 from nodalarc.models.scheduler_ops import OperatorRepairCommand
 from nodalarc.models.session import SessionConfig
 from nodalarc.models.vs_api import (
@@ -74,6 +75,8 @@ from nodalarc.nats_channels import (
 )
 from nodalarc.platform_config import get_platform_config
 from nodalarc.project_info import project_attribution, project_version
+from nodalarc.resolve_session import resolve_session_with_assets
+from yaml import YAMLError
 
 from vs_api.continuous_tracer import ContinuousTracer
 from vs_api.introspect import VTYSH_COMMANDS, run_vtysh
@@ -532,7 +535,12 @@ def _parse_session_yaml(session_yaml: str) -> tuple[str, SessionConfig]:
     raw = yaml.safe_load(session_yaml)
     if not raw:
         raise ValueError("sessionYaml is empty")
-    session = SessionConfig.model_validate(raw)
+    resolution = resolve_session_with_assets(
+        raw,
+        catalog_roots=_CATALOG_ROOTS,
+        source_context=SourceContext(origin="vs_api.cr"),
+    )
+    session = resolution.runtime_session
     return session.session.name, session
 
 
@@ -938,7 +946,7 @@ async def _nats_subscriber() -> None:
         log.info("CR phase=%s — waiting for Ready before activating SessionContext", _cr_phase)
         if _session_manager:
             _session_manager._status = "wiring"
-            _session_manager.status_detail = _cr_message or f"Phase: {_cr_phase}"
+            _session_manager.status_detail = _cr_message or f"Status: {_cr_phase}"
             for _s in _session_manager._available:
                 if _s.get("name") == _cr_session.session_name:
                     _session_manager.set_active(_s["file"])
@@ -1718,8 +1726,8 @@ def get_decision_explanation(
 ) -> dict | JSONResponse:
     """Composed decision-explanation FACTS for one ground station, or one pair.
 
-    Phase A of the link-explainability UX. VS-API composes the funnel ladder,
-    effective envelope, best-candidate, and actuation/divergence facts from the
+    VS-API composes the funnel ladder, effective envelope, best-candidate,
+    and actuation/divergence facts from the
     committed ground-decision snapshot, the kernel-actual link set, the actuation
     roster, and the Scheduler-owned pending clock (divergence timing, recovered from
     the retained ActualLinkSnapshot). The client registry assigns family/severity/text.
@@ -1820,8 +1828,8 @@ def get_ground_link_decisions(
     ISL-only pair (sat-sat) returns 404 — not because the OME has no
     opinion, but because the ISL decision surface does not exist yet.
 
-    Phase 1 (C-foundation-5): the operator-facing surface for "why isn't
-    this ground pair up?" Every ground pair the OME considered carries
+    Operator-facing surface for "why isn't this ground pair up?" Every
+    ground pair the OME considered carries
     ``visibility_reject_reason``; visible-but-unscheduled pairs
     additionally carry ``unscheduled_reason`` plus the incumbent or
     capacity constraint the allocator chose them over.
@@ -2739,6 +2747,8 @@ async def preview_coverage(body: dict) -> dict:
     Computes visibility at 10-second steps for one orbital period.
     Returns ISL/GS coverage statistics and warnings.
     """
+    from functools import partial
+
     from ome.coverage_preview import compute_coverage_preview
 
     try:
@@ -2751,10 +2761,13 @@ async def preview_coverage(body: dict) -> dict:
     try:
         result = await loop.run_in_executor(
             None,
-            compute_coverage_preview,
-            constellation,
-            body.get("satellite_type"),
-            ground_stations,
+            partial(
+                compute_coverage_preview,
+                constellation,
+                body.get("satellite_type"),
+                ground_stations,
+                catalog_roots=_CATALOG_ROOTS,
+            ),
         )
     except CatalogPathError as exc:
         return _catalog_error(exc)
@@ -2786,49 +2799,29 @@ async def deploy_generated_session(body: dict) -> dict:
         return JSONResponse(status_code=400, content={"error": "yaml field required"})
     try:
         raw = _yaml.safe_load(yaml_str)
-        session = SessionConfig.model_validate(raw)
-    except Exception as exc:
+    except YAMLError as exc:
         log.info("Invalid session YAML rejected: %s", exc)
         return _error_response(400, "Invalid session YAML")
-
-    modified = dict(raw)
-
-    # Full semantic validation — expand the constellation and ground stations
-    # to catch errors like invalid terminal counts, missing model files, or
-    # empty constellations BEFORE creating the CR.
     try:
-        from nodalarc.constellation_loader import (
-            expand_constellation,
-            load_constellation,
-            load_ground_stations,
+        resolution = resolve_session_with_assets(
+            raw,
+            catalog_roots=_CATALOG_ROOTS,
+            source_context=SourceContext(origin="vs_api.deploy"),
         )
-
-        constellation_source = _resolve_api_constellation_source(session.constellation)
-        ground_station_source = _resolve_api_ground_station_source(session.ground_stations)
-        if isinstance(session.constellation, str):
-            modified["constellation"] = constellation_source
-        if isinstance(session.ground_stations, str):
-            modified["ground_stations"] = ground_station_source
-        constellation = load_constellation(constellation_source)
-        load_ground_stations(ground_station_source)
-        satellites = expand_constellation(constellation)
-        if not satellites:
-            return JSONResponse(
-                status_code=400, content={"error": "Constellation expands to 0 satellites"}
-            )
     except CatalogPathError as exc:
         return _catalog_error(exc)
     except FileNotFoundError as exc:
         return _catalog_error(exc)
     except Exception as exc:
-        log.info("Invalid session configuration rejected: %s", exc)
-        return _error_response(400, "Invalid session configuration")
+        log.info("Invalid segment session YAML rejected: %s", exc)
+        return _error_response(400, "Invalid segment session YAML")
 
-    # Write to sessions directory with _wizard- prefix and a collision-resistant stem.
+    # Write the validated segment YAML exactly as supplied. The resolver is the
+    # semantic authority; VS-API must not rewrite it into the old session shape.
     try:
-        stem = generated_file_stem(session.session.name)
+        stem = generated_file_stem(resolution.resolved.session.name)
         session_file = generated_file_path(_CATALOG_ROOTS.sessions, f"_wizard-{stem}.yaml")
-        write_text_exclusive(session_file, _yaml.dump(modified, default_flow_style=False))
+        write_text_exclusive(session_file, _yaml.dump(raw, default_flow_style=False))
     except (CatalogPathError, FileExistsError) as exc:
         return _catalog_error(exc)
 
@@ -2857,87 +2850,29 @@ async def deploy_from_yaml(body: dict) -> dict:
         return JSONResponse(status_code=400, content={"error": "yaml field required"})
     try:
         raw = _yaml.safe_load(yaml_str)
-        session = SessionConfig.model_validate(raw)
-    except Exception as exc:
+    except YAMLError as exc:
         log.info("Invalid session YAML rejected: %s", exc)
         return _error_response(400, "Invalid session YAML")
-
-    # Extract inline definitions → write ephemeral files → rewrite as paths
     try:
-        stem = generated_file_stem(session.session.name)
-    except CatalogPathError as exc:
-        return _catalog_error(exc)
-    modified = dict(raw)
-
-    if isinstance(session.constellation, dict):
-        eph_path = generated_file_path(_CATALOG_ROOTS.constellation_ephemeral, f"{stem}.yaml")
-        try:
-            write_text_exclusive(
-                eph_path, _yaml.dump(session.constellation, default_flow_style=False)
-            )
-        except FileExistsError as exc:
-            return _catalog_error(exc)
-        modified["constellation"] = config_value_for(eph_path)
-    elif isinstance(session.constellation, str):
-        try:
-            modified["constellation"] = config_value_for(
-                resolve_constellation_reference(session.constellation, _CATALOG_ROOTS)
-            )
-        except (CatalogPathError, FileNotFoundError) as exc:
-            return _catalog_error(exc)
-
-    if isinstance(session.ground_stations, dict):
-        eph_path = generated_file_path(_CATALOG_ROOTS.ground_station_ephemeral, f"{stem}.yaml")
-        try:
-            write_text_exclusive(
-                eph_path, _yaml.dump(session.ground_stations, default_flow_style=False)
-            )
-        except FileExistsError as exc:
-            return _catalog_error(exc)
-        modified["ground_stations"] = config_value_for(eph_path)
-    elif isinstance(session.ground_stations, str):
-        try:
-            modified["ground_stations"] = config_value_for(
-                resolve_ground_station_reference(session.ground_stations, _CATALOG_ROOTS)
-            )
-        except (CatalogPathError, FileNotFoundError) as exc:
-            return _catalog_error(exc)
-    elif isinstance(session.ground_stations, list):
-        try:
-            validate_station_names(session.ground_stations)
-        except CatalogPathError as exc:
-            return _catalog_error(exc)
-
-    # Write modified session YAML (inline defs replaced with ephemeral file paths)
-    session_file = generated_file_path(_CATALOG_ROOTS.sessions, f"_wizard-{stem}.yaml")
-    try:
-        write_text_exclusive(session_file, _yaml.dump(modified, default_flow_style=False))
-    except FileExistsError as exc:
-        return _catalog_error(exc)
-
-    # Full semantic validation after ephemeral files are written
-    try:
-        from nodalarc.constellation_loader import (
-            expand_constellation,
-            load_constellation,
-            load_ground_stations,
+        resolution = resolve_session_with_assets(
+            raw,
+            catalog_roots=_CATALOG_ROOTS,
+            source_context=SourceContext(origin="vs_api.upload"),
         )
-
-        _session_for_val = SessionConfig.model_validate(modified)
-        _const = load_constellation(_session_for_val.constellation)
-        load_ground_stations(_session_for_val.ground_stations)
-        _sats = expand_constellation(_const)
-        if not _sats:
-            return JSONResponse(
-                status_code=400, content={"error": "Constellation expands to 0 satellites"}
-            )
+        stem = generated_file_stem(resolution.resolved.session.name)
     except CatalogPathError as exc:
         return _catalog_error(exc)
     except FileNotFoundError as exc:
         return _catalog_error(exc)
     except Exception as exc:
-        log.info("Invalid session configuration rejected: %s", exc)
-        return _error_response(400, "Invalid session configuration")
+        log.info("Invalid segment session YAML rejected: %s", exc)
+        return _error_response(400, "Invalid segment session YAML")
+
+    session_file = generated_file_path(_CATALOG_ROOTS.sessions, f"_wizard-{stem}.yaml")
+    try:
+        write_text_exclusive(session_file, _yaml.dump(raw, default_flow_style=False))
+    except FileExistsError as exc:
+        return _catalog_error(exc)
 
     if _session_manager is None:
         return JSONResponse(status_code=503, content={"error": "Session manager not initialized"})
@@ -3182,7 +3117,7 @@ async def _poll_cr_until_ready() -> None:
             if _session_manager and phase != "Wiring" and status_is_current:
                 # During Wiring, Node Agent NATS progress owns _status_detail.
                 # Only update from CR for non-Wiring phases.
-                _session_manager.status_detail = message or f"Phase: {phase}"
+                _session_manager.status_detail = message or f"Status: {phase}"
             if phase == "Ready":
                 ready = _extract_ready_cr_session(cr)
                 if ready is None:
@@ -3272,13 +3207,20 @@ def main() -> None:
 
     init_platform_config(Path(args.platform_config))
 
-    # Also init NodalPath config (needed for live gRPC trace SID lookups)
+    # NodalPath is distributed separately. Initialize it when present so
+    # NodalPath-specific trace routes can use live SID lookups; absence of that
+    # package must not prevent ordinary NodalArc sessions from starting.
     try:
         from nodalpath.platform import init_nodalpath_config
 
         init_nodalpath_config(Path("configs/nodalpath.yaml"))
-    except Exception:
-        pass  # Non-fatal — CSPF fallback still works
+        log.info("Initialized NodalPath config")
+    except ModuleNotFoundError as exc:
+        log.info("NodalPath package unavailable; NodalPath-specific routes disabled: %s", exc)
+    except Exception as exc:
+        log.warning(
+            "NodalPath config initialization failed; NodalPath-specific routes disabled: %s", exc
+        )
 
     if args.port is None:
         args.port = get_platform_config().vs_api_http_port
@@ -3299,7 +3241,11 @@ def main() -> None:
         else:
             session_data = yaml.safe_load(session_path.read_text())
         if session_data:
-            SessionConfig.model_validate(session_data)
+            resolve_session_with_assets(
+                session_data,
+                catalog_roots=_CATALOG_ROOTS,
+                source_context=SourceContext(origin="vs_api.startup"),
+            )
             # Mark session active
             _active_path = args.session
             try:
@@ -3357,7 +3303,7 @@ def main() -> None:
             elif _cr_phase in ("Pending", "Wiring", "Creating"):
                 log.info(f"Session config loaded but CR phase={_cr_phase} — wiring in progress")
                 _session_manager._status = "wiring"
-                _session_manager.status_detail = _cr_message or f"Phase: {_cr_phase}"
+                _session_manager.status_detail = _cr_message or f"Status: {_cr_phase}"
                 _pending_cr_poll = True
             elif _cr_phase == "Error":
                 _session_manager._status = "error"
@@ -3395,7 +3341,7 @@ def main() -> None:
                         f"Active ConstellationSpec CR found (phase={phase}) — wiring in progress"
                     )
                     _session_manager._status = "wiring"
-                    _session_manager.status_detail = message or f"Phase: {phase}"
+                    _session_manager.status_detail = message or f"Status: {phase}"
                     _pending_cr_poll = True
                 elif phase == "Error":
                     _session_manager._status = "error"

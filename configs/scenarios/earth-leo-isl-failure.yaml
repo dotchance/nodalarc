@@ -1,0 +1,19 @@
+
+scenario:
+  name: earth-leo-isl-failure
+  description: "Inject one ISL failure in the namespaced simple LEO demo and observe reconvergence."
+  steps:
+    - action: wait
+      duration_s: 30
+    - action: inject_link_down
+      node_a: space-sat-p00s03
+      node_b: space-sat-p00s04
+    - action: wait_converge
+      timeout_s: 60
+    - action: measure
+      duration_s: 30
+    - action: inject_link_up
+      node_a: space-sat-p00s03
+      node_b: space-sat-p00s04
+    - action: wait_converge
+      timeout_s: 60

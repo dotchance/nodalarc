@@ -14,7 +14,7 @@ ready. Fix the design before touching the code.
 
 IGP sessions and NodalPath sessions share the OME, Scheduler, and Node Agent wiring. They share nothing in the forwarding plane.
 
-**IGP sessions (IS-IS, OSPF, BGP, any FRR combination):**
+**Routing-daemon sessions (current IS-IS/OSPF, future explicitly-supported FRR combinations):**
 - FRR owns forwarding state entirely
 - Scheduler dispatches BatchLinkUp/Down to Node Agent via NATS request/reply
 - Node Agent manipulates kernel interfaces via pyroute2
@@ -124,7 +124,7 @@ There is no delta/merge logic. The snapshot IS the desired state. This eliminate
 
 All wire-format `sim_time` fields carry **master sim_time** — the OME's pacing clock — never entity-local time. This holds for `VisibilityEvent`, `GroundLinkDecisionSnapshot`, `LinkStateSnapshot`, `ClockTick`, every NATS payload, every SQLite persistence record.
 
-Per-entity local time is a **computed view**. A future `entity_local_time(master_time, clock_config)` helper will derive a node's proper time from master sim_time plus its `NodeClockConfig` (Phase 7 — per-individual-entity clock skew from oscillator drift, relativistic proper-time delta across bodies, ground-ranging sync events). Each entity carries its own clock characteristics; the delta is a function of master_time + per-entity config, never a stored accumulator.
+Per-entity local time is a **computed view**. A future `entity_local_time(master_time, clock_config)` helper will derive a node's proper time from master sim_time plus its `NodeClockConfig` (per-individual-entity clock skew from oscillator drift, relativistic proper-time delta across bodies, ground-ranging sync events). Each entity carries its own clock characteristics; the delta is a function of master_time + per-entity config, never a stored accumulator.
 
 Consumers that need entity-local time call the helper. The wire never carries it as the primary timestamp.
 
@@ -140,10 +140,11 @@ This invariant exists so a future per-entity clock model is a localized addition
 
 ## Ground Link Carrier Model
 
-Ground station `gnd0` carrier is driven by host-side veth state - not by explicit admin manipulation inside the pod:
+Ground terminal carrier (`gnd0`, `gnd1`, ...) is driven by host-side veth state
+- not by explicit admin manipulation inside the pod:
 
-- LinkUp: bring host-side veths UP → carrier arrives on pod gnd0 → FRR forms adjacency
-- LinkDown: bring host-side veths DOWN → carrier drops on pod gnd0 → FRR tears adjacency immediately
+- LinkUp: bring host-side veths UP → carrier arrives on pod `gndX` → FRR forms adjacency
+- LinkDown: bring host-side veths DOWN → carrier drops on pod `gndX` → FRR tears adjacency immediately
 
 FRR detects carrier loss without waiting for hold timers. This is the fastest convergence path.
 

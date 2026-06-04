@@ -1,7 +1,7 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { ConstellationPanel } from "../ConstellationPanel";
 import type { ConstellationPreset } from "../wizardTypes";
 
@@ -34,18 +34,23 @@ describe("ConstellationPanel", () => {
     expect(within(card).queryByText("SGP4 / TLE")).toBeNull();
   });
 
-  it("shows SGP4/TLE support on TLE-backed constellation tiles", () => {
+  it("disables TLE-backed constellation tiles until SGP4 runtime support lands", () => {
+    const onSelect = vi.fn();
     render(
       <ConstellationPanel
         presets={[preset("tle-shell", "tle")]}
         selected={null}
-        onSelect={vi.fn()}
+        onSelect={onSelect}
       />,
     );
 
-    const card = screen.getByRole("button", { name: /tle-shell/ });
-    expect(within(card).getByText("SGP4 / TLE")).toBeTruthy();
+    const card = screen.getByRole("button", { name: /tle-shell/ }) as HTMLButtonElement;
+    expect(card.disabled).toBe(true);
+    expect(within(card).getByText("Coming Soon")).toBeTruthy();
+    expect(within(card).getByText(/require SGP4\/TLE runtime support/)).toBeTruthy();
     expect(within(card).queryByText("J2 Mean Elements")).toBeNull();
     expect(within(card).queryByText("Keplerian Circular")).toBeNull();
+    fireEvent.click(card);
+    expect(onSelect).not.toHaveBeenCalled();
   });
 });

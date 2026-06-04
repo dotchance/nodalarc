@@ -16,12 +16,18 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
-from nodalarc.constellation_loader import SatelliteNode, isl_terminal_for_interface
+from nodalarc.body_frames import body_frame_for
+from nodalarc.constellation_loader import (
+    SatelliteNode,
+    isl_terminal_for_interface,
+    satellite_node_id,
+)
+from nodalarc.ephemeris_runtime import SkyfieldBspEphemeris, body_states_at
+from nodalarc.ground_handover import resolve_station_ground_scheduling
 from nodalarc.ground_terminals import (
     TerminalPhysicsProfile,
     ground_terminal_type,
     satellite_terminal_index_pools_by_target_body,
-    station_ground_terminal_capacity,
     station_ground_terminal_type,
     terminal_physics_profile,
     terminal_physics_profiles,
@@ -29,6 +35,7 @@ from nodalarc.ground_terminals import (
 from nodalarc.models.addressing import AddressingScheme, NeighborAssignment, neighbors_by_node
 from nodalarc.models.events import (
     ClockTick,
+    EphemerisBodyFrame,
     EphemerisNodeFixed,
     EphemerisNodeKeplerian,
     EphemerisNodeTLE,
@@ -85,12 +92,29 @@ def build_session_ephemeris(
     """
     import math
 
-    from nodalarc.constants import EARTH_RADIUS_KM
+    from nodalarc.body_frames import body_frame_for
 
     nodes: dict[str, EphemerisNodeKeplerian | EphemerisNodeTLE | EphemerisNodeFixed] = {}
 
+    def _meta(node_id: str) -> dict[str, object]:
+        raw = ctx.node_metadata.get(node_id, {})
+        return {
+            key: raw[key]
+            for key in (
+                "segment_id",
+                "local_node_id",
+                "namespace",
+                "tags",
+                "reference_body",
+                "frame_id",
+            )
+            if key in raw and raw[key] is not None
+        }
+
     for sat in ctx.satellites:
-        node_id = ctx.addressing.sat_id(sat.plane, sat.slot)
+        node_id = satellite_node_id(sat, ctx.addressing)
+        sat_body = getattr(sat, "central_body", "earth")
+        body_frame = body_frame_for(sat_body)
         if ctx.propagator_id == "sgp4-tle":
             if sat.tle_line_1 is None or sat.tle_line_2 is None:
                 raise ValueError(
@@ -102,16 +126,18 @@ def build_session_ephemeris(
                 plane=sat.plane,
                 slot=sat.slot,
                 norad_id=sat.norad_id,
+                **_meta(node_id),
             )
         else:
             nodes[node_id] = EphemerisNodeKeplerian(
                 propagator=ctx.propagator_id,
-                altitude_km=sat.elements.semi_major_axis_km - EARTH_RADIUS_KM,
+                altitude_km=sat.elements.semi_major_axis_km - body_frame.equatorial_radius_km,
                 inclination_deg=math.degrees(sat.elements.inclination_rad),
                 raan_deg=math.degrees(sat.elements.raan_rad),
                 true_anomaly_deg=math.degrees(sat.elements.true_anomaly_rad),
                 plane=sat.plane,
                 slot=sat.slot,
+                **_meta(node_id),
             )
 
     for gs_id, (_ecef, geo) in ctx.gs_positions.items():
@@ -119,6 +145,26 @@ def build_session_ephemeris(
             lat_deg=geo.lat_deg,
             lon_deg=geo.lon_deg,
             alt_km=geo.alt_km,
+            **_meta(gs_id),
+        )
+
+    epoch_body_states = body_states_at(ctx.body_ephemeris, set(ctx.active_bodies), epoch_unix)
+    body_frames: dict[str, EphemerisBodyFrame] = {}
+    for body_id, body_state in sorted(epoch_body_states.items()):
+        body_frame = body_frame_for(body_id)
+        body_frames[body_id] = EphemerisBodyFrame(
+            body_id=body_id,
+            radius_km=body_frame.equatorial_radius_km,
+            origin_x_km=body_state.position_km.x,
+            origin_y_km=body_state.position_km.y,
+            origin_z_km=body_state.position_km.z,
+            vel_x_km_s=body_state.velocity_km_s.x,
+            vel_y_km_s=body_state.velocity_km_s.y,
+            vel_z_km_s=body_state.velocity_km_s.z,
+            provider=body_state.provider,
+            kernel_id=body_state.kernel_id,
+            quality_tier=body_state.quality_tier,
+            frame=body_state.frame,
         )
 
     return SessionEphemeris(
@@ -126,6 +172,7 @@ def build_session_ephemeris(
         sim_time=datetime.fromtimestamp(epoch_unix, tz=UTC),
         epoch_unix=epoch_unix,
         nodes=nodes,
+        body_frames=body_frames,
     )
 
 
@@ -161,7 +208,9 @@ class StepContext:
     gs_handover_policies: dict[str, HandoverPolicySpec]
     gs_service_priorities: dict[str, int]
     ground_ranking_order: tuple[RankingComponent, ...]
-    ground_handover_mode: Literal["bbm", "mbb"]
+    gs_handover_modes: dict[str, Literal["bbm", "mbb"]]
+    gs_mbb_overlap_ticks: dict[str, int]
+    gs_mbb_reserve: dict[str, int]
     ground_mbb_preemption: str
     ground_successor_abort_policy: str
     ground_cross_tenant_displacement: str
@@ -178,16 +227,18 @@ class StepContext:
     # so every visibility decision is tenant- and body-attributable.
     gs_tenant_ids: dict[str, str]
     gs_reference_bodies: dict[str, str]
+    ground_candidate_satellites_by_gs: dict[str, tuple[str, ...]]
     ground_pair_terminal_types: dict[tuple[str, str], str]
+    node_metadata: dict[str, dict[str, object]]
     by_node: dict[str, list[NeighborAssignment]]
     sat_isl_terminals: dict[str, int]
     sat_isl_terminal_constraints: dict[str, dict[str, IslTerminalConstraints]]
     sat_ground_terminals: dict[str, int]  # satellite ground terminal capacity
     propagator_id: PropagatorId
-    polar_seam_enabled: bool
-    latitude_threshold_deg: float
-    mbb_overlap_ticks: int = 3
-    mbb_reserve: int = 0
+    body_ephemeris: SkyfieldBspEphemeris | None = None
+    active_bodies: frozenset[str] = field(default_factory=lambda: frozenset({"earth"}))
+    polar_seam_enabled: bool = False
+    latitude_threshold_deg: float = 70.0
     ground_policy_lookahead_horizon_ticks: int = 0
     ground_policy_lookahead_horizon_ticks_by_gs: dict[str, int] = field(default_factory=dict)
 
@@ -271,7 +322,9 @@ def _build_policy_audit(
     gs_selection_policies: dict[str, SelectionPolicySpec],
     gs_handover_policies: dict[str, HandoverPolicySpec],
     ground_scheduling: GroundSchedulingConfig,
-    mbb_reserve: int,
+    gs_handover_modes: dict[str, Literal["bbm", "mbb"]],
+    gs_mbb_overlap_ticks: dict[str, int],
+    gs_mbb_reserve: dict[str, int],
     ignored_capacity_fields: tuple[str, ...],
 ) -> GroundPolicyAudit:
     return GroundPolicyAudit(
@@ -282,12 +335,19 @@ def _build_policy_audit(
         handover_policies={k: v.name for k, v in sorted(gs_handover_policies.items())},
         handover_policy_params={k: dict(v.params) for k, v in sorted(gs_handover_policies.items())},
         ranking_order=tuple(ground_scheduling.ranking_order),
-        handover_mode=ground_scheduling.handover_mode,
+        handover_mode=(
+            next(iter(set(gs_handover_modes.values())))
+            if len(set(gs_handover_modes.values())) == 1
+            else "mixed"
+        ),
+        handover_modes=dict(sorted(gs_handover_modes.items())),
         mbb_preemption=ground_scheduling.mbb_preemption,
         successor_abort_policy=ground_scheduling.successor_abort_policy,
         cross_tenant_displacement=ground_scheduling.cross_tenant_displacement,
-        mbb_overlap_ticks=ground_scheduling.mbb_overlap_ticks,
-        mbb_reserve=mbb_reserve,
+        mbb_overlap_ticks=max(gs_mbb_overlap_ticks.values(), default=0),
+        mbb_overlap_ticks_by_gs=dict(sorted(gs_mbb_overlap_ticks.items())),
+        mbb_reserve=max(gs_mbb_reserve.values(), default=0),
+        mbb_reserve_by_gs=dict(sorted(gs_mbb_reserve.items())),
         bbm_acquire_timeout_ticks=ground_scheduling.bbm_acquire_timeout_ticks,
         ignored_capacity_fields=ignored_capacity_fields,
     )
@@ -303,20 +363,22 @@ def build_step_context(
     polar_seam_enabled: bool = False,
     latitude_threshold_deg: float = 70.0,
     ground_link_model: Literal["geometry_only", "terminal_physics"] = "terminal_physics",
+    ground_defaults_applied: bool = False,
+    ground_candidate_satellites_by_gs: Mapping[str, tuple[str, ...]] | None = None,
+    node_metadata: Mapping[str, Mapping[str, object]] | None = None,
+    body_ephemeris: SkyfieldBspEphemeris | None = None,
+    active_bodies: frozenset[str] | None = None,
 ) -> StepContext:
     """Build the per-session-constant context for compute_step()."""
     by_node = neighbors_by_node(neighbors)
+    node_metadata_map = {node_id: dict(value) for node_id, value in (node_metadata or {}).items()}
     has_ground_stations = gs_file is not None and bool(gs_file.stations)
     if has_ground_stations and ground_scheduling is None:
         raise ValueError(
             "build_step_context requires explicit ground_scheduling when ground stations "
-            "exist; Phase 3 does not silently choose selection or handover policy"
+            "exist; NodalArc does not silently choose selection or handover policy"
         )
     ground_scheduling = ground_scheduling or GroundSchedulingConfig()
-    effective_mbb_reserve = (
-        ground_scheduling.mbb_reserve if ground_scheduling.handover_mode == "mbb" else 0
-    )
-
     sat_isl_terminals: dict[str, int] = {}
     sat_isl_terminal_constraints: dict[str, dict[str, IslTerminalConstraints]] = {}
     sat_ground_terminals: dict[str, int] = {}
@@ -329,7 +391,7 @@ def build_step_context(
         "terminal_physics" if require_ground_physics else "geometry_only"
     )
     for sat in satellites:
-        nid = addressing.sat_id(sat.plane, sat.slot)
+        nid = satellite_node_id(sat, addressing)
         sat_isl_terminals[nid] = sat.isl_terminal_count
         sat_ground_terminals[nid] = sat.ground_terminal_count
         sat_ground_terminal_indices_by_body[nid] = satellite_terminal_index_pools_by_target_body(
@@ -370,19 +432,17 @@ def build_step_context(
     gs_selection_policies: dict[str, SelectionPolicySpec] = {}
     gs_selection_policy_names: dict[str, str] = {}
     gs_handover_policies: dict[str, HandoverPolicySpec] = {}
+    gs_handover_modes: dict[str, Literal["bbm", "mbb"]] = {}
+    gs_mbb_overlap_ticks: dict[str, int] = {}
+    gs_mbb_reserve: dict[str, int] = {}
     gs_service_priorities: dict[str, int] = {}
     gs_tenant_ids: dict[str, str] = {}
     gs_reference_bodies: dict[str, str] = {}
+    declared_ground_candidates: dict[str, tuple[str, ...]] = {}
     gs_terminal_types: dict[str, str] = {}
     gs_terminal_profiles: dict[str, TerminalPhysicsProfile] = {}
     ground_pair_terminal_types: dict[tuple[str, str], str] = {}
     if gs_file:
-        default_selection_policy = (
-            gs_file.default_selection_policy or ground_scheduling.selection_policy
-        ).model_copy(deep=True)
-        default_handover_policy = _normalize_handover_policy(
-            gs_file.default_handover_policy or ground_scheduling.handover_policy
-        )
         ignored_capacity_fields.extend(
             _future_capacity_field_paths(
                 tuple(gs_file.default_terminals),
@@ -392,14 +452,21 @@ def build_step_context(
         for _i, station in enumerate(gs_file.stations):
             node_id = addressing.gs_id(station.name)
             geo = GeoPosition(station.lat_deg, station.lon_deg, (station.alt_m or 0) / 1000.0)
-            ecef = geodetic_to_ecef(geo)
+            ecef = geodetic_to_ecef(geo, body_frame_for(station.reference_body))
             gs_positions[node_id] = (ecef, geo)
             gs_min_elevations[node_id] = (
                 station.min_elevation_deg
                 if station.min_elevation_deg is not None
                 else gs_file.default_min_elevation_deg
             )
-            gs_terminal_counts[node_id] = station_ground_terminal_capacity(gs_file, station)
+            station_resolution = resolve_station_ground_scheduling(
+                ground_scheduling,
+                gs_file,
+                station,
+                apply_ground_defaults=not ground_defaults_applied,
+            )
+            station_scheduling = station_resolution.scheduling
+            gs_terminal_counts[node_id] = station_resolution.terminal_capacity
             gs_terminal_types[node_id] = station_ground_terminal_type(gs_file, station)
             effective_terminals = station.terminals or gs_file.default_terminals
             if station.terminals is not None:
@@ -415,20 +482,48 @@ def build_step_context(
                 endpoint="ground",
                 require_constraints=require_ground_physics,
             )
-            selection_policy = (station.selection_policy or default_selection_policy).model_copy(
-                deep=True
-            )
-            handover_policy = _normalize_handover_policy(
-                station.handover_policy or default_handover_policy
-            )
+            selection_policy = station_scheduling.selection_policy.model_copy(deep=True)
+            handover_policy = _normalize_handover_policy(station_scheduling.handover_policy)
             gs_selection_policies[node_id] = selection_policy
             gs_selection_policy_names[node_id] = selection_policy.name
             gs_handover_policies[node_id] = handover_policy
+            gs_handover_modes[node_id] = station_scheduling.handover_mode
+            gs_mbb_overlap_ticks[node_id] = (
+                station_scheduling.mbb_overlap_ticks
+                if station_scheduling.handover_mode == "mbb"
+                else 0
+            )
+            gs_mbb_reserve[node_id] = (
+                station_scheduling.mbb_reserve if station_scheduling.handover_mode == "mbb" else 0
+            )
             gs_service_priorities[node_id] = station.service_priority
             gs_tenant_ids[node_id] = station.tenant_id
             gs_reference_bodies[node_id] = station.reference_body
+
+        if ground_candidate_satellites_by_gs is None:
+            raise ValueError(
+                "build_step_context requires a declared ground-link candidate map "
+                "when ground stations exist"
+            )
+        missing = sorted(set(gs_terminal_types) - set(ground_candidate_satellites_by_gs))
+        extra = sorted(set(ground_candidate_satellites_by_gs) - set(gs_terminal_types))
+        if missing or extra:
+            raise ValueError(
+                "Ground candidate map does not match ground station universe: "
+                f"missing={missing}, extra={extra}"
+            )
+        for gs_id in sorted(gs_terminal_types):
+            candidates = tuple(ground_candidate_satellites_by_gs[gs_id])
+            unknown = sorted(set(candidates) - set(sat_ground_terminal_types))
+            if unknown:
+                raise ValueError(
+                    f"Ground station {gs_id} declares unknown access candidate(s): "
+                    f"{', '.join(unknown)}"
+                )
+            declared_ground_candidates[gs_id] = tuple(sorted(candidates))
         for gs_id, gs_type in gs_terminal_types.items():
-            for sat_id, sat_type in sat_ground_terminal_types.items():
+            for sat_id in declared_ground_candidates[gs_id]:
+                sat_type = sat_ground_terminal_types[sat_id]
                 if gs_type != sat_type:
                     raise ValueError(
                         f"Ground terminal type mismatch for {gs_id}<->{sat_id}: "
@@ -457,7 +552,9 @@ def build_step_context(
         gs_selection_policies=gs_selection_policies,
         gs_handover_policies=gs_handover_policies,
         ground_scheduling=ground_scheduling,
-        mbb_reserve=effective_mbb_reserve,
+        gs_handover_modes=gs_handover_modes,
+        gs_mbb_overlap_ticks=gs_mbb_overlap_ticks,
+        gs_mbb_reserve=gs_mbb_reserve,
         ignored_capacity_fields=ignored_capacity_tuple,
     )
 
@@ -472,7 +569,9 @@ def build_step_context(
         gs_handover_policies=gs_handover_policies,
         gs_service_priorities=gs_service_priorities,
         ground_ranking_order=tuple(ground_scheduling.ranking_order),
-        ground_handover_mode=ground_scheduling.handover_mode,
+        gs_handover_modes=gs_handover_modes,
+        gs_mbb_overlap_ticks=gs_mbb_overlap_ticks,
+        gs_mbb_reserve=gs_mbb_reserve,
         ground_mbb_preemption=ground_scheduling.mbb_preemption,
         ground_successor_abort_policy=ground_scheduling.successor_abort_policy,
         ground_cross_tenant_displacement=ground_scheduling.cross_tenant_displacement,
@@ -485,16 +584,18 @@ def build_step_context(
         sat_ground_terminal_indices_by_body=sat_ground_terminal_indices_by_body,
         gs_tenant_ids=gs_tenant_ids,
         gs_reference_bodies=gs_reference_bodies,
+        ground_candidate_satellites_by_gs=declared_ground_candidates,
         ground_pair_terminal_types=ground_pair_terminal_types,
+        node_metadata=node_metadata_map,
         by_node=by_node,
         sat_isl_terminals=sat_isl_terminals,
         sat_isl_terminal_constraints=sat_isl_terminal_constraints,
         sat_ground_terminals=sat_ground_terminals,
         propagator_id=propagator_id,
+        body_ephemeris=body_ephemeris,
+        active_bodies=active_bodies or frozenset({"earth"}),
         polar_seam_enabled=polar_seam_enabled,
         latitude_threshold_deg=latitude_threshold_deg,
-        mbb_overlap_ticks=ground_scheduling.mbb_overlap_ticks,
-        mbb_reserve=effective_mbb_reserve,
         ground_policy_lookahead_horizon_ticks=lookahead_horizon_ticks,
         ground_policy_lookahead_horizon_ticks_by_gs=lookahead_horizon_ticks_by_gs,
     )
@@ -585,12 +686,14 @@ def compute_step(
     sim_time = datetime.fromtimestamp(epoch_unix + dt, tz=UTC)
 
     # 1. Propagate all satellite states using the session-selected engine.
+    body_states = body_states_at(ctx.body_ephemeris, set(ctx.active_bodies), epoch_unix + dt)
     sat_states = propagate_satellites(
         satellites=ctx.satellites,
         addressing=ctx.addressing,
         epoch_unix=epoch_unix,
         dt=dt,
         propagator_id=ctx.propagator_id,
+        body_states=body_states,
     )
 
     # 2. Build positions dict (for LinkStateSnapshot latency) and ClockTick
@@ -605,7 +708,7 @@ def compute_step(
     ]
 
     # 3-4. Evaluate ISL physics and allocate ISL terminals.
-    node_order = [ctx.addressing.sat_id(sat.plane, sat.slot) for sat in ctx.satellites]
+    node_order = [satellite_node_id(sat, ctx.addressing) for sat in ctx.satellites]
     isl_feasibility = evaluate_isl_feasibility(
         node_order=node_order,
         sat_states=sat_states,
@@ -655,6 +758,8 @@ def compute_step(
                 gs_reference_bodies=ctx.gs_reference_bodies,
                 gs_terminal_profiles=ctx.gs_terminal_profiles,
                 sat_ground_terminal_profiles=ctx.sat_ground_terminal_profiles,
+                body_ephemeris=ctx.body_ephemeris,
+                active_bodies=ctx.active_bodies,
             )
             if "longest-remaining-pass" in set(ctx.gs_selection_policy_names.values())
             else None
@@ -662,6 +767,7 @@ def compute_step(
         ground_link_model=ctx.ground_link_model,
         gs_terminal_profiles=ctx.gs_terminal_profiles,
         sat_ground_terminal_profiles=ctx.sat_ground_terminal_profiles,
+        candidate_satellite_ids_by_gs=ctx.ground_candidate_satellites_by_gs,
     )
 
     # 7. Scored, hysteresis-aware ground link allocation.
@@ -681,9 +787,9 @@ def compute_step(
         sat_ground_terminals=ctx.sat_ground_terminals,
         sat_ground_terminal_indices_by_body=ctx.sat_ground_terminal_indices_by_body,
         ranking_order=ctx.ground_ranking_order,
-        handover_mode=ctx.ground_handover_mode,
-        mbb_overlap_ticks=ctx.mbb_overlap_ticks,
-        mbb_reserve=ctx.mbb_reserve,
+        gs_handover_modes=ctx.gs_handover_modes,
+        gs_mbb_overlap_ticks=ctx.gs_mbb_overlap_ticks,
+        gs_mbb_reserve=ctx.gs_mbb_reserve,
         mbb_preemption=ctx.ground_mbb_preemption,
         successor_abort_policy=ctx.ground_successor_abort_policy,
         cross_tenant_displacement=ctx.ground_cross_tenant_displacement,
@@ -808,12 +914,16 @@ def precompute_timeline_window(
     polar_seam_enabled: bool = False,
     latitude_threshold_deg: float = 70.0,
     ground_link_model: Literal["geometry_only", "terminal_physics"] = "terminal_physics",
+    ground_defaults_applied: bool = False,
+    ground_candidate_satellites_by_gs: Mapping[str, tuple[str, ...]] | None = None,
     initial_isl_state: dict[tuple[str, str], tuple[bool, bool]] | None = None,
     initial_gs_state: dict[tuple[str, str], tuple[bool, bool, str]] | None = None,
     initial_associations: dict[tuple[str, str], tuple[int, int]] | None = None,
     initial_pending_teardowns: MbbTeardownState | None = None,
     timestamp_offset: float = 0.0,
     predictive: bool = False,
+    body_ephemeris: SkyfieldBspEphemeris | None = None,
+    active_bodies: frozenset[str] | None = None,
 ) -> TimelineWindowResult:
     """Precompute a single window of the timeline (batch mode).
 
@@ -831,6 +941,10 @@ def precompute_timeline_window(
         polar_seam_enabled=polar_seam_enabled,
         latitude_threshold_deg=latitude_threshold_deg,
         ground_link_model=ground_link_model,
+        ground_defaults_applied=ground_defaults_applied,
+        ground_candidate_satellites_by_gs=ground_candidate_satellites_by_gs,
+        body_ephemeris=body_ephemeris,
+        active_bodies=active_bodies,
     )
     return precompute_timeline_window_from_context(
         ctx,
@@ -859,6 +973,10 @@ def precompute_timeline(
     polar_seam_enabled: bool = False,
     latitude_threshold_deg: float = 70.0,
     ground_link_model: Literal["geometry_only", "terminal_physics"] = "terminal_physics",
+    ground_defaults_applied: bool = False,
+    ground_candidate_satellites_by_gs: Mapping[str, tuple[str, ...]] | None = None,
+    body_ephemeris: SkyfieldBspEphemeris | None = None,
+    active_bodies: frozenset[str] | None = None,
 ) -> list[TimelineEvent]:
     """Single-window convenience wrapper.
 
@@ -877,6 +995,10 @@ def precompute_timeline(
         polar_seam_enabled=polar_seam_enabled,
         latitude_threshold_deg=latitude_threshold_deg,
         ground_link_model=ground_link_model,
+        ground_defaults_applied=ground_defaults_applied,
+        ground_candidate_satellites_by_gs=ground_candidate_satellites_by_gs,
+        body_ephemeris=body_ephemeris,
+        active_bodies=active_bodies,
     )
     return result.events
 

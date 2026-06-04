@@ -12,6 +12,8 @@ import hashlib
 import json
 import logging
 import os
+from collections.abc import Mapping
+from dataclasses import fields, is_dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -19,17 +21,15 @@ from typing import Any
 import kubernetes
 import yaml
 from jinja2 import Environment, FileSystemLoader
-from nodalarc.constellation_loader import (
-    expand_constellation,
-    load_constellation,
-    load_ground_stations,
-)
+from nodalarc.constellation_loader import satellite_node_id
 from nodalarc.ground_terminals import station_ground_terminal_capacity
-from nodalarc.models.addressing import AddressingScheme, assign_isl_neighbors, neighbors_by_node
+from nodalarc.models.addressing import neighbors_by_node
+from nodalarc.models.resolved_session import SourceContext
 from nodalarc.models.session import PlacementConfig, SessionConfig
 from nodalarc.nats_channels import sanitize_session_id
+from nodalarc.resolve_session import resolve_session_with_assets
 from nodalarc.session_identity import require_session_run_id
-from nodalarc.stack_resolver import resolve_stack
+from nodalarc.stack_resolver import resolve_stack, validate_sid_indices
 from nodalarc.template_vars import build_template_vars
 
 log = logging.getLogger(__name__)
@@ -284,7 +284,7 @@ def compute_pod_placement(
         return result
 
     if placement.policy == "planeGroupPerNode":
-        ppg = placement.planes_per_group or max(1, len(available_nodes))
+        ppg = placement.planes_per_group
         result = {}
         for nid, vars in node_vars.items():
             if vars.get("node_type") == "ground_station":
@@ -354,6 +354,7 @@ def _required_substrate_pairs(
     isl_pairs: set[tuple[str, str]],
     pod_placement: dict[str, str],
     node_ips: dict[str, str],
+    ground_candidate_satellites_by_gs: Mapping[str, tuple[str, ...]] | None = None,
 ) -> list[dict[str, Any]]:
     """Collapse possible cross-node links into required directional node pairs."""
     from nodalarc.substrate.measurement_contract import RequiredSubstratePair
@@ -371,14 +372,20 @@ def _required_substrate_pairs(
     for node_a, node_b in isl_pairs:
         _add_reason(node_a, node_b, "isl")
 
-    satellite_ids = sorted(
-        node_id for node_id, spec in nodes.items() if spec["node_type"] == "satellite"
-    )
     ground_ids = sorted(
         node_id for node_id, spec in nodes.items() if spec["node_type"] == "ground_station"
     )
     for gs_id in ground_ids:
-        for sat_id in satellite_ids:
+        candidate_sat_ids = (
+            ground_candidate_satellites_by_gs.get(gs_id, ())
+            if ground_candidate_satellites_by_gs is not None
+            else tuple(
+                node_id for node_id, spec in nodes.items() if spec["node_type"] == "satellite"
+            )
+        )
+        if not candidate_sat_ids:
+            raise ValueError(f"ground station {gs_id!r} has no substrate candidate satellites")
+        for sat_id in sorted(candidate_sat_ids):
             _add_reason(gs_id, sat_id, "ground")
 
     pairs = [
@@ -506,58 +513,28 @@ def ensure_session_configmaps(
             "Label at least one node: kubectl label node <name> nodalarc.io/node-agent=true"
         )
 
-    # --- Step 1: Parse session YAML from the CRD spec ---
-    _progress("Parsing session configuration")
+    # --- Step 1: Resolve segment session YAML from the CRD spec ---
+    _progress("Resolving segment session configuration")
     session_yaml = spec.get("sessionYaml")
     if not session_yaml:
         raise ValueError("spec.sessionYaml is required")
     raw_session = yaml.safe_load(session_yaml)
-    session = SessionConfig.model_validate(raw_session)
+    resolution = resolve_session_with_assets(
+        raw_session,
+        source_context=SourceContext(origin="operator.deploy"),
+    )
+    session = resolution.runtime_session
     if session.session.run_id:
         raise ValueError("session.run_id is operator-managed and must not be set in session YAML")
     if not session_run_id:
         raise ValueError("session_run_id is required to create runtime session ConfigMaps")
     session_id = sanitize_session_id(session_run_id)
 
-    # --- Step 2: Load constellation and ground stations ---
-    _progress("Loading constellation and ground station definitions")
-    # Handle inline constellation dicts: write to ephemeral file, then load
-    constellation_source = session.constellation
-    if isinstance(constellation_source, dict):
-        eph_dir = Path("configs/constellations/_ephemeral")
-        eph_dir.mkdir(parents=True, exist_ok=True)
-        eph_path = eph_dir / f"{session_id}.yaml"
-        eph_path.write_text(yaml.dump(constellation_source, default_flow_style=False))
-        log.debug("Wrote ephemeral constellation: %s", eph_path)
-        constellation_source = str(eph_path)
-    elif session.satellite_type:
-        # Satellite type override on a file-path constellation
-        from nodalarc.session_generator import merge_constellation_with_satellite_type
-
-        merged = merge_constellation_with_satellite_type(
-            constellation_source, session.satellite_type
-        )
-        eph_dir = Path("configs/constellations/_ephemeral")
-        eph_dir.mkdir(parents=True, exist_ok=True)
-        eph_path = eph_dir / f"{session_id}.yaml"
-        eph_path.write_text(yaml.dump(merged, default_flow_style=False))
-        log.debug("Wrote ephemeral constellation (satellite_type override): %s", eph_path)
-        constellation_source = str(eph_path)
-
-    constellation = load_constellation(constellation_source)
-
-    # Handle inline ground station dicts
-    gs_source = session.ground_stations
-    if isinstance(gs_source, dict):
-        eph_dir = Path("configs/ground-stations/_ephemeral")
-        eph_dir.mkdir(parents=True, exist_ok=True)
-        eph_path = eph_dir / f"{session_id}.yaml"
-        eph_path.write_text(yaml.dump(gs_source, default_flow_style=False))
-        log.debug("Wrote ephemeral ground stations: %s", eph_path)
-        gs_source = str(eph_path)
-
-    gs_file = load_ground_stations(gs_source)
-    satellites = expand_constellation(constellation)
+    # --- Step 2: Use resolver-owned constellation and ground assets ---
+    _progress("Using resolved constellation and ground station definitions")
+    constellation = resolution.runtime_constellation
+    gs_file = resolution.primary_ground_set.config
+    satellites = list(resolution.satellites)
     num_planes = max((s.plane for s in satellites), default=0) + 1
     _progress(
         f"Expanded {len(satellites)} satellites across {num_planes} planes, {len(gs_file.stations)} ground stations"
@@ -565,8 +542,8 @@ def ensure_session_configmaps(
     if not satellites:
         raise ValueError("No satellites in constellation")
 
-    addressing = AddressingScheme(session.addressing)
-    assign_isl_neighbors(constellation, addressing)
+    addressing = resolution.addressing
+    neighbors = resolution.neighbors
 
     # --- Step 3: Resolve routing stack ---
     _progress(f"Resolving routing stack: {session.routing.protocol}")
@@ -576,6 +553,8 @@ def ensure_session_configmaps(
     )
     config_overrides = dict(resolved.template_variables)
     config_overrides.update(session.routing.config_overrides)
+    sid_by_node = resolution.resolved.sid_index_by_node_id()
+    validate_sid_indices(resolved, sid_by_node)
 
     # --- Step 3b: Validate session readiness ---
     _progress("Validating session readiness")
@@ -588,6 +567,7 @@ def ensure_session_configmaps(
         gs_file,
         resolved,
         available_node_count=len(available_nodes),
+        sid_indices_by_node=sid_by_node,
     )
     val_errors = [r for r in validation_results if r.level == "error"]
     val_warnings = [r for r in validation_results if r.level == "warning"]
@@ -606,7 +586,7 @@ def ensure_session_configmaps(
     _progress(f"Building template variables for {total_nodes} nodes")
     node_vars: dict[str, dict] = {}
     for sat in satellites:
-        node_id = addressing.sat_id(sat.plane, sat.slot)
+        node_id = satellite_node_id(sat, addressing)
         node_vars[node_id] = build_template_vars(
             session=session,
             constellation=constellation,
@@ -615,7 +595,11 @@ def ensure_session_configmaps(
             node_type="satellite",
             plane=sat.plane,
             slot=sat.slot,
+            sat_node_id=node_id,
+            sat_ground_terminal_count=sat.ground_terminal_count,
             config_overrides=config_overrides,
+            neighbors=neighbors,
+            node_sid_index=sid_by_node[node_id],
         )
     for i, station in enumerate(gs_file.stations):
         node_id = addressing.gs_id(station.name)
@@ -628,6 +612,8 @@ def ensure_session_configmaps(
             gs_name=station.name,
             gs_index=i,
             config_overrides=config_overrides,
+            neighbors=neighbors,
+            node_sid_index=sid_by_node[node_id],
         )
 
     # --- Step 5: Render FRR configs (parallelized) ---
@@ -698,8 +684,6 @@ def ensure_session_configmaps(
         v1,
         session,
         session_yaml,
-        constellation_source if isinstance(constellation_source, str) else None,
-        gs_source if isinstance(gs_source, str) else None,
         namespace,
         owner_ref,
         session_run_id,
@@ -926,9 +910,13 @@ def write_wiring_manifest(
         derive_wiring_generation,
     )
 
-    # Parse session from CRD spec
+    # Resolve session from CRD spec
     session_yaml = spec.get("sessionYaml", "")
-    session = SessionConfig.model_validate(yaml.safe_load(session_yaml))
+    resolution = resolve_session_with_assets(
+        yaml.safe_load(session_yaml),
+        source_context=SourceContext(origin="operator.wiring_manifest"),
+    )
+    session = resolution.runtime_session
     if session.session.run_id:
         raise ValueError("session.run_id is operator-managed and must not be set in session YAML")
     if not session_run_id:
@@ -945,28 +933,16 @@ def write_wiring_manifest(
     except kubernetes.client.rest.ApiException as e:
         if e.status != 404:
             raise
-    constellation = load_constellation(session.constellation)
-    gs_file = load_ground_stations(session.ground_stations)
-    satellites = expand_constellation(constellation)
-    addressing = AddressingScheme(session.addressing)
-    neighbors = assign_isl_neighbors(constellation, addressing)
+    gs_file = resolution.primary_ground_set.config
+    satellites = list(resolution.satellites)
+    addressing = resolution.addressing
+    neighbors = resolution.neighbors
     by_node = neighbors_by_node(neighbors)
 
     resolved = resolve_stack(session.routing.protocol, session.routing.extensions)
     segment_routing = resolved.segment_routing
     mpls_enable = any(name.startswith("net.mpls.") for name in resolved.sysctls)
-
-    # Validate stack × constellation constraints before building manifest
-    from nodalarc.stack_resolver import validate_constellation_constraints
-
-    num_planes = max((s.plane for s in satellites), default=0) + 1
-    max_slot = max((s.slot for s in satellites), default=0)
-    validate_constellation_constraints(
-        resolved,
-        num_planes=num_planes,
-        max_slots_per_plane=max_slot,
-        num_ground_stations=len(gs_file.stations),
-    )
+    validate_sid_indices(resolved, resolution.resolved.sid_index_by_node_id())
 
     # Platform-level sysctls (protocol-agnostic) merged with stack-provided sysctls.
     # The deployer never interprets stack fields to derive sysctls.
@@ -984,7 +960,7 @@ def write_wiring_manifest(
 
     # Satellites
     for sat in satellites:
-        node_id = addressing.sat_id(sat.plane, sat.slot)
+        node_id = satellite_node_id(sat, addressing)
         node_assignments = by_node.get(node_id, [])
         isl_interfaces = []
         for na in node_assignments:
@@ -1002,6 +978,9 @@ def write_wiring_manifest(
                 if pa.peer_node_id == node_id:
                     iface["peer_iface"] = pa.interface
                     break
+        isl_interfaces.sort(
+            key=lambda iface: (iface["name"], iface["peer_node"], iface["peer_iface"])
+        )
 
         nodes[node_id] = {
             "node_type": "satellite",
@@ -1072,6 +1051,7 @@ def write_wiring_manifest(
         isl_pairs=isl_pairs,
         pod_placement=pod_placement,
         node_ips=node_ips,
+        ground_candidate_satellites_by_gs=resolution.ground_candidate_satellites_by_gs,
     )
     _delete_stale_substrate_status_configmaps(v1, namespace)
 
@@ -1520,35 +1500,89 @@ def check_wiring_complete(namespace: str, expected_count: int) -> tuple[bool, in
     return ready_count == expected_count, ready_count, None
 
 
+def _canonical_hash_value(value: Any) -> Any:
+    """Convert resolved runtime objects into deterministic JSON primitives."""
+    if hasattr(value, "model_dump"):
+        return _canonical_hash_value(value.model_dump(mode="json"))
+    if is_dataclass(value) and not isinstance(value, type):
+        return {
+            field.name: _canonical_hash_value(getattr(value, field.name)) for field in fields(value)
+        }
+    if hasattr(value, "_asdict"):
+        return {str(k): _canonical_hash_value(v) for k, v in value._asdict().items()}
+    if isinstance(value, Mapping):
+        return {str(k): _canonical_hash_value(v) for k, v in sorted(value.items())}
+    if isinstance(value, set | frozenset):
+        items = [_canonical_hash_value(v) for v in value]
+        return sorted(
+            items, key=lambda item: json.dumps(item, sort_keys=True, separators=(",", ":"))
+        )
+    if isinstance(value, tuple | list):
+        return [_canonical_hash_value(v) for v in value]
+    return value
+
+
+def _canonical_satellite_for_hash(sat: Any) -> dict[str, Any]:
+    return {
+        "plane": sat.plane,
+        "slot": sat.slot,
+        "elements": _canonical_hash_value(sat.elements),
+        "isl_terminal_count": sat.isl_terminal_count,
+        "ground_terminal_count": sat.ground_terminal_count,
+        "isl_terminals": _canonical_hash_value(sat.isl_terminals),
+        "ground_terminals": _canonical_hash_value(sat.ground_terminals),
+        "tle_line_1": sat.tle_line_1,
+        "tle_line_2": sat.tle_line_2,
+        "norad_id": sat.norad_id,
+    }
+
+
 def compute_platform_hash(spec: dict) -> str:
-    """Hash platform-impacting fields for service restart detection.
+    """Hash resolved runtime truth for service restart detection.
 
-    The CR spec carries sessionYaml as a string. This function parses it
-    and hashes the fields that affect platform services: session identity
-    (name → session_id → NATS subjects), constellation, ground stations,
-    routing protocol, and time config. Changes to non-platform fields
-    (placement policy, MI settings) do not trigger restarts.
+    OME, Scheduler, and NodalPath currently load session truth at startup. Any
+    user-authored YAML field or referenced catalog asset that can affect runtime
+    computation must therefore change this hash and trigger a platform-pod
+    restart. Hashing the raw segment YAML is insufficient because a session can
+    reference constellation, TLE, satellite-type, and ground-station files whose
+    contents can change while the reference string stays fixed.
 
-    restart_platform_pods uses this hash as a Deployment annotation.
-    A changed hash triggers a rolling restart so OME/Scheduler pick up
-    the new session configuration and publish to the correct NATS subjects.
+    The only excluded fields are operator-owned runtime lineage/context
+    (``session.run_id`` and ``source_context``). Everything else comes from the
+    resolver-owned runtime model and resolved assets.
+
+    restart_platform_pods uses this hash as a Deployment annotation. A changed
+    hash triggers a rolling restart so OME/Scheduler pick up the new session
+    configuration and publish to the correct NATS subjects.
 
     Returns a hex digest string (SHA-256).
     """
     session_yaml = spec.get("sessionYaml", "")
     if not session_yaml:
         return hashlib.sha256(b"").hexdigest()
-    try:
-        parsed = yaml.safe_load(session_yaml)
-        platform_fields = {}
-        for key in ("session", "constellation", "ground_stations", "routing", "time"):
-            if key in parsed:
-                platform_fields[key] = parsed[key]
-        canonical = yaml.dump(platform_fields, default_flow_style=False, sort_keys=True)
-        return hashlib.sha256(canonical.encode()).hexdigest()
-    except Exception as exc:
-        log.warning("Platform hash YAML parse failed, falling back to raw hash: %s", exc)
-        return hashlib.sha256(session_yaml.encode()).hexdigest()
+    parsed = yaml.safe_load(session_yaml)
+    if not isinstance(parsed, dict):
+        raise ValueError("spec.sessionYaml must parse to a mapping for platform hashing")
+    resolution = resolve_session_with_assets(
+        parsed,
+        source_context=SourceContext(origin="operator.platform_hash"),
+    )
+    canonical_obj = {
+        "resolved": resolution.resolved.model_dump(
+            mode="json",
+            exclude={"session": {"run_id"}, "source_context": True},
+        ),
+        "runtime_constellation": _canonical_hash_value(resolution.runtime_constellation),
+        "constellations": [
+            _canonical_hash_value(asset.config) for asset in resolution.constellations
+        ],
+        "primary_ground_set": _canonical_hash_value(resolution.primary_ground_set.config),
+        "satellites": [_canonical_satellite_for_hash(sat) for sat in resolution.satellites],
+        "declared_candidates": _canonical_hash_value(resolution.declared_candidates),
+        "neighbors": _canonical_hash_value(resolution.neighbors),
+    }
+    canonical = json.dumps(canonical_obj, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode()).hexdigest()
 
 
 def compute_runtime_hash(platform_hash: str, session_run_id: str) -> str:
@@ -1573,16 +1607,65 @@ def compute_expected_pod_count(spec: dict) -> int:
     session_yaml = spec.get("sessionYaml")
     if not session_yaml:
         raise ValueError("spec.sessionYaml is missing")
-    session = SessionConfig.model_validate(yaml.safe_load(session_yaml))
-    constellation = load_constellation(session.constellation)
-    gs_file = load_ground_stations(session.ground_stations)
-    satellites = expand_constellation(constellation)
-    count = len(satellites) + len(gs_file.stations)
+    resolution = resolve_session_with_assets(
+        yaml.safe_load(session_yaml),
+        source_context=SourceContext(origin="operator.expected_pod_count"),
+    )
+    count = len(resolution.resolved.nodes)
     if count == 0:
         raise ValueError(
             "Session expands to 0 nodes — check constellation and ground station configs"
         )
     return count
+
+
+def _placement_node_vars_from_resolution(resolution: Any) -> dict[str, dict]:
+    """Build placement inputs from the same resolved assets used for pod creation."""
+
+    addressing = resolution.addressing
+    node_vars: dict[str, dict] = {}
+    for sat in resolution.satellites:
+        node_id = satellite_node_id(sat, addressing)
+        node_vars[node_id] = {
+            "node_type": "satellite",
+            "plane": sat.plane,
+            "slot": sat.slot,
+        }
+    ground_stations = resolution.primary_ground_set.config
+    for index, station in enumerate(ground_stations.stations):
+        node_vars[addressing.gs_id(station.name)] = {
+            "node_type": "ground_station",
+            "gs_name": station.name,
+            "gs_index": index,
+        }
+    return node_vars
+
+
+def compute_expected_placement_node_count(spec: dict, available_nodes: list[str]) -> int:
+    """Compute how many Kubernetes nodes the active placement policy should use.
+
+    This is the pure equivalent of the operator deployment path's placement step.
+    It intentionally uses ``resolution.satellites`` rather than the primary
+    constellation, so multi-segment sessions include relay/space segments in the
+    expected placement distribution.
+    """
+
+    session_yaml = spec.get("sessionYaml")
+    if not session_yaml:
+        raise ValueError("spec.sessionYaml is missing")
+    resolution = resolve_session_with_assets(
+        yaml.safe_load(session_yaml),
+        source_context=SourceContext(origin="operator.expected_placement"),
+    )
+    node_vars = _placement_node_vars_from_resolution(resolution)
+    if not node_vars:
+        raise ValueError("Session expands to 0 nodes — cannot compute placement")
+    placement = compute_pod_placement(
+        resolution.runtime_session.placement,
+        node_vars,
+        available_nodes,
+    )
+    return len(set(placement.values()))
 
 
 def check_pods_ready_condition(namespace: str) -> tuple[int, int]:
@@ -1782,22 +1865,19 @@ def _create_session_configmaps(
     v1: kubernetes.client.CoreV1Api,
     session: SessionConfig,
     session_yaml: str,
-    constellation_path: str | None,
-    gs_path: str | None,
     namespace: str,
     owner_ref: dict,
     session_run_id: str,
 ) -> None:
-    """Create session-level ConfigMaps (session, constellation, ground-stations)."""
-    # Session YAML — rewrite paths for container mounts
+    """Create session-level ConfigMaps with segment session YAML."""
     raw = yaml.safe_load(session_yaml)
     raw.setdefault("session", {})
     raw["session"]["run_id"] = session_run_id
-    raw["constellation"] = "/etc/nodalarc/constellation.yaml"
-    if isinstance(raw.get("ground_stations"), str):
-        raw["ground_stations"] = "/etc/nodalarc/ground-stations.yaml"
-    runtime_session = SessionConfig.model_validate(raw)
-    runtime_run_id = require_session_run_id(runtime_session)
+    runtime_resolution = resolve_session_with_assets(
+        raw,
+        source_context=SourceContext(origin="operator.session_configmap"),
+    )
+    runtime_run_id = require_session_run_id(runtime_resolution.runtime_session)
     _create_or_update_configmap(
         v1,
         "nodalarc-session",
@@ -1809,32 +1889,7 @@ def _create_session_configmaps(
         },
         owner_ref,
     )
-
-    # Constellation YAML ConfigMap
-    if constellation_path:
-        const_p = Path(constellation_path)
-        if const_p.exists():
-            _create_or_update_configmap(
-                v1,
-                "nodalarc-constellation",
-                namespace,
-                {"constellation.yaml": const_p.read_text()},
-                owner_ref,
-            )
-
-    # Ground stations ConfigMap
-    if gs_path:
-        gs_p = Path(gs_path)
-        if gs_p.exists():
-            _create_or_update_configmap(
-                v1,
-                "nodalarc-ground-stations",
-                namespace,
-                {"ground-stations.yaml": gs_p.read_text()},
-                owner_ref,
-            )
-
-    log.debug("Created session-level ConfigMaps")
+    log.debug("Created session-level ConfigMap")
 
 
 def _build_sidecar_config(resolved) -> dict | None:
@@ -1972,7 +2027,7 @@ def _create_session_pod(
             name="var-log",
             empty_dir=kubernetes.client.V1EmptyDirVolumeSource(medium="Memory"),
         ),
-        # Forward-compatible mounts for SSH terminal (Phase 1)
+        # Forward-compatible mounts for interactive SSH terminal support.
         kubernetes.client.V1Volume(
             name="ssh-config",
             empty_dir=kubernetes.client.V1EmptyDirVolumeSource(medium="Memory"),

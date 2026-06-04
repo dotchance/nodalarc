@@ -12,10 +12,10 @@ interface lo
 {% endif %}
 exit
 
-{% for iface in isl_interfaces %}
-interface {{ iface }}
+{% for iface_name, info in interface_info.items() %}
+interface {{ iface_name }}
  ip address {{ ipv4_loopback }}/32
-{% if protocol == "isis" %}
+{% if protocol == "isis" and not info.static_only | default(false) %}
  ip router isis NODAL
 {% endif %}
 {% if protocol != "static" %}

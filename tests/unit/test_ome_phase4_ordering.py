@@ -13,6 +13,7 @@ from pathlib import Path
 import ome.event_stream as ome_event_stream
 import ome.main as ome_main
 import pytest
+import yaml
 from nodalarc.models.events import (
     ClockTick,
     OpsEvent,
@@ -40,6 +41,8 @@ from ome.ground_allocator import GroundAllocationResult
 from ome.main import _load_session_config, _run_pacing
 from ome.snapshot_builder import LinkSnapshotSource
 from ome.types import GroundVisibilityDecision, MbbTeardownLifecycleEvent
+
+from tests.conftest import build_segment_session_dict
 
 
 @pytest.fixture(autouse=True)
@@ -116,11 +119,14 @@ def _policy_audit() -> GroundPolicyAudit:
         handover_policy_params={"gs-fixed": {"discount_factor": 1.15, "mask_fade_range_deg": 5.0}},
         ranking_order=("service_priority", "selection_score", "lex_pair"),
         handover_mode="bbm",
+        handover_modes={"gs-fixed": "bbm"},
         mbb_preemption="off",
         successor_abort_policy="hard_release",
         cross_tenant_displacement="off",
         mbb_overlap_ticks=3,
+        mbb_overlap_ticks_by_gs={"gs-fixed": 3},
         mbb_reserve=0,
+        mbb_reserve_by_gs={"gs-fixed": 0},
         bbm_acquire_timeout_ticks=1,
         ignored_capacity_fields=(),
     )
@@ -193,6 +199,23 @@ def _fixed_step_result(
     )
 
 
+def _demo_phase4_session_path(tmp_path: Path) -> Path:
+    session_path = tmp_path / "earth-leo-simple.yaml"
+    session_path.write_text(
+        yaml.dump(
+            build_segment_session_dict(
+                name="earth-leo-simple",
+                constellation="configs/constellations/demo-36.yaml",
+                ground_stations="configs/ground-stations/sets/demo.yaml",
+                protocol="ospf",
+                orbit_propagator="j2-mean-elements",
+            ),
+            sort_keys=False,
+        )
+    )
+    return session_path
+
+
 def _phase4_cfg(session_path: Path, run_id: str):
     cfg = _load_session_config(str(session_path))
     session = cfg.session.model_copy(
@@ -210,10 +233,8 @@ def _reset_playback_globals() -> None:
     ome_main._initial_epoch_committed = False
 
 
-def test_initial_epoch_publishes_step0_snapshot_before_playing_and_clock(monkeypatch):
-    session_path = Path("configs/sessions/demo-36-ospf.yaml")
-    if not session_path.exists():
-        pytest.skip("demo-36-ospf.yaml not available")
+def test_initial_epoch_publishes_step0_snapshot_before_playing_and_clock(monkeypatch, tmp_path):
+    session_path = _demo_phase4_session_path(tmp_path)
 
     import nats
 
@@ -276,10 +297,8 @@ def test_initial_epoch_publishes_step0_snapshot_before_playing_and_clock(monkeyp
     assert playback.state == "playing"
 
 
-def test_seek_abandons_inflight_old_tick_and_commits_step0_snapshot(monkeypatch):
-    session_path = Path("configs/sessions/demo-36-ospf.yaml")
-    if not session_path.exists():
-        pytest.skip("demo-36-ospf.yaml not available")
+def test_seek_abandons_inflight_old_tick_and_commits_step0_snapshot(monkeypatch, tmp_path):
+    session_path = _demo_phase4_session_path(tmp_path)
 
     import nats
 
@@ -382,10 +401,8 @@ def test_seek_abandons_inflight_old_tick_and_commits_step0_snapshot(monkeypatch)
     assert playback.state == "playing"
 
 
-def test_initial_epoch_ordering_oracle_uses_fixed_step_result(monkeypatch):
-    session_path = Path("configs/sessions/demo-36-ospf.yaml")
-    if not session_path.exists():
-        pytest.skip("demo-36-ospf.yaml not available")
+def test_initial_epoch_ordering_oracle_uses_fixed_step_result(monkeypatch, tmp_path):
+    session_path = _demo_phase4_session_path(tmp_path)
 
     import nats
 
@@ -456,10 +473,8 @@ def test_initial_epoch_ordering_oracle_uses_fixed_step_result(monkeypatch):
     assert playback.state == "playing"
 
 
-def test_initial_epoch_lifecycle_event_uses_ops_enqueue_after_snapshot(monkeypatch):
-    session_path = Path("configs/sessions/demo-36-ospf.yaml")
-    if not session_path.exists():
-        pytest.skip("demo-36-ospf.yaml not available")
+def test_initial_epoch_lifecycle_event_uses_ops_enqueue_after_snapshot(monkeypatch, tmp_path):
+    session_path = _demo_phase4_session_path(tmp_path)
 
     import nats
 
@@ -536,10 +551,10 @@ def test_initial_epoch_lifecycle_event_uses_ops_enqueue_after_snapshot(monkeypat
     assert event.details["authority_before"]["old_pair"]["pending_teardown"] is True
 
 
-def test_seek_step0_compute_failure_logs_epoch_and_target_without_new_snapshot(monkeypatch, caplog):
-    session_path = Path("configs/sessions/demo-36-ospf.yaml")
-    if not session_path.exists():
-        pytest.skip("demo-36-ospf.yaml not available")
+def test_seek_step0_compute_failure_logs_epoch_and_target_without_new_snapshot(
+    monkeypatch, caplog, tmp_path
+):
+    session_path = _demo_phase4_session_path(tmp_path)
 
     import nats
 

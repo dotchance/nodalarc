@@ -45,6 +45,7 @@ COPY services/ome/ services/ome/
 COPY configs/satellite-types/ configs/satellite-types/
 COPY configs/ground-stations/ configs/ground-stations/
 COPY configs/constellations/ configs/constellations/
+COPY configs/ephemerides/ configs/ephemerides/
 
 # Health probe port
 EXPOSE 8081

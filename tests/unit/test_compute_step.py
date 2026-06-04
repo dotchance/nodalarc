@@ -5,14 +5,9 @@
 from __future__ import annotations
 
 import pytest
-from nodalarc.constellation_loader import (
-    expand_constellation,
-    load_constellation,
-    load_ground_stations,
-)
-from nodalarc.models.addressing import AddressingScheme, assign_isl_neighbors
+from nodalarc.models.addressing import assign_isl_neighbors
 from nodalarc.models.ground_policy import SelectionPolicySpec
-from nodalarc.models.session import GroundSchedulingConfig, SessionConfig
+from nodalarc.models.session import GroundSchedulingConfig
 from ome.event_stream import (
     build_step_context,
     compute_step,
@@ -25,22 +20,30 @@ def _load_test_session():
     """Load a small test constellation for step comparison."""
     from pathlib import Path
 
-    import yaml
-
-    session_path = Path("configs/sessions/demo-36-ospf.yaml")
+    session_path = Path("configs/sessions/earth-leo-simple.yaml")
     if not session_path.exists():
         import pytest
 
-        pytest.skip("demo-36-ospf.yaml not available")
+        pytest.skip("earth-leo-simple.yaml not available")
 
-    data = yaml.safe_load(session_path.read_text())
-    session = SessionConfig.model_validate(data)
-    constellation_config = load_constellation(session.constellation)
-    gs_file = load_ground_stations(session.ground_stations)
-    satellites = expand_constellation(constellation_config)
-    addressing = AddressingScheme(session.addressing)
+    from nodalarc.resolve_session import load_session_resolution_from_file
+
+    resolution = load_session_resolution_from_file(session_path, origin="test.compute_step")
+    session = resolution.runtime_session
+    constellation_config = resolution.primary_constellation.config
+    gs_file = resolution.primary_ground_set.config
+    satellites = list(resolution.primary_constellation.satellites)
+    addressing = resolution.addressing
     neighbors = assign_isl_neighbors(constellation_config, addressing)
-    return session, constellation_config, gs_file, satellites, addressing, neighbors
+    return (
+        session,
+        constellation_config,
+        gs_file,
+        satellites,
+        addressing,
+        neighbors,
+        dict(resolution.ground_candidate_satellites_by_gs),
+    )
 
 
 class TestComputeStepMatchesWindow:
@@ -48,7 +51,7 @@ class TestComputeStepMatchesWindow:
     precompute_timeline_window(duration_s=N*step_seconds)."""
 
     def test_first_10_steps_match_window_prefix(self):
-        session, cc, gs_file, sats, addressing, neighbors = _load_test_session()
+        session, cc, gs_file, sats, addressing, neighbors, ground_candidates = _load_test_session()
         epoch_unix = 1704067200.0  # Fixed epoch for determinism
         n_steps = 10
         step_seconds = session.time.step_seconds
@@ -63,6 +66,7 @@ class TestComputeStepMatchesWindow:
             duration_s=n_steps * step_seconds,
             propagator_id=session.orbit.propagator,
             ground_scheduling=session.scheduling.ground,
+            ground_candidate_satellites_by_gs=ground_candidates,
             step_seconds=step_seconds,
         )
         window_events = window.events
@@ -75,6 +79,7 @@ class TestComputeStepMatchesWindow:
             neighbors=neighbors,
             propagator_id=session.orbit.propagator,
             ground_scheduling=session.scheduling.ground,
+            ground_candidate_satellites_by_gs=ground_candidates,
         )
         isl_state: dict = {}
         gs_state: dict = {}
@@ -103,7 +108,7 @@ class TestComputeStepMatchesWindow:
 
     def test_isl_state_continuity(self):
         """isl_state after N per-step calls matches window's returned isl_state."""
-        session, cc, gs_file, sats, addressing, neighbors = _load_test_session()
+        session, cc, gs_file, sats, addressing, neighbors, ground_candidates = _load_test_session()
         epoch_unix = 1704067200.0
         n_steps = 10
         step_seconds = session.time.step_seconds
@@ -117,6 +122,7 @@ class TestComputeStepMatchesWindow:
             duration_s=n_steps * step_seconds,
             propagator_id=session.orbit.propagator,
             ground_scheduling=session.scheduling.ground,
+            ground_candidate_satellites_by_gs=ground_candidates,
             step_seconds=step_seconds,
         )
 
@@ -127,6 +133,7 @@ class TestComputeStepMatchesWindow:
             neighbors=neighbors,
             propagator_id=session.orbit.propagator,
             ground_scheduling=session.scheduling.ground,
+            ground_candidate_satellites_by_gs=ground_candidates,
         )
         isl_state: dict = {}
         gs_state: dict = {}
@@ -137,8 +144,14 @@ class TestComputeStepMatchesWindow:
         assert gs_state == window.gs_state
 
     def test_context_precompute_uses_exact_context_configuration(self):
-        """Context-based precompute shares live OME scheduling parameters."""
-        session, cc, gs_file, sats, addressing, neighbors = _load_test_session()
+        """Context precompute resolves ground-source handover defaults.
+
+        The base scheduling object is only the session/segment default. The
+        demo ground set is MBB-capable and declares MBB as its own default, so
+        the effective per-station context must be MBB even if the caller's base
+        object is BBM.
+        """
+        session, cc, gs_file, sats, addressing, neighbors, ground_candidates = _load_test_session()
         epoch_unix = 1704067200.0
         step_seconds = session.time.step_seconds
 
@@ -154,6 +167,7 @@ class TestComputeStepMatchesWindow:
                 mbb_reserve=0,
             ),
             propagator_id="j2-mean-elements",
+            ground_candidate_satellites_by_gs=ground_candidates,
         )
 
         window = precompute_timeline_window_from_context(
@@ -165,13 +179,14 @@ class TestComputeStepMatchesWindow:
         )
 
         assert window.predictive is True
-        assert ctx.mbb_overlap_ticks == 7
-        assert ctx.mbb_reserve == 0
+        assert set(ctx.gs_handover_modes.values()) == {"mbb"}
+        assert set(ctx.gs_mbb_overlap_ticks.values()) == {3}
+        assert set(ctx.gs_mbb_reserve.values()) == {1}
         assert ctx.propagator_id == "j2-mean-elements"
         assert len(window.events) > 0
 
     def test_selection_score_ranking_rejects_incompatible_policy_scales(self):
-        session, cc, gs_file, sats, addressing, neighbors = _load_test_session()
+        session, cc, gs_file, sats, addressing, neighbors, ground_candidates = _load_test_session()
         if len(gs_file.stations) < 2:
             pytest.skip("test requires at least two ground stations")
 
@@ -192,11 +207,12 @@ class TestComputeStepMatchesWindow:
                     ranking_order=["selection_score", "lex_pair"],
                 ),
                 propagator_id=session.orbit.propagator,
+                ground_candidate_satellites_by_gs=ground_candidates,
             )
 
     def test_visibility_transitions_only_on_state_change(self):
         """VisibilityEvents are emitted only when state changes, not every step."""
-        session, cc, gs_file, sats, addressing, neighbors = _load_test_session()
+        session, cc, gs_file, sats, addressing, neighbors, ground_candidates = _load_test_session()
         epoch_unix = 1704067200.0
         step_seconds = session.time.step_seconds
 
@@ -207,6 +223,7 @@ class TestComputeStepMatchesWindow:
             neighbors=neighbors,
             propagator_id=session.orbit.propagator,
             ground_scheduling=session.scheduling.ground,
+            ground_candidate_satellites_by_gs=ground_candidates,
         )
         isl_state: dict = {}
         gs_state: dict = {}
@@ -232,7 +249,7 @@ class TestComputeStepMatchesWindow:
 
     def test_positions_returned_alongside_events(self):
         """compute_step() returns positions dict alongside events."""
-        session, cc, gs_file, sats, addressing, neighbors = _load_test_session()
+        session, cc, gs_file, sats, addressing, neighbors, ground_candidates = _load_test_session()
         epoch_unix = 1704067200.0
         step_seconds = session.time.step_seconds
 
@@ -243,6 +260,7 @@ class TestComputeStepMatchesWindow:
             neighbors=neighbors,
             propagator_id=session.orbit.propagator,
             ground_scheduling=session.scheduling.ground,
+            ground_candidate_satellites_by_gs=ground_candidates,
         )
         isl_state: dict = {}
         gs_state: dict = {}
@@ -252,8 +270,8 @@ class TestComputeStepMatchesWindow:
         assert isinstance(positions, dict)
         assert len(positions) > 0
         # Positions should include both satellites and ground stations
-        sat_count = sum(1 for k in positions if k.startswith("sat-"))
-        gs_count = sum(1 for k in positions if k.startswith("gs-"))
+        sat_count = sum(1 for k in positions if k.startswith("space-sat-"))
+        gs_count = sum(1 for k in positions if k.startswith("ground-gs-"))
         assert sat_count > 0
         assert gs_count >= 0  # May be 0 if no GS configured
 
@@ -266,7 +284,7 @@ class TestComputeStepMatchesWindow:
         empty; the committed StepResult source must still contain the current
         visible pairs and allocation state.
         """
-        session, cc, gs_file, sats, addressing, neighbors = _load_test_session()
+        session, cc, gs_file, sats, addressing, neighbors, ground_candidates = _load_test_session()
         epoch_unix = 1704067200.0
         step_seconds = session.time.step_seconds
 
@@ -277,6 +295,7 @@ class TestComputeStepMatchesWindow:
             neighbors=neighbors,
             propagator_id=session.orbit.propagator,
             ground_scheduling=session.scheduling.ground,
+            ground_candidate_satellites_by_gs=ground_candidates,
         )
         isl_state: dict = {}
         gs_state: dict = {}
@@ -321,7 +340,7 @@ class TestComputeStepMatchesWindow:
         pending teardowns. This keeps snapshot size proportional to actual link
         candidates rather than the full ground-station by satellite product.
         """
-        session, cc, gs_file, sats, addressing, neighbors = _load_test_session()
+        session, cc, gs_file, sats, addressing, neighbors, ground_candidates = _load_test_session()
         epoch_unix = 1704067200.0
         step_seconds = session.time.step_seconds
 
@@ -332,6 +351,7 @@ class TestComputeStepMatchesWindow:
             neighbors=neighbors,
             propagator_id=session.orbit.propagator,
             ground_scheduling=session.scheduling.ground,
+            ground_candidate_satellites_by_gs=ground_candidates,
         )
 
         result = compute_step(ctx, epoch_unix, 0, step_seconds, 0.0, {}, {})
@@ -360,7 +380,7 @@ class TestComputeStepMatchesWindow:
         unscheduled reason. Scheduled/teardown pairs must be represented in the
         allocation state, not hidden in a missing-reason gap.
         """
-        session, cc, gs_file, sats, addressing, neighbors = _load_test_session()
+        session, cc, gs_file, sats, addressing, neighbors, ground_candidates = _load_test_session()
         epoch_unix = 1704067200.0
         step_seconds = session.time.step_seconds
 
@@ -371,6 +391,7 @@ class TestComputeStepMatchesWindow:
             neighbors=neighbors,
             propagator_id=session.orbit.propagator,
             ground_scheduling=session.scheduling.ground,
+            ground_candidate_satellites_by_gs=ground_candidates,
         )
         result = compute_step(ctx, epoch_unix, 0, step_seconds, 0.0, {}, {})
         allocation = result.ground_allocation

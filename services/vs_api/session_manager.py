@@ -22,8 +22,9 @@ from pathlib import Path
 
 import yaml
 from nodalarc.catalog_paths import CatalogPathError
-from nodalarc.models.session import SessionConfig
+from nodalarc.models.resolved_session import SourceContext
 from nodalarc.platform_config import get_platform_config
+from nodalarc.resolve_session import resolve_session_with_assets
 
 log = logging.getLogger(__name__)
 
@@ -93,7 +94,7 @@ class SessionManager:
             self._status_detail = value
 
     def scan_sessions(self) -> list[dict]:
-        """Read each YAML in sessions_dir, parse with SessionConfig, return metadata."""
+        """Read each segment YAML in sessions_dir, resolve it, return metadata."""
         results = []
         if not self._sessions_dir.is_dir():
             log.warning(f"Sessions directory not found: {self._sessions_dir}")
@@ -113,20 +114,20 @@ class SessionManager:
 
             try:
                 raw = yaml.safe_load(resolved_path.read_text())
-                session = SessionConfig.model_validate(raw)
-                if session.routing.stack is not None:
-                    routing_label = Path(session.routing.stack).name
-                else:
-                    ext_str = (
-                        "-".join(session.routing.extensions)
-                        if session.routing.extensions
-                        else "plain"
-                    )
-                    routing_label = f"{session.routing.protocol}-{ext_str}"
-                if isinstance(session.constellation, dict):
-                    const_label = session.constellation.get("name", "custom")
-                else:
-                    const_label = Path(session.constellation).stem
+                resolution = resolve_session_with_assets(
+                    raw,
+                    source_context=SourceContext(origin="vs_api.session_manager"),
+                )
+                session = resolution.runtime_session
+                ext_str = (
+                    "-".join(session.routing.extensions) if session.routing.extensions else "plain"
+                )
+                routing_label = f"{session.routing.protocol}-{ext_str}"
+                const_label = (
+                    resolution.primary_constellation.config.name
+                    if len(resolution.constellations) == 1
+                    else " + ".join(asset.segment.id for asset in resolution.constellations)
+                )
                 results.append(
                     {
                         "name": session.session.name,
@@ -186,8 +187,11 @@ class SessionManager:
         for s in self._available:
             try:
                 raw = yaml.safe_load(Path(s["file"]).read_text())
-                cfg = SessionConfig.model_validate(raw)
-                dirs.add(cfg.session.data_dir)
+                resolution = resolve_session_with_assets(
+                    raw,
+                    source_context=SourceContext(origin="vs_api.session_manager.data_dirs"),
+                )
+                dirs.add(resolution.runtime_session.session.data_dir)
             except Exception:
                 pass
         return [Path(d) for d in dirs]

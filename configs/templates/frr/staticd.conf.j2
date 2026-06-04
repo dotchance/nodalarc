@@ -5,7 +5,9 @@ log syslog informational
    No dynamic IGP — forwarding based on explicit static routes and SR policies
    pushed by an external controller (PRD R-NF-003). #}
 {% for iface_name, info in interface_info.items() %}
+{% if info.static_only | default(false) %}
 ip route {{ info.peer_loopback_ipv4 }}/32 {{ iface_name }}
+{% endif %}
 {% endfor %}
 
 {% for iface in gnd_interfaces %}

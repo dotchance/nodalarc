@@ -214,3 +214,66 @@ def test_incompatible_retained_checkpoint_decodes_as_clean_start():
 
     payload = gzip.compress(json.dumps(old_schema).encode())
     assert decode_retained_scheduling_checkpoint(payload) is None
+
+
+def test_recovered_checkpoint_accepts_extended_wall_clock_gap():
+    """A valid checkpoint remains the simulation-lineage authority after downtime."""
+    from ome.main import _validate_recovered_checkpoint
+
+    ckpt = _checkpoint(written_at=1_000.0, step=4, snapshot_seq=8)
+
+    assert _validate_recovered_checkpoint(ckpt, now_wall_s=1_900.0) == 900.0
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "match"),
+    [
+        ("written_at", 0.0, "invalid written_at"),
+        ("step", -1, "negative step"),
+        ("snapshot_seq", 0, "invalid snapshot_seq"),
+    ],
+)
+def test_recovered_checkpoint_rejects_invalid_lineage_fields(field, value, match):
+    from ome.main import _validate_recovered_checkpoint
+
+    ckpt = _checkpoint(**{field: value})
+
+    with pytest.raises(RuntimeError, match=match):
+        _validate_recovered_checkpoint(ckpt, now_wall_s=2_000.0)
+
+
+def test_recovered_checkpoint_rejects_future_written_at():
+    from ome.main import _validate_recovered_checkpoint
+
+    ckpt = _checkpoint(written_at=2_000.0)
+
+    with pytest.raises(RuntimeError, match="future"):
+        _validate_recovered_checkpoint(ckpt, now_wall_s=1_999.0)
+
+
+def test_checkpoint_pair_roles_are_derived_from_ground_universe():
+    """Allocator-normalized pairs can be sat-first; checkpoint roles cannot."""
+    from ome.main import _checkpoint_ground_sat_pair
+
+    assert _checkpoint_ground_sat_pair(
+        ("luna-sat-p01s00", "lunar-ground-gs-nearside-relay-site"),
+        {"lunar-ground-gs-nearside-relay-site"},
+    ) == ("lunar-ground-gs-nearside-relay-site", "luna-sat-p01s00")
+    assert _checkpoint_ground_sat_pair(("gs-denver", "sat-p00s00"), {"gs-denver"}) == (
+        "gs-denver",
+        "sat-p00s00",
+    )
+
+
+@pytest.mark.parametrize(
+    "pair",
+    [
+        ("sat-a", "sat-b"),
+        ("gs-a", "gs-b"),
+    ],
+)
+def test_checkpoint_pair_roles_reject_non_ground_or_double_ground_pairs(pair):
+    from ome.main import _checkpoint_ground_sat_pair
+
+    with pytest.raises(ValueError, match="expected exactly one ground station"):
+        _checkpoint_ground_sat_pair(pair, {"gs-a", "gs-b"})

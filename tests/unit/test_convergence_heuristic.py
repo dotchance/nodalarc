@@ -13,7 +13,6 @@ import time as _time
 
 from vs_api.session_context import (
     SessionContext,
-    _derive_link_type,
     _link_key,
 )
 
@@ -39,7 +38,7 @@ def _apply_links(ctx: SessionContext, count: int, seq: int = 1, prefix: str = "P
                 node_a=node_a,
                 node_b=node_b,
                 state="active",
-                link_type=_derive_link_type(node_a, node_b),
+                link_type="intra_plane_isl",
                 link_reason="",
                 latency_ms=4.0,
                 bandwidth_mbps=1000.0,

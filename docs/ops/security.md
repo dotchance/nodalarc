@@ -56,7 +56,10 @@ Every pod has a `cni0` interface (renamed from eth0 at boot by the FRR entrypoin
 
 ### Data Plane Interfaces
 
-Only `isl0-3`, `gnd0`, `terr0`, and `lo` carry user-plane traffic. These are wired by the Node Agent and carry real routed traffic between pods. Traffic on these interfaces is genuine emulated satellite networking.
+Only generated terminal interfaces such as `islX`, `gndX`, `terr0`, and `lo`
+carry user-plane traffic. These are wired by the Node Agent and carry real
+routed traffic between pods. Traffic on these interfaces is genuine emulated
+satellite networking.
 
 ## SSH Key Lifecycle
 

@@ -5,7 +5,13 @@ from nodalarc.models.addressing import (
     AddressingScheme,
     compute_area_assignments,
 )
-from nodalarc.models.session import AreaAssignmentConfig, AreaMapping
+from nodalarc.models.session import (
+    AreaMapping,
+    ExplicitAreaAssignmentConfig,
+    FlatAreaAssignmentConfig,
+    PerPlaneAreaAssignmentConfig,
+    StripeAreaAssignmentConfig,
+)
 
 
 @pytest.fixture
@@ -15,7 +21,7 @@ def addressing():
 
 class TestStripeStrategy:
     def test_stripe_6_planes_2_per_stripe(self, addressing):
-        config = AreaAssignmentConfig(strategy="stripe", planes_per_stripe=2)
+        config = StripeAreaAssignmentConfig(strategy="stripe", planes_per_stripe=2)
         result = compute_area_assignments(
             config, plane_count=6, sats_per_plane=10, addressing=addressing
         )
@@ -29,7 +35,7 @@ class TestStripeStrategy:
         assert result[addressing.sat_id(5, 9)] == "49.0003"
 
     def test_stripe_4_planes_1_per_stripe(self, addressing):
-        config = AreaAssignmentConfig(strategy="stripe", planes_per_stripe=1)
+        config = StripeAreaAssignmentConfig(strategy="stripe", planes_per_stripe=1)
         result = compute_area_assignments(
             config, plane_count=4, sats_per_plane=8, addressing=addressing
         )
@@ -38,7 +44,7 @@ class TestStripeStrategy:
             assert result[addressing.sat_id(p, 0)] == f"49.{p + 1:04d}"
 
     def test_stripe_cross_area_boundary(self, addressing):
-        config = AreaAssignmentConfig(strategy="stripe", planes_per_stripe=2)
+        config = StripeAreaAssignmentConfig(strategy="stripe", planes_per_stripe=2)
         result = compute_area_assignments(
             config, plane_count=6, sats_per_plane=10, addressing=addressing
         )
@@ -50,7 +56,7 @@ class TestStripeStrategy:
 
 class TestPerPlaneStrategy:
     def test_each_plane_unique_area(self, addressing):
-        config = AreaAssignmentConfig(strategy="per-plane")
+        config = PerPlaneAreaAssignmentConfig(strategy="per-plane")
         result = compute_area_assignments(
             config, plane_count=6, sats_per_plane=10, addressing=addressing
         )
@@ -61,7 +67,7 @@ class TestPerPlaneStrategy:
         assert len(areas) == 6
 
     def test_per_plane_area_ids_sequential(self, addressing):
-        config = AreaAssignmentConfig(strategy="per-plane")
+        config = PerPlaneAreaAssignmentConfig(strategy="per-plane")
         result = compute_area_assignments(
             config, plane_count=4, sats_per_plane=8, addressing=addressing
         )
@@ -71,7 +77,7 @@ class TestPerPlaneStrategy:
         assert result[addressing.sat_id(3, 0)] == "49.0004"
 
     def test_same_plane_same_area(self, addressing):
-        config = AreaAssignmentConfig(strategy="per-plane")
+        config = PerPlaneAreaAssignmentConfig(strategy="per-plane")
         result = compute_area_assignments(
             config, plane_count=2, sats_per_plane=4, addressing=addressing
         )
@@ -82,7 +88,7 @@ class TestPerPlaneStrategy:
 
 class TestFlatStrategy:
     def test_all_nodes_same_area(self, addressing):
-        config = AreaAssignmentConfig(strategy="flat")
+        config = FlatAreaAssignmentConfig(strategy="flat")
         result = compute_area_assignments(
             config, plane_count=6, sats_per_plane=10, addressing=addressing
         )
@@ -91,7 +97,7 @@ class TestFlatStrategy:
         assert "49.0001" in areas
 
     def test_flat_includes_all_sats(self, addressing):
-        config = AreaAssignmentConfig(strategy="flat")
+        config = FlatAreaAssignmentConfig(strategy="flat")
         result = compute_area_assignments(
             config, plane_count=2, sats_per_plane=2, addressing=addressing
         )
@@ -100,7 +106,7 @@ class TestFlatStrategy:
 
 class TestExplicitStrategy:
     def test_explicit_mapping_applied(self, addressing):
-        config = AreaAssignmentConfig(
+        config = ExplicitAreaAssignmentConfig(
             strategy="explicit",
             assignments=[
                 AreaMapping(planes=[0, 1], area_id="49.0001"),
@@ -116,7 +122,7 @@ class TestExplicitStrategy:
         assert result[addressing.sat_id(3, 7)] == "49.0002"
 
     def test_explicit_unmapped_plane_gets_default(self, addressing):
-        config = AreaAssignmentConfig(
+        config = ExplicitAreaAssignmentConfig(
             strategy="explicit",
             assignments=[
                 AreaMapping(planes=[0], area_id="49.0010"),
@@ -132,7 +138,7 @@ class TestExplicitStrategy:
 
 class TestGroundStationAreas:
     def test_gs_area_id_applied(self, addressing):
-        config = AreaAssignmentConfig(
+        config = FlatAreaAssignmentConfig(
             strategy="flat",
             gs_area_id="49.0000",
         )
@@ -148,7 +154,7 @@ class TestGroundStationAreas:
         assert result["gs-ashburn"] == "49.0000"
 
     def test_gs_default_area_when_not_specified(self, addressing):
-        config = AreaAssignmentConfig(strategy="flat")
+        config = FlatAreaAssignmentConfig(strategy="flat")
         gs_names = ["hawthorne"]
         result = compute_area_assignments(
             config,
@@ -161,7 +167,7 @@ class TestGroundStationAreas:
         assert result["gs-hawthorne"] == "49.0000"
 
     def test_no_gs_names_no_gs_entries(self, addressing):
-        config = AreaAssignmentConfig(strategy="flat")
+        config = FlatAreaAssignmentConfig(strategy="flat")
         result = compute_area_assignments(
             config,
             plane_count=2,
@@ -174,7 +180,7 @@ class TestGroundStationAreas:
     def test_cross_area_flag_detectable(self, addressing):
         """Verify that area assignments at stripe boundaries differ,
         enabling cross_area detection in template_vars."""
-        config = AreaAssignmentConfig(strategy="stripe", planes_per_stripe=2)
+        config = StripeAreaAssignmentConfig(strategy="stripe", planes_per_stripe=2)
         result = compute_area_assignments(
             config, plane_count=6, sats_per_plane=10, addressing=addressing
         )
@@ -190,15 +196,47 @@ class TestGroundStationAreas:
 
 class TestTotalNodeCount:
     def test_starlink_mini_sat_count(self, addressing):
-        config = AreaAssignmentConfig(strategy="stripe", planes_per_stripe=2)
+        config = StripeAreaAssignmentConfig(strategy="stripe", planes_per_stripe=2)
         result = compute_area_assignments(
             config, plane_count=6, sats_per_plane=10, addressing=addressing
         )
         assert len(result) == 60  # 6 planes × 10 sats
 
     def test_four_node_sat_count(self, addressing):
-        config = AreaAssignmentConfig(strategy="flat")
+        config = FlatAreaAssignmentConfig(strategy="flat")
         result = compute_area_assignments(
             config, plane_count=2, sats_per_plane=2, addressing=addressing
         )
         assert len(result) == 4
+
+
+class TestExplicitGroundStationValidation:
+    def test_explicit_gs_mapping_requires_known_universe(self, addressing):
+        config = ExplicitAreaAssignmentConfig(
+            strategy="explicit",
+            assignments=[AreaMapping(ground_stations=("hawthorne",), area_id="49.1234")],
+        )
+        with pytest.raises(ValueError, match="requires the known gs_names universe"):
+            compute_area_assignments(
+                config,
+                plane_count=1,
+                sats_per_plane=1,
+                addressing=addressing,
+                protocol="isis",
+            )
+
+    def test_explicit_gs_mapping_applies_with_known_universe(self, addressing):
+        config = ExplicitAreaAssignmentConfig(
+            strategy="explicit",
+            assignments=[AreaMapping(ground_stations=("hawthorne",), area_id="49.1234")],
+        )
+        result = compute_area_assignments(
+            config,
+            plane_count=1,
+            sats_per_plane=1,
+            addressing=addressing,
+            gs_names=["hawthorne", "ashburn"],
+            protocol="isis",
+        )
+        assert result["gs-hawthorne"] == "49.1234"
+        assert result["gs-ashburn"] == "49.0000"

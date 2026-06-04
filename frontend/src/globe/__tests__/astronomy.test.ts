@@ -23,7 +23,7 @@ import {
 
 describe("gmstRadians — backend contract", () => {
   // Reference values computed from services/ome/propagator.py:gmst().
-  // See specs/eci-view-plan.md §1.11. Do not edit without re-running backend.
+  // Do not edit without re-running the backend reference computation.
   const REFERENCE_VALUES: Array<{
     name: string;
     unixSeconds: number;

@@ -5,6 +5,7 @@
 import type { MutableRefObject } from "react";
 import type { StateSnapshot, Selection } from "../types";
 import type { GlobeActions } from "../globe/actions";
+import { isGroundLinkState } from "../networkIdentity";
 
 interface NodePopoverProps {
   snapshot: StateSnapshot | null;
@@ -25,12 +26,8 @@ export function NodePopover({ snapshot, selection, onClose, onOpenCli }: NodePop
   const connectedLinks = (node && snapshot) ? snapshot.links.filter(
     (l) => l.node_a === node.node_id || l.node_b === node.node_id,
   ) : [];
-  const islCount = connectedLinks.filter(
-    (l) => !l.node_a.startsWith("gs-") && !l.node_b.startsWith("gs-"),
-  ).length;
-  const gndCount = connectedLinks.filter(
-    (l) => l.node_a.startsWith("gs-") || l.node_b.startsWith("gs-"),
-  ).length;
+  const gndCount = connectedLinks.filter((l) => isGroundLinkState(l)).length;
+  const islCount = connectedLinks.length - gndCount;
 
   let role = "";
   if (node) {

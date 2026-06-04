@@ -26,8 +26,10 @@ def _policy_kwargs(gs_id: str) -> dict:
         "gs_handover_policies": {
             gs_id: HandoverPolicySpec(name="hysteresis", params=HysteresisParameters().model_dump())
         },
+        "gs_handover_modes": {gs_id: "bbm"},
+        "gs_mbb_overlap_ticks": {gs_id: 0},
+        "gs_mbb_reserve": {gs_id: 0},
         "ranking_order": ("service_priority", "selection_score", "lex_pair"),
-        "handover_mode": "bbm",
         "mbb_preemption": "off",
         "successor_abort_policy": "hard_release",
         "cross_tenant_displacement": "off",
@@ -90,8 +92,6 @@ class TestGroundAllocatorDeterminism:
                 gs_service_priorities={gs_id: 10},
                 gs_tenant_ids={gs_id: "default"},
                 gs_reference_bodies={gs_id: "earth"},
-                mbb_overlap_ticks=3,
-                mbb_reserve=0,
             )
             winner = next(iter(result.scheduled_pairs)) if result.scheduled_pairs else None
             results.append(winner)
@@ -143,8 +143,6 @@ class TestGroundAllocatorDeterminism:
             gs_service_priorities={gs_id: 10},
             gs_tenant_ids={gs_id: "default"},
             gs_reference_bodies={gs_id: "earth"},
-            mbb_overlap_ticks=3,
-            mbb_reserve=0,
         )
 
         # (gs-A, sat-P00S00) < (gs-A, sat-P01S00) lexicographically
@@ -182,6 +180,7 @@ class TestAuthorityFreshnessOnStableLinks:
             session_id="test",
             wiring_generation="sha256:" + "a" * 64,
             gs_terminal_capacities={},
+            gs_handover_modes={},
             sat_ground_terminal_capacities={},
             max_latency_age_s=2.0,
         )

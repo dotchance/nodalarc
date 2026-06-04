@@ -7,18 +7,21 @@ in a constellation. Satellite type files live in configs/satellite-types/
 and are referenced by name from constellation definitions.
 """
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from nodalarc.model_validation import NonEmptyReference
 from nodalarc.models.terminal_physics import SatGroundTerminalBoresight
 
 
 class IslTerminalDef(BaseModel):
     """ISL terminal definition within a satellite type."""
 
-    type: str  # "optical" or "rf"
-    band: str | None = None  # Frequency band for RF terminals
+    model_config = ConfigDict(allow_inf_nan=False)
+
+    type: NonEmptyReference  # "optical" or "rf"
+    band: NonEmptyReference | None = None  # Frequency band for RF terminals
     count: int
-    role: str | None = None  # "intra-plane", "cross-plane", or None (pool)
+    role: NonEmptyReference | None = None  # "intra-plane", "cross-plane", or None (pool)
     max_range_km: float
     bandwidth_mbps: float
     max_tracking_rate_deg_s: float
@@ -77,8 +80,10 @@ class IslTerminalDef(BaseModel):
 class GroundTerminalDef(BaseModel):
     """Ground terminal definition within a satellite type."""
 
-    type: str  # "optical" or "rf"
-    band: str | None = None  # Frequency band for RF terminals
+    model_config = ConfigDict(allow_inf_nan=False)
+
+    type: NonEmptyReference  # "optical" or "rf"
+    band: NonEmptyReference | None = None  # Frequency band for RF terminals
     count: int
     bandwidth_mbps: float
     max_range_km: float | None = None
@@ -89,8 +94,8 @@ class GroundTerminalDef(BaseModel):
     max_tracking_rate_deg_s: float | None = None
     boresight: SatGroundTerminalBoresight | None = None
     beam_falloff_exponent: float = 2.0
-    gateway_beam_quota: int | None = None  # Accepted in Phase 3, not enforced yet.
-    user_terminal_beam_quota: int | None = None  # Accepted in Phase 3, not enforced yet.
+    gateway_beam_quota: int | None = None  # Declared for future per-beam allocation.
+    user_terminal_beam_quota: int | None = None  # Declared for future per-beam allocation.
 
     @field_validator("type")
     @classmethod
@@ -156,8 +161,10 @@ class SatelliteTypeConfig(BaseModel):
     filename without extension (e.g., 'iridium-next.yaml' → 'iridium-next').
     """
 
-    name: str
-    tenant_id: str = "default"
+    model_config = ConfigDict(allow_inf_nan=False)
+
+    name: NonEmptyReference
+    tenant_id: NonEmptyReference = "default"
     description: str | None = None
     ut_serving_capacity: int = 100  # Number of logical UTs this sat can serve
     isl_terminals: list[IslTerminalDef]

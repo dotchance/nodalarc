@@ -9,7 +9,7 @@
 import { useState } from "react";
 import type { ConstellationPreset } from "./wizardTypes";
 import { CONSTELLATION_HELP } from "./wizardHelp";
-import { supportedOrbitModelsForConstellation } from "./orbitModels";
+import { constellationUnsupportedReason, supportedOrbitModelsForConstellation } from "./orbitModels";
 
 // --- Help component — click to expand, not hover tooltip ---
 
@@ -185,6 +185,11 @@ function OrbitSupportBadges({ preset }: { preset: ConstellationPreset }) {
           {model.label}
         </span>
       ))}
+      {supportedModels.length === 0 && (
+        <span className="wizard-card-orbit-badge wizard-card-orbit-badge--disabled">
+          Coming Soon
+        </span>
+      )}
     </div>
   );
 }
@@ -406,19 +411,26 @@ export function ConstellationPanel({
 
   return (
     <div className="wizard-grid">
-      {allPresets.map((p) => (
-        <button
-          key={p.name}
-          className={`wizard-card ${selected?.name === p.name ? "wizard-card--selected" : ""}`}
-          onClick={() => onSelect(p)}
-        >
-          <div className="wizard-card-title">{p.name}</div>
-          <div className="wizard-card-stat">{p.satellite_count} satellites</div>
-          <OrbitSupportBadges preset={p} />
-          <div className="wizard-card-desc">{p.description}</div>
-          {p.real && <div className="wizard-card-real">Real: {p.real}</div>}
-        </button>
-      ))}
+      {allPresets.map((p) => {
+        const disabledReason = constellationUnsupportedReason(p);
+        const disabled = disabledReason !== null;
+        return (
+          <button
+            key={p.name}
+            className={`wizard-card ${selected?.name === p.name ? "wizard-card--selected" : ""} ${disabled ? "wizard-card--disabled" : ""}`}
+            onClick={() => !disabled && onSelect(p)}
+            disabled={disabled}
+            title={disabledReason ?? undefined}
+          >
+            <div className="wizard-card-title">{p.name}</div>
+            <div className="wizard-card-stat">{p.satellite_count} satellites</div>
+            <OrbitSupportBadges preset={p} />
+            <div className="wizard-card-desc">{p.description}</div>
+            {disabledReason && <div className="wizard-card-disabled">{disabledReason}</div>}
+            {p.real && <div className="wizard-card-real">Real: {p.real}</div>}
+          </button>
+        );
+      })}
       <button
         className="wizard-card wizard-card--custom"
         onClick={() => setShowCustom(true)}

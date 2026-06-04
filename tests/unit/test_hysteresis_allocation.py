@@ -34,11 +34,15 @@ def _handover_policy() -> HandoverPolicySpec:
 
 
 def _policy_kwargs(policy: str, handover_mode: str) -> dict:
+    overlap = 3 if handover_mode == "mbb" else 0
+    reserve = 1 if handover_mode == "mbb" else 0
     return {
         "gs_selection_policies": {"gs-test": _selection_policy(policy)},
         "gs_handover_policies": {"gs-test": _handover_policy()},
+        "gs_handover_modes": {"gs-test": handover_mode},
+        "gs_mbb_overlap_ticks": {"gs-test": overlap},
+        "gs_mbb_reserve": {"gs-test": reserve},
         "ranking_order": ("service_priority", "selection_score", "lex_pair"),
-        "handover_mode": handover_mode,
         "mbb_preemption": "off",
         "successor_abort_policy": "hard_release",
         "cross_tenant_displacement": "off",
@@ -164,8 +168,6 @@ class TestHysteresisDiscount:
             gs_reference_bodies={"gs-test": "earth"},
             sat_ground_terminals=sat_terminals,
             sat_ground_terminal_indices_by_body=_sat_body_pools(sat_terminals),
-            mbb_overlap_ticks=3,
-            mbb_reserve=mbb_reserve,
         )
 
     def test_active_pair_survives_when_challenger_does_not_clear_hysteresis_margin(self):

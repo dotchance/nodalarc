@@ -11,6 +11,7 @@ import { candidateStatus } from "../explain/derive";
 import { CandidateRow } from "../explain/components/CandidateRow";
 import { PairInspectorView } from "../explain/components/PairInspectorView";
 import { FamilyBadge } from "../explain/components/FamilyBadge";
+import { isGroundLinkState, selectionTypeForNodeId } from "../networkIdentity";
 
 interface SatelliteDetailProps {
   node: NodeState;
@@ -26,6 +27,7 @@ function linkTypeLabel(linkType: string | null): string {
   switch (linkType) {
     case "intra_plane_isl": return "intra-area";
     case "cross_plane_isl": return "cross-area";
+    case "ground": return "ground";
     case "ground_uplink": return "ground";
     case "ground_downlink": return "ground";
     default: return linkType ?? "unknown";
@@ -35,6 +37,7 @@ function linkTypeLabel(linkType: string | null): string {
 export function SatelliteDetail({ node, snapshot, anchorGsId, onSelect }: SatelliteDetailProps) {
   const [inspectedGs, setInspectedGs] = useState<string | null>(null);
   const [decisions, setDecisions] = useState<GroundDecisionsSnapshot | null>(null);
+  const [candidateError, setCandidateError] = useState<string | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -42,12 +45,18 @@ export function SatelliteDetail({ node, snapshot, anchorGsId, onSelect }: Satell
     // Clear the previous satellite's slice immediately so a stale cross-node candidate
     // never renders for a moment after switching satellites.
     setDecisions(null);
+    setCandidateError(null);
     const load = async () => {
       try {
         const snap = await fetchGroundDecisions(node.node_id, controller.signal);
-        if (alive) setDecisions(snap);
-      } catch {
-        // candidate list is non-essential; keep prior state on transient errors
+        if (alive) {
+          setDecisions(snap);
+          setCandidateError(null);
+        }
+      } catch (err) {
+        if (!alive || (err instanceof DOMException && err.name === "AbortError")) return;
+        setDecisions(null);
+        setCandidateError(err instanceof Error ? err.message : "ground-link-decisions request failed");
       }
     };
     void load();
@@ -70,12 +79,8 @@ export function SatelliteDetail({ node, snapshot, anchorGsId, onSelect }: Satell
   const connectedLinks = snapshot.links.filter(
     (l) => l.node_a === node.node_id || l.node_b === node.node_id,
   );
-  const islLinks = connectedLinks.filter(
-    (l) => !l.node_a.startsWith("gs-") && !l.node_b.startsWith("gs-"),
-  );
-  const gndLinks = connectedLinks.filter(
-    (l) => l.node_a.startsWith("gs-") || l.node_b.startsWith("gs-"),
-  );
+  const gndLinks = connectedLinks.filter((l) => isGroundLinkState(l));
+  const islLinks = connectedLinks.filter((l) => !isGroundLinkState(l));
 
   // A true actuator/proof fault involving this satellite (spec: "fault badge if true actuator/proof
   // fault exists"). Sourced from the Scheduler actuation notices (kernel dirty / dispatch blocked),
@@ -96,7 +101,8 @@ export function SatelliteDetail({ node, snapshot, anchorGsId, onSelect }: Satell
   const role = linkedAreas.size > 1 ? "Router (ABR)" : "Router";
 
   const selectPeer = (peerId: string) => {
-    const type = peerId.startsWith("gs-") ? "ground_station" : "satellite";
+    const type = selectionTypeForNodeId(peerId, snapshot.nodes);
+    if (type === null) return;
     onSelect({ type, id: peerId });
   };
 
@@ -252,6 +258,12 @@ export function SatelliteDetail({ node, snapshot, anchorGsId, onSelect }: Satell
             />
           ))}
         </>
+      ) : null}
+      {candidateError ? (
+        <div className="detail-row">
+          <span className="detail-label">Candidate Ground Stations</span>
+          <span className="detail-value">Unavailable: {candidateError}</span>
+        </div>
       ) : null}
 
       <h3>Position</h3>

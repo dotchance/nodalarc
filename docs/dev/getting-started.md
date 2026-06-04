@@ -154,8 +154,8 @@ When a session is deployed, the `nodalarc` namespace contains:
 | nodalarc-operator | Deployment | 1 | Session lifecycle, pod creation |
 | nodalarc-nats | StatefulSet | 1 | NATS JetStream |
 | nodalarc-vf | Deployment | 1 | Frontend (nginx + React) |
-| sat-P{nn}S{nn} | Pod | per satellite | FRR routing daemon |
-| gs-{name} | Pod | per ground station | FRR routing daemon |
+| {namespace}-sat-p{nn}s{nn} | Pod | per satellite | FRR routing daemon |
+| {namespace}-gs-{site}-{node} | Pod | per ground node | FRR routing daemon |
 
 ## Next Steps
 

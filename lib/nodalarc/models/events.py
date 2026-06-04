@@ -149,10 +149,9 @@ class VisibilityEvent(BaseModel):
 
     node_a is always alphabetically < node_b (enforced by validator).
 
-    Reason fields (Phase 1, C-foundation-5): every transition must carry
-    both axes of the typed reason taxonomy so consumers can explain
-    the transition from the event stream alone — without correlating
-    against the decision snapshot.
+    Reason fields: every transition must carry both axes of the typed reason
+    taxonomy so consumers can explain the transition from the event stream
+    alone — without correlating against the decision snapshot.
 
     - ``visibility_reject_reason``: physical / geometric attribution.
       ``"ok"`` when the pair is visible; one of the typed rejection
@@ -250,8 +249,8 @@ class VisibilityEvent(BaseModel):
 
     @model_validator(mode="after")
     def _reasons_consistent_with_state(self) -> VisibilityEvent:
-        """Phase 1 (C-foundation-5): both axes of the reason taxonomy must be
-        consistent with (visible, scheduled). The four states are:
+        """Both axes of the reason taxonomy must be consistent with
+        (visible, scheduled). The four states are:
 
         - visible=True,  scheduled=True  → reject='ok',     unscheduled=None
         - visible=True,  scheduled=False → reject='ok',     unscheduled=<set>
@@ -365,6 +364,12 @@ class EphemerisNodeKeplerian(BaseModel):
     true_anomaly_deg: float
     plane: int
     slot: int
+    segment_id: str | None = None
+    local_node_id: str | None = None
+    namespace: str | None = None
+    tags: tuple[str, ...] = ()
+    reference_body: str = "earth"
+    frame_id: str = "earth"
 
 
 class EphemerisNodeTLE(BaseModel):
@@ -378,6 +383,12 @@ class EphemerisNodeTLE(BaseModel):
     plane: int
     slot: int
     norad_id: int | None = None
+    segment_id: str | None = None
+    local_node_id: str | None = None
+    namespace: str | None = None
+    tags: tuple[str, ...] = ()
+    reference_body: str = "earth"
+    frame_id: str = "earth"
 
     @model_validator(mode="after")
     def _validate_tle_pair(self):
@@ -396,12 +407,43 @@ class EphemerisNodeFixed(BaseModel):
     lat_deg: float
     lon_deg: float
     alt_km: float
+    segment_id: str | None = None
+    local_node_id: str | None = None
+    namespace: str | None = None
+    tags: tuple[str, ...] = ()
+    reference_body: str = "earth"
+    frame_id: str = "earth"
 
 
 EphemerisNode = Annotated[
     EphemerisNodeKeplerian | EphemerisNodeTLE | EphemerisNodeFixed,
     Field(discriminator="type"),
 ]
+
+
+class EphemerisBodyFrame(BaseModel):
+    """Body origin in the session common frame at ``epoch_unix``.
+
+    Positions and velocities are Earth-relative GCRS-like km vectors supplied by
+    the backend ephemeris provider. The renderer may apply a visual scale or
+    camera-relative transform, but these numbers remain the authoritative
+    physical frame facts used to place bodies relative to one another.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    body_id: str
+    radius_km: float
+    origin_x_km: float
+    origin_y_km: float
+    origin_z_km: float
+    vel_x_km_s: float
+    vel_y_km_s: float
+    vel_z_km_s: float
+    provider: str
+    kernel_id: str
+    quality_tier: str
+    frame: str
 
 
 class SessionEphemeris(BaseModel):
@@ -421,6 +463,7 @@ class SessionEphemeris(BaseModel):
     sim_time: datetime
     epoch_unix: float  # Unix timestamp for propagation dt calculation
     nodes: dict[str, EphemerisNode]
+    body_frames: dict[str, EphemerisBodyFrame] = Field(default_factory=dict)
 
 
 class PlaybackState(BaseModel):

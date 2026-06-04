@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from nodalarc.constellation_loader import isl_link_bandwidth_mbps
 from nodalarc.ground_terminals import station_ground_terminal_capacity
 from nodalarc.models.addressing import (
     AddressingScheme,
@@ -42,14 +43,6 @@ def _constellation_dims(
     raise NotImplementedError(f"Unsupported constellation type: {type(constellation)}")
 
 
-def _isl_bandwidth(constellation: ConstellationConfig) -> float:
-    """Extract default ISL bandwidth_mbps from constellation terminals."""
-    if isinstance(constellation, ParametricConstellation | ExplicitConstellation):
-        for term in constellation.default_terminals.isl:
-            return term.bandwidth_mbps
-    return 1000.0
-
-
 def _ground_terminal_count(constellation: ConstellationConfig) -> int:
     """Extract total ground terminal count from constellation."""
     if isinstance(constellation, ParametricConstellation | ExplicitConstellation):
@@ -61,7 +54,7 @@ def _build_interface_info(
     node_neighbors: list[NeighborAssignment],
     area_assignments: dict[str, str],
     node_id: str,
-    bandwidth_mbps: float,
+    bandwidth_by_interface: dict[tuple[str, str], float],
     loopback_map: dict[str, str] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Build interface_info dict keyed by interface name for a satellite."""
@@ -70,18 +63,111 @@ def _build_interface_info(
     interfaces: dict[str, dict[str, Any]] = {}
     for na in node_neighbors:
         peer_area = area_assignments.get(na.peer_node_id, "")
+        static_only = na.link_type.startswith("static_ip:")
+        bandwidth_mbps = na.bandwidth_mbps
+        if bandwidth_mbps is None:
+            key = (na.interface, na.peer_node_id)
+            try:
+                bandwidth_mbps = bandwidth_by_interface[key]
+            except KeyError as exc:
+                raise ValueError(
+                    f"missing resolved ISL bandwidth for {node_id}:{na.interface} "
+                    f"to {na.peer_node_id}"
+                ) from exc
         info: dict[str, Any] = {
             "peer_node_id": na.peer_node_id,
             "link_type": na.link_type,
             "priority": na.priority,
             "peer_area_id": peer_area,
             "cross_area": node_area != peer_area and node_area != "" and peer_area != "",
-            "bandwidth_mbps": bandwidth_mbps,
+            "bandwidth_mbps": float(bandwidth_mbps),
+            "static_only": static_only,
         }
         if na.peer_node_id in lb:
             info["peer_loopback_ipv4"] = lb[na.peer_node_id]
         interfaces[na.interface] = info
     return interfaces
+
+
+def _satellite_plane_slot_map(
+    constellation: ConstellationConfig,
+    addressing: AddressingScheme,
+) -> dict[str, tuple[int, int]]:
+    """Return runtime node_id -> runtime plane/slot for template projection."""
+    positions: dict[str, tuple[int, int]] = {}
+    if isinstance(constellation, ParametricConstellation):
+        for plane in range(constellation.planes.count):
+            for slot in range(constellation.planes.sats_per_plane):
+                positions[addressing.sat_id(plane, slot)] = (plane, slot)
+        return positions
+    if isinstance(constellation, ExplicitConstellation):
+        for sat in constellation.satellites:
+            positions[addressing.sat_id(sat.plane, sat.slot)] = (sat.plane, sat.slot)
+        return positions
+    raise ValueError(f"ISL bandwidth projection is not supported for {type(constellation)}")
+
+
+def _peer_interface(
+    assignments: frozenset[tuple[str, NeighborAssignment]],
+    node_id: str,
+    assignment: NeighborAssignment,
+) -> str:
+    matches = [
+        peer_assignment.interface
+        for peer_node_id, peer_assignment in assignments
+        if peer_node_id == assignment.peer_node_id and peer_assignment.peer_node_id == node_id
+    ]
+    if len(matches) != 1:
+        raise ValueError(
+            f"ISL assignment {node_id}:{assignment.interface}->{assignment.peer_node_id} "
+            f"has {len(matches)} reciprocal peer interface(s); expected exactly one"
+        )
+    return matches[0]
+
+
+def _resolve_isl_bandwidths(
+    constellation: ConstellationConfig,
+    addressing: AddressingScheme,
+    assignments: frozenset[tuple[str, NeighborAssignment]],
+) -> dict[str, dict[tuple[str, str], float]]:
+    """Resolve per-node ISL interface bandwidths from terminal inventory.
+
+    The bottleneck bandwidth is a property of the two concrete terminal slots on
+    the link. This function is deliberately fail-loud: if the neighbor graph is
+    not reciprocal or an interface cannot be mapped back to a terminal block,
+    the session cannot render trustworthy FRR metrics.
+    """
+    positions = _satellite_plane_slot_map(constellation, addressing)
+    resolved: dict[str, dict[tuple[str, str], float]] = {}
+    for node_id, assignment in assignments:
+        if assignment.bandwidth_mbps is not None:
+            resolved.setdefault(node_id, {})[(assignment.interface, assignment.peer_node_id)] = (
+                float(assignment.bandwidth_mbps)
+            )
+            continue
+        if node_id not in positions or assignment.peer_node_id not in positions:
+            if assignment.link_type.startswith("static_ip:"):
+                # Static inter-body links still use satellite ISL terminals, so
+                # missing positions mean the runtime projection is malformed.
+                pass
+            raise ValueError(
+                f"cannot resolve ISL bandwidth for {node_id}->{assignment.peer_node_id}; "
+                "both endpoints must be satellites in the runtime constellation"
+            )
+        node_plane, node_slot = positions[node_id]
+        peer_plane, peer_slot = positions[assignment.peer_node_id]
+        peer_iface = _peer_interface(assignments, node_id, assignment)
+        bw = isl_link_bandwidth_mbps(
+            constellation,
+            node_plane,
+            node_slot,
+            assignment.interface,
+            peer_plane,
+            peer_slot,
+            peer_iface,
+        )
+        resolved.setdefault(node_id, {})[(assignment.interface, assignment.peer_node_id)] = bw
+    return resolved
 
 
 def _host_address_from_prefix(prefix: str) -> str:
@@ -184,9 +270,13 @@ def build_template_vars(
     node_type: str,
     plane: int | None = None,
     slot: int | None = None,
+    sat_node_id: str | None = None,
+    sat_ground_terminal_count: int | None = None,
     gs_name: str | None = None,
     gs_index: int | None = None,
     config_overrides: dict[str, Any] | None = None,
+    neighbors: frozenset[tuple[str, NeighborAssignment]] | None = None,
+    node_sid_index: int | None = None,
 ) -> dict[str, Any]:
     """Build complete Jinja2 template variable namespace for a node.
 
@@ -222,9 +312,16 @@ def build_template_vars(
             protocol=session.routing.protocol or "isis",
         )
 
-    # Compute ISL neighbors
-    neighbors = assign_isl_neighbors(constellation, addressing)
-    by_node = neighbors_by_node(neighbors)
+    # Compute ISL neighbors unless the resolver provided the declared graph.
+    neighbor_assignments = (
+        neighbors if neighbors is not None else assign_isl_neighbors(constellation, addressing)
+    )
+    by_node = neighbors_by_node(neighbor_assignments)
+    isl_bandwidths = _resolve_isl_bandwidths(
+        constellation,
+        addressing,
+        neighbor_assignments,
+    )
 
     # Build loopback map for peer IP resolution (used by static routes)
     loopback_map = _build_loopback_map(
@@ -236,7 +333,7 @@ def build_template_vars(
     # Derive node_id
     if node_type == "satellite":
         assert plane is not None and slot is not None
-        node_id = addressing.sat_id(plane, slot)
+        node_id = sat_node_id or addressing.sat_id(plane, slot)
     elif node_type == "ground_station":
         assert gs_name is not None and gs_index is not None
         node_id = addressing.gs_id(gs_name)
@@ -271,6 +368,12 @@ def build_template_vars(
                 "ospf_spf_max_hold": routing.ospf_spf_max_hold,
             }
         )
+    if result.get("sr_enabled"):
+        if node_sid_index is None:
+            raise ValueError(
+                f"segment routing is enabled but no resolved SID index was provided for {node_id}"
+            )
+        result["node_sid_index"] = node_sid_index
 
     # Core variables (always override config_overrides)
     result.update(
@@ -284,8 +387,11 @@ def build_template_vars(
         }
     )
 
-    bandwidth = _isl_bandwidth(constellation)
-    gnd_count = _ground_terminal_count(constellation)
+    gnd_count = (
+        sat_ground_terminal_count
+        if sat_ground_terminal_count is not None
+        else _ground_terminal_count(constellation)
+    )
 
     if node_type == "satellite":
         node_neighbors = by_node.get(node_id, [])
@@ -297,7 +403,7 @@ def build_template_vars(
             node_neighbors,
             area_assignments,
             node_id,
-            bandwidth,
+            isl_bandwidths.get(node_id, {}),
             loopback_map=loopback_map,
         )
         result["isl_count"] = len(node_neighbors)

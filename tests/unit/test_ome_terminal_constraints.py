@@ -52,7 +52,9 @@ def test_cross_plane_isl_uses_cross_plane_tracking_limit(monkeypatch):
         gs_handover_policies={},
         gs_service_priorities={},
         ground_ranking_order=("service_priority", "selection_score", "lex_pair"),
-        ground_handover_mode="bbm",
+        gs_handover_modes={},
+        gs_mbb_overlap_ticks={},
+        gs_mbb_reserve={},
         ground_mbb_preemption="off",
         ground_successor_abort_policy="hard_release",
         ground_cross_tenant_displacement="off",
@@ -65,11 +67,14 @@ def test_cross_plane_isl_uses_cross_plane_tracking_limit(monkeypatch):
             handover_policy_params={},
             ranking_order=("service_priority", "selection_score", "lex_pair"),
             handover_mode="bbm",
+            handover_modes={},
             mbb_preemption="off",
             successor_abort_policy="hard_release",
             cross_tenant_displacement="off",
             mbb_overlap_ticks=3,
+            mbb_overlap_ticks_by_gs={},
             mbb_reserve=0,
+            mbb_reserve_by_gs={},
             bbm_acquire_timeout_ticks=1,
             ignored_capacity_fields=(),
         ),
@@ -79,7 +84,9 @@ def test_cross_plane_isl_uses_cross_plane_tracking_limit(monkeypatch):
         sat_ground_terminal_indices_by_body={node_a: {}, node_b: {}},
         gs_tenant_ids={},
         gs_reference_bodies={},
+        ground_candidate_satellites_by_gs={},
         ground_pair_terminal_types={},
+        node_metadata={},
         by_node={
             node_a: [
                 NeighborAssignment(
@@ -130,8 +137,9 @@ def test_cross_plane_isl_uses_cross_plane_tracking_limit(monkeypatch):
     pos_b = EcefVec3(Vec3(7121.0, 0.0, 0.0))
     vel_b = EcefVec3(Vec3(0.0, -7.59, 0.0))
 
-    def fake_propagation(*, satellites, addressing, epoch_unix, dt, propagator_id):
+    def fake_propagation(*, satellites, addressing, epoch_unix, dt, propagator_id, body_states):
         del satellites, addressing, propagator_id
+        assert set(body_states) == {"earth"}
         sim_time_unix = epoch_unix + dt
         return {
             node_a: PropagatedState(

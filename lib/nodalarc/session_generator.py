@@ -26,7 +26,13 @@ from nodalarc.catalog_paths import (
     validate_catalog_name,
     validate_station_names,
 )
-from nodalarc.models.session import SessionConfig
+from nodalarc.constellation_loader import (
+    expand_constellation,
+    load_constellation,
+    load_ground_stations,
+)
+from nodalarc.models.resolved_session import SourceContext
+from nodalarc.resolve_session import resolve_session
 from nodalarc.stack_resolver import resolve_stack
 
 
@@ -196,6 +202,11 @@ def generate_session_yaml(
         raise ValueError("orbit_propagator='sgp4-tle' requires a TLE constellation source")
     if constellation_mode == "tle" and orbit_propagator != "sgp4-tle":
         raise ValueError("TLE constellation sources require orbit_propagator='sgp4-tle'")
+    if orbit_propagator == "sgp4-tle":
+        raise ValueError(
+            "orbit_propagator='sgp4-tle' is structurally valid future grammar, "
+            "but the current runtime supports only keplerian-circular and j2-mean-elements"
+        )
 
     # --- Resolve ground stations ---
     if custom_ground_stations is not None:
@@ -233,7 +244,7 @@ def generate_session_yaml(
             area_assignment["gs_area_id"] = "0.0.0.0"
 
     routing_overrides = dict(routing_config or {})
-    mbb_requested = bool(routing_overrides.pop("mbb_dispatch", protocol == "nodalpath"))
+    mbb_requested = bool(routing_overrides.pop("mbb_dispatch", True))
     mbb_overlap_ticks = int(routing_overrides.pop("mbb_overlap_ticks", 3 if mbb_requested else 0))
     supported_propagators = {"keplerian-circular", "j2-mean-elements", "sgp4-tle"}
     if orbit_propagator not in supported_propagators:
@@ -255,31 +266,77 @@ def generate_session_yaml(
             "'longest-remaining-pass'"
         )
 
-    # Build session dict
+    ground_source: str | dict[str, Any]
+    if isinstance(gs_value, list):
+        # The segment grammar has no top-level station-name-list shortcut.
+        # Selected catalog stations are materialized into a real inline station
+        # set so the generated YAML is self-contained and structurally honest.
+        ground_source = load_ground_stations(gs_value).model_dump(mode="python")
+    elif isinstance(gs_value, dict):
+        ground_source = gs_value
+    else:
+        ground_source = gs_value
+
+    satellite_count = len(expand_constellation(load_constellation(constellation_value)))
+    ground_count = len(load_ground_stations(ground_source).stations)
+    static_candidate_bound = max(1, satellite_count * ground_count)
+    ground_scheduling: dict[str, Any] = {
+        "selection_policy": selection_policy,
+        "handover_policy": {
+            "name": "hysteresis",
+            "params": {
+                "discount_factor": 1.15,
+                "mask_fade_range_deg": 5.0,
+            },
+        },
+        "handover_mode": "mbb" if mbb_requested else "bbm",
+        "mbb_overlap_ticks": mbb_overlap_ticks,
+        "mbb_reserve": 1 if mbb_requested else 0,
+    }
+
+    # Build segment-grammar session dict. The wizard emits the same product
+    # grammar that upload/deploy accepts; SessionConfig is only an internal
+    # resolver projection and is never the user-facing output.
     session_dict: dict[str, Any] = {
         "session": {"name": session_name},
-        "constellation": constellation_value,
-        "ground_stations": gs_value,
+        "identity": {"mode": "segment_namespaced"},
+        "segments": [
+            {
+                "id": "space",
+                "kind": "constellation",
+                "source": constellation_value,
+                "namespace": "space",
+                "central_body": "earth",
+                **({"satellite_type": satellite_type} if satellite_type else {}),
+                "tags": ["earth", "orbit"],
+            },
+            {
+                "id": "ground",
+                "kind": "ground_set",
+                "source": ground_source,
+                "namespace": "ground",
+                "reference_body": "earth",
+                "tags": ["earth", "ground"],
+                "scheduling": ground_scheduling,
+            },
+        ],
+        "link_rules": [
+            {
+                "id": "ground-access",
+                "kind": "access",
+                "endpoints": [
+                    {"selector": {"segment": "ground"}, "terminal_role": "ground"},
+                    {"selector": {"segment": "space"}, "terminal_role": "ground"},
+                ],
+                "topology": {"mode": "visible_candidates"},
+            }
+        ],
         "simulation": {
             "schema_version": 2,
+            "candidate_limits": {"max_pairs_per_rule": static_candidate_bound},
         },
         "orbit": {
             "propagator": orbit_propagator,
-        },
-        "scheduling": {
-            "ground": {
-                "selection_policy": selection_policy,
-                "handover_policy": {
-                    "name": "hysteresis",
-                    "params": {
-                        "discount_factor": 1.15,
-                        "mask_fade_range_deg": 5.0,
-                    },
-                },
-                "handover_mode": "mbb" if mbb_requested else "bbm",
-                "mbb_overlap_ticks": mbb_overlap_ticks,
-                "mbb_reserve": 1 if mbb_requested else 0,
-            }
         },
         "dispatch": {
             "latency_authority": "ome",
@@ -297,9 +354,6 @@ def generate_session_yaml(
     if orbit_propagator == "sgp4-tle":
         session_dict["orbit"]["tle_max_age_days"] = 7.0
 
-    if satellite_type:
-        session_dict["satellite_type"] = satellite_type
-
     if area_assignment:
         session_dict["routing"]["area_assignment"] = area_assignment
     if routing_overrides:
@@ -310,10 +364,13 @@ def generate_session_yaml(
     if preset and preset.traffic_flows:
         session_dict["traffic_flows"] = preset.traffic_flows
     if preset and preset.convergence:
-        session_dict["convergence"] = preset.convergence
+        session_dict["mi"] = {"convergence": preset.convergence}
 
-    # Validate through Pydantic
-    SessionConfig.model_validate(session_dict)
+    resolve_session(
+        session_dict,
+        catalog_roots=roots,
+        source_context=SourceContext(origin="session_generator"),
+    )
 
     yaml_str = yaml.dump(session_dict, default_flow_style=False, sort_keys=False)
     return yaml_str, warnings

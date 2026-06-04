@@ -27,11 +27,21 @@ interface NodeEntry {
 
 const localPositions = new Map<string, NodeEntry>();
 const bodyFrames = new Map<string, THREE.Object3D>();
+const bodyRadii = new Map<string, number>();
 
 /** Register (or, with null, clear) a body's group — the frame its nodes map local→world through. */
-export function setBodyFrame(bodyId: string, group: THREE.Object3D | null): void {
-  if (group) bodyFrames.set(bodyId, group);
-  else bodyFrames.delete(bodyId);
+export function setBodyFrame(
+  bodyId: string,
+  group: THREE.Object3D | null,
+  radiusRender?: number,
+): void {
+  if (group) {
+    bodyFrames.set(bodyId, group);
+    if (radiusRender !== undefined) bodyRadii.set(bodyId, radiusRender);
+  } else {
+    bodyFrames.delete(bodyId);
+    bodyRadii.delete(bodyId);
+  }
 }
 
 /** Upsert a node's body-local position + the body it lives in (zero-alloc after first sighting). */
@@ -91,4 +101,37 @@ export function getNodeWorldPosition(nodeId: string, target: THREE.Vector3): boo
   target.copy(e.v);
   frame.localToWorld(target);
   return true;
+}
+
+/**
+ * Resolve the body sphere that owns a node. Returns false until the node's frame and body radius
+ * are both registered; callers should skip occlusion rather than assume Earth.
+ */
+export function getNodeBodySphere(
+  nodeId: string,
+  centerTarget: THREE.Vector3,
+): { body: string; radius: number } | null {
+  const e = localPositions.get(nodeId);
+  if (!e) return null;
+  const frame = bodyFrames.get(e.body);
+  const radius = bodyRadii.get(e.body);
+  if (!frame || radius === undefined) return null;
+  frame.updateWorldMatrix(true, false);
+  centerTarget.set(0, 0, 0);
+  frame.localToWorld(centerTarget);
+  return { body: e.body, radius };
+}
+
+/** Resolve a body's world-space center and render radius. */
+export function getBodyWorldSphere(
+  bodyId: string,
+  centerTarget: THREE.Vector3,
+): { body: string; radius: number } | null {
+  const frame = bodyFrames.get(bodyId);
+  const radius = bodyRadii.get(bodyId);
+  if (!frame || radius === undefined) return null;
+  frame.updateWorldMatrix(true, false);
+  centerTarget.set(0, 0, 0);
+  frame.localToWorld(centerTarget);
+  return { body: bodyId, radius };
 }

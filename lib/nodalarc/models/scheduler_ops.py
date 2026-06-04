@@ -5,7 +5,7 @@
 These models are the typed producer-side shape for Scheduler OpsEvent details,
 VS-API actuation health, and explicit operator repair commands. OpsEvent keeps a
 free-form ``details`` dict for wire compatibility; Scheduler code constructs
-that dict from these models so Phase 5 failure states are not ad hoc strings.
+that dict from these models so actuation-failure states are not ad hoc strings.
 """
 
 from __future__ import annotations

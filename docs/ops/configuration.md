@@ -1,27 +1,54 @@
 # Configuration Reference
 
-NodalArc sessions are configured through YAML files that define what to emulate: which constellation, which ground stations, and which routing protocol. Users can create sessions through the browser wizard, but as an operator you may need to write or modify session configs directly.
+NodalArc sessions are configured through YAML files that assemble reusable
+building blocks into a deployable emulation. Users can create sessions through
+the browser wizard, upload YAML, or deploy a file with `make session`.
+
+The product session grammar is the segment grammar: top-level `segments` and
+`link_rules`. Old top-level `constellation` plus `ground_stations` session YAML
+is not a supported product path.
 
 ## Session Configuration
 
-A session config assembles the building blocks - constellation, ground stations, routing protocol - into a deployable emulation:
+A session joins segment definitions, declared connectivity, routing, placement,
+time, and optional ephemeris:
 
 ```yaml
 session:
-  name: starlink-176-isis-te
+  name: earth-leo-walker
+identity:
+  mode: segment_namespaced
 
-constellation: configs/constellations/starlink-176.yaml
-ground_stations: configs/ground-stations/sets/global.yaml
+segments:
+  - id: space
+    kind: constellation
+    source: configs/constellations/starlink-176.yaml
+    namespace: space
+    central_body: earth
+    tags: [earth, leo]
+
+  - id: ground
+    kind: ground_set
+    source: configs/ground-stations/sets/starlink-176.yaml
+    namespace: ground
+    reference_body: earth
+    tags: [earth, ground]
+
+link_rules:
+  - id: ground-access
+    kind: access
+    endpoints:
+      - selector: {segment: ground}
+        terminal_role: ground
+      - selector: {segment: space}
+        terminal_role: ground
+    topology: {mode: visible_candidates}
 
 routing:
   protocol: isis
-  extensions:
-    - traffic-engineering
+  extensions: [traffic-engineering]
   area_assignment:
     strategy: per-plane
-
-placement:
-  policy: planePerNode
 
 time:
   step_seconds: 1
@@ -29,44 +56,117 @@ time:
 
 ### Session Fields
 
-| Field | Required | Default | Description |
-|-------|:---:|---------|-------------|
-| `session.name` | yes | - | Session identifier |
-| `constellation` | yes | - | Path to constellation YAML |
-| `ground_stations` | yes | - | Path to ground station set YAML |
-| `routing.protocol` | yes | - | `isis` or `ospf` |
-| `routing.extensions` | no | none | Protocol extensions (see below) |
-| `routing.area_assignment.strategy` | no | `flat` | `flat`, `per-plane`, or `stripe` |
-| `routing.area_assignment.planes_per_stripe` | no | - | Required for `stripe` strategy |
-| `routing.config_overrides` | no | none | Key-value overrides for FRR templates |
-| `placement.policy` | no | `planePerNode` | `allOnOne`, `planePerNode`, `planeGroupPerNode` |
-| `time.step_seconds` | no | 1 | Simulation time step in seconds |
-| `satellite_type` | no | from constellation | Override the constellation's satellite type |
+| Field | Required | Description |
+|-------|:---:|-------------|
+| `session.name` | yes | Session identifier |
+| `identity.mode` | yes | Must be `segment_namespaced` |
+| `segments` | yes | Node-producing and relay building blocks |
+| `segments[].namespace` | yes for node-producing segments | Runtime node ID namespace |
+| `segments[].kind` | yes | `constellation`, `ground_set`, or `space_node` in current shipped sessions |
+| `link_rules` | yes | Declared candidate connectivity between segments |
+| `routing.protocol` | yes | `isis` or `ospf` |
+| `routing.extensions` | no | Supported protocol extensions |
+| `routing.area_assignment` | no | Area assignment strategy |
+| `placement.policy` | no | Pod placement policy |
+| `time.step_seconds` | no | Simulation time step |
+| `ephemeris` | multi-body only | Body ephemeris provider and kernel references |
 
-### Routing Protocols
+Runtime node IDs are allocated as `{namespace}-{local_node_id}` and normalized
+for NATS, Kubernetes, and interface safety. The local node ID and display name
+remain separate from the runtime ID.
+
+## Curated Sessions
+
+These are the shipped demo sessions:
+
+| Session | Routing | Description |
+|---------|---------|-------------|
+| `earth-leo-simple.yaml` | OSPF | Default Earth LEO starter with MBB-capable ground nodes |
+| `earth-leo-walker.yaml` | IS-IS + TE | Walker-delta LEO starter |
+| `earth-leo-polar.yaml` | IS-IS + TE | Polar LEO starter with high-latitude ground stations |
+| `earth-meo-gps.yaml` | IS-IS | GPS-like MEO starter |
+| `earth-geo-inmarsat.yaml` | IS-IS | Representative GEO commercial-relay-style starter |
+| `earth-geo-tdrs.yaml` | IS-IS | Representative GEO relay/TDRS-style starter |
+| `earth-leo-meo-geo.yaml` | IS-IS + TE | LEO, MEO, GEO, and ground access in one Earth session |
+| `earth-luna-relay.yaml` | IS-IS + TE | Earth relay, lunar relay, and lunar ground access |
+| `earth-luna-gateway-site.yaml` | IS-IS + TE | Earth gateway site, cislunar relay, lunar relay, and lunar surface router |
+
+The catalog contains more reusable primitives than these sessions. That is
+intentional. The sessions are the examples; the catalog parts are the building
+blocks.
+
+## Link Rules
+
+| Kind | Current Meaning |
+|------|-----------------|
+| `access` | Body-local ground-to-space access. Earth ground to Earth orbit, or lunar ground to lunar orbit. |
+| `inter_constellation` | Space-to-space links between segments in the same body frame. |
+| `inter_body_relay` | Space-to-space relay across body frames, with an explicit protocol boundary. |
+
+Supported topology modes:
+
+| Mode | Meaning |
+|------|---------|
+| `visible_candidates` | OME evaluates visible candidates under the rule. |
+| `nearest_n` | Resolver builds a bounded static candidate set from nearest endpoint pairs. |
+| `explicit_pairs` | Resolver uses the exact declared pairs. |
+
+Unsupported future grammar is rejected by the resolver with typed errors. It is
+not interpreted as a fallback.
+
+## Routing Protocols
 
 | Protocol | Extensions Available | Description |
-|----------|---------------------|-------------|
+|----------|----------------------|-------------|
 | `isis` | `traffic-engineering`, `sr`, `mpls` | IS-IS link-state IGP |
 | `ospf` | `traffic-engineering`, `sr`, `mpls` | OSPF link-state IGP |
 
 Extension dependencies:
+
 - `mpls` requires `traffic-engineering`
-- `sr` (segment routing) requires `isis` or `ospf`
+- `sr` requires `isis` or `ospf`
 
-### Area Strategies
+BGP and DSN/DTN-style protocol adapters are roadmap items. Cislunar demo
+sessions currently use static protocol-boundary behavior where configured.
 
-| Strategy | Description | Recommended For |
-|----------|-------------|-----------------|
-| `flat` | All nodes in one routing area | Constellations < 50 satellites |
-| `per-plane` | Each orbital plane is its own area | Large constellations (recommended) |
-| `stripe` | N adjacent planes share an area | Balance between scope and inter-area traffic |
+## Ground Sites, Nodes, and Terminals
+
+A ground site is the physical location. A ground node is a router or terminal
+system at that site. A ground node can carry multiple terminals, and a site can
+contain multiple nodes.
+
+```yaml
+ground_sites:
+  - id: santiago
+    display_name: Santiago Gateway Site
+    reference_body: earth
+    lat_deg: -33.45
+    lon_deg: -70.66
+    nodes:
+      - id: leo-router
+        handover_mode: mbb
+        mbb_overlap_ticks: 3
+        mbb_reserve: 1
+        terrestrial_prefixes:
+          - prefix: 172.61.10.0/24
+            metric: 10
+        terminals:
+          - id: leo-ka
+            type: rf
+            band: Ka
+            count: 2
+            bandwidth_mbps: 1200
+            tracking_capacity: 1
+```
+
+Handoff policy belongs to the ground node. A node with one compatible terminal
+cannot truthfully make before break. A node with multiple compatible terminals
+can reserve capacity for overlap.
 
 ## Constellation Configuration
 
-Defines orbital geometry. Located in `configs/constellations/`.
-
-### Parametric Mode (Walker Constellation)
+Constellation files live in `configs/constellations/` and define orbital
+geometry. They are referenced by session segments.
 
 ```yaml
 mode: parametric
@@ -83,48 +183,22 @@ planes:
   phase_offset_deg: 2.045
 ```
 
-| Field | Description |
-|-------|-------------|
-| `orbit.altitude_km` | Orbital altitude in km |
-| `orbit.inclination_deg` | Orbital inclination in degrees |
-| `orbit.pattern` | `walker-delta` or `walker-star` |
-| `planes.count` | Number of orbital planes |
-| `planes.sats_per_plane` | Satellites per plane |
-| `planes.raan_spacing_deg` | Right Ascension spacing between planes |
-| `planes.phase_offset_deg` | Phase offset between adjacent planes |
+Representative catalog examples include:
 
-### Explicit Mode (Custom Orbits)
-
-```yaml
-mode: explicit
-name: custom-constellation
-satellites:
-  - plane: 0
-    slot: 0
-    altitude_km: 550
-    inclination_deg: 53.0
-    raan_deg: 0.0
-    true_anomaly_deg: 0.0
-```
-
-### Available Constellations
-
-| Config | Satellites | Planes | Altitude | Pattern |
-|--------|-----------|--------|----------|---------|
-| `demo-36.yaml` | 36 | 1 | 550 km | Single ring |
-| `starlink-176.yaml` | 176 | 16 | 550 km | Walker delta |
-| `starlink-576.yaml` | 576 | 36 | 550 km | Walker delta |
-| `starlink-shell1-220.yaml` | 220 | 20 | 550 km | Walker delta |
-| `starlink-gen2-1584.yaml` | 1584 | 72 | 530 km | Walker delta |
-| `iridium-66.yaml` | 66 | 6 | 780 km | Walker star |
-| `iridium-small-36.yaml` | 36 | 6 | 780 km | Walker star (reduced) |
-| `oneweb-60.yaml` | 60 | 6 | 1200 km | Walker delta |
-| `kuiper-50.yaml` | 50 | 5 | 630 km | Walker delta |
-| `custom-example.yaml` | 4 | 2 | 550 km | Minimal test |
+| Config | Description |
+|--------|-------------|
+| `demo-36.yaml` | Small LEO starter ring |
+| `starlink-176.yaml` | Walker-delta LEO shell |
+| `iridium-66.yaml` | Polar Walker-star-style shell |
+| `meo-gps-24.yaml` | GPS-like MEO shell |
+| `geo-inmarsat-representative.yaml` | GEO commercial-relay-style shell |
+| `geo-tdrs-representative.yaml` | GEO relay/TDRS-style shell |
+| `luna-polar-8.yaml` | Lunar polar relay shell |
 
 ## Satellite Type Configuration
 
-Defines the hardware on each satellite bus. Located in `configs/satellite-types/`.
+Satellite type files live in `configs/satellite-types/` and describe terminal
+inventory:
 
 ```yaml
 satellite_type:
@@ -141,124 +215,30 @@ satellite_type:
       count: 1
       bandwidth_mbps: 1000
       band: Ku
-      beam_falloff_exponent: 2.0
 ```
 
-**ISL terminals** - laser or RF links between satellites:
+Terminal fields drive candidate eligibility, bandwidth shaping, and
+explainability. If a link rule narrows terminal compatibility in a way the
+runtime cannot honor, the resolver rejects it rather than silently widening it.
 
-| Field | Description |
-|-------|-------------|
-| `type` | `optical` or `rf` |
-| `count` | Number of ISL terminals (determines max simultaneous ISLs) |
-| `max_range_km` | Maximum link range |
-| `bandwidth_mbps` | Per-terminal capacity |
-| `max_tracking_rate_deg_s` | Terminal slew rate |
-| `field_of_regard_deg` | Pointing range (360 = hemispherical) |
+## Ground Station Sets
 
-**Ground terminals** - satellite's downlink antennas:
+Ground station set files live in `configs/ground-stations/sets/`. Some sets are
+simple station lists; newer sets can define sites, nodes, terminals, and
+station-scoped scheduling.
 
-| Field | Description |
-|-------|-------------|
-| `type` | `optical` or `rf` |
-| `count` | Number of ground-facing antennas (limits simultaneous ground links) |
-| `bandwidth_mbps` | Downlink capacity per antenna |
-| `band` | RF frequency band (RF terminals only) |
-| `beam_falloff_exponent` | Signal degradation at low elevation |
+| Config | Purpose |
+|--------|---------|
+| `demo-mbb.yaml` | Default MBB-capable Earth LEO ground set |
+| `meo-gps.yaml` | Long-range RF gateways for MEO/GEO demos |
+| `geo-inmarsat.yaml` | GEO commercial-relay-style ground set |
+| `geo-tdrs.yaml` | GEO relay/TDRS-style ground set |
+| `luna-demo.yaml` | Lunar surface demo sites |
 
-### Available Satellite Types
+## Resolver Boundary
 
-| Config | ISL Count | ISL Type | ISL Range | Description |
-|--------|-----------|----------|-----------|-------------|
-| `starlink-v2.yaml` | 4 | optical | 5,000 km | Starlink Gen2 |
-| `starlink-v2-laser.yaml` | 4 | optical | 5,000 km | Laser-only variant |
-| `generic-4isl.yaml` | 4 | optical | 5,000 km | Generic platform |
-| `generic-2isl.yaml` | 2 | optical | 5,000 km | Intra-plane only |
-| `iridium-next.yaml` | 4 | RF | 4,400 km | Iridium NEXT |
-| `kuiper-v1.yaml` | 4 | optical | 5,000 km | Amazon Kuiper |
-| `oneweb-gen2.yaml` | 4 | optical | 5,000 km | OneWeb Gen2 |
-
-## Ground Station Configuration
-
-Located in `configs/ground-stations/`.
-
-### Individual Stations (`stations/`)
-
-```yaml
-ground_station:
-  name: hawthorne
-  lat_deg: 33.92
-  lon_deg: -118.33
-  alt_m: 20
-  min_elevation_deg: 15
-  terminals:
-    - type: optical
-      count: 2
-      bandwidth_mbps: 1000
-      tracking_capacity: 1
-  terrestrial_prefixes:
-    - prefix: "172.16.1.0/24"
-      metric: 10
-    - prefix: "0.0.0.0/0"
-      metric: 100
-```
-
-| Field | Description |
-|-------|-------------|
-| `name` | Identifier (becomes `gs-{name}` in the network) |
-| `lat_deg`, `lon_deg` | WGS84 coordinates |
-| `alt_m` | Altitude above sea level (meters) |
-| `min_elevation_deg` | Minimum satellite elevation for link formation |
-| `terminals[].tracking_capacity` | Simultaneous satellite connections per antenna |
-| `terrestrial_prefixes` | IP prefixes advertised into the routing protocol |
-
-### Station Sets (`sets/`)
-
-```yaml
-ground_station_set:
-  name: global
-  stations:
-    - hawthorne
-    - ashburn
-    - frankfurt
-    - singapore
-    - sao-paulo
-    - sydney
-    - mcmurdo
-  default_terrestrial_prefixes:
-    ipv4_template: "172.16.{gs_index}.0/24"
-    ipv6_template: "fd10::{gs_index}:0/112"
-    metric: 10
-    default_route: true
-    default_route_metric: 100
-```
-
-The `{gs_index}` template is replaced with each station's 0-based index. Individual station configs override set defaults when both define `terrestrial_prefixes`.
-
-### Available Ground Station Sets
-
-| Config | Stations | Coverage |
-|--------|----------|----------|
-| `demo.yaml` | 6 | US + Europe + Asia |
-| `global.yaml` | 7 | 6 continents |
-| `global-8.yaml` | 8 | 6 continents + polar |
-| `us-conus.yaml` | 4 | Continental US |
-| `transatlantic.yaml` | 4 | US East + Europe |
-| `transpacific.yaml` | 4 | US West + Asia-Pacific |
-| `polar-emphasis.yaml` | 6 | High-latitude stations |
-
-## Config File Structure
-
-```
-configs/
-├── constellations/         Orbital geometry definitions
-├── satellite-types/        Satellite hardware definitions
-├── ground-stations/
-│   ├── stations/           Individual ground station configs
-│   └── sets/               Named groups of stations
-├── sessions/               Complete session configs (references above)
-├── templates/frr/          Jinja2 templates for FRR config generation
-├── presets/                 UI wizard preset metadata
-└── platform.yaml           Platform-level settings
-```
-
-Session configs reference constellations and ground station sets by path. Paths are relative to the project root.
+All product deploy paths use the same session resolver. The browser wizard,
+YAML upload, command-line deploy, Operator, OME, Scheduler, VS-API, and
+Measurement Interface consume the same resolved runtime view. If a session
+cannot be resolved, deployment fails before pods are treated as valid runtime
+state.

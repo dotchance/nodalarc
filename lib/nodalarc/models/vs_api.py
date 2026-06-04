@@ -14,6 +14,18 @@ from nodalarc.body_frames import SupportedSurfaceBody
 from nodalarc.models.scheduler_ops import ActuationState
 
 
+class NodeAddress(BaseModel):
+    """Configured network identity/address associated with one node."""
+
+    model_config = ConfigDict(frozen=True)
+
+    purpose: Literal["router_loopback", "site_interface", "site_prefix"]
+    family: Literal["ipv4", "ipv6"]
+    address: str
+    interface: str | None = None
+    metric: int | None = None
+
+
 class NodeState(BaseModel):
     """State of a single node in the constellation."""
 
@@ -34,6 +46,7 @@ class NodeState(BaseModel):
     isl_count: int = 0
     gnd_count: int = 0
     prefix: str | None = None  # Ground station advertised prefix
+    addresses: tuple[NodeAddress, ...] = ()
     min_elevation_deg: float | None = None  # Ground stations only
     beam_falloff_exponent: float | None = None  # Satellites only, from satellite type
     # Parameterization (D2/D3 from day one): which celestial body this node is anchored to and
@@ -41,7 +54,12 @@ class NodeState(BaseModel):
     # tints by tenant without an Earth/default assumption. Defaults keep single-shell Earth
     # sessions unchanged; multi-shell / lunar sessions set them per node.
     reference_body: SupportedSurfaceBody = "earth"
+    frame_id: str = "earth"
     tenant_id: str = "default"
+    segment_id: str | None = None
+    local_node_id: str | None = None
+    namespace: str | None = None
+    tags: tuple[str, ...] = ()
 
 
 class LinkState(BaseModel):
@@ -60,6 +78,9 @@ class LinkState(BaseModel):
     traffic_load_pct: float | None  # None = no probe data (distinct from 0)
     interface_a: str = ""
     interface_b: str = ""
+    link_rule_id: str | None = None
+    topology_mode: str | None = None
+    endpoint_segments: tuple[str, str] | None = None
     scheduling_state: str = "active"
     teardown_remaining_ticks: int | None = None
     successor_pair: tuple[str, str] | None = None
@@ -88,6 +109,9 @@ class LinkDecisionTrace(BaseModel):
     substrate_one_way_ms: float | None
     netem_one_way_ms: float | None
     rtt_to_one_way_policy: str | None
+    link_rule_id: str | None = None
+    topology_mode: str | None = None
+    endpoint_segments: tuple[str, str] | None = None
 
 
 class TracedPath(BaseModel):

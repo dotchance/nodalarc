@@ -1,114 +1,221 @@
 # Sessions
 
-A session is a running constellation emulation. It defines which satellites are in orbit, how they're connected, which ground stations exist, and what routing protocol they're running. You can deploy different sessions to experiment with different configurations.
+A session is a running network experiment. It defines which nodes exist, where
+they are placed, which links are allowed to become candidates, and what routing
+stack runs inside the nodes.
 
-## Creating a Session from the Wizard
+The simplest session is still a single LEO constellation with Earth ground
+stations. That is the right place to start. The same session grammar also lets
+you assemble multiple orbital regimes, lunar segments, relay nodes, and
+body-specific ground sites when the experiment needs them.
 
-The session wizard walks you through building a constellation configuration step by step.
+## The Session Model
 
-![Session Wizard](../images/user-session-wizard.png)
+NodalArc sessions are assembled from reusable building blocks:
 
-### Step 1: Choose a Constellation
+- **segments** - groups of nodes in a placement frame, such as an Earth LEO
+  constellation, an Earth ground-site set, a GEO relay segment, a lunar polar
+  relay segment, or a single cislunar relay node
+- **link rules** - declarations of which segment endpoints are allowed to form
+  candidate links
+- **routing** - the protocol and extensions rendered into each router
+- **time** - simulation start time, step size, and compression
+- **ephemeris** - optional body-position data for multi-body sessions
 
-The constellation defines the orbital geometry - how many satellites, at what altitude, in what pattern.
+The important distinction is that a link rule says a link is allowed to be
+considered. It does not force the link to exist. Geometry, terminal capability,
+policy, capacity, and actuation proof still decide whether the link is actually
+active.
 
-| Constellation | Satellites | Description |
-|---------------|-----------|-------------|
-| Demo-36 | 36 | Single orbital ring. Fast to deploy, good for learning |
-| Starlink-176 | 176 | 16 orbital planes, realistic Starlink-scale topology |
-| Starlink-576 | 576 | Full shell, large-scale testing |
-| Iridium-66 | 66 | Polar orbit constellation |
-| OneWeb-60 | 60 | Medium-altitude constellation |
-| Kuiper-50 | 50 | Amazon Kuiper-inspired geometry |
-| Custom | Any | Define your own orbital parameters |
+## Curated Demo Sessions
 
-Larger constellations take longer to deploy and require more system resources. Start with Demo-36 or Starlink-176 for evaluation.
+These are the sessions intended for normal use and demos:
 
-### Step 2: Choose a Satellite Type
+| Session | What It Shows |
+|---------|---------------|
+| `earth-leo-simple.yaml` | Default Earth LEO starter. 36 satellites, Earth ground nodes, OSPF, MBB-capable access. |
+| `earth-leo-walker.yaml` | Walker-delta LEO shell with IS-IS and traffic engineering. |
+| `earth-leo-polar.yaml` | Polar LEO shell with high-latitude ground coverage. |
+| `earth-meo-gps.yaml` | GPS-like MEO geometry with long-range RF gateway stations. |
+| `earth-geo-inmarsat.yaml` | Representative GEO commercial-relay-style session. |
+| `earth-geo-tdrs.yaml` | Representative GEO relay/TDRS-style session. |
+| `earth-leo-meo-geo.yaml` | Earth multi-regime session: LEO, MEO, GEO, and ground access in one experiment. |
+| `earth-luna-relay.yaml` | Lunar relay demonstrator with Earth relay, lunar polar relay, and lunar ground access. |
+| `earth-luna-gateway-site.yaml` | Cislunar gateway-site demonstrator with Earth access nodes, Earth relay, lunar relay, and lunar surface router. |
 
-The satellite type defines what hardware each satellite carries - specifically its inter-satellite link (ISL) terminals and ground-facing antennas.
+The catalog files under `configs/constellations/`, `configs/satellite-types/`,
+and `configs/ground-stations/` are the reusable parts. The session files under
+`configs/sessions/` are the assembled examples.
 
-| Satellite Type | ISL Terminals | ISL Range | Description |
-|---------------|--------------|-----------|-------------|
-| Starlink V2 | 4 optical | 5,000 km | Standard optical laser ISL platform |
-| Generic 4-ISL | 4 optical | 5,000 km | Generic satellite bus with 4 ISL terminals |
-| Generic 2-ISL | 2 optical | 5,000 km | Minimal ISL configuration (intra-plane only) |
-| Iridium NEXT | 4 RF | 4,400 km | RF crosslinks |
-| Kuiper V1 | 4 optical | 5,000 km | Amazon Kuiper platform |
+## Example Session YAML
 
-The ISL terminal count determines how many simultaneous inter-satellite links each satellite can maintain. A 4-terminal satellite typically has 2 intra-plane links (forward/backward in the same orbital ring) and 2 cross-plane links (to satellites in adjacent orbital planes).
+```yaml
+session:
+  name: earth-leo-simple
+identity:
+  mode: segment_namespaced
 
-### Step 3: Choose Ground Stations
+segments:
+  - id: space
+    kind: constellation
+    source: configs/constellations/demo-36.yaml
+    namespace: space
+    central_body: earth
+    tags: [earth, leo, simple]
 
-Ground stations are where the constellation connects to terrestrial networks. You can choose a predefined set or pick individual stations.
+  - id: ground
+    kind: ground_set
+    source: configs/ground-stations/sets/demo-mbb.yaml
+    namespace: ground
+    reference_body: earth
+    tags: [earth, ground, simple]
+    scheduling:
+      selection_policy:
+        name: highest-elevation
+      handover_policy:
+        name: hysteresis
+        params:
+          discount_factor: 1.15
+          mask_fade_range_deg: 5.0
 
-| Ground Station Set | Stations | Coverage |
-|-------------------|----------|----------|
-| Demo | 6 | US + Europe + Asia (Hawthorne, Ashburn, Denver, Frankfurt, Singapore, Tokyo) |
-| Global | 7 | 6 continents including McMurdo (Antarctica) |
-| US CONUS | 4 | Continental US coverage |
-| Transatlantic | 4 | US East Coast + Europe |
-| Transpacific | 4 | US West Coast + Asia-Pacific |
-| Polar Emphasis | 6 | High-latitude stations for polar orbit testing |
+link_rules:
+  - id: ground-access
+    kind: access
+    endpoints:
+      - selector: {segment: ground}
+        terminal_role: ground
+      - selector: {segment: space}
+        terminal_role: ground
+    topology:
+      mode: visible_candidates
 
-Each ground station has tracking antennas that connect to overhead satellites. When multiple satellites are visible, the system picks the best candidate based on elevation angle. Ground stations originate a default route into the routing protocol, so satellites with active ground connections become preferred gateways for internet-bound traffic.
+routing:
+  protocol: ospf
+  area_assignment:
+    strategy: flat
 
-### Step 4: Choose a Routing Protocol
+time:
+  step_seconds: 1
+```
 
-The routing protocol runs inside every satellite and ground station, computing forwarding paths across the constellation.
+Every node-producing segment has a `namespace`. Runtime node IDs are allocated
+from that namespace and the node's local ID. For example, a satellite with local
+ID `sat-P00S00` in namespace `space` becomes `space-sat-p00s00`. The local ID
+and human display name remain separate from the runtime node ID so future
+renaming does not break routing identity.
 
-| Protocol | Description | Best For |
-|----------|-------------|----------|
-| OSPF | Open Shortest Path First. Common in enterprise networks | Learning, small constellations, familiar protocol |
-| IS-IS | Intermediate System to Intermediate System. Preferred for large networks | Large constellations, multi-area designs, production-like testing |
-| IS-IS + TE | IS-IS with traffic engineering extensions | Traffic engineering, bandwidth-aware routing |
-| IS-IS + SR-MPLS | IS-IS with segment routing over MPLS | Label-switched paths, service chaining |
+## Segments
 
-For your first session, OSPF or IS-IS with a flat area strategy is simplest. For larger constellations (100+ satellites), IS-IS with per-plane areas is recommended - it keeps the routing database manageable by limiting flooding scope to each orbital plane.
+### Constellation Segments
 
-### Step 5: Deploy
+A constellation segment references an orbital catalog file:
 
-Click Deploy. The system builds the constellation configuration, creates all satellite and ground station nodes, wires their network interfaces, and starts the routing protocol. Deployment takes 1-3 minutes depending on constellation size.
+```yaml
+- id: leo
+  kind: constellation
+  source: configs/constellations/demo-36.yaml
+  namespace: leo
+  central_body: earth
+  tags: [earth, leo]
+```
 
-The visualization updates live during deployment - you'll see satellites appear as their pods come online.
+`central_body` tells the OME which body the segment orbits. Current shipped
+sessions use Earth and Luna. The grammar is built to grow toward Mars,
+Lagrange-point relays, and deeper-space scenarios, but unsupported runtime
+features fail validation instead of being silently approximated.
+
+### Ground Segments
+
+A ground segment references a set file or defines sites inline. A ground site is
+the physical place. A ground node is a router or terminal system at that place.
+A ground node can have one or more terminals, and a site can contain multiple
+nodes.
+
+That matters because a real gateway site often has different terminals for
+different missions. A Santiago site can have one LEO Ka-band router, one GEO
+C-band router, and one cislunar gateway router. They are at the same physical
+site, but they are different network nodes with different terminals and
+different policies.
+
+### Space Node Segments
+
+A `space_node` segment creates one explicit relay node. The cislunar demo uses
+this for an Earth-side relay node in GEO-like placement.
+
+## Link Rules
+
+Link rules define the candidate graph the OME is allowed to evaluate.
+
+| Rule Kind | Meaning |
+|-----------|---------|
+| `access` | Body-local ground-to-space access. Earth ground to Earth orbit, or lunar ground to lunar orbit. |
+| `inter_constellation` | Space-to-space links between constellation segments in the same body frame. |
+| `inter_body_relay` | Space-to-space relay across body frames, such as Earth relay to lunar relay. |
+
+Current topology modes:
+
+| Mode | Meaning |
+|------|---------|
+| `visible_candidates` | Evaluate all visible candidates under the rule, bounded by candidate limits. |
+| `nearest_n` | Build a static candidate set from the nearest `n` endpoint pairs. |
+| `explicit_pairs` | Use the exact declared candidate pairs. |
+
+Dynamic `nearest_visible` selection is intentionally not accepted until the OME
+owns it as a per-tick truth source.
+
+## Ground Handoff Policy
+
+Ground handoff is a property of the ground node, not the whole session.
+
+A ground node with one usable terminal must use break-before-make behavior. A
+ground node with multiple compatible terminals can use make-before-break
+behavior by reserving enough terminal capacity for overlap.
+
+```yaml
+nodes:
+  - id: leo-router
+    handover_mode: mbb
+    mbb_overlap_ticks: 3
+    mbb_reserve: 1
+    terminals:
+      - id: leo-ka
+        type: rf
+        band: Ka
+        count: 2
+        tracking_capacity: 1
+```
+
+The allocator does not invent overlap where terminal capacity does not exist.
+If a configuration asks for make-before-break without enough terminals, the
+session is rejected or reduced to the explicitly configured, truthful behavior.
 
 ## Switching Sessions
 
-You can switch to a different session without restarting NodalArc. Open the session wizard and deploy a new configuration. The system tears down the current session and brings up the new one automatically. You'll see a progress indicator during the transition.
+You can switch sessions without restarting the platform:
 
-## What Each Setting Means
+```bash
+make session DEFAULT_SESSION=configs/sessions/earth-leo-meo-geo.yaml
+```
 
-### Altitude
+The browser session wizard and YAML upload path use the same resolver as the
+command-line deploy path. A session that the browser accepts is the same shape
+that the runtime accepts.
 
-Higher altitude means longer orbital periods (satellites move more slowly relative to the ground), longer ISL ranges (satellites are farther apart), and higher ground-to-satellite latency. LEO constellations (500-1200 km) offer low latency but require many satellites for global coverage.
+## Current Limits
 
-### Inclination
+NodalArc is intentionally strict. It is better to reject unsupported grammar
+than to run an approximation that looks correct.
 
-The orbital inclination determines the latitude range the constellation covers. A 53-degree inclination (like Starlink) covers latitudes from 53N to 53S. A 97-degree (sun-synchronous) orbit covers nearly pole-to-pole. Higher inclination means better polar coverage but potentially lower satellite density at the equator.
+Current MVP limits include:
 
-### Planes and Satellites Per Plane
+- Product session YAML uses the segment grammar. Old top-level
+  `constellation`/`ground_stations` session files are not a supported product
+  path.
+- `access` links are body-local. Cross-body links use `inter_body_relay`.
+- The cislunar demos include realistic Earth-Luna range and latency, but DSN
+  protocol conversion and full deep-space protocol behavior are future work.
+- Router configuration capture/replay and per-class template overlays are future
+  work. Today FRR configs are generated from session YAML and templates.
 
-More planes = wider longitude coverage with fewer satellites per plane. More satellites per plane = denser coverage within each orbital ring. The phase offset between planes determines the "stitching" pattern between adjacent planes and affects cross-plane ISL geometry.
-
-### Area Strategy
-
-For IS-IS and OSPF, the constellation is divided into routing areas to limit flooding scope:
-
-- **Flat** - all nodes in one area. Simplest but every topology change floods everywhere
-- **Per-plane** - each orbital plane is its own area. Recommended for large constellations
-- **Stripe** - groups of adjacent planes share an area. Balance between scope and inter-area routing
-
-### Minimum Elevation
-
-The minimum elevation angle for ground station visibility (set per ground station). Higher values mean the ground station only connects when a satellite is nearly overhead - shorter connection windows but stronger signal. Lower values mean longer connections but at lower signal quality and higher slant range.
-
-## Session Lifecycle
-
-A session goes through these states:
-
-1. **Creating** - pods are being deployed, FRR configs delivered
-2. **Wiring** - network interfaces being connected, routing starting
-3. **Ready** - all nodes running, routing converging
-4. **Active** - routing converged, constellation fully operational
-
-You can interact with the session at any point after it reaches Ready. Routing convergence typically takes 10-30 seconds after all interfaces are wired, depending on constellation size and protocol.
+Those limits are part of the truth contract. If the model cannot represent a
+behavior correctly yet, it should say so.

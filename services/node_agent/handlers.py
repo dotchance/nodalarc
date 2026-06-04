@@ -354,7 +354,7 @@ def _isl_link_down(
     replace semantics on the next LinkUp, so orphaned qdiscs are harmless.
 
     CROSS_NODE ISLs: destroys the VXLAN tunnel (handled separately in the
-    batch handler's Phase 0 teardown).
+    batch handler's pre-mutation teardown).
     """
     try:
         if iface.locality == node_agent_pb2.LOCALITY_LOCAL:
@@ -698,15 +698,15 @@ def handle_batch_link_down(
     )
 
 
-def _isl_link_up_phase1(
+def _isl_link_up_carrier_stage(
     iface: node_agent_pb2.InterfaceUp, pid_map: dict[str, int] | None = None
 ) -> EntryOutcome:
-    """Phase 1 of ISL link-up: attach host-side + shaping. No NDP yet.
+    """ISL link-up carrier stage: attach host-side + shaping. No NDP yet.
 
     LOCAL ISLs: pod-side interface is already admin UP (from wiring). Attaches
     host-side veths (UP + tc mirred) → carrier appears on pod-side.
 
-    CROSS_NODE ISLs: VXLAN tunnel + veth already created in Phase 0 and
+    CROSS_NODE ISLs: VXLAN tunnel + veth already created in the preparation stage and
     interface is UP. Only tc shaping needs to be applied.
 
     Returns error string or None.
@@ -749,7 +749,7 @@ def _isl_link_up_phase1(
             )
         return _combine_proofs("ISL LinkUp verified", proofs)
     except Exception as exc:
-        msg = f"ISL up phase1 failed {iface.node_id}/{iface.interface_name}: {exc}"
+        msg = f"ISL up carrier stage failed {iface.node_id}/{iface.interface_name}: {exc}"
         log.warning(msg)
         return _fail(node_agent_pb2.NODE_AGENT_KERNEL_MUTATION_FAILED, msg, dirty_kernel=True)
 
@@ -762,9 +762,9 @@ def handle_batch_link_up(
 ) -> node_agent_pb2.BatchLinkUpResponse:
     """Handle BatchLinkUp command.
 
-    Phase 0 (sequential): Create VXLAN tunnels for CROSS_NODE interfaces.
-    Phase 1 (concurrent): Bring host-side veth carrier UP and apply
-      tc tbf + tc netem shaping on every interface. ACK as soon as Phase 1
+    Preparation stage (sequential): create VXLAN tunnels for CROSS_NODE interfaces.
+    Carrier stage (concurrent): bring host-side veth carrier UP and apply
+      tc tbf + tc netem shaping on every interface. ACK as soon as this stage
       is complete — Layer 2 carrier transitions are the Node Agent's
       contract with the Scheduler.
 
@@ -772,7 +772,7 @@ def handle_batch_link_up(
     (v0.72 reversal), NDP is owned by FRR (IGP sessions — IS-IS/OSPF hello
     fires NS naturally on carrier-up) and the kernel NDP state machine
     (NodalPath sessions — resolves on first forwarding attempt). The
-    previous `_isl_ndp_phase2` nsenter-ping storm and its `trigger_ndp_and_wait`
+    previous neighbor-discovery nsenter-ping storm and its `trigger_ndp_and_wait`
     polling loop are deleted: a Layer 2 substrate actuator must not do
     Layer 3 work, the subprocess.run-per-link pattern did not scale, and
     the per-attempt `_ns_lock` contention defeated the entire simultaneity
@@ -825,7 +825,7 @@ def handle_batch_link_up(
                 message=str(exc),
             )
 
-    # Phase 0: Create VXLAN tunnels for CROSS_NODE interfaces.
+    # Preparation stage: Create VXLAN tunnels for CROSS_NODE interfaces.
     # Each interface carries its own locality — only CROSS_NODE interfaces
     # need VXLAN. LOCAL interfaces in the same batch are unaffected.
     #
@@ -834,7 +834,7 @@ def handle_batch_link_up(
     #   interface (satellite _gnd_{sat} or GS _gbr-{gs}). Pod-side gnd0 already
     #   exists from wiring. Same carrier model as LOCAL ground links.
     local_ip: str | None = None
-    phase0_failed: set[tuple[str, str]] = set()
+    preparation_failed: set[tuple[str, str]] = set()
     for iface in request.interfaces:
         if iface.locality != node_agent_pb2.LOCALITY_CROSS_NODE:
             continue
@@ -844,7 +844,7 @@ def handle_batch_link_up(
         except Exception as exc:
             outcome = _fail(node_agent_pb2.NODE_AGENT_HOST_IP_MISSING, str(exc))
             outcomes[_iface_key(iface)] = outcome
-            phase0_failed.add(_iface_key(iface))
+            preparation_failed.add(_iface_key(iface))
             continue
 
         try:
@@ -857,7 +857,7 @@ def handle_batch_link_up(
                 f"Substrate measurement unavailable for {iface.remote_node_ip}: {exc}",
                 dirty_kernel=False,
             )
-            phase0_failed.add(_iface_key(iface))
+            preparation_failed.add(_iface_key(iface))
             continue
 
         if iface.link_type == node_agent_pb2.LINK_TYPE_GROUND:
@@ -918,7 +918,7 @@ def handle_batch_link_up(
                     msg,
                     dirty_kernel=True,
                 )
-                phase0_failed.add(_iface_key(iface))
+                preparation_failed.add(_iface_key(iface))
         else:
             # ISL: create full VXLAN + veth pair into pod namespace
             try:
@@ -944,7 +944,7 @@ def handle_batch_link_up(
                 )
                 if not proof.verified:
                     outcomes[_iface_key(iface)] = _ok(proof)
-                    phase0_failed.add(_iface_key(iface))
+                    preparation_failed.add(_iface_key(iface))
             except Exception as exc:
                 msg = f"VXLAN create failed {iface.node_id}/{iface.interface_name}: {exc}"
                 outcomes[_iface_key(iface)] = _fail(
@@ -952,15 +952,15 @@ def handle_batch_link_up(
                     msg,
                     dirty_kernel=True,
                 )
-                phase0_failed.add(_iface_key(iface))
+                preparation_failed.add(_iface_key(iface))
 
-    # Phase 1: Bring interfaces UP + apply shaping.
+    # Carrier stage: Bring interfaces UP + apply shaping.
     # - LOCAL GROUND: bridge + mirred attach (_ground_link_up)
     # - CROSS_NODE GROUND: VXLAN attach + local endpoint shaping handled above
-    # - LOCAL/CROSS_NODE ISL: UP + shaping (_isl_link_up_phase1)
-    phase1_futures = {}
+    # - LOCAL/CROSS_NODE ISL: UP + shaping (_isl_link_up_carrier_stage)
+    carrier_futures = {}
     for iface in request.interfaces:
-        if _iface_key(iface) in phase0_failed:
+        if _iface_key(iface) in preparation_failed:
             continue
         if (
             iface.link_type == node_agent_pb2.LINK_TYPE_GROUND
@@ -971,22 +971,22 @@ def handle_batch_link_up(
             iface.link_type == node_agent_pb2.LINK_TYPE_GROUND
             and iface.locality == node_agent_pb2.LOCALITY_LOCAL
         ):
-            phase1_futures[_BATCH_POOL.submit(_ground_link_up, iface, pm)] = iface
+            carrier_futures[_BATCH_POOL.submit(_ground_link_up, iface, pm)] = iface
         else:
-            phase1_futures[_BATCH_POOL.submit(_isl_link_up_phase1, iface, pm)] = iface
+            carrier_futures[_BATCH_POOL.submit(_isl_link_up_carrier_stage, iface, pm)] = iface
 
-    # Wait for ALL phase 1 to complete. ACK on completion — Layer 3
+    # Wait for all carrier-stage work to complete. ACK on completion — Layer 3
     # neighbor resolution happens asynchronously in FRR / kernel NDP
     # (see docstring and PRD §13.22.6).
-    for fut in as_completed(phase1_futures):
-        iface = phase1_futures[fut]
+    for fut in as_completed(carrier_futures):
+        iface = carrier_futures[fut]
         try:
             outcome = fut.result(timeout=10)
             if outcome.success:
                 upped += 1
             outcomes[_iface_key(iface)] = outcome
         except Exception as exc:
-            msg = f"Phase1 error for {iface.node_id}/{iface.interface_name}: {exc}"
+            msg = f"Carrier-stage error for {iface.node_id}/{iface.interface_name}: {exc}"
             outcomes[_iface_key(iface)] = _fail(
                 node_agent_pb2.NODE_AGENT_KERNEL_MUTATION_FAILED,
                 msg,
@@ -1067,7 +1067,7 @@ def _verify_kernel_inventory_entry(
     entry: node_agent_pb2.KernelInventoryEntry,
     pid_map: dict[str, int] | None = None,
 ) -> EntryOutcome:
-    """Read-only GS-facing verification for Phase 5 actuation recovery."""
+    """Read-only GS-facing verification for actuation recovery."""
     try:
         if pid_map is None:
             raise ValueError("pid_map is None — wiring not complete?")
@@ -1163,7 +1163,7 @@ def handle_kernel_inventory(
     pid_map: dict[str, int] | None = None,
     fence: RuntimeFence | None = None,
 ) -> node_agent_pb2.KernelInventoryResponse:
-    """Handle read-only KernelInventory verification for Phase 5."""
+    """Handle read-only KernelInventory verification."""
     start = _time.monotonic()
     if fence is None:
         raise ValueError("RuntimeFence is required")

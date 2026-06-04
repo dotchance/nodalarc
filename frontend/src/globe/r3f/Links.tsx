@@ -3,9 +3,9 @@
 /**
  * Links — the batched ISL + ground link renderer. Wraps LinkBatch (the faithful port of
  * link batch in the R3F lifecycle: the batch's LineSegments2 is created lazily and
- * added to this group (a child of the Earth body frame, so its local-space endpoints are
- * correct), metadata reconciles on each snapshot, and endpoints are re-resolved + uploaded
- * every frame. The fat-line material resolution tracks the actual canvas size (not the
+ * added to this group (a scene-root child, so inter-body endpoints use world-space positions),
+ * metadata reconciles on each snapshot, and endpoints are re-resolved + uploaded every frame.
+ * The fat-line material resolution tracks the actual canvas size (not the
  * window), so split-pane layouts render correct line widths.
  *
  * Truth gate: a link renders solid only when it is in the Scheduler-verified kernel-actual
@@ -20,7 +20,7 @@ import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { useFrame, useThree } from "@react-three/fiber";
 import { LinkBatch, linkKey } from "./linkBatch";
-import { getNodeLocalPosition } from "./positions";
+import { getNodeWorldPosition } from "./positions";
 import type { LinkState } from "../../types";
 
 interface LinksProps {
@@ -43,7 +43,7 @@ export function Links({
   const groupRef = useRef<THREE.Group>(null);
   // Keyed on resetKey: a new constellation builds a fresh batch; the [batch] cleanup below
   // disposes the old one (removes its LineSegments2 + clears its links map + buffers).
-  const batch = useMemo(() => new LinkBatch(getNodeLocalPosition), [resetKey]);
+  const batch = useMemo(() => new LinkBatch(getNodeWorldPosition), [resetKey]);
   const size = useThree((s) => s.size);
   const sizeRef = useRef(size);
   sizeRef.current = size;

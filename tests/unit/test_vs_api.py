@@ -3,9 +3,9 @@
 import json
 import sqlite3
 from datetime import UTC, datetime
-from pathlib import Path
 
 import pytest
+import yaml
 from nodalarc.db.queries import (
     insert_convergence_result,
     insert_link_up,
@@ -13,7 +13,7 @@ from nodalarc.db.queries import (
     query_nearest_snapshot,
 )
 from nodalarc.db.schema import create_tables
-from nodalarc.models.events import EphemerisNodeTLE, SessionEphemeris
+from nodalarc.models.events import EphemerisNodeFixed, EphemerisNodeTLE, SessionEphemeris
 from nodalarc.models.link_events import LinkUp
 from nodalarc.models.metrics import ConvergenceResult
 from nodalarc.models.vs_api import (
@@ -24,7 +24,9 @@ from nodalarc.models.vs_api import (
     StateSnapshot,
 )
 from nodalarc.nats_channels import STREAM_OME_EVENTS
-from vs_api.session_context import SessionContext, _link_key
+from vs_api.session_context import SessionContext, _derive_link_type, _link_key
+
+from tests.conftest import build_segment_session_dict
 
 ISS_TLE_EPOCH = 1615896900.000275
 ISS_TLE_LINE_1 = "1 25544U 98067A   21075.51041667  .00001264  00000-0  29660-4 0  9993"
@@ -67,8 +69,43 @@ class TestOpsEventVisibility:
         assert visible == events[2:]
 
 
-def _session_yaml_text(name: str = "demo-36-ospf.yaml") -> str:
-    return Path("configs/sessions", name).read_text(encoding="utf-8")
+class TestLinkTypeDerivation:
+    def test_generic_isl_does_not_parse_node_ids_for_intra_cross_guess(self):
+        assert _derive_link_type("isl") == "isl"
+
+    def test_endpoint_segments_classify_declared_inter_constellation_links(self):
+        assert (
+            _derive_link_type(
+                "isl",
+                link_rule_id="leo-to-meo",
+                topology_mode="nearest_n",
+                endpoint_segments=("leo", "meo"),
+            )
+            == "inter_constellation"
+        )
+
+    def test_static_cross_body_link_classifies_as_inter_body_relay(self):
+        assert (
+            _derive_link_type(
+                "isl",
+                link_rule_id="earth-luna-static-relay",
+                topology_mode="static_ip",
+                endpoint_segments=("earth-relay", "luna-relay"),
+            )
+            == "inter_body_relay"
+        )
+
+
+def _session_yaml_text(name: str = "earth-leo-simple") -> str:
+    return yaml.dump(
+        build_segment_session_dict(
+            name=name,
+            constellation="configs/constellations/demo-36.yaml",
+            ground_stations="configs/ground-stations/sets/demo.yaml",
+            protocol="ospf",
+        ),
+        sort_keys=False,
+    )
 
 
 def _constellation_cr(
@@ -81,7 +118,7 @@ def _constellation_cr(
     wired_pods: int = 43,
     session_yaml: str | None = None,
     session_run_id: str = "run-test-0001",
-    session_name: str | None = "demo-36-ospf",
+    session_name: str | None = "earth-leo-simple",
 ) -> dict:
     status = {
         "phase": phase,
@@ -203,9 +240,9 @@ class TestConstellationCRReadiness:
 
         assert ready is not None
         assert ready.session_id == "run-test-0001"
-        assert ready.session_name == "demo-36-ospf"
+        assert ready.session_name == "earth-leo-simple"
         assert ready.generation == 2
-        assert ready.session.session.name == "demo-36-ospf"
+        assert ready.session.session.name == "earth-leo-simple"
 
     def test_extract_ready_cr_session_requires_runtime_identity(self):
         import vs_api.main as m
@@ -272,6 +309,31 @@ class TestConstellationCRReadiness:
 
         with pytest.raises(ValueError, match="sessionYaml"):
             m._extract_ready_cr_session(_constellation_cr(session_yaml=""))
+
+
+class TestSessionContextNetworkIdentity:
+    def test_exposes_loopback_and_site_prefix_addresses(self, tmp_path):
+        session_path = tmp_path / "session.yaml"
+        session_path.write_text(_session_yaml_text())
+
+        ctx = SessionContext("run-test-0001", str(session_path))
+
+        addresses = ctx._node_addresses_by_id["ground-gs-hawthorne"]
+        assert any(
+            a.purpose == "router_loopback" and a.family == "ipv4" and a.address == "10.255.0.1/32"
+            for a in addresses
+        )
+        assert any(
+            a.purpose == "site_prefix" and a.family == "ipv4" and a.address == "172.16.0.0/24"
+            for a in addresses
+        )
+        assert any(
+            a.purpose == "site_interface"
+            and a.address == "172.16.0.1/24"
+            and a.interface == "terr0"
+            for a in addresses
+        )
+        assert ctx._node_primary_prefix_by_id["ground-gs-hawthorne"] == "172.16.0.0/24"
 
 
 class TestStateSnapshot:
@@ -580,6 +642,34 @@ class TestEphemerisPositionPropagation:
         assert node.lat_deg == pytest.approx(44.4565, abs=1e-3)
         assert node.lon_deg == pytest.approx(152.9363, abs=1e-3)
         assert node.alt_km > 400.0
+
+    def test_ephemeris_metadata_updates_node_state(self):
+        ctx = SessionContext.__new__(SessionContext)
+        ctx._init_state_only()
+        ctx.cached_ephemeris_obj = SessionEphemeris(
+            epoch_id=0,
+            sim_time=datetime(2025, 1, 1, tzinfo=UTC),
+            epoch_unix=1735689600.0,
+            nodes={
+                "ground-gs-denver": EphemerisNodeFixed(
+                    lat_deg=39.74,
+                    lon_deg=-104.99,
+                    alt_km=1.61,
+                    segment_id="ground",
+                    local_node_id="gs-denver",
+                    namespace="ground",
+                    tags=("earth", "ground", "demo"),
+                )
+            },
+        )
+
+        ctx._propagate_positions_from_time(datetime(2025, 1, 1, tzinfo=UTC).isoformat())
+
+        node = ctx.nodes["ground-gs-denver"]
+        assert node.segment_id == "ground"
+        assert node.local_node_id == "gs-denver"
+        assert node.namespace == "ground"
+        assert node.tags == ("earth", "ground", "demo")
 
 
 class TestLinkDecisionTraceState:
@@ -1277,11 +1367,14 @@ def _decision_snapshot_payload() -> dict:
             },
             "ranking_order": ["service_priority", "selection_score", "lex_pair"],
             "handover_mode": "bbm",
+            "handover_modes": {"gs-den": "bbm"},
             "mbb_preemption": "off",
             "successor_abort_policy": "hard_release",
             "cross_tenant_displacement": "off",
             "mbb_overlap_ticks": 3,
+            "mbb_overlap_ticks_by_gs": {"gs-den": 0},
             "mbb_reserve": 0,
+            "mbb_reserve_by_gs": {"gs-den": 0},
             "bbm_acquire_timeout_ticks": 1,
             "ignored_capacity_fields": [],
         },

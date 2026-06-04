@@ -9,7 +9,7 @@ from nodalarc.constellation_loader import (
     load_ground_stations,
 )
 from nodalarc.ground_terminals import ground_terminal_type, station_ground_terminal_type
-from nodalarc.models.session import SessionConfig
+from nodalarc.resolve_session import resolve_session_with_assets
 from nodalarc.session_generator import (
     constellation_source_mode,
     generate_session_yaml,
@@ -20,11 +20,27 @@ from nodalarc.session_generator import (
 from tests.conftest import FIXTURES_DIR
 
 
+def _resolve_generated(yaml_str: str):
+    raw = yaml.safe_load(yaml_str)
+    assert "segments" in raw
+    assert "link_rules" in raw
+    assert "constellation" not in raw
+    assert "ground_stations" not in raw
+    resolution = resolve_session_with_assets(raw)
+    return raw, resolution, resolution.runtime_session
+
+
 class TestLoadPresets:
     def test_loads_all_presets(self):
         presets = load_constellation_presets()
         assert len(presets) >= 5
+        assert "demo-36" in presets
+        assert "geo-inmarsat-representative" in presets
+        assert "geo-tdrs-representative" in presets
         assert "iridium-66" in presets
+        assert "leo-simple-36" in presets
+        assert "leo-walker-delta-176" in presets
+        assert "leo-polar-36" in presets
         assert "starlink-early-44" in presets
 
     def test_preset_fields(self):
@@ -103,15 +119,14 @@ class TestGenerateSessionYaml:
             extensions=extensions,
             orbit_propagator="keplerian-circular",
         )
-        # Must parse back to valid SessionConfig
-        raw = yaml.safe_load(yaml_str)
-        session = SessionConfig.model_validate(raw)
+        # Must parse as segment YAML and resolve to the runtime projection.
+        raw, resolution, session = _resolve_generated(yaml_str)
 
         assert (
             session.session.name == f"{constellation}-{protocol}-{'-'.join(extensions) or 'plain'}"
         )
         assert session.routing.protocol == protocol
-        assert session.routing.extensions == extensions
+        assert session.routing.extensions == tuple(extensions)
         assert session.routing.stack is None  # Wizard sessions use protocol, not stack
 
     @pytest.mark.parametrize("area_strategy", ["flat", "stripe", "per-plane"])
@@ -123,8 +138,7 @@ class TestGenerateSessionYaml:
             orbit_propagator="keplerian-circular",
             area_strategy=area_strategy,
         )
-        raw = yaml.safe_load(yaml_str)
-        session = SessionConfig.model_validate(raw)
+        raw, resolution, session = _resolve_generated(yaml_str)
         assert session.routing.area_assignment is not None
         assert session.routing.area_assignment.strategy == area_strategy
 
@@ -147,8 +161,7 @@ class TestGenerateSessionYaml:
             ground_policy="longest-remaining-pass",
             ground_selection_lookahead_horizon_ticks=600,
         )
-        raw = yaml.safe_load(yaml_str)
-        session = SessionConfig.model_validate(raw)
+        raw, resolution, session = _resolve_generated(yaml_str)
         assert session.scheduling.ground.selection_policy.name == "longest-remaining-pass"
         assert session.scheduling.ground.selection_policy.params["lookahead_horizon_ticks"] == 600
 
@@ -181,8 +194,7 @@ class TestOrbitPropagatorGeneration:
             [],
             orbit_propagator="j2-mean-elements",
         )
-        raw = yaml.safe_load(yaml_str)
-        session = SessionConfig.model_validate(raw)
+        raw, resolution, session = _resolve_generated(yaml_str)
 
         assert session.orbit.propagator == "j2-mean-elements"
         assert session.orbit.fidelity_label == "j2-mean-elements"
@@ -197,40 +209,48 @@ class TestOrbitPropagatorGeneration:
                 orbit_propagator="sgp4-tle",
             )
 
-    def test_sgp4_tle_custom_constellation_sets_matching_fidelity(self):
-        yaml_str, _ = generate_session_yaml(
-            "custom-tle",
-            "ospf",
-            [],
-            custom_constellation={
-                "mode": "tle",
-                "name": "sample-tle",
-                "tle_file": str(FIXTURES_DIR / "tles/sample.tle"),
-                "filter": {"max_count": 1},
-                "default_terminals": {
-                    "isl": [
-                        {
-                            "type": "optical",
-                            "count": 2,
-                            "max_range_km": 5000,
-                            "bandwidth_mbps": 1000,
-                            "max_tracking_rate_deg_s": 3.0,
-                        }
-                    ],
-                    "ground": [{"type": "rf", "count": 1, "bandwidth_mbps": 1000}],
+    def test_sgp4_tle_custom_constellation_fails_until_runtime_supports_it(self):
+        with pytest.raises(ValueError, match="current runtime supports only"):
+            generate_session_yaml(
+                "custom-tle",
+                "ospf",
+                [],
+                custom_constellation={
+                    "mode": "tle",
+                    "name": "sample-tle",
+                    "tle_file": str(FIXTURES_DIR / "tles/sample.tle"),
+                    "filter": {"max_count": 1},
+                    "default_terminals": {
+                        "isl": [
+                            {
+                                "type": "optical",
+                                "count": 2,
+                                "max_range_km": 5000,
+                                "bandwidth_mbps": 1000,
+                                "max_tracking_rate_deg_s": 3.0,
+                            }
+                        ],
+                        "ground": [{"type": "rf", "count": 1, "bandwidth_mbps": 1000}],
+                    },
                 },
-            },
-            custom_ground_stations=[
-                {"name": "ashburn", "lat_deg": 39.04, "lon_deg": -77.49, "alt_km": 0.095}
-            ],
-            orbit_propagator="sgp4-tle",
-        )
-        raw = yaml.safe_load(yaml_str)
-        session = SessionConfig.model_validate(raw)
-
-        assert session.orbit.propagator == "sgp4-tle"
-        assert session.orbit.fidelity_label == "sgp4-tle"
-        assert session.orbit.tle_max_age_days == 7.0
+                custom_ground_stations=[
+                    {
+                        "name": "ashburn",
+                        "lat_deg": 39.04,
+                        "lon_deg": -77.49,
+                        "alt_km": 0.095,
+                        "terminals": [
+                            {
+                                "type": "rf",
+                                "count": 1,
+                                "bandwidth_mbps": 1000,
+                                "tracking_capacity": 1,
+                            }
+                        ],
+                    }
+                ],
+                orbit_propagator="sgp4-tle",
+            )
 
 
 class TestRoutingConfigRoundtrip:
@@ -253,8 +273,7 @@ class TestRoutingConfigRoundtrip:
             orbit_propagator="keplerian-circular",
             routing_config={"bfd": bfd},
         )
-        raw = yaml.safe_load(yaml_str)
-        session = SessionConfig.model_validate(raw)
+        raw, resolution, session = _resolve_generated(yaml_str)
         assert session.routing.bfd is bfd
 
     def test_isis_timers(self):
@@ -274,8 +293,7 @@ class TestRoutingConfigRoundtrip:
             orbit_propagator="keplerian-circular",
             routing_config=timers,
         )
-        raw = yaml.safe_load(yaml_str)
-        session = SessionConfig.model_validate(raw)
+        raw, resolution, session = _resolve_generated(yaml_str)
         assert session.routing.isis_hello_interval == 3
         assert session.routing.isis_hello_multiplier == 5
         assert session.routing.spf_init_delay == 100
@@ -299,8 +317,7 @@ class TestRoutingConfigRoundtrip:
             orbit_propagator="keplerian-circular",
             routing_config=timers,
         )
-        raw = yaml.safe_load(yaml_str)
-        session = SessionConfig.model_validate(raw)
+        raw, resolution, session = _resolve_generated(yaml_str)
         assert session.routing.ospf_hello_interval == 10
         assert session.routing.ospf_dead_interval == 40
         assert session.routing.ospf_spf_delay == 200
@@ -321,8 +338,7 @@ class TestRoutingConfigRoundtrip:
             orbit_propagator="keplerian-circular",
             routing_config=timers,
         )
-        raw = yaml.safe_load(yaml_str)
-        session = SessionConfig.model_validate(raw)
+        raw, resolution, session = _resolve_generated(yaml_str)
         assert session.routing.bfd is True
         assert session.routing.bfd_detect_multiplier == 5
         assert session.routing.bfd_rx_interval == 100
@@ -335,8 +351,7 @@ class TestRoutingConfigRoundtrip:
             extensions=[],
             orbit_propagator="keplerian-circular",
         )
-        raw = yaml.safe_load(yaml_str)
-        session = SessionConfig.model_validate(raw)
+        raw, resolution, session = _resolve_generated(yaml_str)
         assert session.routing.bfd is False
         assert session.routing.isis_hello_interval == 1
         assert session.routing.spf_long_delay == 1000
@@ -383,8 +398,7 @@ class TestRoutingConfigRoundtrip:
             orbit_propagator="keplerian-circular",
             routing_config=routing_config,
         )
-        raw = yaml.safe_load(yaml_str)
-        session = SessionConfig.model_validate(raw)
+        raw, resolution, session = _resolve_generated(yaml_str)
         assert session.routing.protocol == protocol
         assert session.routing.bfd is True
         assert session.scheduling.ground.handover_mode == "mbb"

@@ -4,7 +4,7 @@ NodalArc runs real routing stacks on real network interfaces. Scaling depends on
 
 ## Measured Performance
 
-**176 satellites + 7 ground stations on a 4-node cluster:**
+**176 LEO satellites + 7 Earth ground nodes on a 4-node cluster:**
 
 | Metric | Value |
 |--------|-------|
@@ -18,6 +18,10 @@ NodalArc runs real routing stacks on real network interfaces. Scaling depends on
 | Session deployment time | ~3 minutes (CRD apply to all pods wired) |
 | Initial VXLAN batch (cold start) | ~30 seconds for 176 tunnels |
 | Visualization draw calls | 47/frame (O(1) rendering architecture) |
+
+These numbers are for the LEO session family. MEO, GEO, and cislunar sessions
+have different event rates, larger link latencies, and larger visual scales.
+Measure the specific session family you plan to run.
 
 ## Per-Satellite Footprint
 

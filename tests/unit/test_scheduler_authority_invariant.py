@@ -134,6 +134,7 @@ def _make_dispatcher_with_two_terminal_gs() -> Dispatcher:
         wiring_generation="sha256:" + "b" * 64,
         max_latency_age_s=1.0,
         gs_terminal_capacities={"gs-multi": 2},
+        gs_handover_modes={"gs-multi": "mbb"},
         sat_ground_terminal_capacities={"sat-old": 1, "sat-new": 1},
     )
     d._js = AsyncMock()
@@ -331,11 +332,14 @@ def _policy_audit() -> GroundPolicyAudit:
         handover_policy_params={"gs-multi": {"discount_factor": 1.15, "mask_fade_range_deg": 5.0}},
         ranking_order=("service_priority", "selection_score", "lex_pair"),
         handover_mode="bbm",
+        handover_modes={"gs-multi": "bbm"},
         mbb_preemption="off",
         successor_abort_policy="hard_release",
         cross_tenant_displacement="off",
         mbb_overlap_ticks=3,
+        mbb_overlap_ticks_by_gs={"gs-multi": 3},
         mbb_reserve=0,
+        mbb_reserve_by_gs={"gs-multi": 0},
         bbm_acquire_timeout_ticks=1,
         ignored_capacity_fields=(),
     )

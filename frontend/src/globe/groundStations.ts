@@ -15,12 +15,15 @@ export function getGsLabelsEnabled(): boolean {
 }
 
 /** Compute the surface radius, in render units, of a min-elevation coverage cone. */
-export function computeConeRadius(minElevDeg: number, orbitalAltKm: number): number {
-  const earthRadiusKm = 6371;
+export function computeConeRadius(
+  minElevDeg: number,
+  orbitalAltKm: number,
+  bodyRadiusKm = 6371,
+): number {
   const elevRad = (minElevDeg * Math.PI) / 180;
   const centralAngle =
-    Math.acos((earthRadiusKm * Math.cos(elevRad)) / (earthRadiusKm + orbitalAltKm)) -
+    Math.acos((bodyRadiusKm * Math.cos(elevRad)) / (bodyRadiusKm + orbitalAltKm)) -
     elevRad;
-  const arcKm = earthRadiusKm * centralAngle;
+  const arcKm = bodyRadiusKm * centralAngle;
   return arcKm / KM_PER_UNIT;
 }

@@ -1,0 +1,28 @@
+# Cislunar relay RF/optical platform for the Luna demonstrator.
+#
+# This is a reusable demo primitive sized for Earth-Luna relay distances. It is
+# intentionally long-range; LEO/MEO/GEO example terminals are not physically
+# capable of spanning the cislunar hop.
+satellite_type:
+  name: cislunar-relay-rf
+  description: "Long-range cislunar relay platform with optical relay ISLs and Luna-targeted RF ground terminals."
+
+  isl_terminals:
+    - type: optical
+      count: 4
+      max_range_km: 500000
+      bandwidth_mbps: 1000
+      max_tracking_rate_deg_s: 5.0
+      field_of_regard_deg: 360
+
+  ground_terminals:
+    - type: rf
+      band: S
+      count: 2
+      bandwidth_mbps: 100
+      max_range_km: 12000
+      field_of_regard_deg: 160
+      max_tracking_rate_deg_s: 2.0
+      boresight:
+        target_body: luna
+        mode: nadir

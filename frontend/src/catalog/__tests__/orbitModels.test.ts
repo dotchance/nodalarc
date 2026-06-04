@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import type { ConstellationPreset } from "../wizardTypes";
 import {
   DEFAULT_ORBIT_PROPAGATOR,
+  constellationUnsupportedReason,
   constellationSupportsSgp4Tle,
   defaultOrbitPropagatorForConstellation,
   supportedOrbitModelsForConstellation,
@@ -26,23 +27,25 @@ describe("orbit model helpers", () => {
     expect(defaultOrbitPropagatorForConstellation(preset("parametric"))).toBe("j2-mean-elements");
   });
 
-  it("allows SGP4 only for TLE-backed constellations", () => {
+  it("detects TLE-backed constellations as structurally SGP4/TLE-only", () => {
     expect(constellationSupportsSgp4Tle(preset("parametric"))).toBe(false);
     expect(constellationSupportsSgp4Tle(preset("explicit"))).toBe(false);
     expect(constellationSupportsSgp4Tle(preset("tle"))).toBe(true);
+    expect(constellationUnsupportedReason(preset("tle"))).toContain("coming soon");
   });
 
   it("detects inline TLE constellation sources", () => {
     const inline = preset(null, JSON.stringify({ mode: "tle", name: "tle-demo" }));
 
     expect(constellationSupportsSgp4Tle(inline)).toBe(true);
-    expect(defaultOrbitPropagatorForConstellation(inline)).toBe("sgp4-tle");
+    expect(defaultOrbitPropagatorForConstellation(inline)).toBe("j2-mean-elements");
+    expect(constellationUnsupportedReason(inline)).toContain("coming soon");
   });
 
-  it("lists supported orbit models by constellation source", () => {
+  it("lists runtime-supported orbit models by constellation source", () => {
     expect(supportedOrbitModelsForConstellation(preset("parametric")).map((option) => option.id))
       .toEqual(["j2-mean-elements", "keplerian-circular"]);
     expect(supportedOrbitModelsForConstellation(preset("tle")).map((option) => option.id))
-      .toEqual(["sgp4-tle"]);
+      .toEqual([]);
   });
 });

@@ -8,9 +8,16 @@ No K8s, no NATS, no file system access, no imports from services/.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
+from pydantic import ValidationError
+
+from nodalarc.ground_handover import (
+    GroundHandoverResolutionError,
+    resolve_station_ground_scheduling,
+)
 from nodalarc.ground_terminals import (
     ground_terminal_type,
-    station_ground_terminal_capacity,
     station_ground_terminal_type,
     terminal_collection_missing_physics,
     terminal_physics_profiles,
@@ -27,7 +34,7 @@ from nodalarc.models.ground_policy import (
 )
 from nodalarc.models.ground_station import GroundStationFile
 from nodalarc.models.session import SessionConfig, resolve_session_epoch
-from nodalarc.stack_resolver import ResolvedStack
+from nodalarc.stack_resolver import ResolvedStack, validate_sid_indices
 from nodalarc.tle import tle_age_days
 
 # Canonical list of valid selection policies. Pydantic validates parsed YAML;
@@ -42,6 +49,7 @@ def validate_session_readiness(
     ground_stations: GroundStationFile,
     resolved_stack: ResolvedStack,
     available_node_count: int = 1,
+    sid_indices_by_node: Mapping[str, int] | None = None,
 ) -> list[ValidationResult]:
     """Validate a session before deployment.
 
@@ -52,6 +60,8 @@ def validate_session_readiness(
         ground_stations: Parsed GroundStationFile.
         resolved_stack: Output of resolve_stack().
         available_node_count: Number of K8s nodes available for pod placement.
+        sid_indices_by_node: Resolver-owned prefix-SID indices, required when
+            segment routing is enabled.
 
     Returns:
         List of ValidationResult. Errors block deployment; warnings are logged.
@@ -59,7 +69,7 @@ def validate_session_readiness(
     results: list[ValidationResult] = []
 
     results.extend(_check_e003(satellites, ground_stations, session))
-    results.extend(_check_e004(satellites, resolved_stack))
+    results.extend(_check_e004(resolved_stack, sid_indices_by_node))
     results.extend(_check_e005(ground_stations))
     results.extend(_check_e007(session))
     results.extend(_check_e008(session, constellation, satellites))
@@ -157,36 +167,38 @@ def _check_e003(
 
 
 def _check_e004(
-    satellites: list,
     resolved_stack: ResolvedStack,
+    sid_indices_by_node: Mapping[str, int] | None,
 ) -> list[ValidationResult]:
-    """E004: SRGB overflow — constellation too large for SID index space."""
+    """E004: Resolved SID indices must fit inside the routing stack SRGB."""
     results: list[ValidationResult] = []
 
     if not resolved_stack.segment_routing:
         return results
 
-    tv = resolved_stack.template_variables
-    gs_sid_offset = tv.get("gs_sid_offset")
-    if gs_sid_offset is None:
-        return results  # No SR variables to check
-
-    # SID scheme from stack_resolver.py:validate_constellation_constraints
-    # Satellite SID = plane * 100 + slot + 1
-    max_plane = max((s.plane for s in satellites), default=0)
-    max_slot = max((s.slot for s in satellites), default=0)
-    max_sat_sid = max_plane * 100 + max_slot + 1
-
-    if max_sat_sid >= gs_sid_offset:
+    if sid_indices_by_node is None:
         results.append(
             ValidationResult(
                 level="error",
                 code="E004",
                 message=(
-                    f"Satellite SID range (max {max_sat_sid}) overlaps GS SID offset "
-                    f"({gs_sid_offset}). Constellation is too large for the SRGB."
+                    "Segment routing is enabled but the resolved session did not "
+                    "provide prefix-SID indices."
                 ),
-                remediation="Increase SRGB range or reduce constellation size.",
+                remediation="Resolve the session through the segment resolver before deployment.",
+            )
+        )
+        return results
+
+    try:
+        validate_sid_indices(resolved_stack, sid_indices_by_node)
+    except ValueError as exc:
+        results.append(
+            ValidationResult(
+                level="error",
+                code="E004",
+                message=f"Resolved prefix-SID indices do not fit the SRGB: {exc}",
+                remediation="Increase SRGB range or reduce the resolved node count.",
             )
         )
 
@@ -448,60 +460,53 @@ def _check_e010(
     session: SessionConfig,
     ground_stations: GroundStationFile,
 ) -> list[ValidationResult]:
-    """E010: MBB handover requires station capacity for steady + reserve links."""
-    ground = session.scheduling.ground
-    if ground.handover_mode != "mbb":
-        return []
-
-    required_capacity = ground.mbb_reserve + 1
-    shortfalls: list[tuple[str, int]] = []
+    """E010/W011: MBB capability is resolved per ground station."""
+    results: list[ValidationResult] = []
     for station in ground_stations.stations:
-        capacity = station_ground_terminal_capacity(ground_stations, station)
-        if capacity < required_capacity:
-            shortfalls.append((station.name, capacity))
-    if not shortfalls:
-        return []
-
-    details = ", ".join(f"{name}(capacity={cap})" for name, cap in shortfalls)
-    if session.simulation.acknowledge_bbm_handover_gap:
-        return [
-            ValidationResult(
-                level="warning",
-                code="W011",
-                message=(
-                    "MBB handover requested, but one or more ground stations cannot "
-                    f"support physical overlap: {details}. The session explicitly "
-                    "acknowledges degraded BBM behavior and must run with effective "
-                    "handover_mode='bbm'."
-                ),
-                remediation=(
-                    "For zero-loss MBB, increase terminal count/tracking_capacity or "
-                    "lower mbb_reserve. For degraded BBM, keep "
-                    "simulation.acknowledge_bbm_handover_gap: true and expect a typed gap."
-                ),
-                field_path="simulation.acknowledge_bbm_handover_gap",
+        try:
+            resolution = resolve_station_ground_scheduling(
+                session.scheduling.ground, ground_stations, station
             )
-        ]
+        except GroundHandoverResolutionError as exc:
+            message = str(exc)
+            results.append(
+                ValidationResult(
+                    level="error",
+                    code="E010",
+                    message=message,
+                    remediation=(
+                        f"Give station '{station.name}' enough terminal capacity for MBB, "
+                        "or set that station's handover_mode to 'bbm'. MBB/BBM is a "
+                        "ground-station policy, not a session-wide fallback."
+                    ),
+                    field_path=f"ground_stations.stations.{station.name}.handover_mode",
+                )
+            )
+            continue
+        except ValidationError:
+            # Policy-shape errors are owned by E005/E009. E010 only evaluates
+            # handover capability once the policy surface itself is valid.
+            continue
 
-    name, capacity = shortfalls[0]
-    return [
-        ValidationResult(
-            level="error",
-            code="E010",
-            message=(
-                f"MBB handover requested, but station '{name}' has ground terminal "
-                f"capacity {capacity}. With mbb_reserve={ground.mbb_reserve}, MBB "
-                f"requires capacity >= {required_capacity} so one steady link can "
-                "exist while the reserved terminal is held for make-before-break overlap."
-            ),
-            remediation=(
-                f"Increase terminal count/tracking_capacity for station '{name}', lower "
-                "mbb_reserve, set scheduling.ground.handover_mode to 'bbm', or explicitly "
-                "set simulation.acknowledge_bbm_handover_gap: true to run degraded BBM."
-            ),
-            field_path="scheduling.ground.handover_mode",
-        )
-    ]
+        if resolution.capability_forced_bbm:
+            results.append(
+                ValidationResult(
+                    level="warning",
+                    code="W011",
+                    message=(
+                        f"Ground station '{station.name}' has terminal capacity "
+                        f"{resolution.terminal_capacity}, so its effective handover_mode is "
+                        "BBM even though the default ground scheduling mode is MBB."
+                    ),
+                    remediation=(
+                        f"To make '{station.name}' MBB-capable, configure at least two "
+                        "simultaneous ground terminal slots and leave mbb_reserve=1. "
+                        "Otherwise this is the correct effective station policy."
+                    ),
+                    field_path=f"ground_stations.stations.{station.name}.terminals",
+                )
+            )
+    return results
 
 
 def _check_e023(session: SessionConfig) -> list[ValidationResult]:
@@ -1082,7 +1087,7 @@ def _check_w010(
             level="warning",
             code="W010",
             message=(
-                "Ground capacity beam quota fields are declared but Phase 3 "
+                "Ground capacity beam quota fields are declared but the current allocator "
                 "enforces only total simultaneous ground links. Ignored fields: "
                 f"{', '.join(sorted(paths))}"
             ),

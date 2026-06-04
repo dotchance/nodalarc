@@ -1,6 +1,12 @@
 # Globe View
 
-The globe view is the primary visualization. It shows the full constellation orbiting Earth in real time with all active links, ground stations, and satellite motion.
+The globe view is the primary visualization. It shows the active session in 3D:
+satellites, ground nodes, orbital paths, inter-satellite links, ground links,
+body frames, and relay paths.
+
+For a LEO-only session, this looks like a familiar Earth-centered satellite
+view. For multi-segment sessions, the same view can scale out to MEO, GEO,
+Luna, and cislunar relays.
 
 ![Globe View Overview](../images/user-globe-overview.png)
 
@@ -8,103 +14,128 @@ The globe view is the primary visualization. It shows the full constellation orb
 
 | Action | Control |
 |--------|---------|
-| Rotate globe | Left-click + drag |
-| Zoom | Scroll wheel |
+| Rotate around focus | Left-click + drag |
+| Zoom toward focus | Scroll wheel |
 | Pan | Right-click + drag |
-| Select node | Click a satellite or ground station |
+| Select node | Click a satellite or ground node |
+| Fly to node/body | Double-click, or select from the filter drawer |
 | Deselect | Press Escape or click empty space |
 | Follow selected node | Press F |
 | Top-down view | Press V |
 
+The camera uses a focus point. When you fly to Luna, a GEO satellite, or a
+cislunar relay, orbit and zoom controls pivot around that target. That keeps
+deep-space navigation usable instead of forcing every interaction around the
+center of Earth.
+
 ## Visual Elements
 
-### Satellites
+### Bodies
 
-Satellites appear as dots moving along their orbital paths. Their color depends on the active color mode:
+Earth and Luna render as bodies with local surface frames. Body rendering is a
+view concern; the OME owns the physical body positions and publishes the
+ephemeris facts needed by the frontend.
 
-- **Color by plane** (press 2) - each orbital plane gets a distinct color. Satellites in the same plane share a color, making orbital structure visible at a glance.
-- **Color by area** (press 1) - satellites colored by their routing area assignment. Useful for visualizing how the constellation is partitioned for flooding scope.
+### Satellites and Relay Nodes
 
-### ISL Links
+Satellites appear as glyphs in their segment frame. LEO nodes move quickly near
+Earth, MEO and GEO nodes sit farther out, and lunar relay nodes move in the
+Luna frame. Relay nodes created by `space_node` segments are rendered like other
+network nodes but may represent a single explicit gateway.
 
-Inter-satellite links are drawn between connected satellite pairs. There are two types:
+Node color communicates operational family first. Segment styling and tags are
+secondary visual channels; they must not hide fault state.
 
-- **Intra-plane ISLs** - links between satellites in the same orbital plane (forward and backward neighbors in the ring). These are always active while satellites remain in the plane.
-- **Cross-plane ISLs** - links between satellites in adjacent orbital planes. These appear and disappear as the relative geometry between planes changes.
+### Segments and Tags
 
-ISL links curve slightly (bowed arc) to distinguish them from straight ground links and to prevent visual overlap when two satellites are at similar altitudes.
+Every node belongs to a segment such as `leo`, `geo`, `earth-site`, or
+`luna-relay`. Segments carry tags like `earth`, `leo`, `ground`, `cislunar`, or
+`relay`.
 
-Toggle ISL link visibility with **L**.
+Press **Q** to open the filter drawer. Use it to:
 
-### Ground Stations
+- show or emphasize one segment
+- filter by tags
+- fly to a segment or body frame
+- inspect which link rules involve a selected segment
 
-Ground stations appear as fixed points at their geographic coordinates on the Earth's surface. They don't move - the constellation moves over them.
+### ISL and Relay Links
+
+Inter-satellite links are drawn between active space nodes. Same-body
+constellation links use the configured ISL candidate rules. Cross-body links,
+such as Earth relay to lunar relay, use `inter_body_relay` rules and carry their
+own range-derived latency.
+
+Toggle ISL and relay link visibility with **L**.
 
 ### Ground Links
 
-Straight lines connecting ground stations to their currently-connected satellite. Ground links are dynamic - they appear when a satellite enters the ground station's coverage cone (elevation angle exceeds the minimum threshold) and disappear when the satellite passes out of coverage.
+Ground links connect a ground node terminal to a visible satellite or relay. A
+site may contain multiple ground nodes with different terminals and policies.
+For example, one site can have a LEO access router and a GEO gateway router at
+the same latitude/longitude.
 
 Toggle ground link visibility with **G**.
 
-### Satellite Trails
+### Satellite Trails and Orbital Paths
 
-Press **T** to show trails. Each satellite leaves a fading trace showing its recent path. The trail color matches the satellite's color (by plane or by area) and fades from bright to transparent over time.
+Press **T** to show recent trails. Press **P** to show full orbital paths. These
+help make orbital motion visible, especially in LEO and polar sessions.
 
-Trails make orbital motion intuitive - you can see the direction and speed of each satellite at a glance.
+## Selection and Explainability
 
-### Orbital Paths
+Click a node to open the detail panel. The panel shows:
 
-Press **P** to show full orbital paths. These are the complete orbital rings (not trails - the full predicted path). Colored by orbital plane so you can see the constellation's geometric structure.
+- runtime node ID and display name
+- node type, segment, tags, and body/frame
+- position and altitude
+- active links and link latencies
+- candidate links and why they are accepted or rejected
+- terminal/handoff policy for ground nodes
+- actuation state when the Scheduler or Node Agent reports a fault
 
-## Panels
-
-### Detail Panel
-
-Click any satellite or ground station to open the detail panel (right side). It shows:
-
-- **Node ID** - the satellite or ground station name
-- **Position** - latitude, longitude, altitude
-- **Active links** - ISL count and ground connection count
-- **Neighbors** - routing protocol neighbors (IS-IS or OSPF adjacencies)
-
-### Event Log
-
-The bottom panel shows a timestamped event log. Events include:
-
-- **Link Up** - a new ISL or ground link activated
-- **Link Down** - a link deactivated (satellite moved out of range)
-- **Handoff** - ground station connection transferred from one satellite to another
-
-Use the event filter to search for specific nodes or event types. Press **/** to focus the filter input.
-
-### Terminal Panel
-
-Open the terminal panel to access any node's router CLI. See [Terminal Access](terminal.md) for details.
+For a selected ground node, the scene can highlight candidate satellites and
+draw the effective coverage envelope. This is the visual answer to questions
+like "why is that satellite overhead but not connected?" The panel should show
+whether the stop reason is geometry, terminal capability, policy, capacity, or
+actuation.
 
 ## Display Toggles
 
 | Key | Toggle | Default |
 |-----|--------|---------|
-| L | ISL links | On |
+| L | ISL and relay links | On |
 | G | Ground links | On |
 | P | Orbital paths | Off |
 | T | Satellite trails | Off |
-| N | Globe rendering mode | Standard |
+| N | Rendering mode | Standard |
 | ; | Satellite labels | Off |
-| ' | Ground station labels | Off |
+| ' | Ground labels | Off |
+| Q | Filter drawer | Closed |
 
 ## Color Modes
 
 | Key | Mode | Description |
 |-----|------|-------------|
 | 1 | Area | Colored by routing area assignment |
-| 2 | Plane | Colored by orbital plane (default) |
+| 2 | Plane | Colored by orbital plane where applicable |
+
+Some nodes, such as explicit relays or ground nodes, do not have orbital plane
+membership. In those cases the view uses their segment/style metadata while
+preserving the operational fault color channel.
 
 ## Views
 
 | Key | View | Description |
 |-----|------|-------------|
 | Tab | Toggle | Switch between globe view and topology view |
-| V | Top view | Camera above the North Pole, looking down |
+| V | Top view | Camera above the active body/reference frame |
 | F | Follow | Camera tracks the selected node |
 | Escape | Reset | Deselect node, return to free camera |
+
+## Current Limits
+
+Historical playback controls are not a complete product feature yet. Pause,
+resume, and speed changes are live OME controls. If a history control appears
+in the UI during development, treat it as experimental until the runtime
+history path is explicitly shipped.

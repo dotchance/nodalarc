@@ -17,7 +17,7 @@ to use the system.
 - [Globe View](user/globe-view.md) - the 3D visualization, what everything means, navigation
 - [Topology View](user/topology-view.md) - the 2D network graph view
 - [Terminal Access](user/terminal.md) - browser terminal for inspecting routers (vtysh)
-- [Time Controls](user/time-controls.md) - pause, resume, speed, seek
+- [Time Controls](user/time-controls.md) - pause, resume, and speed controls
 - [Keyboard Shortcuts](user/keyboard-shortcuts.md) - quick reference
 - [API for Power Users](user/api.md) - scripting and automation via REST/WebSocket
 - [Troubleshooting](user/troubleshooting.md) - common issues and fixes
@@ -29,7 +29,7 @@ clusters. This is where the lifecycle lives: install, upgrade, session switch,
 teardown, nuke, scale, and troubleshoot.
 
 - [Getting Started](ops/getting-started.md) - prerequisites, installation, first deployment
-- [Configuration](ops/configuration.md) - session YAML, constellations, ground stations, satellite types
+- [Configuration](ops/configuration.md) - segment session YAML, link rules, constellations, ground sites, and satellite types
 - [Multi-Node Deployment](ops/multi-node.md) - registry setup, pod placement, VXLAN tunnels
 - [Scaling](ops/scaling.md) - resource requirements, capacity planning, performance
 - [Operations](ops/operations.md) - teardown, session switching, upgrades, health monitoring

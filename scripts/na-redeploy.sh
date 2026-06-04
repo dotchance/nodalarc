@@ -26,7 +26,7 @@ done
 
 if [ -z "$SESSION" ]; then
     echo "ERROR: --session <path> is required" >&2
-    echo "Usage: na-redeploy.sh --session configs/sessions/starlink-176-isis-te.yaml" >&2
+    echo "Usage: na-redeploy.sh --session configs/sessions/earth-leo-walker.yaml" >&2
     exit 2
 fi
 

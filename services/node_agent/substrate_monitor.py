@@ -100,6 +100,7 @@ _k8s_v1: kubernetes.client.CoreV1Api | None = None
 _namespace: str = ""
 _current_manifest: WiringManifest | None = None
 _measure_lock = threading.Lock()
+_state_lock = threading.RLock()
 
 
 def set_identity(session_id: str, wiring_generation: str) -> None:
@@ -108,9 +109,17 @@ def set_identity(session_id: str, wiring_generation: str) -> None:
         raise ValueError("substrate monitor session_id is required")
     if not wiring_generation:
         raise ValueError("substrate monitor wiring_generation is required")
-    global _session_id, _wiring_generation
-    _session_id = session_id
-    _wiring_generation = wiring_generation
+    global _session_id, _wiring_generation, _required_pairs, _latest_status, _current_manifest
+    with _state_lock:
+        changed = (session_id, wiring_generation) != (_session_id, _wiring_generation)
+        _session_id = session_id
+        _wiring_generation = wiring_generation
+        if changed:
+            _required_pairs = []
+            _latest_status = None
+            _current_manifest = None
+            with _peers_lock:
+                _peer_refs.clear()
 
 
 def init(hostname: str) -> None:
@@ -130,12 +139,18 @@ def _active_remote_ips_locked() -> set[str]:
 def add_peer_ref(ref: PeerRef) -> None:
     """Register one exact VXLAN peer reference for diagnostics."""
     ref.validate()
-    if ref.session_id != _session_id or ref.wiring_generation != _wiring_generation:
-        raise ValueError(
-            "substrate peer ref identity does not match monitor identity: "
-            f"ref=({ref.session_id}, {ref.wiring_generation}) "
-            f"monitor=({_session_id}, {_wiring_generation})"
-        )
+    with _state_lock:
+        current_session_id = _session_id
+        current_wiring_generation = _wiring_generation
+        if (
+            ref.session_id != current_session_id
+            or ref.wiring_generation != current_wiring_generation
+        ):
+            raise ValueError(
+                "substrate peer ref identity does not match monitor identity: "
+                f"ref=({ref.session_id}, {ref.wiring_generation}) "
+                f"monitor=({current_session_id}, {current_wiring_generation})"
+            )
     with _peers_lock:
         before = _active_remote_ips_locked()
         _peer_refs.add(ref)
@@ -187,16 +202,17 @@ def _reset_for_tests() -> None:
     """Reset module state for isolated unit tests."""
     global _hostname, _session_id, _wiring_generation
     global _required_pairs, _latest_status, _k8s_v1, _namespace, _current_manifest
-    with _peers_lock:
-        _peer_refs.clear()
-    _hostname = ""
-    _session_id = ""
-    _wiring_generation = ""
-    _required_pairs = []
-    _latest_status = None
-    _k8s_v1 = None
-    _namespace = ""
-    _current_manifest = None
+    with _state_lock:
+        with _peers_lock:
+            _peer_refs.clear()
+        _hostname = ""
+        _session_id = ""
+        _wiring_generation = ""
+        _required_pairs = []
+        _latest_status = None
+        _k8s_v1 = None
+        _namespace = ""
+        _current_manifest = None
 
 
 def measure_one_detail(
@@ -290,12 +306,14 @@ def measure_required_pair(
     *,
     count: int = 10,
     stale_after_s: float = DEFAULT_STALE_AFTER_S,
+    session_id: str | None = None,
+    wiring_generation: str | None = None,
 ) -> SubstrateMeasurement:
     """Measure one manifest-required substrate pair from this host."""
     result = measure_one_detail(pair.target_ip, count=count, stale_after_s=stale_after_s)
     return SubstrateMeasurement(
-        session_id=_session_id,
-        wiring_generation=_wiring_generation,
+        session_id=session_id or _session_id,
+        wiring_generation=wiring_generation or _wiring_generation,
         source_node=pair.source_node,
         source_ip=pair.source_ip,
         target_node=pair.target_node,
@@ -357,23 +375,29 @@ def configure_required_measurements(
     measurement is still written as evidence, then surfaced as a fatal startup
     condition so the Scheduler cannot dispatch into unknown substrate truth.
     """
-    if manifest.session_id != _session_id or manifest.wiring_generation != _wiring_generation:
-        raise ValueError(
-            "substrate monitor identity does not match manifest: "
-            f"monitor=({_session_id}, {_wiring_generation}) "
-            f"manifest=({manifest.session_id}, {manifest.wiring_generation})"
-        )
-
-    pairs = _local_required_pairs(hostname, manifest)
     global _required_pairs, _latest_status, _k8s_v1, _namespace, _hostname, _current_manifest
-    _required_pairs = list(pairs)
-    _k8s_v1 = v1
-    _namespace = namespace
-    _hostname = hostname
-    _current_manifest = manifest
+    with _state_lock:
+        if manifest.session_id != _session_id or manifest.wiring_generation != _wiring_generation:
+            raise ValueError(
+                "substrate monitor identity does not match manifest: "
+                f"monitor=({_session_id}, {_wiring_generation}) "
+                f"manifest=({manifest.session_id}, {manifest.wiring_generation})"
+            )
+
+        pairs = _local_required_pairs(hostname, manifest)
+        _required_pairs = list(pairs)
+        _k8s_v1 = v1
+        _namespace = namespace
+        _hostname = hostname
+        _current_manifest = manifest
 
     if not pairs:
-        _latest_status = None
+        with _state_lock:
+            if (
+                manifest.session_id == _session_id
+                and manifest.wiring_generation == _wiring_generation
+            ):
+                _latest_status = None
         log.info("No required substrate measurements for %s", hostname)
         return None
 
@@ -391,7 +415,18 @@ def configure_required_measurements(
             f"manifest={expected_host_ip!r} node={hostname}"
         )
 
-    measurement_fn = measure_fn or measure_required_pair
+    if measure_fn is None:
+
+        def measurement_fn(pair: RequiredSubstratePair) -> SubstrateMeasurement:
+            return measure_required_pair(
+                pair,
+                session_id=manifest.session_id,
+                wiring_generation=manifest.wiring_generation,
+            )
+
+    else:
+        measurement_fn = measure_fn
+
     with _measure_lock:
         measurements = {
             pair.target_node: measurement_fn(pair)
@@ -403,6 +438,17 @@ def configure_required_measurements(
             source_node=hostname,
             measurements=measurements,
         )
+    with _state_lock:
+        if manifest.session_id != _session_id or manifest.wiring_generation != _wiring_generation:
+            log.info(
+                "Discarding substrate measurements for superseded identity: "
+                "measured=(%s, %s) current=(%s, %s)",
+                manifest.session_id,
+                manifest.wiring_generation,
+                _session_id,
+                _wiring_generation,
+            )
+            return None
         _write_status_document(v1, namespace, document)
         _latest_status = document
 
@@ -431,7 +477,8 @@ def configure_required_measurements(
 
 
 def latest_status_document() -> SubstrateStatusDocument | None:
-    return _latest_status
+    with _state_lock:
+        return _latest_status
 
 
 def read_local_status_document(
@@ -447,7 +494,10 @@ def require_fresh_measurement_for_remote_ip(remote_ip: str) -> None:
     """Fail unless local durable status proves a fresh RTT to ``remote_ip``."""
     if not remote_ip:
         raise ValueError("remote_ip is required for substrate measurement verification")
-    document = _latest_status
+    with _state_lock:
+        document = _latest_status
+        session_id = _session_id
+        wiring_generation = _wiring_generation
     if document is None:
         raise RuntimeError("local substrate status has not been measured")
     host_ip = os.environ.get("HOST_IP", "").strip()
@@ -461,8 +511,8 @@ def require_fresh_measurement_for_remote_ip(remote_ip: str) -> None:
     measurement = matches[0]
     measurement.rtt_ms(
         now=datetime.now(UTC),
-        session_id=_session_id,
-        wiring_generation=_wiring_generation,
+        session_id=session_id,
+        wiring_generation=wiring_generation,
         source_node=document.source_node,
         source_ip=host_ip,
         target_node=measurement.target_node,
@@ -481,11 +531,16 @@ async def monitor_loop(hostname: str, interval_s: float = 60.0) -> None:
     )
     while True:
         await asyncio.sleep(interval_s)
-        if not _required_pairs:
+        with _state_lock:
+            has_required_pairs = bool(_required_pairs)
+            k8s_v1 = _k8s_v1
+            namespace = _namespace
+            current_manifest = _current_manifest
+        if not has_required_pairs:
             continue
-        if _k8s_v1 is None or not _namespace:
+        if k8s_v1 is None or not namespace:
             raise RuntimeError("substrate monitor missing Kubernetes status writer")
-        if _current_manifest is None:
+        if current_manifest is None:
             raise RuntimeError("substrate monitor missing current wiring manifest")
         stale_after_s = max(interval_s * 2.0, DEFAULT_STALE_AFTER_S)
 
@@ -493,16 +548,25 @@ async def monitor_loop(hostname: str, interval_s: float = 60.0) -> None:
             pair: RequiredSubstratePair,
             *,
             _stale_after_s: float = stale_after_s,
+            _session_id: str = current_manifest.session_id,
+            _wiring_generation: str = current_manifest.wiring_generation,
         ) -> SubstrateMeasurement:
-            return measure_required_pair(pair, stale_after_s=_stale_after_s)
+            return measure_required_pair(
+                pair,
+                stale_after_s=_stale_after_s,
+                session_id=_session_id,
+                wiring_generation=_wiring_generation,
+            )
 
         await asyncio.get_running_loop().run_in_executor(
             None,
-            lambda: configure_required_measurements(
-                v1=_k8s_v1,
-                namespace=_namespace,
-                hostname=hostname,
-                manifest=_current_manifest,
-                measure_fn=_measure,
+            lambda _v1=k8s_v1, _namespace=namespace, _hostname=hostname, _manifest=current_manifest, _measure_fn=_measure: (
+                configure_required_measurements(
+                    v1=_v1,
+                    namespace=_namespace,
+                    hostname=_hostname,
+                    manifest=_manifest,
+                    measure_fn=_measure_fn,
+                )
             ),
         )

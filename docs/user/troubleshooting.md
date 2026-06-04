@@ -53,7 +53,8 @@ Common issues you might encounter when using NodalArc and how to resolve them.
 - The cluster may not have enough resources for the selected constellation size. Smaller constellations (36, 66) require less resources.
 - A previous session may not have cleaned up completely. Ask your administrator to run a teardown.
 
-**Try:** Start with a smaller constellation (Demo-36). If it works, the issue is resource limits.
+**Try:** Start with `earth-leo-simple.yaml`. If it works, the issue is likely
+resource limits or a larger session-specific configuration.
 
 ## Routing Not Converging
 

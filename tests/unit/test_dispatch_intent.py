@@ -122,6 +122,7 @@ def _make_dispatcher(mbb=False):
         wiring_generation="sha256:" + "a" * 64,
         max_latency_age_s=1.0,
         gs_terminal_capacities={"gs-ashburn": 2},
+        gs_handover_modes={"gs-ashburn": "mbb" if mbb else "bbm"},
         sat_ground_terminal_capacities={"sat-P00S00": 1, "sat-P00S01": 1},
         mbb_dispatch=mbb,
     )
@@ -451,6 +452,26 @@ class TestOnScenarioCommand:
         assert resp["status"] == "error"
         assert d._dispatch_queue.empty()
 
+    def test_unknown_scenario_node_rejected_without_mutation_or_enqueue(self):
+        d, _ = _make_dispatcher()
+        d._current_sim_time = SIM
+
+        msg = self._make_msg(
+            {
+                "action": "inject_link_down",
+                "node_a": "space-sat-p99s99",
+                "node_b": "sat-P00S00",
+            }
+        )
+        asyncio.run(d._on_scenario_command(msg))
+
+        resp = json.loads(msg.respond.call_args[0][0])
+        assert resp["status"] == "error"
+        assert "space-sat-p99s99" in resp["msg"]
+        assert d._override_pairs == {}
+        assert d._override_nodes == {}
+        assert d._dispatch_queue.empty()
+
     def test_command_without_ome_sim_time_fails_loudly(self):
         d, _ = _make_dispatcher()
 
@@ -462,6 +483,8 @@ class TestOnScenarioCommand:
             asyncio.run(d._on_scenario_command(msg))
 
         assert d._dispatch_queue.empty()
+        assert d._override_pairs == {}
+        assert d._override_nodes == {}
 
     def test_pair_normalization(self):
         """Pairs are normalized to (min, max) regardless of command order."""
@@ -469,12 +492,12 @@ class TestOnScenarioCommand:
         d._current_sim_time = SIM
 
         msg = self._make_msg(
-            {"action": "inject_link_down", "node_a": "sat-P01S00", "node_b": "sat-P00S00"}
+            {"action": "inject_link_down", "node_a": "sat-P00S01", "node_b": "sat-P00S00"}
         )
         asyncio.run(d._on_scenario_command(msg))
 
-        assert ("sat-P00S00", "sat-P01S00") in d._override_pairs
-        assert ("sat-P01S00", "sat-P00S00") not in d._override_pairs
+        assert ("sat-P00S00", "sat-P00S01") in d._override_pairs
+        assert ("sat-P00S01", "sat-P00S00") not in d._override_pairs
 
 
 class TestSuspendDeferral:

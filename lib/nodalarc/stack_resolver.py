@@ -3,13 +3,14 @@
 """Stack resolver — derives routing stack configuration from (protocol, extensions).
 
 Replaces the need for per-stack directories when deploying via the wizard.
-Legacy deploys using routing.stack still load from stack.yaml directly.
+Session routing uses protocol/extensions only; routing.stack is rejected at parse time.
 
 The resolver is the single source of truth for per-permutation configuration:
-sysctls, template variables, derived SID ranges, and constraint validation.
+sysctls, template variables, and SRGB constraint validation.
 The deployer and templates are pure pass-through — no protocol-aware logic.
 """
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, NamedTuple
 
@@ -19,11 +20,6 @@ class TemplateFile(NamedTuple):
 
     src: str
     dst: str
-
-
-# Must exceed the maximum number of ground stations in any constellation.
-# GS SID indices are allocated from (srgb_size - GS_SID_HEADROOM) upward.
-GS_SID_HEADROOM = 100
 
 
 @dataclass(frozen=True)
@@ -76,22 +72,15 @@ _DAEMON_TEMPLATES: dict[str, TemplateFile] = {
 
 
 def _derive_sr_variables(srgb_start: int, srgb_end: int) -> dict[str, Any]:
-    """Derive all SR-related template variables from the SRGB range.
-
-    Returns template variables including gs_sid_offset, validated against
-    the SRGB size. Raises ValueError if constraints are violated.
-    """
+    """Derive SR template variables from the SRGB range."""
     srgb_size = srgb_end - srgb_start + 1
-    gs_sid_offset = srgb_size - GS_SID_HEADROOM
-
-    if gs_sid_offset <= 0:
-        raise ValueError(f"SRGB too small ({srgb_size}) for GS_SID_HEADROOM ({GS_SID_HEADROOM})")
+    if srgb_size <= 0:
+        raise ValueError(f"SRGB range is invalid ({srgb_start}..{srgb_end})")
 
     return {
         "sr_enabled": True,
         "srgb_start": srgb_start,
         "srgb_end": srgb_end,
-        "gs_sid_offset": gs_sid_offset,
     }
 
 
@@ -116,41 +105,62 @@ def _mpls_sysctls(mpls_labels: str = "100000") -> dict[str, str]:
     }
 
 
-def validate_constellation_constraints(
-    resolved: ResolvedStack,
-    num_planes: int,
-    max_slots_per_plane: int,
-    num_ground_stations: int,
-) -> None:
-    """Validate stack × constellation constraints.
+def validate_sid_indices(resolved: ResolvedStack, sid_by_node: Mapping[str, int]) -> None:
+    """Validate resolver-owned prefix-SID indices against the stack SRGB.
 
-    Called by the Operator after constellation expansion, before template
-    rendering. Raises ValueError if the constellation is too large for
-    the stack's SRGB or SID scheme.
+    The resolver owns SID allocation. The routing stack owns only the SRGB size
+    and whether segment routing is enabled. No caller should derive SID indices
+    from plane/slot, node kind, or ground-station order.
     """
-    tv = resolved.template_variables
     if not resolved.segment_routing:
         return
 
-    gs_sid_offset = tv.get("gs_sid_offset", 0)
+    if not sid_by_node:
+        raise ValueError("segment routing requires resolved SID indices")
+
+    tv = resolved.template_variables
     srgb_start = tv.get("srgb_start", 0)
-    srgb_end = tv.get("srgb_end", 0)
+    srgb_end = tv.get("srgb_end", -1)
     srgb_size = srgb_end - srgb_start + 1
+    if srgb_size <= 0:
+        raise ValueError("segment routing stack has invalid SRGB bounds")
 
-    # Satellite SID scheme: plane * 100 + slot + 1
-    max_sat_sid = num_planes * 100 + max_slots_per_plane
-    if max_sat_sid >= gs_sid_offset:
-        raise ValueError(
-            f"Satellite SID range ({max_sat_sid}) overlaps GS SID offset "
-            f"({gs_sid_offset}). Increase SRGB or reduce constellation size."
-        )
+    invalid = {node_id: sid for node_id, sid in sid_by_node.items() if sid <= 0 or sid > srgb_size}
+    if invalid:
+        examples = ", ".join(f"{node_id}={sid}" for node_id, sid in sorted(invalid.items())[:10])
+        raise ValueError(f"resolved SID index exceeds SRGB size {srgb_size}: {examples}")
 
-    max_gs_sid = gs_sid_offset + num_ground_stations
-    if max_gs_sid > srgb_size:
-        raise ValueError(
-            f"GS SID range ({gs_sid_offset}..{max_gs_sid}) exceeds SRGB size "
-            f"({srgb_size}). Increase SRGB range or reduce ground stations."
-        )
+
+# Canonical routing-extension vocabulary. Aliases normalize to the short form the
+# resolver actually consumes; anything else is rejected (never silently ignored).
+_EXTENSION_ALIASES: dict[str, str] = {
+    "te": "te",
+    "traffic-engineering": "te",
+    "sr": "sr",
+    "segment-routing": "sr",
+    "mpls": "mpls",
+}
+
+
+def normalize_extensions(extensions: list[str] | tuple[str, ...]) -> tuple[str, ...]:
+    """Canonicalize routing-extension aliases to {te, sr, mpls}.
+
+    Raises ValueError on unknown or duplicate extensions. This is the owning
+    boundary for the extension vocabulary; both RoutingConfig and resolve_stack
+    route through it so no caller can pass a value the resolver would drop.
+    """
+    normalized: list[str] = []
+    for ext in extensions:
+        canon = _EXTENSION_ALIASES.get(ext)
+        if canon is None:
+            raise ValueError(
+                f"unknown routing extension {ext!r}; valid: "
+                "te/traffic-engineering, sr/segment-routing, mpls"
+            )
+        normalized.append(canon)
+    if len(set(normalized)) != len(normalized):
+        raise ValueError("routing extensions must not contain duplicates")
+    return tuple(normalized)
 
 
 def resolve_stack(protocol: str, extensions: list[str]) -> ResolvedStack:
@@ -158,7 +168,7 @@ def resolve_stack(protocol: str, extensions: list[str]) -> ResolvedStack:
 
     Raises ValueError for invalid combinations.
     """
-    ext_set = set(extensions)
+    ext_set = set(normalize_extensions(extensions))
 
     # --- Validate constraints ---
     if protocol == "nodalpath":
@@ -182,7 +192,7 @@ def resolve_stack(protocol: str, extensions: list[str]) -> ResolvedStack:
 
 
 def _resolve_ospf(ext_set: set[str]) -> ResolvedStack:
-    daemons = ["zebra", "ospfd"]
+    daemons = ["zebra", "ospfd", "staticd"]
     template_vars: dict[str, Any] = {
         "protocol": "ospf",
         "reference_bandwidth": 10000,
@@ -218,7 +228,7 @@ def _resolve_ospf(ext_set: set[str]) -> ResolvedStack:
 
 
 def _resolve_isis(ext_set: set[str]) -> ResolvedStack:
-    daemons = ["zebra", "isisd"]
+    daemons = ["zebra", "isisd", "staticd"]
     template_vars: dict[str, Any] = {
         "protocol": "isis",
         "reference_bandwidth": 10000,

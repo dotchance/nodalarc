@@ -24,6 +24,7 @@ def _make_dispatcher(**overrides) -> Dispatcher:
         "wiring_generation": "sha256:" + "a" * 64,
         "max_latency_age_s": 1.0,
         "gs_terminal_capacities": {},
+        "gs_handover_modes": {},
         "sat_ground_terminal_capacities": {},
     }
     defaults.update(overrides)

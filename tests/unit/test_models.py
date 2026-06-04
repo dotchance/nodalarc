@@ -762,7 +762,7 @@ class TestTraceResponse:
 class TestNodeState:
     def test_satellite_round_trip(self):
         ns = NodeState(
-            node_id="sat-P03S07",
+            node_id="leo-sat-p03s07",
             node_type="satellite",
             lat_deg=33.0,
             lon_deg=-118.0,
@@ -776,12 +776,20 @@ class TestNodeState:
             neighbor_count=4,
             isl_count=3,
             gnd_count=1,
+            segment_id="leo",
+            local_node_id="sat-P03S07",
+            namespace="leo",
+            tags=("earth", "leo", "access"),
         )
-        _round_trip(ns)
+        restored = _round_trip(ns)
+        assert restored.segment_id == "leo"
+        assert restored.local_node_id == "sat-P03S07"
+        assert restored.namespace == "leo"
+        assert restored.tags == ("earth", "leo", "access")
 
     def test_ground_station_round_trip(self):
         ns = NodeState(
-            node_id="gs-ashburn",
+            node_id="ground-gs-ashburn",
             node_type="ground_station",
             lat_deg=39.04,
             lon_deg=-77.49,
@@ -795,8 +803,16 @@ class TestNodeState:
             neighbor_count=1,
             isl_count=0,
             gnd_count=1,
+            segment_id="ground",
+            local_node_id="gs-ashburn",
+            namespace="ground",
+            tags=("earth", "ground"),
         )
-        _round_trip(ns)
+        restored = _round_trip(ns)
+        assert restored.segment_id == "ground"
+        assert restored.local_node_id == "gs-ashburn"
+        assert restored.namespace == "ground"
+        assert restored.tags == ("earth", "ground")
 
 
 class TestLinkState:

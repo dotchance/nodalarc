@@ -6,6 +6,14 @@
 
 import type { ActuationState } from "./explain/reasons";
 
+export interface NodeAddress {
+  purpose: "router_loopback" | "site_interface" | "site_prefix";
+  family: "ipv4" | "ipv6";
+  address: string;
+  interface: string | null;
+  metric: number | null;
+}
+
 export interface NodeState {
   node_id: string;
   node_type: string; // "satellite" | "ground_station"
@@ -22,13 +30,20 @@ export interface NodeState {
   isl_count: number;
   gnd_count: number;
   prefix: string | null;
+  addresses?: NodeAddress[];
   min_elevation_deg: number | null;
   beam_falloff_exponent: number | null;
-  /** Celestial body this node is anchored to (earth | luna | mars). Optional for forward-compat
-   *  with pre-parameterization snapshots; consumers default to "earth". */
+  /** Celestial body this node is anchored to (earth | luna | mars). */
   reference_body?: string;
+  /** Placement frame id from the resolved session. */
+  frame_id?: string;
   /** Owning tenant (multi-tenant from day one). Optional; consumers default to "default". */
   tenant_id?: string;
+  /** Segment metadata from the resolved session. Used for grouping/filtering, not runtime identity. */
+  segment_id?: string | null;
+  local_node_id?: string | null;
+  namespace?: string | null;
+  tags?: string[];
 }
 
 export interface LinkState {
@@ -43,6 +58,9 @@ export interface LinkState {
   traffic_load_pct: number | null;
   interface_a: string;
   interface_b: string;
+  link_rule_id?: string | null;
+  topology_mode?: string | null;
+  endpoint_segments?: [string, string] | null;
   scheduling_state?: string;
   teardown_remaining_ticks?: number | null;
   successor_pair?: [string, string] | null;
@@ -67,6 +85,9 @@ export interface LinkDecisionTrace {
   substrate_one_way_ms: number | null;
   netem_one_way_ms: number | null;
   rtt_to_one_way_policy: string | null;
+  link_rule_id?: string | null;
+  topology_mode?: string | null;
+  endpoint_segments?: [string, string] | null;
 }
 
 export interface TracedPath {
@@ -235,6 +256,6 @@ export type GlobeMode = "blue-marble" | "day-night" | "political";
  *  - "earth-inertial": observer fixed in inertial space, Earth visibly rotates
  *    at sidereal rate, satellites visibly traverse orbits, stars stationary.
  *
- *  Namespace reserves "earth-*" prefix for future "moon-*", "sun-*", and
- *  rotating-barycenter-frame values. See specs/eci-view-plan.md §9. */
+ *  Namespace reserves the "earth-*" prefix so future body and barycenter
+ *  reference frames can be added without renaming existing values. */
 export type ReferenceFrame = "earth-fixed" | "earth-inertial";

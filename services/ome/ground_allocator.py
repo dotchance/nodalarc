@@ -341,15 +341,16 @@ def _policy_audit(
     gs_selection_policies: Mapping[str, SelectionPolicySpec],
     gs_handover_policies: Mapping[str, HandoverPolicySpec],
     ranking_order: Sequence[RankingComponent],
-    handover_mode: Literal["bbm", "mbb"],
+    gs_handover_modes: Mapping[str, Literal["bbm", "mbb"]],
+    gs_mbb_overlap_ticks: Mapping[str, int],
+    gs_mbb_reserve: Mapping[str, int],
     mbb_preemption: MbbPreemptionPolicy,
     successor_abort_policy: SuccessorAbortPolicy,
     cross_tenant_displacement: CrossTenantDisplacementPolicy,
-    mbb_overlap_ticks: int,
-    mbb_reserve: int,
     bbm_acquire_timeout_ticks: int,
     ignored_capacity_fields: Sequence[str],
 ) -> GroundPolicyAudit:
+    handover_mode_values = set(gs_handover_modes.values())
     return GroundPolicyAudit(
         selection_policies={k: v.name for k, v in sorted(gs_selection_policies.items())},
         selection_policy_params={
@@ -358,12 +359,17 @@ def _policy_audit(
         handover_policies={k: v.name for k, v in sorted(gs_handover_policies.items())},
         handover_policy_params={k: dict(v.params) for k, v in sorted(gs_handover_policies.items())},
         ranking_order=tuple(ranking_order),
-        handover_mode=handover_mode,
+        handover_mode=(
+            next(iter(handover_mode_values)) if len(handover_mode_values) == 1 else "mixed"
+        ),
+        handover_modes=dict(sorted(gs_handover_modes.items())),
         mbb_preemption=mbb_preemption,
         successor_abort_policy=successor_abort_policy,
         cross_tenant_displacement=cross_tenant_displacement,
-        mbb_overlap_ticks=mbb_overlap_ticks,
-        mbb_reserve=mbb_reserve,
+        mbb_overlap_ticks=max(gs_mbb_overlap_ticks.values(), default=0),
+        mbb_overlap_ticks_by_gs=dict(sorted(gs_mbb_overlap_ticks.items())),
+        mbb_reserve=max(gs_mbb_reserve.values(), default=0),
+        mbb_reserve_by_gs=dict(sorted(gs_mbb_reserve.items())),
         bbm_acquire_timeout_ticks=bbm_acquire_timeout_ticks,
         ignored_capacity_fields=tuple(sorted(ignored_capacity_fields)),
     )
@@ -435,15 +441,15 @@ def allocate_ground_links(
     gs_selection_policies: Mapping[str, SelectionPolicySpec],
     gs_min_elevations: Mapping[str, float],
     gs_handover_policies: Mapping[str, HandoverPolicySpec],
+    gs_handover_modes: Mapping[str, Literal["bbm", "mbb"]],
+    gs_mbb_overlap_ticks: Mapping[str, int],
+    gs_mbb_reserve: Mapping[str, int],
     gs_service_priorities: Mapping[str, int],
     gs_tenant_ids: Mapping[str, str],
     gs_reference_bodies: Mapping[str, str],
     sat_ground_terminals: Mapping[str, int],
     sat_ground_terminal_indices_by_body: Mapping[str, Mapping[str, Sequence[int]]],
     ranking_order: Sequence[RankingComponent],
-    handover_mode: Literal["bbm", "mbb"],
-    mbb_overlap_ticks: int,
-    mbb_reserve: int,
     mbb_preemption: MbbPreemptionPolicy,
     successor_abort_policy: SuccessorAbortPolicy,
     cross_tenant_displacement: CrossTenantDisplacementPolicy,
@@ -460,17 +466,15 @@ def allocate_ground_links(
 
     if step < 0:
         raise ValueError("Ground allocator step must be non-negative")
-    if handover_mode not in ("bbm", "mbb"):
-        raise ValueError(f"Unknown handover_mode={handover_mode!r}")
     if mbb_preemption != "off":
         raise ValueError(
-            f"mbb_preemption={mbb_preemption!r} is not implemented in Phase 3; "
+            f"mbb_preemption={mbb_preemption!r} is not implemented; "
             "the schema must reject unsupported preemption policies"
         )
     if cross_tenant_displacement != "off":
         raise ValueError(
             f"cross_tenant_displacement={cross_tenant_displacement!r} is not implemented "
-            "in Phase 3; cross-tenant preemption needs an explicit priority policy"
+            "yet; cross-tenant preemption needs an explicit priority policy"
         )
     if successor_abort_policy not in ("hard_release", "soft_retain"):
         raise ValueError(f"Unknown successor_abort_policy={successor_abort_policy!r}")
@@ -479,26 +483,63 @@ def allocate_ground_links(
             "bbm_acquire_timeout_ticks values other than 1 require the future "
             "multi-tick BBMGap wait-state algorithm"
         )
-    if mbb_overlap_ticks < 0:
-        raise ValueError("mbb_overlap_ticks must be >= 0")
-    if mbb_reserve < 0:
-        raise ValueError("mbb_reserve must be >= 0")
-    # BIG HONESTY NOTE / MBB-002:
-    # This allocator has a deliberate single-overlap state machine per GS. When a
-    # GS is already in MBBOverlap, new challengers are rejected as
-    # `mbb_overlap_locked`; a second reserved terminal is not consumed for a second
-    # parallel overlap. Letting mbb_reserve=2+ through would silently strand
-    # capacity and lie about supported gateway behavior. Remove this guard only
-    # when MBB-002 adds multi-overlap pending-teardown state and proves it.
-    if mbb_reserve > 1:
-        raise ValueError(
-            "mbb_reserve > 1 requires future MBB-002 multi-overlap allocator support; "
-            "current allocator supports at most one concurrent MBB overlap per GS"
-        )
-    if handover_mode == "mbb" and (mbb_overlap_ticks <= 0 or mbb_reserve <= 0):
-        raise ValueError("MBB handover requires mbb_overlap_ticks > 0 and mbb_reserve > 0")
-
     order = _validate_ranking_order(ranking_order)
+
+    known_gs = set(ground_station_ids) | set(gs_terminal_counts)
+    for label, mapping in (
+        ("handover mode", gs_handover_modes),
+        ("MBB overlap ticks", gs_mbb_overlap_ticks),
+        ("MBB reserve", gs_mbb_reserve),
+    ):
+        missing = sorted(known_gs - set(mapping))
+        extra = sorted(set(mapping) - known_gs)
+        if missing or extra:
+            detail = []
+            if missing:
+                detail.append("missing=" + ", ".join(missing))
+            if extra:
+                detail.append("extra=" + ", ".join(extra))
+            raise ValueError(
+                f"Ground allocator {label} map does not match stations: {'; '.join(detail)}"
+            )
+
+    for gs_id in sorted(known_gs):
+        mode = gs_handover_modes[gs_id]
+        if mode not in ("bbm", "mbb"):
+            raise ValueError(f"Unknown handover_mode for {gs_id}: {mode!r}")
+        overlap_ticks = gs_mbb_overlap_ticks[gs_id]
+        reserve = gs_mbb_reserve[gs_id]
+        if overlap_ticks < 0:
+            raise ValueError(f"mbb_overlap_ticks for {gs_id} must be >= 0")
+        if reserve < 0:
+            raise ValueError(f"mbb_reserve for {gs_id} must be >= 0")
+        # BIG HONESTY NOTE / MBB-002:
+        # This allocator has a deliberate single-overlap state machine per GS. When a
+        # GS is already in MBBOverlap, new challengers are rejected as
+        # `mbb_overlap_locked`; a second reserved terminal is not consumed for a second
+        # parallel overlap. Letting mbb_reserve=2+ through would silently strand
+        # capacity and lie about supported gateway behavior. Remove this guard only
+        # when MBB-002 adds multi-overlap pending-teardown state and proves it.
+        if reserve > 1:
+            raise ValueError(
+                f"mbb_reserve > 1 for {gs_id} requires future MBB-002 multi-overlap "
+                "allocator support; current allocator supports at most one concurrent "
+                "MBB overlap per GS"
+            )
+        if mode == "mbb":
+            if overlap_ticks <= 0 or reserve <= 0:
+                raise ValueError(
+                    f"MBB handover for {gs_id} requires mbb_overlap_ticks > 0 and mbb_reserve > 0"
+                )
+            if gs_terminal_counts[gs_id] <= reserve:
+                raise ValueError(
+                    f"MBB handover for {gs_id} requires terminal capacity greater "
+                    f"than mbb_reserve; capacity={gs_terminal_counts[gs_id]}, reserve={reserve}"
+                )
+        elif reserve != 0 or overlap_ticks != 0:
+            raise ValueError(
+                f"BBM handover for {gs_id} must carry mbb_reserve=0 and mbb_overlap_ticks=0"
+            )
 
     visible_gs = set(visible_per_station)
     missing_tenant = sorted(visible_gs - set(gs_tenant_ids))
@@ -524,24 +565,16 @@ def allocate_ground_links(
             f"Ground allocator is missing min elevation for {', '.join(missing_min_elevation)}"
         )
 
-    if handover_mode == "mbb":
-        invalid = sorted(gs for gs, count in gs_terminal_counts.items() if count <= mbb_reserve)
-        if invalid:
-            raise ValueError(
-                "MBB handover requires every active ground station to have terminal "
-                "capacity greater than mbb_reserve; invalid: " + ", ".join(invalid)
-            )
-
     policy_audit = _policy_audit(
         gs_selection_policies=gs_selection_policies,
         gs_handover_policies=gs_handover_policies,
         ranking_order=order,
-        handover_mode=handover_mode,
+        gs_handover_modes=gs_handover_modes,
+        gs_mbb_overlap_ticks=gs_mbb_overlap_ticks,
+        gs_mbb_reserve=gs_mbb_reserve,
         mbb_preemption=mbb_preemption,
         successor_abort_policy=successor_abort_policy,
         cross_tenant_displacement=cross_tenant_displacement,
-        mbb_overlap_ticks=mbb_overlap_ticks,
-        mbb_reserve=mbb_reserve,
         bbm_acquire_timeout_ticks=bbm_acquire_timeout_ticks,
         ignored_capacity_fields=ignored_capacity_fields,
     )
@@ -635,9 +668,18 @@ def allocate_ground_links(
         rejected.pop(candidate.pair, None)
         return True
 
+    def handover_mode_for(gs_id: str) -> Literal["bbm", "mbb"]:
+        return gs_handover_modes[gs_id]
+
+    def mbb_overlap_ticks_for(gs_id: str) -> int:
+        return gs_mbb_overlap_ticks[gs_id] if handover_mode_for(gs_id) == "mbb" else 0
+
+    def mbb_reserve_for(gs_id: str) -> int:
+        return gs_mbb_reserve[gs_id] if handover_mode_for(gs_id) == "mbb" else 0
+
     def steady_limit(gs_id: str) -> int:
         tc = gs_terminal_counts[gs_id]
-        return tc - mbb_reserve if handover_mode == "mbb" else tc
+        return tc - mbb_reserve_for(gs_id) if handover_mode_for(gs_id) == "mbb" else tc
 
     def steady_pairs_for_gs(gs_id: str) -> list[tuple[str, str]]:
         return [
@@ -720,7 +762,7 @@ def allocate_ground_links(
                 message=(
                     f"BBM released incumbent {incumbent.pair!r} before acquiring "
                     f"challenger {challenger.pair!r}; timeout_ticks={bbm_acquire_timeout_ticks}. "
-                    "Phase 3 BBMGap is an immediate one-tick release/acquire transition."
+                    "BBMGap is an immediate one-tick release/acquire transition."
                 ),
                 successor_pair=challenger.pair,
                 challenger_pair=challenger.pair,
@@ -805,6 +847,11 @@ def allocate_ground_links(
         successor_visible = successor in visible_set
         successor_current = successor in current_associations and successor not in pending_teardowns
         elapsed = step - teardown.start_step
+        if handover_mode_for(gs_id) != "mbb":
+            raise ValueError(
+                f"Pending MBB teardown {pair!r} exists for BBM ground station {gs_id}; "
+                "runtime handover policy and allocator state are inconsistent"
+            )
 
         if not successor_visible or not successor_current:
             category = "failed_successor" if not successor_current else "successor_aborted"
@@ -886,7 +933,7 @@ def allocate_ground_links(
                 )
             continue
 
-        if elapsed >= mbb_overlap_ticks or not pair_visible:
+        if elapsed >= mbb_overlap_ticks_for(gs_id) or not pair_visible:
             drop_current_pairs.add(pair)
             completion_message = (
                 f"MBB teardown completed for old pair {pair!r}; successor {successor!r} "
@@ -1035,7 +1082,7 @@ def allocate_ground_links(
                         f"{decision.action!r}"
                     )
                 gs_displacement = incumbent
-                if handover_mode == "mbb" and not physical_room:
+                if handover_mode_for(gs_id) == "mbb" and not physical_room:
                     _record_rejection(
                         rejected,
                         candidate.pair,
@@ -1054,7 +1101,7 @@ def allocate_ground_links(
                 )
                 continue
 
-            if gs_displacement is not None and handover_mode == "bbm":
+            if gs_displacement is not None and handover_mode_for(gs_id) == "bbm":
                 remove_association(gs_displacement.pair)
                 if gs_displacement.pair in visible_set:
                     _record_rejection(
@@ -1085,7 +1132,7 @@ def allocate_ground_links(
                 )
             progress = True
 
-            if gs_displacement is not None and handover_mode == "mbb":
+            if gs_displacement is not None and handover_mode_for(gs_id) == "mbb":
                 new_pending_teardowns[gs_displacement.pair] = MbbTeardown(
                     start_step=step,
                     successor_pair=candidate.pair,
@@ -1099,7 +1146,8 @@ def allocate_ground_links(
                         gs_reference_bodies=gs_reference_bodies,
                         message=(
                             f"MBB overlap started for incumbent {gs_displacement.pair!r} "
-                            f"with successor {candidate.pair!r}; overlap_ticks={mbb_overlap_ticks}"
+                            f"with successor {candidate.pair!r}; "
+                            f"overlap_ticks={mbb_overlap_ticks_for(gs_id)}"
                         ),
                         successor_pair=candidate.pair,
                         challenger_pair=candidate.pair,

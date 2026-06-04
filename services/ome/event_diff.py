@@ -66,7 +66,7 @@ def diff_isl_visibility_events(
             continue
 
         state[pair] = new_state
-        # Phase 1 (C-foundation-5): propagate typed reasons onto the event.
+        # Propagate typed reasons onto the event.
         # An ISL transition's reason is fully attributable from the
         # feasibility result + scheduling result without consulting
         # the snapshot. `IslFeasibilityResult.reject_reason` is `str`
@@ -124,13 +124,13 @@ def diff_ground_visibility_events(
 ) -> GroundEventDiff:
     """Emit ground VisibilityEvents for changed visibility/allocation state.
 
-    Consumes the typed `GroundVisibilityDecisionMap` (Phase 1.2.b
-    replacement for the positional `GroundVisibilityDetails` tuple).
+    Consumes the typed `GroundVisibilityDecisionMap`, which replaced the
+    positional `GroundVisibilityDetails` tuple.
     Named field access — no positional unpacking that can silently
     swap fields when the schema grows.
 
-    Reason propagation (Phase 1, C-foundation-5): every emitted event
-    carries both ``visibility_reject_reason`` (from the typed
+    Reason propagation: every emitted event carries both
+    ``visibility_reject_reason`` (from the typed
     decision) and ``unscheduled_reason`` (from the allocation's
     unscheduled-pair set). Consumers of the event stream can attribute
     transitions without correlating against the decision snapshot.

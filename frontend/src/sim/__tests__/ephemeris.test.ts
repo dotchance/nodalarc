@@ -24,6 +24,7 @@ const TOL = 0.01; // degrees tolerance
 
 const SAT_P00S00: EphemerisNodeKeplerian = {
   type: "keplerian",
+  propagator: "keplerian-circular",
   altitude_km: 550.0,
   inclination_deg: 53.0,
   raan_deg: 0.0,
@@ -34,6 +35,7 @@ const SAT_P00S00: EphemerisNodeKeplerian = {
 
 const SAT_RAAN90: EphemerisNodeKeplerian = {
   type: "keplerian",
+  propagator: "keplerian-circular",
   altitude_km: 550.0,
   inclination_deg: 53.0,
   raan_deg: 90.0,

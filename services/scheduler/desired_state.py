@@ -87,7 +87,11 @@ def require_ome_geometry(
 
 
 def _ground_interfaces(
-    gs_terminal_index: int | None, sat_terminal_index: int | None
+    pair: tuple[str, str],
+    *,
+    ground_station_ids: frozenset[str],
+    gs_terminal_index: int | None,
+    sat_terminal_index: int | None,
 ) -> tuple[str, str]:
     if gs_terminal_index is None or sat_terminal_index is None:
         raise ValueError(
@@ -95,7 +99,21 @@ def _ground_interfaces(
             f"got gs_terminal_index={gs_terminal_index!r}, "
             f"sat_terminal_index={sat_terminal_index!r}"
         )
-    return f"term{gs_terminal_index}", f"gnd{sat_terminal_index}"
+
+    a_is_ground = pair[0] in ground_station_ids
+    b_is_ground = pair[1] in ground_station_ids
+    if a_is_ground == b_is_ground:
+        role = "no ground endpoint" if not a_is_ground else "two ground endpoints"
+        raise ValueError(
+            f"Scheduled ground link {pair} has {role}; refusing to infer "
+            "interface ownership without exactly one configured ground station"
+        )
+
+    gs_iface = f"term{gs_terminal_index}"
+    sat_iface = f"gnd{sat_terminal_index}"
+    if a_is_ground:
+        return gs_iface, sat_iface
+    return sat_iface, gs_iface
 
 
 def _configured_bandwidth(
@@ -118,6 +136,7 @@ def desired_link_from_visibility(
     *,
     interface_map: dict[tuple[str, str], tuple[str, str]],
     bandwidth_map: dict[tuple[str, str], float],
+    ground_station_ids: frozenset[str],
 ) -> tuple[tuple[str, str], ActiveLinkInfo]:
     """Build one desired link from a scheduled visible OME event."""
     pair = (vis.node_a, vis.node_b)
@@ -129,7 +148,12 @@ def desired_link_from_visibility(
     )
 
     if vis.link_type == "ground":
-        ifaces = _ground_interfaces(vis.gs_terminal_index, vis.sat_terminal_index)
+        ifaces = _ground_interfaces(
+            pair,
+            ground_station_ids=ground_station_ids,
+            gs_terminal_index=vis.gs_terminal_index,
+            sat_terminal_index=vis.sat_terminal_index,
+        )
     else:
         ifaces = interface_map.get(pair)
         if ifaces is None:
@@ -156,6 +180,7 @@ def desired_link_from_snapshot_link(
     *,
     interface_map: dict[tuple[str, str], tuple[str, str]],
     bandwidth_map: dict[tuple[str, str], float],
+    ground_station_ids: frozenset[str],
     snapshot_sim_time: datetime,
     snapshot_seq: int,
 ) -> tuple[tuple[str, str], ActiveLinkInfo] | None:
@@ -178,7 +203,12 @@ def desired_link_from_snapshot_link(
     )
 
     if link.link_type == "ground":
-        ifaces = _ground_interfaces(link.gs_terminal_index, link.sat_terminal_index)
+        ifaces = _ground_interfaces(
+            pair,
+            ground_station_ids=ground_station_ids,
+            gs_terminal_index=link.gs_terminal_index,
+            sat_terminal_index=link.sat_terminal_index,
+        )
     else:
         ifaces = interface_map.get(pair)
         if ifaces is None:

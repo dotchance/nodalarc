@@ -24,7 +24,9 @@ from functools import lru_cache
 
 import kopf
 import kubernetes
+from nodalarc.models.resolved_session import SourceContext
 from nodalarc.nats_channels import sanitize_session_id
+from nodalarc.resolve_session import resolve_session_with_assets
 from nodalarc.session_identity import derive_session_run_id
 
 from nodalarc_operator.session_deployer import (
@@ -121,36 +123,19 @@ def _build_owner_ref(name: str, meta: dict) -> dict:
 
 @lru_cache(maxsize=4)
 def _compute_expected_node_ids_cached(_spec_hash: str, session_yaml: str) -> frozenset[str]:
-    """Compute expected pod names from session YAML. Memoized by spec hash.
+    """Compute expected pod names from resolver output. Memoized by spec hash.
 
-    Cached to avoid re-expanding the constellation on every 10-second
-    reconciler tick during scale-down (waiting for K8s to terminate pods).
+    Cached to avoid re-resolving the same session on every 10-second reconciler
+    tick during scale-down. Resolution errors are fatal to reconciliation; an
+    empty expected set would silently delete or ignore runtime state.
     """
-    try:
-        import yaml as _yaml
-        from nodalarc.constellation_loader import (
-            expand_constellation,
-            load_constellation,
-            load_ground_stations,
-        )
-        from nodalarc.models.addressing import AddressingScheme
-        from nodalarc.models.session import SessionConfig
+    import yaml as _yaml
 
-        raw = _yaml.safe_load(session_yaml)
-        session = SessionConfig.model_validate(raw)
-        constellation = load_constellation(session.constellation)
-        satellites = expand_constellation(constellation)
-        gs_file = load_ground_stations(session.ground_stations)
-        addressing = AddressingScheme(session.addressing)
-        expected = set()
-        for sat in satellites:
-            expected.add(addressing.sat_id(sat.plane, sat.slot).lower())
-        for station in gs_file.stations:
-            expected.add(addressing.gs_id(station.name).lower())
-        return frozenset(expected)
-    except Exception as exc:
-        log.error("Cannot compute expected node_ids: %s", exc, exc_info=True)
-        return frozenset()
+    resolution = resolve_session_with_assets(
+        _yaml.safe_load(session_yaml),
+        source_context=SourceContext(origin="operator.expected_node_ids"),
+    )
+    return frozenset(node_id.lower() for node_id in resolution.resolved.node_ids())
 
 
 def _compute_expected_node_ids(spec: dict) -> frozenset[str]:
@@ -401,6 +386,29 @@ async def _reconcile_session(spec, name, namespace, meta, status):
                 {
                     "phase": "Error",
                     "message": message,
+                    **identity_fields,
+                },
+            ),
+        )
+        return
+
+    deleted_obsolete = await loop.run_in_executor(
+        None, _delete_obsolete_pods, expected_ids, namespace
+    )
+    if deleted_obsolete:
+        log.info(
+            "Reconcile: deleted %d obsolete pods before readiness evaluation",
+            deleted_obsolete,
+        )
+        _update_status(
+            name,
+            namespace,
+            _with_observed_generation(
+                meta,
+                {
+                    "phase": "Creating",
+                    "message": f"Pruning {deleted_obsolete} pod(s) from a previous session",
+                    "podCount": expected_count,
                     **identity_fields,
                 },
             ),

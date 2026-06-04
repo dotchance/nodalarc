@@ -17,24 +17,20 @@ from __future__ import annotations
 import logging
 import time
 from collections import defaultdict
-from pathlib import Path
 
-import yaml
+from nodalarc.body_frames import body_frame_for
+from nodalarc.catalog_paths import CatalogRoots
 from nodalarc.constants import EARTH_RADIUS_KM
 from nodalarc.constellation_loader import (
-    expand_constellation,
     isl_terminal_for_interface,
-    load_constellation,
     load_ground_stations,
 )
 from nodalarc.models.addressing import (
-    AddressingScheme,
-    assign_isl_neighbors,
     neighbors_by_node,
     topology_summary,
     unique_isl_pairs,
 )
-from nodalarc.models.constellation import ParametricConstellation, TLEConstellation
+from nodalarc.models.constellation import ParametricConstellation
 from nodalarc.models.coverage import (
     CoveragePreviewResult,
     GsPreview,
@@ -43,9 +39,10 @@ from nodalarc.models.coverage import (
     IslPreview,
 )
 from nodalarc.models.ground_policy import HandoverPolicySpec, SelectionPolicySpec
-from nodalarc.models.session import AddressingConfig, GroundSchedulingConfig
+from nodalarc.models.resolved_session import SourceContext
+from nodalarc.models.session import GroundSchedulingConfig
 from nodalarc.propagator import orbital_period, propagate_keplerian
-from nodalarc.session_generator import merge_constellation_with_satellite_type
+from nodalarc.resolve_session import resolve_session_with_assets
 
 from ome.coverage_insights import describe_gs_coverage, generate_insights
 from ome.event_stream import precompute_timeline_window
@@ -64,14 +61,70 @@ def _preview_ground_scheduling() -> GroundSchedulingConfig:
     )
 
 
+def _preview_segment_session(
+    *,
+    constellation_source: str | dict,
+    satellite_type_override: str | None,
+    ground_stations_source: str | dict,
+) -> dict:
+    preview_ground = _preview_ground_scheduling().model_dump(mode="python")
+    constellation_segment = {
+        "id": "space",
+        "kind": "constellation",
+        "source": constellation_source,
+        "namespace": "space",
+        "central_body": "earth",
+    }
+    if satellite_type_override:
+        constellation_segment["satellite_type"] = satellite_type_override
+    return {
+        "session": {"name": "coverage-preview"},
+        "identity": {"mode": "segment_namespaced"},
+        "segments": [
+            constellation_segment,
+            {
+                "id": "ground",
+                "kind": "ground_set",
+                "source": ground_stations_source,
+                "namespace": "ground",
+                "reference_body": "earth",
+            },
+        ],
+        "link_rules": [
+            {
+                "id": "ground-access",
+                "kind": "access",
+                "endpoints": [
+                    {"selector": {"segment": "ground"}, "terminal_role": "ground"},
+                    {"selector": {"segment": "space"}, "terminal_role": "ground"},
+                ],
+                "topology": {"mode": "visible_candidates"},
+            }
+        ],
+        "simulation": {
+            "ground_link_model": "geometry_only",
+            "acknowledge_geometry_only": True,
+            "candidate_limits": {"max_pairs_per_rule": 100000},
+        },
+        "orbit": {"propagator": "keplerian-circular"},
+        "scheduling": {"ground": preview_ground},
+        "routing": {"protocol": "isis", "extensions": []},
+    }
+
+
 def compute_coverage_preview(
     constellation_source: str | dict | None,
     satellite_type_override: str | None,
     ground_stations_source: str | list[str] | dict | None,
+    *,
+    catalog_roots: CatalogRoots | None = None,
 ) -> CoveragePreviewResult:
-    """Compute coverage statistics for a constellation + GS combination.
+    """Compute coverage statistics through the segment-session resolver.
 
-    Returns CoveragePreviewResult with ISL/GS statistics and user-facing insights.
+    The browser still supplies wizard-style preview selections, but this function
+    immediately assembles a segment-session and resolves it through the same
+    semantic path used by deploy/upload. Coverage preview must not maintain a
+    second runtime view of constellation + ground station truth.
     """
     t0 = time.monotonic()
 
@@ -80,25 +133,34 @@ def compute_coverage_preview(
     if ground_stations_source is None:
         raise ValueError("ground_stations is required for coverage preview")
 
-    # --- Resolve constellation (with optional satellite type override) ---
-    constellation = _load_constellation(constellation_source, satellite_type_override)
+    ground_source = ground_stations_source
+    if isinstance(ground_source, list):
+        ground_source = load_ground_stations(ground_source).model_dump(mode="python")
 
-    # --- Resolve ground stations ---
-    gs_source = ground_stations_source
-    if isinstance(gs_source, str):
-        gs_source = _resolve_gs_path(gs_source)
-    gs_file = load_ground_stations(gs_source)
+    session_dict = _preview_segment_session(
+        constellation_source=constellation_source,
+        satellite_type_override=satellite_type_override,
+        ground_stations_source=ground_source,
+    )
+    resolution = resolve_session_with_assets(
+        session_dict,
+        catalog_roots=catalog_roots,
+        source_context=SourceContext(origin="coverage_preview"),
+    )
 
-    # --- Expand and compute ---
-    satellites = expand_constellation(constellation)
+    constellation = resolution.runtime_constellation
+    gs_file = resolution.primary_ground_set.config
+    satellites = list(resolution.satellites)
     if not satellites:
         raise ValueError("No satellites in constellation")
 
-    addressing = AddressingScheme(AddressingConfig())
-    neighbors = assign_isl_neighbors(constellation, addressing)
+    addressing = resolution.addressing
+    neighbors = resolution.neighbors
 
     first_alt = satellites[0].elements.semi_major_axis_km - EARTH_RADIUS_KM
-    period = orbital_period(first_alt)
+    period = max(
+        orbital_period(sat.elements.semi_major_axis_km - EARTH_RADIUS_KM) for sat in satellites
+    )
 
     # Extract visibility parameters from resolved constellation
     vis_params = _extract_visibility_params(constellation, gs_file)
@@ -111,12 +173,12 @@ def compute_coverage_preview(
         neighbors=neighbors,
         epoch_unix=0.0,
         duration_s=period,
-        propagator_id="sgp4-tle"
-        if isinstance(constellation, TLEConstellation)
-        else "keplerian-circular",
+        propagator_id=resolution.runtime_session.orbit.propagator,
         step_seconds=_PREVIEW_STEP_SECONDS,
-        ground_scheduling=_preview_ground_scheduling(),
+        ground_scheduling=resolution.runtime_session.scheduling.ground,
         ground_link_model="geometry_only",
+        ground_defaults_applied=True,
+        ground_candidate_satellites_by_gs=resolution.ground_candidate_satellites_by_gs,
         **vis_params,
     )
     events = window.events
@@ -145,21 +207,27 @@ def compute_coverage_preview(
     inclination_deg = 0.0
     altitude_km = first_alt
     plane_count = 1
-    if isinstance(constellation, ParametricConstellation):
-        inclination_deg = constellation.orbit.inclination_deg
-        plane_count = constellation.planes.count
+    parametric_assets = [
+        asset.config
+        for asset in resolution.constellations
+        if isinstance(asset.config, ParametricConstellation)
+    ]
+    if parametric_assets:
+        inclination_deg = parametric_assets[0].orbit.inclination_deg
+        plane_count = sum(asset.planes.count for asset in parametric_assets)
 
     isl_terminal_count = satellites[0].isl_terminal_count if satellites else 4
     topo = topology_summary(neighbors)
     all_pairs = unique_isl_pairs(neighbors)
 
     # Analyze timeline events
-    isl_stats, gs_stats = _count_events(events, neighbors, gs_file, period)
+    isl_stats, gs_stats = _count_events(events, neighbors, gs_file, addressing, period)
 
     # Compute per-GS diagnostics
     per_station = _build_gs_previews(
         gs_file,
         gs_stats,
+        addressing,
         inclination_deg,
         altitude_km,
     )
@@ -217,25 +285,6 @@ def compute_coverage_preview(
 # ---------------------------------------------------------------------------
 
 
-def _load_constellation(source, satellite_type_override):
-    """Load constellation with optional satellite type override."""
-    if isinstance(source, dict):
-        if satellite_type_override:
-            source = dict(source)
-            source["satellite_type"] = satellite_type_override
-            source.pop("default_terminals", None)
-        return load_constellation(source)
-
-    if isinstance(source, str):
-        path = _resolve_constellation_path(source)
-        if satellite_type_override:
-            merged = merge_constellation_with_satellite_type(path, satellite_type_override)
-            return load_constellation(merged)
-        return load_constellation(path)
-
-    raise ValueError(f"Invalid constellation source type: {type(source)}")
-
-
 def _extract_visibility_params(constellation, gs_file) -> dict:
     """Extract OME visibility parameters from resolved constellation."""
     params = {
@@ -248,7 +297,7 @@ def _extract_visibility_params(constellation, gs_file) -> dict:
     return params
 
 
-def _count_events(events, neighbors, gs_file, period: float) -> tuple[dict, dict]:
+def _count_events(events, neighbors, gs_file, addressing, period: float) -> tuple[dict, dict]:
     """Count ISL and GS statistics from timeline events.
 
     Returns (isl_stats, gs_stats) dicts.
@@ -263,7 +312,7 @@ def _count_events(events, neighbors, gs_file, period: float) -> tuple[dict, dict
 
     if gs_file:
         for station in gs_file.stations:
-            gs_coverage_steps[f"gs-{station.name}"] = 0
+            gs_coverage_steps[addressing.gs_id(station.name)] = 0
 
     total_steps = 0
 
@@ -320,7 +369,7 @@ def _count_events(events, neighbors, gs_file, period: float) -> tuple[dict, dict
     return isl_stats, gs_stats
 
 
-def _build_gs_previews(gs_file, gs_stats, inclination_deg, altitude_km):
+def _build_gs_previews(gs_file, gs_stats, addressing, inclination_deg, altitude_km):
     """Build per-station preview with physics-based descriptions for every station."""
     per_station: dict[str, GsStationPreview] = {}
     if not gs_file:
@@ -328,10 +377,10 @@ def _build_gs_previews(gs_file, gs_stats, inclination_deg, altitude_km):
 
     total_steps = gs_stats["total_steps"]
     coverage_steps = gs_stats["coverage_steps"]
-    default_min_elev = gs_file.default_min_elevation_deg or 25.0
+    default_min_elev = gs_file.default_min_elevation_deg
 
     for station in gs_file.stations:
-        gs_id = f"gs-{station.name}"
+        gs_id = addressing.gs_id(station.name)
         steps_connected = coverage_steps.get(gs_id, 0)
         coverage_pct = (steps_connected / total_steps) * 100.0 if total_steps > 0 else 0.0
         gap_steps = total_steps - steps_connected
@@ -437,6 +486,7 @@ def _scan_isl_failure_reasons(
                     max_range_km=max_range,
                     max_tracking_rate_deg_s=max_tracking if is_cross else None,
                     field_of_regard_deg=fov,
+                    body_frame=body_frame_for(getattr(sat_map[nid], "central_body", "earth")),
                     polar_seam_enabled=seam_enabled and is_cross,
                     latitude_threshold_deg=lat_threshold,
                     geo_a=geo_a,
@@ -458,27 +508,3 @@ def _scan_isl_failure_reasons(
         ),
         pairs_ever_feasible,
     )
-
-
-def _resolve_constellation_path(source: str) -> str:
-    """Resolve constellation source string to a file path."""
-    if Path(source).exists():
-        return source
-    candidate = Path("configs/constellations") / f"{source}.yaml"
-    if candidate.exists():
-        return str(candidate)
-    preset_path = Path("configs/presets/constellations") / f"{source}.yaml"
-    if preset_path.exists():
-        data = yaml.safe_load(preset_path.read_text())
-        return data.get("constellation", source)
-    raise FileNotFoundError(f"Cannot resolve constellation: {source}")
-
-
-def _resolve_gs_path(source: str) -> str:
-    """Resolve ground station source string to a file path."""
-    if Path(source).exists():
-        return source
-    candidate = Path("configs/ground-stations/sets") / f"{source}.yaml"
-    if candidate.exists():
-        return str(candidate)
-    raise FileNotFoundError(f"Cannot resolve ground stations: {source}")

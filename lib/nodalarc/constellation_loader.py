@@ -218,6 +218,12 @@ class SatelliteNode:
     __slots__ = (
         "plane",
         "slot",
+        "local_plane",
+        "local_slot",
+        "node_id",
+        "local_node_id",
+        "segment_id",
+        "central_body",
         "elements",
         "isl_terminal_count",
         "ground_terminal_count",
@@ -235,6 +241,12 @@ class SatelliteNode:
         elements: OrbitalElements,
         isl_terminal_count: int,
         ground_terminal_count: int,
+        local_plane: int | None = None,
+        local_slot: int | None = None,
+        node_id: str | None = None,
+        local_node_id: str | None = None,
+        segment_id: str | None = None,
+        central_body: str = "earth",
         isl_terminals: list | tuple | None = None,
         ground_terminals: list | tuple | None = None,
         tle_line_1: str | None = None,
@@ -243,6 +255,12 @@ class SatelliteNode:
     ) -> None:
         self.plane = plane
         self.slot = slot
+        self.local_plane = plane if local_plane is None else local_plane
+        self.local_slot = slot if local_slot is None else local_slot
+        self.node_id = node_id
+        self.local_node_id = local_node_id
+        self.segment_id = segment_id
+        self.central_body = central_body
         self.elements = elements
         self.isl_terminal_count = isl_terminal_count
         self.ground_terminal_count = ground_terminal_count
@@ -251,6 +269,61 @@ class SatelliteNode:
         self.tle_line_1 = tle_line_1
         self.tle_line_2 = tle_line_2
         self.norad_id = norad_id
+
+
+def satellite_local_node_id(sat: SatelliteNode) -> str:
+    """Return the source-local satellite ID preserved by the resolver."""
+    return sat.local_node_id or f"sat-P{sat.local_plane:02d}S{sat.local_slot:02d}"
+
+
+def satellite_local_plane_slot(sat: SatelliteNode) -> tuple[int, int]:
+    """Return the source-local plane/slot inside the satellite's segment."""
+    return sat.local_plane, sat.local_slot
+
+
+def satellite_node_id(sat: SatelliteNode, addressing) -> str:
+    """Return the resolver-assigned runtime node ID for a satellite.
+
+    Runtime identity is resolver-owned. Plane/slot remain orbital-local
+    metadata and are not globally identifying once multiple segments are loaded.
+    The addressing fallback exists for low-level structural tests that construct
+    ``SatelliteNode`` directly without a resolver.
+    """
+    return sat.node_id or addressing.sat_id(sat.plane, sat.slot)
+
+
+def clone_satellite_node(
+    sat: SatelliteNode,
+    *,
+    plane: int | None = None,
+    slot: int | None = None,
+    local_plane: int | None = None,
+    local_slot: int | None = None,
+    node_id: str | None = None,
+    local_node_id: str | None = None,
+    segment_id: str | None = None,
+    central_body: str | None = None,
+    elements: OrbitalElements | None = None,
+) -> SatelliteNode:
+    """Copy a satellite while assigning resolver-owned runtime identity."""
+    return SatelliteNode(
+        plane=sat.plane if plane is None else plane,
+        slot=sat.slot if slot is None else slot,
+        local_plane=sat.local_plane if local_plane is None else local_plane,
+        local_slot=sat.local_slot if local_slot is None else local_slot,
+        node_id=sat.node_id if node_id is None else node_id,
+        local_node_id=sat.local_node_id if local_node_id is None else local_node_id,
+        segment_id=sat.segment_id if segment_id is None else segment_id,
+        central_body=sat.central_body if central_body is None else central_body,
+        elements=sat.elements if elements is None else elements,
+        isl_terminal_count=sat.isl_terminal_count,
+        ground_terminal_count=sat.ground_terminal_count,
+        isl_terminals=sat.isl_terminals,
+        ground_terminals=sat.ground_terminals,
+        tle_line_1=sat.tle_line_1,
+        tle_line_2=sat.tle_line_2,
+        norad_id=sat.norad_id,
+    )
 
 
 def load_constellation(source: str | Path | dict) -> ConstellationConfig:
@@ -324,6 +397,9 @@ def _build_gs_file_from_stations(
     default_min_elevation_deg: float | None = None,
     default_selection_policy: SelectionPolicySpec | None = None,
     default_handover_policy: HandoverPolicySpec | None = None,
+    default_handover_mode: str | None = None,
+    default_mbb_overlap_ticks: int | None = None,
+    default_mbb_reserve: int | None = None,
 ) -> GroundStationFile:
     """Build a GroundStationFile from a list of individual station configs.
 
@@ -340,6 +416,9 @@ def _build_gs_file_from_stations(
         ),
         default_selection_policy=default_selection_policy,
         default_handover_policy=default_handover_policy,
+        default_handover_mode=default_handover_mode,
+        default_mbb_overlap_ticks=default_mbb_overlap_ticks,
+        default_mbb_reserve=default_mbb_reserve,
         default_terrestrial_prefixes=default_terrestrial_prefixes,
         stations=stations,
     )
@@ -364,6 +443,9 @@ def load_ground_stations_from_set(
         default_min_elevation_deg=gs_set.default_min_elevation_deg,
         default_selection_policy=gs_set.default_selection_policy,
         default_handover_policy=gs_set.default_handover_policy,
+        default_handover_mode=gs_set.default_handover_mode,
+        default_mbb_overlap_ticks=gs_set.default_mbb_overlap_ticks,
+        default_mbb_reserve=gs_set.default_mbb_reserve,
     )
 
 
@@ -416,6 +498,9 @@ def load_ground_stations(source: str | Path | list[str] | dict) -> GroundStation
                 default_min_elevation_deg=gs_set.default_min_elevation_deg,
                 default_selection_policy=gs_set.default_selection_policy,
                 default_handover_policy=gs_set.default_handover_policy,
+                default_handover_mode=gs_set.default_handover_mode,
+                default_mbb_overlap_ticks=gs_set.default_mbb_overlap_ticks,
+                default_mbb_reserve=gs_set.default_mbb_reserve,
             )
         if "set" in data:
             gs_file = load_ground_stations(data["set"])

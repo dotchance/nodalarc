@@ -41,6 +41,11 @@
   text-align: right;
 }
 
+.detail-value--code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: var(--font-size-xs);
+}
+
 .detail-value--active {
   color: var(--accent-green);
 }
@@ -327,6 +332,68 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
+}
+
+.filter-segment-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.filter-segment-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel);
+}
+
+.filter-segment-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+  cursor: pointer;
+}
+
+.filter-segment-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.filter-segment-name {
+  color: var(--text-primary);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.filter-segment-meta {
+  color: var(--text-dim);
+  font-size: var(--font-size-xxs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.filter-fly-btn {
+  font-size: var(--font-size-xxs);
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+}
+
+.filter-fly-btn:hover {
+  border-color: var(--accent-blue);
+  color: var(--accent-blue);
 }
 
 .filter-plane-item {

@@ -30,7 +30,7 @@ export function simTimeIsoToUnixSeconds(simTimeIso: string): number {
  *  position and ECEF-derived scene-unit velocity, under the current
  *  earthFrame rotation angle AND angular velocity.
  *
- *  Derivation (see specs/eci-view-plan.md §1.6):
+ *  Derivation:
  *    p_world(t) = R_z(θ(t)) · p_local(t)
  *    v_world(t) = R_z(θ) · ((dθ/dt)·ẑ × p_local + v_local)
  *               = R_z(θ) · (Ω × p_local + v_local)

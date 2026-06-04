@@ -16,6 +16,7 @@ from datetime import datetime
 
 from nodalarc.frames import EcefVec3, GeoPosition
 from nodalarc.geo import compute_latency_ms, compute_range_km
+from nodalarc.link_metadata import LinkRuleMetadata
 from nodalarc.models.link_decisions import (
     GroundAllocationEvent,
     GroundLinkDecisionSnapshot,
@@ -106,8 +107,9 @@ def build_link_state_snapshot(
     interval_s: float,
     fixed_positions: Mapping[str, tuple[EcefVec3, GeoPosition]] | None = None,
     epoch_id: int = 0,
-    mbb_overlap_ticks: int = 3,
+    mbb_overlap_ticks_by_gs: Mapping[str, int] | None = None,
     current_step: int = 0,
+    rule_map: Mapping[tuple[str, str], LinkRuleMetadata] | None = None,
 ) -> LinkStateSnapshot:
     """Build a LinkStateSnapshot from committed OME StepResult state.
 
@@ -117,8 +119,12 @@ def build_link_state_snapshot(
     downstream components to decide whether to invent or reject physics.
     """
     ecef: dict[str, EcefVec3] = {}
+    common: dict[str, EcefVec3] = {}
+    central_body: dict[str, str] = {}
     for node_id, state in source.propagated_states.items():
         ecef[node_id] = state.position_ecef_km
+        common[node_id] = state.position_common_km
+        central_body[node_id] = state.central_body
     if fixed_positions:
         for node_id, (position_ecef, _geo) in fixed_positions.items():
             ecef[node_id] = position_ecef
@@ -128,7 +134,10 @@ def build_link_state_snapshot(
         node_b: str,
         link_type: str,
     ) -> tuple[float, float]:
-        pa, pb = ecef.get(node_a), ecef.get(node_b)
+        if link_type == "isl" and central_body.get(node_a) != central_body.get(node_b):
+            pa, pb = common.get(node_a), common.get(node_b)
+        else:
+            pa, pb = ecef.get(node_a), ecef.get(node_b)
         if pa is None or pb is None:
             missing = ", ".join(node for node, pos in ((node_a, pa), (node_b, pb)) if pos is None)
             raise ValueError(
@@ -148,6 +157,11 @@ def build_link_state_snapshot(
             )
         return bandwidth
 
+    def _link_rule_metadata(pair: tuple[str, str]) -> LinkRuleMetadata | None:
+        if rule_map is None:
+            return None
+        return rule_map.get(pair)
+
     links: list[LinkState] = []
 
     for pair, (visible, scheduled) in source.isl_state.items():
@@ -162,6 +176,7 @@ def build_link_state_snapshot(
             _link_range_latency(pair[0], pair[1], "isl") if carrier == CarrierState.UP else None
         )
         bandwidth_mbps = _link_bandwidth(pair, "isl") if carrier == CarrierState.UP else None
+        rule_meta = _link_rule_metadata(pair)
         links.append(
             LinkState(
                 node_a=pair[0],
@@ -175,12 +190,26 @@ def build_link_state_snapshot(
                 latency_ms=range_latency[1] if range_latency else None,
                 bandwidth_mbps=bandwidth_mbps,
                 link_type="isl",
+                link_rule_id=rule_meta.link_rule_id if rule_meta is not None else None,
+                topology_mode=rule_meta.topology_mode if rule_meta is not None else None,
+                endpoint_segments=rule_meta.endpoint_segments if rule_meta is not None else None,
                 sim_time=sim_time,
             )
         )
 
     assoc = source.associations
     td_state = source.pending_teardowns
+    overlap_by_gs = dict(mbb_overlap_ticks_by_gs or {})
+
+    def _overlap_ticks_for_ground_pair(pair: tuple[str, str]) -> int:
+        for node_id in pair:
+            if node_id in overlap_by_gs:
+                return overlap_by_gs[node_id]
+        raise ValueError(
+            f"Cannot build LinkStateSnapshot for pending teardown {pair}: missing "
+            "per-ground-station MBB overlap policy"
+        )
+
     for pair, state_tuple in source.ground_state.items():
         visible = state_tuple[0]
         scheduled = state_tuple[1]
@@ -215,7 +244,10 @@ def build_link_state_snapshot(
         if pair in td_state:
             teardown = td_state[pair]
             successor = teardown.successor_pair
-            td_remaining = max(0, mbb_overlap_ticks - (current_step - teardown.start_step))
+            td_remaining = max(
+                0, _overlap_ticks_for_ground_pair(pair) - (current_step - teardown.start_step)
+            )
+        rule_meta = _link_rule_metadata(pair)
         links.append(
             LinkState(
                 node_a=pair[0],
@@ -235,6 +267,9 @@ def build_link_state_snapshot(
                 teardown_remaining_ticks=td_remaining,
                 successor_pair=successor,
                 sim_time=sim_time,
+                link_rule_id=rule_meta.link_rule_id if rule_meta is not None else None,
+                topology_mode=rule_meta.topology_mode if rule_meta is not None else None,
+                endpoint_segments=rule_meta.endpoint_segments if rule_meta is not None else None,
             )
         )
 

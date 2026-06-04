@@ -33,7 +33,7 @@ ws://host:8080/ws/v1/state?token=$TOKEN
 
 ### Connection sequence
 
-1. Connect → server sends `SessionEphemeris` (orbital elements for local propagation)
+1. Connect → server sends `SessionEphemeris` (node ephemeris plus body/frame facts for local propagation)
 2. Server sends current `StateSnapshot`
 3. Server broadcasts updated snapshots at ~1 Hz
 
@@ -41,7 +41,7 @@ ws://host:8080/ws/v1/state?token=$TOKEN
 
 | `msg_type` | Content | When |
 |------------|---------|------|
-| `session_ephemeris` | Orbital elements for all satellites, fixed positions for GS | On connect, on epoch change |
+| `session_ephemeris` | Ephemeris inputs for all nodes, fixed ground positions, and body/frame facts | On connect, on epoch change |
 | `state_snapshot` | Full state (nodes, links, events, health) | ~1 Hz continuous |
 | `session_transitioning` | Progress updates during session switch | During switch only |
 | `playback_state` | Playing/paused/speed | On change |
@@ -69,7 +69,7 @@ async def stream_state():
             msg_type = msg.get("msg_type", "state_snapshot")
 
             if msg_type == "session_ephemeris":
-                print(f"Received ephemeris for {len(msg['satellites'])} satellites")
+                print(f"Received ephemeris for {len(msg.get('nodes', {}))} nodes")
             elif msg_type == "state_snapshot":
                 print(f"[{msg['sim_time'][:19]}] {len(msg['links'])} links")
 
@@ -113,13 +113,13 @@ See [VS-API component docs](../components/vs-api.md) for the full schema. Key fi
 {
   "sim_time": "2026-04-03T19:48:03Z",
   "nodes": [
-    {"node_id": "sat-P00S00", "node_type": "satellite", "lat_deg": 42.9, "lon_deg": -84.9, "alt_km": 552.7, ...}
+    {"node_id": "space-sat-p00s00", "node_type": "satellite", "segment_id": "space", "reference_body": "earth", ...}
   ],
   "links": [
-    {"node_a": "sat-P00S00", "node_b": "sat-P00S01", "link_type": "intra_plane_isl", "latency_ms": 13.0, ...}
+    {"node_a": "space-sat-p00s00", "node_b": "space-sat-p00s01", "link_type": "intra_plane_isl", "latency_ms": 13.0, ...}
   ],
   "recent_events": [
-    {"sim_time": "...", "node_id": "gs-hawthorne", "event_type": "link_up", "summary": "..."}
+    {"sim_time": "...", "node_id": "ground-gs-hawthorne", "event_type": "link_up", "summary": "..."}
   ],
   "network_health": {"status": "converged", ...}
 }
@@ -129,12 +129,13 @@ See [VS-API component docs](../components/vs-api.md) for the full schema. Key fi
 
 ### Position computation
 
-The VS-API does NOT push per-frame satellite positions. It pushes `SessionEphemeris` (Keplerian orbital elements) once, and your client computes positions locally.
+The VS-API does NOT push per-frame positions. It pushes `SessionEphemeris` once
+per epoch, and your client computes positions locally.
 
 If you're building a real-time visualization:
-- Implement Keplerian propagation (two-body problem)
-- Compute positions at your frame rate from the cached ephemeris
-- The `satellite.js` npm package implements this in JavaScript
+- Read each node's published ephemeris type and frame metadata
+- Compute node positions at your frame rate from the cached ephemeris
+- Apply body/frame transforms for multi-body sessions
 
 If you're building a dashboard or non-real-time tool:
 - Use `lat_deg`, `lon_deg`, `alt_km` from the state snapshot (updated at ~1 Hz)

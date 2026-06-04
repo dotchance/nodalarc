@@ -24,11 +24,14 @@ import { useKeyboard } from "./hooks/useKeyboard";
 import { useSessionSwitcher } from "./hooks/useSessionSwitcher";
 import { usePlayback } from "./hooks/usePlayback";
 import { useAppState } from "./hooks/useAppState";
+import { filterSnapshotForRender, nodeSegmentId } from "./filters/renderSnapshot";
+import { selectionTypeForNode } from "./networkIdentity";
 import { SessionWizard } from "./catalog/SessionWizard";
 import { WS_URL, fetchApiKey } from "./config";
 import { setLabelsEnabled, getLabelsEnabled } from "./globe/labels";
 import { setGsLabelsEnabled, getGsLabelsEnabled } from "./globe/groundStations";
 import type { TracedPath } from "./types";
+import type { GlobeActions } from "./globe/actions";
 
 import "./styles/variables.css";
 import "./styles/reset.css";
@@ -60,15 +63,21 @@ function AppInner() {
   const { snapshot, ephemeris, playbackState, connected, hasEverConnected, kicked, sessionTransitioning, sessionError, switchDetail, historicalMode, setHistoricalMode, fetchHistorical, historicalError, sendMessage } =
     useSnapshot();
   const { selection, select, clearSelection, anchorGsId } = useSelection();
+  const preselectedAppliedRef = useRef(false);
 
   useEffect(() => {
+    if (preselectedAppliedRef.current || !snapshot) return;
     const params = new URLSearchParams(window.location.search);
     const preselected = params.get("selected");
-    if (preselected) {
-      const type = preselected.startsWith("gs-") ? "ground_station" as const : "satellite" as const;
-      select({ type, id: preselected });
+    if (!preselected) {
+      preselectedAppliedRef.current = true;
+      return;
     }
-  }, [select]);
+    const node = snapshot.nodes.find((candidate) => candidate.node_id === preselected);
+    if (!node) return;
+    select({ type: selectionTypeForNode(node), id: preselected });
+    preselectedAppliedRef.current = true;
+  }, [snapshot, select]);
 
   const { switching } = useSessionSwitcher(snapshot?.session_status ?? null);
   const playback = usePlayback(snapshot?.playback_paused, snapshot?.playback_speed);
@@ -106,6 +115,8 @@ function AppInner() {
 
   const [userTrace, setUserTrace] = useState<TracedPath | null>(null);
   const [visiblePlanes, setVisiblePlanes] = useState<Set<number> | null>(null);
+  const [visibleSegments, setVisibleSegments] = useState<Set<string> | null>(null);
+  const globeActionsRef = useRef<GlobeActions | null>(null);
 
   const handleTogglePlane = useCallback((plane: number) => {
     setVisiblePlanes((prev) => {
@@ -129,6 +140,32 @@ function AppInner() {
   const handleShowAllPlanes = useCallback(() => setVisiblePlanes(null), []);
   const handleHideAllPlanes = useCallback(() => setVisiblePlanes(new Set()), []);
 
+  const handleToggleSegment = useCallback((segmentId: string) => {
+    setVisibleSegments((prev) => {
+      if (prev === null) {
+        const allSegments = new Set<string>();
+        if (snapshot) {
+          for (const node of snapshot.nodes) allSegments.add(nodeSegmentId(node));
+        }
+        allSegments.delete(segmentId);
+        return allSegments;
+      }
+      const next = new Set(prev);
+      if (next.has(segmentId)) next.delete(segmentId);
+      else next.add(segmentId);
+      return next;
+    });
+  }, [snapshot]);
+
+  const handleShowAllSegments = useCallback(() => setVisibleSegments(null), []);
+  const handleHideAllSegments = useCallback(() => setVisibleSegments(new Set()), []);
+  const handleFlyToSegment = useCallback((segmentId: string) => {
+    const nodeIds = (snapshot?.nodes ?? [])
+      .filter((node) => nodeSegmentId(node) === segmentId)
+      .map((node) => node.node_id);
+    globeActionsRef.current?.flyToSegment(nodeIds);
+  }, [snapshot]);
+
   const [panelOpen, setPanelOpen] = useState(true);
   const panelManualRef = useRef(false);
   const [panelWidth, setPanelWidth] = useState<number>(() => {
@@ -150,14 +187,6 @@ function AppInner() {
     panelManualRef.current = true;
   }, []);
 
-  const globeActionsRef = useRef<{
-    flyToTopView: () => void;
-    setFollowTarget: (nodeId: string | null) => void;
-    captureScreenshot: () => void;
-    flyToNode: (nodeId: string) => void;
-    getNodeScreenPosition: (nodeId: string) => { x: number; y: number; visible: boolean } | null;
-  } | null>(null);
-
   const toggleHistorical = useCallback(() => {
     const next = !historicalMode;
     setHistoricalPlaying(false);
@@ -167,21 +196,40 @@ function AppInner() {
     setHistoricalMode(next);
   }, [historicalMode, setHistoricalMode, snapshot?.sim_time]);
 
+  const focusCurrentSelection = useCallback((follow = false): boolean => {
+    if (!selection) {
+      if (!follow) globeActionsRef.current?.frameScene();
+      return !follow;
+    }
+    if (selection.type === "link") {
+      const link = snapshot?.links.find(
+        (candidate) => `${[candidate.node_a, candidate.node_b].sort().join(":")}` === selection.id,
+      );
+      if (!link) return false;
+      globeActionsRef.current?.focusLink(link.node_a, link.node_b, { follow });
+      return true;
+    }
+    globeActionsRef.current?.focusNode(selection.id, { follow });
+    return true;
+  }, [selection, snapshot?.links]);
+
   const handleFollowNode = useCallback(() => {
     setFollowNode((prev: boolean) => {
       if (prev) {
         globeActionsRef.current?.setFollowTarget(null);
         return false;
       }
-      if (!selection || selection.type === "link") return false;
-      globeActionsRef.current?.setFollowTarget(selection.id);
-      return true;
+      return focusCurrentSelection(true);
     });
-  }, [selection, setFollowNode]);
+  }, [focusCurrentSelection, setFollowNode]);
 
   const handleTopView = useCallback(() => { globeActionsRef.current?.flyToTopView(); }, []);
+  const handleFrameScene = useCallback(() => { globeActionsRef.current?.frameScene(); }, []);
+  const handleFrameSelection = useCallback(() => {
+    focusCurrentSelection(false);
+  }, [focusCurrentSelection]);
   const handleScreenshot = useCallback(() => { globeActionsRef.current?.captureScreenshot(); }, []);
-  const handleFlyToNode = useCallback((nodeId: string) => { globeActionsRef.current?.flyToNode(nodeId); }, []);
+  const handleFlyToNode = useCallback((nodeId: string) => { globeActionsRef.current?.focusNode(nodeId); }, []);
   const handleVisualizationFatalError = useCallback((message: string) => {
     setVisualizationError(message);
   }, []);
@@ -207,6 +255,8 @@ function AppInner() {
       onToggleGlobeMode: () => setGlobeMode((m: string) => m === "blue-marble" ? "day-night" : m === "day-night" ? "political" : "blue-marble"),
       onToggleReferenceFrame: toggleReferenceFrame,
       onFollowNode: handleFollowNode,
+      onFrameSelection: handleFrameSelection,
+      onFrameScene: handleFrameScene,
       onTopView: handleTopView,
       onToggleCli: () => setCliDrawerOpen((v: boolean) => !v),
       onTogglePanel: handlePanelToggle,
@@ -214,7 +264,7 @@ function AppInner() {
       onToggleLabels: () => setLabelsEnabled(!getLabelsEnabled()),
       onToggleGsLabels: () => setGsLabelsEnabled(!getGsLabelsEnabled()),
     }),
-    [clearSelection, closeCatalog, showCatalog, hasEverDeployed, toggleView, toggleHistorical, handleFollowNode, handleTopView, historicalMode, playback, handlePanelToggle, toggleReferenceFrame, setColorMode, setShowGroundLinks, setShowIslLinks, setShowSatPaths, setShowTrails, setGlobeMode, setCliDrawerOpen, setFilterOpen],
+    [clearSelection, closeCatalog, showCatalog, hasEverDeployed, toggleView, toggleHistorical, handleFollowNode, handleFrameSelection, handleFrameScene, handleTopView, historicalMode, playback, handlePanelToggle, toggleReferenceFrame, setColorMode, setShowGroundLinks, setShowIslLinks, setShowSatPaths, setShowTrails, setGlobeMode, setCliDrawerOpen, setFilterOpen],
   );
 
   useKeyboard(keyboardActions);
@@ -224,9 +274,9 @@ function AppInner() {
     const prev = prevViewModeRef.current;
     prevViewModeRef.current = viewMode;
     if (viewMode !== prev && (viewMode === "globe" || viewMode === "split") && selection) {
-      globeActionsRef.current?.flyToNode(selection.id);
+      focusCurrentSelection(false);
     }
-  }, [viewMode, selection]);
+  }, [viewMode, selection, focusCurrentSelection]);
 
   const augmentedSnapshot = useMemo(() => {
     if (!snapshot) return snapshot;
@@ -236,6 +286,11 @@ function AppInner() {
     const serverPaths = snapshot.traced_paths.filter(p => p.flow_id !== "__user_trace__");
     return { ...snapshot, traced_paths: [...serverPaths, userTrace] };
   }, [snapshot, userTrace]);
+
+  const renderedSnapshot = useMemo(
+    () => filterSnapshotForRender(augmentedSnapshot, visibleSegments, visiblePlanes),
+    [augmentedSnapshot, visibleSegments, visiblePlanes],
+  );
 
   // --- Build zone content ---
 
@@ -328,7 +383,7 @@ function AppInner() {
       >
         <VisualizationErrorBoundary onError={handleVisualizationFatalError}>
           <R3FScene
-            snapshot={augmentedSnapshot}
+            snapshot={renderedSnapshot}
             ephemeris={ephemeris}
             colorMode={colorMode}
             globeMode={globeMode}
@@ -350,7 +405,7 @@ function AppInner() {
         style={{ display: (viewMode === "globe" || viewMode === "dashboard") ? "none" : undefined }}
       >
         <TopologyView
-          snapshot={augmentedSnapshot}
+          snapshot={renderedSnapshot}
           selection={selection}
           onSelect={select}
           onFlyTo={handleFlyToNode}
@@ -371,6 +426,7 @@ function AppInner() {
         showIslLinks={showIslLinks}
         showSatPaths={showSatPaths}
         followNode={followNode}
+        filterOpen={filterOpen}
         canSplit={canSplit}
         referenceFrame={referenceFrame}
         onViewMode={setViewMode}
@@ -378,6 +434,7 @@ function AppInner() {
         onToggleGroundLinks={() => setShowGroundLinks((v: boolean) => !v)}
         onToggleIslLinks={() => setShowIslLinks((v: boolean) => !v)}
         onToggleSatPaths={() => setShowSatPaths((v: boolean) => !v)}
+        onToggleFilter={() => setFilterOpen((v: boolean) => !v)}
         globeMode={globeMode}
         onToggleGlobeMode={() => setGlobeMode((m: string) => m === "blue-marble" ? "day-night" : "blue-marble")}
         onToggleReferenceFrame={toggleReferenceFrame}
@@ -428,6 +485,11 @@ function AppInner() {
               onTogglePlane={handleTogglePlane}
               onShowAllPlanes={handleShowAllPlanes}
               onHideAllPlanes={handleHideAllPlanes}
+              visibleSegments={visibleSegments}
+              onToggleSegment={handleToggleSegment}
+              onShowAllSegments={handleShowAllSegments}
+              onHideAllSegments={handleHideAllSegments}
+              onFlyToSegment={handleFlyToSegment}
             />
           </div>
         </div>

@@ -7,11 +7,11 @@
  * overlay, and the HTML label layer — and drives the reference-frame rotation (FrameDriver).
  * It owns the cross-cutting lifecycle the legacy GlobeView held: feeding the EMA sim-clock
  * per snapshot, pausing the clock, driving the SGP4 worker on ephemeris change, and
- * registering the Earth body group as the position registry's world frame.
+ * registering each active body group as a position-registry frame.
  *
- * World-frame layers (trails, all-orbits, selection ring, labels) are scene-root children;
- * earth-local layers (Earth, sats, GS, links, flows, footprint, ground tracks) are children
- * of <Body>. R3F is the single production globe implementation.
+ * World-frame layers (links, flows, trails, all-orbits, selection ring, labels) are scene-root
+ * children; body-local layers (planet/moon appearance, sats, GS, footprint, ground tracks) are
+ * children of that body's <Body>. R3F is the single production globe implementation.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
@@ -27,13 +27,13 @@ import {
   requestFlush,
   sendEphemeris,
 } from "../../sim/workerBridge";
-import type { PlaybackStateMsg, SessionEphemeris } from "../../sim/ephemeris";
+import type { EphemerisBodyFrame, PlaybackStateMsg, SessionEphemeris } from "../../sim/ephemeris";
 import type { ColorMode, GlobeMode, ReferenceFrame, Selection, StateSnapshot } from "../../types";
 import type { GlobeActions } from "../actions";
 import { Universe } from "./Universe";
 import { GlobeActionsBridge } from "./GlobeActionsBridge";
 import { Body } from "./Body";
-import { Earth, Starfield } from "./Earth";
+import { Earth, Moon, Starfield } from "./Earth";
 import { Constellation } from "./Constellation";
 import { GroundStations } from "./GroundStation";
 import { GroundTracks } from "./GroundTracks";
@@ -48,9 +48,20 @@ import { Labels } from "./Labels";
 import { Tooltip, type HoverInfo } from "./Tooltip";
 import { SelectionOverlay } from "./SelectionOverlay";
 import { FrameDriver } from "./FrameDriver";
-import { EARTH_RADIUS_KM } from "./units";
+import { EARTH_RADIUS_KM, kmToRender } from "./units";
+import {
+  cameraDistanceForSceneRadius,
+  cameraFarForMaxDistance,
+  sceneFrameForCamera,
+  sceneRadiusForCamera,
+} from "./cameraBounds";
 
 const MAX_PINS = 7;
+const BODY_RADIUS_KM: Record<string, number> = {
+  earth: EARTH_RADIUS_KM,
+  luna: 1737.4,
+  mars: 3389.5,
+};
 
 interface SceneProps {
   snapshot: StateSnapshot | null;
@@ -93,13 +104,15 @@ export function Scene({
   const starGroupRef = useRef<THREE.Group>(null);
   const labelContainerRef = useRef<HTMLDivElement>(null);
   const controlsRef = useRef<OrbitControls | null>(null);
-  // The LinkPicker (inside the Canvas) publishes its hit-test-and-select here; the Canvas-level
-  // onPointerMissed below invokes it on a background click. No-op until the LinkPicker mounts.
+  // The screen-space picker (inside the Canvas) publishes its hit-test-and-select here; the
+  // Canvas-level onPointerMissed below invokes it when physical geometry is missed. No-op until
+  // the picker mounts.
   const missedRef = useRef<(event: MouseEvent) => void>(() => {});
 
   // ctrl/cmd-click orbit pins (capped, oldest evicted) + hover tooltip state.
   const [pinnedIds, setPinnedIds] = useState<string[]>([]);
   const [hover, setHover] = useState<HoverInfo | null>(null);
+  const [cameraFocusLabel, setCameraFocusLabel] = useState("Scene");
   const togglePin = useCallback((id: string) => {
     setPinnedIds((prev) =>
       prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id].slice(-MAX_PINS),
@@ -112,6 +125,52 @@ export function Scene({
   // declaratively via their resetKeys below; orbit rings re-seed on their own.
   const constellation = snapshot?.constellation_name ?? null;
   const nodes = snapshot?.nodes ?? [];
+  const earthNodes = useMemo(
+    () => nodes.filter((node) => (node.reference_body ?? "earth") === "earth"),
+    [nodes],
+  );
+  const simTimeUnix = snapshot?.sim_time ? Date.parse(snapshot.sim_time) / 1000 : null;
+  const bodies = useMemo(() => {
+    const frames = ephemeris?.body_frames ?? {};
+    const ids = new Set<string>(["earth"]);
+    for (const bodyId of Object.keys(frames)) ids.add(bodyId);
+    if (ephemeris?.body_frames) {
+      for (const node of nodes) ids.add(node.reference_body ?? "earth");
+    }
+
+    return [...ids]
+      .sort((a, b) => (a === "earth" ? -1 : b === "earth" ? 1 : a.localeCompare(b)))
+      .map((id) => {
+        const frame = frames[id];
+        if (id !== "earth" && !frame) return null;
+        return {
+          id,
+          radiusKm: frame?.radius_km ?? BODY_RADIUS_KM[id] ?? EARTH_RADIUS_KM,
+          position: bodyFramePosition(frame, ephemeris?.epoch_unix ?? null, simTimeUnix),
+        };
+      })
+      .filter((value): value is { id: string; radiusKm: number; position: [number, number, number] } =>
+        value !== null,
+      );
+  }, [ephemeris, nodes, simTimeUnix]);
+  const controlsMaxDistance = useMemo(
+    () => cameraDistanceForSceneRadius(sceneRadiusForCamera(bodies, nodes)),
+    [bodies, nodes],
+  );
+  const sceneFrame = useMemo(() => sceneFrameForCamera(bodies, nodes), [bodies, nodes]);
+  const cameraFar = useMemo(
+    () => cameraFarForMaxDistance(controlsMaxDistance),
+    [controlsMaxDistance],
+  );
+  const bodyPickTargets = useMemo(
+    () =>
+      bodies.map((body) => ({
+        id: body.id,
+        center: new THREE.Vector3(body.position[0], body.position[1], body.position[2]),
+        radius: kmToRender(body.radiusKm),
+      })),
+    [bodies],
+  );
 
   // On-select decision data, lifted here so the globe is internally single-sourced: the GS
   // envelope cone and the per-sat relation tinting both read from
@@ -127,6 +186,24 @@ export function Scene({
     () =>
       selectedGsId ? gsCandidateRelations(selectedGsId, candidates, snapshot?.links ?? []) : null,
     [selectedGsId, candidates, snapshot?.links],
+  );
+  const focusNode = useCallback(
+    (nodeId: string) => {
+      actionsRef?.current?.focusNode(nodeId);
+    },
+    [actionsRef],
+  );
+  const focusLink = useCallback(
+    (nodeA: string, nodeB: string) => {
+      actionsRef?.current?.focusLink(nodeA, nodeB);
+    },
+    [actionsRef],
+  );
+  const focusBody = useCallback(
+    (bodyId: string) => {
+      actionsRef?.current?.focusBody(bodyId);
+    },
+    [actionsRef],
   );
   useEffect(() => {
     setPinnedIds([]);
@@ -181,18 +258,31 @@ export function Scene({
       <Universe
         controlsRef={controlsRef}
         onPointerMissed={(e) => missedRef.current(e)}
+        controlsMaxDistance={controlsMaxDistance}
+        cameraFar={cameraFar}
         afterControls={<Labels nodes={nodes} containerRef={labelContainerRef} />}
       >
         {actionsRef && (
-          <GlobeActionsBridge actionsRef={actionsRef} controlsRef={controlsRef} />
+          <GlobeActionsBridge
+            actionsRef={actionsRef}
+            controlsRef={controlsRef}
+            sceneFitDistance={controlsMaxDistance}
+            sceneFrame={sceneFrame}
+            onFocusChange={setCameraFocusLabel}
+          />
         )}
-        {/* Click a beam to select the link; click empty space / Earth to deselect (legacy
-            gpuPicker link path + onSelect(null)-on-miss). Sats/GS are picked by their own handlers. */}
+        {/* Missed physical hits get a screen-space pass: nodes first, then beams, then bodies.
+            This keeps MEO/GEO/cislunar objects usable without visually inflating the scene. */}
         <LinkPicker
+          nodes={nodes}
           links={snapshot?.links ?? []}
+          bodies={bodyPickTargets}
           showIslLinks={showIslLinks}
           showGroundLinks={showGroundLinks}
           onSelect={onSelect}
+          onFocusNode={focusNode}
+          onFocusLink={focusLink}
+          onFocusBody={focusBody}
           handlerRef={missedRef}
         />
         <FrameDriver
@@ -214,48 +304,66 @@ export function Scene({
           resetKey={`${ephemeris?.epoch_id ?? "none"}|${referenceFrame}|${constellation ?? "none"}`}
         />
         <AllOrbits
-          nodes={nodes}
+          nodes={earthNodes}
           show={showSatPaths}
           earthFrame={earthGroupRef}
           referenceFrame={referenceFrame}
         />
         <OrbitPins
           pinnedIds={pinnedIds}
-          nodes={nodes}
+          nodes={earthNodes}
           earthFrame={earthGroupRef}
           referenceFrame={referenceFrame}
         />
-        <Body id="earth" radiusKm={EARTH_RADIUS_KM} ref={earthGroupRef}>
-          <Earth globeMode={globeMode} simTimeIso={snapshot?.sim_time ?? null} />
-          <Constellation
-            nodes={nodes}
-            ephemeris={ephemeris}
-            colorMode={colorMode}
-            onSelect={onSelect}
-            onTogglePin={togglePin}
-            onHover={setHover}
-            relations={relations}
-          />
-          <GroundStations
-            nodes={nodes}
-            selection={selection}
-            links={snapshot?.links ?? []}
-            actuationNotices={snapshot?.actuation_notices ?? []}
-            envelope={envelope}
-            onSelect={onSelect}
-            onHover={setHover}
-          />
-          <GroundTracks nodes={nodes} enabled={false} />
-          <Links
-            links={snapshot?.links ?? []}
-            kernelActualPairs={snapshot?.kernel_actual_pairs ?? []}
-            showIslLinks={showIslLinks}
-            showGroundLinks={showGroundLinks}
-            resetKey={constellation ?? "none"}
-          />
-          <FlowPaths tracedPaths={snapshot?.traced_paths ?? []} />
-          <CoverageFootprint selection={selection} nodes={nodes} />
-        </Body>
+        <Links
+          links={snapshot?.links ?? []}
+          kernelActualPairs={snapshot?.kernel_actual_pairs ?? []}
+          showIslLinks={showIslLinks}
+          showGroundLinks={showGroundLinks}
+          resetKey={constellation ?? "none"}
+        />
+        <FlowPaths tracedPaths={snapshot?.traced_paths ?? []} />
+        {bodies.map((body) => {
+          const bodyNodes = nodes.filter((node) => (node.reference_body ?? "earth") === body.id);
+          return (
+            <Body
+              key={body.id}
+              id={body.id}
+              radiusKm={body.radiusKm}
+              position={body.position}
+              onFocusBody={focusBody}
+              ref={body.id === "earth" ? earthGroupRef : undefined}
+            >
+              {body.id === "earth" ? (
+                <Earth globeMode={globeMode} simTimeIso={snapshot?.sim_time ?? null} />
+              ) : body.id === "luna" ? (
+                <Moon />
+              ) : null}
+              <Constellation
+                nodes={bodyNodes}
+                ephemeris={ephemeris}
+                colorMode={colorMode}
+                onSelect={onSelect}
+                onFocusNode={focusNode}
+                onTogglePin={togglePin}
+                onHover={setHover}
+                relations={relations}
+              />
+              <GroundStations
+                nodes={bodyNodes}
+                selection={selection}
+                links={snapshot?.links ?? []}
+                actuationNotices={snapshot?.actuation_notices ?? []}
+                envelope={envelope}
+                onSelect={onSelect}
+                onFocusNode={focusNode}
+                onHover={setHover}
+              />
+              <GroundTracks nodes={bodyNodes} enabled={false} />
+              <CoverageFootprint selection={selection} nodes={bodyNodes} />
+            </Body>
+          );
+        })}
         <SelectionOverlay selection={selection} />
       </Universe>
       {/* HTML label overlay — Labels (inside the canvas) projects positions into these divs. */}
@@ -272,6 +380,28 @@ export function Scene({
         }}
       />
       <Tooltip hover={hover} />
+      <div
+        style={{
+          position: "absolute",
+          left: 90,
+          top: 14,
+          zIndex: 8,
+          padding: "4px 8px",
+          border: "1px solid rgba(90, 124, 255, 0.35)",
+          borderRadius: 4,
+          background: "rgba(12, 14, 28, 0.72)",
+          color: "#aeb8ff",
+          fontSize: 11,
+          fontFamily: "monospace",
+          pointerEvents: "none",
+          maxWidth: "min(520px, calc(100vw - 180px))",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+        }}
+      >
+        Focus: {cameraFocusLabel}
+      </div>
       {/* Epoch-suspension overlay during a seek (PRD seek protocol) — legacy "Recalculating Epoch". */}
       {seeking && (
         <div
@@ -303,4 +433,17 @@ export function Scene({
       )}
     </div>
   );
+}
+
+function bodyFramePosition(
+  frame: EphemerisBodyFrame | undefined,
+  epochUnix: number | null,
+  simTimeUnix: number | null,
+): [number, number, number] {
+  if (!frame) return [0, 0, 0];
+  const dt = epochUnix !== null && simTimeUnix !== null ? simTimeUnix - epochUnix : 0;
+  const xKm = frame.origin_x_km + frame.vel_x_km_s * dt;
+  const yKm = frame.origin_y_km + frame.vel_y_km_s * dt;
+  const zKm = frame.origin_z_km + frame.vel_z_km_s * dt;
+  return [kmToRender(xKm), kmToRender(zKm), -kmToRender(yKm)];
 }

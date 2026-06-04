@@ -94,6 +94,11 @@
   border-color: var(--accent-blue);
 }
 
+.wizard-card--disabled {
+  cursor: not-allowed;
+  opacity: 0.52;
+}
+
 .wizard-card-title {
   font-size: var(--font-size-lg);
   font-weight: var(--font-weight-semibold);
@@ -137,10 +142,22 @@
   text-transform: uppercase;
 }
 
+.wizard-card-orbit-badge--disabled {
+  border-color: rgba(255, 170, 80, 0.38);
+  color: var(--accent-orange);
+}
+
 .wizard-card-desc {
   font-size: var(--font-size-xs);
   color: var(--text-secondary);
   line-height: 1.4;
+}
+
+.wizard-card-disabled {
+  color: var(--accent-orange);
+  font-size: var(--font-size-xs);
+  line-height: 1.4;
+  margin-top: var(--space-3);
 }
 
 .wizard-protocol-list {

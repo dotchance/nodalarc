@@ -41,15 +41,31 @@ class AddressingScheme:
         self._ipv6_sat_tpl = cfg.ipv6_sat_template
         self._ipv6_gs_tpl = cfg.ipv6_gs_template
         self._node_types: dict[str, str] = {}
+        self._sat_node_ids_by_location: dict[tuple[int, int], str] = {}
+        self._gs_node_ids_by_source_name: dict[str, str] = {}
+        self._ambiguous_gs_source_names: set[str] = set()
 
         if satellites:
             for sat in satellites:
-                nid = self.sat_id(sat.plane, sat.slot)
+                nid = getattr(sat, "node_id", None) or self._sat_id_tpl.format(
+                    plane=sat.plane,
+                    slot=sat.slot,
+                )
+                self._sat_node_ids_by_location[(sat.plane, sat.slot)] = nid
                 self._node_types[nid] = "satellite"
         if gs_file and hasattr(gs_file, "stations"):
             for station in gs_file.stations:
                 nid = self.gs_id(station.name)
                 self._node_types[nid] = "ground_station"
+                source_name = getattr(station, "source_name", None)
+                if source_name:
+                    key = str(source_name)
+                    existing = self._gs_node_ids_by_source_name.get(key)
+                    if existing is not None and existing != nid:
+                        self._ambiguous_gs_source_names.add(key)
+                        self._gs_node_ids_by_source_name.pop(key, None)
+                    elif key not in self._ambiguous_gs_source_names:
+                        self._gs_node_ids_by_source_name[key] = nid
 
     def node_type(self, node_id: str) -> str:
         if node_id not in self._node_types:
@@ -73,9 +89,18 @@ class AddressingScheme:
     # -- Node IDs --
 
     def sat_id(self, plane: int, slot: int) -> str:
+        if (plane, slot) in self._sat_node_ids_by_location:
+            return self._sat_node_ids_by_location[(plane, slot)]
         return self._sat_id_tpl.format(plane=plane, slot=slot)
 
     def gs_id(self, name: str) -> str:
+        if name in self._ambiguous_gs_source_names:
+            raise KeyError(
+                f"ground station source name {name!r} is ambiguous across segments; "
+                "use the resolved runtime node_id instead"
+            )
+        if name in self._gs_node_ids_by_source_name:
+            return self._gs_node_ids_by_source_name[name]
         return self._gs_id_tpl.format(name=name)
 
     # -- IP addresses --
@@ -161,6 +186,12 @@ def compute_area_assignments(
     strategy = config.strategy
     is_ospf = protocol == "ospf"
 
+    # Explicit per-ground-station area overrides (applied below). "all" maps every
+    # station; a name list (or bare name) maps those stations. These are honored,
+    # never silently dropped.
+    gs_name_to_area: dict[str, str] = {}
+    explicit_all_gs_area: str | None = None
+
     if strategy == "flat":
         default = "0.0.0.0" if is_ospf else "49.0001"
         area_id = config.gs_area_id or default
@@ -190,17 +221,47 @@ def compute_area_assignments(
             if mapping.planes is not None:
                 for p in mapping.planes:
                     plane_to_area[p] = mapping.area_id
+            if mapping.ground_stations is not None:
+                if mapping.ground_stations == "all":
+                    explicit_all_gs_area = mapping.area_id
+                else:
+                    for name in mapping.ground_stations:
+                        gs_name_to_area[name] = mapping.area_id
+        # A mapping that targets a non-existent plane or station does nothing —
+        # fail loud rather than silently drop it.
+        out_of_range = sorted(p for p in plane_to_area if not 0 <= p < plane_count)
+        if out_of_range:
+            raise ValueError(
+                f"explicit area assignment maps plane(s) outside [0, {plane_count}): {out_of_range}"
+            )
+        explicit_gs_intent = explicit_all_gs_area is not None or bool(gs_name_to_area)
+        if explicit_gs_intent and gs_names is None:
+            raise ValueError(
+                "explicit ground-station area assignment requires the known gs_names universe"
+            )
+        if gs_names is not None:
+            known = set(gs_names)
+            unknown = sorted(n for n in gs_name_to_area if n not in known)
+            if unknown:
+                raise ValueError(
+                    f"explicit area assignment maps unknown ground station(s): {unknown}"
+                )
         fallback = "0.0.0.0" if is_ospf else "49.0001"
         for p in range(plane_count):
             area_id = plane_to_area.get(p, fallback)
             for s in range(sats_per_plane):
                 result[addressing.sat_id(p, s)] = area_id
 
-    # Ground stations: for OSPF flat, area 0. For IS-IS, gs_area_id.
-    gs_area = (config.gs_area_id or "0.0.0.0") if is_ospf else (config.gs_area_id or "49.0000")
+    else:
+        raise ValueError(f"unknown area-assignment strategy: {strategy!r}")
+
+    # Ground stations: explicit per-GS/all overrides win; else gs_area_id; else
+    # the protocol default (OSPF backbone / IS-IS 49.0000).
+    gs_default = (config.gs_area_id or "0.0.0.0") if is_ospf else (config.gs_area_id or "49.0000")
     if gs_names:
         for name in gs_names:
-            result[addressing.gs_id(name)] = gs_area
+            area = gs_name_to_area.get(name, explicit_all_gs_area or gs_default)
+            result[addressing.gs_id(name)] = area
 
     return result
 
@@ -217,6 +278,7 @@ class NeighborAssignment(NamedTuple):
     peer_node_id: str  # "sat-P03S08"
     link_type: str  # "intra_plane_isl", "cross_plane_isl", "ground_uplink", "ground_downlink"
     priority: int  # 0=intra-fwd, 1=intra-aft, 2=cross-right, 3=cross-left
+    bandwidth_mbps: float | None = None  # Per-interface bottleneck bandwidth when pre-resolved.
 
 
 def _get_constellation_params(
@@ -412,9 +474,19 @@ def neighbors_by_node(
     result: dict[str, list[NeighborAssignment]] = {}
     for node_id, na in assignments:
         result.setdefault(node_id, []).append(na)
-    # Sort each node's assignments by priority
+    # Sort each node's assignments by a total key. The source collection is a
+    # frozenset, so priority alone leaves equal-priority entries hash-seed
+    # dependent.
     for node_id in result:
-        result[node_id].sort(key=lambda x: x.priority)
+        result[node_id].sort(
+            key=lambda x: (
+                x.priority,
+                x.interface,
+                x.peer_node_id,
+                x.link_type,
+                -1.0 if x.bandwidth_mbps is None else x.bandwidth_mbps,
+            )
+        )
     return result
 
 

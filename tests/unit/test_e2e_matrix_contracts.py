@@ -34,8 +34,8 @@ def test_mbb_packet_acceptance_requires_successor_fib_overlap() -> None:
 def test_check_ping_fails_ground_session_when_ground_probe_is_not_proven(monkeypatch) -> None:
     state = {
         "nodes": [
-            {"node_id": "gs-denver"},
-            {"node_id": "sat-P00S00"},
+            {"node_id": "gs-denver", "node_type": "ground_station"},
+            {"node_id": "sat-P00S00", "node_type": "satellite"},
         ],
         "links": [],
     }
@@ -55,7 +55,10 @@ def test_check_ping_fails_ground_session_when_ground_probe_is_not_proven(monkeyp
 
 def test_check_ping_fails_when_declared_ground_nodes_do_not_materialize(monkeypatch) -> None:
     state = {
-        "nodes": [{"node_id": "sat-P00S00"}, {"node_id": "sat-P00S01"}],
+        "nodes": [
+            {"node_id": "sat-P00S00", "node_type": "satellite"},
+            {"node_id": "sat-P00S01", "node_type": "satellite"},
+        ],
         "links": [],
     }
     monkeypatch.setattr(e2e_matrix, "request_json", lambda *args, **kwargs: state)
@@ -72,7 +75,10 @@ def test_check_ping_fails_when_declared_ground_nodes_do_not_materialize(monkeypa
 
 def test_check_ping_allows_skip_only_for_satellite_only_topology(monkeypatch) -> None:
     state = {
-        "nodes": [{"node_id": "sat-P00S00"}, {"node_id": "sat-P00S01"}],
+        "nodes": [
+            {"node_id": "sat-P00S00", "node_type": "satellite"},
+            {"node_id": "sat-P00S01", "node_type": "satellite"},
+        ],
         "links": [],
     }
     monkeypatch.setattr(e2e_matrix, "request_json", lambda *args, **kwargs: state)

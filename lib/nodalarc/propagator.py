@@ -22,6 +22,7 @@ import math
 from datetime import UTC, datetime
 from functools import lru_cache
 
+from nodalarc.body_frames import EARTH_BODY_FRAME, BodyFrame
 from nodalarc.constants import (
     EARTH_J2,
     EARTH_MU,
@@ -35,6 +36,7 @@ from nodalarc.geo import geodetic_to_ecef
 from nodalarc.orbital import (
     OrbitalElements,
     elements_from_params,
+    elements_from_params_for_radius,
 )
 
 # Re-export so consumers can get everything from one place
@@ -45,21 +47,28 @@ __all__ = [
     "GeoPosition",
     "OrbitalElements",
     "elements_from_params",
+    "elements_from_params_for_radius",
     "EARTH_ROTATION_RATE",
     "J2000_UNIX",
     "orbital_period",
+    "orbital_period_for_body",
     "orbital_velocity",
     "j2_circular_secular_rates",
     "propagate_eci",
+    "propagate_eci_for_body",
     "propagate_eci_j2_mean_elements",
     "gmst",
     "eci_to_ecef",
+    "eci_to_body_fixed",
     "ecef_to_eci",
     "ecef_to_geodetic",
+    "body_fixed_to_geodetic",
     "geodetic_to_ecef",
     "eci_to_ecef_velocity",
     "propagate_keplerian",
+    "propagate_keplerian_for_body",
     "propagate_j2_mean_elements",
+    "propagate_j2_mean_elements_for_body",
     "propagate_sgp4_tle",
 ]
 
@@ -79,6 +88,13 @@ def orbital_period(altitude_km: float) -> float:
     return TWO_PI * math.sqrt(a**3 / EARTH_MU)
 
 
+def orbital_period_for_body(elements: OrbitalElements, body_frame: BodyFrame) -> float:
+    """Compute circular orbital period in seconds for a body-specific orbit."""
+    return TWO_PI * math.sqrt(
+        elements.semi_major_axis_km**3 / body_frame.gravitational_parameter_km3_s2
+    )
+
+
 def orbital_velocity(altitude_km: float) -> float:
     """Compute orbital velocity in km/s for a circular orbit.
 
@@ -88,7 +104,13 @@ def orbital_velocity(altitude_km: float) -> float:
     return math.sqrt(EARTH_MU / a)
 
 
-def j2_circular_secular_rates(elements: OrbitalElements) -> tuple[float, float]:
+def j2_circular_secular_rates(
+    elements: OrbitalElements,
+    *,
+    mu_km3_s2: float = EARTH_MU,
+    j2: float = EARTH_J2,
+    reference_radius_km: float = WGS84_A,
+) -> tuple[float, float]:
     """Return (RAAN rate, mean-anomaly rate) for the circular J2 model.
 
     Rates are radians per second. The second value includes the Keplerian
@@ -96,15 +118,20 @@ def j2_circular_secular_rates(elements: OrbitalElements) -> tuple[float, float]:
     """
     a = elements.semi_major_axis_km
     i = elements.inclination_rad
-    n = math.sqrt(EARTH_MU / a**3)
+    n = math.sqrt(mu_km3_s2 / a**3)
     cos_i = math.cos(i)
-    j2_factor = EARTH_J2 * (WGS84_A / a) ** 2
+    j2_factor = j2 * (reference_radius_km / a) ** 2
     raan_dot = -1.5 * j2_factor * n * cos_i
     mean_anomaly_dot = n * (1.0 + 0.75 * j2_factor * (3.0 * cos_i**2 - 1.0))
     return raan_dot, mean_anomaly_dot
 
 
-def propagate_eci(elements: OrbitalElements, dt: float) -> tuple[EciVec3, EciVec3]:
+def propagate_eci_for_body(
+    elements: OrbitalElements,
+    dt: float,
+    *,
+    mu_km3_s2: float,
+) -> tuple[EciVec3, EciVec3]:
     """Propagate circular orbit by dt seconds in ECI frame.
 
     Returns (position_km_ECI, velocity_km_s_ECI) in Earth-Centered Inertial
@@ -119,7 +146,7 @@ def propagate_eci(elements: OrbitalElements, dt: float) -> tuple[EciVec3, EciVec
     raan = elements.raan_rad
 
     # Mean motion (rad/s)
-    n = math.sqrt(EARTH_MU / a**3)
+    n = math.sqrt(mu_km3_s2 / a**3)
 
     # True anomaly at time dt (circular: ν = ν₀ + n·dt)
     nu = elements.true_anomaly_rad + n * dt
@@ -130,7 +157,7 @@ def propagate_eci(elements: OrbitalElements, dt: float) -> tuple[EciVec3, EciVec
     y_pf = r * math.sin(nu)
 
     # Velocity in orbital plane
-    v = math.sqrt(EARTH_MU / a)
+    v = math.sqrt(mu_km3_s2 / a)
     vx_pf = -v * math.sin(nu)
     vy_pf = v * math.cos(nu)
 
@@ -153,7 +180,17 @@ def propagate_eci(elements: OrbitalElements, dt: float) -> tuple[EciVec3, EciVec
     return EciVec3(Vec3(x_eci, y_eci, z_eci)), EciVec3(Vec3(vx_eci, vy_eci, vz_eci))
 
 
-def propagate_eci_j2_mean_elements(elements: OrbitalElements, dt: float) -> tuple[EciVec3, EciVec3]:
+def propagate_eci(elements: OrbitalElements, dt: float) -> tuple[EciVec3, EciVec3]:
+    """Propagate circular Earth orbit by dt seconds in ECI frame."""
+    return propagate_eci_for_body(elements, dt, mu_km3_s2=EARTH_MU)
+
+
+def propagate_eci_j2_mean_elements_for_body(
+    elements: OrbitalElements,
+    dt: float,
+    *,
+    body_frame: BodyFrame,
+) -> tuple[EciVec3, EciVec3]:
     """Propagate a circular mean-element orbit with first-order secular J2.
 
     This model is intentionally explicit and limited: the current constellation
@@ -166,7 +203,12 @@ def propagate_eci_j2_mean_elements(elements: OrbitalElements, dt: float) -> tupl
     i = elements.inclination_rad
     cos_i = math.cos(i)
     sin_i = math.sin(i)
-    raan_dot, mean_anomaly_dot = j2_circular_secular_rates(elements)
+    raan_dot, mean_anomaly_dot = j2_circular_secular_rates(
+        elements,
+        mu_km3_s2=body_frame.gravitational_parameter_km3_s2,
+        j2=body_frame.j2,
+        reference_radius_km=body_frame.equatorial_radius_km,
+    )
 
     raan = elements.raan_rad + raan_dot * dt
     u = elements.true_anomaly_rad + mean_anomaly_dot * dt
@@ -195,6 +237,11 @@ def propagate_eci_j2_mean_elements(elements: OrbitalElements, dt: float) -> tupl
     return EciVec3(Vec3(x, y, z)), EciVec3(Vec3(vx, vy, vz))
 
 
+def propagate_eci_j2_mean_elements(elements: OrbitalElements, dt: float) -> tuple[EciVec3, EciVec3]:
+    """Propagate Earth circular mean elements with first-order secular J2."""
+    return propagate_eci_j2_mean_elements_for_body(elements, dt, body_frame=EARTH_BODY_FRAME)
+
+
 def gmst(unix_timestamp: float) -> float:
     """Compute Greenwich Mean Sidereal Time in radians.
 
@@ -214,6 +261,30 @@ def gmst(unix_timestamp: float) -> float:
 def eci_to_ecef(pos_eci: EciVec3, unix_timestamp: float) -> EcefVec3:
     """Convert ECI position to ECEF via GMST rotation about Z axis."""
     theta = gmst(unix_timestamp)
+    cos_t = math.cos(theta)
+    sin_t = math.sin(theta)
+    return EcefVec3(
+        Vec3(
+            cos_t * pos_eci.x + sin_t * pos_eci.y,
+            -sin_t * pos_eci.x + cos_t * pos_eci.y,
+            pos_eci.z,
+        )
+    )
+
+
+def _body_rotation_angle(body_frame: BodyFrame, unix_timestamp: float) -> float:
+    if body_frame.name == "earth":
+        return gmst(unix_timestamp)
+    return (unix_timestamp - J2000_UNIX) * body_frame.rotation_rate_rad_s
+
+
+def eci_to_body_fixed(
+    pos_eci: EciVec3,
+    unix_timestamp: float,
+    body_frame: BodyFrame,
+) -> EcefVec3:
+    """Convert body-centered inertial position to the body's rotating local frame."""
+    theta = _body_rotation_angle(body_frame, unix_timestamp)
     cos_t = math.cos(theta)
     sin_t = math.sin(theta)
     return EcefVec3(
@@ -272,6 +343,30 @@ def ecef_to_geodetic(pos_ecef: EcefVec3) -> GeoPosition:
     )
 
 
+def body_fixed_to_geodetic(pos_body_fixed: EcefVec3, body_frame: BodyFrame) -> GeoPosition:
+    """Convert a body-fixed XYZ vector to geodetic coordinates on that body."""
+    x, y, z = pos_body_fixed
+    lon_rad = math.atan2(y, x)
+    p = math.sqrt(x**2 + y**2)
+    a = body_frame.equatorial_radius_km
+    b = body_frame.polar_radius_km
+    e2 = 1.0 - (b * b) / (a * a)
+    lat_rad = math.atan2(z, p * (1.0 - e2))
+    for _ in range(10):
+        sin_lat = math.sin(lat_rad)
+        n = a / math.sqrt(1.0 - e2 * sin_lat**2)
+        lat_rad = math.atan2(z + e2 * n * sin_lat, p)
+    sin_lat = math.sin(lat_rad)
+    cos_lat = math.cos(lat_rad)
+    n = a / math.sqrt(1.0 - e2 * sin_lat**2)
+    alt_km = p / cos_lat - n if abs(cos_lat) > 1e-10 else abs(z) - n * (1.0 - e2)
+    return GeoPosition(
+        lat_deg=math.degrees(lat_rad),
+        lon_deg=math.degrees(lon_rad),
+        alt_km=alt_km,
+    )
+
+
 def eci_to_ecef_velocity(pos_eci: EciVec3, vel_eci: EciVec3, unix_timestamp: float) -> EcefVec3:
     """Convert ECI velocity to ECEF velocity.
 
@@ -294,6 +389,54 @@ def eci_to_ecef_velocity(pos_eci: EciVec3, vel_eci: EciVec3, unix_timestamp: flo
     return EcefVec3(Vec3(vx, vy, vz))
 
 
+def eci_to_body_fixed_velocity(
+    pos_eci: EciVec3,
+    vel_eci: EciVec3,
+    unix_timestamp: float,
+    body_frame: BodyFrame,
+) -> EcefVec3:
+    """Convert inertial velocity to velocity relative to a body's rotating frame."""
+    theta = _body_rotation_angle(body_frame, unix_timestamp)
+    cos_t, sin_t = math.cos(theta), math.sin(theta)
+    vx = cos_t * vel_eci.x + sin_t * vel_eci.y
+    vy = -sin_t * vel_eci.x + cos_t * vel_eci.y
+    vz = vel_eci.z
+    pos_fixed = eci_to_body_fixed(pos_eci, unix_timestamp, body_frame)
+    omega = body_frame.rotation_rate_rad_s
+    vx -= -omega * pos_fixed.y
+    vy -= omega * pos_fixed.x
+    return EcefVec3(Vec3(vx, vy, vz))
+
+
+def propagate_keplerian_for_body(
+    elements: OrbitalElements,
+    epoch_unix: float,
+    dt: float,
+    *,
+    body_frame: BodyFrame,
+) -> tuple[EcefVec3, EcefVec3, GeoPosition, EciVec3, EciVec3]:
+    """Propagate a circular orbit in a body-specific local frame.
+
+    Returns body-fixed position/velocity/geodetic plus body-centered inertial
+    position/velocity. The latter is the value that can be translated into a
+    common GCRS frame by adding the body's ephemeris state.
+    """
+    pos_inertial, vel_inertial = propagate_eci_for_body(
+        elements,
+        dt,
+        mu_km3_s2=body_frame.gravitational_parameter_km3_s2,
+    )
+    current_time = epoch_unix + dt
+    pos_fixed = eci_to_body_fixed(pos_inertial, current_time, body_frame)
+    vel_fixed = eci_to_body_fixed_velocity(pos_inertial, vel_inertial, current_time, body_frame)
+    geo = (
+        ecef_to_geodetic(pos_fixed)
+        if body_frame.name == "earth"
+        else body_fixed_to_geodetic(pos_fixed, body_frame)
+    )
+    return pos_fixed, vel_fixed, geo, pos_inertial, vel_inertial
+
+
 def propagate_keplerian(
     elements: OrbitalElements,
     epoch_unix: float,
@@ -314,12 +457,37 @@ def propagate_keplerian(
     Returns:
         (pos_ecef_km, vel_ecef_km_s, geodetic_position)
     """
-    pos_eci, vel_eci = propagate_eci(elements, dt)
-    current_time = epoch_unix + dt
-    pos_ecef = eci_to_ecef(pos_eci, current_time)
-    vel_ecef = eci_to_ecef_velocity(pos_eci, vel_eci, current_time)
-    geo = ecef_to_geodetic(pos_ecef)
+    pos_ecef, vel_ecef, geo, _pos_eci, _vel_eci = propagate_keplerian_for_body(
+        elements,
+        epoch_unix,
+        dt,
+        body_frame=EARTH_BODY_FRAME,
+    )
     return pos_ecef, vel_ecef, geo
+
+
+def propagate_j2_mean_elements_for_body(
+    elements: OrbitalElements,
+    epoch_unix: float,
+    dt: float,
+    *,
+    body_frame: BodyFrame,
+) -> tuple[EcefVec3, EcefVec3, GeoPosition, EciVec3, EciVec3]:
+    """Propagate body-specific circular mean elements with that body's J2 value."""
+    pos_inertial, vel_inertial = propagate_eci_j2_mean_elements_for_body(
+        elements,
+        dt,
+        body_frame=body_frame,
+    )
+    current_time = epoch_unix + dt
+    pos_fixed = eci_to_body_fixed(pos_inertial, current_time, body_frame)
+    vel_fixed = eci_to_body_fixed_velocity(pos_inertial, vel_inertial, current_time, body_frame)
+    geo = (
+        ecef_to_geodetic(pos_fixed)
+        if body_frame.name == "earth"
+        else body_fixed_to_geodetic(pos_fixed, body_frame)
+    )
+    return pos_fixed, vel_fixed, geo, pos_inertial, vel_inertial
 
 
 def propagate_j2_mean_elements(
@@ -328,11 +496,12 @@ def propagate_j2_mean_elements(
     dt: float,
 ) -> tuple[EcefVec3, EcefVec3, GeoPosition]:
     """Propagate with the explicit circular J2 mean-element model."""
-    pos_eci, vel_eci = propagate_eci_j2_mean_elements(elements, dt)
-    current_time = epoch_unix + dt
-    pos_ecef = eci_to_ecef(pos_eci, current_time)
-    vel_ecef = eci_to_ecef_velocity(pos_eci, vel_eci, current_time)
-    geo = ecef_to_geodetic(pos_ecef)
+    pos_ecef, vel_ecef, geo, _pos_eci, _vel_eci = propagate_j2_mean_elements_for_body(
+        elements,
+        epoch_unix,
+        dt,
+        body_frame=EARTH_BODY_FRAME,
+    )
     return pos_ecef, vel_ecef, geo
 
 

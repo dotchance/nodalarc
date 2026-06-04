@@ -8,10 +8,8 @@ import pytest
 import yaml
 from nodalarc.constellation_loader import (
     SatelliteNode,
-    expand_constellation,
-    load_constellation,
-    load_ground_stations,
 )
+from nodalarc.ground_terminals import station_ground_terminal_capacity
 from nodalarc.models.constellation import (
     GroundTerminal,
     IslTerminal,
@@ -28,9 +26,13 @@ from nodalarc.models.ground_station import (
     GroundStationFile,
     GroundTerminalDef,
 )
+from nodalarc.models.resolved_session import SourceContext
 from nodalarc.models.session import (
+    AllOnOnePlacementConfig,
     OrbitConfig,
     PlacementConfig,
+    PlaneGroupPerNodePlacementConfig,
+    PlanePerNodePlacementConfig,
     RoutingConfig,
     SessionConfig,
     SessionMeta,
@@ -38,6 +40,7 @@ from nodalarc.models.session import (
 )
 from nodalarc.models.terminal_physics import SatGroundTerminalBoresight, TerminalBoresight
 from nodalarc.orbital import elements_from_params
+from nodalarc.resolve_session import resolve_session_with_assets
 from nodalarc.session_validator import (
     VALID_SCHEDULING_POLICIES,
     build_validation_report,
@@ -45,6 +48,7 @@ from nodalarc.session_validator import (
 )
 from nodalarc.stack_resolver import ResolvedStack, resolve_stack
 from ome.main import _effective_ground_scheduling_for_runtime
+from pydantic import TypeAdapter, ValidationError
 
 from tests.conftest import CONFIGS_DIR
 
@@ -63,6 +67,20 @@ _EXPLICIT_SCHEDULING = {
 
 ISS_TLE_LINE_1 = "1 25544U 98067A   21075.51041667  .00001264  00000-0  29660-4 0  9993"
 ISS_TLE_LINE_2 = "2 25544  51.6442  21.5417 0002426  95.1670  21.8444 15.48974333273145"
+
+
+def _placement_config(placement_policy: str, planes_per_group: int | None) -> PlacementConfig:
+    if placement_policy == "allOnOne":
+        return AllOnOnePlacementConfig(policy="allOnOne")
+    if placement_policy == "planePerNode":
+        return PlanePerNodePlacementConfig(policy="planePerNode")
+    if placement_policy == "planeGroupPerNode":
+        return PlaneGroupPerNodePlacementConfig(
+            policy="planeGroupPerNode",
+            planes_per_group=planes_per_group,
+        )
+    raise ValueError(f"unsupported placement policy in test helper: {placement_policy}")
+
 
 # ---------------------------------------------------------------------------
 # Helpers — build minimal valid models for testing
@@ -109,11 +127,27 @@ def _make_session(
         ),
         time=TimeConfig(step_seconds=step_seconds),
         scheduling=_EXPLICIT_SCHEDULING,
-        placement=PlacementConfig(
-            policy=placement_policy,
-            planes_per_group=planes_per_group,
-        ),
+        placement=_placement_config(placement_policy, planes_per_group),
     )
+
+
+def _with_ground(session: SessionConfig, **overrides) -> SessionConfig:
+    """Return ``session`` with ground-scheduling overrides applied.
+
+    Config sub-models are frozen, so test setup applies overrides via
+    ``model_copy(update=)`` — which also bypasses re-validation, the same effect
+    as a tool mutating the parsed model after Pydantic validation (the case the
+    readiness validator must still catch as defense in depth).
+    """
+    new_ground = session.scheduling.ground.model_copy(update=overrides)
+    session.scheduling = session.scheduling.model_copy(update={"ground": new_ground})
+    return session
+
+
+def _with_simulation(session: SessionConfig, **overrides) -> SessionConfig:
+    """Return ``session`` with simulation-config overrides applied (see _with_ground)."""
+    session.simulation = session.simulation.model_copy(update=overrides)
+    return session
 
 
 def _selection_policy(name: str, *, horizon: int | None = None) -> SelectionPolicySpec:
@@ -471,12 +505,11 @@ class TestE003:
 
 class TestE004:
     def test_srgb_overflow(self):
-        """Constellation too large for SRGB = error."""
+        """Resolved prefix-SID indices outside the SRGB = error."""
         session = _make_session()
         gs = _make_gs_file()
-        # 80 planes * 100 = 8000, which exceeds gs_sid_offset of 7900
-        sats = _make_satellites(count=80 * 22, planes=80, isl_terminals=4)
-        constellation = _make_constellation(planes=80, sats_per_plane=22)
+        sats = _make_satellites(count=1, planes=1, isl_terminals=4)
+        constellation = _make_constellation(planes=1, sats_per_plane=1)
         stack = _make_resolved_stack(segment_routing=True)
 
         results = validate_session_readiness(
@@ -485,6 +518,7 @@ class TestE004:
             sats,
             gs,
             stack,
+            sid_indices_by_node={"space-sat-p00s00": 8001},
         )
 
         errors = [r for r in results if r.level == "error" and r.code == "E004"]
@@ -510,6 +544,20 @@ class TestE004:
         e004 = [r for r in results if r.code == "E004"]
         assert len(e004) == 0
 
+    def test_sr_requires_resolved_sid_indices(self):
+        """SR readiness fails if caller did not provide resolver-owned SIDs."""
+        session = _make_session()
+        gs = _make_gs_file()
+        sats = _make_satellites(count=1, planes=1)
+        constellation = _make_constellation(planes=1, sats_per_plane=1)
+        stack = _make_resolved_stack(segment_routing=True)
+
+        results = validate_session_readiness(session, constellation, sats, gs, stack)
+
+        errors = [r for r in results if r.level == "error" and r.code == "E004"]
+        assert len(errors) == 1
+        assert "prefix-SID indices" in errors[0].message
+
     def test_small_constellation_sr_ok(self):
         """Small constellation with SR should not trigger E004."""
         session = _make_session()
@@ -524,6 +572,7 @@ class TestE004:
             sats,
             gs,
             stack,
+            sid_indices_by_node={"space-sat-p00s00": 1},
         )
 
         e004 = [r for r in results if r.code == "E004"]
@@ -705,7 +754,9 @@ class TestE022:
 
     def test_per_gs_rank_ranking_allows_incompatible_raw_policy_score_scales(self):
         session = _make_session()
-        session.scheduling.ground.ranking_order = ["service_priority", "per_gs_rank", "lex_pair"]
+        session = _with_ground(
+            session, ranking_order=["service_priority", "per_gs_rank", "lex_pair"]
+        )
         stations = [
             GroundStationConfig(
                 name="dwell-gs",
@@ -736,46 +787,9 @@ class TestE022:
 
 
 class TestE010:
-    def test_mbb_requires_capacity_for_steady_link_plus_reserve(self):
+    def test_default_mbb_single_terminal_station_resolves_to_bbm_warning(self):
         session = _make_session()
-        session.scheduling.ground.handover_mode = "mbb"
-        session.scheduling.ground.mbb_overlap_ticks = 3
-        session.scheduling.ground.mbb_reserve = 1
-        gs = _make_gs_file(
-            stations=[
-                GroundStationConfig(
-                    name="single-terminal",
-                    lat_deg=34.0,
-                    lon_deg=-118.0,
-                    terminals=[
-                        GroundTerminalDef(
-                            type="rf",
-                            count=1,
-                            bandwidth_mbps=1000,
-                            tracking_capacity=1,
-                            **GROUND_PHYSICAL_TERMINAL_FIELDS,
-                        )
-                    ],
-                )
-            ]
-        )
-        sats = _make_satellites()
-        constellation = _make_constellation()
-        stack = _make_resolved_stack()
-
-        results = validate_session_readiness(session, constellation, sats, gs, stack)
-
-        errors = [r for r in results if r.level == "error" and r.code == "E010"]
-        assert len(errors) == 1
-        assert "capacity 1" in errors[0].message
-        assert "requires capacity >= 2" in errors[0].message
-
-    def test_mbb_incapable_session_can_only_run_degraded_with_explicit_acknowledgement(self):
-        session = _make_session()
-        session.scheduling.ground.handover_mode = "mbb"
-        session.scheduling.ground.mbb_overlap_ticks = 3
-        session.scheduling.ground.mbb_reserve = 1
-        session.simulation.acknowledge_bbm_handover_gap = True
+        session = _with_ground(session, handover_mode="mbb", mbb_overlap_ticks=3, mbb_reserve=1)
         gs = _make_gs_file(
             stations=[
                 GroundStationConfig(
@@ -803,20 +817,21 @@ class TestE010:
         assert [r for r in results if r.level == "error" and r.code == "E010"] == []
         warnings = [r for r in results if r.level == "warning" and r.code == "W011"]
         assert len(warnings) == 1
-        assert "explicitly acknowledges degraded BBM behavior" in warnings[0].message
-        assert warnings[0].field_path == "simulation.acknowledge_bbm_handover_gap"
+        assert "effective handover_mode is BBM" in warnings[0].message
+        assert warnings[0].field_path == "ground_stations.stations.single-terminal.terminals"
 
-    def test_ome_runtime_rejects_unacknowledged_mbb_capacity_shortfall(self):
+    def test_explicit_station_mbb_requires_capacity_for_steady_link_plus_reserve(self):
         session = _make_session()
-        session.scheduling.ground.handover_mode = "mbb"
-        session.scheduling.ground.mbb_overlap_ticks = 3
-        session.scheduling.ground.mbb_reserve = 1
+        session = _with_ground(session, handover_mode="mbb", mbb_overlap_ticks=3, mbb_reserve=1)
         gs = _make_gs_file(
             stations=[
                 GroundStationConfig(
                     name="single-terminal",
                     lat_deg=34.0,
                     lon_deg=-118.0,
+                    handover_mode="mbb",
+                    mbb_overlap_ticks=3,
+                    mbb_reserve=1,
                     terminals=[
                         GroundTerminalDef(
                             type="rf",
@@ -829,45 +844,37 @@ class TestE010:
                 )
             ]
         )
+        sats = _make_satellites()
+        constellation = _make_constellation()
+        stack = _make_resolved_stack()
 
-        with pytest.raises(RuntimeError, match="Refusing to degrade silently"):
-            _effective_ground_scheduling_for_runtime(session, gs)
+        results = validate_session_readiness(session, constellation, sats, gs, stack)
 
-    def test_ome_runtime_converts_acknowledged_mbb_shortfall_to_bbm(self):
+        errors = [r for r in results if r.level == "error" and r.code == "E010"]
+        assert len(errors) == 1
+        assert "capacity 1" in errors[0].message
+        assert "requires capacity > 1" in errors[0].message
+        assert errors[0].field_path == "ground_stations.stations.single-terminal.handover_mode"
+
+    def test_ome_runtime_keeps_session_default_template_for_per_station_resolution(self):
         session = _make_session()
-        session.scheduling.ground.handover_mode = "mbb"
-        session.scheduling.ground.mbb_overlap_ticks = 3
-        session.scheduling.ground.mbb_reserve = 1
-        session.simulation.acknowledge_bbm_handover_gap = True
-        gs = _make_gs_file(
-            stations=[
-                GroundStationConfig(
-                    name="single-terminal",
-                    lat_deg=34.0,
-                    lon_deg=-118.0,
-                    terminals=[
-                        GroundTerminalDef(
-                            type="rf",
-                            count=1,
-                            bandwidth_mbps=1000,
-                            tracking_capacity=1,
-                            **GROUND_PHYSICAL_TERMINAL_FIELDS,
-                        )
-                    ],
-                )
-            ]
-        )
+        session = _with_ground(session, handover_mode="mbb", mbb_overlap_ticks=3, mbb_reserve=1)
 
-        effective = _effective_ground_scheduling_for_runtime(session, gs)
+        effective = _effective_ground_scheduling_for_runtime(session)
 
-        assert effective.handover_mode == "bbm"
-        assert effective.mbb_reserve == 0
+        assert effective.handover_mode == "mbb"
+        assert effective.mbb_reserve == 1
+
+    def test_ome_runtime_rejects_unimplemented_multi_overlap_reserve(self):
+        session = _make_session()
+        session = _with_ground(session, handover_mode="mbb", mbb_overlap_ticks=3, mbb_reserve=2)
+
+        with pytest.raises(RuntimeError, match="MBB-002 multi-overlap"):
+            _effective_ground_scheduling_for_runtime(session)
 
     def test_mbb_capacity_uses_terminal_count_times_tracking_capacity(self):
         session = _make_session()
-        session.scheduling.ground.handover_mode = "mbb"
-        session.scheduling.ground.mbb_overlap_ticks = 3
-        session.scheduling.ground.mbb_reserve = 1
+        session = _with_ground(session, handover_mode="mbb", mbb_overlap_ticks=3, mbb_reserve=1)
         gs = _make_gs_file(
             stations=[
                 GroundStationConfig(
@@ -903,10 +910,10 @@ class TestE010:
 class TestE023:
     def test_mbb_reserve_above_one_is_rejected_even_if_capacity_exists(self):
         session = _make_session()
-        session.scheduling.ground.handover_mode = "mbb"
-        session.scheduling.ground.mbb_overlap_ticks = 3
-        # Simulate a tool mutating the parsed model after Pydantic validation.
-        session.scheduling.ground.mbb_reserve = 2
+        # Simulate a tool mutating the parsed model after Pydantic validation:
+        # model_copy(update=) bypasses the model validator that otherwise rejects
+        # mbb_reserve > 1, so the readiness validator must still catch it (E023).
+        session = _with_ground(session, handover_mode="mbb", mbb_overlap_ticks=3, mbb_reserve=2)
         gs = _make_gs_file(
             stations=[
                 GroundStationConfig(
@@ -997,8 +1004,9 @@ class TestE011:
 class TestGroundPhysicsFidelityGates:
     def test_geometry_only_requires_explicit_acknowledgement(self):
         session = _make_session()
-        session.simulation.ground_link_model = "geometry_only"
-        session.simulation.acknowledge_geometry_only = False
+        session = _with_simulation(
+            session, ground_link_model="geometry_only", acknowledge_geometry_only=False
+        )
         gs = _make_gs_file()
         sats = _make_satellites()
         constellation = _make_constellation()
@@ -1012,8 +1020,9 @@ class TestGroundPhysicsFidelityGates:
 
     def test_acknowledged_geometry_only_warns_but_does_not_emit_e020(self):
         session = _make_session()
-        session.simulation.ground_link_model = "geometry_only"
-        session.simulation.acknowledge_geometry_only = True
+        session = _with_simulation(
+            session, ground_link_model="geometry_only", acknowledge_geometry_only=True
+        )
         gs = _make_gs_file()
         sats = _make_satellites()
         constellation = _make_constellation()
@@ -1124,31 +1133,13 @@ class TestGroundPhysicsFidelityGates:
 
 
 class TestE007:
-    def test_plane_group_without_planes_per_group(self):
-        """planeGroupPerNode without planes_per_group = error."""
-        session = _make_session(
-            placement_policy="planeGroupPerNode",
-            planes_per_group=None,
-        )
-        gs = _make_gs_file()
-        sats = _make_satellites()
-        constellation = _make_constellation()
-        stack = _make_resolved_stack()
-
-        results = validate_session_readiness(
-            session,
-            constellation,
-            sats,
-            gs,
-            stack,
-        )
-
-        errors = [r for r in results if r.level == "error" and r.code == "E007"]
-        assert len(errors) == 1
-        assert "planes_per_group" in errors[0].message
+    def test_plane_group_without_planes_per_group_rejected_at_parse_boundary(self):
+        """planeGroupPerNode without planes_per_group is unrepresentable post-parse."""
+        with pytest.raises(ValidationError, match="planes_per_group"):
+            TypeAdapter(PlacementConfig).validate_python({"policy": "planeGroupPerNode"})
 
     def test_plane_group_with_planes_per_group_ok(self):
-        """planeGroupPerNode with planes_per_group set = no error."""
+        """planeGroupPerNode with planes_per_group set reaches readiness with no E007."""
         session = _make_session(
             placement_policy="planeGroupPerNode",
             planes_per_group=4,
@@ -1670,11 +1661,16 @@ class TestExistingSessions:
     def test_existing_sessions_pass(self, session_path):
         """Real session YAML files must produce zero validation errors."""
         raw = yaml.safe_load(session_path.read_text())
-        session = SessionConfig.model_validate(raw)
-
-        constellation = load_constellation(session.constellation)
-        gs_file = load_ground_stations(session.ground_stations)
-        satellites = expand_constellation(constellation)
+        resolution = resolve_session_with_assets(
+            raw,
+            source_context=SourceContext(
+                origin="test.session_validator", session_path=str(session_path)
+            ),
+        )
+        session = resolution.runtime_session
+        constellation = resolution.primary_constellation.config
+        gs_file = resolution.primary_ground_set.config
+        satellites = list(resolution.primary_constellation.satellites)
 
         protocol = session.routing.protocol or "isis"
         extensions = session.routing.extensions
@@ -1721,6 +1717,28 @@ def test_checked_in_sessions_include_non_default_ground_policy_example():
     assert examples, (
         "checked-in sessions must include at least one non-default ground policy example"
     )
+
+
+def test_checked_in_simple_leo_demo_is_mbb_capable():
+    path = CONFIGS_DIR / "sessions" / "earth-leo-simple.yaml"
+    resolution = resolve_session_with_assets(
+        yaml.safe_load(path.read_text()),
+        source_context=SourceContext(origin="test.simple_leo_mbb"),
+    )
+
+    ground = resolution.runtime_session.scheduling.ground
+    assert ground.handover_mode == "mbb"
+    assert ground.mbb_overlap_ticks > 0
+    assert ground.mbb_reserve == 1
+
+    required_capacity = ground.mbb_reserve + 1
+    gs_file = resolution.primary_ground_set.config
+    capacities = {
+        station.name: station_ground_terminal_capacity(gs_file, station)
+        for station in gs_file.stations
+    }
+    assert capacities
+    assert all(capacity >= required_capacity for capacity in capacities.values())
 
 
 # ---------------------------------------------------------------------------

@@ -10,6 +10,41 @@ only stays understandable while these boundaries hold.
 If a proposed change needs to violate one of these rules, the change is not
 ready. Fix the design before touching the code.
 
+## Base Emulation Truth Boundary
+
+NodalArc's base layer builds and proves the emulated world. Its authority is:
+
+- nodes exist
+- terminals exist
+- bodies, frames, and orbits are correct
+- links are physically possible or impossible
+- latency, bandwidth, and loss are applied truthfully
+- kernel state matches OME/Scheduler authority
+- actuation failures are surfaced honestly
+
+That layer is vendor-neutral and routing-stack-neutral. Do not encode Cisco,
+FRR, Juniper, SONiC, DTN, DSN, or any other router/protocol implementation as
+base session truth.
+
+Generated router configuration is a derived artifact. It may be necessary to
+boot an emulated node and let a selected routing stack run, but it must consume
+resolved NodalArc facts, not define them. A routing template, captured config
+bundle, or per-node router override must never change whether a node exists,
+whether a link is physically possible, what latency should be applied, or
+whether kernel state is clean.
+
+Session YAML declares the emulated world and the intended interactions between
+building blocks. It may reference higher-layer routing configuration artifacts
+once that product surface exists. It must not become a raw router configuration
+file and must not inline vendor CLI as the source of truth for the emulated
+world.
+
+Routing protocol success or failure is an observation above the base layer. If
+IS-IS, OSPF, BGP, MPLS, static routing, DTN, or a vendor NOS fails to converge
+under truthful link state, latency, bandwidth, and loss, that is a valid
+experiment result. Do not hide it with retries, silent local repair, fabricated
+routes, or topology shortcuts that a real system would not have.
+
 ## Session Type Boundary
 
 IGP sessions and NodalPath sessions share the OME, Scheduler, and Node Agent wiring. They share nothing in the forwarding plane.

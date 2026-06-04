@@ -47,20 +47,33 @@ routes, or topology shortcuts that a real system would not have.
 
 ## Session Type Boundary
 
-IGP sessions and NodalPath sessions share the OME, Scheduler, and Node Agent wiring. They share nothing in the forwarding plane.
+Routing-daemon sessions and NodalPath sessions share the OME, Scheduler, and Node Agent wiring. They share nothing in the forwarding plane.
 
-**Routing-daemon sessions (current IS-IS/OSPF, future explicitly-supported FRR combinations):**
-- FRR owns forwarding state entirely
+**Routing-daemon sessions (FRR today, future supported NOS/router containers):**
+- Each emulated node's assigned routing or NOS stack owns that node's Layer 3
+  forwarding state through its normal control-plane mechanisms. Today that is
+  usually FRR. Future sessions may mix FRR, Cisco, Juniper, Arista, SONiC,
+  custom protocol containers, or other supported stacks in the same emulated
+  world.
 - Scheduler dispatches BatchLinkUp/Down to Node Agent via NATS request/reply
 - Node Agent manipulates kernel interfaces via pyroute2
-- No Node Agent gRPC. No NETCONF. No `GetTopology`.
+- Scheduler and Node Agent do not use router-management protocols to make
+  topology true. No Node Agent gRPC, NETCONF, RESTCONF, eAPI, vtysh, or
+  `GetTopology` path is allowed for base-layer link actuation.
 - `scheduler.agent_pool.AgentPool` is allowed: it is the NATS request/reply
   client pool for Node Agents, not a forwarding-plane agent inventory.
-- If you find any of these in an IGP code path, it is wrong. Remove it.
+- Higher-layer router configuration tooling may use each vendor's normal
+  management API to configure that node's assigned router/NOS stack. That is
+  not part of the Scheduler/Node Agent actuation path and must not redefine
+  NodalArc substrate truth.
+- If a routing-daemon code path makes OME visibility, link actuation, or kernel
+  truth depend on a vendor routing API, it is wrong. Remove it.
 
 **NodalPath sessions:**
 - nodalpath-fwd sidecar owns forwarding state via pyroute2 into policy table 100
-- FRR is observability only (zebra + staticd)
+- Any co-located routing daemon is observability/support only unless explicitly
+  part of the NodalPath sidecar contract. In the current implementation, FRR is
+  observability only (zebra + staticd).
 - gRPC pushes ForwardingTableUpdates to sidecars
 - gRPC exists here and only here
 

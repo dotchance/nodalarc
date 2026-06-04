@@ -3207,13 +3207,20 @@ def main() -> None:
 
     init_platform_config(Path(args.platform_config))
 
-    # Also init NodalPath config (needed for live gRPC trace SID lookups)
+    # NodalPath is distributed separately. Initialize it when present so
+    # NodalPath-specific trace routes can use live SID lookups; absence of that
+    # package must not prevent ordinary NodalArc sessions from starting.
     try:
         from nodalpath.platform import init_nodalpath_config
 
         init_nodalpath_config(Path("configs/nodalpath.yaml"))
+        log.info("Initialized NodalPath config")
+    except ModuleNotFoundError as exc:
+        log.info("NodalPath package unavailable; NodalPath-specific routes disabled: %s", exc)
     except Exception as exc:
-        raise RuntimeError("failed to initialize NodalPath config") from exc
+        log.warning(
+            "NodalPath config initialization failed; NodalPath-specific routes disabled: %s", exc
+        )
 
     if args.port is None:
         args.port = get_platform_config().vs_api_http_port

@@ -16,7 +16,9 @@ import re
 K8S_LABEL_VALUE_MAX = 63
 LINUX_IFNAME_MAX = 15
 _RUNTIME_NODE_ID_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$")
+_CURRENT_HOST_IFNAME_RE = re.compile(r"^[isg][0-9a-z]{2}-[0-9a-f]{10}$")
 _ALPHABET = "0123456789abcdefghijklmnopqrstuvwxyz"
+_RETIRED_HOST_IFNAME_PREFIXES = ("_isl_", "_gnd_", "_gbr-", "_na_")
 
 
 def validate_runtime_node_id(node_id: str) -> None:
@@ -63,3 +65,21 @@ def satellite_ground_host_name(sat_id: str, index: int = 0) -> str:
 def isl_host_name(node_id: str, index: int) -> str:
     """Host-side veth name for one satellite ISL terminal."""
     return _ifname("i", node_id, index)
+
+
+def is_managed_host_ifname(name: str) -> bool:
+    """Return True for host-side interfaces owned by NodalArc.
+
+    Cleanup code must recognize both the current resolver-owned bounded names
+    and retired names from older deployments, because a reused node can contain
+    either after a restart or session switch.
+    """
+    if _CURRENT_HOST_IFNAME_RE.fullmatch(name):
+        return True
+    if name.startswith("br-gnd-"):
+        return True
+    if any(name.startswith(prefix) for prefix in _RETIRED_HOST_IFNAME_PREFIXES):
+        return True
+    # Retired ground bridge port shape, e.g. _g0...; keep this here so cleanup
+    # callers do not re-encode old naming knowledge.
+    return name.startswith("_g") and len(name) > 2 and name[2:3].isdigit()

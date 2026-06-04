@@ -505,12 +505,11 @@ class TestE003:
 
 class TestE004:
     def test_srgb_overflow(self):
-        """Constellation too large for SRGB = error."""
+        """Resolved prefix-SID indices outside the SRGB = error."""
         session = _make_session()
         gs = _make_gs_file()
-        # 80 planes * 100 = 8000, which exceeds gs_sid_offset of 7900
-        sats = _make_satellites(count=80 * 22, planes=80, isl_terminals=4)
-        constellation = _make_constellation(planes=80, sats_per_plane=22)
+        sats = _make_satellites(count=1, planes=1, isl_terminals=4)
+        constellation = _make_constellation(planes=1, sats_per_plane=1)
         stack = _make_resolved_stack(segment_routing=True)
 
         results = validate_session_readiness(
@@ -519,6 +518,7 @@ class TestE004:
             sats,
             gs,
             stack,
+            sid_indices_by_node={"space-sat-p00s00": 8001},
         )
 
         errors = [r for r in results if r.level == "error" and r.code == "E004"]
@@ -544,6 +544,20 @@ class TestE004:
         e004 = [r for r in results if r.code == "E004"]
         assert len(e004) == 0
 
+    def test_sr_requires_resolved_sid_indices(self):
+        """SR readiness fails if caller did not provide resolver-owned SIDs."""
+        session = _make_session()
+        gs = _make_gs_file()
+        sats = _make_satellites(count=1, planes=1)
+        constellation = _make_constellation(planes=1, sats_per_plane=1)
+        stack = _make_resolved_stack(segment_routing=True)
+
+        results = validate_session_readiness(session, constellation, sats, gs, stack)
+
+        errors = [r for r in results if r.level == "error" and r.code == "E004"]
+        assert len(errors) == 1
+        assert "prefix-SID indices" in errors[0].message
+
     def test_small_constellation_sr_ok(self):
         """Small constellation with SR should not trigger E004."""
         session = _make_session()
@@ -558,6 +572,7 @@ class TestE004:
             sats,
             gs,
             stack,
+            sid_indices_by_node={"space-sat-p00s00": 1},
         )
 
         e004 = [r for r in results if r.code == "E004"]

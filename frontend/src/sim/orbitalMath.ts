@@ -11,10 +11,13 @@
 export const J2000_UNIX_SECONDS = 946728000.0;
 export const EARTH_RADIUS_KM = 6371.0;
 export const EARTH_MU = 398600.4418;
+export const EARTH_J2 = 1.08262668e-3;
 export const LUNA_RADIUS_KM = 1737.4;
 export const LUNA_MU = 4902.800066;
+export const LUNA_J2 = 0.0;
 export const MARS_RADIUS_KM = 3389.5;
 export const MARS_MU = 42828.375214;
+export const MARS_J2 = 1.96045e-3;
 export const WGS84_A = 6378.137;
 export const WGS84_E2 = 0.00669437999014;
 export const EARTH_ROTATION_RATE = 7.2921159e-5;
@@ -31,6 +34,7 @@ export const SCENE_KM_PER_UNIT = EARTH_RADIUS_KM / SCENE_EARTH_RADIUS;
 export interface BodyMath {
   radiusKm: number;
   muKm3S2: number;
+  j2: number;
   rotationRateRadS: number;
 }
 
@@ -38,16 +42,19 @@ const BODY_MATH: Record<string, BodyMath> = {
   earth: {
     radiusKm: EARTH_RADIUS_KM,
     muKm3S2: EARTH_MU,
+    j2: EARTH_J2,
     rotationRateRadS: EARTH_ROTATION_RATE,
   },
   luna: {
     radiusKm: LUNA_RADIUS_KM,
     muKm3S2: LUNA_MU,
+    j2: LUNA_J2,
     rotationRateRadS: LUNA_ROTATION_RATE,
   },
   mars: {
     radiusKm: MARS_RADIUS_KM,
     muKm3S2: MARS_MU,
+    j2: MARS_J2,
     rotationRateRadS: MARS_ROTATION_RATE,
   },
 };
@@ -96,6 +103,38 @@ function propagateEci(
     cosRaan * xPf - sinRaan * cosI * yPf,
     sinRaan * xPf + cosRaan * cosI * yPf,
     sinI * yPf,
+  ];
+}
+
+function propagateEciJ2MeanElements(
+  semiMajorAxisKm: number,
+  inclinationRad: number,
+  raanRad: number,
+  trueAnomalyRad: number,
+  dt: number,
+  muKm3S2: number,
+  j2: number,
+  referenceRadiusKm: number,
+): [number, number, number] {
+  const a = semiMajorAxisKm;
+  const n = Math.sqrt(muKm3S2 / (a * a * a));
+  const cosI = Math.cos(inclinationRad);
+  const sinI = Math.sin(inclinationRad);
+  const j2Factor = j2 * (referenceRadiusKm / a) ** 2;
+  const raanDot = -1.5 * j2Factor * n * cosI;
+  const meanAnomalyDot = n * (1.0 + 0.75 * j2Factor * (3.0 * cosI * cosI - 1.0));
+
+  const raan = raanRad + raanDot * dt;
+  const u = trueAnomalyRad + meanAnomalyDot * dt;
+  const cosRaan = Math.cos(raan);
+  const sinRaan = Math.sin(raan);
+  const cosU = Math.cos(u);
+  const sinU = Math.sin(u);
+
+  return [
+    a * (cosRaan * cosU - sinRaan * cosI * sinU),
+    a * (sinRaan * cosU + cosRaan * cosI * sinU),
+    a * sinI * sinU,
   ];
 }
 
@@ -165,11 +204,13 @@ export function bodyFixedToSceneXYZ(xKm: number, yKm: number, zKm: number): [num
 // --- Combined propagation to scene coords ---
 
 export interface KeplerianElements {
+  propagator?: "keplerian-circular" | "j2-mean-elements";
   altitude_km: number;
   inclination_deg: number;
   raan_deg: number;
   true_anomaly_deg: number;
   reference_body?: string | null;
+  reference_radius_km?: number | null;
 }
 
 export function propagateToSceneXYZ(
@@ -178,17 +219,37 @@ export function propagateToSceneXYZ(
   simTimeUnix: number,
 ): [number, number, number] {
   const body = bodyMath(elements.reference_body);
-  const a = body.radiusKm + elements.altitude_km;
+  const referenceRadiusKm = elements.reference_radius_km ?? body.radiusKm;
+  const a = referenceRadiusKm + elements.altitude_km;
   const dt = simTimeUnix - epochUnix;
+  const propagator = elements.propagator ?? "keplerian-circular";
+  if (propagator !== "keplerian-circular" && propagator !== "j2-mean-elements") {
+    throw new Error(`Unsupported render propagator: ${String(propagator)}`);
+  }
 
-  const posEci = propagateEci(
-    a,
-    elements.inclination_deg * DEG2RAD,
-    elements.raan_deg * DEG2RAD,
-    elements.true_anomaly_deg * DEG2RAD,
-    dt,
-    body.muKm3S2,
-  );
+  const inclinationRad = elements.inclination_deg * DEG2RAD;
+  const raanRad = elements.raan_deg * DEG2RAD;
+  const trueAnomalyRad = elements.true_anomaly_deg * DEG2RAD;
+  const posEci =
+    propagator === "j2-mean-elements"
+      ? propagateEciJ2MeanElements(
+          a,
+          inclinationRad,
+          raanRad,
+          trueAnomalyRad,
+          dt,
+          body.muKm3S2,
+          body.j2,
+          referenceRadiusKm,
+        )
+      : propagateEci(
+          a,
+          inclinationRad,
+          raanRad,
+          trueAnomalyRad,
+          dt,
+          body.muKm3S2,
+        );
 
   const currentTime = epochUnix + dt;
   const posEcef = eciToEcef(

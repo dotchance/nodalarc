@@ -29,14 +29,9 @@ router isis NODAL
  is-type level-1-2
  metric-style wide
 {% if sr_enabled | default(false) %}
-{% if node_type == "satellite" %}
-{% set sid_index = plane * 100 + slot + 1 %}
-{% elif node_type == "ground_station" %}
-{% set sid_index = gs_sid_offset + gs_index %}
-{% endif %}
  segment-routing on
  segment-routing global-block {{ srgb_start }} {{ srgb_end }} local-block 40000 49999
- segment-routing prefix {{ ipv4_loopback }}/32 index {{ sid_index }}
+ segment-routing prefix {{ ipv4_loopback }}/32 index {{ node_sid_index }}
 {% endif %}
  lsp-gen-interval 1
  spf-delay-ietf init-delay {{ spf_init_delay }} short-delay {{ spf_short_delay }} long-delay {{ spf_long_delay }} holddown {{ spf_holddown }} time-to-learn {{ spf_time_to_learn }}

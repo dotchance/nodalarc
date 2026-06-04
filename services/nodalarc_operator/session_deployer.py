@@ -29,7 +29,7 @@ from nodalarc.models.session import PlacementConfig, SessionConfig
 from nodalarc.nats_channels import sanitize_session_id
 from nodalarc.resolve_session import resolve_session_with_assets
 from nodalarc.session_identity import require_session_run_id
-from nodalarc.stack_resolver import resolve_stack
+from nodalarc.stack_resolver import resolve_stack, validate_sid_indices
 from nodalarc.template_vars import build_template_vars
 
 log = logging.getLogger(__name__)
@@ -553,6 +553,8 @@ def ensure_session_configmaps(
     )
     config_overrides = dict(resolved.template_variables)
     config_overrides.update(session.routing.config_overrides)
+    sid_by_node = resolution.resolved.sid_index_by_node_id()
+    validate_sid_indices(resolved, sid_by_node)
 
     # --- Step 3b: Validate session readiness ---
     _progress("Validating session readiness")
@@ -565,6 +567,7 @@ def ensure_session_configmaps(
         gs_file,
         resolved,
         available_node_count=len(available_nodes),
+        sid_indices_by_node=sid_by_node,
     )
     val_errors = [r for r in validation_results if r.level == "error"]
     val_warnings = [r for r in validation_results if r.level == "warning"]
@@ -596,6 +599,7 @@ def ensure_session_configmaps(
             sat_ground_terminal_count=sat.ground_terminal_count,
             config_overrides=config_overrides,
             neighbors=neighbors,
+            node_sid_index=sid_by_node[node_id],
         )
     for i, station in enumerate(gs_file.stations):
         node_id = addressing.gs_id(station.name)
@@ -609,6 +613,7 @@ def ensure_session_configmaps(
             gs_index=i,
             config_overrides=config_overrides,
             neighbors=neighbors,
+            node_sid_index=sid_by_node[node_id],
         )
 
     # --- Step 5: Render FRR configs (parallelized) ---
@@ -937,18 +942,7 @@ def write_wiring_manifest(
     resolved = resolve_stack(session.routing.protocol, session.routing.extensions)
     segment_routing = resolved.segment_routing
     mpls_enable = any(name.startswith("net.mpls.") for name in resolved.sysctls)
-
-    # Validate stack × constellation constraints before building manifest
-    from nodalarc.stack_resolver import validate_constellation_constraints
-
-    num_planes = max((s.plane for s in satellites), default=0) + 1
-    max_slot = max((s.slot for s in satellites), default=0)
-    validate_constellation_constraints(
-        resolved,
-        num_planes=num_planes,
-        max_slots_per_plane=max_slot,
-        num_ground_stations=len(gs_file.stations),
-    )
+    validate_sid_indices(resolved, resolution.resolved.sid_index_by_node_id())
 
     # Platform-level sysctls (protocol-agnostic) merged with stack-provided sysctls.
     # The deployer never interprets stack fields to derive sysctls.
@@ -984,6 +978,9 @@ def write_wiring_manifest(
                 if pa.peer_node_id == node_id:
                     iface["peer_iface"] = pa.interface
                     break
+        isl_interfaces.sort(
+            key=lambda iface: (iface["name"], iface["peer_node"], iface["peer_iface"])
+        )
 
         nodes[node_id] = {
             "node_type": "satellite",

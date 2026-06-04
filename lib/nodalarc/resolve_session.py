@@ -228,11 +228,7 @@ def resolve_session_with_assets(
     _check_runtime_support(cfg, support)
     active_bodies = _active_bodies(cfg)
     required_ephemeris_bodies = active_bodies & support.ephemeris_required_bodies
-    body_ephemeris = _build_body_ephemeris(
-        cfg,
-        required_bodies=required_ephemeris_bodies,
-        epoch_unix=resolve_session_epoch(cfg.time),
-    )
+    epoch_unix = resolve_session_epoch(cfg.time)
 
     const_assets: list[ResolvedConstellationAssets] = []
     ground_assets: list[ResolvedGroundAssets] = []
@@ -256,6 +252,12 @@ def resolve_session_with_assets(
         )
 
     ground_set = _combine_ground_segments(cfg, tuple(ground_assets))
+    body_ephemeris = _build_body_ephemeris(
+        cfg,
+        required_bodies=required_ephemeris_bodies,
+        epoch_unix=epoch_unix,
+        required_window_s=_required_ephemeris_window_s(cfg, ground_set),
+    )
     const_assets = list(_assign_constellation_runtime_identities([*const_assets, *space_assets]))
     for constellation in const_assets:
         if not constellation.satellites:
@@ -405,7 +407,9 @@ def _build_body_ephemeris(
     *,
     required_bodies: set[str],
     epoch_unix: float,
+    required_window_s: float,
 ) -> SkyfieldBspEphemeris | None:
+    end_epoch_unix = epoch_unix + max(0.0, required_window_s)
     if not required_bodies:
         if cfg.ephemeris is not None:
             try:
@@ -413,6 +417,7 @@ def _build_body_ephemeris(
                     cfg.ephemeris,
                     required_bodies=set(),
                     epoch_unix=epoch_unix,
+                    end_epoch_unix=end_epoch_unix,
                 )
             except EphemerisValidationError as exc:
                 raise SessionResolutionError(str(exc)) from exc
@@ -427,9 +432,31 @@ def _build_body_ephemeris(
             cfg.ephemeris,
             required_bodies=required_bodies,
             epoch_unix=epoch_unix,
+            end_epoch_unix=end_epoch_unix,
         )
     except EphemerisValidationError as exc:
         raise SessionResolutionError(str(exc)) from exc
+
+
+def _required_ephemeris_window_s(
+    cfg: SegmentSessionConfig,
+    ground_set: ResolvedGroundAssets,
+) -> float:
+    """Return the declared future window OME may evaluate at startup.
+
+    Sessions are open-ended, so admission cannot prove an infinite run. It can
+    prove the epoch plus every declared longest-remaining-pass lookahead window
+    that OME may evaluate immediately.
+    """
+    max_horizon_ticks = 0
+    for scheduling in (ground_set.station_scheduling or {}).values():
+        policy = scheduling.selection_policy
+        if policy.name == "longest-remaining-pass":
+            max_horizon_ticks = max(
+                max_horizon_ticks,
+                int(policy.params.get("lookahead_horizon_ticks", 0)),
+            )
+    return max(cfg.time.step_seconds, max_horizon_ticks * cfg.time.step_seconds)
 
 
 def _load_constellation_segment(
@@ -1700,6 +1727,11 @@ def _ground_candidates_by_gs(
     if ground_ids and access_candidate_count == 0:
         raise SessionResolutionError(
             "session declares ground station(s) but no declared access candidates"
+        )
+    uncovered = sorted(gs_id for gs_id in ground_ids if not result.get(gs_id))
+    if uncovered:
+        raise SessionResolutionError(
+            "ground station(s) have no declared access candidates: " + ", ".join(uncovered)
         )
     return FrozenDict({gs_id: tuple(sorted(result.get(gs_id, ()))) for gs_id in sorted(ground_ids)})
 

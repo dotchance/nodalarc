@@ -1,5 +1,9 @@
 import pytest
-from nodalarc.substrate.manifest_contract import REQUIRED_WIRING_PHASES, WiringManifest
+from nodalarc.substrate.manifest_contract import (
+    REQUIRED_WIRING_PHASES,
+    WiringManifest,
+    derive_wiring_generation,
+)
 from pydantic import ValidationError
 
 
@@ -45,6 +49,22 @@ def test_manifest_contract_accepts_strict_ground_bridge_specs() -> None:
     manifest = WiringManifest.model_validate(_manifest())
 
     assert set(manifest.ground_bridges) == {"gs-den"}
+
+
+def test_wiring_generation_canonicalizes_keys_and_ignores_existing_generation() -> None:
+    data = _manifest()
+    first = derive_wiring_generation(data)
+    reordered = {
+        "wiring_generation": "sha256:" + "f" * 64,
+        "required_substrate_pairs": data["required_substrate_pairs"],
+        "ground_bridges": data["ground_bridges"],
+        "nodes": dict(reversed(list(data["nodes"].items()))),
+        "required_phases": data["required_phases"],
+        "isl_link_count": data["isl_link_count"],
+        "session_id": data["session_id"],
+    }
+
+    assert derive_wiring_generation(reordered) == first
 
 
 def test_manifest_contract_rejects_untyped_ground_bridge_fields() -> None:

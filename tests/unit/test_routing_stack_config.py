@@ -1,4 +1,4 @@
-"""Tests for ResolvedStack — segment_routing, sysctls, SID derivation."""
+"""Tests for ResolvedStack — segment_routing and sysctls."""
 
 from nodalarc.models.routing_stack import RoutingStackConfig
 from nodalarc.stack_resolver import resolve_stack

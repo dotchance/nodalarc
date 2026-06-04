@@ -79,18 +79,26 @@ def test_peer_ref_requires_exact_identity_fields() -> None:
         substrate_monitor.add_peer_ref(ref)
 
 
-def _manifest() -> WiringManifest:
+def _manifest(
+    *,
+    session_id: str = SESSION_ID,
+    wiring_generation: str = WIRING_GENERATION,
+    source_node: str = "node-a",
+    source_ip: str = "10.0.0.1",
+    target_node: str = "node-b",
+    target_ip: str = "10.0.0.2",
+) -> WiringManifest:
     pair = RequiredSubstratePair.build(
-        source_node="node-a",
-        source_ip="10.0.0.1",
-        target_node="node-b",
-        target_ip="10.0.0.2",
+        source_node=source_node,
+        source_ip=source_ip,
+        target_node=target_node,
+        target_ip=target_ip,
         reasons=["isl"],
     )
     return WiringManifest.model_validate(
         {
-            "session_id": SESSION_ID,
-            "wiring_generation": WIRING_GENERATION,
+            "session_id": session_id,
+            "wiring_generation": wiring_generation,
             "required_phases": list(REQUIRED_WIRING_PHASES),
             "nodes": {
                 "sat-a": {
@@ -116,6 +124,7 @@ def _manifest() -> WiringManifest:
 def _measurement(
     pair: RequiredSubstratePair,
     *,
+    session_id: str = SESSION_ID,
     status: str = "ok",
     wiring_generation: str = WIRING_GENERATION,
     stale: bool = False,
@@ -126,7 +135,7 @@ def _measurement(
     measured_at = now - timedelta(seconds=120) if stale else now
     stale_after = now - timedelta(seconds=1) if stale else now + timedelta(seconds=120)
     return SubstrateMeasurement(
-        session_id=SESSION_ID,
+        session_id=session_id,
         wiring_generation=wiring_generation,
         source_node=pair.source_node,
         source_ip=pair.source_ip,
@@ -284,5 +293,51 @@ def test_cross_node_mutation_defense_rejects_wrong_generation_measurement(
     )
     substrate_monitor.set_identity(SESSION_ID, "sha256:" + "b" * 64)
 
-    with pytest.raises(ValueError, match="wiring_generation"):
+    with pytest.raises(RuntimeError, match="has not been measured"):
         substrate_monitor.require_fresh_measurement_for_remote_ip("10.0.0.2")
+
+
+def test_identity_change_clears_epoch_scoped_status_and_peer_refs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("HOST_IP", "10.0.0.1")
+    v1 = MagicMock()
+    substrate_monitor.configure_required_measurements(
+        v1=v1,
+        namespace="nodalarc",
+        hostname="node-a",
+        manifest=_manifest(),
+        measure_fn=lambda pair: _measurement(pair),
+    )
+    substrate_monitor.add_peer_ref(_ref(1001, "isl0"))
+
+    substrate_monitor.set_identity(SESSION_ID, "sha256:" + "c" * 64)
+
+    assert substrate_monitor.latest_status_document() is None
+    assert substrate_monitor.get_active_refs() == []
+    with pytest.raises(RuntimeError, match="has not been measured"):
+        substrate_monitor.require_fresh_measurement_for_remote_ip("10.0.0.2")
+
+
+def test_superseded_measurement_is_discarded_without_writing_stale_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("HOST_IP", "10.0.0.1")
+    v1 = MagicMock()
+    next_generation = "sha256:" + "d" * 64
+
+    def superseding_measure(pair: RequiredSubstratePair) -> SubstrateMeasurement:
+        substrate_monitor.set_identity(SESSION_ID, next_generation)
+        return _measurement(pair)
+
+    document = substrate_monitor.configure_required_measurements(
+        v1=v1,
+        namespace="nodalarc",
+        hostname="node-a",
+        manifest=_manifest(),
+        measure_fn=superseding_measure,
+    )
+
+    assert document is None
+    assert substrate_monitor.latest_status_document() is None
+    assert not v1.create_namespaced_config_map.called

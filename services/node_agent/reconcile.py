@@ -13,13 +13,12 @@ from __future__ import annotations
 
 import logging
 
+from nodalarc.runtime_naming import is_managed_host_ifname
 from nodalarc.substrate.manifest_contract import WiringManifest
 from nodalarc.substrate.wiring_status import parse_status_configmap
 from pyroute2 import IPRoute
 
 log = logging.getLogger(__name__)
-
-_PATTERNS = ("_isl_", "_gnd_", "_gbr-", "br-gnd-")
 
 
 def get_actual_nodalarc_interfaces() -> set[str]:
@@ -28,7 +27,7 @@ def get_actual_nodalarc_interfaces() -> set[str]:
         return {
             link.get_attr("IFLA_IFNAME", "")
             for link in ipr.get_links()
-            if any(p in link.get_attr("IFLA_IFNAME", "") for p in _PATTERNS)
+            if is_managed_host_ifname(link.get_attr("IFLA_IFNAME", ""))
         }
 
 
@@ -38,7 +37,7 @@ def clean_nodalarc_kernel_state() -> int:
     with IPRoute() as ipr:
         for link in ipr.get_links():
             name = link.get_attr("IFLA_IFNAME", "")
-            if any(p in name for p in _PATTERNS):
+            if is_managed_host_ifname(name):
                 try:
                     ipr.link("del", index=link["index"])
                     removed += 1

@@ -1,7 +1,7 @@
 """Tests for stack_resolver — every valid combo and invalid combos."""
 
 import pytest
-from nodalarc.stack_resolver import resolve_stack
+from nodalarc.stack_resolver import resolve_stack, validate_sid_indices
 
 # --- Valid combinations ---
 
@@ -55,7 +55,6 @@ class TestISIS:
         assert r.template_variables["sr_enabled"] is True
         assert r.template_variables["srgb_start"] == 16000
         assert r.template_variables["srgb_end"] == 23999
-        assert r.template_variables["gs_sid_offset"] == 7900
         template_srcs = [t.src for t in r.template_files]
         assert "pathd.conf.j2" in template_srcs
 
@@ -81,7 +80,6 @@ class TestOSPFSR:
         assert r.sysctls["net.mpls.ip_ttl_propagate"] == "0"
         assert r.template_variables["sr_enabled"] is True
         assert r.template_variables["srgb_start"] == 16000
-        assert r.template_variables["gs_sid_offset"] == 7900
 
 
 class TestNodalPath:
@@ -128,6 +126,22 @@ class TestResolvedStackFrozen:
         r = resolve_stack("ospf", [])
         with pytest.raises(AttributeError):
             r.image = "something"  # type: ignore
+
+
+class TestSidValidation:
+    def test_sid_indices_within_srgb_ok(self):
+        validate_sid_indices(resolve_stack("isis", ["sr"]), {"space-sat-p00s00": 1})
+
+    def test_segment_routing_requires_resolved_sid_indices(self):
+        with pytest.raises(ValueError, match="requires resolved SID"):
+            validate_sid_indices(resolve_stack("isis", ["sr"]), {})
+
+    def test_sid_indices_must_fit_srgb(self):
+        with pytest.raises(ValueError, match="exceeds SRGB"):
+            validate_sid_indices(resolve_stack("isis", ["sr"]), {"space-sat-p00s00": 8001})
+
+    def test_non_sr_stack_ignores_sid_indices(self):
+        validate_sid_indices(resolve_stack("isis", []), {})
 
 
 class TestTemplateFilePaths:

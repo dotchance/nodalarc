@@ -278,6 +278,7 @@ class NeighborAssignment(NamedTuple):
     peer_node_id: str  # "sat-P03S08"
     link_type: str  # "intra_plane_isl", "cross_plane_isl", "ground_uplink", "ground_downlink"
     priority: int  # 0=intra-fwd, 1=intra-aft, 2=cross-right, 3=cross-left
+    bandwidth_mbps: float | None = None  # Per-interface bottleneck bandwidth when pre-resolved.
 
 
 def _get_constellation_params(
@@ -473,9 +474,19 @@ def neighbors_by_node(
     result: dict[str, list[NeighborAssignment]] = {}
     for node_id, na in assignments:
         result.setdefault(node_id, []).append(na)
-    # Sort each node's assignments by priority
+    # Sort each node's assignments by a total key. The source collection is a
+    # frozenset, so priority alone leaves equal-priority entries hash-seed
+    # dependent.
     for node_id in result:
-        result[node_id].sort(key=lambda x: x.priority)
+        result[node_id].sort(
+            key=lambda x: (
+                x.priority,
+                x.interface,
+                x.peer_node_id,
+                x.link_type,
+                -1.0 if x.bandwidth_mbps is None else x.bandwidth_mbps,
+            )
+        )
     return result
 
 

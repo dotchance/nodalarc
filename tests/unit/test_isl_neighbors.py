@@ -309,3 +309,33 @@ class TestFrozenResult:
             assert hasattr(na, "peer_node_id")
             assert hasattr(na, "link_type")
             assert hasattr(na, "priority")
+
+
+class TestNeighborOrdering:
+    def test_equal_priority_neighbors_have_total_deterministic_order(self):
+        assignments = frozenset(
+            {
+                (
+                    "sat-a",
+                    NeighborAssignment(
+                        "isl1",
+                        "sat-c",
+                        "link_rule:relay",
+                        10,
+                    ),
+                ),
+                (
+                    "sat-a",
+                    NeighborAssignment(
+                        "isl0",
+                        "sat-b",
+                        "link_rule:relay",
+                        10,
+                    ),
+                ),
+            }
+        )
+
+        by_node = neighbors_by_node(assignments)
+
+        assert [assignment.interface for assignment in by_node["sat-a"]] == ["isl0", "isl1"]

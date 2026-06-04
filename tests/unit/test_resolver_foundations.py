@@ -72,7 +72,7 @@ def _resolved_session(**overrides) -> ResolvedSession:
         "session": SessionMeta(name="demo"),
         "nodes": (_node(),),
         "link_rules": (),
-        "sid_blocks": (),
+        "sid_blocks": (SidBlock(segment_id="default-space", sid_start=1, sid_end=1),),
         "simulation": SimulationConfig(),
         "orbit": OrbitConfig(propagator="j2-mean-elements"),
         "routing": RoutingConfig(protocol="isis"),
@@ -477,11 +477,33 @@ def test_ghost_sid_block_rejected():
         _resolved_session(sid_blocks=(SidBlock(segment_id="ghost", sid_start=1, sid_end=2),))
 
 
+def test_missing_sid_block_rejected():
+    with pytest.raises(ValidationError, match="missing sid_blocks"):
+        _resolved_session(sid_blocks=())
+
+
 def test_sid_block_for_real_segment_ok():
     rs = _resolved_session(
         sid_blocks=(SidBlock(segment_id="default-space", sid_start=1, sid_end=10),)
     )
     assert rs.sid_blocks[0].segment_id == "default-space"
+
+
+def test_sid_indices_are_allocated_from_resolved_blocks():
+    rs = _resolved_session(
+        nodes=(_node("sat-a"), _node("sat-b")),
+        sid_blocks=(SidBlock(segment_id="default-space", sid_start=42, sid_end=43),),
+    )
+    assert rs.sid_index_by_node_id() == {"sat-a": 42, "sat-b": 43}
+
+
+def test_sid_block_size_must_match_segment_node_count():
+    rs = _resolved_session(
+        nodes=(_node("sat-a"), _node("sat-b")),
+        sid_blocks=(SidBlock(segment_id="default-space", sid_start=42, sid_end=44),),
+    )
+    with pytest.raises(ValueError, match="has 3 index"):
+        rs.sid_index_by_node_id()
 
 
 # --- Authoritative-boundary self-defense: overlap + duplicate intent ---

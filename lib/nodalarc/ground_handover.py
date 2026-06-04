@@ -21,6 +21,10 @@ from nodalarc.models.session import GroundSchedulingConfig
 GroundHandoverMode = Literal["bbm", "mbb"]
 
 
+class GroundHandoverResolutionError(ValueError):
+    """Raised when a station's handover policy cannot be resolved truthfully."""
+
+
 @dataclass(frozen=True, slots=True)
 class StationHandoverResolution:
     """Effective per-station handover policy and how it was derived."""
@@ -89,7 +93,7 @@ def resolve_station_ground_scheduling(
 
     if mode == "bbm":
         if station.handover_mode == "bbm" and station.mbb_reserve not in (None, 0):
-            raise ValueError(
+            raise GroundHandoverResolutionError(
                 f"ground station {station.name!r} requests BBM but also sets mbb_reserve"
             )
         data["mbb_overlap_ticks"] = 0
@@ -104,18 +108,18 @@ def resolve_station_ground_scheduling(
     reserve = int(data.get("mbb_reserve", 0))
     overlap = int(data.get("mbb_overlap_ticks", 0))
     if reserve > 1:
-        raise ValueError(
+        raise GroundHandoverResolutionError(
             f"ground station {station.name!r} requests mbb_reserve={reserve}; "
             "MBB-002 multi-overlap support is not implemented"
         )
     if reserve <= 0 or overlap <= 0:
-        raise ValueError(
+        raise GroundHandoverResolutionError(
             f"ground station {station.name!r} requests MBB but does not declare positive "
             "mbb_reserve and mbb_overlap_ticks"
         )
     if capacity <= reserve:
         if explicit_mbb_request:
-            raise ValueError(
+            raise GroundHandoverResolutionError(
                 f"ground station {station.name!r} explicitly requests MBB but has terminal "
                 f"capacity {capacity}; MBB with mbb_reserve={reserve} requires capacity "
                 f"> {reserve}"

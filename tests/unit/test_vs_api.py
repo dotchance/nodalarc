@@ -24,7 +24,7 @@ from nodalarc.models.vs_api import (
     StateSnapshot,
 )
 from nodalarc.nats_channels import STREAM_OME_EVENTS
-from vs_api.session_context import SessionContext, _link_key
+from vs_api.session_context import SessionContext, _derive_link_type, _link_key
 
 from tests.conftest import build_segment_session_dict
 
@@ -67,6 +67,33 @@ class TestOpsEventVisibility:
         visible = m._operator_visible_ops_events(events)
 
         assert visible == events[2:]
+
+
+class TestLinkTypeDerivation:
+    def test_generic_isl_does_not_parse_node_ids_for_intra_cross_guess(self):
+        assert _derive_link_type("isl") == "isl"
+
+    def test_endpoint_segments_classify_declared_inter_constellation_links(self):
+        assert (
+            _derive_link_type(
+                "isl",
+                link_rule_id="leo-to-meo",
+                topology_mode="nearest_n",
+                endpoint_segments=("leo", "meo"),
+            )
+            == "inter_constellation"
+        )
+
+    def test_static_cross_body_link_classifies_as_inter_body_relay(self):
+        assert (
+            _derive_link_type(
+                "isl",
+                link_rule_id="earth-luna-static-relay",
+                topology_mode="static_ip",
+                endpoint_segments=("earth-relay", "luna-relay"),
+            )
+            == "inter_body_relay"
+        )
 
 
 def _session_yaml_text(name: str = "earth-leo-simple") -> str:

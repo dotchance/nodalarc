@@ -210,7 +210,7 @@ class TestOrbitPropagatorGeneration:
             )
 
     def test_sgp4_tle_custom_constellation_fails_until_runtime_supports_it(self):
-        with pytest.raises(ValueError, match="M2 runtime supports only"):
+        with pytest.raises(ValueError, match="current runtime supports only"):
             generate_session_yaml(
                 "custom-tle",
                 "ospf",

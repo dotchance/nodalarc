@@ -266,6 +266,9 @@ class ResolvedSession(BaseModel):
         ghost_blocks = sorted(s for s in seg_ids if s not in known_segments)
         if ghost_blocks:
             raise ValueError(f"sid_blocks name segment(s) with no resolved nodes: {ghost_blocks}")
+        missing_blocks = sorted(known_segments - set(seg_ids))
+        if missing_blocks:
+            raise ValueError(f"resolved segment(s) missing sid_blocks: {missing_blocks}")
         # SID blocks must be disjoint — overlapping ranges defeat per-segment SID
         # allocation and silently corrupt forwarding.
         ordered = sorted(self.sid_blocks, key=lambda b: b.sid_start)
@@ -319,3 +322,23 @@ class ResolvedSession(BaseModel):
             if node.node_id == node_id:
                 return node
         return None
+
+    def sid_index_by_node_id(self) -> dict[str, int]:
+        """Return deterministic FRR prefix-SID indices for every resolved node."""
+        nodes_by_segment: dict[str, list[ResolvedNode]] = {}
+        for node in self.nodes:
+            nodes_by_segment.setdefault(node.segment_id, []).append(node)
+        block_by_segment = {block.segment_id: block for block in self.sid_blocks}
+        result: dict[str, int] = {}
+        for segment_id, nodes in sorted(nodes_by_segment.items()):
+            block = block_by_segment[segment_id]
+            ordered_nodes = sorted(nodes, key=lambda node: node.node_id)
+            expected_count = block.sid_end - block.sid_start + 1
+            if expected_count != len(ordered_nodes):
+                raise ValueError(
+                    f"SID block for segment {segment_id!r} has {expected_count} index(es) "
+                    f"for {len(ordered_nodes)} node(s)"
+                )
+            for offset, node in enumerate(ordered_nodes):
+                result[node.node_id] = block.sid_start + offset
+        return result

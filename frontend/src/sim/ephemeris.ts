@@ -33,12 +33,28 @@ const EARTH_ROTATION_RATE = 7.2921159e-5; // rad/s
 
 export interface EphemerisNodeKeplerian {
   type: "keplerian";
+  propagator: "keplerian-circular" | "j2-mean-elements";
   altitude_km: number;
   inclination_deg: number;
   raan_deg: number;
   true_anomaly_deg: number;
   plane: number;
   slot: number;
+  segment_id?: string | null;
+  local_node_id?: string | null;
+  namespace?: string | null;
+  tags?: string[];
+  reference_body?: string;
+  frame_id?: string;
+}
+
+export interface EphemerisNodeTLE {
+  type: "tle";
+  tle_line_1: string;
+  tle_line_2: string;
+  plane: number;
+  slot: number;
+  norad_id?: number | null;
   segment_id?: string | null;
   local_node_id?: string | null;
   namespace?: string | null;
@@ -60,7 +76,7 @@ export interface EphemerisNodeFixed {
   frame_id?: string;
 }
 
-export type EphemerisNode = EphemerisNodeKeplerian | EphemerisNodeFixed;
+export type EphemerisNode = EphemerisNodeKeplerian | EphemerisNodeTLE | EphemerisNodeFixed;
 
 export interface EphemerisBodyFrame {
   body_id: string;
@@ -256,6 +272,14 @@ export function propagateNode(
       velYKmS: 0,
       velZKmS: 0,
     };
+  }
+
+  if (node.type === "tle") {
+    throw new Error("propagateNode does not support tle");
+  }
+
+  if (node.propagator !== "keplerian-circular") {
+    throw new Error(`propagateNode does not support ${node.propagator}`);
   }
 
   const a = EARTH_RADIUS_KM + node.altitude_km;

@@ -19,6 +19,7 @@ from typing import Any
 
 import kubernetes.client
 import kubernetes.config
+from nodalarc.runtime_naming import is_managed_host_ifname
 from nodalarc.substrate.manifest_contract import WiringManifest
 from nodalarc.substrate.wiring_status import (
     NodeWiringStatus,
@@ -121,13 +122,7 @@ def _cleanup_stale_interfaces(
         host_cleaned = 0
         for link in ipr.get_links():
             ifname = link.get_attr("IFLA_IFNAME")
-            if ifname and (
-                ifname.startswith("_isl_")
-                or ifname.startswith("_gnd_")
-                or ifname.startswith("_gbr-")
-                or (ifname.startswith("_g") and len(ifname) > 2 and ifname[2:3].isdigit())
-                or ifname.startswith("_na_")
-            ):
+            if ifname and is_managed_host_ifname(ifname):
                 try:
                     ipr.link("del", index=link["index"])
                     host_cleaned += 1

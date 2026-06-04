@@ -96,3 +96,25 @@ def test_k8s_loader_fails_when_active_expected_node_is_missing(
             expected_node_ids={"earth-leo-sat-p00s00", "earth-leo-sat-p00s01"},
             session_id="run-current",
         )
+
+
+def test_k8s_loader_does_not_treat_pending_pod_as_located(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeV1:
+        def list_namespaced_pod(self, namespace, label_selector):
+            return SimpleNamespace(items=[_pod("earth-leo-sat-p00s00", "run-current", "")])
+
+        def list_node(self):
+            return SimpleNamespace(items=[])
+
+    monkeypatch.setattr(kubernetes.config, "load_incluster_config", lambda: None)
+    monkeypatch.setattr(kubernetes.client, "CoreV1Api", FakeV1)
+
+    loc = PodLocationMap()
+    with pytest.raises(RuntimeError, match="Missing active session pod"):
+        loc.load_from_k8s_api(
+            namespace="nodalarc",
+            expected_node_ids={"earth-leo-sat-p00s00"},
+            session_id="run-current",
+        )

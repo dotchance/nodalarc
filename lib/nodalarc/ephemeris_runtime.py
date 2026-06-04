@@ -84,6 +84,7 @@ def validate_ephemeris_manifest(
     *,
     required_bodies: set[str],
     epoch_unix: float,
+    end_epoch_unix: float | None = None,
     base_dir: Path | None = None,
 ) -> dict[str, Path]:
     """Validate a local ephemeris manifest and return kernel paths by ID."""
@@ -99,6 +100,11 @@ def validate_ephemeris_manifest(
         )
 
     epoch = _epoch_datetime(epoch_unix)
+    end_epoch = _epoch_datetime(end_epoch_unix) if end_epoch_unix is not None else epoch
+    if end_epoch < epoch:
+        raise EphemerisValidationError(
+            "ephemeris validation end_epoch_unix must be greater than or equal to epoch_unix"
+        )
     paths: dict[str, Path] = {}
     available_bodies: set[str] = {"earth"}
     for kernel in config.kernels:
@@ -109,10 +115,10 @@ def validate_ephemeris_manifest(
             raise EphemerisValidationError(
                 f"ephemeris kernel {kernel.id!r} checksum mismatch: expected {expected}, got {actual}"
             )
-        if not (kernel.coverage_start <= epoch <= kernel.coverage_end):
+        if not (kernel.coverage_start <= epoch and end_epoch <= kernel.coverage_end):
             raise EphemerisValidationError(
-                f"ephemeris kernel {kernel.id!r} does not cover session epoch "
-                f"{epoch.isoformat()}; coverage is "
+                f"ephemeris kernel {kernel.id!r} does not cover required session window "
+                f"{epoch.isoformat()}..{end_epoch.isoformat()}; coverage is "
                 f"{kernel.coverage_start.isoformat()}..{kernel.coverage_end.isoformat()}"
             )
         paths[kernel.id] = path
@@ -159,12 +165,14 @@ class SkyfieldBspEphemeris:
         *,
         required_bodies: set[str],
         epoch_unix: float,
+        end_epoch_unix: float | None = None,
         base_dir: Path | None = None,
     ) -> SkyfieldBspEphemeris:
         paths = validate_ephemeris_manifest(
             config,
             required_bodies=required_bodies,
             epoch_unix=epoch_unix,
+            end_epoch_unix=end_epoch_unix,
             base_dir=base_dir,
         )
         return cls(config, kernel_paths=paths)

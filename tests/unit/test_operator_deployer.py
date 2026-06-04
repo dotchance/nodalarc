@@ -821,6 +821,16 @@ class TestWiringManifest:
                 assert isl["peer_node"], f"{node_id}/{isl['name']} has empty peer_node"
                 assert isl["peer_iface"], f"{node_id}/{isl['name']} has empty peer_iface"
 
+    def test_isl_interfaces_emit_in_deterministic_order(self, tmp_path):
+        manifest = self._build_and_extract(tmp_path)
+        for node in manifest["nodes"].values():
+            interfaces = node["isl_interfaces"]
+            ordered = sorted(
+                interfaces,
+                key=lambda iface: (iface["name"], iface["peer_node"], iface["peer_iface"]),
+            )
+            assert interfaces == ordered
+
     def test_ground_station_has_term_interfaces(self, tmp_path):
         manifest = self._build_and_extract(tmp_path)
         gs_nodes = {

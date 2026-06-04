@@ -78,6 +78,30 @@ def _segment_session(**overrides):
     return data
 
 
+def _single_denver_session():
+    data = _segment_session()
+    data["segments"][1]["source"] = {
+        "default_min_elevation_deg": 10,
+        "default_terminals": [
+            {
+                "type": "rf",
+                "count": 1,
+                "bandwidth_mbps": 1000,
+                "tracking_capacity": 1,
+                "max_range_km": 2500,
+                "field_of_regard_deg": 120,
+                "max_tracking_rate_deg_s": 2.0,
+                "boresight": {"mode": "local_vertical"},
+            }
+        ],
+        "stations": [
+            {"name": "denver", "lat_deg": 39.7392, "lon_deg": -104.9903},
+        ],
+    }
+    data["simulation"]["candidate_limits"] = {"max_pairs_per_rule": 36}
+    return data
+
+
 def test_old_top_level_session_shape_rejected():
     with pytest.raises(SessionResolutionError, match="old session grammar"):
         resolve_session(
@@ -237,6 +261,22 @@ def _site_terminal_session():
         "terminal_medium": "rf",
         "terminal_id": "leo-ka",
     }
+    data["link_rules"].append(
+        {
+            "id": "geo-access",
+            "kind": "access",
+            "endpoints": [
+                {
+                    "selector": {"segment": "ground", "node_tags": ["geo-gateway"]},
+                    "terminal_role": "ground",
+                    "terminal_medium": "rf",
+                    "terminal_id": "geo-c",
+                },
+                {"selector": {"segment": "leo"}, "terminal_role": "ground"},
+            ],
+            "topology": {"mode": "visible_candidates"},
+        }
+    )
     data["simulation"]["candidate_limits"] = {"max_pairs_per_rule": 36}
     return data
 
@@ -275,9 +315,9 @@ def test_ground_site_expands_to_independent_ground_nodes_with_terminal_blocks():
     assert leo.terminal_inventory[0].bandwidth_mbps == 1200
     assert geo.terminal_inventory[0].source_terminal_id == "geo-c"
     assert geo.terminal_inventory[0].bandwidth_mbps == 250
-    assert len(resolution.declared_candidates) == 36
+    assert len(resolution.declared_candidates) == 72
     assert len(resolution.ground_candidate_satellites_by_gs["gnd-gs-santiago-leo-router"]) == 36
-    assert resolution.ground_candidate_satellites_by_gs["gnd-gs-santiago-geo-router"] == ()
+    assert len(resolution.ground_candidate_satellites_by_gs["gnd-gs-santiago-geo-router"]) == 36
 
 
 def test_link_rule_terminal_id_mismatch_fails_before_runtime():
@@ -460,6 +500,13 @@ def test_disabled_access_link_rule_leaves_no_implicit_ground_candidates():
         resolve_session(data)
 
 
+def test_each_ground_station_must_have_declared_access_candidates():
+    data = _segment_session()
+    data["link_rules"][0]["endpoints"][0]["selector"]["names"] = ["denver"]
+    with pytest.raises(SessionResolutionError, match="have no declared access candidates"):
+        resolve_session(data)
+
+
 def test_nearest_n_topology_limits_declared_candidates_by_static_physical_rank():
     data = _segment_session()
     data["link_rules"][0]["topology"] = {"mode": "nearest_n", "n": 1}
@@ -502,7 +549,7 @@ def test_terminal_medium_filter_is_carried_on_declared_candidates():
 
 
 def test_explicit_pairs_declare_permission_not_actual_connectivity():
-    data = _segment_session()
+    data = _single_denver_session()
     data["link_rules"][0]["endpoints"][0]["selector"]["names"] = ["denver"]
     data["link_rules"][0]["endpoints"][1]["selector"]["slots"] = [0]
     data["link_rules"][0]["topology"] = {
@@ -517,11 +564,10 @@ def test_explicit_pairs_declare_permission_not_actual_connectivity():
     )
     assert resolution.declared_candidates[0].rule_id == "access"
     assert resolution.ground_candidate_satellites_by_gs["gnd-gs-denver"] == ("leo-sat-p00s00",)
-    assert resolution.ground_candidate_satellites_by_gs["gnd-gs-ashburn"] == ()
 
 
 def test_explicit_pairs_must_stay_inside_resolved_endpoint_selectors():
-    data = _segment_session()
+    data = _single_denver_session()
     data["link_rules"][0]["endpoints"][0]["selector"]["names"] = ["denver"]
     data["link_rules"][0]["endpoints"][1]["selector"]["slots"] = [0]
     data["link_rules"][0]["topology"] = {
@@ -529,12 +575,12 @@ def test_explicit_pairs_must_stay_inside_resolved_endpoint_selectors():
         "pairs": [{"a": "gs-ashburn", "b": "sat-P00S00"}],
     }
 
-    with pytest.raises(SessionResolutionError, match="outside the resolved endpoint selector sets"):
+    with pytest.raises(SessionResolutionError, match="does not resolve inside"):
         resolve_session(data)
 
 
 def test_declared_candidate_rule_metadata_feeds_link_metadata_maps():
-    data = _segment_session()
+    data = _single_denver_session()
     data["link_rules"][0]["endpoints"][0]["selector"]["names"] = ["denver"]
     data["link_rules"][0]["endpoints"][1]["selector"]["slots"] = [0]
     data["link_rules"][0]["topology"] = {
@@ -560,7 +606,7 @@ def test_declared_candidate_rule_metadata_feeds_link_metadata_maps():
 
 
 def test_declared_access_candidates_are_the_only_pairs_ome_evaluates():
-    data = _segment_session()
+    data = _single_denver_session()
     data["link_rules"][0]["endpoints"][0]["selector"]["names"] = ["denver"]
     data["link_rules"][0]["endpoints"][1]["selector"]["slots"] = [0]
     data["link_rules"][0]["topology"] = {
@@ -914,7 +960,23 @@ def test_ephemeris_manifest_must_cover_session_epoch():
     kernel["coverage_start"] = "1850-01-01T00:00:00Z"
     kernel["coverage_end"] = "1900-01-01T00:00:00Z"
 
-    with pytest.raises(SessionResolutionError, match="does not cover session epoch"):
+    with pytest.raises(SessionResolutionError, match="does not cover required session window"):
+        resolve_session_with_assets(data)
+
+
+def test_ephemeris_manifest_must_cover_declared_ground_lookahead_window():
+    data = yaml.safe_load(Path("configs/sessions/earth-luna-relay.yaml").read_text())
+    data["time"]["start_time"] = "2026-01-01T00:00:00+00:00"
+    data["time"]["step_seconds"] = 5
+    data["segments"][2]["scheduling"]["selection_policy"] = {
+        "name": "longest-remaining-pass",
+        "params": {"lookahead_horizon_ticks": 3},
+    }
+    kernel = data["ephemeris"]["kernels"][0]
+    kernel["coverage_start"] = "2025-01-01T00:00:00Z"
+    kernel["coverage_end"] = "2026-01-01T00:00:10Z"
+
+    with pytest.raises(SessionResolutionError, match="does not cover required session window"):
         resolve_session_with_assets(data)
 
 

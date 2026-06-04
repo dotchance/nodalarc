@@ -13,12 +13,12 @@ scenario:
     - action: wait
       duration_s: 30
     - action: inject_satellite_loss
-      node: space-sat-p01s05
+      node: space-sat-p00s05
     - action: wait_converge
       timeout_s: 60
     - action: measure
       duration_s: 30
     - action: restore_satellite
-      node: space-sat-p01s05
+      node: space-sat-p00s05
     - action: wait_converge
       timeout_s: 60

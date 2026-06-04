@@ -6,6 +6,7 @@ Tests: all, plane:N, node:ID, area:N, type:satellite, type:ground_station.
 
 from types import SimpleNamespace
 
+import pytest
 from nodalarc.models.addressing import AddressingScheme
 from nodalarc.models.ground_station import (
     GroundStationConfig,
@@ -103,6 +104,21 @@ class TestInvalidTarget:
 
     def test_empty_string_returns_false(self):
         assert not _match_target("", "space-sat-p00s00", "satellite", 0, "49.0001")
+
+
+class TestReconfigScope:
+    def test_multi_constellation_session_refuses_partial_reconfig(self, monkeypatch):
+        resolution = SimpleNamespace(
+            constellations=(SimpleNamespace(), SimpleNamespace()),
+        )
+        monkeypatch.setattr(
+            na_reconfig,
+            "load_session_resolution_from_file",
+            lambda *_args, **_kwargs: resolution,
+        )
+
+        with pytest.raises(RuntimeError, match="does not support multi-constellation"):
+            na_reconfig.reconfig("configs/sessions/earth-leo-meo-geo.yaml", "all")
 
 
 class TestFlowRemovalUsesResolvedIds:

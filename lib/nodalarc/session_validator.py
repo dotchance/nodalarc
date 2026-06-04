@@ -8,9 +8,14 @@ No K8s, no NATS, no file system access, no imports from services/.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from pydantic import ValidationError
 
-from nodalarc.ground_handover import resolve_station_ground_scheduling
+from nodalarc.ground_handover import (
+    GroundHandoverResolutionError,
+    resolve_station_ground_scheduling,
+)
 from nodalarc.ground_terminals import (
     ground_terminal_type,
     station_ground_terminal_type,
@@ -29,7 +34,7 @@ from nodalarc.models.ground_policy import (
 )
 from nodalarc.models.ground_station import GroundStationFile
 from nodalarc.models.session import SessionConfig, resolve_session_epoch
-from nodalarc.stack_resolver import ResolvedStack
+from nodalarc.stack_resolver import ResolvedStack, validate_sid_indices
 from nodalarc.tle import tle_age_days
 
 # Canonical list of valid selection policies. Pydantic validates parsed YAML;
@@ -44,6 +49,7 @@ def validate_session_readiness(
     ground_stations: GroundStationFile,
     resolved_stack: ResolvedStack,
     available_node_count: int = 1,
+    sid_indices_by_node: Mapping[str, int] | None = None,
 ) -> list[ValidationResult]:
     """Validate a session before deployment.
 
@@ -54,6 +60,8 @@ def validate_session_readiness(
         ground_stations: Parsed GroundStationFile.
         resolved_stack: Output of resolve_stack().
         available_node_count: Number of K8s nodes available for pod placement.
+        sid_indices_by_node: Resolver-owned prefix-SID indices, required when
+            segment routing is enabled.
 
     Returns:
         List of ValidationResult. Errors block deployment; warnings are logged.
@@ -61,7 +69,7 @@ def validate_session_readiness(
     results: list[ValidationResult] = []
 
     results.extend(_check_e003(satellites, ground_stations, session))
-    results.extend(_check_e004(satellites, resolved_stack))
+    results.extend(_check_e004(resolved_stack, sid_indices_by_node))
     results.extend(_check_e005(ground_stations))
     results.extend(_check_e007(session))
     results.extend(_check_e008(session, constellation, satellites))
@@ -159,36 +167,38 @@ def _check_e003(
 
 
 def _check_e004(
-    satellites: list,
     resolved_stack: ResolvedStack,
+    sid_indices_by_node: Mapping[str, int] | None,
 ) -> list[ValidationResult]:
-    """E004: SRGB overflow — constellation too large for SID index space."""
+    """E004: Resolved SID indices must fit inside the routing stack SRGB."""
     results: list[ValidationResult] = []
 
     if not resolved_stack.segment_routing:
         return results
 
-    tv = resolved_stack.template_variables
-    gs_sid_offset = tv.get("gs_sid_offset")
-    if gs_sid_offset is None:
-        return results  # No SR variables to check
-
-    # SID scheme from stack_resolver.py:validate_constellation_constraints
-    # Satellite SID = plane * 100 + slot + 1
-    max_plane = max((s.plane for s in satellites), default=0)
-    max_slot = max((s.slot for s in satellites), default=0)
-    max_sat_sid = max_plane * 100 + max_slot + 1
-
-    if max_sat_sid >= gs_sid_offset:
+    if sid_indices_by_node is None:
         results.append(
             ValidationResult(
                 level="error",
                 code="E004",
                 message=(
-                    f"Satellite SID range (max {max_sat_sid}) overlaps GS SID offset "
-                    f"({gs_sid_offset}). Constellation is too large for the SRGB."
+                    "Segment routing is enabled but the resolved session did not "
+                    "provide prefix-SID indices."
                 ),
-                remediation="Increase SRGB range or reduce constellation size.",
+                remediation="Resolve the session through the segment resolver before deployment.",
+            )
+        )
+        return results
+
+    try:
+        validate_sid_indices(resolved_stack, sid_indices_by_node)
+    except ValueError as exc:
+        results.append(
+            ValidationResult(
+                level="error",
+                code="E004",
+                message=f"Resolved prefix-SID indices do not fit the SRGB: {exc}",
+                remediation="Increase SRGB range or reduce the resolved node count.",
             )
         )
 
@@ -457,10 +467,8 @@ def _check_e010(
             resolution = resolve_station_ground_scheduling(
                 session.scheduling.ground, ground_stations, station
             )
-        except (ValueError, ValidationError) as exc:
+        except GroundHandoverResolutionError as exc:
             message = str(exc)
-            if "explicitly requests MBB" not in message:
-                continue
             results.append(
                 ValidationResult(
                     level="error",
@@ -474,6 +482,10 @@ def _check_e010(
                     field_path=f"ground_stations.stations.{station.name}.handover_mode",
                 )
             )
+            continue
+        except ValidationError:
+            # Policy-shape errors are owned by E005/E009. E010 only evaluates
+            # handover capability once the policy surface itself is valid.
             continue
 
         if resolution.capability_forced_bbm:

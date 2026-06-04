@@ -28,8 +28,8 @@ import yaml
 from jinja2 import Environment, FileSystemLoader
 from nodalarc.constants import LOG_FORMAT
 from nodalarc.models.addressing import compute_area_assignments
-from nodalarc.models.routing_stack import RoutingStackConfig
 from nodalarc.resolve_session import load_session_resolution_from_file
+from nodalarc.stack_resolver import resolve_stack
 from nodalarc.template_vars import _constellation_dims, build_template_vars
 
 log = logging.getLogger(__name__)
@@ -79,18 +79,21 @@ def reconfig(
 ) -> None:
     """Re-render and push configs to targeted nodes."""
     resolution = load_session_resolution_from_file(session_path, origin="na-reconfig")
+    if len(resolution.constellations) != 1:
+        raise RuntimeError(
+            "na_reconfig does not support multi-constellation sessions yet; "
+            "refusing partial config push"
+        )
     session = resolution.runtime_session
     constellation = resolution.primary_constellation.config
     gs_file = resolution.primary_ground_set.config
     addressing = resolution.addressing
     satellites = list(resolution.primary_constellation.satellites)
-
-    stack_dir = Path(session.routing.stack)
-    stack_yaml = yaml.safe_load((stack_dir / "stack.yaml").read_text())
-    stack_config = RoutingStackConfig.model_validate(stack_yaml["stack"])
+    resolved_stack = resolve_stack(session.routing.protocol, session.routing.extensions)
+    sid_by_node = resolution.resolved.sid_index_by_node_id()
 
     # Build config overrides from stack + session + --set + --vars-file
-    config_overrides = dict(stack_config.template_variables)
+    config_overrides = dict(resolved_stack.template_variables)
     config_overrides.update(session.routing.config_overrides)
     config_overrides.update(_parse_set_args(set_args))
     if vars_file:
@@ -110,7 +113,7 @@ def reconfig(
         )
 
     env = Environment(
-        loader=FileSystemLoader(str(stack_dir)),
+        loader=FileSystemLoader(str(Path("configs/templates/frr").resolve())),
         keep_trailing_newline=True,
     )
 
@@ -132,8 +135,10 @@ def reconfig(
             plane=sat.plane,
             slot=sat.slot,
             config_overrides=config_overrides,
+            neighbors=resolution.neighbors,
+            node_sid_index=sid_by_node[node_id],
         )
-        _render_and_push(env, stack_config, node_id, vars)
+        _render_and_push(env, resolved_stack, node_id, vars)
         reconfigured += 1
 
     # Process ground stations
@@ -152,14 +157,16 @@ def reconfig(
             gs_name=station.name,
             gs_index=i,
             config_overrides=config_overrides,
+            neighbors=resolution.neighbors,
+            node_sid_index=sid_by_node[node_id],
         )
-        _render_and_push(env, stack_config, node_id, vars)
+        _render_and_push(env, resolved_stack, node_id, vars)
         reconfigured += 1
 
     log.info(f"Reconfigured {reconfigured} nodes")
 
 
-def _render_and_push(env, stack_config, node_id, vars):
+def _render_and_push(env, resolved_stack, node_id, vars):
     """Render templates and push to pod.
 
     Uses the stack's reconfigure_command with {config_path} placeholder
@@ -169,7 +176,7 @@ def _render_and_push(env, stack_config, node_id, vars):
 
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
-        for tpl_config in stack_config.config_templates:
+        for tpl_config in resolved_stack.template_files:
             tpl = env.get_template(tpl_config.src)
             rendered = tpl.render(**vars)
             dest_name = Path(tpl_config.dst).name
@@ -177,7 +184,7 @@ def _render_and_push(env, stack_config, node_id, vars):
 
         # kubectl cp into pod — copy to the directory containing the config files
         # Derive the common config directory from the first template's dst
-        config_dirs = {str(Path(tc.dst).parent) for tc in stack_config.config_templates}
+        config_dirs = {str(Path(tc.dst).parent) for tc in resolved_stack.template_files}
         for config_dir in config_dirs:
             result = subprocess.run(
                 [
@@ -196,8 +203,10 @@ def _render_and_push(env, stack_config, node_id, vars):
                 sys.exit(1)
 
         # Apply using reconfigure_command from stack.yaml (PRD 13.19)
-        for tpl_config in stack_config.config_templates:
-            cmd = stack_config.reconfigure_command.format(
+        if not resolved_stack.reconfigure_command:
+            raise RuntimeError("resolved routing stack has no reconfigure_command")
+        for tpl_config in resolved_stack.template_files:
+            cmd = resolved_stack.reconfigure_command.format(
                 config_path=tpl_config.dst,
             )
             result = subprocess.run(

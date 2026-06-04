@@ -253,6 +253,24 @@ class TestSatelliteVars:
             # Should be a valid IPv4 address in 10.x.x.x range
             assert info["peer_loopback_ipv4"].startswith("10.")
 
+    def test_interface_info_uses_configured_isl_terminal_bandwidth(
+        self, stripe_session, starlink_config, gs_file, addressing
+    ):
+        result = build_template_vars(
+            session=stripe_session,
+            constellation=starlink_config,
+            ground_stations=gs_file,
+            addressing=addressing,
+            node_type="satellite",
+            plane=0,
+            slot=0,
+        )
+
+        bandwidths = {info["bandwidth_mbps"] for info in result["interface_info"].values()}
+
+        assert bandwidths == {100.0}
+        assert 1000.0 not in bandwidths
+
     def test_satellite_cross_area_flag(self, stripe_session, starlink_config, gs_file, addressing):
         """Node in plane 1 has cross-plane link to plane 2 — different stripe."""
         result = build_template_vars(

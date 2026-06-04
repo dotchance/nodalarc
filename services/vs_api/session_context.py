@@ -544,7 +544,12 @@ class SessionContext:
                     node_a=link.node_a,
                     node_b=link.node_b,
                     state="active",
-                    link_type=_derive_link_type(link.node_a, link.node_b, link.link_type),
+                    link_type=_derive_link_type(
+                        link.link_type,
+                        link_rule_id=link.link_rule_id,
+                        topology_mode=link.topology_mode,
+                        endpoint_segments=link.endpoint_segments,
+                    ),
                     link_reason="",
                     latency_ms=link.latency_ms,
                     bandwidth_mbps=link.bandwidth_mbps,
@@ -678,7 +683,12 @@ class SessionContext:
                 node_a=node_a,
                 node_b=node_b,
                 state="active",
-                link_type=_derive_link_type(node_a, node_b, data["link_type"]),
+                link_type=_derive_link_type(
+                    data["link_type"],
+                    link_rule_id=data.get("link_rule_id"),
+                    topology_mode=data.get("topology_mode"),
+                    endpoint_segments=data.get("endpoint_segments"),
+                ),
                 link_reason=data["reason"],
                 latency_ms=data["latency_ms"],
                 bandwidth_mbps=data["bandwidth_mbps"],
@@ -1516,17 +1526,23 @@ def _link_key(node_a: str, node_b: str) -> str:
     return f"{min(node_a, node_b)}:{max(node_a, node_b)}"
 
 
-def _derive_link_type(node_a: str, node_b: str, raw_type: str | None = None) -> str:
-    import re
-
+def _derive_link_type(
+    raw_type: str | None,
+    *,
+    link_rule_id: str | None = None,
+    topology_mode: str | None = None,
+    endpoint_segments: tuple[str, str] | list[str] | None = None,
+) -> str:
     if raw_type and raw_type != "isl":
         return raw_type
     if raw_type is None:
         raise ValueError("link_type is required; VS-API does not infer ground links from node IDs")
-    ma = re.match(r"(?:[a-z0-9-]+-)?sat-[Pp](\d+)[Ss]\d+$", node_a)
-    mb = re.match(r"(?:[a-z0-9-]+-)?sat-[Pp](\d+)[Ss]\d+$", node_b)
-    if ma and mb:
-        if ma.group(1) == mb.group(1):
-            return "intra_plane_isl"
-        return "cross_plane_isl"
+    if endpoint_segments is not None and len(endpoint_segments) == 2:
+        a, b = endpoint_segments
+        if a != b:
+            if topology_mode == "static_ip":
+                return "inter_body_relay"
+            return "inter_constellation"
+    if link_rule_id and link_rule_id.endswith(".internal_isl"):
+        return "isl"
     return "isl"

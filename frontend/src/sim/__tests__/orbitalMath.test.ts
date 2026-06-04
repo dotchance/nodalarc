@@ -145,6 +145,7 @@ describe("orbitalMath", () => {
       const simTime = epoch + 1200;
       const elements = {
         type: "keplerian" as const,
+        propagator: "keplerian-circular" as const,
         altitude_km: 550,
         inclination_deg: 53,
         raan_deg: 45,
@@ -170,6 +171,53 @@ describe("orbitalMath", () => {
       expect(nx).toBeCloseTo(legacyWorld.x, 2);
       expect(ny).toBeCloseTo(legacyWorld.y, 2);
       expect(nz).toBeCloseTo(legacyWorld.z, 2);
+    });
+
+    it("uses the ephemeris reference radius when provided", () => {
+      const epoch = J2000_UNIX_SECONDS;
+      const equatorialRadiusKm = 6378.137;
+      const elements = {
+        propagator: "keplerian-circular" as const,
+        altitude_km: 420,
+        inclination_deg: 0,
+        raan_deg: 0,
+        true_anomaly_deg: 0,
+      };
+      const [xDefault, yDefault, zDefault] = propagateToSceneXYZ(elements, epoch, epoch);
+      const [xFrame, yFrame, zFrame] = propagateToSceneXYZ(
+        { ...elements, reference_radius_km: equatorialRadiusKm },
+        epoch,
+        epoch,
+      );
+      const defaultDist = Math.sqrt(xDefault * xDefault + yDefault * yDefault + zDefault * zDefault);
+      const frameDist = Math.sqrt(xFrame * xFrame + yFrame * yFrame + zFrame * zFrame);
+
+      expect(frameDist - defaultDist).toBeGreaterThan(0.1);
+    });
+
+    it("honors the J2 mean-elements propagator instead of silently using Keplerian", () => {
+      const epoch = J2000_UNIX_SECONDS;
+      const elements = {
+        altitude_km: 550,
+        inclination_deg: 53,
+        raan_deg: 45,
+        true_anomaly_deg: 20,
+      };
+      const keplerian = propagateToSceneXYZ(
+        { ...elements, propagator: "keplerian-circular" },
+        epoch,
+        epoch + 86400,
+      );
+      const j2 = propagateToSceneXYZ(
+        { ...elements, propagator: "j2-mean-elements", reference_radius_km: 6378.137 },
+        epoch,
+        epoch + 86400,
+      );
+      const delta = Math.sqrt(
+        (j2[0] - keplerian[0]) ** 2 + (j2[1] - keplerian[1]) ** 2 + (j2[2] - keplerian[2]) ** 2,
+      );
+
+      expect(delta).toBeGreaterThan(0.01);
     });
   });
 });

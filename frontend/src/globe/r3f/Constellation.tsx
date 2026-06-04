@@ -21,7 +21,7 @@ import { geoToWorld } from "../geo";
 import { interpolatedSimTimeMs } from "../../sim/simClock";
 import { isWorkerReady, readPosition, requestPropagate } from "../../sim/workerBridge";
 import { propagateToSceneXYZ } from "../../sim/orbitalMath";
-import type { SessionEphemeris } from "../../sim/ephemeris";
+import type { EphemerisNodeKeplerian, SessionEphemeris } from "../../sim/ephemeris";
 import type { ColorMode, NodeState, Selection } from "../../types";
 import { FAMILY_TONE } from "../../explain/families";
 import type { SatRelation } from "../../explain/gsCandidateRelations";
@@ -156,14 +156,22 @@ export function Constellation({
     for (const [nodeId, idx] of satIndex.current) {
       const ephNode = ephemeris.nodes[nodeId];
       if (!ephNode || ephNode.type !== "keplerian") continue;
-      const nodeBody = ephNode.reference_body ?? "earth";
+      const keplerianNode: EphemerisNodeKeplerian = ephNode;
+      const nodeBody = keplerianNode.reference_body ?? "earth";
       let x: number, y: number, z: number;
       if (workerReady && nodeBody === "earth" && readPosition(nodeId, simTimeUnix, _workerPos)) {
         x = _workerPos.x;
         y = _workerPos.y;
         z = _workerPos.z;
       } else {
-        [x, y, z] = propagateToSceneXYZ(ephNode, epochUnix, simTimeUnix);
+        [x, y, z] = propagateToSceneXYZ(
+          {
+            ...keplerianNode,
+            reference_radius_km: ephemeris.body_frames?.[nodeBody]?.radius_km,
+          },
+          epochUnix,
+          simTimeUnix,
+        );
       }
       _tmpMatrix.makeTranslation(x, y, z);
       mesh.setMatrixAt(idx, _tmpMatrix);

@@ -159,6 +159,11 @@ class PodLocationMap:
                 raise RuntimeError(f"Duplicate active session pod location for node {node_id}")
 
             k3s_node = pod.spec.node_name or ""
+            if not k3s_node:
+                # Pending pods do not have a dispatchable Node Agent. Treat
+                # them as missing so startup/reload waits or fails loudly
+                # instead of routing intents to an empty agent address.
+                continue
             self._node_of[node_id] = k3s_node
 
         if expected_node_ids is not None:

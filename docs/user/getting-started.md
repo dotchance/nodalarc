@@ -71,12 +71,12 @@ you the failure instead of hiding it.
 Use the session picker or command line to deploy a different curated session:
 
 ```bash
-make session DEFAULT_SESSION=configs/sessions/earth-leo-meo-geo.yaml
+make session DEFAULT_SESSION=sessions/nodalarc/earth-leo-heo-geo-luna-reachability.yaml
 ```
 
-Try `earth-leo-meo-geo.yaml` to see multiple Earth orbital regimes in one
-session, or `earth-luna-gateway-site.yaml` to see Earth, Luna, and a cislunar
-relay path in the same visualization.
+Try `earth-leo-heo-geo-luna-reachability.yaml` to see multiple Earth orbital
+regimes plus a lunar relay path — Earth, Luna, and a cislunar relay — in the same
+visualization.
 
 ## Navigation
 

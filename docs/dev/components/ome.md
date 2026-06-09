@@ -69,12 +69,13 @@ runtime cost.
 ## Segment and Body Model
 
 The OME does not infer cross-segment connectivity from proximity alone.
-`link_rules` declare the candidate universe:
+`link_rules` declare the candidate universe. Each link's class is derived from
+the roles at its endpoints — authors never write a class:
 
-- `access` is body-local ground-to-space access
-- `inter_constellation` links connect space segments in the same body frame
-- `inter_body_relay` links connect space segments across body frames and carry
-  an explicit protocol boundary
+- access — body-local ground-to-space access
+- inter-constellation — space-to-space within the same body frame
+- inter-body relay — space-to-space across body frames, carrying an explicit
+  protocol boundary
 
 Earth/Luna sessions use a local BSP ephemeris kernel for body positions. The
 session resolver rejects unsupported body/frame grammar before OME startup

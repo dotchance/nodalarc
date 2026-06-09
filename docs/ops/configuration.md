@@ -1,244 +1,373 @@
 # Configuration Reference
 
-NodalArc sessions are configured through YAML files that assemble reusable
-building blocks into a deployable emulation. Users can create sessions through
-the browser wizard, upload YAML, or deploy a file with `make session`.
+NodalArc emulations are built from a **catalog of reusable primitives** that you
+assemble into a **session**. The session is the only file you deploy; everything
+else is a building block it references.
 
-The product session grammar is the segment grammar: top-level `segments` and
-`link_rules`. Old top-level `constellation` plus `ground_stations` session YAML
-is not a supported product path.
+This page explains the model and walks through writing a session. For the formal
+grammar of every object — exact fields, allowed values, and EBNF — see the
+[Configuration Grammar](configuration-grammar.md).
 
-## Session Configuration
+## The catalog model
 
-A session joins segment definitions, declared connectivity, routing, placement,
-time, and optional ephemeris:
+Two trees hold all configuration:
+
+- `catalog/nodalarc/` — reusable primitives: bodies, terminals, orbits, nodes,
+  sites, site sets, constellations, and space node sets.
+- `sessions/nodalarc/` — assembled, deployable sessions that reference catalog
+  primitives.
+
+A primitive is referenced by a token of the form `nodalarc:<path-under-catalog>`.
+For example, a session segment points at a constellation with:
+
+```yaml
+source: nodalarc:constellations/earth/leo/earth-leo-ring-36.yaml
+```
+
+Each primitive file wraps one object whose `id` matches the file name. The same
+primitive can be reused by many sessions — a gateway router model placed at
+twenty sites, one orbit shared by several constellations. The catalog ships more
+primitives than the example sessions use; the extra parts are building blocks,
+not dead files.
+
+### The primitives
+
+| Primitive | Folder | What it is |
+|-----------|--------|------------|
+| Body | `bodies/` | A planet or moon: gravity and radii. Earth and Luna ship today. |
+| Terminal | `terminals/` | A physical link capability (an antenna/modem): medium, band or wavelength, range, bandwidth, pointing limits. |
+| Orbit | `orbits/` | An orbit around a body: Keplerian elements or a shape, orientation, and propagator. |
+| Node | `nodes/` | A router *model* — forwarding behavior, ethernet ports, terminal mounts. Carries **no** addresses and **no** location. |
+| Site | `sites/` | A physical facility: a location, a LAN, and one or more nodes placed there with concrete addresses. |
+| Site set | `site-sets/` | A named list of sites a session can place as a ground segment. |
+| Constellation | `constellations/` | A node model + orbit + plane/slot pattern that generates many satellites. |
+| Space node set | `space-node-sets/` | A fixed list of individually placed space nodes (for example, specific GEO slots). |
+
+## Writing a session
+
+A session names itself, declares **segments** (the groups of nodes in play),
+declares **link rules** (which segments may connect and how), and sets
+addressing, routing, and time. Here is a complete shipped session,
+`earth-leo-simple` (scheduling fields trimmed for brevity):
 
 ```yaml
 session:
-  name: earth-leo-walker
-identity:
-  mode: segment_namespaced
+  name: earth-leo-simple
+  display_name: Earth LEO simple
+  description: Single 36-satellite LEO ring with MBB-capable gateway sites.
 
 segments:
-  - id: space
-    kind: constellation
-    source: configs/constellations/starlink-176.yaml
-    namespace: space
-    central_body: earth
-    tags: [earth, leo]
-
-  - id: ground
-    kind: ground_set
-    source: configs/ground-stations/sets/starlink-176.yaml
-    namespace: ground
-    reference_body: earth
-    tags: [earth, ground]
+- id: leo
+  source: nodalarc:constellations/earth/leo/earth-leo-ring-36.yaml
+- id: ground
+  placement:
+    from_site_set: nodalarc:site-sets/earth/leo/earth-leo-starlink-pop-sites.yaml
+  apply:
+    scheduling:
+      selection_policy:
+        highest_elevation: {}
+      handover_mode: mbb
 
 link_rules:
-  - id: ground-access
-    kind: access
-    endpoints:
-      - selector: {segment: ground}
-        terminal_role: ground
-      - selector: {segment: space}
-        terminal_role: ground
-    topology: {mode: visible_candidates}
-
-routing:
-  protocol: isis
-  extensions: [traffic-engineering]
-  area_assignment:
-    strategy: per-plane
+- id: leo_access
+  topology:
+    mode: visible_candidates
+  endpoints:
+  - select:
+      all:
+      - segment: ground
+      - tag: leo
+    terminal:
+      all:
+      - role: access
+      - medium: rf
+    min_elevation_deg: 25
+  - select:
+      segment: leo
+    terminal:
+      all:
+      - role: access
+      - medium: rf
+- id: leo_isl
+  topology:
+    mode: nearest_n
+    n: 2
+  endpoints:
+  - select: { segment: leo }
+    terminal: { all: [ { role: isl }, { medium: optical } ] }
+  - select: { segment: leo }
+    terminal: { all: [ { role: isl }, { medium: optical } ] }
 
 time:
-  step_seconds: 1
+  start_time: '2026-06-08T00:00:00Z'
+  step_seconds: 10
+  compression: 1
 ```
 
-### Session Fields
+### Segments
 
-| Field | Required | Description |
-|-------|:---:|-------------|
-| `session.name` | yes | Session identifier |
-| `identity.mode` | yes | Must be `segment_namespaced` |
-| `segments` | yes | Node-producing and relay building blocks |
-| `segments[].namespace` | yes for node-producing segments | Runtime node ID namespace |
-| `segments[].kind` | yes | `constellation`, `ground_set`, or `space_node` in current shipped sessions |
-| `link_rules` | yes | Declared candidate connectivity between segments |
-| `routing.protocol` | yes | `isis` or `ospf` |
-| `routing.extensions` | no | Supported protocol extensions |
-| `routing.area_assignment` | no | Area assignment strategy |
-| `placement.policy` | no | Pod placement policy |
-| `time.step_seconds` | no | Simulation time step |
-| `ephemeris` | multi-body only | Body ephemeris provider and kernel references |
+A segment is a named group of runtime nodes. There are two kinds:
 
-Runtime node IDs are allocated as `{namespace}-{local_node_id}` and normalized
-for NATS, Kubernetes, and interface safety. The local node ID and display name
-remain separate from the runtime ID.
+- **Space segment** — references a constellation or space node set as its
+  `source`:
 
-## Curated Sessions
+  ```yaml
+  - id: leo
+    source: nodalarc:constellations/earth/leo/earth-leo-ring-36.yaml
+  ```
 
-These are the shipped demo sessions:
+- **Ground segment** — places a site set, with an optional `apply` overlay for
+  scheduling and other ground policy:
 
-| Session | Routing | Description |
-|---------|---------|-------------|
-| `earth-leo-simple.yaml` | OSPF | Default Earth LEO starter with MBB-capable ground nodes |
-| `earth-leo-walker.yaml` | IS-IS + TE | Walker-delta LEO starter |
-| `earth-leo-polar.yaml` | IS-IS + TE | Polar LEO starter with high-latitude ground stations |
-| `earth-meo-gps.yaml` | IS-IS | GPS-like MEO starter |
-| `earth-geo-inmarsat.yaml` | IS-IS | Representative GEO commercial-relay-style starter |
-| `earth-geo-tdrs.yaml` | IS-IS | Representative GEO relay/TDRS-style starter |
-| `earth-leo-meo-geo.yaml` | IS-IS + TE | LEO, MEO, GEO, and ground access in one Earth session |
-| `earth-luna-relay.yaml` | IS-IS + TE | Earth relay, lunar relay, and lunar ground access |
-| `earth-luna-gateway-site.yaml` | IS-IS + TE | Earth gateway site, cislunar relay, lunar relay, and lunar surface router |
+  ```yaml
+  - id: ground
+    placement:
+      from_site_set: nodalarc:site-sets/earth/leo/earth-leo-starlink-pop-sites.yaml
+    apply:
+      scheduling: { ... }
+  ```
 
-The catalog contains more reusable primitives than these sessions. That is
-intentional. The sessions are the examples; the catalog parts are the building
-blocks.
+Every node receives a runtime id derived from its segment, kept short and safe
+for the routing fabric. You do not author runtime ids or namespaces.
 
-## Link Rules
+### Link rules
 
-| Kind | Current Meaning |
-|------|-----------------|
-| `access` | Body-local ground-to-space access. Earth ground to Earth orbit, or lunar ground to lunar orbit. |
-| `inter_constellation` | Space-to-space links between segments in the same body frame. |
-| `inter_body_relay` | Space-to-space relay across body frames, with an explicit protocol boundary. |
+A link rule declares that nodes selected from two endpoints **may** form links,
+and how candidates are chosen. It does not force links — visibility and the
+topology mode decide the actual connectivity each tick.
 
-Supported topology modes:
+```yaml
+link_rules:
+- id: leo_access
+  topology:
+    mode: visible_candidates
+  endpoints:
+  - select:    { all: [ { segment: ground }, { tag: leo } ] }
+    terminal:  { all: [ { role: access }, { medium: rf } ] }
+    min_elevation_deg: 25
+  - select:    { segment: leo }
+    terminal:  { all: [ { role: access }, { medium: rf } ] }
+```
+
+Each endpoint has a **node selector** (`select:`) choosing which nodes
+participate and a **terminal selector** (`terminal:`) choosing which of their
+installed terminals. The link's *class* (access, ISL, and so on) is **derived**
+from the endpoints — you never write a `kind`.
+
+#### Selectors
+
+Selectors are set expressions, not loose maps. You compose leaf predicates with
+`all` (intersection), `any` (union), and `not` (complement):
+
+- Node leaves: `segment`, `tag`, `node`, `plane`, `slot` (`plane`/`slot` match constellation satellites by their orbital position).
+- Terminal leaves: `role`, `medium`, `mount`.
+
+A bare leaf is the whole selector; add an operator when you need more than one:
+
+```yaml
+select: { segment: leo }                            # all nodes in segment leo
+select: { all: [ { segment: ground }, { tag: leo } ] }   # ground nodes tagged leo
+select: { any: [ { segment: leo_a }, { segment: leo_b } ] } # union of two segments
+terminal: { all: [ { role: access }, { medium: rf } ] }
+```
+
+Tags are author labels used only for selection. They never change physics,
+routing, topology, or behavior — they are just a way to name and pick a subset.
+
+#### Topology modes
 
 | Mode | Meaning |
 |------|---------|
-| `visible_candidates` | OME evaluates visible candidates under the rule. |
-| `nearest_n` | Resolver builds a bounded static candidate set from nearest endpoint pairs. |
-| `explicit_pairs` | Resolver uses the exact declared pairs. |
+| `visible_candidates` | Every currently visible pair under the rule is a candidate. |
+| `nearest_n` | The `n` nearest endpoint pairs (set `n:`). |
+| `explicit_pairs` | Exactly the pairs you list. |
 
-Unsupported future grammar is rejected by the resolver with typed errors. It is
-not interpreted as a fallback.
+(`nearest_visible` is reserved in the grammar but not accepted at runtime yet.)
 
-## Routing Protocols
+### Addressing
 
-| Protocol | Extensions Available | Description |
-|----------|----------------------|-------------|
-| `isis` | `traffic-engineering`, `sr`, `mpls` | IS-IS link-state IGP |
-| `ospf` | `traffic-engineering`, `sr`, `mpls` | OSPF link-state IGP |
-
-Extension dependencies:
-
-- `mpls` requires `traffic-engineering`
-- `sr` requires `isis` or `ospf`
-
-BGP and DSN/DTN-style protocol adapters are roadmap items. Cislunar demo
-sessions currently use static protocol-boundary behavior where configured.
-
-## Ground Sites, Nodes, and Terminals
-
-A ground site is the physical location. A ground node is a router or terminal
-system at that site. A ground node can carry multiple terminals, and a site can
-contain multiple nodes.
+Satellites are generated by a constellation, so they are not individually
+authored — their loopback and point-to-point addresses are handed out from
+session-level pools in the `addressing` block:
 
 ```yaml
-ground_sites:
-  - id: santiago
-    display_name: Santiago Gateway Site
-    reference_body: earth
-    lat_deg: -33.45
-    lon_deg: -70.66
-    nodes:
-      - id: leo-router
-        handover_mode: mbb
-        mbb_overlap_ticks: 3
-        mbb_reserve: 1
-        terrestrial_prefixes:
-          - prefix: 172.61.10.0/24
-            metric: 10
-        terminals:
-          - id: leo-ka
-            type: rf
-            band: Ka
-            count: 2
-            bandwidth_mbps: 1200
-            tracking_capacity: 1
+addressing:
+  loopbacks:
+  - id: node_loopbacks
+    applies_to: { any: [ { segment: leo_a }, { segment: leo_b } ] }
+    ipv4_pool: 10.255.0.0/16
+    prefix_length: 32
+    allocation: by_node_order
+  point_to_point:
+  - id: p2p_links
+    applies_to: { segment: leo_a }
+    ipv4_pool: 10.128.0.0/12
+    prefix_length: 31
+    allocation: by_attach_index
 ```
 
-Handoff policy belongs to the ground node. A node with one compatible terminal
-cannot truthfully make before break. A node with multiple compatible terminals
-can reserve capacity for overlap.
+Ground nodes carry their own addresses on their site (see below), so simple
+single-shell sessions need no `addressing` block at all.
 
-## Constellation Configuration
+### Routing
 
-Constellation files live in `configs/constellations/` and define orbital
-geometry. They are referenced by session segments.
+A session is multi-protocol by construction. Routing is a set of **domains**, and
+each domain runs its own protocol over the nodes it selects — so one session can
+carry an IS-IS backbone, an OSPF region, BGP at an edge, and static stubs at the
+same time. A domain's protocol is one of `isis`, `ospf`, `bgp`, or `static`, and
+it may enable capabilities such as MPLS, segment routing, or traffic engineering.
+**Boundaries** join domains and redistribute prefixes between them. A session with
+no `routing` block defaults to a single IS-IS domain over all of its nodes.
 
 ```yaml
-mode: parametric
-name: starlink-176
-satellite_type: starlink-v2
-orbit:
-  altitude_km: 550
-  inclination_deg: 53
-  pattern: walker-delta
-planes:
-  count: 16
-  raan_spacing_deg: 22.5
-  sats_per_plane: 11
-  phase_offset_deg: 2.045
+routing:
+  domains:
+  - id: earth_domain
+    protocol: isis
+    selectors:
+    - any: [ { segment: leo }, { segment: ground } ]
+    area_assignment:
+      strategy: flat
+  - id: edge_domain
+    protocol: ospf
+    selectors:
+    - { segment: edge }
+  boundaries:
+  - over: earth_to_edge          # the link rule this boundary rides
+    adapter: static_ip
+    export:
+    - from: earth_domain
+      to: edge_domain
+      prefixes: { aggregate_of: originated }
 ```
 
-Representative catalog examples include:
-
-| Config | Description |
-|--------|-------------|
-| `demo-36.yaml` | Small LEO starter ring |
-| `starlink-176.yaml` | Walker-delta LEO shell |
-| `iridium-66.yaml` | Polar Walker-star-style shell |
-| `meo-gps-24.yaml` | GPS-like MEO shell |
-| `geo-inmarsat-representative.yaml` | GEO commercial-relay-style shell |
-| `geo-tdrs-representative.yaml` | GEO relay/TDRS-style shell |
-| `luna-polar-8.yaml` | Lunar polar relay shell |
-
-## Satellite Type Configuration
-
-Satellite type files live in `configs/satellite-types/` and describe terminal
-inventory:
+### Time
 
 ```yaml
-satellite_type:
-  name: starlink-v2
-  isl_terminals:
-    - type: optical
-      count: 4
-      max_range_km: 5000
-      bandwidth_mbps: 100
-      max_tracking_rate_deg_s: 3.0
-      field_of_regard_deg: 140
-  ground_terminals:
-    - type: rf
-      count: 1
-      bandwidth_mbps: 1000
-      band: Ku
+time:
+  start_time: '2026-06-08T00:00:00Z'   # simulation epoch (UTC)
+  step_seconds: 10                     # seconds of sim time per tick
+  compression: 1                       # sim seconds per wall second (1 = real time)
 ```
 
-Terminal fields drive candidate eligibility, bandwidth shaping, and
-explainability. If a link rule narrows terminal compatibility in a way the
-runtime cannot honor, the resolver rejects it rather than silently widening it.
+## Sites, nodes, terminals, and addressing
 
-## Ground Station Sets
+This is the part that is easy to get wrong, so it is worth stating plainly.
 
-Ground station set files live in `configs/ground-stations/sets/`. Some sets are
-simple station lists; newer sets can define sites, nodes, terminals, and
-station-scoped scheduling.
+A **node model** is a template — a router on a shelf. It declares forwarding
+behavior, ethernet ports, and terminal mounts. It has **no IP addresses and no
+location**:
 
-| Config | Purpose |
-|--------|---------|
-| `demo-mbb.yaml` | Default MBB-capable Earth LEO ground set |
-| `meo-gps.yaml` | Long-range RF gateways for MEO/GEO demos |
-| `geo-inmarsat.yaml` | GEO commercial-relay-style ground set |
-| `geo-tdrs.yaml` | GEO relay/TDRS-style ground set |
-| `luna-demo.yaml` | Lunar surface demo sites |
+```yaml
+node:
+  id: leo-gateway
+  display_name: Earth LEO gateway router
+  forwarding: routed
+  ethernet:
+  - id: terr0
+  terminals:
+  - id: access_ka
+    role: access
+    terminal: nodalarc:terminals/rf/rf-ka-leo-access.yaml
+    count: 8
+  payloads: []
+```
 
-## Resolver Boundary
+A **site** is a facility with a LAN. Placing a node model into a site creates a
+SiteNode — the node *as installed here* — and that is where addresses live:
 
-All product deploy paths use the same session resolver. The browser wizard,
-YAML upload, command-line deploy, Operator, OME, Scheduler, VS-API, and
-Measurement Interface consume the same resolved runtime view. If a session
-cannot be resolved, deployment fails before pods are treated as valid runtime
+```yaml
+site:
+  id: earth-au-perth
+  lan:
+    ipv4: 172.16.6.0/24
+    ipv6: fd00:da7a:6::/64
+  nodes:
+  - id: leo-gateway
+    model: nodalarc:nodes/ground/leo-gateway.yaml
+    terminals:
+      access_ka:
+        installed_count: 3        # how many of the model's 8 mounts are installed here
+    interfaces:
+      lo0:   { ipv4: 10.255.0.7/32,  ipv6: 'fd00:da7a:ffff::7/128' }
+      terr0: { ipv4: 172.16.6.1/24,  ipv6: 'fd00:da7a:6::1/64' }
+    originated_prefixes:
+      ipv4: [ 172.16.6.0/24, 0.0.0.0/0 ]
+      ipv6: [ 'fd00:da7a:6::/64' ]
+    tags: [ leo ]
+  location:
+    lat_deg: -31.9523
+    lon_deg: 115.8613
+    alt_m: 32
+  frame:
+    body_fixed:
+      body: nodalarc:bodies/earth.yaml
+```
+
+The placement, not the model, owns the addresses. Move the same model to another
+site and it takes that site's scheme — exactly like re-addressing a real router
+when you relocate it.
+
+A SiteNode has exactly two **numbered** interfaces:
+
+- `lo0` — the node's loopback.
+- `terr0` — the site-LAN interface; its address sits inside the site's `lan`.
+
+Installed terminals become additional `termN` interfaces at runtime — one per
+installed terminal. These are WAN and point-to-point, and in the current routing
+model they are **unnumbered**: they borrow `lo0` instead of carrying their own
+address, because a ground terminal's peer satellite changes on every handover and
+a numbered interface would have to be re-addressed each time. You do not author `termN` interfaces; they come from
+the installed terminal mounts. A terminal is an interface, never a router — it
+has no loopback of its own.
+
+### Advertising prefixes
+
+A network existing does not advertise it. To inject something into the routing
+protocol, list it in a node's `originated_prefixes`:
+
+```yaml
+originated_prefixes:
+  ipv4:
+  - 172.16.6.0/24      # advertise this node's LAN
+  - 0.0.0.0/0          # advertise a default route
+  ipv6:
+  - fd00:da7a:6::/64
+```
+
+`originated_prefixes` is routing-injection intent and nothing else: list the LAN
+to advertise the LAN, list a default to advertise a default. Anything you do not
+list is not advertised. Each IP family is independent.
+
+## Deploying a session
+
+- **Browser wizard** — build and launch from the UI.
+- **Upload** — paste or upload session YAML.
+- **Command line** — `make session DEFAULT_SESSION=sessions/nodalarc/earth-leo-walker.yaml`.
+
+Every path resolves the same session through the same resolver, so a session that
+deploys from the command line behaves identically in the wizard. If a session
+cannot be resolved, deployment fails before any pods are treated as valid runtime
 state.
+
+## Shipped sessions
+
+| Session | Description |
+|---------|-------------|
+| `earth-leo-simple` | Single 36-satellite LEO ring with MBB-capable gateway sites |
+| `earth-leo-walker` | Walker-delta LEO shell |
+| `earth-leo-polar` | Polar LEO shell with high-latitude gateway sites |
+| `earth-meo-gps` | GPS-altitude MEO shell |
+| `earth-geo-inmarsat` | Representative GEO commercial-relay-style shell |
+| `earth-geo-tdrs` | Representative GEO relay/TDRS-style shell |
+| `earth-leo-heo-geo-luna-reachability` | Multi-regime LEO, HEO, GEO, lunar relay, and lunar ground reachability |
+
+The example sessions are routing-light: six declare no `routing` and fall back to
+the single-IS-IS default, while `reachability` shows the multi-domain shape —
+separate Earth and Luna IS-IS domains joined by a redistribution boundary. The
+routing model mixes protocols per domain (see Routing above); the examples simply
+do not exercise every combination.
+
+The catalog contains more reusable primitives than these sessions use. That is
+intentional: the sessions are the examples; the catalog parts are the building
+blocks.

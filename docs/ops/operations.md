@@ -14,7 +14,7 @@ one.
 ### From the Command Line
 
 ```bash
-make session DEFAULT_SESSION=configs/sessions/earth-leo-walker.yaml
+make session DEFAULT_SESSION=sessions/nodalarc/earth-leo-walker.yaml
 ```
 
 No manual teardown needed. The system switches sessions automatically.
@@ -209,7 +209,7 @@ ssh -i nodalarc-ssh-key -o StrictHostKeyChecking=no operator@$POD_IP
 | Clean K3s or freshly nuked state | `make all` |
 | Running platform, same session | `make build && make load && make upgrade` |
 | Running platform, destructive refresh | `make build && make load && make reinstall && make session` |
-| Running platform, switch session only | `make session DEFAULT_SESSION=configs/sessions/<name>.yaml` |
+| Running platform, switch session only | `make session DEFAULT_SESSION=sessions/nodalarc/<name>.yaml` |
 | Unknown or polluted NodalArc state | `make nuke && make all` |
 | Tooling broken and namespace must be removed | `make force-teardown`, then `make nuke` before redeploying |
 

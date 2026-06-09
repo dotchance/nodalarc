@@ -126,8 +126,8 @@ The resolver owns:
 
 - structural validation of `segments`, `link_rules`, routing, time, and
   ephemeris fields
-- catalog loading for constellation, satellite type, and ground-site assets
-- runtime node ID allocation from `{namespace}-{local_node_id}`
+- catalog loading for constellation, node, terminal, and site assets
+- runtime node ID allocation, derived per segment and normalized for the fabric
 - terminal inventory materialization
 - link-rule endpoint and candidate validation
 - per-segment SID allocation

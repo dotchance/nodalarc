@@ -21,28 +21,23 @@ spec:
   sessionYaml: |
     session:
       name: earth-leo-simple
-    identity:
-      mode: segment_namespaced
     segments:
-      - id: space
-        kind: constellation
-        source: configs/constellations/demo-36.yaml
-        namespace: space
-        central_body: earth
+      - id: leo
+        source: nodalarc:constellations/earth/leo/earth-leo-ring-36.yaml
       - id: ground
-        kind: ground_set
-        source: configs/ground-stations/sets/demo.yaml
-        namespace: ground
-        reference_body: earth
+        placement:
+          from_site_set: nodalarc:site-sets/earth/leo/earth-leo-starlink-pop-sites.yaml
     link_rules:
-      - id: ground-access
-        kind: access
-        endpoints:
-          - selector: {segment: ground}
-            terminal_role: ground
-          - selector: {segment: space}
-            terminal_role: ground
+      - id: leo_access
         topology: {mode: visible_candidates}
+        endpoints:
+          - select:   {all: [{segment: ground}, {tag: leo}]}
+            terminal: {all: [{role: access}, {medium: rf}]}
+            min_elevation_deg: 25
+          - select:   {segment: leo}
+            terminal: {all: [{role: access}, {medium: rf}]}
+    time:
+      step_seconds: 10
     ...
 status:
   phase: Ready       # Creating | Wiring | Ready | Error

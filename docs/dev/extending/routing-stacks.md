@@ -11,7 +11,7 @@ Adding a new routing protocol means either:
 
 Each session pod runs FRR with a configuration generated from Jinja2 templates at session creation time. The template system:
 
-1. Segment session YAML specifies `routing.protocol` and `routing.extensions`
+1. Session YAML declares `routing.domains`, each naming a `protocol` and the nodes it covers
 2. The shared resolver builds the frozen runtime session
 3. The Operator's `frr_renderer.py` resolves which template to use
 4. The template receives variables: loopback IPs, interface IPs, area assignments, SID indexes, ground prefixes, segment metadata, and terminal-derived interface facts
@@ -56,38 +56,36 @@ staticd=yes
 
 ### Step 3: Register the protocol
 
-In `services/nodalarc_operator/frr_renderer.py`, add the protocol to the template resolver so it maps `routing.protocol: yourprotocol` to your template files.
+In `services/nodalarc_operator/frr_renderer.py`, add the protocol to the template resolver so it maps a routing domain's `protocol: yourprotocol` to your template files.
 
 ### Step 4: Test
 
 ```yaml
-# configs/sessions/test-newprotocol.yaml
+# sessions/nodalarc/test-newprotocol.yaml
 session:
   name: test-newprotocol
-identity:
-  mode: segment_namespaced
 segments:
-  - id: space
-    kind: constellation
-    source: configs/constellations/demo-36.yaml
-    namespace: space
-    central_body: earth
+  - id: leo
+    source: nodalarc:constellations/earth/leo/earth-leo-ring-36.yaml
   - id: ground
-    kind: ground_set
-    source: configs/ground-stations/sets/demo.yaml
-    namespace: ground
-    reference_body: earth
+    placement:
+      from_site_set: nodalarc:site-sets/earth/leo/earth-leo-starlink-pop-sites.yaml
 link_rules:
-  - id: ground-access
-    kind: access
-    endpoints:
-      - selector: {segment: ground}
-        terminal_role: ground
-      - selector: {segment: space}
-        terminal_role: ground
+  - id: leo_access
     topology: {mode: visible_candidates}
+    endpoints:
+      - select:   {all: [{segment: ground}, {tag: leo}]}
+        terminal: {all: [{role: access}, {medium: rf}]}
+        min_elevation_deg: 25
+      - select:   {segment: leo}
+        terminal: {all: [{role: access}, {medium: rf}]}
 routing:
-  protocol: yourprotocol
+  domains:
+    - id: earth_domain
+      protocol: yourprotocol
+      selectors: [{any: [{segment: leo}, {segment: ground}]}]
+time:
+  step_seconds: 10
 ```
 
 Deploy and verify adjacencies form.

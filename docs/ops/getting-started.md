@@ -131,24 +131,25 @@ You should see adjacent satellites listed as FULL neighbors. If running IS-IS in
 
 ```bash
 # Switch to a 176-satellite IS-IS constellation
-make session DEFAULT_SESSION=configs/sessions/earth-leo-walker.yaml
+make session DEFAULT_SESSION=sessions/nodalarc/earth-leo-walker.yaml
 ```
 
 Or users can deploy sessions from the browser wizard at http://localhost:3000.
 
 Available session configs:
 
-| Session | Space Nodes | Routing | Description |
-|---------|------------:|---------|-------------|
-| `earth-leo-simple.yaml` | 36 | OSPF | Default. MBB-capable single-shell LEO starter |
-| `earth-leo-walker.yaml` | 176 | IS-IS + TE | Walker-delta LEO starter |
-| `earth-leo-polar.yaml` | 36 | IS-IS + TE | Polar LEO starter with high-latitude ground stations |
-| `earth-meo-gps.yaml` | 24 | IS-IS | GPS-like MEO starter with long-range RF gateways |
-| `earth-geo-inmarsat.yaml` | 4 | IS-IS | Representative GEO commercial-relay-style starter |
-| `earth-geo-tdrs.yaml` | 6 | IS-IS | Representative GEO relay/TDRS-style starter |
-| `earth-leo-meo-geo.yaml` | 68 | IS-IS + TE | Earth LEO/MEO/GEO multi-regime session |
-| `earth-luna-relay.yaml` | 9 | IS-IS + TE | Earth relay plus lunar relay and lunar ground access |
-| `earth-luna-gateway-site.yaml` | 69 | IS-IS + TE | Cislunar gateway-site demonstrator |
+| Session | Space Nodes | Description |
+|---------|------------:|-------------|
+| `earth-leo-simple.yaml` | 36 | Default. MBB-capable single-shell LEO starter |
+| `earth-leo-walker.yaml` | 176 | Walker-delta LEO starter |
+| `earth-leo-polar.yaml` | 36 | Polar LEO starter with high-latitude gateway sites |
+| `earth-meo-gps.yaml` | 24 | GPS-altitude MEO starter with long-range RF gateways |
+| `earth-geo-inmarsat.yaml` | 4 | Representative GEO commercial-relay-style starter |
+| `earth-geo-tdrs.yaml` | 6 | Representative GEO relay/TDRS-style starter |
+| `earth-leo-heo-geo-luna-reachability.yaml` | — | Multi-regime LEO, HEO, GEO, lunar relay, and lunar ground reachability |
+
+These examples run IS-IS (the default). OSPF is also supported, selected per
+routing domain — see [Configuration](configuration.md).
 
 ## Step 5: Teardown
 
@@ -202,7 +203,7 @@ make all
 | Prove full square-one recovery | `make nuke && make all` |
 | Existing platform, update images/chart | `make build && make load && make upgrade` |
 | Existing platform, destructive refresh | `make build && make load && make reinstall && make session` |
-| Existing platform, switch session | `make session DEFAULT_SESSION=configs/sessions/<name>.yaml` |
+| Existing platform, switch session | `make session DEFAULT_SESSION=sessions/nodalarc/<name>.yaml` |
 
 ### Build Targets
 

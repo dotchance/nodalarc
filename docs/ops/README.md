@@ -5,12 +5,13 @@ This guide is for infrastructure engineers who deploy and maintain NodalArc on K
 ## Contents
 
 1. [Getting Started](getting-started.md) - Prerequisites, installation, and first deployment
-2. [Configuration](configuration.md) - Segment session YAML, link rules, constellations, ground sites, satellite types
-3. [Multi-Node Deployment](multi-node.md) - Registry setup, pod placement, VXLAN tunnels
-4. [Scaling](scaling.md) - Resource requirements, capacity planning, performance characteristics
-5. [Operations](operations.md) - Teardown, session switching, upgrades, health monitoring
-6. [Security](security.md) - Pod hardening, SSH key lifecycle, network isolation
-7. [Troubleshooting](troubleshooting.md) - Diagnosing and fixing common deployment issues
+2. [Configuration](configuration.md) - The catalog model, sessions, link rules, sites, nodes, and terminals
+3. [Configuration Grammar](configuration-grammar.md) - Formal grammar for catalog primitives and sessions
+4. [Multi-Node Deployment](multi-node.md) - Registry setup, pod placement, VXLAN tunnels
+5. [Scaling](scaling.md) - Resource requirements, capacity planning, performance characteristics
+6. [Operations](operations.md) - Teardown, session switching, upgrades, health monitoring
+7. [Security](security.md) - Pod hardening, SSH key lifecycle, network isolation
+8. [Troubleshooting](troubleshooting.md) - Diagnosing and fixing common deployment issues
 
 ## Architecture at a Glance
 
@@ -38,7 +39,7 @@ make all
 make nuke && make all
 
 # Start a specific session
-make session DEFAULT_SESSION=configs/sessions/earth-leo-walker.yaml
+make session DEFAULT_SESSION=sessions/nodalarc/earth-leo-walker.yaml
 
 # Update an existing platform without teardown
 make build && make load && make upgrade

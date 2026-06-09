@@ -29,7 +29,8 @@ clusters. This is where the lifecycle lives: install, upgrade, session switch,
 teardown, nuke, scale, and troubleshoot.
 
 - [Getting Started](ops/getting-started.md) - prerequisites, installation, first deployment
-- [Configuration](ops/configuration.md) - segment session YAML, link rules, constellations, ground sites, and satellite types
+- [Configuration](ops/configuration.md) - the catalog model, sessions, link rules, sites, nodes, and terminals
+- [Configuration Grammar](ops/configuration-grammar.md) - formal grammar for catalog primitives and sessions
 - [Multi-Node Deployment](ops/multi-node.md) - registry setup, pod placement, VXLAN tunnels
 - [Scaling](ops/scaling.md) - resource requirements, capacity planning, performance
 - [Operations](ops/operations.md) - teardown, session switching, upgrades, health monitoring

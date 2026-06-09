@@ -1,0 +1,14 @@
+node:
+  id: leo-gateway
+  display_name: Earth LEO gateway router
+  forwarding: routed
+  ethernet:
+  - id: terr0
+  terminals:
+  - id: access_ka
+    role: access
+    terminal: nodalarc:terminals/rf/rf-ka-leo-access.yaml
+    count: 8
+  payloads: []
+  reference: https://fcc.report/IBFS/SAT-LOA-20200526-00055/2378671.pdf
+  notes: Ground gateway model for LEO access experiments. Site files choose installed_count per location.

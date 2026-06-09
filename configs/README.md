@@ -1,48 +1,52 @@
-# Configuration
+# Runtime Support Configuration
 
-Runtime configuration files mounted into containers or read at deploy time.
+This directory contains platform support files that are mounted into containers
+or read by deploy-time tooling.
+
+Reusable NodalArc model data now lives under `catalog/nodalarc/`, and assembled
+session examples live under `sessions/nodalarc/`.
 
 ## Directories
 
 | Directory | Purpose |
 |-----------|---------|
-| `constellations/` | Full constellation definitions — orbital parameters, plane layout, satellite type. Referenced by session YAMLs. |
-| `presets/constellations/` | Wizard metadata — display name, description, satellite count, plus reference to the actual constellation YAML and default ground stations. Used by the session creation wizard in the VF. |
-| `ground-stations/stations/` | Individual ground station definitions (lat, lon, elevation). |
-| `ground-stations/sets/` | Named sets of ground stations (e.g., `global-8.yaml` = 8 stations worldwide). |
-| `satellite-types/` | Satellite hardware definitions — ISL terminal count, bandwidth, tracking rate. |
-| `scenarios/` | Failure injection scenarios (link failure, satellite loss, compound). |
-| `sessions/` | Curated segment-session YAMLs for manual deployment (e.g., `earth-leo-simple.yaml`). |
-| `templates/frr/` | Jinja2 templates for FRR daemon configuration files. |
-| `platform.yaml` | Platform-level settings (NATS URL, service ports, system tuning). |
+| `ephemerides/` | Local ephemeris kernels used by multi-body sessions. |
+| `templates/frr/` | Jinja2 templates for generated FRR daemon configuration files. |
+| `platform.yaml` | Platform-level settings such as NATS URL, service ports, and system tuning. |
 
-## Constellations vs Presets
+The old constellation, satellite-type, ground-station, preset, scenario, and
+session examples were removed during the catalog grammar reset. New examples
+must be authored against the catalog/session grammar:
 
-- `constellations/starlink-176.yaml` — the orbital mechanics definition (altitude, inclination, planes, phase offset)
-- `presets/constellations/starlink-176.yaml` — wizard entry pointing to the above, plus display metadata
-
-Session YAMLs assemble reusable building blocks through `segments` and `link_rules`:
 ```yaml
 segments:
-  - id: space
-    kind: constellation
-    source: configs/constellations/starlink-176.yaml
-    namespace: space
-    central_body: earth
-  - id: ground
-    kind: ground_set
-    source: configs/ground-stations/sets/starlink-176.yaml
-    namespace: ground
-    reference_body: earth
-link_rules:
-  - id: ground-access
-    kind: access
-    endpoints:
-      - selector: {segment: ground}
-        terminal_role: ground
-      - selector: {segment: space}
-        terminal_role: ground
-    topology: {mode: visible_candidates}
-```
+  - id: leo
+    source: nodalarc:constellations/earth/leo/earth-leo-simple-36.yaml
 
-The wizard reads presets to populate the dropdown, then generates the same segment YAML accepted by upload/deploy.
+	  - id: ground
+	    placement:
+	      from_site_set: nodalarc:site-sets/earth/leo/starlink-demo-gateways.yaml
+	    apply:
+	      originated_prefixes:
+	        ipv4: [0.0.0.0/0]
+
+	link_rules:
+	  - id: leo_access
+	    topology: {mode: visible_candidates}
+	    endpoints:
+	      - select:
+	          all:
+	            - segment: ground
+	            - tag: leo_gs
+	        terminal:
+	          all:
+	            - role: access
+	            - medium: rf
+	        min_elevation_deg: 25
+	      - select:
+	          segment: leo
+	        terminal:
+	          all:
+	            - role: access
+	            - medium: rf
+```

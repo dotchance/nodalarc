@@ -1,0 +1,23 @@
+terminal:
+  id: rf-s-tdrs-relay-sa
+  display_name: TDRS relay S-band single-access terminal
+  medium: rf
+  signal:
+    band: s
+    frequency_hz: 2200000000
+  bandwidth_mbps:
+    transmit: 14
+    receive: 23.6
+  tracking_capacity: 1
+  max_range_km: 45000
+  limits:
+    azimuth_deg:
+      min: -22
+      max: 22
+    elevation_deg:
+      min: -28
+      max: 28
+    max_tracking_rate_deg_s: 0.5
+  reference: https://www.eoportal.org/satellite-missions/tdrs
+  notes: S-band single-access dish, 14 Mbps forward and 23.6 Mbps return. Field of regard about 22 by 28 degrees per eoPortal.
+    Frequency is mid-band of the 2.0 to 2.3 GHz S band; slew estimated.

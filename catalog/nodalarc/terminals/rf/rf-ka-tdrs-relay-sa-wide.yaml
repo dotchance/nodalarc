@@ -1,0 +1,24 @@
+terminal:
+  id: rf-ka-tdrs-relay-sa-wide
+  display_name: TDRS relay Ka-band wide single-access terminal
+  medium: rf
+  signal:
+    band: ka
+    frequency_hz: 26000000000
+  bandwidth_mbps:
+    transmit: 50
+    receive: 1200
+  tracking_capacity: 1
+  max_range_km: 45000
+  limits:
+    azimuth_deg:
+      min: -22
+      max: 22
+    elevation_deg:
+      min: -28
+      max: 28
+    max_tracking_rate_deg_s: 0.5
+  reference: https://www.eoportal.org/satellite-missions/tdrs
+  notes: Ka single-access 650 MHz wideband return channel, 1200 Mbps return and 50 Mbps forward. Field of regard about 22
+    degrees E-W and 28 degrees N-S per eoPortal. Frequency is a representative center of the 22.5 to 27.5 GHz SA band. Slew
+    rate is an estimate.

@@ -1,0 +1,75 @@
+session:
+  name: earth-meo-gps
+  display_name: Earth GPS-altitude MEO
+  description: GPS-altitude 24-node MEO shell with MEO gateway sites.
+segments:
+- id: meo
+  source: nodalarc:constellations/earth/meo/earth-meo-gps-24.yaml
+- id: ground
+  placement:
+    from_site_set: nodalarc:site-sets/earth/meo/earth-meo-gateway-sites.yaml
+  apply:
+    scheduling:
+      selection_policy:
+        longest_remaining_pass:
+          lookahead_horizon_ticks: 720
+      handover_policy:
+        hard_release: {}
+      handover_mode: bbm
+      mbb_overlap_ticks: 0
+      mbb_reserve: 0
+      handover_concurrency: one_at_a_time
+      ranking_order:
+      - service_priority
+      - selection_score
+      - satellite_ground_terminal_capacity
+      - lex_pair
+      mbb_preemption: 'off'
+      successor_abort_policy: hard_release
+      cross_tenant_displacement: 'off'
+      bbm_acquire_timeout_ticks: 1
+link_rules:
+- id: meo_access
+  topology:
+    mode: visible_candidates
+  endpoints:
+  - select:
+      all:
+      - segment: ground
+      - tag: meo
+    terminal:
+      all:
+      - role: access
+      - medium: rf
+    min_elevation_deg: 10
+  - select:
+      segment: meo
+    terminal:
+      all:
+      - role: access
+      - medium: rf
+- id: meo_isl
+  topology:
+    mode: nearest_n
+    n: 2
+  endpoints:
+  - select:
+      segment: meo
+    terminal:
+      all:
+      - role: isl
+      - medium: optical
+  - select:
+      segment: meo
+    terminal:
+      all:
+      - role: isl
+      - medium: optical
+simulation:
+  candidate_limits:
+    max_pairs_per_rule: 500
+    max_pairs_per_tick: 2000
+time:
+  start_time: '2026-06-08T00:00:00Z'
+  step_seconds: 10
+  compression: 1

@@ -1,9 +1,0 @@
-
-scenario:
-  name: steady-state
-  description: "Baseline observation window with all links healthy."
-  steps:
-    - action: wait
-      duration_s: 5700
-    - action: measure
-      duration_s: 60

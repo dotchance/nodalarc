@@ -1,0 +1,7 @@
+site_set:
+  id: earth-leo-polar-gateway-sites
+  display_name: Polar LEO gateway sites
+  sites:
+  - nodalarc:sites/earth/de/earth-de-frankfurt.yaml
+  - nodalarc:sites/earth/sj/earth-sj-svalbard.yaml
+  notes: Gateway sites with LEO access terminals sized for the 780 km polar shell at the declared access mask.

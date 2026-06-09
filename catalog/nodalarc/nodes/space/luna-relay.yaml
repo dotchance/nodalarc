@@ -1,0 +1,21 @@
+node:
+  id: luna-relay
+  display_name: Luna orbiter relay node
+  forwarding: routed
+  ethernet: []
+  terminals:
+  - id: access_s
+    role: access
+    terminal: nodalarc:terminals/rf/rf-s-luna-access.yaml
+    count: 1
+  - id: isl_optical
+    role: isl
+    terminal: nodalarc:terminals/optical/optical-low-orbit-isl.yaml
+    count: 2
+  - id: relay_optical
+    role: crosslink
+    terminal: nodalarc:terminals/optical/optical-cislunar-crosslink.yaml
+    count: 2
+  payloads: []
+  reference: https://www.nasa.gov/directorates/somd/space-communications-navigation-program/lunanet/
+  notes: Lunar relay orbiter with local S-band access and cislunar optical crosslink.

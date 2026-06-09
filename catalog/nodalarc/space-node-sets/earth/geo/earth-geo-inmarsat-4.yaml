@@ -1,0 +1,71 @@
+space_node_set:
+  id: earth-geo-inmarsat-4
+  nodes:
+  - id: inmarsat-098w
+    node: nodalarc:nodes/space/geo-relay.yaml
+    orbit:
+      id: earth-geo-inmarsat-098w
+      central_body: nodalarc:bodies/earth.yaml
+      epoch: '2026-06-08T00:00:00Z'
+      shape:
+        altitude_km: 35786
+      orientation:
+        inclination_deg: 0.0
+        raan_deg: 0.0
+        argument_of_perigee_deg: 0.0
+      phase:
+        mean_anomaly_deg: 262.0
+      propagator: j2_mean_elements
+      reference: https://www.esa.int/Enabling_Support/Space_Operations/Types_of_orbits
+      notes: GEO slot orbit. Mean anomaly is used as the first-pass longitude slot proxy in the grammar catalog.
+  - id: inmarsat-054w
+    node: nodalarc:nodes/space/geo-relay.yaml
+    orbit:
+      id: earth-geo-inmarsat-054w
+      central_body: nodalarc:bodies/earth.yaml
+      epoch: '2026-06-08T00:00:00Z'
+      shape:
+        altitude_km: 35786
+      orientation:
+        inclination_deg: 0.0
+        raan_deg: 0.0
+        argument_of_perigee_deg: 0.0
+      phase:
+        mean_anomaly_deg: 306.0
+      propagator: j2_mean_elements
+      reference: https://www.esa.int/Enabling_Support/Space_Operations/Types_of_orbits
+      notes: GEO slot orbit. Mean anomaly is used as the first-pass longitude slot proxy in the grammar catalog.
+  - id: inmarsat-025e
+    node: nodalarc:nodes/space/geo-relay.yaml
+    orbit:
+      id: earth-geo-inmarsat-025e
+      central_body: nodalarc:bodies/earth.yaml
+      epoch: '2026-06-08T00:00:00Z'
+      shape:
+        altitude_km: 35786
+      orientation:
+        inclination_deg: 0.0
+        raan_deg: 0.0
+        argument_of_perigee_deg: 0.0
+      phase:
+        mean_anomaly_deg: 25.0
+      propagator: j2_mean_elements
+      reference: https://www.esa.int/Enabling_Support/Space_Operations/Types_of_orbits
+      notes: GEO slot orbit. Mean anomaly is used as the first-pass longitude slot proxy in the grammar catalog.
+  - id: inmarsat-143e
+    node: nodalarc:nodes/space/geo-relay.yaml
+    orbit:
+      id: earth-geo-inmarsat-143e
+      central_body: nodalarc:bodies/earth.yaml
+      epoch: '2026-06-08T00:00:00Z'
+      shape:
+        altitude_km: 35786
+      orientation:
+        inclination_deg: 0.0
+        raan_deg: 0.0
+        argument_of_perigee_deg: 0.0
+      phase:
+        mean_anomaly_deg: 143.5
+      propagator: j2_mean_elements
+      reference: https://www.esa.int/Enabling_Support/Space_Operations/Types_of_orbits
+      notes: GEO slot orbit. Mean anomaly is used as the first-pass longitude slot proxy in the grammar catalog.

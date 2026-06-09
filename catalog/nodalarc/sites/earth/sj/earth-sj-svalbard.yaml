@@ -1,0 +1,89 @@
+site:
+  id: earth-sj-svalbard
+  display_name: Svalbard gateway (HEO + LEO)
+  verified:
+    source: wikipedia
+    notes: NodalArc HEO gateway demo site using the SvalSat plateau location and explicit emulation addressing.
+  lan:
+    ipv4: 172.16.79.0/24
+    ipv6: fd00:da7a:4f::/64
+  nodes:
+  - id: heo-gateway
+    model: nodalarc:nodes/ground/heo-gateway.yaml
+    payloads: {}
+    terminals:
+      access_ka:
+        installed_count: 2
+        capabilities:
+          bandwidth_mbps:
+            transmit: 500.0
+            receive: 500.0
+          tracking_capacity: 1
+          max_range_km: 48000.0
+          limits:
+            azimuth_deg:
+              min: -180
+              max: 180
+            elevation_deg:
+              min: 15
+              max: 90
+            max_tracking_rate_deg_s: 0.8
+          boresight:
+            mode: local_vertical
+    tags:
+    - heo
+    interfaces:
+      lo0:
+        ipv4: 10.255.0.83/32
+        ipv6: fd00:da7a:ffff::53/128
+      terr0:
+        ipv4: 172.16.79.1/24
+        ipv6: fd00:da7a:4f::1/64
+    originated_prefixes:
+      ipv4: &id001
+      - 172.16.79.0/24
+      - 0.0.0.0/0
+      ipv6:
+      - fd00:da7a:4f::/64
+  - id: leo-gateway
+    model: nodalarc:nodes/ground/leo-gateway.yaml
+    terminals:
+      access_ka:
+        installed_count: 2
+        capabilities:
+          bandwidth_mbps:
+            transmit: 1000.0
+            receive: 1000.0
+          tracking_capacity: 1
+          max_range_km: 2500.0
+          limits:
+            azimuth_deg:
+              min: -180
+              max: 180
+            elevation_deg:
+              min: 25.0
+              max: 90
+            max_tracking_rate_deg_s: 1.5
+          boresight:
+            mode: local_vertical
+    payloads: {}
+    tags:
+    - leo
+    interfaces:
+      lo0:
+        ipv4: 10.255.0.84/32
+        ipv6: fd00:da7a:ffff::54/128
+      terr0:
+        ipv4: 172.16.79.2/24
+        ipv6: fd00:da7a:4f::2/64
+    originated_prefixes:
+      ipv4: *id001
+      ipv6:
+      - fd00:da7a:4f::/64
+  frame:
+    body_fixed:
+      body: nodalarc:bodies/earth.yaml
+  location:
+    lat_deg: 78.23
+    lon_deg: 15.41
+    alt_m: 450

@@ -1,0 +1,22 @@
+terminal:
+  id: rf-ka-geo-access
+  display_name: Ka-band GEO access terminal
+  medium: rf
+  signal:
+    band: ka
+    frequency_hz: 30000000000
+  bandwidth_mbps:
+    transmit: 750
+    receive: 750
+  tracking_capacity: 1
+  max_range_km: 42000
+  limits:
+    azimuth_deg:
+      min: -180
+      max: 180
+    elevation_deg:
+      min: -90
+      max: 90
+    max_tracking_rate_deg_s: 0.1
+  reference: https://www.itu.int/en/ITU-R/space/Pages/default.aspx
+  notes: Engineering model for GEO relay/gateway access experiments.

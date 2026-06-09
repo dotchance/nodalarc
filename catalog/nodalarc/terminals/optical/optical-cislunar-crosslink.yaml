@@ -1,0 +1,22 @@
+terminal:
+  id: optical-cislunar-crosslink
+  display_name: Optical cislunar crosslink terminal
+  medium: optical
+  signal:
+    wavelength_nm: 1550
+  bandwidth_mbps:
+    transmit: 1000
+    receive: 1000
+  tracking_capacity: 1
+  max_range_km: 450000
+  limits:
+    azimuth_deg:
+      min: -180
+      max: 180
+    elevation_deg:
+      min: -90
+      max: 90
+    max_tracking_rate_deg_s: 0.25
+  reference: https://www.nasa.gov/directorates/somd/space-communications-navigation-program/lunanet-interoperability-specification/
+  notes: Engineering model for Earth-Luna optical relay experiments. Atmospheric availability is external link-environment
+    input.

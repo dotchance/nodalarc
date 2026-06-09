@@ -1,0 +1,9 @@
+site_set:
+  id: earth-leo-starlink-gateway-sites
+  display_name: LEO A gateway sites
+  sites:
+  - nodalarc:sites/earth/us/co/earth-us-co-denver.yaml
+  - nodalarc:sites/earth/us/ak/earth-us-ak-fairbanks.yaml
+  - nodalarc:sites/earth/cl/earth-cl-santiago.yaml
+  - nodalarc:sites/earth/au/earth-au-perth.yaml
+  notes: Four LEO A sites. Denver is the only site shared with LEO B.

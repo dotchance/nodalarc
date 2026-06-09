@@ -1,7 +1,0 @@
-name: geo-ring-8
-description: "1 plane x 8 satellites, 35,786 km / 0 deg GEO. Geostationary equatorial ring: ~24 h period, near-stationary over the equator, the outermost shell."
-satellite_count: 8
-constellation: configs/constellations/geo-ring-8.yaml
-ground_stations: configs/ground-stations/sets/global.yaml
-time:
-  step_seconds: 1

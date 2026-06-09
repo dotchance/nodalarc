@@ -1,0 +1,23 @@
+terminal:
+  id: rf-ka-nsn-space-direct
+  display_name: NASA Near Space Network spacecraft Ka-band direct terminal
+  medium: rf
+  signal:
+    band: ka
+    frequency_hz: 26000000000
+  bandwidth_mbps:
+    transmit: 3500
+    receive: 5
+  tracking_capacity: 1
+  max_range_km: 2500
+  limits:
+    azimuth_deg:
+      min: -180
+      max: 180
+    elevation_deg:
+      min: -60
+      max: 60
+    max_tracking_rate_deg_s: 3.0
+  reference: https://explorers.larc.nasa.gov/2023APPROBE/pdf_files/Prog05e.%20NSN%20Brochure.pdf
+  notes: Transmit 3.5 Gbps is the NSN published Ka direct-to-Earth return max (NISAR class, LEO). Receive models the S/X-band
+    about 5 Mbps command link. max_range is the LEO operating point; 3.5 Gbps Ka does not close at GEO or lunar range.

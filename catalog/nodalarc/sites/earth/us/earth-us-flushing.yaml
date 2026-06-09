@@ -1,0 +1,56 @@
+site:
+  id: earth-us-flushing
+  display_name: Flushing Gateway Site
+  verified:
+    source: FCC IBFS
+    filing: SES-LIC-20250529-00801
+    confidence: filing
+    notes: 'Legacy site fact: antennas=1. Legacy site fact: antenna_diameter_m=1.85. Legacy site fact: band=Ka+E. Legacy operational mask was 25 degrees; operational masks belong on link-rule endpoints
+      in the current grammar.'
+  lan:
+    ipv4: 172.16.110.0/24
+    ipv6: fd00:da7a:6e::/64
+  nodes:
+  - id: leo-gateway
+    model: nodalarc:nodes/ground/starlink-gateway.yaml
+    terminals:
+      access_ka:
+        installed_count: 1
+        capabilities:
+          bandwidth_mbps:
+            transmit: 5000
+            receive: 5000
+          tracking_capacity: 1
+          max_range_km: 1250
+          limits:
+            azimuth_deg:
+              min: -180
+              max: 180
+            elevation_deg:
+              min: 30.0
+              max: 90
+            max_tracking_rate_deg_s: 1.5
+          boresight:
+            mode: local_vertical
+    payloads: {}
+    interfaces:
+      lo0:
+        ipv4: 10.255.0.116/32
+        ipv6: fd00:da7a:ffff::74/128
+      terr0:
+        ipv4: 172.16.110.1/24
+        ipv6: fd00:da7a:6e::1/64
+    tags:
+    - leo
+    originated_prefixes:
+      ipv4:
+      - 172.16.110.0/24
+      ipv6:
+      - fd00:da7a:6e::/64
+  frame:
+    body_fixed:
+      body: nodalarc:bodies/earth.yaml
+  location:
+    lat_deg: 40.772
+    lon_deg: -73.834778
+    alt_m: 10

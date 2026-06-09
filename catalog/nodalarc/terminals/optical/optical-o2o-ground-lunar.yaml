@@ -1,0 +1,22 @@
+terminal:
+  id: optical-o2o-ground-lunar
+  display_name: Orion O2O-class lunar optical ground terminal
+  medium: optical
+  signal:
+    wavelength_nm: 1550
+  bandwidth_mbps:
+    transmit: 20
+    receive: 260
+  tracking_capacity: 1
+  max_range_km: 450000
+  limits:
+    azimuth_deg:
+      min: -180
+      max: 180
+    elevation_deg:
+      min: 0
+      max: 90
+    max_tracking_rate_deg_s: 0.2
+  reference: https://www.nasa.gov/technology/space-comms/o2o/
+  notes: NASA O2O (Orion Artemis II Optical) ground terminal (White Sands and Table Mountain); 1550 nm, 20 Mbps forward uplink
+    and 260 Mbps return downlink at lunar distance. Steering and slew are estimates.

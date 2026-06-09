@@ -1,7 +1,0 @@
-name: starlink-early-44
-description: "4 planes x 11 satellites, 550 km inclined orbit. Stable ISLs, no polar seam."
-satellite_count: 44
-constellation: configs/constellations/starlink-early-44.yaml
-ground_stations: configs/ground-stations/sets/global.yaml
-time:
-  step_seconds: 1

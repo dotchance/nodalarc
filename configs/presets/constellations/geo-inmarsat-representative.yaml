@@ -1,7 +1,0 @@
-name: geo-inmarsat-representative
-description: "4 representative GEO commercial mobile-satellite slots. Long-range RF access with near-stationary geometry."
-satellite_count: 4
-constellation: configs/constellations/geo-inmarsat-representative.yaml
-ground_stations: configs/ground-stations/sets/geo-inmarsat.yaml
-time:
-  step_seconds: 10

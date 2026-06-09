@@ -1,0 +1,55 @@
+site:
+  id: earth-fr-bordeaux
+  display_name: Bordeaux Gateway Site
+  verified:
+    source: none
+    confidence: geocoded
+    notes: Named-facility coordinate estimate. Exact facility coordinates are not from regulatory filing. Legacy operational mask was 25 degrees; operational masks belong on link-rule endpoints in the current
+      grammar.
+  lan:
+    ipv4: 172.16.30.0/24
+    ipv6: fd00:da7a:1e::/64
+  nodes:
+  - id: leo-gateway
+    model: nodalarc:nodes/ground/starlink-gateway.yaml
+    terminals:
+      access_ka:
+        installed_count: 1
+        capabilities:
+          bandwidth_mbps:
+            transmit: 1000.0
+            receive: 1000.0
+          tracking_capacity: 1
+          max_range_km: 1250
+          limits:
+            azimuth_deg:
+              min: -180
+              max: 180
+            elevation_deg:
+              min: 30.0
+              max: 90
+            max_tracking_rate_deg_s: 1.5
+          boresight:
+            mode: local_vertical
+    payloads: {}
+    interfaces:
+      lo0:
+        ipv4: 10.255.0.33/32
+        ipv6: fd00:da7a:ffff::21/128
+      terr0:
+        ipv4: 172.16.30.1/24
+        ipv6: fd00:da7a:1e::1/64
+    tags:
+    - leo
+    originated_prefixes:
+      ipv4:
+      - 172.16.30.0/24
+      ipv6:
+      - fd00:da7a:1e::/64
+  frame:
+    body_fixed:
+      body: nodalarc:bodies/earth.yaml
+  location:
+    lat_deg: 44.84
+    lon_deg: -0.58
+    alt_m: 20

@@ -1,0 +1,56 @@
+site:
+  id: earth-us-butte
+  display_name: Butte Gateway Site
+  verified:
+    source: FCC IBFS
+    filing: SES-LIC-20200616-00648
+    confidence: filing
+    notes: 'Legacy site fact: antennas=8. Legacy site fact: antenna_diameter_m=1.52. Legacy site fact: band=Ka. Legacy operational mask was 25 degrees; operational masks belong on link-rule endpoints in
+      the current grammar.'
+  lan:
+    ipv4: 172.16.93.0/24
+    ipv6: fd00:da7a:5d::/64
+  nodes:
+  - id: leo-gateway
+    model: nodalarc:nodes/ground/starlink-gateway.yaml
+    terminals:
+      access_ka:
+        installed_count: 8
+        capabilities:
+          bandwidth_mbps:
+            transmit: 5000
+            receive: 5000
+          tracking_capacity: 1
+          max_range_km: 1250
+          limits:
+            azimuth_deg:
+              min: -180
+              max: 180
+            elevation_deg:
+              min: 30.0
+              max: 90
+            max_tracking_rate_deg_s: 1.5
+          boresight:
+            mode: local_vertical
+    payloads: {}
+    interfaces:
+      lo0:
+        ipv4: 10.255.0.98/32
+        ipv6: fd00:da7a:ffff::62/128
+      terr0:
+        ipv4: 172.16.93.1/24
+        ipv6: fd00:da7a:5d::1/64
+    tags:
+    - leo
+    originated_prefixes:
+      ipv4:
+      - 172.16.93.0/24
+      ipv6:
+      - fd00:da7a:5d::/64
+  frame:
+    body_fixed:
+      body: nodalarc:bodies/earth.yaml
+  location:
+    lat_deg: 45.924056
+    lon_deg: -112.513194
+    alt_m: 1700

@@ -1,0 +1,8 @@
+site_set:
+  id: earth-heo-gateway-sites
+  display_name: HEO gateway sites
+  sites:
+  - nodalarc:sites/earth/us/nm/earth-us-nm-white-sands.yaml
+  - nodalarc:sites/earth/sj/earth-sj-svalbard.yaml
+  - nodalarc:sites/earth/au/earth-au-canberra.yaml
+  notes: Three HEO gateway sites for Molniya-style demos.

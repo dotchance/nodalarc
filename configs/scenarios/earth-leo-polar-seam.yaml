@@ -1,9 +1,0 @@
-
-scenario:
-  name: earth-leo-polar-seam
-  description: "Observe polar-seam ISL dropout and routing behavior in the polar LEO demo."
-  steps:
-    - action: wait
-      duration_s: 5700
-    - action: measure
-      duration_s: 60

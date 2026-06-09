@@ -1,0 +1,9 @@
+body:
+  id: earth
+  display_name: Earth
+  gravitational_parameter_km3_s2: 398600.4418
+  mean_radius_km: 6371.0088
+  equatorial_radius_km: 6378.137
+  polar_radius_km: 6356.752
+  reference: https://ssd.jpl.nasa.gov/astro_par.html
+  notes: WGS84 mean, equatorial, and polar radii with the standard gravitational parameter.

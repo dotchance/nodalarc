@@ -1,0 +1,9 @@
+body:
+  id: luna
+  display_name: Luna
+  gravitational_parameter_km3_s2: 4902.800066
+  mean_radius_km: 1737.4
+  equatorial_radius_km: 1738.1
+  polar_radius_km: 1736.0
+  reference: https://nssdc.gsfc.nasa.gov/planetary/factsheet/moonfact.html
+  notes: 'NASA NSSDCA values: equatorial radius 1738.1 km, polar radius 1736.0 km, volumetric mean radius 1737.4 km.'

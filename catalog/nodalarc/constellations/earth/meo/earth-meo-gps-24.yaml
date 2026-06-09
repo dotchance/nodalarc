@@ -1,0 +1,16 @@
+constellation:
+  id: earth-meo-gps-24
+  display_name: Earth GPS-altitude MEO 24-satellite shell
+  node: nodalarc:nodes/space/meo-relay.yaml
+  orbit: nodalarc:orbits/earth/meo/earth-meo-gps.yaml
+  planes:
+    count: 6
+    raan_spacing_deg: 60
+  slots_per_plane: 4
+  phasing:
+    mode: walker_delta
+    phase_offset_deg: 15.0
+  node_tags:
+  - tag: all
+  reference: https://www.gps.gov/systems/gps/space/
+  notes: GPS-altitude MEO shell for medium-orbit network experiments.

@@ -1,0 +1,15 @@
+orbit:
+  id: luna-llo-polar
+  central_body: nodalarc:bodies/luna.yaml
+  epoch: '2026-06-08T00:00:00Z'
+  shape:
+    altitude_km: 100
+  orientation:
+    inclination_deg: 90.0
+    raan_deg: 0.0
+    argument_of_perigee_deg: 0.0
+  phase:
+    mean_anomaly_deg: 0.0
+  propagator: two_body
+  reference: https://ssd.jpl.nasa.gov/astro_par.html
+  notes: Low lunar polar orbit atom for first-pass lunar relay experiments.

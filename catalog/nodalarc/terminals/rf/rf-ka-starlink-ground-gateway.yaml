@@ -1,0 +1,24 @@
+terminal:
+  id: rf-ka-starlink-ground-gateway
+  display_name: Starlink ground Ka-band gateway terminal
+  medium: rf
+  signal:
+    band: ka
+    frequency_hz: 30000000000
+  bandwidth_mbps:
+    transmit: 5000
+    receive: 5000
+  tracking_capacity: 1
+  max_range_km: 1250
+  limits:
+    azimuth_deg:
+      min: -180
+      max: 180
+    elevation_deg:
+      min: 0
+      max: 90
+    max_tracking_rate_deg_s: 3.0
+  reference: https://fcc.report/IBFS/SAT-LOA-20200526-00055/2378671.pdf
+  notes: Per-antenna Ka gateway link is about 5 Gbps; a bonded gateway is about 20 Gbps across 4 antennas (Speedcast).
+    Starlink gateway filings use about 27.5-30.0 GHz uplink and 17.8-20.2 GHz downlink. Steering envelope is an
+    engineering estimate.

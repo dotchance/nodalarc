@@ -1,7 +1,0 @@
-name: meo-gps-24
-description: "6 planes x 4 satellites, 20,200 km / 55 deg MEO (GPS-like). Medium-orbit regime: ~12 h period, large footprints, slow ground-relative motion."
-satellite_count: 24
-constellation: configs/constellations/meo-gps-24.yaml
-ground_stations: configs/ground-stations/sets/global.yaml
-time:
-  step_seconds: 1

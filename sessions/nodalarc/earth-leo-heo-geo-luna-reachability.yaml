@@ -1,0 +1,468 @@
+session:
+  name: earth-leo-heo-geo-luna-reachability
+  display_name: Earth LEO/HEO/GEO to Luna reachability
+  description: Two LEO constellations, HEO relay, GEO relay, and lunar relay/surface segments for grammar-level reachability testing.
+segments:
+- id: leo_a
+  source: nodalarc:constellations/earth/leo/earth-leo-ring-36.yaml
+- id: leo_b
+  source: nodalarc:constellations/earth/leo/earth-leo-polar-36.yaml
+- id: heo_relay
+  source: nodalarc:constellations/earth/heo/earth-heo-molniya-3.yaml
+- id: geo_relay
+  source: nodalarc:constellations/earth/geo/earth-geo-ring-8.yaml
+- id: luna_llo
+  source: nodalarc:constellations/luna/llo/luna-polar-2.yaml
+- id: leo_a_ground
+  placement:
+    from_site_set: nodalarc:site-sets/earth/leo/earth-leo-starlink-gateway-sites.yaml
+  apply:
+    scheduling:
+      selection_policy:
+        highest_elevation: {}
+      handover_policy:
+        hysteresis:
+          discount_factor: 1.1
+          mask_fade_range_deg: 3.0
+      handover_mode: mbb
+      mbb_overlap_ticks: 3
+      mbb_reserve: 1
+      handover_concurrency: one_at_a_time
+      ranking_order:
+      - service_priority
+      - selection_score
+      - satellite_ground_terminal_capacity
+      - lex_pair
+      mbb_preemption: 'off'
+      successor_abort_policy: hard_release
+      cross_tenant_displacement: 'off'
+      bbm_acquire_timeout_ticks: 1
+    originated_prefixes:
+      ipv4:
+      - 0.0.0.0/0
+- id: leo_b_ground
+  placement:
+    from_site_set: nodalarc:site-sets/earth/leo/earth-leo-oneweb-gateway-sites.yaml
+  apply:
+    scheduling:
+      selection_policy:
+        highest_elevation: {}
+      handover_policy:
+        hysteresis:
+          discount_factor: 1.1
+          mask_fade_range_deg: 3.0
+      handover_mode: mbb
+      mbb_overlap_ticks: 3
+      mbb_reserve: 1
+      handover_concurrency: one_at_a_time
+      ranking_order:
+      - service_priority
+      - selection_score
+      - satellite_ground_terminal_capacity
+      - lex_pair
+      mbb_preemption: 'off'
+      successor_abort_policy: hard_release
+      cross_tenant_displacement: 'off'
+      bbm_acquire_timeout_ticks: 1
+    originated_prefixes:
+      ipv4:
+      - 0.0.0.0/0
+- id: heo_ground
+  placement:
+    from_site_set: nodalarc:site-sets/earth/heo/earth-heo-gateway-sites.yaml
+  apply:
+    scheduling:
+      selection_policy:
+        longest_remaining_pass:
+          lookahead_horizon_ticks: 720
+      handover_policy:
+        hard_release: {}
+      handover_mode: bbm
+      mbb_overlap_ticks: 0
+      mbb_reserve: 0
+      handover_concurrency: one_at_a_time
+      ranking_order:
+      - service_priority
+      - selection_score
+      - satellite_ground_terminal_capacity
+      - lex_pair
+      mbb_preemption: 'off'
+      successor_abort_policy: hard_release
+      cross_tenant_displacement: 'off'
+      bbm_acquire_timeout_ticks: 1
+- id: geo_ground
+  placement:
+    from_site_set: nodalarc:site-sets/earth/geo/earth-geo-gateway-sites.yaml
+  apply:
+    scheduling:
+      selection_policy:
+        longest_remaining_pass:
+          lookahead_horizon_ticks: 720
+      handover_policy:
+        hard_release: {}
+      handover_mode: bbm
+      mbb_overlap_ticks: 0
+      mbb_reserve: 0
+      handover_concurrency: one_at_a_time
+      ranking_order:
+      - service_priority
+      - selection_score
+      - satellite_ground_terminal_capacity
+      - lex_pair
+      mbb_preemption: 'off'
+      successor_abort_policy: hard_release
+      cross_tenant_displacement: 'off'
+      bbm_acquire_timeout_ticks: 1
+- id: luna_ground
+  placement:
+    from_site_set: nodalarc:site-sets/luna/luna-surface-sites.yaml
+  apply:
+    scheduling:
+      selection_policy:
+        highest_elevation: {}
+      handover_policy:
+        hysteresis:
+          discount_factor: 1.1
+          mask_fade_range_deg: 3.0
+      handover_mode: mbb
+      mbb_overlap_ticks: 3
+      mbb_reserve: 0
+      handover_concurrency: one_at_a_time
+      ranking_order:
+      - service_priority
+      - selection_score
+      - satellite_ground_terminal_capacity
+      - lex_pair
+      mbb_preemption: 'off'
+      successor_abort_policy: hard_release
+      cross_tenant_displacement: 'off'
+      bbm_acquire_timeout_ticks: 1
+link_rules:
+- id: leo_a_access
+  topology:
+    mode: visible_candidates
+  endpoints:
+  - select:
+      all:
+      - segment: leo_a_ground
+      - tag: leo
+    terminal:
+      all:
+      - role: access
+      - medium: rf
+    min_elevation_deg: 25
+  - select:
+      segment: leo_a
+    terminal:
+      all:
+      - role: access
+      - medium: rf
+- id: leo_b_access
+  topology:
+    mode: visible_candidates
+  endpoints:
+  - select:
+      all:
+      - segment: leo_b_ground
+      - tag: leo
+    terminal:
+      all:
+      - role: access
+      - medium: rf
+    min_elevation_deg: 25
+  - select:
+      segment: leo_b
+    terminal:
+      all:
+      - role: access
+      - medium: rf
+- id: heo_access
+  topology:
+    mode: visible_candidates
+  endpoints:
+  - select:
+      all:
+      - segment: heo_ground
+      - tag: heo
+    terminal:
+      all:
+      - role: access
+      - medium: rf
+    min_elevation_deg: 15
+  - select:
+      segment: heo_relay
+    terminal:
+      all:
+      - role: access
+      - medium: rf
+- id: geo_access
+  topology:
+    mode: visible_candidates
+  endpoints:
+  - select:
+      all:
+      - segment: geo_ground
+      - tag: geo
+    terminal:
+      all:
+      - role: access
+      - medium: rf
+    min_elevation_deg: 5
+  - select:
+      segment: geo_relay
+    terminal:
+      all:
+      - role: access
+      - medium: rf
+- id: luna_access
+  topology:
+    mode: visible_candidates
+  endpoints:
+  - select:
+      all:
+      - segment: luna_ground
+      - tag: luna
+    terminal:
+      all:
+      - role: access
+      - medium: rf
+    min_elevation_deg: 10
+  - select:
+      segment: luna_llo
+    terminal:
+      all:
+      - role: access
+      - medium: rf
+- id: leo_a_isl
+  topology:
+    mode: nearest_n
+    n: 2
+  endpoints:
+  - select:
+      segment: leo_a
+    terminal:
+      all:
+      - role: isl
+      - medium: optical
+  - select:
+      segment: leo_a
+    terminal:
+      all:
+      - role: isl
+      - medium: optical
+- id: leo_b_isl
+  topology:
+    mode: nearest_n
+    n: 2
+  endpoints:
+  - select:
+      segment: leo_b
+    terminal:
+      all:
+      - role: isl
+      - medium: optical
+  - select:
+      segment: leo_b
+    terminal:
+      all:
+      - role: isl
+      - medium: optical
+- id: heo_isl
+  topology:
+    mode: nearest_n
+    n: 2
+  endpoints:
+  - select:
+      segment: heo_relay
+    terminal:
+      all:
+      - role: isl
+      - medium: optical
+  - select:
+      segment: heo_relay
+    terminal:
+      all:
+      - role: isl
+      - medium: optical
+- id: geo_isl
+  topology:
+    mode: nearest_n
+    n: 2
+  endpoints:
+  - select:
+      segment: geo_relay
+    terminal:
+      all:
+      - role: isl
+      - medium: optical
+  - select:
+      segment: geo_relay
+    terminal:
+      all:
+      - role: isl
+      - medium: optical
+- id: luna_isl
+  topology:
+    mode: nearest_n
+    n: 2
+  endpoints:
+  - select:
+      segment: luna_llo
+    terminal:
+      all:
+      - role: isl
+      - medium: optical
+  - select:
+      segment: luna_llo
+    terminal:
+      all:
+      - role: isl
+      - medium: optical
+- id: leo_to_heo
+  topology:
+    mode: nearest_n
+    n: 1
+  endpoints:
+  - select:
+      segment: leo_a
+    terminal:
+      all:
+      - role: crosslink
+      - medium: optical
+  - select:
+      segment: heo_relay
+    terminal:
+      all:
+      - role: crosslink
+      - medium: optical
+- id: heo_to_geo
+  topology:
+    mode: nearest_n
+    n: 1
+  endpoints:
+  - select:
+      segment: heo_relay
+    terminal:
+      all:
+      - role: crosslink
+      - medium: optical
+  - select:
+      segment: geo_relay
+    terminal:
+      all:
+      - role: crosslink
+      - medium: optical
+- id: geo_to_luna
+  topology:
+    mode: nearest_n
+    n: 1
+  endpoints:
+  - select:
+      segment: geo_relay
+    terminal:
+      all:
+      - role: crosslink
+      - medium: optical
+  - select:
+      segment: luna_llo
+    terminal:
+      all:
+      - role: crosslink
+      - medium: optical
+addressing:
+  loopbacks:
+  - id: node_loopbacks
+    applies_to:
+      any:
+      - segment: leo_a
+      - segment: leo_b
+      - segment: heo_relay
+      - segment: geo_relay
+      - segment: luna_llo
+      - segment: leo_a_ground
+      - segment: leo_b_ground
+      - segment: heo_ground
+      - segment: geo_ground
+      - segment: luna_ground
+    ipv4_pool: 10.255.0.0/16
+    prefix_length: 32
+    allocation: by_node_order
+  point_to_point:
+  - id: p2p_links
+    applies_to:
+      any:
+      - segment: leo_a
+      - segment: leo_b
+      - segment: heo_relay
+      - segment: geo_relay
+      - segment: luna_llo
+    ipv4_pool: 10.128.0.0/12
+    prefix_length: 31
+    allocation: by_attach_index
+routing:
+  domains:
+  - id: earth_domain
+    protocol: isis
+    capabilities:
+      mpls: {}
+      segment_routing:
+        data_plane: mpls
+    selectors:
+    - any:
+      - segment: leo_a
+      - segment: leo_b
+      - segment: heo_relay
+      - segment: geo_relay
+      - segment: leo_a_ground
+      - segment: leo_b_ground
+      - segment: heo_ground
+      - segment: geo_ground
+    area_assignment:
+      strategy: flat
+  - id: luna_domain
+    protocol: isis
+    selectors:
+    - any:
+      - segment: luna_llo
+      - segment: luna_ground
+    area_assignment:
+      strategy: flat
+  boundaries:
+  - over: geo_to_luna
+    adapter: static_ip
+    export:
+    - from: earth_domain
+      to: luna_domain
+      prefixes:
+        aggregate_of: originated
+      export_node_loopbacks: true
+      install_via: peer_loopback
+    - from: luna_domain
+      to: earth_domain
+      prefixes:
+        aggregate_of: originated
+      export_node_loopbacks: true
+      install_via: peer_loopback
+simulation:
+  candidate_limits:
+    max_pairs_per_rule: 2000
+    max_pairs_per_tick: 10000
+time:
+  start_time: '2026-06-08T00:00:00Z'
+  step_seconds: 10
+  compression: 1
+ephemeris:
+  provider: skyfield_bsp
+  quality_tier: de440s
+  kernels:
+  - id: de440s
+    path: configs/ephemerides/de440s.bsp
+    targets:
+    - nodalarc:bodies/earth.yaml
+    - nodalarc:bodies/luna.yaml
+    frame: gcrs
+orbit:
+  default_propagator: j2_mean_elements
+dispatch:
+  latency_authority: ome
+  max_latency_age_ticks: 1

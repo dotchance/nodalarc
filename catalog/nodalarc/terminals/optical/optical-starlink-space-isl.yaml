@@ -1,0 +1,23 @@
+terminal:
+  id: optical-starlink-space-isl
+  display_name: Starlink spacecraft optical ISL terminal
+  medium: optical
+  signal:
+    wavelength_nm: 1550
+  bandwidth_mbps:
+    transmit: 200000
+    receive: 200000
+  tracking_capacity: 1
+  max_range_km: 5400
+  limits:
+    azimuth_deg:
+      min: -60
+      max: 60
+    elevation_deg:
+      min: -60
+      max: 60
+    max_tracking_rate_deg_s: 3.0
+  reference: https://starlink.com/public-files/starlinkProgressReport_2024.pdf
+  notes: 200 Gbps is the SpaceX-stated peak; sustained fleet rate is about 100 Gbps. Public SpaceX material does
+    not disclose the laser wavelength, so 1550 nm is an engineering estimate. 5400 km is sized to the same-shell
+    geometric line-of-sight maximum for a 550 km shell. Steering envelope is an engineering estimate.

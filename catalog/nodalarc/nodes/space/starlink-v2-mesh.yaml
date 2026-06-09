@@ -1,0 +1,17 @@
+node:
+  id: starlink-v2-mesh
+  display_name: Starlink v2 routed spacecraft
+  forwarding: routed
+  ethernet: []
+  terminals:
+  - id: access_ka
+    role: access
+    terminal: nodalarc:terminals/rf/rf-ka-starlink-space-gateway.yaml
+    count: 1
+  - id: isl_optical
+    role: isl
+    terminal: nodalarc:terminals/optical/optical-starlink-space-isl.yaml
+    count: 4
+  payloads: []
+  reference: https://starlink.com/public-files/starlinkProgressReport_2024.pdf
+  notes: Routed Starlink-like spacecraft model with Ka gateway access and optical ISLs.

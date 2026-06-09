@@ -1,0 +1,22 @@
+terminal:
+  id: optical-lcrd-ground-ogs
+  display_name: LCRD-class optical ground station terminal
+  medium: optical
+  signal:
+    wavelength_nm: 1550
+  bandwidth_mbps:
+    transmit: 1200
+    receive: 1200
+  tracking_capacity: 1
+  max_range_km: 45000
+  limits:
+    azimuth_deg:
+      min: -180
+      max: 180
+    elevation_deg:
+      min: 0
+      max: 90
+    max_tracking_rate_deg_s: 1.0
+  reference: https://www.eoportal.org/satellite-missions/lcrd
+  notes: NASA LCRD GEO-relay optical ground station (OGS-1 Table Mountain and OGS-2 Haleakala); 1550 nm DPSK, 1.244 Gbps symmetric;
+    about 45000 km slant range to GEO. Steering and slew are estimates.

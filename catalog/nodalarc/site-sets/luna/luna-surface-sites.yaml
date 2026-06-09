@@ -1,0 +1,6 @@
+site_set:
+  id: luna-surface-sites
+  display_name: Luna surface sites
+  sites:
+  - nodalarc:sites/luna/luna-artemis-base.yaml
+  notes: Lunar surface site set with a /22 LAN.

@@ -1,0 +1,16 @@
+constellation:
+  id: earth-leo-walker-delta-176
+  display_name: Earth LEO Walker-delta 176-satellite shell
+  node: nodalarc:nodes/space/starlink-v2-mesh.yaml
+  orbit: nodalarc:orbits/earth/leo/earth-leo-starlink.yaml
+  planes:
+    count: 16
+    raan_spacing_deg: 22.5
+  slots_per_plane: 11
+  phasing:
+    mode: walker_delta
+    phase_offset_deg: 2.045
+  node_tags:
+  - tag: all
+  reference: https://fcc.report/IBFS/SAT-MOD-20200417-00037/2269026.pdf
+  notes: Scaled Starlink Shell 1-class Walker-delta shell.

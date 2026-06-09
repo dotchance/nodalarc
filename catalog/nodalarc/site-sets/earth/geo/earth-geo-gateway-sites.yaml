@@ -1,0 +1,8 @@
+site_set:
+  id: earth-geo-gateway-sites
+  display_name: GEO gateway sites
+  sites:
+  - nodalarc:sites/earth/it/earth-it-fucino.yaml
+  - nodalarc:sites/earth/us/ca/earth-us-ca-goldstone.yaml
+  - nodalarc:sites/earth/jp/earth-jp-yamaguchi.yaml
+  notes: Two GEO gateway sites.

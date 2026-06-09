@@ -1,0 +1,16 @@
+constellation:
+  id: luna-polar-2
+  display_name: Two-node lunar polar relay shell
+  node: nodalarc:nodes/space/luna-relay.yaml
+  orbit: nodalarc:orbits/luna/llo/luna-llo-polar.yaml
+  planes:
+    count: 1
+    raan_spacing_deg: 0
+  slots_per_plane: 2
+  phasing:
+    mode: evenly_spaced_mean_anomaly
+    phase_offset_deg: 0
+  node_tags:
+  - tag: all
+  reference: https://www.nasa.gov/directorates/somd/space-communications-navigation-program/lunanet/
+  notes: Two lunar relay satellites with S-band surface access and optical cislunar crosslinks.

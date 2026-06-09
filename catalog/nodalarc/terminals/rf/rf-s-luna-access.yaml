@@ -1,0 +1,22 @@
+terminal:
+  id: rf-s-luna-access
+  display_name: S-band lunar surface access terminal
+  medium: rf
+  signal:
+    band: s
+    frequency_hz: 2200000000
+  bandwidth_mbps:
+    transmit: 50
+    receive: 50
+  tracking_capacity: 1
+  max_range_km: 5000
+  limits:
+    azimuth_deg:
+      min: -180
+      max: 180
+    elevation_deg:
+      min: -75
+      max: 90
+    max_tracking_rate_deg_s: 0.5
+  reference: https://www.nasa.gov/directorates/somd/space-communications-navigation-program/
+  notes: Engineering model for Luna surface-to-orbiter S-band testing.

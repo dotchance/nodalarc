@@ -1,0 +1,14 @@
+node:
+  id: luna-surface-gateway
+  display_name: Luna surface gateway router
+  forwarding: routed
+  ethernet:
+  - id: terr0
+  terminals:
+  - id: access_s
+    role: access
+    terminal: nodalarc:terminals/rf/rf-s-luna-access.yaml
+    count: 4
+  payloads: []
+  reference: https://www.nasa.gov/directorates/somd/space-communications-navigation-program/lunanet/
+  notes: Lunar surface gateway with S-band access terminals. Site files choose installed_count per surface site.

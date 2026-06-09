@@ -1,0 +1,14 @@
+node:
+  id: starlink-gateway
+  display_name: Starlink gateway router
+  forwarding: routed
+  ethernet:
+  - id: terr0
+  terminals:
+  - id: access_ka
+    role: access
+    terminal: nodalarc:terminals/rf/rf-ka-starlink-ground-gateway.yaml
+    count: 64
+  payloads: []
+  reference: https://fcc.report/IBFS/SAT-LOA-20200526-00055/2378671.pdf
+  notes: Ground gateway router model. Sites state the installed antenna count and narrowed as-installed terminal capabilities.

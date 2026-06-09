@@ -1,0 +1,56 @@
+site:
+  id: earth-us-hillsboro
+  display_name: Hillsboro Gateway Site
+  verified:
+    source: FCC IBFS
+    filing: SES-LIC-20251118-00367
+    confidence: filing
+    notes: 'Legacy site fact: antennas=1. Legacy site fact: antenna_diameter_m=1.85. Legacy site fact: band=Ka+E. Legacy operational mask was 25 degrees; operational masks belong on link-rule endpoints
+      in the current grammar.'
+  lan:
+    ipv4: 172.16.116.0/24
+    ipv6: fd00:da7a:74::/64
+  nodes:
+  - id: leo-gateway
+    model: nodalarc:nodes/ground/starlink-gateway.yaml
+    terminals:
+      access_ka:
+        installed_count: 1
+        capabilities:
+          bandwidth_mbps:
+            transmit: 5000
+            receive: 5000
+          tracking_capacity: 1
+          max_range_km: 1250
+          limits:
+            azimuth_deg:
+              min: -180
+              max: 180
+            elevation_deg:
+              min: 30.0
+              max: 90
+            max_tracking_rate_deg_s: 1.5
+          boresight:
+            mode: local_vertical
+    payloads: {}
+    interfaces:
+      lo0:
+        ipv4: 10.255.0.122/32
+        ipv6: fd00:da7a:ffff::7a/128
+      terr0:
+        ipv4: 172.16.116.1/24
+        ipv6: fd00:da7a:74::1/64
+    tags:
+    - leo
+    originated_prefixes:
+      ipv4:
+      - 172.16.116.0/24
+      ipv6:
+      - fd00:da7a:74::/64
+  frame:
+    body_fixed:
+      body: nodalarc:bodies/earth.yaml
+  location:
+    lat_deg: 45.5677
+    lon_deg: -122.9166
+    alt_m: 60

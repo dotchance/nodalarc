@@ -1,0 +1,9 @@
+site_set:
+  id: earth-meo-gateway-sites
+  display_name: MEO gateway sites
+  sites:
+  - nodalarc:sites/earth/us/co/earth-us-co-denver.yaml
+  - nodalarc:sites/earth/gb/earth-gb-goonhilly.yaml
+  - nodalarc:sites/earth/au/earth-au-perth.yaml
+  - nodalarc:sites/earth/jp/earth-jp-yamaguchi.yaml
+  notes: Three MEO gateway sites for GPS-altitude demos.

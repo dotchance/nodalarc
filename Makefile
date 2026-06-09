@@ -17,7 +17,7 @@ SUDO_CTR        ?= sudo
 MODE            ?= auto
 REGISTRY_HOST   ?= $(shell bash scripts/detect-registry.sh 2>/dev/null)
 REGISTRY_PREFIX ?= $(if $(filter single-node,$(MODE)),,$(if $(REGISTRY_HOST),$(REGISTRY_HOST)/,))
-DEFAULT_SESSION ?= configs/sessions/earth-leo-simple.yaml
+DEFAULT_SESSION ?= sessions/nodalarc/earth-leo-simple.yaml
 NAMESPACE       ?= nodalarc
 HELM_EXTRA_ARGS ?=
 TEST_ROOT_PYTHON ?= .venv/bin/python
@@ -94,7 +94,7 @@ help: ## Show this help
 	@echo "  From scratch proof:   make nuke && make all"
 	@echo "  Existing platform:    make build && make load && make upgrade"
 	@echo "  Destructive refresh:  make build && make load && make reinstall && make session"
-	@echo "  Session switch:       make session DEFAULT_SESSION=configs/sessions/earth-leo-walker.yaml"
+	@echo "  Session switch:       make session DEFAULT_SESSION=sessions/nodalarc/earth-leo-walker.yaml"
 	@echo "  Emergency only:       make force-teardown"
 	@echo ""
 	@echo "Notes:"

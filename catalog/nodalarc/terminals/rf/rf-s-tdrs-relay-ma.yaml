@@ -1,0 +1,24 @@
+terminal:
+  id: rf-s-tdrs-relay-ma
+  display_name: TDRS relay S-band multiple-access terminal
+  medium: rf
+  signal:
+    band: s
+    frequency_hz: 2200000000
+  bandwidth_mbps:
+    transmit: 3
+    receive: 7
+  tracking_capacity: 20
+  max_range_km: 45000
+  limits:
+    azimuth_deg:
+      min: -13
+      max: 13
+    elevation_deg:
+      min: -13
+      max: 13
+    max_tracking_rate_deg_s: 1.0
+  reference: https://www.eoportal.org/satellite-missions/tdrs
+  notes: S-band multiple-access phased array with a 13 degree conical field of regard (eoPortal). tracking_capacity is 20
+    simultaneous return users, not the 32 array elements; forward is a single beam. 3 Mbps forward and 7 Mbps return aggregate;
+    slew estimated.

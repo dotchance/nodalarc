@@ -1,7 +1,0 @@
-name: kuiper-50
-description: "5 planes x 10 satellites, 590 km inclined orbit. Area design comparison."
-satellite_count: 50
-constellation: configs/constellations/kuiper-50.yaml
-ground_stations: configs/ground-stations/sets/global.yaml
-time:
-  step_seconds: 1

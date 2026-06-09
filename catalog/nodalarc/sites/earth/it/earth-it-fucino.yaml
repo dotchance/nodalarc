@@ -1,0 +1,53 @@
+site:
+  id: earth-it-fucino
+  display_name: Fucino GEO gateway
+  verified:
+    source: nodalarc_catalog
+    notes: NodalArc GEO gateway demo site using public location coordinates and explicit emulation addressing.
+  lan:
+    ipv4: 172.16.46.0/24
+    ipv6: fd00:da7a:2e::/64
+  nodes:
+  - id: geo-gateway
+    model: nodalarc:nodes/ground/geo-gateway.yaml
+    payloads: {}
+    terminals:
+      access_ka:
+        installed_count: 2
+        capabilities:
+          bandwidth_mbps:
+            transmit: 750.0
+            receive: 750.0
+          tracking_capacity: 1
+          max_range_km: 42000.0
+          limits:
+            azimuth_deg:
+              min: -180
+              max: 180
+            elevation_deg:
+              min: 5
+              max: 90
+            max_tracking_rate_deg_s: 0.1
+          boresight:
+            mode: local_vertical
+    interfaces:
+      lo0:
+        ipv4: 10.255.0.49/32
+        ipv6: fd00:da7a:ffff::31/128
+      terr0:
+        ipv4: 172.16.46.1/24
+        ipv6: fd00:da7a:2e::1/64
+    tags:
+    - geo
+    originated_prefixes:
+      ipv4:
+      - 172.16.46.0/24
+      ipv6:
+      - fd00:da7a:2e::/64
+  frame:
+    body_fixed:
+      body: nodalarc:bodies/earth.yaml
+  location:
+    lat_deg: 41.978
+    lon_deg: 13.603
+    alt_m: 650

@@ -1,0 +1,16 @@
+constellation:
+  id: earth-leo-ring-36
+  display_name: Earth LEO simple 36-satellite ring
+  node: nodalarc:nodes/space/starlink-v2-mesh.yaml
+  orbit: nodalarc:orbits/earth/leo/earth-leo-starlink.yaml
+  planes:
+    count: 1
+    raan_spacing_deg: 0
+  slots_per_plane: 36
+  phasing:
+    mode: evenly_spaced_mean_anomaly
+    phase_offset_deg: 10.0
+  node_tags:
+  - tag: all
+  reference: https://fcc.report/IBFS/SAT-MOD-20200417-00037/2269026.pdf
+  notes: Single LEO ring for quick demos and MBB handover testing.

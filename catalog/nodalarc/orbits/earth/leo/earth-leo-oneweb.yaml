@@ -1,0 +1,15 @@
+orbit:
+  id: earth-leo-oneweb
+  central_body: nodalarc:bodies/earth.yaml
+  epoch: '2026-06-08T00:00:00Z'
+  shape:
+    altitude_km: 1200
+  orientation:
+    inclination_deg: 87.0
+    raan_deg: 15.0
+    argument_of_perigee_deg: 0.0
+  phase:
+    mean_anomaly_deg: 45.0
+  propagator: j2_mean_elements
+  reference: https://www.esa.int/Enabling_Support/Space_Operations/Types_of_orbits
+  notes: High-inclination 1200 km LEO orbit for polar and high-latitude access experiments.

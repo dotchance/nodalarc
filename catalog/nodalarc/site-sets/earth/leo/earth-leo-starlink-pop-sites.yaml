@@ -1,0 +1,9 @@
+site_set:
+  id: earth-leo-starlink-pop-sites
+  display_name: Starlink PoP gateway sites
+  sites:
+  - nodalarc:sites/earth/us/earth-us-hawthorne.yaml
+  - nodalarc:sites/earth/us/co/earth-us-co-denver.yaml
+  - nodalarc:sites/earth/us/va/earth-us-va-ashburn.yaml
+  - nodalarc:sites/earth/de/earth-de-frankfurt.yaml
+  notes: Small Starlink-style gateway set for simple LEO demos.

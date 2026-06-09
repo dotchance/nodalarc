@@ -1,0 +1,17 @@
+node:
+  id: meo-relay
+  display_name: MEO relay satellite node
+  forwarding: routed
+  ethernet: []
+  terminals:
+  - id: access_ka
+    role: access
+    terminal: nodalarc:terminals/rf/rf-ka-meo-access.yaml
+    count: 1
+  - id: isl_optical
+    role: isl
+    terminal: nodalarc:terminals/optical/optical-high-orbit-isl.yaml
+    count: 2
+  payloads: []
+  reference: https://www.esa.int/Enabling_Support/Space_Operations/Types_of_orbits
+  notes: Routed GPS-altitude MEO node for medium-orbit experiments.

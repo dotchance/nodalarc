@@ -1,7 +1,0 @@
-name: iridium-66
-description: "6 planes x 11 satellites, 780 km polar orbit. Canonical polar seam constellation."
-satellite_count: 66
-constellation: configs/constellations/iridium-66.yaml
-ground_stations: configs/ground-stations/sets/polar-emphasis.yaml
-time:
-  step_seconds: 1

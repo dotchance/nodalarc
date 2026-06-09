@@ -1,0 +1,21 @@
+terminal:
+  id: optical-high-orbit-isl
+  display_name: High-orbit optical ISL terminal
+  medium: optical
+  signal:
+    wavelength_nm: 1550
+  bandwidth_mbps:
+    transmit: 2500
+    receive: 2500
+  tracking_capacity: 1
+  max_range_km: 80000
+  limits:
+    azimuth_deg:
+      min: -180
+      max: 180
+    elevation_deg:
+      min: -80
+      max: 90
+    max_tracking_rate_deg_s: 0.5
+  reference: https://www.nasa.gov/directorates/somd/space-communications-navigation-program/
+  notes: Engineering model sized for HEO/GEO neighbor links without using the cislunar bridge terminal.

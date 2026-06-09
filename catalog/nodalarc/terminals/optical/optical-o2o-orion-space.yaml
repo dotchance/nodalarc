@@ -1,0 +1,22 @@
+terminal:
+  id: optical-o2o-orion-space
+  display_name: Orion O2O spacecraft optical terminal
+  medium: optical
+  signal:
+    wavelength_nm: 1550
+  bandwidth_mbps:
+    transmit: 260
+    receive: 20
+  tracking_capacity: 1
+  max_range_km: 505000
+  limits:
+    azimuth_deg:
+      min: -60
+      max: 60
+    elevation_deg:
+      min: -60
+      max: 60
+    max_tracking_rate_deg_s: 0.2
+  reference: https://www.nasa.gov/technology/space-comms/o2o/
+  notes: NASA O2O Orion-side space terminal (CACI/MIT-LL modem); 1550 nm PPM, 260 Mbps return downlink and 20 Mbps forward
+    uplink over about 505000 km. Mirror of the O2O lunar ground terminal; gimbal field of regard and slew are estimates.

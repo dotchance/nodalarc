@@ -1,7 +1,0 @@
-name: oneweb-60
-description: "6 planes x 10 satellites, 1200 km near-polar orbit. Slow dynamics, long contacts."
-satellite_count: 60
-constellation: configs/constellations/oneweb-60.yaml
-ground_stations: configs/ground-stations/sets/polar-emphasis.yaml
-time:
-  step_seconds: 1

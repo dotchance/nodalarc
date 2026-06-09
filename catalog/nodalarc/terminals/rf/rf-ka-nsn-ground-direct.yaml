@@ -1,0 +1,24 @@
+terminal:
+  id: rf-ka-nsn-ground-direct
+  display_name: NASA Near Space Network ground Ka-band direct terminal
+  medium: rf
+  signal:
+    band: ka
+    frequency_hz: 26000000000
+  bandwidth_mbps:
+    transmit: 5
+    receive: 3500
+  tracking_capacity: 1
+  max_range_km: 2500
+  limits:
+    azimuth_deg:
+      min: -180
+      max: 180
+    elevation_deg:
+      min: 0
+      max: 90
+    max_tracking_rate_deg_s: 3.0
+  reference: https://explorers.larc.nasa.gov/2023APPROBE/pdf_files/Prog05e.%20NSN%20Brochure.pdf
+  notes: Receive 3.5 Gbps is the NSN published Ka direct-to-Earth return max (NISAR class, LEO). Transmit models the DTE command
+    link, which on NSN is S/X-band about 5 Mbps. max_range is the LEO operating point; 3.5 Gbps Ka does not close at GEO or
+    lunar range. The NSN 2 million km figure is the network service domain, not this single link.

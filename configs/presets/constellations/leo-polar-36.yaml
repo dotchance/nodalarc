@@ -1,7 +1,0 @@
-name: leo-polar-36
-description: "6 planes x 6 satellites, 780 km / 86.4 deg polar LEO. Small polar-seam shell for high-latitude coverage and seam behavior."
-satellite_count: 36
-constellation: configs/constellations/iridium-small-36.yaml
-ground_stations: configs/ground-stations/sets/polar-emphasis.yaml
-time:
-  step_seconds: 1

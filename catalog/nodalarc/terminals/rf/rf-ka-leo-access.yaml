@@ -1,0 +1,23 @@
+terminal:
+  id: rf-ka-leo-access
+  display_name: Ka-band LEO access terminal
+  medium: rf
+  signal:
+    band: ka
+    frequency_hz: 30000000000
+  bandwidth_mbps:
+    transmit: 1000
+    receive: 1000
+  tracking_capacity: 1
+  max_range_km: 3600
+  limits:
+    azimuth_deg:
+      min: -180
+      max: 180
+    elevation_deg:
+      min: -70
+      max: 90
+    max_tracking_rate_deg_s: 3.0
+  reference: https://fcc.report/IBFS/SAT-LOA-20200526-00055/2378671.pdf
+  notes: Ka access terminal engineering model sized for LEO sat/ground experiments up to a 1200 km shell at a 5 degree
+    access mask. Individual site installs may narrow this range.

@@ -1,0 +1,21 @@
+node:
+  id: heo-relay
+  display_name: HEO relay satellite node
+  forwarding: routed
+  ethernet: []
+  terminals:
+  - id: access_ka
+    role: access
+    terminal: nodalarc:terminals/rf/rf-ka-heo-access.yaml
+    count: 1
+  - id: isl_optical
+    role: isl
+    terminal: nodalarc:terminals/optical/optical-high-orbit-isl.yaml
+    count: 2
+  - id: relay_optical
+    role: crosslink
+    terminal: nodalarc:terminals/optical/optical-cislunar-crosslink.yaml
+    count: 4
+  payloads: []
+  reference: https://www.esa.int/Enabling_Support/Space_Operations/Types_of_orbits
+  notes: HEO relay node with optical crosslinks to LEO and GEO segments.

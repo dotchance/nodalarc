@@ -1,0 +1,14 @@
+node:
+  id: heo-gateway
+  display_name: Earth HEO gateway router
+  forwarding: routed
+  ethernet:
+  - id: terr0
+  terminals:
+  - id: access_ka
+    role: access
+    terminal: nodalarc:terminals/rf/rf-ka-heo-access.yaml
+    count: 4
+  payloads: []
+  reference: https://www.itu.int/en/ITU-R/space/Pages/default.aspx
+  notes: Ground gateway model for HEO access experiments.

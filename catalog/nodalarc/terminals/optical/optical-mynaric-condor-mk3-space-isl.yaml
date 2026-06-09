@@ -1,0 +1,23 @@
+terminal:
+  id: optical-mynaric-condor-mk3-space-isl
+  display_name: Mynaric CONDOR Mk3 space optical ISL terminal
+  medium: optical
+  signal:
+    wavelength_nm: 1550
+  bandwidth_mbps:
+    transmit: 2500
+    receive: 2500
+  tracking_capacity: 1
+  max_range_km: 6500
+  limits:
+    azimuth_deg:
+      min: -175
+      max: 175
+    elevation_deg:
+      min: -60
+      max: 85
+    max_tracking_rate_deg_s: 3.0
+  reference: https://mynaric.com/products/space/condor-mk3/
+  notes: CONDOR Mk3 datasheet rate 313 Mbps to 2.5 Gbps, range 6500 km, wavelength 1536 to 1553 nm, field of regard azimuth
+    175 degrees and elevation -60 to +85 degrees. The 100 Gbps figure in Mynaric marketing is the product-line ceiling, not
+    this terminal. Slew rate is an estimate.

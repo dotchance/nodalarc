@@ -1,0 +1,24 @@
+terminal:
+  id: rf-ka-starlink-space-gateway
+  display_name: Starlink spacecraft Ka-band gateway terminal
+  medium: rf
+  signal:
+    band: ka
+    frequency_hz: 30000000000
+  bandwidth_mbps:
+    transmit: 5000
+    receive: 5000
+  tracking_capacity: 1
+  max_range_km: 1250
+  limits:
+    azimuth_deg:
+      min: -60
+      max: 60
+    elevation_deg:
+      min: -60
+      max: 60
+    max_tracking_rate_deg_s: 3.0
+  reference: https://fcc.report/IBFS/SAT-LOA-20200526-00055/2378671.pdf
+  notes: Satellite side of the Starlink Ka gateway link, about 5 Gbps per antenna (about 20 Gbps bonded across 4 antennas).
+    Satellite transmit is the about 19 GHz downlink and receive the about 28 GHz uplink. The 60 degree off-nadir steering
+    envelope is an engineering estimate.

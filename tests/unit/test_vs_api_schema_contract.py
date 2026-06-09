@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import importlib
 import inspect
+import json
 import re
 from pathlib import Path
 
@@ -22,6 +23,9 @@ import pytest
 from pydantic import BaseModel
 
 TYPES_TS = Path(__file__).resolve().parents[2] / "frontend" / "src" / "types.ts"
+SNAPSHOT_SCHEMA_JSON = (
+    Path(__file__).resolve().parents[2] / "services" / "vs_api" / "schema" / "snapshot_v1.json"
+)
 VS_API_MODULE = "nodalarc.models.vs_api"
 
 
@@ -203,3 +207,21 @@ def test_backend_required_fields_exist_in_frontend(shared_pairs):
     assert not failures, "Backend sends required fields that frontend ignores:\n" + "\n".join(
         failures
     )
+
+
+def test_checked_in_snapshot_schema_matches_backend_model(py_models):
+    """The public schema artifact must not drift from the backend model."""
+    expected = py_models["StateSnapshot"].model_json_schema()
+    actual = json.loads(SNAPSHOT_SCHEMA_JSON.read_text(encoding="utf-8"))
+    assert actual == expected
+
+
+def test_node_state_body_frame_fields_are_required_without_defaults(py_models):
+    """Body/frame identity must be explicit on the wire, not implied as Earth."""
+    schema = py_models["StateSnapshot"].model_json_schema()
+    node_schema = schema["$defs"]["NodeState"]
+    required = set(node_schema["required"])
+
+    assert {"reference_body", "frame_id"} <= required
+    assert "default" not in node_schema["properties"]["reference_body"]
+    assert "default" not in node_schema["properties"]["frame_id"]

@@ -25,6 +25,7 @@ from nodalarc.models.vs_api import (
     StateSnapshot,
 )
 from nodalarc.nats_channels import STREAM_OME_EVENTS
+from pydantic import ValidationError
 from vs_api.session_context import SessionContext, _derive_link_type, _link_key
 
 from tests.physics_fixtures import EARTH_TEST_EPHEMERIS_BODY_FRAMES
@@ -1936,8 +1937,23 @@ class TestKernelActualRecovery:
     it — otherwise a scheduled-but-unactuated pair masks as connected.
     """
 
+    _EMITTED_AT = datetime(2026, 5, 29, 18, 0, 0, tzinfo=UTC)
+
+    def test_actual_link_snapshot_requires_emitted_at(self):
+        from nodalarc.models.scheduler_ops import ActualLinkSnapshot
+
+        with pytest.raises(ValidationError, match="emitted_at"):
+            ActualLinkSnapshot(
+                session_id="test",
+                wiring_generation="gen-1",
+                scheduler_instance_id="sched-1",
+                hostname="sched-1-host",
+                active_pairs=[],
+                pending_pairs=[],
+            )
+
     def _deliver(
-        self, ctx, *, instance: str, pairs, pending=None, emitted_at=None, generation: str = "gen-1"
+        self, ctx, *, instance: str, pairs, emitted_at, pending=None, generation: str = "gen-1"
     ) -> None:
         import asyncio
         from unittest.mock import MagicMock
@@ -1966,7 +1982,12 @@ class TestKernelActualRecovery:
     def test_recovers_kernel_actual_pairs_on_subscribe(self):
         ctx = SessionContext.__new__(SessionContext)
         ctx._init_state_only()
-        self._deliver(ctx, instance="sched-1", pairs=[("gs-den", "sat-03")])
+        self._deliver(
+            ctx,
+            instance="sched-1",
+            pairs=[("gs-den", "sat-03")],
+            emitted_at=self._EMITTED_AT,
+        )
         assert ctx.actual_kernel_pairs() == frozenset({("gs-den", "sat-03")})
 
     def test_pairs_canonically_ordered_to_match_composer(self):
@@ -1974,7 +1995,12 @@ class TestKernelActualRecovery:
         # set must be ordered the same way regardless of wire order.
         ctx = SessionContext.__new__(SessionContext)
         ctx._init_state_only()
-        self._deliver(ctx, instance="sched-1", pairs=[("sat-03", "gs-den")])
+        self._deliver(
+            ctx,
+            instance="sched-1",
+            pairs=[("sat-03", "gs-den")],
+            emitted_at=self._EMITTED_AT,
+        )
         assert ctx.actual_kernel_pairs() == frozenset({("gs-den", "sat-03")})
 
     def test_restart_supersedes_dead_predecessor_same_generation(self):
@@ -1984,8 +2010,18 @@ class TestKernelActualRecovery:
         # masking this fix removes. (Mirrors the roster's _update_actuation_notice.)
         ctx = SessionContext.__new__(SessionContext)
         ctx._init_state_only()
-        self._deliver(ctx, instance="sched-old", pairs=[("gs-den", "sat-03")])
-        self._deliver(ctx, instance="sched-new", pairs=[("gs-den", "sat-09")])
+        self._deliver(
+            ctx,
+            instance="sched-old",
+            pairs=[("gs-den", "sat-03")],
+            emitted_at=self._EMITTED_AT,
+        )
+        self._deliver(
+            ctx,
+            instance="sched-new",
+            pairs=[("gs-den", "sat-09")],
+            emitted_at=self._EMITTED_AT,
+        )
         assert "sched-old" not in ctx.actual_links_by_instance
         assert ctx.actual_kernel_pairs() == frozenset({("gs-den", "sat-09")})
 
@@ -2058,7 +2094,12 @@ class TestKernelActualRecovery:
         from fastapi.testclient import TestClient
 
         ctx = self._ctx_with_snapshot_and_clean_roster()
-        self._deliver(ctx, instance="sched-1", pairs=[("gs-den", "sat-a")])
+        self._deliver(
+            ctx,
+            instance="sched-1",
+            pairs=[("gs-den", "sat-a")],
+            emitted_at=self._EMITTED_AT,
+        )
         monkeypatch.setattr(m, "_active_context", ctx)
 
         r = TestClient(m.app).get("/api/v1/decision-explanation", params={"gs": "gs-den"})

@@ -165,7 +165,7 @@ class ActualLinkSnapshot(BaseModel):
     snapshot_seq: int | None = None
     active_pairs: list[list[str]] = Field(default_factory=list)
     pending_pairs: list[PendingActuationPair] = Field(default_factory=list)
-    emitted_at: datetime | None = None
+    emitted_at: datetime
 
 
 class ActuationNotice(BaseModel):

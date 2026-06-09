@@ -673,17 +673,14 @@
           "title": "Beam Falloff Exponent"
         },
         "reference_body": {
-          "default": "earth",
           "enum": [
             "earth",
-            "luna",
-            "mars"
+            "luna"
           ],
           "title": "Reference Body",
           "type": "string"
         },
         "frame_id": {
-          "default": "earth",
           "title": "Frame Id",
           "type": "string"
         },
@@ -747,7 +744,9 @@
         "vel_y_km_s",
         "vel_z_km_s",
         "plane",
-        "slot"
+        "slot",
+        "reference_body",
+        "frame_id"
       ],
       "title": "NodeState",
       "type": "object"

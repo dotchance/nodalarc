@@ -190,7 +190,7 @@ class SessionContext:
         # Recoverable kernel-actual + pending state per Scheduler instance, replace-not-
         # merge per instance, from the retained ActualLinkSnapshot. value = {"generation":
         # str, "pairs": frozenset[ordered pair], "pending": dict[ordered pair, pending_since],
-        # "emitted_at": datetime|None, "received_at": datetime}. actual_kernel_pairs() unions
+        # "emitted_at": datetime, "received_at": datetime}. actual_kernel_pairs() unions
         # "pairs" into kernel-actual truth (for kernel_up — NOT ctx.links, OME's model);
         # pending_actuation() turns "pending" into the Scheduler-owned divergence clock.
         # "received_at" (VS-API wall clock at receipt) + "emitted_at" (Scheduler publish
@@ -883,16 +883,12 @@ class SessionContext:
         """
         out: dict[tuple[str, str], PendingActuation] = {}
         for rec in self.actual_links_by_instance.values():
-            emitted_at = rec.get("emitted_at")
-            received_at = rec.get("received_at")
+            emitted_at = rec["emitted_at"]
+            received_at = rec["received_at"]
             for pair, since in rec.get("pending", {}).items():
-                if emitted_at is not None and received_at is not None:
-                    elapsed_ms = (
-                        (emitted_at - since).total_seconds() + (now - received_at).total_seconds()
-                    ) * 1000.0
-                else:
-                    # No emission stamp (legacy producer): fall back to VS-API-clock age.
-                    elapsed_ms = (now - since).total_seconds() * 1000.0
+                elapsed_ms = (
+                    (emitted_at - since).total_seconds() + (now - received_at).total_seconds()
+                ) * 1000.0
                 existing = out.get(pair)
                 if existing is None or since < existing.pending_since:
                     out[pair] = PendingActuation(

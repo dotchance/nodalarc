@@ -10,7 +10,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 CATALOG = ROOT / "catalog" / "nodalarc"
-SESSIONS = ROOT / "sessions" / "nodalarc"
+SESSIONS = CATALOG / "sessions"
 CONFIGS = ROOT / "configs"
 
 IDENTIFIER_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
@@ -60,7 +60,9 @@ def _yaml_files(root: Path) -> list[Path]:
 
 
 def _catalog_files() -> list[Path]:
-    return _yaml_files(CATALOG)
+    # Sessions live under the catalog (catalog/nodalarc/sessions/) but are validated
+    # as sessions, not primitives — exclude that subtree from primitive checks.
+    return [path for path in _yaml_files(CATALOG) if SESSIONS not in path.parents]
 
 
 def _session_files() -> list[Path]:
@@ -419,7 +421,7 @@ def _assert_scheduling(value: Any, owner: Path, label: str) -> None:
 
 def test_no_user_catalog_or_obsolete_example_roots_remain() -> None:
     assert not (ROOT / "catalog" / "user").exists()
-    assert not (ROOT / "sessions" / "user").exists()
+    assert not (ROOT / "sessions").exists()  # sessions are folded into catalog/nodalarc/sessions
     for child in OBSOLETE_CONFIG_ROOTS:
         assert not (CONFIGS / child).exists(), child
 

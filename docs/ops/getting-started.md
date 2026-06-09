@@ -131,7 +131,7 @@ You should see adjacent satellites listed as FULL neighbors. If running IS-IS in
 
 ```bash
 # Switch to a 176-satellite IS-IS constellation
-make session DEFAULT_SESSION=sessions/nodalarc/earth-leo-walker.yaml
+make session DEFAULT_SESSION=catalog/nodalarc/sessions/earth-leo-walker.yaml
 ```
 
 Or users can deploy sessions from the browser wizard at http://localhost:3000.
@@ -203,7 +203,7 @@ make all
 | Prove full square-one recovery | `make nuke && make all` |
 | Existing platform, update images/chart | `make build && make load && make upgrade` |
 | Existing platform, destructive refresh | `make build && make load && make reinstall && make session` |
-| Existing platform, switch session | `make session DEFAULT_SESSION=sessions/nodalarc/<name>.yaml` |
+| Existing platform, switch session | `make session DEFAULT_SESSION=catalog/nodalarc/sessions/<name>.yaml` |
 
 ### Build Targets
 

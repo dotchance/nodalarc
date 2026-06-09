@@ -107,7 +107,7 @@ frontend/               Visualization Frontend (React 19 + R3F + Three.js)
 images/                 Base container images (FRR, probe)
 deploy/helm/            Helm chart (templates, values)
 catalog/nodalarc/       Reusable config primitives (bodies, terminals, orbits, nodes, sites, constellations)
-sessions/nodalarc/      Assembled, deployable sessions
+catalog/nodalarc/sessions/      Assembled, deployable sessions
 configs/                Platform config, ephemerides, and FRR templates
 scripts/                Lifecycle and operational scripts
 tools/                  Python report, scenario, compare, and reconfig CLIs

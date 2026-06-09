@@ -71,7 +71,7 @@ you the failure instead of hiding it.
 Use the session picker or command line to deploy a different curated session:
 
 ```bash
-make session DEFAULT_SESSION=sessions/nodalarc/earth-leo-heo-geo-luna-reachability.yaml
+make session DEFAULT_SESSION=catalog/nodalarc/sessions/earth-leo-heo-geo-luna-reachability.yaml
 ```
 
 Try `earth-leo-heo-geo-luna-reachability.yaml` to see multiple Earth orbital

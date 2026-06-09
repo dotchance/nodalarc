@@ -39,7 +39,7 @@ make all
 make nuke && make all
 
 # Start a specific session
-make session DEFAULT_SESSION=sessions/nodalarc/earth-leo-walker.yaml
+make session DEFAULT_SESSION=catalog/nodalarc/sessions/earth-leo-walker.yaml
 
 # Update an existing platform without teardown
 make build && make load && make upgrade

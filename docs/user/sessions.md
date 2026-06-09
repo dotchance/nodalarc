@@ -45,7 +45,7 @@ still decide whether a link is actually active.
 
 The reusable parts live under `catalog/nodalarc/` (bodies, terminals, orbits,
 nodes, sites, site sets, constellations); the assembled examples live under
-`sessions/nodalarc/`.
+`catalog/nodalarc/sessions/`.
 
 ## A session at a glance
 
@@ -149,7 +149,7 @@ site installs — not from inline session fields.
 You can switch sessions without restarting the platform:
 
 ```bash
-make session DEFAULT_SESSION=sessions/nodalarc/earth-leo-walker.yaml
+make session DEFAULT_SESSION=catalog/nodalarc/sessions/earth-leo-walker.yaml
 ```
 
 The browser session wizard and YAML upload path use the same resolver as the

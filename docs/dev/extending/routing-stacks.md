@@ -61,7 +61,7 @@ In `services/nodalarc_operator/frr_renderer.py`, add the protocol to the templat
 ### Step 4: Test
 
 ```yaml
-# sessions/nodalarc/test-newprotocol.yaml
+# catalog/nodalarc/sessions/test-newprotocol.yaml
 session:
   name: test-newprotocol
 segments:

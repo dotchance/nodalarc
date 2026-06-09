@@ -4,7 +4,7 @@ This directory contains platform support files that are mounted into containers
 or read by deploy-time tooling.
 
 Reusable NodalArc model data now lives under `catalog/nodalarc/`, and assembled
-session examples live under `sessions/nodalarc/`.
+session examples live under `catalog/nodalarc/sessions/`.
 
 ## Directories
 

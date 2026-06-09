@@ -14,7 +14,7 @@ Two trees hold all configuration:
 
 - `catalog/nodalarc/` — reusable primitives: bodies, terminals, orbits, nodes,
   sites, site sets, constellations, and space node sets.
-- `sessions/nodalarc/` — assembled, deployable sessions that reference catalog
+- `catalog/nodalarc/sessions/` — assembled, deployable sessions that reference catalog
   primitives.
 
 A primitive is referenced by a token of the form `nodalarc:<path-under-catalog>`.
@@ -343,7 +343,7 @@ list is not advertised. Each IP family is independent.
 
 - **Browser wizard** — build and launch from the UI.
 - **Upload** — paste or upload session YAML.
-- **Command line** — `make session DEFAULT_SESSION=sessions/nodalarc/earth-leo-walker.yaml`.
+- **Command line** — `make session DEFAULT_SESSION=catalog/nodalarc/sessions/earth-leo-walker.yaml`.
 
 Every path resolves the same session through the same resolver, so a session that
 deploys from the command line behaves identically in the wizard. If a session

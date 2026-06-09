@@ -126,7 +126,7 @@ segments:
           mask_fade_range_deg: 3.0
       handover_mode: mbb
       mbb_overlap_ticks: 3
-      mbb_reserve: 0
+      mbb_reserve: 1
       handover_concurrency: one_at_a_time
       ranking_order:
       - service_priority
@@ -457,6 +457,9 @@ ephemeris:
   kernels:
   - id: de440s
     path: configs/ephemerides/de440s.bsp
+    sha256: c1c7feeab882263fc493a9d5a5b2ddd71b54826cdf65d8d17a76126b260a49f2
+    coverage_start: '1849-12-25T00:00:00Z'
+    coverage_end: '2150-01-21T00:00:00Z'
     targets:
     - nodalarc:bodies/earth.yaml
     - nodalarc:bodies/luna.yaml

@@ -293,17 +293,8 @@ else
     TOKEN=$(curl -s "http://$API_IP:8080/api/v1/auth/token" 2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin).get('token',''))" 2>/dev/null || true)
     if [ -n "$TOKEN" ]; then
         curl -s -H "Authorization: Bearer $TOKEN" "http://$API_IP:8080/api/v1/state" 2>/dev/null | \
-            python3 -c "
-import json,sys
-s=json.load(sys.stdin)
-intra=sum(1 for l in s['links'] if l.get('link_type')=='intra_plane_isl')
-cross=sum(1 for l in s['links'] if l.get('link_type')=='cross_plane_isl')
-gnd=sum(1 for l in s['links'] if l.get('link_type')=='ground')
-print(f'  Intra-plane ISL: {intra}')
-print(f'  Cross-plane ISL: {cross}')
-print(f'  Ground links: {gnd}')
-print(f'  Total active: {len(s[\"links\"])}')
-" 2>/dev/null || echo "  Unable to query VS-API at http://$API_IP:8080"
+            python3 "$(dirname "$0")/na_status_summary.py" 2>/dev/null | sed 's/^/  /' || \
+            echo "  Unable to query VS-API at http://$API_IP:8080"
     else
         echo "  VS-API not reachable at http://$API_IP:8080"
     fi

@@ -8,7 +8,8 @@ site:
     ipv4: 172.16.78.0/24
     ipv6: fd00:da7a:4e::/64
   nodes:
-  - id: leo-gateway
+  - id: gw1
+    display_name: LEO Gateway
     model: nodalarc:nodes/ground/leo-gateway.yaml
     payloads: {}
     terminals:

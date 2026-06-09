@@ -8,7 +8,8 @@ site:
     ipv4: 172.16.4.0/24
     ipv6: fd00:da7a:4::/64
   nodes:
-  - id: heo-gateway
+  - id: gw1
+    display_name: HEO Gateway
     model: nodalarc:nodes/ground/heo-gateway.yaml
     payloads: {}
     terminals:

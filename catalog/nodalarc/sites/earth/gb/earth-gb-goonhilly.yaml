@@ -8,7 +8,8 @@ site:
     ipv4: 172.16.34.0/24
     ipv6: fd00:da7a:22::/64
   nodes:
-  - id: meo-gateway
+  - id: gw1
+    display_name: MEO Gateway
     model: nodalarc:nodes/ground/meo-gateway.yaml
     payloads: {}
     terminals:

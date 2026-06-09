@@ -283,7 +283,8 @@ site:
     ipv4: 172.16.6.0/24
     ipv6: fd00:da7a:6::/64
   nodes:
-  - id: leo-gateway
+  - id: gw1
+    display_name: LEO Gateway
     model: nodalarc:nodes/ground/leo-gateway.yaml
     terminals:
       access_ka:

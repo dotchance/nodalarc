@@ -8,7 +8,8 @@ site:
     ipv4: 172.16.79.0/24
     ipv6: fd00:da7a:4f::/64
   nodes:
-  - id: heo-gateway
+  - id: gw1
+    display_name: HEO Gateway
     model: nodalarc:nodes/ground/heo-gateway.yaml
     payloads: {}
     terminals:
@@ -45,7 +46,8 @@ site:
       - 0.0.0.0/0
       ipv6:
       - fd00:da7a:4f::/64
-  - id: leo-gateway
+  - id: gw2
+    display_name: LEO Gateway
     model: nodalarc:nodes/ground/leo-gateway.yaml
     terminals:
       access_ka:

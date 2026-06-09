@@ -8,7 +8,8 @@ site:
     ipv4: 172.16.152.0/24
     ipv6: fd00:da7a:98::/64
   nodes:
-  - id: luna-gateway
+  - id: gw1
+    display_name: Luna Gateway
     model: nodalarc:nodes/ground/luna-surface-gateway.yaml
     payloads: {}
     terminals:

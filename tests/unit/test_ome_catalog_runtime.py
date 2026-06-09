@@ -191,8 +191,8 @@ def test_ome_inputs_ignore_ground_nodes_without_declared_access_candidates() -> 
         run_id="run-ome-0001",
     ).resolved
 
-    inactive_ground_node = "earth-us-co-denver-meo-gateway"
-    active_ground_node = "earth-us-co-denver-leo-gateway"
+    inactive_ground_node = "earth-us-co-denver-gw2"
+    active_ground_node = "earth-us-co-denver-gw1"
     resolved_node_ids = {node.node_id for node in resolved.nodes}
     candidates = resolved.ground_candidate_satellites_by_gs()
 

@@ -29,7 +29,7 @@ The template has access to:
 
 | Variable | Type | Content |
 |----------|------|---------|
-| `node_id` | str | e.g., `space-sat-p00s00`, `leo-sat-p00s00`, or `earth-site-gs-santiago-leo-router` |
+| `node_id` | str | e.g., `space-sat-p00s00`, `leo-sat-p00s00`, or `earth-cl-santiago-gw1` |
 | `node_type` | str | `satellite` or `ground_station` |
 | `loopback_ip` | str | Node's loopback address |
 | `interfaces` | list | All interfaces with peer info, IP, bandwidth |

@@ -315,7 +315,7 @@ class TestSessionContextNetworkIdentity:
 
         ctx = SessionContext("run-test-0001", str(session_path))
 
-        addresses = ctx._node_addresses_by_id["earth-us-co-denver-leo-gateway"]
+        addresses = ctx._node_addresses_by_id["earth-us-co-denver-gw1"]
         assert any(
             a.purpose == "router_loopback" and a.family == "ipv4" and a.address == "10.255.0.104/32"
             for a in addresses
@@ -330,15 +330,15 @@ class TestSessionContextNetworkIdentity:
             and a.interface == "terr0"
             for a in addresses
         )
-        assert ctx._node_primary_prefix_by_id["earth-us-co-denver-leo-gateway"] == "172.16.99.0/24"
+        assert ctx._node_primary_prefix_by_id["earth-us-co-denver-gw1"] == "172.16.99.0/24"
 
     def test_resolved_static_ground_nodes_survive_partial_ome_ephemeris(self):
         ctx = SessionContext(
             "run-test-0001",
             "catalog/nodalarc/sessions/earth-leo-simple.yaml",
         )
-        inactive_id = "earth-us-co-denver-meo-gateway"
-        active_id = "earth-us-co-denver-leo-gateway"
+        inactive_id = "earth-us-co-denver-gw2"
+        active_id = "earth-us-co-denver-gw1"
 
         assert inactive_id in ctx.nodes
         inactive = ctx.nodes[inactive_id]
@@ -362,7 +362,7 @@ class TestSessionContextNetworkIdentity:
                     lon_deg=-104.9903,
                     alt_km=1.609,
                     segment_id="ground",
-                    local_node_id="earth-us-co-denver-leo-gateway",
+                    local_node_id="earth-us-co-denver-gw1",
                     namespace="ground",
                     tags=("leo_gateway",),
                     reference_body="earth",

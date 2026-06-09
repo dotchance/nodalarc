@@ -9,7 +9,8 @@ site:
     ipv4: 172.16.53.0/24
     ipv6: fd00:da7a:35::/64
   nodes:
-  - id: geo-gateway
+  - id: gw1
+    display_name: GEO Gateway
     model: nodalarc:nodes/ground/geo-gateway.yaml
     payloads: {}
     terminals:
@@ -45,7 +46,8 @@ site:
       - 172.16.53.0/24
       ipv6:
       - fd00:da7a:35::/64
-  - id: meo-gateway
+  - id: gw2
+    display_name: MEO Gateway
     model: nodalarc:nodes/ground/meo-gateway.yaml
     payloads: {}
     terminals:

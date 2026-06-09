@@ -14,9 +14,14 @@ import hashlib
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from nodalarc.frames import Vec3
-from nodalarc.models.ephemeris import EphemerisConfig
+from nodalarc.models.ephemeris import EphemerisConfig, EphemerisKernel
+
+if TYPE_CHECKING:
+    from nodalarc.models.resolved_session import ResolvedEphemeris
+    from nodalarc.models.segment_session import TimeConfig
 
 
 @dataclass(frozen=True)
@@ -34,6 +39,54 @@ class CommonBodyState:
 
 class EphemerisValidationError(ValueError):
     """Raised when an ephemeris manifest cannot support the requested session."""
+
+
+def session_epoch_unix(time_cfg: TimeConfig | None) -> float:
+    """The single owner of catalog-session epoch derivation.
+
+    Requires a declared, timezone-aware ``start_time``. There is no naive-
+    datetime interpretation and no wall-clock fallback: an epoch that depends
+    on the container timezone or process start moment is not a session fact.
+    """
+    if time_cfg is None:
+        raise EphemerisValidationError("catalog session time with start_time is required")
+    raw = time_cfg.start_time
+    epoch = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    if epoch.tzinfo is None:
+        raise EphemerisValidationError(f"catalog session start_time must include timezone: {raw!r}")
+    return epoch.timestamp()
+
+
+def runtime_config_from_resolved(ephemeris: ResolvedEphemeris) -> EphemerisConfig:
+    """Convert a resolved ephemeris manifest into the runtime provider config.
+
+    Single owner of the resolved-to-runtime manifest mapping; the resolver and
+    OME input construction both call this so they can never disagree.
+    """
+    kernels: list[EphemerisKernel] = []
+    for kernel in ephemeris.kernels:
+        if kernel.sha256 is None:
+            raise EphemerisValidationError(f"ephemeris kernel {kernel.id!r} requires sha256")
+        if kernel.coverage_start is None or kernel.coverage_end is None:
+            raise EphemerisValidationError(
+                f"ephemeris kernel {kernel.id!r} requires coverage_start and coverage_end"
+            )
+        kernels.append(
+            EphemerisKernel(
+                id=kernel.id,
+                path=kernel.path,
+                checksum=kernel.sha256,
+                targets=list(kernel.targets),
+                frame=kernel.frame,
+                coverage_start=datetime.fromisoformat(kernel.coverage_start.replace("Z", "+00:00")),
+                coverage_end=datetime.fromisoformat(kernel.coverage_end.replace("Z", "+00:00")),
+            )
+        )
+    return EphemerisConfig(
+        provider=ephemeris.provider,
+        quality_tier=ephemeris.quality_tier,
+        kernels=kernels,
+    )
 
 
 def _repo_root() -> Path:

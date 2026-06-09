@@ -43,7 +43,7 @@ def test_current_catalog_session_resolves_runtime_truth() -> None:
 
     assert resolved.identity_mode.value == "segment_namespaced"
     assert "space-sat-p00s00" in resolved.node_ids()
-    assert "ground-earth-test-site-00-router" in resolved.node_ids()
+    assert "earth-test-site-00-router" in resolved.node_ids()
     assert resolved.source_context.run_id == "run-1"
     assert resolved.routing_domains[0].node_ids
     assert resolved.link_candidates

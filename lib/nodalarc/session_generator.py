@@ -23,6 +23,7 @@ from nodalarc.catalog_paths import (
 )
 from nodalarc.models.catalog import validate_catalog_document
 from nodalarc.models.resolved_session import SourceContext
+from nodalarc.models.segment_session import RoutingTimers
 from nodalarc.resolve_session import resolve_session
 from nodalarc.stack_resolver import normalize_extensions, resolve_stack
 
@@ -232,6 +233,7 @@ def generate_session_yaml(
     custom_constellation: dict | None = None,
     custom_ground_stations: list[dict] | None = None,
     routing_config: dict | None = None,
+    timers: dict | None = None,
     ground_policy: str = "highest_elevation",
     ground_selection_lookahead_horizon_ticks: int = 0,
     catalog_roots: CatalogRoots | None = None,
@@ -371,6 +373,7 @@ def generate_session_yaml(
                     "selectors": [{"any": [{"segment": "space"}, {"segment": "ground"}]}],
                     "area_assignment": _area_assignment(area_strategy),
                     **({"capabilities": capabilities} if capabilities else {}),
+                    **(_timers_block(timers)),
                 }
             ]
         },
@@ -386,7 +389,8 @@ def generate_session_yaml(
     }
     if routing_config:
         raise ValueError(
-            "routing_config overrides are retired; author routing domains in catalog YAML"
+            "routing_config overrides are retired; use routing.domains[].timers "
+            "(the 'timers' request field) for IGP timer tuning"
         )
 
     resolve_session(
@@ -395,6 +399,22 @@ def generate_session_yaml(
         source_context=SourceContext(origin="session_generator"),
     )
     return yaml.safe_dump(session_dict, default_flow_style=False, sort_keys=False), warnings
+
+
+def _timers_block(timers: dict | None) -> dict:
+    """Validated per-domain timer tuning for generated sessions.
+
+    Defaults are engine-owned: only non-default values are written into the
+    generated YAML, so an untouched wizard panel emits no timers block.
+    """
+    if not timers:
+        return {}
+    validated = RoutingTimers.model_validate(timers)
+    dumped = validated.model_dump(mode="python", exclude_defaults=True)
+    for key in ("spf", "bfd"):
+        if key in dumped and not dumped[key]:
+            del dumped[key]
+    return {"timers": dumped} if dumped else {}
 
 
 def merge_constellation_with_satellite_type(

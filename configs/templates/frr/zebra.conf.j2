@@ -5,7 +5,9 @@ ipv6 forwarding
 
 interface lo
  ip address {{ ipv4_loopback }}/32
+{% if ipv6_loopback %}
  ipv6 address {{ ipv6_loopback }}/128
+{% endif %}
 {% if protocol == "isis" %}
  ip router isis NODAL
  isis passive
@@ -15,7 +17,7 @@ exit
 {% for iface_name, info in interface_info.items() %}
 interface {{ iface_name }}
  ip address {{ ipv4_loopback }}/32
-{% if protocol == "isis" and not info.static_only | default(false) %}
+{% if protocol == "isis" and not info.static_only %}
  ip router isis NODAL
 {% endif %}
 {% if protocol != "static" %}
@@ -36,10 +38,9 @@ interface {{ iface }}
 exit
 {% endfor %}
 
-{% set terr0_render_addresses = terr0_addresses | default(terrestrial_prefixes | default([])) %}
-{% if node_type == "ground_station" and terr0_render_addresses %}
+{% if node_type == "ground_station" and terr0_addresses %}
 interface terr0
-{% for tp in terr0_render_addresses %}
+{% for tp in terr0_addresses %}
 {% if ':' in tp.host_address %}
  ipv6 address {{ tp.host_address }}
 {% else %}

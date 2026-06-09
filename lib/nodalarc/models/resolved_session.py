@@ -27,6 +27,7 @@ from nodalarc.models.segment_session import (
     AreaAssignment,
     Dispatch,
     Routing,
+    RoutingTimers,
     SessionMeta,
     Simulation,
     TimeConfig,
@@ -141,6 +142,9 @@ class ResolvedRoutingDomain(BaseModel):
     node_ids: tuple[NonEmptyReference, ...] = Field(min_length=1)
     capabilities: tuple[NonEmptyReference, ...] = ()
     area_assignment: AreaAssignment | None = None
+    # Effective timer values — defaults applied at resolution, so every
+    # consumer reads one populated truth and templates carry no fallbacks.
+    timers: RoutingTimers = RoutingTimers()
 
     @model_validator(mode="after")
     def _unique_node_ids(self) -> ResolvedRoutingDomain:
@@ -233,6 +237,12 @@ class ResolvedNode(BaseModel):
     local_node_id: NonEmptyReference
     segment_id: NonEmptyReference
     namespace: NonEmptyReference | None
+    # Ground nodes: every placement group (ground segment) that placed this
+    # node's site. A physical site exists once; placement groups are labels,
+    # not namespaces, so one node may belong to several. segment_id holds the
+    # first placing group for surfaces that need a single primary label.
+    # Empty for space nodes (their segment IS their namespace).
+    placement_groups: tuple[NonEmptyReference, ...] = ()
     kind: NodeKind
     frame_id: NonEmptyReference
     central_body: FrameBodyName | None = None
@@ -394,6 +404,26 @@ class ResolvedSession(BaseModel):
             dupes = sorted({i for i in ids if ids.count(i) > 1})
             raise ValueError(f"duplicate runtime node_id(s): {dupes}")
         node_segment = {n.node_id: n.segment_id for n in self.nodes}
+        # A node answers for its segment plus every placement group that placed
+        # its site — shared sites are members of several groups by design.
+        node_labels = {n.node_id: {n.segment_id, *n.placement_groups} for n in self.nodes}
+
+        # Loopbacks are router identity: one address, one node, per family.
+        for family in ("ipv4", "ipv6"):
+            owners: dict[str, str] = {}
+            for n in self.nodes:
+                if n.interfaces is None:
+                    continue
+                value = getattr(n.interfaces.lo0, family)
+                if value is None:
+                    continue
+                address = value.split("/")[0]
+                if address in owners:
+                    raise ValueError(
+                        f"duplicate lo0 {family} address {address!r}: "
+                        f"{owners[address]!r} and {n.node_id!r}"
+                    )
+                owners[address] = n.node_id
 
         body_ids = [body.body_id for body in self.bodies]
         if len(set(body_ids)) != len(body_ids):
@@ -464,10 +494,11 @@ class ResolvedSession(BaseModel):
                         f"link rule {rule.rule_id!r} endpoint references unknown "
                         f"node_id(s): {missing}"
                     )
-                # An endpoint claims one segment; every node it lists must belong
-                # to that segment (no cross-segment endpoint membership).
+                # An endpoint claims one segment label; every node it lists
+                # must carry that label (segment or placement group — no
+                # membership in unrelated segments).
                 foreign = sorted(
-                    nid for nid in endpoint.node_ids if node_segment[nid] != endpoint.segment_id
+                    nid for nid in endpoint.node_ids if endpoint.segment_id not in node_labels[nid]
                 )
                 if foreign:
                     raise ValueError(
@@ -514,6 +545,28 @@ class ResolvedSession(BaseModel):
             if node.node_id == node_id:
                 return node
         return None
+
+    def node_index_by_node_id(self) -> dict[str, int]:
+        """Resolution-order index for every node — the session's only
+        globally-unique numeric node identity.
+
+        Consumers that need a compact unique number (FRR system IDs, future
+        per-node identity encodings) read this; nothing may derive identity
+        from per-segment facts like plane/slot or from enumeration the
+        consumer performs itself.
+        """
+        return {node.node_id: index for index, node in enumerate(self.nodes)}
+
+    def ground_index_by_node_id(self) -> dict[str, int]:
+        """Resolution-order index over ground stations (wiring-manifest fact).
+
+        The Node Agent manifest contract requires gs_index; this is its only
+        derivation — consumers must not enumerate ground nodes themselves.
+        """
+        return {
+            node.node_id: index
+            for index, node in enumerate(n for n in self.nodes if n.kind == "ground_station")
+        }
 
     def sid_index_by_node_id(self) -> dict[str, int]:
         """Return deterministic FRR prefix-SID indices for every resolved node."""

@@ -81,7 +81,6 @@ def reconfig(
     resolution = load_session_resolution_from_file(session_path, origin="na-reconfig")
     resolved = resolution.resolved
     sid_by_node = resolution.resolved.sid_index_by_node_id()
-    ground_index_by_node = _ground_index_by_node(resolved)
 
     # Build config overrides from --set + --vars-file. Stack variables are
     # merged per-node after the resolved routing domain is known.
@@ -109,7 +108,6 @@ def reconfig(
             node.node_id,
             stack_variables=stack_variables,
             node_sid_index=sid_by_node.get(node.node_id),
-            gs_index=ground_index_by_node.get(node.node_id),
         )
         node_type = "satellite" if node.kind == "satellite" else "ground_station"
         if not _match_target(target, node.node_id, node_type, node.plane, vars.get("area_id", "")):
@@ -132,11 +130,6 @@ def _routing_domain_for_node(
             f"got {[domain.domain_id for domain in domains]}"
         )
     return domains[0]
-
-
-def _ground_index_by_node(resolved: ResolvedSession) -> dict[str, int]:
-    ground_ids = [node.node_id for node in resolved.nodes if node.kind == "ground_station"]
-    return {node_id: index for index, node_id in enumerate(ground_ids)}
 
 
 def _render_and_push(env, resolved_stack, node_id, vars):

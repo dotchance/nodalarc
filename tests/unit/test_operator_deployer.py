@@ -17,6 +17,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import MagicMock, create_autospec, patch
 
+import kopf
 import kubernetes.client
 import pytest
 import yaml
@@ -1065,6 +1066,41 @@ class TestRequiredSubstratePairs:
 # ---------------------------------------------------------------------------
 # Class 7: TestConfigRendering
 # ---------------------------------------------------------------------------
+
+
+class TestPreDeployValidationGate:
+    """ensure_session_configmaps() must refuse unready sessions before any
+    ConfigMap or pod exists — the readiness validator is a deploy gate, not
+    an advisory report."""
+
+    def test_zero_candidate_link_rule_blocks_deploy(self, tmp_path):
+        # A 1-satellite constellation leaves the ISL rule with zero candidate
+        # pairs: resolvable, but not deployable as declared.
+        spec = _make_inline_spec(
+            tmp_path,
+            constellation={"planes": {"count": 1, "sats_per_plane": 1}},
+        )
+        mock_v1 = create_autospec(kubernetes.client.CoreV1Api, instance=True)
+        mock_v1.read_namespaced_secret.return_value = _existing_terminal_secret()
+        owner_ref = {
+            "apiVersion": "nodalarc.io/v1alpha1",
+            "kind": "ConstellationSpec",
+            "name": "current-session",
+            "uid": "test-uid",
+        }
+        with (
+            patch("nodalarc_operator.session_deployer._get_v1", return_value=mock_v1),
+            patch(
+                "nodalarc_operator.session_deployer.discover_available_nodes",
+                return_value=["node01", "node02"],
+            ),
+        ):
+            with pytest.raises(kopf.PermanentError, match="Session validation failed"):
+                ensure_session_configmaps(
+                    spec, "current-session", "nodalarc", owner_ref, session_run_id="run-test-0001"
+                )
+        # Nothing was written before the gate fired.
+        mock_v1.create_namespaced_config_map.assert_not_called()
 
 
 class TestConfigRendering:

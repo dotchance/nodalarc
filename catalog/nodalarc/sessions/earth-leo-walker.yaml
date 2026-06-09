@@ -68,7 +68,7 @@ link_rules:
       - medium: optical
 simulation:
   candidate_limits:
-    max_pairs_per_rule: 500
+    max_pairs_per_rule: 1000
     max_pairs_per_tick: 2000
 time:
   start_time: '2026-06-08T00:00:00Z'

@@ -16,7 +16,6 @@ def build_template_vars_from_resolved(
     *,
     stack_variables: dict[str, Any] | None = None,
     node_sid_index: int | None = None,
-    gs_index: int | None = None,
 ) -> dict[str, Any]:
     """Build FRR template variables from the catalog-resolved runtime view."""
     node = resolved.node_by_id(node_id)
@@ -35,21 +34,34 @@ def build_template_vars_from_resolved(
             )
         result["node_sid_index"] = node_sid_index
 
+    result.update(_timer_template_facts(domain))
     result.update(
         {
             "node_id": node.node_id,
             "hostname": node.node_id,
             "node_type": "satellite" if node.kind == "satellite" else "ground_station",
             "area_id": _resolved_area_id(domain, node),
+            "system_id": _isis_system_id(resolved, node),
             "mgmt_interface": "eth0",
             "compression_factor": resolved.time.compression,
             "protocol": domain.protocol,
             "ipv4_loopback": _ip_from_interface(node.interfaces.lo0.ipv4, field="lo0.ipv4"),
-            "ipv6_loopback": _ip_from_interface(node.interfaces.lo0.ipv6, field="lo0.ipv6"),
+            # v4-only nodes are a legitimate resolved shape; templates render
+            # the v6 loopback only when the resolver assigned one.
+            "ipv6_loopback": (
+                _ip_from_interface(node.interfaces.lo0.ipv6, field="lo0.ipv6")
+                if node.interfaces.lo0.ipv6 is not None
+                else None
+            ),
             "interface_info": _resolved_interface_info(resolved, node, domain),
             "neighbors": _resolved_neighbors(resolved, node),
         }
     )
+    boundary_routes = _boundary_static_routes(resolved, node, domain)
+    result["boundary_static_routes"] = boundary_routes
+    # Border nodes must redistribute boundary statics into their IGP, or the
+    # rest of the domain never learns the exported reachability.
+    result["redistribute_static"] = bool(boundary_routes) and domain.protocol in {"isis", "ospf"}
 
     if node.kind == "satellite":
         if node.plane is None or node.slot is None:
@@ -73,12 +85,9 @@ def build_template_vars_from_resolved(
 
     if node.kind != "ground_station":
         raise ValueError(f"unsupported resolved node kind for FRR rendering: {node.kind!r}")
-    if gs_index is None:
-        raise ValueError(f"ground station {node.node_id!r} requires gs_index for FRR system ID")
     result.update(
         {
             "gs_name": node.local_node_id,
-            "gs_index": gs_index,
             "gnd_interfaces": [iface.name for iface in node.wan_interfaces],
             "isl_interfaces": [],
             "isl_count": 0,
@@ -91,6 +100,57 @@ def build_template_vars_from_resolved(
     result["terr0_default_route"] = default_route
     result["terr0_default_metric"] = default_metric
     return result
+
+
+def _timer_template_facts(domain: ResolvedRoutingDomain) -> dict[str, Any]:
+    """Map resolved per-domain timers onto the protocol's FRR vocabulary.
+
+    The resolver always populates ``timers`` with effective values, so every
+    emitted fact is concrete — templates carry no timer fallbacks.
+    """
+    timers = domain.timers
+    facts: dict[str, Any] = {
+        "bfd_enabled": timers.bfd.enabled,
+        "bfd_detect_multiplier": timers.bfd.detect_multiplier,
+        "bfd_rx_interval": timers.bfd.rx_interval_ms,
+        "bfd_tx_interval": timers.bfd.tx_interval_ms,
+    }
+    if domain.protocol == "isis":
+        facts.update(
+            {
+                "isis_hello_interval": timers.hello_interval_s,
+                "isis_hello_multiplier": max(
+                    2, -(-timers.hold_interval_s // timers.hello_interval_s)
+                ),
+                "spf_init_delay": timers.spf.init_delay_ms,
+                "spf_short_delay": timers.spf.short_delay_ms,
+                "spf_long_delay": timers.spf.long_delay_ms,
+                "spf_holddown": timers.spf.holddown_ms,
+                "spf_time_to_learn": timers.spf.time_to_learn_ms,
+            }
+        )
+    elif domain.protocol == "ospf":
+        facts.update(
+            {
+                "ospf_hello_interval": timers.hello_interval_s,
+                "ospf_dead_interval": timers.hold_interval_s,
+                "ospf_spf_delay": timers.spf.init_delay_ms,
+                "ospf_spf_initial_hold": timers.spf.short_delay_ms,
+                "ospf_spf_max_hold": timers.spf.long_delay_ms,
+            }
+        )
+    return facts
+
+
+def _isis_system_id(resolved: ResolvedSession, node: ResolvedNode) -> str:
+    """Globally-unique IS-IS system ID from the resolver-owned node index.
+
+    Plane/slot restart at zero per segment, so they are never identity. The
+    resolution-order node index is unique across the whole session; templates
+    consume the formatted value verbatim and derive nothing.
+    """
+    index = resolved.node_index_by_node_id()[node.node_id]
+    return f"0000.{(index >> 16) & 0xFFFF:04x}.{index & 0xFFFF:04x}"
 
 
 def _single_routing_domain_for_node(
@@ -197,6 +257,120 @@ def _static_boundary_rule_ids(resolved: ResolvedSession) -> set[str]:
     return {
         boundary.over for boundary in resolved.routing.boundaries if boundary.adapter == "static_ip"
     }
+
+
+def _lo0_address(node: ResolvedNode, family: str) -> str | None:
+    if node.interfaces is None:
+        return None
+    value = getattr(node.interfaces.lo0, family)
+    return value.split("/")[0] if value is not None else None
+
+
+def _boundary_export_prefixes(
+    export: Any, from_domain: ResolvedRoutingDomain, resolved: ResolvedSession
+) -> dict[str, list[str]]:
+    """The concrete per-family prefix set one export rule declares.
+
+    ``aggregate_of: originated`` derives the from-domain's originated
+    prefixes (grammar C046). Literal prefix lists pass through split by
+    family.
+    """
+    prefixes: dict[str, list[str]] = {"ipv4": [], "ipv6": []}
+    declared = export.prefixes
+    if isinstance(declared, tuple):
+        for prefix in declared:
+            prefixes["ipv6" if ":" in prefix else "ipv4"].append(prefix)
+    else:  # AggregateOf — validated at resolve
+        seen: set[str] = set()
+        for node_id in from_domain.node_ids:
+            node = resolved.node_by_id(node_id)
+            if node is None or node.originated_prefixes is None:
+                continue
+            for family in ("ipv4", "ipv6"):
+                for prefix in getattr(node.originated_prefixes, family) or ():
+                    if prefix not in seen:
+                        seen.add(prefix)
+                        prefixes[family].append(prefix)
+    if export.export_node_loopbacks:
+        for node_id in from_domain.node_ids:
+            node = resolved.node_by_id(node_id)
+            if node is None or node.forwarding != "routed":
+                continue
+            for family, host_len in (("ipv4", 32), ("ipv6", 128)):
+                address = _lo0_address(node, family)
+                if address is not None:
+                    prefix = f"{address}/{host_len}"
+                    if prefix not in prefixes[family]:
+                        prefixes[family].append(prefix)
+    return prefixes
+
+
+def _boundary_static_routes(
+    resolved: ResolvedSession, node: ResolvedNode, domain: ResolvedRoutingDomain
+) -> list[dict[str, str]]:
+    """Materialized static routes this border node installs for boundary
+    exports it receives.
+
+    The receiving side of ``from: X, to: Y`` is the Y-domain endpoint of the
+    boundary rule's candidates. Next hop is the boundary peer's loopback
+    (install_via: peer_loopback, the default) — recursive over the existing
+    peer-loopback interface route — or the named interface. A family is
+    installable only when the peer carries a loopback of that family; the
+    aggregate semantics are per installable family.
+    """
+    if resolved.routing is None or not resolved.routing.boundaries:
+        return []
+    routes: list[dict[str, str]] = []
+    emitted: set[tuple[str, str]] = set()
+    for boundary in resolved.routing.boundaries:
+        if boundary.adapter != "static_ip":
+            continue
+        for export in boundary.export:
+            if export.to not in (domain.domain_id,):
+                continue
+            from_domain = next(d for d in resolved.routing_domains if d.domain_id == export.from_)
+            for candidate in resolved.link_candidates:
+                if candidate.rule_id != boundary.over:
+                    continue
+                if candidate.node_a == node.node_id:
+                    peer_id, iface = candidate.node_b, candidate.interface_a
+                elif candidate.node_b == node.node_id:
+                    peer_id, iface = candidate.node_a, candidate.interface_b
+                else:
+                    continue
+                if peer_id not in from_domain.node_ids:
+                    continue
+                peer = resolved.node_by_id(peer_id)
+                if peer is None:
+                    raise ValueError(f"boundary candidate references unresolved peer {peer_id!r}")
+                exports = _boundary_export_prefixes(export, from_domain, resolved)
+                for family in ("ipv4", "ipv6"):
+                    if export.install_via is None or export.install_via == "peer_loopback":
+                        via = _lo0_address(peer, family)
+                        if via is None:
+                            # Family not installable over this peer; the
+                            # aggregate is defined per installable family.
+                            # Literal prefixes of an uninstallable family are
+                            # an authoring error — fail loud.
+                            if isinstance(export.prefixes, tuple) and exports[family]:
+                                raise ValueError(
+                                    f"boundary over {boundary.over!r} exports {family} "
+                                    f"prefixes but peer {peer_id!r} has no {family} "
+                                    "loopback for install_via: peer_loopback"
+                                )
+                            continue
+                    else:
+                        via = iface if export.install_via == iface else export.install_via
+                    for prefix in exports[family]:
+                        if _lo0_address(node, family) == prefix.split("/")[0]:
+                            continue  # never route our own loopback
+                        if via == prefix.split("/")[0]:
+                            continue  # peer's own loopback is the seed route
+                        key = (prefix, via)
+                        if key not in emitted:
+                            emitted.add(key)
+                            routes.append({"prefix": prefix, "via": via, "family": family})
+    return routes
 
 
 def _terr0_template_facts(node: ResolvedNode) -> tuple[list[dict[str, Any]], bool, bool, int]:

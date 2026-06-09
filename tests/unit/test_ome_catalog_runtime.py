@@ -191,8 +191,8 @@ def test_ome_inputs_ignore_ground_nodes_without_declared_access_candidates() -> 
         run_id="run-ome-0001",
     ).resolved
 
-    inactive_ground_node = "ground-earth-us-co-denver-meo-gateway"
-    active_ground_node = "ground-earth-us-co-denver-leo-gateway"
+    inactive_ground_node = "earth-us-co-denver-meo-gateway"
+    active_ground_node = "earth-us-co-denver-leo-gateway"
     resolved_node_ids = {node.node_id for node in resolved.nodes}
     candidates = resolved.ground_candidate_satellites_by_gs()
 
@@ -225,11 +225,13 @@ def test_ome_materializes_non_earth_ephemeris_provider_from_resolved_manifest(
     )
 
 
-def test_ome_rejects_non_earth_ephemeris_manifest_without_checksum(tmp_path: Path) -> None:
-    resolved = _resolved(tmp_path, _lunar_catalog_session(include_sha=False))
+def test_resolver_rejects_non_earth_ephemeris_manifest_without_checksum(tmp_path: Path) -> None:
+    # Manifest runtime validation is a resolve-time gate: a sha-less manifest
+    # must fail at upload/deploy, never reach OME input construction.
+    session_path = _write_session(tmp_path, _lunar_catalog_session(include_sha=False))
 
-    with pytest.raises(ValueError, match="requires sha256"):
-        build_ome_inputs_from_resolved(resolved)
+    with pytest.raises(SessionResolutionError, match="requires sha256"):
+        load_session_resolution_from_file(session_path, origin="test.ome", run_id="run-ome-0001")
 
 
 def test_resolver_rejects_non_earth_session_without_ephemeris_manifest(tmp_path: Path) -> None:

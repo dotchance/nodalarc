@@ -1,17 +1,13 @@
 hostname {{ hostname }}
 log file /var/log/frr/ospfd.log informational
 
-{# OSPF timer defaults — overridable from session config_overrides #}
-{% set ospf_hello_interval = ospf_hello_interval | default(1) %}
-{% set ospf_dead_interval = ospf_dead_interval | default(3) %}
-{% set ospf_spf_delay = ospf_spf_delay | default(50) %}
-{% set ospf_spf_initial_hold = ospf_spf_initial_hold | default(200) %}
-{% set ospf_spf_max_hold = ospf_spf_max_hold | default(5000) %}
-
-{# BFD — independent of protocol, controlled by bfd_enabled #}
-{% set bfd_enabled = bfd_enabled | default(false) %}
+{# Timer and BFD values are resolver-owned per-domain facts supplied by the
+   producer (routing.domains[].timers); the template carries no fallbacks. #}
 
 router ospf
+{% if redistribute_static %}
+ redistribute static
+{% endif %}
  ospf router-id {{ ipv4_loopback }}
 {% if te_enabled | default(false) %}
  mpls-te on
@@ -26,7 +22,7 @@ interface lo
 exit
 
 {% for iface_name, info in interface_info.items() %}
-{% if not info.static_only | default(false) %}
+{% if not info.static_only %}
 interface {{ iface_name }}
 {% if info.cross_area %}
  ip ospf area 0.0.0.0
@@ -57,16 +53,15 @@ interface {{ iface }}
 exit
 {% endfor %}
 
-{% set terr0_igp = terr0_igp_enabled | default(terrestrial_prefixes is defined) %}
-{% if node_type == "ground_station" and terr0_igp %}
+{% if node_type == "ground_station" and terr0_igp_enabled %}
 interface terr0
  ip ospf area {{ area_id }}
  ip ospf passive
 exit
 {% endif %}
 
-{% if node_type == "ground_station" and terr0_default_route | default(false) %}
+{% if node_type == "ground_station" and terr0_default_route %}
 router ospf
- default-information originate always metric {{ terr0_default_metric | default(100) }}
+ default-information originate always metric {{ terr0_default_metric }}
 exit
 {% endif %}

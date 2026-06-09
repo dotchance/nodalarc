@@ -20,6 +20,12 @@ import yaml
 from pydantic import ValidationError
 
 from nodalarc.catalog_paths import CatalogRoots, resolve_catalog_reference
+from nodalarc.ephemeris_runtime import (
+    EphemerisValidationError,
+    runtime_config_from_resolved,
+    session_epoch_unix,
+    validate_ephemeris_manifest,
+)
 from nodalarc.link_rule_candidates import generate_declared_link_candidates
 from nodalarc.models.catalog import validate_catalog_document, validate_catalog_value
 from nodalarc.models.identity import IdentityMode
@@ -43,10 +49,10 @@ from nodalarc.models.resolved_session import (
     SidBlock,
     SourceContext,
 )
-from nodalarc.models.segment_session import Dispatch, SegmentSessionConfig
-from nodalarc.models.segments import GroundSegment, SpaceSegment
+from nodalarc.models.segment_session import Dispatch, RoutingTimers, SegmentSessionConfig
+from nodalarc.models.segments import GroundOverride, GroundSegment, SpaceSegment
 from nodalarc.runtime_naming import validate_runtime_node_id
-from nodalarc.runtime_support import RuntimeSupport, UnsupportedFeatureError
+from nodalarc.runtime_support import RuntimeSupport, UnsupportedFeature, UnsupportedFeatureError
 
 _NORMALIZE_RE = re.compile(r"[^a-z0-9-]+")
 _DEFAULT_GENERATED_SPACE_LOOPBACK_IPV4_POOL = ipaddress.ip_network("100.64.0.0/10")
@@ -122,17 +128,22 @@ def resolve_session_with_assets(
     except Exception as exc:
         raise SessionResolutionError(f"invalid catalog session: {exc}") from exc
 
-    if runtime_support is not None:
-        _check_runtime_support(cfg, runtime_support)
+    # The runtime-support gate is mandatory. Production always runs the
+    # Earth-Luna profile; callers may only widen/narrow it explicitly. A None
+    # here must never mean "skip the typed UnsupportedFeature layer".
+    support = runtime_support or RuntimeSupport.earth_luna()
+    _check_runtime_support(cfg, support, roots)
 
     runtime_nodes = _apply_addressing(cfg, _expand_segments(cfg, roots))
     resolved_nodes = tuple(item.node for item in runtime_nodes)
     body_facts = _collect_body_facts(runtime_nodes)
+    _check_body_support(resolved_nodes, body_facts, support)
     ephemeris = _resolve_ephemeris(cfg, roots, resolved_nodes)
     link_rules = tuple(
         _resolve_link_rule(rule, cfg, runtime_nodes) for rule in cfg.link_rules or ()
     )
     routing_domains = tuple(_resolve_routing_domains(cfg, runtime_nodes))
+    _validate_routing_boundaries(cfg, routing_domains, link_rules)
     sid_blocks = tuple(_allocate_sid_blocks(routing_domains))
     dispatch = _resolve_dispatch(cfg)
 
@@ -196,13 +207,20 @@ def load_session_resolution_from_file(
     )
 
 
-def _check_runtime_support(cfg: SegmentSessionConfig, support: RuntimeSupport) -> None:
+def _check_runtime_support(
+    cfg: SegmentSessionConfig, support: RuntimeSupport, roots: CatalogRoots
+) -> None:
     unsupported = []
     for segment in cfg.segments:
         if isinstance(segment, GroundSegment):
             kind = "ground_set"
         elif isinstance(segment, SpaceSegment):
-            kind = "constellation"
+            # The segment class does not identify the source wrapper: a
+            # SpaceSegment can carry a constellation, a single space_node, or
+            # a space_node_set, and each is a distinct supported feature. The
+            # gate must key on the loaded wrapper, not the segment class.
+            wrapper, _ = _load_ref_or_object(segment.source, roots)
+            kind = wrapper
         else:
             kind = "lagrange_point"
         if feature := support.check_segment_kind(kind):
@@ -211,11 +229,45 @@ def _check_runtime_support(cfg: SegmentSessionConfig, support: RuntimeSupport) -
         feature := support.check_ephemeris_provider(cfg.ephemeris.provider)
     ):
         unsupported.append(feature)
+    for domain in cfg.routing.domains if cfg.routing is not None else ():
+        if feature := support.check_routing_protocol(domain.protocol):
+            unsupported.append(feature)
     for boundary in (
         cfg.routing.boundaries if cfg.routing is not None and cfg.routing.boundaries else ()
     ):
         if feature := support.check_protocol_adapter(boundary.adapter):
             unsupported.append(feature)
+    if unsupported:
+        raise UnsupportedFeatureError(unsupported)
+
+
+def _check_body_support(
+    nodes: tuple[ResolvedNode, ...],
+    body_facts: tuple[ResolvedBodyFacts, ...],
+    support: RuntimeSupport,
+) -> None:
+    """Gate resolved body usage against the runtime-support profile.
+
+    Body names are also constrained by model Literals, but the support profile
+    is the single typed authority for what the *selected* runtime implements —
+    an Earth-only profile must reject a Luna session with a typed reason, not
+    rely on schema width.
+    """
+    unsupported = []
+    seen: set[tuple[str, str]] = set()
+
+    def _add(feature: UnsupportedFeature | None) -> None:
+        if feature is not None and (feature.category, feature.value) not in seen:
+            seen.add((feature.category, feature.value))
+            unsupported.append(feature)
+
+    for node in nodes:
+        if node.central_body is not None:
+            _add(support.check_central_body(node.central_body))
+        if node.reference_body is not None:
+            _add(support.check_reference_body(node.reference_body))
+    for facts in body_facts:
+        _add(support.check_frame_body(facts.body_id))
     if unsupported:
         raise UnsupportedFeatureError(unsupported)
 
@@ -299,11 +351,27 @@ def _resolve_ephemeris(
             "ephemeris manifest is missing required body target(s): " + ", ".join(missing_targets)
         )
 
-    return ResolvedEphemeris(
+    resolved_ephemeris = ResolvedEphemeris(
         provider=cfg.ephemeris.provider,
         quality_tier=cfg.ephemeris.quality_tier,
         kernels=tuple(kernels),
     )
+
+    # Manifest runtime validation happens at resolve time, not service
+    # startup: kernel existence, sha256, declared coverage vs the session
+    # epoch, and the single-kernel limit. A session whose ephemeris cannot
+    # support it must fail at upload/deploy, not kill a pod later.
+    try:
+        epoch_unix = session_epoch_unix(cfg.time)
+        validate_ephemeris_manifest(
+            runtime_config_from_resolved(resolved_ephemeris),
+            required_bodies=active_bodies - {"earth"},
+            epoch_unix=epoch_unix,
+        )
+    except EphemerisValidationError as exc:
+        raise SessionResolutionError(f"ephemeris manifest validation failed: {exc}") from exc
+
+    return resolved_ephemeris
 
 
 def _ephemeris_target_body_id(target: Any, roots: CatalogRoots) -> str:
@@ -311,17 +379,51 @@ def _ephemeris_target_body_id(target: Any, roots: CatalogRoots) -> str:
     return str(body["id"])
 
 
+@dataclass
+class _SitePlacement:
+    """One physical site and every ground segment (placement group) placing it.
+
+    A site is a place, and a place exists once: placing a site in a segment
+    enrolls it under that group label, it never mints a second copy of the
+    site's routers. Group order is first-placement order.
+    """
+
+    site: dict[str, Any]
+    segments: list[GroundSegment]
+
+
+@dataclass(frozen=True)
+class _SiteMarker:
+    site_id: str
+
+
 def _expand_segments(cfg: SegmentSessionConfig, roots: CatalogRoots) -> tuple[_RuntimeNode, ...]:
-    nodes: list[_RuntimeNode] = []
+    ordered: list[_RuntimeNode | _SiteMarker] = []
+    placements: dict[str, _SitePlacement] = {}
     for segment in cfg.segments:
         if isinstance(segment, SpaceSegment):
-            nodes.extend(_expand_space_segment(segment, roots))
+            ordered.extend(_expand_space_segment(segment, roots))
         elif isinstance(segment, GroundSegment):
-            nodes.extend(_expand_ground_segment(segment, roots))
+            site_set = _load_expected(segment.placement.from_site_set, roots, "site_set")
+            for site_ref in site_set["sites"]:
+                site = _load_expected(site_ref, roots, "site")
+                site_id = site["id"]
+                placement = placements.get(site_id)
+                if placement is None:
+                    placements[site_id] = _SitePlacement(site=site, segments=[segment])
+                    ordered.append(_SiteMarker(site_id))
+                elif segment.id not in {s.id for s in placement.segments}:
+                    placement.segments.append(segment)
         else:
             raise SessionResolutionError(
                 f"segment {segment.id!r} uses runtime-unsupported lagrange placement"
             )
+    nodes: list[_RuntimeNode] = []
+    for entry in ordered:
+        if isinstance(entry, _SiteMarker):
+            nodes.extend(_expand_site_placement(placements[entry.site_id], roots))
+        else:
+            nodes.append(entry)
     if not nodes:
         raise SessionResolutionError("session resolves to zero runtime nodes")
     return tuple(nodes)
@@ -440,74 +542,127 @@ def _space_node_from_entry(
     )
 
 
-def _expand_ground_segment(segment: GroundSegment, roots: CatalogRoots) -> list[_RuntimeNode]:
-    site_set = _load_expected(segment.placement.from_site_set, roots, "site_set")
+def _site_override_for(segment: GroundSegment, site_id: str) -> GroundOverride | None:
+    matches = [override for override in (segment.overrides or ()) if override.match.site == site_id]
+    if len(matches) > 1:
+        raise SessionResolutionError(
+            f"ground segment {segment.id!r} declares {len(matches)} overrides for "
+            f"site {site_id!r}; at most one override per site"
+        )
+    return matches[0] if matches else None
+
+
+def _effective_site_policy(
+    segment: GroundSegment, site_id: str
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None, tuple[str, ...]]:
+    """One placing group's effective (scheduling, originated, tags) for a site.
+
+    GroundOverride is the session author's per-site word and wins over the
+    group-level apply. Returned scheduling/prefixes are plain dumps so they
+    can be compared across placing groups.
+    """
+    override = _site_override_for(segment, site_id)
+    apply = segment.apply
+    scheduling = None
+    if override is not None and override.scheduling is not None:
+        scheduling = override.scheduling.model_dump(mode="python")
+    elif apply is not None and apply.scheduling is not None:
+        scheduling = apply.scheduling.model_dump(mode="python")
+    originated = None
+    if override is not None and override.originated_prefixes is not None:
+        originated = override.originated_prefixes.model_dump(mode="python")
+    elif apply is not None and apply.originated_prefixes is not None:
+        originated = apply.originated_prefixes.model_dump(mode="python")
+    tags: list[str] = list(segment.tags or ())
+    if apply is not None and apply.tags:
+        tags.extend(apply.tags)
+    if override is not None and override.tags:
+        tags.extend(override.tags)
+    return scheduling, originated, tuple(tags)
+
+
+def _expand_site_placement(placement: _SitePlacement, roots: CatalogRoots) -> list[_RuntimeNode]:
+    site = placement.site
+    site_id = site["id"]
+    groups = tuple(segment.id for segment in placement.segments)
+
+    # Effective per-site policy must agree across every placing group: a site
+    # can join several groups, but it cannot run two scheduling policies or
+    # originate two different prefix sets. Tags union; everything else is
+    # identical-or-reject.
+    policies = [_effective_site_policy(segment, site_id) for segment in placement.segments]
+    base_scheduling, base_originated, _ = policies[0]
+    for index in range(1, len(policies)):
+        scheduling, originated, _ = policies[index]
+        if scheduling != base_scheduling or originated != base_originated:
+            raise SessionResolutionError(
+                f"site {site_id!r} is placed by groups {list(groups)!r} with conflicting "
+                f"apply/override policy (group {groups[index]!r} differs from {groups[0]!r}); "
+                "tags may differ per group, scheduling and originated_prefixes must be identical"
+            )
+    tags: set[str] = set()
+    for _, _, group_tags in policies:
+        tags.update(group_tags)
+    tags.update(site.get("tags") or ())
+
+    body_ref = site["frame"]["body_fixed"]["body"]
+    body = _load_expected(body_ref, roots, "body")
+    if site.get("location") is None:
+        raise SessionResolutionError(
+            f"site {site_id!r} is not body-fixed; runtime support requires "
+            "a fixed surface location for placed ground nodes"
+        )
+
     expanded: list[_RuntimeNode] = []
-    for site_ref in site_set["sites"]:
-        site = _load_expected(site_ref, roots, "site")
-        body_ref = site["frame"]["body_fixed"]["body"]
-        body = _load_expected(body_ref, roots, "body")
-        for site_node in site["nodes"]:
-            source_node = _load_expected(site_node["model"], roots, "node")
-            local_id = f"{site['id']}-{site_node['id']}"
-            runtime_id = _runtime_id(segment.id, local_id)
-            tags = set(segment.tags or ())
-            tags.update(site.get("tags") or ())
-            tags.update(site_node.get("tags") or ())
-            tags.update(
-                segment.apply.tags if segment.apply is not None and segment.apply.tags else ()
-            )
-            scheduling = site_node.get("scheduling") or (
-                segment.apply.scheduling.model_dump(mode="python")
-                if segment.apply is not None and segment.apply.scheduling is not None
-                else None
-            )
-            if site.get("location") is None:
-                raise SessionResolutionError(
-                    f"site {site['id']!r} is not body-fixed; runtime support requires "
-                    "a fixed surface location for placed ground nodes"
-                )
-            originated = _merge_originated_prefixes(
-                site_node.get("originated_prefixes"),
-                segment.apply.originated_prefixes.model_dump(mode="python")
-                if segment.apply is not None and segment.apply.originated_prefixes is not None
-                else None,
-            )
-            expanded.append(
-                _RuntimeNode(
-                    node=ResolvedNode(
-                        node_id=runtime_id,
-                        local_node_id=local_id,
-                        segment_id=segment.id,
-                        namespace=segment.id,
-                        kind="ground_station",
-                        frame_id=body["id"],
-                        reference_body=body["id"],
-                        tags=tuple(sorted(tags)),
-                        terminal_inventory=tuple(
-                            _terminal_blocks_for_site_node(
-                                runtime_id, source_node, site_node, roots
-                            )
-                        ),
-                        interfaces=_interfaces_from_site_node(site_node),
-                        wan_interfaces=tuple(
-                            _wan_interfaces_for_site_node(runtime_id, source_node, site_node)
-                        ),
-                        surface_position=ResolvedSurfacePosition(
-                            body=body["id"],
-                            lat_deg=float(site["location"]["lat_deg"]),
-                            lon_deg=float(site["location"]["lon_deg"]),
-                            alt_m=float(site["location"]["alt_m"]),
-                        ),
-                        originated_prefixes=originated,
-                        forwarding=source_node["forwarding"],
-                        service_priority=site_node.get("service_priority"),
-                        ground_scheduling=scheduling,
+    for site_node in site["nodes"]:
+        source_node = _load_expected(site_node["model"], roots, "node")
+        # Ground identity is site-anchored: a node's name never depends on
+        # which group(s) placed its site. local_node_id keeps the
+        # site-qualified form so `node:` selectors stay unique.
+        local_id = f"{site_id}-{site_node['id']}"
+        runtime_id = _runtime_id(site_id, site_node["id"])
+        node_tags = set(tags)
+        node_tags.update(site_node.get("tags") or ())
+        scheduling = site_node.get("scheduling") or base_scheduling
+        originated = _merge_originated_prefixes(
+            site_node.get("originated_prefixes"),
+            base_originated,
+        )
+        expanded.append(
+            _RuntimeNode(
+                node=ResolvedNode(
+                    node_id=runtime_id,
+                    local_node_id=local_id,
+                    segment_id=groups[0],
+                    namespace=_normalize_token(site_id),
+                    placement_groups=groups,
+                    kind="ground_station",
+                    frame_id=body["id"],
+                    reference_body=body["id"],
+                    tags=tuple(sorted(node_tags)),
+                    tenant_id=site_node.get("tenant_id") or "default",
+                    terminal_inventory=tuple(
+                        _terminal_blocks_for_site_node(runtime_id, source_node, site_node, roots)
                     ),
-                    mounts=_mounts_by_id(source_node),
-                    body_facts=(_body_facts_from_catalog(body),),
-                )
+                    interfaces=_interfaces_from_site_node(site_node),
+                    wan_interfaces=tuple(
+                        _wan_interfaces_for_site_node(runtime_id, source_node, site_node)
+                    ),
+                    surface_position=ResolvedSurfacePosition(
+                        body=body["id"],
+                        lat_deg=float(site["location"]["lat_deg"]),
+                        lon_deg=float(site["location"]["lon_deg"]),
+                        alt_m=float(site["location"]["alt_m"]),
+                    ),
+                    originated_prefixes=originated,
+                    forwarding=source_node["forwarding"],
+                    service_priority=site_node.get("service_priority"),
+                    ground_scheduling=scheduling,
+                ),
+                mounts=_mounts_by_id(source_node),
+                body_facts=(_body_facts_from_catalog(body),),
             )
+        )
     return expanded
 
 
@@ -723,31 +878,67 @@ def _apply_addressing(
                 raise SessionResolutionError(
                     f"address pool assignment {assignment.id!r} matched zero nodes"
                 )
-            ordered_ids = [item.node.node_id for item in selected]
-            ipv4 = (
-                _allocate_pool_addresses(
-                    assignment.ipv4_pool,
-                    assignment.prefix_length,
-                    count=len(ordered_ids),
-                    assignment_id=assignment.id,
-                )
+            # Pool allocation is need-based and reservation-aware: a node that
+            # already carries an authored address for a family keeps it and
+            # consumes no pool slot, and every address already present in the
+            # session (authored site lo0s included) is excluded from the pool
+            # walk. Positional allocation that ignores authored addresses
+            # mints duplicate router identities.
+            reserved_ipv4, reserved_ipv6 = _existing_loopback_addresses(nodes)
+            by_id = {item.node.node_id: item for item in selected}
+
+            def _needs(item: _RuntimeNode, family: str) -> bool:
+                interfaces = item.node.interfaces
+                if interfaces is None:
+                    return True
+                return getattr(interfaces.lo0, family) is None
+
+            ipv4_ids = (
+                [nid for nid, item in by_id.items() if _needs(item, "ipv4")]
                 if assignment.ipv4_pool is not None
-                else [None] * len(ordered_ids)
+                else []
             )
-            ipv6 = (
-                _allocate_pool_addresses(
-                    assignment.ipv6_pool,
-                    assignment.prefix_length,
-                    count=len(ordered_ids),
-                    assignment_id=assignment.id,
-                )
+            ipv6_ids = (
+                [nid for nid, item in by_id.items() if _needs(item, "ipv6")]
                 if assignment.ipv6_pool is not None
-                else [None] * len(ordered_ids)
+                else []
+            )
+            ipv4_by_id = dict(
+                zip(
+                    ipv4_ids,
+                    _allocate_pool_addresses(
+                        assignment.ipv4_pool,
+                        assignment.prefix_length,
+                        count=len(ipv4_ids),
+                        assignment_id=assignment.id,
+                        reserved=reserved_ipv4,
+                    ),
+                    strict=True,
+                )
+                if ipv4_ids
+                else ()
+            )
+            ipv6_by_id = dict(
+                zip(
+                    ipv6_ids,
+                    _allocate_pool_addresses(
+                        assignment.ipv6_pool,
+                        assignment.prefix_length,
+                        count=len(ipv6_ids),
+                        assignment_id=assignment.id,
+                        reserved=reserved_ipv6,
+                    ),
+                    strict=True,
+                )
+                if ipv6_ids
+                else ()
             )
             allocated = {
-                node_id: ResolvedInterfaceAddress(ipv4=v4, ipv6=v6)
-                for node_id, v4, v6 in zip(ordered_ids, ipv4, ipv6, strict=True)
-                if v4 is not None or v6 is not None
+                node_id: ResolvedInterfaceAddress(
+                    ipv4=ipv4_by_id.get(node_id), ipv6=ipv6_by_id.get(node_id)
+                )
+                for node_id in by_id
+                if node_id in ipv4_by_id or node_id in ipv6_by_id
             }
             next_nodes: list[_RuntimeNode] = []
             for item in nodes:
@@ -904,6 +1095,7 @@ def _allocate_pool_addresses(
     *,
     count: int,
     assignment_id: str,
+    reserved: set[ipaddress.IPv4Address] | set[ipaddress.IPv6Address] = frozenset(),
 ) -> list[str]:
     if prefix_length is None:
         raise SessionResolutionError(
@@ -922,18 +1114,23 @@ def _allocate_pool_addresses(
     if prefix_length == max_prefix and network.num_addresses > 2:
         start += 1
         available -= 2
-    if count > available:
-        raise SessionResolutionError(
-            f"address pool assignment {assignment_id!r} needs {count} address(es), "
-            f"but pool {pool}/{prefix_length} has {available}"
-        )
     addresses: list[str] = []
-    for index in range(count):
-        address = ipaddress.ip_address(start + index * subnet_size)
+    offset = 0
+    while len(addresses) < count:
+        if offset >= available:
+            raise SessionResolutionError(
+                f"address pool assignment {assignment_id!r} needs {count} address(es), "
+                f"but pool {pool}/{prefix_length} has only "
+                f"{len(addresses)} free after reserved/authored addresses"
+            )
+        address = ipaddress.ip_address(start + offset * subnet_size)
+        offset += 1
         if address not in network:
             raise SessionResolutionError(
                 f"address pool assignment {assignment_id!r} allocated {address} outside {pool}"
             )
+        if address in reserved:
+            continue
         addresses.append(f"{address}/{prefix_length}")
     return addresses
 
@@ -999,14 +1196,25 @@ def _resolve_link_rule(
             raise SessionResolutionError(
                 f"link rule {rule.id!r} terminal selector matched zero compatible mounts"
             )
-        segment_ids = {item.node.segment_id for item in compatible}
-        if len(segment_ids) != 1:
+        # Endpoint coherence: every selected node must share at least one
+        # segment label. A node's labels are its segment plus its placement
+        # groups — a shared site legitimately answers for every group that
+        # placed it, so a {segment: leo_b_ground} endpoint may include a site
+        # whose primary segment is leo_a_ground.
+        label_sets = [{item.node.segment_id, *item.node.placement_groups} for item in compatible]
+        common_labels = set.intersection(*label_sets)
+        if not common_labels:
+            spanned = sorted({item.node.segment_id for item in compatible})
             raise SessionResolutionError(
-                f"link rule {rule.id!r} endpoint selector spans multiple segments: {sorted(segment_ids)}"
+                f"link rule {rule.id!r} endpoint selector spans unrelated segments: {spanned}"
             )
+        primary_segments = {item.node.segment_id for item in compatible}
+        endpoint_segment = next(
+            iter(sorted(common_labels & primary_segments) or sorted(common_labels))
+        )
         endpoints.append(
             ResolvedEndpoint(
-                segment_id=next(iter(segment_ids)),
+                segment_id=endpoint_segment,
                 terminal_role=_first_terminal_role(endpoint.terminal),
                 terminal_medium=_first_terminal_medium(endpoint.terminal),
                 min_elevation_deg=endpoint.min_elevation_deg,
@@ -1059,6 +1267,7 @@ def _resolve_routing_domains(
             ResolvedRoutingDomain(
                 domain_id=domain.id,
                 protocol=domain.protocol,
+                timers=domain.timers or RoutingTimers(),
                 node_ids=tuple(sorted(selected_ids)),
                 capabilities=tuple(capabilities),
                 area_assignment=domain.area_assignment,
@@ -1176,6 +1385,18 @@ def _access_candidate_interfaces(left: ResolvedNode, right: ResolvedNode) -> tup
         raise SessionResolutionError(
             f"access candidate requires exactly one ground station endpoint: "
             f"{left.node_id}<->{right.node_id}"
+        )
+    ground, satellite = (left, right) if left_ground else (right, left)
+    # Ground access visibility is body-local: the GS body-fixed frame and the
+    # satellite central-body frame must be the same body, or every range and
+    # elevation number downstream is cross-frame garbage. Cross-body paths use
+    # inter-body relays, never direct ground access.
+    if ground.reference_body != satellite.central_body:
+        raise SessionResolutionError(
+            f"access link {ground.node_id}<->{satellite.node_id} is cross-body "
+            f"(ground reference_body={ground.reference_body!r}, satellite "
+            f"central_body={satellite.central_body!r}); ground access visibility is "
+            "body-local — use an inter-body relay path instead"
         )
     return ("term0", "gnd0") if left_ground else ("gnd0", "term0")
 
@@ -1310,7 +1531,12 @@ def _eval_node_selector(
         excluded = {item.node.node_id for item in _eval_node_selector(selector.not_, runtime_nodes)}
         return [item for item in universe if item.node.node_id not in excluded]
     if selector.segment is not None:
-        return [item for item in universe if item.node.segment_id == selector.segment]
+        return [
+            item
+            for item in universe
+            if item.node.segment_id == selector.segment
+            or selector.segment in item.node.placement_groups
+        ]
     if selector.tag is not None:
         return [item for item in universe if selector.tag in item.node.tags]
     if selector.node is not None:
@@ -1371,6 +1597,84 @@ def _derive_link_label(endpoints: list[ResolvedEndpoint]) -> str:
     if left.terminal_role == "access" or right.terminal_role == "access":
         return "access"
     return "inter_body"
+
+
+def _validate_routing_boundaries(
+    cfg: SegmentSessionConfig,
+    domains: tuple[ResolvedRoutingDomain, ...],
+    link_rules: tuple[ResolvedLinkRule, ...],
+) -> None:
+    """Boundary declarations must be materializable, and domain separation
+    must be real.
+
+    1. Every boundary's ``over`` names an existing, enabled, non-access rule
+       whose endpoints land exactly in each export's from/to domains.
+    2. Every non-access rule whose endpoints land in two different routing
+       domains must be covered by a boundary — otherwise both ends would
+       render live IGP interfaces and two declared-separate domains silently
+       run as one.
+    """
+    domains_by_id = {domain.domain_id: domain for domain in domains}
+    rules_by_id = {rule.rule_id: rule for rule in link_rules}
+    domain_of_node = {
+        node_id: domain.domain_id for domain in domains for node_id in domain.node_ids
+    }
+    boundary_rule_ids: set[str] = set()
+
+    for boundary in cfg.routing.boundaries or () if cfg.routing is not None else ():
+        rule = rules_by_id.get(boundary.over)
+        if rule is None:
+            raise SessionResolutionError(
+                f"routing boundary over {boundary.over!r} names no declared link rule"
+            )
+        if not rule.enabled:
+            raise SessionResolutionError(
+                f"routing boundary over {boundary.over!r} names a disabled link rule"
+            )
+        if rule.kind == "access":
+            raise SessionResolutionError(
+                f"routing boundary over {boundary.over!r} names an access rule; "
+                "boundaries run over fixed inter-domain links"
+            )
+        boundary_rule_ids.add(rule.rule_id)
+        rule_domains = {
+            domain_of_node[node_id]
+            for endpoint in rule.endpoints
+            for node_id in endpoint.node_ids
+            if node_id in domain_of_node
+        }
+        for export in boundary.export:
+            for domain_id in (export.from_, export.to):
+                if domain_id not in domains_by_id:
+                    raise SessionResolutionError(
+                        f"routing boundary export references unknown domain {domain_id!r}"
+                    )
+            if export.from_ == export.to:
+                raise SessionResolutionError(
+                    f"routing boundary export from/to must differ; got {export.from_!r}"
+                )
+            if rule_domains != {export.from_, export.to}:
+                raise SessionResolutionError(
+                    f"routing boundary over {boundary.over!r} spans domains "
+                    f"{sorted(rule_domains)} but export declares "
+                    f"{sorted((export.from_, export.to))}"
+                )
+
+    for rule in link_rules:
+        if rule.kind == "access" or not rule.enabled:
+            continue
+        rule_domains = {
+            domain_of_node[node_id]
+            for endpoint in rule.endpoints
+            for node_id in endpoint.node_ids
+            if node_id in domain_of_node
+        }
+        if len(rule_domains) > 1 and rule.rule_id not in boundary_rule_ids:
+            raise SessionResolutionError(
+                f"link rule {rule.rule_id!r} joins routing domains {sorted(rule_domains)} "
+                "without a routing boundary; declare a boundary over it or keep the "
+                "rule inside one domain"
+            )
 
 
 def _allocate_sid_blocks(domains: tuple[ResolvedRoutingDomain, ...]) -> list[SidBlock]:

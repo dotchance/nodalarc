@@ -139,8 +139,8 @@ def test_reconfig_targets_resolved_ground_nodes(monkeypatch, tmp_path: Path) -> 
     na_reconfig.reconfig(str(session_path), "type:ground_station")
 
     assert pushed == [
-        "ground-earth-test-site-00-router",
-        "ground-earth-test-site-01-router",
+        "earth-test-site-00-router",
+        "earth-test-site-01-router",
     ]
 
 
@@ -163,7 +163,7 @@ def test_add_flow_resolves_destination_from_resolved_session(monkeypatch, tmp_pa
     session_path = _session_file(tmp_path, stations=["a", "b"])
     monkeypatch.setattr(
         "measurement.flow_manager.resolve_src_pod_ip",
-        lambda node_id: "10.42.0.7" if node_id == "ground-earth-test-site-00-router" else None,
+        lambda node_id: "10.42.0.7" if node_id == "earth-test-site-00-router" else None,
     )
     configured: list[dict] = []
     monkeypatch.setattr(
@@ -173,7 +173,7 @@ def test_add_flow_resolves_destination_from_resolved_session(monkeypatch, tmp_pa
 
     na_reconfig.add_flow(
         str(session_path),
-        "flow-1:ground-earth-test-site-00-router:ground-earth-test-site-01-router:udp:100:continuous",
+        "flow-1:earth-test-site-00-router:earth-test-site-01-router:udp:100:continuous",
     )
 
     assert configured == [
@@ -194,7 +194,7 @@ def test_remove_flow_scans_resolved_ground_node_ids(monkeypatch, tmp_path: Path)
 
     def fake_resolve_src_pod_ip(node_id: str):
         probed.append(node_id)
-        return "10.42.0.8" if node_id == "ground-earth-test-site-01-router" else None
+        return "10.42.0.8" if node_id == "earth-test-site-01-router" else None
 
     deleted: list[tuple[str, str]] = []
     monkeypatch.setattr("measurement.flow_manager.resolve_src_pod_ip", fake_resolve_src_pod_ip)
@@ -206,7 +206,7 @@ def test_remove_flow_scans_resolved_ground_node_ids(monkeypatch, tmp_path: Path)
     na_reconfig.remove_flow(str(session_path), "flow-1")
 
     assert probed == [
-        "ground-earth-test-site-00-router",
-        "ground-earth-test-site-01-router",
+        "earth-test-site-00-router",
+        "earth-test-site-01-router",
     ]
     assert deleted == [("10.42.0.8", "flow-1")]

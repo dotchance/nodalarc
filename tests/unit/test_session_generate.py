@@ -145,3 +145,53 @@ def test_generate_catalog_session_rejects_future_sgp4_runtime_path() -> None:
             extensions=[],
             orbit_propagator="sgp4_tle",
         )
+
+
+def test_generated_session_carries_wizard_timers_into_resolved_domain() -> None:
+    raw, resolved, warnings = _generated_session(
+        constellation="earth-leo-ring-36",
+        protocol="isis",
+        extensions=[],
+        orbit_propagator="j2_mean_elements",
+        ground_stations="nodalarc:site-sets/earth/leo/earth-leo-starlink-pop-sites.yaml",
+        timers={"hello_interval_s": 2, "hold_interval_s": 10, "bfd": {"enabled": True}},
+    )
+
+    assert warnings == []
+    assert raw["routing"]["domains"][0]["timers"] == {
+        "hello_interval_s": 2,
+        "hold_interval_s": 10,
+        "bfd": {"enabled": True},
+    }
+    domain = resolved.routing_domains[0]
+    assert domain.timers.hello_interval_s == 2
+    assert domain.timers.hold_interval_s == 10
+    assert domain.timers.bfd.enabled is True
+    # Untouched fields carry engine defaults on the resolved truth.
+    assert domain.timers.spf.init_delay_ms == 50
+
+
+def test_generated_session_with_default_timers_emits_no_timers_block() -> None:
+    raw, resolved, _warnings = _generated_session(
+        constellation="earth-leo-ring-36",
+        protocol="isis",
+        extensions=[],
+        orbit_propagator="j2_mean_elements",
+        ground_stations="nodalarc:site-sets/earth/leo/earth-leo-starlink-pop-sites.yaml",
+        timers={"hello_interval_s": 1, "hold_interval_s": 3},
+    )
+
+    assert "timers" not in raw["routing"]["domains"][0]
+    assert resolved.routing_domains[0].timers.hello_interval_s == 1
+
+
+def test_generator_rejects_retired_routing_config_with_timers_pointer() -> None:
+    with pytest.raises(ValueError, match="timers"):
+        generate_session_yaml(
+            constellation="earth-leo-ring-36",
+            protocol="isis",
+            extensions=[],
+            orbit_propagator="j2_mean_elements",
+            ground_stations="nodalarc:site-sets/earth/leo/earth-leo-starlink-pop-sites.yaml",
+            routing_config={"isis_hello_interval": 5},
+        )

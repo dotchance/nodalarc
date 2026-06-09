@@ -43,36 +43,66 @@ def test_catalog_primitive_models_reject_extra_fields() -> None:
         validate_catalog_document(raw)
 
 
-def test_shipped_runtime_addressed_catalog_sessions_resolve_to_runtime_truth() -> None:
+# Every shipped session resolves under the production-default runtime-support
+# gate, with no per-session opt-outs. If a session is added or its composition
+# changes, this table changes with it — silently shipping an unresolvable or
+# shrunken session is the failure mode this exists to catch.
+SHIPPED_SESSION_SHAPES = {
+    "earth-geo-inmarsat.yaml": (8, 16),
+    "earth-geo-tdrs.yaml": (10, 24),
+    "earth-leo-heo-geo-luna-reachability.yaml": (103, 415),
+    "earth-leo-polar.yaml": (39, 108),
+    "earth-leo-simple.yaml": (41, 180),
+    "earth-leo-walker.yaml": (181, 880),
+    "earth-meo-gps.yaml": (31, 120),
+}
+
+
+def test_every_shipped_catalog_session_resolves_to_runtime_truth() -> None:
     paths = sorted(SESSIONS.glob("*.yaml"))
-    assert paths
+    assert [path.name for path in paths] == sorted(SHIPPED_SESSION_SHAPES)
 
     for path in paths:
-        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
-        if not (raw.get("addressing") or {}).get("loopbacks"):
-            continue
         resolution = load_session_resolution_from_file(path)
-        assert resolution.resolved.nodes
+        resolved = resolution.resolved
+        expected_nodes, expected_candidates = SHIPPED_SESSION_SHAPES[path.name]
+        assert len(resolved.nodes) == expected_nodes, path.name
+        assert len(resolved.link_candidates) == expected_candidates, path.name
+
+        # Loopback identity: unique per family across the whole session.
+        for family in ("ipv4", "ipv6"):
+            seen: dict[str, str] = {}
+            for node in resolved.nodes:
+                if node.interfaces is None:
+                    continue
+                value = getattr(node.interfaces.lo0, family)
+                if value is None:
+                    continue
+                address = value.split("/")[0]
+                assert address not in seen, (
+                    f"{path.name}: duplicate lo0 {family} {address} on "
+                    f"{seen[address]} and {node.node_id}"
+                )
+                seen[address] = node.node_id
+
         sr_domains = [
             domain
-            for domain in resolution.resolved.routing_domains
+            for domain in resolved.routing_domains
             if "segment_routing" in domain.capabilities
         ]
         assert {domain.domain_id for domain in sr_domains} == {
-            block.domain_id for block in resolution.resolved.sid_blocks
+            block.domain_id for block in resolved.sid_blocks
         }
-        assert all(0 < sid <= 8000 for sid in resolution.resolved.sid_index_by_node_id().values())
+        assert all(0 < sid <= 8000 for sid in resolved.sid_index_by_node_id().values())
         assert all(
             node.interfaces is not None and node.interfaces.lo0 is not None
-            for node in resolution.resolved.nodes
+            for node in resolved.nodes
             if node.forwarding == "routed"
         )
-        assert all(
-            node.orbit is not None for node in resolution.resolved.nodes if node.kind == "satellite"
-        )
+        assert all(node.orbit is not None for node in resolved.nodes if node.kind == "satellite")
         assert all(
             node.surface_position is not None
-            for node in resolution.resolved.nodes
+            for node in resolved.nodes
             if node.kind == "ground_station"
         )
 

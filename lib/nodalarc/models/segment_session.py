@@ -119,6 +119,50 @@ class AreaAssignment(BaseModel):
         return self
 
 
+class SpfThrottle(BaseModel):
+    """IETF SPF backoff values in milliseconds (IS-IS spf-delay-ietf; OSPF
+    maps init/short/long onto its throttle triple)."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    init_delay_ms: int = Field(default=50, ge=0)
+    short_delay_ms: int = Field(default=200, ge=0)
+    long_delay_ms: int = Field(default=1000, ge=0)
+    holddown_ms: int = Field(default=2000, ge=0)
+    time_to_learn_ms: int = Field(default=500, ge=0)
+
+
+class BfdConfig(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    enabled: bool = False
+    detect_multiplier: int = Field(default=3, gt=0)
+    rx_interval_ms: int = Field(default=300, gt=0)
+    tx_interval_ms: int = Field(default=300, gt=0)
+
+
+class RoutingTimers(BaseModel):
+    """Per-domain IGP timer tuning. Protocol-neutral where the concept is
+    shared; the renderer maps values per protocol. Engine defaults apply when
+    a field (or the whole object) is omitted."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    hello_interval_s: int = Field(default=1, gt=0)
+    hold_interval_s: int = Field(default=3, gt=0)
+    spf: SpfThrottle = SpfThrottle()
+    bfd: BfdConfig = BfdConfig()
+
+    @model_validator(mode="after")
+    def _hold_exceeds_hello(self) -> RoutingTimers:
+        if self.hold_interval_s <= self.hello_interval_s:
+            raise ValueError(
+                f"hold_interval_s ({self.hold_interval_s}) must be greater than "
+                f"hello_interval_s ({self.hello_interval_s})"
+            )
+        return self
+
+
 class RoutingDomain(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -127,7 +171,25 @@ class RoutingDomain(BaseModel):
     capabilities: RoutingCapabilities | None = None
     selectors: tuple[NodeSelector, ...] = Field(min_length=1)
     area_assignment: AreaAssignment | None = None
-    timers: Identifier | None = None
+    timers: RoutingTimers | None = None
+
+    @model_validator(mode="after")
+    def _timers_only_on_igp(self) -> RoutingDomain:
+        if self.timers is not None and self.protocol not in {"isis", "ospf"}:
+            raise ValueError(
+                f"routing domain {self.id!r} declares timers on protocol "
+                f"{self.protocol!r}; IGP timers apply to isis/ospf domains only"
+            )
+        return self
+
+
+class AggregateOf(BaseModel):
+    """Resolver-derived prefix set (grammar C046): the from-domain's
+    originated prefixes, per address family the boundary can install."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    aggregate_of: Literal["originated"]
 
 
 class ExportRule(BaseModel):
@@ -135,7 +197,7 @@ class ExportRule(BaseModel):
 
     from_: Identifier = Field(alias="from")
     to: Identifier
-    prefixes: tuple[NonEmptyReference, ...] | dict[str, Literal["originated"]]
+    prefixes: tuple[NonEmptyReference, ...] | AggregateOf
     export_node_loopbacks: bool | None = None
     install_via: Literal["peer_loopback"] | NonEmptyReference | None = None
 

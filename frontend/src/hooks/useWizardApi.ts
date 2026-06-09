@@ -9,6 +9,7 @@
 import { useState, useCallback } from "react";
 import { REST_URL, authHeaders } from "../config";
 import type { WizardRuntimeState, CoveragePreviewResult } from "../catalog/wizardTypes";
+import { timersToGrammar } from "../catalog/wizardTypes";
 
 /** If the constellation field is a JSON string (custom), parse it to a dict.
  *  Otherwise return the file path string as-is. */
@@ -62,7 +63,7 @@ export function useWizardApi() {
               : state.groundStationSet?.stations ?? undefined,
             satellite_type: state.satelliteType?.name ?? undefined,
             custom_constellation: isCustomConstellation ? constellationValue : undefined,
-            routing_config: state.routingTimers ?? undefined,
+            timers: timersToGrammar(state.protocol, state.routingTimers),
           }),
         });
         const data = await resp.json();

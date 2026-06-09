@@ -10,9 +10,19 @@ sysctls, template variables, and SRGB constraint validation.
 The deployer and templates are pure pass-through — no protocol-aware logic.
 """
 
+from __future__ import annotations
+
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any, NamedTuple
+from typing import TYPE_CHECKING, Any, NamedTuple
+
+if TYPE_CHECKING:
+    from nodalarc.models.resolved_session import ResolvedRoutingDomain
+
+# The routing-domain protocols with an implemented FRR stack. This is the
+# single owner of "what renders": RuntimeSupport builds its profile from it,
+# so resolve-time gating and the renderer can never disagree.
+SUPPORTED_STACK_PROTOCOLS: frozenset[str] = frozenset({"isis", "ospf", "static"})
 
 
 class TemplateFile(NamedTuple):
@@ -163,27 +173,35 @@ def normalize_extensions(extensions: list[str] | tuple[str, ...]) -> tuple[str, 
     return tuple(normalized)
 
 
-def domain_extensions(domain: Any) -> list[str]:
+def domain_extensions(domain: ResolvedRoutingDomain) -> list[str]:
     """Return routing-stack extensions implied by a resolved routing domain."""
-    protocol = getattr(domain, "protocol", None)
-    domain_id = getattr(domain, "domain_id", "<unknown>")
-    if protocol not in {"isis", "ospf"}:
+    if domain.protocol not in SUPPORTED_STACK_PROTOCOLS:
         raise ValueError(
-            f"routing domain {domain_id!r} uses protocol {protocol!r}; "
-            "current FRR runtime supports isis/ospf domains"
+            f"routing domain {domain.domain_id!r} uses protocol {domain.protocol!r}; "
+            f"implemented FRR stacks: {', '.join(sorted(SUPPORTED_STACK_PROTOCOLS))}"
         )
-    capabilities = set(getattr(domain, "capabilities", ()) or ())
+    capabilities = set(domain.capabilities or ())
+    if domain.protocol == "static" and capabilities:
+        raise ValueError(
+            f"routing domain {domain.domain_id!r} declares capabilities "
+            f"{sorted(capabilities)} on protocol 'static'; static domains carry no "
+            "IGP capabilities"
+        )
     extensions: list[str] = []
     if "segment_routing" in capabilities:
         extensions.append("sr")
     if "traffic_engineering" in capabilities:
         extensions.append("te")
-    if "mpls" in capabilities and "traffic_engineering" in capabilities:
+    if "mpls" in capabilities and "segment_routing" not in capabilities:
+        # A bare mpls capability means LDP-distributed MPLS forwarding. When
+        # segment_routing is also declared, the MPLS data plane is provided by
+        # SR-MPLS (the sr extension carries the label plumbing and sysctls) —
+        # the capability is consumed by SR, not dropped.
         extensions.append("mpls")
     return extensions
 
 
-def resolve_domain_stack(domain: Any) -> ResolvedStack:
+def resolve_domain_stack(domain: ResolvedRoutingDomain) -> ResolvedStack:
     """Resolve the routing stack for one resolved routing domain."""
     return resolve_stack(domain.protocol, domain_extensions(domain))
 
@@ -205,15 +223,36 @@ def resolve_stack(protocol: str, extensions: list[str]) -> ResolvedStack:
         raise ValueError("TE extension requires ospf or isis protocol")
     if "mpls" in ext_set and protocol not in ("ospf", "isis"):
         raise ValueError("MPLS extension requires ospf or isis protocol")
-    if "mpls" in ext_set and "te" not in ext_set:
-        raise ValueError("MPLS extension requires TE extension")
 
     if protocol == "ospf":
         return _resolve_ospf(ext_set)
     elif protocol == "isis":
         return _resolve_isis(ext_set)
+    elif protocol == "static":
+        if ext_set:
+            raise ValueError("static protocol takes no extensions")
+        return _resolve_static()
     else:
         raise ValueError(f"Unknown protocol: {protocol}")
+
+
+def _resolve_static() -> ResolvedStack:
+    """Static-only routing stack: zebra + staticd, no IGP daemons.
+
+    Valid for stub/edge domains joined to IGP domains through routing
+    boundaries. Reachability inside a static domain comes from connected
+    routes plus boundary-exported static routes.
+    """
+    daemons = ["zebra", "staticd"]
+    return ResolvedStack(
+        daemons=daemons,
+        template_files=[_DAEMON_TEMPLATES[d] for d in daemons],
+        template_variables={"protocol": "static"},
+        image="frr",
+        mi_adapter=None,
+        segment_routing=False,
+        reconfigure_command="vtysh -f {config_path}",
+    )
 
 
 def _resolve_ospf(ext_set: set[str]) -> ResolvedStack:

@@ -2,6 +2,8 @@
 # Licensed under the Apache License, Version 2.0. See LICENSE file.
 """Tests for the catalog resolver runtime contract."""
 
+import zlib
+
 import pytest
 from nodalarc.models.identity import IdentityMode
 from nodalarc.models.link_rules import VisibleCandidatesTopology
@@ -63,9 +65,17 @@ def _body() -> ResolvedBodyFacts:
     )
 
 
-def _interfaces() -> ResolvedNodeInterfaces:
+def _unique_octets(node_id: str) -> tuple[int, int]:
+    value = zlib.crc32(node_id.encode()) % 65021
+    return (value >> 8) & 0xFF, value & 0xFF
+
+
+def _interfaces(node_id: str = "ground-denver-router") -> ResolvedNodeInterfaces:
+    # Loopbacks are router identity; fixtures derive a per-node address so the
+    # session-wide lo0 uniqueness validator holds for multi-node fixtures.
+    hi, lo = _unique_octets(node_id)
     return ResolvedNodeInterfaces(
-        lo0=ResolvedInterfaceAddress(ipv4="10.255.0.1/32", ipv6="fd00::1/128"),
+        lo0=ResolvedInterfaceAddress(ipv4=f"10.255.{hi}.{lo}/32", ipv6=f"fd00::{hi:x}:{lo:x}/128"),
         terr0=ResolvedInterfaceAddress(ipv4="172.16.1.1/24", ipv6="fd10::1/64"),
     )
 
@@ -103,7 +113,9 @@ def _satellite(node_id: str = "leo-sat-p00s00", *, segment_id: str = "leo") -> R
         terminal_inventory=(_terminal(node_id),),
         orbit=_orbit(),
         forwarding="routed",
-        interfaces=ResolvedNodeInterfaces(lo0=ResolvedInterfaceAddress(ipv4="10.255.0.1/32")),
+        interfaces=ResolvedNodeInterfaces(
+            lo0=ResolvedInterfaceAddress(ipv4="10.254.{}.{}/32".format(*_unique_octets(node_id)))
+        ),
         plane=0,
         slot=0,
     )
@@ -121,7 +133,7 @@ def _ground(node_id: str = "ground-denver-router", *, segment_id: str = "ground"
         terminal_inventory=(
             _terminal(node_id, terminal_id="access_ka", role="access", medium="rf", count=2),
         ),
-        interfaces=_interfaces(),
+        interfaces=_interfaces(node_id),
         surface_position=_surface(),
         forwarding="routed",
         ground_scheduling=GroundScheduling(

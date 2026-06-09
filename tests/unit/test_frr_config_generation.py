@@ -5,14 +5,15 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
 from typing import Any
 
 import nodalarc.template_vars as template_vars
 import pytest
 from jinja2 import Environment, FileSystemLoader
 from nodalarc.models.resolved_session import ResolvedSession, SourceContext
-from nodalarc.resolve_session import resolve_session
-from nodalarc.stack_resolver import resolve_stack
+from nodalarc.resolve_session import load_session_resolution_from_file, resolve_session
+from nodalarc.stack_resolver import domain_extensions, resolve_domain_stack, resolve_stack
 from nodalarc.template_vars import build_template_vars_from_resolved
 
 from tests.conftest import CONFIGS_DIR, build_segment_session_dict
@@ -76,22 +77,9 @@ def _domain_for_node(resolved: ResolvedSession, node_id: str):
     return domains[0]
 
 
-def _extensions_for_domain(domain) -> list[str]:
-    capabilities = set(domain.capabilities)
-    extensions: list[str] = []
-    if "segment_routing" in capabilities:
-        extensions.append("sr")
-    if "traffic_engineering" in capabilities:
-        extensions.append("te")
-    if "mpls" in capabilities and "traffic_engineering" in capabilities:
-        extensions.append("mpls")
-    return extensions
-
-
 def _vars_for(resolved: ResolvedSession, node_id: str) -> dict[str, Any]:
     domain = _domain_for_node(resolved, node_id)
-    stack = resolve_stack(domain.protocol, _extensions_for_domain(domain))
-    ground_ids = [node.node_id for node in resolved.nodes if node.kind == "ground_station"]
+    stack = resolve_stack(domain.protocol, domain_extensions(domain))
     return build_template_vars_from_resolved(
         resolved,
         node_id,
@@ -99,7 +87,6 @@ def _vars_for(resolved: ResolvedSession, node_id: str) -> dict[str, Any]:
         node_sid_index=resolved.sid_index_by_node_id().get(node_id)
         if stack.segment_routing
         else None,
-        gs_index=ground_ids.index(node_id) if node_id in ground_ids else None,
     )
 
 
@@ -197,3 +184,172 @@ def test_resolved_template_vars_fail_loud_when_sr_sid_is_missing() -> None:
             node_id,
             stack_variables=stack.template_variables,
         )
+
+
+# ---------------------------------------------------------------------------
+# Identity and multi-domain rendering nets
+# ---------------------------------------------------------------------------
+
+NET_LINE = re.compile(
+    r"^ net (?P<area>[0-9a-f.]+)\.(?P<system>[0-9a-f]{4}\.[0-9a-f]{4}\.[0-9a-f]{4})\.00$"
+)
+
+
+def test_isis_system_ids_are_globally_unique_across_segments() -> None:
+    """Four segments share plane/slot numbering in one IS-IS domain; every
+    rendered NET must still be unique — identity comes from the resolver,
+    never from per-segment indices."""
+    resolution = load_session_resolution_from_file(
+        Path("catalog/nodalarc/sessions/earth-leo-heo-geo-luna-reachability.yaml")
+    )
+    resolved = resolution.resolved
+
+    nets: dict[str, str] = {}
+    for domain in resolved.routing_domains:
+        stack = resolve_domain_stack(domain)
+        sid_by_node = resolved.sid_index_by_node_id()
+        for node_id in domain.node_ids:
+            vars_for_node = build_template_vars_from_resolved(
+                resolved,
+                node_id,
+                stack_variables=stack.template_variables,
+                node_sid_index=sid_by_node.get(node_id) if stack.segment_routing else None,
+            )
+            rendered = _render("isisd.conf.j2", vars_for_node)
+            net_lines = [line for line in rendered.splitlines() if NET_LINE.match(line)]
+            assert len(net_lines) >= 1, f"{node_id}: no parseable NET in rendered isisd.conf"
+            net = net_lines[0]
+            assert net not in nets, (
+                f"duplicate IS-IS NET {net!r} rendered for {node_id} and {nets[net]}"
+            )
+            nets[net] = node_id
+    # Every routed node rendered exactly one unique NET.
+    routed = sum(len(domain.node_ids) for domain in resolved.routing_domains)
+    assert len(nets) == routed
+
+
+def test_two_protocol_session_renders_each_domain_with_its_own_stack() -> None:
+    raw = _raw_session(
+        routing={
+            "domains": [
+                {
+                    "id": "space_igp",
+                    "protocol": "isis",
+                    "selectors": [{"segment": "space"}],
+                },
+                {
+                    "id": "ground_igp",
+                    "protocol": "ospf",
+                    "selectors": [{"segment": "ground"}],
+                },
+            ]
+        }
+    )
+    resolved = resolve_session(
+        raw, source_context=SourceContext(origin="test.frr", run_id="run-test-0001")
+    )
+    assert {(d.domain_id, d.protocol) for d in resolved.routing_domains} == {
+        ("space_igp", "isis"),
+        ("ground_igp", "ospf"),
+    }
+
+    sat_id = _first_satellite(resolved)
+    ground_id = _first_ground(resolved)
+    sat_stack = resolve_domain_stack(_domain_for_node(resolved, sat_id))
+    ground_stack = resolve_domain_stack(_domain_for_node(resolved, ground_id))
+    assert "isisd" in sat_stack.daemons and "ospfd" not in sat_stack.daemons
+    assert "ospfd" in ground_stack.daemons and "isisd" not in ground_stack.daemons
+
+    sat_isis = _render("isisd.conf.j2", _vars_for(resolved, sat_id))
+    ground_ospf = _render("ospfd.conf.j2", _vars_for(resolved, ground_id))
+    assert "router isis NODAL" in sat_isis
+    assert " ip router isis NODAL" in sat_isis
+    assert "router ospf" in ground_ospf
+    assert " ip ospf area" in ground_ospf
+
+
+def test_static_domain_renders_zebra_and_staticd_only() -> None:
+    raw = _raw_session(protocol="static")
+    resolved = resolve_session(
+        raw, source_context=SourceContext(origin="test.frr", run_id="run-test-0001")
+    )
+    sat_id = _first_satellite(resolved)
+    stack = resolve_domain_stack(_domain_for_node(resolved, sat_id))
+    assert stack.daemons == ["zebra", "staticd"]
+
+    zebra = _render("zebra.conf.j2", _vars_for(resolved, sat_id))
+    staticd = _render("staticd.conf.j2", _vars_for(resolved, sat_id))
+    # No IGP statements leak into a static-domain zebra config.
+    assert "isis" not in zebra
+    assert f"hostname {sat_id}" in zebra
+    assert staticd.strip()
+
+
+def test_boundary_exports_materialize_on_flagship_border_nodes() -> None:
+    """The cislunar session's declared purpose is Earth<->Luna reachability:
+    boundary exports must render as installable static routes plus IGP
+    redistribution on the border nodes — declared intent, materialized."""
+    resolved = load_session_resolution_from_file(
+        Path("catalog/nodalarc/sessions/earth-leo-heo-geo-luna-reachability.yaml")
+    ).resolved
+
+    boundary = resolved.routing.boundaries[0]
+    luna_domain = next(d for d in resolved.routing_domains if d.domain_id == "luna_domain")
+    earth_domain = next(d for d in resolved.routing_domains if d.domain_id == "earth_domain")
+    border_candidates = [c for c in resolved.link_candidates if c.rule_id == boundary.over]
+    assert border_candidates, "boundary rule resolves zero candidates"
+    luna_border = next(
+        node_id
+        for c in border_candidates
+        for node_id in (c.node_a, c.node_b)
+        if node_id in luna_domain.node_ids
+    )
+
+    vars_for_node = _vars_for(resolved, luna_border)
+    routes = vars_for_node["boundary_static_routes"]
+    assert routes, "luna border node materialized zero boundary routes"
+    route_prefixes = {r["prefix"] for r in routes}
+
+    # Every earth-domain routed loopback is exported (export_node_loopbacks).
+    earth_loopbacks = {
+        f"{node.interfaces.lo0.ipv4.split('/')[0]}/32"
+        for node in resolved.nodes
+        if node.node_id in earth_domain.node_ids
+        and node.forwarding == "routed"
+        and node.interfaces is not None
+        and node.interfaces.lo0.ipv4 is not None
+    }
+    peer_seeds = {
+        f"{_vars_for(resolved, luna_border)['interface_info'][iface]['peer_loopback_ipv4']}/32"
+        for iface, info in vars_for_node["interface_info"].items()
+        if info.get("static_only")
+    }
+    assert earth_loopbacks - peer_seeds <= route_prefixes
+
+    # Earth-domain originated v4 aggregates are exported too.
+    earth_originated = {
+        prefix
+        for node in resolved.nodes
+        if node.node_id in earth_domain.node_ids and node.originated_prefixes is not None
+        for prefix in node.originated_prefixes.ipv4 or ()
+    }
+    assert earth_originated
+    assert earth_originated <= route_prefixes
+
+    staticd = _render("staticd.conf.j2", vars_for_node)
+    sample = sorted(route_prefixes)[0]
+    assert f"ip route {sample} " in staticd
+
+    isis = _render("isisd.conf.j2", vars_for_node)
+    assert "redistribute ipv4 static level-2" in isis
+
+
+def test_non_border_nodes_render_no_boundary_routes_or_redistribution() -> None:
+    resolved = load_session_resolution_from_file(
+        Path("catalog/nodalarc/sessions/earth-leo-simple.yaml")
+    ).resolved
+    vars_for_node = _vars_for(resolved, _first_satellite(resolved))
+    assert vars_for_node["boundary_static_routes"] == []
+    assert vars_for_node["redistribute_static"] is False
+    isis = _render("isisd.conf.j2", vars_for_node)
+    assert "redistribute" not in isis

@@ -200,6 +200,20 @@ def build_link_state_snapshot(
     assoc = source.associations
     td_state = source.pending_teardowns
     overlap_by_gs = dict(mbb_overlap_ticks_by_gs or {})
+    ground_ids = set(overlap_by_gs)
+    if fixed_positions:
+        ground_ids.update(fixed_positions)
+
+    def _ground_side(pair: tuple[str, str]) -> int:
+        # Ground pairs are lexicographically sorted, so position never
+        # identifies the ground endpoint — resolved ground identity does.
+        in_ground = [index for index, node_id in enumerate(pair) if node_id in ground_ids]
+        if len(in_ground) != 1:
+            raise ValueError(
+                f"Cannot build LinkStateSnapshot for ground link {pair}: expected exactly "
+                f"one ground-station endpoint, found {len(in_ground)}"
+            )
+        return in_ground[0]
 
     def _overlap_ticks_for_ground_pair(pair: tuple[str, str]) -> int:
         for node_id in pair:
@@ -237,8 +251,14 @@ def build_link_state_snapshot(
             else:
                 gs_ti = sat_ti = None
             bandwidth_mbps = None
-        interface_a = f"term{gs_ti}" if gs_ti is not None else ""
-        interface_b = f"gnd{sat_ti}" if sat_ti is not None else ""
+        if gs_ti is not None:
+            gs_index = _ground_side(pair)
+            term_iface, gnd_iface = f"term{gs_ti}", f"gnd{sat_ti}"
+            interface_a = term_iface if gs_index == 0 else gnd_iface
+            interface_b = gnd_iface if gs_index == 0 else term_iface
+        else:
+            interface_a = ""
+            interface_b = ""
         td_remaining = None
         successor = None
         if pair in td_state:

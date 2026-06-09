@@ -374,6 +374,15 @@ def evaluate_ground_visibility(
                     f"Missing propagated satellite state for {sat_id}; "
                     "ground visibility cannot be evaluated authoritatively"
                 )
+            if state.central_body != reference_body:
+                # The resolver rejects cross-body access candidates; if one
+                # reaches this engine anyway, evaluating it would mix two
+                # body-fixed frames and emit plausible-looking garbage.
+                raise ValueError(
+                    f"cross-body ground visibility pair {gs_id}<->{sat_id}: "
+                    f"GS reference_body={reference_body!r} vs satellite "
+                    f"central_body={state.central_body!r}; access visibility is body-local"
+                )
 
             try:
                 body_frame = body_frames[reference_body]

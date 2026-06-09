@@ -16,6 +16,8 @@ from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict
 
+from nodalarc.stack_resolver import SUPPORTED_STACK_PROTOCOLS
+
 
 class FeatureCategory(StrEnum):
     """Which grammar dimension an unsupported feature came from."""
@@ -26,12 +28,13 @@ class FeatureCategory(StrEnum):
     FRAME_BODY = "frame_body"
     PROTOCOL_ADAPTER = "protocol_adapter"
     EPHEMERIS_PROVIDER = "ephemeris_provider"
+    ROUTING_PROTOCOL = "routing_protocol"
 
 
 # Informational notes shown with unsupported features.
 FEATURE_SUPPORT_NOTES: dict[tuple[FeatureCategory, str], str] = {
     (FeatureCategory.SEGMENT_KIND, "space_node"): "supported by the Earth-Luna runtime",
-    (FeatureCategory.SEGMENT_KIND, "space_node_set"): "future runtime capability",
+    (FeatureCategory.SEGMENT_KIND, "space_node_set"): "supported by the Earth-Luna runtime",
     (FeatureCategory.SEGMENT_KIND, "lagrange_point"): "future runtime capability",
     (FeatureCategory.CENTRAL_BODY, "luna"): "supported by the Earth-Luna runtime",
     (FeatureCategory.CENTRAL_BODY, "mars"): "future runtime capability",
@@ -48,6 +51,10 @@ FEATURE_SUPPORT_NOTES: dict[tuple[FeatureCategory, str], str] = {
     (FeatureCategory.EPHEMERIS_PROVIDER, "skyfield_bsp"): "supported by the Earth-Luna runtime",
     (FeatureCategory.EPHEMERIS_PROVIDER, "spice_kernel_stack"): "future runtime capability",
     (FeatureCategory.EPHEMERIS_PROVIDER, "operator_supplied_spk"): "future runtime capability",
+    (FeatureCategory.ROUTING_PROTOCOL, "isis"): "supported FRR routing stack",
+    (FeatureCategory.ROUTING_PROTOCOL, "ospf"): "supported FRR routing stack",
+    (FeatureCategory.ROUTING_PROTOCOL, "static"): "supported FRR routing stack",
+    (FeatureCategory.ROUTING_PROTOCOL, "bgp"): "planned runtime capability (eBGP-first)",
 }
 
 
@@ -82,6 +89,7 @@ class RuntimeSupport(BaseModel):
     supported_frame_bodies: frozenset[str]
     supported_protocol_adapters: frozenset[str]
     supported_ephemeris_providers: frozenset[str]
+    supported_routing_protocols: frozenset[str]
     # Surface bodies whose presence requires an ephemeris manifest.
     ephemeris_required_bodies: frozenset[str]
 
@@ -100,6 +108,7 @@ class RuntimeSupport(BaseModel):
             supported_frame_bodies=frozenset({"earth"}),
             supported_protocol_adapters=frozenset(),
             supported_ephemeris_providers=frozenset(),
+            supported_routing_protocols=SUPPORTED_STACK_PROTOCOLS,
             ephemeris_required_bodies=frozenset({"luna", "mars"}),
         )
 
@@ -107,12 +116,15 @@ class RuntimeSupport(BaseModel):
     def earth_luna(cls) -> RuntimeSupport:
         """Earth + Luna runtime with explicit cislunar relay support."""
         return cls(
-            supported_segment_kinds=frozenset({"constellation", "ground_set", "space_node"}),
+            supported_segment_kinds=frozenset(
+                {"constellation", "ground_set", "space_node", "space_node_set"}
+            ),
             supported_central_bodies=frozenset({"earth", "luna"}),
             supported_reference_bodies=frozenset({"earth", "luna"}),
             supported_frame_bodies=frozenset({"earth", "luna"}),
             supported_protocol_adapters=frozenset({"static_ip"}),
             supported_ephemeris_providers=frozenset({"skyfield_bsp"}),
+            supported_routing_protocols=SUPPORTED_STACK_PROTOCOLS,
             ephemeris_required_bodies=frozenset({"luna"}),
         )
 
@@ -157,3 +169,10 @@ class RuntimeSupport(BaseModel):
         if provider in self.supported_ephemeris_providers:
             return None
         return self._unsupported(FeatureCategory.EPHEMERIS_PROVIDER, provider, "ephemeris provider")
+
+    def check_routing_protocol(self, protocol: str) -> UnsupportedFeature | None:
+        if protocol in self.supported_routing_protocols:
+            return None
+        return self._unsupported(
+            FeatureCategory.ROUTING_PROTOCOL, protocol, "routing domain protocol"
+        )

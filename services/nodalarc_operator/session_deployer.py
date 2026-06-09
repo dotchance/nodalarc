@@ -27,6 +27,7 @@ from nodalarc.nats_channels import sanitize_session_id
 from nodalarc.platform_config import get_platform_config
 from nodalarc.resolve_session import resolve_session_with_assets
 from nodalarc.session_identity import require_resolved_session_run_id
+from nodalarc.session_validator import validate_session_readiness
 from nodalarc.stack_resolver import resolve_domain_stack, validate_sid_indices
 from nodalarc.template_vars import build_template_vars_from_resolved
 
@@ -485,16 +486,10 @@ def _routing_domain_for_node(resolved: Any, node_id: str) -> Any:
     return domains[0]
 
 
-def _ground_index_by_node_id(resolved: Any) -> dict[str, int]:
-    ground_ids = [node.node_id for node in resolved.nodes if node.kind == "ground_station"]
-    return {node_id: index for index, node_id in enumerate(ground_ids)}
-
-
 def _node_vars_from_resolved(
     resolved: Any, stacks: Mapping[str, Any]
 ) -> tuple[dict[str, dict], dict[str, Any]]:
     sid_by_node = resolved.sid_index_by_node_id()
-    ground_indices = _ground_index_by_node_id(resolved)
     node_vars: dict[str, dict] = {}
     node_stacks: dict[str, Any] = {}
     for node in resolved.nodes:
@@ -506,7 +501,6 @@ def _node_vars_from_resolved(
             node.node_id,
             stack_variables=stack.template_variables,
             node_sid_index=node_sid_index,
-            gs_index=ground_indices.get(node.node_id),
         )
         node_vars[node.node_id] = vars_for_node
         node_stacks[node.node_id] = stack
@@ -668,6 +662,24 @@ def ensure_session_configmaps(
     # --- Step 3: Resolve routing stacks per domain ---
     _progress("Resolving routing stacks from resolved routing domains")
     stacks_by_domain = _stack_by_domain(resolved_session)
+
+    # --- Step 3b: Pre-deployment readiness validation ---
+    # A session that resolves but is unsuitable for deployment (zero-candidate
+    # link rules, disconnected routing members, SR index gaps, MBB capacity
+    # shortfalls) must fail here, before any ConfigMap or pod exists.
+    _progress("Validating session readiness")
+    validation_results = validate_session_readiness(
+        resolved_session,
+        available_node_count=len(available_nodes),
+    )
+    val_errors = [r for r in validation_results if r.level == "error"]
+    if validation_results:
+        _publish_validation_ops_events(validation_results, namespace, session_id=session_run_id)
+    if val_errors:
+        import kopf
+
+        error_msg = "; ".join(f"[{r.code}] {r.message}" for r in val_errors)
+        raise kopf.PermanentError(f"Session validation failed: {error_msg}")
 
     # --- Step 4: Build template vars per node ---
     total_nodes = len(resolved_session.nodes)
@@ -1005,7 +1017,7 @@ def write_wiring_manifest(
         "net.ipv6.conf.default.dad_transmits": "0",
     }
     fixed_interfaces = _fixed_link_interfaces_by_node(resolved_session)
-    ground_indices = _ground_index_by_node_id(resolved_session)
+    ground_indices = resolved_session.ground_index_by_node_id()
 
     # Build per-node wiring spec
     nodes: dict[str, Any] = {}
@@ -1602,7 +1614,7 @@ def _placement_node_vars_from_resolution(resolution: Any) -> dict[str, dict]:
     """Build placement inputs from the same resolved assets used for pod creation."""
 
     node_vars: dict[str, dict] = {}
-    ground_indices = _ground_index_by_node_id(resolution.resolved)
+    ground_indices = resolution.resolved.ground_index_by_node_id()
     for node in resolution.resolved.nodes:
         if node.kind == "satellite":
             if node.plane is None or node.slot is None:

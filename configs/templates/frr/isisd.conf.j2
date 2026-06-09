@@ -1,29 +1,12 @@
 hostname {{ hostname }}
 log file /var/log/frr/isisd.log informational
 
-{% if node_type == "satellite" %}
-{# System-ID for satellites: plane and slot encoded as hex #}
-{% set system_id = "%04x.%04x.0001" | format(plane, slot) %}
-{% elif node_type == "ground_station" %}
-{# System-ID for ground stations: 00ff prefix with gs_index #}
-{% set system_id = "00ff.%04x.0002" | format(gs_index) %}
-{% endif %}
+{# system_id is a resolver-owned globally-unique identity fact supplied by
+   the producer and consumed verbatim. plane/slot restart per segment and
+   must never be encoded into identity. #}
 
-{# IS-IS timer defaults — overridable from session config_overrides #}
-{% set isis_hello_interval = isis_hello_interval | default(1) %}
-{% set isis_hello_multiplier = isis_hello_multiplier | default(3) %}
-{% set spf_init_delay = spf_init_delay | default(50) %}
-{% set spf_short_delay = spf_short_delay | default(200) %}
-{% set spf_long_delay = spf_long_delay | default(1000) %}
-{% set spf_holddown = spf_holddown | default(2000) %}
-{% set spf_time_to_learn = spf_time_to_learn | default(500) %}
-
-{# BFD — disabled by default, enabled via extensions: [bfd] #}
-{% set bfd_enabled = bfd_enabled | default(false) %}
-{% set bfd_detect_multiplier = bfd_detect_multiplier | default(3) %}
-{% set bfd_rx_interval = bfd_rx_interval | default(300) %}
-{% set bfd_tx_interval = bfd_tx_interval | default(300) %}
-
+{# Timer and BFD values are resolver-owned per-domain facts supplied by the
+   producer (routing.domains[].timers); the template carries no fallbacks. #}
 router isis NODAL
  net {{ area_id }}.{{ system_id }}.00
  is-type level-1-2
@@ -33,6 +16,9 @@ router isis NODAL
  segment-routing global-block {{ srgb_start }} {{ srgb_end }} local-block 40000 49999
  segment-routing prefix {{ ipv4_loopback }}/32 index {{ node_sid_index }}
 {% endif %}
+{% if redistribute_static %}
+ redistribute ipv4 static level-2
+{% endif %}
  lsp-gen-interval 1
  spf-delay-ietf init-delay {{ spf_init_delay }} short-delay {{ spf_short_delay }} long-delay {{ spf_long_delay }} holddown {{ spf_holddown }} time-to-learn {{ spf_time_to_learn }}
  max-lsp-lifetime 1200
@@ -40,7 +26,7 @@ router isis NODAL
 exit
 
 {% for iface_name, info in interface_info.items() %}
-{% if not info.static_only | default(false) %}
+{% if not info.static_only %}
 interface {{ iface_name }}
  ip router isis NODAL
  isis network point-to-point
@@ -72,17 +58,16 @@ interface lo
  isis passive
 exit
 
-{% set terr0_igp = terr0_igp_enabled | default(terrestrial_prefixes is defined) %}
-{% if node_type == "ground_station" and terr0_igp %}
+{% if node_type == "ground_station" and terr0_igp_enabled %}
 interface terr0
  ip router isis NODAL
  isis passive
- isis metric {{ terr0_metric | default(10) }}
+ isis metric {{ terr0_metric }}
 exit
 {% endif %}
 
-{% if node_type == "ground_station" and terr0_default_route | default(false) %}
+{% if node_type == "ground_station" and terr0_default_route %}
 router isis NODAL
- default-information originate ipv4 level-2 always metric {{ terr0_default_metric | default(100) }}
+ default-information originate ipv4 level-2 always metric {{ terr0_default_metric }}
 exit
 {% endif %}

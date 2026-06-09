@@ -12,16 +12,19 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from datetime import datetime
 from typing import Literal
 
 from nodalarc.body_frames import BodyFrame, body_runtime_support_for
 from nodalarc.constellation_loader import SatelliteNode
-from nodalarc.ephemeris_runtime import SkyfieldBspEphemeris
+from nodalarc.ephemeris_runtime import (
+    SkyfieldBspEphemeris,
+    runtime_config_from_resolved,
+    session_epoch_unix,
+)
 from nodalarc.link_metadata import LinkRuleMetadata
 from nodalarc.models.addressing import NeighborAssignment
 from nodalarc.models.constellation import GroundTerminal, IslTerminal
-from nodalarc.models.ephemeris import EphemerisConfig, EphemerisKernel
+from nodalarc.models.ephemeris import EphemerisConfig
 from nodalarc.models.ground_policy import HandoverPolicySpec, SelectionPolicySpec
 from nodalarc.models.ground_station import (
     GroundStationConfig,
@@ -284,44 +287,15 @@ def _body_ephemeris_from_resolved(
 
 
 def _session_epoch_unix(resolved: ResolvedSession) -> float:
-    if resolved.time is None:
-        raise ValueError("catalog session time is required")
-    raw = resolved.time.start_time
-    value = raw.replace("Z", "+00:00")
-    epoch = datetime.fromisoformat(value)
-    if epoch.tzinfo is None:
-        raise ValueError(f"catalog session start_time must include timezone: {raw!r}")
-    return epoch.timestamp()
+    # Single epoch owner: nodalarc.ephemeris_runtime.session_epoch_unix.
+    return session_epoch_unix(resolved.time)
 
 
 def _runtime_ephemeris_config(resolved: ResolvedSession) -> EphemerisConfig:
-    ephemeris = resolved.ephemeris
-    if ephemeris is None:
+    if resolved.ephemeris is None:
         raise ValueError("resolved session has no ephemeris manifest")
-    kernels: list[EphemerisKernel] = []
-    for kernel in ephemeris.kernels:
-        if kernel.sha256 is None:
-            raise ValueError(f"ephemeris kernel {kernel.id!r} requires sha256")
-        if kernel.coverage_start is None or kernel.coverage_end is None:
-            raise ValueError(
-                f"ephemeris kernel {kernel.id!r} requires coverage_start and coverage_end"
-            )
-        kernels.append(
-            EphemerisKernel(
-                id=kernel.id,
-                path=kernel.path,
-                checksum=kernel.sha256,
-                targets=list(kernel.targets),
-                frame=kernel.frame,
-                coverage_start=datetime.fromisoformat(kernel.coverage_start.replace("Z", "+00:00")),
-                coverage_end=datetime.fromisoformat(kernel.coverage_end.replace("Z", "+00:00")),
-            )
-        )
-    return EphemerisConfig(
-        provider=ephemeris.provider,
-        quality_tier=ephemeris.quality_tier,
-        kernels=kernels,
-    )
+    # Single mapping owner: nodalarc.ephemeris_runtime.runtime_config_from_resolved.
+    return runtime_config_from_resolved(resolved.ephemeris)
 
 
 def _satellite_from_resolved(node: ResolvedNode) -> SatelliteNode:

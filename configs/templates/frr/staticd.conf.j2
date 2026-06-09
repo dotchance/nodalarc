@@ -5,11 +5,22 @@ log syslog informational
    No dynamic IGP — forwarding based on explicit static routes and SR policies
    pushed by an external controller (PRD R-NF-003). #}
 {% for iface_name, info in interface_info.items() %}
-{% if info.static_only | default(false) %}
+{% if info.static_only %}
 ip route {{ info.peer_loopback_ipv4 }}/32 {{ iface_name }}
 {% endif %}
 {% endfor %}
 
 {% for iface in gnd_interfaces %}
 {# Ground link routes are dynamic — managed by the external controller. #}
+{% endfor %}
+
+{# Routing-boundary exports (adapter: static_ip) — materialized intent from
+   routing.boundaries[].export; next hop recurses over the peer-loopback
+   seed route above. #}
+{% for route in boundary_static_routes | default([]) %}
+{% if route.family == "ipv6" %}
+ipv6 route {{ route.prefix }} {{ route.via }}
+{% else %}
+ip route {{ route.prefix }} {{ route.via }}
+{% endif %}
 {% endfor %}

@@ -129,6 +129,50 @@ export interface RoutingTimers {
   ospf_spf_max_hold: number;
 }
 
+
+/**
+ * Grammar shape for routing.domains[].timers — protocol-neutral intent.
+ * The panel keeps per-protocol fields for familiarity; this maps the selected
+ * protocol's values onto the session grammar. Returns undefined for non-IGP
+ * protocols and when every value matches the engine defaults (so untouched
+ * panels emit no timers block).
+ */
+export function timersToGrammar(
+  protocol: string,
+  t: RoutingTimers,
+): Record<string, unknown> | undefined {
+  if (protocol !== "isis" && protocol !== "ospf") return undefined;
+  const isIsis = protocol === "isis";
+  const hello = isIsis ? t.isis_hello_interval : t.ospf_hello_interval;
+  const hold = isIsis
+    ? t.isis_hello_interval * t.isis_hello_multiplier
+    : t.ospf_dead_interval;
+  const spf = isIsis
+    ? {
+        init_delay_ms: t.spf_init_delay,
+        short_delay_ms: t.spf_short_delay,
+        long_delay_ms: t.spf_long_delay,
+        holddown_ms: t.spf_holddown,
+        time_to_learn_ms: t.spf_time_to_learn,
+      }
+    : {
+        init_delay_ms: t.ospf_spf_delay,
+        short_delay_ms: t.ospf_spf_initial_hold,
+        long_delay_ms: t.ospf_spf_max_hold,
+      };
+  return {
+    hello_interval_s: hello,
+    hold_interval_s: Math.max(hold, hello + 1),
+    spf,
+    bfd: {
+      enabled: t.bfd,
+      detect_multiplier: t.bfd_detect_multiplier,
+      rx_interval_ms: t.bfd_rx_interval,
+      tx_interval_ms: t.bfd_tx_interval,
+    },
+  };
+}
+
 export const DEFAULT_ROUTING_TIMERS: RoutingTimers = {
   bfd: false,
   bfd_detect_multiplier: 3,

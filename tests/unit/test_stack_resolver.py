@@ -1,7 +1,39 @@
 """Tests for stack_resolver — every valid combo and invalid combos."""
 
 import pytest
-from nodalarc.stack_resolver import resolve_stack, validate_sid_indices
+from nodalarc.models.resolved_session import ResolvedRoutingDomain
+from nodalarc.stack_resolver import domain_extensions, resolve_stack, validate_sid_indices
+
+
+def _domain(protocol: str, capabilities: tuple[str, ...] = ()) -> ResolvedRoutingDomain:
+    return ResolvedRoutingDomain(
+        domain_id="d1",
+        protocol=protocol,
+        node_ids=("node-a",),
+        capabilities=capabilities,
+    )
+
+
+class TestDomainExtensions:
+    def test_bare_mpls_capability_maps_to_ldp_extension(self):
+        assert domain_extensions(_domain("isis", ("mpls",))) == ["mpls"]
+
+    def test_mpls_with_segment_routing_is_consumed_by_sr_mpls(self):
+        # SR-MPLS provides the MPLS data plane; the declared mpls capability
+        # is satisfied by the sr extension, not silently dropped.
+        assert domain_extensions(_domain("isis", ("mpls", "segment_routing"))) == ["sr"]
+
+    def test_static_domain_rejects_capabilities(self):
+        with pytest.raises(ValueError, match="static domains carry no"):
+            domain_extensions(_domain("static", ("mpls",)))
+
+    def test_static_domain_without_capabilities_is_valid(self):
+        assert domain_extensions(_domain("static")) == []
+
+    def test_unimplemented_stack_protocol_rejected(self):
+        with pytest.raises(ValueError, match="implemented FRR stacks"):
+            domain_extensions(_domain("bgp"))
+
 
 # --- Valid combinations ---
 
@@ -104,21 +136,48 @@ class TestInvalid:
         with pytest.raises(ValueError, match="distributed separately"):
             resolve_stack("nodalpath", ["te"])
 
-    def test_mpls_requires_te_isis(self):
-        with pytest.raises(ValueError, match="MPLS extension requires TE"):
-            resolve_stack("isis", ["mpls"])
-
-    def test_mpls_requires_te_ospf(self):
-        with pytest.raises(ValueError, match="MPLS extension requires TE"):
-            resolve_stack("ospf", ["mpls"])
-
     def test_unknown_protocol(self):
         with pytest.raises(ValueError, match="Unknown protocol"):
             resolve_stack("bgp", [])
 
-    def test_static_is_not_a_protocol(self):
-        with pytest.raises(ValueError):
+    def test_static_rejects_sr_extension(self):
+        with pytest.raises(ValueError, match="SR extension requires ospf or isis"):
             resolve_stack("static", ["sr"])
+
+
+class TestMplsWithoutTe:
+    """LDP-distributed MPLS is valid without TE on both IGPs.
+
+    The old mpls-requires-te constraint forced the capability layer to
+    silently drop a declared bare mpls capability — the rendering must be
+    total over the declared grammar instead.
+    """
+
+    def test_isis_mpls_alone_resolves_ldp(self):
+        r = resolve_stack("isis", ["mpls"])
+        assert r.daemons == ["zebra", "isisd", "staticd", "ldpd"]
+        assert r.template_variables["mpls_enabled"] is True
+        assert "te_enabled" not in r.template_variables
+        assert r.sysctls["net.mpls.platform_labels"] == "100000"
+
+    def test_ospf_mpls_alone_resolves_ldp(self):
+        r = resolve_stack("ospf", ["mpls"])
+        assert r.daemons == ["zebra", "ospfd", "staticd", "ldpd"]
+        assert r.template_variables["mpls_enabled"] is True
+        assert "te_enabled" not in r.template_variables
+        assert r.sysctls["net.mpls.platform_labels"] == "100000"
+
+
+class TestStaticStack:
+    def test_static_plain(self):
+        r = resolve_stack("static", [])
+        assert r.daemons == ["zebra", "staticd"]
+        assert r.image == "frr"
+        assert r.mi_adapter is None
+        assert r.segment_routing is False
+        assert r.template_variables == {"protocol": "static"}
+        template_srcs = [t.src for t in r.template_files]
+        assert template_srcs == ["zebra.conf.j2", "staticd.conf.j2"]
 
 
 class TestResolvedStackFrozen:

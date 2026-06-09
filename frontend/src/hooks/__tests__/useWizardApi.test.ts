@@ -84,6 +84,49 @@ describe("useWizardApi", () => {
     expect(body.area_strategy).toBe("per_plane");
   });
 
+  it("sends grammar-shaped timers and never the retired routing_config", async () => {
+    const { result } = renderHook(() => useWizardApi());
+
+    await act(async () => { await result.current.generate(wizardState()); });
+
+    const body = JSON.parse(fetchMock.mock.calls[0]![1]!.body as string) as Record<string, unknown>;
+    expect(body.routing_config).toBeUndefined();
+    expect(body.timers).toEqual({
+      hello_interval_s: 1,
+      hold_interval_s: 3,
+      spf: {
+        init_delay_ms: 50,
+        short_delay_ms: 200,
+        long_delay_ms: 1000,
+        holddown_ms: 2000,
+        time_to_learn_ms: 500,
+      },
+      bfd: {
+        enabled: false,
+        detect_multiplier: 3,
+        rx_interval_ms: 300,
+        tx_interval_ms: 300,
+      },
+    });
+  });
+
+  it("maps ospf panel timers onto the neutral grammar shape", async () => {
+    const { result } = renderHook(() => useWizardApi());
+    const state = wizardState();
+    state.protocol = "ospf";
+    state.routingTimers.ospf_hello_interval = 2;
+    state.routingTimers.ospf_dead_interval = 8;
+    state.routingTimers.bfd = true;
+
+    await act(async () => { await result.current.generate(state); });
+
+    const body = JSON.parse(fetchMock.mock.calls[0]![1]!.body as string) as Record<string, unknown>;
+    const timers = body.timers as Record<string, unknown>;
+    expect(timers.hello_interval_s).toBe(2);
+    expect(timers.hold_interval_s).toBe(8);
+    expect((timers.bfd as Record<string, unknown>).enabled).toBe(true);
+  });
+
   it("surfaces backend orbit contract failures instead of masking them", async () => {
     fetchMock.mockResolvedValueOnce({
       ok: false,

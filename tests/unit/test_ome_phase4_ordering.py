@@ -35,7 +35,6 @@ from nodalarc.nats_channels import (
 )
 from nodalarc.platform_config import init_platform_config
 from nodalarc.scheduling_checkpoint import decode_retained_scheduling_checkpoint
-from nodalarc.session_identity import require_session_run_id
 from ome.event_stream import StepResult
 from ome.ground_allocator import GroundAllocationResult
 from ome.main import _load_session_config, _run_pacing
@@ -217,11 +216,7 @@ def _demo_phase4_session_path(tmp_path: Path) -> Path:
 
 
 def _phase4_cfg(session_path: Path, run_id: str):
-    cfg = _load_session_config(str(session_path))
-    session = cfg.session.model_copy(
-        update={"session": cfg.session.session.model_copy(update={"run_id": run_id})}
-    )
-    return cfg._replace(session=session)
+    return _load_session_config(str(session_path), run_id=run_id)
 
 
 def _reset_playback_globals() -> None:
@@ -245,7 +240,7 @@ def test_initial_epoch_publishes_step0_snapshot_before_playing_and_clock(monkeyp
     init_platform_config(Path("configs/platform.yaml"))
 
     cfg = _phase4_cfg(session_path, "phase4-ordering")
-    session_id = require_session_run_id(cfg.session)
+    session_id = cfg.session_id
 
     shutdown = threading.Event()
     records = _RecordingQueue(shutdown, ome_clock_subject(session_id))
@@ -309,7 +304,7 @@ def test_seek_abandons_inflight_old_tick_and_commits_step0_snapshot(monkeypatch,
     init_platform_config(Path("configs/platform.yaml"))
 
     cfg = _phase4_cfg(session_path, "phase4-seek")
-    session_id = require_session_run_id(cfg.session)
+    session_id = cfg.session_id
 
     real_compute_step = ome_event_stream.compute_step
     seek_target: dict[str, float] = {}
@@ -413,7 +408,7 @@ def test_initial_epoch_ordering_oracle_uses_fixed_step_result(monkeypatch, tmp_p
     init_platform_config(Path("configs/platform.yaml"))
 
     cfg = _phase4_cfg(session_path, "phase4-ordering-oracle")
-    session_id = require_session_run_id(cfg.session)
+    session_id = cfg.session_id
     fixed_time = datetime(2030, 1, 1, 0, 0, 0, tzinfo=UTC)
     fixed_result = _fixed_step_result(sim_time=fixed_time, step=0)
     calls: list[tuple[float, int]] = []
@@ -485,7 +480,7 @@ def test_initial_epoch_lifecycle_event_uses_ops_enqueue_after_snapshot(monkeypat
     init_platform_config(Path("configs/platform.yaml"))
 
     cfg = _phase4_cfg(session_path, "phase6-lifecycle-enqueue")
-    session_id = require_session_run_id(cfg.session)
+    session_id = cfg.session_id
     sim_time = datetime(2030, 1, 1, 0, 0, 0, tzinfo=UTC)
     old_pair = ("gs-fixed", "sat-old")
     successor_pair = ("gs-fixed", "sat-fixed")
@@ -566,7 +561,7 @@ def test_seek_step0_compute_failure_logs_epoch_and_target_without_new_snapshot(
     init_platform_config(Path("configs/platform.yaml"))
 
     cfg = _phase4_cfg(session_path, "phase4-seek-failure")
-    session_id = require_session_run_id(cfg.session)
+    session_id = cfg.session_id
     seek_target: dict[str, float] = {}
 
     def _compute_step_with_failed_seek(_ctx, epoch_unix, step, step_seconds, *_args, **_kwargs):

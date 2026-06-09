@@ -5,7 +5,6 @@ import json
 import pytest
 from nodalarc.constellation_loader import (
     expand_constellation,
-    load_constellation,
     load_ground_stations,
 )
 from nodalarc.models.addressing import AddressingScheme, assign_isl_neighbors
@@ -20,8 +19,6 @@ from ome.event_stream import (
 )
 from pydantic import TypeAdapter
 
-from tests.conftest import CONFIGS_DIR
-
 adapter = TypeAdapter(ConstellationConfig)
 EPOCH = 1735689600.0
 
@@ -33,10 +30,83 @@ def _ground_scheduling() -> GroundSchedulingConfig:
     )
 
 
+def _four_node_constellation() -> ConstellationConfig:
+    return adapter.validate_python(
+        {
+            "mode": "explicit",
+            "name": "four-node",
+            "default_terminals": {
+                "isl": [
+                    {
+                        "type": "optical",
+                        "count": 2,
+                        "max_range_km": 5000,
+                        "bandwidth_mbps": 1000,
+                        "max_tracking_rate_deg_s": 3.0,
+                    }
+                ],
+                "ground": [
+                    {
+                        "type": "optical",
+                        "count": 1,
+                        "bandwidth_mbps": 1000,
+                        "max_range_km": 2000,
+                        "field_of_regard_deg": 120,
+                        "max_tracking_rate_deg_s": 1.5,
+                        "boresight": {"target_body": "earth", "mode": "nadir"},
+                    }
+                ],
+            },
+            "satellites": [
+                {
+                    "plane": 0,
+                    "slot": 0,
+                    "orbit": {
+                        "altitude_km": 550,
+                        "inclination_deg": 53,
+                        "raan_deg": 0,
+                        "true_anomaly_deg": 0,
+                    },
+                },
+                {
+                    "plane": 0,
+                    "slot": 1,
+                    "orbit": {
+                        "altitude_km": 550,
+                        "inclination_deg": 53,
+                        "raan_deg": 0,
+                        "true_anomaly_deg": 180,
+                    },
+                },
+                {
+                    "plane": 1,
+                    "slot": 0,
+                    "orbit": {
+                        "altitude_km": 550,
+                        "inclination_deg": 53,
+                        "raan_deg": 45,
+                        "true_anomaly_deg": 0,
+                    },
+                },
+                {
+                    "plane": 1,
+                    "slot": 1,
+                    "orbit": {
+                        "altitude_km": 550,
+                        "inclination_deg": 53,
+                        "raan_deg": 45,
+                        "true_anomaly_deg": 180,
+                    },
+                },
+            ],
+        }
+    )
+
+
 @pytest.fixture
 def four_node_timeline():
     """Precompute a short timeline for the custom-example constellation."""
-    config = load_constellation(CONFIGS_DIR / "constellations/custom-example.yaml")
+    config = _four_node_constellation()
     sats = expand_constellation(config)
     addressing = AddressingScheme()
     neighbors = assign_isl_neighbors(config, addressing)
@@ -160,7 +230,7 @@ class TestJsonLinesIO:
 class TestNoGroundStations:
     def test_timeline_without_gs(self):
         """Timeline works without ground stations."""
-        config = load_constellation(CONFIGS_DIR / "constellations/custom-example.yaml")
+        config = _four_node_constellation()
         sats = expand_constellation(config)
         addressing = AddressingScheme()
         neighbors = assign_isl_neighbors(config, addressing)

@@ -9,21 +9,21 @@ export interface OrbitModelOption {
   comingSoon?: boolean;
 }
 
-export const DEFAULT_ORBIT_PROPAGATOR: OrbitPropagator = "j2-mean-elements";
+export const DEFAULT_ORBIT_PROPAGATOR: OrbitPropagator = "j2_mean_elements";
 
 export const ORBIT_MODEL_OPTIONS: OrbitModelOption[] = [
   {
-    id: "j2-mean-elements",
+    id: "j2_mean_elements",
     label: "J2 Mean Elements",
     description: "Default for parametric sessions. Includes Earth oblateness drift without requiring TLE data.",
   },
   {
-    id: "keplerian-circular",
+    id: "two_body",
     label: "Keplerian Circular",
     description: "Simple circular motion. Useful for fast synthetic comparisons and teaching runs.",
   },
   {
-    id: "sgp4-tle",
+    id: "sgp4_tle",
     label: "SGP4 / TLE",
     description: "Real TLE propagation.",
     comingSoon: true,

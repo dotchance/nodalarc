@@ -1,16 +1,13 @@
 # Copyright 2024-2026 .chance (dotchance)
 # Licensed under the Apache License, Version 2.0. See LICENSE file.
-"""Session generator — produces session YAML from wizard selections.
+"""Session generator for the catalog configuration language.
 
-Takes independent wizard choices (constellation geometry, satellite type,
-ground stations, protocol, extensions) and produces a valid session YAML.
-
-Satellite type and constellation are fully orthogonal — the user can
-combine any orbital geometry with any terminal hardware.  When the
-satellite type differs from the constellation's built-in type, the
-generator produces an inline constellation definition with the
-satellite_type field replaced.
+The wizard is an authoring helper. It emits the same catalog session grammar
+that upload/deploy accepts; it does not revive the retired session grammar or
+project catalog primitives through old constellation/ground-station models.
 """
+
+from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
@@ -20,93 +17,207 @@ from pydantic import BaseModel
 
 from nodalarc.catalog_paths import (
     CatalogRoots,
-    config_value_for,
-    resolve_constellation_reference,
-    resolve_ground_station_reference,
+    resolve_catalog_reference,
+    resolve_site_set_reference,
     validate_catalog_name,
-    validate_station_names,
 )
-from nodalarc.constellation_loader import (
-    expand_constellation,
-    load_constellation,
-    load_ground_stations,
-)
+from nodalarc.models.catalog import validate_catalog_document
 from nodalarc.models.resolved_session import SourceContext
 from nodalarc.resolve_session import resolve_session
-from nodalarc.stack_resolver import resolve_stack
+from nodalarc.stack_resolver import normalize_extensions, resolve_stack
 
 
 class ConstellationPreset(BaseModel):
-    """Schema for a constellation preset YAML file."""
+    """Wizard card for one shipped constellation primitive."""
 
     name: str
     description: str
     satellite_count: int
     constellation: str
     ground_stations: str
-    time: dict[str, Any] = {}
-    traffic_flows: list[dict[str, Any]] = []
-    convergence: dict[str, Any] = {}
+    mode: str
 
 
 def _default_catalog_roots() -> CatalogRoots:
-    return CatalogRoots.from_config_root(Path("configs"))
+    return CatalogRoots.from_catalog_root(Path("catalog/nodalarc"))
+
+
+def _catalog_ref_for_path(path: Path, roots: CatalogRoots) -> str:
+    rel = path.resolve(strict=True).relative_to(roots.root.resolve(strict=True))
+    return "nodalarc:" + rel.as_posix()
+
+
+def _load_catalog_document(ref: str, roots: CatalogRoots) -> tuple[str, dict[str, Any]]:
+    path = resolve_catalog_reference(ref, roots)
+    raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    wrapper, model = validate_catalog_document(raw)
+    return wrapper, model.model_dump(mode="python", by_alias=True, exclude_none=True)
+
+
+def _default_ground_sites_for_constellation(ref: str) -> str:
+    if "/luna/" in ref:
+        return "nodalarc:site-sets/luna/luna-surface-sites.yaml"
+    if "/earth/geo/" in ref:
+        return "nodalarc:site-sets/earth/geo/earth-geo-gateway-sites.yaml"
+    if "/earth/heo/" in ref:
+        return "nodalarc:site-sets/earth/heo/earth-heo-gateway-sites.yaml"
+    if "/earth/meo/" in ref:
+        return "nodalarc:site-sets/earth/meo/earth-meo-gateway-sites.yaml"
+    if "polar" in ref:
+        return "nodalarc:site-sets/earth/leo/earth-leo-polar-gateway-sites.yaml"
+    return "nodalarc:site-sets/earth/leo/earth-leo-starlink-pop-sites.yaml"
+
+
+def _satellite_count(wrapper: str, value: dict[str, Any]) -> int:
+    if wrapper == "constellation":
+        return int(value["planes"]["count"]) * int(value["slots_per_plane"])
+    if wrapper == "space_node_set":
+        return len(value["nodes"])
+    return 0
 
 
 def load_constellation_presets(
     catalog_roots: CatalogRoots | None = None,
 ) -> dict[str, ConstellationPreset]:
-    """Scan preset directory and return name -> preset map."""
-    presets_dir = (catalog_roots or _default_catalog_roots()).constellation_presets
-    presets: dict[str, ConstellationPreset] = {}
-    if not presets_dir.is_dir():
-        return presets
-    for yaml_path in sorted(presets_dir.glob("*.yaml")):
-        raw = yaml.safe_load(yaml_path.read_text())
-        preset = ConstellationPreset.model_validate(raw)
-        presets[preset.name] = preset
-    return presets
+    """Scan catalog constellation primitives and return wizard cards."""
+    roots = catalog_roots or _default_catalog_roots()
+    results: dict[str, ConstellationPreset] = {}
+    for yaml_path in sorted((roots.root / "constellations").rglob("*.yaml")):
+        ref = _catalog_ref_for_path(yaml_path, roots)
+        wrapper, value = _load_catalog_document(ref, roots)
+        if wrapper != "constellation":
+            continue
+        preset = ConstellationPreset(
+            name=value["id"],
+            description=value.get("notes") or value.get("display_name") or value["id"],
+            satellite_count=_satellite_count(wrapper, value),
+            constellation=ref,
+            ground_stations=_default_ground_sites_for_constellation(ref),
+            mode=wrapper,
+        )
+        results[preset.name] = preset
+    return results
 
 
 def constellation_source_mode(
     source: str | Path | dict,
     catalog_roots: CatalogRoots | None = None,
 ) -> str | None:
-    """Return the configured constellation mode for a file or inline source."""
+    """Return the catalog wrapper for a constellation-like source."""
     if isinstance(source, dict):
-        mode = source.get("mode")
-        return mode if isinstance(mode, str) else None
+        try:
+            wrapper, _model = validate_catalog_document(source)
+        except Exception:
+            return None
+        return wrapper
     roots = catalog_roots or _default_catalog_roots()
-    source_path = resolve_constellation_reference(source, roots)
-    data = yaml.safe_load(source_path.read_text()) or {}
-    if not isinstance(data, dict):
+    try:
+        wrapper, _value = _load_catalog_document(str(source), roots)
+    except Exception:
         return None
-    mode = data.get("mode")
-    return mode if isinstance(mode, str) else None
+    return wrapper
 
 
-def merge_constellation_with_satellite_type(
-    constellation_path: str,
-    satellite_type: str,
-    catalog_roots: CatalogRoots | None = None,
-) -> dict:
-    """Load a constellation file and replace its satellite_type field.
+def _resolve_constellation_source(
+    constellation: str,
+    preset: ConstellationPreset | None,
+    roots: CatalogRoots,
+    custom_constellation: dict | None,
+) -> str | dict[str, Any]:
+    if custom_constellation is not None:
+        wrapper, _model = validate_catalog_document(custom_constellation)
+        if wrapper not in {"constellation", "space_node_set"}:
+            raise ValueError(
+                "custom_constellation must be a catalog constellation or space_node_set object"
+            )
+        return custom_constellation
+    if preset is not None:
+        return preset.constellation
+    if isinstance(constellation, str) and constellation.startswith("nodalarc:"):
+        wrapper, _value = _load_catalog_document(constellation, roots)
+        if wrapper not in {"constellation", "space_node_set"}:
+            raise ValueError(f"constellation source must resolve to constellation, got {wrapper!r}")
+        return constellation
+    raise ValueError(f"Unknown constellation preset: {constellation}")
 
-    Returns the merged constellation as a plain dict suitable for
-    embedding inline in a session YAML.
-    """
-    roots = catalog_roots or _default_catalog_roots()
-    satellite_type = validate_catalog_name(satellite_type, label="satellite_type")
-    source_path = resolve_constellation_reference(constellation_path, roots)
-    data = yaml.safe_load(source_path.read_text())
-    if not isinstance(data, dict):
-        raise ValueError(f"Constellation file is not a dict: {constellation_path}")
-    # Replace satellite_type with the wizard's selection
-    data["satellite_type"] = satellite_type
-    # Remove resolved default_terminals if present — force re-resolution
-    # from the new satellite_type at load time
-    data.pop("default_terminals", None)
-    return data
+
+def _resolve_ground_source(
+    ground_stations: str | list[str] | dict | None,
+    preset: ConstellationPreset | None,
+    custom_ground_stations: list[dict] | None,
+    roots: CatalogRoots,
+) -> str | dict[str, Any]:
+    if custom_ground_stations is not None:
+        raise ValueError(
+            "custom_ground_stations list is retired; provide a catalog site_set object instead"
+        )
+    if isinstance(ground_stations, dict):
+        wrapper, _model = validate_catalog_document(ground_stations)
+        if wrapper != "site_set":
+            raise ValueError("custom ground source must be a catalog site_set object")
+        return ground_stations
+    if isinstance(ground_stations, list):
+        raise ValueError("ground station name lists are retired; provide a catalog site_set")
+    if isinstance(ground_stations, str) and ground_stations:
+        resolve_site_set_reference(ground_stations, roots)
+        return ground_stations
+    if preset is not None:
+        resolve_site_set_reference(preset.ground_stations, roots)
+        return preset.ground_stations
+    raise ValueError("No ground station source: provide a catalog site_set")
+
+
+def _routing_capabilities(extensions: tuple[str, ...]) -> dict[str, Any] | None:
+    capabilities: dict[str, Any] = {}
+    if "mpls" in extensions:
+        capabilities["mpls"] = {}
+    if "sr" in extensions:
+        capabilities["segment_routing"] = {"data_plane": "mpls"}
+    if "te" in extensions:
+        capabilities["traffic_engineering"] = {}
+    return capabilities or None
+
+
+def _area_assignment(area_strategy: str) -> dict[str, Any]:
+    strategy = validate_catalog_name(area_strategy, label="area_strategy")
+    if strategy == "flat":
+        return {"strategy": "flat", "gs_area_id": "area0"}
+    if strategy == "per_plane":
+        return {"strategy": "per_plane", "gs_area_id": "area0"}
+    if strategy == "stripe":
+        return {"strategy": "stripe", "gs_area_id": "area0", "planes_per_stripe": 2}
+    raise ValueError(f"Unsupported area_strategy: {area_strategy!r}")
+
+
+def _selection_policy(ground_policy: str, lookahead_ticks: int) -> dict[str, Any]:
+    policy = validate_catalog_name(ground_policy, label="ground_policy")
+    if policy == "highest_elevation":
+        if lookahead_ticks:
+            raise ValueError(
+                "ground_selection_lookahead_horizon_ticks is only valid with longest_remaining_pass"
+            )
+        return {"highest_elevation": {}}
+    if policy == "lowest_elevation":
+        if lookahead_ticks:
+            raise ValueError(
+                "ground_selection_lookahead_horizon_ticks is only valid with longest_remaining_pass"
+            )
+        return {"lowest_elevation": {}}
+    if policy == "longest_remaining_pass":
+        if lookahead_ticks <= 0:
+            raise ValueError(
+                "ground_selection_lookahead_horizon_ticks is required with longest_remaining_pass"
+            )
+        return {"longest_remaining_pass": {"lookahead_horizon_ticks": int(lookahead_ticks)}}
+    raise ValueError(f"Unsupported ground_policy: {ground_policy!r}")
+
+
+def _default_time() -> dict[str, Any]:
+    return {
+        "start_time": "2026-06-08T00:00:00Z",
+        "step_seconds": 10,
+        "compression": 1,
+    }
 
 
 def generate_session_yaml(
@@ -116,277 +227,183 @@ def generate_session_yaml(
     *,
     orbit_propagator: str,
     area_strategy: str = "flat",
-    ground_stations: str | list[str] | None = None,
+    ground_stations: str | list[str] | dict | None = None,
     satellite_type: str | None = None,
     custom_constellation: dict | None = None,
     custom_ground_stations: list[dict] | None = None,
     routing_config: dict | None = None,
-    ground_policy: str = "highest-elevation",
+    ground_policy: str = "highest_elevation",
     ground_selection_lookahead_horizon_ticks: int = 0,
     catalog_roots: CatalogRoots | None = None,
 ) -> tuple[str, list[str]]:
-    """Generate a session YAML from wizard selections.
-
-    Args:
-        constellation: Preset name (used for orbital geometry and defaults).
-        protocol: Routing protocol ("ospf", "isis", "nodalpath", etc.).
-        extensions: Protocol extensions (["te", "mpls", "sr"]).
-        area_strategy: Area assignment strategy.
-        ground_stations: GS set file path, list of station names, or None
-            (uses preset default).
-        satellite_type: Independent satellite type selection. When set and
-            different from the constellation's built-in type, produces an
-            inline merged constellation definition.
-        custom_constellation: Inline constellation dict (advanced mode).
-            When provided, ``constellation`` preset is used only for name
-            and defaults (time, traffic_flows).
-        custom_ground_stations: List of inline station dicts (advanced mode).
-        orbit_propagator: Required physical propagation model. This is the
-            single user-facing fidelity choice; the fidelity label is derived
-            from it.
-        ground_policy: Ground handover scoring policy.
-        ground_selection_lookahead_horizon_ticks: Required when ground_policy is
-            ``longest-remaining-pass``; measured in OME ticks.
-
-    Returns:
-        (yaml_str, warnings).
-    Raises ValueError for invalid combinations.
-    """
+    """Generate catalog session YAML from wizard selections."""
     warnings: list[str] = []
     roots = catalog_roots or _default_catalog_roots()
-    if satellite_type:
-        satellite_type = validate_catalog_name(satellite_type, label="satellite_type")
-
-    # Load preset for defaults — optional when custom_constellation is provided
-    presets = load_constellation_presets(roots)
-    preset = presets.get(constellation)
-    if preset is None and custom_constellation is None:
-        raise ValueError(f"Unknown constellation preset: {constellation}")
-
-    # Validate routing combo early
-    resolve_stack(protocol, extensions)
-
-    # Build session name
-    ext_suffix = "-".join(extensions) if extensions else "plain"
-    session_name = f"{constellation}-{protocol}-{ext_suffix}"
-
-    # --- Resolve constellation definition ---
-    if custom_constellation is not None:
-        # Custom or real-world geometry preset: inline constellation dict
-        constellation_value: str | dict = custom_constellation
-        if satellite_type and isinstance(custom_constellation, dict):
-            custom_constellation = dict(custom_constellation)
-            custom_constellation["satellite_type"] = satellite_type
-            custom_constellation.pop("default_terminals", None)
-            constellation_value = custom_constellation
-    elif preset is not None and satellite_type:
-        # Library preset with satellite type override
-        built_in_type = _read_constellation_satellite_type(preset.constellation, roots)
-        if built_in_type and built_in_type != satellite_type:
-            constellation_value = merge_constellation_with_satellite_type(
-                preset.constellation, satellite_type, roots
-            )
-            warnings.append(
-                f"Constellation '{constellation}' uses '{built_in_type}' terminals — "
-                f"overriding with '{satellite_type}'"
-            )
-        else:
-            constellation_value = preset.constellation
-    elif preset is not None:
-        constellation_value = preset.constellation
-    else:
-        raise ValueError("No constellation source: provide a preset name or custom_constellation")
-
-    constellation_mode = constellation_source_mode(constellation_value, roots)
-    if orbit_propagator == "sgp4-tle" and constellation_mode != "tle":
-        raise ValueError("orbit_propagator='sgp4-tle' requires a TLE constellation source")
-    if constellation_mode == "tle" and orbit_propagator != "sgp4-tle":
-        raise ValueError("TLE constellation sources require orbit_propagator='sgp4-tle'")
-    if orbit_propagator == "sgp4-tle":
+    if satellite_type is not None:
+        validate_catalog_name(satellite_type, label="satellite_type")
         raise ValueError(
-            "orbit_propagator='sgp4-tle' is structurally valid future grammar, "
-            "but the current runtime supports only keplerian-circular and j2-mean-elements"
+            "satellite_type overrides are retired; choose or author a constellation primitive"
         )
 
-    # --- Resolve ground stations ---
-    if custom_ground_stations is not None:
-        gs_value: str | list[str] | dict = {
-            "default_terminals": [
-                {"type": "optical", "count": 1, "bandwidth_mbps": 1000, "tracking_capacity": 1}
-            ],
-            "stations": custom_ground_stations,
-        }
-    elif ground_stations:
-        if isinstance(ground_stations, str):
-            gs_value = config_value_for(resolve_ground_station_reference(ground_stations, roots))
-        elif isinstance(ground_stations, list):
-            validate_station_names(ground_stations)
-            gs_value = ground_stations
-        else:
-            gs_value = ground_stations
-    elif preset is not None:
-        gs_value = preset.ground_stations
-    else:
-        raise ValueError(
-            "No ground station source: provide ground_stations or a preset with defaults"
-        )
+    protocol = validate_catalog_name(protocol, label="protocol")
+    normalized_extensions = normalize_extensions(tuple(extensions))
+    resolve_stack(protocol, list(normalized_extensions))
 
-    # Build area assignment
-    area_assignment: dict[str, Any] | None = None
-    if protocol != "nodalpath":
-        area_assignment = {"strategy": area_strategy}
-        if area_strategy == "stripe":
-            area_assignment["planes_per_stripe"] = 2
-            warnings.append("Using default planes_per_stripe=2 for stripe strategy")
-        if protocol == "isis":
-            area_assignment["gs_area_id"] = "49.0001"
-        elif protocol == "ospf":
-            area_assignment["gs_area_id"] = "0.0.0.0"
-
-    routing_overrides = dict(routing_config or {})
-    mbb_requested = bool(routing_overrides.pop("mbb_dispatch", True))
-    mbb_overlap_ticks = int(routing_overrides.pop("mbb_overlap_ticks", 3 if mbb_requested else 0))
-    supported_propagators = {"keplerian-circular", "j2-mean-elements", "sgp4-tle"}
+    supported_propagators = {"two_body", "j2_mean_elements", "sgp4_tle"}
     if orbit_propagator not in supported_propagators:
         raise ValueError(f"Unsupported orbit_propagator: {orbit_propagator!r}")
-
-    selection_policy: dict[str, Any] = {"name": ground_policy, "params": {}}
-    if ground_policy == "longest-remaining-pass":
-        if ground_selection_lookahead_horizon_ticks <= 0:
-            raise ValueError(
-                "ground_selection_lookahead_horizon_ticks is required when ground_policy is "
-                "'longest-remaining-pass'"
-            )
-        selection_policy["params"]["lookahead_horizon_ticks"] = int(
-            ground_selection_lookahead_horizon_ticks
-        )
-    elif ground_selection_lookahead_horizon_ticks > 0:
+    if orbit_propagator == "sgp4_tle":
         raise ValueError(
-            "ground_selection_lookahead_horizon_ticks is only valid when ground_policy is "
-            "'longest-remaining-pass'"
+            "orbit_propagator='sgp4_tle' is structurally valid future grammar, "
+            "but the current runtime does not materialize TLE inputs"
         )
 
-    ground_source: str | dict[str, Any]
-    if isinstance(gs_value, list):
-        # The segment grammar has no top-level station-name-list shortcut.
-        # Selected catalog stations are materialized into a real inline station
-        # set so the generated YAML is self-contained and structurally honest.
-        ground_source = load_ground_stations(gs_value).model_dump(mode="python")
-    elif isinstance(gs_value, dict):
-        ground_source = gs_value
-    else:
-        ground_source = gs_value
+    presets = load_constellation_presets(roots)
+    preset = presets.get(constellation)
+    constellation_value = _resolve_constellation_source(
+        constellation,
+        preset,
+        roots,
+        custom_constellation,
+    )
+    ground_value = _resolve_ground_source(
+        ground_stations,
+        preset,
+        custom_ground_stations,
+        roots,
+    )
 
-    satellite_count = len(expand_constellation(load_constellation(constellation_value)))
-    ground_count = len(load_ground_stations(ground_source).stations)
-    static_candidate_bound = max(1, satellite_count * ground_count)
-    ground_scheduling: dict[str, Any] = {
-        "selection_policy": selection_policy,
+    ext_suffix = "-".join(normalized_extensions) if normalized_extensions else "plain"
+    session_name = validate_catalog_name(f"{constellation}-{protocol}-{ext_suffix}".lower())
+    capabilities = _routing_capabilities(normalized_extensions)
+
+    ground_scheduling = {
+        "selection_policy": _selection_policy(
+            ground_policy,
+            ground_selection_lookahead_horizon_ticks,
+        ),
         "handover_policy": {
-            "name": "hysteresis",
-            "params": {
+            "hysteresis": {
                 "discount_factor": 1.15,
                 "mask_fade_range_deg": 5.0,
-            },
+            }
         },
-        "handover_mode": "mbb" if mbb_requested else "bbm",
-        "mbb_overlap_ticks": mbb_overlap_ticks,
-        "mbb_reserve": 1 if mbb_requested else 0,
+        "handover_mode": "mbb",
+        "mbb_overlap_ticks": 3,
+        "mbb_reserve": 1,
+        "handover_concurrency": "one_at_a_time",
+        "ranking_order": [
+            "service_priority",
+            "selection_score",
+            "satellite_ground_terminal_capacity",
+            "lex_pair",
+        ],
+        "mbb_preemption": "off",
+        "successor_abort_policy": "hard_release",
+        "cross_tenant_displacement": "off",
+        "bbm_acquire_timeout_ticks": 1,
     }
 
-    # Build segment-grammar session dict. The wizard emits the same product
-    # grammar that upload/deploy accepts; SessionConfig is only an internal
-    # resolver projection and is never the user-facing output.
     session_dict: dict[str, Any] = {
         "session": {"name": session_name},
-        "identity": {"mode": "segment_namespaced"},
         "segments": [
-            {
-                "id": "space",
-                "kind": "constellation",
-                "source": constellation_value,
-                "namespace": "space",
-                "central_body": "earth",
-                **({"satellite_type": satellite_type} if satellite_type else {}),
-                "tags": ["earth", "orbit"],
-            },
+            {"id": "space", "source": constellation_value},
             {
                 "id": "ground",
-                "kind": "ground_set",
-                "source": ground_source,
-                "namespace": "ground",
-                "reference_body": "earth",
-                "tags": ["earth", "ground"],
-                "scheduling": ground_scheduling,
+                "placement": {"from_site_set": ground_value},
+                "apply": {"scheduling": ground_scheduling},
             },
         ],
         "link_rules": [
             {
-                "id": "ground-access",
-                "kind": "access",
-                "endpoints": [
-                    {"selector": {"segment": "ground"}, "terminal_role": "ground"},
-                    {"selector": {"segment": "space"}, "terminal_role": "ground"},
-                ],
+                "id": "ground_access",
                 "topology": {"mode": "visible_candidates"},
-            }
-        ],
-        "simulation": {
-            "schema_version": 2,
-            "candidate_limits": {"max_pairs_per_rule": static_candidate_bound},
-        },
-        "orbit": {
-            "propagator": orbit_propagator,
-        },
-        "dispatch": {
-            "latency_authority": "ome",
-            "max_latency_age_ticks": 1,
-            "substrate_compensation": {
-                "measurement_source": "node-agent-rtt",
-                "rtt_to_one_way": "half-rtt",
+                "endpoints": [
+                    {
+                        "select": {"segment": "ground"},
+                        "terminal": {"all": [{"role": "access"}, {"medium": "rf"}]},
+                        "min_elevation_deg": 10,
+                    },
+                    {
+                        "select": {"segment": "space"},
+                        "terminal": {"all": [{"role": "access"}, {"medium": "rf"}]},
+                    },
+                ],
             },
+            {
+                "id": "space_isl",
+                "topology": {"mode": "nearest_n", "n": 1},
+                "endpoints": [
+                    {
+                        "select": {"segment": "space"},
+                        "terminal": {"all": [{"role": "isl"}, {"medium": "optical"}]},
+                    },
+                    {
+                        "select": {"segment": "space"},
+                        "terminal": {"all": [{"role": "isl"}, {"medium": "optical"}]},
+                    },
+                ],
+            },
+        ],
+        "addressing": {
+            "loopbacks": [
+                {
+                    "id": "space_loopbacks_v4",
+                    "applies_to": {"segment": "space"},
+                    "ipv4_pool": "10.0.0.0/16",
+                    "prefix_length": 32,
+                    "allocation": "by_plane_slot",
+                },
+                {
+                    "id": "space_loopbacks_v6",
+                    "applies_to": {"segment": "space"},
+                    "ipv6_pool": "fd00::/64",
+                    "prefix_length": 128,
+                    "allocation": "by_plane_slot",
+                },
+            ]
         },
         "routing": {
-            "protocol": protocol,
-            "extensions": extensions,
+            "domains": [
+                {
+                    "id": "default",
+                    "protocol": protocol,
+                    "selectors": [{"any": [{"segment": "space"}, {"segment": "ground"}]}],
+                    "area_assignment": _area_assignment(area_strategy),
+                    **({"capabilities": capabilities} if capabilities else {}),
+                }
+            ]
         },
+        "simulation": {
+            "candidate_limits": {
+                "max_pairs_per_rule": 100000,
+                "max_pairs_per_tick": 100000,
+            }
+        },
+        "orbit": {"default_propagator": orbit_propagator},
+        "time": _default_time(),
+        "dispatch": {"latency_authority": "ome", "max_latency_age_ticks": 3},
     }
-    if orbit_propagator == "sgp4-tle":
-        session_dict["orbit"]["tle_max_age_days"] = 7.0
-
-    if area_assignment:
-        session_dict["routing"]["area_assignment"] = area_assignment
-    if routing_overrides:
-        session_dict["routing"].update(routing_overrides)
-
-    if preset and preset.time:
-        session_dict["time"] = preset.time
-    if preset and preset.traffic_flows:
-        session_dict["traffic_flows"] = preset.traffic_flows
-    if preset and preset.convergence:
-        session_dict["mi"] = {"convergence": preset.convergence}
+    if routing_config:
+        raise ValueError(
+            "routing_config overrides are retired; author routing domains in catalog YAML"
+        )
 
     resolve_session(
         session_dict,
         catalog_roots=roots,
         source_context=SourceContext(origin="session_generator"),
     )
-
-    yaml_str = yaml.dump(session_dict, default_flow_style=False, sort_keys=False)
-    return yaml_str, warnings
+    return yaml.safe_dump(session_dict, default_flow_style=False, sort_keys=False), warnings
 
 
-def _read_constellation_satellite_type(
+def merge_constellation_with_satellite_type(
     constellation_path: str,
+    satellite_type: str,
     catalog_roots: CatalogRoots | None = None,
-) -> str | None:
-    """Read the satellite_type field from a constellation YAML without full parsing."""
-    try:
-        roots = catalog_roots or _default_catalog_roots()
-        source_path = resolve_constellation_reference(constellation_path, roots)
-        data = yaml.safe_load(source_path.read_text())
-        if isinstance(data, dict):
-            return data.get("satellite_type")
-    except Exception:
-        pass
-    return None
+) -> dict:
+    """Reject the retired satellite-type override path."""
+    validate_catalog_name(satellite_type, label="satellite_type")
+    raise ValueError(
+        "satellite_type overrides are retired; choose or author a constellation primitive"
+    )

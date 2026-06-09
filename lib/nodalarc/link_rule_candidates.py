@@ -91,7 +91,7 @@ def _explicit_runtime_pairs(
 
 def _cross_product_pairs(rule: ResolvedLinkRule) -> tuple[tuple[str, str], ...]:
     left, right = rule.endpoints
-    return tuple(_pair(a, b) for a in left.node_ids for b in right.node_ids)
+    return tuple(_pair(a, b) for a in left.node_ids for b in right.node_ids if a != b)
 
 
 def _apply_static_topology(

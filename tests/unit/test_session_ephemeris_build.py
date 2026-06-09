@@ -5,16 +5,14 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from pathlib import Path
 
-import pytest
 from nodalarc.constellation_loader import (
     expand_constellation,
     load_constellation,
 )
 from nodalarc.frames import EcefVec3, GeoPosition, Vec3
 from nodalarc.link_metadata import LinkRuleMetadata
-from nodalarc.models.addressing import AddressingScheme, assign_isl_neighbors
+from nodalarc.models.addressing import AddressingScheme
 from nodalarc.models.events import (
     EphemerisNodeFixed,
     EphemerisNodeKeplerian,
@@ -23,11 +21,10 @@ from nodalarc.models.events import (
 )
 from nodalarc.models.ground_policy import HandoverPolicySpec, SelectionPolicySpec
 from nodalarc.models.session import GroundSchedulingConfig
-from nodalarc.resolve_session import load_session_resolution_from_file
 from ome.event_stream import build_link_state_snapshot, build_session_ephemeris, build_step_context
 from ome.snapshot_builder import LinkSnapshotSource
 
-from tests.conftest import FIXTURES_DIR
+from tests.conftest import FIXTURES_DIR, load_runtime_ome_test_inputs
 
 
 def _ground_scheduling() -> GroundSchedulingConfig:
@@ -39,17 +36,9 @@ def _ground_scheduling() -> GroundSchedulingConfig:
 
 def _load_test_ctx():
     """Load a small test constellation and build StepContext."""
-    session_path = Path("configs/sessions/earth-leo-simple.yaml")
-    if not session_path.exists():
-        pytest.skip("earth-leo-simple.yaml not available")
-
-    resolution = load_session_resolution_from_file(session_path, origin="test.session_ephemeris")
-    session = resolution.runtime_session
-    cc = resolution.primary_constellation.config
-    gs_file = resolution.primary_ground_set.config
-    sats = list(resolution.primary_constellation.satellites)
-    addressing = resolution.addressing
-    neighbors = assign_isl_neighbors(cc, addressing)
+    session, _resolved, gs_file, sats, addressing, neighbors, candidates = (
+        load_runtime_ome_test_inputs(origin="test.session_ephemeris")
+    )
 
     ctx = build_step_context(
         satellites=sats,
@@ -58,7 +47,8 @@ def _load_test_ctx():
         neighbors=neighbors,
         propagator_id=session.orbit.propagator,
         ground_scheduling=session.scheduling.ground,
-        ground_candidate_satellites_by_gs=resolution.ground_candidate_satellites_by_gs,
+        ground_candidate_satellites_by_gs=candidates,
+        ground_link_model=session.ground_link_model,
     )
     return ctx, sats, gs_file
 
@@ -89,6 +79,7 @@ class TestBuildSessionEphemeris:
             propagator_id="j2-mean-elements",
             ground_scheduling=_ground_scheduling(),
             ground_candidate_satellites_by_gs=ctx.ground_candidate_satellites_by_gs,
+            ground_link_model=ctx.ground_link_model,
         )
         eph = build_session_ephemeris(ctx, EPOCH, epoch_id=0)
         sat = eph.nodes["space-sat-p00s00"]
@@ -135,8 +126,7 @@ class TestBuildSessionEphemeris:
     def test_ground_station_mapped_to_fixed(self):
         ctx, _, gs_file = _load_test_ctx()
         eph = build_session_ephemeris(ctx, EPOCH, epoch_id=0)
-        # Find any ground station node
-        gs_nodes = {k: v for k, v in eph.nodes.items() if k.startswith("ground-gs-")}
+        gs_nodes = {k: v for k, v in eph.nodes.items() if k in ctx.gs_positions}
         assert len(gs_nodes) > 0, "Expected at least one ground station"
         gs_name, gs = next(iter(gs_nodes.items()))
         assert isinstance(gs, EphemerisNodeFixed)
@@ -156,6 +146,7 @@ class TestBuildSessionEphemeris:
             propagator_id=ctx.propagator_id,
             ground_scheduling=_ground_scheduling(),
             ground_candidate_satellites_by_gs=ctx.ground_candidate_satellites_by_gs,
+            ground_link_model=ctx.ground_link_model,
             node_metadata={
                 sat_id: {
                     "segment_id": "leo",

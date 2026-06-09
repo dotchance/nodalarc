@@ -6,13 +6,11 @@ Executes kernel operations dispatched by scheduler/dispatcher.py via
 NATS request/reply. Uses namespace_ops.py and ground_bridge.py for
 all netlink operations (setns-based, no fork).
 
-IMPORTANT — node ID case sensitivity:
-  Node IDs in Node Agent protobuf messages MUST use the canonical case from the
-  AddressingScheme (e.g., "sat-P01S02" not "sat-p01s02"). The ground
-  bridge naming helpers derive host veth names from the node ID
-  (e.g., "_gnd_P01S02"), and Linux interface names are case-sensitive.
-  The Scheduler derives canonical node IDs from (plane, slot) via the
-  AddressingScheme, so this should be correct automatically.
+IMPORTANT — node ID contract:
+  Node IDs in Node Agent protobuf messages MUST use the runtime node ID from
+  the resolved session manifest, not the sanitized K8s pod name. The ground
+  bridge naming helpers derive host veth names from that node ID, and Linux
+  interface names are case-sensitive.
 
 Error handling: every per-link operation is wrapped in try/except.
 A single failing link does not prevent other links in the batch from

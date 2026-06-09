@@ -1,1089 +1,199 @@
-"""Test FRR config template rendering — IS-IS, OSPF, Static SR."""
+# Copyright 2024-2026 .chance (dotchance)
+# Licensed under the Apache License, Version 2.0. See LICENSE file.
+"""FRR template rendering from catalog-resolved runtime truth."""
+
+from __future__ import annotations
 
 import re
+from typing import Any
 
+import nodalarc.template_vars as template_vars
 import pytest
 from jinja2 import Environment, FileSystemLoader
-from nodalarc.constellation_loader import load_constellation
-from nodalarc.models.addressing import AddressingScheme
-from nodalarc.models.session import (
-    FlatAreaAssignmentConfig,
-    OrbitConfig,
-    RoutingConfig,
-    SessionConfig,
-    SessionMeta,
-    StripeAreaAssignmentConfig,
-    TimeConfig,
-)
+from nodalarc.models.resolved_session import ResolvedSession, SourceContext
+from nodalarc.resolve_session import resolve_session
 from nodalarc.stack_resolver import resolve_stack
-from nodalarc.template_vars import build_template_vars
+from nodalarc.template_vars import build_template_vars_from_resolved
 
-from tests.conftest import CONFIGS_DIR
-
-_EXPLICIT_SCHEDULING = {
-    "ground": {
-        "selection_policy": {"name": "highest-elevation", "params": {}},
-        "handover_policy": {
-            "name": "hysteresis",
-            "params": {"discount_factor": 1.15, "mask_fade_range_deg": 5.0},
-        },
-        "handover_mode": "bbm",
-        "mbb_overlap_ticks": 3,
-        "mbb_reserve": 0,
-    }
-}
+from tests.conftest import CONFIGS_DIR, build_segment_session_dict
 
 TEMPLATES_DIR = CONFIGS_DIR / "templates" / "frr"
 
 
-@pytest.fixture
-def addressing():
-    return AddressingScheme()
+def test_legacy_session_config_template_builder_is_removed() -> None:
+    assert not hasattr(template_vars, "build_template_vars")
 
 
-@pytest.fixture
-def four_node_config():
-    return load_constellation(CONFIGS_DIR / "constellations/custom-example.yaml")
-
-
-@pytest.fixture
-def starlink_config():
-    return load_constellation(CONFIGS_DIR / "constellations/starlink-early-44.yaml")
-
-
-@pytest.fixture
-def gs_file():
-    from nodalarc.constellation_loader import load_ground_stations
-
-    return load_ground_stations(CONFIGS_DIR / "ground-stations/sets/global.yaml")
-
-
-@pytest.fixture
-def flat_session():
-    return SessionConfig(
-        session=SessionMeta(name="test-isis"),
-        constellation="configs/constellations/custom-example.yaml",
-        ground_stations="configs/ground-stations/sets/global.yaml",
-        orbit=OrbitConfig(propagator="keplerian-circular"),
-        routing=RoutingConfig(
-            protocol="isis",
-            extensions=["sr"],
-            area_assignment=FlatAreaAssignmentConfig(strategy="flat", gs_area_id="49.0001"),
-        ),
-        time=TimeConfig(compression=1),
-        scheduling=_EXPLICIT_SCHEDULING,
+def _raw_session(
+    *,
+    protocol: str = "isis",
+    extensions: list[str] | None = None,
+    planes: int = 2,
+    slots: int = 2,
+    routing: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return build_segment_session_dict(
+        name=f"test-{protocol}",
+        constellation={"planes": {"count": planes, "sats_per_plane": slots}},
+        ground_stations={"stations": [{} for _ in range(2)]},
+        protocol=protocol,
+        extensions=extensions or [],
+        routing=routing,
     )
 
 
-@pytest.fixture
-def stripe_session():
-    return SessionConfig(
-        session=SessionMeta(name="test-isis-stripe"),
-        constellation="configs/constellations/starlink-early-44.yaml",
-        ground_stations="configs/ground-stations/sets/global.yaml",
-        orbit=OrbitConfig(propagator="keplerian-circular"),
-        routing=RoutingConfig(
-            protocol="isis",
-            extensions=["sr"],
-            area_assignment=StripeAreaAssignmentConfig(
-                strategy="stripe",
-                planes_per_stripe=2,
-                gs_area_id="49.0000",
-            ),
+def _resolved(
+    *,
+    protocol: str = "isis",
+    extensions: list[str] | None = None,
+    planes: int = 2,
+    slots: int = 2,
+    routing: dict[str, Any] | None = None,
+) -> ResolvedSession:
+    return resolve_session(
+        _raw_session(
+            protocol=protocol,
+            extensions=extensions,
+            planes=planes,
+            slots=slots,
+            routing=routing,
         ),
-        time=TimeConfig(compression=5),
-        scheduling=_EXPLICIT_SCHEDULING,
+        source_context=SourceContext(origin="test.frr", run_id="run-test-0001"),
     )
 
 
-@pytest.fixture
-def isis_stack():
-    from nodalarc.stack_resolver import resolve_stack
-
-    return resolve_stack("isis", ["sr"])
-
-
-def _render_template(_stack_dir: str, template_name: str, vars: dict) -> str:
-    """Render a Jinja2 template from the unified templates directory."""
+def _render(template_name: str, vars_for_node: dict[str, Any]) -> str:
     env = Environment(
         loader=FileSystemLoader(str(TEMPLATES_DIR)),
         keep_trailing_newline=True,
     )
-    tpl = env.get_template(template_name)
-    return tpl.render(**vars)
+    return env.get_template(template_name).render(**vars_for_node)
 
 
-def _test_sid_index(**kwargs) -> int:
-    if kwargs.get("node_type") == "satellite":
-        return 200 + int(kwargs["plane"]) * 10 + int(kwargs["slot"])
-    if kwargs.get("node_type") == "ground_station":
-        return 700 + int(kwargs["gs_index"])
-    return 1
+def _domain_for_node(resolved: ResolvedSession, node_id: str):
+    domains = [domain for domain in resolved.routing_domains if node_id in domain.node_ids]
+    assert len(domains) == 1
+    return domains[0]
 
 
-def _get_vars(session, constellation, gs_file, addressing, isis_stack, **kwargs):
-    """Build template vars with stack template_variables merged."""
-    overrides = dict(isis_stack.template_variables)
-    if "config_overrides" in kwargs:
-        overrides.update(kwargs.pop("config_overrides"))
-    if overrides.get("sr_enabled") and "node_sid_index" not in kwargs:
-        kwargs["node_sid_index"] = _test_sid_index(**kwargs)
-    return build_template_vars(
-        session=session,
-        constellation=constellation,
-        ground_stations=gs_file,
-        addressing=addressing,
-        config_overrides=overrides,
-        **kwargs,
+def _extensions_for_domain(domain) -> list[str]:
+    capabilities = set(domain.capabilities)
+    extensions: list[str] = []
+    if "segment_routing" in capabilities:
+        extensions.append("sr")
+    if "traffic_engineering" in capabilities:
+        extensions.append("te")
+    if "mpls" in capabilities and "traffic_engineering" in capabilities:
+        extensions.append("mpls")
+    return extensions
+
+
+def _vars_for(resolved: ResolvedSession, node_id: str) -> dict[str, Any]:
+    domain = _domain_for_node(resolved, node_id)
+    stack = resolve_stack(domain.protocol, _extensions_for_domain(domain))
+    ground_ids = [node.node_id for node in resolved.nodes if node.kind == "ground_station"]
+    return build_template_vars_from_resolved(
+        resolved,
+        node_id,
+        stack_variables=stack.template_variables,
+        node_sid_index=resolved.sid_index_by_node_id().get(node_id)
+        if stack.segment_routing
+        else None,
+        gs_index=ground_ids.index(node_id) if node_id in ground_ids else None,
     )
 
 
-class TestIsisNetFormat:
-    def test_satellite_net_even_hex(
-        self, flat_session, four_node_config, gs_file, addressing, isis_stack
-    ):
-        vars = _get_vars(
-            flat_session,
-            four_node_config,
-            gs_file,
-            addressing,
-            isis_stack,
-            node_type="satellite",
-            plane=0,
-            slot=0,
+def _first_satellite(resolved: ResolvedSession) -> str:
+    return next(node.node_id for node in resolved.nodes if node.kind == "satellite")
+
+
+def _first_ground(resolved: ResolvedSession) -> str:
+    return next(node.node_id for node in resolved.nodes if node.kind == "ground_station")
+
+
+def test_isis_satellite_uses_resolved_loopback_unnumbered_wan_and_sid() -> None:
+    resolved = _resolved(protocol="isis", extensions=["sr"])
+    node_id = _first_satellite(resolved)
+    vars_for_node = _vars_for(resolved, node_id)
+
+    zebra = _render("zebra.conf.j2", vars_for_node)
+    isis = _render("isisd.conf.j2", vars_for_node)
+
+    assert f"hostname {node_id}" in zebra
+    assert f"ip address {vars_for_node['ipv4_loopback']}/32" in zebra
+    assert "interface isl0" in zebra
+    assert "interface gnd0" in zebra
+    assert "router isis NODAL" in isis
+    assert "isis network point-to-point" in isis
+    assert "segment-routing on" in isis
+    sid = int(re.search(r"index\s+(\d+)", isis).group(1))
+    assert 0 < sid <= 8000
+
+
+def test_isis_ground_renders_numbered_terr0_and_unnumbered_term_interfaces() -> None:
+    resolved = _resolved(protocol="isis")
+    node_id = _first_ground(resolved)
+    vars_for_node = _vars_for(resolved, node_id)
+
+    zebra = _render("zebra.conf.j2", vars_for_node)
+    isis = _render("isisd.conf.j2", vars_for_node)
+
+    assert "interface terr0" in zebra
+    assert "ip address 172.16.0.1/24" in zebra
+    assert "interface term0" in zebra
+    assert f"ip address {vars_for_node['ipv4_loopback']}/32" in zebra
+    assert "interface terr0" in isis
+    assert "isis passive" in isis
+
+
+def test_default_route_is_originated_from_prefix_intent_not_as_an_interface_address() -> None:
+    raw = _raw_session(protocol="isis")
+    raw["segments"][1]["apply"]["originated_prefixes"] = {"ipv4": ["0.0.0.0/0"]}
+    resolved = resolve_session(raw, source_context=SourceContext(origin="test.frr"))
+    vars_for_node = _vars_for(resolved, _first_ground(resolved))
+
+    zebra = _render("zebra.conf.j2", vars_for_node)
+    isis = _render("isisd.conf.j2", vars_for_node)
+
+    assert "0.0.0.0/0" not in zebra
+    assert "default-information originate ipv4" in isis
+
+
+def test_ospf_satellite_uses_resolved_point_to_point_links_and_te() -> None:
+    resolved = _resolved(protocol="ospf", extensions=["te", "mpls"])
+    vars_for_node = _vars_for(resolved, _first_satellite(resolved))
+
+    ospf = _render("ospfd.conf.j2", vars_for_node)
+
+    assert "router ospf" in ospf
+    assert "mpls-te on" in ospf
+    assert "ip ospf network point-to-point" in ospf
+    assert "ip ospf cost" in ospf
+
+
+def test_ospf_cross_area_link_uses_backbone_area_from_resolved_area_assignment() -> None:
+    raw = _raw_session(protocol="ospf", planes=2, slots=1)
+    raw["link_rules"][1]["topology"] = {
+        "mode": "explicit_pairs",
+        "pairs": [{"a": "sat-p00s00", "b": "sat-p01s00"}],
+    }
+    raw["routing"]["domains"][0]["area_assignment"] = {"strategy": "per_plane"}
+    resolved = resolve_session(raw, source_context=SourceContext(origin="test.frr"))
+    vars_for_node = _vars_for(resolved, "space-sat-p00s00")
+
+    assert any(info["cross_area"] for info in vars_for_node["interface_info"].values())
+    ospf = _render("ospfd.conf.j2", vars_for_node)
+    assert "ip ospf area 0.0.0.0" in ospf
+
+
+def test_resolved_template_vars_fail_loud_when_sr_sid_is_missing() -> None:
+    resolved = _resolved(protocol="isis", extensions=["sr"])
+    node_id = _first_satellite(resolved)
+    stack = resolve_stack("isis", ["sr"])
+
+    with pytest.raises(ValueError, match="SID index"):
+        build_template_vars_from_resolved(
+            resolved,
+            node_id,
+            stack_variables=stack.template_variables,
         )
-        rendered = _render_template("frr-isis-sr", "isisd.conf.j2", vars)
-        # Extract NET from rendered config
-        net_match = re.search(r"net\s+(\S+)", rendered)
-        assert net_match is not None
-        net = net_match.group(1)
-        # NET should have even number of hex digits in each component
-        parts = net.split(".")
-        for part in parts:
-            assert len(part) % 2 == 0, f"Odd hex length in NET component: {part}"
-
-    def test_satellite_system_id(
-        self, flat_session, four_node_config, gs_file, addressing, isis_stack
-    ):
-        vars = _get_vars(
-            flat_session,
-            four_node_config,
-            gs_file,
-            addressing,
-            isis_stack,
-            node_type="satellite",
-            plane=1,
-            slot=1,
-        )
-        rendered = _render_template("frr-isis-sr", "isisd.conf.j2", vars)
-        # Plane 1, slot 1 → system_id = 0001.0001.0001
-        assert "0001.0001.0001" in rendered
-
-    def test_gs_system_id(self, flat_session, four_node_config, gs_file, addressing, isis_stack):
-        vars = _get_vars(
-            flat_session,
-            four_node_config,
-            gs_file,
-            addressing,
-            isis_stack,
-            node_type="ground_station",
-            gs_name="hawthorne",
-            gs_index=0,
-        )
-        rendered = _render_template("frr-isis-sr", "isisd.conf.j2", vars)
-        # GS index 0 → system_id = 00ff.0000.0002
-        assert "00ff.0000.0002" in rendered
-
-    def test_net_includes_area_id(
-        self, flat_session, four_node_config, gs_file, addressing, isis_stack
-    ):
-        vars = _get_vars(
-            flat_session,
-            four_node_config,
-            gs_file,
-            addressing,
-            isis_stack,
-            node_type="satellite",
-            plane=0,
-            slot=0,
-        )
-        rendered = _render_template("frr-isis-sr", "isisd.conf.j2", vars)
-        assert "49.0001" in rendered
-
-
-class TestIsisConfig:
-    def test_wide_metrics(self, flat_session, four_node_config, gs_file, addressing, isis_stack):
-        vars = _get_vars(
-            flat_session,
-            four_node_config,
-            gs_file,
-            addressing,
-            isis_stack,
-            node_type="satellite",
-            plane=0,
-            slot=0,
-        )
-        rendered = _render_template("frr-isis-sr", "isisd.conf.j2", vars)
-        assert "metric-style wide" in rendered
-
-    def test_point_to_point_on_isl(
-        self, flat_session, four_node_config, gs_file, addressing, isis_stack
-    ):
-        vars = _get_vars(
-            flat_session,
-            four_node_config,
-            gs_file,
-            addressing,
-            isis_stack,
-            node_type="satellite",
-            plane=0,
-            slot=0,
-        )
-        rendered = _render_template("frr-isis-sr", "isisd.conf.j2", vars)
-        assert "isis network point-to-point" in rendered
-
-    def test_explicit_metric(self, flat_session, four_node_config, gs_file, addressing, isis_stack):
-        vars = _get_vars(
-            flat_session,
-            four_node_config,
-            gs_file,
-            addressing,
-            isis_stack,
-            node_type="satellite",
-            plane=0,
-            slot=0,
-        )
-        rendered = _render_template("frr-isis-sr", "isisd.conf.j2", vars)
-        # reference_bandwidth=10000, bandwidth_mbps=1000 → metric = 10
-        assert "isis metric 10" in rendered
-
-    def test_no_ipv6_nd_suppress_ra(
-        self, flat_session, four_node_config, gs_file, addressing, isis_stack
-    ):
-        vars = _get_vars(
-            flat_session,
-            four_node_config,
-            gs_file,
-            addressing,
-            isis_stack,
-            node_type="satellite",
-            plane=0,
-            slot=0,
-        )
-        rendered = _render_template("frr-isis-sr", "zebra.conf.j2", vars)
-        assert "no ipv6 nd suppress-ra" in rendered
-
-    def test_loopback_passive(
-        self, flat_session, four_node_config, gs_file, addressing, isis_stack
-    ):
-        vars = _get_vars(
-            flat_session,
-            four_node_config,
-            gs_file,
-            addressing,
-            isis_stack,
-            node_type="satellite",
-            plane=0,
-            slot=0,
-        )
-        rendered = _render_template("frr-isis-sr", "isisd.conf.j2", vars)
-        # lo interface should be passive
-        assert "isis passive" in rendered
-
-    def test_mgmt_interface_passive(
-        self, flat_session, four_node_config, gs_file, addressing, isis_stack
-    ):
-        vars = _get_vars(
-            flat_session,
-            four_node_config,
-            gs_file,
-            addressing,
-            isis_stack,
-            node_type="satellite",
-            plane=0,
-            slot=0,
-        )
-        rendered = _render_template("frr-isis-sr", "zebra.conf.j2", vars)
-        # mgmt_interface (eth0) not in zebra template — it's the K8s mgmt interface
-        # Verify lo has isis passive instead
-        assert "isis passive" in rendered
-
-
-class TestSrMpls:
-    def test_segment_routing_enabled(
-        self, flat_session, four_node_config, gs_file, addressing, isis_stack
-    ):
-        vars = _get_vars(
-            flat_session,
-            four_node_config,
-            gs_file,
-            addressing,
-            isis_stack,
-            node_type="satellite",
-            plane=0,
-            slot=0,
-        )
-        rendered = _render_template("frr-isis-sr", "isisd.conf.j2", vars)
-        assert "segment-routing on" in rendered
-
-    def test_srgb_range(self, flat_session, four_node_config, gs_file, addressing, isis_stack):
-        vars = _get_vars(
-            flat_session,
-            four_node_config,
-            gs_file,
-            addressing,
-            isis_stack,
-            node_type="satellite",
-            plane=0,
-            slot=0,
-        )
-        rendered = _render_template("frr-isis-sr", "isisd.conf.j2", vars)
-        assert "global-block 16000 23999" in rendered
-
-    def test_unique_sid_indices(
-        self, flat_session, four_node_config, gs_file, addressing, isis_stack
-    ):
-        """All nodes should have unique SID indices."""
-        sids = set()
-        for p in range(2):
-            for s in range(2):
-                vars = _get_vars(
-                    flat_session,
-                    four_node_config,
-                    gs_file,
-                    addressing,
-                    isis_stack,
-                    node_type="satellite",
-                    plane=p,
-                    slot=s,
-                )
-                rendered = _render_template("frr-isis-sr", "isisd.conf.j2", vars)
-                sid_match = re.search(r"index\s+(\d+)", rendered)
-                assert sid_match
-                sids.add(int(sid_match.group(1)))
-        # GS node
-        vars = _get_vars(
-            flat_session,
-            four_node_config,
-            gs_file,
-            addressing,
-            isis_stack,
-            node_type="ground_station",
-            gs_name="hawthorne",
-            gs_index=0,
-        )
-        rendered = _render_template("frr-isis-sr", "isisd.conf.j2", vars)
-        sid_match = re.search(r"index\s+(\d+)", rendered)
-        assert sid_match
-        sids.add(int(sid_match.group(1)))
-        # All unique
-        assert len(sids) == 5  # 4 sats + 1 GS
-
-    def test_sr_prefix_index(self, flat_session, four_node_config, gs_file, addressing, isis_stack):
-        vars = _get_vars(
-            flat_session,
-            four_node_config,
-            gs_file,
-            addressing,
-            isis_stack,
-            node_type="satellite",
-            plane=0,
-            slot=0,
-        )
-        rendered = _render_template("frr-isis-sr", "isisd.conf.j2", vars)
-        assert "segment-routing prefix" in rendered
-        assert "index 200" in rendered
-
-
-class TestTimerScaling:
-    def test_lsp_gen_interval_present(
-        self, flat_session, four_node_config, gs_file, addressing, isis_stack
-    ):
-        vars = _get_vars(
-            flat_session,
-            four_node_config,
-            gs_file,
-            addressing,
-            isis_stack,
-            node_type="satellite",
-            plane=0,
-            slot=0,
-        )
-        rendered = _render_template("frr-isis-sr", "isisd.conf.j2", vars)
-        assert "lsp-gen-interval" in rendered
-
-    def test_spf_interval_present(
-        self, stripe_session, starlink_config, gs_file, addressing, isis_stack
-    ):
-        vars = _get_vars(
-            stripe_session,
-            starlink_config,
-            gs_file,
-            addressing,
-            isis_stack,
-            node_type="satellite",
-            plane=0,
-            slot=0,
-        )
-        rendered = _render_template("frr-isis-sr", "isisd.conf.j2", vars)
-        assert "spf-delay-ietf" in rendered
-
-
-class TestBfdAndTimerRendering:
-    """Verify BFD and timer values render into FRR templates correctly."""
-
-    def test_bfd_enabled_renders_isis_bfd(
-        self, stripe_session, starlink_config, gs_file, addressing, isis_stack
-    ):
-        vars = _get_vars(
-            stripe_session,
-            starlink_config,
-            gs_file,
-            addressing,
-            isis_stack,
-            node_type="satellite",
-            plane=0,
-            slot=0,
-        )
-        vars["bfd_enabled"] = True
-        rendered = _render_template("frr-isis-sr", "isisd.conf.j2", vars)
-        assert "isis bfd" in rendered
-
-    def test_bfd_disabled_no_isis_bfd(
-        self, stripe_session, starlink_config, gs_file, addressing, isis_stack
-    ):
-        vars = _get_vars(
-            stripe_session,
-            starlink_config,
-            gs_file,
-            addressing,
-            isis_stack,
-            node_type="satellite",
-            plane=0,
-            slot=0,
-        )
-        vars["bfd_enabled"] = False
-        rendered = _render_template("frr-isis-sr", "isisd.conf.j2", vars)
-        assert "isis bfd" not in rendered
-
-    def test_custom_isis_timers_render(
-        self, stripe_session, starlink_config, gs_file, addressing, isis_stack
-    ):
-        vars = _get_vars(
-            stripe_session,
-            starlink_config,
-            gs_file,
-            addressing,
-            isis_stack,
-            node_type="satellite",
-            plane=0,
-            slot=0,
-        )
-        vars["isis_hello_interval"] = 3
-        vars["isis_hello_multiplier"] = 5
-        vars["spf_init_delay"] = 100
-        vars["spf_long_delay"] = 2000
-        rendered = _render_template("frr-isis-sr", "isisd.conf.j2", vars)
-        assert "isis hello-interval 3" in rendered
-        assert "isis hello-multiplier 5" in rendered
-        assert "init-delay 100" in rendered
-        assert "long-delay 2000" in rendered
-
-    def test_ospf_bfd_renders(self, flat_session, four_node_config, gs_file, addressing):
-        from nodalarc.stack_resolver import resolve_stack
-
-        ospf_stack = resolve_stack("ospf", [])
-        vars = _get_vars(
-            flat_session,
-            four_node_config,
-            gs_file,
-            addressing,
-            ospf_stack,
-            node_type="satellite",
-            plane=0,
-            slot=0,
-        )
-        vars["bfd_enabled"] = True
-        rendered = _render_template("frr-ospf", "ospfd.conf.j2", vars)
-        assert "ip ospf bfd" in rendered
-
-    def test_ospf_no_bfd(self, flat_session, four_node_config, gs_file, addressing):
-        from nodalarc.stack_resolver import resolve_stack
-
-        ospf_stack = resolve_stack("ospf", [])
-        vars = _get_vars(
-            flat_session,
-            four_node_config,
-            gs_file,
-            addressing,
-            ospf_stack,
-            node_type="satellite",
-            plane=0,
-            slot=0,
-        )
-        vars["bfd_enabled"] = False
-        rendered = _render_template("frr-ospf", "ospfd.conf.j2", vars)
-        assert "ip ospf bfd" not in rendered
-
-    def test_ospf_custom_timers(self, flat_session, four_node_config, gs_file, addressing):
-        from nodalarc.stack_resolver import resolve_stack
-
-        ospf_stack = resolve_stack("ospf", [])
-        vars = _get_vars(
-            flat_session,
-            four_node_config,
-            gs_file,
-            addressing,
-            ospf_stack,
-            node_type="satellite",
-            plane=0,
-            slot=0,
-        )
-        vars["ospf_hello_interval"] = 10
-        vars["ospf_dead_interval"] = 40
-        vars["ospf_spf_delay"] = 200
-        vars["ospf_spf_max_hold"] = 5000
-        rendered = _render_template("frr-ospf", "ospfd.conf.j2", vars)
-        assert "ip ospf hello-interval 10" in rendered
-        assert "ip ospf dead-interval 40" in rendered
-        assert "timers throttle spf 200" in rendered
-
-
-class TestZebraConfig:
-    def test_hostname(self, flat_session, four_node_config, gs_file, addressing, isis_stack):
-        vars = _get_vars(
-            flat_session,
-            four_node_config,
-            gs_file,
-            addressing,
-            isis_stack,
-            node_type="satellite",
-            plane=0,
-            slot=0,
-        )
-        rendered = _render_template("frr-isis-sr", "zebra.conf.j2", vars)
-        assert "hostname sat-P00S00" in rendered
-
-    def test_loopback_addresses(
-        self, flat_session, four_node_config, gs_file, addressing, isis_stack
-    ):
-        vars = _get_vars(
-            flat_session,
-            four_node_config,
-            gs_file,
-            addressing,
-            isis_stack,
-            node_type="satellite",
-            plane=0,
-            slot=0,
-        )
-        rendered = _render_template("frr-isis-sr", "zebra.conf.j2", vars)
-        assert "ip address 10.0.0.1/32" in rendered
-        assert "ipv6 address fd00::0:0:1/128" in rendered
-
-    def test_ip_forwarding(self, flat_session, four_node_config, gs_file, addressing, isis_stack):
-        vars = _get_vars(
-            flat_session,
-            four_node_config,
-            gs_file,
-            addressing,
-            isis_stack,
-            node_type="satellite",
-            plane=0,
-            slot=0,
-        )
-        rendered = _render_template("frr-isis-sr", "zebra.conf.j2", vars)
-        assert "ip forwarding" in rendered
-        assert "ipv6 forwarding" in rendered
-
-    def test_isl_interfaces_use_loopback_ip(
-        self, flat_session, four_node_config, gs_file, addressing, isis_stack
-    ):
-        """ISL interfaces borrow the loopback IP (unnumbered style) for IS-IS."""
-        vars = _get_vars(
-            flat_session,
-            four_node_config,
-            gs_file,
-            addressing,
-            isis_stack,
-            node_type="satellite",
-            plane=0,
-            slot=0,
-        )
-        rendered = _render_template("frr-isis-sr", "zebra.conf.j2", vars)
-        loopback_ip = vars["ipv4_loopback"]
-        assert f"ip address {loopback_ip}/32" in rendered
-
-    def test_gs_terrestrial_interface(
-        self, flat_session, four_node_config, gs_file, addressing, isis_stack
-    ):
-        vars = _get_vars(
-            flat_session,
-            four_node_config,
-            gs_file,
-            addressing,
-            isis_stack,
-            node_type="ground_station",
-            gs_name="hawthorne",
-            gs_index=0,
-        )
-        rendered = _render_template("frr-isis-sr", "zebra.conf.j2", vars)
-        assert "interface terr0" in rendered
-        assert "172.16.0.1/24" in rendered
-
-    def test_ip_forwarding_enabled(
-        self, flat_session, four_node_config, gs_file, addressing, isis_stack
-    ):
-        vars = _get_vars(
-            flat_session,
-            four_node_config,
-            gs_file,
-            addressing,
-            isis_stack,
-            node_type="satellite",
-            plane=0,
-            slot=0,
-        )
-        rendered = _render_template("frr-isis-sr", "zebra.conf.j2", vars)
-        assert "ip forwarding" in rendered
-
-
-class TestIsisAbrSatellite:
-    """IS-IS config for a cross-area ABR satellite (stripe area strategy)."""
-
-    def test_abr_has_cross_area_interfaces(
-        self, stripe_session, starlink_config, gs_file, addressing, isis_stack
-    ):
-        """ABR satellite at plane boundary has cross-area ISL neighbors."""
-        vars = _get_vars(
-            stripe_session,
-            starlink_config,
-            gs_file,
-            addressing,
-            isis_stack,
-            node_type="satellite",
-            plane=1,
-            slot=5,
-        )
-        rendered = _render_template("frr-isis-sr", "isisd.conf.j2", vars)
-        # ABR at plane 1 (stripe 0) has cross-plane ISL to plane 2 (stripe 1)
-        has_cross = any(info["cross_area"] for info in vars["interface_info"].values())
-        assert has_cross, "ABR satellite should have at least one cross-area interface"
-        # IS-IS still renders all interfaces (area is per-node in IS-IS)
-        assert "isis network point-to-point" in rendered
-
-    def test_abr_explicit_metrics(
-        self, stripe_session, starlink_config, gs_file, addressing, isis_stack
-    ):
-        vars = _get_vars(
-            stripe_session,
-            starlink_config,
-            gs_file,
-            addressing,
-            isis_stack,
-            node_type="satellite",
-            plane=1,
-            slot=5,
-        )
-        rendered = _render_template("frr-isis-sr", "isisd.conf.j2", vars)
-        assert "isis metric" in rendered
-
-    def test_abr_sr_prefix_unique(
-        self, stripe_session, starlink_config, gs_file, addressing, isis_stack
-    ):
-        """ABR satellite SID index is unique from intra-area satellites."""
-        vars_intra = _get_vars(
-            stripe_session,
-            starlink_config,
-            gs_file,
-            addressing,
-            isis_stack,
-            node_type="satellite",
-            plane=0,
-            slot=0,
-        )
-        vars_abr = _get_vars(
-            stripe_session,
-            starlink_config,
-            gs_file,
-            addressing,
-            isis_stack,
-            node_type="satellite",
-            plane=1,
-            slot=5,
-        )
-        r_intra = _render_template("frr-isis-sr", "isisd.conf.j2", vars_intra)
-        r_abr = _render_template("frr-isis-sr", "isisd.conf.j2", vars_abr)
-        sid_intra = re.search(r"index\s+(\d+)", r_intra).group(1)
-        sid_abr = re.search(r"index\s+(\d+)", r_abr).group(1)
-        assert sid_intra != sid_abr
-
-
-class TestIsisGroundStation:
-    """IS-IS config for a ground station node."""
-
-    def test_gs_isis_enabled(self, flat_session, four_node_config, gs_file, addressing, isis_stack):
-        vars = _get_vars(
-            flat_session,
-            four_node_config,
-            gs_file,
-            addressing,
-            isis_stack,
-            node_type="ground_station",
-            gs_name="hawthorne",
-            gs_index=0,
-        )
-        rendered = _render_template("frr-isis-sr", "isisd.conf.j2", vars)
-        assert "router isis NODAL" in rendered
-
-    def test_gs_net_formed(self, flat_session, four_node_config, gs_file, addressing, isis_stack):
-        vars = _get_vars(
-            flat_session,
-            four_node_config,
-            gs_file,
-            addressing,
-            isis_stack,
-            node_type="ground_station",
-            gs_name="hawthorne",
-            gs_index=0,
-        )
-        rendered = _render_template("frr-isis-sr", "isisd.conf.j2", vars)
-        net_match = re.search(r"net\s+(\S+)", rendered)
-        assert net_match is not None
-        net = net_match.group(1)
-        # GS should be in area 49.0001
-        assert "49.0001" in net
-        # GS system_id uses 00ff prefix
-        assert "00ff" in net
-
-    def test_gs_sr_sid(self, flat_session, four_node_config, gs_file, addressing, isis_stack):
-        vars = _get_vars(
-            flat_session,
-            four_node_config,
-            gs_file,
-            addressing,
-            isis_stack,
-            node_type="ground_station",
-            gs_name="hawthorne",
-            gs_index=0,
-        )
-        rendered = _render_template("frr-isis-sr", "isisd.conf.j2", vars)
-        assert "index 700" in rendered
-
-    def test_gs_terrestrial_interface_passive(
-        self, flat_session, four_node_config, gs_file, addressing, isis_stack
-    ):
-        vars = _get_vars(
-            flat_session,
-            four_node_config,
-            gs_file,
-            addressing,
-            isis_stack,
-            node_type="ground_station",
-            gs_name="hawthorne",
-            gs_index=0,
-        )
-        rendered = _render_template("frr-isis-sr", "isisd.conf.j2", vars)
-        # terr0 should be in IS-IS as passive
-        assert "interface terr0" in rendered
-
-    def test_gs_zebra_terrestrial_prefixes(
-        self, flat_session, four_node_config, gs_file, addressing, isis_stack
-    ):
-        vars = _get_vars(
-            flat_session,
-            four_node_config,
-            gs_file,
-            addressing,
-            isis_stack,
-            node_type="ground_station",
-            gs_name="hawthorne",
-            gs_index=0,
-        )
-        rendered = _render_template("frr-isis-sr", "zebra.conf.j2", vars)
-        assert "172.16.0.1/24" in rendered
-        assert "interface terr0" in rendered
-
-    def test_gs_no_isl_interfaces(
-        self, flat_session, four_node_config, gs_file, addressing, isis_stack
-    ):
-        vars = _get_vars(
-            flat_session,
-            four_node_config,
-            gs_file,
-            addressing,
-            isis_stack,
-            node_type="ground_station",
-            gs_name="hawthorne",
-            gs_index=0,
-        )
-        assert vars["isl_interfaces"] == []
-        assert vars["isl_count"] == 0
-
-
-# ===================================================================
-# OSPF Template Tests
-# ===================================================================
-
-
-@pytest.fixture
-def ospf_stack():
-    return resolve_stack("ospf", ["te"])
-
-
-def _get_ospf_vars(session, constellation, gs_file, addressing, ospf_stack, **kwargs):
-    overrides = dict(ospf_stack.template_variables)
-    if "config_overrides" in kwargs:
-        overrides.update(kwargs.pop("config_overrides"))
-    return build_template_vars(
-        session=session,
-        constellation=constellation,
-        ground_stations=gs_file,
-        addressing=addressing,
-        config_overrides=overrides,
-        **kwargs,
-    )
-
-
-class TestOspfConfig:
-    def test_ospf_point_to_point(
-        self, flat_session, four_node_config, gs_file, addressing, ospf_stack
-    ):
-        vars = _get_ospf_vars(
-            flat_session,
-            four_node_config,
-            gs_file,
-            addressing,
-            ospf_stack,
-            node_type="satellite",
-            plane=0,
-            slot=0,
-        )
-        rendered = _render_template("frr-ospf-te", "ospfd.conf.j2", vars)
-        assert "ip ospf network point-to-point" in rendered
-
-    def test_ospf_explicit_cost(
-        self, flat_session, four_node_config, gs_file, addressing, ospf_stack
-    ):
-        vars = _get_ospf_vars(
-            flat_session,
-            four_node_config,
-            gs_file,
-            addressing,
-            ospf_stack,
-            node_type="satellite",
-            plane=0,
-            slot=0,
-        )
-        rendered = _render_template("frr-ospf-te", "ospfd.conf.j2", vars)
-        # reference_bandwidth=10000, bandwidth_mbps=1000 → cost 10
-        assert "ip ospf cost 10" in rendered
-
-    def test_ospf_mgmt_passive(
-        self, flat_session, four_node_config, gs_file, addressing, ospf_stack
-    ):
-        vars = _get_ospf_vars(
-            flat_session,
-            four_node_config,
-            gs_file,
-            addressing,
-            ospf_stack,
-            node_type="satellite",
-            plane=0,
-            slot=0,
-        )
-        rendered = _render_template("frr-ospf-te", "ospfd.conf.j2", vars)
-        assert "ip ospf passive" in rendered
-
-    def test_ospf_cross_area_in_backbone(
-        self, stripe_session, starlink_config, gs_file, addressing, ospf_stack
-    ):
-        """Cross-area interfaces should be assigned to area 0 (backbone)."""
-        vars = _get_ospf_vars(
-            stripe_session,
-            starlink_config,
-            gs_file,
-            addressing,
-            ospf_stack,
-            node_type="satellite",
-            plane=1,
-            slot=5,
-        )
-        rendered = _render_template("frr-ospf-te", "ospfd.conf.j2", vars)
-        assert "ip ospf area 0.0.0.0" in rendered
-
-    def test_ospf_mpls_te(self, flat_session, four_node_config, gs_file, addressing, ospf_stack):
-        vars = _get_ospf_vars(
-            flat_session,
-            four_node_config,
-            gs_file,
-            addressing,
-            ospf_stack,
-            node_type="satellite",
-            plane=0,
-            slot=0,
-        )
-        rendered = _render_template("frr-ospf-te", "ospfd.conf.j2", vars)
-        assert "mpls-te on" in rendered
-
-    def test_ospf_no_ipv6_suppress_ra(
-        self, flat_session, four_node_config, gs_file, addressing, ospf_stack
-    ):
-        vars = _get_ospf_vars(
-            flat_session,
-            four_node_config,
-            gs_file,
-            addressing,
-            ospf_stack,
-            node_type="satellite",
-            plane=0,
-            slot=0,
-        )
-        rendered = _render_template("frr-ospf-te", "zebra.conf.j2", vars)
-        assert "no ipv6 nd suppress-ra" in rendered
-
-
-class TestOspfGroundStation:
-    """OSPF config for a ground station node."""
-
-    def test_gs_ospf_router_id(
-        self, flat_session, four_node_config, gs_file, addressing, ospf_stack
-    ):
-        vars = _get_ospf_vars(
-            flat_session,
-            four_node_config,
-            gs_file,
-            addressing,
-            ospf_stack,
-            node_type="ground_station",
-            gs_name="hawthorne",
-            gs_index=0,
-        )
-        rendered = _render_template("frr-ospf-te", "ospfd.conf.j2", vars)
-        assert f"ospf router-id {vars['ipv4_loopback']}" in rendered
-
-    def test_gs_terrestrial_passive(
-        self, flat_session, four_node_config, gs_file, addressing, ospf_stack
-    ):
-        vars = _get_ospf_vars(
-            flat_session,
-            four_node_config,
-            gs_file,
-            addressing,
-            ospf_stack,
-            node_type="ground_station",
-            gs_name="hawthorne",
-            gs_index=0,
-        )
-        rendered = _render_template("frr-ospf-te", "ospfd.conf.j2", vars)
-        assert "interface terr0" in rendered
-        assert "ip ospf passive" in rendered
-
-    def test_gs_loopback_in_area(
-        self, flat_session, four_node_config, gs_file, addressing, ospf_stack
-    ):
-        vars = _get_ospf_vars(
-            flat_session,
-            four_node_config,
-            gs_file,
-            addressing,
-            ospf_stack,
-            node_type="ground_station",
-            gs_name="hawthorne",
-            gs_index=0,
-        )
-        rendered = _render_template("frr-ospf-te", "ospfd.conf.j2", vars)
-        assert "ip ospf area" in rendered
-
-    def test_gs_zebra_forwarding(
-        self, flat_session, four_node_config, gs_file, addressing, ospf_stack
-    ):
-        vars = _get_ospf_vars(
-            flat_session,
-            four_node_config,
-            gs_file,
-            addressing,
-            ospf_stack,
-            node_type="ground_station",
-            gs_name="hawthorne",
-            gs_index=0,
-        )
-        rendered = _render_template("frr-ospf-te", "zebra.conf.j2", vars)
-        assert "ip forwarding" in rendered
-        assert "interface terr0" in rendered
-
-    def test_gs_no_isl_interfaces_in_ospf(
-        self, flat_session, four_node_config, gs_file, addressing, ospf_stack
-    ):
-        """GS has no ISL interfaces — only gnd and terr in OSPF."""
-        vars = _get_ospf_vars(
-            flat_session,
-            four_node_config,
-            gs_file,
-            addressing,
-            ospf_stack,
-            node_type="ground_station",
-            gs_name="hawthorne",
-            gs_index=0,
-        )
-        assert vars["interface_info"] == {}
-
-
-class TestOspfAbrSatellite:
-    """OSPF config for a cross-area ABR satellite."""
-
-    def test_abr_cross_area_interface_in_area0(
-        self, stripe_session, starlink_config, gs_file, addressing, ospf_stack
-    ):
-        vars = _get_ospf_vars(
-            stripe_session,
-            starlink_config,
-            gs_file,
-            addressing,
-            ospf_stack,
-            node_type="satellite",
-            plane=1,
-            slot=5,
-        )
-        rendered = _render_template("frr-ospf-te", "ospfd.conf.j2", vars)
-        assert "ip ospf area 0.0.0.0" in rendered
-
-    def test_abr_intra_area_interface_in_own_area(
-        self, stripe_session, starlink_config, gs_file, addressing, ospf_stack
-    ):
-        vars = _get_ospf_vars(
-            stripe_session,
-            starlink_config,
-            gs_file,
-            addressing,
-            ospf_stack,
-            node_type="satellite",
-            plane=1,
-            slot=5,
-        )
-        rendered = _render_template("frr-ospf-te", "ospfd.conf.j2", vars)
-        # Should have at least one interface in its own area (not area 0)
-        area_id = vars["area_id"]
-        assert f"ip ospf area {area_id}" in rendered
-
-    def test_abr_has_ospf_timers(
-        self, stripe_session, starlink_config, gs_file, addressing, ospf_stack
-    ):
-        vars = _get_ospf_vars(
-            stripe_session,
-            starlink_config,
-            gs_file,
-            addressing,
-            ospf_stack,
-            node_type="satellite",
-            plane=1,
-            slot=5,
-        )
-        rendered = _render_template("frr-ospf-te", "ospfd.conf.j2", vars)
-        assert "ip ospf hello-interval" in rendered
-        assert "ip ospf dead-interval" in rendered
-
-
-# Static SR tests removed — frr-static-sr was a legacy stack with no
-# stack resolver path. The static-sr routing stack is not exposed in
-# the wizard and has no production deployment path.

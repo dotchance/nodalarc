@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import hashlib
+from pathlib import Path
 from typing import Any
 
 from nodalarc.nats_channels import sanitize_session_id
@@ -37,3 +38,28 @@ def require_session_run_id(session: Any) -> str:
             f"session.run_id is required in deployed runtime session config (session.name={name!r})"
         )
     return sanitize_session_id(str(run_id))
+
+
+def require_resolved_session_run_id(resolved: Any) -> str:
+    """Return the deployed runtime identity from a ResolvedSession-like object."""
+    source_context = getattr(resolved, "source_context", None)
+    run_id = getattr(source_context, "run_id", None)
+    if not run_id:
+        session_meta = getattr(resolved, "session", None)
+        name = getattr(session_meta, "name", "")
+        raise ValueError(
+            "resolved.source_context.run_id is required in deployed runtime "
+            f"session config (session.name={name!r})"
+        )
+    return sanitize_session_id(str(run_id))
+
+
+def read_runtime_session_run_id_file(path: str | Path) -> str:
+    """Read the operator-owned runtime lineage sidecar."""
+    run_id_path = Path(path)
+    if not run_id_path.is_file():
+        raise RuntimeError(f"runtime session run-id file is missing: {run_id_path}")
+    run_id = run_id_path.read_text(encoding="utf-8").strip()
+    if not run_id:
+        raise RuntimeError(f"runtime session run-id file is empty: {run_id_path}")
+    return run_id

@@ -4,7 +4,8 @@
 set -euo pipefail
 
 NAMESPACE="${NAMESPACE:-nodalarc}"
-DEFAULT_SESSION="${DEFAULT_SESSION:-configs/sessions/earth-leo-simple.yaml}"
+DEFAULT_SESSION="${DEFAULT_SESSION:-catalog/nodalarc/sessions/earth-leo-simple.yaml}"
+PLATFORM_CONFIG="${PLATFORM_CONFIG:-configs/platform.yaml}"
 KUBECONFIG="${KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}"
 export KUBECONFIG
 
@@ -25,7 +26,7 @@ fi
 echo "[session] Expected session pods: $expected_pods"
 
 echo "[session] Computing placement policy..."
-if ! placement_policy="$(PYTHONPATH=lib uv run python -c 'import sys; from nodalarc.resolve_session import load_session_resolution_from_file; print(load_session_resolution_from_file(sys.argv[1], origin="na-session").runtime_session.placement.policy)' "$DEFAULT_SESSION")"; then
+if ! placement_policy="$(PYTHONPATH=lib uv run python -c 'import sys; from pathlib import Path; from nodalarc.platform_config import init_platform_config; cfg = init_platform_config(Path(sys.argv[1])); print(cfg.default_session_pod_placement_policy)' "$PLATFORM_CONFIG")"; then
     echo "[session] ERROR: failed to compute placement policy for $DEFAULT_SESSION" >&2
     exit 1
 fi
@@ -161,17 +162,20 @@ verify_session_placement() {
         PYTHONPATH=lib uv run python -c '
 import sys
 import importlib.util
+from pathlib import Path
+from nodalarc.platform_config import init_platform_config
 
 spec = importlib.util.spec_from_file_location("session_deployer", "services/nodalarc_operator/session_deployer.py")
 session_deployer = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(session_deployer)
+init_platform_config(Path(sys.argv[3]))
 
 available_nodes = [n for n in sys.argv[2].split(",") if n]
 print(session_deployer.compute_expected_placement_node_count(
     {"sessionYaml": open(sys.argv[1], encoding="utf-8").read()},
     available_nodes,
 ))
-' "$DEFAULT_SESSION" "$ready_node_csv"
+' "$DEFAULT_SESSION" "$ready_node_csv" "$PLATFORM_CONFIG"
     )"; then
         echo "[session] ERROR: failed to compute expected placement for $DEFAULT_SESSION" >&2
         exit 1

@@ -10,8 +10,8 @@ function preset(name: string, mode: string): ConstellationPreset {
     name,
     description: `${name} description`,
     satellite_count: 12,
-    constellation: `configs/constellations/${name}.yaml`,
-    ground_stations: "configs/ground-stations/sets/demo.yaml",
+    constellation: `nodalarc:constellations/earth/leo/${name}.yaml`,
+    ground_stations: "nodalarc:site-sets/earth/leo/earth-leo-starlink-pop-sites.yaml",
     mode,
   };
 }

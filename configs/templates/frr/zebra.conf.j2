@@ -36,9 +36,10 @@ interface {{ iface }}
 exit
 {% endfor %}
 
-{% if node_type == "ground_station" and terrestrial_prefixes is defined %}
+{% set terr0_render_addresses = terr0_addresses | default(terrestrial_prefixes | default([])) %}
+{% if node_type == "ground_station" and terr0_render_addresses %}
 interface terr0
-{% for tp in terrestrial_prefixes %}
+{% for tp in terr0_render_addresses %}
 {% if ':' in tp.host_address %}
  ipv6 address {{ tp.host_address }}
 {% else %}

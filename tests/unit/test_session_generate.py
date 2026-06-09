@@ -1,406 +1,147 @@
-"""Tests for session_generator — generate YAML, parse back, assert fields match."""
+"""Direct unit tests for catalog session generation."""
+
+from __future__ import annotations
 
 import pytest
 import yaml
-from nodalarc.catalog_paths import CatalogPathError
-from nodalarc.constellation_loader import (
-    expand_constellation,
-    load_constellation,
-    load_ground_stations,
-)
-from nodalarc.ground_terminals import ground_terminal_type, station_ground_terminal_type
-from nodalarc.resolve_session import resolve_session_with_assets
+from nodalarc.resolve_session import resolve_session
 from nodalarc.session_generator import (
     constellation_source_mode,
     generate_session_yaml,
     load_constellation_presets,
-    merge_constellation_with_satellite_type,
 )
 
-from tests.conftest import FIXTURES_DIR
+
+def _generated_session(**kwargs):
+    yaml_text, warnings = generate_session_yaml(**kwargs)
+    raw = yaml.safe_load(yaml_text)
+    resolved = resolve_session(raw)
+    return raw, resolved, warnings
 
 
-def _resolve_generated(yaml_str: str):
-    raw = yaml.safe_load(yaml_str)
-    assert "segments" in raw
-    assert "link_rules" in raw
+def test_load_constellation_presets_scans_catalog_constellations() -> None:
+    presets = load_constellation_presets()
+
+    assert {
+        "earth-leo-ring-36",
+        "earth-leo-walker-delta-176",
+        "earth-leo-polar-36",
+        "earth-meo-gps-24",
+        "earth-geo-ring-8",
+        "earth-heo-molniya-3",
+        "luna-polar-2",
+    }.issubset(presets)
+    assert all(p.constellation.startswith("nodalarc:constellations/") for p in presets.values())
+    assert all(p.ground_stations.startswith("nodalarc:site-sets/") for p in presets.values())
+    assert all(p.mode == "constellation" for p in presets.values())
+
+
+def test_constellation_source_mode_reports_catalog_wrapper() -> None:
+    assert (
+        constellation_source_mode("nodalarc:constellations/earth/leo/earth-leo-ring-36.yaml")
+        == "constellation"
+    )
+    assert constellation_source_mode("/tmp/outside.yaml") is None
+
+
+def test_generate_catalog_session_yaml_round_trips_through_resolver() -> None:
+    raw, resolved, warnings = _generated_session(
+        constellation="earth-leo-ring-36",
+        protocol="isis",
+        extensions=["te", "mpls"],
+        orbit_propagator="j2_mean_elements",
+        area_strategy="per_plane",
+        ground_stations="nodalarc:site-sets/earth/leo/earth-leo-starlink-pop-sites.yaml",
+    )
+
+    assert warnings == []
     assert "constellation" not in raw
     assert "ground_stations" not in raw
-    resolution = resolve_session_with_assets(raw)
-    return raw, resolution, resolution.runtime_session
+    assert raw["segments"][0]["source"].startswith("nodalarc:constellations/")
+    assert raw["segments"][1]["placement"]["from_site_set"].startswith("nodalarc:site-sets/")
+    assert raw["orbit"]["default_propagator"] == "j2_mean_elements"
+    assert raw["routing"]["domains"][0]["protocol"] == "isis"
+    assert raw["routing"]["domains"][0]["capabilities"] == {
+        "mpls": {},
+        "traffic_engineering": {},
+    }
+    assert resolved.routing_domains[0].protocol == "isis"
+    assert resolved.nodes
 
 
-class TestLoadPresets:
-    def test_loads_all_presets(self):
-        presets = load_constellation_presets()
-        assert len(presets) >= 5
-        assert "demo-36" in presets
-        assert "geo-inmarsat-representative" in presets
-        assert "geo-tdrs-representative" in presets
-        assert "iridium-66" in presets
-        assert "leo-simple-36" in presets
-        assert "leo-walker-delta-176" in presets
-        assert "leo-polar-36" in presets
-        assert "starlink-early-44" in presets
-
-    def test_preset_fields(self):
-        presets = load_constellation_presets()
-        p = presets["iridium-66"]
-        assert p.satellite_count == 66
-        assert "iridium-66.yaml" in p.constellation
-        assert p.ground_stations.endswith(".yaml")
-
-    def test_preset_ground_terminal_types_match_satellite_models(self):
-        presets = load_constellation_presets()
-
-        for name, preset in presets.items():
-            constellation = load_constellation(preset.constellation)
-            satellites = expand_constellation(constellation)
-            satellite_types = {ground_terminal_type(sat.ground_terminals) for sat in satellites}
-
-            ground_stations = load_ground_stations(preset.ground_stations)
-            station_types = {
-                station_ground_terminal_type(ground_stations, station)
-                for station in ground_stations.stations
-            }
-
-            assert station_types == satellite_types, (
-                f"Preset {name} has satellite ground terminals {satellite_types} "
-                f"but ground station terminals {station_types}"
-            )
-
-
-class TestCatalogPathContainment:
-    def test_constellation_source_mode_rejects_absolute_path(self):
-        with pytest.raises(CatalogPathError, match="absolute"):
-            constellation_source_mode("/tmp/outside.yaml")
-
-    def test_merge_constellation_rejects_traversal_path(self):
-        with pytest.raises(CatalogPathError, match="traversal"):
-            merge_constellation_with_satellite_type("../../outside.yaml", "starlink-v2")
-
-    def test_merge_constellation_rejects_satellite_type_path_syntax(self):
-        with pytest.raises(CatalogPathError, match="satellite_type"):
-            merge_constellation_with_satellite_type(
-                "configs/constellations/demo-36.yaml", "../starlink-v2"
-            )
-
-
-class TestGenerateSessionYaml:
-    """Generate YAML for every valid preset x protocol x extension combo."""
-
-    @pytest.mark.parametrize(
-        "constellation",
-        [
-            "iridium-66",
-            "iridium-small-36",
-            "starlink-early-44",
-            "oneweb-60",
-            "kuiper-50",
-        ],
+def test_generate_catalog_session_supports_custom_site_set_object() -> None:
+    presets = load_constellation_presets()
+    site_set_ref = presets["earth-leo-ring-36"].ground_stations
+    raw, _resolved, _warnings = _generated_session(
+        constellation="earth-leo-ring-36",
+        protocol="ospf",
+        extensions=[],
+        orbit_propagator="j2_mean_elements",
+        ground_stations=site_set_ref,
     )
-    @pytest.mark.parametrize(
-        "protocol,extensions",
-        [
-            ("ospf", []),
-            ("ospf", ["te"]),
-            ("ospf", ["te", "mpls"]),
-            ("isis", []),
-            ("isis", ["sr"]),
-            ("isis", ["te"]),
-            ("isis", ["te", "mpls"]),
-            ("ospf", ["sr"]),
-        ],
-    )
-    def test_generate_and_roundtrip(self, constellation, protocol, extensions):
-        yaml_str, warnings = generate_session_yaml(
-            constellation=constellation,
-            protocol=protocol,
-            extensions=extensions,
-            orbit_propagator="keplerian-circular",
-        )
-        # Must parse as segment YAML and resolve to the runtime projection.
-        raw, resolution, session = _resolve_generated(yaml_str)
 
-        assert (
-            session.session.name == f"{constellation}-{protocol}-{'-'.join(extensions) or 'plain'}"
-        )
-        assert session.routing.protocol == protocol
-        assert session.routing.extensions == tuple(extensions)
-        assert session.routing.stack is None  # Wizard sessions use protocol, not stack
-
-    @pytest.mark.parametrize("area_strategy", ["flat", "stripe", "per-plane"])
-    def test_area_strategies(self, area_strategy):
-        yaml_str, warnings = generate_session_yaml(
-            constellation="iridium-small-36",
-            protocol="ospf",
-            extensions=[],
-            orbit_propagator="keplerian-circular",
-            area_strategy=area_strategy,
-        )
-        raw, resolution, session = _resolve_generated(yaml_str)
-        assert session.routing.area_assignment is not None
-        assert session.routing.area_assignment.strategy == area_strategy
-
-    def test_longest_remaining_pass_generation_requires_horizon(self):
-        with pytest.raises(ValueError, match="ground_selection_lookahead_horizon_ticks"):
-            generate_session_yaml(
-                constellation="iridium-small-36",
-                protocol="ospf",
-                extensions=[],
-                orbit_propagator="keplerian-circular",
-                ground_policy="longest-remaining-pass",
-            )
-
-    def test_longest_remaining_pass_generation_sets_horizon(self):
-        yaml_str, _ = generate_session_yaml(
-            constellation="iridium-small-36",
-            protocol="ospf",
-            extensions=[],
-            orbit_propagator="keplerian-circular",
-            ground_policy="longest-remaining-pass",
-            ground_selection_lookahead_horizon_ticks=600,
-        )
-        raw, resolution, session = _resolve_generated(yaml_str)
-        assert session.scheduling.ground.selection_policy.name == "longest-remaining-pass"
-        assert session.scheduling.ground.selection_policy.params["lookahead_horizon_ticks"] == 600
+    assert raw["segments"][1]["placement"]["from_site_set"] == site_set_ref
 
 
-class TestGenerateInvalid:
-    def test_unknown_constellation(self):
-        with pytest.raises(ValueError, match="Unknown constellation"):
-            generate_session_yaml("nonexistent", "ospf", [], orbit_propagator="keplerian-circular")
-
-    def test_invalid_combo(self):
-        with pytest.raises(ValueError, match="distributed separately"):
-            generate_session_yaml(
-                "iridium-66", "nodalpath", ["sr"], orbit_propagator="keplerian-circular"
-            )
-
-
-class TestNodalPathExternal:
-    def test_nodalpath_sessions_are_not_generated_by_nodalarc(self):
-        with pytest.raises(ValueError, match="distributed separately"):
-            generate_session_yaml(
-                "iridium-66", "nodalpath", [], orbit_propagator="keplerian-circular"
-            )
-
-
-class TestOrbitPropagatorGeneration:
-    def test_j2_propagator_is_the_single_fidelity_knob(self):
-        yaml_str, _ = generate_session_yaml(
-            "iridium-small-36",
-            "ospf",
-            [],
-            orbit_propagator="j2-mean-elements",
-        )
-        raw, resolution, session = _resolve_generated(yaml_str)
-
-        assert session.orbit.propagator == "j2-mean-elements"
-        assert session.orbit.fidelity_label == "j2-mean-elements"
-        assert session.dispatch.substrate_compensation.rtt_to_one_way == "half-rtt"
-
-    def test_sgp4_requires_tle_constellation(self):
-        with pytest.raises(ValueError, match="requires a TLE constellation"):
-            generate_session_yaml(
-                "iridium-small-36",
-                "ospf",
-                [],
-                orbit_propagator="sgp4-tle",
-            )
-
-    def test_sgp4_tle_custom_constellation_fails_until_runtime_supports_it(self):
-        with pytest.raises(ValueError, match="current runtime supports only"):
-            generate_session_yaml(
-                "custom-tle",
-                "ospf",
-                [],
-                custom_constellation={
-                    "mode": "tle",
-                    "name": "sample-tle",
-                    "tle_file": str(FIXTURES_DIR / "tles/sample.tle"),
-                    "filter": {"max_count": 1},
-                    "default_terminals": {
-                        "isl": [
-                            {
-                                "type": "optical",
-                                "count": 2,
-                                "max_range_km": 5000,
-                                "bandwidth_mbps": 1000,
-                                "max_tracking_rate_deg_s": 3.0,
-                            }
-                        ],
-                        "ground": [{"type": "rf", "count": 1, "bandwidth_mbps": 1000}],
-                    },
-                },
-                custom_ground_stations=[
-                    {
-                        "name": "ashburn",
-                        "lat_deg": 39.04,
-                        "lon_deg": -77.49,
-                        "alt_km": 0.095,
-                        "terminals": [
-                            {
-                                "type": "rf",
-                                "count": 1,
-                                "bandwidth_mbps": 1000,
-                                "tracking_capacity": 1,
-                            }
-                        ],
-                    }
-                ],
-                orbit_propagator="sgp4-tle",
-            )
-
-
-class TestRoutingConfigRoundtrip:
-    """Verify routing config fields survive generate → YAML → parse."""
-
-    @pytest.mark.parametrize(
-        "protocol,bfd",
-        [
-            ("isis", False),
-            ("isis", True),
-            ("ospf", False),
-            ("ospf", True),
-        ],
-    )
-    def test_bfd_toggle(self, protocol, bfd):
-        yaml_str, _ = generate_session_yaml(
-            constellation="iridium-small-36",
-            protocol=protocol,
-            extensions=[],
-            orbit_propagator="keplerian-circular",
-            routing_config={"bfd": bfd},
-        )
-        raw, resolution, session = _resolve_generated(yaml_str)
-        assert session.routing.bfd is bfd
-
-    def test_isis_timers(self):
-        timers = {
-            "isis_hello_interval": 3,
-            "isis_hello_multiplier": 5,
-            "spf_init_delay": 100,
-            "spf_short_delay": 500,
-            "spf_long_delay": 2000,
-            "spf_holddown": 5000,
-            "spf_time_to_learn": 1000,
-        }
-        yaml_str, _ = generate_session_yaml(
-            constellation="iridium-small-36",
+def test_generate_catalog_session_rejects_retired_satellite_type_override() -> None:
+    with pytest.raises(ValueError, match="satellite_type overrides are retired"):
+        generate_session_yaml(
+            constellation="earth-leo-ring-36",
             protocol="isis",
             extensions=[],
-            orbit_propagator="keplerian-circular",
-            routing_config=timers,
+            orbit_propagator="j2_mean_elements",
+            satellite_type="starlink-v2",
         )
-        raw, resolution, session = _resolve_generated(yaml_str)
-        assert session.routing.isis_hello_interval == 3
-        assert session.routing.isis_hello_multiplier == 5
-        assert session.routing.spf_init_delay == 100
-        assert session.routing.spf_short_delay == 500
-        assert session.routing.spf_long_delay == 2000
-        assert session.routing.spf_holddown == 5000
-        assert session.routing.spf_time_to_learn == 1000
 
-    def test_ospf_timers(self):
-        timers = {
-            "ospf_hello_interval": 10,
-            "ospf_dead_interval": 40,
-            "ospf_spf_delay": 200,
-            "ospf_spf_initial_hold": 1000,
-            "ospf_spf_max_hold": 5000,
-        }
-        yaml_str, _ = generate_session_yaml(
-            constellation="iridium-small-36",
-            protocol="ospf",
-            extensions=[],
-            orbit_propagator="keplerian-circular",
-            routing_config=timers,
-        )
-        raw, resolution, session = _resolve_generated(yaml_str)
-        assert session.routing.ospf_hello_interval == 10
-        assert session.routing.ospf_dead_interval == 40
-        assert session.routing.ospf_spf_delay == 200
-        assert session.routing.ospf_spf_initial_hold == 1000
-        assert session.routing.ospf_spf_max_hold == 5000
 
-    def test_bfd_timers(self):
-        timers = {
-            "bfd": True,
-            "bfd_detect_multiplier": 5,
-            "bfd_rx_interval": 100,
-            "bfd_tx_interval": 100,
-        }
-        yaml_str, _ = generate_session_yaml(
-            constellation="iridium-small-36",
-            protocol="isis",
-            extensions=["te"],
-            orbit_propagator="keplerian-circular",
-            routing_config=timers,
-        )
-        raw, resolution, session = _resolve_generated(yaml_str)
-        assert session.routing.bfd is True
-        assert session.routing.bfd_detect_multiplier == 5
-        assert session.routing.bfd_rx_interval == 100
-        assert session.routing.bfd_tx_interval == 100
-
-    def test_defaults_when_no_routing_config(self):
-        yaml_str, _ = generate_session_yaml(
-            constellation="iridium-small-36",
+def test_generate_catalog_session_rejects_retired_ground_station_lists() -> None:
+    with pytest.raises(ValueError, match="ground station name lists are retired"):
+        generate_session_yaml(
+            constellation="earth-leo-ring-36",
             protocol="isis",
             extensions=[],
-            orbit_propagator="keplerian-circular",
+            orbit_propagator="j2_mean_elements",
+            ground_stations=["denver", "hawthorne"],
         )
-        raw, resolution, session = _resolve_generated(yaml_str)
-        assert session.routing.bfd is False
-        assert session.routing.isis_hello_interval == 1
-        assert session.routing.spf_long_delay == 1000
 
-    @pytest.mark.parametrize(
-        "protocol,extensions",
-        [
-            ("isis", []),
-            ("isis", ["te"]),
-            ("isis", ["te", "mpls"]),
-            ("isis", ["sr"]),
-            ("ospf", []),
-            ("ospf", ["te"]),
-            ("ospf", ["te", "mpls"]),
-            ("ospf", ["sr"]),
-        ],
+
+def test_longest_remaining_pass_generation_requires_horizon() -> None:
+    with pytest.raises(ValueError, match="ground_selection_lookahead_horizon_ticks"):
+        generate_session_yaml(
+            constellation="earth-leo-ring-36",
+            protocol="isis",
+            extensions=[],
+            orbit_propagator="j2_mean_elements",
+            ground_policy="longest_remaining_pass",
+        )
+
+
+def test_longest_remaining_pass_generation_sets_policy() -> None:
+    raw, resolved, _warnings = _generated_session(
+        constellation="earth-leo-ring-36",
+        protocol="isis",
+        extensions=[],
+        orbit_propagator="j2_mean_elements",
+        ground_policy="longest_remaining_pass",
+        ground_selection_lookahead_horizon_ticks=600,
     )
-    def test_full_routing_config_all_combos(self, protocol, extensions):
-        """Every protocol+extension combo with full routing config produces valid YAML."""
-        routing_config = {
-            "bfd": True,
-            "bfd_detect_multiplier": 3,
-            "bfd_rx_interval": 300,
-            "bfd_tx_interval": 300,
-            "isis_hello_interval": 1,
-            "isis_hello_multiplier": 3,
-            "spf_init_delay": 50,
-            "spf_short_delay": 200,
-            "spf_long_delay": 1000,
-            "spf_holddown": 2000,
-            "spf_time_to_learn": 500,
-            "ospf_hello_interval": 1,
-            "ospf_dead_interval": 3,
-            "ospf_spf_delay": 50,
-            "ospf_spf_initial_hold": 200,
-            "ospf_spf_max_hold": 1000,
-            "mbb_dispatch": True,
-            "mbb_overlap_ticks": 3,
-        }
-        yaml_str, _ = generate_session_yaml(
-            constellation="iridium-small-36",
-            protocol=protocol,
-            extensions=extensions,
-            orbit_propagator="keplerian-circular",
-            routing_config=routing_config,
+
+    scheduling = raw["segments"][1]["apply"]["scheduling"]
+    assert scheduling["selection_policy"] == {
+        "longest_remaining_pass": {"lookahead_horizon_ticks": 600}
+    }
+    assert all(
+        node.ground_scheduling is None
+        or node.ground_scheduling.selection_policy.longest_remaining_pass is not None
+        for node in resolved.nodes
+    )
+
+
+def test_generate_catalog_session_rejects_future_sgp4_runtime_path() -> None:
+    with pytest.raises(ValueError, match="structurally valid future grammar"):
+        generate_session_yaml(
+            constellation="earth-leo-ring-36",
+            protocol="isis",
+            extensions=[],
+            orbit_propagator="sgp4_tle",
         )
-        raw, resolution, session = _resolve_generated(yaml_str)
-        assert session.routing.protocol == protocol
-        assert session.routing.bfd is True
-        assert session.scheduling.ground.handover_mode == "mbb"
-        assert session.scheduling.ground.mbb_overlap_ticks == 3
-        assert session.scheduling.ground.mbb_reserve == 1

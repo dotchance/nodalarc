@@ -526,7 +526,9 @@ class GroundStationIndividualFile(BaseModel):
 class GroundStationSetConfig(GroundHandoverDefaultSurface):
     """Ground station set — a named collection of station references.
 
-    Station names resolve to configs/ground-stations/stations/{name}.yaml.
+    Retained for tests that exercise the old ground-station model family.
+    Runtime catalog sessions use site and site-set primitives resolved by
+    `resolve_session()`.
     """
 
     name: NonEmptyReference

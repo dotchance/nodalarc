@@ -5,7 +5,7 @@
 set -euo pipefail
 
 NAMESPACE="${NAMESPACE:-nodalarc}"
-DEFAULT_SESSION="${DEFAULT_SESSION:-configs/sessions/earth-leo-simple.yaml}"
+DEFAULT_SESSION="${DEFAULT_SESSION:-catalog/nodalarc/sessions/earth-leo-simple.yaml}"
 REGISTRY_HOST="${REGISTRY_HOST:-}"
 TAG="${TAG:-dev}"
 
@@ -237,7 +237,7 @@ else
     if [ -z "$SESSION" ]; then
         echo "  No session deployed"
         echo "  Available sessions:"
-        for f in configs/sessions/*.yaml; do
+        for f in catalog/nodalarc/sessions/*.yaml; do
             name=$(basename "$f")
             if [ "$f" = "$DEFAULT_SESSION" ]; then
                 echo "    $name (default)"
@@ -246,7 +246,7 @@ else
             fi
         done
         echo "  Run: make session"
-        echo "  Override: make session DEFAULT_SESSION=configs/sessions/<name>.yaml"
+        echo "  Override: make session DEFAULT_SESSION=catalog/nodalarc/sessions/<name>.yaml"
     else
         SESSION_NAME=$(echo "$SESSION" | python3 -c "import json,sys,yaml; d=json.load(sys.stdin); status=d.get('status',{}); name=status.get('sessionId') or yaml.safe_load(d.get('spec',{}).get('sessionYaml','{}')).get('session',{}).get('name','unknown'); print(name)" 2>/dev/null || echo "unknown")
         PHASE=$(echo "$SESSION" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('status',{}).get('phase','Unknown'))" 2>/dev/null || echo "Unknown")

@@ -72,7 +72,8 @@ interface lo
  isis passive
 exit
 
-{% if node_type == "ground_station" and terrestrial_prefixes is defined %}
+{% set terr0_igp = terr0_igp_enabled | default(terrestrial_prefixes is defined) %}
+{% if node_type == "ground_station" and terr0_igp %}
 interface terr0
  ip router isis NODAL
  isis passive

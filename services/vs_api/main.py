@@ -41,7 +41,7 @@ from nodalarc.catalog_paths import (
     generated_file_path,
     generated_file_stem,
     resolve_constellation_reference,
-    resolve_ground_station_reference,
+    resolve_site_set_reference,
     validate_station_names,
     write_text_exclusive,
 )
@@ -53,9 +53,9 @@ from nodalarc.db.queries import (
     query_probe_results,
 )
 from nodalarc.db.schema import create_tables
-from nodalarc.models.resolved_session import SourceContext
+from nodalarc.models.catalog import validate_catalog_document
+from nodalarc.models.resolved_session import ResolvedSession, SourceContext
 from nodalarc.models.scheduler_ops import OperatorRepairCommand
-from nodalarc.models.session import SessionConfig
 from nodalarc.models.vs_api import (
     LinkState,
     NetworkHealth,
@@ -86,7 +86,18 @@ from vs_api.terminal import TerminalManager
 
 log = logging.getLogger(__name__)
 
-_CATALOG_ROOTS = CatalogRoots.from_config_root(Path("configs"))
+_CATALOG_ROOTS = CatalogRoots.from_catalog_root(Path("catalog/nodalarc"))
+
+
+def _generated_sessions_dir() -> Path:
+    """Return the runtime write root for wizard/upload sessions."""
+    return Path(get_platform_config().session_data_root) / "generated-sessions"
+
+
+def _catalog_ref_for_path(path: Path) -> str:
+    rel = path.resolve(strict=True).relative_to(_CATALOG_ROOTS.root.resolve(strict=True))
+    return "nodalarc:" + rel.as_posix()
+
 
 # --- Authentication ---
 
@@ -519,7 +530,7 @@ class CRSessionIdentity:
     session_id: str
     session_name: str
     session_yaml: str
-    session: SessionConfig
+    session: ResolvedSession
     generation: int
 
 
@@ -531,7 +542,7 @@ def _as_positive_int(value: Any) -> int | None:
     return parsed if parsed > 0 else None
 
 
-def _parse_session_yaml(session_yaml: str) -> tuple[str, SessionConfig]:
+def _parse_session_yaml(session_yaml: str) -> tuple[str, ResolvedSession]:
     raw = yaml.safe_load(session_yaml)
     if not raw:
         raise ValueError("sessionYaml is empty")
@@ -540,7 +551,7 @@ def _parse_session_yaml(session_yaml: str) -> tuple[str, SessionConfig]:
         catalog_roots=_CATALOG_ROOTS,
         source_context=SourceContext(origin="vs_api.cr"),
     )
-    session = resolution.runtime_session
+    session = resolution.resolved
     return session.session.name, session
 
 
@@ -625,7 +636,7 @@ def _write_cr_session_file(ready: CRSessionIdentity) -> Path:
     return path
 
 
-def _mark_session_manager_ready(session: SessionConfig, session_path: Path) -> None:
+def _mark_session_manager_ready(session: ResolvedSession, session_path: Path) -> None:
     if not _session_manager:
         return
     with contextlib.suppress(Exception):
@@ -885,9 +896,9 @@ async def _nats_subscriber() -> None:
         log.warning("System OpsEvent subscription failed: %s", exc)
 
     # Bootstrap session from the ConstellationSpec CR — the single source of truth.
-    # The CR's spec.sessionYaml has the ORIGINAL session YAML with original file
-    # paths (e.g., configs/constellations/...). VS-API has the full catalog baked
-    # into its image, so these paths resolve correctly.
+    # The CR's spec.sessionYaml has the original catalog session YAML. VS-API has
+    # the catalog baked into its image, so nodalarc:<path> references resolve
+    # consistently after restart.
     #
     # We do NOT read from ConfigMap mounts. The Operator rewrites paths in the
     # nodalarc-session ConfigMap for FRR pod consumption (/etc/nodalarc/*.yaml).
@@ -961,8 +972,6 @@ async def _nats_subscriber() -> None:
         log.info("CR phase=%s has no active session context", _cr_phase)
     else:
         session_id = _cr_session.session_id
-        session = _cr_session.session
-
         _tmp_session = Path(f"/tmp/_session-{session_id}.yaml")
         _tmp_session.write_text(_cr_session.session_yaml, encoding="utf-8")
 
@@ -977,7 +986,7 @@ async def _nats_subscriber() -> None:
             _session_manager._status = "ready"
             _session_manager.status_detail = ""
             for _s in _session_manager._available:
-                if _s.get("name") == session.session.name:
+                if _s.get("name") == _cr_session.session_name:
                     _session_manager.set_active(_s["file"])
                     break
 
@@ -1560,10 +1569,20 @@ async def get_node_config(node_id: str) -> Response:
         await session.close()
 
 
-@app.get("/api/v1/state", dependencies=[Depends(_require_api_key)])
-def get_state() -> dict:
+@app.get("/api/v1/state", response_model=None, dependencies=[Depends(_require_api_key)])
+def get_state() -> dict | JSONResponse:
     """Current state snapshot."""
-    return _build_snapshot()
+    snapshot = _build_snapshot()
+    if snapshot is None:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "error": "No active session",
+                "session_status": _session_manager.status if _session_manager else "idle",
+                "session_status_detail": _session_manager.status_detail if _session_manager else "",
+            },
+        )
+    return snapshot
 
 
 _NODALPATH_TIMEOUT = 1.0
@@ -2564,64 +2583,39 @@ def list_constellation_presets() -> list[dict]:
 
 @app.get("/api/v1/presets/satellite-types", dependencies=[Depends(_require_api_key)])
 def list_satellite_types() -> list[dict]:
-    """Return available satellite type presets for the wizard."""
-    from nodalarc.models.satellite_type import SatelliteTypeConfig
+    """Return satellite-type overrides for the wizard.
 
-    sat_types_dir = Path("configs/satellite-types")
-    results: list[dict] = []
-    if not sat_types_dir.is_dir():
-        return results
-    for yaml_path in sorted(sat_types_dir.glob("*.yaml")):
-        raw = yaml.safe_load(yaml_path.read_text())
-        data = raw.get("satellite_type", raw)
-        cfg = SatelliteTypeConfig.model_validate(data)
-        results.append(
-            {
-                "name": cfg.name,
-                "description": cfg.description,
-                "isl_terminals": [
-                    {
-                        "type": t.type,
-                        "band": t.band,
-                        "count": t.count,
-                        "role": t.role,
-                        "max_range_km": t.max_range_km,
-                        "bandwidth_mbps": t.bandwidth_mbps,
-                        "max_tracking_rate_deg_s": t.max_tracking_rate_deg_s,
-                        "field_of_regard_deg": t.field_of_regard_deg,
-                    }
-                    for t in cfg.isl_terminals
-                ],
-                "ground_terminals": [
-                    {
-                        "type": t.type,
-                        "band": t.band,
-                        "count": t.count,
-                        "bandwidth_mbps": t.bandwidth_mbps,
-                    }
-                    for t in cfg.ground_terminals
-                ],
-            }
-        )
-    return results
+    Satellite-type override was a retired config convenience. Current catalog
+    constellations own their node model, terminal mounts, and orbit; users who
+    want a different combination author or choose a different constellation
+    primitive. Returning an empty list prevents the UI from offering an invalid
+    override path.
+    """
+    return []
 
 
 @app.get("/api/v1/presets/ground-stations", dependencies=[Depends(_require_api_key)])
 def list_ground_station_sets() -> list[dict]:
-    """Return available ground station sets for the wizard."""
-    gs_sets_dir = Path("configs/ground-stations/sets")
+    """Return available catalog site-set presets for the wizard."""
+    gs_sets_dir = _CATALOG_ROOTS.root / "site-sets"
     results: list[dict] = []
     if not gs_sets_dir.is_dir():
         return results
-    for yaml_path in sorted(gs_sets_dir.glob("*.yaml")):
-        raw = yaml.safe_load(yaml_path.read_text())
-        gs_data = raw.get("ground_station_set", raw)
+    for yaml_path in sorted(gs_sets_dir.rglob("*.yaml")):
+        raw = yaml.safe_load(yaml_path.read_text(encoding="utf-8")) or {}
+        wrapper, model = validate_catalog_document(raw)
+        if wrapper != "site_set":
+            continue
+        data = model.model_dump(mode="python", by_alias=True, exclude_none=True)
         results.append(
             {
-                "name": gs_data.get("name", yaml_path.stem),
-                "description": gs_data.get("description", ""),
-                "stations": gs_data.get("stations", []),
-                "file": f"configs/ground-stations/sets/{yaml_path.name}",
+                "name": data["id"],
+                "description": data.get("display_name") or data.get("notes") or "",
+                "stations": [
+                    site.get("site", {}).get("id", "") if isinstance(site, dict) else str(site)
+                    for site in data.get("sites", [])
+                ],
+                "file": _catalog_ref_for_path(yaml_path),
             }
         )
     return results
@@ -2629,19 +2623,24 @@ def list_ground_station_sets() -> list[dict]:
 
 @app.get("/api/v1/presets/ground-stations/stations", dependencies=[Depends(_require_api_key)])
 def list_individual_stations() -> list[dict]:
-    """Return all available individual ground stations for custom set building."""
-    stations_dir = Path("configs/ground-stations/stations")
+    """Return all available catalog sites for custom set building."""
+    stations_dir = _CATALOG_ROOTS.root / "sites"
     results: list[dict] = []
     if not stations_dir.is_dir():
         return results
-    for yaml_path in sorted(stations_dir.glob("*.yaml")):
-        raw = yaml.safe_load(yaml_path.read_text())
-        gs = raw.get("ground_station", raw)
+    for yaml_path in sorted(stations_dir.rglob("*.yaml")):
+        raw = yaml.safe_load(yaml_path.read_text(encoding="utf-8")) or {}
+        wrapper, model = validate_catalog_document(raw)
+        if wrapper != "site":
+            continue
+        site = model.model_dump(mode="python", by_alias=True, exclude_none=True)
+        location = site.get("location") or {}
         results.append(
             {
-                "name": gs.get("name", yaml_path.stem),
-                "lat_deg": gs.get("lat_deg", 0),
-                "lon_deg": gs.get("lon_deg", 0),
+                "name": site["id"],
+                "lat_deg": location.get("lat_deg", 0),
+                "lon_deg": location.get("lon_deg", 0),
+                "file": _catalog_ref_for_path(yaml_path),
             }
         )
     return results
@@ -2655,7 +2654,7 @@ def wizard_extension_rules() -> dict:
             "ospf": {"extensions": ["sr", "te", "mpls"], "constraints": {"mpls": ["te"]}},
             "isis": {"extensions": ["sr", "te", "mpls"], "constraints": {"mpls": ["te"]}},
         },
-        "area_strategies": ["flat", "stripe", "per-plane"],
+        "area_strategies": ["flat", "stripe", "per_plane"],
     }
 
 
@@ -2687,7 +2686,7 @@ def _resolve_api_constellation_source(source: Any) -> Any:
 
 def _resolve_api_ground_station_source(source: Any) -> Any:
     if isinstance(source, str):
-        return config_value_for(resolve_ground_station_reference(source, _CATALOG_ROOTS))
+        return config_value_for(resolve_site_set_reference(source, _CATALOG_ROOTS))
     if isinstance(source, list) and all(isinstance(item, str) for item in source):
         validate_station_names(source)
     return source
@@ -2751,11 +2750,8 @@ async def preview_coverage(body: dict) -> dict:
 
     from ome.coverage_preview import compute_coverage_preview
 
-    try:
-        constellation = _resolve_api_constellation_source(body.get("constellation"))
-        ground_stations = _resolve_api_ground_station_source(body.get("ground_stations"))
-    except (CatalogPathError, FileNotFoundError) as exc:
-        return _catalog_error(exc)
+    constellation = body.get("constellation")
+    ground_stations = body.get("ground_stations")
 
     loop = asyncio.get_event_loop()
     try:
@@ -2820,7 +2816,7 @@ async def deploy_generated_session(body: dict) -> dict:
     # semantic authority; VS-API must not rewrite it into the old session shape.
     try:
         stem = generated_file_stem(resolution.resolved.session.name)
-        session_file = generated_file_path(_CATALOG_ROOTS.sessions, f"_wizard-{stem}.yaml")
+        session_file = generated_file_path(_generated_sessions_dir(), f"_wizard-{stem}.yaml")
         write_text_exclusive(session_file, _yaml.dump(raw, default_flow_style=False))
     except (CatalogPathError, FileExistsError) as exc:
         return _catalog_error(exc)
@@ -2868,7 +2864,7 @@ async def deploy_from_yaml(body: dict) -> dict:
         log.info("Invalid segment session YAML rejected: %s", exc)
         return _error_response(400, "Invalid segment session YAML")
 
-    session_file = generated_file_path(_CATALOG_ROOTS.sessions, f"_wizard-{stem}.yaml")
+    session_file = generated_file_path(_generated_sessions_dir(), f"_wizard-{stem}.yaml")
     try:
         write_text_exclusive(session_file, _yaml.dump(raw, default_flow_style=False))
     except FileExistsError as exc:
@@ -3196,7 +3192,9 @@ def main() -> None:
     parser.add_argument("--db", default=None, help="Path to SQLite database (optional)")
     parser.add_argument("--port", type=int, default=None, help="HTTP port")
     parser.add_argument(
-        "--sessions-dir", default="configs/sessions", help="Directory with session YAMLs"
+        "--sessions-dir",
+        default="catalog/nodalarc/sessions",
+        help="Directory with catalog session YAMLs",
     )
     parser.add_argument(
         "--platform-config", default="configs/platform.yaml", help="Path to platform config YAML"
@@ -3227,7 +3225,11 @@ def main() -> None:
 
     global _session_manager, _initial_session_file, _pending_cr_poll
 
-    _session_manager = SessionManager(args.sessions_dir, initial_db_path=args.db)
+    _session_manager = SessionManager(
+        args.sessions_dir,
+        initial_db_path=args.db,
+        generated_sessions_dir=str(_generated_sessions_dir()),
+    )
 
     log.info("VS-API starting [build=%s]", os.environ.get("NODAL_BUILD", "dev"))
 
@@ -3241,7 +3243,7 @@ def main() -> None:
         else:
             session_data = yaml.safe_load(session_path.read_text())
         if session_data:
-            resolve_session_with_assets(
+            startup_resolution = resolve_session_with_assets(
                 session_data,
                 catalog_roots=_CATALOG_ROOTS,
                 source_context=SourceContext(origin="vs_api.startup"),
@@ -3257,12 +3259,7 @@ def main() -> None:
             except Exception:
                 pass
             _session_manager.set_active(_active_path)
-            # Resolve mounted path to the original session file in configs/sessions/.
-            # The ConfigMap-mounted session.yaml has Operator-rewritten paths
-            # (e.g., /etc/nodalarc/ground-stations.yaml) for FRR pod consumption.
-            # VS-API must use the original file with original paths — it has the
-            # full catalog baked into its image and doesn't need ConfigMap mounts.
-            _loaded_name = session_data.get("session", {}).get("name", "")
+            _loaded_name = startup_resolution.resolved.session.name
             if _loaded_name:
                 for _s in _session_manager._available:
                     if _s.get("name") == _loaded_name:

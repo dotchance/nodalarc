@@ -1,22 +1,34 @@
-"""Test na-reconfig target matching and flow identity helpers.
+# Copyright 2024-2026 .chance (dotchance)
+# Licensed under the Apache License, Version 2.0. See LICENSE file.
+"""Tests for resolved-session na-reconfig helpers."""
 
-PRD Section 13.10: target selectors for config push.
-Tests: all, plane:N, node:ID, area:N, type:satellite, type:ground_station.
-"""
+from __future__ import annotations
 
-from types import SimpleNamespace
+from pathlib import Path
 
-import pytest
-from nodalarc.models.addressing import AddressingScheme
-from nodalarc.models.ground_station import (
-    GroundStationConfig,
-    GroundStationFile,
-    GroundTerminalDef,
-)
-from nodalarc.models.session import AddressingConfig
+import yaml
 
+from tests.conftest import build_segment_session_dict
 from tools import na_reconfig
 from tools.na_reconfig import _match_target
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+def _session_file(tmp_path: Path, *, stations: list[str] | None = None) -> Path:
+    session_path = tmp_path / "session.yaml"
+    session_path.write_text(
+        yaml.safe_dump(
+            build_segment_session_dict(
+                name="reconfig-catalog-session",
+                constellation={"planes": {"count": 2, "sats_per_plane": 2}},
+                ground_stations={"stations": stations or ["a", "b"]},
+            ),
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    return session_path
 
 
 class TestMatchTargetAll:
@@ -33,7 +45,7 @@ class TestMatchTargetNode:
 
     def test_node_no_match(self):
         assert not _match_target(
-            "node:space-sat-p03s07", "space-sat-p00s00", "satellite", 0, "49.0001"
+            "node:space-sat-p03s07", "space-sat-p00s07", "satellite", 0, "49.0001"
         )
 
     def test_node_gs_match(self):
@@ -54,7 +66,6 @@ class TestMatchTargetPlane:
         assert not _match_target("plane:3", "space-sat-p00s07", "satellite", 0, "49.0001")
 
     def test_plane_none_for_gs(self):
-        """Ground stations have plane=None, should not match any plane selector."""
         assert not _match_target(
             "plane:0", "ground-gs-hawthorne", "ground_station", None, "49.0001"
         )
@@ -71,7 +82,6 @@ class TestMatchTargetArea:
         assert not _match_target("area:2", "space-sat-p00s00", "satellite", 0, "49.0001")
 
     def test_area_ospf_format(self):
-        """OSPF area_id format: dotted-decimal like 0.0.0.1"""
         assert _match_target("area:1", "space-sat-p00s00", "satellite", 0, "0.0.0.0001")
 
     def test_area_gs_match(self):
@@ -106,68 +116,97 @@ class TestInvalidTarget:
         assert not _match_target("", "space-sat-p00s00", "satellite", 0, "49.0001")
 
 
-class TestReconfigScope:
-    def test_multi_constellation_session_refuses_partial_reconfig(self, monkeypatch):
-        resolution = SimpleNamespace(
-            constellations=(SimpleNamespace(), SimpleNamespace()),
-        )
-        monkeypatch.setattr(
-            na_reconfig,
-            "load_session_resolution_from_file",
-            lambda *_args, **_kwargs: resolution,
-        )
+def test_reconfig_source_does_not_use_old_runtime_projection() -> None:
+    source = (ROOT / "tools" / "na_reconfig.py").read_text(encoding="utf-8")
 
-        with pytest.raises(RuntimeError, match="does not support multi-constellation"):
-            na_reconfig.reconfig("configs/sessions/earth-leo-meo-geo.yaml", "all")
+    assert ".runtime_session" not in source
+    assert ".primary_constellation" not in source
+    assert ".primary_ground_set" not in source
+    assert "AddressingScheme" not in source
+    assert "build_template_vars(" not in source
 
 
-class TestFlowRemovalUsesResolvedIds:
-    def test_remove_flow_scans_resolved_ground_node_ids(self, monkeypatch):
-        gs_file = GroundStationFile(
-            default_terminals=[
-                GroundTerminalDef(
-                    type="rf",
-                    count=1,
-                    bandwidth_mbps=1000,
-                    tracking_capacity=1,
-                )
-            ],
-            stations=[
-                GroundStationConfig(name="hawthorne", lat_deg=33.9, lon_deg=-118.3),
-                GroundStationConfig(name="frankfurt", lat_deg=50.1, lon_deg=8.7),
-            ],
-        )
-        addressing = AddressingScheme(
-            AddressingConfig(gs_id_template="ground-gs-{name}"),
-            gs_file=gs_file,
-        )
-        resolution = SimpleNamespace(
-            primary_ground_set=SimpleNamespace(config=gs_file),
-            addressing=addressing,
-        )
-        monkeypatch.setattr(
-            na_reconfig,
-            "load_session_resolution_from_file",
-            lambda *_args, **_kwargs: resolution,
-        )
+def test_reconfig_targets_resolved_ground_nodes(monkeypatch, tmp_path: Path) -> None:
+    session_path = _session_file(tmp_path, stations=["a", "b"])
+    pushed: list[str] = []
 
-        probed: list[str] = []
+    monkeypatch.setattr(
+        na_reconfig,
+        "_render_and_push",
+        lambda _env, _stack, node_id, _vars: pushed.append(node_id),
+    )
 
-        def fake_resolve_src_pod_ip(node_id: str):
-            probed.append(node_id)
-            return "10.42.0.8" if node_id == "ground-gs-frankfurt" else None
+    na_reconfig.reconfig(str(session_path), "type:ground_station")
 
-        deleted: list[tuple[str, str]] = []
-        monkeypatch.setattr(
-            "measurement.flow_manager.resolve_src_pod_ip",
-            fake_resolve_src_pod_ip,
-        )
-        monkeypatch.setattr(
-            "measurement.probe_client.delete_flow",
-            lambda pod_ip, flow_id: deleted.append((pod_ip, flow_id)),
-        )
+    assert pushed == [
+        "ground-earth-test-site-00-router",
+        "ground-earth-test-site-01-router",
+    ]
 
-        na_reconfig.remove_flow("configs/sessions/earth-leo-simple.yaml", "flow-1")
 
-        assert probed == ["ground-gs-hawthorne", "ground-gs-frankfurt"]
-        assert deleted == [("10.42.0.8", "flow-1")]
+def test_reconfig_targets_resolved_plane(monkeypatch, tmp_path: Path) -> None:
+    session_path = _session_file(tmp_path, stations=["a"])
+    pushed: list[str] = []
+
+    monkeypatch.setattr(
+        na_reconfig,
+        "_render_and_push",
+        lambda _env, _stack, node_id, _vars: pushed.append(node_id),
+    )
+
+    na_reconfig.reconfig(str(session_path), "plane:1")
+
+    assert pushed == ["space-sat-p01s00", "space-sat-p01s01"]
+
+
+def test_add_flow_resolves_destination_from_resolved_session(monkeypatch, tmp_path: Path) -> None:
+    session_path = _session_file(tmp_path, stations=["a", "b"])
+    monkeypatch.setattr(
+        "measurement.flow_manager.resolve_src_pod_ip",
+        lambda node_id: "10.42.0.7" if node_id == "ground-earth-test-site-00-router" else None,
+    )
+    configured: list[dict] = []
+    monkeypatch.setattr(
+        "measurement.probe_client.configure_flow",
+        lambda **kwargs: configured.append(kwargs),
+    )
+
+    na_reconfig.add_flow(
+        str(session_path),
+        "flow-1:ground-earth-test-site-00-router:ground-earth-test-site-01-router:udp:100:continuous",
+    )
+
+    assert configured == [
+        {
+            "pod_ip": "10.42.0.7",
+            "flow_id": "flow-1",
+            "dst_ip": "172.16.1.1",
+            "protocol": "udp",
+            "bandwidth_kbps": 100.0,
+            "probe_type": "continuous",
+        }
+    ]
+
+
+def test_remove_flow_scans_resolved_ground_node_ids(monkeypatch, tmp_path: Path) -> None:
+    session_path = _session_file(tmp_path, stations=["a", "b"])
+    probed: list[str] = []
+
+    def fake_resolve_src_pod_ip(node_id: str):
+        probed.append(node_id)
+        return "10.42.0.8" if node_id == "ground-earth-test-site-01-router" else None
+
+    deleted: list[tuple[str, str]] = []
+    monkeypatch.setattr("measurement.flow_manager.resolve_src_pod_ip", fake_resolve_src_pod_ip)
+    monkeypatch.setattr(
+        "measurement.probe_client.delete_flow",
+        lambda pod_ip, flow_id: deleted.append((pod_ip, flow_id)),
+    )
+
+    na_reconfig.remove_flow(str(session_path), "flow-1")
+
+    assert probed == [
+        "ground-earth-test-site-00-router",
+        "ground-earth-test-site-01-router",
+    ]
+    assert deleted == [("10.42.0.8", "flow-1")]

@@ -89,6 +89,10 @@ platform:
   # ── Container Filesystem Paths ──────────────────────────────────────
   # Paths inside FRR routing containers for config delivery.
 
+  # Root directory for per-run session state captured by VS-API and
+  # measurement services.
+  session_data_root: /var/nodalarc/sessions
+
   # Directory where FRR daemon config files are copied (via kubectl cp).
   # Contains zebra.conf, isisd.conf, ospfd.conf, etc.
   frr_config_directory_in_container: /etc/frr
@@ -145,6 +149,23 @@ platform:
   # Maximum concurrent WebSocket client connections to VS-API.
   # Each connection receives ~30-40 KB/s of state snapshots.
   vs_api_max_websocket_connections: 50
+
+  # Visual signal falloff exponent used by VS-API for frontend node metadata.
+  vs_api_visual_beam_falloff_exponent: 2.0
+
+  # Wall-clock actuation-latency contract used by VS-API explanations.
+  # These are deployment instrumentation bounds, not simulation time.
+  vs_api_actuation_expected_latency_ms: 250.0
+  vs_api_actuation_fault_after_ms: 1200.0
+
+  # Scheduler kernel-audit heartbeat for recoverable actuation state.
+  # This is deployment instrumentation, not session physics.
+  scheduler_clean_kernel_audit_interval_s: 60.0
+
+  # Default Kubernetes placement policy for session pods. The catalog session
+  # describes the emulated world; pod placement is deployment behavior.
+  default_session_pod_placement_policy: planePerNode
+  default_session_pod_planes_per_group: 1
 
   # Rate limits for expensive VS-API endpoints (requests per minute).
   # Introspect: each call spawns a kubectl exec process.

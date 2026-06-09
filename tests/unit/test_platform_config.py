@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
+import yaml
 from nodalarc.platform_config import (
     PlatformConfig,
     get_platform_config,
@@ -10,6 +13,8 @@ from nodalarc.platform_config import (
     reset_platform_config,
 )
 from pydantic import ValidationError
+
+ROOT = Path(__file__).resolve().parents[2]
 
 
 def _valid_config_dict() -> dict:
@@ -24,6 +29,7 @@ def _valid_config_dict() -> dict:
         "probe_daemon_http_api_port": 9100,
         "probe_daemon_udp_data_port": 19100,
         "deploy_daemon_unix_socket_path": "/tmp/nodal-deploy.sock",
+        "session_data_root": "/var/nodalarc/sessions",
         "frr_config_directory_in_container": "/etc/frr",
         "frr_config_ready_sentinel_path": "/etc/frr/.config-ready",
         "veth_interface_mtu_bytes": 9000,
@@ -35,6 +41,12 @@ def _valid_config_dict() -> dict:
         "frr_config_delivery_settle_seconds": 5,
         "kubectl_exec_max_parallel_workers": 20,
         "vs_api_max_websocket_connections": 50,
+        "vs_api_visual_beam_falloff_exponent": 2.0,
+        "vs_api_actuation_expected_latency_ms": 250.0,
+        "vs_api_actuation_fault_after_ms": 1200.0,
+        "scheduler_clean_kernel_audit_interval_s": 60.0,
+        "default_session_pod_placement_policy": "planePerNode",
+        "default_session_pod_planes_per_group": 1,
         "vs_api_introspect_max_requests_per_minute": 10,
         "vs_api_playback_max_requests_per_minute": 30,
         "vs_api_session_switch_max_requests_per_minute": 5,
@@ -75,6 +87,17 @@ class TestPlatformConfig:
         assert cfg.service_host("vs-api") == "nodalarc-vs-api"
         assert cfg.service_host("nodalpath") == "nodalpath"
         assert cfg.service_host("unknown") == "127.0.0.1"
+
+    def test_repo_and_helm_platform_yaml_share_model_contract(self):
+        repo_raw = yaml.safe_load((ROOT / "configs" / "platform.yaml").read_text(encoding="utf-8"))
+        helm_raw = yaml.safe_load(
+            (ROOT / "deploy" / "helm" / "files" / "platform.yaml").read_text(encoding="utf-8")
+        )
+
+        repo_cfg = PlatformConfig.model_validate(repo_raw["platform"])
+        helm_cfg = PlatformConfig.model_validate(helm_raw["platform"])
+
+        assert set(repo_cfg.model_dump()) == set(helm_cfg.model_dump())
 
 
 class TestSingleton:

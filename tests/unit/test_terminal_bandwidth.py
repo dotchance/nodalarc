@@ -17,11 +17,10 @@ from nodalarc.constellation_loader import (
     gs_terminal_bandwidth_mbps,
     isl_link_bandwidth_mbps,
     isl_terminal_bandwidth_mbps,
-    load_constellation,
-    load_ground_stations,
     satellite_ground_bandwidth_mbps,
 )
 from nodalarc.models.constellation import (
+    ConstellationConfig,
     GroundTerminal,
     IslTerminal,
 )
@@ -36,8 +35,46 @@ from nodalarc.models.satellite_type import (
 from nodalarc.models.satellite_type import (
     IslTerminalDef,
 )
+from pydantic import TypeAdapter
 
-from tests.conftest import CONFIGS_DIR
+adapter = TypeAdapter(ConstellationConfig)
+
+
+def _starlink_like_constellation() -> ConstellationConfig:
+    return adapter.validate_python(
+        {
+            "mode": "parametric",
+            "name": "starlink-like",
+            "orbit": {"altitude_km": 550, "inclination_deg": 53, "pattern": "walker-delta"},
+            "planes": {
+                "count": 4,
+                "raan_spacing_deg": 45,
+                "sats_per_plane": 11,
+                "phase_offset_deg": 0,
+            },
+            "default_terminals": {
+                "isl": [
+                    {
+                        "type": "optical",
+                        "count": 4,
+                        "max_range_km": 5400,
+                        "bandwidth_mbps": 100,
+                        "max_tracking_rate_deg_s": 3.0,
+                    }
+                ],
+                "ground": [{"type": "rf", "count": 1, "bandwidth_mbps": 1000}],
+            },
+        }
+    )
+
+
+def _demo_ground_file() -> GroundStationFile:
+    return GroundStationFile(
+        default_terminals=[
+            GroundTerminalDef(type="rf", count=1, bandwidth_mbps=500.0, tracking_capacity=1)
+        ],
+        stations=[GroundStationConfig(name="hawthorne", lat_deg=33.916, lon_deg=-118.333)],
+    )
 
 
 class TestIslTerminalBandwidthLookup:
@@ -195,12 +232,11 @@ class TestGsTerminalBandwidth:
 
 
 class TestIslLinkBandwidthRealConfig:
-    """End-to-end: load a real constellation and verify link bandwidth."""
+    """End-to-end: typed constellation bandwidth feeds link bandwidth."""
 
     def test_starlink_early_uniform(self):
-        """starlink-early-44 uses starlink-v2 (100 Mbps optical ISL)."""
-        config = load_constellation(CONFIGS_DIR / "constellations/starlink-early-44.yaml")
-        # All satellites use starlink-v2 (4 optical @ 100 Mbps) → all ISL pairs 100 Mbps
+        """All satellites use the 100 Mbps optical ISL fixture."""
+        config = _starlink_like_constellation()
         bw = isl_link_bandwidth_mbps(config, 0, 0, "isl0", 0, 1, "isl1")
         assert bw == 100.0
         bw2 = isl_link_bandwidth_mbps(config, 1, 5, "isl2", 2, 3, "isl3")
@@ -209,14 +245,11 @@ class TestIslLinkBandwidthRealConfig:
 
 class TestGroundLinkBandwidthRealConfig:
     def test_starlink_early_hawthorne_ground(self):
-        """starlink-v2 sat ground terminal = 1000 Mbps; typical GS default varies."""
-        config = load_constellation(CONFIGS_DIR / "constellations/starlink-early-44.yaml")
-        gs_file = load_ground_stations("configs/ground-stations/sets/demo.yaml")
-        # Sat bw: starlink-v2 ground_terminals → 1000 Mbps
-        # GS bw: whatever demo ground stations declare; take min
+        """Sat terminal is 1000 Mbps and GS default caps the link at 500 Mbps."""
+        config = _starlink_like_constellation()
+        gs_file = _demo_ground_file()
         bw = ground_link_bandwidth_mbps(config, gs_file, 0, 0, "hawthorne")
-        assert bw > 0
-        assert bw <= 1000.0  # sat side caps at 1000
+        assert bw == 500.0
 
 
 class TestBandwidthNotHardcoded:
@@ -224,8 +257,7 @@ class TestBandwidthNotHardcoded:
 
     def test_starlink_isl_is_not_1000_mbps(self):
         """If someone regresses the fix to hardcode 1000, this test fails."""
-        config = load_constellation(CONFIGS_DIR / "constellations/starlink-early-44.yaml")
+        config = _starlink_like_constellation()
         bw = isl_link_bandwidth_mbps(config, 0, 0, "isl0", 0, 1, "isl0")
-        # starlink-v2 is 100 Mbps — must NOT be the old 1000.0 default
         assert bw == 100.0
         assert bw != 1000.0

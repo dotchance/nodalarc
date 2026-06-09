@@ -208,6 +208,9 @@ def test_lifecycle_scripts_print_next_steps() -> None:
 
 def test_session_readiness_requires_expected_generation_and_pod_counts() -> None:
     script = (ROOT / "scripts/na-session.sh").read_text()
+    assert 'PLATFORM_CONFIG="${PLATFORM_CONFIG:-configs/platform.yaml}"' in script
+    assert "init_platform_config(Path(sys.argv[3]))" in script
+    assert ".runtime_session" not in script
     assert "compute_expected_pod_count" in script
     assert "compute_expected_placement_node_count" in script
     assert "Previous attempt is terminal Error for the same YAML" in script

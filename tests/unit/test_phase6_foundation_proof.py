@@ -40,7 +40,6 @@ from nodalarc.nats_channels import (
     session_ephemeris_subject,
 )
 from nodalarc.platform_config import init_platform_config
-from nodalarc.session_identity import require_session_run_id
 from scheduler.actuation import (
     ActuationFailureClass,
     ActuationResult,
@@ -608,13 +607,8 @@ def _capture_ome_seek_stream(monkeypatch, tmp_path: Path) -> tuple[str, list[tup
     init_platform_config(Path("configs/platform.yaml"))
     _reset_ome_playback_globals()
 
-    cfg = _load_session_config(str(session_path))
-    cfg = cfg._replace(
-        session=cfg.session.model_copy(
-            update={"session": cfg.session.session.model_copy(update={"run_id": "phase6-replay"})}
-        )
-    )
-    session_id = require_session_run_id(cfg.session)
+    cfg = _load_session_config(str(session_path), run_id="phase6-replay")
+    session_id = cfg.session_id
 
     real_compute_step = ome_event_stream.compute_step
     seek_target: dict[str, float] = {}
@@ -651,7 +645,7 @@ def _dispatcher_for_captured_records(
     *, session_id: str, records: list[tuple[str, bytes]], now_base: datetime
 ) -> Dispatcher:
     def _is_ground_node_id(node_id: str) -> bool:
-        return node_id.startswith("gs-") or "-gs-" in node_id
+        return node_id.startswith(("gs-", "ground-")) or "-gs-" in node_id or "-ground-" in node_id
 
     interface_map: dict[tuple[str, str], tuple[str, str]] = {}
     bandwidth_map: dict[tuple[str, str], float] = {}

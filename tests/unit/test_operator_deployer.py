@@ -423,29 +423,29 @@ class TestPlatformHash:
         spec2 = {"sessionYaml": _make_session_yaml(step_seconds=5)}
         assert compute_platform_hash(spec1) != compute_platform_hash(spec2)
 
-    def test_placement_change_changes_hash(self):
-        spec1 = {"sessionYaml": _make_session_yaml()}
-        spec2 = {"sessionYaml": _make_session_yaml(placement_policy="allOnOne")}
-        assert compute_platform_hash(spec1) != compute_platform_hash(spec2)
+    def test_session_owned_placement_is_rejected(self):
+        body = yaml.safe_load(_make_session_yaml())
+        body["placement"] = {"policy": "allOnOne"}
+
+        with pytest.raises(Exception, match="placement"):
+            compute_platform_hash({"sessionYaml": yaml.safe_dump(body)})
 
     def test_runtime_semantics_change_hash(self):
         base = yaml.safe_load(_make_session_yaml())
 
         scheduling = yaml.safe_load(_make_session_yaml())
-        scheduling["scheduling"]["ground"]["selection_policy"] = {
-            "name": "longest-remaining-pass",
-            "params": {"lookahead_horizon_ticks": 4},
+        scheduling["segments"][1]["apply"]["scheduling"]["selection_policy"] = {
+            "longest_remaining_pass": {"lookahead_horizon_ticks": 4}
         }
 
         simulation = yaml.safe_load(_make_session_yaml())
-        simulation["simulation"]["ground_link_model"] = "geometry_only"
-        simulation["simulation"]["acknowledge_geometry_only"] = True
+        simulation["simulation"]["candidate_limits"]["max_pairs_per_tick"] = 1001
 
         dispatch = yaml.safe_load(_make_session_yaml())
-        dispatch["dispatch"] = {"max_latency_age_ticks": 7}
+        dispatch["dispatch"]["max_latency_age_ticks"] = 7
 
         addressing = yaml.safe_load(_make_session_yaml())
-        addressing["addressing"] = {"ipv4_sat_template": "10.{plane}.{slot}.9"}
+        addressing["addressing"]["loopbacks"][0]["ipv4_pool"] = "10.1.0.0/16"
 
         hashes = {
             compute_platform_hash({"sessionYaml": yaml.dump(candidate, default_flow_style=False)})
@@ -453,13 +453,12 @@ class TestPlatformHash:
         }
         assert len(hashes) == 5
 
-    def test_operator_injected_run_id_does_not_change_hash(self):
-        base = yaml.safe_load(_make_session_yaml())
+    def test_session_yaml_run_id_is_rejected(self):
         with_run_id = yaml.safe_load(_make_session_yaml())
         with_run_id["session"]["run_id"] = "operator-owned-run"
-        assert compute_platform_hash({"sessionYaml": yaml.dump(base)}) == compute_platform_hash(
-            {"sessionYaml": yaml.dump(with_run_id)}
-        )
+
+        with pytest.raises(Exception, match="run_id"):
+            compute_platform_hash({"sessionYaml": yaml.dump(with_run_id)})
 
     def test_empty_session_yaml(self):
         h1 = compute_platform_hash({"sessionYaml": ""})
@@ -475,6 +474,12 @@ class TestPlatformHash:
 
 
 class TestRuntimeIdentityCleanup:
+    def test_teardown_does_not_touch_retired_ephemeral_config_roots(self):
+        source = Path("services/nodalarc_operator/session_deployer.py").read_text(encoding="utf-8")
+
+        assert "configs/constellations/_ephemeral" not in source
+        assert "configs/ground-stations/_ephemeral" not in source
+
     def test_purge_targets_are_session_scoped(self):
         targets = session_runtime_purge_targets("run-test-0001")
 
@@ -487,11 +492,7 @@ class TestRuntimeIdentityCleanup:
     def test_teardown_purges_before_deleting_identity_configmap(self):
         mock_v1 = create_autospec(kubernetes.client.CoreV1Api, instance=True)
         mock_v1.read_namespaced_config_map.return_value = kubernetes.client.V1ConfigMap(
-            data={
-                "session.yaml": yaml.safe_dump(
-                    {"session": {"name": "display-name", "run_id": "run-test-0001"}}
-                )
-            }
+            data={"session_run_id": "run-test-0001"}
         )
 
         with (
@@ -540,7 +541,11 @@ class TestExpectedPodCount:
             compute_expected_pod_count({})
 
     def test_bad_constellation_path_raises(self):
-        spec = {"sessionYaml": _make_session_yaml(constellation_path="/nonexistent/path.yaml")}
+        spec = {
+            "sessionYaml": _make_session_yaml(
+                constellation_path="nodalarc:constellations/no-such-file.yaml"
+            )
+        }
         with pytest.raises(Exception):
             compute_expected_pod_count(spec)
 
@@ -548,8 +553,33 @@ class TestExpectedPodCount:
 class TestExpectedPlacementNodeCount:
     """Expected placement must use all resolved segments, not only the primary constellation."""
 
-    def test_earth_luna_relay_counts_relay_segment_placement(self):
-        session_yaml = (PROJECT_ROOT / "configs/sessions/earth-luna-relay.yaml").read_text()
+    def test_multi_segment_session_counts_relay_segment_placement(self):
+        body = yaml.safe_load(_make_session_yaml())
+        relay_segment = dict(body["segments"][0])
+        relay_segment["id"] = "relay"
+        body["segments"].append(relay_segment)
+        body["addressing"]["loopbacks"].append(
+            {
+                "id": "relay-loopbacks-v4",
+                "applies_to": {"segment": "relay"},
+                "ipv4_pool": "10.2.0.0/16",
+                "prefix_length": 32,
+                "allocation": "by_plane_slot",
+            }
+        )
+        body["addressing"]["loopbacks"].append(
+            {
+                "id": "relay-loopbacks-v6",
+                "applies_to": {"segment": "relay"},
+                "ipv6_pool": "fd00:2::/64",
+                "prefix_length": 128,
+                "allocation": "by_plane_slot",
+            }
+        )
+        body["routing"]["domains"][0]["selectors"] = [
+            {"any": [{"segment": "space"}, {"segment": "relay"}, {"segment": "ground"}]}
+        ]
+        session_yaml = yaml.safe_dump(body)
 
         count = compute_expected_placement_node_count(
             {"sessionYaml": session_yaml},
@@ -985,6 +1015,52 @@ class TestRequiredSubstratePairs:
         assert by_key["node01->node02"]["reasons"] == ["ground", "isl"]
         assert by_key["node02->node01"]["reasons"] == ["ground", "isl"]
 
+    def test_resolved_candidate_map_scopes_active_ground_universe(self):
+        nodes = {
+            "sat-a": {"node_type": "satellite"},
+            "sat-b": {"node_type": "satellite"},
+            "gs-leo": {"node_type": "ground_station"},
+            "gs-meo-unused": {"node_type": "ground_station"},
+        }
+        pairs = _required_substrate_pairs(
+            nodes=nodes,
+            isl_pairs=set(),
+            pod_placement={
+                "sat-a": "node01",
+                "sat-b": "node01",
+                "gs-leo": "node02",
+                "gs-meo-unused": "node03",
+            },
+            node_ips={"node01": "10.0.0.1", "node02": "10.0.0.2", "node03": "10.0.0.3"},
+            ground_candidate_satellites_by_gs={"gs-leo": ("sat-a", "sat-b")},
+        )
+
+        assert {pair["directional_key"] for pair in pairs} == {
+            "node01->node02",
+            "node02->node01",
+        }
+        assert all(pair["reasons"] == ["ground"] for pair in pairs)
+
+    def test_resolved_candidate_map_rejects_unknown_ground_node(self):
+        with pytest.raises(ValueError, match="unknown ground station"):
+            _required_substrate_pairs(
+                nodes={"sat-a": {"node_type": "satellite"}},
+                isl_pairs=set(),
+                pod_placement={"sat-a": "node01", "gs-missing": "node02"},
+                node_ips={"node01": "10.0.0.1", "node02": "10.0.0.2"},
+                ground_candidate_satellites_by_gs={"gs-missing": ("sat-a",)},
+            )
+
+    def test_resolved_candidate_map_rejects_unknown_satellite_node(self):
+        with pytest.raises(ValueError, match="unknown substrate candidate satellite"):
+            _required_substrate_pairs(
+                nodes={"gs-den": {"node_type": "ground_station"}},
+                isl_pairs=set(),
+                pod_placement={"gs-den": "node01", "sat-missing": "node02"},
+                node_ips={"node01": "10.0.0.1", "node02": "10.0.0.2"},
+                ground_candidate_satellites_by_gs={"gs-den": ("sat-missing",)},
+            )
+
 
 # ---------------------------------------------------------------------------
 # Class 7: TestConfigRendering
@@ -1027,7 +1103,7 @@ class TestConfigRendering:
                     configs[name] = body.data
         return configs, context
 
-    def test_runtime_session_configmap_injects_run_id(self, tmp_path):
+    def test_runtime_session_configmap_records_run_id_without_mutating_yaml(self, tmp_path):
         spec = _make_inline_spec(tmp_path)
         mock_v1 = create_autospec(kubernetes.client.CoreV1Api, instance=True)
         mock_v1.read_namespaced_secret.return_value = _existing_terminal_secret()
@@ -1057,7 +1133,7 @@ class TestConfigRendering:
         runtime_yaml = yaml.safe_load(session_cms[0]["session.yaml"])
         assert context["session_id"] == "run-test-0001"
         assert context["session_run_id"] == "run-test-0001"
-        assert runtime_yaml["session"]["run_id"] == "run-test-0001"
+        assert "run_id" not in runtime_yaml["session"]
         assert session_cms[0]["session_run_id"] == "run-test-0001"
 
     def test_terminal_keys_are_not_rotated_when_secret_exists(self):
@@ -1198,13 +1274,9 @@ class TestPodSpec:
     The pod spec IS the Operator's primary output.
     """
 
-    def _create_pods(self, tmp_path, *, mi_enabled=False):
+    def _create_pods(self, tmp_path):
         """Run the full pipeline and capture all created pods."""
         spec = _make_inline_spec(tmp_path)
-        if mi_enabled:
-            session = yaml.safe_load(spec["sessionYaml"])
-            session["mi"] = {"enabled": True}
-            spec["sessionYaml"] = yaml.dump(session, default_flow_style=False)
         mock_v1 = create_autospec(kubernetes.client.CoreV1Api, instance=True)
         mock_v1.read_namespaced_secret.return_value = _existing_terminal_secret("test-uid-456")
         owner_ref = {
@@ -1275,23 +1347,16 @@ class TestPodSpec:
                 assert "nodalarc.io/plane" in labels
                 assert "nodalarc.io/slot" in labels
 
-    def test_probe_sidecar_bind_host_uses_pod_ip_downward_api(self, tmp_path):
-        pods = self._create_pods(tmp_path, mi_enabled=True)
+    def test_probe_sidecar_is_not_created_from_retired_session_mi_field(self, tmp_path):
+        pods = self._create_pods(tmp_path)
         probe_containers = [
             container
             for pod in pods
-            if pod.metadata.labels["nodalarc.io/role"] == "ground-station"
             for container in pod.spec.containers
             if container.name == "probe"
         ]
 
-        assert probe_containers, "MI-enabled ground-station pods should include probe sidecars"
-        for probe in probe_containers:
-            env = {item.name: item for item in probe.env or []}
-            bind_host = env.get("NODALARC_PROBE_BIND_HOST")
-            assert bind_host is not None
-            assert bind_host.value is None
-            assert bind_host.value_from.field_ref.field_path == "status.podIP"
+        assert probe_containers == []
 
     def test_owner_reference(self, tmp_path):
         pods = self._create_pods(tmp_path)

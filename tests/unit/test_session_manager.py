@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import logging
 import os
 import signal
 from pathlib import Path
@@ -13,35 +14,34 @@ import yaml
 from nodalarc.catalog_paths import CatalogPathError
 from vs_api.session_manager import SessionManager, _pid_alive
 
-from tests.conftest import build_segment_session_dict
+CATALOG_SESSION = Path("catalog/nodalarc/sessions/earth-leo-heo-geo-luna-reachability.yaml")
 
 
 def _segment_session_yaml(name: str, data_dir: Path) -> str:
-    return yaml.dump(
-        build_segment_session_dict(
-            name=name,
-            data_dir=str(data_dir),
-            constellation="configs/constellations/demo-36.yaml",
-            ground_stations="configs/ground-stations/sets/demo.yaml",
-            protocol="isis",
-            orbit_propagator="keplerian-circular",
-        ),
-        sort_keys=False,
-    )
+    raw = yaml.safe_load(CATALOG_SESSION.read_text(encoding="utf-8"))
+    raw["session"]["name"] = name
+    return yaml.dump(raw, sort_keys=False)
 
 
 @pytest.fixture
-def tmp_sessions(tmp_path):
+def tmp_sessions(tmp_path, monkeypatch):
     """Create a temporary sessions directory with a valid session config."""
     sessions_dir = tmp_path / "sessions"
     sessions_dir.mkdir()
 
     data_dir = tmp_path / "data"
     data_dir.mkdir()
+    monkeypatch.setattr(
+        "vs_api.session_manager.get_platform_config",
+        lambda: SimpleNamespace(
+            kubernetes_namespace="nodalarc",
+            session_data_root=str(data_dir),
+        ),
+    )
 
     # Write a minimal valid session YAML
     session_yaml = sessions_dir / "test-session.yaml"
-    session_yaml.write_text(_segment_session_yaml("Test Session", data_dir))
+    session_yaml.write_text(_segment_session_yaml("test-session", data_dir))
 
     return {
         "sessions_dir": sessions_dir,
@@ -57,24 +57,57 @@ class TestSessionCatalog:
         sessions = mgr.list_sessions()
 
         assert len(sessions) == 1
-        assert sessions[0]["name"] == "Test Session"
-        assert sessions[0]["constellation"] == "demo-36"
-        assert sessions[0]["routing_stack"] == "isis-plain"
+        assert sessions[0]["name"] == "test-session"
+        assert sessions[0]["constellation"] == "geo_relay + heo_relay + leo_a + leo_b + luna_llo"
+        assert sessions[0]["routing_stack"] == "earth_domain:isis + luna_domain:isis"
 
     def test_scan_sessions_reports_multi_segment_label(self, tmp_path):
         sessions_dir = tmp_path / "sessions"
         sessions_dir.mkdir()
-        source = Path("configs/sessions/earth-leo-meo-geo.yaml")
-        if not source.exists():
-            pytest.skip("earth-leo-meo-geo.yaml not available")
-        (sessions_dir / "earth-leo-meo-geo.yaml").write_text(source.read_text())
+        (sessions_dir / "reachability.yaml").write_text(CATALOG_SESSION.read_text())
         mgr = SessionManager(str(sessions_dir))
 
         sessions = mgr.list_sessions()
 
         assert len(sessions) == 1
-        assert sessions[0]["name"] == "earth-leo-meo-geo"
-        assert sessions[0]["constellation"] == "leo + meo + geo"
+        assert sessions[0]["name"] == "earth-leo-heo-geo-luna-reachability"
+        assert sessions[0]["constellation"] == "geo_relay + heo_relay + leo_a + leo_b + luna_llo"
+
+    def test_scan_sessions_includes_generated_root_without_catalog_pollution(self, tmp_path):
+        catalog_sessions = tmp_path / "catalog-sessions"
+        generated_sessions = tmp_path / "generated-sessions"
+        catalog_sessions.mkdir()
+        generated_sessions.mkdir()
+        (catalog_sessions / "catalog.yaml").write_text(
+            _segment_session_yaml("catalog-session", tmp_path)
+        )
+        (generated_sessions / "wizard.yaml").write_text(
+            _segment_session_yaml("wizard-session", tmp_path)
+        )
+
+        mgr = SessionManager(
+            str(catalog_sessions),
+            generated_sessions_dir=str(generated_sessions),
+        )
+
+        sessions = mgr.list_sessions()
+        assert {item["name"] for item in sessions} == {"catalog-session", "wizard-session"}
+        assert str(generated_sessions / "wizard.yaml") in mgr._valid_session_files()
+
+    def test_scan_sessions_deduplicates_unchanged_parse_failures(self, tmp_path, caplog):
+        sessions_dir = tmp_path / "sessions"
+        sessions_dir.mkdir()
+        (sessions_dir / "bad.yaml").write_text("session: [", encoding="utf-8")
+
+        with caplog.at_level(logging.WARNING, logger="vs_api.session_manager"):
+            mgr = SessionManager(str(sessions_dir))
+            mgr.rescan()
+            mgr.rescan()
+
+        warnings = [
+            record for record in caplog.records if "Failed to parse session" in record.getMessage()
+        ]
+        assert len(warnings) == 1
 
 
 def _make_session_dir(data_dir: Path, session_id: str, mi_pid: int = 0, orch_pid: int = 0) -> Path:
@@ -87,7 +120,7 @@ def _make_session_dir(data_dir: Path, session_id: str, mi_pid: int = 0, orch_pid
         "mi_pid": mi_pid,
         "vsapi_pid": 0,
         "orchestrator_pid": orch_pid,
-        "session_config": "configs/sessions/test-session.yaml",
+        "session_config": "catalog/nodalarc/sessions/test-session.yaml",
         "db_path": str(d / "session.db"),
     }
     (d / "session-state.json").write_text(json.dumps(state))
@@ -342,7 +375,7 @@ class TestCleanupOldSessions:
 
 class TestCollectDataDirs:
     def test_collects_from_configs(self, tmp_sessions):
-        """Reads data_dir from session YAML configs."""
+        """Reads the deployment session-data root."""
         mgr = SessionManager(str(tmp_sessions["sessions_dir"]))
         dirs = mgr._collect_data_dirs()
         assert len(dirs) == 1
@@ -352,7 +385,7 @@ class TestCollectDataDirs:
         """Multiple YAMLs with same data_dir produce one entry."""
         # Add second session with same data_dir
         yaml2 = tmp_sessions["sessions_dir"] / "test-session-2.yaml"
-        yaml2.write_text(_segment_session_yaml("Test Session 2", tmp_sessions["data_dir"]))
+        yaml2.write_text(_segment_session_yaml("test-session-2", tmp_sessions["data_dir"]))
         mgr = SessionManager(str(tmp_sessions["sessions_dir"]))
         dirs = mgr._collect_data_dirs()
         assert len(dirs) == 1

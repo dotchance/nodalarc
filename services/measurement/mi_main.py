@@ -19,11 +19,11 @@ import sqlite3
 import subprocess
 import threading
 import time
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
 import nats
-import yaml
 from nodal.logging import configure as _configure_logging
 from nodalarc.db.queries import (
     insert_adapter_event,
@@ -31,16 +31,14 @@ from nodalarc.db.queries import (
     insert_probe_result,
 )
 from nodalarc.db.schema import create_tables
-from nodalarc.models.addressing import AddressingScheme
 from nodalarc.models.metrics import (
     ConvergenceResult,
     ProbeResult,
     TraceRequest,
     TraceResponse,
 )
-from nodalarc.models.resolved_session import SourceContext
+from nodalarc.models.resolved_session import ResolvedSession
 from nodalarc.models.routing_stack import RoutingStackConfig
-from nodalarc.models.session import SessionConfig
 from nodalarc.nats_channels import (
     NATS_CONNECT_OPTIONS,
     SUBJECT_MI_CONVERGENCE_GATE,
@@ -51,13 +49,26 @@ from nodalarc.nats_channels import (
     probe_result_subject,
 )
 from nodalarc.platform_config import get_platform_config
-from nodalarc.resolve_session import resolve_session_with_assets
-from nodalarc.session_identity import require_session_run_id
+from nodalarc.resolve_session import load_session_resolution_from_file
+from nodalarc.session_identity import (
+    read_runtime_session_run_id_file,
+    require_resolved_session_run_id,
+)
+from nodalarc.stack_resolver import ResolvedStack, resolve_domain_stack
 
 from measurement.adapters import create_adapter
 from measurement.convergence_gate import ConvergenceGate
 
 log = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class ConvergenceRuntimeConfig:
+    """Resolved MI convergence defaults until catalog MI policy is added."""
+
+    stability_period_s: float = 2.0
+    timeout_s: float = 30.0
+    probe_interval_ms: int = 100
 
 
 def _discover_pods(namespace: str | None = None) -> list[dict[str, str]]:
@@ -112,19 +123,17 @@ class MIService:
 
     def __init__(
         self,
-        session: SessionConfig,
-        gs_file,
+        resolved: ResolvedSession,
         stack_config: RoutingStackConfig,
         db_path: str,
         namespace: str | None = None,
-        addressing: AddressingScheme | None = None,
     ) -> None:
         if namespace is None:
             namespace = get_platform_config().kubernetes_namespace
-        self._session = session
-        self._session_id = require_session_run_id(session)
-        self._gs_file = gs_file
-        self._addressing = addressing or AddressingScheme(session.addressing, gs_file=gs_file)
+        if not isinstance(resolved, ResolvedSession):
+            raise TypeError("MIService requires a ResolvedSession")
+        self._resolved = resolved
+        self._session_id = require_resolved_session_run_id(resolved)
         self._stack_config = stack_config
         self._db_path = db_path
         self._namespace = namespace
@@ -140,6 +149,8 @@ class MIService:
         self._db_lock = threading.Lock()
 
         # Protocol adapter
+        if not stack_config.mi_adapter:
+            raise ValueError(f"routing stack {stack_config.name!r} does not provide an MI adapter")
         self._adapter = create_adapter(stack_config.mi_adapter)
 
         # Flow manager (lazy init — needs pods to be running)
@@ -147,7 +158,7 @@ class MIService:
 
         # Convergence gate
         self._gate = ConvergenceGate(
-            convergence_config=session.convergence,
+            convergence_config=ConvergenceRuntimeConfig(),
             active_flows_fn=self._get_active_flows,
             adapter=self._adapter,
         )
@@ -177,10 +188,8 @@ class MIService:
         from measurement.flow_manager import FlowManager
 
         self._flow_manager = FlowManager(
-            session=self._session,
-            gs_file=self._gs_file,
+            resolved=self._resolved,
             namespace=self._namespace,
-            addressing=self._addressing,
         )
         try:
             self._flow_manager.load_initial_flows()
@@ -386,46 +395,64 @@ def main() -> None:
     parser.add_argument("--session", required=True, help="Path to session YAML")
     parser.add_argument("--db", required=True, help="Path to SQLite database")
     parser.add_argument("--platform-config", default="configs/platform.yaml")
+    parser.add_argument("--session-run-id-file", default="/etc/nodalarc/session_run_id")
     args = parser.parse_args()
 
     from nodalarc.platform_config import init_platform_config
 
     init_platform_config(Path(args.platform_config))
 
-    # Load configs through the resolver so MI observes the same runtime view as
-    # OME/Scheduler/Operator.
-    raw = yaml.safe_load(Path(args.session).read_text())
-    resolution = resolve_session_with_assets(
-        raw,
-        source_context=SourceContext(origin="mi"),
+    # Load through the catalog resolver so MI observes the same runtime view as
+    # OME/Scheduler/Operator. The run id is operator-owned lineage, not YAML.
+    resolution = load_session_resolution_from_file(
+        Path(args.session),
+        origin="mi",
+        run_id=read_runtime_session_run_id_file(Path(args.session_run_id_file)),
     )
-    session = resolution.runtime_session
-    gs_file = resolution.primary_ground_set.config
-
-    from nodalarc.stack_resolver import resolve_stack
-
-    resolved = resolve_stack(session.routing.protocol, session.routing.extensions)
-    stack_config = RoutingStackConfig(
-        name=f"{session.routing.protocol}-{'-'.join(session.routing.extensions) or 'plain'}",
-        image=resolved.image,
-        daemons=resolved.daemons or None,
-        config_templates=[],
-        template_variables=resolved.template_variables,
-        mi_adapter=resolved.mi_adapter,
-        segment_routing=resolved.segment_routing,
-        ttl_propagation=resolved.ttl_propagation,
-        max_compression=resolved.max_compression,
-        reconfigure_command=resolved.reconfigure_command,
-    )
+    stack_config = _mi_stack_config_from_resolved(resolution.resolved)
 
     service = MIService(
-        session=session,
-        gs_file=gs_file,
+        resolved=resolution.resolved,
         stack_config=stack_config,
         db_path=args.db,
-        addressing=resolution.addressing,
     )
     service.run()
+
+
+def _mi_stack_config_from_resolved(resolved: ResolvedSession) -> RoutingStackConfig:
+    """Resolve the single MI adapter supported by the current MI service.
+
+    MI currently has one adapter instance. Multiple resolved routing domains are
+    acceptable only when they resolve to the same MI adapter implementation.
+    """
+    stacks_by_adapter: dict[str, ResolvedStack] = {}
+    for domain in resolved.routing_domains:
+        stack = resolve_domain_stack(domain)
+        if stack.mi_adapter is None:
+            raise ValueError(
+                f"routing domain {domain.domain_id!r} resolves to stack without an MI adapter"
+            )
+        stacks_by_adapter.setdefault(stack.mi_adapter, stack)
+    if not stacks_by_adapter:
+        raise ValueError("MI requires at least one resolved routing domain with an adapter")
+    if len(stacks_by_adapter) != 1:
+        raise ValueError(
+            "MI currently supports one protocol adapter per service instance; "
+            f"resolved adapters: {sorted(stacks_by_adapter)}"
+        )
+
+    adapter, stack = next(iter(stacks_by_adapter.items()))
+    return RoutingStackConfig(
+        name=f"mi-{adapter}",
+        image=stack.image,
+        daemons=stack.daemons or None,
+        config_templates=[],
+        template_variables=stack.template_variables,
+        mi_adapter=stack.mi_adapter,
+        segment_routing=stack.segment_routing,
+        ttl_propagation=stack.ttl_propagation,
+        max_compression=stack.max_compression,
+    )
 
 
 if __name__ == "__main__":

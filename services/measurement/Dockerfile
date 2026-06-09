@@ -45,6 +45,7 @@ ENV PYTHONPATH=/app/lib:/app/services:/app
 
 # Copy shared library
 COPY lib/ lib/
+COPY catalog/ catalog/
 
 # Copy measurement service
 COPY services/measurement/ services/measurement/

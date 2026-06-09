@@ -5,7 +5,6 @@ Proves discriminated union dispatch, validation rules, and round-trips.
 
 import pytest
 import yaml
-from nodalarc.constellation_loader import load_constellation
 from nodalarc.models.constellation import (
     ConstellationConfig,
     ExplicitConstellation,
@@ -14,20 +13,102 @@ from nodalarc.models.constellation import (
 )
 from pydantic import TypeAdapter, ValidationError
 
-from tests.conftest import CONFIGS_DIR, FIXTURES_DIR
+from tests.conftest import FIXTURES_DIR
 
 adapter = TypeAdapter(ConstellationConfig)
 
 
+def _terminal_config(isl_count: int = 2) -> dict:
+    return {
+        "isl": [
+            {
+                "type": "optical",
+                "count": isl_count,
+                "max_range_km": 5000,
+                "bandwidth_mbps": 1000,
+                "max_tracking_rate_deg_s": 3.0,
+            }
+        ],
+        "ground": [{"type": "rf", "count": 1, "bandwidth_mbps": 1000}],
+    }
+
+
+def _parametric_data(**overrides) -> dict:
+    data = {
+        "mode": "parametric",
+        "name": "starlink-early-44",
+        "orbit": {"altitude_km": 550, "inclination_deg": 53, "pattern": "walker-delta"},
+        "planes": {
+            "count": 4,
+            "raan_spacing_deg": 45,
+            "sats_per_plane": 11,
+            "phase_offset_deg": 0,
+        },
+        "default_terminals": _terminal_config(4),
+    }
+    data.update(overrides)
+    return data
+
+
+def _explicit_data() -> dict:
+    return {
+        "mode": "explicit",
+        "name": "custom-example",
+        "default_terminals": _terminal_config(2),
+        "satellites": [
+            {
+                "plane": 0,
+                "slot": 0,
+                "orbit": {
+                    "altitude_km": 550,
+                    "inclination_deg": 53,
+                    "raan_deg": 0,
+                    "true_anomaly_deg": 0,
+                },
+            },
+            {
+                "plane": 0,
+                "slot": 1,
+                "orbit": {
+                    "altitude_km": 550,
+                    "inclination_deg": 53,
+                    "raan_deg": 0,
+                    "true_anomaly_deg": 180,
+                },
+            },
+            {
+                "plane": 1,
+                "slot": 0,
+                "orbit": {
+                    "altitude_km": 550,
+                    "inclination_deg": 53,
+                    "raan_deg": 45,
+                    "true_anomaly_deg": 0,
+                },
+            },
+            {
+                "plane": 1,
+                "slot": 1,
+                "orbit": {
+                    "altitude_km": 550,
+                    "inclination_deg": 53,
+                    "raan_deg": 45,
+                    "true_anomaly_deg": 180,
+                },
+            },
+        ],
+    }
+
+
 class TestDiscriminatedUnion:
     def test_parametric_dispatch(self):
-        config = load_constellation(CONFIGS_DIR / "constellations/starlink-early-44.yaml")
+        config = adapter.validate_python(_parametric_data())
         assert isinstance(config, ParametricConstellation)
         assert config.mode == "parametric"
         assert config.name == "starlink-early-44"
 
     def test_explicit_dispatch(self):
-        config = load_constellation(CONFIGS_DIR / "constellations/custom-example.yaml")
+        config = adapter.validate_python(_explicit_data())
         assert isinstance(config, ExplicitConstellation)
         assert config.mode == "explicit"
         assert len(config.satellites) == 4
@@ -58,13 +139,13 @@ class TestDiscriminatedUnion:
             adapter.validate_python(data)
 
     def test_round_trip_parametric(self):
-        config = load_constellation(CONFIGS_DIR / "constellations/starlink-early-44.yaml")
+        config = adapter.validate_python(_parametric_data())
         json_str = config.model_dump_json()
         restored = adapter.validate_json(json_str)
         assert restored == config
 
     def test_round_trip_explicit(self):
-        config = load_constellation(CONFIGS_DIR / "constellations/custom-example.yaml")
+        config = adapter.validate_python(_explicit_data())
         json_str = config.model_dump_json()
         restored = adapter.validate_json(json_str)
         assert restored == config
@@ -72,7 +153,7 @@ class TestDiscriminatedUnion:
 
 class TestParametricConstellation:
     def test_starlink_early_loads(self):
-        config = load_constellation(CONFIGS_DIR / "constellations/starlink-early-44.yaml")
+        config = adapter.validate_python(_parametric_data())
         assert config.orbit.altitude_km == 550
         assert config.orbit.inclination_deg == 53
         assert config.orbit.pattern == "walker-delta"
@@ -80,7 +161,19 @@ class TestParametricConstellation:
         assert config.planes.sats_per_plane == 11
 
     def test_iridium_66_loads(self):
-        config = load_constellation(CONFIGS_DIR / "constellations/iridium-66.yaml")
+        config = adapter.validate_python(
+            _parametric_data(
+                name="iridium-66",
+                orbit={"altitude_km": 780, "inclination_deg": 86.4, "pattern": "walker-star"},
+                planes={
+                    "count": 6,
+                    "raan_spacing_deg": 31.6,
+                    "sats_per_plane": 11,
+                    "phase_offset_deg": 0,
+                },
+                polar_seam={"enabled": True, "latitude_threshold_deg": 70},
+            )
+        )
         assert config.orbit.pattern == "walker-star"
         assert config.orbit.inclination_deg == 86.4
         assert config.polar_seam is not None
@@ -90,7 +183,7 @@ class TestParametricConstellation:
 
 class TestExplicitConstellation:
     def test_custom_example_loads(self):
-        config = load_constellation(CONFIGS_DIR / "constellations/custom-example.yaml")
+        config = adapter.validate_python(_explicit_data())
         assert len(config.satellites) == 4
         planes = {s.plane for s in config.satellites}
         assert planes == {0, 1}
@@ -99,7 +192,7 @@ class TestExplicitConstellation:
             assert sat.orbit.altitude_km == 550
 
     def test_terminal_count_from_default(self):
-        config = load_constellation(CONFIGS_DIR / "constellations/custom-example.yaml")
+        config = adapter.validate_python(_explicit_data())
         assert config.default_terminals.isl[0].count == 2
 
 

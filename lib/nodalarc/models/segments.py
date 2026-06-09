@@ -1,66 +1,45 @@
 # Copyright 2024-2026 .chance (dotchance)
 # Licensed under the Apache License, Version 2.0. See LICENSE file.
-"""Segment grammar — building blocks that produce runtime nodes.
+"""Catalog segment grammar."""
 
-Structural schema for the segment-based session grammar. This layer is permissive
-on cross-object/identity-mode rules (those belong to semantic + runtime-support
-validation); it is strict on object shape and local field meaning. Runtime-future
-segment kinds (``space_node_set``, ``lagrange_point``) are defined here so
-future-looking YAML validates structurally, then fails runtime-support validation
-with a typed reason until the runtime implements them.
-"""
+from __future__ import annotations
 
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, NonNegativeInt, field_validator, model_validator
-
-from nodalarc.body_frames import FrameBodyName, SupportedSurfaceBody
-from nodalarc.model_validation import NonEmptyReference
-from nodalarc.models.constellation import ConstellationConfig, OrbitalElements
-from nodalarc.models.ground_policy import (
-    CrossTenantDisplacementPolicy,
-    HandoverPolicySpec,
-    MbbPreemptionPolicy,
-    RankingComponent,
-    SelectionPolicySpec,
-    SuccessorAbortPolicy,
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    NonNegativeInt,
+    PositiveInt,
+    TypeAdapter,
+    model_validator,
 )
 
-# --- Grammar primitives (lexical types shared across the grammar modules) ---
+from nodalarc.model_validation import NonEmptyReference
 
-# Identifier ::= /[a-z][a-z0-9-]*/
-Identifier = Annotated[str, Field(pattern=r"^[a-z][a-z0-9-]*$")]
-# LocalNodeId ::= string without whitespace (source IDs before namespace expansion)
-LocalNodeId = Annotated[str, Field(pattern=r"^\S+$")]
-# Namespace prefixes runtime node IDs in segment_namespaced mode.
-Namespace = Identifier
-# TerminalMedium ::= "rf" | "optical"
+Identifier = Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")]
+RuntimeNodeId = Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9-]*$")]
 TerminalMedium = Literal["rf", "optical"]
-# LagrangePoint ::= "L1" | "L2" | "L3" | "L4" | "L5"
-LagrangePoint = Literal["L1", "L2", "L3", "L4", "L5"]
-# Non-finite geometry/physics inputs (NaN/Inf) are banned at the grammar layer.
 FiniteFloat = Annotated[float, Field(allow_inf_nan=False)]
 PositiveFiniteFloat = Annotated[float, Field(gt=0, allow_inf_nan=False)]
+NonNegativeFiniteFloat = Annotated[float, Field(ge=0, allow_inf_nan=False)]
+LagrangePoint = Literal["l1", "l2", "l3", "l4", "l5"]
 
-SegmentKind = Literal[
-    "constellation",
-    "ground_set",
-    "space_node",
-    "space_node_set",
-    "lagrange_point",
-]
+CatalogObject = NonEmptyReference | dict[str, Any]
+
+
+class TagsMixin(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    @staticmethod
+    def _validate_unique_tags(tags: tuple[str, ...] | None) -> tuple[str, ...] | None:
+        if tags is not None and len(set(tags)) != len(tags):
+            raise ValueError("tags must not contain duplicates")
+        return tags
 
 
 class SegmentClock(BaseModel):
-    """Optional, future-facing per-segment clock offset/rate from session time.
-
-    OME remains responsible for aligning all computed facts to the session master
-    timeline; per-node time is metadata for propagation and future relativistic
-    modeling. Link decisions and events still carry session master sim time.
-
-    Frozen: it is embedded in the frozen ``ResolvedNode`` and is parsed once.
-    """
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     model: Literal["session", "affine"] = "session"
@@ -69,254 +48,281 @@ class SegmentClock(BaseModel):
 
     @model_validator(mode="after")
     def _validate_clock(self) -> SegmentClock:
-        if self.model == "affine":
-            if self.rate is None:
-                raise ValueError("clock.model='affine' requires a positive rate")
-        else:  # session
+        if self.model == "session":
             if self.offset_s is not None or self.rate is not None:
-                raise ValueError("clock.model='session' must not set offset_s or rate")
+                raise ValueError("session clock must not set offset_s or rate")
+        elif self.rate is None:
+            raise ValueError("affine clock requires rate")
         return self
 
 
-# --- Constellation segment ---
+class OriginatedPrefixes(BaseModel):
+    """Routing injection intent for a placed node."""
 
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
-class InternalIslConfig(BaseModel):
-    """In-segment ISL behavior. In-segment ISLs never permit cross-segment links."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    enabled: bool = True
-    scope: Literal["intra_segment"] = "intra_segment"
-
-
-class InternalLinkConfig(BaseModel):
-    """Ordinary in-segment links produced by a constellation segment."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    isl: InternalIslConfig | None = None
-
-
-class ConstellationSegment(BaseModel):
-    """A segment that references or inlines a constellation file."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    id: Identifier
-    kind: Literal["constellation"]
-    # A path string to a constellation file, or an inline constellation. The
-    # inline form is the typed ConstellationConfig union so JSON Schema validates
-    # its shape; catalog/cross-file checks remain resolver semantics.
-    source: NonEmptyReference | ConstellationConfig
-    namespace: Namespace
-    # Required after resolution in multi-segment sessions (semantic validation).
-    central_body: FrameBodyName | None = None
-    satellite_type: Identifier | None = None
-    internal_links: InternalLinkConfig | None = None
-    display_name: str | None = None
-    tags: list[Identifier] | None = None
-    clock: SegmentClock | None = None
-
-
-# --- Ground segment ---
-
-
-class GroundSchedulingPolicy(BaseModel):
-    """All-optional ground scheduling override surface.
-
-    Mirrors ``session.GroundSchedulingConfig`` structurally so the grammar can
-    describe the intended future surface, but the resolver only accepts fields
-    the current runtime can honor at this level. Station-scoped fields are
-    partial overrides merged by the resolver; allocator-wide fields remain
-    top-level-only until OME consumes them per segment.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    selection_policy: SelectionPolicySpec | None = None
-    handover_policy: HandoverPolicySpec | None = None
-    ranking_order: tuple[RankingComponent, ...] | None = None
-    handover_mode: Literal["bbm", "mbb"] | None = None
-    mbb_overlap_ticks: NonNegativeInt | None = None
-    mbb_reserve: Annotated[int, Field(ge=0, le=1)] | None = None
-    mbb_preemption: MbbPreemptionPolicy | None = None
-    successor_abort_policy: SuccessorAbortPolicy | None = None
-    cross_tenant_displacement: CrossTenantDisplacementPolicy | None = None
-    bbm_acquire_timeout_ticks: Literal[1] | None = None
-
-    @field_validator("ranking_order")
-    @classmethod
-    def _validate_ranking_order(
-        cls, value: tuple[RankingComponent, ...] | None
-    ) -> tuple[RankingComponent, ...] | None:
-        if value is None:
-            return None
-        if not value:
-            raise ValueError("ground segment scheduling.ranking_order must not be empty")
-        if value[-1] != "lex_pair":
-            raise ValueError("ground segment scheduling.ranking_order must end with 'lex_pair'")
-        if len(value) == 1:
-            raise ValueError(
-                "ground segment scheduling.ranking_order must include at least one "
-                "decision component before 'lex_pair'"
-            )
-        if len(set(value)) != len(value):
-            raise ValueError("ground segment scheduling.ranking_order must not contain duplicates")
-        return value
+    ipv4: tuple[NonEmptyReference, ...] | None = None
+    ipv6: tuple[NonEmptyReference, ...] | None = None
 
     @model_validator(mode="after")
-    def _validate_partial_mbb_surface(self) -> GroundSchedulingPolicy:
-        if self.handover_mode == "mbb":
-            if self.mbb_overlap_ticks is not None and self.mbb_overlap_ticks <= 0:
-                raise ValueError("MBB ground segment override requires mbb_overlap_ticks > 0")
-            if self.mbb_reserve is not None and self.mbb_reserve <= 0:
-                raise ValueError("MBB ground segment override requires mbb_reserve > 0")
+    def _not_empty(self) -> OriginatedPrefixes:
+        if not self.ipv4 and not self.ipv6:
+            raise ValueError("originated_prefixes must include ipv4 and/or ipv6")
+        return self
+
+
+class HighestElevationPolicy(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    highest_elevation: dict = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _empty(self) -> HighestElevationPolicy:
+        if self.highest_elevation:
+            raise ValueError("highest_elevation policy takes no parameters")
+        return self
+
+
+class LowestElevationPolicy(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    lowest_elevation: dict = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _empty(self) -> LowestElevationPolicy:
+        if self.lowest_elevation:
+            raise ValueError("lowest_elevation policy takes no parameters")
+        return self
+
+
+class LongestRemainingPassParams(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    lookahead_horizon_ticks: PositiveInt
+
+
+class LongestRemainingPassPolicy(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    longest_remaining_pass: LongestRemainingPassParams
+
+
+SelectionPolicy = HighestElevationPolicy | LowestElevationPolicy | LongestRemainingPassPolicy
+
+
+class HysteresisParams(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    discount_factor: PositiveFiniteFloat
+    mask_fade_range_deg: NonNegativeFiniteFloat
+
+
+class HysteresisPolicy(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    hysteresis: HysteresisParams
+
+
+class HardReleasePolicy(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    hard_release: dict = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _empty(self) -> HardReleasePolicy:
+        if self.hard_release:
+            raise ValueError("hard_release policy takes no parameters")
+        return self
+
+
+HandoverPolicy = HysteresisPolicy | HardReleasePolicy
+
+RankingComponent = Literal[
+    "service_priority",
+    "selection_score",
+    "per_gs_rank",
+    "satellite_ground_terminal_capacity",
+    "lex_pair",
+]
+
+
+class GroundScheduling(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    selection_policy: SelectionPolicy | None = None
+    handover_policy: HandoverPolicy | None = None
+    handover_mode: Literal["mbb", "bbm"] | None = None
+    mbb_overlap_ticks: NonNegativeInt | None = None
+    mbb_reserve: NonNegativeInt | None = None
+    handover_concurrency: Literal["one_at_a_time", "all_at_once"] | None = None
+    ranking_order: tuple[RankingComponent, ...] | None = None
+    mbb_preemption: Literal["off"] | None = None
+    successor_abort_policy: Literal["hard_release", "soft_retain"] | None = None
+    cross_tenant_displacement: Literal["off"] | None = None
+    bbm_acquire_timeout_ticks: NonNegativeInt | None = None
+
+    @model_validator(mode="after")
+    def _validate_scheduling(self) -> GroundScheduling:
+        if self.ranking_order is not None:
+            if len(set(self.ranking_order)) != len(self.ranking_order):
+                raise ValueError("ranking_order must not contain duplicates")
+            if self.ranking_order[-1] != "lex_pair":
+                raise ValueError("ranking_order must end with lex_pair")
+        return self
+
+
+class GroundApply(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    scheduling: GroundScheduling | None = None
+    originated_prefixes: OriginatedPrefixes | None = None
+    tags: tuple[Identifier, ...] | None = None
+
+    @model_validator(mode="after")
+    def _unique_tags(self) -> GroundApply:
+        TagsMixin._validate_unique_tags(self.tags)
+        return self
+
+
+class GroundOverrideMatch(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    site: Identifier
+
+
+class GroundOverride(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    match: GroundOverrideMatch
+    tags: tuple[Identifier, ...] | None = None
+    scheduling: GroundScheduling | None = None
+    originated_prefixes: OriginatedPrefixes | None = None
+
+    @model_validator(mode="after")
+    def _unique_tags(self) -> GroundOverride:
+        TagsMixin._validate_unique_tags(self.tags)
+        return self
+
+
+class GroundPlacement(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    from_site_set: CatalogObject
+
+
+class SpaceSegment(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    id: Identifier
+    display_name: str | None = None
+    tags: tuple[Identifier, ...] | None = None
+    clock: SegmentClock | None = None
+    source: CatalogObject
+
+    @model_validator(mode="after")
+    def _unique_tags(self) -> SpaceSegment:
+        TagsMixin._validate_unique_tags(self.tags)
         return self
 
 
 class GroundSegment(BaseModel):
-    """A segment that references a ground station set or inline ground config."""
-
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     id: Identifier
-    kind: Literal["ground_set"]
-    # A path string, or an inline ground source. Inline ground sources are
-    # genuinely heterogeneous (a station-set file, a monolithic station file, or
-    # a name list per ``load_ground_stations``), so their structural validation is
-    # resolver-owned (the single ground-loading authority) rather than expressed
-    # as one lossy structural union here. See the grammar doc, "Ground Segment".
-    source: NonEmptyReference | dict
-    # Required for every node-producing segment; runtime node IDs are
-    # namespace-prefixed by the resolver.
-    reference_body: SupportedSurfaceBody | None = None
-    namespace: Namespace
     display_name: str | None = None
-    tags: list[Identifier] | None = None
-    scheduling: GroundSchedulingPolicy | None = None
+    tags: tuple[Identifier, ...] | None = None
+    clock: SegmentClock | None = None
+    placement: GroundPlacement
+    apply: GroundApply | None = None
+    overrides: tuple[GroundOverride, ...] | None = None
 
-
-# --- Space node segment (MVP runtime: Luna milestone) ---
+    @model_validator(mode="after")
+    def _validate_ground(self) -> GroundSegment:
+        TagsMixin._validate_unique_tags(self.tags)
+        if self.overrides is not None:
+            seen: set[str] = set()
+            for override in self.overrides:
+                site = override.match.site
+                if site in seen:
+                    raise ValueError(f"duplicate ground override for site {site!r}")
+                seen.add(site)
+        return self
 
 
 class StateVector(BaseModel):
-    """Explicit position/velocity state for a space node, in a named frame."""
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
-    model_config = ConfigDict(extra="forbid")
-
+    epoch: str
     frame: Identifier
     position_km: tuple[FiniteFloat, FiniteFloat, FiniteFloat]
     velocity_km_s: tuple[FiniteFloat, FiniteFloat, FiniteFloat]
 
 
-class ExplicitSpaceNode(BaseModel):
-    """One explicitly placed relay/spacecraft node."""
+class ConfiguredStateLagrange(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
-    model_config = ConfigDict(extra="forbid")
-
-    id: Identifier
-    satellite_type: Identifier | None = None
-    state: StateVector | OrbitalElements
-    tags: list[Identifier] | None = None
-    clock: SegmentClock | None = None
+    configured_state: StateVector
 
 
-class SpaceNodeSegment(BaseModel):
-    """A single explicitly placed relay/spacecraft node (MVP: one node)."""
+class ApproximateLagrange(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
-    model_config = ConfigDict(extra="forbid")
+    lagrange_approximation: dict = Field(default_factory=dict)
 
-    id: Identifier
-    kind: Literal["space_node"]
-    namespace: Namespace
-    # Required by the current runtime when node.state is orbital elements. StateVector
-    # space nodes are structurally valid but runtime-future until a common-frame
-    # fixed-state propagator is wired through OME/Node Agent.
-    central_body: FrameBodyName | None = None
-    satellite_type: Identifier
-    node: ExplicitSpaceNode
-    tags: list[Identifier] | None = None
+    @model_validator(mode="after")
+    def _empty(self) -> ApproximateLagrange:
+        if self.lagrange_approximation:
+            raise ValueError("lagrange_approximation takes no parameters")
+        return self
 
 
-class SpaceNodeSetSegment(BaseModel):
-    """Explicit group of space nodes. Structurally valid but runtime-future."""
+class ExternalEphemerisLagrange(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
-    model_config = ConfigDict(extra="forbid")
+    external_ephemeris: dict[str, NonEmptyReference]
 
-    id: Identifier
-    kind: Literal["space_node_set"]
-    namespace: Namespace
-    satellite_type: Identifier | None = None
-    nodes: list[ExplicitSpaceNode] = Field(min_length=1)
-    tags: list[Identifier] | None = None
-
-
-# --- Lagrange point segment (runtime-future) ---
+    @model_validator(mode="after")
+    def _path_only(self) -> ExternalEphemerisLagrange:
+        if set(self.external_ephemeris) != {"path"}:
+            raise ValueError("external_ephemeris requires only path")
+        return self
 
 
-class ConfiguredStateLagrangeEphemeris(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    model: Literal["configured_state"]
-    state: StateVector
-
-
-class LagrangeApproximationEphemeris(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    model: Literal["lagrange_approximation"]
-
-
-class ExternalLagrangeEphemeris(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    model: Literal["external_ephemeris"]
-    source: NonEmptyReference
-
-
-LagrangeEphemeris = Annotated[
-    ConfiguredStateLagrangeEphemeris | LagrangeApproximationEphemeris | ExternalLagrangeEphemeris,
-    Field(discriminator="model"),
-]
+LagrangeEphemeris = ConfiguredStateLagrange | ApproximateLagrange | ExternalEphemerisLagrange
+_LAGRANGE_EPHEMERIS_ADAPTER = TypeAdapter(LagrangeEphemeris)
 
 
 class LagrangeFrame(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
-    primary_body: FrameBodyName
-    secondary_body: FrameBodyName
-    point: LagrangePoint
-    ephemeris: LagrangeEphemeris
+    lagrange: dict[str, Any]
+
+    @model_validator(mode="after")
+    def _validate_frame(self) -> LagrangeFrame:
+        required = {"primary_body", "secondary_body", "point", "ephemeris"}
+        keys = set(self.lagrange)
+        if keys != required:
+            raise ValueError(f"lagrange frame keys must be {sorted(required)}")
+        if self.lagrange["point"] not in {"l1", "l2", "l3", "l4", "l5"}:
+            raise ValueError("lagrange point must be l1, l2, l3, l4, or l5")
+        _LAGRANGE_EPHEMERIS_ADAPTER.validate_python(self.lagrange["ephemeris"])
+        return self
 
 
-class LagrangePointSegment(BaseModel):
-    """One relay node anchored to a Lagrange point. Structurally valid, runtime-future."""
-
-    model_config = ConfigDict(extra="forbid")
+class LagrangeSegment(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     id: Identifier
-    kind: Literal["lagrange_point"]
-    namespace: Namespace
-    frame: LagrangeFrame
-    satellite_type: Identifier
     display_name: str | None = None
-    tags: list[Identifier] | None = None
+    tags: tuple[Identifier, ...] | None = None
     clock: SegmentClock | None = None
+    node: CatalogObject
+    frame: LagrangeFrame
+
+    @model_validator(mode="after")
+    def _unique_tags(self) -> LagrangeSegment:
+        TagsMixin._validate_unique_tags(self.tags)
+        return self
 
 
-# --- The Segment discriminated union ---
-
-Segment = Annotated[
-    ConstellationSegment
-    | GroundSegment
-    | SpaceNodeSegment
-    | SpaceNodeSetSegment
-    | LagrangePointSegment,
-    Field(discriminator="kind"),
-]
-
-# Segment kinds that produce runtime nodes (all of them, today).
-NODE_PRODUCING_KINDS: frozenset[str] = frozenset(
-    {"constellation", "ground_set", "space_node", "space_node_set", "lagrange_point"}
-)
+Segment = SpaceSegment | GroundSegment | LagrangeSegment

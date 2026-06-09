@@ -219,18 +219,29 @@ class TestDiscriminatedUnionDispatch:
             )
 
     def test_scenario_from_yaml_fixture(self):
-        """Load the isl-failure scenario YAML and verify step dispatch."""
-        from pathlib import Path
-
-        import yaml
-
-        fixture = (
-            Path(__file__).parent.parent.parent / "configs/scenarios/earth-leo-isl-failure.yaml"
-        )
-        if not fixture.exists():
-            pytest.skip("isl-failure.yaml not available")
-
-        data = yaml.safe_load(fixture.read_text())
+        """Validate a YAML-shaped scenario document and verify step dispatch."""
+        data = {
+            "scenario": {
+                "name": "earth-leo-isl-failure",
+                "description": "Inject one ISL failure and measure convergence.",
+                "steps": [
+                    {"action": "wait", "duration_s": 10.0},
+                    {
+                        "action": "inject_link_down",
+                        "node_a": "space-sat-p00s00",
+                        "node_b": "space-sat-p00s01",
+                    },
+                    {"action": "wait_converge"},
+                    {"action": "measure", "duration_s": 5.0},
+                    {
+                        "action": "inject_link_up",
+                        "node_a": "space-sat-p00s00",
+                        "node_b": "space-sat-p00s01",
+                    },
+                    {"action": "wait_converge"},
+                ],
+            }
+        }
         config = ScenarioConfig.model_validate(data["scenario"])
         assert len(config.steps) == 6
 

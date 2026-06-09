@@ -12,32 +12,22 @@ Runs against a real fixture constellation with hysteresis active.
 
 from __future__ import annotations
 
-from pathlib import Path
-
-import pytest
-from nodalarc.models.addressing import assign_isl_neighbors
-from nodalarc.resolve_session import load_session_resolution_from_file
 from ome.event_stream import build_step_context, compute_step
+
+from tests.conftest import load_runtime_ome_test_inputs
 
 
 def _load_test_session():
-    session_path = Path("configs/sessions/earth-leo-simple.yaml")
-    if not session_path.exists():
-        pytest.skip("earth-leo-simple.yaml not available")
-    resolution = load_session_resolution_from_file(session_path, origin="test.allocation_contract")
-    session = resolution.runtime_session
-    constellation_config = resolution.primary_constellation.config
-    gs_file = resolution.primary_ground_set.config
-    satellites = list(resolution.primary_constellation.satellites)
-    addressing = resolution.addressing
-    neighbors = assign_isl_neighbors(constellation_config, addressing)
+    session, _resolved, gs_file, satellites, addressing, neighbors, candidates = (
+        load_runtime_ome_test_inputs(origin="test.allocation_contract")
+    )
     return (
         session,
         gs_file,
         satellites,
         addressing,
         neighbors,
-        dict(resolution.ground_candidate_satellites_by_gs),
+        candidates,
     )
 
 
@@ -57,6 +47,7 @@ class TestAllocationContractInvariants:
             propagator_id=session.orbit.propagator,
             ground_scheduling=session.scheduling.ground,
             ground_candidate_satellites_by_gs=ground_candidates,
+            ground_link_model=session.ground_link_model,
         )
 
         isl_state: dict = {}
@@ -113,6 +104,7 @@ class TestAllocationContractInvariants:
             propagator_id=session.orbit.propagator,
             ground_scheduling=session.scheduling.ground,
             ground_candidate_satellites_by_gs=ground_candidates,
+            ground_link_model=session.ground_link_model,
         )
 
         isl_state: dict = {}
@@ -157,6 +149,7 @@ class TestAllocationContractInvariants:
             propagator_id=session.orbit.propagator,
             ground_scheduling=session.scheduling.ground,
             ground_candidate_satellites_by_gs=ground_candidates,
+            ground_link_model=session.ground_link_model,
         )
 
         # Run with hysteresis (stateful fold)

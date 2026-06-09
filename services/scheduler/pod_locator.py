@@ -2,11 +2,11 @@
 # Licensed under the Apache License, Version 2.0. See LICENSE file.
 """Pod location map — maps canonical node IDs to K3s nodes.
 
-IMPORTANT — case sensitivity contract:
-  All node IDs are derived from AddressingScheme (e.g., "sat-P01S02").
-  K8s pod names are lowercase ("sat-p01s02") and are NEVER used as node IDs.
-  The K8s label "nodalarc.io/node-id" carries the canonical case, set by
-  Helm at deploy time from the AddressingScheme output.
+IMPORTANT — node identity contract:
+  Runtime node IDs come from the resolved session. K8s pod names are sanitized
+  deployment names and are NEVER used as node IDs. The K8s label
+  "nodalarc.io/node-id" carries the canonical runtime node ID set by the
+  Operator from resolved session truth.
 
   This module reads the label value directly — it does not transform or
   derive node IDs from pod names. The canonical ID flows unchanged from

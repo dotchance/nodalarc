@@ -10,27 +10,74 @@ from nodalarc.models.ground_station import (
 )
 from pydantic import ValidationError
 
-from tests.conftest import CONFIGS_DIR, FIXTURES_DIR
+from tests.conftest import FIXTURES_DIR
+
+
+def _ground_station_file_data() -> dict:
+    return {
+        "default_min_elevation_deg": 25,
+        "default_selection_policy": {"name": "highest-elevation", "params": {}},
+        "default_terminals": [
+            {
+                "type": "rf",
+                "count": 2,
+                "bandwidth_mbps": 1000,
+                "tracking_capacity": 1,
+                "max_range_km": 2500,
+                "field_of_regard_deg": 120,
+                "max_tracking_rate_deg_s": 2.0,
+            }
+        ],
+        "default_terrestrial_prefixes": {
+            "ipv4_template": "172.16.{gs_index}.0/24",
+            "ipv6_template": "fd10::{gs_index}:0/112",
+            "metric": 10,
+        },
+        "stations": [
+            {"name": "hawthorne", "lat_deg": 33.9164, "lon_deg": -118.3526},
+            {"name": "ashburn", "lat_deg": 39.0438, "lon_deg": -77.4874},
+            {"name": "frankfurt", "lat_deg": 50.1109, "lon_deg": 8.6821},
+            {
+                "name": "polar-station",
+                "lat_deg": -77.85,
+                "lon_deg": 166.67,
+                "min_elevation_deg": 10,
+                "selection_policy": {"name": "lowest-elevation", "params": {}},
+                "terminals": [
+                    {
+                        "type": "optical",
+                        "count": 1,
+                        "bandwidth_mbps": 500,
+                        "tracking_capacity": 1,
+                        "max_range_km": 2500,
+                        "field_of_regard_deg": 120,
+                        "max_tracking_rate_deg_s": 2.0,
+                    }
+                ],
+                "terrestrial_prefixes": [
+                    {"prefix": "172.16.100.0/24", "metric": 50},
+                    {"prefix": "fd10::100:0/112", "metric": 50},
+                ],
+            },
+        ],
+    }
 
 
 class TestGroundStationFileLoading:
     def test_custom_example_loads(self):
-        data = yaml.safe_load((CONFIGS_DIR / "ground-stations/custom-example.yaml").read_text())
-        gs = GroundStationFile.model_validate(data)
+        gs = GroundStationFile.model_validate(_ground_station_file_data())
         assert len(gs.stations) == 4
         assert gs.default_min_elevation_deg == 25
         assert gs.default_selection_policy is not None
         assert gs.default_selection_policy.name == "highest-elevation"
 
     def test_station_names_unique(self):
-        data = yaml.safe_load((CONFIGS_DIR / "ground-stations/custom-example.yaml").read_text())
-        gs = GroundStationFile.model_validate(data)
+        gs = GroundStationFile.model_validate(_ground_station_file_data())
         names = [s.name for s in gs.stations]
         assert len(names) == len(set(names))
 
     def test_round_trip(self):
-        data = yaml.safe_load((CONFIGS_DIR / "ground-stations/custom-example.yaml").read_text())
-        gs = GroundStationFile.model_validate(data)
+        gs = GroundStationFile.model_validate(_ground_station_file_data())
         json_str = gs.model_dump_json()
         restored = GroundStationFile.model_validate_json(json_str)
         assert restored == gs
@@ -38,8 +85,7 @@ class TestGroundStationFileLoading:
 
 class TestDefaultPrefixTemplate:
     def test_template_present(self):
-        data = yaml.safe_load((CONFIGS_DIR / "ground-stations/custom-example.yaml").read_text())
-        gs = GroundStationFile.model_validate(data)
+        gs = GroundStationFile.model_validate(_ground_station_file_data())
         assert gs.default_terrestrial_prefixes is not None
         tpl = gs.default_terrestrial_prefixes
         assert tpl.ipv4_template == "172.16.{gs_index}.0/24"
@@ -57,8 +103,7 @@ class TestDefaultPrefixTemplate:
 
 class TestPolarStationOverrides:
     def test_polar_station(self):
-        data = yaml.safe_load((CONFIGS_DIR / "ground-stations/custom-example.yaml").read_text())
-        gs = GroundStationFile.model_validate(data)
+        gs = GroundStationFile.model_validate(_ground_station_file_data())
         polar = next(s for s in gs.stations if s.name == "polar-station")
 
         # Per-station overrides

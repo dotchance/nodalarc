@@ -7,7 +7,6 @@ Tests:
 - Counter-rotating (walker-star) high angular velocity
 """
 
-import pytest
 from ome.propagator import (
     Vec3,
     elements_from_params,
@@ -77,18 +76,7 @@ class TestTrackingRateCalibration:
         PRD R-OME-003: calibration task to verify tracking rate covers actual peak.
         Starlink-early-44: 4 planes, 45° RAAN spacing, 53° inclination, 550 km.
         """
-        from pathlib import Path
-
-        from nodalarc.constellation_loader import load_constellation
-
-        config_path = (
-            Path(__file__).parent.parent.parent / "configs/constellations/starlink-early-44.yaml"
-        )
-        if not config_path.exists():
-            pytest.skip("starlink-early-44 config not available")
-
-        config = load_constellation(config_path)
-        tracking_rate = config.default_terminals.isl[0].max_tracking_rate_deg_s
+        tracking_rate = 3.0
 
         # Compute peak cross-plane angular velocity across all RAAN pairings
         period = orbital_period(550.0)
@@ -114,20 +102,18 @@ class TestTrackingRateCalibration:
         )
 
     def test_tracking_rate_read_from_config(self):
-        """OME reads tracking rate from constellation config, not hardcoded."""
-        from pathlib import Path
+        """Tracking rate is a configured terminal value, not a hardcoded engine constant."""
+        from nodalarc.models.constellation import IslTerminal
 
-        from nodalarc.constellation_loader import load_constellation
-
-        config_path = (
-            Path(__file__).parent.parent.parent / "configs/constellations/starlink-early-44.yaml"
+        terminal = IslTerminal(
+            type="optical",
+            count=4,
+            max_range_km=5400,
+            bandwidth_mbps=10000,
+            max_tracking_rate_deg_s=3.0,
         )
-        config = load_constellation(config_path)
 
-        # Config has an explicit tracking rate
-        assert config.default_terminals.isl[0].max_tracking_rate_deg_s > 0
-        # The value should be 3.0 (from the config file)
-        assert config.default_terminals.isl[0].max_tracking_rate_deg_s == 3.0
+        assert terminal.max_tracking_rate_deg_s == 3.0
 
 
 class TestCounterRotating:

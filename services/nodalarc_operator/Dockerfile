@@ -44,7 +44,8 @@ COPY lib/ lib/
 # Copy operator service
 COPY services/nodalarc_operator/ services/nodalarc_operator/
 
-# Copy configs (FRR templates, satellite types, ground stations, etc.)
+# Copy deployment templates and static catalog data used by the resolver.
 COPY configs/ configs/
+COPY catalog/ catalog/
 
 CMD ["kopf", "run", "-m", "nodalarc_operator", "--namespace", "nodalarc", "--liveness=http://0.0.0.0:8090/healthz"]

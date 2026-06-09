@@ -3,6 +3,7 @@
 import json
 import sqlite3
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 import yaml
@@ -26,11 +27,10 @@ from nodalarc.models.vs_api import (
 from nodalarc.nats_channels import STREAM_OME_EVENTS
 from vs_api.session_context import SessionContext, _derive_link_type, _link_key
 
-from tests.conftest import build_segment_session_dict
-
 ISS_TLE_EPOCH = 1615896900.000275
 ISS_TLE_LINE_1 = "1 25544U 98067A   21075.51041667  .00001264  00000-0  29660-4 0  9993"
 ISS_TLE_LINE_2 = "2 25544  51.6442  21.5417 0002426  95.1670  21.8444 15.48974333273145"
+CATALOG_SESSION = Path("catalog/nodalarc/sessions/earth-leo-heo-geo-luna-reachability.yaml")
 
 
 class TestOpsEventVisibility:
@@ -97,15 +97,9 @@ class TestLinkTypeDerivation:
 
 
 def _session_yaml_text(name: str = "earth-leo-simple") -> str:
-    return yaml.dump(
-        build_segment_session_dict(
-            name=name,
-            constellation="configs/constellations/demo-36.yaml",
-            ground_stations="configs/ground-stations/sets/demo.yaml",
-            protocol="ospf",
-        ),
-        sort_keys=False,
-    )
+    raw = yaml.safe_load(CATALOG_SESSION.read_text(encoding="utf-8"))
+    raw["session"]["name"] = name
+    return yaml.dump(raw, sort_keys=False)
 
 
 def _constellation_cr(
@@ -318,26 +312,92 @@ class TestSessionContextNetworkIdentity:
 
         ctx = SessionContext("run-test-0001", str(session_path))
 
-        addresses = ctx._node_addresses_by_id["ground-gs-hawthorne"]
+        addresses = ctx._node_addresses_by_id["leo-a-ground-earth-us-co-denver-leo-gateway"]
         assert any(
-            a.purpose == "router_loopback" and a.family == "ipv4" and a.address == "10.255.0.1/32"
+            a.purpose == "router_loopback" and a.family == "ipv4" and a.address == "10.255.0.104/32"
             for a in addresses
         )
         assert any(
-            a.purpose == "site_prefix" and a.family == "ipv4" and a.address == "172.16.0.0/24"
+            a.purpose == "site_prefix" and a.family == "ipv4" and a.address == "172.16.99.0/24"
             for a in addresses
         )
         assert any(
             a.purpose == "site_interface"
-            and a.address == "172.16.0.1/24"
+            and a.address == "172.16.99.1/24"
             and a.interface == "terr0"
             for a in addresses
         )
-        assert ctx._node_primary_prefix_by_id["ground-gs-hawthorne"] == "172.16.0.0/24"
+        assert (
+            ctx._node_primary_prefix_by_id["leo-a-ground-earth-us-co-denver-leo-gateway"]
+            == "172.16.99.0/24"
+        )
+
+    def test_resolved_static_ground_nodes_survive_partial_ome_ephemeris(self):
+        ctx = SessionContext(
+            "run-test-0001",
+            "catalog/nodalarc/sessions/earth-leo-simple.yaml",
+        )
+        inactive_id = "ground-earth-us-co-denver-meo-gateway"
+        active_id = "ground-earth-us-co-denver-leo-gateway"
+
+        assert inactive_id in ctx.nodes
+        inactive = ctx.nodes[inactive_id]
+        assert inactive.node_type == "ground_station"
+        assert inactive.lat_deg == pytest.approx(39.7392)
+        assert inactive.lon_deg == pytest.approx(-104.9903)
+        assert inactive.prefix == "172.16.99.0/24"
+        assert any(
+            address.purpose == "router_loopback" and address.address == "10.255.0.105/32"
+            for address in inactive.addresses
+        )
+
+        ctx.cached_ephemeris_obj = SessionEphemeris(
+            epoch_id=0,
+            sim_time=datetime(2026, 6, 8, tzinfo=UTC),
+            epoch_unix=1780876800.0,
+            nodes={
+                active_id: EphemerisNodeFixed(
+                    lat_deg=39.7392,
+                    lon_deg=-104.9903,
+                    alt_km=1.609,
+                    segment_id="ground",
+                    local_node_id="earth-us-co-denver-leo-gateway",
+                    namespace="ground",
+                    tags=("leo_gateway",),
+                )
+            },
+        )
+
+        ctx._propagate_positions_from_time(datetime(2026, 6, 8, tzinfo=UTC).isoformat())
+
+        assert inactive_id in ctx.nodes
+        assert ctx.nodes[inactive_id] == inactive
+        assert active_id in ctx.nodes
 
 
 class TestStateSnapshot:
     """Test that SessionContext state manipulation produces correct snapshots."""
+
+    def test_state_endpoint_reports_transition_without_validation_error(self, monkeypatch):
+        import vs_api.main as m
+        from fastapi.testclient import TestClient
+
+        class FakeSessionManager:
+            status = "switching"
+            status_detail = "Waiting for session to deploy"
+
+        monkeypatch.setattr(m, "_API_KEY", "")
+        monkeypatch.setattr(m, "_active_context", None)
+        monkeypatch.setattr(m, "_session_manager", FakeSessionManager())
+
+        response = TestClient(m.app).get("/api/v1/state")
+
+        assert response.status_code == 503
+        assert response.json() == {
+            "error": "No active session",
+            "session_status": "switching",
+            "session_status_detail": "Waiting for session to deploy",
+        }
 
     def test_link_up_adds_to_state(self):
         ctx = SessionContext.__new__(SessionContext)

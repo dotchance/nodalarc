@@ -27,10 +27,10 @@ from pathlib import Path
 import yaml
 from jinja2 import Environment, FileSystemLoader
 from nodalarc.constants import LOG_FORMAT
-from nodalarc.models.addressing import compute_area_assignments
+from nodalarc.models.resolved_session import ResolvedNode, ResolvedRoutingDomain, ResolvedSession
 from nodalarc.resolve_session import load_session_resolution_from_file
-from nodalarc.stack_resolver import resolve_stack
-from nodalarc.template_vars import _constellation_dims, build_template_vars
+from nodalarc.stack_resolver import resolve_domain_stack
+from nodalarc.template_vars import build_template_vars_from_resolved
 
 log = logging.getLogger(__name__)
 
@@ -79,38 +79,16 @@ def reconfig(
 ) -> None:
     """Re-render and push configs to targeted nodes."""
     resolution = load_session_resolution_from_file(session_path, origin="na-reconfig")
-    if len(resolution.constellations) != 1:
-        raise RuntimeError(
-            "na_reconfig does not support multi-constellation sessions yet; "
-            "refusing partial config push"
-        )
-    session = resolution.runtime_session
-    constellation = resolution.primary_constellation.config
-    gs_file = resolution.primary_ground_set.config
-    addressing = resolution.addressing
-    satellites = list(resolution.primary_constellation.satellites)
-    resolved_stack = resolve_stack(session.routing.protocol, session.routing.extensions)
+    resolved = resolution.resolved
     sid_by_node = resolution.resolved.sid_index_by_node_id()
+    ground_index_by_node = _ground_index_by_node(resolved)
 
-    # Build config overrides from stack + session + --set + --vars-file
-    config_overrides = dict(resolved_stack.template_variables)
-    config_overrides.update(session.routing.config_overrides)
+    # Build config overrides from --set + --vars-file. Stack variables are
+    # merged per-node after the resolved routing domain is known.
+    config_overrides = {}
     config_overrides.update(_parse_set_args(set_args))
     if vars_file:
         config_overrides.update(yaml.safe_load(Path(vars_file).read_text()))
-
-    # Compute area assignments for target matching (empty if not configured)
-    pc, spp = _constellation_dims(constellation)
-    gs_names = [s.name for s in gs_file.stations]
-    area_assignments: dict[str, str] = {}
-    if session.routing.area_assignment is not None:
-        area_assignments = compute_area_assignments(
-            session.routing.area_assignment,
-            pc,
-            spp,
-            addressing,
-            gs_names,
-        )
 
     env = Environment(
         loader=FileSystemLoader(str(Path("configs/templates/frr").resolve())),
@@ -119,51 +97,46 @@ def reconfig(
 
     reconfigured = 0
 
-    # Process satellites
-    for sat in satellites:
-        node_id = addressing.sat_id(sat.plane, sat.slot)
-        area_id = area_assignments.get(node_id, "")
-        if not _match_target(target, node_id, "satellite", sat.plane, area_id):
+    for node in resolved.nodes:
+        if node.forwarding != "routed":
+            continue
+        domain = _routing_domain_for_node(resolved, node)
+        stack = resolve_domain_stack(domain)
+        stack_variables = dict(stack.template_variables)
+        stack_variables.update(config_overrides)
+        vars = build_template_vars_from_resolved(
+            resolved,
+            node.node_id,
+            stack_variables=stack_variables,
+            node_sid_index=sid_by_node.get(node.node_id),
+            gs_index=ground_index_by_node.get(node.node_id),
+        )
+        node_type = "satellite" if node.kind == "satellite" else "ground_station"
+        if not _match_target(target, node.node_id, node_type, node.plane, vars.get("area_id", "")):
             continue
 
-        vars = build_template_vars(
-            session=session,
-            constellation=constellation,
-            ground_stations=gs_file,
-            addressing=addressing,
-            node_type="satellite",
-            plane=sat.plane,
-            slot=sat.slot,
-            config_overrides=config_overrides,
-            neighbors=resolution.neighbors,
-            node_sid_index=sid_by_node[node_id],
-        )
-        _render_and_push(env, resolved_stack, node_id, vars)
-        reconfigured += 1
-
-    # Process ground stations
-    for i, station in enumerate(gs_file.stations):
-        node_id = addressing.gs_id(station.name)
-        area_id = area_assignments.get(node_id, "")
-        if not _match_target(target, node_id, "ground_station", None, area_id):
-            continue
-
-        vars = build_template_vars(
-            session=session,
-            constellation=constellation,
-            ground_stations=gs_file,
-            addressing=addressing,
-            node_type="ground_station",
-            gs_name=station.name,
-            gs_index=i,
-            config_overrides=config_overrides,
-            neighbors=resolution.neighbors,
-            node_sid_index=sid_by_node[node_id],
-        )
-        _render_and_push(env, resolved_stack, node_id, vars)
+        _render_and_push(env, stack, node.node_id, vars)
         reconfigured += 1
 
     log.info(f"Reconfigured {reconfigured} nodes")
+
+
+def _routing_domain_for_node(
+    resolved: ResolvedSession,
+    node: ResolvedNode,
+) -> ResolvedRoutingDomain:
+    domains = [domain for domain in resolved.routing_domains if node.node_id in domain.node_ids]
+    if len(domains) != 1:
+        raise ValueError(
+            f"node {node.node_id!r} must resolve to exactly one routing domain for reconfig; "
+            f"got {[domain.domain_id for domain in domains]}"
+        )
+    return domains[0]
+
+
+def _ground_index_by_node(resolved: ResolvedSession) -> dict[str, int]:
+    ground_ids = [node.node_id for node in resolved.nodes if node.kind == "ground_station"]
+    return {node_id: index for index, node_id in enumerate(ground_ids)}
 
 
 def _render_and_push(env, resolved_stack, node_id, vars):
@@ -245,50 +218,49 @@ def add_flow(session_path: str, flow_spec: str) -> None:
     records the flow in the session database.
     """
     resolution = load_session_resolution_from_file(session_path, origin="na-reconfig")
-    session = resolution.runtime_session
-    gs_file = resolution.primary_ground_set.config
-    addressing = resolution.addressing
+    resolved = resolution.resolved
 
     spec = _parse_flow_spec(flow_spec)
     from measurement import probe_client
-    from measurement.flow_manager import resolve_dst_ip, resolve_src_pod_ip
+    from measurement.flow_manager import ProbeFlowConfig, resolve_dst_ip, resolve_src_pod_ip
 
-    dst_ip = resolve_dst_ip(spec["dst"], gs_file, session, addressing)
-    src_pod_ip = resolve_src_pod_ip(spec["src"])
+    flow = ProbeFlowConfig(**spec)
+    dst_ip = resolve_dst_ip(flow.dst, resolved)
+    src_pod_ip = resolve_src_pod_ip(flow.src)
     if src_pod_ip is None:
-        log.error(f"Cannot resolve pod IP for {spec['src']}")
+        log.error(f"Cannot resolve pod IP for {flow.src}")
         sys.exit(1)
 
     probe_client.configure_flow(
         pod_ip=src_pod_ip,
-        flow_id=spec["flow_id"],
+        flow_id=flow.flow_id,
         dst_ip=dst_ip,
-        protocol=spec["protocol"],
-        bandwidth_kbps=spec["bandwidth_kbps"],
-        probe_type=spec["probe_type"],
+        protocol=flow.protocol,
+        bandwidth_kbps=flow.bandwidth_kbps,
+        probe_type=flow.probe_type,
     )
-    log.info(f"Added flow {spec['flow_id']}: {spec['src']} → {spec['dst']} ({dst_ip})")
+    log.info(f"Added flow {flow.flow_id}: {flow.src} -> {flow.dst} ({dst_ip})")
 
 
 def remove_flow(session_path: str, flow_id: str) -> None:
     """Remove a probe flow from a running session."""
     resolution = load_session_resolution_from_file(session_path, origin="na-reconfig")
-    gs_file = resolution.primary_ground_set.config
-    addressing = resolution.addressing
+    resolved = resolution.resolved
 
     # We need to find which GS pod this flow runs on.
     # Check all GS pods for the flow.
     from measurement import probe_client
     from measurement.flow_manager import resolve_src_pod_ip
 
-    for station in gs_file.stations:
-        gs_id = addressing.gs_id(station.name)
-        pod_ip = resolve_src_pod_ip(gs_id)
+    for node in resolved.nodes:
+        if node.kind != "ground_station":
+            continue
+        pod_ip = resolve_src_pod_ip(node.node_id)
         if pod_ip is None:
             continue
         try:
             probe_client.delete_flow(pod_ip, flow_id)
-            log.info(f"Removed flow {flow_id} from {gs_id}")
+            log.info(f"Removed flow {flow_id} from {node.node_id}")
             return
         except Exception:
             continue

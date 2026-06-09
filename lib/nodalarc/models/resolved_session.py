@@ -6,9 +6,7 @@ This module defines the authoritative object that the resolver will hand to OME,
 Scheduler, Operator, VS-API, MI, and coverage preview. The model self-defends the
 runtime truth it can validate locally: immutable config, concrete node identity,
 materialized terminal inventory, disjoint SID blocks, and resolved link-rule
-node sets. Consumer cutover happens in the resolver implementation; until that
-lands, existing services still consume the resolver's internal ``SessionConfig``
-runtime projection.
+node sets.
 """
 
 from typing import Literal
@@ -22,29 +20,49 @@ from nodalarc.models.link_rules import (
     LinkKind,
     LinkRuleConstraints,
     LinkTopology,
-    ProtocolBoundary,
     TerminalRole,
 )
-from nodalarc.models.segments import SegmentClock
-from nodalarc.models.session import (
-    AddressingConfig,
-    DispatchConfig,
-    GroundSchedulingConfig,
-    MiConfig,
-    ObservabilityConfig,
-    OrbitConfig,
-    PlacementConfig,
-    RoutingConfig,
-    SchedulingConfig,
+from nodalarc.models.segment_session import (
+    Addressing,
+    AreaAssignment,
+    Dispatch,
+    Routing,
     SessionMeta,
-    SimulationConfig,
-    TerrestrialLinkConfig,
+    Simulation,
     TimeConfig,
-    TrafficFlowConfig,
 )
+from nodalarc.models.segments import GroundScheduling, OriginatedPrefixes, SegmentClock
 
 NodeKind = Literal["satellite", "ground_station", "relay"]
 TerminalMediumLiteral = Literal["rf", "optical"]
+
+
+class ResolvedOrbitFacts(BaseModel):
+    """Runtime orbital facts for one resolved space node."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    orbit_id: NonEmptyReference
+    central_body: FrameBodyName
+    epoch: NonEmptyReference
+    propagator: Literal["two_body", "j2_mean_elements", "sgp4_tle"]
+    semi_major_axis_km: float = Field(gt=0, allow_inf_nan=False)
+    eccentricity: float = Field(ge=0, lt=1, allow_inf_nan=False)
+    inclination_deg: float = Field(allow_inf_nan=False)
+    raan_deg: float = Field(allow_inf_nan=False)
+    argument_of_perigee_deg: float = Field(allow_inf_nan=False)
+    mean_anomaly_deg: float = Field(allow_inf_nan=False)
+
+
+class ResolvedSurfacePosition(BaseModel):
+    """Fixed body-surface position for one placed node."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    body: SupportedSurfaceBody
+    lat_deg: float = Field(ge=-90, le=90, allow_inf_nan=False)
+    lon_deg: float = Field(ge=-180, le=180, allow_inf_nan=False)
+    alt_m: float = Field(allow_inf_nan=False)
 
 
 class ResolvedTerminalBlock(BaseModel):
@@ -63,7 +81,7 @@ class ResolvedTerminalBlock(BaseModel):
 
     terminal_id: NonEmptyReference
     owner_node_id: NonEmptyReference
-    endpoint_role: TerminalRole  # ground | isl | relay
+    endpoint_role: TerminalRole
     medium: TerminalMediumLiteral  # rf | optical
     source_terminal_id: NonEmptyReference | None = None
     link_role: NonEmptyReference | None = None
@@ -76,6 +94,112 @@ class ResolvedTerminalBlock(BaseModel):
     bandwidth_mbps: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     # Provenance for audit/debug only (e.g. "satellite_type:starlink-v2-laser#isl[0]").
     source_ref: NonEmptyReference
+
+
+class ResolvedInterfaceAddress(BaseModel):
+    """A numbered interface address set."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    ipv4: NonEmptyReference | None = None
+    ipv6: NonEmptyReference | None = None
+
+    @model_validator(mode="after")
+    def _has_family(self) -> ResolvedInterfaceAddress:
+        if self.ipv4 is None and self.ipv6 is None:
+            raise ValueError("interface address requires ipv4 and/or ipv6")
+        return self
+
+
+class ResolvedNodeInterfaces(BaseModel):
+    """Numbered interfaces authored by placement or allocated by the resolver."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    lo0: ResolvedInterfaceAddress
+    terr0: ResolvedInterfaceAddress | None = None
+
+
+class ResolvedWanInterface(BaseModel):
+    """Derived unnumbered WAN interface created from a terminal mount."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    name: NonEmptyReference
+    owner_node_id: NonEmptyReference
+    terminal_id: NonEmptyReference
+    borrows: Literal["lo0"] = "lo0"
+
+
+class ResolvedRoutingDomain(BaseModel):
+    """One routing domain after selector resolution."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    domain_id: NonEmptyReference
+    protocol: Literal["isis", "ospf", "bgp", "static"]
+    node_ids: tuple[NonEmptyReference, ...] = Field(min_length=1)
+    capabilities: tuple[NonEmptyReference, ...] = ()
+    area_assignment: AreaAssignment | None = None
+
+    @model_validator(mode="after")
+    def _unique_node_ids(self) -> ResolvedRoutingDomain:
+        if len(set(self.node_ids)) != len(self.node_ids):
+            raise ValueError(f"routing domain {self.domain_id!r} contains duplicate node ids")
+        return self
+
+
+class ResolvedEphemerisKernel(BaseModel):
+    """One ephemeris kernel after target references resolve to body IDs."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    id: NonEmptyReference
+    path: NonEmptyReference
+    sha256: NonEmptyReference | None = None
+    targets: tuple[FrameBodyName, ...] = Field(min_length=1)
+    frame: NonEmptyReference
+    coverage_start: NonEmptyReference | None = None
+    coverage_end: NonEmptyReference | None = None
+
+
+class ResolvedEphemeris(BaseModel):
+    """Resolved ephemeris manifest carried to runtime physics consumers."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    provider: Literal["skyfield_bsp", "spice_kernel_stack", "operator_supplied_spk"]
+    quality_tier: NonEmptyReference
+    kernels: tuple[ResolvedEphemerisKernel, ...] = Field(min_length=1)
+
+
+class ResolvedLinkCandidate(BaseModel):
+    """One declared static candidate pair with concrete runtime interfaces."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    rule_id: NonEmptyReference
+    kind: LinkKind
+    terminal_role: TerminalRole
+    terminal_medium: TerminalMediumLiteral | None = None
+    node_a: NonEmptyReference
+    node_b: NonEmptyReference
+    interface_a: NonEmptyReference
+    interface_b: NonEmptyReference
+    bandwidth_mbps: float = Field(gt=0, allow_inf_nan=False)
+    topology_mode: NonEmptyReference
+    priority: int = Field(ge=0)
+    endpoint_segments: tuple[NonEmptyReference, NonEmptyReference]
+
+    @model_validator(mode="after")
+    def _pair_is_not_self(self) -> ResolvedLinkCandidate:
+        if self.node_a == self.node_b:
+            raise ValueError(f"link candidate {self.rule_id!r} has identical endpoints")
+        return self
+
+    @property
+    def pair(self) -> tuple[str, str]:
+        return (self.node_a, self.node_b)
 
 
 class ResolvedNode(BaseModel):
@@ -99,8 +223,17 @@ class ResolvedNode(BaseModel):
     satellite_type: NonEmptyReference | None = None
     tenant_id: NonEmptyReference = "default"
     terminal_inventory: tuple[ResolvedTerminalBlock, ...] = ()
+    interfaces: ResolvedNodeInterfaces | None = None
+    wan_interfaces: tuple[ResolvedWanInterface, ...] = ()
+    orbit: ResolvedOrbitFacts | None = None
+    surface_position: ResolvedSurfacePosition | None = None
+    originated_prefixes: OriginatedPrefixes | None = None
+    forwarding: Literal["routed", "host", "bridge", "control_only"] | None = None
+    service_priority: int | None = Field(default=None, gt=0)
+    plane: int | None = Field(default=None, ge=0)
+    slot: int | None = Field(default=None, ge=0)
     # Complete resolved policy for ground stations; None for space nodes.
-    ground_scheduling: GroundSchedulingConfig | None = None
+    ground_scheduling: GroundScheduling | None = None
     clock: SegmentClock = SegmentClock()
 
     @model_validator(mode="after")
@@ -117,31 +250,28 @@ class ResolvedNode(BaseModel):
                     f"terminal {block.terminal_id!r} owner_node_id "
                     f"{block.owner_node_id!r} != node_id {self.node_id!r}"
                 )
-            if self.kind == "ground_station":
-                if block.endpoint_role != "ground":
-                    raise ValueError(
-                        f"ground station {self.node_id!r} terminal {block.terminal_id!r} "
-                        f"has non-ground endpoint_role {block.endpoint_role!r}"
-                    )
-                if block.tracking_capacity is None:
-                    raise ValueError(
-                        f"ground station {self.node_id!r} terminal {block.terminal_id!r} "
-                        "requires tracking_capacity"
-                    )
-            elif block.tracking_capacity is not None:
+            if block.tracking_capacity is None:
                 raise ValueError(
-                    f"non-ground node {self.node_id!r} terminal {block.terminal_id!r} "
-                    "must not set tracking_capacity"
+                    f"node {self.node_id!r} terminal {block.terminal_id!r} "
+                    "requires tracking_capacity"
                 )
         if self.kind == "ground_station":
             if self.reference_body is None:
                 raise ValueError(f"ground station {self.node_id!r} requires reference_body")
             if self.ground_scheduling is None:
                 raise ValueError(f"ground station {self.node_id!r} requires ground_scheduling")
+            if self.surface_position is None:
+                raise ValueError(f"ground station {self.node_id!r} requires surface_position")
         elif self.ground_scheduling is not None:
             raise ValueError(f"non-ground node {self.node_id!r} must not set ground_scheduling")
         if self.kind == "satellite" and self.central_body is None:
             raise ValueError(f"satellite {self.node_id!r} requires central_body")
+        if self.kind == "satellite" and self.orbit is None:
+            raise ValueError(f"satellite {self.node_id!r} requires orbit facts")
+        if self.kind != "satellite" and self.orbit is not None:
+            raise ValueError(f"non-satellite node {self.node_id!r} must not set orbit")
+        if self.kind != "satellite" and (self.plane is not None or self.slot is not None):
+            raise ValueError(f"non-satellite node {self.node_id!r} must not set plane/slot")
         return self
 
 
@@ -154,6 +284,7 @@ class ResolvedEndpoint(BaseModel):
     terminal_role: TerminalRole
     terminal_medium: TerminalMediumLiteral | None = None
     terminal_id: NonEmptyReference | None = None
+    min_elevation_deg: float | None = Field(default=None, ge=-90.0, le=90.0, allow_inf_nan=False)
     # Resolved runtime node IDs; a selector that matched zero nodes is invalid.
     node_ids: tuple[NonEmptyReference, ...] = Field(min_length=1)
 
@@ -176,29 +307,21 @@ class ResolvedLinkRule(BaseModel):
     endpoints: tuple[ResolvedEndpoint, ResolvedEndpoint]
     topology: LinkTopology
     constraints: LinkRuleConstraints | None = None
-    protocol_boundary: ProtocolBoundary | None = None
     tags: tuple[NonEmptyReference, ...] = ()
-
-    @model_validator(mode="after")
-    def _validate_endpoint_sets(self) -> ResolvedLinkRule:
-        left = set(self.endpoints[0].node_ids)
-        right = set(self.endpoints[1].node_ids)
-        overlap = sorted(left & right)
-        if overlap:
-            raise ValueError(f"link rule {self.rule_id!r} has node(s) on both endpoints: {overlap}")
-        return self
 
 
 class SidBlock(BaseModel):
-    """The disjoint segment-routing SID block allocated to one segment.
+    """The disjoint segment-routing SID block allocated to one routing domain.
 
-    Every supported session uses segment-namespaced identity, so each segment
-    owns a disjoint SID block and plane/slot are no longer globally meaningful.
+    Segment identity scopes node names; SR capability scopes SID allocation.
+    A session can have routed domains that do not run segment routing, and
+    those domains must not receive prefix-SID indices.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    segment_id: NonEmptyReference
+    domain_id: NonEmptyReference
+    node_ids: tuple[NonEmptyReference, ...] = Field(min_length=1)
     sid_start: int = Field(ge=0)
     sid_end: int = Field(ge=0)
 
@@ -206,9 +329,11 @@ class SidBlock(BaseModel):
     def _validate_range(self) -> SidBlock:
         if self.sid_end < self.sid_start:
             raise ValueError(
-                f"SID block for segment {self.segment_id!r} is reversed: "
+                f"SID block for routing domain {self.domain_id!r} is reversed: "
                 f"sid_end {self.sid_end} < sid_start {self.sid_start}"
             )
+        if len(set(self.node_ids)) != len(self.node_ids):
+            raise ValueError(f"SID block for routing domain {self.domain_id!r} has duplicate nodes")
         return self
 
 
@@ -232,51 +357,61 @@ class ResolvedSession(BaseModel):
     session: SessionMeta
     nodes: tuple[ResolvedNode, ...]
     link_rules: tuple[ResolvedLinkRule, ...]
+    link_candidates: tuple[ResolvedLinkCandidate, ...] = ()
+    routing_domains: tuple[ResolvedRoutingDomain, ...] = ()
     sid_blocks: tuple[SidBlock, ...]
-    # Reused session config surface (one orbit/routing/simulation/... contract).
-    simulation: SimulationConfig
-    orbit: OrbitConfig
-    routing: RoutingConfig
-    dispatch: DispatchConfig
-    scheduling: SchedulingConfig
-    addressing: AddressingConfig
-    observability: ObservabilityConfig
-    time: TimeConfig
-    placement: PlacementConfig
-    mi: MiConfig
-    traffic_flows: tuple[TrafficFlowConfig, ...] = ()
-    terrestrial_links: tuple[TerrestrialLinkConfig, ...] = ()
+    simulation: Simulation | None = None
+    routing: Routing | None = None
+    dispatch: Dispatch | None = None
+    addressing: Addressing | None = None
+    ephemeris: ResolvedEphemeris | None = None
+    time: TimeConfig | None = None
     source_context: SourceContext
 
     @model_validator(mode="after")
     def _validate_consistency(self) -> ResolvedSession:
-        if self.identity_mode is not IdentityMode.SEGMENT_NAMESPACED:
-            raise ValueError("ResolvedSession identity_mode must be segment_namespaced")
-
         ids = [n.node_id for n in self.nodes]
         if len(set(ids)) != len(ids):
             dupes = sorted({i for i in ids if ids.count(i) > 1})
             raise ValueError(f"duplicate runtime node_id(s): {dupes}")
         node_segment = {n.node_id: n.segment_id for n in self.nodes}
-        known_segments = set(node_segment.values())
 
-        seg_ids = [b.segment_id for b in self.sid_blocks]
-        if len(set(seg_ids)) != len(seg_ids):
-            raise ValueError("duplicate segment_id in sid_blocks")
-        ghost_blocks = sorted(s for s in seg_ids if s not in known_segments)
+        domain_ids = [domain.domain_id for domain in self.routing_domains]
+        if len(set(domain_ids)) != len(domain_ids):
+            dupes = sorted({d for d in domain_ids if domain_ids.count(d) > 1})
+            raise ValueError(f"duplicate routing domain id(s): {dupes}")
+        sr_domain_ids = {
+            domain.domain_id
+            for domain in self.routing_domains
+            if "segment_routing" in domain.capabilities
+        }
+        sid_domain_ids = [b.domain_id for b in self.sid_blocks]
+        if len(set(sid_domain_ids)) != len(sid_domain_ids):
+            raise ValueError("duplicate routing domain in sid_blocks")
+        ghost_blocks = sorted(s for s in sid_domain_ids if s not in sr_domain_ids)
         if ghost_blocks:
-            raise ValueError(f"sid_blocks name segment(s) with no resolved nodes: {ghost_blocks}")
-        missing_blocks = sorted(known_segments - set(seg_ids))
+            raise ValueError(
+                "sid_blocks name routing domain(s) without segment_routing capability: "
+                f"{ghost_blocks}"
+            )
+        missing_blocks = sorted(sr_domain_ids - set(sid_domain_ids))
         if missing_blocks:
-            raise ValueError(f"resolved segment(s) missing sid_blocks: {missing_blocks}")
+            raise ValueError(f"SR routing domain(s) missing sid_blocks: {missing_blocks}")
+        for block in self.sid_blocks:
+            missing = sorted(node_id for node_id in block.node_ids if node_id not in node_segment)
+            if missing:
+                raise ValueError(
+                    f"SID block for routing domain {block.domain_id!r} references "
+                    f"unknown node(s): {missing}"
+                )
         # SID blocks must be disjoint — overlapping ranges defeat per-segment SID
         # allocation and silently corrupt forwarding.
         ordered = sorted(self.sid_blocks, key=lambda b: b.sid_start)
         for prev, cur in zip(ordered, ordered[1:], strict=False):
             if cur.sid_start <= prev.sid_end:
                 raise ValueError(
-                    f"SID blocks overlap: {prev.segment_id!r} "
-                    f"[{prev.sid_start}..{prev.sid_end}] and {cur.segment_id!r} "
+                    f"SID blocks overlap: {prev.domain_id!r} "
+                    f"[{prev.sid_start}..{prev.sid_end}] and {cur.domain_id!r} "
                     f"[{cur.sid_start}..{cur.sid_end}]"
                 )
 
@@ -284,14 +419,6 @@ class ResolvedSession(BaseModel):
         if len(set(rule_ids)) != len(rule_ids):
             dupes = sorted({r for r in rule_ids if rule_ids.count(r) > 1})
             raise ValueError(f"duplicate link rule id(s): {dupes}")
-        flow_ids = [f.flow_id for f in self.traffic_flows]
-        if len(set(flow_ids)) != len(flow_ids):
-            dupes = sorted({f for f in flow_ids if flow_ids.count(f) > 1})
-            raise ValueError(f"duplicate traffic flow id(s): {dupes}")
-        link_pairs = [frozenset((t.station_a, t.station_b)) for t in self.terrestrial_links]
-        if len(set(link_pairs)) != len(link_pairs):
-            raise ValueError("duplicate terrestrial link station pair(s)")
-
         for rule in self.link_rules:
             for endpoint in rule.endpoints:
                 missing = [nid for nid in endpoint.node_ids if nid not in node_segment]
@@ -311,6 +438,34 @@ class ResolvedSession(BaseModel):
                         f"{endpoint.segment_id!r} contains node(s) from another "
                         f"segment: {foreign}"
                     )
+        candidate_pairs_by_rule: set[tuple[str, tuple[str, str]]] = set()
+        for candidate in self.link_candidates:
+            missing = [
+                node_id
+                for node_id in (candidate.node_a, candidate.node_b)
+                if node_id not in node_segment
+            ]
+            if missing:
+                raise ValueError(
+                    f"link candidate {candidate.rule_id!r} references unknown node(s): {missing}"
+                )
+            if candidate.rule_id not in rule_ids:
+                raise ValueError(
+                    f"link candidate references unknown link rule {candidate.rule_id!r}"
+                )
+            key = (candidate.rule_id, candidate.pair)
+            if key in candidate_pairs_by_rule:
+                raise ValueError(
+                    f"duplicate link candidate for rule {candidate.rule_id!r}: {candidate.pair}"
+                )
+            candidate_pairs_by_rule.add(key)
+
+        for domain in self.routing_domains:
+            missing = sorted(node_id for node_id in domain.node_ids if node_id not in node_segment)
+            if missing:
+                raise ValueError(
+                    f"routing domain {domain.domain_id!r} references unknown node(s): {missing}"
+                )
         return self
 
     def node_ids(self) -> tuple[str, ...]:
@@ -325,20 +480,47 @@ class ResolvedSession(BaseModel):
 
     def sid_index_by_node_id(self) -> dict[str, int]:
         """Return deterministic FRR prefix-SID indices for every resolved node."""
-        nodes_by_segment: dict[str, list[ResolvedNode]] = {}
-        for node in self.nodes:
-            nodes_by_segment.setdefault(node.segment_id, []).append(node)
-        block_by_segment = {block.segment_id: block for block in self.sid_blocks}
         result: dict[str, int] = {}
-        for segment_id, nodes in sorted(nodes_by_segment.items()):
-            block = block_by_segment[segment_id]
-            ordered_nodes = sorted(nodes, key=lambda node: node.node_id)
+        for block in sorted(self.sid_blocks, key=lambda item: item.domain_id):
+            ordered_nodes = tuple(sorted(block.node_ids))
             expected_count = block.sid_end - block.sid_start + 1
             if expected_count != len(ordered_nodes):
                 raise ValueError(
-                    f"SID block for segment {segment_id!r} has {expected_count} index(es) "
+                    f"SID block for routing domain {block.domain_id!r} has {expected_count} index(es) "
                     f"for {len(ordered_nodes)} node(s)"
                 )
-            for offset, node in enumerate(ordered_nodes):
-                result[node.node_id] = block.sid_start + offset
+            for offset, node_id in enumerate(ordered_nodes):
+                result[node_id] = block.sid_start + offset
         return result
+
+    def link_interface_map(self) -> dict[tuple[str, str], tuple[str, str]]:
+        """Return concrete interface names keyed by canonical node pair."""
+        return {
+            candidate.pair: (candidate.interface_a, candidate.interface_b)
+            for candidate in self.link_candidates
+        }
+
+    def link_bandwidth_map(self) -> dict[tuple[str, str], float]:
+        """Return concrete bottleneck bandwidth keyed by canonical node pair."""
+        return {candidate.pair: candidate.bandwidth_mbps for candidate in self.link_candidates}
+
+    def ground_candidate_satellites_by_gs(self) -> dict[str, tuple[str, ...]]:
+        """Return access candidate satellites keyed by ground station node id."""
+        ground_ids = {node.node_id for node in self.nodes if node.kind == "ground_station"}
+        satellite_ids = {node.node_id for node in self.nodes if node.kind == "satellite"}
+        result: dict[str, list[str]] = {}
+        for candidate in self.link_candidates:
+            if candidate.kind != "access":
+                continue
+            left_ground = candidate.node_a in ground_ids
+            right_ground = candidate.node_b in ground_ids
+            if left_ground == right_ground:
+                raise ValueError(
+                    f"access candidate {candidate.pair} must contain exactly one ground station"
+                )
+            gs_id = candidate.node_a if left_ground else candidate.node_b
+            sat_id = candidate.node_b if left_ground else candidate.node_a
+            if sat_id not in satellite_ids:
+                raise ValueError(f"access candidate {candidate.pair} has no satellite endpoint")
+            result.setdefault(gs_id, []).append(sat_id)
+        return {gs_id: tuple(sorted(set(sats))) for gs_id, sats in sorted(result.items())}

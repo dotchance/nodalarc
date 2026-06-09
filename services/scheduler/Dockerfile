@@ -2,8 +2,7 @@
 # changes to Node Agents via NATS request/reply.
 #
 # All session config comes from ConfigMap mounts at /etc/nodalarc/.
-# Static reference data (satellite types, ground stations, constellations)
-# is baked into the image.
+# Static catalog reference data is baked into the image.
 #
 # Build context must be the repo root:
 #   docker build -f services/scheduler/Dockerfile -t nodalarc/scheduler:latest .
@@ -46,10 +45,8 @@ COPY lib/ lib/
 # Copy scheduler service
 COPY services/scheduler/ services/scheduler/
 
-# Copy static reference configs
-COPY configs/satellite-types/ configs/satellite-types/
-COPY configs/ground-stations/ configs/ground-stations/
-COPY configs/constellations/ configs/constellations/
+# Copy static catalog reference data
+COPY catalog/ catalog/
 COPY configs/ephemerides/ configs/ephemerides/
 
 ENTRYPOINT ["python", "-m", "scheduler"]

@@ -2,9 +2,8 @@
 # Licensed under the Apache License, Version 2.0. See LICENSE file.
 """OME entry point — orchestration only, no logic.
 
-Loads configs via YAML + Pydantic, creates AddressingScheme,
-computes ISL neighbor assignments (frozen), calls precompute_timeline(),
-publishes events on NATS JetStream.
+Loads a resolved catalog session, builds OME physics inputs, calls
+precompute_timeline(), publishes events on NATS JetStream.
 """
 
 from __future__ import annotations
@@ -19,11 +18,8 @@ from typing import TYPE_CHECKING, NamedTuple
 
 from nodal.logging import configure as _configure_logging
 from nodal.logging import connect as _connect_logging
-from nodalarc.body_frames import body_frame_for
-from nodalarc.constellation_loader import SatelliteNode, satellite_node_id
-from nodalarc.link_metadata import LinkRuleMetadata, build_link_metadata_maps
-from nodalarc.models.addressing import AddressingScheme
-from nodalarc.models.constellation import ConstellationConfig
+from nodalarc.constellation_loader import SatelliteNode
+from nodalarc.link_metadata import LinkRuleMetadata
 from nodalarc.models.events import OpsEvent, PlaybackControlCommand, SchedulingCheckpoint
 from nodalarc.models.ground_station import GroundStationFile
 from nodalarc.models.ome_lifecycle import (
@@ -31,17 +27,20 @@ from nodalarc.models.ome_lifecycle import (
     MbbTeardownLifecycleDetails,
     OmeOpsCode,
 )
-from nodalarc.models.session import GroundSchedulingConfig, SessionConfig, resolve_session_epoch
+from nodalarc.models.resolved_session import ResolvedSession
+from nodalarc.models.session import GroundSchedulingConfig, resolve_session_epoch
 from nodalarc.nats_channels import MAX_TIME_ACCEL, MIN_TIME_ACCEL
+from nodalarc.ome_inputs import ResolvedAddressingView, build_ome_inputs_from_resolved
 from nodalarc.resolve_session import load_session_resolution_from_file
-from nodalarc.session_identity import require_session_run_id
-from nodalarc.tle import tle_age_days
+from nodalarc.session_identity import (
+    read_runtime_session_run_id_file,
+    require_resolved_session_run_id,
+)
 
 from ome.event_stream import (
     precompute_timeline,
     write_timeline_jsonl,
 )
-from ome.propagator import orbital_period_for_body
 from ome.types import MbbTeardownLifecycleEvent, MbbTeardownState
 
 if TYPE_CHECKING:
@@ -51,12 +50,12 @@ if TYPE_CHECKING:
 class _SessionBundle(NamedTuple):
     """All session-derived config needed by the OME pacing loop."""
 
-    session: SessionConfig
-    constellation_config: ConstellationConfig
-    gs_file: GroundStationFile
+    resolved: ResolvedSession
+    session_id: str
+    gs_file: GroundStationFile | None
     satellites: list[SatelliteNode]
     period: float
-    addressing: AddressingScheme
+    addressing: ResolvedAddressingView
     neighbors: frozenset
     polar_seam_enabled: bool
     latitude_threshold_deg: float
@@ -65,6 +64,8 @@ class _SessionBundle(NamedTuple):
     bandwidth_map: dict[tuple[str, str], float]
     rule_map: dict[tuple[str, str], LinkRuleMetadata]
     ground_candidate_satellites_by_gs: dict[str, tuple[str, ...]]
+    ground_scheduling: GroundSchedulingConfig
+    ground_link_model: str
     node_metadata: dict[str, dict[str, object]]
     body_ephemeris: object | None
     active_bodies: frozenset[str]
@@ -118,110 +119,60 @@ def _checkpoint_ground_sat_pair(
     return pair if a_is_ground else (pair[1], pair[0])
 
 
-def _load_session_config(session_path: str | Path) -> _SessionBundle:
+def _load_session_config(session_path: str | Path, *, run_id: str) -> _SessionBundle:
     """Load and validate all session config. Pure — no side effects."""
-    from nodalarc.models.constellation import ParametricConstellation, TLEConstellation
-
-    resolution = load_session_resolution_from_file(session_path, origin="ome")
-    session = resolution.runtime_session
-    constellation_config = resolution.runtime_constellation
-    gs_file = resolution.primary_ground_set.config
-    satellites = list(resolution.satellites)
-    if not satellites:
-        raise ValueError("No satellites in constellation")
-    if session.orbit.propagator == "sgp4-tle" and not isinstance(
-        constellation_config, TLEConstellation
-    ):
-        raise ValueError(
-            "orbit.propagator='sgp4-tle' requires constellation.mode='tle'; "
-            "OME will not approximate a non-TLE source as SGP4"
-        )
-    if (
-        isinstance(constellation_config, TLEConstellation)
-        and session.orbit.propagator != "sgp4-tle"
-    ):
-        raise ValueError(
-            "constellation.mode='tle' requires orbit.propagator='sgp4-tle'; "
-            "OME will not downgrade TLEs into circular elements"
-        )
-
-    period = max(
-        orbital_period_for_body(sat.elements, body_frame_for(getattr(sat, "central_body", "earth")))
-        for sat in satellites
-    )
-    addressing = resolution.addressing
-    neighbors = resolution.neighbors
-
+    resolution = load_session_resolution_from_file(session_path, origin="ome", run_id=run_id)
+    resolved = resolution.resolved
+    if resolved.time is None:
+        raise ValueError("OME requires catalog session time")
+    if resolved.dispatch is None:
+        raise ValueError("OME requires catalog session dispatch")
+    runtime = build_ome_inputs_from_resolved(resolved)
     polar_seam_enabled = False
     latitude_threshold_deg = 70.0
 
-    for asset in resolution.constellations:
-        if isinstance(asset.config, ParametricConstellation) and asset.config.polar_seam:
-            polar_seam_enabled = polar_seam_enabled or asset.config.polar_seam.enabled
-            latitude_threshold_deg = max(
-                latitude_threshold_deg,
-                asset.config.polar_seam.latitude_threshold_deg,
-            )
-
-    metadata = build_link_metadata_maps(
-        session,
-        addressing,
-        constellation=constellation_config,
-        satellites=satellites,
-        gs_file=gs_file,
-        neighbors=neighbors,
-        ground_candidate_satellites_by_gs=resolution.ground_candidate_satellites_by_gs,
-        declared_candidates=resolution.declared_candidates,
-    )
-
     return _SessionBundle(
-        session=session,
-        constellation_config=constellation_config,
-        gs_file=gs_file,
-        satellites=satellites,
-        period=period,
-        addressing=addressing,
-        neighbors=neighbors,
+        resolved=resolved,
+        session_id=require_resolved_session_run_id(resolved),
+        gs_file=runtime.gs_file,
+        satellites=runtime.satellites,
+        period=runtime.period,
+        addressing=runtime.addressing,
+        neighbors=runtime.neighbors,
         polar_seam_enabled=polar_seam_enabled,
         latitude_threshold_deg=latitude_threshold_deg,
-        propagator_id=session.orbit.propagator,
-        interface_map=metadata.interface_map,
-        bandwidth_map=metadata.bandwidth_map,
-        rule_map=metadata.rule_map,
-        ground_candidate_satellites_by_gs=dict(resolution.ground_candidate_satellites_by_gs),
-        node_metadata={
-            node.node_id: {
-                "segment_id": node.segment_id,
-                "local_node_id": node.local_node_id,
-                "namespace": node.namespace,
-                "tags": tuple(node.tags),
-                "reference_body": node.reference_body or node.central_body or "earth",
-                "frame_id": node.frame_id,
-            }
-            for node in resolution.resolved.nodes
-        },
-        body_ephemeris=resolution.body_ephemeris,
-        active_bodies=resolution.active_bodies,
+        propagator_id=runtime.propagator_id,
+        interface_map=runtime.interface_map,
+        bandwidth_map=runtime.bandwidth_map,
+        rule_map=runtime.rule_map,
+        ground_candidate_satellites_by_gs=runtime.ground_candidate_satellites_by_gs,
+        ground_scheduling=runtime.ground_scheduling,
+        ground_link_model=runtime.ground_link_model,
+        node_metadata=runtime.node_metadata,
+        body_ephemeris=runtime.body_ephemeris,
+        active_bodies=runtime.active_bodies,
     )
 
 
-def _enforce_ground_link_model_contract(session: SessionConfig) -> None:
+def _enforce_ground_link_model_contract(ground_link_model: str) -> None:
     """Fail before OME run if geometry-only physics is not explicitly acknowledged."""
-    if session.simulation.ground_link_model != "geometry_only":
+    if ground_link_model != "geometry_only":
         return
-    if not session.simulation.acknowledge_geometry_only:
-        raise ValueError(
-            "simulation.ground_link_model=geometry_only requires "
-            "simulation.acknowledge_geometry_only: true. Ground links would "
-            "otherwise run without range, field-of-regard, or tracking-rate checks."
-        )
     logging.warning(
-        "simulation.ground_link_model=geometry_only: ground links use LOS/elevation only; "
-        "range, field-of-regard, and tracking-rate constraints are not enforced"
+        "catalog OME ground_link_model=geometry_only: ground links use LOS/elevation and "
+        "declared candidates; terminal range, field-of-regard, and tracking-rate checks are "
+        "not enforced until resolved terminal-physics inputs are wired"
     )
 
 
-def _effective_ground_scheduling_for_runtime(session: SessionConfig) -> GroundSchedulingConfig:
+def _read_runtime_run_id_file(path: Path) -> str:
+    """Read the operator-owned runtime lineage sidecar."""
+    return read_runtime_session_run_id_file(path)
+
+
+def _effective_ground_scheduling_for_runtime(
+    ground_scheduling: GroundSchedulingConfig,
+) -> GroundSchedulingConfig:
     """Return the session-root ground scheduling defaults used by OME.
 
     MBB/BBM capability is resolved per ground station. A single-terminal station
@@ -229,43 +180,26 @@ def _effective_ground_scheduling_for_runtime(session: SessionConfig) -> GroundSc
     still explicitly choose BBM. This helper only keeps the fail-loud global guard
     for future multi-overlap MBB values that the current allocator cannot honor.
     """
-    ground = session.scheduling.ground
     # BIG HONESTY NOTE / MBB-002:
     # The runtime must not accept a reserve value that the allocator cannot honor.
     # `mbb_reserve > 1` means multi-overlap MBB; today we only support one overlap
     # per GS. Remove this guard only when MBB-002 adds multi-overlap allocator state
     # and proves it.
-    if ground.mbb_reserve > 1:
+    if ground_scheduling.mbb_reserve > 1:
         raise RuntimeError(
             "scheduling.ground.mbb_reserve > 1 requires future MBB-002 multi-overlap "
             "allocator support; current OME supports at most one concurrent MBB "
             "overlap per ground station"
         )
-    return ground
+    return ground_scheduling
 
 
 def _validate_sgp4_tle_freshness(cfg: _SessionBundle, epoch_unix: float) -> None:
     """Fail before dispatch if a selected SGP4 source violates its age budget."""
-    if cfg.session.orbit.propagator != "sgp4-tle":
+    if cfg.propagator_id != "sgp4-tle":
         return
 
-    max_age_days = cfg.session.orbit.tle_max_age_days
-    if max_age_days is None:
-        raise ValueError("orbit.tle_max_age_days is required for SGP4/TLE sessions")
-
-    stale: list[str] = []
-    for sat in cfg.satellites:
-        node_id = satellite_node_id(sat, cfg.addressing)
-        if sat.tle_line_1 is None or sat.tle_line_2 is None:
-            raise ValueError(f"Satellite {node_id} has no TLE record for SGP4 propagation")
-        age_days = tle_age_days(sat.tle_line_1, epoch_unix)
-        if age_days > max_age_days:
-            stale.append(f"{node_id} NORAD {sat.norad_id} age {age_days:.2f}d")
-
-    if stale:
-        raise ValueError(
-            f"TLE age exceeds orbit.tle_max_age_days={max_age_days:g}: {', '.join(stale[:5])}"
-        )
+    raise ValueError("catalog OME SGP4/TLE runtime inputs are not implemented")
 
 
 def _authority_snapshot_interval_s(
@@ -400,13 +334,13 @@ async def _handle_playback_control_command(
     }
 
 
-def run(session_path: str, output_dir: str | None = None) -> Path:
+def run(session_path: str, output_dir: str | None = None, *, run_id: str) -> Path:
     """Run the OME pipeline (single window, batch mode) and return the output path."""
-    cfg = _load_session_config(session_path)
-    _enforce_ground_link_model_contract(cfg.session)
-    epoch_unix = resolve_session_epoch(cfg.session.time)
+    cfg = _load_session_config(session_path, run_id=run_id)
+    _enforce_ground_link_model_contract(cfg.ground_link_model)
+    epoch_unix = resolve_session_epoch(cfg.resolved.time)
     _validate_sgp4_tle_freshness(cfg, epoch_unix)
-    effective_ground_scheduling = _effective_ground_scheduling_for_runtime(cfg.session)
+    effective_ground_scheduling = _effective_ground_scheduling_for_runtime(cfg.ground_scheduling)
     events = precompute_timeline(
         satellites=cfg.satellites,
         addressing=cfg.addressing,
@@ -415,18 +349,18 @@ def run(session_path: str, output_dir: str | None = None) -> Path:
         epoch_unix=epoch_unix,
         duration_s=cfg.period,
         propagator_id=cfg.propagator_id,
-        step_seconds=cfg.session.time.step_seconds,
+        step_seconds=int(cfg.resolved.time.step_seconds),
         ground_scheduling=effective_ground_scheduling,
         polar_seam_enabled=cfg.polar_seam_enabled,
         latitude_threshold_deg=cfg.latitude_threshold_deg,
-        ground_link_model=cfg.session.simulation.ground_link_model,
+        ground_link_model=cfg.ground_link_model,
         ground_candidate_satellites_by_gs=cfg.ground_candidate_satellites_by_gs,
         body_ephemeris=cfg.body_ephemeris,
         active_bodies=cfg.active_bodies,
     )
 
     out_dir = Path(output_dir) if output_dir else Path("output")
-    out_path = out_dir / f"{cfg.session.session.name}-timeline.jsonl"
+    out_path = out_dir / f"{cfg.resolved.session.name}-timeline.jsonl"
     write_timeline_jsonl(events, out_path)
 
     logging.info(
@@ -704,6 +638,7 @@ def _run_pacing(
     event_queue,
     shutdown_event,
     preloaded_cfg: _SessionBundle | None = None,
+    run_id: str | None = None,
 ) -> None:
     """Pacing loop — synchronous, dedicated thread, wall-clock precise.
 
@@ -811,9 +746,11 @@ def _run_pacing(
         while not session_file.is_file():
             logging.debug("Waiting for session config at %s...", session_path)
             time.sleep(5)
-        cfg = _load_session_config(session_path)
-    session = cfg.session
-    session_id = require_session_run_id(session)
+        if run_id is None:
+            raise RuntimeError("OME pacing requires operator-owned runtime session run-id")
+        cfg = _load_session_config(session_path, run_id=run_id)
+    session = cfg.resolved
+    session_id = cfg.session_id
     period = cfg.period
     epoch_unix = resolve_session_epoch(session.time)
     _validate_sgp4_tle_freshness(cfg, epoch_unix)
@@ -1018,7 +955,7 @@ def _run_pacing(
 
     from ome.event_stream import build_step_context, compute_step
 
-    effective_ground_scheduling = _effective_ground_scheduling_for_runtime(session)
+    effective_ground_scheduling = _effective_ground_scheduling_for_runtime(cfg.ground_scheduling)
 
     step_ctx = build_step_context(
         satellites=cfg.satellites,
@@ -1029,7 +966,7 @@ def _run_pacing(
         polar_seam_enabled=cfg.polar_seam_enabled,
         latitude_threshold_deg=cfg.latitude_threshold_deg,
         ground_scheduling=effective_ground_scheduling,
-        ground_link_model=session.simulation.ground_link_model,
+        ground_link_model=cfg.ground_link_model,
         ground_defaults_applied=True,
         ground_candidate_satellites_by_gs=cfg.ground_candidate_satellites_by_gs,
         node_metadata=cfg.node_metadata,
@@ -1037,7 +974,7 @@ def _run_pacing(
         active_bodies=cfg.active_bodies,
     )
 
-    step_seconds = session.time.step_seconds
+    step_seconds = int(session.time.step_seconds)
     snapshot_interval_s = _authority_snapshot_interval_s(
         platform_snapshot_interval_s=platform_snapshot_interval_s,
         max_latency_age_ticks=session.dispatch.max_latency_age_ticks,
@@ -1621,6 +1558,11 @@ def main() -> None:
     parser.add_argument(
         "--platform-config", default="configs/platform.yaml", help="Path to platform config YAML"
     )
+    parser.add_argument(
+        "--session-run-id-file",
+        default="/etc/nodalarc/session_run_id",
+        help="Path to operator-owned runtime session run-id sidecar",
+    )
     args = parser.parse_args()
 
     from nodalarc.platform_config import init_platform_config
@@ -1628,7 +1570,11 @@ def main() -> None:
     init_platform_config(Path(args.platform_config))
 
     if not args.continuous:
-        run(args.session, args.output_dir)
+        run(
+            args.session,
+            args.output_dir,
+            run_id=_read_runtime_run_id_file(Path(args.session_run_id_file)),
+        )
         return
 
     # --- Continuous mode: producer-consumer with two threads ---
@@ -1650,8 +1596,9 @@ def main() -> None:
     while not session_file.is_file():
         logging.debug("Waiting for session config at %s...", args.session)
         time.sleep(5)
-    pre_cfg = _load_session_config(args.session)
-    session_id = require_session_run_id(pre_cfg.session)
+    run_id = _read_runtime_run_id_file(Path(args.session_run_id_file))
+    pre_cfg = _load_session_config(args.session, run_id=run_id)
+    session_id = pre_cfg.session_id
     from nodal.logging import set_session
 
     set_session(session_id)

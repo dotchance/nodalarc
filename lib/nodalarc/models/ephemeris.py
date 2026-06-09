@@ -9,7 +9,7 @@ files is forbidden — kernels are local, checksum-verified, and must cover the
 session time window.
 """
 
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
@@ -17,7 +17,7 @@ from nodalarc.body_frames import FrameBodyName
 from nodalarc.models.segments import Identifier
 
 EphemerisProvider = Literal["skyfield_bsp", "spice_kernel_stack", "operator_supplied_spk"]
-EphemerisQualityTier = Literal["jpl_de_bsp", "spice_kernel_stack", "operator_supplied_spk"]
+EphemerisQualityTier = Annotated[str, Field(min_length=1)]
 
 
 class EphemerisKernel(BaseModel):

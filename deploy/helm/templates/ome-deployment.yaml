@@ -14,6 +14,8 @@ spec:
     metadata:
       labels:
         app: nodalarc-ome
+      annotations:
+        checksum/platform-config: {{ .Files.Get "files/platform.yaml" | sha256sum | quote }}
     spec:
 {{- if .Values.controlPlaneNode }}
       nodeSelector:
@@ -92,6 +94,8 @@ spec:
             - "--continuous"
             - "--platform-config"
             - "/etc/nodalarc/platform.yaml"
+            - "--session-run-id-file"
+            - "/etc/nodalarc/session_run_id"
             - "/etc/nodalarc/session.yaml"
           ports:
             - containerPort: 8081
@@ -121,6 +125,9 @@ spec:
             - name: session-config
               mountPath: /etc/nodalarc/session.yaml
               subPath: session.yaml
+            - name: session-config
+              mountPath: /etc/nodalarc/session_run_id
+              subPath: session_run_id
             - name: constellation-config
               mountPath: /etc/nodalarc/constellation.yaml
               subPath: constellation.yaml

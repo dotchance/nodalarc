@@ -8,9 +8,10 @@ Loads from configs/platform.yaml. No fallback defaults in Python code.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class PlatformConfig(BaseModel):
@@ -44,6 +45,7 @@ class PlatformConfig(BaseModel):
     deploy_daemon_unix_socket_path: str
 
     # Container filesystem paths
+    session_data_root: str
     frr_config_directory_in_container: str
     frr_config_ready_sentinel_path: str
 
@@ -63,6 +65,12 @@ class PlatformConfig(BaseModel):
 
     # VS-API operational limits
     vs_api_max_websocket_connections: int
+    vs_api_visual_beam_falloff_exponent: float = Field(gt=0)
+    vs_api_actuation_expected_latency_ms: float = Field(gt=0)
+    vs_api_actuation_fault_after_ms: float = Field(gt=0)
+    scheduler_clean_kernel_audit_interval_s: float = Field(gt=0)
+    default_session_pod_placement_policy: Literal["allOnOne", "planePerNode", "planeGroupPerNode"]
+    default_session_pod_planes_per_group: int = Field(gt=0)
     vs_api_introspect_max_requests_per_minute: int
     vs_api_playback_max_requests_per_minute: int
     vs_api_session_switch_max_requests_per_minute: int
@@ -87,6 +95,14 @@ class PlatformConfig(BaseModel):
     def service_host(self, service: str) -> str:
         """Resolve hostname for a named service, falling back to default."""
         return self.service_hosts.get(service, self.default_service_host)
+
+    @model_validator(mode="after")
+    def _validate_actuation_bounds(self) -> PlatformConfig:
+        if self.vs_api_actuation_fault_after_ms <= self.vs_api_actuation_expected_latency_ms:
+            raise ValueError(
+                "vs_api_actuation_fault_after_ms must exceed vs_api_actuation_expected_latency_ms"
+            )
+        return self
 
 
 # --- Module-level singleton ---

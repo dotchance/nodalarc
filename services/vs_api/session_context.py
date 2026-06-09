@@ -45,9 +45,8 @@ from nodalarc.models.decision_explanation import (
     PendingActuation,
 )
 from nodalarc.models.link_decisions import GroundLinkDecisionSnapshot
-from nodalarc.models.resolved_session import SourceContext
+from nodalarc.models.resolved_session import ResolvedNode, SourceContext
 from nodalarc.models.scheduler_ops import ActualLinkSnapshot, ActuationState, parse_actuation_state
-from nodalarc.models.session import SessionConfig
 from nodalarc.models.vs_api import (
     AlmanacState,
     LinkDecisionTrace,
@@ -75,6 +74,7 @@ from nodalarc.nats_channels import (
     playback_state_subject,
     session_ephemeris_subject,
 )
+from nodalarc.platform_config import get_platform_config
 from nodalarc.resolve_session import resolve_session_with_assets
 from pydantic import ValidationError
 
@@ -111,27 +111,32 @@ class SessionContext:
             session_data,
             source_context=SourceContext(origin="vs_api.session_context"),
         )
-        session = resolution.runtime_session
-        ext_str = "-".join(session.routing.extensions) if session.routing.extensions else "plain"
-        self.routing_stack = f"{session.routing.protocol}-{ext_str}"
-        self.constellation_name = session.session.name
+        resolved = resolution.resolved
+        platform = self._platform_config()
+        self.routing_stack = self._routing_label(resolved)
+        self.constellation_name = resolved.session.name
 
         # Load GS elevation map and beam falloff
-        self.gs_elevation_map: dict[str, float] = self._load_gs_elevation_map(
-            resolution.primary_ground_set.config, resolution.addressing
-        )
+        self.gs_elevation_map: dict[str, float] = self._load_gs_elevation_map(resolved)
         (
             self._node_addresses_by_id,
             self._node_primary_prefix_by_id,
         ) = self._build_node_network_identity_map(resolution)
-        self.beam_falloff_exponent: float = self._load_beam_falloff_exponent(session)
+        self._resolved_static_nodes_by_id = self._build_resolved_static_node_states(
+            resolved,
+            addresses_by_id=self._node_addresses_by_id,
+            primary_prefix_by_id=self._node_primary_prefix_by_id,
+            min_elevation_by_id=self.gs_elevation_map,
+        )
+        self.beam_falloff_exponent: float = platform.vs_api_visual_beam_falloff_exponent
 
         # Wall-clock actuation-latency contract (simulation.actuation) — the
         # in_flight -> faulted bound the explanation composer carries.
-        self.actuation_expected_latency_ms: float = session.simulation.actuation.expected_latency_ms
-        self.actuation_fault_after_ms: float = session.simulation.actuation.fault_after_ms
+        self.actuation_expected_latency_ms: float = platform.vs_api_actuation_expected_latency_ms
+        self.actuation_fault_after_ms: float = platform.vs_api_actuation_fault_after_ms
 
         self._init_runtime_state()
+        self._seed_resolved_static_nodes()
 
     def _init_runtime_state(self) -> None:
         """Initialize all runtime state fields. Called by __init__ and
@@ -144,6 +149,8 @@ class SessionContext:
             self._node_addresses_by_id = {}
         if not hasattr(self, "_node_primary_prefix_by_id"):
             self._node_primary_prefix_by_id = {}
+        if not hasattr(self, "_resolved_static_nodes_by_id"):
+            self._resolved_static_nodes_by_id = {}
         self.nodes: dict[str, NodeState] = {}
         self.links: dict[str, LinkState] = {}
         self.link_decision_traces: dict[str, LinkDecisionTrace] = {}
@@ -208,6 +215,7 @@ class SessionContext:
         self.gs_elevation_map = {}
         self._node_addresses_by_id = {}
         self._node_primary_prefix_by_id = {}
+        self._resolved_static_nodes_by_id = {}
         self.beam_falloff_exponent = 2.0
         self.actuation_expected_latency_ms = 250.0
         self.actuation_fault_after_ms = 1200.0
@@ -1396,20 +1404,49 @@ class SessionContext:
             self.network_health = self.network_health.model_copy(update={"status": "converged"})
 
     @staticmethod
-    def _load_gs_elevation_map(gs_file, addressing) -> dict[str, float]:
+    def _routing_label(resolved) -> str:
+        routing = resolved.routing
+        if routing is None or not routing.domains:
+            return "unrouted"
+        return " + ".join(f"{domain.id}:{domain.protocol}" for domain in routing.domains)
+
+    @staticmethod
+    def _platform_config():
+        return get_platform_config()
+
+    @staticmethod
+    def _load_gs_elevation_map(resolved) -> dict[str, float]:
         result: dict[str, float] = {}
-        for station in gs_file.stations:
-            gs_id = addressing.gs_id(station.name)
-            elev = station.min_elevation_deg
-            if elev is None:
-                elev = gs_file.default_min_elevation_deg
-            if elev is None:
-                log.error(
-                    "FATAL: No min_elevation_deg for GS %s and no default set",
-                    station.name,
-                )
-                raise ValueError(f"No min_elevation_deg for {station.name}")
-            result[gs_id] = elev
+        node_by_id = {node.node_id: node for node in resolved.nodes}
+        for rule in resolved.link_rules:
+            if rule.kind != "access":
+                continue
+            for endpoint in rule.endpoints:
+                for node_id in endpoint.node_ids:
+                    node = node_by_id[node_id]
+                    if node.kind != "ground_station":
+                        continue
+                    terminal_masks = [
+                        block.min_elevation_deg
+                        for block in node.terminal_inventory
+                        if block.endpoint_role == endpoint.terminal_role
+                        and (
+                            endpoint.terminal_medium is None
+                            or block.medium == endpoint.terminal_medium
+                        )
+                        and block.min_elevation_deg is not None
+                    ]
+                    masks = [
+                        value
+                        for value in (*terminal_masks, endpoint.min_elevation_deg)
+                        if value is not None
+                    ]
+                    if not masks:
+                        raise ValueError(
+                            f"no resolved min_elevation_deg for access endpoint {node_id}"
+                        )
+                    effective = max(masks)
+                    result[node_id] = max(result.get(node_id, effective), effective)
         return result
 
     @staticmethod
@@ -1430,11 +1467,6 @@ class SessionContext:
             metric=metric,
         )
 
-    @staticmethod
-    def _host_address_from_prefix(prefix: str) -> str:
-        net = ipaddress.ip_network(prefix, strict=False)
-        return f"{net.network_address + 1}/{net.prefixlen}"
-
     @classmethod
     def _build_node_network_identity_map(
         cls, resolution
@@ -1447,74 +1479,121 @@ class SessionContext:
 
         addresses_by_id: dict[str, tuple[NodeAddress, ...]] = {}
         primary_prefix_by_id: dict[str, str] = {}
-        addressing = resolution.addressing
-
-        for sat in resolution.satellites:
-            node_id = addressing.sat_id(sat.plane, sat.slot)
-            addresses_by_id[node_id] = (
-                cls._node_addr(
-                    purpose="router_loopback",
-                    address=f"{addressing.sat_ipv4(sat.plane, sat.slot)}/32",
-                    interface="lo",
-                ),
-                cls._node_addr(
-                    purpose="router_loopback",
-                    address=f"{addressing.sat_ipv6(sat.plane, sat.slot)}/128",
-                    interface="lo",
-                ),
-            )
-
-        gs_file = resolution.primary_ground_set.config
-        for index, station in enumerate(gs_file.stations):
-            node_id = addressing.gs_id(station.name)
-            node_addresses: list[NodeAddress] = [
-                cls._node_addr(
-                    purpose="router_loopback",
-                    address=f"{addressing.gs_ipv4(index)}/32",
-                    interface="lo",
-                ),
-                cls._node_addr(
-                    purpose="router_loopback",
-                    address=f"{addressing.gs_ipv6(index)}/128",
-                    interface="lo",
-                ),
-            ]
+        for node in resolution.resolved.nodes:
+            node_addresses: list[NodeAddress] = []
+            if node.interfaces is not None:
+                for address in (node.interfaces.lo0.ipv4, node.interfaces.lo0.ipv6):
+                    if address is None:
+                        continue
+                    node_addresses.append(
+                        cls._node_addr(
+                            purpose="router_loopback",
+                            address=address,
+                            interface="lo0",
+                        )
+                    )
+                if node.interfaces.terr0 is not None:
+                    for address in (node.interfaces.terr0.ipv4, node.interfaces.terr0.ipv6):
+                        if address is None:
+                            continue
+                        node_addresses.append(
+                            cls._node_addr(
+                                purpose="site_interface",
+                                address=address,
+                                interface="terr0",
+                            )
+                        )
             primary_prefix: str | None = None
-            for prefix_cfg in station.terrestrial_prefixes or ():
-                prefix = str(prefix_cfg.prefix)
-                net = ipaddress.ip_network(prefix, strict=False)
-                if net.prefixlen == 0:
-                    continue
-                node_addresses.append(
-                    cls._node_addr(
-                        purpose="site_prefix",
-                        address=prefix,
-                        metric=prefix_cfg.metric,
+            if node.originated_prefixes is not None:
+                for prefix in (
+                    *(node.originated_prefixes.ipv4 or ()),
+                    *(node.originated_prefixes.ipv6 or ()),
+                ):
+                    net = ipaddress.ip_network(prefix, strict=False)
+                    if net.prefixlen == 0:
+                        continue
+                    node_addresses.append(
+                        cls._node_addr(
+                            purpose="site_prefix",
+                            address=prefix,
+                        )
                     )
-                )
-                node_addresses.append(
-                    cls._node_addr(
-                        purpose="site_interface",
-                        address=cls._host_address_from_prefix(prefix),
-                        interface="terr0",
-                        metric=prefix_cfg.metric,
-                    )
-                )
-                if primary_prefix is None and net.version == 4:
-                    primary_prefix = prefix
-            addresses_by_id[node_id] = tuple(node_addresses)
+                    if primary_prefix is None and net.version == 4:
+                        primary_prefix = prefix
+            addresses_by_id[node.node_id] = tuple(node_addresses)
             if primary_prefix is not None:
-                primary_prefix_by_id[node_id] = primary_prefix
+                primary_prefix_by_id[node.node_id] = primary_prefix
 
         return addresses_by_id, primary_prefix_by_id
 
     @staticmethod
-    def _load_beam_falloff_exponent(session: SessionConfig) -> float:
-        if session.routing and hasattr(session.routing, "beam_falloff_exponent"):
-            val = session.routing.beam_falloff_exponent
-            if val is not None:
-                return val
-        return 2.0
+    def _build_resolved_static_node_states(
+        resolved,
+        *,
+        addresses_by_id: dict[str, tuple[NodeAddress, ...]],
+        primary_prefix_by_id: dict[str, str],
+        min_elevation_by_id: dict[str, float],
+    ) -> dict[str, NodeState]:
+        """Build VS-API state for resolved body-fixed nodes.
+
+        OME publishes ephemeris only for the nodes it must schedule or propagate.
+        The resolver is still authoritative for the deployed node roster, so
+        body-fixed ground routers that do not participate in an access rule must
+        be present in VS-API state even when OME has no ephemeris entry for them.
+        """
+
+        return {
+            node.node_id: SessionContext._resolved_static_node_state(
+                node,
+                addresses=addresses_by_id.get(node.node_id, ()),
+                prefix=primary_prefix_by_id.get(node.node_id),
+                min_elevation_deg=min_elevation_by_id.get(node.node_id),
+            )
+            for node in resolved.nodes
+            if node.kind == "ground_station"
+        }
+
+    @staticmethod
+    def _resolved_static_node_state(
+        node: ResolvedNode,
+        *,
+        addresses: tuple[NodeAddress, ...],
+        prefix: str | None,
+        min_elevation_deg: float | None,
+    ) -> NodeState:
+        if node.surface_position is None or node.reference_body is None:
+            raise ValueError(f"resolved ground node {node.node_id!r} is missing fixed position")
+        return NodeState(
+            node_id=node.node_id,
+            node_type="ground_station",
+            lat_deg=node.surface_position.lat_deg,
+            lon_deg=node.surface_position.lon_deg,
+            alt_km=node.surface_position.alt_m / 1000.0,
+            vel_x_km_s=0.0,
+            vel_y_km_s=0.0,
+            vel_z_km_s=0.0,
+            plane=None,
+            slot=None,
+            routing_area=None,
+            neighbor_count=0,
+            prefix=prefix,
+            addresses=addresses,
+            min_elevation_deg=min_elevation_deg,
+            reference_body=node.reference_body,
+            frame_id=node.frame_id,
+            tenant_id=node.tenant_id,
+            segment_id=node.segment_id,
+            local_node_id=node.local_node_id,
+            namespace=node.namespace,
+            tags=tuple(node.tags),
+        )
+
+    def _seed_resolved_static_nodes(self) -> None:
+        if not self._resolved_static_nodes_by_id:
+            return
+        with self.state_lock:
+            for node_id, node_state in self._resolved_static_nodes_by_id.items():
+                self.nodes.setdefault(node_id, node_state)
 
 
 # ------------------------------------------------------------------

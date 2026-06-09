@@ -147,6 +147,8 @@ def test_make_configuration_uses_canonical_script_paths() -> None:
     for rel_path in ("Makefile", "config.mk.example"):
         text = (ROOT / rel_path).read_text()
         assert not stale_tool_script.search(text), f"{rel_path} uses stale tools/ script path"
+        assert "configs/sessions" not in text, f"{rel_path} references retired session root"
+        assert "catalog/nodalarc/sessions/earth-leo-simple.yaml" in text
 
     local_config = ROOT / "config.mk"
     if local_config.exists():
@@ -333,6 +335,30 @@ def test_helm_templates_do_not_have_duplicate_env_blocks_or_nats_box_latest() ->
         p.read_text() for p in (ROOT / "deploy/helm/templates").glob("*.yaml")
     )
     assert "natsio/nats-box:latest" not in rendered_templates
+
+
+def test_platform_config_mounts_force_pod_rollout_on_config_change() -> None:
+    checksum = (
+        'checksum/platform-config: {{ .Files.Get "files/platform.yaml" | sha256sum | quote }}'
+    )
+    platform_mount = "mountPath: /etc/nodalarc/platform.yaml"
+
+    checked = []
+    for path in sorted((ROOT / "deploy/helm/templates").glob("*.yaml")):
+        text = path.read_text()
+        if platform_mount not in text:
+            continue
+        rel = str(path.relative_to(ROOT))
+        checked.append(rel)
+        assert checksum in text, f"{rel} mounts platform config without rollout checksum"
+
+    assert checked == [
+        "deploy/helm/templates/node-agent-daemonset.yaml",
+        "deploy/helm/templates/ome-deployment.yaml",
+        "deploy/helm/templates/operator-deployment.yaml",
+        "deploy/helm/templates/scheduler-deployment.yaml",
+        "deploy/helm/templates/vs-api-deployment.yaml",
+    ]
 
 
 def test_orchestrator_rbac_can_list_substrate_status_configmaps() -> None:

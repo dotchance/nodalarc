@@ -22,13 +22,12 @@ from pathlib import Path
 from typing import Any
 
 from nodal.logging import configure as _configure_logging
-from nodalarc.link_metadata import build_link_metadata_maps
-from nodalarc.models.addressing import (
-    AddressingScheme,
-)
-from nodalarc.models.session import SessionConfig
+from nodalarc.models.resolved_session import ResolvedSession
 from nodalarc.resolve_session import load_session_resolution_from_file
-from nodalarc.session_identity import require_session_run_id
+from nodalarc.session_identity import (
+    read_runtime_session_run_id_file,
+    require_resolved_session_run_id,
+)
 from nodalarc.substrate.manifest_contract import WiringManifest
 from nodalarc.substrate.wiring_status import failed_status_summary, parse_status_configmap
 
@@ -43,27 +42,85 @@ from scheduler.substrate_latency import (
 log = logging.getLogger(__name__)
 
 
-def _build_interface_map(
-    session: SessionConfig,
-    addressing: AddressingScheme,
-    *,
-    constellation,
-    satellites,
-    gs_file,
-    neighbors,
-    ground_candidate_satellites_by_gs,
-) -> tuple[dict[tuple[str, str], tuple[str, str]], dict[tuple[str, str], float]]:
-    """Build shared interface and bandwidth maps from resolver-owned assets."""
-    metadata = build_link_metadata_maps(
-        session,
-        addressing,
-        constellation=constellation,
-        satellites=satellites,
-        gs_file=gs_file,
-        neighbors=neighbors,
-        ground_candidate_satellites_by_gs=ground_candidate_satellites_by_gs,
+def _read_runtime_run_id_file(path: Path) -> str:
+    """Read the operator-owned runtime lineage sidecar."""
+    return read_runtime_session_run_id_file(path)
+
+
+def _routing_protocol_label(resolved: ResolvedSession) -> str:
+    """Human log label for one or more routing domains."""
+    protocols = tuple(sorted({domain.protocol for domain in resolved.routing_domains}))
+    if not protocols:
+        return "none"
+    if len(protocols) == 1:
+        return protocols[0]
+    return "multi-domain[" + ",".join(protocols) + "]"
+
+
+def _dispatch_timing(resolved: ResolvedSession) -> tuple[float, float]:
+    """Derive Scheduler timing from catalog-resolved session truth."""
+    if resolved.dispatch is None:
+        raise RuntimeError("resolved session is missing dispatch configuration")
+    if resolved.time is None:
+        raise RuntimeError("resolved session is missing time configuration")
+    return (
+        resolved.dispatch.max_latency_age_ticks * resolved.time.step_seconds,
+        resolved.time.compression,
     )
-    return metadata.interface_map, metadata.bandwidth_map
+
+
+def _scheduler_capacity_maps(
+    resolved: ResolvedSession,
+) -> tuple[dict[str, int], dict[str, str], dict[str, int]]:
+    """Build Scheduler capacity/policy maps from catalog terminal mounts."""
+    ground_candidates = resolved.ground_candidate_satellites_by_gs()
+    required_ground_ids = set(ground_candidates)
+    required_satellite_ids = {sat_id for sats in ground_candidates.values() for sat_id in sats}
+    gs_terminal_capacities: dict[str, int] = {}
+    gs_handover_modes: dict[str, str] = {}
+    sat_ground_terminal_capacities: dict[str, int] = {}
+
+    for node in resolved.nodes:
+        access_capacity = sum(
+            block.count * (block.tracking_capacity or 0)
+            for block in node.terminal_inventory
+            if block.endpoint_role == "access"
+        )
+        if node.kind == "ground_station":
+            if node.node_id not in required_ground_ids:
+                continue
+            if access_capacity <= 0:
+                raise RuntimeError(
+                    f"Resolved ground station {node.node_id} has access candidates but no access capacity"
+                )
+            if node.ground_scheduling is None or node.ground_scheduling.handover_mode is None:
+                raise RuntimeError(
+                    f"Resolved ground station {node.node_id} is missing handover scheduling"
+                )
+            gs_terminal_capacities[node.node_id] = access_capacity
+            gs_handover_modes[node.node_id] = node.ground_scheduling.handover_mode
+        elif node.kind == "satellite":
+            sat_capacity = sum(
+                block.count for block in node.terminal_inventory if block.endpoint_role == "access"
+            )
+            if node.node_id in required_satellite_ids and sat_capacity <= 0:
+                raise RuntimeError(
+                    f"Resolved satellite {node.node_id} has access candidates but no access terminal capacity"
+                )
+            if sat_capacity > 0:
+                sat_ground_terminal_capacities[node.node_id] = sat_capacity
+
+    missing_gs = sorted(required_ground_ids - set(gs_terminal_capacities))
+    if missing_gs:
+        raise RuntimeError(
+            f"Ground candidate map references unresolved ground station(s): {missing_gs}"
+        )
+    missing_sats = sorted(required_satellite_ids - set(sat_ground_terminal_capacities))
+    if missing_sats:
+        raise RuntimeError(
+            f"Ground candidate map references unresolved satellite(s): {missing_sats}"
+        )
+    return gs_terminal_capacities, gs_handover_modes, sat_ground_terminal_capacities
 
 
 def wait_for_wiring_gate(
@@ -240,6 +297,11 @@ def main() -> None:
     _configure_logging("nodal.arc.scheduler", nats_level=logging.INFO)
     parser = argparse.ArgumentParser(description="Nodal Arc Scheduler")
     parser.add_argument("--session", required=True, help="Path to session YAML")
+    parser.add_argument(
+        "--session-run-id-file",
+        default="/etc/nodalarc/session_run_id",
+        help="Path to operator-owned runtime session run-id sidecar",
+    )
     parser.add_argument("--pid-map", help="Path to pid_map.json from na-deploy")
     parser.add_argument(
         "--platform-config",
@@ -257,23 +319,14 @@ def main() -> None:
     while not session_file.is_file():
         log.debug("Waiting for session config at %s...", args.session)
         _time.sleep(5)
-    resolution = load_session_resolution_from_file(session_file, origin="scheduler")
-    session = resolution.runtime_session
-    addressing = resolution.addressing
-    satellites = list(resolution.satellites)
-    gs_file = resolution.primary_ground_set.config
-    interface_map, bandwidth_map = _build_interface_map(
-        session,
-        addressing,
-        constellation=resolution.runtime_constellation,
-        satellites=satellites,
-        gs_file=gs_file,
-        neighbors=resolution.neighbors,
-        ground_candidate_satellites_by_gs=resolution.ground_candidate_satellites_by_gs,
-    )
+    run_id = _read_runtime_run_id_file(Path(args.session_run_id_file))
+    resolution = load_session_resolution_from_file(session_file, origin="scheduler", run_id=run_id)
+    resolved = resolution.resolved
+    interface_map = resolved.link_interface_map()
+    bandwidth_map = resolved.link_bandwidth_map()
     log.debug("Interface map: %d link pairs", len(interface_map))
-    session_id = require_session_run_id(session)
-    expected_nodes = set(resolution.resolved.node_ids())
+    session_id = require_resolved_session_run_id(resolved)
+    expected_nodes = set(resolved.node_ids())
 
     # Pod location map — canonical node IDs from K8s labels
     loc = PodLocationMap()
@@ -320,36 +373,15 @@ def main() -> None:
     # Agent pool
     pool = AgentPool()
 
-    # Build capacity and handover maps from ResolvedSession. MBB/BBM is a
-    # per-ground-station policy/capability, not a session-wide dispatch flag.
-    gs_terminal_capacities: dict[str, int] = {}
-    gs_handover_modes: dict[str, str] = {}
-    sat_ground_terminal_capacities: dict[str, int] = {}
-    for node in resolution.resolved.nodes:
-        if node.kind == "ground_station":
-            capacity = sum(
-                block.count * (block.tracking_capacity or 0)
-                for block in node.terminal_inventory
-                if block.endpoint_role == "ground"
-            )
-            if capacity <= 0:
-                raise RuntimeError(f"Resolved ground station {node.node_id} has no capacity")
-            if node.ground_scheduling is None:
-                raise RuntimeError(
-                    f"Resolved ground station {node.node_id} is missing ground_scheduling"
-                )
-            gs_terminal_capacities[node.node_id] = capacity
-            gs_handover_modes[node.node_id] = node.ground_scheduling.handover_mode
-        elif node.kind == "satellite":
-            sat_ground_terminal_capacities[node.node_id] = sum(
-                block.count for block in node.terminal_inventory if block.endpoint_role == "ground"
-            )
-
+    gs_terminal_capacities, gs_handover_modes, sat_ground_terminal_capacities = (
+        _scheduler_capacity_maps(resolved)
+    )
+    max_latency_age_s, compression_factor = _dispatch_timing(resolved)
     mbb_dispatch = any(mode == "mbb" for mode in gs_handover_modes.values())
     log.info(
         "Ground handover by station: %s (protocol=%s)",
         ", ".join(f"{gs}={mode}" for gs, mode in sorted(gs_handover_modes.items())),
-        session.routing.protocol,
+        _routing_protocol_label(resolved),
     )
 
     from nodal.logging import set_session
@@ -369,14 +401,14 @@ def main() -> None:
         bandwidth_map=bandwidth_map,
         pod_locator=loc,
         agent_pool=pool,
-        max_latency_age_s=session.dispatch.max_latency_age_ticks * session.time.step_seconds,
-        compression_factor=session.time.compression,
+        max_latency_age_s=max_latency_age_s,
+        compression_factor=compression_factor,
         gs_terminal_capacities=gs_terminal_capacities,
         gs_handover_modes=gs_handover_modes,
         sat_ground_terminal_capacities=sat_ground_terminal_capacities,
         mbb_dispatch=mbb_dispatch,
-        rtt_to_one_way_policy=session.dispatch.substrate_compensation.rtt_to_one_way,
-        clean_kernel_audit_interval_s=session.dispatch.clean_kernel_audit_interval_s,
+        rtt_to_one_way_policy="half-rtt",
+        clean_kernel_audit_interval_s=get_platform_config().scheduler_clean_kernel_audit_interval_s,
         session_id=session_id,
         wiring_generation=wiring_manifest.wiring_generation,
         required_substrate_pairs=wiring_manifest.required_substrate_pairs,

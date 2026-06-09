@@ -21,23 +21,23 @@ function wizardState(): WizardRuntimeState {
       ground_terminals: [],
     },
     groundStationSet: {
-      name: "starlink-176",
+      name: "earth-leo-starlink-pop-sites",
       description: "test",
       stations: ["edmonton"],
-      file: "configs/ground-stations/sets/starlink-176.yaml",
+      file: "nodalarc:site-sets/earth/leo/earth-leo-starlink-pop-sites.yaml",
     },
     constellation: {
-      name: "starlink-176",
+      name: "earth-leo-walker-delta-176",
       description: "test",
       satellite_count: 176,
-      constellation: "configs/constellations/starlink-176.yaml",
-      ground_stations: "configs/ground-stations/sets/starlink-176.yaml",
+      constellation: "nodalarc:constellations/earth/leo/earth-leo-walker-delta-176.yaml",
+      ground_stations: "nodalarc:site-sets/earth/leo/earth-leo-starlink-pop-sites.yaml",
       mode: "parametric",
     },
-    orbitPropagator: "j2-mean-elements",
+    orbitPropagator: "j2_mean_elements",
     protocol: "isis",
     extensions: ["te", "mpls"],
-    areaStrategy: "per-plane",
+    areaStrategy: "per_plane",
     routingTimers: {
       bfd: false,
       bfd_detect_multiplier: 3,
@@ -77,11 +77,11 @@ describe("useWizardApi", () => {
 
     const body = JSON.parse(fetchMock.mock.calls[0]![1]!.body as string) as Record<string, unknown>;
     expect(fetchMock.mock.calls[0]![0]).toBe("http://test:8080/api/v1/session/generate");
-    expect(body.orbit_propagator).toBe("j2-mean-elements");
-    expect(body.constellation).toBe("starlink-176");
+    expect(body.orbit_propagator).toBe("j2_mean_elements");
+    expect(body.constellation).toBe("earth-leo-walker-delta-176");
     expect(body.protocol).toBe("isis");
     expect(body.extensions).toEqual(["te", "mpls"]);
-    expect(body.area_strategy).toBe("per-plane");
+    expect(body.area_strategy).toBe("per_plane");
   });
 
   it("surfaces backend orbit contract failures instead of masking them", async () => {

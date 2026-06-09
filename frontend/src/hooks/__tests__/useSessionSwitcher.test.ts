@@ -22,13 +22,13 @@ describe("useSessionSwitcher", () => {
 
   it("switchSession sends deploy request", async () => {
     const { result } = renderHook(() => useSessionSwitcher(null));
-    await act(async () => { await result.current.switchSession("configs/sessions/demo.yaml"); });
+    await act(async () => { await result.current.switchSession("catalog/nodalarc/sessions/earth-leo-simple.yaml"); });
     const switchCall = fetchMock.mock.calls.find(
       (c: unknown[]) => String(c[0]).includes("/sessions/switch"),
     );
     expect(switchCall).toBeTruthy();
     const body = JSON.parse(switchCall![1]!.body as string);
-    expect(body.session).toBe("configs/sessions/demo.yaml");
+    expect(body.session).toBe("catalog/nodalarc/sessions/earth-leo-simple.yaml");
   });
 
   it("no double switch while already switching", async () => {

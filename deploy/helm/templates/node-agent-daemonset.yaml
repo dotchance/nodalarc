@@ -14,6 +14,8 @@ spec:
       labels:
         app: nodalarc-node-agent
         nodalarc.io/role: node-agent
+      annotations:
+        checksum/platform-config: {{ .Files.Get "files/platform.yaml" | sha256sum | quote }}
     spec:
       hostNetwork: true
       hostPID: true

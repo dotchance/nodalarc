@@ -68,7 +68,7 @@ export interface ExtensionRules {
 
 export type Protocol = "ospf" | "isis" | "nodalpath";
 export type ConstellationMode = "parametric" | "explicit" | "tle";
-export type OrbitPropagator = "keplerian-circular" | "j2-mean-elements" | "sgp4-tle";
+export type OrbitPropagator = "two_body" | "j2_mean_elements" | "sgp4_tle";
 
 // --- Coverage preview (returned by POST /api/v1/session/preview-coverage) ---
 

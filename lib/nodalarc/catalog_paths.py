@@ -20,34 +20,20 @@ _YAML_SUFFIXES = {".yaml", ".yml"}
 
 @dataclass(frozen=True)
 class CatalogRoots:
-    """Approved roots for NodalArc config catalog references."""
+    """Approved root for the NodalArc catalog."""
 
-    config_root: Path
+    root: Path
     sessions: Path
-    constellations: Path
-    ground_stations: Path
-    ground_station_sets: Path
-    constellation_presets: Path
 
     @classmethod
-    def from_config_root(cls, config_root: str | Path) -> CatalogRoots:
-        root = Path(config_root)
-        return cls(
-            config_root=root,
-            sessions=root / "sessions",
-            constellations=root / "constellations",
-            ground_stations=root / "ground-stations",
-            ground_station_sets=root / "ground-stations" / "sets",
-            constellation_presets=root / "presets" / "constellations",
-        )
+    def from_catalog_root(cls, catalog_root: str | Path = "catalog/nodalarc") -> CatalogRoots:
+        root = Path(catalog_root)
+        return cls(root=root, sessions=root / "sessions")
 
     @property
-    def constellation_ephemeral(self) -> Path:
-        return self.constellations / "_ephemeral"
-
-    @property
-    def ground_station_ephemeral(self) -> Path:
-        return self.ground_stations / "_ephemeral"
+    def config_root(self) -> Path:
+        """Retired name retained only to fail old assumptions at call sites."""
+        return self.root
 
 
 def safe_display_stem(name: str) -> str:
@@ -174,35 +160,37 @@ def _looks_like_path(source: str) -> bool:
     return "/" in source or "\\" in source or source.endswith((".yaml", ".yml"))
 
 
-def resolve_constellation_reference(source: str | Path, roots: CatalogRoots) -> Path:
-    """Resolve an API/session constellation reference under approved roots."""
+def resolve_catalog_reference(
+    source: str | Path,
+    roots: CatalogRoots,
+    *,
+    label: str = "catalog reference",
+) -> Path:
+    """Resolve a ``nodalarc:<path>`` token under the catalog root."""
     raw = str(source)
-    if _looks_like_path(raw):
-        return _resolve_existing_under(raw, roots.constellations, label="constellation")
-
+    if not raw.startswith("nodalarc:"):
+        raise CatalogPathError(f"{label} must be a nodalarc:<path> reference")
+    relative = raw.split(":", 1)[1]
+    reference = _validate_yaml_path_reference(
+        _reject_unsafe_path_source(relative, label=label), label=label
+    )
+    root_resolved = roots.root.resolve(strict=True)
+    resolved = (root_resolved / reference).resolve(strict=True)
     try:
-        return _resolve_named_yaml_under(raw, roots.constellations, label="constellation")
-    except FileNotFoundError as exc:
-        preset = _resolve_named_yaml_under(
-            raw, roots.constellation_presets, label="constellation preset"
-        )
-        import yaml
-
-        data = yaml.safe_load(preset.read_text()) or {}
-        nested = data.get("constellation")
-        if not isinstance(nested, str):
-            raise CatalogPathError(
-                f"constellation preset {raw!r} has no constellation path"
-            ) from exc
-        return resolve_constellation_reference(nested, roots)
+        resolved.relative_to(root_resolved)
+    except ValueError as exc:
+        raise CatalogPathError(f"{label} escapes approved catalog root: {roots.root}") from exc
+    return resolved
 
 
-def resolve_ground_station_reference(source: str | Path, roots: CatalogRoots) -> Path:
-    """Resolve an API/session ground-station reference under approved roots."""
-    raw = str(source)
-    if _looks_like_path(raw):
-        return _resolve_existing_under(raw, roots.ground_stations, label="ground_stations")
-    return _resolve_named_yaml_under(raw, roots.ground_station_sets, label="ground_stations")
+def resolve_constellation_reference(source: str | Path, roots: CatalogRoots) -> Path:
+    """Resolve a constellation catalog token."""
+    return resolve_catalog_reference(source, roots, label="constellation")
+
+
+def resolve_site_set_reference(source: str | Path, roots: CatalogRoots) -> Path:
+    """Resolve a site-set catalog token."""
+    return resolve_catalog_reference(source, roots, label="ground placement")
 
 
 def validate_station_names(names: list[str]) -> None:

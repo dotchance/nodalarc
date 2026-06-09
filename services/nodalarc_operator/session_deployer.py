@@ -9,6 +9,7 @@ Called by kopf handlers in handlers.py.
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import logging
 import os
@@ -21,16 +22,13 @@ from typing import Any
 import kubernetes
 import yaml
 from jinja2 import Environment, FileSystemLoader
-from nodalarc.constellation_loader import satellite_node_id
-from nodalarc.ground_terminals import station_ground_terminal_capacity
-from nodalarc.models.addressing import neighbors_by_node
 from nodalarc.models.resolved_session import SourceContext
-from nodalarc.models.session import PlacementConfig, SessionConfig
 from nodalarc.nats_channels import sanitize_session_id
+from nodalarc.platform_config import get_platform_config
 from nodalarc.resolve_session import resolve_session_with_assets
-from nodalarc.session_identity import require_session_run_id
-from nodalarc.stack_resolver import resolve_stack, validate_sid_indices
-from nodalarc.template_vars import build_template_vars
+from nodalarc.session_identity import require_resolved_session_run_id
+from nodalarc.stack_resolver import resolve_domain_stack, validate_sid_indices
+from nodalarc.template_vars import build_template_vars_from_resolved
 
 log = logging.getLogger(__name__)
 
@@ -252,14 +250,14 @@ def _deterministic_node(nid: str, available_nodes: list[str]) -> str:
 
 
 def compute_pod_placement(
-    placement: PlacementConfig,
+    placement: Any,
     node_vars: dict[str, dict],
     available_nodes: list[str],
 ) -> dict[str, str]:
     """Compute target node for each pod based on placement policy.
 
     Args:
-        placement: PlacementConfig from session YAML.
+        placement: Platform-owned placement policy.
         node_vars: {node_id: {node_type, plane, ...}} from template_vars.
         available_nodes: sorted list of available K3s node names.
 
@@ -269,11 +267,18 @@ def compute_pod_placement(
     if not available_nodes:
         raise ValueError("No available K3s nodes for pod placement")
 
-    if placement.policy == "allOnOne":
+    if isinstance(placement, Mapping):
+        policy = str(placement.get("policy") or "")
+        planes_per_group = int(placement.get("planes_per_group") or 1)
+    else:
+        policy = str(getattr(placement, "policy", placement))
+        planes_per_group = int(getattr(placement, "planes_per_group", 1) or 1)
+
+    if policy == "allOnOne":
         target = available_nodes[0]
         return dict.fromkeys(node_vars, target)
 
-    if placement.policy == "planePerNode":
+    if policy == "planePerNode":
         result: dict[str, str] = {}
         for nid, vars in node_vars.items():
             if vars.get("node_type") == "ground_station":
@@ -283,8 +288,8 @@ def compute_pod_placement(
                 result[nid] = available_nodes[plane % len(available_nodes)]
         return result
 
-    if placement.policy == "planeGroupPerNode":
-        ppg = placement.planes_per_group
+    if policy == "planeGroupPerNode":
+        ppg = planes_per_group
         result = {}
         for nid, vars in node_vars.items():
             if vars.get("node_type") == "ground_station":
@@ -295,7 +300,7 @@ def compute_pod_placement(
                 result[nid] = available_nodes[group % len(available_nodes)]
         return result
 
-    raise ValueError(f"Unknown placement policy: {placement.policy}")
+    raise ValueError(f"Unknown placement policy: {policy}")
 
 
 def _node_internal_ips(
@@ -372,19 +377,37 @@ def _required_substrate_pairs(
     for node_a, node_b in isl_pairs:
         _add_reason(node_a, node_b, "isl")
 
-    ground_ids = sorted(
+    all_ground_ids = {
         node_id for node_id, spec in nodes.items() if spec["node_type"] == "ground_station"
-    )
+    }
+    all_satellite_ids = {
+        node_id for node_id, spec in nodes.items() if spec["node_type"] == "satellite"
+    }
+    if ground_candidate_satellites_by_gs is not None:
+        unknown_ground = sorted(set(ground_candidate_satellites_by_gs) - all_ground_ids)
+        if unknown_ground:
+            raise ValueError(
+                "substrate candidate map names unknown ground station(s): "
+                + ", ".join(unknown_ground)
+            )
+        ground_ids = sorted(ground_candidate_satellites_by_gs)
+    else:
+        ground_ids = sorted(all_ground_ids)
+
     for gs_id in ground_ids:
         candidate_sat_ids = (
             ground_candidate_satellites_by_gs.get(gs_id, ())
             if ground_candidate_satellites_by_gs is not None
-            else tuple(
-                node_id for node_id, spec in nodes.items() if spec["node_type"] == "satellite"
-            )
+            else tuple(sorted(all_satellite_ids))
         )
         if not candidate_sat_ids:
             raise ValueError(f"ground station {gs_id!r} has no substrate candidate satellites")
+        unknown_satellites = sorted(set(candidate_sat_ids) - all_satellite_ids)
+        if unknown_satellites:
+            raise ValueError(
+                f"ground station {gs_id!r} declares unknown substrate candidate satellite(s): "
+                + ", ".join(unknown_satellites)
+            )
         for sat_id in sorted(candidate_sat_ids):
             _add_reason(gs_id, sat_id, "ground")
 
@@ -424,6 +447,107 @@ def _delete_stale_substrate_status_configmaps(
     except kubernetes.client.rest.ApiException as exc:
         if exc.status != 404:
             raise
+
+
+def _platform_placement_policy() -> Any:
+    cfg = get_platform_config()
+    return {
+        "policy": cfg.default_session_pod_placement_policy,
+        "planes_per_group": cfg.default_session_pod_planes_per_group,
+    }
+
+
+def _stack_by_domain(resolved: Any) -> dict[str, Any]:
+    stacks: dict[str, Any] = {}
+    sid_by_node = resolved.sid_index_by_node_id()
+    for domain in resolved.routing_domains:
+        stack = resolve_domain_stack(domain)
+        if stack.segment_routing:
+            validate_sid_indices(
+                stack,
+                {
+                    node_id: sid_by_node[node_id]
+                    for node_id in domain.node_ids
+                    if node_id in sid_by_node
+                },
+            )
+        stacks[domain.domain_id] = stack
+    return stacks
+
+
+def _routing_domain_for_node(resolved: Any, node_id: str) -> Any:
+    domains = [domain for domain in resolved.routing_domains if node_id in domain.node_ids]
+    if len(domains) != 1:
+        raise ValueError(
+            f"node {node_id!r} must resolve to exactly one routing domain for deployment; "
+            f"got {[domain.domain_id for domain in domains]}"
+        )
+    return domains[0]
+
+
+def _ground_index_by_node_id(resolved: Any) -> dict[str, int]:
+    ground_ids = [node.node_id for node in resolved.nodes if node.kind == "ground_station"]
+    return {node_id: index for index, node_id in enumerate(ground_ids)}
+
+
+def _node_vars_from_resolved(
+    resolved: Any, stacks: Mapping[str, Any]
+) -> tuple[dict[str, dict], dict[str, Any]]:
+    sid_by_node = resolved.sid_index_by_node_id()
+    ground_indices = _ground_index_by_node_id(resolved)
+    node_vars: dict[str, dict] = {}
+    node_stacks: dict[str, Any] = {}
+    for node in resolved.nodes:
+        domain = _routing_domain_for_node(resolved, node.node_id)
+        stack = stacks[domain.domain_id]
+        node_sid_index = sid_by_node.get(node.node_id) if stack.segment_routing else None
+        vars_for_node = build_template_vars_from_resolved(
+            resolved,
+            node.node_id,
+            stack_variables=stack.template_variables,
+            node_sid_index=node_sid_index,
+            gs_index=ground_indices.get(node.node_id),
+        )
+        node_vars[node.node_id] = vars_for_node
+        node_stacks[node.node_id] = stack
+    return node_vars, node_stacks
+
+
+def _fixed_link_interfaces_by_node(resolved: Any) -> dict[str, list[dict[str, str]]]:
+    by_node: dict[str, list[dict[str, str]]] = {}
+    for candidate in resolved.link_candidates:
+        if candidate.kind == "access":
+            continue
+        by_node.setdefault(candidate.node_a, []).append(
+            {
+                "name": candidate.interface_a,
+                "peer_node": candidate.node_b,
+                "peer_iface": candidate.interface_b,
+            }
+        )
+        by_node.setdefault(candidate.node_b, []).append(
+            {
+                "name": candidate.interface_b,
+                "peer_node": candidate.node_a,
+                "peer_iface": candidate.interface_a,
+            }
+        )
+    return {
+        node_id: sorted(
+            items, key=lambda item: (item["name"], item["peer_node"], item["peer_iface"])
+        )
+        for node_id, items in by_node.items()
+    }
+
+
+def _terr0_manifest_addresses(node: Any) -> list[str]:
+    if node.interfaces is None or node.interfaces.terr0 is None:
+        return []
+    return [
+        address
+        for address in (node.interfaces.terr0.ipv4, node.interfaces.terr0.ipv6)
+        if address is not None and ipaddress.ip_interface(address)
+    ]
 
 
 # All known FRR daemons — used to generate the daemons file
@@ -490,9 +614,9 @@ def ensure_session_configmaps(
         progress_fn: Optional callback(message: str) for status updates.
 
     Returns:
-        Context dict with keys: session_id, session_run_id, session, constellation,
-        satellites, gs_file, resolved_stack, node_vars, pod_placement,
-        available_nodes. Passed to ensure_session_pods().
+        Context dict with keys: session_id, session_run_id, resolved_session,
+        node_vars, node_stacks, pod_placement, available_nodes. Passed to
+        ensure_session_pods().
     """
 
     def _progress(msg: str) -> None:
@@ -521,100 +645,34 @@ def ensure_session_configmaps(
     raw_session = yaml.safe_load(session_yaml)
     resolution = resolve_session_with_assets(
         raw_session,
-        source_context=SourceContext(origin="operator.deploy"),
+        source_context=SourceContext(origin="operator.deploy", run_id=session_run_id),
     )
-    session = resolution.runtime_session
-    if session.session.run_id:
-        raise ValueError("session.run_id is operator-managed and must not be set in session YAML")
     if not session_run_id:
         raise ValueError("session_run_id is required to create runtime session ConfigMaps")
     session_id = sanitize_session_id(session_run_id)
+    resolved_session = resolution.resolved
+    if require_resolved_session_run_id(resolved_session) != session_id:
+        raise ValueError("resolved runtime session id does not match operator session_run_id")
 
-    # --- Step 2: Use resolver-owned constellation and ground assets ---
-    _progress("Using resolved constellation and ground station definitions")
-    constellation = resolution.runtime_constellation
-    gs_file = resolution.primary_ground_set.config
-    satellites = list(resolution.satellites)
-    num_planes = max((s.plane for s in satellites), default=0) + 1
+    # --- Step 2: Use catalog-resolved runtime truth ---
+    _progress("Using resolved catalog runtime definitions")
+    satellite_count = sum(1 for node in resolved_session.nodes if node.kind == "satellite")
+    ground_count = sum(1 for node in resolved_session.nodes if node.kind == "ground_station")
     _progress(
-        f"Expanded {len(satellites)} satellites across {num_planes} planes, {len(gs_file.stations)} ground stations"
+        f"Expanded {satellite_count} satellites and {ground_count} ground nodes "
+        f"across {len(resolved_session.routing_domains)} routing domain(s)"
     )
-    if not satellites:
-        raise ValueError("No satellites in constellation")
+    if satellite_count <= 0:
+        raise ValueError("No satellites in resolved session")
 
-    addressing = resolution.addressing
-    neighbors = resolution.neighbors
-
-    # --- Step 3: Resolve routing stack ---
-    _progress(f"Resolving routing stack: {session.routing.protocol}")
-    resolved = resolve_stack(
-        session.routing.protocol,
-        session.routing.extensions,
-    )
-    config_overrides = dict(resolved.template_variables)
-    config_overrides.update(session.routing.config_overrides)
-    sid_by_node = resolution.resolved.sid_index_by_node_id()
-    validate_sid_indices(resolved, sid_by_node)
-
-    # --- Step 3b: Validate session readiness ---
-    _progress("Validating session readiness")
-    from nodalarc.session_validator import validate_session_readiness
-
-    validation_results = validate_session_readiness(
-        session,
-        constellation,
-        satellites,
-        gs_file,
-        resolved,
-        available_node_count=len(available_nodes),
-        sid_indices_by_node=sid_by_node,
-    )
-    val_errors = [r for r in validation_results if r.level == "error"]
-    val_warnings = [r for r in validation_results if r.level == "warning"]
-    for w in val_warnings:
-        log.warning("Session validation %s: %s", w.code, w.message)
-    if validation_results:
-        _publish_validation_ops_events(validation_results, namespace, session_id=session_run_id)
-    if val_errors:
-        import kopf
-
-        error_msg = "; ".join(f"[{r.code}] {r.message}" for r in val_errors)
-        raise kopf.PermanentError(f"Session validation failed: {error_msg}")
+    # --- Step 3: Resolve routing stacks per domain ---
+    _progress("Resolving routing stacks from resolved routing domains")
+    stacks_by_domain = _stack_by_domain(resolved_session)
 
     # --- Step 4: Build template vars per node ---
-    total_nodes = len(satellites) + len(gs_file.stations)
+    total_nodes = len(resolved_session.nodes)
     _progress(f"Building template variables for {total_nodes} nodes")
-    node_vars: dict[str, dict] = {}
-    for sat in satellites:
-        node_id = satellite_node_id(sat, addressing)
-        node_vars[node_id] = build_template_vars(
-            session=session,
-            constellation=constellation,
-            ground_stations=gs_file,
-            addressing=addressing,
-            node_type="satellite",
-            plane=sat.plane,
-            slot=sat.slot,
-            sat_node_id=node_id,
-            sat_ground_terminal_count=sat.ground_terminal_count,
-            config_overrides=config_overrides,
-            neighbors=neighbors,
-            node_sid_index=sid_by_node[node_id],
-        )
-    for i, station in enumerate(gs_file.stations):
-        node_id = addressing.gs_id(station.name)
-        node_vars[node_id] = build_template_vars(
-            session=session,
-            constellation=constellation,
-            ground_stations=gs_file,
-            addressing=addressing,
-            node_type="ground_station",
-            gs_name=station.name,
-            gs_index=i,
-            config_overrides=config_overrides,
-            neighbors=neighbors,
-            node_sid_index=sid_by_node[node_id],
-        )
+    node_vars, node_stacks = _node_vars_from_resolved(resolved_session, stacks_by_domain)
 
     # --- Step 5: Render FRR configs (parallelized) ---
     _progress(f"Rendering FRR configurations for {len(node_vars)} nodes")
@@ -628,15 +686,16 @@ def ensure_session_configmaps(
 
     def _render_one_node(node_id: str, tpl_vars: dict) -> tuple[str, dict[str, str]]:
         configs: dict[str, str] = {}
-        for tpl_file in resolved.template_files:
+        node_stack = node_stacks[node_id]
+        for tpl_file in node_stack.template_files:
             tpl = env.get_template(tpl_file.src)
             rendered = tpl.render(**tpl_vars)
             dest_name = Path(tpl_file.dst).name
             configs[dest_name] = rendered
         # Generate daemons file
-        if resolved.daemons:
+        if node_stack.daemons:
             # mgmtd is always required in FRR 10.x — it manages config loading
-            enabled = set(resolved.daemons) | {"mgmtd"}
+            enabled = set(node_stack.daemons) | {"mgmtd"}
             configs["daemons"] = (
                 "\n".join(f"{d}={'yes' if d in enabled else 'no'}" for d in _ALL_FRR_DAEMONS) + "\n"
             )
@@ -682,7 +741,7 @@ def ensure_session_configmaps(
     _progress("Creating session-level ConfigMaps")
     _create_session_configmaps(
         v1,
-        session,
+        resolved_session.session.name,
         session_yaml,
         namespace,
         owner_ref,
@@ -694,14 +753,15 @@ def ensure_session_configmaps(
     _create_terminal_ssh_keys(v1, namespace, owner_ref)
 
     # --- Step 8: Compute pod placement ---
-    _progress(f"Computing pod placement ({session.placement.policy} policy)")
-    pod_placement = compute_pod_placement(session.placement, node_vars, available_nodes)
+    placement = _platform_placement_policy()
+    _progress(f"Computing pod placement ({placement['policy']} policy)")
+    pod_placement = compute_pod_placement(placement, node_vars, available_nodes)
     node_counts: dict[str, int] = {}
     for target in pod_placement.values():
         node_counts[target] = node_counts.get(target, 0) + 1
     log.info(
         "Placement policy=%s, %d pods across %d nodes: %s",
-        session.placement.policy,
+        placement["policy"],
         len(pod_placement),
         len(node_counts),
         ", ".join(f"{n}={c}" for n, c in sorted(node_counts.items())),
@@ -710,12 +770,9 @@ def ensure_session_configmaps(
     return {
         "session_id": session_id,
         "session_run_id": session_run_id,
-        "session": session,
-        "constellation": constellation,
-        "satellites": satellites,
-        "gs_file": gs_file,
-        "resolved_stack": resolved,
+        "resolved_session": resolved_session,
         "node_vars": node_vars,
+        "node_stacks": node_stacks,
         "pod_placement": pod_placement,
         "available_nodes": available_nodes,
     }
@@ -752,20 +809,19 @@ def ensure_session_pods(
 
     v1 = _get_v1()
     node_vars = context["node_vars"]
+    node_stacks = context["node_stacks"]
     pod_placement = context["pod_placement"]
-    session = context["session"]
     session_id = context["session_id"]
-    resolved = context["resolved_stack"]
 
     total_pods = len(node_vars)
     _progress(f"Creating {total_pods} session pods")
-    sidecar_config = _build_sidecar_config(resolved)
-    env_list = resolved.env
 
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
     pod_specs: list[dict] = []
     for node_id, vars in node_vars.items():
+        stack = node_stacks[node_id]
+        sidecar_config = _build_sidecar_config(stack)
         pod_specs.append(
             {
                 "pod_name": node_id.lower(),
@@ -775,10 +831,11 @@ def ensure_session_pods(
                 "slot": vars.get("slot"),
                 "gs_name": vars.get("gs_name"),
                 "config_cm_name": f"frr-config-{node_id.lower()}",
-                "sidecar_env": _build_sidecar_env(node_id, vars, env_list)
+                "sidecar_config": sidecar_config,
+                "sidecar_env": _build_sidecar_env(node_id, vars, stack.env)
                 if sidecar_config
                 else None,
-                "probe_enabled": session.mi.enabled if session.mi else False,
+                "probe_enabled": False,
                 "target_node": pod_placement.get(node_id),
             }
         )
@@ -818,7 +875,7 @@ def ensure_session_pods(
                 slot=ps["slot"],
                 gs_name=ps["gs_name"],
                 config_cm_name=ps["config_cm_name"],
-                sidecar_config=sidecar_config,
+                sidecar_config=ps["sidecar_config"],
                 sidecar_env=ps["sidecar_env"],
                 probe_enabled=ps["probe_enabled"],
                 target_node=ps["target_node"],
@@ -901,7 +958,6 @@ def write_wiring_manifest(
 
     Returns the number of ISL links in the manifest.
     """
-    import ipaddress as _ipaddress
     import json as _json
 
     from nodalarc.nats_channels import sanitize_session_id
@@ -914,13 +970,11 @@ def write_wiring_manifest(
     session_yaml = spec.get("sessionYaml", "")
     resolution = resolve_session_with_assets(
         yaml.safe_load(session_yaml),
-        source_context=SourceContext(origin="operator.wiring_manifest"),
+        source_context=SourceContext(origin="operator.wiring_manifest", run_id=session_run_id),
     )
-    session = resolution.runtime_session
-    if session.session.run_id:
-        raise ValueError("session.run_id is operator-managed and must not be set in session YAML")
     if not session_run_id:
         raise ValueError("session_run_id is required to write topology wiring manifest")
+    resolved_session = resolution.resolved
 
     v1 = _get_v1()
 
@@ -933,16 +987,13 @@ def write_wiring_manifest(
     except kubernetes.client.rest.ApiException as e:
         if e.status != 404:
             raise
-    gs_file = resolution.primary_ground_set.config
-    satellites = list(resolution.satellites)
-    addressing = resolution.addressing
-    neighbors = resolution.neighbors
-    by_node = neighbors_by_node(neighbors)
-
-    resolved = resolve_stack(session.routing.protocol, session.routing.extensions)
-    segment_routing = resolved.segment_routing
-    mpls_enable = any(name.startswith("net.mpls.") for name in resolved.sysctls)
-    validate_sid_indices(resolved, resolution.resolved.sid_index_by_node_id())
+    stacks_by_domain = _stack_by_domain(resolved_session)
+    node_stack_by_id = {
+        node.node_id: stacks_by_domain[
+            _routing_domain_for_node(resolved_session, node.node_id).domain_id
+        ]
+        for node in resolved_session.nodes
+    }
 
     # Platform-level sysctls (protocol-agnostic) merged with stack-provided sysctls.
     # The deployer never interprets stack fields to derive sysctls.
@@ -953,95 +1004,60 @@ def write_wiring_manifest(
         "net.ipv6.conf.all.dad_transmits": "0",
         "net.ipv6.conf.default.dad_transmits": "0",
     }
-    node_sysctls = {**base_sysctls, **resolved.sysctls}
+    fixed_interfaces = _fixed_link_interfaces_by_node(resolved_session)
+    ground_indices = _ground_index_by_node_id(resolved_session)
 
     # Build per-node wiring spec
     nodes: dict[str, Any] = {}
 
-    # Satellites
-    for sat in satellites:
-        node_id = satellite_node_id(sat, addressing)
-        node_assignments = by_node.get(node_id, [])
-        isl_interfaces = []
-        for na in node_assignments:
-            isl_interfaces.append(
-                {
-                    "name": na.interface,
-                    "peer_node": na.peer_node_id,
-                    "peer_iface": "",  # filled below
-                }
-            )
-        # Resolve peer interfaces
-        for iface in isl_interfaces:
-            peer_assignments = by_node.get(iface["peer_node"], [])
-            for pa in peer_assignments:
-                if pa.peer_node_id == node_id:
-                    iface["peer_iface"] = pa.interface
-                    break
-        isl_interfaces.sort(
-            key=lambda iface: (iface["name"], iface["peer_node"], iface["peer_iface"])
-        )
-
-        nodes[node_id] = {
-            "node_type": "satellite",
-            "plane": sat.plane,
-            "slot": sat.slot,
-            "sysctls": dict(node_sysctls),
-            "isl_interfaces": isl_interfaces,
-            "gnd_interfaces": [{"name": f"gnd{g}"} for g in range(sat.ground_terminal_count)],
-            "mpls_enable": mpls_enable,
-            "segment_routing": segment_routing,
-            "mtu": 9000,
-            "remove_default_route": True,
-        }
-
-    # Ground stations
     ground_bridges: dict[str, dict] = {}
-    for i, station in enumerate(gs_file.stations):
-        gs_id = addressing.gs_id(station.name)
-
-        # Terrestrial prefix addresses — use host addresses, skip default routes
-        addrs = []
-        raw_prefixes: list[str] = []
-        if station.terrestrial_prefixes:
-            raw_prefixes = [tp.prefix for tp in station.terrestrial_prefixes]
-        elif gs_file.default_terrestrial_prefixes:
-            tpl = gs_file.default_terrestrial_prefixes
-            raw_prefixes = [
-                tpl.ipv4_template.format(gs_index=i),
-                tpl.ipv6_template.format(gs_index=i),
-            ]
-        for pfx in raw_prefixes:
-            net = _ipaddress.ip_network(pfx, strict=False)
-            if net.prefixlen == 0:
-                continue  # default route — not an interface address
-            host = net.network_address + 1
-            addrs.append(f"{host}/{net.prefixlen}")
-
-        nodes[gs_id] = {
-            "node_type": "ground_station",
-            "gs_name": station.name,
-            "gs_index": i,
-            "sysctls": dict(node_sysctls),
-            "isl_interfaces": [],
-            "gnd_interfaces": [
-                {"name": f"term{t}"}
-                for t in range(station_ground_terminal_capacity(gs_file, station))
-            ],
-            "terrestrial": {"addresses": addrs},
-            "mpls_enable": mpls_enable,
-            "segment_routing": segment_routing,
-            "mtu": 9000,
-            "remove_default_route": True,
-        }
-
-        ground_bridges[gs_id] = {}
+    for node in resolved_session.nodes:
+        stack = node_stack_by_id[node.node_id]
+        node_sysctls = {**base_sysctls, **stack.sysctls}
+        mpls_enable = any(name.startswith("net.mpls.") for name in stack.sysctls)
+        if node.kind == "satellite":
+            if node.plane is None or node.slot is None:
+                raise ValueError(f"satellite node {node.node_id!r} is missing plane/slot")
+            nodes[node.node_id] = {
+                "node_type": "satellite",
+                "plane": node.plane,
+                "slot": node.slot,
+                "sysctls": dict(node_sysctls),
+                "isl_interfaces": fixed_interfaces.get(node.node_id, []),
+                "gnd_interfaces": [
+                    {"name": iface.name}
+                    for iface in node.wan_interfaces
+                    if iface.name.startswith("gnd")
+                ],
+                "mpls_enable": mpls_enable,
+                "segment_routing": stack.segment_routing,
+                "mtu": 9000,
+                "remove_default_route": True,
+            }
+            continue
+        if node.kind == "ground_station":
+            nodes[node.node_id] = {
+                "node_type": "ground_station",
+                "gs_name": node.local_node_id,
+                "gs_index": ground_indices[node.node_id],
+                "sysctls": dict(node_sysctls),
+                "isl_interfaces": [],
+                "gnd_interfaces": [{"name": iface.name} for iface in node.wan_interfaces],
+                "terrestrial": {"addresses": _terr0_manifest_addresses(node)},
+                "mpls_enable": mpls_enable,
+                "segment_routing": stack.segment_routing,
+                "mtu": 9000,
+                "remove_default_route": True,
+            }
+            ground_bridges[node.node_id] = {}
+            continue
+        raise ValueError(f"unsupported node kind in wiring manifest: {node.kind!r}")
 
     # Count unique ISL links
     isl_pairs: set[tuple[str, str]] = set()
-    for node_id, assignments in by_node.items():
-        for na in assignments:
-            isl_pairs.add((min(node_id, na.peer_node_id), max(node_id, na.peer_node_id)))
+    for candidate in resolved_session.link_candidates:
+        if candidate.kind != "access":
+            isl_pairs.add((candidate.node_a, candidate.node_b))
 
     pod_placement = _discover_session_pod_placement(v1, namespace, set(nodes))
     k8s_nodes = set(pod_placement.values())
@@ -1051,7 +1067,7 @@ def write_wiring_manifest(
         isl_pairs=isl_pairs,
         pod_placement=pod_placement,
         node_ips=node_ips,
-        ground_candidate_satellites_by_gs=resolution.ground_candidate_satellites_by_gs,
+        ground_candidate_satellites_by_gs=resolved_session.ground_candidate_satellites_by_gs(),
     )
     _delete_stale_substrate_status_configmaps(v1, namespace)
 
@@ -1210,20 +1226,17 @@ def teardown_session(namespace: str, session_id: str | None = None) -> None:
 
         try:
             cm = v1.read_namespaced_config_map("nodalarc-session", namespace)
-            if cm.data and "session.yaml" in cm.data:
-                raw = yaml.safe_load(cm.data["session.yaml"])
-                session_run_id = raw.get("session", {}).get("run_id", "")
+            if cm.data and "session_run_id" in cm.data:
+                session_run_id = str(cm.data.get("session_run_id") or "").strip()
                 if not session_run_id:
-                    log.error(
-                        "FATAL: nodalarc-session ConfigMap has no session.run_id — cannot purge JetStream subjects"
-                    )
-                    raise ValueError("session.run_id missing from nodalarc-session ConfigMap")
+                    log.error("FATAL: nodalarc-session ConfigMap has empty session_run_id")
+                    raise ValueError("session_run_id missing from nodalarc-session ConfigMap")
                 session_id = sanitize_session_id(session_run_id)
             else:
                 log.error(
-                    "FATAL: nodalarc-session ConfigMap has no session.yaml data — cannot determine session_id for teardown"
+                    "FATAL: nodalarc-session ConfigMap has no session_run_id data — cannot determine session_id for teardown"
                 )
-                raise ValueError("nodalarc-session ConfigMap missing session.yaml")
+                raise ValueError("nodalarc-session ConfigMap missing session_run_id")
         except (ValueError, kubernetes.client.rest.ApiException) as exc:
             log.error("FATAL: Cannot derive session_id for teardown: %s", exc)
             raise
@@ -1258,17 +1271,6 @@ def teardown_session(namespace: str, session_id: str | None = None) -> None:
         with suppress(kubernetes.client.rest.ApiException):
             v1.delete_namespaced_config_map(cm.metadata.name, namespace)
     log.debug("Cleaned up %d FRR config ConfigMaps", len(cms.items))
-
-    # Clean up ephemeral constellation and ground station files
-    import glob
-
-    for pattern in [
-        "configs/constellations/_ephemeral/*",
-        "configs/ground-stations/_ephemeral/*",
-    ]:
-        for f in glob.glob(pattern):
-            Path(f).unlink(missing_ok=True)
-    log.debug("Cleaned up ephemeral config files")
 
 
 def session_runtime_purge_targets(session_id: str) -> tuple[tuple[str, str], ...]:
@@ -1522,21 +1524,6 @@ def _canonical_hash_value(value: Any) -> Any:
     return value
 
 
-def _canonical_satellite_for_hash(sat: Any) -> dict[str, Any]:
-    return {
-        "plane": sat.plane,
-        "slot": sat.slot,
-        "elements": _canonical_hash_value(sat.elements),
-        "isl_terminal_count": sat.isl_terminal_count,
-        "ground_terminal_count": sat.ground_terminal_count,
-        "isl_terminals": _canonical_hash_value(sat.isl_terminals),
-        "ground_terminals": _canonical_hash_value(sat.ground_terminals),
-        "tle_line_1": sat.tle_line_1,
-        "tle_line_2": sat.tle_line_2,
-        "norad_id": sat.norad_id,
-    }
-
-
 def compute_platform_hash(spec: dict) -> str:
     """Hash resolved runtime truth for service restart detection.
 
@@ -1570,16 +1557,8 @@ def compute_platform_hash(spec: dict) -> str:
     canonical_obj = {
         "resolved": resolution.resolved.model_dump(
             mode="json",
-            exclude={"session": {"run_id"}, "source_context": True},
+            exclude={"source_context": True},
         ),
-        "runtime_constellation": _canonical_hash_value(resolution.runtime_constellation),
-        "constellations": [
-            _canonical_hash_value(asset.config) for asset in resolution.constellations
-        ],
-        "primary_ground_set": _canonical_hash_value(resolution.primary_ground_set.config),
-        "satellites": [_canonical_satellite_for_hash(sat) for sat in resolution.satellites],
-        "declared_candidates": _canonical_hash_value(resolution.declared_candidates),
-        "neighbors": _canonical_hash_value(resolution.neighbors),
     }
     canonical = json.dumps(canonical_obj, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode()).hexdigest()
@@ -1622,22 +1601,23 @@ def compute_expected_pod_count(spec: dict) -> int:
 def _placement_node_vars_from_resolution(resolution: Any) -> dict[str, dict]:
     """Build placement inputs from the same resolved assets used for pod creation."""
 
-    addressing = resolution.addressing
     node_vars: dict[str, dict] = {}
-    for sat in resolution.satellites:
-        node_id = satellite_node_id(sat, addressing)
-        node_vars[node_id] = {
-            "node_type": "satellite",
-            "plane": sat.plane,
-            "slot": sat.slot,
-        }
-    ground_stations = resolution.primary_ground_set.config
-    for index, station in enumerate(ground_stations.stations):
-        node_vars[addressing.gs_id(station.name)] = {
-            "node_type": "ground_station",
-            "gs_name": station.name,
-            "gs_index": index,
-        }
+    ground_indices = _ground_index_by_node_id(resolution.resolved)
+    for node in resolution.resolved.nodes:
+        if node.kind == "satellite":
+            if node.plane is None or node.slot is None:
+                raise ValueError(f"satellite node {node.node_id!r} is missing plane/slot")
+            node_vars[node.node_id] = {
+                "node_type": "satellite",
+                "plane": node.plane,
+                "slot": node.slot,
+            }
+        elif node.kind == "ground_station":
+            node_vars[node.node_id] = {
+                "node_type": "ground_station",
+                "gs_name": node.local_node_id,
+                "gs_index": ground_indices[node.node_id],
+            }
     return node_vars
 
 
@@ -1645,9 +1625,9 @@ def compute_expected_placement_node_count(spec: dict, available_nodes: list[str]
     """Compute how many Kubernetes nodes the active placement policy should use.
 
     This is the pure equivalent of the operator deployment path's placement step.
-    It intentionally uses ``resolution.satellites`` rather than the primary
-    constellation, so multi-segment sessions include relay/space segments in the
-    expected placement distribution.
+    It intentionally uses ``resolution.resolved.nodes`` so multi-segment
+    sessions include relay/space segments in the expected placement
+    distribution.
     """
 
     session_yaml = spec.get("sessionYaml")
@@ -1661,7 +1641,7 @@ def compute_expected_placement_node_count(spec: dict, available_nodes: list[str]
     if not node_vars:
         raise ValueError("Session expands to 0 nodes — cannot compute placement")
     placement = compute_pod_placement(
-        resolution.runtime_session.placement,
+        _platform_placement_policy(),
         node_vars,
         available_nodes,
     )
@@ -1863,7 +1843,7 @@ def _create_or_update_configmap(
 
 def _create_session_configmaps(
     v1: kubernetes.client.CoreV1Api,
-    session: SessionConfig,
+    session_name: str,
     session_yaml: str,
     namespace: str,
     owner_ref: dict,
@@ -1871,20 +1851,21 @@ def _create_session_configmaps(
 ) -> None:
     """Create session-level ConfigMaps with segment session YAML."""
     raw = yaml.safe_load(session_yaml)
-    raw.setdefault("session", {})
-    raw["session"]["run_id"] = session_run_id
     runtime_resolution = resolve_session_with_assets(
         raw,
-        source_context=SourceContext(origin="operator.session_configmap"),
+        source_context=SourceContext(
+            origin="operator.session_configmap",
+            run_id=session_run_id,
+        ),
     )
-    runtime_run_id = require_session_run_id(runtime_resolution.runtime_session)
+    runtime_run_id = require_resolved_session_run_id(runtime_resolution.resolved)
     _create_or_update_configmap(
         v1,
         "nodalarc-session",
         namespace,
         {
-            "session.yaml": yaml.dump(raw, default_flow_style=False),
-            "session_name": session.session.name,
+            "session.yaml": session_yaml,
+            "session_name": session_name,
             "session_run_id": runtime_run_id,
         },
         owner_ref,

@@ -1,27 +1,12 @@
 """Tests for satellite type Pydantic model and YAML loading."""
 
 import pytest
-from nodalarc.catalog_paths import CatalogPathError
-from nodalarc.constellation_loader import load_satellite_type, set_satellite_type_dir
 from nodalarc.models.satellite_type import (
     GroundTerminalDef,
     IslTerminalDef,
     SatelliteTypeConfig,
 )
 from pydantic import ValidationError
-
-from tests.conftest import CONFIGS_DIR
-
-SAT_TYPE_DIR = CONFIGS_DIR / "satellite-types"
-
-
-@pytest.fixture(autouse=True)
-def _set_sat_type_dir():
-    """Point satellite type loader at the real configs directory."""
-    set_satellite_type_dir(SAT_TYPE_DIR)
-    yield
-    # Reset cache between tests
-    load_satellite_type.cache_clear()
 
 
 class TestIslTerminalDef:
@@ -209,96 +194,6 @@ class TestSatelliteTypeConfig:
         assert len(cfg.ground_terminals) == 0
 
 
-class TestSatelliteTypeYAMLRoundTrip:
-    """Load each satellite type YAML file and verify it round-trips."""
-
-    @pytest.mark.parametrize(
-        "name",
-        [
-            "iridium-next",
-            "starlink-v2",
-            "oneweb-gen2",
-            "kuiper-v1",
-            "generic-4isl",
-        ],
-    )
-    def test_load_and_validate(self, name: str):
-        sat_type = load_satellite_type(name)
-        assert sat_type.name == name
-
-    @pytest.mark.parametrize(
-        "name",
-        [
-            "iridium-next",
-            "starlink-v2",
-            "oneweb-gen2",
-            "kuiper-v1",
-            "generic-4isl",
-        ],
-    )
-    def test_round_trip_serialization(self, name: str):
-        sat_type = load_satellite_type(name)
-        # Serialize to dict and back
-        data = sat_type.model_dump()
-        restored = SatelliteTypeConfig.model_validate(data)
-        assert restored == sat_type
-
-
-class TestIridiumNext:
-    def test_terminal_count(self):
-        sat_type = load_satellite_type("iridium-next")
-        total_isl = sum(t.count for t in sat_type.isl_terminals)
-        assert total_isl == 4
-
-    def test_two_intra_two_cross(self):
-        sat_type = load_satellite_type("iridium-next")
-        intra = [t for t in sat_type.isl_terminals if t.role == "intra-plane"]
-        cross = [t for t in sat_type.isl_terminals if t.role == "cross-plane"]
-        assert len(intra) == 1  # 1 entry with count=2
-        assert intra[0].count == 2
-        assert len(cross) == 1  # 1 entry with count=2
-        assert cross[0].count == 2
-
-    def test_tracking_rates(self):
-        sat_type = load_satellite_type("iridium-next")
-        intra = next(t for t in sat_type.isl_terminals if t.role == "intra-plane")
-        cross = next(t for t in sat_type.isl_terminals if t.role == "cross-plane")
-        assert intra.max_tracking_rate_deg_s == 4.0
-        assert cross.max_tracking_rate_deg_s == 2.5
-
-    def test_field_of_regard(self):
-        sat_type = load_satellite_type("iridium-next")
-        for t in sat_type.isl_terminals:
-            assert t.field_of_regard_deg == 120
-
-    def test_ground_terminal(self):
-        sat_type = load_satellite_type("iridium-next")
-        assert len(sat_type.ground_terminals) == 1
-        assert sat_type.ground_terminals[0].bandwidth_mbps == 200
-
-    def test_rf_type(self):
-        sat_type = load_satellite_type("iridium-next")
-        for t in sat_type.isl_terminals:
-            assert t.type == "rf"
-            assert t.band == "Ka"
-
-
-class TestGeneric4Isl:
-    def test_permissive_values(self):
-        sat_type = load_satellite_type("generic-4isl")
-        assert len(sat_type.isl_terminals) == 1
-        t = sat_type.isl_terminals[0]
-        assert t.count == 4
-        assert t.max_range_km == 6000
-        assert t.max_tracking_rate_deg_s == 5.0
-        assert t.field_of_regard_deg == 160
-        assert t.role is None  # pooled
-
-    def test_optical_type(self):
-        sat_type = load_satellite_type("generic-4isl")
-        assert sat_type.isl_terminals[0].type == "optical"
-
-
 class TestBeamFalloffExponent:
     def test_beam_falloff_default(self):
         t = GroundTerminalDef(type="rf", count=1, bandwidth_mbps=100)
@@ -315,13 +210,3 @@ class TestBeamFalloffExponent:
     def test_beam_falloff_above_maximum_rejected(self):
         with pytest.raises(ValidationError, match="beam_falloff_exponent must be 1.0-8.0"):
             GroundTerminalDef(type="rf", count=1, bandwidth_mbps=100, beam_falloff_exponent=9.0)
-
-
-class TestSatelliteTypeLoaderErrors:
-    def test_nonexistent_type(self):
-        with pytest.raises(FileNotFoundError, match="Satellite type file not found"):
-            load_satellite_type("does-not-exist")
-
-    def test_rejects_name_that_would_escape_satellite_type_catalog(self):
-        with pytest.raises(CatalogPathError, match="satellite_type"):
-            load_satellite_type("../outside")

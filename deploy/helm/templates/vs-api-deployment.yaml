@@ -7,15 +7,13 @@
 # Volume mount philosophy:
 #   platform-config  — platform infrastructure config, does not change per session
 #   session-config   — directory mount (auto-updates), bootstrap for dev path only;
-#                      the wizard path reads session YAMLs from configs/sessions/
+#                      the wizard path reads catalog sessions from catalog/nodalarc/
 #   session-db       — emptyDir for SQLite (future: PVC-backed persistent storage
 #                      for user-uploaded models, session history, and user catalog)
 #
-# Constellation, ground-station, satellite-type, and protocol definitions
-# are baked into the image as the static product catalog (configs/).
-# User-uploaded models will be stored on persistent volumes in a future
-# release, alongside the static catalog. VS-API reads both when presenting
-# the wizard — no ConfigMap mounts needed for session data.
+# Baseline catalog primitives and deployable session examples are baked into
+# the image under catalog/nodalarc/. User-uploaded models will be stored on
+# persistent volumes in a future release, alongside the static catalog.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -34,6 +32,8 @@ spec:
     metadata:
       labels:
         app: nodalarc-vs-api
+      annotations:
+        checksum/platform-config: {{ .Files.Get "files/platform.yaml" | sha256sum | quote }}
     spec:
       serviceAccountName: nodalarc-orchestrator
 {{- if .Values.controlPlaneNode }}

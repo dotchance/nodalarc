@@ -324,7 +324,7 @@ link_rules:
     n: 1
   endpoints:
   - select:
-      segment: leo_a
+      segment: leo_b
     terminal:
       all:
       - role: crosslink

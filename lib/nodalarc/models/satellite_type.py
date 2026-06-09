@@ -3,8 +3,8 @@
 """Satellite type configuration models.
 
 A satellite type defines the terminal hardware carried by each satellite
-in a constellation. Satellite type files live in configs/satellite-types/
-and are referenced by name from constellation definitions.
+in an old constellation model fixture. Runtime catalog sessions use node and
+terminal primitives resolved by `resolve_session()`.
 """
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator

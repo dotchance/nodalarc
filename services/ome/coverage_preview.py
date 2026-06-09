@@ -17,20 +17,18 @@ from __future__ import annotations
 import logging
 import time
 from collections import defaultdict
+from typing import Any
 
 from nodalarc.body_frames import body_frame_for
 from nodalarc.catalog_paths import CatalogRoots
-from nodalarc.constants import EARTH_RADIUS_KM
 from nodalarc.constellation_loader import (
     isl_terminal_for_interface,
-    load_ground_stations,
 )
 from nodalarc.models.addressing import (
     neighbors_by_node,
     topology_summary,
     unique_isl_pairs,
 )
-from nodalarc.models.constellation import ParametricConstellation
 from nodalarc.models.coverage import (
     CoveragePreviewResult,
     GsPreview,
@@ -38,10 +36,9 @@ from nodalarc.models.coverage import (
     IslFailureBreakdown,
     IslPreview,
 )
-from nodalarc.models.ground_policy import HandoverPolicySpec, SelectionPolicySpec
 from nodalarc.models.resolved_session import SourceContext
-from nodalarc.models.session import GroundSchedulingConfig
-from nodalarc.propagator import orbital_period, propagate_keplerian
+from nodalarc.ome_inputs import build_ome_inputs_from_resolved
+from nodalarc.propagator import propagate_keplerian
 from nodalarc.resolve_session import resolve_session_with_assets
 
 from ome.coverage_insights import describe_gs_coverage, generate_insights
@@ -54,61 +51,86 @@ _PREVIEW_STEP_SECONDS = 10
 _FAILURE_SCAN_SAMPLES = 10
 
 
-def _preview_ground_scheduling() -> GroundSchedulingConfig:
-    return GroundSchedulingConfig(
-        selection_policy=SelectionPolicySpec(name="highest-elevation", params={}),
-        handover_policy=HandoverPolicySpec(name="none", params={}),
-    )
-
-
 def _preview_segment_session(
     *,
     constellation_source: str | dict,
-    satellite_type_override: str | None,
     ground_stations_source: str | dict,
 ) -> dict:
-    preview_ground = _preview_ground_scheduling().model_dump(mode="python")
-    constellation_segment = {
-        "id": "space",
-        "kind": "constellation",
-        "source": constellation_source,
-        "namespace": "space",
-        "central_body": "earth",
+    preview_ground = {
+        "selection_policy": {"highest_elevation": {}},
+        "handover_policy": {"hard_release": {}},
+        "handover_mode": "bbm",
+        "mbb_overlap_ticks": 0,
+        "mbb_reserve": 0,
     }
-    if satellite_type_override:
-        constellation_segment["satellite_type"] = satellite_type_override
     return {
         "session": {"name": "coverage-preview"},
-        "identity": {"mode": "segment_namespaced"},
         "segments": [
-            constellation_segment,
+            {
+                "id": "space",
+                "source": constellation_source,
+            },
             {
                 "id": "ground",
-                "kind": "ground_set",
-                "source": ground_stations_source,
-                "namespace": "ground",
-                "reference_body": "earth",
+                "placement": {"from_site_set": ground_stations_source},
+                "apply": {"scheduling": preview_ground},
             },
         ],
         "link_rules": [
             {
                 "id": "ground-access",
-                "kind": "access",
-                "endpoints": [
-                    {"selector": {"segment": "ground"}, "terminal_role": "ground"},
-                    {"selector": {"segment": "space"}, "terminal_role": "ground"},
-                ],
                 "topology": {"mode": "visible_candidates"},
-            }
+                "endpoints": [
+                    {
+                        "select": {"segment": "ground"},
+                        "terminal": {"all": [{"role": "access"}, {"medium": "rf"}]},
+                        "min_elevation_deg": 10,
+                    },
+                    {
+                        "select": {"segment": "space"},
+                        "terminal": {"all": [{"role": "access"}, {"medium": "rf"}]},
+                    },
+                ],
+            },
+            {
+                "id": "space-isl",
+                "topology": {"mode": "nearest_n", "n": 1},
+                "endpoints": [
+                    {
+                        "select": {"segment": "space"},
+                        "terminal": {"all": [{"role": "isl"}, {"medium": "optical"}]},
+                    },
+                    {
+                        "select": {"segment": "space"},
+                        "terminal": {"all": [{"role": "isl"}, {"medium": "optical"}]},
+                    },
+                ],
+            },
         ],
-        "simulation": {
-            "ground_link_model": "geometry_only",
-            "acknowledge_geometry_only": True,
-            "candidate_limits": {"max_pairs_per_rule": 100000},
+        "addressing": {
+            "loopbacks": [
+                {
+                    "id": "space-loopbacks-v4",
+                    "applies_to": {"segment": "space"},
+                    "ipv4_pool": "10.0.0.0/16",
+                    "prefix_length": 32,
+                    "allocation": "by_plane_slot",
+                },
+                {
+                    "id": "space-loopbacks-v6",
+                    "applies_to": {"segment": "space"},
+                    "ipv6_pool": "fd00::/64",
+                    "prefix_length": 128,
+                    "allocation": "by_plane_slot",
+                },
+            ]
         },
-        "orbit": {"propagator": "keplerian-circular"},
-        "scheduling": {"ground": preview_ground},
-        "routing": {"protocol": "isis", "extensions": []},
+        "simulation": {
+            "candidate_limits": {
+                "max_pairs_per_rule": 100000,
+                "max_pairs_per_tick": 100000,
+            },
+        },
     }
 
 
@@ -132,15 +154,19 @@ def compute_coverage_preview(
         raise ValueError("constellation is required for coverage preview")
     if ground_stations_source is None:
         raise ValueError("ground_stations is required for coverage preview")
-
-    ground_source = ground_stations_source
-    if isinstance(ground_source, list):
-        ground_source = load_ground_stations(ground_source).model_dump(mode="python")
+    if satellite_type_override is not None:
+        raise ValueError(
+            "satellite_type override is not supported by catalog coverage preview; "
+            "choose or author a constellation primitive with the desired node model"
+        )
+    if isinstance(ground_stations_source, list):
+        raise ValueError(
+            "coverage preview requires a site_set catalog reference or inline site_set"
+        )
 
     session_dict = _preview_segment_session(
         constellation_source=constellation_source,
-        satellite_type_override=satellite_type_override,
-        ground_stations_source=ground_source,
+        ground_stations_source=ground_stations_source,
     )
     resolution = resolve_session_with_assets(
         session_dict,
@@ -148,24 +174,25 @@ def compute_coverage_preview(
         source_context=SourceContext(origin="coverage_preview"),
     )
 
-    constellation = resolution.runtime_constellation
-    gs_file = resolution.primary_ground_set.config
-    satellites = list(resolution.satellites)
+    runtime = build_ome_inputs_from_resolved(resolution.resolved)
+    gs_file = runtime.gs_file
+    satellites = list(runtime.satellites)
     if not satellites:
         raise ValueError("No satellites in constellation")
 
-    addressing = resolution.addressing
-    neighbors = resolution.neighbors
+    addressing = runtime.addressing
+    neighbors = runtime.neighbors
 
-    first_alt = satellites[0].elements.semi_major_axis_km - EARTH_RADIUS_KM
-    period = max(
-        orbital_period(sat.elements.semi_major_axis_km - EARTH_RADIUS_KM) for sat in satellites
-    )
+    first_body_frame = body_frame_for(getattr(satellites[0], "central_body", "earth"))
+    first_alt = satellites[0].elements.semi_major_axis_km - first_body_frame.equatorial_radius_km
+    period = runtime.period
 
-    # Extract visibility parameters from resolved constellation
-    vis_params = _extract_visibility_params(constellation, gs_file)
+    vis_params = {
+        "polar_seam_enabled": False,
+        "latitude_threshold_deg": 70.0,
+    }
+    ground_scheduling = runtime.ground_scheduling
 
-    # Run timeline computation
     window = precompute_timeline_window(
         satellites=satellites,
         addressing=addressing,
@@ -173,12 +200,14 @@ def compute_coverage_preview(
         neighbors=neighbors,
         epoch_unix=0.0,
         duration_s=period,
-        propagator_id=resolution.runtime_session.orbit.propagator,
+        propagator_id=runtime.propagator_id,
         step_seconds=_PREVIEW_STEP_SECONDS,
-        ground_scheduling=resolution.runtime_session.scheduling.ground,
-        ground_link_model="geometry_only",
+        ground_scheduling=ground_scheduling,
+        ground_link_model=runtime.ground_link_model,
         ground_defaults_applied=True,
-        ground_candidate_satellites_by_gs=resolution.ground_candidate_satellites_by_gs,
+        ground_candidate_satellites_by_gs=runtime.ground_candidate_satellites_by_gs,
+        body_ephemeris=runtime.body_ephemeris,
+        active_bodies=runtime.active_bodies,
         **vis_params,
     )
     events = window.events
@@ -206,15 +235,11 @@ def compute_coverage_preview(
     # Extract constellation geometry for insights
     inclination_deg = 0.0
     altitude_km = first_alt
-    plane_count = 1
-    parametric_assets = [
-        asset.config
-        for asset in resolution.constellations
-        if isinstance(asset.config, ParametricConstellation)
-    ]
-    if parametric_assets:
-        inclination_deg = parametric_assets[0].orbit.inclination_deg
-        plane_count = sum(asset.planes.count for asset in parametric_assets)
+    plane_count = len({(sat.segment_id or "space", sat.local_plane) for sat in satellites}) or 1
+    if satellites:
+        import math
+
+        inclination_deg = math.degrees(satellites[0].elements.inclination_rad)
 
     isl_terminal_count = satellites[0].isl_terminal_count if satellites else 4
     topo = topology_summary(neighbors)
@@ -283,18 +308,6 @@ def compute_coverage_preview(
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
-
-
-def _extract_visibility_params(constellation, gs_file) -> dict:
-    """Extract OME visibility parameters from resolved constellation."""
-    params = {
-        "polar_seam_enabled": False,
-        "latitude_threshold_deg": 70.0,
-    }
-    if isinstance(constellation, ParametricConstellation) and constellation.polar_seam:
-        params["polar_seam_enabled"] = constellation.polar_seam.enabled
-        params["latitude_threshold_deg"] = constellation.polar_seam.latitude_threshold_deg
-    return params
 
 
 def _count_events(events, neighbors, gs_file, addressing, period: float) -> tuple[dict, dict]:
@@ -423,7 +436,11 @@ def _scan_isl_failure_reasons(
     reason_counts: dict[str, int] = defaultdict(int)
     pairs_ever_feasible: set[tuple[str, str]] = set()
 
-    sat_map = {addressing.sat_id(s.plane, s.slot): s for s in satellites}
+    sat_map: dict[str, Any] = {}
+    for sat in satellites:
+        if sat.node_id is None:
+            raise ValueError("coverage preview requires resolver-owned satellite node_id")
+        sat_map[sat.node_id] = sat
     sample_times = [period * i / _FAILURE_SCAN_SAMPLES for i in range(_FAILURE_SCAN_SAMPLES)]
 
     seam_enabled = vis_params["polar_seam_enabled"]

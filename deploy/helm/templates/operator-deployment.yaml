@@ -20,6 +20,8 @@ spec:
     metadata:
       labels:
         app: nodalarc-operator
+      annotations:
+        checksum/platform-config: {{ .Files.Get "files/platform.yaml" | sha256sum | quote }}
     spec:
       serviceAccountName: nodalarc-operator
       hostNetwork: true

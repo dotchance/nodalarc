@@ -1,9 +1,11 @@
 # Copyright 2024-2026 .chance (dotchance)
 # Licensed under the Apache License, Version 2.0. See LICENSE file.
-"""Constellation loader — expands config to satellite orbital elements.
+"""Constellation helper models and expansion math.
 
-Handles parametric (Walker-delta/star), explicit, and TLE modes.
-YAML loading happens here (component responsibility, not shared lib).
+Catalog sessions are resolved before runtime consumers call OME. This module is
+still used for inline test fixtures and OME's mature satellite-node physics
+shape; file-loading helpers must be pointed at explicit test roots and must not
+discover retired product config directories implicitly.
 """
 
 from __future__ import annotations
@@ -52,7 +54,6 @@ adapter = TypeAdapter(ConstellationConfig)
 IslTerminalLike = IslTerminal | IslTerminalDef
 GroundTerminalLike = GroundTerminal | SatelliteGroundTerminalDef
 
-# Default search paths for config directories
 _SAT_TYPE_DIR: Path | None = None
 _GS_STATIONS_DIR: Path | None = None
 _GS_SETS_DIR: Path | None = None
@@ -76,52 +77,42 @@ def set_ground_station_dirs(
         _GS_SETS_DIR = Path(sets_dir)
 
 
-def _find_repo_root() -> Path:
-    """Walk up from this file to find the repo root (contains configs/)."""
-    p = Path(__file__).resolve().parent
-    for _ in range(10):
-        if (p / "configs").is_dir():
-            return p
-        p = p.parent
-    raise FileNotFoundError("Cannot find repo root (directory containing configs/)")
-
-
 def _resolve_sat_type_dir() -> Path:
-    """Resolve the satellite type directory, defaulting to configs/satellite-types/."""
     if _SAT_TYPE_DIR is not None:
         return _SAT_TYPE_DIR
-    candidate = _find_repo_root() / "configs" / "satellite-types"
-    if candidate.is_dir():
-        return candidate
     raise FileNotFoundError(
-        "Cannot find configs/satellite-types/ directory. "
-        "Call set_satellite_type_dir() to configure explicitly."
+        "Satellite-type file loading requires an explicit directory. Runtime catalog "
+        "sessions must use resolve_session(); tests that exercise this legacy helper "
+        "must call set_satellite_type_dir()."
     )
 
 
 def _resolve_gs_stations_dir() -> Path:
     if _GS_STATIONS_DIR is not None:
         return _GS_STATIONS_DIR
-    candidate = _find_repo_root() / "configs" / "ground-stations" / "stations"
-    if candidate.is_dir():
-        return candidate
-    raise FileNotFoundError("Cannot find configs/ground-stations/stations/ directory.")
+    raise FileNotFoundError(
+        "Ground-station file loading requires an explicit stations directory. Runtime "
+        "catalog sessions must use resolve_session(); tests that exercise this legacy "
+        "helper must call set_ground_station_dirs()."
+    )
 
 
 def _resolve_gs_sets_dir() -> Path:
     if _GS_SETS_DIR is not None:
         return _GS_SETS_DIR
-    candidate = _find_repo_root() / "configs" / "ground-stations" / "sets"
-    if candidate.is_dir():
-        return candidate
-    raise FileNotFoundError("Cannot find configs/ground-stations/sets/ directory.")
+    raise FileNotFoundError(
+        "Ground-station set file loading requires an explicit sets directory. Runtime "
+        "catalog sessions must use resolve_session(); tests that exercise this legacy "
+        "helper must call set_ground_station_dirs()."
+    )
 
 
 @lru_cache(maxsize=32)
 def load_satellite_type(name: str) -> SatelliteTypeConfig:
     """Load and validate a satellite type YAML file by name.
 
-    The name resolves to configs/satellite-types/{name}.yaml.
+    The name resolves under the explicit directory set by
+    set_satellite_type_dir().
     Results are cached since the same type may be referenced multiple times.
     """
     name = validate_catalog_name(name, label="satellite_type")
@@ -429,7 +420,8 @@ def load_ground_stations_from_set(
 ) -> GroundStationFile:
     """Load a ground station set and resolve all station references.
 
-    Returns a GroundStationFile for backward compatibility with downstream code.
+    This helper is retained for tests that exercise the old model family. Runtime
+    catalog sessions must use resolve_session().
     """
     gs_set = load_ground_station_set(set_name)
     stations: list[GroundStationConfig] = []
@@ -455,7 +447,8 @@ def load_ground_stations_from_list(
 ) -> GroundStationFile:
     """Load a list of individual station files by name.
 
-    Returns a GroundStationFile for backward compatibility with downstream code.
+    This helper is retained for tests that exercise the old model family. Runtime
+    catalog sessions must use resolve_session().
     """
     stations: list[GroundStationConfig] = []
     for name in station_names:
@@ -471,8 +464,8 @@ def load_ground_stations(source: str | Path | list[str] | dict) -> GroundStation
     """Load and validate ground stations.
 
     Accepts:
-    - str/Path: YAML file path (set, individual, or legacy format)
-    - list[str]: list of individual station names to load directly
+    - str/Path: YAML file path using the old model family
+    - list[str]: list of individual station names under an explicit test root
     - dict: inline GroundStationFile definition (for self-contained session YAML)
     """
     if isinstance(source, list):

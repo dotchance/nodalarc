@@ -10,21 +10,24 @@ import {
   supportedOrbitModelsForConstellation,
 } from "../orbitModels";
 
-function preset(mode: string | null, constellation = "configs/constellations/starlink-176.yaml"): ConstellationPreset {
+function preset(
+  mode: string | null,
+  constellation = "nodalarc:constellations/earth/leo/earth-leo-walker-delta-176.yaml",
+): ConstellationPreset {
   return {
     name: "test",
     description: "test",
     satellite_count: 1,
     constellation,
-    ground_stations: "configs/ground-stations/sets/global.yaml",
+    ground_stations: "nodalarc:site-sets/earth/leo/earth-leo-starlink-pop-sites.yaml",
     mode,
   };
 }
 
 describe("orbit model helpers", () => {
   it("defaults normal parametric constellations to J2 mean elements", () => {
-    expect(DEFAULT_ORBIT_PROPAGATOR).toBe("j2-mean-elements");
-    expect(defaultOrbitPropagatorForConstellation(preset("parametric"))).toBe("j2-mean-elements");
+    expect(DEFAULT_ORBIT_PROPAGATOR).toBe("j2_mean_elements");
+    expect(defaultOrbitPropagatorForConstellation(preset("parametric"))).toBe("j2_mean_elements");
   });
 
   it("detects TLE-backed constellations as structurally SGP4/TLE-only", () => {
@@ -38,13 +41,13 @@ describe("orbit model helpers", () => {
     const inline = preset(null, JSON.stringify({ mode: "tle", name: "tle-demo" }));
 
     expect(constellationSupportsSgp4Tle(inline)).toBe(true);
-    expect(defaultOrbitPropagatorForConstellation(inline)).toBe("j2-mean-elements");
+    expect(defaultOrbitPropagatorForConstellation(inline)).toBe("j2_mean_elements");
     expect(constellationUnsupportedReason(inline)).toContain("coming soon");
   });
 
   it("lists runtime-supported orbit models by constellation source", () => {
     expect(supportedOrbitModelsForConstellation(preset("parametric")).map((option) => option.id))
-      .toEqual(["j2-mean-elements", "keplerian-circular"]);
+      .toEqual(["j2_mean_elements", "two_body"]);
     expect(supportedOrbitModelsForConstellation(preset("tle")).map((option) => option.id))
       .toEqual([]);
   });

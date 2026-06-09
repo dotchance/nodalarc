@@ -6,12 +6,13 @@ Migrated from orchestrator/link_manager.py:71-111. The DaemonSet
 variant filters by spec.nodeName so each agent only discovers pods
 on its own node.
 
-IMPORTANT — node ID case sensitivity:
+IMPORTANT — node ID contract:
   The node_id returned here comes from the K8s label "nodalarc.io/node-id",
-  which uses the canonical case from the AddressingScheme (e.g., "sat-P01S02").
-  All Node Agent protobuf messages must use this canonical case because ground bridge naming
-  helpers derive host veth names from the node ID, and Linux interface names
-  are case-sensitive. K8s pod names are lowercase; node IDs are not.
+  which carries the runtime node ID from the resolved session manifest. All
+  Node Agent protobuf messages must use this exact value because ground bridge
+  naming helpers derive host veth names from the node ID, and Linux interface
+  names are case-sensitive. K8s pod names are deployment names; node IDs are
+  emulation identity.
 """
 
 from __future__ import annotations

@@ -1,7 +1,6 @@
 """Test ISL neighbor assignment for all constellation types."""
 
 import pytest
-from nodalarc.constellation_loader import load_constellation
 from nodalarc.models.addressing import (
     AddressingScheme,
     NeighborAssignment,
@@ -11,9 +10,49 @@ from nodalarc.models.addressing import (
 from nodalarc.models.constellation import ConstellationConfig
 from pydantic import TypeAdapter
 
-from tests.conftest import CONFIGS_DIR
-
 adapter = TypeAdapter(ConstellationConfig)
+
+
+def _terminal_config(isl_count: int) -> dict:
+    return {
+        "isl": [
+            {
+                "type": "optical",
+                "count": isl_count,
+                "max_range_km": 5000,
+                "bandwidth_mbps": 1000,
+                "max_tracking_rate_deg_s": 3.0,
+            }
+        ]
+    }
+
+
+def _parametric_constellation(
+    *,
+    name: str,
+    planes: int,
+    sats_per_plane: int,
+    raan_spacing_deg: float,
+    isl_count: int,
+) -> ConstellationConfig:
+    return adapter.validate_python(
+        {
+            "mode": "parametric",
+            "name": name,
+            "orbit": {
+                "altitude_km": 550,
+                "inclination_deg": 53,
+                "pattern": "walker-delta",
+            },
+            "planes": {
+                "count": planes,
+                "raan_spacing_deg": raan_spacing_deg,
+                "sats_per_plane": sats_per_plane,
+                "phase_offset_deg": 0,
+            },
+            "default_terminals": _terminal_config(isl_count),
+        }
+    )
 
 
 @pytest.fixture
@@ -23,17 +62,35 @@ def addressing():
 
 @pytest.fixture
 def four_node_config():
-    return load_constellation(CONFIGS_DIR / "constellations/custom-example.yaml")
+    return _parametric_constellation(
+        name="four-node",
+        planes=2,
+        sats_per_plane=2,
+        raan_spacing_deg=45,
+        isl_count=2,
+    )
 
 
 @pytest.fixture
 def starlink_config():
-    return load_constellation(CONFIGS_DIR / "constellations/starlink-early-44.yaml")
+    return _parametric_constellation(
+        name="starlink-early-44",
+        planes=4,
+        sats_per_plane=11,
+        raan_spacing_deg=45,
+        isl_count=4,
+    )
 
 
 @pytest.fixture
 def iridium_config():
-    return load_constellation(CONFIGS_DIR / "constellations/iridium-66.yaml")
+    return _parametric_constellation(
+        name="iridium-66",
+        planes=6,
+        sats_per_plane=11,
+        raan_spacing_deg=31.6,
+        isl_count=4,
+    )
 
 
 class TestFourNodeAssignment:

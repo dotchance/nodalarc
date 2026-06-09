@@ -163,6 +163,31 @@ def normalize_extensions(extensions: list[str] | tuple[str, ...]) -> tuple[str, 
     return tuple(normalized)
 
 
+def domain_extensions(domain: Any) -> list[str]:
+    """Return routing-stack extensions implied by a resolved routing domain."""
+    protocol = getattr(domain, "protocol", None)
+    domain_id = getattr(domain, "domain_id", "<unknown>")
+    if protocol not in {"isis", "ospf"}:
+        raise ValueError(
+            f"routing domain {domain_id!r} uses protocol {protocol!r}; "
+            "current FRR runtime supports isis/ospf domains"
+        )
+    capabilities = set(getattr(domain, "capabilities", ()) or ())
+    extensions: list[str] = []
+    if "segment_routing" in capabilities:
+        extensions.append("sr")
+    if "traffic_engineering" in capabilities:
+        extensions.append("te")
+    if "mpls" in capabilities and "traffic_engineering" in capabilities:
+        extensions.append("mpls")
+    return extensions
+
+
+def resolve_domain_stack(domain: Any) -> ResolvedStack:
+    """Resolve the routing stack for one resolved routing domain."""
+    return resolve_stack(domain.protocol, domain_extensions(domain))
+
+
 def resolve_stack(protocol: str, extensions: list[str]) -> ResolvedStack:
     """Resolve a (protocol, extensions) pair into a full stack configuration.
 

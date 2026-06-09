@@ -142,7 +142,7 @@ Sessions can assemble independent building blocks into one emulated network: LEO
 
 ![Cislunar routing session with lunar relay mesh and router terminal](docs/images/readme-cislunar-routing.png)
 
-The screenshot above is a running `earth-luna-gateway-site` session. The globe is focused on Luna, the lunar relay mesh is active, the cislunar relay spans back toward Earth, the side panel explains why the selected Earth ground terminal is not currently linked, and the terminal is a live shell inside the Artemis surface router.
+The screenshot above shows a cislunar routing session. The globe is focused on Luna, the lunar relay mesh is active, the cislunar relay spans back toward Earth, the side panel explains why the selected Earth ground terminal is not currently linked, and the terminal is a live shell inside the Artemis surface router.
 
 ## What You Can Test
 

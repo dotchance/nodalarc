@@ -6,12 +6,10 @@
 # never restarts it. Session parameters are variables, not reasons to
 # restart; VS-API hot-reloads via SessionContext teardown/creation.
 #
-# configs/ is the static product catalog: verified satellite models,
-# ground station definitions, constellation templates, protocol configs,
-# and example sessions that ship with each release. Users assemble these
-# like building blocks to define sessions. In a future release, user-
-# uploaded models (custom satellites, ground stations, constellations)
-# will be stored on persistent volumes alongside this static catalog.
+# catalog/ is the static product catalog: verified primitives and example
+# sessions that ship with each release. Users assemble these like building
+# blocks to define sessions. In a future release, user-uploaded models will be
+# stored on persistent volumes alongside this static catalog.
 #
 # Runtime data (live snapshots, link state, events) comes from NATS.
 # Platform config comes from a single ConfigMap mount (platform.yaml).
@@ -64,8 +62,9 @@ COPY services/vs_api/ services/vs_api/
 # Copy OME service (coverage_preview used by wizard)
 COPY services/ome/ services/ome/
 
-# Bake in all config files
+# Bake in deployment templates and the static catalog.
 COPY configs/ configs/
+COPY catalog/ catalog/
 
 # HTTP + WebSocket port
 EXPOSE 8080

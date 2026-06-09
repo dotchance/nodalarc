@@ -5,7 +5,7 @@ executes steps sequentially. Communicates with Scheduler via NATS
 request/reply and with MI convergence gate via NATS request/reply.
 
 Usage:
-  python -m tools.na_scenario --scenario configs/scenarios/isl-failure.yaml --session configs/sessions/sample.yaml
+  python -m tools.na_scenario --scenario scenario.yaml --session catalog/nodalarc/sessions/earth-leo-simple.yaml
 """
 
 from __future__ import annotations

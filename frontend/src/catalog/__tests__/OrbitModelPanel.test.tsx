@@ -10,8 +10,8 @@ function preset(mode: string): ConstellationPreset {
     name: `${mode}-constellation`,
     description: "test",
     satellite_count: 1,
-    constellation: "configs/constellations/test.yaml",
-    ground_stations: "configs/ground-stations/sets/global.yaml",
+    constellation: "nodalarc:constellations/earth/leo/earth-leo-ring-36.yaml",
+    ground_stations: "nodalarc:site-sets/earth/leo/earth-leo-starlink-pop-sites.yaml",
     mode,
   };
 }
@@ -24,7 +24,7 @@ describe("OrbitModelPanel", () => {
     render(
       <OrbitModelPanel
         constellation={preset("parametric")}
-        selected="j2-mean-elements"
+        selected="j2_mean_elements"
         onSelect={onSelect}
       />,
     );
@@ -42,7 +42,7 @@ describe("OrbitModelPanel", () => {
     render(
       <OrbitModelPanel
         constellation={preset("tle")}
-        selected="j2-mean-elements"
+        selected="j2_mean_elements"
         onSelect={onSelect}
       />,
     );

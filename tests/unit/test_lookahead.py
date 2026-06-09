@@ -68,6 +68,7 @@ def test_lookahead_submit_and_get_result():
         propagator_id=session.orbit.propagator,
         ground_scheduling=session.scheduling.ground,
         ground_candidate_satellites_by_gs=ground_candidates,
+        ground_link_model=session.ground_link_model,
     )
 
     la.submit(
@@ -108,6 +109,7 @@ def test_lookahead_cancel_discards_result():
         propagator_id=session.orbit.propagator,
         ground_scheduling=session.scheduling.ground,
         ground_candidate_satellites_by_gs=ground_candidates,
+        ground_link_model=session.ground_link_model,
     )
 
     la.submit(
@@ -147,6 +149,7 @@ def test_lookahead_is_ready():
         propagator_id=session.orbit.propagator,
         ground_scheduling=session.scheduling.ground,
         ground_candidate_satellites_by_gs=ground_candidates,
+        ground_link_model=session.ground_link_model,
     )
 
     assert not la.is_ready()

@@ -166,7 +166,7 @@ def test_valid_selectors_still_accepted():
     PlaneOverride(planes=[0, 6, 12], satellite_type="x")
     AreaMapping(ground_stations="all", area_id="0.0.0.0")  # "all" keyword
     TLEFilter(norad_ids=[25544, 43013])
-    NodeSelector(segment="leo", planes=[0, 1, 2])
+    NodeSelector(all=(NodeSelector(segment="leo"), NodeSelector(plane=0)))
 
 
 def test_routing_extensions_normalize_and_reject():

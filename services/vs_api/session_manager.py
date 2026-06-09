@@ -2,7 +2,7 @@
 # Licensed under the Apache License, Version 2.0. See LICENSE file.
 """Session manager — lists available sessions and orchestrates switching.
 
-Scans configs/sessions/ for YAML files, provides list with active flag,
+Scans catalog session YAML files, provides list with active flag,
 and runs teardown + deploy in a thread executor during switch.
 
 Session recovery: on startup without explicit --session/--db, scans known
@@ -31,6 +31,18 @@ log = logging.getLogger(__name__)
 
 # Maximum number of old session directories to keep
 _MAX_KEPT_SESSIONS = 5
+
+
+def _routing_label(resolved) -> str:
+    routing = resolved.routing
+    if routing is None or not routing.domains:
+        return "unrouted"
+    return " + ".join(f"{domain.id}:{domain.protocol}" for domain in routing.domains)
+
+
+def _constellation_label(resolved) -> str:
+    segments = sorted({node.segment_id for node in resolved.nodes if node.kind == "satellite"})
+    return " + ".join(segments) if segments else "none"
 
 
 def _cr_status_observes_current_generation(cr: dict) -> bool:
@@ -62,8 +74,16 @@ def _pid_alive(pid: int) -> bool:
 class SessionManager:
     """Manages session listing, switching, and status tracking."""
 
-    def __init__(self, sessions_dir: str, initial_db_path: str | None = None) -> None:
+    def __init__(
+        self,
+        sessions_dir: str,
+        initial_db_path: str | None = None,
+        generated_sessions_dir: str | None = None,
+    ) -> None:
         self._sessions_dir = Path(sessions_dir)
+        self._generated_sessions_dir = (
+            Path(generated_sessions_dir) if generated_sessions_dir else None
+        )
         self._current_data_dir: Path | None = None
         self._current_session_file: str | None = None
         self._status: str = "idle"
@@ -71,6 +91,7 @@ class SessionManager:
         self._detail_lock = threading.Lock()
         self._available: list[dict] = []
         self._session_file_paths: dict[str, Path] = {}
+        self._session_parse_failures: dict[str, str] = {}
 
         # Derive initial data_dir from db_path parent if provided
         if initial_db_path:
@@ -78,6 +99,22 @@ class SessionManager:
 
         # Scan sessions on init
         self._available = self.scan_sessions()
+
+    def _scan_roots(self) -> tuple[tuple[Path, bool], ...]:
+        """Return session roots as ``(path, required)`` pairs."""
+        roots: list[tuple[Path, bool]] = [(self._sessions_dir, True)]
+        if self._generated_sessions_dir is not None:
+            roots.append((self._generated_sessions_dir, False))
+        return tuple(roots)
+
+    def _record_session_parse_failure(self, file_key: str, yaml_path: Path, exc: Exception) -> None:
+        """Log a session parse failure when it first appears or changes."""
+        error = str(exc)
+        if self._session_parse_failures.get(file_key) != error:
+            log.warning("Failed to parse session %s: %s", yaml_path, exc)
+        else:
+            log.debug("Repeated session parse failure for %s: %s", yaml_path, exc)
+        self._session_parse_failures[file_key] = error
 
     @property
     def status(self) -> str:
@@ -96,49 +133,49 @@ class SessionManager:
     def scan_sessions(self) -> list[dict]:
         """Read each segment YAML in sessions_dir, resolve it, return metadata."""
         results = []
-        if not self._sessions_dir.is_dir():
-            log.warning(f"Sessions directory not found: {self._sessions_dir}")
-            return results
-        root = self._sessions_dir.resolve(strict=True)
         session_file_paths: dict[str, Path] = {}
+        active_failures: set[str] = set()
 
-        for yaml_path in sorted(self._sessions_dir.glob("*.yaml")):
-            file_key = str(yaml_path)
-            resolved_path = yaml_path.resolve(strict=True)
-            try:
-                resolved_path.relative_to(root)
-            except ValueError as exc:
-                msg = f"Session file escapes sessions root: {yaml_path}"
-                log.error(msg)
-                raise CatalogPathError(msg) from exc
+        for scan_root, required in self._scan_roots():
+            if not scan_root.is_dir():
+                if required:
+                    log.warning(f"Sessions directory not found: {scan_root}")
+                continue
+            root = scan_root.resolve(strict=True)
 
-            try:
-                raw = yaml.safe_load(resolved_path.read_text())
-                resolution = resolve_session_with_assets(
-                    raw,
-                    source_context=SourceContext(origin="vs_api.session_manager"),
-                )
-                session = resolution.runtime_session
-                ext_str = (
-                    "-".join(session.routing.extensions) if session.routing.extensions else "plain"
-                )
-                routing_label = f"{session.routing.protocol}-{ext_str}"
-                const_label = (
-                    resolution.primary_constellation.config.name
-                    if len(resolution.constellations) == 1
-                    else " + ".join(asset.segment.id for asset in resolution.constellations)
-                )
-                results.append(
-                    {
-                        "name": session.session.name,
-                        "file": file_key,
-                        "constellation": const_label,
-                        "routing_stack": routing_label,
-                    }
-                )
-                session_file_paths[file_key] = resolved_path
-            except Exception as exc:
-                log.warning(f"Failed to parse session {yaml_path}: {exc}")
+            for yaml_path in sorted(scan_root.glob("*.yaml")):
+                file_key = str(yaml_path)
+                resolved_path = yaml_path.resolve(strict=True)
+                try:
+                    resolved_path.relative_to(root)
+                except ValueError as exc:
+                    msg = f"Session file escapes sessions root: {yaml_path}"
+                    log.error(msg)
+                    raise CatalogPathError(msg) from exc
+
+                try:
+                    raw = yaml.safe_load(resolved_path.read_text())
+                    resolution = resolve_session_with_assets(
+                        raw,
+                        source_context=SourceContext(origin="vs_api.session_manager"),
+                    )
+                    resolved = resolution.resolved
+                    results.append(
+                        {
+                            "name": resolved.session.name,
+                            "file": file_key,
+                            "constellation": _constellation_label(resolved),
+                            "routing_stack": _routing_label(resolved),
+                        }
+                    )
+                    session_file_paths[file_key] = resolved_path
+                    self._session_parse_failures.pop(file_key, None)
+                except Exception as exc:
+                    active_failures.add(file_key)
+                    self._record_session_parse_failure(file_key, yaml_path, exc)
+        for key in tuple(self._session_parse_failures):
+            if key not in active_failures and key not in session_file_paths:
+                self._session_parse_failures.pop(key, None)
         self._session_file_paths = session_file_paths
         return results
 
@@ -187,11 +224,11 @@ class SessionManager:
         for s in self._available:
             try:
                 raw = yaml.safe_load(Path(s["file"]).read_text())
-                resolution = resolve_session_with_assets(
+                resolve_session_with_assets(
                     raw,
                     source_context=SourceContext(origin="vs_api.session_manager.data_dirs"),
                 )
-                dirs.add(resolution.runtime_session.session.data_dir)
+                dirs.add(get_platform_config().session_data_root)
             except Exception:
                 pass
         return [Path(d) for d in dirs]

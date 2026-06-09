@@ -9,33 +9,23 @@ these tests fail, NodalPath will install phantom forwarding state.
 
 from __future__ import annotations
 
-from pathlib import Path
-
-import pytest
-from nodalarc.models.addressing import assign_isl_neighbors
-from nodalarc.resolve_session import load_session_resolution_from_file
 from ome.event_stream import build_step_context, compute_step, precompute_timeline_window
+
+from tests.conftest import load_runtime_ome_test_inputs
 
 
 def _load_test_session():
-    session_path = Path("configs/sessions/earth-leo-simple.yaml")
-    if not session_path.exists():
-        pytest.skip("earth-leo-simple.yaml not available")
-    resolution = load_session_resolution_from_file(session_path, origin="test.fold_determinism")
-    session = resolution.runtime_session
-    constellation_config = resolution.primary_constellation.config
-    gs_file = resolution.primary_ground_set.config
-    satellites = list(resolution.primary_constellation.satellites)
-    addressing = resolution.addressing
-    neighbors = assign_isl_neighbors(constellation_config, addressing)
+    session, resolved, gs_file, satellites, addressing, neighbors, candidates = (
+        load_runtime_ome_test_inputs(origin="test.fold_determinism")
+    )
     return (
         session,
-        constellation_config,
+        resolved,
         gs_file,
         satellites,
         addressing,
         neighbors,
-        dict(resolution.ground_candidate_satellites_by_gs),
+        candidates,
     )
 
 
@@ -60,6 +50,7 @@ class TestFoldDeterminism:
             ground_scheduling=session.scheduling.ground,
             ground_candidate_satellites_by_gs=ground_candidates,
             step_seconds=step_seconds,
+            ground_link_model=session.ground_link_model,
         )
         window_events = window.events
 
@@ -71,6 +62,7 @@ class TestFoldDeterminism:
             propagator_id=session.orbit.propagator,
             ground_scheduling=session.scheduling.ground,
             ground_candidate_satellites_by_gs=ground_candidates,
+            ground_link_model=session.ground_link_model,
         )
         isl_state: dict = {}
         gs_state: dict = {}
@@ -113,6 +105,7 @@ class TestFoldDeterminism:
             propagator_id=session.orbit.propagator,
             ground_scheduling=session.scheduling.ground,
             ground_candidate_satellites_by_gs=ground_candidates,
+            ground_link_model=session.ground_link_model,
         )
 
         # Run 10 ticks to build up association state
@@ -185,6 +178,7 @@ class TestFoldDeterminism:
             propagator_id=session.orbit.propagator,
             ground_scheduling=session.scheduling.ground,
             ground_candidate_satellites_by_gs=ground_candidates,
+            ground_link_model=session.ground_link_model,
         )
         seed_isl: dict = {}
         seed_gs: dict = {}
@@ -219,6 +213,7 @@ class TestFoldDeterminism:
             initial_isl_state=dict(seed_isl),
             initial_gs_state=dict(seed_gs),
             initial_associations=seed_assoc,
+            ground_link_model=session.ground_link_model,
         )
         window_events = window.events
 
@@ -273,6 +268,7 @@ class TestFoldDeterminism:
             propagator_id=session.orbit.propagator,
             ground_scheduling=session.scheduling.ground,
             ground_candidate_satellites_by_gs=ground_candidates,
+            ground_link_model=session.ground_link_model,
         )
 
         # --- Path A: continuous 60 ticks ---

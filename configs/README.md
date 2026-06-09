@@ -21,32 +21,32 @@ must be authored against the catalog/session grammar:
 ```yaml
 segments:
   - id: leo
-    source: nodalarc:constellations/earth/leo/earth-leo-simple-36.yaml
+    source: nodalarc:constellations/earth/leo/earth-leo-ring-36.yaml
 
-	  - id: ground
-	    placement:
-	      from_site_set: nodalarc:site-sets/earth/leo/starlink-demo-gateways.yaml
-	    apply:
-	      originated_prefixes:
-	        ipv4: [0.0.0.0/0]
+  - id: ground
+    placement:
+      from_site_set: nodalarc:site-sets/earth/leo/earth-leo-starlink-pop-sites.yaml
+    apply:
+      originated_prefixes:
+        ipv4: [0.0.0.0/0]
 
-	link_rules:
-	  - id: leo_access
-	    topology: {mode: visible_candidates}
-	    endpoints:
-	      - select:
-	          all:
-	            - segment: ground
-	            - tag: leo_gs
-	        terminal:
-	          all:
-	            - role: access
-	            - medium: rf
-	        min_elevation_deg: 25
-	      - select:
-	          segment: leo
-	        terminal:
-	          all:
-	            - role: access
-	            - medium: rf
+link_rules:
+  - id: leo_access
+    topology: {mode: visible_candidates}
+    endpoints:
+      - select:
+          all:
+            - segment: ground
+            - tag: leo
+        terminal:
+          all:
+            - role: access
+            - medium: rf
+        min_elevation_deg: 25
+      - select:
+          segment: leo
+        terminal:
+          all:
+            - role: access
+            - medium: rf
 ```

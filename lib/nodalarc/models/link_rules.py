@@ -1,14 +1,13 @@
 # Copyright 2024-2026 .chance (dotchance)
 # Licensed under the Apache License, Version 2.0. See LICENSE file.
-"""Link rule grammar — the session-level wiring permission graph.
+"""Catalog link-rule grammar.
 
-No cross-segment link exists by implication. ``link_rules`` declare which node
-groups may form physical links; OME computes feasibility, allocation policy
-schedules, and the Scheduler/Node Agent prove kernel state. This module is the
-structural schema; selector cardinality, terminal compatibility, candidate
-budgets, and protocol-boundary runtime support are semantic/runtime-support
-checks owned by the resolver.
+Link rules declare which resolved node sets may form physical links. They do
+not create links directly; OME still computes feasibility from geometry,
+terminal limits, and current runtime state.
 """
+
+from __future__ import annotations
 
 from typing import Annotated, Literal
 
@@ -19,60 +18,86 @@ from pydantic import (
     Field,
     NonNegativeInt,
     PositiveInt,
-    field_validator,
+    model_validator,
 )
 
 from nodalarc.frozen import FrozenDict
-from nodalarc.model_validation import nonempty_unique
-from nodalarc.models.ground_policy import SelectionPolicySpec
-from nodalarc.models.segments import (
-    Identifier,
-    LocalNodeId,
-    PositiveFiniteFloat,
-    TerminalMedium,
-)
+from nodalarc.models.segments import FiniteFloat, Identifier, PositiveFiniteFloat, TerminalMedium
 
-LinkKind = Literal["access", "inter_constellation", "inter_body_relay", "relay"]
-TerminalRole = Literal["ground", "isl", "relay"]
+MountRole = Literal["access", "isl", "crosslink", "backbone"]
+LinkLabel = Literal["access", "isl", "relay", "backbone", "inter_body"]
+LinkRelation = Literal["intra_segment", "inter_segment", "inter_body"]
+LinkMedium = Literal["rf", "optical", "terrestrial", "mixed"]
+
+# Transitional type names retained for callers while the resolver/runtime are
+# moved to the catalog vocabulary. The values are the catalog mount/link labels,
+# not the retired ground|isl|relay endpoint role set.
+TerminalRole = MountRole
+LinkKind = LinkLabel
 
 
 class NodeSelector(BaseModel):
-    """Selects nodes inside one segment. All supplied filters are ANDed.
+    """Set expression over resolved nodes.
 
-    ``planes``/``slots`` are valid only for constellation segments; ``names`` for
-    ground segments; ``node_ids`` refer to local IDs before namespace expansion.
-    A selector matching zero nodes is invalid (semantic validation).
+    Exactly one field is allowed. ``all`` is intersection, ``any`` is union, and
+    ``not`` is complement relative to the selector universe.
     """
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid", populate_by_name=True)
 
-    segment: Identifier
-    node_ids: tuple[LocalNodeId, ...] | None = None
-    node_tags: tuple[Identifier, ...] | None = None
-    # Plane/slot indices are constellation array positions: non-negative.
-    planes: tuple[NonNegativeInt, ...] | None = None
-    slots: tuple[NonNegativeInt, ...] | None = None
-    names: tuple[Identifier, ...] | None = None
+    all: tuple[NodeSelector, ...] | None = Field(default=None, min_length=1)
+    any: tuple[NodeSelector, ...] | None = Field(default=None, min_length=1)
+    not_: NodeSelector | None = Field(default=None, alias="not")
+    segment: Identifier | None = None
+    tag: Identifier | None = None
+    node: Identifier | None = None
+    plane: NonNegativeInt | None = None
+    slot: NonNegativeInt | None = None
 
-    @field_validator("node_ids", "node_tags", "planes", "slots", "names")
-    @classmethod
-    def _nonempty_unique_filters(cls, v):
-        # A present selector filter must select something and not repeat intent.
-        return nonempty_unique(v)
+    @model_validator(mode="after")
+    def _exactly_one_operator(self) -> NodeSelector:
+        present = [
+            field
+            for field in ("all", "any", "not_", "segment", "tag", "node", "plane", "slot")
+            if getattr(self, field) is not None
+        ]
+        if len(present) != 1:
+            raise ValueError("node selector must contain exactly one set operator or predicate")
+        return self
+
+
+class TerminalSelector(BaseModel):
+    """Set expression over terminal mounts on the already-selected node set."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", populate_by_name=True)
+
+    all: tuple[TerminalSelector, ...] | None = Field(default=None, min_length=1)
+    any: tuple[TerminalSelector, ...] | None = Field(default=None, min_length=1)
+    not_: TerminalSelector | None = Field(default=None, alias="not")
+    role: MountRole | None = None
+    medium: TerminalMedium | None = None
+    mount: Identifier | None = None
+
+    @model_validator(mode="after")
+    def _exactly_one_operator(self) -> TerminalSelector:
+        present = [
+            field
+            for field in ("all", "any", "not_", "role", "medium", "mount")
+            if getattr(self, field) is not None
+        ]
+        if len(present) != 1:
+            raise ValueError("terminal selector must contain exactly one set operator or predicate")
+        return self
 
 
 class Endpoint(BaseModel):
-    """One end of a link rule: a node set plus the terminal it links through."""
+    """One endpoint of a link rule."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    selector: NodeSelector
-    terminal_role: TerminalRole
-    terminal_medium: TerminalMedium | None = None
-    terminal_id: Identifier | None = None
-
-
-# --- Topology (discriminated on ``mode``) ---
+    select: NodeSelector
+    terminal: TerminalSelector
+    min_elevation_deg: FiniteFloat | None = None
 
 
 class VisibleCandidatesTopology(BaseModel):
@@ -91,14 +116,20 @@ class NearestNTopology(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     mode: Literal["nearest_n"]
-    n: int = Field(gt=0)
+    n: PositiveInt
 
 
 class ExplicitPair(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    a: LocalNodeId
-    b: LocalNodeId
+    a: Identifier
+    b: Identifier
+
+    @model_validator(mode="after")
+    def _no_self_pair(self) -> ExplicitPair:
+        if self.a == self.b:
+            raise ValueError("explicit link pair endpoints must differ")
+        return self
 
 
 class ExplicitPairsTopology(BaseModel):
@@ -107,19 +138,15 @@ class ExplicitPairsTopology(BaseModel):
     mode: Literal["explicit_pairs"]
     pairs: tuple[ExplicitPair, ...] = Field(min_length=1)
 
-    @field_validator("pairs")
-    @classmethod
-    def _valid_pairs(cls, v: tuple[ExplicitPair, ...]) -> tuple[ExplicitPair, ...]:
+    @model_validator(mode="after")
+    def _unique_undirected_pairs(self) -> ExplicitPairsTopology:
         seen: set[frozenset[str]] = set()
-        for pair in v:
-            if pair.a == pair.b:
-                raise ValueError(f"explicit pair is a self-pair: {pair.a!r}")
-            # Physical links are undirected: (a, b) and (b, a) are the same pair.
+        for pair in self.pairs:
             key = frozenset((pair.a, pair.b))
             if key in seen:
-                raise ValueError(f"duplicate explicit pair (links are undirected): {sorted(key)}")
+                raise ValueError(f"duplicate explicit pair: {sorted(key)}")
             seen.add(key)
-        return v
+        return self
 
 
 LinkTopology = Annotated[
@@ -128,48 +155,47 @@ LinkTopology = Annotated[
 ]
 
 
-# --- Constraints + protocol boundary ---
-
-
 class LinkRuleConstraints(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    # Positive int applies to every node; the map keys are segment IDs with
-    # positive per-segment caps (frozen if a map). Zero/negative caps are invalid.
     max_links_per_node: (
         PositiveInt | Annotated[dict[Identifier, PositiveInt], AfterValidator(FrozenDict)] | None
     ) = None
     max_range_km: PositiveFiniteFloat | None = None
     require_mutual_visibility: bool | None = None
-    scheduling_policy: SelectionPolicySpec | None = None
 
-
-class ProtocolBoundary(BaseModel):
-    """Inter-domain boundary for inter-body relay rules.
-
-    Only ``static_ip`` is MVP-supported; ``bgp``/``dtn_bundle``/``custom`` are
-    structurally valid but rejected by runtime-support validation. A cislunar
-    protocol boundary must not create an OSPF/ISIS adjacency.
-    """
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    enabled: bool
-    adapter: Literal["static_ip", "bgp", "dtn_bundle", "custom"]
-    routing_domain_a: Identifier | None = None
-    routing_domain_b: Identifier | None = None
+    @model_validator(mode="after")
+    def _validate_per_segment_caps(self) -> LinkRuleConstraints:
+        if isinstance(self.max_links_per_node, FrozenDict):
+            if not self.max_links_per_node:
+                raise ValueError("max_links_per_node map must not be empty")
+            for segment_id, value in self.max_links_per_node.items():
+                if not isinstance(segment_id, str) or not segment_id:
+                    raise ValueError("max_links_per_node segment ids must be non-empty strings")
+                if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+                    raise ValueError("max_links_per_node values must be positive integers")
+        return self
 
 
 class LinkRule(BaseModel):
     """A declared permission for two node groups to form physical links."""
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid", populate_by_name=True)
 
     id: Identifier
-    kind: LinkKind
     enabled: bool = True
     endpoints: tuple[Endpoint, Endpoint]
     topology: LinkTopology
     constraints: LinkRuleConstraints | None = None
-    protocol_boundary: ProtocolBoundary | None = None
+    class_: LinkLabel | None = Field(default=None, alias="class")
     tags: tuple[Identifier, ...] | None = None
+
+    @model_validator(mode="after")
+    def _unique_tags(self) -> LinkRule:
+        if self.tags is not None and len(set(self.tags)) != len(self.tags):
+            raise ValueError("link rule tags must not contain duplicates")
+        return self
+
+
+NodeSelector.model_rebuild()
+TerminalSelector.model_rebuild()

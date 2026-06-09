@@ -12,19 +12,26 @@ from __future__ import annotations
 import logging
 import time
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Protocol
 
 from nodalarc.models.link_events import LinkDown, LinkUp
 from nodalarc.models.metrics import ConvergenceResult
-from nodalarc.models.session import ConvergenceConfig
 
 log = logging.getLogger(__name__)
+
+
+class ConvergenceConfigView(Protocol):
+    """Minimal convergence settings consumed by MI measurement."""
+
+    stability_period_s: float
+    timeout_s: float
+    probe_interval_ms: int
 
 
 def measure_convergence(
     event_id: str,
     link_event: LinkUp | LinkDown,
-    convergence_config: ConvergenceConfig,
+    convergence_config: ConvergenceConfigView,
     active_flows: dict[str, dict[str, Any]],
     adapter: Any | None = None,
     probe_client_mod: Any | None = None,

@@ -50,7 +50,7 @@ def _log_actuation_latency(
     measured in WALL-CLOCK around the Node Agent RPC round-trip (commit+dispatch ->
     proof), NOT sim-time. Aggregate p50/p95/p99 per operation from debug logs
     during targeted measurement runs to justify or tighten the actuation-latency
-    contract (simulation.actuation.fault_after_ms, the in_flight -> faulted bound)
+    contract (platform scheduler fault-after bound, the in_flight -> faulted bound)
     against real data instead of guessing. Logs at WARNING when the batch had
     failures so a slow/failed actuation is loud, DEBUG otherwise.
     """

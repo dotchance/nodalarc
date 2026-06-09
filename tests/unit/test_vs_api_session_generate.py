@@ -63,7 +63,7 @@ def test_generate_session_writes_selected_orbit_propagator():
     assert "kind" not in session["segments"][1]
     assert session["segments"][0]["source"].startswith("nodalarc:constellations/")
     assert session["segments"][1]["placement"]["from_site_set"].startswith("nodalarc:site-sets/")
-    assert session["orbit"]["default_propagator"] == "j2_mean_elements"
+    assert "orbit" not in session
     domain = session["routing"]["domains"][0]
     assert domain["protocol"] == "isis"
     assert domain["area_assignment"]["strategy"] == "per_plane"

@@ -11,6 +11,7 @@ deploy — never as untyped errors after a pod is already running.
 from __future__ import annotations
 
 import hashlib
+from copy import deepcopy
 from pathlib import Path
 
 import pytest
@@ -141,4 +142,232 @@ class TestEphemerisManifestAtResolve:
         raw["ephemeris"] = manifest
         # Session epoch is 2026-06-08 — outside the declared coverage window.
         with pytest.raises(SessionResolutionError, match="does not cover"):
+            resolve_session(raw)
+
+
+class TestUnconsumedGrammarClass:
+    """Every grammar field is consumed or rejected typed — these prove the
+    rejected dispositions actually fire (the completeness contract only
+    proves they are classified)."""
+
+    def test_point_to_point_pool_rejected_typed(self) -> None:
+        raw = _session()
+        raw["addressing"]["point_to_point"] = [
+            {
+                "id": "p2p",
+                "applies_to": {"segment": "space"},
+                "ipv4_pool": "10.128.0.0/12",
+                "prefix_length": 31,
+            }
+        ]
+        with pytest.raises(UnsupportedFeatureError) as err:
+            resolve_session(raw)
+        assert any(f.value == "point_to_point" for f in err.value.features)
+
+    def test_unimplemented_allocation_strategy_rejected_typed(self) -> None:
+        raw = _session()
+        raw["addressing"]["loopbacks"][0]["allocation"] = "by_attach_index"
+        with pytest.raises(UnsupportedFeatureError) as err:
+            resolve_session(raw)
+        assert any("by_attach_index" in f.value for f in err.value.features)
+
+    def test_affine_segment_clock_rejected_typed(self) -> None:
+        raw = _session()
+        raw["segments"][0]["clock"] = {"model": "affine", "rate": 2.0}
+        with pytest.raises(UnsupportedFeatureError) as err:
+            resolve_session(raw)
+        assert any(
+            f.category == FeatureCategory.CLOCK_MODEL and f.value == "affine"
+            for f in err.value.features
+        )
+
+    def test_session_clock_threads_onto_resolved_nodes(self) -> None:
+        raw = _session()
+        raw["segments"][0]["clock"] = {"model": "session"}
+        resolved = resolve_session(raw)
+        sats = [n for n in resolved.nodes if n.kind == "satellite"]
+        assert sats and all(n.clock.model == "session" for n in sats)
+
+    def test_node_payloads_rejected_typed(self) -> None:
+        raw = _session()
+        node = raw["segments"][0]["source"]["constellation"]["node"]["node"]
+        node["payloads"] = [
+            {
+                "id": "cam-mount",
+                "count": 1,
+                "payload": {
+                    "payload": {
+                        "id": "cam",
+                        "terminal_slots": [],
+                    }
+                },
+            }
+        ]
+        with pytest.raises(UnsupportedFeatureError) as err:
+            resolve_session(raw)
+        assert any(f.category == FeatureCategory.PAYLOAD for f in err.value.features)
+
+    def test_max_links_per_node_is_enforced_at_resolve(self) -> None:
+        raw = _session(constellation={"planes": {"count": 1, "sats_per_plane": 4}})
+        raw["link_rules"][1]["topology"] = {"mode": "nearest_n", "n": 2}
+        raw["link_rules"][1]["constraints"] = {"max_links_per_node": 1}
+        with pytest.raises(SessionResolutionError, match="exceeding max_links_per_node"):
+            resolve_session(raw)
+
+    def test_unconsumed_dynamic_constraints_rejected_loudly(self) -> None:
+        raw = _session()
+        raw["link_rules"][1]["constraints"] = {"max_range_km": 4000.0}
+        with pytest.raises(SessionResolutionError, match="unsupported runtime constraint"):
+            resolve_session(raw)
+
+    def test_multi_segment_session_requires_candidate_limits(self) -> None:
+        raw = _session()
+        del raw["simulation"]
+        with pytest.raises(SessionResolutionError, match="must declare"):
+            resolve_session(raw)
+
+    def test_declared_candidate_bound_fails_before_materialization(self) -> None:
+        raw = _session(constellation={"planes": {"count": 2, "sats_per_plane": 4}})
+        raw["simulation"]["candidate_limits"]["max_pairs_per_rule"] = 3
+        with pytest.raises(SessionResolutionError, match="before materialization"):
+            resolve_session(raw)
+
+    def test_inert_orbit_default_propagator_rejected(self) -> None:
+        raw = _session()
+        raw["orbit"] = {"default_propagator": "j2_mean_elements"}
+        with pytest.raises(SessionResolutionError, match="inert"):
+            resolve_session(raw)
+
+    def test_unknown_terminal_install_mount_rejected(self) -> None:
+        raw = _session()
+        sites = raw["segments"][1]["placement"]["from_site_set"]["site_set"]["sites"]
+        site_node = sites[0]["site"]["nodes"][0]
+        site_node["terminals"]["no-such-mount"] = {"installed_count": 1}
+        with pytest.raises(SessionResolutionError, match="unknown mount"):
+            resolve_session(raw)
+
+    def test_allocator_wide_scheduling_divergence_rejected_at_resolve(self) -> None:
+        raw = _session(ground_stations={"stations": ["a", "b"]})
+        sites = raw["segments"][1]["placement"]["from_site_set"]["site_set"]["sites"]
+        sites[0]["site"]["nodes"][0]["scheduling"] = {
+            "ranking_order": ["selection_score", "lex_pair"]
+        }
+        with pytest.raises(SessionResolutionError, match="allocator-wide"):
+            resolve_session(raw)
+
+
+class TestTerminalBindingClass:
+    """Terminal compatibility is authored, never inferred: one ground terminal
+    binds to exactly one access rule, and fixed-link candidate interfaces
+    belong to the terminal block the rule actually selected."""
+
+    def test_ground_terminal_bound_by_two_access_rules_rejected(self) -> None:
+        raw = _session()
+        # Second constellation + second access rule whose terminal selector
+        # matches the same ground terminal pool.
+        second = deepcopy(raw["segments"][0])
+        second["id"] = "space_b"
+        raw["segments"].append(second)
+        raw["routing"]["domains"][0]["selectors"] = [
+            {"any": [{"segment": "space"}, {"segment": "space_b"}, {"segment": "ground"}]}
+        ]
+        raw["link_rules"].append(
+            {
+                "id": "ground-access-b",
+                "endpoints": [
+                    {
+                        "select": {"segment": "ground"},
+                        "terminal": {"all": [{"role": "access"}, {"medium": "rf"}]},
+                    },
+                    {
+                        "select": {"segment": "space_b"},
+                        "terminal": {"all": [{"role": "access"}, {"medium": "rf"}]},
+                    },
+                ],
+                "topology": {"mode": "visible_candidates"},
+            }
+        )
+        with pytest.raises(SessionResolutionError, match="bindings must be disjoint"):
+            resolve_session(raw)
+
+    def test_fixed_interfaces_come_from_the_selected_terminal_block(self) -> None:
+        raw = _session(constellation={"planes": {"count": 1, "sats_per_plane": 2}})
+        node = raw["segments"][0]["source"]["constellation"]["node"]["node"]
+        # Two ISL mounts with different mediums; manifest order puts the rf
+        # mount's interface first. The rf terminal definition is cloned from
+        # the (rf) access terminal so it stays a valid rf primitive.
+        optical_mount = next(mount for mount in node["terminals"] if mount["role"] == "isl")
+        access_mount = next(mount for mount in node["terminals"] if mount["role"] == "access")
+        rf_isl = {
+            "id": "isl_rf",
+            "role": "isl",
+            "count": optical_mount["count"],
+            "terminal": deepcopy(access_mount["terminal"]),
+        }
+        rf_isl["terminal"]["terminal"]["id"] = "isl-rf-test"
+        node["terminals"].insert(0, rf_isl)
+
+        resolved = resolve_session(raw)
+        sat = next(n for n in resolved.nodes if n.kind == "satellite")
+        name_by_terminal = {w.name: w.terminal_id for w in sat.wan_interfaces}
+        optical_candidates = [c for c in resolved.link_candidates if c.terminal_medium == "optical"]
+        assert optical_candidates
+        for candidate in optical_candidates:
+            for node_id, iface in (
+                (candidate.node_a, candidate.interface_a),
+                (candidate.node_b, candidate.interface_b),
+            ):
+                owner = name_by_terminal[iface]
+                block = next(
+                    b
+                    for n in resolved.nodes
+                    if n.node_id == node_id
+                    for b in n.terminal_inventory
+                    if b.terminal_id == owner
+                )
+                assert block.medium == "optical", (
+                    f"optical candidate claimed {iface} owned by {block.medium} mount"
+                )
+
+
+class TestSharedSitePlacement:
+    """A site is a place; a place exists once. Placement groups are labels."""
+
+    def _two_group_session(self, second_apply: dict | None = None) -> dict:
+        raw = _session(ground_stations={"stations": ["a"]})
+        ground = deepcopy(raw["segments"][1])
+        ground["id"] = "ground_b"
+        if second_apply is not None:
+            ground["apply"] = second_apply
+        raw["segments"].append(ground)
+        # The duplicate group joins the existing access rule's ground side.
+        raw["link_rules"][0]["endpoints"][0]["select"] = {
+            "any": [{"segment": "ground"}, {"segment": "ground_b"}]
+        }
+        return raw
+
+    def test_site_placed_by_two_groups_instantiates_once(self) -> None:
+        raw = self._two_group_session()
+        resolved = resolve_session(raw)
+        ground_nodes = [n for n in resolved.nodes if n.kind == "ground_station"]
+        assert len(ground_nodes) == 1
+        node = ground_nodes[0]
+        assert node.placement_groups == ("ground", "ground_b")
+        assert node.segment_id == "ground"
+
+    def test_conflicting_group_apply_for_shared_site_rejected(self) -> None:
+        raw = self._two_group_session(
+            second_apply={
+                "scheduling": {
+                    "selection_policy": {"lowest_elevation": {}},
+                    "handover_policy": {
+                        "hysteresis": {"discount_factor": 1.15, "mask_fade_range_deg": 5.0}
+                    },
+                    "handover_mode": "bbm",
+                    "mbb_overlap_ticks": 0,
+                    "mbb_reserve": 0,
+                }
+            }
+        )
+        with pytest.raises(SessionResolutionError, match="conflicting"):
             resolve_session(raw)

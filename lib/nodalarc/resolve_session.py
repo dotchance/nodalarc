@@ -50,9 +50,14 @@ from nodalarc.models.resolved_session import (
     SourceContext,
 )
 from nodalarc.models.segment_session import Dispatch, RoutingTimers, SegmentSessionConfig
-from nodalarc.models.segments import GroundOverride, GroundSegment, SpaceSegment
+from nodalarc.models.segments import GroundOverride, GroundSegment, SegmentClock, SpaceSegment
 from nodalarc.runtime_naming import validate_runtime_node_id
-from nodalarc.runtime_support import RuntimeSupport, UnsupportedFeature, UnsupportedFeatureError
+from nodalarc.runtime_support import (
+    FeatureCategory,
+    RuntimeSupport,
+    UnsupportedFeature,
+    UnsupportedFeatureError,
+)
 
 _NORMALIZE_RE = re.compile(r"[^a-z0-9-]+")
 _DEFAULT_GENERATED_SPACE_LOOPBACK_IPV4_POOL = ipaddress.ip_network("100.64.0.0/10")
@@ -76,7 +81,6 @@ class _RuntimeNode:
     node: ResolvedNode
     plane: int | None = None
     slot: int | None = None
-    mounts: dict[str, dict[str, Any]] | None = None
     body_facts: tuple[ResolvedBodyFacts, ...] = ()
 
 
@@ -136,12 +140,12 @@ def resolve_session_with_assets(
 
     runtime_nodes = _apply_addressing(cfg, _expand_segments(cfg, roots))
     resolved_nodes = tuple(item.node for item in runtime_nodes)
+    _validate_allocator_wide_scheduling(resolved_nodes)
+    _validate_orbit_default_propagator(cfg, resolved_nodes)
     body_facts = _collect_body_facts(runtime_nodes)
     _check_body_support(resolved_nodes, body_facts, support)
     ephemeris = _resolve_ephemeris(cfg, roots, resolved_nodes)
-    link_rules = tuple(
-        _resolve_link_rule(rule, cfg, runtime_nodes) for rule in cfg.link_rules or ()
-    )
+    link_rules = tuple(_resolve_link_rule(rule, runtime_nodes) for rule in cfg.link_rules or ())
     routing_domains = tuple(_resolve_routing_domains(cfg, runtime_nodes))
     _validate_routing_boundaries(cfg, routing_domains, link_rules)
     sid_blocks = tuple(_allocate_sid_blocks(routing_domains))
@@ -163,13 +167,17 @@ def resolve_session_with_assets(
         time=cfg.time,
         source_context=context,
     )
+    _enforce_declared_candidate_bounds(cfg, base_resolved)
+    _validate_access_terminal_bindings(cfg, base_resolved)
+    candidates = tuple(_resolve_link_candidates(base_resolved, cfg))
+    _enforce_link_rule_constraints(base_resolved, candidates)
     resolved = ResolvedSession(
         identity_mode=base_resolved.identity_mode,
         session=base_resolved.session,
         nodes=base_resolved.nodes,
         bodies=base_resolved.bodies,
         link_rules=base_resolved.link_rules,
-        link_candidates=tuple(_resolve_link_candidates(base_resolved)),
+        link_candidates=candidates,
         routing_domains=base_resolved.routing_domains,
         sid_blocks=base_resolved.sid_blocks,
         simulation=base_resolved.simulation,
@@ -231,6 +239,25 @@ def _check_runtime_support(
         unsupported.append(feature)
     for domain in cfg.routing.domains if cfg.routing is not None else ():
         if feature := support.check_routing_protocol(domain.protocol):
+            unsupported.append(feature)
+    if cfg.addressing is not None:
+        for pool_class in ("point_to_point", "terrestrial_prefixes"):
+            if getattr(cfg.addressing, pool_class) and (
+                feature := support.check_addressing_pool(pool_class)
+            ):
+                unsupported.append(feature)
+        for assignment in cfg.addressing.loopbacks or ():
+            if assignment.allocation not in (None, "by_node_order"):
+                unsupported.append(
+                    support._unsupported(
+                        FeatureCategory.ADDRESSING_POOL,
+                        f"allocation:{assignment.allocation}",
+                        "address pool allocation strategy",
+                    )
+                )
+    for segment in cfg.segments:
+        clock = getattr(segment, "clock", None)
+        if clock is not None and (feature := support.check_clock_model(clock.model)):
             unsupported.append(feature)
     for boundary in (
         cfg.routing.boundaries if cfg.routing is not None and cfg.routing.boundaries else ()
@@ -466,7 +493,6 @@ def _expand_constellation_segment(
             tags = set(segment.tags or ())
             tags.update(constellation.get("tags") or ())
             tags.update(_node_tags_for(tag_rules, plane=plane, slot=slot, local_id=local_id))
-            phase_deg = (360.0 / slots) * slot + phase_offset
             expanded.append(
                 _RuntimeNode(
                     node=_resolved_space_node(
@@ -487,18 +513,15 @@ def _expand_constellation_segment(
                         ),
                         tags=tuple(sorted(tags)),
                         roots=roots,
+                        clock=segment.clock,
                         plane=plane,
                         slot=slot,
                     ),
                     plane=plane,
                     slot=slot,
-                    mounts=_mounts_by_id(node),
                     body_facts=(_body_facts_from_catalog(body),),
                 )
             )
-            # The orbit phase is intentionally retained in the catalog object; the
-            # runtime propagation seam will consume it when P5/P6 repoints engines.
-            _ = phase_deg
     return expanded
 
 
@@ -508,9 +531,18 @@ def _space_node_from_entry(
     node = _load_expected(entry["node"], roots, "node")
     orbit = _load_expected(entry["orbit"], roots, "orbit") if "orbit" in entry else None
     if orbit is None:
-        raise SessionResolutionError(
-            f"space node {entry['id']!r} uses state_vector placement, which is "
-            "structurally valid but not runtime-supported by the catalog cutover yet"
+        raise UnsupportedFeatureError(
+            [
+                UnsupportedFeature(
+                    category=FeatureCategory.SEGMENT_KIND,
+                    value="space_node:state_vector",
+                    message=(
+                        f"space node {entry['id']!r} uses raw state_vector placement; "
+                        "the current runtime propagates orbit-element nodes only"
+                    ),
+                    support_note="future runtime capability",
+                )
+            ]
         )
     body = _load_expected(orbit["central_body"], roots, "body") if orbit is not None else None
     local_id = entry["id"]
@@ -534,12 +566,83 @@ def _space_node_from_entry(
             ),
             tags=tags,
             roots=roots,
+            clock=segment.clock,
             plane=None,
             slot=None,
         ),
-        mounts=_mounts_by_id(node),
         body_facts=(_body_facts_from_catalog(body),),
     )
+
+
+_ALLOCATOR_WIDE_SCHEDULING_FIELDS = (
+    "ranking_order",
+    "mbb_preemption",
+    "successor_abort_policy",
+    "cross_tenant_displacement",
+    "bbm_acquire_timeout_ticks",
+)
+
+
+def _merge_ground_scheduling(
+    site_value: dict[str, Any] | None, base: dict[str, Any] | None
+) -> dict[str, Any] | None:
+    """Field-level merge: a site's scheduling overrides the placing group's
+    apply/override values per field; unset fields inherit. A whole-object
+    replace silently dropped group policy the site never mentioned."""
+    if site_value is None:
+        return base
+    if base is None:
+        return dict(site_value)
+    merged = dict(base)
+    merged.update({key: value for key, value in site_value.items() if value is not None})
+    return merged
+
+
+def _validate_orbit_default_propagator(
+    cfg: SegmentSessionConfig, nodes: tuple[ResolvedNode, ...]
+) -> None:
+    """orbit.default_propagator is structurally inert — reject it.
+
+    The grammar requires every orbit primitive to declare its propagator, so a
+    session-level default can never apply, and one declared value cannot be
+    honest for mixed-propagator sessions. A field that can never do anything
+    must not validate as if it did.
+    """
+    if cfg.orbit is None or cfg.orbit.default_propagator is None:
+        return
+    actual = sorted({node.orbit.propagator for node in nodes if node.orbit is not None})
+    raise SessionResolutionError(
+        "orbit.default_propagator is inert: orbit primitives always declare their "
+        f"propagator (this session resolves {actual}); remove the orbit block"
+    )
+
+
+def _validate_allocator_wide_scheduling(nodes: tuple[ResolvedNode, ...]) -> None:
+    """Allocator-wide scheduling knobs must be uniform across every ground
+    node at resolve time.
+
+    The OME allocator is a single decision-maker; per-node divergence of these
+    fields has no runtime meaning and previously died late with an untyped
+    error at OME-input build.
+    """
+    baseline: dict[str, Any] | None = None
+    baseline_node: str | None = None
+    for node in nodes:
+        if node.kind != "ground_station" or node.ground_scheduling is None:
+            continue
+        values = {
+            field: getattr(node.ground_scheduling, field)
+            for field in _ALLOCATOR_WIDE_SCHEDULING_FIELDS
+        }
+        if baseline is None:
+            baseline, baseline_node = values, node.node_id
+            continue
+        diffs = sorted(field for field in values if values[field] != baseline[field])
+        if diffs:
+            raise SessionResolutionError(
+                f"allocator-wide scheduling fields must be uniform across ground nodes; "
+                f"{node.node_id!r} differs from {baseline_node!r} on: {', '.join(diffs)}"
+            )
 
 
 def _site_override_for(segment: GroundSegment, site_id: str) -> GroundOverride | None:
@@ -605,7 +708,23 @@ def _expand_site_placement(placement: _SitePlacement, roots: CatalogRoots) -> li
         tags.update(group_tags)
     tags.update(site.get("tags") or ())
 
-    body_ref = site["frame"]["body_fixed"]["body"]
+    frame = site["frame"]
+    if "body_fixed" not in frame:
+        frame_kind = next(iter(frame), "<empty>")
+        raise UnsupportedFeatureError(
+            [
+                UnsupportedFeature(
+                    category=FeatureCategory.SEGMENT_KIND,
+                    value=f"site_frame:{frame_kind}",
+                    message=(
+                        f"site {site_id!r} uses a {frame_kind!r} frame; placed ground "
+                        "nodes require a body_fixed surface frame on the current runtime"
+                    ),
+                    support_note="future runtime capability",
+                )
+            ]
+        )
+    body_ref = frame["body_fixed"]["body"]
     body = _load_expected(body_ref, roots, "body")
     if site.get("location") is None:
         raise SessionResolutionError(
@@ -614,6 +733,10 @@ def _expand_site_placement(placement: _SitePlacement, roots: CatalogRoots) -> li
         )
 
     expanded: list[_RuntimeNode] = []
+    clock = next(
+        (segment.clock for segment in placement.segments if segment.clock is not None),
+        None,
+    )
     for site_node in site["nodes"]:
         source_node = _load_expected(site_node["model"], roots, "node")
         # Ground identity is site-anchored: a node's name never depends on
@@ -621,9 +744,10 @@ def _expand_site_placement(placement: _SitePlacement, roots: CatalogRoots) -> li
         # site-qualified form so `node:` selectors stay unique.
         local_id = f"{site_id}-{site_node['id']}"
         runtime_id = _runtime_id(site_id, site_node["id"])
+        _reject_unsupported_node_payloads(runtime_id, source_node, site_node)
         node_tags = set(tags)
         node_tags.update(site_node.get("tags") or ())
-        scheduling = site_node.get("scheduling") or base_scheduling
+        scheduling = _merge_ground_scheduling(site_node.get("scheduling"), base_scheduling)
         originated = _merge_originated_prefixes(
             site_node.get("originated_prefixes"),
             base_originated,
@@ -658,8 +782,8 @@ def _expand_site_placement(placement: _SitePlacement, roots: CatalogRoots) -> li
                     forwarding=source_node["forwarding"],
                     service_priority=site_node.get("service_priority"),
                     ground_scheduling=scheduling,
+                    clock=clock or SegmentClock(),
                 ),
-                mounts=_mounts_by_id(source_node),
                 body_facts=(_body_facts_from_catalog(body),),
             )
         )
@@ -678,9 +802,11 @@ def _resolved_space_node(
     roots: CatalogRoots,
     plane: int | None,
     slot: int | None,
+    clock: SegmentClock | None = None,
 ) -> ResolvedNode:
     if body is None:
         raise SessionResolutionError(f"space node {runtime_id!r} has no resolved central body")
+    _reject_unsupported_node_payloads(runtime_id, source_node, None)
     return ResolvedNode(
         node_id=runtime_id,
         local_node_id=local_id,
@@ -696,6 +822,7 @@ def _resolved_space_node(
         forwarding=source_node["forwarding"],
         plane=plane,
         slot=slot,
+        clock=clock or SegmentClock(),
     )
 
 
@@ -750,6 +877,34 @@ def _orbit_facts(
     )
 
 
+def _installed_mount_counts(
+    runtime_id: str, source_node: dict[str, Any], installs: dict[str, Any] | None
+) -> dict[str, int]:
+    """The single derivation of how many terminals each mount has installed.
+
+    ``installs`` is the site placement's terminal map. Absent (space nodes,
+    no site customization surface) means the node model's mount counts apply.
+    Present means it is exhaustive site truth: a mount without an entry has
+    zero installed, an entry without installed_count takes the model count,
+    and an entry naming an unknown mount is an authoring error.
+    """
+    mounts = {mount["id"]: int(mount["count"]) for mount in source_node["terminals"]}
+    if installs is None:
+        return mounts
+    unknown = sorted(set(installs) - set(mounts))
+    if unknown:
+        raise SessionResolutionError(
+            f"node {runtime_id!r} installs terminals for unknown mount(s): {unknown}; "
+            f"node model declares {sorted(mounts)}"
+        )
+    return {
+        mount_id: int((installs.get(mount_id) or {}).get("installed_count", model_count))
+        if mount_id in installs
+        else 0
+        for mount_id, model_count in mounts.items()
+    }
+
+
 def _terminal_blocks_for_node(
     runtime_id: str,
     source_node: dict[str, Any],
@@ -757,13 +912,17 @@ def _terminal_blocks_for_node(
     roots: CatalogRoots,
 ) -> list[ResolvedTerminalBlock]:
     blocks: list[ResolvedTerminalBlock] = []
+    counts = _installed_mount_counts(runtime_id, source_node, installs)
     for mount in source_node["terminals"]:
+        count = counts[mount["id"]]
+        if count == 0:
+            # Not installed at this placement — no inventory, no interfaces.
+            continue
         terminal = _load_expected(mount["terminal"], roots, "terminal")
         installed = installs.get(mount["id"], {}) if installs is not None else {}
         capabilities = installed.get("capabilities") or {}
         limits = capabilities.get("limits") or terminal["limits"]
         bandwidth = capabilities.get("bandwidth_mbps") or terminal["bandwidth_mbps"]
-        count = int(installed.get("installed_count", mount["count"]))
         blocks.append(
             ResolvedTerminalBlock(
                 terminal_id=mount["id"],
@@ -779,11 +938,39 @@ def _terminal_blocks_for_node(
                 min_elevation_deg=float(limits["elevation_deg"]["min"]),
                 field_of_regard_deg=_field_of_regard_deg(limits),
                 tracking_rate_deg_s=float(limits["max_tracking_rate_deg_s"]),
-                bandwidth_mbps=float(max(bandwidth["transmit"], bandwidth["receive"])),
+                # Slowest direction governs the usable link rate (codebase
+                # convention) — the optimistic max overstated asymmetric pairs.
+                bandwidth_mbps=float(min(bandwidth["transmit"], bandwidth["receive"])),
                 source_ref=_catalog_source_ref(mount["terminal"], inline_id=terminal["id"]),
             )
         )
     return blocks
+
+
+def _reject_unsupported_node_payloads(
+    runtime_id: str, source_node: dict[str, Any], site_node: dict[str, Any] | None
+) -> None:
+    """Payloads are grammar-valid and runtime-future on every current profile.
+
+    A node whose capability is authored via payloads must fail typed — it must
+    never appear in the resolved session without that capability.
+    """
+    declared = bool(source_node.get("payloads")) or bool(site_node and site_node.get("payloads"))
+    if declared:
+        raise UnsupportedFeatureError(
+            [
+                UnsupportedFeature(
+                    category=FeatureCategory.PAYLOAD,
+                    value="payloads",
+                    message=(
+                        f"node {runtime_id!r} declares payloads; payload-provided "
+                        "terminals and resource groups are not supported by the "
+                        "current runtime"
+                    ),
+                    support_note="future runtime capability",
+                )
+            ]
+        )
 
 
 def _catalog_source_ref(value: Any, *, inline_id: str) -> str:
@@ -815,8 +1002,9 @@ def _wan_interfaces_for_node(
     interfaces: list[ResolvedWanInterface] = []
     isl_index = 0
     gnd_index = 0
+    counts = _installed_mount_counts(runtime_id, source_node, None)
     for mount in source_node["terminals"]:
-        for _ in range(int(mount["count"])):
+        for _ in range(counts[mount["id"]]):
             if mount["role"] == "access":
                 name = f"gnd{gnd_index}"
                 gnd_index += 1
@@ -838,10 +1026,9 @@ def _wan_interfaces_for_site_node(
 ) -> list[ResolvedWanInterface]:
     interfaces: list[ResolvedWanInterface] = []
     index = 0
+    counts = _installed_mount_counts(runtime_id, source_node, site_node["terminals"])
     for mount in source_node["terminals"]:
-        install = site_node["terminals"].get(mount["id"])
-        count = int(install["installed_count"]) if install is not None else 0
-        for _ in range(count):
+        for _ in range(counts[mount["id"]]):
             interfaces.append(
                 ResolvedWanInterface(
                     name=f"term{index}",
@@ -966,7 +1153,6 @@ def _apply_addressing(
                             ),
                             plane=item.plane,
                             slot=item.slot,
-                            mounts=item.mounts,
                             body_facts=item.body_facts,
                         )
                     )
@@ -978,7 +1164,6 @@ def _apply_addressing(
                         ),
                         plane=item.plane,
                         slot=item.slot,
-                        mounts=item.mounts,
                         body_facts=item.body_facts,
                     )
                 )
@@ -1032,7 +1217,6 @@ def _apply_default_generated_space_loopbacks(nodes: list[_RuntimeNode]) -> list[
                 node=node.model_copy(update={"interfaces": ResolvedNodeInterfaces(lo0=loopback)}),
                 plane=item.plane,
                 slot=item.slot,
-                mounts=item.mounts,
                 body_facts=item.body_facts,
             )
         )
@@ -1181,9 +1365,7 @@ def _merge_originated_prefixes(
     return OriginatedPrefixes.model_validate(data)
 
 
-def _resolve_link_rule(
-    rule: LinkRule, cfg: SegmentSessionConfig, runtime_nodes: tuple[_RuntimeNode, ...]
-) -> ResolvedLinkRule:
+def _resolve_link_rule(rule: LinkRule, runtime_nodes: tuple[_RuntimeNode, ...]) -> ResolvedLinkRule:
     endpoints: list[ResolvedEndpoint] = []
     for endpoint in rule.endpoints:
         selected = _eval_node_selector(endpoint.select, runtime_nodes)
@@ -1215,8 +1397,8 @@ def _resolve_link_rule(
         endpoints.append(
             ResolvedEndpoint(
                 segment_id=endpoint_segment,
-                terminal_role=_first_terminal_role(endpoint.terminal),
-                terminal_medium=_first_terminal_medium(endpoint.terminal),
+                terminal_role=_endpoint_terminal_role(endpoint.terminal),
+                terminal_medium=_endpoint_terminal_medium(endpoint.terminal),
                 min_elevation_deg=endpoint.min_elevation_deg,
                 node_ids=tuple(item.node.node_id for item in compatible),
             )
@@ -1237,11 +1419,21 @@ def _resolve_routing_domains(
     runtime_nodes: tuple[_RuntimeNode, ...],
 ) -> list[ResolvedRoutingDomain]:
     if cfg.routing is None:
+        # Documented product default: one flat IS-IS domain over every ROUTED
+        # node. Hosts/bridges/control-only nodes run no routing protocol and
+        # must not be invented into one.
+        routed = tuple(
+            sorted(item.node.node_id for item in runtime_nodes if item.node.forwarding == "routed")
+        )
+        if not routed:
+            raise SessionResolutionError(
+                "session declares no routing and resolves zero routed nodes"
+            )
         return [
             ResolvedRoutingDomain(
                 domain_id="default_domain",
                 protocol="isis",
-                node_ids=tuple(sorted(item.node.node_id for item in runtime_nodes)),
+                node_ids=routed,
                 capabilities=(),
                 area_assignment=None,
             )
@@ -1305,12 +1497,95 @@ def _validate_routing_domain_partition(
         )
 
 
-def _resolve_link_candidates(resolved: ResolvedSession) -> list[ResolvedLinkCandidate]:
+def _terminal_selectors_by_rule(
+    cfg: SegmentSessionConfig,
+) -> dict[str, tuple[TerminalSelector, TerminalSelector]]:
+    return {
+        rule.id: (rule.endpoints[0].terminal, rule.endpoints[1].terminal)
+        for rule in cfg.link_rules or ()
+    }
+
+
+def _validate_access_terminal_bindings(
+    cfg: SegmentSessionConfig, resolved: ResolvedSession
+) -> None:
+    """Ground terminal blocks bind to exactly one access rule.
+
+    Terminal compatibility is authored, never inferred: the rule's terminal
+    selector IS the binding declaration, and one ground terminal serving two
+    constellations is an authoring ambiguity the allocator must never be
+    asked to arbitrate. Satellite access terminals serve whichever ground
+    station the allocator assigns and are deliberately not bound.
+    """
+    selectors = _terminal_selectors_by_rule(cfg)
+    node_by_id = {node.node_id: node for node in resolved.nodes}
+    bound: dict[tuple[str, str], str] = {}
+    for rule in resolved.link_rules:
+        if rule.kind != "access" or not rule.enabled:
+            continue
+        for endpoint, selector in zip(rule.endpoints, selectors[rule.rule_id], strict=True):
+            for node_id in endpoint.node_ids:
+                node = node_by_id[node_id]
+                if node.kind != "ground_station":
+                    continue
+                for block in node.terminal_inventory:
+                    if not _terminal_matches(block, selector):
+                        continue
+                    key = (node_id, block.terminal_id)
+                    owner = bound.get(key)
+                    if owner is not None and owner != rule.rule_id:
+                        raise SessionResolutionError(
+                            f"ground terminal {block.terminal_id!r} on {node_id!r} is "
+                            f"bound by access rules {owner!r} and {rule.rule_id!r}; "
+                            "terminal bindings must be disjoint — one terminal serves "
+                            "one constellation"
+                        )
+                    bound[key] = rule.rule_id
+
+
+def _resolve_link_candidates(
+    resolved: ResolvedSession, cfg: SegmentSessionConfig
+) -> list[ResolvedLinkCandidate]:
     pair_rank = _pair_rank_map(resolved)
     declared = generate_declared_link_candidates(resolved, pair_rank=pair_rank)
     candidates: list[ResolvedLinkCandidate] = []
     node_by_id = {node.node_id: node for node in resolved.nodes}
-    fixed_iface_by_node: dict[str, int] = {}
+    selectors = _terminal_selectors_by_rule(cfg)
+    rules_by_id = {rule.rule_id: rule for rule in resolved.link_rules}
+    used_ifaces: dict[str, set[str]] = {}
+
+    def _fixed_iface(node_id: str, rule_id: str) -> str:
+        # The interface comes from the wan manifest entries whose owning
+        # terminal block matches THIS rule's terminal selector — a candidate
+        # must never claim an interface the manifest assigned to a different
+        # mount (an rf link on the optical mount's interface is wire fiction).
+        node = node_by_id[node_id]
+        rule = rules_by_id[rule_id]
+        side_selectors = [
+            selector
+            for endpoint, selector in zip(rule.endpoints, selectors[rule_id], strict=True)
+            if node_id in endpoint.node_ids
+        ]
+        blocks_by_id = {block.terminal_id: block for block in node.terminal_inventory}
+        eligible = [
+            iface.name
+            for iface in node.wan_interfaces
+            if iface.terminal_id in blocks_by_id
+            and any(
+                _terminal_matches(blocks_by_id[iface.terminal_id], selector)
+                for selector in side_selectors
+            )
+        ]
+        used = used_ifaces.setdefault(node_id, set())
+        for name in eligible:
+            if name not in used:
+                used.add(name)
+                return name
+        raise SessionResolutionError(
+            f"link rule {rule_id!r} needs another fixed interface on {node_id!r}, but "
+            f"every matching terminal interface is allocated ({sorted(eligible)})"
+        )
+
     for candidate in declared:
         node_a, node_b = candidate.pair
         left = node_by_id[node_a]
@@ -1318,10 +1593,8 @@ def _resolve_link_candidates(resolved: ResolvedSession) -> list[ResolvedLinkCand
         if candidate.kind == "access":
             iface_a, iface_b = _access_candidate_interfaces(left, right)
         else:
-            iface_a = f"isl{fixed_iface_by_node.get(node_a, 0)}"
-            fixed_iface_by_node[node_a] = fixed_iface_by_node.get(node_a, 0) + 1
-            iface_b = f"isl{fixed_iface_by_node.get(node_b, 0)}"
-            fixed_iface_by_node[node_b] = fixed_iface_by_node.get(node_b, 0) + 1
+            iface_a = _fixed_iface(node_a, candidate.rule_id)
+            iface_b = _fixed_iface(node_b, candidate.rule_id)
         bandwidth = _candidate_bandwidth_mbps(
             left,
             right,
@@ -1347,6 +1620,46 @@ def _resolve_link_candidates(resolved: ResolvedSession) -> list[ResolvedLinkCand
     _validate_fixed_interface_capacity(candidates, node_by_id)
     _enforce_candidate_limits(candidates, resolved)
     return candidates
+
+
+def _enforce_declared_candidate_bounds(
+    cfg: SegmentSessionConfig, resolved: ResolvedSession
+) -> None:
+    """Bound the candidate graph BEFORE materializing it.
+
+    Multi-segment sessions must declare candidate_limits — an all-by-all rule
+    over composed segments is exactly the case the budget exists for, and an
+    absent budget must not mean an absent bound. The static per-rule upper
+    bound (mode-aware) is checked against the declared budget before any pair,
+    interface, or rank is built.
+    """
+    limits = cfg.simulation.candidate_limits if cfg.simulation is not None else None
+    if limits is None:
+        if len(cfg.segments) > 1 and resolved.link_rules:
+            raise SessionResolutionError(
+                "multi-segment sessions with link rules must declare simulation.candidate_limits"
+            )
+        return
+    for rule in resolved.link_rules:
+        if not rule.enabled:
+            continue
+        left, right = rule.endpoints
+        mode = rule.topology.mode
+        if mode == "visible_candidates":
+            bound = len(left.node_ids) * len(right.node_ids)
+        elif mode == "nearest_n":
+            bound = max(len(left.node_ids), len(right.node_ids)) * (rule.topology.n or 1)
+        elif mode == "explicit_pairs":
+            bound = len(rule.topology.pairs or ())
+        else:
+            continue  # nearest_visible rejects later with its own typed error
+        if bound > limits.max_pairs_per_rule:
+            raise SessionResolutionError(
+                f"link rule {rule.rule_id!r} declares a static candidate upper bound of "
+                f"{bound} pairs ({mode}), exceeding "
+                f"simulation.candidate_limits.max_pairs_per_rule={limits.max_pairs_per_rule} "
+                "before materialization"
+            )
 
 
 def _enforce_candidate_limits(
@@ -1461,6 +1774,7 @@ def _validate_fixed_interface_capacity(
 
 def _pair_rank_map(resolved: ResolvedSession) -> dict[tuple[str, str], float]:
     node_by_id = {node.node_id: node for node in resolved.nodes}
+    radius_by_body = {facts.body_id: facts.mean_radius_km for facts in resolved.bodies}
     ranks: dict[tuple[str, str], float] = {}
     for rule in resolved.link_rules:
         for a in rule.endpoints[0].node_ids:
@@ -1468,16 +1782,48 @@ def _pair_rank_map(resolved: ResolvedSession) -> dict[tuple[str, str], float]:
                 if a == b:
                     continue
                 pair = (a, b) if a < b else (b, a)
-                ranks[pair] = _pair_static_rank(node_by_id[a], node_by_id[b])
+                ranks[pair] = _pair_static_rank(node_by_id[a], node_by_id[b], radius_by_body)
     return ranks
 
 
-def _pair_static_rank(left: ResolvedNode, right: ResolvedNode) -> float:
-    left_pos = _orbit_rank_position(left)
-    right_pos = _orbit_rank_position(right)
+def _pair_static_rank(
+    left: ResolvedNode, right: ResolvedNode, radius_by_body: dict[str, float]
+) -> float:
+    left_pos = _static_rank_position(left, radius_by_body)
+    right_pos = _static_rank_position(right, radius_by_body)
     if left_pos is None or right_pos is None:
-        return float(sum(ord(ch) for ch in f"{left.node_id}\0{right.node_id}"))
+        raise SessionResolutionError(
+            f"cannot rank pair {left.node_id}<->{right.node_id} by distance: a node "
+            "has neither resolved orbit facts nor a surface position"
+        )
     return math.dist(left_pos, right_pos)
+
+
+def _static_rank_position(
+    node: ResolvedNode, radius_by_body: dict[str, float]
+) -> tuple[float, float, float] | None:
+    """Epoch position for nearest-N ranking: orbital state for space nodes,
+    body-fixed surface position for placed ground nodes (resolved body radius,
+    never a hardcoded constant). A "nearest" rank derived from node-id
+    character sums would be geometry theater."""
+    orbital = _orbit_rank_position(node)
+    if orbital is not None:
+        return orbital
+    if node.surface_position is None:
+        return None
+    body = node.surface_position
+    radius = radius_by_body.get(body.body)
+    if radius is None:
+        raise SessionResolutionError(
+            f"cannot rank {node.node_id!r}: no resolved body facts for {body.body!r}"
+        )
+    lat = math.radians(body.lat_deg)
+    lon = math.radians(body.lon_deg)
+    return (
+        radius * math.cos(lat) * math.cos(lon),
+        radius * math.cos(lat) * math.sin(lon),
+        radius * math.sin(lat),
+    )
 
 
 def _orbit_rank_position(node: ResolvedNode) -> tuple[float, float, float] | None:
@@ -1568,35 +1914,106 @@ def _terminal_matches(block: ResolvedTerminalBlock, selector: TerminalSelector) 
     raise AssertionError("unreachable terminal selector")
 
 
-def _first_terminal_role(selector: TerminalSelector) -> str:
-    if selector.role is not None:
-        return selector.role
-    children = selector.all or selector.any or ()
-    for child in children:
-        value = _first_terminal_role(child)
-        if value:
-            return value
-    raise SessionResolutionError("link endpoint terminal selector must include role")
+def _collect_terminal_leaves(selector: TerminalSelector, attr: str) -> set[str]:
+    """Collect positive leaf values for one selector attribute.
+
+    ``not`` subtrees are exclusions — a role inside a negation is not the
+    endpoint's role and must not be collected.
+    """
+    values: set[str] = set()
+    leaf = getattr(selector, attr)
+    if leaf is not None:
+        values.add(leaf)
+    for child in (selector.all or ()) + (selector.any or ()):
+        values.update(_collect_terminal_leaves(child, attr))
+    return values
 
 
-def _first_terminal_medium(selector: TerminalSelector) -> str | None:
-    if selector.medium is not None:
-        return selector.medium
-    children = selector.all or selector.any or ()
-    for child in children:
-        value = _first_terminal_medium(child)
-        if value:
-            return value
-    return None
+def _endpoint_terminal_role(selector: TerminalSelector) -> str:
+    roles = _collect_terminal_leaves(selector, "role")
+    if len(roles) != 1:
+        raise SessionResolutionError(
+            "link endpoint terminal selector must name exactly one role; "
+            f"got {sorted(roles) or 'none'}"
+        )
+    return next(iter(roles))
+
+
+def _endpoint_terminal_medium(selector: TerminalSelector) -> str | None:
+    mediums = _collect_terminal_leaves(selector, "medium")
+    if len(mediums) > 1:
+        raise SessionResolutionError(
+            f"link endpoint terminal selector names multiple mediums: {sorted(mediums)}"
+        )
+    return next(iter(mediums)) if mediums else None
 
 
 def _derive_link_label(endpoints: list[ResolvedEndpoint]) -> str:
     left, right = endpoints
-    if left.segment_id == right.segment_id:
-        return "isl"
+    # An access-role endpoint makes the rule an access rule regardless of
+    # segment arrangement — labeling it "isl" sends it down the wrong
+    # interface/candidate path with a misleading failure.
     if left.terminal_role == "access" or right.terminal_role == "access":
         return "access"
+    if left.segment_id == right.segment_id:
+        return "isl"
     return "inter_body"
+
+
+def _constraint_limit_for_node(limit: Any, node: ResolvedNode) -> int:
+    if isinstance(limit, int):
+        return limit
+    labels = {node.segment_id, *node.placement_groups}
+    matches = [value for segment_id, value in limit.items() if segment_id in labels]
+    if not matches:
+        raise SessionResolutionError(
+            f"link_rule max_links_per_node map has no entry for segment(s) {sorted(labels)!r}"
+        )
+    return int(min(matches))
+
+
+def _enforce_link_rule_constraints(resolved: ResolvedSession, candidates: tuple[Any, ...]) -> None:
+    """Enforce the runtime-supported subset of link-rule constraints.
+
+    ``max_links_per_node`` is a static graph constraint, enforceable here.
+    Range/mutual-visibility constraints are dynamic OME semantics; accepting
+    them before OME consumes them would be a lie, so they reject loudly.
+    """
+    nodes = {node.node_id: node for node in resolved.nodes}
+    degree: dict[tuple[str, str], int] = {}
+    for candidate in candidates:
+        for node_id in (candidate.node_a, candidate.node_b):
+            key = (candidate.rule_id, node_id)
+            degree[key] = degree.get(key, 0) + 1
+
+    for rule in resolved.link_rules:
+        constraints = rule.constraints
+        if constraints is None:
+            continue
+        unsupported = [
+            name
+            for name, value in (
+                ("max_range_km", constraints.max_range_km),
+                ("require_mutual_visibility", constraints.require_mutual_visibility),
+            )
+            if value is not None
+        ]
+        if unsupported:
+            raise SessionResolutionError(
+                f"link_rule {rule.rule_id!r} uses unsupported runtime constraint(s): "
+                + ", ".join(unsupported)
+            )
+        if constraints.max_links_per_node is None:
+            continue
+        for (rule_id, node_id), count in sorted(degree.items()):
+            if rule_id != rule.rule_id:
+                continue
+            limit = _constraint_limit_for_node(constraints.max_links_per_node, nodes[node_id])
+            if count > limit:
+                raise SessionResolutionError(
+                    f"link_rule {rule.rule_id!r} declares {count} candidate links for "
+                    f"{node_id!r}, exceeding max_links_per_node={limit}"
+                )
 
 
 def _validate_routing_boundaries(
@@ -1709,10 +2126,6 @@ def _node_tags_for(
             continue
         tags.add(rule["tag"])
     return tags
-
-
-def _mounts_by_id(node: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    return {mount["id"]: mount for mount in node["terminals"]}
 
 
 def _runtime_id(segment_id: str, local_id: str) -> str:

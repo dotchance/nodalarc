@@ -85,7 +85,9 @@ routing:
       protocol: yourprotocol
       selectors: [{any: [{segment: leo}, {segment: ground}]}]
 time:
+  start_time: '2026-06-08T00:00:00Z'
   step_seconds: 10
+  compression: 1
 ```
 
 Deploy and verify adjacencies form.

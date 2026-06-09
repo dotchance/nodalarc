@@ -58,20 +58,42 @@ def _match_target(
     node_type: str,
     plane: int | None,
     area_id: str,
+    segment_id: str | None = None,
 ) -> bool:
-    """Check if a node matches the target selector."""
+    """Check if a node matches the target selector.
+
+    Plane numbers restart per segment and are never global identity, so a
+    bare ``plane:N`` target is only valid for single-space-segment sessions
+    (validated by the caller); multi-segment sessions use
+    ``plane:<segment>:<n>``.
+    """
     if target == "all":
         return True
     kind, _, value = target.partition(":")
     if kind == "node":
         return node_id == value
     if kind == "plane":
+        scope, _, scoped_value = value.rpartition(":")
+        if scope:
+            return segment_id == scope and plane is not None and plane == int(scoped_value)
         return plane is not None and plane == int(value)
     if kind == "area":
         return area_id.endswith(f".{int(value):04d}")
     if kind == "type":
         return node_type == value
     return False
+
+
+def _validate_plane_target_scope(target: str, resolved: ResolvedSession) -> None:
+    kind, _, value = target.partition(":")
+    if kind != "plane" or ":" in value:
+        return
+    space_segments = {node.segment_id for node in resolved.nodes if node.kind == "satellite"}
+    if len(space_segments) > 1:
+        raise RuntimeError(
+            f"plane:{value} is ambiguous across space segments {sorted(space_segments)}; "
+            f"use plane:<segment>:{value}"
+        )
 
 
 def reconfig(
@@ -96,6 +118,7 @@ def reconfig(
 
     reconfigured = 0
 
+    _validate_plane_target_scope(target, resolved)
     for node in resolved.nodes:
         if node.forwarding != "routed":
             continue
@@ -110,7 +133,9 @@ def reconfig(
             node_sid_index=sid_by_node.get(node.node_id),
         )
         node_type = "satellite" if node.kind == "satellite" else "ground_station"
-        if not _match_target(target, node.node_id, node_type, node.plane, vars.get("area_id", "")):
+        if not _match_target(
+            target, node.node_id, node_type, node.plane, vars.get("area_id", ""), node.segment_id
+        ):
             continue
 
         _render_and_push(env, stack, node.node_id, vars)

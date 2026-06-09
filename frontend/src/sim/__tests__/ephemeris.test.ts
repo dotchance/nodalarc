@@ -149,3 +149,46 @@ describe("ecefToGeodetic round-trip", () => {
     expect(geo.latDeg).toBeCloseTo(39, 0);
   });
 });
+
+describe("propagateNode - eccentric (Molniya) Python parity", () => {
+  // Reference values generated from the production Python propagator
+  // (propagate_j2_mean_elements) with the shipped catalog Earth body facts
+  // and the shipped earth-heo-molniya element set. This is the regime that
+  // distinguishes the eccentric Kepler/J2 math from the old circular path —
+  // a sign error in argument-of-perigee handling passes every e=0 fixture.
+  const MOLNIYA: EphemerisNodeKeplerian = {
+    type: "keplerian",
+    propagator: "j2-mean-elements",
+    semi_major_axis_km: 26521.0088,
+    eccentricity: 0.7371514465166197,
+    inclination_deg: 63.4,
+    raan_deg: 270.0,
+    argument_of_perigee_deg: 270.0,
+    mean_anomaly_deg: 0.0,
+    plane: 0,
+    slot: 0,
+    reference_body: "earth",
+    frame_id: "earth",
+  };
+
+  it("matches Python at perigee (t=0)", () => {
+    const pos = propagateNode(MOLNIYA, EPOCH, EPOCH, EARTH_BODY);
+    expect(pos.latDeg).toBeCloseTo(-63.5404, 2);
+    expect(pos.lonDeg).toBeCloseTo(79.1004, 2);
+    expect(pos.altKm).toBeCloseTo(609.985, 1);
+  });
+
+  it("matches Python on the ascending climb (t=3600)", () => {
+    const pos = propagateNode(MOLNIYA, EPOCH, EPOCH + 3600, EARTH_BODY);
+    expect(pos.latDeg).toBeCloseTo(28.0735, 2);
+    expect(pos.lonDeg).toBeCloseTo(169.5099, 2);
+    expect(pos.altKm).toBeCloseTo(13391.666, 1);
+  });
+
+  it("matches Python at the apogee dwell (t=21540)", () => {
+    const pos = propagateNode(MOLNIYA, EPOCH, EPOCH + 21540, EARTH_BODY);
+    expect(pos.latDeg).toBeCloseTo(63.4212, 2);
+    expect(pos.lonDeg).toBeCloseTo(169.2663, 2);
+    expect(pos.altKm).toBeCloseTo(39709.812, 1);
+  });
+});

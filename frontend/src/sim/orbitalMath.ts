@@ -27,7 +27,7 @@ export interface BodyMath {
   kmPerRenderUnit: number;
 }
 
-function ellipsoidE2(body: BodyMath): number {
+export function ellipsoidE2(body: BodyMath): number {
   const a = body.equatorialRadiusKm;
   const b = body.polarRadiusKm;
   return 1.0 - (b * b) / (a * a);
@@ -45,7 +45,10 @@ export function gmstRadians(unixSeconds: number): number {
 
 // --- Keplerian mean-element propagation ---
 
-function solveEccentricAnomaly(meanAnomalyRad: number, eccentricity: number): number {
+export function solveEccentricAnomaly(
+  meanAnomalyRad: number,
+  eccentricity: number,
+): number {
   if (eccentricity === 0) return meanAnomalyRad;
   const twoPi = Math.PI * 2;
   let mean = meanAnomalyRad % twoPi;

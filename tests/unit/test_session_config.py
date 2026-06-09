@@ -316,7 +316,6 @@ def test_isl_override_rejects_duplicate_terminal():
 
 
 def test_area_assignment_fails_loud_on_bad_config():
-    from nodalarc.models.addressing import AddressingScheme, compute_area_assignments
     from nodalarc.models.session import AreaMapping
 
     with pytest.raises(ValidationError):  # unknown strategy
@@ -330,30 +329,6 @@ def test_area_assignment_fails_loud_on_bad_config():
                 AreaMapping(planes=(1,), area_id="a"),
                 AreaMapping(planes=(1,), area_id="b"),
             ],
-        )
-    scheme = AddressingScheme(config=None, satellites=None, gs_file=None)
-    with pytest.raises(ValueError, match="outside"):  # plane that does not exist
-        compute_area_assignments(
-            ExplicitAreaAssignmentConfig(
-                strategy="explicit", assignments=[AreaMapping(planes=(99,), area_id="a")]
-            ),
-            plane_count=2,
-            sats_per_plane=1,
-            addressing=scheme,
-            gs_names=["g"],
-            protocol="isis",
-        )
-    with pytest.raises(ValueError, match="unknown ground station"):
-        compute_area_assignments(
-            ExplicitAreaAssignmentConfig(
-                strategy="explicit",
-                assignments=[AreaMapping(ground_stations=("typo",), area_id="a")],
-            ),
-            plane_count=1,
-            sats_per_plane=1,
-            addressing=scheme,
-            gs_names=["real"],
-            protocol="isis",
         )
 
 
@@ -382,29 +357,6 @@ def test_resolve_stack_is_the_extension_owning_boundary():
 def test_terrestrial_and_traffic_objects_reject_impossible_intent(factory):
     with pytest.raises(ValidationError):
         factory()
-
-
-def test_explicit_ground_station_area_mapping_is_applied():
-    # Regression: an explicit per-GS area mapping must be honored, not silently
-    # replaced by the default area.
-    from nodalarc.models.addressing import AddressingScheme, compute_area_assignments
-    from nodalarc.models.session import AreaMapping
-
-    scheme = AddressingScheme(config=None, satellites=None, gs_file=None)
-    cfg = ExplicitAreaAssignmentConfig(
-        strategy="explicit",
-        assignments=[AreaMapping(ground_stations=("hawthorne",), area_id="49.1234")],
-    )
-    areas = compute_area_assignments(
-        cfg,
-        plane_count=1,
-        sats_per_plane=1,
-        addressing=scheme,
-        gs_names=["hawthorne", "other"],
-        protocol="isis",
-    )
-    assert areas[scheme.gs_id("hawthorne")] == "49.1234"
-    assert areas[scheme.gs_id("other")] == "49.0000"  # unmapped -> default
 
 
 def _ground_scheduling(**overrides):

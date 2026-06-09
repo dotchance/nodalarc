@@ -59,7 +59,13 @@ def test_generate_catalog_session_yaml_round_trips_through_resolver() -> None:
     assert "ground_stations" not in raw
     assert raw["segments"][0]["source"].startswith("nodalarc:constellations/")
     assert raw["segments"][1]["placement"]["from_site_set"].startswith("nodalarc:site-sets/")
-    assert raw["orbit"]["default_propagator"] == "j2_mean_elements"
+    # orbit.default_propagator is inert grammar (orbit primitives own their
+    # propagator) — generated sessions must not emit it; the generator instead
+    # validates the requested propagator against the resolved orbits.
+    assert "orbit" not in raw
+    assert {n.orbit.propagator for n in resolved.nodes if n.orbit is not None} == {
+        "j2_mean_elements"
+    }
     assert raw["routing"]["domains"][0]["protocol"] == "isis"
     assert raw["routing"]["domains"][0]["capabilities"] == {
         "mpls": {},
@@ -194,4 +200,15 @@ def test_generator_rejects_retired_routing_config_with_timers_pointer() -> None:
             orbit_propagator="j2_mean_elements",
             ground_stations="nodalarc:site-sets/earth/leo/earth-leo-starlink-pop-sites.yaml",
             routing_config={"isis_hello_interval": 5},
+        )
+
+
+def test_generator_rejects_propagator_that_does_not_match_catalog_orbits() -> None:
+    with pytest.raises(ValueError, match="does not match the selected"):
+        generate_session_yaml(
+            constellation="earth-leo-ring-36",
+            protocol="isis",
+            extensions=[],
+            orbit_propagator="two_body",
+            ground_stations="nodalarc:site-sets/earth/leo/earth-leo-starlink-pop-sites.yaml",
         )

@@ -37,7 +37,9 @@ spec:
           - select:   {segment: leo}
             terminal: {all: [{role: access}, {medium: rf}]}
     time:
+      start_time: '2026-06-08T00:00:00Z'
       step_seconds: 10
+      compression: 1
     ...
 status:
   phase: Ready       # Creating | Wiring | Ready | Error

@@ -522,3 +522,29 @@ class TestSwitchFailLoud:
 
         assert mgr.status_detail == "ready"
         assert mgr._current_session_file == str(tmp_sessions["session_yaml"])
+
+
+def test_cleanup_never_classifies_generated_session_library_as_orphan(tmp_path, monkeypatch):
+    """The wizard/upload library lives under the session data root but is user
+    content — orphan cleanup deleting it would destroy saved sessions."""
+    from types import SimpleNamespace as _NS
+
+    from vs_api.session_manager import SessionManager
+
+    data_root = tmp_path / "sessions"
+    generated = data_root / "generated-sessions"
+    generated.mkdir(parents=True)
+    (generated / "_wizard-keep-me.yaml").write_text("session: {}\n", encoding="utf-8")
+    orphan = data_root / "dead-deploy"
+    orphan.mkdir()
+
+    monkeypatch.setattr(
+        "vs_api.session_manager.get_platform_config",
+        lambda: _NS(kubernetes_namespace="nodalarc", session_data_root=str(data_root)),
+    )
+    manager = SessionManager.__new__(SessionManager)
+    manager._available = []
+    removed = SessionManager.cleanup_old_sessions(manager, keep=1)
+
+    assert generated.exists() and (generated / "_wizard-keep-me.yaml").exists()
+    assert removed >= 1 and not orphan.exists()

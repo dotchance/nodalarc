@@ -354,14 +354,14 @@ def generate_session_yaml(
                     "applies_to": {"segment": "space"},
                     "ipv4_pool": "10.0.0.0/16",
                     "prefix_length": 32,
-                    "allocation": "by_plane_slot",
+                    "allocation": "by_node_order",
                 },
                 {
                     "id": "space_loopbacks_v6",
                     "applies_to": {"segment": "space"},
                     "ipv6_pool": "fd00::/64",
                     "prefix_length": 128,
-                    "allocation": "by_plane_slot",
+                    "allocation": "by_node_order",
                 },
             ]
         },
@@ -383,7 +383,6 @@ def generate_session_yaml(
                 "max_pairs_per_tick": 100000,
             }
         },
-        "orbit": {"default_propagator": orbit_propagator},
         "time": _default_time(),
         "dispatch": {"latency_authority": "ome", "max_latency_age_ticks": 3},
     }
@@ -393,11 +392,20 @@ def generate_session_yaml(
             "(the 'timers' request field) for IGP timer tuning"
         )
 
-    resolve_session(
+    resolved = resolve_session(
         session_dict,
         catalog_roots=roots,
         source_context=SourceContext(origin="session_generator"),
     )
+    # The requested propagator must be what the selected catalog content
+    # actually uses — orbit primitives own their propagator, so a divergent
+    # wizard choice is an authoring error, never a silent no-op.
+    actual = sorted({node.orbit.propagator for node in resolved.nodes if node.orbit is not None})
+    if actual and orbit_propagator not in actual:
+        raise ValueError(
+            f"requested orbit_propagator {orbit_propagator!r} does not match the selected "
+            f"constellation's orbit propagator(s) {actual}"
+        )
     return yaml.safe_dump(session_dict, default_flow_style=False, sort_keys=False), warnings
 
 

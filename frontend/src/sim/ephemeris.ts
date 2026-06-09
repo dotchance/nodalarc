@@ -16,7 +16,13 @@
  */
 
 import { gmstRadians } from "../globe/astronomy";
-import { J2000_UNIX_SECONDS, SCENE_EARTH_RADIUS, type BodyMath } from "./orbitalMath";
+import {
+  J2000_UNIX_SECONDS,
+  SCENE_EARTH_RADIUS,
+  ellipsoidE2,
+  solveEccentricAnomaly,
+  type BodyMath,
+} from "./orbitalMath";
 
 // ---------------------------------------------------------------------------
 // Types (match lib/nodalarc/models/events.py SessionEphemeris)
@@ -134,12 +140,6 @@ export function bodyMathFromFrame(frame: EphemerisBodyFrame, kmPerRenderUnit: nu
   };
 }
 
-function ellipsoidE2(body: BodyMath): number {
-  const a = body.equatorialRadiusKm;
-  const b = body.polarRadiusKm;
-  return 1.0 - (b * b) / (a * a);
-}
-
 // ---------------------------------------------------------------------------
 // Keplerian mean-element propagation
 // ---------------------------------------------------------------------------
@@ -150,22 +150,6 @@ function deg2rad(deg: number): number {
 
 function rad2deg(rad: number): number {
   return (rad * 180.0) / Math.PI;
-}
-
-function solveEccentricAnomaly(meanAnomalyRad: number, eccentricity: number): number {
-  if (eccentricity === 0) return meanAnomalyRad;
-  const twoPi = Math.PI * 2;
-  let mean = meanAnomalyRad % twoPi;
-  if (mean < 0) mean += twoPi;
-  let eccentricAnomaly = eccentricity < 0.8 ? mean : Math.PI;
-  for (let i = 0; i < 12; i++) {
-    const f = eccentricAnomaly - eccentricity * Math.sin(eccentricAnomaly) - mean;
-    const fp = 1.0 - eccentricity * Math.cos(eccentricAnomaly);
-    const step = f / fp;
-    eccentricAnomaly -= step;
-    if (Math.abs(step) < 1e-14) break;
-  }
-  return eccentricAnomaly;
 }
 
 function perifocalState(

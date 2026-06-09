@@ -138,7 +138,6 @@ export function Scene({
     if (!ephemeris || kmPerRenderUnit === null) return [];
     const frames = ephemeris.body_frames;
     const ids = new Set<string>(Object.keys(frames));
-    for (const bodyId of Object.keys(frames)) ids.add(bodyId);
     for (const node of nodes) {
       if (!node.reference_body) {
         throw new Error(`Node ${node.node_id} is missing reference_body`);

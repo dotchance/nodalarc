@@ -22,13 +22,18 @@ from typing import Any
 import kubernetes
 import yaml
 from jinja2 import Environment, FileSystemLoader
-from nodalarc.models.resolved_session import SourceContext
+from nodalarc.models.resolved_session import (
+    ResolvedNode,
+    ResolvedRoutingDomain,
+    ResolvedSession,
+    SourceContext,
+)
 from nodalarc.nats_channels import sanitize_session_id
 from nodalarc.platform_config import get_platform_config
-from nodalarc.resolve_session import resolve_session_with_assets
+from nodalarc.resolve_session import SessionResolution, resolve_session_with_assets
 from nodalarc.session_identity import require_resolved_session_run_id
 from nodalarc.session_validator import validate_session_readiness
-from nodalarc.stack_resolver import resolve_domain_stack, validate_sid_indices
+from nodalarc.stack_resolver import ResolvedStack, resolve_domain_stack, validate_sid_indices
 from nodalarc.template_vars import build_template_vars_from_resolved
 
 log = logging.getLogger(__name__)
@@ -458,8 +463,8 @@ def _platform_placement_policy() -> Any:
     }
 
 
-def _stack_by_domain(resolved: Any) -> dict[str, Any]:
-    stacks: dict[str, Any] = {}
+def _stack_by_domain(resolved: ResolvedSession) -> dict[str, ResolvedStack]:
+    stacks: dict[str, ResolvedStack] = {}
     sid_by_node = resolved.sid_index_by_node_id()
     for domain in resolved.routing_domains:
         stack = resolve_domain_stack(domain)
@@ -476,7 +481,7 @@ def _stack_by_domain(resolved: Any) -> dict[str, Any]:
     return stacks
 
 
-def _routing_domain_for_node(resolved: Any, node_id: str) -> Any:
+def _routing_domain_for_node(resolved: ResolvedSession, node_id: str) -> ResolvedRoutingDomain:
     domains = [domain for domain in resolved.routing_domains if node_id in domain.node_ids]
     if len(domains) != 1:
         raise ValueError(
@@ -487,11 +492,11 @@ def _routing_domain_for_node(resolved: Any, node_id: str) -> Any:
 
 
 def _node_vars_from_resolved(
-    resolved: Any, stacks: Mapping[str, Any]
-) -> tuple[dict[str, dict], dict[str, Any]]:
+    resolved: ResolvedSession, stacks: Mapping[str, ResolvedStack]
+) -> tuple[dict[str, dict], dict[str, ResolvedStack]]:
     sid_by_node = resolved.sid_index_by_node_id()
     node_vars: dict[str, dict] = {}
-    node_stacks: dict[str, Any] = {}
+    node_stacks: dict[str, ResolvedStack] = {}
     for node in resolved.nodes:
         domain = _routing_domain_for_node(resolved, node.node_id)
         stack = stacks[domain.domain_id]
@@ -507,7 +512,7 @@ def _node_vars_from_resolved(
     return node_vars, node_stacks
 
 
-def _fixed_link_interfaces_by_node(resolved: Any) -> dict[str, list[dict[str, str]]]:
+def _fixed_link_interfaces_by_node(resolved: ResolvedSession) -> dict[str, list[dict[str, str]]]:
     by_node: dict[str, list[dict[str, str]]] = {}
     for candidate in resolved.link_candidates:
         if candidate.kind == "access":
@@ -534,7 +539,7 @@ def _fixed_link_interfaces_by_node(resolved: Any) -> dict[str, list[dict[str, st
     }
 
 
-def _terr0_manifest_addresses(node: Any) -> list[str]:
+def _terr0_manifest_addresses(node: ResolvedNode) -> list[str]:
     if node.interfaces is None or node.interfaces.terr0 is None:
         return []
     return [
@@ -751,14 +756,7 @@ def ensure_session_configmaps(
 
     # --- Step 7: Create session-level ConfigMaps ---
     _progress("Creating session-level ConfigMaps")
-    _create_session_configmaps(
-        v1,
-        resolved_session.session.name,
-        session_yaml,
-        namespace,
-        owner_ref,
-        session_run_id,
-    )
+    _create_session_configmaps(v1, resolved_session, session_yaml, namespace, owner_ref)
 
     # --- Step 7b: Ensure SSH keypair for terminal access ---
     _progress("Ensuring SSH keypair for terminal access")
@@ -1610,7 +1608,7 @@ def compute_expected_pod_count(spec: dict) -> int:
     return count
 
 
-def _placement_node_vars_from_resolution(resolution: Any) -> dict[str, dict]:
+def _placement_node_vars_from_resolution(resolution: SessionResolution) -> dict[str, dict]:
     """Build placement inputs from the same resolved assets used for pod creation."""
 
     node_vars: dict[str, dict] = {}
@@ -1855,45 +1853,35 @@ def _create_or_update_configmap(
 
 def _create_session_configmaps(
     v1: kubernetes.client.CoreV1Api,
-    session_name: str,
+    resolved: ResolvedSession,
     session_yaml: str,
     namespace: str,
     owner_ref: dict,
-    session_run_id: str,
 ) -> None:
     """Create session-level ConfigMaps with segment session YAML."""
-    raw = yaml.safe_load(session_yaml)
-    runtime_resolution = resolve_session_with_assets(
-        raw,
-        source_context=SourceContext(
-            origin="operator.session_configmap",
-            run_id=session_run_id,
-        ),
-    )
-    runtime_run_id = require_resolved_session_run_id(runtime_resolution.resolved)
     _create_or_update_configmap(
         v1,
         "nodalarc-session",
         namespace,
         {
             "session.yaml": session_yaml,
-            "session_name": session_name,
-            "session_run_id": runtime_run_id,
+            "session_name": resolved.session.name,
+            "session_run_id": require_resolved_session_run_id(resolved),
         },
         owner_ref,
     )
     log.debug("Created session-level ConfigMap")
 
 
-def _build_sidecar_config(resolved) -> dict | None:
+def _build_sidecar_config(stack: ResolvedStack) -> dict | None:
     """Build sidecar container config from resolved stack."""
-    if resolved.image and resolved.image != "frr":
-        if resolved.image != "nodalpath-fwd":
-            raise RuntimeError(f"Unsupported sidecar image intent: {resolved.image}")
+    if stack.image and stack.image != "frr":
+        if stack.image != "nodalpath-fwd":
+            raise RuntimeError(f"Unsupported sidecar image intent: {stack.image}")
         return {
-            "name": resolved.image,
+            "name": stack.image,
             "image": _require_env("NODALPATH_FWD_IMAGE"),
-            "capabilities": resolved.security_context_capabilities
+            "capabilities": stack.security_context_capabilities
             or ["NET_ADMIN", "NET_RAW", "SYS_ADMIN"],
         }
     return None

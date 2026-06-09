@@ -210,6 +210,8 @@ class SkyfieldBspEphemeris:
         self._path = kernel_paths[self._kernel.id]
         self._eph = load_file(str(self._path))
         self._ts = load.timescale()
+        self._coverage_start_unix = self._kernel.coverage_start.timestamp()
+        self._coverage_end_unix = self._kernel.coverage_end.timestamp()
 
     @classmethod
     def from_config(
@@ -231,6 +233,17 @@ class SkyfieldBspEphemeris:
         return cls(config, kernel_paths=paths)
 
     def body_state(self, body_id: str, unix_timestamp: float) -> CommonBodyState:
+        # Every evaluation is bounded by the validated coverage window. The
+        # pacing loop, lookahead, and seek all run unbounded sim time; a
+        # timestamp past coverage must fail typed here, never surface as a
+        # mid-tick kernel exception with the pacing thread already dead.
+        if not (self._coverage_start_unix <= unix_timestamp <= self._coverage_end_unix):
+            raise EphemerisValidationError(
+                f"ephemeris kernel {self._kernel.id!r} does not cover requested time "
+                f"{datetime.fromtimestamp(unix_timestamp, UTC).isoformat()}; coverage is "
+                f"{self._kernel.coverage_start.isoformat()}.."
+                f"{self._kernel.coverage_end.isoformat()}"
+            )
         if body_id == "earth":
             return CommonBodyState(
                 body_id="earth",

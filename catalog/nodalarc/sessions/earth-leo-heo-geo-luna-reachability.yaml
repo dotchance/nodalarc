@@ -387,18 +387,6 @@ addressing:
     ipv4_pool: 10.255.0.0/16
     prefix_length: 32
     allocation: by_node_order
-  point_to_point:
-  - id: p2p_links
-    applies_to:
-      any:
-      - segment: leo_a
-      - segment: leo_b
-      - segment: heo_relay
-      - segment: geo_relay
-      - segment: luna_llo
-    ipv4_pool: 10.128.0.0/12
-    prefix_length: 31
-    allocation: by_attach_index
 routing:
   domains:
   - id: earth_domain
@@ -464,8 +452,6 @@ ephemeris:
     - nodalarc:bodies/earth.yaml
     - nodalarc:bodies/luna.yaml
     frame: gcrs
-orbit:
-  default_propagator: j2_mean_elements
 dispatch:
   latency_authority: ome
   max_latency_age_ticks: 1

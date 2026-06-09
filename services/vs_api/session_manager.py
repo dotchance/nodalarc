@@ -219,19 +219,9 @@ class SessionManager:
         return self._session_file_paths.get(session_path)
 
     def _collect_data_dirs(self) -> list[Path]:
-        """Collect all unique data_dir paths from scanned session configs."""
-        dirs: set[str] = set()
-        for s in self._available:
-            try:
-                raw = yaml.safe_load(Path(s["file"]).read_text())
-                resolve_session_with_assets(
-                    raw,
-                    source_context=SourceContext(origin="vs_api.session_manager.data_dirs"),
-                )
-                dirs.add(get_platform_config().session_data_root)
-            except Exception:
-                pass
-        return [Path(d) for d in dirs]
+        """Session data lives under the platform-owned root — a platform fact,
+        not something derived by resolving every available session."""
+        return [Path(get_platform_config().session_data_root)]
 
     def recover_session(self) -> dict | None:
         """Scan data directories for the newest session-state.json with live PIDs.
@@ -337,11 +327,13 @@ class SessionManager:
             if not base.is_dir():
                 continue
 
-            # Separate complete (has session-state.json) from orphan dirs
+            # Separate complete (has session-state.json) from orphan dirs.
+            # The generated-session library lives under the same data root but
+            # is user content with its own lifecycle — never an orphan deploy.
             complete = []
             orphan = []
             for d in base.iterdir():
-                if not d.is_dir():
+                if not d.is_dir() or d.name == "generated-sessions":
                     continue
                 if (d / "session-state.json").exists():
                     complete.append(d)

@@ -27,7 +27,7 @@ echo "[session] Expected session pods: $expected_pods"
 
 echo "[session] Computing placement policy..."
 if ! placement_policy="$(PYTHONPATH=lib uv run python -c 'import sys; from pathlib import Path; from nodalarc.platform_config import init_platform_config; cfg = init_platform_config(Path(sys.argv[1])); print(cfg.default_session_pod_placement_policy)' "$PLATFORM_CONFIG")"; then
-    echo "[session] ERROR: failed to compute placement policy for $DEFAULT_SESSION" >&2
+    echo "[session] ERROR: failed to read placement policy from $PLATFORM_CONFIG" >&2
     exit 1
 fi
 if [ -z "$placement_policy" ]; then

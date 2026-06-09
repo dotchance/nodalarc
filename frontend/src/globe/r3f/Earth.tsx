@@ -131,7 +131,7 @@ function Sun({
     const dist = radiusRender * 50;
     sunDirectionForDate(date, localSunDir);
     light.position.copy(localSunDir).multiplyScalar(dist);
-  }, [localSunDir, simTimeIso]);
+  }, [localSunDir, simTimeIso, radiusRender]);
 
   // After the frame rotation (FrameDriver -2), feed the post-rotation sun world direction
   // into the day/night shader. Default priority runs after the rotation is set this frame.

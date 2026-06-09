@@ -407,6 +407,9 @@ def main() -> None:
         gs_handover_modes=gs_handover_modes,
         sat_ground_terminal_capacities=sat_ground_terminal_capacities,
         mbb_dispatch=mbb_dispatch,
+        # Substrate compensation policy: half the measured RTT is the one-way
+        # bound. The dispatcher rejects any other policy; this is the single
+        # declared value, not a fallback.
         rtt_to_one_way_policy="half-rtt",
         clean_kernel_audit_interval_s=get_platform_config().scheduler_clean_kernel_audit_interval_s,
         session_id=session_id,

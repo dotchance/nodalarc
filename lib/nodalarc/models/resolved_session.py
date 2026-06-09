@@ -557,6 +557,48 @@ class ResolvedSession(BaseModel):
         """
         return {node.node_id: index for index, node in enumerate(self.nodes)}
 
+    def effective_ground_min_elevation_by_gs(self) -> dict[str, float]:
+        """The single derivation of each ground station's effective elevation
+        mask: per access rule, the max of the matching terminal blocks' masks
+        and the rule endpoint's declared mask, max-combined across rules.
+
+        OME enforcement and VS-API display both read this — two derivations
+        of the same mask is how the UI ends up showing a constraint the
+        allocator does not enforce.
+        """
+        result: dict[str, float] = {}
+        node_by_id = {node.node_id: node for node in self.nodes}
+        for rule in self.link_rules:
+            if rule.kind != "access" or not rule.enabled:
+                continue
+            for endpoint in rule.endpoints:
+                for node_id in endpoint.node_ids:
+                    node = node_by_id[node_id]
+                    if node.kind != "ground_station":
+                        continue
+                    terminal_masks = [
+                        block.min_elevation_deg
+                        for block in node.terminal_inventory
+                        if block.endpoint_role == endpoint.terminal_role
+                        and (
+                            endpoint.terminal_medium is None
+                            or block.medium == endpoint.terminal_medium
+                        )
+                        and block.min_elevation_deg is not None
+                    ]
+                    masks = [
+                        value
+                        for value in (*terminal_masks, endpoint.min_elevation_deg)
+                        if value is not None
+                    ]
+                    if not masks:
+                        raise ValueError(
+                            f"no resolved min_elevation_deg for access endpoint {node_id}"
+                        )
+                    effective = max(float(value) for value in masks)
+                    result[node_id] = max(result.get(node_id, effective), effective)
+        return result
+
     def ground_index_by_node_id(self) -> dict[str, int]:
         """Resolution-order index over ground stations (wiring-manifest fact).
 

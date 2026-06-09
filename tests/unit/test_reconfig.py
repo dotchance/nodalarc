@@ -6,11 +6,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 import yaml
 
 from tests.conftest import build_segment_session_dict
 from tools import na_reconfig
-from tools.na_reconfig import _match_target
+from tools.na_reconfig import _match_target, _validate_plane_target_scope
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -210,3 +211,30 @@ def test_remove_flow_scans_resolved_ground_node_ids(monkeypatch, tmp_path: Path)
         "earth-test-site-01-router",
     ]
     assert deleted == [("10.42.0.8", "flow-1")]
+
+
+def test_bare_plane_target_refused_on_multi_space_segment_sessions(tmp_path) -> None:
+    """Plane numbers restart per segment; a bare plane target over the
+    flagship session would silently reconfigure every segment's plane N."""
+    from pathlib import Path
+
+    from nodalarc.resolve_session import load_session_resolution_from_file
+
+    resolved = load_session_resolution_from_file(
+        Path("catalog/nodalarc/sessions/earth-leo-heo-geo-luna-reachability.yaml")
+    ).resolved
+
+    with pytest.raises(RuntimeError, match="ambiguous across space segments"):
+        _validate_plane_target_scope("plane:0", resolved)
+
+    # Segment-qualified targets stay valid and scope correctly.
+    leo_a_plane0 = [
+        node.node_id
+        for node in resolved.nodes
+        if node.kind == "satellite"
+        and _match_target(
+            "plane:leo_a:0", node.node_id, "satellite", node.plane, "", node.segment_id
+        )
+    ]
+    assert leo_a_plane0
+    assert all(node_id.startswith("leo-a-") for node_id in leo_a_plane0)

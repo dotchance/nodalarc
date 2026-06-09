@@ -13,6 +13,8 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, PositiveFloat, PositiveInt, model_validator
 
+from nodalarc.models.segments import GroundScheduling, OriginatedPrefixes
+
 Identifier = Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")]
 CatalogObject = Annotated[str, Field(min_length=1)] | dict[str, Any]
 FiniteFloat = Annotated[float, Field(allow_inf_nan=False)]
@@ -290,17 +292,6 @@ class NodeInterfaces(_FrozenModel):
     terr0: InterfaceAddress
 
 
-class OriginatedPrefixes(_FrozenModel):
-    ipv4: tuple[str, ...] | None = None
-    ipv6: tuple[str, ...] | None = None
-
-    @model_validator(mode="after")
-    def _has_prefix(self) -> OriginatedPrefixes:
-        if not self.ipv4 and not self.ipv6:
-            raise ValueError("originated_prefixes requires ipv4 and/or ipv6")
-        return self
-
-
 class PayloadInstallation(_FrozenModel):
     installed_count: PositiveInt
     tags: tuple[Identifier, ...] | None = None
@@ -349,7 +340,7 @@ class SiteNode(_FrozenModel):
     originated_prefixes: OriginatedPrefixes | None = None
     tenant_id: Identifier | None = None
     service_priority: PositiveInt | None = None
-    scheduling: dict[str, Any] | None = None
+    scheduling: GroundScheduling | None = None
     tags: tuple[Identifier, ...] | None = None
 
 

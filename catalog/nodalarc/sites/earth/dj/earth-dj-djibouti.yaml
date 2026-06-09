@@ -9,7 +9,7 @@ site:
     ipv6: fd00:da7a:17::/64
   nodes:
   - id: leo-gateway
-    model: nodalarc:nodes/ground/starlink-gateway.yaml
+    model: nodalarc:nodes/ground/leo-gateway.yaml
     terminals:
       access_ka:
         installed_count: 1
@@ -18,7 +18,7 @@ site:
             transmit: 1000.0
             receive: 1000.0
           tracking_capacity: 1
-          max_range_km: 1250
+          max_range_km: 2500.0
           limits:
             azimuth_deg:
               min: -180

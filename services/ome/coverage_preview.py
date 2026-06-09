@@ -121,14 +121,14 @@ def _preview_segment_session(
                     "applies_to": {"segment": "space"},
                     "ipv4_pool": "10.0.0.0/16",
                     "prefix_length": 32,
-                    "allocation": "by_plane_slot",
+                    "allocation": "by_node_order",
                 },
                 {
                     "id": "space-loopbacks-v6",
                     "applies_to": {"segment": "space"},
                     "ipv6_pool": "fd00::/64",
                     "prefix_length": 128,
-                    "allocation": "by_plane_slot",
+                    "allocation": "by_node_order",
                 },
             ]
         },

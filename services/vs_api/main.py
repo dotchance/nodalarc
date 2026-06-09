@@ -40,9 +40,6 @@ from nodalarc.catalog_paths import (
     config_value_for,
     generated_file_path,
     generated_file_stem,
-    resolve_constellation_reference,
-    resolve_site_set_reference,
-    validate_station_names,
     write_text_exclusive,
 )
 from nodalarc.db.queries import (
@@ -2676,20 +2673,6 @@ def _catalog_error(exc: Exception) -> JSONResponse:
     else:
         message = "Invalid catalog reference"
     return _error_response(400, message)
-
-
-def _resolve_api_constellation_source(source: Any) -> Any:
-    if isinstance(source, str):
-        return config_value_for(resolve_constellation_reference(source, _CATALOG_ROOTS))
-    return source
-
-
-def _resolve_api_ground_station_source(source: Any) -> Any:
-    if isinstance(source, str):
-        return config_value_for(resolve_site_set_reference(source, _CATALOG_ROOTS))
-    if isinstance(source, list) and all(isinstance(item, str) for item in source):
-        validate_station_names(source)
-    return source
 
 
 @app.post("/api/v1/session/generate", dependencies=[Depends(_require_api_key)])

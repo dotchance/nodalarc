@@ -79,6 +79,8 @@ from nodalarc.platform_config import get_platform_config
 from nodalarc.resolve_session import resolve_session_with_assets
 from pydantic import ValidationError
 
+from vs_api.session_manager import _routing_label
+
 log = logging.getLogger(__name__)
 
 STALE_THRESHOLD_S: float = 15.0
@@ -114,7 +116,7 @@ class SessionContext:
         )
         resolved = resolution.resolved
         platform = self._platform_config()
-        self.routing_stack = self._routing_label(resolved)
+        self.routing_stack = _routing_label(resolved)
         self.constellation_name = resolved.session.name
 
         # Load GS elevation map and beam falloff
@@ -131,7 +133,7 @@ class SessionContext:
         )
         self.beam_falloff_exponent: float = platform.vs_api_visual_beam_falloff_exponent
 
-        # Wall-clock actuation-latency contract (simulation.actuation) — the
+        # Wall-clock actuation-latency contract (platform vs_api_actuation_*) — the
         # in_flight -> faulted bound the explanation composer carries.
         self.actuation_expected_latency_ms: float = platform.vs_api_actuation_expected_latency_ms
         self.actuation_fault_after_ms: float = platform.vs_api_actuation_fault_after_ms
@@ -1432,52 +1434,15 @@ class SessionContext:
             self.network_health = self.network_health.model_copy(update={"status": "converged"})
 
     @staticmethod
-    def _routing_label(resolved) -> str:
-        routing = resolved.routing
-        if routing is None or not routing.domains:
-            return "unrouted"
-        return " + ".join(f"{domain.id}:{domain.protocol}" for domain in routing.domains)
-
-    @staticmethod
     def _platform_config():
         return get_platform_config()
 
     @staticmethod
     def _load_gs_elevation_map(resolved) -> dict[str, float]:
-        result: dict[str, float] = {}
-        node_by_id = {node.node_id: node for node in resolved.nodes}
-        for rule in resolved.link_rules:
-            if rule.kind != "access":
-                continue
-            for endpoint in rule.endpoints:
-                for node_id in endpoint.node_ids:
-                    node = node_by_id[node_id]
-                    if node.kind != "ground_station":
-                        continue
-                    terminal_masks = [
-                        block.min_elevation_deg
-                        for block in node.terminal_inventory
-                        if block.endpoint_role == endpoint.terminal_role
-                        and (
-                            endpoint.terminal_medium is None
-                            or block.medium == endpoint.terminal_medium
-                        )
-                        and block.min_elevation_deg is not None
-                    ]
-                    masks = [
-                        value
-                        for value in (*terminal_masks, endpoint.min_elevation_deg)
-                        if value is not None
-                    ]
-                    if not masks:
-                        raise ValueError(
-                            f"no resolved min_elevation_deg for access endpoint {node_id}"
-                        )
-                    effective = max(masks)
-                    result[node_id] = max(result.get(node_id, effective), effective)
-        return result
+        # Single owner: the resolved session derives the effective mask; the
+        # display layer never re-derives what the allocator enforces.
+        return resolved.effective_ground_min_elevation_by_gs()
 
-    @staticmethod
     def _node_addr(
         *,
         purpose: Literal["router_loopback", "site_interface", "site_prefix"],

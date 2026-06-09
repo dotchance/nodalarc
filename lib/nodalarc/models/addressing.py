@@ -15,7 +15,7 @@ from nodalarc.models.constellation import (
     ExplicitConstellation,
     ParametricConstellation,
 )
-from nodalarc.models.session import AddressingConfig, AreaAssignmentConfig
+from nodalarc.models.session import AddressingConfig
 
 
 class AddressingScheme:
@@ -157,113 +157,6 @@ class AreaAssignment(NamedTuple):
 
     node_id: str
     area_id: str
-
-
-def compute_area_assignments(
-    config: AreaAssignmentConfig,
-    plane_count: int,
-    sats_per_plane: int,
-    addressing: AddressingScheme,
-    gs_names: list[str] | None = None,
-    protocol: str = "isis",
-) -> dict[str, str]:
-    """Compute area_id for every satellite and ground station.
-
-    Returns a dict mapping node_id -> area_id.
-
-    IS-IS areas use NET prefix format: 49.0001, 49.0002, etc.
-    OSPF areas use dotted IP format: 0.0.0.0 (backbone), 0.0.0.1, etc.
-    OSPF areas must be contiguous and all non-backbone areas must
-    touch area 0.0.0.0 via ABRs.
-
-    Strategies:
-    - flat: all nodes share one area
-    - per-plane: each plane gets its own area
-    - stripe: groups of `planes_per_stripe` planes share an area
-    - explicit: user-provided mapping from plane indices to area_ids
-    """
-    result: dict[str, str] = {}
-    strategy = config.strategy
-    is_ospf = protocol == "ospf"
-
-    # Explicit per-ground-station area overrides (applied below). "all" maps every
-    # station; a name list (or bare name) maps those stations. These are honored,
-    # never silently dropped.
-    gs_name_to_area: dict[str, str] = {}
-    explicit_all_gs_area: str | None = None
-
-    if strategy == "flat":
-        default = "0.0.0.0" if is_ospf else "49.0001"
-        area_id = config.gs_area_id or default
-        for p in range(plane_count):
-            for s in range(sats_per_plane):
-                result[addressing.sat_id(p, s)] = area_id
-
-    elif strategy == "per-plane":
-        for p in range(plane_count):
-            area_id = f"0.0.0.{p + 1}" if is_ospf else f"49.{p + 1:04d}"
-            for s in range(sats_per_plane):
-                result[addressing.sat_id(p, s)] = area_id
-
-    elif strategy == "stripe":
-        pps = config.planes_per_stripe
-        assert pps is not None and pps > 0
-        for p in range(plane_count):
-            stripe_index = p // pps
-            area_id = f"0.0.0.{stripe_index + 1}" if is_ospf else f"49.{stripe_index + 1:04d}"
-            for s in range(sats_per_plane):
-                result[addressing.sat_id(p, s)] = area_id
-
-    elif strategy == "explicit":
-        assert config.assignments is not None
-        plane_to_area: dict[int, str] = {}
-        for mapping in config.assignments:
-            if mapping.planes is not None:
-                for p in mapping.planes:
-                    plane_to_area[p] = mapping.area_id
-            if mapping.ground_stations is not None:
-                if mapping.ground_stations == "all":
-                    explicit_all_gs_area = mapping.area_id
-                else:
-                    for name in mapping.ground_stations:
-                        gs_name_to_area[name] = mapping.area_id
-        # A mapping that targets a non-existent plane or station does nothing —
-        # fail loud rather than silently drop it.
-        out_of_range = sorted(p for p in plane_to_area if not 0 <= p < plane_count)
-        if out_of_range:
-            raise ValueError(
-                f"explicit area assignment maps plane(s) outside [0, {plane_count}): {out_of_range}"
-            )
-        explicit_gs_intent = explicit_all_gs_area is not None or bool(gs_name_to_area)
-        if explicit_gs_intent and gs_names is None:
-            raise ValueError(
-                "explicit ground-station area assignment requires the known gs_names universe"
-            )
-        if gs_names is not None:
-            known = set(gs_names)
-            unknown = sorted(n for n in gs_name_to_area if n not in known)
-            if unknown:
-                raise ValueError(
-                    f"explicit area assignment maps unknown ground station(s): {unknown}"
-                )
-        fallback = "0.0.0.0" if is_ospf else "49.0001"
-        for p in range(plane_count):
-            area_id = plane_to_area.get(p, fallback)
-            for s in range(sats_per_plane):
-                result[addressing.sat_id(p, s)] = area_id
-
-    else:
-        raise ValueError(f"unknown area-assignment strategy: {strategy!r}")
-
-    # Ground stations: explicit per-GS/all overrides win; else gs_area_id; else
-    # the protocol default (OSPF backbone / IS-IS 49.0000).
-    gs_default = (config.gs_area_id or "0.0.0.0") if is_ospf else (config.gs_area_id or "49.0000")
-    if gs_names:
-        for name in gs_names:
-            area = gs_name_to_area.get(name, explicit_all_gs_area or gs_default)
-            result[addressing.gs_id(name)] = area
-
-    return result
 
 
 # ---------------------------------------------------------------------------

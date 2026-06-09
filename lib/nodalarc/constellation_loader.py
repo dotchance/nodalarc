@@ -56,7 +56,6 @@ GroundTerminalLike = GroundTerminal | SatelliteGroundTerminalDef
 
 _SAT_TYPE_DIR: Path | None = None
 _GS_STATIONS_DIR: Path | None = None
-_GS_SETS_DIR: Path | None = None
 
 
 def set_satellite_type_dir(path: str | Path) -> None:
@@ -65,16 +64,11 @@ def set_satellite_type_dir(path: str | Path) -> None:
     _SAT_TYPE_DIR = Path(path)
 
 
-def set_ground_station_dirs(
-    stations_dir: str | Path | None = None,
-    sets_dir: str | Path | None = None,
-) -> None:
-    """Set directories for ground station files."""
-    global _GS_STATIONS_DIR, _GS_SETS_DIR
+def set_ground_station_dirs(stations_dir: str | Path | None = None) -> None:
+    """Set the directory for individual ground station files."""
+    global _GS_STATIONS_DIR
     if stations_dir is not None:
         _GS_STATIONS_DIR = Path(stations_dir)
-    if sets_dir is not None:
-        _GS_SETS_DIR = Path(sets_dir)
 
 
 def _resolve_sat_type_dir() -> Path:
@@ -92,16 +86,6 @@ def _resolve_gs_stations_dir() -> Path:
         return _GS_STATIONS_DIR
     raise FileNotFoundError(
         "Ground-station file loading requires an explicit stations directory. Runtime "
-        "catalog sessions must use resolve_session(); tests that exercise this low-level "
-        "helper must call set_ground_station_dirs()."
-    )
-
-
-def _resolve_gs_sets_dir() -> Path:
-    if _GS_SETS_DIR is not None:
-        return _GS_SETS_DIR
-    raise FileNotFoundError(
-        "Ground-station set file loading requires an explicit sets directory. Runtime "
         "catalog sessions must use resolve_session(); tests that exercise this low-level "
         "helper must call set_ground_station_dirs()."
     )
@@ -373,18 +357,6 @@ def load_ground_station_individual(name: str) -> GroundStationConfig:
     return station
 
 
-def load_ground_station_set(name: str) -> GroundStationSetConfig:
-    """Load a ground station set YAML file by name."""
-    sets_dir = _resolve_gs_sets_dir()
-    path = sets_dir / f"{name}.yaml"
-    if not path.exists():
-        raise FileNotFoundError(f"Ground station set file not found: {path}")
-    data = yaml.safe_load(path.read_text())
-    if isinstance(data, dict) and "ground_station_set" in data:
-        return GroundStationSetConfig.model_validate(data["ground_station_set"])
-    return GroundStationSetConfig.model_validate(data)
-
-
 # Default elevation for individual station files. Policy defaults come from session unless explicitly set in station/set YAML.
 _DEFAULT_MIN_ELEVATION_DEG = 25.0
 
@@ -421,32 +393,6 @@ def _build_gs_file_from_stations(
         default_mbb_reserve=default_mbb_reserve,
         default_terrestrial_prefixes=default_terrestrial_prefixes,
         stations=stations,
-    )
-
-
-def load_ground_stations_from_set(
-    set_name: str,
-) -> GroundStationFile:
-    """Load a ground station set and resolve all station references.
-
-    This helper is retained for tests that exercise the old model family. Runtime
-    catalog sessions must use resolve_session().
-    """
-    gs_set = load_ground_station_set(set_name)
-    stations: list[GroundStationConfig] = []
-    for station_name in gs_set.stations:
-        station = load_ground_station_individual(station_name)
-        stations.append(station)
-    return _build_gs_file_from_stations(
-        stations,
-        default_terminals=gs_set.default_terminals,
-        default_terrestrial_prefixes=gs_set.default_terrestrial_prefixes,
-        default_min_elevation_deg=gs_set.default_min_elevation_deg,
-        default_selection_policy=gs_set.default_selection_policy,
-        default_handover_policy=gs_set.default_handover_policy,
-        default_handover_mode=gs_set.default_handover_mode,
-        default_mbb_overlap_ticks=gs_set.default_mbb_overlap_ticks,
-        default_mbb_reserve=gs_set.default_mbb_reserve,
     )
 
 

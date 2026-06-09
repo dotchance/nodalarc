@@ -136,28 +136,6 @@ class ResolvedAddressingView:
         # Resolved ground station names passed to OME are already runtime node IDs.
         return name
 
-    @staticmethod
-    def isl_interfaces(count: int) -> list[str]:
-        return [f"isl{i}" for i in range(count)]
-
-    @staticmethod
-    def term_interfaces(count: int) -> list[str]:
-        return [f"term{i}" for i in range(count)]
-
-    @staticmethod
-    def gnd_interfaces(count: int) -> list[str]:
-        return [f"gnd{i}" for i in range(count)]
-
-    def ground_link_interfaces(
-        self,
-        pair: tuple[str, str],
-        gs_terminal_index: int = 0,
-        sat_terminal_index: int = 0,
-    ) -> tuple[str, str]:
-        if self.is_ground_segment(pair[0]):
-            return (f"term{gs_terminal_index}", f"gnd{sat_terminal_index}")
-        return (f"gnd{sat_terminal_index}", f"term{gs_terminal_index}")
-
 
 def build_ome_inputs_from_resolved(resolved: ResolvedSession) -> ResolvedOmeInputs:
     """Build OME runtime inputs from the resolved catalog session."""
@@ -173,7 +151,9 @@ def build_ome_inputs_from_resolved(resolved: ResolvedSession) -> ResolvedOmeInpu
     access_ground_ids = frozenset(ground_candidate_satellites_by_gs)
     all_ground_nodes = [node for node in resolved.nodes if node.kind == "ground_station"]
     ground_nodes = [node for node in all_ground_nodes if node.node_id in access_ground_ids]
-    gs_file = _ground_file_from_resolved(ground_nodes)
+    gs_file = _ground_file_from_resolved(
+        ground_nodes, resolved.effective_ground_min_elevation_by_gs()
+    )
     addressing = ResolvedAddressingView(resolved)
     neighbors = _neighbors_from_resolved(resolved)
     propagator_id = _single_ome_propagator(resolved)
@@ -332,7 +312,9 @@ def _satellite_from_resolved(node: ResolvedNode) -> SatelliteNode:
     )
 
 
-def _ground_file_from_resolved(nodes: list[ResolvedNode]) -> GroundStationFile | None:
+def _ground_file_from_resolved(
+    nodes: list[ResolvedNode], min_elevation_by_gs: dict[str, float]
+) -> GroundStationFile | None:
     stations: list[GroundStationConfig] = []
     for node in nodes:
         if node.surface_position is None:
@@ -355,7 +337,7 @@ def _ground_file_from_resolved(nodes: list[ResolvedNode]) -> GroundStationFile |
                 lat_deg=node.surface_position.lat_deg,
                 lon_deg=node.surface_position.lon_deg,
                 alt_m=node.surface_position.alt_m,
-                min_elevation_deg=_effective_ground_min_elevation(node),
+                min_elevation_deg=min_elevation_by_gs[node.node_id],
                 terminals=tuple(_ground_terminal(block) for block in access_blocks),
                 tenant_id=node.tenant_id,
                 reference_body=_node_reference_body(node),
@@ -505,15 +487,9 @@ def _required(value: float | None, block: ResolvedTerminalBlock, field: str) -> 
     return float(value)
 
 
-def _effective_ground_min_elevation(node: ResolvedNode) -> float:
-    values = [
-        block.min_elevation_deg
-        for block in node.terminal_inventory
-        if block.endpoint_role == "access" and block.min_elevation_deg is not None
-    ]
-    if not values:
-        raise ValueError(f"ground node {node.node_id!r} has no access terminal elevation limit")
-    return max(float(value) for value in values)
+# Effective ground elevation masks are resolved-session truth
+# (ResolvedSession.effective_ground_min_elevation_by_gs) — OME enforcement and
+# VS-API display read the same derivation, including rule-endpoint masks.
 
 
 def _ground_scheduling_config(value) -> GroundSchedulingConfig:

@@ -401,7 +401,25 @@ RoutingDomain ::= {
   "protocol": Protocol,
   [ "capabilities": Capabilities ],
   "selectors": NodeSelector+,
-  [ "area_assignment": { "strategy": AreaStrategy } ]
+  [ "area_assignment": { "strategy": AreaStrategy } ],
+  [ "timers": RoutingTimers ]          # isis/ospf domains only
+}
+
+RoutingTimers ::= {                    # engine defaults apply when omitted
+  [ "hello_interval_s": Integer ],     # default 1
+  [ "hold_interval_s": Integer ],      # default 3; must exceed hello
+  [ "spf": SpfThrottle ],
+  [ "bfd": BfdConfig ]
+}
+SpfThrottle ::= {                      # IETF SPF backoff, milliseconds
+  [ "init_delay_ms": Integer ], [ "short_delay_ms": Integer ],
+  [ "long_delay_ms": Integer ], [ "holddown_ms": Integer ],
+  [ "time_to_learn_ms": Integer ]
+}
+BfdConfig ::= {
+  "enabled": Bool,                     # default false
+  [ "detect_multiplier": Integer ],
+  [ "rx_interval_ms": Integer ], [ "tx_interval_ms": Integer ]
 }
 
 RoutingBoundary ::= {

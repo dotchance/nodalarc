@@ -30,11 +30,6 @@ class CatalogRoots:
         root = Path(catalog_root)
         return cls(root=root, sessions=root / "sessions")
 
-    @property
-    def config_root(self) -> Path:
-        """Retired name retained only to fail old assumptions at call sites."""
-        return self.root
-
 
 def safe_display_stem(name: str) -> str:
     """Return the exact display-name stem used for generated files."""
@@ -102,62 +97,6 @@ def _validate_yaml_path_reference(path: Path, *, label: str) -> Path:
     parts = [validate_catalog_name(part, label=f"{label} directory") for part in path.parts[:-1]]
     stem = validate_catalog_name(Path(filename).stem, label=f"{label} filename")
     return Path(*parts, f"{stem}{suffix}")
-
-
-def _strip_catalog_root_prefix(candidate: Path, root_resolved: Path) -> Path:
-    cwd = Path.cwd().resolve(strict=True)
-    try:
-        root_from_cwd = root_resolved.relative_to(cwd)
-    except ValueError:
-        root_from_cwd = None
-
-    if root_from_cwd is not None:
-        try:
-            return candidate.relative_to(root_from_cwd)
-        except ValueError:
-            pass
-
-    if candidate.parts[:1] == (root_resolved.name,):
-        return Path(*candidate.parts[1:])
-    return candidate
-
-
-def _resolve_existing_under(source: str | Path, root: Path, *, label: str) -> Path:
-    raw = str(source)
-    candidate = _reject_unsafe_path_source(raw, label=label)
-    root_resolved = root.resolve(strict=True)
-    reference = _validate_yaml_path_reference(
-        _strip_catalog_root_prefix(candidate, root_resolved), label=label
-    )
-
-    for yaml_path in sorted(
-        path for suffix in _YAML_SUFFIXES for path in root_resolved.rglob(f"*{suffix}")
-    ):
-        if yaml_path.relative_to(root_resolved) != reference:
-            continue
-        resolved = yaml_path.resolve(strict=True)
-        try:
-            resolved.relative_to(root_resolved)
-        except ValueError as exc:
-            raise CatalogPathError(f"{label} escapes approved root: {root}") from exc
-        return resolved
-
-    raise FileNotFoundError(f"{label} file not found: {root / reference}")
-
-
-def _resolve_named_yaml_under(name: str, root: Path, *, label: str) -> Path:
-    name = validate_catalog_name(name, label=label)
-    root_resolved = root.resolve(strict=True)
-    resolved = (root_resolved / f"{name}.yaml").resolve(strict=True)
-    try:
-        resolved.relative_to(root_resolved)
-    except ValueError as exc:
-        raise CatalogPathError(f"{label} escapes approved root: {root}") from exc
-    return resolved
-
-
-def _looks_like_path(source: str) -> bool:
-    return "/" in source or "\\" in source or source.endswith((".yaml", ".yml"))
 
 
 def resolve_catalog_reference(

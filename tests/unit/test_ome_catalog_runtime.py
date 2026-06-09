@@ -257,14 +257,14 @@ def test_ome_addressing_rejects_ambiguous_global_plane_slot_lookup(tmp_path: Pat
                 "applies_to": {"segment": "space_b"},
                 "ipv4_pool": "10.10.0.0/16",
                 "prefix_length": 32,
-                "allocation": "by_plane_slot",
+                "allocation": "by_node_order",
             },
             {
                 "id": "space-b-loopbacks-v6",
                 "applies_to": {"segment": "space_b"},
                 "ipv6_pool": "fd10::/64",
                 "prefix_length": 128,
-                "allocation": "by_plane_slot",
+                "allocation": "by_node_order",
             },
         ]
     )
@@ -317,3 +317,25 @@ def test_ome_rejects_sgp4_until_tle_runtime_inputs_are_materialized(tmp_path: Pa
 
     with pytest.raises(ValueError, match="TLE records"):
         build_ome_inputs_from_resolved(sgp4)
+
+
+def test_rule_endpoint_elevation_mask_is_enforced_not_just_displayed(tmp_path: Path) -> None:
+    """One mask derivation for enforcement and display: a rule-endpoint
+    min_elevation_deg stricter than the terminal mask must reach OME's
+    ground-station inputs, not only the UI map."""
+    raw = build_segment_session_dict(
+        name="ome-endpoint-mask",
+        constellation={"planes": {"count": 1, "sats_per_plane": 2}},
+        ground_stations={"stations": ["a"]},
+    )
+    raw["link_rules"][0]["endpoints"][0]["min_elevation_deg"] = 37
+    resolved = _resolved(tmp_path, raw)
+
+    masks = resolved.effective_ground_min_elevation_by_gs()
+    gs_id = next(node.node_id for node in resolved.nodes if node.kind == "ground_station")
+    assert masks[gs_id] >= 37.0
+
+    runtime = build_ome_inputs_from_resolved(resolved)
+    assert runtime.gs_file is not None
+    station = next(s for s in runtime.gs_file.stations if s.name == gs_id)
+    assert station.min_elevation_deg == masks[gs_id]

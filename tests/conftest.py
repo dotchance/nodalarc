@@ -90,7 +90,9 @@ def build_segment_session_dict(
     candidate_limit: int = 100000,
 ) -> dict:
     """Build a segment-grammar session for product/runtime tests."""
-    constellation_source = _catalog_constellation_source(constellation)
+    constellation_source = _catalog_constellation_source(
+        constellation, propagator=_catalog_propagator(orbit_propagator)
+    )
     ground_source = _catalog_site_set_source(ground_stations)
     routing_data = _catalog_routing(protocol=protocol, extensions=extensions or [], routing=routing)
     scheduling_data = scheduling or {
@@ -161,14 +163,14 @@ def build_segment_session_dict(
                     "applies_to": {"segment": "space"},
                     "ipv4_pool": "10.0.0.0/16",
                     "prefix_length": 32,
-                    "allocation": "by_plane_slot",
+                    "allocation": "by_node_order",
                 },
                 {
                     "id": "space-loopbacks-v6",
                     "applies_to": {"segment": "space"},
                     "ipv6_pool": "fd00::/64",
                     "prefix_length": 128,
-                    "allocation": "by_plane_slot",
+                    "allocation": "by_node_order",
                 },
             ]
         },
@@ -178,7 +180,6 @@ def build_segment_session_dict(
                 "max_pairs_per_tick": candidate_limit,
             }
         },
-        "orbit": {"default_propagator": _catalog_propagator(orbit_propagator)},
         "routing": routing_data,
         "time": time_data,
         "dispatch": {"latency_authority": "ome", "max_latency_age_ticks": 3},
@@ -347,7 +348,7 @@ def _ground_node() -> dict:
     }
 
 
-def _catalog_orbit() -> dict:
+def _catalog_orbit(propagator: str = "j2_mean_elements") -> dict:
     return {
         "orbit": {
             "id": "earth-leo-test",
@@ -360,13 +361,15 @@ def _catalog_orbit() -> dict:
                 "argument_of_perigee_deg": 0,
             },
             "phase": {"mean_anomaly_deg": 0},
-            "propagator": "j2_mean_elements",
+            "propagator": propagator,
             "reference": "test-fixture",
         }
     }
 
 
-def _catalog_constellation_source(source: object) -> object:
+def _catalog_constellation_source(
+    source: object, *, propagator: str = "j2_mean_elements"
+) -> object:
     if isinstance(source, str) and source.startswith("nodalarc:"):
         return source
     if isinstance(source, dict) and "constellation" in source:
@@ -388,7 +391,7 @@ def _catalog_constellation_source(source: object) -> object:
             "id": ident,
             "display_name": ident,
             "node": _space_node(),
-            "orbit": _catalog_orbit(),
+            "orbit": _catalog_orbit(propagator),
             "planes": {"count": planes, "raan_spacing_deg": 360 / planes},
             "slots_per_plane": slots,
             "phasing": {"mode": "walker_delta", "phase_offset_deg": 0},

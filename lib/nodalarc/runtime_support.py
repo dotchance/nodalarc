@@ -29,6 +29,9 @@ class FeatureCategory(StrEnum):
     PROTOCOL_ADAPTER = "protocol_adapter"
     EPHEMERIS_PROVIDER = "ephemeris_provider"
     ROUTING_PROTOCOL = "routing_protocol"
+    ADDRESSING_POOL = "addressing_pool"
+    PAYLOAD = "payload"
+    CLOCK_MODEL = "clock_model"
 
 
 # Informational notes shown with unsupported features.
@@ -55,6 +58,16 @@ FEATURE_SUPPORT_NOTES: dict[tuple[FeatureCategory, str], str] = {
     (FeatureCategory.ROUTING_PROTOCOL, "ospf"): "supported FRR routing stack",
     (FeatureCategory.ROUTING_PROTOCOL, "static"): "supported FRR routing stack",
     (FeatureCategory.ROUTING_PROTOCOL, "bgp"): "planned runtime capability (eBGP-first)",
+    (FeatureCategory.ADDRESSING_POOL, "loopbacks"): "supported pool class",
+    (FeatureCategory.ADDRESSING_POOL, "point_to_point"): (
+        "future runtime capability — WAN interfaces are unnumbered (borrow lo0)"
+    ),
+    (FeatureCategory.ADDRESSING_POOL, "terrestrial_prefixes"): (
+        "future runtime capability — sites author terr0 addresses directly"
+    ),
+    (FeatureCategory.PAYLOAD, "payloads"): "future runtime capability",
+    (FeatureCategory.CLOCK_MODEL, "session"): "supported clock model",
+    (FeatureCategory.CLOCK_MODEL, "affine"): "future runtime capability",
 }
 
 
@@ -90,6 +103,9 @@ class RuntimeSupport(BaseModel):
     supported_protocol_adapters: frozenset[str]
     supported_ephemeris_providers: frozenset[str]
     supported_routing_protocols: frozenset[str]
+    supported_addressing_pools: frozenset[str]
+    supported_clock_models: frozenset[str]
+    supports_payloads: bool
     # Surface bodies whose presence requires an ephemeris manifest.
     ephemeris_required_bodies: frozenset[str]
 
@@ -109,6 +125,9 @@ class RuntimeSupport(BaseModel):
             supported_protocol_adapters=frozenset(),
             supported_ephemeris_providers=frozenset(),
             supported_routing_protocols=SUPPORTED_STACK_PROTOCOLS,
+            supported_addressing_pools=frozenset({"loopbacks"}),
+            supported_clock_models=frozenset({"session"}),
+            supports_payloads=False,
             ephemeris_required_bodies=frozenset({"luna", "mars"}),
         )
 
@@ -125,6 +144,9 @@ class RuntimeSupport(BaseModel):
             supported_protocol_adapters=frozenset({"static_ip"}),
             supported_ephemeris_providers=frozenset({"skyfield_bsp"}),
             supported_routing_protocols=SUPPORTED_STACK_PROTOCOLS,
+            supported_addressing_pools=frozenset({"loopbacks"}),
+            supported_clock_models=frozenset({"session"}),
+            supports_payloads=False,
             ephemeris_required_bodies=frozenset({"luna"}),
         )
 
@@ -176,3 +198,18 @@ class RuntimeSupport(BaseModel):
         return self._unsupported(
             FeatureCategory.ROUTING_PROTOCOL, protocol, "routing domain protocol"
         )
+
+    def check_addressing_pool(self, pool_class: str) -> UnsupportedFeature | None:
+        if pool_class in self.supported_addressing_pools:
+            return None
+        return self._unsupported(FeatureCategory.ADDRESSING_POOL, pool_class, "addressing pool")
+
+    def check_clock_model(self, model: str) -> UnsupportedFeature | None:
+        if model in self.supported_clock_models:
+            return None
+        return self._unsupported(FeatureCategory.CLOCK_MODEL, model, "segment clock model")
+
+    def check_payloads(self, has_payloads: bool) -> UnsupportedFeature | None:
+        if not has_payloads or self.supports_payloads:
+            return None
+        return self._unsupported(FeatureCategory.PAYLOAD, "payloads", "node payloads")

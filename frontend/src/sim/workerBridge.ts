@@ -4,7 +4,12 @@
 // Allocates the double-buffered SharedArrayBuffer, sends ephemeris data
 // to the Worker, and reads interpolated positions for the render loop.
 
-import type { SessionEphemeris, EphemerisNodeKeplerian } from "./ephemeris";
+import {
+  bodyMathFromFrame,
+  kmPerRenderUnitFromEphemeris,
+  type SessionEphemeris,
+  type EphemerisNodeKeplerian,
+} from "./ephemeris";
 import type { KeplerianElements } from "./orbitalMath";
 
 // --- Configuration ---
@@ -91,21 +96,27 @@ export function sendEphemeris(ephemeris: SessionEphemeris): void {
   if (!worker) return;
 
   const sats: { id: string; elements: KeplerianElements }[] = [];
+  const kmPerRenderUnit = kmPerRenderUnitFromEphemeris(ephemeris);
   for (const [id, node] of Object.entries(ephemeris.nodes)) {
     if (node.type !== "keplerian") continue;
     const kep = node as EphemerisNodeKeplerian;
-    const referenceBody = kep.reference_body ?? "earth";
+    const referenceBody = kep.reference_body;
     if (referenceBody !== "earth") continue;
+    const frame = ephemeris.body_frames[referenceBody];
+    if (!frame) {
+      throw new Error(`SessionEphemeris missing body frame for worker node ${id}: ${referenceBody}`);
+    }
     sats.push({
       id,
       elements: {
         propagator: kep.propagator,
-        altitude_km: kep.altitude_km,
+        semi_major_axis_km: kep.semi_major_axis_km,
+        eccentricity: kep.eccentricity,
         inclination_deg: kep.inclination_deg,
         raan_deg: kep.raan_deg,
-        true_anomaly_deg: kep.true_anomaly_deg,
-        reference_body: referenceBody,
-        reference_radius_km: ephemeris.body_frames?.[referenceBody]?.radius_km,
+        argument_of_perigee_deg: kep.argument_of_perigee_deg,
+        mean_anomaly_deg: kep.mean_anomaly_deg,
+        body: bodyMathFromFrame(frame, kmPerRenderUnit),
       },
     });
   }

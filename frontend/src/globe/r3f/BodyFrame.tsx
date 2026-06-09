@@ -15,6 +15,7 @@ export interface BodyFrameValue {
   /** Body id, e.g. "earth", "luna", "mars". */
   id: string;
   radiusKm: number;
+  kmPerRenderUnit: number;
   /** Body radius in render units. */
   radiusRender: number;
 }

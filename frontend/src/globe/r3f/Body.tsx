@@ -25,6 +25,7 @@ import { kmToRender } from "./units";
 interface BodyProps {
   id: string;
   radiusKm: number;
+  kmPerRenderUnit: number;
   /** Body centre in the universe frame (render units). Earth sits at origin today. */
   position?: [number, number, number];
   onFocusBody?: (bodyId: string) => void;
@@ -33,11 +34,11 @@ interface BodyProps {
 
 /** ref exposes the body's group so the render loop can drive its frame rotation. */
 export const Body = forwardRef<THREE.Group, BodyProps>(function Body(
-  { id, radiusKm, position = [0, 0, 0], onFocusBody, children },
+  { id, radiusKm, kmPerRenderUnit, position = [0, 0, 0], onFocusBody, children },
   ref,
 ) {
-  const radiusRender = kmToRender(radiusKm);
-  const frame: BodyFrameValue = { id, radiusKm, radiusRender };
+  const radiusRender = kmToRender(radiusKm, kmPerRenderUnit);
+  const frame: BodyFrameValue = { id, radiusKm, kmPerRenderUnit, radiusRender };
 
   const attach = useCallback(
     (group: THREE.Group | null) => {

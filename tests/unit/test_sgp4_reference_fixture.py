@@ -11,6 +11,8 @@ import pytest
 from nodalarc.propagator import propagate_sgp4_tle
 from sgp4.api import Satrec
 
+from tests.physics_fixtures import EARTH_TEST_BODY_FRAME
+
 ISS_TLE_LINE_1 = "1 25544U 98067A   21075.51041667  .00001264  00000-0  29660-4 0  9993"
 ISS_TLE_LINE_2 = "2 25544  51.6442  21.5417 0002426  95.1670  21.8444 15.48974333273145"
 
@@ -227,7 +229,13 @@ def test_tle_sgp4_ecef_reference_positions(
     expected_ecef_velocity_km_s,
 ):
     del name
-    position, velocity, geo = propagate_sgp4_tle(tle_line_1, tle_line_2, epoch_unix, offset_s)
+    position, velocity, geo = propagate_sgp4_tle(
+        tle_line_1,
+        tle_line_2,
+        epoch_unix,
+        offset_s,
+        body_frame=EARTH_TEST_BODY_FRAME,
+    )
 
     assert (position.x, position.y, position.z) == pytest.approx(expected_ecef_km, abs=1e-6)
     assert (velocity.x, velocity.y, velocity.z) == pytest.approx(

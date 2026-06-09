@@ -16,7 +16,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
-from nodalarc.body_frames import body_frame_for
+from nodalarc.body_frames import BodyFrame
 from nodalarc.constellation_loader import (
     SatelliteNode,
     isl_terminal_for_interface,
@@ -63,7 +63,7 @@ from ome.isl_engine import (
 )
 from ome.propagation_engine import (
     PropagatedState,
-    PropagatorId,
+    SessionPropagatorId,
     build_node_positions,
     propagate_satellites,
 )
@@ -92,8 +92,6 @@ def build_session_ephemeris(
     """
     import math
 
-    from nodalarc.body_frames import body_frame_for
-
     nodes: dict[str, EphemerisNodeKeplerian | EphemerisNodeTLE | EphemerisNodeFixed] = {}
 
     def _meta(node_id: str) -> dict[str, object]:
@@ -105,17 +103,29 @@ def build_session_ephemeris(
                 "local_node_id",
                 "namespace",
                 "tags",
-                "reference_body",
-                "frame_id",
             )
             if key in raw and raw[key] is not None
         }
 
     for sat in ctx.satellites:
         node_id = satellite_node_id(sat, ctx.addressing)
-        sat_body = getattr(sat, "central_body", "earth")
-        body_frame = body_frame_for(sat_body)
-        if ctx.propagator_id == "sgp4-tle":
+        reference_body = sat.central_body
+        if reference_body not in ctx.body_frames:
+            raise ValueError(
+                f"Session ephemeris missing resolved body primitive facts for satellite "
+                f"{node_id!r} central_body={reference_body!r}"
+            )
+        sat_propagator_id = getattr(sat, "propagator_id", None) or ctx.propagator_id
+        if sat_propagator_id == "mixed":
+            raise ValueError(
+                f"Satellite {node_id} is missing propagator_id in mixed-propagator session"
+            )
+        if sat_propagator_id == "sgp4-tle":
+            if reference_body != "earth":
+                raise ValueError(
+                    f"Satellite {node_id} uses central_body={reference_body!r}; "
+                    "SGP4/TLE ephemeris is Earth-only"
+                )
             if sat.tle_line_1 is None or sat.tle_line_2 is None:
                 raise ValueError(
                     f"Satellite {node_id} has no TLE lines; cannot build SGP4 ephemeris"
@@ -126,35 +136,63 @@ def build_session_ephemeris(
                 plane=sat.plane,
                 slot=sat.slot,
                 norad_id=sat.norad_id,
+                reference_body=reference_body,
+                frame_id=reference_body,
                 **_meta(node_id),
             )
         else:
             nodes[node_id] = EphemerisNodeKeplerian(
-                propagator=ctx.propagator_id,
-                altitude_km=sat.elements.semi_major_axis_km - body_frame.equatorial_radius_km,
+                propagator=sat_propagator_id,
+                semi_major_axis_km=sat.elements.semi_major_axis_km,
+                eccentricity=sat.elements.eccentricity,
                 inclination_deg=math.degrees(sat.elements.inclination_rad),
                 raan_deg=math.degrees(sat.elements.raan_rad),
-                true_anomaly_deg=math.degrees(sat.elements.true_anomaly_rad),
+                argument_of_perigee_deg=math.degrees(sat.elements.argument_of_perigee_rad),
+                mean_anomaly_deg=math.degrees(sat.elements.mean_anomaly_rad),
                 plane=sat.plane,
                 slot=sat.slot,
+                reference_body=reference_body,
+                frame_id=reference_body,
                 **_meta(node_id),
             )
 
     for gs_id, (_ecef, geo) in ctx.gs_positions.items():
+        reference_body = ctx.gs_reference_bodies.get(gs_id)
+        if reference_body is None:
+            raise ValueError(
+                f"Session ephemeris missing resolved reference_body for ground node {gs_id!r}"
+            )
+        if reference_body not in ctx.body_frames:
+            raise ValueError(
+                f"Session ephemeris missing resolved body primitive facts for ground node "
+                f"{gs_id!r} reference_body={reference_body!r}"
+            )
         nodes[gs_id] = EphemerisNodeFixed(
             lat_deg=geo.lat_deg,
             lon_deg=geo.lon_deg,
             alt_km=geo.alt_km,
+            reference_body=reference_body,
+            frame_id=reference_body,
             **_meta(gs_id),
         )
 
     epoch_body_states = body_states_at(ctx.body_ephemeris, set(ctx.active_bodies), epoch_unix)
     body_frames: dict[str, EphemerisBodyFrame] = {}
     for body_id, body_state in sorted(epoch_body_states.items()):
-        body_frame = body_frame_for(body_id)
+        try:
+            body_frame = ctx.body_frames[body_id]
+        except KeyError as exc:
+            raise ValueError(
+                f"Session ephemeris missing resolved body primitive facts for body {body_id!r}"
+            ) from exc
         body_frames[body_id] = EphemerisBodyFrame(
             body_id=body_id,
-            radius_km=body_frame.equatorial_radius_km,
+            mean_radius_km=body_frame.mean_radius_km,
+            equatorial_radius_km=body_frame.equatorial_radius_km,
+            polar_radius_km=body_frame.polar_radius_km,
+            gravitational_parameter_km3_s2=body_frame.gravitational_parameter_km3_s2,
+            rotation_rate_rad_s=body_frame.rotation_rate_rad_s,
+            j2=body_frame.j2,
             origin_x_km=body_state.position_km.x,
             origin_y_km=body_state.position_km.y,
             origin_z_km=body_state.position_km.z,
@@ -234,13 +272,18 @@ class StepContext:
     sat_isl_terminals: dict[str, int]
     sat_isl_terminal_constraints: dict[str, dict[str, IslTerminalConstraints]]
     sat_ground_terminals: dict[str, int]  # satellite ground terminal capacity
-    propagator_id: PropagatorId
+    propagator_id: SessionPropagatorId
+    body_frames: dict[str, BodyFrame]
     body_ephemeris: SkyfieldBspEphemeris | None = None
-    active_bodies: frozenset[str] = field(default_factory=lambda: frozenset({"earth"}))
+    active_bodies: frozenset[str] = field(default_factory=frozenset)
     polar_seam_enabled: bool = False
     latitude_threshold_deg: float = 70.0
     ground_policy_lookahead_horizon_ticks: int = 0
     ground_policy_lookahead_horizon_ticks_by_gs: dict[str, int] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not self.active_bodies:
+            raise ValueError("StepContext requires active_bodies derived from resolved session")
 
 
 @dataclass(frozen=True)
@@ -317,6 +360,39 @@ def _normalize_handover_policy(policy: HandoverPolicySpec) -> HandoverPolicySpec
     raise ValueError(f"Unknown handover_policy.name={policy.name!r}")
 
 
+def _require_body_frames(body_frames: Mapping[str, BodyFrame] | None) -> dict[str, BodyFrame]:
+    if body_frames is None:
+        raise ValueError(
+            "build_step_context requires resolved body primitive facts; "
+            "runtime physics must not use hard-coded body constants"
+        )
+    if not body_frames:
+        raise ValueError("build_step_context received zero resolved body primitive facts")
+    return dict(body_frames)
+
+
+def _resolve_active_bodies_for_context(
+    *,
+    satellites: list[SatelliteNode],
+    gs_reference_bodies: Mapping[str, str],
+    active_bodies: frozenset[str] | None,
+) -> frozenset[str]:
+    required = {sat.central_body for sat in satellites}
+    required.update(gs_reference_bodies.values())
+    if not required:
+        raise ValueError("StepContext cannot derive active_bodies from an empty node set")
+    if active_bodies is None:
+        return frozenset(required)
+    if not active_bodies:
+        raise ValueError("StepContext active_bodies cannot be empty")
+    missing = sorted(required - set(active_bodies))
+    if missing:
+        raise ValueError(
+            "StepContext active_bodies omits resolved node body/bodies: " + ", ".join(missing)
+        )
+    return active_bodies
+
+
 def _build_policy_audit(
     *,
     gs_selection_policies: dict[str, SelectionPolicySpec],
@@ -358,7 +434,7 @@ def build_step_context(
     addressing: AddressingScheme,
     gs_file: GroundStationFile | None,
     neighbors: frozenset[tuple[str, NeighborAssignment]],
-    propagator_id: PropagatorId,
+    propagator_id: SessionPropagatorId,
     ground_scheduling: GroundSchedulingConfig | None = None,
     polar_seam_enabled: bool = False,
     latitude_threshold_deg: float = 70.0,
@@ -366,10 +442,12 @@ def build_step_context(
     ground_defaults_applied: bool = False,
     ground_candidate_satellites_by_gs: Mapping[str, tuple[str, ...]] | None = None,
     node_metadata: Mapping[str, Mapping[str, object]] | None = None,
+    body_frames: Mapping[str, BodyFrame] | None = None,
     body_ephemeris: SkyfieldBspEphemeris | None = None,
     active_bodies: frozenset[str] | None = None,
 ) -> StepContext:
     """Build the per-session-constant context for compute_step()."""
+    resolved_body_frames = _require_body_frames(body_frames)
     by_node = neighbors_by_node(neighbors)
     node_metadata_map = {node_id: dict(value) for node_id, value in (node_metadata or {}).items()}
     has_ground_stations = gs_file is not None and bool(gs_file.stations)
@@ -452,7 +530,14 @@ def build_step_context(
         for _i, station in enumerate(gs_file.stations):
             node_id = addressing.gs_id(station.name)
             geo = GeoPosition(station.lat_deg, station.lon_deg, (station.alt_m or 0) / 1000.0)
-            ecef = geodetic_to_ecef(geo, body_frame_for(station.reference_body))
+            try:
+                body_frame = resolved_body_frames[station.reference_body]
+            except KeyError as exc:
+                raise ValueError(
+                    f"Ground station {node_id!r} references body {station.reference_body!r}, "
+                    "but resolved body primitive facts are missing"
+                ) from exc
+            ecef = geodetic_to_ecef(geo, body_frame)
             gs_positions[node_id] = (ecef, geo)
             gs_min_elevations[node_id] = (
                 station.min_elevation_deg
@@ -557,6 +642,11 @@ def build_step_context(
         gs_mbb_reserve=gs_mbb_reserve,
         ignored_capacity_fields=ignored_capacity_tuple,
     )
+    resolved_active_bodies = _resolve_active_bodies_for_context(
+        satellites=satellites,
+        gs_reference_bodies=gs_reference_bodies,
+        active_bodies=active_bodies,
+    )
 
     return StepContext(
         satellites=satellites,
@@ -592,8 +682,9 @@ def build_step_context(
         sat_isl_terminal_constraints=sat_isl_terminal_constraints,
         sat_ground_terminals=sat_ground_terminals,
         propagator_id=propagator_id,
+        body_frames=resolved_body_frames,
         body_ephemeris=body_ephemeris,
-        active_bodies=active_bodies or frozenset({"earth"}),
+        active_bodies=resolved_active_bodies,
         polar_seam_enabled=polar_seam_enabled,
         latitude_threshold_deg=latitude_threshold_deg,
         ground_policy_lookahead_horizon_ticks=lookahead_horizon_ticks,
@@ -694,6 +785,7 @@ def compute_step(
         dt=dt,
         propagator_id=ctx.propagator_id,
         body_states=body_states,
+        body_frames=ctx.body_frames,
     )
 
     # 2. Build positions dict (for LinkStateSnapshot latency) and ClockTick
@@ -714,6 +806,7 @@ def compute_step(
         sat_states=sat_states,
         by_node=ctx.by_node,
         terminal_constraints=ctx.sat_isl_terminal_constraints,
+        body_frames=ctx.body_frames,
         polar_seam_enabled=ctx.polar_seam_enabled,
         latitude_threshold_deg=ctx.latitude_threshold_deg,
     )
@@ -743,6 +836,7 @@ def compute_step(
         gs_min_elevations=ctx.gs_min_elevations,
         gs_tenant_ids=ctx.gs_tenant_ids,
         gs_reference_bodies=ctx.gs_reference_bodies,
+        body_frames=ctx.body_frames,
         gs_selection_policy_names=ctx.gs_selection_policy_names,
         pass_lookahead=(
             GroundPassLookahead(
@@ -758,6 +852,7 @@ def compute_step(
                 gs_reference_bodies=ctx.gs_reference_bodies,
                 gs_terminal_profiles=ctx.gs_terminal_profiles,
                 sat_ground_terminal_profiles=ctx.sat_ground_terminal_profiles,
+                body_frames=ctx.body_frames,
                 body_ephemeris=ctx.body_ephemeris,
                 active_bodies=ctx.active_bodies,
             )
@@ -908,7 +1003,7 @@ def precompute_timeline_window(
     neighbors: frozenset[tuple[str, NeighborAssignment]],
     epoch_unix: float,
     duration_s: float,
-    propagator_id: PropagatorId,
+    propagator_id: SessionPropagatorId,
     step_seconds: int = 1,
     ground_scheduling: GroundSchedulingConfig | None = None,
     polar_seam_enabled: bool = False,
@@ -923,6 +1018,7 @@ def precompute_timeline_window(
     timestamp_offset: float = 0.0,
     predictive: bool = False,
     body_ephemeris: SkyfieldBspEphemeris | None = None,
+    body_frames: Mapping[str, BodyFrame] | None = None,
     active_bodies: frozenset[str] | None = None,
 ) -> TimelineWindowResult:
     """Precompute a single window of the timeline (batch mode).
@@ -943,6 +1039,7 @@ def precompute_timeline_window(
         ground_link_model=ground_link_model,
         ground_defaults_applied=ground_defaults_applied,
         ground_candidate_satellites_by_gs=ground_candidate_satellites_by_gs,
+        body_frames=_require_body_frames(body_frames),
         body_ephemeris=body_ephemeris,
         active_bodies=active_bodies,
     )
@@ -967,7 +1064,7 @@ def precompute_timeline(
     neighbors: frozenset[tuple[str, NeighborAssignment]],
     epoch_unix: float,
     duration_s: float,
-    propagator_id: PropagatorId,
+    propagator_id: SessionPropagatorId,
     step_seconds: int = 1,
     ground_scheduling: GroundSchedulingConfig | None = None,
     polar_seam_enabled: bool = False,
@@ -976,6 +1073,7 @@ def precompute_timeline(
     ground_defaults_applied: bool = False,
     ground_candidate_satellites_by_gs: Mapping[str, tuple[str, ...]] | None = None,
     body_ephemeris: SkyfieldBspEphemeris | None = None,
+    body_frames: Mapping[str, BodyFrame] | None = None,
     active_bodies: frozenset[str] | None = None,
 ) -> list[TimelineEvent]:
     """Single-window convenience wrapper.
@@ -997,6 +1095,7 @@ def precompute_timeline(
         ground_link_model=ground_link_model,
         ground_defaults_applied=ground_defaults_applied,
         ground_candidate_satellites_by_gs=ground_candidate_satellites_by_gs,
+        body_frames=_require_body_frames(body_frames),
         body_ephemeris=body_ephemeris,
         active_bodies=active_bodies,
     )

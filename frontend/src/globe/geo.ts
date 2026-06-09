@@ -3,8 +3,6 @@
 /** Geographic coordinate conversions for Three.js scene. */
 
 import * as THREE from "three";
-import { EARTH_RADIUS, KM_PER_UNIT } from "../config";
-
 /**
  * Convert geographic coordinates to Three.js world position.
  * Must match Three.js SphereGeometry UV mapping so markers align with texture.
@@ -14,11 +12,12 @@ export function geoToWorld(
   lat_deg: number,
   lon_deg: number,
   alt_km: number,
-  radiusRender: number = EARTH_RADIUS,
+  radiusRender: number,
+  kmPerRenderUnit: number,
 ): THREE.Vector3 {
   const lat = (lat_deg * Math.PI) / 180;
   const lon = (lon_deg * Math.PI) / 180;
-  const r = radiusRender + alt_km / KM_PER_UNIT;
+  const r = radiusRender + alt_km / kmPerRenderUnit;
 
   return new THREE.Vector3(
     r * Math.cos(lat) * Math.cos(lon),   // X: prime meridian at equator
@@ -32,8 +31,13 @@ export function geoToWorld(
  * ECEF: X=prime meridian equator, Y=90°E equator, Z=north pole.
  * Three.js: X=prime meridian, Y=north, Z=negative 90°E.
  */
-export function velocityToScene(vel_x: number, vel_y: number, vel_z: number): THREE.Vector3 {
-  const scale = 1 / KM_PER_UNIT;
+export function velocityToScene(
+  vel_x: number,
+  vel_y: number,
+  vel_z: number,
+  kmPerRenderUnit: number,
+): THREE.Vector3 {
+  const scale = 1 / kmPerRenderUnit;
   return new THREE.Vector3(
     vel_x * scale,   // ECEF X (PM equator) → Three.js X
     vel_z * scale,   // ECEF Z (north pole) → Three.js Y

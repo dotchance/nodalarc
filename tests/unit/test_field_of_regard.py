@@ -10,9 +10,10 @@ Verifies:
 
 import math
 
-from nodalarc.constants import EARTH_RADIUS_KM
 from ome.propagator import Vec3
 from ome.visibility import check_field_of_regard, check_isl_visibility
+
+from tests.physics_fixtures import EARTH_TEST_BODY_FRAME
 
 # Orbital velocity at 550 km altitude (approx)
 V_550 = 7.58  # km/s
@@ -21,6 +22,8 @@ V_780 = 7.45  # km/s
 # Earth radius + altitudes
 R_550 = 6921.0  # km
 R_780 = 7151.0  # km
+EARTH_RADIUS_KM = EARTH_TEST_BODY_FRAME.mean_radius_km
+EARTH_MU = EARTH_TEST_BODY_FRAME.gravitational_parameter_km3_s2
 
 
 def _polar_orbit_state(raan_deg: float, true_anomaly_deg: float, altitude_km: float = 550.0):
@@ -32,7 +35,7 @@ def _polar_orbit_state(raan_deg: float, true_anomaly_deg: float, altitude_km: fl
     where ν = true anomaly.
     """
     R = EARTH_RADIUS_KM + altitude_km
-    v = math.sqrt(398600.4418 / R)  # vis-viva for circular orbit
+    v = math.sqrt(EARTH_MU / R)  # vis-viva for circular orbit
     raan = math.radians(raan_deg)
     nu = math.radians(true_anomaly_deg)
 
@@ -144,6 +147,7 @@ class TestFieldOfRegardInPipeline:
             vel_b,
             max_range_km=50000.0,  # Very large to not trigger range check
             field_of_regard_deg=120.0,
+            body_frame=EARTH_TEST_BODY_FRAME,
         )
         assert result.visible is False
 
@@ -158,6 +162,7 @@ class TestFieldOfRegardInPipeline:
             vel_b,
             max_range_km=50000.0,
             field_of_regard_deg=120.0,
+            body_frame=EARTH_TEST_BODY_FRAME,
         )
         assert result.visible is True
         assert result.reason == "ok"
@@ -173,6 +178,7 @@ class TestFieldOfRegardInPipeline:
             vel_b,
             max_range_km=50000.0,
             field_of_regard_deg=120.0,
+            body_frame=EARTH_TEST_BODY_FRAME,
         )
         assert result.visible is True
 
@@ -187,6 +193,7 @@ class TestFieldOfRegardInPipeline:
             vel_b,
             max_range_km=50000.0,
             # field_of_regard_deg defaults to 360.0
+            body_frame=EARTH_TEST_BODY_FRAME,
         )
         assert result.reason != "field_of_regard"
 

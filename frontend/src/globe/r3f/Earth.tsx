@@ -89,10 +89,10 @@ export function sunDirectionForDate(date: Date, target = new THREE.Vector3()): T
     .normalize();
 }
 
-function Atmosphere() {
+function Atmosphere({ radiusRender }: { radiusRender: number }) {
   return (
     <mesh>
-      <sphereGeometry args={[EARTH_RADIUS_RENDER * 1.015, 32, 32]} />
+      <sphereGeometry args={[radiusRender * 1.015, 32, 32]} />
       <shaderMaterial
         vertexShader={ATMO_VERT}
         fragmentShader={ATMO_FRAG}
@@ -111,10 +111,12 @@ function Sun({
   simTimeIso,
   intensity,
   dayNightMaterial,
+  radiusRender,
 }: {
   simTimeIso: string | null;
   intensity: number;
   dayNightMaterial: THREE.ShaderMaterial | null;
+  radiusRender: number;
 }) {
   const lightRef = useRef<THREE.DirectionalLight>(null);
   const worldPos = useMemo(() => new THREE.Vector3(), []);
@@ -126,7 +128,7 @@ function Sun({
     if (!light || !simTimeIso) return;
     const date = new Date(simTimeIso);
     if (Number.isNaN(date.getTime())) return;
-    const dist = EARTH_RADIUS_RENDER * 50;
+    const dist = radiusRender * 50;
     sunDirectionForDate(date, localSunDir);
     light.position.copy(localSunDir).multiplyScalar(dist);
   }, [localSunDir, simTimeIso]);
@@ -193,13 +195,13 @@ function SunReference({ simTimeIso }: { simTimeIso: string | null }) {
 
 /** Country boundaries: Natural Earth 110m as one LineSegments at
  *  R*1.001, shown in political + day-night modes. Loaded once, async. */
-function Boundaries({ visible }: { visible: boolean }) {
+function Boundaries({ visible, radiusRender }: { visible: boolean; radiusRender: number }) {
   const [geometry, setGeometry] = useState<THREE.BufferGeometry | null>(null);
 
   useEffect(() => {
     let alive = true;
     let ownedGeometry: THREE.BufferGeometry | null = null;
-    const r = EARTH_RADIUS_RENDER * 1.001;
+    const r = radiusRender * 1.001;
     const toXYZ = (lon: number, lat: number): [number, number, number] => {
       const latR = (lat * Math.PI) / 180;
       const lonR = (lon * Math.PI) / 180;
@@ -265,6 +267,7 @@ export function Earth({
   globeMode: GlobeMode;
   simTimeIso: string | null;
 }) {
+  const { radiusRender } = useBodyFrame();
   const textures = useLoader(THREE.TextureLoader, ["/earth-blue-marble.jpg", "/earth-night.jpg"]);
   const dayTexture = textures[0]!;
   const nightTexture = textures[1]!;
@@ -297,15 +300,20 @@ export function Earth({
   return (
     <>
       <mesh visible={showBlueMarble}>
-        <sphereGeometry args={[EARTH_RADIUS_RENDER, 64, 64]} />
+        <sphereGeometry args={[radiusRender, 64, 64]} />
         <meshPhongMaterial map={dayTexture} shininess={5} />
       </mesh>
       <mesh visible={showDayNight} material={dayNightMaterial}>
-        <sphereGeometry args={[EARTH_RADIUS_RENDER, 64, 64]} />
+        <sphereGeometry args={[radiusRender, 64, 64]} />
       </mesh>
-      <Atmosphere />
-      <Boundaries visible={showBoundaries} />
-      <Sun simTimeIso={simTimeIso} intensity={sunIntensity} dayNightMaterial={dayNightMaterial} />
+      <Atmosphere radiusRender={radiusRender} />
+      <Boundaries visible={showBoundaries} radiusRender={radiusRender} />
+      <Sun
+        simTimeIso={simTimeIso}
+        intensity={sunIntensity}
+        dayNightMaterial={dayNightMaterial}
+        radiusRender={radiusRender}
+      />
       <SunReference simTimeIso={simTimeIso} />
     </>
   );

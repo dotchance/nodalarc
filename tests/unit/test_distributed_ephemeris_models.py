@@ -23,74 +23,64 @@ from nodalarc.models.events import (
 from nodalarc.models.link_state import LinkState, LinkStateSnapshot
 from pydantic import ValidationError
 
+from tests.physics_fixtures import EARTH_TEST_EPHEMERIS_BODY_FRAMES
+
 # ---------------------------------------------------------------------------
 # EphemerisNodeKeplerian
 # ---------------------------------------------------------------------------
 
 
+def _keplerian_node(**overrides) -> EphemerisNodeKeplerian:
+    data = {
+        "propagator": "two-body",
+        "semi_major_axis_km": 6928.137,
+        "eccentricity": 0.0,
+        "inclination_deg": 53.0,
+        "raan_deg": 0.0,
+        "argument_of_perigee_deg": 0.0,
+        "mean_anomaly_deg": 0.0,
+        "plane": 0,
+        "slot": 0,
+        "reference_body": "earth",
+        "frame_id": "earth",
+    }
+    data.update(overrides)
+    return EphemerisNodeKeplerian(**data)
+
+
 class TestEphemerisNodeKeplerian:
     def test_round_trip(self):
-        node = EphemerisNodeKeplerian(
-            propagator="keplerian-circular",
-            altitude_km=550.0,
-            inclination_deg=53.0,
-            raan_deg=0.0,
-            true_anomaly_deg=45.0,
-            plane=3,
-            slot=7,
-        )
+        node = _keplerian_node(mean_anomaly_deg=45.0, plane=3, slot=7)
         data = node.model_dump(mode="json")
         restored = EphemerisNodeKeplerian.model_validate(data)
         assert restored == node
         assert data["type"] == "keplerian"
-        assert data["propagator"] == "keplerian-circular"
+        assert data["propagator"] == "two-body"
 
     def test_frozen(self):
-        node = EphemerisNodeKeplerian(
-            propagator="keplerian-circular",
-            altitude_km=550.0,
-            inclination_deg=53.0,
-            raan_deg=0.0,
-            true_anomaly_deg=0.0,
-            plane=0,
-            slot=0,
-        )
+        node = _keplerian_node()
         with pytest.raises(ValidationError):
-            node.altitude_km = 600.0
+            node.semi_major_axis_km = 7000.0
 
     def test_type_discriminator_default(self):
-        node = EphemerisNodeKeplerian(
-            propagator="keplerian-circular",
-            altitude_km=550.0,
-            inclination_deg=53.0,
-            raan_deg=0.0,
-            true_anomaly_deg=0.0,
-            plane=0,
-            slot=0,
-        )
+        node = _keplerian_node()
         assert node.type == "keplerian"
-        assert node.propagator == "keplerian-circular"
+        assert node.propagator == "two-body"
 
     def test_j2_propagator_identity_round_trip(self):
-        node = EphemerisNodeKeplerian(
-            propagator="j2-mean-elements",
-            altitude_km=550.0,
-            inclination_deg=53.0,
-            raan_deg=0.0,
-            true_anomaly_deg=0.0,
-            plane=0,
-            slot=0,
-        )
+        node = _keplerian_node(propagator="j2-mean-elements")
         restored = EphemerisNodeKeplerian.model_validate(node.model_dump(mode="json"))
         assert restored.propagator == "j2-mean-elements"
 
     def test_propagator_identity_required(self):
         with pytest.raises(ValidationError, match="propagator"):
             EphemerisNodeKeplerian(
-                altitude_km=550.0,
+                semi_major_axis_km=6928.137,
+                eccentricity=0.0,
                 inclination_deg=53.0,
                 raan_deg=0.0,
-                true_anomaly_deg=0.0,
+                argument_of_perigee_deg=0.0,
+                mean_anomaly_deg=0.0,
                 plane=0,
                 slot=0,
             )
@@ -109,6 +99,8 @@ class TestEphemerisNodeTLE:
             plane=0,
             slot=0,
             norad_id=25544,
+            reference_body="earth",
+            frame_id="earth",
         )
         data = node.model_dump(mode="json")
         restored = EphemerisNodeTLE.model_validate(data)
@@ -121,6 +113,8 @@ class TestEphemerisNodeTLE:
             tle_line_2="2 25544  51.6442  21.5417 0002426  95.1670  21.8444 15.48974333273145",
             plane=0,
             slot=0,
+            reference_body="earth",
+            frame_id="earth",
         )
         with pytest.raises(ValidationError):
             node.plane = 1
@@ -133,14 +127,26 @@ class TestEphemerisNodeTLE:
 
 class TestEphemerisNodeFixed:
     def test_round_trip(self):
-        node = EphemerisNodeFixed(lat_deg=39.04, lon_deg=-77.49, alt_km=0.095)
+        node = EphemerisNodeFixed(
+            lat_deg=39.04,
+            lon_deg=-77.49,
+            alt_km=0.095,
+            reference_body="earth",
+            frame_id="earth",
+        )
         data = node.model_dump(mode="json")
         restored = EphemerisNodeFixed.model_validate(data)
         assert restored == node
         assert data["type"] == "fixed"
 
     def test_frozen(self):
-        node = EphemerisNodeFixed(lat_deg=0.0, lon_deg=0.0, alt_km=0.0)
+        node = EphemerisNodeFixed(
+            lat_deg=0.0,
+            lon_deg=0.0,
+            alt_km=0.0,
+            reference_body="earth",
+            frame_id="earth",
+        )
         with pytest.raises(ValidationError):
             node.lat_deg = 10.0
 
@@ -156,17 +162,16 @@ class TestSessionEphemeris:
             epoch_id=0,
             sim_time=datetime(2025, 1, 1, tzinfo=UTC),
             epoch_unix=1735689600.0,
+            body_frames=EARTH_TEST_EPHEMERIS_BODY_FRAMES,
             nodes={
-                "sat-P00S00": EphemerisNodeKeplerian(
-                    propagator="keplerian-circular",
-                    altitude_km=550.0,
-                    inclination_deg=53.0,
-                    raan_deg=0.0,
-                    true_anomaly_deg=0.0,
-                    plane=0,
-                    slot=0,
+                "sat-P00S00": _keplerian_node(),
+                "gs-ashburn": EphemerisNodeFixed(
+                    lat_deg=39.04,
+                    lon_deg=-77.49,
+                    alt_km=0.095,
+                    reference_body="earth",
+                    frame_id="earth",
                 ),
-                "gs-ashburn": EphemerisNodeFixed(lat_deg=39.04, lon_deg=-77.49, alt_km=0.095),
             },
         )
 
@@ -181,15 +186,10 @@ class TestSessionEphemeris:
             epoch_id=0,
             sim_time=datetime(2025, 1, 1, tzinfo=UTC),
             epoch_unix=1735689600.0,
+            body_frames=EARTH_TEST_EPHEMERIS_BODY_FRAMES,
             nodes={
-                "leo-sat-p00s00": EphemerisNodeKeplerian(
+                "leo-sat-p00s00": _keplerian_node(
                     propagator="j2-mean-elements",
-                    altitude_km=550.0,
-                    inclination_deg=53.0,
-                    raan_deg=0.0,
-                    true_anomaly_deg=0.0,
-                    plane=0,
-                    slot=0,
                     segment_id="leo",
                     local_node_id="sat-P00S00",
                     namespace="leo",
@@ -203,6 +203,8 @@ class TestSessionEphemeris:
                     local_node_id="gs-denver",
                     namespace="ground",
                     tags=("earth", "ground"),
+                    reference_body="earth",
+                    frame_id="earth",
                 ),
             },
         )
@@ -225,7 +227,7 @@ class TestSessionEphemeris:
         sat = eph.nodes["sat-P00S00"]
         assert isinstance(sat, EphemerisNodeKeplerian)
         assert sat.type == "keplerian"
-        assert sat.altitude_km == 550.0
+        assert sat.semi_major_axis_km == 6928.137
 
     def test_discriminated_union_fixed(self):
         eph = self._make()

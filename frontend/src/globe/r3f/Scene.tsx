@@ -27,7 +27,12 @@ import {
   requestFlush,
   sendEphemeris,
 } from "../../sim/workerBridge";
-import type { EphemerisBodyFrame, PlaybackStateMsg, SessionEphemeris } from "../../sim/ephemeris";
+import {
+  kmPerRenderUnitFromEphemeris,
+  type EphemerisBodyFrame,
+  type PlaybackStateMsg,
+  type SessionEphemeris,
+} from "../../sim/ephemeris";
 import type { ColorMode, GlobeMode, ReferenceFrame, Selection, StateSnapshot } from "../../types";
 import type { GlobeActions } from "../actions";
 import { Universe } from "./Universe";
@@ -48,7 +53,7 @@ import { Labels } from "./Labels";
 import { Tooltip, type HoverInfo } from "./Tooltip";
 import { SelectionOverlay } from "./SelectionOverlay";
 import { FrameDriver } from "./FrameDriver";
-import { EARTH_RADIUS_KM, kmToRender } from "./units";
+import { kmToRender } from "./units";
 import {
   cameraDistanceForSceneRadius,
   cameraFarForMaxDistance,
@@ -57,12 +62,6 @@ import {
 } from "./cameraBounds";
 
 const MAX_PINS = 7;
-const BODY_RADIUS_KM: Record<string, number> = {
-  earth: EARTH_RADIUS_KM,
-  luna: 1737.4,
-  mars: 3389.5,
-};
-
 interface SceneProps {
   snapshot: StateSnapshot | null;
   ephemeris: SessionEphemeris | null;
@@ -126,38 +125,60 @@ export function Scene({
   const constellation = snapshot?.constellation_name ?? null;
   const nodes = snapshot?.nodes ?? [];
   const earthNodes = useMemo(
-    () => nodes.filter((node) => (node.reference_body ?? "earth") === "earth"),
+    () => nodes.filter((node) => node.reference_body === "earth"),
     [nodes],
   );
   const simTimeUnix = snapshot?.sim_time ? Date.parse(snapshot.sim_time) / 1000 : null;
+  const kmPerRenderUnit = useMemo(
+    () => (ephemeris ? kmPerRenderUnitFromEphemeris(ephemeris) : null),
+    [ephemeris],
+  );
+  const earthRotationRateRadS = ephemeris?.body_frames?.earth?.rotation_rate_rad_s ?? null;
   const bodies = useMemo(() => {
-    const frames = ephemeris?.body_frames ?? {};
-    const ids = new Set<string>(["earth"]);
+    if (!ephemeris || kmPerRenderUnit === null) return [];
+    const frames = ephemeris.body_frames;
+    const ids = new Set<string>(Object.keys(frames));
     for (const bodyId of Object.keys(frames)) ids.add(bodyId);
-    if (ephemeris?.body_frames) {
-      for (const node of nodes) ids.add(node.reference_body ?? "earth");
+    for (const node of nodes) {
+      if (!node.reference_body) {
+        throw new Error(`Node ${node.node_id} is missing reference_body`);
+      }
+      ids.add(node.reference_body);
     }
 
     return [...ids]
       .sort((a, b) => (a === "earth" ? -1 : b === "earth" ? 1 : a.localeCompare(b)))
       .map((id) => {
         const frame = frames[id];
-        if (id !== "earth" && !frame) return null;
+        if (!frame) {
+          throw new Error(`SessionEphemeris missing body frame for rendered body ${id}`);
+        }
         return {
           id,
-          radiusKm: frame?.radius_km ?? BODY_RADIUS_KM[id] ?? EARTH_RADIUS_KM,
-          position: bodyFramePosition(frame, ephemeris?.epoch_unix ?? null, simTimeUnix),
+          radiusKm: frame.equatorial_radius_km,
+          position: bodyFramePosition(
+            frame,
+            ephemeris?.epoch_unix ?? null,
+            simTimeUnix,
+            kmPerRenderUnit,
+          ),
         };
       })
       .filter((value): value is { id: string; radiusKm: number; position: [number, number, number] } =>
         value !== null,
       );
-  }, [ephemeris, nodes, simTimeUnix]);
+  }, [ephemeris, nodes, simTimeUnix, kmPerRenderUnit]);
   const controlsMaxDistance = useMemo(
-    () => cameraDistanceForSceneRadius(sceneRadiusForCamera(bodies, nodes)),
-    [bodies, nodes],
+    () =>
+      cameraDistanceForSceneRadius(
+        sceneRadiusForCamera(bodies, nodes, kmPerRenderUnit),
+      ),
+    [bodies, nodes, kmPerRenderUnit],
   );
-  const sceneFrame = useMemo(() => sceneFrameForCamera(bodies, nodes), [bodies, nodes]);
+  const sceneFrame = useMemo(
+    () => sceneFrameForCamera(bodies, nodes, kmPerRenderUnit),
+    [bodies, nodes, kmPerRenderUnit],
+  );
   const cameraFar = useMemo(
     () => cameraFarForMaxDistance(controlsMaxDistance),
     [controlsMaxDistance],
@@ -167,9 +188,12 @@ export function Scene({
       bodies.map((body) => ({
         id: body.id,
         center: new THREE.Vector3(body.position[0], body.position[1], body.position[2]),
-        radius: kmToRender(body.radiusKm),
+        radius:
+          kmPerRenderUnit === null
+            ? 0
+            : kmToRender(body.radiusKm, kmPerRenderUnit),
       })),
-    [bodies],
+    [bodies, kmPerRenderUnit],
   );
 
   // On-select decision data, lifted here so the globe is internally single-sourced: the GS
@@ -303,18 +327,26 @@ export function Scene({
           nodes={nodes}
           resetKey={`${ephemeris?.epoch_id ?? "none"}|${referenceFrame}|${constellation ?? "none"}`}
         />
-        <AllOrbits
-          nodes={earthNodes}
-          show={showSatPaths}
-          earthFrame={earthGroupRef}
-          referenceFrame={referenceFrame}
-        />
-        <OrbitPins
-          pinnedIds={pinnedIds}
-          nodes={earthNodes}
-          earthFrame={earthGroupRef}
-          referenceFrame={referenceFrame}
-        />
+        {kmPerRenderUnit !== null && earthRotationRateRadS !== null && (
+          <AllOrbits
+            nodes={earthNodes}
+            show={showSatPaths}
+            earthFrame={earthGroupRef}
+            referenceFrame={referenceFrame}
+            kmPerRenderUnit={kmPerRenderUnit}
+            earthRotationRateRadS={earthRotationRateRadS}
+          />
+        )}
+        {kmPerRenderUnit !== null && earthRotationRateRadS !== null && (
+          <OrbitPins
+            pinnedIds={pinnedIds}
+            nodes={earthNodes}
+            earthFrame={earthGroupRef}
+            referenceFrame={referenceFrame}
+            kmPerRenderUnit={kmPerRenderUnit}
+            earthRotationRateRadS={earthRotationRateRadS}
+          />
+        )}
         <Links
           links={snapshot?.links ?? []}
           kernelActualPairs={snapshot?.kernel_actual_pairs ?? []}
@@ -323,13 +355,14 @@ export function Scene({
           resetKey={constellation ?? "none"}
         />
         <FlowPaths tracedPaths={snapshot?.traced_paths ?? []} />
-        {bodies.map((body) => {
-          const bodyNodes = nodes.filter((node) => (node.reference_body ?? "earth") === body.id);
+        {kmPerRenderUnit !== null && bodies.map((body) => {
+          const bodyNodes = nodes.filter((node) => node.reference_body === body.id);
           return (
             <Body
               key={body.id}
               id={body.id}
               radiusKm={body.radiusKm}
+              kmPerRenderUnit={kmPerRenderUnit}
               position={body.position}
               onFocusBody={focusBody}
               ref={body.id === "earth" ? earthGroupRef : undefined}
@@ -439,11 +472,16 @@ function bodyFramePosition(
   frame: EphemerisBodyFrame | undefined,
   epochUnix: number | null,
   simTimeUnix: number | null,
+  kmPerRenderUnit: number,
 ): [number, number, number] {
   if (!frame) return [0, 0, 0];
   const dt = epochUnix !== null && simTimeUnix !== null ? simTimeUnix - epochUnix : 0;
   const xKm = frame.origin_x_km + frame.vel_x_km_s * dt;
   const yKm = frame.origin_y_km + frame.vel_y_km_s * dt;
   const zKm = frame.origin_z_km + frame.vel_z_km_s * dt;
-  return [kmToRender(xKm), kmToRender(zKm), -kmToRender(yKm)];
+  return [
+    kmToRender(xKm, kmPerRenderUnit),
+    kmToRender(zKm, kmPerRenderUnit),
+    -kmToRender(yKm, kmPerRenderUnit),
+  ];
 }

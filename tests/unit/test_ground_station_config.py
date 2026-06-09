@@ -34,13 +34,29 @@ def _ground_station_file_data() -> dict:
             "metric": 10,
         },
         "stations": [
-            {"name": "hawthorne", "lat_deg": 33.9164, "lon_deg": -118.3526},
-            {"name": "ashburn", "lat_deg": 39.0438, "lon_deg": -77.4874},
-            {"name": "frankfurt", "lat_deg": 50.1109, "lon_deg": 8.6821},
+            {
+                "name": "hawthorne",
+                "lat_deg": 33.9164,
+                "lon_deg": -118.3526,
+                "reference_body": "earth",
+            },
+            {
+                "name": "ashburn",
+                "lat_deg": 39.0438,
+                "lon_deg": -77.4874,
+                "reference_body": "earth",
+            },
+            {
+                "name": "frankfurt",
+                "lat_deg": 50.1109,
+                "lon_deg": 8.6821,
+                "reference_body": "earth",
+            },
             {
                 "name": "polar-station",
                 "lat_deg": -77.85,
                 "lon_deg": 166.67,
+                "reference_body": "earth",
                 "min_elevation_deg": 10,
                 "selection_policy": {"name": "lowest-elevation", "params": {}},
                 "terminals": [
@@ -138,8 +154,8 @@ class TestValidationRejections:
                     {"type": "optical", "count": 2, "bandwidth_mbps": 1000, "tracking_capacity": 1}
                 ],
                 stations=[
-                    {"name": "dup", "lat_deg": 0, "lon_deg": 0},
-                    {"name": "dup", "lat_deg": 1, "lon_deg": 1},
+                    {"name": "dup", "lat_deg": 0, "lon_deg": 0, "reference_body": "earth"},
+                    {"name": "dup", "lat_deg": 1, "lon_deg": 1, "reference_body": "earth"},
                 ],
             )
 
@@ -154,15 +170,21 @@ class TestValidationRejections:
 
     def test_invalid_latitude(self):
         with pytest.raises(ValidationError, match="lat_deg must be -90 to 90"):
-            GroundStationConfig(name="bad", lat_deg=91, lon_deg=0)
+            GroundStationConfig(name="bad", lat_deg=91, lon_deg=0, reference_body="earth")
 
     def test_invalid_longitude(self):
         with pytest.raises(ValidationError, match="lon_deg must be -180 to 180"):
-            GroundStationConfig(name="bad", lat_deg=0, lon_deg=181)
+            GroundStationConfig(name="bad", lat_deg=0, lon_deg=181, reference_body="earth")
 
     def test_invalid_elevation(self):
         with pytest.raises(ValidationError, match="min_elevation_deg must be 0-90"):
-            GroundStationConfig(name="bad", lat_deg=0, lon_deg=0, min_elevation_deg=91)
+            GroundStationConfig(
+                name="bad",
+                lat_deg=0,
+                lon_deg=0,
+                reference_body="earth",
+                min_elevation_deg=91,
+            )
 
 
 class TestInvalidFixtures:

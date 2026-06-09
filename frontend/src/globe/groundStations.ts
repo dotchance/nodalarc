@@ -2,8 +2,6 @@
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
 /** Shared ground-station view toggles and coverage-cone math for the R3F globe. */
 
-import { KM_PER_UNIT } from "../config";
-
 let gsLabelsEnabled = true;
 
 export function setGsLabelsEnabled(enabled: boolean): void {
@@ -18,12 +16,13 @@ export function getGsLabelsEnabled(): boolean {
 export function computeConeRadius(
   minElevDeg: number,
   orbitalAltKm: number,
-  bodyRadiusKm = 6371,
+  bodyRadiusKm: number,
+  kmPerRenderUnit: number,
 ): number {
   const elevRad = (minElevDeg * Math.PI) / 180;
   const centralAngle =
     Math.acos((bodyRadiusKm * Math.cos(elevRad)) / (bodyRadiusKm + orbitalAltKm)) -
     elevRad;
   const arcKm = bodyRadiusKm * centralAngle;
-  return arcKm / KM_PER_UNIT;
+  return arcKm / kmPerRenderUnit;
 }

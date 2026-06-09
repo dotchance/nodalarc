@@ -11,7 +11,7 @@ from __future__ import annotations
 import math
 
 import pytest
-from nodalarc.body_frames import EARTH_BODY_FRAME, LUNA_BODY_FRAME, BodyFrame
+from nodalarc.body_frames import BodyFrame
 from nodalarc.constellation_loader import SatelliteNode
 from nodalarc.ground_terminals import TerminalPhysicsProfile
 from nodalarc.models.addressing import AddressingScheme
@@ -20,7 +20,6 @@ from nodalarc.models.ground_policy import HandoverPolicySpec, SelectionPolicySpe
 from nodalarc.models.ground_station import GroundStationConfig, GroundStationFile, GroundTerminalDef
 from nodalarc.models.session import GroundSchedulingConfig
 from nodalarc.models.terminal_physics import SatGroundTerminalBoresight, TerminalBoresight
-from nodalarc.orbital import elements_from_params
 from ome.event_stream import build_step_context, compute_step
 from ome.propagation_engine import propagate_satellites
 from ome.propagator import GeoPosition, Vec3
@@ -30,6 +29,16 @@ from ome.visibility import (
     compute_topocentric_angular_velocity,
     has_line_of_sight,
 )
+
+from tests.physics_fixtures import (
+    EARTH_ORIGIN_BODY_STATES,
+    EARTH_TEST_BODY_FRAME,
+    LUNA_TEST_BODY_FRAME,
+    earth_elements_from_params,
+)
+
+TEST_BODY_FRAMES = {"earth": EARTH_TEST_BODY_FRAME, "luna": LUNA_TEST_BODY_FRAME}
+SAT_ID = "earth-test-sat-p00s00"
 
 
 def _ground_scheduling() -> GroundSchedulingConfig:
@@ -61,7 +70,9 @@ def _terminal_profiles() -> tuple[TerminalPhysicsProfile, TerminalPhysicsProfile
     return gs_profile, sat_profile
 
 
-@pytest.mark.parametrize("body_frame", [EARTH_BODY_FRAME, LUNA_BODY_FRAME], ids=lambda b: b.name)
+@pytest.mark.parametrize(
+    "body_frame", [EARTH_TEST_BODY_FRAME, LUNA_TEST_BODY_FRAME], ids=lambda b: b.name
+)
 def test_analytic_tangent_point_is_zero_elevation_for_supported_bodies(body_frame: BodyFrame):
     observer_geo = GeoPosition(0.0, 0.0, 0.0)
     observer = Vec3(body_frame.equatorial_radius_km, 0.0, 0.0)
@@ -78,7 +89,9 @@ def test_analytic_tangent_point_is_zero_elevation_for_supported_bodies(body_fram
     assert elevation == pytest.approx(0.0, abs=1e-9)
 
 
-@pytest.mark.parametrize("body_frame", [EARTH_BODY_FRAME, LUNA_BODY_FRAME], ids=lambda b: b.name)
+@pytest.mark.parametrize(
+    "body_frame", [EARTH_TEST_BODY_FRAME, LUNA_TEST_BODY_FRAME], ids=lambda b: b.name
+)
 def test_subsatellite_point_is_ninety_degree_elevation_for_supported_bodies(
     body_frame: BodyFrame,
 ):
@@ -112,8 +125,8 @@ def test_subsatellite_point_is_ninety_degree_elevation_for_supported_bodies(
 @pytest.mark.parametrize(
     ("body_frame", "desired_slant_km", "max_range_km"),
     [
-        (EARTH_BODY_FRAME, 2200.0, 2000.0),
-        (LUNA_BODY_FRAME, 1000.0, 800.0),
+        (EARTH_TEST_BODY_FRAME, 2200.0, 2000.0),
+        (LUNA_TEST_BODY_FRAME, 1000.0, 800.0),
     ],
     ids=lambda value: value.name if isinstance(value, BodyFrame) else str(value),
 )
@@ -158,7 +171,9 @@ def test_range_constraint_rejects_clear_los_before_allocator_can_see_pair(
     assert not result.visible
 
 
-@pytest.mark.parametrize("body_frame", [EARTH_BODY_FRAME, LUNA_BODY_FRAME], ids=lambda b: b.name)
+@pytest.mark.parametrize(
+    "body_frame", [EARTH_TEST_BODY_FRAME, LUNA_TEST_BODY_FRAME], ids=lambda b: b.name
+)
 def test_topocentric_angular_velocity_accounts_for_observing_body_rotation(
     body_frame: BodyFrame,
 ):
@@ -186,12 +201,14 @@ def test_compute_step_schedules_only_pairs_that_pass_applied_ground_physics():
     sat = SatelliteNode(
         plane=0,
         slot=0,
-        elements=elements_from_params(
+        elements=earth_elements_from_params(
             altitude_km=550.0,
             inclination_deg=0.0,
             raan_deg=0.0,
             true_anomaly_deg=0.0,
         ),
+        node_id=SAT_ID,
+        central_body="earth",
         isl_terminal_count=0,
         ground_terminal_count=1,
         isl_terminals=(),
@@ -216,8 +233,10 @@ def test_compute_step_schedules_only_pairs_that_pass_applied_ground_physics():
         epoch_unix=epoch_unix,
         dt=0.0,
         propagator_id="keplerian-circular",
+        body_frames=TEST_BODY_FRAMES,
+        body_states=EARTH_ORIGIN_BODY_STATES,
     )
-    sat_state = propagated["sat-P00S00"]
+    sat_state = propagated[SAT_ID]
     gs_file = GroundStationFile(
         default_terminals=[
             GroundTerminalDef(
@@ -239,6 +258,7 @@ def test_compute_step_schedules_only_pairs_that_pass_applied_ground_physics():
                 lat_deg=sat_state.geodetic.lat_deg,
                 lon_deg=sat_state.geodetic.lon_deg,
                 alt_m=0.0,
+                reference_body="earth",
             )
         ],
     )
@@ -250,10 +270,11 @@ def test_compute_step_schedules_only_pairs_that_pass_applied_ground_physics():
         propagator_id="keplerian-circular",
         ground_scheduling=_ground_scheduling(),
         ground_link_model="terminal_physics",
-        ground_candidate_satellites_by_gs={"gs-overhead": ("sat-P00S00",)},
+        ground_candidate_satellites_by_gs={"gs-overhead": (SAT_ID,)},
+        body_frames=TEST_BODY_FRAMES,
     )
 
-    pair = ("gs-overhead", "sat-P00S00")
+    pair = (min("gs-overhead", SAT_ID), max("gs-overhead", SAT_ID))
     associations: dict[tuple[str, str], tuple[int, int]] = {}
     gs_state: dict[tuple[str, str], tuple[bool, bool, str]] = {}
     saw_scheduled_pair = False
@@ -283,13 +304,15 @@ def test_compute_step_schedules_only_pairs_that_pass_applied_ground_physics():
             assert decision.applied_gs_max_tracking_rate_deg_s == 2.0
             assert decision.applied_sat_max_tracking_rate_deg_s == 2.0
 
-            gs_ecef, gs_geo = ctx.gs_positions[scheduled_pair[0]]
+            gs_id = next(endpoint for endpoint in scheduled_pair if endpoint in ctx.gs_positions)
+            sat_id = next(endpoint for endpoint in scheduled_pair if endpoint != gs_id)
+            gs_ecef, gs_geo = ctx.gs_positions[gs_id]
             gs_profile, sat_profile = _terminal_profiles()
             recomputed = check_ground_visibility(
                 gs_ecef,
                 gs_geo,
-                result.propagated_states[scheduled_pair[1]].position_ecef_km,
-                ctx.gs_min_elevations[scheduled_pair[0]],
+                result.propagated_states[sat_id].position_ecef_km,
+                ctx.gs_min_elevations[gs_id],
                 gs_max_range_km=gs_profile.max_range_km,
                 sat_max_range_km=sat_profile.max_range_km,
                 gs_boresight=gs_profile.boresight,
@@ -298,10 +321,8 @@ def test_compute_step_schedules_only_pairs_that_pass_applied_ground_physics():
                 sat_field_of_regard_deg=sat_profile.field_of_regard_deg,
                 gs_max_tracking_rate_deg_s=gs_profile.max_tracking_rate_deg_s,
                 sat_max_tracking_rate_deg_s=sat_profile.max_tracking_rate_deg_s,
-                sat_velocity_ecef_km_s=result.propagated_states[
-                    scheduled_pair[1]
-                ].velocity_ecef_km_s,
-                body_frame=EARTH_BODY_FRAME,
+                sat_velocity_ecef_km_s=result.propagated_states[sat_id].velocity_ecef_km_s,
+                body_frame=EARTH_TEST_BODY_FRAME,
             )
             assert recomputed.visible
             assert recomputed.reject_reason == "ok"

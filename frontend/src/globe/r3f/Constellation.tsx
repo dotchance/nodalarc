@@ -21,7 +21,12 @@ import { geoToWorld } from "../geo";
 import { interpolatedSimTimeMs } from "../../sim/simClock";
 import { isWorkerReady, readPosition, requestPropagate } from "../../sim/workerBridge";
 import { propagateToSceneXYZ } from "../../sim/orbitalMath";
-import type { EphemerisNodeKeplerian, SessionEphemeris } from "../../sim/ephemeris";
+import {
+  bodyMathFromFrame,
+  kmPerRenderUnitFromEphemeris,
+  type EphemerisNodeKeplerian,
+  type SessionEphemeris,
+} from "../../sim/ephemeris";
 import type { ColorMode, NodeState, Selection } from "../../types";
 import { FAMILY_TONE } from "../../explain/families";
 import type { SatRelation } from "../../explain/gsCandidateRelations";
@@ -107,7 +112,13 @@ export function Constellation({
         idx = countRef.current++;
         satIndex.current.set(node.node_id, idx);
         indexToId.current[idx] = node.node_id;
-        const p = geoToWorld(node.lat_deg, node.lon_deg, node.alt_km, bodyFrame.radiusRender);
+        const p = geoToWorld(
+          node.lat_deg,
+          node.lon_deg,
+          node.alt_km,
+          bodyFrame.radiusRender,
+          bodyFrame.kmPerRenderUnit,
+        );
         _tmpMatrix.makeTranslation(p.x, p.y, p.z);
         mesh.setMatrixAt(idx, _tmpMatrix);
         setNodeLocalPosition(node.node_id, bodyId, p.x, p.y, p.z);
@@ -137,7 +148,7 @@ export function Constellation({
     mesh.count = countRef.current;
     mesh.instanceMatrix.needsUpdate = true;
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
-  }, [nodes, colorMode, relations, bodyId, bodyFrame.radiusRender]);
+  }, [nodes, colorMode, relations, bodyId, bodyFrame.radiusRender, bodyFrame.kmPerRenderUnit]);
 
   // Per-frame propagation from the latest ephemeris and sim clock.
   useFrame(() => {
@@ -148,6 +159,7 @@ export function Constellation({
     if (simMs === null) return;
     const simTimeUnix = simMs / 1000;
     const epochUnix = ephemeris.epoch_unix;
+    const kmPerRenderUnit = kmPerRenderUnitFromEphemeris(ephemeris);
     const workerReady = isWorkerReady();
     if (workerReady && now - lastPropagateRef.current > 2000) {
       requestPropagate(simTimeUnix, 1.0);
@@ -157,17 +169,21 @@ export function Constellation({
       const ephNode = ephemeris.nodes[nodeId];
       if (!ephNode || ephNode.type !== "keplerian") continue;
       const keplerianNode: EphemerisNodeKeplerian = ephNode;
-      const nodeBody = keplerianNode.reference_body ?? "earth";
+      const nodeBody = keplerianNode.reference_body;
       let x: number, y: number, z: number;
       if (workerReady && nodeBody === "earth" && readPosition(nodeId, simTimeUnix, _workerPos)) {
         x = _workerPos.x;
         y = _workerPos.y;
         z = _workerPos.z;
       } else {
+        const frame = ephemeris.body_frames[nodeBody];
+        if (!frame) {
+          throw new Error(`SessionEphemeris missing body frame for node ${nodeId}: ${nodeBody}`);
+        }
         [x, y, z] = propagateToSceneXYZ(
           {
             ...keplerianNode,
-            reference_radius_km: ephemeris.body_frames?.[nodeBody]?.radius_km,
+            body: bodyMathFromFrame(frame, kmPerRenderUnit),
           },
           epochUnix,
           simTimeUnix,

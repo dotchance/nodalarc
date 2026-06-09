@@ -7,7 +7,6 @@ from __future__ import annotations
 import math
 
 import pytest
-from nodalarc.body_frames import LUNA_BODY_FRAME
 from nodalarc.models.addressing import NeighborAssignment
 from ome.isl_engine import (
     IslFeasibilityResult,
@@ -17,6 +16,10 @@ from ome.isl_engine import (
 )
 from ome.propagation_engine import PropagatedState
 from ome.propagator import EcefVec3, GeoPosition, Vec3
+
+from tests.physics_fixtures import EARTH_TEST_BODY_FRAME, LUNA_TEST_BODY_FRAME
+
+TEST_BODY_FRAMES = {"earth": EARTH_TEST_BODY_FRAME, "luna": LUNA_TEST_BODY_FRAME}
 
 
 def _state(
@@ -76,6 +79,7 @@ def test_isl_feasibility_fails_loud_when_node_state_missing():
             },
             polar_seam_enabled=False,
             latitude_threshold_deg=70.0,
+            body_frames=TEST_BODY_FRAMES,
         )
 
 
@@ -94,6 +98,7 @@ def test_isl_feasibility_fails_loud_when_peer_state_missing():
             },
             polar_seam_enabled=False,
             latitude_threshold_deg=70.0,
+            body_frames=TEST_BODY_FRAMES,
         )
 
 
@@ -114,6 +119,7 @@ def test_cross_plane_feasibility_applies_cross_plane_tracking_limit():
         },
         polar_seam_enabled=False,
         latitude_threshold_deg=70.0,
+        body_frames=TEST_BODY_FRAMES,
     )
 
     result = feasibility[("sat-A", "sat-B")]
@@ -141,6 +147,7 @@ def test_terminal_role_mismatch_is_auditable_rejection():
         },
         polar_seam_enabled=False,
         latitude_threshold_deg=70.0,
+        body_frames=TEST_BODY_FRAMES,
     )
 
     result = feasibility[("sat-A", "sat-B")]
@@ -153,7 +160,7 @@ def test_terminal_role_mismatch_is_auditable_rejection():
 
 
 def test_lunar_same_body_isl_uses_lunar_occluder_not_earth_default():
-    radius_km = LUNA_BODY_FRAME.equatorial_radius_km + 2000.0
+    radius_km = LUNA_TEST_BODY_FRAME.equatorial_radius_km + 2000.0
     theta = math.radians(60.0)
     sat_a = Vec3(radius_km, 0.0, 0.0)
     sat_b = Vec3(radius_km * math.cos(theta), radius_km * math.sin(theta), 0.0)
@@ -174,6 +181,7 @@ def test_lunar_same_body_isl_uses_lunar_occluder_not_earth_default():
         },
         polar_seam_enabled=False,
         latitude_threshold_deg=70.0,
+        body_frames=TEST_BODY_FRAMES,
     )
 
     result = feasibility[("luna-a", "luna-b")]
@@ -269,6 +277,7 @@ def test_isl_feasibility_is_topology_bounded_not_all_pairs():
         terminal_constraints=terminal_constraints,
         polar_seam_enabled=False,
         latitude_threshold_deg=70.0,
+        body_frames=TEST_BODY_FRAMES,
     )
 
     assert len(feasibility) == sat_count

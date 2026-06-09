@@ -30,6 +30,8 @@ from nodalarc.proto import node_agent_pb2
 from scheduler.dispatcher import ActiveLinkInfo, Dispatcher
 from scheduler.pod_locator import PodLocationMap
 
+from tests.physics_fixtures import EARTH_TEST_EPHEMERIS_BODY_FRAMES
+
 
 def _make_vis(
     node_a: str,
@@ -469,25 +471,32 @@ class TestSessionEphemerisContract:
             epoch_id=0,
             sim_time=datetime(2025, 1, 1, tzinfo=UTC),
             epoch_unix=1735689600.0,
+            body_frames=EARTH_TEST_EPHEMERIS_BODY_FRAMES,
             nodes={
                 "sat-P00S00": EphemerisNodeKeplerian(
-                    propagator="keplerian-circular",
-                    altitude_km=550.0,
+                    propagator="two-body",
+                    semi_major_axis_km=6921.0,
+                    eccentricity=0.0,
                     inclination_deg=53.0,
                     raan_deg=22.5,
-                    true_anomaly_deg=45.0,
+                    argument_of_perigee_deg=0.0,
+                    mean_anomaly_deg=45.0,
                     plane=0,
                     slot=0,
+                    reference_body="earth",
+                    frame_id="earth",
                 ),
             },
         )
         restored = SessionEphemeris.model_validate_json(eph.model_dump_json())
         sat = restored.nodes["sat-P00S00"]
         assert isinstance(sat, EphemerisNodeKeplerian)
-        assert sat.altitude_km == 550.0
+        assert sat.semi_major_axis_km == 6921.0
+        assert sat.eccentricity == 0.0
         assert sat.inclination_deg == 53.0
         assert sat.raan_deg == 22.5
-        assert sat.true_anomaly_deg == 45.0
+        assert sat.argument_of_perigee_deg == 0.0
+        assert sat.mean_anomaly_deg == 45.0
         assert sat.plane == 0
         assert sat.slot == 0
 
@@ -498,11 +507,14 @@ class TestSessionEphemerisContract:
             epoch_id=3,
             sim_time=datetime(2025, 6, 15, tzinfo=UTC),
             epoch_unix=1750000000.0,
+            body_frames=EARTH_TEST_EPHEMERIS_BODY_FRAMES,
             nodes={
                 "gs-ashburn": EphemerisNodeFixed(
                     lat_deg=39.04,
                     lon_deg=-77.49,
                     alt_km=0.095,
+                    reference_body="earth",
+                    frame_id="earth",
                 ),
             },
         )
@@ -539,17 +551,28 @@ class TestSessionEphemerisContract:
             epoch_id=0,
             sim_time=datetime(2025, 1, 1, tzinfo=UTC),
             epoch_unix=1735689600.0,
+            body_frames=EARTH_TEST_EPHEMERIS_BODY_FRAMES,
             nodes={
                 "sat-P00S00": EphemerisNodeKeplerian(
-                    propagator="keplerian-circular",
-                    altitude_km=550.0,
+                    propagator="two-body",
+                    semi_major_axis_km=6921.0,
+                    eccentricity=0.0,
                     inclination_deg=53.0,
                     raan_deg=0.0,
-                    true_anomaly_deg=0.0,
+                    argument_of_perigee_deg=0.0,
+                    mean_anomaly_deg=0.0,
                     plane=0,
                     slot=0,
+                    reference_body="earth",
+                    frame_id="earth",
                 ),
-                "gs-test": EphemerisNodeFixed(lat_deg=0.0, lon_deg=0.0, alt_km=0.0),
+                "gs-test": EphemerisNodeFixed(
+                    lat_deg=0.0,
+                    lon_deg=0.0,
+                    alt_km=0.0,
+                    reference_body="earth",
+                    frame_id="earth",
+                ),
             },
         )
         restored = SessionEphemeris.model_validate_json(eph.model_dump_json())

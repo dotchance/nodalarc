@@ -5,11 +5,12 @@ from __future__ import annotations
 from nodalarc.constellation_loader import SatelliteNode
 from nodalarc.models.addressing import AddressingScheme, NeighborAssignment
 from nodalarc.models.link_decisions import GroundPolicyAudit
-from nodalarc.orbital import elements_from_params
 from ome.event_stream import StepContext, compute_step
 from ome.isl_engine import IslTerminalConstraints
 from ome.propagation_engine import PropagatedState
 from ome.propagator import EcefVec3, GeoPosition, Vec3
+
+from tests.physics_fixtures import EARTH_TEST_BODY_FRAMES, earth_elements_from_params
 
 
 def test_cross_plane_isl_uses_cross_plane_tracking_limit(monkeypatch):
@@ -23,22 +24,26 @@ def test_cross_plane_isl_uses_cross_plane_tracking_limit(monkeypatch):
     """
 
     addressing = AddressingScheme()
+    node_a = "earth-iridium-sat-p00s00"
+    node_b = "earth-iridium-sat-p01s00"
     sat_a = SatelliteNode(
         0,
         0,
-        elements_from_params(550.0, 86.4, 0.0, 0.0),
+        earth_elements_from_params(550.0, 86.4, 0.0, 0.0),
+        node_id=node_a,
+        central_body="earth",
         isl_terminal_count=4,
         ground_terminal_count=0,
     )
     sat_b = SatelliteNode(
         1,
         0,
-        elements_from_params(550.0, 86.4, 30.0, 0.0),
+        earth_elements_from_params(550.0, 86.4, 30.0, 0.0),
+        node_id=node_b,
+        central_body="earth",
         isl_terminal_count=4,
         ground_terminal_count=0,
     )
-    node_a = addressing.sat_id(0, 0)
-    node_b = addressing.sat_id(1, 0)
     pair = (min(node_a, node_b), max(node_a, node_b))
 
     ctx = StepContext(
@@ -128,6 +133,8 @@ def test_cross_plane_isl_uses_cross_plane_tracking_limit(monkeypatch):
         },
         sat_ground_terminals={node_a: 0, node_b: 0},
         propagator_id="keplerian-circular",
+        body_frames=EARTH_TEST_BODY_FRAMES,
+        active_bodies=frozenset({"earth"}),
         polar_seam_enabled=False,
         latitude_threshold_deg=70.0,
     )
@@ -137,9 +144,19 @@ def test_cross_plane_isl_uses_cross_plane_tracking_limit(monkeypatch):
     pos_b = EcefVec3(Vec3(7121.0, 0.0, 0.0))
     vel_b = EcefVec3(Vec3(0.0, -7.59, 0.0))
 
-    def fake_propagation(*, satellites, addressing, epoch_unix, dt, propagator_id, body_states):
+    def fake_propagation(
+        *,
+        satellites,
+        addressing,
+        epoch_unix,
+        dt,
+        propagator_id,
+        body_states,
+        body_frames,
+    ):
         del satellites, addressing, propagator_id
         assert set(body_states) == {"earth"}
+        assert set(body_frames) == {"earth"}
         sim_time_unix = epoch_unix + dt
         return {
             node_a: PropagatedState(
@@ -149,6 +166,7 @@ def test_cross_plane_isl_uses_cross_plane_tracking_limit(monkeypatch):
                 velocity_ecef_km_s=vel_a,
                 geodetic=GeoPosition(0.0, 0.0, 550.0),
                 propagator_id="test-fixture",
+                central_body="earth",
             ),
             node_b: PropagatedState(
                 node_id=node_b,
@@ -157,6 +175,7 @@ def test_cross_plane_isl_uses_cross_plane_tracking_limit(monkeypatch):
                 velocity_ecef_km_s=vel_b,
                 geodetic=GeoPosition(0.0, 0.0, 550.0),
                 propagator_id="test-fixture",
+                central_body="earth",
             ),
         }
 

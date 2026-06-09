@@ -16,16 +16,7 @@
  */
 
 import { gmstRadians } from "../globe/astronomy";
-
-// ---------------------------------------------------------------------------
-// Constants (must match lib/nodalarc/constants.py)
-// ---------------------------------------------------------------------------
-
-const EARTH_RADIUS_KM = 6371.0;
-const EARTH_MU = 398600.4418; // km^3/s^2
-const WGS84_A = 6378.137; // Semi-major axis, km
-const WGS84_E2 = 0.00669437999014; // First eccentricity squared
-const EARTH_ROTATION_RATE = 7.2921159e-5; // rad/s
+import { J2000_UNIX_SECONDS, SCENE_EARTH_RADIUS, type BodyMath } from "./orbitalMath";
 
 // ---------------------------------------------------------------------------
 // Types (match lib/nodalarc/models/events.py SessionEphemeris)
@@ -33,19 +24,21 @@ const EARTH_ROTATION_RATE = 7.2921159e-5; // rad/s
 
 export interface EphemerisNodeKeplerian {
   type: "keplerian";
-  propagator: "keplerian-circular" | "j2-mean-elements";
-  altitude_km: number;
+  propagator: "two-body" | "keplerian-circular" | "j2-mean-elements";
+  semi_major_axis_km: number;
+  eccentricity: number;
   inclination_deg: number;
   raan_deg: number;
-  true_anomaly_deg: number;
+  argument_of_perigee_deg: number;
+  mean_anomaly_deg: number;
   plane: number;
   slot: number;
   segment_id?: string | null;
   local_node_id?: string | null;
   namespace?: string | null;
   tags?: string[];
-  reference_body?: string;
-  frame_id?: string;
+  reference_body: string;
+  frame_id: string;
 }
 
 export interface EphemerisNodeTLE {
@@ -59,8 +52,8 @@ export interface EphemerisNodeTLE {
   local_node_id?: string | null;
   namespace?: string | null;
   tags?: string[];
-  reference_body?: string;
-  frame_id?: string;
+  reference_body: string;
+  frame_id: string;
 }
 
 export interface EphemerisNodeFixed {
@@ -72,15 +65,20 @@ export interface EphemerisNodeFixed {
   local_node_id?: string | null;
   namespace?: string | null;
   tags?: string[];
-  reference_body?: string;
-  frame_id?: string;
+  reference_body: string;
+  frame_id: string;
 }
 
 export type EphemerisNode = EphemerisNodeKeplerian | EphemerisNodeTLE | EphemerisNodeFixed;
 
 export interface EphemerisBodyFrame {
   body_id: string;
-  radius_km: number;
+  mean_radius_km: number;
+  equatorial_radius_km: number;
+  polar_radius_km: number;
+  gravitational_parameter_km3_s2: number;
+  rotation_rate_rad_s: number;
+  j2: number;
   origin_x_km: number;
   origin_y_km: number;
   origin_z_km: number;
@@ -98,7 +96,7 @@ export interface SessionEphemeris {
   sim_time: string; // ISO 8601
   epoch_unix: number;
   nodes: Record<string, EphemerisNode>;
-  body_frames?: Record<string, EphemerisBodyFrame>;
+  body_frames: Record<string, EphemerisBodyFrame>;
 }
 
 export interface PlaybackStateMsg {
@@ -115,8 +113,35 @@ export interface PropagatedPosition {
   velZKmS: number;
 }
 
+export function kmPerRenderUnitFromEphemeris(ephemeris: SessionEphemeris): number {
+  const earth = ephemeris.body_frames.earth;
+  if (!earth) {
+    throw new Error("SessionEphemeris missing earth body frame required for render scale");
+  }
+  return earth.equatorial_radius_km / SCENE_EARTH_RADIUS;
+}
+
+export function bodyMathFromFrame(frame: EphemerisBodyFrame, kmPerRenderUnit: number): BodyMath {
+  return {
+    bodyId: frame.body_id,
+    meanRadiusKm: frame.mean_radius_km,
+    equatorialRadiusKm: frame.equatorial_radius_km,
+    polarRadiusKm: frame.polar_radius_km,
+    gravitationalParameterKm3S2: frame.gravitational_parameter_km3_s2,
+    rotationRateRadS: frame.rotation_rate_rad_s,
+    j2: frame.j2,
+    kmPerRenderUnit,
+  };
+}
+
+function ellipsoidE2(body: BodyMath): number {
+  const a = body.equatorialRadiusKm;
+  const b = body.polarRadiusKm;
+  return 1.0 - (b * b) / (a * a);
+}
+
 // ---------------------------------------------------------------------------
-// Keplerian propagation (circular orbit, e=0)
+// Keplerian mean-element propagation
 // ---------------------------------------------------------------------------
 
 function deg2rad(deg: number): number {
@@ -127,47 +152,175 @@ function rad2deg(rad: number): number {
   return (rad * 180.0) / Math.PI;
 }
 
-/**
- * Propagate circular orbit by dt seconds in ECI frame.
- * Returns [posEci, velEci] as [x,y,z] arrays in km and km/s.
- */
-function propagateEci(
+function solveEccentricAnomaly(meanAnomalyRad: number, eccentricity: number): number {
+  if (eccentricity === 0) return meanAnomalyRad;
+  const twoPi = Math.PI * 2;
+  let mean = meanAnomalyRad % twoPi;
+  if (mean < 0) mean += twoPi;
+  let eccentricAnomaly = eccentricity < 0.8 ? mean : Math.PI;
+  for (let i = 0; i < 12; i++) {
+    const f = eccentricAnomaly - eccentricity * Math.sin(eccentricAnomaly) - mean;
+    const fp = 1.0 - eccentricity * Math.cos(eccentricAnomaly);
+    const step = f / fp;
+    eccentricAnomaly -= step;
+    if (Math.abs(step) < 1e-14) break;
+  }
+  return eccentricAnomaly;
+}
+
+function perifocalState(
   semiMajorAxisKm: number,
-  inclinationRad: number,
+  eccentricity: number,
+  meanAnomalyRad: number,
+  meanAnomalyDot: number,
+): [number, number, number, number] {
+  const eccentricAnomaly = solveEccentricAnomaly(meanAnomalyRad, eccentricity);
+  const cosE = Math.cos(eccentricAnomaly);
+  const sinE = Math.sin(eccentricAnomaly);
+  const sqrtOneMinusE2 = Math.sqrt(1.0 - eccentricity * eccentricity);
+  const denom = 1.0 - eccentricity * cosE;
+  const eccentricAnomalyDot = meanAnomalyDot / denom;
+  return [
+    semiMajorAxisKm * (cosE - eccentricity),
+    semiMajorAxisKm * sqrtOneMinusE2 * sinE,
+    -semiMajorAxisKm * sinE * eccentricAnomalyDot,
+    semiMajorAxisKm * sqrtOneMinusE2 * cosE * eccentricAnomalyDot,
+  ];
+}
+
+function rotationTerms(
   raanRad: number,
-  trueAnomalyRad: number,
-  dt: number,
-): [[number, number, number], [number, number, number]] {
-  const a = semiMajorAxisKm;
-  const n = Math.sqrt(EARTH_MU / (a * a * a)); // mean motion
-  const nu = trueAnomalyRad + n * dt;
-
-  // Perifocal frame
-  const r = a;
-  const xPf = r * Math.cos(nu);
-  const yPf = r * Math.sin(nu);
-
-  const v = Math.sqrt(EARTH_MU / a);
-  const vxPf = -v * Math.sin(nu);
-  const vyPf = v * Math.cos(nu);
-
-  // Rotation to ECI
+  inclinationRad: number,
+  argumentOfPerigeeRad: number,
+): [[number, number], [number, number], [number, number]] {
   const cosRaan = Math.cos(raanRad);
   const sinRaan = Math.sin(raanRad);
   const cosI = Math.cos(inclinationRad);
   const sinI = Math.sin(inclinationRad);
+  const cosArgp = Math.cos(argumentOfPerigeeRad);
+  const sinArgp = Math.sin(argumentOfPerigeeRad);
+  return [
+    [cosRaan * cosArgp - sinRaan * sinArgp * cosI,
+      -cosRaan * sinArgp - sinRaan * cosArgp * cosI],
+    [sinRaan * cosArgp + cosRaan * sinArgp * cosI,
+      -sinRaan * sinArgp + cosRaan * cosArgp * cosI],
+    [sinArgp * sinI, cosArgp * sinI],
+  ];
+}
 
-  const xEci = cosRaan * xPf - sinRaan * cosI * yPf;
-  const yEci = sinRaan * xPf + cosRaan * cosI * yPf;
-  const zEci = sinI * yPf;
+function rotationDerivativeTerms(
+  raanRad: number,
+  inclinationRad: number,
+  argumentOfPerigeeRad: number,
+): [
+  [[number, number], [number, number], [number, number]],
+  [[number, number], [number, number], [number, number]],
+] {
+  const cosRaan = Math.cos(raanRad);
+  const sinRaan = Math.sin(raanRad);
+  const cosI = Math.cos(inclinationRad);
+  const sinI = Math.sin(inclinationRad);
+  const cosArgp = Math.cos(argumentOfPerigeeRad);
+  const sinArgp = Math.sin(argumentOfPerigeeRad);
+  return [
+    [
+      [-sinRaan * cosArgp - cosRaan * sinArgp * cosI,
+        sinRaan * sinArgp - cosRaan * cosArgp * cosI],
+      [cosRaan * cosArgp - sinRaan * sinArgp * cosI,
+        -cosRaan * sinArgp - sinRaan * cosArgp * cosI],
+      [0.0, 0.0],
+    ],
+    [
+      [-cosRaan * sinArgp - sinRaan * cosArgp * cosI,
+        -cosRaan * cosArgp + sinRaan * sinArgp * cosI],
+      [-sinRaan * sinArgp + cosRaan * cosArgp * cosI,
+        -sinRaan * cosArgp - cosRaan * sinArgp * cosI],
+      [cosArgp * sinI, -sinArgp * sinI],
+    ],
+  ];
+}
 
-  const vxEci = cosRaan * vxPf - sinRaan * cosI * vyPf;
-  const vyEci = sinRaan * vxPf + cosRaan * cosI * vyPf;
-  const vzEci = sinI * vyPf;
+function applyRotation(
+  matrix: [[number, number], [number, number], [number, number]],
+  xPf: number,
+  yPf: number,
+): [number, number, number] {
+  return [
+    matrix[0][0] * xPf + matrix[0][1] * yPf,
+    matrix[1][0] * xPf + matrix[1][1] * yPf,
+    matrix[2][0] * xPf + matrix[2][1] * yPf,
+  ];
+}
+
+function propagateEci(
+  semiMajorAxisKm: number,
+  eccentricity: number,
+  inclinationRad: number,
+  raanRad: number,
+  argumentOfPerigeeRad: number,
+  meanAnomalyRad: number,
+  dt: number,
+  body: BodyMath,
+): [[number, number, number], [number, number, number]] {
+  const a = semiMajorAxisKm;
+  const n = Math.sqrt(body.gravitationalParameterKm3S2 / (a * a * a));
+  const [xPf, yPf, vxPf, vyPf] = perifocalState(
+    a,
+    eccentricity,
+    meanAnomalyRad + n * dt,
+    n,
+  );
+  const rotation = rotationTerms(raanRad, inclinationRad, argumentOfPerigeeRad);
 
   return [
-    [xEci, yEci, zEci],
-    [vxEci, vyEci, vzEci],
+    applyRotation(rotation, xPf, yPf),
+    applyRotation(rotation, vxPf, vyPf),
+  ];
+}
+
+function propagateEciJ2MeanElements(
+  semiMajorAxisKm: number,
+  eccentricity: number,
+  inclinationRad: number,
+  raanRad: number,
+  argumentOfPerigeeRad: number,
+  meanAnomalyRad: number,
+  dt: number,
+  body: BodyMath,
+): [[number, number, number], [number, number, number]] {
+  const a = semiMajorAxisKm;
+  const n = Math.sqrt(body.gravitationalParameterKm3S2 / (a * a * a));
+  const cosI = Math.cos(inclinationRad);
+  const p = a * (1.0 - eccentricity * eccentricity);
+  const j2Factor = body.j2 * (body.equatorialRadiusKm / p) ** 2;
+  const raanDot = -1.5 * j2Factor * n * cosI;
+  const argumentOfPerigeeDot =
+    eccentricity === 0 ? 0.0 : 0.75 * j2Factor * n * (5.0 * cosI * cosI - 1.0);
+  const meanAnomalyDot =
+    n * (1.0 + 0.75 * j2Factor * Math.sqrt(1.0 - eccentricity * eccentricity) *
+      (3.0 * cosI * cosI - 1.0));
+
+  const raan = raanRad + raanDot * dt;
+  const argumentOfPerigee = argumentOfPerigeeRad + argumentOfPerigeeDot * dt;
+  const [xPf, yPf, vxPf, vyPf] = perifocalState(
+    a,
+    eccentricity,
+    meanAnomalyRad + meanAnomalyDot * dt,
+    meanAnomalyDot,
+  );
+  const rotation = rotationTerms(raan, inclinationRad, argumentOfPerigee);
+  const [dRaan, dArgp] = rotationDerivativeTerms(raan, inclinationRad, argumentOfPerigee);
+  const baseVel = applyRotation(rotation, vxPf, vyPf);
+  const raanVel = applyRotation(dRaan, xPf, yPf);
+  const argpVel = applyRotation(dArgp, xPf, yPf);
+
+  return [
+    applyRotation(rotation, xPf, yPf),
+    [
+      baseVel[0] + raanDot * raanVel[0] + argumentOfPerigeeDot * argpVel[0],
+      baseVel[1] + raanDot * raanVel[1] + argumentOfPerigeeDot * argpVel[1],
+      baseVel[2] + raanDot * raanVel[2] + argumentOfPerigeeDot * argpVel[2],
+    ],
   ];
 }
 
@@ -177,8 +330,12 @@ function propagateEci(
 function eciToEcef(
   posEci: [number, number, number],
   unixTimestamp: number,
+  body: BodyMath,
 ): [number, number, number] {
-  const theta = gmstRadians(unixTimestamp);
+  const theta =
+    body.bodyId === "earth"
+      ? gmstRadians(unixTimestamp)
+      : (unixTimestamp - J2000_UNIX_SECONDS) * body.rotationRateRadS;
   const cosT = Math.cos(theta);
   const sinT = Math.sin(theta);
   return [
@@ -195,8 +352,12 @@ function eciToEcefVelocity(
   posEci: [number, number, number],
   velEci: [number, number, number],
   unixTimestamp: number,
+  body: BodyMath,
 ): [number, number, number] {
-  const theta = gmstRadians(unixTimestamp);
+  const theta =
+    body.bodyId === "earth"
+      ? gmstRadians(unixTimestamp)
+      : (unixTimestamp - J2000_UNIX_SECONDS) * body.rotationRateRadS;
   const cosT = Math.cos(theta);
   const sinT = Math.sin(theta);
 
@@ -205,41 +366,44 @@ function eciToEcefVelocity(
   const vz = velEci[2];
 
   // Subtract Earth rotation: omega x r_ecef
-  const posEcef = eciToEcef(posEci, unixTimestamp);
-  vx -= -EARTH_ROTATION_RATE * posEcef[1];
-  vy -= EARTH_ROTATION_RATE * posEcef[0];
+  const posEcef = eciToEcef(posEci, unixTimestamp, body);
+  vx -= -body.rotationRateRadS * posEcef[1];
+  vy -= body.rotationRateRadS * posEcef[0];
 
   return [vx, vy, vz];
 }
 
 /**
- * Convert ECEF (km) to geodetic (lat_deg, lon_deg, alt_km).
- * Iterative Bowring method on WGS84 ellipsoid.
+ * Convert body-fixed XYZ (km) to geodetic (lat_deg, lon_deg, alt_km).
+ * Iterative Bowring method on the supplied body ellipsoid.
  */
 export function ecefToGeodetic(
   x: number,
   y: number,
   z: number,
+  body: BodyMath,
 ): { latDeg: number; lonDeg: number; altKm: number } {
   const lonRad = Math.atan2(y, x);
   const p = Math.sqrt(x * x + y * y);
+  const a = body.equatorialRadiusKm;
+  const e2 = ellipsoidE2(body);
 
-  let latRad = Math.atan2(z, p * (1.0 - WGS84_E2));
+  let latRad = Math.atan2(z, p * (1.0 - e2));
 
   for (let i = 0; i < 10; i++) {
     const sinLat = Math.sin(latRad);
-    const N = WGS84_A / Math.sqrt(1.0 - WGS84_E2 * sinLat * sinLat);
-    latRad = Math.atan2(z + WGS84_E2 * N * sinLat, p);
+    const N = a / Math.sqrt(1.0 - e2 * sinLat * sinLat);
+    latRad = Math.atan2(z + e2 * N * sinLat, p);
   }
 
   const sinLat = Math.sin(latRad);
   const cosLat = Math.cos(latRad);
-  const N = WGS84_A / Math.sqrt(1.0 - WGS84_E2 * sinLat * sinLat);
+  const N = a / Math.sqrt(1.0 - e2 * sinLat * sinLat);
 
   const altKm =
     Math.abs(cosLat) > 1e-10
       ? p / cosLat - N
-      : Math.abs(z) - N * (1.0 - WGS84_E2);
+      : Math.abs(z) - N * (1.0 - e2);
 
   return {
     latDeg: rad2deg(latRad),
@@ -262,6 +426,7 @@ export function propagateNode(
   node: EphemerisNode,
   epochUnix: number,
   simTimeUnix: number,
+  body?: BodyMath,
 ): PropagatedPosition {
   if (node.type === "fixed") {
     return {
@@ -277,22 +442,52 @@ export function propagateNode(
   if (node.type === "tle") {
     throw new Error("propagateNode does not support tle");
   }
-
-  if (node.propagator !== "keplerian-circular") {
-    throw new Error(`propagateNode does not support ${node.propagator}`);
+  if (!body) {
+    throw new Error(
+      `propagateNode requires a body frame for keplerian node reference_body=${node.reference_body}`,
+    );
   }
 
-  const a = EARTH_RADIUS_KM + node.altitude_km;
+  if (
+    node.propagator !== "two-body" &&
+    node.propagator !== "keplerian-circular" &&
+    node.propagator !== "j2-mean-elements"
+  ) {
+    throw new Error(`propagateNode does not support ${String(node.propagator)}`);
+  }
+
   const iRad = deg2rad(node.inclination_deg);
   const raanRad = deg2rad(node.raan_deg);
-  const nuRad = deg2rad(node.true_anomaly_deg);
+  const argumentOfPerigeeRad = deg2rad(node.argument_of_perigee_deg);
+  const meanAnomalyRad = deg2rad(node.mean_anomaly_deg);
   const dt = simTimeUnix - epochUnix;
 
-  const [posEci, velEci] = propagateEci(a, iRad, raanRad, nuRad, dt);
+  const [posEci, velEci] =
+    node.propagator === "j2-mean-elements"
+      ? propagateEciJ2MeanElements(
+          node.semi_major_axis_km,
+          node.eccentricity,
+          iRad,
+          raanRad,
+          argumentOfPerigeeRad,
+          meanAnomalyRad,
+          dt,
+          body,
+        )
+      : propagateEci(
+          node.semi_major_axis_km,
+          node.eccentricity,
+          iRad,
+          raanRad,
+          argumentOfPerigeeRad,
+          meanAnomalyRad,
+          dt,
+          body,
+        );
   const currentTime = epochUnix + dt;
-  const posEcef = eciToEcef(posEci, currentTime);
-  const velEcef = eciToEcefVelocity(posEci, velEci, currentTime);
-  const geo = ecefToGeodetic(posEcef[0], posEcef[1], posEcef[2]);
+  const posEcef = eciToEcef(posEci, currentTime, body);
+  const velEcef = eciToEcefVelocity(posEci, velEci, currentTime, body);
+  const geo = ecefToGeodetic(posEcef[0], posEcef[1], posEcef[2], body);
 
   return {
     latDeg: geo.latDeg,

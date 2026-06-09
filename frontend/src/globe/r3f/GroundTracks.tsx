@@ -26,11 +26,9 @@ import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { AREA_COLORS, getPlaneColor } from "../../config";
 import { geoToWorld, velocityToScene } from "../geo";
-import { EARTH_RADIUS_RENDER } from "./units";
+import { useBodyFrame } from "./BodyFrame";
 import type { NodeState } from "../../types";
 
-/** Surface offset (render units) to avoid z-fighting with the Earth sphere. */
-const SURFACE_OFFSET = EARTH_RADIUS_RENDER * 1.002;
 const STEPS = 40;
 const DT_PER_STEP = 30; // seconds per step → +/-10 minutes total
 
@@ -45,9 +43,19 @@ function getTrackColor(node: NodeState): number {
 }
 
 /** Build the +/-10-minute surface-projected track points for one satellite. */
-function buildTrackPoints(sat: NodeState): THREE.Vector3[] {
-  const pos = geoToWorld(sat.lat_deg, sat.lon_deg, sat.alt_km);
-  const vel = velocityToScene(sat.vel_x_km_s ?? 0, sat.vel_y_km_s ?? 0, sat.vel_z_km_s ?? 0);
+function buildTrackPoints(
+  sat: NodeState,
+  radiusRender: number,
+  kmPerRenderUnit: number,
+): THREE.Vector3[] {
+  const surfaceOffset = radiusRender * 1.002;
+  const pos = geoToWorld(sat.lat_deg, sat.lon_deg, sat.alt_km, radiusRender, kmPerRenderUnit);
+  const vel = velocityToScene(
+    sat.vel_x_km_s ?? 0,
+    sat.vel_y_km_s ?? 0,
+    sat.vel_z_km_s ?? 0,
+    kmPerRenderUnit,
+  );
   const points: THREE.Vector3[] = [];
   for (let i = -STEPS / 2; i <= STEPS / 2; i++) {
     const t = i * DT_PER_STEP;
@@ -56,7 +64,7 @@ function buildTrackPoints(sat: NodeState): THREE.Vector3[] {
     const pz = pos.z + vel.z * t;
     const len = Math.sqrt(px * px + py * py + pz * pz);
     if (len < 0.01) continue;
-    const scale = SURFACE_OFFSET / len;
+    const scale = surfaceOffset / len;
     points.push(new THREE.Vector3(px * scale, py * scale, pz * scale));
   }
   return points;
@@ -70,6 +78,7 @@ interface GroundTracksProps {
 }
 
 export function GroundTracks({ nodes, enabled }: GroundTracksProps) {
+  const { radiusRender, kmPerRenderUnit } = useBodyFrame();
   const groupRef = useRef<THREE.Group>(null);
   const tracksRef = useRef(new Map<string, THREE.Line>());
 
@@ -103,7 +112,7 @@ export function GroundTracks({ nodes, enabled }: GroundTracksProps) {
       if (sat.node_type !== "satellite" || sat.vel_x_km_s == null) continue;
       seen.add(sat.node_id);
 
-      const points = buildTrackPoints(sat);
+      const points = buildTrackPoints(sat, radiusRender, kmPerRenderUnit);
       if (points.length < 2) continue;
 
       const existing = tracks.get(sat.node_id);
@@ -133,7 +142,7 @@ export function GroundTracks({ nodes, enabled }: GroundTracksProps) {
         tracks.delete(id);
       }
     }
-  }, [nodes, enabled]);
+  }, [nodes, enabled, radiusRender, kmPerRenderUnit]);
 
   return <group ref={groupRef} name="ground-tracks" />;
 }

@@ -6,6 +6,7 @@ import pytest
 from nodalarc.models.identity import IdentityMode
 from nodalarc.models.link_rules import VisibleCandidatesTopology
 from nodalarc.models.resolved_session import (
+    ResolvedBodyFacts,
     ResolvedEndpoint,
     ResolvedInterfaceAddress,
     ResolvedLinkCandidate,
@@ -48,6 +49,18 @@ def _orbit() -> ResolvedOrbitFacts:
 
 def _surface() -> ResolvedSurfacePosition:
     return ResolvedSurfacePosition(body="earth", lat_deg=39.0, lon_deg=-104.0, alt_m=1800.0)
+
+
+def _body() -> ResolvedBodyFacts:
+    return ResolvedBodyFacts(
+        body_id="earth",
+        display_name="Earth",
+        gravitational_parameter_km3_s2=398600.4418,
+        mean_radius_km=6371.0088,
+        equatorial_radius_km=6378.137,
+        polar_radius_km=6356.752,
+        reference="test:earth-body",
+    )
 
 
 def _interfaces() -> ResolvedNodeInterfaces:
@@ -159,6 +172,7 @@ def _resolved_session(**overrides) -> ResolvedSession:
         "identity_mode": IdentityMode.SEGMENT_NAMESPACED,
         "session": SessionMeta(name="demo"),
         "nodes": nodes,
+        "bodies": (_body(),),
         "link_rules": (),
         "link_candidates": (),
         "routing_domains": domain,

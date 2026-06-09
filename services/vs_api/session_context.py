@@ -27,6 +27,7 @@ import asyncio
 import ipaddress
 import json
 import logging
+import math
 import sqlite3
 import threading
 import time as _time
@@ -1060,13 +1061,13 @@ class SessionContext:
         Called on each ClockTick. Propagates satellite positions using the
         ephemeris model published by OME. Ground station positions are static.
         """
-        from nodalarc.body_frames import body_frame_for
+        from nodalarc.body_frames import BodyFrame
         from nodalarc.models.events import (
             EphemerisNodeFixed,
             EphemerisNodeKeplerian,
             EphemerisNodeTLE,
         )
-        from nodalarc.orbital import elements_from_params_for_radius
+        from nodalarc.orbital import OrbitalElements
         from nodalarc.propagator import (
             propagate_j2_mean_elements_for_body,
             propagate_keplerian_for_body,
@@ -1086,13 +1087,28 @@ class SessionContext:
 
             for node_id, node in self.cached_ephemeris_obj.nodes.items():
                 if isinstance(node, EphemerisNodeKeplerian):
-                    body_frame = body_frame_for(node.reference_body)
-                    elements = elements_from_params_for_radius(
-                        node.altitude_km,
-                        node.inclination_deg,
-                        node.raan_deg,
-                        node.true_anomaly_deg,
-                        body_frame.equatorial_radius_km,
+                    frame = self.cached_ephemeris_obj.body_frames.get(node.reference_body)
+                    if frame is None:
+                        raise ValueError(
+                            f"Ephemeris node {node_id!r} references body "
+                            f"{node.reference_body!r}, but SessionEphemeris has no body frame"
+                        )
+                    body_frame = BodyFrame(
+                        name=frame.body_id,
+                        mean_radius_km=frame.mean_radius_km,
+                        equatorial_radius_km=frame.equatorial_radius_km,
+                        polar_radius_km=frame.polar_radius_km,
+                        rotation_rate_rad_s=frame.rotation_rate_rad_s,
+                        gravitational_parameter_km3_s2=frame.gravitational_parameter_km3_s2,
+                        j2=frame.j2,
+                    )
+                    elements = OrbitalElements(
+                        semi_major_axis_km=node.semi_major_axis_km,
+                        inclination_rad=math.radians(node.inclination_deg),
+                        raan_rad=math.radians(node.raan_deg),
+                        mean_anomaly_rad=math.radians(node.mean_anomaly_deg),
+                        eccentricity=node.eccentricity,
+                        argument_of_perigee_rad=math.radians(node.argument_of_perigee_deg),
                     )
                     dt = sim_time_unix - self.cached_ephemeris_obj.epoch_unix
                     if node.propagator == "j2-mean-elements":
@@ -1153,11 +1169,27 @@ class SessionContext:
                             f"reference_body={node.reference_body!r}; SGP4/TLE is Earth-only"
                         )
                     dt = sim_time_unix - self.cached_ephemeris_obj.epoch_unix
+                    frame = self.cached_ephemeris_obj.body_frames.get(node.reference_body)
+                    if frame is None:
+                        raise ValueError(
+                            f"Ephemeris node {node_id!r} references missing body frame "
+                            f"{node.reference_body!r}"
+                        )
+                    body_frame = BodyFrame(
+                        name=frame.body_id,
+                        mean_radius_km=frame.mean_radius_km,
+                        equatorial_radius_km=frame.equatorial_radius_km,
+                        polar_radius_km=frame.polar_radius_km,
+                        rotation_rate_rad_s=frame.rotation_rate_rad_s,
+                        gravitational_parameter_km3_s2=frame.gravitational_parameter_km3_s2,
+                        j2=frame.j2,
+                    )
                     _pos_ecef, vel_ecef, geo = propagate_sgp4_tle(
                         node.tle_line_1,
                         node.tle_line_2,
                         self.cached_ephemeris_obj.epoch_unix,
                         dt,
+                        body_frame=body_frame,
                     )
 
                     existing = self.nodes.get(node_id)

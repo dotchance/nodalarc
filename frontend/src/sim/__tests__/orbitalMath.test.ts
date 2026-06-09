@@ -5,12 +5,14 @@ import {
   gmstRadians,
   propagateToSceneXYZ,
   geoToSceneXYZ,
-  SCENE_EARTH_RADIUS,
-  SCENE_KM_PER_UNIT,
   J2000_UNIX_SECONDS,
-  EARTH_RADIUS_KM,
-  EARTH_MU,
 } from "../orbitalMath";
+import { catalogEarthBodyMath } from "./bodyModelFixture";
+
+const EARTH_BODY = catalogEarthBodyMath();
+const EARTH_KM_PER_RENDER_UNIT = EARTH_BODY.kmPerRenderUnit;
+const EARTH_SURFACE_RENDER = EARTH_BODY.equatorialRadiusKm / EARTH_KM_PER_RENDER_UNIT;
+const ORBIT_BASE_RADIUS_KM = EARTH_BODY.meanRadiusKm;
 
 describe("orbitalMath", () => {
   describe("gmstRadians matches astronomy.ts contract", () => {
@@ -37,63 +39,97 @@ describe("orbitalMath", () => {
 
   describe("geoToSceneXYZ geometric correctness", () => {
     it("equator/prime meridian → positive X, near-zero Y and Z", () => {
-      const [x, y, z] = geoToSceneXYZ(0, 0, 0);
-      expect(x).toBeCloseTo(SCENE_EARTH_RADIUS, 3);
+      const [x, y, z] = geoToSceneXYZ(
+        0,
+        0,
+        0,
+        EARTH_BODY.equatorialRadiusKm,
+        EARTH_KM_PER_RENDER_UNIT,
+      );
+      expect(x).toBeCloseTo(EARTH_SURFACE_RENDER, 3);
       expect(Math.abs(y)).toBeLessThan(0.001);
       expect(Math.abs(z)).toBeLessThan(0.001);
     });
 
     it("north pole → positive Y, near-zero X and Z", () => {
-      const [x, y, z] = geoToSceneXYZ(90, 0, 0);
+      const [x, y, z] = geoToSceneXYZ(
+        90,
+        0,
+        0,
+        EARTH_BODY.equatorialRadiusKm,
+        EARTH_KM_PER_RENDER_UNIT,
+      );
       expect(Math.abs(x)).toBeLessThan(0.001);
-      expect(y).toBeCloseTo(SCENE_EARTH_RADIUS, 3);
+      expect(y).toBeCloseTo(EARTH_SURFACE_RENDER, 3);
       expect(Math.abs(z)).toBeLessThan(0.001);
     });
 
     it("south pole → negative Y", () => {
-      const [x, y, z] = geoToSceneXYZ(-90, 0, 0);
+      const [x, y, z] = geoToSceneXYZ(
+        -90,
+        0,
+        0,
+        EARTH_BODY.equatorialRadiusKm,
+        EARTH_KM_PER_RENDER_UNIT,
+      );
       expect(Math.abs(x)).toBeLessThan(0.001);
-      expect(y).toBeCloseTo(-SCENE_EARTH_RADIUS, 3);
+      expect(y).toBeCloseTo(-EARTH_SURFACE_RENDER, 3);
       expect(Math.abs(z)).toBeLessThan(0.001);
     });
 
     it("altitude increases distance from origin", () => {
-      const [x0, y0, z0] = geoToSceneXYZ(45, 30, 0);
-      const [x1, y1, z1] = geoToSceneXYZ(45, 30, 550);
+      const [x0, y0, z0] = geoToSceneXYZ(
+        45,
+        30,
+        0,
+        EARTH_BODY.equatorialRadiusKm,
+        EARTH_KM_PER_RENDER_UNIT,
+      );
+      const [x1, y1, z1] = geoToSceneXYZ(
+        45,
+        30,
+        550,
+        EARTH_BODY.equatorialRadiusKm,
+        EARTH_KM_PER_RENDER_UNIT,
+      );
       const dist0 = Math.sqrt(x0 * x0 + y0 * y0 + z0 * z0);
       const dist1 = Math.sqrt(x1 * x1 + y1 * y1 + z1 * z1);
       expect(dist1).toBeGreaterThan(dist0);
-      const expectedIncrease = 550 / SCENE_KM_PER_UNIT;
+      const expectedIncrease = 550 / EARTH_KM_PER_RENDER_UNIT;
       expect(dist1 - dist0).toBeCloseTo(expectedIncrease, 2);
     });
 
     it("all points on the surface have the same distance from origin", () => {
       const points = [
-        geoToSceneXYZ(0, 0, 0),
-        geoToSceneXYZ(45, 90, 0),
-        geoToSceneXYZ(-30, -120, 0),
-        geoToSceneXYZ(89, 179, 0),
+        geoToSceneXYZ(0, 0, 0, EARTH_BODY.equatorialRadiusKm, EARTH_KM_PER_RENDER_UNIT),
+        geoToSceneXYZ(45, 90, 0, EARTH_BODY.equatorialRadiusKm, EARTH_KM_PER_RENDER_UNIT),
+        geoToSceneXYZ(-30, -120, 0, EARTH_BODY.equatorialRadiusKm, EARTH_KM_PER_RENDER_UNIT),
+        geoToSceneXYZ(89, 179, 0, EARTH_BODY.equatorialRadiusKm, EARTH_KM_PER_RENDER_UNIT),
       ];
       for (const [x, y, z] of points) {
         const dist = Math.sqrt(x * x + y * y + z * z);
-        expect(dist).toBeCloseTo(SCENE_EARTH_RADIUS, 3);
+        expect(dist).toBeCloseTo(EARTH_SURFACE_RENDER, 3);
       }
     });
   });
 
   describe("propagateToSceneXYZ", () => {
     const iss = {
-      altitude_km: 420,
+      semi_major_axis_km: ORBIT_BASE_RADIUS_KM + 420,
+      eccentricity: 0,
       inclination_deg: 51.6,
       raan_deg: 0,
-      true_anomaly_deg: 0,
+      argument_of_perigee_deg: 0,
+      mean_anomaly_deg: 0,
+      body: EARTH_BODY,
     };
+    const issAltitudeKm = 420;
 
     it("produces a position at the correct orbital altitude", () => {
       const epoch = J2000_UNIX_SECONDS;
       const [x, y, z] = propagateToSceneXYZ(iss, epoch, epoch);
       const dist = Math.sqrt(x * x + y * y + z * z);
-      const expectedDist = SCENE_EARTH_RADIUS + iss.altitude_km / SCENE_KM_PER_UNIT;
+      const expectedDist = EARTH_SURFACE_RENDER + issAltitudeKm / EARTH_KM_PER_RENDER_UNIT;
       // WGS84 ellipsoid altitude differs from spherical by up to ~21km
       // at high inclinations. Allow 0.5 scene units (~32km) tolerance.
       expect(Math.abs(dist - expectedDist)).toBeLessThan(0.5);
@@ -111,9 +147,9 @@ describe("orbitalMath", () => {
 
     it("preserves orbital altitude over a full orbit", () => {
       const epoch = J2000_UNIX_SECONDS;
-      const a = EARTH_RADIUS_KM + iss.altitude_km;
-      const period = 2 * Math.PI * Math.sqrt((a ** 3) / EARTH_MU);
-      const expectedDist = SCENE_EARTH_RADIUS + iss.altitude_km / SCENE_KM_PER_UNIT;
+      const a = iss.semi_major_axis_km;
+      const period = 2 * Math.PI * Math.sqrt((a ** 3) / EARTH_BODY.gravitationalParameterKm3S2);
+      const expectedDist = EARTH_SURFACE_RENDER + issAltitudeKm / EARTH_KM_PER_RENDER_UNIT;
 
       for (let t = 0; t < period; t += period / 20) {
         const [x, y, z] = propagateToSceneXYZ(iss, epoch, epoch + t);
@@ -124,8 +160,8 @@ describe("orbitalMath", () => {
 
     it("returns to approximately the same position after one orbit", () => {
       const epoch = J2000_UNIX_SECONDS;
-      const a = EARTH_RADIUS_KM + iss.altitude_km;
-      const period = 2 * Math.PI * Math.sqrt((a ** 3) / EARTH_MU);
+      const a = iss.semi_major_axis_km;
+      const period = 2 * Math.PI * Math.sqrt((a ** 3) / EARTH_BODY.gravitationalParameterKm3S2);
 
       const [x0, y0, z0] = propagateToSceneXYZ(iss, epoch, epoch);
       const [x1, y1, z1] = propagateToSceneXYZ(iss, epoch, epoch + period);
@@ -145,24 +181,37 @@ describe("orbitalMath", () => {
       const simTime = epoch + 1200;
       const elements = {
         type: "keplerian" as const,
-        propagator: "keplerian-circular" as const,
-        altitude_km: 550,
+        propagator: "two-body" as const,
+        semi_major_axis_km: ORBIT_BASE_RADIUS_KM + 550,
+        eccentricity: 0,
         inclination_deg: 53,
         raan_deg: 45,
-        true_anomaly_deg: 120,
+        argument_of_perigee_deg: 0,
+        mean_anomaly_deg: 120,
         plane: 0,
         slot: 0,
+        reference_body: "earth",
+        frame_id: "earth",
       };
 
-      const legacyPos = propagateNode(elements, epoch, simTime);
-      const legacyWorld = geoToWorld(legacyPos.latDeg, legacyPos.lonDeg, legacyPos.altKm);
+      const legacyPos = propagateNode(elements, epoch, simTime, EARTH_BODY);
+      const legacyWorld = geoToWorld(
+        legacyPos.latDeg,
+        legacyPos.lonDeg,
+        legacyPos.altKm,
+        EARTH_SURFACE_RENDER,
+        EARTH_KM_PER_RENDER_UNIT,
+      );
 
       const [nx, ny, nz] = propagateToSceneXYZ(
         {
-          altitude_km: elements.altitude_km,
+          semi_major_axis_km: elements.semi_major_axis_km,
+          eccentricity: elements.eccentricity,
           inclination_deg: elements.inclination_deg,
           raan_deg: elements.raan_deg,
-          true_anomaly_deg: elements.true_anomaly_deg,
+          argument_of_perigee_deg: elements.argument_of_perigee_deg,
+          mean_anomaly_deg: elements.mean_anomaly_deg,
+          body: EARTH_BODY,
         },
         epoch,
         simTime,
@@ -173,43 +222,45 @@ describe("orbitalMath", () => {
       expect(nz).toBeCloseTo(legacyWorld.z, 2);
     });
 
-    it("uses the ephemeris reference radius when provided", () => {
+    it("uses absolute semi-major axis as the orbit-size authority", () => {
       const epoch = J2000_UNIX_SECONDS;
-      const equatorialRadiusKm = 6378.137;
       const elements = {
-        propagator: "keplerian-circular" as const,
-        altitude_km: 420,
+        propagator: "two-body" as const,
+        semi_major_axis_km: ORBIT_BASE_RADIUS_KM + 420,
+        eccentricity: 0,
         inclination_deg: 0,
         raan_deg: 0,
-        true_anomaly_deg: 0,
+        argument_of_perigee_deg: 0,
+        mean_anomaly_deg: 0,
+        body: EARTH_BODY,
       };
       const [xDefault, yDefault, zDefault] = propagateToSceneXYZ(elements, epoch, epoch);
-      const [xFrame, yFrame, zFrame] = propagateToSceneXYZ(
-        { ...elements, reference_radius_km: equatorialRadiusKm },
-        epoch,
-        epoch,
-      );
+      const [xFrame, yFrame, zFrame] = propagateToSceneXYZ({ ...elements }, epoch, epoch);
       const defaultDist = Math.sqrt(xDefault * xDefault + yDefault * yDefault + zDefault * zDefault);
       const frameDist = Math.sqrt(xFrame * xFrame + yFrame * yFrame + zFrame * zFrame);
 
-      expect(frameDist - defaultDist).toBeGreaterThan(0.1);
+      expect(frameDist).toBeCloseTo(defaultDist, 6);
+      expect(EARTH_BODY.equatorialRadiusKm).toBeGreaterThan(EARTH_BODY.meanRadiusKm);
     });
 
     it("honors the J2 mean-elements propagator instead of silently using Keplerian", () => {
       const epoch = J2000_UNIX_SECONDS;
       const elements = {
-        altitude_km: 550,
+        semi_major_axis_km: ORBIT_BASE_RADIUS_KM + 550,
+        eccentricity: 0,
         inclination_deg: 53,
         raan_deg: 45,
-        true_anomaly_deg: 20,
+        argument_of_perigee_deg: 0,
+        mean_anomaly_deg: 20,
+        body: EARTH_BODY,
       };
       const keplerian = propagateToSceneXYZ(
-        { ...elements, propagator: "keplerian-circular" },
+        { ...elements, propagator: "two-body" },
         epoch,
         epoch + 86400,
       );
       const j2 = propagateToSceneXYZ(
-        { ...elements, propagator: "j2-mean-elements", reference_radius_km: 6378.137 },
+        { ...elements, propagator: "j2-mean-elements" },
         epoch,
         epoch + 86400,
       );

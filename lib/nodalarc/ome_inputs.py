@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal
 
-from nodalarc.body_frames import body_frame_for
+from nodalarc.body_frames import BodyFrame, body_runtime_support_for
 from nodalarc.constellation_loader import SatelliteNode
 from nodalarc.ephemeris_runtime import SkyfieldBspEphemeris
 from nodalarc.link_metadata import LinkRuleMetadata
@@ -28,13 +28,28 @@ from nodalarc.models.ground_station import (
     GroundStationFile,
     GroundTerminalDef,
 )
-from nodalarc.models.resolved_session import ResolvedNode, ResolvedSession, ResolvedTerminalBlock
+from nodalarc.models.resolved_session import (
+    ResolvedBodyFacts,
+    ResolvedNode,
+    ResolvedSession,
+    ResolvedTerminalBlock,
+)
 from nodalarc.models.session import GroundSchedulingConfig
 from nodalarc.orbital import OrbitalElements
 from nodalarc.propagator import orbital_period_for_body
 
 GroundLinkModel = Literal["geometry_only", "terminal_physics"]
-PropagatorId = Literal["keplerian-circular", "j2-mean-elements", "sgp4-tle"]
+PropagatorId = Literal["two-body", "keplerian-circular", "j2-mean-elements", "sgp4-tle"]
+SessionPropagatorId = PropagatorId | Literal["mixed"]
+
+
+def _ome_propagator_id(value: str) -> PropagatorId:
+    mapping: dict[str, PropagatorId] = {
+        "two_body": "two-body",
+        "j2_mean_elements": "j2-mean-elements",
+        "sgp4_tle": "sgp4-tle",
+    }
+    return mapping[value]
 
 
 @dataclass(frozen=True)
@@ -46,7 +61,7 @@ class ResolvedOmeInputs:
     gs_file: GroundStationFile | None
     neighbors: frozenset[tuple[str, NeighborAssignment]]
     period: float
-    propagator_id: PropagatorId
+    propagator_id: SessionPropagatorId
     interface_map: dict[tuple[str, str], tuple[str, str]]
     bandwidth_map: dict[tuple[str, str], float]
     rule_map: dict[tuple[str, str], LinkRuleMetadata]
@@ -55,6 +70,7 @@ class ResolvedOmeInputs:
     ground_scheduling: GroundSchedulingConfig
     ground_link_model: GroundLinkModel
     active_bodies: frozenset[str]
+    body_frames: dict[str, BodyFrame]
     body_ephemeris: SkyfieldBspEphemeris | None
 
 
@@ -143,6 +159,7 @@ class ResolvedAddressingView:
 def build_ome_inputs_from_resolved(resolved: ResolvedSession) -> ResolvedOmeInputs:
     """Build OME runtime inputs from the resolved catalog session."""
 
+    body_frames = _body_frames_from_resolved(resolved)
     satellites = [
         _satellite_from_resolved(node) for node in resolved.nodes if node.kind == "satellite"
     ]
@@ -160,7 +177,7 @@ def build_ome_inputs_from_resolved(resolved: ResolvedSession) -> ResolvedOmeInpu
     period = max(
         orbital_period_for_body(
             sat.elements,
-            body_frame_for(getattr(sat, "central_body", "earth")),
+            _required_body_frame(body_frames, sat.central_body),
         )
         for sat in satellites
     )
@@ -181,6 +198,7 @@ def build_ome_inputs_from_resolved(resolved: ResolvedSession) -> ResolvedOmeInpu
         ground_scheduling=ground_scheduling,
         ground_link_model="geometry_only",
         active_bodies=active_bodies,
+        body_frames=body_frames,
         body_ephemeris=_body_ephemeris_from_resolved(
             resolved,
             active_bodies=active_bodies,
@@ -189,13 +207,54 @@ def build_ome_inputs_from_resolved(resolved: ResolvedSession) -> ResolvedOmeInpu
     )
 
 
+def _body_frame_from_resolved_facts(facts: ResolvedBodyFacts) -> BodyFrame:
+    try:
+        runtime_support = body_runtime_support_for(facts.body_id)
+    except ValueError as exc:
+        raise ValueError(
+            f"body {facts.body_id!r} has primitive physical facts, but the runtime "
+            "has no rotation/J2 support for that body"
+        ) from exc
+    return BodyFrame(
+        name=facts.body_id,
+        mean_radius_km=facts.mean_radius_km,
+        equatorial_radius_km=facts.equatorial_radius_km,
+        polar_radius_km=facts.polar_radius_km,
+        rotation_rate_rad_s=runtime_support.rotation_rate_rad_s,
+        gravitational_parameter_km3_s2=facts.gravitational_parameter_km3_s2,
+        j2=runtime_support.j2,
+    )
+
+
+def _body_frames_from_resolved(resolved: ResolvedSession) -> dict[str, BodyFrame]:
+    frames = {facts.body_id: _body_frame_from_resolved_facts(facts) for facts in resolved.bodies}
+    active = _active_bodies(resolved)
+    missing = sorted(active - set(frames))
+    if missing:
+        raise ValueError(
+            "resolved session is missing body primitive facts for active body/bodies: "
+            + ", ".join(missing)
+        )
+    return frames
+
+
+def _required_body_frame(body_frames: dict[str, BodyFrame], body_id: str) -> BodyFrame:
+    try:
+        return body_frames[body_id]
+    except KeyError as exc:
+        raise ValueError(f"resolved runtime is missing body frame for {body_id!r}") from exc
+
+
 def _active_bodies(resolved: ResolvedSession) -> frozenset[str]:
-    return frozenset(
+    active = frozenset(
         body
         for node in resolved.nodes
         for body in (node.central_body, node.reference_body)
         if body is not None
-    ) or frozenset({"earth"})
+    )
+    if not active:
+        raise ValueError("resolved session contains no active body references")
+    return active
 
 
 def _body_ephemeris_from_resolved(
@@ -268,12 +327,8 @@ def _runtime_ephemeris_config(resolved: ResolvedSession) -> EphemerisConfig:
 def _satellite_from_resolved(node: ResolvedNode) -> SatelliteNode:
     if node.orbit is None:
         raise ValueError(f"satellite {node.node_id!r} is missing resolved orbit facts")
-    if node.orbit.eccentricity != 0.0:
-        raise ValueError(
-            f"OME circular propagators cannot run eccentric orbit {node.orbit.orbit_id!r} "
-            f"for {node.node_id!r}; eccentric propagation must be implemented before this "
-            "session can run"
-        )
+    if node.central_body is None:
+        raise ValueError(f"satellite {node.node_id!r} is missing resolved central_body")
     isl_blocks = [
         block for block in node.terminal_inventory if block.endpoint_role in {"isl", "crosslink"}
     ]
@@ -286,17 +341,20 @@ def _satellite_from_resolved(node: ResolvedNode) -> SatelliteNode:
         node_id=node.node_id,
         local_node_id=node.local_node_id,
         segment_id=node.segment_id,
-        central_body=node.central_body or "earth",
+        central_body=node.central_body,
         elements=OrbitalElements(
             semi_major_axis_km=node.orbit.semi_major_axis_km,
             inclination_rad=math.radians(node.orbit.inclination_deg),
             raan_rad=math.radians(node.orbit.raan_deg),
-            true_anomaly_rad=math.radians(node.orbit.mean_anomaly_deg),
+            mean_anomaly_rad=math.radians(node.orbit.mean_anomaly_deg),
+            eccentricity=node.orbit.eccentricity,
+            argument_of_perigee_rad=math.radians(node.orbit.argument_of_perigee_deg),
         ),
         isl_terminal_count=sum(block.count for block in isl_blocks),
         ground_terminal_count=sum(block.count for block in access_blocks),
         isl_terminals=tuple(_isl_terminal(block) for block in isl_blocks),
         ground_terminals=tuple(_satellite_ground_terminal(block) for block in access_blocks),
+        propagator_id=_ome_propagator_id(node.orbit.propagator),
     )
 
 
@@ -326,7 +384,7 @@ def _ground_file_from_resolved(nodes: list[ResolvedNode]) -> GroundStationFile |
                 min_elevation_deg=_effective_ground_min_elevation(node),
                 terminals=tuple(_ground_terminal(block) for block in access_blocks),
                 tenant_id=node.tenant_id,
-                reference_body=node.reference_body or "earth",
+                reference_body=_node_reference_body(node),
                 service_priority=node.service_priority or 10,
                 selection_policy=scheduling.selection_policy,
                 handover_policy=scheduling.handover_policy,
@@ -341,29 +399,20 @@ def _ground_file_from_resolved(nodes: list[ResolvedNode]) -> GroundStationFile |
     return GroundStationFile(stations=stations)
 
 
-def _single_ome_propagator(resolved: ResolvedSession) -> PropagatorId:
-    mapping: dict[str, PropagatorId] = {
-        "two_body": "keplerian-circular",
-        "j2_mean_elements": "j2-mean-elements",
-        "sgp4_tle": "sgp4-tle",
-    }
+def _single_ome_propagator(resolved: ResolvedSession) -> SessionPropagatorId:
     propagators = {
         node.orbit.propagator
         for node in resolved.nodes
         if node.kind == "satellite" and node.orbit is not None
     }
-    if len(propagators) != 1:
-        raise ValueError(
-            "OME currently requires one propagator across all satellite nodes; "
-            f"got {sorted(propagators)}"
-        )
-    propagator = next(iter(propagators))
-    if propagator == "sgp4_tle":
+    if "sgp4_tle" in propagators:
         raise ValueError(
             "OME catalog runtime does not yet materialize TLE records for sgp4_tle; "
             "refusing to run instead of synthesizing placeholder orbital inputs"
         )
-    return mapping[propagator]
+    if len(propagators) > 1:
+        return "mixed"
+    return _ome_propagator_id(next(iter(propagators)))
 
 
 def _neighbors_from_resolved(
@@ -423,11 +472,19 @@ def _node_metadata(resolved: ResolvedSession) -> dict[str, dict[str, object]]:
             "local_node_id": node.local_node_id,
             "namespace": node.namespace,
             "tags": tuple(node.tags),
-            "reference_body": node.reference_body or node.central_body or "earth",
+            "reference_body": _node_reference_body(node),
             "frame_id": node.frame_id,
         }
         for node in resolved.nodes
     }
+
+
+def _node_reference_body(node: ResolvedNode) -> str:
+    if node.reference_body is not None:
+        return node.reference_body
+    if node.central_body is not None:
+        return node.central_body
+    raise ValueError(f"resolved node {node.node_id!r} is missing reference/central body")
 
 
 def _isl_terminal(block: ResolvedTerminalBlock) -> IslTerminal:

@@ -144,6 +144,46 @@ def test_ome_inputs_are_resolved_owned_and_materialize_ground_candidates(tmp_pat
     assert all(runtime.rule_map[pair].link_rule_id for pair in runtime.rule_map)
 
 
+def test_ome_maps_resolved_two_body_to_truthful_runtime_propagator_id(tmp_path: Path) -> None:
+    resolved = _resolved(tmp_path)
+    nodes = [
+        node.model_copy(update={"orbit": node.orbit.model_copy(update={"propagator": "two_body"})})
+        if node.kind == "satellite" and node.orbit is not None
+        else node
+        for node in resolved.nodes
+    ]
+    resolved = resolved.model_copy(update={"nodes": tuple(nodes)})
+
+    runtime = build_ome_inputs_from_resolved(resolved)
+
+    assert runtime.propagator_id == "two-body"
+
+
+def test_ome_inputs_support_mixed_resolved_satellite_propagators(tmp_path: Path) -> None:
+    resolved = _resolved(tmp_path)
+    nodes = []
+    changed = False
+    for node in resolved.nodes:
+        if node.kind == "satellite" and node.orbit is not None and not changed:
+            nodes.append(
+                node.model_copy(
+                    update={"orbit": node.orbit.model_copy(update={"propagator": "two_body"})}
+                )
+            )
+            changed = True
+        else:
+            nodes.append(node)
+    mixed = resolved.model_copy(update={"nodes": tuple(nodes)})
+
+    runtime = build_ome_inputs_from_resolved(mixed)
+
+    assert runtime.propagator_id == "mixed"
+    assert {sat.propagator_id for sat in runtime.satellites} == {
+        "two-body",
+        "j2-mean-elements",
+    }
+
+
 def test_ome_inputs_ignore_ground_nodes_without_declared_access_candidates() -> None:
     resolved = load_session_resolution_from_file(
         Path("catalog/nodalarc/sessions/earth-leo-simple.yaml"),
@@ -234,7 +274,7 @@ def test_ome_addressing_rejects_ambiguous_global_plane_slot_lookup(tmp_path: Pat
         view.sat_id(0, 0)
 
 
-def test_ome_rejects_eccentric_orbits_until_eccentric_propagation_exists(tmp_path: Path) -> None:
+def test_ome_materializes_eccentric_orbits_into_runtime_elements(tmp_path: Path) -> None:
     resolved = _resolved(tmp_path)
     nodes = list(resolved.nodes)
     for index, node in enumerate(nodes):
@@ -243,15 +283,24 @@ def test_ome_rejects_eccentric_orbits_until_eccentric_propagation_exists(tmp_pat
             nodes[index] = node.model_copy(
                 update={
                     "orbit": node.orbit.model_copy(
-                        update={"orbit_id": "test-eccentric", "eccentricity": 0.5}
+                        update={
+                            "orbit_id": "test-eccentric",
+                            "eccentricity": 0.5,
+                            "argument_of_perigee_deg": 270.0,
+                            "mean_anomaly_deg": 12.0,
+                        }
                     )
                 }
             )
             break
     eccentric = resolved.model_copy(update={"nodes": tuple(nodes)})
 
-    with pytest.raises(ValueError, match="eccentric propagation"):
-        build_ome_inputs_from_resolved(eccentric)
+    runtime = build_ome_inputs_from_resolved(eccentric)
+    sat = runtime.satellites[0]
+
+    assert sat.elements.eccentricity == 0.5
+    assert math.degrees(sat.elements.argument_of_perigee_rad) == pytest.approx(270.0)
+    assert math.degrees(sat.elements.mean_anomaly_rad) == pytest.approx(12.0)
 
 
 def test_ome_rejects_sgp4_until_tle_runtime_inputs_are_materialized(tmp_path: Path) -> None:

@@ -73,7 +73,14 @@ def _demo_ground_file() -> GroundStationFile:
         default_terminals=[
             GroundTerminalDef(type="rf", count=1, bandwidth_mbps=500.0, tracking_capacity=1)
         ],
-        stations=[GroundStationConfig(name="hawthorne", lat_deg=33.916, lon_deg=-118.333)],
+        stations=[
+            GroundStationConfig(
+                name="hawthorne",
+                lat_deg=33.916,
+                lon_deg=-118.333,
+                reference_body="earth",
+            )
+        ],
     )
 
 
@@ -190,6 +197,7 @@ class TestGsTerminalBandwidth:
                 name="hawthorne",
                 lat_deg=33.916,
                 lon_deg=-118.333,
+                reference_body="earth",
                 terminals=station_terminals,
             ),
         ]

@@ -19,7 +19,6 @@ import time
 from collections import defaultdict
 from typing import Any
 
-from nodalarc.body_frames import body_frame_for
 from nodalarc.catalog_paths import CatalogRoots
 from nodalarc.constellation_loader import (
     isl_terminal_for_interface,
@@ -38,7 +37,11 @@ from nodalarc.models.coverage import (
 )
 from nodalarc.models.resolved_session import SourceContext
 from nodalarc.ome_inputs import build_ome_inputs_from_resolved
-from nodalarc.propagator import propagate_keplerian
+from nodalarc.propagator import (
+    propagate_j2_mean_elements_for_body,
+    propagate_keplerian_for_body,
+    propagate_sgp4_tle,
+)
 from nodalarc.resolve_session import resolve_session_with_assets
 
 from ome.coverage_insights import describe_gs_coverage, generate_insights
@@ -183,7 +186,13 @@ def compute_coverage_preview(
     addressing = runtime.addressing
     neighbors = runtime.neighbors
 
-    first_body_frame = body_frame_for(getattr(satellites[0], "central_body", "earth"))
+    first_body = satellites[0].central_body
+    try:
+        first_body_frame = runtime.body_frames[first_body]
+    except KeyError as exc:
+        raise ValueError(
+            f"coverage preview is missing resolved body primitive facts for {first_body!r}"
+        ) from exc
     first_alt = satellites[0].elements.semi_major_axis_km - first_body_frame.equatorial_radius_km
     period = runtime.period
 
@@ -206,6 +215,7 @@ def compute_coverage_preview(
         ground_link_model=runtime.ground_link_model,
         ground_defaults_applied=True,
         ground_candidate_satellites_by_gs=runtime.ground_candidate_satellites_by_gs,
+        body_frames=runtime.body_frames,
         body_ephemeris=runtime.body_ephemeris,
         active_bodies=runtime.active_bodies,
         **vis_params,
@@ -229,6 +239,8 @@ def compute_coverage_preview(
         neighbors,
         0.0,
         period,
+        runtime.propagator_id,
+        runtime.body_frames,
         vis_params,
     )
 
@@ -255,6 +267,7 @@ def compute_coverage_preview(
         addressing,
         inclination_deg,
         altitude_km,
+        first_body_frame.equatorial_radius_km,
     )
 
     # Compute ISL failure breakdown (merge scan + event data)
@@ -382,7 +395,14 @@ def _count_events(events, neighbors, gs_file, addressing, period: float) -> tupl
     return isl_stats, gs_stats
 
 
-def _build_gs_previews(gs_file, gs_stats, addressing, inclination_deg, altitude_km):
+def _build_gs_previews(
+    gs_file,
+    gs_stats,
+    addressing,
+    inclination_deg,
+    altitude_km,
+    body_radius_km,
+):
     """Build per-station preview with physics-based descriptions for every station."""
     per_station: dict[str, GsStationPreview] = {}
     if not gs_file:
@@ -406,6 +426,7 @@ def _build_gs_previews(gs_file, gs_stats, addressing, inclination_deg, altitude_
             station_lat=station.lat_deg,
             inclination_deg=inclination_deg,
             altitude_km=altitude_km,
+            body_radius_km=body_radius_km,
             coverage_pct=coverage_pct,
             longest_gap_s=longest_gap_s,
             min_elevation_deg=min_elev,
@@ -426,6 +447,8 @@ def _scan_isl_failure_reasons(
     neighbors,
     epoch_unix,
     period,
+    propagator_id,
+    body_frames,
     vis_params,
 ) -> tuple[IslFailureBreakdown, set[tuple[str, str]]]:
     """Sample timesteps and count WHY ISLs fail to form.
@@ -447,9 +470,57 @@ def _scan_isl_failure_reasons(
     lat_threshold = vis_params["latitude_threshold_deg"]
 
     for dt in sample_times:
-        positions = {
-            nid: propagate_keplerian(sat.elements, epoch_unix, dt) for nid, sat in sat_map.items()
-        }
+        positions = {}
+        for nid, sat in sat_map.items():
+            central_body = sat.central_body
+            try:
+                body_frame = body_frames[central_body]
+            except KeyError as exc:
+                raise ValueError(
+                    f"coverage preview is missing resolved body primitive facts for "
+                    f"central_body={central_body!r} while scanning {nid!r}"
+                ) from exc
+            sat_propagator_id = getattr(sat, "propagator_id", None) or propagator_id
+            if sat_propagator_id == "mixed":
+                raise ValueError(
+                    f"coverage preview mixed propagation requires propagator_id on {nid!r}"
+                )
+            if sat_propagator_id in ("two-body", "keplerian-circular"):
+                positions[nid] = propagate_keplerian_for_body(
+                    sat.elements,
+                    epoch_unix,
+                    dt,
+                    body_frame=body_frame,
+                )[:3]
+            elif sat_propagator_id == "j2-mean-elements":
+                positions[nid] = propagate_j2_mean_elements_for_body(
+                    sat.elements,
+                    epoch_unix,
+                    dt,
+                    body_frame=body_frame,
+                )[:3]
+            elif sat_propagator_id == "sgp4-tle":
+                if central_body != "earth":
+                    raise ValueError(
+                        f"coverage preview SGP4/TLE scan is Earth-only; {nid!r} uses "
+                        f"central_body={central_body!r}"
+                    )
+                if sat.tle_line_1 is None or sat.tle_line_2 is None:
+                    raise ValueError(
+                        f"coverage preview SGP4/TLE scan requires TLE lines for {nid!r}"
+                    )
+                positions[nid] = propagate_sgp4_tle(
+                    sat.tle_line_1,
+                    sat.tle_line_2,
+                    epoch_unix,
+                    dt,
+                    body_frame=body_frame,
+                )
+            else:
+                raise ValueError(
+                    f"coverage preview does not support propagator {sat_propagator_id!r} "
+                    f"for {nid!r}"
+                )
 
         seen: set[tuple[str, str]] = set()
         for nid, assignments in by_node.items():
@@ -503,7 +574,7 @@ def _scan_isl_failure_reasons(
                     max_range_km=max_range,
                     max_tracking_rate_deg_s=max_tracking if is_cross else None,
                     field_of_regard_deg=fov,
-                    body_frame=body_frame_for(getattr(sat_map[nid], "central_body", "earth")),
+                    body_frame=body_frames[sat_map[nid].central_body],
                     polar_seam_enabled=seam_enabled and is_cross,
                     latitude_threshold_deg=lat_threshold,
                     geo_a=geo_a,

@@ -20,8 +20,8 @@ log = logging.getLogger(__name__)
 import yaml
 from pydantic import TypeAdapter
 
+from nodalarc.body_frames import BodyFrame
 from nodalarc.catalog_paths import CatalogPathError, validate_catalog_name
-from nodalarc.constants import EARTH_MU
 from nodalarc.models.constellation import (
     ConstellationConfig,
     ExplicitConstellation,
@@ -82,7 +82,7 @@ def _resolve_sat_type_dir() -> Path:
         return _SAT_TYPE_DIR
     raise FileNotFoundError(
         "Satellite-type file loading requires an explicit directory. Runtime catalog "
-        "sessions must use resolve_session(); tests that exercise this legacy helper "
+        "sessions must use resolve_session(); tests that exercise this low-level helper "
         "must call set_satellite_type_dir()."
     )
 
@@ -92,7 +92,7 @@ def _resolve_gs_stations_dir() -> Path:
         return _GS_STATIONS_DIR
     raise FileNotFoundError(
         "Ground-station file loading requires an explicit stations directory. Runtime "
-        "catalog sessions must use resolve_session(); tests that exercise this legacy "
+        "catalog sessions must use resolve_session(); tests that exercise this low-level "
         "helper must call set_ground_station_dirs()."
     )
 
@@ -102,7 +102,7 @@ def _resolve_gs_sets_dir() -> Path:
         return _GS_SETS_DIR
     raise FileNotFoundError(
         "Ground-station set file loading requires an explicit sets directory. Runtime "
-        "catalog sessions must use resolve_session(); tests that exercise this legacy "
+        "catalog sessions must use resolve_session(); tests that exercise this low-level "
         "helper must call set_ground_station_dirs()."
     )
 
@@ -133,10 +133,10 @@ def load_satellite_type(name: str) -> SatelliteTypeConfig:
 
 
 def _sat_type_to_terminal_config(sat_type: SatelliteTypeConfig) -> TerminalConfig:
-    """Convert a SatelliteTypeConfig to the legacy TerminalConfig format.
+    """Convert a SatelliteTypeConfig to the internal TerminalConfig shape.
 
-    Bridges the new satellite type model to the inline terminal format
-    that downstream code (template_vars, addressing, ome/main) expects.
+    This is an internal typed adapter for the satellite expansion helper. Runtime
+    catalog sessions resolve terminal inventory before consumers see it.
     """
     isl_terminals = []
     for td in sat_type.isl_terminals:
@@ -173,8 +173,8 @@ def resolve_constellation_terminals(config: ConstellationConfig) -> Constellatio
     """Resolve satellite_type references and populate default_terminals.
 
     If the constellation uses satellite_type instead of inline
-    default_terminals, loads the satellite type and fills in
-    default_terminals so downstream code works unchanged.
+    default_terminals, loads the satellite type and fills in the typed terminal
+    blocks expected by the expansion helper.
 
     Returns the config (possibly mutated) for convenience.
     """
@@ -223,6 +223,7 @@ class SatelliteNode:
         "tle_line_1",
         "tle_line_2",
         "norad_id",
+        "propagator_id",
     )
 
     def __init__(
@@ -237,12 +238,13 @@ class SatelliteNode:
         node_id: str | None = None,
         local_node_id: str | None = None,
         segment_id: str | None = None,
-        central_body: str = "earth",
+        central_body: str | None = None,
         isl_terminals: list | tuple | None = None,
         ground_terminals: list | tuple | None = None,
         tle_line_1: str | None = None,
         tle_line_2: str | None = None,
         norad_id: int | None = None,
+        propagator_id: str | None = None,
     ) -> None:
         self.plane = plane
         self.slot = slot
@@ -251,6 +253,8 @@ class SatelliteNode:
         self.node_id = node_id
         self.local_node_id = local_node_id
         self.segment_id = segment_id
+        if central_body is None:
+            raise ValueError("SatelliteNode requires central_body from resolved orbit/body facts")
         self.central_body = central_body
         self.elements = elements
         self.isl_terminal_count = isl_terminal_count
@@ -260,6 +264,7 @@ class SatelliteNode:
         self.tle_line_1 = tle_line_1
         self.tle_line_2 = tle_line_2
         self.norad_id = norad_id
+        self.propagator_id = propagator_id
 
 
 def satellite_local_node_id(sat: SatelliteNode) -> str:
@@ -277,10 +282,13 @@ def satellite_node_id(sat: SatelliteNode, addressing) -> str:
 
     Runtime identity is resolver-owned. Plane/slot remain orbital-local
     metadata and are not globally identifying once multiple segments are loaded.
-    The addressing fallback exists for low-level structural tests that construct
-    ``SatelliteNode`` directly without a resolver.
     """
-    return sat.node_id or addressing.sat_id(sat.plane, sat.slot)
+    if sat.node_id is None:
+        raise ValueError(
+            "SatelliteNode is missing resolver-assigned node_id; runtime identity "
+            "must come from resolve_session(), not addressing plane/slot synthesis"
+        )
+    return sat.node_id
 
 
 def clone_satellite_node(
@@ -314,6 +322,7 @@ def clone_satellite_node(
         tle_line_1=sat.tle_line_1,
         tle_line_2=sat.tle_line_2,
         norad_id=sat.norad_id,
+        propagator_id=sat.propagator_id,
     )
 
 
@@ -322,7 +331,7 @@ def load_constellation(source: str | Path | dict) -> ConstellationConfig:
 
     Accepts either a file path (str/Path) or an inline dict.
     If the constellation references a satellite_type, resolves it and
-    populates default_terminals so downstream code works unchanged.
+    populates the terminal blocks required by the expansion helper.
     """
     if isinstance(source, dict):
         config = adapter.validate_python(source)
@@ -507,7 +516,11 @@ def load_ground_stations(source: str | Path | list[str] | dict) -> GroundStation
     return GroundStationFile.model_validate(data)
 
 
-def expand_parametric(config: ParametricConstellation) -> list[SatelliteNode]:
+def expand_parametric(
+    config: ParametricConstellation,
+    *,
+    body_frame: BodyFrame,
+) -> list[SatelliteNode]:
     """Expand parametric constellation to individual satellite nodes.
 
     Walker-delta and Walker-star use the same orbital element formulas:
@@ -539,6 +552,7 @@ def expand_parametric(config: ParametricConstellation) -> list[SatelliteNode]:
                 inclination_deg=config.orbit.inclination_deg,
                 raan_deg=raan,
                 true_anomaly_deg=true_anomaly,
+                reference_radius_km=body_frame.mean_radius_km,
             )
             satellites.append(
                 SatelliteNode(
@@ -547,6 +561,7 @@ def expand_parametric(config: ParametricConstellation) -> list[SatelliteNode]:
                     elements=elements,
                     isl_terminal_count=isl_count,
                     ground_terminal_count=gnd_count,
+                    central_body=body_frame.name,
                     isl_terminals=isl_terminals,
                     ground_terminals=ground_terminals,
                 )
@@ -555,7 +570,11 @@ def expand_parametric(config: ParametricConstellation) -> list[SatelliteNode]:
     return satellites
 
 
-def expand_explicit(config: ExplicitConstellation) -> list[SatelliteNode]:
+def expand_explicit(
+    config: ExplicitConstellation,
+    *,
+    body_frame: BodyFrame,
+) -> list[SatelliteNode]:
     """Expand explicit constellation — each satellite has its own orbital elements."""
     satellites: list[SatelliteNode] = []
 
@@ -569,6 +588,7 @@ def expand_explicit(config: ExplicitConstellation) -> list[SatelliteNode]:
             inclination_deg=sat_cfg.orbit.inclination_deg,
             raan_deg=sat_cfg.orbit.raan_deg,
             true_anomaly_deg=sat_cfg.orbit.true_anomaly_deg,
+            reference_radius_km=body_frame.mean_radius_km,
         )
         satellites.append(
             SatelliteNode(
@@ -577,6 +597,7 @@ def expand_explicit(config: ExplicitConstellation) -> list[SatelliteNode]:
                 elements=elements,
                 isl_terminal_count=isl_count,
                 ground_terminal_count=gnd_count,
+                central_body=body_frame.name,
                 isl_terminals=isl_terminals,
                 ground_terminals=ground_terminals,
             )
@@ -585,7 +606,12 @@ def expand_explicit(config: ExplicitConstellation) -> list[SatelliteNode]:
     return satellites
 
 
-def _elements_from_tle_lines(line_1: str, line_2: str) -> OrbitalElements:
+def _elements_from_tle_lines(
+    line_1: str,
+    line_2: str,
+    *,
+    body_frame: BodyFrame,
+) -> OrbitalElements:
     """Build approximate circular elements for non-authoritative metadata.
 
     SGP4 propagation uses the original TLE lines. These elements exist only for
@@ -599,28 +625,23 @@ def _elements_from_tle_lines(line_1: str, line_2: str) -> OrbitalElements:
     inclination_deg = float(line_2[8:16])
     raan_deg = float(line_2[17:25])
     eccentricity = float(f"0.{line_2[26:33].strip()}")
+    argument_of_perigee_deg = float(line_2[34:42])
     mean_anomaly_rad = math.radians(float(line_2[43:51]))
     mean_motion_rev_day = float(line_2[52:63])
     mean_motion_rad_s = mean_motion_rev_day * 2.0 * math.pi / 86400.0
-    semi_major_axis_km = (EARTH_MU / (mean_motion_rad_s**2)) ** (1.0 / 3.0)
-
-    # Convert mean anomaly to true anomaly for a closer metadata summary. This
-    # does not make the circular element model authoritative for TLE sessions.
-    eccentric_anomaly = mean_anomaly_rad
-    for _ in range(8):
-        eccentric_anomaly -= (
-            eccentric_anomaly - eccentricity * math.sin(eccentric_anomaly) - mean_anomaly_rad
-        ) / (1.0 - eccentricity * math.cos(eccentric_anomaly))
-    true_anomaly_rad = math.atan2(
-        math.sqrt(1.0 - eccentricity**2) * math.sin(eccentric_anomaly),
-        math.cos(eccentric_anomaly) - eccentricity,
+    if body_frame.name != "earth":
+        raise ValueError("TLE element metadata requires an explicit Earth body frame")
+    semi_major_axis_km = (body_frame.gravitational_parameter_km3_s2 / (mean_motion_rad_s**2)) ** (
+        1.0 / 3.0
     )
 
     return OrbitalElements(
         semi_major_axis_km=semi_major_axis_km,
         inclination_rad=math.radians(inclination_deg),
         raan_rad=math.radians(raan_deg),
-        true_anomaly_rad=true_anomaly_rad,
+        mean_anomaly_rad=mean_anomaly_rad,
+        eccentricity=eccentricity,
+        argument_of_perigee_rad=math.radians(argument_of_perigee_deg),
     )
 
 
@@ -655,7 +676,11 @@ def _read_tle_records(path: Path) -> list[tuple[str | None, str, str]]:
     return records
 
 
-def expand_tle(config: TLEConstellation) -> list[SatelliteNode]:
+def expand_tle(
+    config: TLEConstellation,
+    *,
+    body_frame: BodyFrame,
+) -> list[SatelliteNode]:
     """Expand a TLE constellation into SGP4-backed satellite nodes."""
     satellites: list[SatelliteNode] = []
     records = _read_tle_records(Path(config.tle_file))
@@ -675,9 +700,10 @@ def expand_tle(config: TLEConstellation) -> list[SatelliteNode]:
             SatelliteNode(
                 plane=0,
                 slot=slot,
-                elements=_elements_from_tle_lines(line_1, line_2),
+                elements=_elements_from_tle_lines(line_1, line_2, body_frame=body_frame),
                 isl_terminal_count=isl_count,
                 ground_terminal_count=gnd_count,
+                central_body=body_frame.name,
                 isl_terminals=isl_terminals,
                 ground_terminals=ground_terminals,
                 tle_line_1=line_1,
@@ -689,14 +715,18 @@ def expand_tle(config: TLEConstellation) -> list[SatelliteNode]:
     return satellites
 
 
-def expand_constellation(config: ConstellationConfig) -> list[SatelliteNode]:
+def expand_constellation(
+    config: ConstellationConfig,
+    *,
+    body_frame: BodyFrame,
+) -> list[SatelliteNode]:
     """Dispatch to the correct expansion function based on mode."""
     if isinstance(config, ParametricConstellation):
-        return expand_parametric(config)
+        return expand_parametric(config, body_frame=body_frame)
     if isinstance(config, ExplicitConstellation):
-        return expand_explicit(config)
+        return expand_explicit(config, body_frame=body_frame)
     if isinstance(config, TLEConstellation):
-        return expand_tle(config)
+        return expand_tle(config, body_frame=body_frame)
     raise ValueError(f"Unknown constellation type: {type(config)}")
 
 
@@ -743,7 +773,7 @@ def _terminals_for_node(
                     return list(sat_type.isl_terminals), list(sat_type.ground_terminals)
                 if sat_cfg.terminals is not None:
                     return list(sat_cfg.terminals.isl), list(sat_cfg.terminals.ground)
-                break  # Fall through to constellation default
+                break  # Continue to constellation-level terminal source.
 
     if isinstance(config, ParametricConstellation) and config.plane_overrides:
         for ovr in config.plane_overrides:
@@ -753,10 +783,9 @@ def _terminals_for_node(
                     return list(sat_type.isl_terminals), list(sat_type.ground_terminals)
                 if ovr.terminals is not None:
                     return list(ovr.terminals.isl), list(ovr.terminals.ground)
-                break  # Fall through to constellation default
+                break  # Continue to constellation-level terminal source.
 
-    # Constellation-level fallback — prefer inline default_terminals (already
-    # resolved from satellite_type by resolve_constellation_terminals).
+    # Constellation-level terminal source.
     if config.default_terminals is not None:
         return list(config.default_terminals.isl), list(config.default_terminals.ground)
     if config.satellite_type is not None:

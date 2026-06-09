@@ -191,23 +191,6 @@ def _check_ome_runtime_support(resolved: ResolvedSession) -> list[ValidationResu
     for node in resolved.nodes:
         if node.kind != "satellite" or node.orbit is None:
             continue
-        if node.orbit.eccentricity != 0.0:
-            results.append(
-                ValidationResult(
-                    level="error",
-                    code="E020",
-                    message=(
-                        f"Satellite {node.node_id!r} uses eccentric orbit "
-                        f"{node.orbit.orbit_id!r}; current OME propagation accepts "
-                        "only circular resolved orbit inputs."
-                    ),
-                    remediation=(
-                        "Implement the eccentric propagation runtime input before "
-                        "deploying this session."
-                    ),
-                    field_path=f"segments.{node.segment_id}.orbit",
-                )
-            )
         if node.orbit.propagator == "sgp4_tle":
             results.append(
                 ValidationResult(
@@ -228,20 +211,26 @@ def _check_ome_runtime_support(resolved: ResolvedSession) -> list[ValidationResu
         for body in (node.central_body, node.reference_body)
         if body is not None
     }
-    unsupported_bodies = sorted(body for body in active_bodies if body != "earth")
-    if unsupported_bodies:
+    non_earth_bodies = sorted(body for body in active_bodies if body != "earth")
+    manifest_targets = {
+        target
+        for kernel in (resolved.ephemeris.kernels if resolved.ephemeris is not None else ())
+        for target in kernel.targets
+    }
+    missing_bodies = sorted(set(non_earth_bodies) - manifest_targets)
+    if missing_bodies:
         results.append(
             ValidationResult(
                 level="error",
                 code="E020",
                 message=(
                     "Session contains non-Earth body/bodies "
-                    f"{unsupported_bodies}, but OME does not yet receive a validated "
-                    "catalog ephemeris provider for non-Earth bodies."
+                    f"{missing_bodies}, but OME did not receive a validated catalog "
+                    "ephemeris provider for those bodies."
                 ),
                 remediation=(
-                    "Materialize the catalog ephemeris manifest into ResolvedSession "
-                    "and OME before deploying non-Earth sessions."
+                    "Add a resolved ephemeris manifest that targets every non-Earth "
+                    "body before deploying this session."
                 ),
                 field_path="ephemeris",
             )

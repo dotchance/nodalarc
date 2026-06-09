@@ -25,6 +25,8 @@ function node(node_id: string, segment_id: string, plane: number | null): NodeSt
     beam_falloff_exponent: null,
     segment_id,
     tags: [segment_id],
+    reference_body: "earth",
+    frame_id: "earth",
   };
 }
 

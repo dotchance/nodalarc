@@ -11,6 +11,9 @@ Does NOT apply tc commands, manage interfaces, or know about convergence.
 
 from __future__ import annotations
 
+import math
+
+from nodalarc.body_frames import BodyFrame
 from nodalarc.frames import EcefVec3, GeoPosition
 from nodalarc.geo import compute_latency_ms, compute_range_km, geodetic_to_ecef
 from nodalarc.models.events import (
@@ -19,8 +22,12 @@ from nodalarc.models.events import (
     EphemerisNodeTLE,
     SessionEphemeris,
 )
-from nodalarc.orbital import elements_from_params
-from nodalarc.propagator import propagate_j2_mean_elements, propagate_keplerian, propagate_sgp4_tle
+from nodalarc.orbital import OrbitalElements
+from nodalarc.propagator import (
+    propagate_j2_mean_elements_for_body,
+    propagate_keplerian_for_body,
+    propagate_sgp4_tle,
+)
 
 
 class PositionTable:
@@ -34,7 +41,9 @@ class PositionTable:
     def __init__(self) -> None:
         self._sat_elements: dict[str, object] = {}  # node_id -> OrbitalElements
         self._sat_propagators: dict[str, str] = {}
+        self._sat_reference_bodies: dict[str, str] = {}
         self._sat_tles: dict[str, tuple[str, str]] = {}
+        self._body_frames: dict[str, BodyFrame] = {}
         self._gs_ecef: dict[str, EcefVec3] = {}
         self._epoch_unix: float = 0.0
         self._loaded = False
@@ -52,26 +61,55 @@ class PositionTable:
         """
         self._sat_elements.clear()
         self._sat_propagators.clear()
+        self._sat_reference_bodies.clear()
         self._sat_tles.clear()
+        self._body_frames = {
+            body_id: BodyFrame(
+                name=frame.body_id,
+                mean_radius_km=frame.mean_radius_km,
+                equatorial_radius_km=frame.equatorial_radius_km,
+                polar_radius_km=frame.polar_radius_km,
+                rotation_rate_rad_s=frame.rotation_rate_rad_s,
+                gravitational_parameter_km3_s2=frame.gravitational_parameter_km3_s2,
+                j2=frame.j2,
+            )
+            for body_id, frame in ephemeris.body_frames.items()
+        }
         self._gs_ecef.clear()
         self._epoch_unix = ephemeris.epoch_unix
 
         for node_id, node in ephemeris.nodes.items():
             if isinstance(node, EphemerisNodeKeplerian):
-                self._sat_elements[node_id] = elements_from_params(
-                    node.altitude_km,
-                    node.inclination_deg,
-                    node.raan_deg,
-                    node.true_anomaly_deg,
+                self._sat_elements[node_id] = OrbitalElements(
+                    semi_major_axis_km=node.semi_major_axis_km,
+                    inclination_rad=math.radians(node.inclination_deg),
+                    raan_rad=math.radians(node.raan_deg),
+                    mean_anomaly_rad=math.radians(node.mean_anomaly_deg),
+                    eccentricity=node.eccentricity,
+                    argument_of_perigee_rad=math.radians(node.argument_of_perigee_deg),
                 )
                 self._sat_propagators[node_id] = node.propagator
+                self._sat_reference_bodies[node_id] = node.reference_body
             elif isinstance(node, EphemerisNodeTLE):
                 self._sat_tles[node_id] = (node.tle_line_1, node.tle_line_2)
+                self._sat_reference_bodies[node_id] = node.reference_body
             elif isinstance(node, EphemerisNodeFixed):
-                ecef = geodetic_to_ecef(GeoPosition(node.lat_deg, node.lon_deg, node.alt_km))
+                body_frame = self._required_body_frame(node.reference_body)
+                ecef = geodetic_to_ecef(
+                    GeoPosition(node.lat_deg, node.lon_deg, node.alt_km),
+                    body_frame,
+                )
                 self._gs_ecef[node_id] = ecef
 
         self._loaded = True
+
+    def _required_body_frame(self, body_id: str) -> BodyFrame:
+        try:
+            return self._body_frames[body_id]
+        except KeyError as exc:
+            raise ValueError(
+                f"SessionEphemeris is missing body frame for reference_body={body_id!r}"
+            ) from exc
 
     def _get_ecef(self, node_id: str, sim_time_unix: float) -> EcefVec3 | None:
         """Get ECEF position for a node at the given sim_time.
@@ -86,21 +124,37 @@ class PositionTable:
         dt = sim_time_unix - self._epoch_unix
         if elements is not None:
             propagator = self._sat_propagators[node_id]
+            body_frame = self._required_body_frame(self._sat_reference_bodies[node_id])
             if propagator == "j2-mean-elements":
-                pos_ecef, _vel, _geo = propagate_j2_mean_elements(
+                pos_ecef, _vel, _geo, _pos_inertial, _vel_inertial = (
+                    propagate_j2_mean_elements_for_body(
+                        elements,
+                        self._epoch_unix,
+                        dt,
+                        body_frame=body_frame,
+                    )
+                )
+            elif propagator in ("two-body", "keplerian-circular"):
+                pos_ecef, _vel, _geo, _pos_inertial, _vel_inertial = propagate_keplerian_for_body(
                     elements,
                     self._epoch_unix,
                     dt,
+                    body_frame=body_frame,
                 )
-            elif propagator == "keplerian-circular":
-                pos_ecef, _vel, _geo = propagate_keplerian(elements, self._epoch_unix, dt)
             else:
                 raise ValueError(f"Unsupported ephemeris propagator for {node_id}: {propagator!r}")
             return pos_ecef
 
         tle = self._sat_tles.get(node_id)
         if tle is not None:
-            pos_ecef, _vel, _geo = propagate_sgp4_tle(tle[0], tle[1], self._epoch_unix, dt)
+            body_frame = self._required_body_frame(self._sat_reference_bodies[node_id])
+            pos_ecef, _vel, _geo = propagate_sgp4_tle(
+                tle[0],
+                tle[1],
+                self._epoch_unix,
+                dt,
+                body_frame=body_frame,
+            )
             return pos_ecef
 
         return None

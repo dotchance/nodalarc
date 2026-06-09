@@ -15,11 +15,9 @@ import * as THREE from "three";
 import {
   gmstRadians as _gmstRadians,
   J2000_UNIX_SECONDS as _J2000,
-  EARTH_ROTATION_RATE as _EARTH_ROT,
 } from "../sim/orbitalMath";
 
 export const J2000_UNIX_SECONDS = _J2000;
-export const EARTH_ROTATION_RATE_RAD_S = _EARTH_ROT;
 export const gmstRadians = _gmstRadians;
 
 export function simTimeIsoToUnixSeconds(simTimeIso: string): number {
@@ -51,7 +49,7 @@ export function simTimeIsoToUnixSeconds(simTimeIso: string): number {
  *  @param vEcefSceneUnits       sat's ECEF velocity in scene units/s
  *  @param viewFrameRotationRad  current earthFrame.rotation.y (radians)
  *  @param frameAngularVelocityRadS  dθ/dt: 0 for static frame,
- *                                   EARTH_ROTATION_RATE_RAD_S for earth-inertial
+ *                                   resolved body-frame rotation for earth-inertial
  *  @param target                output vector (avoids allocation)
  *  @returns target, filled with world-frame velocity in scene units/s
  */

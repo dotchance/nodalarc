@@ -68,6 +68,7 @@ class _SessionBundle(NamedTuple):
     ground_link_model: str
     node_metadata: dict[str, dict[str, object]]
     body_ephemeris: object | None
+    body_frames: dict
     active_bodies: frozenset[str]
 
 
@@ -150,6 +151,7 @@ def _load_session_config(session_path: str | Path, *, run_id: str) -> _SessionBu
         ground_link_model=runtime.ground_link_model,
         node_metadata=runtime.node_metadata,
         body_ephemeris=runtime.body_ephemeris,
+        body_frames=runtime.body_frames,
         active_bodies=runtime.active_bodies,
     )
 
@@ -196,7 +198,9 @@ def _effective_ground_scheduling_for_runtime(
 
 def _validate_sgp4_tle_freshness(cfg: _SessionBundle, epoch_unix: float) -> None:
     """Fail before dispatch if a selected SGP4 source violates its age budget."""
-    if cfg.propagator_id != "sgp4-tle":
+    if cfg.propagator_id != "sgp4-tle" and not any(
+        getattr(sat, "propagator_id", None) == "sgp4-tle" for sat in cfg.satellites
+    ):
         return
 
     raise ValueError("catalog OME SGP4/TLE runtime inputs are not implemented")
@@ -355,6 +359,7 @@ def run(session_path: str, output_dir: str | None = None, *, run_id: str) -> Pat
         latitude_threshold_deg=cfg.latitude_threshold_deg,
         ground_link_model=cfg.ground_link_model,
         ground_candidate_satellites_by_gs=cfg.ground_candidate_satellites_by_gs,
+        body_frames=cfg.body_frames,
         body_ephemeris=cfg.body_ephemeris,
         active_bodies=cfg.active_bodies,
     )
@@ -970,6 +975,7 @@ def _run_pacing(
         ground_defaults_applied=True,
         ground_candidate_satellites_by_gs=cfg.ground_candidate_satellites_by_gs,
         node_metadata=cfg.node_metadata,
+        body_frames=cfg.body_frames,
         body_ephemeris=cfg.body_ephemeris,
         active_bodies=cfg.active_bodies,
     )

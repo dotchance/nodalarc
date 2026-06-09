@@ -780,6 +780,8 @@ class TestNodeState:
             local_node_id="sat-P03S07",
             namespace="leo",
             tags=("earth", "leo", "access"),
+            reference_body="earth",
+            frame_id="earth",
         )
         restored = _round_trip(ns)
         assert restored.segment_id == "leo"
@@ -807,6 +809,8 @@ class TestNodeState:
             local_node_id="gs-ashburn",
             namespace="ground",
             tags=("earth", "ground"),
+            reference_body="earth",
+            frame_id="earth",
         )
         restored = _round_trip(ns)
         assert restored.segment_id == "ground"
@@ -926,6 +930,8 @@ class TestStateSnapshot:
                     neighbor_count=2,
                     isl_count=2,
                     gnd_count=0,
+                    reference_body="earth",
+                    frame_id="earth",
                 ),
             ],
             links=[

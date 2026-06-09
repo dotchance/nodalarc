@@ -7,7 +7,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import get_args
 
-from nodalarc.body_frames import BODY_FRAMES, SupportedSurfaceBody
+from nodalarc.body_frames import SUPPORTED_BODY_NAMES, SupportedSurfaceBody
 from nodalarc.models.link_decisions import (
     GroundAllocationEventCategory,
     GroundVisibilityRejectingEndpoint,
@@ -92,10 +92,10 @@ class GroundVisibilityDecision:
 
     def __post_init__(self) -> None:
         """Mirror of ``GroundVisibilityDecisionWire``'s validators."""
-        if self.reference_body not in BODY_FRAMES:
+        if self.reference_body not in SUPPORTED_BODY_NAMES:
             raise ValueError(
                 f"reference_body={self.reference_body!r} is not supported. "
-                f"Supported bodies: {sorted(BODY_FRAMES)!r}."
+                f"Supported bodies: {sorted(SUPPORTED_BODY_NAMES)!r}."
             )
         if self.reject_reason not in _GROUND_REJECT_REASONS:
             raise ValueError(

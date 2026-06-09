@@ -166,7 +166,6 @@ def test_current_ome_runtime_limits_are_reported_before_deploy() -> None:
 
     assert "E020" in _codes(results)
     messages = "\n".join(result.message for result in results)
-    assert "eccentric orbit" in messages
     assert "sgp4_tle" in messages
     assert "non-Earth" in messages
 

@@ -7,6 +7,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from nodalarc.constellation_loader import (
+    clone_satellite_node,
     expand_constellation,
     load_constellation,
 )
@@ -25,6 +26,7 @@ from ome.event_stream import build_link_state_snapshot, build_session_ephemeris,
 from ome.snapshot_builder import LinkSnapshotSource
 
 from tests.conftest import FIXTURES_DIR, load_runtime_ome_test_inputs
+from tests.physics_fixtures import EARTH_TEST_BODY_FRAME, EARTH_TEST_BODY_FRAMES
 
 
 def _ground_scheduling() -> GroundSchedulingConfig:
@@ -49,11 +51,24 @@ def _load_test_ctx():
         ground_scheduling=session.scheduling.ground,
         ground_candidate_satellites_by_gs=candidates,
         ground_link_model=session.ground_link_model,
+        body_frames=session.body_frames,
     )
     return ctx, sats, gs_file
 
 
 EPOCH = 1735689600.0  # 2025-01-01T00:00:00 UTC
+
+
+def _assign_test_runtime_ids(sats, *, segment_id: str):
+    return [
+        clone_satellite_node(
+            sat,
+            node_id=f"{segment_id}-sat-p{sat.local_plane:02d}s{sat.local_slot:02d}",
+            local_node_id=f"sat-P{sat.local_plane:02d}S{sat.local_slot:02d}",
+            segment_id=segment_id,
+        )
+        for sat in sats
+    ]
 
 
 class TestBuildSessionEphemeris:
@@ -66,7 +81,7 @@ class TestBuildSessionEphemeris:
         assert sat.type == "keplerian"
         assert sat.plane == 0
         assert sat.slot == 0
-        assert sat.altitude_km > 160  # must be a valid LEO altitude
+        assert sat.semi_major_axis_km > 6500  # must be a valid LEO-size orbit
         assert sat.propagator == ctx.propagator_id
 
     def test_j2_ephemeris_preserves_propagator_identity(self):
@@ -80,11 +95,39 @@ class TestBuildSessionEphemeris:
             ground_scheduling=_ground_scheduling(),
             ground_candidate_satellites_by_gs=ctx.ground_candidate_satellites_by_gs,
             ground_link_model=ctx.ground_link_model,
+            body_frames=ctx.body_frames,
         )
         eph = build_session_ephemeris(ctx, EPOCH, epoch_id=0)
         sat = eph.nodes["space-sat-p00s00"]
         assert isinstance(sat, EphemerisNodeKeplerian)
         assert sat.propagator == "j2-mean-elements"
+
+    def test_mixed_ephemeris_uses_per_satellite_propagator_identity(self):
+        ctx, sats, gs_file = _load_test_ctx()
+        sats = list(sats)
+        sats[0].propagator_id = "two-body"
+        for sat in sats[1:]:
+            sat.propagator_id = "j2-mean-elements"
+        ctx = build_step_context(
+            satellites=sats,
+            addressing=ctx.addressing,
+            gs_file=gs_file,
+            neighbors=frozenset(),
+            propagator_id="mixed",
+            ground_scheduling=_ground_scheduling(),
+            ground_candidate_satellites_by_gs=ctx.ground_candidate_satellites_by_gs,
+            ground_link_model=ctx.ground_link_model,
+            body_frames=ctx.body_frames,
+        )
+
+        eph = build_session_ephemeris(ctx, EPOCH, epoch_id=0)
+
+        first = eph.nodes[ctx.addressing.sat_id(sats[0].plane, sats[0].slot)]
+        second = eph.nodes[ctx.addressing.sat_id(sats[1].plane, sats[1].slot)]
+        assert isinstance(first, EphemerisNodeKeplerian)
+        assert isinstance(second, EphemerisNodeKeplerian)
+        assert first.propagator == "two-body"
+        assert second.propagator == "j2-mean-elements"
 
     def test_tle_satellite_mapped_to_tle_ephemeris(self):
         cc = load_constellation(
@@ -107,17 +150,21 @@ class TestBuildSessionEphemeris:
                 },
             }
         )
-        sats = expand_constellation(cc)
+        sats = _assign_test_runtime_ids(
+            expand_constellation(cc, body_frame=EARTH_TEST_BODY_FRAME),
+            segment_id="tle",
+        )
         ctx = build_step_context(
             satellites=sats,
-            addressing=AddressingScheme(),
+            addressing=AddressingScheme(satellites=sats),
             gs_file=None,
             neighbors=frozenset(),
             propagator_id="sgp4-tle",
+            body_frames=EARTH_TEST_BODY_FRAMES,
         )
 
         eph = build_session_ephemeris(ctx, EPOCH, epoch_id=0)
-        sat = eph.nodes["sat-P00S00"]
+        sat = eph.nodes["tle-sat-p00s00"]
         assert isinstance(sat, EphemerisNodeTLE)
         assert sat.type == "tle"
         assert sat.norad_id == 25544
@@ -147,6 +194,7 @@ class TestBuildSessionEphemeris:
             ground_scheduling=_ground_scheduling(),
             ground_candidate_satellites_by_gs=ctx.ground_candidate_satellites_by_gs,
             ground_link_model=ctx.ground_link_model,
+            body_frames=ctx.body_frames,
             node_metadata={
                 sat_id: {
                     "segment_id": "leo",
@@ -208,16 +256,20 @@ class TestBuildSessionEphemeris:
 
         import math
 
-        from nodalarc.body_frames import body_frame_for
-
         for sat in sats[:3]:
             nid = ctx.addressing.sat_id(sat.plane, sat.slot)
             node = eph.nodes[nid]
             assert isinstance(node, EphemerisNodeKeplerian)
-            expected_alt = (
-                sat.elements.semi_major_axis_km - body_frame_for("earth").equatorial_radius_km
+            assert abs(node.semi_major_axis_km - sat.elements.semi_major_axis_km) < 0.001
+            assert abs(node.eccentricity - sat.elements.eccentricity) < 1e-12
+            assert (
+                abs(
+                    node.argument_of_perigee_deg
+                    - math.degrees(sat.elements.argument_of_perigee_rad)
+                )
+                < 0.001
             )
-            assert abs(node.altitude_km - expected_alt) < 0.001
+            assert abs(node.mean_anomaly_deg - math.degrees(sat.elements.mean_anomaly_rad)) < 0.001
             assert abs(node.inclination_deg - math.degrees(sat.elements.inclination_rad)) < 0.001
 
 

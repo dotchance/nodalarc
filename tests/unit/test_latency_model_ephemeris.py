@@ -14,10 +14,30 @@ from nodalarc.models.events import (
 )
 from scheduler.latency_model import PositionTable
 
+from tests.physics_fixtures import EARTH_TEST_EPHEMERIS_BODY_FRAMES
+
 EPOCH = 1735689600.0  # 2025-01-01T00:00:00 UTC
 ISS_TLE_EPOCH = 1615896900.000275
 ISS_TLE_LINE_1 = "1 25544U 98067A   21075.51041667  .00001264  00000-0  29660-4 0  9993"
 ISS_TLE_LINE_2 = "2 25544  51.6442  21.5417 0002426  95.1670  21.8444 15.48974333273145"
+
+
+def _keplerian_node(**overrides) -> EphemerisNodeKeplerian:
+    data = {
+        "propagator": "two-body",
+        "semi_major_axis_km": 6921.0,
+        "eccentricity": 0.0,
+        "inclination_deg": 53.0,
+        "raan_deg": 0.0,
+        "argument_of_perigee_deg": 0.0,
+        "mean_anomaly_deg": 0.0,
+        "plane": 0,
+        "slot": 0,
+        "reference_body": "earth",
+        "frame_id": "earth",
+    }
+    data.update(overrides)
+    return EphemerisNodeKeplerian(**data)
 
 
 def _make_ephemeris() -> SessionEphemeris:
@@ -25,26 +45,17 @@ def _make_ephemeris() -> SessionEphemeris:
         epoch_id=0,
         sim_time=datetime(2025, 1, 1, tzinfo=UTC),
         epoch_unix=EPOCH,
+        body_frames=EARTH_TEST_EPHEMERIS_BODY_FRAMES,
         nodes={
-            "sat-P00S00": EphemerisNodeKeplerian(
-                propagator="keplerian-circular",
-                altitude_km=550.0,
-                inclination_deg=53.0,
-                raan_deg=0.0,
-                true_anomaly_deg=0.0,
-                plane=0,
-                slot=0,
+            "sat-P00S00": _keplerian_node(),
+            "sat-P00S01": _keplerian_node(mean_anomaly_deg=32.7, slot=1),
+            "gs-ashburn": EphemerisNodeFixed(
+                lat_deg=39.04,
+                lon_deg=-77.49,
+                alt_km=0.095,
+                reference_body="earth",
+                frame_id="earth",
             ),
-            "sat-P00S01": EphemerisNodeKeplerian(
-                propagator="keplerian-circular",
-                altitude_km=550.0,
-                inclination_deg=53.0,
-                raan_deg=0.0,
-                true_anomaly_deg=32.7,
-                plane=0,
-                slot=1,
-            ),
-            "gs-ashburn": EphemerisNodeFixed(lat_deg=39.04, lon_deg=-77.49, alt_km=0.095),
         },
     )
 
@@ -64,16 +75,9 @@ class TestLoadEphemeris:
             epoch_id=1,
             sim_time=datetime(2025, 1, 1, tzinfo=UTC),
             epoch_unix=EPOCH,
+            body_frames=EARTH_TEST_EPHEMERIS_BODY_FRAMES,
             nodes={
-                "sat-P00S00": EphemerisNodeKeplerian(
-                    propagator="keplerian-circular",
-                    altitude_km=550.0,
-                    inclination_deg=53.0,
-                    raan_deg=0.0,
-                    true_anomaly_deg=0.0,
-                    plane=0,
-                    slot=0,
-                ),
+                "sat-P00S00": _keplerian_node(),
             },
         )
         pt.load_ephemeris(eph2)
@@ -101,6 +105,7 @@ class TestComputeLinkLatency:
             epoch_id=0,
             sim_time=datetime.fromtimestamp(ISS_TLE_EPOCH, UTC),
             epoch_unix=ISS_TLE_EPOCH,
+            body_frames=EARTH_TEST_EPHEMERIS_BODY_FRAMES,
             nodes={
                 "sat-P00S00": EphemerisNodeTLE(
                     tle_line_1=ISS_TLE_LINE_1,
@@ -108,11 +113,15 @@ class TestComputeLinkLatency:
                     plane=0,
                     slot=0,
                     norad_id=25544,
+                    reference_body="earth",
+                    frame_id="earth",
                 ),
                 "gs-ashburn": EphemerisNodeFixed(
                     lat_deg=39.04,
                     lon_deg=-77.49,
                     alt_km=0.095,
+                    reference_body="earth",
+                    frame_id="earth",
                 ),
             },
         )

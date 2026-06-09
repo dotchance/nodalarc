@@ -18,8 +18,8 @@
  *
  * The integrator supplies the live view-frame rotation. The frame rotation is whatever the
  * Earth body group carries this frame (set by <FrameDriver>); the angular velocity is
- * EARTH_ROTATION_RATE_RAD_S in earth-inertial and 0 in earth-fixed — derived here from
- * `referenceFrame` so callers pass the same two inputs FrameDriver already gets.
+ * the resolved Earth body-frame rotation in earth-inertial and 0 in earth-fixed — derived here
+ * from `referenceFrame` so callers pass the same two inputs FrameDriver already gets.
  *
  * useFrame runs at DEFAULT priority (0): after FrameDriver (-2) has set the frame rotation and
  * <Constellation> (-1) has written this frame's positions into the registry, so the world
@@ -34,7 +34,7 @@ import { LineSegmentsGeometry } from "three/addons/lines/LineSegmentsGeometry.js
 import { LineMaterial } from "three/addons/lines/LineMaterial.js";
 import { getPlaneColor } from "../../config";
 import { velocityToScene } from "../geo";
-import { worldVelocity, EARTH_ROTATION_RATE_RAD_S } from "../astronomy";
+import { worldVelocity } from "../astronomy";
 import { computeOrbitPositions, ORBIT_SAMPLES } from "./orbitGeometry";
 import type { NodeState, ReferenceFrame } from "../../types";
 import { getNodeLocalPosition, getNodeWorldPosition } from "./positions";
@@ -76,13 +76,22 @@ interface AllOrbitsProps {
   earthFrame: React.RefObject<THREE.Group | null>;
   /**
    * Active reference frame — selects the frame angular velocity (dθ/dt): non-zero only in
-   * earth-inertial (EARTH_ROTATION_RATE_RAD_S), zero in earth-fixed. Mirrors the legacy
+   * earth-inertial (resolved body-frame rotation), zero in earth-fixed. Mirrors the legacy
    * `angularVelocityRadS` argument.
    */
   referenceFrame: ReferenceFrame;
+  kmPerRenderUnit: number;
+  earthRotationRateRadS: number;
 }
 
-export function AllOrbits({ nodes, show, earthFrame, referenceFrame }: AllOrbitsProps) {
+export function AllOrbits({
+  nodes,
+  show,
+  earthFrame,
+  referenceFrame,
+  kmPerRenderUnit,
+  earthRotationRateRadS,
+}: AllOrbitsProps) {
   const groupRef = useRef<THREE.Group>(null);
   const size = useThree((s) => s.size);
 
@@ -98,6 +107,10 @@ export function AllOrbits({ nodes, show, earthFrame, referenceFrame }: AllOrbits
   showRef.current = show;
   const refFrameRef = useRef(referenceFrame);
   refFrameRef.current = referenceFrame;
+  const kmPerRenderUnitRef = useRef(kmPerRenderUnit);
+  kmPerRenderUnitRef.current = kmPerRenderUnit;
+  const earthRotationRateRef = useRef(earthRotationRateRadS);
+  earthRotationRateRef.current = earthRotationRateRadS;
   const sizeRef = useRef(size);
   sizeRef.current = size;
 
@@ -125,7 +138,7 @@ export function AllOrbits({ nodes, show, earthFrame, referenceFrame }: AllOrbits
   // parameters. The count gate alone never catches this — the sat set is unchanged on a toggle.
   useEffect(() => {
     teardown();
-  }, [referenceFrame, teardown]);
+  }, [referenceFrame, earthRotationRateRadS, teardown]);
 
   // Rebuild the batch from the current satellite set.
   // Returns false if no rings were produced (count gate keeps retrying next frame).
@@ -147,7 +160,14 @@ export function AllOrbits({ nodes, show, earthFrame, referenceFrame }: AllOrbits
       if (ns.plane == null) continue;
       if (!getNodeWorldPosition(ns.node_id, _worldPos)) continue;
       if (!getNodeLocalPosition(ns.node_id, _localPos)) continue;
-      _velEcef.copy(velocityToScene(ns.vel_x_km_s, ns.vel_y_km_s, ns.vel_z_km_s));
+      _velEcef.copy(
+        velocityToScene(
+          ns.vel_x_km_s,
+          ns.vel_y_km_s,
+          ns.vel_z_km_s,
+          kmPerRenderUnitRef.current,
+        ),
+      );
       worldVelocity(_localPos, _velEcef, viewFrameRotationRad, frameAngularVelocityRadS, _velWorld);
 
       const positions = computeOrbitPositions(_worldPos, _velWorld);
@@ -220,7 +240,7 @@ export function AllOrbits({ nodes, show, earthFrame, referenceFrame }: AllOrbits
     }
     const viewFrameRotationRad = earthFrame.current?.rotation.y ?? 0;
     const frameAngularVelocityRadS =
-      refFrameRef.current === "earth-inertial" ? EARTH_ROTATION_RATE_RAD_S : 0;
+      refFrameRef.current === "earth-inertial" ? earthRotationRateRef.current : 0;
     rebuild(sats, viewFrameRotationRad, frameAngularVelocityRadS);
   });
 

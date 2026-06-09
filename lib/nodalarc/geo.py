@@ -1,26 +1,23 @@
 # Copyright 2024-2026 .chance (dotchance)
 # Licensed under the Apache License, Version 2.0. See LICENSE file.
-"""Geodetic/ECEF conversion and range/latency computation.
+"""Geodetic/body-fixed conversion and range/latency computation.
 
-Pure math on WGS84 constants. OME is the geometry authority; the
-Scheduler may use these functions only for explicit validation/cross-check
-paths, not to invent missing actuation values.
-
-One formula, one place.
+OME is the geometry authority; callers must pass the resolved body frame from
+the session. This module does not choose a default body.
 """
 
 from __future__ import annotations
 
 import math
 
-from nodalarc.body_frames import EARTH_BODY_FRAME, BodyFrame
+from nodalarc.body_frames import BodyFrame
 from nodalarc.constants import SPEED_OF_LIGHT_KM_S
 from nodalarc.frames import EcefVec3, GeoPosition, Vec3
 
 
 def geodetic_to_body_fixed(
     pos: GeoPosition,
-    body_frame: BodyFrame = EARTH_BODY_FRAME,
+    body_frame: BodyFrame,
 ) -> EcefVec3:
     """Convert geodetic latitude/longitude/altitude to a body-fixed XYZ vector."""
     lat_rad = math.radians(pos.lat_deg)
@@ -39,14 +36,9 @@ def geodetic_to_body_fixed(
 
 def geodetic_to_ecef(
     pos: GeoPosition,
-    body_frame: BodyFrame = EARTH_BODY_FRAME,
+    body_frame: BodyFrame,
 ) -> EcefVec3:
-    """Convert geodetic (lat, lon, alt) to body-fixed xyz in km.
-
-    With the default body this is Earth ECEF. Passing a different body frame
-    returns that body's local fixed frame; callers must name the body explicitly
-    at the call site when non-Earth geometry is intended.
-    """
+    """Convert geodetic (lat, lon, alt) to body-fixed xyz in km."""
     return geodetic_to_body_fixed(pos, body_frame)
 
 

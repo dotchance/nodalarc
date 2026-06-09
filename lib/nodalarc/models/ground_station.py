@@ -96,12 +96,12 @@ class GroundSegment(BaseModel):
     """Base class for all ground segment entities (Ground Stations, UTs).
 
     Aligns with NMTS PLATFORM_DEFINITION / NETWORK_NODE mapping.
-    Every ground segment has a tenant ID, a reference body (default Earth),
-    and a mobility class.
+    Every ground segment has a tenant ID, an explicit reference body, and a
+    mobility class.
     """
 
     tenant_id: NonEmptyReference = "default"
-    reference_body: SupportedSurfaceBody = "earth"
+    reference_body: SupportedSurfaceBody
     mobility: NonEmptyReference = "fixed"  # "fixed", "terrestrial", "maritime", "aerial"
     service_priority: int = 10  # Lower = higher priority. Headroom: 1, 5, 10, 20...
     selection_policy: SelectionPolicySpec | None = None

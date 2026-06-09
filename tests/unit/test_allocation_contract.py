@@ -48,6 +48,7 @@ class TestAllocationContractInvariants:
             ground_scheduling=session.scheduling.ground,
             ground_candidate_satellites_by_gs=ground_candidates,
             ground_link_model=session.ground_link_model,
+            body_frames=session.body_frames,
         )
 
         isl_state: dict = {}
@@ -105,6 +106,7 @@ class TestAllocationContractInvariants:
             ground_scheduling=session.scheduling.ground,
             ground_candidate_satellites_by_gs=ground_candidates,
             ground_link_model=session.ground_link_model,
+            body_frames=session.body_frames,
         )
 
         isl_state: dict = {}
@@ -150,6 +152,7 @@ class TestAllocationContractInvariants:
             ground_scheduling=session.scheduling.ground,
             ground_candidate_satellites_by_gs=ground_candidates,
             ground_link_model=session.ground_link_model,
+            body_frames=session.body_frames,
         )
 
         # Run with hysteresis (stateful fold)

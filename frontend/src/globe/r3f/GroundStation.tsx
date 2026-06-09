@@ -110,7 +110,13 @@ function GroundStation({
   // Taxonomy caption for the hover tooltip — same family label the inspector/logs use.
   const caption = `${FAMILY_TONE[family.family].label}${family.reason ? `. ${family.reason}` : ""}`;
   const geom = useMemo(() => {
-    const p = geoToWorld(node.lat_deg, node.lon_deg, node.alt_km, bodyFrame.radiusRender);
+    const p = geoToWorld(
+      node.lat_deg,
+      node.lon_deg,
+      node.alt_km,
+      bodyFrame.radiusRender,
+      bodyFrame.kmPerRenderUnit,
+    );
     const outward = p.clone().normalize();
     const surface = outward.clone().multiplyScalar(bodyFrame.radiusRender * 1.001);
     const quat = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, -1), outward);
@@ -119,9 +125,11 @@ function GroundStation({
     const effElev = selected ? effectiveMinElevDeg : null;
     const confElev = selected ? configuredMinElevDeg : null;
     const hasEnvelope = effElev !== null && confElev !== null;
-    const effRadius = hasEnvelope ? computeConeRadius(effElev, orbitalAltKm, bodyFrame.radiusKm) : 0;
+    const effRadius = hasEnvelope
+      ? computeConeRadius(effElev, orbitalAltKm, bodyFrame.radiusKm, bodyFrame.kmPerRenderUnit)
+      : 0;
     const confRadius = hasEnvelope
-      ? computeConeRadius(confElev, orbitalAltKm, bodyFrame.radiusKm)
+      ? computeConeRadius(confElev, orbitalAltKm, bodyFrame.radiusKm, bodyFrame.kmPerRenderUnit)
       : 0;
     // Show the configured reference only when the mask is genuinely non-binding (the
     // effective floor is higher → a tighter cone), i.e. the FoR-bound / dead-knob case.
@@ -147,6 +155,7 @@ function GroundStation({
     configuredMinElevDeg,
     bodyFrame.radiusRender,
     bodyFrame.radiusKm,
+    bodyFrame.kmPerRenderUnit,
   ]);
 
   useEffect(

@@ -7,10 +7,6 @@ from nodalarc.models.terminal_physics import SatGroundTerminalBoresight, Termina
 from ome.propagator import (
     GeoPosition,
     Vec3,
-    elements_from_params,
-    geodetic_to_ecef,
-    propagate_eci,
-    propagate_keplerian,
 )
 from ome.visibility import (
     ScheduledLink,
@@ -23,56 +19,64 @@ from ome.visibility import (
     schedule_isl_terminals,
 )
 
+from tests.physics_fixtures import (
+    EARTH_TEST_BODY_FRAME,
+    earth_elements_from_params,
+    earth_geodetic_to_ecef,
+    earth_propagate_eci,
+    earth_propagate_keplerian,
+)
+
 EPOCH = 1735689600.0
 
 
 class TestLineOfSight:
     def test_same_plane_sats_have_los(self):
         """Two satellites in the same orbital plane, nearby, should have LOS."""
-        e1 = elements_from_params(550.0, 53.0, 0.0, 0.0)
-        e2 = elements_from_params(550.0, 53.0, 0.0, 36.0)  # 36° apart
-        pos1, _, _ = propagate_keplerian(e1, EPOCH, 0.0)
-        pos2, _, _ = propagate_keplerian(e2, EPOCH, 0.0)
-        assert has_line_of_sight(pos1, pos2)
+        e1 = earth_elements_from_params(550.0, 53.0, 0.0, 0.0)
+        e2 = earth_elements_from_params(550.0, 53.0, 0.0, 36.0)  # 36° apart
+        pos1, _, _ = earth_propagate_keplerian(e1, EPOCH, 0.0)
+        pos2, _, _ = earth_propagate_keplerian(e2, EPOCH, 0.0)
+        assert has_line_of_sight(pos1, pos2, EARTH_TEST_BODY_FRAME)
 
     def test_opposite_side_sats_no_los(self):
         """Two satellites on opposite sides of Earth should NOT have LOS."""
-        e1 = elements_from_params(550.0, 53.0, 0.0, 0.0)
-        e2 = elements_from_params(550.0, 53.0, 0.0, 180.0)
-        pos1, _, _ = propagate_keplerian(e1, EPOCH, 0.0)
-        pos2, _, _ = propagate_keplerian(e2, EPOCH, 0.0)
-        assert not has_line_of_sight(pos1, pos2)
+        e1 = earth_elements_from_params(550.0, 53.0, 0.0, 0.0)
+        e2 = earth_elements_from_params(550.0, 53.0, 0.0, 180.0)
+        pos1, _, _ = earth_propagate_keplerian(e1, EPOCH, 0.0)
+        pos2, _, _ = earth_propagate_keplerian(e2, EPOCH, 0.0)
+        assert not has_line_of_sight(pos1, pos2, EARTH_TEST_BODY_FRAME)
 
     def test_gs_and_overhead_sat_have_los(self):
         """GS and a satellite directly overhead should have LOS."""
-        gs = geodetic_to_ecef(GeoPosition(0.0, 0.0, 0.0))
-        sat = geodetic_to_ecef(GeoPosition(0.0, 0.0, 550.0))
-        assert has_line_of_sight(gs, sat)
+        gs = earth_geodetic_to_ecef(GeoPosition(0.0, 0.0, 0.0))
+        sat = earth_geodetic_to_ecef(GeoPosition(0.0, 0.0, 550.0))
+        assert has_line_of_sight(gs, sat, EARTH_TEST_BODY_FRAME)
 
     def test_gs_and_horizon_sat(self):
         """GS and satellite just above the horizon should have LOS."""
-        gs = geodetic_to_ecef(GeoPosition(0.0, 0.0, 0.0))
+        gs = earth_geodetic_to_ecef(GeoPosition(0.0, 0.0, 0.0))
         # Satellite at ~20° elevation
-        sat = geodetic_to_ecef(GeoPosition(10.0, 0.0, 550.0))
-        assert has_line_of_sight(gs, sat)
+        sat = earth_geodetic_to_ecef(GeoPosition(10.0, 0.0, 550.0))
+        assert has_line_of_sight(gs, sat, EARTH_TEST_BODY_FRAME)
 
 
 class TestRange:
     def test_same_plane_range(self):
         """Two sats 36° apart at 550km should be ~4300 km apart."""
-        e1 = elements_from_params(550.0, 53.0, 0.0, 0.0)
-        e2 = elements_from_params(550.0, 53.0, 0.0, 36.0)
-        pos1, _, _ = propagate_keplerian(e1, EPOCH, 0.0)
-        pos2, _, _ = propagate_keplerian(e2, EPOCH, 0.0)
+        e1 = earth_elements_from_params(550.0, 53.0, 0.0, 0.0)
+        e2 = earth_elements_from_params(550.0, 53.0, 0.0, 36.0)
+        pos1, _, _ = earth_propagate_keplerian(e1, EPOCH, 0.0)
+        pos2, _, _ = earth_propagate_keplerian(e2, EPOCH, 0.0)
         r = compute_range_km(pos1, pos2)
         # 2 * (R+h) * sin(θ/2) ≈ 2 * 6921 * sin(18°) ≈ 4278 km
         assert 4000.0 < r < 4600.0
 
     def test_range_within_limit(self):
-        e1 = elements_from_params(550.0, 53.0, 0.0, 0.0)
-        e2 = elements_from_params(550.0, 53.0, 0.0, 36.0)
-        pos1, _, _ = propagate_keplerian(e1, EPOCH, 0.0)
-        pos2, _, _ = propagate_keplerian(e2, EPOCH, 0.0)
+        e1 = earth_elements_from_params(550.0, 53.0, 0.0, 0.0)
+        e2 = earth_elements_from_params(550.0, 53.0, 0.0, 36.0)
+        pos1, _, _ = earth_propagate_keplerian(e1, EPOCH, 0.0)
+        pos2, _, _ = earth_propagate_keplerian(e2, EPOCH, 0.0)
         r = compute_range_km(pos1, pos2)
         assert r < 5016.0  # starlink-early-44 max range
 
@@ -81,17 +85,17 @@ class TestElevationAngle:
     def test_overhead_satellite(self):
         """Satellite directly overhead → ~90° elevation."""
         gs_geo = GeoPosition(0.0, 0.0, 0.0)
-        gs_ecef = geodetic_to_ecef(gs_geo)
-        sat_ecef = geodetic_to_ecef(GeoPosition(0.0, 0.0, 550.0))
+        gs_ecef = earth_geodetic_to_ecef(gs_geo)
+        sat_ecef = earth_geodetic_to_ecef(GeoPosition(0.0, 0.0, 550.0))
         elev = compute_elevation_angle(gs_ecef, gs_geo, sat_ecef)
         assert 85.0 < elev <= 90.0
 
     def test_horizon_satellite(self):
         """Satellite moderately far → positive but low elevation angle."""
         gs_geo = GeoPosition(0.0, 0.0, 0.0)
-        gs_ecef = geodetic_to_ecef(gs_geo)
+        gs_ecef = earth_geodetic_to_ecef(gs_geo)
         # Satellite at 10° lat, 550km — should be above horizon but not high
-        sat_ecef = geodetic_to_ecef(GeoPosition(10.0, 0.0, 550.0))
+        sat_ecef = earth_geodetic_to_ecef(GeoPosition(10.0, 0.0, 550.0))
         elev = compute_elevation_angle(gs_ecef, gs_geo, sat_ecef)
         # Should be positive but moderate
         assert 0.0 < elev < 45.0
@@ -99,15 +103,15 @@ class TestElevationAngle:
     def test_below_horizon(self):
         """Satellite behind the curve → negative elevation."""
         gs_geo = GeoPosition(0.0, 0.0, 0.0)
-        gs_ecef = geodetic_to_ecef(gs_geo)
-        sat_ecef = geodetic_to_ecef(GeoPosition(60.0, 0.0, 550.0))
+        gs_ecef = earth_geodetic_to_ecef(gs_geo)
+        sat_ecef = earth_geodetic_to_ecef(GeoPosition(60.0, 0.0, 550.0))
         elev = compute_elevation_angle(gs_ecef, gs_geo, sat_ecef)
         assert elev < 0.0
 
     def test_analytic_horizon_is_near_zero_elevation(self):
         """At the geometric tangent point, elevation is zero in the local frame."""
         gs_geo = GeoPosition(0.0, 0.0, 0.0)
-        gs_ecef = geodetic_to_ecef(gs_geo)
+        gs_ecef = earth_geodetic_to_ecef(gs_geo)
         radius_km = gs_ecef.x
         orbit_radius_km = radius_km + 550.0
         central_angle = math.acos(radius_km / orbit_radius_km)
@@ -123,9 +127,15 @@ class TestElevationAngle:
 class TestGroundVisibility:
     def test_overhead_visible(self):
         gs_geo = GeoPosition(0.0, 0.0, 0.0)
-        gs_ecef = geodetic_to_ecef(gs_geo)
-        sat_ecef = geodetic_to_ecef(GeoPosition(0.0, 0.0, 550.0))
-        result = check_ground_visibility(gs_ecef, gs_geo, sat_ecef, min_elevation_deg=25.0)
+        gs_ecef = earth_geodetic_to_ecef(gs_geo)
+        sat_ecef = earth_geodetic_to_ecef(GeoPosition(0.0, 0.0, 550.0))
+        result = check_ground_visibility(
+            gs_ecef,
+            gs_geo,
+            sat_ecef,
+            min_elevation_deg=25.0,
+            body_frame=EARTH_TEST_BODY_FRAME,
+        )
         assert result.visible
         assert result.reject_reason == "ok"
 
@@ -136,9 +146,15 @@ class TestGroundVisibility:
         `los_blocked`. (At 25° lat offset Earth occludes LOS, which is
         a separate rejection — see `test_los_blocked_pair`.)"""
         gs_geo = GeoPosition(0.0, 0.0, 0.0)
-        gs_ecef = geodetic_to_ecef(gs_geo)
-        sat_ecef = geodetic_to_ecef(GeoPosition(10.0, 0.0, 550.0))
-        result = check_ground_visibility(gs_ecef, gs_geo, sat_ecef, min_elevation_deg=25.0)
+        gs_ecef = earth_geodetic_to_ecef(gs_geo)
+        sat_ecef = earth_geodetic_to_ecef(GeoPosition(10.0, 0.0, 550.0))
+        result = check_ground_visibility(
+            gs_ecef,
+            gs_geo,
+            sat_ecef,
+            min_elevation_deg=25.0,
+            body_frame=EARTH_TEST_BODY_FRAME,
+        )
         assert not result.visible
         assert result.reject_reason == "elevation_below_min"
         # The elevation value carries the actual computed angle, not a
@@ -151,24 +167,31 @@ class TestGroundVisibility:
         elevation undefined; the reject_reason field is the
         authoritative attribution, not the elevation value."""
         gs_geo = GeoPosition(0.0, 0.0, 0.0)
-        gs_ecef = geodetic_to_ecef(gs_geo)
+        gs_ecef = earth_geodetic_to_ecef(gs_geo)
         # Satellite on the opposite side of Earth — LOS blocked.
-        sat_ecef = geodetic_to_ecef(GeoPosition(0.0, 180.0, 550.0))
-        result = check_ground_visibility(gs_ecef, gs_geo, sat_ecef, min_elevation_deg=25.0)
+        sat_ecef = earth_geodetic_to_ecef(GeoPosition(0.0, 180.0, 550.0))
+        result = check_ground_visibility(
+            gs_ecef,
+            gs_geo,
+            sat_ecef,
+            min_elevation_deg=25.0,
+            body_frame=EARTH_TEST_BODY_FRAME,
+        )
         assert not result.visible
         assert result.reject_reason == "los_blocked"
         assert result.elevation_deg == -90.0
 
     def test_range_limit_rejects_visible_overhead_satellite(self):
         gs_geo = GeoPosition(0.0, 0.0, 0.0)
-        gs_ecef = geodetic_to_ecef(gs_geo)
-        sat_ecef = geodetic_to_ecef(GeoPosition(0.0, 0.0, 550.0))
+        gs_ecef = earth_geodetic_to_ecef(gs_geo)
+        sat_ecef = earth_geodetic_to_ecef(GeoPosition(0.0, 0.0, 550.0))
         result = check_ground_visibility(
             gs_ecef,
             gs_geo,
             sat_ecef,
             min_elevation_deg=25.0,
             max_range_km=100.0,
+            body_frame=EARTH_TEST_BODY_FRAME,
         )
         assert not result.visible
         assert result.reject_reason == "range_exceeded"
@@ -177,8 +200,8 @@ class TestGroundVisibility:
 
     def test_ground_field_of_regard_rejects_off_boresight_satellite(self):
         gs_geo = GeoPosition(0.0, 0.0, 0.0)
-        gs_ecef = geodetic_to_ecef(gs_geo)
-        sat_ecef = geodetic_to_ecef(GeoPosition(10.0, 0.0, 550.0))
+        gs_ecef = earth_geodetic_to_ecef(gs_geo)
+        sat_ecef = earth_geodetic_to_ecef(GeoPosition(10.0, 0.0, 550.0))
         result = check_ground_visibility(
             gs_ecef,
             gs_geo,
@@ -186,6 +209,7 @@ class TestGroundVisibility:
             min_elevation_deg=0.0,
             gs_boresight=TerminalBoresight(mode="local_vertical"),
             gs_field_of_regard_deg=10.0,
+            body_frame=EARTH_TEST_BODY_FRAME,
         )
         assert not result.visible
         assert result.reject_reason == "field_of_regard"
@@ -193,8 +217,8 @@ class TestGroundVisibility:
 
     def test_satellite_nadir_field_of_regard_rejects_off_axis_ground_station(self):
         gs_geo = GeoPosition(0.0, 0.0, 0.0)
-        gs_ecef = geodetic_to_ecef(gs_geo)
-        sat_ecef = geodetic_to_ecef(GeoPosition(10.0, 0.0, 550.0))
+        gs_ecef = earth_geodetic_to_ecef(gs_geo)
+        sat_ecef = earth_geodetic_to_ecef(GeoPosition(10.0, 0.0, 550.0))
         result = check_ground_visibility(
             gs_ecef,
             gs_geo,
@@ -205,6 +229,7 @@ class TestGroundVisibility:
                 mode="nadir",
             ),
             sat_field_of_regard_deg=10.0,
+            body_frame=EARTH_TEST_BODY_FRAME,
         )
         assert not result.visible
         assert result.reject_reason == "field_of_regard"
@@ -212,8 +237,8 @@ class TestGroundVisibility:
 
     def test_tracking_rate_limit_rejects_fast_overhead_satellite(self):
         gs_geo = GeoPosition(0.0, 0.0, 0.0)
-        gs_ecef = geodetic_to_ecef(gs_geo)
-        sat_ecef = geodetic_to_ecef(GeoPosition(0.0, 0.0, 550.0))
+        gs_ecef = earth_geodetic_to_ecef(gs_geo)
+        sat_ecef = earth_geodetic_to_ecef(GeoPosition(0.0, 0.0, 550.0))
         result = check_ground_visibility(
             gs_ecef,
             gs_geo,
@@ -221,6 +246,7 @@ class TestGroundVisibility:
             min_elevation_deg=25.0,
             max_tracking_rate_deg_s=0.1,
             sat_velocity_ecef_km_s=Vec3(0.0, 10.0, 0.0),
+            body_frame=EARTH_TEST_BODY_FRAME,
         )
         assert not result.visible
         assert result.reject_reason == "tracking_exceeded"
@@ -229,23 +255,37 @@ class TestGroundVisibility:
 
 class TestIslVisibility:
     def test_nearby_sats_visible(self):
-        e1 = elements_from_params(550.0, 53.0, 0.0, 0.0)
-        e2 = elements_from_params(550.0, 53.0, 0.0, 36.0)
-        pos1, vel1 = propagate_eci(e1, 0.0)
-        pos2, vel2 = propagate_eci(e2, 0.0)
+        e1 = earth_elements_from_params(550.0, 53.0, 0.0, 0.0)
+        e2 = earth_elements_from_params(550.0, 53.0, 0.0, 36.0)
+        pos1, vel1 = earth_propagate_eci(e1, 0.0)
+        pos2, vel2 = earth_propagate_eci(e2, 0.0)
         # Use ECI positions as approximate ECEF (t=0 acceptable for test)
-        result = check_isl_visibility(pos1, vel1, pos2, vel2, max_range_km=5016.0)
+        result = check_isl_visibility(
+            pos1,
+            vel1,
+            pos2,
+            vel2,
+            max_range_km=5016.0,
+            body_frame=EARTH_TEST_BODY_FRAME,
+        )
         assert result.visible
         assert result.reason == "ok"
 
     def test_range_exceeded(self):
         """Two nearby sats with LOS but beyond a tight range limit."""
-        e1 = elements_from_params(550.0, 53.0, 0.0, 0.0)
-        e2 = elements_from_params(550.0, 53.0, 0.0, 36.0)  # ~4300 km apart, have LOS
-        pos1, vel1 = propagate_eci(e1, 0.0)
-        pos2, vel2 = propagate_eci(e2, 0.0)
+        e1 = earth_elements_from_params(550.0, 53.0, 0.0, 0.0)
+        e2 = earth_elements_from_params(550.0, 53.0, 0.0, 36.0)  # ~4300 km apart, have LOS
+        pos1, vel1 = earth_propagate_eci(e1, 0.0)
+        pos2, vel2 = earth_propagate_eci(e2, 0.0)
         # Range is ~4300 km, limit to 1000 km
-        result = check_isl_visibility(pos1, vel1, pos2, vel2, max_range_km=1000.0)
+        result = check_isl_visibility(
+            pos1,
+            vel1,
+            pos2,
+            vel2,
+            max_range_km=1000.0,
+            body_frame=EARTH_TEST_BODY_FRAME,
+        )
         assert not result.visible
         assert result.reason == "range_exceeded"
 
@@ -254,8 +294,8 @@ class TestIslVisibility:
         # Simulate two satellites at high latitude
         geo_a = GeoPosition(80.0, 0.0, 550.0)
         geo_b = GeoPosition(80.0, 10.0, 550.0)
-        pos_a = geodetic_to_ecef(geo_a)
-        pos_b = geodetic_to_ecef(geo_b)
+        pos_a = earth_geodetic_to_ecef(geo_a)
+        pos_b = earth_geodetic_to_ecef(geo_b)
         result = check_isl_visibility(
             pos_a,
             Vec3(0, 0, 0),
@@ -266,6 +306,7 @@ class TestIslVisibility:
             latitude_threshold_deg=75.0,
             geo_a=geo_a,
             geo_b=geo_b,
+            body_frame=EARTH_TEST_BODY_FRAME,
         )
         assert not result.visible
         assert result.reason == "polar_seam"
@@ -274,10 +315,10 @@ class TestIslVisibility:
 class TestAngularVelocity:
     def test_co_rotating_same_plane_near_zero(self):
         """Two satellites in the same plane, co-rotating → near-zero angular velocity."""
-        e1 = elements_from_params(550.0, 53.0, 0.0, 0.0)
-        e2 = elements_from_params(550.0, 53.0, 0.0, 36.0)
-        pos1, vel1 = propagate_eci(e1, 0.0)
-        pos2, vel2 = propagate_eci(e2, 0.0)
+        e1 = earth_elements_from_params(550.0, 53.0, 0.0, 0.0)
+        e2 = earth_elements_from_params(550.0, 53.0, 0.0, 36.0)
+        pos1, vel1 = earth_propagate_eci(e1, 0.0)
+        pos2, vel2 = earth_propagate_eci(e2, 0.0)
         ang_vel = compute_angular_velocity(pos1, vel1, pos2, vel2)
         # Same orbital plane, same altitude → relative angular velocity should be very small
         # (it's not exactly zero because of the angular separation, but should be < 0.1 deg/s)
@@ -285,10 +326,10 @@ class TestAngularVelocity:
 
     def test_cross_plane_moderate_angular_velocity(self):
         """Cross-plane satellites have moderate angular velocity."""
-        e1 = elements_from_params(550.0, 53.0, 0.0, 0.0)
-        e2 = elements_from_params(550.0, 53.0, 30.0, 0.0)  # Different RAAN
-        pos1, vel1 = propagate_eci(e1, 0.0)
-        pos2, vel2 = propagate_eci(e2, 0.0)
+        e1 = earth_elements_from_params(550.0, 53.0, 0.0, 0.0)
+        e2 = earth_elements_from_params(550.0, 53.0, 30.0, 0.0)  # Different RAAN
+        pos1, vel1 = earth_propagate_eci(e1, 0.0)
+        pos2, vel2 = earth_propagate_eci(e2, 0.0)
         ang_vel = compute_angular_velocity(pos1, vel1, pos2, vel2)
         # Cross-plane → some angular velocity
         assert ang_vel > 0.0

@@ -7,7 +7,6 @@
 import { tokens } from "./styles/tokens";
 
 export const EARTH_RADIUS = tokens.earthRadius;
-export const KM_PER_UNIT = 6371 / EARTH_RADIUS;
 
 // Runtime config injected by container entrypoint (config.js), then
 // Vite build-time env vars, then auto-derive from browser hostname.

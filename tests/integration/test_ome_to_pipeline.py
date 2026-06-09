@@ -130,7 +130,7 @@ def polar_seam_session_path():
 def four_node_timeline(four_node_session_path, tmp_path):
     from ome.main import run as ome_run
 
-    path = ome_run(four_node_session_path, str(tmp_path))
+    path = ome_run(four_node_session_path, str(tmp_path), run_id="test-four-node")
     Path(four_node_session_path).unlink(missing_ok=True)
     return path
 
@@ -139,7 +139,7 @@ def four_node_timeline(four_node_session_path, tmp_path):
 def sample_timeline(sample_session_path, tmp_path):
     from ome.main import run as ome_run
 
-    path = ome_run(sample_session_path, str(tmp_path))
+    path = ome_run(sample_session_path, str(tmp_path), run_id="test-sample")
     Path(sample_session_path).unlink(missing_ok=True)
     return path
 
@@ -148,7 +148,7 @@ def sample_timeline(sample_session_path, tmp_path):
 def polar_seam_timeline(polar_seam_session_path, tmp_path):
     from ome.main import run as ome_run
 
-    path = ome_run(polar_seam_session_path, str(tmp_path))
+    path = ome_run(polar_seam_session_path, str(tmp_path), run_id="test-polar-seam")
     Path(polar_seam_session_path).unlink(missing_ok=True)
     return path
 

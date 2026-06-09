@@ -4,6 +4,7 @@ import json
 
 import pytest
 from nodalarc.constellation_loader import (
+    clone_satellite_node,
     expand_constellation,
     load_ground_stations,
 )
@@ -19,8 +20,22 @@ from ome.event_stream import (
 )
 from pydantic import TypeAdapter
 
+from tests.physics_fixtures import EARTH_TEST_BODY_FRAME, EARTH_TEST_BODY_FRAMES
+
 adapter = TypeAdapter(ConstellationConfig)
 EPOCH = 1735689600.0
+
+
+def _assign_timeline_runtime_ids(sats):
+    return [
+        clone_satellite_node(
+            sat,
+            node_id=f"timeline-sat-p{sat.local_plane:02d}s{sat.local_slot:02d}",
+            local_node_id=f"sat-P{sat.local_plane:02d}S{sat.local_slot:02d}",
+            segment_id="timeline",
+        )
+        for sat in sats
+    ]
 
 
 def _ground_scheduling() -> GroundSchedulingConfig:
@@ -107,8 +122,10 @@ def _four_node_constellation() -> ConstellationConfig:
 def four_node_timeline():
     """Precompute a short timeline for the custom-example constellation."""
     config = _four_node_constellation()
-    sats = expand_constellation(config)
-    addressing = AddressingScheme()
+    sats = _assign_timeline_runtime_ids(
+        expand_constellation(config, body_frame=EARTH_TEST_BODY_FRAME)
+    )
+    addressing = AddressingScheme(satellites=sats)
     neighbors = assign_isl_neighbors(config, addressing)
     gs_file = load_ground_stations(
         {
@@ -133,6 +150,7 @@ def four_node_timeline():
                     "name": "equator",
                     "lat_deg": 0.0,
                     "lon_deg": 0.0,
+                    "reference_body": "earth",
                 }
             ],
         }
@@ -148,9 +166,8 @@ def four_node_timeline():
         propagator_id="keplerian-circular",
         step_seconds=10,
         ground_scheduling=_ground_scheduling(),
-        ground_candidate_satellites_by_gs={
-            "gs-equator": tuple(addressing.sat_id(sat.plane, sat.slot) for sat in sats)
-        },
+        ground_candidate_satellites_by_gs={"gs-equator": tuple(str(sat.node_id) for sat in sats)},
+        body_frames=EARTH_TEST_BODY_FRAMES,
     )
     return events
 
@@ -231,8 +248,10 @@ class TestNoGroundStations:
     def test_timeline_without_gs(self):
         """Timeline works without ground stations."""
         config = _four_node_constellation()
-        sats = expand_constellation(config)
-        addressing = AddressingScheme()
+        sats = _assign_timeline_runtime_ids(
+            expand_constellation(config, body_frame=EARTH_TEST_BODY_FRAME)
+        )
+        addressing = AddressingScheme(satellites=sats)
         neighbors = assign_isl_neighbors(config, addressing)
 
         events = precompute_timeline(
@@ -244,6 +263,7 @@ class TestNoGroundStations:
             duration_s=10.0,
             propagator_id="keplerian-circular",
             step_seconds=5,
+            body_frames=EARTH_TEST_BODY_FRAMES,
         )
         ticks = [e for e in events if e.event_type == "ClockTick"]
         assert len(ticks) == 3  # 0, 5, 10

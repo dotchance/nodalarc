@@ -9,7 +9,7 @@
  */
 
 import { CAMERA_FOV, CAMERA_MAX_DISTANCE } from "../../config";
-import { EARTH_RADIUS_KM, kmToRender } from "./units";
+import { EARTH_RADIUS_RENDER, kmToRender } from "./units";
 
 export interface CameraBoundsBody {
   id: string;
@@ -18,8 +18,16 @@ export interface CameraBoundsBody {
 }
 
 export interface CameraBoundsNode {
-  reference_body?: string | null;
+  node_id?: string;
+  reference_body: string;
   alt_km?: number | null;
+}
+
+function nodeReferenceBody(node: CameraBoundsNode): string {
+  if (!node.reference_body) {
+    throw new Error(`camera bounds node ${node.node_id ?? "<unknown>"} is missing reference_body`);
+  }
+  return node.reference_body;
 }
 
 export interface CameraSceneFrame {
@@ -48,26 +56,29 @@ function includeSphere(
 export function sceneRadiusForCamera(
   bodies: readonly CameraBoundsBody[],
   nodes: readonly CameraBoundsNode[],
+  kmPerRenderUnit: number | null,
 ): number {
+  if (kmPerRenderUnit === null) return EARTH_RADIUS_RENDER;
   const bodyRadiusKm = new Map<string, number>();
   const bodyCenter = new Map<string, number>();
-  let radius = kmToRender(EARTH_RADIUS_KM);
+  let radius = EARTH_RADIUS_RENDER;
 
   for (const body of bodies) {
     const center = length3(body.position);
-    const bodyRadius = kmToRender(body.radiusKm);
+    const bodyRadius = kmToRender(body.radiusKm, kmPerRenderUnit);
     bodyRadiusKm.set(body.id, body.radiusKm);
     bodyCenter.set(body.id, center);
     radius = Math.max(radius, center + bodyRadius);
   }
 
   for (const node of nodes) {
-    const bodyId = node.reference_body ?? "earth";
+    const bodyId = nodeReferenceBody(node);
     const center = bodyCenter.get(bodyId);
     if (center === undefined) continue;
-    const surfaceKm = bodyRadiusKm.get(bodyId) ?? EARTH_RADIUS_KM;
+    const surfaceKm = bodyRadiusKm.get(bodyId);
+    if (surfaceKm === undefined) continue;
     const altitudeKm = Math.max(0, node.alt_km ?? 0);
-    radius = Math.max(radius, center + kmToRender(surfaceKm + altitudeKm));
+    radius = Math.max(radius, center + kmToRender(surfaceKm + altitudeKm, kmPerRenderUnit));
   }
 
   return radius;
@@ -76,31 +87,35 @@ export function sceneRadiusForCamera(
 export function sceneFrameForCamera(
   bodies: readonly CameraBoundsBody[],
   nodes: readonly CameraBoundsNode[],
+  kmPerRenderUnit: number | null,
 ): CameraSceneFrame {
+  if (kmPerRenderUnit === null) {
+    return { center: [0, 0, 0], radius: EARTH_RADIUS_RENDER };
+  }
   const bodyRadiusKm = new Map<string, number>();
   const bodyCenter = new Map<string, readonly [number, number, number]>();
   const min: [number, number, number] = [Infinity, Infinity, Infinity];
   const max: [number, number, number] = [-Infinity, -Infinity, -Infinity];
 
   if (bodies.length === 0) {
-    const earthRadius = kmToRender(EARTH_RADIUS_KM);
-    return { center: [0, 0, 0], radius: earthRadius };
+    return { center: [0, 0, 0], radius: EARTH_RADIUS_RENDER };
   }
 
   for (const body of bodies) {
-    const bodyRadius = kmToRender(body.radiusKm);
+    const bodyRadius = kmToRender(body.radiusKm, kmPerRenderUnit);
     bodyRadiusKm.set(body.id, body.radiusKm);
     bodyCenter.set(body.id, body.position);
     includeSphere(min, max, body.position, bodyRadius);
   }
 
   for (const node of nodes) {
-    const bodyId = node.reference_body ?? "earth";
+    const bodyId = nodeReferenceBody(node);
     const center = bodyCenter.get(bodyId);
     if (!center) continue;
-    const surfaceKm = bodyRadiusKm.get(bodyId) ?? EARTH_RADIUS_KM;
+    const surfaceKm = bodyRadiusKm.get(bodyId);
+    if (surfaceKm === undefined) continue;
     const altitudeKm = Math.max(0, node.alt_km ?? 0);
-    includeSphere(min, max, center, kmToRender(surfaceKm + altitudeKm));
+    includeSphere(min, max, center, kmToRender(surfaceKm + altitudeKm, kmPerRenderUnit));
   }
 
   const center: [number, number, number] = [

@@ -49,12 +49,10 @@ class NodeState(BaseModel):
     addresses: tuple[NodeAddress, ...] = ()
     min_elevation_deg: float | None = None  # Ground stations only
     beam_falloff_exponent: float | None = None  # Satellites only, from satellite type
-    # Parameterization (D2/D3 from day one): which celestial body this node is anchored to and
-    # which tenant owns it. Carried on the render contract so the globe groups/frames by body and
-    # tints by tenant without an Earth/default assumption. Defaults keep single-shell Earth
-    # sessions unchanged; multi-shell / lunar sessions set them per node.
-    reference_body: SupportedSurfaceBody = "earth"
-    frame_id: str = "earth"
+    # Which celestial body this node is anchored to. Required so render and API
+    # consumers never infer Earth from an omitted field.
+    reference_body: SupportedSurfaceBody
+    frame_id: str
     tenant_id: str = "default"
     segment_id: str | None = None
     local_node_id: str | None = None

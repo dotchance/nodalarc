@@ -91,13 +91,18 @@ export function CoverageFootprint({ selection, nodes }: CoverageFootprintProps) 
     () =>
       sat
         ? new THREE.CircleGeometry(
-            computeConeRadius(MIN_ELEV_DEG, altKm, bodyFrame.radiusKm),
+            computeConeRadius(
+              MIN_ELEV_DEG,
+              altKm,
+              bodyFrame.radiusKm,
+              bodyFrame.kmPerRenderUnit,
+            ),
             SEGMENTS,
           )
         : null,
     // altKm intentionally excluded; altKmQuant is the >1km-change gate.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [sat?.node_id, altKmQuant, bodyFrame.radiusKm],
+    [sat?.node_id, altKmQuant, bodyFrame.radiusKm, bodyFrame.kmPerRenderUnit],
   );
 
   const material = useMemo(

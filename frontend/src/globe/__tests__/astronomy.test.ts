@@ -17,9 +17,11 @@ import {
   gmstRadians,
   worldVelocity,
   simTimeIsoToUnixSeconds,
-  EARTH_ROTATION_RATE_RAD_S,
   J2000_UNIX_SECONDS,
 } from "../astronomy";
+import { catalogEarthFrame } from "../../sim/__tests__/bodyModelFixture";
+
+const ROTATION_RATE_FROM_EPHEMERIS_RAD_S = catalogEarthFrame().rotation_rate_rad_s;
 
 describe("gmstRadians — backend contract", () => {
   // Reference values computed from services/ome/propagator.py:gmst().
@@ -136,10 +138,10 @@ describe("worldVelocity", () => {
     const pLocal = new THREE.Vector3(r, 0, 0);
     const vLocal = new THREE.Vector3(0, 0, 0);
     const target = new THREE.Vector3();
-    worldVelocity(pLocal, vLocal, 0, EARTH_ROTATION_RATE_RAD_S, target);
+    worldVelocity(pLocal, vLocal, 0, ROTATION_RATE_FROM_EPHEMERIS_RAD_S, target);
     expect(target.x).toBeCloseTo(0, 10);
     expect(target.y).toBeCloseTo(0, 10);
-    expect(target.z).toBeCloseTo(-EARTH_ROTATION_RATE_RAD_S * r, 12);
+    expect(target.z).toBeCloseTo(-ROTATION_RATE_FROM_EPHEMERIS_RAD_S * r, 12);
   });
 
   it("composes rotation × (Ω × r + v) correctly", () => {
@@ -148,7 +150,7 @@ describe("worldVelocity", () => {
     const p = new THREE.Vector3(50, 10, 20);
     const v = new THREE.Vector3(1, 2, 3);
     const theta = Math.PI / 4;
-    const omega = EARTH_ROTATION_RATE_RAD_S;
+    const omega = ROTATION_RATE_FROM_EPHEMERIS_RAD_S;
 
     // Expected local: Ω × p + v
     //   Ω × p = (ω·pz, 0, -ω·px) = (ω·20, 0, -ω·50)
@@ -176,7 +178,7 @@ describe("worldVelocity", () => {
     const v = new THREE.Vector3(5, 0, 0);
     const theta = 0.5;
     const target = new THREE.Vector3();
-    worldVelocity(p, v, theta, EARTH_ROTATION_RATE_RAD_S, target);
+    worldVelocity(p, v, theta, ROTATION_RATE_FROM_EPHEMERIS_RAD_S, target);
     // R_z(0.5) applied to (5, 0, 0): (5 cos0.5, 0, -5 sin0.5)
     expect(target.x).toBeCloseTo(5 * Math.cos(0.5), 10);
     expect(target.y).toBeCloseTo(0, 10);

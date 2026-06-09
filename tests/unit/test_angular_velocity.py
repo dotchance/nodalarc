@@ -9,11 +9,14 @@ Tests:
 
 from ome.propagator import (
     Vec3,
-    elements_from_params,
-    orbital_period,
-    propagate_eci,
 )
 from ome.visibility import compute_angular_velocity
+
+from tests.physics_fixtures import (
+    earth_elements_from_params,
+    earth_orbital_period,
+    earth_propagate_eci,
+)
 
 EPOCH = 1735689600.0
 
@@ -21,20 +24,20 @@ EPOCH = 1735689600.0
 class TestCoRotatingSamePlane:
     def test_near_zero_angular_velocity(self):
         """Two satellites in the same plane, co-rotating → near-zero angular velocity."""
-        e1 = elements_from_params(550.0, 53.0, 0.0, 0.0)
-        e2 = elements_from_params(550.0, 53.0, 0.0, 36.0)
-        pos1, vel1 = propagate_eci(e1, 0.0)
-        pos2, vel2 = propagate_eci(e2, 0.0)
+        e1 = earth_elements_from_params(550.0, 53.0, 0.0, 0.0)
+        e2 = earth_elements_from_params(550.0, 53.0, 0.0, 36.0)
+        pos1, vel1 = earth_propagate_eci(e1, 0.0)
+        pos2, vel2 = earth_propagate_eci(e2, 0.0)
         ang_vel = compute_angular_velocity(pos1, vel1, pos2, vel2)
         assert ang_vel < 0.5, f"Same-plane angular velocity {ang_vel:.4f} deg/s should be < 0.5"
 
     def test_same_plane_various_separations(self):
         """Same-plane sats at different separations all have very low angular velocity."""
         for ta_sep in [10.0, 20.0, 36.0, 60.0]:
-            e1 = elements_from_params(550.0, 53.0, 0.0, 0.0)
-            e2 = elements_from_params(550.0, 53.0, 0.0, ta_sep)
-            pos1, vel1 = propagate_eci(e1, 0.0)
-            pos2, vel2 = propagate_eci(e2, 0.0)
+            e1 = earth_elements_from_params(550.0, 53.0, 0.0, 0.0)
+            e2 = earth_elements_from_params(550.0, 53.0, 0.0, ta_sep)
+            pos1, vel1 = earth_propagate_eci(e1, 0.0)
+            pos2, vel2 = earth_propagate_eci(e2, 0.0)
             ang_vel = compute_angular_velocity(pos1, vel1, pos2, vel2)
             assert ang_vel < 0.5, (
                 f"Same-plane sep={ta_sep}° angular velocity {ang_vel:.4f} should be < 0.5"
@@ -44,24 +47,24 @@ class TestCoRotatingSamePlane:
 class TestCrossPlaneIncreasingLatitude:
     def test_cross_plane_has_nonzero_angular_velocity(self):
         """Cross-plane neighbors have measurable angular velocity."""
-        e1 = elements_from_params(550.0, 53.0, 0.0, 0.0)
-        e2 = elements_from_params(550.0, 53.0, 30.0, 0.0)
-        pos1, vel1 = propagate_eci(e1, 0.0)
-        pos2, vel2 = propagate_eci(e2, 0.0)
+        e1 = earth_elements_from_params(550.0, 53.0, 0.0, 0.0)
+        e2 = earth_elements_from_params(550.0, 53.0, 30.0, 0.0)
+        pos1, vel1 = earth_propagate_eci(e1, 0.0)
+        pos2, vel2 = earth_propagate_eci(e2, 0.0)
         ang_vel = compute_angular_velocity(pos1, vel1, pos2, vel2)
         assert ang_vel > 0.0, "Cross-plane should have nonzero angular velocity"
 
     def test_angular_velocity_varies_with_orbital_position(self):
         """Cross-plane angular velocity varies as satellites move along orbit."""
-        e1 = elements_from_params(550.0, 53.0, 0.0, 0.0)
-        e2 = elements_from_params(550.0, 53.0, 30.0, 6.0)  # starlink-early-44 RAAN + phase
-        period = orbital_period(550.0)
+        e1 = earth_elements_from_params(550.0, 53.0, 0.0, 0.0)
+        e2 = earth_elements_from_params(550.0, 53.0, 30.0, 6.0)  # starlink-early-44 RAAN + phase
+        period = earth_orbital_period(550.0)
 
         angular_velocities = []
         for step in range(0, int(period), 100):
             dt = float(step)
-            pos1, vel1 = propagate_eci(e1, dt)
-            pos2, vel2 = propagate_eci(e2, dt)
+            pos1, vel1 = earth_propagate_eci(e1, dt)
+            pos2, vel2 = earth_propagate_eci(e2, dt)
             ang_vel = compute_angular_velocity(pos1, vel1, pos2, vel2)
             angular_velocities.append(ang_vel)
 
@@ -79,7 +82,7 @@ class TestTrackingRateCalibration:
         tracking_rate = 3.0
 
         # Compute peak cross-plane angular velocity across all RAAN pairings
-        period = orbital_period(550.0)
+        period = earth_orbital_period(550.0)
         max_ang_vel = 0.0
         raan_spacing = 45.0
         phase_offset = 8.2
@@ -88,10 +91,10 @@ class TestTrackingRateCalibration:
             raan_diff = plane_delta * raan_spacing
             for step in range(0, int(period), 10):
                 dt = float(step)
-                e1 = elements_from_params(550.0, 53.0, 0.0, 0.0)
-                e2 = elements_from_params(550.0, 53.0, raan_diff, plane_delta * phase_offset)
-                pos1, vel1 = propagate_eci(e1, dt)
-                pos2, vel2 = propagate_eci(e2, dt)
+                e1 = earth_elements_from_params(550.0, 53.0, 0.0, 0.0)
+                e2 = earth_elements_from_params(550.0, 53.0, raan_diff, plane_delta * phase_offset)
+                pos1, vel1 = earth_propagate_eci(e1, dt)
+                pos2, vel2 = earth_propagate_eci(e2, dt)
                 ang_vel = compute_angular_velocity(pos1, vel1, pos2, vel2)
                 if ang_vel > max_ang_vel:
                     max_ang_vel = ang_vel
@@ -139,25 +142,25 @@ class TestCounterRotating:
         Near-polar orbits have higher relative velocities at equatorial crossings.
         """
         # Walker-delta: 53° inclination
-        e1_delta = elements_from_params(550.0, 53.0, 0.0, 0.0)
-        e2_delta = elements_from_params(550.0, 53.0, 30.0, 0.0)
+        e1_delta = earth_elements_from_params(550.0, 53.0, 0.0, 0.0)
+        e2_delta = earth_elements_from_params(550.0, 53.0, 30.0, 0.0)
 
         # Walker-star: 97.4° inclination
-        e1_star = elements_from_params(550.0, 97.4, 0.0, 0.0)
-        e2_star = elements_from_params(550.0, 97.4, 90.0, 0.0)
+        e1_star = earth_elements_from_params(550.0, 97.4, 0.0, 0.0)
+        e2_star = earth_elements_from_params(550.0, 97.4, 90.0, 0.0)
 
         # Find peak for each
-        period = orbital_period(550.0)
+        period = earth_orbital_period(550.0)
         max_delta = 0.0
         max_star = 0.0
         for step in range(0, int(period), 50):
             dt = float(step)
-            pos1, vel1 = propagate_eci(e1_delta, dt)
-            pos2, vel2 = propagate_eci(e2_delta, dt)
+            pos1, vel1 = earth_propagate_eci(e1_delta, dt)
+            pos2, vel2 = earth_propagate_eci(e2_delta, dt)
             max_delta = max(max_delta, compute_angular_velocity(pos1, vel1, pos2, vel2))
 
-            pos1, vel1 = propagate_eci(e1_star, dt)
-            pos2, vel2 = propagate_eci(e2_star, dt)
+            pos1, vel1 = earth_propagate_eci(e1_star, dt)
+            pos2, vel2 = earth_propagate_eci(e2_star, dt)
             max_star = max(max_star, compute_angular_velocity(pos1, vel1, pos2, vel2))
 
         assert max_star > max_delta, (

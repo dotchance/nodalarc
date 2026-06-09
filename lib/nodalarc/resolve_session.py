@@ -25,6 +25,7 @@ from nodalarc.models.catalog import validate_catalog_document, validate_catalog_
 from nodalarc.models.identity import IdentityMode
 from nodalarc.models.link_rules import LinkRule, NodeSelector, TerminalSelector
 from nodalarc.models.resolved_session import (
+    ResolvedBodyFacts,
     ResolvedEndpoint,
     ResolvedEphemeris,
     ResolvedEphemerisKernel,
@@ -70,6 +71,7 @@ class _RuntimeNode:
     plane: int | None = None
     slot: int | None = None
     mounts: dict[str, dict[str, Any]] | None = None
+    body_facts: tuple[ResolvedBodyFacts, ...] = ()
 
 
 def default_catalog_roots() -> CatalogRoots:
@@ -125,6 +127,7 @@ def resolve_session_with_assets(
 
     runtime_nodes = _apply_addressing(cfg, _expand_segments(cfg, roots))
     resolved_nodes = tuple(item.node for item in runtime_nodes)
+    body_facts = _collect_body_facts(runtime_nodes)
     ephemeris = _resolve_ephemeris(cfg, roots, resolved_nodes)
     link_rules = tuple(
         _resolve_link_rule(rule, cfg, runtime_nodes) for rule in cfg.link_rules or ()
@@ -137,6 +140,7 @@ def resolve_session_with_assets(
         identity_mode=IdentityMode.SEGMENT_NAMESPACED,
         session=cfg.session,
         nodes=resolved_nodes,
+        bodies=body_facts,
         link_rules=link_rules,
         routing_domains=routing_domains,
         sid_blocks=sid_blocks,
@@ -152,6 +156,7 @@ def resolve_session_with_assets(
         identity_mode=base_resolved.identity_mode,
         session=base_resolved.session,
         nodes=base_resolved.nodes,
+        bodies=base_resolved.bodies,
         link_rules=base_resolved.link_rules,
         link_candidates=tuple(_resolve_link_candidates(base_resolved)),
         routing_domains=base_resolved.routing_domains,
@@ -216,12 +221,42 @@ def _check_runtime_support(cfg: SegmentSessionConfig, support: RuntimeSupport) -
 
 
 def _active_bodies(nodes: tuple[ResolvedNode, ...]) -> set[str]:
-    return {
+    active = {
         body
         for node in nodes
         for body in (node.central_body, node.reference_body)
         if body is not None
-    } or {"earth"}
+    }
+    if not active:
+        raise SessionResolutionError("resolved session contains no active body references")
+    return active
+
+
+def _body_facts_from_catalog(body: dict[str, Any]) -> ResolvedBodyFacts:
+    return ResolvedBodyFacts(
+        body_id=body["id"],
+        display_name=body["display_name"],
+        gravitational_parameter_km3_s2=float(body["gravitational_parameter_km3_s2"]),
+        mean_radius_km=float(body["mean_radius_km"]),
+        equatorial_radius_km=float(body["equatorial_radius_km"]),
+        polar_radius_km=float(body["polar_radius_km"]),
+        reference=body["reference"],
+    )
+
+
+def _collect_body_facts(runtime_nodes: tuple[_RuntimeNode, ...]) -> tuple[ResolvedBodyFacts, ...]:
+    by_id: dict[str, ResolvedBodyFacts] = {}
+    for item in runtime_nodes:
+        for facts in item.body_facts:
+            existing = by_id.get(facts.body_id)
+            if existing is not None and existing != facts:
+                raise SessionResolutionError(
+                    f"body primitive {facts.body_id!r} resolves to conflicting physical facts"
+                )
+            by_id[facts.body_id] = facts
+    if not by_id:
+        raise SessionResolutionError("resolved session contains no body primitive facts")
+    return tuple(by_id[body_id] for body_id in sorted(by_id))
 
 
 def _resolve_ephemeris(
@@ -356,6 +391,7 @@ def _expand_constellation_segment(
                     plane=plane,
                     slot=slot,
                     mounts=_mounts_by_id(node),
+                    body_facts=(_body_facts_from_catalog(body),),
                 )
             )
             # The orbit phase is intentionally retained in the catalog object; the
@@ -400,6 +436,7 @@ def _space_node_from_entry(
             slot=None,
         ),
         mounts=_mounts_by_id(node),
+        body_facts=(_body_facts_from_catalog(body),),
     )
 
 
@@ -468,6 +505,7 @@ def _expand_ground_segment(segment: GroundSegment, roots: CatalogRoots) -> list[
                         ground_scheduling=scheduling,
                     ),
                     mounts=_mounts_by_id(source_node),
+                    body_facts=(_body_facts_from_catalog(body),),
                 )
             )
     return expanded
@@ -486,14 +524,16 @@ def _resolved_space_node(
     plane: int | None,
     slot: int | None,
 ) -> ResolvedNode:
+    if body is None:
+        raise SessionResolutionError(f"space node {runtime_id!r} has no resolved central body")
     return ResolvedNode(
         node_id=runtime_id,
         local_node_id=local_id,
         segment_id=segment_id,
         namespace=segment_id,
         kind="satellite",
-        frame_id=body["id"] if body is not None else "unknown",
-        central_body=body["id"] if body is not None else None,
+        frame_id=body["id"],
+        central_body=body["id"],
         tags=tags,
         terminal_inventory=tuple(_terminal_blocks_for_node(runtime_id, source_node, None, roots)),
         wan_interfaces=tuple(_wan_interfaces_for_node(runtime_id, source_node)),
@@ -585,16 +625,16 @@ def _terminal_blocks_for_node(
                 field_of_regard_deg=_field_of_regard_deg(limits),
                 tracking_rate_deg_s=float(limits["max_tracking_rate_deg_s"]),
                 bandwidth_mbps=float(max(bandwidth["transmit"], bandwidth["receive"])),
-                source_ref=_catalog_source_ref(mount["terminal"], fallback_id=terminal["id"]),
+                source_ref=_catalog_source_ref(mount["terminal"], inline_id=terminal["id"]),
             )
         )
     return blocks
 
 
-def _catalog_source_ref(value: Any, *, fallback_id: str) -> str:
+def _catalog_source_ref(value: Any, *, inline_id: str) -> str:
     if isinstance(value, str):
         return value
-    return f"inline:{fallback_id}"
+    return f"inline:{inline_id}"
 
 
 def _field_of_regard_deg(limits: dict[str, Any]) -> float:
@@ -736,6 +776,7 @@ def _apply_addressing(
                             plane=item.plane,
                             slot=item.slot,
                             mounts=item.mounts,
+                            body_facts=item.body_facts,
                         )
                     )
                     continue
@@ -747,6 +788,7 @@ def _apply_addressing(
                         plane=item.plane,
                         slot=item.slot,
                         mounts=item.mounts,
+                        body_facts=item.body_facts,
                     )
                 )
             nodes = next_nodes
@@ -800,6 +842,7 @@ def _apply_default_generated_space_loopbacks(nodes: list[_RuntimeNode]) -> list[
                 plane=item.plane,
                 slot=item.slot,
                 mounts=item.mounts,
+                body_facts=item.body_facts,
             )
         )
     return next_nodes

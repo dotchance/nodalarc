@@ -18,7 +18,7 @@ import { LineSegmentsGeometry } from "three/addons/lines/LineSegmentsGeometry.js
 import { LineMaterial } from "three/addons/lines/LineMaterial.js";
 import { getPlaneColor } from "../../config";
 import { velocityToScene } from "../geo";
-import { worldVelocity, EARTH_ROTATION_RATE_RAD_S } from "../astronomy";
+import { worldVelocity } from "../astronomy";
 import { computeOrbitPositions, ORBIT_SAMPLES } from "./orbitGeometry";
 import type { NodeState, ReferenceFrame } from "../../types";
 import { getNodeLocalPosition, getNodeWorldPosition } from "./positions";
@@ -51,9 +51,18 @@ interface OrbitPinsProps {
   nodes: NodeState[];
   earthFrame: React.RefObject<THREE.Group | null>;
   referenceFrame: ReferenceFrame;
+  kmPerRenderUnit: number;
+  earthRotationRateRadS: number;
 }
 
-export function OrbitPins({ pinnedIds, nodes, earthFrame, referenceFrame }: OrbitPinsProps) {
+export function OrbitPins({
+  pinnedIds,
+  nodes,
+  earthFrame,
+  referenceFrame,
+  kmPerRenderUnit,
+  earthRotationRateRadS,
+}: OrbitPinsProps) {
   const groupRef = useRef<THREE.Group>(null);
   const size = useThree((s) => s.size);
   const batchRef = useRef<LineSegments2 | null>(null);
@@ -82,7 +91,7 @@ export function OrbitPins({ pinnedIds, nodes, earthFrame, referenceFrame }: Orbi
     const group = groupRef.current;
     if (!group || pinnedIds.length === 0) return;
     const rotY = earthFrame.current?.rotation.y ?? 0;
-    const angVel = referenceFrame === "earth-inertial" ? EARTH_ROTATION_RATE_RAD_S : 0;
+    const angVel = referenceFrame === "earth-inertial" ? earthRotationRateRadS : 0;
 
     const pos = new Float32Array(pinnedIds.length * FLOATS_PER_ORBIT);
     const col = new Float32Array(pinnedIds.length * FLOATS_PER_ORBIT);
@@ -92,7 +101,9 @@ export function OrbitPins({ pinnedIds, nodes, earthFrame, referenceFrame }: Orbi
       if (!ns || ns.vel_x_km_s == null || ns.vel_y_km_s == null || ns.vel_z_km_s == null) continue;
       if (ns.plane == null) continue;
       if (!getNodeWorldPosition(id, _worldPos) || !getNodeLocalPosition(id, _localPos)) continue;
-      _velEcef.copy(velocityToScene(ns.vel_x_km_s, ns.vel_y_km_s, ns.vel_z_km_s));
+      _velEcef.copy(
+        velocityToScene(ns.vel_x_km_s, ns.vel_y_km_s, ns.vel_z_km_s, kmPerRenderUnit),
+      );
       worldVelocity(_localPos, _velEcef, rotY, angVel, _velWorld);
       const ring = computeOrbitPositions(_worldPos, _velWorld);
       _color.setHex(getPlaneColor(ns.plane));
@@ -136,7 +147,7 @@ export function OrbitPins({ pinnedIds, nodes, earthFrame, referenceFrame }: Orbi
     group.add(batch);
     batchRef.current = batch;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pinKey, referenceFrame]);
+  }, [pinKey, referenceFrame, kmPerRenderUnit, earthRotationRateRadS]);
 
   // Keep the fat-line resolution in sync with the canvas.
   useEffect(() => {

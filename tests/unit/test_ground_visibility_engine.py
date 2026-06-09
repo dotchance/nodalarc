@@ -6,20 +6,27 @@ from __future__ import annotations
 
 import nodalarc.constellation_loader as constellation_loader
 import pytest
-from nodalarc.body_frames import LUNA_BODY_FRAME
 from nodalarc.frames import EcefVec3, GeoPosition, Vec3
-from nodalarc.geo import geodetic_to_ecef
 from nodalarc.ground_terminals import TerminalPhysicsProfile
 from nodalarc.models.addressing import AddressingScheme
 from nodalarc.models.ground_policy import HandoverPolicySpec, SelectionPolicySpec
 from nodalarc.models.ground_station import GroundStationConfig, GroundStationFile, GroundTerminalDef
 from nodalarc.models.session import GroundSchedulingConfig
 from nodalarc.models.terminal_physics import SatGroundTerminalBoresight, TerminalBoresight
-from nodalarc.orbital import elements_from_params
 from ome.event_stream import build_step_context
 from ome.ground_visibility_engine import GroundPassLookahead, evaluate_ground_visibility
 from ome.propagation_engine import PropagatedState, propagate_satellites
 from ome.visibility import GroundVisibility
+
+from tests.physics_fixtures import (
+    EARTH_ORIGIN_BODY_STATES,
+    EARTH_TEST_BODY_FRAME,
+    LUNA_TEST_BODY_FRAME,
+    earth_elements_from_params,
+    earth_geodetic_to_ecef,
+)
+
+TEST_BODY_FRAMES = {"earth": EARTH_TEST_BODY_FRAME, "luna": LUNA_TEST_BODY_FRAME}
 
 
 def _ground_scheduling() -> GroundSchedulingConfig:
@@ -33,10 +40,11 @@ def _state(node_id: str, geo: GeoPosition, velocity: Vec3 | None = None) -> Prop
     return PropagatedState(
         node_id=node_id,
         sim_time_unix=0.0,
-        position_ecef_km=geodetic_to_ecef(geo),
+        position_ecef_km=earth_geodetic_to_ecef(geo),
         velocity_ecef_km_s=EcefVec3(velocity or Vec3(0.0, 0.0, 0.0)),
         geodetic=geo,
         propagator_id="test-fixture",
+        central_body="earth",
     )
 
 
@@ -49,6 +57,7 @@ def _gs_default_kwargs(
         "gs_tenant_ids": {gs_id: "default"},
         "gs_reference_bodies": {gs_id: "earth"},
         "candidate_satellite_ids_by_gs": {gs_id: sat_ids},
+        "body_frames": TEST_BODY_FRAMES,
     }
 
 
@@ -94,7 +103,7 @@ def test_ground_visibility_evaluates_all_station_satellite_pairs_with_physical_c
     result = evaluate_ground_visibility(
         satellite_ids=("sat-a",),
         sat_states={"sat-a": _state("sat-a", sat_geo)},
-        gs_positions={"gs-equator": (geodetic_to_ecef(gs_geo), gs_geo)},
+        gs_positions={"gs-equator": (earth_geodetic_to_ecef(gs_geo), gs_geo)},
         gs_min_elevations={"gs-equator": 25.0},
         **_gs_default_kwargs(),
         **_physical_kwargs(),
@@ -131,7 +140,7 @@ def test_physical_visibility_rejects_range_before_allocator_candidate_set():
     result = evaluate_ground_visibility(
         satellite_ids=("sat-a",),
         sat_states={"sat-a": _state("sat-a", GeoPosition(0.0, 0.0, 550.0))},
-        gs_positions={"gs-equator": (geodetic_to_ecef(gs_geo), gs_geo)},
+        gs_positions={"gs-equator": (earth_geodetic_to_ecef(gs_geo), gs_geo)},
         gs_min_elevations={"gs-equator": 25.0},
         **_gs_default_kwargs(),
         **_physical_kwargs(max_range_km=100.0),
@@ -162,7 +171,7 @@ def test_satellite_field_of_regard_rejection_carries_off_nadir_angle():
     result = evaluate_ground_visibility(
         satellite_ids=(sat_id,),
         sat_states={sat_id: _state(sat_id, GeoPosition(8.0, 0.0, 550.0))},
-        gs_positions={"gs-equator": (geodetic_to_ecef(gs_geo), gs_geo)},
+        gs_positions={"gs-equator": (earth_geodetic_to_ecef(gs_geo), gs_geo)},
         gs_min_elevations={"gs-equator": -90.0},
         **_gs_default_kwargs(),
         **physical,
@@ -183,7 +192,7 @@ def test_physical_visibility_requires_endpoint_profiles():
         evaluate_ground_visibility(
             satellite_ids=("sat-a",),
             sat_states={"sat-a": _state("sat-a", GeoPosition(0.0, 0.0, 550.0))},
-            gs_positions={"gs-equator": (geodetic_to_ecef(gs_geo), gs_geo)},
+            gs_positions={"gs-equator": (earth_geodetic_to_ecef(gs_geo), gs_geo)},
             gs_min_elevations={"gs-equator": 25.0},
             **_gs_default_kwargs(),
         )
@@ -196,7 +205,7 @@ def test_ground_visibility_missing_propagated_state_fails_loudly():
         evaluate_ground_visibility(
             satellite_ids=("sat-missing",),
             sat_states={},
-            gs_positions={"gs-equator": (geodetic_to_ecef(gs_geo), gs_geo)},
+            gs_positions={"gs-equator": (earth_geodetic_to_ecef(gs_geo), gs_geo)},
             gs_min_elevations={"gs-equator": 25.0},
             **_gs_default_kwargs(sat_ids=("sat-missing",)),
             **_physical_kwargs(sat_id="sat-missing"),
@@ -210,11 +219,12 @@ def test_ground_visibility_missing_tenant_fails_loudly():
         evaluate_ground_visibility(
             satellite_ids=("sat-a",),
             sat_states={"sat-a": _state("sat-a", GeoPosition(0.0, 0.0, 550.0))},
-            gs_positions={"gs-equator": (geodetic_to_ecef(gs_geo), gs_geo)},
+            gs_positions={"gs-equator": (earth_geodetic_to_ecef(gs_geo), gs_geo)},
             gs_min_elevations={"gs-equator": 25.0},
             gs_tenant_ids={},
             gs_reference_bodies={"gs-equator": "earth"},
             candidate_satellite_ids_by_gs={"gs-equator": ("sat-a",)},
+            body_frames=TEST_BODY_FRAMES,
         )
 
 
@@ -225,11 +235,12 @@ def test_ground_visibility_missing_reference_body_fails_loudly():
         evaluate_ground_visibility(
             satellite_ids=("sat-a",),
             sat_states={"sat-a": _state("sat-a", GeoPosition(0.0, 0.0, 550.0))},
-            gs_positions={"gs-equator": (geodetic_to_ecef(gs_geo), gs_geo)},
+            gs_positions={"gs-equator": (earth_geodetic_to_ecef(gs_geo), gs_geo)},
             gs_min_elevations={"gs-equator": 25.0},
             gs_tenant_ids={"gs-equator": "default"},
             gs_reference_bodies={},
             candidate_satellite_ids_by_gs={"gs-equator": ("sat-a",)},
+            body_frames=TEST_BODY_FRAMES,
         )
 
 
@@ -240,7 +251,7 @@ def test_ground_visibility_carries_rejection_reason_for_invisible_pair():
     result = evaluate_ground_visibility(
         satellite_ids=("sat-a",),
         sat_states={"sat-a": _state("sat-a", sat_geo)},
-        gs_positions={"gs-equator": (geodetic_to_ecef(gs_geo), gs_geo)},
+        gs_positions={"gs-equator": (earth_geodetic_to_ecef(gs_geo), gs_geo)},
         gs_min_elevations={"gs-equator": 25.0},
         **_gs_default_kwargs(),
         **_physical_kwargs(),
@@ -253,21 +264,25 @@ def test_ground_visibility_carries_rejection_reason_for_invisible_pair():
 
 def test_longest_remaining_pass_lookahead_uses_real_propagation():
     addressing = AddressingScheme()
+    sat_id = "earth-test-sat-p00s00"
     satellite = constellation_loader.SatelliteNode(
         plane=0,
         slot=0,
-        elements=elements_from_params(550.0, 0.0, 0.0, 0.0),
+        elements=earth_elements_from_params(550.0, 0.0, 0.0, 0.0),
+        node_id=sat_id,
+        central_body="earth",
         isl_terminal_count=2,
         ground_terminal_count=1,
     )
     epoch_unix = 1735689600.0
-    sat_id = addressing.sat_id(0, 0)
     sat_states = propagate_satellites(
         satellites=[satellite],
         addressing=addressing,
         epoch_unix=epoch_unix,
         dt=0.0,
         propagator_id="keplerian-circular",
+        body_frames=TEST_BODY_FRAMES,
+        body_states=EARTH_ORIGIN_BODY_STATES,
     )
     current_geo = sat_states[sat_id].geodetic
     gs_id = "gs-underpass"
@@ -278,7 +293,7 @@ def test_longest_remaining_pass_lookahead_uses_real_propagation():
     result = evaluate_ground_visibility(
         satellite_ids=(sat_id,),
         sat_states=sat_states,
-        gs_positions={gs_id: (geodetic_to_ecef(gs_geo), gs_geo)},
+        gs_positions={gs_id: (earth_geodetic_to_ecef(gs_geo), gs_geo)},
         gs_min_elevations={gs_id: 0.0},
         gs_selection_policy_names={gs_id: "longest-remaining-pass"},
         pass_lookahead=GroundPassLookahead(
@@ -290,14 +305,16 @@ def test_longest_remaining_pass_lookahead_uses_real_propagation():
             horizon_ticks=2,
             horizon_ticks_by_gs={gs_id: 2},
             gs_reference_bodies={gs_id: "earth"},
+            body_frames=TEST_BODY_FRAMES,
             propagator_id="keplerian-circular",
             ground_link_model="geometry_only",
+            active_bodies=frozenset({"earth"}),
         ),
         ground_link_model="geometry_only",
         **_gs_default_kwargs(gs_id, sat_ids=(sat_id,)),
     )
 
-    pair = (gs_id, sat_id)
+    pair = (min(gs_id, sat_id), max(gs_id, sat_id))
     assert result.decisions[pair].visible is True
     visible = result.visible_per_station[gs_id]
     assert len(visible) == 1
@@ -308,7 +325,7 @@ def test_longest_remaining_pass_lookahead_uses_real_propagation():
 def test_longest_remaining_pass_populates_sampled_dwell(monkeypatch):
     gs_geo = GeoPosition(0.0, 0.0, 0.0)
 
-    def fake_check_ground_visibility(_gs_ecef, _gs_geo, sat_ecef, _min_elev):
+    def fake_check_ground_visibility(_gs_ecef, _gs_geo, sat_ecef, _min_elev, **_kwargs):
         # sat-short uses y=1 and drops at t=2; sat-long uses y=2 and drops at t=4.
         visible_until = 2.0 if sat_ecef.y == 1.0 else 4.0
         visible = sat_ecef.x < visible_until
@@ -332,6 +349,7 @@ def test_longest_remaining_pass_populates_sampled_dwell(monkeypatch):
                 EcefVec3(Vec3(0.0, 0.0, 0.0)),
                 GeoPosition(0.0, 0.0, 550.0),
                 "test",
+                "earth",
             ),
             "sat-long": PropagatedState(
                 "sat-long",
@@ -340,6 +358,7 @@ def test_longest_remaining_pass_populates_sampled_dwell(monkeypatch):
                 EcefVec3(Vec3(0.0, 0.0, 0.0)),
                 GeoPosition(0.0, 0.0, 550.0),
                 "test",
+                "earth",
             ),
         }
 
@@ -362,6 +381,7 @@ def test_longest_remaining_pass_populates_sampled_dwell(monkeypatch):
                 EcefVec3(Vec3(0.0, 0.0, 0.0)),
                 GeoPosition(0.0, 0.0, 550.0),
                 "test",
+                "earth",
             ),
             "sat-long": PropagatedState(
                 "sat-long",
@@ -370,9 +390,10 @@ def test_longest_remaining_pass_populates_sampled_dwell(monkeypatch):
                 EcefVec3(Vec3(0.0, 0.0, 0.0)),
                 GeoPosition(0.0, 0.0, 550.0),
                 "test",
+                "earth",
             ),
         },
-        gs_positions={"gs-equator": (geodetic_to_ecef(gs_geo), gs_geo)},
+        gs_positions={"gs-equator": (earth_geodetic_to_ecef(gs_geo), gs_geo)},
         gs_min_elevations={"gs-equator": 25.0},
         gs_selection_policy_names={"gs-equator": "longest-remaining-pass"},
         pass_lookahead=GroundPassLookahead(
@@ -384,8 +405,10 @@ def test_longest_remaining_pass_populates_sampled_dwell(monkeypatch):
             horizon_ticks=5,
             horizon_ticks_by_gs={"gs-equator": 5},
             gs_reference_bodies={"gs-equator": "earth"},
+            body_frames=TEST_BODY_FRAMES,
             propagator_id="test",
             ground_link_model="geometry_only",
+            active_bodies=frozenset({"earth"}),
         ),
         ground_link_model="geometry_only",
         **_gs_default_kwargs(sat_ids=("sat-short", "sat-long")),
@@ -426,6 +449,7 @@ def test_longest_remaining_pass_uses_each_ground_station_horizon(monkeypatch):
                 EcefVec3(Vec3(0.0, 0.0, 0.0)),
                 GeoPosition(0.0, 0.0, 550.0),
                 "test",
+                "earth",
             )
         }
 
@@ -449,11 +473,12 @@ def test_longest_remaining_pass_uses_each_ground_station_horizon(monkeypatch):
                 EcefVec3(Vec3(0.0, 0.0, 0.0)),
                 GeoPosition(0.0, 0.0, 550.0),
                 "test",
+                "earth",
             )
         },
         gs_positions={
-            "gs-short": (geodetic_to_ecef(gs_geo), gs_geo),
-            "gs-long": (geodetic_to_ecef(gs_geo), gs_geo),
+            "gs-short": (earth_geodetic_to_ecef(gs_geo), gs_geo),
+            "gs-long": (earth_geodetic_to_ecef(gs_geo), gs_geo),
         },
         gs_min_elevations={"gs-short": 25.0, "gs-long": 25.0},
         gs_tenant_ids={"gs-short": "default", "gs-long": "default"},
@@ -471,14 +496,17 @@ def test_longest_remaining_pass_uses_each_ground_station_horizon(monkeypatch):
             horizon_ticks=3,
             horizon_ticks_by_gs={"gs-short": 1, "gs-long": 3},
             gs_reference_bodies={"gs-short": "earth", "gs-long": "earth"},
+            body_frames=TEST_BODY_FRAMES,
             propagator_id="test",
             ground_link_model="geometry_only",
+            active_bodies=frozenset({"earth"}),
         ),
         ground_link_model="geometry_only",
         candidate_satellite_ids_by_gs={
             "gs-short": ("sat-a",),
             "gs-long": ("sat-a",),
         },
+        body_frames=TEST_BODY_FRAMES,
     )
 
     assert result.visible_per_station["gs-short"][0].remaining_visible_s == 1.0
@@ -492,7 +520,7 @@ def test_longest_remaining_pass_without_lookahead_fails_loudly():
         evaluate_ground_visibility(
             satellite_ids=("sat-a",),
             sat_states={"sat-a": _state("sat-a", GeoPosition(0.0, 0.0, 550.0))},
-            gs_positions={"gs-equator": (geodetic_to_ecef(gs_geo), gs_geo)},
+            gs_positions={"gs-equator": (earth_geodetic_to_ecef(gs_geo), gs_geo)},
             gs_min_elevations={"gs-equator": 25.0},
             gs_selection_policy_names={"gs-equator": "longest-remaining-pass"},
             **_gs_default_kwargs(),
@@ -507,7 +535,7 @@ def test_longest_remaining_pass_lookahead_requires_reference_body():
         evaluate_ground_visibility(
             satellite_ids=("sat-a",),
             sat_states={"sat-a": _state("sat-a", GeoPosition(0.0, 0.0, 550.0))},
-            gs_positions={"gs-equator": (geodetic_to_ecef(gs_geo), gs_geo)},
+            gs_positions={"gs-equator": (earth_geodetic_to_ecef(gs_geo), gs_geo)},
             gs_min_elevations={"gs-equator": 25.0},
             gs_selection_policy_names={"gs-equator": "longest-remaining-pass"},
             pass_lookahead=GroundPassLookahead(
@@ -519,8 +547,10 @@ def test_longest_remaining_pass_lookahead_requires_reference_body():
                 horizon_ticks=5,
                 horizon_ticks_by_gs={"gs-equator": 5},
                 gs_reference_bodies={},
+                body_frames=TEST_BODY_FRAMES,
                 propagator_id="test",
                 ground_link_model="geometry_only",
+                active_bodies=frozenset({"earth"}),
             ),
             ground_link_model="geometry_only",
             **_gs_default_kwargs(),
@@ -530,7 +560,7 @@ def test_longest_remaining_pass_lookahead_requires_reference_body():
 def test_satellite_profiles_select_matching_target_body_for_cislunar_relay():
     gs_id = "gs-luna"
     sat_id = "sat-relay"
-    luna_radius = LUNA_BODY_FRAME.equatorial_radius_km
+    luna_radius = LUNA_TEST_BODY_FRAME.equatorial_radius_km
     gs_geo = GeoPosition(0.0, 0.0, 0.0)
     gs_ecef = EcefVec3(Vec3(luna_radius, 0.0, 0.0))
     sat_state = PropagatedState(
@@ -540,6 +570,7 @@ def test_satellite_profiles_select_matching_target_body_for_cislunar_relay():
         EcefVec3(Vec3(0.0, 0.0, 0.0)),
         GeoPosition(0.0, 0.0, 550.0),
         "test-fixture",
+        "luna",
     )
 
     result = evaluate_ground_visibility(
@@ -586,9 +617,10 @@ def test_satellite_profiles_select_matching_target_body_for_cislunar_relay():
             )
         },
         candidate_satellite_ids_by_gs={gs_id: (sat_id,)},
+        body_frames=TEST_BODY_FRAMES,
     )
 
-    decision = result.decisions[(gs_id, sat_id)]
+    decision = result.decisions[(min(gs_id, sat_id), max(gs_id, sat_id))]
     assert decision.visible
     assert decision.applied_sat_terminal_profile == f"{sat_id}.ground_terminals[1]"
     assert decision.reference_body == "luna"
@@ -652,7 +684,12 @@ satellite_type:
             },
         }
     )
-    satellites = constellation_loader.expand_constellation(constellation)
+    satellites = constellation_loader.expand_constellation(
+        constellation,
+        body_frame=EARTH_TEST_BODY_FRAME,
+    )
+    sat_id = "earth-relay-sat-p00s00"
+    satellites[0].node_id = sat_id
     addressing = AddressingScheme()
     gs_file = GroundStationFile(
         default_terminals=[
@@ -684,12 +721,12 @@ satellite_type:
         propagator_id="keplerian-circular",
         ground_scheduling=_ground_scheduling(),
         ground_link_model="terminal_physics",
-        ground_candidate_satellites_by_gs={addressing.gs_id("luna"): (addressing.sat_id(0, 0),)},
+        ground_candidate_satellites_by_gs={addressing.gs_id("luna"): (sat_id,)},
+        body_frames=TEST_BODY_FRAMES,
     )
 
-    sat_id = addressing.sat_id(0, 0)
     gs_id = addressing.gs_id("luna")
-    luna_radius = LUNA_BODY_FRAME.equatorial_radius_km
+    luna_radius = LUNA_TEST_BODY_FRAME.equatorial_radius_km
     gs_geo = GeoPosition(0.0, 0.0, 0.0)
     result = evaluate_ground_visibility(
         satellite_ids=(sat_id,),
@@ -701,6 +738,7 @@ satellite_type:
                 EcefVec3(Vec3(0.0, 0.0, 0.0)),
                 GeoPosition(0.0, 0.0, 550.0),
                 "test-fixture",
+                "luna",
             )
         },
         gs_positions={gs_id: (EcefVec3(Vec3(luna_radius, 0.0, 0.0)), gs_geo)},
@@ -711,9 +749,10 @@ satellite_type:
         gs_terminal_profiles=ctx.gs_terminal_profiles,
         sat_ground_terminal_profiles=ctx.sat_ground_terminal_profiles,
         candidate_satellite_ids_by_gs=ctx.ground_candidate_satellites_by_gs,
+        body_frames=TEST_BODY_FRAMES,
     )
 
-    decision = result.decisions[(gs_id, sat_id)]
+    decision = result.decisions[(min(gs_id, sat_id), max(gs_id, sat_id))]
     assert decision.visible
     assert decision.reference_body == "luna"
     assert decision.applied_sat_terminal_profile == f"{sat_id}.ground_terminals[1]"

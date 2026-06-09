@@ -2,19 +2,19 @@
 # Licensed under the Apache License, Version 2.0. See LICENSE file.
 """OME propagation engine boundary.
 
-The production implementations are explicit circular Keplerian propagation,
-circular mean-element J2 secular propagation, and SGP4/TLE propagation. Each
-model is selected by its own propagator ID with its own validation and error
-budget; this module must never silently downgrade an unsupported model into
-Keplerian.
+The production implementations are explicit two-body Keplerian propagation, J2
+mean-element secular propagation, and SGP4/TLE propagation. Each model is
+selected by its own propagator ID with its own validation and error budget; this
+module must never silently downgrade an unsupported model into Keplerian.
 """
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal
 
-from nodalarc.body_frames import body_frame_for
+from nodalarc.body_frames import BodyFrame
 from nodalarc.constellation_loader import SatelliteNode, satellite_node_id
 from nodalarc.ephemeris_runtime import CommonBodyState
 from nodalarc.frames import EcefVec3, Vec3
@@ -28,7 +28,8 @@ from ome.propagator import (
     propagate_sgp4_tle,
 )
 
-PropagatorId = Literal["keplerian-circular", "j2-mean-elements", "sgp4-tle"]
+PropagatorId = Literal["two-body", "keplerian-circular", "j2-mean-elements", "sgp4-tle"]
+SessionPropagatorId = PropagatorId | Literal["mixed"]
 
 
 @dataclass(frozen=True)
@@ -41,10 +42,10 @@ class PropagatedState:
     velocity_ecef_km_s: EcefVec3
     geodetic: GeoPosition
     propagator_id: PropagatorId
+    central_body: str
     position_common_km: EcefVec3 | None = None
     velocity_common_km_s: EcefVec3 | None = None
     body_origin_common_km: EcefVec3 | None = None
-    central_body: str = "earth"
 
     def __post_init__(self) -> None:
         if self.position_common_km is None:
@@ -59,18 +60,6 @@ class PropagatedState:
             )
 
 
-def _zero_body_state(body_id: str = "earth") -> CommonBodyState:
-    return CommonBodyState(
-        body_id=body_id,
-        position_km=Vec3(0.0, 0.0, 0.0),
-        velocity_km_s=Vec3(0.0, 0.0, 0.0),
-        provider="none",
-        kernel_id=f"{body_id}-origin",
-        quality_tier="analytic",
-        frame="gcrs-earth-origin",
-    )
-
-
 def _common_vec(origin: Vec3, local_inertial: Vec3) -> EcefVec3:
     return EcefVec3(
         Vec3(
@@ -81,14 +70,31 @@ def _common_vec(origin: Vec3, local_inertial: Vec3) -> EcefVec3:
     )
 
 
+def _satellite_propagator_id(sat, session_propagator_id: SessionPropagatorId) -> PropagatorId:
+    sat_propagator_id = getattr(sat, "propagator_id", None)
+    if sat_propagator_id is not None:
+        if sat_propagator_id not in (
+            "two-body",
+            "keplerian-circular",
+            "j2-mean-elements",
+            "sgp4-tle",
+        ):
+            raise ValueError(f"Unsupported satellite propagator: {sat_propagator_id!r}")
+        return sat_propagator_id
+    if session_propagator_id == "mixed":
+        raise ValueError("OME mixed propagation requires every satellite to carry propagator_id")
+    return session_propagator_id
+
+
 def propagate_satellites(
     *,
     satellites: list[SatelliteNode],
     addressing: AddressingScheme,
     epoch_unix: float,
     dt: float,
-    propagator_id: PropagatorId,
-    body_states: dict[str, CommonBodyState] | None = None,
+    propagator_id: SessionPropagatorId,
+    body_frames: Mapping[str, BodyFrame],
+    body_states: Mapping[str, CommonBodyState],
 ) -> dict[str, PropagatedState]:
     """Propagate all satellites for one tick.
 
@@ -96,30 +102,43 @@ def propagate_satellites(
     requests require actual TLE records on every satellite; missing records
     fail before any lower-fidelity substitute can be used.
     """
-    if propagator_id not in ("keplerian-circular", "j2-mean-elements", "sgp4-tle"):
+    if propagator_id not in (
+        "mixed",
+        "two-body",
+        "keplerian-circular",
+        "j2-mean-elements",
+        "sgp4-tle",
+    ):
         raise ValueError(f"Unsupported OME propagator: {propagator_id!r}")
 
     sim_time_unix = epoch_unix + dt
-    states_by_body = dict(body_states or {"earth": _zero_body_state("earth")})
+    states_by_body = dict(body_states)
     states: dict[str, PropagatedState] = {}
     for sat in satellites:
         node_id = satellite_node_id(sat, addressing)
-        central_body = getattr(sat, "central_body", "earth")
-        body_frame = body_frame_for(central_body)
+        central_body = sat.central_body
+        sat_propagator_id = _satellite_propagator_id(sat, propagator_id)
+        try:
+            body_frame = body_frames[central_body]
+        except KeyError as exc:
+            raise ValueError(
+                f"Propagation missing resolved body primitive facts for central_body={central_body!r} "
+                f"while propagating {node_id!r}"
+            ) from exc
         body_state = states_by_body.get(central_body)
         if body_state is None:
             raise ValueError(
                 f"Propagation missing common-frame ephemeris state for central_body={central_body!r} "
                 f"while propagating {node_id!r}"
             )
-        if propagator_id == "keplerian-circular":
+        if sat_propagator_id in ("two-body", "keplerian-circular"):
             pos_ecef, vel_ecef, geo, pos_inertial, vel_inertial = propagate_keplerian_for_body(
                 sat.elements,
                 epoch_unix,
                 dt,
                 body_frame=body_frame,
             )
-        elif propagator_id == "j2-mean-elements":
+        elif sat_propagator_id == "j2-mean-elements":
             (
                 pos_ecef,
                 vel_ecef,
@@ -148,6 +167,7 @@ def propagate_satellites(
                 sat.tle_line_2,
                 epoch_unix,
                 dt,
+                body_frame=body_frame,
             )
             pos_inertial = pos_ecef
             vel_inertial = vel_ecef
@@ -163,7 +183,7 @@ def propagate_satellites(
             body_origin_common_km=EcefVec3(body_state.position_km),
             central_body=central_body,
             geodetic=geo,
-            propagator_id=propagator_id,
+            propagator_id=sat_propagator_id,
         )
     return states
 

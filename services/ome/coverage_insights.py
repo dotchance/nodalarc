@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import math
 
-from nodalarc.constants import EARTH_RADIUS_KM
 from nodalarc.models.coverage import CoverageInsight, GsStationPreview, IslFailureBreakdown
 
 
@@ -52,6 +51,7 @@ def describe_gs_coverage(
     station_lat: float,
     inclination_deg: float,
     altitude_km: float,
+    body_radius_km: float,
     coverage_pct: float,
     longest_gap_s: float,
     min_elevation_deg: float = 25.0,
@@ -60,7 +60,7 @@ def describe_gs_coverage(
 
     Always returns a meaningful explanation. Uses orbital geometry.
     """
-    footprint_deg = _footprint_half_angle(altitude_km)
+    footprint_deg = _footprint_half_angle(altitude_km, body_radius_km)
     max_visible_lat = inclination_deg + footprint_deg
     abs_lat = abs(station_lat)
 
@@ -74,7 +74,12 @@ def describe_gs_coverage(
         )
 
     if abs_lat > inclination_deg:
-        max_elev = _max_elevation_at_latitude(abs_lat, inclination_deg, altitude_km)
+        max_elev = _max_elevation_at_latitude(
+            abs_lat,
+            inclination_deg,
+            altitude_km,
+            body_radius_km,
+        )
         return (
             f"At {abs_lat:.0f}\u00b0 latitude, this station is beyond the orbital "
             f"inclination ({inclination_deg:.0f}\u00b0) but within the footprint edge "
@@ -90,7 +95,12 @@ def describe_gs_coverage(
         )
 
     if abs_lat > inclination_deg - 10:
-        max_elev = _max_elevation_at_latitude(abs_lat, inclination_deg, altitude_km)
+        max_elev = _max_elevation_at_latitude(
+            abs_lat,
+            inclination_deg,
+            altitude_km,
+            body_radius_km,
+        )
         gap_desc = _gap_description(longest_gap_s)
         return (
             f"At {abs_lat:.0f}\u00b0 latitude, near the edge of the {inclination_deg:.0f}\u00b0 "
@@ -103,7 +113,12 @@ def describe_gs_coverage(
             )
         )
 
-    max_elev = _max_elevation_at_latitude(abs_lat, inclination_deg, altitude_km)
+    max_elev = _max_elevation_at_latitude(
+        abs_lat,
+        inclination_deg,
+        altitude_km,
+        body_radius_km,
+    )
     gap_desc = _gap_description(longest_gap_s)
 
     if coverage_pct >= 95:
@@ -135,14 +150,15 @@ def describe_gs_coverage(
 # --- Private helpers ---
 
 
-def _footprint_half_angle(altitude_km: float) -> float:
-    return math.degrees(math.acos(EARTH_RADIUS_KM / (EARTH_RADIUS_KM + altitude_km)))
+def _footprint_half_angle(altitude_km: float, body_radius_km: float) -> float:
+    return math.degrees(math.acos(body_radius_km / (body_radius_km + altitude_km)))
 
 
 def _max_elevation_at_latitude(
     station_lat_abs: float,
     inclination_deg: float,
     altitude_km: float,
+    body_radius_km: float,
 ) -> float:
     if inclination_deg <= 0:
         return 0.0
@@ -150,7 +166,7 @@ def _max_elevation_at_latitude(
     if lat_offset <= 0:
         return 90.0
     delta_rad = math.radians(lat_offset)
-    ratio = EARTH_RADIUS_KM / (EARTH_RADIUS_KM + altitude_km)
+    ratio = body_radius_km / (body_radius_km + altitude_km)
     elev_rad = math.atan2(math.cos(delta_rad) - ratio, math.sin(delta_rad))
     return max(0.0, min(90.0, math.degrees(elev_rad)))
 

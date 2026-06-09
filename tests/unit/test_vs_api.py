@@ -27,6 +27,8 @@ from nodalarc.models.vs_api import (
 from nodalarc.nats_channels import STREAM_OME_EVENTS
 from vs_api.session_context import SessionContext, _derive_link_type, _link_key
 
+from tests.physics_fixtures import EARTH_TEST_EPHEMERIS_BODY_FRAMES
+
 ISS_TLE_EPOCH = 1615896900.000275
 ISS_TLE_LINE_1 = "1 25544U 98067A   21075.51041667  .00001264  00000-0  29660-4 0  9993"
 ISS_TLE_LINE_2 = "2 25544  51.6442  21.5417 0002426  95.1670  21.8444 15.48974333273145"
@@ -355,6 +357,7 @@ class TestSessionContextNetworkIdentity:
             epoch_id=0,
             sim_time=datetime(2026, 6, 8, tzinfo=UTC),
             epoch_unix=1780876800.0,
+            body_frames=EARTH_TEST_EPHEMERIS_BODY_FRAMES,
             nodes={
                 active_id: EphemerisNodeFixed(
                     lat_deg=39.7392,
@@ -364,6 +367,8 @@ class TestSessionContextNetworkIdentity:
                     local_node_id="earth-us-co-denver-leo-gateway",
                     namespace="ground",
                     tags=("leo_gateway",),
+                    reference_body="earth",
+                    frame_id="earth",
                 )
             },
         )
@@ -498,6 +503,8 @@ class TestSnapshotModel:
                     prefix=None,
                     min_elevation_deg=None,
                     beam_falloff_exponent=None,
+                    reference_body="earth",
+                    frame_id="earth",
                 )
             ],
             links=[
@@ -685,6 +692,7 @@ class TestEphemerisPositionPropagation:
             epoch_id=0,
             sim_time=datetime.fromtimestamp(ISS_TLE_EPOCH, UTC),
             epoch_unix=ISS_TLE_EPOCH,
+            body_frames=EARTH_TEST_EPHEMERIS_BODY_FRAMES,
             nodes={
                 "sat-P00S00": EphemerisNodeTLE(
                     tle_line_1=ISS_TLE_LINE_1,
@@ -692,6 +700,8 @@ class TestEphemerisPositionPropagation:
                     plane=0,
                     slot=0,
                     norad_id=25544,
+                    reference_body="earth",
+                    frame_id="earth",
                 )
             },
         )
@@ -710,6 +720,7 @@ class TestEphemerisPositionPropagation:
             epoch_id=0,
             sim_time=datetime(2025, 1, 1, tzinfo=UTC),
             epoch_unix=1735689600.0,
+            body_frames=EARTH_TEST_EPHEMERIS_BODY_FRAMES,
             nodes={
                 "ground-gs-denver": EphemerisNodeFixed(
                     lat_deg=39.74,
@@ -719,6 +730,8 @@ class TestEphemerisPositionPropagation:
                     local_node_id="gs-denver",
                     namespace="ground",
                     tags=("earth", "ground", "demo"),
+                    reference_body="earth",
+                    frame_id="earth",
                 )
             },
         )

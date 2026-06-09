@@ -56,6 +56,7 @@ class TestComputeStepMatchesWindow:
             ground_candidate_satellites_by_gs=ground_candidates,
             step_seconds=step_seconds,
             ground_link_model=session.ground_link_model,
+            body_frames=session.body_frames,
         )
         window_events = window.events
 
@@ -69,6 +70,7 @@ class TestComputeStepMatchesWindow:
             ground_scheduling=session.scheduling.ground,
             ground_candidate_satellites_by_gs=ground_candidates,
             ground_link_model=session.ground_link_model,
+            body_frames=session.body_frames,
         )
         isl_state: dict = {}
         gs_state: dict = {}
@@ -114,6 +116,7 @@ class TestComputeStepMatchesWindow:
             ground_candidate_satellites_by_gs=ground_candidates,
             step_seconds=step_seconds,
             ground_link_model=session.ground_link_model,
+            body_frames=session.body_frames,
         )
 
         ctx = build_step_context(
@@ -125,6 +128,7 @@ class TestComputeStepMatchesWindow:
             ground_scheduling=session.scheduling.ground,
             ground_candidate_satellites_by_gs=ground_candidates,
             ground_link_model=session.ground_link_model,
+            body_frames=session.body_frames,
         )
         isl_state: dict = {}
         gs_state: dict = {}
@@ -154,6 +158,7 @@ class TestComputeStepMatchesWindow:
             propagator_id="j2-mean-elements",
             ground_candidate_satellites_by_gs=ground_candidates,
             ground_link_model=session.ground_link_model,
+            body_frames=session.body_frames,
         )
 
         window = precompute_timeline_window_from_context(
@@ -195,6 +200,7 @@ class TestComputeStepMatchesWindow:
                 propagator_id=session.orbit.propagator,
                 ground_candidate_satellites_by_gs=ground_candidates,
                 ground_link_model=session.ground_link_model,
+                body_frames=session.body_frames,
             )
 
     def test_visibility_transitions_only_on_state_change(self):
@@ -212,6 +218,7 @@ class TestComputeStepMatchesWindow:
             ground_scheduling=session.scheduling.ground,
             ground_candidate_satellites_by_gs=ground_candidates,
             ground_link_model=session.ground_link_model,
+            body_frames=session.body_frames,
         )
         isl_state: dict = {}
         gs_state: dict = {}
@@ -250,6 +257,7 @@ class TestComputeStepMatchesWindow:
             ground_scheduling=session.scheduling.ground,
             ground_candidate_satellites_by_gs=ground_candidates,
             ground_link_model=session.ground_link_model,
+            body_frames=session.body_frames,
         )
         isl_state: dict = {}
         gs_state: dict = {}
@@ -286,6 +294,7 @@ class TestComputeStepMatchesWindow:
             ground_scheduling=session.scheduling.ground,
             ground_candidate_satellites_by_gs=ground_candidates,
             ground_link_model=session.ground_link_model,
+            body_frames=session.body_frames,
         )
         isl_state: dict = {}
         gs_state: dict = {}
@@ -343,6 +352,7 @@ class TestComputeStepMatchesWindow:
             ground_scheduling=session.scheduling.ground,
             ground_candidate_satellites_by_gs=ground_candidates,
             ground_link_model=session.ground_link_model,
+            body_frames=session.body_frames,
         )
 
         result = compute_step(ctx, epoch_unix, 0, step_seconds, 0.0, {}, {})
@@ -384,6 +394,7 @@ class TestComputeStepMatchesWindow:
             ground_scheduling=session.scheduling.ground,
             ground_candidate_satellites_by_gs=ground_candidates,
             ground_link_model=session.ground_link_model,
+            body_frames=session.body_frames,
         )
         result = compute_step(ctx, epoch_unix, 0, step_seconds, 0.0, {}, {})
         allocation = result.ground_allocation

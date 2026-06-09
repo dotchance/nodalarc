@@ -173,6 +173,24 @@ class ResolvedEphemeris(BaseModel):
     kernels: tuple[ResolvedEphemerisKernel, ...] = Field(min_length=1)
 
 
+class ResolvedBodyFacts(BaseModel):
+    """Primitive-owned physical facts for one resolved body.
+
+    Body primitives own these values. Runtime consumers must read them from the
+    resolved session, not from hard-coded Earth/Luna tables.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    body_id: NonEmptyReference
+    display_name: str
+    gravitational_parameter_km3_s2: float = Field(gt=0, allow_inf_nan=False)
+    mean_radius_km: float = Field(gt=0, allow_inf_nan=False)
+    equatorial_radius_km: float = Field(gt=0, allow_inf_nan=False)
+    polar_radius_km: float = Field(gt=0, allow_inf_nan=False)
+    reference: str
+
+
 class ResolvedLinkCandidate(BaseModel):
     """One declared static candidate pair with concrete runtime interfaces."""
 
@@ -356,6 +374,7 @@ class ResolvedSession(BaseModel):
     identity_mode: IdentityMode
     session: SessionMeta
     nodes: tuple[ResolvedNode, ...]
+    bodies: tuple[ResolvedBodyFacts, ...]
     link_rules: tuple[ResolvedLinkRule, ...]
     link_candidates: tuple[ResolvedLinkCandidate, ...] = ()
     routing_domains: tuple[ResolvedRoutingDomain, ...] = ()
@@ -375,6 +394,24 @@ class ResolvedSession(BaseModel):
             dupes = sorted({i for i in ids if ids.count(i) > 1})
             raise ValueError(f"duplicate runtime node_id(s): {dupes}")
         node_segment = {n.node_id: n.segment_id for n in self.nodes}
+
+        body_ids = [body.body_id for body in self.bodies]
+        if len(set(body_ids)) != len(body_ids):
+            dupes = sorted({body_id for body_id in body_ids if body_ids.count(body_id) > 1})
+            raise ValueError(f"duplicate resolved body primitive(s): {dupes}")
+        resolved_bodies = set(body_ids)
+        active_bodies = {
+            body
+            for node in self.nodes
+            for body in (node.central_body, node.reference_body)
+            if body is not None
+        }
+        missing_bodies = sorted(active_bodies - resolved_bodies)
+        if missing_bodies:
+            raise ValueError(
+                "resolved session is missing body primitive facts for active body/bodies: "
+                f"{missing_bodies}"
+            )
 
         domain_ids = [domain.domain_id for domain in self.routing_domains]
         if len(set(domain_ids)) != len(domain_ids):

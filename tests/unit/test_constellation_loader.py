@@ -4,14 +4,19 @@ from __future__ import annotations
 
 import math
 
-from nodalarc.constants import EARTH_RADIUS_KM
 from nodalarc.constellation_loader import expand_constellation
 from nodalarc.models.constellation import ConstellationConfig, ParametricConstellation
 from pydantic import TypeAdapter
 
 from tests.conftest import FIXTURES_DIR
+from tests.physics_fixtures import EARTH_TEST_BODY_FRAME
 
 adapter = TypeAdapter(ConstellationConfig)
+EARTH_RADIUS_KM = EARTH_TEST_BODY_FRAME.mean_radius_km
+
+
+def _expand(config: ConstellationConfig):
+    return expand_constellation(config, body_frame=EARTH_TEST_BODY_FRAME)
 
 
 def _terminal_config(isl_count: int, ground_count: int = 1) -> dict:
@@ -114,23 +119,23 @@ def _explicit() -> ConstellationConfig:
 
 class TestParametricExpansion:
     def test_starlink_early_count(self):
-        sats = expand_constellation(_parametric())
+        sats = _expand(_parametric())
         assert len(sats) == 44
 
     def test_starlink_early_planes_and_slots(self):
-        sats = expand_constellation(_parametric())
+        sats = _expand(_parametric())
         assert {s.plane for s in sats} == {0, 1, 2, 3}
         for plane in range(4):
             assert {s.slot for s in sats if s.plane == plane} == set(range(11))
 
     def test_starlink_early_altitude(self):
-        sats = expand_constellation(_parametric())
+        sats = _expand(_parametric())
         for sat in sats:
             alt = sat.elements.semi_major_axis_km - EARTH_RADIUS_KM
             assert abs(alt - 550.0) < 0.01
 
     def test_starlink_early_raan_spacing(self):
-        sats = expand_constellation(_parametric())
+        sats = _expand(_parametric())
         for plane in range(4):
             sat = next(s for s in sats if s.plane == plane and s.slot == 0)
             assert abs(sat.elements.raan_rad - math.radians(plane * 45.0)) < 1e-10
@@ -142,7 +147,7 @@ class TestParametricExpansion:
         assert raan_spread < 360.0
 
     def test_iridium_66_count(self):
-        sats = expand_constellation(
+        sats = _expand(
             _parametric(
                 name="iridium-66",
                 planes=6,
@@ -171,7 +176,7 @@ class TestParametricExpansion:
         assert raan_spread < 360.0
 
     def test_terminal_counts(self):
-        sats = expand_constellation(_parametric())
+        sats = _expand(_parametric())
         for sat in sats:
             assert sat.isl_terminal_count == 4
             assert sat.ground_terminal_count == 1
@@ -179,14 +184,14 @@ class TestParametricExpansion:
 
 class TestExplicitExpansion:
     def test_custom_example_count(self):
-        assert len(expand_constellation(_explicit())) == 4
+        assert len(_expand(_explicit())) == 4
 
     def test_custom_example_planes(self):
-        sats = expand_constellation(_explicit())
+        sats = _expand(_explicit())
         assert {s.plane for s in sats} == {0, 1}
 
     def test_custom_example_orbital_elements(self):
-        sats = expand_constellation(_explicit())
+        sats = _expand(_explicit())
         p0s0 = next(s for s in sats if s.plane == 0 and s.slot == 0)
         assert abs(p0s0.elements.semi_major_axis_km - (EARTH_RADIUS_KM + 550.0)) < 0.01
         assert abs(p0s0.elements.inclination_rad - math.radians(53.0)) < 1e-10
@@ -194,7 +199,7 @@ class TestExplicitExpansion:
         assert abs(p0s0.elements.true_anomaly_rad) < 1e-10
 
     def test_custom_example_terminal_counts(self):
-        sats = expand_constellation(_explicit())
+        sats = _expand(_explicit())
         for sat in sats:
             assert sat.isl_terminal_count == 2
             assert sat.ground_terminal_count == 1
@@ -212,7 +217,7 @@ class TestTLEExpansion:
             }
         )
 
-        sats = expand_constellation(config)
+        sats = _expand(config)
 
         assert len(sats) == 2
         assert [sat.norad_id for sat in sats] == [25544, 23455]

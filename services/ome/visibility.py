@@ -17,7 +17,7 @@ from __future__ import annotations
 import math
 from typing import Literal, NamedTuple
 
-from nodalarc.body_frames import EARTH_BODY_FRAME, BodyFrame
+from nodalarc.body_frames import BodyFrame
 from nodalarc.geo import compute_range_km
 from nodalarc.models.link_decisions import (
     GroundVisibilityRejectingEndpoint,
@@ -92,7 +92,7 @@ class ScheduledLink(NamedTuple):
 def has_line_of_sight(
     pos_a: Vec3,
     pos_b: Vec3,
-    body_frame: BodyFrame = EARTH_BODY_FRAME,
+    body_frame: BodyFrame,
 ) -> bool:
     """Check if two points have line of sight through a body-fixed frame."""
     dx = pos_b.x - pos_a.x
@@ -359,7 +359,7 @@ def compute_topocentric_angular_velocity(
     observer_ecef: Vec3,
     target_ecef: Vec3,
     target_velocity_km_s: Vec3,
-    body_frame: BodyFrame = EARTH_BODY_FRAME,
+    body_frame: BodyFrame,
     velocity_frame: Literal["body_fixed", "inertial"] = "body_fixed",
 ) -> float:
     """Apparent angular rate in the body-fixed topocentric frame of the observer.
@@ -402,9 +402,10 @@ def check_isl_visibility(
     pos_b: Vec3,
     vel_b: Vec3,
     max_range_km: float,
+    *,
+    body_frame: BodyFrame,
     max_tracking_rate_deg_s: float | None = None,
     field_of_regard_deg: float = 360.0,
-    body_frame: BodyFrame = EARTH_BODY_FRAME,
     polar_seam_enabled: bool = False,
     latitude_threshold_deg: float = 70.0,
     geo_a: GeoPosition | None = None,
@@ -452,6 +453,7 @@ def check_ground_visibility(
     sat_ecef: Vec3,
     min_elevation_deg: float = 25.0,
     *,
+    body_frame: BodyFrame,
     max_range_km: float | None = None,
     gs_max_range_km: float | None = None,
     sat_max_range_km: float | None = None,
@@ -463,7 +465,6 @@ def check_ground_visibility(
     gs_max_tracking_rate_deg_s: float | None = None,
     sat_max_tracking_rate_deg_s: float | None = None,
     sat_velocity_ecef_km_s: Vec3 | None = None,
-    body_frame: BodyFrame = EARTH_BODY_FRAME,
 ) -> GroundVisibility:
     """Check ground-station-to-satellite visibility with physics constraints.
 

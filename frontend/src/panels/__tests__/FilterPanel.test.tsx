@@ -27,6 +27,8 @@ function node(node_id: string, segment_id: string, tags: string[]): NodeState {
     beam_falloff_exponent: null,
     segment_id,
     tags,
+    reference_body: "earth",
+    frame_id: "earth",
   };
 }
 

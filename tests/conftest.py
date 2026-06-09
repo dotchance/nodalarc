@@ -221,6 +221,8 @@ def load_runtime_ome_test_inputs(*, origin: str, name: str = "earth-leo-simple")
         orbit=SimpleNamespace(propagator=runtime.propagator_id),
         scheduling=SimpleNamespace(ground=runtime.ground_scheduling),
         ground_link_model=runtime.ground_link_model,
+        node_metadata=runtime.node_metadata,
+        body_frames=runtime.body_frames,
     )
     return (
         session_view,

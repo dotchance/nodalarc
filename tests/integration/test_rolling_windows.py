@@ -13,11 +13,11 @@ import json
 from pathlib import Path
 
 import pytest
-from nodalarc.body_frames import body_frame_for
 from nodalarc.orbital import elements_from_params_for_radius
 from nodalarc.propagator import orbital_period_for_body
 
 from tests.conftest import build_segment_session_dict
+from tests.physics_fixtures import EARTH_TEST_BODY_FRAME
 
 pytestmark = pytest.mark.integration
 
@@ -25,7 +25,7 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent
 
 
 def _custom_example_period_s() -> float:
-    body_frame = body_frame_for("earth")
+    body_frame = EARTH_TEST_BODY_FRAME
     elements = elements_from_params_for_radius(
         altitude_km=550.0,
         inclination_deg=53.0,
@@ -89,7 +89,7 @@ def four_node_timeline(tmp_path):
         yaml.dump(session, f)
         session_path = f.name
 
-    path = ome_run(session_path, str(tmp_path))
+    path = ome_run(session_path, str(tmp_path), run_id="test-rolling-window")
     Path(session_path).unlink(missing_ok=True)
     return path
 

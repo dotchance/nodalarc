@@ -50,6 +50,7 @@ from scheduler.dispatcher import ActiveLinkInfo, Dispatcher
 from scheduler.pod_locator import PodLocationMap
 
 from tests.conftest import build_segment_session_dict
+from tests.physics_fixtures import EARTH_TEST_EPHEMERIS_BODY_FRAMES
 
 BASE = datetime(2026, 5, 27, 12, 0, 0, tzinfo=UTC)
 OLD = ("gs-multi", "sat-old")
@@ -133,10 +134,29 @@ def _ephemeris(*, epoch_id: int, sim_time: datetime) -> SessionEphemeris:
         epoch_id=epoch_id,
         sim_time=sim_time,
         epoch_unix=sim_time.timestamp(),
+        body_frames=EARTH_TEST_EPHEMERIS_BODY_FRAMES,
         nodes={
-            "gs-multi": EphemerisNodeFixed(lat_deg=39.0, lon_deg=-105.0, alt_km=1.6),
-            "sat-old": EphemerisNodeFixed(lat_deg=39.1, lon_deg=-105.0, alt_km=550.0),
-            "sat-new": EphemerisNodeFixed(lat_deg=39.2, lon_deg=-105.0, alt_km=550.0),
+            "gs-multi": EphemerisNodeFixed(
+                lat_deg=39.0,
+                lon_deg=-105.0,
+                alt_km=1.6,
+                reference_body="earth",
+                frame_id="earth",
+            ),
+            "sat-old": EphemerisNodeFixed(
+                lat_deg=39.1,
+                lon_deg=-105.0,
+                alt_km=550.0,
+                reference_body="earth",
+                frame_id="earth",
+            ),
+            "sat-new": EphemerisNodeFixed(
+                lat_deg=39.2,
+                lon_deg=-105.0,
+                alt_km=550.0,
+                reference_body="earth",
+                frame_id="earth",
+            ),
         },
     )
 

@@ -51,6 +51,7 @@ class TestFoldDeterminism:
             ground_candidate_satellites_by_gs=ground_candidates,
             step_seconds=step_seconds,
             ground_link_model=session.ground_link_model,
+            body_frames=session.body_frames,
         )
         window_events = window.events
 
@@ -63,6 +64,7 @@ class TestFoldDeterminism:
             ground_scheduling=session.scheduling.ground,
             ground_candidate_satellites_by_gs=ground_candidates,
             ground_link_model=session.ground_link_model,
+            body_frames=session.body_frames,
         )
         isl_state: dict = {}
         gs_state: dict = {}
@@ -106,6 +108,7 @@ class TestFoldDeterminism:
             ground_scheduling=session.scheduling.ground,
             ground_candidate_satellites_by_gs=ground_candidates,
             ground_link_model=session.ground_link_model,
+            body_frames=session.body_frames,
         )
 
         # Run 10 ticks to build up association state
@@ -179,6 +182,7 @@ class TestFoldDeterminism:
             ground_scheduling=session.scheduling.ground,
             ground_candidate_satellites_by_gs=ground_candidates,
             ground_link_model=session.ground_link_model,
+            body_frames=session.body_frames,
         )
         seed_isl: dict = {}
         seed_gs: dict = {}
@@ -214,6 +218,7 @@ class TestFoldDeterminism:
             initial_gs_state=dict(seed_gs),
             initial_associations=seed_assoc,
             ground_link_model=session.ground_link_model,
+            body_frames=session.body_frames,
         )
         window_events = window.events
 
@@ -269,6 +274,7 @@ class TestFoldDeterminism:
             ground_scheduling=session.scheduling.ground,
             ground_candidate_satellites_by_gs=ground_candidates,
             ground_link_model=session.ground_link_model,
+            body_frames=session.body_frames,
         )
 
         # --- Path A: continuous 60 ticks ---

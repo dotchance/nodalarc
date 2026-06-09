@@ -42,6 +42,8 @@ def test_vs_api_state_snapshot_schema():
                 neighbor_count=2,
                 isl_count=2,
                 gnd_count=0,
+                reference_body="earth",
+                frame_id="earth",
             ),
         ],
         links=[

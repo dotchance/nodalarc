@@ -13,7 +13,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from nodalarc.body_frames import body_frame_for
+from nodalarc.body_frames import BodyFrame
 from nodalarc.frames import Vec3
 from nodalarc.geo import compute_latency_ms, compute_range_km
 from nodalarc.models.addressing import NeighborAssignment
@@ -131,14 +131,24 @@ def _segment_intersects_sphere(
     return cx * cx + cy * cy + cz * cz < radius_km * radius_km
 
 
-def _inter_body_occluded(state_a: PropagatedState, state_b: PropagatedState) -> bool:
+def _inter_body_occluded(
+    state_a: PropagatedState,
+    state_b: PropagatedState,
+    *,
+    body_frames: Mapping[str, BodyFrame],
+) -> bool:
     """Return whether the common-frame segment is blocked by either endpoint body."""
     bodies = {
         state_a.central_body: state_a.body_origin_common_km,
         state_b.central_body: state_b.body_origin_common_km,
     }
     for body_id, origin in bodies.items():
-        radius = body_frame_for(body_id).equatorial_radius_km
+        try:
+            radius = body_frames[body_id].equatorial_radius_km
+        except KeyError as exc:
+            raise ValueError(
+                f"ISL feasibility is missing resolved body primitive facts for body {body_id!r}"
+            ) from exc
         if _segment_intersects_sphere(
             state_a.position_common_km,
             state_b.position_common_km,
@@ -207,6 +217,7 @@ def evaluate_isl_feasibility(
     sat_states: Mapping[str, PropagatedState],
     by_node: Mapping[str, list[NeighborAssignment]],
     terminal_constraints: Mapping[str, Mapping[str, IslTerminalConstraints]],
+    body_frames: Mapping[str, BodyFrame],
     polar_seam_enabled: bool,
     latitude_threshold_deg: float,
 ) -> dict[tuple[str, str], IslFeasibilityResult]:
@@ -318,7 +329,7 @@ def evaluate_isl_feasibility(
             if cross_body:
                 range_km = compute_range_km(pos_a, pos_b)
                 angular_velocity = compute_angular_velocity(pos_a, vel_a, pos_b, vel_b)
-                if _inter_body_occluded(state_a, state_b):
+                if _inter_body_occluded(state_a, state_b, body_frames=body_frames):
                     visible = False
                     reason = "los_blocked"
                 elif range_km > max_range_km:
@@ -339,6 +350,12 @@ def evaluate_isl_feasibility(
                     reason = "ok"
                 visibility_range = range_km
             else:
+                body_frame = body_frames.get(state_a.central_body)
+                if body_frame is None:
+                    raise ValueError(
+                        f"ISL feasibility is missing resolved body primitive facts "
+                        f"for body {state_a.central_body!r}"
+                    )
                 visibility = check_isl_visibility(
                     pos_a,
                     vel_a,
@@ -347,7 +364,7 @@ def evaluate_isl_feasibility(
                     max_range_km=max_range_km,
                     max_tracking_rate_deg_s=applied_tracking_rate,
                     field_of_regard_deg=field_of_regard_deg,
-                    body_frame=body_frame_for(state_a.central_body),
+                    body_frame=body_frame,
                     polar_seam_enabled=polar_seam_enabled
                     and assignment_a.link_type == "cross_plane_isl",
                     latitude_threshold_deg=latitude_threshold_deg,

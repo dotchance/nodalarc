@@ -8,7 +8,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Literal
 
-from nodalarc.body_frames import body_frame_for
+from nodalarc.body_frames import BodyFrame
 from nodalarc.constellation_loader import SatelliteNode
 from nodalarc.ephemeris_runtime import SkyfieldBspEphemeris, body_states_at
 from nodalarc.frames import EcefVec3, GeoPosition
@@ -52,12 +52,17 @@ class GroundPassLookahead:
     horizon_ticks: int
     horizon_ticks_by_gs: Mapping[str, int]
     gs_reference_bodies: Mapping[str, str]
+    body_frames: Mapping[str, BodyFrame]
     propagator_id: str
     ground_link_model: Literal["geometry_only", "terminal_physics"] = "terminal_physics"
     gs_terminal_profiles: Mapping[str, TerminalPhysicsProfile] | None = None
     sat_ground_terminal_profiles: Mapping[str, TerminalPhysicsProfileSet] | None = None
     body_ephemeris: SkyfieldBspEphemeris | None = None
-    active_bodies: frozenset[str] = frozenset({"earth"})
+    active_bodies: frozenset[str] = frozenset()
+
+    def __post_init__(self) -> None:
+        if not self.active_bodies:
+            raise ValueError("GroundPassLookahead requires active_bodies from StepContext")
 
 
 def _require_complete_profile(
@@ -175,6 +180,7 @@ def _estimate_remaining_visible_seconds(
             epoch_unix=lookahead.epoch_unix,
             dt=future_dt,
             propagator_id=lookahead.propagator_id,
+            body_frames=lookahead.body_frames,
             body_states=body_states_at(
                 lookahead.body_ephemeris,
                 set(lookahead.active_bodies),
@@ -194,7 +200,13 @@ def _estimate_remaining_visible_seconds(
                     "ground pass lookahead cannot be evaluated authoritatively"
                 )
             reference_body = lookahead.gs_reference_bodies[gs_id]
-            body_frame = body_frame_for(reference_body)
+            try:
+                body_frame = lookahead.body_frames[reference_body]
+            except KeyError as exc:
+                raise ValueError(
+                    f"Ground pass lookahead is missing resolved body primitive facts "
+                    f"for reference_body={reference_body!r}"
+                ) from exc
             gs_profile = _physical_profile(
                 lookahead.gs_terminal_profiles,
                 gs_id,
@@ -207,7 +219,7 @@ def _estimate_remaining_visible_seconds(
                 reference_body=reference_body,
                 ground_link_model=lookahead.ground_link_model,
             )
-            kwargs = {}
+            kwargs = {"body_frame": body_frame}
             if gs_profile is not None and sat_profile is not None:
                 kwargs = {
                     "gs_max_range_km": gs_profile.max_range_km,
@@ -219,7 +231,6 @@ def _estimate_remaining_visible_seconds(
                     "gs_max_tracking_rate_deg_s": gs_profile.max_tracking_rate_deg_s,
                     "sat_max_tracking_rate_deg_s": sat_profile.max_tracking_rate_deg_s,
                     "sat_velocity_ecef_km_s": state.velocity_ecef_km_s,
-                    "body_frame": body_frame,
                 }
             visible = check_ground_visibility(
                 gs_ecef,
@@ -246,6 +257,7 @@ def evaluate_ground_visibility(
     gs_min_elevations: Mapping[str, float],
     gs_tenant_ids: Mapping[str, str],
     gs_reference_bodies: Mapping[str, str],
+    body_frames: Mapping[str, BodyFrame],
     gs_selection_policy_names: Mapping[str, str] | None = None,
     pass_lookahead: GroundPassLookahead | None = None,
     ground_link_model: Literal["geometry_only", "terminal_physics"] = "terminal_physics",
@@ -363,7 +375,13 @@ def evaluate_ground_visibility(
                     "ground visibility cannot be evaluated authoritatively"
                 )
 
-            body_frame = body_frame_for(reference_body)
+            try:
+                body_frame = body_frames[reference_body]
+            except KeyError as exc:
+                raise ValueError(
+                    f"Ground visibility is missing resolved body primitive facts "
+                    f"for reference_body={reference_body!r}"
+                ) from exc
             gs_profile = _physical_profile(
                 gs_terminal_profiles,
                 gs_id,
@@ -384,7 +402,7 @@ def evaluate_ground_visibility(
             sat_max_tracking_rate_deg_s = None
             gs_boresight_mode = None
             sat_boresight_mode = None
-            kwargs = {}
+            kwargs = {"body_frame": body_frame}
             if gs_profile is not None and sat_profile is not None:
                 gs_max_range_km = gs_profile.max_range_km
                 sat_max_range_km = sat_profile.max_range_km
@@ -394,18 +412,19 @@ def evaluate_ground_visibility(
                 sat_max_tracking_rate_deg_s = sat_profile.max_tracking_rate_deg_s
                 gs_boresight_mode = getattr(gs_profile.boresight, "mode", None)
                 sat_boresight_mode = getattr(sat_profile.boresight, "mode", None)
-                kwargs = {
-                    "gs_max_range_km": gs_max_range_km,
-                    "sat_max_range_km": sat_max_range_km,
-                    "gs_boresight": gs_profile.boresight,
-                    "sat_boresight": sat_profile.boresight,
-                    "gs_field_of_regard_deg": gs_field_of_regard_deg,
-                    "sat_field_of_regard_deg": sat_field_of_regard_deg,
-                    "gs_max_tracking_rate_deg_s": gs_max_tracking_rate_deg_s,
-                    "sat_max_tracking_rate_deg_s": sat_max_tracking_rate_deg_s,
-                    "sat_velocity_ecef_km_s": state.velocity_ecef_km_s,
-                    "body_frame": body_frame,
-                }
+                kwargs.update(
+                    {
+                        "gs_max_range_km": gs_max_range_km,
+                        "sat_max_range_km": sat_max_range_km,
+                        "gs_boresight": gs_profile.boresight,
+                        "sat_boresight": sat_profile.boresight,
+                        "gs_field_of_regard_deg": gs_field_of_regard_deg,
+                        "sat_field_of_regard_deg": sat_field_of_regard_deg,
+                        "gs_max_tracking_rate_deg_s": gs_max_tracking_rate_deg_s,
+                        "sat_max_tracking_rate_deg_s": sat_max_tracking_rate_deg_s,
+                        "sat_velocity_ecef_km_s": state.velocity_ecef_km_s,
+                    }
+                )
 
             gv = check_ground_visibility(
                 gs_ecef,

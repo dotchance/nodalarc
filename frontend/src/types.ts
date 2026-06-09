@@ -34,9 +34,9 @@ export interface NodeState {
   min_elevation_deg: number | null;
   beam_falloff_exponent: number | null;
   /** Celestial body this node is anchored to (earth | luna | mars). */
-  reference_body?: string;
+  reference_body: string;
   /** Placement frame id from the resolved session. */
-  frame_id?: string;
+  frame_id: string;
   /** Owning tenant (multi-tenant from day one). Optional; consumers default to "default". */
   tenant_id?: string;
   /** Segment metadata from the resolved session. Used for grouping/filtering, not runtime identity. */

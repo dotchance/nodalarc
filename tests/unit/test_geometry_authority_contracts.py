@@ -9,12 +9,11 @@ from datetime import UTC, datetime
 from unittest.mock import MagicMock
 
 import pytest
-from nodalarc.constants import SPEED_OF_LIGHT_KM_S, WGS84_A, WGS84_B
+from nodalarc.constants import SPEED_OF_LIGHT_KM_S
 from nodalarc.frames import EcefVec3, GeoPosition, Vec3
 from nodalarc.geo import (
     compute_latency_ms,
     compute_range_km,
-    geodetic_to_ecef,
 )
 from nodalarc.models.events import VisibilityEvent
 from nodalarc.models.link_state import (
@@ -31,9 +30,13 @@ from ome.snapshot_builder import LinkSnapshotSource
 from scheduler.dispatcher import Dispatcher
 from scheduler.pod_locator import PodLocationMap
 
+from tests.physics_fixtures import EARTH_TEST_BODY_FRAME, earth_geodetic_to_ecef
+
 SIM = datetime(2026, 1, 1, tzinfo=UTC)
 RANGE_TOL_KM = 1e-6
 LATENCY_TOL_MS = 1e-9
+WGS84_A = EARTH_TEST_BODY_FRAME.equatorial_radius_km
+WGS84_B = EARTH_TEST_BODY_FRAME.polar_radius_km
 
 
 def _propagated_state(node_id: str, lat: float, lon: float, alt_km: float) -> PropagatedState:
@@ -41,10 +44,11 @@ def _propagated_state(node_id: str, lat: float, lon: float, alt_km: float) -> Pr
     return PropagatedState(
         node_id=node_id,
         sim_time_unix=SIM.timestamp(),
-        position_ecef_km=geodetic_to_ecef(geo),
+        position_ecef_km=earth_geodetic_to_ecef(geo),
         velocity_ecef_km_s=EcefVec3(Vec3(0.0, 0.0, 0.0)),
         geodetic=geo,
         propagator_id="test-authority",
+        central_body="earth",
     )
 
 
@@ -98,22 +102,24 @@ class TestAnalyticGeometry:
         )
 
     def test_wgs84_axis_fixtures(self):
-        x, y, z = geodetic_to_ecef(GeoPosition(0.0, 0.0, 0.0))
+        x, y, z = earth_geodetic_to_ecef(GeoPosition(0.0, 0.0, 0.0))
         assert math.isclose(x, WGS84_A, abs_tol=RANGE_TOL_KM)
         assert math.isclose(y, 0.0, abs_tol=RANGE_TOL_KM)
         assert math.isclose(z, 0.0, abs_tol=RANGE_TOL_KM)
 
-        x, y, z = geodetic_to_ecef(GeoPosition(90.0, 0.0, 0.0))
+        x, y, z = earth_geodetic_to_ecef(GeoPosition(90.0, 0.0, 0.0))
         assert math.isclose(x, 0.0, abs_tol=RANGE_TOL_KM)
         assert math.isclose(y, 0.0, abs_tol=RANGE_TOL_KM)
         assert math.isclose(z, WGS84_B, abs_tol=RANGE_TOL_KM)
 
     def test_propagator_reexports_single_geodetic_to_ecef_implementation(self):
+        from nodalarc.geo import geodetic_to_ecef
+
         assert reexported_geodetic_to_ecef is geodetic_to_ecef
 
         geo = GeoPosition(lat_deg=33.9175, lon_deg=-118.328111, alt_km=0.04)
-        direct_ecef = geodetic_to_ecef(geo)
-        reexported_ecef = reexported_geodetic_to_ecef(geo)
+        direct_ecef = earth_geodetic_to_ecef(geo)
+        reexported_ecef = reexported_geodetic_to_ecef(geo, EARTH_TEST_BODY_FRAME)
 
         assert math.isclose(direct_ecef.x, reexported_ecef.x, abs_tol=RANGE_TOL_KM)
         assert math.isclose(direct_ecef.y, reexported_ecef.y, abs_tol=RANGE_TOL_KM)
@@ -138,8 +144,8 @@ class TestOmeSnapshotGeometry:
         )
         link = snapshot.links[0]
         expected_range = compute_range_km(
-            geodetic_to_ecef(GeoPosition(0.0, 0.0, 550.0)),
-            geodetic_to_ecef(GeoPosition(0.0, 5.0, 550.0)),
+            earth_geodetic_to_ecef(GeoPosition(0.0, 0.0, 550.0)),
+            earth_geodetic_to_ecef(GeoPosition(0.0, 5.0, 550.0)),
         )
 
         assert link.range_km is not None

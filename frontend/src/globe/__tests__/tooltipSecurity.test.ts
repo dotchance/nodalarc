@@ -26,6 +26,8 @@ function node(nodeId: string, nodeType: string): NodeState {
     prefix: null,
     min_elevation_deg: null,
     beam_falloff_exponent: null,
+    reference_body: "earth",
+    frame_id: "earth",
   };
 }
 

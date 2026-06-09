@@ -346,30 +346,32 @@ class TimelinePositionSnapshot(BaseModel):
 
 
 class EphemerisNodeKeplerian(BaseModel):
-    """Circular-element ephemeris for a satellite.
+    """Mean-element ephemeris for a satellite.
 
-    Fields mirror OrbitalElements from constellation.py. The `propagator`
-    field is part of the contract because the same circular element fields can
-    drive either the synthetic Keplerian engine or the J2 mean-element engine.
+    Fields mirror ``nodalarc.orbital.OrbitalElements``. The ``propagator``
+    field is part of the contract because the same element fields can drive
+    either the two-body Keplerian engine or the J2 mean-element engine.
     Consumers must not silently treat J2 sessions as Keplerian.
     """
 
     model_config = ConfigDict(frozen=True)
 
     type: Literal["keplerian"] = "keplerian"
-    propagator: Literal["keplerian-circular", "j2-mean-elements"]
-    altitude_km: float
-    inclination_deg: float
-    raan_deg: float
-    true_anomaly_deg: float
+    propagator: Literal["two-body", "keplerian-circular", "j2-mean-elements"]
+    semi_major_axis_km: float = Field(gt=0, allow_inf_nan=False)
+    eccentricity: float = Field(ge=0, lt=1, allow_inf_nan=False)
+    inclination_deg: float = Field(allow_inf_nan=False)
+    raan_deg: float = Field(allow_inf_nan=False)
+    argument_of_perigee_deg: float = Field(allow_inf_nan=False)
+    mean_anomaly_deg: float = Field(allow_inf_nan=False)
     plane: int
     slot: int
     segment_id: str | None = None
     local_node_id: str | None = None
     namespace: str | None = None
     tags: tuple[str, ...] = ()
-    reference_body: str = "earth"
-    frame_id: str = "earth"
+    reference_body: str
+    frame_id: str
 
 
 class EphemerisNodeTLE(BaseModel):
@@ -387,8 +389,8 @@ class EphemerisNodeTLE(BaseModel):
     local_node_id: str | None = None
     namespace: str | None = None
     tags: tuple[str, ...] = ()
-    reference_body: str = "earth"
-    frame_id: str = "earth"
+    reference_body: str
+    frame_id: str
 
     @model_validator(mode="after")
     def _validate_tle_pair(self):
@@ -411,8 +413,8 @@ class EphemerisNodeFixed(BaseModel):
     local_node_id: str | None = None
     namespace: str | None = None
     tags: tuple[str, ...] = ()
-    reference_body: str = "earth"
-    frame_id: str = "earth"
+    reference_body: str
+    frame_id: str
 
 
 EphemerisNode = Annotated[
@@ -433,7 +435,12 @@ class EphemerisBodyFrame(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     body_id: str
-    radius_km: float
+    mean_radius_km: float
+    equatorial_radius_km: float
+    polar_radius_km: float
+    gravitational_parameter_km3_s2: float
+    rotation_rate_rad_s: float
+    j2: float
     origin_x_km: float
     origin_y_km: float
     origin_z_km: float
@@ -464,6 +471,17 @@ class SessionEphemeris(BaseModel):
     epoch_unix: float  # Unix timestamp for propagation dt calculation
     nodes: dict[str, EphemerisNode]
     body_frames: dict[str, EphemerisBodyFrame] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _validate_body_frames(self):
+        referenced = sorted({node.reference_body for node in self.nodes.values()})
+        missing = [body for body in referenced if body not in self.body_frames]
+        if missing:
+            raise ValueError(
+                "SessionEphemeris is missing body frame(s) for referenced body "
+                f"id(s): {', '.join(missing)}"
+            )
+        return self
 
 
 class PlaybackState(BaseModel):

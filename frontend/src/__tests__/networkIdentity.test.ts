@@ -28,6 +28,8 @@ function node(node_id: string, node_type: NodeState["node_type"]): NodeState {
     prefix: null,
     min_elevation_deg: null,
     beam_falloff_exponent: null,
+    reference_body: "earth",
+    frame_id: "earth",
   };
 }
 

@@ -147,6 +147,37 @@ def describe_gs_coverage(
     )
 
 
+def describe_sampled_gs_coverage(
+    *,
+    station_name: str,
+    coverage_pct: float,
+    longest_gap_s: float,
+    min_elevation_deg: float,
+    orbit_family: str,
+) -> str:
+    """Describe coverage when no circular-shell geometry shortcut is valid."""
+    gap_desc = _gap_description(longest_gap_s)
+    if coverage_pct >= 95:
+        return (
+            f"Sampled {orbit_family} propagation shows near-continuous coverage for "
+            f"{station_name}: {coverage_pct:.0f}%{gap_desc} above the "
+            f"{min_elevation_deg:.0f}\u00b0 minimum elevation mask."
+        )
+    if coverage_pct >= 70:
+        return (
+            f"Sampled {orbit_family} propagation shows useful coverage for "
+            f"{station_name}: {coverage_pct:.0f}%{gap_desc} above the "
+            f"{min_elevation_deg:.0f}\u00b0 minimum elevation mask."
+        )
+    return (
+        f"Sampled {orbit_family} propagation shows limited coverage for "
+        f"{station_name}: {coverage_pct:.0f}%{gap_desc} above the "
+        f"{min_elevation_deg:.0f}\u00b0 minimum elevation mask. For non-circular "
+        "orbits, coverage is driven by the sampled apogee/perigee geometry rather "
+        "than a single circular footprint."
+    )
+
+
 # --- Private helpers ---
 
 

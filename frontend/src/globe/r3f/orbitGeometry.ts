@@ -5,6 +5,13 @@
 import * as THREE from "three";
 
 export const ORBIT_SAMPLES = 180;
+export const STATIC_ORBIT_RING_ECCENTRICITY_LIMIT = 1e-6;
+
+/** Static ring overlays are only truthful for circular/near-circular Keplerian paths. */
+export function supportsStaticOrbitRing(eccentricity: number | null | undefined): boolean {
+  if (eccentricity == null) return false;
+  return Math.abs(eccentricity) <= STATIC_ORBIT_RING_ECCENTRICITY_LIMIT;
+}
 
 /** Compute a closed great-circle orbit ring from position and velocity vectors. */
 export function computeOrbitPositions(

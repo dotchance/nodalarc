@@ -29,6 +29,16 @@ def demo_preview() -> CoveragePreviewResult:
     )
 
 
+@pytest.fixture(scope="module")
+def heo_preview() -> CoveragePreviewResult:
+    """Run coverage preview on the shipped eccentric HEO catalog primitives."""
+    return compute_coverage_preview(
+        constellation_source="nodalarc:constellations/earth/heo/earth-heo-molniya-3.yaml",
+        satellite_type_override=None,
+        ground_stations_source="nodalarc:site-sets/earth/heo/earth-heo-gateway-sites.yaml",
+    )
+
+
 def test_returns_coverage_preview_result(demo_preview):
     assert isinstance(demo_preview, CoveragePreviewResult)
 
@@ -80,6 +90,16 @@ def test_demo_36_has_gs_coverage(demo_preview):
     gs = demo_preview.ground_stations
     has_coverage = any(s.coverage_pct > 0 for s in gs.per_station.values())
     assert has_coverage, "At least one ground station should have coverage"
+
+
+def test_heo_preview_uses_eccentric_sampled_explanations(heo_preview):
+    assert 40_000 < heo_preview.orbital_period_s < 45_000
+    assert heo_preview.ground_stations.per_station
+
+    reasons = [station.reason or "" for station in heo_preview.ground_stations.per_station.values()]
+    assert all("Sampled eccentric orbit propagation" in reason for reason in reasons)
+    assert all("inclination band" not in reason for reason in reasons)
+    assert all("footprint edge" not in reason for reason in reasons)
 
 
 def test_warnings_is_list(demo_preview):

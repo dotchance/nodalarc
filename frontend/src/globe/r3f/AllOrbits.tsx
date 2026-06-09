@@ -35,8 +35,9 @@ import { LineMaterial } from "three/addons/lines/LineMaterial.js";
 import { getPlaneColor } from "../../config";
 import { velocityToScene } from "../geo";
 import { worldVelocity } from "../astronomy";
-import { computeOrbitPositions, ORBIT_SAMPLES } from "./orbitGeometry";
+import { computeOrbitPositions, ORBIT_SAMPLES, supportsStaticOrbitRing } from "./orbitGeometry";
 import type { NodeState, ReferenceFrame } from "../../types";
+import type { SessionEphemeris } from "../../sim/ephemeris";
 import { getNodeLocalPosition, getNodeWorldPosition } from "./positions";
 
 const SEGMENTS_PER_ORBIT = ORBIT_SAMPLES; // closed ring = N segments from N+1 vertices
@@ -82,6 +83,7 @@ interface AllOrbitsProps {
   referenceFrame: ReferenceFrame;
   kmPerRenderUnit: number;
   earthRotationRateRadS: number;
+  ephemeris: SessionEphemeris;
 }
 
 export function AllOrbits({
@@ -91,6 +93,7 @@ export function AllOrbits({
   referenceFrame,
   kmPerRenderUnit,
   earthRotationRateRadS,
+  ephemeris,
 }: AllOrbitsProps) {
   const groupRef = useRef<THREE.Group>(null);
   const size = useThree((s) => s.size);
@@ -111,6 +114,8 @@ export function AllOrbits({
   kmPerRenderUnitRef.current = kmPerRenderUnit;
   const earthRotationRateRef = useRef(earthRotationRateRadS);
   earthRotationRateRef.current = earthRotationRateRadS;
+  const ephemerisRef = useRef(ephemeris);
+  ephemerisRef.current = ephemeris;
   const sizeRef = useRef(size);
   sizeRef.current = size;
 
@@ -138,7 +143,7 @@ export function AllOrbits({
   // parameters. The count gate alone never catches this — the sat set is unchanged on a toggle.
   useEffect(() => {
     teardown();
-  }, [referenceFrame, earthRotationRateRadS, teardown]);
+  }, [referenceFrame, earthRotationRateRadS, ephemeris.epoch_id, teardown]);
 
   // Rebuild the batch from the current satellite set.
   // Returns false if no rings were produced (count gate keeps retrying next frame).
@@ -154,10 +159,20 @@ export function AllOrbits({
     const orbitPositions = new Float32Array(sats.length * FLOATS_PER_ORBIT);
     const orbitColors = new Float32Array(sats.length * FLOATS_PER_ORBIT);
     let orbitIdx = 0;
+    let renderableCount = 0;
 
     for (const ns of sats) {
       if (ns.vel_x_km_s == null || ns.vel_y_km_s == null || ns.vel_z_km_s == null) continue;
       if (ns.plane == null) continue;
+      const ephNode = ephemerisRef.current.nodes[ns.node_id];
+      if (
+        !ephNode ||
+        ephNode.type !== "keplerian" ||
+        !supportsStaticOrbitRing(ephNode.eccentricity)
+      ) {
+        continue;
+      }
+      renderableCount++;
       if (!getNodeWorldPosition(ns.node_id, _worldPos)) continue;
       if (!getNodeLocalPosition(ns.node_id, _localPos)) continue;
       _velEcef.copy(
@@ -197,7 +212,10 @@ export function AllOrbits({
       orbitIdx++;
     }
 
-    if (orbitIdx === 0) return;
+    if (orbitIdx === 0) {
+      if (renderableCount === 0) lastSatCountRef.current = sats.length;
+      return;
+    }
 
     // Trim to actual count (some sats may have been skipped). Subarray, not copy.
     const usedFloats = orbitIdx * FLOATS_PER_ORBIT;

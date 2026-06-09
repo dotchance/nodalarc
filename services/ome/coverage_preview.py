@@ -44,7 +44,11 @@ from nodalarc.propagator import (
 )
 from nodalarc.resolve_session import resolve_session_with_assets
 
-from ome.coverage_insights import describe_gs_coverage, generate_insights
+from ome.coverage_insights import (
+    describe_gs_coverage,
+    describe_sampled_gs_coverage,
+    generate_insights,
+)
 from ome.event_stream import precompute_timeline_window
 from ome.visibility import check_isl_visibility
 
@@ -247,6 +251,7 @@ def compute_coverage_preview(
     # Extract constellation geometry for insights
     inclination_deg = 0.0
     altitude_km = first_alt
+    max_eccentricity = max((sat.elements.eccentricity for sat in satellites), default=0.0)
     plane_count = len({(sat.segment_id or "space", sat.local_plane) for sat in satellites}) or 1
     if satellites:
         import math
@@ -268,6 +273,7 @@ def compute_coverage_preview(
         inclination_deg,
         altitude_km,
         first_body_frame.equatorial_radius_km,
+        max_eccentricity,
     )
 
     # Compute ISL failure breakdown (merge scan + event data)
@@ -402,6 +408,7 @@ def _build_gs_previews(
     inclination_deg,
     altitude_km,
     body_radius_km,
+    max_eccentricity,
 ):
     """Build per-station preview with physics-based descriptions for every station."""
     per_station: dict[str, GsStationPreview] = {}
@@ -421,16 +428,25 @@ def _build_gs_previews(
         min_elev = (
             station.min_elevation_deg if station.min_elevation_deg is not None else default_min_elev
         )
-        reason = describe_gs_coverage(
-            station_name=station.name,
-            station_lat=station.lat_deg,
-            inclination_deg=inclination_deg,
-            altitude_km=altitude_km,
-            body_radius_km=body_radius_km,
-            coverage_pct=coverage_pct,
-            longest_gap_s=longest_gap_s,
-            min_elevation_deg=min_elev,
-        )
+        if max_eccentricity > 1e-6:
+            reason = describe_sampled_gs_coverage(
+                station_name=station.name,
+                coverage_pct=coverage_pct,
+                longest_gap_s=longest_gap_s,
+                min_elevation_deg=min_elev,
+                orbit_family="eccentric orbit",
+            )
+        else:
+            reason = describe_gs_coverage(
+                station_name=station.name,
+                station_lat=station.lat_deg,
+                inclination_deg=inclination_deg,
+                altitude_km=altitude_km,
+                body_radius_km=body_radius_km,
+                coverage_pct=coverage_pct,
+                longest_gap_s=longest_gap_s,
+                min_elevation_deg=min_elev,
+            )
         per_station[station.name] = GsStationPreview(
             coverage_pct=round(coverage_pct, 1),
             longest_gap_s=round(longest_gap_s, 1),

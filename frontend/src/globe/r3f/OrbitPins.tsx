@@ -19,8 +19,9 @@ import { LineMaterial } from "three/addons/lines/LineMaterial.js";
 import { getPlaneColor } from "../../config";
 import { velocityToScene } from "../geo";
 import { worldVelocity } from "../astronomy";
-import { computeOrbitPositions, ORBIT_SAMPLES } from "./orbitGeometry";
+import { computeOrbitPositions, ORBIT_SAMPLES, supportsStaticOrbitRing } from "./orbitGeometry";
 import type { NodeState, ReferenceFrame } from "../../types";
+import type { SessionEphemeris } from "../../sim/ephemeris";
 import { getNodeLocalPosition, getNodeWorldPosition } from "./positions";
 
 const FLOATS_PER_ORBIT = ORBIT_SAMPLES * 6;
@@ -53,6 +54,7 @@ interface OrbitPinsProps {
   referenceFrame: ReferenceFrame;
   kmPerRenderUnit: number;
   earthRotationRateRadS: number;
+  ephemeris: SessionEphemeris;
 }
 
 export function OrbitPins({
@@ -62,6 +64,7 @@ export function OrbitPins({
   referenceFrame,
   kmPerRenderUnit,
   earthRotationRateRadS,
+  ephemeris,
 }: OrbitPinsProps) {
   const groupRef = useRef<THREE.Group>(null);
   const size = useThree((s) => s.size);
@@ -100,6 +103,14 @@ export function OrbitPins({
       const ns = byIdRef.current.get(id);
       if (!ns || ns.vel_x_km_s == null || ns.vel_y_km_s == null || ns.vel_z_km_s == null) continue;
       if (ns.plane == null) continue;
+      const ephNode = ephemeris.nodes[id];
+      if (
+        !ephNode ||
+        ephNode.type !== "keplerian" ||
+        !supportsStaticOrbitRing(ephNode.eccentricity)
+      ) {
+        continue;
+      }
       if (!getNodeWorldPosition(id, _worldPos) || !getNodeLocalPosition(id, _localPos)) continue;
       _velEcef.copy(
         velocityToScene(ns.vel_x_km_s, ns.vel_y_km_s, ns.vel_z_km_s, kmPerRenderUnit),
@@ -147,7 +158,7 @@ export function OrbitPins({
     group.add(batch);
     batchRef.current = batch;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pinKey, referenceFrame, kmPerRenderUnit, earthRotationRateRadS]);
+  }, [pinKey, referenceFrame, kmPerRenderUnit, earthRotationRateRadS, ephemeris]);
 
   // Keep the fat-line resolution in sync with the canvas.
   useEffect(() => {

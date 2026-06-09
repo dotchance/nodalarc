@@ -327,7 +327,7 @@ export function Scene({
           nodes={nodes}
           resetKey={`${ephemeris?.epoch_id ?? "none"}|${referenceFrame}|${constellation ?? "none"}`}
         />
-        {kmPerRenderUnit !== null && earthRotationRateRadS !== null && (
+        {ephemeris !== null && kmPerRenderUnit !== null && earthRotationRateRadS !== null && (
           <AllOrbits
             nodes={earthNodes}
             show={showSatPaths}
@@ -335,9 +335,10 @@ export function Scene({
             referenceFrame={referenceFrame}
             kmPerRenderUnit={kmPerRenderUnit}
             earthRotationRateRadS={earthRotationRateRadS}
+            ephemeris={ephemeris}
           />
         )}
-        {kmPerRenderUnit !== null && earthRotationRateRadS !== null && (
+        {ephemeris !== null && kmPerRenderUnit !== null && earthRotationRateRadS !== null && (
           <OrbitPins
             pinnedIds={pinnedIds}
             nodes={earthNodes}
@@ -345,6 +346,7 @@ export function Scene({
             referenceFrame={referenceFrame}
             kmPerRenderUnit={kmPerRenderUnit}
             earthRotationRateRadS={earthRotationRateRadS}
+            ephemeris={ephemeris}
           />
         )}
         <Links

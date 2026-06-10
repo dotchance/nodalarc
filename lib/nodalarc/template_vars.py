@@ -96,10 +96,34 @@ def build_template_vars_from_resolved(
     terr0_addresses, terr0_igp_enabled, default_route, default_metric = _terr0_template_facts(node)
     result["terr0_addresses"] = terr0_addresses
     result["terr0_igp_enabled"] = terr0_igp_enabled
+    # Active IGP on terr0 only where the wired site LAN actually has a peer:
+    # ≥2 routed same-domain members at this site run a broadcast adjacency
+    # (DIS/DR election on a real L2 segment); a lone member stays passive —
+    # the honest stub-LAN posture.
+    result["terr0_igp_active"] = _terr0_site_peer_count(resolved, node, domain) >= 1
     result["terr0_metric"] = 10
     result["terr0_default_route"] = default_route
     result["terr0_default_metric"] = default_metric
     return result
+
+
+def _terr0_site_peer_count(
+    resolved: ResolvedSession, node: ResolvedNode, domain: ResolvedRoutingDomain
+) -> int:
+    """Routed peers sharing this node's site LAN within the same routing domain."""
+    if node.interfaces is None or node.interfaces.terr0 is None:
+        return 0
+    return sum(
+        1
+        for peer in resolved.nodes
+        if peer.node_id != node.node_id
+        and peer.kind == "ground_station"
+        and peer.namespace == node.namespace
+        and peer.forwarding == "routed"
+        and peer.node_id in domain.node_ids
+        and peer.interfaces is not None
+        and peer.interfaces.terr0 is not None
+    )
 
 
 def _timer_template_facts(domain: ResolvedRoutingDomain) -> dict[str, Any]:

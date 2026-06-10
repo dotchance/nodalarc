@@ -19,6 +19,10 @@ _RUNTIME_NODE_ID_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$")
 _CURRENT_HOST_IFNAME_RE = re.compile(r"^[isg][0-9a-z]{2}-[0-9a-f]{10}$")
 _ALPHABET = "0123456789abcdefghijklmnopqrstuvwxyz"
 _RETIRED_HOST_IFNAME_PREFIXES = ("_isl_", "_gnd_", "_gbr-", "_na_")
+# Site-LAN host interfaces: bridge sl<vni>, vxlan port sv<vni>, member veth
+# ends sm<vni><idx>/sp<vni><idx>. VNI is zero-padded to 8 digits, member
+# index to 2 — every name fits LINUX_IFNAME_MAX with room to spare.
+_SITE_LAN_HOST_IFNAME_RE = re.compile(r"^s[lvmp][0-9]{8}(?:[0-9]{2})?$")
 
 
 def validate_runtime_node_id(node_id: str) -> None:
@@ -76,6 +80,8 @@ def is_managed_host_ifname(name: str) -> bool:
     """
     if _CURRENT_HOST_IFNAME_RE.fullmatch(name):
         return True
+    if _SITE_LAN_HOST_IFNAME_RE.fullmatch(name):
+        return True
     if name.startswith("br-gnd-"):
         return True
     if any(name.startswith(prefix) for prefix in _RETIRED_HOST_IFNAME_PREFIXES):
@@ -83,3 +89,27 @@ def is_managed_host_ifname(name: str) -> bool:
     # Retired ground bridge port shape, e.g. _g0...; keep this here so cleanup
     # callers do not re-encode old naming knowledge.
     return name.startswith("_g") and len(name) > 2 and name[2:3].isdigit()
+
+
+def site_lan_bridge_name(vni: int) -> str:
+    """Host bridge carrying one site's LAN segment on this host."""
+    return f"sl{vni:08d}"
+
+
+def site_lan_vxlan_name(vni: int) -> str:
+    """Host VXLAN port joining this host's site-LAN bridge to peer hosts."""
+    return f"sv{vni:08d}"
+
+
+def site_lan_member_host_ifname(vni: int, member_index: int) -> str:
+    """Host-side veth end (bridge port) for one site member pod."""
+    if not 0 <= member_index <= 99:
+        raise ValueError(f"site LAN member index out of range: {member_index}")
+    return f"sm{vni:08d}{member_index:02d}"
+
+
+def site_lan_member_pod_ifname(vni: int, member_index: int) -> str:
+    """Transit name for the pod-side veth end before it becomes terr0."""
+    if not 0 <= member_index <= 99:
+        raise ValueError(f"site LAN member index out of range: {member_index}")
+    return f"sp{vni:08d}{member_index:02d}"

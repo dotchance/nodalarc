@@ -56,7 +56,9 @@ exit
 {% if node_type == "ground_station" and terr0_igp_enabled %}
 interface terr0
  ip ospf area {{ area_id }}
+{% if not terr0_igp_active %}
  ip ospf passive
+{% endif %}
 exit
 {% endif %}
 

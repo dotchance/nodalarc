@@ -955,6 +955,62 @@ def deploy_session(
     }
 
 
+def _site_lans_for_manifest(
+    resolved: ResolvedSession,
+    pod_placement: dict[str, str],
+    node_ips: dict[str, str],
+) -> dict[str, dict]:
+    """Site LAN segments for the wiring manifest.
+
+    Members are ground nodes grouped by site (their namespace), each carrying
+    the operator-assigned Kubernetes node and its host IP so the Node Agent
+    can build per-host bridges and head-end-replicated VXLAN without any
+    placement re-derivation of its own.
+    """
+    from nodalarc.vxlan import compute_site_vni
+
+    members_by_site: dict[str, list[dict]] = {}
+    for node in resolved.nodes:
+        if node.kind != "ground_station":
+            continue
+        if node.interfaces is None or node.interfaces.terr0 is None:
+            continue
+        site_id = node.namespace
+        if site_id is None:
+            raise ValueError(f"ground node {node.node_id!r} has no site namespace")
+        k3s_node = pod_placement.get(node.node_id)
+        if not k3s_node:
+            raise ValueError(
+                f"ground node {node.node_id!r} has no discovered pod placement; "
+                "site LAN wiring cannot be derived"
+            )
+        host_ip = node_ips.get(k3s_node)
+        if not host_ip:
+            raise ValueError(
+                f"Kubernetes node {k3s_node!r} (hosting {node.node_id!r}) has no "
+                "InternalIP; site LAN wiring cannot be derived"
+            )
+        members_by_site.setdefault(site_id, []).append(
+            {"node_id": node.node_id, "k3s_node": k3s_node, "host_ip": host_ip}
+        )
+
+    site_lans: dict[str, dict] = {}
+    vni_owner: dict[int, str] = {}
+    for site_id in sorted(members_by_site):
+        vni = compute_site_vni(site_id)
+        if vni in vni_owner:
+            raise ValueError(
+                f"site LAN VNI collision: {site_id!r} and {vni_owner[vni]!r} both "
+                f"hash to VNI {vni}; rename one site"
+            )
+        vni_owner[vni] = site_id
+        site_lans[site_id] = {
+            "vni": vni,
+            "members": sorted(members_by_site[site_id], key=lambda m: m["node_id"]),
+        }
+    return site_lans
+
+
 def write_wiring_manifest(
     spec: dict,
     namespace: str,
@@ -1053,7 +1109,12 @@ def write_wiring_manifest(
                 "sysctls": dict(node_sysctls),
                 "isl_interfaces": [],
                 "gnd_interfaces": [{"name": iface.name} for iface in node.wan_interfaces],
-                "terrestrial": {"addresses": _terr0_manifest_addresses(node)},
+                "terrestrial": {
+                    "addresses": _terr0_manifest_addresses(node),
+                    # Ground namespace IS the site (site-anchored identity) —
+                    # terr0 is a port on that site's LAN segment.
+                    "site_id": node.namespace,
+                },
                 "mpls_enable": mpls_enable,
                 "segment_routing": stack.segment_routing,
                 "mtu": 9000,
@@ -1072,6 +1133,7 @@ def write_wiring_manifest(
     pod_placement = _discover_session_pod_placement(v1, namespace, set(nodes))
     k8s_nodes = set(pod_placement.values())
     node_ips = _node_internal_ips(v1, k8s_nodes)
+    site_lans = _site_lans_for_manifest(resolved_session, pod_placement, node_ips)
     required_substrate_pairs = _required_substrate_pairs(
         nodes=nodes,
         isl_pairs=isl_pairs,
@@ -1098,6 +1160,7 @@ def write_wiring_manifest(
         "nodes": nodes,
         "ground_bridges": ground_bridges,
         "required_substrate_pairs": required_substrate_pairs,
+        "site_lans": site_lans,
         "isl_link_count": len(isl_pairs),
     }
     manifest["wiring_generation"] = derive_wiring_generation(manifest)

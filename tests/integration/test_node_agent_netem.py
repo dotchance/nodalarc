@@ -154,6 +154,7 @@ def _seed_substrate_measurement(
                 }
             },
             "ground_bridges": {},
+            "site_lans": {},
             "required_substrate_pairs": [pair.model_dump(mode="json")],
             "isl_link_count": 0,
         }

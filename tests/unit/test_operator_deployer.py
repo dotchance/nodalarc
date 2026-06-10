@@ -128,6 +128,7 @@ def _make_wiring_manifest(node_ids=("sat-P00S00", "sat-P00S01")):
             "required_phases": list(REQUIRED_WIRING_PHASES),
             "nodes": nodes,
             "ground_bridges": {},
+            "site_lans": {},
             "required_substrate_pairs": [],
             "isl_link_count": 0,
         }
@@ -813,6 +814,37 @@ class TestWiringManifest:
             assert "segment_routing" in node, f"{node_id} missing segment_routing"
             assert "remove_default_route" in node, f"{node_id} missing remove_default_route"
             assert "mtu" in node, f"{node_id} missing mtu"
+
+    def test_manifest_declares_site_lans_for_every_addressed_terr0(self, tmp_path):
+        manifest = self._build_and_extract(tmp_path)
+
+        assert "site_lans" in manifest
+        ground_nodes = {
+            node_id: node
+            for node_id, node in manifest["nodes"].items()
+            if node["node_type"] == "ground_station"
+        }
+        assert ground_nodes
+        member_ids = {
+            member["node_id"]
+            for spec in manifest["site_lans"].values()
+            for member in spec["members"]
+        }
+        for node_id, node in ground_nodes.items():
+            terrestrial = node.get("terrestrial") or {}
+            if not terrestrial.get("addresses"):
+                continue
+            assert terrestrial["site_id"] in manifest["site_lans"], node_id
+            assert node_id in member_ids, node_id
+        for spec in manifest["site_lans"].values():
+            assert 1 <= spec["vni"] <= 16777214
+            for member in spec["members"]:
+                assert member["k3s_node"] == "node01"
+                assert member["host_ip"] == "10.0.0.1"
+        vnis = [spec["vni"] for spec in manifest["site_lans"].values()]
+        assert len(set(vnis)) == len(vnis)
+        # The whole manifest still validates through the Node Agent contract.
+        WiringManifest.model_validate(manifest)
 
     def test_manifest_disables_mpls_for_plain_igp(self, tmp_path):
         manifest = self._build_and_extract(tmp_path)

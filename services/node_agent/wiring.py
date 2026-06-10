@@ -40,7 +40,6 @@ from node_agent.namespace_ops import (
     _in_namespace,
     _write_sysctl_in_netns,
     configure_interface,
-    create_dummy_interface,
     enable_mpls_input,
 )
 from node_agent.pid_discovery import discover_local_pod_pids
@@ -133,6 +132,13 @@ def _cleanup_stale_interfaces(
     if host_cleaned:
         log.info("Cleaned %d stale host interfaces", host_cleaned)
 
+    # Host firewall: drop the pinned site-LAN transit rules alongside the
+    # interfaces they served; the terrestrial phase re-pins them when this
+    # generation wires site LANs.
+    from node_agent.site_lan import remove_site_lan_transit
+
+    remove_site_lan_transit()
+
     # Pod namespaces: remove stale isl* and gnd0 interfaces
     pod_cleaned = 0
     import contextlib
@@ -146,6 +152,9 @@ def _cleanup_stale_interfaces(
                 or ifname.startswith("term")
                 or ifname.startswith("gnd")
                 or ifname.startswith("terr")
+                # Site-LAN veth transit name (pod end before its rename to
+                # terr0) — stranded only if wiring crashed mid-move.
+                or ifname.startswith("sp")
             ):
                 with contextlib.suppress(Exception):
                     ns_ipr.link("del", index=link["index"])
@@ -486,30 +495,80 @@ def execute_wiring(
         f"Ground infrastructure ready: {gs_created} GS, {sat_gnd_created} satellites. Creating terrestrial interfaces..."
     )
 
-    # Create terr0 dummy interfaces for ground stations (parallelized).
-    terr0_tasks = []
-    for node_id, node_spec in nodes.items():
-        if node_spec.get("node_type") != "ground_station":
-            continue
-        pid = pid_map.get(node_id, 0)
-        if pid == 0:
-            continue
-        addrs = node_spec.get("terrestrial", {}).get("addresses", [])
-        if addrs:
-            terr0_tasks.append((pid, node_id, addrs))
+    # Wire site LANs (terr0 as bridge ports, parallelized per site).
+    # A site's LAN is one L2 segment: per-host bridge, member terr0 veths as
+    # ports, VXLAN head-end replication between hosts that share the site.
+    from nodalarc.platform_config import get_platform_config
 
+    from node_agent.site_lan import plan_site_lan, wire_site_lan
+
+    local_ip = os.environ.get("HOST_IP", "")
+    base_mtu = get_platform_config().veth_interface_mtu_bytes
+    site_lan_specs = {
+        site_id: spec.model_dump() for site_id, spec in manifest_model.site_lans.items()
+    }
+
+    def _local_site_members(spec: dict) -> list[str]:
+        return [
+            member["node_id"] for member in spec["members"] if pid_map.get(member["node_id"], 0) > 0
+        ]
+
+    site_plans = []
+    for site_id, spec in site_lan_specs.items():
+        try:
+            plan = plan_site_lan(
+                site_id,
+                spec,
+                nodes=nodes,
+                pid_map=pid_map,
+                local_node=local_node,
+                local_ip=local_ip,
+                base_mtu=base_mtu,
+            )
+        except Exception as exc:
+            for member_id in _local_site_members(spec):
+                _record_failure(member_id, "terrestrial_interfaces", f"site LAN plan failed: {exc}")
+            continue
+        if plan is not None:
+            site_plans.append(plan)
+
+    if site_plans:
+        # Bridged transit on the site LANs must not be subject to host
+        # firewall policy (br_netfilter + e.g. Docker's FORWARD DROP).
+        # Failure poisons every local member: a LAN the host may police is
+        # not wired, it only looks wired.
+        from node_agent.site_lan import ensure_site_lan_transit
+
+        try:
+            ensure_site_lan_transit()
+        except Exception as exc:
+            log.exception("Site LAN transit rule installation failed")
+            for plan in site_plans:
+                for port in plan.local_members:
+                    _record_failure(
+                        port.node_id,
+                        "terrestrial_interfaces",
+                        f"site LAN transit rules failed: {exc}",
+                    )
+            site_plans = []
+
+    wired_sites = 0
     with ThreadPoolExecutor(max_workers=8) as pool:
-        terr_futures = {
-            pool.submit(create_dummy_interface, pid, "terr0", addrs): nid
-            for pid, nid, addrs in terr0_tasks
-        }
-        for fut in as_completed(terr_futures):
-            nid = terr_futures[fut]
+        site_futures = {pool.submit(wire_site_lan, plan): plan for plan in site_plans}
+        for fut in as_completed(site_futures):
+            plan = site_futures[fut]
             try:
                 fut.result()
+                wired_sites += 1
             except Exception as exc:
-                _record_failure(nid, "terrestrial_interfaces", f"terr0 creation failed: {exc}")
-    log.info("%d terr0 dummy interfaces created", len(terr0_tasks))
+                log.exception("Site LAN %s wiring failed", plan.site_id)
+                for port in plan.local_members:
+                    _record_failure(
+                        port.node_id,
+                        "terrestrial_interfaces",
+                        f"site LAN {plan.site_id} wiring failed: {exc}",
+                    )
+    log.info("%d site LANs wired on this host", wired_sites)
     _write_progress(
         f"Terrestrial interfaces created. Finalizing {total_nodes} pods (routes + security)..."
     )

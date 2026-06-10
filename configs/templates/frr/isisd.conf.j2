@@ -61,7 +61,9 @@ exit
 {% if node_type == "ground_station" and terr0_igp_enabled %}
 interface terr0
  ip router isis NODAL
+{% if not terr0_igp_active %}
  isis passive
+{% endif %}
  isis metric {{ terr0_metric }}
 exit
 {% endif %}

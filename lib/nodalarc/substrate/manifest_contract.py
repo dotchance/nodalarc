@@ -64,6 +64,60 @@ class IslInterface(_StrictModel):
 
 class TerrestrialSpec(_StrictModel):
     addresses: list[str] = Field(default_factory=list)
+    # The site LAN this node's terr0 attaches to. Required whenever addresses
+    # are present — terr0 is a port on the site's L2 segment, never an
+    # isolated interface.
+    site_id: str | None = None
+
+    @model_validator(mode="after")
+    def _addressed_terr0_belongs_to_a_site(self) -> TerrestrialSpec:
+        if self.addresses and not self.site_id:
+            raise ValueError("terrestrial addresses require site_id (site LAN membership)")
+        return self
+
+
+class SiteLanMember(_StrictModel):
+    """One pod attached to a site LAN, with its operator-assigned placement."""
+
+    node_id: str
+    k3s_node: str
+    host_ip: str
+
+    @field_validator("node_id", "k3s_node", "host_ip")
+    @classmethod
+    def _member_fields(cls, value: str) -> str:
+        if not value:
+            raise ValueError("site LAN member fields must be non-empty")
+        return value
+
+
+class SiteLanUplink(_StrictModel):
+    """Future capability slot: attach the site LAN to a real physical
+    interface on a compute node so the emulation joins the real world.
+
+    Schema-present from day one so adding the capability is a value, not a
+    contract break. The Node Agent fails loudly if it encounters one before
+    the wiring exists — an uplink must never be silently ignored.
+    """
+
+    host: str
+    interface: str
+
+
+class SiteLanSpec(_StrictModel):
+    """One physical site's LAN segment: per-host bridge, members as bridge
+    ports, VXLAN head-end replication between hosts that carry members."""
+
+    vni: int = Field(ge=1, le=16777214)
+    members: list[SiteLanMember] = Field(min_length=1)
+    uplink: SiteLanUplink | None = None
+
+    @model_validator(mode="after")
+    def _unique_members(self) -> SiteLanSpec:
+        node_ids = [member.node_id for member in self.members]
+        if len(set(node_ids)) != len(node_ids):
+            raise ValueError("site LAN members must be unique")
+        return self
 
 
 class GroundBridgeSpec(_StrictModel):
@@ -140,6 +194,7 @@ class WiringManifest(_StrictModel):
     nodes: dict[str, NodeSpec]
     ground_bridges: dict[str, GroundBridgeSpec]
     required_substrate_pairs: list[RequiredSubstratePair]
+    site_lans: dict[str, SiteLanSpec]
     isl_link_count: int
 
     @field_validator("session_id", "wiring_generation")
@@ -186,6 +241,45 @@ class WiringManifest(_StrictModel):
                 f"missing={sorted(ground_station_nodes - bridge_ids)} "
                 f"extra={sorted(bridge_ids - ground_station_nodes)}"
             )
+        return self
+
+    @model_validator(mode="after")
+    def _site_lans_cover_addressed_terr0(self) -> WiringManifest:
+        """Site LANs and addressed terr0 interfaces must agree exactly.
+
+        Every ground node carrying terrestrial addresses is a member of the
+        site LAN it names, every declared member is a manifest ground node,
+        and VNIs are pairwise distinct — the agent wires precisely what is
+        declared, with no orphan ports and no phantom members.
+        """
+        members_by_site: dict[str, set[str]] = {
+            site_id: {member.node_id for member in spec.members}
+            for site_id, spec in self.site_lans.items()
+        }
+        for node_id, node in self.nodes.items():
+            terrestrial = node.terrestrial
+            if terrestrial is None or not terrestrial.addresses:
+                continue
+            site_id = terrestrial.site_id
+            if site_id not in members_by_site:
+                raise ValueError(
+                    f"node {node_id!r} references site LAN {site_id!r}, "
+                    "which is not declared in site_lans"
+                )
+            if node_id not in members_by_site[site_id]:
+                raise ValueError(
+                    f"node {node_id!r} is not a declared member of site LAN {site_id!r}"
+                )
+        ground_nodes = {
+            node_id for node_id, node in self.nodes.items() if node.node_type == "ground_station"
+        }
+        for site_id, member_ids in members_by_site.items():
+            unknown = sorted(member_ids - ground_nodes)
+            if unknown:
+                raise ValueError(f"site LAN {site_id!r} declares non-ground member(s): {unknown}")
+        vnis = [spec.vni for spec in self.site_lans.values()]
+        if len(set(vnis)) != len(vnis):
+            raise ValueError("site LAN VNIs must be pairwise distinct")
         return self
 
     @field_validator("required_substrate_pairs")

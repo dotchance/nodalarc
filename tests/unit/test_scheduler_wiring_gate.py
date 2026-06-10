@@ -123,6 +123,7 @@ def _manifest_configmap() -> SimpleNamespace:
             }
         },
         "ground_bridges": {},
+        "site_lans": {},
         "required_substrate_pairs": [],
         "isl_link_count": 0,
     }
@@ -291,6 +292,7 @@ def _substrate_manifest(required_pairs: list[RequiredSubstratePair]):
                 }
             },
             "ground_bridges": {},
+            "site_lans": {},
             "required_substrate_pairs": [pair.model_dump(mode="json") for pair in required_pairs],
             "isl_link_count": 0,
         }

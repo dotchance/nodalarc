@@ -20,3 +20,14 @@ def compute_vni(node_a: str, node_b: str, iface_a: str, iface_b: str) -> int:
     key = f"{pair[0][0]}:{pair[0][1]}:{pair[1][0]}:{pair[1][1]}"
     h = int(hashlib.sha256(key.encode()).hexdigest()[:8], 16)
     return (h % 16777214) + 1
+
+
+def compute_site_vni(site_id: str) -> int:
+    """Deterministic VNI for a site LAN segment.
+
+    Site LANs are multipoint segments keyed by site identity, not by link
+    pairs. Same 24-bit space and collision posture as link VNIs; the deployer
+    validates site VNIs pairwise at manifest build.
+    """
+    h = int(hashlib.sha256(f"site-lan:{site_id}".encode()).hexdigest()[:8], 16)
+    return (h % 16777214) + 1

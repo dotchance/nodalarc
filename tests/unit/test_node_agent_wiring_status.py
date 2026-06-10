@@ -24,6 +24,7 @@ def _manifest() -> WiringManifest:
                 }
             },
             "ground_bridges": {},
+            "site_lans": {},
             "required_substrate_pairs": [],
             "isl_link_count": 0,
         }

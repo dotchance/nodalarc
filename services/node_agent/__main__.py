@@ -313,8 +313,26 @@ async def main() -> None:
                     manifest=manifest_model,
                 )
 
-                # Case B: wiring-status exists and covers all manifest nodes
-                if wiring_status_is_current(v1, ns, manifest_model):
+                # Case B: wiring-status exists and covers all manifest nodes.
+                # Host firewall state drifts independently of interface state
+                # (a Docker (re)start re-imposes FORWARD DROP), so verification
+                # also re-pins site-LAN transit rules; a pin failure means the
+                # host may police LAN transit, which is NOT a verified state —
+                # fall through to the rewire path so the failure lands in
+                # wiring status instead of a clean no-op.
+                transit_verified = True
+                if manifest_model.site_lans:
+                    from node_agent.site_lan import ensure_site_lan_transit
+
+                    try:
+                        ensure_site_lan_transit()
+                    except Exception:
+                        log.exception(
+                            "Site LAN transit rules could not be pinned during "
+                            "verification — treating wiring as diverged"
+                        )
+                        transit_verified = False
+                if transit_verified and wiring_status_is_current(v1, ns, manifest_model):
                     log.info(
                         "Wiring verified — status matches manifest (%d nodes), no-op",
                         len(nodes),

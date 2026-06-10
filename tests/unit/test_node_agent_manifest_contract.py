@@ -40,6 +40,7 @@ def _manifest():
             },
         },
         "ground_bridges": {"gs-den": {}},
+        "site_lans": {},
         "required_substrate_pairs": [],
         "isl_link_count": 0,
     }
@@ -60,6 +61,7 @@ def test_wiring_generation_canonicalizes_keys_and_ignores_existing_generation() 
         "ground_bridges": data["ground_bridges"],
         "nodes": dict(reversed(list(data["nodes"].items()))),
         "required_phases": data["required_phases"],
+        "site_lans": data["site_lans"],
         "isl_link_count": data["isl_link_count"],
         "session_id": data["session_id"],
     }

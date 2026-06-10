@@ -421,7 +421,7 @@ class TestKernelInventory:
         assert resp.dirty_kernel is False
 
     def test_kernel_inventory_handler_is_read_only(self, monkeypatch):
-        from node_agent import ground_bridge, kernel_actuator, kernel_verifier, namespace_ops, vxlan
+        from node_agent import ground_bridge, kernel_actuator, kernel_verifier, vxlan
 
         def _mutation_forbidden(*_args, **_kwargs):
             raise AssertionError("KernelInventory must not mutate kernel state")
@@ -449,7 +449,6 @@ class TestKernelInventory:
                     "detach_local_isl",
                 ),
             ),
-            (namespace_ops, ("create_dummy_interface",)),
             (
                 vxlan,
                 (

@@ -103,19 +103,27 @@
   grid-area: time-controls;
 }
 
-/* Connection lost banner — VF spec Section 14 */
-.connection-banner {
+/* Status banners — VF spec Section 14. Several banner conditions can be
+   true at once (e.g. stale data while waiting for orbital propagation), so
+   one absolutely-positioned stack owns placement and the banners flow
+   vertically inside it instead of painting over each other. */
+.banner-stack {
   position: absolute;
   top: 0;
   left: 0;
   right: 0;
   z-index: var(--z-overlay);
+  display: flex;
+  flex-direction: column;
+  pointer-events: none;
+}
+
+.connection-banner {
   padding: var(--space-3) var(--space-8);
   background: var(--bg-overlay-90);
   color: var(--ws-reconnecting);
   font-size: var(--font-size-sm);
   text-align: center;
-  pointer-events: none;
 }
 
 /* VS-API startup error — full-screen overlay */

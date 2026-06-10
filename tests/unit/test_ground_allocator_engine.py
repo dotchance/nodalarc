@@ -287,6 +287,167 @@ def test_pending_teardown_expires_after_overlap_window():
 
 
 # ---------------------------------------------------------------------------
+# Terminal selection: hot-index avoidance
+#
+# An index allocated in the previously published authority state may still be
+# physically wired until the Scheduler actuates the release. New allocations
+# must prefer indices that were idle last tick; reusing a just-vacated index
+# is the fallback only when nothing cold is free, and the Scheduler's dispatch
+# staging then owns ordering the release before the acquire. These tests pin
+# the DEFINITION (was-held-last-tick), one per vacate path.
+# ---------------------------------------------------------------------------
+
+
+def test_successor_avoids_terminal_vacated_by_invisible_incumbent():
+    """Window closed and successor admitted in the same tick (the live
+    denver-gw1 failure): the successor must land on an idle terminal, not
+    the one the dead incumbent is still wired to."""
+    old_pair = ("gs-A", "sat-old")
+    visible = [
+        GroundVisibility(
+            sat_id="sat-new",
+            visible=True,
+            elevation_deg=50.0,
+            range_km=900.0,
+            remaining_visible_s=None,
+            reject_reason="ok",
+        ),
+    ]
+    result = _allocate(
+        visible,
+        current={old_pair: (0, 0)},
+        gs_terminals=4,
+        sat_terminals={"sat-old": 1, "sat-new": 1},
+    )
+
+    assert result.associations == {("gs-A", "sat-new"): (1, 0)}
+
+
+def test_successor_falls_back_to_hot_terminal_when_nothing_else_is_free():
+    old_pair = ("gs-A", "sat-old")
+    visible = [
+        GroundVisibility(
+            sat_id="sat-new",
+            visible=True,
+            elevation_deg=50.0,
+            range_km=900.0,
+            remaining_visible_s=None,
+            reject_reason="ok",
+        ),
+    ]
+    result = _allocate(
+        visible,
+        current={old_pair: (0, 0)},
+        gs_terminals=1,
+        sat_terminals={"sat-old": 1, "sat-new": 1},
+    )
+
+    assert result.associations == {("gs-A", "sat-new"): (0, 0)}
+
+
+def test_surviving_incumbent_keeps_its_terminal_index():
+    pair = ("gs-A", "sat-old")
+    visible = [
+        GroundVisibility(
+            sat_id="sat-old",
+            visible=True,
+            elevation_deg=50.0,
+            range_km=900.0,
+            remaining_visible_s=None,
+            reject_reason="ok",
+        ),
+    ]
+    result = _allocate(
+        visible,
+        current={pair: (2, 0)},
+        gs_terminals=4,
+        sat_terminals={"sat-old": 1},
+    )
+
+    assert result.associations == {pair: (2, 0)}
+
+
+def test_acquire_avoids_satellite_terminal_vacated_by_another_station():
+    """gs-A's link to sat-X dies this tick while gs-B acquires sat-X: the
+    satellite-side index gs-A is still wired to must not be reused."""
+    sat_caps = {"sat-X": 2}
+    result = allocate_ground_links(
+        step=10,
+        visible_per_station={
+            "gs-A": [],
+            "gs-B": [
+                GroundVisibility(
+                    sat_id="sat-X",
+                    visible=True,
+                    elevation_deg=50.0,
+                    range_km=900.0,
+                    remaining_visible_s=None,
+                    reject_reason="ok",
+                ),
+            ],
+        },
+        ground_station_ids={"gs-A", "gs-B"},
+        current_associations={("gs-A", "sat-X"): (0, 0)},
+        pending_teardowns={},
+        gs_terminal_counts={"gs-A": 1, "gs-B": 1},
+        **_policy_kwargs({"gs-A", "gs-B"}),
+        gs_min_elevations={"gs-A": 25.0, "gs-B": 25.0},
+        gs_service_priorities={"gs-A": 10, "gs-B": 10},
+        gs_tenant_ids={"gs-A": "default", "gs-B": "default"},
+        gs_reference_bodies={"gs-A": "earth", "gs-B": "earth"},
+        sat_ground_terminals=sat_caps,
+        sat_ground_terminal_indices_by_body=_sat_body_pools(sat_caps),
+    )
+
+    assert result.associations == {("gs-B", "sat-X"): (0, 1)}
+
+
+def test_new_challenger_avoids_terminal_freed_by_expiring_teardown():
+    """An MBB teardown completing this tick vacates its index; a challenger
+    admitted in the same tick must not land on it."""
+    old_pair = ("gs-A", "sat-old")
+    successor_pair = ("gs-A", "sat-new")
+    visible = [
+        GroundVisibility(
+            sat_id="sat-new",
+            visible=True,
+            elevation_deg=47.0,
+            range_km=900.0,
+            remaining_visible_s=None,
+            reject_reason="ok",
+        ),
+        GroundVisibility(
+            sat_id="sat-third",
+            visible=True,
+            elevation_deg=44.0,
+            range_km=950.0,
+            remaining_visible_s=None,
+            reject_reason="ok",
+        ),
+    ]
+    sat_caps = {"sat-old": 1, "sat-new": 1, "sat-third": 1}
+    result = allocate_ground_links(
+        step=13,
+        visible_per_station={"gs-A": visible},
+        ground_station_ids={"gs-A"},
+        current_associations={old_pair: (0, 0), successor_pair: (1, 0)},
+        pending_teardowns={old_pair: MbbTeardown(10, successor_pair)},
+        gs_terminal_counts={"gs-A": 4},
+        **_policy_kwargs({"gs-A"}, handover_mode="mbb"),
+        gs_min_elevations={"gs-A": 25.0},
+        gs_service_priorities={"gs-A": 10},
+        gs_tenant_ids={"gs-A": "default"},
+        gs_reference_bodies={"gs-A": "earth"},
+        sat_ground_terminals=sat_caps,
+        sat_ground_terminal_indices_by_body=_sat_body_pools(sat_caps),
+    )
+
+    assert result.pending_teardowns == {}
+    assert result.associations[successor_pair] == (1, 0)
+    assert result.associations[("gs-A", "sat-third")] == (2, 0)
+
+
+# ---------------------------------------------------------------------------
 # UnscheduledPair emission
 #
 # Every visible pair that the allocator rejects MUST appear in

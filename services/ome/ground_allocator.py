@@ -462,6 +462,15 @@ def allocate_ground_links(
     through named policy specs, ranking_order, and handover mode parameters.
     Scheduler state, Node Agent state, and orbital physics do not enter this
     function.
+
+    Terminal selection: surviving links keep their indices (sticky). New
+    links take the lowest free index, preferring indices that were idle in
+    the previously published authority state — an index vacated this tick
+    may still be physically wired until the release is actuated, so reusing
+    it forces the handover to break-before-make. When every free index was
+    held last tick (capacity 1, or full churn), the allocator falls back to
+    reuse and the Scheduler's dispatch staging owns ordering the release
+    before the acquire.
     """
 
     if step < 0:
@@ -595,6 +604,18 @@ def allocate_ground_links(
     )
     gs_occupied: dict[str, set[int]] = {gs: set() for gs in gs_terminal_counts}
     sat_occupied: dict[str, set[int]] = {sat: set() for sat in sat_ground_terminals}
+    # Terminal indices allocated in the previously published authority state.
+    # An index that was held last tick and is free now ("hot") may still be
+    # physically wired until the Scheduler actuates the release; landing a
+    # new link on it makes the handover break-before-make by necessity.
+    # New allocations therefore prefer indices that were idle last tick and
+    # fall back to hot indices only when nothing else is free.
+    prior_gs_occupancy: dict[str, set[int]] = {}
+    prior_sat_occupancy: dict[str, set[int]] = {}
+    for _pair, (_gs_idx, _sat_idx) in current_associations.items():
+        _gs_id, _sat_id = _ground_and_satellite_ids(_pair, ground_station_ids)
+        prior_gs_occupancy.setdefault(_gs_id, set()).add(_gs_idx)
+        prior_sat_occupancy.setdefault(_sat_id, set()).add(_sat_idx)
     new_associations: dict[tuple[str, str], tuple[int, int]] = {}
     new_pending_teardowns: MbbTeardownState = {}
     rejected: dict[tuple[str, str], _Rejected] = {}
@@ -649,7 +670,12 @@ def allocate_ground_links(
 
     def next_sat_terminal_index(candidate: _Candidate) -> int | None:
         occupied = sat_occupied.setdefault(candidate.sat_id, set())
-        return next((idx for idx in sat_terminal_pool(candidate) if idx not in occupied), None)
+        pool = sat_terminal_pool(candidate)
+        hot = prior_sat_occupancy.get(candidate.sat_id, set())
+        cold = next((idx for idx in pool if idx not in occupied and idx not in hot), None)
+        if cold is not None:
+            return cold
+        return next((idx for idx in pool if idx not in occupied), None)
 
     def satellite_has_capacity(candidate: _Candidate) -> bool:
         return next_sat_terminal_index(candidate) is not None
@@ -658,7 +684,10 @@ def allocate_ground_links(
         gs_occ = gs_occupied.setdefault(candidate.gs_id, set())
         sat_occ = sat_occupied.setdefault(candidate.sat_id, set())
         gs_total = gs_terminal_counts[candidate.gs_id]
-        gs_idx = next((i for i in range(gs_total) if i not in gs_occ), None)
+        gs_hot = prior_gs_occupancy.get(candidate.gs_id, set())
+        gs_idx = next((i for i in range(gs_total) if i not in gs_occ and i not in gs_hot), None)
+        if gs_idx is None:
+            gs_idx = next((i for i in range(gs_total) if i not in gs_occ), None)
         sat_idx = next_sat_terminal_index(candidate)
         if gs_idx is None or sat_idx is None:
             return False

@@ -186,7 +186,7 @@ def apply_link_shaping(
         )
 
     _in_namespace(pid, _op)
-    log.info(
+    log.debug(
         "Applied shaping on ns(%s)/%s: %sms, %sMbps",
         pid,
         ifname,

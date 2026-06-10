@@ -156,7 +156,7 @@ def add_peer_ref(ref: PeerRef) -> None:
         _peer_refs.add(ref)
         is_new = ref.remote_ip not in before
     if is_new:
-        log.info("New VXLAN peer diagnostic ref: %s", ref.remote_ip)
+        log.debug("New VXLAN peer diagnostic ref: %s", ref.remote_ip)
 
 
 def remove_peer_ref(ref: PeerRef) -> bool:
@@ -171,7 +171,7 @@ def remove_peer_ref(ref: PeerRef) -> bool:
         _peer_refs.discard(ref)
         still_active = ref.remote_ip in _active_remote_ips_locked()
     if existed and not still_active:
-        log.info("Removed VXLAN peer: %s (no more exact refs)", ref.remote_ip)
+        log.debug("Removed VXLAN peer: %s (no more exact refs)", ref.remote_ip)
     if not existed:
         log.warning("Substrate peer ref was not active during removal: %s", ref)
     return existed

@@ -92,7 +92,7 @@ def create_vxlan_link(
         return bool(ns_ipr.link_lookup(ifname=ifname))
 
     if _in_namespace(pid, _check_exists):
-        log.info("VXLAN link %s already exists in ns(%d), skipping create", ifname, pid)
+        log.debug("VXLAN link %s already exists in ns(%d), skipping create", ifname, pid)
         return
 
     # Get the target pod's namespace fd (while we can still see /proc/{pid})
@@ -118,7 +118,7 @@ def create_vxlan_link(
                     for stale_name in [veth_host, vxlan_if]:
                         stale = ipr.link_lookup(ifname=stale_name)
                         if stale:
-                            log.info("Cleaning stale %s before VXLAN create", stale_name)
+                            log.debug("Cleaning stale %s before VXLAN create", stale_name)
                             ipr.link("del", index=stale[0])
 
                     # 1. Create VXLAN interface
@@ -184,7 +184,7 @@ def create_vxlan_link(
 
     _in_namespace(pid, _configure_in_pod)
 
-    log.info(
+    log.debug(
         "Created VXLAN link %s in ns(%d): VNI=%d %s→%s MTU=%d [%s↔%s↔%s]",
         ifname,
         pid,
@@ -240,7 +240,7 @@ def destroy_vxlan_link(pid: int, ifname: str, vni: int) -> None:
             log.warning("VXLAN link cleanup failed (VNI=%d): %s", vni, exc)
             raise
 
-    log.info("Destroyed VXLAN link VNI=%d [%s + %s]", vni, vxlan_if, veth_host)
+    log.debug("Destroyed VXLAN link VNI=%d [%s + %s]", vni, vxlan_if, veth_host)
 
 
 # ---------------------------------------------------------------------------
@@ -287,7 +287,7 @@ def attach_cross_node_ground(
                 # Idempotent: clean up stale VXLAN from prior attempt
                 stale = ipr.link_lookup(ifname=vxlan_if)
                 if stale:
-                    log.info("Cleaning stale %s before ground VXLAN attach", vxlan_if)
+                    log.debug("Cleaning stale %s before ground VXLAN attach", vxlan_if)
                     _tc_mirred_remove(vxlan_if)
                     _tc_mirred_remove(local_host_ifname)
                     ipr.link("del", index=stale[0])
@@ -330,7 +330,7 @@ def attach_cross_node_ground(
 
         _in_namespace(sat_pid, _up_sat_iface)
 
-    log.info(
+    log.debug(
         "Attached cross-node ground: %s ↔ VXLAN VNI=%d (%s→%s)",
         local_host_ifname,
         vni,
@@ -401,4 +401,4 @@ def detach_cross_node_ground(
             log.warning("Cross-node ground detach failed (VNI=%d): %s", vni, exc)
             raise
 
-    log.info("Detached cross-node ground: %s, VNI=%d", local_host_ifname, vni)
+    log.debug("Detached cross-node ground: %s, VNI=%d", local_host_ifname, vni)

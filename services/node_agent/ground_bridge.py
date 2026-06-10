@@ -179,7 +179,7 @@ def _attach_to_ground_bridge_unlocked(
     _tc_mirred_redirect(gs_port, host_veth)
     _tc_mirred_redirect(host_veth, gs_port)
 
-    log.info("Attached %s to %s (tc redirect)", sat_id, gs_id)
+    log.debug("Attached %s to %s (tc redirect)", sat_id, gs_id)
 
 
 def detach_from_ground_bridge(
@@ -236,7 +236,7 @@ def _detach_from_ground_bridge_unlocked(
     finally:
         ipr.close()
 
-    log.info("Detached %s from %s", sat_id, gs_id)
+    log.debug("Detached %s from %s", sat_id, gs_id)
 
 
 # ---------------------------------------------------------------------------
@@ -285,7 +285,7 @@ def attach_isl(
     finally:
         ipr.close()
 
-    log.info("Attached ISL: %s <-> %s", host_a, host_b)
+    log.debug("Attached ISL: %s <-> %s", host_a, host_b)
 
 
 def detach_isl(
@@ -313,7 +313,7 @@ def detach_isl(
     finally:
         ipr.close()
 
-    log.info("Detached ISL: %s <-> %s", host_a, host_b)
+    log.debug("Detached ISL: %s <-> %s", host_a, host_b)
 
 
 # ---------------------------------------------------------------------------
@@ -387,7 +387,7 @@ def create_ground_bridge(
 
         _in_namespace(gs_pid, _rename_iface)
 
-        log.info("Created GS port %s → %s in ns(%s)", gs_port, ifname, gs_pid)
+        log.debug("Created GS port %s → %s in ns(%s)", gs_port, ifname, gs_pid)
     finally:
         ipr.close()
 
@@ -453,7 +453,7 @@ def create_satellite_ground_veth(
     finally:
         ipr.close()
 
-    log.info("Created satellite ground veth %s ↔ %s in ns(%s)", host_name, ifname, sat_pid)
+    log.debug("Created satellite ground veth %s ↔ %s in ns(%s)", host_name, ifname, sat_pid)
     return (host_name, ifname)
 
 
@@ -545,7 +545,7 @@ def create_mediated_isl(
     _tc_mirred_redirect(host_a, host_b)
     _tc_mirred_redirect(host_b, host_a)
 
-    log.info(
+    log.debug(
         "Created mediated ISL: ns(%s)/%s [%s] ↔ [%s] ns(%s)/%s (mirred installed)",
         pid_a,
         ifname_a,

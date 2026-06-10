@@ -79,6 +79,11 @@ def execute_plan(plan: OperationPlan) -> OperationExecutionResult:
                 proof = step.rollback_verify() if step.rollback_verify else None
                 if proof is not None and not proof.verified:
                     dirty = True
+                    log.error(
+                        "Rollback of step %s left unproven kernel state: %s",
+                        step.name,
+                        proof.summary,
+                    )
                     rollback_results.append(
                         StepExecution(
                             step_name=step.name,
@@ -90,6 +95,11 @@ def execute_plan(plan: OperationPlan) -> OperationExecutionResult:
                     rollback_results.append(StepExecution(step_name=step.name, proof=proof))
             except Exception as rollback_exc:
                 dirty = True
+                log.error(
+                    "Rollback of step %s failed; kernel is dirty: %s",
+                    step.name,
+                    rollback_exc,
+                )
                 rollback_results.append(
                     StepExecution(step_name=step.name, error_message=str(rollback_exc))
                 )

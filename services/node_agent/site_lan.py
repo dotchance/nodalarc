@@ -312,7 +312,7 @@ def _ensure_link(ipr, ifname: str, *, kind: str, mtu: int, **kwargs) -> int:
     # link is wired from scratch — the same posture as every other wiring op.
     stale = ipr.link_lookup(ifname=ifname)
     if stale:
-        log.info("Cleaning stale %s before site LAN create", ifname)
+        log.debug("Cleaning stale %s before site LAN create", ifname)
         ipr.link("del", index=stale[0])
     ipr.link("add", ifname=ifname, kind=kind, **kwargs)
     idx = ipr.link_lookup(ifname=ifname)[0]
@@ -324,7 +324,7 @@ def _ensure_veth(ipr, host_ifname: str, pod_ifname: str, *, mtu: int) -> None:
     for stale_name in (host_ifname, pod_ifname):
         stale = ipr.link_lookup(ifname=stale_name)
         if stale:
-            log.info("Cleaning stale %s before site LAN create", stale_name)
+            log.debug("Cleaning stale %s before site LAN create", stale_name)
             ipr.link("del", index=stale[0])
     ipr.link("add", ifname=host_ifname, kind="veth", peer={"ifname": pod_ifname})
     for name in (host_ifname, pod_ifname):

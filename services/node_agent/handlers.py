@@ -172,6 +172,15 @@ def _combine_proofs(summary: str, proofs: list[kernel_verifier.Proof]) -> EntryO
     failures = [proof for proof in proofs if not proof.verified]
     evidence = tuple(item for proof in proofs for item in proof.evidence)
     if failures:
+        # The agent is the component that OBSERVED the divergence; it must
+        # say so in its own log, not only in the reply. Without this, a
+        # failed proof is invisible on the node where the evidence lives.
+        log.warning(
+            "Kernel proof failed: %s — %s",
+            summary,
+            "; ".join(proof.summary for proof in failures),
+            extra={"evidence": list(evidence)[:8]},
+        )
         return _fail(
             node_agent_pb2.NODE_AGENT_KERNEL_PROOF_FAILED,
             "; ".join(proof.summary for proof in failures),
@@ -185,6 +194,19 @@ def _combine_proofs(summary: str, proofs: list[kernel_verifier.Proof]) -> EntryO
 
 
 def _interface_result(iface, outcome: EntryOutcome) -> node_agent_pb2.InterfaceResult:
+    if not outcome.success:
+        # The agent's own log carries who/what/why for every failed
+        # interface outcome: dirty-kernel failures are errors (the kernel
+        # now needs recovery), everything else warns. Success is debug-only.
+        log.log(
+            logging.ERROR if outcome.dirty_kernel else logging.WARNING,
+            "%s/%s failed (code=%s%s): %s",
+            iface.node_id,
+            iface.interface_name,
+            outcome.error_code,
+            ", dirty_kernel" if outcome.dirty_kernel else "",
+            outcome.error_message,
+        )
     return node_agent_pb2.InterfaceResult(
         node_id=iface.node_id,
         interface_name=iface.interface_name,
@@ -654,9 +676,10 @@ def handle_batch_link_down(
 
     elapsed = (_time.monotonic() - start) * 1000
     ordered_outcomes = [
-        outcomes.get(
-            _iface_key(iface),
-            _fail(node_agent_pb2.NODE_AGENT_INTERNAL_ERROR, "not attempted"),
+        outcomes.get(_iface_key(iface))
+        or _fail(
+            node_agent_pb2.NODE_AGENT_INTERNAL_ERROR,
+            f"not attempted: batch aborted before {iface.node_id}/{iface.interface_name}",
         )
         for iface in request.interfaces
     ]
@@ -1003,9 +1026,10 @@ def handle_batch_link_up(
 
     elapsed = (_time.monotonic() - start) * 1000
     ordered_outcomes = [
-        outcomes.get(
-            _iface_key(iface),
-            _fail(node_agent_pb2.NODE_AGENT_INTERNAL_ERROR, "not attempted"),
+        outcomes.get(_iface_key(iface))
+        or _fail(
+            node_agent_pb2.NODE_AGENT_INTERNAL_ERROR,
+            f"not attempted: batch aborted before {iface.node_id}/{iface.interface_name}",
         )
         for iface in request.interfaces
     ]
@@ -1207,9 +1231,11 @@ def handle_kernel_inventory(
             )
 
     ordered_outcomes = [
-        outcomes.get(
-            _iface_key(entry),
-            _fail(node_agent_pb2.NODE_AGENT_INTERNAL_ERROR, "not attempted", dirty_kernel=True),
+        outcomes.get(_iface_key(entry))
+        or _fail(
+            node_agent_pb2.NODE_AGENT_INTERNAL_ERROR,
+            f"not attempted: batch aborted before {entry.node_id}/{entry.interface_name}",
+            dirty_kernel=True,
         )
         for entry in request.entries
     ]

@@ -49,15 +49,24 @@ _watch_config() {
             echo "ConfigMap change detected, reloading FRR config"
             cp /etc/frr-config/* /etc/frr/
             chown -R frr:frr /etc/frr
-            # Graceful reload — FRR re-reads config without restarting daemons.
-            # vtysh sources the new config file, applying changes incrementally.
-            vtysh -f /etc/frr/frr.conf 2>/dev/null || true
-            # Update config version sentinel after successful reload
-            if [ -f /etc/frr-config/_config_version ]; then
-                cp /etc/frr-config/_config_version /etc/frr/.config_version
+            # Declarative reload — frr-reload.py diffs the running config
+            # against the intended file and applies additions AND removals.
+            # (vtysh -f only sources commands additively: config removed in
+            # the new version would silently survive in the daemons.)
+            if python3 /usr/lib/frr/frr-reload.py --reload /etc/frr/frr.conf; then
+                # The sentinel is a claim that the running NOS has converged
+                # to this config version. It moves only on reload success;
+                # on failure the readiness probe must report the pod stale.
+                if [ -f /etc/frr-config/_config_version ]; then
+                    cp /etc/frr-config/_config_version /etc/frr/.config_version
+                fi
+                echo "FRR config reloaded"
+                last_hash="$current_hash"
+            else
+                # last_hash intentionally not advanced: the watcher keeps
+                # reconciling toward the intended config on every poll.
+                echo "ERROR: FRR declarative reload failed; running config is stale and readiness will report it"
             fi
-            last_hash="$current_hash"
-            echo "FRR config reloaded"
         fi
     done
 }

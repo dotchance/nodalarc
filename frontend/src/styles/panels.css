@@ -604,3 +604,33 @@
   border-right: 1px solid var(--border);
   overflow-y: auto;
 }
+
+/* Multi-gateway site tabs at the top of the GS detail panel. */
+.site-member-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.site-member-tab {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-bottom: none;
+  border-radius: 6px 6px 0 0;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-family: var(--font-family);
+  font-size: var(--font-size-sm);
+  padding: 4px 10px;
+}
+
+.site-member-tab:hover {
+  color: var(--text-primary);
+}
+
+.site-member-tab--active {
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+  font-weight: 600;
+}

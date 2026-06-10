@@ -283,7 +283,13 @@ export function Scene({
         onPointerMissed={(e) => missedRef.current(e)}
         controlsMaxDistance={controlsMaxDistance}
         cameraFar={cameraFar}
-        afterControls={<Labels nodes={nodes} containerRef={labelContainerRef} />}
+        afterControls={
+          <Labels
+            nodes={nodes}
+            containerRef={labelContainerRef}
+            selectedGsId={selection?.type === "ground_station" ? selection.id : null}
+          />
+        }
       >
         {actionsRef && (
           <GlobeActionsBridge

@@ -83,10 +83,42 @@ interface LabelsProps {
   nodes: NodeState[];
   /** The position-absolute overlay div (sibling of the canvas) this component owns its labels in. */
   containerRef: React.RefObject<HTMLDivElement | null>;
+  /** Selected ground station id - the stacked-site label follows it. */
+  selectedGsId?: string | null;
 }
 
-export function Labels({ nodes, containerRef }: LabelsProps) {
+/**
+ * Multi-gateway sites stack at one surface point; rendering every member's
+ * label produces unreadable overlap with an arbitrary winner. One label
+ * represents the stack: the SELECTED member when the selection is in the
+ * site, the first member (sorted) otherwise.
+ */
+export function siteLabelRepresentatives(
+  nodes: NodeState[],
+  selectedGsId: string | null,
+): Set<string> {
+  const bySite = new Map<string, string[]>();
+  for (const node of nodes) {
+    if (node.node_type !== "ground_station") continue;
+    const site = node.namespace ?? node.node_id;
+    const members = bySite.get(site);
+    if (members) members.push(node.node_id);
+    else bySite.set(site, [node.node_id]);
+  }
+  const representatives = new Set<string>();
+  for (const members of bySite.values()) {
+    members.sort();
+    representatives.add(
+      selectedGsId !== null && members.includes(selectedGsId) ? selectedGsId : members[0]!,
+    );
+  }
+  return representatives;
+}
+
+export function Labels({ nodes, containerRef, selectedGsId = null }: LabelsProps) {
   const camera = useThree((s) => s.camera);
+  const gsRepresentativesRef = useRef(new Set<string>());
+  gsRepresentativesRef.current = siteLabelRepresentatives(nodes, selectedGsId);
 
   // The label divs this component owns, keyed by node_id. Mutated in useFrame as nodes appear
   // / disappear, so read nodes through a ref to keep the useFrame closure stable (mirrors
@@ -139,6 +171,7 @@ export function Labels({ nodes, containerRef }: LabelsProps) {
           satLabels.current.get(node.node_id)!.textContent = label;
         }
       } else if (node.node_type === "ground_station") {
+        if (!gsRepresentativesRef.current.has(node.node_id)) continue;
         seenGs.add(node.node_id);
         const label = nodeDisplayLabel(node);
         if (!gsLabels.current.has(node.node_id)) {

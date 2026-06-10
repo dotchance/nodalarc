@@ -70,6 +70,16 @@ export function GroundStationDetail({ node, snapshot, onSelect }: GroundStationD
   const connectedLinks = snapshot.links.filter(
     (l) => l.node_a === node.node_id || l.node_b === node.node_id,
   );
+  // Multi-gateway sites: every ground node sharing this node's site
+  // (namespace). Rendered as a switcher so each colocated gateway is one
+  // click away - the map fans them apart, but the site is the entity a
+  // user thinks in. (A fuller site-level tab is planned UX.)
+  const siteMembers = node.namespace
+    ? snapshot.nodes
+        .filter((n) => n.node_type === "ground_station" && n.namespace === node.namespace)
+        .map((n) => n.node_id)
+        .sort()
+    : [node.node_id];
   const nodeAddresses = node.addresses ?? [];
   const loopbacks = nodeAddresses.filter((a) => a.purpose === "router_loopback");
   const siteInterfaces = nodeAddresses.filter((a) => a.purpose === "site_interface");
@@ -148,6 +158,27 @@ export function GroundStationDetail({ node, snapshot, onSelect }: GroundStationD
 
   return (
     <div>
+      {siteMembers.length > 1 ? (
+        <div className="site-member-tabs" role="tablist" aria-label={`Site ${node.namespace}`}>
+          {siteMembers.map((memberId) => (
+            <button
+              key={memberId}
+              type="button"
+              role="tab"
+              aria-selected={memberId === node.node_id}
+              className={
+                memberId === node.node_id
+                  ? "site-member-tab site-member-tab--active"
+                  : "site-member-tab"
+              }
+              onClick={() => onSelect({ type: "ground_station", id: memberId })}
+              title={`Select ${memberId}`}
+            >
+              {memberId.split("-").pop()}
+            </button>
+          ))}
+        </div>
+      ) : null}
       <h2>{node.node_id}</h2>
       {explanation.facts ? (
         <GroundStationCard
@@ -183,6 +214,7 @@ export function GroundStationDetail({ node, snapshot, onSelect }: GroundStationD
         <span className="detail-label">Role</span>
         <span className="detail-value">Gateway</span>
       </div>
+
       <div className="detail-row">
         <span className="detail-label">Area</span>
         <span className="detail-value">ground</span>

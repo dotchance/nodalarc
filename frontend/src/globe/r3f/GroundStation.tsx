@@ -66,8 +66,38 @@ function ringGeometry(radius: number): THREE.BufferGeometry {
   return g;
 }
 
+/**
+ * Stacked-site click cycling.
+ *
+ * Every gateway of a multi-node site shares the site's surface coordinates -
+ * truthfully: that IS where they are, and drawing them apart would lie about
+ * geography. Stacked markers make a single click ambiguous, so clicks cycle:
+ * the first click selects the site's first member (sorted by node id), and
+ * clicking the stack again advances to the next member. The detail panel's
+ * site section lists all members for direct selection.
+ */
+export function nextSiteMember(
+  nodes: NodeState[],
+  clickedId: string,
+  selectedId: string | null,
+): string {
+  const clicked = nodes.find((n) => n.node_id === clickedId);
+  const site = clicked?.namespace;
+  if (!site) return clickedId;
+  const members = nodes
+    .filter((n) => n.node_type === "ground_station" && n.namespace === site)
+    .map((n) => n.node_id)
+    .sort();
+  if (members.length < 2) return clickedId;
+  const selectedIndex = selectedId === null ? -1 : members.indexOf(selectedId);
+  if (selectedIndex === -1) return members[0]!;
+  return members[(selectedIndex + 1) % members.length]!;
+}
+
 interface GroundStationProps {
   node: NodeState;
+  /** Resolve which node a click on this (possibly stacked) marker selects. */
+  resolveClickTarget: (clickedId: string) => string;
   selected: boolean;
   orbitalAltKm: number;
   texture: THREE.CanvasTexture;
@@ -84,6 +114,7 @@ interface GroundStationProps {
 
 function GroundStation({
   node,
+  resolveClickTarget,
   selected,
   orbitalAltKm,
   texture,
@@ -176,13 +207,14 @@ function GroundStation({
     // A modified click is reserved for satellite orbit-pinning; swallow it on a GS (the legacy
     // gpuPicker returns on a modified click for anything that is not a satellite).
     if (e.nativeEvent.ctrlKey || e.nativeEvent.metaKey) return;
-    onSelect({ type: "ground_station", id: node.node_id });
+    onSelect({ type: "ground_station", id: resolveClickTarget(node.node_id) });
   };
 
   const handleDoubleClick = (e: ThreeEvent<MouseEvent>) => {
     e.stopPropagation();
-    onSelect({ type: "ground_station", id: node.node_id });
-    onFocusNode(node.node_id);
+    const target = resolveClickTarget(node.node_id);
+    onSelect({ type: "ground_station", id: target });
+    onFocusNode(target);
   };
 
   return (
@@ -190,6 +222,7 @@ function GroundStation({
       <sprite
         ref={spriteRef}
         scale={[GS_SIZE, GS_SIZE, 1]}
+        renderOrder={selected ? 2 : 0}
         position={geom.position}
         onClick={handleClick}
         onDoubleClick={handleDoubleClick}
@@ -267,8 +300,9 @@ export function GroundStations({
 
   const gsNodes = nodes.filter((n) => n.node_type === "ground_station");
   const orbitalAltKm = nodes.find((n) => n.node_type === "satellite")?.alt_km ?? 550;
-
   const selectedGsId = selection?.type === "ground_station" ? selection.id : null;
+  const resolveClickTarget = (clickedId: string) =>
+    nextSiteMember(gsNodes, clickedId, selectedGsId);
 
   return (
     <>
@@ -278,6 +312,7 @@ export function GroundStations({
           <GroundStation
             key={node.node_id}
             node={node}
+            resolveClickTarget={resolveClickTarget}
             selected={isSelected}
             orbitalAltKm={orbitalAltKm}
             texture={texture}

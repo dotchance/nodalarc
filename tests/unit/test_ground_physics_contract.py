@@ -2,7 +2,7 @@
 # Licensed under the Apache License, Version 2.0. See LICENSE file.
 """Foundational ground-link physics contracts.
 
-These tests lock the Phase 2 promise: a scheduled ground link must first pass
+These tests lock the ground-physics invariant: a scheduled ground link must first pass
 body-aware LOS, range, field-of-regard, and topocentric tracking constraints.
 """
 

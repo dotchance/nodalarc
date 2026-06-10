@@ -1,8 +1,8 @@
 # Copyright 2024-2026 .chance (dotchance)
 # Licensed under the Apache License, Version 2.0. See LICENSE file.
-"""Phase 6 local foundation proof tests.
+"""Runtime foundation proof tests.
 
-These tests cover the deterministic/local parts of Phase 6. C-J packet-behavior
+These tests cover deterministic/local foundation behavior. C-J packet-behavior
 acceptance remains a real-pod run with retained evidence.
 """
 
@@ -67,7 +67,7 @@ def _info(pair: tuple[str, str]) -> ActiveLinkInfo:
         link_type="ground",
         range_km=100.0,
         authority_sim_time=BASE,
-        authority_source="phase6-test",
+        authority_source="foundation-test",
     )
 
 
@@ -87,7 +87,7 @@ def _dispatcher(*, now=None) -> Dispatcher:
         bandwidth_map=dict.fromkeys(interface_map, 100.0),
         pod_locator=loc,
         agent_pool=pool,
-        session_id="phase6-proof",
+        session_id="foundation-proof",
         wiring_generation="sha256:" + "6" * 64,
         max_latency_age_s=1.0,
         gs_terminal_capacities={"gs-multi": 2},
@@ -595,7 +595,7 @@ def _reset_ome_playback_globals() -> None:
     ome_main._initial_epoch_committed = False
 
 
-def _demo_phase6_session_path(tmp_path: Path) -> Path:
+def _demo_foundation_session_path(tmp_path: Path) -> Path:
     session_path = tmp_path / "earth-leo-simple.yaml"
     session_path.write_text(
         yaml.dump(
@@ -613,7 +613,7 @@ def _demo_phase6_session_path(tmp_path: Path) -> Path:
 
 
 def _capture_ome_seek_stream(monkeypatch, tmp_path: Path) -> tuple[str, list[tuple[str, bytes]]]:
-    session_path = _demo_phase6_session_path(tmp_path)
+    session_path = _demo_foundation_session_path(tmp_path)
 
     import nats
     import ome.event_stream as ome_event_stream
@@ -627,7 +627,7 @@ def _capture_ome_seek_stream(monkeypatch, tmp_path: Path) -> tuple[str, list[tup
     init_platform_config(Path("configs/platform.yaml"))
     _reset_ome_playback_globals()
 
-    cfg = _load_session_config(str(session_path), run_id="phase6-replay")
+    cfg = _load_session_config(str(session_path), run_id="checkpoint-replay")
     session_id = cfg.session_id
 
     real_compute_step = ome_event_stream.compute_step

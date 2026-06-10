@@ -242,8 +242,8 @@ def headers(token: str) -> dict:
     return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
 
-def phase6_progress(message: str) -> None:
-    print(f"[phase6] {message}", flush=True)
+def acceptance_progress(message: str) -> None:
+    print(f"[acceptance] {message}", flush=True)
 
 
 def request_json(method: str, path: str, *, token: str | None = None, retries: int = 12, **kwargs):
@@ -378,7 +378,7 @@ def wait_for_ready(token: str, timeout: int = 600) -> dict:
 
     deadline = time.monotonic() + timeout
 
-    # Phase 1: Wait for CR to reach Ready or Error
+    # Wait for CR to reach Ready or Error.
     cr_ready = False
     while time.monotonic() < deadline:
         try:
@@ -411,7 +411,7 @@ def wait_for_ready(token: str, timeout: int = 600) -> dict:
     if not cr_ready:
         return {"phase": "Timeout"}
 
-    # Phase 2: Wait for VS-API to expose a live, non-empty state snapshot.
+    # Wait for VS-API to expose a live, non-empty state snapshot.
     # The _run_switch background task may still be running its poll loop.
     for _ in range(120):  # up to 120s
         try:
@@ -1562,7 +1562,7 @@ def _events_since(
     return [event for event in events if _event_at_or_after(event, started_at)]
 
 
-def run_phase6_dirty_repair_acceptance() -> dict:
+def run_dirty_repair_acceptance() -> dict:
     evidence: dict = {
         "id": "P6-REPAIR",
         "label": "forced-kernel-dirty-operator-repair",
@@ -1572,11 +1572,11 @@ def run_phase6_dirty_repair_acceptance() -> dict:
     if not MBB_ACCEPTANCE_SESSION.exists():
         return {**evidence, "result": "ERROR", "error": "MBB acceptance session missing"}
     try:
-        phase6_progress("dirty-repair: acquiring token")
+        acceptance_progress("dirty-repair: acquiring token")
         token = get_token()
-        phase6_progress("dirty-repair: deploying session")
+        acceptance_progress("dirty-repair: deploying session")
         yaml_str = _acceptance_session_yaml(
-            session_name=f"phase6-dirty-repair-{int(time.time())}",
+            session_name=f"dirty-repair-{int(time.time())}",
             clean_kernel_audit_interval_s=2.0,
         )
         evidence["deploy_response"] = deploy_session(token, yaml_str)
@@ -1584,29 +1584,29 @@ def run_phase6_dirty_repair_acceptance() -> dict:
             evidence["result"] = "FAIL"
             evidence["error"] = f"Deploy rejected: {evidence['deploy_response']}"
             return evidence
-        phase6_progress("dirty-repair: waiting for session readiness")
+        acceptance_progress("dirty-repair: waiting for session readiness")
         ready_result = wait_for_ready(token, timeout=600)
         evidence["ready_result"] = ready_result
-        phase6_progress(f"dirty-repair: readiness result {ready_result}")
+        acceptance_progress(f"dirty-repair: readiness result {ready_result}")
         if ready_result.get("phase") != "Ready":
             evidence["result"] = "FAIL"
             evidence["error"] = f"Did not reach Ready: {ready_result}"
             return evidence
 
-        phase6_progress("dirty-repair: waiting for scheduler actuation roster")
+        acceptance_progress("dirty-repair: waiting for scheduler actuation roster")
         roster = _wait_for_scheduler_actuation_roster(token, wait_s=180)
         evidence["scheduler_actuation_roster"] = roster
-        phase6_progress(f"dirty-repair: roster result {roster.get('result')}")
+        acceptance_progress(f"dirty-repair: roster result {roster.get('result')}")
         if roster.get("result") != "PASS":
             evidence["result"] = "FAIL"
             evidence["error"] = "Scheduler actuation startup roster did not complete"
             return evidence
 
-        phase6_progress("dirty-repair: waiting for active ground link candidate")
+        acceptance_progress("dirty-repair: waiting for active ground link candidate")
         time.sleep(20)
         token = get_token()
         pair = _active_ground_link_with_interfaces(token, wait_s=240)
-        phase6_progress(f"dirty-repair: selected pair {pair}")
+        acceptance_progress(f"dirty-repair: selected pair {pair}")
         evidence["selected_pair"] = pair
         if not pair:
             evidence["result"] = "FAIL"
@@ -1617,7 +1617,7 @@ def run_phase6_dirty_repair_acceptance() -> dict:
         sat_id = pair["sat_id"]
         gs_ifname = pair["gs_ifname"]
         break_started = datetime.now(UTC)
-        phase6_progress(f"dirty-repair: forcing host peer for {gs_id} {gs_ifname} down")
+        acceptance_progress(f"dirty-repair: forcing host peer for {gs_id} {gs_ifname} down")
         break_cmd = _force_ground_host_interface_down(gs_id, gs_ifname, timeout=10)
         evidence["forced_mutation"] = {
             "operation": "ground host veth admin-down",
@@ -1634,25 +1634,25 @@ def run_phase6_dirty_repair_acceptance() -> dict:
             evidence["error"] = "Failed to induce dirty kernel state"
             return evidence
 
-        phase6_progress(f"dirty-repair: waiting for {gs_id} kernel_dirty")
+        acceptance_progress(f"dirty-repair: waiting for {gs_id} kernel_dirty")
         dirty = _wait_for_actuation_state(token, gs_id, "kernel_dirty", wait_s=240)
         evidence["dirty_observation"] = dirty
-        phase6_progress(f"dirty-repair: dirty observation {dirty.get('result')}")
+        acceptance_progress(f"dirty-repair: dirty observation {dirty.get('result')}")
         evidence["events_after_forced_mutation"] = _events_since(token, break_started)
         if dirty.get("result") != "PASS":
             evidence["result"] = "FAIL"
             evidence["error"] = "Forced kernel mutation did not produce kernel_dirty state"
             return evidence
 
-        intervention_id = f"phase6-repair-{int(time.time())}"
-        phase6_progress(f"dirty-repair: requesting repair {intervention_id}")
+        intervention_id = f"dirty-repair-{int(time.time())}"
+        acceptance_progress(f"dirty-repair: requesting repair {intervention_id}")
         repair_response = request_json(
             "POST",
             "/api/v1/ops/repair",
             token=token,
             json={
                 "gs_id": gs_id,
-                "reason": "Phase 6 acceptance: repair a deliberately induced kernel mismatch",
+                "reason": "Acceptance test: repair a deliberately induced kernel mismatch",
                 "intervention_id": intervention_id,
             },
             retries=3,
@@ -1663,9 +1663,9 @@ def run_phase6_dirty_repair_acceptance() -> dict:
             evidence["error"] = "Operator repair was not accepted"
             return evidence
 
-        phase6_progress(f"dirty-repair: waiting for {gs_id} clean after repair")
+        acceptance_progress(f"dirty-repair: waiting for {gs_id} clean after repair")
         clean = _wait_for_actuation_state(token, gs_id, "clean", wait_s=180)
-        phase6_progress(f"dirty-repair: clean observation {clean.get('result')}")
+        acceptance_progress(f"dirty-repair: clean observation {clean.get('result')}")
         repair_events = []
         succeeded = False
         failed = []
@@ -1802,7 +1802,7 @@ def _wait_for_mbb_overlap(token: str, *, wait_s: int = 600) -> dict:
             "active_ground_gs_count": len(by_gs),
         }
         if time.monotonic() >= next_progress:
-            phase6_progress(
+            acceptance_progress(
                 "seek-mbb: waiting for OME overlap start; "
                 f"active_ground_gs={len(by_gs)} multi_link={len(multi_link_candidates)} "
                 f"allocation_events={len(allocation_events)}"
@@ -1835,7 +1835,7 @@ def _wait_for_playback_not_seeking(token: str, epoch_id: int, *, wait_s: int = 1
     }
 
 
-def run_phase6_seek_during_mbb_acceptance() -> dict:
+def run_seek_during_mbb_acceptance() -> dict:
     evidence: dict = {
         "id": "P6-SEEK-MBB",
         "label": "seek-during-mbb-overlap",
@@ -1845,13 +1845,13 @@ def run_phase6_seek_during_mbb_acceptance() -> dict:
     if not MBB_ACCEPTANCE_SESSION.exists():
         return {**evidence, "result": "ERROR", "error": "MBB acceptance session missing"}
     try:
-        phase6_progress("seek-mbb: acquiring token")
+        acceptance_progress("seek-mbb: acquiring token")
         token = get_token()
         yaml_str = _acceptance_session_yaml(
-            session_name=f"phase6-seek-mbb-{int(time.time())}",
+            session_name=f"seek-mbb-{int(time.time())}",
             mbb_overlap_ticks=600,
         )
-        phase6_progress("seek-mbb: deploying session")
+        acceptance_progress("seek-mbb: deploying session")
         evidence["deploy_response"] = deploy_session(token, yaml_str)
         if evidence["deploy_response"].get("status") != "switching":
             evidence["result"] = "FAIL"
@@ -1866,10 +1866,10 @@ def run_phase6_seek_during_mbb_acceptance() -> dict:
 
         time.sleep(20)
         token = get_token()
-        phase6_progress("seek-mbb: waiting for OME teardown-state overlap")
+        acceptance_progress("seek-mbb: waiting for OME teardown-state overlap")
         overlap = _wait_for_mbb_overlap(token, wait_s=900)
         evidence["overlap_observation"] = overlap
-        phase6_progress(f"seek-mbb: overlap observation {overlap.get('result')}")
+        acceptance_progress(f"seek-mbb: overlap observation {overlap.get('result')}")
         if overlap.get("result") != "PASS":
             evidence["result"] = "FAIL"
             evidence["error"] = "No MBB overlap available for seek test"
@@ -1877,7 +1877,7 @@ def run_phase6_seek_during_mbb_acceptance() -> dict:
 
         current_sim = _parse_api_datetime(overlap["sim_time"])
         seek_target = current_sim + timedelta(seconds=30)
-        phase6_progress(f"seek-mbb: requesting seek to {seek_target.isoformat()}")
+        acceptance_progress(f"seek-mbb: requesting seek to {seek_target.isoformat()}")
         seek_response = request_json(
             "POST",
             "/api/v1/playback",
@@ -1894,10 +1894,10 @@ def run_phase6_seek_during_mbb_acceptance() -> dict:
             evidence["error"] = "Seek was not accepted into seeking state"
             return evidence
 
-        phase6_progress("seek-mbb: waiting for playback to resume")
+        acceptance_progress("seek-mbb: waiting for playback to resume")
         resumed = _wait_for_playback_not_seeking(token, int(seek_response["epoch_id"]), wait_s=120)
         evidence["resume_observation"] = resumed
-        phase6_progress(f"seek-mbb: resume observation {resumed.get('result')}")
+        acceptance_progress(f"seek-mbb: resume observation {resumed.get('result')}")
         events = request_json("GET", "/api/v1/ops/events?limit=500", token=token)
         lifecycle = [
             event
@@ -1947,7 +1947,7 @@ def run_mbb_acceptance() -> dict:
     try:
         token = get_token()
         yaml_str = _acceptance_session_yaml(
-            session_name=f"phase6-cj-mbb-{int(time.time())}",
+            session_name=f"cj-mbb-{int(time.time())}",
             mbb_overlap_ticks=60,
         )
         evidence["yaml_length"] = len(yaml_str)
@@ -1956,10 +1956,10 @@ def run_mbb_acceptance() -> dict:
             evidence["result"] = "FAIL"
             evidence["error"] = f"Deploy rejected: {evidence['deploy_response']}"
             return evidence
-        phase6_progress("seek-mbb: waiting for session readiness")
+        acceptance_progress("seek-mbb: waiting for session readiness")
         ready_result = wait_for_ready(token, timeout=600)
         evidence["ready_result"] = ready_result
-        phase6_progress(f"seek-mbb: readiness result {ready_result}")
+        acceptance_progress(f"seek-mbb: readiness result {ready_result}")
         if ready_result.get("phase") != "Ready":
             evidence["result"] = "FAIL"
             evidence["error"] = f"Did not reach Ready: {ready_result}"
@@ -2137,7 +2137,7 @@ def main():
         xfailed = 0
         xpassed = 0
 
-        if os.environ.get("NODALARC_PHASE6_ONLY") != "1":
+        if os.environ.get("NODALARC_ACCEPTANCE_ONLY") != "1":
             for perm in MATRIX:
                 evidence = run_permutation(perm)
                 bucket = _classify_matrix_result(evidence, perm)
@@ -2161,27 +2161,27 @@ def main():
         if os.environ.get("NODALARC_RUN_MBB_ACCEPTANCE") == "1":
             evidence = run_mbb_acceptance()
             results.append(evidence)
-            evidence_file = evidence_dir / "phase6-cj-mbb-packet-behavior.json"
+            evidence_file = evidence_dir / "cj-mbb-packet-behavior.json"
             evidence_file.write_text(json.dumps(evidence, indent=2))
             if evidence["result"] == "PASS":
                 passed += 1
             else:
                 failed += 1
 
-        if os.environ.get("NODALARC_RUN_PHASE6_DIRTY_REPAIR") == "1":
-            evidence = run_phase6_dirty_repair_acceptance()
+        if os.environ.get("NODALARC_RUN_DIRTY_REPAIR") == "1":
+            evidence = run_dirty_repair_acceptance()
             results.append(evidence)
-            evidence_file = evidence_dir / "phase6-dirty-repair.json"
+            evidence_file = evidence_dir / "dirty-repair.json"
             evidence_file.write_text(json.dumps(evidence, indent=2))
             if evidence["result"] == "PASS":
                 passed += 1
             else:
                 failed += 1
 
-        if os.environ.get("NODALARC_RUN_PHASE6_SEEK_MBB") == "1":
-            evidence = run_phase6_seek_during_mbb_acceptance()
+        if os.environ.get("NODALARC_RUN_SEEK_MBB") == "1":
+            evidence = run_seek_during_mbb_acceptance()
             results.append(evidence)
-            evidence_file = evidence_dir / "phase6-seek-during-mbb.json"
+            evidence_file = evidence_dir / "seek-during-mbb.json"
             evidence_file.write_text(json.dumps(evidence, indent=2))
             if evidence["result"] == "PASS":
                 passed += 1

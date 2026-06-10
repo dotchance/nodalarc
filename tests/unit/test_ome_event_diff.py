@@ -47,7 +47,7 @@ def _decision(
 ) -> GroundVisibilityDecision:
     """Build a typed visibility decision for test inputs.
 
-    Phase 1.2.b replaced the positional tuple `(visible, range_km,
+    Ground visibility diffs replaced the positional tuple `(visible, range_km,
     elevation_deg)` with `GroundVisibilityDecision`. Tests construct
     the typed form explicitly — no positional shortcuts.
     """
@@ -213,7 +213,7 @@ def test_ground_event_diff_marks_mbb_teardown_state():
 
 
 # ---------------------------------------------------------------------------
-# Reason propagation (Phase 1, C-foundation-5):
+# Reason propagation into operator-facing snapshots:
 # event_diff must surface BOTH visibility_reject_reason (from the
 # typed decision) and unscheduled_reason (from the allocator's
 # unscheduled_pairs) onto VisibilityEvent so consumers can explain

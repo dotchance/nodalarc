@@ -13,7 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from nodalarc.substrate.measurement_contract import RequiredSubstratePair
 
 REQUIRED_WIRING_PHASES: tuple[str, ...] = (
-    "phase0_cleanup",
+    "managed_interface_cleanup",
     "sysctls",
     "isl_interfaces",
     "mpls",

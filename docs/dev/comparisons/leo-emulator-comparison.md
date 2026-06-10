@@ -43,7 +43,7 @@ Important interpretation rules:
 
 ## External References
 
-- Prompt-provided ScienceDirect article:
+- ScienceDirect article:
   <https://www.sciencedirect.com/science/article/pii/S1389128626003956>
 - bLEO repository: <https://github.com/leonetlab-upct/bleo>
 - bLEO paper page: <https://www.sciencedirect.com/science/article/pii/S1570870526000272>

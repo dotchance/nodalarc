@@ -41,7 +41,7 @@ def test_failed_status_marks_prior_ready_failed_phase_dirty_and_later_pending() 
     )
 
     phases = {phase.phase: phase for phase in status.phases}
-    assert phases["phase0_cleanup"].status == "ready"
+    assert phases["managed_interface_cleanup"].status == "ready"
     assert phases["sysctls"].status == "ready"
     assert phases["ground_infrastructure"].status == "dirty_kernel"
     assert phases["ground_infrastructure"].error_message == "bridge failed"

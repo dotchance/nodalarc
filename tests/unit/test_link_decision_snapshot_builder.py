@@ -2,7 +2,7 @@
 # Licensed under the Apache License, Version 2.0. See LICENSE file.
 """Unit tests for `build_link_decision_snapshot`.
 
-Phase 1.3.b — the builder converts hot-path slotted
+The builder converts hot-path slotted
 `GroundVisibilityDecision` instances to Pydantic
 `GroundVisibilityDecisionWire` form for the NATS boundary, and packs
 them together with the `UnscheduledPair` records into the wire-form
@@ -259,7 +259,7 @@ class TestBuildLinkDecisionSnapshot:
 
 
 # ---------------------------------------------------------------------------
-# Snapshot-level consistency validators (Phase 1.1 boundary correctness)
+# Snapshot-level consistency validators for boundary correctness.
 # ---------------------------------------------------------------------------
 
 

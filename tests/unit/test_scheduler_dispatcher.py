@@ -307,7 +307,7 @@ class TestDispatcherActiveLinks:
         d._active_links[("sat-P00S00", "sat-P00S01")] = info
 
         # ISL pair still visible but allocator did not schedule it.
-        # Phase 5 treats OME scheduled=false as authority: desired state
+        # OME scheduled=false is authoritative: desired state
         # must not keep forwarding-plane links the OME did not schedule.
         vis = _make_vis(
             "sat-P00S00",

@@ -1,6 +1,6 @@
 # Copyright 2024-2026 .chance (dotchance)
 # Licensed under the Apache License, Version 2.0. See LICENSE file.
-"""Phase 5 Scheduler actuation trust contracts."""
+"""Scheduler actuation trust contracts."""
 
 from __future__ import annotations
 
@@ -540,9 +540,9 @@ def test_recoverable_state_heartbeat_is_due_independent_of_clean_kernel_audit() 
     assert actuation_state_subject(d._session_id, "gs-multi") in subjects
 
 
-def test_reconcile_publishes_corrected_set_when_a_phase_fails_after_teardown() -> None:
-    # Split-brain guard. A dispatch phase commits a membership change (tears down
-    # old_pair) and a later phase raises a fatal failure (the real path:
+def test_reconcile_publishes_corrected_set_when_dispatch_step_fails_after_teardown() -> None:
+    # Split-brain guard. A dispatch step commits a membership change (tears down
+    # old_pair) and a later step raises a fatal failure (the real path:
     # _handle_actuation_result -> _halt_dispatcher -> RuntimeError). The publish is in a
     # finally, so the corrected kernel-actual set is still published before the raise
     # propagates — otherwise the retained snapshot lists the torn-down pair as up and

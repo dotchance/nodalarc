@@ -1333,7 +1333,7 @@ class TestDebugRefCounting:
 
 
 # ---------------------------------------------------------------------------
-# Phase 1 (C-foundation-5): operator-facing decision reasons
+# Operator-facing decision reasons
 # ---------------------------------------------------------------------------
 
 

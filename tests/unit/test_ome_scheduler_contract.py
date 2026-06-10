@@ -397,7 +397,7 @@ class TestGsDeallocationDispatchBatch:
         d._desired_links[("sat-P00S00", "sat-P00S01")] = info
         d._active_links[("sat-P00S00", "sat-P00S01")] = info
 
-        # ISL pair still visible but OME did not schedule it. Phase 5
+        # ISL pair still visible but OME did not schedule it. The Scheduler
         # treats scheduled=false as authoritative for forwarding state.
         vis = _make_vis(
             "sat-P00S00",

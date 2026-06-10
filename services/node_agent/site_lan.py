@@ -228,8 +228,8 @@ def plan_site_lan(
 def wire_site_lan(plan: SiteLanPlan) -> None:
     """Execute one site LAN plan: bridge, member ports, VXLAN replication.
 
-    Stale interfaces were removed by phase0 cleanup (site LAN names are
-    managed host ifnames), so creation starts from clean state — Case A.
+    Stale managed interfaces were removed before wiring (site LAN names are
+    managed host ifnames), so creation starts from a clean host namespace.
     """
     from pyroute2 import IPRoute
 

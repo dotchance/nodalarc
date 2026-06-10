@@ -287,7 +287,7 @@ def test_pending_teardown_expires_after_overlap_window():
 
 
 # ---------------------------------------------------------------------------
-# UnscheduledPair emission (Phase 1.3.a)
+# UnscheduledPair emission
 #
 # Every visible pair that the allocator rejects MUST appear in
 # result.unscheduled_pairs with a typed reason. Tests below pin each

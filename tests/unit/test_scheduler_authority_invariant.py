@@ -215,7 +215,7 @@ class TestCAReproFailedReplacement:
         return d
 
     def test_release_event_drops_old_pair_from_desired_links(self) -> None:
-        """Phase 5 removes the Scheduler safety net. When OME releases
+        """Scheduler follows OME authority without a local safety net. When OME releases
         the old pair, Scheduler desired state follows OME authority even
         if no successor was ACKed."""
         d = self._drive_failed_replacement()
@@ -308,7 +308,7 @@ class TestAuthoritySubsetInvariantHappyPath:
 
 
 # ---------------------------------------------------------------------------
-# Phase 1.3.b correction: explicit decision/state snapshot pairing.
+# Explicit decision/state snapshot pairing.
 #
 # Sharing a NATS stream does not prove pairing. Consumers reading the
 # decision snapshot need an explicit (epoch_id, snapshot_seq, sim_time)

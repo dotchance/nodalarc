@@ -23,7 +23,7 @@ ENV NODALARC_VERSION=${PROJECT_VERSION} \
     NODALARC_BUILD_DATE=${BUILD_DATE}
 WORKDIR /app
 
-# iputils-ping for substrate latency measurement between nodes (M10)
+# iputils-ping for substrate latency measurement between nodes
 # openssh-client for ssh-keygen (terminal access SSH keypair generation)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     iputils-ping iputils-tracepath openssh-client \

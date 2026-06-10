@@ -54,7 +54,7 @@ def wiring_status_is_current(
     """Check if nodalarc-wiring-status reflects the current manifest.
 
     Returns True (Case B) if wiring-status exists, matches session and
-    generation, and every manifest node has a ready phase-complete status.
+    generation, and every manifest node has all required wiring steps ready.
     """
     try:
         cm = v1.read_namespaced_config_map("nodalarc-wiring-status", namespace)

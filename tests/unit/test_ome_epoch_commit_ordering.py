@@ -1,6 +1,6 @@
 # Copyright 2024-2026 .chance (dotchance)
 # Licensed under the Apache License, Version 2.0. See LICENSE file.
-"""Phase 4 OME epoch-commit ordering contracts."""
+"""OME epoch-commit ordering contracts."""
 
 from __future__ import annotations
 
@@ -198,7 +198,7 @@ def _fixed_step_result(
     )
 
 
-def _demo_phase4_session_path(tmp_path: Path) -> Path:
+def _demo_epoch_commit_session_path(tmp_path: Path) -> Path:
     session_path = tmp_path / "earth-leo-simple.yaml"
     session_path.write_text(
         yaml.dump(
@@ -215,7 +215,7 @@ def _demo_phase4_session_path(tmp_path: Path) -> Path:
     return session_path
 
 
-def _phase4_cfg(session_path: Path, run_id: str):
+def _load_epoch_commit_cfg(session_path: Path, run_id: str):
     return _load_session_config(str(session_path), run_id=run_id)
 
 
@@ -229,7 +229,7 @@ def _reset_playback_globals() -> None:
 
 
 def test_initial_epoch_publishes_step0_snapshot_before_playing_and_clock(monkeypatch, tmp_path):
-    session_path = _demo_phase4_session_path(tmp_path)
+    session_path = _demo_epoch_commit_session_path(tmp_path)
 
     import nats
 
@@ -239,7 +239,7 @@ def test_initial_epoch_publishes_step0_snapshot_before_playing_and_clock(monkeyp
     monkeypatch.setattr(nats, "connect", _fake_connect)
     init_platform_config(Path("configs/platform.yaml"))
 
-    cfg = _phase4_cfg(session_path, "phase4-ordering")
+    cfg = _load_epoch_commit_cfg(session_path, "epoch-commit-ordering")
     session_id = cfg.session_id
 
     shutdown = threading.Event()
@@ -293,7 +293,7 @@ def test_initial_epoch_publishes_step0_snapshot_before_playing_and_clock(monkeyp
 
 
 def test_seek_abandons_inflight_old_tick_and_commits_step0_snapshot(monkeypatch, tmp_path):
-    session_path = _demo_phase4_session_path(tmp_path)
+    session_path = _demo_epoch_commit_session_path(tmp_path)
 
     import nats
 
@@ -303,7 +303,7 @@ def test_seek_abandons_inflight_old_tick_and_commits_step0_snapshot(monkeypatch,
     monkeypatch.setattr(nats, "connect", _fake_connect)
     init_platform_config(Path("configs/platform.yaml"))
 
-    cfg = _phase4_cfg(session_path, "phase4-seek")
+    cfg = _load_epoch_commit_cfg(session_path, "epoch-seek")
     session_id = cfg.session_id
 
     real_compute_step = ome_event_stream.compute_step
@@ -397,7 +397,7 @@ def test_seek_abandons_inflight_old_tick_and_commits_step0_snapshot(monkeypatch,
 
 
 def test_initial_epoch_ordering_oracle_uses_fixed_step_result(monkeypatch, tmp_path):
-    session_path = _demo_phase4_session_path(tmp_path)
+    session_path = _demo_epoch_commit_session_path(tmp_path)
 
     import nats
 
@@ -407,7 +407,7 @@ def test_initial_epoch_ordering_oracle_uses_fixed_step_result(monkeypatch, tmp_p
     monkeypatch.setattr(nats, "connect", _fake_connect)
     init_platform_config(Path("configs/platform.yaml"))
 
-    cfg = _phase4_cfg(session_path, "phase4-ordering-oracle")
+    cfg = _load_epoch_commit_cfg(session_path, "epoch-ordering-oracle")
     session_id = cfg.session_id
     fixed_time = datetime(2030, 1, 1, 0, 0, 0, tzinfo=UTC)
     fixed_result = _fixed_step_result(sim_time=fixed_time, step=0)
@@ -469,7 +469,7 @@ def test_initial_epoch_ordering_oracle_uses_fixed_step_result(monkeypatch, tmp_p
 
 
 def test_initial_epoch_lifecycle_event_uses_ops_enqueue_after_snapshot(monkeypatch, tmp_path):
-    session_path = _demo_phase4_session_path(tmp_path)
+    session_path = _demo_epoch_commit_session_path(tmp_path)
 
     import nats
 
@@ -479,7 +479,7 @@ def test_initial_epoch_lifecycle_event_uses_ops_enqueue_after_snapshot(monkeypat
     monkeypatch.setattr(nats, "connect", _fake_connect)
     init_platform_config(Path("configs/platform.yaml"))
 
-    cfg = _phase4_cfg(session_path, "phase6-lifecycle-enqueue")
+    cfg = _load_epoch_commit_cfg(session_path, "lifecycle-enqueue")
     session_id = cfg.session_id
     sim_time = datetime(2030, 1, 1, 0, 0, 0, tzinfo=UTC)
     old_pair = ("gs-fixed", "sat-old")
@@ -549,7 +549,7 @@ def test_initial_epoch_lifecycle_event_uses_ops_enqueue_after_snapshot(monkeypat
 def test_seek_step0_compute_failure_logs_epoch_and_target_without_new_snapshot(
     monkeypatch, caplog, tmp_path
 ):
-    session_path = _demo_phase4_session_path(tmp_path)
+    session_path = _demo_epoch_commit_session_path(tmp_path)
 
     import nats
 
@@ -560,7 +560,7 @@ def test_seek_step0_compute_failure_logs_epoch_and_target_without_new_snapshot(
     monkeypatch.setattr(ome_main.time, "sleep", lambda _seconds: None)
     init_platform_config(Path("configs/platform.yaml"))
 
-    cfg = _phase4_cfg(session_path, "phase4-seek-failure")
+    cfg = _load_epoch_commit_cfg(session_path, "seek-failure")
     session_id = cfg.session_id
     seek_target: dict[str, float] = {}
 

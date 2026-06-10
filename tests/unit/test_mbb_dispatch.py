@@ -139,7 +139,7 @@ class TestMBBCapacityClassification:
 
         _run(d._reconcile_links(desired, nc, sim))
 
-        # MBB: sat-02 should be up (Phase 2), sat-01 should be down (Phase 3)
+        # MBB: the successor link should be up before the old link is released.
         assert pair_new in d._actual_links
         assert pair_old not in d._actual_links
 
@@ -197,7 +197,7 @@ class TestMBBCapacityClassification:
 
 class TestMBBRollback:
     def test_rollback_on_failed_make(self):
-        """If Phase 2 MBB LinkUp fails, Phase 3 skips the old link's down."""
+        """If successor LinkUp fails, MBB must not tear down the old link."""
         pair_old = ("gs-A", "sat-01")
         pair_new = ("gs-A", "sat-02")
         d = _make_dispatcher(
@@ -238,7 +238,7 @@ class TestMBBRollback:
 
         _run(d._reconcile_links(desired, nc, sim))
 
-        # Rollback: sat-01 should still be active (Phase 3 skipped)
+        # Rollback: sat-01 should still be active because teardown was skipped.
         assert pair_old in d._actual_links
         assert pair_new not in d._actual_links
 

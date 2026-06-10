@@ -7,8 +7,8 @@ construction, no permissive defaults, body and tenant scope are
 mandatory. Tests deliberately try to construct invalid instances and
 assert that construction raises.
 
-This is Phase 1.1 of the foundational trust plan: the types exist and
-are strict; consumers migrate in Phase 1.2.
+These tests pin the strict decision contract used between OME, VS-API,
+and operator-facing explanations.
 """
 
 from __future__ import annotations

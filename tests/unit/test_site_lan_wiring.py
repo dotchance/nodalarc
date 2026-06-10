@@ -30,7 +30,7 @@ def _manifest_data() -> dict:
         "session_id": "run-test-0001",
         "wiring_generation": "sha256:" + "a" * 64,
         "required_phases": [
-            "phase0_cleanup",
+            "managed_interface_cleanup",
             "sysctls",
             "isl_interfaces",
             "mpls",

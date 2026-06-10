@@ -83,7 +83,7 @@ message InterfaceDown {
 message BatchLinkDownRequest {
   CommandEnvelope envelope = 1;
   string target_sim_time = 2;
-  // field 3 removed — locality moved to per-interface (M10)
+  // field 3 removed; locality moved to per-interface wiring requests.
   repeated InterfaceDown interfaces = 4;
 }
 
@@ -137,7 +137,7 @@ message InterfaceUp {
 message BatchLinkUpRequest {
   CommandEnvelope envelope = 1;
   string target_sim_time = 2;
-  // field 3 removed — locality moved to per-interface (M10)
+  // field 3 removed; locality moved to per-interface wiring requests.
   repeated InterfaceUp interfaces = 4;
 }
 

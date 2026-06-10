@@ -16,6 +16,23 @@ Usage::
 
     # After NATS connects:
     await connect(nc)
+
+
+Message standard (enforced in review):
+
+- Every message names its SUBJECT: the node/interface/pair/GS/session it is
+  about. "not attempted (code=15)" is unacceptable; "gs-x/term0 failed
+  (code=KERNEL_MUTATION_FAILED): tc replace refused" is the bar. The logger
+  already stamps service, hostname, and session - the message must supply
+  the who/what/why within that scope.
+- DEBUG: routine per-item chatter (idempotent skips, per-link successes).
+- INFO: state changes worth an operator knowing ("N site LANs wired",
+  "transit rules pinned", "session Ready").
+- WARNING: something failed or was unexpected but is being handled
+  (re-proving, retrying, degraded inputs).
+- ERROR/CRITICAL: failed and needs attention (dirty kernel, rollback
+  failure, exhausted recovery); pair with a typed ops event carrying
+  remediation whenever an operator must act.
 """
 
 from __future__ import annotations

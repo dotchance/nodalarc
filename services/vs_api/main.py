@@ -1050,7 +1050,10 @@ async def lifespan(app: FastAPI):
         elif task.cancelled():
             log.info("NATS subscriber task cancelled")
         else:
-            log.warning("NATS subscriber task exited unexpectedly")
+            log.warning(
+                "NATS subscriber task for session state exited without error - "
+                "no further snapshots will be consumed until restart"
+            )
 
     sub_task.add_done_callback(_on_subscriber_done)
 
@@ -2982,7 +2985,10 @@ async def _run_switch_locked(session_path: str) -> None:
         try:
             await asyncio.wait_for(new_ctx._ready.wait(), timeout=30.0)
         except TimeoutError:
-            log.error("Session switch timeout — new context not ready after 30s")
+            log.error(
+                "Session switch timeout — context for session %s not ready after 30s",
+                getattr(new_ctx, "session_id", "?"),
+            )
             await _publish_system_ops_event(
                 "error",
                 "SESSION_SWITCH_TIMEOUT",

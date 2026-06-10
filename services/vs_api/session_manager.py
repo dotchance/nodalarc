@@ -427,7 +427,7 @@ class SessionManager:
                         name="current-session",
                     ),
                 )
-                log.info("Deleted existing ConstellationSpec CR")
+                log.info("Deleted existing ConstellationSpec CR %s/current-session", ns)
 
                 await _progress("Waiting for old session to finalize")
                 old_cr_deleted = False

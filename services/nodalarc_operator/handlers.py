@@ -273,7 +273,13 @@ def _wiring_manifest_matches_spec(
         )
         return False
     if data.get("platform_hash") != desired_hash:
-        log.info("Reconcile: wiring manifest platform hash mismatch, rewriting")
+        log.info(
+            "Reconcile: wiring manifest platform hash mismatch for session %s "
+            "(stored=%.12s desired=%.12s), rewriting",
+            desired_session_id,
+            data.get("platform_hash") or "",
+            desired_hash,
+        )
         return False
     if data.get("node_count") != str(expected_count):
         log.info(
@@ -285,7 +291,10 @@ def _wiring_manifest_matches_spec(
 
     encoded = data.get("manifest.json.gz.b64")
     if not encoded:
-        log.info("Reconcile: wiring manifest payload missing, rewriting")
+        log.info(
+            "Reconcile: wiring manifest payload missing for session %s, rewriting",
+            desired_session_id,
+        )
         return False
     try:
         manifest = json.loads(gzip.decompress(base64.b64decode(encoded)))
@@ -295,13 +304,31 @@ def _wiring_manifest_matches_spec(
 
     manifest_nodes = manifest.get("nodes")
     if not isinstance(manifest_nodes, dict) or len(manifest_nodes) != expected_count:
-        log.info("Reconcile: wiring manifest node payload mismatch, rewriting")
+        log.info(
+            "Reconcile: wiring manifest node payload mismatch for session %s "
+            "(have %s nodes, expected %s), rewriting",
+            desired_session_id,
+            len(manifest_nodes)
+            if isinstance(manifest_nodes, dict)
+            else type(manifest_nodes).__name__,
+            expected_count,
+        )
         return False
     if manifest.get("session_id") != desired_session_id:
-        log.info("Reconcile: wiring manifest payload session mismatch, rewriting")
+        log.info(
+            "Reconcile: wiring manifest payload session mismatch (%r != %r), rewriting",
+            manifest.get("session_id"),
+            desired_session_id,
+        )
         return False
     if manifest.get("wiring_generation") != data.get("wiring_generation"):
-        log.info("Reconcile: wiring manifest generation metadata mismatch, rewriting")
+        log.info(
+            "Reconcile: wiring manifest generation mismatch for session %s "
+            "(payload=%.20s metadata=%.20s), rewriting",
+            desired_session_id,
+            manifest.get("wiring_generation") or "",
+            data.get("wiring_generation") or "",
+        )
         return False
     return True
 

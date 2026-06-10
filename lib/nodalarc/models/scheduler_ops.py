@@ -56,6 +56,8 @@ class SchedulerOpsCode(StrEnum):
     OPERATOR_REPAIR_SUCCEEDED = "OPERATOR_REPAIR_SUCCEEDED"
     OPERATOR_REPAIR_FAILED = "OPERATOR_REPAIR_FAILED"
     OPERATOR_REPAIR_REJECTED = "OPERATOR_REPAIR_REJECTED"
+    AGENT_DEGRADED = "AGENT_DEGRADED"
+    AGENT_RECOVERED = "AGENT_RECOVERED"
 
 
 class ActuationFailureClass(StrEnum):
@@ -66,6 +68,7 @@ class ActuationFailureClass(StrEnum):
     GROUND_CLEAN_FAILURE = "ground_clean_failure"
     GROUND_KERNEL_DIRTY = "ground_kernel_dirty"
     GROUND_UNKNOWN = "ground_unknown"
+    AGENT_UNREACHABLE = "agent_unreachable"
     ISL_FAILURE = "isl_failure"
     OPS_PUBLISH_FAILURE = "ops_publish_failure"
 
@@ -106,6 +109,10 @@ class ActuationOpsDetails(BaseModel):
     recovery_status: RecoveryStatus = Field(default_factory=RecoveryStatus)
     intervention_id: str | None = None
     reason: str | None = None
+    # Operator-facing guidance: what to do about this event, in words. Set
+    # whenever the event represents a state needing (or explicitly NOT
+    # needing) human action.
+    remediation: str | None = None
 
 
 class PendingActuationPair(BaseModel):

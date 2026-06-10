@@ -231,6 +231,10 @@ def build_link_up_batch_plan(
         compensation = compensation_for_pair(node_a, node_b, info.latency_ms)
         pair_compensation[pair] = compensation
         netem_ms = compensation.netem_one_way_ms
+        # Remember what was COMMANDED: kernel proofs assert against this value.
+        # Recomputing compensation at proof time reads live substrate RTT and
+        # reports normal measurement drift as kernel divergence.
+        info.netem_one_way_ms = netem_ms
 
         if info.link_type == "ground":
             gs_id, sat_id = _ground_ids(pair, gs_capacities)

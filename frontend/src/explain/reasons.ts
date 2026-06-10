@@ -101,6 +101,7 @@ export type ActuationFailureClass =
   | "ground_clean_failure"
   | "ground_kernel_dirty"
   | "ground_unknown"
+  | "agent_unreachable"
   | "isl_failure"
   | "ops_publish_failure";
 export const ACTUATION_FAILURE_CLASSES: readonly ActuationFailureClass[] = [
@@ -111,6 +112,7 @@ export const ACTUATION_FAILURE_CLASSES: readonly ActuationFailureClass[] = [
   "ground_clean_failure",
   "ground_kernel_dirty",
   "ground_unknown",
+  "agent_unreachable",
   "isl_failure",
   "ops_publish_failure",
 ];
@@ -133,6 +135,8 @@ export const SCHEDULER_OPS_CODES = [
   "OPERATOR_REPAIR_SUCCEEDED",
   "OPERATOR_REPAIR_FAILED",
   "OPERATOR_REPAIR_REJECTED",
+  "AGENT_DEGRADED",
+  "AGENT_RECOVERED",
 ] as const;
 export type SchedulerOpsCode = (typeof SCHEDULER_OPS_CODES)[number];
 
@@ -165,6 +169,8 @@ export const SCHEDULER_OPS_REGISTRY: Record<SchedulerOpsCode, SchedulerOpsRecord
   OPERATOR_REPAIR_SUCCEEDED: ops("OPERATOR_REPAIR_SUCCEEDED", "Operator repair succeeded", "Operator repair proved the station clean.", "info"),
   OPERATOR_REPAIR_FAILED: ops("OPERATOR_REPAIR_FAILED", "Operator repair failed", "Operator repair did not prove the station clean.", "alarm"),
   OPERATOR_REPAIR_REJECTED: ops("OPERATOR_REPAIR_REJECTED", "Operator repair rejected", "The operator repair request was rejected.", "warning"),
+  AGENT_DEGRADED: ops("AGENT_DEGRADED", "Node Agent degraded", "A Node Agent has failed most of its recent calls and appears down; check its DaemonSet pod.", "alarm"),
+  AGENT_RECOVERED: ops("AGENT_RECOVERED", "Node Agent recovered", "A previously degraded Node Agent is answering again.", "info"),
 };
 
 export function schedulerOpsLabel(code: string | null | undefined): string {
@@ -627,6 +633,19 @@ export const REASON_REGISTRY: Record<string, ReasonRecord> = {
     sentence: "Ground actuation state is inconclusive; not assumed clean.",
     levers: [],
     producer: "node_agent",
+  }),
+  agent_unreachable: rec({
+    code: "agent_unreachable",
+    domains: ["actuation"],
+    gate: "actuation_proof",
+    layer: "actuation",
+    family: "unknown",
+    severity: "warning",
+    label: "Node Agent unreachable",
+    sentence:
+      "The Node Agent did not answer a kernel proof (typically an agent restart or rollout); nothing was observed, the previous proven state stands, and the Scheduler re-proves automatically.",
+    levers: [],
+    producer: "scheduler",
   }),
   isl_failure: rec({
     code: "isl_failure",

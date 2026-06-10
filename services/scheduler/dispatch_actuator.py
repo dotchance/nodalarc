@@ -78,6 +78,12 @@ def _log_actuation_latency(
 
 LinkPair = tuple[str, str]
 LatencyCompensationFn = Callable[[str, str, float], LatencyCompensation]
+
+# Kernel-proof sentinel: "shaping must exist, but no specific netem delay is
+# asserted" - used when this scheduler instance has not commanded a netem
+# value for the pair. The agent verifier skips the delay comparison for
+# negative expectations rather than failing against an invented number.
+NETEM_NOT_ASSERTED = -1.0
 AuthorityFreshnessValidator = Callable[..., None]
 LinkProvenanceBuilder = Callable[..., object]
 
@@ -253,17 +259,46 @@ def _merge_agent_results(
             details={"agent_addr": addr, "operation": operation, "chunks": []},
         )
 
+    if len(results) == 1:
+        # The common case: one chunk. Pass the classified result through
+        # verbatim so its failure class and per-interface diagnostics
+        # (requested/returned/interface_results) survive to the ops events.
+        return results[0]
+
+    # Every failure class a chunk can carry must appear here; a class missing
+    # from the precedence silently merges to NONE, which both hides the
+    # failure from consumers and defeats transport-only detection.
     precedence = [
         ActuationFailureClass.FENCE,
         ActuationFailureClass.GROUND_KERNEL_DIRTY,
         ActuationFailureClass.GROUND_UNKNOWN,
+        ActuationFailureClass.AGENT_UNREACHABLE,
         ActuationFailureClass.GROUND_CLEAN_FAILURE,
+        ActuationFailureClass.ISL_FAILURE,
     ]
     failure_class = ActuationFailureClass.NONE
     for candidate in precedence:
         if any(result.failure_class == candidate for result in results):
             failure_class = candidate
             break
+    unmerged = {
+        result.failure_class
+        for result in results
+        if result.failure_class != ActuationFailureClass.NONE
+        and result.failure_class not in precedence
+    }
+    if unmerged:
+        raise RuntimeError(
+            f"_merge_agent_results cannot merge failure classes {sorted(unmerged)}; "
+            "extend the precedence list"
+        )
+
+    def _concat(key: str) -> list:
+        merged: list = []
+        for result in results:
+            merged.extend(result.details.get(key) or [])
+        return merged
+
     return AgentCommandResult(
         agent_addr=addr,
         operation=operation,
@@ -276,9 +311,24 @@ def _merge_agent_results(
         details={
             "agent_addr": addr,
             "operation": operation,
+            "success": all(bool(result.details.get("success")) for result in results),
+            "error_code": next(
+                (
+                    result.details.get("error_code")
+                    for result in results
+                    if result.failure_class != ActuationFailureClass.NONE
+                ),
+                "NODE_AGENT_ERROR_UNSPECIFIED",
+            ),
+            "error_message": "; ".join(
+                msg for result in results if (msg := str(result.details.get("error_message") or ""))
+            ),
             "dirty_kernel": any(result.dirty_kernel for result in results),
             "unknown_outcome": any(result.unknown_outcome for result in results),
             "fence_failure": any(result.fence_failure for result in results),
+            "requested": _concat("requested"),
+            "returned": _concat("returned"),
+            "interface_results": _concat("interface_results"),
             "chunks": [result.details for result in results],
         },
     )
@@ -291,7 +341,6 @@ def _ground_inventory_entries_for_pair(
     expected_admin_up: bool,
     locator: Any,
     gs_capacities: Mapping[str, int],
-    latency_compensation: LatencyCompensationFn,
 ) -> tuple[dict[str, list[node_agent_pb2.KernelInventoryEntry]], set[InterfaceAck]]:
     if info.link_type != "ground":
         raise ValueError(f"KernelInventory is ground-only; got {pair} type={info.link_type!r}")
@@ -313,7 +362,15 @@ def _ground_inventory_entries_for_pair(
     latency_ms = 0.0
     bandwidth_mbps = 0.0
     if expected_admin_up:
-        latency_ms = latency_compensation(node_a, node_b, info.latency_ms).netem_one_way_ms
+        # Prove the kernel against what was COMMANDED, never against a live
+        # recomputation: compensation reads measured substrate RTT, which
+        # drifts between dispatch and proof, and that drift is not kernel
+        # divergence. When no commanded value is known for this scheduler
+        # instance (pair never dispatched here), send the explicit
+        # do-not-assert sentinel instead of inventing an expectation.
+        latency_ms = (
+            info.netem_one_way_ms if info.netem_one_way_ms is not None else NETEM_NOT_ASSERTED
+        )
         bandwidth_mbps = info.bandwidth_mbps
 
     entries_by_agent: dict[str, list[node_agent_pb2.KernelInventoryEntry]] = {}
@@ -415,7 +472,6 @@ async def verify_ground_kernel_inventory(
     sim_iso: str,
     sim_time: datetime,
     gs_capacities: Mapping[str, int],
-    latency_compensation: LatencyCompensationFn,
     session_id: str,
     wiring_generation: str,
 ) -> ActuationResult:
@@ -438,7 +494,6 @@ async def verify_ground_kernel_inventory(
                 expected_admin_up=expected_admin_up,
                 locator=locator,
                 gs_capacities=gs_capacities,
-                latency_compensation=latency_compensation,
             )
             pair_agent_ifaces.setdefault(pair, set()).update(ack_keys)
             for agent, entries in agent_entries.items():
@@ -703,6 +758,8 @@ async def send_authoritative_latency_updates(
         compensation = latency_compensation(node_a, node_b, info.latency_ms)
         pair_compensation[pair] = compensation
         netem_ms = compensation.netem_one_way_ms
+        # Remember what was COMMANDED: kernel proofs assert against this value.
+        info.netem_one_way_ms = netem_ms
 
         if info.link_type == "ground":
             gs_id = node_a if node_a in gs_capacities else node_b

@@ -23,6 +23,12 @@ class ActuationFailureClass(StrEnum):
     GROUND_CLEAN_FAILURE = "ground_clean_failure"
     GROUND_KERNEL_DIRTY = "ground_kernel_dirty"
     GROUND_UNKNOWN = "ground_unknown"
+    # The prover could not be reached at all (no responders / transport
+    # timeout). For a MUTATING command this still implies conservative
+    # unknown/dirty handling; for a READ-ONLY proof it is evidence of
+    # nothing - "could not observe" must never be reported as "observed
+    # divergence".
+    AGENT_UNREACHABLE = "agent_unreachable"
     ISL_FAILURE = "isl_failure"
 
 
@@ -137,6 +143,26 @@ class ActuationResult:
     def has_failures(self) -> bool:
         return bool(self.failed_pairs) or any(
             result.failure_class != ActuationFailureClass.NONE for result in self.agent_results
+        )
+
+    @property
+    def transport_only_failure(self) -> bool:
+        """Every failure is the prover being unreachable - nothing was observed.
+
+        True only when there ARE failures and every failing agent result is
+        AGENT_UNREACHABLE. Any agent that answered with a real mismatch (or any
+        other failure class) makes this False: partial observation of
+        divergence is divergence.
+        """
+        if not self.has_failures:
+            return False
+        failing = [
+            result
+            for result in self.agent_results
+            if result.failure_class != ActuationFailureClass.NONE
+        ]
+        return bool(failing) and all(
+            result.failure_class == ActuationFailureClass.AGENT_UNREACHABLE for result in failing
         )
 
     def node_agent_details(self) -> list[dict[str, Any]]:
@@ -257,11 +283,22 @@ def classify_agent_exception(
     operation: str,
 ) -> AgentCommandResult:
     requested_set = {(iface.node_id, iface.interface_name) for iface in requested_interfaces}
+    # "Nobody listening" and "listening but silent" are different facts: an
+    # agent intentionally does not subscribe while re-verifying wiring after
+    # a restart (expected, seconds), while a subscribed agent that lets a
+    # request time out SHOULD have answered - that one deserves attention.
+    exc_name = type(exc).__name__
+    if "NoResponders" in exc_name:
+        error_code = "NO_RESPONDERS"
+    elif "Timeout" in exc_name:
+        error_code = "TIMEOUT"
+    else:
+        error_code = "TRANSPORT"
     details = {
         "agent_addr": agent_addr,
         "operation": operation,
         "success": False,
-        "error_code": "TRANSPORT_OR_TIMEOUT",
+        "error_code": error_code,
         "error_message": str(exc),
         "dirty_kernel": True,
         "unknown_outcome": True,
@@ -275,7 +312,7 @@ def classify_agent_exception(
         operation=operation,
         requested=tuple(sorted(requested_set)),
         success_acks=frozenset(),
-        failure_class=ActuationFailureClass.GROUND_UNKNOWN,
+        failure_class=ActuationFailureClass.AGENT_UNREACHABLE,
         dirty_kernel=True,
         unknown_outcome=True,
         fence_failure=False,

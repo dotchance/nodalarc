@@ -7,7 +7,7 @@ from __future__ import annotations
 import asyncio
 import json
 from datetime import UTC, datetime, timedelta
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from nodalarc.models.scheduler_ops import (
@@ -814,9 +814,11 @@ def test_seek_epoch_reset_does_not_clear_dirty_actuation_state() -> None:
 
 
 def test_read_only_kernel_proof_clears_dirty_ground_station() -> None:
+    # Recovery proves the kernel against PROVEN bookkeeping (_actual_links),
+    # not the moving OME desire - see _verify_gs_against_current_authority.
     d = _make_dispatcher_with_two_terminal_gs()
     pair = ("gs-multi", "sat-old")
-    d._desired_links[pair] = _info()
+    d._actual_links[pair] = _info()
     d._gs_actuation["gs-multi"] = GroundActuationState(
         gs_id="gs-multi",
         state=ActuationState.KERNEL_DIRTY,
@@ -963,7 +965,7 @@ def test_kernel_verify_due_gate_and_backoff_use_injected_clock() -> None:
     base = datetime(2026, 5, 27, 12, 0, 0, tzinfo=UTC)
     current = {"now": base}
     d._now = lambda: current["now"]
-    d._desired_links[pair] = _info()
+    d._actual_links[pair] = _info()
     d._gs_actuation["gs-multi"] = GroundActuationState(
         gs_id="gs-multi",
         state=ActuationState.KERNEL_DIRTY,
@@ -1135,3 +1137,375 @@ def test_clean_kernel_audit_runs_after_due_latency_update_in_reconcile() -> None
 
     assert order == [("set_latency", 2.0), ("clean_audit", 2.0)]
     assert d._actual_links[pair].latency_ms == 2.0
+
+
+# --- Prover-unreachable class: "could not observe" is never "observed divergence" ---
+
+
+def _unreachable_result(pair: tuple[str, str], operation: str = "KernelInventory"):
+    return _actuation_result(
+        pair=pair,
+        link_type="ground",
+        gs_id="gs-multi",
+        failure=ActuationFailureClass.AGENT_UNREACHABLE,
+        operation=operation,
+    )
+
+
+def _published_ops_details(publish_mock: AsyncMock) -> list[dict]:
+    details: list[dict] = []
+    for call in publish_mock.await_args_list:
+        subject = call.args[0] if call.args else call.kwargs.get("subject")
+        payload = call.args[1] if len(call.args) > 1 else call.kwargs.get("payload")
+        if not subject or ".ops." not in subject:
+            continue
+        data = json.loads(payload.decode() if isinstance(payload, bytes) else payload)
+        details.append(data.get("details") or {})
+    return details
+
+
+def test_transport_only_failure_distinguishes_unreachable_from_divergence() -> None:
+    pair = ("gs-multi", "sat-old")
+    unreachable = _unreachable_result(pair)
+    assert unreachable.has_failures
+    assert unreachable.transport_only_failure is True
+
+    mismatch = _actuation_result(
+        pair=pair,
+        link_type="ground",
+        gs_id="gs-multi",
+        failure=ActuationFailureClass.GROUND_KERNEL_DIRTY,
+        operation="KernelInventory",
+    )
+    assert mismatch.transport_only_failure is False
+
+    # Partial observation of divergence is divergence: one unreachable agent
+    # plus one real mismatch must NOT read as transport-only.
+    mixed = ActuationResult(
+        operation="KernelInventory",
+        requested_pairs=frozenset({pair}),
+        succeeded_pairs=frozenset(),
+        failed_pairs=frozenset({pair}),
+        pair_results={},
+        agent_results=(
+            _agent_result(ActuationFailureClass.AGENT_UNREACHABLE, operation="KernelInventory"),
+            _agent_result(ActuationFailureClass.GROUND_KERNEL_DIRTY, operation="KernelInventory"),
+        ),
+    )
+    assert mixed.transport_only_failure is False
+
+
+def test_clean_kernel_audit_unreachable_prover_keeps_proven_clean_state() -> None:
+    """A node-agent rollout must never fault a healthy ground station: the
+    audit observed nothing, so the proven-clean claim stands."""
+    d = _make_dispatcher_with_two_terminal_gs()
+    pair = ("gs-multi", "sat-old")
+    d._actual_links[pair] = _info()
+    d._send_kernel_inventory = AsyncMock(return_value=_unreachable_result(pair))
+    d._js.publish = AsyncMock()
+
+    result = asyncio.run(d._audit_clean_ground_kernel_state(sim_time=SIM_TIME, gs_ids={"gs-multi"}))
+
+    assert result == {"gs-multi": True}
+    assert d._gs_actuation["gs-multi"].state == ActuationState.CLEAN
+    assert _published_ops_codes(d._js.publish) == ["KERNEL_VERIFY_ATTEMPTED"]
+    details = _published_ops_details(d._js.publish)[0]
+    assert details["failure_class"] == "agent_unreachable"
+    assert "rollout" in (details.get("remediation") or "")
+
+
+def test_verify_unreachable_prover_never_consumes_attempts_or_exhausts() -> None:
+    """Exhaustion is a statement about repeated evidence of divergence; an
+    unreachable prover provides none, no matter how often it is retried."""
+    d = _make_dispatcher_with_two_terminal_gs()
+    pair = ("gs-multi", "sat-old")
+    d._actual_links[pair] = _info()
+    d._gs_actuation["gs-multi"] = GroundActuationState(
+        gs_id="gs-multi",
+        state=ActuationState.KERNEL_DIRTY,
+        reason_code=SchedulerOpsCode.KERNEL_DIRTY,
+        recovery=RecoveryStatus(verify_attempt_count=4),
+    )
+    d._send_kernel_inventory = AsyncMock(return_value=_unreachable_result(pair))
+    d._js.publish = AsyncMock()
+
+    for _ in range(10):
+        verified = asyncio.run(
+            d._verify_gs_against_current_authority(gs_id="gs-multi", sim_time=SIM_TIME)
+        )
+        assert verified is False
+
+    state = d._gs_actuation["gs-multi"]
+    assert state.state == ActuationState.KERNEL_DIRTY
+    assert state.recovery.verify_attempt_count == 4
+    assert state.recovery.verify_exhausted is False
+    assert state.recovery.operator_action_required is False
+    assert state.recovery.last_verify_result == "agent_unreachable"
+    assert state.recovery.next_verify_after is not None
+
+
+def test_verify_recovers_automatically_once_the_prover_answers() -> None:
+    d = _make_dispatcher_with_two_terminal_gs()
+    pair = ("gs-multi", "sat-old")
+    d._actual_links[pair] = _info()
+    d._gs_actuation["gs-multi"] = GroundActuationState(
+        gs_id="gs-multi",
+        state=ActuationState.KERNEL_DIRTY,
+        reason_code=SchedulerOpsCode.KERNEL_DIRTY,
+        recovery=RecoveryStatus(verify_attempt_count=2),
+    )
+    d._send_kernel_inventory = AsyncMock(return_value=_unreachable_result(pair))
+    d._js.publish = AsyncMock()
+    asyncio.run(d._verify_gs_against_current_authority(gs_id="gs-multi", sim_time=SIM_TIME))
+    assert d._gs_actuation["gs-multi"].state == ActuationState.KERNEL_DIRTY
+
+    d._send_kernel_inventory = AsyncMock(
+        return_value=_success_result(pair=pair, operation="KernelInventory")
+    )
+    verified = asyncio.run(
+        d._verify_gs_against_current_authority(gs_id="gs-multi", sim_time=SIM_TIME)
+    )
+    assert verified is True
+    assert d._gs_actuation["gs-multi"].state == ActuationState.CLEAN
+
+
+def test_nonclean_transitions_carry_operator_remediation() -> None:
+    d = _make_dispatcher_with_two_terminal_gs()
+    pair = ("gs-multi", "sat-old")
+    d._actual_links[pair] = _info()
+    d._send_kernel_inventory = AsyncMock(
+        return_value=_actuation_result(
+            pair=pair,
+            link_type="ground",
+            gs_id="gs-multi",
+            failure=ActuationFailureClass.GROUND_KERNEL_DIRTY,
+            operation="KernelInventory",
+        )
+    )
+    d._js.publish = AsyncMock()
+
+    asyncio.run(d._audit_clean_ground_kernel_state(sim_time=SIM_TIME, gs_ids={"gs-multi"}))
+
+    dirty_details = [
+        det
+        for det in _published_ops_details(d._js.publish)
+        if det.get("actuation_state_after") == "kernel_dirty"
+    ]
+    assert dirty_details
+    assert "ops/repair" in (dirty_details[-1].get("remediation") or "")
+
+
+# --- Commanded-netem proofs: the kernel is proven against what was dispatched ---
+
+
+def test_inventory_entries_assert_commanded_netem_not_live_recomputation() -> None:
+    """Kernel proofs must use the netem value that was COMMANDED at dispatch.
+    Recomputing compensation at proof time reads live substrate RTT, and that
+    measurement drift was reported as kernel divergence - false dirty."""
+    from scheduler.dispatch_actuator import (
+        NETEM_NOT_ASSERTED,
+        _ground_inventory_entries_for_pair,
+    )
+
+    class _Locator:
+        def link_locality(self, a, b):
+            return node_agent_pb2.LOCALITY_LOCAL
+
+        def agent_addr(self, node_id):
+            return "agent-a"
+
+    info = ActiveLinkInfo(
+        "term0",
+        "gnd0",
+        12.0,
+        1000.0,
+        link_type="ground",
+        netem_one_way_ms=3.25,
+    )
+    entries, _acks = _ground_inventory_entries_for_pair(
+        pair=("gs-multi", "sat-old"),
+        info=info,
+        expected_admin_up=True,
+        locator=_Locator(),
+        gs_capacities={"gs-multi": 2},
+    )
+    entry = entries["agent-a"][0]
+    assert entry.latency_ms == 3.25
+
+    bare = ActiveLinkInfo("term0", "gnd0", 12.0, 1000.0, link_type="ground")
+    entries, _acks = _ground_inventory_entries_for_pair(
+        pair=("gs-multi", "sat-old"),
+        info=bare,
+        expected_admin_up=True,
+        locator=_Locator(),
+        gs_capacities={"gs-multi": 2},
+    )
+    assert entries["agent-a"][0].latency_ms == NETEM_NOT_ASSERTED
+
+
+def test_verify_overlays_commanded_netem_from_kernel_actual_bookkeeping() -> None:
+    """Desired infos come from the latest OME snapshot and carry no dispatch
+    provenance; the proof must inherit the commanded netem from the actual
+    link the scheduler dispatched."""
+    d = _make_dispatcher_with_two_terminal_gs()
+    pair = ("gs-multi", "sat-old")
+    actual = _info()
+    actual.netem_one_way_ms = 7.5
+    d._actual_links[pair] = actual
+
+    desired = _info()
+    assert desired.netem_one_way_ms is None
+    patched = d._info_with_commanded_netem(pair, desired)
+    assert patched.netem_one_way_ms == 7.5
+    assert patched.latency_ms == desired.latency_ms
+
+    # A pair with its own commanded value keeps it.
+    own = _info()
+    own.netem_one_way_ms = 2.0
+    assert d._info_with_commanded_netem(pair, own).netem_one_way_ms == 2.0
+
+    # No actual bookkeeping -> unchanged (proof sends the do-not-assert sentinel).
+    other = ("gs-multi", "sat-new")
+    assert d._info_with_commanded_netem(other, desired).netem_one_way_ms is None
+
+
+def test_audit_through_real_inventory_path_keeps_clean_on_transport_failure() -> None:
+    """End-to-end through the REAL verify_ground_kernel_inventory and chunk
+    merge: a transport exception at the agent stub must surface as
+    AGENT_UNREACHABLE (not merge silently to NONE) and the clean-state audit
+    must keep the proven-clean state. This is the wire path the mocked
+    unreachable tests bypass - the merge precedence hole lived here."""
+    d = _make_dispatcher_with_two_terminal_gs()
+    pair = ("gs-multi", "sat-old")
+    d._actual_links[pair] = _info()
+    d._js.publish = AsyncMock()
+
+    failing_stub = MagicMock()
+    failing_stub.async_kernel_inventory = AsyncMock(side_effect=TimeoutError("nats: timeout"))
+    d._pool.get_stub = MagicMock(return_value=failing_stub)
+
+    result = asyncio.run(d._audit_clean_ground_kernel_state(sim_time=SIM_TIME, gs_ids={"gs-multi"}))
+
+    assert result == {"gs-multi": True}
+    assert d._gs_actuation["gs-multi"].state == ActuationState.CLEAN
+    details = _published_ops_details(d._js.publish)[0]
+    assert details["failure_class"] == "agent_unreachable"
+
+
+def test_merge_preserves_unreachable_class_and_diagnostics_across_chunks() -> None:
+    from scheduler.dispatch_actuator import _merge_agent_results
+
+    ok = _agent_result(ActuationFailureClass.NONE, operation="KernelInventory")
+    unreachable = _agent_result(
+        ActuationFailureClass.AGENT_UNREACHABLE, operation="KernelInventory"
+    )
+    merged = _merge_agent_results(
+        addr="agent-a", operation="KernelInventory", results=[ok, unreachable]
+    )
+    assert merged.failure_class == ActuationFailureClass.AGENT_UNREACHABLE
+
+    single = _merge_agent_results(
+        addr="agent-a", operation="KernelInventory", results=[unreachable]
+    )
+    assert single is unreachable
+
+
+def test_recovery_converges_when_desire_moved_past_the_frozen_kernel() -> None:
+    """Dirty suppresses dispatch, so OME desire walks away from the kernel on
+    every pass/handover. Recovery must prove the kernel against PROVEN
+    bookkeeping and clear - convergence to the new desire is the reconcile
+    loop's job once dispatch resumes. Proving against desire made recovery
+    structurally impossible for any station with moving selection."""
+    d = _make_dispatcher_with_two_terminal_gs()
+    old_pair = ("gs-multi", "sat-old")
+    new_pair = ("gs-multi", "sat-new")
+    d._actual_links[old_pair] = _info()
+    d._desired_links[new_pair] = _info("term1")
+    d._gs_actuation["gs-multi"] = GroundActuationState(
+        gs_id="gs-multi",
+        state=ActuationState.KERNEL_DIRTY,
+        reason_code=SchedulerOpsCode.KERNEL_DIRTY,
+        recovery=RecoveryStatus(verify_attempt_count=2),
+    )
+    d._send_kernel_inventory = AsyncMock(
+        return_value=_success_result(pair=old_pair, operation="KernelInventory")
+    )
+    d._js.publish = AsyncMock()
+
+    verified = asyncio.run(
+        d._verify_gs_against_current_authority(gs_id="gs-multi", sim_time=SIM_TIME)
+    )
+
+    assert verified is True
+    assert d._gs_actuation["gs-multi"].state == ActuationState.CLEAN
+    call = d._send_kernel_inventory.await_args.kwargs
+    assert set(call["expected_up"]) == {old_pair}, (
+        "recovery must prove the kernel the scheduler froze, not the desire "
+        "that moved on while dispatch was suppressed"
+    )
+
+
+# --- Agent health: windowed n-of-last-x reachability, never a lifetime counter ---
+
+
+def test_agent_health_window_semantics() -> None:
+    from datetime import UTC, datetime
+
+    from scheduler.agent_health import (
+        AgentHealthPolicy,
+        AgentHealthTracker,
+        AgentHealthTransition,
+    )
+
+    now = datetime(2026, 6, 10, tzinfo=UTC)
+    t = AgentHealthTracker(AgentHealthPolicy(window_size=20, failure_threshold=15))
+
+    # A restart burst (5 failures, then successes) never degrades.
+    for _ in range(5):
+        assert t.record("node-a", ok=False, reason="NO_RESPONDERS", now=now) is None
+    for _ in range(15):
+        assert t.record("node-a", ok=True, now=now) is None
+    assert t.is_degraded("node-a") is False
+
+    # Isolated misses spread across a long session age out of the window
+    # and never accumulate to a cutoff.
+    for _ in range(200):
+        assert t.record("node-a", ok=True, now=now) is None
+        assert t.record("node-a", ok=False, reason="TIMEOUT", now=now) is None
+    assert t.is_degraded("node-a") is False
+
+    # Sustained unreachability crosses the threshold exactly once...
+    transitions = [t.record("node-a", ok=False, reason="NO_RESPONDERS", now=now) for _ in range(20)]
+    assert transitions.count(AgentHealthTransition.DEGRADED) == 1
+    assert t.is_degraded("node-a") is True
+    assert "of last" in t.failure_summary("node-a")
+
+    # ...and the first answered call recovers it.
+    assert t.record("node-a", ok=True, now=now) == AgentHealthTransition.RECOVERED
+    assert t.is_degraded("node-a") is False
+
+
+def test_degraded_agent_slows_transport_reprove_but_never_exhausts() -> None:
+    d = _make_dispatcher_with_two_terminal_gs()
+    pair = ("gs-multi", "sat-old")
+    d._actual_links[pair] = _info()
+    d._gs_actuation["gs-multi"] = GroundActuationState(
+        gs_id="gs-multi",
+        state=ActuationState.KERNEL_DIRTY,
+        reason_code=SchedulerOpsCode.KERNEL_DIRTY,
+        recovery=RecoveryStatus(verify_attempt_count=1),
+    )
+    d._send_kernel_inventory = AsyncMock(return_value=_unreachable_result(pair))
+    d._js.publish = AsyncMock()
+
+    # Drive the agent into degraded through the health window.
+    for _ in range(30):
+        asyncio.run(d._verify_gs_against_current_authority(gs_id="gs-multi", sim_time=SIM_TIME))
+
+    assert d._agent_health.is_degraded("agent-a") is True
+    state = d._gs_actuation["gs-multi"]
+    assert state.recovery.verify_exhausted is False
+    assert state.recovery.verify_attempt_count == 1
+    # Backoff switched to the degraded cadence.
+    delta = state.recovery.next_verify_after - d._now()
+    assert delta.total_seconds() > d._transport_retry_delay_s

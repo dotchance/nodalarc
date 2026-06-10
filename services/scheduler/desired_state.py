@@ -30,6 +30,7 @@ class ActiveLinkInfo:
         "interface_a",
         "interface_b",
         "latency_ms",
+        "netem_one_way_ms",
         "bandwidth_mbps",
         "link_type",
         "range_km",
@@ -50,10 +51,18 @@ class ActiveLinkInfo:
         authority_sim_time: datetime | None = None,
         authority_source: str | None = None,
         authority_sequence: int | None = None,
+        netem_one_way_ms: float | None = None,
     ) -> None:
         self.interface_a = interface_a
         self.interface_b = interface_b
         self.latency_ms = latency_ms
+        # The netem delay actually COMMANDED to the Node Agent for this link
+        # (orbital latency minus the substrate compensation measured at
+        # dispatch time). Set by the command builders when a LinkUp or
+        # SetLatency is sent; kernel proofs assert against this value, never
+        # against a live recomputation - compensation inputs drift between
+        # dispatch and proof, and that drift is not kernel divergence.
+        self.netem_one_way_ms = netem_one_way_ms
         self.bandwidth_mbps = bandwidth_mbps
         self.link_type = link_type
         self.range_km = range_km

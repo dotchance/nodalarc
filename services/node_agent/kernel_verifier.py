@@ -172,22 +172,29 @@ def verify_qdisc(
     if "netem" not in kinds:
         return Proof.fail(f"missing netem qdisc on {ifname}", *evidence)
 
-    # Netem delay is configured in integer microseconds, but the kernel reports
-    # it in tc scheduler ticks. Use the same normalization as the mutator, then
-    # mirror pyroute2's encoder so proof compares the exact kernel value.
-    expected_delay_us = delay_ms_to_netem_us(delay_ms)
-    expected_delay_ticks = netem_us_to_ticks(expected_delay_us)
-    actual_delay_ticks = _extract_delay_ticks(rows)
-    if actual_delay_ticks is None:
-        return Proof.fail(f"cannot parse netem delay for {ifname}", *evidence)
-    if abs(actual_delay_ticks - expected_delay_ticks) > NETEM_TICK_TOLERANCE:
-        return Proof.fail(
-            f"netem delay mismatch on {ifname}",
-            f"expected_us={expected_delay_us}",
-            f"expected_ticks={expected_delay_ticks}",
-            f"actual_ticks={actual_delay_ticks}",
-            *evidence,
-        )
+    if delay_ms >= 0:
+        # Netem delay is configured in integer microseconds, but the kernel
+        # reports it in tc scheduler ticks. Use the same normalization as the
+        # mutator, then mirror pyroute2's encoder so proof compares the exact
+        # kernel value.
+        expected_delay_us = delay_ms_to_netem_us(delay_ms)
+        expected_delay_ticks = netem_us_to_ticks(expected_delay_us)
+        actual_delay_ticks = _extract_delay_ticks(rows)
+        if actual_delay_ticks is None:
+            return Proof.fail(f"cannot parse netem delay for {ifname}", *evidence)
+        if abs(actual_delay_ticks - expected_delay_ticks) > NETEM_TICK_TOLERANCE:
+            return Proof.fail(
+                f"netem delay mismatch on {ifname}",
+                f"expected_us={expected_delay_us}",
+                f"expected_ticks={expected_delay_ticks}",
+                f"actual_ticks={actual_delay_ticks}",
+                *evidence,
+            )
+    # delay_ms < 0 is the explicit do-not-assert sentinel: the prover has no
+    # commanded netem value for this link (e.g. a Scheduler instance that has
+    # not dispatched it). Shaping presence and rate are still proven; comparing
+    # the delay against an invented expectation would report normal
+    # latency-update cadence as kernel divergence.
 
     if rate_mbps is not None:
         expected_rate = int(rate_mbps * 1_000_000)
@@ -204,6 +211,8 @@ def verify_qdisc(
                 *evidence,
             )
 
+    if delay_ms < 0:
+        return Proof.ok(f"qdisc verified on {ifname}; netem delay not asserted", *evidence)
     return Proof.ok(
         f"qdisc verified on {ifname}",
         f"delay_us={expected_delay_us}",

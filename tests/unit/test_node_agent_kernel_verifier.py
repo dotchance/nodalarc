@@ -159,3 +159,32 @@ def test_verify_mirred_rejects_stale_redirect_to_wrong_destination(monkeypatch):
     assert proof.summary == "mirred destination mismatch src0->dst0"
     assert "expected_ifindex=20" in proof.evidence
     assert "actual_ifindexes=[99]" in proof.evidence
+
+
+def test_verify_qdisc_sentinel_skips_delay_but_still_proves_presence_and_rate(monkeypatch):
+    """delay_ms < 0 is the explicit do-not-assert sentinel: the prover has no
+    commanded netem value, so the delay must not be compared against an
+    invented expectation - but shaping presence and rate stay proven."""
+
+    def _fake_run_in_pod_namespace(pid, fn):
+        return _qdisc_rows(delay_ticks=12345)
+
+    monkeypatch.setattr(kernel_verifier, "run_in_pod_namespace", _fake_run_in_pod_namespace)
+
+    proof = kernel_verifier.verify_qdisc(1234, "term0", delay_ms=-1.0, rate_mbps=1000.0)
+    assert proof.verified is True
+    assert "not asserted" in proof.summary
+
+    # Rate is still asserted under the sentinel.
+    wrong_rate = kernel_verifier.verify_qdisc(1234, "term0", delay_ms=-1.0, rate_mbps=4.0)
+    assert wrong_rate.verified is False
+    assert "rate mismatch" in wrong_rate.summary
+
+    # Missing shaping is still a failure under the sentinel.
+    def _no_netem(pid, fn):
+        rows = [r for r in _qdisc_rows(delay_ticks=1) if r["kind"] != "netem"]
+        return rows
+
+    monkeypatch.setattr(kernel_verifier, "run_in_pod_namespace", _no_netem)
+    missing = kernel_verifier.verify_qdisc(1234, "term0", delay_ms=-1.0, rate_mbps=1000.0)
+    assert missing.verified is False

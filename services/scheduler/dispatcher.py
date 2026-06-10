@@ -48,7 +48,7 @@ import os
 import socket
 from collections.abc import Callable
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from typing import Literal
 
@@ -106,6 +106,7 @@ from scheduler.actuation import (
 from scheduler.actuation import (
     RecoveryStatus as SchedulerRecoveryStatus,
 )
+from scheduler.agent_health import AgentHealthTracker, AgentHealthTransition
 from scheduler.agent_pool import AgentPool
 from scheduler.desired_state import (
     ActiveLinkInfo,
@@ -391,6 +392,16 @@ class Dispatcher:
         self._active_repair_tasks: set[asyncio.Task] = set()
         self._repair_original_states: dict[str, GroundActuationState] = {}
         self._max_kernel_verify_attempts = 5
+        # Re-prove cadence when the prover itself is unreachable (agent
+        # restart/rollout). Short and fixed: recovery should land within
+        # seconds of the agent answering, and these retries never consume
+        # verify attempts.
+        self._transport_retry_delay_s = 10
+        # Backoff for re-proving against an agent judged DOWN by the
+        # sliding-window health tracker - fast retries are for agents
+        # expected back in seconds, not for hammering a dead one.
+        self._degraded_transport_retry_delay_s = 60
+        self._agent_health = AgentHealthTracker()
         # Serializes normal reconciliation and explicit operator repair. The
         # Scheduler must never have two concurrent writers to Node Agent or
         # _actual_links for the same GS.
@@ -769,7 +780,11 @@ class Dispatcher:
                 ckpt_msg = await asyncio.wait_for(ckpt_sub.next_msg(), timeout=2.0)
                 ckpt = decode_retained_scheduling_checkpoint(ckpt_msg.data)
                 if ckpt is None:
-                    log.info("Retained SchedulingCheckpoint is incompatible; starting fresh")
+                    log.info(
+                        "Retained SchedulingCheckpoint for session %s is incompatible "
+                        "with this build; starting fresh",
+                        self._session_id,
+                    )
                 else:
                     self._current_sim_time = ckpt.sim_time
                     log.info(
@@ -1154,6 +1169,7 @@ class Dispatcher:
             ActuationFailureClass.GROUND_CLEAN_FAILURE: OpsActuationFailureClass.GROUND_CLEAN_FAILURE,
             ActuationFailureClass.GROUND_KERNEL_DIRTY: OpsActuationFailureClass.GROUND_KERNEL_DIRTY,
             ActuationFailureClass.GROUND_UNKNOWN: OpsActuationFailureClass.GROUND_UNKNOWN,
+            ActuationFailureClass.AGENT_UNREACHABLE: OpsActuationFailureClass.AGENT_UNREACHABLE,
             ActuationFailureClass.ISL_FAILURE: OpsActuationFailureClass.ISL_FAILURE,
         }
         return mapping[failure]
@@ -1182,6 +1198,7 @@ class Dispatcher:
         state_after: GroundActuationState | None = None,
         intervention_id: str | None = None,
         reason: str | None = None,
+        remediation: str | None = None,
     ) -> ActuationOpsDetails:
         affected = set(affected_pairs or set())
         before_value = state_before.state.value if state_before else "unknown"
@@ -1198,6 +1215,7 @@ class Dispatcher:
             gs_id=gs_id,
             operation=operation,
             failure_class=self._ops_failure_class(failure_class),
+            remediation=remediation,
             affected_pairs=self._pair_rows(affected),
             desired_pairs_for_gs=self._pair_rows(set(self._desired_ground_pairs_for_gs(gs_id)))
             if gs_id
@@ -1493,7 +1511,14 @@ class Dispatcher:
         expected_down: dict[tuple[str, str], ActiveLinkInfo],
         sim_time: datetime,
     ) -> ActuationResult:
-        return await verify_ground_kernel_inventory(
+        # Overlay the commanded netem from kernel-actual bookkeeping: desired
+        # infos come from the latest OME snapshot and carry no dispatch
+        # provenance, but the kernel can only be expected to hold what was
+        # last COMMANDED for the pair.
+        expected_up = {
+            pair: self._info_with_commanded_netem(pair, info) for pair, info in expected_up.items()
+        }
+        result = await verify_ground_kernel_inventory(
             gs_id=gs_id,
             expected_up=expected_up,
             expected_down=expected_down,
@@ -1502,9 +1527,81 @@ class Dispatcher:
             sim_iso=sim_time.isoformat(),
             sim_time=sim_time,
             gs_capacities=self._gs_capacities,
-            latency_compensation=self._latency_compensation,
             session_id=self._session_id,
             wiring_generation=self._wiring_generation,
+        )
+        return result
+
+    async def _record_agent_health(self, result: ActuationResult) -> None:
+        """Feed every agent call outcome into the sliding-window health
+        tracker and announce transitions. Health is observability only - it
+        never mutates actuation state, it tells the operator an agent is
+        down (n-of-last-x failures) and when it came back."""
+        for agent_result in result.agent_results:
+            ok = agent_result.failure_class != ActuationFailureClass.AGENT_UNREACHABLE
+            transition = self._agent_health.record(
+                agent_result.agent_addr,
+                ok=ok,
+                reason=str(agent_result.details.get("error_code") or ""),
+                now=self._now(),
+            )
+            if transition is None:
+                continue
+            summary = self._agent_health.failure_summary(agent_result.agent_addr)
+            if transition == AgentHealthTransition.DEGRADED:
+                await self._publish_scheduler_ops(
+                    code=SchedulerOpsCode.AGENT_DEGRADED,
+                    message=(f"Node Agent {agent_result.agent_addr} appears down: {summary}"),
+                    level="error",
+                    details=self._actuation_details(
+                        gs_id=None,
+                        operation="AgentHealth",
+                        failure_class=ActuationFailureClass.AGENT_UNREACHABLE,
+                        sim_time=self._current_sim_time,
+                        reason=summary,
+                        remediation=(
+                            f"Node Agent {agent_result.agent_addr} has failed most "
+                            "of its recent calls. Check the nodalarc-node-agent "
+                            "DaemonSet pod on that Kubernetes node (kubectl get "
+                            "pods -l app=nodalarc-node-agent -o wide). Affected "
+                            "ground stations keep their last proven state and "
+                            "re-prove automatically when the agent answers."
+                        ),
+                    ),
+                )
+            else:
+                await self._publish_scheduler_ops(
+                    code=SchedulerOpsCode.AGENT_RECOVERED,
+                    message=f"Node Agent {agent_result.agent_addr} is answering again",
+                    level="info",
+                    details=self._actuation_details(
+                        gs_id=None,
+                        operation="AgentHealth",
+                        failure_class=ActuationFailureClass.NONE,
+                        sim_time=self._current_sim_time,
+                        reason=summary,
+                    ),
+                )
+
+    def _info_with_commanded_netem(
+        self, pair: tuple[str, str], info: ActiveLinkInfo
+    ) -> ActiveLinkInfo:
+        if info.netem_one_way_ms is not None:
+            return info
+        actual = self._actual_links.get(pair)
+        if actual is None or actual.netem_one_way_ms is None:
+            return info
+        return ActiveLinkInfo(
+            info.interface_a,
+            info.interface_b,
+            info.latency_ms,
+            info.bandwidth_mbps,
+            link_type=info.link_type,
+            range_km=info.range_km,
+            authority_sim_time=info.authority_sim_time,
+            authority_source=info.authority_source,
+            authority_sequence=info.authority_sequence,
+            netem_one_way_ms=actual.netem_one_way_ms,
         )
 
     async def _mark_gs_clean(
@@ -1608,6 +1705,15 @@ class Dispatcher:
             state_after=after,
             intervention_id=intervention_id,
             reason=reason,
+            remediation=(
+                "Dispatch to this ground station is suppressed until its kernel "
+                "is re-proven. The Scheduler re-verifies automatically on a "
+                "backoff; if verification exhausts, trigger operator repair "
+                "(POST /api/v1/ops/repair with gs_id and reason, or the Repair "
+                "action in the UI) to reconcile the GS kernel to current "
+                "authority under a logged intervention id. Per-interface "
+                "mismatches are listed in node_agent_results."
+            ),
         )
         await self._publish_scheduler_ops(
             code=code,
@@ -1647,6 +1753,9 @@ class Dispatcher:
         operation_context: str,
         intervention_id: str | None = None,
     ) -> None:
+        # Every agent interaction feeds the reachability window, successes
+        # included - recovery detection should not wait for the next audit.
+        await self._record_agent_health(result)
         if not result.has_failures:
             return
         fatal_pairs = {
@@ -1776,7 +1885,15 @@ class Dispatcher:
         sim_time: datetime,
         intervention_id: str | None = None,
     ) -> bool:
-        expected_up = self._desired_ground_pairs_for_gs(gs_id)
+        # Recovery proves the kernel against the Scheduler's PROVEN
+        # bookkeeping (kernel-actual links plus stale footprints) - the same
+        # claim the clean-state audit makes. It must NOT prove against the
+        # current OME desire: dirty suppresses dispatch, so desired membership
+        # walks away from the frozen kernel (every pass/handover), making
+        # recovery structurally impossible and exhaustion guaranteed.
+        # Convergence to desire is the reconcile loop's job, and it resumes
+        # the moment this proof re-establishes trust.
+        expected_up = self._actual_ground_pairs_for_gs(gs_id)
         expected_down = self._kernel_expected_down_for_gs(gs_id, expected_up)
         state_before = self._ground_state(gs_id)
         if not expected_up and not expected_down:
@@ -1793,6 +1910,60 @@ class Dispatcher:
             expected_down=expected_down,
             sim_time=sim_time,
         )
+        await self._record_agent_health(result)
+        if result.transport_only_failure:
+            # The prover was unreachable - nothing was observed, so nothing
+            # was disproven. Reschedule the proof on a short fixed delay
+            # WITHOUT consuming a verify attempt: exhaustion is a statement
+            # about repeated evidence of divergence, and an agent mid-rollout
+            # provides none. Recovery is automatic the moment it answers.
+            retry_delay_s = (
+                self._degraded_transport_retry_delay_s
+                if any(
+                    self._agent_health.is_degraded(agent_result.agent_addr)
+                    for agent_result in result.agent_results
+                )
+                else self._transport_retry_delay_s
+            )
+            recovery = SchedulerRecoveryStatus(
+                verify_attempt_count=state_before.recovery.verify_attempt_count,
+                last_verify_result="agent_unreachable",
+                next_verify_after=self._now() + timedelta(seconds=retry_delay_s),
+                verify_exhausted=False,
+                operator_action_required=False,
+                active_intervention_id=intervention_id,
+            )
+            after = replace(state_before, recovery=recovery)
+            self._gs_actuation[gs_id] = after
+            await self._publish_scheduler_ops(
+                code=SchedulerOpsCode.KERNEL_VERIFY_ATTEMPTED,
+                message=(
+                    f"KernelInventory for {gs_id} could not reach its Node Agent; "
+                    "re-proving automatically"
+                ),
+                level="warning",
+                details=self._actuation_details(
+                    gs_id=gs_id,
+                    operation="KernelInventory",
+                    failure_class=ActuationFailureClass.AGENT_UNREACHABLE,
+                    affected_pairs=result.failed_pairs,
+                    result=result,
+                    sim_time=sim_time,
+                    state_before=state_before,
+                    state_after=after,
+                    intervention_id=intervention_id,
+                    reason="read-only GS kernel verification: prover unreachable",
+                    remediation=(
+                        "The Node Agent did not answer - typically a node-agent "
+                        "restart or rollout. The Scheduler re-proves automatically "
+                        f"every {retry_delay_s}s and clears this "
+                        "state as soon as the agent responds with a matching "
+                        "kernel. No operator action is needed unless this "
+                        "persists after the agent is Running again."
+                    ),
+                ),
+            )
+            return False
         details = self._actuation_details(
             gs_id=gs_id,
             operation="KernelInventory",
@@ -1856,6 +2027,14 @@ class Dispatcher:
                 state_after=after,
                 intervention_id=intervention_id,
                 reason="bounded auto-verify exhausted; operator action required",
+                remediation=(
+                    "Automatic verification is exhausted: the kernel repeatedly "
+                    "disagreed with Scheduler authority. Trigger operator repair "
+                    "(POST /api/v1/ops/repair with gs_id and reason, or the "
+                    "Repair action in the UI). Repair reconciles the GS kernel "
+                    "to current authority once, under a logged intervention id; "
+                    "per-interface mismatches are in node_agent_results."
+                ),
             )
             await self._publish_scheduler_ops(
                 code=SchedulerOpsCode.KERNEL_VERIFY_EXHAUSTED,
@@ -1899,6 +2078,39 @@ class Dispatcher:
                 expected_down=expected_down,
                 sim_time=sim_time,
             )
+            await self._record_agent_health(result)
+            if result.transport_only_failure:
+                # The prover was unreachable (typically a node-agent rollout):
+                # the audit observed nothing, so the proven-clean claim stands
+                # and no transition happens. The next periodic audit re-proves.
+                await self._publish_scheduler_ops(
+                    code=SchedulerOpsCode.KERNEL_VERIFY_ATTEMPTED,
+                    message=(
+                        f"Clean-state audit for {gs_id} could not reach its "
+                        "Node Agent; keeping proven-clean state"
+                    ),
+                    level="warning",
+                    details=self._actuation_details(
+                        gs_id=gs_id,
+                        operation="KernelInventoryAudit",
+                        failure_class=ActuationFailureClass.AGENT_UNREACHABLE,
+                        affected_pairs=result.failed_pairs,
+                        result=result,
+                        sim_time=sim_time,
+                        state_before=state_before,
+                        state_after=state_before,
+                        reason="clean-state audit: prover unreachable, nothing observed",
+                        remediation=(
+                            "The Node Agent did not answer the audit - typically "
+                            "a node-agent restart or rollout. The previously "
+                            "proven kernel state is kept and the next periodic "
+                            "audit re-proves it. No operator action is needed "
+                            "unless this persists after the agent is Running."
+                        ),
+                    ),
+                )
+                outcomes[gs_id] = True
+                continue
             details = self._actuation_details(
                 gs_id=gs_id,
                 operation="KernelInventoryAudit",

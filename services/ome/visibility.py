@@ -89,6 +89,16 @@ class ScheduledLink(NamedTuple):
 # ---------------------------------------------------------------------------
 
 
+# An endpoint authored ON the body surface (a ground station with alt 0)
+# converts from geodetic coordinates to a point within float ULPs of the
+# ellipsoid — its normalized radius can land at 1.0 - 1e-16. "On the
+# surface" is not "inside the body": without this tolerance such an
+# observer is permanently LOS-blocked from the entire sky, including
+# zenith. The slack is dimensionless ~1e-12 (micrometres at planetary
+# scale), far below any physical fidelity claim.
+_SURFACE_NORM_TOLERANCE = 1e-12
+
+
 def has_line_of_sight(
     pos_a: Vec3,
     pos_b: Vec3,
@@ -113,7 +123,7 @@ def has_line_of_sight(
     a = body_frame.equatorial_radius_km
     b = body_frame.polar_radius_km
     norm_sq = (cx / a) ** 2 + (cy / a) ** 2 + (cz / b) ** 2
-    return norm_sq >= 1.0
+    return norm_sq >= 1.0 - _SURFACE_NORM_TOLERANCE
 
 
 def _enu_components(

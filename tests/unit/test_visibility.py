@@ -2,7 +2,8 @@
 
 import math
 
-from nodalarc.geo import compute_range_km
+from nodalarc.body_frames import BodyFrame
+from nodalarc.geo import compute_range_km, geodetic_to_body_fixed
 from nodalarc.models.terminal_physics import SatGroundTerminalBoresight, TerminalBoresight
 from ome.propagator import (
     GeoPosition,
@@ -430,3 +431,47 @@ class TestSymmetricScheduling:
         assert result["B"][0].scheduled is True
         # A→C: asymmetric (C doesn't schedule A), A→C gets unscheduled
         assert result["A"][1].scheduled is False
+
+
+class TestSurfaceObserverLineOfSight:
+    """The surface-representation class: an observer authored ON the body
+    ellipsoid (alt 0) converts from geodetic coordinates to a point within
+    float ULPs of the surface — sometimes one ULP INSIDE it. LOS must read
+    "on the surface" as outside the body, or any zero-altitude site is
+    permanently blind to its entire sky (luna-artemis-base at lat -89.4,
+    alt 0, rejected a 123 km zenith pass as los_blocked)."""
+
+    LUNA = BodyFrame(
+        name="luna",
+        mean_radius_km=1737.4,
+        equatorial_radius_km=1738.1,
+        polar_radius_km=1736.0,
+        rotation_rate_rad_s=2.6616995e-06,
+        gravitational_parameter_km3_s2=4902.800066,
+        j2=0.0,
+    )
+
+    def test_polar_surface_site_sees_zenith_satellite(self):
+        gs_geo = GeoPosition(-89.4, 30.0, 0.0)
+        gs = geodetic_to_body_fixed(gs_geo, self.LUNA)
+        sat = geodetic_to_body_fixed(GeoPosition(-89.4, 30.0, 100.0), self.LUNA)
+        assert has_line_of_sight(gs, sat, self.LUNA), (
+            "a surface observer must not be occluded by the body it stands on"
+        )
+
+    def test_zero_altitude_site_full_ground_visibility_decision(self):
+        gs_geo = GeoPosition(-89.4, 30.0, 0.0)
+        gs = geodetic_to_body_fixed(gs_geo, self.LUNA)
+        sat = geodetic_to_body_fixed(GeoPosition(-89.4, 30.0, 100.0), self.LUNA)
+        gv = check_ground_visibility(gs, gs_geo, sat, 10.0, body_frame=self.LUNA)
+        assert gv.visible, f"zenith pass rejected: {gv.reject_reason}"
+        assert gv.elevation_deg > 80.0
+
+    def test_occlusion_still_blocks_through_the_body(self):
+        gs_geo = GeoPosition(-89.4, 30.0, 0.0)
+        gs = geodetic_to_body_fixed(gs_geo, self.LUNA)
+        # Satellite over the OPPOSITE pole: the segment crosses the body.
+        sat = geodetic_to_body_fixed(GeoPosition(89.4, 30.0, 100.0), self.LUNA)
+        assert not has_line_of_sight(gs, sat, self.LUNA), (
+            "the surface tolerance must not disable real occlusion"
+        )

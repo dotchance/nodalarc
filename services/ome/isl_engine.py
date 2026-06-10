@@ -128,7 +128,10 @@ def _segment_intersects_sphere(
     cx = ax + t * dx
     cy = ay + t * dy
     cz = az + t * dz
-    return cx * cx + cy * cy + cz * cz < radius_km * radius_km
+    # Same surface-representation tolerance as visibility.has_line_of_sight:
+    # an endpoint sitting numerically ON the sphere (a surface node in an
+    # inter-body link) must not read as inside it.
+    return cx * cx + cy * cy + cz * cz < radius_km * radius_km * (1.0 - 1e-12)
 
 
 def _inter_body_occluded(

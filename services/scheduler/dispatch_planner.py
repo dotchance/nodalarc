@@ -75,6 +75,39 @@ def sat_id_for_gs_pair(pair: tuple[str, str], gs_capacities: Mapping[str, int]) 
     return None
 
 
+def interface_colliding_downs(
+    *,
+    to_remove: set[tuple[str, str]],
+    to_add: set[tuple[str, str]],
+    actual: Mapping[tuple[str, str], ActiveLinkInfo],
+    desired: Mapping[tuple[str, str], ActiveLinkInfo],
+) -> set[tuple[str, str]]:
+    """Release pairs whose kernel interface is reused by a same-pass acquire.
+
+    The OME allocator may hand a terminal freed in one tick straight to the
+    successor link in the same tick. Such a handover cannot be
+    make-before-break: one kernel interface cannot carry the old and the new
+    link at once, and dispatching the acquire first means the deferred
+    release tears down the interface state the acquire just created. Every
+    release returned here must be dispatched before the acquires.
+    """
+    acquire_endpoints: set[tuple[str, str]] = set()
+    for pair in to_add:
+        info = desired[pair]
+        acquire_endpoints.add((pair[0], info.interface_a))
+        acquire_endpoints.add((pair[1], info.interface_b))
+
+    colliding: set[tuple[str, str]] = set()
+    for pair in to_remove:
+        info = actual[pair]
+        if (pair[0], info.interface_a) in acquire_endpoints or (
+            pair[1],
+            info.interface_b,
+        ) in acquire_endpoints:
+            colliding.add(pair)
+    return colliding
+
+
 def classify_mbb_changes(
     *,
     to_remove: set[tuple[str, str]],

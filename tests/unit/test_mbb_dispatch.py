@@ -14,17 +14,22 @@ from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
 from nodalarc.proto import node_agent_pb2
+from scheduler.dispatch_planner import interface_colliding_downs
 from scheduler.dispatcher import ActiveLinkInfo, Dispatcher
 
 OME_RANGE_KM = 1000.0
 
 
-def _ground_info(authority_sim_time: datetime | None = None) -> ActiveLinkInfo:
+def _ground_info(
+    authority_sim_time: datetime | None = None,
+    gs_iface: str = "term0",
+    sat_iface: str = "gnd0",
+) -> ActiveLinkInfo:
     if authority_sim_time is None:
         authority_sim_time = datetime.now(UTC)
     return ActiveLinkInfo(
-        "term0",
-        "gnd0",
+        gs_iface,
+        sat_iface,
         3.0,
         1000.0,
         link_type="ground",
@@ -135,7 +140,8 @@ class TestMBBCapacityClassification:
         nc = AsyncMock()
         nc.publish = AsyncMock()
         sim = datetime.now(UTC)
-        desired = {pair_new: _ground_info(authority_sim_time=sim)}
+        # The successor occupies a different terminal — true MBB is possible.
+        desired = {pair_new: _ground_info(authority_sim_time=sim, gs_iface="term1")}
 
         _run(d._reconcile_links(desired, nc, sim))
 
@@ -234,7 +240,9 @@ class TestMBBRollback:
         nc = AsyncMock()
         nc.publish = AsyncMock()
         sim = datetime.now(UTC)
-        desired = {pair_new: _ground_info(authority_sim_time=sim)}
+        # Distinct terminal: a same-terminal successor is break-before-make
+        # by necessity and the old link is legitimately released first.
+        desired = {pair_new: _ground_info(authority_sim_time=sim, gs_iface="term1")}
 
         _run(d._reconcile_links(desired, nc, sim))
 
@@ -316,6 +324,139 @@ class TestCounterIntegrity:
         assert d._sat_active_count.get("sat-01", 0) == 0
 
 
+def _record_call_order(d: Dispatcher) -> list[str]:
+    """Re-wrap the stub's down/up responders to record dispatch order."""
+    order: list[str] = []
+    stub = d._pool.get_stub("agent-1")
+    original_down = stub.async_batch_link_down.side_effect
+    original_up = stub.async_batch_link_up.side_effect
+
+    def resp_down(req):
+        order.append("down")
+        return original_down(req)
+
+    def resp_up(req):
+        order.append("up")
+        return original_up(req)
+
+    stub.async_batch_link_down = AsyncMock(side_effect=resp_down)
+    stub.async_batch_link_up = AsyncMock(side_effect=resp_up)
+    return order
+
+
+class TestTerminalReuseCollision:
+    """A release whose kernel interface is reused by a same-pass acquire
+    must dispatch before the acquire (forced break-before-make).
+
+    Live failure this pins: the OME allocator freed denver-gw1 term0 and
+    handed it to the successor link in the same tick; MBB staging upped the
+    successor on term0 (proof passed), then the final-release down of the
+    old link tore term0's host veth and mirred state back down — kernel
+    diverged from proven bookkeeping and the GS exhausted recovery.
+    """
+
+    def test_same_terminal_handover_dispatches_down_before_up(self):
+        pair_old = ("gs-A", "sat-01")
+        pair_new = ("gs-A", "sat-02")
+        d = _make_dispatcher(
+            gs_caps={"gs-A": 4},
+            sat_caps={"sat-01": 1, "sat-02": 1},
+            pairs=[pair_old, pair_new],
+        )
+        d._actual_links[pair_old] = _ground_info()
+        d._gs_active_count["gs-A"] = 1
+        d._sat_active_count["sat-01"] = 1
+        order = _record_call_order(d)
+
+        nc = AsyncMock()
+        nc.publish = AsyncMock()
+        sim = datetime.now(UTC)
+        # Successor reuses term0 — spare capacity exists, but MBB is
+        # physically impossible on one terminal.
+        desired = {pair_new: _ground_info(authority_sim_time=sim, gs_iface="term0")}
+
+        _run(d._reconcile_links(desired, nc, sim))
+
+        assert order == ["down", "up"]
+        assert pair_new in d._actual_links
+        assert pair_old not in d._actual_links
+
+    def test_distinct_terminal_handover_keeps_mbb_order(self):
+        pair_old = ("gs-A", "sat-01")
+        pair_new = ("gs-A", "sat-02")
+        d = _make_dispatcher(
+            gs_caps={"gs-A": 4},
+            sat_caps={"sat-01": 1, "sat-02": 1},
+            pairs=[pair_old, pair_new],
+        )
+        d._actual_links[pair_old] = _ground_info()
+        d._gs_active_count["gs-A"] = 1
+        d._sat_active_count["sat-01"] = 1
+        order = _record_call_order(d)
+
+        nc = AsyncMock()
+        nc.publish = AsyncMock()
+        sim = datetime.now(UTC)
+        desired = {pair_new: _ground_info(authority_sim_time=sim, gs_iface="term1")}
+
+        _run(d._reconcile_links(desired, nc, sim))
+
+        assert order == ["up", "down"]
+        assert pair_new in d._actual_links
+        assert pair_old not in d._actual_links
+
+    def test_sat_terminal_reuse_across_stations_dispatches_down_first(self):
+        """gs-A releases sat-X gnd0 while gs-B acquires it in the same pass;
+        gs-A also has its own distinct-terminal acquire, so without the
+        collision check its release would defer past gs-B's acquire."""
+        pair_a_old = ("gs-A", "sat-X")
+        pair_a_new = ("gs-A", "sat-Y")
+        pair_b_new = ("gs-B", "sat-X")
+        all_pairs = [pair_a_old, pair_a_new, pair_b_new]
+        d = _make_dispatcher(
+            gs_caps={"gs-A": 4, "gs-B": 4},
+            sat_caps={"sat-X": 1, "sat-Y": 1},
+            pairs=all_pairs,
+        )
+        d._actual_links[pair_a_old] = _ground_info(gs_iface="term0", sat_iface="gnd0")
+        d._gs_active_count["gs-A"] = 1
+        d._sat_active_count["sat-X"] = 1
+        order = _record_call_order(d)
+
+        nc = AsyncMock()
+        nc.publish = AsyncMock()
+        sim = datetime.now(UTC)
+        desired = {
+            pair_a_new: _ground_info(authority_sim_time=sim, gs_iface="term1", sat_iface="gnd0"),
+            pair_b_new: _ground_info(authority_sim_time=sim, gs_iface="term0", sat_iface="gnd0"),
+        }
+
+        _run(d._reconcile_links(desired, nc, sim))
+
+        assert order[0] == "down"
+        assert pair_a_old not in d._actual_links
+        assert pair_b_new in d._actual_links
+
+    def test_helper_flags_only_shared_interfaces(self):
+        sim = datetime.now(UTC)
+        reused = ("gs-A", "sat-01")
+        independent = ("gs-A", "sat-02")
+        actual = {
+            reused: _ground_info(authority_sim_time=sim, gs_iface="term0"),
+            independent: _ground_info(authority_sim_time=sim, gs_iface="term1"),
+        }
+        acquire = ("gs-A", "sat-03")
+        desired = {acquire: _ground_info(authority_sim_time=sim, gs_iface="term0")}
+
+        colliding = interface_colliding_downs(
+            to_remove={reused, independent},
+            to_add={acquire},
+            actual=actual,
+            desired=desired,
+        )
+        assert colliding == {reused}
+
+
 class TestForcedBBMSegmentEscalation:
     """forced_bbm_pairs escalates to GS-segment level in _reconcile_mbb."""
 
@@ -337,9 +478,10 @@ class TestForcedBBMSegmentEscalation:
         d._sat_active_count = {"sat-01": 1, "sat-03": 1}
 
         sim = datetime.now(UTC)
+        # Successors take fresh terminals so gs-B remains genuinely MBB.
         desired = {
-            pair_a_new: _ground_info(authority_sim_time=sim),
-            pair_b_new: _ground_info(authority_sim_time=sim),
+            pair_a_new: _ground_info(authority_sim_time=sim, gs_iface="term1"),
+            pair_b_new: _ground_info(authority_sim_time=sim, gs_iface="term1"),
         }
 
         forced = frozenset({pair_a_old})

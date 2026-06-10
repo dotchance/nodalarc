@@ -123,6 +123,7 @@ from scheduler.dispatch_planner import (
     classify_mbb_changes,
     diff_link_state,
     gs_id_for_pair,
+    interface_colliding_downs,
     sat_id_for_gs_pair,
 )
 from scheduler.epoch_sync import EpochSyncState
@@ -3304,6 +3305,26 @@ class Dispatcher:
                 raise ValueError(f"Missing handover mode for ground station {gs_id}")
             if mode == "bbm":
                 policy_forced_bbm.add(pair)
+
+        # A release whose kernel interface is reused by a same-pass acquire
+        # is physically break-before-make: the acquire-then-release order
+        # would tear down the interface state the acquire just created
+        # (and proved), leaving bookkeeping asserting a link the kernel no
+        # longer has.
+        collision_downs = interface_colliding_downs(
+            to_remove=to_remove,
+            to_add=to_add,
+            actual=self._actual_links,
+            desired=desired,
+        )
+        newly_forced = collision_downs - policy_forced_bbm
+        if newly_forced:
+            log.info(
+                "Forced break-before-make for ground release(s) whose terminal "
+                "is reused by a same-pass acquire: %s",
+                sorted(newly_forced),
+            )
+        policy_forced_bbm.update(collision_downs)
         forced_bbm_pairs = frozenset(policy_forced_bbm)
 
         # --- Classify changes ---

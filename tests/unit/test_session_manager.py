@@ -58,7 +58,10 @@ class TestSessionCatalog:
 
         assert len(sessions) == 1
         assert sessions[0]["name"] == "test-session"
-        assert sessions[0]["constellation"] == "geo_relay + heo_relay + leo_a + leo_b + luna_llo"
+        assert (
+            sessions[0]["constellation"]
+            == "geo_relay + heo_relay + leo_a + leo_b + luna_relay + meo"
+        )
         assert sessions[0]["routing_stack"] == "earth_domain:isis + luna_domain:isis"
 
     def test_scan_sessions_reports_multi_segment_label(self, tmp_path):
@@ -71,7 +74,10 @@ class TestSessionCatalog:
 
         assert len(sessions) == 1
         assert sessions[0]["name"] == "earth-leo-heo-geo-luna-reachability"
-        assert sessions[0]["constellation"] == "geo_relay + heo_relay + leo_a + leo_b + luna_llo"
+        assert (
+            sessions[0]["constellation"]
+            == "geo_relay + heo_relay + leo_a + leo_b + luna_relay + meo"
+        )
 
     def test_scan_sessions_includes_generated_root_without_catalog_pollution(self, tmp_path):
         catalog_sessions = tmp_path / "catalog-sessions"

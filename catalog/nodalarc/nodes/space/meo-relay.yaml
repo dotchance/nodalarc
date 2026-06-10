@@ -12,6 +12,10 @@ node:
     role: isl
     terminal: nodalarc:terminals/optical/optical-high-orbit-isl.yaml
     count: 2
+  - id: relay_optical
+    role: crosslink
+    terminal: nodalarc:terminals/optical/optical-cislunar-crosslink.yaml
+    count: 2
   payloads: []
   reference: https://www.esa.int/Enabling_Support/Space_Operations/Types_of_orbits
-  notes: Routed GPS-altitude MEO node for medium-orbit experiments.
+  notes: Routed GPS-altitude MEO relay node with Earth access, medium-orbit ISLs, and optical crosslinks toward the high-orbit backbone.

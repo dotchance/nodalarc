@@ -13,7 +13,7 @@ site:
     model: nodalarc:nodes/ground/leo-gateway.yaml
     terminals:
       access_ka:
-        installed_count: 1
+        installed_count: 2
         capabilities:
           bandwidth_mbps:
             transmit: 1000.0

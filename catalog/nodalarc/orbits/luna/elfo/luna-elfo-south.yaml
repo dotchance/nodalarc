@@ -1,0 +1,23 @@
+orbit:
+  id: luna-elfo-south
+  central_body: nodalarc:bodies/luna.yaml
+  epoch: '2026-06-08T00:00:00Z'
+  shape:
+    perigee_altitude_km: 673
+    apogee_altitude_km: 7332
+  orientation:
+    inclination_deg: 46.8
+    raan_deg: 252.0
+    argument_of_perigee_deg: 86.2
+  phase:
+    mean_anomaly_deg: 0.0
+  propagator: two_body
+  reference: https://www.eoportal.org/satellite-missions/lunar-pathfinder
+  notes: Elliptical Lunar Frozen Orbit on the ESA Lunar Pathfinder mission
+    design (perilune 673 km x apolune 7332 km, period ~10.8 h). Perilune sits
+    over the northern hemisphere so the apolune arc dwells over the lunar
+    south pole for hours per revolution - the orbit class real lunar comm
+    relays (ESA Moonlight LCNS, China Queqiao-2) actually fly. Frozen-orbit
+    stability against lunar mascons is a property of the real design; this
+    runtime's two-body propagation holds the elements constant, which matches
+    that intent at the current fidelity layer.

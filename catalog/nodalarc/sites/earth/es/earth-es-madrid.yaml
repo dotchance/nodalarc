@@ -1,12 +1,12 @@
 site:
-  id: earth-br-sao-paulo
-  display_name: Sao Paulo gateway (LEO)
+  id: earth-es-madrid
+  display_name: Madrid gateway (LEO)
   verified:
     source: nodalarc_catalog
     notes: NodalArc demo site using a named-facility coordinate estimate and explicit emulation addressing.
   lan:
-    ipv4: 172.16.154.0/24
-    ipv6: fd00:da7a:9a::/64
+    ipv4: 172.16.153.0/24
+    ipv6: fd00:da7a:99::/64
   nodes:
   - id: gw1
     display_name: LEO Gateway
@@ -33,23 +33,23 @@ site:
             mode: local_vertical
     interfaces:
       lo0:
-        ipv4: 10.255.0.160/32
-        ipv6: fd00:da7a:ffff::a0/128
+        ipv4: 10.255.0.159/32
+        ipv6: fd00:da7a:ffff::9f/128
       terr0:
-        ipv4: 172.16.154.1/24
-        ipv6: fd00:da7a:9a::1/64
+        ipv4: 172.16.153.1/24
+        ipv6: fd00:da7a:99::1/64
     originated_prefixes:
       ipv4:
-      - 172.16.154.0/24
+      - 172.16.153.0/24
       - 0.0.0.0/0
       ipv6:
-      - fd00:da7a:9a::/64
+      - fd00:da7a:99::/64
     tags:
     - leo
   frame:
     body_fixed:
       body: nodalarc:bodies/earth.yaml
   location:
-    lat_deg: -23.5505
-    lon_deg: -46.6333
-    alt_m: 760
+    lat_deg: 40.4168
+    lon_deg: -3.7038
+    alt_m: 657

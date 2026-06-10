@@ -9,7 +9,7 @@ terminal:
     transmit: 50
     receive: 50
   tracking_capacity: 1
-  max_range_km: 5000
+  max_range_km: 10000
   limits:
     azimuth_deg:
       min: -180
@@ -19,4 +19,6 @@ terminal:
       max: 90
     max_tracking_rate_deg_s: 0.5
   reference: https://www.nasa.gov/directorates/somd/space-communications-navigation-program/
-  notes: Engineering model for Luna surface-to-orbiter S-band testing.
+  notes: Engineering model for Luna surface-to-orbiter S-band testing. Range
+    is sized for ELFO relay geometry (apolune slant range ~8000 km, the span
+    ESA Lunar Pathfinder's S-band serves); LLO use stays well inside it.

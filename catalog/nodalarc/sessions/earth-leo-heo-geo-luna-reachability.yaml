@@ -7,12 +7,14 @@ segments:
   source: nodalarc:constellations/earth/leo/earth-leo-ring-36.yaml
 - id: leo_b
   source: nodalarc:constellations/earth/leo/earth-leo-polar-36.yaml
+- id: meo
+  source: nodalarc:constellations/earth/meo/earth-meo-gps-24.yaml
 - id: heo_relay
   source: nodalarc:constellations/earth/heo/earth-heo-molniya-3.yaml
 - id: geo_relay
   source: nodalarc:constellations/earth/geo/earth-geo-ring-8.yaml
-- id: luna_llo
-  source: nodalarc:constellations/luna/llo/luna-polar-2.yaml
+- id: luna_relay
+  source: nodalarc:constellations/luna/elfo/luna-elfo-relay-2.yaml
 - id: leo_a_ground
   placement:
     from_site_set: nodalarc:site-sets/earth/leo/earth-leo-starlink-gateway-sites.yaml
@@ -30,7 +32,7 @@ segments:
       handover_concurrency: one_at_a_time
       ranking_order:
       - service_priority
-      - selection_score
+      - per_gs_rank
       - satellite_ground_terminal_capacity
       - lex_pair
       mbb_preemption: 'off'
@@ -57,7 +59,7 @@ segments:
       handover_concurrency: one_at_a_time
       ranking_order:
       - service_priority
-      - selection_score
+      - per_gs_rank
       - satellite_ground_terminal_capacity
       - lex_pair
       mbb_preemption: 'off'
@@ -83,7 +85,7 @@ segments:
       handover_concurrency: one_at_a_time
       ranking_order:
       - service_priority
-      - selection_score
+      - per_gs_rank
       - satellite_ground_terminal_capacity
       - lex_pair
       mbb_preemption: 'off'
@@ -106,7 +108,7 @@ segments:
       handover_concurrency: one_at_a_time
       ranking_order:
       - service_priority
-      - selection_score
+      - per_gs_rank
       - satellite_ground_terminal_capacity
       - lex_pair
       mbb_preemption: 'off'
@@ -130,7 +132,7 @@ segments:
       handover_concurrency: one_at_a_time
       ranking_order:
       - service_priority
-      - selection_score
+      - per_gs_rank
       - satellite_ground_terminal_capacity
       - lex_pair
       mbb_preemption: 'off'
@@ -228,7 +230,7 @@ link_rules:
       - medium: rf
     min_elevation_deg: 10
   - select:
-      segment: luna_llo
+      segment: luna_relay
     terminal:
       all:
       - role: access
@@ -307,13 +309,13 @@ link_rules:
     n: 2
   endpoints:
   - select:
-      segment: luna_llo
+      segment: luna_relay
     terminal:
       all:
       - role: isl
       - medium: optical
   - select:
-      segment: luna_llo
+      segment: luna_relay
     terminal:
       all:
       - role: isl
@@ -331,6 +333,61 @@ link_rules:
       - medium: optical
   - select:
       segment: heo_relay
+    terminal:
+      all:
+      - role: crosslink
+      - medium: optical
+- id: santiago_geo_access
+  topology:
+    mode: visible_candidates
+  endpoints:
+  - select:
+      all:
+      - segment: leo_a_ground
+      - tag: geo
+    terminal:
+      all:
+      - role: access
+      - medium: rf
+    min_elevation_deg: 5
+  - select:
+      segment: geo_relay
+    terminal:
+      all:
+      - role: access
+      - medium: rf
+- id: meo_access
+  topology:
+    mode: visible_candidates
+  endpoints:
+  - select:
+      all:
+      - segment: leo_a_ground
+      - tag: meo
+    terminal:
+      all:
+      - role: access
+      - medium: rf
+    min_elevation_deg: 10
+  - select:
+      segment: meo
+    terminal:
+      all:
+      - role: access
+      - medium: rf
+- id: meo_to_geo
+  topology:
+    mode: nearest_n
+    n: 1
+  endpoints:
+  - select:
+      segment: meo
+    terminal:
+      all:
+      - role: crosslink
+      - medium: optical
+  - select:
+      segment: geo_relay
     terminal:
       all:
       - role: crosslink
@@ -364,7 +421,7 @@ link_rules:
       - role: crosslink
       - medium: optical
   - select:
-      segment: luna_llo
+      segment: luna_relay
     terminal:
       all:
       - role: crosslink
@@ -378,7 +435,7 @@ addressing:
       - segment: leo_b
       - segment: heo_relay
       - segment: geo_relay
-      - segment: luna_llo
+      - segment: luna_relay
       - segment: leo_a_ground
       - segment: leo_b_ground
       - segment: heo_ground
@@ -399,6 +456,7 @@ routing:
     - any:
       - segment: leo_a
       - segment: leo_b
+      - segment: meo
       - segment: heo_relay
       - segment: geo_relay
       - segment: leo_a_ground
@@ -411,7 +469,7 @@ routing:
     protocol: isis
     selectors:
     - any:
-      - segment: luna_llo
+      - segment: luna_relay
       - segment: luna_ground
     area_assignment:
       strategy: flat

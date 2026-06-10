@@ -50,7 +50,7 @@ def test_catalog_primitive_models_reject_extra_fields() -> None:
 SHIPPED_SESSION_SHAPES = {
     "earth-geo-inmarsat.yaml": (8, 16),
     "earth-geo-tdrs.yaml": (10, 24),
-    "earth-leo-heo-geo-luna-reachability.yaml": (104, 415),
+    "earth-leo-heo-geo-luna-reachability.yaml": (132, 587),
     "earth-leo-polar.yaml": (39, 108),
     "earth-leo-simple.yaml": (41, 180),
     "earth-leo-walker.yaml": (181, 880),

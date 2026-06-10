@@ -1,0 +1,24 @@
+orbit:
+  id: luna-nrho-southern-l2
+  central_body: nodalarc:bodies/luna.yaml
+  epoch: '2026-06-08T00:00:00Z'
+  shape:
+    perigee_altitude_km: 1500
+    apogee_altitude_km: 69000
+  orientation:
+    inclination_deg: 90.0
+    raan_deg: 0.0
+    argument_of_perigee_deg: 90.0
+  phase:
+    mean_anomaly_deg: 0.0
+  propagator: crtbp
+  reference: https://www.nasa.gov/mission/gateway/
+  notes: Southern Earth-Moon L2 Near-Rectilinear Halo Orbit on the Gateway
+    mission design (perilune ~1500 km over the north pole, apolune ~69000 km
+    dwelling over the south pole, ~6.56-day period, 9:2 lunar synodic
+    resonance). An NRHO is a three-body trajectory - the apolune arc is
+    outside Luna's gravitational sphere of influence, so Kepler elements
+    cannot fly it truthfully. The shape/orientation fields record the
+    osculating envelope for authoring and display; the crtbp propagator is a
+    future runtime capability and sessions referencing this orbit fail
+    resolution with a typed UnsupportedFeature until it lands.

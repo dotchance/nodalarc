@@ -3,7 +3,13 @@ site_set:
   display_name: LEO A gateway sites
   sites:
   - nodalarc:sites/earth/us/co/earth-us-co-denver.yaml
-  - nodalarc:sites/earth/us/ak/earth-us-ak-fairbanks.yaml
   - nodalarc:sites/earth/cl/earth-cl-santiago.yaml
   - nodalarc:sites/earth/au/earth-au-perth.yaml
-  notes: Four LEO A gateway sites.
+  - nodalarc:sites/earth/es/earth-es-madrid.yaml
+  - nodalarc:sites/earth/br/earth-br-sao-paulo.yaml
+  - nodalarc:sites/earth/nz/earth-nz-christchurch.yaml
+  - nodalarc:sites/earth/us/hi/earth-us-hi-honolulu.yaml
+  notes: Seven LEO A gateway sites spread across longitudes so the single
+    53-degree ring's coverage windows tile more of the day. Fairbanks was
+    removed - at 64.8 N it sits above the ring's coverage band and can never
+    schedule a pass over its 25-degree elevation mask.

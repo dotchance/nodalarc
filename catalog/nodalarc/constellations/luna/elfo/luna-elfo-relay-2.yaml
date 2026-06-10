@@ -1,0 +1,19 @@
+constellation:
+  id: luna-elfo-relay-2
+  display_name: Two-node lunar ELFO relay constellation
+  node: nodalarc:nodes/space/luna-relay.yaml
+  orbit: nodalarc:orbits/luna/elfo/luna-elfo-south.yaml
+  planes:
+    count: 1
+    raan_spacing_deg: 0
+  slots_per_plane: 2
+  phasing:
+    mode: evenly_spaced_mean_anomaly
+    phase_offset_deg: 0
+  node_tags:
+  - tag: all
+  reference: https://en.wikipedia.org/wiki/Moonlight_Programme
+  notes: Two anti-phased lunar relay satellites in the Lunar Pathfinder ELFO.
+    While one transits perilune the other dwells on the apolune arc over the
+    south pole, so a polar surface site keeps a relay in view for most of
+    each orbit instead of catching minutes-long low-orbit passes.

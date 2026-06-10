@@ -1,9 +1,9 @@
 site:
   id: earth-cl-santiago
-  display_name: Santiago LEO A gateway
+  display_name: Santiago teleport (LEO + GEO)
   verified:
     source: nodalarc_catalog
-    notes: NodalArc demo site using a named-facility coordinate estimate and explicit emulation addressing.
+    notes: NodalArc demo site using a named-facility coordinate estimate and explicit emulation addressing. Shared teleport campus; the GEO antenna bridges the LEO gateway LAN to the GEO segment over terr0.
   lan:
     ipv4: 172.16.17.0/24
     ipv6: fd00:da7a:11::/64
@@ -46,6 +46,43 @@ site:
       - fd00:da7a:11::/64
     tags:
     - leo
+  - id: gw2
+    display_name: GEO Gateway
+    model: nodalarc:nodes/ground/geo-gateway.yaml
+    payloads: {}
+    terminals:
+      access_ka:
+        installed_count: 2
+        capabilities:
+          bandwidth_mbps:
+            transmit: 750.0
+            receive: 750.0
+          tracking_capacity: 1
+          max_range_km: 42000.0
+          limits:
+            azimuth_deg:
+              min: -180
+              max: 180
+            elevation_deg:
+              min: 5
+              max: 90
+            max_tracking_rate_deg_s: 0.1
+          boresight:
+            mode: local_vertical
+    interfaces:
+      lo0:
+        ipv4: 10.255.0.200/32
+        ipv6: fd00:da7a:ffff::c8/128
+      terr0:
+        ipv4: 172.16.17.2/24
+        ipv6: fd00:da7a:11::2/64
+    originated_prefixes:
+      ipv4:
+      - 172.16.17.0/24
+      ipv6:
+      - fd00:da7a:11::/64
+    tags:
+    - geo
   frame:
     body_fixed:
       body: nodalarc:bodies/earth.yaml

@@ -92,6 +92,19 @@ export function getNodeLocalPosition(nodeId: string, target: THREE.Vector3): boo
  * earth-inertial. Returning false makes consumers skip (a loud, obvious "absent") instead of
  * rendering a plausible-but-wrong position. The frame registers the moment its <Body> mounts.
  */
+/**
+ * Transform a body-local scene point into world space through the registered
+ * body frame group. Same absent-frame contract as getNodeWorldPosition:
+ * returns false (caller skips) rather than handing back a wrong-frame value.
+ */
+export function bodyLocalToWorld(bodyId: string, target: THREE.Vector3): boolean {
+  const frame = bodyFrames.get(bodyId);
+  if (!frame) return false;
+  frame.updateWorldMatrix(true, false);
+  frame.localToWorld(target);
+  return true;
+}
+
 export function getNodeWorldPosition(nodeId: string, target: THREE.Vector3): boolean {
   const e = localPositions.get(nodeId);
   if (!e) return false;

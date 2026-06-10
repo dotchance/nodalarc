@@ -309,3 +309,66 @@ export function propagateToSceneXYZ(
     body.kmPerRenderUnit,
   );
 }
+
+/**
+ * Sample one full osculating orbit as a closed scene-local path.
+ *
+ * This is the truthful path overlay for eccentric orbits (HEO, lunar ELFO),
+ * where a great-circle ring would lie about the trajectory, and for any
+ * non-Earth body, where the world-frame circle trick assumes an Earth-centred
+ * scene. The path is sampled uniformly in ECCENTRIC anomaly (dense around
+ * perigee where the trajectory curves fastest), with J2 secular drift applied
+ * to RAAN/argument-of-perigee at the seed instant and the body rotation
+ * frozen at `simTimeUnix` — the same snapshot semantics as the circular
+ * rings, which are also seeded once and inertially static.
+ *
+ * Coordinates are scene-LOCAL to the node's body frame (identical pipeline to
+ * propagateToSceneXYZ); callers transform them into world space through the
+ * registered body group.
+ */
+export function sampleOrbitPathSceneXYZ(
+  elements: KeplerianElements,
+  epochUnix: number,
+  simTimeUnix: number,
+  samples = 180,
+): Float32Array {
+  const body = elements.body;
+  const dt = simTimeUnix - epochUnix;
+  const a = elements.semi_major_axis_km;
+  const e = elements.eccentricity;
+  const inclinationRad = elements.inclination_deg * DEG2RAD;
+  let raanRad = elements.raan_deg * DEG2RAD;
+  let argumentOfPerigeeRad = elements.argument_of_perigee_deg * DEG2RAD;
+
+  if ((elements.propagator ?? "two-body") === "j2-mean-elements") {
+    // Same secular drift the live position propagation applies.
+    const n = Math.sqrt(body.gravitationalParameterKm3S2 / (a * a * a));
+    const cosI = Math.cos(inclinationRad);
+    const p = a * (1.0 - e * e);
+    const j2Factor = body.j2 * (body.equatorialRadiusKm / p) ** 2;
+    raanRad += -1.5 * j2Factor * n * cosI * dt;
+    argumentOfPerigeeRad +=
+      e === 0 ? 0.0 : 0.75 * j2Factor * n * (5.0 * cosI * cosI - 1.0) * dt;
+  }
+
+  const sqrtOneMinusE2 = Math.sqrt(1.0 - e * e);
+  const positions = new Float32Array((samples + 1) * 3);
+  for (let i = 0; i <= samples; i++) {
+    const eccentricAnomaly = (i * 2 * Math.PI) / samples;
+    const xPf = a * (Math.cos(eccentricAnomaly) - e);
+    const yPf = a * sqrtOneMinusE2 * Math.sin(eccentricAnomaly);
+    const eci = rotatePerifocal(xPf, yPf, raanRad, inclinationRad, argumentOfPerigeeRad);
+    const ecef = eciToEcef(eci[0], eci[1], eci[2], simTimeUnix, body);
+    let scene: [number, number, number];
+    if (body.bodyId !== "earth") {
+      scene = bodyFixedToSceneXYZ(ecef[0], ecef[1], ecef[2], body.kmPerRenderUnit);
+    } else {
+      const [latDeg, lonDeg, altKm] = ecefToGeodetic(ecef[0], ecef[1], ecef[2], body);
+      scene = geoToSceneXYZ(latDeg, lonDeg, altKm, body.equatorialRadiusKm, body.kmPerRenderUnit);
+    }
+    positions[i * 3] = scene[0];
+    positions[i * 3 + 1] = scene[1];
+    positions[i * 3 + 2] = scene[2];
+  }
+  return positions;
+}

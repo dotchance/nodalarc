@@ -272,3 +272,109 @@ describe("orbitalMath", () => {
     });
   });
 });
+
+describe("sampleOrbitPathSceneXYZ", () => {
+  const earth = catalogEarthBodyMath();
+
+  it("samples a closed elliptical path whose radii match a(1±e)", async () => {
+    const { sampleOrbitPathSceneXYZ } = await import("../orbitalMath");
+    // Molniya-class HEO: perigee 600 km, apogee 39700 km.
+    const a = 6371.0088 + (600 + 39700) / 2;
+    const e = (39700 - 600) / (2 * a + 600 + 39700 - (39700 - 600));
+    const elements = {
+      propagator: "j2-mean-elements" as const,
+      semi_major_axis_km: a,
+      eccentricity: 0.737,
+      inclination_deg: 63.4,
+      raan_deg: 270,
+      argument_of_perigee_deg: 270,
+      mean_anomaly_deg: 0,
+      body: earth,
+    };
+    void e;
+    const path = sampleOrbitPathSceneXYZ(elements, 0, 600, 180);
+    expect(path.length).toBe(181 * 3);
+    // Closed: first and last vertices coincide (E=0 and E=2π).
+    expect(path[0]).toBeCloseTo(path[180 * 3]!, 6);
+    expect(path[1]).toBeCloseTo(path[180 * 3 + 1]!, 6);
+    expect(path[2]).toBeCloseTo(path[180 * 3 + 2]!, 6);
+    // Radii span the ellipse, not a circle: min ≈ a(1-e), max ≈ a(1+e)
+    // (scene units; geodetic round-trip introduces sub-km ellipsoid error).
+    let minR = Infinity;
+    let maxR = -Infinity;
+    for (let i = 0; i < path.length; i += 3) {
+      const r = Math.hypot(path[i]!, path[i + 1]!, path[i + 2]!);
+      minR = Math.min(minR, r);
+      maxR = Math.max(maxR, r);
+    }
+    const km = earth.kmPerRenderUnit;
+    expect(minR * km).toBeGreaterThan(elements.semi_major_axis_km * (1 - 0.737) * 0.99);
+    expect(minR * km).toBeLessThan(elements.semi_major_axis_km * (1 - 0.737) * 1.01);
+    expect(maxR * km).toBeGreaterThan(elements.semi_major_axis_km * (1 + 0.737) * 0.99);
+    expect(maxR * km).toBeLessThan(elements.semi_major_axis_km * (1 + 0.737) * 1.01);
+  });
+
+  it("degenerates to the circular radius for e=0", async () => {
+    const { sampleOrbitPathSceneXYZ } = await import("../orbitalMath");
+    const elements = {
+      propagator: "two-body" as const,
+      semi_major_axis_km: 6371.0088 + 550,
+      eccentricity: 0,
+      inclination_deg: 53,
+      raan_deg: 10,
+      argument_of_perigee_deg: 0,
+      mean_anomaly_deg: 0,
+      body: earth,
+    };
+    const path = sampleOrbitPathSceneXYZ(elements, 0, 0, 90);
+    const km = earth.kmPerRenderUnit;
+    for (let i = 0; i < path.length; i += 3) {
+      const rKm = Math.hypot(path[i]!, path[i + 1]!, path[i + 2]!) * km;
+      expect(rKm).toBeGreaterThan(elements.semi_major_axis_km * 0.995);
+      expect(rKm).toBeLessThan(elements.semi_major_axis_km * 1.005);
+    }
+  });
+
+  it("samples non-Earth bodies in their own frame (lunar ELFO)", async () => {
+    const { sampleOrbitPathSceneXYZ } = await import("../orbitalMath");
+    const lunaRadius = 1737.4;
+    const luna = {
+      bodyId: "luna",
+      meanRadiusKm: lunaRadius,
+      equatorialRadiusKm: 1738.1,
+      polarRadiusKm: 1736.0,
+      gravitationalParameterKm3S2: 4902.800066,
+      j2: 0,
+      rotationRateRadS: 2.6616995e-6,
+      kmPerRenderUnit: earth.kmPerRenderUnit,
+    };
+    const a = lunaRadius + (673 + 7332) / 2;
+    const ecc = (7332 - 673) / (673 + 7332 + 2 * lunaRadius);
+    const path = sampleOrbitPathSceneXYZ(
+      {
+        propagator: "two-body" as const,
+        semi_major_axis_km: a,
+        eccentricity: ecc,
+        inclination_deg: 46.8,
+        raan_deg: 252,
+        argument_of_perigee_deg: 86.2,
+        mean_anomaly_deg: 0,
+        body: luna,
+      },
+      0,
+      0,
+      180,
+    );
+    let minR = Infinity;
+    let maxR = -Infinity;
+    for (let i = 0; i < path.length; i += 3) {
+      const r = Math.hypot(path[i]!, path[i + 1]!, path[i + 2]!) * luna.kmPerRenderUnit;
+      minR = Math.min(minR, r);
+      maxR = Math.max(maxR, r);
+    }
+    expect(minR).toBeCloseTo(a * (1 - ecc), 0);
+    expect(maxR).toBeCloseTo(a * (1 + ecc), 0);
+    // The path must orbit Luna's local origin, never Earth-sized radii.
+    expect(maxR).toBeLessThan(12000);
+  });
+});

@@ -4,10 +4,12 @@
  * OrbitPins — the ctrl/cmd-click "pinned" orbit rings, rendered as ONE
  * batched LineSegments2 fat-line at the SCENE ROOT (world frame), like <AllOrbits> but for the
  * small pinned-satellite set and drawn brighter/thicker (the emphasis a pin is meant to give).
- * Each pinned satellite's ring is the great circle through its world position in the
- * position/velocity plane (orbitGeometry.computeOrbitPositions + worldVelocity), seeded
- * from the live registry world position + the view-frame rotation/angular velocity, and
- * re-seeded when the pin set or the reference frame changes. The ring is static between seed points; the satellite moves along it.
+ * Circular Earth pins ring the great circle through the world position in the
+ * position/velocity plane (orbitGeometry.computeOrbitPositions + worldVelocity); eccentric
+ * (HEO/ELFO) and non-Earth pins sample the true osculating ellipse from the ephemeris
+ * elements through the body frame (orbitalMath.sampleOrbitPathSceneXYZ). Rings are
+ * re-seeded when the pin set or the reference frame changes and are static between
+ * seed points; the satellite moves along them.
  */
 
 import { useEffect, useMemo, useRef } from "react";
@@ -20,9 +22,12 @@ import { getPlaneColor } from "../../config";
 import { velocityToScene } from "../geo";
 import { worldVelocity } from "../astronomy";
 import { computeOrbitPositions, ORBIT_SAMPLES, supportsStaticOrbitRing } from "./orbitGeometry";
+import { sampleOrbitPathSceneXYZ } from "../../sim/orbitalMath";
+import { bodyMathFromFrame } from "../../sim/ephemeris";
+import { interpolatedSimTimeMs } from "../../sim/simClock";
 import type { NodeState, ReferenceFrame } from "../../types";
 import type { SessionEphemeris } from "../../sim/ephemeris";
-import { getNodeLocalPosition, getNodeWorldPosition } from "./positions";
+import { bodyLocalToWorld, getNodeLocalPosition, getNodeWorldPosition } from "./positions";
 
 const FLOATS_PER_ORBIT = ORBIT_SAMPLES * 6;
 
@@ -99,24 +104,49 @@ export function OrbitPins({
     const pos = new Float32Array(pinnedIds.length * FLOATS_PER_ORBIT);
     const col = new Float32Array(pinnedIds.length * FLOATS_PER_ORBIT);
     let n = 0;
+    const simMs = interpolatedSimTimeMs(performance.now());
     for (const id of pinnedIds) {
       const ns = byIdRef.current.get(id);
-      if (!ns || ns.vel_x_km_s == null || ns.vel_y_km_s == null || ns.vel_z_km_s == null) continue;
+      if (!ns) continue;
       if (ns.plane == null) continue;
       const ephNode = ephemeris.nodes[id];
-      if (
-        !ephNode ||
-        ephNode.type !== "keplerian" ||
-        !supportsStaticOrbitRing(ephNode.eccentricity)
-      ) {
-        continue;
+      if (!ephNode || ephNode.type !== "keplerian") continue;
+
+      let ring: Float32Array;
+      if (supportsStaticOrbitRing(ephNode.eccentricity) && ephNode.reference_body === "earth") {
+        if (ns.vel_x_km_s == null || ns.vel_y_km_s == null || ns.vel_z_km_s == null) continue;
+        if (!getNodeWorldPosition(id, _worldPos) || !getNodeLocalPosition(id, _localPos)) continue;
+        _velEcef.copy(
+          velocityToScene(ns.vel_x_km_s, ns.vel_y_km_s, ns.vel_z_km_s, kmPerRenderUnit),
+        );
+        worldVelocity(_localPos, _velEcef, rotY, angVel, _velWorld);
+        ring = computeOrbitPositions(_worldPos, _velWorld);
+      } else {
+        // Eccentric (HEO/ELFO) and/or non-Earth pins: true osculating
+        // ellipse from the elements, transformed through the body frame.
+        if (simMs === null) continue;
+        const frame = ephemeris.body_frames[ephNode.reference_body];
+        if (!frame) continue;
+        const local = sampleOrbitPathSceneXYZ(
+          { ...ephNode, body: bodyMathFromFrame(frame, kmPerRenderUnit) },
+          ephemeris.epoch_unix,
+          simMs / 1000,
+          ORBIT_SAMPLES,
+        );
+        let transformed = true;
+        for (let i = 0; i < local.length; i += 3) {
+          _worldPos.set(local[i]!, local[i + 1]!, local[i + 2]!);
+          if (!bodyLocalToWorld(ephNode.reference_body, _worldPos)) {
+            transformed = false;
+            break;
+          }
+          local[i] = _worldPos.x;
+          local[i + 1] = _worldPos.y;
+          local[i + 2] = _worldPos.z;
+        }
+        if (!transformed) continue;
+        ring = local;
       }
-      if (!getNodeWorldPosition(id, _worldPos) || !getNodeLocalPosition(id, _localPos)) continue;
-      _velEcef.copy(
-        velocityToScene(ns.vel_x_km_s, ns.vel_y_km_s, ns.vel_z_km_s, kmPerRenderUnit),
-      );
-      worldVelocity(_localPos, _velEcef, rotY, angVel, _velWorld);
-      const ring = computeOrbitPositions(_worldPos, _velWorld);
       _color.setHex(getPlaneColor(ns.plane));
       const base = n * FLOATS_PER_ORBIT;
       for (let i = 0; i < ORBIT_SAMPLES; i++) {

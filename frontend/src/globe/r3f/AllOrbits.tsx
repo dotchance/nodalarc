@@ -2,11 +2,13 @@
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
 /**
  * AllOrbits — full-constellation orbit rings, the "Satellite Paths" toggle, rendered as ONE
- * batched LineSegments2 fat-line draw call. Implemented in the R3F
- * lifecycle: for each satellite with velocity + plane it derives the orbit's world-frame
- * position + velocity (registry world position + velocityToScene·worldVelocity with the live
- * view-frame rotation/angular velocity), samples a 180-segment closed ring via the reused
- * orbitGeometry.computeOrbitPositions, and packs every ring into a single position/color buffer
+ * batched LineSegments2 fat-line draw call. Two truthful path sources feed
+ * one buffer: circular Earth orbits use the world great-circle seeded from the
+ * live registry position + velocity (orbitGeometry.computeOrbitPositions);
+ * eccentric orbits (HEO, lunar ELFO) and any non-Earth Keplerian orbit sample
+ * the true osculating ellipse from the ephemeris elements in the node's body
+ * frame (orbitalMath.sampleOrbitPathSceneXYZ → bodyLocalToWorld). Both are
+ * packed into a single position/color buffer
  * with per-vertex getPlaneColor. The rings are world-frame curves, so the batch lives at
  * SCENE ROOT (a Universe child) — NOT inside the Earth body — exactly like the world-frame renderer: the batch lives in the scene root and reads getNodeWorldPosition / worldVelocity.
  *
@@ -36,9 +38,12 @@ import { getPlaneColor } from "../../config";
 import { velocityToScene } from "../geo";
 import { worldVelocity } from "../astronomy";
 import { computeOrbitPositions, ORBIT_SAMPLES, supportsStaticOrbitRing } from "./orbitGeometry";
+import { sampleOrbitPathSceneXYZ } from "../../sim/orbitalMath";
+import { bodyMathFromFrame } from "../../sim/ephemeris";
+import { interpolatedSimTimeMs } from "../../sim/simClock";
 import type { NodeState, ReferenceFrame } from "../../types";
 import type { SessionEphemeris } from "../../sim/ephemeris";
-import { getNodeLocalPosition, getNodeWorldPosition } from "./positions";
+import { bodyLocalToWorld, getNodeLocalPosition, getNodeWorldPosition } from "./positions";
 
 const SEGMENTS_PER_ORBIT = ORBIT_SAMPLES; // closed ring = N segments from N+1 vertices
 const FLOATS_PER_ORBIT = SEGMENTS_PER_ORBIT * 6;
@@ -151,6 +156,7 @@ export function AllOrbits({
     sats: NodeState[],
     viewFrameRotationRad: number,
     frameAngularVelocityRadS: number,
+    simTimeUnix: number | null,
   ): void => {
     teardown();
     const group = groupRef.current;
@@ -162,30 +168,55 @@ export function AllOrbits({
     let renderableCount = 0;
 
     for (const ns of sats) {
-      if (ns.vel_x_km_s == null || ns.vel_y_km_s == null || ns.vel_z_km_s == null) continue;
       if (ns.plane == null) continue;
       const ephNode = ephemerisRef.current.nodes[ns.node_id];
-      if (
-        !ephNode ||
-        ephNode.type !== "keplerian" ||
-        !supportsStaticOrbitRing(ephNode.eccentricity)
-      ) {
-        continue;
-      }
-      renderableCount++;
-      if (!getNodeWorldPosition(ns.node_id, _worldPos)) continue;
-      if (!getNodeLocalPosition(ns.node_id, _localPos)) continue;
-      _velEcef.copy(
-        velocityToScene(
-          ns.vel_x_km_s,
-          ns.vel_y_km_s,
-          ns.vel_z_km_s,
-          kmPerRenderUnitRef.current,
-        ),
-      );
-      worldVelocity(_localPos, _velEcef, viewFrameRotationRad, frameAngularVelocityRadS, _velWorld);
+      if (!ephNode || ephNode.type !== "keplerian") continue;
 
-      const positions = computeOrbitPositions(_worldPos, _velWorld);
+      let positions: Float32Array;
+      if (supportsStaticOrbitRing(ephNode.eccentricity) && ephNode.reference_body === "earth") {
+        // Circular Earth orbit: world great-circle seeded from live pos+vel.
+        if (ns.vel_x_km_s == null || ns.vel_y_km_s == null || ns.vel_z_km_s == null) continue;
+        renderableCount++;
+        if (!getNodeWorldPosition(ns.node_id, _worldPos)) continue;
+        if (!getNodeLocalPosition(ns.node_id, _localPos)) continue;
+        _velEcef.copy(
+          velocityToScene(
+            ns.vel_x_km_s,
+            ns.vel_y_km_s,
+            ns.vel_z_km_s,
+            kmPerRenderUnitRef.current,
+          ),
+        );
+        worldVelocity(_localPos, _velEcef, viewFrameRotationRad, frameAngularVelocityRadS, _velWorld);
+        positions = computeOrbitPositions(_worldPos, _velWorld);
+      } else {
+        // Eccentric (HEO/ELFO) and/or non-Earth Keplerian: sample the true
+        // osculating ellipse from the elements in the node's body frame — a
+        // world great-circle would lie about both the shape and the centre.
+        renderableCount++;
+        if (simTimeUnix == null) continue;
+        const frame = ephemerisRef.current.body_frames[ephNode.reference_body];
+        if (!frame) continue;
+        const local = sampleOrbitPathSceneXYZ(
+          { ...ephNode, body: bodyMathFromFrame(frame, kmPerRenderUnitRef.current) },
+          ephemerisRef.current.epoch_unix,
+          simTimeUnix,
+          ORBIT_SAMPLES,
+        );
+        let transformed = true;
+        for (let i = 0; i < local.length; i += 3) {
+          _worldPos.set(local[i]!, local[i + 1]!, local[i + 2]!);
+          if (!bodyLocalToWorld(ephNode.reference_body, _worldPos)) {
+            transformed = false;
+            break;
+          }
+          local[i] = _worldPos.x;
+          local[i + 1] = _worldPos.y;
+          local[i + 2] = _worldPos.z;
+        }
+        if (!transformed) continue;
+        positions = local;
+      }
       _color.setHex(getPlaneColor(ns.plane));
       const r = _color.r;
       const g = _color.g;
@@ -259,7 +290,8 @@ export function AllOrbits({
     const viewFrameRotationRad = earthFrame.current?.rotation.y ?? 0;
     const frameAngularVelocityRadS =
       refFrameRef.current === "earth-inertial" ? earthRotationRateRef.current : 0;
-    rebuild(sats, viewFrameRotationRad, frameAngularVelocityRadS);
+    const simMs = interpolatedSimTimeMs(performance.now());
+    rebuild(sats, viewFrameRotationRad, frameAngularVelocityRadS, simMs === null ? null : simMs / 1000);
   });
 
   return <group ref={groupRef} name="all-orbits" />;

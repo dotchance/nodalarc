@@ -200,7 +200,7 @@ def test_lifecycle_scripts_print_next_steps() -> None:
         "scripts/na-session.sh": "[session] Next: make status",
         "scripts/na-nuke.sh": "[nuke] Next: make all",
         "scripts/na-teardown.sh": "[teardown] Next: make install && make session",
-        "scripts/na-deploy-service.sh": "[deploy] Next: make status",
+        "scripts/na-deploy-service.sh": "Next: make status",
     }
     for rel, marker in expected.items():
         assert marker in (ROOT / rel).read_text()

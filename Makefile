@@ -30,12 +30,15 @@ $(error REGISTRY_PREFIX is set without REGISTRY_HOST; set REGISTRY_HOST instead)
 endif
 endif
 
-# Image tag: git short SHA for reproducibility
+# Image tag: content identity, not just HEAD identity.
+# Clean tree -> <sha>; dirty tree -> <sha>-<diffhash> (scripts/na-tag.sh).
+# Two different trees can never share a tag, so the registry can never serve
+# stale code under a current name and concurrent builds cannot race.
 GIT_SHA := $(shell git rev-parse --short HEAD)
 ifeq ($(strip $(GIT_SHA)),)
 $(error Unable to resolve git SHA; run from a git checkout)
 endif
-TAG     ?= $(GIT_SHA)
+TAG     ?= $(shell bash scripts/na-tag.sh)
 PROJECT_VERSION ?= $(shell bash scripts/na-project-version.sh)
 ifeq ($(strip $(PROJECT_VERSION)),)
 PROJECT_VERSION := 0+unknown
@@ -300,10 +303,19 @@ reinstall: ## Explicit destructive reinstall through official teardown
 # is healthy. restart is a blunt operational tool for already-installed
 # platform pods; it does not change Helm values or session state.
 
-session: ## Start a session (DEFAULT_SESSION=path/to/session.yaml)
+session: ## Start a session (DEFAULT_SESSION=...); refuses a drifted platform (FORCE_SESSION=1 overrides)
+	@if [ "$(FORCE_SESSION)" != "1" ]; then \
+		MODE='$(MODE)' KUBECONFIG='$(KUBECONFIG)' NAMESPACE='$(NAMESPACE)' REGISTRY_HOST='$(REGISTRY_HOST)' TAG='$(TAG)' bash scripts/na-drift.sh --check || { \
+			echo ""; \
+			echo "[session] REFUSED: the platform is not running this tree's images."; \
+			echo "[session] Next: make deploy-<service> or make build && make load && make upgrade,"; \
+			echo "[session]       or FORCE_SESSION=1 make session to deploy against the drifted platform anyway."; \
+			exit 1; \
+		}; \
+	fi
 	@KUBECONFIG='$(KUBECONFIG)' NAMESPACE='$(NAMESPACE)' DEFAULT_SESSION='$(DEFAULT_SESSION)' bash scripts/na-session.sh
 
-restart: ## Rolling restart all platform pods (forces image re-pull)
+restart: ## Bounce all platform pods on their CURRENT images (no code deploy; use deploy-* to ship code)
 	@echo "[restart] Rolling restart of all platform deployments and daemonsets..."
 	@for dep in ome nodalarc-scheduler nodalarc-vs-api nodalarc-operator nodalarc-vf; do \
 		kubectl get deployment/$$dep -n $(NAMESPACE) >/dev/null; \
@@ -338,37 +350,32 @@ upgrade: ## In-place Helm upgrade (updates image tags, no teardown)
 # Iterative service deploys
 # ---------------------------------------------------------------------------
 #
-# deploy-* is for fast inner-loop development against an already installed
-# platform. It is not the first-install path and it is not a replacement for
-# build/load/upgrade when you want Helm values to reflect a new committed SHA.
-# Each target builds one image, transports that image, then restarts only the
-# matching Deployment or DaemonSet.
+# deploy-* is the fast inner loop against an already installed platform:
+#   edit code -> make deploy-vs-api -> test -> repeat
 #
-# Iterative dev loop — no commit needed:
-#   edit code → make deploy-vs-api → test in browser → repeat
+# How it works (scripts/na-deploy-service.sh):
+#   1. Build the one image (layer cache makes unchanged layers instant).
+#   2. Push the content-addressed tag (na-tag.sh: dirty trees get their own
+#      tag, so this push can never overwrite a different tree's image).
+#   3. helm upgrade --reuse-values --set images.<svc>=<ref> — Helm OWNS the
+#      image reference, so the deploy MOVES it; Kubernetes rolls exactly
+#      this one workload. (A bare `rollout restart` re-pulls whatever tag
+#      the spec already pins — after any commit that silently redeployed
+#      the OLD image. Deploys move references; restart only bounces pods.)
+#   4. Wait for convergence with a budget that scales for the node-agent
+#      DaemonSet (it re-verifies wiring per session pod before serving);
+#      "still progressing" extends the wait, only a stalled rollout fails.
+#   5. PROVE it: the running pods' image digest must equal the pushed
+#      digest, or the deploy fails loudly with both values.
 #
-# How it works:
-#   1. Build the one service image (Docker layer cache makes unchanged
-#      layers instant — only the COPY layer with your code change rebuilds)
-#   2. Load/push the selected :SHA tag. The :SHA tag
-#      replaces the previous image at that tag. The Deployment spec
-#      already references :SHA from the last make install.
-#   3. kubectl rollout restart forces a new pod. imagePullPolicy=Always
-#      (set in config.mk for multi-node) ensures it pulls from the
-#      registry instead of using the node's containerd cache.
-#
-# No Helm involved — the Deployment spec doesn't change (same :SHA tag),
-# only the image content behind the tag changes in the registry. This
-# avoids Helm drift while supporting rapid iteration without commits.
-#
-# After committing: make build && make load && make upgrade
-# This updates Helm with the new SHA tags (post-commit permanent state).
+# Works identically before and after commits. `make upgrade` remains the
+# all-services path that also refreshes buildTag and chart values.
 
 define _deploy-service
 	@MODE='$(MODE)' REGISTRY_HOST='$(REGISTRY_HOST)' TAG='$(TAG)' SUDO_CTR='$(SUDO_CTR)' KUBECONFIG='$(KUBECONFIG)' NAMESPACE='$(NAMESPACE)' bash scripts/na-deploy-service.sh $1 $2
 endef
 
-deploy-all: build-ome build-scheduler build-node-agent build-vs-api build-operator build-vf ## Build + load + restart all platform services
+deploy-all: build-ome build-scheduler build-node-agent build-vs-api build-operator build-vf ## Build + push + Helm-move + digest-verify every platform service
 	$(call _deploy-service,ome,deployment/ome)
 	$(call _deploy-service,scheduler,deployment/nodalarc-scheduler)
 	$(call _deploy-service,node-agent,daemonset/nodalarc-node-agent)
@@ -376,33 +383,34 @@ deploy-all: build-ome build-scheduler build-node-agent build-vs-api build-operat
 	$(call _deploy-service,operator,deployment/nodalarc-operator)
 	$(call _deploy-service,vf,deployment/nodalarc-vf)
 
-deploy-ome: build-ome ## Build + load + restart OME
+deploy-ome: build-ome ## Build + push + Helm-move + digest-verify OME
 	$(call _deploy-service,ome,deployment/ome)
 
-deploy-scheduler: build-scheduler ## Build + load + restart Scheduler
+deploy-scheduler: build-scheduler ## Build + push + Helm-move + digest-verify Scheduler
 	$(call _deploy-service,scheduler,deployment/nodalarc-scheduler)
 
-deploy-node-agent: build-node-agent ## Build + load + restart Node Agent
+deploy-node-agent: build-node-agent ## Build + push + Helm-move + digest-verify Node Agent
 	$(call _deploy-service,node-agent,daemonset/nodalarc-node-agent)
 
-deploy-vs-api: build-vs-api ## Build + load + restart VS-API
+deploy-vs-api: build-vs-api ## Build + push + Helm-move + digest-verify VS-API
 	$(call _deploy-service,vs-api,deployment/nodalarc-vs-api)
 
-deploy-operator: build-operator ## Build + load + restart Operator
+deploy-operator: build-operator ## Build + push + Helm-move + digest-verify Operator
 	$(call _deploy-service,operator,deployment/nodalarc-operator)
 
-deploy-vf: build-vf ## Build + load + restart VF
+deploy-vf: build-vf ## Build + push + Helm-move + digest-verify VF
 	$(call _deploy-service,vf,deployment/nodalarc-vf)
 
-deploy-measurement: build-measurement ## Build + load + restart MI
+deploy-measurement: build-measurement ## Build + push + Helm-move + digest-verify MI (requires MI in the chart)
 	$(call _deploy-service,measurement,deployment/nodalarc-measurement)
 
 # ---------------------------------------------------------------------------
 # Status
 # ---------------------------------------------------------------------------
 
-status: ## Show cluster status (pods, phase, links)
+status: ## Show cluster status (pods, phase, links) + image drift table
 	@MODE='$(MODE)' KUBECONFIG='$(KUBECONFIG)' NAMESPACE='$(NAMESPACE)' REGISTRY_HOST='$(REGISTRY_HOST)' DEFAULT_SESSION='$(DEFAULT_SESSION)' TAG='$(TAG)' bash scripts/na-status.sh
+	@MODE='$(MODE)' KUBECONFIG='$(KUBECONFIG)' NAMESPACE='$(NAMESPACE)' REGISTRY_HOST='$(REGISTRY_HOST)' TAG='$(TAG)' bash scripts/na-drift.sh || true
 
 # ---------------------------------------------------------------------------
 # Lint and static analysis

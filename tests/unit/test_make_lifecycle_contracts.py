@@ -452,3 +452,91 @@ def test_constellationspec_status_schema_preserves_runtime_identity_fields() -> 
 
     for field in ("sessionName", "sessionRunId", "platformHash", "runtimeHash"):
         assert status_props[field]["type"] == "string"
+
+
+def test_image_tags_are_content_addressed() -> None:
+    """Image identity must equal content identity: a dirty tree must never
+    share a tag with its HEAD commit, or the registry serves stale code under
+    a current name and concurrent builds race (this happened; it cost hours)."""
+    import subprocess
+    import tempfile
+    from pathlib import Path
+
+    script = Path(__file__).resolve().parents[2] / "scripts" / "na-tag.sh"
+
+    with tempfile.TemporaryDirectory() as tmp:
+        repo = Path(tmp)
+        env = {"PATH": "/usr/bin:/bin", "HOME": tmp, "GIT_CONFIG_GLOBAL": "/dev/null"}
+
+        def git(*args: str) -> None:
+            subprocess.run(
+                ["git", "-c", "user.name=t", "-c", "user.email=t@t", *args],
+                cwd=repo,
+                env=env,
+                check=True,
+                capture_output=True,
+            )
+
+        def tag() -> str:
+            return subprocess.run(
+                ["bash", str(script)],
+                cwd=repo,
+                env=env,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+
+        git("init", "-q")
+        (repo / "a.txt").write_text("one\n")
+        git("add", "a.txt")
+        git("commit", "-qm", "first")
+
+        clean = tag()
+        assert "-" not in clean, f"clean tree must tag as bare sha, got {clean}"
+
+        (repo / "a.txt").write_text("two\n")
+        dirty_one = tag()
+        assert dirty_one.startswith(clean + "-"), dirty_one
+        assert dirty_one != clean, "dirty tree must not share the clean tag"
+
+        (repo / "a.txt").write_text("three\n")
+        dirty_two = tag()
+        assert dirty_two != dirty_one, "different dirty trees must not share a tag"
+
+        # Untracked files change builds too.
+        (repo / "a.txt").write_text("one\n")
+        assert tag() == clean
+        (repo / "new.txt").write_text("x\n")
+        assert tag() != clean, "untracked files must dirty the tag"
+
+
+def test_deploy_script_moves_helm_reference_and_verifies_digest() -> None:
+    """A deploy must MOVE the Helm-owned image reference and PROVE the
+    cluster runs what was pushed. `rollout restart` re-pulls whatever tag the
+    spec already pins - after any commit that silently redeploys old code."""
+    from pathlib import Path
+
+    script = (Path(__file__).resolve().parents[2] / "scripts" / "na-deploy-service.sh").read_text()
+    code_lines = [line for line in script.splitlines() if not line.strip().startswith("#")]
+    code = "\n".join(code_lines)
+    assert "helm upgrade" in code
+    assert "--reuse-values" in code
+    assert "rollout restart" not in code, (
+        "deploys must move the Helm reference, never bounce pods onto a pinned tag"
+    )
+    assert "pushed_digest" in code and "imageID" in code, (
+        "deploys must verify the running digest against the pushed digest"
+    )
+
+
+def test_session_refuses_drifted_platform_unless_forced() -> None:
+    """make session must not deploy a session onto a platform that is not
+    running this tree's images - testing against stale services looks like
+    testing your change when it is not."""
+    from pathlib import Path
+
+    makefile = (Path(__file__).resolve().parents[2] / "Makefile").read_text()
+    session_block = makefile.split("session:")[1].split("\n\n")[0]
+    assert "na-drift.sh --check" in session_block
+    assert "FORCE_SESSION" in session_block

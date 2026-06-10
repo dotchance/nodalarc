@@ -107,6 +107,10 @@ spec:
               port: 8081
             initialDelaySeconds: 3
             periodSeconds: 5
+            # The health responder shares the GIL with the physics loop;
+            # checkpoint-recovery replay can stall it past the k8s default
+            # 1s timeout even though the process is healthy and working.
+            timeoutSeconds: 5
           livenessProbe:
             httpGet:
               path: /
@@ -114,6 +118,10 @@ spec:
             initialDelaySeconds: 30
             periodSeconds: 15
             failureThreshold: 6
+            # Default 1s timeout killed a LIVE OME mid-replay, forcing an
+            # ever-longer replay each restart. A real hang still fails six
+            # consecutive 5s probes.
+            timeoutSeconds: 5
           resources:
             requests:
               cpu: {{ .Values.ome.cpuRequest | default "500m" }}

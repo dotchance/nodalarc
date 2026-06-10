@@ -41,7 +41,9 @@ def validate_session_readiness(
     results.extend(_check_routing_domain_connectivity(resolved))
     results.extend(_check_segment_routing_indices(resolved))
     results.extend(_check_ground_mbb_capacity(resolved))
+    results.extend(_check_selection_score_scale(resolved))
     results.extend(_check_ome_runtime_support(resolved))
+    results.extend(_check_access_geometry_feasibility(resolved))
     results.extend(_check_available_node_count(resolved, available_node_count))
     return results
 
@@ -100,36 +102,146 @@ def _check_routing_domain_connectivity(resolved: ResolvedSession) -> list[Valida
     routing protocol; catalog sessions can run multiple domains.
     """
     candidate_neighbors = _candidate_neighbors_by_node(resolved.link_candidates)
+    site_lan_neighbors = _site_lan_neighbors_by_node(resolved)
     results: list[ValidationResult] = []
     nodes_by_id = {node.node_id: node for node in resolved.nodes}
     for domain in resolved.routing_domains:
         if len(domain.node_ids) <= 1:
             continue
-        domain_members = set(domain.node_ids)
-        for node_id in domain.node_ids:
-            node = nodes_by_id.get(node_id)
-            if node is None or node.forwarding not in {"routed", "host"}:
-                continue
-            domain_neighbors = candidate_neighbors.get(node_id, set()) & domain_members
-            if domain_neighbors:
-                continue
-            results.append(
-                ValidationResult(
-                    level="error",
-                    code="E003",
-                    message=(
-                        f"Routing domain {domain.domain_id!r} includes node {node_id!r}, "
-                        "but that node has no resolved link candidate to another member "
-                        "of the same domain."
-                    ),
-                    remediation=(
-                        "Adjust the routing-domain selector or link rules so every "
-                        "routed domain member has at least one declared adjacency."
-                    ),
-                    field_path=f"routing.domains.{domain.domain_id}",
-                )
+        domain_members = {
+            node_id
+            for node_id in domain.node_ids
+            if (node := nodes_by_id.get(node_id)) is not None
+            and node.forwarding in {"routed", "host"}
+        }
+        if len(domain_members) <= 1:
+            continue
+        # Per-node degree is not connectivity: a domain can split into
+        # internally-dense islands where every node has neighbors but half
+        # the domain is unreachable. Walk the candidate + site-LAN graph and
+        # require one connected component.
+        components: list[set[str]] = []
+        unvisited = set(domain_members)
+        while unvisited:
+            start = unvisited.pop()
+            component = {start}
+            frontier = [start]
+            while frontier:
+                current = frontier.pop()
+                neighbors = (
+                    candidate_neighbors.get(current, set()) | site_lan_neighbors.get(current, set())
+                ) & domain_members
+                for neighbor in neighbors:
+                    if neighbor in unvisited:
+                        unvisited.discard(neighbor)
+                        component.add(neighbor)
+                        frontier.append(neighbor)
+            components.append(component)
+        if len(components) == 1:
+            continue
+        components.sort(key=len, reverse=True)
+        detail = "; ".join(
+            f"component {index} ({len(component)} nodes, e.g. {', '.join(sorted(component)[:3])})"
+            for index, component in enumerate(components, start=1)
+        )
+        results.append(
+            ValidationResult(
+                level="error",
+                code="E003",
+                message=(
+                    f"Routing domain {domain.domain_id!r} is not connected: it splits "
+                    f"into {len(components)} components — {detail}."
+                ),
+                remediation=(
+                    "Add link rules (or site-LAN membership) joining the components, "
+                    "or split the domain along the real connectivity boundary."
+                ),
+                field_path=f"routing.domains.{domain.domain_id}",
             )
+        )
     return results
+
+
+_ENGINE_DEFAULT_RANKING_ORDER = (
+    "service_priority",
+    "selection_score",
+    "satellite_ground_terminal_capacity",
+    "lex_pair",
+)
+
+_SELECTION_POLICY_NAMES = {
+    "highest_elevation": "highest-elevation",
+    "lowest_elevation": "lowest-elevation",
+    "longest_remaining_pass": "longest-remaining-pass",
+}
+
+
+def _check_selection_score_scale(resolved: ResolvedSession) -> list[ValidationResult]:
+    """E022: 'selection_score' ranking over mixed score scales fails the
+    deploy gate — never an OME startup crash."""
+    from nodalarc.models.ground_policy import validate_selection_score_scale_compatibility
+
+    policy_names: dict[str, str] = {}
+    ranking: tuple[str, ...] | None = None
+    for node in resolved.nodes:
+        scheduling = node.ground_scheduling
+        if node.kind != "ground_station" or scheduling is None:
+            continue
+        if scheduling.selection_policy is not None:
+            for field, name in _SELECTION_POLICY_NAMES.items():
+                if getattr(scheduling.selection_policy, field, None) is not None:
+                    policy_names[node.node_id] = name
+                    break
+        if scheduling.ranking_order is not None:
+            ranking = tuple(scheduling.ranking_order)
+    if not policy_names:
+        return []
+    try:
+        validate_selection_score_scale_compatibility(
+            policy_names=policy_names,
+            # Allocator-wide ranking is resolve-time uniform; absent means the
+            # engine default applies — validate against what will actually run.
+            ranking_order=ranking or _ENGINE_DEFAULT_RANKING_ORDER,
+        )
+    except ValueError as exc:
+        return [
+            ValidationResult(
+                level="error",
+                code="E022",
+                message=str(exc),
+                remediation=(
+                    "Use 'per_gs_rank' in ranking_order for cross-policy arbitration, "
+                    "or give every ground station a selection policy with the same "
+                    "score scale."
+                ),
+                field_path="segments.apply.scheduling.ranking_order",
+            )
+        ]
+    return []
+
+
+def _site_lan_neighbors_by_node(resolved: ResolvedSession) -> dict[str, set[str]]:
+    """Wired site-LAN adjacencies: routed ground nodes sharing one site's
+    terr0 segment are L2 neighbors — real edges created at wiring time, not
+    a validation exemption."""
+    members_by_site: dict[str, list[str]] = {}
+    for node in resolved.nodes:
+        if (
+            node.kind == "ground_station"
+            and node.forwarding == "routed"
+            and node.namespace is not None
+            and node.interfaces is not None
+            and node.interfaces.terr0 is not None
+        ):
+            members_by_site.setdefault(node.namespace, []).append(node.node_id)
+    neighbors: dict[str, set[str]] = {}
+    for members in members_by_site.values():
+        if len(members) < 2:
+            continue
+        member_set = set(members)
+        for node_id in members:
+            neighbors[node_id] = member_set - {node_id}
+    return neighbors
 
 
 def _check_segment_routing_indices(resolved: ResolvedSession) -> list[ValidationResult]:
@@ -235,6 +347,76 @@ def _check_ome_runtime_support(resolved: ResolvedSession) -> list[ValidationResu
                 field_path="ephemeris",
             )
         )
+    return results
+
+
+def _check_access_geometry_feasibility(resolved: ResolvedSession) -> list[ValidationResult]:
+    """Flag gateways whose access rule can never close geometrically.
+
+    A circular/elliptical orbit's ground track is bounded by its inclination
+    band; a site far enough outside that band can never see the constellation
+    above its elevation mask, no matter how long the session runs. The bound
+    here is deliberately generous (apoapsis altitude at the band's closest
+    approach to the site latitude), so a W005 means truly impossible, not
+    merely rare — the trap is content that LOOKS wired (candidates exist,
+    pods deploy) but can never schedule a link.
+    """
+    import math
+
+    radius_by_body = {facts.body_id: facts.mean_radius_km for facts in resolved.bodies}
+    node_by_id = {node.node_id: node for node in resolved.nodes}
+    min_elev_by_gs = resolved.effective_ground_min_elevation_by_gs()
+
+    # (gs, rule) -> best achievable elevation across that rule's candidates
+    best_by_pair: dict[tuple[str, str], float] = {}
+    for candidate in resolved.link_candidates:
+        if candidate.kind != "access":
+            continue
+        node_a = node_by_id[candidate.node_a]
+        node_b = node_by_id[candidate.node_b]
+        ground, sat = (node_a, node_b) if node_a.kind == "ground_station" else (node_b, node_a)
+        if ground.surface_position is None or sat.orbit is None:
+            continue
+        body_radius = radius_by_body.get(sat.orbit.central_body)
+        if body_radius is None:
+            continue
+        inclination = sat.orbit.inclination_deg % 180.0
+        band_deg = min(inclination, 180.0 - inclination)
+        offset_deg = max(0.0, abs(ground.surface_position.lat_deg) - band_deg)
+        r_apo = sat.orbit.semi_major_axis_km * (1.0 + sat.orbit.eccentricity)
+        if offset_deg <= 0.0:
+            best_elevation = 90.0
+        else:
+            offset = math.radians(offset_deg)
+            best_elevation = math.degrees(
+                math.atan2(math.cos(offset) - body_radius / r_apo, math.sin(offset))
+            )
+        key = (ground.node_id, candidate.rule_id)
+        best_by_pair[key] = max(best_by_pair.get(key, -90.0), best_elevation)
+
+    results: list[ValidationResult] = []
+    for (gs_id, rule_id), best_elevation in sorted(best_by_pair.items()):
+        mask = min_elev_by_gs.get(gs_id, 0.0)
+        if best_elevation < mask:
+            results.append(
+                ValidationResult(
+                    level="warning",
+                    code="W005",
+                    message=(
+                        f"Ground station {gs_id!r} can never see any satellite of "
+                        f"access rule {rule_id!r} above its {mask:.0f} degree "
+                        f"elevation mask (best achievable elevation "
+                        f"{best_elevation:.1f} degrees - the site lies outside the "
+                        "constellation's inclination band)"
+                    ),
+                    remediation=(
+                        "Move the site inside the constellation's ground-track "
+                        "band, lower the elevation mask, or pair the site with a "
+                        "constellation that covers its latitude"
+                    ),
+                    field_path=f"link_rules.{rule_id}",
+                )
+            )
     return results
 
 

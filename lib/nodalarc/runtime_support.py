@@ -32,6 +32,7 @@ class FeatureCategory(StrEnum):
     ADDRESSING_POOL = "addressing_pool"
     PAYLOAD = "payload"
     CLOCK_MODEL = "clock_model"
+    PROPAGATOR = "propagator"
 
 
 # Informational notes shown with unsupported features.
@@ -47,6 +48,10 @@ FEATURE_SUPPORT_NOTES: dict[tuple[FeatureCategory, str], str] = {
     (FeatureCategory.FRAME_BODY, "luna"): "supported by the Earth-Luna runtime",
     (FeatureCategory.FRAME_BODY, "mars"): "future runtime capability",
     (FeatureCategory.FRAME_BODY, "sun"): "future runtime capability",
+    (FeatureCategory.PROPAGATOR, "crtbp"): (
+        "future runtime capability - three-body (CR3BP) propagation for NRHO/halo "
+        "orbits; Kepler elements cannot represent these trajectories truthfully"
+    ),
     (FeatureCategory.PROTOCOL_ADAPTER, "static_ip"): "supported by the Earth-Luna runtime",
     (FeatureCategory.PROTOCOL_ADAPTER, "bgp"): "future runtime capability",
     (FeatureCategory.PROTOCOL_ADAPTER, "dtn_bundle"): "future runtime capability",
@@ -105,6 +110,7 @@ class RuntimeSupport(BaseModel):
     supported_routing_protocols: frozenset[str]
     supported_addressing_pools: frozenset[str]
     supported_clock_models: frozenset[str]
+    supported_propagators: frozenset[str]
     supports_payloads: bool
     # Surface bodies whose presence requires an ephemeris manifest.
     ephemeris_required_bodies: frozenset[str]
@@ -127,6 +133,7 @@ class RuntimeSupport(BaseModel):
             supported_routing_protocols=SUPPORTED_STACK_PROTOCOLS,
             supported_addressing_pools=frozenset({"loopbacks"}),
             supported_clock_models=frozenset({"session"}),
+            supported_propagators=frozenset({"two_body", "j2_mean_elements", "sgp4_tle"}),
             supports_payloads=False,
             ephemeris_required_bodies=frozenset({"luna", "mars"}),
         )
@@ -146,6 +153,7 @@ class RuntimeSupport(BaseModel):
             supported_routing_protocols=SUPPORTED_STACK_PROTOCOLS,
             supported_addressing_pools=frozenset({"loopbacks"}),
             supported_clock_models=frozenset({"session"}),
+            supported_propagators=frozenset({"two_body", "j2_mean_elements", "sgp4_tle"}),
             supports_payloads=False,
             ephemeris_required_bodies=frozenset({"luna"}),
         )
@@ -164,6 +172,11 @@ class RuntimeSupport(BaseModel):
         if kind in self.supported_segment_kinds:
             return None
         return self._unsupported(FeatureCategory.SEGMENT_KIND, kind, "segment kind")
+
+    def check_propagator(self, propagator: str) -> UnsupportedFeature | None:
+        if propagator in self.supported_propagators:
+            return None
+        return self._unsupported(FeatureCategory.PROPAGATOR, propagator, "orbit propagator")
 
     def check_central_body(self, body: str) -> UnsupportedFeature | None:
         if body in self.supported_central_bodies:

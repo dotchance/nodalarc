@@ -144,6 +144,7 @@ def resolve_session_with_assets(
     _validate_orbit_default_propagator(cfg, resolved_nodes)
     body_facts = _collect_body_facts(runtime_nodes)
     _check_body_support(resolved_nodes, body_facts, support)
+    _check_propagator_support(resolved_nodes, support)
     ephemeris = _resolve_ephemeris(cfg, roots, resolved_nodes)
     link_rules = tuple(_resolve_link_rule(rule, runtime_nodes) for rule in cfg.link_rules or ())
     routing_domains = tuple(_resolve_routing_domains(cfg, runtime_nodes))
@@ -295,6 +296,32 @@ def _check_body_support(
             _add(support.check_reference_body(node.reference_body))
     for facts in body_facts:
         _add(support.check_frame_body(facts.body_id))
+    if unsupported:
+        raise UnsupportedFeatureError(unsupported)
+
+
+def _check_propagator_support(
+    nodes: tuple[ResolvedNode, ...],
+    support: RuntimeSupport,
+) -> None:
+    """Gate orbit propagators against the runtime-support profile.
+
+    The grammar carries propagators the runtime cannot fly yet (e.g. "crtbp"
+    three-body NRHO/halo trajectories). Those must fail here with a typed
+    reason — propagating them through Kepler machinery would emit
+    plausible-looking but physically false trajectories.
+    """
+    unsupported = []
+    seen: set[str] = set()
+    for node in nodes:
+        if node.orbit is None:
+            continue
+        propagator = node.orbit.propagator
+        if propagator in seen:
+            continue
+        seen.add(propagator)
+        if feature := support.check_propagator(propagator):
+            unsupported.append(feature)
     if unsupported:
         raise UnsupportedFeatureError(unsupported)
 
@@ -1595,17 +1622,21 @@ def _resolve_link_candidates(
         else:
             iface_a = _fixed_iface(node_a, candidate.rule_id)
             iface_b = _fixed_iface(node_b, candidate.rule_id)
+        role_a, role_b = _candidate_side_roles(
+            candidate, node_a, node_b, rules_by_id[candidate.rule_id]
+        )
         bandwidth = _candidate_bandwidth_mbps(
             left,
             right,
-            role=candidate.terminal_role,
+            role_left=role_a,
+            role_right=role_b,
             medium=candidate.terminal_medium,
         )
         candidates.append(
             ResolvedLinkCandidate(
                 rule_id=candidate.rule_id,
                 kind=candidate.kind,
-                terminal_role=candidate.terminal_role,
+                terminal_roles=(role_a, role_b),
                 terminal_medium=candidate.terminal_medium,
                 node_a=node_a,
                 node_b=node_b,
@@ -1714,15 +1745,35 @@ def _access_candidate_interfaces(left: ResolvedNode, right: ResolvedNode) -> tup
     return ("term0", "gnd0") if left_ground else ("gnd0", "term0")
 
 
+def _candidate_side_roles(
+    candidate: Any,
+    node_a: str,
+    node_b: str,
+    rule: ResolvedLinkRule,
+) -> tuple[str, str]:
+    """Map endpoint-ordered terminal roles onto the candidate's pair order."""
+
+    def _role_for(node_id: str) -> str:
+        for endpoint, role in zip(rule.endpoints, candidate.terminal_roles, strict=True):
+            if node_id in endpoint.node_ids:
+                return role
+        raise SessionResolutionError(
+            f"candidate node {node_id!r} belongs to neither endpoint of rule {rule.rule_id!r}"
+        )
+
+    return _role_for(node_a), _role_for(node_b)
+
+
 def _candidate_bandwidth_mbps(
     left: ResolvedNode,
     right: ResolvedNode,
     *,
-    role: str,
+    role_left: str,
+    role_right: str,
     medium: str | None,
 ) -> float:
-    left_block = _first_matching_terminal_block(left, role=role, medium=medium)
-    right_block = _first_matching_terminal_block(right, role=role, medium=medium)
+    left_block = _first_matching_terminal_block(left, role=role_left, medium=medium)
+    right_block = _first_matching_terminal_block(right, role=role_right, medium=medium)
     if left_block.bandwidth_mbps is None or right_block.bandwidth_mbps is None:
         raise SessionResolutionError(
             f"link candidate {left.node_id}<->{right.node_id} is missing bandwidth"

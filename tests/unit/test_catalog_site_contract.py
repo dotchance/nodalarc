@@ -21,7 +21,9 @@ MOUNT_ROLES = {"access", "isl", "crosslink", "backbone"}
 NODE_SELECTOR_LEAVES = {"segment", "tag", "node", "plane", "slot"}
 TERMINAL_SELECTOR_LEAVES = {"role", "medium", "mount"}
 FORWARDING_CLASSES = {"routed", "host", "bridge", "control_only"}
-PROPAGATORS = {"two_body", "j2_mean_elements", "sgp4_tle"}
+# "crtbp" is structurally valid grammar (NRHO/halo three-body trajectories);
+# the runtime-support layer rejects it with a typed UnsupportedFeature.
+PROPAGATORS = {"two_body", "j2_mean_elements", "sgp4_tle", "crtbp"}
 PHASING_MODES = {"walker_delta", "walker_star", "evenly_spaced_mean_anomaly"}
 BORESIGHT_MODES = {"local_vertical", "configured_topocentric", "steerable_envelope"}
 SELECTION_POLICIES = {"highest_elevation", "lowest_elevation", "longest_remaining_pass"}

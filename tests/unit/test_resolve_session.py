@@ -161,3 +161,33 @@ def test_source_changes_change_resolved_session() -> None:
 
     assert baseline.model_dump(mode="python") != updated.model_dump(mode="python")
     assert all("changed" in node.tags for node in updated.nodes if node.segment_id == "space")
+
+
+def test_crtbp_propagator_is_future_gated_with_typed_reason() -> None:
+    """NRHO/halo orbits are three-body trajectories; until a CR3BP propagator
+    lands, sessions referencing them must fail with a typed UnsupportedFeature
+    — never fly a plausible-looking but physically false Kepler ellipse."""
+    from nodalarc.runtime_support import FeatureCategory, UnsupportedFeatureError
+
+    raw = _raw_session(orbit_propagator="crtbp")
+    with pytest.raises(UnsupportedFeatureError) as excinfo:
+        resolve_session(raw)
+    features = excinfo.value.features
+    assert any(f.category == FeatureCategory.PROPAGATOR and f.value == "crtbp" for f in features)
+    assert any("three-body" in (f.support_note or "") for f in features)
+
+
+def test_shipped_nrho_constellation_is_future_gated() -> None:
+    """The shipped Gateway-class NRHO content is authored grammar the runtime
+    cannot fly yet; composing it into a session must reject loudly."""
+    from nodalarc.runtime_support import FeatureCategory, UnsupportedFeatureError
+
+    raw = _raw_session(
+        constellation="nodalarc:constellations/luna/nrho/luna-nrho-relay-1.yaml",
+    )
+    with pytest.raises(UnsupportedFeatureError) as excinfo:
+        resolve_session(raw)
+    assert any(
+        f.category == FeatureCategory.PROPAGATOR and f.value == "crtbp"
+        for f in excinfo.value.features
+    )

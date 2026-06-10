@@ -193,3 +193,48 @@ def test_validation_report_blocks_on_errors() -> None:
     assert report.dispatchable is False
     assert report.errors
     assert report.effective_config["session"]["name"] == "validator-catalog-session"
+
+
+def test_mixed_score_scales_with_selection_score_ranking_fail_the_gate(tmp_path) -> None:
+    """E022 belongs at the deploy gate — a session whose ranking compares
+    incompatible raw scores must never reach an OME startup crash."""
+    from nodalarc.resolve_session import resolve_session
+    from nodalarc.session_validator import validate_session_readiness
+
+    from tests.conftest import build_segment_session_dict
+
+    raw = build_segment_session_dict(
+        name="mixed-scales",
+        constellation={"planes": {"count": 1, "sats_per_plane": 2}},
+        ground_stations={"stations": ["a", "b"]},
+    )
+    sites = raw["segments"][1]["placement"]["from_site_set"]["site_set"]["sites"]
+    sites[1]["site"]["nodes"][0]["scheduling"] = {
+        "selection_policy": {"longest_remaining_pass": {"lookahead_horizon_ticks": 600}},
+    }
+    resolved = resolve_session(raw)
+    errors = [
+        r
+        for r in validate_session_readiness(resolved, available_node_count=4)
+        if r.level == "error" and r.code == "E022"
+    ]
+    assert errors and "incompatible score scales" in errors[0].message
+
+    # per_gs_rank arbitration makes the same mix valid.
+    raw["segments"][1]["apply"]["scheduling"]["ranking_order"] = [
+        "service_priority",
+        "per_gs_rank",
+        "lex_pair",
+    ]
+    sites[1]["site"]["nodes"][0]["scheduling"]["ranking_order"] = [
+        "service_priority",
+        "per_gs_rank",
+        "lex_pair",
+    ]
+    resolved = resolve_session(raw)
+    errors = [
+        r
+        for r in validate_session_readiness(resolved, available_node_count=4)
+        if r.level == "error" and r.code == "E022"
+    ]
+    assert errors == []

@@ -15,7 +15,12 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from nodalarc.models.ground_policy import SelectionPolicySpec, selection_policy_score_scale
+from nodalarc.models.ground_policy import (
+    SelectionPolicySpec,
+)
+from nodalarc.models.ground_policy import (
+    validate_selection_score_scale_compatibility as _validate_scale_compatibility,
+)
 
 from ome.visibility import GroundVisibility
 
@@ -83,21 +88,11 @@ def validate_selection_score_scale_compatibility(
     policies: Mapping[str, SelectionPolicySpec],
     ranking_order: tuple[str, ...],
 ) -> None:
-    """Fail if global ranking compares incompatible raw selection scores."""
+    """Runtime backstop for the pre-deploy scale-compatibility gate."""
 
-    if "selection_score" not in ranking_order:
-        return
-    scales: dict[str, list[str]] = {}
-    for gs_id, policy in sorted(policies.items()):
-        scales.setdefault(selection_policy_score_scale(policy.name), []).append(gs_id)
-    if len(scales) <= 1:
-        return
-    details = "; ".join(f"{scale}: {', '.join(gs_ids)}" for scale, gs_ids in sorted(scales.items()))
-    raise ValueError(
-        "scheduling.ground.ranking_order includes 'selection_score', but resolved "
-        "ground selection policies use incompatible score scales. Use 'per_gs_rank' "
-        "for cross-policy arbitration or configure compatible selection policies. "
-        f"Resolved scales: {details}"
+    _validate_scale_compatibility(
+        policy_names={gs_id: policy.name for gs_id, policy in policies.items()},
+        ranking_order=ranking_order,
     )
 
 

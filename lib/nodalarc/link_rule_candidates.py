@@ -33,7 +33,8 @@ class DeclaredLinkCandidate:
     pair: tuple[str, str]
     rule_id: str
     kind: str
-    terminal_role: str
+    # Endpoint-ordered, parallel to endpoint_segments/endpoint_terminal_ids.
+    terminal_roles: tuple[str, str]
     terminal_medium: str | None
     endpoint_terminal_ids: tuple[str | None, str | None]
     topology_mode: str
@@ -164,11 +165,6 @@ def generate_declared_link_candidates(
     for rule in resolved.link_rules:
         if not rule.enabled:
             continue
-        if rule.endpoints[0].terminal_role != rule.endpoints[1].terminal_role:
-            raise ValueError(
-                f"link_rule {rule.rule_id!r} has mixed terminal roles; "
-                "candidate generation requires both endpoints to use the same role"
-            )
         endpoint_media = {
             medium
             for medium in (
@@ -210,7 +206,10 @@ def generate_declared_link_candidates(
                     pair=pair,
                     rule_id=rule.rule_id,
                     kind=rule.kind,
-                    terminal_role=rule.endpoints[0].terminal_role,
+                    terminal_roles=(
+                        rule.endpoints[0].terminal_role,
+                        rule.endpoints[1].terminal_role,
+                    ),
                     terminal_medium=candidate_medium,
                     endpoint_terminal_ids=(
                         rule.endpoints[0].terminal_id,

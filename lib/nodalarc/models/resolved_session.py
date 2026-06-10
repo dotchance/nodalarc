@@ -46,7 +46,10 @@ class ResolvedOrbitFacts(BaseModel):
     orbit_id: NonEmptyReference
     central_body: FrameBodyName
     epoch: NonEmptyReference
-    propagator: Literal["two_body", "j2_mean_elements", "sgp4_tle"]
+    # "crtbp" is structurally representable so the runtime-support gate can
+    # reject it with a typed UnsupportedFeature instead of an opaque schema
+    # error; no production runtime path consumes it yet.
+    propagator: Literal["two_body", "j2_mean_elements", "sgp4_tle", "crtbp"]
     semi_major_axis_km: float = Field(gt=0, allow_inf_nan=False)
     eccentricity: float = Field(ge=0, lt=1, allow_inf_nan=False)
     inclination_deg: float = Field(allow_inf_nan=False)
@@ -202,7 +205,9 @@ class ResolvedLinkCandidate(BaseModel):
 
     rule_id: NonEmptyReference
     kind: LinkKind
-    terminal_role: TerminalRole
+    # Endpoint-ordered (parallel to endpoint_segments) — a link may join two
+    # different terminal classes, e.g. a LEO isl head to a HEO crosslink head.
+    terminal_roles: tuple[TerminalRole, TerminalRole]
     terminal_medium: TerminalMediumLiteral | None = None
     node_a: NonEmptyReference
     node_b: NonEmptyReference

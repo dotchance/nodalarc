@@ -379,7 +379,7 @@ def test_link_candidate_maps_and_ground_candidates() -> None:
     candidate = ResolvedLinkCandidate(
         rule_id="access",
         kind="access",
-        terminal_role="access",
+        terminal_roles=("access", "access"),
         terminal_medium="rf",
         node_a=gs.node_id,
         node_b=sat.node_id,
@@ -407,7 +407,7 @@ def test_link_candidate_rejects_self_pair() -> None:
         ResolvedLinkCandidate(
             rule_id="r",
             kind="isl",
-            terminal_role="isl",
+            terminal_roles=("isl", "isl"),
             terminal_medium="optical",
             node_a="sat",
             node_b="sat",

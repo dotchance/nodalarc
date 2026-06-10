@@ -24,7 +24,10 @@ NonNegativeFiniteFloat = Annotated[float, Field(ge=0, allow_inf_nan=False)]
 TerminalMedium = Literal["rf", "optical"]
 MountRole = Literal["access", "isl", "crosslink", "backbone"]
 ForwardingClass = Literal["routed", "host", "bridge", "control_only"]
-Propagator = Literal["two_body", "j2_mean_elements", "sgp4_tle"]
+# "crtbp" (three-body NRHO/halo trajectories) is structurally valid grammar;
+# the runtime-support layer rejects it with a typed UnsupportedFeature until a
+# CR3BP propagator lands. Kepler elements cannot represent those orbits.
+Propagator = Literal["two_body", "j2_mean_elements", "sgp4_tle", "crtbp"]
 PhasingMode = Literal["walker_delta", "walker_star", "evenly_spaced_mean_anomaly"]
 BoresightMode = Literal["local_vertical", "configured_topocentric", "steerable_envelope"]
 LagrangePoint = Literal["l1", "l2", "l3", "l4", "l5"]

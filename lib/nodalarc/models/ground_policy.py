@@ -44,6 +44,34 @@ SELECTION_POLICY_SCORE_SCALES: dict[str, str] = {
 }
 
 
+def validate_selection_score_scale_compatibility(
+    *,
+    policy_names: Mapping[str, str],
+    ranking_order: tuple[str, ...],
+) -> None:
+    """Fail if global ranking compares incompatible raw selection scores.
+
+    ``selection_score`` ranks ground stations by their policies' raw outputs;
+    mixing score scales (elevation degrees vs remaining seconds) makes that
+    comparison meaningless. Enforced at the pre-deploy readiness gate and
+    re-checked by OME at startup.
+    """
+    if "selection_score" not in ranking_order:
+        return
+    scales: dict[str, list[str]] = {}
+    for gs_id, policy_name in sorted(policy_names.items()):
+        scales.setdefault(selection_policy_score_scale(policy_name), []).append(gs_id)
+    if len(scales) <= 1:
+        return
+    details = "; ".join(f"{scale}: {', '.join(gs_ids)}" for scale, gs_ids in sorted(scales.items()))
+    raise ValueError(
+        "scheduling.ground.ranking_order includes 'selection_score', but resolved "
+        "ground selection policies use incompatible score scales. Use 'per_gs_rank' "
+        "for cross-policy arbitration or configure compatible selection policies. "
+        f"Resolved scales: {details}"
+    )
+
+
 def selection_policy_score_scale(policy_name: str) -> str:
     """Return the score scale used when comparing policy output across GSes."""
 

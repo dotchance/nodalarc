@@ -138,23 +138,6 @@
   color: var(--text-dim);
 }
 
-/* Legacy event type classes (kept for backwards compatibility) */
-.event-type--link_up {
-  color: var(--accent-green);
-}
-
-.event-type--link_down {
-  color: var(--accent-red);
-}
-
-.event-type--convergence {
-  color: var(--accent-amber);
-}
-
-.event-type--adjacency {
-  color: var(--accent-blue);
-}
-
 .event-node {
   color: var(--text-secondary);
   overflow: hidden;

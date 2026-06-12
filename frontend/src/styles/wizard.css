@@ -274,13 +274,6 @@
   font-size: var(--font-size-sm);
 }
 
-.wizard-select--sm {
-  padding: var(--space-2) var(--space-4);
-  font-size: var(--font-size-sm);
-  min-width: 90px;
-  flex-shrink: 0;
-}
-
 .wizard-input {
   padding: var(--space-2) var(--space-4);
   border-radius: var(--radius-md);
@@ -515,19 +508,6 @@
   font-size: var(--font-size-md);
 }
 
-.wizard-sat-summary {
-  margin-top: var(--space-4);
-  padding-top: var(--space-3);
-  border-top: 1px solid var(--border);
-}
-
-.wizard-terminal-row {
-  font-size: var(--font-size-xxs);
-  color: var(--text-secondary);
-  line-height: 1.6;
-  font-family: var(--font-family);
-}
-
 .wizard-station-list {
   margin-top: var(--space-3);
   font-size: var(--font-size-xxs);
@@ -631,59 +611,6 @@
 
 .wizard-card--compact .wizard-card-desc {
   font-size: var(--font-size-xs);
-}
-
-.wizard-terminal-group {
-  background: var(--bg-panel);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  padding: var(--space-6);
-  margin-bottom: var(--space-4);
-}
-
-.wizard-terminal-group-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-semibold);
-  color: var(--text-primary);
-  margin-bottom: var(--space-5);
-}
-
-.wizard-remove-btn {
-  font-size: var(--font-size-xs);
-  color: var(--accent-red);
-  cursor: pointer;
-  padding: var(--space-1) var(--space-4);
-  border: 1px solid var(--accent-red);
-  border-radius: var(--radius-sm);
-  background: transparent;
-}
-
-.wizard-remove-btn:hover {
-  background: rgba(255, 51, 51, 0.1);
-}
-
-.wizard-terminal-fields {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-  gap: var(--space-4);
-}
-
-.wizard-terminal-fields label {
-  font-size: var(--font-size-xxs);
-  color: var(--text-secondary);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-}
-
-.wizard-terminal-fields input,
-.wizard-terminal-fields select {
-  font-size: var(--font-size-sm);
-  padding: var(--space-2) var(--space-3);
-  width: 100%;
 }
 
 /* Custom ground station picker */
@@ -946,13 +873,6 @@
 .wizard-preview-gs-gap {
   color: var(--text-secondary);
   font-size: var(--font-size-xs);
-}
-
-.wizard-preview-warnings {
-  margin-top: var(--space-6);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
 }
 
 .wizard-preview-gs-reason {

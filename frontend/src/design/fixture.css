@@ -1,0 +1,253 @@
+/* Design-system fixture chrome (dev-only). Consumes only injected tokens +
+   color-mix derivations — no raw palette values may appear here. */
+
+.fx-root {
+  min-height: 100vh;
+  background: var(--bg-main);
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  padding: var(--space-12) var(--space-16);
+  max-width: 1280px;
+  margin: 0 auto;
+}
+
+.fx-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-8);
+  margin-bottom: var(--space-12);
+}
+
+.fx-header h1 {
+  font-size: var(--font-size-xxl);
+  font-weight: var(--font-weight-bold);
+  margin: 0;
+}
+
+.fx-sub {
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+  margin: var(--space-2) 0 0;
+}
+
+.fx-sub code,
+.fx-swatch-value,
+.fx-type-row code,
+.fx-z-row code,
+.fx-note code {
+  font-family: var(--font-mono);
+}
+
+.fx-theme-buttons {
+  display: flex;
+  gap: var(--space-3);
+}
+
+.fx-btn {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel);
+  color: var(--text-secondary);
+  font-family: var(--font-ui);
+  font-size: var(--font-size-sm);
+  padding: var(--space-3) var(--space-6);
+  cursor: pointer;
+}
+
+.fx-btn:hover {
+  border-color: var(--border-strong);
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+}
+
+.fx-btn--active {
+  border-color: color-mix(in srgb, var(--accent-blue) 72%, var(--border));
+  background: color-mix(in srgb, var(--accent-blue) 16%, var(--bg-panel));
+  color: var(--text-primary);
+}
+
+.fx-section {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  padding: var(--space-8);
+  margin-bottom: var(--space-8);
+}
+
+.fx-section h2 {
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-semibold);
+  margin: 0 0 var(--space-4);
+}
+
+.fx-note {
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+  margin: 0 0 var(--space-6);
+  max-width: 70ch;
+}
+
+.fx-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: var(--space-4);
+  margin-bottom: var(--space-4);
+}
+
+.fx-swatch {
+  display: grid;
+  grid-template-columns: 28px 1fr;
+  grid-template-rows: auto auto;
+  column-gap: var(--space-4);
+  row-gap: var(--space-1);
+  align-items: center;
+  background: var(--bg-panel-hover);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+}
+
+.fx-swatch-chip {
+  grid-row: 1 / 3;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+}
+
+.fx-swatch-name {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+}
+
+.fx-swatch-value {
+  font-size: var(--font-size-xs);
+  color: var(--text-dim);
+}
+
+.fx-swatch-label {
+  grid-column: 2;
+  font-size: var(--font-size-xs);
+  color: var(--text-secondary);
+}
+
+/* --- Link language: relation = line identity, medium = endpoint dots,
+       state = pattern/override. Mirrors the lab .scene-link slot pattern. --- */
+
+.fx-link {
+  --relation-color: var(--text-dim);
+  --medium-color: var(--text-dim);
+  --state-color: var(--relation-color);
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 2px;
+  margin: 10px 0 6px;
+  border-radius: var(--radius-pill);
+  background: var(--state-color);
+}
+
+.fx-link::before,
+.fx-link::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--medium-color);
+  border: 1px solid color-mix(in srgb, var(--medium-color) 72%, var(--bg-panel));
+  transform: translateY(-50%);
+}
+
+.fx-link::before { left: -1px; }
+.fx-link::after { right: -1px; }
+
+/* --relation-color / --medium-color are set inline by LinkSample from tokens. */
+
+.fx-link.state-candidate {
+  background: repeating-linear-gradient(90deg, var(--state-color) 0 8px, transparent 8px 14px);
+}
+
+.fx-link.state-degraded {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--status-warn) 22%, transparent);
+}
+
+.fx-link.state-faulted {
+  --state-color: var(--status-fail);
+  background: repeating-linear-gradient(90deg, var(--state-color) 0 10px, transparent 10px 17px);
+}
+
+.fx-link.state-unsupported {
+  --state-color: var(--text-dim);
+  background: repeating-linear-gradient(90deg, var(--state-color) 0 3px, transparent 3px 9px);
+}
+
+.fx-link-matrix {
+  display: grid;
+  gap: var(--space-5);
+}
+
+.fx-link-row {
+  display: grid;
+  grid-template-columns: 140px repeat(5, 1fr);
+  gap: var(--space-6);
+  align-items: center;
+}
+
+.fx-link-row-label {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+}
+
+.fx-link-cell small {
+  display: block;
+  color: var(--text-dim);
+  font-size: var(--font-size-xxs);
+}
+
+/* --- Typography --- */
+
+.fx-type-specimen {
+  display: grid;
+  gap: var(--space-5);
+  border-bottom: 1px solid var(--border);
+  padding-bottom: var(--space-6);
+  margin-bottom: var(--space-6);
+}
+
+.fx-spec-tag {
+  display: inline-block;
+  font-family: var(--font-ui);
+  font-size: var(--font-size-xxs);
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-right: var(--space-4);
+}
+
+.fx-type-scale,
+.fx-zladder {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.fx-type-row {
+  display: grid;
+  grid-template-columns: 180px 1fr;
+  gap: var(--space-6);
+  align-items: baseline;
+}
+
+.fx-type-row code,
+.fx-z-row code {
+  font-size: var(--font-size-xs);
+  color: var(--text-dim);
+}
+
+.fx-z-row {
+  display: grid;
+  grid-template-columns: 180px 1fr;
+  gap: var(--space-6);
+}

@@ -5,6 +5,33 @@
 import { useEffect } from "react";
 import type { ViewMode, ColorMode } from "../types";
 
+/** Shortcut reference consumed by the help overlay — keep in sync with the
+ *  switch below (they live side by side so edits are visually adjacent). */
+export const KEYBOARD_SHORTCUTS: readonly { keys: string; action: string; group: string }[] = [
+  { keys: "Space", action: "Pause / resume simulation", group: "Simulation" },
+  { keys: "Tab", action: "Toggle globe / topology view", group: "Views" },
+  { keys: "V", action: "Top-down view", group: "Views" },
+  { keys: "F", action: "Frame selection", group: "Views" },
+  { keys: "Shift+F", action: "Follow selected node", group: "Views" },
+  { keys: "Home", action: "Frame whole scene", group: "Views" },
+  { keys: "Escape", action: "Deselect / close overlay", group: "Views" },
+  { keys: "L", action: "Toggle ISL links", group: "Display" },
+  { keys: "G", action: "Toggle ground links", group: "Display" },
+  { keys: "P", action: "Toggle orbital paths", group: "Display" },
+  { keys: "T", action: "Toggle satellite trails", group: "Display" },
+  { keys: "N", action: "Cycle globe surface", group: "Display" },
+  { keys: "I", action: "Toggle reference frame", group: "Display" },
+  { keys: ";", action: "Toggle satellite labels", group: "Display" },
+  { keys: "'", action: "Toggle ground labels", group: "Display" },
+  { keys: "1", action: "Color by routing area", group: "Color modes" },
+  { keys: "2", action: "Color by orbital plane", group: "Color modes" },
+  { keys: "]", action: "Toggle detail panel", group: "Panels" },
+  { keys: "Q", action: "Toggle filter drawer", group: "Panels" },
+  { keys: "`", action: "Toggle CLI drawer", group: "Panels" },
+  { keys: "H", action: "Toggle historical mode (experimental)", group: "Simulation" },
+  { keys: "?", action: "Show this overlay", group: "Panels" },
+];
+
 interface KeyboardActions {
   onEscape: () => void;
   onCloseCatalog?: () => void;
@@ -27,6 +54,7 @@ interface KeyboardActions {
   onToggleFilter?: () => void;
   onToggleLabels?: () => void;
   onToggleGsLabels?: () => void;
+  onShowHelp?: () => void;
 }
 
 export function useKeyboard(actions: KeyboardActions): void {
@@ -115,10 +143,11 @@ export function useKeyboard(actions: KeyboardActions): void {
         case "'":
           actions.onToggleGsLabels?.();
           break;
-        case "/":
-          e.preventDefault();
-          // Focus event filter input if exists
-          document.querySelector<HTMLInputElement>(".event-filter-input")?.focus();
+        case "`":
+          actions.onToggleCli?.();
+          break;
+        case "?":
+          actions.onShowHelp?.();
           break;
       }
     };

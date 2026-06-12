@@ -1,10 +1,13 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
-/** Top bar — session info, sim time, health indicator, mode selector. */
+/** Top bar — session entry, clocks, status chip strip, playback, mode select. */
 
 import { useEffect, useRef, useState } from "react";
 import { formatTime, formatDuration } from "../translate";
 import { schedulerOpsLabel } from "../explain/reasons";
+import { Icon } from "../ui/icons/Icon";
+import { Button } from "../ui/Button";
+import { StatusDot, type StatusTone } from "../ui/Badge";
 import type { ActuationNotice, StateSnapshot } from "../types";
 
 function pairLabel(pair: string[] | undefined): string {
@@ -86,75 +89,26 @@ function ActuationNoticeButton({ notices, dirty }: { notices: ActuationNotice[];
   }, [open]);
 
   return (
-    <span ref={rootRef} style={{ position: "relative", display: "inline-flex" }}>
+    <span ref={rootRef} className="topbar-actuation">
       <button
         type="button"
         onClick={() => setOpen((value) => !value)}
         aria-expanded={open}
         aria-label={`${label}; show details`}
-        style={{
-          color: dirty ? "var(--status-fail)" : "var(--status-warn)",
-          fontWeight: 600,
-          background: "transparent",
-          border: "1px solid currentColor",
-          borderRadius: 4,
-          padding: "2px 8px",
-          fontSize: 11,
-          cursor: "pointer",
-        }}
+        className={`topbar-chip topbar-chip--button topbar-chip--${dirty ? "fail" : "warn"}`}
         title={title}
       >
+        <StatusDot tone={dirty ? "fail" : "warn"} />
         {label}
       </button>
       {open && (
-        <div
-          role="dialog"
-          aria-label="Actuation condition details"
-          style={{
-            position: "absolute",
-            zIndex: 1000,
-            top: "calc(100% + 8px)",
-            left: 0,
-            width: 440,
-            maxWidth: "calc(100vw - 32px)",
-            padding: 12,
-            border: "1px solid var(--border)",
-            borderRadius: 6,
-            background: "var(--bg-panel)",
-            boxShadow: "0 10px 30px rgba(0, 0, 0, 0.45)",
-            color: "var(--text-primary)",
-            display: "grid",
-            gap: 10,
-          }}
-        >
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+        <div role="dialog" aria-label="Actuation condition details" className="topbar-actuation-popover">
+          <div className="topbar-actuation-head">
             <strong>{label}</strong>
-            <button
-              type="button"
-              onClick={() => setOpen(false)}
-              style={{
-                border: "1px solid var(--border)",
-                borderRadius: 4,
-                background: "transparent",
-                color: "var(--text-secondary)",
-                cursor: "pointer",
-                fontSize: 11,
-              }}
-            >
-              Close
-            </button>
+            <Button onClick={() => setOpen(false)}>Close</Button>
           </div>
           {notices.map((notice) => (
-            <div
-              key={`${notice.gs_id}:${notice.reason_code}:${notice.since ?? "unknown"}`}
-              style={{
-                display: "grid",
-                gap: 4,
-                paddingTop: 8,
-                borderTop: "1px solid var(--border)",
-                lineHeight: 1.35,
-              }}
-            >
+            <div key={`${notice.gs_id}:${notice.reason_code}:${notice.since ?? "unknown"}`} className="topbar-actuation-notice">
               <div><strong>Ground station:</strong> {notice.gs_id}</div>
               <div><strong>State:</strong> {notice.actuation_state}</div>
               <div><strong>Reason:</strong> {schedulerOpsLabel(notice.reason_code)}</div>
@@ -190,130 +144,68 @@ interface TopBarProps {
   onPlaybackResume: () => void;
   onPlaybackSetSpeed: (factor: number) => void;
   onSeekToNow: () => void;
+  onShowHelp: () => void;
 }
 
-export function TopBar({ snapshot, historicalMode, onToggleHistorical, activeSessionName, switching, onOpenCatalog, playbackPaused, playbackSpeed, playbackLoading, onPlaybackPause, onPlaybackResume, onPlaybackSetSpeed, onSeekToNow }: TopBarProps) {
+export function TopBar({ snapshot, historicalMode, onToggleHistorical, activeSessionName, switching, onOpenCatalog, playbackPaused, playbackSpeed, playbackLoading, onPlaybackPause, onPlaybackResume, onPlaybackSetSpeed, onSeekToNow, onShowHelp }: TopBarProps) {
   const healthStatus = snapshot?.network_health.status ?? "unknown";
   const actuationNotices = snapshot?.actuation_notices ?? [];
   const actuationDirty = actuationNotices.some((n) => n.actuation_state === "kernel_dirty");
-  const healthColor =
-    healthStatus === "converged"
-      ? "var(--status-ok)"
-      : healthStatus === "converging"
-        ? "var(--status-warn)"
-        : "var(--status-fail)";
+  const healthTone: StatusTone =
+    healthStatus === "converged" ? "ok" : healthStatus === "converging" ? "warn" : "fail";
 
   return (
-    <div
-      className="area-topbar"
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: 16,
-        padding: "0 16px",
-        background: "var(--bg-bar)",
-        borderBottom: "1px solid var(--border)",
-        fontSize: 12,
-      }}
-    >
+    <div className="area-topbar topbar">
       <button
         onClick={onOpenCatalog}
         disabled={switching}
-        style={{
-          fontWeight: 600,
-          color: "var(--accent-blue)",
-          background: "transparent",
-          border: "1px solid var(--border)",
-          borderRadius: 4,
-          padding: "2px 8px",
-          fontSize: 12,
-          maxWidth: 200,
-          cursor: switching ? "wait" : "pointer",
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-          whiteSpace: "nowrap",
-        }}
+        className="topbar-session"
+        style={switching ? { cursor: "wait" } : undefined}
         title="Open session catalog"
       >
-        {activeSessionName ?? snapshot?.constellation_name ?? "Nodal Arc"}
+        {activeSessionName ?? snapshot?.constellation_name ?? "NodalArc"}
       </button>
-      {snapshot?.routing_stack && (
-        <span style={{ color: "var(--text-dim)", fontSize: 10 }}>
-          {snapshot.routing_stack}
-        </span>
-      )}
-      <span
-        style={{
-          display: "inline-flex",
-          flexDirection: "column",
-          lineHeight: 1.25,
-          fontFamily: "var(--font-mono, monospace)",
-          fontSize: 11,
-        }}
-        title="Sim and wall clocks, digit-aligned so divergence reads at a glance"
-      >
-        <span style={{ color: "var(--text-secondary)" }}>
-          Sim&nbsp;&nbsp;{snapshot ? formatTime(snapshot.sim_time) : "--:--:--"}
-        </span>
-        <span style={{ color: "var(--text-dim)" }}>
-          Wall&nbsp;{snapshot ? formatTime(snapshot.wall_time) : "--:--:--"}
-        </span>
+      {snapshot?.routing_stack && <span className="topbar-stack">{snapshot.routing_stack}</span>}
+
+      <span className="topbar-clocks" title="Sim and wall clocks, digit-aligned so divergence reads at a glance">
+        <span className="topbar-clock-sim">Sim&nbsp;&nbsp;{snapshot ? formatTime(snapshot.sim_time) : "--:--:--"}</span>
+        <span className="topbar-clock-wall">Wall&nbsp;{snapshot ? formatTime(snapshot.wall_time) : "--:--:--"}</span>
       </span>
-      {snapshot?.network_health.last_convergence_ms != null && (
-        <span style={{ color: "var(--text-dim)" }}>
-          Conv: {formatDuration(snapshot.network_health.last_convergence_ms)}
+
+      <div className="topbar-chips">
+        <span className={`topbar-chip topbar-chip--${healthTone}`} title={`Network: ${healthStatus}`}>
+          <StatusDot tone={healthTone} />
+          {healthStatus}
+          {healthStatus === "converging" && snapshot?.network_health.converging_since_ms != null && (
+            <span className="topbar-chip-extra">({formatDuration(snapshot.network_health.converging_since_ms)})</span>
+          )}
         </span>
-      )}
-      <span
-        style={{
-          width: 8,
-          height: 8,
-          borderRadius: "50%",
-          background: healthColor,
-          display: "inline-block",
-        }}
-        title={`Network: ${healthStatus}`}
-      />
-      <span style={{ color: "var(--text-secondary)" }}>
-        {healthStatus}
-        {healthStatus === "converging" && snapshot?.network_health.converging_since_ms != null && (
-          <span style={{ color: "var(--text-dim)", marginLeft: 4 }}>
-            ({formatDuration(snapshot.network_health.converging_since_ms)})
+        {snapshot?.network_health.last_convergence_ms != null && (
+          <span className="topbar-chip" title="Last convergence duration">
+            conv {formatDuration(snapshot.network_health.last_convergence_ms)}
           </span>
         )}
-      </span>
-      {actuationNotices.length > 0 && (
-        <ActuationNoticeButton notices={actuationNotices} dirty={actuationDirty} />
-      )}
-      <div style={{ display: "flex", alignItems: "center", gap: 4, marginLeft: 8 }}>
+        {actuationNotices.length > 0 && (
+          <ActuationNoticeButton notices={actuationNotices} dirty={actuationDirty} />
+        )}
+      </div>
+
+      <div className="topbar-playback">
         <button
           onClick={playbackPaused ? onPlaybackResume : onPlaybackPause}
           disabled={playbackLoading}
-          style={{
-            padding: "2px 8px",
-            borderRadius: 4,
-            border: "1px solid var(--border)",
-            background: playbackPaused ? "var(--status-warn)" : "transparent",
-            color: "var(--text-secondary)",
-            fontSize: 11,
-            cursor: playbackLoading ? "wait" : "pointer",
-          }}
-          title={playbackPaused ? "Resume" : "Pause"}
+          className={`topbar-play${playbackPaused ? " topbar-play--paused" : ""}`}
+          style={playbackLoading ? { cursor: "wait" } : undefined}
+          title={playbackPaused ? "Resume (Space)" : "Pause (Space)"}
+          aria-label={playbackPaused ? "Resume" : "Pause"}
         >
-          {playbackPaused ? "Play" : "Pause"}
+          <Icon name={playbackPaused ? "play" : "pause"} size={13} />
         </button>
         <select
           value={playbackSpeed}
           onChange={(e) => onPlaybackSetSpeed(Number(e.target.value))}
           disabled={playbackLoading}
-          style={{
-            padding: "2px 4px",
-            borderRadius: 4,
-            border: "1px solid var(--border)",
-            background: "transparent",
-            color: "var(--text-secondary)",
-            fontSize: 11,
-          }}
+          className="topbar-select"
           title="Playback speed"
         >
           <option value={1}>1x</option>
@@ -326,11 +218,7 @@ export function TopBar({ snapshot, historicalMode, onToggleHistorical, activeSes
         </select>
         {snapshot?.pacing_degraded && snapshot.playback_achieved != null && (
           <span
-            style={{
-              fontSize: 11,
-              color: "var(--status-warn)",
-              whiteSpace: "nowrap",
-            }}
+            className="topbar-pacing"
             title={
               `Engine is delivering ${snapshot.playback_achieved.toFixed(1)}x of the ` +
               `commanded ${playbackSpeed}x. The clock is honest: simulation time advances ` +
@@ -343,47 +231,32 @@ export function TopBar({ snapshot, historicalMode, onToggleHistorical, activeSes
         <button
           onClick={onSeekToNow}
           disabled={playbackLoading}
-          style={{
-            padding: "2px 6px",
-            borderRadius: 4,
-            border: "1px solid var(--border)",
-            background: "transparent",
-            color: "var(--text-secondary)",
-            fontSize: 11,
-            cursor: playbackLoading ? "wait" : "pointer",
-          }}
+          className="topbar-now"
+          style={playbackLoading ? { cursor: "wait" } : undefined}
           title="Reset sim time to wall-clock now"
         >
           Now
         </button>
       </div>
-      <div style={{ flex: 1 }} />
-      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-        <span
-          style={{
-            width: 6,
-            height: 6,
-            borderRadius: "50%",
-            background: historicalMode ? "var(--status-warn)" : "var(--status-ok)",
-            display: "inline-block",
-          }}
-        />
+
+      <div className="topbar-spring" />
+
+      <div className="topbar-mode">
+        <StatusDot tone={historicalMode ? "warn" : "ok"} title={historicalMode ? "Historical" : "Live"} />
         <select
           value={historicalMode ? "historical" : "live"}
-          onChange={() => onToggleHistorical()}
-          style={{
-            padding: "2px 6px",
-            borderRadius: 4,
-            border: "1px solid var(--border)",
-            background: "transparent",
-            color: "var(--text-secondary)",
-            fontSize: 11,
-            fontWeight: 600,
+          onChange={(e) => {
+            const next = e.target.value === "historical";
+            if (next !== historicalMode) onToggleHistorical();
           }}
+          className="topbar-select topbar-select--mode"
         >
           <option value="live">Live</option>
           <option value="historical">Historical</option>
         </select>
+        <button className="topbar-help" onClick={onShowHelp} title="Keyboard shortcuts and about (?)" aria-label="Help">
+          <Icon name="info" size={14} />
+        </button>
       </div>
     </div>
   );

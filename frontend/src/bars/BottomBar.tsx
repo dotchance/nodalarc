@@ -1,8 +1,10 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
-/** Bottom bar — link/node counts, convergence, WS status. */
+/** Bottom bar — link/node counts, convergence, WS status, build provenance.
+ *  The build hash line is part of the deploy drift-gate workflow — keep it. */
 
 import { WS_URL } from "../config";
+import { StatusDot } from "../ui/Badge";
 import type { StateSnapshot } from "../types";
 
 interface BottomBarProps {
@@ -21,96 +23,43 @@ export function BottomBar({ snapshot, connected, historicalMode, logPanelOpen, o
   const convergence = snapshot?.network_health.status ?? "unknown";
   const unreachableFlows = snapshot?.network_health.unreachable_flows ?? 0;
 
-  const convColor =
+  const convClass =
     convergence === "converged"
-      ? "var(--status-ok)"
+      ? "bottombar-ok"
       : convergence === "converging" || convergence === "stabilizing"
-        ? "var(--status-warn)"
+        ? "bottombar-warn"
         : convergence === "degraded"
-          ? "var(--status-fail)"
-          : "var(--text-secondary)";
+          ? "bottombar-fail"
+          : "";
 
-  const wsColor = historicalMode
-    ? "var(--status-warn)"
-    : connected
-      ? "var(--status-ok)"
-      : "var(--status-fail)";
-  const wsLabel = historicalMode
-    ? "Historical"
-    : connected
-      ? "Connected"
-      : "Disconnected";
+  const wsTone = historicalMode ? "warn" : connected ? "ok" : "fail";
+  const wsClass = historicalMode ? "bottombar-warn" : connected ? "bottombar-ok" : "bottombar-fail";
+  const wsLabel = historicalMode ? "Historical" : connected ? "Connected" : "Disconnected";
 
   return (
-    <div
-      className="area-bottombar"
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: 16,
-        padding: "0 16px",
-        background: "var(--bg-bar)",
-        borderTop: "1px solid var(--border)",
-        fontSize: 11,
-        color: "var(--text-secondary)",
-      }}
-    >
-      <span>Links {activeLinks}/{totalLinks}</span>
-      <span>Nodes {nodeCount}</span>
-      <span style={{ color: convColor }}>
+    <div className="area-bottombar bottombar">
+      <span className="bottombar-stat">Links {activeLinks}/{totalLinks}</span>
+      <span className="bottombar-stat">Nodes {nodeCount}</span>
+      <span className={`bottombar-stat ${convClass}`}>
         Conv: {convergence}
         {convergence === "degraded" && unreachableFlows > 0 ? ` (${unreachableFlows} flows)` : ""}
       </span>
-      <span>Flows {flowCount}</span>
-      <div style={{ flex: 1 }} />
-      <span
-        title={WS_URL}
-        style={{
-          width: 6,
-          height: 6,
-          borderRadius: "50%",
-          background: wsColor,
-          display: "inline-block",
-          cursor: "help",
-        }}
-      />
-      <span style={{ color: wsColor }} title={WS_URL}>{wsLabel}</span>
+      <span className="bottombar-stat">Flows {flowCount}</span>
+      <div className="bottombar-spring" />
+      <span title={WS_URL} className="bottombar-ws">
+        <StatusDot tone={wsTone} />
+      </span>
+      <span className={wsClass} title={WS_URL}>{wsLabel}</span>
       {onToggleLogPanel && (
         <button
           onClick={onToggleLogPanel}
           title="System Logs"
-          style={{
-            background: logPanelOpen ? "rgba(68,136,255,0.15)" : "transparent",
-            border: `1px solid ${logPanelOpen ? "var(--accent-blue)" : "var(--border)"}`,
-            borderRadius: 3,
-            color: logPanelOpen ? "var(--accent-blue)" : "var(--text-secondary)",
-            padding: "1px 8px",
-            cursor: "pointer",
-            fontSize: 10,
-            fontFamily: "var(--font-family)",
-          }}
+          className={`bottombar-logs${logPanelOpen ? " bottombar-logs--open" : ""}`}
         >
           Logs
         </button>
       )}
-      <a
-        href="https://github.com/dotchance/nodalarc"
-        target="_blank"
-        rel="noreferrer"
-        title="Official NodalArc source"
-        style={{
-          color: "var(--text-dim)",
-          fontSize: 10,
-          fontFamily: "var(--font-family)",
-          textDecoration: "none",
-          whiteSpace: "nowrap",
-        }}
-      >
-        NodalArc by .chance
-      </a>
-      <span style={{ color: "var(--accent-blue)", fontSize: 11, fontFamily: "var(--font-family)" }}>
-        build: {__BUILD_HASH__}
-      </span>
+      <span className="bottombar-build">build: {__BUILD_HASH__}</span>
     </div>
   );
 }

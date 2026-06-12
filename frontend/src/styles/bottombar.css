@@ -1,0 +1,138 @@
+/* Bottom status bar + the shortcut-help/About overlay. */
+
+.bottombar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  padding: 0 var(--space-8);
+  background: var(--bg-bar);
+  border-top: 1px solid var(--border);
+  font-family: var(--font-ui);
+  font-size: var(--font-size-xs);
+  color: var(--text-secondary);
+}
+
+.bottombar-stat { white-space: nowrap; }
+.bottombar-spring { flex: 1; }
+.bottombar-ws { display: inline-flex; cursor: help; }
+
+.bottombar-ok { color: var(--status-ok); }
+.bottombar-warn { color: var(--status-warn); }
+.bottombar-fail { color: var(--status-fail); }
+
+.bottombar-logs {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  padding: 1px var(--space-4);
+  font-family: var(--font-ui);
+  font-size: var(--font-size-xxs);
+}
+
+.bottombar-logs:hover { background: var(--bg-panel-hover); color: var(--text-primary); }
+
+.bottombar-logs--open {
+  background: color-mix(in srgb, var(--accent-blue) 15%, transparent);
+  border-color: var(--accent-blue);
+  color: var(--accent-blue);
+}
+
+.bottombar-build {
+  color: var(--accent-blue);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  white-space: nowrap;
+}
+
+/* --- Shortcut help / About overlay --- */
+
+.help-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-scrim);
+  background: var(--bg-scrim-light);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.help-panel {
+  width: 720px;
+  max-width: calc(100vw - 48px);
+  max-height: calc(100vh - 96px);
+  overflow-y: auto;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-popover);
+  padding: var(--space-8);
+  font-family: var(--font-ui);
+}
+
+.help-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-2);
+}
+
+.help-head h2 {
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-semibold);
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.help-note {
+  color: var(--text-dim);
+  font-size: var(--font-size-xs);
+  margin: 0 0 var(--space-6);
+}
+
+.help-groups {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--space-8);
+}
+
+.help-group h3 {
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-dim);
+  margin: 0 0 var(--space-3);
+}
+
+.help-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-5);
+  padding: var(--space-1) 0;
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary);
+}
+
+.help-row kbd {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xxs);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  padding: 0 var(--space-2);
+  min-width: 52px;
+  text-align: center;
+}
+
+.help-about {
+  margin-top: var(--space-8);
+  padding-top: var(--space-5);
+  border-top: 1px solid var(--border);
+  font-size: var(--font-size-xs);
+  color: var(--text-dim);
+}
+
+.help-about strong { color: var(--text-primary); }
+.help-about a { color: var(--accent-blue); text-decoration: none; }
+.help-about a:hover { text-decoration: underline; }

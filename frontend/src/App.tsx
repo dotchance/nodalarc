@@ -27,6 +27,7 @@ import { useAppState } from "./hooks/useAppState";
 import { filterSnapshotForRender, nodeSegmentId } from "./filters/renderSnapshot";
 import { selectionTypeForNode } from "./networkIdentity";
 import { SessionWizard } from "./catalog/SessionWizard";
+import { ShortcutHelp } from "./panels/ShortcutHelp";
 import { WS_URL, fetchApiKey } from "./config";
 import { setLabelsEnabled, getLabelsEnabled } from "./globe/labels";
 import { setGsLabelsEnabled, getGsLabelsEnabled } from "./globe/groundStations";
@@ -38,6 +39,8 @@ import "./styles/variables.css";
 import "./styles/reset.css";
 import "./ui/ui.css";
 import "./styles/layout.css";
+import "./styles/topbar.css";
+import "./styles/bottombar.css";
 import "./styles/panels.css";
 import "./styles/toolbar.css";
 import "./styles/topology.css";
@@ -104,6 +107,7 @@ function AppInner() {
   } = appState;
 
   const [windowWidth, setWindowWidth] = useState(window.innerWidth);
+  const [showHelp, setShowHelp] = useState(false);
   const [historicalPlaying, setHistoricalPlaying] = useState(false);
   const [historicalRangeEnd, setHistoricalRangeEnd] = useState<string | null>(null);
   const [visualizationError, setVisualizationError] = useState<string | null>(null);
@@ -265,6 +269,7 @@ function AppInner() {
       onToggleFilter: () => setFilterOpen((v: boolean) => !v),
       onToggleLabels: () => setLabelsEnabled(!getLabelsEnabled()),
       onToggleGsLabels: () => setGsLabelsEnabled(!getGsLabelsEnabled()),
+      onShowHelp: () => setShowHelp(true),
     }),
     [clearSelection, closeCatalog, showCatalog, hasEverDeployed, toggleView, toggleHistorical, handleFollowNode, handleFrameSelection, handleFrameScene, handleTopView, historicalMode, playback, handlePanelToggle, toggleReferenceFrame, setColorMode, setShowGroundLinks, setShowIslLinks, setShowSatPaths, setShowTrails, setGlobeMode, setCliDrawerOpen, setFilterOpen],
   );
@@ -311,6 +316,7 @@ function AppInner() {
       onPlaybackResume={playback.resume}
       onPlaybackSetSpeed={playback.setSpeed}
       onSeekToNow={playback.seekToNow}
+      onShowHelp={() => setShowHelp(true)}
     />
   );
 
@@ -347,26 +353,25 @@ function AppInner() {
           </div>
         )}
         {snapshot?.stale && (
-          <div className="connection-banner" style={{ background: "rgba(200, 60, 60, 0.85)" }}>
+          <div className="connection-banner connection-banner--fail">
             STALE DATA - waiting for upstream update
           </div>
         )}
       </div>
+      {showHelp && <ShortcutHelp onClose={() => setShowHelp(false)} />}
       {(switching || sessionTransitioning) && (
         <div className="session-switching-overlay">
           <div className="switching-box">
             <p>{sessionTransitioning ? "Switching session..." : "Deploying session..."}</p>
-            <p style={{ fontSize: 10, color: "var(--text-dim)" }}>
-              {switchDetail ?? snapshot?.session_status_detail ?? ""}
-            </p>
+            <p className="switching-detail">{switchDetail ?? snapshot?.session_status_detail ?? ""}</p>
           </div>
         </div>
       )}
       {sessionError && !switching && !sessionTransitioning && (
         <div className="session-switching-overlay">
-          <div className="switching-box" style={{ borderColor: "var(--accent-red)" }}>
-            <p style={{ color: "var(--accent-red)" }}>Session switch failed</p>
-            <p style={{ fontSize: 10, color: "var(--text-dim)" }}>{sessionError}</p>
+          <div className="switching-box switching-box--fail">
+            <p>Session switch failed</p>
+            <p className="switching-detail">{sessionError}</p>
           </div>
         </div>
       )}
@@ -374,9 +379,7 @@ function AppInner() {
         <div className="session-switching-overlay">
           <div className="switching-box">
             <p>Data plane wiring in progress</p>
-            <p style={{ fontSize: 10, color: "var(--text-dim)" }}>
-              {snapshot?.session_status_detail ?? "Waiting for Node Agent..."}
-            </p>
+            <p className="switching-detail">{snapshot?.session_status_detail ?? "Waiting for Node Agent..."}</p>
           </div>
         </div>
       )}

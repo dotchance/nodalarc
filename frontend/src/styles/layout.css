@@ -126,6 +126,14 @@
   text-align: center;
 }
 
+/* True-fault banners (stale data) get the fail slot — distinct from the
+   calm informational banners above. */
+.connection-banner--fail {
+  background: color-mix(in srgb, var(--status-fail) 38%, var(--bg-main));
+  color: var(--text-primary);
+  font-weight: var(--font-weight-semibold);
+}
+
 /* VS-API startup error — full-screen overlay */
 .connection-startup-error {
   position: absolute;
@@ -220,6 +228,15 @@
   text-align: center;
   color: var(--text-primary);
   font-size: var(--font-size-lg);
+}
+
+.switching-box--fail p:first-child {
+  color: var(--status-fail);
+}
+
+.switching-detail {
+  font-size: var(--font-size-xxs);
+  color: var(--text-dim);
 }
 
 /* Split view: side by side globe + topology */

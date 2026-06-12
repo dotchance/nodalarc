@@ -78,6 +78,7 @@ function renderTopBar(snapshot: StateSnapshot) {
       onPlaybackResume={vi.fn()}
       onPlaybackSetSpeed={vi.fn()}
       onSeekToNow={vi.fn()}
+      onShowHelp={vi.fn()}
     />,
   );
 }

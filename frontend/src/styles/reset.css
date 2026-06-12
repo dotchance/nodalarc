@@ -12,10 +12,18 @@ body,
   width: 100%;
   height: 100%;
   overflow: hidden;
-  font-family: var(--font-family);
+  /* Inter is the UI face; data values (ids, addresses, metrics, CLI) opt
+     into the mono face via --font-mono / --font-family per component. */
+  font-family: var(--font-ui);
   font-size: var(--font-size-md);
   color: var(--text-primary);
   background: var(--bg-main);
+}
+
+code,
+pre,
+kbd {
+  font-family: var(--font-mono);
 }
 
 button {

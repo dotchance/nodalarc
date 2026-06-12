@@ -150,51 +150,70 @@ function Sun({
   return <directionalLight ref={lightRef} color={0xffffff} intensity={intensity} />;
 }
 
+/** Radial sun texture: hot core fading through the sun tint to transparent.
+ *  Static, generated once — colors come from tokens at load. */
+function makeSunTexture(): THREE.CanvasTexture {
+  const size = 128;
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext("2d")!;
+  const tint = "#" + tokens.colorSunTint.toString(16).padStart(6, "0");
+  const g = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+  g.addColorStop(0, "#ffffff");
+  g.addColorStop(0.18, tint);
+  g.addColorStop(0.32, tint + "66");
+  g.addColorStop(1, tint + "00");
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, size, size);
+  return new THREE.CanvasTexture(canvas);
+}
+
+/** The visible sun: a glowing disc at the sun direction on the camera-centered
+ *  star shell. Depth-tested, so Earth truthfully occludes it at sunrise/sunset
+ *  viewing angles. Apparent size is sceneSunDiscScale of the shell radius. */
 function SunReference({ simTimeIso }: { simTimeIso: string | null }) {
-  const pointRef = useRef<THREE.Points>(null);
+  const spriteRef = useRef<THREE.Sprite>(null);
   const camera = useThree((s) => s.camera);
   const cameraWorld = useMemo(() => new THREE.Vector3(), []);
   const cameraLocal = useMemo(() => new THREE.Vector3(), []);
+  const sunTexture = useMemo(makeSunTexture, []);
+  useEffect(() => () => sunTexture.dispose(), [sunTexture]);
   const direction = useMemo(() => {
     if (!simTimeIso) return null;
     const date = new Date(simTimeIso);
     if (Number.isNaN(date.getTime())) return null;
     return sunDirectionForDate(date);
   }, [simTimeIso]);
-  const geometry = useMemo(() => {
-    const g = new THREE.BufferGeometry();
-    g.setAttribute("position", new THREE.BufferAttribute(new Float32Array([0, 0, 0]), 3));
-    return g;
-  }, []);
-  useEffect(() => () => geometry.dispose(), [geometry]);
   useFrame(() => {
-    const point = pointRef.current;
-    if (!point || !direction) {
-      if (point) point.visible = false;
+    const sprite = spriteRef.current;
+    if (!sprite || !direction) {
+      if (sprite) sprite.visible = false;
       return;
     }
-    point.visible = true;
-    const parent = point.parent;
+    sprite.visible = true;
+    const parent = sprite.parent;
     camera.getWorldPosition(cameraWorld);
     if (parent) {
       parent.worldToLocal(cameraLocal.copy(cameraWorld));
-      point.position.copy(cameraLocal);
+      sprite.position.copy(cameraLocal);
     } else {
-      point.position.copy(cameraWorld);
+      sprite.position.copy(cameraWorld);
     }
-    point.position.addScaledVector(direction, starShellRadiusForCameraFar(camera.far) * 0.98);
+    const shell = starShellRadiusForCameraFar(camera.far) * 0.98;
+    sprite.position.addScaledVector(direction, shell);
+    const scale = shell * tokens.sceneSunDiscScale;
+    sprite.scale.set(scale, scale, 1);
   });
   return (
-    <points ref={pointRef} geometry={geometry} frustumCulled={false}>
-      <pointsMaterial
-        color={tokens.colorSunTint}
-        size={8}
-        sizeAttenuation={false}
+    <sprite ref={spriteRef} frustumCulled={false} visible={false}>
+      <spriteMaterial
+        map={sunTexture}
         transparent
-        opacity={0.95}
         depthWrite={false}
+        blending={THREE.AdditiveBlending}
       />
-    </points>
+    </sprite>
   );
 }
 

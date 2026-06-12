@@ -297,8 +297,12 @@ export const tokens = {
   // Sun-driven lighting. Ambient is the night-side floor: keep it low enough
   // that the terminator reads as real day/night, high enough that the dark
   // limb stays a visible silhouette. Tune here — nothing else owns lighting.
-  sceneSunIntensity: 1.3,
-  sceneAmbientIntensity: 0.15,
+  // 1.0 + ambient must stay near 1: the renderer clips above it (no tone
+  // mapping), washing texture detail out of the day side instead of
+  // brightening it.
+  sceneSunIntensity: 1.05,
+  sceneAmbientIntensity: 0.12,
+  sceneSunDiscScale: 0.035, // sun apparent diameter as a fraction of the star-shell radius
   earthDayFloor: 0.06, // day-side shading floor approaching the terminator
   earthTwilightHalfWidth: 0.08, // terminator blend half-width (cos of sun angle)
   earthNightLightsLevel: 0.85, // city-lights brightness in day-night mode

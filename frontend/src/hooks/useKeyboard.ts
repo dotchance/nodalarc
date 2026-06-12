@@ -3,6 +3,7 @@
 /** Keyboard shortcuts for VF (per VF spec Section 12). */
 
 import { useEffect } from "react";
+import { focusSearchTarget } from "../ui/searchFocus";
 import type { ViewMode, ColorMode } from "../types";
 
 /** Shortcut reference consumed by the help overlay — keep in sync with the
@@ -28,6 +29,7 @@ export const KEYBOARD_SHORTCUTS: readonly { keys: string; action: string; group:
   { keys: "]", action: "Toggle detail panel", group: "Panels" },
   { keys: "Q", action: "Toggle filter drawer", group: "Panels" },
   { keys: "`", action: "Toggle CLI drawer", group: "Panels" },
+  { keys: "/", action: "Focus log search (when the log window is open)", group: "Panels" },
   { keys: "H", action: "Toggle historical mode (experimental)", group: "Simulation" },
   { keys: "?", action: "Show this overlay", group: "Panels" },
 ];
@@ -145,6 +147,9 @@ export function useKeyboard(actions: KeyboardActions): void {
           break;
         case "`":
           actions.onToggleCli?.();
+          break;
+        case "/":
+          if (focusSearchTarget()) e.preventDefault();
           break;
         case "?":
           actions.onShowHelp?.();

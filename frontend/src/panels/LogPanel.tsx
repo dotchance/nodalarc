@@ -1,105 +1,93 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
-/** Floating system log panel — OpsEvents from NATS via VS-API WebSocket. */
+/**
+ * System Logs window — OpsEvents (and opt-in per-service debug streams) plus
+ * an Events mode over the network event feed. Chrome comes from
+ * FloatingWindow; the column language from DataTable. Geometry persists per
+ * window; '/' focuses the search while the window is open.
+ */
 
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
-import type { OpsEvent } from "../types";
+import { FloatingWindow } from "../ui/FloatingWindow";
+import { DataTable, type SortState, type TableColumn } from "../ui/DataTable";
+import { IconButton } from "../ui/Button";
+import { Icon } from "../ui/icons/Icon";
+import { setSearchTarget } from "../ui/searchFocus";
+import { formatTime } from "../translate";
+import type { OpsEvent, RecentEvent } from "../types";
 
 interface LogPanelProps {
   events: OpsEvent[];
   debugEvents: OpsEvent[];
   debugSources: string[];
+  recentEvents: RecentEvent[];
   sendMessage: (data: Record<string, unknown>) => void;
   onClose: () => void;
 }
 
 const DEBUG_SOURCE_TYPES = ["ome", "scheduler", "node_agent", "operator"] as const;
-
-type SortField = "timestamp" | "source" | "level" | "code" | "message";
-type SortDir = "asc" | "desc";
-
 const LEVELS = ["critical", "error", "warning", "info"] as const;
-const LEVEL_COLORS: Record<string, string> = {
-  critical: "var(--accent-red)",
-  error: "var(--accent-red)",
-  warning: "#ffaa33",
-  info: "var(--accent-blue)",
-  debug: "var(--text-secondary)",
-};
 
-const MIN_WIDTH = 500;
-const MIN_HEIGHT = 200;
-const DEFAULT_WIDTH = 800;
-const DEFAULT_HEIGHT = 350;
+function levelClass(level: string): string {
+  if (level === "critical" || level === "error") return "log-level--fail";
+  if (level === "warning") return "log-level--warn";
+  if (level === "info") return "log-level--info";
+  return "log-level--debug";
+}
 
-const EDGE_SIZE = 6;
-const COLUMNS: { field: SortField; label: string; defaultWidth: number; minWidth: number }[] = [
-  { field: "timestamp", label: "timestamp", defaultWidth: 90, minWidth: 60 },
-  { field: "source", label: "source", defaultWidth: 80, minWidth: 50 },
-  { field: "level", label: "level", defaultWidth: 65, minWidth: 45 },
-  { field: "code", label: "code", defaultWidth: 100, minWidth: 50 },
-  { field: "message", label: "message", defaultWidth: 0, minWidth: 100 },
+const LOG_COLUMNS: TableColumn[] = [
+  { key: "timestamp", label: "timestamp", width: 90, minWidth: 60, sortable: true },
+  { key: "source", label: "source", width: 80, minWidth: 50, sortable: true },
+  { key: "level", label: "level", width: 65, minWidth: 45, sortable: true },
+  { key: "code", label: "code", width: 100, minWidth: 50, sortable: true },
+  { key: "message", label: "message", sortable: true, mono: false },
 ];
 
-export function LogPanel({ events, debugEvents, debugSources, sendMessage, onClose }: LogPanelProps) {
+const EVENT_COLUMNS: TableColumn[] = [
+  { key: "sim_time", label: "sim time", width: 90, minWidth: 60, sortable: true },
+  { key: "node_id", label: "node", width: 170, minWidth: 80, sortable: true },
+  { key: "event_type", label: "type", width: 110, minWidth: 60, sortable: true },
+  { key: "summary", label: "summary", sortable: true, mono: false },
+];
+
+export function LogPanel({ events, debugEvents, debugSources, recentEvents, sendMessage, onClose }: LogPanelProps) {
+  const [mode, setMode] = useState<"logs" | "events">("logs");
   const [paused, setPaused] = useState(false);
   const [pausedEvents, setPausedEvents] = useState<OpsEvent[]>([]);
-  const [sortField, setSortField] = useState<SortField>("timestamp");
-  const [sortDir, setSortDir] = useState<SortDir>("desc");
+  const [sort, setSort] = useState<SortState | null>({ key: "timestamp", dir: "desc" });
   const [levelFilter, setLevelFilter] = useState<Set<string>>(new Set(LEVELS));
   const [sourceFilter, setSourceFilter] = useState<string>("all");
   const [searchPattern, setSearchPattern] = useState("");
+  const [searchValid, setSearchValid] = useState(true);
   const [debugDropdownOpen, setDebugDropdownOpen] = useState(false);
   const [debugPending, setDebugPending] = useState<Set<string>>(new Set());
   const [debugFailed, setDebugFailed] = useState<Set<string>>(new Set());
-  const [searchValid, setSearchValid] = useState(true);
   const [fontSize, setFontSize] = useState(11);
-  const [cleared, setCleared] = useState(false);
-  const [clearedAt, setClearedAt] = useState(0);
+  const [clearedAt, setClearedAt] = useState<number | null>(null);
+  const [logColumns, setLogColumns] = useState(LOG_COLUMNS);
+  const [eventColumns, setEventColumns] = useState(EVENT_COLUMNS);
 
-  const [pos, setPos] = useState({ x: 100, y: window.innerHeight - DEFAULT_HEIGHT - 60 });
-  const [size, setSize] = useState({ w: DEFAULT_WIDTH, h: DEFAULT_HEIGHT });
-  const [colWidths, setColWidths] = useState<number[]>(COLUMNS.map((c) => c.defaultWidth));
-
-  const panelRef = useRef<HTMLDivElement>(null);
-  const tableBodyRef = useRef<HTMLDivElement>(null);
-  const dragRef = useRef<{ startX: number; startY: number; startPosX: number; startPosY: number } | null>(null);
-  const resizeRef = useRef<{ startX: number; startY: number; startW: number; startH: number; edge: string } | null>(null);
-  const colResizeRef = useRef<{ startX: number; colIdx: number; startWidth: number } | null>(null);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
   const autoScrollRef = useRef(true);
   const prevFontSizeRef = useRef(fontSize);
+  const debugRootRef = useRef<HTMLDivElement>(null);
 
+  // Column widths track the font scale so resized columns stay proportional.
   useEffect(() => {
-    if (prevFontSizeRef.current !== fontSize) {
-      const scale = fontSize / prevFontSizeRef.current;
-      setColWidths((prev) =>
-        prev.map((w, i) => {
-          if (i === COLUMNS.length - 1) return w;
-          return Math.max(COLUMNS[i]!.minWidth, Math.round(w * scale));
-        }),
+    if (prevFontSizeRef.current === fontSize) return;
+    const scale = fontSize / prevFontSizeRef.current;
+    prevFontSizeRef.current = fontSize;
+    const rescale = (cols: TableColumn[]) =>
+      cols.map((c) =>
+        c.width !== undefined ? { ...c, width: Math.max(c.minWidth ?? 40, Math.round(c.width * scale)) } : c,
       );
-      prevFontSizeRef.current = fontSize;
-    }
+    setLogColumns(rescale);
+    setEventColumns(rescale);
   }, [fontSize]);
 
   useEffect(() => {
-    if (!paused) {
-      setPausedEvents([]);
-    }
+    if (!paused) setPausedEvents([]);
   }, [paused]);
-
-  const displayEvents = useMemo(() => {
-    const opsSource = paused ? pausedEvents : events;
-    const allEvents = debugSources.length > 0 ? [...opsSource, ...debugEvents] : opsSource;
-    if (!cleared) return allEvents;
-    return allEvents.filter((e) => {
-      try {
-        return new Date(e.timestamp).getTime() > clearedAt;
-      } catch {
-        return true;
-      }
-    });
-  }, [paused, pausedEvents, events, debugEvents, debugSources, cleared, clearedAt]);
 
   useEffect(() => {
     if (paused && pausedEvents.length === 0 && events.length > 0) {
@@ -107,106 +95,8 @@ export function LogPanel({ events, debugEvents, debugSources, sendMessage, onClo
     }
   }, [paused, pausedEvents.length, events]);
 
-  const searchRegex = useMemo(() => {
-    if (!searchPattern) return null;
-    try {
-      const re = new RegExp(searchPattern, "i");
-      setSearchValid(true);
-      return re;
-    } catch {
-      setSearchValid(false);
-      return null;
-    }
-  }, [searchPattern]);
-
-  const filtered = useMemo(() => {
-    let result = displayEvents.filter((e) => {
-      if (!levelFilter.has(e.level)) return false;
-      if (sourceFilter !== "all" && e.source !== sourceFilter) return false;
-      return true;
-    });
-    if (searchRegex) {
-      result = result.filter(
-        (e) => searchRegex.test(e.message) || searchRegex.test(e.code) || searchRegex.test(e.source),
-      );
-    }
-    return result;
-  }, [displayEvents, levelFilter, sourceFilter, searchRegex]);
-
-  const sorted = useMemo(() => {
-    const copy = [...filtered];
-    copy.sort((a, b) => {
-      const av = a[sortField] ?? "";
-      const bv = b[sortField] ?? "";
-      const cmp = av < bv ? -1 : av > bv ? 1 : 0;
-      return sortDir === "asc" ? cmp : -cmp;
-    });
-    return copy;
-  }, [filtered, sortField, sortDir]);
-
-  useEffect(() => {
-    if (autoScrollRef.current && tableBodyRef.current) {
-      if (sortField === "timestamp" && sortDir === "desc") {
-        tableBodyRef.current.scrollTop = 0;
-      } else {
-        tableBodyRef.current.scrollTop = tableBodyRef.current.scrollHeight;
-      }
-    }
-  }, [sorted, sortField, sortDir]);
-
-  const handleScroll = useCallback(() => {
-    if (!tableBodyRef.current) return;
-    const { scrollTop, scrollHeight, clientHeight } = tableBodyRef.current;
-    if (sortField === "timestamp" && sortDir === "desc") {
-      autoScrollRef.current = scrollTop < 30;
-    } else {
-      autoScrollRef.current = scrollHeight - scrollTop - clientHeight < 30;
-    }
-  }, [sortField, sortDir]);
-
-  const handleSort = useCallback(
-    (field: SortField) => {
-      if (sortField === field) {
-        setSortDir((d) => (d === "asc" ? "desc" : "asc"));
-      } else {
-        setSortField(field);
-        setSortDir("desc");
-      }
-    },
-    [sortField],
-  );
-
-  const toggleLevel = useCallback((level: string) => {
-    setLevelFilter((prev) => {
-      const next = new Set(prev);
-      if (next.has(level)) next.delete(level);
-      else next.add(level);
-      return next;
-    });
-  }, []);
-
-  const toggleDebugSource = useCallback(
-    (source: string) => {
-      const isActive = debugSources.includes(source);
-      if (isActive) {
-        sendMessage({ action: "debug_stop", sources: [source] });
-      } else {
-        setDebugPending((prev) => { const n = new Set(prev); n.add(source); return n; });
-        setDebugFailed((prev) => { const n = new Set(prev); n.delete(source); return n; });
-        sendMessage({ action: "debug_stream", sources: [source] });
-      }
-    },
-    [debugSources, sendMessage],
-  );
-
-  const disableAllDebug = useCallback(() => {
-    sendMessage({ action: "debug_stop_all" });
-    setDebugPending(new Set());
-    setDebugFailed(new Set());
-    setDebugDropdownOpen(false);
-  }, [sendMessage]);
-
-  // Clear pending state when source appears in debugSources (confirmed)
+  // Debug enable lifecycle: pending until confirmed in debugSources; failed on
+  // the DEBUG_ENABLE_FAILED ops code.
   useEffect(() => {
     if (debugPending.size === 0) return;
     setDebugPending((prev) => {
@@ -216,7 +106,6 @@ export function LogPanel({ events, debugEvents, debugSources, sendMessage, onClo
     });
   }, [debugSources, debugPending.size]);
 
-  // Detect failed enables from ops_events
   useEffect(() => {
     for (const e of events) {
       if (e.code === "DEBUG_ENABLE_FAILED" && e.message) {
@@ -230,588 +119,308 @@ export function LogPanel({ events, debugEvents, debugSources, sendMessage, onClo
     }
   }, [events, debugPending]);
 
-  const sources = useMemo(() => {
-    const s = new Set(events.map((e) => e.source));
-    return Array.from(s).sort();
-  }, [events]);
+  useEffect(() => {
+    if (!debugDropdownOpen) return;
+    const onPointerDown = (e: PointerEvent) => {
+      const root = debugRootRef.current;
+      if (root && e.target instanceof Node && !root.contains(e.target)) setDebugDropdownOpen(false);
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => document.removeEventListener("pointerdown", onPointerDown);
+  }, [debugDropdownOpen]);
 
-  const handleClear = useCallback(() => {
-    setCleared(true);
-    setClearedAt(Date.now());
-  }, []);
+  const searchRegex = useMemo(() => {
+    if (!searchPattern) return null;
+    try {
+      const re = new RegExp(searchPattern, "i");
+      setSearchValid(true);
+      return re;
+    } catch {
+      setSearchValid(false);
+      return null;
+    }
+  }, [searchPattern]);
 
-  // Drag handling (title bar)
-  const handleDragStart = useCallback(
-    (e: React.MouseEvent) => {
-      e.preventDefault();
-      dragRef.current = { startX: e.clientX, startY: e.clientY, startPosX: pos.x, startPosY: pos.y };
-      const onMove = (ev: MouseEvent) => {
-        if (!dragRef.current) return;
-        setPos({
-          x: dragRef.current.startPosX + (ev.clientX - dragRef.current.startX),
-          y: dragRef.current.startPosY + (ev.clientY - dragRef.current.startY),
-        });
-      };
-      const onUp = () => {
-        dragRef.current = null;
-        document.removeEventListener("mousemove", onMove);
-        document.removeEventListener("mouseup", onUp);
-      };
-      document.addEventListener("mousemove", onMove);
-      document.addEventListener("mouseup", onUp);
-    },
-    [pos],
-  );
+  const displayEvents = useMemo(() => {
+    const opsSource = paused ? pausedEvents : events;
+    const allEvents = debugSources.length > 0 ? [...opsSource, ...debugEvents] : opsSource;
+    if (clearedAt === null) return allEvents;
+    return allEvents.filter((e) => {
+      try {
+        return new Date(e.timestamp).getTime() > clearedAt;
+      } catch {
+        return true;
+      }
+    });
+  }, [paused, pausedEvents, events, debugEvents, debugSources, clearedAt]);
 
-  // Edge resize handling — all four edges and corners
-  const handleEdgeResizeStart = useCallback(
-    (e: React.MouseEvent, edge: string) => {
-      e.preventDefault();
-      e.stopPropagation();
-      resizeRef.current = { startX: e.clientX, startY: e.clientY, startW: size.w, startH: size.h, edge };
-      const startPos = { ...pos };
-      const onMove = (ev: MouseEvent) => {
-        if (!resizeRef.current) return;
-        const dx = ev.clientX - resizeRef.current.startX;
-        const dy = ev.clientY - resizeRef.current.startY;
-        const ed = resizeRef.current.edge;
+  const sortedLogs = useMemo(() => {
+    let result = displayEvents.filter((e) => {
+      if (!levelFilter.has(e.level)) return false;
+      if (sourceFilter !== "all" && e.source !== sourceFilter) return false;
+      return true;
+    });
+    if (searchRegex) {
+      result = result.filter(
+        (e) => searchRegex.test(e.message) || searchRegex.test(e.code) || searchRegex.test(e.source),
+      );
+    }
+    if (sort) {
+      const { key, dir } = sort;
+      result = [...result].sort((a, b) => {
+        const av = a[key as keyof OpsEvent] ?? "";
+        const bv = b[key as keyof OpsEvent] ?? "";
+        const cmp = av < bv ? -1 : av > bv ? 1 : 0;
+        return dir === "asc" ? cmp : -cmp;
+      });
+    }
+    return result;
+  }, [displayEvents, levelFilter, sourceFilter, searchRegex, sort]);
 
-        let newW = resizeRef.current.startW;
-        let newH = resizeRef.current.startH;
-        let newX = startPos.x;
-        let newY = startPos.y;
+  const sortedNetworkEvents = useMemo(() => {
+    let result = recentEvents;
+    if (searchRegex) {
+      result = result.filter(
+        (e) => searchRegex.test(e.summary) || searchRegex.test(e.node_id) || searchRegex.test(e.event_type),
+      );
+    }
+    if (sort) {
+      const { key, dir } = sort;
+      result = [...result].sort((a, b) => {
+        const av = a[key as keyof RecentEvent] ?? "";
+        const bv = b[key as keyof RecentEvent] ?? "";
+        const cmp = av < bv ? -1 : av > bv ? 1 : 0;
+        return dir === "asc" ? cmp : -cmp;
+      });
+    }
+    return result;
+  }, [recentEvents, searchRegex, sort]);
 
-        if (ed.includes("right")) newW = Math.max(MIN_WIDTH, resizeRef.current.startW + dx);
-        if (ed.includes("bottom")) newH = Math.max(MIN_HEIGHT, resizeRef.current.startH + dy);
-        if (ed.includes("left")) {
-          newW = Math.max(MIN_WIDTH, resizeRef.current.startW - dx);
-          if (newW > MIN_WIDTH) newX = startPos.x + dx;
-        }
-        if (ed.includes("top")) {
-          newH = Math.max(MIN_HEIGHT, resizeRef.current.startH - dy);
-          if (newH > MIN_HEIGHT) newY = startPos.y + dy;
-        }
+  // Follow-live auto-scroll: newest-first sorts pin to the top, otherwise the
+  // bottom; manual scrolling away suspends following until scrolled back.
+  const newestFirst = sort?.dir === "desc" && (sort.key === "timestamp" || sort.key === "sim_time");
+  const rowCount = mode === "logs" ? sortedLogs.length : sortedNetworkEvents.length;
 
-        setSize({ w: newW, h: newH });
-        setPos({ x: newX, y: newY });
-      };
-      const onUp = () => {
-        resizeRef.current = null;
-        document.removeEventListener("mousemove", onMove);
-        document.removeEventListener("mouseup", onUp);
-      };
-      document.addEventListener("mousemove", onMove);
-      document.addEventListener("mouseup", onUp);
-    },
-    [size, pos],
-  );
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el || !autoScrollRef.current) return;
+    el.scrollTop = newestFirst ? 0 : el.scrollHeight;
+  }, [rowCount, newestFirst, mode]);
 
-  // Column resize handling
-  const handleColResizeStart = useCallback(
-    (e: React.MouseEvent, colIdx: number) => {
-      e.preventDefault();
-      e.stopPropagation();
-      const col = COLUMNS[colIdx]!;
-      colResizeRef.current = { startX: e.clientX, colIdx, startWidth: colWidths[colIdx] ?? col.defaultWidth };
-      const onMove = (ev: MouseEvent) => {
-        if (!colResizeRef.current) return;
-        const dx = ev.clientX - colResizeRef.current.startX;
-        const newWidth = Math.max(col.minWidth, colResizeRef.current.startWidth + dx);
-        setColWidths((prev) => {
-          const next = [...prev];
-          next[colResizeRef.current!.colIdx] = newWidth;
-          return next;
-        });
-      };
-      const onUp = () => {
-        colResizeRef.current = null;
-        document.removeEventListener("mousemove", onMove);
-        document.removeEventListener("mouseup", onUp);
-      };
-      document.addEventListener("mousemove", onMove);
-      document.addEventListener("mouseup", onUp);
-    },
-    [colWidths],
-  );
+  const handleScroll = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    autoScrollRef.current = newestFirst
+      ? el.scrollTop < 30
+      : el.scrollHeight - el.scrollTop - el.clientHeight < 30;
+  }, [newestFirst]);
 
-  const highlightText = useCallback(
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    el.addEventListener("scroll", handleScroll);
+    return () => el.removeEventListener("scroll", handleScroll);
+  }, [handleScroll, mode]);
+
+  const toggleLevel = (level: string) => {
+    setLevelFilter((prev) => {
+      const next = new Set(prev);
+      if (next.has(level)) next.delete(level);
+      else next.add(level);
+      return next;
+    });
+  };
+
+  const toggleDebugSource = (source: string) => {
+    if (debugSources.includes(source)) {
+      sendMessage({ action: "debug_stop", sources: [source] });
+    } else {
+      setDebugPending((prev) => new Set(prev).add(source));
+      setDebugFailed((prev) => { const n = new Set(prev); n.delete(source); return n; });
+      sendMessage({ action: "debug_stream", sources: [source] });
+    }
+  };
+
+  const disableAllDebug = () => {
+    sendMessage({ action: "debug_stop_all" });
+    setDebugPending(new Set());
+    setDebugFailed(new Set());
+    setDebugDropdownOpen(false);
+  };
+
+  const sources = useMemo(() => Array.from(new Set(events.map((e) => e.source))).sort(), [events]);
+
+  const highlight = useCallback(
     (text: string) => {
       if (!searchRegex) return text;
-      const parts = text.split(searchRegex);
-      const matches = text.match(searchRegex);
-      if (!matches || parts.length <= 1) return text;
-      return parts.reduce<(string | React.ReactElement)[]>((acc, part, i) => {
-        acc.push(part as unknown as React.ReactElement);
-        if (i < matches.length) {
-          acc.push(
-            <span key={i} style={{ background: "rgba(255,200,0,0.3)", color: "#ffe066" }}>
-              {matches[i]}
-            </span>,
-          );
-        }
-        return acc;
-      }, []);
+      const m = text.match(searchRegex);
+      if (!m || m.index === undefined) return text;
+      return (
+        <>
+          {text.slice(0, m.index)}
+          <mark className="log-mark">{m[0]}</mark>
+          {text.slice(m.index + m[0].length)}
+        </>
+      );
     },
     [searchRegex],
   );
 
-  const formatTime = (ts: string) => {
-    try {
-      return new Date(ts).toISOString().slice(11, 23);
-    } catch {
-      return ts;
-    }
-  };
-
-  const sortIndicator = (field: SortField) => {
-    if (sortField !== field) return null;
-    return sortDir === "asc" ? " ▲" : " ▼";
-  };
-
-  const gridCols = colWidths.map((w, i) => (i === colWidths.length - 1 ? "1fr" : `${w}px`)).join(" ");
-
-  const edgeCursor: Record<string, string> = {
-    top: "ns-resize",
-    bottom: "ns-resize",
-    left: "ew-resize",
-    right: "ew-resize",
-    "top-left": "nwse-resize",
-    "top-right": "nesw-resize",
-    "bottom-left": "nesw-resize",
-    "bottom-right": "nwse-resize",
-  };
+  const title = mode === "logs" ? `System Logs (${sortedLogs.length})` : `Network Events (${sortedNetworkEvents.length})`;
 
   return (
-    <div
-      ref={panelRef}
-      className="log-panel"
-      style={{
-        position: "fixed",
-        left: pos.x,
-        top: pos.y,
-        width: size.w,
-        height: size.h,
-        zIndex: 9999,
-        display: "flex",
-        flexDirection: "column",
-        background: "rgba(13,13,26,0.96)",
-        backdropFilter: "blur(12px)",
-        border: "1px solid var(--border)",
-        borderRadius: 6,
-        boxShadow: "0 8px 32px rgba(0,0,0,0.6)",
-        fontFamily: "var(--font-family)",
-        fontSize,
-        color: "var(--text-primary)",
-        overflow: "hidden",
-      }}
+    <FloatingWindow
+      title={title}
+      onClose={onClose}
+      initial={{ x: 100, y: Math.max(0, window.innerHeight - 350 - 60), w: 800, h: 350 }}
+      minWidth={500}
+      minHeight={200}
+      persistKey="logs"
+      headerExtras={
+        <>
+          <IconButton icon="minus" label="Smaller text" onClick={() => setFontSize((s) => Math.max(9, s - 1))} />
+          <IconButton icon="plus" label="Larger text" onClick={() => setFontSize((s) => Math.min(16, s + 1))} />
+        </>
+      }
     >
-      {/* Edge resize handles */}
-      {["top", "bottom", "left", "right", "top-left", "top-right", "bottom-left", "bottom-right"].map((edge) => {
-        const s: React.CSSProperties = {
-          position: "absolute",
-          zIndex: 10,
-          cursor: edgeCursor[edge],
-        };
-        if (edge === "top") { s.top = 0; s.left = EDGE_SIZE; s.right = EDGE_SIZE; s.height = EDGE_SIZE; }
-        else if (edge === "bottom") { s.bottom = 0; s.left = EDGE_SIZE; s.right = EDGE_SIZE; s.height = EDGE_SIZE; }
-        else if (edge === "left") { s.left = 0; s.top = EDGE_SIZE; s.bottom = EDGE_SIZE; s.width = EDGE_SIZE; }
-        else if (edge === "right") { s.right = 0; s.top = EDGE_SIZE; s.bottom = EDGE_SIZE; s.width = EDGE_SIZE; }
-        else if (edge === "top-left") { s.top = 0; s.left = 0; s.width = EDGE_SIZE * 2; s.height = EDGE_SIZE * 2; }
-        else if (edge === "top-right") { s.top = 0; s.right = 0; s.width = EDGE_SIZE * 2; s.height = EDGE_SIZE * 2; }
-        else if (edge === "bottom-left") { s.bottom = 0; s.left = 0; s.width = EDGE_SIZE * 2; s.height = EDGE_SIZE * 2; }
-        else if (edge === "bottom-right") { s.bottom = 0; s.right = 0; s.width = EDGE_SIZE * 2; s.height = EDGE_SIZE * 2; }
-        return <div key={edge} style={s} onMouseDown={(e) => handleEdgeResizeStart(e, edge)} />;
-      })}
-
-      {/* Title bar — draggable */}
-      <div
-        onMouseDown={handleDragStart}
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 8,
-          padding: "6px 10px",
-          background: "var(--bg-bar)",
-          borderBottom: "1px solid var(--border)",
-          cursor: "move",
-          userSelect: "none",
-          flexShrink: 0,
-        }}
-      >
-        <span style={{ fontWeight: 600, fontSize: 12 }}>System Logs</span>
-        <span style={{ color: "var(--text-secondary)", fontSize: 10 }}>
-          {filtered.length}/{displayEvents.length} events
-        </span>
-        <div style={{ flex: 1 }} />
-        <button
-          onClick={handleClear}
-          title="Clear log"
-          style={{
-            background: "transparent",
-            border: "1px solid var(--border)",
-            borderRadius: 3,
-            color: "var(--text-secondary)",
-            padding: "2px 8px",
-            cursor: "pointer",
-            fontSize: 10,
-          }}
-        >
-          Clear
-        </button>
-        <button
-          onClick={() => setPaused((p) => !p)}
-          title={paused ? "Resume" : "Pause"}
-          style={{
-            background: paused ? "rgba(255,170,51,0.2)" : "transparent",
-            border: "1px solid var(--border)",
-            borderRadius: 3,
-            color: paused ? "#ffaa33" : "var(--text-secondary)",
-            padding: "2px 8px",
-            cursor: "pointer",
-            fontSize: 10,
-          }}
-        >
-          {paused ? "▶ Resume" : "⏸ Pause"}
-        </button>
-        <span style={{ display: "flex", alignItems: "center", gap: 0 }}>
-          <button
-            onClick={() => setFontSize((s) => Math.max(9, s - 1))}
-            title="Decrease font size"
-            style={{
-              background: "none",
-              border: "1px solid var(--border)",
-              borderRadius: "3px 0 0 3px",
-              color: "var(--text-secondary)",
-              fontSize: 10,
-              cursor: "pointer",
-              padding: "2px 6px",
-            }}
-          >A-</button>
-          <button
-            onClick={() => setFontSize((s) => Math.min(18, s + 1))}
-            title="Increase font size"
-            style={{
-              background: "none",
-              border: "1px solid var(--border)",
-              borderLeft: "none",
-              borderRadius: "0 3px 3px 0",
-              color: "var(--text-secondary)",
-              fontSize: 12,
-              cursor: "pointer",
-              padding: "2px 6px",
-            }}
-          >A+</button>
-        </span>
-        <button
-          onClick={onClose}
-          title="Close"
-          style={{
-            background: "transparent",
-            border: "none",
-            color: "var(--text-secondary)",
-            cursor: "pointer",
-            fontSize: 14,
-            padding: "0 4px",
-            lineHeight: 1,
-          }}
-        >
-          ×
-        </button>
-      </div>
-
-      {/* Filter bar */}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 6,
-          padding: "4px 10px",
-          borderBottom: "1px solid var(--border)",
-          flexShrink: 0,
-          flexWrap: "wrap",
-        }}
-      >
-        {LEVELS.map((lvl) => (
-          <button
-            key={lvl}
-            onClick={() => toggleLevel(lvl)}
-            style={{
-              background: levelFilter.has(lvl) ? `${LEVEL_COLORS[lvl]}22` : "transparent",
-              border: `1px solid ${levelFilter.has(lvl) ? LEVEL_COLORS[lvl] : "var(--border)"}`,
-              borderRadius: 3,
-              color: levelFilter.has(lvl) ? LEVEL_COLORS[lvl] : "var(--text-dim)",
-              padding: "1px 6px",
-              cursor: "pointer",
-              fontSize: 10,
-              textTransform: "uppercase",
-            }}
-          >
-            {lvl}
+      <div className="log-toolbar">
+        <span className="log-modes">
+          <button className={`log-mode${mode === "logs" ? " log-mode--active" : ""}`} onClick={() => setMode("logs")}>
+            Logs
           </button>
-        ))}
-        <span style={{ color: "var(--border)" }}>|</span>
-        <div style={{ position: "relative", display: "inline-block" }}>
-          <button
-            onClick={() => setDebugDropdownOpen((v) => !v)}
-            style={{
-              background: debugSources.length > 0 ? "rgba(136,136,153,0.2)" : "transparent",
-              border: `1px solid ${debugSources.length > 0 ? "var(--accent-blue)" : "var(--border)"}`,
-              borderRadius: 3,
-              color: debugSources.length > 0 ? "var(--accent-blue)" : "var(--text-dim)",
-              padding: "1px 6px",
-              cursor: "pointer",
-              fontSize: 10,
-              textTransform: "uppercase",
-            }}
-          >
-            {debugSources.length > 0 ? `DEBUG (${debugSources.length})` : "DEBUG ▾"}
+          <button className={`log-mode${mode === "events" ? " log-mode--active" : ""}`} onClick={() => setMode("events")}>
+            Events
           </button>
-          {debugDropdownOpen && (
-            <div
-              style={{
-                position: "absolute",
-                top: "100%",
-                left: 0,
-                marginTop: 4,
-                background: "var(--bg-panel)",
-                border: "1px solid var(--border)",
-                borderRadius: 4,
-                padding: "6px 0",
-                zIndex: 20,
-                minWidth: 180,
-                boxShadow: "0 4px 16px rgba(0,0,0,0.4)",
-              }}
-            >
-              <div style={{ padding: "2px 10px 6px", fontSize: 10, color: "var(--text-secondary)", fontWeight: 600 }}>
-                Enable debug output:
-              </div>
-              {DEBUG_SOURCE_TYPES.map((src) => {
-                const active = debugSources.includes(src);
-                const pending = debugPending.has(src);
-                const failed = debugFailed.has(src);
-                let icon = "☐";
-                let color = "var(--text-primary)";
-                if (active) { icon = "✓"; color = "var(--accent-blue)"; }
-                else if (pending) { icon = "⏳"; color = "var(--text-secondary)"; }
-                else if (failed) { icon = "✗"; color = "var(--accent-red)"; }
-                return (
-                  <div
-                    key={src}
-                    onClick={() => toggleDebugSource(src)}
-                    style={{
-                      padding: "4px 10px",
-                      cursor: "pointer",
-                      fontSize: 11,
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 6,
-                      color,
-                    }}
-                    onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "var(--bg-panel-hover)"; }}
-                    onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
-                  >
-                    <span style={{ width: 14, textAlign: "center" }}>{icon}</span>
-                    {src.replace("_", " ")}
-                  </div>
-                );
-              })}
-              {debugSources.length > 0 && (
-                <>
-                  <div style={{ borderTop: "1px solid var(--border)", margin: "4px 0" }} />
-                  <div
-                    onClick={disableAllDebug}
-                    style={{
-                      padding: "4px 10px",
-                      cursor: "pointer",
-                      fontSize: 11,
-                      color: "var(--accent-red)",
-                    }}
-                    onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "var(--bg-panel-hover)"; }}
-                    onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
-                  >
-                    Disable All
-                  </div>
-                </>
+        </span>
+        {mode === "logs" && (
+          <>
+            <span className="log-sep" />
+            {LEVELS.map((lvl) => (
+              <button
+                key={lvl}
+                onClick={() => toggleLevel(lvl)}
+                className={`log-chip ${levelClass(lvl)}${levelFilter.has(lvl) ? " log-chip--on" : ""}`}
+              >
+                {lvl}
+              </button>
+            ))}
+            <span className="log-sep" />
+            <div className="log-debug" ref={debugRootRef}>
+              <button
+                onClick={() => setDebugDropdownOpen((v) => !v)}
+                className={`log-chip log-level--debug${debugSources.length > 0 ? " log-chip--on" : ""}`}
+                aria-expanded={debugDropdownOpen}
+              >
+                {debugSources.length > 0 ? `debug (${debugSources.length})` : "debug"}
+                <Icon name="chevron-down" size={10} />
+              </button>
+              {debugDropdownOpen && (
+                <div className="log-debug-menu">
+                  <div className="log-debug-head">Enable debug output:</div>
+                  {DEBUG_SOURCE_TYPES.map((src) => {
+                    const active = debugSources.includes(src);
+                    const pending = debugPending.has(src);
+                    const failed = debugFailed.has(src);
+                    return (
+                      <button key={src} className="log-debug-row" onClick={() => toggleDebugSource(src)}>
+                        <span className={`log-debug-state${failed ? " log-level--fail" : active ? " log-debug-state--on" : ""}`}>
+                          <Icon
+                            name={active ? "circle-check" : pending ? "history" : failed ? "circle-x" : "minus"}
+                            size={12}
+                          />
+                        </span>
+                        {src.replace("_", " ")}
+                        {pending && <small>enabling…</small>}
+                        {failed && <small>failed</small>}
+                      </button>
+                    );
+                  })}
+                  {debugSources.length > 0 && (
+                    <button className="log-debug-row log-level--fail" onClick={disableAllDebug}>
+                      Disable all
+                    </button>
+                  )}
+                </div>
               )}
             </div>
-          )}
-        </div>
-        <span style={{ color: "var(--border)" }}>|</span>
-        <select
-          value={sourceFilter}
-          onChange={(e) => setSourceFilter(e.target.value)}
-          style={{
-            background: "var(--bg-panel)",
-            border: "1px solid var(--border)",
-            borderRadius: 3,
-            color: "var(--text-primary)",
-            fontSize: 10,
-            padding: "2px 4px",
-          }}
-        >
-          <option value="all">All sources</option>
-          {sources.map((s) => (
-            <option key={s} value={s}>
-              {s}
-            </option>
-          ))}
-        </select>
-        <span style={{ color: "var(--border)" }}>|</span>
+            <span className="log-sep" />
+            <select className="log-select" value={sourceFilter} onChange={(e) => setSourceFilter(e.target.value)}>
+              <option value="all">All sources</option>
+              {sources.map((s) => (
+                <option key={s} value={s}>{s}</option>
+              ))}
+            </select>
+          </>
+        )}
+        <span className="log-sep" />
         <input
+          ref={setSearchTarget}
           type="text"
-          placeholder="Search (regex)..."
+          placeholder="Search (regex)… /"
           value={searchPattern}
           onChange={(e) => setSearchPattern(e.target.value)}
-          style={{
-            background: "var(--bg-panel)",
-            border: `1px solid ${searchValid ? "var(--border)" : "var(--accent-red)"}`,
-            borderRadius: 3,
-            color: "var(--text-primary)",
-            fontSize: 10,
-            padding: "2px 6px",
-            width: 160,
-            outline: "none",
-          }}
+          className={`log-search${searchValid ? "" : " log-search--invalid"}`}
         />
-        {!searchValid && (
-          <span style={{ color: "var(--accent-red)", fontSize: 10 }}>invalid regex</span>
+        {!searchValid && <span className="log-invalid">invalid regex</span>}
+        <span className="log-spring" />
+        {mode === "logs" && (
+          <>
+            <button className="log-chip" onClick={() => setClearedAt(Date.now())} title="Hide rows older than now">
+              clear
+            </button>
+            <button
+              className={`log-chip${paused ? " log-chip--on log-level--warn" : ""}`}
+              onClick={() => setPaused((p) => !p)}
+              title={paused ? "Resume live feed" : "Pause live feed"}
+            >
+              <Icon name={paused ? "play" : "pause"} size={10} />
+              {paused ? "resume" : "pause"}
+            </button>
+          </>
         )}
       </div>
-
-      {/* Table header with resizable columns */}
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: gridCols,
-          gap: 0,
-          padding: "4px 10px",
-          borderBottom: "1px solid var(--border)",
-          background: "var(--bg-panel)",
-          flexShrink: 0,
-          userSelect: "none",
-        }}
-      >
-        {COLUMNS.map((col, idx) => (
-          <div
-            key={col.field}
-            style={{ position: "relative", display: "flex", alignItems: "center" }}
-          >
-            <div
-              onClick={() => handleSort(col.field)}
-              style={{
-                cursor: "pointer",
-                color: sortField === col.field ? "var(--accent-blue)" : "var(--text-secondary)",
-                fontSize: 10,
-                fontWeight: 600,
-                textTransform: "uppercase",
-                whiteSpace: "nowrap",
-                overflow: "hidden",
-                flex: 1,
-              }}
-            >
-              {col.label}
-              {sortIndicator(col.field)}
-            </div>
-            {idx < COLUMNS.length - 1 && (
-              <div
-                onMouseDown={(e) => handleColResizeStart(e, idx)}
-                className="col-resize-handle"
-                style={{
-                  position: "absolute",
-                  right: -5,
-                  top: 0,
-                  bottom: 0,
-                  width: 10,
-                  cursor: "col-resize",
-                  zIndex: 5,
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                }}
-              >
-                <div style={{
-                  width: 2,
-                  height: "60%",
-                  background: "var(--border)",
-                  borderRadius: 1,
-                  opacity: 0.5,
-                }} />
-              </div>
-            )}
-          </div>
-        ))}
-      </div>
-
-      {/* Table body — scrollable */}
-      <div
-        ref={tableBodyRef}
-        onScroll={handleScroll}
-        style={{
-          flex: 1,
-          overflowY: "auto",
-          overflowX: "hidden",
-          minHeight: 0,
-        }}
-      >
-        {sorted.length === 0 ? (
-          <div
-            style={{
-              padding: 20,
-              textAlign: "center",
-              color: "var(--text-dim)",
+      <div className="log-table" style={{ fontSize }}>
+        {mode === "logs" ? (
+          <DataTable
+            label="System logs"
+            columns={logColumns}
+            onColumnsChange={setLogColumns}
+            rows={sortedLogs}
+            rowKey={(e) => `${e.timestamp}-${e.source}-${e.code}-${e.message}`}
+            sort={sort}
+            onSortChange={setSort}
+            scrollRef={scrollRef}
+            emptyText={events.length === 0 ? "No events received" : "No events match filters"}
+            rowClassName={(e) => (e.level === "critical" || e.level === "error" ? "log-row--fail" : "")}
+            renderCell={(e, key) => {
+              if (key === "timestamp") return formatTime(e.timestamp);
+              if (key === "level") return <span className={levelClass(e.level)}>{e.level}</span>;
+              if (key === "message") {
+                return (
+                  <span title={e.details ? JSON.stringify(e.details) : e.message}>{highlight(e.message)}</span>
+                );
+              }
+              return highlight(String(e[key as keyof OpsEvent] ?? ""));
             }}
-          >
-            {events.length === 0 ? "No events received" : "No events match filters"}
-          </div>
+          />
         ) : (
-          sorted.map((e, i) => (
-            <div
-              key={`${e.timestamp}-${e.code}-${i}`}
-              style={{
-                display: "grid",
-                gridTemplateColumns: gridCols,
-                gap: 0,
-                padding: "2px 10px",
-                borderBottom: "1px solid rgba(255,255,255,0.03)",
-                fontSize,
-                lineHeight: `${fontSize + 7}px`,
-                cursor: e.details ? "help" : undefined,
-              }}
-              title={e.details ? JSON.stringify(e.details) : undefined}
-            >
-              <span style={{ color: "var(--text-secondary)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                {formatTime(e.timestamp)}
-              </span>
-              <span style={{ color: "var(--text-secondary)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                {highlightText(e.source)}
-              </span>
-              <span
-                style={{
-                  color: LEVEL_COLORS[e.level] ?? "var(--text-primary)",
-                  fontWeight: e.level === "error" || e.level === "critical" ? 600 : 400,
-                  whiteSpace: "nowrap",
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                }}
-              >
-                {e.level}
-              </span>
-              <span style={{ color: "var(--text-secondary)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                {highlightText(e.code)}
-              </span>
-              <span
-                style={{
-                  whiteSpace: "nowrap",
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                }}
-              >
-                {highlightText(e.message)}
-              </span>
-            </div>
-          ))
+          <DataTable
+            label="Network events"
+            columns={eventColumns}
+            onColumnsChange={setEventColumns}
+            rows={sortedNetworkEvents}
+            rowKey={(e) => `${e.sim_time}-${e.node_id}-${e.event_type}-${e.summary}`}
+            sort={sort}
+            onSortChange={setSort}
+            scrollRef={scrollRef}
+            emptyText="No network events"
+            renderCell={(e, key) => {
+              if (key === "sim_time") return formatTime(e.sim_time);
+              return highlight(String(e[key as keyof RecentEvent] ?? ""));
+            }}
+          />
         )}
       </div>
-    </div>
+    </FloatingWindow>
   );
 }

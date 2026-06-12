@@ -1,0 +1,140 @@
+/* System Logs window: toolbar chips, debug menu, search. Table + chrome come
+   from the ui primitives. */
+
+.log-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-5);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  font-family: var(--font-ui);
+}
+
+.log-modes { display: inline-flex; gap: var(--space-1); }
+
+.log-mode {
+  font-family: var(--font-ui);
+  font-size: var(--font-size-xs);
+  color: var(--text-secondary);
+  padding: var(--space-1) var(--space-4);
+  border-radius: var(--radius-sm);
+}
+
+.log-mode:hover { background: var(--bg-panel-hover); color: var(--text-primary); }
+
+.log-mode--active {
+  background: color-mix(in srgb, var(--accent-blue) 16%, var(--bg-panel));
+  color: var(--text-primary);
+}
+
+.log-sep {
+  width: 1px;
+  height: 14px;
+  background: var(--border);
+}
+
+.log-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-dim);
+  padding: 1px var(--space-3);
+  font-family: var(--font-ui);
+  font-size: var(--font-size-xxs);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.log-chip--on {
+  color: currentColor;
+  border-color: currentColor;
+  background: color-mix(in srgb, currentColor 12%, transparent);
+}
+
+.log-level--fail { color: var(--status-fail); }
+.log-level--warn { color: var(--status-warn); }
+.log-level--info { color: var(--accent-blue); }
+.log-level--debug { color: var(--text-secondary); }
+
+.log-chip:not(.log-chip--on) { color: var(--text-dim); }
+.log-chip:hover { background: var(--bg-panel-hover); }
+
+.log-debug { position: relative; }
+
+.log-debug-menu {
+  position: absolute;
+  top: calc(100% + var(--space-2));
+  left: 0;
+  min-width: 190px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-popover);
+  padding: var(--space-2) 0;
+  z-index: var(--z-popover);
+}
+
+.log-debug-head {
+  padding: var(--space-1) var(--space-5) var(--space-3);
+  font-size: var(--font-size-xxs);
+  color: var(--text-secondary);
+  font-weight: var(--font-weight-semibold);
+}
+
+.log-debug-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  text-align: left;
+  padding: var(--space-2) var(--space-5);
+  font-family: var(--font-ui);
+  font-size: var(--font-size-xs);
+  color: var(--text-primary);
+}
+
+.log-debug-row:hover { background: var(--bg-panel-hover); }
+.log-debug-row small { color: var(--text-dim); margin-left: auto; }
+
+.log-debug-state { display: inline-flex; color: var(--text-dim); }
+.log-debug-state--on { color: var(--accent-blue); }
+
+.log-select {
+  font-size: var(--font-size-xxs);
+  padding: 1px var(--space-2);
+}
+
+.log-search {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xxs);
+  width: 170px;
+  outline: none;
+}
+
+.log-search--invalid { border-color: var(--status-fail); }
+
+.log-invalid {
+  color: var(--status-fail);
+  font-size: var(--font-size-xxs);
+}
+
+.log-spring { flex: 1; }
+
+.log-table {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.log-row--fail .ui-table-td { color: color-mix(in srgb, var(--status-fail) 55%, var(--text-secondary)); }
+
+.log-mark {
+  background: color-mix(in srgb, var(--status-warn) 35%, transparent);
+  color: var(--text-primary);
+  border-radius: 2px;
+}

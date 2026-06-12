@@ -40,6 +40,7 @@ import "./ui/ui.css";
 import "./styles/layout.css";
 import "./styles/topbar.css";
 import "./styles/bottombar.css";
+import "./styles/log-window.css";
 import "./styles/panels.css";
 import "./styles/toolbar.css";
 import "./styles/topology.css";
@@ -469,6 +470,7 @@ function AppInner() {
           events={snapshot?.ops_events ?? []}
           debugEvents={snapshot?.debug_events ?? []}
           debugSources={snapshot?.debug_sources ?? []}
+          recentEvents={snapshot?.recent_events ?? []}
           sendMessage={sendMessage}
           onClose={() => setLogPanelOpen(false)}
         />

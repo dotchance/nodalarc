@@ -6,6 +6,9 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { useIntrospect } from "../hooks/useIntrospect";
 import { PersistentTerminal } from "./PersistentTerminal";
 import { REST_URL, authHeaders } from "../config";
+import { Button, IconButton } from "../ui/Button";
+import { Tabs, type TabItem } from "../ui/Tabs";
+import type { StatusTone } from "../ui/Badge";
 import type { StateSnapshot, Selection } from "../types";
 
 type CliMode = "commands" | "terminal";
@@ -22,6 +25,13 @@ const MIN_HEIGHT = 120;
 const MAX_HEIGHT_PCT = 0.6;
 const DEFAULT_HEIGHT = 300;
 
+function statusTone(status?: ConnectionStatus): StatusTone {
+  if (status === "connected") return "ok";
+  if (status === "connecting") return "warn";
+  if (status === "error") return "fail";
+  return "neutral";
+}
+
 export function CliDrawer({ open, onClose, snapshot, selection }: CliDrawerProps) {
   const { loading, output, error, commands, execute } = useIntrospect();
 
@@ -30,6 +40,7 @@ export function CliDrawer({ open, onClose, snapshot, selection }: CliDrawerProps
   const [height, setHeight] = useState(DEFAULT_HEIGHT);
   const [selectedNode, setSelectedNode] = useState("");
   const [selectedCommand, setSelectedCommand] = useState("");
+  const [downloadError, setDownloadError] = useState<string | null>(null);
   const draggingRef = useRef(false);
   const drawerRef = useRef<HTMLDivElement>(null);
 
@@ -40,26 +51,22 @@ export function CliDrawer({ open, onClose, snapshot, selection }: CliDrawerProps
   const runtimeSessionId = snapshot?.session_id ?? "";
   const previousRuntimeSessionIdRef = useRef("");
 
-  // Auto-select node when selection changes
   useEffect(() => {
     if (selection && selection.type !== "link") {
       setSelectedNode(selection.id);
     }
   }, [selection]);
 
-  // Default to first command when commands load
   useEffect(() => {
     if (commands.length > 0 && !selectedCommand) {
       setSelectedCommand(commands[0] ?? "");
     }
   }, [commands, selectedCommand]);
 
-  // Open a terminal session for the selected node
   const openTerminalSession = useCallback((nodeId: string) => {
     if (!nodeId) return;
     setOpenSessions((prev) => {
       if (prev.includes(nodeId)) {
-        // Already open — just switch to it
         setActiveSession(nodeId);
         return prev;
       }
@@ -68,21 +75,16 @@ export function CliDrawer({ open, onClose, snapshot, selection }: CliDrawerProps
     });
   }, []);
 
-  // When node dropdown changes in terminal mode, open a session
   useEffect(() => {
     if (mode === "terminal" && selectedNode) {
       openTerminalSession(selectedNode);
     }
   }, [selectedNode, mode, openTerminalSession]);
 
-  // Close a specific session
   const closeSession = useCallback((nodeId: string) => {
     setOpenSessions((prev) => {
       const next = prev.filter((id) => id !== nodeId);
-      // If we closed the active session, switch to the last remaining
-      setActiveSession((current) =>
-        current === nodeId ? next[next.length - 1] ?? null : current
-      );
+      setActiveSession((current) => (current === nodeId ? next[next.length - 1] ?? null : current));
       return next;
     });
     setSessionStatuses((prev) => {
@@ -92,7 +94,6 @@ export function CliDrawer({ open, onClose, snapshot, selection }: CliDrawerProps
     });
   }, []);
 
-  // Session status callback from PersistentTerminal
   const handleSessionStatus = useCallback((nodeId: string, status: ConnectionStatus) => {
     setSessionStatuses((prev) => {
       const next = new Map(prev);
@@ -112,7 +113,6 @@ export function CliDrawer({ open, onClose, snapshot, selection }: CliDrawerProps
     previousRuntimeSessionIdRef.current = runtimeSessionId;
   }, [runtimeSessionId]);
 
-  // Drag handle for resizing
   const handleDragStart = useCallback((e: React.MouseEvent) => {
     draggingRef.current = true;
     e.preventDefault();
@@ -146,22 +146,27 @@ export function CliDrawer({ open, onClose, snapshot, selection }: CliDrawerProps
   const handleDownloadConfig = useCallback(async () => {
     const target = mode === "terminal" ? activeSession : selectedNode;
     if (!target) return;
+    setDownloadError(null);
     try {
       const resp = await fetch(
         `${REST_URL}/api/v1/nodes/${encodeURIComponent(target)}/config`,
         { headers: authHeaders() },
       );
-      if (resp.ok) {
-        const text = await resp.text();
-        const blob = new Blob([text], { type: "text/plain" });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = `${target}.conf`;
-        a.click();
-        URL.revokeObjectURL(url);
+      if (!resp.ok) {
+        setDownloadError(`config download failed: HTTP ${resp.status}`);
+        return;
       }
-    } catch { /* ignore */ }
+      const text = await resp.text();
+      const blob = new Blob([text], { type: "text/plain" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${target}.conf`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      setDownloadError("config download failed: network error");
+    }
   }, [mode, activeSession, selectedNode]);
 
   const nodes = snapshot
@@ -170,194 +175,91 @@ export function CliDrawer({ open, onClose, snapshot, selection }: CliDrawerProps
 
   if (!open) return null;
 
-  const statusColor = (status?: ConnectionStatus) =>
-    status === "connected" ? "#44cc66" :
-    status === "connecting" ? "#ffaa00" :
-    status === "error" ? "#ff3333" : "#555577";
+  const sessionTabs: TabItem[] = openSessions.map((nodeId) => ({
+    key: nodeId,
+    label: nodeId,
+    closable: true,
+    tone: statusTone(sessionStatuses.get(nodeId)),
+  }));
 
   return (
-    <div
-      ref={drawerRef}
-      style={{
-        position: "absolute", bottom: 0, left: 0, right: 0, zIndex: 15,
-        height, background: "rgba(26,26,46,0.96)", backdropFilter: "blur(4px)",
-        borderTop: "1px solid #2a2a4e", display: "flex", flexDirection: "column",
-      }}
-    >
-      {/* Drag handle */}
-      <div
-        onMouseDown={handleDragStart}
-        style={{ flexShrink: 0, height: 5, cursor: "ns-resize", background: "#2a2a4e" }}
-      />
+    <div ref={drawerRef} className="cli-drawer" style={{ height }}>
+      <div className="cli-drag-handle" onMouseDown={handleDragStart} />
 
-      {/* Toolbar */}
-      <div style={{
-        display: "flex", alignItems: "center", gap: 8,
-        padding: "6px 12px", flexShrink: 0, borderBottom: "1px solid #2a2a4e",
-      }}>
-        {/* Mode toggle */}
-        <div style={{
-          display: "flex", borderRadius: 4, overflow: "hidden",
-          border: "1px solid #2a2a4e",
-        }}>
-          <button
-            onClick={() => setMode("terminal")}
-            style={{
-              background: mode === "terminal" ? "#4488ff" : "#0d0d1a",
-              color: mode === "terminal" ? "#0d0d1a" : "#888899",
-              border: "none", fontSize: 11, padding: "3px 10px", cursor: "pointer",
-              fontWeight: mode === "terminal" ? 600 : 400,
-            }}
-          >Terminal</button>
-          <button
-            onClick={() => setMode("commands")}
-            style={{
-              background: mode === "commands" ? "#4488ff" : "#0d0d1a",
-              color: mode === "commands" ? "#0d0d1a" : "#888899",
-              border: "none", borderLeft: "1px solid #2a2a4e",
-              fontSize: 11, padding: "3px 10px", cursor: "pointer",
-              fontWeight: mode === "commands" ? 600 : 400,
-            }}
-          >Commands</button>
-        </div>
+      <div className="cli-toolbar">
+        <span className="cli-mode-toggle">
+          <Button active={mode === "terminal"} onClick={() => setMode("terminal")}>
+            Terminal
+          </Button>
+          <Button active={mode === "commands"} onClick={() => setMode("commands")}>
+            Commands
+          </Button>
+        </span>
 
-        {/* Node selector */}
-        <label style={{ fontSize: 11, color: "#888899", whiteSpace: "nowrap" }}>Node:</label>
-        <select
-          value={selectedNode}
-          onChange={(e) => setSelectedNode(e.target.value)}
-          style={{
-            background: "#0d0d1a", color: "#e0e0e0", border: "1px solid #2a2a4e",
-            borderRadius: 4, padding: "4px 8px", fontSize: 12, maxWidth: 200,
-          }}
-        >
-          <option value="">—</option>
-          {nodes.map((n) => (
-            <option key={n.node_id} value={n.node_id}>{n.node_id}</option>
-          ))}
-        </select>
+        <label className="cli-label">
+          Node:
+          <select
+            className="cli-select"
+            value={selectedNode}
+            onChange={(e) => setSelectedNode(e.target.value)}
+          >
+            <option value="">—</option>
+            {nodes.map((n) => (
+              <option key={n.node_id} value={n.node_id}>{n.node_id}</option>
+            ))}
+          </select>
+        </label>
 
-        {/* Commands mode controls */}
         {mode === "commands" && (
           <>
-            <label style={{ fontSize: 11, color: "#888899", whiteSpace: "nowrap" }}>Command:</label>
-            <select
-              value={selectedCommand}
-              onChange={(e) => setSelectedCommand(e.target.value)}
-              style={{
-                background: "#0d0d1a", color: "#e0e0e0", border: "1px solid #2a2a4e",
-                borderRadius: 4, padding: "4px 8px", fontSize: 12, maxWidth: 200,
-              }}
-            >
-              {commands.map((cmd) => (
-                <option key={cmd} value={cmd}>{cmd}</option>
-              ))}
-            </select>
-            <button
+            <label className="cli-label">
+              Command:
+              <select
+                className="cli-select"
+                value={selectedCommand}
+                onChange={(e) => setSelectedCommand(e.target.value)}
+              >
+                {commands.map((cmd) => (
+                  <option key={cmd} value={cmd}>{cmd}</option>
+                ))}
+              </select>
+            </label>
+            <Button
+              variant="primary"
               onClick={handleRun}
               disabled={loading || !selectedNode || !selectedCommand}
-              style={{
-                background: "#4488ff", color: "#0d0d1a", border: "none", borderRadius: 4,
-                padding: "4px 14px", fontSize: 12, fontWeight: 600, cursor: "pointer",
-                opacity: (loading || !selectedNode || !selectedCommand) ? 0.4 : 1,
-              }}
             >
               {loading ? "Running..." : "Run"}
-            </button>
+            </Button>
           </>
         )}
 
-        {/* Download config button */}
         {(mode === "terminal" ? activeSession : selectedNode) && (
-          <button
-            onClick={handleDownloadConfig}
-            title="Download running config"
-            style={{
-              background: "none", border: "1px solid #2a2a4e", borderRadius: 4,
-              color: "#888899", fontSize: 11, cursor: "pointer", padding: "3px 8px",
-            }}
-          >⬇ Config</button>
+          <Button icon="download" onClick={handleDownloadConfig} title="Download running config">
+            Config
+          </Button>
         )}
+        {downloadError && <span className="cli-error">{downloadError}</span>}
 
-        {/* Right side controls */}
-        <span style={{
-          marginLeft: "auto", display: "flex", alignItems: "center", gap: 0,
-          borderLeft: "1px solid #2a2a4e", paddingLeft: 8,
-        }}>
-          <button
-            onClick={() => setFontSize((s) => Math.max(9, s - 1))}
-            title="Decrease font size"
-            style={{
-              background: "none", border: "1px solid #2a2a4e", borderRadius: "4px 0 0 4px",
-              color: "#888899", fontSize: 11, cursor: "pointer", padding: "2px 6px",
-            }}
-          >A-</button>
-          <button
-            onClick={() => setFontSize((s) => Math.min(18, s + 1))}
-            title="Increase font size"
-            style={{
-              background: "none", border: "1px solid #2a2a4e", borderLeft: "none",
-              borderRadius: "0 4px 4px 0",
-              color: "#888899", fontSize: 13, cursor: "pointer", padding: "2px 6px",
-            }}
-          >A+</button>
-        </span>
-
-        <button
-          onClick={onClose}
-          title="Close CLI drawer"
-          style={{
-            background: "none", border: "none",
-            color: "#555577", fontSize: 16, cursor: "pointer", padding: "2px 6px",
-          }}
-        >✕</button>
+        <span className="cli-spring" />
+        <IconButton icon="minus" label="Decrease font size" onClick={() => setFontSize((s) => Math.max(9, s - 1))} />
+        <IconButton icon="plus" label="Increase font size" onClick={() => setFontSize((s) => Math.min(18, s + 1))} />
+        <IconButton icon="x" label="Close CLI drawer" onClick={onClose} />
       </div>
 
-      {/* Session tabs (terminal mode only) */}
       {mode === "terminal" && openSessions.length > 0 && (
-        <div style={{
-          display: "flex", alignItems: "center", gap: 2,
-          padding: "3px 12px", flexShrink: 0, borderBottom: "1px solid #1a1a2e",
-          overflowX: "auto", minHeight: 28,
-        }}>
-          {openSessions.map((nodeId) => {
-            const isActive = nodeId === activeSession;
-            const status = sessionStatuses.get(nodeId);
-            return (
-              <div
-                key={nodeId}
-                onClick={() => setActiveSession(nodeId)}
-                style={{
-                  display: "flex", alignItems: "center", gap: 5,
-                  padding: "3px 8px", borderRadius: 4, cursor: "pointer",
-                  background: isActive ? "#1a2a4e" : "transparent",
-                  border: isActive ? "1px solid #2a4a7a" : "1px solid transparent",
-                  fontSize: 11, color: isActive ? "#e0e0e0" : "#888899",
-                  whiteSpace: "nowrap",
-                }}
-              >
-                <span style={{
-                  width: 6, height: 6, borderRadius: "50%",
-                  background: statusColor(status), display: "inline-block",
-                  flexShrink: 0,
-                }} />
-                {nodeId}
-                <span
-                  onClick={(e) => { e.stopPropagation(); closeSession(nodeId); }}
-                  title="Close session"
-                  style={{
-                    color: "#555577", cursor: "pointer", fontSize: 10,
-                    padding: "0 2px", marginLeft: 2,
-                  }}
-                >✕</span>
-              </div>
-            );
-          })}
+        <div className="cli-tabs">
+          <Tabs
+            label="Terminal sessions"
+            tabs={sessionTabs}
+            active={activeSession ?? ""}
+            onSelect={setActiveSession}
+            onClose={closeSession}
+          />
         </div>
       )}
 
-      {/* Content area */}
-      <div style={{ flex: 1, overflow: "hidden", minHeight: 0 }}>
+      <div className="cli-content">
         {mode === "terminal" ? (
           openSessions.length > 0 ? (
             <PersistentTerminal
@@ -368,32 +270,15 @@ export function CliDrawer({ open, onClose, snapshot, selection }: CliDrawerProps
               fontSize={fontSize}
             />
           ) : (
-            <div style={{ padding: "12px", color: "#555577", fontStyle: "italic", fontSize: 12 }}>
-              Select a node to open an interactive terminal.
-            </div>
+            <div className="cli-placeholder">Select a node to open an interactive terminal.</div>
           )
         ) : (
-          /* Commands mode output */
-          <div style={{ padding: "8px 12px", overflow: "auto", height: "100%" }}>
-            {loading && (
-              <pre style={{ margin: 0, fontFamily: "monospace", fontSize, color: "#ffaa00" }}>
-                Running command...
-              </pre>
-            )}
-            {error && (
-              <pre style={{ margin: 0, fontFamily: "monospace", fontSize, color: "#ff3333" }}>
-                {error}
-              </pre>
-            )}
-            {output && (
-              <pre style={{ margin: 0, fontFamily: "monospace", fontSize, color: "#e0e0e0", whiteSpace: "pre" }}>
-                {output}
-              </pre>
-            )}
+          <div className="cli-output" style={{ fontSize }}>
+            {loading && <pre className="cli-pre cli-pre--warn">Running command...</pre>}
+            {error && <pre className="cli-pre cli-pre--fail">{error}</pre>}
+            {output && <pre className="cli-pre">{output}</pre>}
             {!loading && !error && !output && (
-              <pre style={{ margin: 0, fontFamily: "monospace", fontSize, color: "#555577", fontStyle: "italic" }}>
-                Select a node and command, then click Run.
-              </pre>
+              <pre className="cli-pre cli-pre--dim">Select a node and command, then click Run.</pre>
             )}
           </div>
         )}

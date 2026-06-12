@@ -192,6 +192,9 @@
 }
 
 .ui-tab-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
   font-family: var(--font-ui);
   font-size: var(--font-size-sm);
   color: inherit;

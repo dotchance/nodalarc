@@ -1,0 +1,99 @@
+/* Bottom CLI drawer: terminal + one-shot commands. Matte; chrome controls
+   come from the ui primitives. */
+
+.cli-drawer {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: var(--z-cli-drawer);
+  background: var(--bg-overlay-96);
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+}
+
+.cli-drag-handle {
+  flex-shrink: 0;
+  height: 5px;
+  cursor: ns-resize;
+  background: var(--border);
+}
+
+.cli-drag-handle:hover {
+  background: var(--border-strong);
+}
+
+.cli-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-6);
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border);
+  font-family: var(--font-ui);
+}
+
+.cli-mode-toggle {
+  display: inline-flex;
+  gap: var(--space-1);
+}
+
+.cli-label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  font-size: var(--font-size-xs);
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.cli-select {
+  font-size: var(--font-size-sm);
+  max-width: 220px;
+  font-family: var(--font-mono);
+}
+
+.cli-error {
+  color: var(--status-fail);
+  font-size: var(--font-size-xs);
+}
+
+.cli-spring { flex: 1; }
+
+.cli-tabs {
+  flex-shrink: 0;
+  padding: 0 var(--space-6);
+  overflow-x: auto;
+}
+
+.cli-content {
+  flex: 1;
+  overflow: hidden;
+  min-height: 0;
+}
+
+.cli-placeholder {
+  padding: var(--space-6);
+  color: var(--text-dim);
+  font-style: italic;
+  font-size: var(--font-size-sm);
+  font-family: var(--font-ui);
+}
+
+.cli-output {
+  padding: var(--space-4) var(--space-6);
+  overflow: auto;
+  height: 100%;
+}
+
+.cli-pre {
+  margin: 0;
+  font-family: var(--font-family-cli);
+  color: var(--text-primary);
+  white-space: pre;
+}
+
+.cli-pre--warn { color: var(--status-warn); }
+.cli-pre--fail { color: var(--status-fail); }
+.cli-pre--dim { color: var(--text-dim); font-style: italic; }

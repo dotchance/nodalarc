@@ -41,6 +41,7 @@ import "./styles/layout.css";
 import "./styles/topbar.css";
 import "./styles/bottombar.css";
 import "./styles/log-window.css";
+import "./styles/cli-drawer.css";
 import "./styles/panels.css";
 import "./styles/toolbar.css";
 import "./styles/topology.css";

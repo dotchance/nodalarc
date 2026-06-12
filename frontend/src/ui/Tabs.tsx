@@ -8,11 +8,14 @@
 
 import type { KeyboardEvent } from "react";
 import { Icon } from "./icons/Icon";
+import { StatusDot, type StatusTone } from "./Badge";
 
 export interface TabItem<K extends string = string> {
   key: K;
   label: string;
   closable?: boolean;
+  /** Optional status light before the label (e.g. terminal connection state). */
+  tone?: StatusTone;
 }
 
 interface TabsProps<K extends string> {
@@ -44,6 +47,7 @@ export function Tabs<K extends string>({ tabs, active, onSelect, onClose, label 
             className="ui-tab-btn"
             onClick={() => onSelect(tab.key)}
           >
+            {tab.tone && <StatusDot tone={tab.tone} />}
             {tab.label}
           </button>
           {tab.closable && onClose && (

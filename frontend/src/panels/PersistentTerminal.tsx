@@ -14,6 +14,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import "@xterm/xterm/css/xterm.css";
 import { REST_URL, getApiKey } from "../config";
+import { tokens, withAlpha } from "../styles/tokens";
 
 type ConnectionStatus = "connecting" | "connected" | "disconnected" | "error";
 
@@ -55,15 +56,17 @@ export function PersistentTerminal({
   useEffect(() => {
     if (!containerRef.current || terminalRef.current) return;
 
+    // xterm renders to canvas: CSS variables cannot restyle it, so the theme
+    // is built from token values at construction (per-theme via reload).
     const terminal = new Terminal({
       cursorBlink: true,
       fontSize,
-      fontFamily: "'SF Mono', 'Fira Code', 'Cascadia Code', Consolas, monospace",
+      fontFamily: tokens.fontFamilyCli,
       theme: {
-        background: "#0d0d1a",
-        foreground: "#e0e0e0",
-        cursor: "#4488ff",
-        selectionBackground: "#2a4a7a",
+        background: tokens.bgMain,
+        foreground: tokens.textPrimary,
+        cursor: tokens.accentBlue,
+        selectionBackground: withAlpha(tokens.accentBlue, 0.35),
       },
       scrollback: MAX_BUFFER_LINES,
     });

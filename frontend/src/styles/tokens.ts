@@ -2,54 +2,184 @@
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
 
 // Single source of truth for all visual tokens.
-// Three.js code imports hex values directly.
-// CSS code uses var(--token-name) after injectCssTokens() runs.
+// Two themes (Mission Light is the default working console; NOC Dark is the
+// high-contrast projection theme). The active theme is resolved ONCE at module
+// load from localStorage; switching themes stores the new name and reloads —
+// scene materials, canvas paints, and xterm capture token values at
+// construction time, so a reload is the honest switch mechanism.
+//
+// Three.js / canvas / xterm code imports values from `tokens` directly.
+// CSS uses var(--token-name) after applyTheme() runs (main.tsx, before mount).
 // Change a value here → updates globe, topology, panels, everything.
 
+export type ThemeName = "mission-light" | "noc-dark";
+
+export const THEME_STORAGE_KEY = "nodalarc.theme";
+
+/** Values that differ between themes. Everything else is theme-invariant. */
+export interface Theme {
+  // surfaces
+  bgMain: string;
+  bgBar: string;
+  bgPanel: string;
+  bgPanelHover: string;
+  border: string;
+  borderStrong: string;
+  // text
+  textPrimary: string;
+  textSecondary: string;
+  textDim: string;
+  // accents
+  accentBlue: string;
+  accentTeal: string;
+  accentOrange: string;
+  accentRed: string;
+  accentGreen: string;
+  accentAmber: string;
+  // generic status slots (transport health, convergence, severity fills)
+  statusOk: string;
+  statusWarn: string;
+  statusFail: string;
+  // decision-family tones (the Expected/Faulted color law, single source).
+  // faulted is the ONLY red; a restrictive or intermittent model must read
+  // as calm, never as an error. Law enforced by explain registry tests.
+  familyConnected: string;
+  familyExpectedNoLink: string;
+  familyEligibleUnselected: string;
+  familyInFlight: string;
+  familyFaulted: string;
+  familyUnknown: string;
+  // scene
+  colorLinkFail: number; // matches familyFaulted — beams and cards agree on red
+  shadowPopover: string;
+  shadowPanel: string;
+}
+
+export const THEMES: Record<ThemeName, Theme> = {
+  "mission-light": {
+    bgMain: "#0d1117",
+    bgBar: "#121820",
+    bgPanel: "#1c2430",
+    bgPanelHover: "#222c39",
+    border: "#3c4858",
+    borderStrong: "#5b6b80",
+    textPrimary: "#f6f8fb",
+    textSecondary: "#c2ccd9",
+    textDim: "#8c98a8",
+    accentBlue: "#82b7ff",
+    accentTeal: "#7ed4df",
+    accentOrange: "#f2a34b",
+    accentRed: "#f06c6c",
+    accentGreen: "#68d98b",
+    accentAmber: "#f0b84d",
+    statusOk: "#68d98b",
+    statusWarn: "#f0b84d",
+    statusFail: "#f06c6c",
+    familyConnected: "#68d98b",
+    // calm steel-blue "no-link is fine" tone: holds contrast as a globe glyph
+    // against both dark ocean and tan land.
+    familyExpectedNoLink: "#7aa7e8",
+    familyEligibleUnselected: "#5b9aa8",
+    familyInFlight: "#f0b84d",
+    familyFaulted: "#f06c6c",
+    familyUnknown: "#8a93a8",
+    colorLinkFail: 0xf06c6c,
+    shadowPopover: "0 4px 16px rgba(0, 0, 0, 0.38)",
+    shadowPanel: "0 4px 12px rgba(0, 0, 0, 0.3)",
+  },
+  "noc-dark": {
+    bgMain: "#050607",
+    bgBar: "#090b0d",
+    bgPanel: "#111820",
+    bgPanelHover: "#182331",
+    border: "#435266",
+    borderStrong: "#65768c",
+    textPrimary: "#ffffff",
+    textSecondary: "#c0cad6",
+    textDim: "#8f9cad",
+    accentBlue: "#7db5ff",
+    accentTeal: "#77dce8",
+    accentOrange: "#f2a34b",
+    accentRed: "#ff6b6b",
+    accentGreen: "#6be58f",
+    accentAmber: "#ffc452",
+    statusOk: "#6be58f",
+    statusWarn: "#ffc452",
+    statusFail: "#ff6b6b",
+    familyConnected: "#6be58f",
+    familyExpectedNoLink: "#84aff0",
+    familyEligibleUnselected: "#5fa8b8",
+    familyInFlight: "#ffc452",
+    familyFaulted: "#ff6b6b",
+    familyUnknown: "#93a0b3",
+    colorLinkFail: 0xff6b6b,
+    shadowPopover: "0 4px 16px rgba(0, 0, 0, 0.55)",
+    shadowPanel: "0 4px 12px rgba(0, 0, 0, 0.45)",
+  },
+};
+
+export function activeThemeName(): ThemeName {
+  if (typeof localStorage !== "undefined") {
+    const stored = localStorage.getItem(THEME_STORAGE_KEY);
+    if (stored === "mission-light" || stored === "noc-dark") return stored;
+    if (stored !== null) {
+      console.warn(`unknown theme '${stored}' in ${THEME_STORAGE_KEY}; using mission-light`);
+    }
+  }
+  return "mission-light";
+}
+
+const theme = THEMES[activeThemeName()];
+
+/** Derive an rgba() string from a 6-digit hex token (for JS-side consumers;
+ *  CSS-side derived tints use color-mix() in stylesheets instead). */
+export function withAlpha(hexCss: string, alpha: number): string {
+  const v = parseInt(hexCss.replace("#", ""), 16);
+  const r = (v >> 16) & 0xff;
+  const g = (v >> 8) & 0xff;
+  const b = v & 0xff;
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
 export const tokens = {
-  // --- Backgrounds ---
-  bgMain: '#0d0d1a',
-  bgPanel: '#1a1a2e',
-  bgPanelHover: '#2a2a4e',
-  bgToolbar: 'rgba(26, 26, 46, 0.8)',
-  bgBar: '#16162a',
-  bgOverlay96: 'rgba(26, 26, 46, 0.96)',
-  bgOverlay94: 'rgba(26, 26, 46, 0.94)',
-  bgOverlay92: 'rgba(26, 26, 46, 0.92)',
-  bgOverlay90: 'rgba(26, 26, 46, 0.9)',
-  bgScrim: 'rgba(13, 13, 26, 0.95)',
-  bgScrimLight: 'rgba(13, 13, 26, 0.6)',
-  bgSwitching: 'rgba(0, 0, 0, 0.7)',
+  // --- Theme-resolved values (see Theme above) ---
+  ...theme,
 
-  // --- Text ---
-  textPrimary: '#e0e0e0',
-  textSecondary: '#888899',
-  textDim: '#7777aa',
+  // --- Derived surfaces ---
+  bgToolbar: withAlpha(theme.bgPanel, 0.9),
+  bgOverlay96: withAlpha(theme.bgPanel, 0.96),
+  bgOverlay94: withAlpha(theme.bgPanel, 0.94),
+  bgOverlay90: withAlpha(theme.bgPanel, 0.9),
+  bgScrim: withAlpha(theme.bgMain, 0.95),
+  bgScrimLight: withAlpha(theme.bgMain, 0.6),
+  bgSwitching: "rgba(0, 0, 0, 0.7)",
 
-  // --- Borders ---
-  border: '#2a2a4e',
-  borderSubtle: '#2a2a4a',
+  // --- Taxonomy: orbital regime (theme-invariant identity colors) ---
+  regimeLeo: "#f2a34b",
+  regimeMeo: "#64d1df",
+  regimeGeo: "#68d98b",
+  regimeHeo: "#82b7ff",
+  regimeLuna: "#c9c4bb",
 
-  // --- Accents ---
-  accentBlue: '#4488ff',
-  accentTeal: '#00d4aa',
-  accentOrange: '#ff8800',
-  accentRed: '#ff3333',
-  accentGreen: '#44cc66',
-  accentAmber: '#ffaa00',
+  // --- Taxonomy: link medium (theme-invariant) ---
+  mediumRf: "#f0c15c",
+  mediumOptical: "#aa98ff",
+  mediumTerrestrial: "#9aa6b5",
 
   // --- Node colors (Three.js hex) ---
   colorNodeSatellite: 0xccddee,
-  colorNodeGs: 0x00d4aa,
+  colorNodeGs: 0x7ed4df,
   colorNodeSelected: 0xffffff,
 
-  // --- Link colors (Three.js hex) ---
-  colorLinkIsl: 0x44cc66,
-  colorLinkGround: 0x00ccff,
-  colorLinkFail: 0xff3333,
-  colorLinkInactive: 0x333333,
-  colorLinkFlow: 0xff8800,
-  colorLinkFlowSecondary: 0xff00aa,
+  // --- Link colors (Three.js hex). Relation identity: ISL violet, access
+  //     light-blue, inter-body warm grey. State stays a separate channel
+  //     (proven solid / unproven dimmed / failing red / inactive hidden). ---
+  colorLinkIsl: 0x9f91ff,
+  colorLinkGround: 0x8edcff,
+  colorLinkInterbody: 0xd7d4cc,
+  colorLinkInactive: 0x3a4452,
+  colorLinkFlow: 0xf2a34b,
+  colorLinkFlowSecondary: 0x7ed4df,
 
   // --- Link widths (px) ---
   linkWidthIsl: 1.5,
@@ -72,59 +202,38 @@ export const tokens = {
     0x9966cc, // purple
   ] as readonly number[],
 
-  // --- Status ---
-  statusConnected: '#44cc66',
-  statusReconnecting: '#ffaa00',
-  statusDisconnected: '#ff3333',
-  statusError: '#e85555',
-  statusErrorBright: '#ff6666',
-
-  // --- Decision family tones (the Expected/Faulted color law, single source) ---
-  // The canonical no-link families. faulted is the ONLY red; a restrictive or
-  // intermittent model must read as calm, never as an error. statusDisconnected
-  // above is red and encodes the OLD connected/disconnected model — surfaces are
-  // migrating onto these family tones so a correct (expected) no-link is not red.
-  familyConnected: '#44cc66',
-  // Brighter steel-blue than the old muted #7788aa: a calm "no-link is fine" tone that still
-  // holds contrast as a globe glyph against both dark ocean and tan land (the old slate vanished).
-  familyExpectedNoLink: '#7aa7e8',
-  familyEligibleUnselected: '#5b9aa8',
-  familyInFlight: '#ffaa00',
-  familyFaulted: '#ff3333',
-  familyUnknown: '#8a87a8',
-
-  // --- Fail-flash timing (ms) ---
+  // --- Fail-flash timing (ms) — drives scene animation AND state expiry ---
   failHoldMs: 1500,
   failFadeMs: 1000,
 
-  // --- Typography ---
+  // --- Typography (font files land with the typography stage) ---
   fontFamily: "'JetBrains Mono', 'Fira Code', 'Source Code Pro', monospace",
   fontFamilyCli: "'SF Mono', 'Fira Code', 'Cascadia Code', monospace",
-  fontSizeXxs: '10px',
-  fontSizeXs: '11px',
-  fontSizeSm: '12px',
-  fontSizeMd: '13px',
-  fontSizeLg: '14px',
-  fontSizeXl: '16px',
-  fontSizeXxl: '20px',
-  fontSizeTitle: '28px',
+  fontSizeXxs: "10px",
+  fontSizeXs: "11px",
+  fontSizeSm: "12px",
+  fontSizeMd: "13px",
+  fontSizeLg: "14px",
+  fontSizeXl: "16px",
+  fontSizeXxl: "20px",
+  fontSizeTitle: "28px",
   fontWeightNormal: 400,
   fontWeightMedium: 500,
   fontWeightSemibold: 600,
   fontWeightBold: 700,
 
   // --- Spacing scale ---
-  space1: '2px',
-  space2: '4px',
-  space3: '6px',
-  space4: '8px',
-  space5: '10px',
-  space6: '12px',
-  space8: '16px',
-  space10: '20px',
-  space12: '24px',
-  space16: '32px',
-  space24: '48px',
+  space1: "2px",
+  space2: "4px",
+  space3: "6px",
+  space4: "8px",
+  space5: "10px",
+  space6: "12px",
+  space8: "16px",
+  space10: "20px",
+  space12: "24px",
+  space16: "32px",
+  space24: "48px",
 
   // --- Z-index layers ---
   zPanel: 10,
@@ -135,39 +244,34 @@ export const tokens = {
   zScrim: 200,
   zToast: 300,
   zTooltip: 400,
+  zWindow: 500, // floating operational windows (logs, trace) ride above all chrome
 
   // --- Border radii ---
-  radiusXs: '2px',
-  radiusSm: '3px',
-  radiusMd: '4px',
-  radiusLg: '6px',
-  radiusXl: '8px',
-  radiusPill: '20px',
-  radiusCircle: '50%',
-
-  // --- Shadows ---
-  shadowPopover: '0 4px 16px rgba(0, 0, 0, 0.4)',
-  shadowPanel: '0 4px 12px rgba(0, 0, 0, 0.3)',
+  radiusXs: "2px",
+  radiusSm: "3px",
+  radiusMd: "4px",
+  radiusLg: "6px",
+  radiusXl: "8px",
+  radiusPill: "20px",
+  radiusCircle: "50%",
 
   // --- Transitions ---
-  transitionFast: '0.15s ease',
-  transitionNormal: '0.2s ease',
+  transitionFast: "0.15s ease",
+  transitionNormal: "0.2s ease",
 
   // --- Touch targets ---
-  touchTargetMin: '44px',
-  touchTargetComfortable: '48px',
-
-  // --- Responsive breakpoints ---
-  breakpointTablet: '768px',
-  breakpointDesktop: '1280px',
+  touchTargetMin: "44px",
+  touchTargetComfortable: "48px",
 
   // --- Layout ---
-  topbarHeight: '48px',
-  bottombarHeight: '32px',
-  panelWidth: '420px',
-  toolbarWidth: '48px',
+  topbarHeight: "48px",
+  bottombarHeight: "32px",
+  panelWidth: "420px",
 
-  // --- Scene constants (Three.js units, not CSS) ---
+  // --- Scene constants (Three.js units, not CSS). BEHAVIOR, not theme:
+  //     earthRadius pairs with orbitalMath.SCENE_EARTH_RADIUS (physics→scene
+  //     scale) and cameraDistance participates in the label-fade rendering
+  //     invariant. Never vary these per theme. ---
   earthRadius: 100,
   satRadius: 0.9,
   satSegments: 12,
@@ -176,126 +280,114 @@ export const tokens = {
   cameraDistance: 250,
   cameraMinDistance: 105,
   cameraMaxDistance: 3000,
-} as const;
+};
 
 export type Tokens = typeof tokens;
 
-function hexToCSS(hex: number): string {
-  return '#' + hex.toString(16).padStart(6, '0');
-}
-
-export function injectCssTokens(): void {
+/** Write the active theme's tokens onto :root as CSS custom properties.
+ *  Must run before first paint (main.tsx). */
+export function applyTheme(): void {
   const s = document.documentElement.style;
 
-  // Backgrounds
-  s.setProperty('--bg-main', tokens.bgMain);
-  s.setProperty('--bg-panel', tokens.bgPanel);
-  s.setProperty('--bg-panel-hover', tokens.bgPanelHover);
-  s.setProperty('--bg-toolbar', tokens.bgToolbar);
-  s.setProperty('--bg-bar', tokens.bgBar);
-  s.setProperty('--bg-overlay-96', tokens.bgOverlay96);
-  s.setProperty('--bg-overlay-94', tokens.bgOverlay94);
-  s.setProperty('--bg-overlay-92', tokens.bgOverlay92);
-  s.setProperty('--bg-overlay-90', tokens.bgOverlay90);
-  s.setProperty('--bg-scrim', tokens.bgScrim);
-  s.setProperty('--bg-scrim-light', tokens.bgScrimLight);
-  s.setProperty('--bg-switching', tokens.bgSwitching);
+  // Surfaces
+  s.setProperty("--bg-main", tokens.bgMain);
+  s.setProperty("--bg-panel", tokens.bgPanel);
+  s.setProperty("--bg-panel-hover", tokens.bgPanelHover);
+  s.setProperty("--bg-toolbar", tokens.bgToolbar);
+  s.setProperty("--bg-bar", tokens.bgBar);
+  s.setProperty("--bg-overlay-96", tokens.bgOverlay96);
+  s.setProperty("--bg-overlay-94", tokens.bgOverlay94);
+  s.setProperty("--bg-overlay-90", tokens.bgOverlay90);
+  s.setProperty("--bg-scrim", tokens.bgScrim);
+  s.setProperty("--bg-scrim-light", tokens.bgScrimLight);
+  s.setProperty("--bg-switching", tokens.bgSwitching);
 
   // Text
-  s.setProperty('--text-primary', tokens.textPrimary);
-  s.setProperty('--text-secondary', tokens.textSecondary);
-  s.setProperty('--text-dim', tokens.textDim);
+  s.setProperty("--text-primary", tokens.textPrimary);
+  s.setProperty("--text-secondary", tokens.textSecondary);
+  s.setProperty("--text-dim", tokens.textDim);
 
   // Borders
-  s.setProperty('--border', tokens.border);
-  s.setProperty('--border-subtle', tokens.borderSubtle);
+  s.setProperty("--border", tokens.border);
+  s.setProperty("--border-strong", tokens.borderStrong);
 
   // Accents
-  s.setProperty('--accent-blue', tokens.accentBlue);
-  s.setProperty('--accent-teal', tokens.accentTeal);
-  s.setProperty('--accent-orange', tokens.accentOrange);
-  s.setProperty('--accent-red', tokens.accentRed);
-  s.setProperty('--accent-green', tokens.accentGreen);
-  s.setProperty('--accent-amber', tokens.accentAmber);
+  s.setProperty("--accent-blue", tokens.accentBlue);
+  s.setProperty("--accent-teal", tokens.accentTeal);
+  s.setProperty("--accent-orange", tokens.accentOrange);
+  s.setProperty("--accent-red", tokens.accentRed);
+  s.setProperty("--accent-green", tokens.accentGreen);
+  s.setProperty("--accent-amber", tokens.accentAmber);
 
-  // Node/link colors (CSS versions for topology view, panels)
-  s.setProperty('--color-node-satellite', hexToCSS(tokens.colorNodeSatellite));
-  s.setProperty('--color-node-gs', hexToCSS(tokens.colorNodeGs));
-  s.setProperty('--color-node-selected', hexToCSS(tokens.colorNodeSelected));
-  s.setProperty('--color-link-isl', hexToCSS(tokens.colorLinkIsl));
-  s.setProperty('--color-link-ground', hexToCSS(tokens.colorLinkGround));
-  s.setProperty('--color-link-fail', hexToCSS(tokens.colorLinkFail));
-  s.setProperty('--color-link-flow', hexToCSS(tokens.colorLinkFlow));
-
-  // Status
-  s.setProperty('--ws-connected', tokens.statusConnected);
-  s.setProperty('--ws-reconnecting', tokens.statusReconnecting);
-  s.setProperty('--ws-disconnected', tokens.statusDisconnected);
-  s.setProperty('--status-error', tokens.statusError);
+  // Status slots
+  s.setProperty("--status-ok", tokens.statusOk);
+  s.setProperty("--status-warn", tokens.statusWarn);
+  s.setProperty("--status-fail", tokens.statusFail);
 
   // Typography
-  s.setProperty('--font-family', tokens.fontFamily);
-  s.setProperty('--font-family-cli', tokens.fontFamilyCli);
-  s.setProperty('--font-size-xxs', tokens.fontSizeXxs);
-  s.setProperty('--font-size-xs', tokens.fontSizeXs);
-  s.setProperty('--font-size-sm', tokens.fontSizeSm);
-  s.setProperty('--font-size-md', tokens.fontSizeMd);
-  s.setProperty('--font-size-lg', tokens.fontSizeLg);
-  s.setProperty('--font-size-xl', tokens.fontSizeXl);
-  s.setProperty('--font-size-xxl', tokens.fontSizeXxl);
-  s.setProperty('--font-size-title', tokens.fontSizeTitle);
-  s.setProperty('--font-weight-normal', String(tokens.fontWeightNormal));
-  s.setProperty('--font-weight-medium', String(tokens.fontWeightMedium));
-  s.setProperty('--font-weight-semibold', String(tokens.fontWeightSemibold));
-  s.setProperty('--font-weight-bold', String(tokens.fontWeightBold));
+  s.setProperty("--font-family", tokens.fontFamily);
+  s.setProperty("--font-family-cli", tokens.fontFamilyCli);
+  s.setProperty("--font-mono", tokens.fontFamilyCli);
+  s.setProperty("--font-size-xxs", tokens.fontSizeXxs);
+  s.setProperty("--font-size-xs", tokens.fontSizeXs);
+  s.setProperty("--font-size-sm", tokens.fontSizeSm);
+  s.setProperty("--font-size-md", tokens.fontSizeMd);
+  s.setProperty("--font-size-lg", tokens.fontSizeLg);
+  s.setProperty("--font-size-xl", tokens.fontSizeXl);
+  s.setProperty("--font-size-xxl", tokens.fontSizeXxl);
+  s.setProperty("--font-size-title", tokens.fontSizeTitle);
+  s.setProperty("--font-weight-normal", String(tokens.fontWeightNormal));
+  s.setProperty("--font-weight-medium", String(tokens.fontWeightMedium));
+  s.setProperty("--font-weight-semibold", String(tokens.fontWeightSemibold));
+  s.setProperty("--font-weight-bold", String(tokens.fontWeightBold));
 
   // Spacing
-  s.setProperty('--space-1', tokens.space1);
-  s.setProperty('--space-2', tokens.space2);
-  s.setProperty('--space-3', tokens.space3);
-  s.setProperty('--space-4', tokens.space4);
-  s.setProperty('--space-5', tokens.space5);
-  s.setProperty('--space-6', tokens.space6);
-  s.setProperty('--space-8', tokens.space8);
-  s.setProperty('--space-10', tokens.space10);
-  s.setProperty('--space-12', tokens.space12);
-  s.setProperty('--space-16', tokens.space16);
-  s.setProperty('--space-24', tokens.space24);
+  s.setProperty("--space-1", tokens.space1);
+  s.setProperty("--space-2", tokens.space2);
+  s.setProperty("--space-3", tokens.space3);
+  s.setProperty("--space-4", tokens.space4);
+  s.setProperty("--space-5", tokens.space5);
+  s.setProperty("--space-6", tokens.space6);
+  s.setProperty("--space-8", tokens.space8);
+  s.setProperty("--space-10", tokens.space10);
+  s.setProperty("--space-12", tokens.space12);
+  s.setProperty("--space-16", tokens.space16);
+  s.setProperty("--space-24", tokens.space24);
 
   // Z-index
-  s.setProperty('--z-panel', String(tokens.zPanel));
-  s.setProperty('--z-cli-drawer', String(tokens.zCliDrawer));
-  s.setProperty('--z-popover', String(tokens.zPopover));
-  s.setProperty('--z-catalog', String(tokens.zCatalog));
-  s.setProperty('--z-overlay', String(tokens.zOverlay));
-  s.setProperty('--z-scrim', String(tokens.zScrim));
-  s.setProperty('--z-toast', String(tokens.zToast));
-  s.setProperty('--z-tooltip', String(tokens.zTooltip));
+  s.setProperty("--z-panel", String(tokens.zPanel));
+  s.setProperty("--z-cli-drawer", String(tokens.zCliDrawer));
+  s.setProperty("--z-popover", String(tokens.zPopover));
+  s.setProperty("--z-catalog", String(tokens.zCatalog));
+  s.setProperty("--z-overlay", String(tokens.zOverlay));
+  s.setProperty("--z-scrim", String(tokens.zScrim));
+  s.setProperty("--z-toast", String(tokens.zToast));
+  s.setProperty("--z-tooltip", String(tokens.zTooltip));
+  s.setProperty("--z-window", String(tokens.zWindow));
 
   // Border radii
-  s.setProperty('--radius-xs', tokens.radiusXs);
-  s.setProperty('--radius-sm', tokens.radiusSm);
-  s.setProperty('--radius-md', tokens.radiusMd);
-  s.setProperty('--radius-lg', tokens.radiusLg);
-  s.setProperty('--radius-xl', tokens.radiusXl);
-  s.setProperty('--radius-pill', tokens.radiusPill);
-  s.setProperty('--radius-circle', tokens.radiusCircle);
+  s.setProperty("--radius-xs", tokens.radiusXs);
+  s.setProperty("--radius-sm", tokens.radiusSm);
+  s.setProperty("--radius-md", tokens.radiusMd);
+  s.setProperty("--radius-lg", tokens.radiusLg);
+  s.setProperty("--radius-xl", tokens.radiusXl);
+  s.setProperty("--radius-pill", tokens.radiusPill);
+  s.setProperty("--radius-circle", tokens.radiusCircle);
 
   // Shadows
-  s.setProperty('--shadow-popover', tokens.shadowPopover);
-  s.setProperty('--shadow-panel', tokens.shadowPanel);
+  s.setProperty("--shadow-popover", tokens.shadowPopover);
+  s.setProperty("--shadow-panel", tokens.shadowPanel);
 
   // Transitions
-  s.setProperty('--transition-fast', tokens.transitionFast);
-  s.setProperty('--transition-normal', tokens.transitionNormal);
+  s.setProperty("--transition-fast", tokens.transitionFast);
+  s.setProperty("--transition-normal", tokens.transitionNormal);
 
   // Touch targets
-  s.setProperty('--touch-target-min', tokens.touchTargetMin);
-  s.setProperty('--touch-target-comfortable', tokens.touchTargetComfortable);
+  s.setProperty("--touch-target-min", tokens.touchTargetMin);
+  s.setProperty("--touch-target-comfortable", tokens.touchTargetComfortable);
 
   // Layout
-  s.setProperty('--topbar-height', tokens.topbarHeight);
-  s.setProperty('--bottombar-height', tokens.bottombarHeight);
-  s.setProperty('--panel-width', tokens.panelWidth);
-  s.setProperty('--toolbar-width', tokens.toolbarWidth);
+  s.setProperty("--topbar-height", tokens.topbarHeight);
+  s.setProperty("--bottombar-height", tokens.bottombarHeight);
+  s.setProperty("--panel-width", tokens.panelWidth);
 }

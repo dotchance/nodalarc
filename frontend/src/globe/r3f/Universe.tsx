@@ -17,6 +17,7 @@ import {
   CAMERA_MIN_DISTANCE,
   CAMERA_MAX_DISTANCE,
 } from "../../config";
+import { tokens } from "../../styles/tokens";
 
 /**
  * OrbitControls (three addon) wired to R3F's camera + canvas, matching legacy damping. The
@@ -102,7 +103,7 @@ export function Universe({
       dpr={[1, 2]}
       onPointerMissed={onPointerMissed}
     >
-      <color attach="background" args={["#0d0d1a"]} />
+      <color attach="background" args={[tokens.bgMain]} />
       {/* Ambient fill only; the sun directional lives in <Earth> (earth frame), positioned by
           the sim-time sun model so the terminator tracks the frame rotation. */}
       <ambientLight intensity={0.5} />

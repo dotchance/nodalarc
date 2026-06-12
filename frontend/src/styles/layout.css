@@ -121,7 +121,7 @@
 .connection-banner {
   padding: var(--space-3) var(--space-8);
   background: var(--bg-overlay-90);
-  color: var(--ws-reconnecting);
+  color: var(--status-warn);
   font-size: var(--font-size-sm);
   text-align: center;
 }

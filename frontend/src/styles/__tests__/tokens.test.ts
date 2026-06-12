@@ -1,7 +1,7 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
 import { describe, it, expect, beforeAll } from "vitest";
-import { tokens, injectCssTokens } from "../tokens";
+import { tokens, applyTheme, THEMES } from "../tokens";
 import {
   LINK_ISL_COLOR, LINK_GROUND_COLOR, LINK_FAIL_COLOR,
   LINK_INACTIVE_COLOR, LINK_FLOW_COLOR, LINK_FLOW_SECONDARY_COLOR,
@@ -20,12 +20,8 @@ import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 beforeAll(() => {
-  injectCssTokens();
+  applyTheme();
 });
-
-function hexToCSS(hex: number): string {
-  return "#" + hex.toString(16).padStart(6, "0");
-}
 
 describe("token system", () => {
   describe("config.ts re-exports match tokens.ts source values", () => {
@@ -78,33 +74,21 @@ describe("token system", () => {
   });
 
   describe("CSS injection produces correct values (not just non-empty)", () => {
-    const colorMappings: [string, number][] = [
-      ["--color-node-satellite", tokens.colorNodeSatellite],
-      ["--color-node-gs", tokens.colorNodeGs],
-      ["--color-node-selected", tokens.colorNodeSelected],
-      ["--color-link-isl", tokens.colorLinkIsl],
-      ["--color-link-ground", tokens.colorLinkGround],
-      ["--color-link-fail", tokens.colorLinkFail],
-      ["--color-link-flow", tokens.colorLinkFlow],
-    ];
-
-    it.each(colorMappings)(
-      "%s CSS value matches Three.js hex token",
-      (cssVar, tokenHex) => {
-        const cssVal = document.documentElement.style.getPropertyValue(cssVar);
-        const expected = hexToCSS(tokenHex);
-        expect(cssVal).toBe(expected);
-      },
-    );
-
     const stringMappings: [string, string][] = [
       ["--bg-main", tokens.bgMain],
       ["--bg-panel", tokens.bgPanel],
       ["--text-primary", tokens.textPrimary],
       ["--text-secondary", tokens.textSecondary],
+      ["--text-dim", tokens.textDim],
+      ["--border", tokens.border],
+      ["--border-strong", tokens.borderStrong],
       ["--accent-blue", tokens.accentBlue],
       ["--accent-red", tokens.accentRed],
       ["--accent-green", tokens.accentGreen],
+      ["--status-ok", tokens.statusOk],
+      ["--status-warn", tokens.statusWarn],
+      ["--status-fail", tokens.statusFail],
+      ["--font-mono", tokens.fontFamilyCli],
       ["--font-size-xs", tokens.fontSizeXs],
       ["--font-size-md", tokens.fontSizeMd],
       ["--topbar-height", tokens.topbarHeight],
@@ -127,6 +111,7 @@ describe("token system", () => {
       ["--z-panel", tokens.zPanel],
       ["--z-overlay", tokens.zOverlay],
       ["--z-tooltip", tokens.zTooltip],
+      ["--z-window", tokens.zWindow],
       ["--font-weight-semibold", tokens.fontWeightSemibold],
     ];
 
@@ -170,7 +155,7 @@ describe("token system", () => {
 
       expect(
         missingVars,
-        `CSS files reference ${missingVars.length} var() names not injected by injectCssTokens():\n` +
+        `CSS files reference ${missingVars.length} var() names not injected by applyTheme():\n` +
         missingVars.join("\n") +
         "\nThese will silently produce no styling.",
       ).toHaveLength(0);
@@ -188,6 +173,7 @@ describe("token system", () => {
         tokens.zScrim,
         tokens.zToast,
         tokens.zTooltip,
+        tokens.zWindow,
       ];
       for (let i = 1; i < layers.length; i++) {
         expect(
@@ -253,12 +239,30 @@ describe("token system", () => {
     });
   });
 
-  describe("injectCssTokens idempotency", () => {
+  describe("applyTheme idempotency", () => {
     it("calling twice produces the same values", () => {
       const before = document.documentElement.style.getPropertyValue("--accent-blue");
-      injectCssTokens();
+      applyTheme();
       const after = document.documentElement.style.getPropertyValue("--accent-blue");
       expect(after).toBe(before);
+    });
+  });
+
+  describe("theme structure", () => {
+    it("both themes define identical key sets", () => {
+      const names = Object.keys(THEMES) as (keyof typeof THEMES)[];
+      expect(names.length).toBe(2);
+      const keySets = names.map((n) => Object.keys(THEMES[n]).sort().join(","));
+      expect(keySets[0]).toBe(keySets[1]);
+    });
+
+    it("theme color strings are 6-digit hex (withAlpha and Three.js parse them)", () => {
+      for (const [themeName, theme] of Object.entries(THEMES)) {
+        for (const [key, value] of Object.entries(theme)) {
+          if (typeof value !== "string" || !value.startsWith("#")) continue;
+          expect(value, `${themeName}.${key}`).toMatch(/^#[0-9a-fA-F]{6}$/);
+        }
+      }
     });
   });
 });

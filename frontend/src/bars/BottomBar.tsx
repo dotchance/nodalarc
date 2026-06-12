@@ -23,18 +23,18 @@ export function BottomBar({ snapshot, connected, historicalMode, logPanelOpen, o
 
   const convColor =
     convergence === "converged"
-      ? "var(--ws-connected)"
+      ? "var(--status-ok)"
       : convergence === "converging" || convergence === "stabilizing"
-        ? "var(--ws-reconnecting)"
+        ? "var(--status-warn)"
         : convergence === "degraded"
-          ? "var(--ws-disconnected)"
+          ? "var(--status-fail)"
           : "var(--text-secondary)";
 
   const wsColor = historicalMode
-    ? "var(--ws-reconnecting)"
+    ? "var(--status-warn)"
     : connected
-      ? "var(--ws-connected)"
-      : "var(--ws-disconnected)";
+      ? "var(--status-ok)"
+      : "var(--status-fail)";
   const wsLabel = historicalMode
     ? "Historical"
     : connected

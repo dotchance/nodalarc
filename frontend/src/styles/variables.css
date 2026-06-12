@@ -1,4 +1,5 @@
-/* Design tokens are injected by tokens.ts via injectCssTokens()
+/* Design tokens are injected by tokens.ts via applyTheme()
    which runs synchronously before React createRoot().
    This file is kept as an import target but defines no values —
-   tokens.ts is the single source of truth. */
+   tokens.ts is the single source of truth (two themes: Mission
+   Light default, NOC Dark; switching stores + reloads). */

@@ -93,7 +93,7 @@ function ActuationNoticeButton({ notices, dirty }: { notices: ActuationNotice[];
         aria-expanded={open}
         aria-label={`${label}; show details`}
         style={{
-          color: dirty ? "var(--ws-disconnected)" : "var(--ws-reconnecting)",
+          color: dirty ? "var(--status-fail)" : "var(--status-warn)",
           fontWeight: 600,
           background: "transparent",
           border: "1px solid currentColor",
@@ -198,10 +198,10 @@ export function TopBar({ snapshot, historicalMode, onToggleHistorical, activeSes
   const actuationDirty = actuationNotices.some((n) => n.actuation_state === "kernel_dirty");
   const healthColor =
     healthStatus === "converged"
-      ? "var(--ws-connected)"
+      ? "var(--status-ok)"
       : healthStatus === "converging"
-        ? "var(--ws-reconnecting)"
-        : "var(--ws-disconnected)";
+        ? "var(--status-warn)"
+        : "var(--status-fail)";
 
   return (
     <div
@@ -293,7 +293,7 @@ export function TopBar({ snapshot, historicalMode, onToggleHistorical, activeSes
             padding: "2px 8px",
             borderRadius: 4,
             border: "1px solid var(--border)",
-            background: playbackPaused ? "var(--ws-reconnecting)" : "transparent",
+            background: playbackPaused ? "var(--status-warn)" : "transparent",
             color: "var(--text-secondary)",
             fontSize: 11,
             cursor: playbackLoading ? "wait" : "pointer",
@@ -328,7 +328,7 @@ export function TopBar({ snapshot, historicalMode, onToggleHistorical, activeSes
           <span
             style={{
               fontSize: 11,
-              color: "var(--ws-reconnecting)",
+              color: "var(--status-warn)",
               whiteSpace: "nowrap",
             }}
             title={
@@ -364,7 +364,7 @@ export function TopBar({ snapshot, historicalMode, onToggleHistorical, activeSes
             width: 6,
             height: 6,
             borderRadius: "50%",
-            background: historicalMode ? "var(--ws-reconnecting)" : "var(--ws-connected)",
+            background: historicalMode ? "var(--status-warn)" : "var(--status-ok)",
             display: "inline-block",
           }}
         />

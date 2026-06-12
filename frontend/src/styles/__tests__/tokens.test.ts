@@ -125,6 +125,54 @@ describe("token system", () => {
     );
   });
 
+  describe("TSX/TS inline styles only reference variables that are injected", () => {
+    it("every var() reference in source files resolves to an injected property", () => {
+      const thisDir = dirname(fileURLToPath(import.meta.url));
+      const srcDir = resolve(thisDir, "..", "..");
+
+      const style = document.documentElement.style;
+      const injectedVars = new Set<string>();
+      for (let i = 0; i < style.length; i++) {
+        const prop = style.item(i);
+        if (prop) injectedVars.add(prop);
+      }
+
+      const missing: string[] = [];
+      const walk = (dir: string) => {
+        for (const entry of readdirSync(dir, { withFileTypes: true }) as {
+          name: string;
+          isDirectory(): boolean;
+        }[]) {
+          const full = resolve(dir, entry.name);
+          if (entry.isDirectory()) {
+            if (entry.name === "node_modules" || entry.name === "__tests__") continue;
+            walk(full);
+            continue;
+          }
+          if (!entry.name.endsWith(".tsx") && !entry.name.endsWith(".ts")) continue;
+          if (full.endsWith("styles/tokens.ts")) continue; // definition site; comments mention var(--token-name)
+          const content = readFileSync(full, "utf-8") as string;
+          const refs = content.match(/var\(--[\w-]+/g) ?? [];
+          for (const ref of new Set(refs.map((r: string) => r.replace("var(", "")))) {
+            // Custom properties set locally by components (not theme tokens).
+            if (ref === "--panel-width" || ref === "--relation-color" || ref === "--medium-color" || ref === "--state-color") continue;
+            if (!injectedVars.has(ref)) {
+              missing.push(`${full.replace(srcDir, "src")}: var(${ref})`);
+            }
+          }
+        }
+      };
+      walk(srcDir);
+
+      expect(
+        missing,
+        `Source files reference ${missing.length} var() names not injected by applyTheme():\n` +
+          missing.join("\n") +
+          "\nInline var() with no injected value silently renders nothing — the --font-mono failure class.",
+      ).toHaveLength(0);
+    });
+  });
+
   describe("CSS files only reference variables that are injected", () => {
     it("every var() reference in CSS files resolves to an injected property", () => {
       const thisDir = dirname(fileURLToPath(import.meta.url));

@@ -178,7 +178,6 @@ function ActuationNoticeButton({ notices, dirty }: { notices: ActuationNotice[];
 
 interface TopBarProps {
   snapshot: StateSnapshot | null;
-  connected: boolean;
   historicalMode: boolean;
   onToggleHistorical: () => void;
   activeSessionName: string | null;
@@ -193,7 +192,7 @@ interface TopBarProps {
   onSeekToNow: () => void;
 }
 
-export function TopBar({ snapshot, connected: _connected, historicalMode, onToggleHistorical, activeSessionName, switching, onOpenCatalog, playbackPaused, playbackSpeed, playbackLoading, onPlaybackPause, onPlaybackResume, onPlaybackSetSpeed, onSeekToNow }: TopBarProps) {
+export function TopBar({ snapshot, historicalMode, onToggleHistorical, activeSessionName, switching, onOpenCatalog, playbackPaused, playbackSpeed, playbackLoading, onPlaybackPause, onPlaybackResume, onPlaybackSetSpeed, onSeekToNow }: TopBarProps) {
   const healthStatus = snapshot?.network_health.status ?? "unknown";
   const actuationNotices = snapshot?.actuation_notices ?? [];
   const actuationDirty = actuationNotices.some((n) => n.actuation_state === "kernel_dirty");

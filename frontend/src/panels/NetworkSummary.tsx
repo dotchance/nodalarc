@@ -2,15 +2,14 @@
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
 /** Network summary — shown when nothing is selected. */
 
-import type { StateSnapshot, Selection } from "../types";
+import type { StateSnapshot } from "../types";
 import { isGroundLinkState } from "../networkIdentity";
 
 interface NetworkSummaryProps {
   snapshot: StateSnapshot;
-  onSelect: (sel: Selection | null) => void;
 }
 
-export function NetworkSummary({ snapshot, onSelect: _onSelect }: NetworkSummaryProps) {
+export function NetworkSummary({ snapshot }: NetworkSummaryProps) {
   const sats = snapshot.nodes.filter((n) => n.node_type === "satellite");
   const gss = snapshot.nodes.filter((n) => n.node_type === "ground_station");
   const activeLinks = snapshot.links.filter((l) => l.state === "active");

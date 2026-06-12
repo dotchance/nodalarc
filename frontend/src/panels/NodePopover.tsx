@@ -2,9 +2,7 @@
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
 /** Floating popover showing selected node info on the globe view. */
 
-import type { MutableRefObject } from "react";
 import type { StateSnapshot, Selection } from "../types";
-import type { GlobeActions } from "../globe/actions";
 import { isGroundLinkState } from "../networkIdentity";
 
 interface NodePopoverProps {
@@ -12,7 +10,6 @@ interface NodePopoverProps {
   selection: Selection;
   onClose: () => void;
   onOpenCli: () => void;
-  globeActionsRef: MutableRefObject<GlobeActions | null>;
 }
 
 const AREA_COLORS: Record<string, string> = {

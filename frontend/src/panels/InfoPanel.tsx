@@ -67,7 +67,7 @@ export function InfoPanel({
   let detailSection: React.ReactNode;
 
   if (!selection) {
-    detailSection = <NetworkSummary snapshot={snapshot} onSelect={onSelect} />;
+    detailSection = <NetworkSummary snapshot={snapshot} />;
   } else if (selection.type === "satellite") {
     const node = snapshot.nodes.find((n) => n.node_id === selection.id);
     detailSection = node ? (
@@ -78,14 +78,14 @@ export function InfoPanel({
         onSelect={onSelect}
       />
     ) : (
-      <NetworkSummary snapshot={snapshot} onSelect={onSelect} />
+      <NetworkSummary snapshot={snapshot} />
     );
   } else if (selection.type === "ground_station") {
     const node = snapshot.nodes.find((n) => n.node_id === selection.id);
     detailSection = node ? (
       <GroundStationDetail node={node} snapshot={snapshot} onSelect={onSelect} />
     ) : (
-      <NetworkSummary snapshot={snapshot} onSelect={onSelect} />
+      <NetworkSummary snapshot={snapshot} />
     );
   } else if (selection.type === "link") {
     const link = snapshot.links.find(
@@ -94,10 +94,10 @@ export function InfoPanel({
     detailSection = link ? (
       <LinkDetail link={link} snapshot={snapshot} />
     ) : (
-      <NetworkSummary snapshot={snapshot} onSelect={onSelect} />
+      <NetworkSummary snapshot={snapshot} />
     );
   } else {
-    detailSection = <NetworkSummary snapshot={snapshot} onSelect={onSelect} />;
+    detailSection = <NetworkSummary snapshot={snapshot} />;
   }
 
   return (

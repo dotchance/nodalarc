@@ -66,7 +66,6 @@ function renderTopBar(snapshot: StateSnapshot) {
   return render(
     <TopBar
       snapshot={snapshot}
-      connected
       historicalMode={false}
       onToggleHistorical={vi.fn()}
       activeSessionName="demo"

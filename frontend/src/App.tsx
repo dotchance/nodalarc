@@ -297,7 +297,6 @@ function AppInner() {
   const topBarContent = (
     <TopBar
       snapshot={snapshot}
-      connected={connected}
       historicalMode={historicalMode}
       onToggleHistorical={toggleHistorical}
       activeSessionName={activeSessionName}
@@ -450,7 +449,6 @@ function AppInner() {
           selection={selection}
           onClose={clearSelection}
           onOpenCli={() => setCliDrawerOpen(true)}
-          globeActionsRef={globeActionsRef}
         />
       )}
       {cliDrawerOpen && (

@@ -4,6 +4,7 @@
  *  The build hash line is part of the deploy drift-gate workflow — keep it. */
 
 import { WS_URL } from "../config";
+import { formatDuration } from "../translate";
 import { StatusDot } from "../ui/Badge";
 import type { StateSnapshot } from "../types";
 
@@ -19,9 +20,10 @@ export function BottomBar({ snapshot, connected, historicalMode, logPanelOpen, o
   const activeLinks = snapshot?.links.filter((l) => l.state === "active").length ?? 0;
   const totalLinks = snapshot?.links.length ?? 0;
   const nodeCount = snapshot?.nodes.length ?? 0;
-  const flowCount = snapshot?.active_flows.length ?? 0;
   const convergence = snapshot?.network_health.status ?? "unknown";
   const unreachableFlows = snapshot?.network_health.unreachable_flows ?? 0;
+  const lastConvergenceMs = snapshot?.network_health.last_convergence_ms;
+  const convergingSinceMs = snapshot?.network_health.converging_since_ms;
 
   const convClass =
     convergence === "converged"
@@ -40,11 +42,14 @@ export function BottomBar({ snapshot, connected, historicalMode, logPanelOpen, o
     <div className="area-bottombar bottombar">
       <span className="bottombar-stat">Links {activeLinks}/{totalLinks}</span>
       <span className="bottombar-stat">Nodes {nodeCount}</span>
-      <span className={`bottombar-stat ${convClass}`}>
+      <span
+        className={`bottombar-stat ${convClass}`}
+        title={lastConvergenceMs != null ? `Last convergence: ${formatDuration(lastConvergenceMs)}` : undefined}
+      >
         Conv: {convergence}
+        {convergence === "converging" && convergingSinceMs != null ? ` (${formatDuration(convergingSinceMs)})` : ""}
         {convergence === "degraded" && unreachableFlows > 0 ? ` (${unreachableFlows} flows)` : ""}
       </span>
-      <span className="bottombar-stat">Flows {flowCount}</span>
       <div className="bottombar-spring" />
       <span title={WS_URL} className="bottombar-ws">
         <StatusDot tone={wsTone} />

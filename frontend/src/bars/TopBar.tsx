@@ -3,11 +3,11 @@
 /** Top bar — session entry, clocks, status chip strip, playback, mode select. */
 
 import { useEffect, useRef, useState } from "react";
-import { formatTime, formatDuration } from "../translate";
+import { formatTime } from "../translate";
 import { schedulerOpsLabel } from "../explain/reasons";
 import { Icon } from "../ui/icons/Icon";
 import { Button } from "../ui/Button";
-import { StatusDot, type StatusTone } from "../ui/Badge";
+import { StatusDot } from "../ui/Badge";
 import type { ActuationNotice, StateSnapshot } from "../types";
 
 function pairLabel(pair: string[] | undefined): string {
@@ -148,11 +148,8 @@ interface TopBarProps {
 }
 
 export function TopBar({ snapshot, historicalMode, onToggleHistorical, activeSessionName, switching, onOpenCatalog, playbackPaused, playbackSpeed, playbackLoading, onPlaybackPause, onPlaybackResume, onPlaybackSetSpeed, onSeekToNow, onShowHelp }: TopBarProps) {
-  const healthStatus = snapshot?.network_health.status ?? "unknown";
   const actuationNotices = snapshot?.actuation_notices ?? [];
   const actuationDirty = actuationNotices.some((n) => n.actuation_state === "kernel_dirty");
-  const healthTone: StatusTone =
-    healthStatus === "converged" ? "ok" : healthStatus === "converging" ? "warn" : "fail";
 
   return (
     <div className="area-topbar topbar">
@@ -172,23 +169,14 @@ export function TopBar({ snapshot, historicalMode, onToggleHistorical, activeSes
         <span className="topbar-clock-wall">Wall&nbsp;{snapshot ? formatTime(snapshot.wall_time) : "--:--:--"}</span>
       </span>
 
-      <div className="topbar-chips">
-        <span className={`topbar-chip topbar-chip--${healthTone}`} title={`Network: ${healthStatus}`}>
-          <StatusDot tone={healthTone} />
-          {healthStatus}
-          {healthStatus === "converging" && snapshot?.network_health.converging_since_ms != null && (
-            <span className="topbar-chip-extra">({formatDuration(snapshot.network_health.converging_since_ms)})</span>
-          )}
-        </span>
-        {snapshot?.network_health.last_convergence_ms != null && (
-          <span className="topbar-chip" title="Last convergence duration">
-            conv {formatDuration(snapshot.network_health.last_convergence_ms)}
-          </span>
-        )}
-        {actuationNotices.length > 0 && (
+      {/* Convergence/health lives in the bottom bar (owner pick — one home
+          per fact). The actuation chip stays here: kernel truth is a
+          different fact and demands attention. */}
+      {actuationNotices.length > 0 && (
+        <div className="topbar-chips">
           <ActuationNoticeButton notices={actuationNotices} dirty={actuationDirty} />
-        )}
-      </div>
+        </div>
+      )}
 
       <div className="topbar-playback">
         <button

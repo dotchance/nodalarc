@@ -45,6 +45,7 @@ import "./styles/cli-drawer.css";
 import "./styles/popover.css";
 import "./styles/panels.css";
 import "./styles/toolbar.css";
+import "./styles/scene.css";
 import "./styles/topology.css";
 import "./styles/time-controls.css";
 import "./styles/catalog.css";
@@ -102,6 +103,7 @@ function AppInner() {
     viewMode, setViewMode, colorMode, setColorMode,
     showGroundLinks, setShowGroundLinks, showIslLinks, setShowIslLinks,
     showSatPaths, setShowSatPaths, showTrails, setShowTrails,
+    showGroundTracks, setShowGroundTracks,
     globeMode, setGlobeMode, referenceFrame, toggleReferenceFrame, toggleView,
     cliDrawerOpen, setCliDrawerOpen, logPanelOpen, setLogPanelOpen,
     filterOpen, setFilterOpen,
@@ -401,6 +403,7 @@ function AppInner() {
             showIslLinks={showIslLinks}
             showGroundLinks={showGroundLinks}
             showSatPaths={showSatPaths}
+            showGroundTracks={showGroundTracks}
             showTrails={showTrails}
             selection={selection}
             onSelect={select}
@@ -488,6 +491,8 @@ function AppInner() {
               onToggleIslLinks={() => setShowIslLinks((v: boolean) => !v)}
               onToggleGroundLinks={() => setShowGroundLinks((v: boolean) => !v)}
               onToggleSatPaths={() => setShowSatPaths((v: boolean) => !v)}
+              showGroundTracks={showGroundTracks}
+              onToggleGroundTracks={() => setShowGroundTracks((v: boolean) => !v)}
               onSetColorMode={setColorMode}
               visiblePlanes={visiblePlanes}
               onTogglePlane={handleTogglePlane}

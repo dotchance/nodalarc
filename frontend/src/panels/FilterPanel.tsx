@@ -14,10 +14,12 @@ interface FilterPanelProps {
   showIslLinks: boolean;
   showGroundLinks: boolean;
   showSatPaths: boolean;
+  showGroundTracks: boolean;
   colorMode: ColorMode;
   onToggleIslLinks: () => void;
   onToggleGroundLinks: () => void;
   onToggleSatPaths: () => void;
+  onToggleGroundTracks: () => void;
   onSetColorMode: (mode: ColorMode) => void;
   visiblePlanes: Set<number> | null;
   onTogglePlane: (plane: number) => void;
@@ -39,10 +41,12 @@ export function FilterPanel({
   showIslLinks,
   showGroundLinks,
   showSatPaths,
+  showGroundTracks,
   colorMode,
   onToggleIslLinks,
   onToggleGroundLinks,
   onToggleSatPaths,
+  onToggleGroundTracks,
   onSetColorMode,
   visiblePlanes,
   onTogglePlane,
@@ -171,6 +175,10 @@ export function FilterPanel({
         <label className="filter-toggle-item">
           <input className="ui-checkbox" type="checkbox" checked={showSatPaths} onChange={onToggleSatPaths} />
           <span>Orbital Paths</span>
+        </label>
+        <label className="filter-toggle-item">
+          <input className="ui-checkbox" type="checkbox" checked={showGroundTracks} onChange={onToggleGroundTracks} />
+          <span>Ground Tracks</span>
         </label>
       </div>
 

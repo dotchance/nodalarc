@@ -6,8 +6,11 @@
  *   blue-marble: Phong-lit textured sphere (sun directional + ambient), boundaries shown.
  *   day-night:   custom terminator shader (city lights on the night side),
  *                boundaries shown.
- *   political:   both Earth meshes hidden; country boundaries over the scene background.
- * Atmosphere (backside rim glow) is always on; the starfield is inertial (scene root).
+ *   political:   matte depth-writing schematic globe with boundaries on top —
+ *                no photoreal atmosphere; the surface must occlude far-side
+ *                geometry or links/satellites read as visible through the planet.
+ * Atmosphere (backside rim glow) shows in the photoreal modes only; the
+ * starfield is inertial (scene root).
  *
  * The sun directional light lives in the Earth body frame and is positioned from sim_time by
  * the approximate UTC declination/hour-angle model (NOT gmst — that drives the frame
@@ -183,7 +186,7 @@ function SunReference({ simTimeIso }: { simTimeIso: string | null }) {
   return (
     <points ref={pointRef} geometry={geometry} frustumCulled={false}>
       <pointsMaterial
-        color={0xfff1a8}
+        color={tokens.colorSunTint}
         size={8}
         sizeAttenuation={false}
         transparent
@@ -258,7 +261,7 @@ function Boundaries({ radiusRender }: { radiusRender: number }) {
 
   return (
     <lineSegments geometry={geometry ?? undefined} visible={geometry !== null} renderOrder={2}>
-      <lineBasicMaterial color={0x88aacc} transparent opacity={0.55} depthWrite={false} />
+      <lineBasicMaterial color={tokens.colorBoundaries} transparent opacity={0.55} depthWrite={false} />
     </lineSegments>
   );
 }

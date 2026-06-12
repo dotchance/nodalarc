@@ -1,0 +1,58 @@
+/* DOM overlays inside the 3D scene container. These form a scene-local
+   stacking ladder (labels < hud < seek < tooltip) independent of the app
+   chrome z tokens — the viewport is its own stacking context. */
+
+.scene-hud {
+  position: absolute;
+  left: 90px; /* clears the toolbar */
+  top: var(--space-8);
+  z-index: var(--z-scene-hud);
+  padding: var(--space-2) var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-overlay-90);
+  color: var(--text-secondary);
+  font-size: var(--font-size-xs);
+  font-family: var(--font-mono);
+  pointer-events: none;
+  max-width: min(520px, calc(100vw - 180px));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scene-seek-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-scrim-light);
+  pointer-events: none;
+  z-index: var(--z-scene-seek);
+}
+
+.scene-seek-box {
+  color: var(--text-primary);
+  font-size: var(--font-size-xl);
+  font-family: var(--font-ui);
+  padding: var(--space-6) var(--space-12);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--bg-overlay-94);
+}
+
+.scene-tooltip {
+  position: fixed;
+  pointer-events: none;
+  white-space: pre-line;
+  z-index: var(--z-scene-tooltip);
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-md);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  line-height: 1.4;
+  color: var(--text-primary);
+  background: var(--bg-scrim);
+  border: 1px solid var(--border-strong);
+}

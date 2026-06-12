@@ -2,19 +2,19 @@
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
 /** Color utilities for satellite and link rendering. */
 
-import { AREA_COLORS, PLANE_COLORS } from "../config";
+import { AREA_COLORS, PLANE_COLORS, UNKNOWN_TINT } from "../config";
 import type { ColorMode } from "../types";
 
 /** Get hex color for a routing area string. */
 export function areaColor(area: string | null): number {
-  if (!area) return 0xaabbcc;
-  return AREA_COLORS[area] ?? 0xaabbcc;
+  if (!area) return UNKNOWN_TINT;
+  return AREA_COLORS[area] ?? UNKNOWN_TINT;
 }
 
 /** Get hex color for an orbital plane index. */
 export function planeColor(plane: number | null): number {
-  if (plane == null) return 0xaabbcc;
-  return PLANE_COLORS[plane % PLANE_COLORS.length] ?? 0xaabbcc;
+  if (plane == null) return UNKNOWN_TINT;
+  return PLANE_COLORS[plane % PLANE_COLORS.length] ?? UNKNOWN_TINT;
 }
 
 /** Get CSS color string for a routing area. */

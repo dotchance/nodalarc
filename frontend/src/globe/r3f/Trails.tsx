@@ -33,12 +33,13 @@ import * as THREE from "three";
 import { useFrame } from "@react-three/fiber";
 import type { NodeState } from "../../types";
 import { getNodeWorldPosition } from "./positions";
+import { tokens } from "../../styles/tokens";
 
 // --- Trail ring-buffer constants ---
 const TRAIL_LENGTH = 600;
 const SAMPLE_EVERY = 2;
 const MAX_ARC_LENGTH = 1.8;
-const TRAIL_COLOR = new THREE.Color(0x6699dd);
+const TRAIL_COLOR = new THREE.Color(tokens.colorTrail);
 /** Wall-clock frame-delta (s) above which we skip extending trails (backgrounded tab). */
 const MAX_FRAME_DELTA_S = 0.15;
 

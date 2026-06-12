@@ -7,7 +7,7 @@
  * (geoToWorld) along the scene-unit velocity (velocityToScene), with every sample reprojected
  * onto the surface sphere at SURFACE_OFFSET = EARTH_RADIUS_RENDER*1.002 (avoids z-fighting).
  * Each track is one THREE.Line; color is getTrackColor — routing-area AREA_COLORS first, then
- * getPlaneColor, else the legacy fallback 0x4488ff — with a faint LineBasicMaterial
+ * getPlaneColor, else the shared unknown tint — with a faint LineBasicMaterial
  * (opacity 0.15, depthWrite:false).
  *
  * The tracks are Earth-local curves (built from geoToWorld, which is the same body-local frame
@@ -24,7 +24,7 @@
 
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
-import { AREA_COLORS, getPlaneColor } from "../../config";
+import { AREA_COLORS, getPlaneColor, UNKNOWN_TINT } from "../../config";
 import { geoToWorld, velocityToScene } from "../geo";
 import { useBodyFrame } from "./BodyFrame";
 import type { NodeState } from "../../types";
@@ -39,7 +39,7 @@ function getTrackColor(node: NodeState): number {
   if (node.plane != null) {
     return getPlaneColor(node.plane);
   }
-  return 0x4488ff;
+  return UNKNOWN_TINT;
 }
 
 /** Build the +/-10-minute surface-projected track points for one satellite. */

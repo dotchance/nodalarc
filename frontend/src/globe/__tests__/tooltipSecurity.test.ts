@@ -45,7 +45,8 @@ describe("R3F tooltip rendering", () => {
 
     const tip = screen.getByText((content) => content.includes("<script>alert(1)</script>"));
     expect(tip).toBeInstanceOf(HTMLDivElement);
-    expect((tip as HTMLDivElement).style.whiteSpace).toBe("pre-line");
+    // Multi-line rendering moved to the stylesheet: the class carries white-space: pre-line.
+    expect((tip as HTMLDivElement).className).toContain("scene-tooltip");
     expect(tip.textContent).toContain("\n");
     expect(tip.textContent).toContain("<img src=x onerror=alert(1)>");
     expect(tip.querySelector("script")).toBeNull();

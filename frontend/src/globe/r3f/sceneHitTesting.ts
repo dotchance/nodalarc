@@ -24,8 +24,10 @@ export type ScreenPick =
   | { kind: "body"; bodyId: string }
   | null;
 
-const NODE_MIN_HIT_PX = 16;
-const NODE_MAX_HIT_PX = 30;
+// Hit budget tuned in the design lab: forgiving targets for distant
+// MEO/GEO/lunar glyphs without inflating the visuals.
+const NODE_MIN_HIT_PX = 28;
+const NODE_MAX_HIT_PX = 48;
 const NODE_HIT_PADDING_PX = 7;
 const BODY_MIN_HIT_PX = 24;
 const BODY_MAX_EDGE_PADDING_PX = 28;

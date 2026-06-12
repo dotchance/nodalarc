@@ -172,6 +172,10 @@ export const tokens = {
   colorNodeSelected: 0xffffff,
   colorNodeUnknown: 0xaabbcc, // unmapped area/plane fallback tint
   colorBodyPolitical: 0x18202b, // matte schematic globe (political mode)
+  colorTrail: 0x6699dd, // satellite motion-history trails
+  colorFootprint: 0x8edcff, // selected-sat coverage disc (access-relation family)
+  colorBoundaries: 0x88aacc, // country border lines on the globe
+  colorSunTint: 0xfff1a8, // sun reference point
 
   // --- Link colors (Three.js hex). Relation identity: ISL violet, access
   //     light-blue, inter-body warm grey. State stays a separate channel
@@ -249,6 +253,12 @@ export const tokens = {
   zScrim: 200,
   zTooltip: 400,
   zWindow: 500, // floating operational windows (logs, trace) ride above all chrome
+
+  // Scene-local DOM ladder (inside the viewport's own stacking context):
+  // labels (none) < hud < seek overlay < scene tooltip.
+  zSceneHud: 8,
+  zSceneSeek: 10,
+  zSceneTooltip: 20,
 
   // --- Border radii ---
   radiusXs: "2px",
@@ -368,6 +378,9 @@ export function applyTheme(): void {
   s.setProperty("--z-scrim", String(tokens.zScrim));
   s.setProperty("--z-tooltip", String(tokens.zTooltip));
   s.setProperty("--z-window", String(tokens.zWindow));
+  s.setProperty("--z-scene-hud", String(tokens.zSceneHud));
+  s.setProperty("--z-scene-seek", String(tokens.zSceneSeek));
+  s.setProperty("--z-scene-tooltip", String(tokens.zSceneTooltip));
 
   // Border radii
   s.setProperty("--radius-xs", tokens.radiusXs);

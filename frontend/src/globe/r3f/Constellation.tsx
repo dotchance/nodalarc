@@ -16,7 +16,8 @@
 import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { useFrame, type ThreeEvent } from "@react-three/fiber";
-import { SAT_RADIUS, SAT_SEGMENTS, AREA_COLORS, getPlaneColor } from "../../config";
+import { SAT_RADIUS, SAT_SEGMENTS, AREA_COLORS, getPlaneColor, UNKNOWN_TINT } from "../../config";
+import { tokens } from "../../styles/tokens";
 import { geoToWorld } from "../geo";
 import { interpolatedSimTimeMs } from "../../sim/simClock";
 import { isWorkerReady, readPosition, requestPropagate } from "../../sim/workerBridge";
@@ -41,9 +42,9 @@ const _tmpColor = new THREE.Color();
 const _workerPos = { x: 0, y: 0, z: 0 };
 
 function satColor(node: NodeState, mode: ColorMode): number {
-  if (mode === "area" && node.routing_area) return AREA_COLORS[node.routing_area] ?? 0xaabbcc;
+  if (mode === "area" && node.routing_area) return AREA_COLORS[node.routing_area] ?? UNKNOWN_TINT;
   if (mode === "plane" && node.plane != null) return getPlaneColor(node.plane);
-  return 0xccddee;
+  return tokens.colorNodeSatellite;
 }
 
 interface ConstellationProps {

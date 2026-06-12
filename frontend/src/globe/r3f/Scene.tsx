@@ -73,6 +73,7 @@ interface SceneProps {
   showIslLinks: boolean;
   showGroundLinks: boolean;
   showSatPaths: boolean;
+  showGroundTracks: boolean;
   showTrails: boolean;
   selection: Selection | null;
   onSelect: (sel: Selection | null) => void;
@@ -91,6 +92,7 @@ export function Scene({
   showIslLinks,
   showGroundLinks,
   showSatPaths,
+  showGroundTracks,
   showTrails,
   selection,
   onSelect,
@@ -407,7 +409,7 @@ export function Scene({
                 onFocusNode={focusNode}
                 onHover={setHover}
               />
-              <GroundTracks nodes={bodyNodes} enabled={false} />
+              <GroundTracks nodes={bodyNodes} enabled={showGroundTracks} />
               <CoverageFootprint selection={selection} nodes={bodyNodes} />
             </Body>
           );
@@ -428,55 +430,11 @@ export function Scene({
         }}
       />
       <Tooltip hover={hover} />
-      <div
-        style={{
-          position: "absolute",
-          left: 90,
-          top: 14,
-          zIndex: 8,
-          padding: "4px 8px",
-          border: "1px solid rgba(90, 124, 255, 0.35)",
-          borderRadius: 4,
-          background: "rgba(12, 14, 28, 0.72)",
-          color: "#aeb8ff",
-          fontSize: 11,
-          fontFamily: "monospace",
-          pointerEvents: "none",
-          maxWidth: "min(520px, calc(100vw - 180px))",
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-          whiteSpace: "nowrap",
-        }}
-      >
-        Focus: {cameraFocusLabel}
-      </div>
+      <div className="scene-hud">Focus: {cameraFocusLabel}</div>
       {/* Epoch-suspension overlay during a seek (PRD seek protocol) — legacy "Recalculating Epoch". */}
       {seeking && (
-        <div
-          style={{
-            position: "absolute",
-            inset: 0,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            backgroundColor: "rgba(0, 0, 0, 0.6)",
-            pointerEvents: "none",
-            zIndex: 10,
-          }}
-        >
-          <div
-            style={{
-              color: "#fff",
-              fontSize: "1.5rem",
-              fontFamily: "monospace",
-              padding: "1rem 2rem",
-              border: "1px solid rgba(255, 255, 255, 0.3)",
-              borderRadius: "8px",
-              backgroundColor: "rgba(0, 0, 0, 0.7)",
-            }}
-          >
-            Recalculating Epoch...
-          </div>
+        <div className="scene-seek-overlay">
+          <div className="scene-seek-box">Recalculating epoch…</div>
         </div>
       )}
     </div>

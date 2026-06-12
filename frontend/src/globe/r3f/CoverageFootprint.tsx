@@ -7,8 +7,8 @@
  * whose radius = computeConeRadius(MIN_ELEV_DEG=25, satAltKm) — reused verbatim from
  * globe/groundStations.ts so the footprint scale matches the rest of the scene — textured
  * with the exact radial-gradient ShaderMaterial (r = length(vUv-0.5)*2; discard r>0.98;
- * sinElev = sin((1-r)*PI/2); alpha = pow(sinElev, u_falloff)*0.15) tinted FOOTPRINT_COLOR
- * (0xff44aa). u_falloff is the satellite's beam_falloff_exponent (higher → tighter center,
+ * sinElev = sin((1-r)*PI/2); alpha = pow(sinElev, u_falloff)*0.15) tinted FOOTPRINT_COLOR.
+ * u_falloff is the satellite's beam_falloff_exponent (higher → tighter center,
  * e.g. Iridium 3.5; lower → broader, e.g. Starlink 2.0), defaulting to 2.0.
  *
  * Lives inside a <Body> (body-child), so its position is in that body's local frame.
@@ -24,11 +24,12 @@ import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { useFrame } from "@react-three/fiber";
 import { computeConeRadius } from "../groundStations";
+import { tokens } from "../../styles/tokens";
 import { getNodeLocalPosition } from "./positions";
 import { useBodyFrame } from "./BodyFrame";
 import type { NodeState, Selection } from "../../types";
 
-const FOOTPRINT_COLOR = new THREE.Color(0xff44aa);
+const FOOTPRINT_COLOR = new THREE.Color(tokens.colorFootprint);
 const MIN_ELEV_DEG = 25;
 const SEGMENTS = 96;
 const DEFAULT_FALLOFF = 2.0;

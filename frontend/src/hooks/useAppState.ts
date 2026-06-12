@@ -57,6 +57,7 @@ export function useAppState(inputs: AppStateInputs) {
   const [showGroundLinks, setShowGroundLinks] = useState(true);
   const [showIslLinks, setShowIslLinks] = useState(true);
   const [showSatPaths, setShowSatPaths] = useState(false);
+  const [showGroundTracks, setShowGroundTracks] = useState(false);
   const [showTrails, setShowTrails] = useState(true);
   const [globeMode, setGlobeMode] = useState<GlobeMode>("blue-marble");
   const [referenceFrame, setReferenceFrame] = useState<ReferenceFrame>(() => {
@@ -134,7 +135,9 @@ export function useAppState(inputs: AppStateInputs) {
     showIslLinks,
     setShowIslLinks,
     showSatPaths,
+    showGroundTracks,
     setShowSatPaths,
+    setShowGroundTracks,
     showTrails,
     setShowTrails,
     globeMode,

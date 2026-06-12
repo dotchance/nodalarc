@@ -124,8 +124,8 @@ describe("scene screen-space hit testing", () => {
   });
 
   it("keeps hit radii finite and bounded", () => {
-    expect(nodeHitRadiusPx(0)).toBe(16);
-    expect(nodeHitRadiusPx(100)).toBe(30);
+    expect(nodeHitRadiusPx(0)).toBe(28);
+    expect(nodeHitRadiusPx(100)).toBe(48);
     expect(bodyHitRadiusPx(0)).toBe(24);
     expect(bodyHitRadiusPx(100)).toBe(124);
     expect(pointToSegment2D(5, 5, 0, 0, 10, 0)).toBe(5);

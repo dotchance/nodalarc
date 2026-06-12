@@ -27,22 +27,7 @@ export function Tooltip({ hover }: { hover: HoverInfo | null }) {
       ? `${n.node_id}\n${n.isl_count} ISLs, ${n.gnd_count} GND, Area ${n.routing_area ?? "none"}`
       : `${n.node_id}\n${n.lat_deg.toFixed(1)}°, ${n.lon_deg.toFixed(1)}°`;
   return (
-    <div
-      style={{
-        position: "fixed",
-        left: hover.x + 12,
-        top: hover.y - 8,
-        pointerEvents: "none",
-        whiteSpace: "pre-line",
-        zIndex: 20,
-        padding: "4px 8px",
-        borderRadius: 4,
-        font: "11px/1.4 monospace",
-        color: "var(--text-primary, #e0e0e0)",
-        background: "var(--bg-scrim, rgba(13,13,26,0.9))",
-        border: "1px solid rgba(255,255,255,0.15)",
-      }}
-    >
+    <div className="scene-tooltip" style={{ left: hover.x + 12, top: hover.y - 8 }}>
       {text}
     </div>
   );

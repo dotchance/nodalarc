@@ -275,3 +275,22 @@
   font-size: var(--font-size-xxs);
   color: var(--text-dim);
 }
+
+/* --- Primitives section --- */
+
+.fx-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+  margin-bottom: var(--space-6);
+}
+
+.fx-section h3.fx-sub {
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-dim);
+  margin: var(--space-8) 0 var(--space-4);
+}

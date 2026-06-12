@@ -14,11 +14,18 @@
  *    fact produces them yet, so they appear here and nowhere else.
  */
 
-import type { CSSProperties } from "react";
+import { useState, type CSSProperties } from "react";
 import { tokens, THEMES, THEME_STORAGE_KEY, activeThemeName, type ThemeName } from "../styles/tokens";
 import { FAMILIES, FAMILY_TONE } from "../explain/families";
 import { Icon } from "../ui/icons/Icon";
 import { ICON_BODIES, type IconName } from "../ui/icons/lucide";
+import { Button, IconButton } from "../ui/Button";
+import { Badge, StatusDot } from "../ui/Badge";
+import { KeyValueRow, DetailSection } from "../ui/KeyValueRow";
+import { Tabs } from "../ui/Tabs";
+import { FloatingWindow } from "../ui/FloatingWindow";
+import { DataTable, type SortState, type TableColumn } from "../ui/DataTable";
+import "../ui/ui.css";
 import "./fixture.css";
 
 function Swatch({ name, value, label }: { name: string; value: string; label?: string }) {
@@ -65,6 +72,123 @@ function LinkSample({ relation, medium, state }: { relation: string; medium: str
 function setTheme(name: ThemeName) {
   localStorage.setItem(THEME_STORAGE_KEY, name);
   location.reload();
+}
+
+const DEMO_COLUMNS: TableColumn[] = [
+  { key: "time", label: "Time", width: 90, sortable: true },
+  { key: "source", label: "Source", width: 90, sortable: true },
+  { key: "level", label: "Level", width: 70, sortable: true },
+  { key: "message", label: "Message", mono: false },
+];
+
+const DEMO_ROWS = [
+  { id: "1", time: "06:11:04.188", source: "scheduler", level: "warning", message: "earth_luna_bridge export waiting for kernel proof before route injection" },
+  { id: "2", time: "06:11:04.944", source: "ome", level: "info", message: "Selected RF access pair santiago-gw1 to leo-sat-p00s12 elevation=42.8" },
+  { id: "3", time: "06:11:06.275", source: "node_agent", level: "error", message: "Kernel state mismatch after LinkUp: expected netem delay missing" },
+];
+
+function PrimitivesSection() {
+  const [windowOpen, setWindowOpen] = useState(false);
+  const [tab, setTab] = useState("object");
+  const [columns, setColumns] = useState(DEMO_COLUMNS);
+  const [sort, setSort] = useState<SortState | null>(null);
+
+  return (
+    <section className="fx-section">
+      <h2>Primitives</h2>
+
+      <h3 className="fx-sub">Buttons</h3>
+      <div className="fx-row">
+        <Button>Default</Button>
+        <Button variant="primary">Primary</Button>
+        <Button variant="danger">Danger</Button>
+        <Button variant="ghost">Ghost</Button>
+        <Button active>Active</Button>
+        <Button disabled>Disabled</Button>
+        <Button icon="download">With icon</Button>
+        <IconButton icon="search" label="Search" />
+        <IconButton icon="x" label="Close" />
+        <IconButton icon="plus" label="Larger" active />
+      </div>
+
+      <h3 className="fx-sub">Status dots + badges</h3>
+      <div className="fx-row">
+        <StatusDot tone="ok" title="ok" />
+        <StatusDot tone="warn" title="warn" />
+        <StatusDot tone="fail" title="fail" />
+        <StatusDot tone="neutral" title="neutral" />
+        <Badge>neutral</Badge>
+        <Badge tone="ok">clean</Badge>
+        <Badge tone="warn">degraded</Badge>
+        <Badge tone="fail">faulted</Badge>
+        <Badge tone="accent">NodalArc</Badge>
+      </div>
+
+      <h3 className="fx-sub">Key-value rows</h3>
+      <div style={{ maxWidth: 420 }}>
+        <DetailSection title="Identity">
+          <KeyValueRow label="segment">leo_access_a</KeyValueRow>
+          <KeyValueRow label="loopback">10.255.0.104/32</KeyValueRow>
+          <KeyValueRow label="adjacency" state="ok">UP</KeyValueRow>
+          <KeyValueRow label="kernel state" state="failed">netem delay missing</KeyValueRow>
+          <KeyValueRow label="max_range_km" state="dead" title="dead knob">40000</KeyValueRow>
+          <KeyValueRow label="notes" state="dim" mono={false}>narrowed by site install</KeyValueRow>
+        </DetailSection>
+      </div>
+
+      <h3 className="fx-sub">Tabs</h3>
+      <Tabs
+        label="Demo tabs"
+        tabs={[
+          { key: "object", label: "Object" },
+          { key: "links", label: "Links" },
+          { key: "routing", label: "Routing" },
+          { key: "cli", label: "leo-a-sat-p00s12", closable: true },
+        ]}
+        active={tab}
+        onSelect={setTab}
+        onClose={() => undefined}
+      />
+
+      <h3 className="fx-sub">Data table (sort, drag-reorder, resize)</h3>
+      <div style={{ height: 140, display: "flex" }}>
+        <DataTable
+          label="Demo table"
+          columns={columns}
+          onColumnsChange={setColumns}
+          rows={DEMO_ROWS}
+          rowKey={(r) => r.id}
+          renderCell={(r, key) => r[key as keyof typeof r]}
+          sort={sort}
+          onSortChange={setSort}
+        />
+      </div>
+
+      <h3 className="fx-sub">Floating window</h3>
+      <div className="fx-row">
+        <Button icon="scroll-text" onClick={() => setWindowOpen(true)}>
+          Open demo window
+        </Button>
+      </div>
+      {windowOpen && (
+        <FloatingWindow
+          title="Demo window"
+          onClose={() => setWindowOpen(false)}
+          initial={{ x: 120, y: 120, w: 520, h: 240 }}
+          headerExtras={
+            <>
+              <IconButton icon="minus" label="Smaller text" />
+              <IconButton icon="plus" label="Larger text" />
+            </>
+          }
+        >
+          <div style={{ padding: "var(--space-6)", color: "var(--text-secondary)" }}>
+            Drag the title bar; resize from any edge or corner; Escape closes when focused.
+          </div>
+        </FloatingWindow>
+      )}
+    </section>
+  );
 }
 
 export function DesignSystemFixture() {
@@ -230,6 +354,8 @@ export function DesignSystemFixture() {
           ))}
         </div>
       </section>
+
+      <PrimitivesSection />
 
       <section className="fx-section">
         <h2>Icons</h2>

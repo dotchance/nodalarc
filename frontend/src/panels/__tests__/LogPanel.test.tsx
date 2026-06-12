@@ -3,7 +3,7 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup } from "@testing-library/react";
 import { LogPanel } from "../LogPanel";
-import type { OpsEvent, RecentEvent } from "../../types";
+import type { OpsEvent } from "../../types";
 
 afterEach(cleanup);
 
@@ -12,9 +12,6 @@ const OPS: OpsEvent[] = [
   { timestamp: "2026-06-12T06:11:06Z", source: "node_agent", level: "error", code: "ACTUATION", message: "kernel state mismatch after LinkUp", session_id: "s1", hostname: "node02" },
 ];
 
-const NET: RecentEvent[] = [
-  { sim_time: "2026-06-12T06:11:05Z", node_id: "ground-gs-x", event_type: "link_up", summary: "gs-x to sat-1 vis_gained" },
-];
 
 function renderPanel() {
   const onClose = vi.fn();
@@ -23,7 +20,6 @@ function renderPanel() {
       events={OPS}
       debugEvents={[]}
       debugSources={[]}
-      recentEvents={NET}
       sendMessage={vi.fn()}
       onClose={onClose}
     />,
@@ -43,13 +39,6 @@ describe("LogPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: "error" }));
     expect(screen.queryByText(/kernel state mismatch/)).toBeNull();
     expect(screen.getByText(/export waiting for kernel proof/)).toBeTruthy();
-  });
-
-  it("events mode shows the network event feed", () => {
-    renderPanel();
-    fireEvent.click(screen.getByRole("button", { name: "Events" }));
-    expect(screen.getByText(/vis_gained/)).toBeTruthy();
-    expect(screen.queryByText(/kernel state mismatch/)).toBeNull();
   });
 
   it("regex search filters and flags invalid patterns", () => {

@@ -100,7 +100,7 @@ export function Toolbar({
     { value: "topology", label: "Topology", icon: "network", shortcut: "Tab" },
   ];
   if (canSplit) viewVariants.push({ value: "split", label: "Split", icon: "columns-2" });
-  viewVariants.push({ value: "dashboard", label: "NOC summary", icon: "layout-dashboard" });
+  viewVariants.push({ value: "dashboard", label: "Dashboard", icon: "layout-dashboard" });
 
   return (
     <div className="toolbar">

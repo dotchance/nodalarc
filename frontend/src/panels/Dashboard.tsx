@@ -1,8 +1,8 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
-// NOC summary view — session health at projection distance: large metrics,
-// convergence state, and live fault rows. Values are neutral; tone appears
-// only where a fact is healthy/degraded/faulted (color-slot law).
+// Dashboard — session health at a glance: large metrics, convergence state,
+// and live fault rows. Values are neutral; tone appears only where a fact is
+// healthy/degraded/faulted (color-slot law).
 
 import { useMemo } from "react";
 import { schedulerOpsLabel } from "../explain/reasons";

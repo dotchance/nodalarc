@@ -1,10 +1,9 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
 /**
- * System Logs window — OpsEvents (and opt-in per-service debug streams) plus
- * an Events mode over the network event feed. Chrome comes from
- * FloatingWindow; the column language from DataTable. Geometry persists per
- * window; '/' focuses the search while the window is open.
+ * System Logs window — OpsEvents and opt-in per-service debug streams.
+ * Chrome comes from FloatingWindow; the column language from DataTable.
+ * Geometry persists per window; '/' focuses the search while it is open.
  */
 
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
@@ -14,13 +13,12 @@ import { IconButton } from "../ui/Button";
 import { Icon } from "../ui/icons/Icon";
 import { setSearchTarget } from "../ui/searchFocus";
 import { formatTime } from "../translate";
-import type { OpsEvent, RecentEvent } from "../types";
+import type { OpsEvent } from "../types";
 
 interface LogPanelProps {
   events: OpsEvent[];
   debugEvents: OpsEvent[];
   debugSources: string[];
-  recentEvents: RecentEvent[];
   sendMessage: (data: Record<string, unknown>) => void;
   onClose: () => void;
 }
@@ -43,15 +41,8 @@ const LOG_COLUMNS: TableColumn[] = [
   { key: "message", label: "message", sortable: true, mono: false },
 ];
 
-const EVENT_COLUMNS: TableColumn[] = [
-  { key: "sim_time", label: "sim time", width: 90, minWidth: 60, sortable: true },
-  { key: "node_id", label: "node", width: 170, minWidth: 80, sortable: true },
-  { key: "event_type", label: "type", width: 110, minWidth: 60, sortable: true },
-  { key: "summary", label: "summary", sortable: true, mono: false },
-];
 
-export function LogPanel({ events, debugEvents, debugSources, recentEvents, sendMessage, onClose }: LogPanelProps) {
-  const [mode, setMode] = useState<"logs" | "events">("logs");
+export function LogPanel({ events, debugEvents, debugSources, sendMessage, onClose }: LogPanelProps) {
   const [paused, setPaused] = useState(false);
   const [pausedEvents, setPausedEvents] = useState<OpsEvent[]>([]);
   const [sort, setSort] = useState<SortState | null>({ key: "timestamp", dir: "desc" });
@@ -65,7 +56,6 @@ export function LogPanel({ events, debugEvents, debugSources, recentEvents, send
   const [fontSize, setFontSize] = useState(11);
   const [clearedAt, setClearedAt] = useState<number | null>(null);
   const [logColumns, setLogColumns] = useState(LOG_COLUMNS);
-  const [eventColumns, setEventColumns] = useState(EVENT_COLUMNS);
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const autoScrollRef = useRef(true);
@@ -82,7 +72,6 @@ export function LogPanel({ events, debugEvents, debugSources, recentEvents, send
         c.width !== undefined ? { ...c, width: Math.max(c.minWidth ?? 40, Math.round(c.width * scale)) } : c,
       );
     setLogColumns(rescale);
-    setEventColumns(rescale);
   }, [fontSize]);
 
   useEffect(() => {
@@ -177,35 +166,17 @@ export function LogPanel({ events, debugEvents, debugSources, recentEvents, send
     return result;
   }, [displayEvents, levelFilter, sourceFilter, searchRegex, sort]);
 
-  const sortedNetworkEvents = useMemo(() => {
-    let result = recentEvents;
-    if (searchRegex) {
-      result = result.filter(
-        (e) => searchRegex.test(e.summary) || searchRegex.test(e.node_id) || searchRegex.test(e.event_type),
-      );
-    }
-    if (sort) {
-      const { key, dir } = sort;
-      result = [...result].sort((a, b) => {
-        const av = a[key as keyof RecentEvent] ?? "";
-        const bv = b[key as keyof RecentEvent] ?? "";
-        const cmp = av < bv ? -1 : av > bv ? 1 : 0;
-        return dir === "asc" ? cmp : -cmp;
-      });
-    }
-    return result;
-  }, [recentEvents, searchRegex, sort]);
 
   // Follow-live auto-scroll: newest-first sorts pin to the top, otherwise the
   // bottom; manual scrolling away suspends following until scrolled back.
-  const newestFirst = sort?.dir === "desc" && (sort.key === "timestamp" || sort.key === "sim_time");
-  const rowCount = mode === "logs" ? sortedLogs.length : sortedNetworkEvents.length;
+  const newestFirst = sort?.dir === "desc" && sort.key === "timestamp";
+  const rowCount = sortedLogs.length;
 
   useEffect(() => {
     const el = scrollRef.current;
     if (!el || !autoScrollRef.current) return;
     el.scrollTop = newestFirst ? 0 : el.scrollHeight;
-  }, [rowCount, newestFirst, mode]);
+  }, [rowCount, newestFirst]);
 
   const handleScroll = useCallback(() => {
     const el = scrollRef.current;
@@ -220,7 +191,7 @@ export function LogPanel({ events, debugEvents, debugSources, recentEvents, send
     if (!el) return;
     el.addEventListener("scroll", handleScroll);
     return () => el.removeEventListener("scroll", handleScroll);
-  }, [handleScroll, mode]);
+  }, [handleScroll]);
 
   const toggleLevel = (level: string) => {
     setLevelFilter((prev) => {
@@ -266,7 +237,7 @@ export function LogPanel({ events, debugEvents, debugSources, recentEvents, send
     [searchRegex],
   );
 
-  const title = mode === "logs" ? `System Logs (${sortedLogs.length})` : `Network Events (${sortedNetworkEvents.length})`;
+  const title = `System Logs (${sortedLogs.length})`;
 
   return (
     <FloatingWindow
@@ -284,18 +255,7 @@ export function LogPanel({ events, debugEvents, debugSources, recentEvents, send
       }
     >
       <div className="log-toolbar">
-        <span className="log-modes">
-          <button className={`log-mode${mode === "logs" ? " log-mode--active" : ""}`} onClick={() => setMode("logs")}>
-            Logs
-          </button>
-          <button className={`log-mode${mode === "events" ? " log-mode--active" : ""}`} onClick={() => setMode("events")}>
-            Events
-          </button>
-        </span>
-        {mode === "logs" && (
-          <>
-            <span className="log-sep" />
-            {LEVELS.map((lvl) => (
+        {LEVELS.map((lvl) => (
               <button
                 key={lvl}
                 onClick={() => toggleLevel(lvl)}
@@ -349,9 +309,7 @@ export function LogPanel({ events, debugEvents, debugSources, recentEvents, send
               {sources.map((s) => (
                 <option key={s} value={s}>{s}</option>
               ))}
-            </select>
-          </>
-        )}
+        </select>
         <span className="log-sep" />
         <input
           ref={setSearchTarget}
@@ -363,25 +321,20 @@ export function LogPanel({ events, debugEvents, debugSources, recentEvents, send
         />
         {!searchValid && <span className="log-invalid">invalid regex</span>}
         <span className="log-spring" />
-        {mode === "logs" && (
-          <>
-            <button className="log-chip" onClick={() => setClearedAt(Date.now())} title="Hide rows older than now">
-              clear
-            </button>
-            <button
-              className={`log-chip${paused ? " log-chip--on log-level--warn" : ""}`}
-              onClick={() => setPaused((p) => !p)}
-              title={paused ? "Resume live feed" : "Pause live feed"}
-            >
-              <Icon name={paused ? "play" : "pause"} size={10} />
-              {paused ? "resume" : "pause"}
-            </button>
-          </>
-        )}
+        <button className="log-chip" onClick={() => setClearedAt(Date.now())} title="Hide rows older than now">
+          clear
+        </button>
+        <button
+          className={`log-chip${paused ? " log-chip--on log-level--warn" : ""}`}
+          onClick={() => setPaused((p) => !p)}
+          title={paused ? "Resume live feed" : "Pause live feed"}
+        >
+          <Icon name={paused ? "play" : "pause"} size={10} />
+          {paused ? "resume" : "pause"}
+        </button>
       </div>
       <div className="log-table" style={{ fontSize }}>
-        {mode === "logs" ? (
-          <DataTable
+        <DataTable
             label="System logs"
             columns={logColumns}
             onColumnsChange={setLogColumns}
@@ -403,23 +356,6 @@ export function LogPanel({ events, debugEvents, debugSources, recentEvents, send
               return highlight(String(e[key as keyof OpsEvent] ?? ""));
             }}
           />
-        ) : (
-          <DataTable
-            label="Network events"
-            columns={eventColumns}
-            onColumnsChange={setEventColumns}
-            rows={sortedNetworkEvents}
-            rowKey={(e) => `${e.sim_time}-${e.node_id}-${e.event_type}-${e.summary}`}
-            sort={sort}
-            onSortChange={setSort}
-            scrollRef={scrollRef}
-            emptyText="No network events"
-            renderCell={(e, key) => {
-              if (key === "sim_time") return formatTime(e.sim_time);
-              return highlight(String(e[key as keyof RecentEvent] ?? ""));
-            }}
-          />
-        )}
       </div>
     </FloatingWindow>
   );

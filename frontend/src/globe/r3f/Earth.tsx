@@ -18,6 +18,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { useFrame, useLoader, useThree } from "@react-three/fiber";
 import type { GlobeMode } from "../../types";
+import { tokens } from "../../styles/tokens";
 import { useBodyFrame } from "./BodyFrame";
 import { EARTH_RADIUS_RENDER } from "./units";
 
@@ -89,9 +90,9 @@ export function sunDirectionForDate(date: Date, target = new THREE.Vector3()): T
     .normalize();
 }
 
-function Atmosphere({ radiusRender }: { radiusRender: number }) {
+function Atmosphere({ radiusRender, visible }: { radiusRender: number; visible: boolean }) {
   return (
-    <mesh>
+    <mesh visible={visible}>
       <sphereGeometry args={[radiusRender * 1.015, 32, 32]} />
       <shaderMaterial
         vertexShader={ATMO_VERT}
@@ -194,8 +195,8 @@ function SunReference({ simTimeIso }: { simTimeIso: string | null }) {
 }
 
 /** Country boundaries: Natural Earth 110m as one LineSegments at
- *  R*1.001, shown in political + day-night modes. Loaded once, async. */
-function Boundaries({ visible, radiusRender }: { visible: boolean; radiusRender: number }) {
+ *  R*1.001, drawn in every globe mode. Loaded once, async. */
+function Boundaries({ radiusRender }: { radiusRender: number }) {
   const [geometry, setGeometry] = useState<THREE.BufferGeometry | null>(null);
 
   useEffect(() => {
@@ -214,7 +215,10 @@ function Boundaries({ visible, radiusRender }: { visible: boolean; radiusRender:
     void (async () => {
       try {
         const resp = await fetch("/ne_110m_countries.geojson");
-        if (!resp.ok) return;
+        if (!resp.ok) {
+          console.error(`country boundaries failed to load: HTTP ${resp.status} — political mode will show no borders`);
+          return;
+        }
         const geojson = await resp.json();
         if (!alive) return;
         const verts: number[] = [];
@@ -242,8 +246,8 @@ function Boundaries({ visible, radiusRender }: { visible: boolean; radiusRender:
         g.setAttribute("position", new THREE.BufferAttribute(new Float32Array(verts), 3));
         ownedGeometry = g;
         setGeometry(g);
-      } catch {
-        /* boundaries are non-essential */
+      } catch (err) {
+        console.error("country boundaries failed to load — political mode will show no borders", err);
       }
     })();
     return () => {
@@ -253,7 +257,7 @@ function Boundaries({ visible, radiusRender }: { visible: boolean; radiusRender:
   }, []);
 
   return (
-    <lineSegments geometry={geometry ?? undefined} visible={visible && geometry !== null} renderOrder={2}>
+    <lineSegments geometry={geometry ?? undefined} visible={geometry !== null} renderOrder={2}>
       <lineBasicMaterial color={0x88aacc} transparent opacity={0.55} depthWrite={false} />
     </lineSegments>
   );
@@ -293,7 +297,7 @@ export function Earth({
 
   const showBlueMarble = globeMode === "blue-marble";
   const showDayNight = globeMode === "day-night";
-  const showBoundaries = globeMode === "blue-marble" || globeMode === "political" || globeMode === "day-night";
+  const showPolitical = globeMode === "political";
   // Earth day-night mode does its own shader lighting; the directional remains for other bodies.
   const sunIntensity = 1.0;
 
@@ -306,8 +310,17 @@ export function Earth({
       <mesh visible={showDayNight} material={dayNightMaterial}>
         <sphereGeometry args={[radiusRender, 64, 64]} />
       </mesh>
-      <Atmosphere radiusRender={radiusRender} />
-      <Boundaries visible={showBoundaries} radiusRender={radiusRender} />
+      {/* Political mode is the schematic view: a matte, depth-writing globe so
+          far-side geometry is truthfully occluded (without a surface, links and
+          satellites behind the planet would read as visible through it), with
+          borders on top and no photoreal atmosphere — the unconditional
+          additive atmosphere shell was what washed this mode out before. */}
+      <mesh visible={showPolitical}>
+        <sphereGeometry args={[radiusRender, 64, 64]} />
+        <meshBasicMaterial color={tokens.colorBodyPolitical} />
+      </mesh>
+      <Atmosphere radiusRender={radiusRender} visible={!showPolitical} />
+      <Boundaries radiusRender={radiusRender} />
       <Sun
         simTimeIso={simTimeIso}
         intensity={sunIntensity}

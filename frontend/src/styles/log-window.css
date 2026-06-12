@@ -12,23 +12,6 @@
   font-family: var(--font-ui);
 }
 
-.log-modes { display: inline-flex; gap: var(--space-1); }
-
-.log-mode {
-  font-family: var(--font-ui);
-  font-size: var(--font-size-xs);
-  color: var(--text-secondary);
-  padding: var(--space-1) var(--space-4);
-  border-radius: var(--radius-sm);
-}
-
-.log-mode:hover { background: var(--bg-panel-hover); color: var(--text-primary); }
-
-.log-mode--active {
-  background: color-mix(in srgb, var(--accent-blue) 16%, var(--bg-panel));
-  color: var(--text-primary);
-}
-
 .log-sep {
   width: 1px;
   height: 14px;

@@ -42,7 +42,7 @@
 }
 
 .detail-value--code {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-family: var(--font-mono);
   font-size: var(--font-size-xs);
 }
 

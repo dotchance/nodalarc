@@ -271,11 +271,11 @@ export function GroundStationDetail({ node, snapshot, onSelect }: GroundStationD
           ) : null}
         </>
       ) : null}
+      {/* Installed terminal capacity is not in the snapshot — show only the
+          measured fact (active ground links), never an invented ratio. */}
       <div className="detail-row">
-        <span className="detail-label">Terminals</span>
-        <span className="detail-value">
-          {terminalCount} OGT ({terminalCount}/{terminalCount} in use)
-        </span>
+        <span className="detail-label">Terminals in use</span>
+        <span className="detail-value">{terminalCount}</span>
       </div>
 
       <h3>Uplinks ({connectedLinks.length})</h3>
@@ -292,7 +292,10 @@ export function GroundStationDetail({ node, snapshot, onSelect }: GroundStationD
               {localIface ? `${localIface}: ` : ""}{peer}
             </span>
             <span className="detail-value">
-              {l.state === "active" ? "UP" : "DOWN"} {l.latency_ms.toFixed(1)}ms
+              <span className={l.state === "active" ? "link-state--up" : "link-state--down"}>
+                {l.state === "active" ? "UP" : "DOWN"}
+              </span>{" "}
+              {l.latency_ms.toFixed(1)}ms
             </span>
           </div>
         );
@@ -310,7 +313,7 @@ export function GroundStationDetail({ node, snapshot, onSelect }: GroundStationD
                 <span className="detail-label">{f.flow_id}</span>
                 <span className="detail-value">
                   {f.src_node} → {f.dst_node}
-                  {trace ? ` (${trace.hops.length} hops, ${trace.hops.length > 1 ? `${(trace.hops.length * 2).toFixed(0)}ms` : ""})` : ""}
+                  {trace ? ` (${trace.hops.length} hops${trace.rtt_ms != null ? `, ${trace.rtt_ms.toFixed(1)}ms` : ""})` : ""}
                   <button
                     className="trace-btn"
                     onClick={() => traceFlow(f.src_node, f.dst_node)}

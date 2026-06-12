@@ -90,7 +90,7 @@ describe("useAppState", () => {
   it("has correct default toggles", () => {
     const { result } = renderHook(() => useAppState(makeInputs()));
     expect(result.current.viewMode).toBe("globe");
-    expect(result.current.colorMode).toBe("area");
+    expect(result.current.colorMode).toBe("regime");
     expect(result.current.showIslLinks).toBe(true);
     expect(result.current.showGroundLinks).toBe(true);
     expect(result.current.showTrails).toBe(true);

@@ -13,6 +13,10 @@ import { CandidateRow } from "../explain/components/CandidateRow";
 import { GroundStationCard } from "../explain/components/GroundStationCard";
 import { PairInspectorView } from "../explain/components/PairInspectorView";
 import { selectionTypeForNodeId } from "../networkIdentity";
+import { Icon } from "../ui/icons/Icon";
+import { TaxonomyChip } from "../ui/Badge";
+import { REGIME_TINT } from "../taxonomy/regime";
+import { tokens } from "../styles/tokens";
 
 interface GroundStationDetailProps {
   node: NodeState;
@@ -179,7 +183,16 @@ export function GroundStationDetail({ node, snapshot, onSelect }: GroundStationD
           ))}
         </div>
       ) : null}
-      <h2>{node.node_id}</h2>
+      <div className="object-head">
+        <span className="object-head-icon"><Icon name="satellite-dish" size={16} /></span>
+        <h2>{node.node_id}</h2>
+        <TaxonomyChip
+          color={node.reference_body === "luna" ? REGIME_TINT.luna.css : tokens.mediumTerrestrial}
+          title="Surface body"
+        >
+          {node.reference_body}
+        </TaxonomyChip>
+      </div>
       {explanation.facts ? (
         <GroundStationCard
           facts={explanation.facts}

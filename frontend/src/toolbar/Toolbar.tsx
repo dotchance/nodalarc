@@ -67,6 +67,7 @@ const GLOBE_MODE_VARIANTS: readonly ToolVariant<GlobeMode>[] = [
 ];
 
 const COLOR_MODE_VARIANTS: readonly ToolVariant<ColorMode>[] = [
+  { value: "regime", label: "Color by regime", icon: "satellite", shortcut: "3" },
   { value: "area", label: "Color by area", icon: "shapes", shortcut: "1" },
   { value: "plane", label: "Color by plane", icon: "layers", shortcut: "2" },
 ];

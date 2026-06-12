@@ -185,13 +185,13 @@ export function FilterPanel({
       <div className="filter-section">
         <h3 className="filter-section-title">Color Mode</h3>
         <div className="filter-color-modes">
-          {(["area", "plane"] as const).map((mode) => (
+          {(["regime", "area", "plane"] as const).map((mode) => (
             <button
               key={mode}
               className={`filter-color-btn ${colorMode === mode ? "filter-color-btn--active" : ""}`}
               onClick={() => onSetColorMode(mode)}
             >
-              {mode === "area" ? "Routing Area" : "Orbital Plane"}
+              {mode === "regime" ? "Orbital Regime" : mode === "area" ? "Routing Area" : "Orbital Plane"}
             </button>
           ))}
         </div>

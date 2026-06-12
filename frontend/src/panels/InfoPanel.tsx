@@ -8,6 +8,7 @@ import { SatelliteDetail } from "./SatelliteDetail";
 import { GroundStationDetail } from "./GroundStationDetail";
 import { LinkDetail } from "./LinkDetail";
 import { TraceDialog } from "./TraceDialog";
+import type { Regime } from "../taxonomy/regime";
 import type { StateSnapshot, Selection, TracedPath } from "../types";
 
 interface InfoPanelProps {
@@ -15,6 +16,7 @@ interface InfoPanelProps {
   selection: Selection | null;
   /** The anchor GS for Selected Pair Mode: when a sat is selected, open straight to its pair. */
   anchorGsId?: string | null;
+  regimeById: ReadonlyMap<string, Regime>;
   onSelect: (sel: Selection | null) => void;
   onTraceResult?: (path: TracedPath | null) => void;
 }
@@ -23,6 +25,7 @@ export function InfoPanel({
   snapshot,
   selection,
   anchorGsId,
+  regimeById,
   onSelect,
   onTraceResult,
 }: InfoPanelProps) {
@@ -45,6 +48,7 @@ export function InfoPanel({
         node={node}
         snapshot={snapshot}
         anchorGsId={anchorGsId}
+        regime={regimeById.get(node.node_id)}
         onSelect={onSelect}
       />
     ) : (

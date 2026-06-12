@@ -4,13 +4,15 @@
 
 import { AREA_COLORS, GS_COLOR, getPlaneColor, UNKNOWN_TINT, hexToCSS } from "../config";
 import { tokens } from "../styles/tokens";
+import { REGIME_TINT, type Regime } from "../taxonomy/regime";
 import type { LayoutNode, AreaBounds } from "./layout";
 import type { ColorMode } from "../types";
 
 const SAT_RADIUS = 8;
 const GS_RADIUS = 10;
 
-function satColor(node: LayoutNode, colorMode: ColorMode): string {
+function satColor(node: LayoutNode, colorMode: ColorMode, regime: Regime | undefined): string {
+  if (colorMode === "regime") return REGIME_TINT[regime ?? "unknown"].css;
   if (colorMode === "plane" && node.plane != null) {
     return hexToCSS(getPlaneColor(node.plane));
   }
@@ -24,9 +26,10 @@ export function drawNode(
   isolated: boolean,
   isABR: boolean,
   colorMode: ColorMode = "area",
+  regime?: Regime,
 ): void {
   const radius = node.type === "ground_station" ? GS_RADIUS : SAT_RADIUS;
-  const color = node.type === "ground_station" ? hexToCSS(GS_COLOR) : satColor(node, colorMode);
+  const color = node.type === "ground_station" ? hexToCSS(GS_COLOR) : satColor(node, colorMode, regime);
 
   ctx.globalAlpha = isolated ? 0.4 : 1.0;
 

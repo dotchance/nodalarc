@@ -53,7 +53,8 @@ export function useAppState(inputs: AppStateInputs) {
 
   // --- View / display toggles ---
   const [viewMode, setViewMode] = useState<ViewMode>("globe");
-  const [colorMode, setColorMode] = useState<ColorMode>("area");
+  // Regime taxonomy is the default visual identity; area/plane are analysis modes.
+  const [colorMode, setColorMode] = useState<ColorMode>("regime");
   const [showGroundLinks, setShowGroundLinks] = useState(true);
   const [showIslLinks, setShowIslLinks] = useState(true);
   const [showSatPaths, setShowSatPaths] = useState(false);

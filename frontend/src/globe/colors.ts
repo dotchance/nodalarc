@@ -3,6 +3,7 @@
 /** Color utilities for satellite and link rendering. */
 
 import { AREA_COLORS, PLANE_COLORS, UNKNOWN_TINT } from "../config";
+import { REGIME_TINT, type Regime } from "../taxonomy/regime";
 import type { ColorMode } from "../types";
 
 /** Get hex color for a routing area string. */
@@ -27,7 +28,14 @@ export function planeCSSColor(plane: number | null): string {
   return `#${planeColor(plane).toString(16).padStart(6, "0")}`;
 }
 
-/** Get color for a node based on current mode. */
-export function nodeColor(area: string | null, plane: number | null, mode: ColorMode): number {
+/** Get color for a node based on current mode. Regime identity comes from
+ *  the authored-orbit classification (taxonomy/regime.ts), never position. */
+export function nodeColor(
+  area: string | null,
+  plane: number | null,
+  mode: ColorMode,
+  regime?: Regime,
+): number {
+  if (mode === "regime") return REGIME_TINT[regime ?? "unknown"].hex;
   return mode === "area" ? areaColor(area) : planeColor(plane);
 }

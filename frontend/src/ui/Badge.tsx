@@ -30,3 +30,14 @@ export function Badge({ tone = "neutral", children, title }: BadgeProps) {
     </span>
   );
 }
+
+/** Taxonomy identity chip (regime, body, medium): a tinted dot + label.
+ *  Taxonomy slot only — never reuse for health/severity (color-slot law). */
+export function TaxonomyChip({ color, children, title }: { color: string; children: ReactNode; title?: string }) {
+  return (
+    <span className="ui-taxchip" title={title}>
+      <span className="ui-taxchip-dot" style={{ background: color }} aria-hidden="true" />
+      {children}
+    </span>
+  );
+}

@@ -5,6 +5,9 @@
 import { useEffect, useState } from "react";
 import { linkEventLabel } from "../explain/linkEvents";
 import { areaCSSColor } from "../globe/colors";
+import { Icon } from "../ui/icons/Icon";
+import { TaxonomyChip } from "../ui/Badge";
+import { REGIME_TINT, type Regime } from "../taxonomy/regime";
 import type { NodeState, StateSnapshot, Selection } from "../types";
 import { fetchGroundDecisions, type GroundDecisionsSnapshot } from "../explain/client";
 import { candidateStatus } from "../explain/derive";
@@ -18,6 +21,8 @@ interface SatelliteDetailProps {
   snapshot: StateSnapshot;
   /** Anchor GS (Selected Pair Mode): when set, the card opens straight to the GS<->sat pair. */
   anchorGsId?: string | null;
+  /** Authored-orbit regime (taxonomy/regime.ts); undefined when unclassified. */
+  regime?: Regime;
   onSelect: (sel: Selection | null) => void;
 }
 
@@ -34,7 +39,8 @@ function linkTypeLabel(linkType: string | null): string {
   }
 }
 
-export function SatelliteDetail({ node, snapshot, anchorGsId, onSelect }: SatelliteDetailProps) {
+export function SatelliteDetail({ node, snapshot, anchorGsId,
+  regime, onSelect }: SatelliteDetailProps) {
   const [inspectedGs, setInspectedGs] = useState<string | null>(null);
   const [decisions, setDecisions] = useState<GroundDecisionsSnapshot | null>(null);
   const [candidateError, setCandidateError] = useState<string | null>(null);
@@ -151,7 +157,15 @@ export function SatelliteDetail({ node, snapshot, anchorGsId, onSelect }: Satell
 
   return (
     <div>
-      <h2>{node.node_id}</h2>
+      <div className="object-head">
+        <span className="object-head-icon"><Icon name="satellite" size={16} /></span>
+        <h2>{node.node_id}</h2>
+        {regime && regime !== "unknown" && (
+          <TaxonomyChip color={REGIME_TINT[regime].css} title="Orbital regime (authored orbit)">
+            {REGIME_TINT[regime].label}
+          </TaxonomyChip>
+        )}
+      </div>
       {satFault ? (
         <div className="detail-row" style={{ alignItems: "center", gap: 8 }}>
           <FamilyBadge family="faulted" />

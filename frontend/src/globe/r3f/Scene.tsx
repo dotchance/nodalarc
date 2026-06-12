@@ -42,6 +42,7 @@ import { Earth, Moon, Starfield } from "./Earth";
 import { Constellation } from "./Constellation";
 import { GroundStations } from "./GroundStation";
 import { GroundTracks } from "./GroundTracks";
+import type { Regime } from "../../taxonomy/regime";
 import { Links } from "./Links";
 import { FlowPaths } from "./FlowPaths";
 import { CoverageFootprint } from "./CoverageFootprint";
@@ -74,6 +75,7 @@ interface SceneProps {
   showGroundLinks: boolean;
   showSatPaths: boolean;
   showGroundTracks: boolean;
+  regimeById: ReadonlyMap<string, Regime>;
   showTrails: boolean;
   selection: Selection | null;
   onSelect: (sel: Selection | null) => void;
@@ -93,6 +95,7 @@ export function Scene({
   showGroundLinks,
   showSatPaths,
   showGroundTracks,
+  regimeById,
   showTrails,
   selection,
   onSelect,
@@ -398,6 +401,7 @@ export function Scene({
                 onTogglePin={togglePin}
                 onHover={setHover}
                 relations={relations}
+                regimeById={regimeById}
               />
               <GroundStations
                 nodes={bodyNodes}

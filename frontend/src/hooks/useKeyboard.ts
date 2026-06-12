@@ -26,6 +26,7 @@ export const KEYBOARD_SHORTCUTS: readonly { keys: string; action: string; group:
   { keys: "'", action: "Toggle ground labels", group: "Display" },
   { keys: "1", action: "Color by routing area", group: "Color modes" },
   { keys: "2", action: "Color by orbital plane", group: "Color modes" },
+  { keys: "3", action: "Color by orbital regime", group: "Color modes" },
   { keys: "]", action: "Toggle detail panel", group: "Panels" },
   { keys: "Q", action: "Toggle filter drawer", group: "Panels" },
   { keys: "`", action: "Toggle CLI drawer", group: "Panels" },
@@ -87,6 +88,9 @@ export function useKeyboard(actions: KeyboardActions): void {
           break;
         case "2":
           actions.onSetColorMode("plane");
+          break;
+        case "3":
+          actions.onSetColorMode("regime");
           break;
         case "Tab":
           e.preventDefault();

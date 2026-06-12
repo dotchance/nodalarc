@@ -24,6 +24,7 @@ import { useSessionSwitcher } from "./hooks/useSessionSwitcher";
 import { usePlayback } from "./hooks/usePlayback";
 import { useAppState } from "./hooks/useAppState";
 import { filterSnapshotForRender, nodeSegmentId } from "./filters/renderSnapshot";
+import { buildRegimeIndex } from "./taxonomy/regime";
 import { selectionTypeForNode } from "./networkIdentity";
 import { SessionWizard } from "./catalog/SessionWizard";
 import { ShortcutHelp } from "./panels/ShortcutHelp";
@@ -298,6 +299,9 @@ function AppInner() {
     return { ...snapshot, traced_paths: [...serverPaths, userTrace] };
   }, [snapshot, userTrace]);
 
+  // Authored-orbit regime per node (static per ephemeris epoch).
+  const regimeById = useMemo(() => buildRegimeIndex(ephemeris), [ephemeris]);
+
   const renderedSnapshot = useMemo(
     () => filterSnapshotForRender(augmentedSnapshot, visibleSegments, visiblePlanes),
     [augmentedSnapshot, visibleSegments, visiblePlanes],
@@ -405,6 +409,7 @@ function AppInner() {
             showSatPaths={showSatPaths}
             showGroundTracks={showGroundTracks}
             showTrails={showTrails}
+            regimeById={regimeById}
             selection={selection}
             onSelect={select}
             actionsRef={globeActionsRef}
@@ -416,6 +421,7 @@ function AppInner() {
         style={{ display: (viewMode === "globe" || viewMode === "dashboard") ? "none" : undefined }}
       >
         <TopologyView
+          regimeById={regimeById}
           snapshot={renderedSnapshot}
           selection={selection}
           onSelect={select}
@@ -458,6 +464,7 @@ function AppInner() {
         <NodePopover
           snapshot={snapshot}
           selection={selection}
+          regime={regimeById.get(selection.id)}
           onClose={clearSelection}
           onOpenCli={() => setCliDrawerOpen(true)}
         />
@@ -515,6 +522,7 @@ function AppInner() {
       snapshot={augmentedSnapshot}
       selection={selection}
       anchorGsId={anchorGsId}
+      regimeById={regimeById}
       onSelect={select}
       onTraceResult={setUserTrace}
     />

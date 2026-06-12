@@ -9,6 +9,7 @@ import { drawLinks, hitTestLink } from "./topoLinks";
 import { setupInteraction, type ViewTransform } from "./interaction";
 import { FAIL_HOLD_MS, FAIL_FADE_MS, LINK_FLOW_COLOR, hexToCSS } from "../config";
 import { tokens } from "../styles/tokens";
+import type { Regime } from "../taxonomy/regime";
 import type { StateSnapshot, Selection, LinkState, ColorMode } from "../types";
 
 /** Recently-removed link kept for fail-flash animation. */
@@ -18,6 +19,7 @@ interface FailedLink {
 }
 
 interface TopologyViewProps {
+  regimeById: ReadonlyMap<string, Regime>;
   snapshot: StateSnapshot | null;
   selection: Selection | null;
   onSelect: (sel: Selection | null) => void;
@@ -27,7 +29,8 @@ interface TopologyViewProps {
   showGroundLinks?: boolean;
 }
 
-export function TopologyView({ snapshot, selection, onSelect, onFlyTo, colorMode = "area", showIslLinks = true, showGroundLinks = true }: TopologyViewProps) {
+export function TopologyView({
+  regimeById, snapshot, selection, onSelect, onFlyTo, colorMode = "area", showIslLinks = true, showGroundLinks = true }: TopologyViewProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const transformRef = useRef<ViewTransform>({ offsetX: 0, offsetY: 0, scale: 1 });
   const animFrameRef = useRef<number>(0);
@@ -168,7 +171,7 @@ export function TopologyView({ snapshot, selection, onSelect, onFlyTo, colorMode
     for (const node of layout.nodes) {
       const isSelected = selection?.id === node.id;
       const isIsolated = !connectedNodes.has(node.id);
-      drawNode(ctx, node, isSelected, isIsolated, abrNodes.has(node.id), colorMode);
+      drawNode(ctx, node, isSelected, isIsolated, abrNodes.has(node.id), colorMode, regimeById.get(node.id));
     }
 
     ctx.restore();

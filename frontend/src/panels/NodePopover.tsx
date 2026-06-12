@@ -5,17 +5,21 @@
 import { hexToCSS, AREA_COLORS, UNKNOWN_TINT } from "../config";
 import { Button, IconButton } from "../ui/Button";
 import { KeyValueRow } from "../ui/KeyValueRow";
+import { Icon } from "../ui/icons/Icon";
+import { TaxonomyChip } from "../ui/Badge";
+import { REGIME_TINT, type Regime } from "../taxonomy/regime";
 import type { StateSnapshot, Selection } from "../types";
 import { isGroundLinkState } from "../networkIdentity";
 
 interface NodePopoverProps {
   snapshot: StateSnapshot | null;
   selection: Selection;
+  regime?: Regime;
   onClose: () => void;
   onOpenCli: () => void;
 }
 
-export function NodePopover({ snapshot, selection, onClose, onOpenCli }: NodePopoverProps) {
+export function NodePopover({ snapshot, selection, regime, onClose, onOpenCli }: NodePopoverProps) {
   const node = snapshot?.nodes.find((n) => n.node_id === selection.id) ?? null;
 
   const connectedLinks = (node && snapshot) ? snapshot.links.filter(
@@ -47,7 +51,13 @@ export function NodePopover({ snapshot, selection, onClose, onOpenCli }: NodePop
   return (
     <div className="node-popover">
       <div className="node-popover-head">
+        <span className="object-head-icon">
+          <Icon name={node?.node_type === "ground_station" ? "satellite-dish" : "satellite"} size={14} />
+        </span>
         <span className="node-popover-title">{node?.node_id ?? selection.id}</span>
+        {regime && regime !== "unknown" && (
+          <TaxonomyChip color={REGIME_TINT[regime].css}>{REGIME_TINT[regime].label}</TaxonomyChip>
+        )}
         <IconButton icon="x" label="Close" onClick={onClose} />
       </div>
       {node ? (

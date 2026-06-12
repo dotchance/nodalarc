@@ -18,6 +18,7 @@ import * as THREE from "three";
 import { useFrame, type ThreeEvent } from "@react-three/fiber";
 import { SAT_RADIUS, SAT_SEGMENTS, AREA_COLORS, getPlaneColor, UNKNOWN_TINT } from "../../config";
 import { tokens } from "../../styles/tokens";
+import { REGIME_TINT, type Regime } from "../../taxonomy/regime";
 import { geoToWorld } from "../geo";
 import { interpolatedSimTimeMs } from "../../sim/simClock";
 import { isWorkerReady, readPosition, requestPropagate } from "../../sim/workerBridge";
@@ -41,7 +42,8 @@ const _tmpMatrix = new THREE.Matrix4();
 const _tmpColor = new THREE.Color();
 const _workerPos = { x: 0, y: 0, z: 0 };
 
-function satColor(node: NodeState, mode: ColorMode): number {
+function satColor(node: NodeState, mode: ColorMode, regime: Regime | undefined): number {
+  if (mode === "regime") return REGIME_TINT[regime ?? "unknown"].hex;
   if (mode === "area" && node.routing_area) return AREA_COLORS[node.routing_area] ?? UNKNOWN_TINT;
   if (mode === "plane" && node.plane != null) return getPlaneColor(node.plane);
   return tokens.colorNodeSatellite;
@@ -59,6 +61,8 @@ interface ConstellationProps {
   onHover: (info: HoverInfo | null) => void;
   /** On-select bloom: per-sat relation to the selected GS (family tone). null = no GS selected. */
   relations: Map<string, SatRelation> | null;
+  /** Authored-orbit regime per node id (taxonomy/regime.ts), derived in App. */
+  regimeById: ReadonlyMap<string, Regime>;
 }
 
 export function Constellation({
@@ -70,6 +74,7 @@ export function Constellation({
   onTogglePin,
   onHover,
   relations,
+  regimeById,
 }: ConstellationProps) {
   const meshRef = useRef<THREE.InstancedMesh>(null);
   const satIndex = useRef(new Map<string, number>());
@@ -134,9 +139,9 @@ export function Constellation({
       if (relations) {
         const r = relations.get(node.node_id);
         if (r) _tmpColor.setHex(FAMILY_TONE[r.family].hex);
-        else _tmpColor.setHex(satColor(node, colorMode)).multiplyScalar(0.28);
+        else _tmpColor.setHex(satColor(node, colorMode, regimeById.get(node.node_id))).multiplyScalar(0.28);
       } else {
-        _tmpColor.setHex(satColor(node, colorMode));
+        _tmpColor.setHex(satColor(node, colorMode, regimeById.get(node.node_id)));
       }
       mesh.setColorAt(idx, _tmpColor);
     }
@@ -161,7 +166,7 @@ export function Constellation({
     // sphere and the raycast skips all instances — sat clicks go dead until
     // a reload. Null it so the next raycast recomputes from live matrices.
     mesh.boundingSphere = null;
-  }, [nodes, colorMode, relations, bodyId, bodyFrame.radiusRender, bodyFrame.kmPerRenderUnit]);
+  }, [nodes, colorMode, relations, regimeById, bodyId, bodyFrame.radiusRender, bodyFrame.kmPerRenderUnit]);
 
   // Per-frame propagation from the latest ephemeris and sim clock.
   useFrame(() => {

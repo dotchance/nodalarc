@@ -437,7 +437,6 @@
   width: 260px;
   max-width: 80vw;
   background: var(--bg-overlay-96);
-  backdrop-filter: blur(4px);
   border-right: 1px solid var(--border);
   overflow-y: auto;
 }
@@ -487,3 +486,63 @@
   border-top: 1px solid var(--border);
   padding-top: var(--space-3);
 }
+
+/* Trace path: status/taxonomy slots instead of inline hexes. */
+.trace-button--stop {
+  border: 1px solid color-mix(in srgb, var(--status-fail) 55%, var(--border));
+  background: color-mix(in srgb, var(--status-fail) 14%, var(--bg-panel));
+  color: var(--status-fail);
+}
+
+.trace-error {
+  margin-top: var(--space-3);
+  font-size: var(--font-size-xs);
+  color: var(--status-fail);
+}
+
+.trace-live {
+  font-size: 9px;
+  font-weight: var(--font-weight-bold);
+  color: var(--status-ok);
+  background: color-mix(in srgb, var(--status-ok) 18%, var(--bg-panel));
+  border-radius: var(--radius-xs);
+  padding: 1px var(--space-3);
+}
+
+.trace-warn {
+  font-size: var(--font-size-xxs);
+  color: var(--status-warn);
+  margin-bottom: var(--space-2);
+}
+
+.trace-warn--block {
+  margin-top: var(--space-4);
+  font-size: var(--font-size-xs);
+}
+
+.trace-countdown {
+  font-size: var(--font-size-xs);
+  color: var(--accent-blue);
+  font-weight: var(--font-weight-semibold);
+  margin-bottom: var(--space-3);
+}
+
+.trace-hops {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xxs);
+  line-height: 1.8;
+  background: var(--bg-main);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-3) var(--space-4);
+}
+
+.trace-hop-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Hop endpoint class colors agree with the scene node palette. */
+.trace-hop-name--ground { color: var(--accent-teal); }
+.trace-hop-name--sat { color: var(--accent-orange); }

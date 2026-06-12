@@ -170,6 +170,7 @@ export const tokens = {
   colorNodeSatellite: 0xccddee,
   colorNodeGs: 0x7ed4df,
   colorNodeSelected: 0xffffff,
+  colorNodeUnknown: 0xaabbcc, // unmapped area/plane fallback tint
 
   // --- Link colors (Three.js hex). Relation identity: ISL violet, access
   //     light-blue, inter-body warm grey. State stays a separate channel

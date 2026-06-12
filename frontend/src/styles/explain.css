@@ -245,7 +245,7 @@
   display: inline-flex;
   width: fit-content;
   overflow: hidden;
-  border: 1px solid rgba(255, 255, 255, 0.16);
+  border: 1px solid var(--border-strong);
   border-radius: 6px;
 }
 
@@ -254,7 +254,7 @@
   height: 24px;
   padding: 0 8px;
   border: 0;
-  border-right: 1px solid rgba(255, 255, 255, 0.12);
+  border-right: 1px solid var(--border);
   background: transparent;
   color: var(--text-dim);
   font: inherit;
@@ -267,7 +267,7 @@
 }
 
 .observed-diagnosis__window--active {
-  background: rgba(255, 255, 255, 0.14);
+  background: color-mix(in srgb, var(--text-primary) 14%, transparent);
   color: var(--text-primary);
 }
 
@@ -279,7 +279,7 @@
   height: 20px;
   overflow: hidden;
   border-radius: 4px;
-  background: rgba(255, 255, 255, 0.08);
+  background: color-mix(in srgb, var(--text-primary) 8%, transparent);
 }
 
 .observed-diagnosis__sample {

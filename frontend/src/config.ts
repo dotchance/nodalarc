@@ -175,9 +175,17 @@ export const AREA_COLORS: Record<string, number> = {
 /** Plane colors */
 export const PLANE_COLORS: readonly number[] = tokens.planeColors;
 
+/** Unmapped area/plane fallback tint — one source for scene + panels. */
+export const UNKNOWN_TINT = tokens.colorNodeUnknown;
+
+/** Three.js hex number → CSS color string. */
+export function hexToCSS(hex: number): string {
+  return "#" + hex.toString(16).padStart(6, "0");
+}
+
 /** Get plane color with lightness reduction for planes beyond the base palette. */
 export function getPlaneColor(plane: number): number {
-  const base = PLANE_COLORS[plane % PLANE_COLORS.length] ?? 0xaabbcc;
+  const base = PLANE_COLORS[plane % PLANE_COLORS.length] ?? UNKNOWN_TINT;
   const cycle = Math.floor(plane / PLANE_COLORS.length);
   if (cycle === 0) return base;
   const factor = Math.max(0.25, 1 - cycle * 0.25);

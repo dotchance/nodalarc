@@ -119,20 +119,20 @@ export function TraceDialog({ nodes, selectedNodeId, onTraceResult, snapshot }: 
             {loading ? "Starting..." : "Trace"}
           </button>
         ) : (
-          <button className="trace-button" onClick={handleStop} style={{ background: "#4a1010", color: "#ff5555" }}>
+          <button className="trace-button trace-button--stop" onClick={handleStop}>
             Stop Trace
           </button>
         )}
       </div>
 
-      {error && <div style={{ marginTop: 6, fontSize: 11, color: "#ff5555" }}>{error}</div>}
+      {error && <div className="trace-error">{error}</div>}
 
       {/* Live trace results */}
       {continuous && tp && (
         <div style={{ marginTop: 8 }}>
           {/* Summary line */}
           <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
-            <span style={{ fontSize: 9, fontWeight: 700, color: "#44cc66", background: "#004400", borderRadius: 2, padding: "1px 5px" }}>LIVE</span>
+            <span className="trace-live">LIVE</span>
             <span style={{ fontSize: 11, color: "var(--text-primary)", fontWeight: 600 }}>
               {tp.hops.length} hops
               {tp.rtt_ms != null && ` · ${tp.rtt_ms.toFixed(1)}ms fwd`}
@@ -142,11 +142,11 @@ export function TraceDialog({ nodes, selectedNodeId, onTraceResult, snapshot }: 
           </div>
 
           {tp.asymmetry_detected && (
-            <div style={{ fontSize: 10, color: "#f5a623", marginBottom: 4 }}>Path asymmetry detected</div>
+            <div className="trace-warn">Path asymmetry detected</div>
           )}
 
           {countdown !== null && (
-            <div style={{ fontSize: 11, color: "#5ba3d9", fontWeight: 600, marginBottom: 6 }}>{countdown}</div>
+            <div className="trace-countdown">{countdown}</div>
           )}
 
           {/* Side-by-side forward + reverse */}
@@ -177,7 +177,7 @@ export function TraceDialog({ nodes, selectedNodeId, onTraceResult, snapshot }: 
         if (srcLinks.length === 0) issues.push(`${src} has no active links`);
         if (dstLinks.length === 0) issues.push(`${dst} has no active links`);
         return (
-          <div style={{ marginTop: 8, fontSize: 11, color: "#f5a623" }}>
+          <div className="trace-warn trace-warn--block">
             {issues.length > 0
               ? `Waiting for connectivity — ${issues.join(", ")}`
               : "Waiting for route convergence..."}
@@ -199,10 +199,7 @@ function HopList({
   nodesById: ReadonlyMap<string, NodeState>;
 }) {
   return (
-    <div style={{
-      fontFamily: "JetBrains Mono, monospace", fontSize: 10, lineHeight: 1.8,
-      background: "rgba(0,0,0,0.25)", borderRadius: 4, padding: "6px 8px",
-    }}>
+    <div className="trace-hops">
       {hops.map((hop, i) => {
         const node = nodesById.get(hop);
         const isGS = node ? isGroundNode(node) : false;
@@ -214,7 +211,7 @@ function HopList({
         return (
           <div key={i} style={{ display: "flex", gap: 6, alignItems: "baseline" }}>
             <span style={{ color: "var(--text-dim)", width: 16, textAlign: "right", flexShrink: 0 }}>{i + 1}</span>
-            <span style={{ color: isGS ? "#00d4aa" : "#ff8800", flex: 1 }}>{hop}</span>
+            <span className={`trace-hop-name ${isGS ? "trace-hop-name--ground" : "trace-hop-name--sat"}`}>{hop}</span>
             {delta != null && delta > 0 && (
               <span style={{ color: "var(--text-secondary)", fontSize: 9, flexShrink: 0 }}>
                 {delta.toFixed(1)}ms

@@ -103,7 +103,7 @@ export function FilterPanel({
                 <div key={segment.id} className="filter-segment-item">
                   <label className="filter-segment-toggle">
                     <input
-                      type="checkbox"
+                      className="ui-checkbox" type="checkbox"
                       checked={isVisible}
                       onChange={() => onToggleSegment(segment.id)}
                     />
@@ -143,7 +143,7 @@ export function FilterPanel({
             return (
               <label key={plane} className="filter-plane-item">
                 <input
-                  type="checkbox"
+                  className="ui-checkbox" type="checkbox"
                   checked={isVisible}
                   onChange={() => onTogglePlane(plane)}
                 />
@@ -161,15 +161,15 @@ export function FilterPanel({
       <div className="filter-section">
         <h3 className="filter-section-title">Overlays</h3>
         <label className="filter-toggle-item">
-          <input type="checkbox" checked={showIslLinks} onChange={onToggleIslLinks} />
+          <input className="ui-checkbox" type="checkbox" checked={showIslLinks} onChange={onToggleIslLinks} />
           <span>ISL Links</span>
         </label>
         <label className="filter-toggle-item">
-          <input type="checkbox" checked={showGroundLinks} onChange={onToggleGroundLinks} />
+          <input className="ui-checkbox" type="checkbox" checked={showGroundLinks} onChange={onToggleGroundLinks} />
           <span>Ground Links</span>
         </label>
         <label className="filter-toggle-item">
-          <input type="checkbox" checked={showSatPaths} onChange={onToggleSatPaths} />
+          <input className="ui-checkbox" type="checkbox" checked={showSatPaths} onChange={onToggleSatPaths} />
           <span>Orbital Paths</span>
         </label>
       </div>

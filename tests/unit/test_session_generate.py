@@ -75,6 +75,33 @@ def test_generate_catalog_session_yaml_round_trips_through_resolver() -> None:
     assert resolved.nodes
 
 
+def test_generated_space_segment_is_named_by_orbit_regime() -> None:
+    # Segment id drives runtime node identity ({segment}-{local}): a wizard
+    # LEO session must produce leo-sat-* ids, matching the shipped sessions'
+    # orbit-derived naming, with the rule/pool ids following the segment.
+    cases = {
+        "earth-leo-ring-36": "leo",
+        "earth-meo-gps-24": "meo",
+        "earth-geo-ring-8": "geo",
+        "earth-heo-molniya-3": "heo",
+    }
+    for constellation, expected in cases.items():
+        raw, resolved, _warnings = _generated_session(
+            constellation=constellation,
+            protocol="isis",
+            extensions=[],
+            orbit_propagator="j2_mean_elements",
+        )
+        assert raw["segments"][0]["id"] == expected, constellation
+        assert raw["link_rules"][0]["id"] == f"{expected}_access"
+        assert raw["link_rules"][1]["id"] == f"{expected}_isl"
+        sat_ids = [n.node_id for n in resolved.nodes if n.orbit is not None]
+        assert sat_ids and all(node_id.startswith(f"{expected}-") for node_id in sat_ids), (
+            constellation,
+            sat_ids[:3],
+        )
+
+
 def test_generate_catalog_session_supports_custom_site_set_object() -> None:
     presets = load_constellation_presets()
     site_set_ref = presets["earth-leo-ring-36"].ground_stations

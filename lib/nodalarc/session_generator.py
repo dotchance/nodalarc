@@ -221,6 +221,57 @@ def _default_time() -> dict[str, Any]:
     }
 
 
+# Orbit-regime classification thresholds — keep in lockstep with the frontend
+# mirror (frontend/src/taxonomy/regime.ts). Regime is a property of the
+# authored orbit (a Molniya bird at perigee is still HEO); anything outside
+# the known classes stays unclassified rather than guessed.
+_GEO_ALTITUDE_KM = 35_786.0
+_GEO_BAND_KM = 1_500.0
+_LEO_CEILING_KM = 2_000.0
+_HEO_ECCENTRICITY = 0.25
+
+
+def _orbit_regime(orbit: Any, radius_by_body: dict[str, float]) -> str | None:
+    """Classify one resolved orbit; None when no known class applies."""
+    if orbit.central_body == "luna":
+        return "luna"
+    if orbit.central_body != "earth":
+        return None
+    radius = radius_by_body.get("earth")
+    if radius is None:
+        return None
+    if orbit.eccentricity >= _HEO_ECCENTRICITY:
+        return "heo"
+    altitude_km = orbit.semi_major_axis_km - radius
+    if altitude_km < _LEO_CEILING_KM:
+        return "leo"
+    if altitude_km < _GEO_ALTITUDE_KM - _GEO_BAND_KM:
+        return "meo"
+    if altitude_km <= _GEO_ALTITUDE_KM + _GEO_BAND_KM:
+        return "geo"
+    return None
+
+
+def _space_segment_id(resolved: Any) -> str:
+    """Name the generated space segment after its orbit regime.
+
+    Runtime node ids are {segment}-{local}, so this is what makes a wizard
+    session produce leo-sat-p00s00 instead of space-sat-p00s00 — the same
+    orbit-derived naming the shipped sessions use. A mixed or unclassifiable
+    constellation keeps the neutral id.
+    """
+    radius_by_body = {body.body_id: body.mean_radius_km for body in resolved.bodies}
+    regimes = {
+        _orbit_regime(node.orbit, radius_by_body)
+        for node in resolved.nodes
+        if node.orbit is not None
+    }
+    regimes.discard(None)
+    if len(regimes) == 1:
+        return regimes.pop()
+    return "space"
+
+
 def generate_session_yaml(
     constellation: str,
     protocol: str,
@@ -306,86 +357,89 @@ def generate_session_yaml(
         "bbm_acquire_timeout_ticks": 1,
     }
 
-    session_dict: dict[str, Any] = {
-        "session": {"name": session_name},
-        "segments": [
-            {"id": "space", "source": constellation_value},
-            {
-                "id": "ground",
-                "placement": {"from_site_set": ground_value},
-                "apply": {"scheduling": ground_scheduling},
-            },
-        ],
-        "link_rules": [
-            {
-                "id": "ground_access",
-                "topology": {"mode": "visible_candidates"},
-                "endpoints": [
-                    {
-                        "select": {"segment": "ground"},
-                        "terminal": {"all": [{"role": "access"}, {"medium": "rf"}]},
-                        "min_elevation_deg": 10,
-                    },
-                    {
-                        "select": {"segment": "space"},
-                        "terminal": {"all": [{"role": "access"}, {"medium": "rf"}]},
-                    },
-                ],
-            },
-            {
-                "id": "space_isl",
-                "topology": {"mode": "nearest_n", "n": 1},
-                "endpoints": [
-                    {
-                        "select": {"segment": "space"},
-                        "terminal": {"all": [{"role": "isl"}, {"medium": "optical"}]},
-                    },
-                    {
-                        "select": {"segment": "space"},
-                        "terminal": {"all": [{"role": "isl"}, {"medium": "optical"}]},
-                    },
-                ],
-            },
-        ],
-        "addressing": {
-            "loopbacks": [
+    def _session_dict(space_id: str) -> dict[str, Any]:
+        return {
+            "session": {"name": session_name},
+            "segments": [
+                {"id": space_id, "source": constellation_value},
                 {
-                    "id": "space_loopbacks_v4",
-                    "applies_to": {"segment": "space"},
-                    "ipv4_pool": "10.0.0.0/16",
-                    "prefix_length": 32,
-                    "allocation": "by_node_order",
+                    "id": "ground",
+                    "placement": {"from_site_set": ground_value},
+                    "apply": {"scheduling": ground_scheduling},
+                },
+            ],
+            "link_rules": [
+                {
+                    "id": f"{space_id}_access",
+                    "topology": {"mode": "visible_candidates"},
+                    "endpoints": [
+                        {
+                            "select": {"segment": "ground"},
+                            "terminal": {"all": [{"role": "access"}, {"medium": "rf"}]},
+                            "min_elevation_deg": 10,
+                        },
+                        {
+                            "select": {"segment": space_id},
+                            "terminal": {"all": [{"role": "access"}, {"medium": "rf"}]},
+                        },
+                    ],
                 },
                 {
-                    "id": "space_loopbacks_v6",
-                    "applies_to": {"segment": "space"},
-                    "ipv6_pool": "fd00::/64",
-                    "prefix_length": 128,
-                    "allocation": "by_node_order",
+                    "id": f"{space_id}_isl",
+                    "topology": {"mode": "nearest_n", "n": 1},
+                    "endpoints": [
+                        {
+                            "select": {"segment": space_id},
+                            "terminal": {"all": [{"role": "isl"}, {"medium": "optical"}]},
+                        },
+                        {
+                            "select": {"segment": space_id},
+                            "terminal": {"all": [{"role": "isl"}, {"medium": "optical"}]},
+                        },
+                    ],
                 },
-            ]
-        },
-        "routing": {
-            "domains": [
-                {
-                    "id": "default",
-                    "protocol": protocol,
-                    "selectors": [{"any": [{"segment": "space"}, {"segment": "ground"}]}],
-                    "area_assignment": _area_assignment(area_strategy),
-                    **({"capabilities": capabilities} if capabilities else {}),
-                    **(_timers_block(timers)),
+            ],
+            "addressing": {
+                "loopbacks": [
+                    {
+                        "id": f"{space_id}_loopbacks_v4",
+                        "applies_to": {"segment": space_id},
+                        "ipv4_pool": "10.0.0.0/16",
+                        "prefix_length": 32,
+                        "allocation": "by_node_order",
+                    },
+                    {
+                        "id": f"{space_id}_loopbacks_v6",
+                        "applies_to": {"segment": space_id},
+                        "ipv6_pool": "fd00::/64",
+                        "prefix_length": 128,
+                        "allocation": "by_node_order",
+                    },
+                ]
+            },
+            "routing": {
+                "domains": [
+                    {
+                        "id": "default",
+                        "protocol": protocol,
+                        "selectors": [{"any": [{"segment": space_id}, {"segment": "ground"}]}],
+                        "area_assignment": _area_assignment(area_strategy),
+                        **({"capabilities": capabilities} if capabilities else {}),
+                        **(_timers_block(timers)),
+                    }
+                ]
+            },
+            "simulation": {
+                "candidate_limits": {
+                    "max_pairs_per_rule": 100000,
+                    "max_pairs_per_tick": 100000,
                 }
-            ]
-        },
-        "simulation": {
-            "candidate_limits": {
-                "max_pairs_per_rule": 100000,
-                "max_pairs_per_tick": 100000,
-            }
-        },
-        "time": _default_time(),
-        "dispatch": {"latency_authority": "ome", "max_latency_age_ticks": 3},
-    }
+            },
+            "time": _default_time(),
+            "dispatch": {"latency_authority": "ome", "max_latency_age_ticks": 3},
+        }
+
+    session_dict = _session_dict("space")
     if routing_config:
         raise ValueError(
             "routing_config overrides are retired; use routing.domains[].timers "
@@ -397,6 +451,17 @@ def generate_session_yaml(
         catalog_roots=roots,
         source_context=SourceContext(origin="session_generator"),
     )
+    # Name the space segment after its orbit regime (resolved orbit facts are
+    # the one truth source), then re-resolve the renamed session so the YAML
+    # we return is exactly what was validated.
+    space_id = _space_segment_id(resolved)
+    if space_id != "space":
+        session_dict = _session_dict(space_id)
+        resolved = resolve_session(
+            session_dict,
+            catalog_roots=roots,
+            source_context=SourceContext(origin="session_generator"),
+        )
     # The requested propagator must be what the selected catalog content
     # actually uses — orbit primitives own their propagator, so a divergent
     # wizard choice is an authoring error, never a silent no-op.

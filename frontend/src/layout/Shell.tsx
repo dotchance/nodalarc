@@ -50,6 +50,10 @@ export function Shell({
   onPanelWidthChange,
 }: ShellProps) {
   const panelDraggingRef = useRef(false);
+  // Latest dragged width — the mouseup closure must not capture the stale
+  // render-time prop, or we persist the pre-drag width.
+  const latestWidthRef = useRef(panelWidth);
+  latestWidthRef.current = panelWidth;
 
   const handlePanelResizeStart = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
@@ -57,17 +61,18 @@ export function Shell({
     const onMove = (ev: MouseEvent) => {
       if (!panelDraggingRef.current) return;
       const newWidth = Math.max(280, Math.min(800, window.innerWidth - ev.clientX));
+      latestWidthRef.current = newWidth;
       onPanelWidthChange(newWidth);
     };
     const onUp = () => {
       panelDraggingRef.current = false;
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
-      localStorage.setItem("nodal_panel_width", String(panelWidth));
+      localStorage.setItem("nodal_panel_width", String(latestWidthRef.current));
     };
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
-  }, [onPanelWidthChange, panelWidth]);
+  }, [onPanelWidthChange]);
 
   const layoutClass = `app-layout${panelOpen ? " app-layout--panel-open" : ""}${historicalMode ? " app-layout--historical" : ""}`;
 

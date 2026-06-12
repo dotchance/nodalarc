@@ -24,19 +24,29 @@ interface ToastsProps {
 const TOAST_DURATION_MS = 5000;
 let nextId = 0;
 
+function eventKey(ev: RecentEvent): string {
+  return `${ev.sim_time}|${ev.node_id}|${ev.event_type}|${ev.summary}`;
+}
+
 export function Toasts({ events }: ToastsProps) {
   const [toasts, setToasts] = useState<Toast[]>([]);
-  const lastEventCountRef = useRef(0);
+  // The server feed is a trimmed ring buffer: once it is full its LENGTH stops
+  // changing, so length-delta detection silently drops every later event.
+  // Track the identity of the newest processed event instead.
+  const lastKeyRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!events || events.length === 0) return;
-    if (events.length <= lastEventCountRef.current) {
-      lastEventCountRef.current = events.length;
-      return;
+    let newEvents: RecentEvent[];
+    if (lastKeyRef.current === null) {
+      newEvents = events;
+    } else {
+      const idx = events.map(eventKey).lastIndexOf(lastKeyRef.current);
+      // Not found = the buffer rotated past everything we saw: all rows are new.
+      newEvents = idx >= 0 ? events.slice(idx + 1) : events;
     }
-
-    const newEvents = events.slice(lastEventCountRef.current);
-    lastEventCountRef.current = events.length;
+    lastKeyRef.current = eventKey(events[events.length - 1]!);
+    if (newEvents.length === 0) return;
 
     const newToasts: Toast[] = [];
     for (const ev of newEvents) {

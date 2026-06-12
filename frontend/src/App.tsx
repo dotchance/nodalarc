@@ -511,7 +511,6 @@ function AppInner() {
       selection={selection}
       anchorGsId={anchorGsId}
       onSelect={select}
-      onFlyTo={handleFlyToNode}
       onTraceResult={setUserTrace}
     />
   );

@@ -56,47 +56,7 @@
 
 /* Column widths — shared between header and data rows */
 
-.event-type {
-  font-weight: var(--font-weight-semibold);
-}
-
 /* Event type color classes */
-.event-type--up {
-  color: var(--accent-green);
-}
-
-.event-type--down {
-  color: var(--accent-red);
-}
-
-.event-type--computation {
-  color: var(--accent-amber);
-}
-
-.event-type--info {
-  color: var(--text-dim);
-}
-
-.event-filter-bar {
-  display: flex;
-  gap: var(--space-3);
-  padding: var(--space-3) 0;
-  flex-wrap: wrap;
-}
-
-.filter-toggle {
-  font-size: var(--font-size-xs);
-  padding: var(--space-1) var(--space-4);
-  border-radius: 10px;
-  border: 1px solid var(--border);
-  transition: all var(--transition-fast);
-}
-
-.filter-toggle--active {
-  border-color: var(--accent-blue);
-  color: var(--accent-blue);
-}
-
 .trace-dialog {
   display: flex;
   flex-direction: column;
@@ -181,20 +141,6 @@
 }
 
 /* Draggable panel divider */
-.panel-divider {
-  flex-shrink: 0;
-  height: 5px;
-  cursor: ns-resize;
-  background: var(--border);
-  margin: var(--space-1) 0;
-  border-radius: var(--radius-xs);
-  transition: background var(--transition-fast);
-}
-
-.panel-divider:hover {
-  background: var(--accent-blue);
-}
-
 /* --- Filter panel --- */
 
 .filter-panel {
@@ -481,7 +427,18 @@
   font-weight: 600;
 }
 
-.event-jump-latest {
-  font-size: var(--font-size-xxs);
-  color: var(--accent-blue);
+
+/* Detail scroll + the pinned trace-path slot (replaces the old events split). */
+.info-panel-detail {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.info-panel-trace {
+  flex-shrink: 0;
+  max-height: 45%;
+  overflow-y: auto;
+  border-top: 1px solid var(--border);
+  padding-top: var(--space-3);
 }

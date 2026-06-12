@@ -1,16 +1,15 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
-/** Right panel — switches display based on selection type.
- *  Includes a draggable divider between detail section and event log.
- */
+/** Right panel — selection detail on top, the trace-path tool pinned below.
+ *  The old embedded events list is gone (owner direction: inaccurate
+ *  precursor to the logs); the network event feed lives in the System Logs
+ *  window's Events mode. */
 
-import { useState, useRef, useEffect, useCallback } from "react";
 import { NetworkSummary } from "./NetworkSummary";
 import { SatelliteDetail } from "./SatelliteDetail";
 import { GroundStationDetail } from "./GroundStationDetail";
 import { LinkDetail } from "./LinkDetail";
 import { TraceDialog } from "./TraceDialog";
-import { EventLog } from "./EventLog";
 import type { StateSnapshot, Selection, TracedPath } from "../types";
 
 interface InfoPanelProps {
@@ -19,7 +18,6 @@ interface InfoPanelProps {
   /** The anchor GS for Selected Pair Mode: when a sat is selected, open straight to its pair. */
   anchorGsId?: string | null;
   onSelect: (sel: Selection | null) => void;
-  onFlyTo?: (nodeId: string) => void;
   onTraceResult?: (path: TracedPath | null) => void;
 }
 
@@ -28,34 +26,8 @@ export function InfoPanel({
   selection,
   anchorGsId,
   onSelect,
-  onFlyTo,
   onTraceResult,
 }: InfoPanelProps) {
-  const panelRef = useRef<HTMLDivElement>(null);
-  const [splitPct, setSplitPct] = useState(50); // percentage for detail section
-  const draggingRef = useRef(false);
-
-  const handleDragStart = useCallback((e: React.MouseEvent) => {
-    draggingRef.current = true;
-    e.preventDefault();
-  }, []);
-
-  useEffect(() => {
-    const onMove = (e: MouseEvent) => {
-      if (!draggingRef.current || !panelRef.current) return;
-      const rect = panelRef.current.getBoundingClientRect();
-      const pct = ((e.clientY - rect.top) / rect.height) * 100;
-      setSplitPct(Math.max(15, Math.min(85, pct)));
-    };
-    const onUp = () => { draggingRef.current = false; };
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
-    return () => {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
-    };
-  }, []);
-
   if (!snapshot) {
     return (
       <div className="info-panel">
@@ -101,26 +73,16 @@ export function InfoPanel({
   }
 
   return (
-    <div className="info-panel" ref={panelRef}>
-      <div style={{ flex: `0 0 ${splitPct}%`, overflow: "auto", minHeight: 0 }}>
-        {detailSection}
+    <div className="info-panel">
+      <div className="info-panel-detail">{detailSection}</div>
+      {/* Trace path owns the space the events list used to occupy — it is a
+          primary user tool and gets a stable, always-reachable home. */}
+      <div className="info-panel-trace">
         <TraceDialog
           nodes={snapshot.nodes}
           selectedNodeId={selection?.type !== "link" ? selection?.id ?? null : null}
           onTraceResult={onTraceResult}
           snapshot={snapshot}
-        />
-      </div>
-      <div
-        className="panel-divider"
-        onMouseDown={handleDragStart}
-      />
-      <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column", minHeight: 0 }}>
-        <EventLog
-          events={snapshot.recent_events}
-          nodes={snapshot.nodes}
-          onSelect={onSelect}
-          onFlyTo={onFlyTo}
         />
       </div>
     </div>

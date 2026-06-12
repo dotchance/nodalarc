@@ -255,12 +255,20 @@ export function Scene({
     else if (playbackState?.state === "playing") setSeeking(false);
   }, [playbackState]);
 
-  // Feed the shared EMA clock on each snapshot (drives propagation timing + interpolation).
+  // Feed the shared clock on each snapshot (drives propagation timing +
+  // interpolation). Phase anchors at transport arrival (stamped at WS
+  // decode), not at effect execution — render scheduling jitter must not
+  // enter the clock.
   useEffect(() => {
-    if (snapshot) onSnapshot(snapshot.sim_time, performance.now());
+    if (snapshot)
+      onSnapshot(
+        snapshot.sim_time,
+        snapshot.client_arrival_ms ?? performance.now(),
+        snapshot.playback_achieved ?? snapshot.playback_speed,
+      );
   }, [snapshot]);
 
-  // Freeze/unfreeze the clock on pause (R-OME-008B: d(sim)/d(wall) = 0 when paused).
+  // Freeze/unfreeze the clock on pause; d(sim)/d(wall) is 0 while paused.
   useEffect(() => {
     setPlaybackPaused(playbackPaused);
   }, [playbackPaused]);

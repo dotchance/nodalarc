@@ -202,6 +202,11 @@ def scheduling_checkpoint_subject(session_id: str) -> str:
     return f"nodalarc.session.{session_id}.scheduling_checkpoint"
 
 
+def replay_anchor_subject(session_id: str) -> str:
+    """Bounded-replay anchor subject for a specific session."""
+    return f"nodalarc.session.{session_id}.replay_anchor"
+
+
 def scenario_inject_subject(session_id: str) -> str:
     """Scenario injection subject for a specific session (core NATS request/reply)."""
     return f"nodalarc.scheduler.{session_id}.scenario"
@@ -311,7 +316,7 @@ def ops_subscribe_subject(session_id: str, *, tenant_id: str = "") -> str:
 
 # Request/reply subjects (NATS core, not JetStream)
 # Playback control (pause / resume / set_speed) owned by OME Pacemaker
-# (R-OME-008B). Subject is in ome_control namespace — deliberately outside
+# Subject is in ome_control namespace — deliberately outside
 # the "nodalarc.ome.>" JetStream-captured wildcard so request/reply
 # messages are not stream-retained.
 SUBJECT_PLAYBACK_CONTROL = "nodalarc.ome_control.playback"

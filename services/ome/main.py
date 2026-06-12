@@ -44,7 +44,7 @@ from ome.event_stream import (
 from ome.types import MbbTeardownLifecycleEvent, MbbTeardownState
 
 if TYPE_CHECKING:
-    from ome.event_stream import StepContext, TimelineWindowResult
+    pass
 
 
 class _SessionBundle(NamedTuple):
@@ -227,7 +227,7 @@ def _authority_snapshot_interval_s(
 
 
 # ---------------------------------------------------------------------------
-# Shared playback state (Pacemaker role, R-OME-008B)
+# Shared playback state (Pacemaker role)
 # ---------------------------------------------------------------------------
 # Mutated by the NATS publisher thread (async subscriber callback) and
 # read by the pacing thread each tick.  Python GIL guarantees atomic
@@ -410,106 +410,6 @@ def _start_health_server(port: int = 8081) -> None:
 # ---------------------------------------------------------------------------
 
 
-# ---------------------------------------------------------------------------
-# Look-ahead thread — background precomputation for NodalPath proactive scheduling
-# ---------------------------------------------------------------------------
-
-
-class _LookAheadThread:
-    """Background precomputation of future windows for NodalPath almanac.
-
-    Runs precompute_timeline_window_from_context() in a daemon thread, producing events
-    for the next orbital period. Results are stored for future consumption
-    by NodalPath's proactive scheduling engine. Does NOT emit to the
-    real-time event stream — that's the Pacemaker's job.
-
-    Thread-safe: receives epoch and state via submit(), produces results
-    retrievable via get_result(). Cancel on seek via cancel().
-    """
-
-    def __init__(self) -> None:
-        import threading
-
-        self._thread: threading.Thread | None = None
-        self._result: TimelineWindowResult | None = None
-        self._ready = threading.Event()
-        self._cancelled = threading.Event()
-        self._lock = threading.Lock()
-
-    def submit(
-        self,
-        step_context: StepContext,
-        epoch_unix: float,
-        duration_s: float,
-        initial_isl_state: dict | None,
-        initial_gs_state: dict | None,
-        initial_associations: dict[tuple[str, str], tuple[int, int]] | None = None,
-        initial_pending_teardowns: MbbTeardownState | None = None,
-        timestamp_offset: float = 0.0,
-    ) -> None:
-        """Start background window precomputation. Non-blocking."""
-        import threading
-
-        from ome.event_stream import precompute_timeline_window_from_context
-
-        # Cancel any in-flight computation
-        self.cancel()
-
-        self._ready.clear()
-        self._cancelled.clear()
-        with self._lock:
-            self._result = None
-
-        def _compute():
-            try:
-                result = precompute_timeline_window_from_context(
-                    step_context,
-                    epoch_unix=epoch_unix,
-                    duration_s=duration_s,
-                    initial_isl_state=dict(initial_isl_state) if initial_isl_state else None,
-                    initial_gs_state=dict(initial_gs_state) if initial_gs_state else None,
-                    initial_associations=initial_associations,
-                    initial_pending_teardowns=initial_pending_teardowns,
-                    timestamp_offset=timestamp_offset,
-                    predictive=True,
-                )
-                if not self._cancelled.is_set():
-                    with self._lock:
-                        self._result = result
-                    self._ready.set()
-                    logging.info(
-                        "Look-ahead: window precomputed (%.0fs from epoch %s, %d events)",
-                        duration_s,
-                        datetime.fromtimestamp(epoch_unix, UTC).isoformat(),
-                        len(result.events),
-                    )
-            except Exception:
-                logging.exception("Look-ahead computation failed")
-
-        self._thread = threading.Thread(target=_compute, name="ome-lookahead", daemon=True)
-        self._thread.start()
-
-    def get_result(self, timeout: float | None = None) -> TimelineWindowResult | None:
-        """Block until result ready or timeout. Returns None if cancelled/timeout."""
-        if not self._ready.wait(timeout=timeout):
-            return None
-        with self._lock:
-            return self._result
-
-    def cancel(self) -> None:
-        """Signal cancellation. In-flight thread runs to completion but result is discarded."""
-        self._cancelled.set()
-        if self._thread and self._thread.is_alive():
-            self._thread.join(timeout=0.1)  # don't block, daemon thread dies on exit
-        self._ready.clear()
-        with self._lock:
-            self._result = None
-
-    def is_ready(self) -> bool:
-        """Non-blocking check if result is available."""
-        return self._ready.is_set()
-
-
 async def _nats_publisher_loop(
     event_queue,
     shutdown_event,
@@ -523,7 +423,7 @@ async def _nats_publisher_loop(
     window computation). Handles reconnection transparently via nats-py.
 
     Also subscribes to SUBJECT_PLAYBACK_CONTROL for runtime pause/resume/
-    set_speed commands (R-OME-008B Pacemaker role).  The subscriber callback
+    set_speed commands. The subscriber callback
     mutates module-level _time_accel and _paused; the pacing thread reads
     them each tick.
     """
@@ -538,6 +438,12 @@ async def _nats_publisher_loop(
         SUBJECT_PLAYBACK_CONTROL,
         nats_url,
         playback_state_subject,
+        replay_anchor_subject,
+        scheduling_checkpoint_subject,
+    )
+    from nodalarc.scheduling_checkpoint import (
+        encode_retained_replay_anchor,
+        encode_retained_scheduling_checkpoint,
     )
 
     if not session_id:
@@ -545,6 +451,8 @@ async def _nats_publisher_loop(
         raise ValueError("session_id is required for OME NATS publisher")
 
     _subj_playback = playback_state_subject(session_id)
+    subj_checkpoint_retained = scheduling_checkpoint_subject(session_id)
+    subj_anchor_retained = replay_anchor_subject(session_id)
 
     nc = await nats.connect(nats_url(), **NATS_CONNECT_OPTIONS)
     js = nc.jetstream()
@@ -557,7 +465,7 @@ async def _nats_publisher_loop(
         await js.publish(_subj_playback, ps.model_dump_json().encode())
         logging.debug("PlaybackState published: state=%s epoch_id=%d", state, _epoch_id)
 
-    # --- Playback control subscriber (R-OME-008B Tier 1) ---
+    # --- Playback control subscriber ---
 
     async def _handle_playback(msg) -> None:
         try:
@@ -596,6 +504,25 @@ async def _nats_publisher_loop(
                 break
 
             subject, payload = item
+            if hasattr(payload, "build"):
+                # Deferred wire materialization: the pacer committed the
+                # tick's typed inputs; the conversion to wire models runs
+                # here, in its sleep window. A build failure kills this
+                # loop loudly and the pacer exits on the full queue.
+                payload = payload.build()
+            if not isinstance(payload, (bytes, bytearray)):
+                # Ownership transfer from the pacing thread: frozen wire
+                # models serialize here, in the pacer's sleep window, so
+                # serialization never rides the tick's critical path.
+                # Pacemaker facts (sim/wall stamps, snapshot_seq) were
+                # captured at construction. A serialization failure kills
+                # this loop loudly; the pacer then exits on a full queue.
+                if subject == subj_checkpoint_retained:
+                    payload = encode_retained_scheduling_checkpoint(payload)
+                elif subject == subj_anchor_retained:
+                    payload = encode_retained_replay_anchor(payload)
+                else:
+                    payload = payload.model_dump_json().encode()
             published = False
             for attempt in range(_MAX_RETRIES):
                 try:
@@ -652,13 +579,13 @@ def _run_pacing(
     Uses time.sleep() for precise wall-clock timing.
     Blocks on queue.put() if queue is full (backpressure from publisher).
     """
-    import gzip as _ckpt_gzip
     import json as _json
     import queue
 
     from nodalarc.models.events import (
         CheckpointAssociation,
         ClockTick,
+        HeartbeatTick,
         PlaybackState,
         SchedulingCheckpoint,
         TeardownEntry,
@@ -667,16 +594,22 @@ def _run_pacing(
         ground_link_decision_snapshot_subject,
         link_state_snapshot_subject,
         ome_clock_subject,
+        ome_heartbeat_subject,
         ome_visibility_subject,
         ops_event_subject,
         playback_state_subject,
+        replay_anchor_subject,
         scheduling_checkpoint_subject,
         session_ephemeris_subject,
     )
     from nodalarc.platform_config import get_platform_config
 
-    from ome.event_stream import build_link_state_snapshot, build_session_ephemeris
-    from ome.snapshot_builder import build_link_decision_snapshot
+    from ome.event_stream import build_session_ephemeris
+    from ome.replay_anchor import DeferredReplayAnchor
+    from ome.snapshot_builder import (
+        DeferredLinkDecisionSnapshot,
+        DeferredLinkStateSnapshot,
+    )
 
     def _build_scheduling_checkpoint(
         sim_time: datetime,
@@ -736,6 +669,10 @@ def _run_pacing(
             paused=_paused,
             time_accel=_time_accel,
             written_at=time.time(),
+            # Closure read, like _paused/_time_accel above: the current
+            # epoch anchor (rebound on seek) recorded bit-exactly so
+            # recovery replays from identical float inputs.
+            epoch_unix=epoch_unix,
         )
 
     # Health server is started by main() before _run_pacing is called.
@@ -756,7 +693,6 @@ def _run_pacing(
         cfg = _load_session_config(session_path, run_id=run_id)
     session = cfg.resolved
     session_id = cfg.session_id
-    period = cfg.period
     epoch_unix = resolve_session_epoch(session.time)
     _validate_sgp4_tle_freshness(cfg, epoch_unix)
     compression = session.time.compression if session.time.compression else 1
@@ -772,10 +708,14 @@ def _run_pacing(
     subj_mbb_lifecycle = ops_event_subject(
         session_id, "ome", OmeOpsCode.MBB_TEARDOWN_TERMINAL.value
     )
+    subj_pacing_telemetry = ops_event_subject(session_id, "ome", OmeOpsCode.PACING_TELEMETRY.value)
+    subj_rate_honesty = ops_event_subject(session_id, "ome", "RATE")
+    subj_heartbeat = ome_heartbeat_subject(session_id)
+    subj_replay_anchor = replay_anchor_subject(session_id)
     ome_hostname = os.environ.get("HOSTNAME") or os.uname().nodename
     logging.debug("OME session_id=%s — NATS subjects scoped", session_id)
 
-    # Initialize Pacemaker rate from static compression (R-OME-008B Part 1).
+    # Initialize Pacemaker rate from static compression.
     # Runtime set_speed commands replace this value dynamically.
     global _time_accel, _seek_target, _seeking, _paused, _epoch_id, _initial_epoch_committed
     _time_accel = float(compression)
@@ -797,9 +737,16 @@ def _run_pacing(
         out_dir.mkdir(parents=True, exist_ok=True)
         out_path = out_dir / f"{session.session.name}-timeline.jsonl"
 
-    def _enqueue(subject: str, payload: bytes) -> None:
-        """Put event on queue. If the queue is full after 10 seconds, the
-        NATS publisher is dead — exit the process so K8s restarts us."""
+    def _enqueue(subject: str, payload) -> None:
+        """Put event on queue: pre-encoded bytes OR a frozen wire model.
+
+        Models serialize on the PUBLISHER thread (ownership transfer):
+        the pacing thread stamps Pacemaker facts at construction and
+        hands the immutable model off, so serialization cost rides the
+        pacer's sleep window instead of the tick's critical path.
+
+        If the queue is full after 10 seconds, the NATS publisher is
+        dead — exit the process so K8s restarts us."""
         try:
             event_queue.put((subject, payload), timeout=10)
         except queue.Full:
@@ -872,7 +819,7 @@ def _run_pacing(
             message=details.message,
             details=details.model_dump(mode="json"),
         )
-        _enqueue(subj_mbb_lifecycle, event.model_dump_json().encode())
+        _enqueue(subj_mbb_lifecycle, event)
 
     def _publish_mbb_lifecycle_events(step_result, *, epoch_id: int) -> None:
         for lifecycle_event in step_result.ground_allocation.lifecycle_events:
@@ -955,10 +902,16 @@ def _run_pacing(
             _enqueue_ome_lifecycle_ops_event(details)
 
     # Build StepContext for per-step computation (Physicist role)
-    from collections import deque
-    from statistics import quantiles
-
     from ome.event_stream import build_step_context, compute_step
+    from ome.ground_visibility_engine import DwellPassState
+    from ome.telemetry import (
+        SEG_OUTPUT_FILE,
+        SEG_PUBLISH_AUTHORITY,
+        SEG_PUBLISH_CHECKPOINT,
+        SEG_PUBLISH_EVENTS,
+        SEG_SLEEP,
+        PacingTelemetryWindow,
+    )
 
     effective_ground_scheduling = _effective_ground_scheduling_for_runtime(cfg.ground_scheduling)
 
@@ -981,6 +934,7 @@ def _run_pacing(
     )
 
     step_seconds = int(session.time.step_seconds)
+    anchor_interval_ticks = max(1, int(300 / step_seconds))
     snapshot_interval_s = _authority_snapshot_interval_s(
         platform_snapshot_interval_s=platform_snapshot_interval_s,
         max_latency_age_ticks=session.dispatch.max_latency_age_ticks,
@@ -995,15 +949,9 @@ def _run_pacing(
             session.dispatch.max_latency_age_ticks,
         )
 
-    # Lookahead uses the same StepContext object as the live pacing loop. That
-    # keeps predictive windows on the same propagation, visibility, allocation,
-    # hysteresis, and MBB settings as authoritative ticks.
-    # Precomputes the next orbital period's events concurrently with real-time emission.
-    # Results available for NodalPath almanac consumption.
-    lookahead = _LookAheadThread()
-    lookahead_launched_for_epoch: float | None = None
     isl_state: dict[tuple[str, str], tuple[bool, bool]] = {}
     gs_state: dict[tuple[str, str], tuple[bool, bool, str]] = {}
+    dwell_state: dict[tuple[str, str], DwellPassState] = {}
     current_associations: dict[tuple[str, str], tuple[int, int]] = {}
     mbb_pending_teardowns: MbbTeardownState = {}
     step = 0
@@ -1011,47 +959,144 @@ def _run_pacing(
     last_snapshot_sim_s: float = -snapshot_interval_s  # force immediate on first step
     force_first_snapshot = True
 
-    # Reference-point pacing model (R-OME-008B).
+    # Reference-point pacing model.
     # Resets on rate change, unpause, or seek to avoid drift.
     pace_ref_wall = time.monotonic()
     pace_ref_step = 0
     current_rate = _time_accel
 
-    # Per-step timing observability — p50/p95/p99 logged every 60s
-    step_timings: deque[float] = deque(maxlen=3600)  # pre-sleep compute time
-    iter_timings: deque[float] = deque(maxlen=3600)  # full iteration (compute + sleep)
-    last_timing_log = time.monotonic()
-    last_iter_start: float = time.monotonic()
+    # Per-segment pacing telemetry: every tick's wall
+    # time is attributed by segment (physics inside compute_step, publish
+    # work here, sleep-vs-overrun against the pacing schedule); aggregated
+    # stats are logged at INFO and published as a typed ops event so "where
+    # does the time go" is answered by production data.
+    telemetry_window = PacingTelemetryWindow()
+    last_telemetry_emit = time.monotonic()
+    _TELEMETRY_EMIT_INTERVAL_S = 60.0
+
+    # Rate-honesty state machine: the Pacemaker judges its own
+    # delivery. Degraded when the measured rate sustainedly falls below the
+    # commanded rate; recovered with hysteresis so boundary noise cannot
+    # flap the alarm.
+    _pacing_degraded = False
+    _DEGRADED_BELOW = 0.90  # enter: achieved < 90% of commanded
+    _RECOVERED_ABOVE = 0.97  # leave: achieved >= 97% of commanded
+
+    def _update_rate_honesty() -> None:
+        nonlocal _pacing_degraded
+        achieved = telemetry_window.achieved_ratio(step_seconds=float(step_seconds))
+        if achieved is None or current_rate <= 0:
+            return
+        ratio = achieved / current_rate
+        if not _pacing_degraded and ratio < _DEGRADED_BELOW:
+            _pacing_degraded = True
+            _emit_rate_transition(OmeOpsCode.RATE_DEGRADED, "warning", achieved)
+        elif _pacing_degraded and ratio >= _RECOVERED_ABOVE:
+            _pacing_degraded = False
+            _emit_rate_transition(OmeOpsCode.RATE_RECOVERED, "info", achieved)
+
+    def _emit_rate_transition(code: OmeOpsCode, level: str, achieved: float) -> None:
+        stats = telemetry_window.snapshot(
+            step_seconds=float(step_seconds), requested_ratio=current_rate
+        )
+        message = (
+            f"OME pacing {'degraded' if code is OmeOpsCode.RATE_DEGRADED else 'recovered'}: "
+            f"commanded {current_rate:g}x, delivering {achieved:.2f}x"
+        )
+        if level == "warning":
+            logging.warning(message)
+        else:
+            logging.info(message)
+        event = OpsEvent(
+            timestamp=datetime.now(UTC),
+            session_id=session_id,
+            source="ome",
+            hostname=ome_hostname,
+            level=level,
+            code=code.value,
+            message=message,
+            details=stats.model_dump(mode="json") if stats else None,
+        )
+        _enqueue(subj_rate_honesty, event)
+
+    def _emit_pacing_telemetry() -> None:
+        stats = telemetry_window.snapshot(
+            step_seconds=float(step_seconds), requested_ratio=current_rate
+        )
+        if stats is None:
+            return
+        logging.info(
+            "OME pacing [%s]: compute p50=%.1fms p95=%.1fms budget=%.1fms "
+            "requested=%.1fx achieved=%.1fx overruns=%d/%d segments_p50=%s "
+            "segments_p95=%s",
+            session_id,
+            stats.compute_p50_ms,
+            stats.compute_p95_ms,
+            stats.budget_ms_per_tick,
+            stats.requested_ratio,
+            stats.achieved_ratio,
+            stats.overrun_ticks,
+            stats.window_ticks,
+            stats.segments_p50_ms,
+            # The tail's attribution, not only the median's: a p95 miss
+            # was once attributed to the wrong segment because this line
+            # hid the per-segment tails.
+            stats.segments_p95_ms,
+        )
+        event = OpsEvent(
+            timestamp=datetime.now(UTC),
+            session_id=session_id,
+            source="ome",
+            hostname=ome_hostname,
+            level="info",
+            code=OmeOpsCode.PACING_TELEMETRY.value,
+            message=(
+                f"OME pacing: compute p50 {stats.compute_p50_ms}ms vs budget "
+                f"{stats.budget_ms_per_tick}ms; requested {stats.requested_ratio}x, "
+                f"achieved {stats.achieved_ratio}x"
+            ),
+            details=stats.model_dump(mode="json"),
+        )
+        _enqueue(subj_pacing_telemetry, event)
 
     def _publish_link_authority(step_result, *, epoch_id: int) -> None:
         """Publish paired authoritative state/decision snapshots for a committed tick."""
         nonlocal snapshot_seq, last_snapshot_sim_s, force_first_snapshot
         snapshot_seq += 1
-        snap = build_link_state_snapshot(
-            step_result.link_snapshot_source,
-            interface_map=interface_map,
-            bandwidth_map=bandwidth_map,
-            rule_map=rule_map,
-            sim_time=step_result.sim_time,
-            seq=snapshot_seq,
-            interval_s=snapshot_interval_s,
-            fixed_positions=step_ctx.gs_positions,
-            epoch_id=epoch_id,
-            mbb_overlap_ticks_by_gs=step_ctx.gs_mbb_overlap_ticks,
-            current_step=step_result.step,
+        # Wire materialization is deferred to the publisher thread: the
+        # measured authority-tick cost was the dataclass-to-pydantic
+        # conversion itself (asdict + construction of ~hundreds of
+        # decisions), not validation or serialization alone. Pacemaker
+        # facts — sim_time, snapshot_seq, epoch_id — are stamped HERE,
+        # at commit, on the pacing thread.
+        _enqueue(
+            subj_link_snapshot,
+            DeferredLinkStateSnapshot(
+                source=step_result.link_snapshot_source,
+                interface_map=interface_map,
+                bandwidth_map=bandwidth_map,
+                rule_map=rule_map,
+                sim_time=step_result.sim_time,
+                seq=snapshot_seq,
+                interval_s=snapshot_interval_s,
+                fixed_positions=step_ctx.gs_positions,
+                epoch_id=epoch_id,
+                mbb_overlap_ticks_by_gs=step_ctx.gs_mbb_overlap_ticks,
+                current_step=step_result.step,
+            ),
         )
-        _enqueue(subj_link_snapshot, snap.model_dump_json().encode())
-
-        decision_snap = build_link_decision_snapshot(
-            decisions=step_result.ground_decisions,
-            unscheduled_pairs=step_result.ground_allocation.unscheduled_pairs,
-            policy_audit=step_result.ground_allocation.policy_audit,
-            allocation_events=step_result.ground_allocation.allocation_events,
-            sim_time=step_result.sim_time,
-            snapshot_seq=snapshot_seq,
-            epoch_id=epoch_id,
+        _enqueue(
+            subj_link_decisions,
+            DeferredLinkDecisionSnapshot(
+                decisions=step_result.ground_decisions,
+                unscheduled_pairs=step_result.ground_allocation.unscheduled_pairs,
+                policy_audit=step_result.ground_allocation.policy_audit,
+                allocation_events=step_result.ground_allocation.allocation_events,
+                sim_time=step_result.sim_time,
+                snapshot_seq=snapshot_seq,
+                epoch_id=epoch_id,
+            ),
         )
-        _enqueue(subj_link_decisions, decision_snap.model_dump_json().encode())
         last_snapshot_sim_s = step_result.step * step_seconds
         force_first_snapshot = False
 
@@ -1065,10 +1110,29 @@ def _run_pacing(
             teardowns=step_result.pending_teardowns,
             mbb_overlap_ticks_by_gs=step_ctx.gs_mbb_overlap_ticks,
         )
+        _enqueue(subj_checkpoint, ckpt)
+
+    def _publish_replay_anchor(step_result, *, epoch_id: int) -> None:
+        """Commit a bounded-replay anchor: copies of the replay-carried
+        state frozen at this tick; the publisher materializes and
+        serializes it off the pacing thread."""
         _enqueue(
-            subj_checkpoint,
-            _ckpt_gzip.compress(ckpt.model_dump_json().encode()),
+            subj_replay_anchor,
+            DeferredReplayAnchor(
+                epoch_id=epoch_id,
+                step=step_result.step,
+                isl_state=dict(isl_state),
+                gs_state=dict(gs_state),
+                associations=step_result.associations,
+                teardowns=step_result.pending_teardowns,
+                ground_station_ids=frozenset(step_ctx.gs_mbb_overlap_ticks),
+                written_at=time.time(),
+            ),
         )
+
+    def _publish_heartbeat() -> None:
+        hb = HeartbeatTick(wall_time=datetime.now(UTC), status="paused")
+        _enqueue(subj_heartbeat, hb)
 
     def _publish_clock_tick(step_result, rate: float, *, epoch_id: int) -> None:
         ct = ClockTick(
@@ -1076,8 +1140,10 @@ def _run_pacing(
             wall_time=datetime.now(UTC),
             compression_ratio=float(rate),
             epoch_id=epoch_id,
+            achieved_ratio=telemetry_window.achieved_ratio(step_seconds=float(step_seconds)),
+            pacing_degraded=_pacing_degraded,
         )
-        _enqueue(subj_clock, ct.model_dump_json().encode())
+        _enqueue(subj_clock, ct)
 
     def _sleep_until_next_step_due() -> None:
         if _paused or shutdown_event.is_set():
@@ -1107,6 +1173,7 @@ def _run_pacing(
     # remains authoritative across wall-clock gaps; recovery resumes from it
     # instead of inventing elapsed sim_time while the service was down.
     recovered_checkpoint = None
+    recovered_anchor = None
     try:
         import asyncio as _aio
 
@@ -1126,28 +1193,40 @@ def _run_pacing(
             try:
                 _js = _nc.jetstream()
                 from nats.js.api import DeliverPolicy
-
-                sub = await _js.subscribe(
-                    subj_checkpoint,
-                    stream=_STREAM,
-                    ordered_consumer=True,
-                    deliver_policy=DeliverPolicy.LAST_PER_SUBJECT,
+                from nodalarc.scheduling_checkpoint import (
+                    decode_retained_replay_anchor,
+                    decode_retained_scheduling_checkpoint,
                 )
-                try:
-                    msg = await sub.next_msg(timeout=2.0)
-                    from nodalarc.scheduling_checkpoint import (
-                        decode_retained_scheduling_checkpoint,
-                    )
 
-                    return decode_retained_scheduling_checkpoint(msg.data)
-                except TimeoutError:
-                    return None
-                finally:
-                    await sub.unsubscribe()
+                async def _last_retained(subject: str) -> bytes | None:
+                    sub = await _js.subscribe(
+                        subject,
+                        stream=_STREAM,
+                        ordered_consumer=True,
+                        deliver_policy=DeliverPolicy.LAST_PER_SUBJECT,
+                    )
+                    try:
+                        msg = await sub.next_msg(timeout=2.0)
+                        return msg.data
+                    except TimeoutError:
+                        return None
+                    finally:
+                        await sub.unsubscribe()
+
+                ckpt_bytes = await _last_retained(subj_checkpoint)
+                if ckpt_bytes is None:
+                    return None, None
+                anchor_bytes = await _last_retained(subj_replay_anchor)
+                anchor = (
+                    decode_retained_replay_anchor(anchor_bytes)
+                    if anchor_bytes is not None
+                    else None
+                )
+                return decode_retained_scheduling_checkpoint(ckpt_bytes), anchor
             finally:
                 await _nc.close()
 
-        recovered_checkpoint = _aio.run(_read_checkpoint())
+        recovered_checkpoint, recovered_anchor = _aio.run(_read_checkpoint())
     except Exception as exc:
         raise RuntimeError(
             "OME checkpoint recovery failed; refusing to start from unknown state"
@@ -1163,8 +1242,21 @@ def _run_pacing(
         _epoch_id = recovered_checkpoint.epoch_id
         # Keep epoch_unix as the original epoch anchor. The checkpoint stores
         # the tick sim_time, so using it directly as epoch_unix would make the
-        # next live tick jump by step * step_seconds.
-        epoch_unix = recovered_checkpoint.sim_time.timestamp() - (step * step_seconds)
+        # next live tick jump by step * step_seconds. Prefer the bit-exact
+        # anchor; checkpoints written before that field existed force the
+        # microsecond-quantized reconstruction, which is only exact for
+        # whole-second epochs.
+        if recovered_checkpoint.epoch_unix is not None:
+            epoch_unix = recovered_checkpoint.epoch_unix
+        else:
+            epoch_unix = recovered_checkpoint.sim_time.timestamp() - (step * step_seconds)
+            logging.warning(
+                "Recovered checkpoint predates the exact epoch anchor; "
+                "reconstructed epoch_unix=%s from microsecond-quantized "
+                "sim_time - replay determinism holds only for whole-second "
+                "epochs from this lineage",
+                epoch_unix,
+            )
         logging.info(
             "Recovered from checkpoint (age=%.1fs, step=%d, seq=%d, sim=%s)",
             checkpoint_age,
@@ -1200,14 +1292,61 @@ def _run_pacing(
     # is serialized from StepResult authority, not from replayed VisibilityEvents.
     initial_step_result = None
     if recovered_checkpoint is not None:
+        # Bounded replay: a valid anchor lets recovery rebuild only the
+        # gap from the anchor to the checkpoint instead of the session's
+        # whole life. Validity is strict — same epoch (a seek bumps the
+        # epoch and orphans old anchors) and strictly older than the
+        # checkpoint (replaying the anchor's own step against post-step
+        # state is not idempotent). Anything else: full replay from
+        # zero — slower, never wrong.
+        replay_start = 0
+        if (
+            recovered_anchor is not None
+            and recovered_anchor.epoch_id == recovered_checkpoint.epoch_id
+            and recovered_anchor.step < recovered_checkpoint.step
+        ):
+            from ome.replay_anchor import replay_state_from_anchor
+
+            seeded = replay_state_from_anchor(recovered_anchor)
+            isl_state.update(seeded[0])
+            gs_state.update(seeded[1])
+            current_associations = seeded[2]
+            mbb_pending_teardowns = seeded[3]
+            replay_start = recovered_anchor.step + 1
+            logging.info(
+                "Bounded replay: anchor at step %d covers %d steps; replaying %d",
+                recovered_anchor.step,
+                recovered_anchor.step + 1,
+                recovered_checkpoint.step - recovered_anchor.step,
+                extra={
+                    "code": "RECOVERY_REPLAY_BOUNDED",
+                    "details": {
+                        "anchor_step": recovered_anchor.step,
+                        "checkpoint_step": recovered_checkpoint.step,
+                    },
+                },
+            )
+        elif recovered_anchor is not None:
+            logging.warning(
+                "Discarding replay anchor (epoch %d step %d) against checkpoint "
+                "(epoch %d step %d); replaying from step zero",
+                recovered_anchor.epoch_id,
+                recovered_anchor.step,
+                recovered_checkpoint.epoch_id,
+                recovered_checkpoint.step,
+            )
         logging.warning(
             "RecoveryReplay: replaying %d steps from checkpoint (step=%d)",
-            step + 1,
+            step + 1 - replay_start,
             step,
-            extra={"code": "RECOVERY_REPLAY", "details": {"total_steps": step + 1}},
+            extra={
+                "code": "RECOVERY_REPLAY",
+                "details": {"total_steps": step + 1 - replay_start},
+            },
         )
 
-        for replay_step in range(step + 1):
+        replay_started = time.monotonic()
+        for replay_step in range(replay_start, step + 1):
             replay_result = compute_step(
                 step_ctx,
                 epoch_unix,
@@ -1218,12 +1357,23 @@ def _run_pacing(
                 gs_state,
                 current_associations,
                 mbb_pending_teardowns,
+                dwell_state=dwell_state,
             )
             initial_step_result = replay_result
             current_associations = replay_result.associations
             mbb_pending_teardowns = replay_result.pending_teardowns
-            if replay_step > 0 and replay_step % 1000 == 0:
-                logging.debug("Recovery replay: %d/%d steps", replay_step, step + 1)
+            if replay_step > replay_start and (replay_step - replay_start) % 200 == 0:
+                elapsed = time.monotonic() - replay_started
+                done = replay_step - replay_start
+                rate = done / elapsed if elapsed > 0 else 0.0
+                eta_s = (step + 1 - replay_step) / rate if rate > 0 else 0.0
+                logging.info(
+                    "Recovery replay: %d/%d steps (%.1f steps/s, ~%.0fs remaining)",
+                    replay_step,
+                    step + 1,
+                    rate,
+                    eta_s,
+                )
         logging.debug("Replayed %d steps to rebuild committed link state", step + 1)
     else:
         initial_step_result = compute_step(
@@ -1236,6 +1386,7 @@ def _run_pacing(
             gs_state,
             current_associations,
             mbb_pending_teardowns,
+            dwell_state=dwell_state,
         )
         current_associations = initial_step_result.associations
         mbb_pending_teardowns = initial_step_result.pending_teardowns
@@ -1258,7 +1409,7 @@ def _run_pacing(
     # GroundLinkDecisionSnapshot → SchedulingCheckpoint → PlaybackState →
     # ClockTick if playing. No pre-compute empty snapshot is ever published.
     eph = build_session_ephemeris(step_ctx, epoch_unix, _epoch_id)
-    _enqueue(subj_ephemeris, eph.model_dump_json().encode())
+    _enqueue(subj_ephemeris, eph)
     logging.debug("Published SessionEphemeris epoch_id=%d (%d nodes)", _epoch_id, len(eph.nodes))
 
     initial_epoch_id = _epoch_id
@@ -1270,11 +1421,19 @@ def _run_pacing(
 
     initial_playback_state = "paused" if _paused else "playing"
     ps = PlaybackState(epoch_id=initial_epoch_id, state=initial_playback_state)
-    _enqueue(subj_playback, ps.model_dump_json().encode())
+    _enqueue(subj_playback, ps)
     if not _paused:
         _publish_clock_tick(initial_step_result, current_rate, epoch_id=initial_epoch_id)
 
     _initial_epoch_committed = True
+
+    # Latest committed state for Pacemaker-transition checkpoints. The
+    # per-tick checkpoint stream stops with the clock, so pause/resume/
+    # rate transitions must commit their own checkpoint or recovery
+    # resurrects the pre-transition state (a paused engine restarting
+    # into PLAY — found live 2026-06-11).
+    last_step_result = initial_step_result
+    last_epoch_id = initial_epoch_id
 
     if recovered_checkpoint is not None:
         logging.info(
@@ -1290,17 +1449,11 @@ def _run_pacing(
     step = initial_step_result.step + 1
     pace_ref_wall = time.monotonic()
     pace_ref_step = initial_step_result.step
-    last_iter_start = time.monotonic()
     _sleep_until_next_step_due()
 
     try:
         while not shutdown_event.is_set():
-            step_start = time.monotonic()
-            if step > 0:
-                iter_timings.append((step_start - last_iter_start) * 1000)
-            last_iter_start = step_start
-
-            # --- Seek check (Tier 2, R-OME-008B Part 5) ---
+            # --- Seek check ---
             seek_to = _seek_target
             if seek_to is not None:
                 _seek_target = None
@@ -1322,15 +1475,15 @@ def _run_pacing(
                 epoch_unix = seek_to
                 isl_state = {}
                 gs_state = {}
+                dwell_state = {}
                 current_associations = {}
                 mbb_pending_teardowns = {}
                 step = 0
                 pace_ref_wall = time.monotonic()
                 pace_ref_step = 0
                 current_rate = _time_accel
+                telemetry_window.clear()
                 force_first_snapshot = False  # the committed step-0 snapshot is published below
-                lookahead.cancel()
-                lookahead_launched_for_epoch = None
 
                 # Compute first, publish after commit. No empty new-epoch
                 # snapshot is allowed.
@@ -1345,6 +1498,7 @@ def _run_pacing(
                         gs_state,
                         current_associations,
                         mbb_pending_teardowns,
+                        dwell_state=dwell_state,
                     )
                 except Exception as exc:
                     target_master_sim_time = datetime.fromtimestamp(epoch_unix, UTC).isoformat()
@@ -1378,15 +1532,17 @@ def _run_pacing(
                 # below are the first facts of that epoch. Step-0 VisibilityEvents
                 # are intentionally not published; StepResult is the state carrier.
                 eph = build_session_ephemeris(step_ctx, epoch_unix, seek_epoch_id)
-                _enqueue(subj_ephemeris, eph.model_dump_json().encode())
+                _enqueue(subj_ephemeris, eph)
                 _publish_link_authority(seek_result, epoch_id=seek_epoch_id)
                 if seek_result.ground_allocation.lifecycle_events:
                     _publish_mbb_lifecycle_events(seek_result, epoch_id=seek_epoch_id)
                 _publish_checkpoint(seek_result, epoch_id=seek_epoch_id)
 
                 ps = PlaybackState(epoch_id=seek_epoch_id, state="playing")
-                _enqueue(subj_playback, ps.model_dump_json().encode())
+                _enqueue(subj_playback, ps)
                 _publish_clock_tick(seek_result, current_rate, epoch_id=seek_epoch_id)
+                last_step_result = seek_result
+                last_epoch_id = seek_epoch_id
                 if _epoch_id == seek_epoch_id and _seek_target is None:
                     _seeking = False  # Clear seeking mutex only for the committed active seek
                     active_epoch_id = seek_epoch_id
@@ -1399,37 +1555,45 @@ def _run_pacing(
                 )
 
                 step = 1
-                last_iter_start = time.monotonic()
                 _sleep_until_next_step_due()
                 continue
 
-            # --- Launch look-ahead if not already running for this epoch ---
-            if lookahead_launched_for_epoch != epoch_unix:
-                lookahead.submit(
-                    step_context=step_ctx,
-                    epoch_unix=epoch_unix,
-                    duration_s=period,
-                    initial_isl_state=isl_state if isl_state else None,
-                    initial_gs_state=gs_state if gs_state else None,
-                    initial_associations=current_associations if current_associations else None,
-                    initial_pending_teardowns=mbb_pending_teardowns
-                    if mbb_pending_teardowns
-                    else None,
-                    timestamp_offset=0.0,
-                )
-                lookahead_launched_for_epoch = epoch_unix
-
             # --- Pause gate ---
             if _paused:
+                # Operator-commanded state must survive a restart: the
+                # per-tick checkpoint stream stops with the clock, so the
+                # last durable checkpoint predates the pause command and
+                # recovery would resurrect a PLAYING engine the operator
+                # paused. Commit the transition before going quiet.
+                _publish_checkpoint(last_step_result, epoch_id=last_epoch_id)
+                # Liveness while the clock is deliberately silent: no
+                # ClockTicks flow during pause, so without a heartbeat
+                # consumers cannot distinguish a healthy pause from a
+                # dead engine — a stale banner on a healthy pause and a
+                # healthy display over a dead engine are both false-state
+                # displays. The heartbeat carries the engine's own wall
+                # stamp so displays can show true sim/wall divergence.
+                last_heartbeat_mono = 0.0
                 while _paused and not shutdown_event.is_set():
                     if _seek_target is not None:
                         break
+                    now_mono = time.monotonic()
+                    if now_mono - last_heartbeat_mono >= 1.0:
+                        _publish_heartbeat()
+                        last_heartbeat_mono = now_mono
                     time.sleep(0.1)
+                # Resume is a transition too — durable before the first
+                # post-resume tick, or a crash in that window restores a
+                # pause the operator already lifted. Seek and shutdown
+                # exits commit their own state.
+                if not _paused and not shutdown_event.is_set() and _seek_target is None:
+                    _publish_checkpoint(last_step_result, epoch_id=last_epoch_id)
                 # Reset reference on unpause — time spent paused
                 # must not count toward wall-clock budget.
                 pace_ref_wall = time.monotonic()
                 pace_ref_step = step
                 current_rate = _time_accel
+                telemetry_window.clear()
                 continue  # re-check seek at top
 
             # --- Rate-change detection ---
@@ -1438,6 +1602,10 @@ def _run_pacing(
                 pace_ref_wall = time.monotonic()
                 pace_ref_step = step
                 current_rate = new_rate
+                telemetry_window.clear()
+                # Durable speed: recovery restores time_accel from the
+                # checkpoint, which otherwise lags the command by a tick.
+                _publish_checkpoint(last_step_result, epoch_id=last_epoch_id)
 
             # --- Compute one step (Physicist role) ---
             tick_epoch_id = _epoch_id
@@ -1451,6 +1619,7 @@ def _run_pacing(
                 gs_state,
                 current_associations,
                 mbb_pending_teardowns,
+                dwell_state=dwell_state,
             )
             if _epoch_id != tick_epoch_id or _seek_target is not None:
                 logging.info(
@@ -1465,39 +1634,49 @@ def _run_pacing(
             mbb_pending_teardowns = step_result.pending_teardowns
 
             # --- Emit events for this step ---
-            for te in step_events:
-                if te.event_type == "VisibilityEvent":
-                    payload = te.data.model_dump_json().encode()
-                    _enqueue(subj_visibility, payload)
-            # ClockTick with real wall_time (not precomputed placeholder)
-            _publish_clock_tick(step_result, current_rate, epoch_id=tick_epoch_id)
+            tick_timings = step_result.timings
+            with tick_timings.measure(SEG_PUBLISH_EVENTS):
+                for te in step_events:
+                    if te.event_type == "VisibilityEvent":
+                        _enqueue(subj_visibility, te.data)
+                # ClockTick with real wall_time (not precomputed placeholder)
+                _publish_clock_tick(step_result, current_rate, epoch_id=tick_epoch_id)
 
             # LinkStateSnapshot at interval, and immediately for terminal MBB
             # lifecycle outcomes so the OpsEvent can reference a same-tick
             # GroundPolicyAudit by (epoch_id, snapshot_seq).
             sim_s = step * step_seconds
             force_lifecycle_snapshot = bool(step_result.ground_allocation.lifecycle_events)
-            if (
-                sim_s - last_snapshot_sim_s >= snapshot_interval_s
-                or force_first_snapshot
-                or force_lifecycle_snapshot
-            ):
-                # Companion GroundLinkDecisionSnapshot is published by the same
-                # helper with the same (epoch_id, snapshot_seq, sim_time). Both
-                # snapshots are serialized from committed StepResult state.
-                _publish_link_authority(step_result, epoch_id=tick_epoch_id)
+            with tick_timings.measure(SEG_PUBLISH_AUTHORITY):
+                if (
+                    sim_s - last_snapshot_sim_s >= snapshot_interval_s
+                    or force_first_snapshot
+                    or force_lifecycle_snapshot
+                ):
+                    # Companion GroundLinkDecisionSnapshot is published by the same
+                    # helper with the same (epoch_id, snapshot_seq, sim_time). Both
+                    # snapshots are serialized from committed StepResult state.
+                    _publish_link_authority(step_result, epoch_id=tick_epoch_id)
 
-            if step_result.ground_allocation.lifecycle_events:
-                _publish_mbb_lifecycle_events(step_result, epoch_id=tick_epoch_id)
+                if step_result.ground_allocation.lifecycle_events:
+                    _publish_mbb_lifecycle_events(step_result, epoch_id=tick_epoch_id)
 
             # Retain the latest authoritative scheduling state every tick, not
             # only at snapshot cadence. Otherwise a crash between snapshots can
             # force recovery to replay stale sim_time and duplicate decisions.
-            _publish_checkpoint(step_result, epoch_id=tick_epoch_id)
+            with tick_timings.measure(SEG_PUBLISH_CHECKPOINT):
+                _publish_checkpoint(step_result, epoch_id=tick_epoch_id)
+                # Bounded-replay anchor every ~300 sim-seconds: recovery
+                # replays only the gap from the newest anchor instead of
+                # the session's whole life.
+                if step % anchor_interval_ticks == 0:
+                    _publish_replay_anchor(step_result, epoch_id=tick_epoch_id)
+            last_step_result = step_result
+            last_epoch_id = tick_epoch_id
 
             # Write JSONL if --output-dir provided
             if out_path is not None:
-                with open(out_path, "a") as f:
+                with tick_timings.measure(SEG_OUTPUT_FILE), open(out_path, "a") as f:
                     for te in step_events:
                         f.write(
                             _json.dumps(
@@ -1510,41 +1689,24 @@ def _run_pacing(
                             + "\n"
                         )
 
-            # --- Per-step timing observability ---
-            pre_sleep_ms = (time.monotonic() - step_start) * 1000
-            step_timings.append(pre_sleep_ms)
-            now_mono = time.monotonic()
-            if now_mono - last_timing_log >= 60.0:
-                if len(step_timings) >= 10:
-                    pcts = quantiles(step_timings, n=100)
-                    budget_ms = (step_seconds / current_rate) * 1000
-                    headroom = (1.0 - pcts[94] / budget_ms) * 100 if budget_ms > 0 else 0
-                    iter_pcts = quantiles(iter_timings, n=100) if len(iter_timings) >= 10 else None
-                    logging.debug(
-                        "OME pacing: compute p50=%.1fms p95=%.1fms "
-                        "iter p50=%.1fms p95=%.1fms "
-                        "budget=%.1fms (%.0fx) headroom=%.0f%%",
-                        pcts[49],
-                        pcts[94],
-                        iter_pcts[49] if iter_pcts else 0,
-                        iter_pcts[94] if iter_pcts else 0,
-                        budget_ms,
-                        current_rate,
-                        headroom,
-                    )
-                last_timing_log = now_mono
-
             # --- Sleep until next step (Pacemaker role) ---
             step += 1
             wall_target = pace_ref_wall + (step - pace_ref_step) * (step_seconds / current_rate)
             now_mono = time.monotonic()
+            # Positive = slack slept away; negative = the tick missed its
+            # wall target by that much (the saturation signal).
+            tick_timings.add(SEG_SLEEP, wall_target - now_mono)
+            telemetry_window.record(tick_timings, wall_mark=now_mono)
+            _update_rate_honesty()
+            if now_mono - last_telemetry_emit >= _TELEMETRY_EMIT_INTERVAL_S:
+                _emit_pacing_telemetry()
+                last_telemetry_emit = now_mono
             if now_mono < wall_target:
                 time.sleep(wall_target - now_mono)
 
     except Exception:
         logging.exception("FATAL: OME pacing thread crashed")
     finally:
-        lookahead.cancel()
         shutdown_event.set()
 
 

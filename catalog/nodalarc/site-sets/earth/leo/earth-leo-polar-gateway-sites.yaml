@@ -4,4 +4,20 @@ site_set:
   sites:
   - nodalarc:sites/earth/de/earth-de-frankfurt.yaml
   - nodalarc:sites/earth/sj/earth-sj-svalbard.yaml
-  notes: Gateway sites with LEO access terminals sized for the 780 km polar shell at the declared access mask.
+  - nodalarc:sites/earth/dj/earth-dj-djibouti.yaml
+  - nodalarc:sites/earth/sg/earth-sg-singapore.yaml
+  - nodalarc:sites/earth/za/earth-za-cape-town.yaml
+  - nodalarc:sites/earth/jp/earth-jp-tokyo.yaml
+  - nodalarc:sites/earth/us/co/earth-us-co-denver.yaml
+  notes: Gateway sites with LEO access terminals sized for the 780 km polar
+    shell at the declared access mask. At this shell's density the only
+    physically visible inter-satellite links are the six cross-plane
+    same-slot chains (intra-plane neighbors are Earth-occluded), so the
+    ground segment carries the connectivity burden - gateways with
+    adjacencies into two chains transit between them. Every member
+    carries feeder-class terminals whose authored range covers the 780 km
+    shell at the session's declared mask (the catalog's Starlink-class
+    sites are range-starved for this shell and fail the site contract).
+    Svalbard anchors the polar convergence; Frankfurt, Djibouti,
+    Singapore, Cape Town, and Tokyo spread the remaining bridges across
+    longitudes and hemispheres.

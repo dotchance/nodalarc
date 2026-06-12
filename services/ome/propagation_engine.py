@@ -14,16 +14,24 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal
 
+import numpy as np
 from nodalarc.body_frames import BodyFrame
 from nodalarc.constellation_loader import SatelliteNode, satellite_node_id
 from nodalarc.ephemeris_runtime import CommonBodyState
-from nodalarc.frames import EcefVec3, Vec3
+from nodalarc.frames import EcefVec3, EciVec3, Vec3
 from nodalarc.models.addressing import AddressingScheme
 from nodalarc.models.events import NodePosition
+from nodalarc.propagation_kernel import (
+    ElementsBatch,
+    body_rotation_angle_batch,
+    eci_to_body_fixed_batch,
+    eci_to_body_fixed_velocity_batch,
+    propagate_eci_batch,
+)
+from nodalarc.propagator import body_fixed_to_geodetic
 
 from ome.propagator import (
     GeoPosition,
-    propagate_j2_mean_elements_for_body,
     propagate_keplerian_for_body,
     propagate_sgp4_tle,
 )
@@ -114,10 +122,62 @@ def propagate_satellites(
     sim_time_unix = epoch_unix + dt
     states_by_body = dict(body_states)
     states: dict[str, PropagatedState] = {}
-    for sat in satellites:
+
+    # The J2 mean-element population — the hot path — propagates as ONE
+    # kernel batch per central body instead of satellite by satellite.
+    # The kernel is bit-identical to the scalar wrapper (enforced by the
+    # equivalence suite), geodetic conversion below consumes those
+    # identical body-fixed positions, and states are still assembled in
+    # the ORIGINAL satellite order, so every downstream value and
+    # iteration order is byte-unchanged from the scalar path.
+    j2_by_body: dict[str, list[int]] = {}
+    sat_propagator_ids: list[str] = []
+    for index, sat in enumerate(satellites):
+        sat_propagator_ids.append(_satellite_propagator_id(sat, propagator_id))
+        if sat_propagator_ids[-1] == "j2-mean-elements":
+            j2_by_body.setdefault(sat.central_body, []).append(index)
+
+    j2_states: dict[int, tuple] = {}
+    dt_column = np.array([dt], dtype=np.float64)
+    time_column = np.array([sim_time_unix], dtype=np.float64)
+    for central_body, indices in j2_by_body.items():
+        first_node_id = satellite_node_id(satellites[indices[0]], addressing)
+        try:
+            body_frame = body_frames[central_body]
+        except KeyError as exc:
+            raise ValueError(
+                f"Propagation missing resolved body primitive facts for central_body={central_body!r} "
+                f"while propagating {first_node_id!r}"
+            ) from exc
+        batch = ElementsBatch.from_elements([satellites[i].elements for i in indices])
+        eci = propagate_eci_batch(batch, dt_column, body_frame=body_frame)
+        theta = body_rotation_angle_batch(body_frame, time_column)
+        bx, by, bz = eci_to_body_fixed_batch(eci.px, eci.py, eci.pz, theta)
+        vbx, vby, vbz = eci_to_body_fixed_velocity_batch(
+            eci.vx,
+            eci.vy,
+            eci.vz,
+            bx,
+            by,
+            theta,
+            rotation_rate_rad_s=body_frame.rotation_rate_rad_s,
+        )
+        for row, sat_index in enumerate(indices):
+            pos_fixed = EcefVec3(Vec3(float(bx[row, 0]), float(by[row, 0]), float(bz[row, 0])))
+            vel_fixed = EcefVec3(Vec3(float(vbx[row, 0]), float(vby[row, 0]), float(vbz[row, 0])))
+            pos_inertial = EciVec3(
+                Vec3(float(eci.px[row, 0]), float(eci.py[row, 0]), float(eci.pz[row, 0]))
+            )
+            vel_inertial = EciVec3(
+                Vec3(float(eci.vx[row, 0]), float(eci.vy[row, 0]), float(eci.vz[row, 0]))
+            )
+            geo = body_fixed_to_geodetic(pos_fixed, body_frame)
+            j2_states[sat_index] = (pos_fixed, vel_fixed, geo, pos_inertial, vel_inertial)
+
+    for index, sat in enumerate(satellites):
         node_id = satellite_node_id(sat, addressing)
         central_body = sat.central_body
-        sat_propagator_id = _satellite_propagator_id(sat, propagator_id)
+        sat_propagator_id = sat_propagator_ids[index]
         try:
             body_frame = body_frames[central_body]
         except KeyError as exc:
@@ -131,21 +191,10 @@ def propagate_satellites(
                 f"Propagation missing common-frame ephemeris state for central_body={central_body!r} "
                 f"while propagating {node_id!r}"
             )
-        if sat_propagator_id in ("two-body", "keplerian-circular"):
+        if sat_propagator_id == "j2-mean-elements":
+            pos_ecef, vel_ecef, geo, pos_inertial, vel_inertial = j2_states[index]
+        elif sat_propagator_id in ("two-body", "keplerian-circular"):
             pos_ecef, vel_ecef, geo, pos_inertial, vel_inertial = propagate_keplerian_for_body(
-                sat.elements,
-                epoch_unix,
-                dt,
-                body_frame=body_frame,
-            )
-        elif sat_propagator_id == "j2-mean-elements":
-            (
-                pos_ecef,
-                vel_ecef,
-                geo,
-                pos_inertial,
-                vel_inertial,
-            ) = propagate_j2_mean_elements_for_body(
                 sat.elements,
                 epoch_unix,
                 dt,

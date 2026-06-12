@@ -6,6 +6,19 @@ Snapshot construction is serialization of already-computed OME state. It is
 kept separate from compute_step so propagation, allocation, and event
 transition logic can be tested without also exercising the LinkStateSnapshot
 wire contract.
+
+LEAF wire models here (per-link LinkState, per-pair decision wire)
+are built with ``model_construct``: every value is OME-computed and
+exactly typed at the call site, and re-validating the producer's own
+output cost ~5.4 ms p95 per authority tick at flagship scale — a third
+of the 16.7 ms 60x budget. The OUTER snapshots remain validated: their
+model_validators are cross-field tripwires against producer
+contradictions, and pydantic does not re-validate already-constructed
+instance fields, so they stay cheap. The trade is explicit: leaf field
+validation and coercion do not run on this path, so the round-trip
+parity tests (validate(dump(built)) reproduces the dump byte-for-byte)
+are the guard that construction stays type-exact. Touch a leaf field
+type or add a leaf validator and those tests must move with it.
 """
 
 from __future__ import annotations
@@ -84,8 +97,14 @@ def build_link_decision_snapshot(
     """
     sorted_decisions = sorted(decisions.items(), key=lambda kv: kv[0])
     wire_decisions = tuple(
-        GroundVisibilityDecisionWire(**asdict(decision)) for _pair, decision in sorted_decisions
+        GroundVisibilityDecisionWire.model_construct(**asdict(decision))
+        for _pair, decision in sorted_decisions
     )
+    # The OUTER snapshot stays validated: its model_validator is a
+    # cross-field tripwire (unscheduled pairs must match visible
+    # decisions) that catches producer contradictions — high value, and
+    # cheap because pydantic does not re-validate the already-built
+    # instance fields. Only the O(N) leaf constructions skip validation.
     return GroundLinkDecisionSnapshot(
         sim_time=sim_time,
         snapshot_seq=snapshot_seq,
@@ -178,7 +197,7 @@ def build_link_state_snapshot(
         bandwidth_mbps = _link_bandwidth(pair, "isl") if carrier == CarrierState.UP else None
         rule_meta = _link_rule_metadata(pair)
         links.append(
-            LinkState(
+            LinkState.model_construct(
                 node_a=pair[0],
                 node_b=pair[1],
                 interface_a=ifaces[0],
@@ -269,7 +288,7 @@ def build_link_state_snapshot(
             )
         rule_meta = _link_rule_metadata(pair)
         links.append(
-            LinkState(
+            LinkState.model_construct(
                 node_a=pair[0],
                 node_b=pair[1],
                 interface_a=interface_a,
@@ -293,6 +312,8 @@ def build_link_state_snapshot(
             )
         )
 
+    # Outer snapshot validated for the same reason as the decision
+    # snapshot: cross-field tripwires stay armed; leaf models carry the cost.
     return LinkStateSnapshot(
         sim_time=sim_time,
         snapshot_seq=seq,
@@ -300,3 +321,75 @@ def build_link_state_snapshot(
         interval_s=interval_s,
         epoch_id=epoch_id,
     )
+
+
+@dataclass(frozen=True)
+class DeferredLinkStateSnapshot:
+    """One authority tick's state-snapshot inputs, committed by the pacer.
+
+    The pacing thread's job ends at committing typed step state; wire
+    MATERIALIZATION (building the pydantic snapshot) and serialization
+    both run on the publisher thread inside the pacer's sleep window —
+    the dataclass-to-pydantic conversion of an authority tick measured
+    4.3 ms at flagship scale, a quarter of the 16.7 ms 60x budget.
+    Every captured field is a per-tick fresh object or a session-static
+    map; nothing is mutated after the tick commits, so the deferred
+    build is race-free. Pacemaker facts (sim_time, seq, epoch_id) are
+    stamped here, on the pacing thread, at commit.
+    """
+
+    source: LinkSnapshotSource
+    interface_map: dict[tuple[str, str], tuple[str, str]]
+    bandwidth_map: Mapping[tuple[str, str], float]
+    rule_map: Mapping[tuple[str, str], LinkRuleMetadata] | None
+    sim_time: datetime
+    seq: int
+    interval_s: float
+    fixed_positions: Mapping[str, tuple[EcefVec3, GeoPosition]] | None
+    epoch_id: int
+    mbb_overlap_ticks_by_gs: Mapping[str, int] | None
+    current_step: int
+
+    def build(self) -> LinkStateSnapshot:
+        return build_link_state_snapshot(
+            self.source,
+            interface_map=self.interface_map,
+            bandwidth_map=self.bandwidth_map,
+            rule_map=self.rule_map,
+            sim_time=self.sim_time,
+            seq=self.seq,
+            interval_s=self.interval_s,
+            fixed_positions=self.fixed_positions,
+            epoch_id=self.epoch_id,
+            mbb_overlap_ticks_by_gs=self.mbb_overlap_ticks_by_gs,
+            current_step=self.current_step,
+        )
+
+
+@dataclass(frozen=True)
+class DeferredLinkDecisionSnapshot:
+    """The decision companion's inputs, committed by the pacer.
+
+    Same contract as DeferredLinkStateSnapshot: per-tick fresh or
+    session-static inputs, Pacemaker facts stamped at commit, built and
+    serialized on the publisher thread.
+    """
+
+    decisions: GroundVisibilityDecisionMap
+    unscheduled_pairs: tuple[UnscheduledPair, ...]
+    policy_audit: GroundPolicyAudit
+    allocation_events: tuple[GroundAllocationEvent, ...]
+    sim_time: datetime
+    snapshot_seq: int
+    epoch_id: int
+
+    def build(self) -> GroundLinkDecisionSnapshot:
+        return build_link_decision_snapshot(
+            decisions=self.decisions,
+            unscheduled_pairs=self.unscheduled_pairs,
+            policy_audit=self.policy_audit,
+            allocation_events=self.allocation_events,
+            sim_time=self.sim_time,
+            snapshot_seq=self.snapshot_seq,
+            epoch_id=self.epoch_id,
+        )

@@ -617,6 +617,14 @@ def allocate_ground_links(
         prior_gs_occupancy.setdefault(_gs_id, set()).add(_gs_idx)
         prior_sat_occupancy.setdefault(_sat_id, set()).add(_sat_idx)
     new_associations: dict[tuple[str, str], tuple[int, int]] = {}
+    # Per-station / per-satellite association indexes, maintained at the
+    # three mutation points below. dicts-as-ordered-sets so per-GS pair
+    # order matches new_associations insertion order exactly (incumbent
+    # selection iterates it); without these, steady_pairs_for_gs and
+    # sat_occupants_for_candidate rescan every association per candidate
+    # (measured ~75% of allocator runtime at scale).
+    assoc_by_gs: dict[str, dict[tuple[str, str], None]] = {}
+    assoc_by_sat: dict[str, dict[tuple[str, str], None]] = {}
     new_pending_teardowns: MbbTeardownState = {}
     rejected: dict[tuple[str, str], _Rejected] = {}
     allocation_events: list[GroundAllocationEvent] = []
@@ -650,6 +658,8 @@ def allocate_ground_links(
         gs_occupied[gs_id].add(gs_idx)
         sat_occupied[sat_id].add(sat_idx)
         new_associations[pair] = indices
+        assoc_by_gs.setdefault(gs_id, {})[pair] = None
+        assoc_by_sat.setdefault(sat_id, {})[pair] = None
 
     def remove_association(pair: tuple[str, str]) -> tuple[int, int]:
         indices = new_associations.pop(pair)
@@ -657,6 +667,8 @@ def allocate_ground_links(
         gs_idx, sat_idx = indices
         gs_occupied.setdefault(gs_id, set()).discard(gs_idx)
         sat_occupied.setdefault(sat_id, set()).discard(sat_idx)
+        assoc_by_gs.get(gs_id, {}).pop(pair, None)
+        assoc_by_sat.get(sat_id, {}).pop(pair, None)
         new_pending_teardowns.pop(pair, None)
         return indices
 
@@ -694,6 +706,8 @@ def allocate_ground_links(
         gs_occ.add(gs_idx)
         sat_occ.add(sat_idx)
         new_associations[candidate.pair] = (gs_idx, sat_idx)
+        assoc_by_gs.setdefault(candidate.gs_id, {})[candidate.pair] = None
+        assoc_by_sat.setdefault(candidate.sat_id, {})[candidate.pair] = None
         rejected.pop(candidate.pair, None)
         return True
 
@@ -711,12 +725,7 @@ def allocate_ground_links(
         return tc - mbb_reserve_for(gs_id) if handover_mode_for(gs_id) == "mbb" else tc
 
     def steady_pairs_for_gs(gs_id: str) -> list[tuple[str, str]]:
-        return [
-            pair
-            for pair in new_associations
-            if pair not in new_pending_teardowns
-            and _ground_and_satellite_ids(pair, ground_station_ids)[0] == gs_id
-        ]
+        return [pair for pair in assoc_by_gs.get(gs_id, ()) if pair not in new_pending_teardowns]
 
     def worst_steady_incumbent(gs_id: str) -> _Candidate | None:
         incumbents = [
@@ -753,9 +762,9 @@ def allocate_ground_links(
     def sat_occupants_for_candidate(candidate: _Candidate) -> list[_Candidate]:
         target_pool = set(sat_terminal_pool(candidate))
         occupants: list[_Candidate] = []
-        for pair, (_gs_idx, sat_idx) in sorted(new_associations.items()):
-            _pair_gs, pair_sat = _ground_and_satellite_ids(pair, ground_station_ids)
-            if pair_sat == candidate.sat_id and sat_idx in target_pool:
+        for pair in sorted(assoc_by_sat.get(candidate.sat_id, ())):
+            sat_idx = new_associations[pair][1]
+            if sat_idx in target_pool:
                 occupants.append(
                     _visible_incumbent_for_pair(pair=pair, candidate_by_pair=candidate_by_pair)
                 )

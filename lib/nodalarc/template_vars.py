@@ -64,8 +64,6 @@ def build_template_vars_from_resolved(
     result["redistribute_static"] = bool(boundary_routes) and domain.protocol in {"isis", "ospf"}
 
     if node.kind == "satellite":
-        if node.plane is None or node.slot is None:
-            raise ValueError(f"satellite node {node.node_id!r} is missing resolved plane/slot")
         gnd_interfaces = [
             iface.name for iface in node.wan_interfaces if iface.name.startswith("gnd")
         ]
@@ -74,13 +72,20 @@ def build_template_vars_from_resolved(
         ]
         result.update(
             {
-                "plane": node.plane,
-                "slot": node.slot,
                 "gnd_interfaces": gnd_interfaces,
                 "isl_interfaces": isl_interfaces,
                 "isl_count": len(isl_interfaces),
             }
         )
+        # Grid coordinates exist only for grid-born satellites (walker/
+        # ring planes). Individually placed satellites — GEO longitude
+        # slots, raw state vectors — legitimately have neither: no FRR
+        # template consumes them, identity never derives from them
+        # (system_id uses the resolver node index), and pod placement
+        # defaults an absent plane to bucket 0. Emitting them only when
+        # present keeps every consumer on its documented absent-key path.
+        if node.plane is not None and node.slot is not None:
+            result.update({"plane": node.plane, "slot": node.slot})
         return result
 
     if node.kind != "ground_station":

@@ -15,31 +15,19 @@ export interface ConstellationPreset {
   constellation: string; // file path — used by generate endpoint
   ground_stations: string; // preset default GS — NOT used for wizard selection
   mode?: ConstellationMode | string | null;
+  /** Node primitive the constellation flies when none is chosen. */
+  default_node?: string | null;
 }
 
+/** A space node primitive — the satellite that flies a constellation's
+ *  geometry. Sessions assemble from primitives: choosing a constellation
+ *  picks geometry plus a default node; this overrides the node. */
 export interface SatelliteTypePreset {
   name: string;
-  description: string | null;
-  isl_terminals: IslTerminalDef[];
-  ground_terminals: GroundTerminalDef[];
-}
-
-export interface IslTerminalDef {
-  type: string;
-  band?: string;
-  count: number;
-  role?: string;
-  max_range_km: number;
-  bandwidth_mbps: number;
-  max_tracking_rate_deg_s: number;
-  field_of_regard_deg?: number;
-}
-
-export interface GroundTerminalDef {
-  type: string;
-  band?: string;
-  count: number;
-  bandwidth_mbps: number;
+  display_name: string;
+  notes: string;
+  file: string;
+  terminals: { id: string; role: string | null; count: number }[];
 }
 
 export interface GroundStationSet {
@@ -108,7 +96,7 @@ export interface CoveragePreviewResult {
 export type WizardPhase = "selections" | "preview" | "protocol" | "extensions" | "review";
 
 /** Which selection card is currently expanded in group A. */
-export type ActiveCard = "constellation" | "satellite-type" | "ground-stations" | "orbit-model" | null;
+export type ActiveCard = "constellation" | "satellite" | "ground-stations" | "orbit-model" | null;
 
 export interface RoutingTimers {
   bfd: boolean;
@@ -196,7 +184,8 @@ export interface WizardState {
   phase: WizardPhase;
   activeCard: ActiveCard;
 
-  // Group A — independent, any order
+  // Group A — independent, any order. The satellite is optional: null
+  // means the constellation's own default node flies.
   constellation: ConstellationPreset | null;
   satelliteType: SatelliteTypePreset | null;
   groundStationSet: GroundStationSet | null;
@@ -216,7 +205,6 @@ export interface WizardState {
 
 export type WizardStep =
   | "selections"
-  | "satellite-type"
   | "ground-stations"
   | "constellation"
   | "protocol"

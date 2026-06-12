@@ -250,3 +250,66 @@ class TestSchedulerAuthorityPreservation:
 
         assert info.range_km == link.range_km
         assert info.latency_ms == link.latency_ms
+
+
+class TestWireParityAfterModelConstruct:
+    """The builders construct wire models WITHOUT validation (the hot
+    authority tick paid ~5.4 ms p95 re-validating OME's own output).
+    These round trips are the replacement contract: validating the dump
+    of a constructed snapshot must reproduce the dump byte for byte. If
+    a field type changes or a coercion starts mattering, this fails
+    before any wire consumer sees a malformed payload."""
+
+    def test_link_state_snapshot_round_trips_byte_identical(self):
+        from nodalarc.models.link_state import LinkStateSnapshot
+
+        isl_pair = ("sat-a", "sat-b")
+        gnd_pair = ("gs-den", "sat-a")
+        propagated_states = {
+            "sat-a": _propagated_state("sat-a", 0.0, 0.0, 550.0),
+            "sat-b": _propagated_state("sat-b", 0.0, 5.0, 550.0),
+        }
+        gs_geo = GeoPosition(39.7, -104.9, 1.6)
+        snapshot = build_link_state_snapshot(
+            LinkSnapshotSource(
+                isl_state={isl_pair: (True, True)},
+                ground_state={gnd_pair: (True, True, "active")},
+                associations={gnd_pair: (0, 1)},
+                pending_teardowns={},
+                propagated_states=propagated_states,
+            ),
+            interface_map={isl_pair: ("isl0", "isl1")},
+            bandwidth_map={isl_pair: 1000.0, gnd_pair: 500.0},
+            sim_time=SIM,
+            seq=7,
+            interval_s=1.0,
+            fixed_positions={"gs-den": (earth_geodetic_to_ecef(gs_geo), gs_geo)},
+            epoch_id=2,
+            mbb_overlap_ticks_by_gs={"gs-den": 30},
+            current_step=11,
+        )
+        wire = snapshot.model_dump_json()
+        assert LinkStateSnapshot.model_validate_json(wire).model_dump_json() == wire
+        assert len(snapshot.links) == 2
+
+    def test_decision_snapshot_round_trips_byte_identical(self):
+        from nodalarc.models.link_decisions import GroundLinkDecisionSnapshot
+        from ome.snapshot_builder import build_link_decision_snapshot
+
+        from tests.unit.test_ome_epoch_commit_ordering import _decision, _policy_audit
+
+        snapshot = build_link_decision_snapshot(
+            decisions={
+                ("gs-den", "sat-a"): _decision(("gs-den", "sat-a"), visible=True),
+                ("gs-den", "sat-b"): _decision(("gs-den", "sat-b"), visible=False),
+            },
+            unscheduled_pairs=(),
+            policy_audit=_policy_audit(),
+            allocation_events=(),
+            sim_time=SIM,
+            snapshot_seq=7,
+            epoch_id=2,
+        )
+        wire = snapshot.model_dump_json()
+        assert GroundLinkDecisionSnapshot.model_validate_json(wire).model_dump_json() == wire
+        assert len(snapshot.decisions) == 2

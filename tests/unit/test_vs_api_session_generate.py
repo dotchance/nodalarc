@@ -85,12 +85,19 @@ def test_constellation_presets_expose_constellation_mode_for_wizard_gating():
 
 
 def test_wizard_presets_are_catalog_backed_not_retired_config_roots():
+    # Satellite presets are catalog space-node PRIMITIVES (sessions assemble
+    # from primitives — the constellation is geometry plus a default node,
+    # and any catalog node can be composed in). The retired config-root
+    # satellite-type overrides stay gone; this list must never be empty.
     sat_response = client.get("/api/v1/presets/satellite-types")
     sets_response = client.get("/api/v1/presets/ground-stations")
     sites_response = client.get("/api/v1/presets/ground-stations/stations")
 
     assert sat_response.status_code == 200
-    assert sat_response.json() == []
+    sat_presets = sat_response.json()
+    assert sat_presets
+    assert all(item["file"].startswith("nodalarc:nodes/space/") for item in sat_presets)
+    assert all(item["terminals"] for item in sat_presets)
     assert sets_response.status_code == 200
     assert sites_response.status_code == 200
 

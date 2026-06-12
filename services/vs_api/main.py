@@ -77,6 +77,12 @@ from yaml import YAMLError
 
 from vs_api.continuous_tracer import ContinuousTracer
 from vs_api.introspect import VTYSH_COMMANDS, run_vtysh
+from vs_api.ops_log import (
+    OPS_LOG_TOKEN,
+    is_operator_visible_ops_event,
+    operator_visible_ops_events,
+    stamp_ops_event,
+)
 from vs_api.session_context import SessionContext, _link_key
 from vs_api.session_manager import SessionManager
 from vs_api.terminal import TerminalManager
@@ -401,37 +407,103 @@ async def _publish_system_ops_event(
         "message": message,
         "details": details,
     }
-    _system_ops_events.append(event)
+    if is_operator_visible_ops_event(event):
+        _system_ops_events.append(stamp_ops_event(event))
 
     log_level = getattr(logging, level.upper(), logging.INFO)
     log.log(log_level, "%s", message, extra={"code": code, "details": details})
 
 
-def _is_operator_visible_ops_event(event: dict) -> bool:
-    """Return False for routine successful telemetry that does not need UI attention."""
-    level = str(event.get("level") or "").lower()
-    code = event.get("code")
-    message = str(event.get("message") or "")
+# Operator-log visibility policy lives in ops_log (shared with the
+# session context, which filters at append time).
+_operator_visible_ops_events = operator_visible_ops_events
 
-    if level == "debug":
-        return False
 
-    if code == "COMMAND_APPLIED" and level in {"", "info"}:
-        return False
+def _ops_events_tail(ctx, *, ops_after: int = 0) -> list[dict]:
+    """Operator-visible ops events newer than the cursor, seq-ordered.
 
-    return not (
-        code == "DISPATCH_ACTUATOR"
-        and level in {"", "info"}
-        and message.startswith("Actuation latency op=")
-        and " failed=0" in message
+    ops_after=0 returns the full 500-tail (REST consumers, first frame
+    of a fresh websocket); a connection's producer passes its cursor so
+    steady-state frames carry only newly arrived events.
+    """
+    all_ops = _operator_visible_ops_events(
+        list(_system_ops_events) + (list(ctx.session_ops_events) if ctx else [])
     )
+    all_ops.sort(key=lambda e: e.get("seq", 0))
+    if ops_after:
+        all_ops = [e for e in all_ops if e.get("seq", 0) > ops_after]
+    return all_ops[-500:]
 
 
-def _operator_visible_ops_events(events: list[dict]) -> list[dict]:
-    return [event for event in events if _is_operator_visible_ops_event(event)]
+@dataclass
+class _SharedFrame:
+    """One snapshot build, shared read-only by every connection.
+
+    The per-client producers used to each rebuild and double-serialize
+    the full snapshot every second under the state lock — O(clients ×
+    session size) of identical work on the serving loop. One builder
+    now produces the base frame once per second; each connection
+    overlays only its per-connection increments (ops cursor slice,
+    health-on-change) onto a shallow copy. Nested structures are shared
+    read-only — overlays replace top-level keys, never mutate nested
+    state.
+    """
+
+    frame: dict
+    health_json: str
 
 
-def _build_snapshot() -> dict | None:
+_shared_frame: _SharedFrame | None = None
+_shared_frame_ready: asyncio.Event | None = None
+
+
+def _overlay_connection_increments(
+    shared: _SharedFrame,
+    *,
+    ops_cursor: int,
+    last_health_json: str | None,
+) -> tuple[dict, int, str]:
+    """Per-connection view of a shared frame. Pure; never mutates shared.
+
+    Returns (snapshot, new_ops_cursor, new_health_json): the ops list is
+    sliced to events newer than the cursor (cursor 0 = first frame =
+    full tail), and actuation_health is omitted when unchanged for this
+    connection.
+    """
+    snapshot = dict(shared.frame)
+    full_ops = snapshot.get("ops_events") or []
+    if ops_cursor:
+        snapshot["ops_events"] = [e for e in full_ops if e.get("seq", 0) > ops_cursor]
+    new_cursor = ops_cursor
+    if snapshot["ops_events"]:
+        new_cursor = max(new_cursor, snapshot["ops_events"][-1].get("seq", 0))
+    if shared.health_json == last_health_json:
+        snapshot.pop("actuation_health", None)
+    return snapshot, new_cursor, shared.health_json
+
+
+def _carry_unsent_increments(pending: dict | None, snapshot: dict) -> dict:
+    """Fold an UNSENT frame's increments into its replacement.
+
+    The mailbox is latest-wins: a slow client's unshipped frame is
+    overwritten. State fields (nodes, links, clock) are idempotent and
+    safely replaced — but the incremental fields are deltas, and a delta
+    that never shipped would be lost with its frame. Ops events from the
+    pending frame prepend (both lists are seq-sorted and the pending
+    ones are strictly older); an unsent actuation_health update carries
+    into a replacement that omitted health as unchanged.
+    """
+    if pending is None:
+        return snapshot
+    pending_ops = pending.get("ops_events") or []
+    if pending_ops:
+        snapshot["ops_events"] = (pending_ops + (snapshot.get("ops_events") or []))[-500:]
+    if "actuation_health" not in snapshot and "actuation_health" in pending:
+        snapshot["actuation_health"] = pending["actuation_health"]
+    return snapshot
+
+
+def _build_snapshot(*, ops_after: int = 0) -> dict | None:
     """Build a StateSnapshot dict from the active SessionContext.
 
     Returns None if no active context (mid-transition or no session).
@@ -479,7 +551,16 @@ def _build_snapshot() -> dict | None:
             sim_time=datetime.fromisoformat(ctx.sim_time)
             if isinstance(ctx.sim_time, str)
             else ctx.sim_time,
-            wall_time=now,
+            # Engine-stamped wall clock. During play this is the same
+            # instant as sim_time (stamped together on each ClockTick);
+            # during pause it advances via heartbeats while sim freezes —
+            # that divergence is real and must display. Serve-time `now`
+            # is only a fallback before the first engine signal arrives.
+            wall_time=(
+                datetime.fromisoformat(engine_wall)
+                if (engine_wall := ctx.engine_wall_time())
+                else now
+            ),
             schema_version=1,
             session_id=ctx.session_id,
             nodes=nodes,
@@ -495,19 +576,21 @@ def _build_snapshot() -> dict | None:
             session_status_detail=_session_manager.status_detail if _session_manager else None,
             playback_paused=ctx.playback_paused,
             playback_speed=ctx.playback_speed,
+            playback_achieved=ctx.playback_achieved,
+            pacing_degraded=ctx.pacing_degraded,
             stale=ctx.is_stale(),
             actuation_notices=list(ctx.actuation_notices_by_key.values()),
             ome_lifecycle_notices=list(ctx.ome_lifecycle_notices_by_key.values()),
             actuation_health=ctx.build_actuation_health(),
         )
         result = json.loads(snapshot.model_dump_json())
-        # System + session OpsEvents merged for the log panel. Routine successful
-        # control-loop telemetry stays out of the operator-facing stream.
-        all_ops = _operator_visible_ops_events(
-            list(_system_ops_events) + list(ctx.session_ops_events)
-        )
-        all_ops.sort(key=lambda e: e.get("timestamp", ""))
-        result["ops_events"] = all_ops[-500:]
+        # System + session OpsEvents merged for the log panel — shipped
+        # INCREMENTALLY per connection (ops_after cursor): re-serializing
+        # the whole 500-entry log into every 1 Hz frame measured 96% of a
+        # 2.5 MB frame. The token lets clients detect a seq-space restart
+        # and replace their scrollback instead of merging.
+        result["ops_events"] = _ops_events_tail(ctx, ops_after=ops_after)
+        result["ops_log_token"] = OPS_LOG_TOKEN
         if _debug_sources:
             result["debug_events"] = list(_debug_events)[-100:]
             result["debug_sources"] = sorted(_debug_sources)
@@ -552,6 +635,37 @@ def _parse_session_yaml(session_yaml: str) -> tuple[str, ResolvedSession]:
     return session.session.name, session
 
 
+def _cr_ready_identity(cr: dict[str, Any]) -> tuple[int, str] | None:
+    """Cheap Ready-state identity from CR metadata/status: no YAML work.
+
+    The 2-second trust poll's question is "did the authoritative session
+    change?" — answerable from generation/runId/pod counts alone.
+    Materializing the session (YAML parse + full resolution — measured
+    0.494 s median in-pod for the 132-node flagship, 2026-06-11) is
+    reserved for actual changes and must run off the event loop.
+    """
+    metadata = cr.get("metadata") or {}
+    status = cr.get("status") or {}
+
+    generation = _as_positive_int(metadata.get("generation"))
+    observed_generation = _as_positive_int(status.get("observedGeneration"))
+    if generation is None or observed_generation != generation:
+        return None
+    if status.get("phase") != "Ready":
+        return None
+    ready_pods = _as_positive_int(status.get("readyPods"))
+    pod_count = _as_positive_int(status.get("podCount"))
+    wired_pods = _as_positive_int(status.get("wiredPods"))
+    if pod_count is None or ready_pods != pod_count:
+        return None
+    if wired_pods != pod_count:
+        return None
+    session_run_id = str(status.get("sessionRunId") or "")
+    if not session_run_id:
+        raise ValueError("Ready ConstellationSpec is missing status.sessionRunId")
+    return generation, sanitize_session_id(session_run_id)
+
+
 def _extract_ready_cr_session(cr: dict[str, Any]) -> CRSessionIdentity | None:
     """Return the CR session only when its Ready state is generation-consistent."""
     return _extract_cr_session(cr, require_ready=True)
@@ -562,39 +676,36 @@ def _extract_cr_session(
     *,
     require_ready: bool,
 ) -> CRSessionIdentity | None:
-    """Return the CR session only when status carries current runtime identity."""
+    """Return the CR session only when status carries current runtime identity.
+
+    Materializes the session from spec.sessionYaml — unbounded CPU work
+    that must never run on the event loop (call via asyncio.to_thread).
+    """
 
     metadata = cr.get("metadata") or {}
     status = cr.get("status") or {}
     spec = cr.get("spec") or {}
 
-    generation = _as_positive_int(metadata.get("generation"))
-    observed_generation = _as_positive_int(status.get("observedGeneration"))
-    ready_pods = _as_positive_int(status.get("readyPods"))
-    pod_count = _as_positive_int(status.get("podCount"))
-    wired_pods = _as_positive_int(status.get("wiredPods"))
-
-    if generation is None or observed_generation != generation:
-        return None
     if require_ready:
-        if status.get("phase") != "Ready":
+        ident = _cr_ready_identity(cr)
+        if ident is None:
             return None
-        if pod_count is None or ready_pods != pod_count:
+        generation, session_run_id = ident
+    else:
+        generation = _as_positive_int(metadata.get("generation"))
+        observed_generation = _as_positive_int(status.get("observedGeneration"))
+        if generation is None or observed_generation != generation:
             return None
-        if wired_pods != pod_count:
+        raw_run_id = str(status.get("sessionRunId") or "")
+        if not raw_run_id:
             return None
+        session_run_id = sanitize_session_id(raw_run_id)
 
     session_yaml = str(spec.get("sessionYaml") or "")
     if not session_yaml.strip():
         raise ValueError("Ready ConstellationSpec is missing spec.sessionYaml")
 
     _display_session_id, session = _parse_session_yaml(session_yaml)
-    session_run_id = str(status.get("sessionRunId") or "")
-    if not session_run_id:
-        if require_ready:
-            raise ValueError("Ready ConstellationSpec is missing status.sessionRunId")
-        return None
-    session_run_id = sanitize_session_id(session_run_id)
 
     status_name = str(status.get("sessionName") or "")
     if require_ready and not status_name:
@@ -634,10 +745,16 @@ def _write_cr_session_file(ready: CRSessionIdentity) -> Path:
 
 
 def _mark_session_manager_ready(session: ResolvedSession, session_path: Path) -> None:
+    """Steady-state CR reconciliation: status bookkeeping ONLY.
+
+    This runs on every 2-second trust poll. It must never do unbounded
+    work: a catalog rescan here once meant a multi-second full session
+    resolution per poll ON the event loop, freezing every websocket
+    sender (live incident 2026-06-11). Rescans happen on session
+    activation and on-demand listing, off the loop.
+    """
     if not _session_manager:
         return
-    with contextlib.suppress(Exception):
-        _session_manager.rescan()
     for available in _session_manager._available:
         if available.get("name") == session.session.name:
             _session_manager.set_active(available["file"])
@@ -662,12 +779,12 @@ async def _activate_session_context_from_cr(ready: CRSessionIdentity, source: st
         and old_ctx.session_id == ready.session_id
         and _active_cr_generation == ready.generation
     ):
-        session_path = _write_cr_session_file(ready)
+        session_path = await asyncio.to_thread(_write_cr_session_file, ready)
         _mark_session_manager_ready(ready.session, session_path)
         return
 
     old_session = old_ctx.session_id if old_ctx else None
-    session_path = _write_cr_session_file(ready)
+    session_path = await asyncio.to_thread(_write_cr_session_file, ready)
 
     await _publish_system_ops_event(
         "info",
@@ -696,7 +813,7 @@ async def _activate_session_context_from_cr(ready: CRSessionIdentity, source: st
     if old_ctx is not None:
         await old_ctx.stop()
 
-    new_ctx = SessionContext(ready.session_id, str(session_path))
+    new_ctx = await asyncio.to_thread(SessionContext, ready.session_id, str(session_path))
     await new_ctx.start(_nats_connection, mode="recovery")
 
     try:
@@ -764,24 +881,61 @@ async def _activate_session_context_from_cr(ready: CRSessionIdentity, source: st
 
 
 async def _monitor_cr_session(api: Any, namespace: str) -> None:
-    """Continuously reconcile VS-API SessionContext with the authoritative CR."""
+    """Continuously reconcile VS-API SessionContext with the authoritative CR.
+
+    Steady state must stay cheap AND off the event loop: the poll answers
+    "did the session change?" from CR metadata alone (_cr_ready_identity).
+    Materialization (YAML parse + full resolution — measured 0.494 s
+    median in-pod for the 132-node flagship) happens only when identity
+    changes, in a worker thread. Running it per-poll on the loop froze
+    every websocket sender ~0.5 s every 2 s — mostly BELOW the watchdog's
+    old 0.5 s floor, so the freeze was live for hours with zero warnings
+    (incident 2026-06-11, second occurrence).
+
+    The single-entry cache below is a memo of the last materialization,
+    keyed by the exact (generation, session_run_id) it was parsed from.
+    The CR remains the source of truth: any identity change reparses.
+    """
 
     global _active_cr_generation
 
     log.info("CR session monitor started")
+    cached: CRSessionIdentity | None = None
+    cached_path: Path | None = None
     while True:
         await asyncio.sleep(_CR_MONITOR_INTERVAL_SECONDS)
         try:
-            cr = api.get_namespaced_custom_object(
+            cr = await asyncio.to_thread(
+                api.get_namespaced_custom_object,
                 group="nodalarc.io",
                 version="v1alpha1",
                 namespace=namespace,
                 plural="constellationspecs",
                 name="current-session",
             )
-            ready = _extract_ready_cr_session(cr)
+            ident = _cr_ready_identity(cr)
+            if ident is None:
+                continue
+            generation, run_id = ident
+
+            ctx = _active_context
+            if (
+                ctx is not None
+                and ctx.session_id == run_id
+                and _active_cr_generation in (None, generation)
+                and cached is not None
+                and cached_path is not None
+                and (cached.generation, cached.session_id) == ident
+            ):
+                _active_cr_generation = generation
+                _mark_session_manager_ready(cached.session, cached_path)
+                continue
+
+            ready = await asyncio.to_thread(_extract_ready_cr_session, cr)
             if ready is None:
                 continue
+            cached = ready
+            cached_path = await asyncio.to_thread(_write_cr_session_file, ready)
 
             ctx = _active_context
             if (
@@ -790,7 +944,7 @@ async def _monitor_cr_session(api: Any, namespace: str) -> None:
                 and _active_cr_generation in (None, ready.generation)
             ):
                 _active_cr_generation = ready.generation
-                _mark_session_manager_ready(ready.session, _write_cr_session_file(ready))
+                _mark_session_manager_ready(ready.session, cached_path)
                 continue
 
             if _session_transition_lock.locked():
@@ -804,7 +958,7 @@ async def _monitor_cr_session(api: Any, namespace: str) -> None:
                     and _active_cr_generation in (None, ready.generation)
                 ):
                     _active_cr_generation = ready.generation
-                    _mark_session_manager_ready(ready.session, _write_cr_session_file(ready))
+                    _mark_session_manager_ready(ready.session, cached_path)
                     continue
 
                 log.info(
@@ -826,6 +980,69 @@ async def _broadcast_to_all(frame: str) -> None:
     for ws in list(_ws_clients):
         with contextlib.suppress(Exception):
             await ws.send_text(frame)
+
+
+async def _shared_frame_builder() -> None:
+    """Build the snapshot once per second for ALL websocket clients.
+
+    Replaces N identical per-connection builds (full pydantic dump +
+    re-parse under the state lock, per client, per second) with one.
+    Each cycle publishes a fresh _SharedFrame and wakes every waiting
+    connection by setting the previous ready-event; connections overlay
+    their own increments on shallow copies. Builds are skipped while no
+    clients are connected.
+    """
+    global _shared_frame, _shared_frame_ready
+    import time as _time
+
+    _shared_frame_ready = asyncio.Event()
+    next_build = _time.monotonic()
+    while True:
+        if _ws_clients:
+            frame = _build_snapshot()
+            if frame is not None:
+                _shared_frame = _SharedFrame(
+                    frame=frame,
+                    health_json=json.dumps(frame.get("actuation_health"), sort_keys=True),
+                )
+                previous_ready = _shared_frame_ready
+                _shared_frame_ready = asyncio.Event()
+                previous_ready.set()
+        next_build += 1.0
+        delay = next_build - _time.monotonic()
+        if delay > 0:
+            await asyncio.sleep(delay)
+        else:
+            next_build = _time.monotonic()
+            await asyncio.sleep(0)
+
+
+async def _event_loop_watchdog() -> None:
+    """Permanent loop-responsiveness monitor.
+
+    Sleeps 0.5 s and measures its own scheduling drift: when something
+    blocks the event loop, every consumer sharing it (websocket senders,
+    NATS handlers) stalls together and this task wakes late. The warn
+    floor is 0.2 s — at the 1 Hz feed cadence that is already 20% of a
+    frame budget. The original 0.5 s floor hid a real 0.49 s-every-2 s
+    freeze for hours (trust-poll resolution, 2026-06-11): a detection
+    threshold at the exact magnitude of the defect class is no detection
+    at all. Companion to the static gate in
+    tests/unit/test_event_loop_contract.py.
+    """
+    import time as _t
+
+    while True:
+        before = _t.monotonic()
+        await asyncio.sleep(0.5)
+        stall = _t.monotonic() - before - 0.5
+        if stall > 0.2:
+            log.warning(
+                "Event loop blocked ~%.2fs: synchronous work is running on "
+                "the serving loop — find it (PYTHONASYNCIODEBUG=1 names the "
+                "task) and offload it with asyncio.to_thread",
+                stall,
+            )
 
 
 async def _nats_subscriber() -> None:
@@ -873,10 +1090,14 @@ async def _nats_subscriber() -> None:
     except Exception as exc:
         log.warning("Wiring progress subscription failed: %s", exc)
 
-    # System OpsEvents — global, not session-scoped
+    # System OpsEvents — global, not session-scoped. Routine telemetry
+    # is filtered at append so it never evicts real history from the
+    # 500-entry log window.
     async def _on_system_ops_event(msg):
         with contextlib.suppress(Exception):
-            _system_ops_events.append(json.loads(msg.data))
+            event = json.loads(msg.data)
+            if is_operator_visible_ops_event(event):
+                _system_ops_events.append(stamp_ops_event(event))
 
     try:
         js = nc.jetstream()
@@ -905,10 +1126,13 @@ async def _nats_subscriber() -> None:
     import kubernetes.client as _k8s
     import kubernetes.config as _k8s_config
 
-    try:
-        _k8s_config.load_incluster_config()
-    except _k8s_config.ConfigException:
-        _k8s_config.load_kube_config()
+    def _load_k8s_config() -> None:
+        try:
+            _k8s_config.load_incluster_config()
+        except _k8s_config.ConfigException:
+            _k8s_config.load_kube_config()
+
+    await asyncio.to_thread(_load_k8s_config)
     _cr_api = _k8s.CustomObjectsApi()
     _cr_ns = get_platform_config().kubernetes_namespace
 
@@ -936,14 +1160,15 @@ async def _nats_subscriber() -> None:
     # - VS-API restarts while a session is running (CR exists immediately)
     while _cr_session is None:
         try:
-            _cr = _cr_api.get_namespaced_custom_object(
+            _cr = await asyncio.to_thread(
+                _cr_api.get_namespaced_custom_object,
                 group="nodalarc.io",
                 version="v1alpha1",
                 namespace=_cr_ns,
                 plural="constellationspecs",
                 name="current-session",
             )
-            _cr_session = _candidate_from_cr(_cr)
+            _cr_session = await asyncio.to_thread(_candidate_from_cr, _cr)
         except Exception as exc:
             log.debug("Waiting for runtime session identity from CR: %s", exc)
         if _cr_session is None:
@@ -970,7 +1195,7 @@ async def _nats_subscriber() -> None:
     else:
         session_id = _cr_session.session_id
         _tmp_session = Path(f"/tmp/_session-{session_id}.yaml")
-        _tmp_session.write_text(_cr_session.session_yaml, encoding="utf-8")
+        await asyncio.to_thread(_tmp_session.write_text, _cr_session.session_yaml, encoding="utf-8")
 
         log.info(
             "Bootstrapping session %s from CR (name=%s phase=%s)",
@@ -987,7 +1212,7 @@ async def _nats_subscriber() -> None:
                     _session_manager.set_active(_s["file"])
                     break
 
-        ctx = SessionContext(session_id, str(_tmp_session))
+        ctx = await asyncio.to_thread(SessionContext, session_id, str(_tmp_session))
         await ctx.start(nc, mode="recovery")
         _active_context = ctx
         _active_cr_generation = _cr_session.generation
@@ -1042,6 +1267,10 @@ async def _nats_subscriber() -> None:
 async def lifespan(app: FastAPI):
     """Start NATS subscriber and WebSocket broadcaster on startup."""
     sub_task = asyncio.create_task(_nats_subscriber())
+    # The loop holds only weak references to tasks: a discarded handle
+    # makes a "permanent" task garbage-collection-eligible.
+    watchdog_task = asyncio.create_task(_event_loop_watchdog(), name="event-loop-watchdog")
+    frame_builder_task = asyncio.create_task(_shared_frame_builder(), name="shared-frame-builder")
 
     def _on_subscriber_done(task: asyncio.Task) -> None:
         exc = task.exception() if not task.cancelled() else None
@@ -1063,6 +1292,8 @@ async def lifespan(app: FastAPI):
 
     sub_task.cancel()
     broadcast_task.cancel()
+    watchdog_task.cancel()
+    frame_builder_task.cancel()
 
 
 app = FastAPI(title="Nodal Arc VS-API", version=project_version(), lifespan=lifespan)
@@ -1359,14 +1590,18 @@ async def _ws_broadcaster() -> None:
                 snapshot = _build_snapshot()
                 if snapshot is None:
                     continue
-                conn = sqlite3.connect(ctx.db_path)
-                insert_snapshot(
-                    conn,
-                    sim_time=snapshot["sim_time"],
-                    wall_time=snapshot["wall_time"],
-                    snapshot_json=json.dumps(snapshot),
-                )
-                conn.close()
+
+                def _store(snap=snapshot, db_path=ctx.db_path):
+                    conn = sqlite3.connect(db_path)
+                    insert_snapshot(
+                        conn,
+                        sim_time=snap["sim_time"],
+                        wall_time=snap["wall_time"],
+                        snapshot_json=json.dumps(snap),
+                    )
+                    conn.close()
+
+                await asyncio.to_thread(_store)
             except Exception as exc:
                 log.warning(f"Failed to store snapshot: {exc}")
 
@@ -1398,13 +1633,56 @@ async def ws_state(websocket: WebSocket) -> None:
         ctx = _active_context
         if ctx and ctx.cached_ephemeris:
             await websocket.send_json(ctx.cached_ephemeris)
-        while not done.is_set():
-            snapshot = _build_snapshot()
-            if snapshot is None:
-                await asyncio.sleep(1.0)
-                continue
-            await websocket.send_json(snapshot)
-            await asyncio.sleep(1.0)
+        # Latest-wins delivery (the websocket form of replace-not-merge):
+        # the producer fills a one-slot mailbox on an absolute 1 s
+        # schedule and never blocks on the socket; the shipper always
+        # sends the freshest state. A client slower than the feed gets
+        # fewer-but-current frames — backpressure skips frames instead of
+        # queueing them, so a slow consumer's clock lag stays bounded at
+        # ~one consumption period rather than growing without limit
+        # (measured live 2026-06-11: a 1.6 s/frame consumer accumulated
+        # +0.6 s of staleness per queued frame under the old send loop).
+
+        latest: list[dict | None] = [None]
+        fresh = asyncio.Event()
+
+        async def _producer():
+            # Per-connection increment state: ops events ship once (seq
+            # cursor) and actuation_health ships on change — re-sending
+            # both wholesale measured 98% of the frame. The frame itself
+            # is built ONCE per second by the shared builder; this task
+            # only overlays this connection's increments on a copy.
+            ops_cursor = 0
+            last_health_json: str | None = None
+            while not done.is_set():
+                ready = _shared_frame_ready
+                if ready is None:
+                    await asyncio.sleep(0.2)
+                    continue
+                await ready.wait()
+                shared = _shared_frame
+                if shared is None:
+                    continue
+                snapshot, ops_cursor, last_health_json = _overlay_connection_increments(
+                    shared, ops_cursor=ops_cursor, last_health_json=last_health_json
+                )
+                # A still-unshipped previous frame is about to be
+                # overwritten — its increments must survive into the
+                # replacement or a slow client silently loses them.
+                pending = latest[0] if fresh.is_set() else None
+                latest[0] = _carry_unsent_increments(pending, snapshot)
+                fresh.set()
+
+        producer_task = asyncio.create_task(_producer())
+        try:
+            while not done.is_set():
+                await fresh.wait()
+                fresh.clear()
+                snapshot = latest[0]
+                if snapshot is not None:
+                    await websocket.send_json(snapshot)
+        finally:
+            producer_task.cancel()
 
     async def _receiver():
         try:
@@ -1467,9 +1745,10 @@ async def ws_terminal(websocket: WebSocket, node_id: str) -> None:
         await websocket.close(code=4404, reason="Node not found")
         return
 
-    # Load SSH key (cached in memory after first call — never written to disk)
+    # Load SSH key (cached in memory after first call — never written to
+    # disk). The Secret freshness check is a sync K8s read: off the loop.
     try:
-        ssh_key = _load_ssh_key(namespace)
+        ssh_key = await asyncio.to_thread(_load_ssh_key, namespace)
     except RuntimeError as e:
         log.warning("Terminal key error: %s", e)
         await websocket.close(code=4503, reason=str(e))
@@ -1546,7 +1825,7 @@ async def get_node_config(node_id: str) -> Response:
         return JSONResponse(status_code=404, content={"error": "Node not found"})
 
     try:
-        ssh_key = _load_ssh_key(namespace)
+        ssh_key = await asyncio.to_thread(_load_ssh_key, namespace)
     except RuntimeError as exc:
         log.warning("SSH key unavailable for config export: %s", exc)
         return JSONResponse(status_code=503, content={"error": "SSH key unavailable"})
@@ -2362,7 +2641,7 @@ async def start_continuous_trace(body: dict) -> dict:
 
     # Load trace context
     try:
-        tracer = _create_continuous_tracer()
+        tracer = await asyncio.to_thread(_create_continuous_tracer)
     except Exception as exc:
         log.warning("Failed to create continuous tracer: %s", exc, exc_info=True)
         return JSONResponse(status_code=500, content={"error": "Tracer initialization failed"})
@@ -2550,8 +2829,9 @@ async def switch_session(body: dict):
     session_path = body.get("session", "")
     if not session_path:
         return JSONResponse(status_code=400, content={"error": "session field required"})
-    # Rescan session directory so newly added YAML files are recognized
-    _session_manager.rescan()
+    # Rescan session directory so newly added YAML files are recognized.
+    # Full multi-session catalog resolution — never on the loop.
+    await asyncio.to_thread(_session_manager.rescan)
     valid_files = _session_manager._valid_session_files()
     if session_path not in valid_files:
         return JSONResponse(status_code=400, content={"error": "Unknown session file"})
@@ -2565,7 +2845,11 @@ async def switch_session(body: dict):
 @app.get("/api/v1/presets/constellations", dependencies=[Depends(_require_api_key)])
 def list_constellation_presets() -> list[dict]:
     """Return available constellation presets for the wizard."""
-    from nodalarc.session_generator import constellation_source_mode, load_constellation_presets
+    from nodalarc.session_generator import (
+        constellation_default_node,
+        constellation_source_mode,
+        load_constellation_presets,
+    )
 
     presets = load_constellation_presets()
     return [
@@ -2576,6 +2860,7 @@ def list_constellation_presets() -> list[dict]:
             "constellation": p.constellation,
             "ground_stations": p.ground_stations,
             "mode": constellation_source_mode(p.constellation),
+            "default_node": constellation_default_node(p.constellation),
         }
         for p in presets.values()
     ]
@@ -2583,15 +2868,16 @@ def list_constellation_presets() -> list[dict]:
 
 @app.get("/api/v1/presets/satellite-types", dependencies=[Depends(_require_api_key)])
 def list_satellite_types() -> list[dict]:
-    """Return satellite-type overrides for the wizard.
+    """Return the space node primitives that can fly a constellation.
 
-    Satellite-type override was a retired config convenience. Current catalog
-    constellations own their node model, terminal mounts, and orbit; users who
-    want a different combination author or choose a different constellation
-    primitive. Returning an empty list prevents the UI from offering an invalid
-    override path.
+    Sessions assemble from primitives: the constellation supplies geometry
+    and a default node; the wizard may swap in any of these. (The retired
+    config-root satellite-type overrides are gone; these are catalog node
+    primitives, composed by the generator.)
     """
-    return []
+    from nodalarc.session_generator import list_space_node_presets
+
+    return list_space_node_presets(_CATALOG_ROOTS)
 
 
 @app.get("/api/v1/presets/ground-stations", dependencies=[Depends(_require_api_key)])
@@ -2782,12 +3068,13 @@ async def deploy_generated_session(body: dict) -> dict:
     if not yaml_str:
         return JSONResponse(status_code=400, content={"error": "yaml field required"})
     try:
-        raw = _yaml.safe_load(yaml_str)
+        raw = await asyncio.to_thread(_yaml.safe_load, yaml_str)
     except YAMLError as exc:
         log.info("Invalid session YAML rejected: %s", exc)
         return _error_response(400, "Invalid session YAML")
     try:
-        resolution = resolve_session_with_assets(
+        resolution = await asyncio.to_thread(
+            resolve_session_with_assets,
             raw,
             catalog_roots=_CATALOG_ROOTS,
             source_context=SourceContext(origin="vs_api.deploy"),
@@ -2805,7 +3092,9 @@ async def deploy_generated_session(body: dict) -> dict:
     try:
         stem = generated_file_stem(resolution.resolved.session.name)
         session_file = generated_file_path(_generated_sessions_dir(), f"_wizard-{stem}.yaml")
-        write_text_exclusive(session_file, _yaml.dump(raw, default_flow_style=False))
+        await asyncio.to_thread(
+            lambda: write_text_exclusive(session_file, _yaml.dump(raw, default_flow_style=False))
+        )
     except (CatalogPathError, FileExistsError) as exc:
         return _catalog_error(exc)
 
@@ -2814,7 +3103,7 @@ async def deploy_generated_session(body: dict) -> dict:
         return JSONResponse(status_code=503, content={"error": "Session manager not initialized"})
     if _session_manager.status == "switching":
         return JSONResponse(status_code=409, content={"error": "Switch already in progress"})
-    _session_manager.rescan()
+    await asyncio.to_thread(_session_manager.rescan)
     session_file_value = config_value_for(session_file)
     asyncio.create_task(_run_switch(session_file_value))
     return {"status": "switching", "session_file": session_file_value}
@@ -2833,12 +3122,13 @@ async def deploy_from_yaml(body: dict) -> dict:
     if not yaml_str:
         return JSONResponse(status_code=400, content={"error": "yaml field required"})
     try:
-        raw = _yaml.safe_load(yaml_str)
+        raw = await asyncio.to_thread(_yaml.safe_load, yaml_str)
     except YAMLError as exc:
         log.info("Invalid session YAML rejected: %s", exc)
         return _error_response(400, "Invalid session YAML")
     try:
-        resolution = resolve_session_with_assets(
+        resolution = await asyncio.to_thread(
+            resolve_session_with_assets,
             raw,
             catalog_roots=_CATALOG_ROOTS,
             source_context=SourceContext(origin="vs_api.upload"),
@@ -2854,7 +3144,9 @@ async def deploy_from_yaml(body: dict) -> dict:
 
     session_file = generated_file_path(_generated_sessions_dir(), f"_wizard-{stem}.yaml")
     try:
-        write_text_exclusive(session_file, _yaml.dump(raw, default_flow_style=False))
+        await asyncio.to_thread(
+            lambda: write_text_exclusive(session_file, _yaml.dump(raw, default_flow_style=False))
+        )
     except FileExistsError as exc:
         return _catalog_error(exc)
 
@@ -2862,7 +3154,7 @@ async def deploy_from_yaml(body: dict) -> dict:
         return JSONResponse(status_code=503, content={"error": "Session manager not initialized"})
     if _session_manager.status == "switching":
         return JSONResponse(status_code=409, content={"error": "Switch already in progress"})
-    _session_manager.rescan()
+    await asyncio.to_thread(_session_manager.rescan)
     session_file_value = config_value_for(session_file)
     asyncio.create_task(_run_switch(session_file_value))
     return {"status": "switching", "session_file": session_file_value}
@@ -2966,19 +3258,19 @@ async def _run_switch_locked(session_path: str) -> None:
             )
 
         ready_cr = await _session_manager.switch(session_path, progress_fn=_switch_progress)
-        ready = _extract_ready_cr_session(ready_cr)
+        ready = await asyncio.to_thread(_extract_ready_cr_session, ready_cr)
         if ready is None:
             raise RuntimeError("Operator returned Ready without a current session_run_id")
 
         # (f) Create new SessionContext
         session_id = ready.session_id
-        session_path_for_context = _write_cr_session_file(ready)
+        session_path_for_context = await asyncio.to_thread(_write_cr_session_file, ready)
 
         if _nats_connection is None:
             log.error("FATAL: No NATS connection for new SessionContext")
             raise RuntimeError("No NATS connection available")
 
-        new_ctx = SessionContext(session_id, str(session_path_for_context))
+        new_ctx = await asyncio.to_thread(SessionContext, session_id, str(session_path_for_context))
         await new_ctx.start(_nats_connection, mode="switch")
 
         # (g) Wait for first live snapshot
@@ -3080,17 +3372,21 @@ async def _poll_cr_until_ready() -> None:
     import kubernetes.client
     import kubernetes.config
 
-    try:
-        kubernetes.config.load_incluster_config()
-    except kubernetes.config.ConfigException:
-        kubernetes.config.load_kube_config()
+    def _load_k8s_config() -> None:
+        try:
+            kubernetes.config.load_incluster_config()
+        except kubernetes.config.ConfigException:
+            kubernetes.config.load_kube_config()
+
+    await asyncio.to_thread(_load_k8s_config)
     api = kubernetes.client.CustomObjectsApi()
     ns = get_platform_config().kubernetes_namespace
 
     for _ in range(600):  # 10 minutes max
         await asyncio.sleep(1)
         try:
-            cr = api.get_namespaced_custom_object(
+            cr = await asyncio.to_thread(
+                api.get_namespaced_custom_object,
                 group="nodalarc.io",
                 version="v1alpha1",
                 namespace=ns,
@@ -3106,7 +3402,7 @@ async def _poll_cr_until_ready() -> None:
                 # Only update from CR for non-Wiring phases.
                 _session_manager.status_detail = message or f"Status: {phase}"
             if phase == "Ready":
-                ready = _extract_ready_cr_session(cr)
+                ready = await asyncio.to_thread(_extract_ready_cr_session, cr)
                 if ready is None:
                     log.info("CR phase is Ready but generation/pod status is not consistent yet")
                     continue
@@ -3137,7 +3433,9 @@ async def _poll_cr_until_ready() -> None:
                             return
                 elif ctx is not None and ctx.session_id == ready.session_id:
                     _active_cr_generation = ready.generation
-                    _mark_session_manager_ready(ready.session, _write_cr_session_file(ready))
+                    _mark_session_manager_ready(
+                        ready.session, await asyncio.to_thread(_write_cr_session_file, ready)
+                    )
 
                 ctx = _active_context
                 if ctx:

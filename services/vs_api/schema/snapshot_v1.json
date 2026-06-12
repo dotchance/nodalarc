@@ -1034,6 +1034,23 @@
       "title": "Playback Speed",
       "type": "number"
     },
+    "playback_achieved": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Playback Achieved"
+    },
+    "pacing_degraded": {
+      "default": false,
+      "title": "Pacing Degraded",
+      "type": "boolean"
+    },
     "stale": {
       "default": false,
       "title": "Stale",

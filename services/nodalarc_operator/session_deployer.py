@@ -1082,12 +1082,17 @@ def write_wiring_manifest(
         node_sysctls = {**base_sysctls, **stack.sysctls}
         mpls_enable = any(name.startswith("net.mpls.") for name in stack.sysctls)
         if node.kind == "satellite":
-            if node.plane is None or node.slot is None:
-                raise ValueError(f"satellite node {node.node_id!r} is missing plane/slot")
+            # plane/slot are optional grid coordinates — individually
+            # placed satellites (GEO longitude slots, state vectors) have
+            # neither. The Node Agent never reads them; included only
+            # when present so consumers stay on their absent-key paths.
             nodes[node.node_id] = {
                 "node_type": "satellite",
-                "plane": node.plane,
-                "slot": node.slot,
+                **(
+                    {"plane": node.plane, "slot": node.slot}
+                    if node.plane is not None and node.slot is not None
+                    else {}
+                ),
                 "sysctls": dict(node_sysctls),
                 "isl_interfaces": fixed_interfaces.get(node.node_id, []),
                 "gnd_interfaces": [
@@ -1678,12 +1683,16 @@ def _placement_node_vars_from_resolution(resolution: SessionResolution) -> dict[
     ground_indices = resolution.resolved.ground_index_by_node_id()
     for node in resolution.resolved.nodes:
         if node.kind == "satellite":
-            if node.plane is None or node.slot is None:
-                raise ValueError(f"satellite node {node.node_id!r} is missing plane/slot")
+            # Optional grid coordinates: placement reads plane via
+            # .get("plane", 0), so a non-grid satellite (GEO longitude
+            # slot, state vector) lands in bucket 0 deterministically.
             node_vars[node.node_id] = {
                 "node_type": "satellite",
-                "plane": node.plane,
-                "slot": node.slot,
+                **(
+                    {"plane": node.plane, "slot": node.slot}
+                    if node.plane is not None and node.slot is not None
+                    else {}
+                ),
             }
         elif node.kind == "ground_station":
             node_vars[node.node_id] = {

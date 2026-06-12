@@ -89,14 +89,45 @@ def test_generate_catalog_session_supports_custom_site_set_object() -> None:
     assert raw["segments"][1]["placement"]["from_site_set"] == site_set_ref
 
 
-def test_generate_catalog_session_rejects_retired_satellite_type_override() -> None:
-    with pytest.raises(ValueError, match="satellite_type overrides are retired"):
+def test_generate_session_composes_chosen_satellite_primitive() -> None:
+    """Sessions assemble from primitives: the constellation supplies
+    geometry; the chosen space node primitive flies it. The composed
+    constellation is inlined with the swapped node ref and a distinct id,
+    and the result still resolves through the production resolver."""
+    import yaml as _yaml
+    from nodalarc.resolve_session import resolve_session
+
+    text, _warnings = generate_session_yaml(
+        constellation="earth-leo-ring-36",
+        protocol="isis",
+        extensions=[],
+        orbit_propagator="j2_mean_elements",
+        satellite_type="leo-relay",
+    )
+    raw = _yaml.safe_load(text)
+    space_source = raw["segments"][0]["source"]
+    assert isinstance(space_source, dict)
+    body = space_source["constellation"]
+    assert body["node"] == "nodalarc:nodes/space/leo-relay.yaml"
+    assert body["id"].endswith("-leo-relay")
+    resolved = resolve_session(raw)
+    sats = [n for n in resolved.nodes if n.kind == "satellite"]
+    assert sats
+    assert {t.terminal_id for t in sats[0].terminal_inventory} == {
+        "access_ka",
+        "isl_optical",
+        "relay_optical",
+    }
+
+
+def test_generate_session_rejects_unknown_satellite_primitive() -> None:
+    with pytest.raises(ValueError, match="Unknown satellite primitive"):
         generate_session_yaml(
             constellation="earth-leo-ring-36",
             protocol="isis",
             extensions=[],
             orbit_propagator="j2_mean_elements",
-            satellite_type="starlink-v2",
+            satellite_type="not-a-real-node",
         )
 
 

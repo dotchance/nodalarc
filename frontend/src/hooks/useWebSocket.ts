@@ -4,6 +4,7 @@
 
 import { useEffect, useRef, useState, useCallback } from "react";
 import { getWsUrl, fetchApiKey } from "../config";
+import { mergeSnapshot } from "../snapshotMerge";
 import type { StateSnapshot } from "../types";
 import type { SessionEphemeris, PlaybackStateMsg } from "../sim/ephemeris";
 
@@ -87,6 +88,9 @@ export function useWebSocket(): WebSocketState {
           setSessionError(null);
           setSwitchDetail(null);
           if (data.snapshot) {
+            // Stamp transport arrival here, not at React effect time —
+            // render scheduling delay must not fold into the clock phase.
+            data.snapshot.client_arrival_ms = performance.now();
             setSnapshot(data.snapshot as StateSnapshot);
           }
           return;
@@ -109,8 +113,13 @@ export function useWebSocket(): WebSocketState {
           return;
         }
 
-        // StateSnapshot — the regular per-tick payload
-        setSnapshot(data as StateSnapshot);
+        // StateSnapshot — the regular per-tick payload. Stamp transport
+        // arrival here, not at React effect time — render scheduling
+        // delay must not fold into the clock phase. Incremental fields
+        // (ops_events, actuation_health) merge against the previous
+        // snapshot — the server ships them as deltas.
+        data.client_arrival_ms = performance.now();
+        setSnapshot((prev) => mergeSnapshot(prev, data as StateSnapshot));
       } catch {
         // Drop malformed frames
       }

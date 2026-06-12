@@ -312,15 +312,31 @@ class ClockTick(BaseModel):
     wall_time: datetime
     compression_ratio: float
     epoch_id: int = 0
+    # Rate honesty: compression_ratio is the COMMANDED rate;
+    # achieved_ratio is the MEASURED d(sim)/d(wall) over the recent pacing
+    # window. None until the window warms up. pacing_degraded is the
+    # Pacemaker's own judgment that it is sustainedly failing to deliver
+    # the commanded rate - consumers must surface it, never infer it.
+    achieved_ratio: float | None = None
+    pacing_degraded: bool = False
 
 
 class HeartbeatTick(BaseModel):
-    """Liveness signal during window computation — does NOT advance sim_time."""
+    """Engine liveness while the clock is deliberately not ticking.
+
+    Published by the OME pacing thread once per wall-second during pause.
+    No ClockTicks flow then, and without a liveness signal consumers
+    cannot tell a healthy pause from a dead engine — a STALE banner over
+    a healthy pause and a healthy display over a dead engine are both
+    false-state displays. wall_time is the engine's own stamp so
+    consumers can show true sim/wall divergence while sim is frozen.
+    Does NOT advance sim_time.
+    """
 
     model_config = ConfigDict(frozen=True)
 
     wall_time: datetime
-    status: str  # "computing" or "ready"
+    status: str  # "paused"
 
 
 class TimelinePositionSnapshot(BaseModel):
@@ -605,6 +621,47 @@ class SchedulingCheckpoint(BaseModel):
     paused: bool
     time_accel: float
     written_at: float  # wall clock (time.time()) when checkpoint was published
+    # Exact epoch anchor. sim_time above is microsecond-quantized by
+    # datetime, so reconstructing the epoch from it is NOT bit-exact for
+    # fractional epochs - and recovery replay must recompute history from
+    # bit-identical inputs. None only in checkpoints written before this
+    # field existed; recovery falls back to the quantized reconstruction
+    # and logs that it did.
+    epoch_unix: float | None = None
+
+
+class ReplayAnchor(BaseModel):
+    """Periodic full capture of the state recovery replay rebuilds.
+
+    The scheduling checkpoint is written every tick but holds only the
+    facts that cannot be recomputed; recovery rebuilds everything else
+    by replaying from step zero, which costs minutes once a session has
+    lived for hours. The anchor captures the complete replay-carried
+    state as of one step — the event-diff baselines (isl_state and
+    gs_state ARE the prior-tick pair state) plus the allocator
+    commitments at that step — so recovery replays only the gap from
+    the anchor to the checkpoint. The dwell memo is deliberately
+    excluded: it is a pure self-filling cache.
+
+    Published to the NODALARC_SESSION stream (MaxMsgsPerSubject=1,
+    latest wins), gzip-encoded by the codec twins beside the
+    checkpoint's. An anchor from another epoch, or at or past the
+    checkpoint step, or with an incompatible schema is discarded and
+    recovery falls back to the full replay — slower, never wrong.
+
+    isl_state: pair_key -> (visible, scheduled)
+    gs_state:  pair_key -> (visible, scheduled, scheduling_state)
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    epoch_id: int
+    step: int
+    isl_state: dict[str, tuple[bool, bool]]
+    gs_state: dict[str, tuple[bool, bool, str]]
+    associations: dict[str, CheckpointAssociation]
+    pending_teardowns: dict[str, TeardownEntry]
+    written_at: float
 
 
 class OpsEvent(BaseModel):

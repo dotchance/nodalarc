@@ -165,3 +165,4 @@ configs/constellations/_ephemeral/*
 configs/ground-stations/_ephemeral/*
 !configs/constellations/_ephemeral/.gitkeep
 !configs/ground-stations/_ephemeral/.gitkeep
+perf-results/

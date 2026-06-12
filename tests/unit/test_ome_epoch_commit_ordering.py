@@ -12,13 +12,14 @@ from pathlib import Path
 
 import ome.event_stream as ome_event_stream
 import ome.main as ome_main
-import pytest
 import yaml
 from nodalarc.models.events import (
     ClockTick,
+    HeartbeatTick,
     OpsEvent,
     PlaybackControlCommand,
     PlaybackState,
+    SchedulingCheckpoint,
     SessionEphemeris,
 )
 from nodalarc.models.link_decisions import GroundLinkDecisionSnapshot, GroundPolicyAudit
@@ -27,6 +28,7 @@ from nodalarc.nats_channels import (
     ground_link_decision_snapshot_subject,
     link_state_snapshot_subject,
     ome_clock_subject,
+    ome_heartbeat_subject,
     ome_visibility_subject,
     ops_event_subject,
     playback_state_subject,
@@ -34,7 +36,6 @@ from nodalarc.nats_channels import (
     session_ephemeris_subject,
 )
 from nodalarc.platform_config import init_platform_config
-from nodalarc.scheduling_checkpoint import decode_retained_scheduling_checkpoint
 from ome.event_stream import StepResult
 from ome.ground_allocator import GroundAllocationResult
 from ome.main import _load_session_config, _run_pacing
@@ -44,9 +45,17 @@ from ome.types import GroundVisibilityDecision, MbbTeardownLifecycleEvent
 from tests.conftest import build_segment_session_dict
 
 
-@pytest.fixture(autouse=True)
-def _disable_lookahead(monkeypatch):
-    monkeypatch.setattr(ome_main._LookAheadThread, "submit", lambda self, **_kwargs: None)
+def _as_model(model_cls, payload):
+    """Queue records carry frozen wire models or DEFERRED builds — wire
+    materialization and serialization both run on the publisher thread.
+    Building here exercises exactly what the publisher executes.
+    Pre-encoded bytes payloads remain valid queue items."""
+    if isinstance(payload, (bytes, bytearray)):
+        return model_cls.model_validate_json(payload)
+    if hasattr(payload, "build"):
+        payload = payload.build()
+    assert isinstance(payload, model_cls), f"expected {model_cls.__name__}, got {type(payload)}"
+    return payload
 
 
 class _NoCheckpointSub:
@@ -271,11 +280,11 @@ def test_initial_epoch_publishes_step0_snapshot_before_playing_and_clock(monkeyp
     ]
     assert ome_visibility_subject(session_id) not in subjects[:6]
 
-    eph = SessionEphemeris.model_validate_json(records.records[0][1])
-    snapshot = LinkStateSnapshot.model_validate_json(records.records[1][1])
-    decisions = GroundLinkDecisionSnapshot.model_validate_json(records.records[2][1])
-    checkpoint = decode_retained_scheduling_checkpoint(records.records[3][1])
-    playback = PlaybackState.model_validate_json(records.records[4][1])
+    eph = _as_model(SessionEphemeris, records.records[0][1])
+    snapshot = _as_model(LinkStateSnapshot, records.records[1][1])
+    decisions = _as_model(GroundLinkDecisionSnapshot, records.records[2][1])
+    checkpoint = _as_model(SchedulingCheckpoint, records.records[3][1])
+    playback = _as_model(PlaybackState, records.records[4][1])
 
     assert checkpoint is not None
     assert (
@@ -363,14 +372,12 @@ def test_seek_abandons_inflight_old_tick_and_commits_step0_snapshot(monkeypatch,
     ]
     assert visibility_subject not in subjects[first_clock_index + 1 : second_clock_index + 1]
 
-    initial_snapshot = LinkStateSnapshot.model_validate_json(records.records[1][1])
-    snapshot = LinkStateSnapshot.model_validate_json(records.records[first_clock_index + 2][1])
-    decisions = GroundLinkDecisionSnapshot.model_validate_json(
-        records.records[first_clock_index + 3][1]
-    )
-    checkpoint = decode_retained_scheduling_checkpoint(records.records[first_clock_index + 4][1])
-    playback = PlaybackState.model_validate_json(records.records[first_clock_index + 5][1])
-    clock = ClockTick.model_validate_json(records.records[second_clock_index][1])
+    initial_snapshot = _as_model(LinkStateSnapshot, records.records[1][1])
+    snapshot = _as_model(LinkStateSnapshot, records.records[first_clock_index + 2][1])
+    decisions = _as_model(GroundLinkDecisionSnapshot, records.records[first_clock_index + 3][1])
+    checkpoint = _as_model(SchedulingCheckpoint, records.records[first_clock_index + 4][1])
+    playback = _as_model(PlaybackState, records.records[first_clock_index + 5][1])
+    clock = _as_model(ClockTick, records.records[second_clock_index][1])
     expected_sim_time = datetime.fromtimestamp(seek_target["unix"], UTC)
 
     assert checkpoint is not None
@@ -420,7 +427,6 @@ def test_initial_epoch_ordering_oracle_uses_fixed_step_result(monkeypatch, tmp_p
         return fixed_result
 
     monkeypatch.setattr(ome_event_stream, "compute_step", _fixed_compute_step)
-    monkeypatch.setattr(ome_main._LookAheadThread, "submit", lambda self, **_kwargs: None)
 
     records = _PassiveQueue()
 
@@ -452,10 +458,10 @@ def test_initial_epoch_ordering_oracle_uses_fixed_step_result(monkeypatch, tmp_p
     ]
     assert ome_visibility_subject(session_id) not in subjects[:6]
 
-    snapshot = LinkStateSnapshot.model_validate_json(records.records[1][1])
-    decisions = GroundLinkDecisionSnapshot.model_validate_json(records.records[2][1])
-    playback = PlaybackState.model_validate_json(records.records[4][1])
-    clock = ClockTick.model_validate_json(records.records[5][1])
+    snapshot = _as_model(LinkStateSnapshot, records.records[1][1])
+    decisions = _as_model(GroundLinkDecisionSnapshot, records.records[2][1])
+    playback = _as_model(PlaybackState, records.records[4][1])
+    clock = _as_model(ClockTick, records.records[5][1])
 
     assert snapshot.sim_time == decisions.sim_time == clock.sim_time == fixed_time
     assert snapshot.snapshot_seq == decisions.snapshot_seq == 1
@@ -538,7 +544,7 @@ def test_initial_epoch_lifecycle_event_uses_ops_enqueue_after_snapshot(monkeypat
     checkpoint_index = subjects.index(scheduling_checkpoint_subject(session_id))
 
     assert snapshot_index < lifecycle_index < checkpoint_index
-    event = OpsEvent.model_validate_json(records.records[lifecycle_index][1])
+    event = _as_model(OpsEvent, records.records[lifecycle_index][1])
     assert event.source == "ome"
     assert event.code == "MBB_TEARDOWN_TERMINAL"
     assert event.details["terminal_outcome"] == "teardown_completed"
@@ -611,13 +617,115 @@ def test_seek_step0_compute_failure_logs_epoch_and_target_without_new_snapshot(
 
     state_subject = link_state_snapshot_subject(session_id)
     snapshots = [
-        LinkStateSnapshot.model_validate_json(payload)
+        _as_model(LinkStateSnapshot, payload)
         for subject, payload in records.records
         if subject == state_subject
     ]
     assert [snapshot.epoch_id for snapshot in snapshots] == [0]
     assert shutdown.is_set()
     assert ome_main._seeking is True
+
+
+def test_pause_gate_publishes_liveness_heartbeats(monkeypatch, tmp_path):
+    """A paused engine must prove it is alive: no ClockTicks flow during
+    pause, so the pacing thread emits a HeartbeatTick once per wall-second
+    through the pause gate. Without it, consumers cannot distinguish a
+    healthy pause from a dead engine — both silences look identical."""
+    session_path = _demo_epoch_commit_session_path(tmp_path)
+
+    import nats
+
+    async def _fake_connect(*args, **kwargs):
+        return _NoCheckpointNc()
+
+    monkeypatch.setattr(nats, "connect", _fake_connect)
+    init_platform_config(Path("configs/platform.yaml"))
+
+    cfg = _load_epoch_commit_cfg(session_path, "pause-heartbeat")
+    session_id = cfg.session_id
+
+    _reset_playback_globals()
+    try:
+        shutdown = threading.Event()
+        hb_subject = ome_heartbeat_subject(session_id)
+        clock_subject = ome_clock_subject(session_id)
+
+        class _PauseAfterFirstTickQueue:
+            """Flip the engine into pause on the first ClockTick (runs on
+            the pacing thread, like a playback command landing), resume
+            after two heartbeats prove pause liveness, and stop once the
+            first post-resume ClockTick arrives.
+
+            _run_pacing resets _paused=False at startup, so pause must be
+            commanded after the run begins, not pre-set."""
+
+            def __init__(self) -> None:
+                self.records: list[tuple[str, bytes]] = []
+                self._heartbeats = 0
+                self._clock_ticks = 0
+
+            def put(self, item, timeout: float | None = None) -> None:
+                self.records.append(item)
+                subject, _payload = item
+                if subject == clock_subject:
+                    self._clock_ticks += 1
+                    if self._clock_ticks == 1:
+                        ome_main._paused = True
+                    else:
+                        shutdown.set()
+                if subject == hb_subject:
+                    self._heartbeats += 1
+                    if self._heartbeats >= 2:
+                        ome_main._paused = False
+
+        records = _PauseAfterFirstTickQueue()
+
+        _run_pacing(
+            str(session_path),
+            output_dir=None,
+            event_queue=records,
+            shutdown_event=shutdown,
+            preloaded_cfg=cfg,
+        )
+
+        heartbeats = [payload for subject, payload in records.records if subject == hb_subject]
+        assert len(heartbeats) >= 2
+        for payload in heartbeats[:2]:
+            hb = _as_model(HeartbeatTick, payload)
+            assert hb.status == "paused"
+            assert hb.wall_time is not None
+        # The paused engine advances no sim time: no ClockTick between
+        # the one that commanded the pause and the resume.
+        subjects = [subject for subject, _p in records.records]
+        first_clock_idx = min(i for i, s in enumerate(subjects) if s == clock_subject)
+        first_hb_idx = min(i for i, s in enumerate(subjects) if s == hb_subject)
+        last_hb_idx = max(i for i, s in enumerate(subjects) if s == hb_subject)
+        assert first_clock_idx < first_hb_idx
+        assert not any(s == clock_subject for s in subjects[first_clock_idx + 1 : last_hb_idx]), (
+            "ClockTick advanced during pause"
+        )
+
+        # Pacemaker transitions are durable: pause commits a checkpoint
+        # with paused=True BEFORE going quiet (recovery of an engine that
+        # died paused must restore a paused engine — the per-tick stream
+        # alone resurrects PLAY, found live 2026-06-11), and resume
+        # commits paused=False before the first post-resume tick.
+        ckpt_subject = scheduling_checkpoint_subject(session_id)
+        ckpts = [
+            (i, _as_model(SchedulingCheckpoint, payload))
+            for i, (subject, payload) in enumerate(records.records)
+            if subject == ckpt_subject
+        ]
+        paused_ckpts = [(i, c) for i, c in ckpts if c.paused]
+        assert paused_ckpts, "pause transition committed no checkpoint"
+        assert min(i for i, _c in paused_ckpts) < first_hb_idx
+        resumed_after_pause = [
+            (i, c) for i, c in ckpts if not c.paused and i > max(i for i, _c in paused_ckpts)
+        ]
+        assert resumed_after_pause, "resume transition committed no checkpoint"
+        assert min(i for i, _c in resumed_after_pause) > last_hb_idx
+    finally:
+        _reset_playback_globals()
 
 
 def test_playback_control_rejects_mutating_commands_before_initial_commit():

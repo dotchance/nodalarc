@@ -16,9 +16,19 @@ import logging
 
 from pydantic import ValidationError
 
-from nodalarc.models.events import SchedulingCheckpoint
+from nodalarc.models.events import ReplayAnchor, SchedulingCheckpoint
 
 log = logging.getLogger(__name__)
+
+
+def encode_retained_scheduling_checkpoint(checkpoint: SchedulingCheckpoint) -> bytes:
+    """Encode a SchedulingCheckpoint for retained JetStream storage.
+
+    The gzip wire format is owned HERE, beside its decoder — producers
+    (the OME publisher thread) and tests use this instead of re-stating
+    the encoding inline.
+    """
+    return gzip.compress(checkpoint.model_dump_json().encode())
 
 
 def decode_retained_scheduling_checkpoint(payload: bytes) -> SchedulingCheckpoint | None:
@@ -35,6 +45,33 @@ def decode_retained_scheduling_checkpoint(payload: bytes) -> SchedulingCheckpoin
         log.warning(
             "Ignoring incompatible retained SchedulingCheckpoint schema; "
             "starting a new checkpoint lineage: %s",
+            exc,
+        )
+        return None
+
+
+def encode_retained_replay_anchor(anchor: ReplayAnchor) -> bytes:
+    """Encode a ReplayAnchor for retained JetStream storage.
+
+    Same wire convention as the checkpoint: gzip of the model JSON,
+    owned beside its decoder.
+    """
+    return gzip.compress(anchor.model_dump_json().encode())
+
+
+def decode_retained_replay_anchor(payload: bytes) -> ReplayAnchor | None:
+    """Decode a retained replay anchor; incompatible schemas decode to None.
+
+    None means full replay from step zero — slower, never wrong. Corrupt
+    gzip still raises: damaged transport is not a schema break.
+    """
+    decompressed = gzip.decompress(payload)
+    try:
+        return ReplayAnchor.model_validate_json(decompressed)
+    except ValidationError as exc:
+        log.warning(
+            "Ignoring incompatible retained ReplayAnchor schema; "
+            "recovery will replay from step zero: %s",
             exc,
         )
         return None

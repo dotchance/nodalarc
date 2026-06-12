@@ -12,7 +12,7 @@ segments:
     scheduling:
       selection_policy:
         longest_remaining_pass:
-          lookahead_horizon_ticks: 720
+          lookahead_horizon_ticks: 7200
       handover_policy:
         hard_release: {}
       handover_mode: bbm
@@ -71,5 +71,5 @@ simulation:
     max_pairs_per_tick: 2000
 time:
   start_time: '2026-06-08T00:00:00Z'
-  step_seconds: 10
+  step_seconds: 1
   compression: 1

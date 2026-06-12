@@ -56,6 +56,98 @@ def test_shipped_session_passes_full_readiness_gate(path: Path) -> None:
 
 
 @pytest.mark.parametrize("path", SESSION_PATHS, ids=lambda p: p.stem)
+def test_shipped_session_computes_real_steps(path: Path) -> None:
+    """Every shipped session must RUN, not merely resolve and render.
+
+    The sessions are worked examples of the primitives — the product is
+    the primitives, and an engine change that computes correctly for one
+    session while breaking another must fail in the suite run before
+    commit, not on a live deploy. (The geo sessions were undeployable
+    for weeks because only one session shape ever got exercised; the
+    render contract closed the deploy-time gap, this closes the runtime
+    one.) Thirty real ticks of the production compute loop per session:
+    propagation across every body in the session, visibility,
+    allocation, dwell where authored, event diffing — the full per-tick
+    pipeline, no mocks.
+    """
+    from nodalarc.models.session import resolve_session_epoch
+    from ome.event_stream import build_step_context, compute_step
+    from ome.main import _effective_ground_scheduling_for_runtime, _load_session_config
+
+    cfg = _load_session_config(str(path), run_id="run-shipped-smoke-0001")
+    ctx = build_step_context(
+        satellites=cfg.satellites,
+        addressing=cfg.addressing,
+        gs_file=cfg.gs_file,
+        neighbors=cfg.neighbors,
+        propagator_id=cfg.propagator_id,
+        polar_seam_enabled=cfg.polar_seam_enabled,
+        latitude_threshold_deg=cfg.latitude_threshold_deg,
+        ground_scheduling=_effective_ground_scheduling_for_runtime(cfg.ground_scheduling),
+        ground_link_model=cfg.ground_link_model,
+        ground_defaults_applied=True,
+        ground_candidate_satellites_by_gs=cfg.ground_candidate_satellites_by_gs,
+        node_metadata=cfg.node_metadata,
+        body_frames=cfg.body_frames,
+        body_ephemeris=cfg.body_ephemeris,
+        active_bodies=cfg.active_bodies,
+    )
+    epoch_unix = resolve_session_epoch(cfg.resolved.time)
+    step_seconds = int(cfg.resolved.time.step_seconds)
+
+    isl_state: dict = {}
+    gs_state: dict = {}
+    dwell_state: dict = {}
+    associations: dict = {}
+    teardowns: dict = {}
+    propagated_nodes: set[str] = set()
+    for step in range(31):
+        result = compute_step(
+            ctx,
+            epoch_unix,
+            step,
+            step_seconds,
+            0.0,
+            isl_state,
+            gs_state,
+            associations,
+            teardowns,
+            dwell_state=dwell_state,
+        )
+        associations = result.associations
+        teardowns = result.pending_teardowns
+        propagated_nodes.update(result.link_snapshot_source.propagated_states)
+
+    sat_count = len(cfg.satellites)
+    assert len(propagated_nodes) == sat_count, (
+        f"{path.name}: {sat_count} satellites resolved but only "
+        f"{len(propagated_nodes)} ever propagated"
+    )
+
+
+@pytest.mark.parametrize("path", SESSION_PATHS, ids=lambda p: p.stem)
+def test_shipped_session_renders_template_vars_for_every_node(path: Path) -> None:
+    """Every node of every shipped session must reach the deploy-time
+    render stage. The geo sessions deployed zero times after the resolver
+    cutover because template-vars building hard-required plane/slot —
+    grid coordinates that individually placed satellites (GEO longitude
+    slots) legitimately lack — and nothing exercised the render stage
+    until a live `make session`. This closes that gap for the whole
+    catalog: resolve AND render, not merely resolve."""
+    from nodalarc.template_vars import build_template_vars_from_resolved
+
+    resolved = _resolved(path)
+    for node in resolved.nodes:
+        result = build_template_vars_from_resolved(resolved, node.node_id)
+        assert result["node_id"] == node.node_id
+        if node.kind == "satellite" and (node.plane is None or node.slot is None):
+            assert "plane" not in result and "slot" not in result, (
+                f"{path.name}: non-grid satellite {node.node_id} must not "
+                "carry fabricated grid coordinates"
+            )
+
+
+@pytest.mark.parametrize("path", SESSION_PATHS, ids=lambda p: p.stem)
 def test_shipped_session_domains_are_single_components(path: Path) -> None:
     resolved = _resolved(path)
 
@@ -136,3 +228,55 @@ def test_w005_catches_the_fairbanks_class() -> None:
     findings = validate_session_readiness(resolved, available_node_count=3)
     fairbanks = [f for f in findings if f.code == "W005" and "fairbanks" in f.message]
     assert fairbanks, "re-adding Fairbanks must trip the impossible-geometry check"
+
+
+class TestTickRateContract:
+    """The system tick is 1 Hz; deviations are deliberate, per-session,
+    and pinned here. A 10x tick change once rode silently inside a
+    configuration refactor, rewrote the meaning of every tick-denominated
+    policy field, and masked an engine regression — any future change to
+    these values must arrive as a loud reviewed diff of this table.
+    """
+
+    DECLARED_TICKS = {
+        "earth-leo-simple": 1,
+        "earth-leo-polar": 1,
+        "earth-leo-walker": 1,
+        "earth-meo-gps": 1,
+        "earth-leo-heo-geo-luna-reachability": 1,
+        # GEO-only sessions: near-stationary geometry, deliberate 10 s tick.
+        "earth-geo-inmarsat": 10,
+        "earth-geo-tdrs": 10,
+    }
+
+    def test_every_shipped_session_matches_declared_tick(self):
+        from pathlib import Path
+
+        import yaml
+
+        sessions_dir = Path(__file__).resolve().parents[2] / "catalog/nodalarc/sessions"
+        seen = {}
+        for path in sorted(sessions_dir.glob("*.yaml")):
+            data = yaml.safe_load(path.read_text())
+            seen[path.stem] = data["time"]["step_seconds"]
+        assert seen == self.DECLARED_TICKS, (
+            "shipped-session tick rates diverged from the declared table — "
+            "tick changes are owner decisions, update both deliberately"
+        )
+
+    def test_dwell_horizons_preserve_two_hour_intent_at_one_hz(self):
+        from pathlib import Path
+
+        import yaml
+
+        sessions_dir = Path(__file__).resolve().parents[2] / "catalog/nodalarc/sessions"
+        for path in sorted(sessions_dir.glob("*.yaml")):
+            data = yaml.safe_load(path.read_text())
+            step = data["time"]["step_seconds"]
+            text = path.read_text()
+            for match in __import__("re").finditer(r"lookahead_horizon_ticks: (\d+)", text):
+                horizon_s = int(match.group(1)) * step
+                assert horizon_s == 7200, (
+                    f"{path.name}: dwell lookahead is {horizon_s}s of sim time; "
+                    "the authored intent is 2 hours — scale ticks with the step"
+                )

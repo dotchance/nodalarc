@@ -1,6 +1,7 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
-/** Wizard data fetching — loads presets, satellite types, GS sets, stations, and extension rules.
+/** Wizard data fetching — loads presets, satellite primitives, GS sets,
+ * stations, and extension rules.
  *
  * Extracted from useWizard.ts. Pure data loading, no state mutations beyond
  * storing the fetched data.

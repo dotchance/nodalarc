@@ -1,16 +1,24 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
-/** Hook for listing available sessions and triggering session switches. */
+/** Hook for listing available sessions and triggering session switches.
+ *
+ * The websocket lifecycle messages (session_transitioning / session_ready /
+ * session_failed) are the single owner of "a switch is in flight" — the
+ * snapshot is nulled for the whole transition window, so any state derived
+ * from snapshot fields during a switch reads absence, not progress. This
+ * hook's `switching` covers only the request window (POST accepted until the
+ * websocket lifecycle takes over) and then follows that lifecycle down.
+ */
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { REST_URL, authHeaders } from "../config";
 import type { SessionInfo } from "../types";
 
-export function useSessionSwitcher(sessionStatus: string | null) {
+export function useSessionSwitcher(sessionTransitioning: boolean) {
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [switching, setSwitching] = useState(false);
-  // Must see "switching" status from backend before accepting "ready" as done
-  const sawSwitchingRef = useRef(false);
+  // The websocket lifecycle must confirm the switch before its end clears it.
+  const sawTransitionRef = useRef(false);
 
   const fetchSessions = useCallback(() => {
     fetch(`${REST_URL}/api/v1/sessions`, { headers: authHeaders() })
@@ -24,38 +32,28 @@ export function useSessionSwitcher(sessionStatus: string | null) {
     fetchSessions();
   }, [fetchSessions]);
 
-  // Detect backend-initiated switches (e.g. wizard deploy endpoint) —
-  // if session_status becomes "switching" and we didn't trigger it locally,
-  // adopt the switch so the progress overlay appears.
-  const prevStatusRef = useRef<string | null>(null);
+  const prevTransitioningRef = useRef(false);
   useEffect(() => {
-    if (!switching && sessionStatus === "switching" && prevStatusRef.current !== "switching") {
-      sawSwitchingRef.current = true;
-      setSwitching(true);
+    if (switching && sessionTransitioning) {
+      sawTransitionRef.current = true;
     }
-    prevStatusRef.current = sessionStatus;
-  }, [switching, sessionStatus]);
-
-  // Track when backend confirms it's switching (for locally-triggered switches)
-  useEffect(() => {
-    if (switching && sessionStatus === "switching") {
-      sawSwitchingRef.current = true;
-    }
-  }, [switching, sessionStatus]);
-
-  // Only clear overlay once we've seen "switching" then "ready" (or "error")
-  useEffect(() => {
-    if (switching && sawSwitchingRef.current && (sessionStatus === "ready" || sessionStatus === "error")) {
+    // Lifecycle ended (session_ready or session_failed): the switch is over.
+    if (switching && sawTransitionRef.current && !sessionTransitioning) {
       setSwitching(false);
-      sawSwitchingRef.current = false;
+      sawTransitionRef.current = false;
+    }
+    // ANY switch end changes which session is active — refresh the list for
+    // backend-initiated switches too (deploys, uploads, other operators).
+    if (prevTransitioningRef.current && !sessionTransitioning) {
       fetchSessions();
     }
-  }, [switching, sessionStatus, fetchSessions]);
+    prevTransitioningRef.current = sessionTransitioning;
+  }, [switching, sessionTransitioning, fetchSessions]);
 
   const switchSession = useCallback(
     async (file: string) => {
       if (switching) return;
-      sawSwitchingRef.current = false;
+      sawTransitionRef.current = false;
       setSwitching(true);
       try {
         const resp = await fetch(`${REST_URL}/api/v1/sessions/switch`, {

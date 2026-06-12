@@ -162,9 +162,14 @@ def compute_coverage_preview(
     if ground_stations_source is None:
         raise ValueError("ground_stations is required for coverage preview")
     if satellite_type_override is not None:
-        raise ValueError(
-            "satellite_type override is not supported by catalog coverage preview; "
-            "choose or author a constellation primitive with the desired node model"
+        # Same composition as session generation: the constellation's geometry
+        # flown by the chosen node primitive, resolved through the same path.
+        from nodalarc.session_generator import merge_constellation_with_satellite_type
+
+        constellation_source = merge_constellation_with_satellite_type(
+            constellation_source,
+            satellite_type_override,
+            catalog_roots,
         )
     if isinstance(ground_stations_source, list):
         raise ValueError(

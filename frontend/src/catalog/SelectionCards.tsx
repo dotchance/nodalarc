@@ -36,7 +36,7 @@ interface SelectionCardsProps {
   orbitPropagator: OrbitPropagator;
   // Callbacks
   onSelectConstellation: (preset: ConstellationPreset) => void;
-  onSelectSatelliteType: (preset: SatelliteTypePreset) => void;
+  onSelectSatelliteType: (preset: SatelliteTypePreset | null) => void;
   onSelectGroundStationSet: (set: GroundStationSet) => void;
   onSelectCustomGroundStations: (names: string[]) => void;
   onSelectOrbitPropagator: (model: OrbitPropagator) => void;
@@ -47,7 +47,7 @@ interface SelectionCardsProps {
   previewing: boolean;
 }
 
-type CardId = "constellation" | "satellite-type" | "ground-stations" | "orbit-model";
+type CardId = "constellation" | "satellite" | "ground-stations" | "orbit-model";
 
 const CARDS: { id: CardId; label: string; getStatus: (props: SelectionCardsProps) => string | null }[] = [
   {
@@ -56,9 +56,13 @@ const CARDS: { id: CardId; label: string; getStatus: (props: SelectionCardsProps
     getStatus: (p) => p.constellation ? `${p.constellation.name} (${p.constellation.satellite_count} sats)` : null,
   },
   {
-    id: "satellite-type",
-    label: "Satellite Type",
-    getStatus: (p) => p.satelliteType?.name ?? null,
+    id: "satellite",
+    label: "Satellite",
+    getStatus: (p) =>
+      p.satelliteType?.name
+      ?? (p.constellation
+        ? `default: ${p.constellation.default_node ?? "constellation node"}`
+        : null),
   },
   {
     id: "ground-stations",
@@ -80,7 +84,6 @@ export function SelectionCards(props: SelectionCardsProps) {
   };
 
   const allSelected = props.constellation !== null
-    && props.satelliteType !== null
     && props.groundStationSet !== null;
 
   return (
@@ -116,12 +119,13 @@ export function SelectionCards(props: SelectionCardsProps) {
         </div>
       )}
 
-      {activeCard === "satellite-type" && (
+      {activeCard === "satellite" && (
         <div className="wizard-selection-panel">
-          <h2 className="wizard-panel-title">Select Satellite Type</h2>
+          <h2 className="wizard-panel-title">Select Satellite</h2>
           <SatelliteTypePanel
             satelliteTypes={props.satelliteTypes}
             selected={props.satelliteType}
+            defaultNode={props.constellation?.default_node ?? null}
             onSelect={(p) => { props.onSelectSatelliteType(p); setActiveCard(null); }}
           />
         </div>

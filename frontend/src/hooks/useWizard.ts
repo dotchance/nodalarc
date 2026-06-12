@@ -3,7 +3,7 @@
 /** Wizard orchestrator — composes data, navigation, and API hooks.
  *
  * This is a thin composition layer. Each concern lives in its own hook:
- * - useWizardData: fetches presets, satellite types, GS sets, stations
+ * - useWizardData: fetches presets, GS sets, stations
  * - useWizardNav: step navigation (goToStep, goBack, goToReview)
  * - useWizardApi: generate, deploy, preview-coverage API calls
  */
@@ -50,7 +50,7 @@ export function useWizard() {
 
   // --- Selection callbacks (update state + advance step) ---
 
-  const selectSatelliteType = useCallback((preset: SatelliteTypePreset) => {
+  const selectSatelliteType = useCallback((preset: SatelliteTypePreset | null) => {
     setState((s) => ({ ...s, satelliteType: preset }));
     api.clearYaml();
     api.clearError();

@@ -42,6 +42,7 @@ SUSPENDED. This prevents sequence regressions from being silent.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -169,6 +170,17 @@ class DispatchIntent:
     rebaseline_counts: bool = False
 
 
+class DispatcherSuperseded(Exception):
+    """The wiring authority moved to a different session/generation.
+
+    Raised instead of the fatal halt when a fence rejection is explained
+    by the authoritative lifecycle state (the wiring manifest) having
+    moved past this instance — the routine end of a session switch, not
+    an actuation fault. The entrypoint exits cleanly on this; the
+    Operator's rollout owns replacement.
+    """
+
+
 class Dispatcher:
     """Event-driven topology dispatcher — NATS JetStream transport.
 
@@ -209,8 +221,16 @@ class Dispatcher:
         rtt_to_one_way_policy: Literal["half-rtt"] = "half-rtt",
         clean_kernel_audit_interval_s: float | None = 60.0,
         now: Callable[[], datetime] | None = None,
+        read_lifecycle_identity: Callable[[], tuple[str | None, tuple[str, str] | None]]
+        | None = None,
     ) -> None:
         self._now = now if now is not None else lambda: datetime.now(UTC)
+        # Authoritative lifecycle reader: returns (ConstellationSpec
+        # status.sessionRunId | None, wiring manifest (session_id,
+        # wiring_generation) | None), None meaning absent. Used only to
+        # classify fatal actuation failures; None (not wired) keeps every
+        # fatal failure fatal.
+        self._read_lifecycle_identity = read_lifecycle_identity
         self._interface_map = interface_map
         self._bandwidth_map = bandwidth_map
         self._loc = pod_locator
@@ -346,6 +366,7 @@ class Dispatcher:
             substrate_measurements or {}
         )
         self._last_substrate_reload: datetime | None = None
+        self._substrate_v1 = None  # cached Kubernetes client (config loaded once)
         self._dispatch_blocked_reason: str | None = None
 
         # Epoch id of the most recent applied LinkStateSnapshot. Used
@@ -808,6 +829,8 @@ class Dispatcher:
             ) from exc
 
         # Load durable substrate measurement status for cross-node compensation.
+        # loop-blocking-ok: startup-only — runs once before the dispatch
+        # worker begins serving; nothing shares the loop yet.
         self._reload_substrate_status()
         await self._publish_startup_actuation_roster()
         # Recoverable kernel-actual baseline for this instance: on a fresh start
@@ -830,6 +853,7 @@ class Dispatcher:
 
         # Start dispatch worker BEFORE subscriptions — ready to receive work
         worker_task = asyncio.create_task(self._dispatch_worker(nc))
+        substrate_refresh_task = asyncio.create_task(self._substrate_refresher())
 
         # NOTE: No explicit catch-up pull. The SUSPENDED state machine is
         # the single source of startup state. The live LinkStateSnapshot
@@ -1020,6 +1044,9 @@ class Dispatcher:
         finally:
             # Stop the dispatch worker
             self._running = False
+            substrate_refresh_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await substrate_refresh_task
             await self._dispatch_queue.put(None)  # sentinel
             await worker_task
             for sub in subs:
@@ -1735,6 +1762,65 @@ class Dispatcher:
                 details=details,
             )
 
+    async def _stop_if_superseded(self, *, operation: str) -> None:
+        """Classify a fatal actuation failure against the lifecycle authority.
+
+        Reads the authority once (no polling, no retries): the
+        ConstellationSpec's Operator-stamped sessionRunId — which flips
+        before old session pods are torn down, so it covers teardown-window
+        failures — and the wiring manifest identity. If either says the
+        world has moved past this instance (different identity, or absent),
+        publish a non-critical lifecycle event, stop dispatch, and raise
+        DispatcherSuperseded for a clean exit. If the authority matches
+        this instance — or cannot be read — return, letting the caller's
+        fatal halt stand: supersession must be proven, never assumed.
+        """
+        if self._read_lifecycle_identity is None:
+            return
+        try:
+            cr_run_id, manifest_identity = await asyncio.get_running_loop().run_in_executor(
+                None, self._read_lifecycle_identity
+            )
+        except Exception as exc:
+            log.error(
+                "Fatal actuation failure during %s but the lifecycle authority "
+                "could not be read (%s: %s); halting fatally",
+                operation,
+                type(exc).__name__,
+                exc,
+            )
+            return
+        own = (self._session_id, self._wiring_generation)
+        cr_current = cr_run_id == self._session_id
+        manifest_current = manifest_identity == own
+        if cr_current and manifest_current:
+            return
+        authority_view = (
+            f"ConstellationSpec sessionRunId={cr_run_id or 'absent'}, "
+            f"wiring manifest="
+            + (
+                f"session={manifest_identity[0]} generation={manifest_identity[1]}"
+                if manifest_identity is not None
+                else "absent"
+            )
+        )
+        reason = (
+            f"Superseded during {operation}: lifecycle authority is ({authority_view}); "
+            f"this instance is session={own[0]} generation={own[1]}. "
+            "Shutting down cleanly."
+        )
+        self._dispatch_blocked_reason = reason
+        self._running = False
+        with suppress(Exception):
+            await self._publish_scheduler_ops(
+                code=SchedulerOpsCode.SCHEDULER_SUPERSEDED,
+                message=reason,
+                level="info",
+            )
+        with suppress(Exception):
+            self._dispatch_queue.put_nowait(None)
+        raise DispatcherSuperseded(reason)
+
     def _failure_code_for_operation(self, *, operation: str, context: str) -> SchedulerOpsCode:
         if context == "replacement_up":
             return SchedulerOpsCode.REPLACEMENT_LINK_UP_FAILED
@@ -1770,6 +1856,15 @@ class Dispatcher:
             )
         }
         if result.fence_failure or fatal_pairs:
+            # A fatal actuation failure has two distinct causes that demand
+            # opposite responses: the world authoritatively moved past this
+            # instance (routine session switch — fence rejections after the
+            # manifest flips, missing-node ISL failures while old pods are
+            # torn down — end quietly), or the failure happened while this
+            # instance IS the current world (a real fault — halt fatally).
+            # Consult the authority once to tell them apart; raises
+            # DispatcherSuperseded when this instance is the stale party.
+            await self._stop_if_superseded(operation=result.operation)
             details = self._actuation_details(
                 gs_id=None,
                 operation=result.operation,
@@ -2468,6 +2563,11 @@ class Dispatcher:
                         intent.down_reasons,
                         intent.forced_bbm_pairs,
                     )
+            except DispatcherSuperseded:
+                # Routine lifecycle end — already logged and published at
+                # info by _stop_if_superseded. A critical here would be a
+                # false alarm on every session switch.
+                raise
             except Exception as exc:
                 self._dispatch_blocked_reason = str(exc)
                 self._running = False
@@ -2918,26 +3018,59 @@ class Dispatcher:
     # Reconcile-based dispatch — single path to Node Agent
     # ------------------------------------------------------------------
 
+    async def _substrate_refresher(self) -> None:
+        """Keep substrate measurements fresh OFF the dispatch path.
+
+        The dispatch worker must never block on Kubernetes I/O — an API
+        server hiccup would stall link actuation for its tail latency.
+        This task refreshes the cached measurements every 10 s in a
+        worker thread; _get_substrate_rtt_ms only reads the cache and
+        refuses dispatch loudly past the staleness bound. A transient
+        refresh failure is logged and retried next cycle — persistent
+        failure surfaces as that loud dispatch refusal, never as silently
+        stale physics.
+        """
+        if not self._required_substrate_pairs:
+            return
+        while self._running:
+            await asyncio.sleep(10.0)
+            try:
+                await asyncio.to_thread(self._reload_substrate_status)
+            except Exception as exc:
+                log.warning(
+                    "Substrate refresh failed (dispatch refuses at the staleness bound): %s",
+                    exc,
+                )
+
     def _reload_substrate_status(self) -> None:
-        """Load and validate durable substrate status documents."""
+        """Load and validate durable substrate status documents.
+
+        Runs at startup (before serving begins) and from the background
+        refresher in a worker thread — never inline on the dispatch path:
+        a synchronous Kubernetes read inside dispatch stalls link
+        actuation for the API server's tail latency, and it used to run
+        there every 10 seconds with a freshly constructed client and
+        config load each time.
+        """
         if not self._required_substrate_pairs:
             log.debug("No required substrate pairs for this session")
             return
         try:
-            import kubernetes
-            import kubernetes.client
-            import kubernetes.config
+            if self._substrate_v1 is None:
+                import kubernetes
+                import kubernetes.client
+                import kubernetes.config
 
-            try:
-                kubernetes.config.load_incluster_config()
-            except kubernetes.config.config_exception.ConfigException:
-                kubernetes.config.load_kube_config()
+                try:
+                    kubernetes.config.load_incluster_config()
+                except kubernetes.config.config_exception.ConfigException:
+                    kubernetes.config.load_kube_config()
+                self._substrate_v1 = kubernetes.client.CoreV1Api()
 
             from nodalarc.platform_config import get_platform_config
 
             ns = get_platform_config().kubernetes_namespace
-            v1 = kubernetes.client.CoreV1Api()
-            documents = load_substrate_status_documents(k8s_v1=v1, namespace=ns)
+            documents = load_substrate_status_documents(k8s_v1=self._substrate_v1, namespace=ns)
             now = self._now()
             self._substrate_by_direction = validate_required_substrate_measurements(
                 required_pairs=self._required_substrate_pairs,
@@ -2966,9 +3099,15 @@ class Dispatcher:
         now = self._now()
         if self._required_substrate_pairs and (
             self._last_substrate_reload is None
-            or (now - self._last_substrate_reload).total_seconds() >= 10.0
+            or (now - self._last_substrate_reload).total_seconds() > 45.0
         ):
-            self._reload_substrate_status()
+            # The background refresher owns freshness; dispatch only reads.
+            # Past the bound the refresher is broken, and refusing loudly
+            # beats actuating links with unverified substrate physics.
+            raise RuntimeError(
+                "substrate measurements stale (>45s) — background refresh is not "
+                "delivering; refusing to dispatch with unverified substrate RTT"
+            )
         return resolve_substrate_rtt_ms(
             locator=self._loc,
             measurements_by_direction=self._substrate_by_direction,

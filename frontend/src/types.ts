@@ -138,6 +138,9 @@ export interface OpsEvent {
   code: string;
   message: string;
   details?: Record<string, unknown> | null;
+  /** VS-API arrival sequence — the merge/dedupe key for the
+   *  incremental ops feed (events ship once per connection). */
+  seq?: number;
 }
 
 
@@ -163,7 +166,8 @@ export interface ActuationHealthGroundStation {
   reason_code: string | null;
   blocking_new_ground_link_up: boolean;
   recovery_status: Record<string, unknown>;
-  last_event: Record<string, unknown>;
+  /* The raw event is deliberately not on the health wire — notices
+   * carry last_event for the failure path. */
 }
 
 export interface ActuationHealthInstance {
@@ -211,10 +215,20 @@ export interface StateSnapshot {
   session_status_detail: string | null;
   playback_paused: boolean;
   playback_speed: number;
+  /** Measured delivered rate from the engine; null until its window warms up. */
+  playback_achieved?: number | null;
+  /** Engine's own judgment that it cannot sustain the commanded rate. */
+  pacing_degraded?: boolean;
+  /** Client-stamped at WebSocket decode — never sent by VS-API. Anchors
+   *  the sim clock phase at transport arrival, not React effect time. */
+  client_arrival_ms?: number;
   stale: boolean;
   actuation_notices?: ActuationNotice[];
   actuation_health?: ActuationHealth | null;
   ops_events?: OpsEvent[];
+  /** Identifies VS-API's ops seq space; a change means the server
+   *  restarted and the scrollback must replace, not merge. */
+  ops_log_token?: string;
   debug_events?: OpsEvent[];
   debug_sources?: string[];
 }

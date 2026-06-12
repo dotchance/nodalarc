@@ -53,7 +53,11 @@ from ome.ground_allocator import (
     allocate_ground_links,
 )
 from ome.ground_selection_policies import validate_selection_score_scale_compatibility
-from ome.ground_visibility_engine import GroundPassLookahead, evaluate_ground_visibility
+from ome.ground_visibility_engine import (
+    DwellPassState,
+    GroundPassLookahead,
+    evaluate_ground_visibility,
+)
 from ome.isl_engine import (
     IslFeasibilityResult,
     IslTerminalConstraints,
@@ -74,6 +78,14 @@ from ome.propagator import (
 )
 from ome.snapshot_builder import LinkSnapshotSource
 from ome.snapshot_builder import build_link_state_snapshot as build_link_state_snapshot
+from ome.telemetry import (
+    SEG_ALLOCATOR,
+    SEG_DIFF,
+    SEG_ISL,
+    SEG_PROPAGATION,
+    SEG_VISIBILITY,
+    StepTimings,
+)
 from ome.types import GroundVisibilityDecisionMap, MbbTeardownState
 
 logger = logging.getLogger(__name__)
@@ -311,6 +323,11 @@ class StepResult:
     sim_time: datetime
     sim_time_unix: float
     step: int
+    # Wall-time attribution for this tick's physics segments. The pacing
+    # loop extends it with publish/sleep segments; the perf harness reads
+    # the same instrument. Mutable telemetry riding on a frozen result is
+    # deliberate: it is derived observability data, not authority state.
+    timings: StepTimings = field(default_factory=StepTimings)
 
     @property
     def associations(self) -> dict[tuple[str, str], tuple[int, int]]:
@@ -760,33 +777,41 @@ def compute_step(
     gs_state: dict[tuple[str, str], tuple[bool, bool, str]],
     current_associations: dict[tuple[str, str], tuple[int, int]] | None = None,
     mbb_pending_teardowns: MbbTeardownState | None = None,
+    dwell_state: dict[tuple[str, str], DwellPassState] | None = None,
 ) -> StepResult:
     """Compute one step of the timeline. Mutates isl_state and gs_state in place.
+
+    dwell_state is the rolling pass-frontier memo for longest-remaining-pass
+    stations, mutated in place like isl_state/gs_state and reset wherever
+    they reset. Callers that do not thread it still get identical results,
+    at full-horizon re-walk cost per tick.
 
     Returns a StepResult with named physics, scheduling, and allocation fields.
 
     Pure computation — no I/O, no wall-time awareness.
-    This is the Physicist role (R-OME-008B Part 2).
+    This is the Physicist role.
     """
     if current_associations is None:
         current_associations = {}
     if mbb_pending_teardowns is None:
         mbb_pending_teardowns = {}
+    timings = StepTimings()
     dt = step * step_seconds
     timestamp_s = dt + timestamp_offset
     sim_time = datetime.fromtimestamp(epoch_unix + dt, tz=UTC)
 
     # 1. Propagate all satellite states using the session-selected engine.
-    body_states = body_states_at(ctx.body_ephemeris, set(ctx.active_bodies), epoch_unix + dt)
-    sat_states = propagate_satellites(
-        satellites=ctx.satellites,
-        addressing=ctx.addressing,
-        epoch_unix=epoch_unix,
-        dt=dt,
-        propagator_id=ctx.propagator_id,
-        body_states=body_states,
-        body_frames=ctx.body_frames,
-    )
+    with timings.measure(SEG_PROPAGATION):
+        body_states = body_states_at(ctx.body_ephemeris, set(ctx.active_bodies), epoch_unix + dt)
+        sat_states = propagate_satellites(
+            satellites=ctx.satellites,
+            addressing=ctx.addressing,
+            epoch_unix=epoch_unix,
+            dt=dt,
+            propagator_id=ctx.propagator_id,
+            body_states=body_states,
+            body_frames=ctx.body_frames,
+        )
 
     # 2. Build positions dict (for LinkStateSnapshot latency) and ClockTick
     positions = build_node_positions(sat_states, ctx.gs_positions)
@@ -801,117 +826,126 @@ def compute_step(
 
     # 3-4. Evaluate ISL physics and allocate ISL terminals.
     node_order = [satellite_node_id(sat, ctx.addressing) for sat in ctx.satellites]
-    isl_feasibility = evaluate_isl_feasibility(
-        node_order=node_order,
-        sat_states=sat_states,
-        by_node=ctx.by_node,
-        terminal_constraints=ctx.sat_isl_terminal_constraints,
-        body_frames=ctx.body_frames,
-        polar_seam_enabled=ctx.polar_seam_enabled,
-        latitude_threshold_deg=ctx.latitude_threshold_deg,
-    )
-    isl_links = schedule_isl_links(
-        feasibility=isl_feasibility,
-        by_node=ctx.by_node,
-        terminal_counts=ctx.sat_isl_terminals,
-    )
+    with timings.measure(SEG_ISL):
+        isl_feasibility = evaluate_isl_feasibility(
+            node_order=node_order,
+            sat_states=sat_states,
+            by_node=ctx.by_node,
+            terminal_constraints=ctx.sat_isl_terminal_constraints,
+            body_frames=ctx.body_frames,
+            polar_seam_enabled=ctx.polar_seam_enabled,
+            latitude_threshold_deg=ctx.latitude_threshold_deg,
+        )
+        isl_links = schedule_isl_links(
+            feasibility=isl_feasibility,
+            by_node=ctx.by_node,
+            terminal_counts=ctx.sat_isl_terminals,
+        )
     isl_scheduled = {pair: link.scheduled for pair, link in isl_links.items()}
 
     # 5. Emit ISL visibility events on state changes.
-    isl_diff = diff_isl_visibility_events(
-        sim_time=sim_time,
-        feasibility=isl_feasibility,
-        scheduled_links=isl_links,
-        previous_state=isl_state,
-    )
-    isl_state.clear()
-    isl_state.update(isl_diff.state)
-    events.extend(TimelineEvent(timestamp_s, "VisibilityEvent", event) for event in isl_diff.events)
+    with timings.measure(SEG_DIFF):
+        isl_diff = diff_isl_visibility_events(
+            sim_time=sim_time,
+            feasibility=isl_feasibility,
+            scheduled_links=isl_links,
+            previous_state=isl_state,
+        )
+        isl_state.clear()
+        isl_state.update(isl_diff.state)
+        events.extend(
+            TimelineEvent(timestamp_s, "VisibilityEvent", event) for event in isl_diff.events
+        )
 
     # 6. Check ground station visibility and schedule
-    ground_visibility = evaluate_ground_visibility(
-        satellite_ids=node_order,
-        sat_states=sat_states,
-        gs_positions=ctx.gs_positions,
-        gs_min_elevations=ctx.gs_min_elevations,
-        gs_tenant_ids=ctx.gs_tenant_ids,
-        gs_reference_bodies=ctx.gs_reference_bodies,
-        body_frames=ctx.body_frames,
-        gs_selection_policy_names=ctx.gs_selection_policy_names,
-        pass_lookahead=(
-            GroundPassLookahead(
-                satellites=tuple(ctx.satellites),
-                addressing=ctx.addressing,
-                epoch_unix=epoch_unix,
-                step=step,
-                step_seconds=step_seconds,
-                horizon_ticks=ctx.ground_policy_lookahead_horizon_ticks,
-                horizon_ticks_by_gs=ctx.ground_policy_lookahead_horizon_ticks_by_gs,
-                propagator_id=ctx.propagator_id,
-                ground_link_model=ctx.ground_link_model,
-                gs_reference_bodies=ctx.gs_reference_bodies,
-                gs_terminal_profiles=ctx.gs_terminal_profiles,
-                sat_ground_terminal_profiles=ctx.sat_ground_terminal_profiles,
-                body_frames=ctx.body_frames,
-                body_ephemeris=ctx.body_ephemeris,
-                active_bodies=ctx.active_bodies,
-            )
-            if "longest-remaining-pass" in set(ctx.gs_selection_policy_names.values())
-            else None
-        ),
-        ground_link_model=ctx.ground_link_model,
-        gs_terminal_profiles=ctx.gs_terminal_profiles,
-        sat_ground_terminal_profiles=ctx.sat_ground_terminal_profiles,
-        candidate_satellite_ids_by_gs=ctx.ground_candidate_satellites_by_gs,
-    )
+    with timings.measure(SEG_VISIBILITY):
+        ground_visibility = evaluate_ground_visibility(
+            timings=timings,
+            satellite_ids=node_order,
+            sat_states=sat_states,
+            gs_positions=ctx.gs_positions,
+            gs_min_elevations=ctx.gs_min_elevations,
+            gs_tenant_ids=ctx.gs_tenant_ids,
+            gs_reference_bodies=ctx.gs_reference_bodies,
+            body_frames=ctx.body_frames,
+            gs_selection_policy_names=ctx.gs_selection_policy_names,
+            pass_lookahead=(
+                GroundPassLookahead(
+                    satellites=tuple(ctx.satellites),
+                    addressing=ctx.addressing,
+                    epoch_unix=epoch_unix,
+                    step=step,
+                    step_seconds=step_seconds,
+                    horizon_ticks=ctx.ground_policy_lookahead_horizon_ticks,
+                    horizon_ticks_by_gs=ctx.ground_policy_lookahead_horizon_ticks_by_gs,
+                    propagator_id=ctx.propagator_id,
+                    ground_link_model=ctx.ground_link_model,
+                    gs_reference_bodies=ctx.gs_reference_bodies,
+                    gs_terminal_profiles=ctx.gs_terminal_profiles,
+                    sat_ground_terminal_profiles=ctx.sat_ground_terminal_profiles,
+                    body_frames=ctx.body_frames,
+                    body_ephemeris=ctx.body_ephemeris,
+                    active_bodies=ctx.active_bodies,
+                )
+                if "longest-remaining-pass" in set(ctx.gs_selection_policy_names.values())
+                else None
+            ),
+            ground_link_model=ctx.ground_link_model,
+            gs_terminal_profiles=ctx.gs_terminal_profiles,
+            sat_ground_terminal_profiles=ctx.sat_ground_terminal_profiles,
+            candidate_satellite_ids_by_gs=ctx.ground_candidate_satellites_by_gs,
+            dwell_state=dwell_state,
+        )
 
     # 7. Scored, hysteresis-aware ground link allocation.
-    ground_allocation = allocate_ground_links(
-        step=step,
-        visible_per_station=ground_visibility.visible_per_station,
-        ground_station_ids=set(ctx.gs_positions),
-        current_associations=current_associations,
-        pending_teardowns=mbb_pending_teardowns,
-        gs_terminal_counts=ctx.gs_terminal_counts,
-        gs_selection_policies=ctx.gs_selection_policies,
-        gs_min_elevations=ctx.gs_min_elevations,
-        gs_handover_policies=ctx.gs_handover_policies,
-        gs_service_priorities=ctx.gs_service_priorities,
-        gs_tenant_ids=ctx.gs_tenant_ids,
-        gs_reference_bodies=ctx.gs_reference_bodies,
-        sat_ground_terminals=ctx.sat_ground_terminals,
-        sat_ground_terminal_indices_by_body=ctx.sat_ground_terminal_indices_by_body,
-        ranking_order=ctx.ground_ranking_order,
-        gs_handover_modes=ctx.gs_handover_modes,
-        gs_mbb_overlap_ticks=ctx.gs_mbb_overlap_ticks,
-        gs_mbb_reserve=ctx.gs_mbb_reserve,
-        mbb_preemption=ctx.ground_mbb_preemption,
-        successor_abort_policy=ctx.ground_successor_abort_policy,
-        cross_tenant_displacement=ctx.ground_cross_tenant_displacement,
-        bbm_acquire_timeout_ticks=ctx.ground_bbm_acquire_timeout_ticks,
-        ignored_capacity_fields=ctx.ignored_ground_capacity_fields,
-    )
+    with timings.measure(SEG_ALLOCATOR):
+        ground_allocation = allocate_ground_links(
+            step=step,
+            visible_per_station=ground_visibility.visible_per_station,
+            ground_station_ids=set(ctx.gs_positions),
+            current_associations=current_associations,
+            pending_teardowns=mbb_pending_teardowns,
+            gs_terminal_counts=ctx.gs_terminal_counts,
+            gs_selection_policies=ctx.gs_selection_policies,
+            gs_min_elevations=ctx.gs_min_elevations,
+            gs_handover_policies=ctx.gs_handover_policies,
+            gs_service_priorities=ctx.gs_service_priorities,
+            gs_tenant_ids=ctx.gs_tenant_ids,
+            gs_reference_bodies=ctx.gs_reference_bodies,
+            sat_ground_terminals=ctx.sat_ground_terminals,
+            sat_ground_terminal_indices_by_body=ctx.sat_ground_terminal_indices_by_body,
+            ranking_order=ctx.ground_ranking_order,
+            gs_handover_modes=ctx.gs_handover_modes,
+            gs_mbb_overlap_ticks=ctx.gs_mbb_overlap_ticks,
+            gs_mbb_reserve=ctx.gs_mbb_reserve,
+            mbb_preemption=ctx.ground_mbb_preemption,
+            successor_abort_policy=ctx.ground_successor_abort_policy,
+            cross_tenant_displacement=ctx.ground_cross_tenant_displacement,
+            bbm_acquire_timeout_ticks=ctx.ground_bbm_acquire_timeout_ticks,
+            ignored_capacity_fields=ctx.ignored_ground_capacity_fields,
+        )
     # 8. Emit ground visibility events on state changes (triple state).
-    ground_diff = diff_ground_visibility_events(
-        sim_time=sim_time,
-        visibility_decisions=ground_visibility.decisions,
-        allocation=ground_allocation,
-        previous_state=gs_state,
-        terminal_types=ctx.ground_pair_terminal_types,
-    )
-    gs_state.clear()
-    gs_state.update(ground_diff.state)
-    events.extend(
-        TimelineEvent(timestamp_s, "VisibilityEvent", event) for event in ground_diff.events
-    )
+    with timings.measure(SEG_DIFF):
+        ground_diff = diff_ground_visibility_events(
+            sim_time=sim_time,
+            visibility_decisions=ground_visibility.decisions,
+            allocation=ground_allocation,
+            previous_state=gs_state,
+            terminal_types=ctx.ground_pair_terminal_types,
+        )
+        gs_state.clear()
+        gs_state.update(ground_diff.state)
+        events.extend(
+            TimelineEvent(timestamp_s, "VisibilityEvent", event) for event in ground_diff.events
+        )
 
-    link_snapshot_source = _build_link_snapshot_source(
-        isl_feasibility=isl_feasibility,
-        isl_links=isl_links,
-        ground_decisions=ground_visibility.decisions,
-        ground_allocation=ground_allocation,
-        propagated_states=sat_states,
-    )
+        link_snapshot_source = _build_link_snapshot_source(
+            isl_feasibility=isl_feasibility,
+            isl_links=isl_links,
+            ground_decisions=ground_visibility.decisions,
+            ground_allocation=ground_allocation,
+            propagated_states=sat_states,
+        )
 
     return StepResult(
         events=events,
@@ -926,6 +960,7 @@ def compute_step(
         sim_time=sim_time,
         sim_time_unix=epoch_unix + dt,
         step=step,
+        timings=timings,
     )
 
 
@@ -967,6 +1002,7 @@ def precompute_timeline_window_from_context(
     pending_teardowns: MbbTeardownState = (
         dict(initial_pending_teardowns) if initial_pending_teardowns else {}
     )
+    dwell_state: dict[tuple[str, str], DwellPassState] = {}
 
     events: list[TimelineEvent] = []
     steps = int(duration_s / step_seconds)
@@ -981,6 +1017,7 @@ def precompute_timeline_window_from_context(
             gs_state,
             associations,
             pending_teardowns,
+            dwell_state=dwell_state,
         )
         events.extend(result.events)
         associations = result.associations

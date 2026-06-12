@@ -17,7 +17,7 @@ segments:
           discount_factor: 1.1
           mask_fade_range_deg: 3.0
       handover_mode: mbb
-      mbb_overlap_ticks: 3
+      mbb_overlap_ticks: 30
       mbb_reserve: 1
       handover_concurrency: one_at_a_time
       ranking_order:
@@ -72,5 +72,5 @@ simulation:
     max_pairs_per_tick: 2000
 time:
   start_time: '2026-06-08T00:00:00Z'
-  step_seconds: 10
+  step_seconds: 1
   compression: 1

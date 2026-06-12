@@ -268,6 +268,13 @@ class StateSnapshot(BaseModel):
     session_status_detail: str | None = None
     playback_paused: bool = False
     playback_speed: float = 1.0
+    # Rate honesty: playback_speed is the COMMANDED rate (from ClockTick
+    # compression_ratio); playback_achieved is what the engine measured
+    # itself delivering; pacing_degraded is the engine's own sustained-
+    # shortfall judgment. The UI must show the divergence, never imply
+    # the commanded rate is being delivered when it is not.
+    playback_achieved: float | None = None
+    pacing_degraded: bool = False
     stale: bool = False
     actuation_notices: list[ActuationNotice] = Field(default_factory=list)
     ome_lifecycle_notices: list[dict[str, Any]] = Field(default_factory=list)

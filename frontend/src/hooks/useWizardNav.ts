@@ -2,8 +2,9 @@
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
 /** Wizard navigation logic — step group model.
  *
- * Group A: constellation, satellite type, ground stations (any order).
- * Preview gates on all three being selected.
+ * Group A: constellation and ground stations (any order). Preview gates
+ * on both being selected; the constellation primitive owns its node
+ * model, so there is no satellite-type selection.
  * Group B: protocol, extensions (after preview).
  *
  * The canPreview function is a pure export — testable without
@@ -18,13 +19,9 @@ import type {
 } from "../catalog/wizardTypes";
 
 /** Pure function: can the user run coverage preview?
- *  True when all three Group A selections are made. */
+ *  True when both Group A selections are made. */
 export function canPreview(state: WizardState): boolean {
-  return (
-    state.constellation !== null &&
-    state.satelliteType !== null &&
-    state.groundStationSet !== null
-  );
+  return state.constellation !== null && state.groundStationSet !== null;
 }
 
 /** Pure function: can the user proceed to review?

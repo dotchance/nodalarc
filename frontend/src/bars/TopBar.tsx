@@ -243,11 +243,22 @@ export function TopBar({ snapshot, connected: _connected, historicalMode, onTogg
           {snapshot.routing_stack}
         </span>
       )}
-      <span style={{ color: "var(--text-secondary)" }}>
-        Sim: {snapshot ? formatTime(snapshot.sim_time) : "--:--:--"}
-      </span>
-      <span style={{ color: "var(--text-dim)" }}>
-        Wall: {snapshot ? formatTime(snapshot.wall_time) : "--:--:--"}
+      <span
+        style={{
+          display: "inline-flex",
+          flexDirection: "column",
+          lineHeight: 1.25,
+          fontFamily: "var(--font-mono, monospace)",
+          fontSize: 11,
+        }}
+        title="Sim and wall clocks, digit-aligned so divergence reads at a glance"
+      >
+        <span style={{ color: "var(--text-secondary)" }}>
+          Sim&nbsp;&nbsp;{snapshot ? formatTime(snapshot.sim_time) : "--:--:--"}
+        </span>
+        <span style={{ color: "var(--text-dim)" }}>
+          Wall&nbsp;{snapshot ? formatTime(snapshot.wall_time) : "--:--:--"}
+        </span>
       </span>
       {snapshot?.network_health.last_convergence_ms != null && (
         <span style={{ color: "var(--text-dim)" }}>
@@ -314,6 +325,22 @@ export function TopBar({ snapshot, connected: _connected, historicalMode, onTogg
           <option value={120}>120x</option>
           <option value={300}>300x</option>
         </select>
+        {snapshot?.pacing_degraded && snapshot.playback_achieved != null && (
+          <span
+            style={{
+              fontSize: 11,
+              color: "var(--ws-reconnecting)",
+              whiteSpace: "nowrap",
+            }}
+            title={
+              `Engine is delivering ${snapshot.playback_achieved.toFixed(1)}x of the ` +
+              `commanded ${playbackSpeed}x. The clock is honest: simulation time advances ` +
+              `at the delivered rate.`
+            }
+          >
+            delivering {snapshot.playback_achieved.toFixed(1)}x
+          </span>
+        )}
         <button
           onClick={onSeekToNow}
           disabled={playbackLoading}

@@ -9,13 +9,14 @@ from dataclasses import dataclass
 from typing import Literal
 
 from nodalarc.body_frames import BodyFrame
-from nodalarc.constellation_loader import SatelliteNode
+from nodalarc.constellation_loader import SatelliteNode, satellite_node_id
 from nodalarc.ephemeris_runtime import SkyfieldBspEphemeris, body_states_at
 from nodalarc.frames import EcefVec3, GeoPosition
 from nodalarc.ground_terminals import TerminalPhysicsProfile
 from nodalarc.models.addressing import AddressingScheme
 
 from ome.propagation_engine import PropagatedState, propagate_satellites
+from ome.telemetry import SEG_DWELL, StepTimings
 from ome.types import GroundVisibilityDecision, GroundVisibilityDecisionMap
 from ome.visibility import GroundVisibility, check_ground_visibility
 
@@ -134,25 +135,89 @@ def _sat_physical_profile(
     )
 
 
-def _estimate_remaining_visible_seconds(
+@dataclass
+class DwellPassState:
+    """Rolling pass-frontier memo for one (gs, sat) candidate pair.
+
+    Pair visibility at a future tick is a pure function of the session and
+    the absolute tick, so samples never expire on their own — entries are
+    discarded only when they cannot answer for the current tick (the pass
+    ended, or candidacy lapsed and left a coverage gap). Carried through
+    compute_step exactly like isl_state/gs_state: mutated in place by the
+    estimator, owned by the caller, reset wherever those reset (seek /
+    epoch change / fresh session).
+    """
+
+    verified_visible_through: int  # absolute tick, inclusive
+    first_invisible: int | None  # absolute tick; None while the pass end is unknown
+
+
+def _pair_visible_at(
     *,
-    candidates: set[tuple[str, str]],
+    lookahead: GroundPassLookahead,
     gs_positions: Mapping[str, tuple[EcefVec3, GeoPosition]],
     gs_min_elevations: Mapping[str, float],
-    lookahead: GroundPassLookahead,
-) -> dict[tuple[str, str], float]:
-    """Estimate sampled remaining dwell time for visible GS/satellite pairs.
+    gs_id: str,
+    sat_id: str,
+    state: PropagatedState,
+) -> bool:
+    """One pair's visibility check against a propagated future state.
 
-    The result is a sampled lower bound at OME tick resolution. A pair visible
-    now and not visible at the next sample has 0 seconds of guaranteed sampled
-    dwell remaining. A pair still visible at the end of the horizon receives
-    the horizon duration; callers should treat that as "at least horizon".
+    Single source of the per-pair physics for BOTH the production frontier
+    walker and the exhaustive oracle — the two may differ only in which
+    ticks they sample, never in what a sample computes.
     """
+    gs_ecef, gs_geo = gs_positions[gs_id]
+    reference_body = lookahead.gs_reference_bodies[gs_id]
+    try:
+        body_frame = lookahead.body_frames[reference_body]
+    except KeyError as exc:
+        raise ValueError(
+            f"Ground pass lookahead is missing resolved body primitive facts "
+            f"for reference_body={reference_body!r}"
+        ) from exc
+    gs_profile = _physical_profile(
+        lookahead.gs_terminal_profiles,
+        gs_id,
+        label="ground terminal profile",
+        ground_link_model=lookahead.ground_link_model,
+    )
+    sat_profile = _sat_physical_profile(
+        lookahead.sat_ground_terminal_profiles,
+        sat_id,
+        reference_body=reference_body,
+        ground_link_model=lookahead.ground_link_model,
+    )
+    kwargs = {"body_frame": body_frame}
+    if gs_profile is not None and sat_profile is not None:
+        kwargs = {
+            "gs_max_range_km": gs_profile.max_range_km,
+            "sat_max_range_km": sat_profile.max_range_km,
+            "gs_boresight": gs_profile.boresight,
+            "sat_boresight": sat_profile.boresight,
+            "gs_field_of_regard_deg": gs_profile.field_of_regard_deg,
+            "sat_field_of_regard_deg": sat_profile.field_of_regard_deg,
+            "gs_max_tracking_rate_deg_s": gs_profile.max_tracking_rate_deg_s,
+            "sat_max_tracking_rate_deg_s": sat_profile.max_tracking_rate_deg_s,
+            "sat_velocity_ecef_km_s": state.velocity_ecef_km_s,
+        }
+    return check_ground_visibility(
+        gs_ecef,
+        gs_geo,
+        state.position_ecef_km,
+        gs_min_elevations[gs_id],
+        **kwargs,
+    ).visible
+
+
+def _validate_dwell_inputs(
+    candidates: set[tuple[str, str]],
+    lookahead: GroundPassLookahead,
+) -> None:
     if lookahead.horizon_ticks <= 0:
         raise ValueError("longest-remaining-pass requires lookahead_horizon_ticks > 0")
     if lookahead.step_seconds <= 0:
         raise ValueError("Ground pass lookahead requires step_seconds > 0")
-
     candidate_gs_ids = {gs_id for gs_id, _sat_id in candidates}
     missing_horizons = sorted(candidate_gs_ids - set(lookahead.horizon_ticks_by_gs))
     if missing_horizons:
@@ -164,6 +229,170 @@ def _estimate_remaining_visible_seconds(
         raise ValueError(
             f"Ground pass lookahead is missing reference_body for {', '.join(missing_bodies)}"
         )
+
+
+def _propagate_for_tick(
+    lookahead: GroundPassLookahead,
+    satellites: list,
+    t_abs: int,
+) -> Mapping[str, PropagatedState]:
+    """Propagate the given satellites to absolute tick t_abs.
+
+    future_dt reproduces the original walk's arithmetic exactly:
+    (step + tick_offset) * step_seconds == t_abs * step_seconds.
+    """
+    future_dt = t_abs * lookahead.step_seconds
+    return propagate_satellites(
+        satellites=satellites,
+        addressing=lookahead.addressing,
+        epoch_unix=lookahead.epoch_unix,
+        dt=future_dt,
+        propagator_id=lookahead.propagator_id,
+        body_frames=lookahead.body_frames,
+        body_states=body_states_at(
+            lookahead.body_ephemeris,
+            set(lookahead.active_bodies),
+            lookahead.epoch_unix + future_dt,
+        ),
+    )
+
+
+def _estimate_remaining_visible_seconds(
+    *,
+    candidates: set[tuple[str, str]],
+    gs_positions: Mapping[str, tuple[EcefVec3, GeoPosition]],
+    gs_min_elevations: Mapping[str, float],
+    lookahead: GroundPassLookahead,
+    dwell_state: dict[tuple[str, str], DwellPassState] | None = None,
+) -> dict[tuple[str, str], float]:
+    """Estimate sampled remaining dwell time for visible GS/satellite pairs.
+
+    The result is a sampled lower bound at OME tick resolution. A pair visible
+    now and not visible at the next sample has 0 seconds of guaranteed sampled
+    dwell remaining. A pair still visible at the end of the horizon receives
+    the horizon duration; callers should treat that as "at least horizon".
+
+    Identical results to the exhaustive oracle below, computed incrementally:
+    each pair's pass frontier is carried in dwell_state across ticks, so a
+    steady-state tick samples at most ONE new future tick per pair (frontier
+    extension) and zero for pairs whose pass end is already known — instead
+    of re-sampling the full horizon for every pair on every tick. Callers
+    that do not thread dwell_state get correct results at exhaustive cost.
+    """
+    _validate_dwell_inputs(candidates, lookahead)
+    if dwell_state is None:
+        dwell_state = {}
+    step_s = lookahead.step_seconds
+    now = lookahead.step
+    horizon_by_gs = lookahead.horizon_ticks_by_gs
+
+    # Entries that cannot answer for the current tick are dead: the pass
+    # ended (first_invisible <= now), or candidacy lapsed long enough that
+    # the frontier fell behind (coverage gap; also prunes pairs that set
+    # and never rose again, bounding the dict by live candidacy).
+    dead = [
+        pair
+        for pair, entry in dwell_state.items()
+        if (entry.first_invisible is not None and entry.first_invisible <= now)
+        or entry.verified_visible_through < now
+    ]
+    for pair in dead:
+        del dwell_state[pair]
+
+    remaining: dict[tuple[str, str], float] = {}
+    walk_start: dict[tuple[str, str], int] = {}  # pair -> first tick to sample
+    for pair in candidates:
+        h = horizon_by_gs[pair[0]]
+        cap = now + h
+        entry = dwell_state.get(pair)
+        if entry is not None and entry.first_invisible is not None:
+            # Pass end known (and > now, by invalidation above). Beyond the
+            # per-GS cap the answer saturates at the horizon, exactly as a
+            # fresh walk would cap.
+            if entry.first_invisible > cap:
+                remaining[pair] = h * step_s
+            else:
+                remaining[pair] = (entry.first_invisible - now - 1) * step_s
+        elif entry is not None and entry.verified_visible_through >= cap:
+            remaining[pair] = h * step_s
+        else:
+            walk_start[pair] = entry.verified_visible_through + 1 if entry else now + 1
+            remaining[pair] = h * step_s  # provisional: survives-to-horizon
+
+    if not walk_start:
+        return remaining
+
+    sat_nodes_by_id: dict[str, object] = {}
+    for sat in lookahead.satellites:
+        sat_nodes_by_id[satellite_node_id(sat, lookahead.addressing)] = sat
+
+    open_caps = {pair: now + horizon_by_gs[pair[0]] for pair in walk_start}
+    t_abs = min(walk_start.values())
+    t_last = max(open_caps.values())
+    while t_abs <= t_last and open_caps:
+        # Pairs whose cap fell before this tick are verified through it.
+        for pair in [p for p, cap in open_caps.items() if cap < t_abs]:
+            dwell_state[pair] = DwellPassState(
+                verified_visible_through=open_caps.pop(pair), first_invisible=None
+            )
+            del walk_start[pair]
+        active = [p for p, start in walk_start.items() if start <= t_abs and p in open_caps]
+        if active:
+            needed_ids = sorted({sat_id for _gs, sat_id in active})
+            try:
+                nodes = [sat_nodes_by_id[sat_id] for sat_id in needed_ids]
+            except KeyError as exc:
+                raise ValueError(
+                    f"Missing propagated satellite state for {exc.args[0]}; "
+                    "ground pass lookahead cannot be evaluated authoritatively"
+                ) from exc
+            states = _propagate_for_tick(lookahead, nodes, t_abs)
+            for pair in active:
+                gs_id, sat_id = pair
+                state = states.get(sat_id)
+                if state is None:
+                    raise ValueError(
+                        f"Missing propagated satellite state for {sat_id}; "
+                        "ground pass lookahead cannot be evaluated authoritatively"
+                    )
+                visible = _pair_visible_at(
+                    lookahead=lookahead,
+                    gs_positions=gs_positions,
+                    gs_min_elevations=gs_min_elevations,
+                    gs_id=gs_id,
+                    sat_id=sat_id,
+                    state=state,
+                )
+                if not visible:
+                    remaining[pair] = (t_abs - now - 1) * step_s
+                    dwell_state[pair] = DwellPassState(
+                        verified_visible_through=t_abs - 1, first_invisible=t_abs
+                    )
+                    del open_caps[pair]
+                    del walk_start[pair]
+        t_abs += 1
+
+    # Survivors are verified visible through their caps.
+    for pair, cap in open_caps.items():
+        dwell_state[pair] = DwellPassState(verified_visible_through=cap, first_invisible=None)
+    return remaining
+
+
+def _estimate_remaining_visible_seconds_exhaustive(
+    *,
+    candidates: set[tuple[str, str]],
+    gs_positions: Mapping[str, tuple[EcefVec3, GeoPosition]],
+    gs_min_elevations: Mapping[str, float],
+    lookahead: GroundPassLookahead,
+) -> dict[tuple[str, str], float]:
+    """The original full-horizon walk, retained as the equivalence oracle.
+
+    Re-samples every future tick for every open pair on every call,
+    propagating the full constellation per sampled tick. Production uses
+    the frontier walker above; tests prove the two return identical
+    results. Shares _pair_visible_at so the physics cannot drift.
+    """
+    _validate_dwell_inputs(candidates, lookahead)
     remaining = {
         pair: lookahead.horizon_ticks_by_gs[pair[0]] * lookahead.step_seconds for pair in candidates
     }
@@ -172,73 +401,27 @@ def _estimate_remaining_visible_seconds(
         return remaining
 
     for tick_offset in range(1, lookahead.horizon_ticks + 1):
-        future_dt = (lookahead.step + tick_offset) * lookahead.step_seconds
-        future_unix = lookahead.epoch_unix + future_dt
-        future_states = propagate_satellites(
-            satellites=list(lookahead.satellites),
-            addressing=lookahead.addressing,
-            epoch_unix=lookahead.epoch_unix,
-            dt=future_dt,
-            propagator_id=lookahead.propagator_id,
-            body_frames=lookahead.body_frames,
-            body_states=body_states_at(
-                lookahead.body_ephemeris,
-                set(lookahead.active_bodies),
-                future_unix,
-            ),
+        future_states = _propagate_for_tick(
+            lookahead, list(lookahead.satellites), lookahead.step + tick_offset
         )
-
         for gs_id, sat_id in tuple(open_pairs):
             if tick_offset > lookahead.horizon_ticks_by_gs[gs_id]:
                 open_pairs.remove((gs_id, sat_id))
                 continue
-            gs_ecef, gs_geo = gs_positions[gs_id]
             state = future_states.get(sat_id)
             if state is None:
                 raise ValueError(
                     f"Missing propagated satellite state for {sat_id}; "
                     "ground pass lookahead cannot be evaluated authoritatively"
                 )
-            reference_body = lookahead.gs_reference_bodies[gs_id]
-            try:
-                body_frame = lookahead.body_frames[reference_body]
-            except KeyError as exc:
-                raise ValueError(
-                    f"Ground pass lookahead is missing resolved body primitive facts "
-                    f"for reference_body={reference_body!r}"
-                ) from exc
-            gs_profile = _physical_profile(
-                lookahead.gs_terminal_profiles,
-                gs_id,
-                label="ground terminal profile",
-                ground_link_model=lookahead.ground_link_model,
+            visible = _pair_visible_at(
+                lookahead=lookahead,
+                gs_positions=gs_positions,
+                gs_min_elevations=gs_min_elevations,
+                gs_id=gs_id,
+                sat_id=sat_id,
+                state=state,
             )
-            sat_profile = _sat_physical_profile(
-                lookahead.sat_ground_terminal_profiles,
-                sat_id,
-                reference_body=reference_body,
-                ground_link_model=lookahead.ground_link_model,
-            )
-            kwargs = {"body_frame": body_frame}
-            if gs_profile is not None and sat_profile is not None:
-                kwargs = {
-                    "gs_max_range_km": gs_profile.max_range_km,
-                    "sat_max_range_km": sat_profile.max_range_km,
-                    "gs_boresight": gs_profile.boresight,
-                    "sat_boresight": sat_profile.boresight,
-                    "gs_field_of_regard_deg": gs_profile.field_of_regard_deg,
-                    "sat_field_of_regard_deg": sat_profile.field_of_regard_deg,
-                    "gs_max_tracking_rate_deg_s": gs_profile.max_tracking_rate_deg_s,
-                    "sat_max_tracking_rate_deg_s": sat_profile.max_tracking_rate_deg_s,
-                    "sat_velocity_ecef_km_s": state.velocity_ecef_km_s,
-                }
-            visible = check_ground_visibility(
-                gs_ecef,
-                gs_geo,
-                state.position_ecef_km,
-                gs_min_elevations[gs_id],
-                **kwargs,
-            ).visible
             if not visible:
                 remaining[(gs_id, sat_id)] = (tick_offset - 1) * lookahead.step_seconds
                 open_pairs.remove((gs_id, sat_id))
@@ -264,6 +447,8 @@ def evaluate_ground_visibility(
     gs_terminal_profiles: Mapping[str, TerminalPhysicsProfile] | None = None,
     sat_ground_terminal_profiles: Mapping[str, TerminalPhysicsProfileSet] | None = None,
     candidate_satellite_ids_by_gs: Mapping[str, Iterable[str]] | None = None,
+    timings: StepTimings | None = None,
+    dwell_state: dict[tuple[str, str], DwellPassState] | None = None,
 ) -> GroundVisibilityEvaluation:
     """Evaluate geometric GS/satellite visibility for one tick.
 
@@ -490,12 +675,14 @@ def evaluate_ground_visibility(
             raise ValueError(
                 "Ground scheduling policy 'longest-remaining-pass' requires pass lookahead config"
             )
-        remaining_by_pair = _estimate_remaining_visible_seconds(
-            candidates=visible_candidates_requiring_dwell,
-            gs_positions=gs_positions,
-            gs_min_elevations=gs_min_elevations,
-            lookahead=pass_lookahead,
-        )
+        with (timings or StepTimings()).measure(SEG_DWELL):
+            remaining_by_pair = _estimate_remaining_visible_seconds(
+                candidates=visible_candidates_requiring_dwell,
+                gs_positions=gs_positions,
+                gs_min_elevations=gs_min_elevations,
+                lookahead=pass_lookahead,
+                dwell_state=dwell_state,
+            )
         for gs_id, visible_sats in list(visible_per_station.items()):
             if gs_id not in longest_pass_station_ids:
                 continue

@@ -76,6 +76,7 @@ _custom_api: kubernetes.client.CustomObjectsApi | None = None
 def _get_custom_api() -> kubernetes.client.CustomObjectsApi:
     global _custom_api
     if _custom_api is None:
+        # loop-blocking-ok: one-shot per process — the client is cached.
         kubernetes.config.load_incluster_config()
         _custom_api = kubernetes.client.CustomObjectsApi()
     return _custom_api
@@ -83,6 +84,9 @@ def _get_custom_api() -> kubernetes.client.CustomObjectsApi:
 
 def _update_status(name: str, namespace: str, status: dict) -> None:
     """Update the ConstellationSpec CR status subresource."""
+    # loop-blocking-ok: small status PATCH at reconcile-event cadence; the
+    # operator loop serves no feed consumers, so API-server tail latency
+    # degrades only reconcile responsiveness, never a user-facing stream.
     _get_custom_api().patch_namespaced_custom_object_status(
         group="nodalarc.io",
         version="v1alpha1",
@@ -352,9 +356,11 @@ async def _reconcile_session(spec, name, namespace, meta, status):
     phase = status.get("phase", "")
     owner_ref = _build_owner_ref(name, meta)
     spec_dict = dict(spec)
-    parsed_yaml = _parse_session_yaml(spec_dict)
+    parsed_yaml = await loop.run_in_executor(None, _parse_session_yaml, spec_dict)
     try:
-        session_name, session_run_id = _runtime_identity(spec_dict, meta)
+        session_name, session_run_id = await loop.run_in_executor(
+            None, _runtime_identity, spec_dict, meta
+        )
         identity_fields = {
             "sessionName": session_name,
             "sessionRunId": session_run_id,
@@ -707,7 +713,7 @@ async def _reconcile_session(spec, name, namespace, meta, status):
 
             protocol = _extract_protocol(parsed_yaml)
             await loop.run_in_executor(None, set_nodalpath_mode, namespace, protocol)
-            platform_hash = compute_platform_hash(spec_dict)
+            platform_hash = await loop.run_in_executor(None, compute_platform_hash, spec_dict)
             runtime_hash = compute_runtime_hash(platform_hash, session_run_id)
             await loop.run_in_executor(None, restart_platform_pods, namespace, runtime_hash)
         except RetryableSessionDependency as exc:
@@ -823,7 +829,7 @@ async def _reconcile_session(spec, name, namespace, meta, status):
             expected_count,
             wired_count,
         )
-    platform_hash = compute_platform_hash(spec_dict)
+    platform_hash = await loop.run_in_executor(None, compute_platform_hash, spec_dict)
     runtime_hash = compute_runtime_hash(platform_hash, session_run_id)
     _update_status(
         name,
@@ -866,13 +872,14 @@ async def on_create(spec, name, namespace, meta, **_):
         )
         raise kopf.PermanentError(f"Invalid CR name: {name}")
 
+    initial_platform_hash = await asyncio.to_thread(compute_platform_hash, dict(spec))
     _update_status(
         name,
         namespace,
         {
             "phase": "Pending",
             "observedGeneration": meta.get("generation", 0),
-            "platformHash": compute_platform_hash(dict(spec)),
+            "platformHash": initial_platform_hash,
         },
     )
 
@@ -896,7 +903,7 @@ async def on_update(spec, name, namespace, meta, status, **_):
         log.debug("on_update: session in Error state, skipping")
         return
 
-    new_hash = compute_platform_hash(dict(spec))
+    new_hash = await asyncio.to_thread(compute_platform_hash, dict(spec))
     old_hash = status.get("platformHash", "")
 
     if old_hash and new_hash != old_hash:
@@ -933,7 +940,7 @@ async def on_delete(name, namespace, spec=None, meta=None, status=None, **_):
     """Handle ConstellationSpec CR deletion — tear down session."""
     log.info("ConstellationSpec '%s' deleted, tearing down session", name)
     loop = asyncio.get_running_loop()
-    session_id = _teardown_session_id(spec, meta, status)
+    session_id = await loop.run_in_executor(None, _teardown_session_id, spec, meta, status)
     await loop.run_in_executor(None, teardown_session, namespace, session_id)
     await loop.run_in_executor(None, set_nodalpath_mode, namespace, "console")
     log.info("Session teardown complete")
@@ -965,8 +972,8 @@ async def wiring_check(spec, name, namespace, meta, status, **_):
     phase = status.get("phase", "")
     if phase == "Ready":
         try:
-            identity_fields = _status_identity_fields(dict(spec), meta)
-            platform_hash = compute_platform_hash(dict(spec))
+            identity_fields = await asyncio.to_thread(_status_identity_fields, dict(spec), meta)
+            platform_hash = await asyncio.to_thread(compute_platform_hash, dict(spec))
             runtime_hash = compute_runtime_hash(platform_hash, identity_fields["sessionRunId"])
         except Exception:
             await _reconcile_session(spec, name, namespace, meta, status)

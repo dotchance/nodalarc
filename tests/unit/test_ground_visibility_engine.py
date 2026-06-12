@@ -29,6 +29,14 @@ from tests.physics_fixtures import (
 TEST_BODY_FRAMES = {"earth": EARTH_TEST_BODY_FRAME, "luna": LUNA_TEST_BODY_FRAME}
 
 
+class _StubSatNode:
+    """Lookahead satellite stub: the frontier walker selects nodes by
+    satellite_node_id (resolver-assigned node_id) before propagating."""
+
+    def __init__(self, node_id: str):
+        self.node_id = node_id
+
+
 def _ground_scheduling() -> GroundSchedulingConfig:
     return GroundSchedulingConfig(
         selection_policy=SelectionPolicySpec(name="highest-elevation", params={}),
@@ -397,7 +405,12 @@ def test_longest_remaining_pass_populates_sampled_dwell(monkeypatch):
         gs_min_elevations={"gs-equator": 25.0},
         gs_selection_policy_names={"gs-equator": "longest-remaining-pass"},
         pass_lookahead=GroundPassLookahead(
-            satellites=(),
+            satellites=(
+                _StubSatNode("sat-short"),
+                _StubSatNode("sat-long"),
+                _StubSatNode("sat-a"),
+                _StubSatNode("sat-b"),
+            ),
             addressing=object(),
             epoch_unix=0.0,
             step=0,
@@ -488,7 +501,12 @@ def test_longest_remaining_pass_uses_each_ground_station_horizon(monkeypatch):
             "gs-long": "longest-remaining-pass",
         },
         pass_lookahead=GroundPassLookahead(
-            satellites=(),
+            satellites=(
+                _StubSatNode("sat-short"),
+                _StubSatNode("sat-long"),
+                _StubSatNode("sat-a"),
+                _StubSatNode("sat-b"),
+            ),
             addressing=object(),
             epoch_unix=0.0,
             step=0,
@@ -539,7 +557,12 @@ def test_longest_remaining_pass_lookahead_requires_reference_body():
             gs_min_elevations={"gs-equator": 25.0},
             gs_selection_policy_names={"gs-equator": "longest-remaining-pass"},
             pass_lookahead=GroundPassLookahead(
-                satellites=(),
+                satellites=(
+                    _StubSatNode("sat-short"),
+                    _StubSatNode("sat-long"),
+                    _StubSatNode("sat-a"),
+                    _StubSatNode("sat-b"),
+                ),
                 addressing=object(),
                 epoch_unix=0.0,
                 step=0,

@@ -105,11 +105,16 @@ def j2_circular_secular_rates(
     """
     a = elements.semi_major_axis_km
     i = elements.inclination_rad
-    n = math.sqrt(body_frame.gravitational_parameter_km3_s2 / a**3)
+    # Powers are spelled as explicit multiplication, never ** — libm's
+    # pow() and numpy's integer-power fast paths disagree at the ulp
+    # level on a few percent of inputs, and this scalar path must
+    # produce bit-identical results to the vectorized kernel.
+    n = math.sqrt(body_frame.gravitational_parameter_km3_s2 / (a * a * a))
     cos_i = math.cos(i)
-    j2_factor = body_frame.j2 * (body_frame.equatorial_radius_km / a) ** 2
+    radius_ratio = body_frame.equatorial_radius_km / a
+    j2_factor = body_frame.j2 * (radius_ratio * radius_ratio)
     raan_dot = -1.5 * j2_factor * n * cos_i
-    mean_anomaly_dot = n * (1.0 + 0.75 * j2_factor * (3.0 * cos_i**2 - 1.0))
+    mean_anomaly_dot = n * (1.0 + 0.75 * j2_factor * (3.0 * (cos_i * cos_i) - 1.0))
     return raan_dot, mean_anomaly_dot
 
 
@@ -131,13 +136,16 @@ def j2_mean_element_secular_rates(
     p = a * (1.0 - e * e)
     if p <= 0.0:
         raise ValueError("semi-latus rectum must be positive")
-    n = math.sqrt(body_frame.gravitational_parameter_km3_s2 / a**3)
+    # Same multiply-only spelling rule as j2_circular_secular_rates:
+    # bit-parity with the vectorized kernel forbids **.
+    n = math.sqrt(body_frame.gravitational_parameter_km3_s2 / (a * a * a))
     cos_i = math.cos(i)
-    j2_factor = body_frame.j2 * (body_frame.equatorial_radius_km / p) ** 2
+    radius_ratio = body_frame.equatorial_radius_km / p
+    j2_factor = body_frame.j2 * (radius_ratio * radius_ratio)
     raan_dot = -1.5 * j2_factor * n * cos_i
-    argp_dot = 0.0 if e == 0.0 else 0.75 * j2_factor * n * (5.0 * cos_i**2 - 1.0)
+    argp_dot = 0.0 if e == 0.0 else 0.75 * j2_factor * n * (5.0 * (cos_i * cos_i) - 1.0)
     mean_anomaly_dot = n * (
-        1.0 + 0.75 * j2_factor * math.sqrt(1.0 - e * e) * (3.0 * cos_i**2 - 1.0)
+        1.0 + 0.75 * j2_factor * math.sqrt(1.0 - e * e) * (3.0 * (cos_i * cos_i) - 1.0)
     )
     return raan_dot, argp_dot, mean_anomaly_dot
 
@@ -351,7 +359,10 @@ def gmst(unix_timestamp: float) -> float:
 
     # GMST in degrees (IAU 1982 model, simplified)
     gmst_deg = (
-        280.46061837 + 360.98564736629 * (jd - 2451545.0) + 0.000387933 * t**2 - t**3 / 38710000.0
+        280.46061837
+        + 360.98564736629 * (jd - 2451545.0)
+        + 0.000387933 * (t * t)
+        - (t * t * t) / 38710000.0
     )
     return math.radians(gmst_deg % 360.0)
 

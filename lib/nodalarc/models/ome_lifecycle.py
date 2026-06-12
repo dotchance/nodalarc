@@ -17,6 +17,12 @@ class OmeOpsCode(StrEnum):
     """OME-produced OpsEvent codes used by operator-facing lifecycle surfaces."""
 
     MBB_TEARDOWN_TERMINAL = "MBB_TEARDOWN_TERMINAL"
+    # Periodic per-segment pacing attribution (PacingWindowStats payload).
+    PACING_TELEMETRY = "PACING_TELEMETRY"
+    # The Pacemaker cannot sustain the commanded rate (entering) / can again
+    # (leaving). Details carry requested vs achieved and the segment split.
+    RATE_DEGRADED = "RATE_DEGRADED"
+    RATE_RECOVERED = "RATE_RECOVERED"
 
 
 class MbbPairAuthority(BaseModel):

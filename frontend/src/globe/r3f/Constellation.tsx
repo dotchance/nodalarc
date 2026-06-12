@@ -74,6 +74,10 @@ export function Constellation({
   const satIndex = useRef(new Map<string, number>());
   const indexToId = useRef<string[]>([]);
   const countRef = useRef(0);
+  // Slots freed by vanished satellites, reused before growing countRef.
+  // Without reuse a long-lived tab leaks one slot per satellite per session
+  // switch and eventually overruns the MAX_SATELLITES instance buffer.
+  const freeSlots = useRef<number[]>([]);
   const lastPropagateRef = useRef(0);
   // The body these satellites live in — written with each position so the registry resolves them
   // through this body's frame (no Earth assumption). Read via a ref so the useFrame closure is stable.
@@ -109,7 +113,7 @@ export function Constellation({
       seen.add(node.node_id);
       let idx = satIndex.current.get(node.node_id);
       if (idx === undefined) {
-        idx = countRef.current++;
+        idx = freeSlots.current.pop() ?? countRef.current++;
         satIndex.current.set(node.node_id, idx);
         indexToId.current[idx] = node.node_id;
         const p = geoToWorld(
@@ -143,11 +147,19 @@ export function Constellation({
         mesh.setMatrixAt(idx, _tmpMatrix);
         removeNode(id);
         satIndex.current.delete(id);
+        delete indexToId.current[idx];
+        freeSlots.current.push(idx);
       }
     }
     mesh.count = countRef.current;
     mesh.instanceMatrix.needsUpdate = true;
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+    // Three caches InstancedMesh.boundingSphere on first raycast and never
+    // invalidates it for matrix writes. A session switch can move satellites
+    // outside the cached sphere, after which every click ray misses the
+    // sphere and the raycast skips all instances — sat clicks go dead until
+    // a reload. Null it so the next raycast recomputes from live matrices.
+    mesh.boundingSphere = null;
   }, [nodes, colorMode, relations, bodyId, bodyFrame.radiusRender, bodyFrame.kmPerRenderUnit]);
 
   // Per-frame propagation from the latest ephemeris and sim clock.
@@ -194,6 +206,9 @@ export function Constellation({
       setNodeLocalPosition(nodeId, bodyIdRef.current, x, y, z);
     }
     mesh.instanceMatrix.needsUpdate = true;
+    // Same staleness as the reconcile above: positions move every frame, so
+    // the raycast sphere must be recomputed lazily from current matrices.
+    mesh.boundingSphere = null;
   }, -1); // after FrameDriver (-2) sets the frame rotation, before world-position consumers
 
   const byId = useMemo(() => new Map(nodes.map((n) => [n.node_id, n])), [nodes]);

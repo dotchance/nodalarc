@@ -682,6 +682,193 @@ class TestSessionContextInit:
         assert ctx.is_stale() is False
 
 
+class TestPauseLiveness:
+    """Heartbeats keep staleness honest in BOTH directions: a healthy
+    pause (no ClockTicks by design) never reads STALE, while an engine
+    that died mid-pause still does — its heartbeats stop too."""
+
+    def _ctx(self):
+        ctx = SessionContext.__new__(SessionContext)
+        ctx._init_state_only()
+        return ctx
+
+    def test_healthy_pause_is_not_stale(self):
+        import time as _t
+
+        ctx = self._ctx()
+        now = _t.monotonic()
+        ctx.last_clock_tick_wall_time = now - 120.0  # ticks stopped at pause
+        ctx.last_link_event_wall_time = now - 120.0
+        ctx.last_heartbeat_wall_time = now - 1.0  # engine proving liveness
+        assert ctx.is_stale() is False
+
+    def test_dead_engine_during_pause_is_stale(self):
+        import time as _t
+
+        ctx = self._ctx()
+        now = _t.monotonic()
+        ctx.last_clock_tick_wall_time = now - 120.0
+        ctx.last_link_event_wall_time = now - 120.0
+        ctx.last_heartbeat_wall_time = now - 60.0  # heartbeats stopped too
+        assert ctx.is_stale() is True
+
+    def test_on_heartbeat_updates_liveness_and_wall_stamp(self):
+        import asyncio
+        from unittest.mock import MagicMock
+
+        ctx = self._ctx()
+        msg = MagicMock()
+        msg.data = json.dumps(
+            {"wall_time": "2026-06-11T05:00:00+00:00", "status": "paused"}
+        ).encode()
+        asyncio.run(ctx._on_heartbeat(msg))
+        assert ctx.heartbeat_wall_time == "2026-06-11T05:00:00+00:00"
+        assert ctx.last_heartbeat_wall_time > 0.0
+
+    def test_on_heartbeat_missing_wall_time_fails_loud(self):
+        import asyncio
+        from unittest.mock import MagicMock
+
+        ctx = self._ctx()
+        msg = MagicMock()
+        msg.data = json.dumps({"status": "paused"}).encode()
+        with pytest.raises(ValueError, match="wall_time"):
+            asyncio.run(ctx._on_heartbeat(msg))
+
+    def test_engine_wall_time_prefers_freshest_source(self):
+        import time as _t
+
+        ctx = self._ctx()
+        assert ctx.engine_wall_time() is None
+        now = _t.monotonic()
+        # During play: ticks are the freshest engine stamp.
+        ctx.tick_wall_time = "2026-06-11T05:00:00+00:00"
+        ctx.last_clock_tick_wall_time = now
+        ctx.heartbeat_wall_time = "2026-06-11T04:59:00+00:00"
+        ctx.last_heartbeat_wall_time = now - 60.0
+        assert ctx.engine_wall_time() == "2026-06-11T05:00:00+00:00"
+        # During pause: sim freezes, wall advances via heartbeats — the
+        # divergence is real and must display.
+        ctx.heartbeat_wall_time = "2026-06-11T05:02:00+00:00"
+        ctx.last_heartbeat_wall_time = now + 120.0
+        assert ctx.engine_wall_time() == "2026-06-11T05:02:00+00:00"
+
+
+class TestIncrementalOpsFeed:
+    """The ops log ships once per connection (seq cursor), and unsent
+    increments survive latest-wins frame replacement — re-sending the
+    whole 500-entry log every frame measured 96% of a 2.5 MB frame."""
+
+    def test_stamp_assigns_monotonic_seq(self):
+        from vs_api.ops_log import stamp_ops_event
+
+        a = stamp_ops_event({"code": "A", "level": "info"})
+        b = stamp_ops_event({"code": "B", "level": "info"})
+        assert b["seq"] > a["seq"] > 0
+
+    def test_ops_tail_filters_by_cursor_and_sorts_by_seq(self):
+        from types import SimpleNamespace
+
+        from vs_api import main as vs_main
+        from vs_api.ops_log import stamp_ops_event
+
+        e1 = stamp_ops_event({"code": "E1", "level": "error", "timestamp": "t1"})
+        e2 = stamp_ops_event({"code": "E2", "level": "error", "timestamp": "t2"})
+        e3 = stamp_ops_event({"code": "E3", "level": "error", "timestamp": "t3"})
+        ctx = SimpleNamespace(session_ops_events=[e2])
+
+        original = list(vs_main._system_ops_events)
+        vs_main._system_ops_events.clear()
+        vs_main._system_ops_events.extend([e1, e3])
+        try:
+            full = vs_main._ops_events_tail(ctx)
+            assert [e["code"] for e in full] == ["E1", "E2", "E3"]  # seq order across logs
+            after = vs_main._ops_events_tail(ctx, ops_after=e1["seq"])
+            assert [e["code"] for e in after] == ["E2", "E3"]
+            assert vs_main._ops_events_tail(ctx, ops_after=e3["seq"]) == []
+        finally:
+            vs_main._system_ops_events.clear()
+            vs_main._system_ops_events.extend(original)
+
+    def test_unsent_frame_increments_survive_replacement(self):
+        from vs_api.main import _carry_unsent_increments
+
+        pending = {
+            "ops_events": [{"code": "LOST?", "seq": 5}],
+            "actuation_health": {"gs": "degraded"},
+            "nodes": ["stale-state"],
+        }
+        replacement = {"ops_events": [{"code": "NEW", "seq": 6}], "nodes": ["fresh-state"]}
+        merged = _carry_unsent_increments(pending, replacement)
+        # Deltas accumulate; idempotent state is replaced, never carried.
+        assert [e["code"] for e in merged["ops_events"]] == ["LOST?", "NEW"]
+        assert merged["actuation_health"] == {"gs": "degraded"}
+        assert merged["nodes"] == ["fresh-state"]
+
+    def test_shipped_frame_replacement_carries_nothing(self):
+        from vs_api.main import _carry_unsent_increments
+
+        replacement = {"ops_events": [], "nodes": ["fresh"]}
+        assert _carry_unsent_increments(None, replacement) is replacement
+
+    def test_unsent_health_does_not_override_newer_change(self):
+        from vs_api.main import _carry_unsent_increments
+
+        pending = {"ops_events": [], "actuation_health": {"gs": "old"}}
+        replacement = {"ops_events": [], "actuation_health": {"gs": "newer"}}
+        merged = _carry_unsent_increments(pending, replacement)
+        assert merged["actuation_health"] == {"gs": "newer"}
+
+    def test_overlay_slices_by_cursor_without_mutating_shared(self):
+        from vs_api.main import _overlay_connection_increments, _SharedFrame
+
+        shared = _SharedFrame(
+            frame={
+                "nodes": ["state"],
+                "ops_events": [{"seq": 1}, {"seq": 2}, {"seq": 3}],
+                "actuation_health": {"gs": "ok"},
+            },
+            health_json='{"gs": "ok"}',
+        )
+        snap, cursor, health = _overlay_connection_increments(
+            shared, ops_cursor=1, last_health_json=None
+        )
+        assert [e["seq"] for e in snap["ops_events"]] == [2, 3]
+        assert cursor == 3
+        assert health == '{"gs": "ok"}'
+        assert snap["actuation_health"] == {"gs": "ok"}  # first send: present
+        # Shared frame untouched — other connections see the full tail.
+        assert len(shared.frame["ops_events"]) == 3
+        assert "actuation_health" in shared.frame
+
+    def test_overlay_first_frame_ships_full_tail(self):
+        from vs_api.main import _overlay_connection_increments, _SharedFrame
+
+        shared = _SharedFrame(
+            frame={"ops_events": [{"seq": 7}, {"seq": 9}]},
+            health_json="null",
+        )
+        snap, cursor, _h = _overlay_connection_increments(
+            shared, ops_cursor=0, last_health_json=None
+        )
+        assert [e["seq"] for e in snap["ops_events"]] == [7, 9]
+        assert cursor == 9
+
+    def test_overlay_omits_unchanged_health_and_holds_cursor(self):
+        from vs_api.main import _overlay_connection_increments, _SharedFrame
+
+        shared = _SharedFrame(
+            frame={"ops_events": [{"seq": 4}], "actuation_health": {"gs": "ok"}},
+            health_json='{"gs": "ok"}',
+        )
+        snap, cursor, _h = _overlay_connection_increments(
+            shared, ops_cursor=4, last_health_json='{"gs": "ok"}'
+        )
+        assert snap["ops_events"] == []
+        assert cursor == 4
+        assert "actuation_health" not in snap
+
+
 class TestEphemerisPositionPropagation:
     def test_tle_ephemeris_updates_satellite_position(self):
         ctx = SessionContext.__new__(SessionContext)

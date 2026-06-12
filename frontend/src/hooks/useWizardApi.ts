@@ -109,7 +109,7 @@ export function useWizardApi() {
 
   const previewCoverage = useCallback(
     async (state: WizardRuntimeState) => {
-      if (!state.constellation || !state.satelliteType || !state.groundStationSet) return;
+      if (!state.constellation || !state.groundStationSet) return;
       setPreviewing(true);
       setError(null);
       try {
@@ -119,7 +119,7 @@ export function useWizardApi() {
           headers: authHeaders({ "Content-Type": "application/json" }),
           body: JSON.stringify({
             constellation: constellationValue,
-            satellite_type: state.satelliteType.name,
+            satellite_type: state.satelliteType?.name ?? undefined,
             ground_stations: state.groundStationSet.file
               ? state.groundStationSet.file
               : state.groundStationSet.stations,

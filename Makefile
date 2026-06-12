@@ -457,6 +457,23 @@ test-frontend: ensure-frontend-deps ## Run frontend unit tests (vitest)
 test-integration: ## Run integration tests (requires running cluster)
 	uv run pytest tests/integration --tb=short -q
 
+perf-test: ## Run OME performance budgets; artifacts land in perf-results/
+	@echo "[perf-test] Running the OME performance scenario matrix against checked-in budgets."
+	@echo "[perf-test] Each scenario drives the production compute_step path and writes a"
+	@echo "[perf-test] provenance-stamped artifact (git sha, host fingerprint, per-segment p50/p95)."
+	@NODALARC_PERF=1 uv run pytest tests/perf --tb=short -q -s || { \
+		echo ""; \
+		echo "[perf-test] BUDGET FAILURE: a scenario exceeded its per-step p50 ceiling."; \
+		echo "[perf-test] Next: read the failing scenario's artifact in perf-results/ —"; \
+		echo "[perf-test]       the per-segment breakdown attributes the regression."; \
+		exit 1; \
+	}
+	@echo ""
+	@echo "[perf-test] No regressions against the checked-in ceilings. Product-target verdicts"
+	@echo "[perf-test] (1x realtime / 60x compression at the 1 Hz tick) are in the table above —"
+	@echo "[perf-test] a scenario can be regression-clean and still fail a product target."
+	@echo "[perf-test] Artifacts + trend index: perf-results/"
+
 test-root: ## Run privileged Node Agent kernel proof tests (requires root/CAP_NET_ADMIN)
 	@if [ "$$(id -u)" != "0" ]; then \
 		echo "FATAL: test-root requires root/CAP_NET_ADMIN. Run: sudo make test-root"; \

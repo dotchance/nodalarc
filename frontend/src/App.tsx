@@ -79,7 +79,7 @@ function AppInner() {
     preselectedAppliedRef.current = true;
   }, [snapshot, select]);
 
-  const { switching } = useSessionSwitcher(snapshot?.session_status ?? null);
+  const { sessions, switching, switchSession } = useSessionSwitcher(sessionTransitioning);
   const playback = usePlayback(snapshot?.playback_paused, snapshot?.playback_speed);
 
   const appState = useAppState({
@@ -522,6 +522,8 @@ function AppInner() {
       onClose={hasEverDeployed ? () => setShowCatalog(false) : undefined}
       deploying={switching}
       systemNotice={visualizationError ?? undefined}
+      sessions={sessions}
+      onLaunchSession={switchSession}
     />
   ) : undefined;
 

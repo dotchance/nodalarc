@@ -1,5 +1,9 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
+/** The switch lifecycle contract: `switching` follows the websocket
+ * transition signal (session_transitioning → session_ready/failed), never
+ * snapshot fields — the snapshot is nulled for the whole transition window,
+ * so deriving progress from it hangs the overlay forever. */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 
@@ -21,7 +25,7 @@ describe("useSessionSwitcher", () => {
   });
 
   it("switchSession sends deploy request", async () => {
-    const { result } = renderHook(() => useSessionSwitcher(null));
+    const { result } = renderHook(() => useSessionSwitcher(false));
     await act(async () => { await result.current.switchSession("catalog/nodalarc/sessions/earth-leo-simple.yaml"); });
     const switchCall = fetchMock.mock.calls.find(
       (c: unknown[]) => String(c[0]).includes("/sessions/switch"),
@@ -32,9 +36,8 @@ describe("useSessionSwitcher", () => {
   });
 
   it("no double switch while already switching", async () => {
-    const { result } = renderHook(() => useSessionSwitcher(null));
+    const { result } = renderHook(() => useSessionSwitcher(false));
     await act(async () => { await result.current.switchSession("a.yaml"); });
-    // Now switching is true - try to switch again
     await act(async () => { await result.current.switchSession("b.yaml"); });
     const switchCalls = fetchMock.mock.calls.filter(
       (c: unknown[]) => String(c[0]).includes("/sessions/switch"),
@@ -47,37 +50,54 @@ describe("useSessionSwitcher", () => {
     fetchMock
       .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve([]) })
       .mockRejectedValueOnce(new Error("network error"));
-    const { result } = renderHook(() => useSessionSwitcher(null));
+    const { result } = renderHook(() => useSessionSwitcher(false));
     await act(async () => { await result.current.switchSession("bad.yaml"); });
     expect(result.current.switching).toBe(false);
   });
 
-  it("backend-initiated switch detected", () => {
+  it("clears once the websocket transition completes", async () => {
     const { result, rerender } = renderHook(
-      ({ status }) => useSessionSwitcher(status),
-      { initialProps: { status: "ready" as string | null } },
+      ({ transitioning }) => useSessionSwitcher(transitioning),
+      { initialProps: { transitioning: false } },
     );
-    expect(result.current.switching).toBe(false);
-    rerender({ status: "switching" });
-    expect(result.current.switching).toBe(true);
-  });
-
-  it("ready after switching clears flag", () => {
-    const { result, rerender } = renderHook(
-      ({ status }) => useSessionSwitcher(status),
-      { initialProps: { status: "ready" as string | null } },
-    );
-    rerender({ status: "switching" });
-    expect(result.current.switching).toBe(true);
-    rerender({ status: "ready" });
-    expect(result.current.switching).toBe(false);
-  });
-
-  it("must see switching before ready clears", async () => {
-    const { result } = renderHook(() => useSessionSwitcher(null));
     await act(async () => { await result.current.switchSession("test.yaml"); });
     expect(result.current.switching).toBe(true);
-    // Rerender directly to "ready" without going through "switching" first
-    // The hook should NOT clear switching until it sees the backend "switching" status
+
+    // The websocket lifecycle takes over, then ends — the regression this
+    // pins: the hook once watched snapshot.session_status, which is null
+    // for the whole transition, so the overlay hung at "Deploying" forever.
+    rerender({ transitioning: true });
+    expect(result.current.switching).toBe(true);
+    rerender({ transitioning: false });
+    expect(result.current.switching).toBe(false);
+  });
+
+  it("does not clear before the transition has been observed", async () => {
+    const { result, rerender } = renderHook(
+      ({ transitioning }) => useSessionSwitcher(transitioning),
+      { initialProps: { transitioning: false } },
+    );
+    await act(async () => { await result.current.switchSession("test.yaml"); });
+    // No transition seen yet — a rerender without one must not clear.
+    rerender({ transitioning: false });
+    expect(result.current.switching).toBe(true);
+  });
+
+  it("refreshes the session list when any switch completes", async () => {
+    const { rerender } = renderHook(
+      ({ transitioning }) => useSessionSwitcher(transitioning),
+      { initialProps: { transitioning: false } },
+    );
+    const listCallsBefore = fetchMock.mock.calls.filter(
+      (c: unknown[]) => String(c[0]).endsWith("/api/v1/sessions"),
+    ).length;
+    // Backend-initiated switch (another operator, a deploy): observe its
+    // lifecycle without a local trigger.
+    rerender({ transitioning: true });
+    rerender({ transitioning: false });
+    const listCallsAfter = fetchMock.mock.calls.filter(
+      (c: unknown[]) => String(c[0]).endsWith("/api/v1/sessions"),
+    ).length;
+    expect(listCallsAfter).toBe(listCallsBefore + 1);
   });
 });

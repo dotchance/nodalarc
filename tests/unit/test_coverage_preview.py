@@ -145,11 +145,20 @@ def test_nonexistent_ground_stations_raises():
         )
 
 
-def test_satellite_type_override_is_not_a_catalog_preview_fallback():
-    """Catalog preview uses the chosen constellation primitive exactly."""
-    with pytest.raises(ValueError, match="satellite_type override is not supported"):
+def test_preview_composes_chosen_satellite_primitive():
+    """Preview assembles from primitives exactly like generation: the chosen
+    space node flies the constellation's geometry through the same resolver
+    path; an unknown primitive is a typed rejection, never a fallback."""
+    with pytest.raises(ValueError, match="Unknown satellite primitive"):
         compute_coverage_preview(
             constellation_source="nodalarc:constellations/earth/leo/earth-leo-ring-36.yaml",
             satellite_type_override="generic-4isl",
             ground_stations_source="nodalarc:site-sets/earth/leo/earth-leo-starlink-pop-sites.yaml",
         )
+
+    result = compute_coverage_preview(
+        constellation_source="nodalarc:constellations/earth/leo/earth-leo-ring-36.yaml",
+        satellite_type_override="leo-relay",
+        ground_stations_source="nodalarc:site-sets/earth/leo/earth-leo-starlink-pop-sites.yaml",
+    )
+    assert result.orbital_period_s > 0

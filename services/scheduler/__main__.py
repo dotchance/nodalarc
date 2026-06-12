@@ -32,7 +32,7 @@ from nodalarc.substrate.manifest_contract import WiringManifest
 from nodalarc.substrate.wiring_status import failed_status_summary, parse_status_configmap
 
 from scheduler.agent_pool import AgentPool
-from scheduler.dispatcher import Dispatcher
+from scheduler.dispatcher import Dispatcher, DispatcherSuperseded
 from scheduler.pod_locator import PodLocationMap
 from scheduler.substrate_latency import (
     load_substrate_status_documents,
@@ -254,6 +254,51 @@ def wait_for_substrate_gate(
     )
 
 
+def _make_lifecycle_identity_reader(
+    k8s_v1: Any, namespace: str
+) -> Callable[[], tuple[str | None, tuple[str, str] | None]]:
+    """Authoritative lifecycle reader for the dispatcher's halt classifier.
+
+    Returns (cr_session_run_id, manifest_identity):
+    - cr_session_run_id: the Operator-stamped status.sessionRunId on the
+      ConstellationSpec. This flips the moment the Operator reconciles a
+      new spec — BEFORE old session pods are deleted — so it is the
+      earliest authoritative supersession signal. None when the CR is
+      absent or carries no stamped identity yet.
+    - manifest_identity: the wiring manifest's (session_id,
+      wiring_generation); None when the manifest ConfigMap is absent
+      (teardown in progress).
+
+    Any other read failure propagates — the dispatcher treats an
+    unreadable authority as unproven supersession and keeps the halt
+    fatal.
+    """
+    import kubernetes.client
+
+    custom = kubernetes.client.CustomObjectsApi(k8s_v1.api_client)
+
+    def _read() -> tuple[str | None, tuple[str, str] | None]:
+        try:
+            cr = custom.get_namespaced_custom_object(
+                "nodalarc.io", "v1alpha1", namespace, "constellationspecs", "current-session"
+            )
+            cr_run_id = str((cr.get("status") or {}).get("sessionRunId") or "") or None
+        except kubernetes.client.rest.ApiException as exc:
+            if exc.status != 404:
+                raise
+            cr_run_id = None
+        try:
+            manifest = read_wiring_manifest_identity(k8s_v1, namespace)
+            manifest_identity = (manifest.session_id, manifest.wiring_generation)
+        except kubernetes.client.rest.ApiException as exc:
+            if exc.status != 404:
+                raise
+            manifest_identity = None
+        return cr_run_id, manifest_identity
+
+    return _read
+
+
 def read_wiring_manifest_identity(k8s_v1: Any, namespace: str) -> WiringManifest:
     cm = k8s_v1.read_namespaced_config_map("nodalarc-topology-wiring", namespace)
     if not cm.data:
@@ -416,10 +461,17 @@ def main() -> None:
         wiring_generation=wiring_manifest.wiring_generation,
         required_substrate_pairs=wiring_manifest.required_substrate_pairs,
         substrate_measurements=substrate_measurements,
+        read_lifecycle_identity=_make_lifecycle_identity_reader(k8s_v1, ns),
     )
 
     try:
         asyncio.run(dispatcher.run())
+    except DispatcherSuperseded as exc:
+        # Routine end of a session switch: the wiring authority moved to a
+        # new session/generation and this instance ended itself. Exit 0 —
+        # the Operator's rollout owns replacement; a non-zero exit here
+        # manufactures crash-loop noise for an expected transition.
+        log.info("%s", exc)
     except KeyboardInterrupt:
         log.info("Scheduler interrupted")
     finally:

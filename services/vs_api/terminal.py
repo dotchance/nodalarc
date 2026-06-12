@@ -205,6 +205,8 @@ class TerminalSession:
         if not self._conn:
             raise RuntimeError("Not connected")
         result = await asyncio.wait_for(
+            # loop-blocking-ok: asyncssh's async SSHClientConnection.run —
+            # the name merely collides with a sync run() in another service.
             self._conn.run(command),
             timeout=timeout,
         )

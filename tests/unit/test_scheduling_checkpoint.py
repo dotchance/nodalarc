@@ -277,3 +277,51 @@ def test_checkpoint_pair_roles_reject_non_ground_or_double_ground_pairs(pair):
 
     with pytest.raises(ValueError, match="expected exactly one ground station"):
         _checkpoint_ground_sat_pair(pair, {"gs-a", "gs-b"})
+
+
+class TestExactEpochAnchor:
+    """The checkpoint carries epoch_unix bit-exactly.
+
+    sim_time is microsecond-quantized by datetime, so reconstructing the
+    epoch from it loses sub-microsecond precision — and recovery replay
+    must recompute history from bit-identical float inputs or replayed
+    decisions can diverge from what was published.
+    """
+
+    def test_epoch_unix_survives_serialization_bit_exactly(self):
+        fractional_epoch = 1_780_876_800.123456789  # not representable in µs
+        ckpt = _checkpoint(epoch_unix=fractional_epoch)
+        decoded = SchedulingCheckpoint.model_validate_json(ckpt.model_dump_json())
+        assert decoded.epoch_unix == fractional_epoch
+
+    def test_retained_wire_format_round_trips_through_the_codec_twins(self):
+        # The gzip wire format is owned by encode/decode in ONE module;
+        # the OME publisher thread encodes with the twin (serialization
+        # moved off the pacing thread), so this round trip IS the wire
+        # contract — bit-exact anchor included.
+        from nodalarc.scheduling_checkpoint import (
+            decode_retained_scheduling_checkpoint,
+            encode_retained_scheduling_checkpoint,
+        )
+
+        fractional_epoch = 1_780_876_800.123456789
+        ckpt = _checkpoint(epoch_unix=fractional_epoch)
+        decoded = decode_retained_scheduling_checkpoint(encode_retained_scheduling_checkpoint(ckpt))
+        assert decoded is not None
+        assert decoded == ckpt
+        assert decoded.epoch_unix == fractional_epoch
+
+    def test_quantized_reconstruction_is_inexact_for_fractional_epochs(self):
+        # Documents WHY the field exists: the legacy path (sim_time
+        # roundtrip minus step offset) cannot reproduce this epoch.
+        fractional_epoch = 1_780_876_800.123456789
+        step, step_seconds = 320, 10
+        sim_time = datetime.fromtimestamp(fractional_epoch + step * step_seconds, tz=UTC)
+        reconstructed = sim_time.timestamp() - (step * step_seconds)
+        assert reconstructed != fractional_epoch
+
+    def test_checkpoints_without_anchor_decode_with_none(self):
+        # Wire compatibility: checkpoints written before the field existed.
+        legacy_json = _checkpoint().model_dump_json(exclude={"epoch_unix"})
+        decoded = SchedulingCheckpoint.model_validate_json(legacy_json)
+        assert decoded.epoch_unix is None

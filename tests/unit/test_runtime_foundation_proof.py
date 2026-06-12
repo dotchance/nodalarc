@@ -58,6 +58,19 @@ NEW = ("gs-multi", "sat-new")
 ACK_TO_ACTUAL_REFERENCE_SLA_MS = 1200.0
 
 
+def _as_model(model_cls, payload):
+    """Queue records carry frozen wire models or DEFERRED builds — wire
+    materialization and serialization both run on the publisher thread.
+    Building here exercises exactly what the publisher executes.
+    Pre-encoded bytes payloads remain valid queue items."""
+    if isinstance(payload, (bytes, bytearray)):
+        return model_cls.model_validate_json(payload)
+    if hasattr(payload, "build"):
+        payload = payload.build()
+    assert isinstance(payload, model_cls), f"expected {model_cls.__name__}, got {type(payload)}"
+    return payload
+
+
 def _info(pair: tuple[str, str]) -> ActiveLinkInfo:
     return ActiveLinkInfo(
         interface_a="term0" if pair == OLD else "term1",
@@ -672,7 +685,7 @@ def _dispatcher_for_captured_records(
     for subject, payload in records:
         if subject != link_state_snapshot_subject(session_id):
             continue
-        snapshot = LinkStateSnapshot.model_validate_json(payload)
+        snapshot = _as_model(LinkStateSnapshot, payload)
         for link in snapshot.links:
             pair = (link.node_a, link.node_b)
             interface_map[pair] = (link.interface_a, link.interface_b)
@@ -770,20 +783,20 @@ def _replay_ome_records(
     async def apply_record(subject: str, payload: bytes) -> None:
         if subject == playback_state_subject(session_id):
             consumed.append("playback")
-            await d._handle_playback_state(PlaybackState.model_validate_json(payload))
+            await d._handle_playback_state(_as_model(PlaybackState, payload))
         elif subject == session_ephemeris_subject(session_id):
             consumed.append("ephemeris")
-            await d._handle_session_ephemeris(SessionEphemeris.model_validate_json(payload))
+            await d._handle_session_ephemeris(_as_model(SessionEphemeris, payload))
         elif subject == link_state_snapshot_subject(session_id):
             consumed.append("snapshot")
-            await d._handle_link_state_snapshot(LinkStateSnapshot.model_validate_json(payload))
+            await d._handle_link_state_snapshot(_as_model(LinkStateSnapshot, payload))
         elif subject == ome_clock_subject(session_id):
             consumed.append("clock")
-            tick = ClockTick.model_validate_json(payload)
+            tick = _as_model(ClockTick, payload)
             await d._handle_clock_tick_payload(json.loads(tick.model_dump_json()))
         elif subject == ome_visibility_subject(session_id):
             consumed.append("visibility")
-            await d._handle_visibility_event(VisibilityEvent.model_validate_json(payload))
+            await d._handle_visibility_event(_as_model(VisibilityEvent, payload))
         elif subject == scheduling_checkpoint_subject(session_id):
             consumed.append("checkpoint")
 

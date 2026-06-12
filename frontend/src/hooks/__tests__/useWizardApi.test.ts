@@ -14,12 +14,7 @@ const { useWizardApi } = await import("../useWizardApi");
 function wizardState(): WizardRuntimeState {
   return {
     step: "review",
-    satelliteType: {
-      name: "starlink-v2",
-      description: "test",
-      isl_terminals: [],
-      ground_terminals: [],
-    },
+    satelliteType: null,
     groundStationSet: {
       name: "earth-leo-starlink-pop-sites",
       description: "test",

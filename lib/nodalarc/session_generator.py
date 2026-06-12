@@ -216,7 +216,7 @@ def _selection_policy(ground_policy: str, lookahead_ticks: int) -> dict[str, Any
 def _default_time() -> dict[str, Any]:
     return {
         "start_time": "2026-06-08T00:00:00Z",
-        "step_seconds": 10,
+        "step_seconds": 1,
         "compression": 1,
     }
 
@@ -241,12 +241,6 @@ def generate_session_yaml(
     """Generate catalog session YAML from wizard selections."""
     warnings: list[str] = []
     roots = catalog_roots or _default_catalog_roots()
-    if satellite_type is not None:
-        validate_catalog_name(satellite_type, label="satellite_type")
-        raise ValueError(
-            "satellite_type overrides are retired; choose or author a constellation primitive"
-        )
-
     protocol = validate_catalog_name(protocol, label="protocol")
     normalized_extensions = normalize_extensions(tuple(extensions))
     resolve_stack(protocol, list(normalized_extensions))
@@ -268,6 +262,12 @@ def generate_session_yaml(
         roots,
         custom_constellation,
     )
+    if satellite_type is not None:
+        constellation_value = merge_constellation_with_satellite_type(
+            constellation_value,
+            satellite_type,
+            roots,
+        )
     ground_value = _resolve_ground_source(
         ground_stations,
         preset,
@@ -425,13 +425,106 @@ def _timers_block(timers: dict | None) -> dict:
     return {"timers": dumped} if dumped else {}
 
 
+def constellation_default_node(
+    source: str | dict,
+    catalog_roots: CatalogRoots | None = None,
+) -> str | None:
+    """The node primitive id a constellation flies when none is chosen."""
+    roots = catalog_roots or _default_catalog_roots()
+    try:
+        if isinstance(source, dict):
+            wrapper, model = validate_catalog_document(source)
+        else:
+            path = resolve_catalog_reference(source, roots)
+            raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+            wrapper, model = validate_catalog_document(raw)
+    except Exception:
+        return None
+    if wrapper != "constellation":
+        return None
+    body = model.model_dump(mode="python", by_alias=True, exclude_none=True)
+    node_ref = body.get("node")
+    if not isinstance(node_ref, str):
+        return None
+    return Path(node_ref).stem
+
+
+def list_space_node_presets(catalog_roots: CatalogRoots | None = None) -> list[dict[str, Any]]:
+    """Space node primitives available to fly a constellation's geometry.
+
+    Sessions assemble from primitives: a constellation is geometry (orbit,
+    planes, phasing) plus a default node; which satellite actually flies it
+    is a separate primitive choice. This lists the candidates.
+    """
+    roots = catalog_roots or _default_catalog_roots()
+    nodes_dir = roots.root / "nodes" / "space"
+    results: list[dict[str, Any]] = []
+    if not nodes_dir.is_dir():
+        return results
+    for path in sorted(nodes_dir.glob("*.yaml")):
+        raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        wrapper, model = validate_catalog_document(raw)
+        if wrapper != "node":
+            continue
+        data = model.model_dump(mode="python", by_alias=True, exclude_none=True)
+        results.append(
+            {
+                "name": data["id"],
+                "display_name": data.get("display_name") or data["id"],
+                "notes": data.get("notes") or "",
+                "file": f"nodalarc:nodes/space/{path.name}",
+                "terminals": [
+                    {
+                        "id": mount["id"],
+                        "role": mount.get("role"),
+                        "count": mount.get("count", 1),
+                    }
+                    for mount in data.get("terminals", [])
+                ],
+            }
+        )
+    return results
+
+
 def merge_constellation_with_satellite_type(
-    constellation_path: str,
+    constellation_source: str | dict,
     satellite_type: str,
     catalog_roots: CatalogRoots | None = None,
 ) -> dict:
-    """Reject the retired satellite-type override path."""
+    """Compose a constellation's geometry with a chosen space node primitive.
+
+    Returns an inline constellation document (wrapper included) whose ``node``
+    reference is the chosen primitive. The session embeds the result, so the
+    shipped constellation file is never modified and the composed identity is
+    explicit in the id. Compatibility between the node's terminals and the
+    session's link rules is the resolver's job — incompatible compositions
+    fail there with typed errors, never silently.
+    """
+    roots = catalog_roots or _default_catalog_roots()
     validate_catalog_name(satellite_type, label="satellite_type")
-    raise ValueError(
-        "satellite_type overrides are retired; choose or author a constellation primitive"
-    )
+    by_name = {preset["name"]: preset for preset in list_space_node_presets(roots)}
+    chosen = by_name.get(satellite_type)
+    if chosen is None:
+        raise ValueError(
+            f"Unknown satellite primitive {satellite_type!r}; available: {sorted(by_name)}"
+        )
+
+    if isinstance(constellation_source, dict):
+        wrapper, model = validate_catalog_document(constellation_source)
+    else:
+        path = resolve_catalog_reference(constellation_source, roots)
+        raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        wrapper, model = validate_catalog_document(raw)
+    if wrapper != "constellation":
+        raise ValueError(
+            f"satellite selection composes onto a constellation source, got {wrapper!r}"
+        )
+
+    body = model.model_dump(mode="python", by_alias=True, exclude_none=True)
+    if body.get("node") == chosen["file"]:
+        return {"constellation": body}
+    body["node"] = chosen["file"]
+    body["id"] = validate_catalog_name(f"{body['id']}-{satellite_type}")
+    composed = {"constellation": body}
+    validate_catalog_document(composed)
+    return composed

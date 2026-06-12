@@ -69,6 +69,8 @@ simulation:
   candidate_limits:
     max_pairs_per_rule: 500
     max_pairs_per_tick: 2000
+# Deliberate 10 s tick: GEO-only session, near-stationary geometry —
+# finer steps add cost without adding fidelity. The system default is 1.
 time:
   start_time: '2026-06-08T00:00:00Z'
   step_seconds: 10

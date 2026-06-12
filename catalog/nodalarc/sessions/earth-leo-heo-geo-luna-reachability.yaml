@@ -27,7 +27,7 @@ segments:
           discount_factor: 1.1
           mask_fade_range_deg: 3.0
       handover_mode: mbb
-      mbb_overlap_ticks: 3
+      mbb_overlap_ticks: 30
       mbb_reserve: 1
       handover_concurrency: one_at_a_time
       ranking_order:
@@ -54,7 +54,7 @@ segments:
           discount_factor: 1.1
           mask_fade_range_deg: 3.0
       handover_mode: mbb
-      mbb_overlap_ticks: 3
+      mbb_overlap_ticks: 30
       mbb_reserve: 1
       handover_concurrency: one_at_a_time
       ranking_order:
@@ -76,7 +76,7 @@ segments:
     scheduling:
       selection_policy:
         longest_remaining_pass:
-          lookahead_horizon_ticks: 720
+          lookahead_horizon_ticks: 7200
       handover_policy:
         hard_release: {}
       handover_mode: bbm
@@ -99,7 +99,7 @@ segments:
     scheduling:
       selection_policy:
         longest_remaining_pass:
-          lookahead_horizon_ticks: 720
+          lookahead_horizon_ticks: 7200
       handover_policy:
         hard_release: {}
       handover_mode: bbm
@@ -127,7 +127,7 @@ segments:
           discount_factor: 1.1
           mask_fade_range_deg: 3.0
       handover_mode: mbb
-      mbb_overlap_ticks: 3
+      mbb_overlap_ticks: 30
       mbb_reserve: 1
       handover_concurrency: one_at_a_time
       ranking_order:
@@ -495,7 +495,7 @@ simulation:
     max_pairs_per_tick: 10000
 time:
   start_time: '2026-06-08T00:00:00Z'
-  step_seconds: 10
+  step_seconds: 1
   compression: 1
 ephemeris:
   provider: skyfield_bsp
@@ -512,4 +512,4 @@ ephemeris:
     frame: gcrs
 dispatch:
   latency_authority: ome
-  max_latency_age_ticks: 1
+  max_latency_age_ticks: 10

@@ -387,7 +387,8 @@ class SessionManager:
         import kubernetes.client
         import kubernetes.config
 
-        self.rescan()
+        # Full multi-session catalog resolution — never on the loop.
+        await asyncio.to_thread(self.rescan)
         validated_session_path = self._validated_session_path(session_path)
         if validated_session_path is None:
             self._status = "error"
@@ -395,10 +396,13 @@ class SessionManager:
             log.error("Rejected switch to unknown session path: %s", session_path)
             raise ValueError(f"Unknown session: {session_path}")
 
-        try:
-            kubernetes.config.load_incluster_config()
-        except kubernetes.config.ConfigException:
-            kubernetes.config.load_kube_config()
+        def _load_k8s_config() -> None:
+            try:
+                kubernetes.config.load_incluster_config()
+            except kubernetes.config.ConfigException:
+                kubernetes.config.load_kube_config()
+
+        await asyncio.to_thread(_load_k8s_config)
 
         api = kubernetes.client.CustomObjectsApi()
         cfg = get_platform_config()
@@ -479,7 +483,7 @@ class SessionManager:
 
             # === Build and apply ConstellationSpec CR ===
             await _progress("Deploying new constellation")
-            session_yaml_content = validated_session_path.read_text()
+            session_yaml_content = await asyncio.to_thread(validated_session_path.read_text)
             cr_body = {
                 "apiVersion": "nodalarc.io/v1alpha1",
                 "kind": "ConstellationSpec",

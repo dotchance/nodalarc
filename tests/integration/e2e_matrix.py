@@ -489,24 +489,41 @@ def _routing_neighbor_up(output: str, protocol: str) -> bool:
     return "Full" in output if protocol == "ospf" else "Up" in output
 
 
-def check_websocket(token: str) -> dict:
-    """Check WebSocket delivers advancing sim_time."""
+def check_websocket(token: str, step_seconds: int = 1) -> dict:
+    """Check the feed delivers advancing sim_time.
+
+    The sample gap derives from the session's own tick — a GEO session
+    deliberately ticks every 10 seconds, and two samples inside one
+    tick legitimately read identical sim_time (found on the first
+    catalog run: both GEO sessions failed this check while their
+    adjacencies and pings passed)."""
     state1 = request_json("GET", "/api/v1/state", token=token)
     t1 = state1.get("sim_time", "")
-    time.sleep(3)
+    time.sleep(max(3, int(step_seconds) + 2))
     state2 = request_json("GET", "/api/v1/state", token=token)
     t2 = state2.get("sim_time", "")
     nodes = state2.get("nodes", [])
     sats = _satellite_nodes(nodes)
-    plane_ok = all(isinstance(s.get("plane"), int) for s in sats)
 
-    # Retry plane/slot check — PositionEvents may not have reached all nodes yet
+    def _sats_ready(sats_now: list[dict]) -> bool:
+        # plane/slot are OPTIONAL grid coordinates — individually placed
+        # satellites (GEO longitude slots) legitimately carry none. What
+        # every satellite must have is a real position.
+        return all(
+            isinstance(s.get("lat_deg"), (int, float))
+            and (s.get("plane") is None or isinstance(s.get("plane"), int))
+            for s in sats_now
+        )
+
+    plane_ok = _sats_ready(sats)
+
+    # Retry — PositionEvents may not have reached all nodes yet
     retries = 0
     while not plane_ok and retries < 3:
         time.sleep(10)
         nodes = request_json("GET", "/api/v1/state", token=token).get("nodes", [])
         sats = _satellite_nodes(nodes)
-        plane_ok = all(isinstance(s.get("plane"), int) for s in sats)
+        plane_ok = _sats_ready(sats)
         retries += 1
 
     return {
@@ -570,22 +587,35 @@ def check_ping(token: str, perm: dict) -> dict:
                 "ground_node_count": 0,
                 "active_link_count": len([l for l in links if l.get("state") == "active"]),
             }
-        ground_probe = _find_routed_ground_probe(token, protocol=protocol, wait_s=120)
+        ground_topology = perm.get("ground_topology")
+        # Cross-body sessions converge over multi-second light-time RTTs;
+        # size the readiness deadline to the declared shape.
+        bodies = {info["body"] for info in (ground_topology or {}).values()}
+        ground_probe = _find_routed_ground_probe(
+            token,
+            protocol=protocol,
+            wait_s=240 if len(bodies) > 1 else 120,
+            ground_topology=ground_topology,
+        )
         if ground_probe and ground_probe.get("result") == "PASS":
             return {
                 **ground_probe,
                 "ground_declared": declares_ground,
                 "ground_node_count": len(gs_nodes),
             }
-        return {
-            "result": "FAIL",
-            "mode": "ground_to_ground",
-            "reason": (ground_probe or {}).get("reason", "ground connectivity was not proven"),
-            "ground_declared": declares_ground,
-            "ground_node_count": len(gs_nodes),
-            "active_link_count": len([l for l in links if l.get("state") == "active"]),
-            "last_probe": ground_probe,
-        }
+        if not (ground_probe and ground_probe.get("result") == "SINGLE_SITE"):
+            return {
+                "result": "FAIL",
+                "mode": "ground_to_ground",
+                "reason": (ground_probe or {}).get("reason", "ground connectivity was not proven"),
+                "ground_declared": declares_ground,
+                "ground_node_count": len(gs_nodes),
+                "active_link_count": len([l for l in links if l.get("state") == "active"]),
+                "last_probe": ground_probe,
+            }
+        # Single ground site: inter-site transit is unprovable by shape.
+        # Fall through to the satellite strategies below, which prove the
+        # space link directly (a satellite has no LAN-only path to ground).
 
     # Find active links to identify connected pairs in satellite-only sessions.
     active_links = [l for l in links if l.get("state") == "active"]
@@ -625,7 +655,7 @@ def check_ping(token: str, perm: dict) -> dict:
     deadline = time.monotonic() + 120  # 2 minutes
     while time.monotonic() < deadline:
         result = subprocess.run(
-            f"{KUBECTL} exec -n nodalarc {src.lower()} -c frr -- ping -c 3 -W 2 {dst_ip}",
+            f"{KUBECTL} exec -n nodalarc {src.lower()} -c frr -- ping -c 3 -W 5 {dst_ip}",
             capture_output=True,
             text=True,
             timeout=30,
@@ -880,52 +910,179 @@ def _ground_node_ids(state: dict) -> list[str]:
     return sorted(n.get("node_id", "") for n in state.get("nodes", []) if _is_ground_node(n))
 
 
+def _pair_separation(a: dict, b: dict) -> float:
+    """Ranking key for site separation. Cross-body pairs sort above any
+    same-body pair; same-body pairs rank by great-circle central angle in
+    degrees (radius-independent, so it orders correctly on any body)."""
+    if a["body"] != b["body"]:
+        return float("inf")
+    import math
+
+    phi1 = math.radians(a["lat_deg"])
+    phi2 = math.radians(b["lat_deg"])
+    half_dphi = (phi2 - phi1) / 2
+    half_dlam = math.radians(b["lon_deg"] - a["lon_deg"]) / 2
+    h = math.sin(half_dphi) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(half_dlam) ** 2
+    return math.degrees(2 * math.asin(min(1.0, math.sqrt(h))))
+
+
+def _transit_pairs(
+    ground_topology: dict[str, dict], srcs: list[str], ground_ids: list[str]
+) -> list[tuple[str, str]]:
+    """Candidate (src, dst) probe pairs that can prove inter-site transit,
+    most distant first.
+
+    Pairs sharing a site are excluded: the site LAN satisfies every
+    readiness check (FIB, adjacency, ping) without a packet ever leaving
+    the site, so such a pair proves nothing about the space segment. When
+    the resolved topology spans bodies, only cross-body pairs qualify —
+    proving an Earth-Earth path for a session that declares Earth-Luna
+    reachability would silently downgrade the claim."""
+    pairs: list[tuple[float, str, str]] = []
+    for src in srcs:
+        src_info = ground_topology.get(src)
+        if src_info is None:
+            continue
+        for dst in ground_ids:
+            dst_info = ground_topology.get(dst)
+            if dst_info is None or dst == src or dst_info["site"] == src_info["site"]:
+                continue
+            pairs.append((_pair_separation(src_info, dst_info), src, dst))
+    if len({info["body"] for info in ground_topology.values()}) > 1:
+        pairs = [p for p in pairs if p[0] == float("inf")]
+    pairs.sort(key=lambda t: (-t[0], t[1], t[2]))
+    return [(src, dst) for _, src, dst in pairs]
+
+
+def _route_egress_dev(route_stdout: str) -> str | None:
+    """The kernel's chosen egress interface from `ip route get` output."""
+    tokens = route_stdout.split()
+    for index, token in enumerate(tokens):
+        if token == "dev" and index + 1 < len(tokens):
+            return tokens[index + 1]
+    return None
+
+
+# Probing one pair costs three kubectl execs, so sweeps are bounded — but
+# only AFTER filtering to currently-routable pairs (the source holds an
+# active space link; the destination's SITE holds at least one, since a
+# co-sited peer may carry the final LAN hop while the source-side egress
+# proof still pins the space segment). Without that filter, a distance-
+# first cap silently probes only far pairs whose endpoints are dark and
+# never reaches the connected near pair — observed live on the sparse
+# polar session, where the only routable pair was also the closest.
+_TRANSIT_PAIRS_PER_SWEEP = 16
+
+
 def _find_routed_ground_probe(
-    token: str, *, protocol: str = "isis", wait_s: int = 180
+    token: str,
+    *,
+    protocol: str = "isis",
+    wait_s: int = 180,
+    ground_topology: dict[str, dict] | None = None,
 ) -> dict | None:
+    """Find one ground-originated routed proof.
+
+    With ``ground_topology`` (resolver-derived site/body/position/WAN
+    facts), a PASS proves inter-site space transit: the pair spans
+    different sites — cross-body when the session declares more than one
+    body — and the source's kernel-chosen egress interface is one of its
+    manifest-allocated space-link terminals, never the site LAN. Without
+    it (legacy generated sessions), the result is explicitly marked
+    ``transit_proven: False``: the LAN alone can satisfy every check.
+    """
     deadline = time.monotonic() + wait_s
     last_reason = "no routed ground probe found"
+    single_site = ground_topology is not None and (
+        len({info["site"] for info in ground_topology.values()}) < 2
+    )
+    if single_site:
+        return {
+            "result": "SINGLE_SITE",
+            "reason": "topology has one ground site; no inter-site transit pair exists",
+        }
     while time.monotonic() < deadline:
         state = request_json("GET", "/api/v1/state", token=token)
         ground_ids = _ground_node_ids(state)
         by_gs = _ground_links_by_gs(state)
-        for src in sorted(by_gs):
-            for dst_gs in ground_ids:
-                if dst_gs == src:
-                    continue
-                dst_ip = _node_loopback_ip(dst_gs)
-                if not dst_ip:
-                    last_reason = f"could not read loopback for {dst_gs}"
-                    continue
-                route = _kubectl_exec(src, f"ip route get {dst_ip}", timeout=10)
-                neigh = _kubectl_exec(
-                    src, f"vtysh -c '{_routing_neighbor_command(protocol)}'", timeout=10
-                )
-                ping = _kubectl_exec(src, f"ping -c 1 -W 1 {dst_ip}", timeout=10)
-                fib_ready = route["rc"] == 0 and dst_ip in route["stdout"]
-                neighbor_up = neigh["rc"] == 0 and _routing_neighbor_up(neigh["stdout"], protocol)
-                packet_ready = ping["rc"] == 0 and "0% packet loss" in ping["stdout"]
-                if fib_ready and neighbor_up and packet_ready:
-                    return {
-                        "result": "PASS",
-                        "mode": "ground_to_ground",
-                        "protocol": protocol,
-                        "key": f"{src}->{dst_gs}",
-                        "src": src,
-                        "dst_gs": dst_gs,
-                        "dst": dst_gs,
-                        "dst_ip": dst_ip,
-                        "active_ground_links": by_gs[src],
-                        "fib_ready": fib_ready,
-                        "neighbor_up": neighbor_up,
-                        "packet_ready": packet_ready,
-                        "route_stdout": route["stdout"],
-                        "isis_stdout": neigh["stdout"],
-                        "ping_stdout": ping["stdout"],
-                    }
+        if ground_topology is not None:
+            linked_sites = {ground_topology[gw]["site"] for gw in by_gs if gw in ground_topology}
+            candidates = [
+                (src, dst)
+                for src, dst in _transit_pairs(ground_topology, sorted(by_gs), ground_ids)
+                if ground_topology.get(dst, {}).get("site") in linked_sites
+            ]
+            if not candidates:
                 last_reason = (
-                    f"{src}->{dst_gs} fib={fib_ready} neighbor={neighbor_up} packet={packet_ready}"
+                    "no transit-capable probe pair: no ground node with an active "
+                    "space link pairs with a linked ground site elsewhere"
                 )
+                time.sleep(3)
+                continue
+            candidates = candidates[:_TRANSIT_PAIRS_PER_SWEEP]
+        else:
+            candidates = [(src, dst) for src in sorted(by_gs) for dst in ground_ids if dst != src]
+        for src, dst_gs in candidates:
+            dst_ip = _node_loopback_ip(dst_gs)
+            if not dst_ip:
+                last_reason = f"could not read loopback for {dst_gs}"
+                continue
+            route = _kubectl_exec(src, f"ip route get {dst_ip}", timeout=10)
+            neigh = _kubectl_exec(
+                src, f"vtysh -c '{_routing_neighbor_command(protocol)}'", timeout=10
+            )
+            ping = _kubectl_exec(src, f"ping -c 1 -W 5 {dst_ip}", timeout=10)
+            fib_ready = route["rc"] == 0 and dst_ip in route["stdout"]
+            neighbor_up = neigh["rc"] == 0 and _routing_neighbor_up(neigh["stdout"], protocol)
+            packet_ready = ping["rc"] == 0 and "0% packet loss" in ping["stdout"]
+            egress_dev = _route_egress_dev(route["stdout"]) if fib_ready else None
+            if ground_topology is not None:
+                src_info = ground_topology[src]
+                dst_info = ground_topology[dst_gs]
+                space_egress = egress_dev in src_info["wan_ifnames"]
+                separation = _pair_separation(src_info, dst_info)
+                transit_fields = {
+                    "transit_proven": True,
+                    "src_site": src_info["site"],
+                    "dst_site": dst_info["site"],
+                    "src_body": src_info["body"],
+                    "dst_body": dst_info["body"],
+                    "separation": (
+                        "cross-body" if separation == float("inf") else f"{separation:.1f}deg"
+                    ),
+                    "egress_dev": egress_dev,
+                }
+            else:
+                space_egress = True
+                transit_fields = {
+                    "transit_proven": False,
+                    "egress_dev": egress_dev,
+                    "transit_note": "no resolver topology: pair may share a site LAN",
+                }
+            if fib_ready and neighbor_up and packet_ready and space_egress:
+                return {
+                    "result": "PASS",
+                    "mode": "ground_to_ground",
+                    "protocol": protocol,
+                    "key": f"{src}->{dst_gs}",
+                    "src": src,
+                    "dst_gs": dst_gs,
+                    "dst": dst_gs,
+                    "dst_ip": dst_ip,
+                    "active_ground_links": by_gs[src],
+                    "fib_ready": fib_ready,
+                    "neighbor_up": neighbor_up,
+                    "packet_ready": packet_ready,
+                    **transit_fields,
+                    "route_stdout": route["stdout"],
+                    "isis_stdout": neigh["stdout"],
+                    "ping_stdout": ping["stdout"],
+                }
+            last_reason = (
+                f"{src}->{dst_gs} fib={fib_ready} neighbor={neighbor_up} "
+                f"packet={packet_ready} egress={egress_dev}"
+                + ("" if space_egress else " (egress is not a space-link terminal)")
+            )
         time.sleep(3)
     return {"result": "FAIL", "reason": last_reason}
 
@@ -946,7 +1103,7 @@ def _find_all_routed_ground_probes(token: str, *, protocol: str = "isis") -> lis
             neigh = _kubectl_exec(
                 src, f"vtysh -c '{_routing_neighbor_command(protocol)}'", timeout=10
             )
-            ping = _kubectl_exec(src, f"ping -c 1 -W 1 {dst_ip}", timeout=10)
+            ping = _kubectl_exec(src, f"ping -c 1 -W 5 {dst_ip}", timeout=10)
             fib_ready = route["rc"] == 0 and dst_ip in route["stdout"]
             neighbor_up = neigh["rc"] == 0 and _routing_neighbor_up(neigh["stdout"], protocol)
             packet_ready = ping["rc"] == 0 and "0% packet loss" in ping["stdout"]
@@ -1985,7 +2142,7 @@ def run_mbb_acceptance() -> dict:
 def run_permutation(perm: dict) -> dict:
     """Run a single E2E permutation."""
     perm_id = perm["id"]
-    label = f"{perm['constellation']}-{perm['protocol']}"
+    label = perm.get("label") or f"{perm['constellation']}-{perm['protocol']}"
     if perm.get("extensions"):
         label += "-" + "-".join(perm["extensions"])
     print(f"\n{'=' * 60}")
@@ -2022,7 +2179,10 @@ def run_permutation(perm: dict) -> dict:
 
         # Generate session YAML
         print("  Generating session YAML...")
-        yaml_str = generate_session(token, perm)
+        # Catalog permutations deploy the shipped segment-grammar session
+        # file verbatim; generated permutations still go through the
+        # wizard endpoint (legacy mode, pre-segment-grammar shapes).
+        yaml_str = perm.get("session_yaml") or generate_session(token, perm)
         evidence["yaml_length"] = len(yaml_str)
 
         # Deploy
@@ -2057,7 +2217,7 @@ def run_permutation(perm: dict) -> dict:
 
         # Check WebSocket
         print("  Checking WebSocket snapshots...")
-        ws_result = check_websocket(token)
+        ws_result = check_websocket(token, step_seconds=perm.get("step_seconds", 1))
         evidence["websocket"] = ws_result
 
         # Check declared connectivity. Ground sessions must prove a GS-originated path;
@@ -2065,9 +2225,17 @@ def run_permutation(perm: dict) -> dict:
         print("  Checking declared connectivity...")
         ping_result = check_ping(token, perm)
         evidence["ping"] = ping_result
+        transit = ""
+        if "transit_proven" in ping_result:
+            transit = (
+                f" transit={'proven' if ping_result['transit_proven'] else 'NOT PROVEN'}"
+                f" sites={ping_result.get('src_site', '?')}->{ping_result.get('dst_site', '?')}"
+                f" sep={ping_result.get('separation', '?')}"
+                f" egress={ping_result.get('egress_dev', '?')}"
+            )
         print(
             f"  Ping: {ping_result.get('result', '?')}"
-            f" ({ping_result.get('src', '?')} -> {ping_result.get('dst', '?')})"
+            f" ({ping_result.get('src', '?')} -> {ping_result.get('dst', '?')}){transit}"
         )
 
         # Determine pass/fail
@@ -2096,6 +2264,69 @@ def run_permutation(perm: dict) -> dict:
 
     evidence["finished_at"] = datetime.now(UTC).isoformat()
     return evidence
+
+
+def catalog_permutations() -> list[dict]:
+    """The shipped catalog sessions, deployed verbatim — network truth
+    for the worked examples before any generated permutations. Protocol
+    is derived from the session's own routing domains via the production
+    resolver, never hand-stated."""
+    import sys as _sys
+
+    repo = Path(__file__).resolve().parents[2]
+    _sys.path.insert(0, str(repo / "lib"))
+    from nodalarc.catalog_paths import CatalogRoots
+    from nodalarc.models.resolved_session import SourceContext
+    from nodalarc.resolve_session import resolve_session_with_assets
+
+    roots = CatalogRoots.from_catalog_root(repo / "catalog" / "nodalarc")
+    only = os.environ.get("NODALARC_E2E_ONLY", "")
+    perms = []
+    for path in sorted((repo / "catalog" / "nodalarc" / "sessions").glob("*.yaml")):
+        if only and path.stem != only:
+            continue
+        text = path.read_text()
+        import yaml as _yaml
+
+        resolved = resolve_session_with_assets(
+            _yaml.safe_load(text),
+            catalog_roots=roots,
+            source_context=SourceContext(origin="e2e.catalog"),
+        ).resolved
+        protocols = sorted({d.protocol for d in resolved.routing_domains})
+        ground_ids = sorted(
+            node.node_id for node in resolved.nodes if node.kind == "ground_station"
+        )
+        # Site identity, body, position, and manifest-allocated WAN names
+        # per ground node — the probe's inter-site transit proof derives
+        # from these resolved facts, never from node-ID string shapes.
+        ground_topology = {
+            node.node_id: {
+                "site": node.namespace,
+                "body": str(node.surface_position.body),
+                "lat_deg": node.surface_position.lat_deg,
+                "lon_deg": node.surface_position.lon_deg,
+                "wan_ifnames": [w.name for w in node.wan_interfaces],
+            }
+            for node in resolved.nodes
+            if node.kind == "ground_station" and node.surface_position is not None
+        }
+        perms.append(
+            {
+                "id": path.stem,
+                "label": f"catalog-{path.stem}",
+                "protocol": protocols[0],
+                "protocols": protocols,
+                # Derived from the resolved session, never hand-stated:
+                # the ground-truth predicate for the ping/adjacency checks.
+                "gs": ground_ids,
+                "ground_topology": ground_topology,
+                "step_seconds": int(resolved.time.step_seconds),
+                "session_yaml": text,
+                "xfail": False,
+            }
+        )
+    return perms
 
 
 def main():
@@ -2138,7 +2369,10 @@ def main():
         xpassed = 0
 
         if os.environ.get("NODALARC_ACCEPTANCE_ONLY") != "1":
-            for perm in MATRIX:
+            mode = os.environ.get("NODALARC_E2E_MODE", "catalog")
+            active_matrix = catalog_permutations() if mode == "catalog" else MATRIX
+            print(f"Mode: {mode} ({len(active_matrix)} permutations)")
+            for perm in active_matrix:
                 evidence = run_permutation(perm)
                 bucket = _classify_matrix_result(evidence, perm)
                 results.append(evidence)
@@ -2155,7 +2389,8 @@ def main():
                 # Write per-permutation evidence immediately, after xfail/xpass classification.
                 eid = perm["id"]
                 label = evidence.get("label", "unknown")
-                evidence_file = evidence_dir / f"perm-{eid:02d}-{label}.json"
+                eid_label = f"{eid:02d}" if isinstance(eid, int) else str(eid)
+                evidence_file = evidence_dir / f"perm-{eid_label}-{label}.json"
                 evidence_file.write_text(json.dumps(evidence, indent=2))
 
         if os.environ.get("NODALARC_RUN_MBB_ACCEPTANCE") == "1":

@@ -1,6 +1,6 @@
 # Copyright 2024-2026 .chance (dotchance)
 # Licensed under the Apache License, Version 2.0. See LICENSE file.
-"""Unit tests for OME time control surface (R-OME-008B Tier 1).
+"""Unit tests for OME time control surface.
 
 Tests the protocol handler, state mutation, and boundary validation.
 Does NOT test the full pacing thread (that requires a running OME);
@@ -267,7 +267,7 @@ class TestPlaybackHandler:
 
 
 class TestSeekHandler:
-    """Tests for the Tier 2 seek action (R-OME-008B Part 5)."""
+    """Tests for seek actions."""
 
     def test_seek_with_explicit_target(self):
         handler, _, get_seek = _make_handler()

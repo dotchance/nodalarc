@@ -37,8 +37,11 @@ export function ReviewPanel({
       <h2 className="wizard-panel-title">Review &amp; Deploy</h2>
       <div className="wizard-review">
         <div className="wizard-review-row">
-          <span className="wizard-review-label">Satellite Type</span>
-          <span className="wizard-review-value">{state.satelliteType?.name ?? "-"}</span>
+          <span className="wizard-review-label">Satellite</span>
+          <span className="wizard-review-value">
+            {state.satelliteType?.name
+              ?? `default (${state.constellation?.default_node ?? "constellation node"})`}
+          </span>
         </div>
         <div className="wizard-review-row">
           <span className="wizard-review-label">Ground Stations</span>

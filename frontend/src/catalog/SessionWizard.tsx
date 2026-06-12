@@ -9,6 +9,7 @@
 import { useState, useCallback, useRef } from "react";
 import { useWizard } from "../hooks/useWizard";
 import type { WizardStep } from "./wizardTypes";
+import type { SessionInfo } from "../types";
 import { SelectionCards } from "./SelectionCards";
 import { CoveragePreview } from "./CoveragePreview";
 import { ProtocolSelection, ExtensionsPanel } from "./ProtocolPanel";
@@ -19,6 +20,9 @@ interface SessionWizardProps {
   onClose: (() => void) | undefined;
   deploying: boolean;
   systemNotice?: string;
+  /** Shipped catalog sessions, deployable as-is via session switch. */
+  sessions: SessionInfo[];
+  onLaunchSession: (file: string) => void;
 }
 
 const GROUP_B_STEPS: { id: WizardStep; label: string }[] = [
@@ -32,13 +36,14 @@ export function SessionWizard({
   onClose,
   deploying,
   systemNotice,
+  sessions,
+  onLaunchSession,
 }: SessionWizardProps) {
   const wizard = useWizard();
   const [uploadError, setUploadError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const isGroupA = wizard.state.step === "selections"
-    || wizard.state.step === "satellite-type"
     || wizard.state.step === "ground-stations"
     || wizard.state.step === "constellation";
 
@@ -85,7 +90,6 @@ export function SessionWizard({
 
   const allGroupASelected =
     wizard.state.constellation !== null &&
-    wizard.state.satelliteType !== null &&
     wizard.state.groundStationSet !== null;
 
   return (
@@ -120,6 +124,34 @@ export function SessionWizard({
           );
         })}
       </div>
+
+      {/* Shipped sessions — deployable as-is, bypasses the builder */}
+      {isGroupA && sessions.length > 0 && (
+        <div className="wizard-selection-panel">
+          <h2 className="wizard-panel-title">Launch a Shipped Session</h2>
+          <div className="wizard-grid">
+            {sessions.map((s) => (
+              <button
+                key={s.file}
+                className={`wizard-card ${s.active ? "wizard-card--disabled" : ""}`}
+                onClick={() => {
+                  if (s.active || deploying) return;
+                  onLaunchSession(s.file);
+                  onDeployStarted();
+                }}
+                disabled={s.active || deploying}
+                title={s.active ? "Already running" : `Deploy ${s.name}`}
+              >
+                <div className="wizard-card-title">{s.name}</div>
+                <div className="wizard-card-stat">{s.constellation}</div>
+                <div className="wizard-card-desc">{s.routing_stack}</div>
+                {s.active && <div className="wizard-card-real">Running now</div>}
+              </button>
+            ))}
+          </div>
+          <p className="catalog-subtitle">— or build a session below —</p>
+        </div>
+      )}
 
       {/* Upload shortcut — always visible, bypasses wizard */}
       <div className="wizard-upload">

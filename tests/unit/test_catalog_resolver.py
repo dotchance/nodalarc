@@ -51,9 +51,17 @@ SHIPPED_SESSION_SHAPES = {
     "earth-geo-inmarsat.yaml": (8, 16),
     "earth-geo-tdrs.yaml": (10, 24),
     "earth-leo-heo-geo-luna-reachability.yaml": (132, 587),
-    "earth-leo-polar.yaml": (39, 108),
+    # 43/246: four feeder-class bridge sites added (Djibouti, Singapore,
+    # Cape Town, Tokyo — authored ranges cover the 780 km shell at the
+    # declared mask) and the ISL rule pinned to the 30 physically visible
+    # cross-plane pairs — at this shell's density the ground segment
+    # carries inter-chain connectivity (BBM bridge gateways hold steady
+    # multi-links; MBB's reserve would forbid bridging).
+    "earth-leo-polar.yaml": (45, 282),
     "earth-leo-simple.yaml": (41, 180),
-    "earth-leo-walker.yaml": (181, 880),
+    # 1056 = 880 + 176: the ISL rule moved from nearest_n (176 degree-capped
+    # pairs, a disconnected graph) to the explicit 352-pair grid.
+    "earth-leo-walker.yaml": (181, 1056),
     "earth-meo-gps.yaml": (31, 120),
 }
 

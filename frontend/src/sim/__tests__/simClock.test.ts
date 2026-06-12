@@ -200,3 +200,107 @@ describe("simClock", () => {
     expect(wallMsPerSimMs()).toBeCloseTo(2.0, 10);
   });
 });
+
+describe("display continuity (sat-motion backtracking defect)", () => {
+  // 60x playback, engine ticks at 1 Hz: each snapshot carries 60 s of
+  // sim per ~1 s of wall. With the rate pinned by the engine declaration,
+  // a late arrival used to hard-rebase the display phase BACKWARD by the
+  // full overshoot (display had extrapolated past the late snapshot) —
+  // visible as satellites jumping back every few seconds.
+  const S = 1775260800000;
+  const seed60x = () => {
+    onSnapshot(ISO(S), 1000, 60);
+    onSnapshot(ISO(S + 60_000), 2000, 60);
+  };
+
+  beforeEach(() => {
+    resetSimClock();
+  });
+
+  it("never steps displayed time backward across a late arrival", () => {
+    seed60x();
+    // Frame just before an arrival that is 100 ms late: display has
+    // extrapolated 100 ms (= 6 sim-seconds at 60x) past the incoming
+    // snapshot's sim_time.
+    const before = interpolatedSimTimeMs(3100)!;
+    onSnapshot(ISO(S + 120_000), 3100, 60);
+    const after = interpolatedSimTimeMs(3116)!;
+    expect(after).toBeGreaterThanOrEqual(before);
+  });
+
+  it("re-converges to the engine phase after jitter (bounded slew)", () => {
+    seed60x();
+    interpolatedSimTimeMs(3100);
+    onSnapshot(ISO(S + 120_000), 3100, 60);
+    let now = 3100;
+    let last = 0;
+    for (let i = 0; i < 60; i++) {
+      now += 16;
+      last = interpolatedSimTimeMs(now)!;
+    }
+    const target = S + 120_000 + (now - 3100) * 60;
+    expect(Math.abs(last - target)).toBeLessThan(60); // within 1 wall-ms
+  });
+
+  it("stays monotonic across sustained arrival jitter at 60x", () => {
+    seed60x();
+    let wall = 2000;
+    let prev = -Infinity;
+    const jitter = [180, -120, 250, -200, 90, -60, 300, -250];
+    for (let k = 0; k < jitter.length; k++) {
+      const arrival = 2000 + (k + 1) * 1000 + (jitter[k] ?? 0);
+      while (wall < arrival) {
+        wall += 16;
+        const v = interpolatedSimTimeMs(wall)!;
+        expect(v).toBeGreaterThanOrEqual(prev);
+        prev = v;
+      }
+      onSnapshot(ISO(S + 60_000 * (k + 2)), arrival, 60);
+    }
+  });
+
+  it("still follows a backward seek down immediately", () => {
+    seed60x();
+    interpolatedSimTimeMs(2500);
+    // Seek back to near session start: a real discontinuity, not jitter.
+    onSnapshot(ISO(S + 1000), 3000, 60);
+    const v = interpolatedSimTimeMs(3016)!;
+    expect(v).toBeLessThan(S + 60_000);
+  });
+
+  it("jump-back-to-now after minutes at 60x lands immediately and keeps rate", () => {
+    // The product flow: run 60x for a few minutes to watch the orbit,
+    // then hit the "now" button — sim is hours ahead; the seek snapshot
+    // rewinds it in one step. The display must land on the seek target
+    // immediately (no backward slew) and keep advancing at the rate the
+    // engine declares afterwards.
+    onSnapshot(ISO(S), 1000, 60);
+    let wall = 1000;
+    let sim = 0;
+    for (let k = 1; k <= 180; k++) {
+      wall = 1000 + k * 1000;
+      sim = k * 60_000;
+      onSnapshot(ISO(S + sim), wall, 60);
+      interpolatedSimTimeMs(wall + 8); // render between arrivals
+    }
+    // ~3 wall-minutes at 60x → sim is ~3 hours ahead. Seek to "now":
+    // engine rewinds sim_time to ~the wall instant (here: S + 181 s).
+    const seekTarget = S + 181_000;
+    onSnapshot(ISO(seekTarget), wall + 1000, 60);
+    const v1 = interpolatedSimTimeMs(wall + 1016)!;
+    expect(Math.abs(v1 - (seekTarget + 16 * 60))).toBeLessThan(2000);
+    // And the clock keeps running forward at the declared rate.
+    const v2 = interpolatedSimTimeMs(wall + 1116)!;
+    expect(v2).toBeGreaterThan(v1);
+    expect(Math.abs(v2 - v1 - 100 * 60)).toBeLessThan(1500);
+  });
+
+  it("snaps rather than slews after a long render stall (backgrounded tab)", () => {
+    seed60x();
+    interpolatedSimTimeMs(2016);
+    // 30 s without frames; engine kept ticking far ahead.
+    onSnapshot(ISO(S + 60_000 * 31), 32_000, 60);
+    const v = interpolatedSimTimeMs(32_016)!;
+    expect(Math.abs(v - (S + 60_000 * 31 + 16 * 60))).toBeLessThan(2000);
+  });
+});

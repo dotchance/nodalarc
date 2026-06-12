@@ -71,6 +71,7 @@ from nodalarc.nats_channels import (
     link_state_snapshot_subject,
     link_up_subject,
     ome_clock_subject,
+    ome_heartbeat_subject,
     ops_subscribe_subject,
     playback_state_subject,
     session_ephemeris_subject,
@@ -79,6 +80,7 @@ from nodalarc.platform_config import get_platform_config
 from nodalarc.resolve_session import resolve_session_with_assets
 from pydantic import ValidationError
 
+from vs_api.ops_log import is_operator_visible_ops_event, stamp_ops_event
 from vs_api.session_manager import _routing_label
 
 log = logging.getLogger(__name__)
@@ -175,8 +177,22 @@ class SessionContext:
         self.sim_time: str = datetime.now(UTC).isoformat()
         self.playback_paused: bool = False
         self.playback_speed: float = 1.0
+        self.playback_achieved: float | None = None
+        self.pacing_degraded: bool = False
+        # Engine-stamped wall clock from the same ClockTick as sim_time:
+        # the two are stamped at one instant, so comparing them shows the
+        # TRUE engine sim/wall relationship. Stamping wall at serve time
+        # instead would bake delivery latency into the comparison and
+        # display a permanent fake 1-2 s lag on a perfect engine.
+        self.tick_wall_time: str | None = None
         self.last_clock_tick_wall_time: float = 0.0
         self.last_link_event_wall_time: float = 0.0
+        # Heartbeats: engine liveness while paused (no ClockTicks flow
+        # then). Keeps staleness honest in both directions and carries
+        # the engine wall stamp so the wall display shows the real
+        # sim/wall divergence while sim is frozen.
+        self.heartbeat_wall_time: str | None = None
+        self.last_heartbeat_wall_time: float = 0.0
         self.session_ready_time: float = 0.0
         self.prev_snapshot_active_count: int = 0
         self.curr_snapshot_active_count: int = 0
@@ -295,10 +311,21 @@ class SessionContext:
         )
 
     def is_stale(self) -> bool:
-        if self.last_clock_tick_wall_time == 0.0 and self.last_link_event_wall_time == 0.0:
+        """True when NO engine signal has arrived within the threshold.
+
+        Heartbeats count as liveness: a paused engine publishes no
+        ClockTicks but proves it is alive once per second, so a healthy
+        pause never reads STALE — while an engine that died mid-pause
+        still does, because its heartbeats stop too.
+        """
+        signals = (
+            self.last_clock_tick_wall_time,
+            self.last_link_event_wall_time,
+            self.last_heartbeat_wall_time,
+        )
+        if all(s == 0.0 for s in signals):
             return False
-        latest = max(self.last_clock_tick_wall_time, self.last_link_event_wall_time)
-        return (_time.monotonic() - latest) > STALE_THRESHOLD_S
+        return (_time.monotonic() - max(signals)) > STALE_THRESHOLD_S
 
     async def _subscriber_loop(self, nc: nats.NATS, mode: str) -> None:
         """Main NATS subscription loop. Cleanup in finally block."""
@@ -385,6 +412,15 @@ class SessionContext:
                     ordered_consumer=True,
                     deliver_policy=DeliverPolicy.NEW,
                     cb=self._on_clock_tick,
+                )
+            )
+            self._subscriptions.append(
+                await js.subscribe(
+                    ome_heartbeat_subject(sid),
+                    stream=STREAM_OME_EVENTS,
+                    ordered_consumer=True,
+                    deliver_policy=DeliverPolicy.NEW,
+                    cb=self._on_heartbeat,
                 )
             )
             try:
@@ -507,10 +543,39 @@ class SessionContext:
         if not sim_time_str:
             log.error("Malformed ClockTick — missing sim_time: %s", data)
             raise ValueError("ClockTick missing sim_time")
+        wall_time_str = data.get("wall_time")
+        if not wall_time_str:
+            # The model makes wall_time mandatory. Tolerating its absence
+            # here would silently re-enable the serve-time fallback and
+            # resurrect the fake Sim/Wall lag the same-instant pair fixed.
+            log.error("Malformed ClockTick — missing wall_time: %s", data)
+            raise ValueError("ClockTick missing wall_time")
         self._propagate_positions_from_time(sim_time_str)
         with self.state_lock:
             self.playback_speed = data.get("compression_ratio", 1.0)
+            self.playback_achieved = data.get("achieved_ratio")
+            self.pacing_degraded = data.get("pacing_degraded", False)
+            self.tick_wall_time = wall_time_str
             self.last_clock_tick_wall_time = _time.monotonic()
+
+    async def _on_heartbeat(self, msg) -> None:
+        """Engine liveness during pause — see HeartbeatTick."""
+        data = json.loads(msg.data)
+        wall_time_str = data.get("wall_time")
+        if not wall_time_str:
+            log.error("Malformed HeartbeatTick — missing wall_time: %s", data)
+            raise ValueError("HeartbeatTick missing wall_time")
+        with self.state_lock:
+            self.heartbeat_wall_time = wall_time_str
+            self.last_heartbeat_wall_time = _time.monotonic()
+
+    def engine_wall_time(self) -> str | None:
+        """Freshest engine wall stamp: the last ClockTick's during play,
+        the last heartbeat's during pause. Sim freezes during pause while
+        wall advances — that divergence is real and must display."""
+        if self.last_heartbeat_wall_time > self.last_clock_tick_wall_time:
+            return self.heartbeat_wall_time
+        return self.tick_wall_time
 
     async def _on_link_state_snapshot(self, msg) -> None:
         from nodalarc.models.link_state import AdminState, CarrierState, LinkStateSnapshot
@@ -788,11 +853,16 @@ class SessionContext:
     async def _on_session_ops_event(self, msg) -> None:
         data = json.loads(msg.data)
         with self.state_lock:
-            self.session_ops_events.append(data)
+            # Notices and persistence process EVERY event; the log window
+            # admits only operator-visible ones — routine telemetry must
+            # not evict real history from its 500 slots.
+            if is_operator_visible_ops_event(data):
+                self.session_ops_events.append(stamp_ops_event(data))
             self._update_actuation_notice(data)
             self._update_ome_lifecycle_notice(data)
-        self._persist_operator_intervention(data)
-        self._persist_ome_lifecycle_event(data)
+        # sqlite writers — never on the loop.
+        await asyncio.to_thread(self._persist_operator_intervention, data)
+        await asyncio.to_thread(self._persist_ome_lifecycle_event, data)
 
     async def _on_actuation_state(self, msg) -> None:
         """Retained per-GS actuation state (LAST_PER_SUBJECT recovery).
@@ -1023,7 +1093,11 @@ class SessionContext:
                     "reason_code": event.get("code"),
                     "blocking_new_ground_link_up": state != ActuationState.CLEAN.value,
                     "recovery_status": details.get("recovery_status") or {},
-                    "last_event": event,
+                    # The raw event is deliberately NOT embedded: it
+                    # duplicated every fact above plus internal payloads
+                    # and measured 126 KB on a healthy 4-station session,
+                    # with no production consumer. Notices carry their
+                    # own last_event for the failure path.
                 }
             )
         for inst in by_instance.values():

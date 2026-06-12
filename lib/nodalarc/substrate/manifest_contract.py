@@ -173,8 +173,12 @@ class NodeSpec(_StrictModel):
     @model_validator(mode="after")
     def _node_type_fields(self) -> NodeSpec:
         if self.node_type == "satellite":
-            if self.plane is None or self.slot is None:
-                raise ValueError("satellite nodes require plane and slot")
+            # plane/slot are optional grid coordinates: grid-born
+            # satellites carry both, individually placed satellites (GEO
+            # longitude slots, raw state vectors) carry neither. No
+            # wiring consumer reads them; a half-set pair is corruption.
+            if (self.plane is None) != (self.slot is None):
+                raise ValueError("satellite plane/slot must be set together or not at all")
             if self.gs_name is not None or self.gs_index is not None:
                 raise ValueError("satellite nodes must not set gs_name or gs_index")
         if self.node_type == "ground_station":

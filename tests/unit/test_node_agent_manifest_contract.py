@@ -77,12 +77,25 @@ def test_manifest_contract_rejects_untyped_ground_bridge_fields() -> None:
         WiringManifest.model_validate(data)
 
 
-def test_manifest_contract_enforces_satellite_identity_fields() -> None:
+def test_manifest_contract_rejects_half_set_grid_coordinates() -> None:
+    # plane without slot (or vice versa) is corruption, not a shape.
     data = _manifest()
     data["nodes"]["sat-a"].pop("plane")
 
-    with pytest.raises(ValidationError, match="satellite nodes require plane and slot"):
+    with pytest.raises(ValidationError, match="set together or not at all"):
         WiringManifest.model_validate(data)
+
+
+def test_manifest_contract_accepts_non_grid_satellite() -> None:
+    # Individually placed satellites (GEO longitude slots, state vectors)
+    # carry no grid coordinates at all — a legitimate resolved shape.
+    data = _manifest()
+    data["nodes"]["sat-a"].pop("plane")
+    data["nodes"]["sat-a"].pop("slot")
+
+    manifest = WiringManifest.model_validate(data)
+    assert manifest.nodes["sat-a"].plane is None
+    assert manifest.nodes["sat-a"].slot is None
 
 
 def test_manifest_contract_enforces_ground_station_identity_fields() -> None:

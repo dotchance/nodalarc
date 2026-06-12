@@ -169,9 +169,9 @@ export function TopBar({ snapshot, historicalMode, onToggleHistorical, activeSes
         <span className="topbar-clock-wall">Wall&nbsp;{snapshot ? formatTime(snapshot.wall_time) : "--:--:--"}</span>
       </span>
 
-      {/* Convergence/health lives in the bottom bar (owner pick — one home
-          per fact). The actuation chip stays here: kernel truth is a
-          different fact and demands attention. */}
+      {/* Convergence/health lives in the bottom bar — one home per fact.
+          The actuation chip stays here: kernel truth is a different fact
+          and demands attention. */}
       {actuationNotices.length > 0 && (
         <div className="topbar-chips">
           <ActuationNoticeButton notices={actuationNotices} dirty={actuationDirty} />

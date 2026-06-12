@@ -1,8 +1,7 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
 /**
- * Photoshop-style tool slot (owner-specified idiom, see the reference
- * screenshots in specs/screenshots/).
+ * Photoshop-style tool slot.
  *
  * Gesture, one continuous motion — NOT click-then-click:
  *  - quick click       → advance to the next variant (mode slots are always-on,

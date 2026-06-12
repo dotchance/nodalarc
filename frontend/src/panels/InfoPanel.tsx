@@ -1,9 +1,7 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
 /** Right panel — selection detail on top, the trace-path tool pinned below.
- *  The old embedded events list is gone (owner direction: inaccurate
- *  precursor to the logs); the network event feed lives in the System Logs
- *  window's Events mode. */
+ *  The network event feed lives in the System Logs window's Events mode. */
 
 import { NetworkSummary } from "./NetworkSummary";
 import { SatelliteDetail } from "./SatelliteDetail";
@@ -75,8 +73,8 @@ export function InfoPanel({
   return (
     <div className="info-panel">
       <div className="info-panel-detail">{detailSection}</div>
-      {/* Trace path owns the space the events list used to occupy — it is a
-          primary user tool and gets a stable, always-reachable home. */}
+      {/* Trace path is a primary user tool: pinned below the detail scroll so
+          it stays reachable regardless of selection. */}
       <div className="info-panel-trace">
         <TraceDialog
           nodes={snapshot.nodes}

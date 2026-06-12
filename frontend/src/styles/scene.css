@@ -56,3 +56,31 @@
   background: var(--bg-scrim);
   border: 1px solid var(--border-strong);
 }
+
+.scene-tooltip-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-1);
+  color: var(--text-secondary);
+}
+
+.scene-tooltip-head strong {
+  color: var(--text-primary);
+  font-weight: var(--font-weight-semibold);
+}
+
+.scene-tooltip-regime {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-family: var(--font-ui);
+  font-size: var(--font-size-xxs);
+  color: var(--text-secondary);
+}
+
+.scene-tooltip-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}

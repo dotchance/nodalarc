@@ -433,7 +433,7 @@ export function Scene({
           overflow: "hidden",
         }}
       />
-      <Tooltip hover={hover} />
+      <Tooltip hover={hover} regime={hover ? regimeById.get(hover.node.node_id) : undefined} />
       <div className="scene-hud">Focus: {cameraFocusLabel}</div>
       {/* Epoch-suspension overlay during a seek (PRD seek protocol) — legacy "Recalculating Epoch". */}
       {seeking && (

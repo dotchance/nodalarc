@@ -3,7 +3,7 @@
 
 import { createElement } from "react";
 import { afterEach, describe, expect, it } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render } from "@testing-library/react";
 import { Tooltip, type HoverInfo } from "../r3f/Tooltip";
 import type { NodeState } from "../../types";
 
@@ -41,13 +41,12 @@ describe("R3F tooltip rendering", () => {
   it("renders node metadata as text, not HTML", () => {
     const hover: HoverInfo = { node: node(malicious, "ground_station"), x: 50, y: 50 };
 
-    render(createElement(Tooltip, { hover }));
+    const { container } = render(createElement(Tooltip, { hover }));
 
-    const tip = screen.getByText((content) => content.includes("<script>alert(1)</script>"));
+    const tip = container.querySelector(".scene-tooltip") as HTMLDivElement;
     expect(tip).toBeInstanceOf(HTMLDivElement);
-    // Multi-line rendering moved to the stylesheet: the class carries white-space: pre-line.
-    expect((tip as HTMLDivElement).className).toContain("scene-tooltip");
-    expect(tip.textContent).toContain("\n");
+    // The hostile id must appear as inert TEXT, never as parsed markup.
+    expect(tip.textContent).toContain("<script>alert(1)</script>");
     expect(tip.textContent).toContain("<img src=x onerror=alert(1)>");
     expect(tip.querySelector("script")).toBeNull();
     expect(tip.querySelector("img")).toBeNull();
@@ -61,10 +60,12 @@ describe("R3F tooltip rendering", () => {
       caption: malicious,
     };
 
-    render(createElement(Tooltip, { hover }));
+    const { container } = render(createElement(Tooltip, { hover }));
 
-    const tip = screen.getByText((content) => content.includes("<script>alert(1)</script>"));
-    expect(tip.textContent).toContain("gs-denver: normal");
+    const tip = container.querySelector(".scene-tooltip") as HTMLDivElement;
+    expect(tip.textContent).toContain("gs-denver");
+    expect(tip.textContent).toContain("normal");
+    expect(tip.textContent).toContain("<script>alert(1)</script>");
     expect(tip.querySelector("script")).toBeNull();
     expect(tip.querySelector("img")).toBeNull();
   });

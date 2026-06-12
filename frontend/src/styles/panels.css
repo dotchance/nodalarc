@@ -318,10 +318,53 @@
 /* --- Dashboard --- */
 
 .dashboard {
-  padding: var(--space-8);
-  max-width: 600px;
+  padding: var(--space-12) var(--space-16);
+  max-width: 1100px;
   margin: 0 auto;
+  font-family: var(--font-ui);
 }
+
+.dashboard-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-8);
+  margin-bottom: var(--space-8);
+}
+
+.dashboard-state {
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-semibold);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-6);
+}
+
+.dashboard-state--ok { color: var(--status-ok); border-color: color-mix(in srgb, var(--status-ok) 45%, var(--border)); }
+.dashboard-state--warn { color: var(--status-warn); border-color: color-mix(in srgb, var(--status-warn) 45%, var(--border)); }
+.dashboard-state--fail { color: var(--status-fail); border-color: color-mix(in srgb, var(--status-fail) 55%, var(--border)); }
+
+.dashboard-feed {
+  display: grid;
+  gap: var(--space-3);
+  margin-top: var(--space-8);
+}
+
+.dashboard-alert {
+  padding: var(--space-3) var(--space-6);
+  border-left: 3px solid var(--border);
+  background: var(--bg-panel);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-md);
+  color: var(--text-secondary);
+}
+
+.dashboard-alert--ok { border-left-color: var(--status-ok); }
+.dashboard-alert--warn { border-left-color: var(--status-warn); color: var(--status-warn); }
+.dashboard-alert--fail { border-left-color: var(--status-fail); color: var(--status-fail); }
+
+.dashboard-card-value--ok { color: var(--status-ok); }
+.dashboard-card-value--fail { color: var(--status-fail); }
 
 .dashboard-empty {
   color: var(--text-dim);
@@ -339,8 +382,8 @@
 .dashboard-time {
   font-size: var(--font-size-xs);
   color: var(--text-dim);
-  font-family: var(--font-family);
-  margin-bottom: var(--space-8);
+  font-family: var(--font-mono);
+  margin-bottom: 0;
 }
 
 .dashboard-grid {
@@ -358,6 +401,8 @@
 }
 
 .dashboard-card-value {
+  color: var(--text-primary);
+  font-family: var(--font-mono);
   font-size: var(--font-size-xxl);
   font-weight: var(--font-weight-bold);
   line-height: 1.2;

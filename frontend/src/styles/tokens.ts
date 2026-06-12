@@ -294,6 +294,15 @@ export const tokens = {
   //     earthRadius pairs with orbitalMath.SCENE_EARTH_RADIUS (physics→scene
   //     scale) and cameraDistance participates in the label-fade rendering
   //     invariant. Never vary these per theme. ---
+  // Sun-driven lighting. Ambient is the night-side floor: keep it low enough
+  // that the terminator reads as real day/night, high enough that the dark
+  // limb stays a visible silhouette. Tune here — nothing else owns lighting.
+  sceneSunIntensity: 1.3,
+  sceneAmbientIntensity: 0.15,
+  earthDayFloor: 0.06, // day-side shading floor approaching the terminator
+  earthTwilightHalfWidth: 0.08, // terminator blend half-width (cos of sun angle)
+  earthNightLightsLevel: 0.85, // city-lights brightness in day-night mode
+
   earthRadius: 100,
   satRadius: 0.9,
   satSegments: 12,

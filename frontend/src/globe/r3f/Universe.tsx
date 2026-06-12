@@ -106,7 +106,7 @@ export function Universe({
       <color attach="background" args={[tokens.bgMain]} />
       {/* Ambient fill only; the sun directional lives in <Earth> (earth frame), positioned by
           the sim-time sun model so the terminator tracks the frame rotation. */}
-      <ambientLight intensity={0.5} />
+      <ambientLight intensity={tokens.sceneAmbientIntensity} />
       <CameraClip far={cameraFar} />
       <Suspense fallback={null}>{children}</Suspense>
       {/* Controls run after scene writers/follow-cam; projection consumers mount after this. */}

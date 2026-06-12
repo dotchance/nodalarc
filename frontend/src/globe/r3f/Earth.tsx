@@ -55,6 +55,7 @@ void main() {
   gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
 }
 `;
+// Lighting constants interpolate from tokens at load — tune in tokens.ts.
 const DAYNIGHT_FRAG = `
 uniform sampler2D u_dayMap;
 uniform sampler2D u_nightMap;
@@ -64,12 +65,12 @@ varying vec3 vWorldNormal;
 void main() {
   vec3 N = normalize(vWorldNormal);
   float NdotL = dot(N, u_sunDirection);
-  float blend = smoothstep(-0.15, 0.15, NdotL);
+  float blend = smoothstep(${(-tokens.earthTwilightHalfWidth).toFixed(3)}, ${tokens.earthTwilightHalfWidth.toFixed(3)}, NdotL);
   vec3 dayColor = texture2D(u_dayMap, vUv).rgb;
   vec3 nightColor = texture2D(u_nightMap, vUv).rgb;
-  float dayShading = 0.3 + 0.7 * max(0.0, NdotL);
+  float dayShading = ${tokens.earthDayFloor.toFixed(3)} + ${(1 - tokens.earthDayFloor).toFixed(3)} * max(0.0, NdotL);
   dayColor *= dayShading;
-  nightColor *= 0.8;
+  nightColor *= ${tokens.earthNightLightsLevel.toFixed(3)};
   vec3 color = mix(nightColor, dayColor, blend);
   gl_FragColor = vec4(color, 1.0);
 }
@@ -302,7 +303,7 @@ export function Earth({
   const showDayNight = globeMode === "day-night";
   const showPolitical = globeMode === "political";
   // Earth day-night mode does its own shader lighting; the directional remains for other bodies.
-  const sunIntensity = 1.0;
+  const sunIntensity = tokens.sceneSunIntensity;
 
   return (
     <>

@@ -9,13 +9,30 @@ own license or usage terms.
 
 ### Inter Font
 
-- Path: `frontend/public/fonts/Inter.woff2`
+- Paths: `frontend/public/fonts/Inter-400.woff2`, `frontend/public/fonts/Inter-600.woff2`,
+  `frontend/public/fonts/Inter-700.woff2`
 - Project: Inter
 - Author: The Inter Project Authors
 - Source: <https://github.com/rsms/inter>
 - License: SIL Open Font License 1.1
 - Local license text: `LICENSES/Inter-OFL-1.1.txt`
-- Local file hash: `sha256:8af7bd5b545567adffb3dfceb5bedb353a522d7bf1b3a2b8af7b6064156babc0`
+- Local file hashes:
+  - `Inter-400.woff2`: `sha256:8909904ab6c872eb994093482a88a28eca2cd95912d7b6fecd72103b0dc07edc`
+  - `Inter-600.woff2`: `sha256:f9a06e79cd3a2a20951c0f0e28f66dd0e6d3fda73911d640a2125c8fcb78f21a`
+  - `Inter-700.woff2`: `sha256:6f56409fd3d64bb85f7d070bce20749db2d66b6d63cec586cc22d1c761be2491`
+
+### IBM Plex Mono Font
+
+- Paths: `frontend/public/fonts/IBM-Plex-Mono-400.woff2`,
+  `frontend/public/fonts/IBM-Plex-Mono-600.woff2`
+- Project: IBM Plex
+- Author: IBM Corp.
+- Source: <https://github.com/IBM/plex>
+- License: SIL Open Font License 1.1
+- Local license text: `LICENSES/IBM-Plex-Mono-OFL-1.1.txt`
+- Local file hashes:
+  - `IBM-Plex-Mono-400.woff2`: `sha256:08949f728dc52d528e69b1667d15c89a5686a4ee9a296ff90983985f99c380f7`
+  - `IBM-Plex-Mono-600.woff2`: `sha256:0d1f0b8d0722224e32e9f28261bdc86c79115be73444ae5eceb73976a1bcdf83`
 
 ### Earth Day Texture
 

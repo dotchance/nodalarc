@@ -33,6 +33,7 @@ import { setGsLabelsEnabled, getGsLabelsEnabled } from "./globe/groundStations";
 import type { TracedPath } from "./types";
 import type { GlobeActions } from "./globe/actions";
 
+import "./styles/fonts.css";
 import "./styles/variables.css";
 import "./styles/reset.css";
 import "./styles/layout.css";

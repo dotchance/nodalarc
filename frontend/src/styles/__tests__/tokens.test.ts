@@ -89,6 +89,7 @@ describe("token system", () => {
       ["--status-warn", tokens.statusWarn],
       ["--status-fail", tokens.statusFail],
       ["--font-mono", tokens.fontFamilyCli],
+      ["--font-ui", tokens.fontFamilyUi],
       ["--font-size-xs", tokens.fontSizeXs],
       ["--font-size-md", tokens.fontSizeMd],
       ["--topbar-height", tokens.topbarHeight],

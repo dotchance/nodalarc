@@ -206,9 +206,12 @@ export const tokens = {
   failHoldMs: 1500,
   failFadeMs: 1000,
 
-  // --- Typography (font files land with the typography stage) ---
-  fontFamily: "'JetBrains Mono', 'Fira Code', 'Source Code Pro', monospace",
-  fontFamilyCli: "'SF Mono', 'Fira Code', 'Cascadia Code', monospace",
+  // --- Typography. Inter (UI) + IBM Plex Mono (data/CLI) are self-hosted
+  //     (fonts.css). fontFamily is the body font: still the mono face until
+  //     the shell stage flips it to fontFamilyUi surface-by-surface. ---
+  fontFamilyUi: "'Inter', system-ui, sans-serif",
+  fontFamily: "'IBM Plex Mono', ui-monospace, monospace",
+  fontFamilyCli: "'IBM Plex Mono', ui-monospace, monospace",
   fontSizeXxs: "10px",
   fontSizeXs: "11px",
   fontSizeSm: "12px",
@@ -325,6 +328,7 @@ export function applyTheme(): void {
   s.setProperty("--status-fail", tokens.statusFail);
 
   // Typography
+  s.setProperty("--font-ui", tokens.fontFamilyUi);
   s.setProperty("--font-family", tokens.fontFamily);
   s.setProperty("--font-family-cli", tokens.fontFamilyCli);
   s.setProperty("--font-mono", tokens.fontFamilyCli);

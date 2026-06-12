@@ -1,10 +1,13 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
-/** Event log — scrolling list with sortable, draggable columns. */
+/** Event log — network event feed in the inspector, on the shared table
+ *  language (sort, drag-reorder, resize). Row click selects + flies to the
+ *  node. */
 
-import React, { useRef, useEffect, useState, useMemo, useCallback } from "react";
+import { useRef, useEffect, useState, useMemo } from "react";
 import { EventFilter } from "./EventFilter";
 import { formatTimeShort } from "../translate";
+import { DataTable, type SortState, type TableColumn } from "../ui/DataTable";
 import type { NodeState, RecentEvent, Selection } from "../types";
 import { isGroundNode, selectionTypeForNode } from "../networkIdentity";
 
@@ -61,108 +64,29 @@ const DEFAULT_FILTERS: Record<string, boolean> = {
   inject: true,
 };
 
-type ColKey = "time" | "node" | "type" | "summary";
-type SortDir = "asc" | "desc";
+const COLUMNS: TableColumn[] = [
+  { key: "time", label: "Time", width: 70, minWidth: 50, sortable: true },
+  { key: "node", label: "Node", width: 86, minWidth: 50, sortable: true },
+  { key: "type", label: "Type", width: 64, minWidth: 44, sortable: true },
+  { key: "summary", label: "Detail", sortable: true, mono: false },
+];
 
-interface ColDef {
-  key: ColKey;
-  label: string;
-  cssClass: string;
-}
-
-const COLUMN_DEFS: Record<ColKey, ColDef> = {
-  time: { key: "time", label: "Time", cssClass: "event-col-time" },
-  node: { key: "node", label: "Node", cssClass: "event-col-node" },
-  type: { key: "type", label: "Type", cssClass: "event-col-type" },
-  summary: { key: "summary", label: "Detail", cssClass: "event-col-summary" },
-};
-
-const DEFAULT_COL_ORDER: ColKey[] = ["time", "node", "type", "summary"];
-
-function renderCell(
-  e: RecentEvent,
-  col: ColKey,
-  nodesById: ReadonlyMap<string, NodeState>,
-): React.ReactNode {
-  switch (col) {
-    case "time":
-      return <span className="event-time">{formatTimeShort(e.sim_time)}</span>;
-    case "type":
-      return (
-        <span className={`event-type ${eventColorClass(e.event_type)}`}>
-          {abbreviateType(e.event_type)}
-        </span>
-      );
-    case "node":
-      return <span className="event-node">{abbreviateNodeId(e.node_id, nodesById.get(e.node_id))}</span>;
-    case "summary":
-      return <span className="event-summary">{e.summary}</span>;
-  }
-}
-
-function sortValue(e: RecentEvent, col: ColKey): string {
+function sortValue(e: RecentEvent, col: string): string {
   switch (col) {
     case "time": return e.sim_time;
     case "type": return abbreviateType(e.event_type);
     case "node": return e.node_id;
-    case "summary": return e.summary;
+    default: return e.summary;
   }
 }
 
 export function EventLog({ events, nodes, onSelect, onFlyTo }: EventLogProps) {
-  const scrollRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
   const [autoScroll, setAutoScroll] = useState(true);
   const [filters, setFilters] = useState(DEFAULT_FILTERS);
-  const [sortKey, setSortKey] = useState<ColKey>("time");
-  const [sortDir, setSortDir] = useState<SortDir>("desc");
-  const [colOrder, setColOrder] = useState<ColKey[]>(DEFAULT_COL_ORDER);
-  const dragColRef = useRef<ColKey | null>(null);
-  const [dragOverCol, setDragOverCol] = useState<ColKey | null>(null);
+  const [columns, setColumns] = useState(COLUMNS);
+  const [sort, setSort] = useState<SortState | null>({ key: "time", dir: "desc" });
   const nodesById = useMemo(() => new Map(nodes.map((node) => [node.node_id, node])), [nodes]);
-
-  const handleColumnClick = useCallback((key: ColKey) => {
-    if (sortKey === key) {
-      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
-    } else {
-      setSortKey(key);
-      setSortDir(key === "time" ? "desc" : "asc");
-    }
-  }, [sortKey]);
-
-  const handleDragStart = useCallback((key: ColKey, e: React.DragEvent) => {
-    dragColRef.current = key;
-    e.dataTransfer.effectAllowed = "move";
-  }, []);
-
-  const handleDragOver = useCallback((key: ColKey, e: React.DragEvent) => {
-    e.preventDefault();
-    e.dataTransfer.dropEffect = "move";
-    setDragOverCol(key);
-  }, []);
-
-  const handleDrop = useCallback((targetKey: ColKey) => {
-    const srcKey = dragColRef.current;
-    if (!srcKey || srcKey === targetKey) {
-      dragColRef.current = null;
-      setDragOverCol(null);
-      return;
-    }
-    setColOrder((prev) => {
-      const next = [...prev];
-      const srcIdx = next.indexOf(srcKey);
-      const tgtIdx = next.indexOf(targetKey);
-      next.splice(srcIdx, 1);
-      next.splice(tgtIdx, 0, srcKey);
-      return next;
-    });
-    dragColRef.current = null;
-    setDragOverCol(null);
-  }, []);
-
-  const handleDragEnd = useCallback(() => {
-    dragColRef.current = null;
-    setDragOverCol(null);
-  }, []);
 
   const filteredEvents = events.filter((e) => {
     if (e.event_type === "link_up" || e.event_type === "link_down") {
@@ -176,11 +100,12 @@ export function EventLog({ events, nodes, onSelect, onFlyTo }: EventLogProps) {
   });
 
   const sortedEvents = useMemo(() => {
-    const sorted = [...filteredEvents];
-    const dir = sortDir === "asc" ? 1 : -1;
-    sorted.sort((a, b) => dir * sortValue(a, sortKey).localeCompare(sortValue(b, sortKey)));
-    return sorted;
-  }, [filteredEvents, sortKey, sortDir]);
+    if (!sort) return filteredEvents;
+    const dir = sort.dir === "asc" ? 1 : -1;
+    return [...filteredEvents].sort(
+      (a, b) => dir * sortValue(a, sort.key).localeCompare(sortValue(b, sort.key)),
+    );
+  }, [filteredEvents, sort]);
 
   useEffect(() => {
     if (autoScroll && scrollRef.current) {
@@ -188,24 +113,20 @@ export function EventLog({ events, nodes, onSelect, onFlyTo }: EventLogProps) {
     }
   }, [events, autoScroll]);
 
-  const handleScroll = () => {
-    if (!scrollRef.current) return;
-    setAutoScroll(scrollRef.current.scrollTop < 30);
-  };
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const onScroll = () => setAutoScroll(el.scrollTop < 30);
+    el.addEventListener("scroll", onScroll);
+    return () => el.removeEventListener("scroll", onScroll);
+  }, []);
 
   const handleEventClick = (event: RecentEvent) => {
-    if (event.node_id) {
-      const node = nodesById.get(event.node_id);
-      if (!node) return;
-      const type = selectionTypeForNode(node);
-      onSelect({ type, id: event.node_id });
-      onFlyTo?.(event.node_id);
-    }
-  };
-
-  const sortIndicator = (key: ColKey) => {
-    if (sortKey !== key) return "";
-    return sortDir === "asc" ? " \u25B4" : " \u25BE";
+    if (!event.node_id) return;
+    const node = nodesById.get(event.node_id);
+    if (!node) return;
+    onSelect({ type: selectionTypeForNode(node), id: event.node_id });
+    onFlyTo?.(event.node_id);
   };
 
   return (
@@ -213,47 +134,39 @@ export function EventLog({ events, nodes, onSelect, onFlyTo }: EventLogProps) {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <h3>Events</h3>
         {!autoScroll && (
-          <button
-            onClick={() => setAutoScroll(true)}
-            style={{ fontSize: 10, color: "var(--accent-blue)" }}
-          >
+          <button className="event-jump-latest" onClick={() => setAutoScroll(true)}>
             Jump to latest
           </button>
         )}
       </div>
-      <EventFilter filters={filters} onToggle={(key) => {
-        setFilters((prev) => ({ ...prev, [key]: !prev[key] }));
-      }} />
-      <div className="event-log-header">
-        {colOrder.map((key) => {
-          const def = COLUMN_DEFS[key];
-          return (
-            <span
-              key={key}
-              className={`${def.cssClass}${dragOverCol === key ? " event-col--drag-over" : ""}`}
-              draggable
-              onClick={() => handleColumnClick(key)}
-              onDragStart={(e) => handleDragStart(key, e)}
-              onDragOver={(e) => handleDragOver(key, e)}
-              onDrop={() => handleDrop(key)}
-              onDragEnd={handleDragEnd}
-            >
-              {def.label}{sortIndicator(key)}
-            </span>
-          );
-        })}
-      </div>
-      <div className="event-log" ref={scrollRef} onScroll={handleScroll}>
-        {sortedEvents.map((e, i) => (
-          <div className="event-entry" key={i} onClick={() => handleEventClick(e)}>
-            {colOrder.map((col) => (
-              <span key={col} className={COLUMN_DEFS[col].cssClass}>
-                {renderCell(e, col, nodesById)}
-              </span>
-            ))}
-          </div>
-        ))}
-      </div>
+      <EventFilter
+        filters={filters}
+        onToggle={(key) => setFilters((prev) => ({ ...prev, [key]: !prev[key] }))}
+      />
+      <DataTable
+        label="Network events"
+        columns={columns}
+        onColumnsChange={setColumns}
+        rows={sortedEvents}
+        rowKey={(e) => `${e.sim_time}-${e.node_id}-${e.event_type}-${e.summary}`}
+        sort={sort}
+        onSortChange={setSort}
+        scrollRef={scrollRef}
+        onRowClick={handleEventClick}
+        emptyText="No events"
+        renderCell={(e, key) => {
+          switch (key) {
+            case "time":
+              return formatTimeShort(e.sim_time);
+            case "type":
+              return <span className={`event-type ${eventColorClass(e.event_type)}`}>{abbreviateType(e.event_type)}</span>;
+            case "node":
+              return abbreviateNodeId(e.node_id, nodesById.get(e.node_id));
+            default:
+              return e.summary;
+          }
+        }}
+      />
     </div>
   );
 }

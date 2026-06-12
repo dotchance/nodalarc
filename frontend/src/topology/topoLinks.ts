@@ -1,10 +1,19 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
 /** Draw topology links on Canvas 2D.
- *  Link colors match the globe view (config.ts constants).
+ *  Link colors come from the same tokens the globe materials use — the two
+ *  views must never disagree about link semantics. Canvas cannot read CSS
+ *  variables, so the stroke strings are precomputed from token values.
  */
 
-import { FAIL_HOLD_MS, FAIL_FADE_MS } from "../config";
+import { FAIL_HOLD_MS, FAIL_FADE_MS, LINK_GROUND_COLOR, LINK_ISL_COLOR, LINK_FAIL_COLOR, LINK_FLOW_COLOR, hexToCSS } from "../config";
+import { withAlpha } from "../styles/tokens";
+
+const GROUND_STROKE = withAlpha(hexToCSS(LINK_GROUND_COLOR), 0.6);
+const ISL_STROKE = withAlpha(hexToCSS(LINK_ISL_COLOR), 0.5);
+const ISL_CROSS_AREA_STROKE = withAlpha(hexToCSS(LINK_ISL_COLOR), 0.35);
+const FLOW_STROKE = hexToCSS(LINK_FLOW_COLOR);
+const FAIL_RGB = [(LINK_FAIL_COLOR >> 16) & 0xff, (LINK_FAIL_COLOR >> 8) & 0xff, LINK_FAIL_COLOR & 0xff] as const;
 import type { LayoutLink, LayoutNode } from "./layout";
 
 /** Point-to-line-segment distance for link hit testing. */
@@ -86,17 +95,17 @@ export function drawLinks(
       if (elapsed > FAIL_HOLD_MS) {
         opacity = 0.7 * (1 - (elapsed - FAIL_HOLD_MS) / FAIL_FADE_MS);
       }
-      strokeStyle = `rgba(255, 51, 51, ${Math.max(0, opacity).toFixed(2)})`;
+      strokeStyle = `rgba(${FAIL_RGB[0]}, ${FAIL_RGB[1]}, ${FAIL_RGB[2]}, ${Math.max(0, opacity).toFixed(2)})`;
       lineWidth = 2;
     } else if (link.isGround) {
-      strokeStyle = "rgba(0, 212, 170, 0.6)";
+      strokeStyle = GROUND_STROKE;
       lineWidth = 2;
     } else if (link.isCrossArea) {
-      strokeStyle = "rgba(120, 180, 130, 0.35)";
+      strokeStyle = ISL_CROSS_AREA_STROKE;
       lineWidth = 1.5;
       dash = [4, 3];
     } else {
-      strokeStyle = "rgba(120, 180, 130, 0.5)";
+      strokeStyle = ISL_STROKE;
       lineWidth = 1.5;
     }
 
@@ -168,7 +177,7 @@ export function drawLinks(
 
   // Draw flow path overlay with animated dash
   if (flowPath && flowPath.length >= 2) {
-    ctx.strokeStyle = "#ff8800";
+    ctx.strokeStyle = FLOW_STROKE;
     ctx.lineWidth = 3;
     ctx.setLineDash([6, 3]);
     ctx.lineDashOffset = -dashOffset;

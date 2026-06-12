@@ -2,7 +2,8 @@
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
 /** Draw topology nodes on Canvas 2D. */
 
-import { AREA_COLORS, GS_COLOR, getPlaneColor } from "../config";
+import { AREA_COLORS, GS_COLOR, getPlaneColor, UNKNOWN_TINT, hexToCSS } from "../config";
+import { tokens } from "../styles/tokens";
 import type { LayoutNode, AreaBounds } from "./layout";
 import type { ColorMode } from "../types";
 
@@ -11,9 +12,9 @@ const GS_RADIUS = 10;
 
 function satColor(node: LayoutNode, colorMode: ColorMode): string {
   if (colorMode === "plane" && node.plane != null) {
-    return `#${getPlaneColor(node.plane).toString(16).padStart(6, "0")}`;
+    return hexToCSS(getPlaneColor(node.plane));
   }
-  return `#${(AREA_COLORS[node.area ?? ""] ?? 0x888888).toString(16).padStart(6, "0")}`;
+  return hexToCSS(AREA_COLORS[node.area ?? ""] ?? UNKNOWN_TINT);
 }
 
 export function drawNode(
@@ -25,9 +26,7 @@ export function drawNode(
   colorMode: ColorMode = "area",
 ): void {
   const radius = node.type === "ground_station" ? GS_RADIUS : SAT_RADIUS;
-  const color = node.type === "ground_station"
-    ? `#${GS_COLOR.toString(16).padStart(6, "0")}`
-    : satColor(node, colorMode);
+  const color = node.type === "ground_station" ? hexToCSS(GS_COLOR) : satColor(node, colorMode);
 
   ctx.globalAlpha = isolated ? 0.4 : 1.0;
 
@@ -40,7 +39,7 @@ export function drawNode(
   // ABR diamond badge — indicates Area Border Router
   if (isABR) {
     const d = radius * 0.5;
-    ctx.fillStyle = "#ffffff";
+    ctx.fillStyle = hexToCSS(tokens.colorNodeSelected);
     ctx.beginPath();
     ctx.moveTo(node.x + radius + 3, node.y - radius);
     ctx.lineTo(node.x + radius + 3 + d, node.y - radius + d);
@@ -52,7 +51,7 @@ export function drawNode(
 
   // Selection ring
   if (selected) {
-    ctx.strokeStyle = "#ffffff";
+    ctx.strokeStyle = hexToCSS(tokens.colorNodeSelected);
     ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.arc(node.x, node.y, radius + 4, 0, Math.PI * 2);
@@ -61,12 +60,12 @@ export function drawNode(
 
   // Label
   ctx.globalAlpha = 1.0;
-  ctx.fillStyle = "#888899";
-  ctx.font = "9px monospace";
+  ctx.fillStyle = tokens.textDim;
+  ctx.font = `9px ${tokens.fontFamilyCli}`;
   ctx.textAlign = "center";
-  const label = node.type === "ground_station"
-    ? node.label
-    : `P${String(node.plane ?? 0).padStart(2, "0")}S${String(node.slot ?? 0).padStart(2, "0")}`;
+  // The layout's display label is the truth for every node class —
+  // synthesizing P##S## here mislabeled multi-body nodes without plane/slot.
+  const label = node.label;
   ctx.fillText(label, node.x, node.y + radius + 12);
 }
 
@@ -85,7 +84,7 @@ export function drawAreaBounds(
   for (const area of areas) {
     // Skip null, unknown, or 0.0.0.0 area ids
     if (!area.id || area.id === "unknown" || area.id === "0.0.0.0") continue;
-    const color = AREA_COLORS[area.id] ?? 0x888888;
+    const color = AREA_COLORS[area.id] ?? UNKNOWN_TINT;
     const [r, g, b] = hexToRgb(color);
     const w = area.maxX - area.minX;
     const h = area.maxY - area.minY;
@@ -105,7 +104,7 @@ export function drawAreaBounds(
 
     // Label above box
     ctx.fillStyle = `rgba(${r}, ${g}, ${b}, 0.5)`;
-    ctx.font = "9px monospace";
+    ctx.font = `9px ${tokens.fontFamilyCli}`;
     ctx.textAlign = "left";
     ctx.fillText(`Area ${area.id}`, area.minX, area.minY - 4);
   }

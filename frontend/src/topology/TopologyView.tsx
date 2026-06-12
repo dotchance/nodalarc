@@ -7,7 +7,8 @@ import { computeLayout } from "./layout";
 import { drawNode, drawAreaBounds, hitTestNode } from "./nodes";
 import { drawLinks, hitTestLink } from "./topoLinks";
 import { setupInteraction, type ViewTransform } from "./interaction";
-import { FAIL_HOLD_MS, FAIL_FADE_MS } from "../config";
+import { FAIL_HOLD_MS, FAIL_FADE_MS, LINK_FLOW_COLOR, hexToCSS } from "../config";
+import { tokens } from "../styles/tokens";
 import type { StateSnapshot, Selection, LinkState, ColorMode } from "../types";
 
 /** Recently-removed link kept for fail-flash animation. */
@@ -133,8 +134,8 @@ export function TopologyView({ snapshot, selection, onSelect, onFlyTo, colorMode
 
     // Draw hop index numbers on flow path nodes
     if (flowPath && flowPath.length >= 2) {
-      ctx.fillStyle = "#ff8800";
-      ctx.font = "9px monospace";
+      ctx.fillStyle = hexToCSS(LINK_FLOW_COLOR);
+      ctx.font = `9px ${tokens.fontFamilyCli}`;
       ctx.textAlign = "left";
       for (let i = 0; i < flowPath.length; i++) {
         const hopNode = nodeMap.get(flowPath[i]!);

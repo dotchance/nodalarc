@@ -8,7 +8,13 @@
 
 import { useEffect } from "react";
 import { KEYBOARD_SHORTCUTS } from "../hooks/useKeyboard";
+import { activeThemeName, setTheme, THEMES, type ThemeName } from "../styles/tokens";
 import { Button } from "../ui/Button";
+
+const THEME_LABELS: Record<ThemeName, string> = {
+  "mission-light": "Mission Light",
+  "noc-dark": "NOC Dark",
+};
 
 interface ShortcutHelpProps {
   onClose: () => void;
@@ -54,6 +60,17 @@ export function ShortcutHelp({ onClose }: ShortcutHelpProps) {
               ))}
             </section>
           ))}
+        </div>
+        <div className="help-theme">
+          <h3>Theme</h3>
+          <div className="help-theme-buttons">
+            {(Object.keys(THEMES) as ThemeName[]).map((name) => (
+              <Button key={name} active={name === activeThemeName()} onClick={() => setTheme(name)}>
+                {THEME_LABELS[name]}
+              </Button>
+            ))}
+          </div>
+          <p className="help-note">Switching reloads the console so every surface repaints consistently.</p>
         </div>
         <footer className="help-about">
           <strong>NodalArc</strong> — high-fidelity orbital network emulation.{" "}

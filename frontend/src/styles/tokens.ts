@@ -118,6 +118,14 @@ export const THEMES: Record<ThemeName, Theme> = {
   },
 };
 
+/** Store the theme and reload. Scene materials, canvas paints, and the
+ *  terminal capture token values at construction, so a reload is the honest
+ *  switch — no surface can be left half-themed. */
+export function setTheme(name: ThemeName): void {
+  localStorage.setItem(THEME_STORAGE_KEY, name);
+  location.reload();
+}
+
 export function activeThemeName(): ThemeName {
   if (typeof localStorage !== "undefined") {
     const stored = localStorage.getItem(THEME_STORAGE_KEY);

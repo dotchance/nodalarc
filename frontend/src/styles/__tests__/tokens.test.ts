@@ -211,6 +211,39 @@ describe("token system", () => {
     });
   });
 
+  describe("stylesheets carry no raw colors", () => {
+    it("every color in src CSS comes from a token or color-mix, never a literal", () => {
+      const thisDir = dirname(fileURLToPath(import.meta.url));
+      const srcDir = resolve(thisDir, "..", "..");
+      const offenders: string[] = [];
+      const walk = (dir: string) => {
+        for (const entry of readdirSync(dir, { withFileTypes: true }) as {
+          name: string;
+          isDirectory(): boolean;
+        }[]) {
+          const full = resolve(dir, entry.name);
+          if (entry.isDirectory()) {
+            if (entry.name === "node_modules") continue;
+            walk(full);
+            continue;
+          }
+          if (!entry.name.endsWith(".css")) continue;
+          const content = readFileSync(full, "utf-8") as string;
+          for (const [lineIdx, line] of content.split("\n").entries()) {
+            if (/#[0-9a-fA-F]{3,8}\b/.test(line) || /\brgba?\(/.test(line) || /\bhsla?\(/.test(line)) {
+              offenders.push(`${full.replace(srcDir, "src")}:${lineIdx + 1}: ${line.trim()}`);
+            }
+          }
+        }
+      };
+      walk(srcDir);
+      expect(
+        offenders,
+        "Raw color literals in stylesheets bypass theming:\n" + offenders.join("\n"),
+      ).toHaveLength(0);
+    });
+  });
+
   describe("domain invariants", () => {
     it("z-index layers form a strict total order", () => {
       const layers = [

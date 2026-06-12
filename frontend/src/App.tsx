@@ -49,7 +49,7 @@ import "./styles/toolbar.css";
 import "./styles/scene.css";
 import "./styles/topology.css";
 import "./styles/time-controls.css";
-import "./styles/catalog.css";
+import "./styles/launcher.css";
 import "./styles/wizard.css";
 import "./styles/explain.css";
 

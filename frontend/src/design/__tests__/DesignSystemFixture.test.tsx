@@ -1,13 +1,15 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
-import { describe, it, expect, beforeAll } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { describe, it, expect, beforeAll, afterEach } from "vitest";
+import { render, screen, cleanup } from "@testing-library/react";
 import { applyTheme } from "../../styles/tokens";
 import { DesignSystemFixture } from "../DesignSystemFixture";
 
 beforeAll(() => {
   applyTheme();
 });
+
+afterEach(cleanup);
 
 describe("DesignSystemFixture", () => {
   it("renders every section of the review surface", () => {

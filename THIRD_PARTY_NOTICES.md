@@ -34,6 +34,15 @@ own license or usage terms.
   - `IBM-Plex-Mono-400.woff2`: `sha256:08949f728dc52d528e69b1667d15c89a5686a4ee9a296ff90983985f99c380f7`
   - `IBM-Plex-Mono-600.woff2`: `sha256:0d1f0b8d0722224e32e9f28261bdc86c79115be73444ae5eceb73976a1bcdf83`
 
+### Lucide Icons
+
+- Path: `frontend/src/ui/icons/lucide.ts` (SVG bodies extracted from `lucide-static`)
+- Project: Lucide
+- Author: Lucide Icons and Contributors
+- Source: <https://lucide.dev> / <https://github.com/lucide-icons/lucide>
+- License: ISC
+- Local license text: `LICENSES/Lucide-ISC.txt`
+
 ### Earth Day Texture
 
 - Path: `frontend/public/earth-blue-marble.jpg`

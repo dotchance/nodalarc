@@ -438,9 +438,10 @@ function AppInner() {
         onToggleSatPaths={() => setShowSatPaths((v: boolean) => !v)}
         onToggleFilter={() => setFilterOpen((v: boolean) => !v)}
         globeMode={globeMode}
-        onToggleGlobeMode={() => setGlobeMode((m: string) => m === "blue-marble" ? "day-night" : "blue-marble")}
+        onGlobeMode={setGlobeMode}
         onToggleReferenceFrame={toggleReferenceFrame}
         onTopView={handleTopView}
+        onFrameScene={handleFrameScene}
         onFollowNode={handleFollowNode}
         onScreenshot={handleScreenshot}
       />

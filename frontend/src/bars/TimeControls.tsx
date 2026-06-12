@@ -4,6 +4,7 @@
 
 import { useState, useRef, useEffect, useCallback } from "react";
 import type { RecentEvent } from "../types";
+import { Icon } from "../ui/icons/Icon";
 
 interface TimeControlsProps {
   onSeek: (simTime: string) => boolean | void | Promise<boolean | void>;
@@ -164,23 +165,23 @@ export function TimeControls({ onSeek, startTime, endTime, events, externalPlayi
   return (
     <div className="time-controls area-time-controls">
       <button className="time-btn" onClick={() => void seekTo(progress - 300000 / duration)} title="Skip back 5min">
-        ⏮
+        <Icon name="skip-back" size={14} />
       </button>
       <button className="time-btn" onClick={() => stepSpeed(-1)} title="Slower">
-        ◀
+        <Icon name="rewind" size={14} />
       </button>
       <button
         className={`time-btn ${playing ? "time-btn--active" : ""}`}
         onClick={() => setPlaying(!playing)}
         title={playing ? "Pause" : "Play"}
       >
-        {playing ? "⏸" : "▶"}
+        <Icon name={playing ? "pause" : "play"} size={14} />
       </button>
       <button className="time-btn" onClick={() => stepSpeed(1)} title="Faster">
-        ▶
+        <Icon name="fast-forward" size={14} />
       </button>
       <button className="time-btn" onClick={() => void seekTo(progress + 300000 / duration)} title="Skip forward 5min">
-        ⏭
+        <Icon name="skip-forward" size={14} />
       </button>
       <div className="time-scrubber" ref={scrubberRef} onMouseDown={handleScrubberDown}>
         <canvas ref={heatmapCanvasRef} className="time-scrubber-heatmap" />

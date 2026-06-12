@@ -251,3 +251,27 @@
   grid-template-columns: 180px 1fr;
   gap: var(--space-6);
 }
+
+/* --- Icon gallery --- */
+
+.fx-icon-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: var(--space-3);
+}
+
+.fx-icon-cell {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  background: var(--bg-panel-hover);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+}
+
+.fx-icon-cell code {
+  font-size: var(--font-size-xxs);
+  color: var(--text-dim);
+}

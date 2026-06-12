@@ -6,6 +6,7 @@
 // Fed from the same WebSocket events as EventLog.
 
 import { useState, useEffect, useCallback, useRef } from "react";
+import { Icon } from "../ui/icons/Icon";
 
 export interface Toast {
   id: number;
@@ -83,7 +84,16 @@ export function Toasts({ events }: ToastsProps) {
           onClick={() => dismiss(toast.id)}
         >
           <span className="toast-icon">
-            {toast.category === "error" ? "✕" : toast.category === "warning" ? "⚠" : "●"}
+            <Icon
+              name={
+                toast.category === "error"
+                  ? "circle-x"
+                  : toast.category === "warning"
+                    ? "triangle-alert"
+                    : "info"
+              }
+              size={14}
+            />
           </span>
           <span className="toast-message">{toast.message}</span>
         </div>

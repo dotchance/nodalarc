@@ -17,6 +17,8 @@
 import type { CSSProperties } from "react";
 import { tokens, THEMES, THEME_STORAGE_KEY, activeThemeName, type ThemeName } from "../styles/tokens";
 import { FAMILIES, FAMILY_TONE } from "../explain/families";
+import { Icon } from "../ui/icons/Icon";
+import { ICON_BODIES, type IconName } from "../ui/icons/lucide";
 import "./fixture.css";
 
 function Swatch({ name, value, label }: { name: string; value: string; label?: string }) {
@@ -224,6 +226,22 @@ export function DesignSystemFixture() {
             <div key={name} className="fx-type-row">
               <code>{name} {size}</code>
               <span style={{ fontSize: size }}>Routing adjacency proven on term2 — 38 links active</span>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className="fx-section">
+        <h2>Icons</h2>
+        <p className="fx-note">
+          Vendored Lucide artwork (ISC), <code>stroke=currentColor</code> — icons inherit the
+          surrounding text color slot.
+        </p>
+        <div className="fx-icon-grid">
+          {(Object.keys(ICON_BODIES) as IconName[]).map((name) => (
+            <div key={name} className="fx-icon-cell">
+              <Icon name={name} size={18} />
+              <code>{name}</code>
             </div>
           ))}
         </div>

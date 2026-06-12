@@ -1,3 +1,6 @@
+/* Left-edge tool palette: matte panel, Photoshop-style tool slots.
+   Tablet media query in layout.css repositions .toolbar — keep the class. */
+
 .toolbar {
   position: absolute;
   top: var(--space-6);
@@ -5,9 +8,7 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
-  background: var(--bg-toolbar);
-  backdrop-filter: blur(4px);
-  -webkit-backdrop-filter: blur(4px);
+  background: var(--bg-panel);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   padding: var(--space-2);
@@ -23,7 +24,7 @@
   border-radius: var(--radius-md);
   color: var(--text-secondary);
   position: relative;
-  transition: all var(--transition-fast);
+  transition: background var(--transition-fast), color var(--transition-fast);
 }
 
 .toolbar-btn:hover {
@@ -31,8 +32,26 @@
   color: var(--text-primary);
 }
 
+.toolbar-btn:focus-visible {
+  outline: 1px solid var(--accent-blue);
+  outline-offset: 1px;
+}
+
+/* Active = filled face + left edge indicator, never text-color alone. */
 .toolbar-btn--active {
-  color: var(--accent-blue);
+  background: color-mix(in srgb, var(--accent-blue) 16%, var(--bg-panel));
+  color: var(--text-primary);
+}
+
+.toolbar-btn--active::before {
+  content: "";
+  position: absolute;
+  left: -1px;
+  top: 6px;
+  bottom: 6px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--accent-blue);
 }
 
 .toolbar-separator {
@@ -42,22 +61,78 @@
   margin: var(--space-1) auto;
 }
 
-.toolbar-tooltip {
-  position: absolute;
-  left: 44px;
-  top: 50%;
-  transform: translateY(-50%);
-  background: var(--bg-panel);
-  border: 1px solid var(--border);
-  padding: var(--space-2) var(--space-4);
-  border-radius: var(--radius-md);
-  font-size: var(--font-size-xs);
-  white-space: nowrap;
-  pointer-events: none;
-  opacity: 0;
-  transition: opacity var(--transition-fast);
+/* --- Tool slots (variant families) --- */
+
+.toolslot {
+  position: relative;
 }
 
-.toolbar-btn:hover .toolbar-tooltip {
-  opacity: 1;
+/* Corner triangle: this slot has variants (press-and-hold / right-click). */
+.toolslot-corner {
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  width: 0;
+  height: 0;
+  border-left: 4px solid transparent;
+  border-bottom: 4px solid var(--text-dim);
+}
+
+.toolslot-flyout {
+  position: absolute;
+  left: calc(100% + var(--space-2));
+  top: 0;
+  min-width: 200px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-popover);
+  padding: var(--space-1);
+  z-index: var(--z-popover);
+  display: flex;
+  flex-direction: column;
+}
+
+.toolslot-row {
+  display: grid;
+  grid-template-columns: 8px 16px 1fr auto;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.toolslot-row--highlight,
+.toolslot-row:hover {
+  background: color-mix(in srgb, var(--accent-blue) 18%, var(--bg-panel));
+  color: var(--text-primary);
+}
+
+/* Small square marks the variant currently on the slot face. */
+.toolslot-current-dot {
+  width: 5px;
+  height: 5px;
+  background: transparent;
+}
+
+.toolslot-row--current .toolslot-current-dot {
+  background: var(--text-primary);
+}
+
+.toolslot-row-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.toolslot-row-key {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xxs);
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  padding: 0 var(--space-2);
 }

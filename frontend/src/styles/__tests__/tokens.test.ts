@@ -172,7 +172,6 @@ describe("token system", () => {
         tokens.zCatalog,
         tokens.zOverlay,
         tokens.zScrim,
-        tokens.zToast,
         tokens.zTooltip,
         tokens.zWindow,
       ];

@@ -24,7 +24,6 @@ interface ShellProps {
   rightPanel: ReactNode | null;
   bottomBar: ReactNode;
   overlay?: ReactNode;
-  toasts?: ReactNode;
   historicalControls?: ReactNode;
   historicalMode?: boolean;
   centerSplit?: boolean;
@@ -40,7 +39,6 @@ export function Shell({
   rightPanel,
   bottomBar,
   overlay,
-  toasts,
   historicalControls,
   historicalMode,
   centerSplit = false,
@@ -81,7 +79,6 @@ export function Shell({
       {topBar}
 
       {overlay}
-      {toasts}
 
       <div className={`area-viewport${centerSplit ? " area-viewport--split" : ""}`}>
         {center}

@@ -383,7 +383,6 @@ export function DesignSystemFixture() {
             ["zCatalog", tokens.zCatalog],
             ["zOverlay", tokens.zOverlay],
             ["zScrim", tokens.zScrim],
-            ["zToast", tokens.zToast],
             ["zTooltip", tokens.zTooltip],
             ["zWindow", tokens.zWindow],
           ] as const).map(([name, z]) => (

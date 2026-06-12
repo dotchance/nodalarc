@@ -245,7 +245,6 @@ export const tokens = {
   zCatalog: 50,
   zOverlay: 100,
   zScrim: 200,
-  zToast: 300,
   zTooltip: 400,
   zWindow: 500, // floating operational windows (logs, trace) ride above all chrome
 
@@ -365,7 +364,6 @@ export function applyTheme(): void {
   s.setProperty("--z-catalog", String(tokens.zCatalog));
   s.setProperty("--z-overlay", String(tokens.zOverlay));
   s.setProperty("--z-scrim", String(tokens.zScrim));
-  s.setProperty("--z-toast", String(tokens.zToast));
   s.setProperty("--z-tooltip", String(tokens.zTooltip));
   s.setProperty("--z-window", String(tokens.zWindow));
 

@@ -37,4 +37,29 @@ describe("r3f sky background", () => {
   it("rejects invalid sun-reference dates", () => {
     expect(() => sunDirectionForDate(new Date("not-a-date"))).toThrow(/invalid date/);
   });
+
+  it("tracks real solar declination: solstices and equinox", () => {
+    // y = sin(declination). June solstice 2026 ≈ +23.43°, December ≈ −23.43°,
+    // March equinox ≈ 0. Spencer's series is good to ~0.3°.
+    const june = sunDirectionForDate(new Date("2026-06-21T12:00:00Z"));
+    expect(Math.asin(june.y) * (180 / Math.PI)).toBeCloseTo(23.43, 0);
+    const december = sunDirectionForDate(new Date("2026-12-21T12:00:00Z"));
+    expect(Math.asin(december.y) * (180 / Math.PI)).toBeCloseTo(-23.43, 0);
+    const equinox = sunDirectionForDate(new Date("2026-03-20T12:00:00Z"));
+    expect(Math.abs(Math.asin(equinox.y) * (180 / Math.PI))).toBeLessThan(0.6);
+  });
+
+  it("models the equation of time: subsolar longitude at 12:00 UTC", () => {
+    // Early November the sundial runs ~16.4 min fast: at 12:00 UTC the
+    // subsolar point sits ~4.1° west of Greenwich. Mid-February it runs
+    // ~14 min slow: ~3.6° east. (Hour angle = atan2(z, x), west-positive.)
+    const november = sunDirectionForDate(new Date("2026-11-03T12:00:00Z"));
+    const novemberDeg = Math.atan2(november.z, november.x) * (180 / Math.PI);
+    expect(novemberDeg).toBeGreaterThan(3.4);
+    expect(novemberDeg).toBeLessThan(4.8);
+    const february = sunDirectionForDate(new Date("2026-02-11T12:00:00Z"));
+    const februaryDeg = Math.atan2(february.z, february.x) * (180 / Math.PI);
+    expect(februaryDeg).toBeLessThan(-3.0);
+    expect(februaryDeg).toBeGreaterThan(-4.2);
+  });
 });

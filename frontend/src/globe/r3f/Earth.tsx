@@ -76,15 +76,37 @@ void main() {
 }
 `;
 
+/** Sun direction in the Earth-fixed frame (subsolar point), from Spencer's
+ *  Fourier series for solar declination and the equation of time — accurate
+ *  to ~0.3 degrees, so seasons and the day/night line track the real sun.
+ *  Presentation-layer only: the OME models no sun physics; this drives
+ *  lighting and the rendered sun disc, never link or visibility facts. */
 export function sunDirectionForDate(date: Date, target = new THREE.Vector3()): THREE.Vector3 {
   if (Number.isNaN(date.getTime())) {
     throw new Error("invalid date for sun direction");
   }
-  const startOfYearMs = Date.UTC(date.getUTCFullYear(), 0, 0);
-  const dayOfYear = (date.getTime() - startOfYearMs) / 86400000;
-  const declRad = ((-23.44 * Math.PI) / 180) * Math.cos(((2 * Math.PI) / 365) * (dayOfYear + 10));
+  const startOfYearMs = Date.UTC(date.getUTCFullYear(), 0, 1);
+  const dayOfYear = (date.getTime() - startOfYearMs) / 86400000; // 0-based, fractional
   const hourUTC = date.getUTCHours() + date.getUTCMinutes() / 60 + date.getUTCSeconds() / 3600;
-  const hourAngle = ((hourUTC - 12) / 24) * 2 * Math.PI;
+  // Spencer (1971) fractional-year angle.
+  const g = ((2 * Math.PI) / 365) * (dayOfYear + (hourUTC - 12) / 24);
+  const declRad =
+    0.006918 -
+    0.399912 * Math.cos(g) +
+    0.070257 * Math.sin(g) -
+    0.006758 * Math.cos(2 * g) +
+    0.000907 * Math.sin(2 * g) -
+    0.002697 * Math.cos(3 * g) +
+    0.00148 * Math.sin(3 * g);
+  // Equation of time (minutes): true solar time minus clock time at Greenwich.
+  const eotMinutes =
+    229.18 *
+    (0.000075 +
+      0.001868 * Math.cos(g) -
+      0.032077 * Math.sin(g) -
+      0.014615 * Math.cos(2 * g) -
+      0.040849 * Math.sin(2 * g));
+  const hourAngle = ((hourUTC + eotMinutes / 60 - 12) / 24) * 2 * Math.PI;
   return target
     .set(
       Math.cos(declRad) * Math.cos(hourAngle),

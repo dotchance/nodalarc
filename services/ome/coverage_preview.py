@@ -62,6 +62,7 @@ def _preview_segment_session(
     *,
     constellation_source: str | dict,
     ground_stations_source: str | dict,
+    isl_topology: dict[str, Any] | None,
 ) -> dict:
     preview_ground = {
         "selection_policy": {"highest_elevation": {}},
@@ -70,6 +71,40 @@ def _preview_segment_session(
         "mbb_overlap_ticks": 0,
         "mbb_reserve": 0,
     }
+    link_rules: list[dict[str, Any]] = [
+        {
+            "id": "ground-access",
+            "topology": {"mode": "visible_candidates"},
+            "endpoints": [
+                {
+                    "select": {"segment": "ground"},
+                    "terminal": {"all": [{"role": "access"}, {"medium": "rf"}]},
+                    "min_elevation_deg": 10,
+                },
+                {
+                    "select": {"segment": "space"},
+                    "terminal": {"all": [{"role": "access"}, {"medium": "rf"}]},
+                },
+            ],
+        }
+    ]
+    if isl_topology is not None:
+        link_rules.append(
+            {
+                "id": "space-isl",
+                "topology": isl_topology,
+                "endpoints": [
+                    {
+                        "select": {"segment": "space"},
+                        "terminal": {"all": [{"role": "isl"}, {"medium": "optical"}]},
+                    },
+                    {
+                        "select": {"segment": "space"},
+                        "terminal": {"all": [{"role": "isl"}, {"medium": "optical"}]},
+                    },
+                ],
+            }
+        )
     return {
         "session": {"name": "coverage-preview"},
         "segments": [
@@ -83,37 +118,7 @@ def _preview_segment_session(
                 "apply": {"scheduling": preview_ground},
             },
         ],
-        "link_rules": [
-            {
-                "id": "ground-access",
-                "topology": {"mode": "visible_candidates"},
-                "endpoints": [
-                    {
-                        "select": {"segment": "ground"},
-                        "terminal": {"all": [{"role": "access"}, {"medium": "rf"}]},
-                        "min_elevation_deg": 10,
-                    },
-                    {
-                        "select": {"segment": "space"},
-                        "terminal": {"all": [{"role": "access"}, {"medium": "rf"}]},
-                    },
-                ],
-            },
-            {
-                "id": "space-isl",
-                "topology": {"mode": "nearest_n", "n": 1},
-                "endpoints": [
-                    {
-                        "select": {"segment": "space"},
-                        "terminal": {"all": [{"role": "isl"}, {"medium": "optical"}]},
-                    },
-                    {
-                        "select": {"segment": "space"},
-                        "terminal": {"all": [{"role": "isl"}, {"medium": "optical"}]},
-                    },
-                ],
-            },
-        ],
+        "link_rules": link_rules,
         "addressing": {
             "loopbacks": [
                 {
@@ -176,9 +181,12 @@ def compute_coverage_preview(
             "coverage preview requires a site_set catalog reference or inline site_set"
         )
 
+    from nodalarc.session_generator import generated_isl_topology
+
     session_dict = _preview_segment_session(
         constellation_source=constellation_source,
         ground_stations_source=ground_stations_source,
+        isl_topology=generated_isl_topology(constellation_source, catalog_roots),
     )
     resolution = resolve_session_with_assets(
         session_dict,

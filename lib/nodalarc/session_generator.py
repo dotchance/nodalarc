@@ -179,6 +179,83 @@ def _routing_capabilities(extensions: tuple[str, ...]) -> dict[str, Any] | None:
     return capabilities or None
 
 
+def _catalog_body(source: str | dict[str, Any], roots: CatalogRoots) -> tuple[str, dict[str, Any]]:
+    if isinstance(source, dict):
+        wrapper, model = validate_catalog_document(source)
+        return wrapper, model.model_dump(mode="python", by_alias=True, exclude_none=True)
+    return _load_catalog_document(source, roots)
+
+
+def _space_node_isl_count(node_ref: str, roots: CatalogRoots) -> int:
+    wrapper, node = _load_catalog_document(node_ref, roots)
+    if wrapper != "node":
+        raise ValueError(f"constellation node reference must resolve to node, got {wrapper!r}")
+    return sum(
+        int(mount.get("count", 1))
+        for mount in node.get("terminals", ())
+        if mount.get("role") == "isl"
+    )
+
+
+def _local_sat_id(plane: int, slot: int) -> str:
+    return f"sat-p{plane:02d}s{slot:02d}"
+
+
+def _walker_mesh_pairs(
+    *,
+    planes: int,
+    slots_per_plane: int,
+    raan_spacing_deg: float,
+    isl_terminal_count: int,
+) -> tuple[dict[str, str], ...]:
+    """Generate the deterministic Walker ISL grid used by Starlink-style nodes."""
+    if isl_terminal_count < 2:
+        return ()
+
+    pairs: set[tuple[str, str]] = set()
+
+    def add_pair(a: str, b: str) -> None:
+        if a == b:
+            return
+        pairs.add((a, b) if a < b else (b, a))
+
+    for plane in range(planes):
+        for slot in range(slots_per_plane):
+            add_pair(_local_sat_id(plane, slot), _local_sat_id(plane, (slot + 1) % slots_per_plane))
+
+    if isl_terminal_count >= 4 and planes > 1:
+        wraps_cross_plane = raan_spacing_deg * planes >= 360.0
+        last_cross_plane = planes if wraps_cross_plane else planes - 1
+        for plane in range(last_cross_plane):
+            right_plane = (plane + 1) % planes
+            for slot in range(slots_per_plane):
+                add_pair(_local_sat_id(plane, slot), _local_sat_id(right_plane, slot))
+
+    return tuple({"a": a, "b": b} for a, b in sorted(pairs))
+
+
+def generated_isl_topology(
+    constellation_source: str | dict[str, Any],
+    catalog_roots: CatalogRoots | None = None,
+) -> dict[str, Any] | None:
+    roots = catalog_roots or _default_catalog_roots()
+    wrapper, body = _catalog_body(constellation_source, roots)
+    if wrapper != "constellation":
+        return None
+    node_ref = body.get("node")
+    if not isinstance(node_ref, str):
+        raise ValueError("constellation node reference must be a catalog reference string")
+    pairs = _walker_mesh_pairs(
+        planes=int(body["planes"]["count"]),
+        slots_per_plane=int(body["slots_per_plane"]),
+        raan_spacing_deg=float(body["planes"]["raan_spacing_deg"]),
+        isl_terminal_count=_space_node_isl_count(node_ref, roots),
+    )
+    if not pairs:
+        return None
+    return {"mode": "explicit_pairs", "pairs": list(pairs)}
+
+
 def _area_assignment(area_strategy: str) -> dict[str, Any]:
     strategy = validate_catalog_name(area_strategy, label="area_strategy")
     if strategy == "flat":
@@ -325,6 +402,7 @@ def generate_session_yaml(
         custom_ground_stations,
         roots,
     )
+    isl_topology = generated_isl_topology(constellation_value, roots)
 
     ext_suffix = "-".join(normalized_extensions) if normalized_extensions else "plain"
     session_name = validate_catalog_name(f"{constellation}-{protocol}-{ext_suffix}".lower())
@@ -358,6 +436,40 @@ def generate_session_yaml(
     }
 
     def _session_dict(space_id: str) -> dict[str, Any]:
+        link_rules: list[dict[str, Any]] = [
+            {
+                "id": f"{space_id}_access",
+                "topology": {"mode": "visible_candidates"},
+                "endpoints": [
+                    {
+                        "select": {"segment": "ground"},
+                        "terminal": {"all": [{"role": "access"}, {"medium": "rf"}]},
+                        "min_elevation_deg": 10,
+                    },
+                    {
+                        "select": {"segment": space_id},
+                        "terminal": {"all": [{"role": "access"}, {"medium": "rf"}]},
+                    },
+                ],
+            }
+        ]
+        if isl_topology is not None:
+            link_rules.append(
+                {
+                    "id": f"{space_id}_isl",
+                    "topology": isl_topology,
+                    "endpoints": [
+                        {
+                            "select": {"segment": space_id},
+                            "terminal": {"all": [{"role": "isl"}, {"medium": "optical"}]},
+                        },
+                        {
+                            "select": {"segment": space_id},
+                            "terminal": {"all": [{"role": "isl"}, {"medium": "optical"}]},
+                        },
+                    ],
+                }
+            )
         return {
             "session": {"name": session_name},
             "segments": [
@@ -368,37 +480,7 @@ def generate_session_yaml(
                     "apply": {"scheduling": ground_scheduling},
                 },
             ],
-            "link_rules": [
-                {
-                    "id": f"{space_id}_access",
-                    "topology": {"mode": "visible_candidates"},
-                    "endpoints": [
-                        {
-                            "select": {"segment": "ground"},
-                            "terminal": {"all": [{"role": "access"}, {"medium": "rf"}]},
-                            "min_elevation_deg": 10,
-                        },
-                        {
-                            "select": {"segment": space_id},
-                            "terminal": {"all": [{"role": "access"}, {"medium": "rf"}]},
-                        },
-                    ],
-                },
-                {
-                    "id": f"{space_id}_isl",
-                    "topology": {"mode": "nearest_n", "n": 1},
-                    "endpoints": [
-                        {
-                            "select": {"segment": space_id},
-                            "terminal": {"all": [{"role": "isl"}, {"medium": "optical"}]},
-                        },
-                        {
-                            "select": {"segment": space_id},
-                            "terminal": {"all": [{"role": "isl"}, {"medium": "optical"}]},
-                        },
-                    ],
-                },
-            ],
+            "link_rules": link_rules,
             "addressing": {
                 "loopbacks": [
                     {

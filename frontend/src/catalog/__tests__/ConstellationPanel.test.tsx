@@ -53,4 +53,69 @@ describe("ConstellationPanel", () => {
     fireEvent.click(card);
     expect(onSelect).not.toHaveBeenCalled();
   });
+
+  it("emits custom constellations in the catalog grammar shape", () => {
+    const onSelect = vi.fn();
+    render(
+      <ConstellationPanel
+        presets={[preset("parametric-shell", "parametric")]}
+        selected={null}
+        onSelect={onSelect}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /^Custom/ }));
+    fireEvent.change(screen.getByRole("spinbutton", { name: "Orbital Planes" }), {
+      target: { value: "10" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Use Custom Constellation" }));
+
+    expect(onSelect).toHaveBeenCalledTimes(1);
+    const selected = onSelect.mock.calls[0]![0] as ConstellationPreset;
+    expect(selected.name).toBe("custom-10x11-550km");
+    expect(selected.mode).toBe("constellation");
+    const parsed = JSON.parse(selected.constellation) as Record<string, unknown>;
+    expect(parsed).toHaveProperty("constellation");
+    expect(parsed).not.toHaveProperty("mode");
+    expect(parsed).not.toHaveProperty("orbit");
+    expect(parsed).not.toHaveProperty("satellite_type");
+    const constellation = parsed.constellation as Record<string, unknown>;
+    expect(constellation.id).toBe("custom-10x11-550km");
+    expect(constellation.node).toBe("nodalarc:nodes/space/starlink-v2-mesh.yaml");
+    expect(constellation.slots_per_plane).toBe(11);
+    expect(constellation.planes).toEqual({ count: 10, raan_spacing_deg: 36 });
+    expect(constellation.phasing).toEqual({
+      mode: "walker_delta",
+      phase_offset_deg: 3.273,
+    });
+    expect(constellation.orbit).toHaveProperty("orbit");
+  });
+
+  it("can author the 576-node Starlink mesh template", () => {
+    const onSelect = vi.fn();
+    render(
+      <ConstellationPanel
+        presets={[preset("parametric-shell", "parametric")]}
+        selected={null}
+        onSelect={onSelect}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /^Custom/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Starlink \(576-node mesh\)/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Use Custom Constellation" }));
+
+    expect(onSelect).toHaveBeenCalledTimes(1);
+    const selected = onSelect.mock.calls[0]![0] as ConstellationPreset;
+    expect(selected.name).toBe("custom-48x12-550km");
+    expect(selected.satellite_count).toBe(576);
+    const parsed = JSON.parse(selected.constellation) as Record<string, unknown>;
+    const constellation = parsed.constellation as Record<string, unknown>;
+    expect(constellation.planes).toEqual({ count: 48, raan_spacing_deg: 7.5 });
+    expect(constellation.slots_per_plane).toBe(12);
+    expect(constellation.phasing).toEqual({
+      mode: "walker_delta",
+      phase_offset_deg: 0.625,
+    });
+  });
 });

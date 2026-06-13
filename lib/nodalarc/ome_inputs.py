@@ -375,14 +375,13 @@ def _neighbors_from_resolved(
     resolved: ResolvedSession,
 ) -> frozenset[tuple[str, NeighborAssignment]]:
     assignments: list[tuple[str, NeighborAssignment]] = []
+    nodes_by_id = {node.node_id: node for node in resolved.nodes}
     for candidate in resolved.link_candidates:
         if candidate.kind == "access":
             continue
-        link_type = (
-            "intra_plane_isl"
-            if candidate.endpoint_segments[0] == candidate.endpoint_segments[1]
-            else "cross_plane_isl"
-        )
+        left = nodes_by_id[candidate.node_a]
+        right = nodes_by_id[candidate.node_b]
+        link_type = _isl_link_type(left, right)
         assignments.append(
             (
                 candidate.node_a,
@@ -408,6 +407,19 @@ def _neighbors_from_resolved(
             )
         )
     return frozenset(assignments)
+
+
+def _isl_link_type(left: ResolvedNode, right: ResolvedNode) -> str:
+    if left.kind == "satellite" and right.kind == "satellite":
+        if (
+            left.segment_id == right.segment_id
+            and left.plane is not None
+            and right.plane is not None
+            and left.plane == right.plane
+        ):
+            return "intra_plane_isl"
+        return "cross_plane_isl"
+    return "cross_plane_isl"
 
 
 def _rule_map_from_resolved(resolved: ResolvedSession) -> dict[tuple[str, str], LinkRuleMetadata]:

@@ -116,6 +116,36 @@ fi
 kubectl get nodes --no-headers 2>/dev/null | awk '{printf "    %s: %s  (%s, %s)\n", $1, $2, $4, $5}'
 echo ""
 
+# --- Node Utilization ---
+echo "Node Utilization:"
+NODE_TOP="$(kubectl top nodes --no-headers 2>/dev/null || true)"
+if [ -z "$NODE_TOP" ]; then
+    echo "  unavailable (metrics-server is not reporting node metrics)"
+else
+    declare -A RUNNING_PODS_BY_NODE=()
+    while read -r count node_name; do
+        [ -n "${node_name:-}" ] || continue
+        RUNNING_PODS_BY_NODE["$node_name"]="$count"
+    done < <(
+        kubectl get pods -A \
+            --field-selector=status.phase=Running \
+            -o custom-columns=NODE:.spec.nodeName \
+            --no-headers 2>/dev/null | sort | uniq -c || true
+    )
+
+    printf "  %-8s %-13s %-15s %s\n" "Node" "CPU" "Memory" "Running pods"
+    while read -r node_name cpu_cores cpu_pct memory_bytes memory_pct; do
+        [ -n "${node_name:-}" ] || continue
+        pods="${RUNNING_PODS_BY_NODE[$node_name]:-0}"
+        printf "  %-8s %-13s %-15s %s\n" \
+            "$node_name" \
+            "${cpu_cores}/${cpu_pct}" \
+            "${memory_bytes}/${memory_pct}" \
+            "$pods"
+    done <<< "$NODE_TOP"
+fi
+echo ""
+
 # --- Platform ---
 if ! kubectl get namespace "$NAMESPACE" >/dev/null 2>&1; then
     echo "Platform: NOT INSTALLED"

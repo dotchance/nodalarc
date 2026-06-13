@@ -15,8 +15,12 @@ in the wizard got a Python traceback instead of results.
 from __future__ import annotations
 
 import pytest
+from nodalarc.models.addressing import topology_summary
 from nodalarc.models.coverage import CoveragePreviewResult
-from ome.coverage_preview import compute_coverage_preview
+from nodalarc.ome_inputs import build_ome_inputs_from_resolved
+from nodalarc.resolve_session import resolve_session_with_assets
+from nodalarc.session_generator import generated_isl_topology
+from ome.coverage_preview import _preview_segment_session, compute_coverage_preview
 
 
 @pytest.fixture(scope="module")
@@ -162,3 +166,52 @@ def test_preview_composes_chosen_satellite_primitive():
         ground_stations_source="nodalarc:site-sets/earth/leo/earth-leo-starlink-pop-sites.yaml",
     )
     assert result.orbital_period_s > 0
+
+
+def test_preview_uses_historical_starlink_576_cross_plane_mesh() -> None:
+    custom_constellation = {
+        "constellation": {
+            "id": "custom-48x12-550km",
+            "display_name": "Custom 48x12 550 km shell",
+            "node": "nodalarc:nodes/space/starlink-v2-mesh.yaml",
+            "orbit": {
+                "orbit": {
+                    "id": "custom-48x12-550km-orbit-550km-53deg",
+                    "central_body": "nodalarc:bodies/earth.yaml",
+                    "epoch": "2026-06-08T00:00:00Z",
+                    "shape": {"altitude_km": 550},
+                    "orientation": {
+                        "inclination_deg": 53,
+                        "raan_deg": 0,
+                        "argument_of_perigee_deg": 0,
+                    },
+                    "phase": {"mean_anomaly_deg": 0},
+                    "propagator": "j2_mean_elements",
+                    "reference": "user-authored",
+                }
+            },
+            "planes": {"count": 48, "raan_spacing_deg": 7.5},
+            "slots_per_plane": 12,
+            "phasing": {"mode": "walker_delta", "phase_offset_deg": 0.625},
+            "node_tags": [{"tag": "all"}],
+            "reference": "user-authored",
+        }
+    }
+
+    topology = generated_isl_topology(custom_constellation)
+    assert topology is not None
+    assert topology["mode"] == "explicit_pairs"
+    assert len(topology["pairs"]) == 1152
+
+    session = _preview_segment_session(
+        constellation_source=custom_constellation,
+        ground_stations_source="nodalarc:site-sets/earth/leo/earth-leo-starlink-pop-sites.yaml",
+        isl_topology=topology,
+    )
+    resolved = resolve_session_with_assets(session).resolved
+    runtime = build_ome_inputs_from_resolved(resolved)
+    summary = topology_summary(runtime.neighbors)
+
+    assert summary["has_cross_plane"] is True
+    assert summary["max_cross_per_sat"] == 2
+    assert summary["total_unique_pairs"] == 1152

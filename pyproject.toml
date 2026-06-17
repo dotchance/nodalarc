@@ -19,7 +19,7 @@ runtime = [
 ]
 dev = [
     { include-group = "runtime" },
-    "grpcio-tools>=1.80.0",
+    "grpcio-tools>=1.81.1",
     "pytest",
     "pytest-cov",
     "pytest-timeout>=2.4.0",

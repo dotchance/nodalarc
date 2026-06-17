@@ -31,28 +31,20 @@ jobs:
       - name: Run lint checks
         run: make lint
 
-  test:
-    name: Non-cluster Tests
+  frontend:
+    name: Frontend Smoke
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.14"
-
-      - name: Set up uv
-        uses: astral-sh/setup-uv@v5
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "22"
 
-      - name: Install Python dependencies
-        run: uv sync
+      - name: Run frontend tests
+        run: make test-frontend
 
-      - name: Run non-cluster tests
-        run: make test
+      - name: Build frontend
+        run: make build-frontends

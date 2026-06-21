@@ -1475,7 +1475,8 @@ async def request_operator_repair(body: dict) -> dict:
             status_code=504, content={"error": "Scheduler repair request timed out"}
         )
     except Exception as exc:
-        return JSONResponse(status_code=500, content={"error": str(exc)})
+        log.warning("Scheduler repair request failed for %s: %s", gs_id, exc, exc_info=True)
+        return JSONResponse(status_code=500, content={"error": "Scheduler repair request failed"})
 
 
 @app.get("/api/v1/ops/events", dependencies=[Depends(_require_api_key)])
@@ -1576,6 +1577,19 @@ def _restore_state_from_db(db_path: str) -> bool:
     except Exception as exc:
         log.warning(f"Failed to restore state from DB: {exc}")
         return False
+
+
+def _public_no_active_session_detail(status: str) -> str:
+    """Return public lifecycle text without echoing internal failure details."""
+    if status == "switching":
+        return "Session switch in progress"
+    if status == "wiring":
+        return "Session wiring in progress"
+    if status == "error":
+        return "Session is not active; check operational events or server logs"
+    if status == "ready":
+        return "Session state is not available yet"
+    return ""
 
 
 async def _ws_broadcaster() -> None:
@@ -1853,12 +1867,13 @@ def get_state() -> dict | JSONResponse:
     """Current state snapshot."""
     snapshot = _build_snapshot()
     if snapshot is None:
+        session_status = _session_manager.status if _session_manager else "idle"
         return JSONResponse(
             status_code=503,
             content={
                 "error": "No active session",
-                "session_status": _session_manager.status if _session_manager else "idle",
-                "session_status_detail": _session_manager.status_detail if _session_manager else "",
+                "session_status": session_status,
+                "session_status_detail": _public_no_active_session_detail(session_status),
             },
         )
     return snapshot

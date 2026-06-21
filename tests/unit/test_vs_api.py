@@ -72,6 +72,47 @@ class TestOpsEventVisibility:
         assert visible == events[2:]
 
 
+class TestOperatorRepairEndpoint:
+    def test_repair_failure_does_not_expose_exception_text(self, monkeypatch):
+        import vs_api.main as m
+        from fastapi.testclient import TestClient
+
+        class FakeLock:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        class FakeContext:
+            session_id = "run-test-0001"
+            state_lock = FakeLock()
+            actuation_latest_by_gs = {}
+
+        class FakeNats:
+            async def request(self, *_args, **_kwargs):
+                raise RuntimeError("backend secret token=abc123 path=/var/run/secrets/key")
+
+        monkeypatch.setattr(m, "_API_KEY", "")
+        monkeypatch.setattr(m, "_active_context", FakeContext())
+        monkeypatch.setattr(m, "_nats_connection", FakeNats())
+
+        response = TestClient(m.app).post(
+            "/api/v1/ops/repair",
+            json={
+                "gs_id": "gs-denver",
+                "reason": "operator_requested",
+                "scheduler_instance_id": "scheduler-a",
+                "wiring_generation": "7",
+            },
+        )
+
+        assert response.status_code == 500
+        assert response.json() == {"error": "Scheduler repair request failed"}
+        assert "abc123" not in response.text
+        assert "/var/run/secrets" not in response.text
+
+
 class TestLinkTypeDerivation:
     def test_generic_isl_does_not_parse_node_ids_for_intra_cross_guess(self):
         assert _derive_link_type("isl") == "isl"
@@ -387,7 +428,7 @@ class TestStateSnapshot:
 
         class FakeSessionManager:
             status = "switching"
-            status_detail = "Waiting for session to deploy"
+            status_detail = "Unhandled: leaked /var/run/secrets/nodal token=abc123"
 
         monkeypatch.setattr(m, "_API_KEY", "")
         monkeypatch.setattr(m, "_active_context", None)
@@ -399,8 +440,10 @@ class TestStateSnapshot:
         assert response.json() == {
             "error": "No active session",
             "session_status": "switching",
-            "session_status_detail": "Waiting for session to deploy",
+            "session_status_detail": "Session switch in progress",
         }
+        assert "abc123" not in response.text
+        assert "/var/run/secrets" not in response.text
 
     def test_link_up_adds_to_state(self):
         ctx = SessionContext.__new__(SessionContext)

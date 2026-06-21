@@ -89,21 +89,23 @@ def test_check_ping_allows_skip_only_for_satellite_only_topology(monkeypatch) ->
     assert result["active_link_count"] == 0
 
 
-def test_quality_workflow_runs_non_cluster_tests_as_separate_signal() -> None:
+def test_quality_workflow_runs_lint_and_frontend_smoke_as_separate_signals() -> None:
     workflow = yaml.safe_load(Path(".github/workflows/quality.yml").read_text())
     triggers = workflow.get("on", workflow.get(True))
     jobs = workflow["jobs"]
 
     assert "pull_request" in triggers
     assert jobs["lint"]["runs-on"] == "ubuntu-latest"
-    assert jobs["test"]["runs-on"] == "ubuntu-latest"
+    assert jobs["frontend"]["runs-on"] == "ubuntu-latest"
 
     lint_steps = jobs["lint"]["steps"]
-    test_steps = jobs["test"]["steps"]
+    frontend_steps = jobs["frontend"]["steps"]
     assert any(step.get("run") == "make lint" for step in lint_steps)
     assert not any(step.get("run") == "make test" for step in lint_steps)
-    assert any(step.get("uses") == "actions/setup-node@v4" for step in test_steps)
-    assert any(step.get("run") == "make test" for step in test_steps)
+    assert any(step.get("uses") == "actions/setup-node@v4" for step in frontend_steps)
+    assert any(step.get("run") == "make test-frontend" for step in frontend_steps)
+    assert any(step.get("run") == "make build-frontends" for step in frontend_steps)
+    assert not any(step.get("run") == "make test" for step in frontend_steps)
 
 
 def test_matrix_result_classification_distinguishes_expected_failures() -> None:

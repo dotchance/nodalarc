@@ -27,6 +27,23 @@ from nodalarc.models.segment_session import SessionMeta
 from nodalarc.models.segments import OriginatedPrefixes
 
 
+class BuilderCatalogEntry(BaseModel):
+    """One catalog primitive as a library listing row.
+
+    ``error`` carries the validation failure verbatim when the file does not
+    satisfy its family's grammar — a broken entry is shown, never hidden.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    ref: str
+    family: str
+    id: str | None = None
+    display_name: str | None = None
+    notes: str | None = None
+    error: str | None = None
+
+
 class BuilderLinkEndpoint(BaseModel):
     """One resolved link-rule endpoint, flattened for builder display."""
 

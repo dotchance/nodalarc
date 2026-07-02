@@ -3080,6 +3080,10 @@ async def builder_resolve_world(body: dict) -> dict:
     - ``session``: a session file key from ``GET /api/v1/sessions`` — the same
       client contract session switch uses, validated against the session
       manager's scanned map (covers generated sessions outside the catalog).
+    - ``document``: an inline session document — the builder's client-side
+      workspace. Resolution failures for this form return the resolver's
+      message verbatim: the user is validating their OWN document, and the
+      typed error IS the product surface.
     """
     from functools import partial
 
@@ -3087,9 +3091,12 @@ async def builder_resolve_world(body: dict) -> dict:
 
     source = body.get("source")
     session_key = body.get("session")
-    if (source is None) == (session_key is None):
-        return _error_response(400, "provide exactly one of source or session")
+    document = body.get("document")
+    provided = [value for value in (source, session_key, document) if value is not None]
+    if len(provided) != 1:
+        return _error_response(400, "provide exactly one of source, session, or document")
 
+    document_form = document is not None
     if session_key is not None:
         if not isinstance(session_key, str) or not session_key:
             return _error_response(400, "session must be a session file key")
@@ -3103,6 +3110,10 @@ async def builder_resolve_world(body: dict) -> dict:
         world_source = await asyncio.to_thread(
             lambda: yaml.safe_load(session_path.read_text(encoding="utf-8"))
         )
+    elif document_form:
+        if not isinstance(document, dict):
+            return _error_response(400, "document must be a session mapping")
+        world_source = document
     else:
         if not isinstance(source, str) or not source:
             return _error_response(400, "source catalog reference is required")
@@ -3119,12 +3130,44 @@ async def builder_resolve_world(body: dict) -> dict:
     except FileNotFoundError as exc:
         return _catalog_error(exc)
     except ValueError as exc:
+        if document_form:
+            # The caller's own document failed resolution — the typed message
+            # is the validation surface, not an internal detail.
+            return JSONResponse(status_code=422, content={"error": str(exc)})
         log.info("Invalid builder world request: %s", exc)
         return _error_response(400, "Builder world request is invalid")
     except Exception as exc:
         log.error("Builder world internal error: %s", exc, exc_info=True)
         return _error_response(500, "Builder world resolution failed")
     return world.model_dump(mode="json")
+
+
+@app.get("/api/v1/builder/catalog", dependencies=[Depends(_require_api_key)])
+def builder_catalog(family: str) -> list[dict]:
+    """List one catalog family's primitives for the builder's library pickers."""
+    from nodalarc.catalog_browse import browse_catalog
+
+    try:
+        entries = browse_catalog(family, roots=_CATALOG_ROOTS)
+    except ValueError as exc:
+        return _error_response(400, str(exc))
+    return [entry.model_dump(mode="json") for entry in entries]
+
+
+@app.get("/api/v1/builder/catalog/object", dependencies=[Depends(_require_api_key)])
+def builder_catalog_object(ref: str) -> dict:
+    """Read one catalog document (authoring-wrapper form; the grammar is the schema)."""
+    from nodalarc.catalog_browse import read_catalog_object
+
+    try:
+        wrapper, document = read_catalog_object(ref, roots=_CATALOG_ROOTS)
+    except CatalogPathError as exc:
+        return _catalog_error(exc)
+    except FileNotFoundError as exc:
+        return _catalog_error(exc)
+    except ValueError as exc:
+        return _error_response(422, str(exc))
+    return {"ref": ref, "family_wrapper": wrapper, "document": document}
 
 
 @app.post("/api/v1/session/deploy", dependencies=[Depends(_require_api_key)])

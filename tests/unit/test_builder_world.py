@@ -154,7 +154,7 @@ def test_endpoint_requires_exactly_one_input_form():
     for body in ({}, {"source": _WALKER_REF, "session": "x"}):
         response = client.post("/api/v1/builder/resolve-world", json=body)
         assert response.status_code == 400
-        assert response.json()["error"] == "provide exactly one of source or session"
+        assert response.json()["error"] == "provide exactly one of source, session, or document"
 
 
 class _FakeSessionManager:
@@ -205,6 +205,52 @@ def test_endpoint_rejects_bad_reference():
         json={"source": "nodalarc:../secrets.yaml"},
     )
     assert response.status_code == 400
+
+
+def test_endpoint_resolves_inline_document():
+    raw = yaml.safe_load(_WALKER_PATH.read_text(encoding="utf-8"))
+    response = client.post("/api/v1/builder/resolve-world", json={"document": raw})
+    assert response.status_code == 200
+    assert len(response.json()["nodes"]) == 181
+
+
+def test_endpoint_document_errors_return_resolver_message():
+    response = client.post(
+        "/api/v1/builder/resolve-world",
+        json={"document": {"session": {"name": "x"}, "segments": []}},
+    )
+    assert response.status_code == 422
+    # The resolver's own message comes back verbatim - it is the user's
+    # validation surface, not a hidden internal detail.
+    assert response.json()["error"]
+
+
+def test_catalog_browse_lists_validated_primitives():
+    response = client.get("/api/v1/builder/catalog", params={"family": "nodes"})
+    assert response.status_code == 200
+    entries = response.json()
+    assert entries
+    starlink = next(e for e in entries if e["id"] == "starlink-v2-mesh")
+    assert starlink["ref"] == "nodalarc:nodes/space/starlink-v2-mesh.yaml"
+    assert starlink["error"] is None
+    assert all(e["family"] == "nodes" for e in entries)
+
+
+def test_catalog_browse_rejects_unknown_family():
+    response = client.get("/api/v1/builder/catalog", params={"family": "../secrets"})
+    assert response.status_code == 400
+
+
+def test_catalog_object_read_round_trips_grammar_document():
+    response = client.get(
+        "/api/v1/builder/catalog/object",
+        params={"ref": "nodalarc:orbits/earth/leo/earth-leo-starlink.yaml"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["family_wrapper"] == "orbit"
+    assert "orbit" in payload["document"]
+    assert payload["document"]["orbit"]["id"]
 
 
 def test_endpoint_returns_world():

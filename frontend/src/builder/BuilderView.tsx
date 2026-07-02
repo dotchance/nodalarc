@@ -28,6 +28,8 @@ import type {
 import { Icon } from "../ui/icons/Icon";
 import { BuilderInspector } from "./BuilderInspector";
 import { builderSnapshotFromWorld } from "./builderSnapshot";
+import { CandidateLines } from "./CandidateLines";
+import { computeCandidates } from "./candidates";
 import { useBuilderWorld } from "./useBuilderWorld";
 import type { BuilderWorld } from "./builderTypes";
 
@@ -146,6 +148,27 @@ export function BuilderView({
     }
   }, [world]);
   const regimeById = useMemo(() => buildRegimeIndex(world?.ephemeris ?? null), [world]);
+
+  // Rule-scoped LOS candidates at the epoch: permission + geometry, decided
+  // in km space by the shared preview math. Toolbar link toggles gate the
+  // overlay per kind, exactly as they gate the live view's link layers.
+  const candidates = useMemo(() => (world ? computeCandidates(world) : null), [world]);
+  const visiblePairs = useMemo(
+    () =>
+      candidates?.pairs.filter((pair) =>
+        pair.kind === "access" ? showGroundLinks : showIslLinks,
+      ) ?? [],
+    [candidates, showGroundLinks, showIslLinks],
+  );
+  const darkRules = candidates
+    ? candidates.previews.filter((p) => p.enabled && p.candidates === 0).length
+    : 0;
+  const ruleNotes = candidates
+    ? candidates.previews
+        .filter((p) => p.note)
+        .map((p) => `${p.rule_id}: ${p.note}`)
+        .join("\n")
+    : "";
 
   return (
     <div className="builder-shell" data-testid="builder-shell">
@@ -288,6 +311,7 @@ export function BuilderView({
               onSelect={setSelection}
               actionsRef={actionsRef}
               liveExplain={false}
+              worldLayers={<CandidateLines pairs={visiblePairs} />}
             />
           </VisualizationErrorBoundary>
         ) : (
@@ -319,9 +343,16 @@ export function BuilderView({
             {snapshotError}
           </span>
         ) : world ? (
-          <span className="builder-status-item">
+          <span className="builder-status-item" title={ruleNotes || undefined}>
             ✓ resolves: {world.nodes.length} nodes ({satelliteCount} satellites ·{" "}
             {groundCount} ground) · {segments.length} segments
+            {candidates && world.link_rules.length > 0 && (
+              <>
+                {" "}
+                · {world.link_rules.length} rules → {candidates.pairs.length} LOS candidates
+                {darkRules > 0 && ` (${darkRules} dark)`}
+              </>
+            )}
           </span>
         ) : (
           <span className="builder-status-item">builder — read-only shell</span>

@@ -16,13 +16,48 @@ from pydantic import BaseModel, ConfigDict
 
 from nodalarc.models.events import SessionEphemeris
 from nodalarc.models.resolved_session import (
+    LinkKind,
     NodeKind,
     ResolvedNodeInterfaces,
     ResolvedSurfacePosition,
     ResolvedTerminalBlock,
+    TerminalRole,
 )
 from nodalarc.models.segment_session import SessionMeta
 from nodalarc.models.segments import OriginatedPrefixes
+
+
+class BuilderLinkEndpoint(BaseModel):
+    """One resolved link-rule endpoint, flattened for builder display."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    segment_id: str
+    terminal_role: TerminalRole
+    terminal_medium: str | None = None
+    min_elevation_deg: float | None = None
+    node_ids: tuple[str, ...]
+
+
+class BuilderLinkRule(BaseModel):
+    """Display projection of one ``ResolvedLinkRule``.
+
+    The resolved rule's topology is a discriminated union; the builder needs
+    the flat facts (mode, n, explicit pairs, range cap) to preview candidate
+    geometry. This is a projection for display — candidate truth at runtime
+    stays with OME.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    rule_id: str
+    kind: LinkKind
+    enabled: bool
+    endpoints: tuple[BuilderLinkEndpoint, BuilderLinkEndpoint]
+    topology_mode: str
+    topology_n: int | None = None
+    explicit_pairs: tuple[tuple[str, str], ...] = ()
+    max_range_km: float | None = None
 
 
 class BuilderWorldNode(BaseModel):
@@ -65,3 +100,4 @@ class BuilderWorld(BaseModel):
     epoch_unix: float
     ephemeris: SessionEphemeris
     nodes: tuple[BuilderWorldNode, ...]
+    link_rules: tuple[BuilderLinkRule, ...] = ()

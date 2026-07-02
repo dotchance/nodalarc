@@ -88,6 +88,25 @@ def test_nodes_carry_hardware_and_network_facts(walker_world):
             assert node.interfaces.lo0.ipv4 or node.interfaces.lo0.ipv6
 
 
+def test_link_rules_project_resolved_endpoint_membership(walker_world):
+    """Rules ride the wire as flat display facts; endpoint node ids are the
+    resolver's runtime ids. When a rule declares explicit pairs, the pair ids
+    must be resolvable against the world (pins the G1-class identity question
+    empirically: whatever id space explicit pairs use, the builder must be
+    able to join them to nodes)."""
+    assert walker_world.link_rules, "walker session has link rules"
+    world_ids = {node.node_id for node in walker_world.nodes}
+    for rule in walker_world.link_rules:
+        assert rule.topology_mode
+        for endpoint in rule.endpoints:
+            assert endpoint.node_ids
+            assert set(endpoint.node_ids) <= world_ids
+        if rule.topology_mode == "explicit_pairs":
+            for a, b in rule.explicit_pairs:
+                assert a in world_ids, f"explicit pair id {a!r} is not a runtime node id"
+                assert b in world_ids, f"explicit pair id {b!r} is not a runtime node id"
+
+
 def test_ground_node_without_space_links_stays_in_world(walker_world):
     """Denver gw2 is a MEO gateway no LEO-session link rule selects: OME's
     ephemeris omits it, but it is a resolved node and must stay in the world

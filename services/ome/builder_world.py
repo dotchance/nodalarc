@@ -15,7 +15,13 @@ from typing import Any
 import yaml
 from nodalarc.catalog_paths import CatalogRoots, resolve_catalog_reference
 from nodalarc.ephemeris_runtime import session_epoch_unix
-from nodalarc.models.builder_world import BuilderWorld, BuilderWorldNode
+from nodalarc.models.builder_world import (
+    BuilderLinkEndpoint,
+    BuilderLinkRule,
+    BuilderWorld,
+    BuilderWorldNode,
+)
+from nodalarc.models.resolved_session import ResolvedLinkRule
 from nodalarc.ome_inputs import build_ome_inputs_from_resolved
 from nodalarc.resolve_session import (
     SourceContext,
@@ -24,6 +30,59 @@ from nodalarc.resolve_session import (
 )
 
 from ome.event_stream import build_session_ephemeris, build_step_context
+
+
+def _builder_link_rule(
+    rule: ResolvedLinkRule,
+    local_to_runtime: dict[tuple[str, str], str],
+) -> BuilderLinkRule:
+    """Flatten one resolved rule's topology union into display facts.
+
+    Explicit pairs survive resolution in the AUTHORED segment-local id space
+    (endpoint memberships are runtime ids). The wire contract carries runtime
+    ids everywhere, so pairs are joined here through the resolver's own
+    (segment, local id) facts — ambiguity is fatal, never guessed.
+    """
+    topology = rule.topology
+    explicit_pairs: tuple[tuple[str, str], ...] = ()
+    if topology.mode == "explicit_pairs":
+        rule_segments = sorted({endpoint.segment_id for endpoint in rule.endpoints})
+
+        def _runtime_id(local: str) -> str:
+            matches = {
+                local_to_runtime[(segment, local)]
+                for segment in rule_segments
+                if (segment, local) in local_to_runtime
+            }
+            if len(matches) != 1:
+                raise ValueError(
+                    f"link rule {rule.rule_id!r}: explicit pair id {local!r} resolves to "
+                    f"{len(matches)} nodes across segments {rule_segments}"
+                )
+            return next(iter(matches))
+
+        explicit_pairs = tuple(
+            (_runtime_id(pair.a), _runtime_id(pair.b)) for pair in topology.pairs
+        )
+    return BuilderLinkRule(
+        rule_id=rule.rule_id,
+        kind=rule.kind,
+        enabled=rule.enabled,
+        endpoints=tuple(
+            BuilderLinkEndpoint(
+                segment_id=endpoint.segment_id,
+                terminal_role=endpoint.terminal_role,
+                terminal_medium=endpoint.terminal_medium,
+                min_elevation_deg=endpoint.min_elevation_deg,
+                node_ids=endpoint.node_ids,
+            )
+            for endpoint in rule.endpoints
+        ),
+        topology_mode=topology.mode,
+        topology_n=getattr(topology, "n", None),
+        explicit_pairs=explicit_pairs,
+        max_range_km=rule.constraints.max_range_km if rule.constraints else None,
+    )
 
 
 def build_builder_world(
@@ -72,6 +131,9 @@ def build_builder_world(
     )
     ephemeris = build_session_ephemeris(ctx, epoch_unix, 0)
 
+    local_to_runtime = {
+        (node.segment_id, node.local_node_id): node.node_id for node in resolved.nodes
+    }
     nodes = tuple(
         BuilderWorldNode(
             node_id=node.node_id,
@@ -95,4 +157,7 @@ def build_builder_world(
         epoch_unix=epoch_unix,
         ephemeris=ephemeris,
         nodes=nodes,
+        link_rules=tuple(
+            _builder_link_rule(rule, local_to_runtime) for rule in resolved.link_rules
+        ),
     )

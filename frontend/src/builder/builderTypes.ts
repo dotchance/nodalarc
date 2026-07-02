@@ -77,12 +77,34 @@ export interface BuilderWorldNode {
   originated_prefixes: OriginatedPrefixes | null;
 }
 
+/** Twin of nodalarc.models.builder_world.BuilderLinkEndpoint. */
+export interface BuilderLinkEndpoint {
+  segment_id: string;
+  terminal_role: string;
+  terminal_medium: string | null;
+  min_elevation_deg: number | null;
+  node_ids: string[];
+}
+
+/** Twin of nodalarc.models.builder_world.BuilderLinkRule. */
+export interface BuilderLinkRule {
+  rule_id: string;
+  kind: string;
+  enabled: boolean;
+  endpoints: [BuilderLinkEndpoint, BuilderLinkEndpoint];
+  topology_mode: string;
+  topology_n: number | null;
+  explicit_pairs: [string, string][];
+  max_range_km: number | null;
+}
+
 /** Twin of nodalarc.models.builder_world.BuilderWorld. */
 export interface BuilderWorld {
   session: BuilderSessionMeta;
   epoch_unix: number;
   ephemeris: SessionEphemeris;
   nodes: BuilderWorldNode[];
+  link_rules: BuilderLinkRule[];
 }
 
 /** One row of GET /api/v1/sessions (session_manager.scan_sessions + active flag). */

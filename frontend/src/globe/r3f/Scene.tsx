@@ -86,6 +86,10 @@ interface SceneProps {
    *  that is not the running session (the session builder) disable it so the
    *  scene never explains one world with another world's decisions. */
   liveExplain?: boolean;
+  /** Extra world-frame layers composed by the hosting surface (domain
+   *  overlays per the viewer layering — e.g. the builder's candidate lines).
+   *  Rendered at scene root alongside links/flows. */
+  worldLayers?: React.ReactNode;
 }
 
 export function Scene({
@@ -106,6 +110,7 @@ export function Scene({
   onSelect,
   actionsRef,
   liveExplain = true,
+  worldLayers,
 }: SceneProps) {
   // The Earth body group, used by FrameDriver / AllOrbits / OrbitPins to drive its view-frame
   // rotation. <Body> populates this ref AND self-registers its frame in the position registry
@@ -383,6 +388,7 @@ export function Scene({
           resetKey={constellation ?? "none"}
         />
         <FlowPaths tracedPaths={snapshot?.traced_paths ?? []} />
+        {worldLayers}
         {kmPerRenderUnit !== null && bodies.map((body) => {
           const bodyNodes = nodes.filter((node) => node.reference_body === body.id);
           return (

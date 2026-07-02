@@ -73,6 +73,7 @@ const WORLD: BuilderWorld = {
   session: { name: "test-session", display_name: null, description: null },
   epoch_unix: EPOCH_UNIX,
   ephemeris: EPHEMERIS,
+  link_rules: [],
   nodes: [
     {
       node_id: "leo-sat-p00s00",

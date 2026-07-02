@@ -33,6 +33,7 @@ import { computeCandidates } from "./candidates";
 import { ConstellationEditor } from "./ConstellationEditor";
 import { useBuilderCatalog, useBuilderWorld } from "./useBuilderWorld";
 import { useWorkspace } from "./useWorkspace";
+import { toSessionDocument } from "./workspace";
 import type { BuilderWorld } from "./builderTypes";
 
 interface BuilderViewProps {
@@ -123,6 +124,7 @@ export function BuilderView({
     error,
     loadSession,
     resolveDocument,
+    saveSession,
     clear,
   } = useBuilderWorld();
   const [selectedFile, setSelectedFile] = useState("");
@@ -143,6 +145,12 @@ export function BuilderView({
   const nodeCatalog = useBuilderCatalog("nodes");
   const [editingSegment, setEditingSegment] = useState<string | null>(null);
   const [showYaml, setShowYaml] = useState(false);
+  const [saveState, setSaveState] = useState<
+    | { kind: "idle" }
+    | { kind: "saving" }
+    | { kind: "saved"; name: string }
+    | { kind: "failed"; message: string }
+  >({ kind: "idle" });
   // Default node model for a fresh constellation: prefer the catalog's space
   // nodes (directory layout is authoring convention, so this is a display
   // heuristic only — the picker offers every node either way).
@@ -275,6 +283,26 @@ export function BuilderView({
               onClick={() => defaultNodeRef && addConstellation(defaultNodeRef)}
             >
               + Add constellation
+            </Button>
+            <Button
+              variant="primary"
+              disabled={!world || !!error || loading || saveState.kind === "saving"}
+              title="Resolve-checked server-side, written exclusively, listed with the sessions"
+              onClick={async () => {
+                if (!workspace) return;
+                setSaveState({ kind: "saving" });
+                try {
+                  const result = await saveSession(toSessionDocument(workspace));
+                  setSaveState({ kind: "saved", name: result.name });
+                } catch (e) {
+                  setSaveState({
+                    kind: "failed",
+                    message: e instanceof Error ? e.message : String(e),
+                  });
+                }
+              }}
+            >
+              {saveState.kind === "saving" ? "Saving…" : "Save session"}
             </Button>
           </div>
         )}
@@ -480,6 +508,14 @@ export function BuilderView({
         ) : (
           <span className="builder-status-item">
             {workspace ? "draft — not resolved yet" : "no session loaded"}
+          </span>
+        )}
+        {saveState.kind === "saved" && (
+          <span className="builder-status-item">saved as {saveState.name}</span>
+        )}
+        {saveState.kind === "failed" && (
+          <span className="builder-status-item builder-status-item--error">
+            save failed: {saveState.message}
           </span>
         )}
         {documentYaml && (

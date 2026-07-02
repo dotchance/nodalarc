@@ -266,3 +266,41 @@ def test_endpoint_returns_world():
     assert payload["session"]["name"]
     assert payload["ephemeris"]["epoch_id"] == 0
     assert len(payload["nodes"]) >= len(payload["ephemeris"]["nodes"])
+
+
+def test_save_session_resolves_then_writes_canonical_yaml(monkeypatch, tmp_path):
+    import vs_api.main as main
+
+    monkeypatch.setattr(main, "_generated_sessions_dir", lambda: tmp_path)
+    monkeypatch.setattr(main, "_session_manager", None)
+    raw = yaml.safe_load(_WALKER_PATH.read_text(encoding="utf-8"))
+    response = client.post("/api/v1/builder/save-session", json={"document": raw})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["name"] == "earth-leo-walker"
+    assert payload["nodes"] == 181
+    saved = list(tmp_path.glob("_builder-earth-leo-walker-*.yaml"))
+    assert len(saved) == 1
+    # The saved file IS the canonical serialization and still resolves.
+    saved_raw = yaml.safe_load(saved[0].read_text(encoding="utf-8"))
+    assert saved_raw == raw
+    assert len(resolve_session(saved_raw).nodes) == 181
+
+
+def test_save_session_rejects_unresolvable_document(monkeypatch, tmp_path):
+    import vs_api.main as main
+
+    monkeypatch.setattr(main, "_generated_sessions_dir", lambda: tmp_path)
+    monkeypatch.setattr(main, "_session_manager", None)
+    response = client.post(
+        "/api/v1/builder/save-session",
+        json={"document": {"session": {"name": "broken"}, "segments": []}},
+    )
+    assert response.status_code == 422
+    assert response.json()["error"]
+    assert list(tmp_path.glob("*.yaml")) == []
+
+
+def test_save_session_requires_mapping_document():
+    response = client.post("/api/v1/builder/save-session", json={"document": "nope"})
+    assert response.status_code == 400

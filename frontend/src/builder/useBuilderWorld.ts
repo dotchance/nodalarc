@@ -67,23 +67,20 @@ export function useBuilderWorld() {
   // overwrite a newer edit's result.
   const resolveSeq = useRef(0);
 
-  useEffect(() => {
-    let cancelled = false;
-    fetch(`${REST_URL}/api/v1/sessions`, { headers: authHeaders() })
-      .then(async (r) => {
-        if (!r.ok) throw new Error(await _errorMessage(r));
-        return r.json();
-      })
-      .then((data: BuilderSessionListEntry[]) => {
-        if (!cancelled) setSessions(data);
-      })
-      .catch((e: Error) => {
-        if (!cancelled) setSessionsError(e.message);
-      });
-    return () => {
-      cancelled = true;
-    };
+  const refreshSessions = useCallback(async () => {
+    try {
+      const response = await fetch(`${REST_URL}/api/v1/sessions`, { headers: authHeaders() });
+      if (!response.ok) throw new Error(await _errorMessage(response));
+      setSessions((await response.json()) as BuilderSessionListEntry[]);
+      setSessionsError(null);
+    } catch (e) {
+      setSessionsError(e instanceof Error ? e.message : String(e));
+    }
   }, []);
+
+  useEffect(() => {
+    void refreshSessions();
+  }, [refreshSessions]);
 
   const resolve = useCallback(
     async (input: { session?: string; document?: unknown }, fileLabel: string | null) => {
@@ -125,6 +122,24 @@ export function useBuilderWorld() {
     (document: unknown) => resolve({ document }, null),
     [resolve],
   );
+  /** Save the workspace document server-side. The server resolves first and
+   *  writes the canonical YAML exclusively; the result names the saved
+   *  session. Throws with the server's message on failure. */
+  const saveSession = useCallback(
+    async (document: unknown): Promise<{ name: string; file: string; nodes: number }> => {
+      const response = await fetch(`${REST_URL}/api/v1/builder/save-session`, {
+        method: "POST",
+        headers: authHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ document }),
+      });
+      if (!response.ok) throw new Error(await _errorMessage(response));
+      const result = await response.json();
+      await refreshSessions();
+      return result;
+    },
+    [refreshSessions],
+  );
+
   /** Drop the current world (e.g. starting a fresh workspace): a stale world
    *  must never render behind a draft that has not resolved yet. */
   const clear = useCallback(() => {
@@ -146,6 +161,7 @@ export function useBuilderWorld() {
     error,
     loadSession,
     resolveDocument,
+    saveSession,
     clear,
   };
 }

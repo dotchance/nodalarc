@@ -3142,6 +3142,66 @@ async def builder_resolve_world(body: dict) -> dict:
     return resolve_check.model_dump(mode="json")
 
 
+@app.post("/api/v1/builder/save-session", dependencies=[Depends(_require_api_key)])
+async def builder_save_session(body: dict) -> dict:
+    """Save a builder workspace document as a generated session file.
+
+    The document must RESOLVE first: a saved session that cannot resolve is a
+    false-state landmine, and work-in-progress persistence is the client-side
+    workspace's job. The file content is the resolve-check's canonical YAML —
+    one serializer for the pane, the wire, and the disk. Writes are exclusive
+    (collision-resistant stem, never overwrite); the saved file lands in the
+    generated-sessions scan root, so it is immediately listable and
+    deployable through the ordinary session paths.
+    """
+    from functools import partial
+
+    from ome.builder_world import build_builder_resolve_check
+
+    document = body.get("document")
+    if not isinstance(document, dict):
+        return _error_response(400, "document must be a session mapping")
+
+    loop = asyncio.get_event_loop()
+    try:
+        resolve_check = await loop.run_in_executor(
+            None,
+            partial(build_builder_resolve_check, document, catalog_roots=_CATALOG_ROOTS),
+        )
+    except CatalogPathError as exc:
+        return _catalog_error(exc)
+    except FileNotFoundError as exc:
+        return _catalog_error(exc)
+    except ValueError as exc:
+        return JSONResponse(status_code=422, content={"error": str(exc)})
+    except Exception as exc:
+        log.error("Builder save internal error: %s", exc, exc_info=True)
+        return _error_response(500, "Builder save failed")
+
+    name = resolve_check.world.session.name
+    try:
+        stem = generated_file_stem(name)
+        session_file = generated_file_path(_generated_sessions_dir(), f"_builder-{stem}.yaml")
+        await asyncio.to_thread(write_text_exclusive, session_file, resolve_check.document_yaml)
+    except CatalogPathError as exc:
+        return _catalog_error(exc)
+    except FileExistsError as exc:
+        return _catalog_error(exc)
+    if _session_manager is not None:
+        await asyncio.to_thread(_session_manager.rescan)
+    log.info(
+        "Builder saved session %r (%d nodes) to %s",
+        name,
+        len(resolve_check.world.nodes),
+        session_file,
+    )
+    return {
+        "name": name,
+        "file": str(session_file),
+        "nodes": len(resolve_check.world.nodes),
+    }
+
+
 @app.get("/api/v1/builder/catalog", dependencies=[Depends(_require_api_key)])
 def builder_catalog(family: str) -> list[dict]:
     """List one catalog family's primitives for the builder's library pickers."""

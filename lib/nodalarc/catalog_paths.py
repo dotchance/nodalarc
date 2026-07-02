@@ -20,15 +20,33 @@ _YAML_SUFFIXES = {".yaml", ".yml"}
 
 @dataclass(frozen=True)
 class CatalogRoots:
-    """Approved root for the NodalArc catalog."""
+    """Approved catalog roots.
+
+    ``root`` is the shipped ``nodalarc:`` catalog — immutable content baked
+    into every service image. ``user_root`` is the writable ``user:`` catalog
+    (the loader contract's second root): an AUTHORING store owned by the API
+    process. Deploy artifacts never depend on it — saved sessions flatten
+    ``user:`` references into inline objects (the same grammar), so runtime
+    services resolve everything against the shipped root alone.
+    """
 
     root: Path
     sessions: Path
+    user_root: Path | None = None
 
     @classmethod
-    def from_catalog_root(cls, catalog_root: str | Path = "catalog/nodalarc") -> CatalogRoots:
+    def from_catalog_root(
+        cls,
+        catalog_root: str | Path = "catalog/nodalarc",
+        *,
+        user_root: str | Path | None = None,
+    ) -> CatalogRoots:
         root = Path(catalog_root)
-        return cls(root=root, sessions=root / "sessions")
+        return cls(
+            root=root,
+            sessions=root / "sessions",
+            user_root=Path(user_root) if user_root is not None else None,
+        )
 
 
 def safe_display_stem(name: str) -> str:
@@ -99,26 +117,47 @@ def _validate_yaml_path_reference(path: Path, *, label: str) -> Path:
     return Path(*parts, f"{stem}{suffix}")
 
 
+def catalog_reference_scheme(source: str | Path) -> str | None:
+    """Return the catalog scheme of a reference token, if it has one."""
+    raw = str(source)
+    for scheme in ("nodalarc", "user"):
+        if raw.startswith(f"{scheme}:"):
+            return scheme
+    return None
+
+
 def resolve_catalog_reference(
     source: str | Path,
     roots: CatalogRoots,
     *,
     label: str = "catalog reference",
 ) -> Path:
-    """Resolve a ``nodalarc:<path>`` token under the catalog root."""
+    """Resolve a ``nodalarc:<path>`` or ``user:<path>`` token under its root.
+
+    Both schemes get identical path validation and containment; ``user:``
+    additionally requires a configured user root — surfaces without one
+    (runtime services) reject user references instead of guessing.
+    """
     raw = str(source)
-    if not raw.startswith("nodalarc:"):
-        raise CatalogPathError(f"{label} must be a nodalarc:<path> reference")
+    scheme = catalog_reference_scheme(raw)
+    if scheme is None:
+        raise CatalogPathError(f"{label} must be a nodalarc:<path> or user:<path> reference")
+    if scheme == "user":
+        if roots.user_root is None:
+            raise CatalogPathError(f"{label} uses the user catalog, which is not available here")
+        root = roots.user_root
+    else:
+        root = roots.root
     relative = raw.split(":", 1)[1]
     reference = _validate_yaml_path_reference(
         _reject_unsafe_path_source(relative, label=label), label=label
     )
-    root_resolved = roots.root.resolve(strict=True)
+    root_resolved = root.resolve(strict=True)
     resolved = (root_resolved / reference).resolve(strict=True)
     try:
         resolved.relative_to(root_resolved)
     except ValueError as exc:
-        raise CatalogPathError(f"{label} escapes approved catalog root: {roots.root}") from exc
+        raise CatalogPathError(f"{label} escapes approved catalog root: {root}") from exc
     return resolved
 
 

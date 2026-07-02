@@ -8,7 +8,7 @@
  *  a world that failed to resolve renders as its error, never as stale data.
  */
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useSyncExternalStore } from "react";
 import { REST_URL, authHeaders } from "../config";
 import type {
   BuilderCatalogEntry,
@@ -27,30 +27,74 @@ async function _errorMessage(response: Response): Promise<string> {
   return `request failed (${response.status})`;
 }
 
-/** One catalog family's primitives for the library pickers. */
+// --- Catalog store: ONE state per family, shared by every consumer. ---
+// Pickers, the library panel, and editors must all see the same list; a save
+// or delete anywhere refreshes everyone. Private per-hook copies were a
+// stale-picker bug class.
+
+interface CatalogFamilyState {
+  entries: BuilderCatalogEntry[];
+  error: string | null;
+}
+
+interface CatalogFamilyStore {
+  state: CatalogFamilyState;
+  listeners: Set<() => void>;
+  fetched: boolean;
+}
+
+const _catalogStores = new Map<string, CatalogFamilyStore>();
+
+function _catalogStore(family: string): CatalogFamilyStore {
+  let store = _catalogStores.get(family);
+  if (!store) {
+    store = { state: { entries: [], error: null }, listeners: new Set(), fetched: false };
+    _catalogStores.set(family, store);
+  }
+  return store;
+}
+
+/** Re-fetch one family and notify every consumer. Mutation helpers call this
+ *  themselves — callers cannot forget. */
+export async function refreshCatalogFamily(family: string): Promise<void> {
+  const store = _catalogStore(family);
+  try {
+    const response = await fetch(
+      `${REST_URL}/api/v1/builder/catalog?family=${encodeURIComponent(family)}`,
+      { headers: authHeaders() },
+    );
+    if (!response.ok) throw new Error(await _errorMessage(response));
+    store.state = { entries: (await response.json()) as BuilderCatalogEntry[], error: null };
+  } catch (e) {
+    store.state = {
+      entries: store.state.entries,
+      error: e instanceof Error ? e.message : String(e),
+    };
+  }
+  for (const listener of store.listeners) listener();
+}
+
+/** One catalog family's primitives — shared state across all consumers. */
 export function useBuilderCatalog(family: string) {
-  const [entries, setEntries] = useState<BuilderCatalogEntry[]>([]);
-  const [error, setError] = useState<string | null>(null);
-
-  const refresh = useCallback(async () => {
-    try {
-      const response = await fetch(
-        `${REST_URL}/api/v1/builder/catalog?family=${encodeURIComponent(family)}`,
-        { headers: authHeaders() },
-      );
-      if (!response.ok) throw new Error(await _errorMessage(response));
-      setEntries((await response.json()) as BuilderCatalogEntry[]);
-      setError(null);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    }
-  }, [family]);
-
+  const store = _catalogStore(family);
+  const state = useSyncExternalStore(
+    (onChange) => {
+      store.listeners.add(onChange);
+      return () => store.listeners.delete(onChange);
+    },
+    () => store.state,
+  );
   useEffect(() => {
-    void refresh();
-  }, [refresh]);
-
-  return { entries, error, refresh };
+    if (!store.fetched) {
+      store.fetched = true;
+      void refreshCatalogFamily(family);
+    }
+  }, [family, store]);
+  return {
+    entries: state.entries,
+    error: state.error,
+    refresh: () => refreshCatalogFamily(family),
+  };
 }
 
 /** Read one catalog document (authoring-wrapper form). */
@@ -81,7 +125,9 @@ export async function importUserObjectYaml(
     error.status = response.status;
     throw error;
   }
-  return response.json();
+  const imported = (await response.json()) as BuilderCatalogEntry;
+  void refreshCatalogFamily(imported.family);
+  return imported;
 }
 
 /** Download one catalog document as a canonical YAML file. */
@@ -108,6 +154,8 @@ export async function deleteUserObject(ref: string): Promise<void> {
     { method: "DELETE", headers: authHeaders() },
   );
   if (!response.ok) throw new Error(await _errorMessage(response));
+  const family = ref.split(":", 2)[1]?.split("/")[0];
+  if (family) void refreshCatalogFamily(family);
 }
 
 /** Save one primitive document into the user catalog. */
@@ -126,7 +174,9 @@ export async function saveUserObject(
     error.status = response.status;
     throw error;
   }
-  return response.json();
+  const saved = (await response.json()) as BuilderCatalogEntry;
+  void refreshCatalogFamily(saved.family);
+  return saved;
 }
 
 export function useBuilderWorld() {

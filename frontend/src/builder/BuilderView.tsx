@@ -218,6 +218,21 @@ export function BuilderView({
       <div className="builder-outline" data-testid="builder-outline">
         <div className="builder-mode-badge">Session Builder</div>
         <div className="builder-zone-title">World</div>
+        {/* Building is the point; blank-first. Loading an existing session is
+            the secondary path. */}
+        {!workspace && (
+          <Button
+            variant="primary"
+            onClick={() => {
+              clear();
+              setSelection(null);
+              setEditingSegment(null);
+              startNew("untitled-session");
+            }}
+          >
+            + New session
+          </Button>
+        )}
         <div className="builder-session-picker">
           <select
             aria-label="Catalog session"
@@ -225,7 +240,7 @@ export function BuilderView({
             onChange={(e) => setSelectedFile(e.target.value)}
           >
             <option value="" disabled>
-              {sessions.length ? "Select a session…" : "No sessions found"}
+              {sessions.length ? "or load an existing session…" : "No sessions found"}
             </option>
             {sessions.map((s) => (
               <option key={s.file} value={s.file}>
@@ -234,7 +249,6 @@ export function BuilderView({
             ))}
           </select>
           <Button
-            variant="primary"
             disabled={!selectedFile || loading}
             onClick={() => {
               closeWorkspace();
@@ -245,18 +259,6 @@ export function BuilderView({
             {loading ? "Resolving…" : "Load"}
           </Button>
         </div>
-        {!workspace && (
-          <Button
-            onClick={() => {
-              clear();
-              setSelection(null);
-              setEditingSegment(null);
-              startNew("untitled-session");
-            }}
-          >
-            New session
-          </Button>
-        )}
         {workspace && (
           <div className="builder-outline-group" data-testid="builder-drafts">
             <div className="builder-outline-kind">Drafts · {workspace.name}</div>
@@ -441,12 +443,36 @@ export function BuilderView({
               worldLayers={<CandidateLines pairs={visiblePairs} />}
             />
           </VisualizationErrorBoundary>
-        ) : (
+        ) : snapshotError ? (
+          <div className="builder-zone-empty">{snapshotError}</div>
+        ) : workspace ? (
           <div className="builder-zone-empty">
-            {snapshotError ??
-              (workspace
-                ? "Add a constellation to begin — the world renders as soon as the draft resolves"
-                : "Load a catalog session or start a new one")}
+            Add a constellation to begin — the world renders as soon as the draft resolves
+          </div>
+        ) : (
+          <div className="builder-start-card" data-testid="builder-start">
+            <div className="builder-zone-title">Build a session from scratch</div>
+            <ol className="builder-start-steps">
+              <li>Add constellations — orbit presets seed values you then own</li>
+              <li>Pick or author the hardware — nodes, terminals, your own physics</li>
+              <li>Place ground sites and their networks</li>
+              <li>Save — a resolvable session file, deployable like any other</li>
+            </ol>
+            <Button
+              variant="primary"
+              onClick={() => {
+                clear();
+                setSelection(null);
+                setEditingSegment(null);
+                startNew("untitled-session");
+              }}
+            >
+              + New session
+            </Button>
+            <div className="builder-zone-empty">
+              Every step round-trips through the real resolver; the YAML pane shows the
+              artifact live.
+            </div>
           </div>
         )}
         {showYaml && documentYaml && (

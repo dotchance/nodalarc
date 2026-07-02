@@ -9,6 +9,9 @@
   /* Left gutter clears the app toolbar (absolute at --space-6, 36px buttons
      + panel padding) so the outline zone is never occluded. */
   padding-left: 88px;
+  /* Authoring-mode identity: the amber bar says "you are building, not
+     watching the live session" from any zone of the screen. */
+  border-top: 3px solid var(--accent-amber);
   grid-template-columns: 280px 1fr 320px;
   grid-template-rows: 1fr auto;
   grid-template-areas:
@@ -80,6 +83,45 @@
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--text-secondary);
+}
+
+.builder-mode-badge {
+  align-self: flex-start;
+  font-size: var(--font-size-xxs);
+  font-weight: var(--font-weight-semibold);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--accent-amber);
+  border: 1px solid var(--accent-amber);
+  border-radius: var(--radius-xs);
+  padding: 1px 6px;
+  white-space: nowrap;
+}
+
+.builder-outline-kind {
+  font-size: var(--font-size-xxs);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+  padding: var(--space-1) var(--space-2) 0;
+}
+
+.builder-outline-name {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.builder-outline-name svg {
+  flex: none;
+}
+
+.builder-outline-name--space svg {
+  color: var(--accent-orange);
+}
+
+.builder-outline-name--ground svg {
+  color: var(--accent-teal);
 }
 
 .builder-zone-empty {

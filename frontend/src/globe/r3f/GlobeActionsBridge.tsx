@@ -32,16 +32,17 @@ import type { GlobeActions } from "../actions";
 import type { CameraSceneFrame } from "./cameraBounds";
 import {
   cameraDirectionFromTarget,
+  flightEndPosition,
   focusDistanceForFrame,
   frameEndpoints,
   framePoints,
+  type AvoidSphere,
   type FocusFrame,
 } from "./cameraFocus";
 
 // Per-call temporaries (single-threaded; each entry re-copies from the registry before use).
 const _world = new THREE.Vector3();
 const _ndc = new THREE.Vector3();
-const _dirA = new THREE.Vector3();
 const _centroid = new THREE.Vector3();
 const _bodyCenter = new THREE.Vector3();
 const _linkA = new THREE.Vector3();
@@ -49,6 +50,7 @@ const _linkB = new THREE.Vector3();
 const _followDir = new THREE.Vector3();
 const _sceneCenter = new THREE.Vector3();
 const _flightPos = new THREE.Vector3();
+const _avoidCenter = new THREE.Vector3();
 const _flightTarget = new THREE.Vector3();
 
 type ActiveFocus =
@@ -137,15 +139,21 @@ export function GlobeActionsBridge({
     {
       floor = CAMERA_MIN_DISTANCE * 1.15,
       distance,
-    }: { floor?: number; distance?: number } = {},
+      avoid = null,
+    }: { floor?: number; distance?: number; avoid?: AvoidSphere | null } = {},
     focus: ActiveFocus | null = null,
   ) => {
     const controls = controlsRef.current;
     const target = frame.center.clone();
     const dist = distance ?? focusDistanceForFrame(frame, floor);
-    cameraDirectionFromTarget(camera.position, target, _dirA);
-    const endPosition = target.clone().add(_dirA.multiplyScalar(dist));
-    const endDirection = _dirA.clone().normalize();
+    const endPosition = flightEndPosition(
+      target,
+      camera.position,
+      dist,
+      avoid,
+      new THREE.Vector3(),
+    );
+    const endDirection = endPosition.clone().sub(target).normalize();
     const startTarget = controls?.target.clone() ?? target.clone();
     if (CAMERA_FLY_TO_INSTANT) {
       flightRef.current = null;
@@ -171,7 +179,7 @@ export function GlobeActionsBridge({
   const setFocus = (
     focus: ActiveFocus | null,
     frame: FocusFrame | null,
-    options?: { floor?: number; distance?: number },
+    options?: { floor?: number; distance?: number; avoid?: AvoidSphere | null },
   ) => {
     if (focus && !frame) {
       focusRef.current = null;
@@ -208,7 +216,13 @@ export function GlobeActionsBridge({
       focusNode: (nodeId: string, options?: { follow?: boolean }) => {
         const focus: ActiveFocus = { kind: "node", nodeId, follow: options?.follow ?? false };
         const frame = resolveFocusFrame(focus);
-        setFocus(focus, frame, { floor: CAMERA_MIN_DISTANCE * 1.15 });
+        // The node's body sphere: a far-side node must be approached from
+        // above its surface, never through the body.
+        const bodySphere = getNodeBodySphere(nodeId, _avoidCenter);
+        const avoid = bodySphere
+          ? { center: _avoidCenter.clone(), radius: bodySphere.radius }
+          : null;
+        setFocus(focus, frame, { floor: CAMERA_MIN_DISTANCE * 1.15, avoid });
       },
       focusLink: (nodeA: string, nodeB: string, options?: { follow?: boolean }) => {
         const focus: ActiveFocus = {

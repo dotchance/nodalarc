@@ -25,6 +25,7 @@ import type {
   Selection,
   StateSnapshot,
 } from "../types";
+import { Icon } from "../ui/icons/Icon";
 import { BuilderInspector } from "./BuilderInspector";
 import { builderSnapshotFromWorld } from "./builderSnapshot";
 import { useBuilderWorld } from "./useBuilderWorld";
@@ -149,6 +150,7 @@ export function BuilderView({
   return (
     <div className="builder-shell" data-testid="builder-shell">
       <div className="builder-outline" data-testid="builder-outline">
+        <div className="builder-mode-badge">Session Builder</div>
         <div className="builder-zone-title">World</div>
         <div className="builder-session-picker">
           <select
@@ -180,71 +182,86 @@ export function BuilderView({
         )}
         {world ? (
           <div data-testid="builder-segments">
-            {bodyGroups.map(([body, group]) => (
-              <div className="builder-outline-group" key={body}>
-                <button
-                  className="builder-outline-body"
-                  onClick={() => actionsRef.current?.focusBody(body)}
-                  title={`Fly to ${body}`}
-                >
-                  {body}
-                </button>
-                {group.map((seg) => {
-                  const expandable = seg.grounds > 0 && seg.satellites === 0;
-                  const expanded = expandedSegment === seg.segment_id;
-                  return (
-                    <div key={seg.segment_id}>
-                      <button
-                        className="builder-outline-row"
-                        onClick={() => {
-                          actionsRef.current?.focusNode(seg.first_node_id);
-                          if (expandable) {
-                            setExpandedSegment(expanded ? null : seg.segment_id);
-                          }
-                        }}
-                        title={`Fly to ${seg.segment_id}`}
+            {bodyGroups.map(([body, group]) => {
+              const spaceSegments = group.filter((s) => s.satellites > 0 || s.relays > 0);
+              const groundSegments = group.filter((s) => s.satellites === 0 && s.relays === 0);
+              const renderSegment = (seg: SegmentSummary, space: boolean) => {
+                const expandable = !space && seg.grounds > 0;
+                const expanded = expandedSegment === seg.segment_id;
+                return (
+                  <div key={seg.segment_id}>
+                    <button
+                      className="builder-outline-row"
+                      onClick={() => {
+                        actionsRef.current?.focusNode(seg.first_node_id);
+                        if (expandable) {
+                          setExpandedSegment(expanded ? null : seg.segment_id);
+                        }
+                      }}
+                      title={`Fly to ${seg.segment_id}`}
+                    >
+                      <span
+                        className={`builder-outline-name builder-outline-name--${space ? "space" : "ground"}`}
                       >
-                        <span>
-                          {expandable ? (expanded ? "▾ " : "▸ ") : ""}
-                          {seg.segment_id}
-                        </span>
-                        <span className="builder-outline-count">
-                          {seg.satellites > 0 && `${seg.satellites} sat`}
-                          {seg.satellites > 0 && seg.grounds + seg.relays > 0 && " · "}
-                          {seg.grounds > 0 && `${seg.grounds} gs`}
-                          {seg.relays > 0 && ` · ${seg.relays} relay`}
-                        </span>
-                      </button>
-                      {expandable &&
-                        expanded &&
-                        world?.nodes
-                          .filter((n) => n.segment_id === seg.segment_id)
-                          .map((n) => (
-                            <button
-                              className={`builder-outline-row builder-outline-row--member${
-                                selection?.id === n.node_id
-                                  ? " builder-outline-row--selected"
-                                  : ""
-                              }`}
-                              key={n.node_id}
-                              onClick={() => {
-                                setSelection({
-                                  type:
-                                    n.kind === "satellite" ? "satellite" : "ground_station",
-                                  id: n.node_id,
-                                });
-                                actionsRef.current?.focusNode(n.node_id);
-                              }}
-                              title={`Select ${n.node_id}`}
-                            >
-                              <span>{n.local_node_id}</span>
-                            </button>
-                          ))}
-                    </div>
-                  );
-                })}
-              </div>
-            ))}
+                        <Icon name={space ? "orbit" : "satellite-dish"} size={12} />
+                        {seg.segment_id}
+                        {expandable ? (expanded ? " ▾" : " ▸") : ""}
+                      </span>
+                      <span className="builder-outline-count">
+                        {seg.satellites > 0 && `${seg.satellites} sat`}
+                        {seg.satellites > 0 && seg.grounds + seg.relays > 0 && " · "}
+                        {seg.grounds > 0 && `${seg.grounds} gs`}
+                        {seg.relays > 0 && ` · ${seg.relays} relay`}
+                      </span>
+                    </button>
+                    {expandable &&
+                      expanded &&
+                      world?.nodes
+                        .filter((n) => n.segment_id === seg.segment_id)
+                        .map((n) => (
+                          <button
+                            className={`builder-outline-row builder-outline-row--member${
+                              selection?.id === n.node_id
+                                ? " builder-outline-row--selected"
+                                : ""
+                            }`}
+                            key={n.node_id}
+                            onClick={() => {
+                              setSelection({
+                                type:
+                                  n.kind === "satellite" ? "satellite" : "ground_station",
+                                id: n.node_id,
+                              });
+                              actionsRef.current?.focusNode(n.node_id);
+                            }}
+                            title={`Select ${n.node_id}`}
+                          >
+                            <span>{n.local_node_id}</span>
+                          </button>
+                        ))}
+                  </div>
+                );
+              };
+              return (
+                <div className="builder-outline-group" key={body}>
+                  <button
+                    className="builder-outline-body"
+                    onClick={() => actionsRef.current?.focusBody(body)}
+                    title={`Fly to ${body}`}
+                  >
+                    {body}
+                  </button>
+                  {spaceSegments.length > 0 && (
+                    <div className="builder-outline-kind">Constellations</div>
+                  )}
+                  {spaceSegments.map((seg) => renderSegment(seg, true))}
+                  {groundSegments.length > 0 && (
+                    <div className="builder-outline-kind">Ground sites</div>
+                  )}
+                  {groundSegments.map((seg) => renderSegment(seg, false))}
+                </div>
+              );
+            })}
           </div>
         ) : (
           <div className="builder-zone-empty">No session loaded</div>
@@ -294,6 +311,7 @@ export function BuilderView({
         })()}
       </div>
       <div className="builder-status" data-testid="builder-status">
+        <span className="builder-mode-badge">Session Builder</span>
         {error ? (
           <span className="builder-status-item builder-status-item--error">{error}</span>
         ) : snapshotError ? (

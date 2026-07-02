@@ -52,3 +52,38 @@ describe("camera focus framing", () => {
     expect(out.length()).toBeCloseTo(1);
   });
 });
+
+describe("flightEndPosition", () => {
+  it("keeps the camera-side approach for a near-side node", async () => {
+    const { flightEndPosition } = await import("../cameraFocus");
+    const THREE = await import("three");
+    const target = new THREE.Vector3(0, 0, 100); // surface node facing the camera
+    const cameraPos = new THREE.Vector3(0, 0, 400);
+    const avoid = { center: new THREE.Vector3(0, 0, 0), radius: 100 };
+    const end = flightEndPosition(target, cameraPos, 30, avoid, new THREE.Vector3());
+    expect(end.z).toBeCloseTo(130);
+    expect(end.length()).toBeGreaterThan(avoid.radius);
+  });
+
+  it("approaches a far-side node along its surface normal instead of through the body", async () => {
+    const { flightEndPosition } = await import("../cameraFocus");
+    const THREE = await import("three");
+    const target = new THREE.Vector3(0, 0, -100); // node on the far side
+    const cameraPos = new THREE.Vector3(0, 0, 400);
+    const avoid = { center: new THREE.Vector3(0, 0, 0), radius: 100 };
+    const end = flightEndPosition(target, cameraPos, 30, avoid, new THREE.Vector3());
+    // Naive end would be (0,0,-70) — inside the body. The fix ends above the
+    // surface along the outward normal.
+    expect(end.length()).toBeGreaterThan(avoid.radius);
+    expect(end.z).toBeCloseTo(-130);
+  });
+
+  it("passes through untouched with no avoid sphere", async () => {
+    const { flightEndPosition } = await import("../cameraFocus");
+    const THREE = await import("three");
+    const target = new THREE.Vector3(0, 0, -100);
+    const cameraPos = new THREE.Vector3(0, 0, 400);
+    const end = flightEndPosition(target, cameraPos, 30, null, new THREE.Vector3());
+    expect(end.z).toBeCloseTo(-70);
+  });
+});

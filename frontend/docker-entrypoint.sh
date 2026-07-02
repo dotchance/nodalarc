@@ -6,11 +6,13 @@ set -e
 # config.ts will auto-derive from window.location.hostname.
 VS_API_URL="${VS_API_URL:-}"
 WS_URL="${WS_URL:-}"
+FEATURE_SESSION_BUILDER="${FEATURE_SESSION_BUILDER:-}"
 
 cat > /usr/share/nginx/html/config.js << EOF
 window.NODALARC_CONFIG = {
   vsApiUrl: "${VS_API_URL}",
-  wsUrl: "${WS_URL}"
+  wsUrl: "${WS_URL}",
+  featureSessionBuilder: "${FEATURE_SESSION_BUILDER}"
 };
 EOF
 

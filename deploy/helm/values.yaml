@@ -31,6 +31,7 @@ vf:
   memoryLimit: 1Gi
   cpuLimit: "4"
   vsApiHost: ""  # Set to host/IP (e.g., nodalarc.example.net or 192.168.10.202) for external access
+  featureSessionBuilder: true  # Session Builder view; keep enabled on the builder branch
 
 # Scheduler consumes OME events and dispatches topology changes to Node Agents.
 scheduler:

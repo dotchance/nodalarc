@@ -30,20 +30,31 @@ import { BuilderInspector } from "./BuilderInspector";
 import { builderSnapshotFromWorld } from "./builderSnapshot";
 import { CandidateLines } from "./CandidateLines";
 import { computeCandidates } from "./candidates";
+import { CatalogObjectView } from "./CatalogObjectView";
 import { ConstellationEditor } from "./ConstellationEditor";
 import { LibraryPanel } from "./LibraryPanel";
 import { NodeEditor } from "./NodeEditor";
 import { TerminalEditor } from "./TerminalEditor";
-import { saveUserObject, useBuilderCatalog, useBuilderWorld } from "./useBuilderWorld";
+import {
+  readCatalogObject,
+  saveUserObject,
+  useBuilderCatalog,
+  useBuilderWorld,
+} from "./useBuilderWorld";
 import { useWorkspace } from "./useWorkspace";
 import {
   defaultDraftNode,
   defaultDraftTerminal,
+  draftConstellationFromDocuments,
+  draftNodeFromDocument,
+  draftTerminalFromDocument,
+  identifier,
   nodeObjectFromDraft,
   toSessionDocument,
   type DraftNode,
   type DraftTerminal,
 } from "./workspace";
+import type { BuilderCatalogEntry } from "./builderTypes";
 import type { BuilderWorld } from "./builderTypes";
 
 interface BuilderViewProps {
@@ -148,6 +159,9 @@ export function BuilderView({
     startNew,
     close: closeWorkspace,
     addConstellation,
+    addConstellationRef,
+    addDraft,
+    removeRefSegment,
     removeConstellation,
     updateConstellation,
     updateOrbit,
@@ -173,6 +187,99 @@ export function BuilderView({
   const [libraryNodeSave, setLibraryNodeSave] = useState<
     { kind: "idle" } | { kind: "conflict" } | { kind: "failed"; message: string }
   >({ kind: "idle" });
+  const [catalogInspect, setCatalogInspect] = useState<{
+    ref: string;
+    document: Record<string, unknown>;
+  } | null>(null);
+  const [libraryError, setLibraryError] = useState<string | null>(null);
+
+  // The Library's per-entry gestures. USE places the block in the session
+  // (self-ensuring: no open workspace starts one); EDIT forks it into an
+  // editable draft; clicking the row inspects it.
+  const handleLibraryUse = (entry: BuilderCatalogEntry) => {
+    setLibraryError(null);
+    setLibraryEditor(null);
+    setCatalogInspect(null);
+    if (entry.family === "constellations") {
+      addConstellationRef(entry.ref, entry.display_name ?? entry.id ?? entry.ref);
+    } else if (entry.family === "site-sets") {
+      setGroundSiteSet(entry.ref);
+    } else if (entry.family === "nodes") {
+      addConstellation(entry.ref);
+    }
+  };
+
+  const handleLibraryCustomize = async (entry: BuilderCatalogEntry) => {
+    setLibraryError(null);
+    setCatalogInspect(null);
+    try {
+      const { document } = await readCatalogObject(entry.ref);
+      if (entry.family === "terminals") {
+        const seeded = draftTerminalFromDocument(document);
+        setEditingSegment(null);
+        setLibraryEditor({
+          kind: "terminal",
+          draft: {
+            ...seeded,
+            id: identifier(`${seeded.id}-custom`),
+            display_name: `${seeded.display_name} (custom)`,
+          },
+        });
+      } else if (entry.family === "nodes") {
+        const seeded = draftNodeFromDocument(document);
+        setEditingSegment(null);
+        setLibraryEditor({
+          kind: "node",
+          draft: {
+            ...seeded,
+            id: identifier(`${seeded.id}-custom`),
+            display_name: `${seeded.display_name} (custom)`,
+          },
+        });
+      } else if (entry.family === "constellations") {
+        const constellation = (document as { constellation?: { orbit?: unknown } })
+          .constellation;
+        const orbitRef =
+          typeof constellation?.orbit === "string" ? constellation.orbit : null;
+        const orbitDocument = orbitRef
+          ? (await readCatalogObject(orbitRef)).document
+          : null;
+        const draft = draftConstellationFromDocuments(document, orbitDocument);
+        setLibraryEditor(null);
+        addDraft(draft);
+        setEditingSegment(draft.segment_id);
+      }
+    } catch (e) {
+      setLibraryError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const handleLibraryInspect = async (entry: BuilderCatalogEntry) => {
+    setLibraryError(null);
+    try {
+      const { document } = await readCatalogObject(entry.ref);
+      setLibraryEditor(null);
+      setEditingSegment(null);
+      setCatalogInspect({ ref: entry.ref, document });
+    } catch (e) {
+      setLibraryError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const handleLibraryNew = (family: string) => {
+    setLibraryError(null);
+    setCatalogInspect(null);
+    if (family === "terminals") {
+      setEditingSegment(null);
+      setLibraryEditor({ kind: "terminal", draft: defaultDraftTerminal() });
+    } else if (family === "nodes") {
+      setEditingSegment(null);
+      setLibraryEditor({ kind: "node", draft: defaultDraftNode() });
+    } else if (family === "constellations" && defaultNodeRef) {
+      setLibraryEditor(null);
+      addConstellation(defaultNodeRef);
+    }
+  };
   // Default node model for a fresh constellation: prefer the catalog's space
   // nodes (directory layout is authoring convention, so this is a display
   // heuristic only — the picker offers every node either way).
@@ -282,6 +389,56 @@ export function BuilderView({
         {workspace && (
           <div className="builder-outline-group" data-testid="builder-drafts">
             <div className="builder-outline-kind">Drafts · {workspace.name}</div>
+            {workspace.space_refs.map((placed) => (
+              <div className="builder-library-entry" key={placed.segment_id}>
+                <span className="builder-outline-name builder-outline-name--space builder-outline-row--segment">
+                  <Icon name="orbit" size={12} />
+                  {placed.label}
+                </span>
+                <span className="builder-library-actions">
+                  <button
+                    className="builder-library-action"
+                    title="Fork into an editable draft"
+                    onClick={() =>
+                      void (async () => {
+                        try {
+                          const { document } = await readCatalogObject(placed.ref);
+                          const constellation = (
+                            document as { constellation?: { orbit?: unknown } }
+                          ).constellation;
+                          const orbitRef =
+                            typeof constellation?.orbit === "string"
+                              ? constellation.orbit
+                              : null;
+                          const orbitDocument = orbitRef
+                            ? (await readCatalogObject(orbitRef)).document
+                            : null;
+                          const draft = draftConstellationFromDocuments(
+                            document,
+                            orbitDocument,
+                          );
+                          removeRefSegment(placed.segment_id);
+                          addDraft(draft);
+                          setLibraryEditor(null);
+                          setEditingSegment(draft.segment_id);
+                        } catch (e) {
+                          setLibraryError(e instanceof Error ? e.message : String(e));
+                        }
+                      })()
+                    }
+                  >
+                    edit
+                  </button>
+                  <button
+                    className="builder-library-action"
+                    title="Remove from the session"
+                    onClick={() => removeRefSegment(placed.segment_id)}
+                  >
+                    ✕
+                  </button>
+                </span>
+              </div>
+            ))}
             {workspace.space.map((draft) => (
               <button
                 className={`builder-outline-row builder-outline-row--segment${
@@ -351,15 +508,12 @@ export function BuilderView({
           </div>
         )}
         <LibraryPanel
-          onNewTerminal={() => {
-            setEditingSegment(null);
-            setLibraryEditor({ kind: "terminal", draft: defaultDraftTerminal() });
-          }}
-          onNewNode={() => {
-            setEditingSegment(null);
-            setLibraryEditor({ kind: "node", draft: defaultDraftNode() });
-          }}
+          onUse={handleLibraryUse}
+          onCustomize={(entry) => void handleLibraryCustomize(entry)}
+          onInspect={(entry) => void handleLibraryInspect(entry)}
+          onNew={handleLibraryNew}
         />
+        {libraryError && <div className="builder-warning">{libraryError}</div>}
         {sessionsError && (
           <div className="builder-zone-empty builder-status-item--error">
             session list unavailable: {sessionsError}
@@ -599,6 +753,14 @@ export function BuilderView({
                   <div className="builder-warning">{libraryNodeSave.message}</div>
                 )}
               </div>
+            );
+          }
+          if (catalogInspect) {
+            return (
+              <CatalogObjectView
+                refStr={catalogInspect.ref}
+                document={catalogInspect.document}
+              />
             );
           }
           const draft = workspace?.space.find((d) => d.segment_id === editingSegment);

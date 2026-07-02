@@ -90,9 +90,19 @@ export interface DraftGroundSet {
   tags: string[];
 }
 
+/** A space segment sourced from a library block as-is (use-this-block).
+ *  Customizing forks it into an editable DraftConstellation. */
+export interface RefSegment {
+  segment_id: string;
+  ref: string;
+  label: string;
+}
+
 export interface Workspace {
   name: string;
   space: DraftConstellation[];
+  /** Library constellations placed by reference (use-this-block). */
+  space_refs: RefSegment[];
   /** Shipped site-set reference; ``ground_draft`` overrides it when set. */
   ground_site_set_ref: string | null;
   ground_draft: DraftGroundSet | null;
@@ -151,6 +161,75 @@ export function newDraftConstellation(nodeRef: string): DraftConstellation {
     raan_spacing_deg: 60,
     slots_per_plane: 8,
     phase_offset_deg: 0,
+  };
+}
+
+let refCounter = 0;
+
+export function newRefSegment(ref: string, label: string): RefSegment {
+  refCounter += 1;
+  return { segment_id: `lib-${refCounter}`, ref, label };
+}
+
+/** Fork a constellation document (plus its orbit document when referenced)
+ *  into an editable draft — customize-a-library-block. Constructs the editor
+ *  cannot represent refuse loudly; nothing is silently dropped. */
+export function draftConstellationFromDocuments(
+  constellationDocument: Record<string, unknown>,
+  orbitDocument: Record<string, unknown> | null,
+): DraftConstellation {
+  const constellation = (
+    constellationDocument as { constellation?: Record<string, unknown> }
+  ).constellation;
+  if (!constellation) throw new Error("not a constellation document");
+  const phasing = (constellation.phasing ?? {}) as Record<string, unknown>;
+  if (phasing.mode && phasing.mode !== "evenly_spaced_mean_anomaly") {
+    throw new Error(
+      `phasing mode ${String(phasing.mode)} — walker modes are pending their runtime semantics`,
+    );
+  }
+  const orbitRaw =
+    typeof constellation.orbit === "string"
+      ? ((orbitDocument as { orbit?: Record<string, unknown> } | null)?.orbit ?? null)
+      : ((constellation.orbit as Record<string, unknown>) ?? null);
+  if (!orbitRaw) throw new Error("constellation orbit could not be read");
+  const shape = (orbitRaw.shape ?? null) as Record<string, unknown> | null;
+  if (!shape) throw new Error("element-form orbits are not editable yet");
+  const orientation = (orbitRaw.orientation ?? {}) as Record<string, unknown>;
+  const phase = (orbitRaw.phase ?? {}) as Record<string, unknown>;
+  const propagator = String(orbitRaw.propagator ?? "j2_mean_elements");
+  if (propagator !== "two_body" && propagator !== "j2_mean_elements") {
+    throw new Error(`propagator ${propagator} is not editable yet`);
+  }
+  const planes = (constellation.planes ?? {}) as Record<string, unknown>;
+
+  const orbit: DraftOrbit = {
+    shape_kind: "altitude_km" in shape ? "circular" : "elliptical",
+    altitude_km: Number(shape.altitude_km ?? 550),
+    perigee_altitude_km: Number(shape.perigee_altitude_km ?? shape.altitude_km ?? 550),
+    apogee_altitude_km: Number(shape.apogee_altitude_km ?? shape.altitude_km ?? 550),
+    inclination_deg: Number(orientation.inclination_deg ?? 0),
+    raan_deg: Number(orientation.raan_deg ?? 0),
+    argument_of_perigee_deg: Number(orientation.argument_of_perigee_deg ?? 0),
+    mean_anomaly_deg: Number(phase.mean_anomaly_deg ?? 0),
+    propagator: propagator as DraftOrbit["propagator"],
+  };
+
+  draftCounter += 1;
+  const node = constellation.node;
+  return {
+    segment_id: `space-${draftCounter}`,
+    display_name: `${String(constellation.display_name ?? constellation.id)} (custom)`,
+    node_ref: typeof node === "string" ? node : "",
+    node_draft:
+      typeof node === "object" && node !== null
+        ? draftNodeFromDocument({ node: node as Record<string, unknown> })
+        : null,
+    orbit,
+    planes: Number(planes.count ?? 1),
+    raan_spacing_deg: Number(planes.raan_spacing_deg ?? 0),
+    slots_per_plane: Number(constellation.slots_per_plane ?? 1),
+    phase_offset_deg: Number(phasing.phase_offset_deg ?? 0),
   };
 }
 
@@ -339,6 +418,7 @@ export function newWorkspace(name: string): Workspace {
   return {
     name: identifier(name) || "untitled-session",
     space: [],
+    space_refs: [],
     ground_site_set_ref: null,
     ground_draft: null,
     start_time: "2026-06-08T00:00:00Z",
@@ -463,6 +543,10 @@ const DEFAULT_GROUND_SCHEDULING = {
 
 /** Serialize the workspace to the session grammar (the ONE artifact). */
 export function toSessionDocument(workspace: Workspace): Record<string, unknown> {
+  const refSegments: unknown[] = workspace.space_refs.map((placed) => ({
+    id: identifier(placed.segment_id),
+    source: placed.ref,
+  }));
   const segments: unknown[] = workspace.space.map((draft) => ({
     id: identifier(draft.segment_id),
     source: {
@@ -505,8 +589,9 @@ export function toSessionDocument(workspace: Workspace): Record<string, unknown>
     },
   }));
 
+  const allSegments = [...refSegments, ...segments];
   if (workspace.ground_site_set_ref) {
-    segments.push({
+    allSegments.push({
       id: "ground",
       placement: { from_site_set: workspace.ground_site_set_ref },
       apply: { scheduling: DEFAULT_GROUND_SCHEDULING },
@@ -515,7 +600,7 @@ export function toSessionDocument(workspace: Workspace): Record<string, unknown>
 
   return {
     session: { name: identifier(workspace.name) || "untitled-session" },
-    segments,
+    segments: allSegments,
     time: { start_time: workspace.start_time, step_seconds: 1, compression: 1 },
   };
 }

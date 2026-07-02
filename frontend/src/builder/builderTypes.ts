@@ -120,6 +120,7 @@ export interface BuilderCatalogEntry {
   id: string | null;
   display_name: string | null;
   notes: string | null;
+  summary: string | null;
   error: string | null;
 }
 

@@ -40,6 +40,44 @@ CATALOG_FAMILIES: dict[str, str] = {
 }
 
 
+def _entry_summary(wrapper: str, model: Any) -> str | None:
+    """The entry's hardware line — what this block IS, at a glance."""
+    try:
+        if wrapper == "constellation":
+            planes = model.planes.count
+            slots = model.slots_per_plane
+            node = model.node if isinstance(model.node, str) else "inline node"
+            node_name = node.split("/")[-1].removesuffix(".yaml") if isinstance(node, str) else node
+            return f"{planes}×{slots} = {planes * slots} sat · {node_name}"
+        if wrapper == "site_set":
+            return f"{len(model.sites)} sites"
+        if wrapper == "node":
+            mounts = " · ".join(f"{m.role} ×{m.count}" for m in model.terminals)
+            lan = f" · lan ×{len(model.ethernet)}" if model.ethernet else ""
+            return f"{model.forwarding}{' · ' + mounts if mounts else ''}{lan}"
+        if wrapper == "terminal":
+            if model.medium == "rf":
+                return f"rf {model.signal.band} · {model.max_range_km:.0f} km"
+            return f"optical {model.signal.wavelength_nm:.0f} nm · {model.max_range_km:.0f} km"
+        if wrapper == "orbit":
+            shape = getattr(model, "shape", None)
+            if shape is not None and hasattr(shape, "altitude_km"):
+                alt = f"{shape.altitude_km:.0f} km circular"
+            elif shape is not None:
+                alt = f"{shape.perigee_altitude_km:.0f}×{shape.apogee_altitude_km:.0f} km"
+            else:
+                elements = model.elements
+                alt = f"a={elements.semi_major_axis_km:.0f} km e={elements.eccentricity}"
+            return f"{alt} · {model.orientation.inclination_deg:.1f}°"
+        if wrapper == "space_node_set":
+            return f"{len(model.nodes)} placed nodes"
+        if wrapper == "body":
+            return f"R={model.mean_radius_km:.0f} km"
+    except Exception:
+        return None
+    return None
+
+
 def _browse_root(family: str, wrapper: str, scheme: str, root: Path) -> list[BuilderCatalogEntry]:
     family_dir = root / family
     entries: list[BuilderCatalogEntry] = []
@@ -63,6 +101,7 @@ def _browse_root(family: str, wrapper: str, scheme: str, root: Path) -> list[Bui
                     id=getattr(model, "id", None),
                     display_name=getattr(model, "display_name", None),
                     notes=getattr(model, "notes", None),
+                    summary=_entry_summary(wrapper, model),
                     error=None,
                 )
             )

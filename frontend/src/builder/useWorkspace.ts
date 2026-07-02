@@ -11,6 +11,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   newDraftConstellation,
+  newRefSegment,
   newWorkspace,
   toSessionDocument,
   type DraftConstellation,
@@ -39,11 +40,53 @@ export function useWorkspace(resolveDocument: (document: unknown) => void) {
 
   const close = useCallback(() => setWorkspace(null), []);
 
+  // Library "use" gestures are self-ensuring: using a block with no open
+  // workspace starts one - building never dead-ends on missing state.
   const addConstellation = useCallback((nodeRef: string) => {
+    setWorkspace((prev) => {
+      const workspace = prev ?? newWorkspace("untitled-session");
+      return { ...workspace, space: [...workspace.space, newDraftConstellation(nodeRef)] };
+    });
+  }, []);
+
+  const addConstellationRef = useCallback((ref: string, label: string) => {
+    setWorkspace((prev) => {
+      const workspace = prev ?? newWorkspace("untitled-session");
+      return { ...workspace, space_refs: [...workspace.space_refs, newRefSegment(ref, label)] };
+    });
+  }, []);
+
+  /** Add an already-built draft (a fork of a library block). */
+  const addDraft = useCallback((draft: DraftConstellation) => {
+    setWorkspace((prev) => {
+      const workspace = prev ?? newWorkspace("untitled-session");
+      return { ...workspace, space: [...workspace.space, draft] };
+    });
+  }, []);
+
+  const removeRefSegment = useCallback((segmentId: string) => {
     setWorkspace((prev) =>
-      prev ? { ...prev, space: [...prev.space, newDraftConstellation(nodeRef)] } : prev,
+      prev
+        ? { ...prev, space_refs: prev.space_refs.filter((r) => r.segment_id !== segmentId) }
+        : prev,
     );
   }, []);
+
+  /** Customize-a-block: swap a placed reference for its forked draft. */
+  const replaceRefWithDraft = useCallback(
+    (segmentId: string, draft: DraftConstellation) => {
+      setWorkspace((prev) =>
+        prev
+          ? {
+              ...prev,
+              space_refs: prev.space_refs.filter((r) => r.segment_id !== segmentId),
+              space: [...prev.space, draft],
+            }
+          : prev,
+      );
+    },
+    [],
+  );
 
   const removeConstellation = useCallback((segmentId: string) => {
     setWorkspace((prev) =>
@@ -88,7 +131,10 @@ export function useWorkspace(resolveDocument: (document: unknown) => void) {
   );
 
   const setGroundSiteSet = useCallback((ref: string | null) => {
-    setWorkspace((prev) => (prev ? { ...prev, ground_site_set_ref: ref } : prev));
+    setWorkspace((prev) => {
+      const workspace = prev ?? newWorkspace("untitled-session");
+      return { ...workspace, ground_site_set_ref: ref };
+    });
   }, []);
 
   return {
@@ -96,6 +142,10 @@ export function useWorkspace(resolveDocument: (document: unknown) => void) {
     startNew,
     close,
     addConstellation,
+    addConstellationRef,
+    addDraft,
+    removeRefSegment,
+    replaceRefWithDraft,
     removeConstellation,
     updateConstellation,
     updateOrbit,

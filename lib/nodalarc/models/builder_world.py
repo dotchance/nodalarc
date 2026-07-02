@@ -55,6 +55,7 @@ class BuilderCatalogEntry(BaseModel):
     id: str | None = None
     display_name: str | None = None
     notes: str | None = None
+    summary: str | None = None
     error: str | None = None
 
 

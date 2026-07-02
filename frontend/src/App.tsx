@@ -451,6 +451,9 @@ function AppInner() {
       )}
       {viewMode === "builder" && (
         <div className="full-pane" style={{ background: "var(--bg-main)" }}>
+          {/* The builder is one operator tool among several: its failures render
+              as a contained fault, never a blank application. */}
+          <VisualizationErrorBoundary onError={handleVisualizationFatalError}>
           <BuilderView
             colorMode={colorMode}
             globeMode={globeMode}
@@ -462,6 +465,7 @@ function AppInner() {
             showTrails={showTrails}
             actionsRef={globeActionsRef}
           />
+          </VisualizationErrorBoundary>
         </div>
       )}
       <Toolbar

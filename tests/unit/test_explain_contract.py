@@ -96,14 +96,24 @@ def test_wire_shape_field_names_match_backend():
 def test_builder_wire_shape_field_names_match_backend():
     """Builder wire models ↔ frontend/src/builder/builderTypes.ts twins."""
     from nodalarc.models.builder_world import BuilderWorld, BuilderWorldNode
-    from nodalarc.models.resolved_session import ResolvedSurfacePosition
+    from nodalarc.models.resolved_session import (
+        ResolvedInterfaceAddress,
+        ResolvedNodeInterfaces,
+        ResolvedSurfacePosition,
+        ResolvedTerminalBlock,
+    )
     from nodalarc.models.segment_session import SessionMeta
+    from nodalarc.models.segments import OriginatedPrefixes
 
     builder_wire_models = [
         (BuilderWorld, "BuilderWorld"),
         (BuilderWorldNode, "BuilderWorldNode"),
         (SessionMeta, "BuilderSessionMeta"),
         (ResolvedSurfacePosition, "BuilderSurfacePosition"),
+        (ResolvedTerminalBlock, "ResolvedTerminalBlock"),
+        (ResolvedInterfaceAddress, "ResolvedInterfaceAddress"),
+        (ResolvedNodeInterfaces, "ResolvedNodeInterfaces"),
+        (OriginatedPrefixes, "OriginatedPrefixes"),
     ]
     for model, ts_name in builder_wire_models:
         py_fields = set(model.model_fields)

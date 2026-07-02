@@ -83,6 +83,10 @@ def build_builder_world(
             slot=node.slot,
             tags=node.tags,
             surface_position=node.surface_position,
+            forwarding=node.forwarding,
+            terminal_inventory=node.terminal_inventory,
+            interfaces=node.interfaces,
+            originated_prefixes=node.originated_prefixes,
         )
         for node in resolved.nodes
     )

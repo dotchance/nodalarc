@@ -75,6 +75,19 @@ def test_kind_matches_ephemeris_variant(walker_world):
     assert grounds > 0
 
 
+def test_nodes_carry_hardware_and_network_facts(walker_world):
+    """Inspector facts ride the resolved models verbatim: every node has its
+    terminal inventory; ground nodes carry interfaces and (for the walker's
+    gateways) originated prefixes."""
+    for node in walker_world.nodes:
+        assert node.terminal_inventory, f"{node.node_id} has no terminal inventory"
+        for block in node.terminal_inventory:
+            assert block.owner_node_id == node.node_id
+        if node.kind == "ground_station":
+            assert node.interfaces is not None
+            assert node.interfaces.lo0.ipv4 or node.interfaces.lo0.ipv6
+
+
 def test_ground_node_without_space_links_stays_in_world(walker_world):
     """Denver gw2 is a MEO gateway no LEO-session link rule selects: OME's
     ephemeris omits it, but it is a resolved node and must stay in the world

@@ -24,6 +24,42 @@ export interface BuilderSurfacePosition {
   alt_m: number;
 }
 
+/** Twin of nodalarc.models.resolved_session.ResolvedTerminalBlock. */
+export interface ResolvedTerminalBlock {
+  terminal_id: string;
+  owner_node_id: string;
+  endpoint_role: string;
+  medium: "rf" | "optical";
+  source_terminal_id: string | null;
+  link_role: string | null;
+  count: number;
+  tracking_capacity: number | null;
+  max_range_km: number | null;
+  min_elevation_deg: number | null;
+  field_of_regard_deg: number | null;
+  tracking_rate_deg_s: number | null;
+  bandwidth_mbps: number | null;
+  source_ref: string;
+}
+
+/** Twin of nodalarc.models.resolved_session.ResolvedInterfaceAddress. */
+export interface ResolvedInterfaceAddress {
+  ipv4: string | null;
+  ipv6: string | null;
+}
+
+/** Twin of nodalarc.models.resolved_session.ResolvedNodeInterfaces. */
+export interface ResolvedNodeInterfaces {
+  lo0: ResolvedInterfaceAddress;
+  terr0: ResolvedInterfaceAddress | null;
+}
+
+/** Twin of nodalarc.models.segments.OriginatedPrefixes. */
+export interface OriginatedPrefixes {
+  ipv4: string[] | null;
+  ipv6: string[] | null;
+}
+
 /** Twin of nodalarc.models.builder_world.BuilderWorldNode. */
 export interface BuilderWorldNode {
   node_id: string;
@@ -35,6 +71,10 @@ export interface BuilderWorldNode {
   slot: number | null;
   tags: string[];
   surface_position: BuilderSurfacePosition | null;
+  forwarding: "routed" | "host" | "bridge" | "control_only" | null;
+  terminal_inventory: ResolvedTerminalBlock[];
+  interfaces: ResolvedNodeInterfaces | null;
+  originated_prefixes: OriginatedPrefixes | null;
 }
 
 /** Twin of nodalarc.models.builder_world.BuilderWorld. */

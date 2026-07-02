@@ -84,6 +84,10 @@ const WORLD: BuilderWorld = {
       slot: 0,
       tags: [],
       surface_position: null,
+      forwarding: "routed",
+      terminal_inventory: [],
+      interfaces: null,
+      originated_prefixes: null,
     },
     {
       node_id: "ground-gw1",
@@ -95,6 +99,10 @@ const WORLD: BuilderWorld = {
       slot: null,
       tags: ["leo"],
       surface_position: { body: "earth", lat_deg: 39.7392, lon_deg: -104.9903, alt_m: 1609 },
+      forwarding: "routed",
+      terminal_inventory: [],
+      interfaces: null,
+      originated_prefixes: null,
     },
     {
       // A ground node with no space links: absent from the ephemeris, still
@@ -108,6 +116,10 @@ const WORLD: BuilderWorld = {
       slot: null,
       tags: ["meo"],
       surface_position: { body: "earth", lat_deg: 39.7392, lon_deg: -104.9903, alt_m: 1609 },
+      forwarding: "routed",
+      terminal_inventory: [],
+      interfaces: null,
+      originated_prefixes: null,
     },
   ],
 };

@@ -10,15 +10,23 @@ session that has been resolved but not deployed.
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict
 
 from nodalarc.models.events import SessionEphemeris
-from nodalarc.models.resolved_session import NodeKind, ResolvedSurfacePosition
+from nodalarc.models.resolved_session import (
+    NodeKind,
+    ResolvedNodeInterfaces,
+    ResolvedSurfacePosition,
+    ResolvedTerminalBlock,
+)
 from nodalarc.models.segment_session import SessionMeta
+from nodalarc.models.segments import OriginatedPrefixes
 
 
 class BuilderWorldNode(BaseModel):
-    """Identity facts for one resolved node, mirrored from ``ResolvedNode``.
+    """One resolved node's facts for builder display, mirrored from ``ResolvedNode``.
 
     ``kind`` is carried explicitly so no consumer infers it from the
     ephemeris variant shape. Satellite placement (orbital elements, frames)
@@ -26,6 +34,9 @@ class BuilderWorldNode(BaseModel):
     ``surface_position``: the ephemeris only carries ground nodes that
     participate in space-link physics, while the world contains every
     resolved node — a gateway with no space links still exists.
+
+    Hardware and network facts reuse the resolved models verbatim — they are
+    the wire truth; the builder never re-shapes them.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -39,6 +50,10 @@ class BuilderWorldNode(BaseModel):
     slot: int | None = None
     tags: tuple[str, ...] = ()
     surface_position: ResolvedSurfacePosition | None = None
+    forwarding: Literal["routed", "host", "bridge", "control_only"] | None = None
+    terminal_inventory: tuple[ResolvedTerminalBlock, ...] = ()
+    interfaces: ResolvedNodeInterfaces | None = None
+    originated_prefixes: OriginatedPrefixes | None = None
 
 
 class BuilderWorld(BaseModel):

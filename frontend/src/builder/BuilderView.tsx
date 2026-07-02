@@ -25,6 +25,7 @@ import type {
   Selection,
   StateSnapshot,
 } from "../types";
+import { BuilderInspector } from "./BuilderInspector";
 import { builderSnapshotFromWorld } from "./builderSnapshot";
 import { useBuilderWorld } from "./useBuilderWorld";
 import type { BuilderWorld } from "./builderTypes";
@@ -113,6 +114,10 @@ export function BuilderView({
   // Builder-local selection: inspect-only, never shared with the live view's
   // selection (two different worlds must not share a pointer).
   const [selection, setSelection] = useState<Selection | null>(null);
+  // Ground segments enumerate their members in the tree (small, placed sets —
+  // click-at-your-granularity). Space segments stay aggregates; individual
+  // satellites are spot-checked on the canvas, not listed 176-deep.
+  const [expandedSegment, setExpandedSegment] = useState<string | null>(null);
 
   const segments = useMemo(() => (world ? summarizeSegments(world) : []), [world]);
   const bodyGroups = useMemo(() => groupByBody(segments), [segments]);
@@ -184,22 +189,60 @@ export function BuilderView({
                 >
                   {body}
                 </button>
-                {group.map((seg) => (
-                  <button
-                    className="builder-outline-row"
-                    key={seg.segment_id}
-                    onClick={() => actionsRef.current?.focusNode(seg.first_node_id)}
-                    title={`Fly to ${seg.segment_id}`}
-                  >
-                    <span>{seg.segment_id}</span>
-                    <span className="builder-outline-count">
-                      {seg.satellites > 0 && `${seg.satellites} sat`}
-                      {seg.satellites > 0 && seg.grounds + seg.relays > 0 && " · "}
-                      {seg.grounds > 0 && `${seg.grounds} gs`}
-                      {seg.relays > 0 && ` · ${seg.relays} relay`}
-                    </span>
-                  </button>
-                ))}
+                {group.map((seg) => {
+                  const expandable = seg.grounds > 0 && seg.satellites === 0;
+                  const expanded = expandedSegment === seg.segment_id;
+                  return (
+                    <div key={seg.segment_id}>
+                      <button
+                        className="builder-outline-row"
+                        onClick={() => {
+                          actionsRef.current?.focusNode(seg.first_node_id);
+                          if (expandable) {
+                            setExpandedSegment(expanded ? null : seg.segment_id);
+                          }
+                        }}
+                        title={`Fly to ${seg.segment_id}`}
+                      >
+                        <span>
+                          {expandable ? (expanded ? "▾ " : "▸ ") : ""}
+                          {seg.segment_id}
+                        </span>
+                        <span className="builder-outline-count">
+                          {seg.satellites > 0 && `${seg.satellites} sat`}
+                          {seg.satellites > 0 && seg.grounds + seg.relays > 0 && " · "}
+                          {seg.grounds > 0 && `${seg.grounds} gs`}
+                          {seg.relays > 0 && ` · ${seg.relays} relay`}
+                        </span>
+                      </button>
+                      {expandable &&
+                        expanded &&
+                        world?.nodes
+                          .filter((n) => n.segment_id === seg.segment_id)
+                          .map((n) => (
+                            <button
+                              className={`builder-outline-row builder-outline-row--member${
+                                selection?.id === n.node_id
+                                  ? " builder-outline-row--selected"
+                                  : ""
+                              }`}
+                              key={n.node_id}
+                              onClick={() => {
+                                setSelection({
+                                  type:
+                                    n.kind === "satellite" ? "satellite" : "ground_station",
+                                  id: n.node_id,
+                                });
+                                actionsRef.current?.focusNode(n.node_id);
+                              }}
+                              title={`Select ${n.node_id}`}
+                            >
+                              <span>{n.local_node_id}</span>
+                            </button>
+                          ))}
+                    </div>
+                  );
+                })}
               </div>
             ))}
           </div>
@@ -238,50 +281,17 @@ export function BuilderView({
       </div>
       <div className="builder-inspector" data-testid="builder-inspector">
         <div className="builder-zone-title">Inspector</div>
-        {selection && world ? (
-          (() => {
-            const node = world.nodes.find((n) => n.node_id === selection.id);
-            if (!node) return <div className="builder-zone-empty">Nothing selected</div>;
-            return (
-              <div className="builder-outline-group" data-testid="builder-inspector-node">
-                <div className="builder-inspector-name">{node.node_id}</div>
-                <div className="builder-outline-row builder-outline-row--static">
-                  <span>kind</span>
-                  <span className="builder-outline-count">{node.kind}</span>
-                </div>
-                <div className="builder-outline-row builder-outline-row--static">
-                  <span>segment</span>
-                  <span className="builder-outline-count">{node.segment_id}</span>
-                </div>
-                {node.plane !== null && (
-                  <div className="builder-outline-row builder-outline-row--static">
-                    <span>plane / slot</span>
-                    <span className="builder-outline-count">
-                      {node.plane} / {node.slot}
-                    </span>
-                  </div>
-                )}
-                {node.surface_position && (
-                  <div className="builder-outline-row builder-outline-row--static">
-                    <span>position</span>
-                    <span className="builder-outline-count">
-                      {node.surface_position.lat_deg.toFixed(2)},{" "}
-                      {node.surface_position.lon_deg.toFixed(2)}
-                    </span>
-                  </div>
-                )}
-                {node.tags.length > 0 && (
-                  <div className="builder-outline-row builder-outline-row--static">
-                    <span>tags</span>
-                    <span className="builder-outline-count">{node.tags.join(", ")}</span>
-                  </div>
-                )}
-              </div>
-            );
-          })()
-        ) : (
-          <div className="builder-zone-empty">Nothing selected</div>
-        )}
+        {(() => {
+          const node =
+            selection && world
+              ? world.nodes.find((n) => n.node_id === selection.id)
+              : undefined;
+          return node && world ? (
+            <BuilderInspector node={node} ephemeris={world.ephemeris} />
+          ) : (
+            <div className="builder-zone-empty">Nothing selected</div>
+          );
+        })()}
       </div>
       <div className="builder-status" data-testid="builder-status">
         {error ? (

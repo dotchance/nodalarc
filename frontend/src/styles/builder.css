@@ -172,8 +172,12 @@
   background: var(--bg-panel-hover);
 }
 
+.builder-outline-row--segment {
+  padding-left: var(--space-4);
+}
+
 .builder-outline-row--member {
-  padding-left: var(--space-5);
+  padding-left: var(--space-6);
   font-family: var(--font-mono);
   color: var(--text-secondary);
 }

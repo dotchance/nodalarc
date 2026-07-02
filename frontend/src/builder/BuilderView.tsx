@@ -191,7 +191,7 @@ export function BuilderView({
                 return (
                   <div key={seg.segment_id}>
                     <button
-                      className="builder-outline-row"
+                      className="builder-outline-row builder-outline-row--segment"
                       onClick={() => {
                         actionsRef.current?.focusNode(seg.first_node_id);
                         if (expandable) {

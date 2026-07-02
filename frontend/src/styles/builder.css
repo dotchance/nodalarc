@@ -362,6 +362,71 @@
   max-width: 100%;
 }
 
+.builder-node-editor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.builder-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-2);
+}
+
+.builder-chip {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-main);
+  color: var(--text-primary);
+  font-size: var(--font-size-xxs);
+  font-family: var(--font-mono);
+  padding: 2px 8px;
+  cursor: pointer;
+  border-left-width: 3px;
+}
+
+.builder-chip--access {
+  border-left-color: var(--accent-teal);
+}
+
+.builder-chip--isl,
+.builder-chip--crosslink,
+.builder-chip--backbone {
+  border-left-color: var(--accent-blue);
+}
+
+.builder-chip--lan {
+  border-left-color: var(--accent-green);
+}
+
+.builder-chip--ghost {
+  border-style: dashed;
+  color: var(--text-secondary);
+  border-left-width: 1px;
+}
+
+.builder-chip--open,
+.builder-chip:hover {
+  background: var(--bg-panel-hover);
+}
+
+.builder-mount-editor,
+.builder-terminal-picker {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-1);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.builder-terminal-picker-list {
+  max-height: 220px;
+  overflow-y: auto;
+}
+
 .builder-preset-row {
   display: flex;
   flex-wrap: wrap;
@@ -438,4 +503,12 @@
 .builder-status-toggle--active {
   color: var(--accent-amber);
   border-color: var(--accent-amber);
+}
+
+.builder-library-note {
+  color: var(--status-ok);
+  font-size: var(--font-size-xs);
+  font-family: var(--font-mono);
+  padding: var(--space-1) var(--space-2);
+  word-break: break-all;
 }

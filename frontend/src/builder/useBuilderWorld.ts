@@ -32,27 +32,56 @@ export function useBuilderCatalog(family: string) {
   const [entries, setEntries] = useState<BuilderCatalogEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    let cancelled = false;
-    fetch(`${REST_URL}/api/v1/builder/catalog?family=${encodeURIComponent(family)}`, {
-      headers: authHeaders(),
-    })
-      .then(async (r) => {
-        if (!r.ok) throw new Error(await _errorMessage(r));
-        return r.json();
-      })
-      .then((data: BuilderCatalogEntry[]) => {
-        if (!cancelled) setEntries(data);
-      })
-      .catch((e: Error) => {
-        if (!cancelled) setError(e.message);
-      });
-    return () => {
-      cancelled = true;
-    };
+  const refresh = useCallback(async () => {
+    try {
+      const response = await fetch(
+        `${REST_URL}/api/v1/builder/catalog?family=${encodeURIComponent(family)}`,
+        { headers: authHeaders() },
+      );
+      if (!response.ok) throw new Error(await _errorMessage(response));
+      setEntries((await response.json()) as BuilderCatalogEntry[]);
+      setError(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
   }, [family]);
 
-  return { entries, error };
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  return { entries, error, refresh };
+}
+
+/** Read one catalog document (authoring-wrapper form). */
+export async function readCatalogObject(
+  ref: string,
+): Promise<{ ref: string; family_wrapper: string; document: Record<string, unknown> }> {
+  const response = await fetch(
+    `${REST_URL}/api/v1/builder/catalog/object?ref=${encodeURIComponent(ref)}`,
+    { headers: authHeaders() },
+  );
+  if (!response.ok) throw new Error(await _errorMessage(response));
+  return response.json();
+}
+
+/** Save one primitive document into the user catalog. */
+export async function saveUserObject(
+  family: string,
+  document: Record<string, unknown>,
+  options?: { overwrite?: boolean },
+): Promise<BuilderCatalogEntry> {
+  const response = await fetch(`${REST_URL}/api/v1/builder/catalog/save`, {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ family, document, overwrite: options?.overwrite ?? false }),
+  });
+  if (!response.ok) {
+    const error = new Error(await _errorMessage(response)) as Error & { status?: number };
+    error.status = response.status;
+    throw error;
+  }
+  return response.json();
 }
 
 export function useBuilderWorld() {

@@ -29,10 +29,32 @@ export interface DraftOrbit {
   propagator: "two_body" | "j2_mean_elements";
 }
 
+export interface DraftTerminalMount {
+  mount_id: string;
+  role: "access" | "isl" | "crosslink" | "backbone";
+  terminal_ref: string;
+  count: number;
+}
+
+/** An editable node: the grammar's Node object as draft state. LAN attach is
+ *  ``ethernet`` ports (the builder's "lan" chips serialize there — LAN is not
+ *  a terminal role). */
+export interface DraftNode {
+  id: string;
+  display_name: string;
+  forwarding: "routed" | "host" | "bridge" | "control_only";
+  ethernet: string[];
+  terminals: DraftTerminalMount[];
+}
+
 export interface DraftConstellation {
   segment_id: string;
   display_name: string;
+  /** The node model reference (shipped or user). When ``node_draft`` is set
+   *  it overrides the ref in serialization — fork-to-draft sets the draft,
+   *  discard clears it, save-to-library replaces the ref and clears it. */
   node_ref: string;
+  node_draft: DraftNode | null;
   orbit: DraftOrbit;
   planes: number;
   raan_spacing_deg: number;
@@ -94,11 +116,68 @@ export function newDraftConstellation(nodeRef: string): DraftConstellation {
     segment_id: `space-${draftCounter}`,
     display_name: `Constellation ${draftCounter}`,
     node_ref: nodeRef,
+    node_draft: null,
     orbit: defaultDraftOrbit(),
     planes: 3,
     raan_spacing_deg: 60,
     slots_per_plane: 8,
     phase_offset_deg: 0,
+  };
+}
+
+/** Convert a node document (authoring-wrapper form, as read from the catalog)
+ *  into an editable draft — the fork-to-draft direction of tweak-ours→yours.
+ *  Grammar constructs the editor cannot represent yet (payload mounts,
+ *  mount tags) are refused loudly rather than silently dropped. */
+export function draftNodeFromDocument(document: Record<string, unknown>): DraftNode {
+  const node = (document as { node?: Record<string, unknown> }).node;
+  if (!node) throw new Error("not a node document");
+  const payloads = node.payloads as unknown[] | undefined;
+  if (payloads && payloads.length > 0) {
+    throw new Error("this node carries payload mounts — payload editing is not built yet");
+  }
+  const terminals = ((node.terminals as Record<string, unknown>[] | undefined) ?? []).map(
+    (mount) => {
+      if (typeof mount.terminal !== "string") {
+        throw new Error(
+          "this node inlines terminal definitions — inline-terminal editing is not built yet",
+        );
+      }
+      return {
+        mount_id: String(mount.id),
+        role: mount.role as DraftTerminalMount["role"],
+        terminal_ref: mount.terminal,
+        count: Number(mount.count ?? 1),
+      };
+    },
+  );
+  return {
+    id: String(node.id ?? "custom-node"),
+    display_name: String(node.display_name ?? node.id ?? "Custom node"),
+    forwarding: (node.forwarding as DraftNode["forwarding"]) ?? "routed",
+    ethernet: ((node.ethernet as { id: string }[] | undefined) ?? []).map((port) =>
+      String(port.id),
+    ),
+    terminals,
+  };
+}
+
+/** Serialize a draft node to the grammar's Node object (unwrapped form —
+ *  nested object-valued fields accept it; the save-to-library path wraps). */
+export function nodeObjectFromDraft(draft: DraftNode): Record<string, unknown> {
+  return {
+    id: identifier(draft.id) || "custom-node",
+    display_name: draft.display_name,
+    forwarding: draft.forwarding,
+    ethernet: draft.ethernet.map((id) => ({ id: identifier(id) || "terr0" })),
+    terminals: draft.terminals.map((mount) => ({
+      id: identifier(mount.mount_id),
+      role: mount.role,
+      terminal: mount.terminal_ref,
+      count: mount.count,
+    })),
+    payloads: [],
+    reference: "session-builder-draft",
   };
 }
 
@@ -111,12 +190,16 @@ export function newWorkspace(name: string): Workspace {
   };
 }
 
-/** Normalize a display string into a grammar Identifier. */
+/** Normalize a display string into a grammar Identifier.
+ *
+ *  The grammar allows underscores (shipped mount ids like ``isl_optical``);
+ *  they must survive round-trips. Mapping identifiers into runtime node ids
+ *  (which ban underscores) is the RESOLVER's normalization, never ours. */
 export function identifier(value: string): string {
   return value
     .toLowerCase()
-    .replace(/[^a-z0-9-]+/g, "-")
-    .replace(/^-+|-+$/g, "")
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/^[-_]+|[-_]+$/g, "")
     .slice(0, 48);
 }
 
@@ -178,7 +261,7 @@ export function toSessionDocument(workspace: Workspace): Record<string, unknown>
       constellation: {
         id: identifier(`${workspace.name}-${draft.segment_id}`),
         display_name: draft.display_name,
-        node: draft.node_ref,
+        node: draft.node_draft ? nodeObjectFromDraft(draft.node_draft) : draft.node_ref,
         orbit: {
           id: identifier(`${draft.segment_id}-orbit`),
           central_body: "nodalarc:bodies/earth.yaml",

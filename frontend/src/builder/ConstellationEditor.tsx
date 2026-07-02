@@ -12,9 +12,13 @@
 
 import { useState } from "react";
 import { Button } from "../ui/Button";
-import { useBuilderCatalog } from "./useBuilderWorld";
+import { NodeEditor } from "./NodeEditor";
+import { readCatalogObject, saveUserObject, useBuilderCatalog } from "./useBuilderWorld";
 import {
   ORBIT_PRESETS,
+  draftNodeFromDocument,
+  identifier,
+  nodeObjectFromDraft,
   orbitWarnings,
   type DraftConstellation,
   type DraftOrbit,
@@ -69,6 +73,58 @@ export function ConstellationEditor({
   const nodes = useBuilderCatalog("nodes");
   const warnings = orbitWarnings(draft.orbit);
   const toggle = (id: string) => setOpenCard((prev) => (prev === id ? null : id));
+  const [forkError, setForkError] = useState<string | null>(null);
+  const [librarySave, setLibrarySave] = useState<
+    | { kind: "idle" }
+    | { kind: "saving" }
+    | { kind: "conflict" }
+    | { kind: "saved"; ref: string }
+    | { kind: "failed"; message: string }
+  >({ kind: "idle" });
+
+  // Fork-to-draft: read the referenced node's document and edit it inline.
+  // The origin ref stays as the fallback; discard just clears the draft.
+  const customizeNode = async () => {
+    setForkError(null);
+    try {
+      const { document } = await readCatalogObject(draft.node_ref);
+      const node_draft = draftNodeFromDocument(document);
+      // A forked copy is a NEW object: never claim the original's identity.
+      node_draft.id = identifier(`${node_draft.id}-custom`);
+      node_draft.display_name = `${node_draft.display_name} (custom)`;
+      onUpdate({ node_draft });
+      setLibrarySave({ kind: "idle" });
+    } catch (e) {
+      setForkError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  // Save the draft to the user catalog and let the segment REFERENCE it —
+  // draft → user: ref, the library direction of tweak-ours→yours.
+  const saveNodeToLibrary = async () => {
+    if (!draft.node_draft) return;
+    setLibrarySave({ kind: "saving" });
+    try {
+      const entry = await saveUserObject(
+        "nodes",
+        { node: nodeObjectFromDraft(draft.node_draft) },
+        { overwrite: librarySave.kind === "conflict" },
+      );
+      onUpdate({ node_ref: entry.ref, node_draft: null });
+      setLibrarySave({ kind: "saved", ref: entry.ref });
+      void nodes.refresh();
+    } catch (e) {
+      const status = (e as Error & { status?: number }).status;
+      if (status === 409 && librarySave.kind !== "conflict") {
+        setLibrarySave({ kind: "conflict" });
+      } else {
+        setLibrarySave({
+          kind: "failed",
+          message: e instanceof Error ? e.message : String(e),
+        });
+      }
+    }
+  };
 
   return (
     <div className="builder-inspector-stack" data-testid="builder-editor">
@@ -219,25 +275,67 @@ export function ConstellationEditor({
         <button className="builder-card-head" onClick={() => toggle("node")}>
           <span className="builder-card-title">Node</span>
           <span className="builder-card-summary">
-            {draft.node_ref.split("/").pop()?.replace(".yaml", "")}
+            {draft.node_draft
+              ? `${draft.node_draft.display_name} (custom) · ${draft.node_draft.terminals.reduce((s, m) => s + m.count, 0)} terminals`
+              : draft.node_ref.split("/").pop()?.replace(".yaml", "")}
           </span>
         </button>
         {openCard === "node" && (
           <div className="builder-card-body">
-            <select
-              aria-label="Node primitive"
-              value={draft.node_ref}
-              onChange={(e) => onUpdate({ node_ref: e.target.value })}
-            >
-              {nodes.entries
-                .filter((entry) => !entry.error)
-                .map((entry) => (
-                  <option key={entry.ref} value={entry.ref}>
-                    {entry.display_name ?? entry.id ?? entry.ref}
-                  </option>
-                ))}
-            </select>
-            {nodes.error && <div className="builder-warning">{nodes.error}</div>}
+            {draft.node_draft ? (
+              <>
+                <NodeEditor
+                  draft={draft.node_draft}
+                  onChange={(node_draft) => onUpdate({ node_draft })}
+                />
+                <div className="builder-preset-row">
+                  <Button
+                    variant="primary"
+                    onClick={() => void saveNodeToLibrary()}
+                    disabled={librarySave.kind === "saving"}
+                  >
+                    {librarySave.kind === "conflict"
+                      ? "Overwrite in library?"
+                      : librarySave.kind === "saving"
+                        ? "Saving…"
+                        : "Save to library"}
+                  </Button>
+                  <Button onClick={() => onUpdate({ node_draft: null })}>
+                    Discard customization
+                  </Button>
+                </div>
+              </>
+            ) : (
+              <>
+                <select
+                  aria-label="Node primitive"
+                  value={draft.node_ref}
+                  onChange={(e) => onUpdate({ node_ref: e.target.value })}
+                >
+                  {nodes.entries
+                    .filter((entry) => !entry.error)
+                    .map((entry) => (
+                      <option key={entry.ref} value={entry.ref}>
+                        {entry.display_name ?? entry.id ?? entry.ref}
+                        {entry.ref.startsWith("user:") ? " (yours)" : ""}
+                      </option>
+                    ))}
+                </select>
+                <div className="builder-preset-row">
+                  <Button onClick={() => void customizeNode()}>Customize node</Button>
+                </div>
+                {forkError && <div className="builder-warning">{forkError}</div>}
+                {nodes.error && <div className="builder-warning">{nodes.error}</div>}
+              </>
+            )}
+            {librarySave.kind === "failed" && (
+              <div className="builder-warning">{librarySave.message}</div>
+            )}
+            {librarySave.kind === "saved" && (
+              <div className="builder-library-note" data-testid="library-note">
+                saved to your library as {librarySave.ref}
+              </div>
+            )}
           </div>
         )}
       </div>

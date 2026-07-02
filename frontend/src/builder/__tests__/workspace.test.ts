@@ -27,7 +27,9 @@ function draftWorkspace() {
 describe("identifier", () => {
   it("normalizes display strings into grammar identifiers", () => {
     expect(identifier("My Test Session")).toBe("my-test-session");
-    expect(identifier("  weird__chars!! ")).toBe("weird-chars");
+    // Underscores are grammar (Identifier allows [a-z0-9_-]) and must survive.
+    expect(identifier("isl_optical")).toBe("isl_optical");
+    expect(identifier("  weird__chars!! ")).toBe("weird__chars");
     expect(identifier("---")).toBe("");
   });
 });
@@ -99,5 +101,58 @@ describe("orbitWarnings", () => {
     const warnings = orbitWarnings(orbit);
     expect(warnings).toContain("perigee inside the upper atmosphere — rapid decay");
     expect(warnings).toContain("apogee is below perigee — swap them");
+  });
+});
+
+describe("node drafts", () => {
+  it("serializes a node draft inline, overriding the reference", async () => {
+    const { draftNodeFromDocument, nodeObjectFromDraft } = await import("../workspace");
+    const workspace = draftWorkspace();
+    const draft = draftNodeFromDocument({
+      node: {
+        id: "starlink-v2-mesh",
+        display_name: "Starlink v2 routed spacecraft",
+        forwarding: "routed",
+        ethernet: [],
+        terminals: [
+          { id: "access_ka", role: "access", terminal: "nodalarc:terminals/rf/x.yaml", count: 1 },
+          { id: "isl_optical", role: "isl", terminal: "nodalarc:terminals/optical/y.yaml", count: 4 },
+        ],
+        payloads: [],
+      },
+    });
+    expect(draft.terminals).toHaveLength(2);
+    workspace.space[0]!.node_draft = { ...draft, ethernet: ["terr0"] };
+    const doc = toSessionDocument(workspace) as any;
+    const node = doc.segments[0].source.constellation.node;
+    expect(typeof node).toBe("object");
+    expect(node.ethernet).toEqual([{ id: "terr0" }]);
+    expect(node.terminals[1]).toEqual({
+      id: "isl_optical",
+      role: "isl",
+      terminal: "nodalarc:terminals/optical/y.yaml",
+      count: 4,
+    });
+    // Round-trip: the emitted object forks back into an equal draft.
+    const roundTrip = draftNodeFromDocument({ node: nodeObjectFromDraft(workspace.space[0]!.node_draft!) });
+    expect(roundTrip.terminals).toEqual(workspace.space[0]!.node_draft!.terminals);
+    expect(roundTrip.ethernet).toEqual(["terr0"]);
+  });
+
+  it("refuses fork of grammar the editor cannot represent yet", async () => {
+    const { draftNodeFromDocument } = await import("../workspace");
+    expect(() =>
+      draftNodeFromDocument({
+        node: { id: "p", payloads: [{ id: "pl", payload: "x", count: 1 }] },
+      }),
+    ).toThrow(/payload/);
+    expect(() =>
+      draftNodeFromDocument({
+        node: {
+          id: "inline-terminal",
+          terminals: [{ id: "t", role: "access", terminal: { id: "inline" }, count: 1 }],
+        },
+      }),
+    ).toThrow(/inline-terminal editing/);
   });
 });

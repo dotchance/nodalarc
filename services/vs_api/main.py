@@ -97,6 +97,20 @@ def _generated_sessions_dir() -> Path:
     return Path(get_platform_config().session_data_root) / "generated-sessions"
 
 
+def _builder_catalog_roots() -> CatalogRoots:
+    """Both catalog tiers for the builder's authoring endpoints.
+
+    Deploy and runtime paths keep the shipped-only _CATALOG_ROOTS: saved
+    sessions are flattened, so a user: reference reaching a deploy path is a
+    contract violation and must fail, not resolve.
+    """
+    return CatalogRoots(
+        root=_CATALOG_ROOTS.root,
+        sessions=_CATALOG_ROOTS.sessions,
+        user_root=Path(get_platform_config().session_data_root) / "user-catalog",
+    )
+
+
 def _catalog_ref_for_path(path: Path) -> str:
     rel = path.resolve(strict=True).relative_to(_CATALOG_ROOTS.root.resolve(strict=True))
     return "nodalarc:" + rel.as_posix()
@@ -3123,7 +3137,11 @@ async def builder_resolve_world(body: dict) -> dict:
     try:
         resolve_check = await loop.run_in_executor(
             None,
-            partial(build_builder_resolve_check, world_source, catalog_roots=_CATALOG_ROOTS),
+            partial(
+                build_builder_resolve_check,
+                world_source,
+                catalog_roots=_builder_catalog_roots(),
+            ),
         )
     except CatalogPathError as exc:
         return _catalog_error(exc)
@@ -3164,9 +3182,18 @@ async def builder_save_session(body: dict) -> dict:
 
     loop = asyncio.get_event_loop()
     try:
+        # Hermetic save: user-library references are dereferenced into inline
+        # objects (the same grammar), so the saved file resolves against the
+        # shipped catalog alone and never drifts with later library edits.
+        from nodalarc.catalog_browse import flatten_user_references
+
+        builder_roots = _builder_catalog_roots()
+        document = await loop.run_in_executor(
+            None, partial(flatten_user_references, document, roots=builder_roots)
+        )
         resolve_check = await loop.run_in_executor(
             None,
-            partial(build_builder_resolve_check, document, catalog_roots=_CATALOG_ROOTS),
+            partial(build_builder_resolve_check, document, catalog_roots=builder_roots),
         )
     except CatalogPathError as exc:
         return _catalog_error(exc)
@@ -3208,10 +3235,57 @@ def builder_catalog(family: str) -> list[dict]:
     from nodalarc.catalog_browse import browse_catalog
 
     try:
-        entries = browse_catalog(family, roots=_CATALOG_ROOTS)
+        entries = browse_catalog(family, roots=_builder_catalog_roots())
     except ValueError as exc:
         return _error_response(400, str(exc))
     return [entry.model_dump(mode="json") for entry in entries]
+
+
+@app.post("/api/v1/builder/catalog/save", dependencies=[Depends(_require_api_key)])
+def builder_catalog_save(body: dict) -> dict:
+    """Save one primitive document into the user catalog.
+
+    The document must satisfy its family's grammar (the library never stores
+    what the resolver would reject); overwriting an existing user entry
+    requires overwrite=true. The shipped catalog is not writable, ever.
+    """
+    from nodalarc.catalog_browse import save_user_object
+
+    family = body.get("family")
+    document = body.get("document")
+    overwrite = bool(body.get("overwrite", False))
+    if not isinstance(family, str) or not isinstance(document, dict):
+        return _error_response(400, "family and document are required")
+    try:
+        entry = save_user_object(
+            family, document, roots=_builder_catalog_roots(), overwrite=overwrite
+        )
+    except FileExistsError as exc:
+        return JSONResponse(status_code=409, content={"error": str(exc)})
+    except CatalogPathError as exc:
+        return _catalog_error(exc)
+    except Exception as exc:
+        # The user's own document failed its family grammar - message verbatim.
+        return JSONResponse(status_code=422, content={"error": str(exc)})
+    log.info("Builder saved user catalog entry %s", entry.ref)
+    return entry.model_dump(mode="json")
+
+
+@app.delete("/api/v1/builder/catalog/object", dependencies=[Depends(_require_api_key)])
+def builder_catalog_delete(ref: str) -> dict:
+    """Delete one user catalog entry. Shipped entries are immutable."""
+    from nodalarc.catalog_browse import delete_user_object
+
+    try:
+        delete_user_object(ref, roots=_builder_catalog_roots())
+    except FileNotFoundError:
+        return _error_response(404, "user catalog entry not found")
+    except CatalogPathError as exc:
+        return _catalog_error(exc)
+    except ValueError as exc:
+        return _error_response(400, str(exc))
+    log.info("Builder deleted user catalog entry %s", ref)
+    return {"deleted": ref}
 
 
 @app.get("/api/v1/builder/catalog/object", dependencies=[Depends(_require_api_key)])
@@ -3220,7 +3294,7 @@ def builder_catalog_object(ref: str) -> dict:
     from nodalarc.catalog_browse import read_catalog_object
 
     try:
-        wrapper, document = read_catalog_object(ref, roots=_CATALOG_ROOTS)
+        wrapper, document = read_catalog_object(ref, roots=_builder_catalog_roots())
     except CatalogPathError as exc:
         return _catalog_error(exc)
     except FileNotFoundError as exc:

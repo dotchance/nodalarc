@@ -304,3 +304,154 @@ def test_save_session_rejects_unresolvable_document(monkeypatch, tmp_path):
 def test_save_session_requires_mapping_document():
     response = client.post("/api/v1/builder/save-session", json={"document": "nope"})
     assert response.status_code == 400
+
+
+_USER_TERMINAL = {
+    "terminal": {
+        "id": "my-ka-terminal",
+        "display_name": "My Ka terminal",
+        "medium": "rf",
+        "signal": {"band": "ka", "frequency_hz": 29.5e9},
+        "bandwidth_mbps": {"transmit": 500.0, "receive": 500.0},
+        "tracking_capacity": 1,
+        "max_range_km": 2500.0,
+        "limits": {
+            "azimuth_deg": {"min": -180, "max": 180},
+            "elevation_deg": {"min": 20, "max": 90},
+            "max_tracking_rate_deg_s": 2.0,
+        },
+        "reference": "test",
+    }
+}
+
+
+@pytest.fixture()
+def user_roots(monkeypatch, tmp_path):
+    """Builder endpoints see a tmp user catalog beside the real shipped one."""
+    import vs_api.main as main
+    from nodalarc.catalog_paths import CatalogRoots
+
+    roots = CatalogRoots(
+        root=main._CATALOG_ROOTS.root,
+        sessions=main._CATALOG_ROOTS.sessions,
+        user_root=tmp_path / "user-catalog",
+    )
+    monkeypatch.setattr(main, "_builder_catalog_roots", lambda: roots)
+    monkeypatch.setattr(main, "_generated_sessions_dir", lambda: tmp_path / "generated")
+    monkeypatch.setattr(main, "_session_manager", None)
+    return roots
+
+
+def test_user_catalog_save_browse_delete_round_trip(user_roots):
+    saved = client.post(
+        "/api/v1/builder/catalog/save",
+        json={"family": "terminals", "document": _USER_TERMINAL},
+    )
+    assert saved.status_code == 200
+    ref = saved.json()["ref"]
+    assert ref == "user:terminals/my-ka-terminal.yaml"
+
+    listed = client.get("/api/v1/builder/catalog", params={"family": "terminals"})
+    refs = [e["ref"] for e in listed.json()]
+    assert ref in refs
+    assert any(r.startswith("nodalarc:") for r in refs)
+
+    duplicate = client.post(
+        "/api/v1/builder/catalog/save",
+        json={"family": "terminals", "document": _USER_TERMINAL},
+    )
+    assert duplicate.status_code == 409
+
+    overwritten = client.post(
+        "/api/v1/builder/catalog/save",
+        json={"family": "terminals", "document": _USER_TERMINAL, "overwrite": True},
+    )
+    assert overwritten.status_code == 200
+
+    deleted = client.delete("/api/v1/builder/catalog/object", params={"ref": ref})
+    assert deleted.status_code == 200
+    assert ref not in [
+        e["ref"]
+        for e in client.get("/api/v1/builder/catalog", params={"family": "terminals"}).json()
+    ]
+
+
+def test_user_catalog_rejects_invalid_and_shipped_targets(user_roots):
+    invalid = client.post(
+        "/api/v1/builder/catalog/save",
+        json={"family": "terminals", "document": {"terminal": {"id": "broken"}}},
+    )
+    assert invalid.status_code == 422
+
+    shipped = client.delete(
+        "/api/v1/builder/catalog/object",
+        params={"ref": "nodalarc:terminals/rf/rf-ka-starlink-space-gateway.yaml"},
+    )
+    assert shipped.status_code == 400
+
+    missing = client.delete(
+        "/api/v1/builder/catalog/object",
+        params={"ref": "user:terminals/never-existed.yaml"},
+    )
+    assert missing.status_code == 404
+
+
+def test_save_session_flattens_user_references(user_roots):
+    node_doc = {
+        "node": {
+            "id": "my-router",
+            "display_name": "My router",
+            "forwarding": "routed",
+            "ethernet": [],
+            "terminals": [
+                {
+                    "id": "access_ka",
+                    "role": "access",
+                    "terminal": "user:terminals/my-ka-terminal.yaml",
+                    "count": 1,
+                }
+            ],
+            "payloads": [],
+        }
+    }
+    assert (
+        client.post(
+            "/api/v1/builder/catalog/save",
+            json={"family": "terminals", "document": _USER_TERMINAL},
+        ).status_code
+        == 200
+    )
+    assert (
+        client.post(
+            "/api/v1/builder/catalog/save",
+            json={"family": "nodes", "document": node_doc},
+        ).status_code
+        == 200
+    )
+
+    raw = yaml.safe_load(_WALKER_PATH.read_text(encoding="utf-8"))
+    # The probe node is access-only; the walker's isl rule would rightly fail
+    # with zero compatible mounts, so the probe session drops it.
+    raw["link_rules"] = [rule for rule in raw["link_rules"] if rule["id"] != "leo_isl"]
+    raw["segments"][0]["source"] = {
+        "constellation": {
+            "id": "flatten-probe",
+            "display_name": "Flatten probe",
+            "node": "user:nodes/my-router.yaml",
+            "orbit": "nodalarc:orbits/earth/leo/earth-leo-starlink.yaml",
+            "planes": {"count": 1, "raan_spacing_deg": 0},
+            "slots_per_plane": 2,
+            "phasing": {"mode": "evenly_spaced_mean_anomaly", "phase_offset_deg": 0},
+            "node_tags": [{"tag": "all"}],
+            "reference": "test",
+        }
+    }
+    response = client.post("/api/v1/builder/save-session", json={"document": raw})
+    assert response.status_code == 200, response.json()
+    saved = next((user_roots.user_root.parent / "generated").glob("_builder-*.yaml"))
+    text = saved.read_text(encoding="utf-8")
+    # Hermetic: no user references survive; the node is inline; shipped refs stay.
+    assert "user:" not in text
+    assert "my-ka-terminal" in text
+    assert "nodalarc:orbits/earth/leo/earth-leo-starlink.yaml" in text
+    assert len(resolve_session(yaml.safe_load(text)).nodes) > 0

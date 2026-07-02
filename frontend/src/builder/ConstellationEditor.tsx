@@ -87,7 +87,10 @@ export function ConstellationEditor({
         <button className="builder-card-head" onClick={() => toggle("orbit")}>
           <span className="builder-card-title">Orbit</span>
           <span className="builder-card-summary">
-            {Math.round(draft.orbit.altitude_km)} km · {draft.orbit.inclination_deg.toFixed(1)}°
+            {draft.orbit.shape_kind === "circular"
+              ? `${Math.round(draft.orbit.altitude_km)} km circular`
+              : `${Math.round(draft.orbit.perigee_altitude_km)} × ${Math.round(draft.orbit.apogee_altitude_km)} km`}{" "}
+            · {draft.orbit.inclination_deg.toFixed(1)}°
           </span>
         </button>
         {openCard === "orbit" && (
@@ -99,13 +102,54 @@ export function ConstellationEditor({
                 </Button>
               ))}
             </div>
-            <NumberField
-              label="altitude"
-              value={draft.orbit.altitude_km}
-              step={10}
-              suffix="km"
-              onChange={(altitude_km) => onUpdateOrbit({ altitude_km })}
-            />
+            <div className="builder-preset-row" role="radiogroup" aria-label="Orbit shape">
+              <Button
+                active={draft.orbit.shape_kind === "circular"}
+                onClick={() => onUpdateOrbit({ shape_kind: "circular" })}
+              >
+                circular
+              </Button>
+              <Button
+                active={draft.orbit.shape_kind === "elliptical"}
+                onClick={() => onUpdateOrbit({ shape_kind: "elliptical" })}
+              >
+                elliptical
+              </Button>
+            </div>
+            {draft.orbit.shape_kind === "circular" ? (
+              <NumberField
+                label="altitude"
+                value={draft.orbit.altitude_km}
+                step={10}
+                suffix="km"
+                onChange={(altitude_km) => onUpdateOrbit({ altitude_km })}
+              />
+            ) : (
+              <>
+                <NumberField
+                  label="perigee"
+                  value={draft.orbit.perigee_altitude_km}
+                  step={10}
+                  suffix="km"
+                  onChange={(perigee_altitude_km) => onUpdateOrbit({ perigee_altitude_km })}
+                />
+                <NumberField
+                  label="apogee"
+                  value={draft.orbit.apogee_altitude_km}
+                  step={10}
+                  suffix="km"
+                  onChange={(apogee_altitude_km) => onUpdateOrbit({ apogee_altitude_km })}
+                />
+                <NumberField
+                  label="arg of perigee"
+                  value={draft.orbit.argument_of_perigee_deg}
+                  suffix="deg"
+                  onChange={(argument_of_perigee_deg) =>
+                    onUpdateOrbit({ argument_of_perigee_deg })
+                  }
+                />
+              </>
+            )}
             <NumberField
               label="inclination"
               value={draft.orbit.inclination_deg}

@@ -15,7 +15,13 @@
  */
 
 export interface DraftOrbit {
+  /** Circular uses altitude_km; elliptical uses perigee/apogee. One form
+   *  serializes (the grammar's OrbitShape variants); the other fields are
+   *  kept so switching shape kinds never loses typed values. */
+  shape_kind: "circular" | "elliptical";
   altitude_km: number;
+  perigee_altitude_km: number;
+  apogee_altitude_km: number;
   inclination_deg: number;
   raan_deg: number;
   argument_of_perigee_deg: number;
@@ -44,15 +50,34 @@ export interface Workspace {
 
 /** Orbit presets seed RAW VALUES the user then owns — never modes. */
 export const ORBIT_PRESETS: { label: string; orbit: Partial<DraftOrbit> }[] = [
-  { label: "LEO 550", orbit: { altitude_km: 550, inclination_deg: 53 } },
-  { label: "Polar LEO", orbit: { altitude_km: 780, inclination_deg: 86.4 } },
-  { label: "MEO (GPS-like)", orbit: { altitude_km: 20180, inclination_deg: 55 } },
-  { label: "GEO", orbit: { altitude_km: 35786, inclination_deg: 0 } },
+  { label: "LEO 550", orbit: { shape_kind: "circular", altitude_km: 550, inclination_deg: 53 } },
+  {
+    label: "Polar LEO",
+    orbit: { shape_kind: "circular", altitude_km: 780, inclination_deg: 86.4 },
+  },
+  {
+    label: "MEO (GPS-like)",
+    orbit: { shape_kind: "circular", altitude_km: 20180, inclination_deg: 55 },
+  },
+  { label: "GEO", orbit: { shape_kind: "circular", altitude_km: 35786, inclination_deg: 0 } },
+  {
+    label: "Molniya",
+    orbit: {
+      shape_kind: "elliptical",
+      perigee_altitude_km: 600,
+      apogee_altitude_km: 39700,
+      inclination_deg: 63.4,
+      argument_of_perigee_deg: 270,
+    },
+  },
 ];
 
 export function defaultDraftOrbit(): DraftOrbit {
   return {
+    shape_kind: "circular",
     altitude_km: 550,
+    perigee_altitude_km: 550,
+    apogee_altitude_km: 550,
     inclination_deg: 53,
     raan_deg: 0,
     argument_of_perigee_deg: 0,
@@ -99,10 +124,26 @@ export function identifier(value: string): string {
  *  paths; only the physically broken gets flagged, in plain language). */
 export function orbitWarnings(orbit: DraftOrbit): string[] {
   const warnings: string[] = [];
-  if (orbit.altitude_km <= 0) {
-    warnings.push("orbit is below the surface");
-  } else if (orbit.altitude_km < 160) {
-    warnings.push("inside the upper atmosphere — rapid decay");
+  const low =
+    orbit.shape_kind === "circular" ? orbit.altitude_km : orbit.perigee_altitude_km;
+  if (low <= 0) {
+    warnings.push(
+      orbit.shape_kind === "circular"
+        ? "orbit is below the surface"
+        : "perigee is below the surface",
+    );
+  } else if (low < 160) {
+    warnings.push(
+      orbit.shape_kind === "circular"
+        ? "inside the upper atmosphere — rapid decay"
+        : "perigee inside the upper atmosphere — rapid decay",
+    );
+  }
+  if (
+    orbit.shape_kind === "elliptical" &&
+    orbit.apogee_altitude_km < orbit.perigee_altitude_km
+  ) {
+    warnings.push("apogee is below perigee — swap them");
   }
   return warnings;
 }
@@ -142,7 +183,13 @@ export function toSessionDocument(workspace: Workspace): Record<string, unknown>
           id: identifier(`${draft.segment_id}-orbit`),
           central_body: "nodalarc:bodies/earth.yaml",
           epoch: workspace.start_time,
-          shape: { altitude_km: draft.orbit.altitude_km },
+          shape:
+            draft.orbit.shape_kind === "circular"
+              ? { altitude_km: draft.orbit.altitude_km }
+              : {
+                  perigee_altitude_km: draft.orbit.perigee_altitude_km,
+                  apogee_altitude_km: draft.orbit.apogee_altitude_km,
+                },
           orientation: {
             inclination_deg: draft.orbit.inclination_deg,
             raan_deg: draft.orbit.raan_deg,

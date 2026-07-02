@@ -141,8 +141,10 @@ export function BuilderView({
     removeConstellation,
     updateConstellation,
     updateOrbit,
+    setGroundSiteSet,
   } = useWorkspace(resolveDocument);
   const nodeCatalog = useBuilderCatalog("nodes");
+  const siteSetCatalog = useBuilderCatalog("site-sets");
   const [editingSegment, setEditingSegment] = useState<string | null>(null);
   const [showYaml, setShowYaml] = useState(false);
   const [saveState, setSaveState] = useState<
@@ -278,6 +280,23 @@ export function BuilderView({
                 </span>
               </button>
             ))}
+            <label className="builder-field builder-field--stack">
+              <span className="builder-field-label">ground sites</span>
+              <select
+                aria-label="Ground site set"
+                value={workspace.ground_site_set_ref ?? ""}
+                onChange={(e) => setGroundSiteSet(e.target.value || null)}
+              >
+                <option value="">none</option>
+                {siteSetCatalog.entries
+                  .filter((entry) => !entry.error)
+                  .map((entry) => (
+                    <option key={entry.ref} value={entry.ref}>
+                      {entry.display_name ?? entry.id ?? entry.ref}
+                    </option>
+                  ))}
+              </select>
+            </label>
             <Button
               disabled={!defaultNodeRef}
               onClick={() => defaultNodeRef && addConstellation(defaultNodeRef)}

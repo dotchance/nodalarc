@@ -346,6 +346,22 @@
   color: var(--text-dim);
 }
 
+.builder-field--stack {
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--space-1);
+}
+
+.builder-field--stack select {
+  background: var(--bg-main);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--font-size-xs);
+  max-width: 100%;
+}
+
 .builder-preset-row {
   display: flex;
   flex-wrap: wrap;

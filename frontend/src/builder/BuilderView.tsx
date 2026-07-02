@@ -30,7 +30,9 @@ import { BuilderInspector } from "./BuilderInspector";
 import { builderSnapshotFromWorld } from "./builderSnapshot";
 import { CandidateLines } from "./CandidateLines";
 import { computeCandidates } from "./candidates";
-import { useBuilderWorld } from "./useBuilderWorld";
+import { ConstellationEditor } from "./ConstellationEditor";
+import { useBuilderCatalog, useBuilderWorld } from "./useBuilderWorld";
+import { useWorkspace } from "./useWorkspace";
 import type { BuilderWorld } from "./builderTypes";
 
 interface BuilderViewProps {
@@ -112,11 +114,42 @@ export function BuilderView({
   showTrails,
   actionsRef,
 }: BuilderViewProps) {
-  const { sessions, sessionsError, world, loading, error, loadSession } = useBuilderWorld();
+  const {
+    sessions,
+    sessionsError,
+    world,
+    documentYaml,
+    loading,
+    error,
+    loadSession,
+    resolveDocument,
+    clear,
+  } = useBuilderWorld();
   const [selectedFile, setSelectedFile] = useState("");
   // Builder-local selection: inspect-only, never shared with the live view's
   // selection (two different worlds must not share a pointer).
   const [selection, setSelection] = useState<Selection | null>(null);
+  // The authoring workspace: client-side drafts, resolve-checked on every
+  // edit; the world on screen is always the resolver's expansion of it.
+  const {
+    workspace,
+    startNew,
+    close: closeWorkspace,
+    addConstellation,
+    removeConstellation,
+    updateConstellation,
+    updateOrbit,
+  } = useWorkspace(resolveDocument);
+  const nodeCatalog = useBuilderCatalog("nodes");
+  const [editingSegment, setEditingSegment] = useState<string | null>(null);
+  const [showYaml, setShowYaml] = useState(false);
+  // Default node model for a fresh constellation: prefer the catalog's space
+  // nodes (directory layout is authoring convention, so this is a display
+  // heuristic only — the picker offers every node either way).
+  const defaultNodeRef =
+    nodeCatalog.entries.find((e) => !e.error && e.ref.includes("nodes/space/"))?.ref ??
+    nodeCatalog.entries.find((e) => !e.error)?.ref ??
+    null;
   // Ground segments enumerate their members in the tree (small, placed sets —
   // click-at-your-granularity). Space segments stay aggregates; individual
   // satellites are spot-checked on the canvas, not listed 176-deep.
@@ -193,11 +226,58 @@ export function BuilderView({
           <Button
             variant="primary"
             disabled={!selectedFile || loading}
-            onClick={() => loadSession(selectedFile)}
+            onClick={() => {
+              closeWorkspace();
+              setEditingSegment(null);
+              loadSession(selectedFile);
+            }}
           >
             {loading ? "Resolving…" : "Load"}
           </Button>
         </div>
+        {!workspace && (
+          <Button
+            onClick={() => {
+              clear();
+              setSelection(null);
+              setEditingSegment(null);
+              startNew("untitled-session");
+            }}
+          >
+            New session
+          </Button>
+        )}
+        {workspace && (
+          <div className="builder-outline-group" data-testid="builder-drafts">
+            <div className="builder-outline-kind">Drafts · {workspace.name}</div>
+            {workspace.space.map((draft) => (
+              <button
+                className={`builder-outline-row builder-outline-row--segment${
+                  editingSegment === draft.segment_id
+                    ? " builder-outline-row--selected"
+                    : ""
+                }`}
+                key={draft.segment_id}
+                onClick={() => setEditingSegment(draft.segment_id)}
+                title={`Edit ${draft.display_name}`}
+              >
+                <span className="builder-outline-name builder-outline-name--space">
+                  <Icon name="orbit" size={12} />
+                  {draft.display_name}
+                </span>
+                <span className="builder-outline-count">
+                  {draft.planes * draft.slots_per_plane} sat
+                </span>
+              </button>
+            ))}
+            <Button
+              disabled={!defaultNodeRef}
+              onClick={() => defaultNodeRef && addConstellation(defaultNodeRef)}
+            >
+              + Add constellation
+            </Button>
+          </div>
+        )}
         {sessionsError && (
           <div className="builder-zone-empty builder-status-item--error">
             session list unavailable: {sessionsError}
@@ -316,13 +396,56 @@ export function BuilderView({
           </VisualizationErrorBoundary>
         ) : (
           <div className="builder-zone-empty">
-            {snapshotError ?? "Load a catalog session to render its resolved world"}
+            {snapshotError ??
+              (workspace
+                ? "Add a constellation to begin — the world renders as soon as the draft resolves"
+                : "Load a catalog session or start a new one")}
+          </div>
+        )}
+        {showYaml && documentYaml && (
+          <div className="builder-yaml-pane" data-testid="builder-yaml">
+            <div className="builder-yaml-head">
+              <span className="builder-zone-title">Session YAML</span>
+              <span className="builder-yaml-actions">
+                <Button onClick={() => navigator.clipboard?.writeText(documentYaml)}>
+                  Copy
+                </Button>
+                <Button
+                  onClick={() => {
+                    const blob = new Blob([documentYaml], { type: "text/yaml" });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement("a");
+                    a.href = url;
+                    a.download = `${world?.session.name ?? "session"}.yaml`;
+                    a.click();
+                    URL.revokeObjectURL(url);
+                  }}
+                >
+                  Download
+                </Button>
+              </span>
+            </div>
+            <pre className="builder-yaml-body">{documentYaml}</pre>
           </div>
         )}
       </div>
       <div className="builder-inspector" data-testid="builder-inspector">
         <div className="builder-zone-title">Inspector</div>
         {(() => {
+          const draft = workspace?.space.find((d) => d.segment_id === editingSegment);
+          if (draft) {
+            return (
+              <ConstellationEditor
+                draft={draft}
+                onUpdate={(patch) => updateConstellation(draft.segment_id, patch)}
+                onUpdateOrbit={(patch) => updateOrbit(draft.segment_id, patch)}
+                onRemove={() => {
+                  removeConstellation(draft.segment_id);
+                  setEditingSegment(null);
+                }}
+              />
+            );
+          }
           const node =
             selection && world
               ? world.nodes.find((n) => n.node_id === selection.id)
@@ -355,7 +478,17 @@ export function BuilderView({
             )}
           </span>
         ) : (
-          <span className="builder-status-item">builder — read-only shell</span>
+          <span className="builder-status-item">
+            {workspace ? "draft — not resolved yet" : "no session loaded"}
+          </span>
+        )}
+        {documentYaml && (
+          <button
+            className={`builder-status-toggle${showYaml ? " builder-status-toggle--active" : ""}`}
+            onClick={() => setShowYaml((v) => !v)}
+          >
+            YAML
+          </button>
         )}
       </div>
     </div>

@@ -18,6 +18,7 @@ from nodalarc.ephemeris_runtime import session_epoch_unix
 from nodalarc.models.builder_world import (
     BuilderLinkEndpoint,
     BuilderLinkRule,
+    BuilderResolveCheck,
     BuilderWorld,
     BuilderWorldNode,
 )
@@ -85,6 +86,20 @@ def _builder_link_rule(
     )
 
 
+def build_builder_resolve_check(
+    session_source: str | dict[str, Any],
+    *,
+    catalog_roots: CatalogRoots | None = None,
+) -> BuilderResolveCheck:
+    """Resolve a session document and return the world with its canonical YAML."""
+    roots = catalog_roots or default_catalog_roots()
+    raw = _load_session_source(session_source, roots)
+    return BuilderResolveCheck(
+        world=_world_from_raw(raw, roots),
+        document_yaml=yaml.dump(raw, default_flow_style=False, sort_keys=False),
+    )
+
+
 def build_builder_world(
     session_source: str | dict[str, Any],
     *,
@@ -97,6 +112,12 @@ def build_builder_world(
     typed — nothing is rendered on failure.
     """
     roots = catalog_roots or default_catalog_roots()
+    return _world_from_raw(_load_session_source(session_source, roots), roots)
+
+
+def _load_session_source(
+    session_source: str | dict[str, Any], roots: CatalogRoots
+) -> dict[str, Any]:
     if isinstance(session_source, str):
         path = resolve_catalog_reference(session_source, roots, label="builder session")
         raw = yaml.safe_load(path.read_text(encoding="utf-8"))
@@ -104,6 +125,10 @@ def build_builder_world(
         raw = session_source
     if not raw:
         raise ValueError("builder session source is empty")
+    return raw
+
+
+def _world_from_raw(raw: dict[str, Any], roots: CatalogRoots) -> BuilderWorld:
 
     resolution = resolve_session_with_assets(
         raw,

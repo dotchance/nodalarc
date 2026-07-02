@@ -3087,7 +3087,7 @@ async def builder_resolve_world(body: dict) -> dict:
     """
     from functools import partial
 
-    from ome.builder_world import build_builder_world
+    from ome.builder_world import build_builder_resolve_check
 
     source = body.get("source")
     session_key = body.get("session")
@@ -3121,9 +3121,9 @@ async def builder_resolve_world(body: dict) -> dict:
 
     loop = asyncio.get_event_loop()
     try:
-        world = await loop.run_in_executor(
+        resolve_check = await loop.run_in_executor(
             None,
-            partial(build_builder_world, world_source, catalog_roots=_CATALOG_ROOTS),
+            partial(build_builder_resolve_check, world_source, catalog_roots=_CATALOG_ROOTS),
         )
     except CatalogPathError as exc:
         return _catalog_error(exc)
@@ -3139,7 +3139,7 @@ async def builder_resolve_world(body: dict) -> dict:
     except Exception as exc:
         log.error("Builder world internal error: %s", exc, exc_info=True)
         return _error_response(500, "Builder world resolution failed")
-    return world.model_dump(mode="json")
+    return resolve_check.model_dump(mode="json")
 
 
 @app.get("/api/v1/builder/catalog", dependencies=[Depends(_require_api_key)])

@@ -27,6 +27,20 @@ from nodalarc.models.segment_session import SessionMeta
 from nodalarc.models.segments import OriginatedPrefixes
 
 
+class BuilderResolveCheck(BaseModel):
+    """Resolve-check result: the world plus the canonical session YAML.
+
+    ``document_yaml`` is the server-serialized form of the session document
+    that resolved — one serializer (the same dump the deploy path writes), so
+    the YAML pane, the saved file, and the wire never diverge.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    world: BuilderWorld
+    document_yaml: str
+
+
 class BuilderCatalogEntry(BaseModel):
     """One catalog primitive as a library listing row.
 

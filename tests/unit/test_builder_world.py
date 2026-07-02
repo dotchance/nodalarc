@@ -173,7 +173,7 @@ def test_endpoint_resolves_scanned_session_key(monkeypatch):
         json={"session": "catalog/nodalarc/sessions/earth-leo-walker.yaml"},
     )
     assert response.status_code == 200
-    assert response.json()["session"]["name"]
+    assert response.json()["world"]["session"]["name"]
 
 
 def test_endpoint_rejects_unknown_session_key(monkeypatch):
@@ -211,7 +211,10 @@ def test_endpoint_resolves_inline_document():
     raw = yaml.safe_load(_WALKER_PATH.read_text(encoding="utf-8"))
     response = client.post("/api/v1/builder/resolve-world", json={"document": raw})
     assert response.status_code == 200
-    assert len(response.json()["nodes"]) == 181
+    payload = response.json()
+    assert len(payload["world"]["nodes"]) == 181
+    # The canonical YAML round-trips to the same document (one serializer).
+    assert yaml.safe_load(payload["document_yaml"]) == raw
 
 
 def test_endpoint_document_errors_return_resolver_message():
@@ -259,7 +262,7 @@ def test_endpoint_returns_world():
         json={"source": _WALKER_REF},
     )
     assert response.status_code == 200
-    payload = response.json()
+    payload = response.json()["world"]
     assert payload["session"]["name"]
     assert payload["ephemeris"]["epoch_id"] == 0
     assert len(payload["nodes"]) >= len(payload["ephemeris"]["nodes"])

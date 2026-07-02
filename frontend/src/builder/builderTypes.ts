@@ -107,6 +107,22 @@ export interface BuilderWorld {
   link_rules: BuilderLinkRule[];
 }
 
+/** Twin of nodalarc.models.builder_world.BuilderResolveCheck. */
+export interface BuilderResolveCheck {
+  world: BuilderWorld;
+  document_yaml: string;
+}
+
+/** Twin of nodalarc.models.builder_world.BuilderCatalogEntry. */
+export interface BuilderCatalogEntry {
+  ref: string;
+  family: string;
+  id: string | null;
+  display_name: string | null;
+  notes: string | null;
+  error: string | null;
+}
+
 /** One row of GET /api/v1/sessions (session_manager.scan_sessions + active flag). */
 export interface BuilderSessionListEntry {
   name: string;

@@ -96,8 +96,10 @@ def test_wire_shape_field_names_match_backend():
 def test_builder_wire_shape_field_names_match_backend():
     """Builder wire models ↔ frontend/src/builder/builderTypes.ts twins."""
     from nodalarc.models.builder_world import (
+        BuilderCatalogEntry,
         BuilderLinkEndpoint,
         BuilderLinkRule,
+        BuilderResolveCheck,
         BuilderWorld,
         BuilderWorldNode,
     )
@@ -113,6 +115,8 @@ def test_builder_wire_shape_field_names_match_backend():
     builder_wire_models = [
         (BuilderWorld, "BuilderWorld"),
         (BuilderWorldNode, "BuilderWorldNode"),
+        (BuilderResolveCheck, "BuilderResolveCheck"),
+        (BuilderCatalogEntry, "BuilderCatalogEntry"),
         (BuilderLinkRule, "BuilderLinkRule"),
         (BuilderLinkEndpoint, "BuilderLinkEndpoint"),
         (SessionMeta, "BuilderSessionMeta"),

@@ -81,6 +81,11 @@ interface SceneProps {
   onSelect: (sel: Selection | null) => void;
   /** Imperative camera/screenshot handle the rest of the app drives (Toolbar, keyboard, fly-to). */
   actionsRef?: MutableRefObject<GlobeActions | null>;
+  /** Ground-selection decision explanation (envelope cone + candidate tinting)
+   *  answers for the RUNNING session's scheduler. Surfaces rendering a world
+   *  that is not the running session (the session builder) disable it so the
+   *  scene never explains one world with another world's decisions. */
+  liveExplain?: boolean;
 }
 
 export function Scene({
@@ -100,6 +105,7 @@ export function Scene({
   selection,
   onSelect,
   actionsRef,
+  liveExplain = true,
 }: SceneProps) {
   // The Earth body group, used by FrameDriver / AllOrbits / OrbitPins to drive its view-frame
   // rotation. <Body> populates this ref AND self-registers its frame in the position registry
@@ -205,7 +211,8 @@ export function Scene({
   // ONE decision-explanation + ONE ground-candidates fetch for the selected GS — and from the SAME
   // client + classifier the node card uses, so a satellite never reads one family on the glyph and
   // another in the panel. Only fetched when a GS is selected (selectedGsId null otherwise).
-  const selectedGsId = selection?.type === "ground_station" ? selection.id : null;
+  const selectedGsId =
+    liveExplain && selection?.type === "ground_station" ? selection.id : null;
   const simTime = snapshot?.sim_time;
   const facts = useDecisionExplanation(selectedGsId, null, simTime).facts;
   const envelope = facts?.envelope ?? null;

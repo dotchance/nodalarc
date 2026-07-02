@@ -49,3 +49,14 @@ describe("siteLabelRepresentatives", () => {
     expect(reps.has("denver-gw2")).toBe(false);
   });
 });
+
+describe("overlapsPlaced", () => {
+  it("detects intersecting label boxes and clears disjoint ones", async () => {
+    const { overlapsPlaced } = await import("../Labels");
+    const placed = [{ x: 100, y: 100, w: 60, h: 14 }];
+    expect(overlapsPlaced(placed, { x: 130, y: 105, w: 60, h: 14 })).toBe(true);
+    expect(overlapsPlaced(placed, { x: 161, y: 100, w: 60, h: 14 })).toBe(false);
+    expect(overlapsPlaced(placed, { x: 100, y: 115, w: 60, h: 14 })).toBe(false);
+    expect(overlapsPlaced([], { x: 0, y: 0, w: 60, h: 14 })).toBe(false);
+  });
+});

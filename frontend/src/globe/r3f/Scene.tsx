@@ -308,6 +308,7 @@ export function Scene({
             nodes={nodes}
             containerRef={labelContainerRef}
             selectedGsId={selection?.type === "ground_station" ? selection.id : null}
+            selectedNodeId={selection?.id ?? null}
           />
         }
       >

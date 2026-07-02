@@ -65,6 +65,42 @@ export async function readCatalogObject(
   return response.json();
 }
 
+/** Import a primitive YAML file into the user catalog (family derived from
+ *  the document's own wrapper; the server owns parsing and validation). */
+export async function importUserObjectYaml(
+  documentYaml: string,
+  options?: { overwrite?: boolean },
+): Promise<BuilderCatalogEntry> {
+  const response = await fetch(`${REST_URL}/api/v1/builder/catalog/save`, {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ document_yaml: documentYaml, overwrite: options?.overwrite ?? false }),
+  });
+  if (!response.ok) {
+    const error = new Error(await _errorMessage(response)) as Error & { status?: number };
+    error.status = response.status;
+    throw error;
+  }
+  return response.json();
+}
+
+/** Download one catalog document as a canonical YAML file. */
+export async function exportCatalogObject(ref: string): Promise<void> {
+  const response = await fetch(
+    `${REST_URL}/api/v1/builder/catalog/export?ref=${encodeURIComponent(ref)}`,
+    { headers: authHeaders() },
+  );
+  if (!response.ok) throw new Error(await _errorMessage(response));
+  const text = await response.text();
+  const blob = new Blob([text], { type: "text/yaml" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = `${ref.split("/").pop() ?? "object.yaml"}`;
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
+
 /** Save one primitive document into the user catalog. */
 export async function saveUserObject(
   family: string,

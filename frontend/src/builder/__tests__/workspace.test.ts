@@ -156,3 +156,37 @@ describe("node drafts", () => {
     ).toThrow(/inline-terminal editing/);
   });
 });
+
+describe("terminal drafts", () => {
+  it("round-trips rf physics through the grammar object", async () => {
+    const { defaultDraftTerminal, terminalObjectFromDraft, draftTerminalFromDocument } =
+      await import("../workspace");
+    const draft = { ...defaultDraftTerminal(), frequency_ghz: 29.5, band: "Ka" };
+    const object = terminalObjectFromDraft(draft) as any;
+    expect(object.signal).toEqual({ band: "ka", frequency_hz: 29.5e9 });
+    expect(object.limits.elevation_deg).toEqual({ min: 20, max: 90 });
+    const back = draftTerminalFromDocument({ terminal: object });
+    expect(back.frequency_ghz).toBeCloseTo(29.5);
+    expect(back.medium).toBe("rf");
+    expect(back.transmit_mbps).toBe(500);
+  });
+
+  it("serializes optical signal without rf fields", async () => {
+    const { defaultDraftTerminal, terminalObjectFromDraft } = await import("../workspace");
+    const draft = { ...defaultDraftTerminal(), medium: "optical" as const, wavelength_nm: 1550 };
+    const object = terminalObjectFromDraft(draft) as any;
+    expect(object.signal).toEqual({ wavelength_nm: 1550 });
+    expect(object.medium).toBe("optical");
+  });
+
+  it("warns on inverted limit ranges without blocking", async () => {
+    const { defaultDraftTerminal, terminalWarnings } = await import("../workspace");
+    const draft = {
+      ...defaultDraftTerminal(),
+      elevation_min_deg: 80,
+      elevation_max_deg: 20,
+    };
+    expect(terminalWarnings(draft)).toContain("elevation min is above max — swap them");
+    expect(terminalWarnings(defaultDraftTerminal())).toEqual([]);
+  });
+});

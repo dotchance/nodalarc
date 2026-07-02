@@ -3245,15 +3245,29 @@ def builder_catalog(family: str) -> list[dict]:
 def builder_catalog_save(body: dict) -> dict:
     """Save one primitive document into the user catalog.
 
-    The document must satisfy its family's grammar (the library never stores
-    what the resolver would reject); overwriting an existing user entry
-    requires overwrite=true. The shipped catalog is not writable, ever.
+    Accepts the document as a mapping or as YAML text (file import); the
+    family may be omitted for YAML imports - the document's own wrapper
+    names it. The document must satisfy its family's grammar (the library
+    never stores what the resolver would reject); overwriting an existing
+    user entry requires overwrite=true. The shipped catalog is not
+    writable, ever.
     """
-    from nodalarc.catalog_browse import save_user_object
+    from nodalarc.catalog_browse import CATALOG_FAMILIES, save_user_object
 
     family = body.get("family")
     document = body.get("document")
+    document_yaml = body.get("document_yaml")
     overwrite = bool(body.get("overwrite", False))
+    if document_yaml is not None:
+        if not isinstance(document_yaml, str):
+            return _error_response(400, "document_yaml must be YAML text")
+        try:
+            document = yaml.safe_load(document_yaml)
+        except yaml.YAMLError as exc:
+            return JSONResponse(status_code=422, content={"error": f"invalid YAML: {exc}"})
+    if isinstance(document, dict) and family is None and len(document) == 1:
+        wrapper = next(iter(document))
+        family = next((f for f, w in CATALOG_FAMILIES.items() if w == wrapper), None)
     if not isinstance(family, str) or not isinstance(document, dict):
         return _error_response(400, "family and document are required")
     try:
@@ -3269,6 +3283,25 @@ def builder_catalog_save(body: dict) -> dict:
         return JSONResponse(status_code=422, content={"error": str(exc)})
     log.info("Builder saved user catalog entry %s", entry.ref)
     return entry.model_dump(mode="json")
+
+
+@app.get("/api/v1/builder/catalog/export", dependencies=[Depends(_require_api_key)])
+def builder_catalog_export(ref: str) -> Response:
+    """Export one catalog document as canonical YAML text (file download)."""
+    from nodalarc.catalog_browse import read_catalog_object
+
+    try:
+        _wrapper, document = read_catalog_object(ref, roots=_builder_catalog_roots())
+    except CatalogPathError as exc:
+        return _catalog_error(exc)
+    except FileNotFoundError as exc:
+        return _catalog_error(exc)
+    except ValueError as exc:
+        return _error_response(422, str(exc))
+    return Response(
+        content=yaml.dump(document, default_flow_style=False, sort_keys=False),
+        media_type="text/yaml",
+    )
 
 
 @app.delete("/api/v1/builder/catalog/object", dependencies=[Depends(_require_api_key)])

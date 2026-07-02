@@ -13,7 +13,12 @@
 import { useState } from "react";
 import { Button } from "../ui/Button";
 import { NodeEditor } from "./NodeEditor";
-import { readCatalogObject, saveUserObject, useBuilderCatalog } from "./useBuilderWorld";
+import {
+  exportCatalogObject,
+  readCatalogObject,
+  saveUserObject,
+  useBuilderCatalog,
+} from "./useBuilderWorld";
 import {
   ORBIT_PRESETS,
   draftNodeFromDocument,
@@ -323,6 +328,9 @@ export function ConstellationEditor({
                 </select>
                 <div className="builder-preset-row">
                   <Button onClick={() => void customizeNode()}>Customize node</Button>
+                  <Button onClick={() => void exportCatalogObject(draft.node_ref)}>
+                    Export file
+                  </Button>
                 </div>
                 {forkError && <div className="builder-warning">{forkError}</div>}
                 {nodes.error && <div className="builder-warning">{nodes.error}</div>}

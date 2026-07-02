@@ -455,3 +455,34 @@ def test_save_session_flattens_user_references(user_roots):
     assert "my-ka-terminal" in text
     assert "nodalarc:orbits/earth/leo/earth-leo-starlink.yaml" in text
     assert len(resolve_session(yaml.safe_load(text)).nodes) > 0
+
+
+def test_catalog_yaml_import_derives_family_and_export_round_trips(user_roots):
+    imported = client.post(
+        "/api/v1/builder/catalog/save",
+        json={"document_yaml": yaml.dump(_USER_TERMINAL)},
+    )
+    assert imported.status_code == 200, imported.json()
+    ref = imported.json()["ref"]
+    assert ref == "user:terminals/my-ka-terminal.yaml"
+
+    exported = client.get("/api/v1/builder/catalog/export", params={"ref": ref})
+    assert exported.status_code == 200
+    assert exported.headers["content-type"].startswith("text/yaml")
+    round_tripped = yaml.safe_load(exported.text)
+    assert round_tripped["terminal"]["id"] == "my-ka-terminal"
+    # Import of the export is identity (canonical both ways).
+    again = client.post(
+        "/api/v1/builder/catalog/save",
+        json={"document_yaml": exported.text, "overwrite": True},
+    )
+    assert again.status_code == 200
+
+
+def test_catalog_yaml_import_rejects_broken_yaml(user_roots):
+    response = client.post(
+        "/api/v1/builder/catalog/save",
+        json={"document_yaml": "terminal: [unclosed"},
+    )
+    assert response.status_code == 422
+    assert "invalid YAML" in response.json()["error"]

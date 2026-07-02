@@ -181,6 +181,120 @@ export function nodeObjectFromDraft(draft: DraftNode): Record<string, unknown> {
   };
 }
 
+/** An editable terminal: the grammar's Terminal object (pure physics — no
+ *  role, no placement; those live on mounts and sites). Terminals author
+ *  LIBRARY-FIRST: the draft saves to the user catalog and mounts by
+ *  reference, because a terminal has no session-local form. */
+export interface DraftTerminal {
+  id: string;
+  display_name: string;
+  medium: "rf" | "optical";
+  /** rf signal */
+  band: string;
+  frequency_ghz: number;
+  /** optical signal */
+  wavelength_nm: number;
+  transmit_mbps: number;
+  receive_mbps: number;
+  tracking_capacity: number;
+  max_range_km: number;
+  elevation_min_deg: number;
+  elevation_max_deg: number;
+  azimuth_min_deg: number;
+  azimuth_max_deg: number;
+  max_tracking_rate_deg_s: number;
+  reference: string;
+}
+
+export function defaultDraftTerminal(): DraftTerminal {
+  return {
+    id: "my-terminal",
+    display_name: "My terminal",
+    medium: "rf",
+    band: "ka",
+    frequency_ghz: 29.5,
+    wavelength_nm: 1550,
+    transmit_mbps: 500,
+    receive_mbps: 500,
+    tracking_capacity: 1,
+    max_range_km: 2500,
+    elevation_min_deg: 20,
+    elevation_max_deg: 90,
+    azimuth_min_deg: -180,
+    azimuth_max_deg: 180,
+    max_tracking_rate_deg_s: 2,
+    reference: "session-builder-draft",
+  };
+}
+
+/** Seed a terminal draft from an existing document (fork-by-seeding). */
+export function draftTerminalFromDocument(document: Record<string, unknown>): DraftTerminal {
+  const terminal = (document as { terminal?: Record<string, unknown> }).terminal;
+  if (!terminal) throw new Error("not a terminal document");
+  const defaults = defaultDraftTerminal();
+  const signal = (terminal.signal ?? {}) as Record<string, unknown>;
+  const bandwidth = (terminal.bandwidth_mbps ?? {}) as Record<string, unknown>;
+  const limits = (terminal.limits ?? {}) as Record<string, Record<string, unknown>>;
+  return {
+    id: String(terminal.id ?? defaults.id),
+    display_name: String(terminal.display_name ?? terminal.id ?? defaults.display_name),
+    medium: (terminal.medium as DraftTerminal["medium"]) ?? "rf",
+    band: String(signal.band ?? defaults.band),
+    frequency_ghz:
+      typeof signal.frequency_hz === "number"
+        ? signal.frequency_hz / 1e9
+        : defaults.frequency_ghz,
+    wavelength_nm:
+      typeof signal.wavelength_nm === "number" ? signal.wavelength_nm : defaults.wavelength_nm,
+    transmit_mbps: Number(bandwidth.transmit ?? defaults.transmit_mbps),
+    receive_mbps: Number(bandwidth.receive ?? defaults.receive_mbps),
+    tracking_capacity: Number(terminal.tracking_capacity ?? defaults.tracking_capacity),
+    max_range_km: Number(terminal.max_range_km ?? defaults.max_range_km),
+    elevation_min_deg: Number(limits.elevation_deg?.min ?? defaults.elevation_min_deg),
+    elevation_max_deg: Number(limits.elevation_deg?.max ?? defaults.elevation_max_deg),
+    azimuth_min_deg: Number(limits.azimuth_deg?.min ?? defaults.azimuth_min_deg),
+    azimuth_max_deg: Number(limits.azimuth_deg?.max ?? defaults.azimuth_max_deg),
+    max_tracking_rate_deg_s: Number(
+      limits.max_tracking_rate_deg_s ?? defaults.max_tracking_rate_deg_s,
+    ),
+    reference: String(terminal.reference ?? defaults.reference),
+  };
+}
+
+/** Serialize a terminal draft to the grammar's Terminal object. */
+export function terminalObjectFromDraft(draft: DraftTerminal): Record<string, unknown> {
+  return {
+    id: identifier(draft.id) || "my-terminal",
+    display_name: draft.display_name,
+    medium: draft.medium,
+    signal:
+      draft.medium === "rf"
+        ? { band: identifier(draft.band) || "ka", frequency_hz: draft.frequency_ghz * 1e9 }
+        : { wavelength_nm: draft.wavelength_nm },
+    bandwidth_mbps: { transmit: draft.transmit_mbps, receive: draft.receive_mbps },
+    tracking_capacity: draft.tracking_capacity,
+    max_range_km: draft.max_range_km,
+    limits: {
+      azimuth_deg: { min: draft.azimuth_min_deg, max: draft.azimuth_max_deg },
+      elevation_deg: { min: draft.elevation_min_deg, max: draft.elevation_max_deg },
+      max_tracking_rate_deg_s: draft.max_tracking_rate_deg_s,
+    },
+    reference: draft.reference,
+  };
+}
+
+/** Terminal sanity findings: warn, never block. */
+export function terminalWarnings(draft: DraftTerminal): string[] {
+  const warnings: string[] = [];
+  if (draft.elevation_min_deg > draft.elevation_max_deg) {
+    warnings.push("elevation min is above max — swap them");
+  }
+  if (draft.azimuth_min_deg > draft.azimuth_max_deg) {
+    warnings.push("azimuth min is above max — swap them");
+  }
+  return warnings;
+}
+
 export function newWorkspace(name: string): Workspace {
   return {
     name: identifier(name) || "untitled-session",

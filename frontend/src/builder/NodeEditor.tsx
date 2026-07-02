@@ -17,8 +17,14 @@
 
 import { useState } from "react";
 import { Button } from "../ui/Button";
-import { useBuilderCatalog } from "./useBuilderWorld";
-import type { DraftNode, DraftTerminalMount } from "./workspace";
+import { TerminalEditor } from "./TerminalEditor";
+import { importUserObjectYaml, useBuilderCatalog } from "./useBuilderWorld";
+import {
+  defaultDraftTerminal,
+  type DraftNode,
+  type DraftTerminal,
+  type DraftTerminalMount,
+} from "./workspace";
 
 const ROLES: DraftTerminalMount["role"][] = ["access", "isl", "crosslink", "backbone"];
 
@@ -51,6 +57,8 @@ export function NodeEditor({ draft, onChange }: NodeEditorProps) {
   const [openMount, setOpenMount] = useState<string | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [pickerRole, setPickerRole] = useState<DraftTerminalMount["role"]>("access");
+  const [terminalDraft, setTerminalDraft] = useState<DraftTerminal | null>(null);
+  const [importError, setImportError] = useState<string | null>(null);
 
   const addOrIncrement = (terminalRef: string) => {
     const existing = draft.terminals.find(
@@ -274,7 +282,53 @@ export function NodeEditor({ draft, onChange }: NodeEditorProps) {
                   <span className="builder-outline-count">add</span>
                 </button>
               ))}
+            <button
+              className="builder-outline-row"
+              data-testid="new-terminal"
+              onClick={() => setTerminalDraft(defaultDraftTerminal())}
+            >
+              <span>+ new terminal…</span>
+            </button>
+            <label className="builder-outline-row" data-testid="import-terminal">
+              <span>import file…</span>
+              <input
+                type="file"
+                accept=".yaml,.yml"
+                style={{ display: "none" }}
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (!file) return;
+                  void file.text().then(async (text) => {
+                    try {
+                      const entry = await importUserObjectYaml(text);
+                      await terminals.refresh();
+                      addOrIncrement(entry.ref);
+                      setImportError(null);
+                    } catch (err) {
+                      setImportError(err instanceof Error ? err.message : String(err));
+                    }
+                  });
+                  e.target.value = "";
+                }}
+              />
+            </label>
+            {importError && <div className="builder-warning">{importError}</div>}
           </div>
+          {terminalDraft && (
+            <TerminalEditor
+              draft={terminalDraft}
+              onChange={setTerminalDraft}
+              catalog={terminals.entries}
+              onSaved={(ref) => {
+                setTerminalDraft(null);
+                void terminals.refresh();
+                // Complete the intent: the freshly authored terminal mounts
+                // immediately with the picker's current role.
+                addOrIncrement(ref);
+              }}
+              onCancel={() => setTerminalDraft(null)}
+            />
+          )}
           {terminals.error && <div className="builder-warning">{terminals.error}</div>}
         </div>
       )}

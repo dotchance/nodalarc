@@ -31,9 +31,19 @@ import { builderSnapshotFromWorld } from "./builderSnapshot";
 import { CandidateLines } from "./CandidateLines";
 import { computeCandidates } from "./candidates";
 import { ConstellationEditor } from "./ConstellationEditor";
-import { useBuilderCatalog, useBuilderWorld } from "./useBuilderWorld";
+import { LibraryPanel } from "./LibraryPanel";
+import { NodeEditor } from "./NodeEditor";
+import { TerminalEditor } from "./TerminalEditor";
+import { saveUserObject, useBuilderCatalog, useBuilderWorld } from "./useBuilderWorld";
 import { useWorkspace } from "./useWorkspace";
-import { toSessionDocument } from "./workspace";
+import {
+  defaultDraftNode,
+  defaultDraftTerminal,
+  nodeObjectFromDraft,
+  toSessionDocument,
+  type DraftNode,
+  type DraftTerminal,
+} from "./workspace";
 import type { BuilderWorld } from "./builderTypes";
 
 interface BuilderViewProps {
@@ -145,6 +155,7 @@ export function BuilderView({
   } = useWorkspace(resolveDocument);
   const nodeCatalog = useBuilderCatalog("nodes");
   const siteSetCatalog = useBuilderCatalog("site-sets");
+  const terminalCatalog = useBuilderCatalog("terminals");
   const [editingSegment, setEditingSegment] = useState<string | null>(null);
   const [showYaml, setShowYaml] = useState(false);
   const [saveState, setSaveState] = useState<
@@ -152,6 +163,15 @@ export function BuilderView({
     | { kind: "saving" }
     | { kind: "saved"; name: string }
     | { kind: "failed"; message: string }
+  >({ kind: "idle" });
+  // Standalone component authoring (Your library) — independent of sessions.
+  const [libraryEditor, setLibraryEditor] = useState<
+    | { kind: "terminal"; draft: DraftTerminal }
+    | { kind: "node"; draft: DraftNode }
+    | null
+  >(null);
+  const [libraryNodeSave, setLibraryNodeSave] = useState<
+    { kind: "idle" } | { kind: "conflict" } | { kind: "failed"; message: string }
   >({ kind: "idle" });
   // Default node model for a fresh constellation: prefer the catalog's space
   // nodes (directory layout is authoring convention, so this is a display
@@ -327,6 +347,12 @@ export function BuilderView({
             </Button>
           </div>
         )}
+        <LibraryPanel
+          onNewTerminal={() =>
+            setLibraryEditor({ kind: "terminal", draft: defaultDraftTerminal() })
+          }
+          onNewNode={() => setLibraryEditor({ kind: "node", draft: defaultDraftNode() })}
+        />
         {sessionsError && (
           <div className="builder-zone-empty builder-status-item--error">
             session list unavailable: {sessionsError}
@@ -505,6 +531,69 @@ export function BuilderView({
       <div className="builder-inspector" data-testid="builder-inspector">
         <div className="builder-zone-title">Inspector</div>
         {(() => {
+          if (libraryEditor?.kind === "terminal") {
+            return (
+              <div className="builder-inspector-stack">
+                <div className="builder-outline-kind">New terminal</div>
+                <TerminalEditor
+                  draft={libraryEditor.draft}
+                  onChange={(draft) => setLibraryEditor({ kind: "terminal", draft })}
+                  catalog={terminalCatalog.entries}
+                  onSaved={() => {
+                    setLibraryEditor(null);
+                    void terminalCatalog.refresh();
+                  }}
+                  onCancel={() => setLibraryEditor(null)}
+                />
+              </div>
+            );
+          }
+          if (libraryEditor?.kind === "node") {
+            return (
+              <div className="builder-inspector-stack">
+                <div className="builder-outline-kind">New node</div>
+                <NodeEditor
+                  draft={libraryEditor.draft}
+                  onChange={(draft) => setLibraryEditor({ kind: "node", draft })}
+                />
+                <div className="builder-preset-row">
+                  <Button
+                    variant="primary"
+                    onClick={async () => {
+                      try {
+                        await saveUserObject(
+                          "nodes",
+                          { node: nodeObjectFromDraft(libraryEditor.draft) },
+                          { overwrite: libraryNodeSave.kind === "conflict" },
+                        );
+                        setLibraryEditor(null);
+                        setLibraryNodeSave({ kind: "idle" });
+                        void nodeCatalog.refresh();
+                      } catch (e) {
+                        const status = (e as Error & { status?: number }).status;
+                        if (status === 409 && libraryNodeSave.kind !== "conflict") {
+                          setLibraryNodeSave({ kind: "conflict" });
+                        } else {
+                          setLibraryNodeSave({
+                            kind: "failed",
+                            message: e instanceof Error ? e.message : String(e),
+                          });
+                        }
+                      }
+                    }}
+                  >
+                    {libraryNodeSave.kind === "conflict"
+                      ? "Overwrite in library?"
+                      : "Save node to library"}
+                  </Button>
+                  <Button onClick={() => setLibraryEditor(null)}>Cancel</Button>
+                </div>
+                {libraryNodeSave.kind === "failed" && (
+                  <div className="builder-warning">{libraryNodeSave.message}</div>
+                )}
+              </div>
+            );
+          }
           const draft = workspace?.space.find((d) => d.segment_id === editingSegment);
           if (draft) {
             return (

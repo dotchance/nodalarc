@@ -101,6 +101,15 @@ export async function exportCatalogObject(ref: string): Promise<void> {
   URL.revokeObjectURL(url);
 }
 
+/** Delete one user catalog entry. */
+export async function deleteUserObject(ref: string): Promise<void> {
+  const response = await fetch(
+    `${REST_URL}/api/v1/builder/catalog/object?ref=${encodeURIComponent(ref)}`,
+    { method: "DELETE", headers: authHeaders() },
+  );
+  if (!response.ok) throw new Error(await _errorMessage(response));
+}
+
 /** Save one primitive document into the user catalog. */
 export async function saveUserObject(
   family: string,

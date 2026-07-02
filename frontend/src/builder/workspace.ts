@@ -62,11 +62,40 @@ export interface DraftConstellation {
   phase_offset_deg: number;
 }
 
+export interface DraftSite {
+  site_id: string;
+  display_name: string;
+  lat_deg: number;
+  lon_deg: number;
+  alt_m: number;
+  tags: string[];
+}
+
+/** An editable ground segment: authored sites with a template node model and
+ *  derived, deterministic, VISIBLE addressing. Per-site node variation is a
+ *  registered grammar delta (template+override, #5) — this slice applies one
+ *  model to every site, which is the current shipped-catalog pattern too. */
+export interface DraftGroundSet {
+  node_ref: string;
+  /** Installed count per mount id, seeded from the node model's mounts. */
+  installed: Record<string, number>;
+  sites: DraftSite[];
+  /** IPv4 base for site LANs: site i gets base.<i>.0/24, terr0 .1. */
+  lan_base: string;
+  /** IPv4 base for node loopbacks: site i gets base.0.<i+1>/32. */
+  loopback_base: string;
+  scheduling_preset: SchedulingPresetKey;
+  /** apply-level originated prefixes (routing injection intent). */
+  originated_ipv4: string[];
+  tags: string[];
+}
+
 export interface Workspace {
   name: string;
   space: DraftConstellation[];
-  /** Shipped site-set reference; ground authoring proper lands in S4. */
+  /** Shipped site-set reference; ``ground_draft`` overrides it when set. */
   ground_site_set_ref: string | null;
+  ground_draft: DraftGroundSet | null;
   start_time: string;
 }
 
@@ -122,6 +151,17 @@ export function newDraftConstellation(nodeRef: string): DraftConstellation {
     raan_spacing_deg: 60,
     slots_per_plane: 8,
     phase_offset_deg: 0,
+  };
+}
+
+/** A blank node draft for from-scratch authoring. */
+export function defaultDraftNode(): DraftNode {
+  return {
+    id: "my-node",
+    display_name: "My node",
+    forwarding: "routed",
+    ethernet: ["terr0"],
+    terminals: [],
   };
 }
 
@@ -300,6 +340,7 @@ export function newWorkspace(name: string): Workspace {
     name: identifier(name) || "untitled-session",
     space: [],
     ground_site_set_ref: null,
+    ground_draft: null,
     start_time: "2026-06-08T00:00:00Z",
   };
 }
@@ -344,6 +385,59 @@ export function orbitWarnings(orbit: DraftOrbit): string[] {
   }
   return warnings;
 }
+
+export type SchedulingPresetKey = "leo-fast-handover" | "geo-longest-pass";
+
+/** Scheduling intent presets — dual literacy: the preset name carries the
+ *  operational intent; selecting one writes the FULL explicit block the
+ *  expert can read in the YAML pane. No hidden defaults. */
+export const SCHEDULING_PRESETS: Record<
+  SchedulingPresetKey,
+  { label: string; block: Record<string, unknown> }
+> = {
+  "leo-fast-handover": {
+    label: "LEO fast handover — make-before-break",
+    block: {
+      selection_policy: { highest_elevation: {} },
+      handover_policy: { hysteresis: { discount_factor: 1.1, mask_fade_range_deg: 3.0 } },
+      handover_mode: "mbb",
+      mbb_overlap_ticks: 30,
+      mbb_reserve: 1,
+      handover_concurrency: "one_at_a_time",
+      ranking_order: [
+        "service_priority",
+        "selection_score",
+        "satellite_ground_terminal_capacity",
+        "lex_pair",
+      ],
+      mbb_preemption: "off",
+      successor_abort_policy: "hard_release",
+      cross_tenant_displacement: "off",
+      bbm_acquire_timeout_ticks: 1,
+    },
+  },
+  "geo-longest-pass": {
+    label: "GEO longest pass — break-before-make",
+    block: {
+      selection_policy: { longest_remaining_pass: { lookahead_horizon_ticks: 600 } },
+      handover_policy: { hard_release: {} },
+      handover_mode: "bbm",
+      mbb_overlap_ticks: 0,
+      mbb_reserve: 0,
+      handover_concurrency: "one_at_a_time",
+      ranking_order: [
+        "service_priority",
+        "selection_score",
+        "satellite_ground_terminal_capacity",
+        "lex_pair",
+      ],
+      mbb_preemption: "off",
+      successor_abort_policy: "hard_release",
+      cross_tenant_displacement: "off",
+      bbm_acquire_timeout_ticks: 30,
+    },
+  },
+};
 
 // Ground segments need complete effective scheduling per node (resolver
 // S-rules); until the S4 scheduling editor lands, drafts apply this explicit

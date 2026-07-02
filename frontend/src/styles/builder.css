@@ -527,6 +527,24 @@
   color: var(--text-primary);
 }
 
+.builder-library-actions {
+  display: inline-flex;
+  gap: var(--space-1);
+}
+
+.builder-library-action {
+  border: none;
+  background: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: var(--font-size-xs);
+  padding: 0 2px;
+}
+
+.builder-library-action:hover {
+  color: var(--text-primary);
+}
+
 .builder-library-note {
   color: var(--status-ok);
   font-size: var(--font-size-xs);

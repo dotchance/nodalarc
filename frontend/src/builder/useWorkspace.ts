@@ -27,7 +27,9 @@ export function useWorkspace(resolveDocument: (document: unknown) => void) {
   resolveRef.current = resolveDocument;
 
   useEffect(() => {
-    if (!workspace || workspace.space.length === 0) return;
+    const hasContent =
+      workspace && workspace.space.length + workspace.space_refs.length > 0;
+    if (!hasContent) return;
     const timer = setTimeout(() => {
       resolveRef.current(toSessionDocument(workspace));
     }, RESOLVE_DEBOUNCE_MS);

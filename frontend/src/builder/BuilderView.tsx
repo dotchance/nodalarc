@@ -290,7 +290,10 @@ export function BuilderView({
                     : ""
                 }`}
                 key={draft.segment_id}
-                onClick={() => setEditingSegment(draft.segment_id)}
+                onClick={() => {
+                  setLibraryEditor(null);
+                  setEditingSegment(draft.segment_id);
+                }}
                 title={`Edit ${draft.display_name}`}
               >
                 <span className="builder-outline-name builder-outline-name--space">
@@ -348,10 +351,14 @@ export function BuilderView({
           </div>
         )}
         <LibraryPanel
-          onNewTerminal={() =>
-            setLibraryEditor({ kind: "terminal", draft: defaultDraftTerminal() })
-          }
-          onNewNode={() => setLibraryEditor({ kind: "node", draft: defaultDraftNode() })}
+          onNewTerminal={() => {
+            setEditingSegment(null);
+            setLibraryEditor({ kind: "terminal", draft: defaultDraftTerminal() });
+          }}
+          onNewNode={() => {
+            setEditingSegment(null);
+            setLibraryEditor({ kind: "node", draft: defaultDraftNode() });
+          }}
         />
         {sessionsError && (
           <div className="builder-zone-empty builder-status-item--error">

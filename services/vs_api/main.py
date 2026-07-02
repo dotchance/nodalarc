@@ -3067,6 +3067,66 @@ async def preview_coverage(body: dict) -> dict:
     return result.model_dump()
 
 
+@app.post("/api/v1/builder/resolve-world", dependencies=[Depends(_require_api_key)])
+async def builder_resolve_world(body: dict) -> dict:
+    """Resolve a session and return its render-ready world view.
+
+    Read-only: runs the same resolver → OME-inputs → session-ephemeris chain
+    OME runs at session start, without deploying anything. The builder renders
+    this expansion instead of maintaining a session view of its own.
+
+    Accepts exactly one input form:
+    - ``source``: a ``nodalarc:<path>`` catalog reference.
+    - ``session``: a session file key from ``GET /api/v1/sessions`` — the same
+      client contract session switch uses, validated against the session
+      manager's scanned map (covers generated sessions outside the catalog).
+    """
+    from functools import partial
+
+    from ome.builder_world import build_builder_world
+
+    source = body.get("source")
+    session_key = body.get("session")
+    if (source is None) == (session_key is None):
+        return _error_response(400, "provide exactly one of source or session")
+
+    if session_key is not None:
+        if not isinstance(session_key, str) or not session_key:
+            return _error_response(400, "session must be a session file key")
+        if _session_manager is None:
+            return JSONResponse(
+                status_code=503, content={"error": "Session manager not initialized"}
+            )
+        session_path = _session_manager._validated_session_path(session_key)
+        if session_path is None:
+            return _error_response(400, "Unknown session file")
+        world_source = await asyncio.to_thread(
+            lambda: yaml.safe_load(session_path.read_text(encoding="utf-8"))
+        )
+    else:
+        if not isinstance(source, str) or not source:
+            return _error_response(400, "source catalog reference is required")
+        world_source = source
+
+    loop = asyncio.get_event_loop()
+    try:
+        world = await loop.run_in_executor(
+            None,
+            partial(build_builder_world, world_source, catalog_roots=_CATALOG_ROOTS),
+        )
+    except CatalogPathError as exc:
+        return _catalog_error(exc)
+    except FileNotFoundError as exc:
+        return _catalog_error(exc)
+    except ValueError as exc:
+        log.info("Invalid builder world request: %s", exc)
+        return _error_response(400, "Builder world request is invalid")
+    except Exception as exc:
+        log.error("Builder world internal error: %s", exc, exc_info=True)
+        return _error_response(500, "Builder world resolution failed")
+    return world.model_dump(mode="json")
+
+
 @app.post("/api/v1/session/deploy", dependencies=[Depends(_require_api_key)])
 async def deploy_generated_session(body: dict) -> dict:
     """Validate YAML, write to sessions dir, and trigger deploy.

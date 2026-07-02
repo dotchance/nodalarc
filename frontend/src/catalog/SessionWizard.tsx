@@ -30,6 +30,10 @@ interface SessionWizardProps {
   /** Shipped catalog sessions, deployable as-is via session switch. */
   sessions: SessionInfo[];
   onLaunchSession: (file: string) => void;
+  /** Feature-gated session-builder entry: navigates to the builder view.
+   *  Day-0 authoring needs no deployed session, so this bypasses the
+   *  hasEverDeployed close gate — it goes somewhere, not to nothing. */
+  onOpenBuilder?: () => void;
 }
 
 const GROUP_B_STEPS: { id: WizardStep; label: string }[] = [
@@ -45,6 +49,7 @@ export function SessionWizard({
   systemNotice,
   sessions,
   onLaunchSession,
+  onOpenBuilder,
 }: SessionWizardProps) {
   const wizard = useWizard();
   const [view, setView] = useState<"launch" | "build">(sessions.length > 0 ? "launch" : "build");
@@ -121,8 +126,13 @@ export function SessionWizard({
               className={`launcher-rail-btn${view === "build" ? " launcher-rail-btn--active" : ""}`}
               onClick={() => setView("build")}
             >
-              Build
+              Wizard
             </button>
+            {onOpenBuilder && (
+              <button className="launcher-rail-btn" onClick={onOpenBuilder}>
+                Session Builder
+              </button>
+            )}
           </nav>
 
           {view === "launch" && (

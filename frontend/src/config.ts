@@ -22,12 +22,12 @@ function _numberConfig(name: string, raw: unknown, defaultValue: number): number
   return parsed;
 }
 
-function _booleanConfig(raw: unknown, defaultValue: boolean): boolean {
+function _booleanConfig(name: string, raw: unknown, defaultValue: boolean): boolean {
   if (raw === undefined || raw === null || raw === "") return defaultValue;
   if (typeof raw === "boolean") return raw;
   if (raw === "true") return true;
   if (raw === "false") return false;
-  throw new Error(`invalid boolean UI config cameraFlyToInstant: ${String(raw)}`);
+  throw new Error(`invalid boolean UI config ${name}: ${String(raw)}`);
 }
 
 export const CAMERA_FLY_TO_SPEED_UNITS_PER_SECOND = _numberConfig(
@@ -46,7 +46,15 @@ export const CAMERA_FLY_TO_MAX_MS = _numberConfig(
   2200,
 );
 export const CAMERA_FLY_TO_INSTANT = _booleanConfig(
+  "cameraFlyToInstant",
   _cfg.cameraFlyToInstant ?? import.meta.env.VITE_CAMERA_FLY_TO_INSTANT,
+  false,
+);
+
+/** Session builder view (long-lived arc; default off until cutover). */
+export const FEATURE_SESSION_BUILDER = _booleanConfig(
+  "featureSessionBuilder",
+  _cfg.featureSessionBuilder ?? import.meta.env.VITE_FEATURE_SESSION_BUILDER,
   false,
 );
 

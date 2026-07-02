@@ -28,7 +28,8 @@ import { buildRegimeIndex } from "./taxonomy/regime";
 import { selectionTypeForNode } from "./networkIdentity";
 import { SessionWizard } from "./catalog/SessionWizard";
 import { ShortcutHelp } from "./panels/ShortcutHelp";
-import { WS_URL, fetchApiKey } from "./config";
+import { BuilderView } from "./builder/BuilderView";
+import { WS_URL, fetchApiKey, FEATURE_SESSION_BUILDER } from "./config";
 import { setLabelsEnabled, getLabelsEnabled } from "./globe/labels";
 import { setGsLabelsEnabled, getGsLabelsEnabled } from "./globe/groundStations";
 import type { TracedPath } from "./types";
@@ -52,6 +53,7 @@ import "./styles/time-controls.css";
 import "./styles/launcher.css";
 import "./styles/wizard.css";
 import "./styles/explain.css";
+import "./styles/builder.css";
 
 const HISTORICAL_WINDOW_MS = 60 * 60 * 1000;
 
@@ -348,6 +350,9 @@ function AppInner() {
           </div>
         </div>
       )}
+      {/* Live-session banners describe the RUNNING session; the builder surface
+          has its own status home. Never let live state read as builder state. */}
+      {viewMode !== "builder" && (
       <div className="banner-stack">
         {!kicked && !connected && hasEverConnected && (
           <div className="connection-banner">Connection lost. Reconnecting...</div>
@@ -366,6 +371,7 @@ function AppInner() {
           </div>
         )}
       </div>
+      )}
       {showHelp && <ShortcutHelp onClose={() => setShowHelp(false)} />}
       {(switching || sessionTransitioning) && (
         <div className="session-switching-overlay">
@@ -391,6 +397,12 @@ function AppInner() {
           </div>
         </div>
       )}
+      {/* The live globe UNMOUNTS in builder mode (unlike topology/dashboard, which
+          only hide it): simClock, the SGP4 worker bridge, and the position registry
+          are module singletons, and the builder mounts its own Scene over the
+          resolved world. Exactly one Scene may own them; the live Scene re-seeds
+          all three on remount from props + the next snapshot. */}
+      {viewMode !== "builder" && (
       <div
         className={viewMode === "split" ? "split-pane" : "full-pane"}
         style={{ display: (viewMode === "topology" || viewMode === "dashboard") ? "none" : undefined }}
@@ -416,9 +428,10 @@ function AppInner() {
           />
         </VisualizationErrorBoundary>
       </div>
+      )}
       <div
         className={viewMode === "split" ? "split-pane" : "full-pane"}
-        style={{ display: (viewMode === "globe" || viewMode === "dashboard") ? "none" : undefined }}
+        style={{ display: (viewMode === "globe" || viewMode === "dashboard" || viewMode === "builder") ? "none" : undefined }}
       >
         <TopologyView
           regimeById={regimeById}
@@ -436,6 +449,21 @@ function AppInner() {
           <Dashboard snapshot={augmentedSnapshot} />
         </div>
       )}
+      {viewMode === "builder" && (
+        <div className="full-pane" style={{ background: "var(--bg-main)" }}>
+          <BuilderView
+            colorMode={colorMode}
+            globeMode={globeMode}
+            referenceFrame={referenceFrame}
+            showSatPaths={showSatPaths}
+            showIslLinks={showIslLinks}
+            showGroundLinks={showGroundLinks}
+            showGroundTracks={showGroundTracks}
+            showTrails={showTrails}
+            actionsRef={globeActionsRef}
+          />
+        </div>
+      )}
       <Toolbar
         viewMode={viewMode}
         colorMode={colorMode}
@@ -445,6 +473,7 @@ function AppInner() {
         followNode={followNode}
         filterOpen={filterOpen}
         canSplit={canSplit}
+        featureSessionBuilder={FEATURE_SESSION_BUILDER}
         referenceFrame={referenceFrame}
         onViewMode={setViewMode}
         onColorMode={setColorMode}
@@ -540,6 +569,11 @@ function AppInner() {
       systemNotice={visualizationError ?? undefined}
       sessions={sessions}
       onLaunchSession={switchSession}
+      onOpenBuilder={
+        FEATURE_SESSION_BUILDER
+          ? () => { setShowCatalog(false); setViewMode("builder"); }
+          : undefined
+      }
     />
   ) : undefined;
 

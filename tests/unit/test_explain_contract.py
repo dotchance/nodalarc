@@ -51,6 +51,7 @@ _REASONS_TS = Path(__file__).resolve().parents[2] / "frontend/src/explain/reason
 _FAMILIES_TS = Path(__file__).resolve().parents[2] / "frontend/src/explain/families.ts"
 _TYPES_TS = Path(__file__).resolve().parents[2] / "frontend/src/explain/types.ts"
 _LINK_EVENTS_TS = Path(__file__).resolve().parents[2] / "frontend/src/explain/linkEvents.ts"
+_BUILDER_TYPES_TS = Path(__file__).resolve().parents[2] / "frontend/src/builder/builderTypes.ts"
 
 # Each backend model and the TS interface that mirrors its wire shape.
 _WIRE_MODELS = [
@@ -66,11 +67,11 @@ _WIRE_MODELS = [
 ]
 
 
-def _ts_interface_fields(name: str) -> set[str]:
+def _ts_interface_fields(name: str, path: Path = _TYPES_TS) -> set[str]:
     """Field names declared in an exported TS interface (skipping comments)."""
-    text = _TYPES_TS.read_text(encoding="utf-8")
+    text = path.read_text(encoding="utf-8")
     match = re.search(rf"export interface {name} \{{\n(.*?)\n\}}", text, re.DOTALL)
-    assert match, f"interface {name} not found in {_TYPES_TS}"
+    assert match, f"interface {name} not found in {path}"
     fields: set[str] = set()
     for raw in match.group(1).splitlines():
         line = raw.strip()
@@ -86,6 +87,27 @@ def test_wire_shape_field_names_match_backend():
     for model, ts_name in _WIRE_MODELS:
         py_fields = set(model.model_fields)
         ts_fields = _ts_interface_fields(ts_name)
+        assert py_fields == ts_fields, (
+            f"{model.__name__} <-> TS {ts_name} field drift: "
+            f"py-only={py_fields - ts_fields}, ts-only={ts_fields - py_fields}"
+        )
+
+
+def test_builder_wire_shape_field_names_match_backend():
+    """Builder wire models ↔ frontend/src/builder/builderTypes.ts twins."""
+    from nodalarc.models.builder_world import BuilderWorld, BuilderWorldNode
+    from nodalarc.models.resolved_session import ResolvedSurfacePosition
+    from nodalarc.models.segment_session import SessionMeta
+
+    builder_wire_models = [
+        (BuilderWorld, "BuilderWorld"),
+        (BuilderWorldNode, "BuilderWorldNode"),
+        (SessionMeta, "BuilderSessionMeta"),
+        (ResolvedSurfacePosition, "BuilderSurfacePosition"),
+    ]
+    for model, ts_name in builder_wire_models:
+        py_fields = set(model.model_fields)
+        ts_fields = _ts_interface_fields(ts_name, path=_BUILDER_TYPES_TS)
         assert py_fields == ts_fields, (
             f"{model.__name__} <-> TS {ts_name} field drift: "
             f"py-only={py_fields - ts_fields}, ts-only={ts_fields - py_fields}"

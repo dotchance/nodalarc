@@ -260,7 +260,7 @@ export interface Selection {
 }
 
 /** View modes */
-export type ViewMode = "globe" | "topology" | "split" | "dashboard";
+export type ViewMode = "globe" | "topology" | "split" | "dashboard" | "builder";
 export type ColorMode = "regime" | "area" | "plane";
 export type GlobeMode = "blue-marble" | "day-night" | "political";
 

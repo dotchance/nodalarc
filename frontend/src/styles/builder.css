@@ -1,0 +1,125 @@
+/* Copyright 2024-2026 .chance (dotchance)
+   Licensed under the Apache License, Version 2.0. See LICENSE file. */
+/* Session builder — four-zone authoring shell.
+   Zones: outline (left) | world canvas (center) | docked inspector (right)
+   | status bar (bottom, the single home for counts/validation/gates). */
+
+.builder-shell {
+  display: grid;
+  /* Left gutter clears the app toolbar (absolute at --space-6, 36px buttons
+     + panel padding) so the outline zone is never occluded. */
+  padding-left: 88px;
+  grid-template-columns: 280px 1fr 320px;
+  grid-template-rows: 1fr auto;
+  grid-template-areas:
+    "outline canvas inspector"
+    "status status status";
+  height: 100%;
+  min-height: 0;
+  background: var(--bg-main);
+  color: var(--text-primary);
+  font-size: var(--font-size-sm);
+}
+
+.builder-outline {
+  grid-area: outline;
+  border-right: 1px solid var(--border);
+  background: var(--bg-panel);
+  overflow-y: auto;
+  padding: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.builder-canvas {
+  grid-area: canvas;
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.builder-inspector {
+  grid-area: inspector;
+  border-left: 1px solid var(--border);
+  background: var(--bg-panel);
+  overflow-y: auto;
+  padding: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.builder-status {
+  grid-area: status;
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  border-top: 1px solid var(--border);
+  background: var(--bg-panel);
+  padding: var(--space-1) var(--space-3);
+  font-size: var(--font-size-xs);
+  color: var(--text-secondary);
+  min-height: 24px;
+}
+
+.builder-status-item {
+  white-space: nowrap;
+}
+
+.builder-status-item--error {
+  color: var(--status-fail);
+}
+
+.builder-zone-title {
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-secondary);
+}
+
+.builder-zone-empty {
+  color: var(--text-dim);
+  font-size: var(--font-size-xs);
+}
+
+.builder-session-picker {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.builder-session-picker select {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg-main);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--font-size-xs);
+}
+
+.builder-outline-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.builder-outline-row {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-xs);
+}
+
+.builder-outline-row .builder-outline-count {
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+}

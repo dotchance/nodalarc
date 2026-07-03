@@ -1,98 +1,114 @@
-# Builder Interaction Grammar
+# Builder Interaction Rules
 
-Status: ACTIVE — authority for every session-builder surface, current and
-future. Authority order: this file > builder UI code. A surface that
-violates a clause is buggy, not stylistically different.
+The session builder grew one editor at a time, and for a while each editor
+invented its own behavior. The result was a UI where creating a
+constellation behaved differently from creating a site, where an editor
+remembered which cards the previous object had open, and where roughly the
+same task needed different gestures on different screens. Users noticed
+immediately.
 
-This grammar governs how a human COMPOSES the session artifact; the session
-grammar (BNF) governs what the ARTIFACT may say. The two meet in one
-standing law: every builder gesture serializes to a session-grammar
-production — the builder is a conforming emitter and never a dialect.
-Nothing in this file changes the session grammar.
+These rules fix the class of problem, not individual screens. Each rule has
+a number (IG-1, IG-2, ...) so code comments, tests, and reviews can point at
+it. Where a rule says "enforced by", that component or test makes the
+violation impossible or fails the build. A rule marked "review only" has no
+mechanical enforcement yet; treat that as debt.
 
-Every clause carries an enforcement pointer: a component that makes
-violation inexpressible, or a test that fails on violation. A clause whose
-pointer is marked ADVISORY is enforceable only by review and is debt.
+These rules cover how a person builds a session in the UI. They are separate
+from the session grammar, which covers what a session file may contain. The
+one connection between the two: everything the builder does must serialize
+to a valid session-grammar production. The builder never has a private
+dialect.
 
-## Creation
+## Creating things
 
-- **IG-1 Create opens what it creates.** Any create gesture (new, use,
-  fork, mint, connect) ends with the created object's editor open and the
-  object selected — never a silent row added somewhere to hunt for.
-  Enforcement: every create handler in `BuilderView` opens the editor;
-  `interactionGrammar.test.tsx`.
-- **IG-2 Naming is the first act.** The editor opened by a create gesture
-  has the name field focused and selected; typing renames immediately;
-  leaving it keeps the seeded name. Enforcement: `EditorName`
-  (`editorKit.tsx`) with `autoFocus` wired to the fresh-object id;
-  `interactionGrammar.test.tsx`.
-- **IG-3 Creation never dead-ends.** A create or use gesture missing a
-  prerequisite either self-ensures it or states exactly what is missing,
-  at the gesture. Enforcement: self-ensuring mutations in `useWorkspace`;
-  resolver walls render at the gesture site.
+**IG-1.** Creating an object opens its editor, with the object selected.
+This applies to every way of creating something: new, use, fork, mint,
+connect. We shipped the constellation flow without this once; the new
+segment appeared as an unremarkable row in the tree and users had to go find
+it. Enforced by the create handlers in `BuilderView` and by
+`interactionGrammar.test.tsx`.
 
-## Editing
+**IG-2.** The editor that opens on create has the name field focused, with
+the seeded name selected. Typing renames; clicking elsewhere keeps the seed.
+Enforced by `EditorName` in `editorKit.tsx`, which takes the fresh-object
+id, and by the conformance tests.
 
-- **IG-4 An editor is a view of an object, not a widget with a history.**
-  Switching objects yields the canonical presentation; open-card state and
-  picker state are keyed by object identity and never bleed between
-  objects. Enforcement: `key={object id}` on every editor instance;
-  `interactionGrammar.test.tsx` remount-reset test.
-- **IG-5 One editing anatomy.** Name first; cards with title plus
-  spec-sheet summary (a closed card reads as the object's spec); fields,
-  numbers, and selects come from the editor kit; no raw
-  `<input>`/`<select>`/`<textarea>` in editor surfaces (file pickers
-  excepted). Enforcement: `editorKit.tsx` is the only source of editing
-  controls; static conformance scan in `interactionGrammar.test.tsx`.
-- **IG-6 Same intent, same gesture.** The verb set — use, edit, inspect,
-  export, delete — has one look and one placement per context; families
-  differ only in WHICH verbs apply, never in how a verb looks or where it
-  sits. Enforcement: `IconButton` row-action idiom; kit components.
-- **IG-7 Derive, don't ask.** Values the system can compute from what it
-  already knows (terminal faceplates, geometry, placement) are seeded and
-  SHOWN, and become the user's the moment they touch them. Asking for a
-  value the system knows is a defect. Enforcement: `linkPhysics.ts` —
-  `connectSegments` derives role/medium/mask/topology from the resolved
-  world's terminal inventories at the connect gesture (both endpoints
-  known BEFORE the rule exists); unformable role/medium options render
-  disabled with the reason; masks come from the ground side's own
-  access-terminal limits. Also: ground stamps, derived addressing,
-  scheduling presets.
-- **IG-8 Dangerous acts live apart.** Destructive and identity-changing
-  actions sit at the editor's end or as the row remove — never adjacent to
-  primary actions. ADVISORY (review clause).
+**IG-3.** Creating never dead-ends. If a create or use gesture needs
+something that doesn't exist yet (a workspace, a ground segment to hold a
+site), the gesture creates it. If it can't, the error appears at the point
+of the gesture and says what is missing. Enforced by the self-ensuring
+mutations in `useWorkspace`.
+
+## Editing things
+
+**IG-4.** An editor shows an object. It does not remember the previous
+object. Card open/closed state, picker state, and scroll position belong to
+the object being edited, so switching objects gives you the same canonical
+layout every time. We had editors inheriting the previous object's open
+cards, which meant the same editor looked different depending on what you
+did earlier. Enforced by keying every editor instance on the object id
+(React remounts on switch) and by the remount test in
+`interactionGrammar.test.tsx`.
+
+**IG-5.** All editors are built from the same parts. Name field first, then
+cards with a title and a summary line (a closed card should read like a spec
+sheet entry). Text fields, number fields, and selects come from
+`editorKit.tsx`. Writing a raw `<input>`, `<select>`, or `<textarea>` in an
+editor fails the static scan in `interactionGrammar.test.tsx`. File pickers
+are the one exception, since they aren't editing controls.
+
+**IG-6.** One verb set: use, edit, inspect, export, delete. A family may
+support only some of these, but a verb always looks the same and sits in the
+same place. Don't invent a second style of edit button.
+
+**IG-7.** If the system already knows a value, fill it in and show it;
+don't make the user type it. The connect flow is the main case: when two
+segments are linked, the role, medium, elevation mask, and topology are
+computed from the terminal inventories in the resolved world
+(`linkPhysics.ts`), because the resolver already knows what each side can
+form. Options that neither side can physically form are shown disabled with
+the reason. Ground stamps, derived addressing, and scheduling presets follow
+the same rule. Any value seeded this way becomes the user's the moment they
+edit it.
+
+**IG-8.** Delete and other destructive actions go at the end of an editor
+or as the remove control on a row. Keep them away from primary actions.
+Review only.
 
 ## State and honesty
 
-- **IG-9 Every consequence is visible, in one voice.** Every gesture lands
-  in the artifact; its consequence (resolve status, completeness rail,
-  inline wall) renders in the same place with the same tone every time. No
-  silent success, no silent failure. This is the customer-trust invariant
-  applied to interaction. Enforcement: the single resolve pipeline, status
-  bar, and rail; resolver messages verbatim.
-- **IG-10 Stale derivations re-derive loudly.** When an upstream edit
-  invalidates a derived value (a re-pointed endpoint, a swapped model),
-  dependents re-derive with a visible notice — they never silently keep
-  stale physics. Enforcement: `rederiveRule` (`linkPhysics.ts`) fires on
-  every endpoint re-point and its notice renders at the rule.
-- **IG-11 Trust mechanics are unconditional.** Undo covers every workspace
-  mutation; autosave is continuous; both work identically on every
-  surface. Enforcement: single mutation path in `useWorkspace` (bounded
-  history + debounced autosave).
+**IG-9.** Every gesture has a visible consequence, and consequences always
+show up in the same place: the resolve status, the completeness rail, or an
+inline message on the owning object. Resolver errors are shown verbatim.
+This is the project's customer-trust rule applied to the UI; the builder
+must not look like it did something it didn't do, or hide something it did.
 
-## Navigation
+**IG-10.** When an edit invalidates a derived value, the value is
+recomputed and the user is told. The concrete case: re-pointing a link
+rule's endpoint changes what the rule can physically be, so the physics
+re-derive and a notice states the new values (`rederiveRule` in
+`linkPhysics.ts`). The old behavior, silently keeping the stale values,
+produced rules that asked ground stations for crosslink optics.
 
-- **IG-12 One selection.** Selecting an object in any representation
-  (tree, canvas, rail chip, editor) IS the selection; all representations
-  agree at all times. Enforcement: single editing-target state in
-  `BuilderView`.
-- **IG-13 Two gestures to edit.** Any visible object is editable within
-  two gestures. ADVISORY (verified by recorded UI drives).
+**IG-11.** Undo (Ctrl/Cmd+Z) covers every workspace mutation. Autosave runs
+continuously and offers a restore after a reload. Neither depends on which
+surface made the change; both hang off the single mutation path in
+`useWorkspace`.
 
-## Usage
+## Getting around
 
-- New surfaces compose the kit and inherit the grammar; interaction design
-  effort goes into content (which cards, which fields), not behavior.
-- Reviews cite clause numbers, not taste.
-- The conformance tests run with the frontend suite; recorded end-to-end
-  build scenarios serve as the friction regression benchmark.
+**IG-12.** There is one selection. Picking an object in the tree, on the
+canvas, in the rail, or in an editor is the same act, and every view agrees
+about what is selected.
+
+**IG-13.** Anything you can see, you can edit within two gestures. Verified
+by the recorded UI drives; review only beyond that.
+
+## Working with these rules
+
+Build new surfaces out of the kit and the rules come along for free; spend
+design effort on what fields an editor needs, not on how fields behave. In
+review, cite rule numbers instead of arguing taste. The conformance tests
+run with the frontend suite. Recorded end-to-end build scenarios are the
+regression benchmark for friction; if a change makes the same session take
+more gestures, that shows up as a number, not an opinion.

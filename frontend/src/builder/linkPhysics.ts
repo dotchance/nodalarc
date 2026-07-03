@@ -1,6 +1,6 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
-/** Link physics derivation — IG-7: derive, don't ask.
+/** Link physics derivation (IG-7).
  *
  *  The resolved world already carries every node's terminal inventory
  *  (role, medium, elevation limits) — resolver truth, not a builder guess.

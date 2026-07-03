@@ -12,7 +12,9 @@
 
 import { useState } from "react";
 import { Button } from "../ui/Button";
+import { EditorName, NumberField, SelectField } from "./editorKit";
 import { NodeEditor } from "./NodeEditor";
+import { SegmentLinksCard } from "./SegmentLinksCard";
 import {
   exportCatalogObject,
   readCatalogObject,
@@ -27,6 +29,7 @@ import {
   orbitWarnings,
   type DraftConstellation,
   type DraftOrbit,
+  type Workspace,
 } from "./workspace";
 
 interface ConstellationEditorProps {
@@ -34,38 +37,12 @@ interface ConstellationEditorProps {
   onUpdate: (patch: Partial<DraftConstellation>) => void;
   onUpdateOrbit: (patch: Partial<DraftOrbit>) => void;
   onRemove: () => void;
-}
-
-function NumberField({
-  label,
-  value,
-  onChange,
-  step = 1,
-  suffix,
-}: {
-  label: string;
-  value: number;
-  onChange: (value: number) => void;
-  step?: number;
-  suffix?: string;
-}) {
-  return (
-    <label className="builder-field">
-      <span className="builder-field-label">{label}</span>
-      <span className="builder-field-input">
-        <input
-          type="number"
-          value={value}
-          step={step}
-          onChange={(e) => {
-            const parsed = Number(e.target.value);
-            if (Number.isFinite(parsed)) onChange(parsed);
-          }}
-        />
-        {suffix && <span className="builder-field-suffix">{suffix}</span>}
-      </span>
-    </label>
-  );
+  /** IG-2: focus the name when a create gesture opened this editor. */
+  autoFocusName?: boolean;
+  /** Connect gesture context (IG-7: "+ link to…" on the segment). */
+  workspace: Workspace;
+  onOpenRule: (ruleId: string) => void;
+  onConnect: (targetSegmentId: string) => void;
 }
 
 export function ConstellationEditor({
@@ -73,6 +50,10 @@ export function ConstellationEditor({
   onUpdate,
   onUpdateOrbit,
   onRemove,
+  autoFocusName = false,
+  workspace,
+  onOpenRule,
+  onConnect,
 }: ConstellationEditorProps) {
   const [openCard, setOpenCard] = useState<string | null>("orbit");
   const nodes = useBuilderCatalog("nodes");
@@ -133,16 +114,11 @@ export function ConstellationEditor({
 
   return (
     <div className="builder-inspector-stack" data-testid="builder-editor">
-      <label className="builder-field">
-        <span className="builder-field-label">name</span>
-        <span className="builder-field-input">
-          <input
-            type="text"
-            value={draft.display_name}
-            onChange={(e) => onUpdate({ display_name: e.target.value })}
-          />
-        </span>
-      </label>
+      <EditorName
+        value={draft.display_name}
+        onChange={(display_name) => onUpdate({ display_name })}
+        autoFocus={autoFocusName}
+      />
 
       <div className={`builder-card${openCard === "orbit" ? " builder-card--open" : ""}`}>
         <button className="builder-card-head" onClick={() => toggle("orbit")}>
@@ -312,20 +288,21 @@ export function ConstellationEditor({
               </>
             ) : (
               <>
-                <select
-                  aria-label="Node primitive"
+                <SelectField
+                  stack
+                  label="model"
+                  ariaLabel="Node primitive"
                   value={draft.node_ref}
-                  onChange={(e) => onUpdate({ node_ref: e.target.value })}
-                >
-                  {nodes.entries
+                  onChange={(node_ref) => onUpdate({ node_ref })}
+                  options={nodes.entries
                     .filter((entry) => !entry.error)
-                    .map((entry) => (
-                      <option key={entry.ref} value={entry.ref}>
-                        {entry.display_name ?? entry.id ?? entry.ref}
-                        {entry.ref.startsWith("user:") ? " (yours)" : ""}
-                      </option>
-                    ))}
-                </select>
+                    .map((entry) => ({
+                      value: entry.ref,
+                      label:
+                        (entry.display_name ?? entry.id ?? entry.ref) +
+                        (entry.ref.startsWith("user:") ? " (yours)" : ""),
+                    }))}
+                />
                 <div className="builder-preset-row">
                   <Button onClick={() => void customizeNode()}>Customize node</Button>
                   <Button onClick={() => void exportCatalogObject(draft.node_ref)}>
@@ -347,6 +324,13 @@ export function ConstellationEditor({
           </div>
         )}
       </div>
+
+      <SegmentLinksCard
+        workspace={workspace}
+        segmentId={draft.segment_id}
+        onOpenRule={onOpenRule}
+        onConnect={onConnect}
+      />
 
       <Button variant="danger" onClick={onRemove}>
         Remove constellation

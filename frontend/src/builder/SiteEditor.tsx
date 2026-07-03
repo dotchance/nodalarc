@@ -12,6 +12,7 @@
 
 import { useState } from "react";
 import { Button, IconButton } from "../ui/Button";
+import { EditorName, Field, NumberField, SelectField } from "./editorKit";
 import { readCatalogObject, saveUserObject, useBuilderCatalog } from "./useBuilderWorld";
 import {
   identifier,
@@ -25,63 +26,11 @@ interface SiteEditorProps {
   onUpdate: (patch: Partial<DraftSiteObject>) => void;
   /** Standalone (Library) mode shows save-to-library + close. */
   onClose?: () => void;
+  /** IG-2: focus the name when a create gesture opened this editor. */
+  autoFocusName?: boolean;
 }
 
-function Field({
-  label,
-  value,
-  onChange,
-  suffix,
-}: {
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-  suffix?: string;
-}) {
-  return (
-    <label className="builder-field">
-      <span className="builder-field-label">{label}</span>
-      <span className="builder-field-input">
-        <input type="text" value={value} onChange={(e) => onChange(e.target.value)} />
-        {suffix && <span className="builder-field-suffix">{suffix}</span>}
-      </span>
-    </label>
-  );
-}
-
-function NumberField({
-  label,
-  value,
-  onChange,
-  step = 0.1,
-  suffix,
-}: {
-  label: string;
-  value: number;
-  onChange: (value: number) => void;
-  step?: number;
-  suffix?: string;
-}) {
-  return (
-    <label className="builder-field">
-      <span className="builder-field-label">{label}</span>
-      <span className="builder-field-input">
-        <input
-          type="number"
-          value={value}
-          step={step}
-          onChange={(e) => {
-            const parsed = Number(e.target.value);
-            if (Number.isFinite(parsed)) onChange(parsed);
-          }}
-        />
-        {suffix && <span className="builder-field-suffix">{suffix}</span>}
-      </span>
-    </label>
-  );
-}
-
-export function SiteEditor({ site, onUpdate, onClose }: SiteEditorProps) {
+export function SiteEditor({ site, onUpdate, onClose, autoFocusName = false }: SiteEditorProps) {
   const nodes = useBuilderCatalog("nodes");
   const sites = useBuilderCatalog("sites");
   const [editorError, setEditorError] = useState<string | null>(null);
@@ -157,12 +106,12 @@ export function SiteEditor({ site, onUpdate, onClose }: SiteEditorProps) {
 
   return (
     <div className="builder-inspector-stack" data-testid="builder-site-editor">
-      <Field
-        label="name"
+      <EditorName
         value={site.display_name}
         onChange={(display_name) =>
           onUpdate({ display_name, site_id: identifier(display_name) || site.site_id })
         }
+        autoFocus={autoFocusName}
       />
       <NumberField
         label="latitude"
@@ -217,42 +166,31 @@ export function SiteEditor({ site, onUpdate, onClose }: SiteEditorProps) {
             )}
           </div>
           <div className="builder-card-body">
-            <label className="builder-field builder-field--stack">
-              <span className="builder-field-label">model</span>
-              <select
-                aria-label={`${node.node_id} model`}
-                value={node.model_ref}
-                onChange={(e) => void setNodeModel(index, e.target.value)}
-              >
-                {nodes.entries
-                  .filter((entry) => !entry.error)
-                  .map((entry) => (
-                    <option key={entry.ref} value={entry.ref}>
-                      {entry.display_name ?? entry.id ?? entry.ref}
-                    </option>
-                  ))}
-              </select>
-            </label>
+            <SelectField
+              stack
+              label="model"
+              ariaLabel={`${node.node_id} model`}
+              value={node.model_ref}
+              onChange={(ref) => void setNodeModel(index, ref)}
+              options={nodes.entries
+                .filter((entry) => !entry.error)
+                .map((entry) => ({
+                  value: entry.ref,
+                  label: entry.display_name ?? entry.id ?? entry.ref,
+                }))}
+            />
             {Object.entries(node.installed).map(([mount, count]) => (
-              <label className="builder-field" key={mount}>
-                <span className="builder-field-label">{mount}</span>
-                <span className="builder-field-input">
-                  <input
-                    type="number"
-                    min={1}
-                    value={count}
-                    onChange={(e) => {
-                      const parsed = Math.max(1, Math.round(Number(e.target.value)));
-                      if (Number.isFinite(parsed)) {
-                        updateNode(index, {
-                          installed: { ...node.installed, [mount]: parsed },
-                        });
-                      }
-                    }}
-                  />
-                  <span className="builder-field-suffix">installed</span>
-                </span>
-              </label>
+              <NumberField
+                key={mount}
+                label={mount}
+                value={count}
+                min={1}
+                integer
+                suffix="installed"
+                onChange={(parsed) =>
+                  updateNode(index, { installed: { ...node.installed, [mount]: parsed } })
+                }
+              />
             ))}
             <Field
               label="lo0"

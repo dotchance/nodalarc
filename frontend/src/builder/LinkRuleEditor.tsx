@@ -11,7 +11,16 @@
  *  resolver's expansion of exactly what this editor emits.
  */
 
+import { useState } from "react";
 import { Button } from "../ui/Button";
+import {
+  EditorName,
+  Field,
+  NullableNumberField,
+  NumberField,
+  SelectField,
+} from "./editorKit";
+import { canForm, type LinkMedium, type LinkRole, type SegmentCapability } from "./linkPhysics";
 import {
   linkWarnings,
   placedSegments,
@@ -20,26 +29,52 @@ import {
   type Workspace,
 } from "./workspace";
 
+const ALL_ROLES: LinkRole[] = ["access", "isl", "crosslink"];
+const ALL_MEDIA: LinkMedium[] = ["rf", "optical"];
+
 interface LinkRuleEditorProps {
   workspace: Workspace;
   rule: DraftLinkRule;
   onUpdate: (patch: Partial<DraftLinkRule>) => void;
   onUpdateEndpoint: (side: "a" | "b", patch: Partial<DraftLinkEndpoint>) => void;
   onRemove: () => void;
+  /** IG-2: focus the name when a create gesture opened this editor. */
+  autoFocusName?: boolean;
+  /** IG-7: what each segment's faceplates can form (resolver truth). */
+  capabilities: Map<string, SegmentCapability>;
+  /** IG-10: re-point an endpoint — physics re-derive loudly; returns the
+   *  notice sentence to show. */
+  onRepoint: (side: "a" | "b", newSegmentId: string) => string;
 }
 
 function EndpointCard({
   title,
   endpoint,
+  other,
   workspace,
+  capabilities,
   onUpdate,
+  onSegmentChange,
 }: {
   title: string;
   endpoint: DraftLinkEndpoint;
+  other: DraftLinkEndpoint;
   workspace: Workspace;
+  capabilities: Map<string, SegmentCapability>;
   onUpdate: (patch: Partial<DraftLinkEndpoint>) => void;
+  onSegmentChange: (newSegmentId: string) => void;
 }) {
   const placed = placedSegments(workspace);
+  const selfCap = capabilities.get(endpoint.segment_id);
+  const otherCap = capabilities.get(other.segment_id);
+  // IG-7 honesty: combinations neither side can form render disabled with
+  // the reason — visible, never hidden. No capabilities yet (unresolved
+  // world) means nothing is disabled.
+  const known = capabilities.size > 0;
+  const roleDisabled = (role: LinkRole) =>
+    known && !ALL_MEDIA.some((medium) => canForm(selfCap, otherCap, role, medium));
+  const mediumDisabled = (medium: LinkMedium) =>
+    known && !canForm(selfCap, otherCap, endpoint.role, medium);
   return (
     <div className="builder-card builder-card--open">
       <div className="builder-card-head">
@@ -50,87 +85,63 @@ function EndpointCard({
         </span>
       </div>
       <div className="builder-card-body">
-        <label className="builder-field builder-field--stack">
-          <span className="builder-field-label">segment</span>
-          <select
-            aria-label={`${title} segment`}
-            value={endpoint.segment_id}
-            onChange={(e) => onUpdate({ segment_id: e.target.value })}
-          >
-            {placed.map((segment) => (
-              <option key={segment.segment_id} value={segment.segment_id}>
-                {segment.label} ({segment.kind})
-              </option>
-            ))}
-            {!placed.some((s) => s.segment_id === endpoint.segment_id) && (
-              <option value={endpoint.segment_id}>
-                {endpoint.segment_id} (removed)
-              </option>
-            )}
-          </select>
-        </label>
-        <label className="builder-field">
-          <span className="builder-field-label">scope to tag</span>
-          <span className="builder-field-input">
-            <input
-              type="text"
-              placeholder="every node in the segment"
-              value={endpoint.tag ?? ""}
-              onChange={(e) => onUpdate({ tag: e.target.value.trim() || null })}
-            />
-          </span>
-        </label>
-        <label className="builder-field">
-          <span className="builder-field-label">terminal role</span>
-          <span className="builder-field-input">
-            <select
-              aria-label={`${title} terminal role`}
-              value={endpoint.role}
-              onChange={(e) =>
-                onUpdate({ role: e.target.value as DraftLinkEndpoint["role"] })
-              }
-            >
-              <option value="access">access</option>
-              <option value="isl">isl</option>
-              <option value="crosslink">crosslink</option>
-            </select>
-          </span>
-        </label>
-        <label className="builder-field">
-          <span className="builder-field-label">medium</span>
-          <span className="builder-field-input">
-            <select
-              aria-label={`${title} medium`}
-              value={endpoint.medium}
-              onChange={(e) =>
-                onUpdate({ medium: e.target.value as DraftLinkEndpoint["medium"] })
-              }
-            >
-              <option value="rf">rf</option>
-              <option value="optical">optical</option>
-            </select>
-          </span>
-        </label>
-        <label className="builder-field">
-          <span className="builder-field-label">min elevation</span>
-          <span className="builder-field-input">
-            <input
-              type="number"
-              placeholder="none"
-              value={endpoint.min_elevation_deg ?? ""}
-              onChange={(e) => {
-                const value = e.target.value;
-                if (value === "") {
-                  onUpdate({ min_elevation_deg: null });
-                } else {
-                  const parsed = Number(value);
-                  if (Number.isFinite(parsed)) onUpdate({ min_elevation_deg: parsed });
-                }
-              }}
-            />
-            <span className="builder-field-suffix">deg</span>
-          </span>
-        </label>
+        <SelectField
+          stack
+          label="segment"
+          ariaLabel={`${title} segment`}
+          value={endpoint.segment_id}
+          onChange={(segment_id) => onSegmentChange(segment_id)}
+          options={[
+            ...placed.map((segment) => ({
+              value: segment.segment_id,
+              label: `${segment.label} (${segment.kind})`,
+            })),
+            ...(placed.some((s) => s.segment_id === endpoint.segment_id)
+              ? []
+              : [{ value: endpoint.segment_id, label: `${endpoint.segment_id} (removed)` }]),
+          ]}
+        />
+        <Field
+          label="scope to tag"
+          placeholder="every node in the segment"
+          value={endpoint.tag ?? ""}
+          onChange={(value) => onUpdate({ tag: value.trim() || null })}
+        />
+        <SelectField
+          label="terminal role"
+          ariaLabel={`${title} terminal role`}
+          value={endpoint.role}
+          onChange={(value) => onUpdate({ role: value as DraftLinkEndpoint["role"] })}
+          options={ALL_ROLES.map((role) => ({
+            value: role,
+            label: role,
+            disabled: roleDisabled(role),
+            title: roleDisabled(role)
+              ? `no ${role} terminals on both ends`
+              : undefined,
+          }))}
+        />
+        <SelectField
+          label="medium"
+          ariaLabel={`${title} medium`}
+          value={endpoint.medium}
+          onChange={(value) => onUpdate({ medium: value as DraftLinkEndpoint["medium"] })}
+          options={ALL_MEDIA.map((medium) => ({
+            value: medium,
+            label: medium,
+            disabled: mediumDisabled(medium),
+            title: mediumDisabled(medium)
+              ? `no ${endpoint.role} ${medium} terminals on both ends`
+              : undefined,
+          }))}
+        />
+        <NullableNumberField
+          label="min elevation"
+          placeholder="none"
+          suffix="deg"
+          value={endpoint.min_elevation_deg}
+          onChange={(min_elevation_deg) => onUpdate({ min_elevation_deg })}
+        />
       </div>
     </div>
   );
@@ -142,33 +153,46 @@ export function LinkRuleEditor({
   onUpdate,
   onUpdateEndpoint,
   onRemove,
+  autoFocusName = false,
+  capabilities,
+  onRepoint,
 }: LinkRuleEditorProps) {
   const warnings = linkWarnings(workspace);
+  const [rederiveNotice, setRederiveNotice] = useState<string | null>(null);
+  const repoint = (side: "a" | "b") => (newSegmentId: string) => {
+    setRederiveNotice(onRepoint(side, newSegmentId));
+  };
   return (
     <div className="builder-inspector-stack" data-testid="builder-link-editor">
-      <label className="builder-field">
-        <span className="builder-field-label">name</span>
-        <span className="builder-field-input">
-          <input
-            type="text"
-            value={rule.label}
-            onChange={(e) => onUpdate({ label: e.target.value })}
-          />
-        </span>
-      </label>
+      <EditorName
+        value={rule.label}
+        onChange={(label) => onUpdate({ label })}
+        autoFocus={autoFocusName}
+      />
 
       <EndpointCard
         title="Endpoint A"
         endpoint={rule.a}
+        other={rule.b}
         workspace={workspace}
+        capabilities={capabilities}
         onUpdate={(patch) => onUpdateEndpoint("a", patch)}
+        onSegmentChange={repoint("a")}
       />
       <EndpointCard
         title="Endpoint B"
         endpoint={rule.b}
+        other={rule.a}
         workspace={workspace}
+        capabilities={capabilities}
         onUpdate={(patch) => onUpdateEndpoint("b", patch)}
+        onSegmentChange={repoint("b")}
       />
+      {rederiveNotice && (
+        <div className="builder-library-note" data-testid="rederive-note">
+          {rederiveNotice}
+        </div>
+      )}
 
       <div className="builder-preset-row" role="radiogroup" aria-label="Topology">
         <Button
@@ -185,44 +209,23 @@ export function LinkRuleEditor({
         </Button>
       </div>
       {rule.topology_mode === "nearest_n" && (
-        <label className="builder-field">
-          <span className="builder-field-label">N</span>
-          <span className="builder-field-input">
-            <input
-              type="number"
-              min={1}
-              value={rule.topology_n}
-              onChange={(e) => {
-                const parsed = Math.max(1, Math.round(Number(e.target.value)));
-                if (Number.isFinite(parsed)) onUpdate({ topology_n: parsed });
-              }}
-            />
-            <span className="builder-field-suffix">neighbors</span>
-          </span>
-        </label>
+        <NumberField
+          label="N"
+          value={rule.topology_n}
+          min={1}
+          integer
+          suffix="neighbors"
+          onChange={(topology_n) => onUpdate({ topology_n })}
+        />
       )}
-      <label className="builder-field">
-        <span className="builder-field-label">max range</span>
-        <span className="builder-field-input">
-          <input
-            type="number"
-            placeholder="unlimited"
-            value={rule.max_range_km ?? ""}
-            onChange={(e) => {
-              const value = e.target.value;
-              if (value === "") {
-                onUpdate({ max_range_km: null });
-              } else {
-                const parsed = Number(value);
-                if (Number.isFinite(parsed) && parsed > 0) {
-                  onUpdate({ max_range_km: parsed });
-                }
-              }
-            }}
-          />
-          <span className="builder-field-suffix">km</span>
-        </span>
-      </label>
+      <NullableNumberField
+        label="max range"
+        placeholder="unlimited"
+        suffix="km"
+        min={1}
+        value={rule.max_range_km}
+        onChange={(max_range_km) => onUpdate({ max_range_km })}
+      />
       <div className="builder-preset-row">
         <Button active={rule.enabled} onClick={() => onUpdate({ enabled: !rule.enabled })}>
           {rule.enabled ? "enabled" : "disabled"}

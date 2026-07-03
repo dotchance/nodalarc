@@ -12,6 +12,7 @@
 
 import { useState } from "react";
 import { Button } from "../ui/Button";
+import { EditorName, Field as TextField, NumberField, SelectField } from "./editorKit";
 import { readCatalogObject, saveUserObject } from "./useBuilderWorld";
 import type { BuilderCatalogEntry } from "./builderTypes";
 import {
@@ -30,38 +31,6 @@ interface TerminalEditorProps {
   /** Called with the new library ref after a successful save. */
   onSaved: (ref: string) => void;
   onCancel: () => void;
-}
-
-function Field({
-  label,
-  value,
-  onChange,
-  suffix,
-  step = 1,
-}: {
-  label: string;
-  value: number;
-  onChange: (value: number) => void;
-  suffix?: string;
-  step?: number;
-}) {
-  return (
-    <label className="builder-field">
-      <span className="builder-field-label">{label}</span>
-      <span className="builder-field-input">
-        <input
-          type="number"
-          value={value}
-          step={step}
-          onChange={(e) => {
-            const parsed = Number(e.target.value);
-            if (Number.isFinite(parsed)) onChange(parsed);
-          }}
-        />
-        {suffix && <span className="builder-field-suffix">{suffix}</span>}
-      </span>
-    </label>
-  );
 }
 
 export function TerminalEditor({
@@ -118,37 +87,29 @@ export function TerminalEditor({
 
   return (
     <div className="builder-mount-editor" data-testid="terminal-editor">
-      <label className="builder-field builder-field--stack">
-        <span className="builder-field-label">start from</span>
-        <select
-          aria-label="Seed terminal"
-          value=""
-          onChange={(e) => e.target.value && void seedFrom(e.target.value)}
-        >
-          <option value="">blank template</option>
-          {catalog
+      <SelectField
+        stack
+        label="start from"
+        ariaLabel="Seed terminal"
+        value=""
+        onChange={(ref) => ref && void seedFrom(ref)}
+        options={[
+          { value: "", label: "blank template" },
+          ...catalog
             .filter((entry) => !entry.error)
-            .map((entry) => (
-              <option key={entry.ref} value={entry.ref}>
-                {entry.display_name ?? entry.id}
-                {entry.ref.startsWith("user:") ? " (yours)" : ""}
-              </option>
-            ))}
-        </select>
-      </label>
+            .map((entry) => ({
+              value: entry.ref,
+              label:
+                (entry.display_name ?? entry.id ?? entry.ref) +
+                (entry.ref.startsWith("user:") ? " (yours)" : ""),
+            })),
+        ]}
+      />
       {seedError && <div className="builder-warning">{seedError}</div>}
-      <label className="builder-field">
-        <span className="builder-field-label">name</span>
-        <span className="builder-field-input">
-          <input
-            type="text"
-            value={draft.display_name}
-            onChange={(e) =>
-              onChange({ ...draft, display_name: e.target.value, id: e.target.value })
-            }
-          />
-        </span>
-      </label>
+      <EditorName
+        value={draft.display_name}
+        onChange={(value) => onChange({ ...draft, display_name: value, id: value })}
+      />
       <div className="builder-preset-row" role="radiogroup" aria-label="Terminal medium">
         <Button active={draft.medium === "rf"} onClick={() => onChange({ ...draft, medium: "rf" })}>
           rf
@@ -162,17 +123,12 @@ export function TerminalEditor({
       </div>
       {draft.medium === "rf" ? (
         <>
-          <label className="builder-field">
-            <span className="builder-field-label">band</span>
-            <span className="builder-field-input">
-              <input
-                type="text"
-                value={draft.band}
-                onChange={(e) => onChange({ ...draft, band: e.target.value })}
-              />
-            </span>
-          </label>
-          <Field
+          <TextField
+            label="band"
+            value={draft.band}
+            onChange={(band) => onChange({ ...draft, band })}
+          />
+          <NumberField
             label="frequency"
             value={draft.frequency_ghz}
             suffix="GHz"
@@ -181,54 +137,54 @@ export function TerminalEditor({
           />
         </>
       ) : (
-        <Field
+        <NumberField
           label="wavelength"
           value={draft.wavelength_nm}
           suffix="nm"
           onChange={(wavelength_nm) => onChange({ ...draft, wavelength_nm })}
         />
       )}
-      <Field
+      <NumberField
         label="tx bandwidth"
         value={draft.transmit_mbps}
         suffix="Mbps"
         step={50}
         onChange={(transmit_mbps) => onChange({ ...draft, transmit_mbps })}
       />
-      <Field
+      <NumberField
         label="rx bandwidth"
         value={draft.receive_mbps}
         suffix="Mbps"
         step={50}
         onChange={(receive_mbps) => onChange({ ...draft, receive_mbps })}
       />
-      <Field
+      <NumberField
         label="tracking capacity"
         value={draft.tracking_capacity}
         onChange={(tracking_capacity) =>
           onChange({ ...draft, tracking_capacity: Math.max(1, Math.round(tracking_capacity)) })
         }
       />
-      <Field
+      <NumberField
         label="max range"
         value={draft.max_range_km}
         suffix="km"
         step={100}
         onChange={(max_range_km) => onChange({ ...draft, max_range_km })}
       />
-      <Field
+      <NumberField
         label="min elevation"
         value={draft.elevation_min_deg}
         suffix="deg"
         onChange={(elevation_min_deg) => onChange({ ...draft, elevation_min_deg })}
       />
-      <Field
+      <NumberField
         label="max elevation"
         value={draft.elevation_max_deg}
         suffix="deg"
         onChange={(elevation_max_deg) => onChange({ ...draft, elevation_max_deg })}
       />
-      <Field
+      <NumberField
         label="max tracking rate"
         value={draft.max_tracking_rate_deg_s}
         suffix="deg/s"

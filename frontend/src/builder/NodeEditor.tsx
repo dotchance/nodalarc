@@ -17,6 +17,7 @@
 
 import { useState } from "react";
 import { Button } from "../ui/Button";
+import { EditorName, NumberField, SelectField } from "./editorKit";
 import { TerminalEditor } from "./TerminalEditor";
 import { importUserObjectYaml, useBuilderCatalog } from "./useBuilderWorld";
 import {
@@ -50,9 +51,11 @@ function nextMountId(draft: DraftNode, role: string): string {
 interface NodeEditorProps {
   draft: DraftNode;
   onChange: (draft: DraftNode) => void;
+  /** IG-2: focus the name when a create gesture opened this editor. */
+  autoFocusName?: boolean;
 }
 
-export function NodeEditor({ draft, onChange }: NodeEditorProps) {
+export function NodeEditor({ draft, onChange, autoFocusName = false }: NodeEditorProps) {
   const terminals = useBuilderCatalog("terminals");
   const [openMount, setOpenMount] = useState<string | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -100,37 +103,24 @@ export function NodeEditor({ draft, onChange }: NodeEditorProps) {
 
   return (
     <div className="builder-node-editor" data-testid="node-editor">
-      <label className="builder-field">
-        <span className="builder-field-label">node name</span>
-        <span className="builder-field-input">
-          <input
-            type="text"
-            value={draft.display_name}
-            onChange={(e) =>
-              onChange({ ...draft, display_name: e.target.value, id: e.target.value })
-            }
-          />
-        </span>
-      </label>
-      <label className="builder-field">
-        <span className="builder-field-label">forwarding</span>
-        <span className="builder-field-input">
-          <select
-            aria-label="Forwarding class"
-            value={draft.forwarding}
-            onChange={(e) =>
-              onChange({ ...draft, forwarding: e.target.value as DraftNode["forwarding"] })
-            }
-          >
-            {FORWARDING_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.value}
-                {option.gated ? " — runtime-gated" : ""}
-              </option>
-            ))}
-          </select>
-        </span>
-      </label>
+      <EditorName
+        label="node name"
+        value={draft.display_name}
+        onChange={(value) => onChange({ ...draft, display_name: value, id: value })}
+        autoFocus={autoFocusName}
+      />
+      <SelectField
+        label="forwarding"
+        ariaLabel="Forwarding class"
+        value={draft.forwarding}
+        onChange={(value) =>
+          onChange({ ...draft, forwarding: value as DraftNode["forwarding"] })
+        }
+        options={FORWARDING_OPTIONS.map((option) => ({
+          value: option.value,
+          label: option.value + (option.gated ? " — runtime-gated" : ""),
+        }))}
+      />
       {FORWARDING_OPTIONS.find((o) => o.value === draft.forwarding)?.gated && (
         <div className="builder-warning">
           {draft.forwarding} is structurally valid grammar; today's runtime rejects it
@@ -186,57 +176,39 @@ export function NodeEditor({ draft, onChange }: NodeEditorProps) {
 
       {editing && (
         <div className="builder-mount-editor" data-testid="mount-editor">
-          <label className="builder-field">
-            <span className="builder-field-label">role</span>
-            <span className="builder-field-input">
-              <select
-                aria-label="Mount role"
-                value={editing.role}
-                onChange={(e) =>
-                  updateMount(editing.mount_id, {
-                    role: e.target.value as DraftTerminalMount["role"],
-                  })
-                }
-              >
-                {ROLES.map((role) => (
-                  <option key={role} value={role}>
-                    {role}
-                  </option>
-                ))}
-              </select>
-            </span>
-          </label>
-          <label className="builder-field builder-field--stack">
-            <span className="builder-field-label">terminal</span>
-            <select
-              aria-label="Mount terminal"
-              value={editing.terminal_ref}
-              onChange={(e) => updateMount(editing.mount_id, { terminal_ref: e.target.value })}
-            >
-              {terminals.entries
-                .filter((entry) => !entry.error)
-                .map((entry) => (
-                  <option key={entry.ref} value={entry.ref}>
-                    {entry.display_name ?? entry.id ?? entry.ref}
-                    {entry.ref.startsWith("user:") ? " (yours)" : ""}
-                  </option>
-                ))}
-            </select>
-          </label>
-          <label className="builder-field">
-            <span className="builder-field-label">count</span>
-            <span className="builder-field-input">
-              <input
-                type="number"
-                value={editing.count}
-                min={1}
-                onChange={(e) => {
-                  const parsed = Math.max(1, Math.round(Number(e.target.value)));
-                  if (Number.isFinite(parsed)) updateMount(editing.mount_id, { count: parsed });
-                }}
-              />
-            </span>
-          </label>
+          <SelectField
+            label="role"
+            ariaLabel="Mount role"
+            value={editing.role}
+            onChange={(value) =>
+              updateMount(editing.mount_id, {
+                role: value as DraftTerminalMount["role"],
+              })
+            }
+            options={ROLES.map((role) => ({ value: role, label: role }))}
+          />
+          <SelectField
+            stack
+            label="terminal"
+            ariaLabel="Mount terminal"
+            value={editing.terminal_ref}
+            onChange={(terminal_ref) => updateMount(editing.mount_id, { terminal_ref })}
+            options={terminals.entries
+              .filter((entry) => !entry.error)
+              .map((entry) => ({
+                value: entry.ref,
+                label:
+                  (entry.display_name ?? entry.id ?? entry.ref) +
+                  (entry.ref.startsWith("user:") ? " (yours)" : ""),
+              }))}
+          />
+          <NumberField
+            label="count"
+            value={editing.count}
+            min={1}
+            integer
+            onChange={(count) => updateMount(editing.mount_id, { count })}
+          />
           <Button
             variant="danger"
             onClick={() => {

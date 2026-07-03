@@ -9,6 +9,7 @@
  *  fields live here so the numbers are the user's, never a hidden default.
  */
 
+import { EditorName, Field, NumberField } from "./editorKit";
 import type { Workspace } from "./workspace";
 
 interface SessionEditorProps {
@@ -16,61 +17,15 @@ interface SessionEditorProps {
   onUpdate: (patch: Partial<Workspace>) => void;
 }
 
-function NumberField({
-  label,
-  value,
-  min,
-  onChange,
-  suffix,
-}: {
-  label: string;
-  value: number;
-  min: number;
-  onChange: (value: number) => void;
-  suffix?: string;
-}) {
-  return (
-    <label className="builder-field">
-      <span className="builder-field-label">{label}</span>
-      <span className="builder-field-input">
-        <input
-          type="number"
-          min={min}
-          value={value}
-          onChange={(e) => {
-            const parsed = Number(e.target.value);
-            if (Number.isFinite(parsed) && parsed >= min) onChange(parsed);
-          }}
-        />
-        {suffix && <span className="builder-field-suffix">{suffix}</span>}
-      </span>
-    </label>
-  );
-}
-
 export function SessionEditor({ workspace, onUpdate }: SessionEditorProps) {
   return (
     <div className="builder-inspector-stack" data-testid="builder-session-editor">
-      <label className="builder-field">
-        <span className="builder-field-label">name</span>
-        <span className="builder-field-input">
-          <input
-            type="text"
-            value={workspace.name}
-            onChange={(e) => onUpdate({ name: e.target.value })}
-          />
-        </span>
-      </label>
-      <label className="builder-field">
-        <span className="builder-field-label">start time</span>
-        <span className="builder-field-input">
-          <input
-            type="text"
-            value={workspace.start_time}
-            onChange={(e) => onUpdate({ start_time: e.target.value.trim() })}
-          />
-        </span>
-      </label>
+      <EditorName value={workspace.name} onChange={(name) => onUpdate({ name })} />
+      <Field
+        label="start time"
+        value={workspace.start_time}
+        onChange={(start_time) => onUpdate({ start_time: start_time.trim() })}
+      />
       <div className="builder-card builder-card--open">
         <div className="builder-card-head">
           <span className="builder-card-title">Time rate</span>

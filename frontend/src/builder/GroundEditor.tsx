@@ -16,6 +16,15 @@
 import { useState } from "react";
 import { Button, IconButton } from "../ui/Button";
 import { Icon } from "../ui/icons/Icon";
+import {
+  EditorName,
+  Field,
+  InlineSelect,
+  NumberField,
+  PasteArea,
+  SelectField,
+} from "./editorKit";
+import { SegmentLinksCard } from "./SegmentLinksCard";
 import { SiteEditor } from "./SiteEditor";
 import { readCatalogObject, saveUserObject, useBuilderCatalog } from "./useBuilderWorld";
 import {
@@ -34,12 +43,19 @@ import {
   type DraftGroundSite,
   type DraftSiteObject,
   type SchedulingPresetKey,
+  type Workspace,
 } from "./workspace";
 
 interface GroundEditorProps {
   draft: DraftGroundSet;
   onUpdate: (patch: Partial<DraftGroundSet>) => void;
   onRemove: () => void;
+  /** IG-2: focus the name when a create gesture opened this editor. */
+  autoFocusName?: boolean;
+  /** Connect gesture context (IG-7: "+ link to…" on the segment). */
+  workspace: Workspace;
+  onOpenRule: (ruleId: string) => void;
+  onConnect: (targetSegmentId: string) => void;
 }
 
 /** Parse a comma/space separated tag or prefix list; empty tokens drop. */
@@ -50,7 +66,15 @@ function tokenList(value: string): string[] {
     .filter((token) => token.length > 0);
 }
 
-export function GroundEditor({ draft, onUpdate, onRemove }: GroundEditorProps) {
+export function GroundEditor({
+  draft,
+  onUpdate,
+  onRemove,
+  autoFocusName = false,
+  workspace,
+  onOpenRule,
+  onConnect,
+}: GroundEditorProps) {
   const [openCard, setOpenCard] = useState<string | null>("sites");
   const toggle = (id: string) => setOpenCard((prev) => (prev === id ? null : id));
   const nodes = useBuilderCatalog("nodes");
@@ -160,16 +184,11 @@ export function GroundEditor({ draft, onUpdate, onRemove }: GroundEditorProps) {
 
   return (
     <div className="builder-inspector-stack" data-testid="builder-ground-editor">
-      <label className="builder-field">
-        <span className="builder-field-label">name</span>
-        <span className="builder-field-input">
-          <input
-            type="text"
-            value={draft.display_name}
-            onChange={(e) => onUpdate({ display_name: e.target.value })}
-          />
-        </span>
-      </label>
+      <EditorName
+        value={draft.display_name}
+        onChange={(display_name) => onUpdate({ display_name })}
+        autoFocus={autoFocusName}
+      />
 
       <div className={`builder-card${openCard === "sites" ? " builder-card--open" : ""}`}>
         <button className="builder-card-head" onClick={() => toggle("sites")}>
@@ -188,26 +207,24 @@ export function GroundEditor({ draft, onUpdate, onRemove }: GroundEditorProps) {
                       <Icon name="locate-fixed" size={12} />
                       {member.label}
                     </span>
-                    <select
+                    <InlineSelect
                       className="builder-ground-preset"
-                      aria-label={`${member.label} scheduling`}
+                      ariaLabel={`${member.label} scheduling`}
                       title="Per-site scheduling — only exceptions are stored"
                       value={member.scheduling_override ?? ""}
-                      onChange={(e) =>
+                      onChange={(value) =>
                         updateMember(member.member_id, {
-                          scheduling_override: (e.target.value || null) as
-                            | SchedulingPresetKey
-                            | null,
+                          scheduling_override: (value || null) as SchedulingPresetKey | null,
                         })
                       }
-                    >
-                      <option value="">= template</option>
-                      {Object.entries(SCHEDULING_PRESETS).map(([key, preset]) => (
-                        <option key={key} value={key}>
-                          {preset.label}
-                        </option>
-                      ))}
-                    </select>
+                      options={[
+                        { value: "", label: "= template" },
+                        ...Object.entries(SCHEDULING_PRESETS).map(([key, preset]) => ({
+                          value: key,
+                          label: preset.label,
+                        })),
+                      ]}
+                    />
                     <IconButton
                       icon="pencil"
                       size={12}
@@ -271,12 +288,10 @@ export function GroundEditor({ draft, onUpdate, onRemove }: GroundEditorProps) {
                   )}
               </div>
             ))}
-            <textarea
-              className="builder-paste"
+            <PasteArea
               placeholder={"paste sites, one per line:\nDenver, 39.7, -104.9\nPerth, -31.9, 115.8"}
               value={pasteText}
-              onChange={(e) => setPasteText(e.target.value)}
-              rows={3}
+              onChange={setPasteText}
             />
             {pasteErrors.map((error) => (
               <div className="builder-warning" key={error}>
@@ -334,74 +349,53 @@ export function GroundEditor({ draft, onUpdate, onRemove }: GroundEditorProps) {
               applied when minting pasted sites — each site owns its
               configuration afterwards (edit the site, not the stamp)
             </div>
-            <label className="builder-field builder-field--stack">
-              <span className="builder-field-label">node model</span>
-              <select
-                aria-label="Stamp node model"
-                value={draft.stamp.node_ref}
-                onChange={(e) => void setStampModel(e.target.value)}
-              >
-                {nodes.entries
-                  .filter((entry) => !entry.error)
-                  .map((entry) => (
-                    <option key={entry.ref} value={entry.ref}>
-                      {entry.display_name ?? entry.id ?? entry.ref}
-                    </option>
-                  ))}
-              </select>
-            </label>
+            <SelectField
+              stack
+              label="node model"
+              ariaLabel="Stamp node model"
+              value={draft.stamp.node_ref}
+              onChange={(ref) => void setStampModel(ref)}
+              options={nodes.entries
+                .filter((entry) => !entry.error)
+                .map((entry) => ({
+                  value: entry.ref,
+                  label: entry.display_name ?? entry.id ?? entry.ref,
+                }))}
+            />
             {Object.entries(draft.stamp.installed).map(([mount, count]) => (
-              <label className="builder-field" key={mount}>
-                <span className="builder-field-label">{mount}</span>
-                <span className="builder-field-input">
-                  <input
-                    type="number"
-                    min={1}
-                    value={count}
-                    onChange={(e) => {
-                      const parsed = Math.max(1, Math.round(Number(e.target.value)));
-                      if (Number.isFinite(parsed)) {
-                        onUpdate({
-                          stamp: {
-                            ...draft.stamp,
-                            installed: { ...draft.stamp.installed, [mount]: parsed },
-                          },
-                        });
-                      }
-                    }}
-                  />
-                  <span className="builder-field-suffix">installed</span>
-                </span>
-              </label>
+              <NumberField
+                key={mount}
+                label={mount}
+                value={count}
+                min={1}
+                integer
+                suffix="installed"
+                onChange={(parsed) =>
+                  onUpdate({
+                    stamp: {
+                      ...draft.stamp,
+                      installed: { ...draft.stamp.installed, [mount]: parsed },
+                    },
+                  })
+                }
+              />
             ))}
-            <label className="builder-field">
-              <span className="builder-field-label">lan base</span>
-              <span className="builder-field-input">
-                <input
-                  type="text"
-                  value={draft.stamp.lan_base}
-                  onChange={(e) =>
-                    onUpdate({ stamp: { ...draft.stamp, lan_base: e.target.value.trim() } })
-                  }
-                />
-                <span className="builder-field-suffix">.site.0/24</span>
-              </span>
-            </label>
-            <label className="builder-field">
-              <span className="builder-field-label">loopback base</span>
-              <span className="builder-field-input">
-                <input
-                  type="text"
-                  value={draft.stamp.loopback_base}
-                  onChange={(e) =>
-                    onUpdate({
-                      stamp: { ...draft.stamp, loopback_base: e.target.value.trim() },
-                    })
-                  }
-                />
-                <span className="builder-field-suffix">.0.n/32</span>
-              </span>
-            </label>
+            <Field
+              label="lan base"
+              value={draft.stamp.lan_base}
+              suffix=".site.0/24"
+              onChange={(lan_base) =>
+                onUpdate({ stamp: { ...draft.stamp, lan_base: lan_base.trim() } })
+              }
+            />
+            <Field
+              label="loopback base"
+              value={draft.stamp.loopback_base}
+              suffix=".0.n/32"
+              onChange={(loopback_base) =>
+                onUpdate({ stamp: { ...draft.stamp, loopback_base: loopback_base.trim() } })
+              }
+            />
             <div className="builder-site-derived">
               next minted site: lan {stampLanPrefix(draft.stamp, 0)}, lo0{" "}
               {stampLoopbackAddress(draft.stamp, 0)} …
@@ -419,24 +413,19 @@ export function GroundEditor({ draft, onUpdate, onRemove }: GroundEditorProps) {
         </button>
         {openCard === "scheduling" && (
           <div className="builder-card-body">
-            <label className="builder-field builder-field--stack">
-              <span className="builder-field-label">
-                intent preset — writes the full explicit block (see YAML)
-              </span>
-              <select
-                aria-label="Scheduling preset"
-                value={draft.scheduling_preset}
-                onChange={(e) =>
-                  onUpdate({ scheduling_preset: e.target.value as SchedulingPresetKey })
-                }
-              >
-                {Object.entries(SCHEDULING_PRESETS).map(([key, preset]) => (
-                  <option key={key} value={key}>
-                    {preset.label}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <SelectField
+              stack
+              label="intent preset — writes the full explicit block (see YAML)"
+              ariaLabel="Scheduling preset"
+              value={draft.scheduling_preset}
+              onChange={(value) =>
+                onUpdate({ scheduling_preset: value as SchedulingPresetKey })
+              }
+              options={Object.entries(SCHEDULING_PRESETS).map(([key, preset]) => ({
+                value: key,
+                label: preset.label,
+              }))}
+            />
           </div>
         )}
       </div>
@@ -453,29 +442,30 @@ export function GroundEditor({ draft, onUpdate, onRemove }: GroundEditorProps) {
         </button>
         {openCard === "routing" && (
           <div className="builder-card-body">
-            <label className="builder-field builder-field--stack">
-              <span className="builder-field-label">originated IPv4 prefixes</span>
-              <input
-                type="text"
-                placeholder="198.51.100.0/24, 203.0.113.0/24"
-                value={draft.originated_ipv4.join(", ")}
-                onChange={(e) => onUpdate({ originated_ipv4: tokenList(e.target.value) })}
-              />
-            </label>
-            <label className="builder-field builder-field--stack">
-              <span className="builder-field-label">
-                segment tags — link rules select on these
-              </span>
-              <input
-                type="text"
-                placeholder="teleport, edge"
-                value={draft.tags.join(", ")}
-                onChange={(e) => onUpdate({ tags: tokenList(e.target.value) })}
-              />
-            </label>
+            <Field
+              stack
+              label="originated IPv4 prefixes"
+              placeholder="198.51.100.0/24, 203.0.113.0/24"
+              value={draft.originated_ipv4.join(", ")}
+              onChange={(value) => onUpdate({ originated_ipv4: tokenList(value) })}
+            />
+            <Field
+              stack
+              label="segment tags — link rules select on these"
+              placeholder="teleport, edge"
+              value={draft.tags.join(", ")}
+              onChange={(value) => onUpdate({ tags: tokenList(value) })}
+            />
           </div>
         )}
       </div>
+
+      <SegmentLinksCard
+        workspace={workspace}
+        segmentId={draft.segment_id}
+        onOpenRule={onOpenRule}
+        onConnect={onConnect}
+      />
 
       {warnings.map((warning) => (
         <div className="builder-warning" key={warning}>

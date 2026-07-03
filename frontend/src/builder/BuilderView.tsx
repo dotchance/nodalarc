@@ -31,6 +31,7 @@ import { BuilderInspector } from "./BuilderInspector";
 import { builderSnapshotFromWorld } from "./builderSnapshot";
 import { CandidateLines } from "./CandidateLines";
 import { computeCandidates } from "./candidates";
+import { capabilitiesBySegment, connectSegments, rederiveRule } from "./linkPhysics";
 import { CatalogObjectView } from "./CatalogObjectView";
 import { ConstellationEditor } from "./ConstellationEditor";
 import { GroundEditor } from "./GroundEditor";
@@ -51,6 +52,7 @@ import { useWorkspace } from "./useWorkspace";
 import {
   defaultDraftNode,
   defaultDraftTerminal,
+  newDraftConstellation,
   draftConstellationFromDocuments,
   draftGroundSetFromDocuments,
   draftNodeFromDocument,
@@ -58,7 +60,6 @@ import {
   draftTerminalFromDocument,
   completenessFindings,
   defaultBoundary,
-  defaultLinkRule,
   defaultRoutingDomain,
   identifier,
   linkWarnings,
@@ -237,12 +238,16 @@ export function BuilderView({
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [undo]);
+  // IG-2: the object a create gesture just made — its editor focuses the
+  // name once; any navigation clears it.
+  const [freshId, setFreshId] = useState<string | null>(null);
   const closeEditors = () => {
     setEditingSegment(null);
     setEditingLink(null);
     setEditingDomain(null);
     setEditingBoundary(null);
     setEditingSession(false);
+    setFreshId(null);
   };
   const [showYaml, setShowYaml] = useState(false);
   const [saveState, setSaveState] = useState<
@@ -396,8 +401,12 @@ export function BuilderView({
       setEditingSegment(null);
       setLibraryEditor({ kind: "node", draft: defaultDraftNode() });
     } else if (family === "constellations" && defaultNodeRef) {
+      const draft = newDraftConstellation(defaultNodeRef);
       setLibraryEditor(null);
-      addConstellation(defaultNodeRef);
+      closeEditors();
+      addDraft(draft);
+      setEditingSegment(draft.segment_id);
+      setFreshId(draft.segment_id);
     } else if (family === "sites" && defaultGroundNodeRef) {
       void (async () => {
         try {
@@ -438,6 +447,28 @@ export function BuilderView({
       })();
     }
   };
+  // The connect gesture (IG-7): both endpoints known BEFORE the rule
+  // exists, physics derived from the resolved world's faceplates.
+  const segmentCapabilities = useMemo(() => capabilitiesBySegment(world), [world]);
+  const openRule = (ruleId: string) => {
+    setLibraryEditor(null);
+    closeEditors();
+    setEditingLink(ruleId);
+  };
+  const connect = (fromSegmentId: string, targetSegmentId: string) => {
+    if (!workspace) return;
+    try {
+      const rule = connectSegments(workspace, world, fromSegmentId, targetSegmentId);
+      addLinkRule(rule);
+      setLibraryEditor(null);
+      closeEditors();
+      setEditingLink(rule.rule_id);
+      setFreshId(rule.rule_id);
+    } catch (e) {
+      setLibraryError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
   // Default node model for a fresh constellation: prefer the catalog's space
   // nodes (directory layout is authoring convention, so this is a display
   // heuristic only — the picker offers every node either way).
@@ -754,25 +785,6 @@ export function BuilderView({
                 </span>
               </button>
             ))}
-            {placedSegments(workspace).length > 0 && (
-              <Button
-                title="Connect two placed segments — role defaults seed the rule"
-                onClick={() => {
-                  const placed = placedSegments(workspace);
-                  const a =
-                    placed.find((s) => s.segment_id === editingSegment) ?? placed[0];
-                  const b = placed.find((s) => s.segment_id !== a?.segment_id) ?? a;
-                  if (!a || !b) return;
-                  const rule = defaultLinkRule(a, b, workspace.links);
-                  addLinkRule(rule);
-                  setLibraryEditor(null);
-                  setEditingSegment(null);
-                  setEditingLink(rule.rule_id);
-                }}
-              >
-                + link
-              </Button>
-            )}
             {linkWarnings(workspace).map((warning) => (
               <div className="builder-warning" key={warning}>
                 {warning}
@@ -841,6 +853,7 @@ export function BuilderView({
                     setLibraryEditor(null);
                     closeEditors();
                     setEditingDomain(domain.domain_id);
+                    setFreshId(domain.domain_id);
                   }}
                 >
                   + domain
@@ -876,7 +889,15 @@ export function BuilderView({
             ))}
             <Button
               disabled={!defaultNodeRef}
-              onClick={() => defaultNodeRef && addConstellation(defaultNodeRef)}
+              onClick={() => {
+                if (!defaultNodeRef) return;
+                const draft = newDraftConstellation(defaultNodeRef);
+                setLibraryEditor(null);
+                closeEditors();
+                addDraft(draft);
+                setEditingSegment(draft.segment_id);
+                setFreshId(draft.segment_id);
+              }}
             >
               + Add constellation
             </Button>
@@ -1138,6 +1159,8 @@ export function BuilderView({
               <div className="builder-inspector-stack">
                 <div className="builder-outline-kind">New site</div>
                 <SiteEditor
+                  key="library-site"
+                  autoFocusName
                   site={libraryEditor.draft}
                   onUpdate={(patch) =>
                     setLibraryEditor({
@@ -1155,6 +1178,8 @@ export function BuilderView({
               <div className="builder-inspector-stack">
                 <div className="builder-outline-kind">New node</div>
                 <NodeEditor
+                  key="library-node"
+                  autoFocusName
                   draft={libraryEditor.draft}
                   onChange={(draft) => setLibraryEditor({ kind: "node", draft })}
                 />
@@ -1208,9 +1233,14 @@ export function BuilderView({
             return <SessionEditor workspace={workspace} onUpdate={updateSession} />;
           }
           const draft = workspace?.space.find((d) => d.segment_id === editingSegment);
-          if (draft) {
+          if (workspace && draft) {
             return (
               <ConstellationEditor
+                key={draft.segment_id}
+                autoFocusName={freshId === draft.segment_id}
+                workspace={workspace}
+                onOpenRule={openRule}
+                onConnect={(target) => connect(draft.segment_id, target)}
                 draft={draft}
                 onUpdate={(patch) => updateConstellation(draft.segment_id, patch)}
                 onUpdateOrbit={(patch) => updateOrbit(draft.segment_id, patch)}
@@ -1224,9 +1254,14 @@ export function BuilderView({
           const groundDraft = workspace?.ground.find(
             (d) => d.segment_id === editingSegment,
           );
-          if (groundDraft) {
+          if (workspace && groundDraft) {
             return (
               <GroundEditor
+                key={groundDraft.segment_id}
+                autoFocusName={freshId === groundDraft.segment_id}
+                workspace={workspace}
+                onOpenRule={openRule}
+                onConnect={(target) => connect(groundDraft.segment_id, target)}
                 draft={groundDraft}
                 onUpdate={(patch) => updateGroundDraft(groundDraft.segment_id, patch)}
                 onRemove={() => {
@@ -1240,8 +1275,22 @@ export function BuilderView({
           if (workspace && linkRule) {
             return (
               <LinkRuleEditor
+                key={linkRule.rule_id}
+                autoFocusName={freshId === linkRule.rule_id}
                 workspace={workspace}
                 rule={linkRule}
+                capabilities={segmentCapabilities}
+                onRepoint={(side, newSegmentId) => {
+                  const { patch, notice } = rederiveRule(
+                    workspace,
+                    world,
+                    linkRule,
+                    side,
+                    newSegmentId,
+                  );
+                  updateLinkRule(linkRule.rule_id, patch);
+                  return notice;
+                }}
                 onUpdate={(patch) => updateLinkRule(linkRule.rule_id, patch)}
                 onUpdateEndpoint={(side, patch) =>
                   updateLinkEndpoint(linkRule.rule_id, side, patch)
@@ -1259,6 +1308,8 @@ export function BuilderView({
           if (workspace && routingDomain) {
             return (
               <RoutingDomainEditor
+                key={routingDomain.domain_id}
+                autoFocusName={freshId === routingDomain.domain_id}
                 workspace={workspace}
                 domain={routingDomain}
                 onUpdate={(patch) => updateRoutingDomain(routingDomain.domain_id, patch)}
@@ -1275,6 +1326,7 @@ export function BuilderView({
           if (workspace && boundary) {
             return (
               <BoundaryEditor
+                key={boundary.boundary_id}
                 workspace={workspace}
                 boundary={boundary}
                 onUpdate={(patch) => updateBoundary(boundary.boundary_id, patch)}

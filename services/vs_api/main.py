@@ -40,6 +40,9 @@ from nodalarc.catalog_paths import (
     config_value_for,
     generated_file_path,
     generated_file_stem,
+    reject_path_name,
+    safe_display_stem,
+    write_text_atomic,
     write_text_exclusive,
 )
 from nodalarc.db.queries import (
@@ -3207,12 +3210,16 @@ async def builder_save_session(body: dict) -> dict:
 
     name = resolve_check.world.session.name
     try:
-        stem = generated_file_stem(name)
-        session_file = generated_file_path(_generated_sessions_dir(), f"_builder-{stem}.yaml")
-        await asyncio.to_thread(write_text_exclusive, session_file, resolve_check.document_yaml)
+        # One artifact per session name: re-saving 'x' replaces the builder's
+        # previous 'x' file atomically. Hash-suffixed siblings made the
+        # session list unreadable — five files all claiming the same name
+        # with no way to tell which was current.
+        reject_path_name(name, label="session.name")
+        session_file = generated_file_path(
+            _generated_sessions_dir(), f"_builder-{safe_display_stem(name)}.yaml"
+        )
+        await asyncio.to_thread(write_text_atomic, session_file, resolve_check.document_yaml)
     except CatalogPathError as exc:
-        return _catalog_error(exc)
-    except FileExistsError as exc:
         return _catalog_error(exc)
     if _session_manager is not None:
         await asyncio.to_thread(_session_manager.rescan)

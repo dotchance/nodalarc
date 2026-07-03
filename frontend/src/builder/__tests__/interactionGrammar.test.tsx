@@ -23,6 +23,7 @@ import {
   NullableNumberField,
   SliderField,
 } from "../editorKit";
+import { BuildGuide } from "../BuildGuide";
 import { GroundEditor } from "../GroundEditor";
 import {
   accessBeamElevationDeg,
@@ -354,5 +355,57 @@ describe("SliderField: track for the common range, box for the truth", () => {
       />,
     );
     expect(track.value).toBe("40000");
+  });
+});
+
+describe("IG-15: the anatomy guide answers what-next in any order", () => {
+  afterEach(cleanup);
+  const guideProps = (ws: ReturnType<typeof newWorkspace>) => ({
+    workspace: ws,
+    saved: null,
+    deployed: false,
+    onAddConstellation: () => {},
+    onAddGround: () => {},
+    onAddDomain: () => {},
+    onOpenSession: () => {},
+    onOpenSegment: () => {},
+  });
+
+  it("every anatomy row is always on screen, pending or done", () => {
+    render(<BuildGuide {...guideProps(newWorkspace("untitled-session"))} />);
+    for (const label of [
+      "Space segments",
+      "Ground sites",
+      "Comms intent",
+      "Routing",
+      "Identity & time",
+      "Save & deploy",
+    ]) {
+      expect(screen.getByText(label)).toBeTruthy();
+    }
+  });
+
+  it("pending rows say why and act; gated rows say what unblocks them", () => {
+    const calls: string[] = [];
+    const ws = newWorkspace("untitled-session");
+    render(
+      <BuildGuide
+        {...guideProps(ws)}
+        onAddConstellation={() => calls.push("space")}
+      />,
+    );
+    fireEvent.click(screen.getByText("Space segments"));
+    expect(calls).toEqual(["space"]);
+    // No segments yet: comms intent explains its precondition instead of acting.
+    expect(screen.getByText("needs two segments first")).toBeTruthy();
+    expect(screen.getByText("add links first")).toBeTruthy();
+  });
+
+  it("done rows show counts, not health claims", () => {
+    const ws = newWorkspace("named-session");
+    ws.space.push(newDraftConstellation("nodalarc:nodes/space/x.yaml"));
+    render(<BuildGuide {...guideProps(ws)} />);
+    expect(screen.getByText("1 segment · add more")).toBeTruthy();
+    expect(screen.getByText("named-session")).toBeTruthy();
   });
 });

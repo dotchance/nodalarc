@@ -28,6 +28,7 @@ import type {
   StateSnapshot,
 } from "../types";
 import { Icon } from "../ui/icons/Icon";
+import { BuildGuide } from "./BuildGuide";
 import { BuilderInspector } from "./BuilderInspector";
 import { builderSnapshotFromWorld } from "./builderSnapshot";
 import { CandidateLines } from "./CandidateLines";
@@ -1141,6 +1142,29 @@ export function BuilderView({
             {loading ? "Resolving…" : "Load"}
           </Button>
         </div>
+        {workspace && (
+          <BuildGuide
+            workspace={workspace}
+            saved={saveState.kind === "saved" || saveState.kind === "deploying" || saveState.kind === "deployed" ? ("name" in saveState ? saveState.name : null) : null}
+            deployed={saveState.kind === "deployed"}
+            onAddConstellation={() => {
+              if (!defaultNodeRef) return;
+              const draft = newDraftConstellation(defaultNodeRef);
+              addDraft(draft);
+              openEditor({ kind: "segment", id: draft.segment_id });
+              setFreshId(draft.segment_id);
+            }}
+            onAddGround={() => handleLibraryNew("site-sets")}
+            onAddDomain={() => {
+              const domain = defaultRoutingDomain(workspace);
+              addRoutingDomain(domain);
+              openEditor({ kind: "domain", id: domain.domain_id });
+              setFreshId(domain.domain_id);
+            }}
+            onOpenSession={() => openEditor({ kind: "session" })}
+            onOpenSegment={(kind, id) => openEditor({ kind, id })}
+          />
+        )}
         {workspace && (
           <div className="builder-outline-group" data-testid="builder-drafts">
             <div className="builder-library-entry">

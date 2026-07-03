@@ -279,12 +279,17 @@ def test_save_session_resolves_then_writes_canonical_yaml(monkeypatch, tmp_path)
     payload = response.json()
     assert payload["name"] == "earth-leo-walker"
     assert payload["nodes"] == 181
-    saved = list(tmp_path.glob("_builder-earth-leo-walker-*.yaml"))
+    saved = list(tmp_path.glob("_builder-earth-leo-walker.yaml"))
     assert len(saved) == 1
     # The saved file IS the canonical serialization and still resolves.
     saved_raw = yaml.safe_load(saved[0].read_text(encoding="utf-8"))
     assert saved_raw == raw
     assert len(resolve_session(saved_raw).nodes) == 181
+    # One artifact per name: saving the same session again REPLACES the
+    # file — no hash-suffixed siblings nobody can tell apart.
+    again = client.post("/api/v1/builder/save-session", json={"document": raw})
+    assert again.status_code == 200
+    assert list(tmp_path.glob("_builder-*.yaml")) == saved
 
 
 def test_save_session_rejects_unresolvable_document(monkeypatch, tmp_path):

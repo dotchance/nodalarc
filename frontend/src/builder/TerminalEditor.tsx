@@ -144,12 +144,37 @@ export function TerminalEditor({
           onChange={(wavelength_nm) => onChange({ ...draft, wavelength_nm })}
         />
       )}
+      {/* Pointing seeds (IG-7): the elevation window decides what this head
+          can physically aim at — a ground dish never looks below its
+          horizon; a space head must. Seeds raw values the user then owns. */}
+      <div className="builder-preset-row" role="radiogroup" aria-label="Pointing">
+        <Button
+          title="Elevation 20 to 90 — a dish on the ground, looking up"
+          onClick={() => onChange({ ...draft, elevation_min_deg: 20, elevation_max_deg: 90 })}
+        >
+          ground dish
+        </Button>
+        <Button
+          title="Elevation -90 to 90 — full sky; a space head looks below its own horizontal (GEO aims almost straight down)"
+          onClick={() => onChange({ ...draft, elevation_min_deg: -90, elevation_max_deg: 90 })}
+        >
+          space head
+        </Button>
+      </div>
       <NumberField
         label="tx bandwidth"
         value={draft.transmit_mbps}
         suffix="Mbps"
         step={50}
-        onChange={(transmit_mbps) => onChange({ ...draft, transmit_mbps })}
+        onChange={(transmit_mbps) =>
+          onChange(
+            // Symmetric duplex is the norm: rx follows tx until rx is set
+            // apart, then it is the user's.
+            draft.receive_mbps === draft.transmit_mbps
+              ? { ...draft, transmit_mbps, receive_mbps: transmit_mbps }
+              : { ...draft, transmit_mbps },
+          )
+        }
       />
       <NumberField
         label="rx bandwidth"

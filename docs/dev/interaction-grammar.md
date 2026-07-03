@@ -112,6 +112,17 @@ tell which one they had performed. Enforced by the window buffers in
 `BuilderView`, `EditorApplyRow` in `editorKit.tsx`, and the conformance
 tests.
 
+**IG-15.** The builder always shows the session's anatomy — what a session
+is made of, what this one has, and why each missing part matters — without
+imposing an order. The anatomy panel's rows are permanent: each one carries
+a structural state (present or not, never a health claim — the resolve
+status stays the only green), a why written for both kinds of user, and an
+action that creates or opens the thing. A user can build in any order they
+please and still always has an answer to "what could I do next, and why
+would I". This exists because watching recorded builds showed the opposite:
+between steps the screen offered no reason to click anything in particular.
+Enforced by `BuildGuide` and its conformance tests.
+
 ## Getting around
 
 **IG-12.** There is one selection. Picking an object in the tree, on the

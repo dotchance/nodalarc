@@ -1353,18 +1353,15 @@ export interface CompletenessFinding {
     | null;
 }
 
-/** The completeness rail's source: structural authoring gaps with
- *  click-to-jump targets. Warnings that already render inline on their
- *  owning object are AGGREGATED as counts, not duplicated. Empty result =
- *  nothing to say (the resolve status is the green, never this rail). */
+/** The completeness rail's source: OBJECT-level authoring gaps with
+ *  click-to-jump targets. Session-level structure (no segments, no rules,
+ *  no domains) lives in the session-anatomy guide, which is always on
+ *  screen — saying it twice would just be two surfaces to keep agreeing.
+ *  Warnings that already render inline on their owning object are
+ *  AGGREGATED as counts, not duplicated. Empty result = nothing to say
+ *  (the resolve status is the green, never this rail). */
 export function completenessFindings(workspace: Workspace): CompletenessFinding[] {
   const findings: CompletenessFinding[] = [];
-  if (workspace.space.length + workspace.space_refs.length === 0) {
-    findings.push({
-      message: "no space segment — OME requires at least one satellite",
-      target: null,
-    });
-  }
   for (const draft of workspace.ground) {
     if (draft.members.length === 0) {
       findings.push({
@@ -1372,19 +1369,6 @@ export function completenessFindings(workspace: Workspace): CompletenessFinding[
         target: { kind: "ground", id: draft.segment_id },
       });
     }
-  }
-  const placed = placedSegments(workspace);
-  if (workspace.links.length === 0 && placed.length >= 2) {
-    findings.push({
-      message: "no link rules — nothing may communicate yet",
-      target: null,
-    });
-  }
-  if (workspace.routing_domains.length === 0 && workspace.links.length > 0) {
-    findings.push({
-      message: "no routing domains — links carry no routed traffic yet",
-      target: null,
-    });
   }
   for (const draft of workspace.space) {
     const count = orbitWarnings(draft.orbit).length;

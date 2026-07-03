@@ -284,19 +284,18 @@ describe("session plumbing + completeness", () => {
     });
   });
 
-  it("reports structural authoring gaps with owning-editor targets", () => {
+  it("reports OBJECT-level gaps with owning-editor targets; session structure is the guide's", () => {
     const workspace = newWorkspace("gaps");
     const ground = newDraftGroundSet("nodalarc:nodes/ground/leo-gateway.yaml", {});
     workspace.ground.push(ground); // no members
     const findings = completenessFindings(workspace);
-    expect(findings.some((f) => f.message.includes("no space segment"))).toBe(true);
+    // Session-level structure (no space segment / no rules / no domains)
+    // belongs to the always-visible session-anatomy guide, not this rail.
+    expect(findings.some((f) => f.message.includes("no space segment"))).toBe(false);
     const siteless = findings.find((f) => f.message.includes("no sites yet"));
     expect(siteless?.target).toEqual({ kind: "ground", id: ground.segment_id });
     // A healthy loaded world says nothing — green comes from the resolver.
-    const healthy = draftWorkspace();
-    expect(
-      completenessFindings(healthy).filter((f) => !f.message.includes("link rules")),
-    ).toEqual([]);
+    expect(completenessFindings(draftWorkspace())).toEqual([]);
   });
 
   it("reseeds id counters past a restored workspace's ids", () => {

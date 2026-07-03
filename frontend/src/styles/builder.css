@@ -892,3 +892,52 @@ button.builder-card-head:hover .builder-card-title {
   font-size: var(--font-size-sm);
   white-space: nowrap;
 }
+
+/* Session-anatomy guide (IG-15): always-on, order-free. Pending rows carry
+   the accent and say why; done rows dim to counts. */
+.builder-guide-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--font-size-sm);
+  text-align: left;
+  border-left: 2px solid var(--accent-amber);
+  color: var(--text-secondary);
+}
+
+button.builder-guide-row {
+  cursor: pointer;
+}
+
+button.builder-guide-row:hover {
+  background: var(--bg-panel-hover);
+}
+
+.builder-guide-row--done {
+  border-left-color: var(--border);
+  color: var(--text-dim);
+}
+
+.builder-guide-state {
+  width: 1em;
+  flex: none;
+  color: var(--accent-amber);
+}
+
+.builder-guide-row--done .builder-guide-state {
+  color: var(--text-dim);
+}
+
+.builder-guide-label {
+  flex: none;
+  font-weight: var(--font-weight-semibold);
+}
+
+.builder-guide-detail {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

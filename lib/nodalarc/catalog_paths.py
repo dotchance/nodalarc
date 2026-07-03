@@ -4,7 +4,10 @@
 
 from __future__ import annotations
 
+import contextlib
+import os
 import re
+import tempfile
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -196,3 +199,21 @@ def write_text_exclusive(path: Path, text: str) -> None:
     """Write text without overwriting an existing generated file."""
     with path.open("x", encoding="utf-8") as fh:
         fh.write(text)
+
+
+def write_text_atomic(path: Path, text: str) -> None:
+    """Write text atomically, replacing any existing generated file.
+
+    For writes where the filename IS the identity (one artifact per name):
+    a temp file in the same directory then os.replace, so readers never see
+    a partial file and a re-save never leaves siblings behind.
+    """
+    fd, tmp_name = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        os.replace(tmp_name, path)
+    except BaseException:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(tmp_name)
+        raise

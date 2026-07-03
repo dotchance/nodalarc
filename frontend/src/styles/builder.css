@@ -124,6 +124,12 @@
   color: var(--accent-teal);
 }
 
+/* Component hardware (nodes, terminals, orbits): glyph stays neutral —
+   the space/ground accent colors mean world placement, not family. */
+.builder-outline-name--component svg {
+  color: var(--text-secondary);
+}
+
 .builder-zone-empty {
   color: var(--text-dim);
   font-size: var(--font-size-xs);
@@ -532,17 +538,113 @@
   gap: var(--space-1);
 }
 
-.builder-library-action {
-  border: none;
-  background: none;
-  color: var(--text-dim);
-  cursor: pointer;
-  font-size: var(--font-size-xs);
+/* All row actions are uniform ui-iconbtn; the primary "use" differs by
+   color only. Compound selector outranks .ui-iconbtn:hover's color. */
+.builder-library-use.ui-iconbtn,
+.builder-library-use.ui-iconbtn:hover {
+  color: var(--accent-amber);
+}
+
+/* Scheduling intent on a placed site set — compact, quiet, in the row. */
+.builder-ground-preset {
+  max-width: 150px;
+  background: var(--bg-main);
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  font-size: var(--font-size-xxs);
   padding: 0 2px;
 }
 
-.builder-library-action:hover {
+/* --- Ground editor: site rows + bulk paste --- */
+
+.builder-site-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+}
+
+.builder-site-row:hover {
+  background: var(--bg-panel-hover);
+}
+
+.builder-site-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.builder-site-name {
+  font-size: var(--font-size-xs);
   color: var(--text-primary);
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.builder-site-head .builder-ground-preset {
+  max-width: 110px;
+  flex: none;
+}
+
+.builder-site-fields {
+  display: flex;
+  gap: var(--space-1);
+}
+
+.builder-site-fields input[type="number"] {
+  width: 64px;
+}
+
+.builder-site-fields input[type="text"] {
+  width: 90px;
+}
+
+.builder-site-fields input {
+  background: var(--bg-main);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  font-size: var(--font-size-xxs);
+  padding: 1px 4px;
+}
+
+/* Derived addressing: dim mono, per-row — the addressing plan is visible,
+   never hidden. */
+.builder-site-derived {
+  font-size: var(--font-size-xxs);
+  font-family: var(--font-mono);
+  color: var(--text-dim);
+}
+
+.builder-paste {
+  width: 100%;
+  background: var(--bg-main);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xxs);
+  padding: var(--space-1) var(--space-2);
+  resize: vertical;
+}
+
+/* An authored member's SiteEditor, expanded in place under its row. */
+.builder-site-embedded {
+  margin: 0 var(--space-2) var(--space-2);
+  padding: var(--space-2);
+  border-left: 2px solid var(--border);
+}
+
+.builder-site-name svg {
+  color: var(--accent-teal);
+  flex: none;
+  vertical-align: -2px;
+  margin-right: 4px;
 }
 
 .builder-library-note {
@@ -560,13 +662,15 @@
   padding: 0 var(--space-2);
 }
 
+/* Tabs are the Library's kind headings — same typography as
+   .builder-outline-kind, plus an active state. */
 .builder-library-tab {
   border: none;
   background: none;
   color: var(--text-dim);
   font-size: var(--font-size-xxs);
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.06em;
   padding: 2px 6px;
   border-radius: var(--radius-xs);
   cursor: pointer;
@@ -611,11 +715,16 @@
 
 .builder-library-entry-name {
   font-size: var(--font-size-xs);
+  min-width: 0;
+}
+
+.builder-library-entry-text {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
+/* Hardware line aligns under the name text, past the 12px glyph + gap. */
 .builder-library-entry-summary {
   font-size: var(--font-size-xxs);
   font-family: var(--font-mono);
@@ -623,13 +732,7 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-
-.builder-library-action--use {
-  color: var(--accent-amber);
-  border: 1px solid var(--accent-amber);
-  border-radius: var(--radius-xs);
-  padding: 0 6px;
+  padding-left: calc(12px + var(--space-1));
 }
 
 .builder-import-label {
@@ -647,4 +750,34 @@
   border-left: 1px solid var(--border);
   margin-left: var(--space-2);
   padding-left: var(--space-2);
+}
+
+/* --- Completeness rail: authoring gaps, click-to-jump --- */
+
+.builder-rail {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-2);
+  border-top: 1px solid var(--border);
+  background: var(--bg-panel);
+}
+
+.builder-rail-chip {
+  border: 1px solid color-mix(in srgb, var(--status-warn) 50%, var(--border));
+  background: none;
+  color: var(--text-secondary);
+  border-radius: var(--radius-xs);
+  font-size: var(--font-size-xxs);
+  padding: 1px 6px;
+  cursor: pointer;
+}
+
+.builder-rail-chip:hover:not(:disabled) {
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+}
+
+.builder-rail-chip:disabled {
+  cursor: default;
 }

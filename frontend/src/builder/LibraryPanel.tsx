@@ -2,15 +2,22 @@
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
 /** The Library — one surface for every primitive family, both tiers.
  *
- *  The validated design (carried from the discovery arc): family tabs,
+ *  Family tabs,
  *  shipped + your entries together (yours marked ★), every entry showing its
  *  hardware line, an explicit USE action per entry, customize-to-fork, file
  *  import, export, delete for yours. Blank-first: "+ new" leads each tab
  *  where an editor exists. Click a row to inspect the block; Use places it.
+ *
+ *  Visual language is the world tree's, not its own: rows speak
+ *  builder-outline-name + family glyph (orbit/orange for space assets,
+ *  satellite-dish/teal for ground, neutral for component hardware), and all
+ *  row actions are uniform IconButtons — the primary "use" differs by color
+ *  only, never by shape.
  */
 
 import { useState } from "react";
-import { Button } from "../ui/Button";
+import { Button, IconButton } from "../ui/Button";
+import { Icon, type IconName } from "../ui/icons/Icon";
 import {
   deleteUserObject,
   exportCatalogObject,
@@ -19,31 +26,73 @@ import {
 } from "./useBuilderWorld";
 import type { BuilderCatalogEntry } from "./builderTypes";
 
-const FAMILY_TABS: { family: string; label: string }[] = [
-  { family: "constellations", label: "Constellations" },
-  { family: "site-sets", label: "Site sets" },
-  { family: "nodes", label: "Nodes" },
-  { family: "terminals", label: "Terminals" },
-  { family: "orbits", label: "Orbits" },
+interface FamilyConfig {
+  family: string;
+  label: string;
+  /** Row glyph — the same vocabulary the world tree uses. */
+  icon: IconName;
+  /** Color slot: space=orange, ground=teal (world-tree hierarchy colors);
+   *  component hardware stays neutral — color means world placement. */
+  tone: "space" | "ground" | "component";
+  /** What USE does for this family; null = no direct session placement. */
+  useTitle: string | null;
+  /** Whether an authoring editor exists for "+ new" / customize. */
+  editor: boolean;
+}
+
+const CONSTELLATIONS: FamilyConfig = {
+  family: "constellations",
+  label: "Constellations",
+  icon: "orbit",
+  tone: "space",
+  useTitle: "Use: place as a space segment",
+  editor: true,
+};
+
+const FAMILIES: FamilyConfig[] = [
+  CONSTELLATIONS,
+  {
+    family: "site-sets",
+    label: "Site sets",
+    icon: "satellite-dish",
+    tone: "ground",
+    useTitle: "Use: place as ground sites",
+    editor: true,
+  },
+  {
+    family: "sites",
+    label: "Sites",
+    icon: "locate-fixed",
+    tone: "ground",
+    useTitle: "Use: add to a ground segment",
+    editor: true,
+  },
+  {
+    family: "nodes",
+    label: "Nodes",
+    icon: "satellite",
+    tone: "component",
+    useTitle: "Use: start a constellation with this node",
+    editor: true,
+  },
+  {
+    family: "terminals",
+    label: "Terminals",
+    icon: "radio-tower",
+    tone: "component",
+    useTitle: null,
+    editor: true,
+  },
+  {
+    family: "orbits",
+    label: "Orbits",
+    icon: "spline",
+    tone: "component",
+    useTitle: null,
+    // orbits are authored inside a constellation's orbit card
+    editor: false,
+  },
 ];
-
-/** Per-family Use semantics; families without a direct session placement
- *  offer customize/export instead of a dead button. */
-const USE_LABEL: Record<string, string | null> = {
-  constellations: "use",
-  "site-sets": "use",
-  nodes: "use",
-  terminals: null,
-  orbits: null,
-};
-
-const NEW_ENABLED: Record<string, boolean> = {
-  constellations: true,
-  "site-sets": false, // ground authoring lands with S4's editor
-  nodes: true,
-  terminals: true,
-  orbits: false, // orbits are authored inside a constellation's orbit card
-};
 
 interface LibraryPanelProps {
   onUse: (entry: BuilderCatalogEntry) => void;
@@ -53,31 +102,30 @@ interface LibraryPanelProps {
 }
 
 export function LibraryPanel({ onUse, onCustomize, onInspect, onNew }: LibraryPanelProps) {
-  const [family, setFamily] = useState("constellations");
+  const [config, setConfig] = useState<FamilyConfig>(CONSTELLATIONS);
+  const family = config.family;
   const catalog = useBuilderCatalog(family);
   const [importError, setImportError] = useState<string | null>(null);
-  const canCustomize = family === "constellations" || family === "nodes" || family === "terminals";
+  const canCustomize = config.editor;
 
   return (
     <div className="builder-outline-group" data-testid="builder-library">
       <div className="builder-outline-kind">Library</div>
       <div className="builder-library-tabs" role="tablist">
-        {FAMILY_TABS.map((tab) => (
+        {FAMILIES.map((tab) => (
           <button
             key={tab.family}
             role="tab"
             aria-selected={family === tab.family}
             className={`builder-library-tab${family === tab.family ? " builder-library-tab--active" : ""}`}
-            onClick={() => setFamily(tab.family)}
+            onClick={() => setConfig(tab)}
           >
             {tab.label}
           </button>
         ))}
       </div>
       <div className="builder-preset-row">
-        {NEW_ENABLED[family] && (
-          <Button onClick={() => onNew(family)}>+ new</Button>
-        )}
+        {config.editor && <Button onClick={() => onNew(family)}>+ new</Button>}
         <label className="builder-import-label">
           import file…
           <input
@@ -121,48 +169,50 @@ export function LibraryPanel({ onUse, onCustomize, onInspect, onNew }: LibraryPa
                 title={`Inspect ${entry.ref}`}
                 onClick={() => onInspect(entry)}
               >
-                <span className="builder-library-entry-name">
-                  {yours ? "★ " : ""}
-                  {entry.display_name ?? entry.id}
+                <span
+                  className={`builder-outline-name builder-outline-name--${config.tone} builder-library-entry-name`}
+                >
+                  <Icon name={config.icon} size={12} />
+                  <span className="builder-library-entry-text">
+                    {yours ? "★ " : ""}
+                    {entry.display_name ?? entry.id}
+                  </span>
                 </span>
                 {entry.summary && (
                   <span className="builder-library-entry-summary">{entry.summary}</span>
                 )}
               </button>
               <span className="builder-library-actions">
-                {USE_LABEL[family] && (
-                  <button
-                    className="builder-library-action builder-library-action--use"
-                    title="Use this block in the session"
+                {config.useTitle && (
+                  <IconButton
+                    icon="plus"
+                    size={12}
+                    label={config.useTitle}
+                    className="builder-library-use"
                     onClick={() => onUse(entry)}
-                  >
-                    {USE_LABEL[family]}
-                  </button>
+                  />
                 )}
                 {canCustomize && (
-                  <button
-                    className="builder-library-action"
-                    title="Fork into an editable draft"
+                  <IconButton
+                    icon="pencil"
+                    size={12}
+                    label="Customize: fork into an editable draft"
                     onClick={() => onCustomize(entry)}
-                  >
-                    edit
-                  </button>
+                  />
                 )}
-                <button
-                  className="builder-library-action"
-                  title="Export file"
+                <IconButton
+                  icon="download"
+                  size={12}
+                  label="Export file"
                   onClick={() => void exportCatalogObject(entry.ref)}
-                >
-                  ⤓
-                </button>
+                />
                 {yours && (
-                  <button
-                    className="builder-library-action"
-                    title="Delete from your library"
+                  <IconButton
+                    icon="x"
+                    size={12}
+                    label="Delete from your library"
                     onClick={() => void deleteUserObject(entry.ref)}
-                  >
-                    ✕
-                  </button>
+                  />
                 )}
               </span>
             </div>

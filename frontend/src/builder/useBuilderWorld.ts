@@ -249,6 +249,17 @@ export function useBuilderWorld() {
   /** Save the workspace document server-side. The server resolves first and
    *  writes the canonical YAML exclusively; the result names the saved
    *  session. Throws with the server's message on failure. */
+  /** Deploy a SAVED session file to the cluster — the same switch the app's
+   *  session picker uses; the builder adds nothing to the path. */
+  const deploySession = useCallback(async (file: string): Promise<void> => {
+    const response = await fetch(`${REST_URL}/api/v1/sessions/switch`, {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ session: file }),
+    });
+    if (!response.ok) throw new Error(await _errorMessage(response));
+  }, []);
+
   const saveSession = useCallback(
     async (document: unknown): Promise<{ name: string; file: string; nodes: number }> => {
       const response = await fetch(`${REST_URL}/api/v1/builder/save-session`, {
@@ -286,6 +297,7 @@ export function useBuilderWorld() {
     loadSession,
     resolveDocument,
     saveSession,
+    deploySession,
     clear,
   };
 }

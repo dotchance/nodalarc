@@ -9,7 +9,7 @@
  *  objects and references are the same grammar (the loader contract), so a
  *  draft session is a valid session, resolvable before anything is saved.
  *
- *  Client-side until save (owner decision): the workspace lives in browser
+ *  Client-side until save: the workspace lives in browser
  *  state; resolve-check posts the serialized document and the world renders
  *  from the resolver's expansion, never from a builder-local one.
  */
@@ -62,28 +62,70 @@ export interface DraftConstellation {
   phase_offset_deg: number;
 }
 
-export interface DraftSite {
+/** One node installed at a site: a model plus what's actually mounted and
+ *  how it addresses. The node is the router; the site is the place. */
+export interface DraftSiteNode {
+  node_id: string;
+  model_ref: string;
+  /** Installed count per mount id, seeded from the model's faceplate. */
+  installed: Record<string, number>;
+  lo0_ipv4: string;
+  terr0_ipv4: string;
+}
+
+/** A SITE is a first-class primitive — the terminals, nodes, networks, and
+ *  parameters that make up a location, not just a lat/lon. This is the
+ *  grammar's Site object as an editable draft (IPv4-only for now). */
+export interface DraftSiteObject {
   site_id: string;
   display_name: string;
   lat_deg: number;
   lon_deg: number;
   alt_m: number;
+  lan_ipv4: string;
   tags: string[];
+  nodes: DraftSiteNode[];
 }
 
-/** An editable ground segment: authored sites with a template node model and
- *  derived, deterministic, VISIBLE addressing. Per-site node variation is a
- *  registered grammar delta (template+override, #5) — this slice applies one
- *  model to every site, which is the current shipped-catalog pattern too. */
-export interface DraftGroundSet {
+/** One member of a ground segment: a DEFINED site — placed by reference at
+ *  full fidelity (its nodes travel with it), or an authored draft. */
+export interface DraftGroundSite {
+  /** Stable list key, builder-local. */
+  member_id: string;
+  kind: "ref" | "draft";
+  /** Catalog reference when kind=ref. */
+  ref: string | null;
+  /** The site's grammar id — override matching keys on this. */
+  site_id: string;
+  label: string;
+  /** Hardware line for ref rows (from the catalog browse). */
+  summary: string | null;
+  site: DraftSiteObject | null;
+  /** Sparse per-site scheduling: null = segment template ("= template");
+   *  a preset key = an override stored as a GroundOverride exception. */
+  scheduling_override: SchedulingPresetKey | null;
+}
+
+/** The stamp: what bulk paste mints NEW sites with — a node model and
+ *  addressing bases. Applied once at creation; every minted site owns its
+ *  configuration afterwards (edit the site, not the stamp). */
+export interface GroundStamp {
   node_ref: string;
-  /** Installed count per mount id, seeded from the node model's mounts. */
   installed: Record<string, number>;
-  sites: DraftSite[];
-  /** IPv4 base for site LANs: site i gets base.<i>.0/24, terr0 .1. */
+  /** IPv4 base for minted site LANs: mint i gets base.<i>.0/24, terr0 .1. */
   lan_base: string;
-  /** IPv4 base for node loopbacks: site i gets base.0.<i+1>/32. */
+  /** IPv4 base for minted loopbacks: mint i gets base.0.<i+1>/32. */
   loopback_base: string;
+}
+
+/** An editable ground segment: a COMBINATION of defined sites, plus the
+ *  session-level application (scheduling intent, originated prefixes, tags,
+ *  sparse per-site overrides). */
+export interface DraftGroundSet {
+  segment_id: string;
+  display_name: string;
+  members: DraftGroundSite[];
+  stamp: GroundStamp;
   scheduling_preset: SchedulingPresetKey;
   /** apply-level originated prefixes (routing injection intent). */
   originated_ipv4: string[];
@@ -98,15 +140,84 @@ export interface RefSegment {
   label: string;
 }
 
+/** One endpoint of an authored link rule: a placed segment, optionally
+ *  scoped to a tag (how one ground segment serves multiple constellations
+ *  differently), with the terminal role/medium it selects and an optional
+ *  elevation mask. */
+export interface DraftLinkEndpoint {
+  segment_id: string;
+  tag: string | null;
+  role: "access" | "isl" | "crosslink";
+  medium: "rf" | "optical";
+  min_elevation_deg: number | null;
+}
+
+/** An authored link rule — comms INTENT between placed segments. Rules
+ *  declare who MAY link; OME computes feasibility from geometry, terminal
+ *  limits, and runtime state. */
+export interface DraftLinkRule {
+  rule_id: string;
+  label: string;
+  enabled: boolean;
+  a: DraftLinkEndpoint;
+  b: DraftLinkEndpoint;
+  /** nearest_visible exists in the grammar but is runtime-gated — never
+   *  offered here; the resolver walls it with UnsupportedFeature. */
+  topology_mode: "visible_candidates" | "nearest_n";
+  topology_n: number;
+  max_range_km: number | null;
+}
+
+/** An authored routing domain: a protocol over member segments. Whole-
+ *  segment membership only — per-terminal membership is a gated grammar
+ *  change and walls at the gesture. Timers are the expert card: null =
+ *  engine defaults (omitted from the artifact). */
+export interface DraftRoutingDomain {
+  domain_id: string;
+  label: string;
+  protocol: "isis" | "ospf" | "bgp" | "static";
+  member_segment_ids: string[];
+  hello_interval_s: number | null;
+  hold_interval_s: number | null;
+}
+
+/** An authored routing boundary: a controlled exchange OVER a link rule.
+ *  v1 export is the shipped exchange pattern — originated prefixes both
+ *  ways, installed via peer loopback. */
+export interface DraftBoundary {
+  boundary_id: string;
+  over_rule_id: string;
+  adapter: "static_ip" | "bgp" | "dtn_bundle";
+  from_domain_id: string;
+  to_domain_id: string;
+  export_node_loopbacks: boolean;
+}
+
 export interface Workspace {
   name: string;
   space: DraftConstellation[];
   /** Library constellations placed by reference (use-this-block). */
   space_refs: RefSegment[];
-  /** Shipped site-set reference; ``ground_draft`` overrides it when set. */
-  ground_site_set_ref: string | null;
-  ground_draft: DraftGroundSet | null;
+  /** Authored ground segments (drafts) — plural by design: teleport, edge,
+   *  and experiment sets carry different scheduling in one session. */
+  ground: DraftGroundSet[];
+  /** Library site sets placed by reference (use-this-block). */
+  ground_refs: RefGroundSet[];
+  /** Authored comms intent between placed segments. */
+  links: DraftLinkRule[];
+  /** Authored routing domains + boundaries between them. */
+  routing_domains: DraftRoutingDomain[];
+  boundaries: DraftBoundary[];
+  /** Candidate math budget — the grammar REQUIRES declared limits once link
+   *  rules exist in a multi-segment session (no silent defaults). Sized to
+   *  the largest shipped session; typeable like everything else. */
+  max_pairs_per_rule: number;
+  max_pairs_per_tick: number;
   start_time: string;
+  /** Sim step and wall-clock compression — 1/1 is real time (the time-rate
+   *  invariant: deviation is an explicit manipulation, never a default). */
+  step_seconds: number;
+  compression: number;
 }
 
 /** Orbit presets seed RAW VALUES the user then owns — never modes. */
@@ -419,9 +530,16 @@ export function newWorkspace(name: string): Workspace {
     name: identifier(name) || "untitled-session",
     space: [],
     space_refs: [],
-    ground_site_set_ref: null,
-    ground_draft: null,
+    ground: [],
+    ground_refs: [],
+    links: [],
+    routing_domains: [],
+    boundaries: [],
+    max_pairs_per_rule: 2000,
+    max_pairs_per_tick: 10000,
     start_time: "2026-06-08T00:00:00Z",
+    step_seconds: 1,
+    compression: 1,
   };
 }
 
@@ -468,9 +586,35 @@ export function orbitWarnings(orbit: DraftOrbit): string[] {
 
 export type SchedulingPresetKey = "leo-fast-handover" | "geo-longest-pass";
 
+/** Allocator-wide scheduling fields: the resolver requires these to be
+ *  UNIFORM across every ground node in the session (they configure the one
+ *  allocator, not a node). Presets therefore never vary them — mixing
+ *  presets across segments or per-site overrides stays resolvable by
+ *  construction. Session-level control over these lands with session
+ *  plumbing (S7). */
+const ALLOCATOR_SCHEDULING = {
+  // per_gs_rank (not selection_score): presets are made to be MIXED, and
+  // their selection policies score on different scales (elevation degrees
+  // vs remaining seconds). per_gs_rank arbitrates across policies — the
+  // same choice the shipped multi-regime session makes.
+  ranking_order: [
+    "service_priority",
+    "per_gs_rank",
+    "satellite_ground_terminal_capacity",
+    "lex_pair",
+  ],
+  mbb_preemption: "off",
+  successor_abort_policy: "hard_release",
+  cross_tenant_displacement: "off",
+  // 1 is the only implemented value; larger waits are reserved extension
+  // points the resolver rejects once access allocation engages.
+  bbm_acquire_timeout_ticks: 1,
+} as const;
+
 /** Scheduling intent presets — dual literacy: the preset name carries the
  *  operational intent; selecting one writes the FULL explicit block the
- *  expert can read in the YAML pane. No hidden defaults. */
+ *  expert can read in the YAML pane. No hidden defaults. Presets differ
+ *  only on per-node fields (see ALLOCATOR_SCHEDULING). */
 export const SCHEDULING_PRESETS: Record<
   SchedulingPresetKey,
   { label: string; block: Record<string, unknown> }
@@ -484,16 +628,7 @@ export const SCHEDULING_PRESETS: Record<
       mbb_overlap_ticks: 30,
       mbb_reserve: 1,
       handover_concurrency: "one_at_a_time",
-      ranking_order: [
-        "service_priority",
-        "selection_score",
-        "satellite_ground_terminal_capacity",
-        "lex_pair",
-      ],
-      mbb_preemption: "off",
-      successor_abort_policy: "hard_release",
-      cross_tenant_displacement: "off",
-      bbm_acquire_timeout_ticks: 1,
+      ...ALLOCATOR_SCHEDULING,
     },
   },
   "geo-longest-pass": {
@@ -505,41 +640,752 @@ export const SCHEDULING_PRESETS: Record<
       mbb_overlap_ticks: 0,
       mbb_reserve: 0,
       handover_concurrency: "one_at_a_time",
-      ranking_order: [
-        "service_priority",
-        "selection_score",
-        "satellite_ground_terminal_capacity",
-        "lex_pair",
-      ],
-      mbb_preemption: "off",
-      successor_abort_policy: "hard_release",
-      cross_tenant_displacement: "off",
-      bbm_acquire_timeout_ticks: 30,
+      ...ALLOCATOR_SCHEDULING,
     },
   },
 };
 
-// Ground segments need complete effective scheduling per node (resolver
-// S-rules); until the S4 scheduling editor lands, drafts apply this explicit
-// default block — visible in the YAML pane, not hidden.
-const DEFAULT_GROUND_SCHEDULING = {
-  selection_policy: { highest_elevation: {} },
-  handover_policy: { hysteresis: { discount_factor: 1.1, mask_fade_range_deg: 3.0 } },
-  handover_mode: "mbb",
-  mbb_overlap_ticks: 30,
-  mbb_reserve: 1,
-  handover_concurrency: "one_at_a_time",
-  ranking_order: [
-    "service_priority",
-    "selection_score",
-    "satellite_ground_terminal_capacity",
-    "lex_pair",
-  ],
-  mbb_preemption: "off",
-  successor_abort_policy: "hard_release",
-  cross_tenant_displacement: "off",
-  bbm_acquire_timeout_ticks: 1,
-};
+/** A site set placed by reference, plus the session-owned scheduling intent
+ *  (scheduling is a SESSION concern — site-set documents never carry it). */
+export interface RefGroundSet extends RefSegment {
+  scheduling_preset: SchedulingPresetKey;
+}
+
+export function newRefGroundSet(ref: string, label: string): RefGroundSet {
+  return { ...newRefSegment(ref, label), scheduling_preset: "leo-fast-handover" };
+}
+
+let groundCounter = 0;
+let memberCounter = 0;
+
+/** A blank ground segment: blank-first (defined sites arrive from the
+ *  library, forks, or minting by paste). Stamp bases stagger per draft so
+ *  two authored segments never collide by default — all editable. */
+export function newDraftGroundSet(
+  nodeRef: string,
+  installed: Record<string, number>,
+): DraftGroundSet {
+  groundCounter += 1;
+  return {
+    segment_id: `ground-${groundCounter}`,
+    display_name: `Ground segment ${groundCounter}`,
+    members: [],
+    stamp: {
+      node_ref: nodeRef,
+      installed,
+      lan_base: `172.${20 + ((groundCounter - 1) % 12)}`,
+      loopback_base: `10.${200 + ((groundCounter - 1) % 55)}`,
+    },
+    scheduling_preset: "leo-fast-handover",
+    originated_ipv4: [],
+    tags: [],
+  };
+}
+
+/** Stamp-derived addressing for MINTED sites (mint index i). Applied once
+ *  at creation and stored explicitly on the site — the site owns it after. */
+export function stampLanPrefix(stamp: GroundStamp, index: number): string {
+  return `${stamp.lan_base}.${index}.0/24`;
+}
+
+export function stampTerr0Address(stamp: GroundStamp, index: number): string {
+  return `${stamp.lan_base}.${index}.1/24`;
+}
+
+export function stampLoopbackAddress(stamp: GroundStamp, index: number): string {
+  return `${stamp.loopback_base}.0.${index + 1}/32`;
+}
+
+/** The grammar id a member answers to (override matching keys on it). */
+export function memberSiteId(member: DraftGroundSite): string {
+  return member.kind === "draft" && member.site ? member.site.site_id : member.site_id;
+}
+
+export interface ParsedSiteLine {
+  name: string;
+  lat_deg: number;
+  lon_deg: number;
+  alt_m: number;
+}
+
+/** Bulk site paste: one site per line, ``name, lat, lon[, alt_m]`` — commas
+ *  or tabs (spreadsheet columns paste as tabs). Bad lines are reported,
+ *  never silently dropped. */
+export function parseSiteLines(text: string): { rows: ParsedSiteLine[]; errors: string[] } {
+  const rows: ParsedSiteLine[] = [];
+  const errors: string[] = [];
+  for (const rawLine of text.split("\n")) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    const parts = line
+      .split(/[\t,]/)
+      .map((part) => part.trim())
+      .filter((part) => part.length > 0);
+    if (parts.length < 3) {
+      errors.push(`"${line}" — expected: name, lat, lon`);
+      continue;
+    }
+    const name = parts[0] ?? "";
+    const lat = Number(parts[1]);
+    const lon = Number(parts[2]);
+    const alt = parts.length > 3 ? Number(parts[3]) : 0;
+    if (!Number.isFinite(lat) || !Number.isFinite(lon) || !Number.isFinite(alt)) {
+      errors.push(`"${line}" — lat, lon, alt must be numbers`);
+      continue;
+    }
+    if (!identifier(name)) {
+      errors.push(`"${line}" — name is empty after normalizing`);
+      continue;
+    }
+    rows.push({ name, lat_deg: lat, lon_deg: lon, alt_m: alt });
+  }
+  return { rows, errors };
+}
+
+/** Mint full SITES from pasted rows using the segment's stamp — node model,
+ *  installed mounts, and derived addressing are applied AT CREATION; each
+ *  minted site owns its configuration afterwards. Mint indices continue
+ *  from the count of existing draft members so addressing never collides
+ *  within the segment. */
+export function mintSiteMembers(
+  draft: DraftGroundSet,
+  rows: ParsedSiteLine[],
+): DraftGroundSite[] {
+  const start = draft.members.filter((member) => member.kind === "draft").length;
+  return rows.map((row, offset) => {
+    const index = start + offset;
+    memberCounter += 1;
+    const site: DraftSiteObject = {
+      site_id: identifier(row.name),
+      display_name: row.name,
+      lat_deg: row.lat_deg,
+      lon_deg: row.lon_deg,
+      alt_m: row.alt_m,
+      lan_ipv4: stampLanPrefix(draft.stamp, index),
+      tags: [],
+      nodes: [
+        {
+          node_id: "gw1",
+          model_ref: draft.stamp.node_ref,
+          installed: { ...draft.stamp.installed },
+          lo0_ipv4: stampLoopbackAddress(draft.stamp, index),
+          terr0_ipv4: stampTerr0Address(draft.stamp, index),
+        },
+      ],
+    };
+    return {
+      member_id: `member-${memberCounter}`,
+      kind: "draft" as const,
+      ref: null,
+      site_id: site.site_id,
+      label: row.name,
+      summary: null,
+      site,
+      scheduling_override: null,
+    };
+  });
+}
+
+/** A defined site placed by reference — full fidelity, its nodes travel
+ *  with it. site_id must be the document's grammar id (read at add time). */
+export function refGroundMember(
+  ref: string,
+  siteId: string,
+  label: string,
+  summary: string | null,
+): DraftGroundSite {
+  memberCounter += 1;
+  return {
+    member_id: `member-${memberCounter}`,
+    kind: "ref",
+    ref,
+    site_id: siteId,
+    label,
+    summary,
+    site: null,
+    scheduling_override: null,
+  };
+}
+
+/** Wrap an authored site as a segment member. */
+export function draftGroundMember(site: DraftSiteObject): DraftGroundSite {
+  memberCounter += 1;
+  return {
+    member_id: `member-${memberCounter}`,
+    kind: "draft",
+    ref: null,
+    site_id: site.site_id,
+    label: site.display_name,
+    summary: null,
+    site,
+    scheduling_override: null,
+  };
+}
+
+/** A blank site for from-scratch authoring (Library → Sites → + new). */
+export function newDraftSiteObject(nodeRef: string, installed: Record<string, number>): DraftSiteObject {
+  return {
+    site_id: "my-site",
+    display_name: "My site",
+    lat_deg: 0,
+    lon_deg: 0,
+    alt_m: 0,
+    lan_ipv4: "172.20.0.0/24",
+    tags: [],
+    nodes: [
+      {
+        node_id: "gw1",
+        model_ref: nodeRef,
+        installed,
+        lo0_ipv4: "10.200.0.1/32",
+        terr0_ipv4: "172.20.0.1/24",
+      },
+    ],
+  };
+}
+
+/** Fork a site document into an editable draft — full fidelity: every node,
+ *  its installed mounts, and its addressing carry over. Constructs the
+ *  editor cannot represent (non-Earth frames, inline node models, payload
+ *  installs, IPv6-only addressing) are refused loudly, never dropped. */
+export function draftSiteFromDocument(document: Record<string, unknown>): DraftSiteObject {
+  const site = (document as { site?: Record<string, unknown> }).site;
+  if (!site) throw new Error("not a site document");
+  const siteId = String(site.id ?? "");
+  const frame = (site.frame ?? {}) as { body_fixed?: { body?: unknown } };
+  const body = frame.body_fixed?.body;
+  if (typeof body !== "string" || !body.includes("bodies/earth")) {
+    throw new Error(
+      `site ${siteId}: only Earth surface sites are editable yet — multi-body ground authoring is pending`,
+    );
+  }
+  const location = (site.location ?? null) as Record<string, unknown> | null;
+  if (!location) throw new Error(`site ${siteId}: non-surface sites are not editable yet`);
+  const lan = (site.lan ?? {}) as { ipv4?: unknown };
+  if (typeof lan.ipv4 !== "string") {
+    throw new Error(`site ${siteId}: IPv6-only sites are not editable yet`);
+  }
+  const nodes = ((site.nodes as Record<string, unknown>[] | undefined) ?? []).map((node) => {
+    const nodeId = String(node.id ?? "gw1");
+    if (typeof node.model !== "string") {
+      throw new Error(`site ${siteId}/${nodeId}: inline node models are not editable yet`);
+    }
+    const payloads = (node.payloads ?? {}) as Record<string, unknown>;
+    if (Object.keys(payloads).length > 0) {
+      throw new Error(`site ${siteId}/${nodeId}: payload installs are not editable yet`);
+    }
+    const terminals =
+      (node.terminals as Record<string, { installed_count?: number }> | undefined) ?? {};
+    const interfaces = (node.interfaces ?? {}) as {
+      lo0?: { ipv4?: unknown };
+      terr0?: { ipv4?: unknown };
+    };
+    if (typeof interfaces.lo0?.ipv4 !== "string" || typeof interfaces.terr0?.ipv4 !== "string") {
+      throw new Error(`site ${siteId}/${nodeId}: IPv6-only interfaces are not editable yet`);
+    }
+    return {
+      node_id: nodeId,
+      model_ref: node.model,
+      installed: Object.fromEntries(
+        Object.entries(terminals).map(([mount, install]) => [
+          mount,
+          Number(install.installed_count ?? 1),
+        ]),
+      ),
+      lo0_ipv4: interfaces.lo0.ipv4,
+      terr0_ipv4: interfaces.terr0.ipv4,
+    };
+  });
+  if (nodes.length === 0) throw new Error(`site ${siteId} has no nodes`);
+  return {
+    site_id: siteId,
+    display_name: String(site.display_name ?? siteId),
+    lat_deg: Number(location.lat_deg ?? 0),
+    lon_deg: Number(location.lon_deg ?? 0),
+    alt_m: Number(location.alt_m ?? 0),
+    lan_ipv4: lan.ipv4,
+    tags: ((site.tags as unknown[] | undefined) ?? []).map(String),
+    nodes,
+  };
+}
+
+/** Serialize a site draft to the grammar's Site object (unwrapped form) —
+ *  the SAME builder feeds session emission and save-to-library. */
+export function siteObjectFromDraft(site: DraftSiteObject): Record<string, unknown> {
+  return {
+    id: identifier(site.site_id),
+    display_name: site.display_name,
+    lan: { ipv4: site.lan_ipv4 },
+    ...(site.tags.length > 0 ? { tags: site.tags.map(identifier) } : {}),
+    nodes: site.nodes.map((node) => ({
+      id: identifier(node.node_id) || "gw1",
+      model: node.model_ref,
+      payloads: {},
+      terminals: Object.fromEntries(
+        Object.entries(node.installed).map(([mount, count]) => [
+          mount,
+          { installed_count: count },
+        ]),
+      ),
+      interfaces: {
+        lo0: { ipv4: node.lo0_ipv4 },
+        terr0: { ipv4: node.terr0_ipv4 },
+      },
+    })),
+    frame: { body_fixed: { body: "nodalarc:bodies/earth.yaml" } },
+    location: { lat_deg: site.lat_deg, lon_deg: site.lon_deg, alt_m: site.alt_m },
+  };
+}
+
+/** Ground sanity findings: warn, never block (a polar site under an
+ *  equatorial shell is a learning path; only the structurally broken and
+ *  the off-the-map get flagged, in plain language). */
+export function groundWarnings(draft: DraftGroundSet): string[] {
+  const warnings: string[] = [];
+  const validBase = (base: string): boolean => {
+    const octets = base.split(".");
+    return (
+      octets.length === 2 &&
+      octets.every((octet) => {
+        const value = Number(octet);
+        return Number.isInteger(value) && value >= 0 && value <= 255 && octet !== "";
+      })
+    );
+  };
+  if (!validBase(draft.stamp.lan_base)) {
+    warnings.push(`lan base "${draft.stamp.lan_base}" — expected two octets, like 172.20`);
+  }
+  if (!validBase(draft.stamp.loopback_base)) {
+    warnings.push(
+      `loopback base "${draft.stamp.loopback_base}" — expected two octets, like 10.200`,
+    );
+  }
+  const seenIds = new Set<string>();
+  const seenLans = new Set<string>();
+  for (const member of draft.members) {
+    const id = memberSiteId(member);
+    if (seenIds.has(id)) {
+      warnings.push(`duplicate site id "${id}" — sites are places and exist once`);
+    }
+    seenIds.add(id);
+    const site = member.site;
+    if (!site) continue;
+    if (seenLans.has(site.lan_ipv4)) {
+      warnings.push(`${site.display_name}: lan ${site.lan_ipv4} is already used in this segment`);
+    }
+    seenLans.add(site.lan_ipv4);
+    if (Math.abs(site.lat_deg) > 90) {
+      warnings.push(`${site.display_name}: latitude ${site.lat_deg} is off the map (±90)`);
+    }
+    if (Math.abs(site.lon_deg) > 180) {
+      warnings.push(`${site.display_name}: longitude ${site.lon_deg} is off the map (±180)`);
+    }
+  }
+  return warnings;
+}
+
+/** Fork a site-set document into an editable ground draft — customize-a-
+ *  placed-block for ground. A site set is a COMBINATION of defined sites:
+ *  referenced members stay references at full fidelity (their nodes travel
+ *  with them); inline members become editable site drafts. The stamp seeds
+ *  from the first readable node so pasting new sites keeps working. */
+export function draftGroundSetFromDocuments(
+  siteSetDocument: Record<string, unknown>,
+  siteEntries: { ref: string | null; document: Record<string, unknown> }[],
+): DraftGroundSet {
+  const siteSet = (siteSetDocument as { site_set?: Record<string, unknown> }).site_set;
+  if (!siteSet) throw new Error("not a site_set document");
+  const members: DraftGroundSite[] = [];
+  let stampNodeRef: string | null = null;
+  let stampInstalled: Record<string, number> | null = null;
+  for (const entry of siteEntries) {
+    const site = (entry.document as { site?: Record<string, unknown> }).site;
+    if (!site) throw new Error("site set contains a non-site entry");
+    const siteId = String(site.id ?? "");
+    const label = String(site.display_name ?? siteId);
+    if (entry.ref !== null) {
+      members.push(refGroundMember(entry.ref, siteId, label, null));
+    } else {
+      members.push(draftGroundMember(draftSiteFromDocument(entry.document)));
+    }
+    if (stampNodeRef === null) {
+      const nodes = (site.nodes as Record<string, unknown>[] | undefined) ?? [];
+      const [node] = nodes;
+      if (node && typeof node.model === "string") {
+        stampNodeRef = node.model;
+        const terminals =
+          (node.terminals as Record<string, { installed_count?: number }> | undefined) ?? {};
+        stampInstalled = Object.fromEntries(
+          Object.entries(terminals).map(([mount, install]) => [
+            mount,
+            Number(install.installed_count ?? 1),
+          ]),
+        );
+      }
+    }
+  }
+  if (members.length === 0) throw new Error("site set has no readable sites");
+  const forked = newDraftGroundSet(stampNodeRef ?? "", stampInstalled ?? {});
+  return {
+    ...forked,
+    display_name: `${String(siteSet.display_name ?? siteSet.id)} (custom)`,
+    members,
+    tags: ((siteSet.tags as unknown[] | undefined) ?? []).map(String),
+  };
+}
+
+/** Serialize a ground draft to the grammar's SiteSet object (unwrapped form)
+ *  — the SAME builder feeds session emission (inline from_site_set) and
+ *  save-to-library (wrapped by the save path). Scheduling, originated
+ *  prefixes, and overrides are SESSION concerns and stay out of it. */
+export function siteSetObjectFromDraft(
+  draft: DraftGroundSet,
+  id: string,
+): Record<string, unknown> {
+  return {
+    id,
+    display_name: draft.display_name,
+    sites: draft.members.map((member) =>
+      member.kind === "ref" && member.ref !== null
+        ? member.ref
+        : { site: siteObjectFromDraft(member.site as DraftSiteObject) },
+    ),
+    reference: "session-builder-draft",
+  };
+}
+
+/** Serialize the workspace to the session grammar (the ONE artifact). *//** Every placed segment a link rule can select, with its kind — the role
+ *  defaults key on kinds (space⟲space=isl, space↔space=crosslink,
+ *  ground↔space=access). */
+export interface PlacedSegment {
+  segment_id: string;
+  label: string;
+  kind: "space" | "ground";
+}
+
+export function placedSegments(workspace: Workspace): PlacedSegment[] {
+  return [
+    ...workspace.space_refs.map((placed) => ({
+      segment_id: placed.segment_id,
+      label: placed.label,
+      kind: "space" as const,
+    })),
+    ...workspace.space.map((draft) => ({
+      segment_id: draft.segment_id,
+      label: draft.display_name,
+      kind: "space" as const,
+    })),
+    ...workspace.ground_refs.map((placed) => ({
+      segment_id: placed.segment_id,
+      label: placed.label,
+      kind: "ground" as const,
+    })),
+    ...workspace.ground.map((draft) => ({
+      segment_id: draft.segment_id,
+      label: draft.display_name,
+      kind: "ground" as const,
+    })),
+  ];
+}
+
+let linkCounter = 0;
+
+/** Connect two placed segments with the DOCUMENTED role defaults: the same
+ *  space segment twice = an ISL fabric (nearest-2 optical); two different
+ *  space segments = optical crosslink; ground↔space = RF access with a 25°
+ *  mask on the ground side. All values are seeds the user then owns. */
+export function defaultLinkRule(
+  a: PlacedSegment,
+  b: PlacedSegment,
+  existing: DraftLinkRule[] = [],
+): DraftLinkRule {
+  linkCounter += 1;
+  const endpoint = (segment: PlacedSegment): DraftLinkEndpoint => ({
+    segment_id: segment.segment_id,
+    tag: null,
+    role: "access",
+    medium: "rf",
+    min_elevation_deg: null,
+  });
+  // Ground endpoint first (the shipped-session convention).
+  const [first, second] = a.kind === "ground" || b.kind !== "ground" ? [a, b] : [b, a];
+  const rule: DraftLinkRule = {
+    rule_id: `link-${linkCounter}`,
+    label: "",
+    enabled: true,
+    a: endpoint(first),
+    b: endpoint(second),
+    topology_mode: "visible_candidates",
+    topology_n: 2,
+    max_range_km: null,
+  };
+  if (first.kind === "space" && second.kind === "space") {
+    const isl = first.segment_id === second.segment_id;
+    const role = isl ? ("isl" as const) : ("crosslink" as const);
+    rule.a = { ...rule.a, role, medium: "optical" };
+    rule.b = { ...rule.b, role, medium: "optical" };
+    if (isl) rule.topology_mode = "nearest_n";
+    rule.label = isl ? `${first.label} mesh` : `${first.label} to ${second.label}`;
+  } else {
+    rule.a = { ...rule.a, min_elevation_deg: first.kind === "ground" ? 25 : null };
+    rule.label = `${first.label} to ${second.label}`;
+  }
+  // Rule ids must be unique in the session — uniquify the seeded name so a
+  // second connect never trips the duplicate-id wall before the rename.
+  // identifier() truncates to 48 chars, so compare TRUNCATED ids and keep
+  // the base short enough that the numeric suffix survives truncation.
+  const taken = new Set(existing.map((r) => identifier(r.label) || r.rule_id));
+  if (taken.has(identifier(rule.label))) {
+    const base = rule.label.slice(0, 40);
+    let n = 2;
+    while (taken.has(identifier(`${base} ${n}`)) && n < 1000) n += 1;
+    rule.label = `${base} ${n}`;
+  }
+  return rule;
+}
+
+/** Link sanity findings: warn, never block. The resolver's verdict on the
+ *  emitted rules arrives verbatim through the resolve-check. */
+export function linkWarnings(workspace: Workspace): string[] {
+  const warnings: string[] = [];
+  const placed = new Map(placedSegments(workspace).map((s) => [s.segment_id, s]));
+  const seenIds = new Set<string>();
+  for (const rule of workspace.links) {
+    const id = identifier(rule.label) || rule.rule_id;
+    if (seenIds.has(id)) {
+      warnings.push(`two link rules named "${id}" — rename one`);
+    }
+    seenIds.add(id);
+    for (const endpoint of [rule.a, rule.b]) {
+      if (!placed.has(endpoint.segment_id)) {
+        warnings.push(
+          `${rule.label || id}: segment "${endpoint.segment_id}" is no longer in the session`,
+        );
+      }
+    }
+    const a = placed.get(rule.a.segment_id);
+    const b = placed.get(rule.b.segment_id);
+    if (a?.kind === "ground" && b?.kind === "ground") {
+      warnings.push(
+        `${rule.label || id}: ground-to-ground links are terrestrial network territory — that arrives with routing, not link rules`,
+      );
+    }
+  }
+  return warnings;
+}
+
+let domainCounter = 0;
+let boundaryCounter = 0;
+
+/** A new domain seeds over EVERY placed segment — one IGP over the whole
+ *  world is the honest default; members are then removed per segment. */
+export function defaultRoutingDomain(workspace: Workspace): DraftRoutingDomain {
+  domainCounter += 1;
+  return {
+    domain_id: `domain-${domainCounter}`,
+    label: `domain ${domainCounter}`,
+    protocol: "isis",
+    member_segment_ids: placedSegments(workspace).map((s) => s.segment_id),
+    hello_interval_s: null,
+    hold_interval_s: null,
+  };
+}
+
+export function defaultBoundary(workspace: Workspace): DraftBoundary {
+  boundaryCounter += 1;
+  const [firstRule] = workspace.links;
+  const [fromDomain, toDomain] = workspace.routing_domains;
+  return {
+    boundary_id: `boundary-${boundaryCounter}`,
+    over_rule_id: firstRule?.rule_id ?? "",
+    adapter: "static_ip",
+    from_domain_id: fromDomain?.domain_id ?? "",
+    to_domain_id: toDomain?.domain_id ?? fromDomain?.domain_id ?? "",
+    export_node_loopbacks: true,
+  };
+}
+
+/** The grammar id a link rule serializes under (boundaries key on it). */
+export function emittedRuleId(rule: DraftLinkRule): string {
+  return identifier(rule.label) || rule.rule_id;
+}
+
+export function emittedDomainId(domain: DraftRoutingDomain): string {
+  return identifier(domain.label) || domain.domain_id;
+}
+
+/** Routing sanity findings: warn, never block — the resolver's verdict on
+ *  the emitted routing block arrives verbatim through the resolve-check. */
+export function routingWarnings(workspace: Workspace): string[] {
+  const warnings: string[] = [];
+  const placed = new Set(placedSegments(workspace).map((s) => s.segment_id));
+  const domainIds = new Set<string>();
+  for (const domain of workspace.routing_domains) {
+    const id = emittedDomainId(domain);
+    if (domainIds.has(id)) warnings.push(`two routing domains named "${id}" — rename one`);
+    domainIds.add(id);
+    if (domain.member_segment_ids.length === 0) {
+      warnings.push(`${domain.label}: no member segments — the resolver requires at least one`);
+    }
+    for (const member of domain.member_segment_ids) {
+      if (!placed.has(member)) {
+        warnings.push(`${domain.label}: segment "${member}" is no longer in the session`);
+      }
+    }
+    if (
+      domain.hello_interval_s !== null &&
+      domain.hold_interval_s !== null &&
+      domain.hold_interval_s <= domain.hello_interval_s
+    ) {
+      warnings.push(`${domain.label}: hold must exceed hello`);
+    }
+  }
+  const ruleIds = new Set(workspace.links.map((rule) => rule.rule_id));
+  const draftDomainIds = new Set(workspace.routing_domains.map((d) => d.domain_id));
+  for (const boundary of workspace.boundaries) {
+    if (!ruleIds.has(boundary.over_rule_id)) {
+      warnings.push("a boundary rides a link rule that is no longer in the session");
+    }
+    if (
+      !draftDomainIds.has(boundary.from_domain_id) ||
+      !draftDomainIds.has(boundary.to_domain_id)
+    ) {
+      warnings.push("a boundary references a routing domain that no longer exists");
+    } else if (boundary.from_domain_id === boundary.to_domain_id) {
+      warnings.push("a boundary must exchange between two DIFFERENT domains");
+    }
+  }
+  return warnings;
+}
+
+/** One authoring gap: what's missing/broken and which editor owns it.
+ *  target=null means the gap is about something not yet created. */
+export interface CompletenessFinding {
+  message: string;
+  target:
+    | { kind: "session" }
+    | { kind: "segment"; id: string }
+    | { kind: "ground"; id: string }
+    | { kind: "link"; id: string }
+    | null;
+}
+
+/** The completeness rail's source: structural authoring gaps with
+ *  click-to-jump targets. Warnings that already render inline on their
+ *  owning object are AGGREGATED as counts, not duplicated. Empty result =
+ *  nothing to say (the resolve status is the green, never this rail). */
+export function completenessFindings(workspace: Workspace): CompletenessFinding[] {
+  const findings: CompletenessFinding[] = [];
+  if (workspace.space.length + workspace.space_refs.length === 0) {
+    findings.push({
+      message: "no space segment — OME requires at least one satellite",
+      target: null,
+    });
+  }
+  for (const draft of workspace.ground) {
+    if (draft.members.length === 0) {
+      findings.push({
+        message: `${draft.display_name}: no sites yet`,
+        target: { kind: "ground", id: draft.segment_id },
+      });
+    }
+  }
+  const placed = placedSegments(workspace);
+  if (workspace.links.length === 0 && placed.length >= 2) {
+    findings.push({
+      message: "no link rules — nothing may communicate yet",
+      target: null,
+    });
+  }
+  if (workspace.routing_domains.length === 0 && workspace.links.length > 0) {
+    findings.push({
+      message: "no routing domains — links carry no routed traffic yet",
+      target: null,
+    });
+  }
+  for (const draft of workspace.space) {
+    const count = orbitWarnings(draft.orbit).length;
+    if (count > 0) {
+      findings.push({
+        message: `${draft.display_name}: ${count} orbit ${count === 1 ? "finding" : "findings"}`,
+        target: { kind: "segment", id: draft.segment_id },
+      });
+    }
+  }
+  for (const draft of workspace.ground) {
+    const count = groundWarnings(draft).length;
+    if (count > 0) {
+      findings.push({
+        message: `${draft.display_name}: ${count} ground ${count === 1 ? "finding" : "findings"}`,
+        target: { kind: "ground", id: draft.segment_id },
+      });
+    }
+  }
+  const linkCount = linkWarnings(workspace).length;
+  if (linkCount > 0) {
+    const first = workspace.links[0];
+    findings.push({
+      message: `${linkCount} link ${linkCount === 1 ? "finding" : "findings"}`,
+      target: first ? { kind: "link", id: first.rule_id } : null,
+    });
+  }
+  const routingCount = routingWarnings(workspace).length;
+  if (routingCount > 0) {
+    findings.push({
+      message: `${routingCount} routing ${routingCount === 1 ? "finding" : "findings"}`,
+      target: null,
+    });
+  }
+  return findings;
+}
+
+/** After restoring an autosaved workspace, module counters restart at zero
+ *  and freshly minted ids would collide with restored ones. Reseed every
+ *  counter past the highest id the workspace carries. */
+export function reseedCounters(workspace: Workspace): void {
+  const bump = (values: string[], prefix: string): number => {
+    let max = 0;
+    for (const value of values) {
+      const match = value.match(new RegExp(`^${prefix}-(\\d+)$`));
+      if (match) max = Math.max(max, Number(match[1]));
+    }
+    return max;
+  };
+  draftCounter = Math.max(
+    draftCounter,
+    bump(workspace.space.map((d) => d.segment_id), "space"),
+  );
+  refCounter = Math.max(
+    refCounter,
+    bump(
+      [...workspace.space_refs, ...workspace.ground_refs].map((r) => r.segment_id),
+      "lib",
+    ),
+  );
+  groundCounter = Math.max(
+    groundCounter,
+    bump(workspace.ground.map((d) => d.segment_id), "ground"),
+  );
+  memberCounter = Math.max(
+    memberCounter,
+    bump(
+      workspace.ground.flatMap((d) => d.members.map((m) => m.member_id)),
+      "member",
+    ),
+  );
+  linkCounter = Math.max(
+    linkCounter,
+    bump(workspace.links.map((r) => r.rule_id), "link"),
+  );
+  domainCounter = Math.max(
+    domainCounter,
+    bump(workspace.routing_domains.map((d) => d.domain_id), "domain"),
+  );
+  boundaryCounter = Math.max(
+    boundaryCounter,
+    bump(workspace.boundaries.map((b) => b.boundary_id), "boundary"),
+  );
+}
 
 /** Serialize the workspace to the session grammar (the ONE artifact). */
 export function toSessionDocument(workspace: Workspace): Record<string, unknown> {
@@ -589,18 +1435,142 @@ export function toSessionDocument(workspace: Workspace): Record<string, unknown>
     },
   }));
 
-  const allSegments = [...refSegments, ...segments];
-  if (workspace.ground_site_set_ref) {
-    allSegments.push({
-      id: "ground",
-      placement: { from_site_set: workspace.ground_site_set_ref },
-      apply: { scheduling: DEFAULT_GROUND_SCHEDULING },
+  const groundRefSegments: unknown[] = workspace.ground_refs.map((placed) => ({
+    id: identifier(placed.segment_id),
+    placement: { from_site_set: placed.ref },
+    apply: { scheduling: SCHEDULING_PRESETS[placed.scheduling_preset].block },
+  }));
+
+  const groundSegments: unknown[] = workspace.ground.map((draft) => {
+    const overrides = draft.members
+      .filter((member) => member.scheduling_override !== null)
+      .map((member) => ({
+        match: { site: identifier(memberSiteId(member)) },
+        scheduling:
+          SCHEDULING_PRESETS[member.scheduling_override as SchedulingPresetKey].block,
+      }));
+    return {
+      id: identifier(draft.segment_id),
+      display_name: draft.display_name,
+      placement: {
+        from_site_set: {
+          site_set: siteSetObjectFromDraft(
+            draft,
+            identifier(`${workspace.name}-${draft.segment_id}`),
+          ),
+        },
+      },
+      apply: {
+        scheduling: SCHEDULING_PRESETS[draft.scheduling_preset].block,
+        ...(draft.originated_ipv4.length > 0
+          ? { originated_prefixes: { ipv4: draft.originated_ipv4 } }
+          : {}),
+        ...(draft.tags.length > 0 ? { tags: draft.tags.map(identifier) } : {}),
+      },
+      ...(overrides.length > 0 ? { overrides } : {}),
+    };
+  });
+
+  const linkRules: unknown[] = workspace.links.map((rule) => ({
+    id: identifier(rule.label) || rule.rule_id,
+    ...(rule.enabled ? {} : { enabled: false }),
+    topology:
+      rule.topology_mode === "nearest_n"
+        ? { mode: "nearest_n", n: rule.topology_n }
+        : { mode: rule.topology_mode },
+    endpoints: [rule.a, rule.b].map((endpoint) => ({
+      select: endpoint.tag
+        ? {
+            all: [
+              { segment: identifier(endpoint.segment_id) },
+              { tag: identifier(endpoint.tag) },
+            ],
+          }
+        : { segment: identifier(endpoint.segment_id) },
+      terminal: { all: [{ role: endpoint.role }, { medium: endpoint.medium }] },
+      ...(endpoint.min_elevation_deg !== null
+        ? { min_elevation_deg: endpoint.min_elevation_deg }
+        : {}),
+    })),
+    ...(rule.max_range_km !== null
+      ? { constraints: { max_range_km: rule.max_range_km } }
+      : {}),
+  }));
+
+  const domains: unknown[] = workspace.routing_domains.map((domain) => ({
+    id: emittedDomainId(domain),
+    protocol: domain.protocol,
+    selectors:
+      domain.member_segment_ids.length === 1
+        ? [{ segment: identifier(domain.member_segment_ids[0] as string) }]
+        : [
+            {
+              any: domain.member_segment_ids.map((member) => ({
+                segment: identifier(member),
+              })),
+            },
+          ],
+    ...(domain.protocol === "isis" || domain.protocol === "ospf"
+      ? { area_assignment: { strategy: "flat" } }
+      : {}),
+    ...(domain.hello_interval_s !== null && domain.hold_interval_s !== null
+      ? {
+          timers: {
+            hello_interval_s: domain.hello_interval_s,
+            hold_interval_s: domain.hold_interval_s,
+          },
+        }
+      : {}),
+  }));
+
+  const domainById = new Map(workspace.routing_domains.map((d) => [d.domain_id, d]));
+  const ruleById = new Map(workspace.links.map((r) => [r.rule_id, r]));
+  const boundaries: unknown[] = workspace.boundaries.map((boundary) => {
+    const fromDomain = domainById.get(boundary.from_domain_id);
+    const toDomain = domainById.get(boundary.to_domain_id);
+    const overRule = ruleById.get(boundary.over_rule_id);
+    const exchange = (from: string, to: string) => ({
+      from,
+      to,
+      prefixes: { aggregate_of: "originated" },
+      export_node_loopbacks: boundary.export_node_loopbacks,
+      install_via: "peer_loopback",
     });
-  }
+    const fromId = fromDomain ? emittedDomainId(fromDomain) : boundary.from_domain_id;
+    const toId = toDomain ? emittedDomainId(toDomain) : boundary.to_domain_id;
+    return {
+      over: overRule ? emittedRuleId(overRule) : boundary.over_rule_id,
+      adapter: boundary.adapter,
+      export: [exchange(fromId, toId), exchange(toId, fromId)],
+    };
+  });
 
   return {
     session: { name: identifier(workspace.name) || "untitled-session" },
-    segments: allSegments,
-    time: { start_time: workspace.start_time, step_seconds: 1, compression: 1 },
+    segments: [...refSegments, ...segments, ...groundRefSegments, ...groundSegments],
+    ...(domains.length > 0
+      ? {
+          routing: {
+            domains,
+            ...(boundaries.length > 0 ? { boundaries } : {}),
+          },
+        }
+      : {}),
+    ...(linkRules.length > 0
+      ? {
+          link_rules: linkRules,
+          simulation: {
+            candidate_limits: {
+              max_pairs_per_rule: workspace.max_pairs_per_rule,
+              max_pairs_per_tick: workspace.max_pairs_per_tick,
+            },
+          },
+        }
+      : {}),
+    time: {
+      start_time: workspace.start_time,
+      step_seconds: workspace.step_seconds,
+      compression: workspace.compression,
+    },
   };
 }

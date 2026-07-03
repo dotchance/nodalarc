@@ -51,13 +51,15 @@ def roots(tmp_path) -> CatalogRoots:
     return CatalogRoots.from_catalog_root(shipped, user_root=user)
 
 
-def test_browse_lists_both_tiers_shipped_first(roots):
+def test_browse_lists_both_tiers_yours_first(roots):
+    """The user's entries lead: burying them under the shipped vocabulary
+    made a just-saved terminal read as missing."""
     save_user_object("terminals", _TERMINAL, roots=roots)
     entries = browse_catalog("terminals", roots=roots)
     refs = [entry.ref for entry in entries]
     assert refs == [
-        "nodalarc:terminals/rf/shipped-ka.yaml",
         "user:terminals/my-ka-terminal.yaml",
+        "nodalarc:terminals/rf/shipped-ka.yaml",
     ]
     assert all(entry.error is None for entry in entries)
 

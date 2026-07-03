@@ -21,6 +21,7 @@ from nodalarc.models.builder_world import (
     BuilderResolveCheck,
     BuilderWorld,
     BuilderWorldNode,
+    BuilderWorldSegment,
 )
 from nodalarc.models.resolved_session import ResolvedLinkRule
 from nodalarc.ome_inputs import build_ome_inputs_from_resolved
@@ -28,6 +29,7 @@ from nodalarc.resolve_session import (
     SourceContext,
     default_catalog_roots,
     resolve_session_with_assets,
+    segment_display_names,
 )
 
 from ome.event_stream import build_session_ephemeris, build_step_context
@@ -177,6 +179,14 @@ def _world_from_raw(raw: dict[str, Any], roots: CatalogRoots) -> BuilderWorld:
         )
         for node in resolved.nodes
     )
+    # The world tree speaks the user's names: segment display names read by
+    # the resolver from the authored sources, ordered as authored. Runtime
+    # ids stay the identity; the name is presentation.
+    names = segment_display_names(raw, roots=roots)
+    seen_segments: list[str] = []
+    for node in resolved.nodes:
+        if node.segment_id not in seen_segments:
+            seen_segments.append(node.segment_id)
     return BuilderWorld(
         session=resolved.session,
         epoch_unix=epoch_unix,
@@ -184,5 +194,9 @@ def _world_from_raw(raw: dict[str, Any], roots: CatalogRoots) -> BuilderWorld:
         nodes=nodes,
         link_rules=tuple(
             _builder_link_rule(rule, local_to_runtime) for rule in resolved.link_rules
+        ),
+        segments=tuple(
+            BuilderWorldSegment(segment_id=seg, display_name=names.get(seg, seg))
+            for seg in seen_segments
         ),
     )

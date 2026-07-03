@@ -115,11 +115,14 @@ interface SegmentSummary {
   satellites: number;
   grounds: number;
   relays: number;
+  /** The user's name for the segment — the tree row's label. */
+  display_name: string;
   /** First member (sorted by node_id) — the tree row's fly-to target. */
   first_node_id: string;
 }
 
 function summarizeSegments(world: BuilderWorld): SegmentSummary[] {
+  const names = new Map(world.segments.map((s) => [s.segment_id, s.display_name]));
   const bySegment = new Map<string, SegmentSummary>();
   for (const node of world.nodes) {
     let summary = bySegment.get(node.segment_id);
@@ -130,6 +133,7 @@ function summarizeSegments(world: BuilderWorld): SegmentSummary[] {
         null;
       summary = {
         segment_id: node.segment_id,
+        display_name: names.get(node.segment_id) ?? node.segment_id,
         body,
         satellites: 0,
         grounds: 0,
@@ -1568,13 +1572,13 @@ export function BuilderView({
                           setExpandedSegment(expanded ? null : seg.segment_id);
                         }
                       }}
-                      title={`Fly to ${seg.segment_id}`}
+                      title={`Fly to ${seg.display_name}`}
                     >
                       <span
                         className={`builder-outline-name builder-outline-name--${space ? "space" : "ground"}`}
                       >
                         <Icon name={space ? "orbit" : "satellite-dish"} size={12} />
-                        {seg.segment_id}
+                        {seg.display_name}
                         {expandable ? (expanded ? " ▾" : " ▸") : ""}
                       </span>
                       <span className="builder-outline-count">

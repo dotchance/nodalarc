@@ -135,17 +135,20 @@ def _browse_root(family: str, wrapper: str, scheme: str, root: Path) -> list[Bui
 
 
 def browse_catalog(family: str, *, roots: CatalogRoots) -> list[BuilderCatalogEntry]:
-    """List one family's primitives across the shipped and user roots.
+    """List one family's primitives across the user and shipped roots.
 
-    Shipped entries come first (they are the stable vocabulary); user entries
-    follow with ``user:`` references. Both tiers are first-class.
+    The user's entries come FIRST: what someone just made is what they are
+    working with, and burying it under the shipped vocabulary made their own
+    library read as missing. Shipped ``nodalarc:`` entries follow. Both
+    tiers are first-class; order is prominence, not privilege.
     """
     wrapper = CATALOG_FAMILIES.get(family)
     if wrapper is None:
         raise ValueError(f"unknown catalog family {family!r}")
-    entries = _browse_root(family, wrapper, "nodalarc", roots.root)
+    entries: list[BuilderCatalogEntry] = []
     if roots.user_root is not None and roots.user_root.is_dir():
         entries.extend(_browse_root(family, wrapper, "user", roots.user_root))
+    entries.extend(_browse_root(family, wrapper, "nodalarc", roots.root))
     return entries
 
 

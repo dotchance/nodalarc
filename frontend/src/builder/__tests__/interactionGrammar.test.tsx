@@ -83,6 +83,7 @@ function tinyWorld(groundId: string, spaceId: string): BuilderWorld {
       node("s1", spaceId, [block("access", "rf", null), block("isl", "optical", null)]),
     ],
     link_rules: [],
+    segments: [],
   };
 }
 

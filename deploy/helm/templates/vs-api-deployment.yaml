@@ -8,12 +8,13 @@
 #   platform-config  — platform infrastructure config, does not change per session
 #   session-config   — directory mount (auto-updates), bootstrap for dev path only;
 #                      the wizard path reads catalog sessions from catalog/nodalarc/
-#   session-db       — emptyDir for SQLite (future: PVC-backed persistent storage
-#                      for user-uploaded models, session history, and user catalog)
+#   session-db       — PVC-backed session data: the user catalog, builder-saved
+#                      sessions, and the session-history SQLite. User work
+#                      product; survives pod restarts and redeploys.
 #
 # Baseline catalog primitives and deployable session examples are baked into
-# the image under catalog/nodalarc/. User-uploaded models will be stored on
-# persistent volumes in a future release, alongside the static catalog.
+# the image under catalog/nodalarc/; user-authored objects live on the
+# nodalarc-session-data volume alongside them.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -96,4 +97,5 @@ spec:
             name: nodalarc-session
             optional: true
         - name: session-db
-          emptyDir: {}
+          persistentVolumeClaim:
+            claimName: nodalarc-session-data

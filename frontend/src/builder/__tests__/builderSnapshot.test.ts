@@ -74,6 +74,7 @@ const WORLD: BuilderWorld = {
   epoch_unix: EPOCH_UNIX,
   ephemeris: EPHEMERIS,
   link_rules: [],
+  segments: [],
   nodes: [
     {
       node_id: "leo-sat-p00s00",

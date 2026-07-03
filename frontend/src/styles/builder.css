@@ -941,3 +941,14 @@ button.builder-guide-row:hover {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* Tier seam in the library list: yours lead; the shipped set is labeled. */
+.builder-library-tier {
+  padding: var(--space-2) var(--space-2) var(--space-1);
+  font-size: var(--font-size-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-dim);
+  border-top: 1px solid var(--border);
+  margin-top: var(--space-1);
+}

@@ -116,6 +116,74 @@ export function LibraryPanel({ onUse, onCustomize, onInspect, onNew }: LibraryPa
       (source === "user") === entry.ref.startsWith("user:"),
   );
 
+  const renderEntry = (entry: BuilderCatalogEntry) => {
+    const yours = entry.ref.startsWith("user:");
+    if (entry.error) {
+      return (
+        <div className="builder-library-entry" key={entry.ref}>
+          <div className="builder-library-entry-name builder-status-item--error">
+            {entry.ref} — {entry.error}
+          </div>
+        </div>
+      );
+    }
+    return (
+      <div className="builder-library-entry" key={entry.ref}>
+        <button
+          className="builder-library-entry-main"
+          title={`Inspect ${entry.ref}`}
+          onClick={() => onInspect(entry)}
+        >
+          <span
+            className={`builder-outline-name builder-outline-name--${config.tone} builder-library-entry-name`}
+          >
+            <Icon name={config.icon} size={12} />
+            <span className="builder-library-entry-text">
+              {yours ? "★ " : ""}
+              {entry.display_name ?? entry.id}
+            </span>
+          </span>
+          {entry.summary && (
+            <span className="builder-library-entry-summary">{entry.summary}</span>
+          )}
+        </button>
+        <span className="builder-library-actions">
+          {config.useTitle && (
+            <IconButton
+              icon="plus"
+              size={12}
+              label={config.useTitle}
+              className="builder-library-use"
+              onClick={() => onUse(entry)}
+            />
+          )}
+          {canCustomize && (
+            <IconButton
+              icon="pencil"
+              size={12}
+              label="Customize: fork into an editable draft"
+              onClick={() => onCustomize(entry)}
+            />
+          )}
+          <IconButton
+            icon="download"
+            size={12}
+            label="Export file"
+            onClick={() => void exportCatalogObject(entry.ref)}
+          />
+          {yours && (
+            <IconButton
+              icon="x"
+              size={12}
+              label="Delete from your library"
+              onClick={() => void deleteUserObject(entry.ref)}
+            />
+          )}
+        </span>
+      </div>
+    );
+  };
+
   return (
     <div className="builder-outline-group" data-testid="builder-library">
       <div className="builder-outline-kind">Library</div>
@@ -175,72 +243,19 @@ export function LibraryPanel({ onUse, onCustomize, onInspect, onNew }: LibraryPa
             nothing of yours in this family yet — + new or save from an editor
           </div>
         )}
-        {visibleEntries.map((entry) => {
-          const yours = entry.ref.startsWith("user:");
-          if (entry.error) {
-            return (
-              <div className="builder-library-entry" key={entry.ref}>
-                <div className="builder-library-entry-name builder-status-item--error">
-                  {entry.ref} — {entry.error}
-                </div>
+        {visibleEntries.map((entry, index) => {
+          // Tier seam: yours lead, and the boundary to the shipped set is
+          // labeled — an invisible sort still read as "only nodalarc here".
+          const startsShipped =
+            !entry.ref.startsWith("user:") &&
+            (index === 0 || visibleEntries[index - 1]!.ref.startsWith("user:"));
+          const tierLabel =
+            source === "all" && startsShipped && visibleEntries.some((e) => e.ref.startsWith("user:")) ? (
+              <div className="builder-library-tier" key={`tier-${entry.ref}`}>
+                nodalarc library
               </div>
-            );
-          }
-          return (
-            <div className="builder-library-entry" key={entry.ref}>
-              <button
-                className="builder-library-entry-main"
-                title={`Inspect ${entry.ref}`}
-                onClick={() => onInspect(entry)}
-              >
-                <span
-                  className={`builder-outline-name builder-outline-name--${config.tone} builder-library-entry-name`}
-                >
-                  <Icon name={config.icon} size={12} />
-                  <span className="builder-library-entry-text">
-                    {yours ? "★ " : ""}
-                    {entry.display_name ?? entry.id}
-                  </span>
-                </span>
-                {entry.summary && (
-                  <span className="builder-library-entry-summary">{entry.summary}</span>
-                )}
-              </button>
-              <span className="builder-library-actions">
-                {config.useTitle && (
-                  <IconButton
-                    icon="plus"
-                    size={12}
-                    label={config.useTitle}
-                    className="builder-library-use"
-                    onClick={() => onUse(entry)}
-                  />
-                )}
-                {canCustomize && (
-                  <IconButton
-                    icon="pencil"
-                    size={12}
-                    label="Customize: fork into an editable draft"
-                    onClick={() => onCustomize(entry)}
-                  />
-                )}
-                <IconButton
-                  icon="download"
-                  size={12}
-                  label="Export file"
-                  onClick={() => void exportCatalogObject(entry.ref)}
-                />
-                {yours && (
-                  <IconButton
-                    icon="x"
-                    size={12}
-                    label="Delete from your library"
-                    onClick={() => void deleteUserObject(entry.ref)}
-                  />
-                )}
-              </span>
-            </div>
-          );
+            ) : null;
+          return [tierLabel, renderEntry(entry)];
         })}
       </div>
     </div>

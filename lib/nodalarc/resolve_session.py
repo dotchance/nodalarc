@@ -2192,6 +2192,48 @@ def _normalize_token(value: str) -> str:
     return token
 
 
+def segment_display_names(raw: dict[str, Any], *, roots: CatalogRoots) -> dict[str, str]:
+    """Map segment id -> the authored display name of its source object.
+
+    Presentation truth for consumers that show segments to humans (the
+    builder's world tree): the resolver owns the grammar reading of where a
+    display name lives, so no consumer re-learns it. Segments whose name
+    cannot be read are simply absent — callers fall back to the id.
+    """
+    out: dict[str, str] = {}
+    for segment in raw.get("segments") or []:
+        if not isinstance(segment, dict):
+            continue
+        seg_id = segment.get("id")
+        if not isinstance(seg_id, str):
+            continue
+        # A name can live on the segment itself (ground segments), on the
+        # source object (space segments), or on the placed site set.
+        own = segment.get("display_name")
+        if isinstance(own, str) and own:
+            out[seg_id] = own
+            continue
+        source = segment.get("source")
+        try:
+            if source is not None:
+                _, obj = _load_ref_or_object(source, roots)
+            else:
+                placement = segment.get("placement")
+                site_set = placement.get("from_site_set") if isinstance(placement, dict) else None
+                if site_set is None:
+                    continue
+                # Mirror the resolution path exactly: from_site_set also
+                # accepts a BARE site-set body (_load_expected), which
+                # _load_ref_or_object would reject.
+                obj = _load_expected(site_set, roots, "site_set")
+        except Exception:
+            continue
+        name = obj.get("display_name") or obj.get("id")
+        if isinstance(name, str) and name:
+            out[seg_id] = name
+    return out
+
+
 def _load_ref_or_object(value: Any, roots: CatalogRoots) -> tuple[str, dict[str, Any]]:
     if isinstance(value, str):
         path = resolve_catalog_reference(value, roots)

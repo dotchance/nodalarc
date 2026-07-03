@@ -1,0 +1,20 @@
+# PersistentVolumeClaim for VS-API session data: the user catalog,
+# builder-saved sessions, and the session-history SQLite. This is user work
+# product — it must survive pod restarts and redeploys. An emptyDir here
+# silently wiped a user's saved terminals and sessions on every VS-API roll.
+# StorageClass is configurable via values.yaml — local-path for single-node,
+# Longhorn/Rook for multi-node.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: nodalarc-session-data
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: nodalarc-vs-api
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: {{ .Values.vsApi.storageClass | default "local-path" }}
+  resources:
+    requests:
+      storage: {{ .Values.vsApi.storageSize | default "2Gi" }}

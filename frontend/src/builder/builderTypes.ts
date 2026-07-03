@@ -98,6 +98,12 @@ export interface BuilderLinkRule {
   max_range_km: number | null;
 }
 
+/** Twin of nodalarc.models.builder_world.BuilderWorldSegment. */
+export interface BuilderWorldSegment {
+  segment_id: string;
+  display_name: string;
+}
+
 /** Twin of nodalarc.models.builder_world.BuilderWorld. */
 export interface BuilderWorld {
   session: BuilderSessionMeta;
@@ -105,6 +111,7 @@ export interface BuilderWorld {
   ephemeris: SessionEphemeris;
   nodes: BuilderWorldNode[];
   link_rules: BuilderLinkRule[];
+  segments: BuilderWorldSegment[];
 }
 
 /** Twin of nodalarc.models.builder_world.BuilderResolveCheck. */

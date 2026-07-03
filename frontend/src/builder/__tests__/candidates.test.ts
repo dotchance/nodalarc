@@ -140,6 +140,7 @@ function world(rules: BuilderLinkRule[]): BuilderWorld {
       groundNode("ground-far", 0, SAT_LON_DEG > 0 ? SAT_LON_DEG - 180 : SAT_LON_DEG + 180),
     ],
     link_rules: rules,
+    segments: [],
   };
 }
 
@@ -336,6 +337,7 @@ function stackedWorld(forDeg: number | null): BuilderWorld {
     },
     nodes: [satNode("leo-sat", "leo"), satNode("geo-sat", "geo")],
     link_rules: [uplink],
+    segments: [],
   };
 }
 

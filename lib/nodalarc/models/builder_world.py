@@ -123,6 +123,16 @@ class BuilderWorldNode(BaseModel):
     originated_prefixes: OriginatedPrefixes | None = None
 
 
+class BuilderWorldSegment(BaseModel):
+    """One segment as the user named it — the world tree speaks their words,
+    never bare runtime ids."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    segment_id: str
+    display_name: str
+
+
 class BuilderWorld(BaseModel):
     """One resolved session as a render-ready, read-only world."""
 
@@ -133,3 +143,4 @@ class BuilderWorld(BaseModel):
     ephemeris: SessionEphemeris
     nodes: tuple[BuilderWorldNode, ...]
     link_rules: tuple[BuilderLinkRule, ...] = ()
+    segments: tuple[BuilderWorldSegment, ...] = ()

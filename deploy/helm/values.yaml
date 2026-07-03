@@ -48,6 +48,9 @@ nodeAgent:
 vsApi:
   memoryLimit: 2Gi
   cpuLimit: "8"
+  # Session data (user catalog, builder-saved sessions, session history).
+  storageClass: local-path
+  storageSize: 2Gi
 
 # NATS JetStream messaging server
 nats:

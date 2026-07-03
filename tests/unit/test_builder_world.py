@@ -266,6 +266,51 @@ def test_endpoint_returns_world():
     assert payload["session"]["name"]
     assert payload["ephemeris"]["epoch_id"] == 0
     assert len(payload["nodes"]) >= len(payload["ephemeris"]["nodes"])
+    # The world speaks the user's names: every segment carries the authored
+    # display name (source, segment, or site-set), never just a runtime id.
+    names = {seg["segment_id"]: seg["display_name"] for seg in payload["segments"]}
+    assert set(names) == {node["segment_id"] for node in payload["nodes"]}
+    assert names["leo"] == "Earth LEO Walker-delta 176-satellite shell"
+
+
+def test_segment_display_names_reads_every_grammar_home():
+    """The helper must read names everywhere the resolver itself accepts a
+    source: segment-level, wrapped inline, ref, and the BARE inline site-set
+    body that _load_expected allows (found by review — _load_ref_or_object
+    alone silently dropped it)."""
+    from nodalarc.resolve_session import default_catalog_roots, segment_display_names
+
+    roots = default_catalog_roots()
+    raw = {
+        "segments": [
+            {"id": "own", "display_name": "Named On Segment", "source": {"x": {}}},
+            {
+                "id": "wrapped",
+                "source": "nodalarc:constellations/earth/leo/earth-leo-walker-delta-176.yaml",
+            },
+            {
+                "id": "bare-ground",
+                "placement": {
+                    "from_site_set": {
+                        "id": "east-sites",
+                        "display_name": "Eastern ground sites",
+                        "sites": [
+                            {
+                                "id": "s1",
+                                "display_name": "Site 1",
+                                "location": {"lat_deg": 1.0, "lon_deg": 2.0, "alt_m": 0.0},
+                                "node": "nodalarc:nodes/ground/earth-leo-gateway.yaml",
+                            }
+                        ],
+                    }
+                },
+            },
+        ]
+    }
+    names = segment_display_names(raw, roots=roots)
+    assert names["own"] == "Named On Segment"
+    assert names["wrapped"] == "Earth LEO Walker-delta 176-satellite shell"
+    assert names["bare-ground"] == "Eastern ground sites"
 
 
 def test_save_session_resolves_then_writes_canonical_yaml(monkeypatch, tmp_path):

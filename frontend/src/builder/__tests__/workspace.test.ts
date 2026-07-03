@@ -688,3 +688,55 @@ describe("dwell longitude lens (geosynchronous orbits)", () => {
     expect((((shifted - base) % 360) + 360) % 360).toBeCloseTo(30, 9);
   });
 });
+
+describe("central body is authored state, never a hardcoded earth", () => {
+  it("serializes the draft's body ref verbatim", () => {
+    const ws = newWorkspace("t");
+    const draft = newDraftConstellation("nodalarc:nodes/space/x.yaml");
+    draft.orbit.central_body = "nodalarc:bodies/luna.yaml";
+    ws.space.push(draft);
+    const doc = toSessionDocument(ws) as {
+      segments: { source: { constellation: { orbit: { central_body: string } } } }[];
+    };
+    expect(doc.segments[0]!.source.constellation.orbit.central_body).toBe(
+      "nodalarc:bodies/luna.yaml",
+    );
+  });
+
+  it("defaults to earth and reads a document's body back on fork", () => {
+    expect(defaultDraftOrbit().central_body).toBe("nodalarc:bodies/earth.yaml");
+  });
+
+  it("a non-Earth orbit makes the session carry the kernel manifest; earth-only does not", () => {
+    const ws = newWorkspace("t");
+    const draft = newDraftConstellation("nodalarc:nodes/space/x.yaml");
+    ws.space.push(draft);
+    expect((toSessionDocument(ws) as { ephemeris?: unknown }).ephemeris).toBeUndefined();
+    draft.orbit.central_body = "nodalarc:bodies/luna.yaml";
+    const doc = toSessionDocument(ws) as {
+      ephemeris?: { kernels: { id: string; targets: string[] }[] };
+    };
+    expect(doc.ephemeris?.kernels[0]?.id).toBe("de440s");
+    expect(doc.ephemeris?.kernels[0]?.targets).toContain("nodalarc:bodies/luna.yaml");
+  });
+
+  it("the atmosphere warning is Earth physics — a 100 km lunar orbit is clean", () => {
+    const luna = {
+      ...defaultDraftOrbit(),
+      altitude_km: 100,
+      central_body: "nodalarc:bodies/luna.yaml",
+    };
+    expect(orbitWarnings(luna)).toEqual([]);
+    expect(orbitWarnings({ ...luna, central_body: "nodalarc:bodies/earth.yaml" })).toHaveLength(1);
+    expect(orbitWarnings({ ...luna, altitude_km: -5 })).toHaveLength(1);
+  });
+
+  it("the dwell lens is Earth math — a lunar orbit never claims it", () => {
+    const orbit = {
+      ...defaultDraftOrbit(),
+      altitude_km: 35786,
+      central_body: "nodalarc:bodies/luna.yaml",
+    };
+    expect(isGeosynchronous(orbit)).toBe(false);
+  });
+});

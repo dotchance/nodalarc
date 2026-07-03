@@ -10,7 +10,7 @@
  */
 
 import { EditorName, Field, NumberField } from "./editorKit";
-import type { Workspace } from "./workspace";
+import { usesNonEarthBodies, type Workspace } from "./workspace";
 
 interface SessionEditorProps {
   workspace: Workspace;
@@ -21,6 +21,12 @@ export function SessionEditor({ workspace, onUpdate }: SessionEditorProps) {
   return (
     <div className="builder-inspector-stack" data-testid="builder-session-editor">
       <EditorName value={workspace.name} onChange={(name) => onUpdate({ name })} />
+      {usesNonEarthBodies(workspace) && (
+        <div className="builder-site-derived">
+          orbits leave Earth — the session carries the DE440s planetary
+          ephemeris manifest (kernels shown in the artifact)
+        </div>
+      )}
       <Field
         label="start time"
         value={workspace.start_time}

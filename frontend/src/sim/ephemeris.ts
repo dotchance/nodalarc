@@ -120,11 +120,19 @@ export interface PropagatedPosition {
 }
 
 export function kmPerRenderUnitFromEphemeris(ephemeris: SessionEphemeris): number {
+  // Render scale is presentation only: anchor on Earth when present so every
+  // Earth session keeps its exact historical scale; a session with no Earth
+  // frame (luna-only, for instance) anchors on its largest body instead.
   const earth = ephemeris.body_frames.earth;
-  if (!earth) {
-    throw new Error("SessionEphemeris missing earth body frame required for render scale");
+  if (earth) return earth.equatorial_radius_km / SCENE_EARTH_RADIUS;
+  const frames = Object.values(ephemeris.body_frames);
+  if (frames.length === 0) {
+    throw new Error("SessionEphemeris carries no body frames to derive render scale");
   }
-  return earth.equatorial_radius_km / SCENE_EARTH_RADIUS;
+  const anchor = frames.reduce((a, b) =>
+    b.equatorial_radius_km > a.equatorial_radius_km ? b : a,
+  );
+  return anchor.equatorial_radius_km / SCENE_EARTH_RADIUS;
 }
 
 export function bodyMathFromFrame(frame: EphemerisBodyFrame, kmPerRenderUnit: number): BodyMath {

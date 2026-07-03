@@ -100,8 +100,8 @@ export function TerminalEditor({
             .map((entry) => ({
               value: entry.ref,
               label:
-                (entry.display_name ?? entry.id ?? entry.ref) +
-                (entry.ref.startsWith("user:") ? " (yours)" : ""),
+                (entry.ref.startsWith("user:") ? "\u2605 " : "") +
+                (entry.display_name ?? entry.id ?? entry.ref),
             })),
         ]}
       />

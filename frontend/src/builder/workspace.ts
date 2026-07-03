@@ -17,6 +17,10 @@
 import { gmstRadians } from "../sim/orbitalMath";
 
 export interface DraftOrbit {
+  /** The body this orbit is around — a bodies-catalog ref, serialized
+   *  verbatim. The runtime decides what it supports; unsupported bodies get
+   *  the resolver's typed wall, never a silent earth default. */
+  central_body: string;
   /** Circular uses altitude_km; elliptical uses perigee/apogee. One form
    *  serializes (the grammar's OrbitShape variants); the other fields are
    *  kept so switching shape kinds never loses typed values. */
@@ -246,8 +250,37 @@ export const ORBIT_PRESETS: { label: string; orbit: Partial<DraftOrbit> }[] = [
   },
 ];
 
+export const EARTH_BODY_REF = "nodalarc:bodies/earth.yaml";
+
+/** The shipped planetary-ephemeris manifest (DE440s), exactly as the
+ *  reference multi-body session declares it. A session whose orbits leave
+ *  Earth must carry a kernel manifest; the builder seeds this one and the
+ *  artifact column shows it — the resolver still validates file and
+ *  checksum server-side. */
+export const DE440S_EPHEMERIS = {
+  provider: "skyfield_bsp",
+  quality_tier: "de440s",
+  kernels: [
+    {
+      id: "de440s",
+      path: "configs/ephemerides/de440s.bsp",
+      sha256: "c1c7feeab882263fc493a9d5a5b2ddd71b54826cdf65d8d17a76126b260a49f2",
+      coverage_start: "1849-12-25T00:00:00Z",
+      coverage_end: "2150-01-21T00:00:00Z",
+      targets: ["nodalarc:bodies/earth.yaml", "nodalarc:bodies/luna.yaml"],
+      frame: "gcrs",
+    },
+  ],
+} as const;
+
+/** True when any authored orbit is around a body other than Earth. */
+export function usesNonEarthBodies(workspace: Workspace): boolean {
+  return workspace.space.some((draft) => draft.orbit.central_body !== EARTH_BODY_REF);
+}
+
 export function defaultDraftOrbit(): DraftOrbit {
   return {
+    central_body: EARTH_BODY_REF,
     shape_kind: "circular",
     altitude_km: 550,
     perigee_altitude_km: 550,
@@ -317,6 +350,8 @@ export function draftConstellationFromDocuments(
   const planes = (constellation.planes ?? {}) as Record<string, unknown>;
 
   const orbit: DraftOrbit = {
+    central_body:
+      typeof orbitRaw.central_body === "string" ? orbitRaw.central_body : EARTH_BODY_REF,
     shape_kind: "altitude_km" in shape ? "circular" : "elliptical",
     altitude_km: Number(shape.altitude_km ?? 550),
     perigee_altitude_km: Number(shape.perigee_altitude_km ?? shape.altitude_km ?? 550),
@@ -566,6 +601,7 @@ const GEO_ALTITUDE_KM = 35786;
  *  answering with mean anomaly. */
 export function isGeosynchronous(orbit: DraftOrbit): boolean {
   return (
+    orbit.central_body === EARTH_BODY_REF &&
     orbit.shape_kind === "circular" &&
     Math.abs(orbit.altitude_km - GEO_ALTITUDE_KM) <= 500
   );
@@ -601,7 +637,10 @@ export function meanAnomalyForDwell(
 }
 
 /** Orbit sanity findings: warn, never block (unusual orbits are learning
- *  paths; only the physically broken gets flagged, in plain language). */
+ *  paths; only the physically broken gets flagged, in plain language).
+ *  Altitude is body-relative already; the atmosphere check is Earth
+ *  physics and must never fire for an airless body — a 100 km lunar orbit
+ *  is a fine orbit, and a false warning is a false state display. */
 export function orbitWarnings(orbit: DraftOrbit): string[] {
   const warnings: string[] = [];
   const low =
@@ -612,7 +651,7 @@ export function orbitWarnings(orbit: DraftOrbit): string[] {
         ? "orbit is below the surface"
         : "perigee is below the surface",
     );
-  } else if (low < 160) {
+  } else if (low < 160 && orbit.central_body === EARTH_BODY_REF) {
     warnings.push(
       orbit.shape_kind === "circular"
         ? "inside the upper atmosphere — rapid decay"
@@ -1446,7 +1485,7 @@ export function toSessionDocument(workspace: Workspace): Record<string, unknown>
         node: draft.node_draft ? nodeObjectFromDraft(draft.node_draft) : draft.node_ref,
         orbit: {
           id: identifier(`${draft.segment_id}-orbit`),
-          central_body: "nodalarc:bodies/earth.yaml",
+          central_body: draft.orbit.central_body,
           epoch: workspace.start_time,
           shape:
             draft.orbit.shape_kind === "circular"
@@ -1616,5 +1655,8 @@ export function toSessionDocument(workspace: Workspace): Record<string, unknown>
       step_seconds: workspace.step_seconds,
       compression: workspace.compression,
     },
+    // Orbits beyond Earth need body frames from a kernel manifest — the
+    // resolver refuses a non-Earth session without one.
+    ...(usesNonEarthBodies(workspace) ? { ephemeris: DE440S_EPHEMERIS } : {}),
   };
 }

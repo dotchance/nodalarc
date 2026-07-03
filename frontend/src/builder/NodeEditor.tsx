@@ -60,6 +60,7 @@ export function NodeEditor({ draft, onChange, autoFocusName = false }: NodeEdito
   const [openMount, setOpenMount] = useState<string | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [pickerRole, setPickerRole] = useState<DraftTerminalMount["role"]>("access");
+  const [pickerSource, setPickerSource] = useState<"all" | "user">("all");
   const [terminalDraft, setTerminalDraft] = useState<DraftTerminal | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
 
@@ -198,8 +199,8 @@ export function NodeEditor({ draft, onChange, autoFocusName = false }: NodeEdito
               .map((entry) => ({
                 value: entry.ref,
                 label:
-                  (entry.display_name ?? entry.id ?? entry.ref) +
-                  (entry.ref.startsWith("user:") ? " (yours)" : ""),
+                  (entry.ref.startsWith("user:") ? "\u2605 " : "") +
+                  (entry.display_name ?? entry.id ?? entry.ref),
               }))}
           />
           {(() => {
@@ -242,10 +243,21 @@ export function NodeEditor({ draft, onChange, autoFocusName = false }: NodeEdito
                 {role}
               </Button>
             ))}
+            <span className="builder-source-filter" role="radiogroup" aria-label="Terminal source">
+              <Button active={pickerSource === "all"} onClick={() => setPickerSource("all")}>
+                all
+              </Button>
+              <Button active={pickerSource === "user"} onClick={() => setPickerSource("user")}>
+                ★ yours
+              </Button>
+            </span>
           </div>
           <div className="builder-terminal-picker-list">
             {terminals.entries
               .filter((entry) => !entry.error)
+              .filter(
+                (entry) => pickerSource === "all" || entry.ref.startsWith("user:"),
+              )
               .map((entry) => (
                 <button
                   key={entry.ref}
@@ -255,8 +267,8 @@ export function NodeEditor({ draft, onChange, autoFocusName = false }: NodeEdito
                 >
                   <span className="builder-terminal-option-name">
                     <span>
+                      {entry.ref.startsWith("user:") ? "\u2605 " : ""}
                       {entry.display_name ?? entry.id}
-                      {entry.ref.startsWith("user:") ? " (yours)" : ""}
                     </span>
                     <span className="builder-outline-count">add</span>
                   </span>

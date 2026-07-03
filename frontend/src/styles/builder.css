@@ -248,6 +248,7 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--bg-main);
+  box-shadow: 0 1px 3px color-mix(in srgb, var(--bg-main) 70%, transparent);
   overflow: hidden;
 }
 
@@ -269,8 +270,14 @@
 button.builder-card-head {
   cursor: pointer;
   position: relative;
+  background: var(--bg-panel-hover);
   border-left: 2px solid var(--border);
   padding-right: var(--space-6);
+}
+
+.builder-card--open > button.builder-card-head {
+  border-bottom: 1px solid var(--border);
+  border-left-color: var(--accent-amber);
 }
 
 button.builder-card-head::after {
@@ -289,7 +296,7 @@ button.builder-card-head::after {
 }
 
 button.builder-card-head:hover {
-  background: var(--bg-panel-hover);
+  background: color-mix(in srgb, var(--bg-panel-hover) 90%, var(--accent-amber));
   border-left-color: var(--accent-amber);
 }
 

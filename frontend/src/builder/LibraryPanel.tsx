@@ -107,6 +107,14 @@ export function LibraryPanel({ onUse, onCustomize, onInspect, onNew }: LibraryPa
   const catalog = useBuilderCatalog(family);
   const [importError, setImportError] = useState<string | null>(null);
   const canCustomize = config.editor;
+  // Source filter: shipped vs yours. Your saves land at the end of a long
+  // shipped list, so without this they read as missing.
+  const [source, setSource] = useState<"all" | "nodalarc" | "user">("all");
+  const visibleEntries = catalog.entries.filter(
+    (entry) =>
+      source === "all" ||
+      (source === "user") === entry.ref.startsWith("user:"),
+  );
 
   return (
     <div className="builder-outline-group" data-testid="builder-library">
@@ -126,6 +134,17 @@ export function LibraryPanel({ onUse, onCustomize, onInspect, onNew }: LibraryPa
       </div>
       <div className="builder-preset-row">
         {config.editor && <Button onClick={() => onNew(family)}>+ new</Button>}
+        <span className="builder-source-filter" role="radiogroup" aria-label="Library source">
+          <Button active={source === "all"} onClick={() => setSource("all")}>
+            all
+          </Button>
+          <Button active={source === "nodalarc"} onClick={() => setSource("nodalarc")}>
+            nodalarc
+          </Button>
+          <Button active={source === "user"} onClick={() => setSource("user")}>
+            ★ yours
+          </Button>
+        </span>
         <label className="builder-import-label">
           import file…
           <input
@@ -151,7 +170,12 @@ export function LibraryPanel({ onUse, onCustomize, onInspect, onNew }: LibraryPa
       {importError && <div className="builder-warning">{importError}</div>}
       {catalog.error && <div className="builder-warning">{catalog.error}</div>}
       <div className="builder-library-list">
-        {catalog.entries.map((entry) => {
+        {visibleEntries.length === 0 && source === "user" && (
+          <div className="builder-zone-empty">
+            nothing of yours in this family yet — + new or save from an editor
+          </div>
+        )}
+        {visibleEntries.map((entry) => {
           const yours = entry.ref.startsWith("user:");
           if (entry.error) {
             return (

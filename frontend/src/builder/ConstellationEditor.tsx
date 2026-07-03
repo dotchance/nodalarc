@@ -22,6 +22,7 @@ import {
   useBuilderCatalog,
 } from "./useBuilderWorld";
 import {
+  EARTH_BODY_REF,
   ORBIT_PRESETS,
   draftNodeFromDocument,
   dwellLongitudeDeg,
@@ -47,6 +48,12 @@ interface ConstellationEditorProps {
   onConnect: (targetSegmentId: string) => void;
 }
 
+/** "nodalarc:bodies/luna.yaml" -> "luna" for the card's spec line. */
+function bodyShortName(ref: string): string {
+  const base = ref.split("/").pop() ?? ref;
+  return base.replace(/\.ya?ml$/, "");
+}
+
 export function ConstellationEditor({
   draft,
   onUpdate,
@@ -59,6 +66,7 @@ export function ConstellationEditor({
 }: ConstellationEditorProps) {
   const [openCard, setOpenCard] = useState<string | null>("orbit");
   const nodes = useBuilderCatalog("nodes");
+  const bodies = useBuilderCatalog("bodies");
   const warnings = orbitWarnings(draft.orbit);
   const toggle = (id: string) => setOpenCard((prev) => (prev === id ? null : id));
   const [forkError, setForkError] = useState<string | null>(null);
@@ -130,17 +138,37 @@ export function ConstellationEditor({
               ? `${Math.round(draft.orbit.altitude_km)} km circular`
               : `${Math.round(draft.orbit.perigee_altitude_km)} × ${Math.round(draft.orbit.apogee_altitude_km)} km`}{" "}
             · {draft.orbit.inclination_deg.toFixed(1)}°
+            {draft.orbit.central_body !== EARTH_BODY_REF &&
+              ` · ${bodyShortName(draft.orbit.central_body)}`}
           </span>
         </button>
         {openCard === "orbit" && (
           <div className="builder-card-body">
-            <div className="builder-preset-row">
-              {ORBIT_PRESETS.map((preset) => (
-                <Button key={preset.label} onClick={() => onUpdateOrbit(preset.orbit)}>
-                  {preset.label}
-                </Button>
-              ))}
-            </div>
+            <SelectField
+              label="around"
+              ariaLabel="Central body"
+              value={draft.orbit.central_body}
+              onChange={(central_body) => onUpdateOrbit({ central_body })}
+              options={
+                bodies.entries.filter((entry) => !entry.error).length > 0
+                  ? bodies.entries
+                      .filter((entry) => !entry.error)
+                      .map((entry) => ({
+                        value: entry.ref,
+                        label: entry.display_name ?? entry.id ?? entry.ref,
+                      }))
+                  : [{ value: draft.orbit.central_body, label: draft.orbit.central_body }]
+              }
+            />
+            {draft.orbit.central_body === EARTH_BODY_REF && (
+              <div className="builder-preset-row">
+                {ORBIT_PRESETS.map((preset) => (
+                  <Button key={preset.label} onClick={() => onUpdateOrbit(preset.orbit)}>
+                    {preset.label}
+                  </Button>
+                ))}
+              </div>
+            )}
             <div className="builder-preset-row" role="radiogroup" aria-label="Orbit shape">
               <Button
                 active={draft.orbit.shape_kind === "circular"}
@@ -324,8 +352,8 @@ export function ConstellationEditor({
                     .map((entry) => ({
                       value: entry.ref,
                       label:
-                        (entry.display_name ?? entry.id ?? entry.ref) +
-                        (entry.ref.startsWith("user:") ? " (yours)" : ""),
+                        (entry.ref.startsWith("user:") ? "\u2605 " : "") +
+                        (entry.display_name ?? entry.id ?? entry.ref),
                     }))}
                 />
                 <div className="builder-preset-row">

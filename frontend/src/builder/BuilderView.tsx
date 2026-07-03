@@ -18,6 +18,7 @@ import { Scene } from "../globe/r3f/Scene";
 import { VisualizationErrorBoundary } from "../globe/VisualizationErrorBoundary";
 import { buildRegimeIndex } from "../taxonomy/regime";
 import { Button, IconButton } from "../ui/Button";
+import { FloatingWindow } from "../ui/FloatingWindow";
 import type { GlobeActions } from "../globe/actions";
 import type {
   ColorMode,
@@ -140,6 +141,39 @@ function count(n: number, word: string): string {
   return `${n} ${word}${n === 1 ? "" : "s"}`;
 }
 
+/** A floating editor window's target — one per object, keyed. */
+type EditorTarget =
+  | { kind: "session" }
+  | { kind: "segment"; id: string }
+  | { kind: "ground"; id: string }
+  | { kind: "link"; id: string }
+  | { kind: "domain"; id: string }
+  | { kind: "boundary"; id: string }
+  | { kind: "inspect"; ref: string; document: Record<string, unknown> }
+  | { kind: "node-view"; nodeId: string }
+  | { kind: "library" };
+
+interface EditorWindow {
+  key: string;
+  target: EditorTarget;
+  x: number;
+  y: number;
+}
+
+function targetKey(target: EditorTarget): string {
+  switch (target.kind) {
+    case "session":
+    case "library":
+      return target.kind;
+    case "inspect":
+      return `inspect:${target.ref}`;
+    case "node-view":
+      return `node:${target.nodeId}`;
+    default:
+      return `${target.kind}:${target.id}`;
+  }
+}
+
 function groupByBody(segments: SegmentSummary[]): [string, SegmentSummary[]][] {
   const byBody = new Map<string, SegmentSummary[]>();
   for (const seg of segments) {
@@ -219,11 +253,28 @@ export function BuilderView({
   } = useWorkspace(resolveDocument);
   const nodeCatalog = useBuilderCatalog("nodes");
   const terminalCatalog = useBuilderCatalog("terminals");
-  const [editingSegment, setEditingSegment] = useState<string | null>(null);
-  const [editingLink, setEditingLink] = useState<string | null>(null);
-  const [editingDomain, setEditingDomain] = useState<string | null>(null);
-  const [editingBoundary, setEditingBoundary] = useState<string | null>(null);
-  const [editingSession, setEditingSession] = useState(false);
+  // The diagram workspace: editors are floating, anchored windows — many
+  // can be open at once, keyed per object (re-open focuses, IG-4/IG-12).
+  const [windows, setWindows] = useState<EditorWindow[]>([]);
+  const openEditor = (target: EditorTarget) => {
+    const key = targetKey(target);
+    setWindows((prev) => {
+      const existing = prev.find((w) => w.key === key);
+      if (existing) {
+        // Focus = move to the top of the stack; refresh the target payload.
+        return [...prev.filter((w) => w.key !== key), { ...existing, target }];
+      }
+      const n = prev.length;
+      return [
+        ...prev,
+        { key, target, x: 440 + (n % 6) * 40, y: 84 + (n % 6) * 32 },
+      ];
+    });
+  };
+  const closeWindow = (key: string) => {
+    setWindows((prev) => prev.filter((w) => w.key !== key));
+  };
+  const isOpen = (key: string) => windows.some((w) => w.key === key);
   // Trust mechanics: Ctrl/Cmd+Z undoes the last workspace mutation unless
   // the user is typing in a field (native input undo wins there).
   useEffect(() => {
@@ -239,17 +290,8 @@ export function BuilderView({
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [undo]);
   // IG-2: the object a create gesture just made — its editor focuses the
-  // name once; any navigation clears it.
+  // name once.
   const [freshId, setFreshId] = useState<string | null>(null);
-  const closeEditors = () => {
-    setEditingSegment(null);
-    setEditingLink(null);
-    setEditingDomain(null);
-    setEditingBoundary(null);
-    setEditingSession(false);
-    setFreshId(null);
-  };
-  const [showYaml, setShowYaml] = useState(false);
   const [saveState, setSaveState] = useState<
     | { kind: "idle" }
     | { kind: "saving" }
@@ -268,10 +310,6 @@ export function BuilderView({
   const [libraryNodeSave, setLibraryNodeSave] = useState<
     { kind: "idle" } | { kind: "conflict" } | { kind: "failed"; message: string }
   >({ kind: "idle" });
-  const [catalogInspect, setCatalogInspect] = useState<{
-    ref: string;
-    document: Record<string, unknown>;
-  } | null>(null);
   const [libraryError, setLibraryError] = useState<string | null>(null);
 
   // The Library's per-entry gestures. USE places the block in the session
@@ -279,9 +317,6 @@ export function BuilderView({
   // editable draft; clicking the row inspects it.
   const handleLibraryUse = (entry: BuilderCatalogEntry) => {
     setLibraryError(null);
-    setLibraryEditor(null);
-    setCatalogInspect(null);
-    setEditingSession(false);
     if (entry.family === "constellations") {
       addConstellationRef(entry.ref, entry.display_name ?? entry.id ?? entry.ref);
     } else if (entry.family === "site-sets") {
@@ -298,13 +333,10 @@ export function BuilderView({
 
   const handleLibraryCustomize = async (entry: BuilderCatalogEntry) => {
     setLibraryError(null);
-    setCatalogInspect(null);
-    setEditingSession(false);
     try {
       const { document } = await readCatalogObject(entry.ref);
       if (entry.family === "terminals") {
         const seeded = draftTerminalFromDocument(document);
-        setEditingSegment(null);
         setLibraryEditor({
           kind: "terminal",
           draft: {
@@ -313,9 +345,9 @@ export function BuilderView({
             display_name: `${seeded.display_name} (custom)`,
           },
         });
+        openEditor({ kind: "library" });
       } else if (entry.family === "nodes") {
         const seeded = draftNodeFromDocument(document);
-        setEditingSegment(null);
         setLibraryEditor({
           kind: "node",
           draft: {
@@ -324,6 +356,7 @@ export function BuilderView({
             display_name: `${seeded.display_name} (custom)`,
           },
         });
+        openEditor({ kind: "library" });
       } else if (entry.family === "constellations") {
         const constellation = (document as { constellation?: { orbit?: unknown } })
           .constellation;
@@ -333,17 +366,14 @@ export function BuilderView({
           ? (await readCatalogObject(orbitRef)).document
           : null;
         const draft = draftConstellationFromDocuments(document, orbitDocument);
-        setLibraryEditor(null);
         addDraft(draft);
-        setEditingSegment(draft.segment_id);
+        openEditor({ kind: "segment", id: draft.segment_id });
       } else if (entry.family === "site-sets") {
         const draft = await forkGroundSet(entry.ref);
-        setLibraryEditor(null);
         addGroundDraft(draft);
-        setEditingSegment(draft.segment_id);
+        openEditor({ kind: "ground", id: draft.segment_id });
       } else if (entry.family === "sites") {
         const seeded = draftSiteFromDocument(document);
-        setEditingSegment(null);
         setLibraryEditor({
           kind: "site",
           draft: {
@@ -352,6 +382,7 @@ export function BuilderView({
             display_name: `${seeded.display_name} (custom)`,
           },
         });
+        openEditor({ kind: "library" });
       }
     } catch (e) {
       setLibraryError(e instanceof Error ? e.message : String(e));
@@ -379,12 +410,9 @@ export function BuilderView({
 
   const handleLibraryInspect = async (entry: BuilderCatalogEntry) => {
     setLibraryError(null);
-    setEditingSession(false);
     try {
       const { document } = await readCatalogObject(entry.ref);
-      setLibraryEditor(null);
-      setEditingSegment(null);
-      setCatalogInspect({ ref: entry.ref, document });
+      openEditor({ kind: "inspect", ref: entry.ref, document });
     } catch (e) {
       setLibraryError(e instanceof Error ? e.message : String(e));
     }
@@ -392,20 +420,16 @@ export function BuilderView({
 
   const handleLibraryNew = (family: string) => {
     setLibraryError(null);
-    setCatalogInspect(null);
-    setEditingSession(false);
     if (family === "terminals") {
-      setEditingSegment(null);
       setLibraryEditor({ kind: "terminal", draft: defaultDraftTerminal() });
+      openEditor({ kind: "library" });
     } else if (family === "nodes") {
-      setEditingSegment(null);
       setLibraryEditor({ kind: "node", draft: defaultDraftNode() });
+      openEditor({ kind: "library" });
     } else if (family === "constellations" && defaultNodeRef) {
       const draft = newDraftConstellation(defaultNodeRef);
-      setLibraryEditor(null);
-      closeEditors();
       addDraft(draft);
-      setEditingSegment(draft.segment_id);
+      openEditor({ kind: "segment", id: draft.segment_id });
       setFreshId(draft.segment_id);
     } else if (family === "sites" && defaultGroundNodeRef) {
       void (async () => {
@@ -415,11 +439,11 @@ export function BuilderView({
           const mounts = (
             (node?.terminals as Record<string, unknown>[] | undefined) ?? []
           ).map((mount) => [String(mount.id), Number(mount.count ?? 1)] as const);
-          setEditingSegment(null);
           setLibraryEditor({
             kind: "site",
             draft: newDraftSiteObject(defaultGroundNodeRef, Object.fromEntries(mounts)),
           });
+          openEditor({ kind: "library" });
         } catch (e) {
           setLibraryError(e instanceof Error ? e.message : String(e));
         }
@@ -438,9 +462,9 @@ export function BuilderView({
             defaultGroundNodeRef,
             Object.fromEntries(mounts),
           );
-          setLibraryEditor(null);
           addGroundDraft(draft);
-          setEditingSegment(draft.segment_id);
+          openEditor({ kind: "ground", id: draft.segment_id });
+          setFreshId(draft.segment_id);
         } catch (e) {
           setLibraryError(e instanceof Error ? e.message : String(e));
         }
@@ -451,18 +475,14 @@ export function BuilderView({
   // exists, physics derived from the resolved world's faceplates.
   const segmentCapabilities = useMemo(() => capabilitiesBySegment(world), [world]);
   const openRule = (ruleId: string) => {
-    setLibraryEditor(null);
-    closeEditors();
-    setEditingLink(ruleId);
+    openEditor({ kind: "link", id: ruleId });
   };
   const connect = (fromSegmentId: string, targetSegmentId: string) => {
     if (!workspace) return;
     try {
       const rule = connectSegments(workspace, world, fromSegmentId, targetSegmentId);
       addLinkRule(rule);
-      setLibraryEditor(null);
-      closeEditors();
-      setEditingLink(rule.rule_id);
+      openEditor({ kind: "link", id: rule.rule_id });
       setFreshId(rule.rule_id);
     } catch (e) {
       setLibraryError(e instanceof Error ? e.message : String(e));
@@ -481,6 +501,282 @@ export function BuilderView({
     nodeCatalog.entries.find((e) => !e.error && e.ref.includes("nodes/ground/"))?.ref ??
     nodeCatalog.entries.find((e) => !e.error)?.ref ??
     null;
+  /** The body of one floating editor window. Null = the object no longer
+   *  exists (undo, removal); the window simply doesn't render. */
+  function renderWindow(
+    target: EditorTarget,
+  ): { title: string; content: React.ReactNode } | null {
+    if (!workspace && target.kind !== "inspect" && target.kind !== "node-view") return null;
+    switch (target.kind) {
+      case "session":
+        return workspace
+          ? {
+              title: `Session · ${workspace.name}`,
+              content: <SessionEditor workspace={workspace} onUpdate={updateSession} />,
+            }
+          : null;
+      case "segment": {
+        const draft = workspace?.space.find((d) => d.segment_id === target.id);
+        if (!workspace || !draft) return null;
+        return {
+          title: draft.display_name,
+          content: (
+            <ConstellationEditor
+              key={draft.segment_id}
+              autoFocusName={freshId === draft.segment_id}
+              workspace={workspace}
+              onOpenRule={openRule}
+              onConnect={(other) => connect(draft.segment_id, other)}
+              draft={draft}
+              onUpdate={(patch) => updateConstellation(draft.segment_id, patch)}
+              onUpdateOrbit={(patch) => updateOrbit(draft.segment_id, patch)}
+              onRemove={() => {
+                removeConstellation(draft.segment_id);
+                closeWindow(targetKey(target));
+              }}
+            />
+          ),
+        };
+      }
+      case "ground": {
+        const draft = workspace?.ground.find((d) => d.segment_id === target.id);
+        if (!workspace || !draft) return null;
+        return {
+          title: draft.display_name,
+          content: (
+            <GroundEditor
+              key={draft.segment_id}
+              autoFocusName={freshId === draft.segment_id}
+              workspace={workspace}
+              onOpenRule={openRule}
+              onConnect={(other) => connect(draft.segment_id, other)}
+              draft={draft}
+              onUpdate={(patch) => updateGroundDraft(draft.segment_id, patch)}
+              onRemove={() => {
+                removeGroundDraft(draft.segment_id);
+                closeWindow(targetKey(target));
+              }}
+            />
+          ),
+        };
+      }
+      case "link": {
+        const rule = workspace?.links.find((r) => r.rule_id === target.id);
+        if (!workspace || !rule) return null;
+        return {
+          title: rule.label || rule.rule_id,
+          content: (
+            <LinkRuleEditor
+              key={rule.rule_id}
+              autoFocusName={freshId === rule.rule_id}
+              workspace={workspace}
+              rule={rule}
+              capabilities={segmentCapabilities}
+              onRepoint={(side, newSegmentId) => {
+                const { patch, notice } = rederiveRule(
+                  workspace,
+                  world,
+                  rule,
+                  side,
+                  newSegmentId,
+                );
+                updateLinkRule(rule.rule_id, patch);
+                return notice;
+              }}
+              onUpdate={(patch) => updateLinkRule(rule.rule_id, patch)}
+              onUpdateEndpoint={(side, patch) =>
+                updateLinkEndpoint(rule.rule_id, side, patch)
+              }
+              onRemove={() => {
+                removeLinkRule(rule.rule_id);
+                closeWindow(targetKey(target));
+              }}
+            />
+          ),
+        };
+      }
+      case "domain": {
+        const domain = workspace?.routing_domains.find(
+          (d) => d.domain_id === target.id,
+        );
+        if (!workspace || !domain) return null;
+        return {
+          title: domain.label,
+          content: (
+            <RoutingDomainEditor
+              key={domain.domain_id}
+              autoFocusName={freshId === domain.domain_id}
+              workspace={workspace}
+              domain={domain}
+              onUpdate={(patch) => updateRoutingDomain(domain.domain_id, patch)}
+              onRemove={() => {
+                removeRoutingDomain(domain.domain_id);
+                closeWindow(targetKey(target));
+              }}
+            />
+          ),
+        };
+      }
+      case "boundary": {
+        const boundary = workspace?.boundaries.find(
+          (b) => b.boundary_id === target.id,
+        );
+        if (!workspace || !boundary) return null;
+        return {
+          title: "Boundary",
+          content: (
+            <BoundaryEditor
+              key={boundary.boundary_id}
+              workspace={workspace}
+              boundary={boundary}
+              onUpdate={(patch) => updateBoundary(boundary.boundary_id, patch)}
+              onRemove={() => {
+                removeBoundary(boundary.boundary_id);
+                closeWindow(targetKey(target));
+              }}
+            />
+          ),
+        };
+      }
+      case "inspect":
+        return {
+          title: target.ref,
+          content: <CatalogObjectView refStr={target.ref} document={target.document} />,
+        };
+      case "node-view": {
+        const node = world?.nodes.find((n) => n.node_id === target.nodeId);
+        if (!world || !node) return null;
+        const owner =
+          workspace?.space.find((d) => d.segment_id === node.segment_id) ??
+          workspace?.ground.find((d) => d.segment_id === node.segment_id);
+        const ownerKind = workspace?.space.some((d) => d.segment_id === node.segment_id)
+          ? ("segment" as const)
+          : ("ground" as const);
+        return {
+          title: node.node_id,
+          content: (
+            <div className="builder-inspector-stack">
+              <BuilderInspector node={node} ephemeris={world.ephemeris} />
+              {owner ? (
+                <Button
+                  onClick={() => openEditor({ kind: ownerKind, id: node.segment_id })}
+                >
+                  Edit {"display_name" in owner ? owner.display_name : node.segment_id}
+                </Button>
+              ) : (
+                <div className="builder-zone-empty">
+                  placed by reference — customize the block to edit it
+                </div>
+              )}
+            </div>
+          ),
+        };
+      }
+      case "library": {
+        if (!libraryEditor) return null;
+        if (libraryEditor.kind === "terminal") {
+          return {
+            title: "New terminal",
+            content: (
+              <TerminalEditor
+                draft={libraryEditor.draft}
+                onChange={(draft) => setLibraryEditor({ kind: "terminal", draft })}
+                catalog={terminalCatalog.entries}
+                onSaved={() => {
+                  setLibraryEditor(null);
+                  closeWindow("library");
+                  void terminalCatalog.refresh();
+                }}
+                onCancel={() => {
+                  setLibraryEditor(null);
+                  closeWindow("library");
+                }}
+              />
+            ),
+          };
+        }
+        if (libraryEditor.kind === "site") {
+          return {
+            title: "New site",
+            content: (
+              <SiteEditor
+                key="library-site"
+                autoFocusName
+                site={libraryEditor.draft}
+                onUpdate={(patch) =>
+                  setLibraryEditor({
+                    kind: "site",
+                    draft: { ...libraryEditor.draft, ...patch },
+                  })
+                }
+                onClose={() => {
+                  setLibraryEditor(null);
+                  closeWindow("library");
+                }}
+              />
+            ),
+          };
+        }
+        return {
+          title: "New node",
+          content: (
+            <div className="builder-inspector-stack">
+              <NodeEditor
+                key="library-node"
+                autoFocusName
+                draft={libraryEditor.draft}
+                onChange={(draft) => setLibraryEditor({ kind: "node", draft })}
+              />
+              <div className="builder-preset-row">
+                <Button
+                  variant="primary"
+                  onClick={async () => {
+                    try {
+                      await saveUserObject(
+                        "nodes",
+                        { node: nodeObjectFromDraft(libraryEditor.draft) },
+                        { overwrite: libraryNodeSave.kind === "conflict" },
+                      );
+                      setLibraryEditor(null);
+                      closeWindow("library");
+                      setLibraryNodeSave({ kind: "idle" });
+                      void nodeCatalog.refresh();
+                    } catch (e) {
+                      const status = (e as Error & { status?: number }).status;
+                      if (status === 409 && libraryNodeSave.kind !== "conflict") {
+                        setLibraryNodeSave({ kind: "conflict" });
+                      } else {
+                        setLibraryNodeSave({
+                          kind: "failed",
+                          message: e instanceof Error ? e.message : String(e),
+                        });
+                      }
+                    }
+                  }}
+                >
+                  {libraryNodeSave.kind === "conflict"
+                    ? "Overwrite in library?"
+                    : "Save node to library"}
+                </Button>
+                <Button
+                  onClick={() => {
+                    setLibraryEditor(null);
+                    closeWindow("library");
+                  }}
+                >
+                  Cancel
+                </Button>
+              </div>
+              {libraryNodeSave.kind === "failed" && (
+                <div className="builder-warning">{libraryNodeSave.message}</div>
+              )}
+            </div>
+          ),
+        };
+      }
+    }
+  }
+
   // Ground segments enumerate their members in the tree (small, placed sets —
   // click-at-your-granularity). Space segments stay aggregates; individual
   // satellites are spot-checked on the canvas, not listed 176-deep.
@@ -548,7 +844,6 @@ export function BuilderView({
               onClick={() => {
                 clear();
                 setSelection(null);
-                setEditingSegment(null);
                 startNew("untitled-session");
               }}
             >
@@ -560,7 +855,6 @@ export function BuilderView({
                 onClick={() => {
                   clear();
                   setSelection(null);
-                  closeEditors();
                   restoreAutosave();
                 }}
               >
@@ -588,7 +882,7 @@ export function BuilderView({
             disabled={!selectedFile || loading}
             onClick={() => {
               closeWorkspace();
-              setEditingSegment(null);
+              setWindows([]);
               loadSession(selectedFile);
             }}
           >
@@ -598,13 +892,9 @@ export function BuilderView({
         {workspace && (
           <div className="builder-outline-group" data-testid="builder-drafts">
             <button
-              className={`builder-outline-row${editingSession ? " builder-outline-row--selected" : ""}`}
+              className={`builder-outline-row${isOpen("session") ? " builder-outline-row--selected" : ""}`}
               title="Session settings — name, time, candidate budget"
-              onClick={() => {
-                setLibraryEditor(null);
-                closeEditors();
-                setEditingSession(true);
-              }}
+              onClick={() => openEditor({ kind: "session" })}
             >
               <span className="builder-outline-kind">Drafts · {workspace.name}</span>
               <span className="builder-outline-count">
@@ -644,8 +934,7 @@ export function BuilderView({
                           );
                           removeRefSegment(placed.segment_id);
                           addDraft(draft);
-                          setLibraryEditor(null);
-                          setEditingSegment(draft.segment_id);
+                          openEditor({ kind: "segment", id: draft.segment_id });
                         } catch (e) {
                           setLibraryError(e instanceof Error ? e.message : String(e));
                         }
@@ -664,16 +953,12 @@ export function BuilderView({
             {workspace.space.map((draft) => (
               <button
                 className={`builder-outline-row builder-outline-row--segment${
-                  editingSegment === draft.segment_id
+                  isOpen(`segment:${draft.segment_id}`)
                     ? " builder-outline-row--selected"
                     : ""
                 }`}
                 key={draft.segment_id}
-                onClick={() => {
-                  setLibraryEditor(null);
-                  closeEditors();
-                  setEditingSegment(draft.segment_id);
-                }}
+                onClick={() => openEditor({ kind: "segment", id: draft.segment_id })}
                 title={`Edit ${draft.display_name}`}
               >
                 <span className="builder-outline-name builder-outline-name--space">
@@ -718,8 +1003,7 @@ export function BuilderView({
                         try {
                           const draft = await forkGroundSet(placed.ref);
                           replaceGroundRefWithDraft(placed.segment_id, draft);
-                          setLibraryEditor(null);
-                          setEditingSegment(draft.segment_id);
+                          openEditor({ kind: "ground", id: draft.segment_id });
                         } catch (e) {
                           setLibraryError(e instanceof Error ? e.message : String(e));
                         }
@@ -738,16 +1022,12 @@ export function BuilderView({
             {workspace.ground.map((draft) => (
               <button
                 className={`builder-outline-row builder-outline-row--segment${
-                  editingSegment === draft.segment_id
+                  isOpen(`ground:${draft.segment_id}`)
                     ? " builder-outline-row--selected"
                     : ""
                 }`}
                 key={draft.segment_id}
-                onClick={() => {
-                  setLibraryEditor(null);
-                  closeEditors();
-                  setEditingSegment(draft.segment_id);
-                }}
+                onClick={() => openEditor({ kind: "ground", id: draft.segment_id })}
                 title={`Edit ${draft.display_name}`}
               >
                 <span className="builder-outline-name builder-outline-name--ground">
@@ -765,14 +1045,10 @@ export function BuilderView({
             {workspace.links.map((rule) => (
               <button
                 className={`builder-outline-row builder-outline-row--segment${
-                  editingLink === rule.rule_id ? " builder-outline-row--selected" : ""
+                  isOpen(`link:${rule.rule_id}`) ? " builder-outline-row--selected" : ""
                 }`}
                 key={rule.rule_id}
-                onClick={() => {
-                  setLibraryEditor(null);
-                  closeEditors();
-                  setEditingLink(rule.rule_id);
-                }}
+                onClick={() => openEditor({ kind: "link", id: rule.rule_id })}
                 title={`Edit ${rule.label || rule.rule_id}`}
               >
                 <span className="builder-outline-name">
@@ -797,16 +1073,12 @@ export function BuilderView({
             {workspace.routing_domains.map((domain) => (
               <button
                 className={`builder-outline-row builder-outline-row--segment${
-                  editingDomain === domain.domain_id
+                  isOpen(`domain:${domain.domain_id}`)
                     ? " builder-outline-row--selected"
                     : ""
                 }`}
                 key={domain.domain_id}
-                onClick={() => {
-                  setLibraryEditor(null);
-                  closeEditors();
-                  setEditingDomain(domain.domain_id);
-                }}
+                onClick={() => openEditor({ kind: "domain", id: domain.domain_id })}
                 title={`Edit ${domain.label}`}
               >
                 <span className="builder-outline-name">
@@ -823,16 +1095,12 @@ export function BuilderView({
               return (
                 <button
                   className={`builder-outline-row builder-outline-row--segment${
-                    editingBoundary === boundary.boundary_id
+                    isOpen(`boundary:${boundary.boundary_id}`)
                       ? " builder-outline-row--selected"
                       : ""
                   }`}
                   key={boundary.boundary_id}
-                  onClick={() => {
-                    setLibraryEditor(null);
-                    closeEditors();
-                    setEditingBoundary(boundary.boundary_id);
-                  }}
+                  onClick={() => openEditor({ kind: "boundary", id: boundary.boundary_id })}
                   title="Edit boundary"
                 >
                   <span className="builder-outline-name">
@@ -850,9 +1118,7 @@ export function BuilderView({
                   onClick={() => {
                     const domain = defaultRoutingDomain(workspace);
                     addRoutingDomain(domain);
-                    setLibraryEditor(null);
-                    closeEditors();
-                    setEditingDomain(domain.domain_id);
+                    openEditor({ kind: "domain", id: domain.domain_id });
                     setFreshId(domain.domain_id);
                   }}
                 >
@@ -873,9 +1139,7 @@ export function BuilderView({
                     );
                     if (fixed) boundary.over_rule_id = fixed.rule_id;
                     addBoundary(boundary);
-                    setLibraryEditor(null);
-                    closeEditors();
-                    setEditingBoundary(boundary.boundary_id);
+                    openEditor({ kind: "boundary", id: boundary.boundary_id });
                   }}
                 >
                   + boundary
@@ -892,10 +1156,8 @@ export function BuilderView({
               onClick={() => {
                 if (!defaultNodeRef) return;
                 const draft = newDraftConstellation(defaultNodeRef);
-                setLibraryEditor(null);
-                closeEditors();
                 addDraft(draft);
-                setEditingSegment(draft.segment_id);
+                openEditor({ kind: "segment", id: draft.segment_id });
                 setFreshId(draft.segment_id);
               }}
             >
@@ -1016,6 +1278,7 @@ export function BuilderView({
                                   n.kind === "satellite" ? "satellite" : "ground_station",
                                 id: n.node_id,
                               });
+                              openEditor({ kind: "node-view", nodeId: n.node_id });
                               actionsRef.current?.focusNode(n.node_id);
                             }}
                             title={`Select ${n.node_id}`}
@@ -1069,7 +1332,10 @@ export function BuilderView({
               regimeById={regimeById}
               showTrails={showTrails}
               selection={selection}
-              onSelect={setSelection}
+              onSelect={(next) => {
+                setSelection(next);
+                if (next) openEditor({ kind: "node-view", nodeId: next.id });
+              }}
               actionsRef={actionsRef}
               liveExplain={false}
               worldLayers={<CandidateLines pairs={visiblePairs} />}
@@ -1095,7 +1361,6 @@ export function BuilderView({
               onClick={() => {
                 clear();
                 setSelection(null);
-                setEditingSegment(null);
                 startNew("untitled-session");
               }}
             >
@@ -1107,246 +1372,54 @@ export function BuilderView({
             </div>
           </div>
         )}
-        {showYaml && documentYaml && (
-          <div className="builder-yaml-pane" data-testid="builder-yaml">
-            <div className="builder-yaml-head">
-              <span className="builder-zone-title">Session YAML</span>
-              <span className="builder-yaml-actions">
-                <Button onClick={() => navigator.clipboard?.writeText(documentYaml)}>
-                  Copy
-                </Button>
-                <Button
-                  onClick={() => {
-                    const blob = new Blob([documentYaml], { type: "text/yaml" });
-                    const url = URL.createObjectURL(blob);
-                    const a = document.createElement("a");
-                    a.href = url;
-                    a.download = `${world?.session.name ?? "session"}.yaml`;
-                    a.click();
-                    URL.revokeObjectURL(url);
-                  }}
-                >
-                  Download
-                </Button>
-              </span>
+      </div>
+      <div data-testid="builder-windows">
+        {windows.map((win) => {
+          const body = renderWindow(win.target);
+          if (!body) return null;
+          return (
+            <FloatingWindow
+              key={win.key}
+              title={body.title}
+              onClose={() => closeWindow(win.key)}
+              initial={{ x: win.x, y: win.y, w: 380, h: 560 }}
+              minWidth={320}
+              minHeight={240}
+            >
+              <div className="builder-window-body">{body.content}</div>
+            </FloatingWindow>
+          );
+        })}
+      </div>
+      <div className="builder-inspector" data-testid="builder-yaml">
+        <div className="builder-zone-title">Session YAML</div>
+        {documentYaml ? (
+          <>
+            <div className="builder-preset-row">
+              <Button onClick={() => navigator.clipboard?.writeText(documentYaml)}>
+                Copy
+              </Button>
+              <Button
+                onClick={() => {
+                  const blob = new Blob([documentYaml], { type: "text/yaml" });
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement("a");
+                  a.href = url;
+                  a.download = `${world?.session.name ?? "session"}.yaml`;
+                  a.click();
+                  URL.revokeObjectURL(url);
+                }}
+              >
+                Download
+              </Button>
             </div>
             <pre className="builder-yaml-body">{documentYaml}</pre>
+          </>
+        ) : (
+          <div className="builder-zone-empty">
+            The artifact appears here as soon as a draft resolves.
           </div>
         )}
-      </div>
-      <div className="builder-inspector" data-testid="builder-inspector">
-        <div className="builder-zone-title">Inspector</div>
-        {(() => {
-          if (libraryEditor?.kind === "terminal") {
-            return (
-              <div className="builder-inspector-stack">
-                <div className="builder-outline-kind">New terminal</div>
-                <TerminalEditor
-                  draft={libraryEditor.draft}
-                  onChange={(draft) => setLibraryEditor({ kind: "terminal", draft })}
-                  catalog={terminalCatalog.entries}
-                  onSaved={() => {
-                    setLibraryEditor(null);
-                    void terminalCatalog.refresh();
-                  }}
-                  onCancel={() => setLibraryEditor(null)}
-                />
-              </div>
-            );
-          }
-          if (libraryEditor?.kind === "site") {
-            return (
-              <div className="builder-inspector-stack">
-                <div className="builder-outline-kind">New site</div>
-                <SiteEditor
-                  key="library-site"
-                  autoFocusName
-                  site={libraryEditor.draft}
-                  onUpdate={(patch) =>
-                    setLibraryEditor({
-                      kind: "site",
-                      draft: { ...libraryEditor.draft, ...patch },
-                    })
-                  }
-                  onClose={() => setLibraryEditor(null)}
-                />
-              </div>
-            );
-          }
-          if (libraryEditor?.kind === "node") {
-            return (
-              <div className="builder-inspector-stack">
-                <div className="builder-outline-kind">New node</div>
-                <NodeEditor
-                  key="library-node"
-                  autoFocusName
-                  draft={libraryEditor.draft}
-                  onChange={(draft) => setLibraryEditor({ kind: "node", draft })}
-                />
-                <div className="builder-preset-row">
-                  <Button
-                    variant="primary"
-                    onClick={async () => {
-                      try {
-                        await saveUserObject(
-                          "nodes",
-                          { node: nodeObjectFromDraft(libraryEditor.draft) },
-                          { overwrite: libraryNodeSave.kind === "conflict" },
-                        );
-                        setLibraryEditor(null);
-                        setLibraryNodeSave({ kind: "idle" });
-                        void nodeCatalog.refresh();
-                      } catch (e) {
-                        const status = (e as Error & { status?: number }).status;
-                        if (status === 409 && libraryNodeSave.kind !== "conflict") {
-                          setLibraryNodeSave({ kind: "conflict" });
-                        } else {
-                          setLibraryNodeSave({
-                            kind: "failed",
-                            message: e instanceof Error ? e.message : String(e),
-                          });
-                        }
-                      }
-                    }}
-                  >
-                    {libraryNodeSave.kind === "conflict"
-                      ? "Overwrite in library?"
-                      : "Save node to library"}
-                  </Button>
-                  <Button onClick={() => setLibraryEditor(null)}>Cancel</Button>
-                </div>
-                {libraryNodeSave.kind === "failed" && (
-                  <div className="builder-warning">{libraryNodeSave.message}</div>
-                )}
-              </div>
-            );
-          }
-          if (catalogInspect) {
-            return (
-              <CatalogObjectView
-                refStr={catalogInspect.ref}
-                document={catalogInspect.document}
-              />
-            );
-          }
-          if (workspace && editingSession) {
-            return <SessionEditor workspace={workspace} onUpdate={updateSession} />;
-          }
-          const draft = workspace?.space.find((d) => d.segment_id === editingSegment);
-          if (workspace && draft) {
-            return (
-              <ConstellationEditor
-                key={draft.segment_id}
-                autoFocusName={freshId === draft.segment_id}
-                workspace={workspace}
-                onOpenRule={openRule}
-                onConnect={(target) => connect(draft.segment_id, target)}
-                draft={draft}
-                onUpdate={(patch) => updateConstellation(draft.segment_id, patch)}
-                onUpdateOrbit={(patch) => updateOrbit(draft.segment_id, patch)}
-                onRemove={() => {
-                  removeConstellation(draft.segment_id);
-                  setEditingSegment(null);
-                }}
-              />
-            );
-          }
-          const groundDraft = workspace?.ground.find(
-            (d) => d.segment_id === editingSegment,
-          );
-          if (workspace && groundDraft) {
-            return (
-              <GroundEditor
-                key={groundDraft.segment_id}
-                autoFocusName={freshId === groundDraft.segment_id}
-                workspace={workspace}
-                onOpenRule={openRule}
-                onConnect={(target) => connect(groundDraft.segment_id, target)}
-                draft={groundDraft}
-                onUpdate={(patch) => updateGroundDraft(groundDraft.segment_id, patch)}
-                onRemove={() => {
-                  removeGroundDraft(groundDraft.segment_id);
-                  setEditingSegment(null);
-                }}
-              />
-            );
-          }
-          const linkRule = workspace?.links.find((r) => r.rule_id === editingLink);
-          if (workspace && linkRule) {
-            return (
-              <LinkRuleEditor
-                key={linkRule.rule_id}
-                autoFocusName={freshId === linkRule.rule_id}
-                workspace={workspace}
-                rule={linkRule}
-                capabilities={segmentCapabilities}
-                onRepoint={(side, newSegmentId) => {
-                  const { patch, notice } = rederiveRule(
-                    workspace,
-                    world,
-                    linkRule,
-                    side,
-                    newSegmentId,
-                  );
-                  updateLinkRule(linkRule.rule_id, patch);
-                  return notice;
-                }}
-                onUpdate={(patch) => updateLinkRule(linkRule.rule_id, patch)}
-                onUpdateEndpoint={(side, patch) =>
-                  updateLinkEndpoint(linkRule.rule_id, side, patch)
-                }
-                onRemove={() => {
-                  removeLinkRule(linkRule.rule_id);
-                  setEditingLink(null);
-                }}
-              />
-            );
-          }
-          const routingDomain = workspace?.routing_domains.find(
-            (d) => d.domain_id === editingDomain,
-          );
-          if (workspace && routingDomain) {
-            return (
-              <RoutingDomainEditor
-                key={routingDomain.domain_id}
-                autoFocusName={freshId === routingDomain.domain_id}
-                workspace={workspace}
-                domain={routingDomain}
-                onUpdate={(patch) => updateRoutingDomain(routingDomain.domain_id, patch)}
-                onRemove={() => {
-                  removeRoutingDomain(routingDomain.domain_id);
-                  setEditingDomain(null);
-                }}
-              />
-            );
-          }
-          const boundary = workspace?.boundaries.find(
-            (b) => b.boundary_id === editingBoundary,
-          );
-          if (workspace && boundary) {
-            return (
-              <BoundaryEditor
-                key={boundary.boundary_id}
-                workspace={workspace}
-                boundary={boundary}
-                onUpdate={(patch) => updateBoundary(boundary.boundary_id, patch)}
-                onRemove={() => {
-                  removeBoundary(boundary.boundary_id);
-                  setEditingBoundary(null);
-                }}
-              />
-            );
-          }
-          const node =
-            selection && world
-              ? world.nodes.find((n) => n.node_id === selection.id)
-              : undefined;
-          return node && world ? (
-            <BuilderInspector node={node} ephemeris={world.ephemeris} />
-          ) : (
-            <div className="builder-zone-empty">Nothing selected</div>
-          );
-        })()}
       </div>
       {workspace && completenessFindings(workspace).length > 0 && (
         <div className="builder-rail" data-testid="builder-rail">
@@ -1359,11 +1432,10 @@ export function BuilderView({
               onClick={() => {
                 const target = finding.target;
                 if (!target) return;
-                setLibraryEditor(null);
-                closeEditors();
-                if (target.kind === "session") setEditingSession(true);
-                else if (target.kind === "link") setEditingLink(target.id);
-                else setEditingSegment(target.id);
+                if (target.kind === "session") openEditor({ kind: "session" });
+                else if (target.kind === "link") openEditor({ kind: "link", id: target.id });
+                else if (target.kind === "ground") openEditor({ kind: "ground", id: target.id });
+                else openEditor({ kind: "segment", id: target.id });
               }}
             >
               {finding.message}
@@ -1405,14 +1477,6 @@ export function BuilderView({
           <span className="builder-status-item builder-status-item--error">
             save failed: {saveState.message}
           </span>
-        )}
-        {documentYaml && (
-          <button
-            className={`builder-status-toggle${showYaml ? " builder-status-toggle--active" : ""}`}
-            onClick={() => setShowYaml((v) => !v)}
-          >
-            YAML
-          </button>
         )}
       </div>
     </div>

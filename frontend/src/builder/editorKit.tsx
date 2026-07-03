@@ -12,6 +12,7 @@
  */
 
 import { useEffect, useRef, type ReactNode } from "react";
+import { Button } from "../ui/Button";
 
 /** The name field every editor leads with. autoFocus fires on mount when
  *  the editor was opened by a create gesture (IG-2). */
@@ -394,5 +395,51 @@ export function PasteArea({
       onChange={(e) => onChange(e.target.value)}
       rows={rows}
     />
+  );
+}
+
+/** The commit row every buffered editor window ends with. A window edits a
+ *  working copy; nothing reaches the session until Apply (or OK, which
+ *  applies and closes). Cancel closes without applying — the same outcome as
+ *  the title-bar X, but said out loud. Defaults returns the window to the
+ *  values it opened with. The state label answers the question the buttons
+ *  exist for: "did my typing take?" */
+export function EditorApplyRow({
+  dirty,
+  onApply,
+  onOk,
+  onDefaults,
+  onCancel,
+}: {
+  dirty: boolean;
+  onApply: () => void;
+  onOk: () => void;
+  onDefaults: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <div className="builder-apply-row" data-testid="builder-apply-row">
+      <span
+        className={`builder-apply-state${dirty ? " builder-apply-state--dirty" : ""}`}
+      >
+        {dirty ? "unapplied changes" : "applied"}
+      </span>
+      <Button
+        onClick={onDefaults}
+        disabled={!dirty}
+        title="Discard edits and return to the values this window opened with"
+      >
+        Defaults
+      </Button>
+      <Button onClick={onCancel} title="Close without applying">
+        Cancel
+      </Button>
+      <Button onClick={onApply} disabled={!dirty} title="Apply edits to the session">
+        Apply
+      </Button>
+      <Button icon="check" onClick={onOk} title="Apply and close">
+        OK
+      </Button>
+    </div>
   );
 }

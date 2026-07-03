@@ -14,7 +14,7 @@
  *  fixed link is nearest-1 (fixed links consume real terminal interfaces).
  */
 
-import type { BuilderWorld } from "./builderTypes";
+import type { BuilderWorld, BuilderWorldNode } from "./builderTypes";
 import { defaultLinkRule, placedSegments, type DraftLinkRule, type Workspace } from "./workspace";
 
 export interface SegmentCapability {
@@ -22,6 +22,24 @@ export interface SegmentCapability {
   pairs: Set<string>;
   /** Strictest access-terminal elevation floor seen on the segment. */
   access_min_elevation_deg: number | null;
+}
+
+/** The elevation floor a node's access beam is drawn with. Declared floors
+ *  win (strictest when several blocks declare one — the same reading as
+ *  capabilitiesBySegment); an access terminal with no declared floor serves
+ *  to the geometric horizon (0). No access terminal, no beam: null. */
+export function accessBeamElevationDeg(node: BuilderWorldNode): number | null {
+  let floor: number | null = null;
+  let hasAccess = false;
+  for (const block of node.terminal_inventory) {
+    if (block.endpoint_role !== "access") continue;
+    hasAccess = true;
+    if (block.min_elevation_deg !== null) {
+      floor = Math.max(floor ?? 0, block.min_elevation_deg);
+    }
+  }
+  if (!hasAccess) return null;
+  return floor ?? 0;
 }
 
 /** Collect each segment's terminal capability from the resolved world. */

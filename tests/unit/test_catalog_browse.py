@@ -62,6 +62,17 @@ def test_browse_lists_both_tiers_shipped_first(roots):
     assert all(entry.error is None for entry in entries)
 
 
+def test_terminal_summary_carries_planning_capabilities(roots):
+    """The picker line a user plans links from: signal, range, rate, slew,
+    tracks. A summary that silently comes back None (the broad best-effort
+    except) is exactly the regression this pins."""
+    save_user_object("terminals", _TERMINAL, roots=roots)
+    entries = browse_catalog("terminals", roots=roots)
+    by_ref = {entry.ref: entry for entry in entries}
+    summary = by_ref["user:terminals/my-ka-terminal.yaml"].summary
+    assert summary == "rf ka 29.5 GHz · 2500 km · 500 Mbps · slew 2°/s · tracks 1"
+
+
 def test_save_validates_and_writes_canonical_grammar(roots):
     entry = save_user_object("terminals", _TERMINAL, roots=roots)
     assert entry.ref == "user:terminals/my-ka-terminal.yaml"

@@ -56,9 +56,24 @@ def _entry_summary(wrapper: str, model: Any) -> str | None:
             lan = f" · lan ×{len(model.ethernet)}" if model.ethernet else ""
             return f"{model.forwarding}{' · ' + mounts if mounts else ''}{lan}"
         if wrapper == "terminal":
-            if model.medium == "rf":
-                return f"rf {model.signal.band} · {model.max_range_km:.0f} km"
-            return f"optical {model.signal.wavelength_nm:.0f} nm · {model.max_range_km:.0f} km"
+            # Planning-critical capabilities: who can talk to whom depends on
+            # range, rate, slew, and simultaneous-track capacity.
+            signal = (
+                f"rf {model.signal.band} {model.signal.frequency_hz / 1e9:g} GHz"
+                if model.medium == "rf"
+                else f"optical {model.signal.wavelength_nm:.0f} nm"
+            )
+            bw = model.bandwidth_mbps
+            rate = (
+                f"{bw.transmit:g}/{bw.receive:g} Mbps"
+                if bw.transmit != bw.receive
+                else f"{bw.transmit:g} Mbps"
+            )
+            slew = model.limits.max_tracking_rate_deg_s
+            return (
+                f"{signal} · {model.max_range_km:.0f} km · {rate}"
+                f" · slew {slew:g}°/s · tracks {model.tracking_capacity}"
+            )
         if wrapper == "orbit":
             shape = getattr(model, "shape", None)
             if shape is not None and hasattr(shape, "altitude_km"):

@@ -262,11 +262,39 @@
   color: var(--text-primary);
   text-align: left;
   padding: var(--space-2);
-  cursor: pointer;
 }
 
-.builder-card-head:hover {
+/* Clickable card heads must LOOK clickable: chevron, accent edge, hover
+   raise. Static heads (div) get none of this — reading is not clicking. */
+button.builder-card-head {
+  cursor: pointer;
+  position: relative;
+  border-left: 2px solid var(--border);
+  padding-right: var(--space-6);
+}
+
+button.builder-card-head::after {
+  content: "\25B8";
+  position: absolute;
+  right: var(--space-3);
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-dim);
+  font-size: var(--font-size-xs);
+}
+
+.builder-card--open > button.builder-card-head::after {
+  content: "\25BE";
+  color: var(--text-secondary);
+}
+
+button.builder-card-head:hover {
   background: var(--bg-panel-hover);
+  border-left-color: var(--accent-amber);
+}
+
+button.builder-card-head:hover .builder-card-title {
+  color: var(--text-primary);
 }
 
 .builder-card-title {
@@ -792,4 +820,39 @@
   overflow-y: auto;
   height: 100%;
   font-size: var(--font-size-sm);
+}
+
+/* Terminal picker options carry the capability line — range, rate, slew,
+   and track capacity are planning-critical, not fine print. */
+.builder-terminal-option {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0;
+}
+
+.builder-terminal-option-name {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+/* The commit row pins under the scrolling window body: buffered edits are
+   invisible to the session until Apply, so the row must never scroll away. */
+.builder-apply-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+  font-size: var(--font-size-sm);
+}
+
+.builder-apply-state {
+  flex: 1;
+  color: var(--text-dim);
+}
+
+.builder-apply-state--dirty {
+  color: var(--accent-amber);
 }

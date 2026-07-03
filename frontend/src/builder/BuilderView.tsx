@@ -32,8 +32,13 @@ import { BuilderInspector } from "./BuilderInspector";
 import { builderSnapshotFromWorld } from "./builderSnapshot";
 import { CandidateLines } from "./CandidateLines";
 import { computeCandidates } from "./candidates";
-import { InlineSelect } from "./editorKit";
-import { capabilitiesBySegment, connectSegments, rederiveRule } from "./linkPhysics";
+import { EditorApplyRow, InlineSelect } from "./editorKit";
+import {
+  accessBeamElevationDeg,
+  capabilitiesBySegment,
+  connectSegments,
+  rederiveRule,
+} from "./linkPhysics";
 import { CatalogObjectView } from "./CatalogObjectView";
 import { ConstellationEditor } from "./ConstellationEditor";
 import { GroundEditor } from "./GroundEditor";
@@ -73,11 +78,16 @@ import {
   refGroundMember,
   SCHEDULING_PRESETS,
   toSessionDocument,
+  type DraftBoundary,
+  type DraftConstellation,
   type DraftGroundSet,
+  type DraftLinkRule,
   type DraftNode,
+  type DraftRoutingDomain,
   type DraftSiteObject,
   type DraftTerminal,
   type SchedulingPresetKey,
+  type Workspace,
 } from "./workspace";
 import type { BuilderCatalogEntry } from "./builderTypes";
 import type { BuilderWorld } from "./builderTypes";
@@ -232,7 +242,6 @@ export function BuilderView({
     removeRefSegment,
     removeConstellation,
     updateConstellation,
-    updateOrbit,
     addGroundRef,
     updateGroundRef,
     removeGroundRef,
@@ -243,7 +252,6 @@ export function BuilderView({
     removeGroundDraft,
     addLinkRule,
     updateLinkRule,
-    updateLinkEndpoint,
     removeLinkRule,
     addRoutingDomain,
     updateRoutingDomain,
@@ -274,8 +282,88 @@ export function BuilderView({
   };
   const closeWindow = (key: string) => {
     setWindows((prev) => prev.filter((w) => w.key !== key));
+    setBuffers((prev) => {
+      if (!(key in prev)) return prev;
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
   };
   const isOpen = (key: string) => windows.some((w) => w.key === key);
+
+  // Buffered editing: an editor window works on a copy of its object; the
+  // session only changes on Apply/OK. Cancel and the title-bar X discard —
+  // the window says which state it is in, so closing is never a guess.
+  const [buffers, setBuffers] = useState<
+    Record<string, { draft: unknown; opened: unknown; dirty: boolean }>
+  >({});
+  type SessionBuffer = Pick<
+    Workspace,
+    | "name"
+    | "start_time"
+    | "step_seconds"
+    | "compression"
+    | "max_pairs_per_rule"
+    | "max_pairs_per_tick"
+  >;
+  /** First edit creates the buffer from the object as rendered ("base");
+   *  later edits build on the working copy. "opened" — the Defaults target —
+   *  is the object as it stood before the first edit. The session buffer is
+   *  a pick, never the whole workspace: applying a stale whole-workspace
+   *  clone would silently revert every other window's applied work. */
+  const patchBuffer = <T,>(key: string, base: T, fn: (draft: T) => T) => {
+    setBuffers((prev) => {
+      const buf = prev[key];
+      const current = (buf?.draft as T | undefined) ?? structuredClone(base);
+      const opened = buf?.opened ?? structuredClone(base);
+      return { ...prev, [key]: { draft: fn(current), opened, dirty: true } };
+    });
+  };
+  const revertBuffer = (key: string) => {
+    setBuffers((prev) => {
+      const buf = prev[key];
+      if (!buf) return prev;
+      return {
+        ...prev,
+        [key]: { ...buf, draft: structuredClone(buf.opened), dirty: false },
+      };
+    });
+  };
+  const applyBuffer = (target: EditorTarget) => {
+    const key = targetKey(target);
+    const buf = buffers[key];
+    if (!buf || !buf.dirty) return;
+    switch (target.kind) {
+      case "session":
+        updateSession(buf.draft as SessionBuffer);
+        break;
+      case "segment":
+        updateConstellation(target.id, buf.draft as DraftConstellation);
+        break;
+      case "ground":
+        updateGroundDraft(target.id, buf.draft as DraftGroundSet);
+        break;
+      case "link":
+        updateLinkRule(target.id, buf.draft as DraftLinkRule);
+        break;
+      case "domain":
+        updateRoutingDomain(target.id, buf.draft as DraftRoutingDomain);
+        break;
+      case "boundary":
+        updateBoundary(target.id, buf.draft as DraftBoundary);
+        break;
+      default:
+        return;
+    }
+    setBuffers((prev) => {
+      const cur = prev[key];
+      if (!cur) return prev;
+      return {
+        ...prev,
+        [key]: { ...cur, opened: structuredClone(cur.draft), dirty: false },
+      };
+    });
+  };
   // Trust mechanics: Ctrl/Cmd+Z undoes the last workspace mutation unless
   // the user is typing in a field (native input undo wins there).
   useEffect(() => {
@@ -475,6 +563,30 @@ export function BuilderView({
   // The connect gesture (IG-7): both endpoints known BEFORE the rule
   // exists, physics derived from the resolved world's faceplates.
   const segmentCapabilities = useMemo(() => capabilitiesBySegment(world), [world]);
+  // Beam discs on the body while a segment's editor is open: every satellite
+  // of that segment, at the elevation floor its access terminals actually
+  // declare — the resolved world is the only physics source (a node with no
+  // access terminal simply has no beam). The selected satellite always shows
+  // (CoverageFootprint unions it in) and reads the same real floors here.
+  const beamFootprints = useMemo(() => {
+    if (!world) return undefined;
+    const openSegments = new Set(
+      windows
+        .filter((w) => w.target.kind === "segment")
+        .map((w) => (w.target as { kind: "segment"; id: string }).id),
+    );
+    const nodeIds = world.nodes
+      .filter((n) => n.kind === "satellite" && openSegments.has(n.segment_id))
+      .map((n) => n.node_id);
+    const byId = new Map(world.nodes.map((n) => [n.node_id, n]));
+    return {
+      nodeIds,
+      elevationFor: (nodeId: string) => {
+        const node = byId.get(nodeId);
+        return node ? accessBeamElevationDeg(node) : null;
+      },
+    };
+  }, [world, windows]);
   const openRule = (ruleId: string) => {
     openEditor({ kind: "link", id: ruleId });
   };
@@ -521,16 +633,36 @@ export function BuilderView({
   ): { title: string; content: React.ReactNode } | null {
     if (!workspace && target.kind !== "inspect" && target.kind !== "node-view") return null;
     switch (target.kind) {
-      case "session":
-        return workspace
-          ? {
-              title: `Session · ${workspace.name}`,
-              content: <SessionEditor workspace={workspace} onUpdate={updateSession} />,
-            }
-          : null;
+      case "session": {
+        if (!workspace) return null;
+        const key = targetKey(target);
+        const sessionPick: SessionBuffer = {
+          name: workspace.name,
+          start_time: workspace.start_time,
+          step_seconds: workspace.step_seconds,
+          compression: workspace.compression,
+          max_pairs_per_rule: workspace.max_pairs_per_rule,
+          max_pairs_per_tick: workspace.max_pairs_per_tick,
+        };
+        const buf = buffers[key];
+        const view = buf ? { ...workspace, ...(buf.draft as SessionBuffer) } : workspace;
+        return {
+          title: `Session · ${view.name}`,
+          content: (
+            <SessionEditor
+              workspace={view}
+              onUpdate={(patch) =>
+                patchBuffer(key, sessionPick, (d) => ({ ...d, ...patch }))
+              }
+            />
+          ),
+        };
+      }
       case "segment": {
-        const draft = workspace?.space.find((d) => d.segment_id === target.id);
-        if (!workspace || !draft) return null;
+        const applied = workspace?.space.find((d) => d.segment_id === target.id);
+        if (!workspace || !applied) return null;
+        const key = targetKey(target);
+        const draft = (buffers[key]?.draft as DraftConstellation | undefined) ?? applied;
         return {
           title: draft.display_name,
           content: (
@@ -541,19 +673,28 @@ export function BuilderView({
               onOpenRule={openRule}
               onConnect={(other) => connect(draft.segment_id, other)}
               draft={draft}
-              onUpdate={(patch) => updateConstellation(draft.segment_id, patch)}
-              onUpdateOrbit={(patch) => updateOrbit(draft.segment_id, patch)}
+              onUpdate={(patch) =>
+                patchBuffer(key, applied, (d) => ({ ...d, ...patch }))
+              }
+              onUpdateOrbit={(patch) =>
+                patchBuffer(key, applied, (d) => ({
+                  ...d,
+                  orbit: { ...d.orbit, ...patch },
+                }))
+              }
               onRemove={() => {
                 removeConstellation(draft.segment_id);
-                closeWindow(targetKey(target));
+                closeWindow(key);
               }}
             />
           ),
         };
       }
       case "ground": {
-        const draft = workspace?.ground.find((d) => d.segment_id === target.id);
-        if (!workspace || !draft) return null;
+        const applied = workspace?.ground.find((d) => d.segment_id === target.id);
+        if (!workspace || !applied) return null;
+        const key = targetKey(target);
+        const draft = (buffers[key]?.draft as DraftGroundSet | undefined) ?? applied;
         return {
           title: draft.display_name,
           content: (
@@ -564,18 +705,22 @@ export function BuilderView({
               onOpenRule={openRule}
               onConnect={(other) => connect(draft.segment_id, other)}
               draft={draft}
-              onUpdate={(patch) => updateGroundDraft(draft.segment_id, patch)}
+              onUpdate={(patch) =>
+                patchBuffer(key, applied, (d) => ({ ...d, ...patch }))
+              }
               onRemove={() => {
                 removeGroundDraft(draft.segment_id);
-                closeWindow(targetKey(target));
+                closeWindow(key);
               }}
             />
           ),
         };
       }
       case "link": {
-        const rule = workspace?.links.find((r) => r.rule_id === target.id);
-        if (!workspace || !rule) return null;
+        const applied = workspace?.links.find((r) => r.rule_id === target.id);
+        if (!workspace || !applied) return null;
+        const key = targetKey(target);
+        const rule = (buffers[key]?.draft as DraftLinkRule | undefined) ?? applied;
         return {
           title: rule.label || rule.rule_id,
           content: (
@@ -593,26 +738,33 @@ export function BuilderView({
                   side,
                   newSegmentId,
                 );
-                updateLinkRule(rule.rule_id, patch);
+                patchBuffer(key, applied, (r) => ({ ...r, ...patch }));
                 return notice;
               }}
-              onUpdate={(patch) => updateLinkRule(rule.rule_id, patch)}
+              onUpdate={(patch) =>
+                patchBuffer(key, applied, (r) => ({ ...r, ...patch }))
+              }
               onUpdateEndpoint={(side, patch) =>
-                updateLinkEndpoint(rule.rule_id, side, patch)
+                patchBuffer(key, applied, (r) => ({
+                  ...r,
+                  [side]: { ...r[side], ...patch },
+                }))
               }
               onRemove={() => {
                 removeLinkRule(rule.rule_id);
-                closeWindow(targetKey(target));
+                closeWindow(key);
               }}
             />
           ),
         };
       }
       case "domain": {
-        const domain = workspace?.routing_domains.find(
+        const applied = workspace?.routing_domains.find(
           (d) => d.domain_id === target.id,
         );
-        if (!workspace || !domain) return null;
+        if (!workspace || !applied) return null;
+        const key = targetKey(target);
+        const domain = (buffers[key]?.draft as DraftRoutingDomain | undefined) ?? applied;
         return {
           title: domain.label,
           content: (
@@ -621,20 +773,24 @@ export function BuilderView({
               autoFocusName={freshId === domain.domain_id}
               workspace={workspace}
               domain={domain}
-              onUpdate={(patch) => updateRoutingDomain(domain.domain_id, patch)}
+              onUpdate={(patch) =>
+                patchBuffer(key, applied, (d) => ({ ...d, ...patch }))
+              }
               onRemove={() => {
                 removeRoutingDomain(domain.domain_id);
-                closeWindow(targetKey(target));
+                closeWindow(key);
               }}
             />
           ),
         };
       }
       case "boundary": {
-        const boundary = workspace?.boundaries.find(
+        const applied = workspace?.boundaries.find(
           (b) => b.boundary_id === target.id,
         );
-        if (!workspace || !boundary) return null;
+        if (!workspace || !applied) return null;
+        const key = targetKey(target);
+        const boundary = (buffers[key]?.draft as DraftBoundary | undefined) ?? applied;
         return {
           title: "Boundary",
           content: (
@@ -642,10 +798,12 @@ export function BuilderView({
               key={boundary.boundary_id}
               workspace={workspace}
               boundary={boundary}
-              onUpdate={(patch) => updateBoundary(boundary.boundary_id, patch)}
+              onUpdate={(patch) =>
+                patchBuffer(key, applied, (b) => ({ ...b, ...patch }))
+              }
               onRemove={() => {
                 removeBoundary(boundary.boundary_id);
-                closeWindow(targetKey(target));
+                closeWindow(key);
               }}
             />
           ),
@@ -904,18 +1062,22 @@ export function BuilderView({
         </div>
         {workspace && (
           <div className="builder-outline-group" data-testid="builder-drafts">
-            <button
-              className={`builder-outline-row${isOpen("session") ? " builder-outline-row--selected" : ""}`}
-              title="Session settings — name, time, candidate budget"
-              onClick={() => openEditor({ kind: "session" })}
-            >
+            <div className="builder-library-entry">
               <span className="builder-outline-kind">Drafts · {workspace.name}</span>
-              <span className="builder-outline-count">
-                {workspace.step_seconds === 1 && workspace.compression === 1
-                  ? "real time"
-                  : `×${workspace.compression}`}
+              <span className="builder-library-actions">
+                <span className="builder-outline-count">
+                  {workspace.step_seconds === 1 && workspace.compression === 1
+                    ? "real time"
+                    : `×${workspace.compression}`}
+                </span>
+                <IconButton
+                  icon="settings"
+                  size={13}
+                  label="Session settings — name, time, candidate budget"
+                  onClick={() => openEditor({ kind: "session" })}
+                />
               </span>
-            </button>
+            </div>
             {workspace.space_refs.map((placed) => (
               <div className="builder-library-entry" key={placed.segment_id}>
                 <span className="builder-outline-name builder-outline-name--space builder-outline-row--segment">
@@ -1390,6 +1552,7 @@ export function BuilderView({
               actionsRef={actionsRef}
               liveExplain={false}
               worldLayers={<CandidateLines pairs={visiblePairs} />}
+              beamFootprints={beamFootprints}
             />
           </VisualizationErrorBoundary>
         ) : snapshotError ? (
@@ -1428,16 +1591,32 @@ export function BuilderView({
         {windows.map((win) => {
           const body = renderWindow(win.target);
           if (!body) return null;
+          const buf = buffers[win.key];
+          const buffered = ["session", "segment", "ground", "link", "domain", "boundary"].includes(
+            win.target.kind,
+          );
           return (
             <FloatingWindow
               key={win.key}
-              title={body.title}
+              title={buf?.dirty ? `${body.title} •` : body.title}
               onClose={() => closeWindow(win.key)}
               initial={{ x: win.x, y: win.y, w: 380, h: 560 }}
               minWidth={320}
               minHeight={240}
             >
               <div className="builder-window-body">{body.content}</div>
+              {buffered && (
+                <EditorApplyRow
+                  dirty={buf?.dirty ?? false}
+                  onApply={() => applyBuffer(win.target)}
+                  onOk={() => {
+                    applyBuffer(win.target);
+                    closeWindow(win.key);
+                  }}
+                  onDefaults={() => revertBuffer(win.key)}
+                  onCancel={() => closeWindow(win.key)}
+                />
+              )}
             </FloatingWindow>
           );
         })}

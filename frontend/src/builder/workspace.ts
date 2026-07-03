@@ -14,6 +14,8 @@
  *  from the resolver's expansion, never from a builder-local one.
  */
 
+import { gmstRadians } from "../sim/orbitalMath";
+
 export interface DraftOrbit {
   /** Circular uses altitude_km; elliptical uses perigee/apogee. One form
    *  serializes (the grammar's OrbitShape variants); the other fields are
@@ -554,6 +556,48 @@ export function identifier(value: string): string {
     .replace(/[^a-z0-9_-]+/g, "-")
     .replace(/^[-_]+|[-_]+$/g, "")
     .slice(0, 48);
+}
+
+const GEO_ALTITUDE_KM = 35786;
+
+/** Geosynchronous check for the dwell-longitude lens. Within ~500 km of GEO
+ *  altitude the period tracks Earth's rotation closely enough that "which
+ *  longitude does this bird sit over" is the question the user is actually
+ *  answering with mean anomaly. */
+export function isGeosynchronous(orbit: DraftOrbit): boolean {
+  return (
+    orbit.shape_kind === "circular" &&
+    Math.abs(orbit.altitude_km - GEO_ALTITUDE_KM) <= 500
+  );
+}
+
+function gmstDegAt(epochIso: string): number {
+  return (gmstRadians(Date.parse(epochIso) / 1000) * 180) / Math.PI;
+}
+
+/** Sub-satellite longitude of the first slot at session start (deg east,
+ *  [-180, 180)). A lens on phase, not new state: it reads RAAN + argument of
+ *  perigee + mean anomaly against sidereal time at the session epoch. Nonzero
+ *  inclination turns the point into a figure-eight centered here. */
+export function dwellLongitudeDeg(orbit: DraftOrbit, epochIso: string): number {
+  const lon =
+    orbit.raan_deg +
+    orbit.argument_of_perigee_deg +
+    orbit.mean_anomaly_deg -
+    gmstDegAt(epochIso);
+  return ((lon % 360) + 540) % 360 - 180;
+}
+
+/** Inverse of the lens: the mean anomaly that puts the first slot over the
+ *  given longitude at session start. */
+export function meanAnomalyForDwell(
+  lonDeg: number,
+  orbit: DraftOrbit,
+  epochIso: string,
+): number {
+  const anomaly =
+    lonDeg + gmstDegAt(epochIso) - orbit.raan_deg - orbit.argument_of_perigee_deg;
+  return ((anomaly % 360) + 360) % 360;
 }
 
 /** Orbit sanity findings: warn, never block (unusual orbits are learning

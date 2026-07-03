@@ -95,6 +95,18 @@ continuously and offers a restore after a reload. Neither depends on which
 surface made the change; both hang off the single mutation path in
 `useWorkspace`.
 
+**IG-14.** An editor window edits a working copy; the session changes only
+on Apply (or OK, which applies and closes). Every editor window ends in the
+same commit row — Apply, OK, Defaults, Cancel — with a state label that says
+"applied" or "unapplied changes", so the answer to "did my typing take?" is
+on screen, never inferred. Closing a window and cancelling it are the same
+action, and both discard. Defaults returns the window to the values it
+opened with. Before this rule, edits were live and closing was ambiguous:
+the same gesture meant both "done" and "never mind", and the user couldn't
+tell which one they had performed. Enforced by the window buffers in
+`BuilderView`, `EditorApplyRow` in `editorKit.tsx`, and the conformance
+tests.
+
 ## Getting around
 
 **IG-12.** There is one selection. Picking an object in the tree, on the

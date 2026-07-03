@@ -17,12 +17,18 @@ import { join } from "node:path";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  EditorApplyRow,
   EditorCard,
   EditorName,
   NullableNumberField,
 } from "../editorKit";
 import { GroundEditor } from "../GroundEditor";
-import { capabilitiesBySegment, connectSegments, deriveLinkPhysics } from "../linkPhysics";
+import {
+  accessBeamElevationDeg,
+  capabilitiesBySegment,
+  connectSegments,
+  deriveLinkPhysics,
+} from "../linkPhysics";
 import {
   mintSiteMembers,
   newDraftConstellation,
@@ -232,5 +238,74 @@ describe("IG-4: editor state is keyed by object identity", () => {
     // Switch to object B (new key = remount): canonical again, no bleed.
     rerender(<GroundEditor key={b.segment_id} draft={b} {...shared} />);
     expect(screen.getByText("+ mint pasted sites")).toBeTruthy();
+  });
+});
+
+describe("IG-14: buffered windows commit through the apply row", () => {
+  afterEach(cleanup);
+
+  it("a clean window says applied; Apply and Defaults are disabled", () => {
+    render(
+      <EditorApplyRow
+        dirty={false}
+        onApply={() => {}}
+        onOk={() => {}}
+        onDefaults={() => {}}
+        onCancel={() => {}}
+      />,
+    );
+    expect(screen.getByText("applied")).toBeTruthy();
+    expect((screen.getByText("Apply") as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByText("Defaults") as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByText("Cancel") as HTMLButtonElement).disabled).toBe(false);
+    expect((screen.getByText("OK") as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("a dirty window says so and every commit path fires its own callback", () => {
+    const calls: string[] = [];
+    render(
+      <EditorApplyRow
+        dirty
+        onApply={() => calls.push("apply")}
+        onOk={() => calls.push("ok")}
+        onDefaults={() => calls.push("defaults")}
+        onCancel={() => calls.push("cancel")}
+      />,
+    );
+    expect(screen.getByText("unapplied changes")).toBeTruthy();
+    fireEvent.click(screen.getByText("Apply"));
+    fireEvent.click(screen.getByText("OK"));
+    fireEvent.click(screen.getByText("Defaults"));
+    fireEvent.click(screen.getByText("Cancel"));
+    expect(calls).toEqual(["apply", "ok", "defaults", "cancel"]);
+  });
+});
+
+describe("beam footprints read the terminals, never a default", () => {
+  const world = tinyWorld("gnd", "shell");
+
+  it("a declared access floor is the beam's floor; the strictest wins", () => {
+    const node = structuredClone(world.nodes.find((n) => n.segment_id === "gnd")!);
+    node.terminal_inventory[0]!.min_elevation_deg = 10;
+    node.terminal_inventory.push({
+      ...node.terminal_inventory[0]!,
+      terminal_id: "access_1",
+      min_elevation_deg: 30,
+    });
+    expect(accessBeamElevationDeg(node)).toBe(30);
+  });
+
+  it("an access terminal with no declared floor serves to the horizon", () => {
+    const node = structuredClone(world.nodes.find((n) => n.segment_id === "shell")!);
+    for (const block of node.terminal_inventory) block.min_elevation_deg = null;
+    expect(accessBeamElevationDeg(node)).toBe(0);
+  });
+
+  it("no access terminal means no beam, not an invented one", () => {
+    const node = structuredClone(world.nodes.find((n) => n.segment_id === "shell")!);
+    node.terminal_inventory = node.terminal_inventory.filter(
+      (b) => b.endpoint_role !== "access",
+    );
+    expect(accessBeamElevationDeg(node)).toBe(null);
   });
 });

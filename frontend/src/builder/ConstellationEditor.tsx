@@ -24,7 +24,10 @@ import {
 import {
   ORBIT_PRESETS,
   draftNodeFromDocument,
+  dwellLongitudeDeg,
   identifier,
+  isGeosynchronous,
+  meanAnomalyForDwell,
   nodeObjectFromDraft,
   orbitWarnings,
   type DraftConstellation,
@@ -205,6 +208,29 @@ export function ConstellationEditor({
               suffix="deg"
               onChange={(mean_anomaly_deg) => onUpdateOrbit({ mean_anomaly_deg })}
             />
+            {isGeosynchronous(draft.orbit) && (
+              <>
+                <NumberField
+                  label="dwell longitude"
+                  value={Math.round(dwellLongitudeDeg(draft.orbit, workspace.start_time) * 10) / 10}
+                  suffix="deg E"
+                  onChange={(lon) =>
+                    onUpdateOrbit({
+                      mean_anomaly_deg: meanAnomalyForDwell(
+                        lon,
+                        draft.orbit,
+                        workspace.start_time,
+                      ),
+                    })
+                  }
+                />
+                <div className="builder-site-derived">
+                  sets mean anomaly so the first slot sits over this longitude at
+                  session start — negative is west; remaining slots space around
+                  the ring from there
+                </div>
+              </>
+            )}
             {warnings.map((warning) => (
               <div className="builder-warning" key={warning}>
                 {warning}

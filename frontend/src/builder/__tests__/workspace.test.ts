@@ -13,6 +13,9 @@ import {
   completenessFindings,
   defaultBoundary,
   defaultDraftOrbit,
+  dwellLongitudeDeg,
+  isGeosynchronous,
+  meanAnomalyForDwell,
   defaultLinkRule,
   defaultRoutingDomain,
   draftGroundSetFromDocuments,
@@ -651,5 +654,37 @@ describe("terminal drafts", () => {
     };
     expect(terminalWarnings(draft)).toContain("elevation min is above max — swap them");
     expect(terminalWarnings(defaultDraftTerminal())).toEqual([]);
+  });
+});
+
+describe("dwell longitude lens (geosynchronous orbits)", () => {
+  const epoch = "2026-06-08T00:00:00Z";
+  const geo = {
+    ...defaultDraftOrbit(),
+    shape_kind: "circular" as const,
+    altitude_km: 35786,
+    inclination_deg: 0,
+  };
+
+  it("only offers the lens near GEO altitude on circular orbits", () => {
+    expect(isGeosynchronous(geo)).toBe(true);
+    expect(isGeosynchronous({ ...geo, altitude_km: 550 })).toBe(false);
+    expect(isGeosynchronous({ ...geo, shape_kind: "elliptical" })).toBe(false);
+  });
+
+  it("round-trips: setting a dwell longitude derives the mean anomaly that reads back as that longitude", () => {
+    for (const lon of [-100.5, 0, 77.2, 179]) {
+      const mean_anomaly_deg = meanAnomalyForDwell(lon, geo, epoch);
+      expect(mean_anomaly_deg).toBeGreaterThanOrEqual(0);
+      expect(mean_anomaly_deg).toBeLessThan(360);
+      const back = dwellLongitudeDeg({ ...geo, mean_anomaly_deg }, epoch);
+      expect(back).toBeCloseTo(lon, 9);
+    }
+  });
+
+  it("moving RAAN shifts the derived longitude by the same amount", () => {
+    const base = dwellLongitudeDeg(geo, epoch);
+    const shifted = dwellLongitudeDeg({ ...geo, raan_deg: geo.raan_deg + 30 }, epoch);
+    expect((((shifted - base) % 360) + 360) % 360).toBeCloseTo(30, 9);
   });
 });

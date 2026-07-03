@@ -202,6 +202,12 @@ export function NodeEditor({ draft, onChange, autoFocusName = false }: NodeEdito
                   (entry.ref.startsWith("user:") ? " (yours)" : ""),
               }))}
           />
+          {(() => {
+            const selected = terminals.entries.find((e) => e.ref === editing.terminal_ref);
+            return selected?.summary ? (
+              <div className="builder-site-derived">{selected.summary}</div>
+            ) : null;
+          })()}
           <NumberField
             label="count"
             value={editing.count}
@@ -243,15 +249,20 @@ export function NodeEditor({ draft, onChange, autoFocusName = false }: NodeEdito
               .map((entry) => (
                 <button
                   key={entry.ref}
-                  className="builder-outline-row"
+                  className="builder-outline-row builder-terminal-option"
                   title={entry.notes ?? entry.ref}
                   onClick={() => addOrIncrement(entry.ref)}
                 >
-                  <span>
-                    {entry.display_name ?? entry.id}
-                    {entry.ref.startsWith("user:") ? " (yours)" : ""}
+                  <span className="builder-terminal-option-name">
+                    <span>
+                      {entry.display_name ?? entry.id}
+                      {entry.ref.startsWith("user:") ? " (yours)" : ""}
+                    </span>
+                    <span className="builder-outline-count">add</span>
                   </span>
-                  <span className="builder-outline-count">add</span>
+                  {entry.summary && (
+                    <span className="builder-library-entry-summary">{entry.summary}</span>
+                  )}
                 </button>
               ))}
             <button

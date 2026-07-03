@@ -14,12 +14,15 @@
  *  compute yet (terrestrial surface runs, inter-body spans) carry an explicit
  *  note instead of fake lines, and any cap is reported, never silent.
  *
- *  Two limits come from the terminals themselves, mirroring the runtime ISL
- *  engine: a pair is rejected when its range exceeds either endpoint's
- *  matching terminal range, and a node never shows more candidate lines
+ *  Three limits come from the terminals themselves, mirroring the runtime
+ *  ISL engine: a pair is rejected when its range exceeds either endpoint's
+ *  matching terminal range; a satellite pair is rejected when either side
+ *  falls outside the pair's field of regard (min of both terminals, the
+ *  cone centered on the local horizontal — a +20-degree elevation floor
+ *  cannot look down from GEO); and a node never shows more candidate lines
  *  than it has matching terminal interfaces (nearest admitted first, the
- *  overflow counted in the rule note). Tracking-rate and field-of-regard
- *  gating remain runtime-only for now.
+ *  overflow counted in the rule note). Tracking-rate gating remains
+ *  runtime-only for now.
  */
 
 import {
@@ -114,6 +117,7 @@ function nodeGeometries(world: BuilderWorld): Map<string, NodeGeometry> {
 interface NodeTerminalFacts {
   maxRangeKm: number | null;
   interfaces: number;
+  fieldOfRegardDeg: number | null;
 }
 
 function endpointTerminalFacts(
@@ -127,6 +131,8 @@ function endpointTerminalFacts(
     let maxRangeKm: number | null = null;
     let unlimited = false;
     let interfaces = 0;
+    let fieldOfRegardDeg: number | null = null;
+    let anyFieldUnknown = false;
     for (const block of node.terminal_inventory) {
       if (block.endpoint_role !== endpoint.terminal_role) continue;
       if (endpoint.terminal_medium !== null && block.medium !== endpoint.terminal_medium) {
@@ -135,13 +141,33 @@ function endpointTerminalFacts(
       interfaces += block.count;
       if (block.max_range_km === null) unlimited = true;
       else maxRangeKm = Math.max(maxRangeKm ?? 0, block.max_range_km);
+      // Most permissive matching block, same stance as range above; a block
+      // with no declared field of regard leaves the node ungated.
+      if (block.field_of_regard_deg === null) anyFieldUnknown = true;
+      else fieldOfRegardDeg = Math.max(fieldOfRegardDeg ?? 0, block.field_of_regard_deg);
     }
     facts.set(node.node_id, {
       maxRangeKm: unlimited ? null : maxRangeKm,
       interfaces,
+      fieldOfRegardDeg: anyFieldUnknown ? null : fieldOfRegardDeg,
     });
   }
   return facts;
+}
+
+/** Angle between the line of sight and the local horizontal plane at
+ *  `from` (radians) — the runtime engine's pointing measure. Positions are
+ *  body-fixed km, origin at the body center. */
+function offLocalHorizontalRad(from: Vec3Km, to: Vec3Km): number {
+  const los: Vec3Km = [to[0] - from[0], to[1] - from[1], to[2] - from[2]];
+  const losMag = Math.hypot(los[0], los[1], los[2]);
+  const radialMag = Math.hypot(from[0], from[1], from[2]);
+  if (losMag < 1e-10 || radialMag < 1e-10) return 0;
+  const cosZenith = Math.max(
+    -1,
+    Math.min(1, (los[0] * from[0] + los[1] * from[1] + los[2] * from[2]) / (losMag * radialMag)),
+  );
+  return Math.abs(Math.acos(cosZenith) - Math.PI / 2);
 }
 
 function pairPasses(
@@ -149,30 +175,47 @@ function pairPasses(
   a: NodeGeometry,
   b: NodeGeometry,
   terminalRangeKm: number | null,
-): { ok: boolean; rangeKm: number; beyondTerminal: boolean } {
+  fieldOfRegardDeg: number | null,
+): { ok: boolean; rangeKm: number; beyondTerminal: boolean; outsideRegard: boolean } {
   const rangeKm = distanceKm(a.positionKm, b.positionKm);
   // The runtime applies min(both terminals' range); the preview mirrors it.
   if (terminalRangeKm !== null && rangeKm > terminalRangeKm) {
-    return { ok: false, rangeKm, beyondTerminal: true };
+    return { ok: false, rangeKm, beyondTerminal: true, outsideRegard: false };
   }
   if (rule.max_range_km !== null && rangeKm > rule.max_range_km) {
-    return { ok: false, rangeKm, beyondTerminal: false };
+    return { ok: false, rangeKm, beyondTerminal: false, outsideRegard: false };
   }
   if (segmentIntersectsBody(a.positionKm, b.positionKm, a.bodyMeanRadiusKm)) {
-    return { ok: false, rangeKm, beyondTerminal: false };
+    return { ok: false, rangeKm, beyondTerminal: false, outsideRegard: false };
+  }
+  // Satellite pairs: the runtime's field-of-regard cone, centered on the
+  // local horizontal, min of both sides. 360 or undeclared = unrestricted.
+  if (
+    fieldOfRegardDeg !== null &&
+    fieldOfRegardDeg < 360 &&
+    a.kind === "satellite" &&
+    b.kind === "satellite"
+  ) {
+    const halfAngle = (fieldOfRegardDeg / 2) * (Math.PI / 180);
+    if (
+      offLocalHorizontalRad(a.positionKm, b.positionKm) > halfAngle ||
+      offLocalHorizontalRad(b.positionKm, a.positionKm) > halfAngle
+    ) {
+      return { ok: false, rangeKm, beyondTerminal: false, outsideRegard: true };
+    }
   }
   const [endA, endB] = rule.endpoints;
   if (endA.min_elevation_deg !== null && a.kind !== "satellite") {
     if (elevationDeg(a.latDeg, a.lonDeg, a.positionKm, b.positionKm) < endA.min_elevation_deg) {
-      return { ok: false, rangeKm, beyondTerminal: false };
+      return { ok: false, rangeKm, beyondTerminal: false, outsideRegard: false };
     }
   }
   if (endB.min_elevation_deg !== null && b.kind !== "satellite") {
     if (elevationDeg(b.latDeg, b.lonDeg, b.positionKm, a.positionKm) < endB.min_elevation_deg) {
-      return { ok: false, rangeKm, beyondTerminal: false };
+      return { ok: false, rangeKm, beyondTerminal: false, outsideRegard: false };
     }
   }
-  return { ok: true, rangeKm, beyondTerminal: false };
+  return { ok: true, rangeKm, beyondTerminal: false, outsideRegard: false };
 }
 
 export interface CandidateComputation {
@@ -224,6 +267,14 @@ export function computeCandidates(world: BuilderWorld): CandidateComputation {
       if (rb === null) return ra;
       return Math.min(ra, rb);
     };
+    // The runtime applies min(both terminals' field of regard).
+    const pairFieldOfRegard = (aId: string, bId: string): number | null => {
+      const fa = factsA.get(aId)?.fieldOfRegardDeg ?? null;
+      const fb = factsB.get(bId)?.fieldOfRegardDeg ?? null;
+      if (fa === null) return fb;
+      if (fb === null) return fa;
+      return Math.min(fa, fb);
+    };
     const geomA = endA.node_ids.map((id) => [id, geometry.get(id)] as const);
     const geomB = endB.node_ids.map((id) => [id, geometry.get(id)] as const);
     const probeA = geomA.find(([, g]) => g)?.[1];
@@ -245,19 +296,22 @@ export function computeCandidates(world: BuilderWorld): CandidateComputation {
     let tested = 0;
     let truncated = false;
     let beyondTerminalRange = 0;
+    let outsideFieldOfRegard = 0;
     const consider = (aId: string, aGeom: NodeGeometry, bId: string, bGeom: NodeGeometry) => {
       if (tested >= MAX_TESTED_PAIRS_PER_RULE) {
         truncated = true;
         return;
       }
       tested += 1;
-      const { ok, rangeKm, beyondTerminal } = pairPasses(
+      const { ok, rangeKm, beyondTerminal, outsideRegard } = pairPasses(
         rule,
         aGeom,
         bGeom,
         pairTerminalRange(aId, bId),
+        pairFieldOfRegard(aId, bId),
       );
       if (beyondTerminal) beyondTerminalRange += 1;
+      if (outsideRegard) outsideFieldOfRegard += 1;
       if (ok) {
         geometricPairs.push({ rule_id: rule.rule_id, kind: rule.kind, a: aId, b: bId, range_km: rangeKm });
       }
@@ -283,13 +337,15 @@ export function computeCandidates(world: BuilderWorld): CandidateComputation {
             break;
           }
           tested += 1;
-          const { ok, rangeKm, beyondTerminal } = pairPasses(
+          const { ok, rangeKm, beyondTerminal, outsideRegard } = pairPasses(
             rule,
             aGeom,
             bGeom,
             pairTerminalRange(aId, bId),
+            pairFieldOfRegard(aId, bId),
           );
           if (beyondTerminal) beyondTerminalRange += 1;
+          if (outsideRegard) outsideFieldOfRegard += 1;
           if (ok) {
             reachable.push({ rule_id: rule.rule_id, kind: rule.kind, a: aId, b: bId, range_km: rangeKm });
           }
@@ -341,6 +397,9 @@ export function computeCandidates(world: BuilderWorld): CandidateComputation {
     if (truncated) notes.push(`pair budget hit — tested ${tested} pairs`);
     if (beyondTerminalRange > 0) {
       notes.push(`${beyondTerminalRange} pairs beyond terminal range`);
+    }
+    if (outsideFieldOfRegard > 0) {
+      notes.push(`${outsideFieldOfRegard} pairs outside field of regard`);
     }
     if (overCapacity > 0) {
       notes.push(`${overCapacity} candidates over terminal interface capacity`);

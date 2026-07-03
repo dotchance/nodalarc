@@ -21,6 +21,7 @@ import {
   EditorCard,
   EditorName,
   NullableNumberField,
+  SliderField,
 } from "../editorKit";
 import { GroundEditor } from "../GroundEditor";
 import {
@@ -307,5 +308,51 @@ describe("beam footprints read the terminals, never a default", () => {
       (b) => b.endpoint_role !== "access",
     );
     expect(accessBeamElevationDeg(node)).toBe(null);
+  });
+});
+
+describe("SliderField: track for the common range, box for the truth", () => {
+  afterEach(cleanup);
+
+  it("typing past the track is allowed and reported verbatim", () => {
+    const seen: number[] = [];
+    render(
+      <SliderField
+        label="altitude"
+        value={550}
+        min={150}
+        max={40000}
+        onChange={(v) => seen.push(v)}
+      />,
+    );
+    const box = document.querySelector('input[type="number"]') as HTMLInputElement;
+    fireEvent.change(box, { target: { value: "120000" } });
+    expect(seen).toEqual([120000]);
+  });
+
+  it("the slider itself streams values and clamps its display to the track", () => {
+    const seen: number[] = [];
+    const { rerender } = render(
+      <SliderField
+        label="altitude"
+        value={550}
+        min={150}
+        max={40000}
+        onChange={(v) => seen.push(v)}
+      />,
+    );
+    const track = screen.getByLabelText("altitude slider") as HTMLInputElement;
+    fireEvent.change(track, { target: { value: "36000" } });
+    expect(seen).toEqual([36000]);
+    rerender(
+      <SliderField
+        label="altitude"
+        value={120000}
+        min={150}
+        max={40000}
+        onChange={(v) => seen.push(v)}
+      />,
+    );
+    expect(track.value).toBe("40000");
   });
 });

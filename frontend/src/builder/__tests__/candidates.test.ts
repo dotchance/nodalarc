@@ -277,3 +277,82 @@ describe("computeCandidates", () => {
     expect(previews[0]!.note).toContain("over terminal interface capacity");
   });
 });
+
+// ---- field of regard: the runtime's pointing cone, mirrored ----
+// A LEO and a GEO stacked on the same radial: the line of sight is straight
+// up/down, 90 degrees off both local horizontals. A 140-degree field of
+// regard (a +20-degree elevation floor) can never form this link; a full
+// sphere can. This is the exact geometry that formed zero GEO uplinks at
+// runtime while the preview claimed candidates.
+function crosslinkBlock(forDeg: number | null): BuilderWorldNode["terminal_inventory"][number] {
+  return {
+    ...accessBlock("crosslink"),
+    medium: "optical",
+    max_range_km: 45000,
+    field_of_regard_deg: forDeg,
+  };
+}
+
+function stackedWorld(forDeg: number | null): BuilderWorld {
+  const geoEntry = {
+    ...EPHEMERIS.nodes["leo-sat"]!,
+    semi_major_axis_km: 42164,
+    segment_id: "geo",
+  };
+  const satNode = (id: string, segment: string): BuilderWorldNode => ({
+    node_id: id,
+    local_node_id: id,
+    segment_id: segment,
+    namespace: segment,
+    kind: "satellite",
+    plane: 0,
+    slot: 0,
+    tags: [],
+    surface_position: null,
+    forwarding: "routed",
+    terminal_inventory: [crosslinkBlock(forDeg)],
+    interfaces: null,
+    originated_prefixes: null,
+  });
+  const uplink: BuilderLinkRule = {
+    rule_id: "uplink",
+    kind: "crosslink",
+    enabled: true,
+    endpoints: [
+      { segment_id: "leo", terminal_role: "crosslink", terminal_medium: "optical", min_elevation_deg: null, node_ids: ["leo-sat"] },
+      { segment_id: "geo", terminal_role: "crosslink", terminal_medium: "optical", min_elevation_deg: null, node_ids: ["geo-sat"] },
+    ],
+    topology_mode: "explicit_pairs",
+    topology_n: null,
+    explicit_pairs: [["leo-sat", "geo-sat"]],
+    max_range_km: null,
+  };
+  return {
+    session: { name: "t", display_name: null, description: null },
+    epoch_unix: EPOCH_UNIX,
+    ephemeris: {
+      ...EPHEMERIS,
+      nodes: { "leo-sat": EPHEMERIS.nodes["leo-sat"]!, "geo-sat": geoEntry },
+    },
+    nodes: [satNode("leo-sat", "leo"), satNode("geo-sat", "geo")],
+    link_rules: [uplink],
+  };
+}
+
+describe("field of regard mirrors the runtime", () => {
+  it("a 140-degree cone cannot look straight down from GEO — no pair, and the note says why", () => {
+    const { pairs, previews } = computeCandidates(stackedWorld(140));
+    expect(pairs).toHaveLength(0);
+    expect(previews[0]!.note).toContain("outside field of regard");
+  });
+
+  it("a full-sphere terminal forms the same link", () => {
+    const { pairs } = computeCandidates(stackedWorld(360));
+    expect(pairs).toHaveLength(1);
+  });
+
+  it("an undeclared field of regard never gates (runtime parity: unknown is not a restriction)", () => {
+    const { pairs } = computeCandidates(stackedWorld(null));
+    expect(pairs).toHaveLength(1);
+  });
+});

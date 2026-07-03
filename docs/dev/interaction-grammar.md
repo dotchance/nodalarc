@@ -101,7 +101,12 @@ same commit row — Apply, OK, Defaults, Cancel — with a state label that says
 "applied" or "unapplied changes", so the answer to "did my typing take?" is
 on screen, never inferred. Closing a window and cancelling it are the same
 action, and both discard. Defaults returns the window to the values it
-opened with. Before this rule, edits were live and closing was ambiguous:
+opened with. The canvas previews the working copy while a window is dirty —
+drag an orbit slider and the satellites move — with a status chip saying so;
+the preview is the resolver's expansion of the edited draft, never a
+builder-local calculation. Saving writes the applied session only, and the
+save control says what is being left out when windows are dirty. Before this
+rule, edits were live and closing was ambiguous:
 the same gesture meant both "done" and "never mind", and the user couldn't
 tell which one they had performed. Enforced by the window buffers in
 `BuilderView`, `EditorApplyRow` in `editorKit.tsx`, and the conformance

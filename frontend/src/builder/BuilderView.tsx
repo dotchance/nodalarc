@@ -259,7 +259,7 @@ export function BuilderView({
     addBoundary,
     updateBoundary,
     removeBoundary,
-  } = useWorkspace(resolveDocument);
+  } = useWorkspace();
   const nodeCatalog = useBuilderCatalog("nodes");
   const terminalCatalog = useBuilderCatalog("terminals");
   // The diagram workspace: editors are floating, anchored windows — many
@@ -364,6 +364,87 @@ export function BuilderView({
       };
     });
   };
+  /** The session as the canvas should show it: the applied workspace with
+   *  every dirty window's working copy substituted in. Editing previews live
+   *  (drag a slider, the sats move); the workspace itself still only changes
+   *  on Apply. */
+  const previewWorkspace = (): Workspace | null => {
+    if (!workspace) return null;
+    let out = workspace;
+    for (const [key, buf] of Object.entries(buffers)) {
+      if (!buf.dirty) continue;
+      const sep = key.indexOf(":");
+      const kind = sep === -1 ? key : key.slice(0, sep);
+      const id = sep === -1 ? "" : key.slice(sep + 1);
+      switch (kind) {
+        case "session":
+          out = { ...out, ...(buf.draft as SessionBuffer) };
+          break;
+        case "segment":
+          out = {
+            ...out,
+            space: out.space.map((d) =>
+              d.segment_id === id ? (buf.draft as DraftConstellation) : d,
+            ),
+          };
+          break;
+        case "ground":
+          out = {
+            ...out,
+            ground: out.ground.map((d) =>
+              d.segment_id === id ? (buf.draft as DraftGroundSet) : d,
+            ),
+          };
+          break;
+        case "link":
+          out = {
+            ...out,
+            links: out.links.map((r) =>
+              r.rule_id === id ? (buf.draft as DraftLinkRule) : r,
+            ),
+          };
+          break;
+        case "domain":
+          out = {
+            ...out,
+            routing_domains: out.routing_domains.map((d) =>
+              d.domain_id === id ? (buf.draft as DraftRoutingDomain) : d,
+            ),
+          };
+          break;
+        case "boundary":
+          out = {
+            ...out,
+            boundaries: out.boundaries.map((b) =>
+              b.boundary_id === id ? (buf.draft as DraftBoundary) : b,
+            ),
+          };
+          break;
+      }
+    }
+    return out;
+  };
+  const dirtyWindows = Object.values(buffers).filter((b) => b.dirty).length;
+  // THE edit→resolve loop — the only caller. Serializes applied state plus
+  // dirty working copies so the canvas moves while you edit; Apply/Cancel
+  // land here too (buffers change) and re-resolve the applied truth.
+  useEffect(() => {
+    if (!workspace) return;
+    const hasContent =
+      workspace.space.length +
+        workspace.space_refs.length +
+        workspace.ground.length +
+        workspace.ground_refs.length >
+      0;
+    if (!hasContent) return;
+    const timer = setTimeout(() => {
+      const preview = previewWorkspace();
+      if (preview) resolveDocument(toSessionDocument(preview));
+    }, 300);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workspace, buffers]);
+
   // Trust mechanics: Ctrl/Cmd+Z undoes the last workspace mutation unless
   // the user is typing in a field (native input undo wins there).
   useEffect(() => {
@@ -1396,6 +1477,12 @@ export function BuilderView({
             >
               {saveState.kind === "saving" ? "Saving…" : "Save session"}
             </Button>
+            {dirtyWindows > 0 && (
+              <div className="builder-zone-empty">
+                {count(dirtyWindows, "window")} with unapplied edits — Apply to
+                include them in the save
+              </div>
+            )}
             {saveState.kind === "saved" && (
               <Button
                 variant="primary"
@@ -1675,6 +1762,11 @@ export function BuilderView({
       )}
       <div className="builder-status" data-testid="builder-status">
         <span className="builder-mode-badge">Session Builder</span>
+        {dirtyWindows > 0 && (
+          <span className="builder-preview-chip" data-testid="builder-preview-chip">
+            previewing {count(dirtyWindows, "window")} of unapplied edits
+          </span>
+        )}
         {error ? (
           <span className="builder-status-item builder-status-item--error">{error}</span>
         ) : snapshotError ? (

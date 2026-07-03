@@ -1,11 +1,13 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
-/** Workspace state + the edit→resolve loop.
+/** Workspace state: the applied session drafts plus undo and autosave.
  *
- *  Every mutation reserializes the workspace through toSessionDocument and
- *  (debounced) resolve-checks it; the rendered world is always the
- *  resolver's expansion of the current draft — or the resolver's error,
- *  verbatim. No builder-local expansion, ever.
+ *  The edit→resolve loop lives in BuilderView, which serializes the
+ *  workspace WITH any open windows' working copies overlaid — the canvas
+ *  previews what is being edited while the workspace itself only changes on
+ *  Apply. The rendered world is always the resolver's expansion of that
+ *  serialization — or the resolver's error, verbatim. No builder-local
+ *  expansion, ever.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -15,7 +17,6 @@ import {
   newRefGroundSet,
   newRefSegment,
   newWorkspace,
-  toSessionDocument,
   type DraftConstellation,
   type DraftGroundSet,
   type DraftGroundSite,
@@ -28,15 +29,12 @@ import {
   type Workspace,
 } from "./workspace";
 
-const RESOLVE_DEBOUNCE_MS = 400;
 const AUTOSAVE_KEY = "nodalarc-builder-draft";
 const AUTOSAVE_DEBOUNCE_MS = 800;
 const HISTORY_LIMIT = 100;
 
-export function useWorkspace(resolveDocument: (document: unknown) => void) {
+export function useWorkspace() {
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
-  const resolveRef = useRef(resolveDocument);
-  resolveRef.current = resolveDocument;
 
   // Trust mechanics: every mutation lands in a bounded history (undo) and a
   // debounced localStorage autosave (restore-after-crash/refresh).
@@ -103,21 +101,6 @@ export function useWorkspace(resolveDocument: (document: unknown) => void) {
       // Nothing to discard when storage is unavailable.
     }
   }, []);
-
-  useEffect(() => {
-    const hasContent =
-      workspace &&
-      workspace.space.length +
-        workspace.space_refs.length +
-        workspace.ground.length +
-        workspace.ground_refs.length >
-        0;
-    if (!hasContent) return;
-    const timer = setTimeout(() => {
-      resolveRef.current(toSessionDocument(workspace));
-    }, RESOLVE_DEBOUNCE_MS);
-    return () => clearTimeout(timer);
-  }, [workspace]);
 
   const startNew = useCallback((name: string) => {
     setWorkspace(newWorkspace(name));

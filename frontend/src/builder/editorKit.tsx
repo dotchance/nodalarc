@@ -131,6 +131,66 @@ export function NumberField({
   );
 }
 
+/** A slider with a typeable value box beside it. The track covers the
+ *  common range; the box accepts numbers beyond it (type past the track).
+ *  Dragging streams onChange continuously so the canvas preview moves with
+ *  the thumb. */
+export function SliderField({
+  label,
+  value,
+  onChange,
+  min,
+  max,
+  step = 1,
+  suffix,
+  integer = false,
+}: {
+  label: string;
+  value: number;
+  onChange: (value: number) => void;
+  min: number;
+  max: number;
+  step?: number;
+  suffix?: string;
+  integer?: boolean;
+}) {
+  const parse = (raw: string): number | null => {
+    let parsed = Number(raw);
+    if (!Number.isFinite(parsed)) return null;
+    if (integer) parsed = Math.round(parsed);
+    return parsed;
+  };
+  return (
+    <label className="builder-field builder-field--slider">
+      <span className="builder-field-label">{label}</span>
+      <span className="builder-field-input builder-slider-row">
+        <input
+          type="range"
+          min={min}
+          max={max}
+          step={step}
+          value={Math.min(max, Math.max(min, value))}
+          aria-label={`${label} slider`}
+          onChange={(e) => {
+            const parsed = parse(e.target.value);
+            if (parsed !== null) onChange(parsed);
+          }}
+        />
+        <input
+          type="number"
+          value={value}
+          step={step}
+          onChange={(e) => {
+            const parsed = parse(e.target.value);
+            if (parsed !== null) onChange(parsed);
+          }}
+        />
+        {suffix && <span className="builder-field-suffix">{suffix}</span>}
+      </span>
+    </label>
+  );
+}
+
 /** A number that may be unset — empty input means null, shown as the
  *  placeholder ("none", "unlimited"). */
 export function NullableNumberField({

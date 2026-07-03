@@ -12,7 +12,7 @@
 
 import { useState } from "react";
 import { Button } from "../ui/Button";
-import { EditorName, NumberField, SelectField } from "./editorKit";
+import { EditorName, NumberField, SelectField, SliderField } from "./editorKit";
 import { NodeEditor } from "./NodeEditor";
 import { SegmentLinksCard } from "./SegmentLinksCard";
 import {
@@ -27,7 +27,6 @@ import {
   dwellLongitudeDeg,
   identifier,
   isGeosynchronous,
-  meanAnomalyForDwell,
   nodeObjectFromDraft,
   orbitWarnings,
   type DraftConstellation,
@@ -157,32 +156,40 @@ export function ConstellationEditor({
               </Button>
             </div>
             {draft.orbit.shape_kind === "circular" ? (
-              <NumberField
+              <SliderField
                 label="altitude"
                 value={draft.orbit.altitude_km}
+                min={150}
+                max={40000}
                 step={10}
                 suffix="km"
                 onChange={(altitude_km) => onUpdateOrbit({ altitude_km })}
               />
             ) : (
               <>
-                <NumberField
+                <SliderField
                   label="perigee"
                   value={draft.orbit.perigee_altitude_km}
+                  min={150}
+                  max={40000}
                   step={10}
                   suffix="km"
                   onChange={(perigee_altitude_km) => onUpdateOrbit({ perigee_altitude_km })}
                 />
-                <NumberField
+                <SliderField
                   label="apogee"
                   value={draft.orbit.apogee_altitude_km}
+                  min={150}
+                  max={45000}
                   step={10}
                   suffix="km"
                   onChange={(apogee_altitude_km) => onUpdateOrbit({ apogee_altitude_km })}
                 />
-                <NumberField
+                <SliderField
                   label="arg of perigee"
                   value={draft.orbit.argument_of_perigee_deg}
+                  min={0}
+                  max={360}
                   suffix="deg"
                   onChange={(argument_of_perigee_deg) =>
                     onUpdateOrbit({ argument_of_perigee_deg })
@@ -190,46 +197,38 @@ export function ConstellationEditor({
                 />
               </>
             )}
-            <NumberField
+            <SliderField
               label="inclination"
               value={draft.orbit.inclination_deg}
+              min={0}
+              max={180}
+              step={0.5}
               suffix="deg"
               onChange={(inclination_deg) => onUpdateOrbit({ inclination_deg })}
             />
-            <NumberField
+            <SliderField
               label="RAAN"
               value={draft.orbit.raan_deg}
+              min={0}
+              max={360}
               suffix="deg"
               onChange={(raan_deg) => onUpdateOrbit({ raan_deg })}
             />
-            <NumberField
+            <SliderField
               label="mean anomaly"
               value={draft.orbit.mean_anomaly_deg}
+              min={0}
+              max={360}
               suffix="deg"
               onChange={(mean_anomaly_deg) => onUpdateOrbit({ mean_anomaly_deg })}
             />
             {isGeosynchronous(draft.orbit) && (
-              <>
-                <NumberField
-                  label="dwell longitude"
-                  value={Math.round(dwellLongitudeDeg(draft.orbit, workspace.start_time) * 10) / 10}
-                  suffix="deg E"
-                  onChange={(lon) =>
-                    onUpdateOrbit({
-                      mean_anomaly_deg: meanAnomalyForDwell(
-                        lon,
-                        draft.orbit,
-                        workspace.start_time,
-                      ),
-                    })
-                  }
-                />
-                <div className="builder-site-derived">
-                  sets mean anomaly so the first slot sits over this longitude at
-                  session start — negative is west; remaining slots space around
-                  the ring from there
-                </div>
-              </>
+              <div className="builder-site-derived">
+                first slot dwells over{" "}
+                {(Math.round(dwellLongitudeDeg(draft.orbit, workspace.start_time) * 10) / 10).toFixed(1)}
+                °E at session start (negative is west) — drag mean anomaly to
+                move it; remaining slots space around the ring
+              </div>
             )}
             {warnings.map((warning) => (
               <div className="builder-warning" key={warning}>

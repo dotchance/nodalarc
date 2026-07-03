@@ -856,3 +856,32 @@ button.builder-card-head:hover .builder-card-title {
 .builder-apply-state--dirty {
   color: var(--accent-amber);
 }
+
+/* Slider fields: track for the common range, value box for precision and
+   for typing past the track. */
+.builder-slider-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.builder-slider-row input[type="range"] {
+  flex: 1;
+  min-width: 0;
+  accent-color: var(--accent-amber);
+}
+
+.builder-slider-row input[type="number"] {
+  width: 5.5em;
+  flex: none;
+}
+
+/* The canvas resolves working copies while a window is dirty — say so. */
+.builder-preview-chip {
+  color: var(--accent-amber);
+  border: 1px solid var(--accent-amber);
+  border-radius: 3px;
+  padding: 0 var(--space-2);
+  font-size: var(--font-size-sm);
+  white-space: nowrap;
+}

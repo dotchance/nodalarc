@@ -7,8 +7,8 @@
  *  is a "lan" chip that serializes to the grammar's ethernet ports (LAN is
  *  not a terminal role). Click a chip to edit that one mount inline. The
  *  terminal picker stays open for batch adding, and clicking a terminal that
- *  matches an existing mount increments its count — the one-click transform
- *  the discovery arc measured as the biggest authoring cost.
+ *  matches an existing mount increments its count — port provisioning is
+ *  the costliest authoring step, so it is one click.
  *
  *  Runtime-gated forwarding classes (host, bridge, control_only) are
  *  selectable — they are grammar — and labeled as gated; the resolver's

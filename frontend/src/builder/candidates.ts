@@ -13,6 +13,13 @@
  *  Previews are honest about scope: rules whose geometry this preview cannot
  *  compute yet (terrestrial surface runs, inter-body spans) carry an explicit
  *  note instead of fake lines, and any cap is reported, never silent.
+ *
+ *  Two limits come from the terminals themselves, mirroring the runtime ISL
+ *  engine: a pair is rejected when its range exceeds either endpoint's
+ *  matching terminal range, and a node never shows more candidate lines
+ *  than it has matching terminal interfaces (nearest admitted first, the
+ *  overflow counted in the rule note). Tracking-rate and field-of-regard
+ *  gating remain runtime-only for now.
  */
 
 import {
@@ -27,7 +34,7 @@ import {
   segmentIntersectsBody,
   type Vec3Km,
 } from "../sim/lineOfSight";
-import type { BuilderLinkRule, BuilderWorld } from "./builderTypes";
+import type { BuilderLinkEndpoint, BuilderLinkRule, BuilderWorld } from "./builderTypes";
 
 // Compute/render bounds — reported in the rule preview whenever they bite.
 const MAX_TESTED_PAIRS_PER_RULE = 40000;
@@ -101,30 +108,71 @@ function nodeGeometries(world: BuilderWorld): Map<string, NodeGeometry> {
   return out;
 }
 
+/** Per-node terminal facts for one rule endpoint: the best matching
+ *  terminal's range (null = that terminal is unlimited) and how many
+ *  matching interfaces the node actually has. */
+interface NodeTerminalFacts {
+  maxRangeKm: number | null;
+  interfaces: number;
+}
+
+function endpointTerminalFacts(
+  world: BuilderWorld,
+  endpoint: BuilderLinkEndpoint,
+): Map<string, NodeTerminalFacts> {
+  const members = new Set(endpoint.node_ids);
+  const facts = new Map<string, NodeTerminalFacts>();
+  for (const node of world.nodes) {
+    if (!members.has(node.node_id)) continue;
+    let maxRangeKm: number | null = null;
+    let unlimited = false;
+    let interfaces = 0;
+    for (const block of node.terminal_inventory) {
+      if (block.endpoint_role !== endpoint.terminal_role) continue;
+      if (endpoint.terminal_medium !== null && block.medium !== endpoint.terminal_medium) {
+        continue;
+      }
+      interfaces += block.count;
+      if (block.max_range_km === null) unlimited = true;
+      else maxRangeKm = Math.max(maxRangeKm ?? 0, block.max_range_km);
+    }
+    facts.set(node.node_id, {
+      maxRangeKm: unlimited ? null : maxRangeKm,
+      interfaces,
+    });
+  }
+  return facts;
+}
+
 function pairPasses(
   rule: BuilderLinkRule,
   a: NodeGeometry,
   b: NodeGeometry,
-): { ok: boolean; rangeKm: number } {
+  terminalRangeKm: number | null,
+): { ok: boolean; rangeKm: number; beyondTerminal: boolean } {
   const rangeKm = distanceKm(a.positionKm, b.positionKm);
+  // The runtime applies min(both terminals' range); the preview mirrors it.
+  if (terminalRangeKm !== null && rangeKm > terminalRangeKm) {
+    return { ok: false, rangeKm, beyondTerminal: true };
+  }
   if (rule.max_range_km !== null && rangeKm > rule.max_range_km) {
-    return { ok: false, rangeKm };
+    return { ok: false, rangeKm, beyondTerminal: false };
   }
   if (segmentIntersectsBody(a.positionKm, b.positionKm, a.bodyMeanRadiusKm)) {
-    return { ok: false, rangeKm };
+    return { ok: false, rangeKm, beyondTerminal: false };
   }
   const [endA, endB] = rule.endpoints;
   if (endA.min_elevation_deg !== null && a.kind !== "satellite") {
     if (elevationDeg(a.latDeg, a.lonDeg, a.positionKm, b.positionKm) < endA.min_elevation_deg) {
-      return { ok: false, rangeKm };
+      return { ok: false, rangeKm, beyondTerminal: false };
     }
   }
   if (endB.min_elevation_deg !== null && b.kind !== "satellite") {
     if (elevationDeg(b.latDeg, b.lonDeg, b.positionKm, a.positionKm) < endB.min_elevation_deg) {
-      return { ok: false, rangeKm };
+      return { ok: false, rangeKm, beyondTerminal: false };
     }
   }
-  return { ok: true, rangeKm };
+  return { ok: true, rangeKm, beyondTerminal: false };
 }
 
 export interface CandidateComputation {
@@ -136,6 +184,12 @@ export function computeCandidates(world: BuilderWorld): CandidateComputation {
   const geometry = nodeGeometries(world);
   const pairs: CandidatePair[] = [];
   const previews: RulePreview[] = [];
+  // Interface budgets are shared ACROSS rules: the same physical mounts
+  // serve every rule that selects them (a node with one crosslink terminal
+  // cannot hold a handoff and an uplink line at once).
+  const budgets = new Map<string, number>();
+  const budgetKey = (nodeId: string, endpoint: BuilderLinkEndpoint) =>
+    `${nodeId}|${endpoint.terminal_role}|${endpoint.terminal_medium ?? "*"}`;
 
   for (const rule of world.link_rules) {
     const preview: RulePreview = {
@@ -153,6 +207,23 @@ export function computeCandidates(world: BuilderWorld): CandidateComputation {
     }
 
     const [endA, endB] = rule.endpoints;
+    const factsA = endpointTerminalFacts(world, endA);
+    const factsB = endpointTerminalFacts(world, endB);
+    for (const [nodeId, facts] of factsA) {
+      const key = budgetKey(nodeId, endA);
+      if (!budgets.has(key)) budgets.set(key, facts.interfaces);
+    }
+    for (const [nodeId, facts] of factsB) {
+      const key = budgetKey(nodeId, endB);
+      if (!budgets.has(key)) budgets.set(key, facts.interfaces);
+    }
+    const pairTerminalRange = (aId: string, bId: string): number | null => {
+      const ra = factsA.get(aId)?.maxRangeKm ?? null;
+      const rb = factsB.get(bId)?.maxRangeKm ?? null;
+      if (ra === null) return rb;
+      if (rb === null) return ra;
+      return Math.min(ra, rb);
+    };
     const geomA = endA.node_ids.map((id) => [id, geometry.get(id)] as const);
     const geomB = endB.node_ids.map((id) => [id, geometry.get(id)] as const);
     const probeA = geomA.find(([, g]) => g)?.[1];
@@ -170,18 +241,25 @@ export function computeCandidates(world: BuilderWorld): CandidateComputation {
       continue;
     }
 
-    const rulePairs: CandidatePair[] = [];
+    const geometricPairs: CandidatePair[] = [];
     let tested = 0;
     let truncated = false;
+    let beyondTerminalRange = 0;
     const consider = (aId: string, aGeom: NodeGeometry, bId: string, bGeom: NodeGeometry) => {
       if (tested >= MAX_TESTED_PAIRS_PER_RULE) {
         truncated = true;
         return;
       }
       tested += 1;
-      const { ok, rangeKm } = pairPasses(rule, aGeom, bGeom);
+      const { ok, rangeKm, beyondTerminal } = pairPasses(
+        rule,
+        aGeom,
+        bGeom,
+        pairTerminalRange(aId, bId),
+      );
+      if (beyondTerminal) beyondTerminalRange += 1;
       if (ok) {
-        rulePairs.push({ rule_id: rule.rule_id, kind: rule.kind, a: aId, b: bId, range_km: rangeKm });
+        geometricPairs.push({ rule_id: rule.rule_id, kind: rule.kind, a: aId, b: bId, range_km: rangeKm });
       }
     };
 
@@ -205,13 +283,19 @@ export function computeCandidates(world: BuilderWorld): CandidateComputation {
             break;
           }
           tested += 1;
-          const { ok, rangeKm } = pairPasses(rule, aGeom, bGeom);
+          const { ok, rangeKm, beyondTerminal } = pairPasses(
+            rule,
+            aGeom,
+            bGeom,
+            pairTerminalRange(aId, bId),
+          );
+          if (beyondTerminal) beyondTerminalRange += 1;
           if (ok) {
             reachable.push({ rule_id: rule.rule_id, kind: rule.kind, a: aId, b: bId, range_km: rangeKm });
           }
         }
         reachable.sort((x, y) => x.range_km - y.range_km);
-        rulePairs.push(...reachable.slice(0, n));
+        geometricPairs.push(...reachable.slice(0, n));
       }
     } else {
       // visible_candidates: every geometrically possible member pair.
@@ -229,15 +313,42 @@ export function computeCandidates(world: BuilderWorld): CandidateComputation {
       }
     }
 
-    if (rulePairs.length > MAX_RENDERED_PAIRS_PER_RULE) {
-      rulePairs.sort((x, y) => x.range_km - y.range_km);
-      preview.note = `showing ${MAX_RENDERED_PAIRS_PER_RULE} nearest of ${rulePairs.length} candidates`;
-      rulePairs.length = MAX_RENDERED_PAIRS_PER_RULE;
-    } else if (truncated) {
-      preview.note = `pair budget hit — tested ${tested} pairs`;
-    } else if (rulePairs.length === 0) {
-      preview.note = "rule permits, geometry currently forbids — runtime computes contacts over time";
+    // Interface capacity, nearest first: a node never shows more candidate
+    // lines than it has matching terminal interfaces — the runtime could
+    // never form the rest simultaneously.
+    geometricPairs.sort((x, y) => x.range_km - y.range_km);
+    const rulePairs: CandidatePair[] = [];
+    let overCapacity = 0;
+    for (const pair of geometricPairs) {
+      const keyA = budgetKey(pair.a, endA);
+      const keyB = budgetKey(pair.b, endB);
+      const remainingA = budgets.get(keyA) ?? 0;
+      const remainingB = budgets.get(keyB) ?? 0;
+      if (remainingA <= 0 || remainingB <= 0) {
+        overCapacity += 1;
+        continue;
+      }
+      budgets.set(keyA, remainingA - 1);
+      budgets.set(keyB, remainingB - 1);
+      rulePairs.push(pair);
     }
+
+    const notes: string[] = [];
+    if (rulePairs.length > MAX_RENDERED_PAIRS_PER_RULE) {
+      notes.push(`showing ${MAX_RENDERED_PAIRS_PER_RULE} nearest of ${rulePairs.length} candidates`);
+      rulePairs.length = MAX_RENDERED_PAIRS_PER_RULE;
+    }
+    if (truncated) notes.push(`pair budget hit — tested ${tested} pairs`);
+    if (beyondTerminalRange > 0) {
+      notes.push(`${beyondTerminalRange} pairs beyond terminal range`);
+    }
+    if (overCapacity > 0) {
+      notes.push(`${overCapacity} candidates over terminal interface capacity`);
+    }
+    if (rulePairs.length === 0 && notes.length === 0) {
+      notes.push("rule permits, geometry currently forbids — runtime computes contacts over time");
+    }
+    preview.note = notes.length ? notes.join("; ") : null;
     preview.candidates = rulePairs.length;
     pairs.push(...rulePairs);
   }

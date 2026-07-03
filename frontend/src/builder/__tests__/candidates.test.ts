@@ -50,6 +50,25 @@ const BODY_MATH = {
   kmPerRenderUnit: 1,
 };
 
+function accessBlock(role: string): BuilderWorldNode["terminal_inventory"][number] {
+  return {
+    terminal_id: `${role}_0`,
+    owner_node_id: "n",
+    endpoint_role: role,
+    medium: "rf",
+    source_terminal_id: null,
+    link_role: null,
+    count: 4,
+    tracking_capacity: null,
+    max_range_km: null,
+    min_elevation_deg: null,
+    field_of_regard_deg: null,
+    tracking_rate_deg_s: null,
+    bandwidth_mbps: null,
+    source_ref: "x",
+  };
+}
+
 function groundNode(id: string, latDeg: number, lonDeg: number): BuilderWorldNode {
   return {
     node_id: id,
@@ -62,7 +81,7 @@ function groundNode(id: string, latDeg: number, lonDeg: number): BuilderWorldNod
     tags: [],
     surface_position: { body: "earth", lat_deg: latDeg, lon_deg: lonDeg, alt_m: 0 },
     forwarding: "routed",
-    terminal_inventory: [],
+    terminal_inventory: [accessBlock("access")],
     interfaces: null,
     originated_prefixes: null,
   };
@@ -113,7 +132,7 @@ function world(rules: BuilderLinkRule[]): BuilderWorld {
         tags: [],
         surface_position: null,
         forwarding: "routed",
-        terminal_inventory: [],
+        terminal_inventory: [accessBlock("access"), accessBlock("isl")],
         interfaces: null,
         originated_prefixes: null,
       },
@@ -219,5 +238,42 @@ describe("computeCandidates", () => {
     const { pairs, previews } = computeCandidates(world([explicit, disabled]));
     expect(pairs).toHaveLength(1);
     expect(previews.find((p) => p.rule_id === "off")!.note).toBe("rule disabled");
+  });
+
+  it("rejects pairs beyond the terminals' own range, with the reason noted", () => {
+    const w = world([{ ...ACCESS_RULE, rule_id: "tight" }]);
+    // Cap both ends' access terminals at 100 km; the overhead satellite sits
+    // ~550 km up, so geometry passes but the terminals cannot form it.
+    for (const node of w.nodes) {
+      node.terminal_inventory = node.terminal_inventory.map((b) => ({
+        ...b,
+        max_range_km: 100,
+      }));
+    }
+    const { pairs, previews } = computeCandidates(w);
+    expect(pairs).toHaveLength(0);
+    expect(previews[0]!.note).toContain("beyond terminal range");
+  });
+
+  it("never draws more lines per node than it has matching interfaces", () => {
+    const w = world([{ ...ACCESS_RULE, rule_id: "cap" }]);
+    // Second visible ground near the subsatellite point; satellite access
+    // capacity cut to ONE interface: only the nearest pair may draw.
+    w.nodes.push(groundNode("ground-near-2", 1.5, SAT_LON_DEG));
+    w.link_rules[0] = {
+      ...w.link_rules[0]!,
+      endpoints: [
+        { ...w.link_rules[0]!.endpoints[0], node_ids: ["ground-near", "ground-far", "ground-near-2"] },
+        w.link_rules[0]!.endpoints[1],
+      ],
+    };
+    const sat = w.nodes.find((n) => n.node_id === "leo-sat")!;
+    sat.terminal_inventory = sat.terminal_inventory.map((b) =>
+      b.endpoint_role === "access" ? { ...b, count: 1 } : b,
+    );
+    const { pairs, previews } = computeCandidates(w);
+    expect(pairs).toHaveLength(1);
+    expect(pairs[0]!.a).toBe("ground-near");
+    expect(previews[0]!.note).toContain("over terminal interface capacity");
   });
 });

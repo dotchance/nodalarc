@@ -32,6 +32,7 @@ import { BuilderInspector } from "./BuilderInspector";
 import { builderSnapshotFromWorld } from "./builderSnapshot";
 import { CandidateLines } from "./CandidateLines";
 import { computeCandidates } from "./candidates";
+import { InlineSelect } from "./editorKit";
 import { capabilitiesBySegment, connectSegments, rederiveRule } from "./linkPhysics";
 import { CatalogObjectView } from "./CatalogObjectView";
 import { ConstellationEditor } from "./ConstellationEditor";
@@ -477,6 +478,18 @@ export function BuilderView({
   const openRule = (ruleId: string) => {
     openEditor({ kind: "link", id: ruleId });
   };
+  // The tree-row connect control: pick the other end right on the row —
+  // no editor window needed to reach the gesture (IG-13).
+  const connectOptions = (selfId: string) => [
+    { value: "", label: "⊶ link to…" },
+    ...(workspace ? placedSegments(workspace) : []).map((segment) => ({
+      value: segment.segment_id,
+      label:
+        segment.segment_id === selfId
+          ? `${segment.label} (mesh)`
+          : `${segment.label} (${segment.kind})`,
+    })),
+  ];
   const connect = (fromSegmentId: string, targetSegmentId: string) => {
     if (!workspace) return;
     try {
@@ -910,6 +923,14 @@ export function BuilderView({
                   {placed.label}
                 </span>
                 <span className="builder-library-actions">
+                  <InlineSelect
+                    className="builder-ground-preset"
+                    ariaLabel={`Connect ${placed.label}`}
+                    title="Connect: pick the other end — physics derive from both faceplates"
+                    value=""
+                    onChange={(target) => target && connect(placed.segment_id, target)}
+                    options={connectOptions(placed.segment_id)}
+                  />
                   <IconButton
                     icon="pencil"
                     size={12}
@@ -951,24 +972,35 @@ export function BuilderView({
               </div>
             ))}
             {workspace.space.map((draft) => (
-              <button
-                className={`builder-outline-row builder-outline-row--segment${
-                  isOpen(`segment:${draft.segment_id}`)
-                    ? " builder-outline-row--selected"
-                    : ""
-                }`}
-                key={draft.segment_id}
-                onClick={() => openEditor({ kind: "segment", id: draft.segment_id })}
-                title={`Edit ${draft.display_name}`}
-              >
-                <span className="builder-outline-name builder-outline-name--space">
-                  <Icon name="orbit" size={12} />
-                  {draft.display_name}
+              <div className="builder-library-entry" key={draft.segment_id}>
+                <button
+                  className={`builder-outline-row builder-outline-row--segment${
+                    isOpen(`segment:${draft.segment_id}`)
+                      ? " builder-outline-row--selected"
+                      : ""
+                  }`}
+                  onClick={() => openEditor({ kind: "segment", id: draft.segment_id })}
+                  title={`Edit ${draft.display_name}`}
+                >
+                  <span className="builder-outline-name builder-outline-name--space">
+                    <Icon name="orbit" size={12} />
+                    {draft.display_name}
+                  </span>
+                  <span className="builder-outline-count">
+                    {draft.planes * draft.slots_per_plane} sat
+                  </span>
+                </button>
+                <span className="builder-library-actions">
+                  <InlineSelect
+                    className="builder-ground-preset"
+                    ariaLabel={`Connect ${draft.display_name}`}
+                    title="Connect: pick the other end — physics derive from both faceplates"
+                    value=""
+                    onChange={(target) => target && connect(draft.segment_id, target)}
+                    options={connectOptions(draft.segment_id)}
+                  />
                 </span>
-                <span className="builder-outline-count">
-                  {draft.planes * draft.slots_per_plane} sat
-                </span>
-              </button>
+              </div>
             ))}
             {workspace.ground_refs.map((placed) => (
               <div className="builder-library-entry" key={placed.segment_id}>
@@ -977,6 +1009,14 @@ export function BuilderView({
                   {placed.label}
                 </span>
                 <span className="builder-library-actions">
+                  <InlineSelect
+                    className="builder-ground-preset"
+                    ariaLabel={`Connect ${placed.label}`}
+                    title="Connect: pick the other end — physics derive from both faceplates"
+                    value=""
+                    onChange={(target) => target && connect(placed.segment_id, target)}
+                    options={connectOptions(placed.segment_id)}
+                  />
                   <select
                     aria-label={`Scheduling for ${placed.label}`}
                     title="Scheduling intent — writes the full explicit block"
@@ -1020,24 +1060,35 @@ export function BuilderView({
               </div>
             ))}
             {workspace.ground.map((draft) => (
-              <button
-                className={`builder-outline-row builder-outline-row--segment${
-                  isOpen(`ground:${draft.segment_id}`)
-                    ? " builder-outline-row--selected"
-                    : ""
-                }`}
-                key={draft.segment_id}
-                onClick={() => openEditor({ kind: "ground", id: draft.segment_id })}
-                title={`Edit ${draft.display_name}`}
-              >
-                <span className="builder-outline-name builder-outline-name--ground">
-                  <Icon name="satellite-dish" size={12} />
-                  {draft.display_name}
+              <div className="builder-library-entry" key={draft.segment_id}>
+                <button
+                  className={`builder-outline-row builder-outline-row--segment${
+                    isOpen(`ground:${draft.segment_id}`)
+                      ? " builder-outline-row--selected"
+                      : ""
+                  }`}
+                  onClick={() => openEditor({ kind: "ground", id: draft.segment_id })}
+                  title={`Edit ${draft.display_name}`}
+                >
+                  <span className="builder-outline-name builder-outline-name--ground">
+                    <Icon name="satellite-dish" size={12} />
+                    {draft.display_name}
+                  </span>
+                  <span className="builder-outline-count">
+                    {count(draft.members.length, "site")}
+                  </span>
+                </button>
+                <span className="builder-library-actions">
+                  <InlineSelect
+                    className="builder-ground-preset"
+                    ariaLabel={`Connect ${draft.display_name}`}
+                    title="Connect: pick the other end — physics derive from both faceplates"
+                    value=""
+                    onChange={(target) => target && connect(draft.segment_id, target)}
+                    options={connectOptions(draft.segment_id)}
+                  />
                 </span>
-                <span className="builder-outline-count">
-                  {count(draft.members.length, "site")}
-                </span>
-              </button>
+              </div>
             ))}
             {(workspace.links.length > 0 || placedSegments(workspace).length > 0) && (
               <div className="builder-outline-kind">Links</div>

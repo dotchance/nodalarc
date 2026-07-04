@@ -12,6 +12,7 @@ from __future__ import annotations
 import ipaddress
 import math
 import re
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -253,7 +254,8 @@ def _check_runtime_support(
             # SpaceSegment can carry a constellation, a single space_node, or
             # a space_node_set, and each is a distinct supported feature. The
             # gate must key on the loaded wrapper, not the segment class.
-            wrapper, _ = _load_ref_or_object(segment.source, roots)
+            with _segment_scope(segment.id):
+                wrapper, _ = _load_ref_or_object(segment.source, roots)
             kind = wrapper
         else:
             kind = "lagrange_point"
@@ -476,27 +478,47 @@ class _SiteMarker:
     site_id: str
 
 
+@contextmanager
+def _segment_scope(segment_id: str):
+    """Address refusals raised while expanding ONE segment: a wall that
+    names no owner lands on the segment being expanded (refusals are
+    addressed mail — an unscoped catalog-validation message would otherwise
+    surface as raw prose far from the object that caused it)."""
+    try:
+        yield
+    except SessionResolutionError as exc:
+        if exc.subject_id or exc.segment_id or exc.node_id:
+            raise
+        raise SessionResolutionError(
+            str(exc),
+            subject_kind="segment",
+            subject_id=segment_id,
+            segment_id=segment_id,
+        ) from exc
+
+
 def _expand_segments(cfg: SegmentSessionConfig, roots: CatalogRoots) -> tuple[_RuntimeNode, ...]:
     ordered: list[_RuntimeNode | _SiteMarker] = []
     placements: dict[str, _SitePlacement] = {}
     for segment in cfg.segments:
-        if isinstance(segment, SpaceSegment):
-            ordered.extend(_expand_space_segment(segment, roots))
-        elif isinstance(segment, GroundSegment):
-            site_set = _load_expected(segment.placement.from_site_set, roots, "site_set")
-            for site_ref in site_set["sites"]:
-                site = _load_expected(site_ref, roots, "site")
-                site_id = site["id"]
-                placement = placements.get(site_id)
-                if placement is None:
-                    placements[site_id] = _SitePlacement(site=site, segments=[segment])
-                    ordered.append(_SiteMarker(site_id))
-                elif segment.id not in {s.id for s in placement.segments}:
-                    placement.segments.append(segment)
-        else:
-            raise SessionResolutionError(
-                f"segment {segment.id!r} uses runtime-unsupported lagrange placement"
-            )
+        with _segment_scope(segment.id):
+            if isinstance(segment, SpaceSegment):
+                ordered.extend(_expand_space_segment(segment, roots))
+            elif isinstance(segment, GroundSegment):
+                site_set = _load_expected(segment.placement.from_site_set, roots, "site_set")
+                for site_ref in site_set["sites"]:
+                    site = _load_expected(site_ref, roots, "site")
+                    site_id = site["id"]
+                    placement = placements.get(site_id)
+                    if placement is None:
+                        placements[site_id] = _SitePlacement(site=site, segments=[segment])
+                        ordered.append(_SiteMarker(site_id))
+                    elif segment.id not in {s.id for s in placement.segments}:
+                        placement.segments.append(segment)
+            else:
+                raise SessionResolutionError(
+                    f"segment {segment.id!r} uses runtime-unsupported lagrange placement"
+                )
     nodes: list[_RuntimeNode] = []
     for entry in ordered:
         if isinstance(entry, _SiteMarker):
@@ -1533,7 +1555,9 @@ def _validate_routing_domain_partition(
     missing = [node_id for node_id, domain_ids in domain_ids_by_node.items() if not domain_ids]
     if missing:
         raise SessionResolutionError(
-            "routing domains must cover every resolved node; missing: " + ", ".join(missing[:20])
+            f"routing domains must cover every resolved node; "
+            f"{len(missing)} node{'s are' if len(missing) != 1 else ' is'} in no domain "
+            f"(e.g. {', '.join(sorted(missing)[:3])})"
         )
     overlaps = {
         node_id: domain_ids
@@ -1541,11 +1565,24 @@ def _validate_routing_domain_partition(
         if len(domain_ids) > 1
     }
     if overlaps:
-        examples = ", ".join(
-            f"{node_id}={domain_ids}" for node_id, domain_ids in sorted(overlaps.items())[:20]
+        # Summarize, and address the wall: name the overlapping DOMAINS and a
+        # few example nodes — enumerating every member of a large session was
+        # a wall of prose no one could act on. The subject is the LAST
+        # declared overlapping domain: the one most recently added is the one
+        # whose membership to fix.
+        domain_names = sorted({d for ids in overlaps.values() for d in ids})
+        examples = ", ".join(sorted(overlaps)[:3])
+        declared_order = [d.domain_id for d in domains]
+        subject = next(
+            (d for d in reversed(declared_order) if d in domain_names),
+            domain_names[-1],
         )
         raise SessionResolutionError(
-            "routing domains must be disjoint; overlapping node membership: " + examples
+            f"routing domains must be disjoint: {', '.join(domain_names)} share "
+            f"{len(overlaps)} node{'s' if len(overlaps) != 1 else ''} "
+            f"(e.g. {examples})",
+            subject_kind="routing_domain",
+            subject_id=subject,
         )
 
 

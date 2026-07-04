@@ -1283,6 +1283,7 @@ export function defaultLinkRule(
 export function linkWarnings(workspace: Workspace): string[] {
   const warnings: string[] = [];
   const placed = new Map(placedSegments(workspace).map((s) => [s.segment_id, s]));
+  const held = heldBackGroundIds(workspace);
   const seenIds = new Set<string>();
   for (const rule of workspace.links) {
     const id = identifier(rule.label) || rule.rule_id;
@@ -1294,6 +1295,10 @@ export function linkWarnings(workspace: Workspace): string[] {
       if (!placed.has(endpoint.segment_id)) {
         warnings.push(
           `${rule.label || id}: segment "${endpoint.segment_id}" is no longer in the session`,
+        );
+      } else if (held.has(endpoint.segment_id)) {
+        warnings.push(
+          `${rule.label || id}: "${placed.get(endpoint.segment_id)?.label}" has no sites yet — the rule is held out of the artifact until it does`,
         );
       }
     }
@@ -1315,11 +1320,17 @@ let boundaryCounter = 0;
  *  world is the honest default; members are then removed per segment. */
 export function defaultRoutingDomain(workspace: Workspace): DraftRoutingDomain {
   domainCounter += 1;
+  // Seed the UNCOVERED segments: the first domain naturally takes
+  // everything, the second means "the rest". Seeding every segment again
+  // guaranteed an instant disjointness refusal on the second "+ domain".
+  const covered = new Set(workspace.routing_domains.flatMap((d) => d.member_segment_ids));
   return {
     domain_id: `domain-${domainCounter}`,
     label: `domain ${domainCounter}`,
     protocol: "isis",
-    member_segment_ids: placedSegments(workspace).map((s) => s.segment_id),
+    member_segment_ids: placedSegments(workspace)
+      .map((s) => s.segment_id)
+      .filter((id) => !covered.has(id)),
     hello_interval_s: null,
     hold_interval_s: null,
   };
@@ -1359,7 +1370,9 @@ export function routingWarnings(workspace: Workspace): string[] {
     if (domainIds.has(id)) warnings.push(`two routing domains named "${id}" — rename one`);
     domainIds.add(id);
     if (domain.member_segment_ids.length === 0) {
-      warnings.push(`${domain.label}: no member segments — the resolver requires at least one`);
+      warnings.push(
+        `${domain.label}: no member segments yet — held out of the artifact until it has some`,
+      );
     }
     for (const member of domain.member_segment_ids) {
       if (!placed.has(member)) {
@@ -1416,7 +1429,7 @@ export function completenessFindings(workspace: Workspace): CompletenessFinding[
   for (const draft of workspace.ground) {
     if (draft.members.length === 0) {
       findings.push({
-        message: `${draft.display_name}: no sites yet`,
+        message: `${draft.display_name}: no sites yet — held out of the artifact`,
         target: { kind: "ground", id: draft.segment_id },
       });
     }
@@ -1505,8 +1518,24 @@ export function reseedCounters(workspace: Workspace): void {
   );
 }
 
+/** A ground draft with no sites cannot possibly resolve — it and anything
+ *  referencing it are HELD OUT of the artifact until complete (the warnings
+ *  and the rail say so). An empty shell used to refuse the whole resolve
+ *  and blank the world the moment authoring began. */
+export function heldBackGroundIds(workspace: Workspace): Set<string> {
+  return new Set(
+    workspace.ground.filter((d) => d.members.length === 0).map((d) => d.segment_id),
+  );
+}
+
 /** Serialize the workspace to the session grammar (the ONE artifact). */
 export function toSessionDocument(workspace: Workspace): Record<string, unknown> {
+  const heldGrounds = heldBackGroundIds(workspace);
+  const emittedSegmentIds = new Set(
+    placedSegments(workspace)
+      .map((s) => s.segment_id)
+      .filter((id) => !heldGrounds.has(id)),
+  );
   const refSegments: unknown[] = workspace.space_refs.map((placed) => ({
     id: identifier(placed.segment_id),
     source: placed.ref,
@@ -1559,7 +1588,9 @@ export function toSessionDocument(workspace: Workspace): Record<string, unknown>
     apply: { scheduling: SCHEDULING_PRESETS[placed.scheduling_preset].block },
   }));
 
-  const groundSegments: unknown[] = workspace.ground.map((draft) => {
+  const groundSegments: unknown[] = workspace.ground
+    .filter((draft) => !heldGrounds.has(draft.segment_id))
+    .map((draft) => {
     const overrides = draft.members
       .filter((member) => member.scheduling_override !== null)
       .map((member) => ({
@@ -1589,7 +1620,11 @@ export function toSessionDocument(workspace: Workspace): Record<string, unknown>
     };
   });
 
-  const linkRules: unknown[] = workspace.links.map((rule) => ({
+  const emittedRules = workspace.links.filter(
+    (rule) =>
+      emittedSegmentIds.has(rule.a.segment_id) && emittedSegmentIds.has(rule.b.segment_id),
+  );
+  const linkRules: unknown[] = emittedRules.map((rule) => ({
     id: identifier(rule.label) || rule.rule_id,
     ...(rule.enabled ? {} : { enabled: false }),
     topology:
@@ -1615,15 +1650,21 @@ export function toSessionDocument(workspace: Workspace): Record<string, unknown>
       : {}),
   }));
 
-  const domains: unknown[] = workspace.routing_domains.map((domain) => ({
+  const emittedDomains = workspace.routing_domains
+    .map((domain) => ({
+      domain,
+      members: domain.member_segment_ids.filter((id) => emittedSegmentIds.has(id)),
+    }))
+    .filter(({ members }) => members.length > 0);
+  const domains: unknown[] = emittedDomains.map(({ domain, members }) => ({
     id: emittedDomainId(domain),
     protocol: domain.protocol,
     selectors:
-      domain.member_segment_ids.length === 1
-        ? [{ segment: identifier(domain.member_segment_ids[0] as string) }]
+      members.length === 1
+        ? [{ segment: identifier(members[0] as string) }]
         : [
             {
-              any: domain.member_segment_ids.map((member) => ({
+              any: members.map((member) => ({
                 segment: identifier(member),
               })),
             },
@@ -1643,7 +1684,16 @@ export function toSessionDocument(workspace: Workspace): Record<string, unknown>
 
   const domainById = new Map(workspace.routing_domains.map((d) => [d.domain_id, d]));
   const ruleById = new Map(workspace.links.map((r) => [r.rule_id, r]));
-  const boundaries: unknown[] = workspace.boundaries.map((boundary) => {
+  const emittedRuleIds = new Set(emittedRules.map((r) => r.rule_id));
+  const emittedDomainIds = new Set(emittedDomains.map(({ domain }) => domain.domain_id));
+  const boundaries: unknown[] = workspace.boundaries
+    .filter(
+      (boundary) =>
+        emittedRuleIds.has(boundary.over_rule_id) &&
+        emittedDomainIds.has(boundary.from_domain_id) &&
+        emittedDomainIds.has(boundary.to_domain_id),
+    )
+    .map((boundary) => {
     const fromDomain = domainById.get(boundary.from_domain_id);
     const toDomain = domainById.get(boundary.to_domain_id);
     const overRule = ruleById.get(boundary.over_rule_id);

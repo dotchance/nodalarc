@@ -942,3 +942,61 @@ describe("workspaceFromSessionDocument — placed refs and inline nodes", () => 
     expect(result.workspace!.space[0]!.node_draft?.terminals[0]?.count).toBe(2);
   });
 });
+
+describe("held-back incomplete containers", () => {
+  it("an empty ground draft and everything referencing it stay out of the artifact", () => {
+    const ws = newWorkspace("holdback-study");
+    ws.space.push(newDraftConstellation("nodalarc:nodes/space/starlink-v2-mesh.yaml"));
+    const shell = ws.space[0]!;
+    const ground = newDraftGroundSet("nodalarc:nodes/ground/leo-gateway.yaml", {});
+    ws.ground.push(ground); // zero sites
+    const rule = defaultLinkRule(
+      { segment_id: ground.segment_id, label: "Empty ground", kind: "ground" },
+      { segment_id: shell.segment_id, label: "Shell", kind: "space" },
+    );
+    ws.links.push(rule);
+    const domain = defaultRoutingDomain(ws);
+    ws.routing_domains.push(domain);
+    const doc = toSessionDocument(ws) as Record<string, unknown>;
+    const segments = doc.segments as Record<string, unknown>[];
+    expect(segments.some((s) => s.id === ground.segment_id)).toBe(false);
+    expect(doc.link_rules).toBeUndefined();
+    // The domain sheds the held-back member but keeps the emitted one.
+    const domains = (doc.routing as { domains: Record<string, unknown>[] }).domains;
+    expect(JSON.stringify(domains[0]!.selectors)).not.toContain(ground.segment_id);
+    // The hold-back is STATED, never silent.
+    expect(
+      completenessFindings(ws).some((f) => f.message.includes("held out of the artifact")),
+    ).toBe(true);
+    expect(linkWarnings(ws).some((w) => w.includes("held out of the artifact"))).toBe(true);
+  });
+
+  it("a domain whose members are all held back is itself held back", () => {
+    const ws = newWorkspace("holdback-domain");
+    ws.space.push(newDraftConstellation("nodalarc:nodes/space/starlink-v2-mesh.yaml"));
+    const ground = newDraftGroundSet("nodalarc:nodes/ground/leo-gateway.yaml", {});
+    ws.ground.push(ground);
+    const domain = defaultRoutingDomain(ws);
+    domain.member_segment_ids = [ground.segment_id];
+    ws.routing_domains.push(domain);
+    const doc = toSessionDocument(ws) as Record<string, unknown>;
+    expect(doc.routing).toBeUndefined();
+  });
+});
+
+describe("defaultRoutingDomain", () => {
+  it("seeds only the UNCOVERED segments — a second domain means the rest", () => {
+    const ws = newWorkspace("domain-seeding");
+    ws.space.push(newDraftConstellation("nodalarc:nodes/space/starlink-v2-mesh.yaml"));
+    ws.space.push(newDraftConstellation("nodalarc:nodes/space/starlink-v2-mesh.yaml"));
+    const first = defaultRoutingDomain(ws);
+    expect(first.member_segment_ids).toHaveLength(2);
+    first.member_segment_ids = [ws.space[0]!.segment_id];
+    ws.routing_domains.push(first);
+    const second = defaultRoutingDomain(ws);
+    expect(second.member_segment_ids).toEqual([ws.space[1]!.segment_id]);
+    ws.routing_domains.push(second);
+    // Everything covered: the third seeds empty (held back until members).
+    expect(defaultRoutingDomain(ws).member_segment_ids).toEqual([]);
+  });
+});

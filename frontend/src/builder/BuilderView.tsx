@@ -13,7 +13,7 @@
  *  world is always the resolver's expansion of the current draft.
  */
 
-import { useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
 import { Scene } from "../globe/r3f/Scene";
 import { VisualizationErrorBoundary } from "../globe/VisualizationErrorBoundary";
 import { buildRegimeIndex } from "../taxonomy/regime";
@@ -33,7 +33,7 @@ import { BuilderInspector } from "./BuilderInspector";
 import { builderSnapshotFromWorld } from "./builderSnapshot";
 import { CandidateLines } from "./CandidateLines";
 import { computeCandidates } from "./candidates";
-import { EditorApplyRow, InlineSelect } from "./editorKit";
+import { EditorApplyRow } from "./editorKit";
 import {
   accessBeamElevationDeg,
   capabilitiesBySegment,
@@ -69,6 +69,7 @@ import {
   completenessFindings,
   defaultBoundary,
   defaultRoutingDomain,
+  emittedDomainId,
   emittedRuleId,
   identifier,
   linkWarnings,
@@ -172,7 +173,8 @@ type EditorTarget =
   | { kind: "boundary"; id: string }
   | { kind: "inspect"; ref: string; document: Record<string, unknown> }
   | { kind: "node-view"; nodeId: string }
-  | { kind: "library" };
+  | { kind: "library" }
+  | { kind: "catalog" };
 
 interface EditorWindow {
   key: string;
@@ -181,10 +183,17 @@ interface EditorWindow {
   y: number;
 }
 
+/** One-line form of a refusal for the compact surfaces (canvas note,
+ *  status bar) — the OWNING window's wall carries the full text. */
+function truncateError(text: string, max = 180): string {
+  return text.length > max ? `${text.slice(0, max)}\u2026` : text;
+}
+
 function targetKey(target: EditorTarget): string {
   switch (target.kind) {
     case "session":
     case "library":
+    case "catalog":
       return target.kind;
     case "inspect":
       return `inspect:${target.ref}`;
@@ -248,8 +257,10 @@ export function BuilderView({
     updateSession,
     undo,
     hasAutosave,
-    autosaveName,
     restoreAutosave,
+    stashAutosaveToBackup,
+    hasBackup,
+    restoreBackup,
     close: closeWorkspace,
     addConstellation,
     addConstellationRef,
@@ -296,18 +307,13 @@ export function BuilderView({
     loadSession(entry.file);
   };
   useEffect(() => {
+    // The running session ALWAYS loads — that is what entering the builder
+    // beside a running cluster means. A browser draft never silently stands
+    // in for it (a stale draft wearing the running session's name showed an
+    // empty world while thirty nodes ran); a displaced draft is preserved
+    // to the backup slot and restorable below.
     if (workspace || importPending || !runningSession) return;
     if (importTriedRef.current === runningSession.file) return;
-    const draftName = autosaveName();
-    if (draftName === runningSession.name) {
-      // The browser draft IS this user's working copy of the running
-      // session — either identical to what's running or their newer
-      // unsaved iteration on it. Continuity wins; restore never destroys.
-      importTriedRef.current = runningSession.file;
-      restoreAutosave();
-      return;
-    }
-    if (draftName !== null) return; // unrelated draft: explicit choice UI
     importTriedRef.current = runningSession.file;
     startImport(runningSession);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -321,6 +327,7 @@ export function BuilderView({
     }
     const result = workspaceFromSessionDocument(loadedDocument);
     if (result.workspace) {
+      stashAutosaveToBackup();
       openWorkspace(result.workspace);
       setImportedFrom(importPending.file);
     } else {
@@ -517,6 +524,15 @@ export function BuilderView({
       const rule = preview.links.find((r) => emittedRuleId(r) === subject.id);
       if (rule) {
         const target: EditorTarget = { kind: "link", id: rule.rule_id };
+        return { target, key: targetKey(target) };
+      }
+    }
+    if (subject?.kind === "routing_domain") {
+      const domain = preview.routing_domains.find(
+        (d) => emittedDomainId(d) === subject.id,
+      );
+      if (domain) {
+        const target: EditorTarget = { kind: "domain", id: domain.domain_id };
         return { target, key: targetKey(target) };
       }
     }
@@ -782,20 +798,22 @@ export function BuilderView({
   const openRule = (ruleId: string) => {
     openEditor({ kind: "link", id: ruleId });
   };
-  // The tree-row connect control: pick the other end right on the row —
-  // no editor window needed to reach the gesture (IG-13).
-  const connectOptions = (selfId: string) => [
-    { value: "", label: "⊶ link to…" },
-    ...(workspace ? placedSegments(workspace) : []).map((segment) => ({
+  // The tree-row connect gesture: a spline IconButton (the app's link
+  // glyph) opens a readable target list under the row — the port-picker
+  // idiom. A select posing as the control failed twice: wide it read as a
+  // blank broken field, narrow it read as glyph soup.
+  const [connectFor, setConnectFor] = useState<string | null>(null);
+  const connectTargets = (selfId: string) =>
+    (workspace ? placedSegments(workspace) : []).map((segment) => ({
       value: segment.segment_id,
       label:
         segment.segment_id === selfId
           ? `${segment.label} (mesh)`
           : `${segment.label} (${segment.kind})`,
-    })),
-  ];
+    }));
   const connect = (fromSegmentId: string, targetSegmentId: string) => {
     if (!workspace) return;
+    setConnectFor(null);
     try {
       const rule = connectSegments(workspace, world, fromSegmentId, targetSegmentId);
       addLinkRule(rule);
@@ -805,6 +823,32 @@ export function BuilderView({
       setLibraryError(e instanceof Error ? e.message : String(e));
     }
   };
+  const connectButton = (segmentId: string, label: string) => (
+    <IconButton
+      icon="spline"
+      size={12}
+      active={connectFor === segmentId}
+      label={`Connect ${label}: pick the other end — physics derive from both faceplates`}
+      onClick={() => setConnectFor(connectFor === segmentId ? null : segmentId)}
+    />
+  );
+  const connectPicker = (segmentId: string) =>
+    connectFor === segmentId ? (
+      <div className="builder-terminal-picker" data-testid="connect-picker">
+        {connectTargets(segmentId).map((target) => (
+          <button
+            key={target.value}
+            className="builder-outline-row"
+            onClick={() => connect(segmentId, target.value)}
+          >
+            <span className="builder-outline-name">
+              <Icon name="spline" size={12} />
+              {target.label}
+            </span>
+          </button>
+        ))}
+      </div>
+    ) : null;
 
   // Default node model for a fresh constellation: prefer the catalog's space
   // nodes (directory layout is authoring convention, so this is a display
@@ -984,9 +1028,16 @@ export function BuilderView({
         if (!workspace || !applied) return null;
         const key = targetKey(target);
         const domain = (buffers[key]?.draft as DraftRoutingDomain | undefined) ?? applied;
+        const domainWall = wallFor(target);
         return {
           title: domain.label,
           content: (
+            <>
+            {domainWall && (
+              <div className="builder-wall" data-testid="wall-banner">
+                {domainWall}
+              </div>
+            )}
             <RoutingDomainEditor
               key={domain.domain_id}
               autoFocusName={freshId === domain.domain_id}
@@ -1000,6 +1051,7 @@ export function BuilderView({
                 closeWindow(key);
               }}
             />
+            </>
           ),
         };
       }
@@ -1059,6 +1111,25 @@ export function BuilderView({
                 </div>
               )}
             </div>
+          ),
+        };
+      }
+      case "catalog": {
+        // The library is EVERYTHING you could use — a separate surface on
+        // purpose. The rail lists only what this session IS using; the two
+        // read alike, and side by side they were indistinguishable.
+        return {
+          title: "Library",
+          content: (
+            <>
+              <LibraryPanel
+                onUse={handleLibraryUse}
+                onCustomize={(entry) => void handleLibraryCustomize(entry)}
+                onInspect={(entry) => void handleLibraryInspect(entry)}
+                onNew={handleLibraryNew}
+              />
+              {libraryError && <div className="builder-warning">{libraryError}</div>}
+            </>
           ),
         };
       }
@@ -1361,20 +1432,14 @@ export function BuilderView({
               </span>
             </div>
             {workspace.space_refs.map((placed) => (
-              <div className="builder-library-entry" key={placed.segment_id}>
+              <Fragment key={placed.segment_id}>
+              <div className="builder-library-entry">
                 <span className="builder-outline-name builder-outline-name--space builder-outline-row--segment">
                   <Icon name="orbit" size={12} />
                   {placed.label}
                 </span>
                 <span className="builder-library-actions">
-                  <InlineSelect
-                    className="builder-ground-preset"
-                    ariaLabel={`Connect ${placed.label}`}
-                    title="Connect: pick the other end — physics derive from both faceplates"
-                    value=""
-                    onChange={(target) => target && connect(placed.segment_id, target)}
-                    options={connectOptions(placed.segment_id)}
-                  />
+                  {connectButton(placed.segment_id, placed.label)}
                   <IconButton
                     icon="pencil"
                     size={12}
@@ -1414,9 +1479,12 @@ export function BuilderView({
                   />
                 </span>
               </div>
+              {connectPicker(placed.segment_id)}
+              </Fragment>
             ))}
             {workspace.space.map((draft) => (
-              <div className="builder-library-entry" key={draft.segment_id}>
+              <Fragment key={draft.segment_id}>
+              <div className="builder-library-entry">
                 <button
                   className={`builder-outline-row builder-outline-row--segment${
                     isOpen(`segment:${draft.segment_id}`)
@@ -1435,32 +1503,21 @@ export function BuilderView({
                   </span>
                 </button>
                 <span className="builder-library-actions">
-                  <InlineSelect
-                    className="builder-ground-preset"
-                    ariaLabel={`Connect ${draft.display_name}`}
-                    title="Connect: pick the other end — physics derive from both faceplates"
-                    value=""
-                    onChange={(target) => target && connect(draft.segment_id, target)}
-                    options={connectOptions(draft.segment_id)}
-                  />
+                  {connectButton(draft.segment_id, draft.display_name)}
                 </span>
               </div>
+              {connectPicker(draft.segment_id)}
+              </Fragment>
             ))}
             {workspace.ground_refs.map((placed) => (
-              <div className="builder-library-entry" key={placed.segment_id}>
+              <Fragment key={placed.segment_id}>
+              <div className="builder-library-entry">
                 <span className="builder-outline-name builder-outline-name--ground builder-outline-row--segment">
                   <Icon name="satellite-dish" size={12} />
                   {placed.label}
                 </span>
                 <span className="builder-library-actions">
-                  <InlineSelect
-                    className="builder-ground-preset"
-                    ariaLabel={`Connect ${placed.label}`}
-                    title="Connect: pick the other end — physics derive from both faceplates"
-                    value=""
-                    onChange={(target) => target && connect(placed.segment_id, target)}
-                    options={connectOptions(placed.segment_id)}
-                  />
+                  {connectButton(placed.segment_id, placed.label)}
                   <select
                     aria-label={`Scheduling for ${placed.label}`}
                     title="Scheduling intent — writes the full explicit block"
@@ -1502,9 +1559,12 @@ export function BuilderView({
                   />
                 </span>
               </div>
+              {connectPicker(placed.segment_id)}
+              </Fragment>
             ))}
             {workspace.ground.map((draft) => (
-              <div className="builder-library-entry" key={draft.segment_id}>
+              <Fragment key={draft.segment_id}>
+              <div className="builder-library-entry">
                 <button
                   className={`builder-outline-row builder-outline-row--segment${
                     isOpen(`ground:${draft.segment_id}`)
@@ -1523,16 +1583,11 @@ export function BuilderView({
                   </span>
                 </button>
                 <span className="builder-library-actions">
-                  <InlineSelect
-                    className="builder-ground-preset"
-                    ariaLabel={`Connect ${draft.display_name}`}
-                    title="Connect: pick the other end — physics derive from both faceplates"
-                    value=""
-                    onChange={(target) => target && connect(draft.segment_id, target)}
-                    options={connectOptions(draft.segment_id)}
-                  />
+                  {connectButton(draft.segment_id, draft.display_name)}
                 </span>
               </div>
+              {connectPicker(draft.segment_id)}
+              </Fragment>
             ))}
             {(workspace.links.length > 0 || placedSegments(workspace).length > 0) && (
               <div className="builder-outline-kind">Links</div>
@@ -1658,6 +1713,19 @@ export function BuilderView({
             >
               + Add constellation
             </Button>
+            {hasBackup() && (
+              <Button
+                title="Bring back the draft this workspace displaced — the running session stays re-importable"
+                onClick={() => {
+                  setWindows([]);
+                  setImportedFrom(null);
+                  setImportIssues(null);
+                  restoreBackup();
+                }}
+              >
+                Restore previous draft
+              </Button>
+            )}
             <Button
               variant="primary"
               disabled={!world || !!error || loading || saveState.kind === "saving"}
@@ -1715,12 +1783,12 @@ export function BuilderView({
             )}
           </div>
         )}
-        <LibraryPanel
-          onUse={handleLibraryUse}
-          onCustomize={(entry) => void handleLibraryCustomize(entry)}
-          onInspect={(entry) => void handleLibraryInspect(entry)}
-          onNew={handleLibraryNew}
-        />
+        <Button
+          title="Every block you could build with — shipped and yours. Opens its own window; this rail lists only what THIS session uses."
+          onClick={() => openEditor({ kind: "catalog" })}
+        >
+          Library…
+        </Button>
         {libraryError && <div className="builder-warning">{libraryError}</div>}
         {sessionsError && (
           <div className="builder-zone-empty builder-status-item--error">
@@ -1812,7 +1880,13 @@ export function BuilderView({
             })}
           </div>
         ) : (
-          <div className="builder-zone-empty">No session loaded</div>
+          <div className="builder-zone-empty">
+            {workspace
+              ? resolveError
+                ? "nothing resolves to list — fix the refusal below"
+                : "resolving…"
+              : "No session loaded"}
+          </div>
         )}
       </div>
       <div className="builder-canvas" data-testid="builder-canvas">
@@ -1847,7 +1921,9 @@ export function BuilderView({
           <div className="builder-zone-empty">{snapshotError}</div>
         ) : workspace ? (
           <div className="builder-zone-empty">
-            Add a constellation to begin — the world renders as soon as the draft resolves
+            {resolveError
+              ? `The session does not resolve — the canvas returns when it does. ${truncateError(resolveError.error)}`
+              : "Add a constellation to begin — the world renders as soon as the draft resolves"}
           </div>
         ) : (
           <div className="builder-start-card" data-testid="builder-start">
@@ -1983,7 +2059,9 @@ export function BuilderView({
           </span>
         )}
         {error ? (
-          <span className="builder-status-item builder-status-item--error">{error}</span>
+          <span className="builder-status-item builder-status-item--error" title={error}>
+            {truncateError(error)}
+          </span>
         ) : snapshotError ? (
           <span className="builder-status-item builder-status-item--error">
             {snapshotError}

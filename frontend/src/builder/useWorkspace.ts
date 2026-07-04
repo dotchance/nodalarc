@@ -30,6 +30,10 @@ import {
 } from "./workspace";
 
 const AUTOSAVE_KEY = "nodalarc-builder-draft";
+// The draft a running-session import DISPLACED — preserved, never silently
+// destroyed (autosave overwrites its own slot the moment a workspace
+// exists, so displacement must copy first).
+const BACKUP_KEY = "nodalarc-builder-draft-previous";
 const AUTOSAVE_DEBOUNCE_MS = 800;
 const HISTORY_LIMIT = 100;
 
@@ -79,17 +83,37 @@ export function useWorkspace() {
     }
   }, []);
 
-  /** The autosaved draft's session name (null = no readable draft) —
-   *  entry flows use it to tell "my working copy of the running session"
-   *  from unrelated drafts. */
-  const autosaveName = useCallback((): string | null => {
+  /** Preserve the current autosaved draft before an import displaces it. */
+  const stashAutosaveToBackup = useCallback(() => {
     try {
       const raw = localStorage.getItem(AUTOSAVE_KEY);
-      if (!raw) return null;
-      const name = (JSON.parse(raw) as Workspace).name;
-      return typeof name === "string" ? name : null;
+      if (raw !== null) localStorage.setItem(BACKUP_KEY, raw);
     } catch {
-      return null;
+      // Storage unavailable — nothing to preserve.
+    }
+  }, []);
+
+  const hasBackup = useCallback((): boolean => {
+    try {
+      return localStorage.getItem(BACKUP_KEY) !== null;
+    } catch {
+      return false;
+    }
+  }, []);
+
+  /** Bring the displaced draft back as the workspace. The imported session
+   *  it replaces is server truth and re-importable — nothing is lost. */
+  const restoreBackup = useCallback((): boolean => {
+    try {
+      const raw = localStorage.getItem(BACKUP_KEY);
+      if (!raw) return false;
+      const restored = JSON.parse(raw) as Workspace;
+      reseedCounters(restored);
+      localStorage.removeItem(BACKUP_KEY);
+      setWorkspace(restored);
+      return true;
+    } catch {
+      return false;
     }
   }, []);
 
@@ -453,8 +477,10 @@ export function useWorkspace() {
     updateSession,
     undo,
     hasAutosave,
-    autosaveName,
     restoreAutosave,
+    stashAutosaveToBackup,
+    hasBackup,
+    restoreBackup,
     discardAutosave,
     close,
     addConstellation,

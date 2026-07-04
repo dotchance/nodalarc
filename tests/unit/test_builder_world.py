@@ -662,3 +662,61 @@ def test_catalog_yaml_import_rejects_broken_yaml(user_roots):
     )
     assert response.status_code == 422
     assert "invalid YAML" in response.json()["error"]
+
+
+def test_segment_validation_refusal_ships_the_owning_segment():
+    """A catalog-validation failure inside ONE segment's expansion is
+    addressed mail: the wall carries that segment's id, never bare pydantic
+    prose with no owner (an empty ground segment used to blank the whole
+    builder with an unrouted error)."""
+    raw = yaml.safe_load(_WALKER_PATH.read_text(encoding="utf-8"))
+    raw["segments"].append(
+        {
+            "id": "empty-ground",
+            "placement": {
+                "from_site_set": {
+                    "site_set": {
+                        "id": "empty-sites",
+                        "display_name": "Empty sites",
+                        "sites": [],
+                    }
+                }
+            },
+        }
+    )
+    response = client.post("/api/v1/builder/resolve-world", json={"document": raw})
+    assert response.status_code == 422
+    body = response.json()
+    assert body["subject"] == {"kind": "segment", "id": "empty-ground"}
+    assert body["segment_id"] == "empty-ground"
+
+
+def test_overlapping_domains_wall_is_summarized_and_addressed():
+    """The disjointness refusal names the domains and a few example nodes —
+    never every member — and its subject is the LAST declared overlapping
+    domain (the one whose membership to fix)."""
+    raw = yaml.safe_load(_WALKER_PATH.read_text(encoding="utf-8"))
+    raw["routing"] = {
+        "domains": [
+            {
+                "id": "everything",
+                "protocol": "isis",
+                "selectors": [{"any": [{"segment": "leo"}, {"segment": "ground"}]}],
+                "area_assignment": {"strategy": "flat"},
+            },
+            {
+                "id": "second_domain",
+                "protocol": "isis",
+                "selectors": [{"segment": "leo"}],
+                "area_assignment": {"strategy": "flat"},
+            },
+        ]
+    }
+    response = client.post("/api/v1/builder/resolve-world", json={"document": raw})
+    assert response.status_code == 422
+    body = response.json()
+    assert body["subject"] == {"kind": "routing_domain", "id": "second_domain"}
+    assert "must be disjoint" in body["error"]
+    assert "176 nodes" in body["error"]
+    # Summarized: a handful of examples, not the whole membership.
+    assert body["error"].count("sat-") <= 3

@@ -207,6 +207,9 @@ export function useBuilderWorld() {
   const [sessionsError, setSessionsError] = useState<string | null>(null);
   const [world, setWorld] = useState<BuilderWorld | null>(null);
   const [documentYaml, setDocumentYaml] = useState<string | null>(null);
+  // The resolved session as a parsed mapping — what the workspace importer
+  // consumes when editing an existing (e.g. the running) session.
+  const [loadedDocument, setLoadedDocument] = useState<Record<string, unknown> | null>(null);
   const [loadedFile, setLoadedFile] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   // Structured refusal from the resolver — `error` (the display string)
@@ -249,6 +252,7 @@ export function useBuilderWorld() {
         if (seq !== resolveSeq.current) return;
         setWorld(data.world);
         setDocumentYaml(data.document_yaml);
+        setLoadedDocument(data.document);
         setLoadedFile(fileLabel);
       } catch (e) {
         if (seq !== resolveSeq.current) return;
@@ -256,6 +260,7 @@ export function useBuilderWorld() {
         // error is the state.
         setWorld(null);
         setDocumentYaml(null);
+        setLoadedDocument(null);
         setLoadedFile(null);
         setResolveError(
           e instanceof ResolveRefusal
@@ -282,14 +287,20 @@ export function useBuilderWorld() {
    *  session. Throws with the server's message on failure. */
   /** Deploy a SAVED session file to the cluster — the same switch the app's
    *  session picker uses; the builder adds nothing to the path. */
-  const deploySession = useCallback(async (file: string): Promise<void> => {
-    const response = await fetch(`${REST_URL}/api/v1/sessions/switch`, {
-      method: "POST",
-      headers: authHeaders({ "Content-Type": "application/json" }),
-      body: JSON.stringify({ session: file }),
-    });
-    if (!response.ok) throw new Error(await _errorMessage(response));
-  }, []);
+  const deploySession = useCallback(
+    async (file: string): Promise<void> => {
+      const response = await fetch(`${REST_URL}/api/v1/sessions/switch`, {
+        method: "POST",
+        headers: authHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ session: file }),
+      });
+      if (!response.ok) throw new Error(await _errorMessage(response));
+      // The active flag is changing hands — refresh so displays that read
+      // it (running-session entry, provenance) track the switch.
+      void refreshSessions();
+    },
+    [refreshSessions],
+  );
 
   const saveSession = useCallback(
     async (document: unknown): Promise<{ name: string; file: string; nodes: number }> => {
@@ -312,6 +323,7 @@ export function useBuilderWorld() {
     resolveSeq.current += 1;
     setWorld(null);
     setDocumentYaml(null);
+    setLoadedDocument(null);
     setLoadedFile(null);
     setResolveError(null);
     setLoading(false);
@@ -322,6 +334,7 @@ export function useBuilderWorld() {
     sessionsError,
     world,
     documentYaml,
+    loadedDocument,
     loadedFile,
     loading,
     error: resolveError?.error ?? null,

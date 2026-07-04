@@ -945,3 +945,14 @@ button.builder-guide-row:hover {
   border-color: var(--accent-red);
   border-left-width: 3px;
 }
+
+/* Provenance marker: this workspace was loaded from the session that is
+   currently running on the cluster. */
+.builder-running-chip {
+  margin-left: var(--space-1);
+  padding: 0 6px;
+  border: 1px solid var(--accent-green);
+  border-radius: var(--radius-sm);
+  color: var(--accent-green);
+  font-size: var(--font-size-xxs);
+}

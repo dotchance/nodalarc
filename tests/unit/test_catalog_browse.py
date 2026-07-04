@@ -12,6 +12,7 @@ from nodalarc.catalog_browse import (
     delete_user_object,
     flatten_user_references,
     read_catalog_object,
+    rehydrate_user_references,
     save_user_object,
 )
 from nodalarc.catalog_paths import CatalogRoots
@@ -149,3 +150,36 @@ def test_flatten_detects_reference_cycles(roots, tmp_path):
     (nodes_dir / "cyclic.yaml").write_text(yaml.dump(cyc), encoding="utf-8")
     with pytest.raises(ValueError, match="cycle"):
         flatten_user_references({"x": "user:nodes/cyclic.yaml"}, roots=roots)
+
+
+def test_rehydrate_is_flatten_inverse_while_the_library_matches(roots):
+    """A hermetic save inlines user refs; loading for editing re-references
+    them — and only them. flatten(rehydrate(x)) == x, and rehydrate restores
+    the exact refs the authoring form used."""
+    save_user_object("terminals", _TERMINAL, roots=roots)
+    document = {
+        "node": {
+            "terminals": [
+                {"terminal": "user:terminals/my-ka-terminal.yaml"},
+                {"terminal": "nodalarc:terminals/rf/shipped-ka.yaml"},
+            ]
+        }
+    }
+    flattened = flatten_user_references(document, roots=roots)
+    rehydrated = rehydrate_user_references(flattened, roots=roots)
+    assert rehydrated == document
+    assert flatten_user_references(rehydrated, roots=roots) == flattened
+
+
+def test_rehydrate_leaves_drifted_inline_objects_verbatim(roots):
+    """An inline object that no longer matches the library is the file's
+    truth — it must stay inline, never be re-referenced to different
+    content."""
+    save_user_object("terminals", _TERMINAL, roots=roots)
+    document = {"terminal": "user:terminals/my-ka-terminal.yaml"}
+    flattened = flatten_user_references(document, roots=roots)
+    # The library entry drifts after the save.
+    drifted = {"terminal": {**_TERMINAL["terminal"], "display_name": "Renamed since the save"}}
+    save_user_object("terminals", drifted, roots=roots, overwrite=True)
+    rehydrated = rehydrate_user_references(flattened, roots=roots)
+    assert rehydrated == flattened

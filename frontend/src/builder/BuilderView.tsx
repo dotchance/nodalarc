@@ -13,7 +13,7 @@
  *  world is always the resolver's expansion of the current draft.
  */
 
-import { useEffect, useMemo, useState, type MutableRefObject } from "react";
+import { useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
 import { Scene } from "../globe/r3f/Scene";
 import { VisualizationErrorBoundary } from "../globe/VisualizationErrorBoundary";
 import { buildRegimeIndex } from "../taxonomy/regime";
@@ -80,6 +80,7 @@ import {
   refGroundMember,
   SCHEDULING_PRESETS,
   toSessionDocument,
+  workspaceFromSessionDocument,
   type DraftBoundary,
   type DraftConstellation,
   type DraftGroundSet,
@@ -91,8 +92,11 @@ import {
   type SchedulingPresetKey,
   type Workspace,
 } from "./workspace";
-import type { BuilderCatalogEntry } from "./builderTypes";
-import type { BuilderWorld } from "./builderTypes";
+import type {
+  BuilderCatalogEntry,
+  BuilderSessionListEntry,
+  BuilderWorld,
+} from "./builderTypes";
 
 interface BuilderViewProps {
   /** Shared display state — the toolbar operates on the builder scene exactly
@@ -220,6 +224,8 @@ export function BuilderView({
     sessionsError,
     world,
     documentYaml,
+    loadedDocument,
+    loadedFile,
     loading,
     error,
     resolveError,
@@ -238,9 +244,11 @@ export function BuilderView({
   const {
     workspace,
     startNew,
+    openWorkspace,
     updateSession,
     undo,
     hasAutosave,
+    autosaveName,
     restoreAutosave,
     close: closeWorkspace,
     addConstellation,
@@ -269,6 +277,69 @@ export function BuilderView({
   } = useWorkspace();
   const nodeCatalog = useBuilderCatalog("nodes");
   const terminalCatalog = useBuilderCatalog("terminals");
+
+  // --- Editing the RUNNING session ------------------------------------
+  // Entering the builder beside a running session loads THAT session as
+  // the workspace — rapid iteration between builder and cluster. The one
+  // exception is an unsaved browser draft: autosave overwrites its slot
+  // as soon as any workspace exists, so auto-importing over a draft would
+  // silently destroy it — that case gets an explicit choice instead.
+  const runningSession = sessions.find((s) => s.active) ?? null;
+  const [importPending, setImportPending] = useState<BuilderSessionListEntry | null>(null);
+  const [importIssues, setImportIssues] = useState<string[] | null>(null);
+  // The file the current workspace was imported from (provenance marker).
+  const [importedFrom, setImportedFrom] = useState<string | null>(null);
+  const importTriedRef = useRef<string | null>(null);
+  const startImport = (entry: BuilderSessionListEntry) => {
+    setImportIssues(null);
+    setImportPending(entry);
+    loadSession(entry.file);
+  };
+  useEffect(() => {
+    if (workspace || importPending || !runningSession) return;
+    if (importTriedRef.current === runningSession.file) return;
+    const draftName = autosaveName();
+    if (draftName === runningSession.name) {
+      // The browser draft IS this user's working copy of the running
+      // session — either identical to what's running or their newer
+      // unsaved iteration on it. Continuity wins; restore never destroys.
+      importTriedRef.current = runningSession.file;
+      restoreAutosave();
+      return;
+    }
+    if (draftName !== null) return; // unrelated draft: explicit choice UI
+    importTriedRef.current = runningSession.file;
+    startImport(runningSession);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workspace, importPending, runningSession]);
+  useEffect(() => {
+    if (!importPending || loadedDocument === null || loadedFile !== importPending.file) return;
+    if (workspace) {
+      // The user started something while the load was in flight — theirs wins.
+      setImportPending(null);
+      return;
+    }
+    const result = workspaceFromSessionDocument(loadedDocument);
+    if (result.workspace) {
+      openWorkspace(result.workspace);
+      setImportedFrom(importPending.file);
+    } else {
+      // The world/YAML stay on screen read-only; the note says why the
+      // session cannot be edited — never a silently lossy workspace.
+      setImportIssues(result.issues);
+    }
+    setImportPending(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [importPending, loadedDocument, loadedFile, workspace]);
+  useEffect(() => {
+    // The import must END with its resolve: a failed fetch or a competing
+    // action (clear/+ New discards the in-flight response) would otherwise
+    // leave "Loading…" claimed forever — a false in-progress display — and
+    // permanently disable the edit-running path for this mount.
+    if (!importPending || loading) return;
+    if (loadedDocument !== null && loadedFile === importPending.file) return;
+    setImportPending(null);
+  }, [importPending, loading, loadedDocument, loadedFile]);
   // The diagram workspace: editors are floating, anchored windows — many
   // can be open at once, keyed per object (re-open focuses, IG-4/IG-12).
   const [windows, setWindows] = useState<EditorWindow[]>([]);
@@ -1158,11 +1229,28 @@ export function BuilderView({
             the secondary path. */}
         {!workspace && (
           <>
+            {runningSession && (
+              <Button
+                variant="primary"
+                disabled={!!importPending}
+                title="Load the session currently running on the cluster for editing"
+                onClick={() => {
+                  setSelection(null);
+                  startImport(runningSession);
+                }}
+              >
+                {importPending
+                  ? "Loading…"
+                  : `Edit running session — ${runningSession.name}`}
+              </Button>
+            )}
             <Button
-              variant="primary"
+              variant={runningSession ? undefined : "primary"}
               onClick={() => {
                 clear();
                 setSelection(null);
+                setImportedFrom(null);
+                setImportIssues(null);
                 startNew("untitled-session");
               }}
             >
@@ -1174,11 +1262,22 @@ export function BuilderView({
                 onClick={() => {
                   clear();
                   setSelection(null);
+                  setImportedFrom(null);
+                  setImportIssues(null);
                   restoreAutosave();
                 }}
               >
                 Restore draft
               </Button>
+            )}
+            {importIssues && (
+              <div className="builder-warning" data-testid="import-issues">
+                {runningSession?.name ?? "this session"} cannot be edited in the
+                builder yet:
+                {importIssues.map((issue) => (
+                  <div key={issue}>· {issue}</div>
+                ))}
+              </div>
             )}
           </>
         )}
@@ -1202,6 +1301,8 @@ export function BuilderView({
             onClick={() => {
               closeWorkspace();
               setWindows([]);
+              setImportedFrom(null);
+              setImportIssues(null);
               loadSession(selectedFile);
             }}
           >
@@ -1234,7 +1335,17 @@ export function BuilderView({
         {workspace && (
           <div className="builder-outline-group" data-testid="builder-drafts">
             <div className="builder-library-entry">
-              <span className="builder-outline-kind">Drafts · {workspace.name}</span>
+              <span className="builder-outline-kind">
+                Drafts · {workspace.name}
+                {importedFrom && sessions.find((s) => s.file === importedFrom)?.active && (
+                  <span
+                    className="builder-running-chip"
+                    title="Loaded from the session that was running when this workspace was opened"
+                  >
+                    running
+                  </span>
+                )}
+              </span>
               <span className="builder-library-actions">
                 <span className="builder-outline-count">
                   {workspace.step_seconds === 1 && workspace.compression === 1
@@ -1752,6 +1863,8 @@ export function BuilderView({
               onClick={() => {
                 clear();
                 setSelection(null);
+                setImportedFrom(null);
+                setImportIssues(null);
                 startNew("untitled-session");
               }}
             >
@@ -1891,7 +2004,13 @@ export function BuilderView({
           </span>
         ) : (
           <span className="builder-status-item">
-            {workspace ? "draft — not resolved yet" : "no session loaded"}
+            {workspace
+              ? "draft — not resolved yet"
+              : importPending
+                ? `loading running session ${importPending.name}…`
+                : runningSession
+                  ? `running: ${runningSession.name} — not loaded`
+                  : "no session loaded"}
           </span>
         )}
         {saveState.kind === "saved" && (

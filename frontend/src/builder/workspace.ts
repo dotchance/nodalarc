@@ -1695,3 +1695,478 @@ export function toSessionDocument(workspace: Workspace): Record<string, unknown>
     ...(usesNonEarthBodies(workspace) ? { ephemeris: DE440S_EPHEMERIS } : {}),
   };
 }
+
+// ---------------------------------------------------------------------------
+// Session import — the serializer's inverse. The builder edits a RUNNING
+// session by parsing its document back into drafts. Import is all-or-
+// nothing: grammar the builder cannot represent refuses with the offending
+// paths, and a successful parse must re-serialize to EXACTLY the source
+// document — an edit surface that silently diverges from what is running
+// would be a false state display, the one thing this product never does.
+
+export type WorkspaceImport =
+  | { workspace: Workspace; issues?: undefined }
+  | { workspace?: undefined; issues: string[] };
+
+function _deepEqual(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true;
+  if (typeof a !== typeof b || a === null || b === null) return false;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+    return a.every((item, i) => _deepEqual(item, b[i]));
+  }
+  if (typeof a === "object") {
+    const ka = Object.keys(a as object);
+    const kb = Object.keys(b as object);
+    if (ka.length !== kb.length) return false;
+    return ka.every((k) =>
+      _deepEqual((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k]),
+    );
+  }
+  return false;
+}
+
+/** Paths where two documents differ (either direction), depth-first,
+ *  capped — enough to say WHERE an import is unfaithful. */
+function _diffPaths(a: unknown, b: unknown, path: string, out: string[], cap: number): void {
+  if (out.length >= cap || _deepEqual(a, b)) return;
+  const isObj = (v: unknown) => typeof v === "object" && v !== null && !Array.isArray(v);
+  if (Array.isArray(a) && Array.isArray(b)) {
+    if (a.length !== b.length) {
+      out.push(`${path || "document"} (${a.length} vs ${b.length} entries)`);
+      return;
+    }
+    for (let i = 0; i < a.length && out.length < cap; i++) {
+      _diffPaths(a[i], b[i], `${path}[${i}]`, out, cap);
+    }
+    return;
+  }
+  if (isObj(a) && isObj(b)) {
+    const keys = new Set([...Object.keys(a as object), ...Object.keys(b as object)]);
+    for (const k of keys) {
+      if (out.length >= cap) return;
+      _diffPaths(
+        (a as Record<string, unknown>)[k],
+        (b as Record<string, unknown>)[k],
+        path ? `${path}.${k}` : k,
+        out,
+        cap,
+      );
+    }
+    return;
+  }
+  out.push(path || "document");
+}
+
+function _refStem(ref: string): string {
+  return (ref.split("/").pop() ?? ref).replace(/\.ya?ml$/, "");
+}
+
+/** The preset whose block equals this scheduling block — presets are the
+ *  builder's only scheduling vocabulary, so an unmatched block refuses. */
+function _presetForSchedulingBlock(block: unknown): SchedulingPresetKey | null {
+  for (const [key, preset] of Object.entries(SCHEDULING_PRESETS)) {
+    if (_deepEqual(preset.block, block)) return key as SchedulingPresetKey;
+  }
+  return null;
+}
+
+function _importConstellation(
+  segId: string,
+  source: Record<string, unknown>,
+  startTime: string,
+  issues: string[],
+): DraftConstellation | null {
+  const wrapper = Object.keys(source)[0] ?? "?";
+  const constellation = source.constellation as Record<string, unknown> | undefined;
+  if (!constellation) {
+    issues.push(`segments.${segId}: uses ${wrapper} — the builder edits constellations only`);
+    return null;
+  }
+  const before = issues.length;
+  const phasing = (constellation.phasing ?? {}) as Record<string, unknown>;
+  if (phasing.mode && phasing.mode !== "evenly_spaced_mean_anomaly") {
+    issues.push(`segments.${segId}: phasing mode ${String(phasing.mode)} is not editable yet`);
+  }
+  const orbitRaw = constellation.orbit;
+  if (typeof orbitRaw !== "object" || orbitRaw === null) {
+    issues.push(`segments.${segId}: orbit by reference is not editable yet`);
+    return null;
+  }
+  const orbit = orbitRaw as Record<string, unknown>;
+  const shape = (orbit.shape ?? null) as Record<string, unknown> | null;
+  if (!shape) issues.push(`segments.${segId}: element-form orbits are not editable yet`);
+  const propagator = String(orbit.propagator ?? "j2_mean_elements");
+  if (propagator !== "two_body" && propagator !== "j2_mean_elements") {
+    issues.push(`segments.${segId}: propagator ${propagator} is not editable yet`);
+  }
+  if (String(orbit.epoch ?? startTime) !== startTime) {
+    issues.push(
+      `segments.${segId}: orbit epoch differs from the session start_time — the builder authors one session epoch`,
+    );
+  }
+  if (issues.length > before || !shape) return null;
+  const orientation = (orbit.orientation ?? {}) as Record<string, unknown>;
+  const phase = (orbit.phase ?? {}) as Record<string, unknown>;
+  const planes = (constellation.planes ?? {}) as Record<string, unknown>;
+  const node = constellation.node;
+  let nodeDraft: DraftNode | null = null;
+  if (typeof node === "object" && node !== null) {
+    try {
+      nodeDraft = draftNodeFromDocument({ node: node as Record<string, unknown> });
+    } catch (e) {
+      issues.push(`segments.${segId}: ${e instanceof Error ? e.message : String(e)}`);
+      return null;
+    }
+  }
+  return {
+    segment_id: segId,
+    display_name: String(constellation.display_name ?? constellation.id ?? segId),
+    node_ref: typeof node === "string" ? node : "",
+    node_draft: nodeDraft,
+    orbit: {
+      central_body:
+        typeof orbit.central_body === "string" ? orbit.central_body : EARTH_BODY_REF,
+      shape_kind: "altitude_km" in shape ? "circular" : "elliptical",
+      altitude_km: Number(shape.altitude_km ?? 550),
+      perigee_altitude_km: Number(shape.perigee_altitude_km ?? shape.altitude_km ?? 550),
+      apogee_altitude_km: Number(shape.apogee_altitude_km ?? shape.altitude_km ?? 550),
+      inclination_deg: Number(orientation.inclination_deg ?? 0),
+      raan_deg: Number(orientation.raan_deg ?? 0),
+      argument_of_perigee_deg: Number(orientation.argument_of_perigee_deg ?? 0),
+      mean_anomaly_deg: Number(phase.mean_anomaly_deg ?? 0),
+      propagator: propagator as DraftOrbit["propagator"],
+    },
+    planes: Number(planes.count ?? 1),
+    raan_spacing_deg: Number(planes.raan_spacing_deg ?? 0),
+    slots_per_plane: Number(constellation.slots_per_plane ?? 1),
+    phase_offset_deg: Number(phasing.phase_offset_deg ?? 0),
+  };
+}
+
+function _importGroundDraft(
+  segId: string,
+  raw: Record<string, unknown>,
+  siteSet: Record<string, unknown>,
+  issues: string[],
+): DraftGroundSet | null {
+  const before = issues.length;
+  const members: DraftGroundSite[] = [];
+  let stampNodeRef = "";
+  let stampInstalled: Record<string, number> = {};
+  for (const entry of (siteSet.sites as unknown[] | undefined) ?? []) {
+    if (typeof entry === "string") {
+      // The ref's grammar id is assumed to be the filename stem — true for
+      // every write path (save_user_object names files by id; shipped
+      // catalog follows the convention). A hand-placed file violating it
+      // would mis-key override matching; the round-trip proof cannot see
+      // that because bare refs re-serialize verbatim. Tracked in the debt
+      // register alongside the resolver's silent tolerance of overrides
+      // that match no site.
+      members.push(refGroundMember(entry, _refStem(entry), _refStem(entry), null));
+      continue;
+    }
+    const wrapped = entry as Record<string, unknown>;
+    if (typeof wrapped.site !== "object" || wrapped.site === null) {
+      issues.push(`segments.${segId}: a site entry is neither a ref nor an inline site`);
+      continue;
+    }
+    try {
+      const site = draftSiteFromDocument(wrapped);
+      members.push(draftGroundMember(site));
+      const [firstNode] = site.nodes;
+      if (!stampNodeRef && firstNode) {
+        stampNodeRef = firstNode.model_ref;
+        stampInstalled = { ...firstNode.installed };
+      }
+    } catch (e) {
+      issues.push(`segments.${segId}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+  const apply = (raw.apply ?? {}) as Record<string, unknown>;
+  const preset = _presetForSchedulingBlock(apply.scheduling);
+  if (preset === null) {
+    issues.push(`segments.${segId}: scheduling block matches no builder preset`);
+  }
+  const originated = (apply.originated_prefixes ?? null) as Record<string, unknown> | null;
+  const base = newDraftGroundSet(stampNodeRef, stampInstalled);
+  const draft: DraftGroundSet = {
+    ...base,
+    segment_id: segId,
+    display_name: String(raw.display_name ?? siteSet.display_name ?? segId),
+    members,
+    scheduling_preset: preset ?? base.scheduling_preset,
+    originated_ipv4: ((originated?.ipv4 as unknown[] | undefined) ?? []).map(String),
+    tags: ((apply.tags as unknown[] | undefined) ?? []).map(String),
+  };
+  for (const overrideRaw of (raw.overrides as Record<string, unknown>[] | undefined) ?? []) {
+    const match = (overrideRaw.match ?? {}) as Record<string, unknown>;
+    const member = draft.members.find((m) => identifier(memberSiteId(m)) === match.site);
+    const overridePreset = _presetForSchedulingBlock(overrideRaw.scheduling);
+    if (!member || overridePreset === null) {
+      issues.push(
+        `segments.${segId}: an override targets ${String(match.site)} with a block the builder cannot edit`,
+      );
+      continue;
+    }
+    member.scheduling_override = overridePreset;
+  }
+  return issues.length > before ? null : draft;
+}
+
+function _importEndpoint(
+  where: string,
+  raw: Record<string, unknown>,
+  issues: string[],
+): DraftLinkEndpoint | null {
+  const before = issues.length;
+  const select = (raw.select ?? {}) as Record<string, unknown>;
+  let segmentId = "";
+  let tag: string | null = null;
+  if (typeof select.segment === "string") {
+    segmentId = select.segment;
+  } else if (Array.isArray(select.all)) {
+    for (const leaf of select.all as Record<string, unknown>[]) {
+      if (typeof leaf.segment === "string") segmentId = leaf.segment;
+      else if (typeof leaf.tag === "string") tag = leaf.tag;
+      else issues.push(`${where}: selector leaf the builder cannot edit`);
+    }
+    if (!segmentId) issues.push(`${where}: endpoint selects no segment`);
+  } else {
+    issues.push(`${where}: endpoint selector shape is not editable yet`);
+  }
+  const terminal = (raw.terminal ?? {}) as Record<string, unknown>;
+  let role: MountRole | null = null;
+  let medium: LinkMedium | null = null;
+  for (const leaf of (terminal.all as Record<string, unknown>[] | undefined) ?? []) {
+    if (typeof leaf.role === "string" && (MOUNT_ROLES as readonly string[]).includes(leaf.role)) {
+      role = leaf.role as MountRole;
+    } else if (
+      typeof leaf.medium === "string" &&
+      (LINK_MEDIA as readonly string[]).includes(leaf.medium)
+    ) {
+      medium = leaf.medium as LinkMedium;
+    } else {
+      issues.push(`${where}: terminal selector leaf the builder cannot edit`);
+    }
+  }
+  if (role === null || medium === null) {
+    issues.push(`${where}: terminal selector must carry one role and one medium`);
+  }
+  if (issues.length > before) return null;
+  return {
+    segment_id: segmentId,
+    tag,
+    role: role as MountRole,
+    medium: medium as LinkMedium,
+    min_elevation_deg:
+      raw.min_elevation_deg === undefined ? null : Number(raw.min_elevation_deg),
+  };
+}
+
+export function workspaceFromSessionDocument(
+  document: Record<string, unknown>,
+): WorkspaceImport {
+  const issues: string[] = [];
+  const KNOWN_TOP = new Set([
+    "session",
+    "segments",
+    "link_rules",
+    "routing",
+    "simulation",
+    "time",
+    "ephemeris",
+  ]);
+  for (const key of Object.keys(document)) {
+    if (!KNOWN_TOP.has(key)) issues.push(`${key}: the builder cannot author this block yet`);
+  }
+  const session = (document.session ?? {}) as Record<string, unknown>;
+  const ws = newWorkspace(String(session.name ?? "untitled-session"));
+  const time = (document.time ?? null) as Record<string, unknown> | null;
+  if (time) {
+    ws.start_time = String(time.start_time ?? ws.start_time);
+    ws.step_seconds = Number(time.step_seconds ?? 1);
+    ws.compression = Number(time.compression ?? 1);
+  } else {
+    issues.push("time: missing — the builder always authors an explicit time block");
+  }
+  const limits = ((document.simulation as Record<string, unknown> | undefined)
+    ?.candidate_limits ?? null) as Record<string, unknown> | null;
+  if (limits) {
+    ws.max_pairs_per_rule = Number(limits.max_pairs_per_rule ?? ws.max_pairs_per_rule);
+    ws.max_pairs_per_tick = Number(limits.max_pairs_per_tick ?? ws.max_pairs_per_tick);
+  }
+  if (
+    document.ephemeris !== undefined &&
+    !_deepEqual(document.ephemeris, DE440S_EPHEMERIS)
+  ) {
+    issues.push("ephemeris: a custom kernel manifest is not editable yet");
+  }
+
+  for (const raw of (document.segments as Record<string, unknown>[] | undefined) ?? []) {
+    const segId = String(raw.id ?? "");
+    if (!segId) {
+      issues.push("segments: a segment carries no id");
+      continue;
+    }
+    const source = raw.source;
+    const placement = raw.placement as Record<string, unknown> | undefined;
+    if (typeof source === "string") {
+      ws.space_refs.push({ segment_id: segId, ref: source, label: _refStem(source) });
+    } else if (typeof source === "object" && source !== null) {
+      const draft = _importConstellation(
+        segId,
+        source as Record<string, unknown>,
+        ws.start_time,
+        issues,
+      );
+      if (draft) ws.space.push(draft);
+    } else if (placement) {
+      const fromSiteSet = placement.from_site_set;
+      if (typeof fromSiteSet === "string") {
+        const apply = (raw.apply ?? {}) as Record<string, unknown>;
+        const preset = _presetForSchedulingBlock(apply.scheduling);
+        if (preset === null) {
+          issues.push(`segments.${segId}: scheduling block matches no builder preset`);
+        } else {
+          ws.ground_refs.push({
+            segment_id: segId,
+            ref: fromSiteSet,
+            label: _refStem(fromSiteSet),
+            scheduling_preset: preset,
+          });
+        }
+      } else if (typeof fromSiteSet === "object" && fromSiteSet !== null) {
+        const siteSet = (fromSiteSet as Record<string, unknown>).site_set;
+        if (typeof siteSet !== "object" || siteSet === null) {
+          issues.push(`segments.${segId}: placement shape is not editable yet`);
+        } else {
+          const draft = _importGroundDraft(
+            segId,
+            raw,
+            siteSet as Record<string, unknown>,
+            issues,
+          );
+          if (draft) ws.ground.push(draft);
+        }
+      } else {
+        issues.push(`segments.${segId}: placement shape is not editable yet`);
+      }
+    } else {
+      issues.push(`segments.${segId}: segment shape the builder cannot edit yet`);
+    }
+  }
+
+  for (const raw of (document.link_rules as Record<string, unknown>[] | undefined) ?? []) {
+    const id = String(raw.id ?? "");
+    const where = `link_rules.${id || "?"}`;
+    const topology = (raw.topology ?? {}) as Record<string, unknown>;
+    const mode = String(topology.mode ?? "");
+    if (mode !== "visible_candidates" && mode !== "nearest_n") {
+      issues.push(`${where}: topology ${mode || "?"} is not editable in the builder yet`);
+      continue;
+    }
+    const endpoints = (raw.endpoints as Record<string, unknown>[] | undefined) ?? [];
+    if (endpoints.length !== 2) {
+      issues.push(`${where}: rules have exactly two endpoints`);
+      continue;
+    }
+    const a = _importEndpoint(where, endpoints[0] as Record<string, unknown>, issues);
+    const b = _importEndpoint(where, endpoints[1] as Record<string, unknown>, issues);
+    if (!a || !b) continue;
+    const constraints = (raw.constraints ?? {}) as Record<string, unknown>;
+    linkCounter += 1;
+    ws.links.push({
+      rule_id: `link-${linkCounter}`,
+      label: id,
+      enabled: raw.enabled !== false,
+      a,
+      b,
+      topology_mode: mode,
+      topology_n: Number(topology.n ?? 2),
+      max_range_km:
+        constraints.max_range_km === undefined ? null : Number(constraints.max_range_km),
+    });
+  }
+
+  const routing = (document.routing ?? null) as Record<string, unknown> | null;
+  for (const raw of (routing?.domains as Record<string, unknown>[] | undefined) ?? []) {
+    const id = String(raw.id ?? "");
+    const where = `routing.domains.${id || "?"}`;
+    const members: string[] = [];
+    const selectors = (raw.selectors as Record<string, unknown>[] | undefined) ?? [];
+    const [selector] = selectors;
+    if (selectors.length === 1 && selector && typeof selector.segment === "string") {
+      members.push(selector.segment);
+    } else if (selectors.length === 1 && selector && Array.isArray(selector.any)) {
+      for (const leaf of selector.any as Record<string, unknown>[]) {
+        if (typeof leaf.segment === "string") members.push(leaf.segment);
+        else issues.push(`${where}: selector leaf the builder cannot edit`);
+      }
+    } else {
+      issues.push(`${where}: selector shape is not editable yet`);
+      continue;
+    }
+    const timers = (raw.timers ?? null) as Record<string, unknown> | null;
+    domainCounter += 1;
+    ws.routing_domains.push({
+      domain_id: `domain-${domainCounter}`,
+      label: id,
+      protocol: String(raw.protocol) as DraftRoutingDomain["protocol"],
+      member_segment_ids: members,
+      hello_interval_s: timers ? Number(timers.hello_interval_s) : null,
+      hold_interval_s: timers ? Number(timers.hold_interval_s) : null,
+    });
+  }
+  for (const raw of (routing?.boundaries as Record<string, unknown>[] | undefined) ?? []) {
+    const over = String(raw.over ?? "");
+    const where = `routing.boundaries.${over || "?"}`;
+    const rule = ws.links.find((r) => emittedRuleId(r) === over);
+    const exports = (raw.export as Record<string, unknown>[] | undefined) ?? [];
+    const [out, back] = exports;
+    const domainByEmitted = (emitted: unknown) =>
+      ws.routing_domains.find((d) => emittedDomainId(d) === emitted);
+    const fromDomain = out ? domainByEmitted(out.from) : undefined;
+    const toDomain = out ? domainByEmitted(out.to) : undefined;
+    const exchangeShape = (entry: Record<string, unknown> | undefined) =>
+      entry !== undefined &&
+      _deepEqual(entry.prefixes, { aggregate_of: "originated" }) &&
+      entry.install_via === "peer_loopback" &&
+      typeof entry.export_node_loopbacks === "boolean";
+    if (
+      !rule ||
+      !fromDomain ||
+      !toDomain ||
+      exports.length !== 2 ||
+      !exchangeShape(out) ||
+      !exchangeShape(back) ||
+      back?.from !== out?.to ||
+      back?.to !== out?.from ||
+      back?.export_node_loopbacks !== out?.export_node_loopbacks
+    ) {
+      issues.push(`${where}: boundary shape is not the builder's exchange pattern`);
+      continue;
+    }
+    boundaryCounter += 1;
+    ws.boundaries.push({
+      boundary_id: `boundary-${boundaryCounter}`,
+      over_rule_id: rule.rule_id,
+      adapter: String(raw.adapter) as DraftBoundary["adapter"],
+      from_domain_id: fromDomain.domain_id,
+      to_domain_id: toDomain.domain_id,
+      export_node_loopbacks: Boolean(out?.export_node_loopbacks),
+    });
+  }
+
+  if (issues.length) return { issues };
+  // The fidelity proof: a workspace that does not re-serialize to EXACTLY
+  // the source document refuses — otherwise "editing the running session"
+  // would silently edit something else.
+  const diffs: string[] = [];
+  _diffPaths(document, toSessionDocument(ws), "", diffs, 6);
+  if (diffs.length) {
+    return { issues: diffs.map((p) => `${p}: the builder cannot reproduce this value`) };
+  }
+  reseedCounters(ws);
+  return { workspace: ws };
+}

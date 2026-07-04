@@ -79,6 +79,20 @@ export function useWorkspace() {
     }
   }, []);
 
+  /** The autosaved draft's session name (null = no readable draft) —
+   *  entry flows use it to tell "my working copy of the running session"
+   *  from unrelated drafts. */
+  const autosaveName = useCallback((): string | null => {
+    try {
+      const raw = localStorage.getItem(AUTOSAVE_KEY);
+      if (!raw) return null;
+      const name = (JSON.parse(raw) as Workspace).name;
+      return typeof name === "string" ? name : null;
+    } catch {
+      return null;
+    }
+  }, []);
+
   const restoreAutosave = useCallback((): boolean => {
     try {
       const raw = localStorage.getItem(AUTOSAVE_KEY);
@@ -104,6 +118,12 @@ export function useWorkspace() {
 
   const startNew = useCallback((name: string) => {
     setWorkspace(newWorkspace(name));
+  }, []);
+
+  /** Adopt a ready-made workspace (session import). The caller is
+   *  responsible for id-counter reseeding (the importer does it). */
+  const openWorkspace = useCallback((imported: Workspace) => {
+    setWorkspace(imported);
   }, []);
 
   /** Session-level plumbing: name, time, and the candidate budget. */
@@ -429,9 +449,11 @@ export function useWorkspace() {
   return {
     workspace,
     startNew,
+    openWorkspace,
     updateSession,
     undo,
     hasAutosave,
+    autosaveName,
     restoreAutosave,
     discardAutosave,
     close,

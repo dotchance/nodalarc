@@ -39,6 +39,9 @@ import {
   stampLoopbackAddress,
   stampTerr0Address,
   toSessionDocument,
+  workspaceFromSessionDocument,
+  draftGroundMember,
+  newDraftSiteObject,
 } from "../workspace";
 
 function draftWorkspace() {
@@ -766,5 +769,176 @@ describe("RF band derives from frequency (ITU satellite letter bands)", () => {
   it("outside the lettered table is null, never a guess", () => {
     expect(bandForFrequencyGhz(0.001)).toBe(null);
     expect(bandForFrequencyGhz(200)).toBe(null);
+  });
+});
+
+describe("workspaceFromSessionDocument — the serializer's inverse", () => {
+  /** A workspace exercising every draft family the builder can author. */
+  function authoredWorkspace() {
+    const ws = newWorkspace("round-trip-study");
+    const shell = newDraftConstellation("nodalarc:nodes/space/starlink-v2-mesh.yaml");
+    shell.display_name = "Shell one";
+    shell.planes = 2;
+    shell.slots_per_plane = 3;
+    ws.space.push(shell);
+    const ground = newDraftGroundSet("nodalarc:nodes/ground/earth-leo-gateway.yaml", {});
+    ground.display_name = "Study ground";
+    const siteA = newDraftSiteObject("nodalarc:nodes/ground/earth-leo-gateway.yaml", {});
+    siteA.site_id = "alpha";
+    siteA.display_name = "Alpha";
+    const siteB = { ...newDraftSiteObject("nodalarc:nodes/ground/earth-leo-gateway.yaml", {}) };
+    siteB.site_id = "bravo";
+    siteB.display_name = "Bravo";
+    siteB.lat_deg = 45;
+    ground.members.push(draftGroundMember(siteA), draftGroundMember(siteB));
+    ground.members[1]!.scheduling_override = "geo-longest-pass";
+    ground.originated_ipv4 = ["203.0.113.0/24"];
+    ground.tags = ["study"];
+    ws.ground.push(ground);
+    ws.space_refs.push({
+      segment_id: "lib-shell",
+      ref: "nodalarc:constellations/earth-leo-starlink.yaml",
+      label: "earth-leo-starlink",
+    });
+    const rule = defaultLinkRule(
+      { segment_id: ground.segment_id, label: "Study ground", kind: "ground" },
+      { segment_id: shell.segment_id, label: "Shell one", kind: "space" },
+    );
+    rule.label = "study access";
+    rule.a.tag = "study";
+    rule.a.min_elevation_deg = 25;
+    rule.topology_mode = "nearest_n";
+    rule.topology_n = 3;
+    rule.max_range_km = 3000;
+    ws.links.push(rule);
+    const domain = defaultRoutingDomain(ws);
+    domain.label = "everything isis";
+    domain.member_segment_ids = [shell.segment_id, ground.segment_id, "lib-shell"];
+    domain.hello_interval_s = 3;
+    domain.hold_interval_s = 10;
+    ws.routing_domains.push(domain);
+    const second = defaultRoutingDomain(ws);
+    second.label = "edge ospf";
+    second.protocol = "ospf";
+    second.member_segment_ids = [ground.segment_id];
+    ws.routing_domains.push(second);
+    const boundary = defaultBoundary(ws);
+    boundary.over_rule_id = rule.rule_id;
+    boundary.from_domain_id = domain.domain_id;
+    boundary.to_domain_id = second.domain_id;
+    ws.boundaries.push(boundary);
+    ws.max_pairs_per_rule = 500;
+    ws.max_pairs_per_tick = 4000;
+    return ws;
+  }
+
+  it("round-trips a builder-authored session EXACTLY — import then re-serialize", () => {
+    const document = toSessionDocument(authoredWorkspace());
+    const result = workspaceFromSessionDocument(document);
+    expect(result.issues).toBeUndefined();
+    expect(toSessionDocument(result.workspace!)).toEqual(document);
+  });
+
+  it("carries the session identity through import", () => {
+    const document = toSessionDocument(authoredWorkspace());
+    const result = workspaceFromSessionDocument(document);
+    expect(result.workspace!.name).toBe("round-trip-study");
+    expect(result.workspace!.space[0]!.display_name).toBe("Shell one");
+    expect(result.workspace!.ground[0]!.members[1]!.scheduling_override).toBe(
+      "geo-longest-pass",
+    );
+  });
+
+  it("refuses grammar the builder cannot author, naming the block", () => {
+    const document = toSessionDocument(authoredWorkspace());
+    document.addressing = { loopbacks: { ipv4_pool: "10.255.0.0/16" } };
+    const result = workspaceFromSessionDocument(document);
+    expect(result.workspace).toBeUndefined();
+    expect(result.issues!.some((i) => i.startsWith("addressing"))).toBe(true);
+  });
+
+  it("refuses fixed pair lists — explicit_pairs is not authorable yet", () => {
+    const document = toSessionDocument(authoredWorkspace());
+    (document.link_rules as Record<string, unknown>[])[0]!.topology = {
+      mode: "explicit_pairs",
+      pairs: [{ a: "x", b: "y" }],
+    };
+    const result = workspaceFromSessionDocument(document);
+    expect(result.issues!.some((i) => i.includes("explicit_pairs"))).toBe(true);
+  });
+
+  it("refuses per-segment epochs that differ from the session start", () => {
+    const document = toSessionDocument(authoredWorkspace());
+    const segments = document.segments as Record<string, unknown>[];
+    const inline = segments.find((s) => typeof s.source === "object")!;
+    ((inline.source as Record<string, unknown>).constellation as Record<string, unknown>)
+      .orbit = {
+      ...(((inline.source as Record<string, unknown>).constellation as Record<
+        string,
+        unknown
+      >).orbit as Record<string, unknown>),
+      epoch: "2001-01-01T00:00:00Z",
+    };
+    const result = workspaceFromSessionDocument(document);
+    expect(result.issues!.some((i) => i.includes("epoch"))).toBe(true);
+  });
+
+  it("refuses a scheduling block that matches no builder preset", () => {
+    const document = toSessionDocument(authoredWorkspace());
+    const segments = document.segments as Record<string, unknown>[];
+    const ground = segments.find((s) => s.placement !== undefined)!;
+    (ground.apply as Record<string, unknown>).scheduling = { custom: true };
+    const result = workspaceFromSessionDocument(document);
+    expect(result.issues!.some((i) => i.includes("scheduling"))).toBe(true);
+  });
+
+  it("an import that would not reproduce the document refuses with the path", () => {
+    const document = toSessionDocument(authoredWorkspace());
+    // A field the importer does not read and the serializer re-derives:
+    // the inline constellation's own id.
+    const segments = document.segments as Record<string, unknown>[];
+    const inline = segments.find((s) => typeof s.source === "object")!;
+    ((inline.source as Record<string, unknown>).constellation as Record<string, unknown>).id =
+      "hand-renamed-inner-id";
+    const result = workspaceFromSessionDocument(document);
+    expect(result.workspace).toBeUndefined();
+    expect(result.issues!.some((i) => i.includes("cannot reproduce"))).toBe(true);
+  });
+});
+
+describe("workspaceFromSessionDocument — placed refs and inline nodes", () => {
+  it("round-trips ground refs, an inline node draft, and a non-Earth orbit", () => {
+    const ws = newWorkspace("ref-heavy-study");
+    const shell = newDraftConstellation("");
+    shell.display_name = "Luna shell";
+    shell.orbit.central_body = "nodalarc:bodies/luna.yaml";
+    shell.node_draft = {
+      id: "custom-bird",
+      display_name: "Custom bird",
+      forwarding: "routed",
+      ethernet: ["terr0"],
+      terminals: [
+        {
+          mount_id: "isl_0",
+          role: "isl",
+          terminal_ref: "nodalarc:terminals/optical/leo-crosslink.yaml",
+          count: 2,
+        },
+      ],
+    };
+    ws.space.push(shell);
+    ws.ground_refs.push({
+      segment_id: "lib-ground",
+      ref: "nodalarc:site-sets/earth/leo/earth-leo-pop-sites.yaml",
+      label: "earth-leo-pop-sites",
+      scheduling_preset: "geo-longest-pass",
+    });
+    const document = toSessionDocument(ws);
+    expect(document.ephemeris).toBeDefined();
+    const result = workspaceFromSessionDocument(document);
+    expect(result.issues).toBeUndefined();
+    expect(toSessionDocument(result.workspace!)).toEqual(document);
+    expect(result.workspace!.ground_refs[0]!.scheduling_preset).toBe("geo-longest-pass");
+    expect(result.workspace!.space[0]!.node_draft?.terminals[0]?.count).toBe(2);
   });
 });

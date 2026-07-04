@@ -173,7 +173,19 @@ def test_endpoint_resolves_scanned_session_key(monkeypatch):
         json={"session": "catalog/nodalarc/sessions/earth-leo-walker.yaml"},
     )
     assert response.status_code == 200
-    assert response.json()["world"]["session"]["name"]
+    payload = response.json()
+    assert payload["world"]["session"]["name"]
+    # The resolve-check ships the session as a PARSED mapping too — the
+    # builder imports it to edit an existing (e.g. the running) session,
+    # and it must be the file's content verbatim.
+    assert payload["document"] == yaml.safe_load(_WALKER_PATH.read_text(encoding="utf-8"))
+
+
+def test_resolve_check_ships_the_document_verbatim():
+    raw = yaml.safe_load(_WALKER_PATH.read_text(encoding="utf-8"))
+    response = client.post("/api/v1/builder/resolve-world", json={"document": raw})
+    assert response.status_code == 200
+    assert response.json()["document"] == raw
 
 
 def test_endpoint_rejects_unknown_session_key(monkeypatch):

@@ -3177,6 +3177,10 @@ async def builder_resolve_world(body: dict) -> dict:
                 build_builder_resolve_check,
                 world_source,
                 catalog_roots=_builder_catalog_roots(),
+                # Files are hermetic (user refs inlined at save); hand them
+                # back in the authoring form for editing. A client-posted
+                # document already carries its references.
+                rehydrate=not document_form,
             ),
         )
     except CatalogPathError as exc:

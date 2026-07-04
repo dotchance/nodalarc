@@ -10,7 +10,7 @@ session that has been resolved but not deployed.
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict
 
@@ -29,16 +29,23 @@ from nodalarc.runtime_support import UnsupportedFeature
 
 
 class BuilderResolveCheck(BaseModel):
-    """Resolve-check result: the world plus the canonical session YAML.
+    """Resolve-check result: the world plus the canonical session document.
 
     ``document_yaml`` is the server-serialized form of the session document
     that resolved — one serializer (the same dump the deploy path writes), so
-    the YAML pane, the saved file, and the wire never diverge.
+    the YAML pane, the saved file, and the wire never diverge. ``document``
+    is the same session as a parsed mapping for the client's draft importer
+    (it has no YAML parser of its own) — in the AUTHORING form when the
+    caller asked for rehydration (hermetically inlined user-library objects
+    re-referenced while their content still matches the library; identical
+    semantics under the loader contract). Its shape is owned by the session
+    grammar, not this envelope.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     world: BuilderWorld
+    document: dict[str, Any]
     document_yaml: str
 
 

@@ -234,6 +234,58 @@ def flatten_user_references(document: Any, *, roots: CatalogRoots, _depth: int =
     return document
 
 
+def rehydrate_user_references(document: Any, *, roots: CatalogRoots) -> Any:
+    """Replace inline objects that MATCH current user-library content with
+    their ``user:`` references — the read-side inverse of
+    ``flatten_user_references``.
+
+    Saved sessions are hermetic (user references are inlined at save time);
+    the builder edits in the AUTHORING form (library objects by reference).
+    Substitution happens only on deep equality with an entry's flattened
+    document, so the rehydrated session means exactly what the file means
+    (loader contract: inline and reference are the same grammar). Inline
+    objects that match nothing — drifted or deleted library entries,
+    hand-authored blocks — stay inline, verbatim.
+    """
+    index = _user_reference_index(roots)
+    if not index:
+        return document
+    return _rehydrate(document, index)
+
+
+def _user_reference_index(roots: CatalogRoots) -> list[tuple[dict[str, Any], str]]:
+    """Every readable user-library entry as (flattened document, ref),
+    ref-sorted so duplicate contents substitute deterministically."""
+    if roots.user_root is None or not roots.user_root.is_dir():
+        return []
+    index: list[tuple[dict[str, Any], str]] = []
+    for family, wrapper in CATALOG_FAMILIES.items():
+        for entry in _browse_root(family, wrapper, "user", roots.user_root):
+            if entry.error is not None:
+                continue
+            try:
+                _wrapper, wrapped = read_catalog_object(entry.ref, roots=roots)
+                index.append((flatten_user_references(wrapped, roots=roots), entry.ref))
+            except ValueError, OSError, yaml.YAMLError:
+                # The file is re-read here (a concurrent library save can
+                # tear it): a broken entry stays inline in the session,
+                # never fails the whole load.
+                continue
+    index.sort(key=lambda item: item[1])
+    return index
+
+
+def _rehydrate(document: Any, index: list[tuple[dict[str, Any], str]]) -> Any:
+    if isinstance(document, dict):
+        for flattened, ref in index:
+            if document == flattened:
+                return ref
+        return {key: _rehydrate(value, index) for key, value in document.items()}
+    if isinstance(document, list):
+        return [_rehydrate(value, index) for value in document]
+    return document
+
+
 def read_catalog_object(ref: str, *, roots: CatalogRoots) -> tuple[str, dict[str, Any]]:
     """Load one catalog document by reference; returns (wrapper, document).
 

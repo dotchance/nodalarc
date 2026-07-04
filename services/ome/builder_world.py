@@ -13,6 +13,7 @@ from __future__ import annotations
 from typing import Any
 
 import yaml
+from nodalarc.catalog_browse import rehydrate_user_references
 from nodalarc.catalog_paths import CatalogRoots, resolve_catalog_reference
 from nodalarc.ephemeris_runtime import session_epoch_unix
 from nodalarc.models.builder_world import (
@@ -94,12 +95,22 @@ def build_builder_resolve_check(
     session_source: str | dict[str, Any],
     *,
     catalog_roots: CatalogRoots | None = None,
+    rehydrate: bool = False,
 ) -> BuilderResolveCheck:
-    """Resolve a session document and return the world with its canonical YAML."""
+    """Resolve a session document and return the world with its canonical YAML.
+
+    ``rehydrate`` returns ``document`` in the AUTHORING form: inline objects
+    a hermetic save flattened are re-referenced into the user library when
+    their content still matches (semantics identical either way — the
+    resolution and the YAML always use the file's own content). Pass it when
+    loading a saved/running session for editing; a client-posted document
+    already carries its references.
+    """
     roots = catalog_roots or default_catalog_roots()
     raw = _load_session_source(session_source, roots)
     return BuilderResolveCheck(
         world=_world_from_raw(raw, roots),
+        document=rehydrate_user_references(raw, roots=roots) if rehydrate else raw,
         document_yaml=yaml.dump(raw, default_flow_style=False, sort_keys=False),
     )
 

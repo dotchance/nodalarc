@@ -168,6 +168,7 @@ export interface BuilderWorld {
 /** Twin of nodalarc.models.builder_world.BuilderResolveCheck. */
 export interface BuilderResolveCheck {
   world: BuilderWorld;
+  document: Record<string, unknown>;
   document_yaml: string;
 }
 

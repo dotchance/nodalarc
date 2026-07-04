@@ -741,6 +741,16 @@ describe("central body is authored state, never a hardcoded earth", () => {
   });
 });
 
+describe("a fresh workspace starts now, not at a fixed date", () => {
+  it("seeds start_time within a minute of creation", () => {
+    const ws = newWorkspace("t");
+    const startMs = Date.parse(ws.start_time);
+    expect(Number.isFinite(startMs)).toBe(true);
+    expect(Math.abs(Date.now() - startMs)).toBeLessThan(120000);
+    expect(ws.start_time.endsWith("00Z")).toBe(true);
+  });
+});
+
 describe("RF band derives from frequency (ITU satellite letter bands)", () => {
   it("names the band the owner's way: 1-2 L, 2-4 S, 26.5-40 Ka", () => {
     expect(bandForFrequencyGhz(1.5)).toBe("l");

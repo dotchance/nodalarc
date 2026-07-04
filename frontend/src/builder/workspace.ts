@@ -574,7 +574,10 @@ export function newWorkspace(name: string): Workspace {
     boundaries: [],
     max_pairs_per_rule: 2000,
     max_pairs_per_tick: 10000,
-    start_time: "2026-06-08T00:00:00Z",
+    // The session starts when it was authored, not at a fixed date in the
+    // past: a stale epoch turns the live view's "Now" into a huge sim-time
+    // jump the moment the session runs. Whole-minute for readability.
+    start_time: `${new Date().toISOString().slice(0, 17)}00Z`,
     step_seconds: 1,
     compression: 1,
   };

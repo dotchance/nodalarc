@@ -16,6 +16,7 @@ import yaml
 from nodalarc.catalog_paths import CatalogRoots, resolve_catalog_reference
 from nodalarc.ephemeris_runtime import session_epoch_unix
 from nodalarc.models.builder_world import (
+    BuilderLinkCandidate,
     BuilderLinkEndpoint,
     BuilderLinkRule,
     BuilderResolveCheck,
@@ -28,6 +29,7 @@ from nodalarc.ome_inputs import build_ome_inputs_from_resolved
 from nodalarc.resolve_session import (
     SourceContext,
     default_catalog_roots,
+    link_rule_interface_facts,
     resolve_session_with_assets,
     segment_display_names,
 )
@@ -138,6 +140,7 @@ def _world_from_raw(raw: dict[str, Any], roots: CatalogRoots) -> BuilderWorld:
         source_context=SourceContext(origin="builder_world"),
     )
     resolved = resolution.resolved
+    catalog_session = resolution.catalog_session
     epoch_unix = session_epoch_unix(resolved.time)
 
     runtime = build_ome_inputs_from_resolved(resolved)
@@ -198,5 +201,16 @@ def _world_from_raw(raw: dict[str, Any], roots: CatalogRoots) -> BuilderWorld:
         segments=tuple(
             BuilderWorldSegment(segment_id=seg, display_name=names.get(seg, seg))
             for seg in seen_segments
+        ),
+        # Capacity truth is computed once, by the allocator, and shipped:
+        # displays report what allocation DID, never re-derive what it might.
+        allocations=tuple(link_rule_interface_facts(resolved, catalog_session)),
+        link_candidates=tuple(
+            BuilderLinkCandidate(
+                rule_id=candidate.rule_id,
+                node_a=candidate.node_a,
+                node_b=candidate.node_b,
+            )
+            for candidate in resolved.link_candidates
         ),
     )

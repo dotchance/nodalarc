@@ -75,7 +75,8 @@ from nodalarc.nats_channels import (
 )
 from nodalarc.platform_config import get_platform_config
 from nodalarc.project_info import project_attribution, project_version
-from nodalarc.resolve_session import resolve_session_with_assets
+from nodalarc.resolve_session import SessionResolutionError, resolve_session_with_assets
+from nodalarc.runtime_support import UnsupportedFeatureError
 from yaml import YAMLError
 
 from vs_api.continuous_tracer import ContinuousTracer
@@ -3084,6 +3085,38 @@ async def preview_coverage(body: dict) -> dict:
     return result.model_dump()
 
 
+def _builder_resolution_error(exc: ValueError) -> JSONResponse:
+    """422 body for a session that failed resolution — structure preserved.
+
+    The resolver ships typed refusals (UnsupportedFeatureError features,
+    SessionResolutionError subject scope); flattening them to a bare string
+    here destroyed knowledge the client needs to land the message on the
+    owning object. ``BuilderResolveRefusal`` owns the envelope schema; this
+    only fills it.
+    """
+    from nodalarc.models.builder_world import BuilderErrorSubject, BuilderResolveRefusal
+
+    subject = None
+    segment_id = None
+    node_id = None
+    features = None
+    if isinstance(exc, UnsupportedFeatureError):
+        features = exc.features
+    if isinstance(exc, SessionResolutionError):
+        if exc.subject_kind and exc.subject_id:
+            subject = BuilderErrorSubject(kind=exc.subject_kind, id=exc.subject_id)
+        segment_id = exc.segment_id or None
+        node_id = exc.node_id or None
+    refusal = BuilderResolveRefusal(
+        error=str(exc),
+        subject=subject,
+        segment_id=segment_id,
+        node_id=node_id,
+        features=features,
+    )
+    return JSONResponse(status_code=422, content=refusal.model_dump(mode="json", exclude_none=True))
+
+
 @app.post("/api/v1/builder/resolve-world", dependencies=[Depends(_require_api_key)])
 async def builder_resolve_world(body: dict) -> dict:
     """Resolve a session and return its render-ready world view.
@@ -3151,10 +3184,12 @@ async def builder_resolve_world(body: dict) -> dict:
     except FileNotFoundError as exc:
         return _catalog_error(exc)
     except ValueError as exc:
-        if document_form:
-            # The caller's own document failed resolution — the typed message
-            # is the validation surface, not an internal detail.
-            return JSONResponse(status_code=422, content={"error": str(exc)})
+        if document_form or isinstance(exc, SessionResolutionError | UnsupportedFeatureError):
+            # A refused SESSION is not an invalid REQUEST: the caller's own
+            # document is always a validation surface, and a typed resolver
+            # refusal for a saved/catalog session carries the same structure
+            # the client lands on the owning object.
+            return _builder_resolution_error(exc)
         log.info("Invalid builder world request: %s", exc)
         return _error_response(400, "Builder world request is invalid")
     except Exception as exc:
@@ -3203,7 +3238,7 @@ async def builder_save_session(body: dict) -> dict:
     except FileNotFoundError as exc:
         return _catalog_error(exc)
     except ValueError as exc:
-        return JSONResponse(status_code=422, content={"error": str(exc)})
+        return _builder_resolution_error(exc)
     except Exception as exc:
         log.error("Builder save internal error: %s", exc, exc_info=True)
         return _error_response(500, "Builder save failed")

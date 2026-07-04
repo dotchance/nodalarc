@@ -17,7 +17,7 @@
 
 import { useState } from "react";
 import { Button } from "../ui/Button";
-import { EditorName, NumberField, SelectField } from "./editorKit";
+import { EditorCard, EditorName, NumberField, SelectField } from "./editorKit";
 import { TerminalEditor } from "./TerminalEditor";
 import { importUserObjectYaml, useBuilderCatalog } from "./useBuilderWorld";
 import {
@@ -25,9 +25,9 @@ import {
   type DraftNode,
   type DraftTerminal,
   type DraftTerminalMount,
+  MOUNT_ROLES,
+  ROLE_DESCRIPTIONS,
 } from "./workspace";
-
-const ROLES: DraftTerminalMount["role"][] = ["access", "isl", "crosslink", "backbone"];
 
 const FORWARDING_OPTIONS: { value: DraftNode["forwarding"]; gated: boolean }[] = [
   { value: "routed", gated: false },
@@ -100,8 +100,6 @@ export function NodeEditor({ draft, onChange, autoFocusName = false }: NodeEdito
     });
   };
 
-  const editing = draft.terminals.find((m) => m.mount_id === openMount);
-
   return (
     <div className="builder-node-editor" data-testid="node-editor">
       <EditorName
@@ -129,41 +127,102 @@ export function NodeEditor({ draft, onChange, autoFocusName = false }: NodeEdito
         </div>
       )}
 
-      <div className="builder-chip-row" data-testid="port-chips">
-        {draft.terminals.map((mount) => (
-          <button
-            key={mount.mount_id}
-            className={`builder-chip builder-chip--${mount.role}${
-              openMount === mount.mount_id ? " builder-chip--open" : ""
-            }`}
-            onClick={() =>
-              setOpenMount(openMount === mount.mount_id ? null : mount.mount_id)
-            }
-            title={mount.terminal_ref}
-          >
-            {mount.role} · {terminalShortName(mount.terminal_ref)} ×{mount.count}
-          </button>
-        ))}
+      <div className="builder-ports" data-testid="port-list">
+        {draft.terminals.map((mount) => {
+          const entry = terminals.entries.find((e) => e.ref === mount.terminal_ref);
+          const name = entry?.display_name ?? terminalShortName(mount.terminal_ref);
+          return (
+            <div key={mount.mount_id} className={`builder-port builder-port--${mount.role}`}>
+              <EditorCard
+                title={name}
+                summary={
+                  <>
+                    {mount.role} · ×{mount.count}
+                    {entry?.summary ? ` · ${entry.summary}` : ""}
+                  </>
+                }
+                open={openMount === mount.mount_id}
+                onToggle={() =>
+                  setOpenMount(openMount === mount.mount_id ? null : mount.mount_id)
+                }
+              >
+                <SelectField
+                  label="role"
+                  ariaLabel="Mount role"
+                  value={mount.role}
+                  onChange={(value) =>
+                    updateMount(mount.mount_id, { role: value as DraftTerminalMount["role"] })
+                  }
+                  options={MOUNT_ROLES.map((role) => ({
+                    value: role,
+                    label: `${role} \u2014 ${ROLE_DESCRIPTIONS[role]}`,
+                  }))}
+                />
+                <SelectField
+                  stack
+                  label="terminal"
+                  ariaLabel="Mount terminal"
+                  value={mount.terminal_ref}
+                  onChange={(terminal_ref) => updateMount(mount.mount_id, { terminal_ref })}
+                  options={terminals.entries
+                    .filter((e) => !e.error)
+                    .map((e) => ({
+                      value: e.ref,
+                      label:
+                        (e.ref.startsWith("user:") ? "\u2605 " : "") +
+                        (e.display_name ?? e.id ?? e.ref),
+                    }))}
+                />
+                {entry?.summary ? (
+                  <div className="builder-site-derived">{entry.summary}</div>
+                ) : null}
+                <NumberField
+                  label="count"
+                  value={mount.count}
+                  min={1}
+                  integer
+                  onChange={(count) => updateMount(mount.mount_id, { count })}
+                />
+                <Button
+                  variant="danger"
+                  onClick={() => {
+                    onChange({
+                      ...draft,
+                      terminals: draft.terminals.filter((m) => m.mount_id !== mount.mount_id),
+                    });
+                    setOpenMount(null);
+                  }}
+                >
+                  Remove port
+                </Button>
+              </EditorCard>
+            </div>
+          );
+        })}
         {draft.ethernet.map((port) => (
-          <button
-            key={port}
-            className="builder-chip builder-chip--lan"
-            title="LAN attach — serializes to the node's ethernet ports"
-            onClick={() =>
-              onChange({ ...draft, ethernet: draft.ethernet.filter((p) => p !== port) })
-            }
-          >
-            lan · {port} ✕
-          </button>
+          <div key={port} className="builder-port builder-port--lan">
+            <EditorCard
+              title={`lan · ${port}`}
+              summary="LAN attach — serializes to the node's ethernet ports"
+              open={openMount === `lan:${port}`}
+              onToggle={() => setOpenMount(openMount === `lan:${port}` ? null : `lan:${port}`)}
+            >
+              <Button
+                variant="danger"
+                onClick={() => {
+                  onChange({ ...draft, ethernet: draft.ethernet.filter((p) => p !== port) });
+                  setOpenMount(null);
+                }}
+              >
+                Remove LAN port
+              </Button>
+            </EditorCard>
+          </div>
         ))}
-        <button
-          className="builder-chip builder-chip--ghost"
-          onClick={() => setPickerOpen((v) => !v)}
-        >
-          + port
-        </button>
-        <button
-          className="builder-chip builder-chip--ghost"
+      </div>
+      <div className="builder-preset-row">
+        <Button onClick={() => setPickerOpen((v) => !v)}>+ port</Button>
+        <Button
           onClick={() => {
             const taken = new Set(draft.ethernet);
             let index = 0;
@@ -172,72 +231,17 @@ export function NodeEditor({ draft, onChange, autoFocusName = false }: NodeEdito
           }}
         >
           + lan
-        </button>
+        </Button>
       </div>
-
-      {editing && (
-        <div className="builder-mount-editor" data-testid="mount-editor">
-          <SelectField
-            label="role"
-            ariaLabel="Mount role"
-            value={editing.role}
-            onChange={(value) =>
-              updateMount(editing.mount_id, {
-                role: value as DraftTerminalMount["role"],
-              })
-            }
-            options={ROLES.map((role) => ({ value: role, label: role }))}
-          />
-          <SelectField
-            stack
-            label="terminal"
-            ariaLabel="Mount terminal"
-            value={editing.terminal_ref}
-            onChange={(terminal_ref) => updateMount(editing.mount_id, { terminal_ref })}
-            options={terminals.entries
-              .filter((entry) => !entry.error)
-              .map((entry) => ({
-                value: entry.ref,
-                label:
-                  (entry.ref.startsWith("user:") ? "\u2605 " : "") +
-                  (entry.display_name ?? entry.id ?? entry.ref),
-              }))}
-          />
-          {(() => {
-            const selected = terminals.entries.find((e) => e.ref === editing.terminal_ref);
-            return selected?.summary ? (
-              <div className="builder-site-derived">{selected.summary}</div>
-            ) : null;
-          })()}
-          <NumberField
-            label="count"
-            value={editing.count}
-            min={1}
-            integer
-            onChange={(count) => updateMount(editing.mount_id, { count })}
-          />
-          <Button
-            variant="danger"
-            onClick={() => {
-              onChange({
-                ...draft,
-                terminals: draft.terminals.filter((m) => m.mount_id !== editing.mount_id),
-              });
-              setOpenMount(null);
-            }}
-          >
-            Remove port
-          </Button>
-        </div>
-      )}
 
       {pickerOpen && (
         <div className="builder-terminal-picker" data-testid="terminal-picker">
           <div className="builder-preset-row" role="radiogroup" aria-label="Port role">
-            {ROLES.map((role) => (
+            {MOUNT_ROLES.map((role) => (
               <Button
                 key={role}
                 active={pickerRole === role}
+                title={ROLE_DESCRIPTIONS[role]}
                 onClick={() => setPickerRole(role)}
               >
                 {role}

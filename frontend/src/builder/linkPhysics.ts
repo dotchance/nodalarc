@@ -15,7 +15,15 @@
  */
 
 import type { BuilderWorld, BuilderWorldNode } from "./builderTypes";
-import { defaultLinkRule, placedSegments, type DraftLinkRule, type Workspace } from "./workspace";
+import {
+  defaultLinkRule,
+  placedSegments,
+  LINK_MEDIA,
+  type DraftLinkRule,
+  type LinkMedium,
+  type MountRole,
+  type Workspace,
+} from "./workspace";
 
 export interface SegmentCapability {
   /** "role|medium" tokens present on at least one node of the segment. */
@@ -67,8 +75,7 @@ export function capabilitiesBySegment(
   return capabilities;
 }
 
-export type LinkRole = "access" | "isl" | "crosslink";
-export type LinkMedium = "rf" | "optical";
+export type LinkRole = MountRole;
 
 /** True when BOTH endpoints carry at least one mount of role|medium. */
 export function canForm(
@@ -92,7 +99,14 @@ export interface DerivedPhysics {
   formable: boolean;
 }
 
-const MEDIUM_ORDER: LinkMedium[] = ["optical", "rf"];
+// Derivation preference among the grammar's media — DERIVED from the owned
+// vocabulary, never re-listed: the Record is exhaustive over LinkMedium, so
+// adding a medium to the grammar fails to compile here instead of silently
+// never being offered (IG-16).
+const MEDIUM_RANK: Record<LinkMedium, number> = { optical: 0, rf: 1 };
+const MEDIUM_ORDER: readonly LinkMedium[] = [...LINK_MEDIA].sort(
+  (a, b) => MEDIUM_RANK[a] - MEDIUM_RANK[b],
+);
 
 /** Derive the physics for a pair of segments. Preference order encodes the
  *  role semantics: same segment = fabric (isl), space to space =

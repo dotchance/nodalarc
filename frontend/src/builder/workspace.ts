@@ -16,6 +16,24 @@
 
 import { gmstRadians } from "../sim/orbitalMath";
 
+/** THE role/medium vocabulary — the frontend twin of the grammar's
+ *  MountRole and terminal-medium literals (lib/nodalarc/models/
+ *  link_rules.py, catalog.py). Every surface imports from here; a
+ *  backend contract test pins the twin to the Python literals, so a
+ *  grammar change breaks the build until this follows. The descriptions
+ *  speak both users' languages — the network engineer's and the orbital
+ *  engineer's — because the bare tokens serve neither alone. */
+export const MOUNT_ROLES = ["access", "isl", "crosslink", "backbone"] as const;
+export type MountRole = (typeof MOUNT_ROLES)[number];
+export const LINK_MEDIA = ["rf", "optical"] as const;
+export type LinkMedium = (typeof LINK_MEDIA)[number];
+export const ROLE_DESCRIPTIONS: Record<MountRole, string> = {
+  access: "space \u2194 ground",
+  isl: "fabric within a constellation",
+  crosslink: "link between constellations",
+  backbone: "trunk between relay tiers",
+};
+
 export interface DraftOrbit {
   /** The body this orbit is around — a bodies-catalog ref, serialized
    *  verbatim. The runtime decides what it supports; unsupported bodies get
@@ -37,7 +55,7 @@ export interface DraftOrbit {
 
 export interface DraftTerminalMount {
   mount_id: string;
-  role: "access" | "isl" | "crosslink" | "backbone";
+  role: MountRole;
   terminal_ref: string;
   count: number;
 }
@@ -153,7 +171,7 @@ export interface RefSegment {
 export interface DraftLinkEndpoint {
   segment_id: string;
   tag: string | null;
-  role: "access" | "isl" | "crosslink";
+  role: MountRole;
   medium: "rf" | "optical";
   min_elevation_deg: number | null;
 }

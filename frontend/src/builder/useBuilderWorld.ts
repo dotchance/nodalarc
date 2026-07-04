@@ -14,8 +14,31 @@ import type {
   BuilderCatalogEntry,
   BuilderResolveCheck,
   BuilderSessionListEntry,
+  BuilderResolveError,
   BuilderWorld,
 } from "./builderTypes";
+
+class ResolveRefusal extends Error {
+  detail: BuilderResolveError;
+  constructor(detail: BuilderResolveError) {
+    super(detail.error);
+    this.detail = detail;
+  }
+}
+
+async function _structuredError(response: Response): Promise<BuilderResolveError> {
+  try {
+    const data = await response.json();
+    if (data && typeof data.error === "string") {
+      // The body IS the BuilderResolveRefusal envelope — pass it through;
+      // re-mapping fields here would be a second schema.
+      return data as BuilderResolveError;
+    }
+  } catch {
+    /* non-JSON error body */
+  }
+  return { error: `request failed (${response.status})` };
+}
 
 async function _errorMessage(response: Response): Promise<string> {
   try {
@@ -186,7 +209,9 @@ export function useBuilderWorld() {
   const [documentYaml, setDocumentYaml] = useState<string | null>(null);
   const [loadedFile, setLoadedFile] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // Structured refusal from the resolver — `error` (the display string)
+  // derives from it; the structure routes the wall to its owning object.
+  const [resolveError, setResolveError] = useState<BuilderResolveError | null>(null);
   // Monotonic resolve counter: a stale in-flight response must never
   // overwrite a newer edit's result.
   const resolveSeq = useRef(0);
@@ -210,14 +235,16 @@ export function useBuilderWorld() {
     async (input: { session?: string; document?: unknown }, fileLabel: string | null) => {
       const seq = ++resolveSeq.current;
       setLoading(true);
-      setError(null);
+      setResolveError(null);
       try {
         const response = await fetch(`${REST_URL}/api/v1/builder/resolve-world`, {
           method: "POST",
           headers: authHeaders({ "Content-Type": "application/json" }),
           body: JSON.stringify(input),
         });
-        if (!response.ok) throw new Error(await _errorMessage(response));
+        if (!response.ok) {
+          throw new ResolveRefusal(await _structuredError(response));
+        }
         const data: BuilderResolveCheck = await response.json();
         if (seq !== resolveSeq.current) return;
         setWorld(data.world);
@@ -230,7 +257,11 @@ export function useBuilderWorld() {
         setWorld(null);
         setDocumentYaml(null);
         setLoadedFile(null);
-        setError(e instanceof Error ? e.message : String(e));
+        setResolveError(
+          e instanceof ResolveRefusal
+            ? e.detail
+            : { error: e instanceof Error ? e.message : String(e) },
+        );
       } finally {
         if (seq === resolveSeq.current) setLoading(false);
       }
@@ -282,7 +313,7 @@ export function useBuilderWorld() {
     setWorld(null);
     setDocumentYaml(null);
     setLoadedFile(null);
-    setError(null);
+    setResolveError(null);
     setLoading(false);
   }, []);
 
@@ -293,7 +324,8 @@ export function useBuilderWorld() {
     documentYaml,
     loadedFile,
     loading,
-    error,
+    error: resolveError?.error ?? null,
+    resolveError,
     loadSession,
     resolveDocument,
     saveSession,

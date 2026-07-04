@@ -20,21 +20,28 @@ import {
   NumberField,
   SelectField,
 } from "./editorKit";
-import { canForm, type LinkMedium, type LinkRole, type SegmentCapability } from "./linkPhysics";
+import { canForm, type SegmentCapability } from "./linkPhysics";
+import type { BuilderRuleAllocation } from "./builderTypes";
 import {
   linkWarnings,
   placedSegments,
   type DraftLinkEndpoint,
   type DraftLinkRule,
   type Workspace,
+  LINK_MEDIA,
+  MOUNT_ROLES,
+  ROLE_DESCRIPTIONS,
+  type LinkMedium,
+  type MountRole,
 } from "./workspace";
-
-const ALL_ROLES: LinkRole[] = ["access", "isl", "crosslink"];
-const ALL_MEDIA: LinkMedium[] = ["rf", "optical"];
 
 interface LinkRuleEditorProps {
   workspace: Workspace;
   rule: DraftLinkRule;
+  /** The allocator's own outcome for this rule from the last resolve —
+   *  displays REPORT it; nothing here re-derives capacity. Null while the
+   *  world is unresolved (show nothing, the existing precedent). */
+  allocation: BuilderRuleAllocation | null;
   onUpdate: (patch: Partial<DraftLinkRule>) => void;
   onUpdateEndpoint: (side: "a" | "b", patch: Partial<DraftLinkEndpoint>) => void;
   onRemove: () => void;
@@ -71,8 +78,8 @@ function EndpointCard({
   // the reason — visible, never hidden. No capabilities yet (unresolved
   // world) means nothing is disabled.
   const known = capabilities.size > 0;
-  const roleDisabled = (role: LinkRole) =>
-    known && !ALL_MEDIA.some((medium) => canForm(selfCap, otherCap, role, medium));
+  const roleDisabled = (role: MountRole) =>
+    known && !LINK_MEDIA.some((medium) => canForm(selfCap, otherCap, role, medium));
   const mediumDisabled = (medium: LinkMedium) =>
     known && !canForm(selfCap, otherCap, endpoint.role, medium);
   return (
@@ -112,13 +119,13 @@ function EndpointCard({
           ariaLabel={`${title} terminal role`}
           value={endpoint.role}
           onChange={(value) => onUpdate({ role: value as DraftLinkEndpoint["role"] })}
-          options={ALL_ROLES.map((role) => ({
+          options={MOUNT_ROLES.map((role) => ({
             value: role,
-            label: role,
+            label: `${role} \u2014 ${ROLE_DESCRIPTIONS[role]}`,
             disabled: roleDisabled(role),
             title: roleDisabled(role)
               ? `no ${role} terminals on both ends`
-              : undefined,
+              : ROLE_DESCRIPTIONS[role],
           }))}
         />
         <SelectField
@@ -126,7 +133,7 @@ function EndpointCard({
           ariaLabel={`${title} medium`}
           value={endpoint.medium}
           onChange={(value) => onUpdate({ medium: value as DraftLinkEndpoint["medium"] })}
-          options={ALL_MEDIA.map((medium) => ({
+          options={LINK_MEDIA.map((medium) => ({
             value: medium,
             label: medium,
             disabled: mediumDisabled(medium),
@@ -156,6 +163,7 @@ export function LinkRuleEditor({
   autoFocusName = false,
   capabilities,
   onRepoint,
+  allocation,
 }: LinkRuleEditorProps) {
   const warnings = linkWarnings(workspace);
   const [rederiveNotice, setRederiveNotice] = useState<string | null>(null);
@@ -218,6 +226,33 @@ export function LinkRuleEditor({
           onChange={(topology_n) => onUpdate({ topology_n })}
         />
       )}
+      {allocation && allocation.per_node.length > 0 && (() => {
+        // The tightest node is ONE node — report its own numbers, never
+        // minima composed across different nodes (that can describe a node
+        // that does not exist). Whether the ask fits is the allocator's
+        // verdict: a fixed rule that cannot allocate walls the resolve;
+        // access is runtime-scheduled. No client-side prediction here.
+        const tightest = allocation.per_node.reduce((best, n) =>
+          n.free < best.free || (n.free === best.free && n.matching < best.matching)
+            ? n
+            : best,
+        );
+        return (
+          <div className="builder-site-derived" data-testid="allocation-facts">
+            {allocation.kind === "access"
+              ? `allocator: ${allocation.allocated_pairs} candidate pair${
+                  allocation.allocated_pairs === 1 ? "" : "s"
+                } · tightest node has ${tightest.matching} matching interface${
+                  tightest.matching === 1 ? "" : "s"
+                } — runtime schedules within them`
+              : `allocator: ${allocation.allocated_pairs} pair${
+                  allocation.allocated_pairs === 1 ? "" : "s"
+                } · tightest node has ${tightest.free} of ${tightest.matching} matching interface${
+                  tightest.matching === 1 ? "" : "s"
+                } free`}
+          </div>
+        );
+      })()}
       <NullableNumberField
         label="max range"
         placeholder="unlimited"

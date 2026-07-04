@@ -98,6 +98,55 @@ export interface BuilderLinkRule {
   max_range_km: number | null;
 }
 
+/** Twin of nodalarc.models.builder_world.BuilderNodeInterfaceFacts. */
+export interface BuilderNodeInterfaceFacts {
+  node_id: string;
+  segment_id: string;
+  matching: number;
+  free: number;
+}
+
+/** Twin of nodalarc.models.builder_world.BuilderRuleAllocation. */
+export interface BuilderRuleAllocation {
+  rule_id: string;
+  kind: string;
+  allocated_pairs: number;
+  per_node: BuilderNodeInterfaceFacts[];
+}
+
+/** Twin of nodalarc.models.builder_world.BuilderLinkCandidate. */
+export interface BuilderLinkCandidate {
+  rule_id: string;
+  node_a: string;
+  node_b: string;
+}
+
+/** Twin of nodalarc.models.builder_world.BuilderErrorSubject. */
+export interface BuilderErrorSubject {
+  kind: string;
+  id: string;
+}
+
+/** Twin of nodalarc.runtime_support.UnsupportedFeature. */
+export interface BuilderUnsupportedFeature {
+  category: string;
+  value: string;
+  message: string;
+  support_note: string | null;
+}
+
+/** Twin of nodalarc.models.builder_world.BuilderResolveRefusal — the 422
+ *  envelope preserves what the resolver typed at the raise site (subject
+ *  scope, unsupported features). ``error`` is the resolver's message
+ *  verbatim. */
+export interface BuilderResolveError {
+  error: string;
+  subject?: BuilderErrorSubject;
+  segment_id?: string;
+  node_id?: string;
+  features?: BuilderUnsupportedFeature[];
+}
+
 /** Twin of nodalarc.models.builder_world.BuilderWorldSegment. */
 export interface BuilderWorldSegment {
   segment_id: string;
@@ -112,6 +161,8 @@ export interface BuilderWorld {
   nodes: BuilderWorldNode[];
   link_rules: BuilderLinkRule[];
   segments: BuilderWorldSegment[];
+  allocations: BuilderRuleAllocation[];
+  link_candidates: BuilderLinkCandidate[];
 }
 
 /** Twin of nodalarc.models.builder_world.BuilderResolveCheck. */

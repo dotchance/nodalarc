@@ -69,6 +69,7 @@ import {
   completenessFindings,
   defaultBoundary,
   defaultRoutingDomain,
+  emittedRuleId,
   identifier,
   linkWarnings,
   placedSegments,
@@ -221,6 +222,7 @@ export function BuilderView({
     documentYaml,
     loading,
     error,
+    resolveError,
     loadSession,
     resolveDocument,
     saveSession,
@@ -430,6 +432,39 @@ export function BuilderView({
     return out;
   };
   const dirtyWindows = Object.values(buffers).filter((b) => b.dirty).length;
+  /** The wall's owning editor target, from the resolver's OWN scope — the
+   *  serialized subject id maps to drafts via the same identifier()
+   *  transform the serializer uses; never by parsing prose or runtime ids.
+   *  Matched against the PREVIEW overlay: the refused document was
+   *  serialized from it, so a dirty rename must be matched by the dirty
+   *  draft, not the applied state. */
+  const wallTarget = ((): { target: EditorTarget; key: string } | null => {
+    if (!workspace || !resolveError) return null;
+    const preview = previewWorkspace() ?? workspace;
+    const subject = resolveError.subject;
+    if (subject?.kind === "link_rule") {
+      const rule = preview.links.find((r) => emittedRuleId(r) === subject.id);
+      if (rule) {
+        const target: EditorTarget = { kind: "link", id: rule.rule_id };
+        return { target, key: targetKey(target) };
+      }
+    }
+    const segmentId = resolveError.segment_id;
+    if (segmentId) {
+      if (preview.space.some((d) => d.segment_id === segmentId)) {
+        const target: EditorTarget = { kind: "segment", id: segmentId };
+        return { target, key: targetKey(target) };
+      }
+      if (preview.ground.some((d) => d.segment_id === segmentId)) {
+        const target: EditorTarget = { kind: "ground", id: segmentId };
+        return { target, key: targetKey(target) };
+      }
+    }
+    return null;
+  })();
+  /** Inline wall text for one open editor window (null = not this window's). */
+  const wallFor = (target: EditorTarget): string | null =>
+    wallTarget && targetKey(target) === wallTarget.key ? (resolveError?.error ?? null) : null;
   // THE edit→resolve loop — the only caller. Serializes applied state plus
   // dirty working copies so the canvas moves while you edit; Apply/Cancel
   // land here too (buffers change) and re-resolve the applied truth.
@@ -749,9 +784,16 @@ export function BuilderView({
         if (!workspace || !applied) return null;
         const key = targetKey(target);
         const draft = (buffers[key]?.draft as DraftConstellation | undefined) ?? applied;
+        const segWall = wallFor(target);
         return {
           title: draft.display_name,
           content: (
+            <>
+            {segWall && (
+              <div className="builder-wall" data-testid="wall-banner">
+                {segWall}
+              </div>
+            )}
             <ConstellationEditor
               key={draft.segment_id}
               autoFocusName={freshId === draft.segment_id}
@@ -773,6 +815,7 @@ export function BuilderView({
                 closeWindow(key);
               }}
             />
+            </>
           ),
         };
       }
@@ -781,9 +824,16 @@ export function BuilderView({
         if (!workspace || !applied) return null;
         const key = targetKey(target);
         const draft = (buffers[key]?.draft as DraftGroundSet | undefined) ?? applied;
+        const groundWall = wallFor(target);
         return {
           title: draft.display_name,
           content: (
+            <>
+            {groundWall && (
+              <div className="builder-wall" data-testid="wall-banner">
+                {groundWall}
+              </div>
+            )}
             <GroundEditor
               key={draft.segment_id}
               autoFocusName={freshId === draft.segment_id}
@@ -799,6 +849,7 @@ export function BuilderView({
                 closeWindow(key);
               }}
             />
+            </>
           ),
         };
       }
@@ -807,15 +858,25 @@ export function BuilderView({
         if (!workspace || !applied) return null;
         const key = targetKey(target);
         const rule = (buffers[key]?.draft as DraftLinkRule | undefined) ?? applied;
+        const ruleWall = wallFor(target);
+        const ruleAllocation =
+          world?.allocations.find((a) => a.rule_id === emittedRuleId(rule)) ?? null;
         return {
           title: rule.label || rule.rule_id,
           content: (
+            <>
+            {ruleWall && (
+              <div className="builder-wall" data-testid="wall-banner">
+                {ruleWall}
+              </div>
+            )}
             <LinkRuleEditor
               key={rule.rule_id}
               autoFocusName={freshId === rule.rule_id}
               workspace={workspace}
               rule={rule}
               capabilities={segmentCapabilities}
+              allocation={ruleAllocation}
               onRepoint={(side, newSegmentId) => {
                 const { patch, notice } = rederiveRule(
                   workspace,
@@ -841,6 +902,7 @@ export function BuilderView({
                 closeWindow(key);
               }}
             />
+            </>
           ),
         };
       }
@@ -1766,8 +1828,20 @@ export function BuilderView({
           </div>
         )}
       </div>
-      {workspace && completenessFindings(workspace).length > 0 && (
+      {workspace &&
+        ((wallTarget && !isOpen(wallTarget.key)) ||
+          completenessFindings(workspace).length > 0) && (
         <div className="builder-rail" data-testid="builder-rail">
+          {wallTarget && !isOpen(wallTarget.key) && (
+            <button
+              className="builder-rail-chip builder-rail-chip--wall"
+              title={resolveError?.error}
+              onClick={() => openEditor(wallTarget.target)}
+            >
+              {(resolveError?.error ?? "").slice(0, 96)}
+              {(resolveError?.error ?? "").length > 96 ? "…" : ""}
+            </button>
+          )}
           {completenessFindings(workspace).map((finding) => (
             <button
               key={finding.message}

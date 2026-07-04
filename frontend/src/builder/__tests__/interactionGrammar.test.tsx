@@ -84,6 +84,8 @@ function tinyWorld(groundId: string, spaceId: string): BuilderWorld {
     ],
     link_rules: [],
     segments: [],
+    allocations: [],
+    link_candidates: [],
   };
 }
 
@@ -408,5 +410,37 @@ describe("IG-15: the anatomy guide answers what-next in any order", () => {
     render(<BuildGuide {...guideProps(ws)} />);
     expect(screen.getByText("1 segment · add more")).toBeTruthy();
     expect(screen.getByText("named-session")).toBeTruthy();
+  });
+});
+
+describe("IG-16: the closed vocabularies have one owner", () => {
+  const vocabularyOffenders = (pattern: RegExp): string[] => {
+    const offenders: string[] = [];
+    for (const entry of readdirSync(BUILDER_DIR)) {
+      if (!entry.endsWith(".ts") && !entry.endsWith(".tsx")) continue;
+      if (entry === "workspace.ts") continue; // the owner
+      const content = readFileSync(join(BUILDER_DIR, entry), "utf-8");
+      if (pattern.test(content)) offenders.push(entry);
+    }
+    return offenders;
+  };
+
+  it("no builder source file re-lists the mount roles as an array literal", () => {
+    // An array literal holding two or more role tokens is a vocabulary
+    // copy; single tokens as object values (preference tables) are
+    // consumption of the vocabulary and pass.
+    expect(
+      vocabularyOffenders(
+        /\[\s*"(access|isl|crosslink|backbone)"\s*,\s*"(access|isl|crosslink|backbone)"/,
+      ),
+      "role vocabulary re-listed outside workspace.ts",
+    ).toEqual([]);
+  });
+
+  it("no builder source file re-lists the link media as an array literal", () => {
+    expect(
+      vocabularyOffenders(/\[\s*"(rf|optical)"\s*,\s*"(rf|optical)"/),
+      "media vocabulary re-listed outside workspace.ts",
+    ).toEqual([]);
   });
 });

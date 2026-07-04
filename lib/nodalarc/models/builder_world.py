@@ -25,6 +25,7 @@ from nodalarc.models.resolved_session import (
 )
 from nodalarc.models.segment_session import SessionMeta
 from nodalarc.models.segments import OriginatedPrefixes
+from nodalarc.runtime_support import UnsupportedFeature
 
 
 class BuilderResolveCheck(BaseModel):
@@ -123,6 +124,75 @@ class BuilderWorldNode(BaseModel):
     originated_prefixes: OriginatedPrefixes | None = None
 
 
+class BuilderNodeInterfaceFacts(BaseModel):
+    """One node's fixed-interface capacity for one rule, as allocated."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    node_id: str
+    segment_id: str
+    matching: int
+    free: int
+
+
+class BuilderRuleAllocation(BaseModel):
+    """The allocator's own outcome for one rule — the single capacity truth
+    every display reports instead of re-deriving.
+
+    For access rules nothing is consumed at resolve time (the runtime
+    schedules access within terminal capacity): ``allocated_pairs`` counts
+    the declared candidate universe and ``free`` always mirrors
+    ``matching``. Displays must not present access facts as fixed
+    allocation."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    rule_id: str
+    kind: str
+    allocated_pairs: int
+    per_node: tuple[BuilderNodeInterfaceFacts, ...] = ()
+
+
+class BuilderLinkCandidate(BaseModel):
+    """One allocated fixed pair — the preview draws these, never re-derives
+    them."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    rule_id: str
+    node_a: str
+    node_b: str
+
+
+class BuilderErrorSubject(BaseModel):
+    """The document object a refusal is about: its kind plus the id the
+    client's own serializer emitted — draft-addressable without prose
+    parsing."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    kind: str
+    id: str
+
+
+class BuilderResolveRefusal(BaseModel):
+    """The 422 envelope for a session document the resolver refused.
+
+    ``error`` is the resolver's message verbatim. Scope fields ride along
+    when the refusal carries them: ``subject``/``segment_id``/``node_id``
+    from ``SessionResolutionError``, ``features`` from
+    ``UnsupportedFeatureError``. This model OWNS the envelope schema — the
+    HTTP layer serializes it and the frontend twin is pinned to it."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    error: str
+    subject: BuilderErrorSubject | None = None
+    segment_id: str | None = None
+    node_id: str | None = None
+    features: tuple[UnsupportedFeature, ...] | None = None
+
+
 class BuilderWorldSegment(BaseModel):
     """One segment as the user named it — the world tree speaks their words,
     never bare runtime ids."""
@@ -144,3 +214,5 @@ class BuilderWorld(BaseModel):
     nodes: tuple[BuilderWorldNode, ...]
     link_rules: tuple[BuilderLinkRule, ...] = ()
     segments: tuple[BuilderWorldSegment, ...] = ()
+    allocations: tuple[BuilderRuleAllocation, ...] = ()
+    link_candidates: tuple[BuilderLinkCandidate, ...] = ()

@@ -313,6 +313,120 @@ def test_segment_display_names_reads_every_grammar_home():
     assert names["bare-ground"] == "Eastern ground sites"
 
 
+def test_world_ships_allocator_capacity_facts():
+    """Capacity truth is computed once, by the allocator, and shipped: the
+    world carries per-rule allocated pairs and per-node matching/free
+    interface counts derived from the SAME eligibility body allocation uses.
+    Displays report these; no client re-derivation."""
+    raw = yaml.safe_load(_WALKER_PATH.read_text(encoding="utf-8"))
+    response = client.post("/api/v1/builder/resolve-world", json={"document": raw})
+    assert response.status_code == 200
+    world = response.json()["world"]
+    allocations = {a["rule_id"]: a for a in world["allocations"]}
+    assert allocations, "world carries no allocation facts"
+    candidates = world["link_candidates"]
+    for rule_id, alloc in allocations.items():
+        assert alloc["allocated_pairs"] == sum(1 for c in candidates if c["rule_id"] == rule_id)
+        for row in alloc["per_node"]:
+            assert 0 <= row["free"] <= row["matching"]
+    # The walker's fixed ISL mesh consumes every isl interface: 176 sats,
+    # 4 isl mounts each, 352 pairs — so free must be EXACTLY 0 with 4
+    # matching on every member. A facts implementation that ignores the
+    # allocator's used-set (free == matching) fails here.
+    isl = allocations["leo_isl"]
+    assert isl["allocated_pairs"] == 352
+    assert isl["per_node"], "isl allocation carries no per-node facts"
+    for row in isl["per_node"]:
+        assert (row["matching"], row["free"]) == (4, 0)
+    # Access consumes nothing at resolve time: free mirrors matching.
+    for row in allocations["leo_access"]["per_node"]:
+        assert row["free"] == row["matching"]
+
+
+def test_interface_wall_ships_draft_addressable_subject():
+    """A refusal that names an object lands ON that object: the allocator
+    wall carries the failing rule id and the node's segment id — both
+    draft-addressable — plus the runtime node id as display detail."""
+    raw = yaml.safe_load(_WALKER_PATH.read_text(encoding="utf-8"))
+    # Oversubscribe: pile explicit fixed pairs onto one node until it runs
+    # out of matching interfaces.
+    fixed = next(
+        rule
+        for rule in raw["link_rules"]
+        if rule.get("topology", {}).get("mode") == "explicit_pairs"
+    )
+    fixed["topology"]["pairs"] = [
+        {"a": "sat-p00s00", "b": f"sat-p00s{slot:02d}"} for slot in range(1, 11)
+    ]
+    response = client.post("/api/v1/builder/resolve-world", json={"document": raw})
+    assert response.status_code == 422
+    body = response.json()
+    assert "needs another fixed interface" in body["error"]
+    assert body["subject"]["kind"] == "link_rule"
+    assert body["subject"]["id"] == fixed["id"]
+    assert body["segment_id"]
+    assert body["node_id"]
+
+
+def test_unsupported_feature_wall_ships_typed_features():
+    """UnsupportedFeatureError is typed at the raise site; the envelope must
+    not flatten it to prose. A bgp routing domain is grammar-valid and
+    deterministically runtime-gated, so the typed gate — not schema
+    validation — is what fires."""
+    raw = yaml.safe_load(_WALKER_PATH.read_text(encoding="utf-8"))
+    raw["routing"] = {
+        "domains": [
+            {
+                "id": "bgp_domain",
+                "protocol": "bgp",
+                "selectors": [{"any": [{"segment": "leo"}, {"segment": "ground"}]}],
+            }
+        ]
+    }
+    response = client.post("/api/v1/builder/resolve-world", json={"document": raw})
+    assert response.status_code == 422
+    body = response.json()
+    assert "runtime-unsupported" in body["error"]
+    features = body["features"]
+    assert features, "typed features did not ride the envelope"
+    assert features[0]["category"] == "routing_protocol"
+    assert features[0]["value"] == "bgp"
+    assert features[0]["message"]
+
+
+def test_session_form_refusal_ships_structured_envelope(monkeypatch, tmp_path):
+    """A saved session that no longer resolves is a refused SESSION, not an
+    invalid request: the session form must ship the same typed envelope the
+    document form does, never a bare 'request is invalid' string."""
+    import vs_api.main as main
+
+    raw = yaml.safe_load(_WALKER_PATH.read_text(encoding="utf-8"))
+    raw["routing"] = {
+        "domains": [
+            {
+                "id": "bgp_domain",
+                "protocol": "bgp",
+                "selectors": [{"any": [{"segment": "leo"}, {"segment": "ground"}]}],
+            }
+        ]
+    }
+    gated = tmp_path / "gated.yaml"
+    gated.write_text(yaml.safe_dump(raw), encoding="utf-8")
+
+    class _GatedSessionManager:
+        def _validated_session_path(self, session_path: str) -> Path | None:
+            return gated if session_path == "generated/gated.yaml" else None
+
+    monkeypatch.setattr(main, "_session_manager", _GatedSessionManager())
+    response = client.post(
+        "/api/v1/builder/resolve-world", json={"session": "generated/gated.yaml"}
+    )
+    assert response.status_code == 422
+    body = response.json()
+    assert "runtime-unsupported" in body["error"]
+    assert body["features"][0]["value"] == "bgp"
+
+
 def test_save_session_resolves_then_writes_canonical_yaml(monkeypatch, tmp_path):
     import vs_api.main as main
 

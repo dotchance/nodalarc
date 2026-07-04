@@ -123,6 +123,19 @@ would I". This exists because watching recorded builds showed the opposite:
 between steps the screen offered no reason to click anything in particular.
 Enforced by `BuildGuide` and its conformance tests.
 
+**IG-16.** A closed vocabulary the grammar defines — mount roles, link
+media — is declared once in the builder's grammar twin and imported
+everywhere it is offered. No surface re-lists it. The rule editor once
+hand-listed roles and silently lost `backbone` while the node editor kept
+it: hardware you could mount but never select with a rule. Each vocabulary
+entry carries a plain-language description written for both kinds of user,
+shown wherever the token is offered. Enforced two ways: a backend contract
+test pins the twin to the Python literals (a grammar change breaks the
+build until the twin follows), and a conformance scan fails any builder
+file that re-lists the roles or the media as an array literal. Preference
+tables over a vocabulary are typed exhaustively (`Record<..., number>`), so
+a new entry fails to compile where it would otherwise be silently skipped.
+
 ## Getting around
 
 **IG-12.** There is one selection. Picking an object in the tree, on the

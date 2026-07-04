@@ -14,15 +14,16 @@
  *  compute yet (terrestrial surface runs, inter-body spans) carry an explicit
  *  note instead of fake lines, and any cap is reported, never silent.
  *
- *  Three limits come from the terminals themselves, mirroring the runtime
- *  ISL engine: a pair is rejected when its range exceeds either endpoint's
- *  matching terminal range; a satellite pair is rejected when either side
- *  falls outside the pair's field of regard (min of both terminals, the
- *  cone centered on the local horizontal — a +20-degree elevation floor
- *  cannot look down from GEO); and a node never shows more candidate lines
- *  than it has matching terminal interfaces (nearest admitted first, the
- *  overflow counted in the rule note). Tracking-rate gating remains
- *  runtime-only for now.
+ *  Fixed rules (nearest_n, explicit_pairs) draw the ALLOCATOR'S OWN pairs,
+ *  shipped in the world as link_candidates — the preview never re-derives
+ *  fixed selection or interface capacity (a client-side budget once
+ *  double-counted mounts across medium selectors; capacity truth is
+ *  computed once, server-side). Each allocated pair is still geometry-gated
+ *  before drawing: LOS, min-of-pair terminal range, field of regard — an
+ *  allocated pair that is not feasible at this instant is counted in the
+ *  rule note, never drawn. Visibility rules (visible_candidates) remain a
+ *  pure geometric preview of runtime scheduling. Tracking-rate gating
+ *  remains runtime-only.
  */
 
 import {
@@ -111,12 +112,10 @@ function nodeGeometries(world: BuilderWorld): Map<string, NodeGeometry> {
   return out;
 }
 
-/** Per-node terminal facts for one rule endpoint: the best matching
- *  terminal's range (null = that terminal is unlimited) and how many
- *  matching interfaces the node actually has. */
+/** Per-node terminal facts for one rule endpoint: the most permissive
+ *  matching terminal's range and field of regard (null = ungated). */
 interface NodeTerminalFacts {
   maxRangeKm: number | null;
-  interfaces: number;
   fieldOfRegardDeg: number | null;
 }
 
@@ -130,7 +129,6 @@ function endpointTerminalFacts(
     if (!members.has(node.node_id)) continue;
     let maxRangeKm: number | null = null;
     let unlimited = false;
-    let interfaces = 0;
     let fieldOfRegardDeg: number | null = null;
     let anyFieldUnknown = false;
     for (const block of node.terminal_inventory) {
@@ -138,7 +136,6 @@ function endpointTerminalFacts(
       if (endpoint.terminal_medium !== null && block.medium !== endpoint.terminal_medium) {
         continue;
       }
-      interfaces += block.count;
       if (block.max_range_km === null) unlimited = true;
       else maxRangeKm = Math.max(maxRangeKm ?? 0, block.max_range_km);
       // Most permissive matching block, same stance as range above; a block
@@ -148,7 +145,6 @@ function endpointTerminalFacts(
     }
     facts.set(node.node_id, {
       maxRangeKm: unlimited ? null : maxRangeKm,
-      interfaces,
       fieldOfRegardDeg: anyFieldUnknown ? null : fieldOfRegardDeg,
     });
   }
@@ -227,12 +223,13 @@ export function computeCandidates(world: BuilderWorld): CandidateComputation {
   const geometry = nodeGeometries(world);
   const pairs: CandidatePair[] = [];
   const previews: RulePreview[] = [];
-  // Interface budgets are shared ACROSS rules: the same physical mounts
-  // serve every rule that selects them (a node with one crosslink terminal
-  // cannot hold a handoff and an uplink line at once).
-  const budgets = new Map<string, number>();
-  const budgetKey = (nodeId: string, endpoint: BuilderLinkEndpoint) =>
-    `${nodeId}|${endpoint.terminal_role}|${endpoint.terminal_medium ?? "*"}`;
+  // Fixed pairs come from the server's allocator, grouped once.
+  const allocatedByRule = new Map<string, { a: string; b: string }[]>();
+  for (const candidate of world.link_candidates) {
+    const list = allocatedByRule.get(candidate.rule_id) ?? [];
+    list.push({ a: candidate.node_a, b: candidate.node_b });
+    allocatedByRule.set(candidate.rule_id, list);
+  }
 
   for (const rule of world.link_rules) {
     const preview: RulePreview = {
@@ -252,14 +249,6 @@ export function computeCandidates(world: BuilderWorld): CandidateComputation {
     const [endA, endB] = rule.endpoints;
     const factsA = endpointTerminalFacts(world, endA);
     const factsB = endpointTerminalFacts(world, endB);
-    for (const [nodeId, facts] of factsA) {
-      const key = budgetKey(nodeId, endA);
-      if (!budgets.has(key)) budgets.set(key, facts.interfaces);
-    }
-    for (const [nodeId, facts] of factsB) {
-      const key = budgetKey(nodeId, endB);
-      if (!budgets.has(key)) budgets.set(key, facts.interfaces);
-    }
     const pairTerminalRange = (aId: string, bId: string): number | null => {
       const ra = factsA.get(aId)?.maxRangeKm ?? null;
       const rb = factsB.get(bId)?.maxRangeKm ?? null;
@@ -297,6 +286,7 @@ export function computeCandidates(world: BuilderWorld): CandidateComputation {
     let truncated = false;
     let beyondTerminalRange = 0;
     let outsideFieldOfRegard = 0;
+    let fixedInfeasible = 0;
     const consider = (aId: string, aGeom: NodeGeometry, bId: string, bGeom: NodeGeometry) => {
       if (tested >= MAX_TESTED_PAIRS_PER_RULE) {
         truncated = true;
@@ -317,42 +307,44 @@ export function computeCandidates(world: BuilderWorld): CandidateComputation {
       }
     };
 
-    if (rule.topology_mode === "explicit_pairs") {
-      for (const [a, b] of rule.explicit_pairs) {
+    const allocated = allocatedByRule.get(rule.rule_id);
+    const fixedMode =
+      rule.topology_mode === "explicit_pairs" || rule.topology_mode === "nearest_n";
+    let fixedUnallocated = false;
+    if (fixedMode) {
+      // Fixed rules: the allocator already chose the pairs and the
+      // interfaces — draw ITS selection, geometry-gated for this instant.
+      // Re-deriving nearest-N client-side was a second allocator.
+      // The wire pair is lexicographically canonical, NOT endpoint-ordered:
+      // orient each pair to the rule's endpoints by membership, so per-side
+      // terminal facts and elevation masks land on the right node.
+      const membersA = new Set(endA.node_ids);
+      const membersB = new Set(endB.node_ids);
+      let infeasibleNow = 0;
+      for (const pair of allocated ?? []) {
+        const straight = membersA.has(pair.a) && membersB.has(pair.b);
+        const a = straight ? pair.a : pair.b;
+        const b = straight ? pair.b : pair.a;
         const aGeom = geometry.get(a);
         const bGeom = geometry.get(b);
-        if (aGeom && bGeom) consider(a, aGeom, b, bGeom);
-      }
-    } else if (rule.topology_mode === "nearest_n" || rule.topology_mode === "nearest_visible") {
-      // Convention: endpoint[0] is the selecting side (rule-endpoint asymmetry
-      // is a registered grammar question; the preview follows OME's ordering).
-      const n = rule.topology_mode === "nearest_visible" ? 1 : (rule.topology_n ?? 1);
-      for (const [aId, aGeom] of geomA) {
-        if (!aGeom) continue;
-        const reachable: CandidatePair[] = [];
-        for (const [bId, bGeom] of geomB) {
-          if (!bGeom || aId === bId) continue;
-          if (tested >= MAX_TESTED_PAIRS_PER_RULE) {
-            truncated = true;
-            break;
-          }
-          tested += 1;
-          const { ok, rangeKm, beyondTerminal, outsideRegard } = pairPasses(
-            rule,
-            aGeom,
-            bGeom,
-            pairTerminalRange(aId, bId),
-            pairFieldOfRegard(aId, bId),
-          );
-          if (beyondTerminal) beyondTerminalRange += 1;
-          if (outsideRegard) outsideFieldOfRegard += 1;
-          if (ok) {
-            reachable.push({ rule_id: rule.rule_id, kind: rule.kind, a: aId, b: bId, range_km: rangeKm });
-          }
+        if (!aGeom || !bGeom) continue;
+        const { ok, rangeKm } = pairPasses(
+          rule,
+          aGeom,
+          bGeom,
+          pairTerminalRange(a, b),
+          pairFieldOfRegard(a, b),
+        );
+        if (ok) {
+          geometricPairs.push({ rule_id: rule.rule_id, kind: rule.kind, a, b, range_km: rangeKm });
+        } else {
+          infeasibleNow += 1;
         }
-        reachable.sort((x, y) => x.range_km - y.range_km);
-        geometricPairs.push(...reachable.slice(0, n));
       }
+      if (infeasibleNow > 0) {
+        fixedInfeasible = infeasibleNow;
+      }
+      fixedUnallocated = (allocated ?? []).length === 0;
     } else {
       // visible_candidates: every geometrically possible member pair.
       const sameSet = endA.node_ids === endB.node_ids ||
@@ -369,25 +361,8 @@ export function computeCandidates(world: BuilderWorld): CandidateComputation {
       }
     }
 
-    // Interface capacity, nearest first: a node never shows more candidate
-    // lines than it has matching terminal interfaces — the runtime could
-    // never form the rest simultaneously.
     geometricPairs.sort((x, y) => x.range_km - y.range_km);
-    const rulePairs: CandidatePair[] = [];
-    let overCapacity = 0;
-    for (const pair of geometricPairs) {
-      const keyA = budgetKey(pair.a, endA);
-      const keyB = budgetKey(pair.b, endB);
-      const remainingA = budgets.get(keyA) ?? 0;
-      const remainingB = budgets.get(keyB) ?? 0;
-      if (remainingA <= 0 || remainingB <= 0) {
-        overCapacity += 1;
-        continue;
-      }
-      budgets.set(keyA, remainingA - 1);
-      budgets.set(keyB, remainingB - 1);
-      rulePairs.push(pair);
-    }
+    const rulePairs: CandidatePair[] = geometricPairs;
 
     const notes: string[] = [];
     if (rulePairs.length > MAX_RENDERED_PAIRS_PER_RULE) {
@@ -401,8 +376,15 @@ export function computeCandidates(world: BuilderWorld): CandidateComputation {
     if (outsideFieldOfRegard > 0) {
       notes.push(`${outsideFieldOfRegard} pairs outside field of regard`);
     }
-    if (overCapacity > 0) {
-      notes.push(`${overCapacity} candidates over terminal interface capacity`);
+    if (fixedInfeasible > 0) {
+      notes.push(
+        `${fixedInfeasible} allocated pair${fixedInfeasible === 1 ? "" : "s"} not feasible at this instant`,
+      );
+    }
+    if (fixedUnallocated) {
+      // Geometry was never consulted — saying "geometry forbids" here would
+      // contradict the rule editor's "allocator: 0 pairs" on the same screen.
+      notes.push("the allocator granted no pairs for this rule");
     }
     if (rulePairs.length === 0 && notes.length === 0) {
       notes.push("rule permits, geometry currently forbids — runtime computes contacts over time");

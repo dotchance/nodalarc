@@ -141,6 +141,8 @@ function world(rules: BuilderLinkRule[]): BuilderWorld {
     ],
     link_rules: rules,
     segments: [],
+    allocations: [],
+    link_candidates: [],
   };
 }
 
@@ -228,7 +230,7 @@ describe("computeCandidates", () => {
     expect(previews[0]!.note).toMatch(/geometry currently forbids/);
   });
 
-  it("respects explicit pairs and disabled rules", () => {
+  it("fixed rules draw the allocator's pairs, and disabled rules draw nothing", () => {
     const explicit: BuilderLinkRule = {
       ...ACCESS_RULE,
       rule_id: "explicit",
@@ -236,7 +238,10 @@ describe("computeCandidates", () => {
       explicit_pairs: [["ground-near", "leo-sat"]],
     };
     const disabled: BuilderLinkRule = { ...ACCESS_RULE, rule_id: "off", enabled: false };
-    const { pairs, previews } = computeCandidates(world([explicit, disabled]));
+    const w = world([explicit, disabled]);
+    // Fixed pairs come from the server's allocation, never re-derived.
+    w.link_candidates = [{ rule_id: "explicit", node_a: "ground-near", node_b: "leo-sat" }];
+    const { pairs, previews } = computeCandidates(w);
     expect(pairs).toHaveLength(1);
     expect(previews.find((p) => p.rule_id === "off")!.note).toBe("rule disabled");
   });
@@ -256,10 +261,9 @@ describe("computeCandidates", () => {
     expect(previews[0]!.note).toContain("beyond terminal range");
   });
 
-  it("never draws more lines per node than it has matching interfaces", () => {
-    const w = world([{ ...ACCESS_RULE, rule_id: "cap" }]);
-    // Second visible ground near the subsatellite point; satellite access
-    // capacity cut to ONE interface: only the nearest pair may draw.
+  it("fixed rules draw ONLY allocated pairs — extra geometric possibilities are not invented", () => {
+    const w = world([{ ...ACCESS_RULE, rule_id: "cap", topology_mode: "explicit_pairs", explicit_pairs: [] }]);
+    // Two visible grounds, but the allocator granted exactly one pair.
     w.nodes.push(groundNode("ground-near-2", 1.5, SAT_LON_DEG));
     w.link_rules[0] = {
       ...w.link_rules[0]!,
@@ -268,14 +272,46 @@ describe("computeCandidates", () => {
         w.link_rules[0]!.endpoints[1],
       ],
     };
-    const sat = w.nodes.find((n) => n.node_id === "leo-sat")!;
-    sat.terminal_inventory = sat.terminal_inventory.map((b) =>
-      b.endpoint_role === "access" ? { ...b, count: 1 } : b,
-    );
-    const { pairs, previews } = computeCandidates(w);
+    w.link_candidates = [{ rule_id: "cap", node_a: "ground-near", node_b: "leo-sat" }];
+    const { pairs } = computeCandidates(w);
     expect(pairs).toHaveLength(1);
     expect(pairs[0]!.a).toBe("ground-near");
-    expect(previews[0]!.note).toContain("over terminal interface capacity");
+  });
+
+  it("a fixed rule the allocator granted nothing says so — never 'geometry forbids'", () => {
+    const w = world([
+      { ...ACCESS_RULE, rule_id: "none", topology_mode: "explicit_pairs", explicit_pairs: [] },
+    ]);
+    w.link_candidates = [];
+    const { pairs, previews } = computeCandidates(w);
+    expect(pairs).toHaveLength(0);
+    expect(previews[0]!.note).toContain("allocator granted no pairs");
+    expect(previews[0]!.note).not.toMatch(/geometry currently forbids/);
+  });
+
+  it("elevation masks land on the ground node even when the wire pair arrives flipped", () => {
+    // Canonical wire order puts "leo-sat" before "zz-ground" while the
+    // rule's endpoint A is the ground side. At ~10 degrees ground range the
+    // satellite sits ~20 degrees above the horizon: LOS is clear, so ONLY
+    // the 60-degree mask can reject — if orientation is lost the mask is
+    // skipped (slot a holds a satellite) and the preview draws a lie.
+    const w = world([]);
+    w.nodes.push(groundNode("zz-ground", 10, SAT_LON_DEG));
+    w.link_rules = [
+      {
+        ...ACCESS_RULE,
+        rule_id: "masked",
+        topology_mode: "explicit_pairs",
+        explicit_pairs: [],
+        endpoints: [
+          { ...ACCESS_RULE.endpoints[0], min_elevation_deg: 60, node_ids: ["zz-ground"] },
+          ACCESS_RULE.endpoints[1],
+        ],
+      },
+    ];
+    w.link_candidates = [{ rule_id: "masked", node_a: "leo-sat", node_b: "zz-ground" }];
+    const { pairs } = computeCandidates(w);
+    expect(pairs).toHaveLength(0);
   });
 });
 
@@ -338,6 +374,11 @@ function stackedWorld(forDeg: number | null): BuilderWorld {
     nodes: [satNode("leo-sat", "leo"), satNode("geo-sat", "geo")],
     link_rules: [uplink],
     segments: [],
+    allocations: [],
+    // The wire pair is lexicographically canonical ("geo-sat" < "leo-sat"),
+    // NOT endpoint-ordered: endpoint A is the LEO side. The preview must
+    // orient the pair by endpoint membership or every per-side gate misses.
+    link_candidates: [{ rule_id: "uplink", node_a: "geo-sat", node_b: "leo-sat" }],
   };
 }
 
@@ -345,7 +386,7 @@ describe("field of regard mirrors the runtime", () => {
   it("a 140-degree cone cannot look straight down from GEO — no pair, and the note says why", () => {
     const { pairs, previews } = computeCandidates(stackedWorld(140));
     expect(pairs).toHaveLength(0);
-    expect(previews[0]!.note).toContain("outside field of regard");
+    expect(previews[0]!.note).toContain("not feasible at this instant");
   });
 
   it("a full-sphere terminal forms the same link", () => {

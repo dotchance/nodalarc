@@ -97,9 +97,14 @@ def test_builder_wire_shape_field_names_match_backend():
     """Builder wire models ↔ frontend/src/builder/builderTypes.ts twins."""
     from nodalarc.models.builder_world import (
         BuilderCatalogEntry,
+        BuilderErrorSubject,
+        BuilderLinkCandidate,
         BuilderLinkEndpoint,
         BuilderLinkRule,
+        BuilderNodeInterfaceFacts,
         BuilderResolveCheck,
+        BuilderResolveRefusal,
+        BuilderRuleAllocation,
         BuilderWorld,
         BuilderWorldNode,
     )
@@ -111,6 +116,7 @@ def test_builder_wire_shape_field_names_match_backend():
     )
     from nodalarc.models.segment_session import SessionMeta
     from nodalarc.models.segments import OriginatedPrefixes
+    from nodalarc.runtime_support import UnsupportedFeature
 
     builder_wire_models = [
         (BuilderWorld, "BuilderWorld"),
@@ -119,6 +125,12 @@ def test_builder_wire_shape_field_names_match_backend():
         (BuilderCatalogEntry, "BuilderCatalogEntry"),
         (BuilderLinkRule, "BuilderLinkRule"),
         (BuilderLinkEndpoint, "BuilderLinkEndpoint"),
+        (BuilderRuleAllocation, "BuilderRuleAllocation"),
+        (BuilderNodeInterfaceFacts, "BuilderNodeInterfaceFacts"),
+        (BuilderLinkCandidate, "BuilderLinkCandidate"),
+        (BuilderResolveRefusal, "BuilderResolveError"),
+        (BuilderErrorSubject, "BuilderErrorSubject"),
+        (UnsupportedFeature, "BuilderUnsupportedFeature"),
         (SessionMeta, "BuilderSessionMeta"),
         (ResolvedSurfacePosition, "BuilderSurfacePosition"),
         (ResolvedTerminalBlock, "ResolvedTerminalBlock"),
@@ -216,3 +228,33 @@ def test_actuation_explanation_reasons_match_backend():
     # match the frontend list, or a backend rename silently drops the headline to
     # "State unknown" while the registry record orphans.
     assert _frontend_array("ACTUATION_EXPLANATION_REASONS") == set(ACTUATION_EXPLANATION_REASONS)
+
+
+# ---------------------------------------------------------------------------
+# Builder vocabulary twin — the role/medium closed sets the builder offers
+# must be the grammar's, in both directions. The builder once hand-listed
+# roles per surface and drifted (backbone existed in the grammar and the
+# node editor but not the rule editor); the single frontend vocabulary in
+# workspace.ts is only a twin while this pins it to the Python literals.
+# ---------------------------------------------------------------------------
+
+_WORKSPACE_TS = Path(__file__).resolve().parents[2] / "frontend/src/builder/workspace.ts"
+
+
+def _ts_const_array(name: str) -> list[str]:
+    text = _WORKSPACE_TS.read_text(encoding="utf-8")
+    match = re.search(rf"export const {name} = \[([^\]]+)\] as const;", text)
+    assert match, f"{name} literal array not found in workspace.ts"
+    return re.findall(r'"([a-z_]+)"', match.group(1))
+
+
+def test_builder_mount_role_vocabulary_matches_grammar():
+    from nodalarc.models.link_rules import MountRole
+
+    assert set(_ts_const_array("MOUNT_ROLES")) == set(get_args(MountRole))
+
+
+def test_builder_medium_vocabulary_matches_grammar():
+    from nodalarc.models.catalog import TerminalMedium
+
+    assert set(_ts_const_array("LINK_MEDIA")) == set(get_args(TerminalMedium))

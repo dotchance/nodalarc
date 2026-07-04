@@ -27,6 +27,7 @@ from nodalarc.ephemeris_runtime import (
     validate_ephemeris_manifest,
 )
 from nodalarc.link_rule_candidates import generate_declared_link_candidates
+from nodalarc.models.builder_world import BuilderNodeInterfaceFacts, BuilderRuleAllocation
 from nodalarc.models.catalog import validate_catalog_document, validate_catalog_value
 from nodalarc.models.identity import IdentityMode
 from nodalarc.models.link_rules import LinkRule, NodeSelector, TerminalSelector
@@ -65,7 +66,31 @@ _DEFAULT_GENERATED_SPACE_LOOPBACK_IPV6_POOL = ipaddress.ip_network("fd00:6e0::/6
 
 
 class SessionResolutionError(ValueError):
-    """Raised when a catalog session is structurally valid but semantically invalid."""
+    """Raised when a catalog session is structurally valid but semantically invalid.
+
+    Refusals are addressed mail, not broadcast: a raise site that knows which
+    authored object failed ships that scope so consumers can land the message
+    on the owning editor. ``subject_id`` is the SERIALIZED object id (the
+    grammar document's id); ``segment_id`` is the draft-addressable scope for
+    node-level walls (raw runtime node ids are not client-routable — the
+    builder has no per-node editors and the world is null at failure time).
+    Unmigrated raise sites ship no scope and behave exactly as before.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        subject_kind: str | None = None,
+        subject_id: str | None = None,
+        segment_id: str | None = None,
+        node_id: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.subject_kind = subject_kind
+        self.subject_id = subject_id
+        self.segment_id = segment_id
+        self.node_id = node_id
 
 
 @dataclass(frozen=True)
@@ -1570,6 +1595,100 @@ def _validate_access_terminal_bindings(
                     bound[key] = rule.rule_id
 
 
+def _eligible_fixed_interfaces(
+    node: ResolvedNode,
+    rule: ResolvedLinkRule,
+    rule_selectors: tuple,
+    node_id: str,
+) -> list[str]:
+    """WAN interfaces on ``node`` whose owning terminal block matches the
+    rule's terminal selector on the side(s) that include the node. The ONE
+    body behind both fixed-interface allocation and the interface facts the
+    builder displays — two implementations of eligibility would be two
+    truths.
+
+    For fixed (non-access) rules only isl-manifest interfaces are eligible
+    — the same constraint ``_validate_fixed_interface_capacity`` enforces.
+    Without it, a selector that also matches an access mount would let the
+    allocator claim (and the facts display advertise as free) an interface
+    the capacity validator then vetoes."""
+    side_selectors = [
+        selector
+        for endpoint, selector in zip(rule.endpoints, rule_selectors, strict=True)
+        if node_id in endpoint.node_ids
+    ]
+    blocks_by_id = {block.terminal_id: block for block in node.terminal_inventory}
+    eligible = [
+        iface.name
+        for iface in node.wan_interfaces
+        if iface.terminal_id in blocks_by_id
+        and any(
+            _terminal_matches(blocks_by_id[iface.terminal_id], selector)
+            for selector in side_selectors
+        )
+    ]
+    if rule.kind == "access":
+        return eligible
+    return [name for name in eligible if name.startswith("isl")]
+
+
+def link_rule_interface_facts(
+    resolved: ResolvedSession, cfg: SegmentSessionConfig
+) -> list[BuilderRuleAllocation]:
+    """Per-rule, per-node interface capacity as the ALLOCATOR sees it.
+
+    Ships to the builder world so every display reports what allocation did
+    rather than re-deriving an approximation (a client-side budget once
+    double-counted mounts across medium selectors). ``used`` counts an
+    interface consumed by ANY fixed rule — the allocator's own accounting.
+    Access rules consume nothing at resolve time; their facts carry the
+    declared candidate universe and access-mount interface counts (see
+    ``BuilderRuleAllocation``).
+    """
+    selectors = _terminal_selectors_by_rule(cfg)
+    node_by_id = {node.node_id: node for node in resolved.nodes}
+    used_by_node: dict[str, set[str]] = {}
+    for candidate in resolved.link_candidates:
+        if candidate.kind == "access":
+            continue
+        used_by_node.setdefault(candidate.node_a, set()).add(candidate.interface_a)
+        used_by_node.setdefault(candidate.node_b, set()).add(candidate.interface_b)
+    facts: list[BuilderRuleAllocation] = []
+    for rule in resolved.link_rules:
+        rule_selectors = selectors.get(rule.rule_id)
+        if rule_selectors is None:
+            continue
+        per_node: list[BuilderNodeInterfaceFacts] = []
+        seen: set[str] = set()
+        for endpoint in rule.endpoints:
+            for node_id in endpoint.node_ids:
+                if node_id in seen:
+                    continue
+                seen.add(node_id)
+                node = node_by_id[node_id]
+                eligible = _eligible_fixed_interfaces(node, rule, rule_selectors, node_id)
+                used = used_by_node.get(node_id, set())
+                free = [name for name in eligible if name not in used]
+                per_node.append(
+                    BuilderNodeInterfaceFacts(
+                        node_id=node_id,
+                        segment_id=node.segment_id,
+                        matching=len(eligible),
+                        free=len(free),
+                    )
+                )
+        allocated = sum(1 for c in resolved.link_candidates if c.rule_id == rule.rule_id)
+        facts.append(
+            BuilderRuleAllocation(
+                rule_id=rule.rule_id,
+                kind=rule.kind,
+                allocated_pairs=allocated,
+                per_node=tuple(per_node),
+            )
+        )
+    return facts
+
+
 def _resolve_link_candidates(
     resolved: ResolvedSession, cfg: SegmentSessionConfig
 ) -> list[ResolvedLinkCandidate]:
@@ -1588,21 +1707,7 @@ def _resolve_link_candidates(
         # mount (an rf link on the optical mount's interface is wire fiction).
         node = node_by_id[node_id]
         rule = rules_by_id[rule_id]
-        side_selectors = [
-            selector
-            for endpoint, selector in zip(rule.endpoints, selectors[rule_id], strict=True)
-            if node_id in endpoint.node_ids
-        ]
-        blocks_by_id = {block.terminal_id: block for block in node.terminal_inventory}
-        eligible = [
-            iface.name
-            for iface in node.wan_interfaces
-            if iface.terminal_id in blocks_by_id
-            and any(
-                _terminal_matches(blocks_by_id[iface.terminal_id], selector)
-                for selector in side_selectors
-            )
-        ]
+        eligible = _eligible_fixed_interfaces(node, rule, selectors[rule_id], node_id)
         used = used_ifaces.setdefault(node_id, set())
         for name in eligible:
             if name not in used:
@@ -1610,7 +1715,11 @@ def _resolve_link_candidates(
                 return name
         raise SessionResolutionError(
             f"link rule {rule_id!r} needs another fixed interface on {node_id!r}, but "
-            f"every matching terminal interface is allocated ({sorted(eligible)})"
+            f"every matching terminal interface is allocated ({sorted(eligible)})",
+            subject_kind="link_rule",
+            subject_id=rule_id,
+            segment_id=node.segment_id,
+            node_id=node_id,
         )
 
     for candidate in declared:
@@ -1818,8 +1927,13 @@ def _validate_fixed_interface_capacity(
         extra = sorted(interfaces - available)
         if extra:
             raise SessionResolutionError(
-                f"node {node_id!r} needs fixed link interface(s) {extra}, "
-                f"but only has {sorted(available)}"
+                f"fixed link candidate(s) landed on interface(s) {extra} of node "
+                f"{node_id!r}, which are not fixed-link capable "
+                f"(fixed-capable: {sorted(available)})",
+                subject_kind="node",
+                subject_id=node_id,
+                segment_id=node_by_id[node_id].segment_id,
+                node_id=node_id,
             )
 
 

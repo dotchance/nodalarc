@@ -409,50 +409,6 @@ button.builder-card-head:hover .builder-card-title {
   gap: var(--space-1);
 }
 
-.builder-chip-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-1);
-  padding: var(--space-1) var(--space-2);
-}
-
-.builder-chip {
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg-main);
-  color: var(--text-primary);
-  font-size: var(--font-size-xxs);
-  font-family: var(--font-mono);
-  padding: 2px 8px;
-  cursor: pointer;
-  border-left-width: 3px;
-}
-
-.builder-chip--access {
-  border-left-color: var(--accent-teal);
-}
-
-.builder-chip--isl,
-.builder-chip--crosslink,
-.builder-chip--backbone {
-  border-left-color: var(--accent-blue);
-}
-
-.builder-chip--lan {
-  border-left-color: var(--accent-green);
-}
-
-.builder-chip--ghost {
-  border-style: dashed;
-  color: var(--text-secondary);
-  border-left-width: 1px;
-}
-
-.builder-chip--open,
-.builder-chip:hover {
-  background: var(--bg-panel-hover);
-}
-
 .builder-mount-editor,
 .builder-terminal-picker {
   border: 1px solid var(--border);
@@ -951,4 +907,41 @@ button.builder-guide-row:hover {
   color: var(--text-dim);
   border-top: 1px solid var(--border);
   margin-top: var(--space-1);
+}
+
+/* Port cards: each mount is an EditorCard whose left edge carries the
+   role tint — the faceplate reads as line cards, and two mounts of the
+   same role stay distinguishable by their terminal names, not by hue. */
+.builder-port > .builder-card {
+  border-left: 3px solid var(--border);
+}
+
+.builder-port--access > .builder-card { border-left-color: var(--accent-amber); }
+.builder-port--isl > .builder-card { border-left-color: var(--accent-teal); }
+.builder-port--crosslink > .builder-card { border-left-color: var(--accent-teal); }
+.builder-port--backbone > .builder-card { border-left-color: var(--text-secondary); }
+.builder-port--lan > .builder-card { border-left-color: var(--accent-blue); }
+
+.builder-ports {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+/* A refusal that names an object lands ON that object: the wall banner
+   sits at the top of the owning editor window, verbatim. */
+.builder-wall {
+  border: 1px solid var(--accent-red);
+  border-left-width: 3px;
+  padding: var(--space-2);
+  font-size: var(--font-size-sm);
+  color: var(--text-primary);
+  background: var(--bg-panel-hover);
+}
+
+/* The wall chip rides the SAME rail as completeness findings — one bottom
+   rail concept — distinguished by the refusal accent. */
+.builder-rail-chip--wall {
+  border-color: var(--accent-red);
+  border-left-width: 3px;
 }

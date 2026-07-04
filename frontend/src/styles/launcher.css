@@ -174,3 +174,20 @@
 .launcher-upload .launcher-hint {
   margin: 0;
 }
+
+/* Row shell: the deploy row plus its per-session actions (download YAML —
+   any listed session's artifact is retrievable, including the running one). */
+.launcher-row-shell {
+  display: flex;
+  align-items: stretch;
+  gap: var(--space-2);
+}
+
+.launcher-row-shell .launcher-row {
+  flex: 1;
+  min-width: 0;
+}
+
+.launcher-row-shell .ui-iconbtn {
+  align-self: center;
+}

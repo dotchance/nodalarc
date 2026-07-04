@@ -15,6 +15,7 @@ import { useState, useCallback, useRef } from "react";
 import { useWizard } from "../hooks/useWizard";
 import type { WizardStep } from "./wizardTypes";
 import type { SessionInfo } from "../types";
+import { REST_URL, authHeaders } from "../config";
 import { Badge } from "../ui/Badge";
 import { Button, IconButton } from "../ui/Button";
 import { SelectionCards } from "./SelectionCards";
@@ -53,6 +54,35 @@ export function SessionWizard({
 }: SessionWizardProps) {
   const wizard = useWizard();
   const [view, setView] = useState<"launch" | "build">(sessions.length > 0 ? "launch" : "build");
+  // Any listed session's YAML is downloadable — including the running one.
+  // The canonical serialization comes from the same resolver that runs it.
+  const [downloadingFile, setDownloadingFile] = useState<string | null>(null);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
+  const downloadSessionYaml = useCallback(async (file: string, name: string) => {
+    setDownloadError(null);
+    setDownloadingFile(file);
+    try {
+      const response = await fetch(`${REST_URL}/api/v1/builder/resolve-world`, {
+        method: "POST",
+        headers: authHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ session: file }),
+      });
+      if (!response.ok) throw new Error(`YAML fetch failed (${response.status})`);
+      const data = (await response.json()) as { document_yaml?: string };
+      if (!data.document_yaml) throw new Error("no document YAML in response");
+      const blob = new Blob([data.document_yaml], { type: "text/yaml" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${name}.yaml`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setDownloadError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setDownloadingFile(null);
+    }
+  }, []);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -143,25 +173,33 @@ export function SessionWizard({
               </p>
               <div className="launcher-sessions">
                 {sessions.map((s) => (
-                  <button
-                    key={s.file}
-                    className="launcher-row"
-                    onClick={() => {
-                      if (s.active || deploying) return;
-                      onLaunchSession(s.file);
-                      onDeployStarted();
-                    }}
-                    disabled={s.active || deploying}
-                    title={s.active ? "Already running" : `Deploy ${s.name}`}
-                  >
-                    <span className="launcher-row-name">{s.name}</span>
-                    <span className="launcher-row-desc">{s.constellation}</span>
-                    <span className="launcher-row-meta">
-                      {s.routing_stack && <Badge>{s.routing_stack}</Badge>}
-                      {s.active && <Badge tone="ok">running</Badge>}
-                    </span>
-                  </button>
+                  <div key={s.file} className="launcher-row-shell">
+                    <button
+                      className="launcher-row"
+                      onClick={() => {
+                        if (s.active || deploying) return;
+                        onLaunchSession(s.file);
+                        onDeployStarted();
+                      }}
+                      disabled={s.active || deploying}
+                      title={s.active ? "Already running" : `Deploy ${s.name}`}
+                    >
+                      <span className="launcher-row-name">{s.name}</span>
+                      <span className="launcher-row-desc">{s.constellation}</span>
+                      <span className="launcher-row-meta">
+                        {s.routing_stack && <Badge>{s.routing_stack}</Badge>}
+                        {s.active && <Badge tone="ok">running</Badge>}
+                      </span>
+                    </button>
+                    <IconButton
+                      icon="download"
+                      label={`Download ${s.name} YAML`}
+                      disabled={downloadingFile !== null}
+                      onClick={() => void downloadSessionYaml(s.file, s.name)}
+                    />
+                  </div>
                 ))}
+                {downloadError && <div className="wizard-error">{downloadError}</div>}
                 {sessions.length === 0 && (
                   <div className="launcher-empty">No shipped sessions found.</div>
                 )}

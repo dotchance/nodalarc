@@ -12,7 +12,8 @@
 
 import { useState } from "react";
 import { Button } from "../ui/Button";
-import { EditorName, Field as TextField, NumberField, SelectField } from "./editorKit";
+import { EditorName, NumberField, SelectField } from "./editorKit";
+import { RF_BANDS, bandForFrequencyGhz } from "./workspace";
 import { readCatalogObject, saveUserObject } from "./useBuilderWorld";
 import type { BuilderCatalogEntry } from "./builderTypes";
 import {
@@ -123,18 +124,41 @@ export function TerminalEditor({
       </div>
       {draft.medium === "rf" ? (
         <>
-          <TextField
+          {/* Frequency is the truth; the band NAME derives from it (ITU
+              satellite letter bands). Picking a band seeds a typical satcom
+              frequency the user then owns — both directions stay in step. */}
+          <SelectField
             label="band"
-            value={draft.band}
-            onChange={(band) => onChange({ ...draft, band })}
+            ariaLabel="RF band"
+            value={bandForFrequencyGhz(draft.frequency_ghz) ?? draft.band}
+            onChange={(band) => {
+              const row = RF_BANDS.find((r) => r.band === band);
+              if (row) onChange({ ...draft, band, frequency_ghz: row.seedGhz });
+            }}
+            options={RF_BANDS.map((row) => ({
+              value: row.band,
+              label: `${row.band.toUpperCase()} (${row.minGhz}\u2013${row.maxGhz} GHz)`,
+            }))}
           />
           <NumberField
             label="frequency"
             value={draft.frequency_ghz}
             suffix="GHz"
             step={0.1}
-            onChange={(frequency_ghz) => onChange({ ...draft, frequency_ghz })}
+            onChange={(frequency_ghz) =>
+              onChange({
+                ...draft,
+                frequency_ghz,
+                band: bandForFrequencyGhz(frequency_ghz) ?? draft.band,
+              })
+            }
           />
+          {bandForFrequencyGhz(draft.frequency_ghz) === null && (
+            <div className="builder-warning">
+              {draft.frequency_ghz} GHz is outside the lettered satellite
+              bands (VHF–W) — the band stays "{draft.band}"
+            </div>
+          )}
         </>
       ) : (
         <NumberField

@@ -593,6 +593,36 @@ export function identifier(value: string): string {
     .slice(0, 48);
 }
 
+/** IEEE/ITU letter bands as used for satellite allocations. The frequency
+ *  is the single source of truth; the band NAME derives from it — picking a
+ *  band seeds a typical satcom frequency the user then owns (IG-7). */
+export const RF_BANDS: {
+  band: string;
+  minGhz: number;
+  maxGhz: number;
+  seedGhz: number;
+}[] = [
+  { band: "vhf", minGhz: 0.03, maxGhz: 0.3, seedGhz: 0.15 },
+  { band: "uhf", minGhz: 0.3, maxGhz: 1, seedGhz: 0.4 },
+  { band: "l", minGhz: 1, maxGhz: 2, seedGhz: 1.5 },
+  { band: "s", minGhz: 2, maxGhz: 4, seedGhz: 2.2 },
+  { band: "c", minGhz: 4, maxGhz: 8, seedGhz: 6 },
+  { band: "x", minGhz: 8, maxGhz: 12, seedGhz: 8.4 },
+  { band: "ku", minGhz: 12, maxGhz: 18, seedGhz: 14 },
+  { band: "k", minGhz: 18, maxGhz: 26.5, seedGhz: 20 },
+  { band: "ka", minGhz: 26.5, maxGhz: 40, seedGhz: 30 },
+  { band: "v", minGhz: 40, maxGhz: 75, seedGhz: 50 },
+  { band: "w", minGhz: 75, maxGhz: 110, seedGhz: 80 },
+];
+
+/** The lettered band a frequency falls in, or null outside the table. */
+export function bandForFrequencyGhz(frequencyGhz: number): string | null {
+  for (const row of RF_BANDS) {
+    if (frequencyGhz >= row.minGhz && frequencyGhz < row.maxGhz) return row.band;
+  }
+  return null;
+}
+
 const GEO_ALTITUDE_KM = 35786;
 
 /** Geosynchronous check for the dwell-longitude lens. Within ~500 km of GEO

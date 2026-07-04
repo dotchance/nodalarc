@@ -12,6 +12,7 @@ import { describe, expect, it } from "vitest";
 import {
   completenessFindings,
   defaultBoundary,
+  bandForFrequencyGhz,
   defaultDraftOrbit,
   dwellLongitudeDeg,
   isGeosynchronous,
@@ -737,5 +738,23 @@ describe("central body is authored state, never a hardcoded earth", () => {
       central_body: "nodalarc:bodies/luna.yaml",
     };
     expect(isGeosynchronous(orbit)).toBe(false);
+  });
+});
+
+describe("RF band derives from frequency (ITU satellite letter bands)", () => {
+  it("names the band the owner's way: 1-2 L, 2-4 S, 26.5-40 Ka", () => {
+    expect(bandForFrequencyGhz(1.5)).toBe("l");
+    expect(bandForFrequencyGhz(2.0)).toBe("s");
+    expect(bandForFrequencyGhz(3.9)).toBe("s");
+    expect(bandForFrequencyGhz(6)).toBe("c");
+    expect(bandForFrequencyGhz(14)).toBe("ku");
+    expect(bandForFrequencyGhz(26.5)).toBe("ka");
+    expect(bandForFrequencyGhz(39.9)).toBe("ka");
+    expect(bandForFrequencyGhz(50)).toBe("v");
+  });
+
+  it("outside the lettered table is null, never a guess", () => {
+    expect(bandForFrequencyGhz(0.001)).toBe(null);
+    expect(bandForFrequencyGhz(200)).toBe(null);
   });
 });

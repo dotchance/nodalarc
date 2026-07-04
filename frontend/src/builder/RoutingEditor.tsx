@@ -2,12 +2,12 @@
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
 /** Routing editors — domains and boundaries.
  *
- *  Link rules say what MAY communicate; routing domains are membership: a
+ *  Link rules say what may communicate; routing domains are membership: a
  *  protocol over member segments (whole-segment membership — per-terminal
  *  membership is a gated grammar change). Timers are the expert card;
  *  engine defaults apply when unset. bgp/static are offered and the
  *  resolver's gate speaks verbatim on resolve. Boundaries are controlled
- *  exchanges OVER a fixed link rule (never access — those links schedule);
+ *  exchanges over a fixed link rule (never access — those links schedule);
  *  v1 export is the shipped exchange: originated prefixes both ways via
  *  peer loopback.
  */
@@ -177,7 +177,7 @@ export function BoundaryEditor({
   onUpdate,
   onRemove,
 }: BoundaryEditorProps) {
-  // Boundaries run over FIXED links; access rules schedule on visibility
+  // Boundaries run over fixed links; access rules schedule on visibility
   // and are excluded here — the same wall the resolver enforces.
   const fixedRules = workspace.links.filter(
     (rule) => rule.a.role !== "access" && rule.b.role !== "access",

@@ -1,14 +1,14 @@
 # Copyright 2024-2026 .chance (dotchance)
 # Licensed under the Apache License, Version 2.0. See LICENSE file.
-"""Cross-language contract: the frontend must mirror the REAL backend wire shape
+"""Cross-language contract: the frontend must mirror the real backend wire shape
 and reason vocabularies, not a hand-copied snapshot of itself.
 
 Two drift surfaces are guarded:
-  1. Reason vocabularies — the frontend registry covering its OWN union arrays
+  1. Reason vocabularies — the frontend registry covering its own union arrays
      (registry.test.ts) is tautological if those arrays drift from Python. This
      extracts the authoritative Python reason codes (Literal / StrEnum members) and
      the literal arrays in frontend/src/explain/reasons.ts and asserts they match
-     in BOTH directions.
+     in both directions.
   2. Wire-shape field names — the TS interfaces in frontend/src/explain/types.ts
      are a no-mapping mirror of the backend DecisionExplanationFacts models. A
      snake_case field rename on either side would silently make the frontend read

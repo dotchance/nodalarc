@@ -2,7 +2,7 @@
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
 /** The connect gesture, on the segment: a segment's
  *  editor lists the rules that touch it and offers "+ link to…" — pick the
- *  other end and the rule is created with physics DERIVED from both
+ *  other end and the rule is created with physics derived from both
  *  faceplates (IG-7), then opens for confirmation (IG-1/IG-2). Connecting
  *  to itself authors the intra-segment fabric (mesh).
  */

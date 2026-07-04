@@ -1,7 +1,7 @@
 # VS-API is platform infrastructure, not a session-scoped service.
 #
 # It is the user's front door — the browser wizard, WebSocket streaming,
-# REST API, and session orchestrator. It must NEVER be restarted by the
+# REST API, and session orchestrator. It must never be restarted by the
 # Operator during session switches (restart_platform_pods excludes it).
 #
 # Volume mount philosophy:

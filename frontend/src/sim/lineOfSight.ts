@@ -3,7 +3,7 @@
 /** Line-of-sight geometry in physical (km, body-fixed) space.
  *
  *  Pure functions, zero dependencies, worker-importable — the physics-layer
- *  sibling of orbitalMath. Consumers decide visibility in KM SPACE and draw
+ *  sibling of orbitalMath. Consumers decide visibility in km space and draw
  *  in render space; render scale never feeds these tests (the presentation-
  *  only scale law). The runtime authority for visibility remains OME — these
  *  power previews that must agree with what OME would decide geometrically:

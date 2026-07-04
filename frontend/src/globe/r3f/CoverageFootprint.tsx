@@ -10,7 +10,7 @@
  * FOOTPRINT_COLOR. u_falloff is the satellite's beam_falloff_exponent (higher → tighter
  * center, e.g. Iridium 3.5; lower → broader, e.g. Starlink 2.0), defaulting to 2.0.
  *
- * Which satellites get a disc: the SELECTED satellite always; plus any node ids the hosting
+ * Which satellites get a disc: the selected satellite always; plus any node ids the hosting
  * surface requests through the `beams` prop (the builder shows every satellite of a segment
  * whose editor window is open). The elevation floor likewise comes from the hosting surface
  * when it has real terminal data — `beams.elevationFor` returning null means the node has no
@@ -19,7 +19,7 @@
  * reach the snapshot.
  *
  * Lives inside a <Body> (body-child), so positions are in that body's local frame. Each frame
- * a disc reads its satellite's body-LOCAL position from the shared registry (after
+ * a disc reads its satellite's body-local position from the shared registry (after
  * <Constellation> at priority -1 has written it) and places itself at the sub-satellite point
  * on the surface, oriented so its local -Z faces outward. Geometry rebuilds only when the
  * satellite or its altitude (>1 km) changes; otherwise only the u_falloff uniform is
@@ -92,7 +92,7 @@ function FootprintDisc({ sat, elevDeg }: FootprintDiscProps) {
   const altKm = sat.alt_km ?? 0;
   const falloff = sat.beam_falloff_exponent ?? DEFAULT_FALLOFF;
 
-  // Rebuild geometry ONLY when the satellite changes or its altitude shifts >1 km (the legacy
+  // Rebuild geometry only when the satellite changes or its altitude shifts >1 km (the legacy
   // gate). Quantizing altKm to whole km gives a stable memo key with that exact threshold, so
   // sub-km orbital drift never thrashes the geometry — only the u_falloff uniform updates.
   const altKmQuant = Math.round(altKm);
@@ -163,7 +163,7 @@ interface CoverageFootprintProps {
 
 export function CoverageFootprint({ selection, nodes, beams }: CoverageFootprintProps) {
   // One disc per satellite that earned one: the selection, plus the hosting
-  // surface's requests — deduped, restricted to THIS body's nodes (the scene
+  // surface's requests — deduped, restricted to this body's nodes (the scene
   // renders one CoverageFootprint per body).
   const discs = useMemo(() => {
     const wanted = new Set<string>();

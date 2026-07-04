@@ -4,7 +4,7 @@
  *
  *  Progressive disclosure like the read-only inspector: Orbit and Pattern
  *  cards, one open at a time, closed cards reading as the spec sheet. Every
- *  field is typeable; presets SEED raw values the user then owns (never
+ *  field is typeable; presets seed raw values the user then owns (never
  *  modes). Orbit sanity findings warn in plain language and never block —
  *  the resolver's verdict arrives through the live resolve-check and is
  *  shown verbatim in the status bar.
@@ -85,7 +85,7 @@ export function ConstellationEditor({
     try {
       const { document } = await readCatalogObject(draft.node_ref);
       const node_draft = draftNodeFromDocument(document);
-      // A forked copy is a NEW object: never claim the original's identity.
+      // A forked copy is a new object: never claim the original's identity.
       node_draft.id = identifier(`${node_draft.id}-custom`);
       node_draft.display_name = `${node_draft.display_name} (custom)`;
       onUpdate({ node_draft });
@@ -95,7 +95,7 @@ export function ConstellationEditor({
     }
   };
 
-  // Save the draft to the user catalog and let the segment REFERENCE it —
+  // Save the draft to the user catalog and let the segment reference it —
   // draft → user: ref, the library direction of tweak-ours→yours.
   const saveNodeToLibrary = async () => {
     if (!draft.node_draft) return;

@@ -82,7 +82,7 @@ interface SceneProps {
   /** Imperative camera/screenshot handle the rest of the app drives (Toolbar, keyboard, fly-to). */
   actionsRef?: MutableRefObject<GlobeActions | null>;
   /** Ground-selection decision explanation (envelope cone + candidate tinting)
-   *  answers for the RUNNING session's scheduler. Surfaces rendering a world
+   *  answers for the running session's scheduler. Surfaces rendering a world
    *  that is not the running session (the session builder) disable it so the
    *  scene never explains one world with another world's decisions. */
   liveExplain?: boolean;
@@ -218,7 +218,7 @@ export function Scene({
 
   // On-select decision data, lifted here so the globe is internally single-sourced: the GS
   // envelope cone and the per-sat relation tinting both read from
-  // ONE decision-explanation + ONE ground-candidates fetch for the selected GS — and from the SAME
+  // one decision-explanation + one ground-candidates fetch for the selected GS — and from the same
   // client + classifier the node card uses, so a satellite never reads one family on the glyph and
   // another in the panel. Only fetched when a GS is selected (selectedGsId null otherwise).
   const selectedGsId =

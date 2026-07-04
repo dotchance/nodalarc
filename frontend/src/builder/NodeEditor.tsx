@@ -2,7 +2,7 @@
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
 /** Node draft editor — the faceplate.
  *
- *  A node reads as hardware: terminal mounts are role-colored port CHIPS in
+ *  A node reads as hardware: terminal mounts are role-colored port chips in
  *  the scene's color language (access teal, isl/crosslink blue); LAN attach
  *  is a "lan" chip that serializes to the grammar's ethernet ports (LAN is
  *  not a terminal role). Click a chip to edit that one mount inline. The

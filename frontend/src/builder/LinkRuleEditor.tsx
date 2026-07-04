@@ -2,7 +2,7 @@
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
 /** Link rule editor — comms intent between placed segments.
  *
- *  A rule declares who MAY link; OME computes feasibility from geometry,
+ *  A rule declares who may link; OME computes feasibility from geometry,
  *  terminal limits, and runtime state. Role defaults seed the rule when two
  *  segments are connected (isl for a fabric, crosslink space↔space, access
  *  ground↔space); every value is then owned by the user. Tag scopes are how
@@ -39,7 +39,7 @@ interface LinkRuleEditorProps {
   workspace: Workspace;
   rule: DraftLinkRule;
   /** The allocator's own outcome for this rule from the last resolve —
-   *  displays REPORT it; nothing here re-derives capacity. Null while the
+   *  displays report it; nothing here re-derives capacity. Null while the
    *  world is unresolved (show nothing, the existing precedent). */
   allocation: BuilderRuleAllocation | null;
   onUpdate: (patch: Partial<DraftLinkRule>) => void;
@@ -227,7 +227,7 @@ export function LinkRuleEditor({
         />
       )}
       {allocation && allocation.per_node.length > 0 && (() => {
-        // The tightest node is ONE node — report its own numbers, never
+        // The tightest node is one node — report its own numbers, never
         // minima composed across different nodes (that can describe a node
         // that does not exist). Whether the ask fits is the allocator's
         // verdict: a fixed rule that cannot allocate walls the resolve;

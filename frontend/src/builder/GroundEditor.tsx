@@ -1,11 +1,11 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
-/** Ground segment editor — a segment is a COMBINATION of defined sites.
+/** Ground segment editor — a segment is a combination of defined sites.
  *
  *  A site is a first-class primitive (nodes, terminals, networks at a
  *  location); members here are either references to defined sites — full
  *  fidelity, their nodes travel with them — or authored site drafts edited
- *  in place with the SiteEditor. Bulk paste MINTS full sites using the
+ *  in place with the SiteEditor. Bulk paste mints full sites using the
  *  segment's stamp (node model + addressing bases, applied at creation;
  *  every minted site owns its configuration afterwards). Scheduling is an
  *  intent preset writing the full explicit block, with sparse per-site
@@ -111,7 +111,7 @@ export function GroundEditor({
     }
   };
 
-  // Place a DEFINED site by reference — full fidelity, its nodes travel.
+  // Place a defined site by reference — full fidelity, its nodes travel.
   const addFromLibrary = (ref: string, siteId: string, label: string, summary: string | null) => {
     setEditorError(null);
     if (draft.members.some((member) => member.site_id === siteId)) {
@@ -138,7 +138,7 @@ export function GroundEditor({
     }
   };
 
-  // Switching the stamp model re-seeds its mounts — affects FUTURE mints only.
+  // Switching the stamp model re-seeds its mounts — affects future mints only.
   const setStampModel = async (ref: string) => {
     setEditorError(null);
     try {

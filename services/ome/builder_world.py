@@ -214,7 +214,7 @@ def _world_from_raw(raw: dict[str, Any], roots: CatalogRoots) -> BuilderWorld:
             for seg in seen_segments
         ),
         # Capacity truth is computed once, by the allocator, and shipped:
-        # displays report what allocation DID, never re-derive what it might.
+        # displays report what allocation did, never re-derive what it might.
         allocations=tuple(link_rule_interface_facts(resolved, catalog_session)),
         link_candidates=tuple(
             BuilderLinkCandidate(

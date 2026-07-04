@@ -97,7 +97,7 @@ export interface DraftSiteNode {
   terr0_ipv4: string;
 }
 
-/** A SITE is a first-class primitive — the terminals, nodes, networks, and
+/** A site is a first-class primitive — the terminals, nodes, networks, and
  *  parameters that make up a location, not just a lat/lon. This is the
  *  grammar's Site object as an editable draft (IPv4-only for now). */
 export interface DraftSiteObject {
@@ -111,7 +111,7 @@ export interface DraftSiteObject {
   nodes: DraftSiteNode[];
 }
 
-/** One member of a ground segment: a DEFINED site — placed by reference at
+/** One member of a ground segment: a defined site — placed by reference at
  *  full fidelity (its nodes travel with it), or an authored draft. */
 export interface DraftGroundSite {
   /** Stable list key, builder-local. */
@@ -130,7 +130,7 @@ export interface DraftGroundSite {
   scheduling_override: SchedulingPresetKey | null;
 }
 
-/** The stamp: what bulk paste mints NEW sites with — a node model and
+/** The stamp: what bulk paste mints new sites with — a node model and
  *  addressing bases. Applied once at creation; every minted site owns its
  *  configuration afterwards (edit the site, not the stamp). */
 export interface GroundStamp {
@@ -142,7 +142,7 @@ export interface GroundStamp {
   loopback_base: string;
 }
 
-/** An editable ground segment: a COMBINATION of defined sites, plus the
+/** An editable ground segment: a combination of defined sites, plus the
  *  session-level application (scheduling intent, originated prefixes, tags,
  *  sparse per-site overrides). */
 export interface DraftGroundSet {
@@ -176,8 +176,8 @@ export interface DraftLinkEndpoint {
   min_elevation_deg: number | null;
 }
 
-/** An authored link rule — comms INTENT between placed segments. Rules
- *  declare who MAY link; OME computes feasibility from geometry, terminal
+/** An authored link rule — comms intent between placed segments. Rules
+ *  declare who may link; OME computes feasibility from geometry, terminal
  *  limits, and runtime state. */
 export interface DraftLinkRule {
   rule_id: string;
@@ -205,7 +205,7 @@ export interface DraftRoutingDomain {
   hold_interval_s: number | null;
 }
 
-/** An authored routing boundary: a controlled exchange OVER a link rule.
+/** An authored routing boundary: a controlled exchange over a link rule.
  *  v1 export is the shipped exchange pattern — originated prefixes both
  *  ways, installed via peer loopback. */
 export interface DraftBoundary {
@@ -232,7 +232,7 @@ export interface Workspace {
   /** Authored routing domains + boundaries between them. */
   routing_domains: DraftRoutingDomain[];
   boundaries: DraftBoundary[];
-  /** Candidate math budget — the grammar REQUIRES declared limits once link
+  /** Candidate math budget — the grammar requires declared limits once link
    *  rules exist in a multi-segment session (no silent defaults). Sized to
    *  the largest shipped session; typeable like everything else. */
   max_pairs_per_rule: number;
@@ -244,7 +244,7 @@ export interface Workspace {
   compression: number;
 }
 
-/** Orbit presets seed RAW VALUES the user then owns — never modes. */
+/** Orbit presets seed raw values the user then owns — never modes. */
 export const ORBIT_PRESETS: { label: string; orbit: Partial<DraftOrbit> }[] = [
   { label: "LEO 550", orbit: { shape_kind: "circular", altitude_km: 550, inclination_deg: 53 } },
   {
@@ -468,7 +468,7 @@ export function nodeObjectFromDraft(draft: DraftNode): Record<string, unknown> {
 
 /** An editable terminal: the grammar's Terminal object (pure physics — no
  *  role, no placement; those live on mounts and sites). Terminals author
- *  LIBRARY-FIRST: the draft saves to the user catalog and mounts by
+ *  library-first: the draft saves to the user catalog and mounts by
  *  reference, because a terminal has no session-local form. */
 export interface DraftTerminal {
   id: string;
@@ -605,7 +605,7 @@ export function newWorkspace(name: string): Workspace {
  *
  *  The grammar allows underscores (shipped mount ids like ``isl_optical``);
  *  they must survive round-trips. Mapping identifiers into runtime node ids
- *  (which ban underscores) is the RESOLVER's normalization, never ours. */
+ *  (which ban underscores) is the resolver's normalization, never ours. */
 export function identifier(value: string): string {
   return value
     .toLowerCase()
@@ -615,7 +615,7 @@ export function identifier(value: string): string {
 }
 
 /** IEEE/ITU letter bands as used for satellite allocations. The frequency
- *  is the single source of truth; the band NAME derives from it — picking a
+ *  is the single source of truth; the band name derives from it — picking a
  *  band seeds a typical satcom frequency the user then owns (IG-7). */
 export const RF_BANDS: {
   band: string;
@@ -721,13 +721,13 @@ export function orbitWarnings(orbit: DraftOrbit): string[] {
 export type SchedulingPresetKey = "leo-fast-handover" | "geo-longest-pass";
 
 /** Allocator-wide scheduling fields: the resolver requires these to be
- *  UNIFORM across every ground node in the session (they configure the one
+ *  uniform across every ground node in the session (they configure the one
  *  allocator, not a node). Presets therefore never vary them — mixing
  *  presets across segments or per-site overrides stays resolvable by
  *  construction. Session-level control over these lands with session
  *  plumbing (S7). */
 const ALLOCATOR_SCHEDULING = {
-  // per_gs_rank (not selection_score): presets are made to be MIXED, and
+  // per_gs_rank (not selection_score): presets are made to be mixed, and
   // their selection policies score on different scales (elevation degrees
   // vs remaining seconds). per_gs_rank arbitrates across policies — the
   // same choice the shipped multi-regime session makes.
@@ -746,7 +746,7 @@ const ALLOCATOR_SCHEDULING = {
 } as const;
 
 /** Scheduling intent presets — dual literacy: the preset name carries the
- *  operational intent; selecting one writes the FULL explicit block the
+ *  operational intent; selecting one writes the full explicit block the
  *  expert can read in the YAML pane. No hidden defaults. Presets differ
  *  only on per-node fields (see ALLOCATOR_SCHEDULING). */
 export const SCHEDULING_PRESETS: Record<
@@ -780,7 +780,7 @@ export const SCHEDULING_PRESETS: Record<
 };
 
 /** A site set placed by reference, plus the session-owned scheduling intent
- *  (scheduling is a SESSION concern — site-set documents never carry it). */
+ *  (scheduling is a session concern — site-set documents never carry it). */
 export interface RefGroundSet extends RefSegment {
   scheduling_preset: SchedulingPresetKey;
 }
@@ -816,7 +816,7 @@ export function newDraftGroundSet(
   };
 }
 
-/** Stamp-derived addressing for MINTED sites (mint index i). Applied once
+/** Stamp-derived addressing for minted sites (mint index i). Applied once
  *  at creation and stored explicitly on the site — the site owns it after. */
 export function stampLanPrefix(stamp: GroundStamp, index: number): string {
   return `${stamp.lan_base}.${index}.0/24`;
@@ -876,8 +876,8 @@ export function parseSiteLines(text: string): { rows: ParsedSiteLine[]; errors: 
   return { rows, errors };
 }
 
-/** Mint full SITES from pasted rows using the segment's stamp — node model,
- *  installed mounts, and derived addressing are applied AT CREATION; each
+/** Mint full sites from pasted rows using the segment's stamp — node model,
+ *  installed mounts, and derived addressing are applied at creation; each
  *  minted site owns its configuration afterwards. Mint indices continue
  *  from the count of existing draft members so addressing never collides
  *  within the segment. */
@@ -1044,7 +1044,7 @@ export function draftSiteFromDocument(document: Record<string, unknown>): DraftS
 }
 
 /** Serialize a site draft to the grammar's Site object (unwrapped form) —
- *  the SAME builder feeds session emission and save-to-library. */
+ *  the same builder feeds session emission and save-to-library. */
 export function siteObjectFromDraft(site: DraftSiteObject): Record<string, unknown> {
   return {
     id: identifier(site.site_id),
@@ -1119,7 +1119,7 @@ export function groundWarnings(draft: DraftGroundSet): string[] {
 }
 
 /** Fork a site-set document into an editable ground draft — customize-a-
- *  placed-block for ground. A site set is a COMBINATION of defined sites:
+ *  placed-block for ground. A site set is a combination of defined sites:
  *  referenced members stay references at full fidelity (their nodes travel
  *  with them); inline members become editable site drafts. The stamp seeds
  *  from the first readable node so pasting new sites keeps working. */
@@ -1169,9 +1169,9 @@ export function draftGroundSetFromDocuments(
 }
 
 /** Serialize a ground draft to the grammar's SiteSet object (unwrapped form)
- *  — the SAME builder feeds session emission (inline from_site_set) and
+ *  — the same builder feeds session emission (inline from_site_set) and
  *  save-to-library (wrapped by the save path). Scheduling, originated
- *  prefixes, and overrides are SESSION concerns and stay out of it. */
+ *  prefixes, and overrides are session concerns and stay out of it. */
 export function siteSetObjectFromDraft(
   draft: DraftGroundSet,
   id: string,
@@ -1188,7 +1188,7 @@ export function siteSetObjectFromDraft(
   };
 }
 
-/** Serialize the workspace to the session grammar (the ONE artifact). *//** Every placed segment a link rule can select, with its kind — the role
+/** Serialize the workspace to the session grammar (the one artifact). *//** Every placed segment a link rule can select, with its kind — the role
  *  defaults key on kinds (space⟲space=isl, space↔space=crosslink,
  *  ground↔space=access). */
 export interface PlacedSegment {
@@ -1224,7 +1224,7 @@ export function placedSegments(workspace: Workspace): PlacedSegment[] {
 
 let linkCounter = 0;
 
-/** Connect two placed segments with the DOCUMENTED role defaults: the same
+/** Connect two placed segments with the documented role defaults: the same
  *  space segment twice = an ISL fabric (nearest-2 optical); two different
  *  space segments = optical crosslink; ground↔space = RF access with a 25°
  *  mask on the ground side. All values are seeds the user then owns. */
@@ -1266,7 +1266,7 @@ export function defaultLinkRule(
   }
   // Rule ids must be unique in the session — uniquify the seeded name so a
   // second connect never trips the duplicate-id wall before the rename.
-  // identifier() truncates to 48 chars, so compare TRUNCATED ids and keep
+  // identifier() truncates to 48 chars, so compare truncated ids and keep
   // the base short enough that the numeric suffix survives truncation.
   const taken = new Set(existing.map((r) => identifier(r.label) || r.rule_id));
   if (taken.has(identifier(rule.label))) {
@@ -1316,11 +1316,11 @@ export function linkWarnings(workspace: Workspace): string[] {
 let domainCounter = 0;
 let boundaryCounter = 0;
 
-/** A new domain seeds over EVERY placed segment — one IGP over the whole
+/** A new domain seeds over every placed segment — one IGP over the whole
  *  world is the honest default; members are then removed per segment. */
 export function defaultRoutingDomain(workspace: Workspace): DraftRoutingDomain {
   domainCounter += 1;
-  // Seed the UNCOVERED segments: the first domain naturally takes
+  // Seed the uncovered segments: the first domain naturally takes
   // everything, the second means "the rest". Seeding every segment again
   // guaranteed an instant disjointness refusal on the second "+ domain".
   const covered = new Set(workspace.routing_domains.flatMap((d) => d.member_segment_ids));
@@ -1399,7 +1399,7 @@ export function routingWarnings(workspace: Workspace): string[] {
     ) {
       warnings.push("a boundary references a routing domain that no longer exists");
     } else if (boundary.from_domain_id === boundary.to_domain_id) {
-      warnings.push("a boundary must exchange between two DIFFERENT domains");
+      warnings.push("a boundary must exchange between two different domains");
     }
   }
   return warnings;
@@ -1417,12 +1417,12 @@ export interface CompletenessFinding {
     | null;
 }
 
-/** The completeness rail's source: OBJECT-level authoring gaps with
+/** The completeness rail's source: object-level authoring gaps with
  *  click-to-jump targets. Session-level structure (no segments, no rules,
  *  no domains) lives in the session-anatomy guide, which is always on
  *  screen — saying it twice would just be two surfaces to keep agreeing.
  *  Warnings that already render inline on their owning object are
- *  AGGREGATED as counts, not duplicated. Empty result = nothing to say
+ *  aggregated as counts, not duplicated. Empty result = nothing to say
  *  (the resolve status is the green, never this rail). */
 export function completenessFindings(workspace: Workspace): CompletenessFinding[] {
   const findings: CompletenessFinding[] = [];
@@ -1519,7 +1519,7 @@ export function reseedCounters(workspace: Workspace): void {
 }
 
 /** A ground draft with no sites cannot possibly resolve — it and anything
- *  referencing it are HELD OUT of the artifact until complete (the warnings
+ *  referencing it are held out of the artifact until complete (the warnings
  *  and the rail say so). An empty shell used to refuse the whole resolve
  *  and blank the world the moment authoring began. */
 export function heldBackGroundIds(workspace: Workspace): Set<string> {
@@ -1528,7 +1528,7 @@ export function heldBackGroundIds(workspace: Workspace): Set<string> {
   );
 }
 
-/** Serialize the workspace to the session grammar (the ONE artifact). */
+/** Serialize the workspace to the session grammar (the one artifact). */
 export function toSessionDocument(workspace: Workspace): Record<string, unknown> {
   const heldGrounds = heldBackGroundIds(workspace);
   const emittedSegmentIds = new Set(
@@ -1747,10 +1747,10 @@ export function toSessionDocument(workspace: Workspace): Record<string, unknown>
 }
 
 // ---------------------------------------------------------------------------
-// Session import — the serializer's inverse. The builder edits a RUNNING
+// Session import — the serializer's inverse. The builder edits a running
 // session by parsing its document back into drafts. Import is all-or-
 // nothing: grammar the builder cannot represent refuses with the offending
-// paths, and a successful parse must re-serialize to EXACTLY the source
+// paths, and a successful parse must re-serialize to exactly the source
 // document — an edit surface that silently diverges from what is running
 // would be a false state display, the one thing this product never does.
 
@@ -1777,7 +1777,7 @@ function _deepEqual(a: unknown, b: unknown): boolean {
 }
 
 /** Paths where two documents differ (either direction), depth-first,
- *  capped — enough to say WHERE an import is unfaithful. */
+ *  capped — enough to say where an import is unfaithful. */
 function _diffPaths(a: unknown, b: unknown, path: string, out: string[], cap: number): void {
   if (out.length >= cap || _deepEqual(a, b)) return;
   const isObj = (v: unknown) => typeof v === "object" && v !== null && !Array.isArray(v);
@@ -2209,7 +2209,7 @@ export function workspaceFromSessionDocument(
   }
 
   if (issues.length) return { issues };
-  // The fidelity proof: a workspace that does not re-serialize to EXACTLY
+  // The fidelity proof: a workspace that does not re-serialize to exactly
   // the source document refuses — otherwise "editing the running session"
   // would silently edit something else.
   const diffs: string[] = [];

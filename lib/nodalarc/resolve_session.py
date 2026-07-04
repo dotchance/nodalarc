@@ -480,7 +480,7 @@ class _SiteMarker:
 
 @contextmanager
 def _segment_scope(segment_id: str):
-    """Address refusals raised while expanding ONE segment: a wall that
+    """Address refusals raised while expanding one segment: a wall that
     names no owner lands on the segment being expanded (refusals are
     addressed mail — an unscoped catalog-validation message would otherwise
     surface as raw prose far from the object that caused it)."""
@@ -1493,7 +1493,7 @@ def _resolve_routing_domains(
     runtime_nodes: tuple[_RuntimeNode, ...],
 ) -> list[ResolvedRoutingDomain]:
     if cfg.routing is None:
-        # Documented product default: one flat IS-IS domain over every ROUTED
+        # Documented product default: one flat IS-IS domain over every routed
         # node. Hosts/bridges/control-only nodes run no routing protocol and
         # must not be invented into one.
         routed = tuple(
@@ -1565,9 +1565,9 @@ def _validate_routing_domain_partition(
         if len(domain_ids) > 1
     }
     if overlaps:
-        # Summarize, and address the wall: name the overlapping DOMAINS and a
+        # Summarize, and address the wall: name the overlapping domains and a
         # few example nodes — enumerating every member of a large session was
-        # a wall of prose no one could act on. The subject is the LAST
+        # a wall of prose no one could act on. The subject is the last
         # declared overlapping domain: the one most recently added is the one
         # whose membership to fix.
         domain_names = sorted({d for ids in overlaps.values() for d in ids})
@@ -1601,7 +1601,7 @@ def _validate_access_terminal_bindings(
     """Ground terminal blocks bind to exactly one access rule.
 
     Terminal compatibility is authored, never inferred: the rule's terminal
-    selector IS the binding declaration, and one ground terminal serving two
+    selector is the binding declaration, and one ground terminal serving two
     constellations is an authoring ambiguity the allocator must never be
     asked to arbitrate. Satellite access terminals serve whichever ground
     station the allocator assigns and are deliberately not bound.
@@ -1639,7 +1639,7 @@ def _eligible_fixed_interfaces(
     node_id: str,
 ) -> list[str]:
     """WAN interfaces on ``node`` whose owning terminal block matches the
-    rule's terminal selector on the side(s) that include the node. The ONE
+    rule's terminal selector on the side(s) that include the node. The one
     body behind both fixed-interface allocation and the interface facts the
     builder displays — two implementations of eligibility would be two
     truths.
@@ -1672,7 +1672,7 @@ def _eligible_fixed_interfaces(
 def link_rule_interface_facts(
     resolved: ResolvedSession, cfg: SegmentSessionConfig
 ) -> list[BuilderRuleAllocation]:
-    """Per-rule, per-node interface capacity as the ALLOCATOR sees it.
+    """Per-rule, per-node interface capacity as the allocator sees it.
 
     Ships to the builder world so every display reports what allocation did
     rather than re-deriving an approximation (a client-side budget once
@@ -1739,7 +1739,7 @@ def _resolve_link_candidates(
 
     def _fixed_iface(node_id: str, rule_id: str) -> str:
         # The interface comes from the wan manifest entries whose owning
-        # terminal block matches THIS rule's terminal selector — a candidate
+        # terminal block matches this rule's terminal selector — a candidate
         # must never claim an interface the manifest assigned to a different
         # mount (an rf link on the optical mount's interface is wire fiction).
         node = node_by_id[node_id]
@@ -1802,7 +1802,7 @@ def _resolve_link_candidates(
 def _enforce_declared_candidate_bounds(
     cfg: SegmentSessionConfig, resolved: ResolvedSession
 ) -> None:
-    """Bound the candidate graph BEFORE materializing it.
+    """Bound the candidate graph before materializing it.
 
     Multi-segment sessions must declare candidate_limits — an all-by-all rule
     over composed segments is exactly the case the budget exists for, and an
@@ -2374,7 +2374,7 @@ def segment_display_names(raw: dict[str, Any], *, roots: CatalogRoots) -> dict[s
                 if site_set is None:
                     continue
                 # Mirror the resolution path exactly: from_site_set also
-                # accepts a BARE site-set body (_load_expected), which
+                # accepts a bare site-set body (_load_expected), which
                 # _load_ref_or_object would reject.
                 obj = _load_expected(site_set, roots, "site_set")
         except Exception:

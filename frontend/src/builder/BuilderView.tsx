@@ -8,7 +8,7 @@
  *  renders the resolver's expansion of a session — never a builder-local
  *  view of what a session means.
  *
- *  Authoring: client-side drafts + library refs, serialized through the ONE
+ *  Authoring: client-side drafts + library refs, serialized through the one
  *  serializer and resolve-checked server-side on every edit; the rendered
  *  world is always the resolver's expansion of the current draft.
  */
@@ -184,7 +184,7 @@ interface EditorWindow {
 }
 
 /** One-line form of a refusal for the compact surfaces (canvas note,
- *  status bar) — the OWNING window's wall carries the full text. */
+ *  status bar) — the owning window's wall carries the full text. */
 function truncateError(text: string, max = 180): string {
   return text.length > max ? `${text.slice(0, max)}\u2026` : text;
 }
@@ -289,8 +289,8 @@ export function BuilderView({
   const nodeCatalog = useBuilderCatalog("nodes");
   const terminalCatalog = useBuilderCatalog("terminals");
 
-  // --- Editing the RUNNING session ------------------------------------
-  // Entering the builder beside a running session loads THAT session as
+  // --- Editing the running session ------------------------------------
+  // Entering the builder beside a running session loads that session as
   // the workspace — rapid iteration between builder and cluster. The one
   // exception is an unsaved browser draft: autosave overwrites its slot
   // as soon as any workspace exists, so auto-importing over a draft would
@@ -307,7 +307,7 @@ export function BuilderView({
     loadSession(entry.file);
   };
   useEffect(() => {
-    // The running session ALWAYS loads — that is what entering the builder
+    // The running session always loads — that is what entering the builder
     // beside a running cluster means. A browser draft never silently stands
     // in for it (a stale draft wearing the running session's name showed an
     // empty world while thirty nodes ran); a displaced draft is preserved
@@ -339,7 +339,7 @@ export function BuilderView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [importPending, loadedDocument, loadedFile, workspace]);
   useEffect(() => {
-    // The import must END with its resolve: a failed fetch or a competing
+    // The import must end with its resolve: a failed fetch or a competing
     // action (clear/+ New discards the in-flight response) would otherwise
     // leave "Loading…" claimed forever — a false in-progress display — and
     // permanently disable the edit-running path for this mount.
@@ -510,10 +510,10 @@ export function BuilderView({
     return out;
   };
   const dirtyWindows = Object.values(buffers).filter((b) => b.dirty).length;
-  /** The wall's owning editor target, from the resolver's OWN scope — the
+  /** The wall's owning editor target, from the resolver's own scope — the
    *  serialized subject id maps to drafts via the same identifier()
    *  transform the serializer uses; never by parsing prose or runtime ids.
-   *  Matched against the PREVIEW overlay: the refused document was
+   *  Matched against the preview overlay: the refused document was
    *  serialized from it, so a dirty rename must be matched by the dirty
    *  draft, not the applied state. */
   const wallTarget = ((): { target: EditorTarget; key: string } | null => {
@@ -768,7 +768,7 @@ export function BuilderView({
       })();
     }
   };
-  // The connect gesture (IG-7): both endpoints known BEFORE the rule
+  // The connect gesture (IG-7): both endpoints known before the rule
   // exists, physics derived from the resolved world's faceplates.
   const segmentCapabilities = useMemo(() => capabilitiesBySegment(world), [world]);
   // Beam discs on the body while a segment's editor is open: every satellite
@@ -1115,8 +1115,8 @@ export function BuilderView({
         };
       }
       case "catalog": {
-        // The library is EVERYTHING you could use — a separate surface on
-        // purpose. The rail lists only what this session IS using; the two
+        // The library is everything you could use — a separate surface on
+        // purpose. The rail lists only what this session is using; the two
         // read alike, and side by side they were indistinguishable.
         return {
           title: "Library",
@@ -1681,7 +1681,7 @@ export function BuilderView({
                       (rule) => rule.a.role !== "access" && rule.b.role !== "access",
                     )
                   }
-                  title="A controlled exchange over a FIXED link rule between two domains"
+                  title="A controlled exchange over a fixed link rule between two domains"
                   onClick={() => {
                     const boundary = defaultBoundary(workspace);
                     const fixed = workspace.links.find(
@@ -1784,7 +1784,7 @@ export function BuilderView({
           </div>
         )}
         <Button
-          title="Every block you could build with — shipped and yours. Opens its own window; this rail lists only what THIS session uses."
+          title="Every block you could build with — shipped and yours. Opens its own window; this rail lists only what this session uses."
           onClick={() => openEditor({ kind: "catalog" })}
         >
           Library…

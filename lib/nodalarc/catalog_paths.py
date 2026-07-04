@@ -204,7 +204,7 @@ def write_text_exclusive(path: Path, text: str) -> None:
 def write_text_atomic(path: Path, text: str) -> None:
     """Write text atomically, replacing any existing generated file.
 
-    For writes where the filename IS the identity (one artifact per name):
+    For writes where the filename is the identity (one artifact per name):
     a temp file in the same directory then os.replace, so readers never see
     a partial file and a re-save never leaves siblings behind.
     """

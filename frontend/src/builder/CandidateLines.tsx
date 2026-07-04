@@ -3,7 +3,7 @@
 /** Candidate-pair lines — the builder's link-rule preview overlay.
  *
  *  Draws straight lines between pair members using the same per-frame
- *  position registry the meshes use. This overlay is PERMISSION + GEOMETRY
+ *  position registry the meshes use. This overlay is permission + geometry
  *  (what the rules allow and the epoch geometry supports) — deliberately
  *  distinct from the live view's Links layer, which renders actuated link
  *  truth. Dimmed, additive-free styling keeps candidates readable as

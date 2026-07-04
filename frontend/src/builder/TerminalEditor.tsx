@@ -3,7 +3,7 @@
 /** Terminal draft editor — authoring the physics OME enforces.
  *
  *  Terminals are pure physical truth (no role, no placement — the grammar's
- *  composition rules), so they author LIBRARY-FIRST: edit the physics, save
+ *  composition rules), so they author library-first: edit the physics, save
  *  to your catalog, then mount by reference. "Start from" seeds every value
  *  from an existing terminal in either tier — fork-by-seeding; the values
  *  become yours. Warnings never block; the family grammar validates at save
@@ -124,7 +124,7 @@ export function TerminalEditor({
       </div>
       {draft.medium === "rf" ? (
         <>
-          {/* Frequency is the truth; the band NAME derives from it (ITU
+          {/* Frequency is the truth; the band name derives from it (ITU
               satellite letter bands). Picking a band seeds a typical satcom
               frequency the user then owns — both directions stay in step. */}
           <SelectField

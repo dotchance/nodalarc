@@ -763,11 +763,11 @@ def _write_cr_session_file(ready: CRSessionIdentity) -> Path:
 
 
 def _mark_session_manager_ready(session: ResolvedSession, session_path: Path) -> None:
-    """Steady-state CR reconciliation: status bookkeeping ONLY.
+    """Steady-state CR reconciliation: status bookkeeping only.
 
     This runs on every 2-second trust poll. It must never do unbounded
     work: a catalog rescan here once meant a multi-second full session
-    resolution per poll ON the event loop, freezing every websocket
+    resolution per poll on the event loop, freezing every websocket
     sender (live incident 2026-06-11). Rescans happen on session
     activation and on-demand listing, off the loop.
     """
@@ -3132,8 +3132,8 @@ async def builder_resolve_world(body: dict) -> dict:
       manager's scanned map (covers generated sessions outside the catalog).
     - ``document``: an inline session document — the builder's client-side
       workspace. Resolution failures for this form return the resolver's
-      message verbatim: the user is validating their OWN document, and the
-      typed error IS the product surface.
+      message verbatim: the user is validating their own document, and the
+      typed error is the product surface.
     """
     from functools import partial
 
@@ -3189,7 +3189,7 @@ async def builder_resolve_world(body: dict) -> dict:
         return _catalog_error(exc)
     except ValueError as exc:
         if document_form or isinstance(exc, SessionResolutionError | UnsupportedFeatureError):
-            # A refused SESSION is not an invalid REQUEST: the caller's own
+            # A refused session is not an invalid request: the caller's own
             # document is always a validation surface, and a typed resolver
             # refusal for a saved/catalog session carries the same structure
             # the client lands on the owning object.
@@ -3387,7 +3387,7 @@ def builder_catalog_object(ref: str) -> dict:
 async def deploy_generated_session(body: dict) -> dict:
     """Validate YAML, write to sessions dir, and trigger deploy.
 
-    Validates the FULL session config before creating any K8s resources:
+    Validates the full session config before creating any K8s resources:
     schema validation (Pydantic), constellation expansion, ground station
     loading, and session readiness checks. If any validation fails, the
     user sees the error immediately — no CR is created, no switch is

@@ -5,7 +5,7 @@
 Sits beside ``catalog_paths`` (path containment) and ``models.catalog`` (the
 grammar): every listed entry is validated through the same catalog document
 validator the resolver uses, so the library never advertises a primitive the
-resolver would reject. A file that fails validation is listed WITH its error —
+resolver would reject. A file that fails validation is listed with its error —
 a broken catalog entry is a fact to show, not to hide.
 """
 
@@ -41,7 +41,7 @@ CATALOG_FAMILIES: dict[str, str] = {
 
 
 def _entry_summary(wrapper: str, model: Any) -> str | None:
-    """The entry's hardware line — what this block IS, at a glance."""
+    """The entry's hardware line — what this block is, at a glance."""
     try:
         if wrapper == "constellation":
             planes = model.planes.count
@@ -137,7 +137,7 @@ def _browse_root(family: str, wrapper: str, scheme: str, root: Path) -> list[Bui
 def browse_catalog(family: str, *, roots: CatalogRoots) -> list[BuilderCatalogEntry]:
     """List one family's primitives across the user and shipped roots.
 
-    The user's entries come FIRST: what someone just made is what they are
+    The user's entries come first: what someone just made is what they are
     working with, and burying it under the shipped vocabulary made their own
     library read as missing. Shipped ``nodalarc:`` entries follow. Both
     tiers are first-class; order is prominence, not privilege.
@@ -161,7 +161,7 @@ def save_user_object(
 ) -> BuilderCatalogEntry:
     """Write one validated document into the user catalog.
 
-    The file content is the canonical serialization of the VALIDATED model —
+    The file content is the canonical serialization of the validated model —
     the library never stores what the grammar would reject. The object's own
     ``id`` names the file; overwriting an existing user entry requires the
     caller to say so. The shipped catalog is never writable here.
@@ -218,7 +218,7 @@ def flatten_user_references(document: Any, *, roots: CatalogRoots, _depth: int =
     image tag.
     """
     if isinstance(document, str) and catalog_reference_scheme(document) == "user":
-        # Depth counts REFERENCE hops only (a chain longer than the limit is
+        # Depth counts reference hops only (a chain longer than the limit is
         # a cycle); structural nesting recurses at the same depth.
         if _depth >= _FLATTEN_DEPTH_LIMIT:
             raise ValueError("user catalog reference cycle detected while flattening")
@@ -235,7 +235,7 @@ def flatten_user_references(document: Any, *, roots: CatalogRoots, _depth: int =
 
 
 def rehydrate_user_references(document: Any, *, roots: CatalogRoots) -> Any:
-    """Replace inline objects that MATCH current user-library content with
+    """Replace inline objects that match current user-library content with
     their ``user:`` references — the read-side inverse of
     ``flatten_user_references``.
 

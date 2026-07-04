@@ -30,7 +30,7 @@ async function _structuredError(response: Response): Promise<BuilderResolveError
   try {
     const data = await response.json();
     if (data && typeof data.error === "string") {
-      // The body IS the BuilderResolveRefusal envelope — pass it through;
+      // The body is the BuilderResolveRefusal envelope — pass it through;
       // re-mapping fields here would be a second schema.
       return data as BuilderResolveError;
     }
@@ -50,7 +50,7 @@ async function _errorMessage(response: Response): Promise<string> {
   return `request failed (${response.status})`;
 }
 
-// --- Catalog store: ONE state per family, shared by every consumer. ---
+// --- Catalog store: one state per family, shared by every consumer. ---
 // Pickers, the library panel, and editors must all see the same list; a save
 // or delete anywhere refreshes everyone. Private per-hook copies were a
 // stale-picker bug class.
@@ -285,7 +285,7 @@ export function useBuilderWorld() {
   /** Save the workspace document server-side. The server resolves first and
    *  writes the canonical YAML exclusively; the result names the saved
    *  session. Throws with the server's message on failure. */
-  /** Deploy a SAVED session file to the cluster — the same switch the app's
+  /** Deploy a saved session file to the cluster — the same switch the app's
    *  session picker uses; the builder adds nothing to the path. */
   const deploySession = useCallback(
     async (file: string): Promise<void> => {

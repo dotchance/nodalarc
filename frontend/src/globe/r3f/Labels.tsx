@@ -144,7 +144,7 @@ function createBodyChip(): HTMLDivElement {
 /**
  * Multi-gateway sites stack at one surface point; rendering every member's
  * label produces unreadable overlap with an arbitrary winner. One label
- * represents the stack: the SELECTED member when the selection is in the
+ * represents the stack: the selected member when the selection is in the
  * site, the first member (sorted) otherwise.
  */
 export function siteLabelRepresentatives(

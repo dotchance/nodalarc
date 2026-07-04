@@ -14,7 +14,7 @@
  *  compute yet (terrestrial surface runs, inter-body spans) carry an explicit
  *  note instead of fake lines, and any cap is reported, never silent.
  *
- *  Fixed rules (nearest_n, explicit_pairs) draw the ALLOCATOR'S OWN pairs,
+ *  Fixed rules (nearest_n, explicit_pairs) draw the allocator's own pairs,
  *  shipped in the world as link_candidates — the preview never re-derives
  *  fixed selection or interface capacity (a client-side budget once
  *  double-counted mounts across medium selectors; capacity truth is
@@ -313,7 +313,7 @@ export function computeCandidates(world: BuilderWorld): CandidateComputation {
     let fixedUnallocated = false;
     if (fixedMode) {
       // Fixed rules: the allocator already chose the pairs and the
-      // interfaces — draw ITS selection, geometry-gated for this instant.
+      // interfaces — draw its selection, geometry-gated for this instant.
       // Re-deriving nearest-N client-side was a second allocator.
       // The wire pair is lexicographically canonical, NOT endpoint-ordered:
       // orient each pair to the rule's endpoints by membership, so per-side

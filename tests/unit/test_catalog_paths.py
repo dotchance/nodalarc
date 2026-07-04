@@ -148,7 +148,7 @@ def test_user_reference_rejected_without_configured_user_root(tmp_path, monkeypa
 
 
 def test_user_reference_cannot_reach_shipped_root(tmp_path, monkeypatch):
-    """The schemes are containment boundaries: a user: token looks ONLY under
+    """The schemes are containment boundaries: a user: token looks only under
     the user root — a file that exists in the shipped catalog is a miss, not
     a fallback, when addressed with the user scheme."""
     roots = _make_two_root_setup(tmp_path, monkeypatch)

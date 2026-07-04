@@ -3,9 +3,9 @@
 /** Session editor — the session-level plumbing: identity, time, and the
  *  candidate-math budget.
  *
- *  Time rate is the invariant: step 1s / compression 1 means sim time IS
+ *  Time rate is the invariant: step 1s / compression 1 means sim time is
  *  wall time; anything else is an explicit manipulation the user typed.
- *  The candidate budget is REQUIRED grammar once link rules exist — the
+ *  The candidate budget is required grammar once link rules exist — the
  *  fields live here so the numbers are the user's, never a hidden default.
  */
 

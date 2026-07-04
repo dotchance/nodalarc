@@ -6,12 +6,12 @@
  *  StateSnapshot + SessionEphemeris. For a resolved-but-not-deployed session
  *  there is no runtime snapshot, so this module derives one from the
  *  BuilderWorld: node identities from the resolver, satellite positions
- *  propagated at the session epoch with the SAME client math the live globe
+ *  propagated at the session epoch with the same client math the live globe
  *  runs (sim/ephemeris twin of the backend propagator), ground positions
  *  from the resolver's surface_position (the ephemeris only carries
  *  space-link participants; the world carries every node).
  *
- *  This object exists ONLY as Scene input. Fields the Scene never reads but
+ *  This object exists only as Scene input. Fields the Scene never reads but
  *  the StateSnapshot type requires (network_health, session ids, ops fields)
  *  get neutral values — never surface them in builder UI as session state.
  */

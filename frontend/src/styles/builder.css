@@ -928,7 +928,7 @@ button.builder-guide-row:hover {
   gap: var(--space-1);
 }
 
-/* A refusal that names an object lands ON that object: the wall banner
+/* A refusal that names an object lands on that object: the wall banner
    sits at the top of the owning editor window, verbatim. */
 .builder-wall {
   border: 1px solid var(--accent-red);
@@ -939,7 +939,7 @@ button.builder-guide-row:hover {
   background: var(--bg-panel-hover);
 }
 
-/* The wall chip rides the SAME rail as completeness findings — one bottom
+/* The wall chip rides the same rail as completeness findings — one bottom
    rail concept — distinguished by the refusal accent. */
 .builder-rail-chip--wall {
   border-color: var(--accent-red);

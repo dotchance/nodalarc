@@ -175,7 +175,7 @@ def test_endpoint_resolves_scanned_session_key(monkeypatch):
     assert response.status_code == 200
     payload = response.json()
     assert payload["world"]["session"]["name"]
-    # The resolve-check ships the session as a PARSED mapping too — the
+    # The resolve-check ships the session as a parsed mapping too — the
     # builder imports it to edit an existing (e.g. the running) session,
     # and it must be the file's content verbatim.
     assert payload["document"] == yaml.safe_load(_WALKER_PATH.read_text(encoding="utf-8"))
@@ -287,7 +287,7 @@ def test_endpoint_returns_world():
 
 def test_segment_display_names_reads_every_grammar_home():
     """The helper must read names everywhere the resolver itself accepts a
-    source: segment-level, wrapped inline, ref, and the BARE inline site-set
+    source: segment-level, wrapped inline, ref, and the bare inline site-set
     body that _load_expected allows (found by review — _load_ref_or_object
     alone silently dropped it)."""
     from nodalarc.resolve_session import default_catalog_roots, segment_display_names
@@ -328,7 +328,7 @@ def test_segment_display_names_reads_every_grammar_home():
 def test_world_ships_allocator_capacity_facts():
     """Capacity truth is computed once, by the allocator, and shipped: the
     world carries per-rule allocated pairs and per-node matching/free
-    interface counts derived from the SAME eligibility body allocation uses.
+    interface counts derived from the same eligibility body allocation uses.
     Displays report these; no client re-derivation."""
     raw = yaml.safe_load(_WALKER_PATH.read_text(encoding="utf-8"))
     response = client.post("/api/v1/builder/resolve-world", json={"document": raw})
@@ -342,7 +342,7 @@ def test_world_ships_allocator_capacity_facts():
         for row in alloc["per_node"]:
             assert 0 <= row["free"] <= row["matching"]
     # The walker's fixed ISL mesh consumes every isl interface: 176 sats,
-    # 4 isl mounts each, 352 pairs — so free must be EXACTLY 0 with 4
+    # 4 isl mounts each, 352 pairs — so free must be exactly 0 with 4
     # matching on every member. A facts implementation that ignores the
     # allocator's used-set (free == matching) fails here.
     isl = allocations["leo_isl"]
@@ -356,7 +356,7 @@ def test_world_ships_allocator_capacity_facts():
 
 
 def test_interface_wall_ships_draft_addressable_subject():
-    """A refusal that names an object lands ON that object: the allocator
+    """A refusal that names an object lands on that object: the allocator
     wall carries the failing rule id and the node's segment id — both
     draft-addressable — plus the runtime node id as display detail."""
     raw = yaml.safe_load(_WALKER_PATH.read_text(encoding="utf-8"))
@@ -407,7 +407,7 @@ def test_unsupported_feature_wall_ships_typed_features():
 
 
 def test_session_form_refusal_ships_structured_envelope(monkeypatch, tmp_path):
-    """A saved session that no longer resolves is a refused SESSION, not an
+    """A saved session that no longer resolves is a refused session, not an
     invalid request: the session form must ship the same typed envelope the
     document form does, never a bare 'request is invalid' string."""
     import vs_api.main as main
@@ -452,11 +452,11 @@ def test_save_session_resolves_then_writes_canonical_yaml(monkeypatch, tmp_path)
     assert payload["nodes"] == 181
     saved = list(tmp_path.glob("_builder-earth-leo-walker.yaml"))
     assert len(saved) == 1
-    # The saved file IS the canonical serialization and still resolves.
+    # The saved file is the canonical serialization and still resolves.
     saved_raw = yaml.safe_load(saved[0].read_text(encoding="utf-8"))
     assert saved_raw == raw
     assert len(resolve_session(saved_raw).nodes) == 181
-    # One artifact per name: saving the same session again REPLACES the
+    # One artifact per name: saving the same session again replaces the
     # file — no hash-suffixed siblings nobody can tell apart.
     again = client.post("/api/v1/builder/save-session", json={"document": raw})
     assert again.status_code == 200
@@ -665,7 +665,7 @@ def test_catalog_yaml_import_rejects_broken_yaml(user_roots):
 
 
 def test_segment_validation_refusal_ships_the_owning_segment():
-    """A catalog-validation failure inside ONE segment's expansion is
+    """A catalog-validation failure inside one segment's expansion is
     addressed mail: the wall carries that segment's id, never bare pydantic
     prose with no owner (an empty ground segment used to blank the whole
     builder with an unrouted error)."""
@@ -693,7 +693,7 @@ def test_segment_validation_refusal_ships_the_owning_segment():
 
 def test_overlapping_domains_wall_is_summarized_and_addressed():
     """The disjointness refusal names the domains and a few example nodes —
-    never every member — and its subject is the LAST declared overlapping
+    never every member — and its subject is the last declared overlapping
     domain (the one whose membership to fix)."""
     raw = yaml.safe_load(_WALKER_PATH.read_text(encoding="utf-8"))
     raw["routing"] = {

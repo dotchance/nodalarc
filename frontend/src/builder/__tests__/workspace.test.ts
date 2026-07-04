@@ -1,6 +1,6 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
-/** Workspace serializer — the ONE serializer from drafts to the grammar.
+/** Workspace serializer — the one serializer from drafts to the grammar.
  *
  *  Pins: circular and elliptical orbit shapes emit the grammar's OrbitShape
  *  variants; ground placement emits from_site_set with the explicit default
@@ -98,7 +98,7 @@ describe("toSessionDocument", () => {
     const doc = toSessionDocument(workspace) as any;
     const ground = doc.segments.find((s: any) => s.placement);
     expect(ground.placement.from_site_set).toBe(placed.ref);
-    // The intent preset writes the FULL block — explicit, never a hidden fallback.
+    // The intent preset writes the full block — explicit, never a hidden fallback.
     expect(ground.apply.scheduling.handover_mode).toBe("bbm");
     expect(ground.apply.scheduling.selection_policy).toEqual({
       longest_remaining_pass: { lookahead_horizon_ticks: 600 },
@@ -134,7 +134,7 @@ describe("toSessionDocument", () => {
     const siteSet = ground.placement.from_site_set.site_set;
     expect(siteSet.sites).toHaveLength(3);
     const denver = siteSet.sites[0].site;
-    // Minted sites carry stamp-derived, EXPLICIT addressing they now own.
+    // Minted sites carry stamp-derived, explicit addressing they now own.
     expect(denver.lan.ipv4).toBe(stampLanPrefix(draft.stamp, 0));
     expect(denver.nodes[0].interfaces.terr0.ipv4).toBe(stampTerr0Address(draft.stamp, 0));
     expect(denver.nodes[0].interfaces.lo0.ipv4).toBe(stampLoopbackAddress(draft.stamp, 0));
@@ -288,7 +288,7 @@ describe("session plumbing + completeness", () => {
     });
   });
 
-  it("reports OBJECT-level gaps with owning-editor targets; session structure is the guide's", () => {
+  it("reports object-level gaps with owning-editor targets; session structure is the guide's", () => {
     const workspace = newWorkspace("gaps");
     const ground = newDraftGroundSet("nodalarc:nodes/ground/leo-gateway.yaml", {});
     workspace.ground.push(ground); // no members
@@ -404,7 +404,7 @@ describe("routing", () => {
     const warnings = routingWarnings(workspace);
     expect(warnings.some((w) => w.includes("no member segments"))).toBe(true);
     expect(warnings.some((w) => w.includes("no longer in the session"))).toBe(true);
-    expect(warnings.some((w) => w.includes("two DIFFERENT domains"))).toBe(true);
+    expect(warnings.some((w) => w.includes("two different domains"))).toBe(true);
   });
 });
 
@@ -500,7 +500,7 @@ describe("draftGroundSetFromDocuments + draftSiteFromDocument", () => {
     },
   });
 
-  it("forks a set as a COMBINATION of defined sites — refs stay refs", () => {
+  it("forks a set as a combination of defined sites — refs stay refs", () => {
     const draft = draftGroundSetFromDocuments(
       { site_set: { id: "gw", display_name: "Gateways", tags: ["teleport"] } },
       [
@@ -515,7 +515,7 @@ describe("draftGroundSetFromDocuments + draftSiteFromDocument", () => {
       ],
     );
     expect(draft.display_name).toBe("Gateways (custom)");
-    // Referenced member keeps full fidelity by ref — multi-node is FINE.
+    // Referenced member keeps full fidelity by ref — multi-node is fine.
     expect(draft.members[0]).toMatchObject({
       kind: "ref",
       ref: "nodalarc:sites/earth/us/denver.yaml",
@@ -755,7 +755,7 @@ describe("a fresh workspace starts now, not at a fixed date", () => {
 });
 
 describe("RF band derives from frequency (ITU satellite letter bands)", () => {
-  it("names the band the owner's way: 1-2 L, 2-4 S, 26.5-40 Ka", () => {
+  it("names the band per the ITU letter table: 1-2 L, 2-4 S, 26.5-40 Ka", () => {
     expect(bandForFrequencyGhz(1.5)).toBe("l");
     expect(bandForFrequencyGhz(2.0)).toBe("s");
     expect(bandForFrequencyGhz(3.9)).toBe("s");
@@ -832,7 +832,7 @@ describe("workspaceFromSessionDocument — the serializer's inverse", () => {
     return ws;
   }
 
-  it("round-trips a builder-authored session EXACTLY — import then re-serialize", () => {
+  it("round-trips a builder-authored session exactly — import then re-serialize", () => {
     const document = toSessionDocument(authoredWorkspace());
     const result = workspaceFromSessionDocument(document);
     expect(result.issues).toBeUndefined();
@@ -964,7 +964,7 @@ describe("held-back incomplete containers", () => {
     // The domain sheds the held-back member but keeps the emitted one.
     const domains = (doc.routing as { domains: Record<string, unknown>[] }).domains;
     expect(JSON.stringify(domains[0]!.selectors)).not.toContain(ground.segment_id);
-    // The hold-back is STATED, never silent.
+    // The hold-back is stated, never silent.
     expect(
       completenessFindings(ws).some((f) => f.message.includes("held out of the artifact")),
     ).toBe(true);
@@ -985,7 +985,7 @@ describe("held-back incomplete containers", () => {
 });
 
 describe("defaultRoutingDomain", () => {
-  it("seeds only the UNCOVERED segments — a second domain means the rest", () => {
+  it("seeds only the uncovered segments — a second domain means the rest", () => {
     const ws = newWorkspace("domain-seeding");
     ws.space.push(newDraftConstellation("nodalarc:nodes/space/starlink-v2-mesh.yaml"));
     ws.space.push(newDraftConstellation("nodalarc:nodes/space/starlink-v2-mesh.yaml"));

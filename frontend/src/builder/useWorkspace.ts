@@ -3,7 +3,7 @@
 /** Workspace state: the applied session drafts plus undo and autosave.
  *
  *  The edit→resolve loop lives in BuilderView, which serializes the
- *  workspace WITH any open windows' working copies overlaid — the canvas
+ *  workspace with any open windows' working copies overlaid — the canvas
  *  previews what is being edited while the workspace itself only changes on
  *  Apply. The rendered world is always the resolver's expansion of that
  *  serialization — or the resolver's error, verbatim. No builder-local
@@ -30,7 +30,7 @@ import {
 } from "./workspace";
 
 const AUTOSAVE_KEY = "nodalarc-builder-draft";
-// The draft a running-session import DISPLACED — preserved, never silently
+// The draft a running-session import displaced — preserved, never silently
 // destroyed (autosave overwrites its own slot the moment a workspace
 // exists, so displacement must copy first).
 const BACKUP_KEY = "nodalarc-builder-draft-previous";
@@ -301,7 +301,7 @@ export function useWorkspace() {
     });
   }, []);
 
-  /** Place a defined site into the LAST ground segment draft — self-ensuring:
+  /** Place a defined site into the last ground segment draft — self-ensuring:
    *  with no draft (or no workspace) open, makeDraft starts one, so using a
    *  site from the Library never dead-ends. */
   const addGroundMember = useCallback(

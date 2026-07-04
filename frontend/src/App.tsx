@@ -350,7 +350,7 @@ function AppInner() {
           </div>
         </div>
       )}
-      {/* Live-session banners describe the RUNNING session; the builder surface
+      {/* Live-session banners describe the running session; the builder surface
           has its own status home. Never let live state read as builder state. */}
       {viewMode !== "builder" && (
       <div className="banner-stack">

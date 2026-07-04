@@ -261,7 +261,7 @@ describe("computeCandidates", () => {
     expect(previews[0]!.note).toContain("beyond terminal range");
   });
 
-  it("fixed rules draw ONLY allocated pairs — extra geometric possibilities are not invented", () => {
+  it("fixed rules draw only allocated pairs — extra geometric possibilities are not invented", () => {
     const w = world([{ ...ACCESS_RULE, rule_id: "cap", topology_mode: "explicit_pairs", explicit_pairs: [] }]);
     // Two visible grounds, but the allocator granted exactly one pair.
     w.nodes.push(groundNode("ground-near-2", 1.5, SAT_LON_DEG));
@@ -292,7 +292,7 @@ describe("computeCandidates", () => {
   it("elevation masks land on the ground node even when the wire pair arrives flipped", () => {
     // Canonical wire order puts "leo-sat" before "zz-ground" while the
     // rule's endpoint A is the ground side. At ~10 degrees ground range the
-    // satellite sits ~20 degrees above the horizon: LOS is clear, so ONLY
+    // satellite sits ~20 degrees above the horizon: LOS is clear, so only
     // the 60-degree mask can reject — if orientation is lost the mask is
     // skipped (slot a holds a satellite) and the preview draws a lie.
     const w = world([]);

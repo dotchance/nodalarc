@@ -1,6 +1,6 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
-/** The editor kit — the ONLY source of editing controls in builder editors.
+/** The editor kit — the only source of editing controls in builder editors.
  *
  *  Interaction-grammar enforcement by construction (IG-5): every editor
  *  composes these controls, so field anatomy, card anatomy, and control
@@ -236,7 +236,7 @@ export function NullableNumberField({
 export interface SelectOption {
   value: string;
   label: string;
-  /** Disabled options stay VISIBLE with the reason in their title —
+  /** Disabled options stay visible with the reason in their title —
    *  honesty about what cannot be formed, not a hidden restriction. */
   disabled?: boolean;
   title?: string;

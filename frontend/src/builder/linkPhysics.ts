@@ -5,7 +5,7 @@
  *  The resolved world already carries every node's terminal inventory
  *  (role, medium, elevation limits) — resolver truth, not a builder guess.
  *  Connecting two segments derives the rule's role, medium, masks, and
- *  topology from what the endpoints can PHYSICALLY form; the user owns
+ *  topology from what the endpoints can physically form; the user owns
  *  every value from the seed onward. Combinations neither side can form
  *  are never offered as defaults and render disabled with the reason.
  *
@@ -77,7 +77,7 @@ export function capabilitiesBySegment(
 
 export type LinkRole = MountRole;
 
-/** True when BOTH endpoints carry at least one mount of role|medium. */
+/** True when both endpoints carry at least one mount of role|medium. */
 export function canForm(
   a: SegmentCapability | undefined,
   b: SegmentCapability | undefined,
@@ -99,7 +99,7 @@ export interface DerivedPhysics {
   formable: boolean;
 }
 
-// Derivation preference among the grammar's media — DERIVED from the owned
+// Derivation preference among the grammar's media — derived from the owned
 // vocabulary, never re-listed: the Record is exhaustive over LinkMedium, so
 // adding a medium to the grammar fails to compile here instead of silently
 // never being offered (IG-16).
@@ -111,7 +111,7 @@ const MEDIUM_ORDER: readonly LinkMedium[] = [...LINK_MEDIA].sort(
 /** Derive the physics for a pair of segments. Preference order encodes the
  *  role semantics: same segment = fabric (isl), space to space =
  *  crosslink, anything with ground = access. Falls back through formable
- *  combinations; when NOTHING is formable, returns the semantic default
+ *  combinations; when nothing is formable, returns the semantic default
  *  with formable=false (the wall will say why — never silently invent). */
 export function deriveLinkPhysics(
   capabilities: Map<string, SegmentCapability>,
@@ -160,7 +160,7 @@ export function deriveLinkPhysics(
   };
 }
 
-/** Connect two placed segments: both endpoints are KNOWN before the rule
+/** Connect two placed segments: both endpoints are known before the rule
  *  exists, so the seed is computed from truth once — nothing to re-point.
  *  Falls back to kind-based defaults when the world hasn't resolved. */
 export function connectSegments(

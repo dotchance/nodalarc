@@ -23,6 +23,7 @@ const SESSIONS: SessionInfo[] = [
     file: "catalog/nodalarc/sessions/earth-leo-polar.yaml",
     constellation: "leo",
     routing_stack: "isis",
+    source: "nodalarc",
     active: true,
   },
   {
@@ -30,6 +31,7 @@ const SESSIONS: SessionInfo[] = [
     file: "catalog/nodalarc/sessions/earth-geo-tdrs.yaml",
     constellation: "geo",
     routing_stack: "isis",
+    source: "nodalarc",
     active: false,
   },
 ];

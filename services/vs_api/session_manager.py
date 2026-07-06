@@ -100,11 +100,17 @@ class SessionManager:
         # Scan sessions on init
         self._available = self.scan_sessions()
 
-    def _scan_roots(self) -> tuple[tuple[Path, bool], ...]:
-        """Return session roots as ``(path, required)`` pairs."""
-        roots: list[tuple[Path, bool]] = [(self._sessions_dir, True)]
+    def _scan_roots(self) -> tuple[tuple[Path, bool, str], ...]:
+        """Return session roots as ``(path, required, source)`` triples.
+
+        ``source`` is the root TIER a file lives under — ``nodalarc`` for
+        the shipped catalog root, ``user`` for the generated root (builder,
+        wizard, and upload outputs alike). It says where the file lives,
+        never who or what authored it.
+        """
+        roots: list[tuple[Path, bool, str]] = [(self._sessions_dir, True, "nodalarc")]
         if self._generated_sessions_dir is not None:
-            roots.append((self._generated_sessions_dir, False))
+            roots.append((self._generated_sessions_dir, False, "user"))
         return tuple(roots)
 
     def _record_session_parse_failure(self, file_key: str, yaml_path: Path, exc: Exception) -> None:
@@ -136,7 +142,7 @@ class SessionManager:
         session_file_paths: dict[str, Path] = {}
         active_failures: set[str] = set()
 
-        for scan_root, required in self._scan_roots():
+        for scan_root, required, source in self._scan_roots():
             if not scan_root.is_dir():
                 if required:
                     log.warning(f"Sessions directory not found: {scan_root}")
@@ -166,6 +172,7 @@ class SessionManager:
                             "file": file_key,
                             "constellation": _constellation_label(resolved),
                             "routing_stack": _routing_label(resolved),
+                            "source": source,
                         }
                     )
                     session_file_paths[file_key] = resolved_path

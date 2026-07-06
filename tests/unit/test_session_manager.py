@@ -100,6 +100,41 @@ class TestSessionCatalog:
         assert {item["name"] for item in sessions} == {"catalog-session", "wizard-session"}
         assert str(generated_sessions / "wizard.yaml") in mgr._valid_session_files()
 
+    def test_scan_sessions_labels_the_source_root(self, tmp_path):
+        # source is the root TIER the file lives under, never provenance:
+        # the generated root holds builder, wizard, and upload outputs
+        # alike, and all of them are "user".
+        catalog_sessions = tmp_path / "catalog-sessions"
+        generated_sessions = tmp_path / "generated-sessions"
+        catalog_sessions.mkdir()
+        generated_sessions.mkdir()
+        (catalog_sessions / "catalog.yaml").write_text(
+            _segment_session_yaml("catalog-session", tmp_path)
+        )
+        (generated_sessions / "wizard.yaml").write_text(
+            _segment_session_yaml("wizard-session", tmp_path)
+        )
+
+        mgr = SessionManager(
+            str(catalog_sessions),
+            generated_sessions_dir=str(generated_sessions),
+        )
+
+        by_name = {item["name"]: item for item in mgr.list_sessions()}
+        assert by_name["catalog-session"]["source"] == "nodalarc"
+        assert by_name["wizard-session"]["source"] == "user"
+
+        # The active flag composes with source for files in either root.
+        assert not any(item["active"] for item in mgr.list_sessions())
+        mgr.set_active(str(generated_sessions / "wizard.yaml"))
+        by_name = {item["name"]: item for item in mgr.list_sessions()}
+        assert by_name["wizard-session"]["active"] is True
+        assert by_name["wizard-session"]["source"] == "user"
+        mgr.set_active(str(catalog_sessions / "catalog.yaml"))
+        by_name = {item["name"]: item for item in mgr.list_sessions()}
+        assert by_name["catalog-session"]["active"] is True
+        assert by_name["catalog-session"]["source"] == "nodalarc"
+
     def test_scan_sessions_deduplicates_unchanged_parse_failures(self, tmp_path, caplog):
         sessions_dir = tmp_path / "sessions"
         sessions_dir.mkdir()

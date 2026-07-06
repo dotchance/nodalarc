@@ -680,6 +680,20 @@ describe("save dialog: the name commits once, never per keystroke", () => {
   });
 });
 
+describe("open picker: source is the server's word, not a path sniff", () => {
+  it("BuilderView groups by entry.source and never sniffs the file path", () => {
+    const source = readFileSync(join(BUILDER_DIR, "BuilderView.tsx"), "utf-8");
+    // The server names each entry's root tier; client-side knowledge of
+    // the server's directory layout was the contract drift being removed.
+    expect(source).not.toContain("generated-sessions");
+    expect(source).toContain('s.source === "user"');
+    expect(source).toContain('s.source === "nodalarc"');
+    // The tiers speak the library's own vocabulary.
+    expect(source).toContain('group("★ yours"');
+    expect(source).toContain('group("nodalarc library"');
+  });
+});
+
 describe("workspaceForSave: the dialog name never silently undoes a rename", () => {
   it("apply-and-save keeps a dirty Session-window rename when the field is untouched", () => {
     const ws = newWorkspace("old-name");

@@ -1294,8 +1294,10 @@ export function BuilderView({
           setSaveState({ kind: "idle" });
           startImport(entry);
         };
-        const yours = sessions.filter((s) => s.file.includes("/generated-sessions/"));
-        const shipped = sessions.filter((s) => !s.file.includes("/generated-sessions/"));
+        // The server names each entry's source root; the tiers speak the
+        // library's own vocabulary (★ yours / nodalarc library).
+        const yours = sessions.filter((s) => s.source === "user");
+        const shipped = sessions.filter((s) => s.source === "nodalarc");
         const group = (label: string, list: BuilderSessionListEntry[]) =>
           list.length === 0 ? null : (
             <div className="builder-picker-group" key={label}>
@@ -1324,8 +1326,8 @@ export function BuilderView({
               {sessions.length === 0 && (
                 <div className="builder-zone-empty">no sessions found</div>
               )}
-              {group("Your sessions", yours)}
-              {group("NodalArc library", shipped)}
+              {group("★ yours", yours)}
+              {group("nodalarc library", shipped)}
               {sessionsError && (
                 <div className="builder-warning">{sessionsError}</div>
               )}

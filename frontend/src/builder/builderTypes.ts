@@ -194,5 +194,8 @@ export interface BuilderSessionListEntry {
   file: string;
   constellation: string;
   routing_stack: string;
+  /** The root tier the file lives under — never provenance: the generated
+   *  root holds builder, wizard, and upload outputs alike, all "user". */
+  source: "user" | "nodalarc";
   active?: boolean;
 }

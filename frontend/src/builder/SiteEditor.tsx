@@ -32,6 +32,7 @@ interface SiteEditorProps {
 
 export function SiteEditor({ site, onUpdate, onClose, autoFocusName = false }: SiteEditorProps) {
   const nodes = useBuilderCatalog("nodes");
+  const bodies = useBuilderCatalog("bodies");
   const sites = useBuilderCatalog("sites");
   const [editorError, setEditorError] = useState<string | null>(null);
   const [librarySave, setLibrarySave] = useState<
@@ -112,6 +113,22 @@ export function SiteEditor({ site, onUpdate, onClose, autoFocusName = false }: S
           onUpdate({ display_name, site_id: identifier(display_name) || site.site_id })
         }
         autoFocus={autoFocusName}
+      />
+      <SelectField
+        label="on body"
+        ariaLabel="Site body"
+        value={site.body}
+        onChange={(body) => onUpdate({ body })}
+        options={
+          bodies.entries.filter((entry) => !entry.error).length > 0
+            ? bodies.entries
+                .filter((entry) => !entry.error)
+                .map((entry) => ({
+                  value: entry.ref,
+                  label: entry.display_name ?? entry.id ?? entry.ref,
+                }))
+            : [{ value: site.body, label: site.body }]
+        }
       />
       <NumberField
         label="latitude"

@@ -33,7 +33,7 @@ import { BuilderInspector } from "./BuilderInspector";
 import { builderSnapshotFromWorld } from "./builderSnapshot";
 import { CandidateLines } from "./CandidateLines";
 import { computeCandidates } from "./candidates";
-import { EditorApplyRow } from "./editorKit";
+import { EditorApplyRow, Field } from "./editorKit";
 import {
   accessBeamElevationDeg,
   capabilitiesBySegment,
@@ -51,12 +51,22 @@ import { SessionEditor } from "./SessionEditor";
 import { SiteEditor } from "./SiteEditor";
 import { TerminalEditor } from "./TerminalEditor";
 import {
+  canDeploy,
+  claimLibraryReveal,
   readCatalogObject,
   saveUserObject,
+  useLibraryReveal,
+  useLibraryRevision,
   useBuilderCatalog,
   useBuilderWorld,
 } from "./useBuilderWorld";
-import { useWorkspace } from "./useWorkspace";
+import {
+  overlayBuffers,
+  workspaceForSave,
+  staleBufferKeys,
+  useWorkspace,
+  type BufferMap,
+} from "./useWorkspace";
 import {
   defaultDraftNode,
   defaultDraftTerminal,
@@ -174,7 +184,9 @@ type EditorTarget =
   | { kind: "inspect"; ref: string; document: Record<string, unknown> }
   | { kind: "node-view"; nodeId: string }
   | { kind: "library" }
-  | { kind: "catalog" };
+  | { kind: "catalog" }
+  | { kind: "open-session" }
+  | { kind: "save-session" };
 
 interface EditorWindow {
   key: string;
@@ -194,6 +206,8 @@ function targetKey(target: EditorTarget): string {
     case "session":
     case "library":
     case "catalog":
+    case "open-session":
+    case "save-session":
       return target.kind;
     case "inspect":
       return `inspect:${target.ref}`;
@@ -214,6 +228,123 @@ function groupByBody(segments: SegmentSummary[]): [string, SegmentSummary[]][] {
   }
   return [...byBody.entries()].sort(([a], [b]) =>
     a === "earth" ? -1 : b === "earth" ? 1 : a.localeCompare(b),
+  );
+}
+
+type SaveState =
+  | { kind: "idle" }
+  | { kind: "saving" }
+  | { kind: "saved"; name: string; file: string; artifact_sha256: string }
+  | { kind: "deploying"; name: string; file: string; artifact_sha256: string }
+  | { kind: "deployed"; name: string; file: string; artifact_sha256: string }
+  | { kind: "failed"; message: string };
+
+/** Save is a small dialog, not a silent write. The name is buffered here and
+ *  committed once on Save (IG-14 — the Session window stays the only live
+ *  name editor); with unapplied windows the primary action applies them
+ *  first, and saving around them is the quieter, explicit choice. */
+function SaveSessionDialog({
+  workspaceName,
+  canSave,
+  blockedReason,
+  saveState,
+  dirtyWindows,
+  staleWindows,
+  onSave,
+  onClose,
+}: {
+  workspaceName: string;
+  canSave: boolean;
+  blockedReason: string | null;
+  saveState: SaveState;
+  dirtyWindows: number;
+  staleWindows: number;
+  onSave: (opts: { applyAll: boolean; name: string; nameTouched: boolean }) => void;
+  onClose: () => void;
+}) {
+  const [name, setName] = useState(workspaceName);
+  // An untouched name field must never override a rename the apply-all
+  // overlays carry in from a dirty Session window — only a name the user
+  // actually typed here wins.
+  const [nameTouched, setNameTouched] = useState(false);
+  const fileId = identifier(name) || workspaceName;
+  const saving = saveState.kind === "saving";
+  return (
+    <div className="builder-inspector-stack" data-testid="builder-save-dialog">
+      <div className="builder-site-derived">
+        Saves to your session library as a resolvable file, listed with every
+        other session and deployable from the rocket.
+      </div>
+      <Field
+        label="save as"
+        value={name}
+        onChange={(value) => {
+          setName(value);
+          setNameTouched(true);
+        }}
+      />
+      <div className="builder-site-derived">file id: {fileId}</div>
+      {!canSave && dirtyWindows === 0 && (
+        <div className="builder-warning">
+          {blockedReason ?? "the session must resolve before it can be saved"}
+        </div>
+      )}
+      {!canSave && dirtyWindows > 0 && (
+        <div className="builder-warning" data-testid="save-preview-refused">
+          the previewed edits do not resolve
+          {blockedReason ? `: ${blockedReason}` : ""} — apply and save is
+          unavailable; saving the applied state asks the server about the
+          session without them
+        </div>
+      )}
+      {dirtyWindows > 0 && staleWindows > 0 && (
+        <div className="builder-warning" data-testid="save-stale-note">
+          some windows are stale — apply them individually
+        </div>
+      )}
+      {saveState.kind === "saved" && (
+        <div className="builder-site-derived" data-testid="save-confirm">
+          saved as {saveState.name} — deploy it with the rocket
+        </div>
+      )}
+      {saveState.kind === "failed" && (
+        <div className="builder-warning">save failed: {saveState.message}</div>
+      )}
+      <div className="builder-preset-row">
+        {dirtyWindows > 0 ? (
+          <>
+            <Button
+              variant="primary"
+              disabled={!canSave || saving || staleWindows > 0}
+              onClick={() => onSave({ applyAll: true, name, nameTouched })}
+            >
+              <Icon name="save" size={13} />{" "}
+              {saving ? "Saving…" : `Apply ${count(dirtyWindows, "edit")} and save`}
+            </Button>
+            <Button
+              // The applied-only escape hatch is gated by the APPLIED
+              // session's truth, which only the server knows once dirty
+              // windows diverge the preview — so it always attempts, and a
+              // refusal lands verbatim as the save error.
+              disabled={saving}
+              title={`leaves out the ${count(dirtyWindows, "window")} with unapplied edits`}
+              onClick={() => onSave({ applyAll: false, name, nameTouched })}
+            >
+              Save applied state only
+            </Button>
+          </>
+        ) : (
+          <Button
+            variant="primary"
+            disabled={!canSave || saving}
+            onClick={() => onSave({ applyAll: false, name, nameTouched })}
+          >
+            <Icon name="save" size={13} /> {saving ? "Saving…" : "Save"}
+          </Button>
+        )}
+        <Button onClick={onClose}>Close</Button>
+      </div>
+    </div>
   );
 }
 
@@ -238,13 +369,13 @@ export function BuilderView({
     loading,
     error,
     resolveError,
+    settledArtifactSha256,
     loadSession,
     resolveDocument,
     saveSession,
     deploySession,
     clear,
   } = useBuilderWorld();
-  const [selectedFile, setSelectedFile] = useState("");
   // Builder-local selection: inspect-only, never shared with the live view's
   // selection (two different worlds must not share a pointer).
   const [selection, setSelection] = useState<Selection | null>(null);
@@ -254,6 +385,7 @@ export function BuilderView({
     workspace,
     startNew,
     openWorkspace,
+    commitWorkspace,
     updateSession,
     undo,
     hasAutosave,
@@ -297,7 +429,12 @@ export function BuilderView({
   // silently destroy it — that case gets an explicit choice instead.
   const runningSession = sessions.find((s) => s.active) ?? null;
   const [importPending, setImportPending] = useState<BuilderSessionListEntry | null>(null);
-  const [importIssues, setImportIssues] = useState<string[] | null>(null);
+  // A refused import names the session the user actually opened — the
+  // running session is not the only thing the picker can open.
+  const [importIssues, setImportIssues] = useState<{
+    name: string;
+    issues: string[];
+  } | null>(null);
   // The file the current workspace was imported from (provenance marker).
   const [importedFrom, setImportedFrom] = useState<string | null>(null);
   const importTriedRef = useRef<string | null>(null);
@@ -333,11 +470,21 @@ export function BuilderView({
     } else {
       // The world/YAML stay on screen read-only; the note says why the
       // session cannot be edited — never a silently lossy workspace.
-      setImportIssues(result.issues);
+      setImportIssues({ name: importPending.name, issues: result.issues });
     }
     setImportPending(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [importPending, loadedDocument, loadedFile, workspace]);
+  // A save is never a dead end: when any editor saves to the library, the
+  // Library window opens (or focuses) and the panel lands on the asset.
+  // Claimed through the module-level retired-nonce registry: a remount
+  // never replays the last save, and each consumer role retires its own.
+  const libraryReveal = useLibraryReveal();
+  useEffect(() => {
+    if (!claimLibraryReveal("opener", libraryReveal)) return;
+    openEditor({ kind: "catalog" });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [libraryReveal]);
   useEffect(() => {
     // The import must end with its resolve: a failed fetch or a competing
     // action (clear/+ New discards the in-flight response) would otherwise
@@ -365,23 +512,38 @@ export function BuilderView({
       ];
     });
   };
-  const closeWindow = (key: string) => {
-    setWindows((prev) => prev.filter((w) => w.key !== key));
+  /** Every window teardown goes through here: closing a window removes it
+   *  AND its buffer, always together. `reason` says who closes — a user
+   *  close is a gesture on the object; a teardown close (New/Open/Restore)
+   *  replaces the workspace and must not mutate the outgoing one on the
+   *  way out. Close-time behaviors key on 'user' only. */
+  const closeWindows = (
+    predicate: (w: EditorWindow) => boolean,
+    _reason: "user" | "teardown",
+  ) => {
+    const closing = new Set(windows.filter(predicate).map((w) => w.key));
+    if (closing.size === 0) return;
+    setWindows((prev) => prev.filter((w) => !closing.has(w.key)));
     setBuffers((prev) => {
-      if (!(key in prev)) return prev;
+      let changed = false;
       const next = { ...prev };
-      delete next[key];
-      return next;
+      for (const key of closing) {
+        if (key in next) {
+          delete next[key];
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
     });
   };
+  const closeWindow = (key: string) => closeWindows((w) => w.key === key, "user");
+  const closeAllWindows = () => closeWindows(() => true, "teardown");
   const isOpen = (key: string) => windows.some((w) => w.key === key);
 
   // Buffered editing: an editor window works on a copy of its object; the
   // session only changes on Apply/OK. Cancel and the title-bar X discard —
   // the window says which state it is in, so closing is never a guess.
-  const [buffers, setBuffers] = useState<
-    Record<string, { draft: unknown; opened: unknown; dirty: boolean }>
-  >({});
+  const [buffers, setBuffers] = useState<BufferMap>({});
   type SessionBuffer = Pick<
     Workspace,
     | "name"
@@ -453,62 +615,8 @@ export function BuilderView({
    *  every dirty window's working copy substituted in. Editing previews live
    *  (drag a slider, the sats move); the workspace itself still only changes
    *  on Apply. */
-  const previewWorkspace = (): Workspace | null => {
-    if (!workspace) return null;
-    let out = workspace;
-    for (const [key, buf] of Object.entries(buffers)) {
-      if (!buf.dirty) continue;
-      const sep = key.indexOf(":");
-      const kind = sep === -1 ? key : key.slice(0, sep);
-      const id = sep === -1 ? "" : key.slice(sep + 1);
-      switch (kind) {
-        case "session":
-          out = { ...out, ...(buf.draft as SessionBuffer) };
-          break;
-        case "segment":
-          out = {
-            ...out,
-            space: out.space.map((d) =>
-              d.segment_id === id ? (buf.draft as DraftConstellation) : d,
-            ),
-          };
-          break;
-        case "ground":
-          out = {
-            ...out,
-            ground: out.ground.map((d) =>
-              d.segment_id === id ? (buf.draft as DraftGroundSet) : d,
-            ),
-          };
-          break;
-        case "link":
-          out = {
-            ...out,
-            links: out.links.map((r) =>
-              r.rule_id === id ? (buf.draft as DraftLinkRule) : r,
-            ),
-          };
-          break;
-        case "domain":
-          out = {
-            ...out,
-            routing_domains: out.routing_domains.map((d) =>
-              d.domain_id === id ? (buf.draft as DraftRoutingDomain) : d,
-            ),
-          };
-          break;
-        case "boundary":
-          out = {
-            ...out,
-            boundaries: out.boundaries.map((b) =>
-              b.boundary_id === id ? (buf.draft as DraftBoundary) : b,
-            ),
-          };
-          break;
-      }
-    }
-    return out;
-  };
+  const previewWorkspace = (): Workspace | null =>
+    workspace ? overlayBuffers(workspace, buffers) : null;
   const dirtyWindows = Object.values(buffers).filter((b) => b.dirty).length;
   /** The wall's owning editor target, from the resolver's own scope — the
    *  serialized subject id maps to drafts via the same identifier()
@@ -554,7 +662,11 @@ export function BuilderView({
     wallTarget && targetKey(target) === wallTarget.key ? (resolveError?.error ?? null) : null;
   // THE edit→resolve loop — the only caller. Serializes applied state plus
   // dirty working copies so the canvas moves while you edit; Apply/Cancel
-  // land here too (buffers change) and re-resolve the applied truth.
+  // land here too (buffers change) and re-resolve the applied truth. The
+  // library revision is a dependency on purpose: a user-catalog mutation
+  // changes what saving this document would write (references dereference
+  // server-side), so the settled artifact hash must re-settle.
+  const libraryRevision = useLibraryRevision();
   useEffect(() => {
     if (!workspace) return;
     const hasContent =
@@ -570,7 +682,7 @@ export function BuilderView({
     }, 300);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [workspace, buffers]);
+  }, [workspace, buffers, libraryRevision]);
 
   // Trust mechanics: Ctrl/Cmd+Z undoes the last workspace mutation unless
   // the user is typing in a field (native input undo wins there).
@@ -589,14 +701,69 @@ export function BuilderView({
   // IG-2: the object a create gesture just made — its editor focuses the
   // name once.
   const [freshId, setFreshId] = useState<string | null>(null);
-  const [saveState, setSaveState] = useState<
-    | { kind: "idle" }
-    | { kind: "saving" }
-    | { kind: "saved"; name: string; file: string }
-    | { kind: "deploying"; name: string }
-    | { kind: "deployed"; name: string }
-    | { kind: "failed"; message: string }
-  >({ kind: "idle" });
+  const [saveState, setSaveState] = useState<SaveState>({ kind: "idle" });
+  const staleWindows = workspace ? staleBufferKeys(workspace, buffers).length : 0;
+  /** One save path for both dialog actions: build the exact document to
+   *  save locally, save it, then adopt it — the saved artifact and the
+   *  adopted workspace cannot diverge, and the race with the async state
+   *  update is unrepresentable. */
+  const performSave = async ({
+    applyAll,
+    name,
+    nameTouched,
+  }: {
+    applyAll: boolean;
+    name: string;
+    nameTouched: boolean;
+  }) => {
+    if (!workspace) return;
+    if (applyAll && staleBufferKeys(workspace, buffers).length > 0) {
+      // Never bulk-apply a working copy whose applied object changed
+      // underneath it (undo/restore); each such window applies individually
+      // where its own notice is visible.
+      setSaveState({
+        kind: "failed",
+        message: "some windows are stale — apply them individually",
+      });
+      return;
+    }
+    setSaveState({ kind: "saving" });
+    try {
+      const next = workspaceForSave(workspace, buffers, {
+        applyAll,
+        dialogName: name,
+        nameTouched,
+      });
+      const result = await saveSession(toSessionDocument(next));
+      if (next !== workspace) {
+        commitWorkspace(next, applyAll ? "apply-all-save" : "save-rename");
+      }
+      if (applyAll) setBuffers({});
+      setSaveState({
+        kind: "saved",
+        name: result.name,
+        file: result.file,
+        artifact_sha256: result.artifact_sha256,
+      });
+    } catch (e) {
+      setSaveState({
+        kind: "failed",
+        message: e instanceof Error ? e.message : String(e),
+      });
+    }
+  };
+  // The deploy gate: server-hash equality between the saved artifact and
+  // the settled resolve of what is on screen, with zero unapplied windows.
+  const deployGate = canDeploy({
+    savedFile:
+      saveState.kind === "saved" || saveState.kind === "deployed" ? saveState.file : null,
+    savedArtifactSha256:
+      saveState.kind === "saved" || saveState.kind === "deployed"
+        ? saveState.artifact_sha256
+        : null,
+    settledArtifactSha256,
+    dirtyWindowCount: dirtyWindows,
+  });
   // Standalone component authoring (Your library) — independent of sessions.
   const [libraryEditor, setLibraryEditor] = useState<
     | { kind: "terminal"; draft: DraftTerminal }
@@ -1114,6 +1281,84 @@ export function BuilderView({
           ),
         };
       }
+      case "open-session": {
+        // Open is a picker, not an inline dropdown: your saved sessions and
+        // the shipped NodalArc sessions, each a row you open. Sessions the
+        // editors cannot represent open read-only and say why.
+        const openEntry = (entry: BuilderSessionListEntry) => {
+          stashAutosaveToBackup();
+          closeWorkspace();
+          closeAllWindows();
+          setSelection(null);
+          setImportedFrom(null);
+          setSaveState({ kind: "idle" });
+          startImport(entry);
+        };
+        const yours = sessions.filter((s) => s.file.includes("/generated-sessions/"));
+        const shipped = sessions.filter((s) => !s.file.includes("/generated-sessions/"));
+        const group = (label: string, list: BuilderSessionListEntry[]) =>
+          list.length === 0 ? null : (
+            <div className="builder-picker-group" key={label}>
+              <div className="builder-outline-kind">{label}</div>
+              {list.map((entry) => (
+                <button
+                  className="builder-outline-row builder-picker-row"
+                  key={entry.file}
+                  onClick={() => openEntry(entry)}
+                  title={`Open ${entry.name}`}
+                >
+                  <span className="builder-outline-name">
+                    <Icon name="folder-open" size={12} />
+                    {entry.name}
+                    {entry.active ? " · running" : ""}
+                  </span>
+                  <span className="builder-outline-count">{entry.constellation}</span>
+                </button>
+              ))}
+            </div>
+          );
+        return {
+          title: "Open a session",
+          content: (
+            <div className="builder-picker" data-testid="builder-open-picker">
+              {sessions.length === 0 && (
+                <div className="builder-zone-empty">no sessions found</div>
+              )}
+              {group("Your sessions", yours)}
+              {group("NodalArc library", shipped)}
+              {sessionsError && (
+                <div className="builder-warning">{sessionsError}</div>
+              )}
+            </div>
+          ),
+        };
+      }
+      case "save-session": {
+        // Save is a small dialog, not a silent write: confirm the name it
+        // saves under (into your library), then Save. Deploy stays its own
+        // toolbar action.
+        const canSave = !!workspace && !!world && !error && !loading;
+        return {
+          title: "Save session",
+          content: workspace ? (
+            <SaveSessionDialog
+              // Remount per workspace identity: the buffered name follows
+              // the session being saved, not a previous one.
+              key={workspace.name}
+              workspaceName={workspace.name}
+              canSave={canSave}
+              blockedReason={error}
+              saveState={saveState}
+              dirtyWindows={dirtyWindows}
+              staleWindows={staleWindows}
+              onSave={(opts) => void performSave(opts)}
+              onClose={() => closeWindow("save-session")}
+            />
+          ) : (
+            <div className="builder-zone-empty">nothing to save yet</div>
+          ),
+        };
+      }
       case "catalog": {
         // The library is everything you could use — a separate surface on
         // purpose. The rail lists only what this session is using; the two
@@ -1293,93 +1538,113 @@ export function BuilderView({
 
   return (
     <div className="builder-shell" data-testid="builder-shell">
-      <div className="builder-outline" data-testid="builder-outline">
-        <div className="builder-mode-badge">Session Builder</div>
-        <div className="builder-zone-title">World</div>
-        {/* Building is the point; blank-first. Loading an existing session is
-            the secondary path. */}
-        {!workspace && (
-          <>
-            {runningSession && (
-              <Button
-                variant="primary"
-                disabled={!!importPending}
-                title="Load the session currently running on the cluster for editing"
-                onClick={() => {
-                  setSelection(null);
-                  startImport(runningSession);
-                }}
-              >
-                {importPending
-                  ? "Loading…"
-                  : `Edit running session — ${runningSession.name}`}
-              </Button>
-            )}
-            <Button
-              variant={runningSession ? undefined : "primary"}
-              onClick={() => {
-                clear();
-                setSelection(null);
-                setImportedFrom(null);
-                setImportIssues(null);
-                startNew("untitled-session");
-              }}
-            >
-              + New session
-            </Button>
-            {hasAutosave() && (
-              <Button
-                title="Restore the autosaved draft from this browser"
-                onClick={() => {
-                  clear();
-                  setSelection(null);
-                  setImportedFrom(null);
-                  setImportIssues(null);
-                  restoreAutosave();
-                }}
-              >
-                Restore draft
-              </Button>
-            )}
-            {importIssues && (
-              <div className="builder-warning" data-testid="import-issues">
-                {runningSession?.name ?? "this session"} cannot be edited in the
-                builder yet:
-                {importIssues.map((issue) => (
-                  <div key={issue}>· {issue}</div>
-                ))}
-              </div>
-            )}
-          </>
-        )}
-        <div className="builder-session-picker">
-          <select
-            aria-label="Catalog session"
-            value={selectedFile}
-            onChange={(e) => setSelectedFile(e.target.value)}
-          >
-            <option value="" disabled>
-              {sessions.length ? "or load an existing session…" : "No sessions found"}
-            </option>
-            {sessions.map((s) => (
-              <option key={s.file} value={s.file}>
-                {s.name}
-              </option>
-            ))}
-          </select>
-          <Button
-            disabled={!selectedFile || loading}
+      {/* Session verbs live HERE, with standard icons — a toolbar, like
+          every other application. The rail below is session CONTENT only;
+          the Library is one surface (its window), opened from here. */}
+      <div className="builder-toolbar" data-testid="builder-toolbar">
+        <span className="builder-mode-badge">Session Builder</span>
+        <span className="builder-toolbar-group">
+          <IconButton
+            className="builder-toolbar-btn"
+            icon="file-plus"
+            size={17}
+            label="New session — blank sheet (any current draft stays under Restore)"
             onClick={() => {
-              closeWorkspace();
-              setWindows([]);
+              stashAutosaveToBackup();
+              clear();
+              setSelection(null);
+              closeAllWindows();
               setImportedFrom(null);
               setImportIssues(null);
-              loadSession(selectedFile);
+              setSaveState({ kind: "idle" });
+              startNew("untitled-session");
             }}
-          >
-            {loading ? "Resolving…" : "Load"}
-          </Button>
-        </div>
+          />
+          <IconButton
+            className="builder-toolbar-btn"
+            icon="folder-open"
+            size={17}
+            disabled={!!importPending}
+            label={importPending ? "Opening…" : "Open a session — from your library or the NodalArc library"}
+            onClick={() => openEditor({ kind: "open-session" })}
+          />
+          <IconButton
+            className="builder-toolbar-btn"
+            icon="save"
+            size={17}
+            disabled={!workspace}
+            label={workspace ? "Save session to your library" : "Nothing to save yet"}
+            onClick={() => openEditor({ kind: "save-session" })}
+          />
+          <IconButton
+            className="builder-toolbar-btn"
+            icon="rocket"
+            size={17}
+            disabled={!deployGate.ok}
+            label={
+              deployGate.ok && (saveState.kind === "saved" || saveState.kind === "deployed")
+                ? `Deploy ${saveState.file} to cluster — the same switch every NodalArc session uses`
+                : (deployGate.reason ?? "save the session first, then deploy")
+            }
+            onClick={async () => {
+              // The gate is the truth: deploy ships exactly the saved file,
+              // and only while it matches the settled resolve on screen.
+              if (!deployGate.ok) return;
+              if (saveState.kind !== "saved" && saveState.kind !== "deployed") return;
+              const { name, file, artifact_sha256 } = saveState;
+              setSaveState({ kind: "deploying", name, file, artifact_sha256 });
+              try {
+                await deploySession(file);
+                setSaveState({ kind: "deployed", name, file, artifact_sha256 });
+              } catch (e) {
+                setSaveState({
+                  kind: "failed",
+                  message: e instanceof Error ? e.message : String(e),
+                });
+              }
+            }}
+          />
+          <IconButton
+            className="builder-toolbar-btn"
+            icon="history"
+            size={17}
+            disabled={!hasBackup() && !hasAutosave()}
+            label={
+              hasBackup()
+                ? "Restore — bring back the draft the last Open or New displaced"
+                : hasAutosave()
+                  ? "Restore the autosaved draft from this browser"
+                  : "Nothing to restore"
+            }
+            onClick={() => {
+              closeAllWindows();
+              setSelection(null);
+              setImportedFrom(null);
+              setImportIssues(null);
+              setSaveState({ kind: "idle" });
+              if (hasBackup()) restoreBackup();
+              else restoreAutosave();
+            }}
+          />
+        </span>
+        <IconButton
+          className="builder-toolbar-btn"
+          icon="library"
+          size={17}
+          label="Library — every block you could build with, shipped and yours"
+          onClick={() => openEditor({ kind: "catalog" })}
+        />
+      </div>
+      <div className="builder-outline" data-testid="builder-outline">
+        <div className="builder-zone-title">World</div>
+        {importIssues && (
+          <div className="builder-warning" data-testid="import-issues">
+            {importIssues.name} cannot be edited in the builder yet:
+            {importIssues.issues.map((issue) => (
+              <div key={issue}>· {issue}</div>
+            ))}
+          </div>
+        )}
         {workspace && (
           <BuildGuide
             workspace={workspace}
@@ -1713,65 +1978,11 @@ export function BuilderView({
             >
               + Add constellation
             </Button>
-            {hasBackup() && (
-              <Button
-                title="Bring back the draft this workspace displaced — the running session stays re-importable"
-                onClick={() => {
-                  setWindows([]);
-                  setImportedFrom(null);
-                  setImportIssues(null);
-                  restoreBackup();
-                }}
-              >
-                Restore previous draft
-              </Button>
-            )}
-            <Button
-              variant="primary"
-              disabled={!world || !!error || loading || saveState.kind === "saving"}
-              title="Resolve-checked server-side, written exclusively, listed with the sessions"
-              onClick={async () => {
-                if (!workspace) return;
-                setSaveState({ kind: "saving" });
-                try {
-                  const result = await saveSession(toSessionDocument(workspace));
-                  setSaveState({ kind: "saved", name: result.name, file: result.file });
-                } catch (e) {
-                  setSaveState({
-                    kind: "failed",
-                    message: e instanceof Error ? e.message : String(e),
-                  });
-                }
-              }}
-            >
-              {saveState.kind === "saving" ? "Saving…" : "Save session"}
-            </Button>
             {dirtyWindows > 0 && (
               <div className="builder-zone-empty">
                 {count(dirtyWindows, "window")} with unapplied edits — Apply to
                 include them in the save
               </div>
-            )}
-            {saveState.kind === "saved" && (
-              <Button
-                variant="primary"
-                title="Switch the cluster to this saved session — same path as the app's session picker"
-                onClick={async () => {
-                  const saved = saveState;
-                  setSaveState({ kind: "deploying", name: saved.name });
-                  try {
-                    await deploySession(saved.file);
-                    setSaveState({ kind: "deployed", name: saved.name });
-                  } catch (e) {
-                    setSaveState({
-                      kind: "failed",
-                      message: e instanceof Error ? e.message : String(e),
-                    });
-                  }
-                }}
-              >
-                Deploy to cluster
-              </Button>
             )}
             {saveState.kind === "deploying" && (
               <div className="builder-library-note">switching the cluster…</div>
@@ -1783,12 +1994,6 @@ export function BuilderView({
             )}
           </div>
         )}
-        <Button
-          title="Every block you could build with — shipped and yours. Opens its own window; this rail lists only what this session uses."
-          onClick={() => openEditor({ kind: "catalog" })}
-        >
-          Library…
-        </Button>
         {libraryError && <div className="builder-warning">{libraryError}</div>}
         {sessionsError && (
           <div className="builder-zone-empty builder-status-item--error">
@@ -1937,18 +2142,22 @@ export function BuilderView({
             <Button
               variant="primary"
               onClick={() => {
+                stashAutosaveToBackup();
                 clear();
                 setSelection(null);
+                closeAllWindows();
                 setImportedFrom(null);
                 setImportIssues(null);
+                setSaveState({ kind: "idle" });
                 startNew("untitled-session");
               }}
             >
-              + New session
+              <Icon name="file-plus" size={13} /> New session
             </Button>
             <div className="builder-zone-empty">
-              Every step round-trips through the real resolver; the YAML pane shows the
-              artifact live.
+              The toolbar above holds the session verbs — New, Open, Save, Deploy,
+              Restore, Library. Every step round-trips through the real resolver;
+              the YAML pane shows the artifact live.
             </div>
           </div>
         )}
@@ -2085,14 +2294,20 @@ export function BuilderView({
             {workspace
               ? "draft — not resolved yet"
               : importPending
-                ? `loading running session ${importPending.name}…`
+                ? importPending.file === runningSession?.file
+                  ? `loading running session ${importPending.name}…`
+                  : `loading session ${importPending.name}…`
                 : runningSession
                   ? `running: ${runningSession.name} — not loaded`
                   : "no session loaded"}
           </span>
         )}
         {saveState.kind === "saved" && (
-          <span className="builder-status-item">saved as {saveState.name}</span>
+          <span className="builder-status-item">
+            {deployGate.ok
+              ? `saved as ${saveState.name}`
+              : `saved as ${saveState.name} — ${deployGate.reason}`}
+          </span>
         )}
         {saveState.kind === "failed" && (
           <span className="builder-status-item builder-status-item--error">

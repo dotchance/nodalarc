@@ -31,15 +31,19 @@ from nodalarc.runtime_support import UnsupportedFeature
 class BuilderResolveCheck(BaseModel):
     """Resolve-check result: the world plus the canonical session document.
 
-    ``document_yaml`` is the server-serialized form of the session document
-    that resolved — one serializer (the same dump the deploy path writes), so
-    the YAML pane, the saved file, and the wire never diverge. ``document``
-    is the same session as a parsed mapping for the client's draft importer
-    (it has no YAML parser of its own) — in the AUTHORING form when the
-    caller asked for rehydration (hermetically inlined user-library objects
-    re-referenced while their content still matches the library; identical
-    semantics under the loader contract). Its shape is owned by the session
-    grammar, not this envelope.
+    ``document_yaml`` is the pane/resolution document — the server-serialized
+    form of the session that resolved, in its authoring shape. It is not the
+    save artifact: a save flattens user-library references first, so the pane
+    YAML and a saved file's bytes are distinct forms of the same session.
+    ``artifact_sha256`` identifies the save artifact — the sha256 of the
+    canonical flattened YAML bytes a save of this document writes
+    (hypothetical on a resolve check, exact on a save). ``document`` is the
+    same session as a parsed mapping for the client's draft importer (it has
+    no YAML parser of its own) — in the AUTHORING form when the caller asked
+    for rehydration (hermetically inlined user-library objects re-referenced
+    while their content still matches the library; identical semantics under
+    the loader contract). Its shape is owned by the session grammar, not
+    this envelope.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -47,6 +51,7 @@ class BuilderResolveCheck(BaseModel):
     world: BuilderWorld
     document: dict[str, Any]
     document_yaml: str
+    artifact_sha256: str
 
 
 class BuilderCatalogEntry(BaseModel):

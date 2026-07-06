@@ -11,6 +11,7 @@ typed rejection of bad or non-session references.
 
 from __future__ import annotations
 
+import hashlib
 from datetime import datetime
 from pathlib import Path
 
@@ -633,6 +634,110 @@ def test_save_session_flattens_user_references(user_roots):
     assert len(resolve_session(yaml.safe_load(text)).nodes) > 0
 
 
+def test_save_artifact_hash_is_the_written_bytes(monkeypatch, tmp_path):
+    import vs_api.main as main
+
+    monkeypatch.setattr(main, "_generated_sessions_dir", lambda: tmp_path)
+    monkeypatch.setattr(main, "_session_manager", None)
+    raw = yaml.safe_load(_WALKER_PATH.read_text(encoding="utf-8"))
+    payload = client.post("/api/v1/builder/save-session", json={"document": raw}).json()
+    saved = tmp_path / "_builder-earth-leo-walker.yaml"
+    assert payload["artifact_sha256"] == hashlib.sha256(saved.read_bytes()).hexdigest()
+
+
+def test_resolve_artifact_hash_is_the_hypothetical_save(monkeypatch, tmp_path):
+    # The resolve check predicts exactly what a save of the same document
+    # writes — the deploy gate compares these two ends.
+    import vs_api.main as main
+
+    monkeypatch.setattr(main, "_generated_sessions_dir", lambda: tmp_path)
+    monkeypatch.setattr(main, "_session_manager", None)
+    raw = yaml.safe_load(_WALKER_PATH.read_text(encoding="utf-8"))
+    resolved = client.post("/api/v1/builder/resolve-world", json={"document": raw}).json()
+    saved = client.post("/api/v1/builder/save-session", json={"document": raw}).json()
+    assert resolved["artifact_sha256"] == saved["artifact_sha256"]
+
+
+def _user_probe_session() -> dict:
+    """Walker variant whose constellation node is a user-library reference."""
+    raw = yaml.safe_load(_WALKER_PATH.read_text(encoding="utf-8"))
+    raw["link_rules"] = [rule for rule in raw["link_rules"] if rule["id"] != "leo_isl"]
+    raw["segments"][0]["source"] = {
+        "constellation": {
+            "id": "hash-probe",
+            "display_name": "Hash probe",
+            "node": "user:nodes/my-router.yaml",
+            "orbit": "nodalarc:orbits/earth/leo/earth-leo-starlink.yaml",
+            "planes": {"count": 1, "raan_spacing_deg": 0},
+            "slots_per_plane": 2,
+            "phasing": {"mode": "evenly_spaced_mean_anomaly", "phase_offset_deg": 0},
+            "node_tags": [{"tag": "all"}],
+            "reference": "test",
+        }
+    }
+    return raw
+
+
+_USER_PROBE_NODE = {
+    "node": {
+        "id": "my-router",
+        "display_name": "My router",
+        "forwarding": "routed",
+        "ethernet": [],
+        "terminals": [
+            {
+                "id": "access_ka",
+                "role": "access",
+                "terminal": "user:terminals/my-ka-terminal.yaml",
+                "count": 1,
+            }
+        ],
+        "payloads": [],
+    }
+}
+
+
+def _save_user_probe_objects() -> None:
+    for family, document in (("terminals", _USER_TERMINAL), ("nodes", _USER_PROBE_NODE)):
+        response = client.post(
+            "/api/v1/builder/catalog/save", json={"family": family, "document": document}
+        )
+        assert response.status_code == 200, response.json()
+
+
+def test_referenced_user_object_change_alters_artifact_hash(user_roots):
+    _save_user_probe_objects()
+    raw = _user_probe_session()
+    before = client.post("/api/v1/builder/resolve-world", json={"document": raw}).json()
+
+    changed = {"terminal": {**_USER_TERMINAL["terminal"], "max_range_km": 3000.0}}
+    assert (
+        client.post(
+            "/api/v1/builder/catalog/save",
+            json={"family": "terminals", "document": changed, "overwrite": True},
+        ).status_code
+        == 200
+    )
+    after = client.post("/api/v1/builder/resolve-world", json={"document": raw}).json()
+    assert after["artifact_sha256"] != before["artifact_sha256"]
+
+
+def test_unrelated_user_object_change_keeps_artifact_hash(user_roots):
+    _save_user_probe_objects()
+    raw = _user_probe_session()
+    before = client.post("/api/v1/builder/resolve-world", json={"document": raw}).json()
+
+    unrelated = {"terminal": {**_USER_TERMINAL["terminal"], "id": "my-other-terminal"}}
+    assert (
+        client.post(
+            "/api/v1/builder/catalog/save", json={"family": "terminals", "document": unrelated}
+        ).status_code
+        == 200
+    )
+    after = client.post("/api/v1/builder/resolve-world", json={"document": raw}).json()
+    assert after["artifact_sha256"] == before["artifact_sha256"]
+
+
 def test_catalog_yaml_import_derives_family_and_export_round_trips(user_roots):
     imported = client.post(
         "/api/v1/builder/catalog/save",
@@ -720,3 +825,38 @@ def test_overlapping_domains_wall_is_summarized_and_addressed():
     assert "176 nodes" in body["error"]
     # Summarized: a handful of examples, not the whole membership.
     assert body["error"].count("sat-") <= 3
+
+
+def test_inline_lunar_surface_site_resolves():
+    """The builder emits authored ground as inline site objects; a lunar
+    site inlined that way must resolve exactly like the shipped
+    by-reference form — ground authoring is body-parameterized, never
+    Earth-assumed."""
+    raw = yaml.safe_load(
+        Path("catalog/nodalarc/sessions/earth-leo-heo-geo-luna-reachability.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    artemis = yaml.safe_load(
+        Path("catalog/nodalarc/sites/luna/luna-artemis-base.yaml").read_text(encoding="utf-8")
+    )
+    luna_ground = next(s for s in raw["segments"] if s["id"] == "luna_ground")
+    luna_ground["placement"]["from_site_set"] = {
+        "site_set": {
+            "id": "authored-luna-sites",
+            "display_name": "Authored luna sites",
+            "sites": [{"site": artemis["site"]}],
+            "reference": "session-builder-draft",
+        }
+    }
+    response = client.post("/api/v1/builder/resolve-world", json={"document": raw})
+    assert response.status_code == 200, response.json().get("error")
+    world = response.json()["world"]
+    luna_nodes = [
+        n
+        for n in world["nodes"]
+        if n["segment_id"] == "luna_ground" and n["surface_position"] is not None
+    ]
+    assert luna_nodes, "no lunar ground node resolved"
+    assert luna_nodes[0]["surface_position"]["body"] == "luna"
+    assert luna_nodes[0]["surface_position"]["lat_deg"] == -89.4

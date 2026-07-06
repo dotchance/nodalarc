@@ -169,7 +169,12 @@ export interface BuilderWorld {
 export interface BuilderResolveCheck {
   world: BuilderWorld;
   document: Record<string, unknown>;
+  /** The pane/resolution document — the authoring shape, not the save
+   *  artifact (a save flattens user references first). */
   document_yaml: string;
+  /** Sha256 of the canonical flattened YAML a save of this document writes:
+   *  hypothetical on a resolve check, exact on a save. */
+  artifact_sha256: string;
 }
 
 /** Twin of nodalarc.models.builder_world.BuilderCatalogEntry. */

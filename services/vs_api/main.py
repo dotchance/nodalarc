@@ -3208,8 +3208,9 @@ async def builder_save_session(body: dict) -> dict:
 
     The document must RESOLVE first: a saved session that cannot resolve is a
     false-state landmine, and work-in-progress persistence is the client-side
-    workspace's job. The file content is the resolve-check's canonical YAML —
-    one serializer for the pane, the wire, and the disk. Writes are exclusive
+    workspace's job. The file content is the canonical YAML of the FLATTENED
+    document — the save artifact, distinct from the pane/resolution YAML,
+    which keeps user references. Writes are exclusive
     (collision-resistant stem, never overwrite); the saved file lands in the
     generated-sessions scan root, so it is immediately listable and
     deployable through the ordinary session paths.
@@ -3272,6 +3273,10 @@ async def builder_save_session(body: dict) -> dict:
         "name": name,
         "file": str(session_file),
         "nodes": len(resolve_check.world.nodes),
+        # Hash of the exact bytes written: the handler flattens before the
+        # resolve check, and flattening is idempotent, so the resolve
+        # check's artifact hash IS the file's.
+        "artifact_sha256": resolve_check.artifact_sha256,
     }
 
 

@@ -21,6 +21,7 @@ import {
   defaultRoutingDomain,
   draftGroundSetFromDocuments,
   draftSiteFromDocument,
+  siteObjectFromDraft,
   groundWarnings,
   identifier,
   mintSiteMembers,
@@ -39,6 +40,7 @@ import {
   stampLoopbackAddress,
   stampTerr0Address,
   toSessionDocument,
+  usesNonEarthBodies,
   workspaceFromSessionDocument,
   draftGroundMember,
   newDraftSiteObject,
@@ -539,10 +541,19 @@ describe("draftGroundSetFromDocuments + draftSiteFromDocument", () => {
     expect(site.lan_ipv4).toBe("172.16.1.0/24");
   });
 
-  it("refuses what the site editor cannot represent, loudly", () => {
+  it("carries any body-fixed body verbatim — a location is (body, lat, lon)", () => {
     const luna = siteDocument("moon-base", "nodalarc:nodes/ground/luna-surface-gateway.yaml");
     (luna.site.frame as any) = { body_fixed: { body: "nodalarc:bodies/luna.yaml" } };
-    expect(() => draftSiteFromDocument(luna)).toThrow(/only Earth surface sites/);
+    const draft = draftSiteFromDocument(luna);
+    expect(draft.body).toBe("nodalarc:bodies/luna.yaml");
+    const emitted = siteObjectFromDraft(draft) as any;
+    expect(emitted.frame).toEqual({ body_fixed: { body: "nodalarc:bodies/luna.yaml" } });
+  });
+
+  it("refuses what the site editor cannot represent, loudly", () => {
+    const anchored = siteDocument("anchored", "nodalarc:nodes/ground/leo-gateway.yaml");
+    (anchored.site.frame as any) = { ephemeris_anchor: { frame: "some-track" } };
+    expect(() => draftSiteFromDocument(anchored)).toThrow(/body-fixed surface sites/);
     const v6only = siteDocument("v6", "nodalarc:nodes/ground/leo-gateway.yaml");
     (v6only.site.lan as any) = { ipv6: "fd00::/64" };
     expect(() => draftSiteFromDocument(v6only)).toThrow(/IPv6-only/);
@@ -998,5 +1009,53 @@ describe("defaultRoutingDomain", () => {
     ws.routing_domains.push(second);
     // Everything covered: the third seeds empty (held back until members).
     expect(defaultRoutingDomain(ws).member_segment_ids).toEqual([]);
+  });
+});
+
+describe("multi-body ground authoring", () => {
+  it("mints sites on the stamp's body and the manifest follows", () => {
+    const ws = newWorkspace("luna-ground-study");
+    const ground = newDraftGroundSet(
+      "nodalarc:nodes/ground/luna-surface-gateway.yaml",
+      {},
+      "nodalarc:bodies/luna.yaml",
+    );
+    ground.members = mintSiteMembers(
+      ground,
+      parseSiteLines("Artemis Base, -89.4, 30.0\nMare Crisium, 17.0, 59.1").rows,
+    );
+    ws.ground.push(ground);
+    expect(ground.members[0]!.site?.body).toBe("nodalarc:bodies/luna.yaml");
+    expect(usesNonEarthBodies(ws)).toBe(true);
+    const doc = toSessionDocument(ws) as any;
+    expect(doc.ephemeris).toBeDefined();
+    const segment = doc.segments.find((s: any) => s.placement);
+    const artemis = segment.placement.from_site_set.site_set.sites[0].site;
+    expect(artemis.frame).toEqual({
+      body_fixed: { body: "nodalarc:bodies/luna.yaml" },
+    });
+    expect(artemis.location.lat_deg).toBe(-89.4);
+  });
+
+  it("round-trips a lunar ground session exactly", () => {
+    const ws = newWorkspace("luna-roundtrip");
+    const shell = newDraftConstellation("nodalarc:nodes/space/luna-relay.yaml");
+    shell.orbit.central_body = "nodalarc:bodies/luna.yaml";
+    ws.space.push(shell);
+    const ground = newDraftGroundSet(
+      "nodalarc:nodes/ground/luna-surface-gateway.yaml",
+      {},
+      "nodalarc:bodies/luna.yaml",
+    );
+    ground.members = mintSiteMembers(ground, parseSiteLines("Shackleton, -89.9, 0.0").rows);
+    ws.ground.push(ground);
+    const document = toSessionDocument(ws);
+    const result = workspaceFromSessionDocument(document);
+    expect(result.issues).toBeUndefined();
+    expect(toSessionDocument(result.workspace!)).toEqual(document);
+    expect(result.workspace!.ground[0]!.members[0]!.site?.body).toBe(
+      "nodalarc:bodies/luna.yaml",
+    );
+    expect(result.workspace!.ground[0]!.stamp.body).toBe("nodalarc:bodies/luna.yaml");
   });
 });

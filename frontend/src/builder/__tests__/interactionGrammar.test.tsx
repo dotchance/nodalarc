@@ -14,7 +14,7 @@
 
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, renderHook, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   EditorApplyRow,
@@ -32,12 +32,20 @@ import {
   deriveLinkPhysics,
 } from "../linkPhysics";
 import {
+  identifier,
   mintSiteMembers,
   newDraftConstellation,
   newDraftGroundSet,
   newWorkspace,
   parseSiteLines,
 } from "../workspace";
+import { canDeploy } from "../useBuilderWorld";
+import {
+  overlayBuffers,
+  staleBufferKeys,
+  useWorkspace,
+  workspaceForSave,
+} from "../useWorkspace";
 import type { BuilderWorld } from "../builderTypes";
 
 /** A minimal resolved world: one ground segment with rf access mounts and
@@ -442,5 +450,288 @@ describe("IG-16: the closed vocabularies have one owner", () => {
       vocabularyOffenders(/\[\s*"(rf|optical)"\s*,\s*"(rf|optical)"/),
       "media vocabulary re-listed outside workspace.ts",
     ).toEqual([]);
+  });
+});
+
+describe("IG-17: a save is never a dead end", () => {
+  it("every library save announces the asset through the reveal store", async () => {
+    const { requestLibraryReveal, useLibraryReveal } = await import("../useBuilderWorld");
+    let latest: unknown = null;
+    function Probe() {
+      latest = useLibraryReveal();
+      return null;
+    }
+    render(<Probe />);
+    const entry = {
+      ref: "user:terminals/test-radio.yaml",
+      family: "terminals",
+      id: "test-radio",
+      display_name: "Test radio",
+      notes: null,
+      summary: null,
+      error: null,
+    };
+    act(() => requestLibraryReveal(entry));
+    expect((latest as { entry: typeof entry }).entry.ref).toBe(
+      "user:terminals/test-radio.yaml",
+    );
+  });
+
+  it("the toolbar owns the session verbs as icon buttons; the rail owns none", () => {
+    const source = readFileSync(join(BUILDER_DIR, "BuilderView.tsx"), "utf-8");
+    const toolbar = source.slice(
+      source.indexOf('className="builder-toolbar"'),
+      source.indexOf('className="builder-outline"'),
+    );
+    // Icon-only: each verb is an icon with a hover/aria label, not visible text.
+    for (const glyph of ["file-plus", "folder-open", "save", "rocket", "history", "library"]) {
+      expect(toolbar, `toolbar carries the ${glyph} glyph`).toContain(`icon="${glyph}"`);
+    }
+    // Open and Save are windows (pickers), not an inline dropdown.
+    expect(toolbar).toContain('kind: "open-session"');
+    expect(toolbar).toContain('kind: "save-session"');
+    expect(toolbar, "no inline session dropdown in the toolbar").not.toContain(
+      'aria-label="Catalog session"',
+    );
+    const rail = source.slice(
+      source.indexOf('className="builder-outline"'),
+      source.indexOf('className="builder-canvas"'),
+    );
+    for (const verb of ["Save session", "Deploy to cluster", "Library…"]) {
+      expect(rail, `rail must not carry "${verb}" as a control`).not.toContain(`>${verb}<`);
+    }
+  });
+
+  it("each reveal consumer role claims a nonce once, across remounts", async () => {
+    const { claimLibraryReveal } = await import("../useBuilderWorld");
+    const entry = {
+      ref: "user:terminals/claim-probe.yaml",
+      family: "terminals",
+      id: "claim-probe",
+      display_name: "Claim probe",
+      notes: null,
+      summary: null,
+      error: null,
+    };
+    // The registry is module state — a remounted consumer re-running its
+    // effect is exactly a second claim of the same nonce, and must get null
+    // (per-mount refs replayed the last save on every remount).
+    const first = claimLibraryReveal("opener", { entry, nonce: 2_000_001 });
+    expect(first?.entry.ref).toBe("user:terminals/claim-probe.yaml");
+    expect(claimLibraryReveal("opener", { entry, nonce: 2_000_001 })).toBeNull();
+    // Roles retire independently — a late-mounting lander still lands.
+    expect(claimLibraryReveal("lander", { entry, nonce: 2_000_001 })).not.toBeNull();
+    expect(claimLibraryReveal("lander", { entry, nonce: 2_000_001 })).toBeNull();
+    // A newer save claims again; null reveals never claim.
+    expect(claimLibraryReveal("opener", { entry, nonce: 2_000_002 })).not.toBeNull();
+    expect(claimLibraryReveal("opener", null)).toBeNull();
+  });
+});
+
+describe("deploy gate: artifact truth, fail closed", () => {
+  const saved = {
+    savedFile: "/data/generated-sessions/_builder-x.yaml",
+    savedArtifactSha256: "abc",
+  };
+
+  it("deploys only when the saved artifact matches the settled resolve", () => {
+    expect(
+      canDeploy({ ...saved, settledArtifactSha256: "abc", dirtyWindowCount: 0 }),
+    ).toEqual({ ok: true, reason: null });
+  });
+
+  it("refuses without a save", () => {
+    const gate = canDeploy({
+      savedFile: null,
+      savedArtifactSha256: null,
+      settledArtifactSha256: "abc",
+      dirtyWindowCount: 0,
+    });
+    expect(gate.ok).toBe(false);
+    expect(gate.reason).toMatch(/save the session first/);
+  });
+
+  it("fails closed when no resolve has settled (cleared or refused)", () => {
+    const gate = canDeploy({ ...saved, settledArtifactSha256: null, dirtyWindowCount: 0 });
+    expect(gate.ok).toBe(false);
+    expect(gate.reason).toMatch(/must resolve/);
+  });
+
+  it("refuses while windows hold unapplied edits", () => {
+    const gate = canDeploy({ ...saved, settledArtifactSha256: "abc", dirtyWindowCount: 2 });
+    expect(gate.ok).toBe(false);
+    expect(gate.reason).toMatch(/2 windows with unapplied edits/);
+  });
+
+  it("names the staleness when the saved copy is behind the edits", () => {
+    const gate = canDeploy({ ...saved, settledArtifactSha256: "def", dirtyWindowCount: 0 });
+    expect(gate.ok).toBe(false);
+    expect(gate.reason).toMatch(/behind your edits/);
+  });
+});
+
+describe("commitWorkspace: one atomic adoption, one undo entry", () => {
+  it("undo after commitWorkspace returns exactly to the pre-commit state", () => {
+    const { result } = renderHook(() => useWorkspace());
+    act(() => result.current.startNew("alpha"));
+    const before = result.current.workspace;
+    expect(before?.name).toBe("alpha");
+    act(() =>
+      result.current.commitWorkspace({ ...before!, name: "beta" }, "test-adoption"),
+    );
+    expect(result.current.workspace?.name).toBe("beta");
+    act(() => result.current.undo());
+    expect(result.current.workspace?.name).toBe("alpha");
+  });
+});
+
+describe("buffer overlays and the stale guard", () => {
+  it("overlayBuffers substitutes only dirty working copies", () => {
+    const ws = newWorkspace("overlay-probe");
+    const draft = newDraftConstellation("nodalarc:nodes/x.yaml");
+    ws.space = [draft];
+    const edited = { ...draft, label: "edited" };
+    const clean = overlayBuffers(ws, {
+      [`segment:${draft.segment_id}`]: { draft: edited, opened: draft, dirty: false },
+    });
+    expect(clean).toBe(ws);
+    const overlaid = overlayBuffers(ws, {
+      [`segment:${draft.segment_id}`]: { draft: edited, opened: draft, dirty: true },
+    });
+    expect(overlaid.space[0]).toBe(edited);
+    // The session buffer is a field pick, never the whole workspace.
+    const renamed = overlayBuffers(ws, {
+      session: { draft: { name: "picked" }, opened: { name: ws.name }, dirty: true },
+    });
+    expect(renamed.name).toBe("picked");
+    expect(renamed.space).toBe(ws.space);
+  });
+
+  it("a dirty buffer is stale once its applied object changed underneath", () => {
+    const ws = newWorkspace("stale-probe");
+    const draft = newDraftConstellation("nodalarc:nodes/x.yaml");
+    ws.space = [draft];
+    const key = `segment:${draft.segment_id}`;
+    const buffer = {
+      draft: { ...draft, label: "working copy" },
+      opened: structuredClone(draft),
+      dirty: true,
+    };
+    const buffers = { [key]: buffer };
+    // Applied still equals the opened base: not stale.
+    expect(staleBufferKeys(ws, buffers)).toEqual([]);
+    // Undo/restore changed the applied object underneath the window.
+    const undone = { ...ws, space: [{ ...draft, label: "reverted elsewhere" }] };
+    expect(staleBufferKeys(undone, buffers)).toEqual([key]);
+    // Deletion underneath is stale too — there is nothing to apply into.
+    const deleted = { ...ws, space: [] };
+    expect(staleBufferKeys(deleted, buffers)).toEqual([key]);
+    // Clean buffers are never stale.
+    expect(staleBufferKeys(undone, { [key]: { ...buffer, dirty: false } })).toEqual([]);
+  });
+
+  it("the session-pick buffer compares only its own fields", () => {
+    const ws = newWorkspace("session-pick-probe");
+    const buffers = {
+      session: {
+        draft: { name: "typed" },
+        opened: { name: ws.name },
+        dirty: true,
+      },
+    };
+    expect(staleBufferKeys(ws, buffers)).toEqual([]);
+    expect(staleBufferKeys({ ...ws, name: "renamed-by-undo" }, buffers)).toEqual([
+      "session",
+    ]);
+  });
+});
+
+describe("save dialog: the name commits once, never per keystroke", () => {
+  it("BuilderView no longer live-writes the workspace name from the dialog", () => {
+    const source = readFileSync(join(BUILDER_DIR, "BuilderView.tsx"), "utf-8");
+    // The old dialog normalized and committed on every keystroke; the name
+    // is buffered in SaveSessionDialog and identifier() runs at save.
+    expect(source).not.toContain("updateSession({ name: identifier(name)");
+    const dialog = source.slice(
+      source.indexOf("function SaveSessionDialog"),
+      source.indexOf("export function BuilderView"),
+    );
+    expect(dialog, "the dialog buffers its name locally").toContain(
+      "useState(workspaceName)",
+    );
+    expect(dialog, "the dirty-save primary applies first").toContain("applyAll: true");
+  });
+
+  it("save applied state only is never gated by the dirty preview", () => {
+    const source = readFileSync(join(BUILDER_DIR, "BuilderView.tsx"), "utf-8");
+    const dialog = source.slice(
+      source.indexOf("function SaveSessionDialog"),
+      source.indexOf("export function BuilderView"),
+    );
+    // The preview gate (canSave) belongs to apply-and-save and the
+    // no-dirty-windows Save — exactly two occurrences. The applied-only
+    // escape hatch attempts regardless (the server owns the applied
+    // session's verdict once dirty windows diverge the preview) and is
+    // held back only by an in-flight save.
+    expect(dialog.match(/disabled=\{!canSave/g)?.length).toBe(2);
+    expect(dialog, "applied-only disabled by saving alone").toContain(
+      "disabled={saving}",
+    );
+  });
+});
+
+describe("workspaceForSave: the dialog name never silently undoes a rename", () => {
+  it("apply-and-save keeps a dirty Session-window rename when the field is untouched", () => {
+    const ws = newWorkspace("old-name");
+    const buffers = {
+      session: {
+        draft: { name: "renamed-in-session" },
+        opened: { name: "old-name" },
+        dirty: true,
+      },
+    };
+    const next = workspaceForSave(ws, buffers, {
+      applyAll: true,
+      dialogName: "old-name",
+      nameTouched: false,
+    });
+    expect(next.name).toBe("renamed-in-session");
+  });
+
+  it("a name the user actually typed in the dialog wins over the overlays", () => {
+    const ws = newWorkspace("old-name");
+    const buffers = {
+      session: {
+        draft: { name: "renamed-in-session" },
+        opened: { name: "old-name" },
+        dirty: true,
+      },
+    };
+    const next = workspaceForSave(ws, buffers, {
+      applyAll: true,
+      dialogName: "typed name",
+      nameTouched: true,
+    });
+    expect(next.name).toBe(identifier("typed name"));
+  });
+
+  it("applied-only with an untouched field is the identity", () => {
+    const ws = newWorkspace("applied-name");
+    const next = workspaceForSave(ws, {}, {
+      applyAll: false,
+      dialogName: "applied-name",
+      nameTouched: false,
+    });
+    expect(next).toBe(ws);
+  });
+
+  it("a touched but empty name falls back to the base name, never an empty id", () => {
+    const ws = newWorkspace("kept");
+    const next = workspaceForSave(ws, {}, {
+      applyAll: false,
+      dialogName: "",
+      nameTouched: true,
+    });
+    expect(next.name).toBe("kept");
   });
 });

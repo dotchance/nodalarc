@@ -136,6 +136,19 @@ file that re-lists the roles or the media as an array literal. Preference
 tables over a vocabulary are typed exhaustively (`Record<..., number>`), so
 a new entry fails to compile where it would otherwise be silently skipped.
 
+**IG-17.** Session verbs — new, open, save, deploy, restore, library — live
+on the builder toolbar with standard icons, the way every desktop
+application arranges file verbs. The world rail carries only the session's
+content: anatomy, drafts, links, routing, the resolved tree. The library is
+one surface, its own window, opened from the toolbar; no second library
+affordance competes elsewhere. And saving an asset to the library is never
+silent: the library opens at that asset's family with the row visible and
+highlighted. The reveal is wired at the one save path every family shares,
+so a new family inherits it without new wiring. This exists because session
+buttons scattered down the rail read as unrelated one-offs, and because a
+saved asset that just vanished into a long list convinced its author the
+save failed.
+
 ## Getting around
 
 **IG-12.** There is one selection. Picking an object in the tree, on the

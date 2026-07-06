@@ -12,6 +12,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  identifier,
   newDraftConstellation,
   reseedCounters,
   newRefGroundSet,
@@ -28,6 +29,160 @@ import {
   type RefGroundSet,
   type Workspace,
 } from "./workspace";
+
+/** One editor window's working copy: `draft` is what the window edits,
+ *  `opened` is the object as it stood before the first edit (the Defaults
+ *  target), `dirty` means the draft has uncommitted changes. */
+export interface EditorBuffer {
+  draft: unknown;
+  opened: unknown;
+  dirty: boolean;
+}
+
+export type BufferMap = Record<string, EditorBuffer>;
+
+function _bufferDeepEqual(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (Array.isArray(a) && Array.isArray(b)) {
+    return a.length === b.length && a.every((item, i) => _bufferDeepEqual(item, b[i]));
+  }
+  if (a && b && typeof a === "object" && typeof b === "object") {
+    const ka = Object.keys(a as Record<string, unknown>);
+    const kb = Object.keys(b as Record<string, unknown>);
+    return (
+      ka.length === kb.length &&
+      ka.every((k) =>
+        _bufferDeepEqual(
+          (a as Record<string, unknown>)[k],
+          (b as Record<string, unknown>)[k],
+        ),
+      )
+    );
+  }
+  return false;
+}
+
+/** The workspace as the canvas previews it: the applied workspace with every
+ *  dirty window's working copy substituted in. Pure — apply-all-and-save
+ *  serializes exactly this and then commits it, so what was saved and what
+ *  was adopted cannot diverge. Buffer keys are `kind` or `kind:id`. */
+export function overlayBuffers(workspace: Workspace, buffers: BufferMap): Workspace {
+  let out = workspace;
+  for (const [key, buf] of Object.entries(buffers)) {
+    if (!buf.dirty) continue;
+    const sep = key.indexOf(":");
+    const kind = sep === -1 ? key : key.slice(0, sep);
+    const id = sep === -1 ? "" : key.slice(sep + 1);
+    switch (kind) {
+      case "session":
+        // The session buffer is a field pick, never the whole workspace.
+        out = { ...out, ...(buf.draft as Partial<Workspace>) };
+        break;
+      case "segment":
+        out = {
+          ...out,
+          space: out.space.map((d) =>
+            d.segment_id === id ? (buf.draft as DraftConstellation) : d,
+          ),
+        };
+        break;
+      case "ground":
+        out = {
+          ...out,
+          ground: out.ground.map((d) =>
+            d.segment_id === id ? (buf.draft as DraftGroundSet) : d,
+          ),
+        };
+        break;
+      case "link":
+        out = {
+          ...out,
+          links: out.links.map((r) => (r.rule_id === id ? (buf.draft as DraftLinkRule) : r)),
+        };
+        break;
+      case "domain":
+        out = {
+          ...out,
+          routing_domains: out.routing_domains.map((d) =>
+            d.domain_id === id ? (buf.draft as DraftRoutingDomain) : d,
+          ),
+        };
+        break;
+      case "boundary":
+        out = {
+          ...out,
+          boundaries: out.boundaries.map((b) =>
+            b.boundary_id === id ? (buf.draft as DraftBoundary) : b,
+          ),
+        };
+        break;
+    }
+  }
+  return out;
+}
+
+function _appliedObjectForKey(workspace: Workspace, key: string): unknown {
+  const sep = key.indexOf(":");
+  const kind = sep === -1 ? key : key.slice(0, sep);
+  const id = sep === -1 ? "" : key.slice(sep + 1);
+  switch (kind) {
+    case "session": {
+      // Compare the same field pick the buffer holds — its `opened` keys.
+      return null;
+    }
+    case "segment":
+      return workspace.space.find((d) => d.segment_id === id) ?? null;
+    case "ground":
+      return workspace.ground.find((d) => d.segment_id === id) ?? null;
+    case "link":
+      return workspace.links.find((r) => r.rule_id === id) ?? null;
+    case "domain":
+      return workspace.routing_domains.find((d) => d.domain_id === id) ?? null;
+    case "boundary":
+      return workspace.boundaries.find((b) => b.boundary_id === id) ?? null;
+    default:
+      return null;
+  }
+}
+
+/** Dirty buffers whose applied object changed underneath them (undo,
+ *  restore, deletion) since the window's `opened` base was taken. Bulk
+ *  apply-and-save refuses these — a bulk gesture must never silently apply
+ *  a stale working copy over an object the user reverted. */
+export function staleBufferKeys(workspace: Workspace, buffers: BufferMap): string[] {
+  const stale: string[] = [];
+  for (const [key, buf] of Object.entries(buffers)) {
+    if (!buf.dirty) continue;
+    const kind = key.indexOf(":") === -1 ? key : key.slice(0, key.indexOf(":"));
+    if (kind === "session") {
+      const opened = buf.opened as Record<string, unknown> | null;
+      if (!opened) continue;
+      const pick = Object.fromEntries(
+        Object.keys(opened).map((k) => [k, (workspace as unknown as Record<string, unknown>)[k]]),
+      );
+      if (!_bufferDeepEqual(pick, opened)) stale.push(key);
+      continue;
+    }
+    const applied = _appliedObjectForKey(workspace, key);
+    if (applied === null || !_bufferDeepEqual(applied, buf.opened)) stale.push(key);
+  }
+  return stale;
+}
+
+/** The exact workspace a save writes, under the dialog's stated gesture.
+ *  applyAll overlays every dirty working copy — the session buffer
+ *  included, so a Session-window rename survives. The dialog's name field
+ *  wins only when the user actually edited it: an untouched field must
+ *  never silently undo a rename the overlays carried in. */
+export function workspaceForSave(
+  workspace: Workspace,
+  buffers: BufferMap,
+  opts: { applyAll: boolean; dialogName: string; nameTouched: boolean },
+): Workspace {
+  const base = opts.applyAll ? overlayBuffers(workspace, buffers) : workspace;
+  const name = opts.nameTouched ? identifier(opts.dialogName) || base.name : base.name;
+  return base.name === name ? base : { ...base, name };
+}
 
 const AUTOSAVE_KEY = "nodalarc-builder-draft";
 // The draft a running-session import displaced — preserved, never silently
@@ -148,6 +303,14 @@ export function useWorkspace() {
    *  responsible for id-counter reseeding (the importer does it). */
   const openWorkspace = useCallback((imported: Workspace) => {
     setWorkspace(imported);
+  }, []);
+
+  /** Atomic adoption of a next workspace the caller composed from the
+   *  current one (apply-all-and-save, save-time rename). Rides the single
+   *  mutation path: exactly one undo entry, normal autosave. Import
+   *  adoption stays `openWorkspace`; apply-all must not abuse it. */
+  const commitWorkspace = useCallback((next: Workspace, _reason: string) => {
+    setWorkspace(next);
   }, []);
 
   /** Session-level plumbing: name, time, and the candidate budget. */
@@ -474,6 +637,7 @@ export function useWorkspace() {
     workspace,
     startNew,
     openWorkspace,
+    commitWorkspace,
     updateSession,
     undo,
     hasAutosave,

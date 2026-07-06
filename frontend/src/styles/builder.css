@@ -13,8 +13,9 @@
      watching the live session" from any zone of the screen. */
   border-top: 3px solid var(--accent-amber);
   grid-template-columns: 280px 1fr 320px;
-  grid-template-rows: 1fr auto;
+  grid-template-rows: auto 1fr auto;
   grid-template-areas:
+    "toolbar toolbar toolbar"
     "outline canvas inspector"
     "status status status";
   height: 100%;
@@ -22,6 +23,64 @@
   background: var(--bg-main);
   color: var(--text-primary);
   font-size: var(--font-size-sm);
+}
+
+/* The session verbs — one toolbar, standard icons, like every other
+   application. The rail below it is session content only. */
+.builder-toolbar {
+  grid-area: toolbar;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-panel);
+}
+
+.builder-toolbar-group {
+  display: inline-flex;
+  gap: var(--space-1);
+  align-items: center;
+}
+
+/* Icon-only session verbs that read as real buttons: bordered, panel
+   surface, comfortable tap target. Hover title carries the name — the
+   glyph is the control, the tooltip is the label. */
+.builder-toolbar-btn.ui-iconbtn {
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--border);
+  background: var(--bg-main);
+  color: var(--text-secondary);
+}
+
+.builder-toolbar-btn.ui-iconbtn:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+}
+
+.builder-toolbar-btn.ui-iconbtn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* Open/Save picker windows: grouped rows the user clicks. */
+.builder-picker {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 320px;
+}
+
+.builder-picker-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.builder-picker-row {
+  cursor: pointer;
 }
 
 .builder-outline {
@@ -944,6 +1003,21 @@ button.builder-guide-row:hover {
 .builder-rail-chip--wall {
   border-color: var(--accent-red);
   border-left-width: 3px;
+}
+
+/* A just-saved asset announces itself: the library lands on it and the
+   row flashes so the save visibly went somewhere. */
+.builder-library-entry--saved {
+  animation: builder-saved-flash 2.4s ease-out;
+}
+
+@keyframes builder-saved-flash {
+  0%, 55% {
+    background: color-mix(in srgb, var(--accent-amber) 28%, transparent);
+  }
+  100% {
+    background: transparent;
+  }
 }
 
 /* Provenance marker: this workspace was loaded from the session that is

@@ -15,14 +15,16 @@
  *  only, never by shape.
  */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button, IconButton } from "../ui/Button";
 import { Icon, type IconName } from "../ui/icons/Icon";
 import {
+  claimLibraryReveal,
   deleteUserObject,
   exportCatalogObject,
   importUserObjectYaml,
   useBuilderCatalog,
+  useLibraryReveal,
 } from "./useBuilderWorld";
 import type { BuilderCatalogEntry } from "./builderTypes";
 
@@ -110,6 +112,30 @@ export function LibraryPanel({ onUse, onCustomize, onInspect, onNew }: LibraryPa
   // Source filter: shipped vs yours. Your saves land at the end of a long
   // shipped list, so without this they read as missing.
   const [source, setSource] = useState<"all" | "nodalarc" | "user">("all");
+  // A save is never a dead end: the panel lands on the saved asset — its
+  // family tab, a filter that shows it, scrolled into view, highlighted.
+  // Claimed via the module-level retired-nonce registry so a remounted
+  // panel never replays the last save while a late-mounting panel with an
+  // unseen save still lands on it.
+  const reveal = useLibraryReveal();
+  const [flashRef, setFlashRef] = useState<string | null>(null);
+  useEffect(() => {
+    const claimed = claimLibraryReveal("lander", reveal);
+    if (!claimed) return;
+    const target = FAMILIES.find((f) => f.family === claimed.entry.family);
+    if (target) setConfig(target);
+    if (source === "nodalarc" && claimed.entry.ref.startsWith("user:")) setSource("all");
+    setFlashRef(claimed.entry.ref);
+    const timer = setTimeout(() => setFlashRef(null), 2600);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reveal]);
+  useEffect(() => {
+    if (!flashRef) return;
+    document
+      .querySelector(`[data-library-ref="${CSS.escape(flashRef)}"]`)
+      ?.scrollIntoView({ block: "center" });
+  });
   const visibleEntries = catalog.entries.filter(
     (entry) =>
       source === "all" ||
@@ -128,7 +154,11 @@ export function LibraryPanel({ onUse, onCustomize, onInspect, onNew }: LibraryPa
       );
     }
     return (
-      <div className="builder-library-entry" key={entry.ref}>
+      <div
+        className={`builder-library-entry${flashRef === entry.ref ? " builder-library-entry--saved" : ""}`}
+        data-library-ref={entry.ref}
+        key={entry.ref}
+      >
         <button
           className="builder-library-entry-main"
           title={`Inspect ${entry.ref}`}

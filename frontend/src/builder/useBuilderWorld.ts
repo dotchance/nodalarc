@@ -97,6 +97,112 @@ export async function refreshCatalogFamily(family: string): Promise<void> {
   for (const listener of store.listeners) listener();
 }
 
+// --- Save-reveal: a save is never a dead end. -------------------------
+// Every save-to-library announces its result here; the Library surface
+// subscribes and lands on the asset (family tab, visible filter, highlight),
+// and the view opens the Library window. One mechanism at the one choke
+// point every family's save flows through — no per-editor wiring to forget.
+
+interface LibraryReveal {
+  entry: BuilderCatalogEntry;
+  nonce: number;
+}
+
+let _revealState: LibraryReveal | null = null;
+const _revealListeners = new Set<() => void>();
+let _revealNonce = 0;
+
+export function requestLibraryReveal(entry: BuilderCatalogEntry): void {
+  _revealNonce += 1;
+  _revealState = { entry, nonce: _revealNonce };
+  for (const listener of _revealListeners) listener();
+}
+
+/** The latest saved asset to land on (null until the first save). */
+export function useLibraryReveal(): LibraryReveal | null {
+  return useSyncExternalStore(
+    (onChange) => {
+      _revealListeners.add(onChange);
+      return () => _revealListeners.delete(onChange);
+    },
+    () => _revealState,
+  );
+}
+
+// Retired nonces live at module level, one slot per consumer role: the
+// opener (BuilderView) and the lander (LibraryPanel) each handle a reveal
+// once across remounts. Per-mount refs replayed the last reveal on every
+// remount; the state is never cleared, so a consumer that mounts late with
+// an unseen nonce still fires.
+const _retiredRevealNonces = new Map<string, number>();
+
+/** Claim a reveal for one consumer role — returns it once, null ever after. */
+export function claimLibraryReveal(
+  role: "opener" | "lander",
+  reveal: LibraryReveal | null,
+): LibraryReveal | null {
+  if (!reveal) return null;
+  if ((_retiredRevealNonces.get(role) ?? 0) >= reveal.nonce) return null;
+  _retiredRevealNonces.set(role, reveal.nonce);
+  return reveal;
+}
+
+// --- Library revision: bumps on every user-catalog mutation. -----------
+// The workspace does not change when a library object does, but the
+// hypothetical save artifact can (references are dereferenced server-side)
+// — the resolve loop depends on this revision so the deploy gate tracks
+// library drift, including deletion (which resolves to a refusal).
+
+let _libraryRevision = 0;
+const _libraryRevisionListeners = new Set<() => void>();
+
+function _bumpLibraryRevision(): void {
+  _libraryRevision += 1;
+  for (const listener of _libraryRevisionListeners) listener();
+}
+
+export function useLibraryRevision(): number {
+  return useSyncExternalStore(
+    (onChange) => {
+      _libraryRevisionListeners.add(onChange);
+      return () => _libraryRevisionListeners.delete(onChange);
+    },
+    () => _libraryRevision,
+  );
+}
+
+/** The deploy gate, as a pure truth table. Deploy ships a saved FILE, so it
+ *  requires: a saved artifact, a SETTLED resolve of the current document
+ *  (explicit state — null after clear() or a refusal, never inferred from
+ *  !loading), no unapplied window edits, and the saved artifact matching
+ *  what saving the current document would write. Fail closed: any missing
+ *  fact disables with its reason. */
+export function canDeploy(input: {
+  savedFile: string | null;
+  savedArtifactSha256: string | null;
+  settledArtifactSha256: string | null;
+  dirtyWindowCount: number;
+}): { ok: boolean; reason: string | null } {
+  if (!input.savedFile || !input.savedArtifactSha256) {
+    return { ok: false, reason: "save the session first, then deploy" };
+  }
+  if (input.settledArtifactSha256 === null) {
+    return { ok: false, reason: "the session must resolve before deploy" };
+  }
+  if (input.dirtyWindowCount > 0) {
+    return {
+      ok: false,
+      reason: `apply or discard the ${input.dirtyWindowCount} ${
+        input.dirtyWindowCount === 1 ? "window" : "windows"
+      } with unapplied edits first`,
+    };
+  }
+  if (input.savedArtifactSha256 !== input.settledArtifactSha256) {
+    return { ok: false, reason: "saved copy is behind your edits — save again" };
+  }
+  return { ok: true, reason: null };
+}
+
 /** One catalog family's primitives — shared state across all consumers. */
 export function useBuilderCatalog(family: string) {
   const store = _catalogStore(family);
@@ -150,6 +256,8 @@ export async function importUserObjectYaml(
   }
   const imported = (await response.json()) as BuilderCatalogEntry;
   void refreshCatalogFamily(imported.family);
+  requestLibraryReveal(imported);
+  _bumpLibraryRevision();
   return imported;
 }
 
@@ -179,6 +287,7 @@ export async function deleteUserObject(ref: string): Promise<void> {
   if (!response.ok) throw new Error(await _errorMessage(response));
   const family = ref.split(":", 2)[1]?.split("/")[0];
   if (family) void refreshCatalogFamily(family);
+  _bumpLibraryRevision();
 }
 
 /** Save one primitive document into the user catalog. */
@@ -199,6 +308,8 @@ export async function saveUserObject(
   }
   const saved = (await response.json()) as BuilderCatalogEntry;
   void refreshCatalogFamily(saved.family);
+  requestLibraryReveal(saved);
+  _bumpLibraryRevision();
   return saved;
 }
 
@@ -215,6 +326,11 @@ export function useBuilderWorld() {
   // Structured refusal from the resolver — `error` (the display string)
   // derives from it; the structure routes the wall to its owning object.
   const [resolveError, setResolveError] = useState<BuilderResolveError | null>(null);
+  // The settled artifact hash: what saving the CURRENT resolved document
+  // would write. Explicit state, never inferred from !loading — set only
+  // when a resolve completes, nulled by clear() and every refusal. The
+  // deploy gate fails closed on null.
+  const [settledArtifactSha256, setSettledArtifactSha256] = useState<string | null>(null);
   // Monotonic resolve counter: a stale in-flight response must never
   // overwrite a newer edit's result.
   const resolveSeq = useRef(0);
@@ -254,6 +370,7 @@ export function useBuilderWorld() {
         setDocumentYaml(data.document_yaml);
         setLoadedDocument(data.document);
         setLoadedFile(fileLabel);
+        setSettledArtifactSha256(data.artifact_sha256);
       } catch (e) {
         if (seq !== resolveSeq.current) return;
         // An edit that fails resolution keeps nothing stale on screen: the
@@ -262,6 +379,7 @@ export function useBuilderWorld() {
         setDocumentYaml(null);
         setLoadedDocument(null);
         setLoadedFile(null);
+        setSettledArtifactSha256(null);
         setResolveError(
           e instanceof ResolveRefusal
             ? e.detail
@@ -303,7 +421,9 @@ export function useBuilderWorld() {
   );
 
   const saveSession = useCallback(
-    async (document: unknown): Promise<{ name: string; file: string; nodes: number }> => {
+    async (
+      document: unknown,
+    ): Promise<{ name: string; file: string; nodes: number; artifact_sha256: string }> => {
       const response = await fetch(`${REST_URL}/api/v1/builder/save-session`, {
         method: "POST",
         headers: authHeaders({ "Content-Type": "application/json" }),
@@ -326,6 +446,7 @@ export function useBuilderWorld() {
     setLoadedDocument(null);
     setLoadedFile(null);
     setResolveError(null);
+    setSettledArtifactSha256(null);
     setLoading(false);
   }, []);
 
@@ -339,6 +460,7 @@ export function useBuilderWorld() {
     loading,
     error: resolveError?.error ?? null,
     resolveError,
+    settledArtifactSha256,
     loadSession,
     resolveDocument,
     saveSession,

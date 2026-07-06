@@ -80,6 +80,7 @@ export function GroundEditor({
   const nodes = useBuilderCatalog("nodes");
   const siteCatalog = useBuilderCatalog("sites");
   const siteSets = useBuilderCatalog("site-sets");
+  const bodies = useBuilderCatalog("bodies");
   const [pasteText, setPasteText] = useState("");
   const [pasteErrors, setPasteErrors] = useState<string[]>([]);
   const [libraryOpen, setLibraryOpen] = useState(false);
@@ -349,6 +350,22 @@ export function GroundEditor({
               applied when minting pasted sites — each site owns its
               configuration afterwards (edit the site, not the stamp)
             </div>
+            <SelectField
+              label="on body"
+              ariaLabel="Stamp body"
+              value={draft.stamp.body}
+              onChange={(body) => onUpdate({ stamp: { ...draft.stamp, body } })}
+              options={
+                bodies.entries.filter((entry) => !entry.error).length > 0
+                  ? bodies.entries
+                      .filter((entry) => !entry.error)
+                      .map((entry) => ({
+                        value: entry.ref,
+                        label: entry.display_name ?? entry.id ?? entry.ref,
+                      }))
+                  : [{ value: draft.stamp.body, label: draft.stamp.body }]
+              }
+            />
             <SelectField
               stack
               label="node model"

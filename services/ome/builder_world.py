@@ -10,10 +10,11 @@ live session-ephemeris stream is by construction: one code path, two callers.
 
 from __future__ import annotations
 
+import hashlib
 from typing import Any
 
 import yaml
-from nodalarc.catalog_browse import rehydrate_user_references
+from nodalarc.catalog_browse import flatten_user_references, rehydrate_user_references
 from nodalarc.catalog_paths import CatalogRoots, resolve_catalog_reference
 from nodalarc.ephemeris_runtime import session_epoch_unix
 from nodalarc.models.builder_world import (
@@ -91,6 +92,16 @@ def _builder_link_rule(
     )
 
 
+def _canonical_session_yaml(document: Any) -> str:
+    """The one canonical YAML dump for session documents.
+
+    The pane/resolution document and the flattened save artifact are
+    different documents; both serialize through this function so the dump
+    style can never drift between them.
+    """
+    return yaml.dump(document, default_flow_style=False, sort_keys=False)
+
+
 def build_builder_resolve_check(
     session_source: str | dict[str, Any],
     *,
@@ -105,13 +116,21 @@ def build_builder_resolve_check(
     resolution and the YAML always use the file's own content). Pass it when
     loading a saved/running session for editing; a client-posted document
     already carries its references.
+
+    ``artifact_sha256`` hashes the canonical FLATTENED form — what a save of
+    this document writes. Flattening is idempotent, so on the save path
+    (which flattens before calling here) the hash equals the written bytes.
     """
     roots = catalog_roots or default_catalog_roots()
     raw = _load_session_source(session_source, roots)
+    flattened = flatten_user_references(raw, roots=roots)
     return BuilderResolveCheck(
         world=_world_from_raw(raw, roots),
         document=rehydrate_user_references(raw, roots=roots) if rehydrate else raw,
-        document_yaml=yaml.dump(raw, default_flow_style=False, sort_keys=False),
+        document_yaml=_canonical_session_yaml(raw),
+        artifact_sha256=hashlib.sha256(
+            _canonical_session_yaml(flattened).encode("utf-8")
+        ).hexdigest(),
     )
 
 

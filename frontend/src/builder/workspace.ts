@@ -99,10 +99,15 @@ export interface DraftSiteNode {
 
 /** A site is a first-class primitive — the terminals, nodes, networks, and
  *  parameters that make up a location, not just a lat/lon. This is the
- *  grammar's Site object as an editable draft (IPv4-only for now). */
+ *  grammar's Site object as an editable draft (IPv4-only for now).
+ *  ``body`` is the surface the site stands on — a bodies-catalog ref
+ *  serialized verbatim into the grammar's body-fixed frame, exactly as an
+ *  orbit's central_body: a location is a (body, lat, lon), never a lat/lon
+ *  with Earth assumed. */
 export interface DraftSiteObject {
   site_id: string;
   display_name: string;
+  body: string;
   lat_deg: number;
   lon_deg: number;
   alt_m: number;
@@ -136,6 +141,9 @@ export interface DraftGroundSite {
 export interface GroundStamp {
   node_ref: string;
   installed: Record<string, number>;
+  /** The body minted sites stand on — seeds each mint; every site owns its
+   *  own body afterwards. */
+  body: string;
   /** IPv4 base for minted site LANs: mint i gets base.<i>.0/24, terr0 .1. */
   lan_base: string;
   /** IPv4 base for minted loopbacks: mint i gets base.0.<i+1>/32. */
@@ -293,7 +301,16 @@ export const DE440S_EPHEMERIS = {
 
 /** True when any authored orbit is around a body other than Earth. */
 export function usesNonEarthBodies(workspace: Workspace): boolean {
-  return workspace.space.some((draft) => draft.orbit.central_body !== EARTH_BODY_REF);
+  return (
+    workspace.space.some((draft) => draft.orbit.central_body !== EARTH_BODY_REF) ||
+    workspace.ground.some(
+      (draft) =>
+        draft.stamp.body !== EARTH_BODY_REF ||
+        draft.members.some(
+          (member) => member.site !== null && member.site.body !== EARTH_BODY_REF,
+        ),
+    )
+  );
 }
 
 export function defaultDraftOrbit(): DraftOrbit {
@@ -798,6 +815,7 @@ let memberCounter = 0;
 export function newDraftGroundSet(
   nodeRef: string,
   installed: Record<string, number>,
+  body: string = EARTH_BODY_REF,
 ): DraftGroundSet {
   groundCounter += 1;
   return {
@@ -807,6 +825,7 @@ export function newDraftGroundSet(
     stamp: {
       node_ref: nodeRef,
       installed,
+      body,
       lan_base: `172.${20 + ((groundCounter - 1) % 12)}`,
       loopback_base: `10.${200 + ((groundCounter - 1) % 55)}`,
     },
@@ -892,6 +911,7 @@ export function mintSiteMembers(
     const site: DraftSiteObject = {
       site_id: identifier(row.name),
       display_name: row.name,
+      body: draft.stamp.body,
       lat_deg: row.lat_deg,
       lon_deg: row.lon_deg,
       alt_m: row.alt_m,
@@ -961,6 +981,7 @@ export function newDraftSiteObject(nodeRef: string, installed: Record<string, nu
   return {
     site_id: "my-site",
     display_name: "My site",
+    body: EARTH_BODY_REF,
     lat_deg: 0,
     lon_deg: 0,
     alt_m: 0,
@@ -988,9 +1009,11 @@ export function draftSiteFromDocument(document: Record<string, unknown>): DraftS
   const siteId = String(site.id ?? "");
   const frame = (site.frame ?? {}) as { body_fixed?: { body?: unknown } };
   const body = frame.body_fixed?.body;
-  if (typeof body !== "string" || !body.includes("bodies/earth")) {
+  if (typeof body !== "string") {
+    // lagrange / ephemeris-anchor frames are a different grammar source,
+    // not a surface location — refuse loudly, never drop.
     throw new Error(
-      `site ${siteId}: only Earth surface sites are editable yet — multi-body ground authoring is pending`,
+      `site ${siteId}: only body-fixed surface sites are editable yet — lagrange and ephemeris-anchor frames are pending`,
     );
   }
   const location = (site.location ?? null) as Record<string, unknown> | null;
@@ -1034,6 +1057,7 @@ export function draftSiteFromDocument(document: Record<string, unknown>): DraftS
   return {
     site_id: siteId,
     display_name: String(site.display_name ?? siteId),
+    body,
     lat_deg: Number(location.lat_deg ?? 0),
     lon_deg: Number(location.lon_deg ?? 0),
     alt_m: Number(location.alt_m ?? 0),
@@ -1066,7 +1090,7 @@ export function siteObjectFromDraft(site: DraftSiteObject): Record<string, unkno
         terr0: { ipv4: node.terr0_ipv4 },
       },
     })),
-    frame: { body_fixed: { body: "nodalarc:bodies/earth.yaml" } },
+    frame: { body_fixed: { body: site.body } },
     location: { lat_deg: site.lat_deg, lon_deg: site.lon_deg, alt_m: site.alt_m },
   };
 }
@@ -1159,7 +1183,8 @@ export function draftGroundSetFromDocuments(
     }
   }
   if (members.length === 0) throw new Error("site set has no readable sites");
-  const forked = newDraftGroundSet(stampNodeRef ?? "", stampInstalled ?? {});
+  const firstDraftBody = members.find((m) => m.site !== null)?.site?.body;
+  const forked = newDraftGroundSet(stampNodeRef ?? "", stampInstalled ?? {}, firstDraftBody);
   return {
     ...forked,
     display_name: `${String(siteSet.display_name ?? siteSet.id)} (custom)`,
@@ -1939,7 +1964,11 @@ function _importGroundDraft(
     issues.push(`segments.${segId}: scheduling block matches no builder preset`);
   }
   const originated = (apply.originated_prefixes ?? null) as Record<string, unknown> | null;
-  const base = newDraftGroundSet(stampNodeRef, stampInstalled);
+  const base = newDraftGroundSet(
+    stampNodeRef,
+    stampInstalled,
+    members.find((m) => m.site !== null)?.site?.body,
+  );
   const draft: DraftGroundSet = {
     ...base,
     segment_id: segId,

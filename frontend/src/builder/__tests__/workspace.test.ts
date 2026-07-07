@@ -21,6 +21,7 @@ import {
   meanAnomalyForDwell,
   defaultLinkRule,
   defaultRoutingDomain,
+  draftConstellationFromDocuments,
   draftGroundSetFromDocuments,
   draftSiteFromDocument,
   siteObjectFromDraft,
@@ -1505,5 +1506,165 @@ describe("a refused import advances no module id counter (N5)", () => {
     const after = probeCounters();
     // The domain the parse minted was rolled back with everything else.
     expect(after.domain).toBe(before.domain + 1);
+  });
+});
+
+describe("shared document→draft parse core: fork throws, import collects (M2, P1b)", () => {
+  function constellationDocument(
+    overrides: Record<string, unknown> = {},
+  ): Record<string, unknown> {
+    return {
+      constellation: {
+        id: "shell-c",
+        display_name: "Shell C",
+        node: "nodalarc:nodes/space/x.yaml",
+        orbit: {
+          central_body: "nodalarc:bodies/earth.yaml",
+          shape: { altitude_km: 550 },
+          orientation: { inclination_deg: 53, raan_deg: 10, argument_of_perigee_deg: 20 },
+          phase: { mean_anomaly_deg: 15 },
+          propagator: "j2_mean_elements",
+        },
+        planes: { count: 3, raan_spacing_deg: 60 },
+        slots_per_plane: 8,
+        phasing: { mode: "evenly_spaced_mean_anomaly", phase_offset_deg: 5 },
+        ...overrides,
+      },
+    };
+  }
+
+  it("(1) fork constellation THROWS on grammar it cannot represent (element-form orbit)", () => {
+    const doc = constellationDocument({ orbit: { propagator: "two_body" } }); // no shape
+    expect(() => draftConstellationFromDocuments(doc, null)).toThrow(/element-form/);
+  });
+
+  it("(2) fork ground THROWS on a non-site entry", () => {
+    expect(() =>
+      draftGroundSetFromDocuments({ site_set: { id: "s", display_name: "S" } }, [
+        { ref: null, document: { not_a_site: {} } },
+      ]),
+    ).toThrow(/non-site entry/);
+  });
+
+  it("(3) import constellation COLLECTS with the segments.<id> path prefix", () => {
+    const ws = newWorkspace("import-collect");
+    ws.space.push(newDraftConstellation("nodalarc:nodes/space/x.yaml"));
+    const doc = toSessionDocument(ws) as any;
+    const seg = doc.segments.find((s: any) => s.source?.constellation);
+    seg.source.constellation.orbit.propagator = "cowell"; // unrepresentable propagator
+    const result = workspaceFromSessionDocument(doc);
+    expect(result.issues!.some((i) => i.startsWith(`segments.${seg.id}: propagator`))).toBe(true);
+  });
+
+  it("(4) import ground COLLECTS with the segments.<id> path prefix", () => {
+    const ws = newWorkspace("import-ground-collect");
+    const g = newDraftGroundSet("nodalarc:nodes/ground/g.yaml", {});
+    g.members = mintSiteMembers(g, parseSiteLines("A, 0, 0").rows);
+    ws.ground.push(g);
+    const doc = toSessionDocument(ws) as any;
+    const seg = doc.segments.find((s: any) => s.placement);
+    seg.placement.from_site_set.site_set.sites.push({ not_a_site: {} });
+    const result = workspaceFromSessionDocument(doc);
+    expect(result.issues!.some((i) => i.startsWith(`segments.${seg.id}:`))).toBe(true);
+  });
+
+  it("(5) a single document collects every independent defect and keeps going", () => {
+    const ws = newWorkspace("two-defects");
+    ws.space.push(newDraftConstellation("nodalarc:nodes/space/x.yaml"));
+    ws.space.push(newDraftConstellation("nodalarc:nodes/space/x.yaml"));
+    const doc = toSessionDocument(ws) as any;
+    const inline = doc.segments.filter((s: any) => s.source?.constellation);
+    inline[0].source.constellation.orbit.propagator = "cowell"; // defect 1
+    delete inline[1].source.constellation.orbit.shape; // defect 2 (element-form)
+    const result = workspaceFromSessionDocument(doc);
+    expect(result.issues!.length).toBeGreaterThanOrEqual(2);
+    expect(result.issues!.some((i) => i.includes("propagator"))).toBe(true);
+    expect(result.issues!.some((i) => i.includes("element-form"))).toBe(true);
+  });
+
+  it("(6) fork constellation SUCCESS: inline circular orbit, geometry, node ref", () => {
+    const draft = draftConstellationFromDocuments(constellationDocument(), null);
+    expect(draft.orbit.shape_kind).toBe("circular");
+    expect(draft.orbit.altitude_km).toBe(550);
+    expect(draft.orbit.inclination_deg).toBe(53);
+    expect(draft.orbit.central_body).toBe("nodalarc:bodies/earth.yaml");
+    expect(draft.planes).toBe(3);
+    expect(draft.raan_spacing_deg).toBe(60);
+    expect(draft.slots_per_plane).toBe(8);
+    expect(draft.phase_offset_deg).toBe(5);
+    expect(draft.node_ref).toBe("nodalarc:nodes/space/x.yaml");
+    expect(draft.node_draft).toBeNull();
+    expect(draft.display_name).toContain("(custom)");
+  });
+
+  it("(6) fork constellation SUCCESS: orbit-by-ref resolves via the orbit document", () => {
+    const doc = constellationDocument({ orbit: "nodalarc:orbits/leo.yaml" });
+    const orbitDoc = {
+      orbit: {
+        central_body: "nodalarc:bodies/earth.yaml",
+        shape: { altitude_km: 1200 },
+        orientation: { inclination_deg: 87 },
+        phase: { mean_anomaly_deg: 0 },
+        propagator: "two_body",
+      },
+    };
+    const draft = draftConstellationFromDocuments(doc, orbitDoc);
+    expect(draft.orbit.altitude_km).toBe(1200); // resolved from the orbit document
+    expect(draft.orbit.inclination_deg).toBe(87);
+    expect(draft.orbit.propagator).toBe("two_body");
+  });
+
+  it("(6) fork constellation SUCCESS: elliptical shape and inline node draft", () => {
+    const doc = constellationDocument({
+      orbit: {
+        central_body: "nodalarc:bodies/earth.yaml",
+        shape: { perigee_altitude_km: 500, apogee_altitude_km: 35000 },
+        orientation: {},
+        phase: {},
+        propagator: "j2_mean_elements",
+      },
+      node: {
+        id: "custom-bird",
+        display_name: "Custom bird",
+        forwarding: "routed",
+        ethernet: [],
+        terminals: [
+          { id: "isl_0", role: "isl", terminal: "nodalarc:terminals/optical/x.yaml", count: 2 },
+        ],
+        payloads: [],
+      },
+    });
+    const draft = draftConstellationFromDocuments(doc, null);
+    expect(draft.orbit.shape_kind).toBe("elliptical");
+    expect(draft.orbit.perigee_altitude_km).toBe(500);
+    expect(draft.orbit.apogee_altitude_km).toBe(35000);
+    expect(draft.node_ref).toBe("");
+    expect(draft.node_draft?.terminals[0]?.count).toBe(2);
+  });
+
+  it("(7) a bare ref is stem-keyed without a document, document-keyed with one (L1 asymmetry)", () => {
+    // Import: no document → identity is the ref's filename stem.
+    const ws = newWorkspace("ref-stem");
+    const g = newDraftGroundSet("nodalarc:nodes/ground/g.yaml", {});
+    g.members = mintSiteMembers(g, parseSiteLines("A, 0, 0").rows);
+    ws.ground.push(g);
+    const doc = toSessionDocument(ws) as any;
+    const seg = doc.segments.find((s: any) => s.placement);
+    seg.placement.from_site_set.site_set.sites.push("nodalarc:site-sets/earth/pop-alpha.yaml");
+    const imported = workspaceFromSessionDocument(doc);
+    const refMember = imported.workspace!.ground[0]!.members.find((m) => m.kind === "ref")!;
+    expect(refMember.site_id).toBe("pop-alpha");
+    expect(refMember.label).toBe("pop-alpha");
+
+    // Fork: a document is supplied → identity is the document's real id.
+    const forked = draftGroundSetFromDocuments({ site_set: { id: "s", display_name: "S" } }, [
+      {
+        ref: "nodalarc:sites/earth/pop-alpha.yaml",
+        document: { site: { id: "gateway-alpha", display_name: "Gateway Alpha" } },
+      },
+    ]);
+    const forkedRef = forked.members.find((m) => m.kind === "ref")!;
+    expect(forkedRef.site_id).toBe("gateway-alpha");
+    expect(forkedRef.label).toBe("Gateway Alpha");
   });
 });

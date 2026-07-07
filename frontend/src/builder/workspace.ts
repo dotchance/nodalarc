@@ -362,39 +362,37 @@ export function newRefSegment(ref: string, label: string): RefSegment {
   return { segment_id: `lib-${refCounter}`, ref, label };
 }
 
-/** Fork a constellation document (plus its orbit document when referenced)
- *  into an editable draft — customize-a-library-block. Constructs the editor
- *  cannot represent refuse loudly; nothing is silently dropped. */
-export function draftConstellationFromDocuments(
-  constellationDocument: Record<string, unknown>,
-  orbitDocument: Record<string, unknown> | null,
-): DraftConstellation {
-  const constellation = (
-    constellationDocument as { constellation?: Record<string, unknown> }
-  ).constellation;
-  if (!constellation) throw new Error("not a constellation document");
-  const phasing = (constellation.phasing ?? {}) as Record<string, unknown>;
-  if (phasing.mode && phasing.mode !== "evenly_spaced_mean_anomaly") {
-    throw new Error(
-      `phasing mode ${String(phasing.mode)} — walker modes are pending their runtime semantics`,
-    );
-  }
-  const orbitRaw =
-    typeof constellation.orbit === "string"
-      ? ((orbitDocument as { orbit?: Record<string, unknown> } | null)?.orbit ?? null)
-      : ((constellation.orbit as Record<string, unknown>) ?? null);
-  if (!orbitRaw) throw new Error("constellation orbit could not be read");
-  const shape = (orbitRaw.shape ?? null) as Record<string, unknown> | null;
-  if (!shape) throw new Error("element-form orbits are not editable yet");
+// ---------------------------------------------------------------------------
+// Shared document→draft parse core. The fork wrappers (throw on grammar the
+// editor cannot represent) and the import wrappers (collect issues and
+// continue) are thin policy layers over these helpers, so the grammar
+// knowledge and the draft field mapping live ONCE and the two paths cannot
+// drift (M2). The helpers return typed conditions and never own copy — each
+// wrapper phrases its own message (fork's throw text, import's
+// `segments.<id>:`-prefixed issue) so the surfaced strings stay exactly as
+// they were.
+
+/** True when an orbit is element-form (no `shape` block) — the builder edits
+ *  shaped orbits only. */
+function _orbitLacksShape(orbitRaw: Record<string, unknown>): boolean {
+  return (orbitRaw.shape ?? null) === null;
+}
+
+/** The propagator the builder cannot author, or null when it is fine. */
+function _unsupportedPropagator(orbitRaw: Record<string, unknown>): string | null {
+  const propagator = String(orbitRaw.propagator ?? "j2_mean_elements");
+  return propagator !== "two_body" && propagator !== "j2_mean_elements" ? propagator : null;
+}
+
+/** The DraftOrbit field mapping shared by fork and import. Assumes the caller
+ *  has confirmed a `shape` block is present (fork threw / import collected an
+ *  issue and returned otherwise). */
+function _buildDraftOrbit(orbitRaw: Record<string, unknown>): DraftOrbit {
+  const shape = (orbitRaw.shape ?? {}) as Record<string, unknown>;
   const orientation = (orbitRaw.orientation ?? {}) as Record<string, unknown>;
   const phase = (orbitRaw.phase ?? {}) as Record<string, unknown>;
   const propagator = String(orbitRaw.propagator ?? "j2_mean_elements");
-  if (propagator !== "two_body" && propagator !== "j2_mean_elements") {
-    throw new Error(`propagator ${propagator} is not editable yet`);
-  }
-  const planes = (constellation.planes ?? {}) as Record<string, unknown>;
-
-  const orbit: DraftOrbit = {
+  return {
     central_body:
       typeof orbitRaw.central_body === "string" ? orbitRaw.central_body : EARTH_BODY_REF,
     shape_kind: "altitude_km" in shape ? "circular" : "elliptical",
@@ -407,6 +405,87 @@ export function draftConstellationFromDocuments(
     mean_anomaly_deg: Number(phase.mean_anomaly_deg ?? 0),
     propagator: propagator as DraftOrbit["propagator"],
   };
+}
+
+/** The phasing mode the builder cannot author, or null when it is fine. */
+function _unsupportedPhasingMode(constellation: Record<string, unknown>): string | null {
+  const phasing = (constellation.phasing ?? {}) as Record<string, unknown>;
+  return phasing.mode && phasing.mode !== "evenly_spaced_mean_anomaly"
+    ? String(phasing.mode)
+    : null;
+}
+
+/** The constellation geometry fields shared by fork and import — the caller
+ *  owns identity, display name, orbit, and node policy. */
+function _constellationGeometry(constellation: Record<string, unknown>): {
+  planes: number;
+  raan_spacing_deg: number;
+  slots_per_plane: number;
+  phase_offset_deg: number;
+} {
+  const planes = (constellation.planes ?? {}) as Record<string, unknown>;
+  const phasing = (constellation.phasing ?? {}) as Record<string, unknown>;
+  return {
+    planes: Number(planes.count ?? 1),
+    raan_spacing_deg: Number(planes.raan_spacing_deg ?? 0),
+    slots_per_plane: Number(constellation.slots_per_plane ?? 1),
+    phase_offset_deg: Number(phasing.phase_offset_deg ?? 0),
+  };
+}
+
+type GroundMemberParse = { member: DraftGroundSite } | { reason: "non-site-entry" };
+
+/** Parse one site-set member entry into a draft member. A ref WITHOUT a
+ *  fetched document (import has only the raw YAML) keys its identity on the
+ *  ref's filename stem — never a client-side ref-metadata fetch; that stem
+ *  assumption is the standing debt-register note. A ref WITH a document (fork
+ *  supplies one) reads the document's real id and display name. An inline site
+ *  document becomes an editable draft member and may throw from
+ *  draftSiteFromDocument — the fork wrapper lets that propagate, the import
+ *  wrapper catches it. A document that is neither is reported as a non-site
+ *  entry (fork throws, import collects) rather than dropped. */
+function _parseGroundMember(
+  ref: string | null,
+  document: Record<string, unknown> | null,
+): GroundMemberParse {
+  if (ref !== null && document === null) {
+    return { member: refGroundMember(ref, _refStem(ref), _refStem(ref), null) };
+  }
+  const site = document === null ? undefined : (document as { site?: unknown }).site;
+  if (typeof site !== "object" || site === null) {
+    return { reason: "non-site-entry" };
+  }
+  if (ref !== null) {
+    const siteObj = site as Record<string, unknown>;
+    const siteId = String(siteObj.id ?? "");
+    return { member: refGroundMember(ref, siteId, String(siteObj.display_name ?? siteId), null) };
+  }
+  return { member: draftGroundMember(draftSiteFromDocument(document as Record<string, unknown>)) };
+}
+
+/** Fork a constellation document (plus its orbit document when referenced)
+ *  into an editable draft — customize-a-library-block. Constructs the editor
+ *  cannot represent refuse loudly; nothing is silently dropped. */
+export function draftConstellationFromDocuments(
+  constellationDocument: Record<string, unknown>,
+  orbitDocument: Record<string, unknown> | null,
+): DraftConstellation {
+  const constellation = (
+    constellationDocument as { constellation?: Record<string, unknown> }
+  ).constellation;
+  if (!constellation) throw new Error("not a constellation document");
+  const badMode = _unsupportedPhasingMode(constellation);
+  if (badMode) {
+    throw new Error(`phasing mode ${badMode} — walker modes are pending their runtime semantics`);
+  }
+  const orbitRaw =
+    typeof constellation.orbit === "string"
+      ? ((orbitDocument as { orbit?: Record<string, unknown> } | null)?.orbit ?? null)
+      : ((constellation.orbit as Record<string, unknown>) ?? null);
+  if (!orbitRaw) throw new Error("constellation orbit could not be read");
+  if (_orbitLacksShape(orbitRaw)) throw new Error("element-form orbits are not editable yet");
+  const badPropagator = _unsupportedPropagator(orbitRaw);
+  if (badPropagator) throw new Error(`propagator ${badPropagator} is not editable yet`);
 
   draftCounter += 1;
   const node = constellation.node;
@@ -418,11 +497,8 @@ export function draftConstellationFromDocuments(
       typeof node === "object" && node !== null
         ? draftNodeFromDocument({ node: node as Record<string, unknown> })
         : null,
-    orbit,
-    planes: Number(planes.count ?? 1),
-    raan_spacing_deg: Number(planes.raan_spacing_deg ?? 0),
-    slots_per_plane: Number(constellation.slots_per_plane ?? 1),
-    phase_offset_deg: Number(phasing.phase_offset_deg ?? 0),
+    orbit: _buildDraftOrbit(orbitRaw),
+    ..._constellationGeometry(constellation),
   };
 }
 
@@ -1289,15 +1365,10 @@ export function draftGroundSetFromDocuments(
   let stampNodeRef: string | null = null;
   let stampInstalled: Record<string, number> | null = null;
   for (const entry of siteEntries) {
-    const site = (entry.document as { site?: Record<string, unknown> }).site;
-    if (!site) throw new Error("site set contains a non-site entry");
-    const siteId = String(site.id ?? "");
-    const label = String(site.display_name ?? siteId);
-    if (entry.ref !== null) {
-      members.push(refGroundMember(entry.ref, siteId, label, null));
-    } else {
-      members.push(draftGroundMember(draftSiteFromDocument(entry.document)));
-    }
+    const parse = _parseGroundMember(entry.ref, entry.document);
+    if ("reason" in parse) throw new Error("site set contains a non-site entry");
+    members.push(parse.member);
+    const site = (entry.document as { site?: Record<string, unknown> }).site ?? {};
     if (stampNodeRef === null) {
       const nodes = (site.nodes as Record<string, unknown>[] | undefined) ?? [];
       const [node] = nodes;
@@ -2138,9 +2209,9 @@ function _importConstellation(
     return null;
   }
   const before = issues.length;
-  const phasing = (constellation.phasing ?? {}) as Record<string, unknown>;
-  if (phasing.mode && phasing.mode !== "evenly_spaced_mean_anomaly") {
-    issues.push(`segments.${segId}: phasing mode ${String(phasing.mode)} is not editable yet`);
+  const badMode = _unsupportedPhasingMode(constellation);
+  if (badMode) {
+    issues.push(`segments.${segId}: phasing mode ${badMode} is not editable yet`);
   }
   const orbitRaw = constellation.orbit;
   if (typeof orbitRaw !== "object" || orbitRaw === null) {
@@ -2148,21 +2219,18 @@ function _importConstellation(
     return null;
   }
   const orbit = orbitRaw as Record<string, unknown>;
-  const shape = (orbit.shape ?? null) as Record<string, unknown> | null;
-  if (!shape) issues.push(`segments.${segId}: element-form orbits are not editable yet`);
-  const propagator = String(orbit.propagator ?? "j2_mean_elements");
-  if (propagator !== "two_body" && propagator !== "j2_mean_elements") {
-    issues.push(`segments.${segId}: propagator ${propagator} is not editable yet`);
+  const lacksShape = _orbitLacksShape(orbit);
+  if (lacksShape) issues.push(`segments.${segId}: element-form orbits are not editable yet`);
+  const badPropagator = _unsupportedPropagator(orbit);
+  if (badPropagator) {
+    issues.push(`segments.${segId}: propagator ${badPropagator} is not editable yet`);
   }
   if (String(orbit.epoch ?? startTime) !== startTime) {
     issues.push(
       `segments.${segId}: orbit epoch differs from the session start_time — the builder authors one session epoch`,
     );
   }
-  if (issues.length > before || !shape) return null;
-  const orientation = (orbit.orientation ?? {}) as Record<string, unknown>;
-  const phase = (orbit.phase ?? {}) as Record<string, unknown>;
-  const planes = (constellation.planes ?? {}) as Record<string, unknown>;
+  if (issues.length > before || lacksShape) return null;
   const node = constellation.node;
   let nodeDraft: DraftNode | null = null;
   if (typeof node === "object" && node !== null) {
@@ -2178,23 +2246,8 @@ function _importConstellation(
     display_name: String(constellation.display_name ?? constellation.id ?? segId),
     node_ref: typeof node === "string" ? node : "",
     node_draft: nodeDraft,
-    orbit: {
-      central_body:
-        typeof orbit.central_body === "string" ? orbit.central_body : EARTH_BODY_REF,
-      shape_kind: "altitude_km" in shape ? "circular" : "elliptical",
-      altitude_km: Number(shape.altitude_km ?? 550),
-      perigee_altitude_km: Number(shape.perigee_altitude_km ?? shape.altitude_km ?? 550),
-      apogee_altitude_km: Number(shape.apogee_altitude_km ?? shape.altitude_km ?? 550),
-      inclination_deg: Number(orientation.inclination_deg ?? 0),
-      raan_deg: Number(orientation.raan_deg ?? 0),
-      argument_of_perigee_deg: Number(orientation.argument_of_perigee_deg ?? 0),
-      mean_anomaly_deg: Number(phase.mean_anomaly_deg ?? 0),
-      propagator: propagator as DraftOrbit["propagator"],
-    },
-    planes: Number(planes.count ?? 1),
-    raan_spacing_deg: Number(planes.raan_spacing_deg ?? 0),
-    slots_per_plane: Number(constellation.slots_per_plane ?? 1),
-    phase_offset_deg: Number(phasing.phase_offset_deg ?? 0),
+    orbit: _buildDraftOrbit(orbit),
+    ..._constellationGeometry(constellation),
   };
 }
 
@@ -2210,25 +2263,19 @@ function _importGroundDraft(
   let stampInstalled: Record<string, number> = {};
   for (const entry of (siteSet.sites as unknown[] | undefined) ?? []) {
     if (typeof entry === "string") {
-      // The ref's grammar id is assumed to be the filename stem — true for
-      // every write path (save_user_object names files by id; shipped
-      // catalog follows the convention). A hand-placed file violating it
-      // would mis-key override matching; the round-trip proof cannot see
-      // that because bare refs re-serialize verbatim. Tracked in the debt
-      // register alongside the resolver's silent tolerance of overrides
-      // that match no site.
-      members.push(refGroundMember(entry, _refStem(entry), _refStem(entry), null));
+      const parse = _parseGroundMember(entry, null);
+      if ("member" in parse) members.push(parse.member);
       continue;
     }
     const wrapped = entry as Record<string, unknown>;
-    if (typeof wrapped.site !== "object" || wrapped.site === null) {
-      issues.push(`segments.${segId}: a site entry is neither a ref nor an inline site`);
-      continue;
-    }
     try {
-      const site = draftSiteFromDocument(wrapped);
-      members.push(draftGroundMember(site));
-      const [firstNode] = site.nodes;
+      const parse = _parseGroundMember(null, wrapped);
+      if ("reason" in parse) {
+        issues.push(`segments.${segId}: a site entry is neither a ref nor an inline site`);
+        continue;
+      }
+      members.push(parse.member);
+      const [firstNode] = parse.member.site?.nodes ?? [];
       if (!stampNodeRef && firstNode) {
         stampNodeRef = firstNode.model_ref;
         stampInstalled = { ...firstNode.installed };

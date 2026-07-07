@@ -10,7 +10,9 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  artifactUsesNonEarthBodies,
   completenessFindings,
+  crossSegmentAddressWarnings,
   defaultBoundary,
   bandForFrequencyGhz,
   defaultDraftOrbit,
@@ -24,10 +26,13 @@ import {
   siteObjectFromDraft,
   groundWarnings,
   identifier,
+  matchStampAddress,
   mintSiteMembers,
   newDraftConstellation,
   newDraftGroundSet,
   newRefGroundSet,
+  newRefSegment,
+  nextMintIndex,
   linkWarnings,
   newWorkspace,
   routingWarnings,
@@ -40,7 +45,6 @@ import {
   stampLoopbackAddress,
   stampTerr0Address,
   toSessionDocument,
-  usesNonEarthBodies,
   workspaceFromSessionDocument,
   draftGroundMember,
   newDraftSiteObject,
@@ -975,11 +979,13 @@ describe("held-back incomplete containers", () => {
     // The domain sheds the held-back member but keeps the emitted one.
     const domains = (doc.routing as { domains: Record<string, unknown>[] }).domains;
     expect(JSON.stringify(domains[0]!.selectors)).not.toContain(ground.segment_id);
-    // The hold-back is stated, never silent.
+    // The hold-back is stated, never silent — including the domain that
+    // partially sheds the held-back member (M1 case d).
     expect(
       completenessFindings(ws).some((f) => f.message.includes("held out of the artifact")),
     ).toBe(true);
     expect(linkWarnings(ws).some((w) => w.includes("held out of the artifact"))).toBe(true);
+    expect(routingWarnings(ws).some((w) => w.includes("dropped from the domain"))).toBe(true);
   });
 
   it("a domain whose members are all held back is itself held back", () => {
@@ -992,6 +998,10 @@ describe("held-back incomplete containers", () => {
     ws.routing_domains.push(domain);
     const doc = toSessionDocument(ws) as Record<string, unknown>;
     expect(doc.routing).toBeUndefined();
+    // The whole domain being held out is stated, never silent (M1 case a).
+    expect(
+      routingWarnings(ws).some((w) => w.includes("the domain is held out of the artifact")),
+    ).toBe(true);
   });
 });
 
@@ -1026,7 +1036,7 @@ describe("multi-body ground authoring", () => {
     );
     ws.ground.push(ground);
     expect(ground.members[0]!.site?.body).toBe("nodalarc:bodies/luna.yaml");
-    expect(usesNonEarthBodies(ws)).toBe(true);
+    expect(artifactUsesNonEarthBodies(ws)).toBe(true);
     const doc = toSessionDocument(ws) as any;
     expect(doc.ephemeris).toBeDefined();
     const segment = doc.segments.find((s: any) => s.placement);
@@ -1057,5 +1067,443 @@ describe("multi-body ground authoring", () => {
       "nodalarc:bodies/luna.yaml",
     );
     expect(result.workspace!.ground[0]!.stamp.body).toBe("nodalarc:bodies/luna.yaml");
+  });
+});
+
+describe("ephemeris manifest keys on emitted content, not stamp state (B1)", () => {
+  it("(a) a lunar stamp on a zero-member ground beside Earth content emits no manifest, and round-trips", () => {
+    const ws = newWorkspace("b1-holdback");
+    ws.space.push(newDraftConstellation("nodalarc:nodes/space/x.yaml")); // Earth orbit
+    const lunarGround = newDraftGroundSet(
+      "nodalarc:nodes/ground/g.yaml",
+      {},
+      "nodalarc:bodies/luna.yaml",
+    );
+    ws.ground.push(lunarGround); // zero members → held back, never emitted
+    expect(artifactUsesNonEarthBodies(ws)).toBe(false);
+    const doc = toSessionDocument(ws) as Record<string, unknown>;
+    expect(doc.ephemeris).toBeUndefined();
+    const result = workspaceFromSessionDocument(doc);
+    expect(result.issues).toBeUndefined();
+    expect(toSessionDocument(result.workspace!)).toEqual(doc);
+  });
+
+  it("(b) a lunar member site emits the manifest, and round-trips", () => {
+    const ws = newWorkspace("b1-lunar-member");
+    const g = newDraftGroundSet(
+      "nodalarc:nodes/ground/luna-gw.yaml",
+      {},
+      "nodalarc:bodies/luna.yaml",
+    );
+    g.members = mintSiteMembers(g, parseSiteLines("Base, -89, 0").rows);
+    ws.ground.push(g);
+    expect(artifactUsesNonEarthBodies(ws)).toBe(true);
+    const doc = toSessionDocument(ws) as Record<string, unknown>;
+    expect(doc.ephemeris).toBeDefined();
+    const result = workspaceFromSessionDocument(doc);
+    expect(result.issues).toBeUndefined();
+    expect(toSessionDocument(result.workspace!)).toEqual(doc);
+  });
+
+  it("(c) a by-ref segment whose path suggests luna emits no manifest — refs are opaque client-side", () => {
+    const ws = newWorkspace("b1-ref-opacity");
+    ws.space.push(newDraftConstellation("nodalarc:nodes/space/x.yaml")); // Earth
+    ws.space_refs.push(newRefSegment("nodalarc:constellations/luna/luna-relay.yaml", "luna-relay"));
+    expect(artifactUsesNonEarthBodies(ws)).toBe(false);
+    const doc = toSessionDocument(ws) as Record<string, unknown>;
+    expect(doc.ephemeris).toBeUndefined();
+  });
+
+  it("(d) a by-ref member inside an inline set whose path suggests luna emits no manifest", () => {
+    const ws = newWorkspace("b1-ref-member-opacity");
+    const g = newDraftGroundSet("nodalarc:nodes/ground/g.yaml", {}); // Earth stamp
+    g.members = [
+      refGroundMember("nodalarc:sites/luna/shackleton.yaml", "shackleton", "Shackleton", null),
+    ];
+    ws.ground.push(g); // has a member → emitted, but the member is a ref (no body)
+    expect(artifactUsesNonEarthBodies(ws)).toBe(false);
+    const doc = toSessionDocument(ws) as Record<string, unknown>;
+    expect(doc.ephemeris).toBeUndefined();
+  });
+});
+
+describe("hold-back and removal are stated in routing, never silent (M1)", () => {
+  function shellWorkspace(name: string) {
+    const ws = newWorkspace(name);
+    ws.space.push(newDraftConstellation("nodalarc:nodes/space/x.yaml"));
+    return ws;
+  }
+
+  it("(b) a boundary over a held-back rule says the rule is held out", () => {
+    const ws = shellWorkspace("m1-held-rule");
+    const shell = ws.space[0]!;
+    const ground = newDraftGroundSet("nodalarc:nodes/ground/g.yaml", {});
+    ws.ground.push(ground); // zero members → held back
+    const rule = defaultLinkRule(
+      { segment_id: ground.segment_id, label: "G", kind: "ground" },
+      { segment_id: shell.segment_id, label: "S", kind: "space" },
+    );
+    ws.links.push(rule);
+    const d1 = defaultRoutingDomain(ws);
+    d1.member_segment_ids = [shell.segment_id];
+    const d2 = defaultRoutingDomain(ws);
+    d2.member_segment_ids = [shell.segment_id];
+    ws.routing_domains.push(d1, d2);
+    const boundary = defaultBoundary(ws);
+    boundary.over_rule_id = rule.rule_id;
+    boundary.from_domain_id = d1.domain_id;
+    boundary.to_domain_id = d2.domain_id;
+    ws.boundaries.push(boundary);
+    expect((toSessionDocument(ws) as { link_rules?: unknown }).link_rules).toBeUndefined();
+    expect(
+      routingWarnings(ws).some((w) =>
+        w.includes("rides a link rule that is held out of the artifact"),
+      ),
+    ).toBe(true);
+  });
+
+  it("(c) a boundary over a held-out domain says the domain is held out", () => {
+    const ws = shellWorkspace("m1-held-domain");
+    const shell = ws.space[0]!;
+    const ground = newDraftGroundSet("nodalarc:nodes/ground/g.yaml", {});
+    ws.ground.push(ground); // held back
+    const rule = defaultLinkRule(
+      { segment_id: shell.segment_id, label: "S", kind: "space" },
+      { segment_id: shell.segment_id, label: "S", kind: "space" },
+    );
+    ws.links.push(rule); // ISL over the emitted shell
+    const emittedDomain = defaultRoutingDomain(ws);
+    emittedDomain.member_segment_ids = [shell.segment_id];
+    const heldDomain = defaultRoutingDomain(ws);
+    heldDomain.member_segment_ids = [ground.segment_id]; // all members held back
+    ws.routing_domains.push(emittedDomain, heldDomain);
+    const boundary = defaultBoundary(ws);
+    boundary.over_rule_id = rule.rule_id;
+    boundary.from_domain_id = emittedDomain.domain_id;
+    boundary.to_domain_id = heldDomain.domain_id;
+    ws.boundaries.push(boundary);
+    expect(
+      routingWarnings(ws).some((w) =>
+        w.includes("references a routing domain that is held out of the artifact"),
+      ),
+    ).toBe(true);
+  });
+
+  it("(e) a boundary over a rule whose endpoint segment was removed says the rule is held out", () => {
+    const ws = shellWorkspace("m1-removed-rule");
+    const shell = ws.space[0]!;
+    const rule = defaultLinkRule(
+      { segment_id: shell.segment_id, label: "S", kind: "space" },
+      { segment_id: "space-removed", label: "Gone", kind: "space" },
+    );
+    ws.links.push(rule); // references a segment that is no longer placed
+    const boundary = defaultBoundary(ws);
+    boundary.over_rule_id = rule.rule_id;
+    ws.boundaries.push(boundary);
+    expect((toSessionDocument(ws) as { link_rules?: unknown }).link_rules).toBeUndefined();
+    expect(
+      routingWarnings(ws).some((w) =>
+        w.includes("rides a link rule that is held out of the artifact"),
+      ),
+    ).toBe(true);
+  });
+
+  it("(f) a domain whose members are all removed is held out and named", () => {
+    const ws = shellWorkspace("m1-removed-domain");
+    const domain = defaultRoutingDomain(ws);
+    domain.member_segment_ids = ["space-removed"]; // segment no longer placed
+    ws.routing_domains.push(domain);
+    const warnings = routingWarnings(ws);
+    expect(warnings.some((w) => w.includes("no longer in the session"))).toBe(true);
+    expect(warnings.some((w) => w.includes("the domain is held out of the artifact"))).toBe(true);
+    expect((toSessionDocument(ws) as { routing?: unknown }).routing).toBeUndefined();
+  });
+});
+
+describe("derived inner ids stay unique under a truncating session name (N1)", () => {
+  it("distinct constellation, orbit, and site-set ids for a 48-char session name, and round-trips", () => {
+    const longName = "an-extremely-long-session-name-that-fills-the-cap"; // 49 chars
+    const ws = newWorkspace(longName);
+    ws.space.push(newDraftConstellation("nodalarc:nodes/space/x.yaml"));
+    ws.space.push(newDraftConstellation("nodalarc:nodes/space/x.yaml"));
+    const g1 = newDraftGroundSet("nodalarc:nodes/ground/g.yaml", {});
+    g1.members = mintSiteMembers(g1, parseSiteLines("A, 0, 0").rows);
+    const g2 = newDraftGroundSet("nodalarc:nodes/ground/g.yaml", {});
+    g2.members = mintSiteMembers(g2, parseSiteLines("B, 1, 1").rows);
+    ws.ground.push(g1, g2);
+    const doc = toSessionDocument(ws) as { segments: Record<string, any>[] };
+    const constellationIds = doc.segments
+      .filter((s) => (s.source as any)?.constellation)
+      .map((s) => (s.source as any).constellation.id);
+    const orbitIds = doc.segments
+      .filter((s) => (s.source as any)?.constellation)
+      .map((s) => (s.source as any).constellation.orbit.id);
+    const siteSetIds = doc.segments
+      .filter((s) => (s as any).placement)
+      .map((s) => (s as any).placement.from_site_set.site_set.id);
+    const all = [...constellationIds, ...orbitIds, ...siteSetIds];
+    expect(new Set(all).size).toBe(all.length); // every derived id distinct
+    expect(new Set(constellationIds).size).toBe(2);
+    expect(new Set(siteSetIds).size).toBe(2);
+    // Deterministic ids mean the long-name session still round-trips.
+    const result = workspaceFromSessionDocument(doc as Record<string, unknown>);
+    expect(result.issues).toBeUndefined();
+    expect(toSessionDocument(result.workspace!)).toEqual(doc);
+  });
+
+  it("throws rather than silently colliding when a base exhausts ~1000 suffixes", () => {
+    const ws = newWorkspace("z".repeat(48));
+    for (let i = 0; i < 1000; i += 1) {
+      ws.space.push(newDraftConstellation("nodalarc:nodes/space/x.yaml"));
+    }
+    expect(() => toSessionDocument(ws)).toThrow();
+  });
+});
+
+describe("mint index tracks used addresses, not member count (N2)", () => {
+  const stampedGround = () => newDraftGroundSet("nodalarc:nodes/ground/g.yaml", {});
+
+  it("minting after a delete skips freed indices instead of reusing them", () => {
+    const g = stampedGround();
+    g.members = mintSiteMembers(g, parseSiteLines("A,0,0\nB,1,1\nC,2,2").rows); // indices 0,1,2
+    g.members.splice(0, 1); // delete member A (index 0)
+    const more = mintSiteMembers(g, parseSiteLines("D,3,3").rows);
+    // Next index is one past the highest used (2), NOT the member count (2).
+    expect(more[0]!.site!.lan_ipv4).toBe(stampLanPrefix(g.stamp, 3));
+    expect(more[0]!.site!.nodes[0]!.lo0_ipv4).toBe(stampLoopbackAddress(g.stamp, 3));
+  });
+
+  it("deleting a middle member still skips its index", () => {
+    const g = stampedGround();
+    g.members = mintSiteMembers(g, parseSiteLines("A,0,0\nB,1,1\nC,2,2").rows);
+    g.members.splice(1, 1); // delete member B (index 1)
+    const more = mintSiteMembers(g, parseSiteLines("D,3,3").rows);
+    expect(more[0]!.site!.lan_ipv4).toBe(stampLanPrefix(g.stamp, 3));
+  });
+
+  it("a hand-edited (off-stamp) survivor does not shift the next index", () => {
+    const g = stampedGround();
+    g.members = mintSiteMembers(g, parseSiteLines("A,0,0").rows); // index 0
+    g.members[0]!.site!.lan_ipv4 = "192.0.2.0/24"; // custom, off-stamp
+    g.members[0]!.site!.nodes[0]!.lo0_ipv4 = "192.0.2.1/32";
+    g.members[0]!.site!.nodes[0]!.terr0_ipv4 = "192.0.2.2/24";
+    const more = mintSiteMembers(g, parseSiteLines("B,1,1").rows);
+    // The custom survivor reserves nothing → index 0 is free again.
+    expect(more[0]!.site!.lan_ipv4).toBe(stampLanPrefix(g.stamp, 0));
+  });
+
+  it("a partial-edit survivor still reserves its stamp index", () => {
+    const g = stampedGround();
+    g.members = mintSiteMembers(g, parseSiteLines("A,0,0\nB,1,1").rows); // indices 0,1
+    // Member B: only its LAN still matches index 1; lo0/terr0 hand-edited off-stamp.
+    g.members[1]!.site!.nodes[0]!.lo0_ipv4 = "192.0.2.9/32";
+    g.members[1]!.site!.nodes[0]!.terr0_ipv4 = "192.0.2.9/24";
+    const more = mintSiteMembers(g, parseSiteLines("C,2,2").rows);
+    // B's surviving LAN still reserves index 1 → next mint is 2.
+    expect(more[0]!.site!.lan_ipv4).toBe(stampLanPrefix(g.stamp, 2));
+  });
+});
+
+describe("addressing honesty: shape-first matcher + within/cross-segment warnings (N3)", () => {
+  it("matches stamp shapes before range so an overflowed octet stays visible", () => {
+    const stamp = {
+      ...newDraftGroundSet("n", {}).stamp,
+      lan_base: "172.20",
+      loopback_base: "10.200",
+    };
+    expect(matchStampAddress("172.20.5.0/24", stamp)).toEqual({
+      form: "lan",
+      index: 5,
+      inRange: true,
+    });
+    expect(matchStampAddress("172.20.5.1/24", stamp)).toEqual({
+      form: "terr0",
+      index: 5,
+      inRange: true,
+    });
+    expect(matchStampAddress("10.200.0.6/32", stamp)).toEqual({
+      form: "lo0",
+      index: 5,
+      inRange: true,
+    });
+    expect(matchStampAddress("10.200.0.256/32", stamp)).toEqual({
+      form: "lo0",
+      index: 255,
+      inRange: false,
+    });
+    expect(matchStampAddress("192.0.2.1/24", stamp)).toBeNull();
+  });
+
+  it("warns on an already-minted address whose octet overflowed 255", () => {
+    const g = newDraftGroundSet("nodalarc:nodes/ground/g.yaml", {});
+    const site = newDraftSiteObject("nodalarc:nodes/ground/g.yaml", {});
+    site.site_id = "edge";
+    site.nodes[0]!.lo0_ipv4 = `${g.stamp.loopback_base}.0.256/32`;
+    g.members = [draftGroundMember(site)];
+    expect(groundWarnings(g).some((w) => w.includes("runs past .255"))).toBe(true);
+  });
+
+  it("warns when the segment has no addressing room left", () => {
+    const g = newDraftGroundSet("nodalarc:nodes/ground/g.yaml", {});
+    const site = newDraftSiteObject("nodalarc:nodes/ground/g.yaml", {});
+    site.site_id = "edge";
+    site.lan_ipv4 = stampLanPrefix(g.stamp, 254);
+    site.nodes[0]!.lo0_ipv4 = stampLoopbackAddress(g.stamp, 254);
+    site.nodes[0]!.terr0_ipv4 = stampTerr0Address(g.stamp, 254);
+    g.members = [draftGroundMember(site)];
+    expect(nextMintIndex(g)).toBe(255);
+    expect(groundWarnings(g).some((w) => w.includes("no addressing room"))).toBe(true);
+  });
+
+  it("treats equal host addresses across families as a collision, mask-independent", () => {
+    const g = newDraftGroundSet("nodalarc:nodes/ground/g.yaml", {});
+    const site = newDraftSiteObject("nodalarc:nodes/ground/g.yaml", {});
+    site.site_id = "collider";
+    site.lan_ipv4 = "172.30.9.0/24";
+    site.nodes[0]!.lo0_ipv4 = "10.9.9.9/32";
+    site.nodes[0]!.terr0_ipv4 = "10.9.9.9/24"; // same host as lo0, different mask
+    g.members = [draftGroundMember(site)];
+    expect(
+      groundWarnings(g).some((w) => w.includes("10.9.9.9") && w.includes("already used")),
+    ).toBe(true);
+  });
+
+  it("(potential) two ground segments that share a stamp base warn before either mints", () => {
+    const ws = newWorkspace("addr-share");
+    const a = newDraftGroundSet("nodalarc:nodes/ground/g.yaml", {});
+    const b = newDraftGroundSet("nodalarc:nodes/ground/g.yaml", {});
+    b.stamp.lan_base = a.stamp.lan_base; // the 12-wrap makes bases repeat
+    ws.ground.push(a, b);
+    expect(
+      crossSegmentAddressWarnings(ws).some((c) => c.message.includes("would collide")),
+    ).toBe(true);
+    // Surfaced on the rail as one aggregate finding jumping to a ground editor.
+    expect(
+      completenessFindings(ws).some(
+        (f) => f.target?.kind === "ground" && f.message.includes("would collide"),
+      ),
+    ).toBe(true);
+  });
+
+  it("(actual) a minted host present in two segments warns as colliding", () => {
+    const ws = newWorkspace("addr-collide");
+    const a = newDraftGroundSet("nodalarc:nodes/ground/g.yaml", {});
+    const b = newDraftGroundSet("nodalarc:nodes/ground/g.yaml", {});
+    b.stamp.lan_base = a.stamp.lan_base;
+    b.stamp.loopback_base = a.stamp.loopback_base;
+    a.members = mintSiteMembers(a, parseSiteLines("A, 0, 0").rows);
+    b.members = mintSiteMembers(b, parseSiteLines("B, 1, 1").rows); // same index 0 → same addresses
+    ws.ground.push(a, b);
+    expect(crossSegmentAddressWarnings(ws).some((c) => c.message.includes("colliding"))).toBe(
+      true,
+    );
+  });
+
+  it("(cross-family) a lan_base equal to a loopback_base warns", () => {
+    const ws = newWorkspace("addr-cross-family");
+    const a = newDraftGroundSet("nodalarc:nodes/ground/g.yaml", {});
+    a.stamp.loopback_base = a.stamp.lan_base; // lan and loopback collide within one draft
+    ws.ground.push(a);
+    expect(crossSegmentAddressWarnings(ws).length).toBeGreaterThan(0);
+  });
+});
+
+describe("a refused import advances no module id counter (N5)", () => {
+  function probeCounters() {
+    const wsp = newWorkspace("probe");
+    return {
+      draft: Number(newDraftConstellation("x").segment_id.split("-")[1]),
+      ref: Number(newRefSegment("r", "l").segment_id.split("-")[1]),
+      ground: Number(newDraftGroundSet("x", {}).segment_id.split("-")[1]),
+      member: Number(refGroundMember("r", "s", "l", null).member_id.split("-")[1]),
+      link: Number(
+        defaultLinkRule(
+          { segment_id: "a", label: "A", kind: "space" },
+          { segment_id: "b", label: "B", kind: "space" },
+        ).rule_id.split("-")[1],
+      ),
+      domain: Number(defaultRoutingDomain(wsp).domain_id.split("-")[1]),
+      boundary: Number(defaultBoundary(wsp).boundary_id.split("-")[1]),
+    };
+  }
+
+  function importableWorkspace(name: string) {
+    const ws = newWorkspace(name);
+    const shell = newDraftConstellation("nodalarc:nodes/space/x.yaml");
+    ws.space.push(shell);
+    const ground = newDraftGroundSet("nodalarc:nodes/ground/g.yaml", {});
+    ground.members = mintSiteMembers(ground, parseSiteLines("A, 0, 0").rows);
+    ws.ground.push(ground);
+    const rule = defaultLinkRule(
+      { segment_id: ground.segment_id, label: ground.display_name, kind: "ground" },
+      { segment_id: shell.segment_id, label: shell.display_name, kind: "space" },
+    );
+    ws.links.push(rule);
+    ws.routing_domains.push(defaultRoutingDomain(ws));
+    return ws;
+  }
+
+  it("an early parse refusal restores every family counter", () => {
+    const document = toSessionDocument(importableWorkspace("n5-early")) as Record<string, unknown>;
+    document.addressing = { loopbacks: {} }; // unknown top-level block → refusal
+    const before = probeCounters();
+    const result = workspaceFromSessionDocument(document);
+    expect(result.issues).toBeDefined();
+    const after = probeCounters();
+    for (const key of Object.keys(before) as (keyof typeof before)[]) {
+      expect(after[key]).toBe(before[key] + 1);
+    }
+  });
+
+  it("a deep parse that refuses at the fidelity check restores every family counter", () => {
+    const document = toSessionDocument(importableWorkspace("n5-deep")) as Record<string, unknown>;
+    // A field the importer ignores and the serializer re-derives → fidelity diff.
+    const segments = document.segments as Record<string, unknown>[];
+    const inline = segments.find((s) => typeof s.source === "object")!;
+    ((inline.source as Record<string, unknown>).constellation as Record<string, unknown>).id =
+      "hand-renamed-inner-id";
+    const before = probeCounters();
+    const result = workspaceFromSessionDocument(document);
+    expect(result.issues!.some((i) => i.includes("cannot reproduce"))).toBe(true);
+    const after = probeCounters();
+    for (const key of Object.keys(before) as (keyof typeof before)[]) {
+      expect(after[key]).toBe(before[key] + 1);
+    }
+  });
+
+  it("contains a re-serialize cap-throw as a refusal, leaking no counter", () => {
+    const bigName = "z".repeat(48);
+    const constellationSegment = (i: number) => ({
+      id: `space-${i}`,
+      source: {
+        constellation: {
+          display_name: `C${i}`,
+          node: "nodalarc:nodes/space/x.yaml",
+          orbit: {
+            central_body: "nodalarc:bodies/earth.yaml",
+            shape: { altitude_km: 550 },
+            orientation: { inclination_deg: 0, raan_deg: 0, argument_of_perigee_deg: 0 },
+            phase: { mean_anomaly_deg: 0 },
+            propagator: "j2_mean_elements",
+          },
+          planes: { count: 1, raan_spacing_deg: 0 },
+          slots_per_plane: 1,
+          phasing: { mode: "evenly_spaced_mean_anomaly", phase_offset_deg: 0 },
+        },
+      },
+    });
+    const document: Record<string, unknown> = {
+      session: { name: bigName },
+      segments: Array.from({ length: 1000 }, (_, i) => constellationSegment(i + 1)),
+      routing: { domains: [{ id: "d", protocol: "isis", selectors: [{ segment: "space-1" }] }] },
+      time: { start_time: "2026-01-01T00:00:00Z", step_seconds: 1, compression: 1 },
+    };
+    const before = probeCounters();
+    const result = workspaceFromSessionDocument(document);
+    expect(result.issues).toBeDefined();
+    expect(result.issues!.join(" ")).toContain("cannot reproduce this session");
+    const after = probeCounters();
+    // The domain the parse minted was rolled back with everything else.
+    expect(after.domain).toBe(before.domain + 1);
   });
 });

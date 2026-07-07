@@ -279,10 +279,10 @@ export const ORBIT_PRESETS: { label: string; orbit: Partial<DraftOrbit> }[] = [
 export const EARTH_BODY_REF = "nodalarc:bodies/earth.yaml";
 
 /** The shipped planetary-ephemeris manifest (DE440s), exactly as the
- *  reference multi-body session declares it. A session whose orbits leave
- *  Earth must carry a kernel manifest; the builder seeds this one and the
- *  artifact column shows it — the resolver still validates file and
- *  checksum server-side. */
+ *  reference multi-body session declares it. A session that places any node
+ *  on a body other than Earth must carry a kernel manifest; the builder seeds
+ *  this one and the artifact column shows it — the resolver still validates
+ *  file and checksum server-side. */
 export const DE440S_EPHEMERIS = {
   provider: "skyfield_bsp",
   quality_tier: "de440s",
@@ -299,13 +299,23 @@ export const DE440S_EPHEMERIS = {
   ],
 } as const;
 
-/** True when any authored orbit is around a body other than Earth. */
-export function usesNonEarthBodies(workspace: Workspace): boolean {
+/** True when the EMITTED session places any node on a body other than Earth —
+ *  a non-Earth central body on an emitted orbit, or a non-Earth member site on
+ *  a ground segment that is actually emitted. Keyed on what toSessionDocument
+ *  emits, never on mint-time stamp state: `stamp.body` is a seed the serializer
+ *  never writes, so keying the manifest on it would let the builder's own saved
+ *  file carry an ephemeris its strict inverse then refuses on reload (a
+ *  held-back ground contributes no emitted content, so its stamp cannot pull a
+ *  manifest into the document). By-ref segments and by-ref members carry no
+ *  body client-side (the L1 ledger item): a lunar by-ref placement hits the
+ *  resolver wall, never a false manifest here. */
+export function artifactUsesNonEarthBodies(workspace: Workspace): boolean {
+  const held = heldBackGroundIds(workspace);
   return (
     workspace.space.some((draft) => draft.orbit.central_body !== EARTH_BODY_REF) ||
     workspace.ground.some(
       (draft) =>
-        draft.stamp.body !== EARTH_BODY_REF ||
+        !held.has(draft.segment_id) &&
         draft.members.some(
           (member) => member.site !== null && member.site.body !== EARTH_BODY_REF,
         ),
@@ -631,6 +641,34 @@ export function identifier(value: string): string {
     .slice(0, 48);
 }
 
+/** Allocate a unique grammar Identifier for a derived inner object id — the
+ *  constellation, orbit, and site-set ids toSessionDocument builds from the
+ *  session name and segment id. identifier() truncates to 48 chars, so under a
+ *  long session name two segments' derived ids would collapse onto each other.
+ *  On collision the base is shortened before the numeric suffix is appended so
+ *  the suffix survives truncation — a suffix-only scheme re-truncates every
+ *  candidate back to the same 48 chars and never converges. One shared
+ *  taken-set spans every derived id in the document, so the families cannot
+ *  collide across each other either. Throws only on genuine suffix exhaustion
+ *  (~1000 objects sharing one base); N1's base-shortening makes that
+ *  unreachable for ordinary authored content. */
+function uniqueDerivedId(base: string, taken: Set<string>): string {
+  const direct = identifier(base);
+  if (!taken.has(direct)) {
+    taken.add(direct);
+    return direct;
+  }
+  const stem = base.slice(0, 40);
+  for (let n = 2; n < 1000; n += 1) {
+    const candidate = identifier(`${stem} ${n}`);
+    if (!taken.has(candidate)) {
+      taken.add(candidate);
+      return candidate;
+    }
+  }
+  throw new Error(`cannot allocate a unique id for "${direct}" — too many collisions`);
+}
+
 /** IEEE/ITU letter bands as used for satellite allocations. The frequency
  *  is the single source of truth; the band name derives from it — picking a
  *  band seeds a typical satcom frequency the user then owns (IG-7). */
@@ -810,8 +848,10 @@ let groundCounter = 0;
 let memberCounter = 0;
 
 /** A blank ground segment: blank-first (defined sites arrive from the
- *  library, forks, or minting by paste). Stamp bases stagger per draft so
- *  two authored segments never collide by default — all editable. */
+ *  library, forks, or minting by paste). Stamp bases stagger per draft to keep
+ *  authored segments apart, but the stagger wraps every 12 (lan) / 55
+ *  (loopback) segments — past that two segments share a base and the
+ *  addressing warnings flag it. All editable. */
 export function newDraftGroundSet(
   nodeRef: string,
   installed: Record<string, number>,
@@ -847,6 +887,77 @@ export function stampTerr0Address(stamp: GroundStamp, index: number): string {
 
 export function stampLoopbackAddress(stamp: GroundStamp, index: number): string {
   return `${stamp.loopback_base}.0.${index + 1}/32`;
+}
+
+/** A stamp-derived address matched back to its form and mint index, or null
+ *  when the address is not stamp-shaped. Shape is checked before range: an
+ *  already-minted address whose octet overflowed (`base.0.256/32`) still
+ *  matches its form and reports `inRange: false`, so the overflow stays
+ *  visible instead of being parsed away. This is the single stamp-address
+ *  parser — mintSiteMembers, nextMintIndex, and the addressing warnings all
+ *  read it, so no second parser can drift from these three forms. */
+export interface StampAddressMatch {
+  form: "lan" | "terr0" | "lo0";
+  index: number;
+  inRange: boolean;
+}
+export function matchStampAddress(
+  address: string,
+  stamp: GroundStamp,
+): StampAddressMatch | null {
+  const esc = (base: string) => base.replace(/\./g, "\\.");
+  const lanRe = new RegExp(`^${esc(stamp.lan_base)}\\.(\\d+)\\.0/24$`);
+  const terrRe = new RegExp(`^${esc(stamp.lan_base)}\\.(\\d+)\\.1/24$`);
+  const loRe = new RegExp(`^${esc(stamp.loopback_base)}\\.0\\.(\\d+)/32$`);
+  const inOctet = (value: number) => value >= 0 && value <= 255;
+  const lan = lanRe.exec(address);
+  if (lan) {
+    const octet = Number(lan[1]);
+    return { form: "lan", index: octet, inRange: inOctet(octet) };
+  }
+  const terr = terrRe.exec(address);
+  if (terr) {
+    const octet = Number(terr[1]);
+    return { form: "terr0", index: octet, inRange: inOctet(octet) };
+  }
+  const lo = loRe.exec(address);
+  if (lo) {
+    const octet = Number(lo[1]);
+    return { form: "lo0", index: octet - 1, inRange: inOctet(octet) };
+  }
+  return null;
+}
+
+/** The host portion of a CIDR address, mask-stripped — two addresses collide
+ *  when their hosts are equal regardless of prefix length (terr0 `x/24` and
+ *  lo0 `x/32` are the same host). */
+export function stampAddressHost(address: string): string {
+  return address.split("/")[0] ?? address;
+}
+
+/** The next free mint index for a ground draft: one past the highest index any
+ *  surviving stamp-shaped address already reserves, across lan, terr0, and lo0.
+ *  Any single matching form reserves its index — a complete triple is not
+ *  required — so deleting a member and minting again never reuses the freed
+ *  index and re-collides with a survivor. Custom, hand-edited, and by-ref
+ *  members carry no stamp index and are skipped; an empty or all-custom draft
+ *  is 0. GroundEditor's "next minted site" preview must read this same
+ *  function, never a second count. */
+export function nextMintIndex(draft: DraftGroundSet): number {
+  let max = -1;
+  for (const member of draft.members) {
+    const site = member.site;
+    if (!site) continue;
+    const addresses = [
+      site.lan_ipv4,
+      ...site.nodes.flatMap((node) => [node.lo0_ipv4, node.terr0_ipv4]),
+    ];
+    for (const address of addresses) {
+      const match = matchStampAddress(address, draft.stamp);
+      if (match) max = Math.max(max, match.index);
+    }
+  }
+  return max + 1;
 }
 
 /** The grammar id a member answers to (override matching keys on it). */
@@ -897,14 +1008,15 @@ export function parseSiteLines(text: string): { rows: ParsedSiteLine[]; errors: 
 
 /** Mint full sites from pasted rows using the segment's stamp — node model,
  *  installed mounts, and derived addressing are applied at creation; each
- *  minted site owns its configuration afterwards. Mint indices continue
- *  from the count of existing draft members so addressing never collides
- *  within the segment. */
+ *  minted site owns its configuration afterwards. Mint indices continue past
+ *  the highest addressing index already in use in the segment (nextMintIndex),
+ *  so deleting a member and minting again never reuses a freed index and
+ *  re-collides with a survivor. */
 export function mintSiteMembers(
   draft: DraftGroundSet,
   rows: ParsedSiteLine[],
 ): DraftGroundSite[] {
-  const start = draft.members.filter((member) => member.kind === "draft").length;
+  const start = nextMintIndex(draft);
   return rows.map((row, offset) => {
     const index = start + offset;
     memberCounter += 1;
@@ -1119,7 +1231,7 @@ export function groundWarnings(draft: DraftGroundSet): string[] {
     );
   }
   const seenIds = new Set<string>();
-  const seenLans = new Set<string>();
+  const seenHosts = new Set<string>();
   for (const member of draft.members) {
     const id = memberSiteId(member);
     if (seenIds.has(id)) {
@@ -1128,16 +1240,36 @@ export function groundWarnings(draft: DraftGroundSet): string[] {
     seenIds.add(id);
     const site = member.site;
     if (!site) continue;
-    if (seenLans.has(site.lan_ipv4)) {
-      warnings.push(`${site.display_name}: lan ${site.lan_ipv4} is already used in this segment`);
+    // Host-address equality is mask-independent and spans families: a terr0
+    // x/24 and a lo0 x/32 are the same host, so a per-family string compare
+    // would miss a lan_base that equals a loopback_base.
+    for (const address of [
+      site.lan_ipv4,
+      ...site.nodes.flatMap((node) => [node.lo0_ipv4, node.terr0_ipv4]),
+    ]) {
+      const host = stampAddressHost(address);
+      if (seenHosts.has(host)) {
+        warnings.push(`${site.display_name}: address ${host} is already used in this segment`);
+      }
+      seenHosts.add(host);
+      const match = matchStampAddress(address, draft.stamp);
+      if (match && !match.inRange) {
+        warnings.push(
+          `${site.display_name}: address ${address} runs past .255 — outside the stamp's addressing range`,
+        );
+      }
     }
-    seenLans.add(site.lan_ipv4);
     if (Math.abs(site.lat_deg) > 90) {
       warnings.push(`${site.display_name}: latitude ${site.lat_deg} is off the map (±90)`);
     }
     if (Math.abs(site.lon_deg) > 180) {
       warnings.push(`${site.display_name}: longitude ${site.lon_deg} is off the map (±180)`);
     }
+  }
+  if (nextMintIndex(draft) > 254) {
+    warnings.push(
+      "no addressing room left — the next minted site would run past stamp index 254",
+    );
   }
   return warnings;
 }
@@ -1293,11 +1425,16 @@ export function defaultLinkRule(
   // second connect never trips the duplicate-id wall before the rename.
   // identifier() truncates to 48 chars, so compare truncated ids and keep
   // the base short enough that the numeric suffix survives truncation.
-  const taken = new Set(existing.map((r) => identifier(r.label) || r.rule_id));
+  const taken = new Set(existing.map(emittedRuleId));
   if (taken.has(identifier(rule.label))) {
     const base = rule.label.slice(0, 40);
     let n = 2;
-    while (taken.has(identifier(`${base} ${n}`)) && n < 1000) n += 1;
+    while (taken.has(identifier(`${base} ${n}`))) {
+      n += 1;
+      if (n >= 1000) {
+        throw new Error(`cannot make link rule name "${rule.label}" unique`);
+      }
+    }
     rule.label = `${base} ${n}`;
   }
   return rule;
@@ -1311,7 +1448,7 @@ export function linkWarnings(workspace: Workspace): string[] {
   const held = heldBackGroundIds(workspace);
   const seenIds = new Set<string>();
   for (const rule of workspace.links) {
-    const id = identifier(rule.label) || rule.rule_id;
+    const id = emittedRuleId(rule);
     if (seenIds.has(id)) {
       warnings.push(`two link rules named "${id}" — rename one`);
     }
@@ -1384,11 +1521,47 @@ export function emittedDomainId(domain: DraftRoutingDomain): string {
   return identifier(domain.label) || domain.domain_id;
 }
 
+/** The segment ids that actually appear in the emitted document: every placed
+ *  segment except held-back grounds (no sites yet). This is the single source
+ *  of the emission decision — toSessionDocument and routingWarnings both read
+ *  it, so a segment cannot be silently present in one view and absent in the
+ *  other. That drift is exactly the class that produced B1. */
+export function emittedSegmentIds(workspace: Workspace): Set<string> {
+  const held = heldBackGroundIds(workspace);
+  return new Set(
+    placedSegments(workspace)
+      .map((s) => s.segment_id)
+      .filter((id) => !held.has(id)),
+  );
+}
+
+/** A link rule is emitted when both its endpoints are emitted segments. */
+export function isEmittedRule(rule: DraftLinkRule, emitted: Set<string>): boolean {
+  return emitted.has(rule.a.segment_id) && emitted.has(rule.b.segment_id);
+}
+
+/** The emitted members of a routing domain — its member segments that survive
+ *  the emission filter. A domain with none is not emitted at all. */
+export function emittedDomainMembers(
+  domain: DraftRoutingDomain,
+  emitted: Set<string>,
+): string[] {
+  return domain.member_segment_ids.filter((id) => emitted.has(id));
+}
+
 /** Routing sanity findings: warn, never block — the resolver's verdict on
- *  the emitted routing block arrives verbatim through the resolve-check. */
+ *  the emitted routing block arrives verbatim through the resolve-check.
+ *  Hold-back is stated, never silent: a domain or boundary whose emitted
+ *  shape differs from what was authored (a member shed, a rule or domain not
+ *  emitted) says so, mirroring linkWarnings. Emission is read from the same
+ *  shared functions toSessionDocument uses, so the two never disagree. */
 export function routingWarnings(workspace: Workspace): string[] {
   const warnings: string[] = [];
-  const placed = new Set(placedSegments(workspace).map((s) => s.segment_id));
+  const segments = placedSegments(workspace);
+  const placed = new Set(segments.map((s) => s.segment_id));
+  const labelById = new Map(segments.map((s) => [s.segment_id, s.label]));
+  const emitted = emittedSegmentIds(workspace);
+  const held = heldBackGroundIds(workspace);
   const domainIds = new Set<string>();
   for (const domain of workspace.routing_domains) {
     const id = emittedDomainId(domain);
@@ -1401,8 +1574,25 @@ export function routingWarnings(workspace: Workspace): string[] {
     }
     for (const member of domain.member_segment_ids) {
       if (!placed.has(member)) {
+        // (f) the removed-segment drive: a member no longer placed.
         warnings.push(`${domain.label}: segment "${member}" is no longer in the session`);
+      } else if (held.has(member)) {
+        // (a)/(d) a placed-but-held-back member is silently shed from the
+        // emitted domain — state it per member, the way linkWarnings does.
+        warnings.push(
+          `${domain.label}: "${labelById.get(member) ?? member}" has no sites yet — dropped from the domain until it does`,
+        );
       }
+    }
+    // (a)/(f) the domain has authored members but none survive emission — the
+    // whole domain is held out of the artifact, not merely reduced.
+    if (
+      domain.member_segment_ids.length > 0 &&
+      emittedDomainMembers(domain, emitted).length === 0
+    ) {
+      warnings.push(
+        `${domain.label}: no members are emitted yet — the domain is held out of the artifact`,
+      );
     }
     if (
       domain.hello_interval_s !== null &&
@@ -1412,11 +1602,23 @@ export function routingWarnings(workspace: Workspace): string[] {
       warnings.push(`${domain.label}: hold must exceed hello`);
     }
   }
-  const ruleIds = new Set(workspace.links.map((rule) => rule.rule_id));
+  const ruleById = new Map(workspace.links.map((rule) => [rule.rule_id, rule]));
+  const emittedRuleIds = new Set(
+    workspace.links.filter((rule) => isEmittedRule(rule, emitted)).map((rule) => rule.rule_id),
+  );
+  const emittedDomainIds = new Set(
+    workspace.routing_domains
+      .filter((domain) => emittedDomainMembers(domain, emitted).length > 0)
+      .map((domain) => domain.domain_id),
+  );
   const draftDomainIds = new Set(workspace.routing_domains.map((d) => d.domain_id));
   for (const boundary of workspace.boundaries) {
-    if (!ruleIds.has(boundary.over_rule_id)) {
+    if (!ruleById.has(boundary.over_rule_id)) {
       warnings.push("a boundary rides a link rule that is no longer in the session");
+    } else if (!emittedRuleIds.has(boundary.over_rule_id)) {
+      // (b)/(e) the rule still exists but is not emitted — a held-back
+      // endpoint or a removed endpoint segment — so the boundary rides nothing.
+      warnings.push("a boundary rides a link rule that is held out of the artifact");
     }
     if (
       !draftDomainIds.has(boundary.from_domain_id) ||
@@ -1425,6 +1627,13 @@ export function routingWarnings(workspace: Workspace): string[] {
       warnings.push("a boundary references a routing domain that no longer exists");
     } else if (boundary.from_domain_id === boundary.to_domain_id) {
       warnings.push("a boundary must exchange between two different domains");
+    } else if (
+      !emittedDomainIds.has(boundary.from_domain_id) ||
+      !emittedDomainIds.has(boundary.to_domain_id)
+    ) {
+      // (c) the domain exists but is held out of the artifact (its members
+      // were all shed), so the boundary references nothing emitted.
+      warnings.push("a boundary references a routing domain that is held out of the artifact");
     }
   }
   return warnings;
@@ -1440,6 +1649,63 @@ export interface CompletenessFinding {
     | { kind: "ground"; id: string }
     | { kind: "link"; id: string }
     | null;
+}
+
+/** Cross-segment addressing collisions — a workspace property a single
+ *  ground draft cannot see (groundWarnings owns the within-draft checks).
+ *  Two classes: POTENTIAL, two stamp bases that are equal (same family across
+ *  drafts, or a lan_base equal to a loopback_base within or across drafts) —
+ *  the stagger wraps every 12 (lan) / 55 (loopback) drafts, so equal bases are
+ *  reachable and warning only after members actually collide warns too late;
+ *  and ACTUAL, a minted host address present in two different segments
+ *  (host-address equality is mask-independent and spans families). Bases and
+ *  hosts are compared raw, never through the stamp matcher, so hand-edited and
+ *  custom addresses collide honestly too. */
+export function crossSegmentAddressWarnings(
+  workspace: Workspace,
+): { message: string; groundId: string }[] {
+  const collisions: { message: string; groundId: string }[] = [];
+  const baseOwners = new Map<string, DraftGroundSet[]>();
+  for (const draft of workspace.ground) {
+    for (const base of [draft.stamp.lan_base, draft.stamp.loopback_base]) {
+      const owners = baseOwners.get(base) ?? [];
+      owners.push(draft);
+      baseOwners.set(base, owners);
+    }
+  }
+  for (const [base, owners] of baseOwners) {
+    if (owners.length < 2) continue;
+    const names = [...new Set(owners.map((d) => d.display_name))];
+    collisions.push({
+      message: `${names.join(" and ")} share addressing base ${base} — minted members would collide`,
+      groundId: owners[0]!.segment_id,
+    });
+  }
+  const hostOwners = new Map<string, Map<string, DraftGroundSet>>();
+  for (const draft of workspace.ground) {
+    for (const member of draft.members) {
+      const site = member.site;
+      if (!site) continue;
+      for (const address of [
+        site.lan_ipv4,
+        ...site.nodes.flatMap((node) => [node.lo0_ipv4, node.terr0_ipv4]),
+      ]) {
+        const host = stampAddressHost(address);
+        const owners = hostOwners.get(host) ?? new Map<string, DraftGroundSet>();
+        owners.set(draft.segment_id, draft);
+        hostOwners.set(host, owners);
+      }
+    }
+  }
+  for (const [host, owners] of hostOwners) {
+    if (owners.size < 2) continue;
+    const drafts = [...owners.values()];
+    collisions.push({
+      message: `${drafts.map((d) => d.display_name).join(" and ")}: address ${host} is used in both — colliding`,
+      groundId: drafts[0]!.segment_id,
+    });
+  }
+  return collisions;
 }
 
 /** The completeness rail's source: object-level authoring gaps with
@@ -1490,6 +1756,20 @@ export function completenessFindings(workspace: Workspace): CompletenessFinding[
     findings.push({
       message: `${routingCount} routing ${routingCount === 1 ? "finding" : "findings"}`,
       target: null,
+    });
+  }
+  // Cross-segment addressing collisions render only here (per-editor inline
+  // display would pull BuilderView into the phase); one aggregate row names
+  // the first affected pair and jumps to its ground editor.
+  const addressCollisions = crossSegmentAddressWarnings(workspace);
+  if (addressCollisions.length > 0) {
+    const first = addressCollisions[0]!;
+    findings.push({
+      message:
+        addressCollisions.length === 1
+          ? first.message
+          : `${first.message} (+${addressCollisions.length - 1} more)`,
+      target: { kind: "ground", id: first.groundId },
     });
   }
   return findings;
@@ -1556,11 +1836,12 @@ export function heldBackGroundIds(workspace: Workspace): Set<string> {
 /** Serialize the workspace to the session grammar (the one artifact). */
 export function toSessionDocument(workspace: Workspace): Record<string, unknown> {
   const heldGrounds = heldBackGroundIds(workspace);
-  const emittedSegmentIds = new Set(
-    placedSegments(workspace)
-      .map((s) => s.segment_id)
-      .filter((id) => !heldGrounds.has(id)),
-  );
+  const emitted = emittedSegmentIds(workspace);
+  // One taken-set across every derived inner id in the document, so a long
+  // session name cannot truncate two segments' constellation/orbit/site-set
+  // ids onto each other (N1). Property values evaluate top-to-bottom, so the
+  // ids are allocated in a stable order and the round-trip stays deterministic.
+  const derivedIds = new Set<string>();
   const refSegments: unknown[] = workspace.space_refs.map((placed) => ({
     id: identifier(placed.segment_id),
     source: placed.ref,
@@ -1569,11 +1850,11 @@ export function toSessionDocument(workspace: Workspace): Record<string, unknown>
     id: identifier(draft.segment_id),
     source: {
       constellation: {
-        id: identifier(`${workspace.name}-${draft.segment_id}`),
+        id: uniqueDerivedId(`${workspace.name}-${draft.segment_id}`, derivedIds),
         display_name: draft.display_name,
         node: draft.node_draft ? nodeObjectFromDraft(draft.node_draft) : draft.node_ref,
         orbit: {
-          id: identifier(`${draft.segment_id}-orbit`),
+          id: uniqueDerivedId(`${draft.segment_id}-orbit`, derivedIds),
           central_body: draft.orbit.central_body,
           epoch: workspace.start_time,
           shape:
@@ -1630,7 +1911,7 @@ export function toSessionDocument(workspace: Workspace): Record<string, unknown>
         from_site_set: {
           site_set: siteSetObjectFromDraft(
             draft,
-            identifier(`${workspace.name}-${draft.segment_id}`),
+            uniqueDerivedId(`${workspace.name}-${draft.segment_id}`, derivedIds),
           ),
         },
       },
@@ -1645,12 +1926,9 @@ export function toSessionDocument(workspace: Workspace): Record<string, unknown>
     };
   });
 
-  const emittedRules = workspace.links.filter(
-    (rule) =>
-      emittedSegmentIds.has(rule.a.segment_id) && emittedSegmentIds.has(rule.b.segment_id),
-  );
+  const emittedRules = workspace.links.filter((rule) => isEmittedRule(rule, emitted));
   const linkRules: unknown[] = emittedRules.map((rule) => ({
-    id: identifier(rule.label) || rule.rule_id,
+    id: emittedRuleId(rule),
     ...(rule.enabled ? {} : { enabled: false }),
     topology:
       rule.topology_mode === "nearest_n"
@@ -1678,7 +1956,7 @@ export function toSessionDocument(workspace: Workspace): Record<string, unknown>
   const emittedDomains = workspace.routing_domains
     .map((domain) => ({
       domain,
-      members: domain.member_segment_ids.filter((id) => emittedSegmentIds.has(id)),
+      members: emittedDomainMembers(domain, emitted),
     }))
     .filter(({ members }) => members.length > 0);
   const domains: unknown[] = emittedDomains.map(({ domain, members }) => ({
@@ -1765,9 +2043,10 @@ export function toSessionDocument(workspace: Workspace): Record<string, unknown>
       step_seconds: workspace.step_seconds,
       compression: workspace.compression,
     },
-    // Orbits beyond Earth need body frames from a kernel manifest — the
-    // resolver refuses a non-Earth session without one.
-    ...(usesNonEarthBodies(workspace) ? { ephemeris: DE440S_EPHEMERIS } : {}),
+    // A session that places any node beyond Earth needs body frames from a
+    // kernel manifest — the resolver refuses a non-Earth session without one.
+    // Keyed on the emitted content, never on mint-time stamp state (B1).
+    ...(artifactUsesNonEarthBodies(workspace) ? { ephemeris: DE440S_EPHEMERIS } : {}),
   };
 }
 
@@ -2044,6 +2323,52 @@ function _importEndpoint(
 }
 
 export function workspaceFromSessionDocument(
+  document: Record<string, unknown>,
+): WorkspaceImport {
+  // A refused import is a pure no-op: it must advance no module id counter,
+  // and the fidelity re-serialize can throw on a pathological id collision
+  // (N1's uniquify cap). Snapshot every family on entry; restore on any
+  // refusal or throw; keep the advanced (then reseeded) counters only on a
+  // clean import.
+  const saved = {
+    draftCounter,
+    refCounter,
+    groundCounter,
+    memberCounter,
+    linkCounter,
+    domainCounter,
+    boundaryCounter,
+  };
+  const restore = () => {
+    draftCounter = saved.draftCounter;
+    refCounter = saved.refCounter;
+    groundCounter = saved.groundCounter;
+    memberCounter = saved.memberCounter;
+    linkCounter = saved.linkCounter;
+    domainCounter = saved.domainCounter;
+    boundaryCounter = saved.boundaryCounter;
+  };
+  try {
+    const result = _importSessionDocument(document);
+    if (result.issues) restore();
+    return result;
+  } catch (e) {
+    restore();
+    return {
+      issues: [
+        `the builder cannot reproduce this session: ${
+          e instanceof Error ? e.message : String(e)
+        }`,
+      ],
+    };
+  }
+}
+
+/** Parse a session document back into a workspace, or refuse with the
+ *  offending paths. Wrapped by workspaceFromSessionDocument, which owns the
+ *  counter-leak guard: a refused import advances no module id counter, and the
+ *  fidelity re-serialize can throw on a pathological id collision. */
+function _importSessionDocument(
   document: Record<string, unknown>,
 ): WorkspaceImport {
   const issues: string[] = [];

@@ -182,12 +182,23 @@ export function canDeploy(input: {
   savedArtifactSha256: string | null;
   settledArtifactSha256: string | null;
   dirtyWindowCount: number;
+  deployReady: boolean;
+  deployBlockers: readonly string[];
 }): { ok: boolean; reason: string | null } {
   if (!input.savedFile || !input.savedArtifactSha256) {
     return { ok: false, reason: "save the session first, then deploy" };
   }
   if (input.settledArtifactSha256 === null) {
     return { ok: false, reason: "the session must resolve before deploy" };
+  }
+  if (!input.deployReady) {
+    // Q3: a grammar-valid, saved, settled session may still be unable to start
+    // on the cluster (no satellites, an unrunnable rule). Disable Deploy with
+    // the server's reason; Save and library actions stay enabled (Q1).
+    return {
+      ok: false,
+      reason: input.deployBlockers[0] ?? "the session cannot start on the cluster yet",
+    };
   }
   if (input.dirtyWindowCount > 0) {
     return {
@@ -331,6 +342,11 @@ export function useBuilderWorld() {
   // when a resolve completes, nulled by clear() and every refusal. The
   // deploy gate fails closed on null.
   const [settledArtifactSha256, setSettledArtifactSha256] = useState<string | null>(null);
+  // Deploy-readiness (Q3) from the last successful resolve: whether the
+  // session can start on the cluster, and why not. Reset by clear() and every
+  // refusal — the deploy gate fails closed on the false default.
+  const [deployReady, setDeployReady] = useState(false);
+  const [deployBlockers, setDeployBlockers] = useState<string[]>([]);
   // Monotonic resolve counter: a stale in-flight response must never
   // overwrite a newer edit's result.
   const resolveSeq = useRef(0);
@@ -371,6 +387,8 @@ export function useBuilderWorld() {
         setLoadedDocument(data.document);
         setLoadedFile(fileLabel);
         setSettledArtifactSha256(data.artifact_sha256);
+        setDeployReady(data.deploy_ready);
+        setDeployBlockers(data.deploy_blockers);
       } catch (e) {
         if (seq !== resolveSeq.current) return;
         // An edit that fails resolution keeps nothing stale on screen: the
@@ -380,6 +398,8 @@ export function useBuilderWorld() {
         setLoadedDocument(null);
         setLoadedFile(null);
         setSettledArtifactSha256(null);
+        setDeployReady(false);
+        setDeployBlockers([]);
         setResolveError(
           e instanceof ResolveRefusal
             ? e.detail
@@ -447,6 +467,8 @@ export function useBuilderWorld() {
     setLoadedFile(null);
     setResolveError(null);
     setSettledArtifactSha256(null);
+    setDeployReady(false);
+    setDeployBlockers([]);
     setLoading(false);
   }, []);
 
@@ -461,6 +483,8 @@ export function useBuilderWorld() {
     error: resolveError?.error ?? null,
     resolveError,
     settledArtifactSha256,
+    deployReady,
+    deployBlockers,
     loadSession,
     resolveDocument,
     saveSession,

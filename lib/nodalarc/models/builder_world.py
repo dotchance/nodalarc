@@ -52,6 +52,12 @@ class BuilderResolveCheck(BaseModel):
     document: dict[str, Any]
     document_yaml: str
     artifact_sha256: str
+    # Runtime-readiness (Q3), the NODE-COUNT-INDEPENDENT subset the UI can gate
+    # on: a session may resolve and save (Q1) yet be unable to start on the
+    # cluster. NECESSARY, not sufficient — the switch endpoint runs the
+    # operator's full, node-count-aware validator and is authoritative.
+    deploy_ready: bool = True
+    deploy_blockers: tuple[str, ...] = ()
 
 
 class BuilderSaveArtifact(BaseModel):

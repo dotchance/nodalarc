@@ -27,15 +27,17 @@ from nodalarc.models.builder_world import (
     BuilderWorldNode,
     BuilderWorldSegment,
 )
-from nodalarc.models.resolved_session import ResolvedLinkRule
+from nodalarc.models.resolved_session import ResolvedLinkRule, ResolvedSession
 from nodalarc.ome_inputs import build_ome_inputs_from_resolved
 from nodalarc.resolve_session import (
+    SessionResolution,
     SourceContext,
     default_catalog_roots,
     link_rule_interface_facts,
     resolve_session_with_assets,
     segment_display_names,
 )
+from nodalarc.session_validator import validate_session_readiness
 
 from ome.event_stream import build_session_ephemeris, build_step_context
 
@@ -125,14 +127,69 @@ def build_builder_resolve_check(
     roots = catalog_roots or default_catalog_roots()
     raw = _load_session_source(session_source, roots)
     flattened = flatten_user_references(raw, roots=roots)
+    resolution = resolve_session_with_assets(
+        raw,
+        catalog_roots=roots,
+        source_context=SourceContext(origin="builder_world"),
+    )
+    deploy_ready, deploy_blockers = _deploy_readiness(resolution.resolved)
     return BuilderResolveCheck(
-        world=_world_from_raw(raw, roots),
+        world=_world_from_resolution(resolution, roots, raw),
         document=rehydrate_user_references(raw, roots=roots) if rehydrate else raw,
         document_yaml=_canonical_session_yaml(raw),
         artifact_sha256=hashlib.sha256(
             _canonical_session_yaml(flattened).encode("utf-8")
         ).hexdigest(),
+        deploy_ready=deploy_ready,
+        deploy_blockers=deploy_blockers,
     )
+
+
+def _deploy_readiness(
+    resolved: ResolvedSession, *, available_node_count: int = 1
+) -> tuple[bool, tuple[str, ...]]:
+    """Deploy-readiness (Q3): can this resolved session start on the cluster?
+
+    Refuses on no satellites (the session cannot start) or any readiness ERROR
+    (zero-candidate link rules, disconnected routing members, SR index gaps,
+    MBB capacity shortfalls) — the same conditions the operator raises on. The
+    only node-count-dependent check the validator runs is a WARNING, never an
+    error, so the refusal set is cluster-fact-free: the UI gate calls this with
+    the default node count and gets exactly the same verdict the switch guard
+    gets with the live count. The switch guard passes the live count so it runs
+    the operator's full validator with real facts and stays authoritative.
+    """
+    blockers: list[str] = []
+    satellite_count = sum(1 for node in resolved.nodes if node.kind == "satellite")
+    if satellite_count < 1:
+        blockers.append("no satellites — the session cannot start on the cluster")
+    for result in validate_session_readiness(resolved, available_node_count=available_node_count):
+        if result.level == "error":
+            blockers.append(f"[{result.code}] {result.message}")
+    return (not blockers, tuple(blockers))
+
+
+def deploy_readiness_for_source(
+    session_source: str | dict[str, Any],
+    *,
+    catalog_roots: CatalogRoots | None = None,
+    available_node_count: int = 1,
+) -> tuple[bool, tuple[str, ...]]:
+    """Resolve a session (Q1) and return its deploy-readiness (Q3).
+
+    The switch guard's authoritative check: it runs BEFORE any CR mutation, so
+    a session that cannot start on the cluster never reaches the switch that
+    would delete the running ConstellationSpec CR before the operator's late
+    raise. Resolution failures propagate typed.
+    """
+    roots = catalog_roots or default_catalog_roots()
+    raw = _load_session_source(session_source, roots)
+    resolution = resolve_session_with_assets(
+        raw,
+        catalog_roots=roots,
+        source_context=SourceContext(origin="builder_world"),
+    )
+    return _deploy_readiness(resolution.resolved, available_node_count=available_node_count)
 
 
 def build_builder_save_artifact(
@@ -197,12 +254,17 @@ def _load_session_source(
 
 
 def _world_from_raw(raw: dict[str, Any], roots: CatalogRoots) -> BuilderWorld:
-
     resolution = resolve_session_with_assets(
         raw,
         catalog_roots=roots,
         source_context=SourceContext(origin="builder_world"),
     )
+    return _world_from_resolution(resolution, roots, raw)
+
+
+def _world_from_resolution(
+    resolution: SessionResolution, roots: CatalogRoots, raw: dict[str, Any]
+) -> BuilderWorld:
     resolved = resolution.resolved
     catalog_session = resolution.catalog_session
     epoch_unix = session_epoch_unix(resolved.time)

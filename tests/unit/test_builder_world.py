@@ -22,7 +22,12 @@ from nodalarc.catalog_paths import CatalogPathError
 from nodalarc.models.builder_world import BuilderWorld
 from nodalarc.models.events import EphemerisNodeFixed, EphemerisNodeKeplerian
 from nodalarc.resolve_session import resolve_session
-from ome.builder_world import build_builder_save_artifact, build_builder_world
+from ome.builder_world import (
+    build_builder_resolve_check,
+    build_builder_save_artifact,
+    build_builder_world,
+    deploy_readiness_for_source,
+)
 from vs_api.main import app
 
 _WALKER_REF = "nodalarc:sessions/earth-leo-walker.yaml"
@@ -69,6 +74,83 @@ def test_save_artifact_saves_a_session_whose_preview_world_refuses():
     assert artifact.node_count >= 1  # the gateway ground nodes
     assert artifact.document_yaml.strip()
     assert len(artifact.artifact_sha256) == 64
+
+
+def test_deploy_readiness_fact_gates_on_runtime_readiness():
+    """B7/Q3: a resolvable session may still be unable to start on the cluster.
+
+    The resolve check ships deploy_ready + deploy_blockers computed from the
+    operator's own readiness validator — a valid satellite-bearing session is
+    ready; a ground-only session is not, and its blockers name BOTH the
+    missing satellites AND a readiness error (E-code), proving the fact runs
+    the full validator, not just the satellite count.
+    """
+    walker = build_builder_resolve_check(_WALKER_REF)
+    assert walker.deploy_ready is True
+    assert walker.deploy_blockers == ()
+
+    ready, blockers = deploy_readiness_for_source(_ground_only_document())
+    assert ready is False
+    assert any("no satellites" in b for b in blockers)
+    assert any(b.startswith("[E") for b in blockers)
+
+
+def _switch_manager(key: str, path: Path):
+    class _SM:
+        status = "idle"
+
+        def rescan(self) -> None:
+            pass
+
+        def _valid_session_files(self) -> dict[str, str]:
+            return {key: str(path)}
+
+        def _validated_session_path(self, requested: str) -> Path | None:
+            return path if requested == key else None
+
+    return _SM()
+
+
+def test_switch_refuses_a_session_that_cannot_start(monkeypatch, tmp_path):
+    """B7/Q3: the switch endpoint refuses a non-runnable session BEFORE any CR
+    mutation — a ground-only session never reaches the switch that would delete
+    the running ConstellationSpec CR, so the running session stays up."""
+    import vs_api.main as main
+
+    ground_only = tmp_path / "ground-only.yaml"
+    ground_only.write_text(yaml.safe_dump(_ground_only_document()), encoding="utf-8")
+    key = "catalog/nodalarc/sessions/ground-only.yaml"
+    monkeypatch.setattr(main, "_session_manager", _switch_manager(key, ground_only))
+
+    switch_calls: list[str] = []
+
+    async def _fake_run_switch(path: str) -> None:
+        switch_calls.append(path)
+
+    monkeypatch.setattr(main, "_run_switch", _fake_run_switch)
+
+    response = client.post("/api/v1/sessions/switch", json={"session": key})
+    assert response.status_code == 400
+    assert "no satellites" in response.json()["error"]
+    # The running session is never torn down: the switch was never scheduled.
+    assert switch_calls == []
+
+
+def test_switch_accepts_a_runnable_session(monkeypatch):
+    """The guard lets a valid, satellite-bearing session through to the switch."""
+    import vs_api.main as main
+
+    key = "catalog/nodalarc/sessions/earth-leo-walker.yaml"
+    monkeypatch.setattr(main, "_session_manager", _switch_manager(key, _WALKER_PATH))
+    monkeypatch.setattr(main, "_run_switch", lambda path: _noop())
+
+    response = client.post("/api/v1/sessions/switch", json={"session": key})
+    assert response.status_code == 200
+    assert response.json()["status"] == "switching"
+
+
+async def _noop() -> None:
+    pass
 
 
 def test_returns_builder_world(walker_world):

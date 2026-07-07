@@ -370,6 +370,8 @@ export function BuilderView({
     error,
     resolveError,
     settledArtifactSha256,
+    deployReady,
+    deployBlockers,
     loadSession,
     resolveDocument,
     saveSession,
@@ -801,6 +803,8 @@ export function BuilderView({
         : null,
     settledArtifactSha256,
     dirtyWindowCount: dirtyWindows,
+    deployReady,
+    deployBlockers,
   });
   // Standalone component authoring (Your library) — independent of sessions.
   const [libraryEditor, setLibraryEditor] = useState<

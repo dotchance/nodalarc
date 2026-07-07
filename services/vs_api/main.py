@@ -2848,6 +2848,37 @@ def list_sessions() -> list[dict]:
     return _session_manager.list_sessions()
 
 
+def _available_session_node_count() -> int:
+    """Best-effort count of cluster nodes that run session pods. It only feeds
+    the readiness validator's node-count WARNING, never a deploy refusal, so a
+    failed query falls back high rather than blocking a switch."""
+    try:
+        import kubernetes.client
+
+        nodes = kubernetes.client.CoreV1Api().list_node(
+            label_selector="nodalarc.io/node-agent=true"
+        )
+        return max(1, len(nodes.items))
+    except Exception:
+        return 1_000_000
+
+
+def _switch_readiness(session_path: str) -> tuple[bool, tuple[str, ...]]:
+    """Resolve the target session and run the operator's own readiness
+    validator with the live node count — the authoritative Q3 gate."""
+    from ome.builder_world import deploy_readiness_for_source
+
+    path = _session_manager._validated_session_path(session_path)
+    if path is None:
+        raise FileNotFoundError(session_path)
+    raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    return deploy_readiness_for_source(
+        raw,
+        catalog_roots=_builder_catalog_roots(),
+        available_node_count=_available_session_node_count(),
+    )
+
+
 @app.post(
     "/api/v1/sessions/switch",
     response_model=None,
@@ -2868,6 +2899,23 @@ async def switch_session(body: dict):
     valid_files = _session_manager._valid_session_files()
     if session_path not in valid_files:
         return JSONResponse(status_code=400, content={"error": "Unknown session file"})
+    # Deploy-readiness guard (Q3), BEFORE any CR mutation: a session that
+    # cannot start on the cluster — no satellites, or any readiness error like
+    # a zero-candidate link rule — must never reach the switch, which deletes
+    # the running ConstellationSpec CR before the operator's late raise would,
+    # destroying the running session. The server guard is authoritative: it
+    # runs the operator's full node-count-aware validator, stricter than the
+    # UI's node-count-independent gate.
+    try:
+        deploy_ready, deploy_blockers = await asyncio.to_thread(_switch_readiness, session_path)
+    except Exception as exc:
+        log.error("Switch readiness guard failed for %s: %s", session_path, exc, exc_info=True)
+        return JSONResponse(
+            status_code=400,
+            content={"error": f"session could not be validated for deploy: {exc}"},
+        )
+    if not deploy_ready:
+        return JSONResponse(status_code=400, content={"error": "; ".join(deploy_blockers)})
     asyncio.create_task(_run_switch(session_path))
     return {"status": "switching"}
 

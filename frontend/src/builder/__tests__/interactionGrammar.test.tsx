@@ -528,15 +528,16 @@ describe("IG-17: a save is never a dead end", () => {
   });
 });
 
-describe("deploy gate: artifact truth, fail closed", () => {
+describe("deploy gate: artifact truth, runtime-readiness, fail closed", () => {
   const saved = {
     savedFile: "/data/generated-sessions/_builder-x.yaml",
     savedArtifactSha256: "abc",
   };
+  const ready = { deployReady: true, deployBlockers: [] as string[] };
 
   it("deploys only when the saved artifact matches the settled resolve", () => {
     expect(
-      canDeploy({ ...saved, settledArtifactSha256: "abc", dirtyWindowCount: 0 }),
+      canDeploy({ ...saved, ...ready, settledArtifactSha256: "abc", dirtyWindowCount: 0 }),
     ).toEqual({ ok: true, reason: null });
   });
 
@@ -546,25 +547,54 @@ describe("deploy gate: artifact truth, fail closed", () => {
       savedArtifactSha256: null,
       settledArtifactSha256: "abc",
       dirtyWindowCount: 0,
+      ...ready,
     });
     expect(gate.ok).toBe(false);
     expect(gate.reason).toMatch(/save the session first/);
   });
 
   it("fails closed when no resolve has settled (cleared or refused)", () => {
-    const gate = canDeploy({ ...saved, settledArtifactSha256: null, dirtyWindowCount: 0 });
+    const gate = canDeploy({
+      ...saved,
+      ...ready,
+      settledArtifactSha256: null,
+      dirtyWindowCount: 0,
+    });
     expect(gate.ok).toBe(false);
     expect(gate.reason).toMatch(/must resolve/);
   });
 
+  it("refuses a saved, settled session that cannot start on the cluster (Q3)", () => {
+    // Every artifact/dirty check passes, but the session is not runtime-ready.
+    const gate = canDeploy({
+      ...saved,
+      settledArtifactSha256: "abc",
+      dirtyWindowCount: 0,
+      deployReady: false,
+      deployBlockers: ["no satellites — the session cannot start on the cluster"],
+    });
+    expect(gate.ok).toBe(false);
+    expect(gate.reason).toMatch(/no satellites/);
+  });
+
   it("refuses while windows hold unapplied edits", () => {
-    const gate = canDeploy({ ...saved, settledArtifactSha256: "abc", dirtyWindowCount: 2 });
+    const gate = canDeploy({
+      ...saved,
+      ...ready,
+      settledArtifactSha256: "abc",
+      dirtyWindowCount: 2,
+    });
     expect(gate.ok).toBe(false);
     expect(gate.reason).toMatch(/2 windows with unapplied edits/);
   });
 
   it("names the staleness when the saved copy is behind the edits", () => {
-    const gate = canDeploy({ ...saved, settledArtifactSha256: "def", dirtyWindowCount: 0 });
+    const gate = canDeploy({
+      ...saved,
+      ...ready,
+      settledArtifactSha256: "def",
+      dirtyWindowCount: 0,
+    });
     expect(gate.ok).toBe(false);
     expect(gate.reason).toMatch(/behind your edits/);
   });

@@ -163,6 +163,8 @@ describe("BuilderView — resolve-loop and world honesty (P2)", () => {
       document_yaml: "session:\n  name: ground-only\n",
       document: { session: { name: "ground-only" } },
       artifact_sha256: "sha-ground",
+      deploy_ready: false,
+      deploy_blockers: ["no satellites — the session cannot start on the cluster"],
     });
     stubFetch({
       // A running session auto-imports on entry; the resolve returns a

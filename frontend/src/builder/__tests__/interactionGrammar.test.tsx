@@ -96,6 +96,7 @@ function tinyWorld(groundId: string, spaceId: string): BuilderWorld {
     segments: [],
     allocations: [],
     link_candidates: [],
+    rule_previews: [],
   };
 }
 

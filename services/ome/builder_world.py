@@ -11,26 +11,32 @@ live session-ephemeris stream is by construction: one code path, two callers.
 from __future__ import annotations
 
 import hashlib
+from datetime import UTC, datetime
 from typing import Any
 
 import yaml
 from nodalarc.catalog_browse import flatten_user_references, rehydrate_user_references
 from nodalarc.catalog_paths import CatalogRoots, resolve_catalog_reference
-from nodalarc.ephemeris_runtime import session_epoch_unix
+from nodalarc.ephemeris_runtime import body_states_at, session_epoch_unix
 from nodalarc.models.builder_world import (
     BuilderLinkCandidate,
     BuilderLinkEndpoint,
     BuilderLinkRule,
+    BuilderPreviewPair,
+    BuilderPreviewReasonCount,
     BuilderResolveCheck,
+    BuilderRulePreview,
     BuilderSaveArtifact,
     BuilderWorld,
     BuilderWorldNode,
     BuilderWorldSegment,
 )
-from nodalarc.models.resolved_session import ResolvedLinkRule, ResolvedSession
-from nodalarc.ome_inputs import build_ome_inputs_from_resolved
+from nodalarc.models.events import SessionEphemeris
+from nodalarc.models.resolved_session import ResolvedLinkRule, ResolvedNode, ResolvedSession
+from nodalarc.ome_inputs import build_ome_inputs_from_resolved, resolved_body_frames_at_epoch
 from nodalarc.resolve_session import (
     SessionResolution,
+    SessionResolutionError,
     SourceContext,
     default_catalog_roots,
     link_rule_interface_facts,
@@ -40,6 +46,8 @@ from nodalarc.resolve_session import (
 from nodalarc.session_validator import validate_session_readiness
 
 from ome.event_stream import build_session_ephemeris, build_step_context
+from ome.propagation_engine import propagate_satellites
+from ome.visibility import check_ground_visibility, check_isl_visibility
 
 
 def _builder_link_rule(
@@ -93,6 +101,374 @@ def _builder_link_rule(
         explicit_pairs=explicit_pairs,
         max_range_km=rule.constraints.max_range_km if rule.constraints else None,
     )
+
+
+# --- Rule preview: server-computed frozen-epoch visibility (P5a) -------------
+#
+# The builder renders these facts; it never runs a second physics engine. Each
+# rule's geometry is computed through the SAME OME visibility composites the
+# runtime uses, at the resolved epoch (dt=0), with the motion-only gates
+# (tracking rate, polar seam) disabled — a preview is one frozen instant, not a
+# simulation. The universe is bounded and the report is honest about the bound.
+
+#: Deterministic per-rule cap on how many pairs geometry runs over. A preview
+#: PREVIEWS; OME simulates. Beyond this the preview is an honest partial.
+_PREVIEW_TESTED_BUDGET = 4000
+#: Cap on drawn pairs shipped per rule — a dense-enough sample to read the
+#: pattern, never the runtime-scale full set.
+_PREVIEW_DRAW_CAP = 800
+
+
+def _preview_body_of(node: ResolvedNode) -> str | None:
+    """The body a node sits on — ``central_body`` for satellites,
+    ``reference_body`` for ground; a relay may carry either."""
+    if node.kind == "satellite":
+        return node.central_body
+    if node.kind == "ground_station":
+        return node.reference_body
+    return node.reference_body or node.central_body
+
+
+def _preview_scope(rule: ResolvedLinkRule, node_by_id: dict[str, ResolvedNode]) -> str:
+    """Whether a rule's geometry is computed, and if not, the typed wall —
+    decided from body/kind/enabled facts alone, no OME. A disabled rule ships no
+    geometry; a rule with no satellite endpoint is static-terrestrial (the
+    runtime does not visibility-compute it); a rule whose endpoint members
+    straddle bodies is inter-body (same-body composites cannot judge it)."""
+    if not rule.enabled:
+        return "disabled"
+    members = [
+        node_by_id[nid]
+        for endpoint in rule.endpoints
+        for nid in endpoint.node_ids
+        if nid in node_by_id
+    ]
+    if not any(node.kind == "satellite" for node in members):
+        return "terrestrial_pending"
+    bodies = {b for b in (_preview_body_of(node) for node in members) if b is not None}
+    if len(bodies) > 1:
+        return "inter_body_pending"
+    return "computed"
+
+
+def _closed_pair_count(members_a: tuple[str, ...], members_b: tuple[str, ...]) -> int:
+    """The deduped canonical unordered pair count ``|A||B| - I - C(I,2)`` (I =
+    |A∩B|) — by FORMULA, never by materializing the pair set. That O(N^2) build
+    on the debounced edit loop is exactly the runtime burden a preview must not
+    carry."""
+    a = set(members_a)
+    b = set(members_b)
+    inter = len(a & b)
+    return len(a) * len(b) - inter - inter * (inter - 1) // 2
+
+
+def _canonical_pairs(members_a: tuple[str, ...], members_b: tuple[str, ...]):
+    """Lazily yield the endpoint cross product as canonical unordered pairs
+    (a==b skipped, each unordered pair once), oriented (endpoint-0 member,
+    endpoint-1 member), in authored member order. A generator, so the tested
+    budget stops it without building the whole universe."""
+    seen: set[tuple[str, str]] = set()
+    for na in members_a:
+        for nb in members_b:
+            if na == nb:
+                continue
+            key = (na, nb) if na <= nb else (nb, na)
+            if key in seen:
+                continue
+            seen.add(key)
+            yield na, nb
+
+
+def _isl_limits(
+    node_a: str,
+    node_b: str,
+    candidate: Any,
+    ctx: Any,
+    rule: ResolvedLinkRule,
+) -> tuple[float | None, float]:
+    """``(max_range_km, field_of_regard_deg)`` for an ISL pair, min-reduced
+    across the two endpoints' terminals — the reduction the runtime and the
+    coverage preview both apply. A fixed pair uses the terminals the allocator
+    assigned (its interfaces); a visible pair, which has no assignment, reduces
+    across each node's ISL terminals. FoR defaults to 360 (gate off) when no
+    terminal limit is known.
+
+    Each node is keyed to ITS OWN allocated interface by node id (never by
+    argument position), so orientation can never re-pair a node with the other
+    node's interface."""
+    constraints = ctx.sat_isl_terminal_constraints
+    node_iface: dict[str, str] = {}
+    if candidate is not None:
+        node_iface[candidate.node_a] = candidate.interface_a
+        node_iface[candidate.node_b] = candidate.interface_b
+
+    def _node_limit(node_id: str) -> tuple[float, float] | None:
+        by_iface = constraints.get(node_id) or {}
+        interface = node_iface.get(node_id)
+        if interface is not None and interface in by_iface:
+            term = by_iface[interface]
+            return float(term.max_range_km), float(term.field_of_regard_deg)
+        if not by_iface:
+            return None
+        return (
+            min(float(t.max_range_km) for t in by_iface.values()),
+            min(float(t.field_of_regard_deg) for t in by_iface.values()),
+        )
+
+    la = _node_limit(node_a)
+    lb = _node_limit(node_b)
+    if la is None or lb is None:
+        rng = rule.constraints.max_range_km if rule.constraints else None
+        return (float(rng) if rng is not None else None), 360.0
+    return min(la[0], lb[0]), min(la[1], lb[1])
+
+
+def _isl_verdict(
+    node_a: str,
+    node_b: str,
+    candidate: Any,
+    sat_states: dict[str, Any],
+    ctx: Any,
+    rule: ResolvedLinkRule,
+    central_body: str,
+) -> str:
+    """The frozen-epoch ISL verdict via the visibility composite — LOS, range,
+    and field-of-regard. This is GEOMETRY: the composite reasons are the only
+    vocabulary. The allocator-layer terminal type/role gates the runtime applies
+    in evaluate_isl_feasibility (terminal_type_mismatch/terminal_role_mismatch)
+    are NOT replicated here — a config-compatibility concern, not geometry — so a
+    cross-segment pair between incompatible ISL terminals reads as geometrically
+    visible even though the runtime would refuse to bring it up."""
+    state_a = sat_states.get(node_a)
+    state_b = sat_states.get(node_b)
+    if state_a is None or state_b is None:
+        return "no_geometry"
+    body_frame = ctx.body_frames.get(central_body)
+    if body_frame is None:
+        return "no_geometry"
+    max_range, fov = _isl_limits(node_a, node_b, candidate, ctx, rule)
+    if max_range is None:
+        return "no_geometry"
+    result = check_isl_visibility(
+        state_a.position_ecef_km,
+        state_a.velocity_ecef_km_s,
+        state_b.position_ecef_km,
+        state_b.velocity_ecef_km_s,
+        max_range_km=max_range,
+        body_frame=body_frame,
+        max_tracking_rate_deg_s=None,  # motion gate — off for a frozen epoch
+        field_of_regard_deg=fov,
+        polar_seam_enabled=False,  # motion gate — off for a frozen epoch
+        geo_a=state_a.geodetic,
+        geo_b=state_b.geodetic,
+    )
+    return "ok" if result.visible else result.reason
+
+
+def _ground_verdict(
+    gs_node: ResolvedNode,
+    sat_state: Any,
+    ctx: Any,
+    gs_min_elev: dict[str, float],
+) -> str:
+    if sat_state is None:
+        return "no_geometry"
+    gs_pos = ctx.gs_positions.get(gs_node.node_id)
+    if gs_pos is None:
+        return "no_geometry"
+    gs_ecef, gs_geo = gs_pos
+    reference_body = ctx.gs_reference_bodies.get(gs_node.node_id)
+    body_frame = ctx.body_frames.get(reference_body) if reference_body else None
+    if body_frame is None:
+        return "no_geometry"
+    # The effective cross-rule mask the runtime enforces at this GS — never the
+    # rule's own endpoint mask (geometry_only carries no boresight/FoR/range).
+    min_elev = gs_min_elev.get(gs_node.node_id, 25.0)
+    gv = check_ground_visibility(
+        gs_ecef,
+        gs_geo,
+        sat_state.position_ecef_km,
+        min_elev,
+        body_frame=body_frame,
+    )
+    return "ok" if gv.visible else gv.reject_reason
+
+
+def _pair_verdict(
+    node_a: str,
+    node_b: str,
+    candidate: Any,
+    node_by_id: dict[str, ResolvedNode],
+    sat_states: dict[str, Any],
+    ctx: Any,
+    rule: ResolvedLinkRule,
+    gs_min_elev: dict[str, float],
+) -> str:
+    left = node_by_id.get(node_a)
+    right = node_by_id.get(node_b)
+    if left is None or right is None:
+        return "no_geometry"
+    a_sat = left.kind == "satellite"
+    b_sat = right.kind == "satellite"
+    if a_sat and b_sat:
+        return _isl_verdict(node_a, node_b, candidate, sat_states, ctx, rule, left.central_body)
+    if a_sat != b_sat:
+        gs_node = right if a_sat else left
+        sat_id = node_a if a_sat else node_b
+        return _ground_verdict(gs_node, sat_states.get(sat_id), ctx, gs_min_elev)
+    # Ground-ground inside a computed rule: no visibility to compute.
+    return "no_geometry"
+
+
+def _computed_preview(
+    rule: ResolvedLinkRule,
+    node_by_id: dict[str, ResolvedNode],
+    sat_states: dict[str, Any],
+    ctx: Any,
+    gs_min_elev: dict[str, float],
+    fixed: dict[str, list[Any]],
+) -> BuilderRulePreview:
+    mode = rule.topology.mode
+    if mode in ("explicit_pairs", "nearest_n"):
+        candidates = fixed.get(rule.rule_id, [])
+        pairs_total = len(candidates)
+        pair_iter: Any = ((c.node_a, c.node_b, c) for c in candidates)
+        fixed_pairs = True
+    elif mode == "visible_candidates":
+        members_a = rule.endpoints[0].node_ids
+        members_b = rule.endpoints[1].node_ids
+        pairs_total = _closed_pair_count(members_a, members_b)
+        pair_iter = ((na, nb, None) for na, nb in _canonical_pairs(members_a, members_b))
+        fixed_pairs = False
+    else:
+        # nearest_visible is rejected upstream; nothing else is computable.
+        pairs_total = 0
+        pair_iter = iter(())
+        fixed_pairs = False
+
+    tested = min(pairs_total, _PREVIEW_TESTED_BUDGET)
+    ep0 = set(rule.endpoints[0].node_ids)
+    ep1 = set(rule.endpoints[1].node_ids)
+    reason_counts: dict[str, int] = {}
+    drawn: list[BuilderPreviewPair] = []
+    passing = 0
+    for index, (na, nb, candidate) in enumerate(pair_iter):
+        if index >= tested:
+            break
+        # The verdict is computed on the pair's OWN node order — for a fixed
+        # pair, node_a carries interface_a and node_b carries interface_b, so
+        # each node is judged against its own allocated terminal. Orientation is
+        # a DISPLAY concern only (which endpoint each node belongs to); swapping
+        # nodes for the drawable must never re-pair a node with the other's
+        # interface.
+        display_a, display_b = na, nb
+        if fixed_pairs:
+            forward = na in ep0 and nb in ep1
+            reverse = na in ep1 and nb in ep0
+            if not (forward or reverse):
+                # An allocated pair matching neither endpoint orientation is an
+                # engine inconsistency, not an authoring fact — fail closed on
+                # the rule's wall channel rather than normalize it to zero lines.
+                raise SessionResolutionError(
+                    f"link rule {rule.rule_id!r}: allocated pair ({na}, {nb}) "
+                    "matches neither endpoint orientation",
+                    subject_kind="link",
+                    subject_id=rule.rule_id,
+                )
+            if not forward:
+                display_a, display_b = nb, na
+        verdict = _pair_verdict(na, nb, candidate, node_by_id, sat_states, ctx, rule, gs_min_elev)
+        if verdict == "ok":
+            passing += 1
+            if len(drawn) < _PREVIEW_DRAW_CAP:
+                drawn.append(
+                    BuilderPreviewPair(
+                        rule_id=rule.rule_id,
+                        kind=rule.kind,
+                        node_a=display_a,
+                        node_b=display_b,
+                    )
+                )
+        else:
+            reason_counts[verdict] = reason_counts.get(verdict, 0) + 1
+
+    capped = tested < pairs_total or passing > _PREVIEW_DRAW_CAP
+    return BuilderRulePreview(
+        rule_id=rule.rule_id,
+        kind=rule.kind,
+        preview_scope="computed",
+        pairs_total=pairs_total,
+        pairs_tested=tested,
+        pairs_drawn=len(drawn),
+        capped=capped,
+        reason_counts=tuple(
+            BuilderPreviewReasonCount(reason=reason, count=count)
+            for reason, count in sorted(reason_counts.items())
+        ),
+        drawable_pairs=tuple(drawn),
+    )
+
+
+def _builder_rule_previews(
+    resolved: ResolvedSession,
+    ctx: Any,
+    epoch_unix: float,
+) -> tuple[BuilderRulePreview, ...]:
+    """Frozen-epoch visibility verdicts for every rule — the server's preview,
+    computed once per resolve through the runtime's own composites."""
+    node_by_id = {node.node_id: node for node in resolved.nodes}
+    scopes = {rule.rule_id: _preview_scope(rule, node_by_id) for rule in resolved.link_rules}
+
+    def _scope_only(rule: ResolvedLinkRule) -> BuilderRulePreview:
+        return BuilderRulePreview(
+            rule_id=rule.rule_id,
+            kind=rule.kind,
+            preview_scope=scopes[rule.rule_id],
+            pairs_total=0,
+            pairs_tested=0,
+            pairs_drawn=0,
+            capped=False,
+        )
+
+    # No rule needs geometry — skip the propagation entirely.
+    if not any(scope == "computed" for scope in scopes.values()):
+        return tuple(_scope_only(rule) for rule in resolved.link_rules)
+
+    # One propagation at the resolved epoch (dt=0) — the exact runtime state.
+    body_states = body_states_at(ctx.body_ephemeris, set(ctx.active_bodies), epoch_unix)
+    sat_states = propagate_satellites(
+        satellites=ctx.satellites,
+        addressing=ctx.addressing,
+        epoch_unix=epoch_unix,
+        dt=0.0,
+        propagator_id=ctx.propagator_id,
+        body_states=body_states,
+        body_frames=ctx.body_frames,
+    )
+    gs_min_elev = resolved.effective_ground_min_elevation_by_gs()
+    fixed: dict[str, list[Any]] = {}
+    for candidate in resolved.link_candidates:
+        fixed.setdefault(candidate.rule_id, []).append(candidate)
+
+    previews: list[BuilderRulePreview] = []
+    for rule in resolved.link_rules:
+        if scopes[rule.rule_id] == "computed":
+            previews.append(
+                _computed_preview(rule, node_by_id, sat_states, ctx, gs_min_elev, fixed)
+            )
+        else:
+            previews.append(
+                BuilderRulePreview(
+                    rule_id=rule.rule_id,
+                    kind=rule.kind,
+                    preview_scope=scopes[rule.rule_id],
+                    pairs_total=0,
+                    pairs_tested=0,
+                    pairs_drawn=0,
+                    capped=False,
+                )
+            )
+    return tuple(previews)
 
 
 def _canonical_session_yaml(document: Any) -> str:
@@ -262,6 +638,41 @@ def _world_from_raw(raw: dict[str, Any], roots: CatalogRoots) -> BuilderWorld:
     return _world_from_resolution(resolution, roots, raw)
 
 
+def _satellite_less_world_view(
+    resolved: ResolvedSession, epoch_unix: float
+) -> tuple[SessionEphemeris, tuple[BuilderRulePreview, ...]]:
+    """The ephemeris and rule previews for a grammar-valid session with no
+    satellite — the OME preview precondition is a runtime-readiness gate, not a
+    grammar rule, so the session RESOLVES and RENDERS rather than walling.
+
+    The ephemeris carries no node ephemerides (there is nothing to propagate and
+    OME cannot be built) but POPULATED body frames, so render scale still anchors
+    on a body. Every rule is accurately terrestrial/inter_body_pending — with no
+    space segment there is nothing to visibility-compute, and a per-rule "add a
+    satellite" note would be a false state for a static terrestrial link."""
+    ephemeris = SessionEphemeris(
+        epoch_id=0,
+        sim_time=datetime.fromtimestamp(epoch_unix, tz=UTC),
+        epoch_unix=epoch_unix,
+        nodes={},
+        body_frames=resolved_body_frames_at_epoch(resolved, epoch_unix),
+    )
+    node_by_id = {node.node_id: node for node in resolved.nodes}
+    previews = tuple(
+        BuilderRulePreview(
+            rule_id=rule.rule_id,
+            kind=rule.kind,
+            preview_scope=_preview_scope(rule, node_by_id),
+            pairs_total=0,
+            pairs_tested=0,
+            pairs_drawn=0,
+            capped=False,
+        )
+        for rule in resolved.link_rules
+    )
+    return ephemeris, previews
+
+
 def _world_from_resolution(
     resolution: SessionResolution, roots: CatalogRoots, raw: dict[str, Any]
 ) -> BuilderWorld:
@@ -269,23 +680,30 @@ def _world_from_resolution(
     catalog_session = resolution.catalog_session
     epoch_unix = session_epoch_unix(resolved.time)
 
-    runtime = build_ome_inputs_from_resolved(resolved)
-    ctx = build_step_context(
-        satellites=runtime.satellites,
-        addressing=runtime.addressing,
-        gs_file=runtime.gs_file,
-        neighbors=runtime.neighbors,
-        propagator_id=runtime.propagator_id,
-        ground_scheduling=runtime.ground_scheduling,
-        ground_link_model=runtime.ground_link_model,
-        ground_defaults_applied=True,
-        ground_candidate_satellites_by_gs=runtime.ground_candidate_satellites_by_gs,
-        node_metadata=runtime.node_metadata,
-        body_frames=runtime.body_frames,
-        body_ephemeris=runtime.body_ephemeris,
-        active_bodies=runtime.active_bodies,
-    )
-    ephemeris = build_session_ephemeris(ctx, epoch_unix, 0)
+    # A satellite-less session cannot build OME inputs (the runtime requires a
+    # satellite), but it is valid grammar that resolves and renders. Guard the
+    # OME chain on satellite presence; the rest of the world is identical.
+    if any(node.kind == "satellite" for node in resolved.nodes):
+        runtime = build_ome_inputs_from_resolved(resolved)
+        ctx = build_step_context(
+            satellites=runtime.satellites,
+            addressing=runtime.addressing,
+            gs_file=runtime.gs_file,
+            neighbors=runtime.neighbors,
+            propagator_id=runtime.propagator_id,
+            ground_scheduling=runtime.ground_scheduling,
+            ground_link_model=runtime.ground_link_model,
+            ground_defaults_applied=True,
+            ground_candidate_satellites_by_gs=runtime.ground_candidate_satellites_by_gs,
+            node_metadata=runtime.node_metadata,
+            body_frames=runtime.body_frames,
+            body_ephemeris=runtime.body_ephemeris,
+            active_bodies=runtime.active_bodies,
+        )
+        ephemeris = build_session_ephemeris(ctx, epoch_unix, 0)
+        rule_previews = _builder_rule_previews(resolved, ctx, epoch_unix)
+    else:
+        ephemeris, rule_previews = _satellite_less_world_view(resolved, epoch_unix)
 
     local_to_runtime = {
         (node.segment_id, node.local_node_id): node.node_id for node in resolved.nodes
@@ -339,4 +757,5 @@ def _world_from_resolution(
             )
             for candidate in resolved.link_candidates
         ),
+        rule_previews=rule_previews,
     )

@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import yaml
@@ -21,8 +22,12 @@ from fastapi.testclient import TestClient
 from nodalarc.catalog_paths import CatalogPathError
 from nodalarc.models.builder_world import BuilderWorld
 from nodalarc.models.events import EphemerisNodeFixed, EphemerisNodeKeplerian
-from nodalarc.resolve_session import resolve_session
+from nodalarc.resolve_session import SessionResolutionError, resolve_session
 from ome.builder_world import (
+    _canonical_pairs,
+    _closed_pair_count,
+    _computed_preview,
+    _preview_scope,
     build_builder_resolve_check,
     build_builder_save_artifact,
     build_builder_world,
@@ -59,21 +64,36 @@ def _ground_only_document() -> dict:
 
 def test_save_artifact_saves_a_session_whose_preview_world_refuses():
     """B8/Q1: save depends only on grammar validity. A ground-only session
-
-    refuses to build a preview world (Q2) but still produces a save
-    artifact — canonical bytes, hash, name, and node count from the resolved
-    session, never a built world.
+    produces a save artifact — canonical bytes, hash, name, and node count from
+    the resolved session, never a built world.
     """
     document = _ground_only_document()
-    # Q2: the preview world build refuses a satellite-less session.
-    with pytest.raises(ValueError, match="satellite"):
-        build_builder_world(document)
-    # Q1: the grammar-only save path still succeeds.
+    # Q1: the grammar-only save path succeeds.
     artifact = build_builder_save_artifact(document)
     assert artifact.session_name == "earth-leo-ground-only"
     assert artifact.node_count >= 1  # the gateway ground nodes
     assert artifact.document_yaml.strip()
     assert len(artifact.artifact_sha256) == 64
+
+
+def test_satellite_less_session_renders_instead_of_walling():
+    """P5a satellite-less guard: a grammar-valid ground-only session is not a
+    grammar error — it RESOLVES into a world with the ground nodes present,
+    POPULATED body frames (so render scale anchors on a body) and empty node
+    ephemerides (nothing to propagate), never a satellite-precondition wall. It
+    still fails the deploy gate (Q3) — that is runtime readiness, tested apart."""
+    world = build_builder_world(_ground_only_document())
+    assert world.nodes  # the ground gateways survive
+    assert all(node.kind != "satellite" for node in world.nodes)
+    # Body frames populated (render scale needs a body); no node ephemerides.
+    assert "earth" in world.ephemeris.body_frames
+    assert world.ephemeris.body_frames["earth"].equatorial_radius_km > 6000
+    assert world.ephemeris.nodes == {}
+    # Any surviving rule carries an accurate non-computed scope, never a wall.
+    assert all(
+        preview.preview_scope in ("terrestrial_pending", "inter_body_pending", "disabled")
+        for preview in world.rule_previews
+    )
 
 
 def test_deploy_readiness_fact_gates_on_runtime_readiness():
@@ -223,6 +243,209 @@ def test_link_rules_project_resolved_endpoint_membership(walker_world):
             for a, b in rule.explicit_pairs:
                 assert a in world_ids, f"explicit pair id {a!r} is not a runtime node id"
                 assert b in world_ids, f"explicit pair id {b!r} is not a runtime node id"
+
+
+# --- P5a: server-computed rule previews --------------------------------------
+
+_PREVIEW_VOCAB = {
+    "los_blocked",
+    "range_exceeded",
+    "elevation_below_min",
+    "field_of_regard",
+    "no_geometry",
+}
+
+
+def _preview_node(node_id: str, kind: str, body: str) -> SimpleNamespace:
+    return SimpleNamespace(
+        node_id=node_id,
+        kind=kind,
+        central_body=body if kind == "satellite" else None,
+        reference_body=body if kind != "satellite" else None,
+    )
+
+
+def _preview_rule(mode: str, ep0, ep1, *, enabled: bool = True, kind: str = "access"):
+    endpoint = lambda ids: SimpleNamespace(node_ids=tuple(ids))  # noqa: E731
+    return SimpleNamespace(
+        rule_id="r",
+        kind=kind,
+        enabled=enabled,
+        endpoints=(endpoint(ep0), endpoint(ep1)),
+        topology=SimpleNamespace(mode=mode, n=None),
+        constraints=None,
+    )
+
+
+def test_preview_scope_reads_body_kind_enabled_only():
+    """Scope is decided from body/kind/enabled facts, no OME: disabled wins;
+    no satellite endpoint is terrestrial; endpoints on different bodies are
+    inter-body; same body with a satellite is computed."""
+    nodes = {
+        n.node_id: n
+        for n in (
+            _preview_node("s1", "satellite", "earth"),
+            _preview_node("g1", "ground_station", "earth"),
+            _preview_node("s2", "satellite", "luna"),
+        )
+    }
+    assert (
+        _preview_scope(_preview_rule("visible_candidates", ["g1"], ["s1"], enabled=False), nodes)
+        == "disabled"
+    )
+    assert (
+        _preview_scope(_preview_rule("visible_candidates", ["g1"], ["g1"]), nodes)
+        == "terrestrial_pending"
+    )
+    assert (
+        _preview_scope(_preview_rule("visible_candidates", ["g1"], ["s2"]), nodes)
+        == "inter_body_pending"
+    )
+    assert _preview_scope(_preview_rule("visible_candidates", ["g1"], ["s1"]), nodes) == "computed"
+
+
+def test_closed_pair_count_matches_the_canonical_generator():
+    """The closed formula and the lazy generator must agree exactly — otherwise
+    pairs_total (the formula) and the tested walk (the generator) diverge and
+    the capped math lies."""
+    for a, b in [
+        (("a", "b", "c"), ("a", "b", "c")),  # self-mesh
+        (("a", "b"), ("c", "d", "e")),  # disjoint
+        (("a", "b", "c"), ("b", "c", "d")),  # partial overlap
+        (("a",), ("a",)),  # single self -> zero pairs
+        (("a", "b", "c", "d"), ("c", "d", "e", "f")),  # larger overlap
+    ]:
+        assert _closed_pair_count(a, b) == len(list(_canonical_pairs(a, b)))
+
+
+def test_orientation_mismatch_fails_closed():
+    """An allocated pair matching neither endpoint orientation is an engine
+    inconsistency — the builder refuses on the wall channel, never normalizes
+    it into a preview with zero lines."""
+    rule = _preview_rule("explicit_pairs", ["A"], ["B"], kind="isl")
+    nodes = {
+        n.node_id: n
+        for n in (
+            _preview_node("A", "satellite", "earth"),
+            _preview_node("B", "satellite", "earth"),
+            _preview_node("C", "satellite", "earth"),
+        )
+    }
+    candidate = SimpleNamespace(
+        rule_id="r", node_a="A", node_b="C", interface_a="isl0", interface_b="isl0"
+    )
+    with pytest.raises(SessionResolutionError) as exc:
+        _computed_preview(rule, nodes, {}, SimpleNamespace(), {}, {"r": [candidate]})
+    assert exc.value.subject_id == "r"
+
+
+def test_isl_limits_key_terminals_by_node_never_by_orientation():
+    """Regression: a reverse-oriented fixed ISL pair must read each node against
+    ITS OWN allocated interface. Keying by argument position instead re-pairs a
+    node with the other's terminal and corrupts the range/FoR verdict."""
+    from ome.builder_world import _isl_limits
+
+    constraints = {
+        "sat-a": {"isl0": SimpleNamespace(max_range_km=8000.0, field_of_regard_deg=360.0)},
+        "sat-b": {"isl1": SimpleNamespace(max_range_km=1500.0, field_of_regard_deg=100.0)},
+    }
+    ctx = SimpleNamespace(sat_isl_terminal_constraints=constraints)
+    candidate = SimpleNamespace(
+        node_a="sat-a", node_b="sat-b", interface_a="isl0", interface_b="isl1"
+    )
+    rule = _preview_rule("explicit_pairs", ["sat-a"], ["sat-b"], kind="isl")
+    forward = _isl_limits("sat-a", "sat-b", candidate, ctx, rule)
+    reverse = _isl_limits("sat-b", "sat-a", candidate, ctx, rule)
+    # min(8000, 1500) range, min(360, 100) FoR — identical whichever way round.
+    assert forward == (1500.0, 100.0)
+    assert reverse == forward
+
+
+def test_walker_previews_cover_every_rule(walker_world):
+    ids = {p.rule_id for p in walker_world.rule_previews}
+    assert ids == {rule.rule_id for rule in walker_world.link_rules}
+    assert all(p.preview_scope == "computed" for p in walker_world.rule_previews)
+
+
+def test_walker_preview_counts_reconcile_over_tested(walker_world):
+    """Every tested pair is drawn or accounted for by exactly one reason —
+    counts sum over pairs_tested, the honest denominator, and drawn pairs are
+    real nodes."""
+    node_ids = {node.node_id for node in walker_world.nodes}
+    computed = [p for p in walker_world.rule_previews if p.preview_scope == "computed"]
+    assert computed
+    for preview in computed:
+        reason_sum = sum(rc.count for rc in preview.reason_counts)
+        # The walker is below the draw cap, so drawn == passing and the sum is tight.
+        assert reason_sum + preview.pairs_drawn == preview.pairs_tested
+        assert preview.pairs_drawn == len(preview.drawable_pairs)
+        assert preview.pairs_tested == min(preview.pairs_total, 4000)
+        assert not preview.capped
+        assert all(rc.reason in _PREVIEW_VOCAB for rc in preview.reason_counts)
+        for pair in preview.drawable_pairs:
+            assert pair.node_a in node_ids and pair.node_b in node_ids
+            assert pair.rule_id == preview.rule_id
+
+
+def test_walker_gate_set_matches_the_frozen_epoch_contract(walker_world):
+    """Only the gates the runtime would enforce at this epoch appear. Ground
+    access under geometry_only carries no boresight/range, and the motion gates
+    are off, so ground reasons are LOS/elevation only; ISL adds range and FoR
+    but never tracking_exceeded or polar_seam."""
+    by_id = {p.rule_id: p for p in walker_world.rule_previews}
+    access = by_id["leo_access"]
+    isl = by_id["leo_isl"]
+    assert {rc.reason for rc in access.reason_counts} <= {"los_blocked", "elevation_below_min"}
+    assert {rc.reason for rc in isl.reason_counts} <= {
+        "los_blocked",
+        "range_exceeded",
+        "field_of_regard",
+    }
+
+
+def test_walker_fixed_isl_draws_the_allocated_pairs(walker_world):
+    """The fixed ISL rule's preview is over EXACTLY the allocator's resolved
+    pairs — the same count as its link_candidates, drawn one-for-one when
+    feasible."""
+    isl = next(p for p in walker_world.rule_previews if p.rule_id == "leo_isl")
+    allocated = [c for c in walker_world.link_candidates if c.rule_id == "leo_isl"]
+    assert isl.pairs_total == len(allocated)
+    # Every allocated ISL pair is feasible at the epoch, so drawn == total.
+    assert isl.pairs_drawn == isl.pairs_total
+
+
+def test_preview_budget_caps_deterministically(monkeypatch):
+    """When the universe exceeds the tested budget the preview is an honest
+    partial: total is the full closed-form universe, tested is the budget,
+    capped is true, and reason counts sum over TESTED — never the universe."""
+    import ome.builder_world as builder_world_module
+
+    monkeypatch.setattr(builder_world_module, "_PREVIEW_TESTED_BUDGET", 50)
+    world = build_builder_world(_WALKER_REF)
+    access = next(p for p in world.rule_previews if p.rule_id == "leo_access")
+    assert access.pairs_total == 704  # the universe is unchanged (closed formula)
+    assert access.pairs_tested == 50  # geometry ran over the budget only
+    assert access.capped is True
+    assert sum(rc.count for rc in access.reason_counts) + access.pairs_drawn == 50
+
+
+def test_disabled_rule_ships_no_geometry(walker_world):
+    """A rule the user switched off shows its wall and nothing else — no pairs,
+    no reason counts — never a false state display for a rule that is off."""
+    raw = dict(yaml.safe_load(_WALKER_PATH.read_text(encoding="utf-8")))
+    raw["session"] = {**raw["session"], "name": "earth-leo-walker-disabled"}
+    raw["link_rules"] = [
+        {**rule, "enabled": False} if rule["id"] == "leo_access" else rule
+        for rule in raw["link_rules"]
+    ]
+    world = build_builder_world(raw)
+    access = next(p for p in world.rule_previews if p.rule_id == "leo_access")
+    assert access.preview_scope == "disabled"
+    assert access.pairs_total == 0
+    assert access.pairs_tested == 0
+    assert access.pairs_drawn == 0
+    assert access.reason_counts == ()
+    assert access.drawable_pairs == ()
 
 
 def test_ground_node_without_space_links_stays_in_world(walker_world):

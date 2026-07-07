@@ -77,6 +77,7 @@ const WORLD: BuilderWorld = {
   segments: [],
   allocations: [],
   link_candidates: [],
+  rule_previews: [],
   nodes: [
     {
       node_id: "leo-sat-p00s00",

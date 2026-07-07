@@ -102,9 +102,12 @@ def test_builder_wire_shape_field_names_match_backend():
         BuilderLinkEndpoint,
         BuilderLinkRule,
         BuilderNodeInterfaceFacts,
+        BuilderPreviewPair,
+        BuilderPreviewReasonCount,
         BuilderResolveCheck,
         BuilderResolveRefusal,
         BuilderRuleAllocation,
+        BuilderRulePreview,
         BuilderWorld,
         BuilderWorldNode,
     )
@@ -128,6 +131,9 @@ def test_builder_wire_shape_field_names_match_backend():
         (BuilderRuleAllocation, "BuilderRuleAllocation"),
         (BuilderNodeInterfaceFacts, "BuilderNodeInterfaceFacts"),
         (BuilderLinkCandidate, "BuilderLinkCandidate"),
+        (BuilderRulePreview, "BuilderRulePreview"),
+        (BuilderPreviewPair, "BuilderPreviewPair"),
+        (BuilderPreviewReasonCount, "BuilderPreviewReasonCount"),
         (BuilderResolveRefusal, "BuilderResolveError"),
         (BuilderErrorSubject, "BuilderErrorSubject"),
         (UnsupportedFeature, "BuilderUnsupportedFeature"),
@@ -180,6 +186,33 @@ def test_link_event_reasons_match_backend():
 def test_visibility_reject_reasons_match_backend():
     assert _frontend_array("GROUND_VISIBILITY_REJECT_REASONS") == _literal_values(
         GroundVisibilityRejectReason
+    )
+
+
+def test_builder_preview_scopes_match_backend():
+    from nodalarc.models.builder_world import PreviewScope
+
+    assert _frontend_array("BUILDER_PREVIEW_SCOPES", path=_BUILDER_TYPES_TS) == _literal_values(
+        PreviewScope
+    )
+
+
+def test_builder_preview_reject_reasons_match_backend():
+    from nodalarc.models.builder_world import BuilderPreviewRejectReason
+
+    assert _frontend_array(
+        "BUILDER_PREVIEW_REJECT_REASONS", path=_BUILDER_TYPES_TS
+    ) == _literal_values(BuilderPreviewRejectReason)
+
+
+def test_builder_preview_reasons_are_runtime_verbatim():
+    """Every builder preview reason except the one server-only bucket is a
+    runtime reject_reason VERBATIM — never a renamed dialect."""
+    from nodalarc.models.builder_world import BuilderPreviewRejectReason
+
+    physics = set(get_args(BuilderPreviewRejectReason)) - {"no_geometry"}
+    assert physics <= _literal_values(GroundVisibilityRejectReason), (
+        f"non-runtime reason tokens: {physics - _literal_values(GroundVisibilityRejectReason)}"
     )
 
 

@@ -114,11 +114,64 @@ export interface BuilderRuleAllocation {
   per_node: BuilderNodeInterfaceFacts[];
 }
 
-/** Twin of nodalarc.models.builder_world.BuilderLinkCandidate. */
+/** Twin of nodalarc.models.builder_world.BuilderLinkCandidate. Superseded by
+ *  BuilderRulePreview.drawable_pairs; kept during the client cutover. */
 export interface BuilderLinkCandidate {
   rule_id: string;
   node_a: string;
   node_b: string;
+}
+
+/** Preview scope vocabulary — twin of nodalarc PreviewScope. Pinned. */
+export const BUILDER_PREVIEW_SCOPES = [
+  "computed",
+  "inter_body_pending",
+  "terrestrial_pending",
+  "disabled",
+] as const;
+export type PreviewScope = (typeof BUILDER_PREVIEW_SCOPES)[number];
+
+/** Preview reject-reason vocabulary — twin of nodalarc
+ *  BuilderPreviewRejectReason, keyed verbatim on the runtime's reject_reason
+ *  plus the server-only no_geometry bucket. Pinned. */
+export const BUILDER_PREVIEW_REJECT_REASONS = [
+  "los_blocked",
+  "range_exceeded",
+  "elevation_below_min",
+  "field_of_regard",
+  "no_geometry",
+] as const;
+export type BuilderPreviewRejectReason =
+  (typeof BUILDER_PREVIEW_REJECT_REASONS)[number];
+
+/** Twin of nodalarc.models.builder_world.BuilderPreviewPair — one drawn pair,
+ *  oriented to the rule's endpoints server-side. */
+export interface BuilderPreviewPair {
+  rule_id: string;
+  kind: string;
+  node_a: string;
+  node_b: string;
+}
+
+/** Twin of nodalarc.models.builder_world.BuilderPreviewReasonCount. */
+export interface BuilderPreviewReasonCount {
+  reason: BuilderPreviewRejectReason;
+  count: number;
+}
+
+/** Twin of nodalarc.models.builder_world.BuilderRulePreview — the server's
+ *  frozen-epoch visibility verdict for one rule. The client renders these
+ *  facts and never runs a second physics engine. */
+export interface BuilderRulePreview {
+  rule_id: string;
+  kind: string;
+  preview_scope: PreviewScope;
+  pairs_total: number;
+  pairs_tested: number;
+  pairs_drawn: number;
+  capped: boolean;
+  reason_counts: BuilderPreviewReasonCount[];
+  drawable_pairs: BuilderPreviewPair[];
 }
 
 /** Twin of nodalarc.models.builder_world.BuilderErrorSubject. */
@@ -163,6 +216,7 @@ export interface BuilderWorld {
   segments: BuilderWorldSegment[];
   allocations: BuilderRuleAllocation[];
   link_candidates: BuilderLinkCandidate[];
+  rule_previews: BuilderRulePreview[];
 }
 
 /** Twin of nodalarc.models.builder_world.BuilderResolveCheck. */

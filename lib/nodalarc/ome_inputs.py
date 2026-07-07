@@ -18,6 +18,7 @@ from nodalarc.body_frames import BodyFrame, body_runtime_support_for
 from nodalarc.constellation_loader import SatelliteNode
 from nodalarc.ephemeris_runtime import (
     SkyfieldBspEphemeris,
+    body_states_at,
     runtime_config_from_resolved,
     session_epoch_unix,
 )
@@ -25,6 +26,7 @@ from nodalarc.link_metadata import LinkRuleMetadata
 from nodalarc.models.addressing import NeighborAssignment
 from nodalarc.models.constellation import GroundTerminal, IslTerminal
 from nodalarc.models.ephemeris import EphemerisConfig
+from nodalarc.models.events import EphemerisBodyFrame
 from nodalarc.models.ground_policy import HandoverPolicySpec, SelectionPolicySpec
 from nodalarc.models.ground_station import (
     GroundStationConfig,
@@ -264,6 +266,55 @@ def _body_ephemeris_from_resolved(
         epoch_unix=epoch_unix,
         end_epoch_unix=epoch_unix + period_s,
     )
+
+
+#: A body ephemeris spans [epoch, epoch + period]. A satellite-less session has
+#: no orbital period to size it; the frames are queried only at the epoch, so any
+#: positive span that covers it works. One day is ample and cheap to load.
+_SATELLITE_LESS_EPHEMERIS_SPAN_S = 86400.0
+
+
+def resolved_body_frames_at_epoch(
+    resolved: ResolvedSession, epoch_unix: float
+) -> dict[str, EphemerisBodyFrame]:
+    """The session's body frames at one epoch, WITHOUT any satellite input.
+
+    ``build_ome_inputs_from_resolved`` refuses a satellite-less session, but a
+    body's physical facts and its position at the epoch are satellite-
+    independent. This lets the builder render a grammar-valid ground-only
+    session (render scale anchors on a body frame) rather than wall it — the OME
+    satellite precondition is a runtime-readiness gate, not a grammar rule."""
+    physical = _body_frames_from_resolved(resolved)
+    active = _active_bodies(resolved)
+    body_ephemeris = _body_ephemeris_from_resolved(
+        resolved,
+        active_bodies=active,
+        period_s=_SATELLITE_LESS_EPHEMERIS_SPAN_S,
+    )
+    body_states = body_states_at(body_ephemeris, set(active), epoch_unix)
+    frames: dict[str, EphemerisBodyFrame] = {}
+    for body_id, state in sorted(body_states.items()):
+        frame = physical[body_id]
+        frames[body_id] = EphemerisBodyFrame(
+            body_id=body_id,
+            mean_radius_km=frame.mean_radius_km,
+            equatorial_radius_km=frame.equatorial_radius_km,
+            polar_radius_km=frame.polar_radius_km,
+            gravitational_parameter_km3_s2=frame.gravitational_parameter_km3_s2,
+            rotation_rate_rad_s=frame.rotation_rate_rad_s,
+            j2=frame.j2,
+            origin_x_km=state.position_km.x,
+            origin_y_km=state.position_km.y,
+            origin_z_km=state.position_km.z,
+            vel_x_km_s=state.velocity_km_s.x,
+            vel_y_km_s=state.velocity_km_s.y,
+            vel_z_km_s=state.velocity_km_s.z,
+            provider=state.provider,
+            kernel_id=state.kernel_id,
+            quality_tier=state.quality_tier,
+            frame=state.frame,
+        )
+    return frames
 
 
 def _session_epoch_unix(resolved: ResolvedSession) -> float:

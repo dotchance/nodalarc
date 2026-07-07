@@ -192,13 +192,99 @@ class BuilderRuleAllocation(BaseModel):
 
 class BuilderLinkCandidate(BaseModel):
     """One allocated fixed pair — the preview draws these, never re-derives
-    them."""
+    them.
+
+    SUPERSEDED by ``BuilderRulePreview.drawable_pairs``, which carries the same
+    pair identities plus the server's frozen-epoch visibility verdict. Kept
+    beside the previews during the client cutover; the reader moves off it and
+    this field is deleted in a later, reader-free step."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     rule_id: str
     node_a: str
     node_b: str
+
+
+#: How a rule's preview geometry was resolved. Only ``computed`` carries reason
+#: counts and drawn pairs; the other three are typed walls the client renders
+#: verbatim instead of deciding client-side. A module-level alias so the
+#: vocabulary can be pinned against the TS twin (``get_args`` reaches it).
+PreviewScope = Literal[
+    "computed",
+    "inter_body_pending",
+    "terrestrial_pending",
+    "disabled",
+]
+
+#: The reasons a tested preview pair drew no line, keyed VERBATIM on the
+#: runtime's own visibility reject_reason — never a renamed dialect — plus the
+#: one server-only bucket ``no_geometry`` (an allocated pair with no computable
+#: geometry at the frozen epoch, the old client N30 silent skip). The
+#: motion-only gates (tracking_exceeded, polar_seam) cannot appear: the preview
+#: is one frozen epoch and calls the composites with those gates disabled.
+BuilderPreviewRejectReason = Literal[
+    "los_blocked",
+    "range_exceeded",
+    "elevation_below_min",
+    "field_of_regard",
+    "no_geometry",
+]
+
+
+class BuilderPreviewPair(BaseModel):
+    """One drawn preview pair: a runtime node pair whose frozen-epoch geometry
+    passed every armed gate, oriented to the rule's endpoints server-side. P5b's
+    canvas draws these directly and never re-derives pair identities."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    rule_id: str
+    kind: str
+    node_a: str
+    node_b: str
+
+
+class BuilderPreviewReasonCount(BaseModel):
+    """How many TESTED pairs one reject reason accounts for. ``reason`` is the
+    runtime's reject_reason verbatim (or ``no_geometry``); counts sum over
+    ``pairs_tested`` — never an untested remainder."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    reason: BuilderPreviewRejectReason
+    count: int
+
+
+class BuilderRulePreview(BaseModel):
+    """The server's frozen-epoch visibility verdict for one link rule.
+
+    NodalArc computes preview geometry through the same OME visibility
+    composites the runtime uses; the builder renders these facts and never runs
+    a second physics engine. ``preview_scope`` says whether geometry ran and, if
+    not, why (``inter_body_pending``/``terrestrial_pending``/``disabled`` are
+    typed walls). Only ``computed`` carries reason counts and drawn pairs.
+
+    The preview is BOUNDED, not a simulation. ``pairs_total`` is the candidate
+    universe size (a closed-form count, never a materialized pair set);
+    ``pairs_tested`` is the deterministic subset geometry actually ran on
+    (``min(pairs_total, budget)``, first pairs in authored/node-id order — never
+    distance-ranked); ``pairs_drawn`` is how many tested pairs passed (the first
+    such, capped to the draw cap). ``capped`` is true when the preview is partial
+    on either axis (``pairs_tested < pairs_total`` or more passed than were
+    drawn). Reason counts and drawn pairs describe the TESTED subset only."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    rule_id: str
+    kind: str
+    preview_scope: PreviewScope
+    pairs_total: int
+    pairs_tested: int
+    pairs_drawn: int
+    capped: bool
+    reason_counts: tuple[BuilderPreviewReasonCount, ...] = ()
+    drawable_pairs: tuple[BuilderPreviewPair, ...] = ()
 
 
 class BuilderErrorSubject(BaseModel):
@@ -253,3 +339,4 @@ class BuilderWorld(BaseModel):
     segments: tuple[BuilderWorldSegment, ...] = ()
     allocations: tuple[BuilderRuleAllocation, ...] = ()
     link_candidates: tuple[BuilderLinkCandidate, ...] = ()
+    rule_previews: tuple[BuilderRulePreview, ...] = ()

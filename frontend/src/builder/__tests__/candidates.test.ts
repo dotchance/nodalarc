@@ -143,6 +143,7 @@ function world(rules: BuilderLinkRule[]): BuilderWorld {
     segments: [],
     allocations: [],
     link_candidates: [],
+    rule_previews: [],
   };
 }
 
@@ -379,6 +380,7 @@ function stackedWorld(forDeg: number | null): BuilderWorld {
     // NOT endpoint-ordered: endpoint A is the LEO side. The preview must
     // orient the pair by endpoint membership or every per-side gate misses.
     link_candidates: [{ rule_id: "uplink", node_a: "geo-sat", node_b: "leo-sat" }],
+    rule_previews: [],
   };
 }
 

@@ -465,6 +465,10 @@ export function useBuilderWorld() {
     resolveDocument,
     saveSession,
     deploySession,
+    // Exposed so the Open picker can refetch on open: the running chip and
+    // auto-import target must not claim a session the cluster switched away
+    // from (N15). The mount effect already fetches once.
+    refreshSessions,
     clear,
   };
 }

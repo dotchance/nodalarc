@@ -22,7 +22,7 @@ from nodalarc.catalog_paths import CatalogPathError
 from nodalarc.models.builder_world import BuilderWorld
 from nodalarc.models.events import EphemerisNodeFixed, EphemerisNodeKeplerian
 from nodalarc.resolve_session import resolve_session
-from ome.builder_world import build_builder_world
+from ome.builder_world import build_builder_save_artifact, build_builder_world
 from vs_api.main import app
 
 _WALKER_REF = "nodalarc:sessions/earth-leo-walker.yaml"
@@ -34,6 +34,41 @@ client = TestClient(app)
 @pytest.fixture(scope="module")
 def walker_world() -> BuilderWorld:
     return build_builder_world(_WALKER_REF)
+
+
+def _ground_only_document() -> dict:
+    """A grammar-valid session with a ground segment and no satellites.
+
+    It resolves (Q1) — a ground-only session is authorable grammar — but the
+    preview world build (Q2) refuses it, because the OME requires at least one
+    satellite node. This is the fixture that exercises the save/preview
+    boundary before P5a's satellite-less guard exists.
+    """
+    raw = dict(yaml.safe_load(_WALKER_PATH.read_text(encoding="utf-8")))
+    raw["session"] = {**raw["session"], "name": "earth-leo-ground-only"}
+    raw["segments"] = [seg for seg in raw["segments"] if seg["id"] == "ground"]
+    raw.pop("link_rules", None)
+    raw.pop("simulation", None)
+    return raw
+
+
+def test_save_artifact_saves_a_session_whose_preview_world_refuses():
+    """B8/Q1: save depends only on grammar validity. A ground-only session
+
+    refuses to build a preview world (Q2) but still produces a save
+    artifact — canonical bytes, hash, name, and node count from the resolved
+    session, never a built world.
+    """
+    document = _ground_only_document()
+    # Q2: the preview world build refuses a satellite-less session.
+    with pytest.raises(ValueError, match="satellite"):
+        build_builder_world(document)
+    # Q1: the grammar-only save path still succeeds.
+    artifact = build_builder_save_artifact(document)
+    assert artifact.session_name == "earth-leo-ground-only"
+    assert artifact.node_count >= 1  # the gateway ground nodes
+    assert artifact.document_yaml.strip()
+    assert len(artifact.artifact_sha256) == 64
 
 
 def test_returns_builder_world(walker_world):

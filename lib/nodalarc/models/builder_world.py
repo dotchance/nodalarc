@@ -54,6 +54,25 @@ class BuilderResolveCheck(BaseModel):
     artifact_sha256: str
 
 
+class BuilderSaveArtifact(BaseModel):
+    """Grammar-only save result: what a save writes, without a preview world.
+
+    The save path answers only Q1 (grammar-valid): a session that resolves
+    canonicalizes and is written, even if its preview world (Q2) fails or
+    refuses to build. So this carries the canonical bytes and their hash plus
+    the two values the save endpoint reports — the session name and node count
+    — read from the ResolvedSession, never from a built world. It deliberately
+    omits ``world``: building it is the resolve-check's job, not the save's.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    document_yaml: str
+    artifact_sha256: str
+    session_name: str
+    node_count: int
+
+
 class BuilderCatalogEntry(BaseModel):
     """One catalog primitive as a library listing row.
 

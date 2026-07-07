@@ -374,6 +374,7 @@ export function BuilderView({
     resolveDocument,
     saveSession,
     deploySession,
+    refreshSessions,
     clear,
   } = useBuilderWorld();
   // Builder-local selection: inspect-only, never shared with the live view's
@@ -667,18 +668,55 @@ export function BuilderView({
   // changes what saving this document would write (references dereference
   // server-side), so the settled artifact hash must re-settle.
   const libraryRevision = useLibraryRevision();
-  useEffect(() => {
-    if (!workspace) return;
-    const hasContent =
-      workspace.space.length +
-        workspace.space_refs.length +
-        workspace.ground.length +
-        workspace.ground_refs.length >
+  // Whether the last preview serialized to a document that emits segments —
+  // the only honest discriminator between "a resolve is coming" and the
+  // all-held-back steady state that fires no resolve ever. A serializer throw
+  // (P1's suffix-exhaustion cap, structurally near-impossible) is a refusal on
+  // the same channel resolver refusals use, never an async crash.
+  const [previewEmits, setPreviewEmits] = useState(false);
+  const [serializeError, setSerializeError] = useState<string | null>(null);
+  // A Restore that finds no payload (missing/corrupt) surfaces here instead of
+  // silently doing nothing; the current workspace and its world stand (N10).
+  const [restoreError, setRestoreError] = useState<string | null>(null);
+  const hasDrafts =
+    !!workspace &&
+    workspace.space.length +
+      workspace.space_refs.length +
+      workspace.ground.length +
+      workspace.ground_refs.length >
       0;
-    if (!hasContent) return;
+  useEffect(() => {
+    // A pure no-op while no workspace exists: the running-session auto-import
+    // in flight and the refused-import read-only display both depend on the
+    // world surviving until a workspace appears. Clearing here would kill
+    // auto-import and wipe the refused world.
+    if (!workspace) return;
+    const preview = previewWorkspace();
+    if (!preview) return;
+    let document: Record<string, unknown>;
+    try {
+      document = toSessionDocument(preview);
+    } catch (e) {
+      // Valid YAML or a clear refusal, never an async crash: clear the world
+      // and render the throw as the state.
+      setPreviewEmits(false);
+      setSerializeError(e instanceof Error ? e.message : String(e));
+      clear();
+      return;
+    }
+    setSerializeError(null);
+    const segments = (document.segments as unknown[] | undefined) ?? [];
+    if (segments.length === 0) {
+      // Emits nothing (no drafts, or every draft held back): the world/YAML/
+      // status must stop describing a prior draft. clear() replaces the
+      // content early-return; it never fires a resolve for empty content.
+      setPreviewEmits(false);
+      clear();
+      return;
+    }
+    setPreviewEmits(true);
     const timer = setTimeout(() => {
-      const preview = previewWorkspace();
-      if (preview) resolveDocument(toSessionDocument(preview));
+      resolveDocument(document);
     }, 300);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -779,8 +817,18 @@ export function BuilderView({
   // The Library's per-entry gestures. USE places the block in the session
   // (self-ensuring: no open workspace starts one); EDIT forks it into an
   // editable draft; clicking the row inspects it.
+  // Third-class member (N11): a Use/Customize gesture self-ensures a
+  // workspace, so when one is created while a refused-import read-only world
+  // is still on screen (world set, workspace null) the stale world would
+  // render behind the new draft. The refused-import state is the only
+  // triggering precondition, so the clear is narrow.
+  const clearRefusedWorldBeforeCreate = () => {
+    if (world && !workspace) clear();
+  };
+
   const handleLibraryUse = (entry: BuilderCatalogEntry) => {
     setLibraryError(null);
+    clearRefusedWorldBeforeCreate();
     if (entry.family === "constellations") {
       addConstellationRef(entry.ref, entry.display_name ?? entry.id ?? entry.ref);
     } else if (entry.family === "site-sets") {
@@ -830,10 +878,12 @@ export function BuilderView({
           ? (await readCatalogObject(orbitRef)).document
           : null;
         const draft = draftConstellationFromDocuments(document, orbitDocument);
+        clearRefusedWorldBeforeCreate();
         addDraft(draft);
         openEditor({ kind: "segment", id: draft.segment_id });
       } else if (entry.family === "site-sets") {
         const draft = await forkGroundSet(entry.ref);
+        clearRefusedWorldBeforeCreate();
         addGroundDraft(draft);
         openEditor({ kind: "ground", id: draft.segment_id });
       } else if (entry.family === "sites") {
@@ -1287,6 +1337,10 @@ export function BuilderView({
         // editors cannot represent open read-only and say why.
         const openEntry = (entry: BuilderSessionListEntry) => {
           stashAutosaveToBackup();
+          // N11: clear before the swap so the previous session's world does
+          // not render during the new load; the load's own resolve owns
+          // failure (error-clears-world), so no conditional guard is needed.
+          clear();
           closeWorkspace();
           closeAllWindows();
           setSelection(null);
@@ -1568,7 +1622,12 @@ export function BuilderView({
             size={17}
             disabled={!!importPending}
             label={importPending ? "Opening…" : "Open a session — from your library or the NodalArc library"}
-            onClick={() => openEditor({ kind: "open-session" })}
+            onClick={() => {
+              // N15: the picker's running chip and auto-import target must not
+              // claim a session the cluster switched away from — refetch on open.
+              void refreshSessions();
+              openEditor({ kind: "open-session" });
+            }}
           />
           <IconButton
             className="builder-toolbar-btn"
@@ -1619,13 +1678,23 @@ export function BuilderView({
                   : "Nothing to restore"
             }
             onClick={() => {
-              closeAllWindows();
-              setSelection(null);
-              setImportedFrom(null);
-              setImportIssues(null);
-              setSaveState({ kind: "idle" });
-              if (hasBackup()) restoreBackup();
-              else restoreAutosave();
+              // N10: clear only when the restore actually swaps the workspace.
+              // On a missing/corrupt payload the restore returns false and the
+              // current world/YAML/status stand (they still describe the
+              // current workspace) — clearing there would strand a null world,
+              // since an unchanged workspace never re-fires the resolve loop.
+              const restored = hasBackup() ? restoreBackup() : restoreAutosave();
+              if (restored) {
+                closeAllWindows();
+                setSelection(null);
+                setImportedFrom(null);
+                setImportIssues(null);
+                setSaveState({ kind: "idle" });
+                setRestoreError(null);
+                clear();
+              } else {
+                setRestoreError("nothing to restore — the saved draft could not be read");
+              }
             }}
           />
         </span>
@@ -1645,6 +1714,20 @@ export function BuilderView({
             {importIssues.issues.map((issue) => (
               <div key={issue}>· {issue}</div>
             ))}
+          </div>
+        )}
+        {workspace && (nodeCatalog.error || terminalCatalog.error) && (
+          <div className="builder-warning" data-testid="builder-catalog-error">
+            hardware catalog unavailable — new constellations need it.{" "}
+            {nodeCatalog.error ?? terminalCatalog.error}{" "}
+            <Button
+              onClick={() => {
+                void nodeCatalog.refresh();
+                void terminalCatalog.refresh();
+              }}
+            >
+              retry
+            </Button>
           </div>
         )}
         {workspace && (
@@ -2128,9 +2211,15 @@ export function BuilderView({
           <div className="builder-zone-empty">{snapshotError}</div>
         ) : workspace ? (
           <div className="builder-zone-empty">
-            {resolveError
-              ? `The session does not resolve — the canvas returns when it does. ${truncateError(resolveError.error)}`
-              : "Add a constellation to begin — the world renders as soon as the draft resolves"}
+            {resolveError || serializeError
+              ? `The session does not resolve — the canvas returns when it does. ${truncateError(
+                  resolveError?.error ?? serializeError ?? "",
+                )}`
+              : previewEmits
+                ? "Resolving draft…"
+                : hasDrafts
+                  ? "Nothing to emit — the content is held out. See the rail."
+                  : "Add a constellation to begin — the world renders as soon as the draft resolves"}
           </div>
         ) : (
           <div className="builder-start-card" data-testid="builder-start">
@@ -2269,32 +2358,46 @@ export function BuilderView({
             previewing {count(dirtyWindows, "window")} of unapplied edits
           </span>
         )}
-        {error ? (
-          <span className="builder-status-item builder-status-item--error" title={error}>
-            {truncateError(error)}
+        {error || serializeError ? (
+          <span
+            className="builder-status-item builder-status-item--error"
+            title={error ?? serializeError ?? undefined}
+          >
+            {truncateError(error ?? serializeError ?? "")}
           </span>
         ) : snapshotError ? (
           <span className="builder-status-item builder-status-item--error">
             {snapshotError}
           </span>
         ) : world ? (
-          <span className="builder-status-item" title={ruleNotes || undefined}>
-            ✓ resolves: {count(world.nodes.length, "node")} (
-            {count(satelliteCount, "satellite")} · {groundCount} ground) ·{" "}
-            {count(segments.length, "segment")}
-            {candidates && world.link_rules.length > 0 && (
-              <>
-                {" "}
-                · {count(world.link_rules.length, "rule")} →{" "}
-                {count(candidates.pairs.length, "LOS candidate")}
-                {darkRules > 0 && ` (${darkRules} dark)`}
-              </>
+          <>
+            <span className="builder-status-item" title={ruleNotes || undefined}>
+              ✓ resolves: {count(world.nodes.length, "node")} (
+              {count(satelliteCount, "satellite")} · {groundCount} ground) ·{" "}
+              {count(segments.length, "segment")}
+              {candidates && world.link_rules.length > 0 && (
+                <>
+                  {" "}
+                  · {count(world.link_rules.length, "rule")} →{" "}
+                  {count(candidates.pairs.length, "LOS candidate")}
+                  {darkRules > 0 && ` (${darkRules} dark)`}
+                </>
+              )}
+            </span>
+            {satelliteCount === 0 && (
+              <span className="builder-status-item builder-status-item--hint">
+                no satellites yet — add one to run contact previews
+              </span>
             )}
-          </span>
+          </>
         ) : (
           <span className="builder-status-item">
             {workspace
-              ? "draft — not resolved yet"
+              ? previewEmits
+                ? "resolving draft…"
+                : hasDrafts
+                  ? "nothing to emit — content held out"
+                  : "add a constellation to begin"
               : importPending
                 ? importPending.file === runningSession?.file
                   ? `loading running session ${importPending.name}…`
@@ -2314,6 +2417,11 @@ export function BuilderView({
         {saveState.kind === "failed" && (
           <span className="builder-status-item builder-status-item--error">
             save failed: {saveState.message}
+          </span>
+        )}
+        {restoreError && (
+          <span className="builder-status-item builder-status-item--error">
+            {restoreError}
           </span>
         )}
       </div>

@@ -3206,18 +3206,22 @@ async def builder_resolve_world(body: dict) -> dict:
 async def builder_save_session(body: dict) -> dict:
     """Save a builder workspace document as a generated session file.
 
-    The document must RESOLVE first: a saved session that cannot resolve is a
-    false-state landmine, and work-in-progress persistence is the client-side
-    workspace's job. The file content is the canonical YAML of the FLATTENED
-    document — the save artifact, distinct from the pane/resolution YAML,
-    which keeps user references. Writes are exclusive
+    Save answers only Q1 (grammar-valid): the document must RESOLVE as
+    grammar — a saved session that cannot resolve is a false-state landmine —
+    but it must NOT require the preview world (Q2) to build. A grammar-valid
+    session whose world build fails or refuses (a satellite-less session, an
+    orientation mismatch) still saves; the preview build feeds only the
+    preview surface, never the save path. Work-in-progress persistence is the
+    client-side workspace's job. The file content is the canonical YAML of the
+    FLATTENED document — the save artifact, distinct from the pane/resolution
+    YAML, which keeps user references. Writes are exclusive
     (collision-resistant stem, never overwrite); the saved file lands in the
     generated-sessions scan root, so it is immediately listable and
     deployable through the ordinary session paths.
     """
     from functools import partial
 
-    from ome.builder_world import build_builder_resolve_check
+    from ome.builder_world import build_builder_save_artifact
 
     document = body.get("document")
     if not isinstance(document, dict):
@@ -3234,9 +3238,12 @@ async def builder_save_session(body: dict) -> dict:
         document = await loop.run_in_executor(
             None, partial(flatten_user_references, document, roots=builder_roots)
         )
-        resolve_check = await loop.run_in_executor(
+        # Grammar-only: resolve + canonicalize + hash, WITHOUT building the
+        # preview world. A ground-only session raises in the world build but
+        # is grammar-valid and must save.
+        artifact = await loop.run_in_executor(
             None,
-            partial(build_builder_resolve_check, document, catalog_roots=builder_roots),
+            partial(build_builder_save_artifact, document, catalog_roots=builder_roots),
         )
     except CatalogPathError as exc:
         return _catalog_error(exc)
@@ -3248,7 +3255,7 @@ async def builder_save_session(body: dict) -> dict:
         log.error("Builder save internal error: %s", exc, exc_info=True)
         return _error_response(500, "Builder save failed")
 
-    name = resolve_check.world.session.name
+    name = artifact.session_name
     try:
         # One artifact per session name: re-saving 'x' replaces the builder's
         # previous 'x' file atomically. Hash-suffixed siblings made the
@@ -3258,7 +3265,7 @@ async def builder_save_session(body: dict) -> dict:
         session_file = generated_file_path(
             _generated_sessions_dir(), f"_builder-{safe_display_stem(name)}.yaml"
         )
-        await asyncio.to_thread(write_text_atomic, session_file, resolve_check.document_yaml)
+        await asyncio.to_thread(write_text_atomic, session_file, artifact.document_yaml)
     except CatalogPathError as exc:
         return _catalog_error(exc)
     if _session_manager is not None:
@@ -3266,17 +3273,17 @@ async def builder_save_session(body: dict) -> dict:
     log.info(
         "Builder saved session %r (%d nodes) to %s",
         name,
-        len(resolve_check.world.nodes),
+        artifact.node_count,
         session_file,
     )
     return {
         "name": name,
         "file": str(session_file),
-        "nodes": len(resolve_check.world.nodes),
+        "nodes": artifact.node_count,
         # Hash of the exact bytes written: the handler flattens before the
-        # resolve check, and flattening is idempotent, so the resolve
-        # check's artifact hash IS the file's.
-        "artifact_sha256": resolve_check.artifact_sha256,
+        # resolve, and flattening is idempotent, so the artifact hash IS the
+        # file's.
+        "artifact_sha256": artifact.artifact_sha256,
     }
 
 

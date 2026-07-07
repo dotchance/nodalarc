@@ -22,6 +22,7 @@ from nodalarc.models.builder_world import (
     BuilderLinkEndpoint,
     BuilderLinkRule,
     BuilderResolveCheck,
+    BuilderSaveArtifact,
     BuilderWorld,
     BuilderWorldNode,
     BuilderWorldSegment,
@@ -131,6 +132,39 @@ def build_builder_resolve_check(
         artifact_sha256=hashlib.sha256(
             _canonical_session_yaml(flattened).encode("utf-8")
         ).hexdigest(),
+    )
+
+
+def build_builder_save_artifact(
+    session_source: str | dict[str, Any],
+    *,
+    catalog_roots: CatalogRoots | None = None,
+) -> BuilderSaveArtifact:
+    """Grammar-only save path (Q1): resolve → canonicalize → hash.
+
+    Deliberately does NOT build the preview world (Q2 —
+    ``_world_from_raw``/``build_ome_inputs_from_resolved``), so a
+    grammar-valid session whose world build would fail or refuse (for
+    instance a satellite-less, ground-only session) still saves: save depends
+    on Q1 alone. The session name and node count come from the
+    ``ResolvedSession``, not a built world.
+    """
+    roots = catalog_roots or default_catalog_roots()
+    raw = _load_session_source(session_source, roots)
+    flattened = flatten_user_references(raw, roots=roots)
+    resolution = resolve_session_with_assets(
+        raw,
+        catalog_roots=roots,
+        source_context=SourceContext(origin="builder_world"),
+    )
+    resolved = resolution.resolved
+    return BuilderSaveArtifact(
+        document_yaml=_canonical_session_yaml(raw),
+        artifact_sha256=hashlib.sha256(
+            _canonical_session_yaml(flattened).encode("utf-8")
+        ).hexdigest(),
+        session_name=resolved.session.name,
+        node_count=len(resolved.nodes),
     )
 
 

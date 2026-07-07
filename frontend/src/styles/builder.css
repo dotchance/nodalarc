@@ -879,6 +879,39 @@ button.builder-card-head:hover .builder-card-title {
   color: var(--accent-amber);
 }
 
+.builder-apply-state--stale {
+  color: var(--accent-red);
+}
+
+/* The applied object moved underneath a dirty window (undo, restore, a sibling
+   edit). The notice rides above the apply row, in the refusal accent, and
+   offers to reload current values as the explicit alternative to Apply. */
+.builder-stale-notice {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  border-top: 1px solid var(--accent-red);
+  border-left: 3px solid var(--accent-red);
+  background: var(--bg-panel-hover);
+  font-size: var(--font-size-sm);
+  flex-shrink: 0;
+}
+
+.builder-stale-notice-text {
+  flex: 1;
+  color: var(--text-primary);
+}
+
+/* The stale-window confirm list: checkbox then its window title, inline. */
+.builder-checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+}
+
 /* Slider fields: track for the common range, value box for precision and
    for typing past the track. */
 .builder-slider-row {

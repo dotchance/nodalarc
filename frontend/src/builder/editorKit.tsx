@@ -466,40 +466,68 @@ export function PasteArea({
  *  exist for: "did my typing take?" */
 export function EditorApplyRow({
   dirty,
+  stale = false,
   onApply,
   onOk,
   onDefaults,
+  onLoadCurrent,
   onCancel,
 }: {
   dirty: boolean;
+  stale?: boolean;
   onApply: () => void;
   onOk: () => void;
   onDefaults: () => void;
+  onLoadCurrent?: () => void;
   onCancel: () => void;
 }) {
   return (
-    <div className="builder-apply-row" data-testid="builder-apply-row">
-      <span
-        className={`builder-apply-state${dirty ? " builder-apply-state--dirty" : ""}`}
-      >
-        {dirty ? "unapplied changes" : "applied"}
-      </span>
-      <Button
-        onClick={onDefaults}
-        disabled={!dirty}
-        title="Discard edits and return to the values this window opened with"
-      >
-        Defaults
-      </Button>
-      <Button onClick={onCancel} title="Close without applying">
-        Cancel
-      </Button>
-      <Button onClick={onApply} disabled={!dirty} title="Apply edits to the session">
-        Apply
-      </Button>
-      <Button icon="check" onClick={onOk} title="Apply and close">
-        OK
-      </Button>
-    </div>
+    <>
+      {stale && (
+        <div className="builder-stale-notice" data-testid="builder-stale-notice">
+          <span className="builder-stale-notice-text">
+            The saved values changed since you started editing. Apply to keep your
+            edits, or load the current values.
+          </span>
+          {onLoadCurrent && (
+            <Button
+              onClick={onLoadCurrent}
+              title="Discard edits and reload the object's current saved values"
+            >
+              Load current values
+            </Button>
+          )}
+        </div>
+      )}
+      <div className="builder-apply-row" data-testid="builder-apply-row">
+        <span
+          className={`builder-apply-state${
+            stale
+              ? " builder-apply-state--stale"
+              : dirty
+                ? " builder-apply-state--dirty"
+                : ""
+          }`}
+        >
+          {stale ? "stale" : dirty ? "unapplied changes" : "applied"}
+        </span>
+        <Button
+          onClick={onDefaults}
+          disabled={!dirty}
+          title="Discard edits and return to the values this window opened with"
+        >
+          Defaults
+        </Button>
+        <Button onClick={onCancel} title="Close without applying">
+          Cancel
+        </Button>
+        <Button onClick={onApply} disabled={!dirty} title="Apply edits to the session">
+          Apply
+        </Button>
+        <Button icon="check" onClick={onOk} title="Apply and close">
+          OK
+        </Button>
+      </div>
+    </>
   );
 }

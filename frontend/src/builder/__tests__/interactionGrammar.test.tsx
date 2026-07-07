@@ -41,6 +41,8 @@ import {
 } from "../workspace";
 import { canDeploy } from "../useBuilderWorld";
 import {
+  appliedObjectForKey,
+  bufferAppliedChanged,
   overlayBuffers,
   staleBufferKeys,
   useWorkspace,
@@ -286,11 +288,36 @@ describe("IG-14: buffered windows commit through the apply row", () => {
       />,
     );
     expect(screen.getByText("unapplied changes")).toBeTruthy();
+    expect(screen.queryByTestId("builder-stale-notice")).toBeNull();
     fireEvent.click(screen.getByText("Apply"));
     fireEvent.click(screen.getByText("OK"));
     fireEvent.click(screen.getByText("Defaults"));
     fireEvent.click(screen.getByText("Cancel"));
     expect(calls).toEqual(["apply", "ok", "defaults", "cancel"]);
+  });
+
+  // M5: a window whose applied object moved underneath a dirty working copy
+  // shows the stale notice and offers to reload current values. Apply stays
+  // live — keeping the edits is the user's call — but the bulk save refuses.
+  it("a stale window shows the notice and Load current values fires its own path", () => {
+    const calls: string[] = [];
+    render(
+      <EditorApplyRow
+        dirty
+        stale
+        onApply={() => calls.push("apply")}
+        onOk={() => calls.push("ok")}
+        onDefaults={() => calls.push("defaults")}
+        onLoadCurrent={() => calls.push("load")}
+        onCancel={() => calls.push("cancel")}
+      />,
+    );
+    expect(screen.getByTestId("builder-stale-notice")).toBeTruthy();
+    expect(screen.getByText("stale")).toBeTruthy();
+    // Apply is deliberately still enabled — the edits may still be wanted.
+    expect((screen.getByText("Apply") as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(screen.getByText("Load current values"));
+    expect(calls).toEqual(["load"]);
   });
 });
 
@@ -653,9 +680,12 @@ describe("buffer overlays and the stale guard", () => {
     // Undo/restore changed the applied object underneath the window.
     const undone = { ...ws, space: [{ ...draft, label: "reverted elsewhere" }] };
     expect(staleBufferKeys(undone, buffers)).toEqual([key]);
-    // Deletion underneath is stale too — there is nothing to apply into.
+    // Deletion underneath is NOT "stale": the reconciliation pass prunes the
+    // window and its buffer, so no window is left to carry a notice and there is
+    // nothing to apply into. Prune (gone) and stale (moved-and-present) are
+    // disjoint so the two owners can never disagree.
     const deleted = { ...ws, space: [] };
-    expect(staleBufferKeys(deleted, buffers)).toEqual([key]);
+    expect(staleBufferKeys(deleted, buffers)).toEqual([]);
     // Clean buffers are never stale.
     expect(staleBufferKeys(undone, { [key]: { ...buffer, dirty: false } })).toEqual([]);
   });
@@ -673,6 +703,91 @@ describe("buffer overlays and the stale guard", () => {
     expect(staleBufferKeys({ ...ws, name: "renamed-by-undo" }, buffers)).toEqual([
       "session",
     ]);
+  });
+
+  // M5: the reconciliation pass decides prune/drop through the same two
+  // primitives the stale guard uses — never a second key->object resolver.
+  it("appliedObjectForKey resolves object kinds by id, and null everywhere else", () => {
+    const ws = newWorkspace("resolve-probe");
+    const seg = newDraftConstellation("nodalarc:nodes/x.yaml");
+    ws.space = [seg];
+    expect(appliedObjectForKey(ws, `segment:${seg.segment_id}`)).toBe(seg);
+    // Gone object -> null: this is exactly the prune trigger.
+    expect(appliedObjectForKey(ws, "segment:missing")).toBeNull();
+    // The session kind names a field pick, not a single object; the chrome and
+    // read-only kinds own no object at all.
+    expect(appliedObjectForKey(ws, "session")).toBeNull();
+    expect(appliedObjectForKey(ws, "library")).toBeNull();
+    expect(appliedObjectForKey(ws, "node:sat-1")).toBeNull();
+  });
+
+  it("bufferAppliedChanged is the one primitive under staleness and the clean drop", () => {
+    const ws = newWorkspace("changed-probe");
+    const seg = newDraftConstellation("nodalarc:nodes/x.yaml");
+    ws.space = [seg];
+    const key = `segment:${seg.segment_id}`;
+    const buf = {
+      draft: { ...seg, label: "working copy" },
+      opened: structuredClone(seg),
+      dirty: true,
+    };
+    // Applied equals opened: unchanged, whatever the dirty flag says.
+    expect(bufferAppliedChanged(ws, key, buf)).toBe(false);
+    expect(bufferAppliedChanged(ws, key, { ...buf, dirty: false })).toBe(false);
+    // Applied moved underneath (undo, sibling edit) or gone (deletion).
+    const moved = { ...ws, space: [{ ...seg, label: "moved elsewhere" }] };
+    expect(bufferAppliedChanged(moved, key, buf)).toBe(true);
+    expect(bufferAppliedChanged({ ...ws, space: [] }, key, buf)).toBe(true);
+    // The dirty flag does not enter the primitive: a CLEAN buffer over a moved
+    // object is "changed" too — that is the clean-drop trigger, the mirror of
+    // the dirty-only staleBufferKeys projection.
+    expect(bufferAppliedChanged(moved, key, { ...buf, dirty: false })).toBe(true);
+    expect(staleBufferKeys(moved, { [key]: buf })).toEqual([key]);
+    expect(staleBufferKeys(moved, { [key]: { ...buf, dirty: false } })).toEqual([]);
+  });
+
+  // M5 bulk apply-and-save: the confirm flow DECLINES a stale window by leaving
+  // its key out of the overlay, so an unconfirmed working copy is never written.
+  it("overlayBuffers skips declined keys; the rest apply", () => {
+    const ws = newWorkspace("skip-probe");
+    const a = newDraftConstellation("nodalarc:nodes/a.yaml");
+    const b = newDraftConstellation("nodalarc:nodes/b.yaml");
+    ws.space = [a, b];
+    const editedA = { ...a, label: "A!" };
+    const editedB = { ...b, label: "B!" };
+    const buffers = {
+      [`segment:${a.segment_id}`]: { draft: editedA, opened: a, dirty: true },
+      [`segment:${b.segment_id}`]: { draft: editedB, opened: b, dirty: true },
+    };
+    const out = overlayBuffers(ws, buffers, new Set([`segment:${b.segment_id}`]));
+    expect(out.space.find((d) => d.segment_id === a.segment_id)).toBe(editedA);
+    // B was declined — its applied object is untouched.
+    expect(out.space.find((d) => d.segment_id === b.segment_id)).toBe(b);
+  });
+
+  it("workspaceForSave threads excludeKeys into the apply-all overlay", () => {
+    const ws = newWorkspace("exclude-probe");
+    const a = newDraftConstellation("nodalarc:nodes/a.yaml");
+    ws.space = [a];
+    const editedA = { ...a, label: "A!" };
+    const key = `segment:${a.segment_id}`;
+    const buffers = { [key]: { draft: editedA, opened: a, dirty: true } };
+    // Declined: the applied object survives even under applyAll.
+    const excluded = workspaceForSave(ws, buffers, {
+      applyAll: true,
+      dialogName: "",
+      nameTouched: false,
+      excludeKeys: new Set([key]),
+    });
+    expect(excluded.space[0]).toBe(a);
+    // Confirmed (nothing excluded): the working copy applies.
+    const applied = workspaceForSave(ws, buffers, {
+      applyAll: true,
+      dialogName: "",
+      nameTouched: false,
+      excludeKeys: new Set(),
+    });
+    expect(applied.space[0]).toBe(editedA);
   });
 });
 
@@ -698,12 +813,12 @@ describe("save dialog: the name commits once, never per keystroke", () => {
       source.indexOf("function SaveSessionDialog"),
       source.indexOf("export function BuilderView"),
     );
-    // The preview gate (canSave) belongs to apply-and-save and the
-    // no-dirty-windows Save — exactly two occurrences. The applied-only
-    // escape hatch attempts regardless (the server owns the applied
-    // session's verdict once dirty windows diverge the preview) and is
-    // held back only by an in-flight save.
-    expect(dialog.match(/disabled=\{!canSave/g)?.length).toBe(2);
+    // The preview gate (canSave) belongs to every SAVE primary — apply-and-save,
+    // the no-dirty-windows Save, and the stale-confirm view's overwrite-and-save
+    // — three occurrences. The applied-only escape hatch attempts regardless
+    // (the server owns the applied session's verdict once dirty windows diverge
+    // the preview) and is held back only by an in-flight save.
+    expect(dialog.match(/disabled=\{!canSave/g)?.length).toBe(3);
     expect(dialog, "applied-only disabled by saving alone").toContain(
       "disabled={saving}",
     );

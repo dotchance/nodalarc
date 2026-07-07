@@ -64,6 +64,8 @@ import {
   overlayBuffers,
   workspaceForSave,
   staleBufferKeys,
+  appliedObjectForKey,
+  bufferAppliedChanged,
   useWorkspace,
   type BufferMap,
 } from "./useWorkspace";
@@ -232,6 +234,55 @@ function targetKey(target: EditorTarget): string {
   }
 }
 
+/** A human title for a window's object — the name shown in the stale-window
+ *  confirm list. Reads the object's own display name/label, falling back to the
+ *  id; the session window names the session. */
+function objectTitle(workspace: Workspace, target: EditorTarget): string {
+  switch (target.kind) {
+    case "session":
+      return `Session · ${workspace.name}`;
+    case "segment":
+      return (
+        workspace.space.find((d) => d.segment_id === target.id)?.display_name ?? target.id
+      );
+    case "ground":
+      return (
+        workspace.ground.find((d) => d.segment_id === target.id)?.display_name ?? target.id
+      );
+    case "link": {
+      const rule = workspace.links.find((r) => r.rule_id === target.id);
+      return rule?.label || target.id;
+    }
+    case "domain":
+      return (
+        workspace.routing_domains.find((d) => d.domain_id === target.id)?.label ?? target.id
+      );
+    case "boundary":
+      return "Boundary";
+    default:
+      return targetKey(target);
+  }
+}
+
+/** A window bound to a workspace object — one the reconciliation pass can
+ *  resolve through appliedObjectForKey and must prune when it vanishes. The
+ *  seven other kinds (session's applied view is a field-pick, not an object;
+ *  library/catalog/open-session/save-session are chrome; inspect/node-view are
+ *  read-only views of catalog/world state) own no editable object and are never
+ *  pruned or re-seeded by the pass. */
+function isObjectTarget(target: EditorTarget): boolean {
+  switch (target.kind) {
+    case "segment":
+    case "ground":
+    case "link":
+    case "domain":
+    case "boundary":
+      return true;
+    default:
+      return false;
+  }
+}
+
 function groupByBody(segments: SegmentSummary[]): [string, SegmentSummary[]][] {
   const byBody = new Map<string, SegmentSummary[]>();
   for (const seg of segments) {
@@ -263,7 +314,7 @@ function SaveSessionDialog({
   blockedReason,
   saveState,
   dirtyWindows,
-  staleWindows,
+  staleList,
   onSave,
   onClose,
 }: {
@@ -272,8 +323,13 @@ function SaveSessionDialog({
   blockedReason: string | null;
   saveState: SaveState;
   dirtyWindows: number;
-  staleWindows: number;
-  onSave: (opts: { applyAll: boolean; name: string; nameTouched: boolean }) => void;
+  staleList: { key: string; title: string }[];
+  onSave: (opts: {
+    applyAll: boolean;
+    name: string;
+    nameTouched: boolean;
+    confirmedStaleKeys?: ReadonlySet<string>;
+  }) => void;
   onClose: () => void;
 }) {
   const [name, setName] = useState(workspaceName);
@@ -281,8 +337,83 @@ function SaveSessionDialog({
   // overlays carry in from a dirty Session window — only a name the user
   // actually typed here wins.
   const [nameTouched, setNameTouched] = useState(false);
+  // The stale-window confirm sub-view. Each stale window starts DECLINED:
+  // overwriting a value that moved underneath the edit is always an explicit
+  // opt-in, never a default of a bulk gesture.
+  const [confirming, setConfirming] = useState(false);
+  const [confirmed, setConfirmed] = useState<Record<string, boolean>>({});
   const fileId = identifier(name) || workspaceName;
   const saving = saveState.kind === "saving";
+  const hasStale = staleList.length > 0;
+  const confirmedKeys = () =>
+    new Set(staleList.filter((s) => confirmed[s.key]).map((s) => s.key));
+  // A completed save returns to the summary view (which carries the "saved"
+  // line); the confirm sub-view is a pre-save gesture, not a result surface.
+  useEffect(() => {
+    if (saveState.kind === "saved") setConfirming(false);
+  }, [saveState.kind]);
+
+  // `hasStale` guards the sub-view: an external change that resolves the last
+  // stale window mid-confirm falls back to the summary rather than an empty list.
+  if (confirming && hasStale) {
+    const confirmCount = staleList.filter((s) => confirmed[s.key]).length;
+    return (
+      <div className="builder-inspector-stack" data-testid="builder-save-dialog">
+        <div className="builder-warning" data-testid="save-stale-confirm">
+          {count(staleList.length, "window")} changed underneath your edits.
+          Check the ones whose edits should overwrite the current values; the
+          rest are left open with their edits.
+        </div>
+        <label className="builder-checkbox-row">
+          <input
+            type="checkbox"
+            checked={confirmCount === staleList.length}
+            onChange={(e) =>
+              setConfirmed(
+                Object.fromEntries(staleList.map((s) => [s.key, e.target.checked])),
+              )
+            }
+          />
+          overwrite all
+        </label>
+        {staleList.map((s) => (
+          <label key={s.key} className="builder-checkbox-row" data-testid="stale-confirm-row">
+            <input
+              type="checkbox"
+              checked={confirmed[s.key] ?? false}
+              onChange={(e) =>
+                setConfirmed((prev) => ({ ...prev, [s.key]: e.target.checked }))
+              }
+            />
+            {s.title}
+          </label>
+        ))}
+        {saveState.kind === "failed" && (
+          <div className="builder-warning">save failed: {saveState.message}</div>
+        )}
+        <div className="builder-preset-row">
+          <Button
+            variant="primary"
+            disabled={!canSave || saving}
+            onClick={() =>
+              onSave({ applyAll: true, name, nameTouched, confirmedStaleKeys: confirmedKeys() })
+            }
+          >
+            <Icon name="save" size={13} />{" "}
+            {saving
+              ? "Saving…"
+              : confirmCount > 0
+                ? `Overwrite ${count(confirmCount, "window")} and save`
+                : "Save without the stale windows"}
+          </Button>
+          <Button disabled={saving} onClick={() => setConfirming(false)}>
+            Back
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="builder-inspector-stack" data-testid="builder-save-dialog">
       <div className="builder-site-derived">
@@ -311,11 +442,6 @@ function SaveSessionDialog({
           session without them
         </div>
       )}
-      {dirtyWindows > 0 && staleWindows > 0 && (
-        <div className="builder-warning" data-testid="save-stale-note">
-          some windows are stale — apply them individually
-        </div>
-      )}
       {saveState.kind === "saved" && (
         <div className="builder-site-derived" data-testid="save-confirm">
           saved as {saveState.name} — deploy it with the rocket
@@ -329,11 +455,21 @@ function SaveSessionDialog({
           <>
             <Button
               variant="primary"
-              disabled={!canSave || saving || staleWindows > 0}
-              onClick={() => onSave({ applyAll: true, name, nameTouched })}
+              disabled={!canSave || saving}
+              // With stale windows present, the primary opens the confirm flow
+              // rather than applying blindly; with none it applies directly.
+              onClick={() =>
+                hasStale
+                  ? setConfirming(true)
+                  : onSave({ applyAll: true, name, nameTouched })
+              }
             >
               <Icon name="save" size={13} />{" "}
-              {saving ? "Saving…" : `Apply ${count(dirtyWindows, "edit")} and save`}
+              {saving
+                ? "Saving…"
+                : hasStale
+                  ? `Apply ${count(dirtyWindows, "edit")} and save…`
+                  : `Apply ${count(dirtyWindows, "edit")} and save`}
             </Button>
             <Button
               // The applied-only escape hatch is gated by the APPLIED
@@ -635,9 +771,15 @@ export function BuilderView({
     setBuffers((prev) => {
       const buf = prev[key];
       if (!buf) return prev;
+      // Defaults = the values this window opened with. On a stale window (the
+      // applied object moved underneath), restoring `opened` still does not
+      // match the applied object, so the buffer stays dirty+stale: the notice
+      // and Apply/"Load current values" persist, the reconciliation pass never
+      // drops it, and non-applied values are never relabeled "applied".
+      const stillStale = !!workspace && bufferAppliedChanged(workspace, key, buf);
       return {
         ...prev,
-        [key]: { ...buf, draft: structuredClone(buf.opened), dirty: false },
+        [key]: { ...buf, draft: structuredClone(buf.opened), dirty: stillStale },
       };
     });
   };
@@ -683,6 +825,94 @@ export function BuilderView({
   const previewWorkspace = (): Workspace | null =>
     workspace ? overlayBuffers(workspace, buffers) : null;
   const dirtyWindows = Object.values(buffers).filter((b) => b.dirty).length;
+  // M5: reconcile open editors when the applied workspace moves underneath them
+  // (undo, restore, a sibling edit, a deletion). Two disjoint responses:
+  //  - GONE: a window whose object no longer exists (deleted, or an undone
+  //    create) is pruned with its buffer — dirty or clean. The object is gone;
+  //    there is nothing left to edit or apply into, and an unapplied buffer over
+  //    a vanished object is not recoverable state.
+  //  - MOVED-but-present: a CLEAN buffer whose applied object changed is dropped
+  //    and lazily re-seeded from current values on the next edit (its "applied"
+  //    label would otherwise be a lie); a DIRTY one survives, and staleKeys
+  //    surfaces it with a notice plus "Load current values" so unsaved work is
+  //    never silently discarded while its object still exists.
+  // The reads are pure and outside the updaters (StrictMode double-invokes
+  // updater bodies).
+  useEffect(() => {
+    if (!workspace) return;
+    const gone = new Set(
+      windows
+        .filter(
+          (w) =>
+            isObjectTarget(w.target) &&
+            appliedObjectForKey(workspace, targetKey(w.target)) === null,
+        )
+        .map((w) => w.key),
+    );
+    const dropClean = Object.entries(buffers)
+      .filter(([key, buf]) => !buf.dirty && bufferAppliedChanged(workspace, key, buf))
+      .map(([key]) => key);
+    if (gone.size === 0 && dropClean.length === 0) return;
+    if (gone.size > 0) setWindows((prev) => prev.filter((w) => !gone.has(w.key)));
+    const drop = new Set([...gone, ...dropClean]);
+    setBuffers((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      for (const key of drop) {
+        if (key in next) {
+          delete next[key];
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [workspace, windows, buffers]);
+  // The keys of every DIRTY buffer whose applied object moved underneath it —
+  // THE single owner (per-window notice, the save-dialog block, and the stale
+  // count all read this one memo, so they can never disagree).
+  const staleKeys = useMemo(
+    () => (workspace ? new Set(staleBufferKeys(workspace, buffers)) : new Set<string>()),
+    [workspace, buffers],
+  );
+  // The stale windows the bulk apply-and-save confirm flow lists, each named by
+  // its object. Every stale key has an open window (a buffer cannot outlive its
+  // window); the fallback to the key is defensive only.
+  const staleList = useMemo(() => {
+    if (!workspace) return [];
+    return [...staleKeys].map((key) => {
+      const win = windows.find((w) => w.key === key);
+      return { key, title: win ? objectTitle(workspace, win.target) : key };
+    });
+  }, [workspace, staleKeys, windows]);
+  /** Replace a stale window's working copy with the object's current applied
+   *  values (the deliberate opposite of Defaults, which returns to the values
+   *  the window opened with). Only reachable while the object still exists — a
+   *  deleted object's window is already pruned. */
+  const loadCurrentValues = (target: EditorTarget) => {
+    if (!workspace) return;
+    const key = targetKey(target);
+    let current: unknown;
+    if (target.kind === "session") {
+      const w = workspace as unknown as Record<string, unknown>;
+      const opened = buffers[key]?.opened as Record<string, unknown> | undefined;
+      const fields = opened ? Object.keys(opened) : [];
+      current = Object.fromEntries(fields.map((k) => [k, w[k]]));
+    } else {
+      current = appliedObjectForKey(workspace, key);
+    }
+    if (current === null || current === undefined) return;
+    setBuffers((prev) => {
+      if (!(key in prev)) return prev;
+      return {
+        ...prev,
+        [key]: {
+          opened: structuredClone(current),
+          draft: structuredClone(current),
+          dirty: false,
+        },
+      };
+    });
+  };
   /** The wall's owning editor target, from the resolver's own scope — the
    *  serialized subject id maps to drafts via the same identifier()
    *  transform the serializer uses; never by parsing prose or runtime ids.
@@ -807,7 +1037,32 @@ export function BuilderView({
   // name once.
   const [freshId, setFreshId] = useState<string | null>(null);
   const [saveState, setSaveState] = useState<SaveState>({ kind: "idle" });
-  const staleWindows = workspace ? staleBufferKeys(workspace, buffers).length : 0;
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
+  // N13: the create-focus marker is one-shot. Drop it once the window it names
+  // is gone (a closed window must not re-grab focus if that id reappears), and
+  // whenever the builder is left, so returning never focuses a stale field.
+  useEffect(() => {
+    if (!active) {
+      if (freshId !== null) setFreshId(null);
+      return;
+    }
+    if (freshId && !windows.some((w) => "id" in w.target && w.target.id === freshId)) {
+      setFreshId(null);
+    }
+  }, [active, windows, freshId]);
+  // N16: the Copy result is transient feedback, cleared after a beat so the
+  // control returns to its resting label.
+  useEffect(() => {
+    if (copyState === "idle") return;
+    const t = setTimeout(() => setCopyState("idle"), 2000);
+    return () => clearTimeout(t);
+  }, [copyState]);
+  // N14: the completeness rail reads this in two places (the guard and the
+  // chip map); compute it once per workspace, not twice per render.
+  const findings = useMemo(
+    () => (workspace ? completenessFindings(workspace) : []),
+    [workspace],
+  );
   /** One save path for both dialog actions: build the exact document to
    *  save locally, save it, then adopt it — the saved artifact and the
    *  adopted workspace cannot diverge, and the race with the async state
@@ -816,34 +1071,62 @@ export function BuilderView({
     applyAll,
     name,
     nameTouched,
+    confirmedStaleKeys,
   }: {
     applyAll: boolean;
     name: string;
     nameTouched: boolean;
+    confirmedStaleKeys?: ReadonlySet<string>;
   }) => {
     if (!workspace) return;
-    if (applyAll && staleBufferKeys(workspace, buffers).length > 0) {
-      // Never bulk-apply a working copy whose applied object changed
-      // underneath it (undo/restore); each such window applies individually
-      // where its own notice is visible.
+    if (applyAll && staleKeys.size > 0 && confirmedStaleKeys === undefined) {
+      // Fail-closed backstop: a bulk apply-and-save with stale windows must
+      // pass through the confirm flow, which decides each stale window
+      // (confirm = overwrite the moved value, decline = leave the window out).
+      // A direct call carrying no decisions refuses rather than silently
+      // overwrite an object the user reverted.
       setSaveState({
         kind: "failed",
-        message: "some windows are stale — apply them individually",
+        message: "confirm the stale windows before applying",
       });
       return;
     }
     setSaveState({ kind: "saving" });
     try {
+      // Declined stale windows (stale, not confirmed) are excluded from the
+      // overlay and survive the save open/dirty/stale; confirmed stale +
+      // non-stale dirty buffers apply.
+      const excludeKeys = new Set(
+        [...staleKeys].filter((k) => !confirmedStaleKeys?.has(k)),
+      );
+      // The exact buffers this save overlays, captured by identity BEFORE the
+      // network round-trip. The save is non-modal — other editor windows stay
+      // live — so the post-save clear removes only these applied buffers,
+      // matched by reference. Anything created or re-edited during the await
+      // has a fresh identity and survives, and declined-stale buffers were
+      // never in this set: no in-flight edit is silently discarded.
+      const appliedBuffers = new Map(
+        Object.entries(buffers).filter(([k, b]) => b.dirty && !excludeKeys.has(k)),
+      );
       const next = workspaceForSave(workspace, buffers, {
         applyAll,
         dialogName: name,
         nameTouched,
+        excludeKeys,
       });
       const result = await saveSession(toSessionDocument(next));
       if (next !== workspace) {
         commitWorkspace(next, applyAll ? "apply-all-save" : "save-rename");
       }
-      if (applyAll) setBuffers({});
+      if (applyAll) {
+        setBuffers((prev) => {
+          const kept: BufferMap = {};
+          for (const [k, b] of Object.entries(prev)) {
+            if (appliedBuffers.get(k) !== b) kept[k] = b;
+          }
+          return kept;
+        });
+      }
       setSaveState({
         kind: "saved",
         name: result.name,
@@ -1488,7 +1771,7 @@ export function BuilderView({
               blockedReason={error}
               saveState={saveState}
               dirtyWindows={dirtyWindows}
-              staleWindows={staleWindows}
+              staleList={staleList}
               onSave={(opts) => void performSave(opts)}
               onClose={() => closeWindow("save-session")}
             />
@@ -2363,12 +2646,14 @@ export function BuilderView({
               {buffered && (
                 <EditorApplyRow
                   dirty={buf?.dirty ?? false}
+                  stale={staleKeys.has(win.key)}
                   onApply={() => applyBuffer(win.target)}
                   onOk={() => {
                     applyBuffer(win.target);
                     closeWindow(win.key);
                   }}
                   onDefaults={() => revertBuffer(win.key)}
+                  onLoadCurrent={() => loadCurrentValues(win.target)}
                   onCancel={() => closeWindow(win.key)}
                 />
               )}
@@ -2381,8 +2666,24 @@ export function BuilderView({
         {documentYaml ? (
           <>
             <div className="builder-preset-row">
-              <Button onClick={() => navigator.clipboard?.writeText(documentYaml)}>
-                Copy
+              <Button
+                onClick={() => {
+                  const p = navigator.clipboard?.writeText(documentYaml);
+                  if (!p) {
+                    setCopyState("failed");
+                    return;
+                  }
+                  p.then(
+                    () => setCopyState("copied"),
+                    () => setCopyState("failed"),
+                  );
+                }}
+              >
+                {copyState === "copied"
+                  ? "Copied"
+                  : copyState === "failed"
+                    ? "Copy failed"
+                    : "Copy"}
               </Button>
               <Button
                 onClick={() => {
@@ -2407,8 +2708,7 @@ export function BuilderView({
         )}
       </div>
       {workspace &&
-        ((wallTarget && !isOpen(wallTarget.key)) ||
-          completenessFindings(workspace).length > 0) && (
+        ((wallTarget && !isOpen(wallTarget.key)) || findings.length > 0) && (
         <div className="builder-rail" data-testid="builder-rail">
           {wallTarget && !isOpen(wallTarget.key) && (
             <button
@@ -2420,7 +2720,7 @@ export function BuilderView({
               {(resolveError?.error ?? "").length > 96 ? "…" : ""}
             </button>
           )}
-          {completenessFindings(workspace).map((finding) => (
+          {findings.map((finding) => (
             <button
               key={finding.message}
               className="builder-rail-chip"

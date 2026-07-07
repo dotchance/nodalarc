@@ -66,11 +66,18 @@ function _bufferDeepEqual(a: unknown, b: unknown): boolean {
 /** The workspace as the canvas previews it: the applied workspace with every
  *  dirty window's working copy substituted in. Pure — apply-all-and-save
  *  serializes exactly this and then commits it, so what was saved and what
- *  was adopted cannot diverge. Buffer keys are `kind` or `kind:id`. */
-export function overlayBuffers(workspace: Workspace, buffers: BufferMap): Workspace {
+ *  was adopted cannot diverge. Buffer keys are `kind` or `kind:id`. `skipKeys`
+ *  omits specific buffers — the bulk apply-and-save confirm flow declines
+ *  stale windows by leaving their keys out of the overlay, so a working copy
+ *  the user did not confirm is never written. */
+export function overlayBuffers(
+  workspace: Workspace,
+  buffers: BufferMap,
+  skipKeys?: ReadonlySet<string>,
+): Workspace {
   let out = workspace;
   for (const [key, buf] of Object.entries(buffers)) {
-    if (!buf.dirty) continue;
+    if (!buf.dirty || skipKeys?.has(key)) continue;
     const sep = key.indexOf(":");
     const kind = sep === -1 ? key : key.slice(0, sep);
     const id = sep === -1 ? "" : key.slice(sep + 1);
@@ -122,7 +129,12 @@ export function overlayBuffers(workspace: Workspace, buffers: BufferMap): Worksp
   return out;
 }
 
-function _appliedObjectForKey(workspace: Workspace, key: string): unknown {
+/** The applied object a buffer key names, or null when it no longer exists (or
+ *  for the session kind, whose applied view is the field-pick the buffer holds,
+ *  not a single object). THE resolver — the reconciliation pass, staleness, and
+ *  "Load current values" all key off this one function; a second key→object
+ *  resolver would be a place for them to drift. */
+export function appliedObjectForKey(workspace: Workspace, key: string): unknown {
   const sep = key.indexOf(":");
   const kind = sep === -1 ? key : key.slice(0, sep);
   const id = sep === -1 ? "" : key.slice(sep + 1);
@@ -146,26 +158,48 @@ function _appliedObjectForKey(workspace: Workspace, key: string): unknown {
   }
 }
 
-/** Dirty buffers whose applied object changed underneath them (undo,
- *  restore, deletion) since the window's `opened` base was taken. Bulk
- *  apply-and-save refuses these — a bulk gesture must never silently apply
- *  a stale working copy over an object the user reverted. */
+/** Whether a buffer's applied object has moved away from the `opened` base the
+ *  buffer was taken against — an undo, restore, deletion, or sibling edit
+ *  changed it (or, for the session kind, the field-pick moved). The one
+ *  primitive under both staleness (a DIRTY such buffer is stale) and the
+ *  clean-buffer drop (a CLEAN such buffer is re-seeded), so the two can never
+ *  disagree about "changed underneath." */
+export function bufferAppliedChanged(
+  workspace: Workspace,
+  key: string,
+  buf: EditorBuffer,
+): boolean {
+  const kind = key.indexOf(":") === -1 ? key : key.slice(0, key.indexOf(":"));
+  if (kind === "session") {
+    const opened = buf.opened as Record<string, unknown> | null;
+    if (!opened) return false;
+    const pick = Object.fromEntries(
+      Object.keys(opened).map((k) => [k, (workspace as unknown as Record<string, unknown>)[k]]),
+    );
+    return !_bufferDeepEqual(pick, opened);
+  }
+  const applied = appliedObjectForKey(workspace, key);
+  return applied === null || !_bufferDeepEqual(applied, buf.opened);
+}
+
+/** Dirty buffers whose applied object still EXISTS but moved underneath them
+ *  (undo, restore, a sibling edit) since the window's `opened` base was taken.
+ *  Bulk apply-and-save refuses these — a bulk gesture must never silently apply
+ *  a stale working copy over an object the user reverted. A buffer whose object
+ *  was DELETED is deliberately NOT "stale": the reconciliation pass prunes its
+ *  window and buffer outright, so there is no window left to carry a notice and
+ *  nothing to apply into. Keeping the two owners disjoint — prune for gone,
+ *  stale for moved-and-present — is what lets them never disagree. */
 export function staleBufferKeys(workspace: Workspace, buffers: BufferMap): string[] {
   const stale: string[] = [];
   for (const [key, buf] of Object.entries(buffers)) {
     if (!buf.dirty) continue;
     const kind = key.indexOf(":") === -1 ? key : key.slice(0, key.indexOf(":"));
-    if (kind === "session") {
-      const opened = buf.opened as Record<string, unknown> | null;
-      if (!opened) continue;
-      const pick = Object.fromEntries(
-        Object.keys(opened).map((k) => [k, (workspace as unknown as Record<string, unknown>)[k]]),
-      );
-      if (!_bufferDeepEqual(pick, opened)) stale.push(key);
-      continue;
-    }
-    const applied = _appliedObjectForKey(workspace, key);
-    if (applied === null || !_bufferDeepEqual(applied, buf.opened)) stale.push(key);
+    // The session pick has no single applied object (appliedObjectForKey is
+    // null there by design); its staleness is the field-pick compare inside
+    // bufferAppliedChanged. Only object-kind windows gate on existence.
+    if (kind !== "session" && appliedObjectForKey(workspace, key) === null) continue;
+    if (bufferAppliedChanged(workspace, key, buf)) stale.push(key);
   }
   return stale;
 }
@@ -178,9 +212,16 @@ export function staleBufferKeys(workspace: Workspace, buffers: BufferMap): strin
 export function workspaceForSave(
   workspace: Workspace,
   buffers: BufferMap,
-  opts: { applyAll: boolean; dialogName: string; nameTouched: boolean },
+  opts: {
+    applyAll: boolean;
+    dialogName: string;
+    nameTouched: boolean;
+    excludeKeys?: ReadonlySet<string>;
+  },
 ): Workspace {
-  const base = opts.applyAll ? overlayBuffers(workspace, buffers) : workspace;
+  const base = opts.applyAll
+    ? overlayBuffers(workspace, buffers, opts.excludeKeys)
+    : workspace;
   const name = opts.nameTouched ? identifier(opts.dialogName) || base.name : base.name;
   return base.name === name ? base : { ...base, name };
 }

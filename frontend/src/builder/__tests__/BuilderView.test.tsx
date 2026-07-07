@@ -19,6 +19,7 @@ const { BuilderView } = await import("../BuilderView");
 const { catalogEarthFrame } = await import("../../sim/__tests__/bodyModelFixture");
 
 const PROPS = {
+  active: true,
   colorMode: "regime",
   globeMode: "blue-marble",
   referenceFrame: "earth-fixed",
@@ -117,6 +118,26 @@ describe("BuilderView — resolve-loop and world honesty (P2)", () => {
     expect(screen.getByTestId("builder-rail").textContent).toContain("held out of the artifact");
   });
 
+  it("(B3) an inactive (hidden) builder does not auto-import a running session", async () => {
+    const fetchMock = stubFetch({
+      sessions: [
+        {
+          name: "hidden-running",
+          file: "catalog/nodalarc/sessions/hidden-running.yaml",
+          source: "nodalarc",
+          active: true,
+          constellation: "x",
+        },
+      ],
+    });
+    render(<BuilderView {...PROPS} active={false} />);
+    await waitFor(() => expect(sessionsCalls(fetchMock).length).toBeGreaterThanOrEqual(1));
+    // A hidden builder is never a background importer: the auto-import is
+    // gated on `active`, so no resolve-world load ever fires.
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(resolveWorldCalls(fetchMock)).toHaveLength(0);
+  });
+
   it("(N15) opening the picker refetches the sessions list", async () => {
     const fetchMock = stubFetch();
     render(<BuilderView {...PROPS} />);
@@ -183,8 +204,11 @@ describe("BuilderView — resolve-loop and world honesty (P2)", () => {
     });
     render(<BuilderView {...PROPS} />);
 
-    await waitFor(() =>
-      expect(screen.getByTestId("builder-status").textContent).toContain("✓ resolves"),
+    // Auto-import is a multi-step async chain (sessions fetch → import →
+    // resolve-world → world); allow generous time under parallel-suite load.
+    await waitFor(
+      () => expect(screen.getByTestId("builder-status").textContent).toContain("✓ resolves"),
+      { timeout: 3000 },
     );
     const status = screen.getByTestId("builder-status").textContent ?? "";
     expect(status).toContain("no satellites yet — add one to run contact previews");

@@ -292,6 +292,16 @@ function AppInner() {
     }
   }, [viewMode, selection, focusCurrentSelection]);
 
+  // B3: the builder mounts on FIRST entry and then stays mounted, hidden via
+  // display:none on leave — so toggling Live<->Builder preserves the draft,
+  // open windows, and dirty buffers instead of unmounting them. The sticky
+  // latch keeps it from mounting (and auto-importing) before the user has
+  // ever entered the builder.
+  const [builderEntered, setBuilderEntered] = useState(false);
+  useEffect(() => {
+    if (viewMode === "builder") setBuilderEntered(true);
+  }, [viewMode]);
+
   const augmentedSnapshot = useMemo(() => {
     if (!snapshot) return snapshot;
     const hasContinuous = snapshot.traced_paths.some(p => p.flow_id === "__continuous_trace__");
@@ -449,12 +459,19 @@ function AppInner() {
           <Dashboard snapshot={augmentedSnapshot} />
         </div>
       )}
-      {viewMode === "builder" && (
-        <div className="full-pane" style={{ background: "var(--bg-main)" }}>
+      {builderEntered && (
+        <div
+          className="full-pane"
+          style={{
+            background: "var(--bg-main)",
+            display: viewMode === "builder" ? undefined : "none",
+          }}
+        >
           {/* The builder is one operator tool among several: its failures render
               as a contained fault, never a blank application. */}
           <VisualizationErrorBoundary onError={handleVisualizationFatalError}>
           <BuilderView
+            active={viewMode === "builder"}
             colorMode={colorMode}
             globeMode={globeMode}
             referenceFrame={referenceFrame}

@@ -109,7 +109,21 @@ import type {
   BuilderWorld,
 } from "./builderTypes";
 
+// B3: the running-session auto-import is entry-scoped, not mount-scoped. The
+// tried-file marker lives at MODULE scope (like the retired-reveal-nonce
+// registry) so it survives a Live<->Builder toggle — which now keeps
+// BuilderView mounted — and the import fires once per app session, on entry.
+let _importTriedFile: string | null = null;
+
 interface BuilderViewProps {
+  /** True only while the builder is the shown view. The builder stays mounted
+   *  when hidden (B3) so drafts, windows, and buffers survive a Live<->Builder
+   *  toggle; `active` gates every operator surface that ACTS (the Scene
+   *  subtree per the singleton law, global key listeners, the reveal-open and
+   *  auto-import effects) so a hidden builder never mounts a second Scene or
+   *  intercepts live-mode input. Passive state — autosave, backup, workspace
+   *  mutations — keeps running while hidden. */
+  active: boolean;
   /** Shared display state — the toolbar operates on the builder scene exactly
    *  as it does on the live scene (same Scene component, same toggles). */
   colorMode: ColorMode;
@@ -349,6 +363,7 @@ function SaveSessionDialog({
 }
 
 export function BuilderView({
+  active,
   colorMode,
   globeMode,
   referenceFrame,
@@ -440,24 +455,62 @@ export function BuilderView({
   } | null>(null);
   // The file the current workspace was imported from (provenance marker).
   const [importedFrom, setImportedFrom] = useState<string | null>(null);
-  const importTriedRef = useRef<string | null>(null);
+  // B3 backup refuse/choice: a gesture that would displace the current draft
+  // (New, Open, auto-import adoption) first stashes it. If the stash is
+  // REFUSED — a real, different draft already occupies the backup slot — the
+  // gesture holds here and the choice dialog offers overwrite-or-cancel
+  // instead of silently destroying either draft.
+  const [pendingDisplace, setPendingDisplace] = useState<{
+    label: string;
+    proceed: () => void;
+  } | null>(null);
+  /** Run a displacing gesture, preserving the current draft to the backup
+   *  slot first. On a refused stash, hold the gesture for the choice dialog. */
+  const displace = (proceed: () => void, label: string) => {
+    if (stashAutosaveToBackup() === "refused") {
+      setPendingDisplace({ label, proceed });
+      return;
+    }
+    proceed();
+  };
+  /** A self-ensuring creation gesture (M4): with a workspace open, just create
+   *  (the gesture adds to it — no displacement). With none open, creating one
+   *  displaces the prior autosave draft, so route through `displace` — preserve
+   *  it to the backup with the refuse/overwrite choice, never a silent loss. */
+  const ensureThenCreate = (create: () => void, label: string) => {
+    if (workspace) create();
+    else displace(create, label);
+  };
   const startImport = (entry: BuilderSessionListEntry) => {
     setImportIssues(null);
     setImportPending(entry);
     loadSession(entry.file);
   };
   useEffect(() => {
-    // The running session always loads — that is what entering the builder
-    // beside a running cluster means. A browser draft never silently stands
-    // in for it (a stale draft wearing the running session's name showed an
-    // empty world while thirty nodes ran); a displaced draft is preserved
-    // to the backup slot and restorable below.
-    if (workspace || importPending || !runningSession) return;
-    if (importTriedRef.current === runningSession.file) return;
-    importTriedRef.current = runningSession.file;
+    // The running session always loads on ENTRY — that is what entering the
+    // builder beside a running cluster means. A browser draft never silently
+    // stands in for it (a stale draft wearing the running session's name
+    // showed an empty world while thirty nodes ran); a displaced draft is
+    // preserved to the backup slot and restorable below. Gated on `active` so
+    // a hidden builder is never a background importer, and keyed on the
+    // module-scope marker so a hide/show toggle does not replay the import.
+    if (!active || workspace || importPending || !runningSession) return;
+    if (_importTriedFile === runningSession.file) return;
+    _importTriedFile = runningSession.file;
     startImport(runningSession);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [workspace, importPending, runningSession]);
+  }, [active, workspace, importPending, runningSession]);
+  // P2/B3 cross-phase contract: refresh the session list when the builder
+  // regains visibility. After B3 the builder stays mounted, so "regains
+  // visibility" is the active false->true transition, not a remount — the
+  // mount-time fetch only fires on first entry, so a re-entry must refetch or
+  // the running chip and auto-import target go stale on an external switch.
+  const prevActiveRef = useRef(active);
+  useEffect(() => {
+    const wasActive = prevActiveRef.current;
+    prevActiveRef.current = active;
+    if (active && !wasActive) void refreshSessions();
+  }, [active, refreshSessions]);
   useEffect(() => {
     if (!importPending || loadedDocument === null || loadedFile !== importPending.file) return;
     if (workspace) {
@@ -467,9 +520,15 @@ export function BuilderView({
     }
     const result = workspaceFromSessionDocument(loadedDocument);
     if (result.workspace) {
-      stashAutosaveToBackup();
-      openWorkspace(result.workspace);
-      setImportedFrom(importPending.file);
+      // Preserve any displaced draft before adoption; if that stash is
+      // refused, the choice dialog holds the adoption (the world stays on
+      // screen read-only meanwhile — never a silently lossy workspace).
+      const imported = result.workspace;
+      const entry = importPending;
+      displace(() => {
+        openWorkspace(imported);
+        setImportedFrom(entry.file);
+      }, `loading ${entry.name}`);
     } else {
       // The world/YAML stay on screen read-only; the note says why the
       // session cannot be edited — never a silently lossy workspace.
@@ -484,10 +543,13 @@ export function BuilderView({
   // never replays the last save, and each consumer role retires its own.
   const libraryReveal = useLibraryReveal();
   useEffect(() => {
+    // Gated on `active` (B3): a hidden builder must not claim the reveal nonce
+    // the shown view owns, nor pop a Library window in an invisible pane.
+    if (!active) return;
     if (!claimLibraryReveal("opener", libraryReveal)) return;
     openEditor({ kind: "catalog" });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [libraryReveal]);
+  }, [active, libraryReveal]);
   useEffect(() => {
     // The import must end with its resolve: a failed fetch or a competing
     // action (clear/+ New discards the in-flight response) would otherwise
@@ -725,8 +787,11 @@ export function BuilderView({
   }, [workspace, buffers, libraryRevision]);
 
   // Trust mechanics: Ctrl/Cmd+Z undoes the last workspace mutation unless
-  // the user is typing in a field (native input undo wins there).
+  // the user is typing in a field (native input undo wins there). Gated on
+  // `active` (B3): a hidden-but-mounted builder must never intercept a Ctrl+Z
+  // the live view's user intends for something else.
   useEffect(() => {
+    if (!active) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== "z") return;
       const target = event.target as HTMLElement | null;
@@ -737,7 +802,7 @@ export function BuilderView({
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [undo]);
+  }, [active, undo]);
   // IG-2: the object a create gesture just made — its editor focuses the
   // name once.
   const [freshId, setFreshId] = useState<string | null>(null);
@@ -832,19 +897,21 @@ export function BuilderView({
 
   const handleLibraryUse = (entry: BuilderCatalogEntry) => {
     setLibraryError(null);
-    clearRefusedWorldBeforeCreate();
-    if (entry.family === "constellations") {
-      addConstellationRef(entry.ref, entry.display_name ?? entry.id ?? entry.ref);
-    } else if (entry.family === "site-sets") {
-      addGroundRef(entry.ref, entry.display_name ?? entry.id ?? entry.ref);
-    } else if (entry.family === "nodes") {
-      addConstellation(entry.ref);
-    } else if (entry.family === "sites" && entry.id) {
-      addGroundMember(
-        refGroundMember(entry.ref, entry.id, entry.display_name ?? entry.id, entry.summary),
-        () => newDraftGroundSet(defaultGroundNodeRef ?? "", {}),
-      );
-    }
+    ensureThenCreate(() => {
+      clearRefusedWorldBeforeCreate();
+      if (entry.family === "constellations") {
+        addConstellationRef(entry.ref, entry.display_name ?? entry.id ?? entry.ref);
+      } else if (entry.family === "site-sets") {
+        addGroundRef(entry.ref, entry.display_name ?? entry.id ?? entry.ref);
+      } else if (entry.family === "nodes") {
+        addConstellation(entry.ref);
+      } else if (entry.family === "sites" && entry.id) {
+        addGroundMember(
+          refGroundMember(entry.ref, entry.id, entry.display_name ?? entry.id, entry.summary),
+          () => newDraftGroundSet(defaultGroundNodeRef ?? "", {}),
+        );
+      }
+    }, `using ${entry.display_name ?? entry.id ?? entry.ref}`);
   };
 
   const handleLibraryCustomize = async (entry: BuilderCatalogEntry) => {
@@ -882,14 +949,18 @@ export function BuilderView({
           ? (await readCatalogObject(orbitRef)).document
           : null;
         const draft = draftConstellationFromDocuments(document, orbitDocument);
-        clearRefusedWorldBeforeCreate();
-        addDraft(draft);
-        openEditor({ kind: "segment", id: draft.segment_id });
+        ensureThenCreate(() => {
+          clearRefusedWorldBeforeCreate();
+          addDraft(draft);
+          openEditor({ kind: "segment", id: draft.segment_id });
+        }, `customizing ${entry.display_name ?? entry.id ?? entry.ref}`);
       } else if (entry.family === "site-sets") {
         const draft = await forkGroundSet(entry.ref);
-        clearRefusedWorldBeforeCreate();
-        addGroundDraft(draft);
-        openEditor({ kind: "ground", id: draft.segment_id });
+        ensureThenCreate(() => {
+          clearRefusedWorldBeforeCreate();
+          addGroundDraft(draft);
+          openEditor({ kind: "ground", id: draft.segment_id });
+        }, `customizing ${entry.display_name ?? entry.id ?? entry.ref}`);
       } else if (entry.family === "sites") {
         const seeded = draftSiteFromDocument(document);
         setLibraryEditor({
@@ -946,9 +1017,11 @@ export function BuilderView({
       openEditor({ kind: "library" });
     } else if (family === "constellations" && defaultNodeRef) {
       const draft = newDraftConstellation(defaultNodeRef);
-      addDraft(draft);
-      openEditor({ kind: "segment", id: draft.segment_id });
-      setFreshId(draft.segment_id);
+      ensureThenCreate(() => {
+        addDraft(draft);
+        openEditor({ kind: "segment", id: draft.segment_id });
+        setFreshId(draft.segment_id);
+      }, "adding a constellation");
     } else if (family === "sites" && defaultGroundNodeRef) {
       void (async () => {
         try {
@@ -980,9 +1053,11 @@ export function BuilderView({
             defaultGroundNodeRef,
             Object.fromEntries(mounts),
           );
-          addGroundDraft(draft);
-          openEditor({ kind: "ground", id: draft.segment_id });
-          setFreshId(draft.segment_id);
+          ensureThenCreate(() => {
+            addGroundDraft(draft);
+            openEditor({ kind: "ground", id: draft.segment_id });
+            setFreshId(draft.segment_id);
+          }, "adding a ground segment");
         } catch (e) {
           setLibraryError(e instanceof Error ? e.message : String(e));
         }
@@ -1340,17 +1415,20 @@ export function BuilderView({
         // the shipped NodalArc sessions, each a row you open. Sessions the
         // editors cannot represent open read-only and say why.
         const openEntry = (entry: BuilderSessionListEntry) => {
-          stashAutosaveToBackup();
-          // N11: clear before the swap so the previous session's world does
-          // not render during the new load; the load's own resolve owns
-          // failure (error-clears-world), so no conditional guard is needed.
-          clear();
-          closeWorkspace();
-          closeAllWindows();
-          setSelection(null);
-          setImportedFrom(null);
-          setSaveState({ kind: "idle" });
-          startImport(entry);
+          // Preserve the current draft before opening displaces it; a refused
+          // stash holds this gesture for the choice dialog.
+          displace(() => {
+            // N11: clear before the swap so the previous session's world does
+            // not render during the new load; the load's own resolve owns
+            // failure (error-clears-world), so no conditional guard is needed.
+            clear();
+            closeWorkspace();
+            closeAllWindows();
+            setSelection(null);
+            setImportedFrom(null);
+            setSaveState({ kind: "idle" });
+            startImport(entry);
+          }, `opening ${entry.name}`);
         };
         // The server names each entry's source root; the tiers speak the
         // library's own vocabulary (★ yours / nodalarc library).
@@ -1610,14 +1688,15 @@ export function BuilderView({
             size={17}
             label="New session — blank sheet (any current draft stays under Restore)"
             onClick={() => {
-              stashAutosaveToBackup();
-              clear();
-              setSelection(null);
-              closeAllWindows();
-              setImportedFrom(null);
-              setImportIssues(null);
-              setSaveState({ kind: "idle" });
-              startNew("untitled-session");
+              displace(() => {
+                clear();
+                setSelection(null);
+                closeAllWindows();
+                setImportedFrom(null);
+                setImportIssues(null);
+                setSaveState({ kind: "idle" });
+                startNew("untitled-session");
+              }, "starting a new session");
             }}
           />
           <IconButton
@@ -1682,13 +1761,14 @@ export function BuilderView({
                   : "Nothing to restore"
             }
             onClick={() => {
-              // N10: clear only when the restore actually swaps the workspace.
-              // On a missing/corrupt payload the restore returns false and the
-              // current world/YAML/status stand (they still describe the
-              // current workspace) — clearing there would strand a null world,
-              // since an unchanged workspace never re-fires the resolve loop.
-              const restored = hasBackup() ? restoreBackup() : restoreAutosave();
-              if (restored) {
+              // N10/N9: clear and reset ONLY when the restore actually swaps
+              // the workspace. On a missing/corrupt/unmigratable payload the
+              // restore refuses with a reason and the stored value survives;
+              // the current world/YAML/status stand (an unchanged workspace
+              // never re-fires the resolve loop, so clear-then-fail would
+              // strand a null world), and the reason surfaces.
+              const result = hasBackup() ? restoreBackup() : restoreAutosave();
+              if (result.ok) {
                 closeAllWindows();
                 setSelection(null);
                 setImportedFrom(null);
@@ -1697,7 +1777,7 @@ export function BuilderView({
                 setRestoreError(null);
                 clear();
               } else {
-                setRestoreError("nothing to restore — the saved draft could not be read");
+                setRestoreError(result.reason);
               }
             }}
           />
@@ -1742,9 +1822,11 @@ export function BuilderView({
             onAddConstellation={() => {
               if (!defaultNodeRef) return;
               const draft = newDraftConstellation(defaultNodeRef);
-              addDraft(draft);
-              openEditor({ kind: "segment", id: draft.segment_id });
-              setFreshId(draft.segment_id);
+              ensureThenCreate(() => {
+                addDraft(draft);
+                openEditor({ kind: "segment", id: draft.segment_id });
+                setFreshId(draft.segment_id);
+              }, "adding a constellation");
             }}
             onAddGround={() => handleLibraryNew("site-sets")}
             onAddDomain={() => {
@@ -2060,9 +2142,11 @@ export function BuilderView({
               onClick={() => {
                 if (!defaultNodeRef) return;
                 const draft = newDraftConstellation(defaultNodeRef);
-                addDraft(draft);
-                openEditor({ kind: "segment", id: draft.segment_id });
-                setFreshId(draft.segment_id);
+                ensureThenCreate(() => {
+                  addDraft(draft);
+                  openEditor({ kind: "segment", id: draft.segment_id });
+                  setFreshId(draft.segment_id);
+                }, "adding a constellation");
               }}
             >
               + Add constellation
@@ -2184,7 +2268,7 @@ export function BuilderView({
         )}
       </div>
       <div className="builder-canvas" data-testid="builder-canvas">
-        {world && snapshot ? (
+        {active && world && snapshot ? (
           <VisualizationErrorBoundary onError={() => {}}>
             <Scene
               snapshot={snapshot}
@@ -2237,14 +2321,15 @@ export function BuilderView({
             <Button
               variant="primary"
               onClick={() => {
-                stashAutosaveToBackup();
-                clear();
-                setSelection(null);
-                closeAllWindows();
-                setImportedFrom(null);
-                setImportIssues(null);
-                setSaveState({ kind: "idle" });
-                startNew("untitled-session");
+                displace(() => {
+                  clear();
+                  setSelection(null);
+                  closeAllWindows();
+                  setImportedFrom(null);
+                  setImportIssues(null);
+                  setSaveState({ kind: "idle" });
+                  startNew("untitled-session");
+                }, "starting a new session");
               }}
             >
               <Icon name="file-plus" size={13} /> New session
@@ -2429,6 +2514,55 @@ export function BuilderView({
           </span>
         )}
       </div>
+      {pendingDisplace && (
+        <div
+          data-testid="builder-backup-choice"
+          style={{
+            position: "absolute",
+            inset: 0,
+            background: "rgba(0, 0, 0, 0.5)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 1000,
+          }}
+        >
+          <div
+            style={{
+              background: "var(--bg-panel, #1a1a1a)",
+              border: "1px solid var(--border, #333)",
+              padding: "18px",
+              borderRadius: "6px",
+              maxWidth: "440px",
+              display: "flex",
+              flexDirection: "column",
+              gap: "12px",
+            }}
+          >
+            <div style={{ fontWeight: 600 }}>A backed-up draft would be replaced</div>
+            <div style={{ fontSize: "13px", opacity: 0.85 }}>
+              {pendingDisplace.label} would overwrite the draft currently held under
+              Restore. Overwrite it, or cancel and keep both.
+            </div>
+            <div style={{ display: "flex", gap: "8px", justifyContent: "flex-end" }}>
+              <Button
+                variant="primary"
+                onClick={() => {
+                  const held = pendingDisplace;
+                  setPendingDisplace(null);
+                  // The overwrite choice: force the stash so the current draft
+                  // replaces the backup, then run the held gesture.
+                  stashAutosaveToBackup({ force: true });
+                  held.proceed();
+                }}
+              >
+                Overwrite the backup
+              </Button>
+              <Button onClick={() => setPendingDisplace(null)}>Cancel — keep both</Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -223,11 +223,15 @@ PreviewScope = Literal[
 #: geometry at the frozen epoch, the old client N30 silent skip). The
 #: motion-only gates (tracking_exceeded, polar_seam) cannot appear: the preview
 #: is one frozen epoch and calls the composites with those gates disabled.
+#: ``terminal_type_mismatch`` is the one allocator-layer gate the preview does
+#: replicate — the runtime refuses to bring up an ISL pair between incompatible
+#: terminal types, so drawing it would be a false-positive line.
 BuilderPreviewRejectReason = Literal[
     "los_blocked",
     "range_exceeded",
     "elevation_below_min",
     "field_of_regard",
+    "terminal_type_mismatch",
     "no_geometry",
 ]
 

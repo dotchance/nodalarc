@@ -223,6 +223,22 @@ def _isl_limits(
     return min(la[0], lb[0]), min(la[1], lb[1])
 
 
+def _isl_terminal_type(node_id: str, candidate: Any, ctx: Any) -> str | None:
+    """The allocated ISL terminal's type for a node in a FIXED pair, resolved by
+    node identity — or None for a visible pair (no allocation) or a missing
+    lookup. Keyed by identity so orientation can never cross the wires."""
+    if candidate is None:
+        return None
+    if node_id == getattr(candidate, "node_a", None):
+        interface = candidate.interface_a
+    elif node_id == getattr(candidate, "node_b", None):
+        interface = candidate.interface_b
+    else:
+        return None
+    term = (ctx.sat_isl_terminal_constraints.get(node_id) or {}).get(interface)
+    return term.terminal_type if term is not None else None
+
+
 def _isl_verdict(
     node_a: str,
     node_b: str,
@@ -232,13 +248,15 @@ def _isl_verdict(
     rule: ResolvedLinkRule,
     central_body: str,
 ) -> str:
-    """The frozen-epoch ISL verdict via the visibility composite — LOS, range,
-    and field-of-regard. This is GEOMETRY: the composite reasons are the only
-    vocabulary. The allocator-layer terminal type/role gates the runtime applies
-    in evaluate_isl_feasibility (terminal_type_mismatch/terminal_role_mismatch)
-    are NOT replicated here — a config-compatibility concern, not geometry — so a
-    cross-segment pair between incompatible ISL terminals reads as geometrically
-    visible even though the runtime would refuse to bring it up."""
+    """The frozen-epoch ISL verdict — LOS, range, and field-of-regard via the
+    visibility composite, plus the one allocator-layer gate the runtime applies
+    before geometry: terminal-type compatibility. The runtime
+    (evaluate_isl_feasibility) refuses to bring up a pair between incompatible
+    ISL terminal types, so the preview reports terminal_type_mismatch and draws
+    no line rather than a false-positive candidate. (terminal_role_mismatch and
+    the motion gates stay out — role compatibility is enforced upstream by the
+    allocated interfaces, and the motion gates are time semantics a frozen epoch
+    does not judge.)"""
     state_a = sat_states.get(node_a)
     state_b = sat_states.get(node_b)
     if state_a is None or state_b is None:
@@ -246,6 +264,10 @@ def _isl_verdict(
     body_frame = ctx.body_frames.get(central_body)
     if body_frame is None:
         return "no_geometry"
+    type_a = _isl_terminal_type(node_a, candidate, ctx)
+    type_b = _isl_terminal_type(node_b, candidate, ctx)
+    if type_a is not None and type_b is not None and type_a != type_b:
+        return "terminal_type_mismatch"
     max_range, fov = _isl_limits(node_a, node_b, candidate, ctx, rule)
     if max_range is None:
         return "no_geometry"

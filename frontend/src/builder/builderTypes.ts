@@ -139,6 +139,7 @@ export const BUILDER_PREVIEW_REJECT_REASONS = [
   "range_exceeded",
   "elevation_below_min",
   "field_of_regard",
+  "terminal_type_mismatch",
   "no_geometry",
 ] as const;
 export type BuilderPreviewRejectReason =

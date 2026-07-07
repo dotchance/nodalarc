@@ -207,13 +207,14 @@ def test_builder_preview_reject_reasons_match_backend():
 
 def test_builder_preview_reasons_are_runtime_verbatim():
     """Every builder preview reason except the one server-only bucket is a
-    runtime reject_reason VERBATIM — never a renamed dialect."""
+    runtime reject_reason VERBATIM (the full ground+ISL union) — never a renamed
+    dialect."""
     from nodalarc.models.builder_world import BuilderPreviewRejectReason
+    from nodalarc.models.events import VisibilityRejectReason
 
     physics = set(get_args(BuilderPreviewRejectReason)) - {"no_geometry"}
-    assert physics <= _literal_values(GroundVisibilityRejectReason), (
-        f"non-runtime reason tokens: {physics - _literal_values(GroundVisibilityRejectReason)}"
-    )
+    runtime = _literal_values(VisibilityRejectReason)
+    assert physics <= runtime, f"non-runtime reason tokens: {physics - runtime}"
 
 
 def test_unscheduled_reasons_match_backend():

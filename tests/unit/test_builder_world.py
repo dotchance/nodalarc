@@ -361,6 +361,42 @@ def test_isl_limits_key_terminals_by_node_never_by_orientation():
     assert reverse == forward
 
 
+def test_isl_verdict_gates_incompatible_terminal_types():
+    """The runtime refuses an ISL pair between incompatible terminal types
+    before any geometry; the preview reports terminal_type_mismatch (a VERDICT
+    reason, never a resolve refusal) and draws no line, rather than a
+    false-positive candidate. Matching types are covered by the walker's ISL
+    rule, whose same-segment terminals all match and all draw."""
+    from ome.builder_world import _isl_verdict
+
+    # Positions are never read: the type gate fires before geometry.
+    state = SimpleNamespace(position_ecef_km=None, velocity_ecef_km_s=None, geodetic=None)
+    ctx = SimpleNamespace(
+        body_frames={"earth": object()},
+        sat_isl_terminal_constraints={
+            "sat-a": {
+                "isl0": SimpleNamespace(
+                    terminal_type="optical-lct-a", max_range_km=5000.0, field_of_regard_deg=360.0
+                )
+            },
+            "sat-b": {
+                "isl1": SimpleNamespace(
+                    terminal_type="optical-lct-b", max_range_km=5000.0, field_of_regard_deg=360.0
+                )
+            },
+        },
+    )
+    candidate = SimpleNamespace(
+        node_a="sat-a", node_b="sat-b", interface_a="isl0", interface_b="isl1"
+    )
+    rule = _preview_rule("explicit_pairs", ["sat-a"], ["sat-b"], kind="isl")
+    verdict = _isl_verdict(
+        "sat-a", "sat-b", candidate, {"sat-a": state, "sat-b": state}, ctx, rule, "earth"
+    )
+    # A verdict string, never a raised refusal — the session stays authorable.
+    assert verdict == "terminal_type_mismatch"
+
+
 def test_walker_previews_cover_every_rule(walker_world):
     ids = {p.rule_id for p in walker_world.rule_previews}
     assert ids == {rule.rule_id for rule in walker_world.link_rules}

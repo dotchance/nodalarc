@@ -13,7 +13,12 @@
 import { useState } from "react";
 import { Button, IconButton } from "../ui/Button";
 import { EditorName, Field, NumberField, SelectField } from "./editorKit";
-import { readCatalogObject, saveUserObject, useBuilderCatalog } from "./useBuilderWorld";
+import {
+  LIBRARY_SAVE_COPY,
+  readCatalogObject,
+  useBuilderCatalog,
+  useLibrarySave,
+} from "./useBuilderWorld";
 import {
   identifier,
   siteObjectFromDraft,
@@ -33,15 +38,8 @@ interface SiteEditorProps {
 export function SiteEditor({ site, onUpdate, onClose, autoFocusName = false }: SiteEditorProps) {
   const nodes = useBuilderCatalog("nodes");
   const bodies = useBuilderCatalog("bodies");
-  const sites = useBuilderCatalog("sites");
   const [editorError, setEditorError] = useState<string | null>(null);
-  const [librarySave, setLibrarySave] = useState<
-    | { kind: "idle" }
-    | { kind: "saving" }
-    | { kind: "conflict" }
-    | { kind: "saved"; ref: string }
-    | { kind: "failed"; message: string }
-  >({ kind: "idle" });
+  const librarySave = useLibrarySave("sites");
 
   const updateNode = (index: number, patch: Partial<DraftSiteNode>) => {
     onUpdate({
@@ -82,28 +80,9 @@ export function SiteEditor({ site, onUpdate, onClose, autoFocusName = false }: S
     });
   };
 
-  const saveToLibrary = async () => {
-    setLibrarySave({ kind: "saving" });
-    try {
-      const entry = await saveUserObject(
-        "sites",
-        { site: siteObjectFromDraft(site) },
-        { overwrite: librarySave.kind === "conflict" },
-      );
-      setLibrarySave({ kind: "saved", ref: entry.ref });
-      void sites.refresh();
-    } catch (e) {
-      const status = (e as Error & { status?: number }).status;
-      if (status === 409 && librarySave.kind !== "conflict") {
-        setLibrarySave({ kind: "conflict" });
-      } else {
-        setLibrarySave({
-          kind: "failed",
-          message: e instanceof Error ? e.message : String(e),
-        });
-      }
-    }
-  };
+  // A standalone site save has no post-save consequence: saveUserObject reveals
+  // and refreshes the family itself, so no onSaved is passed.
+  const saveToLibrary = () => void librarySave.save({ site: siteObjectFromDraft(site) });
 
   return (
     <div className="builder-inspector-stack" data-testid="builder-site-editor">
@@ -229,21 +208,18 @@ export function SiteEditor({ site, onUpdate, onClose, autoFocusName = false }: S
       {editorError && <div className="builder-warning">{editorError}</div>}
 
       <div className="builder-preset-row">
-        <Button
-          onClick={() => void saveToLibrary()}
-          disabled={librarySave.kind === "saving"}
-        >
-          {librarySave.kind === "conflict" ? "Overwrite in library?" : "Save to library"}
+        <Button onClick={saveToLibrary} disabled={librarySave.saving}>
+          {librarySave.label("Save to library")}
         </Button>
         {onClose && <Button onClick={onClose}>Close</Button>}
       </div>
-      {librarySave.kind === "saved" && (
+      {librarySave.state.kind === "saved" && (
         <div className="builder-library-note" data-testid="library-note">
-          in your library: {librarySave.ref}
+          {LIBRARY_SAVE_COPY.savedNote(librarySave.state.ref)}
         </div>
       )}
-      {librarySave.kind === "failed" && (
-        <div className="builder-warning">{librarySave.message}</div>
+      {librarySave.state.kind === "failed" && (
+        <div className="builder-warning">{librarySave.state.message}</div>
       )}
     </div>
   );

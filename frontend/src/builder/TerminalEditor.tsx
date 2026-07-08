@@ -14,7 +14,7 @@ import { useState } from "react";
 import { Button } from "../ui/Button";
 import { EditorName, NumberField, SelectField } from "./editorKit";
 import { RF_BANDS, bandForFrequencyGhz } from "./workspace";
-import { readCatalogObject, saveUserObject } from "./useBuilderWorld";
+import { readCatalogObject, useLibrarySave } from "./useBuilderWorld";
 import type { BuilderCatalogEntry } from "./builderTypes";
 import {
   draftTerminalFromDocument,
@@ -41,12 +41,7 @@ export function TerminalEditor({
   onSaved,
   onCancel,
 }: TerminalEditorProps) {
-  const [saveState, setSaveState] = useState<
-    | { kind: "idle" }
-    | { kind: "saving" }
-    | { kind: "conflict" }
-    | { kind: "failed"; message: string }
-  >({ kind: "idle" });
+  const librarySave = useLibrarySave("terminals");
   const [seedError, setSeedError] = useState<string | null>(null);
   const warnings = terminalWarnings(draft);
 
@@ -66,25 +61,10 @@ export function TerminalEditor({
     }
   };
 
-  const save = async () => {
-    setSaveState({ kind: "saving" });
-    try {
-      const entry = await saveUserObject(
-        "terminals",
-        { terminal: terminalObjectFromDraft(draft) },
-        { overwrite: saveState.kind === "conflict" },
-      );
-      setSaveState({ kind: "idle" });
-      onSaved(entry.ref);
-    } catch (e) {
-      const status = (e as Error & { status?: number }).status;
-      if (status === 409 && saveState.kind !== "conflict") {
-        setSaveState({ kind: "conflict" });
-      } else {
-        setSaveState({ kind: "failed", message: e instanceof Error ? e.message : String(e) });
-      }
-    }
-  };
+  // The hook's callback lives here and forwards the ref to the host's onSaved
+  // prop unchanged — the host owns the consequence (mount, or close + refresh).
+  const save = () =>
+    void librarySave.save({ terminal: terminalObjectFromDraft(draft) }, (ref) => onSaved(ref));
 
   return (
     <div className="builder-mount-editor" data-testid="terminal-editor">
@@ -246,17 +226,13 @@ export function TerminalEditor({
         </div>
       ))}
       <div className="builder-preset-row">
-        <Button variant="primary" disabled={saveState.kind === "saving"} onClick={() => void save()}>
-          {saveState.kind === "conflict"
-            ? "Overwrite in library?"
-            : saveState.kind === "saving"
-              ? "Saving…"
-              : "Save terminal to library"}
+        <Button variant="primary" disabled={librarySave.saving} onClick={save}>
+          {librarySave.label("Save terminal to library")}
         </Button>
         <Button onClick={onCancel}>Cancel</Button>
       </div>
-      {saveState.kind === "failed" && (
-        <div className="builder-warning">{saveState.message}</div>
+      {librarySave.state.kind === "failed" && (
+        <div className="builder-warning">{librarySave.state.message}</div>
       )}
     </div>
   );

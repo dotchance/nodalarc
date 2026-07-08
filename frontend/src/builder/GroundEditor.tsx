@@ -26,7 +26,12 @@ import {
 } from "./editorKit";
 import { SegmentLinksCard } from "./SegmentLinksCard";
 import { SiteEditor } from "./SiteEditor";
-import { readCatalogObject, saveUserObject, useBuilderCatalog } from "./useBuilderWorld";
+import {
+  LIBRARY_SAVE_COPY,
+  readCatalogObject,
+  useBuilderCatalog,
+  useLibrarySave,
+} from "./useBuilderWorld";
 import {
   SCHEDULING_PRESETS,
   draftGroundMember,
@@ -79,20 +84,13 @@ export function GroundEditor({
   const toggle = (id: string) => setOpenCard((prev) => (prev === id ? null : id));
   const nodes = useBuilderCatalog("nodes");
   const siteCatalog = useBuilderCatalog("sites");
-  const siteSets = useBuilderCatalog("site-sets");
   const bodies = useBuilderCatalog("bodies");
   const [pasteText, setPasteText] = useState("");
   const [pasteErrors, setPasteErrors] = useState<string[]>([]);
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [editingMember, setEditingMember] = useState<string | null>(null);
   const [editorError, setEditorError] = useState<string | null>(null);
-  const [librarySave, setLibrarySave] = useState<
-    | { kind: "idle" }
-    | { kind: "saving" }
-    | { kind: "conflict" }
-    | { kind: "saved"; ref: string }
-    | { kind: "failed"; message: string }
-  >({ kind: "idle" });
+  const librarySave = useLibrarySave("site-sets");
   const warnings = groundWarnings(draft);
 
   const updateMember = (memberId: string, patch: Partial<DraftGroundSite>) => {
@@ -156,28 +154,9 @@ export function GroundEditor({
     }
   };
 
-  const saveToLibrary = async () => {
-    setLibrarySave({ kind: "saving" });
-    try {
-      const id = identifier(draft.display_name) || identifier(draft.segment_id);
-      const entry = await saveUserObject(
-        "site-sets",
-        { site_set: siteSetObjectFromDraft(draft, id) },
-        { overwrite: librarySave.kind === "conflict" },
-      );
-      setLibrarySave({ kind: "saved", ref: entry.ref });
-      void siteSets.refresh();
-    } catch (e) {
-      const status = (e as Error & { status?: number }).status;
-      if (status === 409 && librarySave.kind !== "conflict") {
-        setLibrarySave({ kind: "conflict" });
-      } else {
-        setLibrarySave({
-          kind: "failed",
-          message: e instanceof Error ? e.message : String(e),
-        });
-      }
-    }
+  const saveToLibrary = () => {
+    const id = identifier(draft.display_name) || identifier(draft.segment_id);
+    void librarySave.save({ site_set: siteSetObjectFromDraft(draft, id) });
   };
 
   const stampLabel =
@@ -493,22 +472,22 @@ export function GroundEditor({
 
       <div className="builder-preset-row">
         <Button
-          onClick={() => void saveToLibrary()}
-          disabled={draft.members.length === 0 || librarySave.kind === "saving"}
+          onClick={saveToLibrary}
+          disabled={draft.members.length === 0 || librarySave.saving}
         >
-          {librarySave.kind === "conflict" ? "Overwrite in library?" : "Save to library"}
+          {librarySave.label("Save to library")}
         </Button>
         <Button variant="danger" onClick={onRemove}>
           Discard segment
         </Button>
       </div>
-      {librarySave.kind === "saved" && (
+      {librarySave.state.kind === "saved" && (
         <div className="builder-library-note" data-testid="library-note">
-          in your library: {librarySave.ref}
+          {LIBRARY_SAVE_COPY.savedNote(librarySave.state.ref)}
         </div>
       )}
-      {librarySave.kind === "failed" && (
-        <div className="builder-warning">{librarySave.message}</div>
+      {librarySave.state.kind === "failed" && (
+        <div className="builder-warning">{librarySave.state.message}</div>
       )}
     </div>
   );

@@ -15,6 +15,8 @@ vi.mock("../../config", () => ({
 
 const {
   useBuilderWorld,
+  useLibrarySave,
+  resetCatalogStores,
   requestOutlineReveal,
   useOutlineReveal,
   claimOutlineReveal,
@@ -184,5 +186,131 @@ describe("outline reveal is a channel separate from the Library reveal (IG-1)", 
     const before = library.result.current;
     act(() => requestOutlineReveal("ground-42"));
     expect(library.result.current).toBe(before);
+  });
+});
+
+describe("useLibrarySave — the one 409-conflict save machine (M16)", () => {
+  // Each successful save fires saveUserObject's IG-17 side effects (a family
+  // refresh into the module-global catalog store); reset it per case.
+  beforeEach(() => resetCatalogStores());
+  type SaveResp = { ok: boolean; status: number; json: () => Promise<unknown> };
+  /** Stub the save endpoint; every other fetch (the family refresh saveUserObject
+   *  fires internally) returns an empty list. Records each save POST's body. */
+  function stubSave(responder: (n: number) => SaveResp) {
+    let n = 0;
+    const posts: Array<{ overwrite: boolean; document: unknown; family: string }> = [];
+    globalThis.fetch = vi.fn((url: string, init?: { body?: string }) => {
+      if (String(url).includes("/builder/catalog/save")) {
+        const body = init?.body ? JSON.parse(init.body) : {};
+        posts.push({ overwrite: body.overwrite, document: body.document, family: body.family });
+        return Promise.resolve(responder(n++));
+      }
+      return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve([]) });
+    }) as unknown as typeof fetch;
+    return posts;
+  }
+  const ok = (ref: string): SaveResp => ({
+    ok: true,
+    status: 200,
+    json: () => Promise.resolve({ ref, family: "sites" }),
+  });
+  const err = (status: number, message: string): SaveResp => ({
+    ok: false,
+    status,
+    json: () => Promise.resolve({ error: message }),
+  });
+
+  it("(1)(6) first save posts overwrite:false; success → saved + onSaved(ref, savedObject)", async () => {
+    const posts = stubSave(() => ok("user:sites/x.yaml"));
+    const { result } = renderHook(() => useLibrarySave("sites"));
+    const onSaved = vi.fn();
+    await act(async () => {
+      await result.current.save({ site: { id: "x" } }, onSaved);
+    });
+    expect(posts[0]?.overwrite).toBe(false);
+    expect(result.current.state).toEqual({ kind: "saved", ref: "user:sites/x.yaml" });
+    // onSaved is invoked with the ref and the EXACT wrapper that was saved.
+    expect(onSaved).toHaveBeenCalledWith("user:sites/x.yaml", { site: { id: "x" } });
+  });
+
+  it("(2) a 409 on a first save → conflict with the shared copy", async () => {
+    stubSave(() => err(409, "exists"));
+    const { result } = renderHook(() => useLibrarySave("sites"));
+    await act(async () => {
+      await result.current.save({ site: {} });
+    });
+    expect(result.current.state.kind).toBe("conflict");
+    expect(result.current.label("Save to library")).toBe("Overwrite in library?");
+  });
+
+  it("(3) confirming a conflict re-saves with overwrite:true", async () => {
+    const posts = stubSave((n) => (n === 0 ? err(409, "exists") : ok("user:sites/x.yaml")));
+    const { result } = renderHook(() => useLibrarySave("sites"));
+    await act(async () => {
+      await result.current.save({ site: {} });
+    });
+    expect(result.current.state.kind).toBe("conflict");
+    await act(async () => {
+      await result.current.save({ site: {} });
+    });
+    expect(posts[1]?.overwrite).toBe(true);
+    expect(result.current.state.kind).toBe("saved");
+  });
+
+  it("(4) a 409 while already in conflict → failed with the SECOND 409's message", async () => {
+    // Distinct messages so the assertion proves the failed state carries the
+    // second (overwrite) attempt's error, not the first.
+    stubSave((n) => err(409, n === 0 ? "exists" : "still exists"));
+    const { result } = renderHook(() => useLibrarySave("sites"));
+    await act(async () => {
+      await result.current.save({ site: {} });
+    });
+    await act(async () => {
+      await result.current.save({ site: {} });
+    });
+    expect(result.current.state).toEqual({ kind: "failed", message: "still exists" });
+  });
+
+  it("(5) a non-409 error → failed with the server message verbatim", async () => {
+    stubSave(() => err(500, "server boom"));
+    const { result } = renderHook(() => useLibrarySave("sites"));
+    await act(async () => {
+      await result.current.save({ site: {} });
+    });
+    expect(result.current.state).toEqual({ kind: "failed", message: "server boom" });
+  });
+
+  it("shows the shared 'Saving…' label while a save is in flight", async () => {
+    // Hold the save open so the {saving} state is observable — this is the
+    // in-flight affordance GroundEditor/SiteEditor gained.
+    const gate = deferred<SaveResp>();
+    globalThis.fetch = vi.fn((url: string) =>
+      String(url).includes("/builder/catalog/save")
+        ? gate.promise
+        : Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve([]) }),
+    ) as unknown as typeof fetch;
+    const { result } = renderHook(() => useLibrarySave("sites"));
+    let done!: Promise<void>;
+    act(() => {
+      done = result.current.save({ site: {} });
+    });
+    expect(result.current.saving).toBe(true);
+    expect(result.current.label("Save to library")).toBe("Saving…");
+    await act(async () => {
+      gate.resolve(ok("user:sites/x.yaml"));
+      await done;
+    });
+    expect(result.current.state.kind).toBe("saved");
+  });
+
+  it("reset() returns the machine to idle (customize-node reuse)", async () => {
+    stubSave(() => err(409, "exists"));
+    const { result } = renderHook(() => useLibrarySave("sites"));
+    await act(async () => {
+      await result.current.save({ site: {} });
+    });
+    expect(result.current.state.kind).toBe("conflict");
+    act(() => result.current.reset());
+    expect(result.current.state).toEqual({ kind: "idle" });
   });
 });

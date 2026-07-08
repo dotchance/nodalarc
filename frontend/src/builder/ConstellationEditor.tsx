@@ -16,10 +16,11 @@ import { EditorName, NumberField, SelectField, SliderField } from "./editorKit";
 import { NodeEditor } from "./NodeEditor";
 import { SegmentLinksCard } from "./SegmentLinksCard";
 import {
+  LIBRARY_SAVE_COPY,
   exportCatalogObject,
   readCatalogObject,
-  saveUserObject,
   useBuilderCatalog,
+  useLibrarySave,
 } from "./useBuilderWorld";
 import {
   EARTH_BODY_REF,
@@ -70,13 +71,7 @@ export function ConstellationEditor({
   const warnings = orbitWarnings(draft.orbit);
   const toggle = (id: string) => setOpenCard((prev) => (prev === id ? null : id));
   const [forkError, setForkError] = useState<string | null>(null);
-  const [librarySave, setLibrarySave] = useState<
-    | { kind: "idle" }
-    | { kind: "saving" }
-    | { kind: "conflict" }
-    | { kind: "saved"; ref: string }
-    | { kind: "failed"; message: string }
-  >({ kind: "idle" });
+  const librarySave = useLibrarySave("nodes");
 
   // Fork-to-draft: read the referenced node's document and edit it inline.
   // The origin ref stays as the fallback; discard just clears the draft.
@@ -89,37 +84,20 @@ export function ConstellationEditor({
       node_draft.id = identifier(`${node_draft.id}-custom`);
       node_draft.display_name = `${node_draft.display_name} (custom)`;
       onUpdate({ node_draft });
-      setLibrarySave({ kind: "idle" });
+      librarySave.reset();
     } catch (e) {
       setForkError(e instanceof Error ? e.message : String(e));
     }
   };
 
   // Save the draft to the user catalog and let the segment reference it —
-  // draft → user: ref, the library direction of tweak-ours→yours.
-  const saveNodeToLibrary = async () => {
+  // draft → user: ref, the library direction of tweak-ours→yours. The node-ref
+  // rewrite (draft → the new user ref) is this save's own consequence.
+  const saveNodeToLibrary = () => {
     if (!draft.node_draft) return;
-    setLibrarySave({ kind: "saving" });
-    try {
-      const entry = await saveUserObject(
-        "nodes",
-        { node: nodeObjectFromDraft(draft.node_draft) },
-        { overwrite: librarySave.kind === "conflict" },
-      );
-      onUpdate({ node_ref: entry.ref, node_draft: null });
-      setLibrarySave({ kind: "saved", ref: entry.ref });
-      void nodes.refresh();
-    } catch (e) {
-      const status = (e as Error & { status?: number }).status;
-      if (status === 409 && librarySave.kind !== "conflict") {
-        setLibrarySave({ kind: "conflict" });
-      } else {
-        setLibrarySave({
-          kind: "failed",
-          message: e instanceof Error ? e.message : String(e),
-        });
-      }
-    }
+    void librarySave.save({ node: nodeObjectFromDraft(draft.node_draft) }, (ref) =>
+      onUpdate({ node_ref: ref, node_draft: null }),
+    );
   };
 
   return (
@@ -325,14 +303,10 @@ export function ConstellationEditor({
                 <div className="builder-preset-row">
                   <Button
                     variant="primary"
-                    onClick={() => void saveNodeToLibrary()}
-                    disabled={librarySave.kind === "saving"}
+                    onClick={saveNodeToLibrary}
+                    disabled={librarySave.saving}
                   >
-                    {librarySave.kind === "conflict"
-                      ? "Overwrite in library?"
-                      : librarySave.kind === "saving"
-                        ? "Saving…"
-                        : "Save to library"}
+                    {librarySave.label("Save to library")}
                   </Button>
                   <Button onClick={() => onUpdate({ node_draft: null })}>
                     Discard customization
@@ -366,12 +340,12 @@ export function ConstellationEditor({
                 {nodes.error && <div className="builder-warning">{nodes.error}</div>}
               </>
             )}
-            {librarySave.kind === "failed" && (
-              <div className="builder-warning">{librarySave.message}</div>
+            {librarySave.state.kind === "failed" && (
+              <div className="builder-warning">{librarySave.state.message}</div>
             )}
-            {librarySave.kind === "saved" && (
+            {librarySave.state.kind === "saved" && (
               <div className="builder-library-note" data-testid="library-note">
-                saved to your library as {librarySave.ref}
+                {LIBRARY_SAVE_COPY.savedNote(librarySave.state.ref)}
               </div>
             )}
           </div>

@@ -373,6 +373,83 @@ export async function saveUserObject(
   return saved;
 }
 
+// --- One library-save machine (M16). ------------------------------------
+// The four editors each copied the same 409-conflict save handshake. This hook
+// owns it once: the idle/saving/conflict/saved/failed machine + the overwrite
+// retry. saveUserObject is the IG-17 reveal/refresh/revision choke point, so the
+// hook only CALLS it and never re-fires those (a second call would double the
+// reveal nonce). Post-save CONSEQUENCES (a node-ref rewrite, a host window
+// close) are the caller's: it passes onSaved(ref, savedObject), invoked with the
+// exact client-serializer wrapper that was saved.
+
+export type LibrarySaveState =
+  | { kind: "idle" }
+  | { kind: "saving" }
+  | { kind: "conflict" }
+  | { kind: "saved"; ref: string }
+  | { kind: "failed"; message: string };
+
+/** Canonical save copy — one set of strings for every family. The idle label
+ *  stays family-parameterized (each editor names its own object). */
+export const LIBRARY_SAVE_COPY = {
+  saving: "Saving…",
+  conflict: "Overwrite in library?",
+  savedNote: (ref: string): string => `in your library: ${ref}`,
+} as const;
+
+export interface LibrarySave {
+  state: LibrarySaveState;
+  saving: boolean;
+  /** The button label for the current state; the caller supplies the idle one. */
+  label: (idleLabel: string) => string;
+  /** Persist `document` (the client-serializer wrapper). On success →
+   *  { kind: "saved", ref } and onSaved(ref, document); a 409 on a first save →
+   *  { kind: "conflict" } (call again to overwrite); a 409 while already
+   *  conflicting, or any other error → { kind: "failed", message }. */
+  save: (
+    document: Record<string, unknown>,
+    onSaved?: (ref: string, savedObject: Record<string, unknown>) => void,
+  ) => Promise<void>;
+  reset: () => void;
+}
+
+export function useLibrarySave(family: string): LibrarySave {
+  const [state, setState] = useState<LibrarySaveState>({ kind: "idle" });
+  const save = useCallback(
+    async (
+      document: Record<string, unknown>,
+      onSaved?: (ref: string, savedObject: Record<string, unknown>) => void,
+    ) => {
+      const overwrite = state.kind === "conflict";
+      setState({ kind: "saving" });
+      try {
+        const entry = await saveUserObject(family, document, { overwrite });
+        setState({ kind: "saved", ref: entry.ref });
+        onSaved?.(entry.ref, document);
+      } catch (e) {
+        const status = (e as Error & { status?: number }).status;
+        if (status === 409 && !overwrite) {
+          setState({ kind: "conflict" });
+        } else {
+          setState({ kind: "failed", message: e instanceof Error ? e.message : String(e) });
+        }
+      }
+    },
+    [family, state.kind],
+  );
+  const reset = useCallback(() => setState({ kind: "idle" }), []);
+  const label = useCallback(
+    (idleLabel: string): string =>
+      state.kind === "conflict"
+        ? LIBRARY_SAVE_COPY.conflict
+        : state.kind === "saving"
+          ? LIBRARY_SAVE_COPY.saving
+          : idleLabel,
+    [state.kind],
+  );
+  return { state, saving: state.kind === "saving", label, save, reset };
+}
+
 export function useBuilderWorld() {
   const [sessions, setSessions] = useState<BuilderSessionListEntry[]>([]);
   const [sessionsError, setSessionsError] = useState<string | null>(null);

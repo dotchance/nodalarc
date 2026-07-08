@@ -11,7 +11,7 @@
  *  create gesture opens the editor; typing renames immediately).
  */
 
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Button } from "../ui/Button";
 
 /** The name field every editor leads with. autoFocus fires on mount when
@@ -91,6 +91,32 @@ export function Field({
   );
 }
 
+/** A number box that keeps a LOCAL STRING DRAFT so a value can be typed through
+ *  interim states the committed value must never pass through — empty, a lone
+ *  "-", a below-min figure mid-typing. The input binds the draft, not the value
+ *  directly (deferred-clamp contract): `commit` fires only when the raw string
+ *  is a parseable, in-range number; empty / "-" / below-min update the visible
+ *  draft but commit NOTHING (so nothing reaches the buffer or the canvas
+ *  preview). On blur the draft is dropped and the box re-syncs to the committed
+ *  value — it never auto-commits 0 or the min. When `value` changes externally
+ *  (an Apply/Defaults) and the box is not being edited, the draft is null so the
+ *  box shows the new value. */
+function useNumberDraft(
+  value: number | null,
+  commit: (raw: string) => void,
+): { shown: string; handleChange: (raw: string) => void; handleBlur: () => void } {
+  const [draft, setDraft] = useState<string | null>(null);
+  const shown = draft ?? (value === null ? "" : String(value));
+  return {
+    shown,
+    handleChange: (raw: string) => {
+      setDraft(raw);
+      commit(raw);
+    },
+    handleBlur: () => setDraft(null),
+  };
+}
+
 export function NumberField({
   label,
   value,
@@ -108,22 +134,25 @@ export function NumberField({
   suffix?: string;
   integer?: boolean;
 }) {
+  const { shown, handleChange, handleBlur } = useNumberDraft(value, (raw) => {
+    if (raw === "") return;
+    let parsed = Number(raw);
+    if (!Number.isFinite(parsed)) return;
+    if (integer) parsed = Math.round(parsed);
+    if (min !== undefined && parsed < min) return;
+    onChange(parsed);
+  });
   return (
     <label className="builder-field">
       <span className="builder-field-label">{label}</span>
       <span className="builder-field-input">
         <input
           type="number"
-          value={value}
+          value={shown}
           min={min}
           step={step}
-          onChange={(e) => {
-            let parsed = Number(e.target.value);
-            if (!Number.isFinite(parsed)) return;
-            if (integer) parsed = Math.round(parsed);
-            if (min !== undefined) parsed = Math.max(min, parsed);
-            onChange(parsed);
-          }}
+          onChange={(e) => handleChange(e.target.value)}
+          onBlur={handleBlur}
         />
         {suffix && <span className="builder-field-suffix">{suffix}</span>}
       </span>
@@ -131,10 +160,12 @@ export function NumberField({
   );
 }
 
-/** A slider with a typeable value box beside it. The track covers the
- *  common range; the box accepts numbers beyond it (type past the track).
- *  Dragging streams onChange continuously so the canvas preview moves with
- *  the thumb. */
+/** A slider with a typeable value box beside it. The track covers the common
+ *  range and streams onChange continuously as it drags (the canvas preview
+ *  moves with the thumb); it can never produce an out-of-range value. The box
+ *  types past the track's MAX (values above the common range are valid), but
+ *  min is the hard floor — a below-min figure types but does not commit
+ *  (deferred-clamp contract, shared with NumberField). */
 export function SliderField({
   label,
   value,
@@ -154,12 +185,18 @@ export function SliderField({
   suffix?: string;
   integer?: boolean;
 }) {
-  const parse = (raw: string): number | null => {
+  const roundIfInt = (raw: string): number | null => {
     let parsed = Number(raw);
     if (!Number.isFinite(parsed)) return null;
     if (integer) parsed = Math.round(parsed);
     return parsed;
   };
+  const box = useNumberDraft(value, (raw) => {
+    if (raw === "") return;
+    const parsed = roundIfInt(raw);
+    if (parsed === null || parsed < min) return; // min floor deferred; no max ceiling
+    onChange(parsed);
+  });
   return (
     <label className="builder-field builder-field--slider">
       <span className="builder-field-label">{label}</span>
@@ -172,18 +209,16 @@ export function SliderField({
           value={Math.min(max, Math.max(min, value))}
           aria-label={`${label} slider`}
           onChange={(e) => {
-            const parsed = parse(e.target.value);
+            const parsed = roundIfInt(e.target.value);
             if (parsed !== null) onChange(parsed);
           }}
         />
         <input
           type="number"
-          value={value}
+          value={box.shown}
           step={step}
-          onChange={(e) => {
-            const parsed = parse(e.target.value);
-            if (parsed !== null) onChange(parsed);
-          }}
+          onChange={(e) => box.handleChange(e.target.value)}
+          onBlur={box.handleBlur}
         />
         {suffix && <span className="builder-field-suffix">{suffix}</span>}
       </span>
@@ -208,6 +243,16 @@ export function NullableNumberField({
   suffix?: string;
   min?: number;
 }) {
+  const { shown, handleChange, handleBlur } = useNumberDraft(value, (raw) => {
+    if (raw === "") {
+      onChange(null); // empty → null is this field's commit, not a no-op (pinned)
+      return;
+    }
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed)) return;
+    if (min !== undefined && parsed < min) return;
+    onChange(parsed);
+  });
   return (
     <label className="builder-field">
       <span className="builder-field-label">{label}</span>
@@ -215,17 +260,9 @@ export function NullableNumberField({
         <input
           type="number"
           placeholder={placeholder}
-          value={value ?? ""}
-          onChange={(e) => {
-            if (e.target.value === "") {
-              onChange(null);
-              return;
-            }
-            const parsed = Number(e.target.value);
-            if (!Number.isFinite(parsed)) return;
-            if (min !== undefined && parsed < min) return;
-            onChange(parsed);
-          }}
+          value={shown}
+          onChange={(e) => handleChange(e.target.value)}
+          onBlur={handleBlur}
         />
         {suffix && <span className="builder-field-suffix">{suffix}</span>}
       </span>
@@ -461,9 +498,10 @@ export function PasteArea({
 /** The commit row every buffered editor window ends with. A window edits a
  *  working copy; nothing reaches the session until Apply (or OK, which
  *  applies and closes). Cancel closes without applying — the same outcome as
- *  the title-bar X, but said out loud. Defaults returns the window to the
- *  values it opened with. The state label answers the question the buttons
- *  exist for: "did my typing take?" */
+ *  the title-bar X, but said out loud. Defaults returns the window to its
+ *  baseline: the values at window open, advanced to the applied draft on each
+ *  Apply. The state label answers the question the buttons exist for: "did my
+ *  typing take?" */
 export function EditorApplyRow({
   dirty,
   stale = false,
@@ -514,7 +552,7 @@ export function EditorApplyRow({
         <Button
           onClick={onDefaults}
           disabled={!dirty}
-          title="Discard edits and return to the values this window opened with"
+          title="Discard edits and return to the baseline — the values at window open, advanced to the applied draft on each Apply"
         >
           Defaults
         </Button>

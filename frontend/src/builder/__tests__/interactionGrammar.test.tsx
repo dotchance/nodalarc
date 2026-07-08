@@ -20,6 +20,7 @@ import {
   EditorApplyRow,
   EditorCard,
   EditorName,
+  NumberField,
   NullableNumberField,
   SliderField,
 } from "../editorKit";
@@ -111,19 +112,40 @@ function tinyWorld(
 
 const BUILDER_DIR = join(__dirname, "..");
 
-describe("IG-5: editors compose the kit, never raw controls", () => {
-  it("no raw input/select/textarea in any *Editor.tsx outside the kit", () => {
+describe("IG-5: builder surfaces compose the kit, never raw controls", () => {
+  // The kit DEFINES the controls, so editorKit.tsx is exempt. __tests__ is a
+  // directory, skipped by the extension filter (enumerated for intent). The scan
+  // is non-recursive: production builder files are FLAT (only __tests__ is a
+  // subdirectory) — a future production subdir would need this widened.
+  //
+  // Attribute exemptions, scoped to the CONTROL'S OWN opening tag so a sibling
+  // element's attribute never exempts a raw control:
+  //   - type="file" everywhere: a file picker is not an editing control.
+  //   - type="checkbox" only OUTSIDE an *Editor.tsx: the kit DOES own checkbox
+  //     anatomy (CheckboxField), so an editor's boolean object field must use
+  //     it; the shell's transient confirmation checkboxes (the save-stale
+  //     dialog) are not editor object fields and legitimately stay raw.
+  const EXEMPT_FILES = new Set(["editorKit.tsx"]);
+  it("no raw input/select/textarea in any production builder .tsx outside the kit", () => {
     const offenders: string[] = [];
     for (const file of readdirSync(BUILDER_DIR)) {
-      if (!file.endsWith("Editor.tsx")) continue;
-      const source = readFileSync(join(BUILDER_DIR, file), "utf-8");
-      const lines = source.split("\n");
+      if (file === "__tests__") continue;
+      if (!file.endsWith(".tsx")) continue;
+      if (EXEMPT_FILES.has(file)) continue;
+      const isEditor = file.endsWith("Editor.tsx");
+      const lines = readFileSync(join(BUILDER_DIR, file), "utf-8").split("\n");
       lines.forEach((line, index) => {
         if (!/<(input|select|textarea)\b/.test(line)) return;
-        // File pickers are not editing controls; the attribute may sit on a
-        // following line of the same JSX element.
-        const window = lines.slice(index, index + 4).join(" ");
-        if (/type="file"/.test(window)) return;
+        // Accumulate only THIS element's opening tag — from the match to the
+        // line that ends the tag (`>` or `/>` at line end) — so the exempt
+        // attribute must belong to the matched control, not a nearby sibling.
+        let tag = "";
+        for (let i = index; i < lines.length && i < index + 10; i++) {
+          tag += `${lines[i]} `;
+          if (/>\s*$/.test(lines[i]!)) break;
+        }
+        if (/type="file"/.test(tag)) return;
+        if (/type="checkbox"/.test(tag) && !isEditor) return;
         offenders.push(`${file}:${index + 1}: ${line.trim()}`);
       });
     }
@@ -464,6 +486,81 @@ describe("SliderField: track for the common range, box for the truth", () => {
       />,
     );
     expect(track.value).toBe("40000");
+  });
+});
+
+describe("deferred-clamp number contract (local string draft)", () => {
+  afterEach(cleanup);
+
+  const numberInput = () => document.querySelector('input[type="number"]') as HTMLInputElement;
+
+  it("NumberField: empty commits nothing (never 0) and blur re-syncs to the value", () => {
+    const seen: number[] = [];
+    render(<NumberField label="planes" value={6} min={1} integer onChange={(v) => seen.push(v)} />);
+    const box = numberInput();
+    fireEvent.change(box, { target: { value: "" } });
+    expect(seen).toEqual([]); // empty is not a commit — and not 0
+    expect(box.value).toBe(""); // the draft shows exactly what was typed
+    fireEvent.blur(box);
+    expect(box.value).toBe("6"); // re-sync to the committed value
+  });
+
+  it("NumberField: a below-min figure types but does not commit; blur restores", () => {
+    const seen: number[] = [];
+    render(<NumberField label="planes" value={6} min={4} integer onChange={(v) => seen.push(v)} />);
+    const box = numberInput();
+    fireEvent.change(box, { target: { value: "2" } });
+    expect(seen).toEqual([]); // 2 < min 4 → no commit
+    expect(box.value).toBe("2"); // but it is visible while typing
+    fireEvent.blur(box);
+    expect(box.value).toBe("6"); // never auto-commits the min
+  });
+
+  it("NumberField: a valid in-range value commits, rounded for integer fields", () => {
+    const seen: number[] = [];
+    render(<NumberField label="planes" value={6} min={1} integer onChange={(v) => seen.push(v)} />);
+    fireEvent.change(numberInput(), { target: { value: "8.6" } });
+    expect(seen).toEqual([9]);
+  });
+
+  it("NumberField: negatives are typeable and commit when a negative min allows them", () => {
+    const seen: number[] = [];
+    render(<NumberField label="offset" value={0} min={-90} onChange={(v) => seen.push(v)} />);
+    fireEvent.change(numberInput(), { target: { value: "-45" } });
+    expect(seen).toEqual([-45]);
+  });
+
+  it("SliderField box: min is the floor — below-min types but does not commit", () => {
+    const seen: number[] = [];
+    render(
+      <SliderField label="altitude" value={550} min={150} max={40000} onChange={(v) => seen.push(v)} />,
+    );
+    const box = numberInput();
+    fireEvent.change(box, { target: { value: "100" } });
+    expect(seen).toEqual([]); // below the floor → no commit
+    expect(box.value).toBe("100"); // typeable
+    fireEvent.blur(box);
+    expect(box.value).toBe("550"); // re-sync
+  });
+
+  it("NullableNumberField: below-min commits nothing, yet empty still means null", () => {
+    let value: number | null = 25;
+    render(
+      <NullableNumberField
+        label="min elevation"
+        placeholder="none"
+        value={value}
+        min={10}
+        onChange={(v) => {
+          value = v;
+        }}
+      />,
+    );
+    const box = screen.getByPlaceholderText("none");
+    fireEvent.change(box, { target: { value: "5" } });
+    expect(value).toBe(25); // 5 < min 10 → unchanged
+    fireEvent.change(box, { target: { value: "" } });
+    expect(value).toBeNull(); // empty → null contract survives the draft rewrite
   });
 });
 

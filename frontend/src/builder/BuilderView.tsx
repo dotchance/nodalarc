@@ -33,7 +33,7 @@ import { BuilderInspector } from "./BuilderInspector";
 import { builderSnapshotFromWorld } from "./builderSnapshot";
 import { CandidateLines } from "./CandidateLines";
 import { computeCandidates } from "./candidates";
-import { EditorApplyRow, Field } from "./editorKit";
+import { EditorApplyRow, Field, InlineSelect } from "./editorKit";
 import {
   accessBeamElevationDeg,
   capabilitiesBySegment,
@@ -756,7 +756,8 @@ export function BuilderView({
   >;
   /** First edit creates the buffer from the object as rendered ("base");
    *  later edits build on the working copy. "opened" — the Defaults target —
-   *  is the object as it stood before the first edit. The session buffer is
+   *  is the window's baseline: the values at window open, advanced to the
+   *  applied draft on each Apply (see applyBuffer). The session buffer is
    *  a pick, never the whole workspace: applying a stale whole-workspace
    *  clone would silently revert every other window's applied work. */
   const patchBuffer = <T,>(key: string, base: T, fn: (draft: T) => T) => {
@@ -771,8 +772,9 @@ export function BuilderView({
     setBuffers((prev) => {
       const buf = prev[key];
       if (!buf) return prev;
-      // Defaults = the values this window opened with. On a stale window (the
-      // applied object moved underneath), restoring `opened` still does not
+      // Defaults = the baseline: the values at window open, advanced to the
+      // applied draft on each Apply. On a stale window (the applied object moved
+      // underneath), restoring `opened` still does not
       // match the applied object, so the buffer stays dirty+stale: the notice
       // and Apply/"Load current values" persist, the reconciliation pass never
       // drops it, and non-applied values are never relabeled "applied".
@@ -885,9 +887,10 @@ export function BuilderView({
     });
   }, [workspace, staleKeys, windows]);
   /** Replace a stale window's working copy with the object's current applied
-   *  values (the deliberate opposite of Defaults, which returns to the values
-   *  the window opened with). Only reachable while the object still exists — a
-   *  deleted object's window is already pruned. */
+   *  values (the deliberate opposite of Defaults, which returns to the window's
+   *  baseline — the values at window open, advanced to the applied draft on each
+   *  Apply). Only reachable while the object still exists — a deleted object's
+   *  window is already pruned. */
   const loadCurrentValues = (target: EditorTarget) => {
     if (!workspace) return;
     const key = targetKey(target);
@@ -2239,23 +2242,21 @@ export function BuilderView({
                 </span>
                 <span className="builder-library-actions">
                   {connectButton(placed.segment_id, placed.label)}
-                  <select
-                    aria-label={`Scheduling for ${placed.label}`}
+                  <InlineSelect
+                    ariaLabel={`Scheduling for ${placed.label}`}
                     title="Scheduling intent — writes the full explicit block"
                     className="builder-ground-preset"
                     value={placed.scheduling_preset}
-                    onChange={(e) =>
+                    onChange={(v) =>
                       updateGroundRef(placed.segment_id, {
-                        scheduling_preset: e.target.value as SchedulingPresetKey,
+                        scheduling_preset: v as SchedulingPresetKey,
                       })
                     }
-                  >
-                    {Object.entries(SCHEDULING_PRESETS).map(([key, preset]) => (
-                      <option key={key} value={key}>
-                        {preset.label}
-                      </option>
-                    ))}
-                  </select>
+                    options={Object.entries(SCHEDULING_PRESETS).map(([key, preset]) => ({
+                      value: key,
+                      label: preset.label,
+                    }))}
+                  />
                   <IconButton
                     icon="pencil"
                     size={12}

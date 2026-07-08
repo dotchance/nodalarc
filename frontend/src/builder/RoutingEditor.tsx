@@ -13,7 +13,7 @@
  */
 
 import { Button } from "../ui/Button";
-import { CheckboxField, EditorName, NumberField, SelectField } from "./editorKit";
+import { CheckboxField, EditorCard, EditorName, NumberField, SelectField } from "./editorKit";
 import {
   placedSegments,
   routingWarnings,
@@ -69,14 +69,15 @@ export function RoutingDomainEditor({
         ]}
       />
 
-      <div className="builder-card builder-card--open">
-        <div className="builder-card-head">
-          <span className="builder-card-title">Members</span>
-          <span className="builder-card-summary">
+      <EditorCard
+        title="Members"
+        open
+        summary={
+          <>
             {domain.member_segment_ids.length} of {placed.length} segments
-          </span>
-        </div>
-        <div className="builder-card-body">
+          </>
+        }
+      >
           {placed.map((segment) => {
             const member = domain.member_segment_ids.includes(segment.segment_id);
             return (
@@ -98,20 +99,18 @@ export function RoutingDomainEditor({
             whole segments join a domain — per-terminal membership is a
             pending grammar change
           </div>
-        </div>
-      </div>
+      </EditorCard>
 
       {isIgp && (
-        <div className="builder-card builder-card--open">
-          <div className="builder-card-head">
-            <span className="builder-card-title">Timers</span>
-            <span className="builder-card-summary">
-              {explicitTimers
-                ? `hello ${domain.hello_interval_s}s · hold ${domain.hold_interval_s}s`
-                : "engine defaults"}
-            </span>
-          </div>
-          <div className="builder-card-body">
+        <EditorCard
+          title="Timers"
+          open
+          summary={
+            explicitTimers
+              ? `hello ${domain.hello_interval_s}s · hold ${domain.hold_interval_s}s`
+              : "engine defaults"
+          }
+        >
             <div className="builder-preset-row">
               <Button
                 active={!explicitTimers}
@@ -146,8 +145,7 @@ export function RoutingDomainEditor({
                 />
               </>
             )}
-          </div>
-        </div>
+        </EditorCard>
       )}
 
       {routingWarnings(workspace).map((warning) => (

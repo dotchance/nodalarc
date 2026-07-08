@@ -7,7 +7,7 @@
  *  to itself authors the intra-segment fabric (mesh).
  */
 
-import { SelectField } from "./editorKit";
+import { EditorCard, SelectField } from "./editorKit";
 import { placedSegments, type Workspace } from "./workspace";
 
 interface SegmentLinksCardProps {
@@ -29,14 +29,11 @@ export function SegmentLinksCard({
     (rule) => rule.a.segment_id === segmentId || rule.b.segment_id === segmentId,
   );
   return (
-    <div className="builder-card builder-card--open">
-      <div className="builder-card-head">
-        <span className="builder-card-title">Links</span>
-        <span className="builder-card-summary">
-          {touching.length === 1 ? "1 rule" : `${touching.length} rules`}
-        </span>
-      </div>
-      <div className="builder-card-body">
+    <EditorCard
+      title="Links"
+      open
+      summary={touching.length === 1 ? "1 rule" : `${touching.length} rules`}
+    >
         {touching.map((rule) => {
           const otherId =
             rule.a.segment_id === segmentId ? rule.b.segment_id : rule.a.segment_id;
@@ -72,7 +69,6 @@ export function SegmentLinksCard({
             })),
           ]}
         />
-      </div>
-    </div>
+    </EditorCard>
   );
 }

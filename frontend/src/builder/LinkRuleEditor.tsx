@@ -14,6 +14,7 @@
 import { useState } from "react";
 import { Button } from "../ui/Button";
 import {
+  EditorCard,
   EditorName,
   Field,
   NullableNumberField,
@@ -83,15 +84,16 @@ function EndpointCard({
   const mediumDisabled = (medium: LinkMedium) =>
     known && !canForm(selfCap, otherCap, endpoint.role, medium);
   return (
-    <div className="builder-card builder-card--open">
-      <div className="builder-card-head">
-        <span className="builder-card-title">{title}</span>
-        <span className="builder-card-summary">
+    <EditorCard
+      title={title}
+      open
+      summary={
+        <>
           {endpoint.role} · {endpoint.medium}
           {endpoint.tag ? ` · tag ${endpoint.tag}` : ""}
-        </span>
-      </div>
-      <div className="builder-card-body">
+        </>
+      }
+    >
         <SelectField
           stack
           label="segment"
@@ -164,8 +166,7 @@ function EndpointCard({
             </div>
           ) : null;
         })()}
-      </div>
-    </div>
+    </EditorCard>
   );
 }
 

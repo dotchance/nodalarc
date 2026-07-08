@@ -11,38 +11,13 @@
 
 import { useState } from "react";
 import { KeyValueRow } from "../ui/KeyValueRow";
+import { EditorCard } from "./editorKit";
 import type { EphemerisNode, SessionEphemeris } from "../sim/ephemeris";
 import type { BuilderWorldNode } from "./builderTypes";
 
 interface BuilderInspectorProps {
   node: BuilderWorldNode;
   ephemeris: SessionEphemeris;
-}
-
-function Card({
-  id,
-  title,
-  summary,
-  open,
-  onToggle,
-  children,
-}: {
-  id: string;
-  title: string;
-  summary: string;
-  open: boolean;
-  onToggle: (id: string) => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className={`builder-card${open ? " builder-card--open" : ""}`}>
-      <button className="builder-card-head" onClick={() => onToggle(id)}>
-        <span className="builder-card-title">{title}</span>
-        <span className="builder-card-summary">{summary}</span>
-      </button>
-      {open && <div className="builder-card-body">{children}</div>}
-    </div>
-  );
 }
 
 function orbitSummary(entry: EphemerisNode, meanRadiusKm: number): string {
@@ -82,12 +57,11 @@ export function BuilderInspector({ node, ephemeris }: BuilderInspectorProps) {
       </div>
 
       {node.kind === "satellite" && entry?.type === "keplerian" && frame && (
-        <Card
-          id="orbit"
+        <EditorCard
           title="Orbit"
           summary={orbitSummary(entry, frame.mean_radius_km)}
           open={openCard === "orbit"}
-          onToggle={toggle}
+          onToggle={() => toggle("orbit")}
         >
           <KeyValueRow label="semi-major axis">
             {entry.semi_major_axis_km.toFixed(1)} km
@@ -112,30 +86,28 @@ export function BuilderInspector({ node, ephemeris }: BuilderInspectorProps) {
               {node.plane} / {node.slot}
             </KeyValueRow>
           )}
-        </Card>
+        </EditorCard>
       )}
 
       {node.surface_position && (
-        <Card
-          id="position"
+        <EditorCard
           title="Position"
           summary={`${node.surface_position.lat_deg.toFixed(2)}, ${node.surface_position.lon_deg.toFixed(2)} · ${node.surface_position.body}`}
           open={openCard === "position"}
-          onToggle={toggle}
+          onToggle={() => toggle("position")}
         >
           <KeyValueRow label="latitude">{node.surface_position.lat_deg.toFixed(4)}°</KeyValueRow>
           <KeyValueRow label="longitude">{node.surface_position.lon_deg.toFixed(4)}°</KeyValueRow>
           <KeyValueRow label="altitude">{node.surface_position.alt_m.toFixed(0)} m</KeyValueRow>
           <KeyValueRow label="body">{node.surface_position.body}</KeyValueRow>
-        </Card>
+        </EditorCard>
       )}
 
-      <Card
-        id="hardware"
+      <EditorCard
         title="Hardware"
         summary={`${terminalCount} terminal${terminalCount === 1 ? "" : "s"} · ${hardwareSummary}`}
         open={openCard === "hardware"}
-        onToggle={toggle}
+        onToggle={() => toggle("hardware")}
       >
         {node.terminal_inventory.map((block) => (
           <div className="builder-terminal-block" key={block.terminal_id}>
@@ -156,15 +128,14 @@ export function BuilderInspector({ node, ephemeris }: BuilderInspectorProps) {
             )}
           </div>
         ))}
-      </Card>
+      </EditorCard>
 
       {(node.forwarding || node.interfaces || node.originated_prefixes) && (
-        <Card
-          id="network"
+        <EditorCard
           title="Network"
           summary={networkSummary || "—"}
           open={openCard === "network"}
-          onToggle={toggle}
+          onToggle={() => toggle("network")}
         >
           {node.forwarding && <KeyValueRow label="forwarding">{node.forwarding}</KeyValueRow>}
           {lo0?.ipv4 && <KeyValueRow label="lo0 ipv4">{lo0.ipv4}</KeyValueRow>}
@@ -185,7 +156,7 @@ export function BuilderInspector({ node, ephemeris }: BuilderInspectorProps) {
               {prefix}
             </KeyValueRow>
           ))}
-        </Card>
+        </EditorCard>
       )}
     </div>
   );

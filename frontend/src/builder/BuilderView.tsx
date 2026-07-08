@@ -30,7 +30,7 @@ import type {
 import { Icon } from "../ui/icons/Icon";
 import { BuildGuide } from "./BuildGuide";
 import { BuilderInspector } from "./BuilderInspector";
-import { builderSnapshotFromWorld } from "./builderSnapshot";
+import { builderSnapshotFromWorld, distinctGroundStationSites } from "./builderSnapshot";
 import { CandidateLines } from "./CandidateLines";
 import { computeCandidates } from "./candidates";
 import { EditorApplyRow, Field, InlineSelect } from "./editorKit";
@@ -2163,6 +2163,7 @@ export function BuilderView({
             workspace={workspace}
             saved={saveState.kind === "saved" || saveState.kind === "deploying" || saveState.kind === "deployed" ? ("name" in saveState ? saveState.name : null) : null}
             deployed={saveState.kind === "deployed"}
+            resolvedSiteCount={world ? distinctGroundStationSites(world.nodes) : null}
             onAddConstellation={() => {
               if (!defaultNodeRef) return;
               const draft = newDraftConstellation(defaultNodeRef);

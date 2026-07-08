@@ -108,6 +108,15 @@ function _groundNodeState(node: BuilderWorldNode): NodeState {
   };
 }
 
+/** N52: a ground site's identity is its namespace — one site's several nodes
+ *  share it. The honest site count is the number of DISTINCT ground-station
+ *  namespaces in the resolved world, not the raw ground-node count. */
+export function distinctGroundStationSites(nodes: BuilderWorldNode[]): number {
+  return new Set(
+    nodes.filter((node) => node.kind === "ground_station").map((node) => node.namespace),
+  ).size;
+}
+
 /** Derive the Scene-input snapshot for a resolved world, frozen at its epoch. */
 export function builderSnapshotFromWorld(world: BuilderWorld): StateSnapshot {
   const nodes: NodeState[] = world.nodes.map((node) => {

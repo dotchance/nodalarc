@@ -9,8 +9,8 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { builderSnapshotFromWorld } from "../builderSnapshot";
-import type { BuilderWorld } from "../builderTypes";
+import { builderSnapshotFromWorld, distinctGroundStationSites } from "../builderSnapshot";
+import type { BuilderWorld, BuilderWorldNode } from "../builderTypes";
 import type { SessionEphemeris } from "../../sim/ephemeris";
 
 const EPOCH_ISO = "2026-06-08T00:00:00+00:00";
@@ -173,5 +173,25 @@ describe("builderSnapshotFromWorld", () => {
       ),
     };
     expect(() => builderSnapshotFromWorld(broken)).toThrow(/no ephemeris entry/);
+  });
+});
+
+describe("distinctGroundStationSites (N52 site count)", () => {
+  const node = (kind: BuilderWorldNode["kind"], namespace: string): BuilderWorldNode =>
+    ({ kind, namespace }) as unknown as BuilderWorldNode;
+
+  it("counts distinct ground-station namespaces — a two-node site counts once", () => {
+    const nodes = [
+      node("ground_station", "earth-denver"), // two nodes,
+      node("ground_station", "earth-denver"), // one site (shared namespace)
+      node("ground_station", "earth-ames"), // a second site
+      node("satellite", "leo-plane-0"), // satellites do not count
+      node("relay", "relay-a"), // relays do not count
+    ];
+    expect(distinctGroundStationSites(nodes)).toBe(2);
+  });
+
+  it("is zero for a world with no ground stations", () => {
+    expect(distinctGroundStationSites([node("satellite", "leo")])).toBe(0);
   });
 });

@@ -758,10 +758,11 @@ describe("deferred-clamp number contract (local string draft)", () => {
 
 describe("IG-15: the anatomy guide answers what-next in any order", () => {
   afterEach(cleanup);
-  const guideProps = (ws: ReturnType<typeof newWorkspace>) => ({
+  const guideProps = (ws: ReturnType<typeof newWorkspace>, resolvedSiteCount: number | null = null) => ({
     workspace: ws,
     saved: null,
     deployed: false,
+    resolvedSiteCount,
     onAddConstellation: () => {},
     onAddGround: () => {},
     onAddDomain: () => {},
@@ -806,14 +807,41 @@ describe("IG-15: the anatomy guide answers what-next in any order", () => {
     expect(screen.getByText("1 segment · add more")).toBeTruthy();
     expect(screen.getByText("named-session")).toBeTruthy();
   });
+
+  it("N52: the resolved distinct-namespace site count is shown as-is", () => {
+    // A single two-node site resolves to ONE namespace → count 1, not 2.
+    render(<BuildGuide {...guideProps(newWorkspace("named"), 1)} />);
+    expect(screen.getByText("1 site · add more")).toBeTruthy();
+  });
+
+  it("N52: a multi-site resolved count is shown, not the draft node count", () => {
+    render(<BuildGuide {...guideProps(newWorkspace("named"), 3)} />);
+    expect(screen.getByText("3 sites · add more")).toBeTruthy();
+  });
+
+  it("N52: before the world resolves, the count falls back to the draft, flagged unresolved", () => {
+    const ws = newWorkspace("named");
+    const ground = newDraftGroundSet("nodalarc:nodes/ground/gw.yaml", {});
+    ground.members = mintSiteMembers(ground, parseSiteLines("Denver, 39.7, -104.9\nAmes, 42, -93").rows);
+    ws.ground.push(ground);
+    // resolvedSiteCount null → the draft member count (2) with the qualifier.
+    render(<BuildGuide {...guideProps(ws, null)} />);
+    expect(screen.getByText("2 sites (unresolved) · add more")).toBeTruthy();
+  });
 });
 
 describe("IG-16: the closed vocabularies have one owner", () => {
+  // Non-recursive, like the IG-5 scan: production builder files are flat (only
+  // __tests__ is a subdirectory). A future production subdir would need this
+  // widened.
   const vocabularyOffenders = (pattern: RegExp): string[] => {
     const offenders: string[] = [];
     for (const entry of readdirSync(BUILDER_DIR)) {
       if (!entry.endsWith(".ts") && !entry.endsWith(".tsx")) continue;
       if (entry === "workspace.ts") continue; // the owner
+      // builderTypes.ts holds the wire-twin unions as TYPES (a | b | c), not an
+      // offered option list — exempt alongside the owner.
+      if (entry === "builderTypes.ts") continue;
       const content = readFileSync(join(BUILDER_DIR, entry), "utf-8");
       if (pattern.test(content)) offenders.push(entry);
     }
@@ -836,6 +864,48 @@ describe("IG-16: the closed vocabularies have one owner", () => {
     expect(
       vocabularyOffenders(/\[\s*"(rf|optical)"\s*,\s*"(rf|optical)"/),
       "media vocabulary re-listed outside workspace.ts",
+    ).toEqual([]);
+  });
+
+  // N21: the real offenders at HEAD are option-OBJECT arrays ([{value:"isis"},…]),
+  // which the bare-string patterns above cannot see. Each vocabulary is checked
+  // in BOTH forms — an option-object pair (value:"tok"…value:"tok") and a
+  // bare-string array ([ "tok", "tok" ]) — so neither shape can re-list it. The
+  // `satisfies Record<union,…>` maps in workspace.ts are the primary compile-time
+  // catch; this scan is the backstop.
+  it("no builder source file re-lists the routing protocols", () => {
+    const tok = "isis|ospf|bgp|static";
+    expect(
+      vocabularyOffenders(new RegExp(`value:\\s*"(${tok})"[\\s\\S]{0,80}value:\\s*"(${tok})"`)),
+      "protocol vocabulary re-listed (option objects) outside workspace.ts",
+    ).toEqual([]);
+    expect(
+      vocabularyOffenders(new RegExp(`\\[\\s*"(${tok})"\\s*,\\s*"(${tok})"`)),
+      "protocol vocabulary re-listed (bare array) outside workspace.ts",
+    ).toEqual([]);
+  });
+
+  it("no builder source file re-lists the boundary adapters", () => {
+    const tok = "static_ip|bgp|dtn_bundle";
+    expect(
+      vocabularyOffenders(new RegExp(`value:\\s*"(${tok})"[\\s\\S]{0,80}value:\\s*"(${tok})"`)),
+      "adapter vocabulary re-listed (option objects) outside workspace.ts",
+    ).toEqual([]);
+    expect(
+      vocabularyOffenders(new RegExp(`\\[\\s*"(${tok})"\\s*,\\s*"(${tok})"`)),
+      "adapter vocabulary re-listed (bare array) outside workspace.ts",
+    ).toEqual([]);
+  });
+
+  it("no builder source file re-lists the forwarding modes", () => {
+    const tok = "routed|host|bridge|control_only";
+    expect(
+      vocabularyOffenders(new RegExp(`value:\\s*"(${tok})"[\\s\\S]{0,80}value:\\s*"(${tok})"`)),
+      "forwarding vocabulary re-listed (option objects) outside workspace.ts",
+    ).toEqual([]);
+    expect(
+      vocabularyOffenders(new RegExp(`\\[\\s*"(${tok})"\\s*,\\s*"(${tok})"`)),
+      "forwarding vocabulary re-listed (bare array) outside workspace.ts",
     ).toEqual([]);
   });
 });

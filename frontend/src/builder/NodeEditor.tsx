@@ -22,19 +22,15 @@ import { TerminalEditor } from "./TerminalEditor";
 import { importUserObjectYaml, useBuilderCatalog } from "./useBuilderWorld";
 import {
   defaultDraftTerminal,
+  FORWARDING_MODES,
+  MOUNT_ROLES,
+  ROLE_DESCRIPTIONS,
   type DraftNode,
   type DraftTerminal,
   type DraftTerminalMount,
-  MOUNT_ROLES,
-  ROLE_DESCRIPTIONS,
+  type Forwarding,
 } from "./workspace";
 
-const FORWARDING_OPTIONS: { value: DraftNode["forwarding"]; gated: boolean }[] = [
-  { value: "routed", gated: false },
-  { value: "host", gated: true },
-  { value: "bridge", gated: true },
-  { value: "control_only", gated: true },
-];
 
 function terminalShortName(ref: string): string {
   return ref.split("/").pop()?.replace(".yaml", "") ?? ref;
@@ -112,15 +108,13 @@ export function NodeEditor({ draft, onChange, autoFocusName = false }: NodeEdito
         label="forwarding"
         ariaLabel="Forwarding class"
         value={draft.forwarding}
-        onChange={(value) =>
-          onChange({ ...draft, forwarding: value as DraftNode["forwarding"] })
-        }
-        options={FORWARDING_OPTIONS.map((option) => ({
-          value: option.value,
-          label: option.value + (option.gated ? " — runtime-gated" : ""),
+        onChange={(value) => onChange({ ...draft, forwarding: value as Forwarding })}
+        options={(Object.keys(FORWARDING_MODES) as Forwarding[]).map((value) => ({
+          value,
+          label: value + (FORWARDING_MODES[value].gated ? " — runtime-gated" : ""),
         }))}
       />
-      {FORWARDING_OPTIONS.find((o) => o.value === draft.forwarding)?.gated && (
+      {FORWARDING_MODES[draft.forwarding]?.gated && (
         <div className="builder-warning">
           {draft.forwarding} is structurally valid grammar; today's runtime rejects it
           with a typed gate at resolve

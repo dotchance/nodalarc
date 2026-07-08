@@ -31,6 +31,11 @@ interface BuildGuideProps {
   workspace: Workspace;
   saved: string | null;
   deployed: boolean;
+  /** N52: the honest site count — distinct ground-station namespaces in the
+   *  resolved world (one site's several nodes share a namespace). null when the
+   *  world has not resolved yet; the guide then falls back to the draft count
+   *  with an "(unresolved)" qualifier. */
+  resolvedSiteCount: number | null;
   onAddConstellation: () => void;
   onAddGround: () => void;
   onAddDomain: () => void;
@@ -42,6 +47,7 @@ export function BuildGuide({
   workspace,
   saved,
   deployed,
+  resolvedSiteCount,
   onAddConstellation,
   onAddGround,
   onAddDomain,
@@ -49,9 +55,13 @@ export function BuildGuide({
   onOpenSegment,
 }: BuildGuideProps) {
   const spaceCount = workspace.space.length + workspace.space_refs.length;
-  const siteCount =
+  // The draft count over-counts (multi-node sites, unexpanded refs); it is only
+  // the pre-resolve fallback. The resolved namespace count is the truth (N52).
+  const draftSiteCount =
     workspace.ground.reduce((n, g) => n + g.members.length, 0) +
     workspace.ground_refs.length;
+  const siteCount = resolvedSiteCount ?? draftSiteCount;
+  const siteCountQualifier = resolvedSiteCount === null ? " (unresolved)" : "";
   const placed = placedSegments(workspace);
   const firstPlaced = placed[0] ?? null;
   const named = workspace.name !== "untitled-session";
@@ -74,7 +84,7 @@ export function BuildGuide({
       done: siteCount > 0,
       detail:
         siteCount > 0
-          ? `${siteCount} site${siteCount === 1 ? "" : "s"} · add more`
+          ? `${siteCount} site${siteCount === 1 ? "" : "s"}${siteCountQualifier} · add more`
           : "none yet — where traffic enters and exits",
       why: "Surface gateways are where traffic enters and leaves the constellation. Paste sites as name, lat, lon.",
       action: onAddGround,
@@ -91,7 +101,7 @@ export function BuildGuide({
             : "needs two segments first",
       why:
         placed.length >= 2
-          ? "Link rules say who MAY talk to whom; role, band, and reach derive from the terminals both sides carry. Use ⇄ link to… on any segment."
+          ? "Link rules say who may talk to whom; role, band, and reach derive from the terminals both sides carry. Use + link to… on any segment."
           : "Link rules connect two segments, so place at least two before drawing intent.",
       action:
         firstPlaced === null

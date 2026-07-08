@@ -15,10 +15,15 @@
 import { Button } from "../ui/Button";
 import { CheckboxField, EditorCard, EditorName, NumberField, SelectField } from "./editorKit";
 import {
+  ADAPTER_LABELS,
+  isIgp,
   placedSegments,
+  PROTOCOL_LABELS,
   routingWarnings,
+  type Adapter,
   type DraftBoundary,
   type DraftRoutingDomain,
+  type Protocol,
   type Workspace,
 } from "./workspace";
 
@@ -39,7 +44,6 @@ export function RoutingDomainEditor({
   autoFocusName = false,
 }: DomainEditorProps) {
   const placed = placedSegments(workspace);
-  const isIgp = domain.protocol === "isis" || domain.protocol === "ospf";
   const explicitTimers = domain.hello_interval_s !== null;
   return (
     <div className="builder-inspector-stack" data-testid="builder-domain-editor">
@@ -53,20 +57,18 @@ export function RoutingDomainEditor({
         ariaLabel="Routing protocol"
         value={domain.protocol}
         onChange={(value) => {
-          const protocol = value as DraftRoutingDomain["protocol"];
+          const protocol = value as Protocol;
           // Timers are IGP-only grammar; clear them on the way out.
           onUpdate(
-            protocol === "isis" || protocol === "ospf"
+            isIgp(protocol)
               ? { protocol }
               : { protocol, hello_interval_s: null, hold_interval_s: null },
           );
         }}
-        options={[
-          { value: "isis", label: "IS-IS" },
-          { value: "ospf", label: "OSPF" },
-          { value: "bgp", label: "BGP" },
-          { value: "static", label: "static" },
-        ]}
+        options={(Object.keys(PROTOCOL_LABELS) as Protocol[]).map((value) => ({
+          value,
+          label: PROTOCOL_LABELS[value],
+        }))}
       />
 
       <EditorCard
@@ -101,7 +103,7 @@ export function RoutingDomainEditor({
           </div>
       </EditorCard>
 
-      {isIgp && (
+      {isIgp(domain.protocol) && (
         <EditorCard
           title="Timers"
           open
@@ -207,12 +209,11 @@ export function BoundaryEditor({
         label="adapter"
         ariaLabel="Boundary adapter"
         value={boundary.adapter}
-        onChange={(value) => onUpdate({ adapter: value as DraftBoundary["adapter"] })}
-        options={[
-          { value: "static_ip", label: "static_ip" },
-          { value: "bgp", label: "bgp" },
-          { value: "dtn_bundle", label: "dtn_bundle" },
-        ]}
+        onChange={(value) => onUpdate({ adapter: value as Adapter })}
+        options={(Object.keys(ADAPTER_LABELS) as Adapter[]).map((value) => ({
+          value,
+          label: ADAPTER_LABELS[value],
+        }))}
       />
       {(["from_domain_id", "to_domain_id"] as const).map((side) => (
         <SelectField

@@ -34,6 +34,44 @@ export const ROLE_DESCRIPTIONS: Record<MountRole, string> = {
   backbone: "trunk between relay tiers",
 };
 
+/** THE routing / forwarding vocabularies \u2014 twins of the grammar's routing.py and
+ *  node literals. Same one-owner rule as the role vocabulary: the maps below are
+ *  keyed by the union (satisfies Record<union, ...>), so adding a member without
+ *  a label fails compilation here, and the IG-16 scan bans re-listing the tokens
+ *  as option arrays anywhere else. Editors DERIVE their options from these. */
+export type Protocol = "isis" | "ospf" | "bgp" | "static";
+export type Adapter = "static_ip" | "bgp" | "dtn_bundle";
+export type Forwarding = "routed" | "host" | "bridge" | "control_only";
+
+export const PROTOCOL_LABELS = {
+  isis: "IS-IS",
+  ospf: "OSPF",
+  bgp: "BGP",
+  static: "static",
+} satisfies Record<Protocol, string>;
+
+export const ADAPTER_LABELS = {
+  static_ip: "static_ip",
+  bgp: "bgp",
+  dtn_bundle: "dtn_bundle",
+} satisfies Record<Adapter, string>;
+
+/** Forwarding modes with their carrier-gated flag \u2014 host/bridge/control_only need
+ *  kernel capabilities the session may not grant. */
+export const FORWARDING_MODES = {
+  routed: { gated: false },
+  host: { gated: true },
+  bridge: { gated: true },
+  control_only: { gated: true },
+} satisfies Record<Forwarding, { gated: boolean }>;
+
+/** The one IGP predicate: IS-IS and OSPF run link-state timers; BGP and static
+ *  do not. RoutingEditor (Timers card + clear-on-switch) and the session emitter
+ *  (area assignment) both ask this \u2014 never a fourth inline copy. */
+export function isIgp(protocol: Protocol): boolean {
+  return protocol === "isis" || protocol === "ospf";
+}
+
 export interface DraftOrbit {
   /** The body this orbit is around — a bodies-catalog ref, serialized
    *  verbatim. The runtime decides what it supports; unsupported bodies get
@@ -66,7 +104,7 @@ export interface DraftTerminalMount {
 export interface DraftNode {
   id: string;
   display_name: string;
-  forwarding: "routed" | "host" | "bridge" | "control_only";
+  forwarding: Forwarding;
   ethernet: string[];
   terminals: DraftTerminalMount[];
 }
@@ -207,7 +245,7 @@ export interface DraftLinkRule {
 export interface DraftRoutingDomain {
   domain_id: string;
   label: string;
-  protocol: "isis" | "ospf" | "bgp" | "static";
+  protocol: Protocol;
   member_segment_ids: string[];
   hello_interval_s: number | null;
   hold_interval_s: number | null;
@@ -219,7 +257,7 @@ export interface DraftRoutingDomain {
 export interface DraftBoundary {
   boundary_id: string;
   over_rule_id: string;
-  adapter: "static_ip" | "bgp" | "dtn_bundle";
+  adapter: Adapter;
   from_domain_id: string;
   to_domain_id: string;
   export_node_loopbacks: boolean;
@@ -2051,9 +2089,7 @@ export function toSessionDocument(workspace: Workspace): Record<string, unknown>
               })),
             },
           ],
-    ...(domain.protocol === "isis" || domain.protocol === "ospf"
-      ? { area_assignment: { strategy: "flat" } }
-      : {}),
+    ...(isIgp(domain.protocol) ? { area_assignment: { strategy: "flat" } } : {}),
     ...(domain.hello_interval_s !== null && domain.hold_interval_s !== null
       ? {
           timers: {

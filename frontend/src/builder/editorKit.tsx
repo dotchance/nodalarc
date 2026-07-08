@@ -352,23 +352,22 @@ export function CheckboxField({
 }
 
 /** The one card anatomy (IG-5): title + spec-sheet summary; closed cards
- *  read as the object's spec. Accordion when onToggle is given; static
- *  (always open) when not. */
-export function EditorCard({
-  title,
-  summary,
-  open,
-  onToggle,
-  actions,
-  children,
-}: {
+ *  read as the object's spec. Accordion when onToggle is given (the head is a
+ *  <button>); static (always open) when not. `actions` — a header control such
+ *  as a Remove button — is allowed only on the STATIC card: interactive content
+ *  must never nest inside the accordion's <button> head, so the type forbids
+ *  actions together with onToggle. */
+type EditorCardProps = {
   title: string;
   summary?: ReactNode;
   open: boolean;
-  onToggle?: () => void;
-  actions?: ReactNode;
   children?: ReactNode;
-}) {
+} & (
+  | { onToggle: () => void; actions?: never }
+  | { onToggle?: undefined; actions?: ReactNode }
+);
+
+export function EditorCard({ title, summary, open, onToggle, actions, children }: EditorCardProps) {
   const head = (
     <>
       <span className="builder-card-title">{title}</span>

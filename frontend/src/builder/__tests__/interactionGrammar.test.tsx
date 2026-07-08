@@ -313,12 +313,14 @@ describe("IG-7: connect derives physics from faceplates", () => {
 
 describe("IG-4: editor state is keyed by object identity", () => {
   beforeEach(() => {
-    // The catalog fetches behind useBuilderCatalog are irrelevant here.
+    // The catalog fetches behind useBuilderCatalog are irrelevant here — the
+    // catalog endpoint returns a bare array (refreshCatalogFamily casts the
+    // response to BuilderCatalogEntry[]), so the stub must too.
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => ({
         ok: true,
-        json: async () => ({ entries: [] }),
+        json: async () => [],
       })),
     );
   });

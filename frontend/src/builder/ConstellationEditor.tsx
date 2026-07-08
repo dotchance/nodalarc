@@ -12,7 +12,7 @@
 
 import { useState } from "react";
 import { Button } from "../ui/Button";
-import { EditorName, NumberField, SelectField, SliderField } from "./editorKit";
+import { EditorCard, EditorName, NumberField, SelectField, SliderField } from "./editorKit";
 import { NodeEditor } from "./NodeEditor";
 import { SegmentLinksCard } from "./SegmentLinksCard";
 import {
@@ -108,20 +108,21 @@ export function ConstellationEditor({
         autoFocus={autoFocusName}
       />
 
-      <div className={`builder-card${openCard === "orbit" ? " builder-card--open" : ""}`}>
-        <button className="builder-card-head" onClick={() => toggle("orbit")}>
-          <span className="builder-card-title">Orbit</span>
-          <span className="builder-card-summary">
+      <EditorCard
+        title="Orbit"
+        open={openCard === "orbit"}
+        onToggle={() => toggle("orbit")}
+        summary={
+          <>
             {draft.orbit.shape_kind === "circular"
               ? `${Math.round(draft.orbit.altitude_km)} km circular`
               : `${Math.round(draft.orbit.perigee_altitude_km)} × ${Math.round(draft.orbit.apogee_altitude_km)} km`}{" "}
             · {draft.orbit.inclination_deg.toFixed(1)}°
             {draft.orbit.central_body !== EARTH_BODY_REF &&
               ` · ${bodyShortName(draft.orbit.central_body)}`}
-          </span>
-        </button>
-        {openCard === "orbit" && (
-          <div className="builder-card-body">
+          </>
+        }
+      >
             <SelectField
               label="around"
               ariaLabel="Central body"
@@ -241,20 +242,19 @@ export function ConstellationEditor({
                 {warning}
               </div>
             ))}
-          </div>
-        )}
-      </div>
+      </EditorCard>
 
-      <div className={`builder-card${openCard === "pattern" ? " builder-card--open" : ""}`}>
-        <button className="builder-card-head" onClick={() => toggle("pattern")}>
-          <span className="builder-card-title">Pattern</span>
-          <span className="builder-card-summary">
+      <EditorCard
+        title="Pattern"
+        open={openCard === "pattern"}
+        onToggle={() => toggle("pattern")}
+        summary={
+          <>
             {draft.planes} × {draft.slots_per_plane} ={" "}
             {draft.planes * draft.slots_per_plane} sats
-          </span>
-        </button>
-        {openCard === "pattern" && (
-          <div className="builder-card-body">
+          </>
+        }
+      >
             <NumberField
               label="planes"
               value={draft.planes}
@@ -279,21 +279,18 @@ export function ConstellationEditor({
               suffix="deg"
               onChange={(phase_offset_deg) => onUpdate({ phase_offset_deg })}
             />
-          </div>
-        )}
-      </div>
+      </EditorCard>
 
-      <div className={`builder-card${openCard === "node" ? " builder-card--open" : ""}`}>
-        <button className="builder-card-head" onClick={() => toggle("node")}>
-          <span className="builder-card-title">Node</span>
-          <span className="builder-card-summary">
-            {draft.node_draft
-              ? `${draft.node_draft.display_name} (custom) · ${draft.node_draft.terminals.reduce((s, m) => s + m.count, 0)} terminals`
-              : draft.node_ref.split("/").pop()?.replace(".yaml", "")}
-          </span>
-        </button>
-        {openCard === "node" && (
-          <div className="builder-card-body">
+      <EditorCard
+        title="Node"
+        open={openCard === "node"}
+        onToggle={() => toggle("node")}
+        summary={
+          draft.node_draft
+            ? `${draft.node_draft.display_name} (custom) · ${draft.node_draft.terminals.reduce((s, m) => s + m.count, 0)} terminals`
+            : draft.node_ref.split("/").pop()?.replace(".yaml", "")
+        }
+      >
             {draft.node_draft ? (
               <>
                 <NodeEditor
@@ -348,9 +345,7 @@ export function ConstellationEditor({
                 {LIBRARY_SAVE_COPY.savedNote(librarySave.state.ref)}
               </div>
             )}
-          </div>
-        )}
-      </div>
+      </EditorCard>
 
       <SegmentLinksCard
         workspace={workspace}

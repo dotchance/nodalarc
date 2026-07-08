@@ -12,7 +12,7 @@
 
 import { useState } from "react";
 import { Button, IconButton } from "../ui/Button";
-import { EditorName, Field, NumberField, SelectField } from "./editorKit";
+import { EditorCard, EditorName, Field, NumberField, SelectField } from "./editorKit";
 import {
   LIBRARY_SAVE_COPY,
   readCatalogObject,
@@ -147,10 +147,12 @@ export function SiteEditor({ site, onUpdate, onClose, autoFocusName = false }: S
       />
 
       {site.nodes.map((node, index) => (
-        <div className="builder-card builder-card--open" key={index}>
-          <div className="builder-card-head">
-            <span className="builder-card-title">{node.node_id}</span>
-            {site.nodes.length > 1 && (
+        <EditorCard
+          key={index}
+          title={node.node_id}
+          open
+          actions={
+            site.nodes.length > 1 && (
               <IconButton
                 icon="x"
                 size={12}
@@ -159,10 +161,10 @@ export function SiteEditor({ site, onUpdate, onClose, autoFocusName = false }: S
                   onUpdate({ nodes: site.nodes.filter((_, i) => i !== index) })
                 }
               />
-            )}
-          </div>
-          <div className="builder-card-body">
-            <SelectField
+            )
+          }
+        >
+          <SelectField
               stack
               label="model"
               ariaLabel={`${node.node_id} model`}
@@ -198,8 +200,7 @@ export function SiteEditor({ site, onUpdate, onClose, autoFocusName = false }: S
               value={node.terr0_ipv4}
               onChange={(terr0_ipv4) => updateNode(index, { terr0_ipv4: terr0_ipv4.trim() })}
             />
-          </div>
-        </div>
+        </EditorCard>
       ))}
       <div className="builder-preset-row">
         <Button onClick={addNode}>+ add node</Button>

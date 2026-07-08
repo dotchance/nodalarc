@@ -17,6 +17,7 @@ import { useState } from "react";
 import { Button, IconButton } from "../ui/Button";
 import { Icon } from "../ui/icons/Icon";
 import {
+  EditorCard,
   EditorName,
   Field,
   InlineSelect,
@@ -170,15 +171,12 @@ export function GroundEditor({
         autoFocus={autoFocusName}
       />
 
-      <div className={`builder-card${openCard === "sites" ? " builder-card--open" : ""}`}>
-        <button className="builder-card-head" onClick={() => toggle("sites")}>
-          <span className="builder-card-title">Sites</span>
-          <span className="builder-card-summary">
-            {draft.members.length === 1 ? "1 site" : `${draft.members.length} sites`}
-          </span>
-        </button>
-        {openCard === "sites" && (
-          <div className="builder-card-body">
+      <EditorCard
+        title="Sites"
+        open={openCard === "sites"}
+        onToggle={() => toggle("sites")}
+        summary={draft.members.length === 1 ? "1 site" : `${draft.members.length} sites`}
+      >
             {draft.members.map((member) => (
               <div key={member.member_id}>
                 <div className="builder-site-row">
@@ -312,19 +310,18 @@ export function GroundEditor({
                   ))}
               </div>
             )}
-          </div>
-        )}
-      </div>
+      </EditorCard>
 
-      <div className={`builder-card${openCard === "stamp" ? " builder-card--open" : ""}`}>
-        <button className="builder-card-head" onClick={() => toggle("stamp")}>
-          <span className="builder-card-title">New-site stamp</span>
-          <span className="builder-card-summary">
+      <EditorCard
+        title="New-site stamp"
+        open={openCard === "stamp"}
+        onToggle={() => toggle("stamp")}
+        summary={
+          <>
             {stampLabel} · lan {draft.stamp.lan_base}.x
-          </span>
-        </button>
-        {openCard === "stamp" && (
-          <div className="builder-card-body">
+          </>
+        }
+      >
             <div className="builder-site-derived">
               applied when minting pasted sites — each site owns its
               configuration afterwards (edit the site, not the stamp)
@@ -396,19 +393,14 @@ export function GroundEditor({
               next minted site: lan {stampLanPrefix(draft.stamp, 0)}, lo0{" "}
               {stampLoopbackAddress(draft.stamp, 0)} …
             </div>
-          </div>
-        )}
-      </div>
+      </EditorCard>
 
-      <div className={`builder-card${openCard === "scheduling" ? " builder-card--open" : ""}`}>
-        <button className="builder-card-head" onClick={() => toggle("scheduling")}>
-          <span className="builder-card-title">Scheduling</span>
-          <span className="builder-card-summary">
-            {SCHEDULING_PRESETS[draft.scheduling_preset].label.split(" — ")[0]}
-          </span>
-        </button>
-        {openCard === "scheduling" && (
-          <div className="builder-card-body">
+      <EditorCard
+        title="Scheduling"
+        open={openCard === "scheduling"}
+        onToggle={() => toggle("scheduling")}
+        summary={SCHEDULING_PRESETS[draft.scheduling_preset].label.split(" — ")[0]}
+      >
             <SelectField
               stack
               label="intent preset — writes the full explicit block (see YAML)"
@@ -422,22 +414,21 @@ export function GroundEditor({
                 label: preset.label,
               }))}
             />
-          </div>
-        )}
-      </div>
+      </EditorCard>
 
-      <div className={`builder-card${openCard === "routing" ? " builder-card--open" : ""}`}>
-        <button className="builder-card-head" onClick={() => toggle("routing")}>
-          <span className="builder-card-title">Routing intent</span>
-          <span className="builder-card-summary">
+      <EditorCard
+        title="Routing intent"
+        open={openCard === "routing"}
+        onToggle={() => toggle("routing")}
+        summary={
+          <>
             {draft.originated_ipv4.length > 0
               ? `${draft.originated_ipv4.length} originated`
               : "none originated"}
             {draft.tags.length > 0 && ` · ${draft.tags.join(" ")}`}
-          </span>
-        </button>
-        {openCard === "routing" && (
-          <div className="builder-card-body">
+          </>
+        }
+      >
             <Field
               stack
               label="originated IPv4 prefixes"
@@ -452,9 +443,7 @@ export function GroundEditor({
               value={draft.tags.join(", ")}
               onChange={(value) => onUpdate({ tags: tokenList(value) })}
             />
-          </div>
-        )}
-      </div>
+      </EditorCard>
 
       <SegmentLinksCard
         workspace={workspace}

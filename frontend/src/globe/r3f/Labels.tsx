@@ -75,6 +75,47 @@ export function overlapsPlaced(rects: PlacedRect[], candidate: PlacedRect): bool
   return false;
 }
 
+/**
+ * N33/N36 body-fold accounting. Writes each body's counted-segment set into
+ * `out` and the first node seen per body into `probe`. Both maps are reused
+ * across frames — the inner Sets are cleared in place, never reallocated, so
+ * the hot path allocates nothing (N34).
+ *
+ * N33: a segment counts toward a body's fold chip only when the class that owns
+ * it is enabled — satellite members when satellite labels are on, ground-station
+ * members when ground labels are on. A member with no `segment_id` never counts.
+ * A probe is recorded for EVERY body (even one with no counted segments) so the
+ * caller can still project it, but N36 (caller: `counted.size === 0`) then leaves
+ * that body unfolded — labels render as before, never hidden with no chip.
+ */
+export function collectFoldSegments(
+  nodes: NodeState[],
+  satEnabled: boolean,
+  gsEnabled: boolean,
+  out: Map<string, Set<string>>,
+  probe: Map<string, string>,
+): void {
+  for (const set of out.values()) set.clear();
+  probe.clear();
+  for (const node of nodes) {
+    if (!node.reference_body) continue;
+    if (!probe.has(node.reference_body)) probe.set(node.reference_body, node.node_id);
+    const classEnabled =
+      node.node_type === "satellite"
+        ? satEnabled
+        : node.node_type === "ground_station"
+          ? gsEnabled
+          : false;
+    if (!classEnabled || !node.segment_id) continue;
+    let segments = out.get(node.reference_body);
+    if (!segments) {
+      segments = new Set();
+      out.set(node.reference_body, segments);
+    }
+    segments.add(node.segment_id);
+  }
+}
+
 /** Build the satellite label div (globe/labels.ts updateLabels — cssText copied so CSS vars resolve). */
 function createSatLabel(label: string): HTMLDivElement {
   const div = document.createElement("div");
@@ -169,6 +210,184 @@ export function siteLabelRepresentatives(
   return representatives;
 }
 
+// --- Per-frame scratch, pooled at module scope so the hot loop allocates
+// nothing per frame (N34: Maps and Sets cleared, not recreated; the fold-entry
+// objects, placement rects, and the frame context are pooled too). ---
+interface FoldEntry {
+  sx: number;
+  sy: number;
+  segments: Set<string>;
+}
+const _seenSats = new Set<string>();
+const _seenGs = new Set<string>();
+const _bodySegments = new Map<string, Set<string>>();
+const _bodyProbe = new Map<string, string>();
+const _bodyByNode = new Map<string, string>();
+const _foldedBodies = new Map<string, FoldEntry>();
+const _foldEntryPool = new Map<string, FoldEntry>();
+const _placedRects: PlacedRect[] = [];
+
+/** The per-frame state the hoisted placement closures read. One pooled instance,
+ *  repopulated each frame — the closures move to module scope so useFrame does
+ *  not re-create them every frame (N34). */
+interface FrameCtx {
+  width: number;
+  height: number;
+  cx: number;
+  cy: number;
+  camera: THREE.Camera;
+  cameraPos: THREE.Vector3;
+  selectedId: string | null;
+  placedRects: PlacedRect[];
+  foldedBodies: Map<string, FoldEntry>;
+  bodyByNode: Map<string, string>;
+}
+const _ctx: FrameCtx = {
+  width: 0,
+  height: 0,
+  cx: 0,
+  cy: 0,
+  camera: null as unknown as THREE.Camera,
+  cameraPos: null as unknown as THREE.Vector3,
+  selectedId: null,
+  placedRects: _placedRects,
+  foldedBodies: _foldedBodies,
+  bodyByNode: _bodyByNode,
+};
+
+/** Fold visibility predicate (pure, canvas-free): a non-selected node whose body
+ *  is folded this frame is hidden; the selected node's label always survives the
+ *  fold (selection wins). Exported so the selection-survives / folded-hides
+ *  decision is unit-pinned without a canvas. */
+export function isFolded(
+  selectedId: string | null,
+  bodyByNode: Map<string, string>,
+  foldedBodies: ReadonlyMap<string, unknown>,
+  id: string,
+): boolean {
+  if (id === selectedId) return false;
+  const body = bodyByNode.get(id);
+  return body !== undefined && foldedBodies.has(body);
+}
+
+/** Ground-station label placement (globe/groundStations.ts updateGSLabels). */
+function placeGsLabel(ctx: FrameCtx, id: string, div: HTMLDivElement): void {
+  if (isFolded(ctx.selectedId, ctx.bodyByNode, ctx.foldedBodies, id) || !getNodeWorldPosition(id, _worldPos)) {
+    div.style.display = "none";
+    return;
+  }
+  const dist = _worldPos.distanceTo(ctx.cameraPos);
+  if (dist > GS_FADE_OUT_DIST) {
+    div.style.display = "none";
+    return;
+  }
+  _ndc.copy(_worldPos).project(ctx.camera);
+  if (_ndc.z > 1) {
+    div.style.display = "none";
+    return;
+  }
+  const bodySphere = getNodeBodySphere(id, _bodyCenter);
+  if (bodySphere && isOccludedBySphere(
+    _worldPos.x, _worldPos.y, _worldPos.z,
+    ctx.cameraPos.x, ctx.cameraPos.y, ctx.cameraPos.z,
+    _bodyCenter.x, _bodyCenter.y, _bodyCenter.z,
+    bodySphere.radius,
+  )) {
+    div.style.display = "none";
+    return;
+  }
+
+  const x = (_ndc.x * 0.5 + 0.5) * ctx.width;
+  const y = (-_ndc.y * 0.5 + 0.5) * ctx.height;
+  const rect: PlacedRect = {
+    x: x + 8,
+    y: y - 6,
+    w: (div.textContent?.length ?? 8) * LABEL_CHAR_PX,
+    h: LABEL_HEIGHT_PX,
+  };
+  if (id !== ctx.selectedId && overlapsPlaced(ctx.placedRects, rect)) {
+    div.style.display = "none";
+    return;
+  }
+  ctx.placedRects.push(rect);
+
+  div.style.display = "block";
+  div.style.left = `${rect.x}px`;
+  div.style.top = `${rect.y}px`;
+
+  if (dist < GS_FADE_IN_DIST) {
+    div.style.opacity = "1";
+  } else {
+    const t = (dist - GS_FADE_IN_DIST) / (GS_FADE_OUT_DIST - GS_FADE_IN_DIST);
+    div.style.opacity = String(1 - t * 0.7);
+  }
+}
+
+/** Satellite label placement (globe/labels.ts animateLabels). */
+function placeSatLabel(ctx: FrameCtx, id: string, div: HTMLDivElement): void {
+  if (isFolded(ctx.selectedId, ctx.bodyByNode, ctx.foldedBodies, id) || !getNodeWorldPosition(id, _worldPos)) {
+    div.style.display = "none";
+    return;
+  }
+  const dist = _worldPos.distanceTo(ctx.cameraPos);
+  if (dist > SAT_FADE_OUT_DIST) {
+    div.style.display = "none";
+    return;
+  }
+  _ndc.copy(_worldPos).project(ctx.camera);
+  if (_ndc.z > 1) {
+    div.style.display = "none";
+    return;
+  }
+  const bodySphere = getNodeBodySphere(id, _bodyCenter);
+  if (bodySphere && isOccludedBySphere(
+    _worldPos.x, _worldPos.y, _worldPos.z,
+    ctx.cameraPos.x, ctx.cameraPos.y, ctx.cameraPos.z,
+    _bodyCenter.x, _bodyCenter.y, _bodyCenter.z,
+    bodySphere.radius,
+  )) {
+    div.style.display = "none";
+    return;
+  }
+
+  const sx = (_ndc.x * 0.5 + 0.5) * ctx.width;
+  const sy = (-_ndc.y * 0.5 + 0.5) * ctx.height;
+
+  // Offset away from screen center so limb labels point outward (animateLabels).
+  const dx = sx - ctx.cx;
+  const dy = sy - ctx.cy;
+  const screenDist = Math.sqrt(dx * dx + dy * dy);
+  const nx = screenDist > 1 ? dx / screenDist : 1;
+  const ny = screenDist > 1 ? dy / screenDist : 0;
+
+  const rect: PlacedRect = {
+    x: sx + nx * 10,
+    y: sy + ny * 10 - 6,
+    w: (div.textContent?.length ?? 8) * LABEL_CHAR_PX,
+    h: LABEL_HEIGHT_PX,
+  };
+  if (id !== ctx.selectedId && overlapsPlaced(ctx.placedRects, rect)) {
+    div.style.display = "none";
+    return;
+  }
+  ctx.placedRects.push(rect);
+
+  div.style.display = "block";
+  div.style.left = `${rect.x}px`;
+  div.style.top = `${rect.y}px`;
+
+  if (dist < SAT_FADE_IN_DIST) {
+    div.style.opacity = "1";
+    div.style.fontSize = "var(--font-size-xxs)";
+    div.style.color = "var(--text-primary)";
+  } else {
+    const t = (dist - SAT_FADE_IN_DIST) / (SAT_FADE_OUT_DIST - SAT_FADE_IN_DIST);
+    div.style.opacity = String(1 - t * 0.7);
+    div.style.fontSize = "var(--font-size-xxs)";
+    div.style.color = "var(--text-secondary)";
+  }
+}
+
 export function Labels({
   nodes,
   containerRef,
@@ -222,40 +441,42 @@ export function Labels({
     const gsEnabled = getGsLabelsEnabled();
 
     // --- Reconcile divs: create for newly-seen nodes, remove for departed nodes. ---
-    const seenSats = new Set<string>();
-    const seenGs = new Set<string>();
+    _seenSats.clear();
+    _seenGs.clear();
     for (const node of nodeList) {
       if (node.node_type === "satellite") {
-        seenSats.add(node.node_id);
+        _seenSats.add(node.node_id);
         const label = nodeDisplayLabel(node);
-        if (!satLabels.current.has(node.node_id)) {
+        const existing = satLabels.current.get(node.node_id);
+        if (!existing) {
           const div = createSatLabel(label);
           container.appendChild(div);
           satLabels.current.set(node.node_id, div);
-        } else {
-          satLabels.current.get(node.node_id)!.textContent = label;
+        } else if (existing.textContent !== label) {
+          existing.textContent = label;
         }
       } else if (node.node_type === "ground_station") {
         if (!gsRepresentativesRef.current.has(node.node_id)) continue;
-        seenGs.add(node.node_id);
+        _seenGs.add(node.node_id);
         const label = nodeDisplayLabel(node);
-        if (!gsLabels.current.has(node.node_id)) {
+        const existing = gsLabels.current.get(node.node_id);
+        if (!existing) {
           const div = createGsLabel(label);
           container.appendChild(div);
           gsLabels.current.set(node.node_id, div);
-        } else {
-          gsLabels.current.get(node.node_id)!.textContent = label;
+        } else if (existing.textContent !== label) {
+          existing.textContent = label;
         }
       }
     }
     for (const [id, div] of satLabels.current) {
-      if (!seenSats.has(id)) {
+      if (!_seenSats.has(id)) {
         div.remove();
         satLabels.current.delete(id);
       }
     }
     for (const [id, div] of gsLabels.current) {
-      if (!seenGs.has(id)) {
+      if (!_seenGs.has(id)) {
         div.remove();
         gsLabels.current.delete(id);
       }
@@ -267,20 +488,14 @@ export function Labels({
     const selectedId = selectedNodeIdRef.current;
     const projectionFactor =
       height / (2 * Math.tan(((camera as THREE.PerspectiveCamera).fov * Math.PI) / 360));
-    const foldedBodies = new Map<string, { sx: number; sy: number; segments: Set<string> }>();
-    const bodySegments = new Map<string, Set<string>>();
-    const bodyProbe = new Map<string, string>();
-    for (const node of nodeList) {
-      if (!node.reference_body) continue;
-      let segments = bodySegments.get(node.reference_body);
-      if (!segments) {
-        segments = new Set();
-        bodySegments.set(node.reference_body, segments);
-        bodyProbe.set(node.reference_body, node.node_id);
-      }
-      if (node.segment_id) segments.add(node.segment_id);
-    }
-    for (const [body, probeId] of bodyProbe) {
+    // N33/N36 fold accounting: count only the segments whose label class is
+    // enabled; a body with zero counted segments is skipped below (N36), so its
+    // labels render as before rather than folding into a chip.
+    _foldedBodies.clear();
+    collectFoldSegments(nodeList, satEnabled, gsEnabled, _bodySegments, _bodyProbe);
+    for (const [body, probeId] of _bodyProbe) {
+      const counted = _bodySegments.get(body);
+      if (!counted || counted.size === 0) continue; // N36: nothing to fold
       const sphere = getNodeBodySphere(probeId, _bodyCenter);
       if (!sphere) continue;
       const dist = _bodyCenter.distanceTo(cameraPos);
@@ -289,168 +504,59 @@ export function Labels({
       if (screenRadius >= BODY_FOLD_SCREEN_RADIUS_PX) continue;
       _ndc.copy(_bodyCenter).project(camera);
       if (_ndc.z > 1) continue;
-      foldedBodies.set(body, {
-        sx: (_ndc.x * 0.5 + 0.5) * width,
-        sy: (-_ndc.y * 0.5 + 0.5) * height,
-        segments: bodySegments.get(body) ?? new Set(),
-      });
+      let entry = _foldEntryPool.get(body);
+      if (!entry) {
+        entry = { sx: 0, sy: 0, segments: counted };
+        _foldEntryPool.set(body, entry);
+      }
+      entry.sx = (_ndc.x * 0.5 + 0.5) * width;
+      entry.sy = (-_ndc.y * 0.5 + 0.5) * height;
+      entry.segments = counted;
+      _foldedBodies.set(body, entry);
     }
-    const bodyByNode = new Map<string, string>();
+    _bodyByNode.clear();
     for (const node of nodeList) {
-      if (node.reference_body) bodyByNode.set(node.node_id, node.reference_body);
+      if (node.reference_body) _bodyByNode.set(node.node_id, node.reference_body);
     }
 
     // Reconcile chip divs against this frame's folded set.
-    for (const [body, fold] of foldedBodies) {
+    for (const [body, fold] of _foldedBodies) {
       let chip = bodyChips.current.get(body);
       if (!chip) {
         chip = createBodyChip();
         container.appendChild(chip);
         bodyChips.current.set(body, chip);
       }
-      chip.textContent = `${body} · ${fold.segments.size} segment${fold.segments.size === 1 ? "" : "s"} — zoom in`;
-      chip.style.display = "block";
+      const text = `${body} · ${fold.segments.size} segment${fold.segments.size === 1 ? "" : "s"} — zoom in`;
+      if (chip.textContent !== text) chip.textContent = text;
+      if (chip.style.display !== "block") chip.style.display = "block";
       chip.style.left = `${fold.sx + 12}px`;
       chip.style.top = `${fold.sy - 8}px`;
     }
     for (const [body, chip] of bodyChips.current) {
-      if (!foldedBodies.has(body)) chip.style.display = "none";
+      if (!_foldedBodies.has(body) && chip.style.display !== "none") chip.style.display = "none";
     }
 
     // Greedy de-overlap boxes placed this frame (ground labels first, then
-    // satellites; the selected node's label is placed before everything).
-    const placedRects: PlacedRect[] = [];
-
-    const isFolded = (id: string): boolean => {
-      if (id === selectedId) return false;
-      const body = bodyByNode.get(id);
-      return body !== undefined && foldedBodies.has(body);
-    };
-
-    // --- Ground-station labels (globe/groundStations.ts updateGSLabels). ---
-    const placeGsLabel = (id: string, div: HTMLDivElement): void => {
-      if (isFolded(id) || !getNodeWorldPosition(id, _worldPos)) {
-        div.style.display = "none";
-        return;
-      }
-      const dist = _worldPos.distanceTo(cameraPos);
-      if (dist > GS_FADE_OUT_DIST) {
-        div.style.display = "none";
-        return;
-      }
-      _ndc.copy(_worldPos).project(camera);
-      if (_ndc.z > 1) {
-        div.style.display = "none";
-        return;
-      }
-      const bodySphere = getNodeBodySphere(id, _bodyCenter);
-      if (bodySphere && isOccludedBySphere(
-        _worldPos.x, _worldPos.y, _worldPos.z,
-        cameraPos.x, cameraPos.y, cameraPos.z,
-        _bodyCenter.x, _bodyCenter.y, _bodyCenter.z,
-        bodySphere.radius,
-      )) {
-        div.style.display = "none";
-        return;
-      }
-
-      const x = (_ndc.x * 0.5 + 0.5) * width;
-      const y = (-_ndc.y * 0.5 + 0.5) * height;
-      const rect: PlacedRect = {
-        x: x + 8,
-        y: y - 6,
-        w: (div.textContent?.length ?? 8) * LABEL_CHAR_PX,
-        h: LABEL_HEIGHT_PX,
-      };
-      if (id !== selectedId && overlapsPlaced(placedRects, rect)) {
-        div.style.display = "none";
-        return;
-      }
-      placedRects.push(rect);
-
-      div.style.display = "block";
-      div.style.left = `${rect.x}px`;
-      div.style.top = `${rect.y}px`;
-
-      if (dist < GS_FADE_IN_DIST) {
-        div.style.opacity = "1";
-      } else {
-        const t = (dist - GS_FADE_IN_DIST) / (GS_FADE_OUT_DIST - GS_FADE_IN_DIST);
-        div.style.opacity = String(1 - t * 0.7);
-      }
-    };
-
-    // --- Satellite labels (globe/labels.ts animateLabels). ---
-    const placeSatLabel = (id: string, div: HTMLDivElement): void => {
-      if (isFolded(id) || !getNodeWorldPosition(id, _worldPos)) {
-        div.style.display = "none";
-        return;
-      }
-      const dist = _worldPos.distanceTo(cameraPos);
-      if (dist > SAT_FADE_OUT_DIST) {
-        div.style.display = "none";
-        return;
-      }
-      _ndc.copy(_worldPos).project(camera);
-      if (_ndc.z > 1) {
-        div.style.display = "none";
-        return;
-      }
-      const bodySphere = getNodeBodySphere(id, _bodyCenter);
-      if (bodySphere && isOccludedBySphere(
-        _worldPos.x, _worldPos.y, _worldPos.z,
-        cameraPos.x, cameraPos.y, cameraPos.z,
-        _bodyCenter.x, _bodyCenter.y, _bodyCenter.z,
-        bodySphere.radius,
-      )) {
-        div.style.display = "none";
-        return;
-      }
-
-      const sx = (_ndc.x * 0.5 + 0.5) * width;
-      const sy = (-_ndc.y * 0.5 + 0.5) * height;
-
-      // Offset away from screen center so limb labels point outward (animateLabels).
-      const dx = sx - cx;
-      const dy = sy - cy;
-      const screenDist = Math.sqrt(dx * dx + dy * dy);
-      const nx = screenDist > 1 ? dx / screenDist : 1;
-      const ny = screenDist > 1 ? dy / screenDist : 0;
-
-      const rect: PlacedRect = {
-        x: sx + nx * 10,
-        y: sy + ny * 10 - 6,
-        w: (div.textContent?.length ?? 8) * LABEL_CHAR_PX,
-        h: LABEL_HEIGHT_PX,
-      };
-      if (id !== selectedId && overlapsPlaced(placedRects, rect)) {
-        div.style.display = "none";
-        return;
-      }
-      placedRects.push(rect);
-
-      div.style.display = "block";
-      div.style.left = `${rect.x}px`;
-      div.style.top = `${rect.y}px`;
-
-      if (dist < SAT_FADE_IN_DIST) {
-        div.style.opacity = "1";
-        div.style.fontSize = "var(--font-size-xxs)";
-        div.style.color = "var(--text-primary)";
-      } else {
-        const t = (dist - SAT_FADE_IN_DIST) / (SAT_FADE_OUT_DIST - SAT_FADE_IN_DIST);
-        div.style.opacity = String(1 - t * 0.7);
-        div.style.fontSize = "var(--font-size-xxs)";
-        div.style.color = "var(--text-secondary)";
-      }
-    };
+    // satellites; the selected node's label is placed before everything). The
+    // placement closures are hoisted to module scope (N34) and read this frame's
+    // state through the pooled _ctx — _placedRects is reset in place, never
+    // reallocated.
+    _placedRects.length = 0;
+    _ctx.width = width;
+    _ctx.height = height;
+    _ctx.cx = cx;
+    _ctx.cy = cy;
+    _ctx.camera = camera;
+    _ctx.cameraPos = cameraPos;
+    _ctx.selectedId = selectedId;
 
     // Selection always wins: its label claims screen space before any other.
     if (selectedId) {
       const selectedSat = satLabels.current.get(selectedId);
-      if (selectedSat && satEnabled) placeSatLabel(selectedId, selectedSat);
+      if (selectedSat && satEnabled) placeSatLabel(_ctx, selectedId, selectedSat);
       const selectedGs = gsLabels.current.get(selectedId);
-      if (selectedGs && gsEnabled) placeGsLabel(selectedId, selectedGs);
+      if (selectedGs && gsEnabled) placeGsLabel(_ctx, selectedId, selectedGs);
     }
 
     if (!gsEnabled) {
@@ -458,7 +564,7 @@ export function Labels({
     } else {
       for (const [id, div] of gsLabels.current) {
         if (id === selectedId) continue;
-        placeGsLabel(id, div);
+        placeGsLabel(_ctx, id, div);
       }
     }
 
@@ -467,7 +573,7 @@ export function Labels({
     } else {
       for (const [id, div] of satLabels.current) {
         if (id === selectedId) continue;
-        placeSatLabel(id, div);
+        placeSatLabel(_ctx, id, div);
       }
     }
   });

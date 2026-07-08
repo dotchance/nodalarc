@@ -2044,8 +2044,8 @@ export function BuilderView({
 
   return (
     <div className="builder-shell" data-testid="builder-shell">
-      {/* Session verbs live HERE, with standard icons — a toolbar, like
-          every other application. The rail below is session CONTENT only;
+      {/* Session verbs live here, with standard icons — a toolbar, like
+          every other application. The rail below is session content only;
           the Library is one surface (its window), opened from here. */}
       <div className="builder-toolbar" data-testid="builder-toolbar">
         <span className="builder-mode-badge">Session Builder</span>
@@ -2714,7 +2714,7 @@ export function BuilderView({
             <div className="builder-zone-empty">
               The toolbar above holds the session verbs — New, Open, Save, Deploy,
               Restore, Library. Every step round-trips through the real resolver;
-              the YAML pane shows the artifact live.
+              the YAML pane shows the session document live.
             </div>
           </div>
         )}
@@ -2789,7 +2789,7 @@ export function BuilderView({
           </>
         ) : (
           <div className="builder-zone-empty">
-            The artifact appears here as soon as a draft resolves.
+            The session document appears here as soon as a draft resolves.
           </div>
         )}
       </div>

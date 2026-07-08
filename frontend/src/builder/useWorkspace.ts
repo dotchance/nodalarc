@@ -25,10 +25,8 @@ import {
   type DraftGroundSet,
   type DraftGroundSite,
   type DraftBoundary,
-  type DraftLinkEndpoint,
   type DraftLinkRule,
   type DraftRoutingDomain,
-  type DraftOrbit,
   type RefGroundSet,
   type Workspace,
 } from "./workspace";
@@ -544,14 +542,6 @@ export function useWorkspace() {
     return { ok: true };
   }, [commit]);
 
-  const discardAutosave = useCallback(() => {
-    try {
-      localStorage.removeItem(AUTOSAVE_KEY);
-    } catch {
-      // Nothing to discard when storage is unavailable.
-    }
-  }, []);
-
   const startNew = useCallback((name: string) => {
     commit(newWorkspace(name));
   }, []);
@@ -640,22 +630,6 @@ export function useWorkspace() {
     );
   }, []);
 
-  /** Customize-a-block: swap a placed reference for its forked draft. */
-  const replaceRefWithDraft = useCallback(
-    (segmentId: string, draft: DraftConstellation) => {
-      commit((prev) =>
-        prev
-          ? {
-              ...prev,
-              space_refs: prev.space_refs.filter((r) => r.segment_id !== segmentId),
-              space: [...prev.space, draft],
-            }
-          : prev,
-      );
-    },
-    [],
-  );
-
   const removeConstellation = useCallback((segmentId: string) => {
     commit((prev) =>
       prev
@@ -672,24 +646,6 @@ export function useWorkspace() {
               ...prev,
               space: prev.space.map((draft) =>
                 draft.segment_id === segmentId ? { ...draft, ...patch } : draft,
-              ),
-            }
-          : prev,
-      );
-    },
-    [],
-  );
-
-  const updateOrbit = useCallback(
-    (segmentId: string, patch: Partial<DraftOrbit>) => {
-      commit((prev) =>
-        prev
-          ? {
-              ...prev,
-              space: prev.space.map((draft) =>
-                draft.segment_id === segmentId
-                  ? { ...draft, orbit: { ...draft.orbit, ...patch } }
-                  : draft,
               ),
             }
           : prev,
@@ -779,7 +735,7 @@ export function useWorkspace() {
     [createWorkspace],
   );
 
-  /** Connect two placed segments (self-ensuring is NOT needed here: a link
+  /** Connect two placed segments (self-ensuring is not needed here: a link
    *  rule requires segments, so the workspace always exists first). */
   const addLinkRule = useCallback((rule: DraftLinkRule) => {
     commit((prev) => (prev ? { ...prev, links: [...prev.links, rule] } : prev));
@@ -797,24 +753,6 @@ export function useWorkspace() {
         : prev,
     );
   }, []);
-
-  const updateLinkEndpoint = useCallback(
-    (ruleId: string, side: "a" | "b", patch: Partial<DraftLinkEndpoint>) => {
-      commit((prev) =>
-        prev
-          ? {
-              ...prev,
-              links: prev.links.map((rule) =>
-                rule.rule_id === ruleId
-                  ? { ...rule, [side]: { ...rule[side], ...patch } }
-                  : rule,
-              ),
-            }
-          : prev,
-      );
-    },
-    [],
-  );
 
   const removeLinkRule = useCallback((ruleId: string) => {
     commit((prev) =>
@@ -971,16 +909,13 @@ export function useWorkspace() {
     stashAutosaveToBackup,
     hasBackup,
     restoreBackup,
-    discardAutosave,
     close,
     addConstellation,
     addConstellationRef,
     addDraft,
     removeRefSegment,
-    replaceRefWithDraft,
     removeConstellation,
     updateConstellation,
-    updateOrbit,
     addGroundRef,
     updateGroundRef,
     removeGroundRef,
@@ -992,7 +927,6 @@ export function useWorkspace() {
     convergeGroundToRef,
     addLinkRule,
     updateLinkRule,
-    updateLinkEndpoint,
     removeLinkRule,
     addRoutingDomain,
     updateRoutingDomain,

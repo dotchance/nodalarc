@@ -199,7 +199,7 @@ export function SliderField({
     onChange(parsed);
   });
   return (
-    <label className="builder-field builder-field--slider">
+    <label className="builder-field">
       <span className="builder-field-label">{label}</span>
       <span className="builder-field-input builder-slider-row">
         <input
@@ -440,54 +440,6 @@ export function EditorCard({ title, summary, open, onToggle, actions, children }
       )}
       {open && <div className="builder-card-body">{children}</div>}
     </div>
-  );
-}
-
-/** Compact controls for member/list rows (site rows and their kin). */
-export function InlineNumber({
-  ariaLabel,
-  value,
-  onChange,
-  step,
-}: {
-  ariaLabel: string;
-  value: number;
-  onChange: (value: number) => void;
-  step?: number;
-}) {
-  return (
-    <input
-      type="number"
-      aria-label={ariaLabel}
-      value={value}
-      step={step}
-      onChange={(e) => {
-        const parsed = Number(e.target.value);
-        if (Number.isFinite(parsed)) onChange(parsed);
-      }}
-    />
-  );
-}
-
-export function InlineText({
-  ariaLabel,
-  value,
-  onChange,
-  placeholder,
-}: {
-  ariaLabel: string;
-  value: string;
-  onChange: (value: string) => void;
-  placeholder?: string;
-}) {
-  return (
-    <input
-      type="text"
-      aria-label={ariaLabel}
-      placeholder={placeholder}
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-    />
   );
 }
 

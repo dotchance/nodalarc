@@ -194,23 +194,6 @@
   font-size: var(--font-size-xs);
 }
 
-.builder-session-picker {
-  display: flex;
-  gap: var(--space-2);
-  align-items: center;
-}
-
-.builder-session-picker select {
-  flex: 1;
-  min-width: 0;
-  background: var(--bg-main);
-  color: var(--text-primary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: var(--space-1) var(--space-2);
-  font-size: var(--font-size-xs);
-}
-
 .builder-outline-group {
   display: flex;
   flex-direction: column;
@@ -250,14 +233,6 @@
 .builder-outline-row--selected {
   background: var(--bg-panel-hover);
   color: var(--text-primary);
-}
-
-.builder-outline-row--static {
-  cursor: default;
-}
-
-.builder-outline-row--static:hover {
-  background: none;
 }
 
 .builder-outline-row .builder-outline-count {
@@ -507,33 +482,6 @@ button.builder-card-head:hover .builder-card-title {
   max-width: 100%;
 }
 
-.builder-yaml-pane {
-  position: absolute;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  width: 440px;
-  max-width: 60%;
-  background: var(--bg-panel);
-  border-left: 1px solid var(--border);
-  display: flex;
-  flex-direction: column;
-  z-index: 2;
-}
-
-.builder-yaml-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: var(--space-2);
-  border-bottom: 1px solid var(--border);
-}
-
-.builder-yaml-actions {
-  display: inline-flex;
-  gap: var(--space-1);
-}
-
 .builder-yaml-body {
   flex: 1;
   overflow: auto;
@@ -543,22 +491,6 @@ button.builder-card-head:hover .builder-card-title {
   font-size: var(--font-size-xxs);
   color: var(--text-primary);
   white-space: pre;
-}
-
-.builder-status-toggle {
-  margin-left: auto;
-  border: 1px solid var(--border);
-  background: none;
-  color: var(--text-secondary);
-  border-radius: var(--radius-xs);
-  font-size: var(--font-size-xxs);
-  padding: 1px 8px;
-  cursor: pointer;
-}
-
-.builder-status-toggle--active {
-  color: var(--accent-amber);
-  border-color: var(--accent-amber);
 }
 
 .builder-start-card {
@@ -639,28 +571,6 @@ button.builder-card-head:hover .builder-card-title {
 .builder-site-head .builder-ground-preset {
   max-width: 110px;
   flex: none;
-}
-
-.builder-site-fields {
-  display: flex;
-  gap: var(--space-1);
-}
-
-.builder-site-fields input[type="number"] {
-  width: 64px;
-}
-
-.builder-site-fields input[type="text"] {
-  width: 90px;
-}
-
-.builder-site-fields input {
-  background: var(--bg-main);
-  color: var(--text-primary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-xs);
-  font-size: var(--font-size-xxs);
-  padding: 1px 4px;
 }
 
 /* Derived addressing: dim mono, per-row — the addressing plan is visible,

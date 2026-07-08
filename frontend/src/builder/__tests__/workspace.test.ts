@@ -18,7 +18,6 @@ import {
   defaultDraftOrbit,
   dwellLongitudeDeg,
   isGeosynchronous,
-  meanAnomalyForDwell,
   defaultLinkRule,
   defaultRoutingDomain,
   draftConstellationFromDocuments,
@@ -47,7 +46,6 @@ import {
   reseedCounters,
   stampLanPrefix,
   stampLoopbackAddress,
-  stampTerr0Address,
   toSessionDocument,
   workspaceFromSessionDocument,
   draftGroundMember,
@@ -146,7 +144,7 @@ describe("toSessionDocument", () => {
     const denver = siteSet.sites[0].site;
     // Minted sites carry stamp-derived, explicit addressing they now own.
     expect(denver.lan.ipv4).toBe(stampLanPrefix(draft.stamp, 0));
-    expect(denver.nodes[0].interfaces.terr0.ipv4).toBe(stampTerr0Address(draft.stamp, 0));
+    expect(denver.nodes[0].interfaces.terr0.ipv4).toBe(`${draft.stamp.lan_base}.0.1/24`);
     expect(denver.nodes[0].interfaces.lo0.ipv4).toBe(stampLoopbackAddress(draft.stamp, 0));
     expect(denver.nodes[0].model).toBe("nodalarc:nodes/ground/leo-gateway.yaml");
     expect(denver.nodes[0].terminals).toEqual({ access_ka: { installed_count: 2 } });
@@ -694,16 +692,6 @@ describe("dwell longitude lens (geosynchronous orbits)", () => {
     expect(isGeosynchronous({ ...geo, shape_kind: "elliptical" })).toBe(false);
   });
 
-  it("round-trips: setting a dwell longitude derives the mean anomaly that reads back as that longitude", () => {
-    for (const lon of [-100.5, 0, 77.2, 179]) {
-      const mean_anomaly_deg = meanAnomalyForDwell(lon, geo, epoch);
-      expect(mean_anomaly_deg).toBeGreaterThanOrEqual(0);
-      expect(mean_anomaly_deg).toBeLessThan(360);
-      const back = dwellLongitudeDeg({ ...geo, mean_anomaly_deg }, epoch);
-      expect(back).toBeCloseTo(lon, 9);
-    }
-  });
-
   it("moving RAAN shifts the derived longitude by the same amount", () => {
     const base = dwellLongitudeDeg(geo, epoch);
     const shifted = dwellLongitudeDeg({ ...geo, raan_deg: geo.raan_deg + 30 }, epoch);
@@ -963,7 +951,7 @@ describe("workspaceFromSessionDocument — placed refs and inline nodes", () => 
 });
 
 describe("held-back incomplete containers", () => {
-  it("an empty ground draft and everything referencing it stay out of the artifact", () => {
+  it("an empty ground draft and everything referencing it stay out of the session document", () => {
     const ws = newWorkspace("holdback-study");
     ws.space.push(newDraftConstellation("nodalarc:nodes/space/starlink-v2-mesh.yaml"));
     const shell = ws.space[0]!;
@@ -986,9 +974,9 @@ describe("held-back incomplete containers", () => {
     // The hold-back is stated, never silent — including the domain that
     // partially sheds the held-back member (M1 case d).
     expect(
-      completenessFindings(ws).some((f) => f.message.includes("held out of the artifact")),
+      completenessFindings(ws).some((f) => f.message.includes("held out of the session document")),
     ).toBe(true);
-    expect(linkWarnings(ws).some((w) => w.includes("held out of the artifact"))).toBe(true);
+    expect(linkWarnings(ws).some((w) => w.includes("held out of the session document"))).toBe(true);
     expect(routingWarnings(ws).some((w) => w.includes("dropped from the domain"))).toBe(true);
   });
 
@@ -1004,7 +992,7 @@ describe("held-back incomplete containers", () => {
     expect(doc.routing).toBeUndefined();
     // The whole domain being held out is stated, never silent (M1 case a).
     expect(
-      routingWarnings(ws).some((w) => w.includes("the domain is held out of the artifact")),
+      routingWarnings(ws).some((w) => w.includes("the domain is held out of the session document")),
     ).toBe(true);
   });
 });
@@ -1161,7 +1149,7 @@ describe("hold-back and removal are stated in routing, never silent (M1)", () =>
     expect((toSessionDocument(ws) as { link_rules?: unknown }).link_rules).toBeUndefined();
     expect(
       routingWarnings(ws).some((w) =>
-        w.includes("rides a link rule that is held out of the artifact"),
+        w.includes("rides a link rule that is held out of the session document"),
       ),
     ).toBe(true);
   });
@@ -1188,7 +1176,7 @@ describe("hold-back and removal are stated in routing, never silent (M1)", () =>
     ws.boundaries.push(boundary);
     expect(
       routingWarnings(ws).some((w) =>
-        w.includes("references a routing domain that is held out of the artifact"),
+        w.includes("references a routing domain that is held out of the session document"),
       ),
     ).toBe(true);
   });
@@ -1207,7 +1195,7 @@ describe("hold-back and removal are stated in routing, never silent (M1)", () =>
     expect((toSessionDocument(ws) as { link_rules?: unknown }).link_rules).toBeUndefined();
     expect(
       routingWarnings(ws).some((w) =>
-        w.includes("rides a link rule that is held out of the artifact"),
+        w.includes("rides a link rule that is held out of the session document"),
       ),
     ).toBe(true);
   });
@@ -1219,7 +1207,7 @@ describe("hold-back and removal are stated in routing, never silent (M1)", () =>
     ws.routing_domains.push(domain);
     const warnings = routingWarnings(ws);
     expect(warnings.some((w) => w.includes("no longer in the session"))).toBe(true);
-    expect(warnings.some((w) => w.includes("the domain is held out of the artifact"))).toBe(true);
+    expect(warnings.some((w) => w.includes("the domain is held out of the session document"))).toBe(true);
     expect((toSessionDocument(ws) as { routing?: unknown }).routing).toBeUndefined();
   });
 });
@@ -1353,7 +1341,7 @@ describe("addressing honesty: shape-first matcher + within/cross-segment warning
     site.site_id = "edge";
     site.lan_ipv4 = stampLanPrefix(g.stamp, 254);
     site.nodes[0]!.lo0_ipv4 = stampLoopbackAddress(g.stamp, 254);
-    site.nodes[0]!.terr0_ipv4 = stampTerr0Address(g.stamp, 254);
+    site.nodes[0]!.terr0_ipv4 = `${g.stamp.lan_base}.254.1/24`;
     g.members = [draftGroundMember(site)];
     expect(nextMintIndex(g)).toBe(255);
     expect(groundWarnings(g).some((w) => w.includes("no addressing room"))).toBe(true);

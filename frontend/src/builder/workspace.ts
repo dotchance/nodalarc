@@ -241,7 +241,7 @@ export interface DraftLinkRule {
 /** An authored routing domain: a protocol over member segments. Whole-
  *  segment membership only — per-terminal membership is a gated grammar
  *  change and walls at the gesture. Timers are the expert card: null =
- *  engine defaults (omitted from the artifact). */
+ *  engine defaults (omitted from the session document). */
 export interface DraftRoutingDomain {
   domain_id: string;
   label: string;
@@ -319,9 +319,9 @@ export const EARTH_BODY_REF = "nodalarc:bodies/earth.yaml";
 /** The shipped planetary-ephemeris manifest (DE440s), exactly as the
  *  reference multi-body session declares it. A session that places any node
  *  on a body other than Earth must carry a kernel manifest; the builder seeds
- *  this one and the artifact column shows it — the resolver still validates
+ *  this one and the session document shows it — the resolver still validates
  *  file and checksum server-side. */
-export const DE440S_EPHEMERIS = {
+const DE440S_EPHEMERIS = {
   provider: "skyfield_bsp",
   quality_tier: "de440s",
   kernels: [
@@ -844,18 +844,6 @@ export function dwellLongitudeDeg(orbit: DraftOrbit, epochIso: string): number {
   return ((lon % 360) + 540) % 360 - 180;
 }
 
-/** Inverse of the lens: the mean anomaly that puts the first slot over the
- *  given longitude at session start. */
-export function meanAnomalyForDwell(
-  lonDeg: number,
-  orbit: DraftOrbit,
-  epochIso: string,
-): number {
-  const anomaly =
-    lonDeg + gmstDegAt(epochIso) - orbit.raan_deg - orbit.argument_of_perigee_deg;
-  return ((anomaly % 360) + 360) % 360;
-}
-
 /** Orbit sanity findings: warn, never block (unusual orbits are learning
  *  paths; only the physically broken gets flagged, in plain language).
  *  Altitude is body-relative already; the atmosphere check is Earth
@@ -1003,7 +991,7 @@ export function stampLanPrefix(stamp: GroundStamp, index: number): string {
   return `${stamp.lan_base}.${index}.0/24`;
 }
 
-export function stampTerr0Address(stamp: GroundStamp, index: number): string {
+function stampTerr0Address(stamp: GroundStamp, index: number): string {
   return `${stamp.lan_base}.${index}.1/24`;
 }
 
@@ -1083,7 +1071,7 @@ export function nextMintIndex(draft: DraftGroundSet): number {
 }
 
 /** The grammar id a member answers to (override matching keys on it). */
-export function memberSiteId(member: DraftGroundSite): string {
+function memberSiteId(member: DraftGroundSite): string {
   return member.kind === "draft" && member.site ? member.site.site_id : member.site_id;
 }
 
@@ -1498,7 +1486,7 @@ export function groundSetIsRefExpressible(draft: DraftGroundSet): boolean {
   );
 }
 
-/** Serialize the workspace to the session grammar (the one artifact). *//** Every placed segment a link rule can select, with its kind — the role
+/** Serialize the workspace to the session grammar (the one session document). *//** Every placed segment a link rule can select, with its kind — the role
  *  defaults key on kinds (space⟲space=isl, space↔space=crosslink,
  *  ground↔space=access). */
 export interface PlacedSegment {
@@ -1613,7 +1601,7 @@ export function linkWarnings(workspace: Workspace): string[] {
         );
       } else if (held.has(endpoint.segment_id)) {
         warnings.push(
-          `${rule.label || id}: "${placed.get(endpoint.segment_id)?.label}" has no sites yet — the rule is held out of the artifact until it does`,
+          `${rule.label || id}: "${placed.get(endpoint.segment_id)?.label}" has no sites yet — the rule is held out of the session document until it does`,
         );
       }
     }
@@ -1722,7 +1710,7 @@ export function routingWarnings(workspace: Workspace): string[] {
     domainIds.add(id);
     if (domain.member_segment_ids.length === 0) {
       warnings.push(
-        `${domain.label}: no member segments yet — held out of the artifact until it has some`,
+        `${domain.label}: no member segments yet — held out of the session document until it has some`,
       );
     }
     for (const member of domain.member_segment_ids) {
@@ -1738,13 +1726,13 @@ export function routingWarnings(workspace: Workspace): string[] {
       }
     }
     // (a)/(f) the domain has authored members but none survive emission — the
-    // whole domain is held out of the artifact, not merely reduced.
+    // whole domain is held out of the session document, not merely reduced.
     if (
       domain.member_segment_ids.length > 0 &&
       emittedDomainMembers(domain, emitted).length === 0
     ) {
       warnings.push(
-        `${domain.label}: no members are emitted yet — the domain is held out of the artifact`,
+        `${domain.label}: no members are emitted yet — the domain is held out of the session document`,
       );
     }
     if (
@@ -1771,7 +1759,7 @@ export function routingWarnings(workspace: Workspace): string[] {
     } else if (!emittedRuleIds.has(boundary.over_rule_id)) {
       // (b)/(e) the rule still exists but is not emitted — a held-back
       // endpoint or a removed endpoint segment — so the boundary rides nothing.
-      warnings.push("a boundary rides a link rule that is held out of the artifact");
+      warnings.push("a boundary rides a link rule that is held out of the session document");
     }
     if (
       !draftDomainIds.has(boundary.from_domain_id) ||
@@ -1784,9 +1772,9 @@ export function routingWarnings(workspace: Workspace): string[] {
       !emittedDomainIds.has(boundary.from_domain_id) ||
       !emittedDomainIds.has(boundary.to_domain_id)
     ) {
-      // (c) the domain exists but is held out of the artifact (its members
+      // (c) the domain exists but is held out of the session document (its members
       // were all shed), so the boundary references nothing emitted.
-      warnings.push("a boundary references a routing domain that is held out of the artifact");
+      warnings.push("a boundary references a routing domain that is held out of the session document");
     }
   }
   return warnings;
@@ -1873,7 +1861,7 @@ export function completenessFindings(workspace: Workspace): CompletenessFinding[
   for (const draft of workspace.ground) {
     if (draft.members.length === 0) {
       findings.push({
-        message: `${draft.display_name}: no sites yet — held out of the artifact`,
+        message: `${draft.display_name}: no sites yet — held out of the session document`,
         target: { kind: "ground", id: draft.segment_id },
       });
     }
@@ -1977,16 +1965,16 @@ export function reseedCounters(workspace: Workspace): void {
 }
 
 /** A ground draft with no sites cannot possibly resolve — it and anything
- *  referencing it are held out of the artifact until complete (the warnings
+ *  referencing it are held out of the session document until complete (the warnings
  *  and the rail say so). An empty shell used to refuse the whole resolve
  *  and blank the world the moment authoring began. */
-export function heldBackGroundIds(workspace: Workspace): Set<string> {
+function heldBackGroundIds(workspace: Workspace): Set<string> {
   return new Set(
     workspace.ground.filter((d) => d.members.length === 0).map((d) => d.segment_id),
   );
 }
 
-/** Serialize the workspace to the session grammar (the one artifact). */
+/** Serialize the workspace to the session grammar (the one session document). */
 export function toSessionDocument(workspace: Workspace): Record<string, unknown> {
   const heldGrounds = heldBackGroundIds(workspace);
   const emitted = emittedSegmentIds(workspace);

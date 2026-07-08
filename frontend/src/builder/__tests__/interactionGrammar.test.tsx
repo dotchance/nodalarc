@@ -922,6 +922,40 @@ describe("IG-15: the anatomy guide answers what-next in any order", () => {
   });
 });
 
+describe("N55: \"artifact\" survives only in save-form contexts", () => {
+  // After P0a, "artifact" names the flattened SAVE form (artifact_sha256, the
+  // save dialog). Naming the authoring PANE/document an artifact with a leading
+  // article is a false-state display. Scan every builder file INCLUDING
+  // __tests__ for that article+noun phrase; save-form uses ("saved artifact",
+  // "settled artifact hash", artifact_sha256) carry a word between and never
+  // match. The phrase is built from a variable so this scan never flags itself.
+  const ARTICLE = "the";
+  const LEAK = new RegExp(`\\b${ARTICLE} artifact\\b`, "i");
+  const leakOffenders = (): string[] => {
+    const offenders: string[] = [];
+    const scan = (dir: string, prefix: string) => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        if (entry.isDirectory()) {
+          if (entry.name === "__tests__") scan(join(dir, entry.name), `${prefix}${entry.name}/`);
+          continue;
+        }
+        if (!entry.name.endsWith(".ts") && !entry.name.endsWith(".tsx")) continue;
+        readFileSync(join(dir, entry.name), "utf-8")
+          .split("\n")
+          .forEach((line, i) => {
+            if (LEAK.test(line)) offenders.push(`${prefix}${entry.name}:${i + 1} ${line.trim()}`);
+          });
+      }
+    };
+    scan(BUILDER_DIR, "");
+    return offenders;
+  };
+
+  it("no builder file names the authoring document an artifact (leading article)", () => {
+    expect(leakOffenders(), "document-scoped artifact-language leak").toEqual([]);
+  });
+});
+
 describe("IG-16: the closed vocabularies have one owner", () => {
   // Non-recursive, like the IG-5 scan: production builder files are flat (only
   // __tests__ is a subdirectory). A future production subdir would need this

@@ -116,7 +116,7 @@ describe("BuilderView — resolve-loop and world honesty (P2)", () => {
     expect(status).toContain("nothing to emit — content held out");
     expect(status).not.toContain("✓ resolves");
     // The hold-back is stated on the rail, never silent.
-    expect(screen.getByTestId("builder-rail").textContent).toContain("held out of the artifact");
+    expect(screen.getByTestId("builder-rail").textContent).toContain("held out of the session document");
   });
 
   it("(B3) an inactive (hidden) builder does not auto-import a running session", async () => {

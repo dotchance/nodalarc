@@ -24,7 +24,7 @@ export function SessionEditor({ workspace, onUpdate }: SessionEditorProps) {
       {artifactUsesNonEarthBodies(workspace) && (
         <div className="builder-site-derived">
           session uses non-Earth bodies — it carries the DE440s planetary
-          ephemeris manifest (kernels shown in the artifact)
+          ephemeris manifest (kernels shown in the session document)
         </div>
       )}
       <Field
@@ -57,7 +57,7 @@ export function SessionEditor({ workspace, onUpdate }: SessionEditorProps) {
           />
           <div className="builder-site-derived">
             1s step at ×1 is real time — any other rate is an explicit time
-            manipulation carried in the artifact
+            manipulation carried in the session document
           </div>
       </EditorCard>
       <EditorCard

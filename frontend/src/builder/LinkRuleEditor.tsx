@@ -20,7 +20,7 @@ import {
   NumberField,
   SelectField,
 } from "./editorKit";
-import { canForm, type SegmentCapability } from "./linkPhysics";
+import { canForm, groundMaskSeedNote, type SegmentCapability } from "./linkPhysics";
 import type { BuilderRuleAllocation } from "./builderTypes";
 import {
   linkWarnings,
@@ -149,6 +149,21 @@ function EndpointCard({
           value={endpoint.min_elevation_deg}
           onChange={(min_elevation_deg) => onUpdate({ min_elevation_deg })}
         />
+        {(() => {
+          // M11: when the ground mask is the seeded default (no terminal
+          // declares a floor), say so — a value to own, never a derived one.
+          const kind = placed.find((s) => s.segment_id === endpoint.segment_id)?.kind ?? "space";
+          const seedNote = groundMaskSeedNote(selfCap, {
+            role: endpoint.role,
+            kind,
+            min_elevation_deg: endpoint.min_elevation_deg,
+          });
+          return seedNote ? (
+            <div className="builder-site-derived" data-testid="mask-seed-note">
+              {seedNote}
+            </div>
+          ) : null;
+        })()}
       </div>
     </div>
   );

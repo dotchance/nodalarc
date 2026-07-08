@@ -1,403 +1,193 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
-/** Candidate preview — LOS math and rule-scoped pair generation.
+/** Candidate preview — the client renders the server's frozen-epoch verdicts.
  *
- *  Pins: occlusion (a far-side ground never pairs), min-elevation gating,
- *  zero-candidate honesty notes, and the physical-space forward transform.
+ *  There is no client geometry left to pin (it moved server-side; the numeric
+ *  parity fixtures live in tests/unit/test_builder_world.py). What remains is
+ *  the ADAPTER: BuilderRulePreview facts -> canvas candidate lines + editor rule
+ *  notes. These pins cover the decided note-mapping table row by row, the
+ *  drawable-pairs passthrough, and the "enabled means computed" mapping the
+ *  status bar's dark-rule count relies on.
  */
 
 import { describe, expect, it } from "vitest";
 import { computeCandidates } from "../candidates";
-import {
-  elevationDeg,
-  geodeticToBodyFixedKm,
-  segmentIntersectsBody,
-} from "../../sim/lineOfSight";
-import type { BuilderLinkRule, BuilderWorld, BuilderWorldNode } from "../builderTypes";
-import { propagateNode, type SessionEphemeris } from "../../sim/ephemeris";
+import type {
+  BuilderLinkRule,
+  BuilderRuleAllocation,
+  BuilderRulePreview,
+  BuilderWorld,
+} from "../builderTypes";
 
-const EPOCH_ISO = "2026-06-08T00:00:00+00:00";
-const EPOCH_UNIX = Date.parse(EPOCH_ISO) / 1000;
-
-const EARTH_FRAME = {
-  body_id: "earth",
-  mean_radius_km: 6371.0088,
-  equatorial_radius_km: 6378.137,
-  polar_radius_km: 6356.7523,
-  gravitational_parameter_km3_s2: 398600.4418,
-  rotation_rate_rad_s: 7.2921159e-5,
-  j2: 0.00108263,
-  origin_x_km: 0,
-  origin_y_km: 0,
-  origin_z_km: 0,
-  vel_x_km_s: 0,
-  vel_y_km_s: 0,
-  vel_z_km_s: 0,
-  provider: "analytic",
-  kernel_id: "none",
-  quality_tier: "test",
-  frame: "eci",
-};
-
-const BODY_MATH = {
-  bodyId: "earth",
-  meanRadiusKm: EARTH_FRAME.mean_radius_km,
-  equatorialRadiusKm: EARTH_FRAME.equatorial_radius_km,
-  polarRadiusKm: EARTH_FRAME.polar_radius_km,
-  gravitationalParameterKm3S2: EARTH_FRAME.gravitational_parameter_km3_s2,
-  rotationRateRadS: EARTH_FRAME.rotation_rate_rad_s,
-  j2: EARTH_FRAME.j2,
-  kmPerRenderUnit: 1,
-};
-
-function accessBlock(role: string): BuilderWorldNode["terminal_inventory"][number] {
+function preview(over: Partial<BuilderRulePreview>): BuilderRulePreview {
   return {
-    terminal_id: `${role}_0`,
-    owner_node_id: "n",
-    endpoint_role: role,
-    medium: "rf",
-    source_terminal_id: null,
-    link_role: null,
-    count: 4,
-    tracking_capacity: null,
-    max_range_km: null,
-    min_elevation_deg: null,
-    field_of_regard_deg: null,
-    tracking_rate_deg_s: null,
-    bandwidth_mbps: null,
-    source_ref: "x",
+    rule_id: "r",
+    kind: "access",
+    preview_scope: "computed",
+    pairs_total: 0,
+    pairs_tested: 0,
+    pairs_drawn: 0,
+    capped: false,
+    reason_counts: [],
+    drawable_pairs: [],
+    ...over,
   };
 }
 
-function groundNode(id: string, latDeg: number, lonDeg: number): BuilderWorldNode {
+function rule(rule_id: string, topology_mode: string): BuilderLinkRule {
   return {
-    node_id: id,
-    local_node_id: id,
-    segment_id: "ground",
-    namespace: "ground",
-    kind: "ground_station",
-    plane: null,
-    slot: null,
-    tags: [],
-    surface_position: { body: "earth", lat_deg: latDeg, lon_deg: lonDeg, alt_m: 0 },
-    forwarding: "routed",
-    terminal_inventory: [accessBlock("access")],
-    interfaces: null,
-    originated_prefixes: null,
-  };
-}
-
-// One satellite directly over (0, 0) at 550 km; grounds at the subsatellite
-// point and at the antipode.
-const EPHEMERIS: SessionEphemeris = {
-  epoch_id: 0,
-  sim_time: EPOCH_ISO,
-  epoch_unix: EPOCH_UNIX,
-  nodes: {
-    "leo-sat": {
-      type: "keplerian",
-      propagator: "two-body",
-      semi_major_axis_km: 6928.137,
-      eccentricity: 0,
-      inclination_deg: 0,
-      raan_deg: 0,
-      argument_of_perigee_deg: 0,
-      mean_anomaly_deg: 0,
-      plane: 0,
-      slot: 0,
-      segment_id: "leo",
-      reference_body: "earth",
-      frame_id: "earth",
-    },
-  },
-  body_frames: { earth: EARTH_FRAME },
-};
-
-function world(rules: BuilderLinkRule[]): BuilderWorld {
-  // Place the near ground at the satellite's actual epoch ground point: the
-  // two-body propagation at the epoch puts the satellite over (0, lonSat).
-  return {
-    session: { name: "t", display_name: null, description: null },
-    epoch_unix: EPOCH_UNIX,
-    ephemeris: EPHEMERIS,
-    nodes: [
-      {
-        node_id: "leo-sat",
-        local_node_id: "sat",
-        segment_id: "leo",
-        namespace: "leo",
-        kind: "satellite",
-        plane: 0,
-        slot: 0,
-        tags: [],
-        surface_position: null,
-        forwarding: "routed",
-        terminal_inventory: [accessBlock("access"), accessBlock("isl")],
-        interfaces: null,
-        originated_prefixes: null,
-      },
-      groundNode("ground-near", 0, SAT_LON_DEG),
-      groundNode("ground-far", 0, SAT_LON_DEG > 0 ? SAT_LON_DEG - 180 : SAT_LON_DEG + 180),
-    ],
-    link_rules: rules,
-    segments: [],
-    allocations: [],
-    link_candidates: [],
-    rule_previews: [],
-  };
-}
-
-// Derive the satellite's epoch longitude with the same propagation the
-// preview uses, so the "near" ground truly sits underneath it.
-const satAtEpoch = propagateNode(
-  EPHEMERIS.nodes["leo-sat"]!,
-  EPOCH_UNIX,
-  EPOCH_UNIX,
-  BODY_MATH,
-);
-const SAT_LON_DEG = satAtEpoch.lonDeg;
-
-const ACCESS_RULE: BuilderLinkRule = {
-  rule_id: "access",
-  kind: "access",
-  enabled: true,
-  endpoints: [
-    {
-      segment_id: "ground",
-      terminal_role: "access",
-      terminal_medium: "rf",
-      min_elevation_deg: 5,
-      node_ids: ["ground-near", "ground-far"],
-    },
-    {
-      segment_id: "leo",
-      terminal_role: "access",
-      terminal_medium: "rf",
-      min_elevation_deg: null,
-      node_ids: ["leo-sat"],
-    },
-  ],
-  topology_mode: "visible_candidates",
-  topology_n: null,
-  explicit_pairs: [],
-  max_range_km: null,
-};
-
-describe("lineOfSight primitives", () => {
-  it("forward transform lands on the ellipsoid surface", () => {
-    const p = geodeticToBodyFixedKm(0, 0, 0, BODY_MATH);
-    expect(p[0]).toBeCloseTo(BODY_MATH.equatorialRadiusKm, 3);
-    const pole = geodeticToBodyFixedKm(90, 0, 0, BODY_MATH);
-    expect(pole[2]).toBeCloseTo(BODY_MATH.polarRadiusKm, 3);
-  });
-
-  it("elevation is 90 at zenith and negative below the horizon", () => {
-    const site = geodeticToBodyFixedKm(0, 0, 0, BODY_MATH);
-    const overhead = geodeticToBodyFixedKm(0, 0, 550, BODY_MATH);
-    expect(elevationDeg(0, 0, site, overhead)).toBeCloseTo(90, 5);
-    const behind = geodeticToBodyFixedKm(0, 180, 550, BODY_MATH);
-    expect(elevationDeg(0, 0, site, behind)).toBeLessThan(0);
-  });
-
-  it("occlusion blocks chords through the body and passes surface grazes", () => {
-    const a = geodeticToBodyFixedKm(0, 0, 550, BODY_MATH);
-    const b = geodeticToBodyFixedKm(0, 180, 550, BODY_MATH);
-    expect(segmentIntersectsBody(a, b, BODY_MATH.meanRadiusKm)).toBe(true);
-    const c = geodeticToBodyFixedKm(0, 10, 550, BODY_MATH);
-    expect(segmentIntersectsBody(a, c, BODY_MATH.meanRadiusKm)).toBe(false);
-  });
-});
-
-describe("computeCandidates", () => {
-  it("pairs the visible ground and excludes the far-side ground", () => {
-    const { pairs, previews } = computeCandidates(world([ACCESS_RULE]));
-    expect(pairs.map((p) => `${p.a}~${p.b}`)).toEqual(["ground-near~leo-sat"]);
-    expect(previews[0]!.candidates).toBe(1);
-    expect(previews[0]!.note).toBeNull();
-  });
-
-  it("reports the honesty note when geometry forbids everything", () => {
-    const darkRule: BuilderLinkRule = {
-      ...ACCESS_RULE,
-      rule_id: "dark",
-      endpoints: [
-        { ...ACCESS_RULE.endpoints[0], node_ids: ["ground-far"] },
-        ACCESS_RULE.endpoints[1],
-      ],
-    };
-    const { pairs, previews } = computeCandidates(world([darkRule]));
-    expect(pairs).toEqual([]);
-    expect(previews[0]!.candidates).toBe(0);
-    expect(previews[0]!.note).toMatch(/geometry currently forbids/);
-  });
-
-  it("fixed rules draw the allocator's pairs, and disabled rules draw nothing", () => {
-    const explicit: BuilderLinkRule = {
-      ...ACCESS_RULE,
-      rule_id: "explicit",
-      topology_mode: "explicit_pairs",
-      explicit_pairs: [["ground-near", "leo-sat"]],
-    };
-    const disabled: BuilderLinkRule = { ...ACCESS_RULE, rule_id: "off", enabled: false };
-    const w = world([explicit, disabled]);
-    // Fixed pairs come from the server's allocation, never re-derived.
-    w.link_candidates = [{ rule_id: "explicit", node_a: "ground-near", node_b: "leo-sat" }];
-    const { pairs, previews } = computeCandidates(w);
-    expect(pairs).toHaveLength(1);
-    expect(previews.find((p) => p.rule_id === "off")!.note).toBe("rule disabled");
-  });
-
-  it("rejects pairs beyond the terminals' own range, with the reason noted", () => {
-    const w = world([{ ...ACCESS_RULE, rule_id: "tight" }]);
-    // Cap both ends' access terminals at 100 km; the overhead satellite sits
-    // ~550 km up, so geometry passes but the terminals cannot form it.
-    for (const node of w.nodes) {
-      node.terminal_inventory = node.terminal_inventory.map((b) => ({
-        ...b,
-        max_range_km: 100,
-      }));
-    }
-    const { pairs, previews } = computeCandidates(w);
-    expect(pairs).toHaveLength(0);
-    expect(previews[0]!.note).toContain("beyond terminal range");
-  });
-
-  it("fixed rules draw only allocated pairs — extra geometric possibilities are not invented", () => {
-    const w = world([{ ...ACCESS_RULE, rule_id: "cap", topology_mode: "explicit_pairs", explicit_pairs: [] }]);
-    // Two visible grounds, but the allocator granted exactly one pair.
-    w.nodes.push(groundNode("ground-near-2", 1.5, SAT_LON_DEG));
-    w.link_rules[0] = {
-      ...w.link_rules[0]!,
-      endpoints: [
-        { ...w.link_rules[0]!.endpoints[0], node_ids: ["ground-near", "ground-far", "ground-near-2"] },
-        w.link_rules[0]!.endpoints[1],
-      ],
-    };
-    w.link_candidates = [{ rule_id: "cap", node_a: "ground-near", node_b: "leo-sat" }];
-    const { pairs } = computeCandidates(w);
-    expect(pairs).toHaveLength(1);
-    expect(pairs[0]!.a).toBe("ground-near");
-  });
-
-  it("a fixed rule the allocator granted nothing says so — never 'geometry forbids'", () => {
-    const w = world([
-      { ...ACCESS_RULE, rule_id: "none", topology_mode: "explicit_pairs", explicit_pairs: [] },
-    ]);
-    w.link_candidates = [];
-    const { pairs, previews } = computeCandidates(w);
-    expect(pairs).toHaveLength(0);
-    expect(previews[0]!.note).toContain("allocator granted no pairs");
-    expect(previews[0]!.note).not.toMatch(/geometry currently forbids/);
-  });
-
-  it("elevation masks land on the ground node even when the wire pair arrives flipped", () => {
-    // Canonical wire order puts "leo-sat" before "zz-ground" while the
-    // rule's endpoint A is the ground side. At ~10 degrees ground range the
-    // satellite sits ~20 degrees above the horizon: LOS is clear, so only
-    // the 60-degree mask can reject — if orientation is lost the mask is
-    // skipped (slot a holds a satellite) and the preview draws a lie.
-    const w = world([]);
-    w.nodes.push(groundNode("zz-ground", 10, SAT_LON_DEG));
-    w.link_rules = [
-      {
-        ...ACCESS_RULE,
-        rule_id: "masked",
-        topology_mode: "explicit_pairs",
-        explicit_pairs: [],
-        endpoints: [
-          { ...ACCESS_RULE.endpoints[0], min_elevation_deg: 60, node_ids: ["zz-ground"] },
-          ACCESS_RULE.endpoints[1],
-        ],
-      },
-    ];
-    w.link_candidates = [{ rule_id: "masked", node_a: "leo-sat", node_b: "zz-ground" }];
-    const { pairs } = computeCandidates(w);
-    expect(pairs).toHaveLength(0);
-  });
-});
-
-// ---- field of regard: the runtime's pointing cone, mirrored ----
-// A LEO and a GEO stacked on the same radial: the line of sight is straight
-// up/down, 90 degrees off both local horizontals. A 140-degree field of
-// regard (a +20-degree elevation floor) can never form this link; a full
-// sphere can. This is the exact geometry that formed zero GEO uplinks at
-// runtime while the preview claimed candidates.
-function crosslinkBlock(forDeg: number | null): BuilderWorldNode["terminal_inventory"][number] {
-  return {
-    ...accessBlock("crosslink"),
-    medium: "optical",
-    max_range_km: 45000,
-    field_of_regard_deg: forDeg,
-  };
-}
-
-function stackedWorld(forDeg: number | null): BuilderWorld {
-  const geoEntry = {
-    ...EPHEMERIS.nodes["leo-sat"]!,
-    semi_major_axis_km: 42164,
-    segment_id: "geo",
-  };
-  const satNode = (id: string, segment: string): BuilderWorldNode => ({
-    node_id: id,
-    local_node_id: id,
-    segment_id: segment,
-    namespace: segment,
-    kind: "satellite",
-    plane: 0,
-    slot: 0,
-    tags: [],
-    surface_position: null,
-    forwarding: "routed",
-    terminal_inventory: [crosslinkBlock(forDeg)],
-    interfaces: null,
-    originated_prefixes: null,
-  });
-  const uplink: BuilderLinkRule = {
-    rule_id: "uplink",
-    kind: "crosslink",
+    rule_id,
+    kind: "access",
     enabled: true,
     endpoints: [
-      { segment_id: "leo", terminal_role: "crosslink", terminal_medium: "optical", min_elevation_deg: null, node_ids: ["leo-sat"] },
-      { segment_id: "geo", terminal_role: "crosslink", terminal_medium: "optical", min_elevation_deg: null, node_ids: ["geo-sat"] },
+      { segment_id: "g", terminal_role: "access", terminal_medium: "rf", min_elevation_deg: null, node_ids: ["g1"] },
+      { segment_id: "s", terminal_role: "access", terminal_medium: "rf", min_elevation_deg: null, node_ids: ["s1"] },
     ],
-    topology_mode: "explicit_pairs",
+    topology_mode,
     topology_n: null,
-    explicit_pairs: [["leo-sat", "geo-sat"]],
+    explicit_pairs: [],
     max_range_km: null,
-  };
-  return {
-    session: { name: "t", display_name: null, description: null },
-    epoch_unix: EPOCH_UNIX,
-    ephemeris: {
-      ...EPHEMERIS,
-      nodes: { "leo-sat": EPHEMERIS.nodes["leo-sat"]!, "geo-sat": geoEntry },
-    },
-    nodes: [satNode("leo-sat", "leo"), satNode("geo-sat", "geo")],
-    link_rules: [uplink],
-    segments: [],
-    allocations: [],
-    // The wire pair is lexicographically canonical ("geo-sat" < "leo-sat"),
-    // NOT endpoint-ordered: endpoint A is the LEO side. The preview must
-    // orient the pair by endpoint membership or every per-side gate misses.
-    link_candidates: [{ rule_id: "uplink", node_a: "geo-sat", node_b: "leo-sat" }],
-    rule_previews: [],
   };
 }
 
-describe("field of regard mirrors the runtime", () => {
-  it("a 140-degree cone cannot look straight down from GEO — no pair, and the note says why", () => {
-    const { pairs, previews } = computeCandidates(stackedWorld(140));
-    expect(pairs).toHaveLength(0);
-    expect(previews[0]!.note).toContain("not feasible at this instant");
+function alloc(rule_id: string, allocated_pairs: number): BuilderRuleAllocation {
+  return { rule_id, kind: "access", allocated_pairs, per_node: [] };
+}
+
+function world(
+  previews: BuilderRulePreview[],
+  rules: BuilderLinkRule[] = [],
+  allocations: BuilderRuleAllocation[] = [],
+): BuilderWorld {
+  return {
+    session: { name: "t", display_name: null, description: null },
+    epoch_unix: 0,
+    ephemeris: { epoch_id: 0, sim_time: "", epoch_unix: 0, nodes: {}, body_frames: {} },
+    nodes: [],
+    link_rules: rules,
+    segments: [],
+    allocations,
+    link_candidates: [],
+    rule_previews: previews,
+  };
+}
+
+const only = (w: BuilderWorld) => computeCandidates(w).previews[0]!;
+
+describe("adapter: drawable pairs and the dark-rule mapping", () => {
+  it("passes the server's drawn pairs to the canvas verbatim, oriented as sent", () => {
+    const { pairs, previews } = computeCandidates(
+      world([
+        preview({
+          rule_id: "r",
+          pairs_total: 2,
+          pairs_tested: 2,
+          pairs_drawn: 1,
+          drawable_pairs: [{ rule_id: "r", kind: "access", node_a: "g1", node_b: "s1" }],
+          reason_counts: [{ reason: "los_blocked", count: 1 }],
+        }),
+      ]),
+    );
+    expect(pairs).toEqual([{ rule_id: "r", kind: "access", a: "g1", b: "s1" }]);
+    expect(previews[0]!.candidates).toBe(1); // == pairs_drawn
   });
 
-  it("a full-sphere terminal forms the same link", () => {
-    const { pairs } = computeCandidates(stackedWorld(360));
-    expect(pairs).toHaveLength(1);
+  it("only a computed rule reads as enabled/dark; a pending or disabled rule never does", () => {
+    // The status bar counts dark = enabled && candidates===0; that must be
+    // exactly "computed with nothing drawn", never a pending or off rule.
+    expect(only(world([preview({ preview_scope: "computed", pairs_drawn: 0 })])).enabled).toBe(true);
+    expect(only(world([preview({ preview_scope: "terrestrial_pending" })])).enabled).toBe(false);
+    expect(only(world([preview({ preview_scope: "disabled" })])).enabled).toBe(false);
+  });
+});
+
+describe("note-mapping table — one row at a time", () => {
+  it("(a) a non-computed scope renders the typed wall, superseding everything", () => {
+    expect(only(world([preview({ preview_scope: "inter_body_pending" })])).note).toBe(
+      "inter-body span — preview pending, runtime computes contacts",
+    );
+    expect(only(world([preview({ preview_scope: "terrestrial_pending" })])).note).toBe(
+      "terrestrial run — surface routing preview pending",
+    );
+    const disabled = computeCandidates(world([preview({ preview_scope: "disabled" })]));
+    expect(disabled.previews[0]!.note).toBe("rule disabled");
+    expect(disabled.previews[0]!.candidates).toBe(0);
+    expect(disabled.pairs).toEqual([]); // ZERO lines, no counts, no pairs
   });
 
-  it("an undeclared field of regard never gates (runtime parity: unknown is not a restriction)", () => {
-    const { pairs } = computeCandidates(stackedWorld(null));
-    expect(pairs).toHaveLength(1);
+  it("(b) a fixed rule the allocator granted nothing says so — never 'geometry forbids'", () => {
+    const note = only(
+      world([preview({ rule_id: "x", preview_scope: "computed" })], [rule("x", "explicit_pairs")], [alloc("x", 0)]),
+    ).note;
+    expect(note).toBe("the allocator granted no pairs for this rule");
+    expect(note).not.toMatch(/geometry currently forbids/);
+  });
+
+  it("(c) reason counts render per reason; when capped every reason carries the denominator", () => {
+    const uncapped = only(
+      world([
+        preview({
+          pairs_total: 100,
+          pairs_tested: 100,
+          pairs_drawn: 63,
+          reason_counts: [
+            { reason: "elevation_below_min", count: 30 },
+            { reason: "los_blocked", count: 7 },
+          ],
+        }),
+      ]),
+    ).note;
+    expect(uncapped).toBe("30 pairs below the elevation mask; 7 pairs with no line of sight");
+
+    const capped = only(
+      world([
+        preview({
+          pairs_total: 1000,
+          pairs_tested: 100,
+          pairs_drawn: 60,
+          capped: true,
+          reason_counts: [{ reason: "range_exceeded", count: 40 }],
+        }),
+      ]),
+    ).note;
+    // Each reason carries the tested/total denominator AND the (e) summary rides along.
+    expect(capped).toContain("40 pairs beyond terminal range among 100 tested of 1000 possible");
+    expect(capped).toContain("showing 60 drawn from 100 tested of 1000 possible");
+  });
+
+  it("(d) a computed rule that drew nothing and rejected nothing shows the geometry-forbids note", () => {
+    expect(only(world([preview({ preview_scope: "computed", pairs_drawn: 0 })])).note).toBe(
+      "rule permits, geometry currently forbids — runtime computes contacts over time",
+    );
+  });
+
+  it("(e) a capped preview with everything drawn still reports the truncation summary", () => {
+    const note = only(
+      world([
+        preview({ pairs_total: 5000, pairs_tested: 800, pairs_drawn: 800, capped: true }),
+      ]),
+    ).note;
+    expect(note).toBe("showing 800 drawn from 800 tested of 5000 possible");
+  });
+
+  it("terminal_type_mismatch renders human copy over the unchanged machine token", () => {
+    expect(
+      only(
+        world([
+          preview({
+            pairs_total: 3,
+            pairs_tested: 3,
+            pairs_drawn: 1,
+            reason_counts: [{ reason: "terminal_type_mismatch", count: 2 }],
+          }),
+        ]),
+      ).note,
+    ).toBe("2 pairs with incompatible terminal types");
+  });
+
+  it("a complete computed rule with everything drawn carries no note", () => {
+    expect(
+      only(world([preview({ pairs_total: 4, pairs_tested: 4, pairs_drawn: 4 })])).note,
+    ).toBeNull();
   });
 });

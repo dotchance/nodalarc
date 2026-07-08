@@ -25,31 +25,56 @@ function kindColor(kind: string): THREE.Color {
   return _color.set(kind === "access" ? LINK_GROUND_COLOR : LINK_ISL_COLOR);
 }
 
+/** M12: the geometry attributes are stale — and must be rebuilt — when the
+ *  pairs array is a NEW identity (a fresh compute, even at equal length) OR the
+ *  mounted geometry has no position attribute (a remount, e.g. the N->0->N
+ *  path). Keying on length alone missed both: stale kind colors after a
+ *  same-length swap, and an empty buffer after a remount. */
+export function candidateBufferStale(
+  builtFor: CandidatePair[] | null,
+  list: CandidatePair[],
+  hasPositionAttribute: boolean,
+): boolean {
+  return builtFor !== list || !hasPositionAttribute;
+}
+
+/** The per-vertex color buffer for a pairs list — two vertices per pair, each
+ *  the pair's kind color. Rebuilt on every stale check so kind colors always
+ *  follow the current pairs. */
+export function candidateColors(pairs: CandidatePair[]): Float32Array {
+  const colors = new Float32Array(pairs.length * 6);
+  for (let i = 0; i < pairs.length; i++) {
+    const color = kindColor(pairs[i]!.kind);
+    for (const vertex of [0, 1]) {
+      colors[i * 6 + vertex * 3] = color.r;
+      colors[i * 6 + vertex * 3 + 1] = color.g;
+      colors[i * 6 + vertex * 3 + 2] = color.b;
+    }
+  }
+  return colors;
+}
+
 export function CandidateLines({ pairs }: { pairs: CandidatePair[] }) {
   const geometryRef = useRef<THREE.BufferGeometry | null>(null);
   const pairsRef = useRef(pairs);
   pairsRef.current = pairs;
-  const capacityRef = useRef(0);
+  // The pairs array the current attributes were built for. Rebuild on IDENTITY
+  // change (a fresh pairs array — including an equal-length recompute whose kind
+  // colors changed) OR when the mounted geometry has no position attribute (a
+  // geometry remount, e.g. the N->0->N path). Keying on length alone missed
+  // both — stale colors and an empty buffer after a same-length swap or remount.
+  const builtForRef = useRef<CandidatePair[] | null>(null);
 
   useFrame(() => {
     const geometry = geometryRef.current;
     if (!geometry) return;
     const list = pairsRef.current;
 
-    if (capacityRef.current !== list.length) {
-      capacityRef.current = list.length;
+    if (candidateBufferStale(builtForRef.current, list, geometry.getAttribute("position") != null)) {
+      builtForRef.current = list;
       const positions = new Float32Array(list.length * 6);
-      const colors = new Float32Array(list.length * 6);
-      for (let i = 0; i < list.length; i++) {
-        const color = kindColor(list[i]!.kind);
-        for (const vertex of [0, 1]) {
-          colors[i * 6 + vertex * 3] = color.r;
-          colors[i * 6 + vertex * 3 + 1] = color.g;
-          colors[i * 6 + vertex * 3 + 2] = color.b;
-        }
-      }
       geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-      geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+      geometry.setAttribute("color", new THREE.BufferAttribute(candidateColors(list), 3));
     }
 
     const attribute = geometry.getAttribute("position") as THREE.BufferAttribute | undefined;

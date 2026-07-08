@@ -1936,9 +1936,11 @@ export function BuilderView({
   }, [world]);
   const regimeById = useMemo(() => buildRegimeIndex(world?.ephemeris ?? null), [world]);
 
-  // Rule-scoped LOS candidates at the epoch: permission + geometry, decided
-  // in km space by the shared preview math. Toolbar link toggles gate the
-  // overlay per kind, exactly as they gate the live view's link layers.
+  // Rule-scoped preview candidates at the epoch: the server decides the
+  // geometry (through the runtime's own visibility composites) and ships the
+  // verdicts on the world; this adapts them into the overlay and the rule
+  // notes, deciding nothing itself. Toolbar link toggles gate the overlay per
+  // kind, exactly as they gate the live view's link layers.
   const candidates = useMemo(() => (world ? computeCandidates(world) : null), [world]);
   const visiblePairs = useMemo(
     () =>

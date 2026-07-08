@@ -30,9 +30,13 @@ import {
   capabilitiesBySegment,
   connectSegments,
   deriveLinkPhysics,
+  groundMaskSeedNote,
+  rederiveRule,
+  SEEDED_GROUND_MASK_NOTE,
 } from "../linkPhysics";
 import {
   identifier,
+  LINK_MEDIA,
   mintSiteMembers,
   newDraftConstellation,
   newDraftGroundSet,
@@ -50,9 +54,15 @@ import {
 } from "../useWorkspace";
 import type { BuilderWorld } from "../builderTypes";
 
-/** A minimal resolved world: one ground segment with rf access mounts and
- *  a 25-degree floor; one space segment with rf access + optical isl. */
-function tinyWorld(groundId: string, spaceId: string): BuilderWorld {
+/** A minimal resolved world: one ground segment with rf access mounts and a
+ *  declared elevation floor (default 25°; pass null for a floorless ground that
+ *  exercises the seeded default); one space segment with rf access + optical
+ *  isl. */
+function tinyWorld(
+  groundId: string,
+  spaceId: string,
+  groundFloor: number | null = 25,
+): BuilderWorld {
   const block = (role: string, medium: "rf" | "optical", elev: number | null) => ({
     terminal_id: `${role}_0`,
     owner_node_id: "n",
@@ -89,7 +99,7 @@ function tinyWorld(groundId: string, spaceId: string): BuilderWorld {
     epoch_unix: 0,
     ephemeris: { nodes: {} } as BuilderWorld["ephemeris"],
     nodes: [
-      node("g1", groundId, [block("access", "rf", 25)]),
+      node("g1", groundId, [block("access", "rf", groundFloor)]),
       node("s1", spaceId, [block("access", "rf", null), block("isl", "optical", null)]),
     ],
     link_rules: [],
@@ -216,6 +226,67 @@ describe("IG-7: connect derives physics from faceplates", () => {
       { segment_id: groundId, kind: "space" }, // pretend both space
     );
     expect(physics.formable).toBe(false);
+  });
+
+  it("M11: a floorless ground mask is a SEEDED default, said plainly in both carriers", () => {
+    const { workspace, groundId, spaceId } = connectWorkspace();
+    const world = tinyWorld(groundId, spaceId, null); // no terminal declares a floor
+    const rule = connectSegments(workspace, world, groundId, spaceId);
+    // The seed value is applied via the default, not derived from a terminal.
+    expect(rule.a.min_elevation_deg).toBe(25);
+    // Carrier 1 — the editor's seed note (the connect-seed path).
+    const caps = capabilitiesBySegment(world);
+    expect(
+      groundMaskSeedNote(caps.get(groundId), {
+        role: "access",
+        kind: "ground",
+        min_elevation_deg: 25,
+      }),
+    ).toBe("no terminal declares an elevation floor — seeded default 25°");
+    expect(SEEDED_GROUND_MASK_NOTE).toBe("no terminal declares an elevation floor — seeded default 25°");
+    // Carrier 2 — the re-derive notice; a seed reads as a seed, never "derived".
+    const { notice } = rederiveRule(workspace, world, rule, "b", spaceId);
+    expect(notice).toContain("no terminal declares an elevation floor — seeded default 25°");
+    expect(notice).not.toMatch(/· 25° mask/);
+  });
+
+  it("M11: a DECLARED floor is not seeded — the seed note stays off, the notice shows the value", () => {
+    const { workspace, groundId, spaceId } = connectWorkspace();
+    const world = tinyWorld(groundId, spaceId, 25); // the ground terminal declares 25°
+    const rule = connectSegments(workspace, world, groundId, spaceId);
+    const caps = capabilitiesBySegment(world);
+    expect(
+      groundMaskSeedNote(caps.get(groundId), {
+        role: "access",
+        kind: "ground",
+        min_elevation_deg: 25,
+      }),
+    ).toBeNull();
+    const { notice } = rederiveRule(workspace, world, rule, "b", spaceId);
+    expect(notice).toContain("· 25° mask");
+    expect(notice).not.toContain("seeded default");
+  });
+
+  it("N32: the unformable fallback medium comes from the owned vocabulary, not literals", () => {
+    // Empty capabilities -> nothing is formable, so derivation hits the
+    // fallback; its medium must be drawn from LINK_MEDIA (the owned set), the
+    // role-appropriate default, never a re-listed string.
+    const empty = capabilitiesBySegment(null);
+    const access = deriveLinkPhysics(
+      empty,
+      { segment_id: "g", kind: "ground" },
+      { segment_id: "s", kind: "space" },
+    );
+    expect(access.formable).toBe(false);
+    expect(LINK_MEDIA).toContain(access.medium);
+    expect(access.medium).toBe("rf"); // access -> radio, the highest-rank default
+    const fabric = deriveLinkPhysics(
+      empty,
+      { segment_id: "s", kind: "space" },
+      { segment_id: "s", kind: "space" },
+    );
+    expect(fabric.formable).toBe(false);
+    expect(fabric.medium).toBe("optical"); // fabric -> optical, the lowest-rank default
   });
 });
 

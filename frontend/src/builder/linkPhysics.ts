@@ -108,6 +108,30 @@ const MEDIUM_ORDER: readonly LinkMedium[] = [...LINK_MEDIA].sort(
   (a, b) => MEDIUM_RANK[a] - MEDIUM_RANK[b],
 );
 
+/** The ground-access elevation mask seeded when NO terminal declares a floor —
+ *  a default the user then owns, never a derived or measured value. The number
+ *  is a seed, not physics; both the connect/re-derive notice and the editor say
+ *  so with the exact same words. */
+export const DEFAULT_GROUND_MASK_DEG = 25;
+export const SEEDED_GROUND_MASK_NOTE = `no terminal declares an elevation floor — seeded default ${DEFAULT_GROUND_MASK_DEG}°`;
+
+/** The seed note for an access endpoint whose ground mask is the seeded default
+ *  (role access, ground side, value equals the default, and the segment declares
+ *  no floor) — or null when the mask is a declared floor or the endpoint is not
+ *  a seeded ground access. One source for both carriers. */
+export function groundMaskSeedNote(
+  capability: SegmentCapability | undefined,
+  endpoint: { role: string; kind: string; min_elevation_deg: number | null },
+): string | null {
+  const declared = capability?.access_min_elevation_deg ?? null;
+  return endpoint.role === "access" &&
+    endpoint.kind === "ground" &&
+    declared === null &&
+    endpoint.min_elevation_deg === DEFAULT_GROUND_MASK_DEG
+    ? SEEDED_GROUND_MASK_NOTE
+    : null;
+}
+
 /** Derive the physics for a pair of segments. Preference order encodes the
  *  role semantics: same segment = fabric (isl), space to space =
  *  crosslink, anything with ground = access. Falls back through formable
@@ -152,7 +176,15 @@ export function deriveLinkPhysics(
   const fallback = preferences[0] as { role: LinkRole; mode: DerivedPhysics["topology_mode"]; n: number };
   return {
     role: fallback.role,
-    medium: fallback.role === "access" ? "rf" : "optical",
+    // The role's fallback medium, from the owned order — never re-listed
+    // literals. MEDIUM_ORDER is sorted ascending by rank (optical, rf), so an
+    // access link falls back to the highest-rank medium (radio, the ground
+    // default) and a fabric to the lowest (optical). A grammar medium change
+    // flows through MEDIUM_RANK, the one source.
+    medium:
+      fallback.role === "access"
+        ? MEDIUM_ORDER[MEDIUM_ORDER.length - 1]!
+        : MEDIUM_ORDER[0]!,
     ground_mask_deg: groundSide?.access_min_elevation_deg ?? null,
     topology_mode: fallback.mode,
     topology_n: fallback.n,
@@ -178,7 +210,7 @@ export function connectSegments(
   const kindOf = new Map(placed.map((s) => [s.segment_id, s.kind]));
   const maskFor = (segmentId: string) =>
     physics.role === "access" && kindOf.get(segmentId) === "ground"
-      ? (physics.ground_mask_deg ?? 25)
+      ? (physics.ground_mask_deg ?? DEFAULT_GROUND_MASK_DEG)
       : null;
   rule.a = {
     ...rule.a,
@@ -220,7 +252,7 @@ export function rederiveRule(
   const physics = deriveLinkPhysics(capabilitiesBySegment(world), a, b);
   const maskFor = (segment: { kind: string }) =>
     physics.role === "access" && segment.kind === "ground"
-      ? (physics.ground_mask_deg ?? 25)
+      ? (physics.ground_mask_deg ?? DEFAULT_GROUND_MASK_DEG)
       : null;
   const patch: Partial<DraftLinkRule> = {
     a: {
@@ -240,12 +272,15 @@ export function rederiveRule(
     topology_mode: physics.topology_mode,
     topology_n: physics.topology_n,
   };
-  const mask =
-    patch.a?.min_elevation_deg != null
-      ? ` · ${patch.a.min_elevation_deg}° mask`
-      : patch.b?.min_elevation_deg != null
-        ? ` · ${patch.b.min_elevation_deg}° mask`
-        : "";
+  // The mask fragment names a SEEDED default distinctly from a declared floor:
+  // a re-derive that seeded 25° because no terminal declares one must never
+  // read as a measured/derived value.
+  const groundSided = physics.role === "access" && (a.kind === "ground" || b.kind === "ground");
+  const mask = !groundSided
+    ? ""
+    : physics.ground_mask_deg === null
+      ? ` · ${SEEDED_GROUND_MASK_NOTE}`
+      : ` · ${physics.ground_mask_deg}° mask`;
   const topology =
     physics.topology_mode === "nearest_n" ? ` · nearest-${physics.topology_n}` : " · all visible pairs";
   return {

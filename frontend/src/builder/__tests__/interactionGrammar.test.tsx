@@ -17,6 +17,7 @@ import { join } from "node:path";
 import { act, cleanup, fireEvent, render, renderHook, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  BodySelect,
   EditorApplyRow,
   EditorCard,
   EditorName,
@@ -45,8 +46,11 @@ import {
   newDraftGroundSet,
   newDraftSiteObject,
   newWorkspace,
+  nextMintIndex,
   parseSiteLines,
+  stampLanPrefix,
 } from "../workspace";
+import type { BuilderCatalogEntry } from "../builderTypes";
 import { canDeploy } from "../useBuilderWorld";
 import {
   appliedObjectForKey,
@@ -229,6 +233,117 @@ describe("EditorCard adoption smoke: migrated editors render and their cards beh
     expect(screen.queryByText("planes")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: /Pattern/ }));
     expect(screen.getByText("planes")).toBeTruthy();
+  });
+});
+
+describe("P7e: BodySelect failure contract + node-id collision (N27)", () => {
+  beforeEach(() => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => [] })));
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    cleanup();
+  });
+
+  it("BodySelect always includes the current value — the field never blanks an existing body", () => {
+    render(
+      <BodySelect
+        label="on body"
+        ariaLabel="Body"
+        value="catalog:bodies/luna.yaml"
+        onChange={() => {}}
+        bodies={{ entries: [], error: null, refresh: () => Promise.resolve() }}
+      />,
+    );
+    // Even with an empty catalog, the current body is selected and selectable.
+    expect((screen.getByLabelText("Body") as HTMLSelectElement).value).toBe("catalog:bodies/luna.yaml");
+  });
+
+  it("BodySelect on catalog error shows the verbatim message and a retry that refreshes", () => {
+    const refresh = vi.fn(() => Promise.resolve());
+    render(
+      <BodySelect
+        label="on body"
+        ariaLabel="Body"
+        value="catalog:bodies/earth.yaml"
+        onChange={() => {}}
+        bodies={{ entries: [], error: "bodies fetch failed", refresh }}
+      />,
+    );
+    expect(screen.getByText(/bodies fetch failed/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "retry" }));
+    expect(refresh).toHaveBeenCalled();
+  });
+
+  it("N27: adding a node fills the first free gw slot (no collision after a delete)", () => {
+    const base = newDraftSiteObject("nodalarc:nodes/ground/gw.yaml", {});
+    // A gap at gw2 (as a delete-then-render would leave): length+1 would re-mint gw3.
+    const site = { ...base, nodes: [base.nodes[0]!, { ...base.nodes[0]!, node_id: "gw3" }] };
+    let added = site;
+    render(
+      <SiteEditor
+        site={site}
+        onUpdate={(patch) => {
+          added = { ...site, ...patch } as typeof site;
+        }}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "+ add node" }));
+    expect(added.nodes.map((n) => n.node_id)).toEqual(["gw1", "gw3", "gw2"]);
+  });
+
+  it("BodySelect lists a catalog body exactly once when the value is already in the catalog", () => {
+    const entry = (ref: string, display_name: string): BuilderCatalogEntry =>
+      ({
+        ref,
+        family: "bodies",
+        id: ref.split("/").pop() ?? null,
+        display_name,
+        notes: null,
+        summary: null,
+        error: null,
+      }) as BuilderCatalogEntry;
+    render(
+      <BodySelect
+        label="on body"
+        ariaLabel="Body"
+        value="catalog:bodies/earth.yaml"
+        onChange={() => {}}
+        bodies={{
+          entries: [entry("catalog:bodies/earth.yaml", "Earth"), entry("catalog:bodies/luna.yaml", "Luna")],
+          error: null,
+          refresh: () => Promise.resolve(),
+        }}
+      />,
+    );
+    // Earth is both the value AND in the catalog → one option, never a prepend duplicate.
+    expect(screen.getAllByRole("option", { name: "Earth" })).toHaveLength(1);
+    expect((screen.getByLabelText("Body") as HTMLSelectElement).value).toBe("catalog:bodies/earth.yaml");
+  });
+
+  it("N29: the next-minted-site preview reflects nextMintIndex, not a literal 0", () => {
+    const draft = newDraftGroundSet("nodalarc:nodes/ground/gw.yaml", {});
+    // One already-minted member advances the next index past 0.
+    draft.members = mintSiteMembers(draft, parseSiteLines("Denver, 39.7, -104.9").rows);
+    expect(nextMintIndex(draft)).toBeGreaterThan(0);
+    render(
+      <GroundEditor
+        draft={draft}
+        workspace={newWorkspace("t")}
+        onOpenRule={() => {}}
+        onConnect={() => {}}
+        onUpdate={() => {}}
+        onRemove={() => {}}
+      />,
+    );
+    // Open the New-site stamp card (Sites is open by default) to reveal the preview.
+    fireEvent.click(screen.getByRole("button", { name: /New-site stamp/ }));
+    const preview = [...document.querySelectorAll(".builder-site-derived")].find((el) =>
+      el.textContent?.includes("next minted site:"),
+    );
+    // The preview shows the NEXT mint's address (index nextMintIndex) — a revert to
+    // the literal 0 would show a different, colliding address and fail this.
+    expect(preview?.textContent).toContain(stampLanPrefix(draft.stamp, nextMintIndex(draft)));
   });
 });
 

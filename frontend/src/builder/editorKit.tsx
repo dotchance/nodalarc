@@ -13,6 +13,7 @@
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Button } from "../ui/Button";
+import type { BuilderCatalogEntry } from "./builderTypes";
 
 /** The name field every editor leads with. autoFocus fires on mount when
  *  the editor was opened by a create gesture (IG-2). */
@@ -325,6 +326,57 @@ export function SelectField({
       <span className="builder-field-label">{label}</span>
       <span className="builder-field-input">{select}</span>
     </label>
+  );
+}
+
+/** The one bodies-picker: a SelectField over the bodies catalog, hardened for a
+ *  failed or still-loading catalog. The current value is ALWAYS an option, so the
+ *  field never blanks an existing body — before the catalog loads, on error, or
+ *  when the value is not (yet) in the catalog. On a catalog error it renders the
+ *  verbatim message and a retry wired to the hook's refresh (the same failure
+ *  contract N17a uses), never a bare frozen select. */
+export function BodySelect({
+  label,
+  ariaLabel,
+  value,
+  onChange,
+  bodies,
+  stack = false,
+}: {
+  label: string;
+  ariaLabel: string;
+  value: string;
+  onChange: (value: string) => void;
+  bodies: {
+    entries: BuilderCatalogEntry[];
+    error: string | null;
+    refresh: () => Promise<void>;
+  };
+  stack?: boolean;
+}) {
+  const loaded: SelectOption[] = bodies.entries
+    .filter((entry) => !entry.error)
+    .map((entry) => ({ value: entry.ref, label: entry.display_name ?? entry.id ?? entry.ref }));
+  const options: SelectOption[] = loaded.some((option) => option.value === value)
+    ? loaded
+    : [{ value, label: value }, ...loaded];
+  return (
+    <>
+      <SelectField
+        label={label}
+        ariaLabel={ariaLabel}
+        value={value}
+        onChange={onChange}
+        options={options}
+        stack={stack}
+      />
+      {bodies.error && (
+        <div className="builder-warning" data-testid="bodies-catalog-error">
+          bodies catalog unavailable — {bodies.error}{" "}
+          <Button onClick={() => void bodies.refresh()}>retry</Button>
+        </div>
+      )}
+    </>
   );
 }
 

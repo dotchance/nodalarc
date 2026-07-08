@@ -1210,8 +1210,16 @@ export function draftSiteFromDocument(document: Record<string, unknown>): DraftS
   if (typeof lan.ipv4 !== "string") {
     throw new Error(`site ${siteId}: IPv6-only sites are not editable yet`);
   }
+  const seenNodeIds = new Set<string>();
   const nodes = ((site.nodes as Record<string, unknown>[] | undefined) ?? []).map((node) => {
     const nodeId = String(node.id ?? "gw1");
+    if (seenNodeIds.has(nodeId)) {
+      // node_id is the editor's stable card key — a duplicate is malformed;
+      // refuse loudly (as the other constructs here do), never render two cards
+      // under one React key.
+      throw new Error(`site ${siteId}: duplicate node id ${nodeId} — node ids must be unique`);
+    }
+    seenNodeIds.add(nodeId);
     if (typeof node.model !== "string") {
       throw new Error(`site ${siteId}/${nodeId}: inline node models are not editable yet`);
     }

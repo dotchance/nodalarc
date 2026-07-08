@@ -12,7 +12,7 @@
 
 import { useState } from "react";
 import { Button, IconButton } from "../ui/Button";
-import { EditorCard, EditorName, Field, NumberField, SelectField } from "./editorKit";
+import { BodySelect, EditorCard, EditorName, Field, NumberField, SelectField } from "./editorKit";
 import {
   LIBRARY_SAVE_COPY,
   readCatalogObject,
@@ -65,12 +65,17 @@ export function SiteEditor({ site, onUpdate, onClose, autoFocusName = false }: S
 
   const addNode = () => {
     const first = site.nodes[0];
-    const n = site.nodes.length + 1;
+    // Pick the first free gw{k} against the taken set — never length+1, which
+    // re-collides after a delete-then-add (N27) and would duplicate the
+    // node_id React key.
+    const taken = new Set(site.nodes.map((node) => node.node_id));
+    let k = 1;
+    while (taken.has(`gw${k}`)) k += 1;
     onUpdate({
       nodes: [
         ...site.nodes,
         {
-          node_id: `gw${n}`,
+          node_id: `gw${k}`,
           model_ref: first?.model_ref ?? "",
           installed: first ? { ...first.installed } : {},
           lo0_ipv4: "",
@@ -93,21 +98,12 @@ export function SiteEditor({ site, onUpdate, onClose, autoFocusName = false }: S
         }
         autoFocus={autoFocusName}
       />
-      <SelectField
+      <BodySelect
         label="on body"
         ariaLabel="Site body"
         value={site.body}
         onChange={(body) => onUpdate({ body })}
-        options={
-          bodies.entries.filter((entry) => !entry.error).length > 0
-            ? bodies.entries
-                .filter((entry) => !entry.error)
-                .map((entry) => ({
-                  value: entry.ref,
-                  label: entry.display_name ?? entry.id ?? entry.ref,
-                }))
-            : [{ value: site.body, label: site.body }]
-        }
+        bodies={bodies}
       />
       <NumberField
         label="latitude"
@@ -148,7 +144,7 @@ export function SiteEditor({ site, onUpdate, onClose, autoFocusName = false }: S
 
       {site.nodes.map((node, index) => (
         <EditorCard
-          key={index}
+          key={node.node_id}
           title={node.node_id}
           open
           actions={

@@ -135,7 +135,10 @@ export function LibraryPanel({ onUse, onCustomize, onInspect, onNew }: LibraryPa
     document
       .querySelector(`[data-library-ref="${CSS.escape(flashRef)}"]`)
       ?.scrollIntoView({ block: "center" });
-  });
+    // Re-run only on a new reveal (a fresh flashRef) or after the family list
+    // refreshes — the target row may not exist on the render that set flashRef.
+    // Without deps this fired every render and fought the user's own scroll (N26).
+  }, [flashRef, catalog.entries]);
   const visibleEntries = catalog.entries.filter(
     (entry) =>
       source === "all" ||
@@ -232,7 +235,7 @@ export function LibraryPanel({ onUse, onCustomize, onInspect, onNew }: LibraryPa
       </div>
       <div className="builder-preset-row">
         {config.editor && <Button onClick={() => onNew(family)}>+ new</Button>}
-        <span className="builder-source-filter" role="radiogroup" aria-label="Library source">
+        <span role="radiogroup" aria-label="Library source">
           <Button active={source === "all"} onClick={() => setSource("all")}>
             all
           </Button>
@@ -266,7 +269,12 @@ export function LibraryPanel({ onUse, onCustomize, onInspect, onNew }: LibraryPa
         </label>
       </div>
       {importError && <div className="builder-warning">{importError}</div>}
-      {catalog.error && <div className="builder-warning">{catalog.error}</div>}
+      {catalog.error && (
+        <div className="builder-warning" data-testid="library-catalog-error">
+          {catalog.error}{" "}
+          <Button onClick={() => void catalog.refresh()}>retry</Button>
+        </div>
+      )}
       <div className="builder-library-list">
         {visibleEntries.length === 0 && source === "user" && (
           <div className="builder-zone-empty">

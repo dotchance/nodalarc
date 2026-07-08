@@ -12,7 +12,7 @@
 
 import { useState } from "react";
 import { Button } from "../ui/Button";
-import { EditorCard, EditorName, NumberField, SelectField, SliderField } from "./editorKit";
+import { BodySelect, EditorCard, EditorName, NumberField, SelectField, SliderField } from "./editorKit";
 import { NodeEditor } from "./NodeEditor";
 import { SegmentLinksCard } from "./SegmentLinksCard";
 import {
@@ -123,21 +123,12 @@ export function ConstellationEditor({
           </>
         }
       >
-            <SelectField
+            <BodySelect
               label="around"
               ariaLabel="Central body"
               value={draft.orbit.central_body}
               onChange={(central_body) => onUpdateOrbit({ central_body })}
-              options={
-                bodies.entries.filter((entry) => !entry.error).length > 0
-                  ? bodies.entries
-                      .filter((entry) => !entry.error)
-                      .map((entry) => ({
-                        value: entry.ref,
-                        label: entry.display_name ?? entry.id ?? entry.ref,
-                      }))
-                  : [{ value: draft.orbit.central_body, label: draft.orbit.central_body }]
-              }
+              bodies={bodies}
             />
             {draft.orbit.central_body === EARTH_BODY_REF && (
               <div className="builder-preset-row">

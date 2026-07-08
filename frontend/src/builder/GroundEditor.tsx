@@ -17,6 +17,7 @@ import { useState } from "react";
 import { Button, IconButton } from "../ui/Button";
 import { Icon } from "../ui/icons/Icon";
 import {
+  BodySelect,
   EditorCard,
   EditorName,
   Field,
@@ -40,6 +41,7 @@ import {
   groundWarnings,
   identifier,
   mintSiteMembers,
+  nextMintIndex,
   parseSiteLines,
   refGroundMember,
   siteSetObjectFromDraft,
@@ -326,21 +328,12 @@ export function GroundEditor({
               applied when minting pasted sites — each site owns its
               configuration afterwards (edit the site, not the stamp)
             </div>
-            <SelectField
+            <BodySelect
               label="on body"
               ariaLabel="Stamp body"
               value={draft.stamp.body}
               onChange={(body) => onUpdate({ stamp: { ...draft.stamp, body } })}
-              options={
-                bodies.entries.filter((entry) => !entry.error).length > 0
-                  ? bodies.entries
-                      .filter((entry) => !entry.error)
-                      .map((entry) => ({
-                        value: entry.ref,
-                        label: entry.display_name ?? entry.id ?? entry.ref,
-                      }))
-                  : [{ value: draft.stamp.body, label: draft.stamp.body }]
-              }
+              bodies={bodies}
             />
             <SelectField
               stack
@@ -390,8 +383,11 @@ export function GroundEditor({
               }
             />
             <div className="builder-site-derived">
-              next minted site: lan {stampLanPrefix(draft.stamp, 0)}, lo0{" "}
-              {stampLoopbackAddress(draft.stamp, 0)} …
+              {/* The preview must read the SAME next index the mint uses
+                  (nextMintIndex), never a literal 0 — otherwise it lies once the
+                  segment already holds stamp-shaped members (N29). */}
+              next minted site: lan {stampLanPrefix(draft.stamp, nextMintIndex(draft))}, lo0{" "}
+              {stampLoopbackAddress(draft.stamp, nextMintIndex(draft))} …
             </div>
       </EditorCard>
 

@@ -247,7 +247,7 @@ export function NodeEditor({ draft, onChange, autoFocusName = false }: NodeEdito
                 {role}
               </Button>
             ))}
-            <span className="builder-source-filter" role="radiogroup" aria-label="Terminal source">
+            <span role="radiogroup" aria-label="Terminal source">
               <Button active={pickerSource === "all"} onClick={() => setPickerSource("all")}>
                 all
               </Button>

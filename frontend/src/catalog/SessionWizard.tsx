@@ -16,6 +16,8 @@ import { useWizard } from "../hooks/useWizard";
 import type { WizardStep } from "./wizardTypes";
 import type { SessionInfo } from "../types";
 import { REST_URL, authHeaders } from "../config";
+import { apiErrorMessage, apiErrorFromException } from "../ui/apiError";
+import { downloadBlob } from "../ui/downloadBlob";
 import { Badge } from "../ui/Badge";
 import { Button, IconButton } from "../ui/Button";
 import { SelectionCards } from "./SelectionCards";
@@ -67,18 +69,14 @@ export function SessionWizard({
         headers: authHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ session: file }),
       });
-      if (!response.ok) throw new Error(`YAML fetch failed (${response.status})`);
+      // The refusal body is the resolver's own words — surface them verbatim,
+      // never a generic "fetch failed" that hides why the session was rejected.
+      if (!response.ok) throw new Error(await apiErrorMessage(response));
       const data = (await response.json()) as { document_yaml?: string };
       if (!data.document_yaml) throw new Error("no document YAML in response");
-      const blob = new Blob([data.document_yaml], { type: "text/yaml" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `${name}.yaml`;
-      a.click();
-      URL.revokeObjectURL(url);
+      downloadBlob(data.document_yaml, `${name}.yaml`);
     } catch (e) {
-      setDownloadError(e instanceof Error ? e.message : String(e));
+      setDownloadError(apiErrorFromException(e));
     } finally {
       setDownloadingFile(null);
     }
@@ -120,15 +118,9 @@ export function SessionWizard({
 
   const handleDownload = useCallback(() => {
     if (!wizard.generatedYaml) return;
-    const blob = new Blob([wizard.generatedYaml], { type: "text/yaml" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
     const name = wizard.state.constellation?.name ?? "session";
     const proto = wizard.state.protocol ?? "unknown";
-    a.href = url;
-    a.download = `${name}-${proto}.yaml`;
-    a.click();
-    URL.revokeObjectURL(url);
+    downloadBlob(wizard.generatedYaml, `${name}-${proto}.yaml`);
   }, [wizard]);
 
   const allGroupASelected =

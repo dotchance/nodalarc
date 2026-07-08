@@ -10,6 +10,7 @@
 
 import { useState, useEffect, useCallback, useRef, useSyncExternalStore } from "react";
 import { REST_URL, authHeaders } from "../config";
+import { apiErrorMessage } from "../ui/apiError";
 import type {
   BuilderCatalogEntry,
   BuilderResolveCheck,
@@ -38,16 +39,6 @@ async function _structuredError(response: Response): Promise<BuilderResolveError
     /* non-JSON error body */
   }
   return { error: `request failed (${response.status})` };
-}
-
-async function _errorMessage(response: Response): Promise<string> {
-  try {
-    const data = await response.json();
-    if (data && typeof data.error === "string") return data.error;
-  } catch {
-    /* non-JSON error body */
-  }
-  return `request failed (${response.status})`;
 }
 
 // --- Catalog store: one state per family, shared by every consumer. ---
@@ -86,7 +77,7 @@ export async function refreshCatalogFamily(family: string): Promise<void> {
       `${REST_URL}/api/v1/builder/catalog?family=${encodeURIComponent(family)}`,
       { headers: authHeaders() },
     );
-    if (!response.ok) throw new Error(await _errorMessage(response));
+    if (!response.ok) throw new Error(await apiErrorMessage(response));
     store.state = { entries: (await response.json()) as BuilderCatalogEntry[], error: null };
   } catch (e) {
     store.state = {
@@ -245,7 +236,7 @@ export async function readCatalogObject(
     `${REST_URL}/api/v1/builder/catalog/object?ref=${encodeURIComponent(ref)}`,
     { headers: authHeaders() },
   );
-  if (!response.ok) throw new Error(await _errorMessage(response));
+  if (!response.ok) throw new Error(await apiErrorMessage(response));
   return response.json();
 }
 
@@ -261,7 +252,7 @@ export async function importUserObjectYaml(
     body: JSON.stringify({ document_yaml: documentYaml, overwrite: options?.overwrite ?? false }),
   });
   if (!response.ok) {
-    const error = new Error(await _errorMessage(response)) as Error & { status?: number };
+    const error = new Error(await apiErrorMessage(response)) as Error & { status?: number };
     error.status = response.status;
     throw error;
   }
@@ -278,7 +269,7 @@ export async function exportCatalogObject(ref: string): Promise<void> {
     `${REST_URL}/api/v1/builder/catalog/export?ref=${encodeURIComponent(ref)}`,
     { headers: authHeaders() },
   );
-  if (!response.ok) throw new Error(await _errorMessage(response));
+  if (!response.ok) throw new Error(await apiErrorMessage(response));
   const text = await response.text();
   const blob = new Blob([text], { type: "text/yaml" });
   const url = URL.createObjectURL(blob);
@@ -295,7 +286,7 @@ export async function deleteUserObject(ref: string): Promise<void> {
     `${REST_URL}/api/v1/builder/catalog/object?ref=${encodeURIComponent(ref)}`,
     { method: "DELETE", headers: authHeaders() },
   );
-  if (!response.ok) throw new Error(await _errorMessage(response));
+  if (!response.ok) throw new Error(await apiErrorMessage(response));
   const family = ref.split(":", 2)[1]?.split("/")[0];
   if (family) void refreshCatalogFamily(family);
   _bumpLibraryRevision();
@@ -313,7 +304,7 @@ export async function saveUserObject(
     body: JSON.stringify({ family, document, overwrite: options?.overwrite ?? false }),
   });
   if (!response.ok) {
-    const error = new Error(await _errorMessage(response)) as Error & { status?: number };
+    const error = new Error(await apiErrorMessage(response)) as Error & { status?: number };
     error.status = response.status;
     throw error;
   }
@@ -354,7 +345,7 @@ export function useBuilderWorld() {
   const refreshSessions = useCallback(async () => {
     try {
       const response = await fetch(`${REST_URL}/api/v1/sessions`, { headers: authHeaders() });
-      if (!response.ok) throw new Error(await _errorMessage(response));
+      if (!response.ok) throw new Error(await apiErrorMessage(response));
       setSessions((await response.json()) as BuilderSessionListEntry[]);
       setSessionsError(null);
     } catch (e) {
@@ -432,7 +423,7 @@ export function useBuilderWorld() {
         headers: authHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ session: file }),
       });
-      if (!response.ok) throw new Error(await _errorMessage(response));
+      if (!response.ok) throw new Error(await apiErrorMessage(response));
       // The active flag is changing hands — refresh so displays that read
       // it (running-session entry, provenance) track the switch.
       void refreshSessions();
@@ -449,7 +440,7 @@ export function useBuilderWorld() {
         headers: authHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ document }),
       });
-      if (!response.ok) throw new Error(await _errorMessage(response));
+      if (!response.ok) throw new Error(await apiErrorMessage(response));
       const result = await response.json();
       await refreshSessions();
       return result;

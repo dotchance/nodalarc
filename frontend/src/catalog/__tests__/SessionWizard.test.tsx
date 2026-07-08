@@ -6,9 +6,11 @@
  * examples; the wizard must surface them (the wiring was once dropped and
  * left the UI with no way to start a shipped session).
  */
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { render, screen, fireEvent, cleanup } from "@testing-library/react";
 import type { SessionInfo } from "../../types";
+
+afterEach(cleanup);
 
 vi.mock("../../config", () => ({
   REST_URL: "http://test:8080",
@@ -84,5 +86,51 @@ describe("SessionWizard shipped sessions", () => {
     expect(runningCard!.disabled).toBe(true);
     fireEvent.click(runningCard!);
     expect(onLaunchSession).not.toHaveBeenCalled();
+  });
+});
+
+describe("SessionWizard download errors", () => {
+  function renderWizard() {
+    render(
+      <SessionWizard
+        onDeployStarted={vi.fn()}
+        onClose={undefined}
+        deploying={false}
+        sessions={SESSIONS}
+        onLaunchSession={vi.fn()}
+      />,
+    );
+    return screen.getByRole("button", { name: "Download earth-leo-polar YAML" });
+  }
+
+  it("shows the resolver's own refusal words when a download is refused (422)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string) =>
+        url.includes("/builder/resolve-world")
+          ? Promise.resolve({
+              ok: false,
+              status: 422,
+              json: () => Promise.resolve({ error: "segment 'leo' has no satellites" }),
+            })
+          : Promise.resolve({ ok: true, json: () => Promise.resolve([]) }),
+      ),
+    );
+    fireEvent.click(renderWizard());
+    // The envelope's error field reaches the user verbatim — not "fetch failed".
+    expect(await screen.findByText("segment 'leo' has no satellites")).toBeTruthy();
+  });
+
+  it("shows the network failure's message when a download cannot reach the server", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string) =>
+        url.includes("/builder/resolve-world")
+          ? Promise.reject(new Error("Failed to fetch"))
+          : Promise.resolve({ ok: true, json: () => Promise.resolve([]) }),
+      ),
+    );
+    fireEvent.click(renderWizard());
+    expect(await screen.findByText("Failed to fetch")).toBeTruthy();
   });
 });

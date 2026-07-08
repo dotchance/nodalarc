@@ -7,6 +7,7 @@ import { useIntrospect } from "../hooks/useIntrospect";
 import { PersistentTerminal } from "./PersistentTerminal";
 import { REST_URL, authHeaders } from "../config";
 import { Button, IconButton } from "../ui/Button";
+import { downloadBlob } from "../ui/downloadBlob";
 import { Tabs, type TabItem } from "../ui/Tabs";
 import type { StatusTone } from "../ui/Badge";
 import type { StateSnapshot, Selection } from "../types";
@@ -157,13 +158,7 @@ export function CliDrawer({ open, onClose, snapshot, selection }: CliDrawerProps
         return;
       }
       const text = await resp.text();
-      const blob = new Blob([text], { type: "text/plain" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `${target}.conf`;
-      a.click();
-      URL.revokeObjectURL(url);
+      downloadBlob(text, `${target}.conf`, "text/plain");
     } catch {
       setDownloadError("config download failed: network error");
     }

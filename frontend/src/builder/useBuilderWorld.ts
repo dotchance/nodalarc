@@ -11,6 +11,7 @@
 import { useState, useEffect, useCallback, useRef, useSyncExternalStore } from "react";
 import { REST_URL, authHeaders } from "../config";
 import { apiErrorMessage } from "../ui/apiError";
+import { downloadBlob } from "../ui/downloadBlob";
 import type {
   BuilderCatalogEntry,
   BuilderResolveCheck,
@@ -329,13 +330,7 @@ export async function exportCatalogObject(ref: string): Promise<void> {
   );
   if (!response.ok) throw new Error(await apiErrorMessage(response));
   const text = await response.text();
-  const blob = new Blob([text], { type: "text/yaml" });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = `${ref.split("/").pop() ?? "object.yaml"}`;
-  anchor.click();
-  URL.revokeObjectURL(url);
+  downloadBlob(text, ref.split("/").pop() ?? "object.yaml");
 }
 
 /** Delete one user catalog entry. */

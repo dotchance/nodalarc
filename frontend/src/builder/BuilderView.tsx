@@ -56,13 +56,14 @@ import {
   claimOutlineReveal,
   readCatalogObject,
   requestOutlineReveal,
-  saveUserObject,
   useLibraryReveal,
   useLibraryRevision,
+  useLibrarySave,
   useOutlineReveal,
   useBuilderCatalog,
   useBuilderWorld,
 } from "./useBuilderWorld";
+import { downloadBlob } from "../ui/downloadBlob";
 import {
   overlayBuffers,
   workspaceForSave,
@@ -1197,9 +1198,10 @@ export function BuilderView({
     | { kind: "site"; draft: DraftSiteObject }
     | null
   >(null);
-  const [libraryNodeSave, setLibraryNodeSave] = useState<
-    { kind: "idle" } | { kind: "conflict" } | { kind: "failed"; message: string }
-  >({ kind: "idle" });
+  // The fifth save machine (the Library's "New node" window) adopts the shared
+  // hook — gaining the in-flight saving state the hand-rolled copy lacked, so a
+  // double-click no longer double-submits and shows a spurious "Overwrite?".
+  const libraryNodeSave = useLibrarySave("nodes");
   const [libraryError, setLibraryError] = useState<string | null>(null);
 
   // The Library's per-entry gestures. USE places the block in the session
@@ -1364,6 +1366,10 @@ export function BuilderView({
       setLibraryEditor({ kind: "terminal", draft: defaultDraftTerminal() });
       openEditor({ kind: "library" });
     } else if (family === "nodes") {
+      // A fresh node starts with a clean save machine — otherwise a prior
+      // failed/conflict would carry over (a stale warning, or a silent
+      // overwrite:true on the new node). Matches ConstellationEditor's reset.
+      libraryNodeSave.reset();
       setLibraryEditor({ kind: "node", draft: defaultDraftNode() });
       openEditor({ kind: "library" });
     } else if (family === "constellations" && defaultNodeRef) {
@@ -1925,33 +1931,18 @@ export function BuilderView({
               <div className="builder-preset-row">
                 <Button
                   variant="primary"
-                  onClick={async () => {
-                    try {
-                      await saveUserObject(
-                        "nodes",
-                        { node: nodeObjectFromDraft(libraryEditor.draft) },
-                        { overwrite: libraryNodeSave.kind === "conflict" },
-                      );
-                      setLibraryEditor(null);
-                      closeWindow("library");
-                      setLibraryNodeSave({ kind: "idle" });
-                      void nodeCatalog.refresh();
-                    } catch (e) {
-                      const status = (e as Error & { status?: number }).status;
-                      if (status === 409 && libraryNodeSave.kind !== "conflict") {
-                        setLibraryNodeSave({ kind: "conflict" });
-                      } else {
-                        setLibraryNodeSave({
-                          kind: "failed",
-                          message: e instanceof Error ? e.message : String(e),
-                        });
-                      }
-                    }
-                  }}
+                  disabled={libraryNodeSave.saving}
+                  onClick={() =>
+                    void libraryNodeSave.save(
+                      { node: nodeObjectFromDraft(libraryEditor.draft) },
+                      () => {
+                        setLibraryEditor(null);
+                        closeWindow("library");
+                      },
+                    )
+                  }
                 >
-                  {libraryNodeSave.kind === "conflict"
-                    ? "Overwrite in library?"
-                    : "Save node to library"}
+                  {libraryNodeSave.label("Save node to library")}
                 </Button>
                 <Button
                   onClick={() => {
@@ -1962,8 +1953,8 @@ export function BuilderView({
                   Cancel
                 </Button>
               </div>
-              {libraryNodeSave.kind === "failed" && (
-                <div className="builder-warning">{libraryNodeSave.message}</div>
+              {libraryNodeSave.state.kind === "failed" && (
+                <div className="builder-warning">{libraryNodeSave.state.message}</div>
               )}
             </div>
           ),
@@ -2764,15 +2755,7 @@ export function BuilderView({
                     : "Copy"}
               </Button>
               <Button
-                onClick={() => {
-                  const blob = new Blob([documentYaml], { type: "text/yaml" });
-                  const url = URL.createObjectURL(blob);
-                  const a = document.createElement("a");
-                  a.href = url;
-                  a.download = `${world?.session.name ?? "session"}.yaml`;
-                  a.click();
-                  URL.revokeObjectURL(url);
-                }}
+                onClick={() => downloadBlob(documentYaml, `${world?.session.name ?? "session"}.yaml`)}
               >
                 Download
               </Button>

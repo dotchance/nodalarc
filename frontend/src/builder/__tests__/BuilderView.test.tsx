@@ -171,7 +171,6 @@ describe("BuilderView — resolve-loop and world honesty (P2)", () => {
         link_rules: [],
         segments: [{ segment_id: "ground", display_name: "Ground" }],
         allocations: [],
-        link_candidates: [],
         rule_previews: [],
         ephemeris: {
           epoch_id: 0,

@@ -67,7 +67,6 @@ function world(
     link_rules: rules,
     segments: [],
     allocations,
-    link_candidates: [],
     rule_previews: previews,
   };
 }

@@ -76,7 +76,6 @@ const WORLD: BuilderWorld = {
   link_rules: [],
   segments: [],
   allocations: [],
-  link_candidates: [],
   rule_previews: [],
   nodes: [
     {

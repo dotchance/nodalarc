@@ -114,14 +114,6 @@ export interface BuilderRuleAllocation {
   per_node: BuilderNodeInterfaceFacts[];
 }
 
-/** Twin of nodalarc.models.builder_world.BuilderLinkCandidate. Superseded by
- *  BuilderRulePreview.drawable_pairs; kept during the client cutover. */
-export interface BuilderLinkCandidate {
-  rule_id: string;
-  node_a: string;
-  node_b: string;
-}
-
 /** Preview scope vocabulary — twin of nodalarc PreviewScope. Pinned. */
 export const BUILDER_PREVIEW_SCOPES = [
   "computed",
@@ -216,7 +208,6 @@ export interface BuilderWorld {
   link_rules: BuilderLinkRule[];
   segments: BuilderWorldSegment[];
   allocations: BuilderRuleAllocation[];
-  link_candidates: BuilderLinkCandidate[];
   rule_previews: BuilderRulePreview[];
 }
 

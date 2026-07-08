@@ -98,7 +98,6 @@ def test_builder_wire_shape_field_names_match_backend():
     from nodalarc.models.builder_world import (
         BuilderCatalogEntry,
         BuilderErrorSubject,
-        BuilderLinkCandidate,
         BuilderLinkEndpoint,
         BuilderLinkRule,
         BuilderNodeInterfaceFacts,
@@ -130,7 +129,6 @@ def test_builder_wire_shape_field_names_match_backend():
         (BuilderLinkEndpoint, "BuilderLinkEndpoint"),
         (BuilderRuleAllocation, "BuilderRuleAllocation"),
         (BuilderNodeInterfaceFacts, "BuilderNodeInterfaceFacts"),
-        (BuilderLinkCandidate, "BuilderLinkCandidate"),
         (BuilderRulePreview, "BuilderRulePreview"),
         (BuilderPreviewPair, "BuilderPreviewPair"),
         (BuilderPreviewReasonCount, "BuilderPreviewReasonCount"),

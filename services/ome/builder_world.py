@@ -19,7 +19,6 @@ from nodalarc.catalog_browse import flatten_user_references, rehydrate_user_refe
 from nodalarc.catalog_paths import CatalogRoots, resolve_catalog_reference
 from nodalarc.ephemeris_runtime import body_states_at, session_epoch_unix
 from nodalarc.models.builder_world import (
-    BuilderLinkCandidate,
     BuilderLinkEndpoint,
     BuilderLinkRule,
     BuilderPreviewPair,
@@ -771,13 +770,5 @@ def _world_from_resolution(
         # Capacity truth is computed once, by the allocator, and shipped:
         # displays report what allocation did, never re-derive what it might.
         allocations=tuple(link_rule_interface_facts(resolved, catalog_session)),
-        link_candidates=tuple(
-            BuilderLinkCandidate(
-                rule_id=candidate.rule_id,
-                node_a=candidate.node_a,
-                node_b=candidate.node_b,
-            )
-            for candidate in resolved.link_candidates
-        ),
         rule_previews=rule_previews,
     )

@@ -190,22 +190,6 @@ class BuilderRuleAllocation(BaseModel):
     per_node: tuple[BuilderNodeInterfaceFacts, ...] = ()
 
 
-class BuilderLinkCandidate(BaseModel):
-    """One allocated fixed pair — the preview draws these, never re-derives
-    them.
-
-    SUPERSEDED by ``BuilderRulePreview.drawable_pairs``, which carries the same
-    pair identities plus the server's frozen-epoch visibility verdict. Kept
-    beside the previews during the client cutover; the reader moves off it and
-    this field is deleted in a later, reader-free step."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    rule_id: str
-    node_a: str
-    node_b: str
-
-
 #: How a rule's preview geometry was resolved. Only ``computed`` carries reason
 #: counts and drawn pairs; the other three are typed walls the client renders
 #: verbatim instead of deciding client-side. A module-level alias so the
@@ -342,5 +326,4 @@ class BuilderWorld(BaseModel):
     link_rules: tuple[BuilderLinkRule, ...] = ()
     segments: tuple[BuilderWorldSegment, ...] = ()
     allocations: tuple[BuilderRuleAllocation, ...] = ()
-    link_candidates: tuple[BuilderLinkCandidate, ...] = ()
     rule_previews: tuple[BuilderRulePreview, ...] = ()

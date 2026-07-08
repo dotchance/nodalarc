@@ -440,12 +440,11 @@ def test_walker_gate_set_matches_the_frozen_epoch_contract(walker_world):
 
 
 def test_walker_fixed_isl_draws_the_allocated_pairs(walker_world):
-    """The fixed ISL rule's preview is over EXACTLY the allocator's resolved
-    pairs — the same count as its link_candidates, drawn one-for-one when
-    feasible."""
+    """The fixed ISL rule's preview universe is EXACTLY the allocator's resolved
+    pair count (the surviving capacity fact), drawn one-for-one when feasible."""
     isl = next(p for p in walker_world.rule_previews if p.rule_id == "leo_isl")
-    allocated = [c for c in walker_world.link_candidates if c.rule_id == "leo_isl"]
-    assert isl.pairs_total == len(allocated)
+    allocated = next(a for a in walker_world.allocations if a.rule_id == "leo_isl")
+    assert isl.pairs_total == allocated.allocated_pairs
     # Every allocated ISL pair is feasible at the epoch, so drawn == total.
     assert isl.pairs_drawn == isl.pairs_total
 
@@ -713,9 +712,12 @@ def test_world_ships_allocator_capacity_facts():
     world = response.json()["world"]
     allocations = {a["rule_id"]: a for a in world["allocations"]}
     assert allocations, "world carries no allocation facts"
-    candidates = world["link_candidates"]
+    # The allocator's pair count reconciles against the preview universe (the
+    # link_candidates wire field is gone; rule_previews.pairs_total is the same
+    # candidate universe, per rule).
+    previews = {p["rule_id"]: p for p in world["rule_previews"]}
     for rule_id, alloc in allocations.items():
-        assert alloc["allocated_pairs"] == sum(1 for c in candidates if c["rule_id"] == rule_id)
+        assert alloc["allocated_pairs"] == previews[rule_id]["pairs_total"]
         for row in alloc["per_node"]:
             assert 0 <= row["free"] <= row["matching"]
     # The walker's fixed ISL mesh consumes every isl interface: 176 sats,

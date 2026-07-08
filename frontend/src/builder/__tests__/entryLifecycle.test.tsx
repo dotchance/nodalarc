@@ -10,11 +10,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 import { useWorkspace, serializeWorkspace } from "../useWorkspace";
-import { EARTH_BODY_REF, type Workspace } from "../workspace";
+import { EARTH_BODY_REF, newDraftGroundSet, refGroundMember, type Workspace } from "../workspace";
 
 const AUTOSAVE_KEY = "nodalarc-builder-draft";
 const BACKUP_KEY = "nodalarc-builder-draft-previous";
 const SPACE_NODE = "nodalarc:nodes/space/x.yaml";
+const GROUND_NODE = "nodalarc:nodes/ground/gw.yaml";
 
 /** A real authored workspace (one constellation) built through the hook. */
 function authoredWorkspace(name: string): Workspace {
@@ -193,5 +194,33 @@ describe("backup refuse/choice — never bulldoze real work, never protect prist
     });
     expect(outcome).toBe("stashed");
     expect(JSON.parse(localStorage.getItem(BACKUP_KEY)!).workspace.name).toBe("draft-a");
+  });
+});
+
+describe("addGroundMember — created vs appended (IG-1 create-focus safety)", () => {
+  it("creates the first set (created=true) then appends to it (created=false)", () => {
+    const { result } = renderHook(() => useWorkspace());
+    act(() => result.current.startNew("gm-test"));
+    let first!: { segmentId: string; created: boolean };
+    let second!: { segmentId: string; created: boolean };
+    act(() => {
+      first = result.current.addGroundMember(
+        refGroundMember("nodalarc:sites/a.yaml", "a", "A", null),
+        () => newDraftGroundSet(GROUND_NODE, {}),
+      );
+    });
+    act(() => {
+      second = result.current.addGroundMember(
+        refGroundMember("nodalarc:sites/b.yaml", "b", "B", null),
+        () => newDraftGroundSet(GROUND_NODE, {}),
+      );
+    });
+    // The first Use created the set (safe to create-focus its name); the second
+    // only appended, so its caller must NOT steal focus onto the existing name.
+    expect(first.created).toBe(true);
+    expect(second.created).toBe(false);
+    expect(second.segmentId).toBe(first.segmentId); // same receiving set
+    expect(result.current.workspace?.ground).toHaveLength(1);
+    expect(result.current.workspace?.ground[0]?.members).toHaveLength(2);
   });
 });

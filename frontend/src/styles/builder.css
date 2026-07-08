@@ -1053,6 +1053,14 @@ button.builder-guide-row:hover {
   }
 }
 
+/* A just-placed reference announces where it landed: its outline row flashes so
+   a Use gesture visibly went somewhere in the session anatomy (IG-1 ref floor).
+   Reuses the save-flash keyframe — same "it went somewhere" visual language. */
+.builder-outline-row--revealed {
+  animation: builder-saved-flash 2.4s ease-out;
+  border-radius: var(--radius-xs);
+}
+
 /* Provenance marker: this workspace was loaded from the session that is
    currently running on the cluster. */
 .builder-running-chip {

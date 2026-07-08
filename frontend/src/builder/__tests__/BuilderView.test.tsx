@@ -16,6 +16,7 @@ vi.mock("../../config", () => ({
 }));
 
 const { BuilderView } = await import("../BuilderView");
+const { resetCatalogStores } = await import("../useBuilderWorld");
 const { catalogEarthFrame } = await import("../../sim/__tests__/bodyModelFixture");
 
 const PROPS = {
@@ -214,5 +215,104 @@ describe("BuilderView — resolve-loop and world honesty (P2)", () => {
     expect(status).toContain("no satellites yet — add one to run contact previews");
     // A valid ground-only session is NOT a resolver refusal.
     expect(status).not.toContain("does not resolve");
+  });
+});
+
+describe("BuilderView — IG-1: Library Use places and reveals", () => {
+  // The catalog cache is module-global; reset it per case so each mounts with a
+  // fresh fetch (an earlier suite fetching a family empty would otherwise stick).
+  beforeEach(() => resetCatalogStores());
+  // Renders BuilderView and invokes onUse through the real Library panel. A
+  // draft family opens the created object's editor with create-focus; a ref
+  // family places its outline row and flashes it (the separate outline reveal),
+  // never opening an editor; an unusable entry surfaces an error, never a
+  // silent no-op.
+  function catalogFor(family: string | null) {
+    switch (family) {
+      case "constellations":
+        return [{ ref: "nodalarc:constellations/leo.yaml", family: "constellations", id: "leo", display_name: "LEO-REF" }];
+      case "site-sets":
+        return [{ ref: "nodalarc:site-sets/gw.yaml", family: "site-sets", id: "gw", display_name: "GW-SET" }];
+      case "nodes":
+        return [{ ref: GROUND_NODE, family: "nodes", id: "gateway", display_name: "Gateway" }];
+      case "sites":
+        // A sites entry with NO id — the fall-through case IG-3 must surface.
+        return [{ ref: "nodalarc:sites/orphan.yaml", family: "sites", display_name: "No-Id Site" }];
+      default:
+        return [];
+    }
+  }
+  function stubCatalog() {
+    const fetchMock = vi.fn((url: string) => {
+      if (url.includes("/api/v1/sessions")) return Promise.resolve(jsonResponse([]));
+      if (url.includes("/builder/catalog/object")) {
+        return Promise.resolve(
+          jsonResponse({ ref: GROUND_NODE, family_wrapper: "node", document: { node: { terminals: [] } } }),
+        );
+      }
+      if (url.includes("/builder/catalog")) {
+        return Promise.resolve(jsonResponse(catalogFor(new URL(url).searchParams.get("family"))));
+      }
+      return Promise.resolve(jsonResponse({}));
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    return fetchMock;
+  }
+  async function openLibrary() {
+    const start = await screen.findByTestId("builder-start");
+    fireEvent.click(within(start).getByRole("button", { name: /New session/i }));
+    fireEvent.click(await screen.findByLabelText(/^Library —/));
+  }
+
+  it("using a constellation ref places its outline row and flashes exactly it", async () => {
+    stubCatalog();
+    render(<BuilderView {...PROPS} />);
+    await openLibrary();
+    // Default family is constellations (a ref). Use its entry.
+    fireEvent.click(await screen.findByLabelText("Use: place as a space segment"));
+    const outline = screen.getByTestId("builder-outline");
+    await within(outline).findByText("LEO-REF");
+    await waitFor(() => {
+      const flashed = outline.querySelectorAll(".builder-outline-row--revealed");
+      expect(flashed).toHaveLength(1); // exactly one reveal — not a broadcast (pin 2)
+      expect(flashed[0]?.textContent).toContain("LEO-REF");
+    });
+  });
+
+  it("using a site-set ref places its ground row and flashes exactly it", async () => {
+    stubCatalog();
+    render(<BuilderView {...PROPS} />);
+    await openLibrary();
+    fireEvent.click(await screen.findByRole("tab", { name: "Site sets" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Use: place as ground sites" }));
+    const outline = screen.getByTestId("builder-outline");
+    await within(outline).findByText("GW-SET");
+    await waitFor(() => {
+      const flashed = outline.querySelectorAll(".builder-outline-row--revealed");
+      expect(flashed).toHaveLength(1);
+      expect(flashed[0]?.textContent).toContain("GW-SET");
+    });
+  });
+
+  it("using a draft family opens the created segment's editor with create-focus", async () => {
+    stubCatalog();
+    render(<BuilderView {...PROPS} />);
+    await openLibrary();
+    fireEvent.click(await screen.findByRole("tab", { name: "Nodes" }));
+    fireEvent.click(await screen.findByLabelText("Use: start a constellation with this node"));
+    // The created segment lands in the outline drafts, and freshId sets
+    // create-focus (IG-2): the opened editor's name field is focused.
+    await waitFor(() => expect(document.activeElement?.tagName).toBe("INPUT"));
+    expect(screen.getByTestId("builder-drafts")).toBeTruthy();
+    expect((document.activeElement as HTMLInputElement).value).toBeTruthy(); // a named field, not an empty search box
+  });
+
+  it("using a sites entry with no id surfaces an error, never a silent no-op", async () => {
+    stubCatalog();
+    render(<BuilderView {...PROPS} />);
+    await openLibrary();
+    fireEvent.click(await screen.findByRole("tab", { name: "Sites" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Use: add to a ground segment" }));
+    expect((await screen.findAllByText(/the site has no id to place/i)).length).toBeGreaterThan(0);
   });
 });

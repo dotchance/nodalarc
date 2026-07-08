@@ -68,6 +68,13 @@ function _catalogStore(family: string): CatalogFamilyStore {
   return store;
 }
 
+/** Test-only: drop the module-global catalog cache so a suite that mounts the
+ *  builder across many cases starts each with a fresh fetch (the cache is keyed
+ *  by family and otherwise lives for the whole module lifetime). */
+export function resetCatalogStores(): void {
+  _catalogStores.clear();
+}
+
 /** Re-fetch one family and notify every consumer. Mutation helpers call this
  *  themselves — callers cannot forget. */
 export async function refreshCatalogFamily(family: string): Promise<void> {
@@ -135,6 +142,57 @@ export function claimLibraryReveal(
   if (!reveal) return null;
   if ((_retiredRevealNonces.get(role) ?? 0) >= reveal.nonce) return null;
   _retiredRevealNonces.set(role, reveal.nonce);
+  return reveal;
+}
+
+// --- Outline reveal: a SEPARATE channel from the Library reveal. ---------
+// A library reveal means "a saved/imported asset — open and land the Library on
+// it." An outline reveal means "a Use gesture placed a ref in the session — show
+// where it landed in the session anatomy." Different destinations, different
+// consumers, different intents. They share the consume-once nonce PATTERN but
+// nothing else: a placement never opens the Library, and a save never scrolls
+// the outline. Keyed on the placed row's stable key (segment_id).
+interface OutlineReveal {
+  segmentId: string;
+  nonce: number;
+}
+
+let _outlineRevealState: OutlineReveal | null = null;
+const _outlineRevealListeners = new Set<() => void>();
+let _outlineRevealNonce = 0;
+
+/** Reveal a just-placed segment's row in the outline (IG-1 ref floor: a placed
+ *  reference has no editor, so its Use scrolls its row into view and flashes
+ *  it). */
+export function requestOutlineReveal(segmentId: string): void {
+  _outlineRevealNonce += 1;
+  _outlineRevealState = { segmentId, nonce: _outlineRevealNonce };
+  for (const listener of _outlineRevealListeners) listener();
+}
+
+export function useOutlineReveal(): OutlineReveal | null {
+  return useSyncExternalStore(
+    (onChange) => {
+      _outlineRevealListeners.add(onChange);
+      return () => _outlineRevealListeners.delete(onChange);
+    },
+    () => _outlineRevealState,
+  );
+}
+
+const _retiredOutlineNonces = new Map<string, number>();
+
+/** Claim the outline reveal for one consumer role — returns it once, null ever
+ *  after (a remount never replays a stale placement). Its retired-nonce map is
+ *  separate from the Library channel's, so a newer reveal on one channel never
+ *  retires or consumes the other. */
+export function claimOutlineReveal(
+  role: "outline",
+  reveal: OutlineReveal | null,
+): OutlineReveal | null {
+  if (!reveal) return null;
+  if ((_retiredOutlineNonces.get(role) ?? 0) >= reveal.nonce) return null;
+  _retiredOutlineNonces.set(role, reveal.nonce);
   return reveal;
 }
 

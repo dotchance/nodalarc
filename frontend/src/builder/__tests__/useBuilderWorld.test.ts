@@ -13,7 +13,14 @@ vi.mock("../../config", () => ({
   authHeaders: (extra?: Record<string, string>) => ({ ...extra }),
 }));
 
-const { useBuilderWorld } = await import("../useBuilderWorld");
+const {
+  useBuilderWorld,
+  requestOutlineReveal,
+  useOutlineReveal,
+  claimOutlineReveal,
+  requestLibraryReveal,
+  useLibraryReveal,
+} = await import("../useBuilderWorld");
 
 interface Deferred<T> {
   promise: Promise<T>;
@@ -144,5 +151,38 @@ describe("useBuilderWorld — the resolve loop keeps nothing stale (N39)", () =>
     });
     expect(result.current.world).toBeNull();
     expect(result.current.settledArtifactSha256).toBeNull();
+  });
+});
+
+describe("outline reveal is a channel separate from the Library reveal (IG-1)", () => {
+  it("consumes an outline reveal once — claim returns it, then null (no replay)", () => {
+    const { result } = renderHook(() => useOutlineReveal());
+    act(() => requestOutlineReveal("space-777"));
+    const reveal = result.current;
+    expect(reveal?.segmentId).toBe("space-777");
+    expect(claimOutlineReveal("outline", reveal)?.segmentId).toBe("space-777");
+    // A second claim (e.g. a remount replaying the same reveal) yields nothing.
+    expect(claimOutlineReveal("outline", reveal)).toBeNull();
+  });
+
+  it("a Library reveal never touches the outline channel", () => {
+    const outline = renderHook(() => useOutlineReveal());
+    const before = outline.result.current;
+    act(() =>
+      requestLibraryReveal({
+        ref: "user:sites/x.yaml",
+        family: "sites",
+        id: "x",
+      } as unknown as Parameters<typeof requestLibraryReveal>[0]),
+    );
+    // The outline store is unchanged by reference — the reveals do not cross.
+    expect(outline.result.current).toBe(before);
+  });
+
+  it("an outline reveal never touches the Library channel", () => {
+    const library = renderHook(() => useLibraryReveal());
+    const before = library.result.current;
+    act(() => requestOutlineReveal("ground-42"));
+    expect(library.result.current).toBe(before);
   });
 });

@@ -53,10 +53,13 @@ import { TerminalEditor } from "./TerminalEditor";
 import {
   canDeploy,
   claimLibraryReveal,
+  claimOutlineReveal,
   readCatalogObject,
+  requestOutlineReveal,
   saveUserObject,
   useLibraryReveal,
   useLibraryRevision,
+  useOutlineReveal,
   useBuilderCatalog,
   useBuilderWorld,
 } from "./useBuilderWorld";
@@ -686,6 +689,36 @@ export function BuilderView({
     openEditor({ kind: "catalog" });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active, libraryReveal]);
+  // IG-1 ref floor: a placed reference has no editor, so its Use scrolls its
+  // outline row into view and flashes it. A SEPARATE consume-once channel from
+  // the Library reveal — a placement shows where it landed in the session
+  // anatomy, it never opens the Library.
+  const outlineReveal = useOutlineReveal();
+  const [revealedSegment, setRevealedSegment] = useState<string | null>(null);
+  useEffect(() => {
+    // Clear the flash when the builder is hidden — otherwise the effect cleanup
+    // cancels the reset timer and the row stays lit, replaying on every re-show
+    // (the same reason freshId resets on !active).
+    if (!active) {
+      setRevealedSegment(null);
+      return;
+    }
+    const claimed = claimOutlineReveal("outline", outlineReveal);
+    if (!claimed) return;
+    setRevealedSegment(claimed.segmentId);
+    const timer = setTimeout(() => setRevealedSegment(null), 2600);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active, outlineReveal]);
+  useEffect(() => {
+    if (!revealedSegment) return;
+    // segment_ids are NATS-safe (lowercase, no dots/special chars), so they are
+    // selector-safe; guard CSS.escape since jsdom does not provide the CSS global.
+    const escaped =
+      typeof CSS !== "undefined" && CSS.escape ? CSS.escape(revealedSegment) : revealedSegment;
+    // scrollIntoView is optional-chained: jsdom does not implement it.
+    document.querySelector(`[data-segment-id="${escaped}"]`)?.scrollIntoView?.({ block: "nearest" });
+  }, [revealedSegment]);
   useEffect(() => {
     // The import must end with its resolve: a failed fetch or a competing
     // action (clear/+ New discards the in-flight response) would otherwise
@@ -1183,21 +1216,53 @@ export function BuilderView({
 
   const handleLibraryUse = (entry: BuilderCatalogEntry) => {
     setLibraryError(null);
-    ensureThenCreate(() => {
-      clearRefusedWorldBeforeCreate();
-      if (entry.family === "constellations") {
-        addConstellationRef(entry.ref, entry.display_name ?? entry.id ?? entry.ref);
-      } else if (entry.family === "site-sets") {
-        addGroundRef(entry.ref, entry.display_name ?? entry.id ?? entry.ref);
-      } else if (entry.family === "nodes") {
-        addConstellation(entry.ref);
-      } else if (entry.family === "sites" && entry.id) {
-        addGroundMember(
-          refGroundMember(entry.ref, entry.id, entry.display_name ?? entry.id, entry.summary),
+    const label = `using ${entry.display_name ?? entry.id ?? entry.ref}`;
+    const name = entry.display_name ?? entry.id ?? entry.ref;
+    if (entry.family === "constellations") {
+      // REF family: no editor exists for a placed reference (L6) — reveal its
+      // outline row so the placement is visible (IG-1 ref floor).
+      ensureThenCreate(() => {
+        clearRefusedWorldBeforeCreate();
+        requestOutlineReveal(addConstellationRef(entry.ref, name));
+      }, label);
+    } else if (entry.family === "site-sets") {
+      ensureThenCreate(() => {
+        clearRefusedWorldBeforeCreate();
+        requestOutlineReveal(addGroundRef(entry.ref, name));
+      }, label);
+    } else if (entry.family === "nodes") {
+      // DRAFT family: open the created segment's editor, focused for rename.
+      ensureThenCreate(() => {
+        clearRefusedWorldBeforeCreate();
+        const id = addConstellation(entry.ref);
+        openEditor({ kind: "segment", id });
+        setFreshId(id);
+      }, label);
+    } else if (entry.family === "sites" && entry.id) {
+      const siteId = entry.id;
+      ensureThenCreate(() => {
+        clearRefusedWorldBeforeCreate();
+        const { segmentId, created } = addGroundMember(
+          refGroundMember(entry.ref, siteId, entry.display_name ?? siteId, entry.summary),
           () => newDraftGroundSet(defaultGroundNodeRef ?? "", {}),
         );
-      }
-    }, `using ${entry.display_name ?? entry.id ?? entry.ref}`);
+        // Open the receiving set's editor either way; create-focus only a set
+        // this Use actually created — never steal focus onto an existing set's
+        // name (a rename footgun).
+        openEditor({ kind: "ground", id: segmentId });
+        if (created) setFreshId(segmentId);
+      }, label);
+    } else {
+      // Fall-through: a sites entry with no id, or an unknown family — surface it
+      // (IG-3), never a silent no-op branch.
+      setLibraryError(
+        `cannot use "${name}": ${
+          entry.family === "sites"
+            ? "the site has no id to place"
+            : `unsupported family "${entry.family}"`
+        }`,
+      );
+    }
   };
 
   const handleLibraryCustomize = async (entry: BuilderCatalogEntry) => {
@@ -2157,7 +2222,12 @@ export function BuilderView({
             </div>
             {workspace.space_refs.map((placed) => (
               <Fragment key={placed.segment_id}>
-              <div className="builder-library-entry">
+              <div
+                className={`builder-library-entry${
+                  revealedSegment === placed.segment_id ? " builder-outline-row--revealed" : ""
+                }`}
+                data-segment-id={placed.segment_id}
+              >
                 <span className="builder-outline-name builder-outline-name--space builder-outline-row--segment">
                   <Icon name="orbit" size={12} />
                   {placed.label}
@@ -2235,7 +2305,12 @@ export function BuilderView({
             ))}
             {workspace.ground_refs.map((placed) => (
               <Fragment key={placed.segment_id}>
-              <div className="builder-library-entry">
+              <div
+                className={`builder-library-entry${
+                  revealedSegment === placed.segment_id ? " builder-outline-row--revealed" : ""
+                }`}
+                data-segment-id={placed.segment_id}
+              >
                 <span className="builder-outline-name builder-outline-name--ground builder-outline-row--segment">
                   <Icon name="satellite-dish" size={12} />
                   {placed.label}

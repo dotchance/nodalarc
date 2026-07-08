@@ -592,22 +592,32 @@ export function useWorkspace() {
 
   // Library "use" gestures are self-ensuring: using a block with no open
   // workspace starts one - building never dead-ends on missing state.
+  // The Use mutations mint the created/receiving object BEFORE the updater and
+  // return its segment_id (IG-1: the caller opens that object's editor for a
+  // draft, or reveals its placed row for a ref). Minting outside the updater is
+  // also correct-by-construction — the factories bump an impure module counter,
+  // so minting inside a (StrictMode-double-invoked) updater would allocate two
+  // ids for one object.
   const addConstellation = useCallback(
-    (nodeRef: string) => {
+    (nodeRef: string): string => {
+      const draft = newDraftConstellation(nodeRef);
       createWorkspace((workspace) => ({
         ...workspace,
-        space: [...workspace.space, newDraftConstellation(nodeRef)],
+        space: [...workspace.space, draft],
       }));
+      return draft.segment_id;
     },
     [createWorkspace],
   );
 
   const addConstellationRef = useCallback(
-    (ref: string, label: string) => {
+    (ref: string, label: string): string => {
+      const segment = newRefSegment(ref, label);
       createWorkspace((workspace) => ({
         ...workspace,
-        space_refs: [...workspace.space_refs, newRefSegment(ref, label)],
+        space_refs: [...workspace.space_refs, segment],
       }));
+      return segment.segment_id;
     },
     [createWorkspace],
   );
@@ -687,11 +697,13 @@ export function useWorkspace() {
   );
 
   const addGroundRef = useCallback(
-    (ref: string, label: string) => {
+    (ref: string, label: string): string => {
+      const segment = newRefGroundSet(ref, label);
       createWorkspace((workspace) => ({
         ...workspace,
-        ground_refs: [...workspace.ground_refs, newRefGroundSet(ref, label)],
+        ground_refs: [...workspace.ground_refs, segment],
       }));
+      return segment.segment_id;
     },
     [createWorkspace],
   );
@@ -732,20 +744,35 @@ export function useWorkspace() {
    *  with no draft (or no workspace) open, makeDraft starts one, so using a
    *  site from the Library never dead-ends. */
   const addGroundMember = useCallback(
-    (member: DraftGroundSite, makeDraft: () => DraftGroundSet) => {
-      createWorkspace((workspace) => {
-        if (workspace.ground.length === 0) {
-          const draft = makeDraft();
-          return { ...workspace, ground: [{ ...draft, members: [member] }] };
-        }
-        const last = workspace.ground[workspace.ground.length - 1] as DraftGroundSet;
-        return {
+    (
+      member: DraftGroundSite,
+      makeDraft: () => DraftGroundSet,
+    ): { segmentId: string; created: boolean } => {
+      // The receiving set is the last ground draft, or a fresh one when none
+      // exists yet. Decide the branch from the synced ref (createWorkspace may
+      // ensure a workspace, but a fresh one has no ground either way) so the
+      // returned id matches what the updater builds. `created` tells the caller
+      // whether to apply create-focus: focusing (and selecting) the name of an
+      // EXISTING set the member merely joined is a rename footgun.
+      const current = workspaceRef.current;
+      if (!current || current.ground.length === 0) {
+        const draft = makeDraft();
+        createWorkspace((workspace) => ({
           ...workspace,
-          ground: workspace.ground.map((draft) =>
-            draft === last ? { ...draft, members: [...draft.members, member] } : draft,
-          ),
-        };
-      });
+          ground: [{ ...draft, members: [member] }],
+        }));
+        return { segmentId: draft.segment_id, created: true };
+      }
+      const receiving = current.ground[current.ground.length - 1]!; // length > 0 checked above
+      createWorkspace((workspace) => ({
+        ...workspace,
+        ground: workspace.ground.map((draft, index) =>
+          index === workspace.ground.length - 1
+            ? { ...draft, members: [...draft.members, member] }
+            : draft,
+        ),
+      }));
+      return { segmentId: receiving.segment_id, created: false };
     },
     [createWorkspace],
   );

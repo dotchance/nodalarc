@@ -92,6 +92,19 @@ export function useAppState(inputs: AppStateInputs) {
     }
   }, [sessionTransitioning, clearSelection]);
 
+  // Entering the builder closes every live overlay and the session catalog —
+  // the builder has its own surfaces and none of these belong over it.
+  // Selection is deliberately NOT cleared: the live NodePopover is render-gated
+  // in the builder, so returning to the live view keeps the user's selection.
+  useEffect(() => {
+    if (viewMode === "builder") {
+      setFilterOpen(false);
+      setCliDrawerOpen(false);
+      setLogPanelOpen(false);
+      setShowCatalog(false);
+    }
+  }, [viewMode]);
+
   // --- Sim time tracking ---
   const firstSimTimeRef = useRef<string | null>(null);
   const [simTimeAdvanced, setSimTimeAdvanced] = useState(false);

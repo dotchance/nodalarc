@@ -281,7 +281,7 @@ function AppInner() {
     [clearSelection, closeCatalog, showCatalog, hasEverDeployed, toggleView, toggleHistorical, handleFollowNode, handleFrameSelection, handleFrameScene, handleTopView, historicalMode, playback, handlePanelToggle, toggleReferenceFrame, setColorMode, setShowGroundLinks, setShowIslLinks, setShowSatPaths, setShowTrails, setGlobeMode, setCliDrawerOpen, setFilterOpen],
   );
 
-  useKeyboard(keyboardActions);
+  useKeyboard(keyboardActions, viewMode);
 
   const prevViewModeRef = useRef(viewMode);
   useEffect(() => {
@@ -382,7 +382,7 @@ function AppInner() {
         )}
       </div>
       )}
-      {showHelp && <ShortcutHelp onClose={() => setShowHelp(false)} />}
+      {showHelp && <ShortcutHelp onClose={() => setShowHelp(false)} viewMode={viewMode} />}
       {(switching || sessionTransitioning) && (
         <div className="session-switching-overlay">
           <div className="switching-box">
@@ -510,7 +510,7 @@ function AppInner() {
         onFollowNode={handleFollowNode}
         onScreenshot={handleScreenshot}
       />
-      {selection?.type !== "link" && selection != null && !cliDrawerOpen && (
+      {viewMode !== "builder" && selection?.type !== "link" && selection != null && !cliDrawerOpen && (
         <NodePopover
           snapshot={snapshot}
           selection={selection}
@@ -519,7 +519,7 @@ function AppInner() {
           onOpenCli={() => setCliDrawerOpen(true)}
         />
       )}
-      {cliDrawerOpen && (
+      {viewMode !== "builder" && cliDrawerOpen && (
         <CliDrawer
           open={cliDrawerOpen}
           onClose={() => setCliDrawerOpen(false)}
@@ -527,7 +527,7 @@ function AppInner() {
           selection={selection}
         />
       )}
-      {logPanelOpen && (
+      {viewMode !== "builder" && logPanelOpen && (
         <LogPanel
           events={snapshot?.ops_events ?? []}
           debugEvents={snapshot?.debug_events ?? []}
@@ -536,7 +536,7 @@ function AppInner() {
           onClose={() => setLogPanelOpen(false)}
         />
       )}
-      {filterOpen && (
+      {viewMode !== "builder" && filterOpen && (
         <div className="filter-panel-overlay" onClick={() => setFilterOpen(false)}>
           <div className="filter-panel-drawer" onClick={(e) => e.stopPropagation()}>
             <FilterPanel
@@ -582,7 +582,7 @@ function AppInner() {
     <BottomBar snapshot={snapshot} connected={connected} historicalMode={historicalMode} logPanelOpen={logPanelOpen} onToggleLogPanel={() => setLogPanelOpen((v: boolean) => !v)} />
   );
 
-  const overlayContent = showCatalog ? (
+  const overlayContent = showCatalog && viewMode !== "builder" ? (
     <SessionWizard
       onDeployStarted={() => { setShowCatalog(false); setHasEverDeployed(true); }}
       onClose={hasEverDeployed ? () => setShowCatalog(false) : undefined}
@@ -600,7 +600,7 @@ function AppInner() {
 
   const historicalEndTime = historicalRangeEnd ?? snapshot?.sim_time ?? new Date().toISOString();
   const historicalStartTime = subtractMsIso(historicalEndTime, HISTORICAL_WINDOW_MS);
-  const historicalControlsContent = historicalMode ? (
+  const historicalControlsContent = historicalMode && viewMode !== "builder" ? (
     <TimeControls
       onSeek={fetchHistorical}
       startTime={historicalStartTime}
@@ -616,13 +616,13 @@ function AppInner() {
     <Shell
       topBar={topBarContent}
       center={centerContent}
-      rightPanel={rightPanelContent}
+      rightPanel={viewMode !== "builder" ? rightPanelContent : null}
       bottomBar={bottomBarContent}
       overlay={overlayContent}
       historicalControls={historicalControlsContent}
-      historicalMode={historicalMode}
+      historicalMode={viewMode !== "builder" && historicalMode}
       centerSplit={viewMode === "split"}
-      panelOpen={panelOpen}
+      panelOpen={viewMode !== "builder" && panelOpen}
       onPanelToggle={handlePanelToggle}
       panelWidth={panelWidth}
       onPanelWidthChange={setPanelWidth}

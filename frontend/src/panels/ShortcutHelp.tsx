@@ -10,6 +10,7 @@ import { useEffect } from "react";
 import { KEYBOARD_SHORTCUTS } from "../hooks/useKeyboard";
 import { activeThemeName, setTheme, THEMES, type ThemeName } from "../styles/tokens";
 import { Button } from "../ui/Button";
+import type { ViewMode } from "../types";
 
 const THEME_LABELS: Record<ThemeName, string> = {
   "mission-light": "Mission Light",
@@ -18,9 +19,10 @@ const THEME_LABELS: Record<ThemeName, string> = {
 
 interface ShortcutHelpProps {
   onClose: () => void;
+  viewMode: ViewMode;
 }
 
-export function ShortcutHelp({ onClose }: ShortcutHelpProps) {
+export function ShortcutHelp({ onClose, viewMode }: ShortcutHelpProps) {
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
@@ -48,16 +50,29 @@ export function ShortcutHelp({ onClose }: ShortcutHelpProps) {
           <Button onClick={onClose}>Close</Button>
         </header>
         <p className="help-note">Shortcuts are inactive while typing in a terminal or input field.</p>
+        {viewMode === "builder" && (
+          <p className="help-note">
+            In the session builder, live-view shortcuts are suspended — marked below.
+          </p>
+        )}
         <div className="help-groups">
           {groups.map((group) => (
             <section key={group} className="help-group">
               <h3>{group}</h3>
-              {KEYBOARD_SHORTCUTS.filter((s) => s.group === group).map((s) => (
-                <div key={s.keys + s.action} className="help-row">
-                  <kbd>{s.keys}</kbd>
-                  <span>{s.action}</span>
-                </div>
-              ))}
+              {KEYBOARD_SHORTCUTS.filter((s) => s.group === group).map((s) => {
+                const suspended = viewMode === "builder" && s.suspendedInBuilder;
+                return (
+                  <div
+                    key={s.keys + s.action}
+                    className={`help-row${suspended ? " help-row--suspended" : ""}`}
+                    data-testid={suspended ? "shortcut-suspended" : "shortcut-active"}
+                  >
+                    <kbd>{s.keys}</kbd>
+                    <span>{s.action}</span>
+                    {suspended && <span className="help-row-tag">live view only</span>}
+                  </div>
+                );
+              })}
             </section>
           ))}
         </div>

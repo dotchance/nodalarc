@@ -26,6 +26,8 @@ import {
 } from "../editorKit";
 import { BuildGuide } from "../BuildGuide";
 import { GroundEditor } from "../GroundEditor";
+import { SiteEditor } from "../SiteEditor";
+import { ConstellationEditor } from "../ConstellationEditor";
 import {
   accessBeamElevationDeg,
   capabilitiesBySegment,
@@ -41,6 +43,7 @@ import {
   mintSiteMembers,
   newDraftConstellation,
   newDraftGroundSet,
+  newDraftSiteObject,
   newWorkspace,
   parseSiteLines,
 } from "../workspace";
@@ -154,6 +157,78 @@ describe("IG-5: builder surfaces compose the kit, never raw controls", () => {
       "Raw editing controls bypass the interaction grammar (use editorKit):\n" +
         offenders.join("\n"),
     ).toHaveLength(0);
+  });
+});
+
+describe("IG-5: card anatomy lives only in the kit (EditorCard)", () => {
+  it("no builder-card* token in any production builder file outside the kit", () => {
+    // The whole builder-card family — builder-card, -head, -title, -summary,
+    // -body. They share the "builder-card" prefix, so one match closes the class
+    // (banning a single token would under-close it). A hit outside editorKit.tsx
+    // is a hand-rolled card that must compose EditorCard instead.
+    const offenders: string[] = [];
+    for (const file of readdirSync(BUILDER_DIR)) {
+      if (file === "__tests__") continue;
+      if (!file.endsWith(".ts") && !file.endsWith(".tsx")) continue;
+      if (file === "editorKit.tsx") continue; // the kit DEFINES the card anatomy
+      const lines = readFileSync(join(BUILDER_DIR, file), "utf-8").split("\n");
+      lines.forEach((line, index) => {
+        if (/builder-card/.test(line)) offenders.push(`${file}:${index + 1}: ${line.trim()}`);
+      });
+    }
+    expect(
+      offenders,
+      "Hand-rolled card anatomy bypasses EditorCard (compose the kit):\n" + offenders.join("\n"),
+    ).toHaveLength(0);
+  });
+});
+
+describe("EditorCard adoption smoke: migrated editors render and their cards behave", () => {
+  beforeEach(() => {
+    // The editors read catalogs on mount; the endpoint returns a bare array.
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => [] })));
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    cleanup();
+  });
+
+  it("SiteEditor: a multi-node site card carries a working Remove (the actions slot)", () => {
+    const base = newDraftSiteObject("nodalarc:nodes/ground/gw.yaml", {});
+    const site = { ...base, nodes: [base.nodes[0]!, { ...base.nodes[0]!, node_id: "gw2" }] };
+    let updated = site;
+    render(
+      <SiteEditor
+        site={site}
+        onUpdate={(patch) => {
+          updated = { ...updated, ...patch } as typeof site;
+        }}
+      />,
+    );
+    // Both node cards render (the card title is the node id).
+    expect(screen.getByText("gw1")).toBeTruthy();
+    expect(screen.getByText("gw2")).toBeTruthy();
+    // The header Remove — carried through EditorCard's actions slot — drops its node.
+    fireEvent.click(screen.getByRole("button", { name: "Remove gw2" }));
+    expect(updated.nodes.map((n) => n.node_id)).toEqual(["gw1"]);
+  });
+
+  it("ConstellationEditor: a collapsed accordion card opens on head click", () => {
+    render(
+      <ConstellationEditor
+        draft={newDraftConstellation("nodalarc:nodes/space/leo.yaml")}
+        workspace={newWorkspace("t")}
+        onUpdate={() => {}}
+        onUpdateOrbit={() => {}}
+        onRemove={() => {}}
+        onOpenRule={() => {}}
+        onConnect={() => {}}
+      />,
+    );
+    // Orbit is open by default; Pattern is collapsed, so its body field is hidden.
+    expect(screen.queryByText("planes")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /Pattern/ }));
+    expect(screen.getByText("planes")).toBeTruthy();
   });
 });
 

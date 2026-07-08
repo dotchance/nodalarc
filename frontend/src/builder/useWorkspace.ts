@@ -13,12 +13,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   EARTH_BODY_REF,
+  groundSetIsRefExpressible,
   identifier,
   newDraftConstellation,
   reseedCounters,
   newRefGroundSet,
   newRefSegment,
   newWorkspace,
+  siteSetWrapperFromDraft,
   type DraftConstellation,
   type DraftGroundSet,
   type DraftGroundSite,
@@ -923,6 +925,40 @@ export function useWorkspace() {
     );
   }, []);
 
+  /** Close-time convergence (D7): once an authored ground set has been saved to
+   *  the library, collapse it back to a ref of that object — but only if the
+   *  APPLIED set (read here, never a stale closure — `commit`'s functional form
+   *  sees post-Apply state) still serializes byte-for-byte to the snapshot the
+   *  save produced AND is losslessly ref-expressible. The ref REUSES the draft's
+   *  segment_id and carries its scheduling_preset, so every link rule and
+   *  routing-domain membership pointing at the segment stays live; minting a
+   *  fresh segment would orphan them. A best-effort mirror of the server's
+   *  load-time rehydrate — when the guard blocks, the ref stays inline and the
+   *  server converges it on the next load instead. */
+  const convergeGroundToRef = useCallback(
+    (segmentId: string, ref: string, savedSnapshot: Record<string, unknown>) => {
+      commit((prev) => {
+        if (!prev) return prev;
+        const draft = prev.ground.find((d) => d.segment_id === segmentId);
+        if (!draft) return prev;
+        if (!_bufferDeepEqual(siteSetWrapperFromDraft(draft), savedSnapshot)) return prev;
+        if (!groundSetIsRefExpressible(draft)) return prev;
+        const converged: RefGroundSet = {
+          segment_id: draft.segment_id,
+          ref,
+          label: draft.display_name,
+          scheduling_preset: draft.scheduling_preset,
+        };
+        return {
+          ...prev,
+          ground: prev.ground.filter((d) => d.segment_id !== segmentId),
+          ground_refs: [...prev.ground_refs, converged],
+        };
+      });
+    },
+    [],
+  );
+
   return {
     workspace,
     startNew,
@@ -953,6 +989,7 @@ export function useWorkspace() {
     replaceGroundRefWithDraft,
     updateGroundDraft,
     removeGroundDraft,
+    convergeGroundToRef,
     addLinkRule,
     updateLinkRule,
     updateLinkEndpoint,

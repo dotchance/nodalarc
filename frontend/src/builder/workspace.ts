@@ -989,6 +989,14 @@ export function newDraftGroundSet(
   };
 }
 
+/** The untouched mint name — `newDraftGroundSet` above stamps
+ *  `Ground segment ${N}` and nothing else does. A fork stamps `… (custom)`
+ *  and an import carries the authored name, so a match here means the user
+ *  never invested a name. Keep in lockstep with the mint format above. */
+export function isDefaultGroundDisplayName(name: string): boolean {
+  return /^Ground segment \d+$/.test(name);
+}
+
 /** Stamp-derived addressing for minted sites (mint index i). Applied once
  *  at creation and stored explicitly on the site — the site owns it after. */
 export function stampLanPrefix(stamp: GroundStamp, index: number): string {
@@ -1460,6 +1468,34 @@ export function siteSetObjectFromDraft(
     ),
     reference: "session-builder-draft",
   };
+}
+
+/** The wrapper form the save path posts and the library stores: the id the
+ *  save derives, wrapped under `site_set`. ONE owner — the save site and the
+ *  close-time convergence comparator both call this, so the snapshot stored at
+ *  save time and the applied object serialized at close time are byte-identical
+ *  shapes (a comparator over mismatched shapes silently never converges). */
+export function siteSetWrapperFromDraft(draft: DraftGroundSet): {
+  site_set: Record<string, unknown>;
+} {
+  const id = identifier(draft.display_name) || identifier(draft.segment_id);
+  return { site_set: siteSetObjectFromDraft(draft, id) };
+}
+
+/** Whether a ground draft is losslessly expressible as a RefGroundSet, which
+ *  carries only ref + label + scheduling_preset. scheduling_preset IS carried
+ *  (so it is not a blocker); the stamp is mint-seed and discarded by design.
+ *  What a ref CANNOT hold blocks the swap: a per-member scheduling_override,
+ *  originated prefixes, tags. A non-default display_name blocks too — it is
+ *  session-owned authorship the swap would knowingly drop; the deep-equal
+ *  snapshot cannot see any of these, so this guard is separate from it. */
+export function groundSetIsRefExpressible(draft: DraftGroundSet): boolean {
+  return (
+    draft.members.every((member) => member.scheduling_override === null) &&
+    draft.originated_ipv4.length === 0 &&
+    draft.tags.length === 0 &&
+    isDefaultGroundDisplayName(draft.display_name)
+  );
 }
 
 /** Serialize the workspace to the session grammar (the one artifact). *//** Every placed segment a link rule can select, with its kind — the role

@@ -213,6 +213,11 @@ interface EditorWindow {
   target: EditorTarget;
   x: number;
   y: number;
+  /** The last library save made from this window (D7): the ref and the exact
+   *  wrapper snapshot it stored. A user close converges the bound object back to
+   *  this ref if it still matches. Latest save wins; the annotation dies with
+   *  the window, so a reopened window starts a fresh editing session. */
+  saved?: { ref: string; snapshot: Record<string, unknown> };
 }
 
 /** One-line form of a refusal for the compact surfaces (canvas note,
@@ -566,6 +571,7 @@ export function BuilderView({
     replaceGroundRefWithDraft,
     updateGroundDraft,
     removeGroundDraft,
+    convergeGroundToRef,
     addLinkRule,
     updateLinkRule,
     removeLinkRule,
@@ -747,6 +753,11 @@ export function BuilderView({
       ];
     });
   };
+  /** Record a library save against its window (D7): the close-time convergence
+   *  reads this off the bound window. Latest save wins. */
+  const annotateWindowSaved = (key: string, ref: string, snapshot: Record<string, unknown>) => {
+    setWindows((prev) => prev.map((w) => (w.key === key ? { ...w, saved: { ref, snapshot } } : w)));
+  };
   /** Every window teardown goes through here: closing a window removes it
    *  AND its buffer, always together. `reason` says who closes — a user
    *  close is a gesture on the object; a teardown close (New/Open/Restore)
@@ -754,10 +765,22 @@ export function BuilderView({
    *  way out. Close-time behaviors key on 'user' only. */
   const closeWindows = (
     predicate: (w: EditorWindow) => boolean,
-    _reason: "user" | "teardown",
+    reason: "user" | "teardown",
   ) => {
-    const closing = new Set(windows.filter(predicate).map((w) => w.key));
+    const closingWindows = windows.filter(predicate);
+    const closing = new Set(closingWindows.map((w) => w.key));
     if (closing.size === 0) return;
+    // D7: a user close converges each saved-then-unchanged ground back to its
+    // ref. `convergeGroundToRef` reads the APPLIED set through commit's
+    // functional form, so an OK close (Apply then close, this same batch) sees
+    // the just-applied object; a teardown close never mutates the outgoing one.
+    if (reason === "user") {
+      for (const w of closingWindows) {
+        if (w.target.kind === "ground" && w.saved) {
+          convergeGroundToRef(w.target.id, w.saved.ref, w.saved.snapshot);
+        }
+      }
+    }
     setWindows((prev) => prev.filter((w) => !closing.has(w.key)));
     setBuffers((prev) => {
       let changed = false;
@@ -1612,6 +1635,7 @@ export function BuilderView({
               onUpdate={(patch) =>
                 patchBuffer(key, applied, (d) => ({ ...d, ...patch }))
               }
+              onSaved={(ref, snapshot) => annotateWindowSaved(key, ref, snapshot)}
               onRemove={() => {
                 removeGroundDraft(draft.segment_id);
                 closeWindow(key);

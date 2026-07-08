@@ -25,8 +25,11 @@ import {
   draftGroundSetFromDocuments,
   draftSiteFromDocument,
   siteObjectFromDraft,
+  siteSetWrapperFromDraft,
+  groundSetIsRefExpressible,
   groundWarnings,
   identifier,
+  isDefaultGroundDisplayName,
   matchStampAddress,
   mintSiteMembers,
   newDraftConstellation,
@@ -1666,5 +1669,61 @@ describe("shared document→draft parse core: fork throws, import collects (M2, 
     const forkedRef = forked.members.find((m) => m.kind === "ref")!;
     expect(forkedRef.site_id).toBe("gateway-alpha");
     expect(forkedRef.label).toBe("Gateway Alpha");
+  });
+});
+
+describe("D7 close-time convergence primitives (P7g)", () => {
+  const GROUND_NODE = "nodalarc:nodes/ground/gw.yaml";
+  function expressibleDraft() {
+    // A freshly minted set (default name) with a ref member and nothing a ref
+    // cannot hold — the losslessly-convergeable base case.
+    const draft = newDraftGroundSet(GROUND_NODE, {});
+    draft.members = [refGroundMember("nodalarc:sites/denver.yaml", "denver", "Denver", null)];
+    return draft;
+  }
+
+  it("isDefaultGroundDisplayName matches only the untouched mint name", () => {
+    const minted = newDraftGroundSet(GROUND_NODE, {});
+    expect(isDefaultGroundDisplayName(minted.display_name)).toBe(true);
+    // A fork stamps "… (custom)" and an import carries an authored name; neither
+    // is the untouched default.
+    expect(isDefaultGroundDisplayName("Denver sites (custom)")).toBe(false);
+    expect(isDefaultGroundDisplayName("Denver")).toBe(false);
+    expect(isDefaultGroundDisplayName("Ground segment")).toBe(false);
+  });
+
+  it("siteSetWrapperFromDraft is the one save wrapper (id derived, wrapped under site_set)", () => {
+    const draft = expressibleDraft();
+    const wrapper = siteSetWrapperFromDraft(draft);
+    expect(Object.keys(wrapper)).toEqual(["site_set"]);
+    const id = identifier(draft.display_name) || identifier(draft.segment_id);
+    expect((wrapper.site_set as { id: string }).id).toBe(id);
+    // Byte-identical to what the save path posts and the close-time comparator
+    // re-serializes — one owner, so the two shapes can never drift apart.
+    expect(wrapper.site_set).toMatchObject({
+      id,
+      display_name: draft.display_name,
+      reference: "session-builder-draft",
+    });
+  });
+
+  it("groundSetIsRefExpressible passes the base case and each session-owned block blocks it", () => {
+    expect(groundSetIsRefExpressible(expressibleDraft())).toBe(true);
+
+    const override = expressibleDraft();
+    override.members[0]!.scheduling_override = "geo-longest-pass";
+    expect(groundSetIsRefExpressible(override)).toBe(false);
+
+    const originated = expressibleDraft();
+    originated.originated_ipv4 = ["10.0.0.0/24"];
+    expect(groundSetIsRefExpressible(originated)).toBe(false);
+
+    const tagged = expressibleDraft();
+    tagged.tags = ["experiment"];
+    expect(groundSetIsRefExpressible(tagged)).toBe(false);
+
+    const named = expressibleDraft();
+    named.display_name = "Denver sites (custom)";
+    expect(groundSetIsRefExpressible(named)).toBe(false);
   });
 });

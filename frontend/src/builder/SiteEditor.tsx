@@ -33,9 +33,18 @@ interface SiteEditorProps {
   onClose?: () => void;
   /** IG-2: focus the name when a create gesture opened this editor. */
   autoFocusName?: boolean;
+  /** D7: reported when the site is saved to the library. Embedded in a ground
+   *  set, the host converges the authored member to this ref immediately. */
+  onSaved?: (ref: string, savedObject: Record<string, unknown>) => void;
 }
 
-export function SiteEditor({ site, onUpdate, onClose, autoFocusName = false }: SiteEditorProps) {
+export function SiteEditor({
+  site,
+  onUpdate,
+  onClose,
+  autoFocusName = false,
+  onSaved,
+}: SiteEditorProps) {
   const nodes = useBuilderCatalog("nodes");
   const bodies = useBuilderCatalog("bodies");
   const [editorError, setEditorError] = useState<string | null>(null);
@@ -85,9 +94,10 @@ export function SiteEditor({ site, onUpdate, onClose, autoFocusName = false }: S
     });
   };
 
-  // A standalone site save has no post-save consequence: saveUserObject reveals
-  // and refreshes the family itself, so no onSaved is passed.
-  const saveToLibrary = () => void librarySave.save({ site: siteObjectFromDraft(site) });
+  // A standalone (Library) site save has no post-save consequence and passes no
+  // onSaved. Embedded in a ground set the host wires onSaved to converge the
+  // authored member to the saved ref (D7).
+  const saveToLibrary = () => void librarySave.save({ site: siteObjectFromDraft(site) }, onSaved);
 
   return (
     <div className="builder-inspector-stack" data-testid="builder-site-editor">

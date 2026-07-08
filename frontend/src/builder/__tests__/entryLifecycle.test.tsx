@@ -10,7 +10,21 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 import { useWorkspace, serializeWorkspace } from "../useWorkspace";
-import { EARTH_BODY_REF, newDraftGroundSet, refGroundMember, type Workspace } from "../workspace";
+import {
+  EARTH_BODY_REF,
+  SCHEDULING_PRESETS,
+  defaultLinkRule,
+  defaultRoutingDomain,
+  identifier,
+  newDraftGroundSet,
+  placedSegments,
+  refGroundMember,
+  siteSetObjectFromDraft,
+  siteSetWrapperFromDraft,
+  toSessionDocument,
+  type DraftGroundSet,
+  type Workspace,
+} from "../workspace";
 
 const AUTOSAVE_KEY = "nodalarc-builder-draft";
 const BACKUP_KEY = "nodalarc-builder-draft-previous";
@@ -194,6 +208,161 @@ describe("backup refuse/choice — never bulldoze real work, never protect prist
     });
     expect(outcome).toBe("stashed");
     expect(JSON.parse(localStorage.getItem(BACKUP_KEY)!).workspace.name).toBe("draft-a");
+  });
+});
+
+describe("convergeGroundToRef — close-time D7 convergence (P7g)", () => {
+  const REF = "user:site-sets/denver-set.yaml";
+  /** A workspace whose one authored ground set is BOTH a link-rule endpoint and
+   *  a routing-domain member — the identity-continuity fixture. The set is
+   *  ref-expressible (default name, a ref member, no session-owned blocks). */
+  function convergeableWorkspace(): { ws: Workspace; ground: DraftGroundSet } {
+    const built = ((): Workspace => {
+      const { result } = renderHook(() => useWorkspace());
+      act(() => result.current.startNew("d7-converge"));
+      act(() => result.current.addConstellation(SPACE_NODE));
+      return result.current.workspace as Workspace;
+    })();
+    const ground = newDraftGroundSet(GROUND_NODE, {});
+    // A NON-default preset so the identity pin's carry-over assertions actually
+    // distinguish "carried from the draft" from "silently defaulted" (both the
+    // mint and the RefGroundSet default are leo-fast-handover).
+    ground.scheduling_preset = "geo-longest-pass";
+    ground.members = [refGroundMember("nodalarc:sites/denver.yaml", "denver", "Denver", null)];
+    built.ground.push(ground);
+    const placed = placedSegments(built);
+    const space = placed.find((s) => s.kind === "space")!;
+    const groundSeg = placed.find((s) => s.kind === "ground")!;
+    built.links.push(defaultLinkRule(groundSeg, space));
+    const domain = defaultRoutingDomain(built);
+    domain.member_segment_ids = [ground.segment_id]; // single-member → bare segment selector
+    built.routing_domains.push(domain);
+    return { ws: built, ground };
+  }
+
+  const emittedRefsSegment = (segId: string) => (doc: any) =>
+    doc.segments.find((s: any) => s.id === identifier(segId) && s.placement);
+  const selectorNames = (sel: any): string[] =>
+    sel.segment ? [sel.segment] : (sel.all ?? sel.any ?? []).map((x: any) => x.segment);
+
+  it("(identity) reuses the segment_id and carries the preset, keeping rule + domain live", () => {
+    const { ws, ground } = convergeableWorkspace();
+    const snapshot = siteSetWrapperFromDraft(ground);
+    const { result } = renderHook(() => useWorkspace());
+    act(() => result.current.openWorkspace(ws));
+    act(() => result.current.convergeGroundToRef(ground.segment_id, REF, snapshot));
+
+    // The set left `ground` for `ground_refs` under the SAME segment_id.
+    expect(result.current.workspace?.ground.some((d) => d.segment_id === ground.segment_id)).toBe(
+      false,
+    );
+    const converged = result.current.workspace?.ground_refs.find(
+      (r) => r.segment_id === ground.segment_id,
+    );
+    expect(converged).toEqual({
+      segment_id: ground.segment_id,
+      ref: REF,
+      label: ground.display_name,
+      scheduling_preset: ground.scheduling_preset,
+    });
+
+    // In the emitted artifact both references stay live and the scheduling block
+    // is the draft's own preset — not a silently defaulted one.
+    const doc = toSessionDocument(result.current.workspace as Workspace) as any;
+    const seg = emittedRefsSegment(ground.segment_id)(doc);
+    expect(seg.placement.from_site_set).toBe(REF);
+    expect(seg.apply.scheduling).toEqual(SCHEDULING_PRESETS[ground.scheduling_preset].block);
+    const emittedId = identifier(ground.segment_id);
+    expect(
+      doc.link_rules.some((r: any) =>
+        r.endpoints.some((e: any) => selectorNames(e.select).includes(emittedId)),
+      ),
+    ).toBe(true);
+    expect(
+      doc.routing.domains.some((d: any) =>
+        d.selectors.some((s: any) => selectorNames(s).includes(emittedId)),
+      ),
+    ).toBe(true);
+  });
+
+  it("(serializer parity) matches the save's wrapper form, never the bare site_set", () => {
+    // The mutator serializes the applied set through siteSetWrapperFromDraft —
+    // the SAME serializer the save stored the snapshot with. A bare (unwrapped)
+    // site_set is a different shape, so it must NOT match: were the mutator
+    // serializing the applied set in any other form, the real save's wrapper
+    // snapshot would never match and the swap would silently never fire.
+    const { ws, ground } = convergeableWorkspace();
+    const id = identifier(ground.display_name) || identifier(ground.segment_id);
+    const bareSnapshot = siteSetObjectFromDraft(ground, id); // no { site_set } wrapper
+    const { result } = renderHook(() => useWorkspace());
+    act(() => result.current.openWorkspace(ws));
+    act(() => result.current.convergeGroundToRef(ground.segment_id, REF, bareSnapshot));
+    expect(result.current.workspace?.ground_refs).toHaveLength(0); // bare form → no match
+    act(() =>
+      result.current.convergeGroundToRef(ground.segment_id, REF, siteSetWrapperFromDraft(ground)),
+    );
+    expect(result.current.workspace?.ground_refs).toHaveLength(1); // wrapper form → matches
+  });
+
+  it("(X-close) a snapshot that no longer matches the applied set does NOT swap", () => {
+    // edit → save → X-close: the buffer is dropped, so the APPLIED set stays
+    // pre-edit while the snapshot reflects the edited content. No match → the
+    // inline authored set is kept, nothing converges.
+    const { ws, ground } = convergeableWorkspace();
+    const edited: DraftGroundSet = {
+      ...ground,
+      members: [
+        ...ground.members,
+        refGroundMember("nodalarc:sites/ames.yaml", "ames", "Ames", null),
+      ],
+    };
+    const { result } = renderHook(() => useWorkspace());
+    act(() => result.current.openWorkspace(ws));
+    act(() =>
+      result.current.convergeGroundToRef(ground.segment_id, REF, siteSetWrapperFromDraft(edited)),
+    );
+    expect(result.current.workspace?.ground_refs).toHaveLength(0);
+    expect(result.current.workspace?.ground.some((d) => d.segment_id === ground.segment_id)).toBe(
+      true,
+    );
+  });
+
+  it("(OK-close) applying the buffer first makes the applied set match, and it swaps", () => {
+    // save → OK-close: OK commits the buffer (updateGroundDraft) BEFORE the
+    // close, so the applied set equals the snapshot and the swap fires. The
+    // mutator reads the just-applied set through commit's functional form.
+    const { ws, ground } = convergeableWorkspace();
+    const edited: DraftGroundSet = {
+      ...ground,
+      members: [
+        ...ground.members,
+        refGroundMember("nodalarc:sites/ames.yaml", "ames", "Ames", null),
+      ],
+    };
+    const { result } = renderHook(() => useWorkspace());
+    act(() => result.current.openWorkspace(ws));
+    act(() => {
+      result.current.updateGroundDraft(ground.segment_id, { members: edited.members });
+      result.current.convergeGroundToRef(ground.segment_id, REF, siteSetWrapperFromDraft(edited));
+    });
+    expect(result.current.workspace?.ground_refs).toHaveLength(1);
+    expect(result.current.workspace?.ground).toHaveLength(0);
+  });
+
+  it("(guard) a matched snapshot still does NOT swap when a member carries an override", () => {
+    // The wrapper snapshot structurally excludes per-member scheduling_override,
+    // so it can match while the set is NOT ref-expressible. The guard is a
+    // separate gate — the set that a ref cannot express stays inline.
+    const { ws, ground } = convergeableWorkspace();
+    ground.members[0]!.scheduling_override = "geo-longest-pass";
+    // Rebuild the applied set inside the workspace to carry the override.
+    const wsWithOverride = { ...ws, ground: [ground] };
+    const snapshot = siteSetWrapperFromDraft(ground); // matches (override is invisible to it)
+    const { result } = renderHook(() => useWorkspace());
+    act(() => result.current.openWorkspace(wsWithOverride));
+    act(() => result.current.convergeGroundToRef(ground.segment_id, REF, snapshot));
+    expect(result.current.workspace?.ground_refs).toHaveLength(0);
+    expect(result.current.workspace?.ground).toHaveLength(1);
   });
 });
 

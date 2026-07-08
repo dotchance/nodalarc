@@ -14,7 +14,16 @@
 
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { act, cleanup, fireEvent, render, renderHook, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  renderHook,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   BodySelect,
@@ -48,10 +57,11 @@ import {
   newWorkspace,
   nextMintIndex,
   parseSiteLines,
+  siteSetWrapperFromDraft,
   stampLanPrefix,
 } from "../workspace";
 import type { BuilderCatalogEntry } from "../builderTypes";
-import { canDeploy } from "../useBuilderWorld";
+import { canDeploy, resetCatalogStores } from "../useBuilderWorld";
 import {
   appliedObjectForKey,
   bufferAppliedChanged,
@@ -344,6 +354,88 @@ describe("P7e: BodySelect failure contract + node-id collision (N27)", () => {
     // The preview shows the NEXT mint's address (index nextMintIndex) — a revert to
     // the literal 0 would show a different, colliding address and fail this.
     expect(preview?.textContent).toContain(stampLanPrefix(draft.stamp, nextMintIndex(draft)));
+  });
+});
+
+describe("P7g: save-to-library convergence wiring (D7)", () => {
+  beforeEach(() => {
+    resetCatalogStores();
+    // The save endpoint returns a family-specific ref; every other catalog read
+    // (the post-save family refresh included) returns an empty list.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: { body?: string }) => {
+        if (String(url).includes("/builder/catalog/save")) {
+          // useLibrarySave posts the family in the body — echo a ref under it.
+          const family = init?.body ? JSON.parse(init.body).family : "sites";
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({ ref: `user:${family}/x.yaml`, family }),
+          };
+        }
+        return { ok: true, json: async () => [] };
+      }),
+    );
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    cleanup();
+  });
+
+  it("saving the whole set reports (ref, wrapper) to onSaved — the window-annotation source", async () => {
+    const draft = newDraftGroundSet("nodalarc:nodes/ground/gw.yaml", {});
+    draft.members = mintSiteMembers(draft, parseSiteLines("Denver, 39.7, -104.9").rows);
+    const onSaved = vi.fn();
+    render(
+      <GroundEditor
+        draft={draft}
+        workspace={newWorkspace("t")}
+        onOpenRule={() => {}}
+        onConnect={() => {}}
+        onUpdate={() => {}}
+        onRemove={() => {}}
+        onSaved={onSaved}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Save to library" }));
+    await waitFor(() => expect(onSaved).toHaveBeenCalled());
+    // The exact wrapper the save posted — so the window stores the same shape the
+    // close-time comparator re-serializes the applied set into.
+    expect(onSaved.mock.calls[0]).toEqual([
+      "user:site-sets/x.yaml",
+      siteSetWrapperFromDraft(draft),
+    ]);
+  });
+
+  it("saving an authored member flips it to a ref in place, keeping member_id + override", async () => {
+    const draft = newDraftGroundSet("nodalarc:nodes/ground/gw.yaml", {});
+    draft.members = mintSiteMembers(draft, parseSiteLines("Denver, 39.7, -104.9").rows);
+    const member = draft.members[0]!;
+    member.scheduling_override = "geo-longest-pass"; // a session-owned block to preserve
+    let updated = draft;
+    render(
+      <GroundEditor
+        draft={draft}
+        workspace={newWorkspace("t")}
+        onOpenRule={() => {}}
+        onConnect={() => {}}
+        onUpdate={(patch) => {
+          updated = { ...updated, ...patch } as typeof draft;
+        }}
+        onRemove={() => {}}
+      />,
+    );
+    // Open the member's inline editor, then save it to the sites library.
+    fireEvent.click(screen.getByRole("button", { name: `Edit ${member.label}` }));
+    const embedded = screen.getByTestId("builder-site-editor");
+    fireEvent.click(within(embedded).getByRole("button", { name: "Save to library" }));
+    await waitFor(() => expect(updated.members[0]!.kind).toBe("ref"));
+    const flipped = updated.members[0]!;
+    expect(flipped.member_id).toBe(member.member_id); // never minted fresh
+    expect(flipped.ref).toBe("user:sites/x.yaml");
+    expect(flipped.site).toBeNull();
+    expect(flipped.scheduling_override).toBe("geo-longest-pass"); // session-owned, preserved
   });
 });
 

@@ -316,3 +316,75 @@ describe("BuilderView — IG-1: Library Use places and reveals", () => {
     expect((await screen.findAllByText(/the site has no id to place/i)).length).toBeGreaterThan(0);
   });
 });
+
+describe("BuilderView — D7 close-time convergence (P7g)", () => {
+  beforeEach(() => {
+    resetCatalogStores();
+    // A save reveals the asset in LibraryPanel, whose flash effect calls
+    // CSS.escape (LibraryPanel.tsx) — jsdom does not implement it. Shim it so
+    // the save-then-converge flow runs (real browsers always have it).
+    const css = (globalThis as { CSS?: { escape?: (s: string) => string } }).CSS;
+    if (!css) (globalThis as { CSS?: unknown }).CSS = { escape: (s: string) => s };
+    else if (!css.escape) css.escape = (s: string) => s;
+  });
+  // Sites carries a placeable entry (id present); the save endpoint echoes a ref
+  // under the posted family; everything else is empty.
+  function stubConvergence() {
+    const fetchMock = vi.fn((url: string, init?: { body?: string }) => {
+      if (url.includes("/api/v1/sessions")) return Promise.resolve(jsonResponse([]));
+      if (url.includes("/builder/catalog/save")) {
+        const family = init?.body ? JSON.parse(init.body).family : "site-sets";
+        return Promise.resolve(jsonResponse({ ref: `user:${family}/x.yaml`, family }));
+      }
+      if (url.includes("/builder/catalog/object")) {
+        return Promise.resolve(
+          jsonResponse({ ref: GROUND_NODE, family_wrapper: "node", document: { node: { terminals: [] } } }),
+        );
+      }
+      if (url.includes("/builder/catalog")) {
+        const family = new URL(url).searchParams.get("family");
+        return Promise.resolve(
+          jsonResponse(
+            family === "sites"
+              ? [{ ref: "nodalarc:sites/denver.yaml", family: "sites", id: "denver", display_name: "Denver" }]
+              : family === "nodes"
+                ? [{ ref: GROUND_NODE, family: "nodes", id: "gateway", display_name: "Gateway" }]
+                : [],
+          ),
+        );
+      }
+      return Promise.resolve(jsonResponse({}));
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    return fetchMock;
+  }
+
+  it("saving a default ground then confirming (OK) converges it to a library ref", async () => {
+    stubConvergence();
+    render(<BuilderView {...PROPS} />);
+    // New session → Library → Sites → Use Denver: creates an authored, default-named
+    // ground (one ref member) and opens its editor.
+    const start = await screen.findByTestId("builder-start");
+    fireEvent.click(within(start).getByRole("button", { name: /New session/i }));
+    fireEvent.click(await screen.findByLabelText(/^Library —/));
+    fireEvent.click(await screen.findByRole("tab", { name: "Sites" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Use: add to a ground segment" }));
+
+    const editor = await screen.findByTestId("builder-ground-editor");
+    // It is an authored DRAFT in the outline (editable), not yet a ref.
+    expect(screen.getByTitle(/Edit Ground segment/)).toBeTruthy();
+
+    // Save the whole set; wait for the save to land (onSaved annotates the window).
+    fireEvent.click(within(editor).getByRole("button", { name: "Save to library" }));
+    await within(editor).findByText(/in your library:/);
+
+    // OK = apply-then-close. The bound window is annotated, the set is unchanged
+    // and ref-expressible, so it converges: the draft row becomes a ref row
+    // (scheduling select + fork pencil), and the editable draft row is gone.
+    fireEvent.click(screen.getByRole("button", { name: "OK" }));
+    await waitFor(() =>
+      expect(screen.getByLabelText(/Scheduling for Ground segment/)).toBeTruthy(),
+    );
+    expect(screen.queryByTitle(/Edit Ground segment/)).toBeNull();
+  });
+});

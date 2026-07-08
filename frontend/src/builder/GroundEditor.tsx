@@ -39,12 +39,11 @@ import {
   draftGroundMember,
   draftSiteFromDocument,
   groundWarnings,
-  identifier,
   mintSiteMembers,
   nextMintIndex,
   parseSiteLines,
   refGroundMember,
-  siteSetObjectFromDraft,
+  siteSetWrapperFromDraft,
   stampLanPrefix,
   stampLoopbackAddress,
   type DraftGroundSet,
@@ -64,6 +63,9 @@ interface GroundEditorProps {
   workspace: Workspace;
   onOpenRule: (ruleId: string) => void;
   onConnect: (targetSegmentId: string) => void;
+  /** D7: a save of the whole set to the library, reported up so the bound
+   *  window can converge the set back to this ref on a user close. */
+  onSaved?: (ref: string, savedObject: Record<string, unknown>) => void;
 }
 
 /** Parse a comma/space separated tag or prefix list; empty tokens drop. */
@@ -82,6 +84,7 @@ export function GroundEditor({
   workspace,
   onOpenRule,
   onConnect,
+  onSaved,
 }: GroundEditorProps) {
   const [openCard, setOpenCard] = useState<string | null>("sites");
   const toggle = (id: string) => setOpenCard((prev) => (prev === id ? null : id));
@@ -158,8 +161,7 @@ export function GroundEditor({
   };
 
   const saveToLibrary = () => {
-    const id = identifier(draft.display_name) || identifier(draft.segment_id);
-    void librarySave.save({ site_set: siteSetObjectFromDraft(draft, id) });
+    void librarySave.save(siteSetWrapperFromDraft(draft), onSaved);
   };
 
   const stampLabel =
@@ -261,6 +263,15 @@ export function GroundEditor({
                             site_id: site.site_id,
                             label: site.display_name,
                           });
+                        }}
+                        onSaved={(ref) => {
+                          // D7 member-level: this window is bound to the segment,
+                          // not the member, so the authored member converges
+                          // immediately — flip it to a ref in place, keeping its
+                          // member_id and any scheduling_override (updateMember
+                          // patches, never mints).
+                          updateMember(member.member_id, { kind: "ref", ref, site: null });
+                          setEditingMember(null);
                         }}
                         onClose={() => setEditingMember(null)}
                       />

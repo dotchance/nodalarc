@@ -101,6 +101,16 @@ def _generated_sessions_dir() -> Path:
     return Path(get_platform_config().session_data_root) / "generated-sessions"
 
 
+def _saved_session_name(path: Path) -> str | None:
+    """The session.name recorded in a saved session file, or None if it cannot
+    be read — used to detect a filename collision between two distinct names."""
+    try:
+        doc = yaml.safe_load(path.read_text())
+        return doc.get("session", {}).get("name") if isinstance(doc, dict) else None
+    except OSError, yaml.YAMLError, AttributeError:
+        return None
+
+
 def _builder_catalog_roots() -> CatalogRoots:
     """Both catalog tiers for the builder's authoring endpoints.
 
@@ -3313,6 +3323,18 @@ async def builder_save_session(body: dict) -> dict:
         session_file = generated_file_path(
             _generated_sessions_dir(), f"_builder-{safe_display_stem(name)}.yaml"
         )
+        # safe_display_stem is lossy, so two DISTINCT session names can collapse
+        # to one filename. Re-saving the same name replaces its own file; a
+        # different name landing on that file would silently destroy the other
+        # saved session — refuse it instead.
+        if session_file.exists():
+            existing = await asyncio.to_thread(_saved_session_name, session_file)
+            if existing is not None and existing != name:
+                return _error_response(
+                    409,
+                    f"the name {name!r} collides with saved session {existing!r} "
+                    f"(both normalize to {safe_display_stem(name)!r}); choose a distinct name",
+                )
         await asyncio.to_thread(write_text_atomic, session_file, artifact.document_yaml)
     except CatalogPathError as exc:
         return _catalog_error(exc)

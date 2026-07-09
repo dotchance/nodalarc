@@ -842,6 +842,25 @@ def test_save_session_resolves_then_writes_canonical_yaml(monkeypatch, tmp_path)
     assert list(tmp_path.glob("_builder-*.yaml")) == saved
 
 
+def test_save_session_refuses_stem_collision_with_a_different_session(monkeypatch, tmp_path):
+    import vs_api.main as main
+
+    monkeypatch.setattr(main, "_generated_sessions_dir", lambda: tmp_path)
+    monkeypatch.setattr(main, "_session_manager", None)
+    raw = yaml.safe_load(_WALKER_PATH.read_text(encoding="utf-8"))  # name: earth-leo-walker
+    # A DIFFERENT session already occupies this name's file (distinct names that
+    # normalize to one lossy stem land here). Saving must refuse, never clobber.
+    occupied = tmp_path / "_builder-earth-leo-walker.yaml"
+    occupied.write_text("session:\n  name: someone-elses-session\nsegments: []\n")
+    response = client.post("/api/v1/builder/save-session", json={"document": raw})
+    assert response.status_code == 409
+    assert "collides" in response.json()["error"].lower()
+    assert "someone-elses-session" in occupied.read_text()  # the other file is untouched
+    # Re-saving over a file that holds the SAME name still replaces (no false collision).
+    occupied.write_text("session:\n  name: earth-leo-walker\nsegments: []\n")
+    assert client.post("/api/v1/builder/save-session", json={"document": raw}).status_code == 200
+
+
 def test_save_session_rejects_unresolvable_document(monkeypatch, tmp_path):
     import vs_api.main as main
 

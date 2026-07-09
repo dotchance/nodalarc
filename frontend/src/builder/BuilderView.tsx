@@ -2209,7 +2209,7 @@ export function BuilderView({
           </div>
         )}
       </div>
-      <div data-testid="builder-windows">
+      <div className="builder-windows" data-testid="builder-windows">
         {windows.map((win) => {
           const body = renderWindow(win.target);
           if (!body) return null;

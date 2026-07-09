@@ -30,8 +30,9 @@ it. Enforced by the create handlers in `BuilderView` and by
 
 **IG-2.** The editor that opens on create has the name field focused, with
 the seeded name selected. Typing renames; clicking elsewhere keeps the seed.
-Enforced by `EditorName` in `editorKit.tsx`, which takes the fresh-object
-id, and by the conformance tests.
+Enforced by `EditorName` in `editorKit.tsx`, which takes an `autoFocus` flag
+and focuses and selects the seeded name when it is set — the create gesture
+raises the flag for the object it just made — and by the conformance tests.
 
 **IG-3.** Creating never dead-ends. If a create or use gesture needs
 something that doesn't exist yet (a workspace, a ground segment to hold a
@@ -59,7 +60,7 @@ are the one exception, since they aren't editing controls.
 
 **IG-6.** One verb set: use, edit, inspect, export, delete. A family may
 support only some of these, but a verb always looks the same and sits in the
-same place. Don't invent a second style of edit button.
+same place. Don't invent a second style of edit button. Review only.
 
 **IG-7.** If the system already knows a value, fill it in and show it;
 don't make the user type it. The connect flow is the main case: when two
@@ -82,6 +83,7 @@ show up in the same place: the resolve status, the completeness rail, or an
 inline message on the owning object. Resolver errors are shown verbatim.
 This is the project's customer-trust rule applied to the UI; the builder
 must not look like it did something it didn't do, or hide something it did.
+Review only.
 
 **IG-10.** When an edit invalidates a derived value, the value is
 recomputed and the user is told. The concrete case: re-pointing a link
@@ -100,8 +102,9 @@ on Apply (or OK, which applies and closes). Every editor window ends in the
 same commit row — Apply, OK, Defaults, Cancel — with a state label that says
 "applied" or "unapplied changes", so the answer to "did my typing take?" is
 on screen, never inferred. Closing a window and cancelling it are the same
-action, and both discard. Defaults returns the window to the values it
-opened with. The canvas previews the working copy while a window is dirty —
+action, and both discard. Defaults returns the working copy to its baseline —
+the values at window open, advanced to the applied draft on each Apply. The
+canvas previews the working copy while a window is dirty —
 drag an orbit slider and the satellites move — with a status chip saying so;
 the preview is the resolver's expansion of the edited draft, never a
 builder-local calculation. Saving writes the applied session only, and the
@@ -109,7 +112,7 @@ save control says what is being left out when windows are dirty. Before this
 rule, edits were live and closing was ambiguous:
 the same gesture meant both "done" and "never mind", and the user couldn't
 tell which one they had performed. Enforced by the window buffers in
-`BuilderView`, `EditorApplyRow` in `editorKit.tsx`, and the conformance
+`useEditorWindows`, `EditorApplyRow` in `editorKit.tsx`, and the conformance
 tests.
 
 **IG-15.** The builder always shows the session's anatomy — what a session
@@ -147,13 +150,14 @@ highlighted. The reveal is wired at the one save path every family shares,
 so a new family inherits it without new wiring. This exists because session
 buttons scattered down the rail read as unrelated one-offs, and because a
 saved asset that just vanished into a long list convinced its author the
-save failed.
+save failed. Enforced by the toolbar/rail source-slice scan and the
+save-reveal wiring tests in `interactionGrammar.test.tsx`.
 
 ## Getting around
 
 **IG-12.** There is one selection. Picking an object in the tree, on the
 canvas, in the rail, or in an editor is the same act, and every view agrees
-about what is selected.
+about what is selected. Review only.
 
 **IG-13.** Anything you can see, you can edit within two gestures. Verified
 by the recorded UI drives; review only beyond that.

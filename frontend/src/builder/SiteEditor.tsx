@@ -53,16 +53,28 @@ export function SiteEditor({
   const [editorError, setEditorError] = useState<string | null>(null);
   const librarySave = useLibrarySave("sites");
 
-  const updateNode = (index: number, patch: Partial<DraftSiteNode>) => {
+  // Match on the stable node_id, never an array index: setNodeModel awaits a
+  // catalog fetch, and a concurrent add/remove during that gap would shift
+  // indices, landing the write on the wrong node (the N56 lost-edit class).
+  // The patch may be a function so a merge (installed counts) reads the
+  // current node from prev, not a stale render closure.
+  const updateNode = (
+    node_id: string,
+    patch: Partial<DraftSiteNode> | ((node: DraftSiteNode) => Partial<DraftSiteNode>),
+  ) => {
     onUpdate((prev) => ({
       ...prev,
-      nodes: prev.nodes.map((node, i) => (i === index ? { ...node, ...patch } : node)),
+      nodes: prev.nodes.map((node) =>
+        node.node_id === node_id
+          ? { ...node, ...(typeof patch === "function" ? patch(node) : patch) }
+          : node,
+      ),
     }));
   };
 
   // Switching a node's model re-seeds its installed mounts from the model's
   // faceplate — an explicit act, so the reset is expected.
-  const setNodeModel = async (index: number, ref: string) => {
+  const setNodeModel = async (node_id: string, ref: string) => {
     setEditorError(null);
     try {
       const { document } = await readCatalogObject(ref);
@@ -70,7 +82,7 @@ export function SiteEditor({
       const mounts = ((node?.terminals as Record<string, unknown>[] | undefined) ?? []).map(
         (mount) => [String(mount.id), Number(mount.count ?? 1)] as const,
       );
-      updateNode(index, { model_ref: ref, installed: Object.fromEntries(mounts) });
+      updateNode(node_id, { model_ref: ref, installed: Object.fromEntries(mounts) });
     } catch (e) {
       setEditorError(e instanceof Error ? e.message : String(e));
     }
@@ -164,7 +176,7 @@ export function SiteEditor({
         }
       />
 
-      {site.nodes.map((node, index) => (
+      {site.nodes.map((node) => (
         <EditorCard
           key={node.node_id}
           title={node.node_id}
@@ -178,7 +190,7 @@ export function SiteEditor({
                 onClick={() =>
                   onUpdate((prev) => ({
                     ...prev,
-                    nodes: prev.nodes.filter((_, i) => i !== index),
+                    nodes: prev.nodes.filter((n) => n.node_id !== node.node_id),
                   }))
                 }
               />
@@ -190,7 +202,7 @@ export function SiteEditor({
               label="model"
               ariaLabel={`${node.node_id} model`}
               value={node.model_ref}
-              onChange={(ref) => void setNodeModel(index, ref)}
+              onChange={(ref) => void setNodeModel(node.node_id, ref)}
               options={nodes.entries
                 .filter((entry) => !entry.error)
                 .map((entry) => ({
@@ -207,19 +219,21 @@ export function SiteEditor({
                 integer
                 suffix="installed"
                 onChange={(parsed) =>
-                  updateNode(index, { installed: { ...node.installed, [mount]: parsed } })
+                  updateNode(node.node_id, (n) => ({
+                    installed: { ...n.installed, [mount]: parsed },
+                  }))
                 }
               />
             ))}
             <Field
               label="lo0"
               value={node.lo0_ipv4}
-              onChange={(lo0_ipv4) => updateNode(index, { lo0_ipv4: lo0_ipv4.trim() })}
+              onChange={(lo0_ipv4) => updateNode(node.node_id, { lo0_ipv4: lo0_ipv4.trim() })}
             />
             <Field
               label="terr0"
               value={node.terr0_ipv4}
-              onChange={(terr0_ipv4) => updateNode(index, { terr0_ipv4: terr0_ipv4.trim() })}
+              onChange={(terr0_ipv4) => updateNode(node.node_id, { terr0_ipv4: terr0_ipv4.trim() })}
             />
         </EditorCard>
       ))}

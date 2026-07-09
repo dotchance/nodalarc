@@ -99,6 +99,32 @@ describe("N56 lost-edit: async writers read the latest draft (class A — throug
     expect(result.nodes.map((n) => n.node_id)).toEqual(["gw1", "gw2"]); // concurrent node survives
   });
 
+  it("SiteEditor.setNodeModel targets the node by id when an EARLIER node is removed mid-fetch", async () => {
+    // Concurrent-remove is the case an index-based write gets wrong: switching
+    // gw2's model (async) while gw1 is deleted shifts gw2 to index 0, so an
+    // index-1 write would miss it entirely. The stable-id match must still land.
+    stubFetch({
+      object: { document: { node: { terminals: [{ id: "access", count: 2 }] } } },
+      nodes: [{ ref: NODE_REF, family: "nodes", id: "gw", display_name: "GW" }],
+    });
+    const base = newDraftSiteObject(NODE_REF, {});
+    const mk = (id: string) => ({ ...base.nodes[0]!, node_id: id, model_ref: "user:nodes/old.yaml" });
+    const s0 = { ...base, nodes: [mk("gw1"), mk("gw2")] };
+    const onUpdate = vi.fn();
+    render(<SiteEditor site={s0} onUpdate={onUpdate} />);
+    await screen.findAllByRole("option", { name: "GW" });
+    fireEvent.change(screen.getByLabelText("gw2 model"), { target: { value: NODE_REF } });
+    await waitFor(() => expect(onUpdate).toHaveBeenCalled());
+    const updater = onUpdate.mock.calls[0]![0] as (p: typeof s0) => typeof s0;
+
+    // gw1 was removed DURING the fetch — only gw2 remains, now at index 0.
+    const result = updater({ ...s0, nodes: [s0.nodes[1]!] });
+    expect(result.nodes).toHaveLength(1);
+    const gw2 = result.nodes.find((n) => n.node_id === "gw2")!;
+    expect(gw2.model_ref).toBe(NODE_REF); // landed on gw2 by id, not the empty index-1 slot
+    expect(gw2.installed.access).toBe(2); // re-seeded from the fetched faceplate
+  });
+
   it("GroundEditor.setStampModel preserves a concurrent stamp edit", async () => {
     stubFetch({
       object: { document: { node: { terminals: [{ id: "access", count: 1 }] } } },

@@ -48,14 +48,16 @@ import {
   stampLoopbackAddress,
   type DraftGroundSet,
   type DraftGroundSite,
-  type DraftSiteObject,
   type SchedulingPresetKey,
   type Workspace,
 } from "./workspace";
 
 interface GroundEditorProps {
   draft: DraftGroundSet;
-  onUpdate: (patch: Partial<DraftGroundSet>) => void;
+  /** Functional-only (N56): the caller reads the LATEST draft, never a stale
+   *  render-closure, so a concurrent edit during an in-flight fetch (forkMember,
+   *  setStampModel, the member save-flip) survives. */
+  onUpdate: (update: (prev: DraftGroundSet) => DraftGroundSet) => void;
   onRemove: () => void;
   /** IG-2: focus the name when a create gesture opened this editor. */
   autoFocusName?: boolean;
@@ -100,18 +102,19 @@ export function GroundEditor({
   const warnings = groundWarnings(draft);
 
   const updateMember = (memberId: string, patch: Partial<DraftGroundSite>) => {
-    onUpdate({
-      members: draft.members.map((member) =>
+    onUpdate((prev) => ({
+      ...prev,
+      members: prev.members.map((member) =>
         member.member_id === memberId ? { ...member, ...patch } : member,
       ),
-    });
+    }));
   };
 
   const addPastedSites = () => {
     const { rows, errors } = parseSiteLines(pasteText);
     setPasteErrors(errors);
     if (rows.length > 0) {
-      onUpdate({ members: [...draft.members, ...mintSiteMembers(draft, rows)] });
+      onUpdate((prev) => ({ ...prev, members: [...prev.members, ...mintSiteMembers(prev, rows)] }));
       setPasteText("");
     }
   };
@@ -123,7 +126,10 @@ export function GroundEditor({
       setEditorError(`${siteId} is already placed — a site is a place and exists once`);
       return;
     }
-    onUpdate({ members: [...draft.members, refGroundMember(ref, siteId, label, summary)] });
+    onUpdate((prev) => ({
+      ...prev,
+      members: [...prev.members, refGroundMember(ref, siteId, label, summary)],
+    }));
   };
 
   // Customize a referenced site: fork the document into an authored member.
@@ -133,10 +139,17 @@ export function GroundEditor({
       if (!member.ref) return;
       const { document } = await readCatalogObject(member.ref);
       const forked = draftGroundMember(draftSiteFromDocument(document));
-      forked.scheduling_override = member.scheduling_override;
-      onUpdate({
-        members: draft.members.map((m) => (m.member_id === member.member_id ? forked : m)),
-      });
+      onUpdate((prev) => ({
+        ...prev,
+        // Carry the override from the LATEST matched member, not the click-time
+        // closure — a concurrent per-site scheduling edit during the fork fetch
+        // must survive (N56).
+        members: prev.members.map((m) =>
+          m.member_id === member.member_id
+            ? { ...forked, scheduling_override: m.scheduling_override }
+            : m,
+        ),
+      }));
       setEditingMember(forked.member_id);
     } catch (e) {
       setEditorError(e instanceof Error ? e.message : String(e));
@@ -152,9 +165,10 @@ export function GroundEditor({
       const mounts = ((node?.terminals as Record<string, unknown>[] | undefined) ?? []).map(
         (mount) => [String(mount.id), Number(mount.count ?? 1)] as const,
       );
-      onUpdate({
-        stamp: { ...draft.stamp, node_ref: ref, installed: Object.fromEntries(mounts) },
-      });
+      onUpdate((prev) => ({
+        ...prev,
+        stamp: { ...prev.stamp, node_ref: ref, installed: Object.fromEntries(mounts) },
+      }));
     } catch (e) {
       setEditorError(e instanceof Error ? e.message : String(e));
     }
@@ -171,7 +185,7 @@ export function GroundEditor({
     <div className="builder-inspector-stack" data-testid="builder-ground-editor">
       <EditorName
         value={draft.display_name}
-        onChange={(display_name) => onUpdate({ display_name })}
+        onChange={(display_name) => onUpdate((prev) => ({ ...prev, display_name }))}
         autoFocus={autoFocusName}
       />
 
@@ -230,11 +244,10 @@ export function GroundEditor({
                       size={12}
                       label={`Remove ${member.label}`}
                       onClick={() =>
-                        onUpdate({
-                          members: draft.members.filter(
-                            (m) => m.member_id !== member.member_id,
-                          ),
-                        })
+                        onUpdate((prev) => ({
+                          ...prev,
+                          members: prev.members.filter((m) => m.member_id !== member.member_id),
+                        }))
                       }
                     />
                   </div>
@@ -256,14 +269,21 @@ export function GroundEditor({
                     <div className="builder-site-embedded">
                       <SiteEditor
                         site={member.site}
-                        onUpdate={(patch) => {
-                          const site = { ...(member.site as DraftSiteObject), ...patch };
-                          updateMember(member.member_id, {
-                            site,
-                            site_id: site.site_id,
-                            label: site.display_name,
-                          });
-                        }}
+                        onUpdate={(update) =>
+                          // Thread SiteEditor's functional update through the
+                          // ground's own — find the member in the LATEST members
+                          // and update its LATEST site, so a concurrent edit
+                          // (this member or another) during a site-level fetch
+                          // survives (N56).
+                          onUpdate((prev) => ({
+                            ...prev,
+                            members: prev.members.map((m) => {
+                              if (m.member_id !== member.member_id || !m.site) return m;
+                              const site = update(m.site);
+                              return { ...m, site, site_id: site.site_id, label: site.display_name };
+                            }),
+                          }))
+                        }
                         onSaved={(ref) => {
                           // D7 member-level: this window is bound to the segment,
                           // not the member, so the authored member converges
@@ -343,7 +363,7 @@ export function GroundEditor({
               label="on body"
               ariaLabel="Stamp body"
               value={draft.stamp.body}
-              onChange={(body) => onUpdate({ stamp: { ...draft.stamp, body } })}
+              onChange={(body) => onUpdate((prev) => ({ ...prev, stamp: { ...prev.stamp, body } }))}
               bodies={bodies}
             />
             <SelectField
@@ -368,12 +388,13 @@ export function GroundEditor({
                 integer
                 suffix="installed"
                 onChange={(parsed) =>
-                  onUpdate({
+                  onUpdate((prev) => ({
+                    ...prev,
                     stamp: {
-                      ...draft.stamp,
-                      installed: { ...draft.stamp.installed, [mount]: parsed },
+                      ...prev.stamp,
+                      installed: { ...prev.stamp.installed, [mount]: parsed },
                     },
-                  })
+                  }))
                 }
               />
             ))}
@@ -382,7 +403,7 @@ export function GroundEditor({
               value={draft.stamp.lan_base}
               suffix=".site.0/24"
               onChange={(lan_base) =>
-                onUpdate({ stamp: { ...draft.stamp, lan_base: lan_base.trim() } })
+                onUpdate((prev) => ({ ...prev, stamp: { ...prev.stamp, lan_base: lan_base.trim() } }))
               }
             />
             <Field
@@ -390,7 +411,10 @@ export function GroundEditor({
               value={draft.stamp.loopback_base}
               suffix=".0.n/32"
               onChange={(loopback_base) =>
-                onUpdate({ stamp: { ...draft.stamp, loopback_base: loopback_base.trim() } })
+                onUpdate((prev) => ({
+                  ...prev,
+                  stamp: { ...prev.stamp, loopback_base: loopback_base.trim() },
+                }))
               }
             />
             <div className="builder-site-derived">
@@ -414,7 +438,7 @@ export function GroundEditor({
               ariaLabel="Scheduling preset"
               value={draft.scheduling_preset}
               onChange={(value) =>
-                onUpdate({ scheduling_preset: value as SchedulingPresetKey })
+                onUpdate((prev) => ({ ...prev, scheduling_preset: value as SchedulingPresetKey }))
               }
               options={Object.entries(SCHEDULING_PRESETS).map(([key, preset]) => ({
                 value: key,
@@ -441,14 +465,14 @@ export function GroundEditor({
               label="originated IPv4 prefixes"
               placeholder="198.51.100.0/24, 203.0.113.0/24"
               value={draft.originated_ipv4.join(", ")}
-              onChange={(value) => onUpdate({ originated_ipv4: tokenList(value) })}
+              onChange={(value) => onUpdate((prev) => ({ ...prev, originated_ipv4: tokenList(value) }))}
             />
             <Field
               stack
               label="segment tags — link rules select on these"
               placeholder="teleport, edge"
               value={draft.tags.join(", ")}
-              onChange={(value) => onUpdate({ tags: tokenList(value) })}
+              onChange={(value) => onUpdate((prev) => ({ ...prev, tags: tokenList(value) }))}
             />
       </EditorCard>
 

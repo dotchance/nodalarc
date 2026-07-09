@@ -38,7 +38,11 @@ import {
 
 interface ConstellationEditorProps {
   draft: DraftConstellation;
-  onUpdate: (patch: Partial<DraftConstellation>) => void;
+  /** Functional-only (N56): reached from an async path (customizeNode's fetch,
+   *  the node save-then-ref), so it reads the LATEST draft, never a stale
+   *  closure. `onUpdateOrbit` stays value-form — orbit params are sync-only
+   *  (NumberFields), never written from an async writer. */
+  onUpdate: (update: (prev: DraftConstellation) => DraftConstellation) => void;
   onUpdateOrbit: (patch: Partial<DraftOrbit>) => void;
   onRemove: () => void;
   /** IG-2: focus the name when a create gesture opened this editor. */
@@ -83,7 +87,7 @@ export function ConstellationEditor({
       // A forked copy is a new object: never claim the original's identity.
       node_draft.id = identifier(`${node_draft.id}-custom`);
       node_draft.display_name = `${node_draft.display_name} (custom)`;
-      onUpdate({ node_draft });
+      onUpdate((prev) => ({ ...prev, node_draft }));
       librarySave.reset();
     } catch (e) {
       setForkError(e instanceof Error ? e.message : String(e));
@@ -96,7 +100,7 @@ export function ConstellationEditor({
   const saveNodeToLibrary = () => {
     if (!draft.node_draft) return;
     void librarySave.save({ node: nodeObjectFromDraft(draft.node_draft) }, (ref) =>
-      onUpdate({ node_ref: ref, node_draft: null }),
+      onUpdate((prev) => ({ ...prev, node_ref: ref, node_draft: null })),
     );
   };
 
@@ -104,7 +108,7 @@ export function ConstellationEditor({
     <div className="builder-inspector-stack" data-testid="builder-editor">
       <EditorName
         value={draft.display_name}
-        onChange={(display_name) => onUpdate({ display_name })}
+        onChange={(display_name) => onUpdate((prev) => ({ ...prev, display_name }))}
         autoFocus={autoFocusName}
       />
 
@@ -249,26 +253,31 @@ export function ConstellationEditor({
             <NumberField
               label="planes"
               value={draft.planes}
-              onChange={(planes) => onUpdate({ planes: Math.max(1, Math.round(planes)) })}
+              onChange={(planes) =>
+                onUpdate((prev) => ({ ...prev, planes: Math.max(1, Math.round(planes)) }))
+              }
             />
             <NumberField
               label="slots per plane"
               value={draft.slots_per_plane}
               onChange={(slots_per_plane) =>
-                onUpdate({ slots_per_plane: Math.max(1, Math.round(slots_per_plane)) })
+                onUpdate((prev) => ({
+                  ...prev,
+                  slots_per_plane: Math.max(1, Math.round(slots_per_plane)),
+                }))
               }
             />
             <NumberField
               label="RAAN spacing"
               value={draft.raan_spacing_deg}
               suffix="deg"
-              onChange={(raan_spacing_deg) => onUpdate({ raan_spacing_deg })}
+              onChange={(raan_spacing_deg) => onUpdate((prev) => ({ ...prev, raan_spacing_deg }))}
             />
             <NumberField
               label="phase offset"
               value={draft.phase_offset_deg}
               suffix="deg"
-              onChange={(phase_offset_deg) => onUpdate({ phase_offset_deg })}
+              onChange={(phase_offset_deg) => onUpdate((prev) => ({ ...prev, phase_offset_deg }))}
             />
       </EditorCard>
 
@@ -286,7 +295,15 @@ export function ConstellationEditor({
               <>
                 <NodeEditor
                   draft={draft.node_draft}
-                  onChange={(node_draft) => onUpdate({ node_draft })}
+                  onChange={(update) =>
+                    // Thread NodeEditor's functional update through the
+                    // constellation's own, reading the LATEST node_draft so a
+                    // concurrent edit during a terminal import/save survives (N56).
+                    onUpdate((prev) => ({
+                      ...prev,
+                      node_draft: prev.node_draft ? update(prev.node_draft) : prev.node_draft,
+                    }))
+                  }
                 />
                 <div className="builder-preset-row">
                   <Button
@@ -296,7 +313,7 @@ export function ConstellationEditor({
                   >
                     {librarySave.label("Save to library")}
                   </Button>
-                  <Button onClick={() => onUpdate({ node_draft: null })}>
+                  <Button onClick={() => onUpdate((prev) => ({ ...prev, node_draft: null }))}>
                     Discard customization
                   </Button>
                 </div>
@@ -308,7 +325,7 @@ export function ConstellationEditor({
                   label="model"
                   ariaLabel="Node primitive"
                   value={draft.node_ref}
-                  onChange={(node_ref) => onUpdate({ node_ref })}
+                  onChange={(node_ref) => onUpdate((prev) => ({ ...prev, node_ref }))}
                   options={nodes.entries
                     .filter((entry) => !entry.error)
                     .map((entry) => ({

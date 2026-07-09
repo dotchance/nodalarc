@@ -214,8 +214,8 @@ describe("EditorCard adoption smoke: migrated editors render and their cards beh
     render(
       <SiteEditor
         site={site}
-        onUpdate={(patch) => {
-          updated = { ...updated, ...patch } as typeof site;
+        onUpdate={(update) => {
+          updated = update(updated);
         }}
       />,
     );
@@ -293,8 +293,8 @@ describe("P7e: BodySelect failure contract + node-id collision (N27)", () => {
     render(
       <SiteEditor
         site={site}
-        onUpdate={(patch) => {
-          added = { ...site, ...patch } as typeof site;
+        onUpdate={(update) => {
+          added = update(site);
         }}
       />,
     );
@@ -420,8 +420,8 @@ describe("P7g: save-to-library convergence wiring (D7)", () => {
         workspace={newWorkspace("t")}
         onOpenRule={() => {}}
         onConnect={() => {}}
-        onUpdate={(patch) => {
-          updated = { ...updated, ...patch } as typeof draft;
+        onUpdate={(update) => {
+          updated = update(updated);
         }}
         onRemove={() => {}}
       />,

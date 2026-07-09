@@ -28,7 +28,10 @@ import {
 
 interface SiteEditorProps {
   site: DraftSiteObject;
-  onUpdate: (patch: Partial<DraftSiteObject>) => void;
+  /** Functional-only (N56): the caller reads the LATEST draft, never a stale
+   *  render-closure, so a concurrent edit during an in-flight fetch survives.
+   *  Reseed/replace is explicit — `onUpdate(() => replacement)`. */
+  onUpdate: (update: (prev: DraftSiteObject) => DraftSiteObject) => void;
   /** Standalone (Library) mode shows save-to-library + close. */
   onClose?: () => void;
   /** IG-2: focus the name when a create gesture opened this editor. */
@@ -51,9 +54,10 @@ export function SiteEditor({
   const librarySave = useLibrarySave("sites");
 
   const updateNode = (index: number, patch: Partial<DraftSiteNode>) => {
-    onUpdate({
-      nodes: site.nodes.map((node, i) => (i === index ? { ...node, ...patch } : node)),
-    });
+    onUpdate((prev) => ({
+      ...prev,
+      nodes: prev.nodes.map((node, i) => (i === index ? { ...node, ...patch } : node)),
+    }));
   };
 
   // Switching a node's model re-seeds its installed mounts from the model's
@@ -73,24 +77,27 @@ export function SiteEditor({
   };
 
   const addNode = () => {
-    const first = site.nodes[0];
-    // Pick the first free gw{k} against the taken set — never length+1, which
-    // re-collides after a delete-then-add (N27) and would duplicate the
-    // node_id React key.
-    const taken = new Set(site.nodes.map((node) => node.node_id));
-    let k = 1;
-    while (taken.has(`gw${k}`)) k += 1;
-    onUpdate({
-      nodes: [
-        ...site.nodes,
-        {
-          node_id: `gw${k}`,
-          model_ref: first?.model_ref ?? "",
-          installed: first ? { ...first.installed } : {},
-          lo0_ipv4: "",
-          terr0_ipv4: "",
-        },
-      ],
+    onUpdate((prev) => {
+      const first = prev.nodes[0];
+      // Pick the first free gw{k} against the taken set — never length+1, which
+      // re-collides after a delete-then-add (N27) and would duplicate the
+      // node_id React key.
+      const taken = new Set(prev.nodes.map((node) => node.node_id));
+      let k = 1;
+      while (taken.has(`gw${k}`)) k += 1;
+      return {
+        ...prev,
+        nodes: [
+          ...prev.nodes,
+          {
+            node_id: `gw${k}`,
+            model_ref: first?.model_ref ?? "",
+            installed: first ? { ...first.installed } : {},
+            lo0_ipv4: "",
+            terr0_ipv4: "",
+          },
+        ],
+      };
     });
   };
 
@@ -104,7 +111,11 @@ export function SiteEditor({
       <EditorName
         value={site.display_name}
         onChange={(display_name) =>
-          onUpdate({ display_name, site_id: identifier(display_name) || site.site_id })
+          onUpdate((prev) => ({
+            ...prev,
+            display_name,
+            site_id: identifier(display_name) || prev.site_id,
+          }))
         }
         autoFocus={autoFocusName}
       />
@@ -112,43 +123,44 @@ export function SiteEditor({
         label="on body"
         ariaLabel="Site body"
         value={site.body}
-        onChange={(body) => onUpdate({ body })}
+        onChange={(body) => onUpdate((prev) => ({ ...prev, body }))}
         bodies={bodies}
       />
       <NumberField
         label="latitude"
         value={site.lat_deg}
         suffix="deg"
-        onChange={(lat_deg) => onUpdate({ lat_deg })}
+        onChange={(lat_deg) => onUpdate((prev) => ({ ...prev, lat_deg }))}
       />
       <NumberField
         label="longitude"
         value={site.lon_deg}
         suffix="deg"
-        onChange={(lon_deg) => onUpdate({ lon_deg })}
+        onChange={(lon_deg) => onUpdate((prev) => ({ ...prev, lon_deg }))}
       />
       <NumberField
         label="altitude"
         value={site.alt_m}
         step={10}
         suffix="m"
-        onChange={(alt_m) => onUpdate({ alt_m })}
+        onChange={(alt_m) => onUpdate((prev) => ({ ...prev, alt_m }))}
       />
       <Field
         label="site lan"
         value={site.lan_ipv4}
-        onChange={(lan_ipv4) => onUpdate({ lan_ipv4: lan_ipv4.trim() })}
+        onChange={(lan_ipv4) => onUpdate((prev) => ({ ...prev, lan_ipv4: lan_ipv4.trim() }))}
       />
       <Field
         label="tags"
         value={site.tags.join(", ")}
         onChange={(value) =>
-          onUpdate({
+          onUpdate((prev) => ({
+            ...prev,
             tags: value
               .split(/[,\s]+/)
               .map((tag) => tag.trim())
               .filter((tag) => tag.length > 0),
-          })
+          }))
         }
       />
 
@@ -164,7 +176,10 @@ export function SiteEditor({
                 size={12}
                 label={`Remove ${node.node_id}`}
                 onClick={() =>
-                  onUpdate({ nodes: site.nodes.filter((_, i) => i !== index) })
+                  onUpdate((prev) => ({
+                    ...prev,
+                    nodes: prev.nodes.filter((_, i) => i !== index),
+                  }))
                 }
               />
             )

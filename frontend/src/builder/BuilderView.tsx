@@ -1283,9 +1283,7 @@ export function BuilderView({
               onOpenRule={openRule}
               onConnect={(other) => connect(draft.segment_id, other)}
               draft={draft}
-              onUpdate={(patch) =>
-                patchBuffer(key, applied, (d) => ({ ...d, ...patch }))
-              }
+              onUpdate={(update) => patchBuffer(key, applied, update)}
               onUpdateOrbit={(patch) =>
                 patchBuffer(key, applied, (d) => ({
                   ...d,
@@ -1323,9 +1321,7 @@ export function BuilderView({
               onOpenRule={openRule}
               onConnect={(other) => connect(draft.segment_id, other)}
               draft={draft}
-              onUpdate={(patch) =>
-                patchBuffer(key, applied, (d) => ({ ...d, ...patch }))
-              }
+              onUpdate={(update) => patchBuffer(key, applied, update)}
               onSaved={(ref, snapshot) => annotateWindowSaved(key, ref, snapshot)}
               onRemove={() => {
                 removeGroundDraft(draft.segment_id);
@@ -1596,7 +1592,11 @@ export function BuilderView({
             content: (
               <TerminalEditor
                 draft={libraryEditor.draft}
-                onChange={(draft) => setLibraryEditor({ kind: "terminal", draft })}
+                onChange={(update) =>
+                  setLibraryEditor((prev) =>
+                    prev?.kind === "terminal" ? { kind: "terminal", draft: update(prev.draft) } : prev,
+                  )
+                }
                 catalog={terminalCatalog.entries}
                 onSaved={() => {
                   setLibraryEditor(null);
@@ -1619,11 +1619,10 @@ export function BuilderView({
                 key="library-site"
                 autoFocusName
                 site={libraryEditor.draft}
-                onUpdate={(patch) =>
-                  setLibraryEditor({
-                    kind: "site",
-                    draft: { ...libraryEditor.draft, ...patch },
-                  })
+                onUpdate={(update) =>
+                  setLibraryEditor((prev) =>
+                    prev?.kind === "site" ? { kind: "site", draft: update(prev.draft) } : prev,
+                  )
                 }
                 onClose={() => {
                   setLibraryEditor(null);
@@ -1641,7 +1640,11 @@ export function BuilderView({
                 key="library-node"
                 autoFocusName
                 draft={libraryEditor.draft}
-                onChange={(draft) => setLibraryEditor({ kind: "node", draft })}
+                onChange={(update) =>
+                  setLibraryEditor((prev) =>
+                    prev?.kind === "node" ? { kind: "node", draft: update(prev.draft) } : prev,
+                  )
+                }
               />
               <div className="builder-preset-row">
                 <Button

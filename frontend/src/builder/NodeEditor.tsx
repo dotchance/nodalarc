@@ -46,7 +46,10 @@ function nextMountId(draft: DraftNode, role: string): string {
 
 interface NodeEditorProps {
   draft: DraftNode;
-  onChange: (draft: DraftNode) => void;
+  /** Functional-only (N56): the caller reads the LATEST draft, never a stale
+   *  render-closure, so a concurrent edit during an in-flight fetch (mounting a
+   *  freshly imported/authored terminal) survives. */
+  onChange: (update: (prev: DraftNode) => DraftNode) => void;
   /** IG-2: focus the name when a create gesture opened this editor. */
   autoFocusName?: boolean;
 }
@@ -61,39 +64,40 @@ export function NodeEditor({ draft, onChange, autoFocusName = false }: NodeEdito
   const [importError, setImportError] = useState<string | null>(null);
 
   const addOrIncrement = (terminalRef: string) => {
-    const existing = draft.terminals.find(
-      (m) => m.terminal_ref === terminalRef && m.role === pickerRole,
-    );
-    if (existing) {
-      onChange({
-        ...draft,
-        terminals: draft.terminals.map((m) =>
-          m === existing ? { ...m, count: m.count + 1 } : m,
-        ),
-      });
-    } else {
-      onChange({
-        ...draft,
+    onChange((prev) => {
+      const existing = prev.terminals.find(
+        (m) => m.terminal_ref === terminalRef && m.role === pickerRole,
+      );
+      if (existing) {
+        return {
+          ...prev,
+          terminals: prev.terminals.map((m) =>
+            m === existing ? { ...m, count: m.count + 1 } : m,
+          ),
+        };
+      }
+      return {
+        ...prev,
         terminals: [
-          ...draft.terminals,
+          ...prev.terminals,
           {
-            mount_id: nextMountId(draft, pickerRole),
+            mount_id: nextMountId(prev, pickerRole),
             role: pickerRole,
             terminal_ref: terminalRef,
             count: 1,
           },
         ],
-      });
-    }
+      };
+    });
   };
 
   const updateMount = (mountId: string, patch: Partial<DraftTerminalMount>) => {
-    onChange({
-      ...draft,
-      terminals: draft.terminals.map((m) =>
+    onChange((prev) => ({
+      ...prev,
+      terminals: prev.terminals.map((m) =>
         m.mount_id === mountId ? { ...m, ...patch } : m,
       ),
-    });
+    }));
   };
 
   return (
@@ -101,14 +105,14 @@ export function NodeEditor({ draft, onChange, autoFocusName = false }: NodeEdito
       <EditorName
         label="node name"
         value={draft.display_name}
-        onChange={(value) => onChange({ ...draft, display_name: value, id: value })}
+        onChange={(value) => onChange((prev) => ({ ...prev, display_name: value, id: value }))}
         autoFocus={autoFocusName}
       />
       <SelectField
         label="forwarding"
         ariaLabel="Forwarding class"
         value={draft.forwarding}
-        onChange={(value) => onChange({ ...draft, forwarding: value as Forwarding })}
+        onChange={(value) => onChange((prev) => ({ ...prev, forwarding: value as Forwarding }))}
         options={(Object.keys(FORWARDING_MODES) as Forwarding[]).map((value) => ({
           value,
           label: value + (FORWARDING_MODES[value].gated ? " — runtime-gated" : ""),
@@ -180,10 +184,10 @@ export function NodeEditor({ draft, onChange, autoFocusName = false }: NodeEdito
                 <Button
                   variant="danger"
                   onClick={() => {
-                    onChange({
-                      ...draft,
-                      terminals: draft.terminals.filter((m) => m.mount_id !== mount.mount_id),
-                    });
+                    onChange((prev) => ({
+                      ...prev,
+                      terminals: prev.terminals.filter((m) => m.mount_id !== mount.mount_id),
+                    }));
                     setOpenMount(null);
                   }}
                 >
@@ -204,7 +208,7 @@ export function NodeEditor({ draft, onChange, autoFocusName = false }: NodeEdito
               <Button
                 variant="danger"
                 onClick={() => {
-                  onChange({ ...draft, ethernet: draft.ethernet.filter((p) => p !== port) });
+                  onChange((prev) => ({ ...prev, ethernet: prev.ethernet.filter((p) => p !== port) }));
                   setOpenMount(null);
                 }}
               >
@@ -217,12 +221,14 @@ export function NodeEditor({ draft, onChange, autoFocusName = false }: NodeEdito
       <div className="builder-preset-row">
         <Button onClick={() => setPickerOpen((v) => !v)}>+ port</Button>
         <Button
-          onClick={() => {
-            const taken = new Set(draft.ethernet);
-            let index = 0;
-            while (taken.has(`terr${index}`)) index++;
-            onChange({ ...draft, ethernet: [...draft.ethernet, `terr${index}`] });
-          }}
+          onClick={() =>
+            onChange((prev) => {
+              const taken = new Set(prev.ethernet);
+              let index = 0;
+              while (taken.has(`terr${index}`)) index++;
+              return { ...prev, ethernet: [...prev.ethernet, `terr${index}`] };
+            })
+          }
         >
           + lan
         </Button>
@@ -310,7 +316,7 @@ export function NodeEditor({ draft, onChange, autoFocusName = false }: NodeEdito
           {terminalDraft && (
             <TerminalEditor
               draft={terminalDraft}
-              onChange={setTerminalDraft}
+              onChange={(update) => setTerminalDraft((prev) => (prev ? update(prev) : prev))}
               catalog={terminals.entries}
               onSaved={(ref) => {
                 setTerminalDraft(null);

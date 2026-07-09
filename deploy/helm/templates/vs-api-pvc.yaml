@@ -4,11 +4,19 @@
 # silently wiped a user's saved terminals and sessions on every VS-API roll.
 # StorageClass is configurable via values.yaml — local-path for single-node,
 # Longhorn/Rook for multi-node.
+#
+# resource-policy: keep — Helm must NOT delete this PVC on `helm uninstall` or
+# when a chart no longer templates it (e.g. deploying an older chart). Without
+# it, a chart-swap or teardown deletes the PVC and local-path reclaims (wipes)
+# the backing data. Deliberate teardown of user data is a separate, explicit
+# operation, never a side effect of an upgrade/uninstall.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: nodalarc-session-data
   namespace: {{ .Values.namespace }}
+  annotations:
+    "helm.sh/resource-policy": keep
   labels:
     app: nodalarc-vs-api
 spec:

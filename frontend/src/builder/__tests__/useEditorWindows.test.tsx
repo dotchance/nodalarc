@@ -133,7 +133,7 @@ describe("useEditorWindows — buffered editing (M18)", () => {
     expect(result.current.ws.workspace!.start_time).not.toBe(future);
   });
 
-  it("(IG-4/N41) windows are keyed by object identity: distinct objects → distinct windows; re-open focuses", () => {
+  it("(IG-4/N41) windows are keyed by object identity: distinct objects → distinct windows; re-open refreshes in place", () => {
     const { result } = renderHook(() => useHarness());
     act(() => result.current.ws.startNew("t"));
     // Two REAL segments, so the reconciliation pass does not prune their windows.
@@ -146,10 +146,12 @@ describe("useEditorWindows — buffered editing (M18)", () => {
     act(() => result.current.editor.openEditor(a));
     act(() => result.current.editor.openEditor(b));
     expect(result.current.editor.windows.map((w) => w.key)).toEqual([targetKey(a), targetKey(b)]);
-    // Re-opening the same object FOCUSES (moves to the top of the stack), never
-    // duplicates — the window is keyed by object id, not React position.
-    act(() => result.current.editor.openEditor(a));
-    expect(result.current.editor.windows.map((w) => w.key)).toEqual([targetKey(b), targetKey(a)]);
+    // Re-opening the same object refreshes it IN PLACE — never duplicates, and
+    // (N47) never reorders the array: stacking is the raise stack's job now, not
+    // React position. The re-open focus is a raiseWindow call (pinned in
+    // windowStack.test.ts), so the array order is untouched.
+    act(() => result.current.editor.openEditor({ ...a, id: s0!.segment_id }));
+    expect(result.current.editor.windows.map((w) => w.key)).toEqual([targetKey(a), targetKey(b)]);
     expect(result.current.editor.windows).toHaveLength(2);
   });
 });

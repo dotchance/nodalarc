@@ -12,8 +12,13 @@
  * implementation and one keyboard/pointer behavior.
  */
 
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { IconButton } from "./Button";
+import { addWindow, raiseWindow, removeWindow, useWindowRank } from "./windowStack";
+
+// A stable fallback id for windows that don't pass one (e.g. the live LogPanel,
+// the only window in its view). Module-scoped so ids never collide across mounts.
+let _nextWindowId = 0;
 
 export interface WindowGeometry {
   x: number;
@@ -32,6 +37,10 @@ interface FloatingWindowProps {
   minHeight?: number;
   /** localStorage key suffix; geometry persists as nodalarc.window.<key>. */
   persistKey?: string;
+  /** Stable identity in the raise stack (N47). The builder passes its window
+   *  key so a re-open can raise the same window; a lone window (LogPanel) omits
+   *  it and gets a generated id. */
+  raiseId?: string;
   children: ReactNode;
 }
 
@@ -62,11 +71,26 @@ export function FloatingWindow({
   minWidth = 280,
   minHeight = 160,
   persistKey,
+  raiseId,
   children,
 }: FloatingWindowProps) {
   const [geom, setGeom] = useState<WindowGeometry>(() => loadGeometry(persistKey, initial));
   const geomRef = useRef(geom);
   geomRef.current = geom;
+
+  // The window's identity in the raise stack (N47): the passed id, or a stable
+  // generated one. Register at the top on mount, drop on unmount; the rank is
+  // this window's z offset within the zWindow band.
+  const idRef = useRef<string | null>(null);
+  if (idRef.current === null) idRef.current = raiseId ?? `floating-${_nextWindowId++}`;
+  const windowId = raiseId ?? idRef.current;
+  // Register BEFORE paint (useLayoutEffect), so a freshly opened window never
+  // paints one frame at the pre-registration rank of -1 (z one below the band).
+  useLayoutEffect(() => {
+    addWindow(windowId);
+    return () => removeWindow(windowId);
+  }, [windowId]);
+  const rank = useWindowRank(windowId);
 
   const persist = useCallback(() => {
     if (!persistKey || typeof localStorage === "undefined") return;
@@ -151,7 +175,18 @@ export function FloatingWindow({
       className="ui-window"
       role="dialog"
       aria-label={typeof title === "string" ? title : undefined}
-      style={{ left: geom.x, top: geom.y, width: geom.w, height: geom.h }}
+      // Capture so a pointerdown anywhere in the window raises it even when a
+      // child (a resize edge) stops propagation. --window-z-bump is the rank.
+      onPointerDownCapture={() => raiseWindow(windowId)}
+      style={
+        {
+          left: geom.x,
+          top: geom.y,
+          width: geom.w,
+          height: geom.h,
+          "--window-z-bump": rank,
+        } as React.CSSProperties
+      }
     >
       <header className="ui-window-title" onPointerDown={beginDrag}>
         <strong className="ui-window-title-text">{title}</strong>

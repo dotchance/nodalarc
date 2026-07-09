@@ -12,6 +12,7 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
+import { raiseWindow } from "../ui/windowStack";
 import {
   overlayBuffers,
   staleBufferKeys,
@@ -165,17 +166,22 @@ export function useEditorWindows({
   const [windows, setWindows] = useState<EditorWindow[]>([]);
   const openEditor = (target: EditorTarget) => {
     const key = targetKey(target);
+    // Re-open FOCUSES via the one stacking mechanism — the raise stack (N47),
+    // not an array reorder. The side effect stays outside the updater (StrictMode
+    // double-invokes updater bodies); a fresh window rises on mount instead.
+    if (windows.some((w) => w.key === key)) raiseWindow(key);
     setWindows((prev) => {
       const existing = prev.find((w) => w.key === key);
       if (existing) {
-        // Focus = move to the top of the stack; refresh the target payload.
-        return [...prev.filter((w) => w.key !== key), { ...existing, target }];
+        // Refresh the target payload IN PLACE — array order no longer decides
+        // stacking, so the window keeps its slot and the raise stack owns z.
+        return prev.map((w) => (w.key === key ? { ...w, target } : w));
       }
       const n = prev.length;
-      return [
-        ...prev,
-        { key, target, x: 440 + (n % 6) * 40, y: 84 + (n % 6) * 32 },
-      ];
+      // Spawn cascade: monotonic and clamped (the old %6 repeated exactly every
+      // sixth window); a far-out window is pulled back so it stays on screen.
+      const step = Math.min(n, 8);
+      return [...prev, { key, target, x: 440 + step * 40, y: 84 + step * 32 }];
     });
   };
   /** Record a library save against its window (D7): the close-time convergence

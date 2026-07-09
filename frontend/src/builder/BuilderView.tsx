@@ -2220,6 +2220,7 @@ export function BuilderView({
           return (
             <FloatingWindow
               key={win.key}
+              raiseId={win.key}
               title={buf?.dirty ? `${body.title} •` : body.title}
               onClose={() => closeWindow(win.key)}
               initial={{ x: win.x, y: win.y, w: 380, h: 560 }}

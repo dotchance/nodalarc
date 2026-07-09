@@ -226,7 +226,10 @@
 
 .ui-window {
   position: fixed;
-  z-index: var(--z-window);
+  /* N47: rank within the zWindow band. --window-z-bump is the window's raise
+     rank (0 = bottom), so a raised window rises above its siblings but stays in
+     the band (rank is bounded by the open-window count). */
+  z-index: calc(var(--z-window) + var(--window-z-bump, 0));
   display: flex;
   flex-direction: column;
   background: var(--bg-panel);

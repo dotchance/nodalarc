@@ -51,13 +51,6 @@ export const CAMERA_FLY_TO_INSTANT = _booleanConfig(
   false,
 );
 
-/** Session builder view (long-lived arc; default off until cutover). */
-export const FEATURE_SESSION_BUILDER = _booleanConfig(
-  "featureSessionBuilder",
-  _cfg.featureSessionBuilder ?? import.meta.env.VITE_FEATURE_SESSION_BUILDER,
-  false,
-);
-
 if (CAMERA_FLY_TO_SPEED_UNITS_PER_SECOND <= 0) {
   throw new Error("cameraFlyToSpeedUnitsPerSecond must be > 0");
 }

@@ -20,7 +20,6 @@ interface ToolbarProps {
   followNode: boolean;
   filterOpen: boolean;
   canSplit: boolean;
-  featureSessionBuilder: boolean;
   referenceFrame: ReferenceFrame;
   onViewMode: (mode: ViewMode) => void;
   onColorMode: (mode: ColorMode) => void;
@@ -82,7 +81,6 @@ export function Toolbar({
   followNode,
   filterOpen,
   canSplit,
-  featureSessionBuilder,
   referenceFrame,
   onViewMode,
   onColorMode,
@@ -104,9 +102,7 @@ export function Toolbar({
   ];
   if (canSplit) viewVariants.push({ value: "split", label: "Split", icon: "columns-2" });
   viewVariants.push({ value: "dashboard", label: "Dashboard", icon: "layout-dashboard" });
-  if (featureSessionBuilder) {
-    viewVariants.push({ value: "builder", label: "Session Builder", icon: "palette" });
-  }
+  viewVariants.push({ value: "builder", label: "Session Builder", icon: "palette" });
 
   return (
     <div className="toolbar">

@@ -29,9 +29,6 @@ spec:
             - containerPort: 80
               hostPort: 3000
               name: http
-          env:
-            - name: FEATURE_SESSION_BUILDER
-              value: {{ .Values.vf.featureSessionBuilder | default false | quote }}
           resources:
             requests:
               memory: 128Mi

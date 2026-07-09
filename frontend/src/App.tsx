@@ -29,7 +29,7 @@ import { selectionTypeForNode } from "./networkIdentity";
 import { SessionWizard } from "./catalog/SessionWizard";
 import { ShortcutHelp } from "./panels/ShortcutHelp";
 import { BuilderView } from "./builder/BuilderView";
-import { WS_URL, fetchApiKey, FEATURE_SESSION_BUILDER } from "./config";
+import { WS_URL, fetchApiKey } from "./config";
 import { setLabelsEnabled, getLabelsEnabled } from "./globe/labels";
 import { setGsLabelsEnabled, getGsLabelsEnabled } from "./globe/groundStations";
 import type { TracedPath } from "./types";
@@ -494,7 +494,6 @@ function AppInner() {
         followNode={followNode}
         filterOpen={filterOpen}
         canSplit={canSplit}
-        featureSessionBuilder={FEATURE_SESSION_BUILDER}
         referenceFrame={referenceFrame}
         onViewMode={setViewMode}
         onColorMode={setColorMode}
@@ -590,11 +589,7 @@ function AppInner() {
       systemNotice={visualizationError ?? undefined}
       sessions={sessions}
       onLaunchSession={switchSession}
-      onOpenBuilder={
-        FEATURE_SESSION_BUILDER
-          ? () => { setShowCatalog(false); setViewMode("builder"); }
-          : undefined
-      }
+      onOpenBuilder={() => { setShowCatalog(false); setViewMode("builder"); }}
     />
   ) : undefined;
 

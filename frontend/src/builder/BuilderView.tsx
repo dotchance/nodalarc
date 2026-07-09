@@ -45,11 +45,10 @@ import { ConstellationEditor } from "./ConstellationEditor";
 import { GroundEditor } from "./GroundEditor";
 import { LibraryPanel } from "./LibraryPanel";
 import { LinkRuleEditor } from "./LinkRuleEditor";
-import { NodeEditor } from "./NodeEditor";
+import { LibraryEditorWindow, type LibraryEditorState } from "./LibraryEditorWindow";
+import { OpenSessionPicker } from "./OpenSessionPicker";
 import { BoundaryEditor, RoutingDomainEditor } from "./RoutingEditor";
 import { SessionEditor } from "./SessionEditor";
-import { SiteEditor } from "./SiteEditor";
-import { TerminalEditor } from "./TerminalEditor";
 import {
   canDeploy,
   claimLibraryReveal,
@@ -92,7 +91,6 @@ import {
   routingWarnings,
   newDraftGroundSet,
   newDraftSiteObject,
-  nodeObjectFromDraft,
   refGroundMember,
   SCHEDULING_PRESETS,
   toSessionDocument,
@@ -100,10 +98,7 @@ import {
   type DraftConstellation,
   type DraftGroundSet,
   type DraftLinkRule,
-  type DraftNode,
   type DraftRoutingDomain,
-  type DraftSiteObject,
-  type DraftTerminal,
   type SchedulingPresetKey,
 } from "./workspace";
 import type {
@@ -814,12 +809,7 @@ export function BuilderView({
     deployBlockers,
   });
   // Standalone component authoring (Your library) — independent of sessions.
-  const [libraryEditor, setLibraryEditor] = useState<
-    | { kind: "terminal"; draft: DraftTerminal }
-    | { kind: "node"; draft: DraftNode }
-    | { kind: "site"; draft: DraftSiteObject }
-    | null
-  >(null);
+  const [libraryEditor, setLibraryEditor] = useState<LibraryEditorState | null>(null);
   // The fifth save machine (the Library's "New node" window) adopts the shared
   // hook — gaining the in-flight saving state the hand-rolled copy lacked, so a
   // double-click no longer double-submits and shows a spurious "Overwrite?".
@@ -1409,44 +1399,14 @@ export function BuilderView({
             startImport(entry);
           }, `opening ${entry.name}`);
         };
-        // The server names each entry's source root; the tiers speak the
-        // library's own vocabulary (★ yours / nodalarc library).
-        const yours = sessions.filter((s) => s.source === "user");
-        const shipped = sessions.filter((s) => s.source === "nodalarc");
-        const group = (label: string, list: BuilderSessionListEntry[]) =>
-          list.length === 0 ? null : (
-            <div className="builder-picker-group" key={label}>
-              <div className="builder-outline-kind">{label}</div>
-              {list.map((entry) => (
-                <button
-                  className="builder-outline-row builder-picker-row"
-                  key={entry.file}
-                  onClick={() => openEntry(entry)}
-                  title={`Open ${entry.name}`}
-                >
-                  <span className="builder-outline-name">
-                    <Icon name="folder-open" size={12} />
-                    {entry.name}
-                    {entry.active ? " · running" : ""}
-                  </span>
-                  <span className="builder-outline-count">{entry.constellation}</span>
-                </button>
-              ))}
-            </div>
-          );
         return {
           title: "Open a session",
           content: (
-            <div className="builder-picker" data-testid="builder-open-picker">
-              {sessions.length === 0 && (
-                <div className="builder-zone-empty">no sessions found</div>
-              )}
-              {group("★ yours", yours)}
-              {group("nodalarc library", shipped)}
-              {sessionsError && (
-                <div className="builder-warning">{sessionsError}</div>
-              )}
-            </div>
+            <OpenSessionPicker
+              sessions={sessions}
+              sessionsError={sessionsError}
+              onOpen={openEntry}
+            />
           ),
         };
       }
@@ -1497,95 +1457,23 @@ export function BuilderView({
       }
       case "library": {
         if (!libraryEditor) return null;
-        if (libraryEditor.kind === "terminal") {
-          return {
-            title: "New terminal",
-            content: (
-              <TerminalEditor
-                draft={libraryEditor.draft}
-                onChange={(update) =>
-                  setLibraryEditor((prev) =>
-                    prev?.kind === "terminal" ? { kind: "terminal", draft: update(prev.draft) } : prev,
-                  )
-                }
-                catalog={terminalCatalog.entries}
-                onSaved={() => {
-                  setLibraryEditor(null);
-                  closeWindow("library");
-                  void terminalCatalog.refresh();
-                }}
-                onCancel={() => {
-                  setLibraryEditor(null);
-                  closeWindow("library");
-                }}
-              />
-            ),
-          };
-        }
-        if (libraryEditor.kind === "site") {
-          return {
-            title: "New site",
-            content: (
-              <SiteEditor
-                key="library-site"
-                autoFocusName
-                site={libraryEditor.draft}
-                onUpdate={(update) =>
-                  setLibraryEditor((prev) =>
-                    prev?.kind === "site" ? { kind: "site", draft: update(prev.draft) } : prev,
-                  )
-                }
-                onClose={() => {
-                  setLibraryEditor(null);
-                  closeWindow("library");
-                }}
-              />
-            ),
-          };
-        }
+        const title =
+          libraryEditor.kind === "terminal"
+            ? "New terminal"
+            : libraryEditor.kind === "site"
+              ? "New site"
+              : "New node";
         return {
-          title: "New node",
+          title,
           content: (
-            <div className="builder-inspector-stack">
-              <NodeEditor
-                key="library-node"
-                autoFocusName
-                draft={libraryEditor.draft}
-                onChange={(update) =>
-                  setLibraryEditor((prev) =>
-                    prev?.kind === "node" ? { kind: "node", draft: update(prev.draft) } : prev,
-                  )
-                }
-              />
-              <div className="builder-preset-row">
-                <Button
-                  variant="primary"
-                  disabled={libraryNodeSave.saving}
-                  onClick={() =>
-                    void libraryNodeSave.save(
-                      { node: nodeObjectFromDraft(libraryEditor.draft) },
-                      () => {
-                        setLibraryEditor(null);
-                        closeWindow("library");
-                      },
-                    )
-                  }
-                >
-                  {libraryNodeSave.label("Save node to library")}
-                </Button>
-                <Button
-                  onClick={() => {
-                    setLibraryEditor(null);
-                    closeWindow("library");
-                  }}
-                >
-                  Cancel
-                </Button>
-              </div>
-              {libraryNodeSave.state.kind === "failed" && (
-                <div className="builder-warning">{libraryNodeSave.state.message}</div>
-              )}
-            </div>
+            <LibraryEditorWindow
+              editor={libraryEditor}
+              setLibraryEditor={setLibraryEditor}
+              terminalEntries={terminalCatalog.entries}
+              refreshTerminals={terminalCatalog.refresh}
+              closeWindow={closeWindow}
+              nodeSave={libraryNodeSave}
+            />
           ),
         };
       }

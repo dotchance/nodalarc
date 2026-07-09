@@ -28,15 +28,15 @@ import {
 
 interface SiteEditorProps {
   site: DraftSiteObject;
-  /** Functional-only (N56): the caller reads the LATEST draft, never a stale
+  /** Functional-only: the caller reads the LATEST draft, never a stale
    *  render-closure, so a concurrent edit during an in-flight fetch survives.
    *  Reseed/replace is explicit — `onUpdate(() => replacement)`. */
   onUpdate: (update: (prev: DraftSiteObject) => DraftSiteObject) => void;
   /** Standalone (Library) mode shows save-to-library + close. */
   onClose?: () => void;
-  /** IG-2: focus the name when a create gesture opened this editor. */
+  /** focus the name when a create gesture opened this editor. */
   autoFocusName?: boolean;
-  /** D7: reported when the site is saved to the library. Embedded in a ground
+  /** reported when the site is saved to the library. Embedded in a ground
    *  set, the host converges the authored member to this ref immediately. */
   onSaved?: (ref: string, savedObject: Record<string, unknown>) => void;
 }
@@ -55,7 +55,7 @@ export function SiteEditor({
 
   // Match on the stable node_id, never an array index: setNodeModel awaits a
   // catalog fetch, and a concurrent add/remove during that gap would shift
-  // indices, landing the write on the wrong node (the N56 lost-edit class).
+  // indices, landing the write on the wrong node (the lost-edit class).
   // The patch may be a function so a merge (installed counts) reads the
   // current node from prev, not a stale render closure.
   const updateNode = (
@@ -92,7 +92,7 @@ export function SiteEditor({
     onUpdate((prev) => {
       const first = prev.nodes[0];
       // Pick the first free gw{k} against the taken set — never length+1, which
-      // re-collides after a delete-then-add (N27) and would duplicate the
+      // re-collides after a delete-then-add and would duplicate the
       // node_id React key.
       const taken = new Set(prev.nodes.map((node) => node.node_id));
       let k = 1;
@@ -115,7 +115,7 @@ export function SiteEditor({
 
   // A standalone (Library) site save has no post-save consequence and passes no
   // onSaved. Embedded in a ground set the host wires onSaved to converge the
-  // authored member to the saved ref (D7).
+  // authored member to the saved ref.
   const saveToLibrary = () => void librarySave.save({ site: siteObjectFromDraft(site) }, onSaved);
 
   return (

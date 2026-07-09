@@ -1,6 +1,6 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
-/** The resolver wall's owning editor target (M20).
+/** The resolver wall's owning editor target.
  *
  *  A resolve refusal names a subject — a link rule, a routing domain, or a
  *  segment. This maps that subject back to the editor window that owns it, so

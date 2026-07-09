@@ -176,7 +176,7 @@ describe("useKeyboard", () => {
   });
 });
 
-describe("useKeyboard — builder mode suspends live-session keys (M9)", () => {
+describe("useKeyboard — builder mode suspends live-session keys", () => {
   // How each KEYBOARD_SHORTCUTS row is dispatched and which action it drives.
   // "/" (a DOM search-focus, not an action) and "Escape" (two-arm) are covered
   // by dedicated tests below.

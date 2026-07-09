@@ -76,16 +76,16 @@ export function overlapsPlaced(rects: PlacedRect[], candidate: PlacedRect): bool
 }
 
 /**
- * N33/N36 body-fold accounting. Writes each body's counted-segment set into
+ * body-fold accounting. Writes each body's counted-segment set into
  * `out` and the first node seen per body into `probe`. Both maps are reused
  * across frames — the inner Sets are cleared in place, never reallocated, so
- * the hot path allocates nothing (N34).
+ * the hot path allocates nothing.
  *
- * N33: a segment counts toward a body's fold chip only when the class that owns
+ * a segment counts toward a body's fold chip only when the class that owns
  * it is enabled — satellite members when satellite labels are on, ground-station
  * members when ground labels are on. A member with no `segment_id` never counts.
  * A probe is recorded for EVERY body (even one with no counted segments) so the
- * caller can still project it, but N36 (caller: `counted.size === 0`) then leaves
+ * caller can still project it, but (caller: `counted.size === 0`) then leaves
  * that body unfolded — labels render as before, never hidden with no chip.
  */
 export function collectFoldSegments(
@@ -211,7 +211,7 @@ export function siteLabelRepresentatives(
 }
 
 // --- Per-frame scratch, pooled at module scope so the hot loop allocates
-// nothing per frame (N34: Maps and Sets cleared, not recreated; the fold-entry
+// nothing per frame (Maps and Sets cleared, not recreated; the fold-entry
 // objects, placement rects, and the frame context are pooled too). ---
 interface FoldEntry {
   sx: number;
@@ -229,7 +229,7 @@ const _placedRects: PlacedRect[] = [];
 
 /** The per-frame state the hoisted placement closures read. One pooled instance,
  *  repopulated each frame — the closures move to module scope so useFrame does
- *  not re-create them every frame (N34). */
+ *  not re-create them every frame. */
 interface FrameCtx {
   width: number;
   height: number;
@@ -488,14 +488,14 @@ export function Labels({
     const selectedId = selectedNodeIdRef.current;
     const projectionFactor =
       height / (2 * Math.tan(((camera as THREE.PerspectiveCamera).fov * Math.PI) / 360));
-    // N33/N36 fold accounting: count only the segments whose label class is
-    // enabled; a body with zero counted segments is skipped below (N36), so its
+    // fold accounting: count only the segments whose label class is
+    // enabled; a body with zero counted segments is skipped below, so its
     // labels render as before rather than folding into a chip.
     _foldedBodies.clear();
     collectFoldSegments(nodeList, satEnabled, gsEnabled, _bodySegments, _bodyProbe);
     for (const [body, probeId] of _bodyProbe) {
       const counted = _bodySegments.get(body);
-      if (!counted || counted.size === 0) continue; // N36: nothing to fold
+      if (!counted || counted.size === 0) continue; // nothing to fold
       const sphere = getNodeBodySphere(probeId, _bodyCenter);
       if (!sphere) continue;
       const dist = _bodyCenter.distanceTo(cameraPos);
@@ -539,7 +539,7 @@ export function Labels({
 
     // Greedy de-overlap boxes placed this frame (ground labels first, then
     // satellites; the selected node's label is placed before everything). The
-    // placement closures are hoisted to module scope (N34) and read this frame's
+    // placement closures are hoisted to module scope and read this frame's
     // state through the pooled _ctx — _placedRects is reset in place, never
     // reallocated.
     _placedRects.length = 0;

@@ -46,11 +46,11 @@ function nextMountId(draft: DraftNode, role: string): string {
 
 interface NodeEditorProps {
   draft: DraftNode;
-  /** Functional-only (N56): the caller reads the LATEST draft, never a stale
+  /** Functional-only: the caller reads the LATEST draft, never a stale
    *  render-closure, so a concurrent edit during an in-flight fetch (mounting a
    *  freshly imported/authored terminal) survives. */
   onChange: (update: (prev: DraftNode) => DraftNode) => void;
-  /** IG-2: focus the name when a create gesture opened this editor. */
+  /** focus the name when a create gesture opened this editor. */
   autoFocusName?: boolean;
 }
 

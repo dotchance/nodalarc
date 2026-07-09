@@ -162,7 +162,7 @@ let _outlineRevealState: OutlineReveal | null = null;
 const _outlineRevealListeners = new Set<() => void>();
 let _outlineRevealNonce = 0;
 
-/** Reveal a just-placed segment's row in the outline (IG-1 ref floor: a placed
+/** Reveal a just-placed segment's row in the outline (ref floor: a placed
  *  reference has no editor, so its Use scrolls its row into view and flashes
  *  it). */
 export function requestOutlineReveal(segmentId: string): void {
@@ -242,9 +242,9 @@ export function canDeploy(input: {
     return { ok: false, reason: "the session must resolve before deploy" };
   }
   if (!input.deployReady) {
-    // Q3: a grammar-valid, saved, settled session may still be unable to start
+    // a grammar-valid, saved, settled session may still be unable to start
     // on the cluster (no satellites, an unrunnable rule). Disable Deploy with
-    // the server's reason; Save and library actions stay enabled (Q1).
+    // the server's reason; Save and library actions stay enabled.
     return {
       ok: false,
       reason: input.deployBlockers[0] ?? "the session cannot start on the cluster yet",
@@ -368,10 +368,10 @@ export async function saveUserObject(
   return saved;
 }
 
-// --- One library-save machine (M16). ------------------------------------
+// --- One library-save machine. ------------------------------------
 // The four editors each copied the same 409-conflict save handshake. This hook
 // owns it once: the idle/saving/conflict/saved/failed machine + the overwrite
-// retry. saveUserObject is the IG-17 reveal/refresh/revision choke point, so the
+// retry. saveUserObject is the reveal/refresh/revision choke point, so the
 // hook only CALLS it and never re-fires those (a second call would double the
 // reveal nonce). Post-save CONSEQUENCES (a node-ref rewrite, a host window
 // close) are the caller's: it passes onSaved(ref, savedObject), invoked with the
@@ -463,7 +463,7 @@ export function useBuilderWorld() {
   // when a resolve completes, nulled by clear() and every refusal. The
   // deploy gate fails closed on null.
   const [settledArtifactSha256, setSettledArtifactSha256] = useState<string | null>(null);
-  // Deploy-readiness (Q3) from the last successful resolve: whether the
+  // Deploy-readiness from the last successful resolve: whether the
   // session can start on the cluster, and why not. Reset by clear() and every
   // refusal — the deploy gate fails closed on the false default.
   const [deployReady, setDeployReady] = useState(false);
@@ -612,7 +612,7 @@ export function useBuilderWorld() {
     deploySession,
     // Exposed so the Open picker can refetch on open: the running chip and
     // auto-import target must not claim a session the cluster switched away
-    // from (N15). The mount effect already fetches once.
+    // from. The mount effect already fetches once.
     refreshSessions,
     clear,
   };

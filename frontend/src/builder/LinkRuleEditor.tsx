@@ -46,11 +46,11 @@ interface LinkRuleEditorProps {
   onUpdate: (patch: Partial<DraftLinkRule>) => void;
   onUpdateEndpoint: (side: "a" | "b", patch: Partial<DraftLinkEndpoint>) => void;
   onRemove: () => void;
-  /** IG-2: focus the name when a create gesture opened this editor. */
+  /** focus the name when a create gesture opened this editor. */
   autoFocusName?: boolean;
-  /** IG-7: what each segment's faceplates can form (resolver truth). */
+  /** what each segment's faceplates can form (resolver truth). */
   capabilities: Map<string, SegmentCapability>;
-  /** IG-10: re-point an endpoint — physics re-derive loudly; returns the
+  /** re-point an endpoint — physics re-derive loudly; returns the
    *  notice sentence to show. */
   onRepoint: (side: "a" | "b", newSegmentId: string) => string;
 }
@@ -75,7 +75,7 @@ function EndpointCard({
   const placed = placedSegments(workspace);
   const selfCap = capabilities.get(endpoint.segment_id);
   const otherCap = capabilities.get(other.segment_id);
-  // IG-7 honesty: combinations neither side can form render disabled with
+  // honesty: combinations neither side can form render disabled with
   // the reason — visible, never hidden. No capabilities yet (unresolved
   // world) means nothing is disabled.
   const known = capabilities.size > 0;
@@ -152,7 +152,7 @@ function EndpointCard({
           onChange={(min_elevation_deg) => onUpdate({ min_elevation_deg })}
         />
         {(() => {
-          // M11: when the ground mask is the seeded default (no terminal
+          // when the ground mask is the seeded default (no terminal
           // declares a floor), say so — a value to own, never a derived one.
           const kind = placed.find((s) => s.segment_id === endpoint.segment_id)?.kind ?? "space";
           const seedNote = groundMaskSeedNote(selfCap, {

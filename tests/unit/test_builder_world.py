@@ -49,10 +49,10 @@ def walker_world() -> BuilderWorld:
 def _ground_only_document() -> dict:
     """A grammar-valid session with a ground segment and no satellites.
 
-    It resolves (Q1) — a ground-only session is authorable grammar — but the
-    preview world build (Q2) refuses it, because the OME requires at least one
+    It resolves — a ground-only session is authorable grammar — but the
+    preview world build refuses it, because the OME requires at least one
     satellite node. This is the fixture that exercises the save/preview
-    boundary before P5a's satellite-less guard exists.
+    boundary before satellite-less guard exists.
     """
     raw = dict(yaml.safe_load(_WALKER_PATH.read_text(encoding="utf-8")))
     raw["session"] = {**raw["session"], "name": "earth-leo-ground-only"}
@@ -63,12 +63,12 @@ def _ground_only_document() -> dict:
 
 
 def test_save_artifact_saves_a_session_whose_preview_world_refuses():
-    """B8/Q1: save depends only on grammar validity. A ground-only session
+    """save depends only on grammar validity. A ground-only session
     produces a save artifact — canonical bytes, hash, name, and node count from
     the resolved session, never a built world.
     """
     document = _ground_only_document()
-    # Q1: the grammar-only save path succeeds.
+    # the grammar-only save path succeeds.
     artifact = build_builder_save_artifact(document)
     assert artifact.session_name == "earth-leo-ground-only"
     assert artifact.node_count >= 1  # the gateway ground nodes
@@ -77,11 +77,11 @@ def test_save_artifact_saves_a_session_whose_preview_world_refuses():
 
 
 def test_satellite_less_session_renders_instead_of_walling():
-    """P5a satellite-less guard: a grammar-valid ground-only session is not a
+    """satellite-less guard: a grammar-valid ground-only session is not a
     grammar error — it RESOLVES into a world with the ground nodes present,
     POPULATED body frames (so render scale anchors on a body) and empty node
     ephemerides (nothing to propagate), never a satellite-precondition wall. It
-    still fails the deploy gate (Q3) — that is runtime readiness, tested apart."""
+    still fails the deploy gate — that is runtime readiness, tested apart."""
     world = build_builder_world(_ground_only_document())
     assert world.nodes  # the ground gateways survive
     assert all(node.kind != "satellite" for node in world.nodes)
@@ -97,7 +97,7 @@ def test_satellite_less_session_renders_instead_of_walling():
 
 
 def test_deploy_readiness_fact_gates_on_runtime_readiness():
-    """B7/Q3: a resolvable session may still be unable to start on the cluster.
+    """a resolvable session may still be unable to start on the cluster.
 
     The resolve check ships deploy_ready + deploy_blockers computed from the
     operator's own readiness validator — a valid satellite-bearing session is
@@ -132,7 +132,7 @@ def _switch_manager(key: str, path: Path):
 
 
 def test_switch_refuses_a_session_that_cannot_start(monkeypatch, tmp_path):
-    """B7/Q3: the switch endpoint refuses a non-runnable session BEFORE any CR
+    """the switch endpoint refuses a non-runnable session BEFORE any CR
     mutation — a ground-only session never reaches the switch that would delete
     the running ConstellationSpec CR, so the running session stays up."""
     import vs_api.main as main
@@ -245,7 +245,7 @@ def test_link_rules_project_resolved_endpoint_membership(walker_world):
                 assert b in world_ids, f"explicit pair id {b!r} is not a runtime node id"
 
 
-# --- P5a: server-computed rule previews --------------------------------------
+# --- server-computed rule previews --------------------------------------
 
 _PREVIEW_VOCAB = {
     "los_blocked",

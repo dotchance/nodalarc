@@ -1,6 +1,6 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
-/** Link physics derivation (IG-7).
+/** Link physics derivation.
  *
  *  The resolved world already carries every node's terminal inventory
  *  (role, medium, elevation limits) — resolver truth, not a builder guess.
@@ -102,7 +102,7 @@ export interface DerivedPhysics {
 // Derivation preference among the grammar's media — derived from the owned
 // vocabulary, never re-listed: the Record is exhaustive over LinkMedium, so
 // adding a medium to the grammar fails to compile here instead of silently
-// never being offered (IG-16).
+// never being offered.
 const MEDIUM_RANK: Record<LinkMedium, number> = { optical: 0, rf: 1 };
 const MEDIUM_ORDER: readonly LinkMedium[] = [...LINK_MEDIA].sort(
   (a, b) => MEDIUM_RANK[a] - MEDIUM_RANK[b],
@@ -229,7 +229,7 @@ export function connectSegments(
   return rule;
 }
 
-/** IG-10: re-derive a rule's physics after an endpoint re-point — loudly.
+/** re-derive a rule's physics after an endpoint re-point — loudly.
  *  Returns the patch plus a human sentence for the notice. */
 export function rederiveRule(
   workspace: Workspace,

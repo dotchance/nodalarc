@@ -221,7 +221,7 @@ export interface BuilderResolveCheck {
   /** Sha256 of the canonical flattened YAML a save of this document writes:
    *  hypothetical on a resolve check, exact on a save. */
   artifact_sha256: string;
-  /** Runtime-readiness (Q3), node-count-independent subset: a session may
+  /** Runtime-readiness, node-count-independent subset: a session may
    *  resolve and save yet be unable to start on the cluster. Necessary, not
    *  sufficient — the switch endpoint runs the full node-count-aware validator. */
   deploy_ready: boolean;

@@ -1,6 +1,6 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
-/** The builder's session entry/import state machine (M19).
+/** The builder's session entry/import state machine.
  *
  *  Entering the builder beside a running cluster loads that session; the
  *  picker opens any listed session. This hook owns the in-flight import

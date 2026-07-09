@@ -26,7 +26,7 @@ import {
 
 interface TerminalEditorProps {
   draft: DraftTerminal;
-  /** Functional-only (N56): the caller reads the LATEST draft, never a stale
+  /** Functional-only: the caller reads the LATEST draft, never a stale
    *  render-closure. Intentional replacement (seed-from-catalog) is explicit —
    *  `onChange(() => replacement)`. */
   onChange: (update: (prev: DraftTerminal) => DraftTerminal) => void;
@@ -54,7 +54,7 @@ export function TerminalEditor({
       const { document } = await readCatalogObject(ref);
       const seeded = draftTerminalFromDocument(document);
       // Seed-from-catalog is an intentional REPLACEMENT, stated as `() => …` so
-      // it reads nothing from prev — the draft is deliberately overwritten (N56).
+      // it reads nothing from prev — the draft is deliberately overwritten.
       onChange(() => ({
         ...seeded,
         id: identifier(`${seeded.id}-custom`),
@@ -156,7 +156,7 @@ export function TerminalEditor({
           onChange={(wavelength_nm) => onChange((prev) => ({ ...prev, wavelength_nm }))}
         />
       )}
-      {/* Pointing seeds (IG-7): the elevation window decides what this head
+      {/* Pointing seeds: the elevation window decides what this head
           can physically aim at — a ground dish never looks below its
           horizon; a space head must. Seeds raw values the user then owns. */}
       <div className="builder-preset-row" role="radiogroup" aria-label="Pointing">

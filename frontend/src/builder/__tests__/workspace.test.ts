@@ -910,7 +910,7 @@ describe("workspaceFromSessionDocument — the serializer's inverse", () => {
     const result = workspaceFromSessionDocument(document);
     expect(result.workspace).toBeUndefined();
     expect(result.issues!.some((i) => i.includes("cannot reproduce"))).toBe(true);
-    // M23: the refusal carries the PATH, not just the constant suffix — every
+    // the refusal carries the PATH, not just the constant suffix — every
     // issue is "<diff-path>: the builder cannot reproduce this value", and the
     // path names the offending field (the re-derived inner id) so a broken
     // fidelity check cannot pass by emitting a pathless constant.
@@ -922,7 +922,7 @@ describe("workspaceFromSessionDocument — the serializer's inverse", () => {
   });
 });
 
-describe("id-counter reseed covers every family (N37)", () => {
+describe("id-counter reseed covers every family", () => {
   const SPACE = "nodalarc:nodes/space/x.yaml";
   const GROUND = "nodalarc:nodes/ground/gw.yaml";
   const placed = (id: string) => ({ segment_id: id, label: id, kind: "space" as const });
@@ -959,7 +959,7 @@ describe("id-counter reseed covers every family (N37)", () => {
   });
 });
 
-describe("RF band edges (N41 — inclusive min, exclusive max)", () => {
+describe("RF band edges (— inclusive min, exclusive max)", () => {
   it("each band boundary maps to the band it opens, never the one it closes", () => {
     // min is inclusive, max exclusive: exactly 4 GHz is C (not S), 8 is X, etc.
     expect(bandForFrequencyGhz(1)).toBe("l");
@@ -1032,7 +1032,7 @@ describe("held-back incomplete containers", () => {
     const domains = (doc.routing as { domains: Record<string, unknown>[] }).domains;
     expect(JSON.stringify(domains[0]!.selectors)).not.toContain(ground.segment_id);
     // The hold-back is stated, never silent — including the domain that
-    // partially sheds the held-back member (M1 case d).
+    // partially sheds the held-back member (case d).
     expect(
       completenessFindings(ws).some((f) => f.message.includes("held out of the session document")),
     ).toBe(true);
@@ -1050,7 +1050,7 @@ describe("held-back incomplete containers", () => {
     ws.routing_domains.push(domain);
     const doc = toSessionDocument(ws) as Record<string, unknown>;
     expect(doc.routing).toBeUndefined();
-    // The whole domain being held out is stated, never silent (M1 case a).
+    // The whole domain being held out is stated, never silent (case a).
     expect(
       routingWarnings(ws).some((w) => w.includes("the domain is held out of the session document")),
     ).toBe(true);
@@ -1122,7 +1122,7 @@ describe("multi-body ground authoring", () => {
   });
 });
 
-describe("ephemeris manifest keys on emitted content, not stamp state (B1)", () => {
+describe("ephemeris manifest keys on emitted content, not stamp state", () => {
   it("(a) a lunar stamp on a zero-member ground beside Earth content emits no manifest, and round-trips", () => {
     const ws = newWorkspace("b1-holdback");
     ws.space.push(newDraftConstellation("nodalarc:nodes/space/x.yaml")); // Earth orbit
@@ -1179,7 +1179,7 @@ describe("ephemeris manifest keys on emitted content, not stamp state (B1)", () 
   });
 });
 
-describe("hold-back and removal are stated in routing, never silent (M1)", () => {
+describe("hold-back and removal are stated in routing, never silent", () => {
   function shellWorkspace(name: string) {
     const ws = newWorkspace(name);
     ws.space.push(newDraftConstellation("nodalarc:nodes/space/x.yaml"));
@@ -1272,7 +1272,7 @@ describe("hold-back and removal are stated in routing, never silent (M1)", () =>
   });
 });
 
-describe("derived inner ids stay unique under a truncating session name (N1)", () => {
+describe("derived inner ids stay unique under a truncating session name", () => {
   it("distinct constellation, orbit, and site-set ids for a 48-char session name, and round-trips", () => {
     const longName = "an-extremely-long-session-name-that-fills-the-cap"; // 49 chars
     const ws = newWorkspace(longName);
@@ -1312,7 +1312,7 @@ describe("derived inner ids stay unique under a truncating session name (N1)", (
   });
 });
 
-describe("mint index tracks used addresses, not member count (N2)", () => {
+describe("mint index tracks used addresses, not member count", () => {
   const stampedGround = () => newDraftGroundSet("nodalarc:nodes/ground/g.yaml", {});
 
   it("minting after a delete skips freed indices instead of reusing them", () => {
@@ -1356,7 +1356,7 @@ describe("mint index tracks used addresses, not member count (N2)", () => {
   });
 });
 
-describe("addressing honesty: shape-first matcher + within/cross-segment warnings (N3)", () => {
+describe("addressing honesty: shape-first matcher + within/cross-segment warnings", () => {
   it("matches stamp shapes before range so an overflowed octet stays visible", () => {
     const stamp = {
       ...newDraftGroundSet("n", {}).stamp,
@@ -1460,7 +1460,7 @@ describe("addressing honesty: shape-first matcher + within/cross-segment warning
   });
 });
 
-describe("a refused import advances no module id counter (N5)", () => {
+describe("a refused import advances no module id counter", () => {
   function probeCounters() {
     const wsp = newWorkspace("probe");
     return {
@@ -1560,7 +1560,7 @@ describe("a refused import advances no module id counter (N5)", () => {
   });
 });
 
-describe("shared document→draft parse core: fork throws, import collects (M2, P1b)", () => {
+describe("shared document→draft parse core: fork throws, import collects", () => {
   function constellationDocument(
     overrides: Record<string, unknown> = {},
   ): Record<string, unknown> {
@@ -1747,7 +1747,7 @@ describe("shared document→draft parse core: fork throws, import collects (M2, 
   });
 });
 
-describe("D7 close-time convergence primitives (P7g)", () => {
+describe("close-time convergence primitives", () => {
   const GROUND_NODE = "nodalarc:nodes/ground/gw.yaml";
   function expressibleDraft() {
     // A freshly minted set (default name) with a ref member and nothing a ref

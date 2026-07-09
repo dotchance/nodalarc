@@ -176,7 +176,7 @@ describe("builderSnapshotFromWorld", () => {
   });
 });
 
-describe("distinctGroundStationSites (N52 site count)", () => {
+describe("distinctGroundStationSites (site count)", () => {
   const node = (kind: BuilderWorldNode["kind"], namespace: string): BuilderWorldNode =>
     ({ kind, namespace }) as unknown as BuilderWorldNode;
 

@@ -37,7 +37,7 @@ interface FloatingWindowProps {
   minHeight?: number;
   /** localStorage key suffix; geometry persists as nodalarc.window.<key>. */
   persistKey?: string;
-  /** Stable identity in the raise stack (N47). The builder passes its window
+  /** Stable identity in the raise stack. The builder passes its window
    *  key so a re-open can raise the same window; a lone window (LogPanel) omits
    *  it and gets a generated id. */
   raiseId?: string;
@@ -78,7 +78,7 @@ export function FloatingWindow({
   const geomRef = useRef(geom);
   geomRef.current = geom;
 
-  // The window's identity in the raise stack (N47): the passed id, or a stable
+  // The window's identity in the raise stack: the passed id, or a stable
   // generated one. Register at the top on mount, drop on unmount; the rank is
   // this window's z offset within the zWindow band.
   const idRef = useRef<string | null>(null);

@@ -54,18 +54,18 @@ import {
 
 interface GroundEditorProps {
   draft: DraftGroundSet;
-  /** Functional-only (N56): the caller reads the LATEST draft, never a stale
+  /** Functional-only: the caller reads the LATEST draft, never a stale
    *  render-closure, so a concurrent edit during an in-flight fetch (forkMember,
    *  setStampModel, the member save-flip) survives. */
   onUpdate: (update: (prev: DraftGroundSet) => DraftGroundSet) => void;
   onRemove: () => void;
-  /** IG-2: focus the name when a create gesture opened this editor. */
+  /** focus the name when a create gesture opened this editor. */
   autoFocusName?: boolean;
-  /** Connect gesture context (IG-7: "+ link to…" on the segment). */
+  /** Connect gesture context ("+ link to…" on the segment). */
   workspace: Workspace;
   onOpenRule: (ruleId: string) => void;
   onConnect: (targetSegmentId: string) => void;
-  /** D7: a save of the whole set to the library, reported up so the bound
+  /** a save of the whole set to the library, reported up so the bound
    *  window can converge the set back to this ref on a user close. */
   onSaved?: (ref: string, savedObject: Record<string, unknown>) => void;
 }
@@ -143,7 +143,7 @@ export function GroundEditor({
         ...prev,
         // Carry the override from the LATEST matched member, not the click-time
         // closure — a concurrent per-site scheduling edit during the fork fetch
-        // must survive (N56).
+        // must survive.
         members: prev.members.map((m) =>
           m.member_id === member.member_id
             ? { ...forked, scheduling_override: m.scheduling_override }
@@ -274,7 +274,7 @@ export function GroundEditor({
                           // ground's own — find the member in the LATEST members
                           // and update its LATEST site, so a concurrent edit
                           // (this member or another) during a site-level fetch
-                          // survives (N56).
+                          // survives.
                           onUpdate((prev) => ({
                             ...prev,
                             members: prev.members.map((m) => {
@@ -285,7 +285,7 @@ export function GroundEditor({
                           }))
                         }
                         onSaved={(ref) => {
-                          // D7 member-level: this window is bound to the segment,
+                          // member-level: this window is bound to the segment,
                           // not the member, so the authored member converges
                           // immediately — flip it to a ref in place, keeping its
                           // member_id and any scheduling_override (updateMember
@@ -420,7 +420,7 @@ export function GroundEditor({
             <div className="builder-site-derived">
               {/* The preview must read the SAME next index the mint uses
                   (nextMintIndex), never a literal 0 — otherwise it lies once the
-                  segment already holds stamp-shaped members (N29). */}
+                  segment already holds stamp-shaped members. */}
               next minted site: lan {stampLanPrefix(draft.stamp, nextMintIndex(draft))}, lo0{" "}
               {stampLoopbackAddress(draft.stamp, nextMintIndex(draft))} …
             </div>

@@ -83,7 +83,7 @@ function segs(out: Map<string, Set<string>>, body: string): string[] {
   return [...(out.get(body) ?? [])].sort();
 }
 
-describe("collectFoldSegments — N33/N36 body-fold accounting", () => {
+describe("collectFoldSegments — body-fold accounting", () => {
   it("with both classes on, counts every sat and GS segment and probes every body", async () => {
     const { collectFoldSegments } = await import("../Labels");
     const out = new Map<string, Set<string>>();
@@ -98,8 +98,8 @@ describe("collectFoldSegments — N33/N36 body-fold accounting", () => {
     expect(probe.get("mars")).toBe("mars-gs-1");
   });
 
-  it("default-toggle count equals the class-blind count (P6b flag-off inertness)", async () => {
-    // The pre-P6b fold counted every node's segment regardless of label class.
+  it("default-toggle count equals the class-blind count (flag-off inertness)", async () => {
+    // The previous fold counted every node's segment regardless of label class.
     // At default toggles (both on) the new class-aware count must reproduce it
     // exactly, so a never-toggling live user sees identical folding.
     const { collectFoldSegments } = await import("../Labels");
@@ -118,7 +118,7 @@ describe("collectFoldSegments — N33/N36 body-fold accounting", () => {
     }
   });
 
-  it("N33: satellite labels off drops every satellite segment from the count", async () => {
+  it("satellite labels off drops every satellite segment from the count", async () => {
     const { collectFoldSegments } = await import("../Labels");
     const out = new Map<string, Set<string>>();
     collectFoldSegments(FOLD_NODES, false, true, out, new Map());
@@ -127,7 +127,7 @@ describe("collectFoldSegments — N33/N36 body-fold accounting", () => {
     expect(segs(out, "mars")).toEqual(["mars-ground"]);
   });
 
-  it("N33: ground labels off drops every ground segment from the count", async () => {
+  it("ground labels off drops every ground segment from the count", async () => {
     const { collectFoldSegments } = await import("../Labels");
     const out = new Map<string, Set<string>>();
     collectFoldSegments(FOLD_NODES, true, false, out, new Map());
@@ -136,19 +136,19 @@ describe("collectFoldSegments — N33/N36 body-fold accounting", () => {
     expect(out.get("mars")?.size ?? 0).toBe(0); // mars is GS-only → nothing counts
   });
 
-  it("N36: with both classes off nothing counts, yet every body is still probed", async () => {
+  it("with both classes off nothing counts, yet every body is still probed", async () => {
     const { collectFoldSegments } = await import("../Labels");
     const out = new Map<string, Set<string>>();
     const probe = new Map<string, string>();
     collectFoldSegments(FOLD_NODES, false, false, out, probe);
     for (const body of ["earth", "luna", "mars"]) {
-      // counted.size === 0 is the caller's N36 skip — the body does NOT fold.
+      // counted.size === 0 is the caller's skip — the body does NOT fold.
       expect(out.get(body)?.size ?? 0).toBe(0);
       expect(probe.has(body)).toBe(true);
     }
   });
 
-  it("N36: a body whose members all lack a segment_id never folds", async () => {
+  it("a body whose members all lack a segment_id never folds", async () => {
     const { collectFoldSegments } = await import("../Labels");
     const out = new Map<string, Set<string>>();
     const probe = new Map<string, string>();
@@ -173,7 +173,7 @@ describe("collectFoldSegments — N33/N36 body-fold accounting", () => {
     expect(out.get("earth")?.size).toBe(2);
   });
 
-  it("N34: reuses the out/probe maps across frames — inner Sets cleared, not reallocated", async () => {
+  it("reuses the out/probe maps across frames — inner Sets cleared, not reallocated", async () => {
     const { collectFoldSegments } = await import("../Labels");
     const out = new Map<string, Set<string>>();
     const probe = new Map<string, string>();
@@ -181,7 +181,7 @@ describe("collectFoldSegments — N33/N36 body-fold accounting", () => {
     const earthSet = out.get("earth");
     // Next frame: earth keeps only its satellite; the GS and mars/luna depart.
     collectFoldSegments([EARTH_SAT], true, true, out, probe);
-    expect(out.get("earth")).toBe(earthSet); // same Set instance — no realloc (N34)
+    expect(out.get("earth")).toBe(earthSet); // same Set instance — no realloc
     expect([...earthSet!]).toEqual(["earth-leo"]); // stale GS segment cleared
     expect(probe.has("mars")).toBe(false); // departed body's probe cleared
     expect(probe.has("luna")).toBe(false);

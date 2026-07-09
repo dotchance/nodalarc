@@ -1,16 +1,16 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
-/** useEditorWindows — the floating-editor windows + buffered-edit shell (M18).
+/** useEditorWindows — the floating-editor windows + buffered-edit shell.
  *
  *  These pins cover the HOOK behavior end-to-end against the REAL useWorkspace
- *  (so applyBuffer's mutator actually commits and the M5 reconciliation sees
+ *  (so applyBuffer's mutator actually commits and the reconciliation sees
  *  the applied object move): patchBuffer stages a dirty buffer and never
  *  touches the workspace; applyBuffer commits through the matching mutator and
  *  re-bases opened + clears dirty; revertBuffer returns the draft to opened; a
  *  user close discards the window and its buffer together; and previewWorkspace
- *  overlays a dirty session buffer (what the N28 dwell readout reads). The pure
+ *  overlays a dirty session buffer (what the dwell readout reads). The pure
  *  buffer maths (overlayBuffers/staleBufferKeys/workspaceForSave) keep their
- *  landed P0c pins in useWorkspace.test — not re-asserted here.
+ *  landed pins in useWorkspace.test — not re-asserted here.
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
@@ -50,7 +50,7 @@ function withSegment() {
 beforeEach(() => localStorage.clear());
 afterEach(() => localStorage.clear());
 
-describe("useEditorWindows — buffered editing (M18)", () => {
+describe("useEditorWindows — buffered editing", () => {
   it("patchBuffer stages a dirty buffer and never touches the workspace", () => {
     const { result, segmentId } = withSegment();
     const key = targetKey({ kind: "segment", id: segmentId });
@@ -117,7 +117,7 @@ describe("useEditorWindows — buffered editing (M18)", () => {
     expect(result.current.editor.buffers[key]).toBeUndefined();
   });
 
-  it("N28: previewWorkspace overlays a dirty session buffer (what the dwell readout reads)", () => {
+  it("previewWorkspace overlays a dirty session buffer (what the dwell readout reads)", () => {
     const { result } = renderHook(() => useHarness());
     act(() => result.current.ws.startNew("t"));
     const future = "2030-01-01T00:00:00+00:00";
@@ -133,7 +133,7 @@ describe("useEditorWindows — buffered editing (M18)", () => {
     expect(result.current.ws.workspace!.start_time).not.toBe(future);
   });
 
-  it("(IG-4/N41) windows are keyed by object identity: distinct objects → distinct windows; re-open refreshes in place", () => {
+  it(" windows are keyed by object identity: distinct objects → distinct windows; re-open refreshes in place", () => {
     const { result } = renderHook(() => useHarness());
     act(() => result.current.ws.startNew("t"));
     // Two REAL segments, so the reconciliation pass does not prune their windows.
@@ -147,7 +147,7 @@ describe("useEditorWindows — buffered editing (M18)", () => {
     act(() => result.current.editor.openEditor(b));
     expect(result.current.editor.windows.map((w) => w.key)).toEqual([targetKey(a), targetKey(b)]);
     // Re-opening the same object refreshes it IN PLACE — never duplicates, and
-    // (N47) never reorders the array: stacking is the raise stack's job now, not
+    // never reorders the array: stacking is the raise stack's job now, not
     // React position. The re-open focus is a raiseWindow call (pinned in
     // windowStack.test.ts), so the array order is untouched.
     act(() => result.current.editor.openEditor({ ...a, id: s0!.segment_id }));

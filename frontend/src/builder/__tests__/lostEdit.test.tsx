@@ -1,6 +1,6 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
-/** N56 lost-edit class: async writers must read the LATEST draft, never a stale
+/** lost-edit class: async writers must read the LATEST draft, never a stale
  *  render-closure, so a concurrent edit made during an in-flight fetch survives.
  *
  *  The editor write contracts are functional-only — `onUpdate((prev) => next)` /
@@ -72,7 +72,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("N56 lost-edit: async writers read the latest draft (class A — through the buffer)", () => {
+describe("lost-edit: async writers read the latest draft (class A — through the buffer)", () => {
   it("SiteEditor.setNodeModel preserves a concurrently-added node", async () => {
     stubFetch({
       object: { document: { node: { terminals: [{ id: "access", count: 2 }] } } },
@@ -156,7 +156,7 @@ describe("N56 lost-edit: async writers read the latest draft (class A — throug
     expect(result.stamp.lan_base).toBe("10.99"); // concurrent stamp edit survives
   });
 
-  it("GroundEditor member save-flip (D7) preserves a concurrently-added member", async () => {
+  it("GroundEditor member save-flip preserves a concurrently-added member", async () => {
     stubFetch({ nodes: [{ ref: NODE_REF, family: "nodes", id: "gw", display_name: "GW" }] });
     const g0 = newDraftGroundSet(NODE_REF, {});
     g0.members = mintSiteMembers(g0, parseSiteLines("Denver, 39.7, -104.9").rows);
@@ -173,7 +173,7 @@ describe("N56 lost-edit: async writers read the latest draft (class A — throug
       />,
     );
     // Open the member's inline editor and save it to the library — an async save
-    // whose onSaved flips the authored member to a ref (the P7g writer).
+    // whose onSaved flips the authored member to a ref (the writer).
     fireEvent.click(screen.getByRole("button", { name: `Edit ${member.label}` }));
     const embedded = screen.getByTestId("builder-site-editor");
     fireEvent.click(within(embedded).getByRole("button", { name: "Save to library" }));
@@ -269,7 +269,7 @@ describe("N56 lost-edit: async writers read the latest draft (class A — throug
 // NodeEditor, reading prev.node_draft) are pinned below; the library
 // setLibraryEditor wrappers and NodeEditor's setTerminalDraft wrapper thread the
 // same functional update through the same `prev`-read discipline.
-describe("N56 lost-edit: async writers read the latest draft (class B — through local state)", () => {
+describe("lost-edit: async writers read the latest draft (class B — through local state)", () => {
   it("NodeEditor.addOrIncrement (mounting a terminal) preserves a concurrent node-name edit", async () => {
     stubFetch({
       terminals: [{ ref: "user:terminals/ka.yaml", family: "terminals", id: "ka", display_name: "Ka" }],
@@ -333,7 +333,7 @@ describe("N56 lost-edit: async writers read the latest draft (class B — throug
   });
 });
 
-describe("N56 reseed exception: seed-from-catalog REPLACES, stated as () => replacement", () => {
+describe("reseed exception: seed-from-catalog REPLACES, stated as () => replacement", () => {
   it("TerminalEditor.seedFrom drops prev by design (a deliberate reset)", async () => {
     stubFetch({ object: { document: { terminal: { id: "ka-band", display_name: "Ka band" } } } });
     const t0 = defaultDraftTerminal();

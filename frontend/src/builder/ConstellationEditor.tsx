@@ -38,16 +38,16 @@ import {
 
 interface ConstellationEditorProps {
   draft: DraftConstellation;
-  /** Functional-only (N56): reached from an async path (customizeNode's fetch,
+  /** Functional-only: reached from an async path (customizeNode's fetch,
    *  the node save-then-ref), so it reads the LATEST draft, never a stale
    *  closure. `onUpdateOrbit` stays value-form — orbit params are sync-only
    *  (NumberFields), never written from an async writer. */
   onUpdate: (update: (prev: DraftConstellation) => DraftConstellation) => void;
   onUpdateOrbit: (patch: Partial<DraftOrbit>) => void;
   onRemove: () => void;
-  /** IG-2: focus the name when a create gesture opened this editor. */
+  /** focus the name when a create gesture opened this editor. */
   autoFocusName?: boolean;
-  /** Connect gesture context (IG-7: "+ link to…" on the segment). */
+  /** Connect gesture context ("+ link to…" on the segment). */
   workspace: Workspace;
   onOpenRule: (ruleId: string) => void;
   onConnect: (targetSegmentId: string) => void;
@@ -298,7 +298,7 @@ export function ConstellationEditor({
                   onChange={(update) =>
                     // Thread NodeEditor's functional update through the
                     // constellation's own, reading the LATEST node_draft so a
-                    // concurrent edit during a terminal import/save survives (N56).
+                    // concurrent edit during a terminal import/save survives.
                     onUpdate((prev) => ({
                       ...prev,
                       node_draft: prev.node_draft ? update(prev.node_draft) : prev.node_draft,

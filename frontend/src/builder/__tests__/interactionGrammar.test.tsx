@@ -2,14 +2,14 @@
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
 /** Interaction-grammar conformance.
  *
- *  IG-5 static scan: builder editors compose the editor kit; a raw
+ *  static scan: builder editors compose the editor kit; a raw
  *  <input>/<select>/<textarea> in an editor file is a violation (file
  *  inputs excepted — they are not editing controls). Same enforcement
  *  pattern as the stylesheet token scan.
  *
- *  Kit behavior: EditorName create-focus (IG-2); NullableNumberField's
- *  empty-means-unset contract; EditorCard anatomy (IG-5). Object-keyed
- *  state reset (IG-4) is pinned through GroundEditor, the stateful editor.
+ *  Kit behavior: EditorName create-focus; NullableNumberField's
+ *  empty-means-unset contract; EditorCard anatomy. Object-keyed
+ *  state reset is pinned through GroundEditor, the stateful editor.
  */
 
 import { readdirSync, readFileSync } from "node:fs";
@@ -74,7 +74,7 @@ import { tinyWorld } from "./fixtures/tinyWorld";
 
 const BUILDER_DIR = join(__dirname, "..");
 
-describe("IG-5: builder surfaces compose the kit, never raw controls", () => {
+describe("builder surfaces compose the kit, never raw controls", () => {
   // The kit DEFINES the controls, so editorKit.tsx is exempt. __tests__ is a
   // directory, skipped by the extension filter (enumerated for intent). The scan
   // is non-recursive: production builder files are FLAT (only __tests__ is a
@@ -119,7 +119,7 @@ describe("IG-5: builder surfaces compose the kit, never raw controls", () => {
   });
 });
 
-describe("IG-5: card anatomy lives only in the kit (EditorCard)", () => {
+describe("card anatomy lives only in the kit (EditorCard)", () => {
   it("no builder-card* token in any production builder file outside the kit", () => {
     // The whole builder-card family — builder-card, -head, -title, -summary,
     // -body. They share the "builder-card" prefix, so one match closes the class
@@ -191,7 +191,7 @@ describe("EditorCard adoption smoke: migrated editors render and their cards beh
   });
 });
 
-describe("P7e: BodySelect failure contract + node-id collision (N27)", () => {
+describe("BodySelect failure contract + node-id collision", () => {
   beforeEach(() => {
     vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => [] })));
   });
@@ -230,7 +230,7 @@ describe("P7e: BodySelect failure contract + node-id collision (N27)", () => {
     expect(refresh).toHaveBeenCalled();
   });
 
-  it("N27: adding a node fills the first free gw slot (no collision after a delete)", () => {
+  it("adding a node fills the first free gw slot (no collision after a delete)", () => {
     const base = newDraftSiteObject("nodalarc:nodes/ground/gw.yaml", {});
     // A gap at gw2 (as a delete-then-render would leave): length+1 would re-mint gw3.
     const site = { ...base, nodes: [base.nodes[0]!, { ...base.nodes[0]!, node_id: "gw3" }] };
@@ -276,7 +276,7 @@ describe("P7e: BodySelect failure contract + node-id collision (N27)", () => {
     expect((screen.getByLabelText("Body") as HTMLSelectElement).value).toBe("catalog:bodies/earth.yaml");
   });
 
-  it("N29: the next-minted-site preview reflects nextMintIndex, not a literal 0", () => {
+  it("the next-minted-site preview reflects nextMintIndex, not a literal 0", () => {
     const draft = newDraftGroundSet("nodalarc:nodes/ground/gw.yaml", {});
     // One already-minted member advances the next index past 0.
     draft.members = mintSiteMembers(draft, parseSiteLines("Denver, 39.7, -104.9").rows);
@@ -302,7 +302,7 @@ describe("P7e: BodySelect failure contract + node-id collision (N27)", () => {
   });
 });
 
-describe("P7g: save-to-library convergence wiring (D7)", () => {
+describe("save-to-library convergence wiring", () => {
   beforeEach(() => {
     resetCatalogStores();
     // The save endpoint returns a family-specific ref; every other catalog read
@@ -387,7 +387,7 @@ describe("P7g: save-to-library convergence wiring (D7)", () => {
 describe("editor kit behavior", () => {
   afterEach(cleanup);
 
-  it("IG-2: EditorName focuses and selects on create", () => {
+  it("EditorName focuses and selects on create", () => {
     render(<EditorName value="seeded name" onChange={() => {}} autoFocus />);
     const input = screen.getByDisplayValue("seeded name");
     expect(document.activeElement).toBe(input);
@@ -414,7 +414,7 @@ describe("editor kit behavior", () => {
     expect(value).toBeNull();
   });
 
-  it("IG-5: EditorCard closed reads as spec (summary), open shows the body", () => {
+  it("EditorCard closed reads as spec (summary), open shows the body", () => {
     const { rerender } = render(
       <EditorCard title="Orbit" summary="550 km circular" open={false} onToggle={() => {}}>
         <div data-testid="body" />
@@ -431,7 +431,7 @@ describe("editor kit behavior", () => {
   });
 });
 
-describe("IG-7: connect derives physics from faceplates", () => {
+describe("connect derives physics from faceplates", () => {
   function connectWorkspace() {
     const workspace = newWorkspace("t");
     workspace.space.push(newDraftConstellation("nodalarc:nodes/space/leo-relay.yaml"));
@@ -476,7 +476,7 @@ describe("IG-7: connect derives physics from faceplates", () => {
     expect(physics.formable).toBe(false);
   });
 
-  it("M11: a floorless ground mask is a SEEDED default, said plainly in both carriers", () => {
+  it("a floorless ground mask is a SEEDED default, said plainly in both carriers", () => {
     const { workspace, groundId, spaceId } = connectWorkspace();
     const world = tinyWorld(groundId, spaceId, null); // no terminal declares a floor
     const rule = connectSegments(workspace, world, groundId, spaceId);
@@ -498,7 +498,7 @@ describe("IG-7: connect derives physics from faceplates", () => {
     expect(notice).not.toMatch(/· 25° mask/);
   });
 
-  it("M11: a DECLARED floor is not seeded — the seed note stays off, the notice shows the value", () => {
+  it("a DECLARED floor is not seeded — the seed note stays off, the notice shows the value", () => {
     const { workspace, groundId, spaceId } = connectWorkspace();
     const world = tinyWorld(groundId, spaceId, 25); // the ground terminal declares 25°
     const rule = connectSegments(workspace, world, groundId, spaceId);
@@ -515,7 +515,7 @@ describe("IG-7: connect derives physics from faceplates", () => {
     expect(notice).not.toContain("seeded default");
   });
 
-  it("N32: the unformable fallback medium comes from the owned vocabulary, not literals", () => {
+  it("the unformable fallback medium comes from the owned vocabulary, not literals", () => {
     // Empty capabilities -> nothing is formable, so derivation hits the
     // fallback; its medium must be drawn from LINK_MEDIA (the owned set), the
     // role-appropriate default, never a re-listed string.
@@ -537,9 +537,9 @@ describe("IG-7: connect derives physics from faceplates", () => {
     expect(fabric.medium).toBe("optical"); // fabric -> optical, the lowest-rank default
   });
 
-  // M22: rederiveRule's PATCH (not just its notice) — the physics it writes
+  // rederiveRule's PATCH (not just its notice) — the physics it writes
   // when an endpoint moves, and the loud refusal when it cannot re-derive.
-  it("M22: a role flip to isl clears the now-irrelevant elevation mask", () => {
+  it("a role flip to isl clears the now-irrelevant elevation mask", () => {
     const { workspace, groundId, spaceId } = connectWorkspace();
     const world = tinyWorld(groundId, spaceId);
     const access = connectSegments(workspace, world, groundId, spaceId); // ground↔space access
@@ -551,7 +551,7 @@ describe("IG-7: connect derives physics from faceplates", () => {
     expect(patch.b!.min_elevation_deg).toBeNull();
   });
 
-  it("M22: the ground side of a re-derived access rule gets the elevation mask", () => {
+  it("the ground side of a re-derived access rule gets the elevation mask", () => {
     const { workspace, groundId, spaceId } = connectWorkspace();
     const world = tinyWorld(groundId, spaceId);
     const isl = connectSegments(workspace, world, spaceId, spaceId); // space↔space isl, no mask
@@ -563,7 +563,7 @@ describe("IG-7: connect derives physics from faceplates", () => {
     expect(patch.b!.min_elevation_deg).toBeNull(); // space side floorless
   });
 
-  it("M22: an unformable re-derivation carries the warning, never silent physics", () => {
+  it("an unformable re-derivation carries the warning, never silent physics", () => {
     const { workspace, groundId, spaceId } = connectWorkspace();
     const world = tinyWorld(groundId, spaceId);
     const rule = connectSegments(workspace, world, groundId, spaceId);
@@ -572,7 +572,7 @@ describe("IG-7: connect derives physics from faceplates", () => {
     expect(notice).toContain("WARNING: neither side has matching terminals");
   });
 
-  it("M22: re-deriving onto an unplaced segment invents no physics", () => {
+  it("re-deriving onto an unplaced segment invents no physics", () => {
     const { workspace, groundId, spaceId } = connectWorkspace();
     const world = tinyWorld(groundId, spaceId);
     const rule = connectSegments(workspace, world, groundId, spaceId);
@@ -584,7 +584,7 @@ describe("IG-7: connect derives physics from faceplates", () => {
   });
 });
 
-describe("IG-4: editor state is keyed by object identity", () => {
+describe("editor state is keyed by object identity", () => {
   beforeEach(() => {
     // The catalog fetches behind useBuilderCatalog are irrelevant here — the
     // catalog endpoint returns a bare array (refreshCatalogFamily casts the
@@ -624,7 +624,7 @@ describe("IG-4: editor state is keyed by object identity", () => {
   });
 });
 
-describe("IG-14: buffered windows commit through the apply row", () => {
+describe("buffered windows commit through the apply row", () => {
   afterEach(cleanup);
 
   it("a clean window says applied; Apply and Defaults are disabled", () => {
@@ -664,7 +664,7 @@ describe("IG-14: buffered windows commit through the apply row", () => {
     expect(calls).toEqual(["apply", "ok", "defaults", "cancel"]);
   });
 
-  // M5: a window whose applied object moved underneath a dirty working copy
+  // a window whose applied object moved underneath a dirty working copy
   // shows the stale notice and offers to reload current values. Apply stays
   // live — keeping the edits is the user's call — but the bulk save refuses.
   it("a stale window shows the notice and Load current values fires its own path", () => {
@@ -839,7 +839,7 @@ describe("deferred-clamp number contract (local string draft)", () => {
   });
 });
 
-describe("IG-15: the anatomy guide answers what-next in any order", () => {
+describe("the anatomy guide answers what-next in any order", () => {
   afterEach(cleanup);
   const guideProps = (ws: ReturnType<typeof newWorkspace>, resolvedSiteCount: number | null = null) => ({
     workspace: ws,
@@ -891,18 +891,18 @@ describe("IG-15: the anatomy guide answers what-next in any order", () => {
     expect(screen.getByText("named-session")).toBeTruthy();
   });
 
-  it("N52: the resolved distinct-namespace site count is shown as-is", () => {
+  it("the resolved distinct-namespace site count is shown as-is", () => {
     // A single two-node site resolves to ONE namespace → count 1, not 2.
     render(<BuildGuide {...guideProps(newWorkspace("named"), 1)} />);
     expect(screen.getByText("1 site · add more")).toBeTruthy();
   });
 
-  it("N52: a multi-site resolved count is shown, not the draft node count", () => {
+  it("a multi-site resolved count is shown, not the draft node count", () => {
     render(<BuildGuide {...guideProps(newWorkspace("named"), 3)} />);
     expect(screen.getByText("3 sites · add more")).toBeTruthy();
   });
 
-  it("N52: before the world resolves, the count falls back to the draft, flagged unresolved", () => {
+  it("before the world resolves, the count falls back to the draft, flagged unresolved", () => {
     const ws = newWorkspace("named");
     const ground = newDraftGroundSet("nodalarc:nodes/ground/gw.yaml", {});
     ground.members = mintSiteMembers(ground, parseSiteLines("Denver, 39.7, -104.9\nAmes, 42, -93").rows);
@@ -913,8 +913,8 @@ describe("IG-15: the anatomy guide answers what-next in any order", () => {
   });
 });
 
-describe("N55: \"artifact\" survives only in save-form contexts", () => {
-  // After P0a, "artifact" names the flattened SAVE form (artifact_sha256, the
+describe("\"artifact\" survives only in save-form contexts", () => {
+  // "Artifact" names the flattened SAVE form (artifact_sha256, the
   // save dialog). Naming the authoring PANE/document an artifact with a leading
   // article is a false-state display. Scan every builder file INCLUDING
   // __tests__ for that article+noun phrase; save-form uses ("saved artifact",
@@ -947,8 +947,8 @@ describe("N55: \"artifact\" survives only in save-form contexts", () => {
   });
 });
 
-describe("IG-16: the closed vocabularies have one owner", () => {
-  // Non-recursive, like the IG-5 scan: production builder files are flat (only
+describe("the closed vocabularies have one owner", () => {
+  // Non-recursive, like the raw-control scan: production builder files are flat (only
   // __tests__ is a subdirectory). A future production subdir would need this
   // widened.
   const vocabularyOffenders = (pattern: RegExp): string[] => {
@@ -984,7 +984,7 @@ describe("IG-16: the closed vocabularies have one owner", () => {
     ).toEqual([]);
   });
 
-  // N21: the real offenders at HEAD are option-OBJECT arrays ([{value:"isis"},…]),
+  // the real offenders at HEAD are option-OBJECT arrays ([{value:"isis"},…]),
   // which the bare-string patterns above cannot see. Each vocabulary is checked
   // in BOTH forms — an option-object pair (value:"tok"…value:"tok") and a
   // bare-string array ([ "tok", "tok" ]) — so neither shape can re-list it. The
@@ -1027,7 +1027,7 @@ describe("IG-16: the closed vocabularies have one owner", () => {
   });
 });
 
-describe("IG-17: a save is never a dead end", () => {
+describe("a save is never a dead end", () => {
   it("every library save announces the asset through the reveal store", async () => {
     const { requestLibraryReveal, useLibraryReveal } = await import("../useBuilderWorld");
     let latest: unknown = null;
@@ -1053,7 +1053,7 @@ describe("IG-17: a save is never a dead end", () => {
 
   it("the toolbar owns the session verbs as icon buttons; the rail owns none", () => {
     const source = readFileSync(join(BUILDER_DIR, "BuilderView.tsx"), "utf-8");
-    // N38: the slice anchors must EXIST and be ORDERED (toolbar < outline <
+    // the slice anchors must EXIST and be ORDERED (toolbar < outline <
     // canvas). Without this a renamed anchor makes indexOf return -1, the slice
     // is empty/backwards, and the rail `.not.toContain` below passes vacuously —
     // a false green. Assert the anchors so a rename breaks this test loudly.
@@ -1144,7 +1144,7 @@ describe("deploy gate: artifact truth, runtime-readiness, fail closed", () => {
     expect(gate.reason).toMatch(/must resolve/);
   });
 
-  it("refuses a saved, settled session that cannot start on the cluster (Q3)", () => {
+  it("refuses a saved, settled session that cannot start on the cluster", () => {
     // Every artifact/dirty check passes, but the session is not runtime-ready.
     const gate = canDeploy({
       ...saved,
@@ -1258,7 +1258,7 @@ describe("buffer overlays and the stale guard", () => {
     ]);
   });
 
-  // M5: the reconciliation pass decides prune/drop through the same two
+  // the reconciliation pass decides prune/drop through the same two
   // primitives the stale guard uses — never a second key->object resolver.
   it("appliedObjectForKey resolves object kinds by id, and null everywhere else", () => {
     const ws = newWorkspace("resolve-probe");
@@ -1299,7 +1299,7 @@ describe("buffer overlays and the stale guard", () => {
     expect(staleBufferKeys(moved, { [key]: { ...buf, dirty: false } })).toEqual([]);
   });
 
-  // M5 bulk apply-and-save: the confirm flow DECLINES a stale window by leaving
+  // bulk apply-and-save: the confirm flow DECLINES a stale window by leaving
   // its key out of the overlay, so an unconfirmed working copy is never written.
   it("overlayBuffers skips declined keys; the rest apply", () => {
     const ws = newWorkspace("skip-probe");

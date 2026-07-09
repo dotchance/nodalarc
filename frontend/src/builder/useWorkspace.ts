@@ -42,7 +42,7 @@ export interface EditorBuffer {
 
 export type BufferMap = Record<string, EditorBuffer>;
 
-// Deliberately separate from workspaceParseCore's deepEqual (P9e): this is the
+// Deliberately separate from workspaceParseCore's deepEqual: this is the
 // buffer/stale comparator, and its `===` base treats NaN !== NaN, whereas the
 // import-fidelity deepEqual uses Object.is (NaN === NaN). Draft buffers never
 // carry NaN, so the divergence is immaterial here; keeping them split avoids
@@ -239,7 +239,7 @@ const BACKUP_KEY = "nodalarc-builder-draft-previous";
 const AUTOSAVE_DEBOUNCE_MS = 800;
 const HISTORY_LIMIT = 100;
 
-// N9: one serialization owner for both slots. Writes carry a versioned
+// one serialization owner for both slots. Writes carry a versioned
 // envelope so a draft written by an older build migrates on restore instead
 // of loading malformed; reads validate shape and never adopt garbage.
 const ENVELOPE_VERSION = 1;
@@ -368,8 +368,8 @@ function _isPristineUntitled(workspace: Workspace): boolean {
 
 export function useWorkspace() {
   const [workspace, setWorkspaceState] = useState<Workspace | null>(null);
-  // The single mutation path (M4): sync workspaceRef SYNCHRONOUSLY so a
-  // live-workspace read (M3's stash) never lags the commit — for BOTH the
+  // The single mutation path: sync workspaceRef SYNCHRONOUSLY so a
+  // live-workspace read (stash) never lags the commit — for BOTH the
   // value and updater forms — then set React state. Undo history and autosave
   // observe the state change as before.
   const workspaceRef = useRef<Workspace | null>(null);
@@ -429,7 +429,7 @@ export function useWorkspace() {
   }, []);
 
   /** Preserve the current draft to the backup slot before a gesture displaces
-   *  it (M3: the LIVE workspace, not the up-to-800ms-stale autosave slot).
+   *  it (the LIVE workspace, not the up-to-800ms-stale autosave slot).
    *  Returns whether it stashed, skipped (nothing worth preserving), or
    *  refused (a real, different backup would be lost) so the caller can offer
    *  the overwrite/cancel choice. `force` takes the overwrite choice. */
@@ -487,11 +487,11 @@ export function useWorkspace() {
     }
   }, []);
 
-  /** The self-ensuring creation path (M4): building a block with no workspace
+  /** The self-ensuring creation path: building a block with no workspace
    *  starts one. Pure — no side effect inside or around the updater (a side
    *  effect in an updater double-fires under StrictMode). Preserving the
    *  displaced draft (stash-if-null, with the refuse/overwrite choice) and
-   *  clearing a refused-import world first (P2) are the CALLER's job:
+   *  clearing a refused-import world first are the CALLER's job:
    *  BuilderView owns the backup-choice dialog and the resolve world, and
    *  routes a create-from-null through `displace` so the prior draft is never
    *  silently lost when the backup slot is already occupied. */
@@ -590,7 +590,7 @@ export function useWorkspace() {
   // Library "use" gestures are self-ensuring: using a block with no open
   // workspace starts one - building never dead-ends on missing state.
   // The Use mutations mint the created/receiving object BEFORE the updater and
-  // return its segment_id (IG-1: the caller opens that object's editor for a
+  // return its segment_id (the caller opens that object's editor for a
   // draft, or reveals its placed row for a ref). Minting outside the updater is
   // also correct-by-construction — the factories bump an impure module counter,
   // so minting inside a (StrictMode-double-invoked) updater would allocate two
@@ -868,7 +868,7 @@ export function useWorkspace() {
     );
   }, []);
 
-  /** Close-time convergence (D7): once an authored ground set has been saved to
+  /** Close-time convergence: once an authored ground set has been saved to
    *  the library, collapse it back to a ref of that object — but only if the
    *  APPLIED set (read here, never a stale closure — `commit`'s functional form
    *  sees post-Apply state) still serializes byte-for-byte to the snapshot the

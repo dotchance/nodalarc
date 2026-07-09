@@ -1,6 +1,6 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
-/** The floating-window raise stack (N47) — ONE stacking mechanism for every
+/** The floating-window raise stack — ONE stacking mechanism for every
  *  operational window.
  *
  *  Before this, all windows shared a single z on the zWindow layer and stacked

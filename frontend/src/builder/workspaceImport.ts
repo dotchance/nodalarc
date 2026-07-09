@@ -1,6 +1,6 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
-/** The session-document → workspace inverse (P9e).
+/** The session-document → workspace inverse.
  *
  *  The import path — deserialize a session document back into an editable
  *  workspace, or refuse with the offending paths. It mints ids through the
@@ -56,7 +56,7 @@ export type WorkspaceImport =
   | { workspace: Workspace; issues?: undefined }
   | { workspace?: undefined; issues: string[] };
 
-/** Mint a ground member from an id-free candidate (P9e de-mint): the import
+/** Mint a ground member from an id-free candidate (de-mint): the import
  *  path mints inside the counter transaction, so a refusal leaks no member id. */
 function _mintMember(parse: Exclude<GroundMemberParse, { reason: string }>): DraftGroundSite {
   return parse.kind === "ref"
@@ -272,10 +272,9 @@ export function workspaceFromSessionDocument(
   document: Record<string, unknown>,
 ): WorkspaceImport {
   // A refused import is a pure no-op: it must advance no module id counter, and
-  // the fidelity re-serialize can throw on a pathological id collision (N1's
-  // uniquify cap). The counter transaction (workspace.ts) snapshots every family
+  // the fidelity re-serialize can throw on a pathological id collision (// uniquify cap). The counter transaction (workspace.ts) snapshots every family
   // on entry and restores on any refusal (result.issues) or throw, keeping the
-  // advanced counters only on a clean import — the N5 guarantee across the seam.
+  // advanced counters only on a clean import — the guarantee across the seam.
   return runCounterTransaction((): WorkspaceImport => {
     try {
       return _importSessionDocument(document);

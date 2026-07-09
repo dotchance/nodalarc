@@ -1,6 +1,6 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
-/** useSessionImport (M19): the session entry/import state machine. Pins all five
+/** useSessionImport: the session entry/import state machine. Pins all five
  *  members against the REAL useWorkspace (so displace actually stashes and
  *  openWorkspace actually adopts): the running-session auto-import guard; the
  *  stash-before-adopt ordering (the displaced draft lands in the backup slot,
@@ -90,7 +90,7 @@ afterEach(() => {
   localStorage.clear();
 });
 
-describe("useSessionImport (M19)", () => {
+describe("useSessionImport", () => {
   it("(1) auto-import guard: fires on entry beside a running session; blocked when inactive or workspace-present", () => {
     // Inactive: never a background importer.
     const inactive = renderHook((p) => useHarness(p), {

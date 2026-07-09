@@ -102,7 +102,7 @@ def _builder_link_rule(
     )
 
 
-# --- Rule preview: server-computed frozen-epoch visibility (P5a) -------------
+# --- Rule preview: server-computed frozen-epoch visibility -------------
 #
 # The builder renders these facts; it never runs a second physics engine. Each
 # rule's geometry is computed through the SAME OME visibility composites the
@@ -545,7 +545,7 @@ def build_builder_resolve_check(
 def _deploy_readiness(
     resolved: ResolvedSession, *, available_node_count: int = 1
 ) -> tuple[bool, tuple[str, ...]]:
-    """Deploy-readiness (Q3): can this resolved session start on the cluster?
+    """Deploy-readiness: can this resolved session start on the cluster?
 
     Refuses on no satellites (the session cannot start) or any readiness ERROR
     (zero-candidate link rules, disconnected routing members, SR index gaps,
@@ -572,7 +572,7 @@ def deploy_readiness_for_source(
     catalog_roots: CatalogRoots | None = None,
     available_node_count: int = 1,
 ) -> tuple[bool, tuple[str, ...]]:
-    """Resolve a session (Q1) and return its deploy-readiness (Q3).
+    """Resolve a session and return its deploy-readiness.
 
     The switch guard's authoritative check: it runs BEFORE any CR mutation, so
     a session that cannot start on the cluster never reaches the switch that
@@ -594,13 +594,13 @@ def build_builder_save_artifact(
     *,
     catalog_roots: CatalogRoots | None = None,
 ) -> BuilderSaveArtifact:
-    """Grammar-only save path (Q1): resolve → canonicalize → hash.
+    """Grammar-only save path: resolve → canonicalize → hash.
 
-    Deliberately does NOT build the preview world (Q2 —
+    Deliberately does NOT build the preview world (—
     ``_world_from_raw``/``build_ome_inputs_from_resolved``), so a
     grammar-valid session whose world build would fail or refuse (for
     instance a satellite-less, ground-only session) still saves: save depends
-    on Q1 alone. The session name and node count come from the
+    on alone. The session name and node count come from the
     ``ResolvedSession``, not a built world.
     """
     roots = catalog_roots or default_catalog_roots()

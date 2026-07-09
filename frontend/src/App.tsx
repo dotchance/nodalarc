@@ -292,7 +292,7 @@ function AppInner() {
     }
   }, [viewMode, selection, focusCurrentSelection]);
 
-  // B3: the builder mounts on FIRST entry and then stays mounted, hidden via
+  // the builder mounts on FIRST entry and then stays mounted, hidden via
   // display:none on leave — so toggling Live<->Builder preserves the draft,
   // open windows, and dirty buffers instead of unmounting them. The sticky
   // latch keeps it from mounting (and auto-importing) before the user has

@@ -25,7 +25,7 @@ function kindColor(kind: string): THREE.Color {
   return _color.set(kind === "access" ? LINK_GROUND_COLOR : LINK_ISL_COLOR);
 }
 
-/** M12: the geometry attributes are stale — and must be rebuilt — when the
+/** the geometry attributes are stale — and must be rebuilt — when the
  *  pairs array is a NEW identity (a fresh compute, even at equal length) OR the
  *  mounted geometry has no position attribute (a remount, e.g. the N->0->N
  *  path). Keying on length alone missed both: stale kind colors after a

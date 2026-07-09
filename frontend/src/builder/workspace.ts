@@ -28,7 +28,7 @@ import {
 } from "./workspaceParseCore";
 
 // EARTH_BODY_REF and draftSiteFromDocument live in the parse-core leaf now
-// (P9e); re-exported so existing importers are unaffected.
+//; re-exported so existing importers are unaffected.
 export { EARTH_BODY_REF, draftSiteFromDocument } from "./workspaceParseCore";
 
 /** THE role/medium vocabulary — the frontend twin of the grammar's
@@ -52,7 +52,7 @@ export const ROLE_DESCRIPTIONS: Record<MountRole, string> = {
 /** THE routing / forwarding vocabularies \u2014 twins of the grammar's routing.py and
  *  node literals. Same one-owner rule as the role vocabulary: the maps below are
  *  keyed by the union (satisfies Record<union, ...>), so adding a member without
- *  a label fails compilation here, and the IG-16 scan bans re-listing the tokens
+ *  a label fails compilation here, and the scan bans re-listing the tokens
  *  as option arrays anywhere else. Editors DERIVE their options from these. */
 export type Protocol = "isis" | "ospf" | "bgp" | "static";
 export type Adapter = "static_ip" | "bgp" | "dtn_bundle";
@@ -334,8 +334,8 @@ export const ORBIT_PRESETS: { label: string; orbit: Partial<DraftOrbit> }[] = [
  *  on a body other than Earth must carry a kernel manifest; the builder seeds
  *  this one and the session document shows it — the resolver still validates
  *  file and checksum server-side. */
-// Re-exported (P9e): the moved importer reads it for the ephemeris-manifest
-// fidelity check; P8 de-exported it while every consumer was internal.
+// Re-exported: the moved importer reads it for the ephemeris-manifest
+// fidelity check; de-exported it while every consumer was internal.
 export const DE440S_EPHEMERIS = {
   provider: "skyfield_bsp",
   quality_tier: "de440s",
@@ -701,7 +701,7 @@ export function identifier(value: string): string {
  *  candidate back to the same 48 chars and never converges. One shared
  *  taken-set spans every derived id in the document, so the families cannot
  *  collide across each other either. Throws only on genuine suffix exhaustion
- *  (~1000 objects sharing one base); N1's base-shortening makes that
+ *  (~1000 objects sharing one base); base-shortening makes that
  *  unreachable for ordinary authored content. */
 function uniqueDerivedId(base: string, taken: Set<string>): string {
   const direct = identifier(base);
@@ -722,7 +722,7 @@ function uniqueDerivedId(base: string, taken: Set<string>): string {
 
 /** IEEE/ITU letter bands as used for satellite allocations. The frequency
  *  is the single source of truth; the band name derives from it — picking a
- *  band seeds a typical satcom frequency the user then owns (IG-7). */
+ *  band seeds a typical satcom frequency the user then owns. */
 export const RF_BANDS: {
   band: string;
   minGhz: number;
@@ -1008,8 +1008,8 @@ export function nextMintIndex(draft: DraftGroundSet): number {
 }
 
 /** The grammar id a member answers to (override matching keys on it). */
-// Re-exported (P9e): the moved importer matches override targets by site id;
-// P8 de-exported it while every consumer was internal.
+// Re-exported: the moved importer matches override targets by site id;
+// de-exported it while every consumer was internal.
 export function memberSiteId(member: DraftGroundSite): string {
   return member.kind === "draft" && member.site ? member.site.site_id : member.site_id;
 }
@@ -1538,7 +1538,7 @@ export function emittedDomainId(domain: DraftRoutingDomain): string {
  *  segment except held-back grounds (no sites yet). This is the single source
  *  of the emission decision — toSessionDocument and routingWarnings both read
  *  it, so a segment cannot be silently present in one view and absent in the
- *  other. That drift is exactly the class that produced B1. */
+ *  other. That drift is exactly the class that produced . */
 export function emittedSegmentIds(workspace: Workspace): Set<string> {
   const held = heldBackGroundIds(workspace);
   return new Set(
@@ -1852,7 +1852,7 @@ export function toSessionDocument(workspace: Workspace): Record<string, unknown>
   const emitted = emittedSegmentIds(workspace);
   // One taken-set across every derived inner id in the document, so a long
   // session name cannot truncate two segments' constellation/orbit/site-set
-  // ids onto each other (N1). Property values evaluate top-to-bottom, so the
+  // ids onto each other. Property values evaluate top-to-bottom, so the
   // ids are allocated in a stable order and the round-trip stays deterministic.
   const derivedIds = new Set<string>();
   const refSegments: unknown[] = workspace.space_refs.map((placed) => ({
@@ -2056,7 +2056,7 @@ export function toSessionDocument(workspace: Workspace): Record<string, unknown>
     },
     // A session that places any node beyond Earth needs body frames from a
     // kernel manifest — the resolver refuses a non-Earth session without one.
-    // Keyed on the emitted content, never on mint-time stamp state (B1).
+    // Keyed on the emitted content, never on mint-time stamp state.
     ...(artifactUsesNonEarthBodies(workspace) ? { ephemeris: DE440S_EPHEMERIS } : {}),
   };
 }
@@ -2080,10 +2080,10 @@ export function presetForSchedulingBlock(block: unknown): SchedulingPresetKey | 
 }
 
 
-/** The N5 counter-leak transaction (P9e seam owner): snapshot every family id
+/** The counter-leak transaction (seam owner): snapshot every family id
  *  counter, run fn, and restore on a refusal (result.issues) OR a throw — a
  *  refused import must advance no counter. workspaceImport.ts wraps its parse in
- *  this so the N5 guarantee holds across the module boundary. */
+ *  this so the guarantee holds across the module boundary. */
 export function runCounterTransaction<T extends { issues?: string[] }>(fn: () => T): T {
   const saved = {
     draftCounter,
@@ -2114,7 +2114,7 @@ export function runCounterTransaction<T extends { issues?: string[] }>(fn: () =>
 }
 
 /** Mint-id fns for the import path — it builds rules/domains/boundaries inline
- *  and cannot reach these module-private counters across the seam (P9e). */
+ *  and cannot reach these module-private counters across the seam. */
 export function mintLinkRuleId(): string {
   linkCounter += 1;
   return `link-${linkCounter}`;

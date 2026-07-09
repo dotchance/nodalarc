@@ -1,8 +1,7 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
-/** The Library "New terminal / New site / New node" editor window body (P9d
- *  leaf). The library-draft state and the save hooks live in BuilderView and
- *  arrive as props; the functional setLibraryEditor wrappers (N56) are
+/** The Library "New terminal / New site / New node" editor window body (*  leaf). The library-draft state and the save hooks live in BuilderView and
+ *  arrive as props; the functional setLibraryEditor wrappers are
  *  preserved verbatim so a concurrent edit during an async write survives.
  */
 import type { Dispatch, SetStateAction } from "react";

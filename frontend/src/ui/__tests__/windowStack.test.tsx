@@ -1,6 +1,6 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
-/** The floating-window raise stack (N47): ONE bounded stacking mechanism.
+/** The floating-window raise stack: ONE bounded stacking mechanism.
  *
  *  The store pins the ordering (register-on-top, raise-to-top, remove-collapses,
  *  bounded ranks); the FloatingWindow pin proves the wiring — a pointerdown
@@ -24,7 +24,7 @@ afterEach(() => {
   _resetWindowStack();
 });
 
-describe("windowStack — the raise stack ordering (N47)", () => {
+describe("windowStack — the raise stack ordering", () => {
   it("registers each window on top, bottom → top", () => {
     addWindow("a");
     addWindow("b");
@@ -66,7 +66,7 @@ describe("windowStack — the raise stack ordering (N47)", () => {
   });
 });
 
-describe("FloatingWindow — raise-on-pointerdown wiring (N47)", () => {
+describe("FloatingWindow — raise-on-pointerdown wiring", () => {
   function win(raiseId: string) {
     return (
       <FloatingWindow

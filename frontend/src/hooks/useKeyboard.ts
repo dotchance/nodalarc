@@ -8,7 +8,7 @@ import type { ViewMode, ColorMode } from "../types";
 
 /** Shortcut reference consumed by the help overlay — keep in sync with the
  *  switch below (they live side by side so edits are visually adjacent).
- *  `suspendedInBuilder` is the M9 suspend/keep partition: a live-session key is
+ *  `suspendedInBuilder` is the suspend/keep partition: a live-session key is
  *  a no-op in builder mode (the builder has no live session to drive); a shared
  *  display/color/label/camera/help key stays live so the builder consumes the
  *  same display state. This table is the SINGLE source of truth — the help
@@ -98,7 +98,7 @@ export function useKeyboard(actions: KeyboardActions, viewMode: ViewMode): void 
       )
         return;
 
-      // M9: a live-session key is a full no-op in the builder — RETURN before
+      // a live-session key is a full no-op in the builder — RETURN before
       // any preventDefault so native behavior (Tab focus-nav, Space activation)
       // is preserved, not merely the action skipped.
       if (viewMode === "builder" && SUSPENDED_IN_BUILDER.has(e.key)) return;

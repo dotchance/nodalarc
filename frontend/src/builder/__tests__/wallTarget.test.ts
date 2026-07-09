@@ -1,6 +1,6 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
-/** wallTarget (M20): map a resolve refusal's subject back to the editor window
+/** wallTarget: map a resolve refusal's subject back to the editor window
  *  that owns it, matched against the PREVIEW workspace (so a dirty rename routes
  *  by the dirty draft). An unmatched subject returns null — the caller then
  *  shows the session-level wall, never dropping the refusal.

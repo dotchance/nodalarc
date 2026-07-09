@@ -1,6 +1,6 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
-/** The "Open a session" picker window body (P9d leaf).
+/** The "Open a session" picker window body (leaf).
  *
  *  Pure presentation: your saved sessions and the shipped NodalArc sessions,
  *  each a row you open. The open gesture's teardown+import sequence lives in

@@ -32,7 +32,7 @@ interface DomainEditorProps {
   domain: DraftRoutingDomain;
   onUpdate: (patch: Partial<DraftRoutingDomain>) => void;
   onRemove: () => void;
-  /** IG-2: focus the name when a create gesture opened this editor. */
+  /** focus the name when a create gesture opened this editor. */
   autoFocusName?: boolean;
 }
 

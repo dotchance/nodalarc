@@ -1,9 +1,8 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
-/** Entry lifecycle and draft preservation (P3). A draft is user work; silent
+/** Entry lifecycle and draft preservation. A draft is user work; silent
  *  destruction is the worst failure this UI can have. These pins cover the
- *  hook layer: N9's versioned envelope + migration + refuse-with-reason, M3's
- *  live-workspace stash, M4's stash-on-first-workspace, and the backup
+ *  hook layer: versioned envelope + migration + refuse-with-reason, *  live-workspace stash, stash-on-first-workspace, and the backup
  *  refuse/choice rules (a real different backup is never bulldozed; a pristine
  *  draft never protects itself nor bulldozes real work). The Live<->Builder
  *  toggle-preserves-everything behavior is drive-verified. */
@@ -48,7 +47,7 @@ afterEach(() => {
   localStorage.clear();
 });
 
-describe("N9 — versioned envelope, migration, and refuse-with-reason", () => {
+describe("— versioned envelope, migration, and refuse-with-reason", () => {
   it("(1) autosave writes a versioned {v, workspace} envelope", () => {
     const { result } = renderHook(() => useWorkspace());
     act(() => result.current.startNew("env-test"));
@@ -127,8 +126,8 @@ describe("N9 — versioned envelope, migration, and refuse-with-reason", () => {
   });
 });
 
-describe("M3/M4 — the stash preserves the live draft, on time", () => {
-  it("(M3) stashes the LIVE workspace, capturing an edit before the 800ms autosave", () => {
+describe("— the stash preserves the live draft, on time", () => {
+  it(" stashes the LIVE workspace, capturing an edit before the 800ms autosave", () => {
     const { result } = renderHook(() => useWorkspace());
     act(() => result.current.startNew("live"));
     act(() => result.current.addConstellation(SPACE_NODE));
@@ -143,7 +142,7 @@ describe("M3/M4 — the stash preserves the live draft, on time", () => {
     expect(parsed.workspace.space).toHaveLength(1); // the sub-800ms edit survived
   });
 
-  it("(M4) the stash preserves the prior autosave slot when no workspace is open", () => {
+  it(" the stash preserves the prior autosave slot when no workspace is open", () => {
     // The mechanism a self-ensuring creation-from-null routes through
     // (BuilderView's ensureThenCreate -> displace): with no live workspace the
     // stash falls back to the prior autosave slot, preserving that draft to the
@@ -211,7 +210,7 @@ describe("backup refuse/choice — never bulldoze real work, never protect prist
   });
 });
 
-describe("convergeGroundToRef — close-time D7 convergence (P7g)", () => {
+describe("convergeGroundToRef — close-time convergence", () => {
   const REF = "user:site-sets/denver-set.yaml";
   /** A workspace whose one authored ground set is BOTH a link-rule endpoint and
    *  a routing-domain member — the identity-continuity fixture. The set is
@@ -366,7 +365,7 @@ describe("convergeGroundToRef — close-time D7 convergence (P7g)", () => {
   });
 });
 
-describe("addGroundMember — created vs appended (IG-1 create-focus safety)", () => {
+describe("addGroundMember — created vs appended (create-focus safety)", () => {
   it("creates the first set (created=true) then appends to it (created=false)", () => {
     const { result } = renderHook(() => useWorkspace());
     act(() => result.current.startNew("gm-test"));
@@ -394,7 +393,7 @@ describe("addGroundMember — created vs appended (IG-1 create-focus safety)", (
   });
 });
 
-describe("M21 — undo trust mechanics (IG-11)", () => {
+describe("— undo trust mechanics", () => {
   it("undo restores the workspace to its state before the last mutation", () => {
     const { result } = renderHook(() => useWorkspace());
     act(() => result.current.startNew("undo-restore"));

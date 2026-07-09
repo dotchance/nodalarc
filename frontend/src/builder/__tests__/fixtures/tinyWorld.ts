@@ -1,6 +1,6 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
-/** A wire-faithful two-segment BuilderWorld for link-physics tests (N40).
+/** A wire-faithful two-segment BuilderWorld for link-physics tests.
  *
  *  One ground station and one satellite, each carrying a terminal inventory the
  *  physics derivation reads. Built from the real wire types — the ground node is

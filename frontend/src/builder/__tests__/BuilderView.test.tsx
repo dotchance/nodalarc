@@ -1,10 +1,10 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
-/** BuilderView surface contract (P2): the on-screen world is the resolver's
+/** BuilderView surface contract: the on-screen world is the resolver's
  *  expansion of the current draft, never a stale frame or a false "resolves".
  *  These pins RENDER the view (Scene mocked to a null render, fetch stubbed,
  *  localStorage isolated) and assert the emitted DOM — the data-layer hook
- *  test alone cannot see the UI state P2 fixes.
+ *  test alone cannot see the UI state fixes.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor, cleanup, within } from "@testing-library/react";
@@ -85,14 +85,14 @@ afterEach(() => {
   localStorage.clear();
 });
 
-describe("BuilderView — resolve-loop and world honesty (P2)", () => {
+describe("BuilderView — resolve-loop and world honesty", () => {
   it("renders the start card with no session loaded", async () => {
     stubFetch();
     render(<BuilderView {...PROPS} />);
     expect(await screen.findByTestId("builder-start")).toBeTruthy();
   });
 
-  it("(B2) an all-held-back workspace fires no resolve, shows held-out — never resolves", async () => {
+  it(" an all-held-back workspace fires no resolve, shows held-out — never resolves", async () => {
     const fetchMock = stubFetch();
     render(<BuilderView {...PROPS} />);
 
@@ -119,7 +119,7 @@ describe("BuilderView — resolve-loop and world honesty (P2)", () => {
     expect(screen.getByTestId("builder-rail").textContent).toContain("held out of the session document");
   });
 
-  it("(B3) an inactive (hidden) builder does not auto-import a running session", async () => {
+  it(" an inactive (hidden) builder does not auto-import a running session", async () => {
     const fetchMock = stubFetch({
       sessions: [
         {
@@ -139,7 +139,7 @@ describe("BuilderView — resolve-loop and world honesty (P2)", () => {
     expect(resolveWorldCalls(fetchMock)).toHaveLength(0);
   });
 
-  it("(N15) opening the picker refetches the sessions list", async () => {
+  it(" opening the picker refetches the sessions list", async () => {
     const fetchMock = stubFetch();
     render(<BuilderView {...PROPS} />);
     await waitFor(() => expect(sessionsCalls(fetchMock).length).toBeGreaterThanOrEqual(1));
@@ -218,7 +218,7 @@ describe("BuilderView — resolve-loop and world honesty (P2)", () => {
   });
 });
 
-describe("BuilderView — IG-1: Library Use places and reveals", () => {
+describe("BuilderView — Library Use places and reveals", () => {
   // The catalog cache is module-global; reset it per case so each mounts with a
   // fresh fetch (an earlier suite fetching a family empty would otherwise stick).
   beforeEach(() => resetCatalogStores());
@@ -236,7 +236,7 @@ describe("BuilderView — IG-1: Library Use places and reveals", () => {
       case "nodes":
         return [{ ref: GROUND_NODE, family: "nodes", id: "gateway", display_name: "Gateway" }];
       case "sites":
-        // A sites entry with NO id — the fall-through case IG-3 must surface.
+        // A sites entry with NO id — the fall-through case must surface.
         return [{ ref: "nodalarc:sites/orphan.yaml", family: "sites", display_name: "No-Id Site" }];
       default:
         return [];
@@ -301,7 +301,7 @@ describe("BuilderView — IG-1: Library Use places and reveals", () => {
     fireEvent.click(await screen.findByRole("tab", { name: "Nodes" }));
     fireEvent.click(await screen.findByLabelText("Use: start a constellation with this node"));
     // The created segment lands in the outline drafts, and freshId sets
-    // create-focus (IG-2): the opened editor's name field is focused.
+    // create-focus: the opened editor's name field is focused.
     await waitFor(() => expect(document.activeElement?.tagName).toBe("INPUT"));
     expect(screen.getByTestId("builder-drafts")).toBeTruthy();
     expect((document.activeElement as HTMLInputElement).value).toBeTruthy(); // a named field, not an empty search box
@@ -317,7 +317,7 @@ describe("BuilderView — IG-1: Library Use places and reveals", () => {
   });
 });
 
-describe("BuilderView — D7 close-time convergence (P7g)", () => {
+describe("BuilderView — close-time convergence", () => {
   beforeEach(() => {
     resetCatalogStores();
     // A save reveals the asset in LibraryPanel, whose flash effect calls
@@ -389,7 +389,7 @@ describe("BuilderView — D7 close-time convergence (P7g)", () => {
   });
 });
 
-describe("BuilderView — deploy gate toolbar wiring (N41)", () => {
+describe("BuilderView — deploy gate toolbar wiring", () => {
   it("the deploy verb is disabled and shows canDeploy's reason as its label when unsaved", async () => {
     stubFetch();
     render(<BuilderView {...PROPS} />);

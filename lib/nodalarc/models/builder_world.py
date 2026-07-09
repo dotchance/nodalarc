@@ -52,8 +52,8 @@ class BuilderResolveCheck(BaseModel):
     document: dict[str, Any]
     document_yaml: str
     artifact_sha256: str
-    # Runtime-readiness (Q3), the NODE-COUNT-INDEPENDENT subset the UI can gate
-    # on: a session may resolve and save (Q1) yet be unable to start on the
+    # Runtime-readiness, the NODE-COUNT-INDEPENDENT subset the UI can gate
+    # on: a session may resolve and save yet be unable to start on the
     # cluster. NECESSARY, not sufficient — the switch endpoint runs the
     # operator's full, node-count-aware validator and is authoritative.
     deploy_ready: bool = True
@@ -63,8 +63,8 @@ class BuilderResolveCheck(BaseModel):
 class BuilderSaveArtifact(BaseModel):
     """Grammar-only save result: what a save writes, without a preview world.
 
-    The save path answers only Q1 (grammar-valid): a session that resolves
-    canonicalizes and is written, even if its preview world (Q2) fails or
+    The save path answers only (grammar-valid): a session that resolves
+    canonicalizes and is written, even if its preview world fails or
     refuses to build. So this carries the canonical bytes and their hash plus
     the two values the save endpoint reports — the session name and node count
     — read from the ResolvedSession, never from a built world. It deliberately
@@ -204,7 +204,7 @@ PreviewScope = Literal[
 #: The reasons a tested preview pair drew no line, keyed VERBATIM on the
 #: runtime's own visibility reject_reason — never a renamed dialect — plus the
 #: one server-only bucket ``no_geometry`` (an allocated pair with no computable
-#: geometry at the frozen epoch, the old client N30 silent skip). The
+#: geometry at the frozen epoch, the old client silent skip). The
 #: motion-only gates (tracking_exceeded, polar_seam) cannot appear: the preview
 #: is one frozen epoch and calls the composites with those gates disabled.
 #: ``terminal_type_mismatch`` is the one allocator-layer gate the preview does
@@ -222,8 +222,7 @@ BuilderPreviewRejectReason = Literal[
 
 class BuilderPreviewPair(BaseModel):
     """One drawn preview pair: a runtime node pair whose frozen-epoch geometry
-    passed every armed gate, oriented to the rule's endpoints server-side. P5b's
-    canvas draws these directly and never re-derives pair identities."""
+    passed every armed gate, oriented to the rule's endpoints server-side. canvas draws these directly and never re-derives pair identities."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 

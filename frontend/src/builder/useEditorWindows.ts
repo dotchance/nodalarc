@@ -1,11 +1,11 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
-/** The builder's floating-editor windows and their buffered edits (M18).
+/** The builder's floating-editor windows and their buffered edits.
  *
  *  Extracted from BuilderView: the diagram workspace is a set of floating,
  *  per-object editor windows, each editing a copy (buffer) of its object that
  *  the session only adopts on Apply. This hook owns the windows list, the
- *  buffer map, and the M5 reconciliation that keeps open windows honest when
+ *  buffer map, and the reconciliation that keeps open windows honest when
  *  the applied workspace moves underneath them. The pure buffer maths
  *  (overlayBuffers/staleBufferKeys/workspaceForSave) stay in useWorkspace; this
  *  hook is the stateful shell that drives them.
@@ -50,7 +50,7 @@ export interface EditorWindow {
   target: EditorTarget;
   x: number;
   y: number;
-  /** The last library save made from this window (D7): the ref and the exact
+  /** The last library save made from this window: the ref and the exact
    *  wrapper snapshot it stored. A user close converges the bound object back to
    *  this ref if it still matches. Latest save wins; the annotation dies with
    *  the window, so a reopened window starts a fresh editing session. */
@@ -162,11 +162,11 @@ export function useEditorWindows({
   convergeGroundToRef,
 }: UseEditorWindowsDeps) {
   // The diagram workspace: editors are floating, anchored windows — many
-  // can be open at once, keyed per object (re-open focuses, IG-4/IG-12).
+  // can be open at once, keyed per object (re-open focuses, ).
   const [windows, setWindows] = useState<EditorWindow[]>([]);
   const openEditor = (target: EditorTarget) => {
     const key = targetKey(target);
-    // Re-open FOCUSES via the one stacking mechanism — the raise stack (N47),
+    // Re-open FOCUSES via the one stacking mechanism — the raise stack,
     // not an array reorder. The side effect stays outside the updater (StrictMode
     // double-invokes updater bodies); a fresh window rises on mount instead.
     if (windows.some((w) => w.key === key)) raiseWindow(key);
@@ -184,7 +184,7 @@ export function useEditorWindows({
       return [...prev, { key, target, x: 440 + step * 40, y: 84 + step * 32 }];
     });
   };
-  /** Record a library save against its window (D7): the close-time convergence
+  /** Record a library save against its window: the close-time convergence
    *  reads this off the bound window. Latest save wins. */
   const annotateWindowSaved = (key: string, ref: string, snapshot: Record<string, unknown>) => {
     setWindows((prev) => prev.map((w) => (w.key === key ? { ...w, saved: { ref, snapshot } } : w)));
@@ -201,7 +201,7 @@ export function useEditorWindows({
     const closingWindows = windows.filter(predicate);
     const closing = new Set(closingWindows.map((w) => w.key));
     if (closing.size === 0) return;
-    // D7: a user close converges each saved-then-unchanged ground back to its
+    // a user close converges each saved-then-unchanged ground back to its
     // ref. `convergeGroundToRef` reads the APPLIED set through commit's
     // functional form, so an OK close (Apply then close, this same batch) sees
     // the just-applied object; a teardown close never mutates the outgoing one.
@@ -306,7 +306,7 @@ export function useEditorWindows({
   const previewWorkspace = (): Workspace | null =>
     workspace ? overlayBuffers(workspace, buffers) : null;
   const dirtyWindows = Object.values(buffers).filter((b) => b.dirty).length;
-  // M5: reconcile open editors when the applied workspace moves underneath them
+  // reconcile open editors when the applied workspace moves underneath them
   // (undo, restore, a sibling edit, a deletion). Two disjoint responses:
   //  - GONE: a window whose object no longer exists (deleted, or an undone
   //    create) is pruned with its buffer — dirty or clean. The object is gone;

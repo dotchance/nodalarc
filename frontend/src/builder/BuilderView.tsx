@@ -110,7 +110,7 @@ import type {
 
 interface BuilderViewProps {
   /** True only while the builder is the shown view. The builder stays mounted
-   *  when hidden (B3) so drafts, windows, and buffers survive a Live<->Builder
+   *  when hidden so drafts, windows, and buffers survive a Live<->Builder
    *  toggle; `active` gates every operator surface that ACTS (the Scene
    *  subtree per the singleton law, global key listeners, the reveal-open and
    *  auto-import effects) so a hidden builder never mounts a second Scene or
@@ -208,7 +208,7 @@ type SaveState =
   | { kind: "failed"; message: string };
 
 /** Save is a small dialog, not a silent write. The name is buffered here and
- *  committed once on Save (IG-14 — the Session window stays the only live
+ *  committed once on Save (— the Session window stays the only live
  *  name editor); with unapplied windows the primary action applies them
  *  first, and saving around them is the quieter, explicit choice. */
 function SaveSessionDialog({
@@ -486,7 +486,7 @@ export function BuilderView({
   // as soon as any workspace exists, so auto-importing over a draft would
   // silently destroy it — that case gets an explicit choice instead.
   const runningSession = sessions.find((s) => s.active) ?? null;
-  // B3 backup refuse/choice: a gesture that would displace the current draft
+  // backup refuse/choice: a gesture that would displace the current draft
   // (New, Open, auto-import adoption) first stashes it. If the stash is
   // REFUSED — a real, different draft already occupies the backup slot — the
   // gesture holds here and the choice dialog offers overwrite-or-cancel
@@ -504,7 +504,7 @@ export function BuilderView({
     }
     proceed();
   };
-  /** A self-ensuring creation gesture (M4): with a workspace open, just create
+  /** A self-ensuring creation gesture: with a workspace open, just create
    *  (the gesture adds to it — no displacement). With none open, creating one
    *  displaces the prior autosave draft, so route through `displace` — preserve
    *  it to the backup with the refuse/overwrite choice, never a silent loss. */
@@ -512,7 +512,7 @@ export function BuilderView({
     if (workspace) create();
     else displace(create, label);
   };
-  // The session entry/import state machine (M19: useSessionImport) — the
+  // The session entry/import state machine (useSessionImport) — the
   // running-session auto-import, the picker-opened load, the refused-import
   // notice, and the imported-from provenance.
   const { importPending, importIssues, importedFrom, startImport, reset: resetImport } =
@@ -527,8 +527,8 @@ export function BuilderView({
       displace,
       openWorkspace,
     });
-  // P2/B3 cross-phase contract: refresh the session list when the builder
-  // regains visibility. After B3 the builder stays mounted, so "regains
+  // cross-phase contract: refresh the session list when the builder
+  // regains visibility. After the builder stays mounted, so "regains
   // visibility" is the active false->true transition, not a remount — the
   // mount-time fetch only fires on first entry, so a re-entry must refetch or
   // the running chip and auto-import target go stale on an external switch.
@@ -544,14 +544,14 @@ export function BuilderView({
   // never replays the last save, and each consumer role retires its own.
   const libraryReveal = useLibraryReveal();
   useEffect(() => {
-    // Gated on `active` (B3): a hidden builder must not claim the reveal nonce
+    // Gated on `active`: a hidden builder must not claim the reveal nonce
     // the shown view owns, nor pop a Library window in an invisible pane.
     if (!active) return;
     if (!claimLibraryReveal("opener", libraryReveal)) return;
     openEditor({ kind: "catalog" });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active, libraryReveal]);
-  // IG-1 ref floor: a placed reference has no editor, so its Use scrolls its
+  // ref floor: a placed reference has no editor, so its Use scrolls its
   // outline row into view and flashes it. A SEPARATE consume-once channel from
   // the Library reveal — a placement shows where it landed in the session
   // anatomy, it never opens the Library.
@@ -581,7 +581,7 @@ export function BuilderView({
     // scrollIntoView is optional-chained: jsdom does not implement it.
     document.querySelector(`[data-segment-id="${escaped}"]`)?.scrollIntoView?.({ block: "nearest" });
   }, [revealedSegment]);
-  // The floating-editor windows and their buffered edits (M18: useEditorWindows).
+  // The floating-editor windows and their buffered edits (useEditorWindows).
   const {
     windows,
     openEditor,
@@ -609,7 +609,7 @@ export function BuilderView({
     updateBoundary,
     convergeGroundToRef,
   });
-  // The wall's owning editor target (M20: wallTarget). Matched against the
+  // The wall's owning editor target (wallTarget). Matched against the
   // preview overlay — the refused document was serialized from it, so a dirty
   // rename must be matched by the dirty draft, not the applied state.
   const wall = wallTarget(previewWorkspace() ?? workspace, resolveError);
@@ -626,12 +626,12 @@ export function BuilderView({
   // Whether the last preview serialized to a document that emits segments —
   // the only honest discriminator between "a resolve is coming" and the
   // all-held-back steady state that fires no resolve ever. A serializer throw
-  // (P1's suffix-exhaustion cap, structurally near-impossible) is a refusal on
+  // (suffix-exhaustion cap, structurally near-impossible) is a refusal on
   // the same channel resolver refusals use, never an async crash.
   const [previewEmits, setPreviewEmits] = useState(false);
   const [serializeError, setSerializeError] = useState<string | null>(null);
   // A Restore that finds no payload (missing/corrupt) surfaces here instead of
-  // silently doing nothing; the current workspace and its world stand (N10).
+  // silently doing nothing; the current workspace and its world stand.
   const [restoreError, setRestoreError] = useState<string | null>(null);
   const hasDrafts =
     !!workspace &&
@@ -679,7 +679,7 @@ export function BuilderView({
 
   // Trust mechanics: Ctrl/Cmd+Z undoes the last workspace mutation unless
   // the user is typing in a field (native input undo wins there). Gated on
-  // `active` (B3): a hidden-but-mounted builder must never intercept a Ctrl+Z
+  // `active`: a hidden-but-mounted builder must never intercept a Ctrl+Z
   // the live view's user intends for something else.
   useEffect(() => {
     if (!active) return;
@@ -694,12 +694,12 @@ export function BuilderView({
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [active, undo]);
-  // IG-2: the object a create gesture just made — its editor focuses the
+  // the object a create gesture just made — its editor focuses the
   // name once.
   const [freshId, setFreshId] = useState<string | null>(null);
   const [saveState, setSaveState] = useState<SaveState>({ kind: "idle" });
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
-  // N13: the create-focus marker is one-shot. Drop it once the window it names
+  // the create-focus marker is one-shot. Drop it once the window it names
   // is gone (a closed window must not re-grab focus if that id reappears), and
   // whenever the builder is left, so returning never focuses a stale field.
   useEffect(() => {
@@ -711,14 +711,14 @@ export function BuilderView({
       setFreshId(null);
     }
   }, [active, windows, freshId]);
-  // N16: the Copy result is transient feedback, cleared after a beat so the
+  // the Copy result is transient feedback, cleared after a beat so the
   // control returns to its resting label.
   useEffect(() => {
     if (copyState === "idle") return;
     const t = setTimeout(() => setCopyState("idle"), 2000);
     return () => clearTimeout(t);
   }, [copyState]);
-  // N14: the completeness rail reads this in two places (the guard and the
+  // the completeness rail reads this in two places (the guard and the
   // chip map); compute it once per workspace, not twice per render.
   const findings = useMemo(
     () => (workspace ? completenessFindings(workspace) : []),
@@ -820,7 +820,7 @@ export function BuilderView({
   // The Library's per-entry gestures. USE places the block in the session
   // (self-ensuring: no open workspace starts one); EDIT forks it into an
   // editable draft; clicking the row inspects it.
-  // Third-class member (N11): a Use/Customize gesture self-ensures a
+  // Third-class member: a Use/Customize gesture self-ensures a
   // workspace, so when one is created while a refused-import read-only world
   // is still on screen (world set, workspace null) the stale world would
   // render behind the new draft. The refused-import state is the only
@@ -835,7 +835,7 @@ export function BuilderView({
     const name = entry.display_name ?? entry.id ?? entry.ref;
     if (entry.family === "constellations") {
       // REF family: no editor exists for a placed reference (L6) — reveal its
-      // outline row so the placement is visible (IG-1 ref floor).
+      // outline row so the placement is visible (ref floor).
       ensureThenCreate(() => {
         clearRefusedWorldBeforeCreate();
         requestOutlineReveal(addConstellationRef(entry.ref, name));
@@ -869,7 +869,7 @@ export function BuilderView({
       }, label);
     } else {
       // Fall-through: a sites entry with no id, or an unknown family — surface it
-      // (IG-3), never a silent no-op branch.
+      //, never a silent no-op branch.
       setLibraryError(
         `cannot use "${name}": ${
           entry.family === "sites"
@@ -1038,7 +1038,7 @@ export function BuilderView({
       })();
     }
   };
-  // The connect gesture (IG-7): both endpoints known before the rule
+  // The connect gesture: both endpoints known before the rule
   // exists, physics derived from the resolved world's faceplates.
   const segmentCapabilities = useMemo(() => capabilitiesBySegment(world), [world]);
   // Beam discs on the body while a segment's editor is open: every satellite
@@ -1182,7 +1182,7 @@ export function BuilderView({
             <ConstellationEditor
               key={draft.segment_id}
               autoFocusName={freshId === draft.segment_id}
-              // N28: the dwell readout reads the PREVIEW (applied + dirty
+              // the dwell readout reads the PREVIEW (applied + dirty
               // overlays) so a dirty session buffer's start_time is reflected,
               // never a stale applied value.
               workspace={previewWorkspace() ?? workspace}
@@ -1392,7 +1392,7 @@ export function BuilderView({
           // Preserve the current draft before opening displaces it; a refused
           // stash holds this gesture for the choice dialog.
           displace(() => {
-            // N11: clear before the swap so the previous session's world does
+            // clear before the swap so the previous session's world does
             // not render during the new load; the load's own resolve owns
             // failure (error-clears-world), so no conditional guard is needed.
             clear();
@@ -1571,7 +1571,7 @@ export function BuilderView({
             disabled={!!importPending}
             label={importPending ? "Opening…" : "Open a session — from your library or the NodalArc library"}
             onClick={() => {
-              // N15: the picker's running chip and auto-import target must not
+              // the picker's running chip and auto-import target must not
               // claim a session the cluster switched away from — refetch on open.
               void refreshSessions();
               openEditor({ kind: "open-session" });
@@ -1626,7 +1626,7 @@ export function BuilderView({
                   : "Nothing to restore"
             }
             onClick={() => {
-              // N10/N9: clear and reset ONLY when the restore actually swaps
+              // clear and reset ONLY when the restore actually swaps
               // the workspace. On a missing/corrupt/unmigratable payload the
               // restore refuses with a reason and the stored value survives;
               // the current world/YAML/status stand (an unchanged workspace

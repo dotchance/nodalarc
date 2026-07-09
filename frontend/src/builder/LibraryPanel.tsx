@@ -137,7 +137,7 @@ export function LibraryPanel({ onUse, onCustomize, onInspect, onNew }: LibraryPa
       ?.scrollIntoView({ block: "center" });
     // Re-run only on a new reveal (a fresh flashRef) or after the family list
     // refreshes — the target row may not exist on the render that set flashRef.
-    // Without deps this fired every render and fought the user's own scroll (N26).
+    // Without deps this fired every render and fought the user's own scroll.
   }, [flashRef, catalog.entries]);
   const visibleEntries = catalog.entries.filter(
     (entry) =>

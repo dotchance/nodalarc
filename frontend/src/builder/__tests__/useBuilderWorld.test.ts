@@ -1,6 +1,6 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
-/** useBuilderWorld data-layer contract (N39): the resolve loop keeps nothing
+/** useBuilderWorld data-layer contract: the resolve loop keeps nothing
  *  stale on screen. A late response for a superseded edit never overwrites a
  *  newer one; a failed resolve clears the world ("the error is the state");
  *  and clear() invalidates any in-flight response so a resolve that lands
@@ -55,7 +55,7 @@ function check(marker: string) {
 
 const sessionsOk = { ok: true, json: () => Promise.resolve([]) };
 
-describe("useBuilderWorld — the resolve loop keeps nothing stale (N39)", () => {
+describe("useBuilderWorld — the resolve loop keeps nothing stale", () => {
   let fetchMock: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
@@ -156,7 +156,7 @@ describe("useBuilderWorld — the resolve loop keeps nothing stale (N39)", () =>
   });
 });
 
-describe("outline reveal is a channel separate from the Library reveal (IG-1)", () => {
+describe("outline reveal is a channel separate from the Library reveal", () => {
   it("consumes an outline reveal once — claim returns it, then null (no replay)", () => {
     const { result } = renderHook(() => useOutlineReveal());
     act(() => requestOutlineReveal("space-777"));
@@ -189,8 +189,8 @@ describe("outline reveal is a channel separate from the Library reveal (IG-1)", 
   });
 });
 
-describe("useLibrarySave — the one 409-conflict save machine (M16)", () => {
-  // Each successful save fires saveUserObject's IG-17 side effects (a family
+describe("useLibrarySave — the one 409-conflict save machine", () => {
+  // Each successful save fires saveUserObject's side effects (a family
   // refresh into the module-global catalog store); reset it per case.
   beforeEach(() => resetCatalogStores());
   type SaveResp = { ok: boolean; status: number; json: () => Promise<unknown> };

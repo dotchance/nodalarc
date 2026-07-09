@@ -1,14 +1,14 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
-/** Document→draft parse core (P9e leaf).
+/** Document→draft parse core (leaf).
  *
  *  The mint-free, serializer-free core the fork wrappers (workspace.ts, throw
  *  on grammar the editor cannot represent) and the import wrappers
  *  (workspaceImport.ts, collect issues and continue) both consume one-way. The
  *  grammar knowledge and the draft field mapping live ONCE here so the two
- *  paths cannot drift (M2). These helpers never own copy and never mint an id:
+ *  paths cannot drift. These helpers never own copy and never mint an id:
  *  parseGroundMember returns an id-free CANDIDATE and each wrapper mints the
- *  member_id on acceptance (P9e counter seam). Type-only imports from
+ *  member_id on acceptance (counter seam). Type-only imports from
  *  workspace.ts are erased, so there is no runtime cycle.
  */
 import type { DraftOrbit, DraftSiteObject } from "./workspace";
@@ -191,7 +191,7 @@ export function draftSiteFromDocument(document: Record<string, unknown>): DraftS
 
 /** An id-free ground-member candidate. The wrappers mint the member_id on
  *  acceptance (fork mints eagerly, import mints inside the counter transaction),
- *  so the parse core stays mint-free (P9e). */
+ *  so the parse core stays mint-free. */
 export type GroundMemberParse =
   | { kind: "ref"; ref: string; site_id: string; label: string }
   | { kind: "draft"; site: DraftSiteObject }

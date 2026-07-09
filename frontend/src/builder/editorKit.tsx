@@ -2,12 +2,12 @@
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
 /** The editor kit — the only source of editing controls in builder editors.
  *
- *  Interaction-grammar enforcement by construction (IG-5): every editor
+ *  Interaction-grammar enforcement by construction: every editor
  *  composes these controls, so field anatomy, card anatomy, and control
  *  behavior cannot drift per surface. A raw <input>/<select>/<textarea> in
  *  an editor file fails the static conformance test.
  *
- *  IG-2: EditorName carries create-focus (the name field is focused when a
+ *  EditorName carries create-focus (the name field is focused when a
  *  create gesture opens the editor; typing renames immediately).
  */
 
@@ -16,7 +16,7 @@ import { Button } from "../ui/Button";
 import type { BuilderCatalogEntry } from "./builderTypes";
 
 /** The name field every editor leads with. autoFocus fires on mount when
- *  the editor was opened by a create gesture (IG-2). */
+ *  the editor was opened by a create gesture. */
 export function EditorName({
   value,
   onChange,
@@ -334,7 +334,7 @@ export function SelectField({
  *  field never blanks an existing body — before the catalog loads, on error, or
  *  when the value is not (yet) in the catalog. On a catalog error it renders the
  *  verbatim message and a retry wired to the hook's refresh (the same failure
- *  contract N17a uses), never a bare frozen select. */
+ *  contract uses), never a bare frozen select. */
 export function BodySelect({
   label,
   ariaLabel,
@@ -403,7 +403,7 @@ export function CheckboxField({
   );
 }
 
-/** The one card anatomy (IG-5): title + spec-sheet summary; closed cards
+/** The one card anatomy: title + spec-sheet summary; closed cards
  *  read as the object's spec. Accordion when onToggle is given (the head is a
  *  <button>); static (always open) when not. `actions` — a header control such
  *  as a Remove button — is allowed only on the STATIC card: interactive content

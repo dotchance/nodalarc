@@ -1,7 +1,7 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
 /** The session anatomy — what a session is made of, what this one has, and
- *  why each part matters (IG-15).
+ *  why each part matters.
  *
  *  Order-free by construction: every row is always visible and always
  *  actionable, so nothing here imposes a sequence — it answers "what could
@@ -31,7 +31,7 @@ interface BuildGuideProps {
   workspace: Workspace;
   saved: string | null;
   deployed: boolean;
-  /** N52: the honest site count — distinct ground-station namespaces in the
+  /** the honest site count — distinct ground-station namespaces in the
    *  resolved world (one site's several nodes share a namespace). null when the
    *  world has not resolved yet; the guide then falls back to the draft count
    *  with an "(unresolved)" qualifier. */
@@ -56,7 +56,7 @@ export function BuildGuide({
 }: BuildGuideProps) {
   const spaceCount = workspace.space.length + workspace.space_refs.length;
   // The draft count over-counts (multi-node sites, unexpanded refs); it is only
-  // the pre-resolve fallback. The resolved namespace count is the truth (N52).
+  // the pre-resolve fallback. The resolved namespace count is the truth.
   const draftSiteCount =
     workspace.ground.reduce((n, g) => n + g.members.length, 0) +
     workspace.ground_refs.length;

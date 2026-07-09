@@ -2875,7 +2875,7 @@ def _available_session_node_count() -> int:
 
 def _switch_readiness(session_path: str) -> tuple[bool, tuple[str, ...]]:
     """Resolve the target session and run the operator's own readiness
-    validator with the live node count — the authoritative Q3 gate."""
+    validator with the live node count — the authoritative gate."""
     from ome.builder_world import deploy_readiness_for_source
 
     path = _session_manager._validated_session_path(session_path)
@@ -2909,7 +2909,7 @@ async def switch_session(body: dict):
     valid_files = _session_manager._valid_session_files()
     if session_path not in valid_files:
         return JSONResponse(status_code=400, content={"error": "Unknown session file"})
-    # Deploy-readiness guard (Q3), BEFORE any CR mutation: a session that
+    # Deploy-readiness guard, BEFORE any CR mutation: a session that
     # cannot start on the cluster — no satellites, or any readiness error like
     # a zero-candidate link rule — must never reach the switch, which deletes
     # the running ConstellationSpec CR before the operator's late raise would,
@@ -3264,9 +3264,9 @@ async def builder_resolve_world(body: dict) -> dict:
 async def builder_save_session(body: dict) -> dict:
     """Save a builder workspace document as a generated session file.
 
-    Save answers only Q1 (grammar-valid): the document must RESOLVE as
+    Save answers only (grammar-valid): the document must RESOLVE as
     grammar — a saved session that cannot resolve is a false-state landmine —
-    but it must NOT require the preview world (Q2) to build. A grammar-valid
+    but it must NOT require the preview world to build. A grammar-valid
     session whose world build fails or refuses (a satellite-less session, an
     orientation mismatch) still saves; the preview build feeds only the
     preview surface, never the save path. Work-in-progress persistence is the

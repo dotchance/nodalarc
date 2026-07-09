@@ -12,14 +12,14 @@
      app toolbar's own geometry — its 36px buttons are not a token, so it stays
      a documented literal rather than an invented gutter token. It collapses
      below the tablet tier, where the toolbar geometry changes and the gutter
-     would otherwise be dead space (N45; the palette overlap it exposes is
+     would otherwise be dead space (; the palette overlap it exposes is
      L4's, not this fix). */
   padding-left: 88px;
   /* Authoring-mode identity: the amber bar says "you are building, not
      watching the live session" from any zone of the screen. */
   border-top: 3px solid var(--accent-amber);
   grid-template-columns: 280px 1fr 320px;
-  /* The completeness/wall rail gets its own full-width row (M24); it collapses
+  /* The completeness/wall rail gets its own full-width row; it collapses
      to zero height when nothing is held out (the auto track has no content). */
   grid-template-rows: auto 1fr auto auto;
   grid-template-areas:
@@ -35,7 +35,7 @@
 }
 
 /* Below the tablet tier the app toolbar geometry changes; the left gutter is
-   then dead space, so it collapses (N45). The palette-overlaps-chrome behavior
+   then dead space, so it collapses. The palette-overlaps-chrome behavior
    the collapse exposes is a responsive-design decision owned by L4. */
 @media (max-width: 1279px) {
   .builder-shell {
@@ -123,7 +123,7 @@
 }
 
 /* The right pane holds the session YAML — the grid area is named for what it
-   shows now, not the retired docked-inspector concept (N43). The class keeps
+   shows now, not the retired docked-inspector concept. The class keeps
    its .builder-inspector* name (shared by ~10 files) — only the area renamed. */
 .builder-inspector {
   grid-area: yaml;
@@ -256,7 +256,7 @@
   color: var(--text-primary);
 }
 
-/* Un-scoped (N44): the count also appears in the drafts-group actions row (the
+/* Un-scoped: the count also appears in the drafts-group actions row (the
    compression readout), which is not inside a .builder-outline-row. */
 .builder-outline-count {
   color: var(--text-dim);
@@ -423,8 +423,7 @@ button.builder-card-head:hover .builder-card-title {
   min-width: 0;
 }
 
-/* One control skin for the builder's text/number inputs, selects, and paste box
-   (N46) — the shared surface; each control's own rule below carries only its
+/* One control skin for the builder's text/number inputs, selects, and paste box — the shared surface; each control's own rule below carries only its
    extras (width, margin, font-family, resize) and any override. */
 .builder-field-input input,
 .builder-field--stack select,
@@ -762,7 +761,7 @@ button.builder-card-head:hover .builder-card-title {
 /* --- Floating editor windows (the diagram workspace) --- */
 
 /* The windows wrapper must not be an auto-placed grid child of the shell (that
-   put an empty implicit row under the rail, M24). display:contents dissolves
+   put an empty implicit row under the rail, ). display:contents dissolves
    its box; the windows themselves are position:fixed, so they float unchanged. */
 .builder-windows {
   display: contents;
@@ -875,7 +874,7 @@ button.builder-card-head:hover .builder-card-title {
   white-space: nowrap;
 }
 
-/* Session-anatomy guide (IG-15): always-on, order-free. Pending rows carry
+/* Session-anatomy guide: always-on, order-free. Pending rows carry
    the accent and say why; done rows dim to counts. */
 .builder-guide-row {
   display: flex;
@@ -988,7 +987,7 @@ button.builder-guide-row:hover {
 }
 
 /* A just-placed reference announces where it landed: its outline row flashes so
-   a Use gesture visibly went somewhere in the session anatomy (IG-1 ref floor).
+   a Use gesture visibly went somewhere in the session anatomy (ref floor).
    Reuses the save-flash keyframe — same "it went somewhere" visual language. */
 .builder-outline-row--revealed {
   animation: builder-saved-flash 2.4s ease-out;
@@ -1007,7 +1006,7 @@ button.builder-guide-row:hover {
 }
 
 /* The builder's custom row/card/chip/tab buttons take the app's keyboard
-   focus-visible ring (N48) — the same ring ui.css gives .ui-btn/.ui-iconbtn —
+   focus-visible ring — the same ring ui.css gives .ui-btn/.ui-iconbtn —
    instead of relying on the UA default. Icon buttons already inherit it via
    .ui-iconbtn; these are the bespoke buttons the builder styles itself. */
 .builder-outline-row:focus-visible,

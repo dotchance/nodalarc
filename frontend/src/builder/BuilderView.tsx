@@ -71,6 +71,8 @@ import {
   type EditorTarget,
   type SessionBuffer,
 } from "./useEditorWindows";
+import { useSessionImport } from "./useSessionImport";
+import { wallTarget } from "./wallTarget";
 import {
   defaultDraftNode,
   defaultDraftTerminal,
@@ -83,7 +85,6 @@ import {
   completenessFindings,
   defaultBoundary,
   defaultRoutingDomain,
-  emittedDomainId,
   emittedRuleId,
   identifier,
   linkWarnings,
@@ -95,7 +96,6 @@ import {
   refGroundMember,
   SCHEDULING_PRESETS,
   toSessionDocument,
-  workspaceFromSessionDocument,
   type DraftBoundary,
   type DraftConstellation,
   type DraftGroundSet,
@@ -111,12 +111,6 @@ import type {
   BuilderSessionListEntry,
   BuilderWorld,
 } from "./builderTypes";
-
-// B3: the running-session auto-import is entry-scoped, not mount-scoped. The
-// tried-file marker lives at MODULE scope (like the retired-reveal-nonce
-// registry) so it survives a Live<->Builder toggle — which now keeps
-// BuilderView mounted — and the import fires once per app session, on entry.
-let _importTriedFile: string | null = null;
 
 interface BuilderViewProps {
   /** True only while the builder is the shown view. The builder stays mounted
@@ -496,15 +490,6 @@ export function BuilderView({
   // as soon as any workspace exists, so auto-importing over a draft would
   // silently destroy it — that case gets an explicit choice instead.
   const runningSession = sessions.find((s) => s.active) ?? null;
-  const [importPending, setImportPending] = useState<BuilderSessionListEntry | null>(null);
-  // A refused import names the session the user actually opened — the
-  // running session is not the only thing the picker can open.
-  const [importIssues, setImportIssues] = useState<{
-    name: string;
-    issues: string[];
-  } | null>(null);
-  // The file the current workspace was imported from (provenance marker).
-  const [importedFrom, setImportedFrom] = useState<string | null>(null);
   // B3 backup refuse/choice: a gesture that would displace the current draft
   // (New, Open, auto-import adoption) first stashes it. If the stash is
   // REFUSED — a real, different draft already occupies the backup slot — the
@@ -531,25 +516,21 @@ export function BuilderView({
     if (workspace) create();
     else displace(create, label);
   };
-  const startImport = (entry: BuilderSessionListEntry) => {
-    setImportIssues(null);
-    setImportPending(entry);
-    loadSession(entry.file);
-  };
-  useEffect(() => {
-    // The running session always loads on ENTRY — that is what entering the
-    // builder beside a running cluster means. A browser draft never silently
-    // stands in for it (a stale draft wearing the running session's name
-    // showed an empty world while thirty nodes ran); a displaced draft is
-    // preserved to the backup slot and restorable below. Gated on `active` so
-    // a hidden builder is never a background importer, and keyed on the
-    // module-scope marker so a hide/show toggle does not replay the import.
-    if (!active || workspace || importPending || !runningSession) return;
-    if (_importTriedFile === runningSession.file) return;
-    _importTriedFile = runningSession.file;
-    startImport(runningSession);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, workspace, importPending, runningSession]);
+  // The session entry/import state machine (M19: useSessionImport) — the
+  // running-session auto-import, the picker-opened load, the refused-import
+  // notice, and the imported-from provenance.
+  const { importPending, importIssues, importedFrom, startImport, reset: resetImport } =
+    useSessionImport({
+      active,
+      workspace,
+      runningSession,
+      loadedDocument,
+      loadedFile,
+      loading,
+      loadSession,
+      displace,
+      openWorkspace,
+    });
   // P2/B3 cross-phase contract: refresh the session list when the builder
   // regains visibility. After B3 the builder stays mounted, so "regains
   // visibility" is the active false->true transition, not a remount — the
@@ -561,32 +542,6 @@ export function BuilderView({
     prevActiveRef.current = active;
     if (active && !wasActive) void refreshSessions();
   }, [active, refreshSessions]);
-  useEffect(() => {
-    if (!importPending || loadedDocument === null || loadedFile !== importPending.file) return;
-    if (workspace) {
-      // The user started something while the load was in flight — theirs wins.
-      setImportPending(null);
-      return;
-    }
-    const result = workspaceFromSessionDocument(loadedDocument);
-    if (result.workspace) {
-      // Preserve any displaced draft before adoption; if that stash is
-      // refused, the choice dialog holds the adoption (the world stays on
-      // screen read-only meanwhile — never a silently lossy workspace).
-      const imported = result.workspace;
-      const entry = importPending;
-      displace(() => {
-        openWorkspace(imported);
-        setImportedFrom(entry.file);
-      }, `loading ${entry.name}`);
-    } else {
-      // The world/YAML stay on screen read-only; the note says why the
-      // session cannot be edited — never a silently lossy workspace.
-      setImportIssues({ name: importPending.name, issues: result.issues });
-    }
-    setImportPending(null);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [importPending, loadedDocument, loadedFile, workspace]);
   // A save is never a dead end: when any editor saves to the library, the
   // Library window opens (or focuses) and the panel lands on the asset.
   // Claimed through the module-level retired-nonce registry: a remount
@@ -630,15 +585,6 @@ export function BuilderView({
     // scrollIntoView is optional-chained: jsdom does not implement it.
     document.querySelector(`[data-segment-id="${escaped}"]`)?.scrollIntoView?.({ block: "nearest" });
   }, [revealedSegment]);
-  useEffect(() => {
-    // The import must end with its resolve: a failed fetch or a competing
-    // action (clear/+ New discards the in-flight response) would otherwise
-    // leave "Loading…" claimed forever — a false in-progress display — and
-    // permanently disable the edit-running path for this mount.
-    if (!importPending || loading) return;
-    if (loadedDocument !== null && loadedFile === importPending.file) return;
-    setImportPending(null);
-  }, [importPending, loading, loadedDocument, loadedFile]);
   // The floating-editor windows and their buffered edits (M18: useEditorWindows).
   const {
     windows,
@@ -667,48 +613,13 @@ export function BuilderView({
     updateBoundary,
     convergeGroundToRef,
   });
-  /** The wall's owning editor target, from the resolver's own scope — the
-   *  serialized subject id maps to drafts via the same identifier()
-   *  transform the serializer uses; never by parsing prose or runtime ids.
-   *  Matched against the preview overlay: the refused document was
-   *  serialized from it, so a dirty rename must be matched by the dirty
-   *  draft, not the applied state. */
-  const wallTarget = ((): { target: EditorTarget; key: string } | null => {
-    if (!workspace || !resolveError) return null;
-    const preview = previewWorkspace() ?? workspace;
-    const subject = resolveError.subject;
-    if (subject?.kind === "link_rule") {
-      const rule = preview.links.find((r) => emittedRuleId(r) === subject.id);
-      if (rule) {
-        const target: EditorTarget = { kind: "link", id: rule.rule_id };
-        return { target, key: targetKey(target) };
-      }
-    }
-    if (subject?.kind === "routing_domain") {
-      const domain = preview.routing_domains.find(
-        (d) => emittedDomainId(d) === subject.id,
-      );
-      if (domain) {
-        const target: EditorTarget = { kind: "domain", id: domain.domain_id };
-        return { target, key: targetKey(target) };
-      }
-    }
-    const segmentId = resolveError.segment_id;
-    if (segmentId) {
-      if (preview.space.some((d) => d.segment_id === segmentId)) {
-        const target: EditorTarget = { kind: "segment", id: segmentId };
-        return { target, key: targetKey(target) };
-      }
-      if (preview.ground.some((d) => d.segment_id === segmentId)) {
-        const target: EditorTarget = { kind: "ground", id: segmentId };
-        return { target, key: targetKey(target) };
-      }
-    }
-    return null;
-  })();
+  // The wall's owning editor target (M20: wallTarget). Matched against the
+  // preview overlay — the refused document was serialized from it, so a dirty
+  // rename must be matched by the dirty draft, not the applied state.
+  const wall = wallTarget(previewWorkspace() ?? workspace, resolveError);
   /** Inline wall text for one open editor window (null = not this window's). */
   const wallFor = (target: EditorTarget): string | null =>
-    wallTarget && targetKey(target) === wallTarget.key ? (resolveError?.error ?? null) : null;
+    wall && targetKey(target) === wall.key ? (resolveError?.error ?? null) : null;
   // THE edit→resolve loop — the only caller. Serializes applied state plus
   // dirty working copies so the canvas moves while you edit; Apply/Cancel
   // land here too (buffers change) and re-resolve the applied truth. The
@@ -1493,7 +1404,7 @@ export function BuilderView({
             closeWorkspace();
             closeAllWindows();
             setSelection(null);
-            setImportedFrom(null);
+            resetImport();
             setSaveState({ kind: "idle" });
             startImport(entry);
           }, `opening ${entry.name}`);
@@ -1754,8 +1665,7 @@ export function BuilderView({
                 clear();
                 setSelection(null);
                 closeAllWindows();
-                setImportedFrom(null);
-                setImportIssues(null);
+                resetImport();
                 setSaveState({ kind: "idle" });
                 startNew("untitled-session");
               }, "starting a new session");
@@ -1833,8 +1743,7 @@ export function BuilderView({
               if (result.ok) {
                 closeAllWindows();
                 setSelection(null);
-                setImportedFrom(null);
-                setImportIssues(null);
+                resetImport();
                 setSaveState({ kind: "idle" });
                 setRestoreError(null);
                 clear();
@@ -2396,8 +2305,7 @@ export function BuilderView({
                   clear();
                   setSelection(null);
                   closeAllWindows();
-                  setImportedFrom(null);
-                  setImportIssues(null);
+                  resetImport();
                   setSaveState({ kind: "idle" });
                   startNew("untitled-session");
                 }, "starting a new session");
@@ -2488,13 +2396,13 @@ export function BuilderView({
         )}
       </div>
       {workspace &&
-        ((wallTarget && !isOpen(wallTarget.key)) || findings.length > 0) && (
+        ((wall && !isOpen(wall.key)) || findings.length > 0) && (
         <div className="builder-rail" data-testid="builder-rail">
-          {wallTarget && !isOpen(wallTarget.key) && (
+          {wall && !isOpen(wall.key) && (
             <button
               className="builder-rail-chip builder-rail-chip--wall"
               title={resolveError?.error}
-              onClick={() => openEditor(wallTarget.target)}
+              onClick={() => openEditor(wall.target)}
             >
               {(resolveError?.error ?? "").slice(0, 96)}
               {(resolveError?.error ?? "").length > 96 ? "…" : ""}

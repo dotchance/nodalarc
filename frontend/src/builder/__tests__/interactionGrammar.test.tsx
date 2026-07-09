@@ -70,62 +70,7 @@ import {
   useWorkspace,
   workspaceForSave,
 } from "../useWorkspace";
-import type { BuilderWorld } from "../builderTypes";
-
-/** A minimal resolved world: one ground segment with rf access mounts and a
- *  declared elevation floor (default 25°; pass null for a floorless ground that
- *  exercises the seeded default); one space segment with rf access + optical
- *  isl. */
-function tinyWorld(
-  groundId: string,
-  spaceId: string,
-  groundFloor: number | null = 25,
-): BuilderWorld {
-  const block = (role: string, medium: "rf" | "optical", elev: number | null) => ({
-    terminal_id: `${role}_0`,
-    owner_node_id: "n",
-    endpoint_role: role,
-    medium,
-    source_terminal_id: null,
-    link_role: null,
-    count: 1,
-    tracking_capacity: null,
-    max_range_km: null,
-    min_elevation_deg: elev,
-    field_of_regard_deg: null,
-    tracking_rate_deg_s: null,
-    bandwidth_mbps: null,
-    source_ref: "x",
-  });
-  const node = (id: string, segment: string, blocks: ReturnType<typeof block>[]) => ({
-    node_id: id,
-    local_node_id: id,
-    segment_id: segment,
-    namespace: null,
-    kind: "satellite" as const,
-    plane: null,
-    slot: null,
-    tags: [],
-    surface_position: null,
-    forwarding: null,
-    terminal_inventory: blocks,
-    interfaces: null,
-    originated_prefixes: null,
-  });
-  return {
-    session: { name: "t", display_name: null, description: null },
-    epoch_unix: 0,
-    ephemeris: { nodes: {} } as BuilderWorld["ephemeris"],
-    nodes: [
-      node("g1", groundId, [block("access", "rf", groundFloor)]),
-      node("s1", spaceId, [block("access", "rf", null), block("isl", "optical", null)]),
-    ],
-    link_rules: [],
-    segments: [],
-    allocations: [],
-    rule_previews: [],
-  };
-}
+import { tinyWorld } from "./fixtures/tinyWorld";
 
 const BUILDER_DIR = join(__dirname, "..");
 
@@ -590,6 +535,52 @@ describe("IG-7: connect derives physics from faceplates", () => {
     );
     expect(fabric.formable).toBe(false);
     expect(fabric.medium).toBe("optical"); // fabric -> optical, the lowest-rank default
+  });
+
+  // M22: rederiveRule's PATCH (not just its notice) — the physics it writes
+  // when an endpoint moves, and the loud refusal when it cannot re-derive.
+  it("M22: a role flip to isl clears the now-irrelevant elevation mask", () => {
+    const { workspace, groundId, spaceId } = connectWorkspace();
+    const world = tinyWorld(groundId, spaceId);
+    const access = connectSegments(workspace, world, groundId, spaceId); // ground↔space access
+    expect(access.a.min_elevation_deg).toBe(25); // ground side carries the mask
+    // Move the ground endpoint to the space segment → space↔space isl.
+    const { patch } = rederiveRule(workspace, world, access, "a", spaceId);
+    expect(patch.a!.role).toBe("isl");
+    expect(patch.a!.min_elevation_deg).toBeNull(); // the mask is cleared, not carried
+    expect(patch.b!.min_elevation_deg).toBeNull();
+  });
+
+  it("M22: the ground side of a re-derived access rule gets the elevation mask", () => {
+    const { workspace, groundId, spaceId } = connectWorkspace();
+    const world = tinyWorld(groundId, spaceId);
+    const isl = connectSegments(workspace, world, spaceId, spaceId); // space↔space isl, no mask
+    expect(isl.a.min_elevation_deg).toBeNull();
+    // Move endpoint a to the ground segment → access; the ground side gets the mask.
+    const { patch } = rederiveRule(workspace, world, isl, "a", groundId);
+    expect(patch.a!.role).toBe("access");
+    expect(patch.a!.min_elevation_deg).toBe(25); // ground side masked
+    expect(patch.b!.min_elevation_deg).toBeNull(); // space side floorless
+  });
+
+  it("M22: an unformable re-derivation carries the warning, never silent physics", () => {
+    const { workspace, groundId, spaceId } = connectWorkspace();
+    const world = tinyWorld(groundId, spaceId);
+    const rule = connectSegments(workspace, world, groundId, spaceId);
+    // A null world → no capabilities → neither side has matching terminals.
+    const { notice } = rederiveRule(workspace, null, rule, "b", spaceId);
+    expect(notice).toContain("WARNING: neither side has matching terminals");
+  });
+
+  it("M22: re-deriving onto an unplaced segment invents no physics", () => {
+    const { workspace, groundId, spaceId } = connectWorkspace();
+    const world = tinyWorld(groundId, spaceId);
+    const rule = connectSegments(workspace, world, groundId, spaceId);
+    const { patch, notice } = rederiveRule(workspace, world, rule, "b", "not-a-placed-segment");
+    expect(notice).toBe("endpoint changed — pick a placed segment to re-derive physics");
+    expect(patch.b!.segment_id).toBe("not-a-placed-segment"); // the id moves
+    expect(patch.a).toBeUndefined(); // only the changed side
+    expect(patch.topology_mode).toBeUndefined(); // and no fabricated geometry
   });
 });
 
@@ -1062,10 +1053,18 @@ describe("IG-17: a save is never a dead end", () => {
 
   it("the toolbar owns the session verbs as icon buttons; the rail owns none", () => {
     const source = readFileSync(join(BUILDER_DIR, "BuilderView.tsx"), "utf-8");
-    const toolbar = source.slice(
-      source.indexOf('className="builder-toolbar"'),
-      source.indexOf('className="builder-outline"'),
-    );
+    // N38: the slice anchors must EXIST and be ORDERED (toolbar < outline <
+    // canvas). Without this a renamed anchor makes indexOf return -1, the slice
+    // is empty/backwards, and the rail `.not.toContain` below passes vacuously —
+    // a false green. Assert the anchors so a rename breaks this test loudly.
+    const iToolbar = source.indexOf('className="builder-toolbar"');
+    const iOutline = source.indexOf('className="builder-outline"');
+    const iCanvas = source.indexOf('className="builder-canvas"');
+    expect(iToolbar, "toolbar anchor present").toBeGreaterThanOrEqual(0);
+    expect(iOutline, "outline anchor after toolbar").toBeGreaterThan(iToolbar);
+    expect(iCanvas, "canvas anchor after outline").toBeGreaterThan(iOutline);
+
+    const toolbar = source.slice(iToolbar, iOutline);
     // Icon-only: each verb is an icon with a hover/aria label, not visible text.
     for (const glyph of ["file-plus", "folder-open", "save", "rocket", "history", "library"]) {
       expect(toolbar, `toolbar carries the ${glyph} glyph`).toContain(`icon="${glyph}"`);
@@ -1076,10 +1075,8 @@ describe("IG-17: a save is never a dead end", () => {
     expect(toolbar, "no inline session dropdown in the toolbar").not.toContain(
       'aria-label="Catalog session"',
     );
-    const rail = source.slice(
-      source.indexOf('className="builder-outline"'),
-      source.indexOf('className="builder-canvas"'),
-    );
+    const rail = source.slice(iOutline, iCanvas);
+    expect(rail.length, "the rail slice is non-empty").toBeGreaterThan(0);
     for (const verb of ["Save session", "Deploy to cluster", "Library…"]) {
       expect(rail, `rail must not carry "${verb}" as a control`).not.toContain(`>${verb}<`);
     }

@@ -393,3 +393,39 @@ describe("addGroundMember — created vs appended (IG-1 create-focus safety)", (
     expect(result.current.workspace?.ground[0]?.members).toHaveLength(2);
   });
 });
+
+describe("M21 — undo trust mechanics (IG-11)", () => {
+  it("undo restores the workspace to its state before the last mutation", () => {
+    const { result } = renderHook(() => useWorkspace());
+    act(() => result.current.startNew("undo-restore"));
+    act(() => result.current.addConstellation(SPACE_NODE));
+    expect(result.current.workspace?.space).toHaveLength(1);
+    act(() => result.current.undo());
+    expect(result.current.workspace?.space).toHaveLength(0); // back to the pre-add draft
+  });
+
+  it("undo past the first recorded state is a no-op — never throws, never corrupts", () => {
+    const { result } = renderHook(() => useWorkspace());
+    act(() => result.current.startNew("undo-floor"));
+    act(() => result.current.addConstellation(SPACE_NODE));
+    act(() => result.current.undo()); // → the empty draft
+    act(() => result.current.undo()); // → null (the pre-workspace state)
+    expect(result.current.workspace).toBeNull();
+    // Undoing with an exhausted history is a stable no-op.
+    expect(() => act(() => result.current.undo())).not.toThrow();
+    expect(result.current.workspace).toBeNull();
+  });
+
+  it("the undo history is bounded — 150 mutations, 100 undos land at 50 (the oldest 50 dropped)", () => {
+    const { result } = renderHook(() => useWorkspace());
+    act(() => result.current.startNew("undo-cap"));
+    for (let i = 0; i < 150; i++) act(() => result.current.addConstellation(SPACE_NODE));
+    expect(result.current.workspace?.space).toHaveLength(150);
+    // The bounded history (HISTORY_LIMIT 100) can only walk back 100 states.
+    for (let i = 0; i < 100; i++) act(() => result.current.undo());
+    expect(result.current.workspace?.space).toHaveLength(50); // not 0 — the oldest 50 were capped off
+    // Beyond the cap floor, further undos are no-ops.
+    for (let i = 0; i < 10; i++) act(() => result.current.undo());
+    expect(result.current.workspace?.space).toHaveLength(50);
+  });
+});

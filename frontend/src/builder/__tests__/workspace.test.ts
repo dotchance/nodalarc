@@ -910,6 +910,66 @@ describe("workspaceFromSessionDocument — the serializer's inverse", () => {
     const result = workspaceFromSessionDocument(document);
     expect(result.workspace).toBeUndefined();
     expect(result.issues!.some((i) => i.includes("cannot reproduce"))).toBe(true);
+    // M23: the refusal carries the PATH, not just the constant suffix — every
+    // issue is "<diff-path>: the builder cannot reproduce this value", and the
+    // path names the offending field (the re-derived inner id) so a broken
+    // fidelity check cannot pass by emitting a pathless constant.
+    expect(
+      result.issues!.every((i) => i.includes(": the builder cannot reproduce this value")),
+    ).toBe(true);
+    expect(result.issues!.some((i) => i.split(":")[0]!.trim().length > 0)).toBe(true);
+    expect(result.issues!.some((i) => i.split(":")[0]!.includes("id"))).toBe(true);
+  });
+});
+
+describe("id-counter reseed covers every family (N37)", () => {
+  const SPACE = "nodalarc:nodes/space/x.yaml";
+  const GROUND = "nodalarc:nodes/ground/gw.yaml";
+  const placed = (id: string) => ({ segment_id: id, label: id, kind: "space" as const });
+  const num = (id: string) => Number(id.split("-").pop());
+
+  it("reseedCounters lifts ALL seven id-counter families past a restored workspace", () => {
+    // A restored workspace carrying one id of each family, far past any counter
+    // a live session would reach. reseedCounters must bump every module counter
+    // so the next mint of each family cannot collide with a restored id.
+    const ws = newWorkspace("reseed-all");
+    ws.space.push({ ...newDraftConstellation(SPACE), segment_id: "space-9999" });
+    ws.space_refs.push({
+      ...newRefSegment("nodalarc:constellations/x.yaml", "X"),
+      segment_id: "lib-9999",
+    });
+    const ground = { ...newDraftGroundSet(GROUND, {}), segment_id: "ground-9999" };
+    ground.members = [
+      { ...draftGroundMember(newDraftSiteObject(GROUND, {})), member_id: "member-9999" },
+    ];
+    ws.ground.push(ground);
+    ws.links.push({ ...defaultLinkRule(placed("space-1"), placed("space-1")), rule_id: "link-9999" });
+    ws.routing_domains.push({ ...defaultRoutingDomain(ws), domain_id: "domain-9999" });
+    ws.boundaries.push({ ...defaultBoundary(ws), boundary_id: "boundary-9999" });
+
+    reseedCounters(ws);
+
+    expect(num(newDraftConstellation(SPACE).segment_id)).toBeGreaterThan(9999); // space
+    expect(num(newRefSegment("nodalarc:x.yaml", "x").segment_id)).toBeGreaterThan(9999); // lib
+    expect(num(newDraftGroundSet(GROUND, {}).segment_id)).toBeGreaterThan(9999); // ground
+    expect(num(draftGroundMember(newDraftSiteObject(GROUND, {})).member_id)).toBeGreaterThan(9999); // member
+    expect(num(defaultLinkRule(placed("space-1"), placed("space-1")).rule_id)).toBeGreaterThan(9999); // link
+    expect(num(defaultRoutingDomain(newWorkspace("t")).domain_id)).toBeGreaterThan(9999); // domain
+    expect(num(defaultBoundary(newWorkspace("t")).boundary_id)).toBeGreaterThan(9999); // boundary
+  });
+});
+
+describe("RF band edges (N41 — inclusive min, exclusive max)", () => {
+  it("each band boundary maps to the band it opens, never the one it closes", () => {
+    // min is inclusive, max exclusive: exactly 4 GHz is C (not S), 8 is X, etc.
+    expect(bandForFrequencyGhz(1)).toBe("l");
+    expect(bandForFrequencyGhz(4)).toBe("c");
+    expect(bandForFrequencyGhz(8)).toBe("x");
+    expect(bandForFrequencyGhz(12)).toBe("ku");
+    expect(bandForFrequencyGhz(18)).toBe("k");
+    expect(bandForFrequencyGhz(40)).toBe("v");
+    // The top of the lettered range is exclusive — 110 GHz is above W.
+    expect(bandForFrequencyGhz(110)).toBe(null);
   });
 });
 

@@ -132,4 +132,24 @@ describe("useEditorWindows — buffered editing (M18)", () => {
     expect(result.current.editor.previewWorkspace()?.start_time).toBe(future);
     expect(result.current.ws.workspace!.start_time).not.toBe(future);
   });
+
+  it("(IG-4/N41) windows are keyed by object identity: distinct objects → distinct windows; re-open focuses", () => {
+    const { result } = renderHook(() => useHarness());
+    act(() => result.current.ws.startNew("t"));
+    // Two REAL segments, so the reconciliation pass does not prune their windows.
+    act(() => result.current.ws.addConstellation(SPACE_NODE));
+    act(() => result.current.ws.addConstellation(SPACE_NODE));
+    const [s0, s1] = result.current.ws.workspace!.space;
+    const a: EditorTarget = { kind: "segment", id: s0!.segment_id };
+    const b: EditorTarget = { kind: "segment", id: s1!.segment_id };
+    // Two different objects open two windows, keyed by their object id.
+    act(() => result.current.editor.openEditor(a));
+    act(() => result.current.editor.openEditor(b));
+    expect(result.current.editor.windows.map((w) => w.key)).toEqual([targetKey(a), targetKey(b)]);
+    // Re-opening the same object FOCUSES (moves to the top of the stack), never
+    // duplicates — the window is keyed by object id, not React position.
+    act(() => result.current.editor.openEditor(a));
+    expect(result.current.editor.windows.map((w) => w.key)).toEqual([targetKey(b), targetKey(a)]);
+    expect(result.current.editor.windows).toHaveLength(2);
+  });
 });

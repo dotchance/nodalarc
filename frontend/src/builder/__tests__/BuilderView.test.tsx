@@ -388,3 +388,19 @@ describe("BuilderView — D7 close-time convergence (P7g)", () => {
     expect(screen.queryByTitle(/Edit Ground segment/)).toBeNull();
   });
 });
+
+describe("BuilderView — deploy gate toolbar wiring (N41)", () => {
+  it("the deploy verb is disabled and shows canDeploy's reason as its label when unsaved", async () => {
+    stubFetch();
+    render(<BuilderView {...PROPS} />);
+    const start = await screen.findByTestId("builder-start");
+    fireEvent.click(within(start).getByRole("button", { name: /New session/i }));
+    // A fresh, unsaved session: canDeploy gates deploy, and the gate's REASON is
+    // the button's own label (gate.reason → label), while gate.ok=false disables
+    // it (gate.ok → the click). A broken wiring would enable it or mislabel it.
+    const deploy = await screen.findByRole("button", {
+      name: "save the session first, then deploy",
+    });
+    expect((deploy as HTMLButtonElement).disabled).toBe(true);
+  });
+});

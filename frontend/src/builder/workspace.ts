@@ -15,6 +15,20 @@
  */
 
 import { gmstRadians } from "../sim/orbitalMath";
+import {
+  EARTH_BODY_REF,
+  buildDraftOrbit,
+  constellationGeometry,
+  deepEqual,
+  orbitLacksShape,
+  parseGroundMember,
+  unsupportedPhasingMode,
+  unsupportedPropagator,
+} from "./workspaceParseCore";
+
+// EARTH_BODY_REF and draftSiteFromDocument live in the parse-core leaf now
+// (P9e); re-exported so existing importers are unaffected.
+export { EARTH_BODY_REF, draftSiteFromDocument } from "./workspaceParseCore";
 
 /** THE role/medium vocabulary — the frontend twin of the grammar's
  *  MountRole and terminal-medium literals (lib/nodalarc/models/
@@ -314,14 +328,14 @@ export const ORBIT_PRESETS: { label: string; orbit: Partial<DraftOrbit> }[] = [
   },
 ];
 
-export const EARTH_BODY_REF = "nodalarc:bodies/earth.yaml";
-
 /** The shipped planetary-ephemeris manifest (DE440s), exactly as the
  *  reference multi-body session declares it. A session that places any node
  *  on a body other than Earth must carry a kernel manifest; the builder seeds
  *  this one and the session document shows it — the resolver still validates
  *  file and checksum server-side. */
-const DE440S_EPHEMERIS = {
+// Re-exported (P9e): the moved importer reads it for the ephemeris-manifest
+// fidelity check; P8 de-exported it while every consumer was internal.
+export const DE440S_EPHEMERIS = {
   provider: "skyfield_bsp",
   quality_tier: "de440s",
   kernels: [
@@ -400,106 +414,6 @@ export function newRefSegment(ref: string, label: string): RefSegment {
   return { segment_id: `lib-${refCounter}`, ref, label };
 }
 
-// ---------------------------------------------------------------------------
-// Shared document→draft parse core. The fork wrappers (throw on grammar the
-// editor cannot represent) and the import wrappers (collect issues and
-// continue) are thin policy layers over these helpers, so the grammar
-// knowledge and the draft field mapping live ONCE and the two paths cannot
-// drift (M2). The helpers return typed conditions and never own copy — each
-// wrapper phrases its own message (fork's throw text, import's
-// `segments.<id>:`-prefixed issue) so the surfaced strings stay exactly as
-// they were.
-
-/** True when an orbit is element-form (no `shape` block) — the builder edits
- *  shaped orbits only. */
-function _orbitLacksShape(orbitRaw: Record<string, unknown>): boolean {
-  return (orbitRaw.shape ?? null) === null;
-}
-
-/** The propagator the builder cannot author, or null when it is fine. */
-function _unsupportedPropagator(orbitRaw: Record<string, unknown>): string | null {
-  const propagator = String(orbitRaw.propagator ?? "j2_mean_elements");
-  return propagator !== "two_body" && propagator !== "j2_mean_elements" ? propagator : null;
-}
-
-/** The DraftOrbit field mapping shared by fork and import. Assumes the caller
- *  has confirmed a `shape` block is present (fork threw / import collected an
- *  issue and returned otherwise). */
-function _buildDraftOrbit(orbitRaw: Record<string, unknown>): DraftOrbit {
-  const shape = (orbitRaw.shape ?? {}) as Record<string, unknown>;
-  const orientation = (orbitRaw.orientation ?? {}) as Record<string, unknown>;
-  const phase = (orbitRaw.phase ?? {}) as Record<string, unknown>;
-  const propagator = String(orbitRaw.propagator ?? "j2_mean_elements");
-  return {
-    central_body:
-      typeof orbitRaw.central_body === "string" ? orbitRaw.central_body : EARTH_BODY_REF,
-    shape_kind: "altitude_km" in shape ? "circular" : "elliptical",
-    altitude_km: Number(shape.altitude_km ?? 550),
-    perigee_altitude_km: Number(shape.perigee_altitude_km ?? shape.altitude_km ?? 550),
-    apogee_altitude_km: Number(shape.apogee_altitude_km ?? shape.altitude_km ?? 550),
-    inclination_deg: Number(orientation.inclination_deg ?? 0),
-    raan_deg: Number(orientation.raan_deg ?? 0),
-    argument_of_perigee_deg: Number(orientation.argument_of_perigee_deg ?? 0),
-    mean_anomaly_deg: Number(phase.mean_anomaly_deg ?? 0),
-    propagator: propagator as DraftOrbit["propagator"],
-  };
-}
-
-/** The phasing mode the builder cannot author, or null when it is fine. */
-function _unsupportedPhasingMode(constellation: Record<string, unknown>): string | null {
-  const phasing = (constellation.phasing ?? {}) as Record<string, unknown>;
-  return phasing.mode && phasing.mode !== "evenly_spaced_mean_anomaly"
-    ? String(phasing.mode)
-    : null;
-}
-
-/** The constellation geometry fields shared by fork and import — the caller
- *  owns identity, display name, orbit, and node policy. */
-function _constellationGeometry(constellation: Record<string, unknown>): {
-  planes: number;
-  raan_spacing_deg: number;
-  slots_per_plane: number;
-  phase_offset_deg: number;
-} {
-  const planes = (constellation.planes ?? {}) as Record<string, unknown>;
-  const phasing = (constellation.phasing ?? {}) as Record<string, unknown>;
-  return {
-    planes: Number(planes.count ?? 1),
-    raan_spacing_deg: Number(planes.raan_spacing_deg ?? 0),
-    slots_per_plane: Number(constellation.slots_per_plane ?? 1),
-    phase_offset_deg: Number(phasing.phase_offset_deg ?? 0),
-  };
-}
-
-type GroundMemberParse = { member: DraftGroundSite } | { reason: "non-site-entry" };
-
-/** Parse one site-set member entry into a draft member. A ref WITHOUT a
- *  fetched document (import has only the raw YAML) keys its identity on the
- *  ref's filename stem — never a client-side ref-metadata fetch; that stem
- *  assumption is the standing debt-register note. A ref WITH a document (fork
- *  supplies one) reads the document's real id and display name. An inline site
- *  document becomes an editable draft member and may throw from
- *  draftSiteFromDocument — the fork wrapper lets that propagate, the import
- *  wrapper catches it. A document that is neither is reported as a non-site
- *  entry (fork throws, import collects) rather than dropped. */
-function _parseGroundMember(
-  ref: string | null,
-  document: Record<string, unknown> | null,
-): GroundMemberParse {
-  if (ref !== null && document === null) {
-    return { member: refGroundMember(ref, _refStem(ref), _refStem(ref), null) };
-  }
-  const site = document === null ? undefined : (document as { site?: unknown }).site;
-  if (typeof site !== "object" || site === null) {
-    return { reason: "non-site-entry" };
-  }
-  if (ref !== null) {
-    const siteObj = site as Record<string, unknown>;
-    const siteId = String(siteObj.id ?? "");
-    return { member: refGroundMember(ref, siteId, String(siteObj.display_name ?? siteId), null) };
-  }
-  return { member: draftGroundMember(draftSiteFromDocument(document as Record<string, unknown>)) };
-}
 
 /** Fork a constellation document (plus its orbit document when referenced)
  *  into an editable draft — customize-a-library-block. Constructs the editor
@@ -512,7 +426,7 @@ export function draftConstellationFromDocuments(
     constellationDocument as { constellation?: Record<string, unknown> }
   ).constellation;
   if (!constellation) throw new Error("not a constellation document");
-  const badMode = _unsupportedPhasingMode(constellation);
+  const badMode = unsupportedPhasingMode(constellation);
   if (badMode) {
     throw new Error(`phasing mode ${badMode} — walker modes are pending their runtime semantics`);
   }
@@ -521,8 +435,8 @@ export function draftConstellationFromDocuments(
       ? ((orbitDocument as { orbit?: Record<string, unknown> } | null)?.orbit ?? null)
       : ((constellation.orbit as Record<string, unknown>) ?? null);
   if (!orbitRaw) throw new Error("constellation orbit could not be read");
-  if (_orbitLacksShape(orbitRaw)) throw new Error("element-form orbits are not editable yet");
-  const badPropagator = _unsupportedPropagator(orbitRaw);
+  if (orbitLacksShape(orbitRaw)) throw new Error("element-form orbits are not editable yet");
+  const badPropagator = unsupportedPropagator(orbitRaw);
   if (badPropagator) throw new Error(`propagator ${badPropagator} is not editable yet`);
 
   draftCounter += 1;
@@ -535,8 +449,8 @@ export function draftConstellationFromDocuments(
       typeof node === "object" && node !== null
         ? draftNodeFromDocument({ node: node as Record<string, unknown> })
         : null,
-    orbit: _buildDraftOrbit(orbitRaw),
-    ..._constellationGeometry(constellation),
+    orbit: buildDraftOrbit(orbitRaw),
+    ...constellationGeometry(constellation),
   };
 }
 
@@ -1071,7 +985,9 @@ export function nextMintIndex(draft: DraftGroundSet): number {
 }
 
 /** The grammar id a member answers to (override matching keys on it). */
-function memberSiteId(member: DraftGroundSite): string {
+// Re-exported (P9e): the moved importer matches override targets by site id;
+// P8 de-exported it while every consumer was internal.
+export function memberSiteId(member: DraftGroundSite): string {
   return member.kind === "draft" && member.site ? member.site.site_id : member.site_id;
 }
 
@@ -1225,77 +1141,6 @@ export function newDraftSiteObject(nodeRef: string, installed: Record<string, nu
  *  its installed mounts, and its addressing carry over. Constructs the
  *  editor cannot represent (non-Earth frames, inline node models, payload
  *  installs, IPv6-only addressing) are refused loudly, never dropped. */
-export function draftSiteFromDocument(document: Record<string, unknown>): DraftSiteObject {
-  const site = (document as { site?: Record<string, unknown> }).site;
-  if (!site) throw new Error("not a site document");
-  const siteId = String(site.id ?? "");
-  const frame = (site.frame ?? {}) as { body_fixed?: { body?: unknown } };
-  const body = frame.body_fixed?.body;
-  if (typeof body !== "string") {
-    // lagrange / ephemeris-anchor frames are a different grammar source,
-    // not a surface location — refuse loudly, never drop.
-    throw new Error(
-      `site ${siteId}: only body-fixed surface sites are editable yet — lagrange and ephemeris-anchor frames are pending`,
-    );
-  }
-  const location = (site.location ?? null) as Record<string, unknown> | null;
-  if (!location) throw new Error(`site ${siteId}: non-surface sites are not editable yet`);
-  const lan = (site.lan ?? {}) as { ipv4?: unknown };
-  if (typeof lan.ipv4 !== "string") {
-    throw new Error(`site ${siteId}: IPv6-only sites are not editable yet`);
-  }
-  const seenNodeIds = new Set<string>();
-  const nodes = ((site.nodes as Record<string, unknown>[] | undefined) ?? []).map((node) => {
-    const nodeId = String(node.id ?? "gw1");
-    if (seenNodeIds.has(nodeId)) {
-      // node_id is the editor's stable card key — a duplicate is malformed;
-      // refuse loudly (as the other constructs here do), never render two cards
-      // under one React key.
-      throw new Error(`site ${siteId}: duplicate node id ${nodeId} — node ids must be unique`);
-    }
-    seenNodeIds.add(nodeId);
-    if (typeof node.model !== "string") {
-      throw new Error(`site ${siteId}/${nodeId}: inline node models are not editable yet`);
-    }
-    const payloads = (node.payloads ?? {}) as Record<string, unknown>;
-    if (Object.keys(payloads).length > 0) {
-      throw new Error(`site ${siteId}/${nodeId}: payload installs are not editable yet`);
-    }
-    const terminals =
-      (node.terminals as Record<string, { installed_count?: number }> | undefined) ?? {};
-    const interfaces = (node.interfaces ?? {}) as {
-      lo0?: { ipv4?: unknown };
-      terr0?: { ipv4?: unknown };
-    };
-    if (typeof interfaces.lo0?.ipv4 !== "string" || typeof interfaces.terr0?.ipv4 !== "string") {
-      throw new Error(`site ${siteId}/${nodeId}: IPv6-only interfaces are not editable yet`);
-    }
-    return {
-      node_id: nodeId,
-      model_ref: node.model,
-      installed: Object.fromEntries(
-        Object.entries(terminals).map(([mount, install]) => [
-          mount,
-          Number(install.installed_count ?? 1),
-        ]),
-      ),
-      lo0_ipv4: interfaces.lo0.ipv4,
-      terr0_ipv4: interfaces.terr0.ipv4,
-    };
-  });
-  if (nodes.length === 0) throw new Error(`site ${siteId} has no nodes`);
-  return {
-    site_id: siteId,
-    display_name: String(site.display_name ?? siteId),
-    body,
-    lat_deg: Number(location.lat_deg ?? 0),
-    lon_deg: Number(location.lon_deg ?? 0),
-    alt_m: Number(location.alt_m ?? 0),
-    lan_ipv4: lan.ipv4,
-    tags: ((site.tags as unknown[] | undefined) ?? []).map(String),
-    nodes,
-  };
-}
 
 /** Serialize a site draft to the grammar's Site object (unwrapped form) —
  *  the same builder feeds session emission and save-to-library. */
@@ -1407,9 +1252,13 @@ export function draftGroundSetFromDocuments(
   let stampNodeRef: string | null = null;
   let stampInstalled: Record<string, number> | null = null;
   for (const entry of siteEntries) {
-    const parse = _parseGroundMember(entry.ref, entry.document);
+    const parse = parseGroundMember(entry.ref, entry.document);
     if ("reason" in parse) throw new Error("site set contains a non-site entry");
-    members.push(parse.member);
+    members.push(
+      parse.kind === "ref"
+        ? refGroundMember(parse.ref, parse.site_id, parse.label, null)
+        : draftGroundMember(parse.site),
+    );
     const site = (entry.document as { site?: Record<string, unknown> }).site ?? {};
     if (stampNodeRef === null) {
       const nodes = (site.nodes as Record<string, unknown>[] | undefined) ?? [];
@@ -2197,254 +2046,22 @@ export function toSessionDocument(workspace: Workspace): Record<string, unknown>
 // document — an edit surface that silently diverges from what is running
 // would be a false state display, the one thing this product never does.
 
-export type WorkspaceImport =
-  | { workspace: Workspace; issues?: undefined }
-  | { workspace?: undefined; issues: string[] };
-
-function _deepEqual(a: unknown, b: unknown): boolean {
-  if (Object.is(a, b)) return true;
-  if (typeof a !== typeof b || a === null || b === null) return false;
-  if (Array.isArray(a) || Array.isArray(b)) {
-    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
-    return a.every((item, i) => _deepEqual(item, b[i]));
-  }
-  if (typeof a === "object") {
-    const ka = Object.keys(a as object);
-    const kb = Object.keys(b as object);
-    if (ka.length !== kb.length) return false;
-    return ka.every((k) =>
-      _deepEqual((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k]),
-    );
-  }
-  return false;
-}
-
-/** Paths where two documents differ (either direction), depth-first,
- *  capped — enough to say where an import is unfaithful. */
-function _diffPaths(a: unknown, b: unknown, path: string, out: string[], cap: number): void {
-  if (out.length >= cap || _deepEqual(a, b)) return;
-  const isObj = (v: unknown) => typeof v === "object" && v !== null && !Array.isArray(v);
-  if (Array.isArray(a) && Array.isArray(b)) {
-    if (a.length !== b.length) {
-      out.push(`${path || "document"} (${a.length} vs ${b.length} entries)`);
-      return;
-    }
-    for (let i = 0; i < a.length && out.length < cap; i++) {
-      _diffPaths(a[i], b[i], `${path}[${i}]`, out, cap);
-    }
-    return;
-  }
-  if (isObj(a) && isObj(b)) {
-    const keys = new Set([...Object.keys(a as object), ...Object.keys(b as object)]);
-    for (const k of keys) {
-      if (out.length >= cap) return;
-      _diffPaths(
-        (a as Record<string, unknown>)[k],
-        (b as Record<string, unknown>)[k],
-        path ? `${path}.${k}` : k,
-        out,
-        cap,
-      );
-    }
-    return;
-  }
-  out.push(path || "document");
-}
-
-function _refStem(ref: string): string {
-  return (ref.split("/").pop() ?? ref).replace(/\.ya?ml$/, "");
-}
-
 /** The preset whose block equals this scheduling block — presets are the
- *  builder's only scheduling vocabulary, so an unmatched block refuses. */
-function _presetForSchedulingBlock(block: unknown): SchedulingPresetKey | null {
+ *  builder's only scheduling vocabulary, so an unmatched block refuses.
+ *  Exported for workspaceImport.ts (the import path reads scheduling back). */
+export function presetForSchedulingBlock(block: unknown): SchedulingPresetKey | null {
   for (const [key, preset] of Object.entries(SCHEDULING_PRESETS)) {
-    if (_deepEqual(preset.block, block)) return key as SchedulingPresetKey;
+    if (deepEqual(preset.block, block)) return key as SchedulingPresetKey;
   }
   return null;
 }
 
-function _importConstellation(
-  segId: string,
-  source: Record<string, unknown>,
-  startTime: string,
-  issues: string[],
-): DraftConstellation | null {
-  const wrapper = Object.keys(source)[0] ?? "?";
-  const constellation = source.constellation as Record<string, unknown> | undefined;
-  if (!constellation) {
-    issues.push(`segments.${segId}: uses ${wrapper} — the builder edits constellations only`);
-    return null;
-  }
-  const before = issues.length;
-  const badMode = _unsupportedPhasingMode(constellation);
-  if (badMode) {
-    issues.push(`segments.${segId}: phasing mode ${badMode} is not editable yet`);
-  }
-  const orbitRaw = constellation.orbit;
-  if (typeof orbitRaw !== "object" || orbitRaw === null) {
-    issues.push(`segments.${segId}: orbit by reference is not editable yet`);
-    return null;
-  }
-  const orbit = orbitRaw as Record<string, unknown>;
-  const lacksShape = _orbitLacksShape(orbit);
-  if (lacksShape) issues.push(`segments.${segId}: element-form orbits are not editable yet`);
-  const badPropagator = _unsupportedPropagator(orbit);
-  if (badPropagator) {
-    issues.push(`segments.${segId}: propagator ${badPropagator} is not editable yet`);
-  }
-  if (String(orbit.epoch ?? startTime) !== startTime) {
-    issues.push(
-      `segments.${segId}: orbit epoch differs from the session start_time — the builder authors one session epoch`,
-    );
-  }
-  if (issues.length > before || lacksShape) return null;
-  const node = constellation.node;
-  let nodeDraft: DraftNode | null = null;
-  if (typeof node === "object" && node !== null) {
-    try {
-      nodeDraft = draftNodeFromDocument({ node: node as Record<string, unknown> });
-    } catch (e) {
-      issues.push(`segments.${segId}: ${e instanceof Error ? e.message : String(e)}`);
-      return null;
-    }
-  }
-  return {
-    segment_id: segId,
-    display_name: String(constellation.display_name ?? constellation.id ?? segId),
-    node_ref: typeof node === "string" ? node : "",
-    node_draft: nodeDraft,
-    orbit: _buildDraftOrbit(orbit),
-    ..._constellationGeometry(constellation),
-  };
-}
 
-function _importGroundDraft(
-  segId: string,
-  raw: Record<string, unknown>,
-  siteSet: Record<string, unknown>,
-  issues: string[],
-): DraftGroundSet | null {
-  const before = issues.length;
-  const members: DraftGroundSite[] = [];
-  let stampNodeRef = "";
-  let stampInstalled: Record<string, number> = {};
-  for (const entry of (siteSet.sites as unknown[] | undefined) ?? []) {
-    if (typeof entry === "string") {
-      const parse = _parseGroundMember(entry, null);
-      if ("member" in parse) members.push(parse.member);
-      continue;
-    }
-    const wrapped = entry as Record<string, unknown>;
-    try {
-      const parse = _parseGroundMember(null, wrapped);
-      if ("reason" in parse) {
-        issues.push(`segments.${segId}: a site entry is neither a ref nor an inline site`);
-        continue;
-      }
-      members.push(parse.member);
-      const [firstNode] = parse.member.site?.nodes ?? [];
-      if (!stampNodeRef && firstNode) {
-        stampNodeRef = firstNode.model_ref;
-        stampInstalled = { ...firstNode.installed };
-      }
-    } catch (e) {
-      issues.push(`segments.${segId}: ${e instanceof Error ? e.message : String(e)}`);
-    }
-  }
-  const apply = (raw.apply ?? {}) as Record<string, unknown>;
-  const preset = _presetForSchedulingBlock(apply.scheduling);
-  if (preset === null) {
-    issues.push(`segments.${segId}: scheduling block matches no builder preset`);
-  }
-  const originated = (apply.originated_prefixes ?? null) as Record<string, unknown> | null;
-  const base = newDraftGroundSet(
-    stampNodeRef,
-    stampInstalled,
-    members.find((m) => m.site !== null)?.site?.body,
-  );
-  const draft: DraftGroundSet = {
-    ...base,
-    segment_id: segId,
-    display_name: String(raw.display_name ?? siteSet.display_name ?? segId),
-    members,
-    scheduling_preset: preset ?? base.scheduling_preset,
-    originated_ipv4: ((originated?.ipv4 as unknown[] | undefined) ?? []).map(String),
-    tags: ((apply.tags as unknown[] | undefined) ?? []).map(String),
-  };
-  for (const overrideRaw of (raw.overrides as Record<string, unknown>[] | undefined) ?? []) {
-    const match = (overrideRaw.match ?? {}) as Record<string, unknown>;
-    const member = draft.members.find((m) => identifier(memberSiteId(m)) === match.site);
-    const overridePreset = _presetForSchedulingBlock(overrideRaw.scheduling);
-    if (!member || overridePreset === null) {
-      issues.push(
-        `segments.${segId}: an override targets ${String(match.site)} with a block the builder cannot edit`,
-      );
-      continue;
-    }
-    member.scheduling_override = overridePreset;
-  }
-  return issues.length > before ? null : draft;
-}
-
-function _importEndpoint(
-  where: string,
-  raw: Record<string, unknown>,
-  issues: string[],
-): DraftLinkEndpoint | null {
-  const before = issues.length;
-  const select = (raw.select ?? {}) as Record<string, unknown>;
-  let segmentId = "";
-  let tag: string | null = null;
-  if (typeof select.segment === "string") {
-    segmentId = select.segment;
-  } else if (Array.isArray(select.all)) {
-    for (const leaf of select.all as Record<string, unknown>[]) {
-      if (typeof leaf.segment === "string") segmentId = leaf.segment;
-      else if (typeof leaf.tag === "string") tag = leaf.tag;
-      else issues.push(`${where}: selector leaf the builder cannot edit`);
-    }
-    if (!segmentId) issues.push(`${where}: endpoint selects no segment`);
-  } else {
-    issues.push(`${where}: endpoint selector shape is not editable yet`);
-  }
-  const terminal = (raw.terminal ?? {}) as Record<string, unknown>;
-  let role: MountRole | null = null;
-  let medium: LinkMedium | null = null;
-  for (const leaf of (terminal.all as Record<string, unknown>[] | undefined) ?? []) {
-    if (typeof leaf.role === "string" && (MOUNT_ROLES as readonly string[]).includes(leaf.role)) {
-      role = leaf.role as MountRole;
-    } else if (
-      typeof leaf.medium === "string" &&
-      (LINK_MEDIA as readonly string[]).includes(leaf.medium)
-    ) {
-      medium = leaf.medium as LinkMedium;
-    } else {
-      issues.push(`${where}: terminal selector leaf the builder cannot edit`);
-    }
-  }
-  if (role === null || medium === null) {
-    issues.push(`${where}: terminal selector must carry one role and one medium`);
-  }
-  if (issues.length > before) return null;
-  return {
-    segment_id: segmentId,
-    tag,
-    role: role as MountRole,
-    medium: medium as LinkMedium,
-    min_elevation_deg:
-      raw.min_elevation_deg === undefined ? null : Number(raw.min_elevation_deg),
-  };
-}
-
-export function workspaceFromSessionDocument(
-  document: Record<string, unknown>,
-): WorkspaceImport {
-  // A refused import is a pure no-op: it must advance no module id counter,
-  // and the fidelity re-serialize can throw on a pathological id collision
-  // (N1's uniquify cap). Snapshot every family on entry; restore on any
-  // refusal or throw; keep the advanced (then reseeded) counters only on a
-  // clean import.
+/** The N5 counter-leak transaction (P9e seam owner): snapshot every family id
+ *  counter, run fn, and restore on a refusal (result.issues) OR a throw — a
+ *  refused import must advance no counter. workspaceImport.ts wraps its parse in
+ *  this so the N5 guarantee holds across the module boundary. */
+export function runCounterTransaction<T extends { issues?: string[] }>(fn: () => T): T {
   const saved = {
     draftCounter,
     refCounter,
@@ -2464,228 +2081,26 @@ export function workspaceFromSessionDocument(
     boundaryCounter = saved.boundaryCounter;
   };
   try {
-    const result = _importSessionDocument(document);
+    const result = fn();
     if (result.issues) restore();
     return result;
   } catch (e) {
     restore();
-    return {
-      issues: [
-        `the builder cannot reproduce this session: ${
-          e instanceof Error ? e.message : String(e)
-        }`,
-      ],
-    };
+    throw e;
   }
 }
 
-/** Parse a session document back into a workspace, or refuse with the
- *  offending paths. Wrapped by workspaceFromSessionDocument, which owns the
- *  counter-leak guard: a refused import advances no module id counter, and the
- *  fidelity re-serialize can throw on a pathological id collision. */
-function _importSessionDocument(
-  document: Record<string, unknown>,
-): WorkspaceImport {
-  const issues: string[] = [];
-  const KNOWN_TOP = new Set([
-    "session",
-    "segments",
-    "link_rules",
-    "routing",
-    "simulation",
-    "time",
-    "ephemeris",
-  ]);
-  for (const key of Object.keys(document)) {
-    if (!KNOWN_TOP.has(key)) issues.push(`${key}: the builder cannot author this block yet`);
-  }
-  const session = (document.session ?? {}) as Record<string, unknown>;
-  const ws = newWorkspace(String(session.name ?? "untitled-session"));
-  const time = (document.time ?? null) as Record<string, unknown> | null;
-  if (time) {
-    ws.start_time = String(time.start_time ?? ws.start_time);
-    ws.step_seconds = Number(time.step_seconds ?? 1);
-    ws.compression = Number(time.compression ?? 1);
-  } else {
-    issues.push("time: missing — the builder always authors an explicit time block");
-  }
-  const limits = ((document.simulation as Record<string, unknown> | undefined)
-    ?.candidate_limits ?? null) as Record<string, unknown> | null;
-  if (limits) {
-    ws.max_pairs_per_rule = Number(limits.max_pairs_per_rule ?? ws.max_pairs_per_rule);
-    ws.max_pairs_per_tick = Number(limits.max_pairs_per_tick ?? ws.max_pairs_per_tick);
-  }
-  if (
-    document.ephemeris !== undefined &&
-    !_deepEqual(document.ephemeris, DE440S_EPHEMERIS)
-  ) {
-    issues.push("ephemeris: a custom kernel manifest is not editable yet");
-  }
-
-  for (const raw of (document.segments as Record<string, unknown>[] | undefined) ?? []) {
-    const segId = String(raw.id ?? "");
-    if (!segId) {
-      issues.push("segments: a segment carries no id");
-      continue;
-    }
-    const source = raw.source;
-    const placement = raw.placement as Record<string, unknown> | undefined;
-    if (typeof source === "string") {
-      ws.space_refs.push({ segment_id: segId, ref: source, label: _refStem(source) });
-    } else if (typeof source === "object" && source !== null) {
-      const draft = _importConstellation(
-        segId,
-        source as Record<string, unknown>,
-        ws.start_time,
-        issues,
-      );
-      if (draft) ws.space.push(draft);
-    } else if (placement) {
-      const fromSiteSet = placement.from_site_set;
-      if (typeof fromSiteSet === "string") {
-        const apply = (raw.apply ?? {}) as Record<string, unknown>;
-        const preset = _presetForSchedulingBlock(apply.scheduling);
-        if (preset === null) {
-          issues.push(`segments.${segId}: scheduling block matches no builder preset`);
-        } else {
-          ws.ground_refs.push({
-            segment_id: segId,
-            ref: fromSiteSet,
-            label: _refStem(fromSiteSet),
-            scheduling_preset: preset,
-          });
-        }
-      } else if (typeof fromSiteSet === "object" && fromSiteSet !== null) {
-        const siteSet = (fromSiteSet as Record<string, unknown>).site_set;
-        if (typeof siteSet !== "object" || siteSet === null) {
-          issues.push(`segments.${segId}: placement shape is not editable yet`);
-        } else {
-          const draft = _importGroundDraft(
-            segId,
-            raw,
-            siteSet as Record<string, unknown>,
-            issues,
-          );
-          if (draft) ws.ground.push(draft);
-        }
-      } else {
-        issues.push(`segments.${segId}: placement shape is not editable yet`);
-      }
-    } else {
-      issues.push(`segments.${segId}: segment shape the builder cannot edit yet`);
-    }
-  }
-
-  for (const raw of (document.link_rules as Record<string, unknown>[] | undefined) ?? []) {
-    const id = String(raw.id ?? "");
-    const where = `link_rules.${id || "?"}`;
-    const topology = (raw.topology ?? {}) as Record<string, unknown>;
-    const mode = String(topology.mode ?? "");
-    if (mode !== "visible_candidates" && mode !== "nearest_n") {
-      issues.push(`${where}: topology ${mode || "?"} is not editable in the builder yet`);
-      continue;
-    }
-    const endpoints = (raw.endpoints as Record<string, unknown>[] | undefined) ?? [];
-    if (endpoints.length !== 2) {
-      issues.push(`${where}: rules have exactly two endpoints`);
-      continue;
-    }
-    const a = _importEndpoint(where, endpoints[0] as Record<string, unknown>, issues);
-    const b = _importEndpoint(where, endpoints[1] as Record<string, unknown>, issues);
-    if (!a || !b) continue;
-    const constraints = (raw.constraints ?? {}) as Record<string, unknown>;
-    linkCounter += 1;
-    ws.links.push({
-      rule_id: `link-${linkCounter}`,
-      label: id,
-      enabled: raw.enabled !== false,
-      a,
-      b,
-      topology_mode: mode,
-      topology_n: Number(topology.n ?? 2),
-      max_range_km:
-        constraints.max_range_km === undefined ? null : Number(constraints.max_range_km),
-    });
-  }
-
-  const routing = (document.routing ?? null) as Record<string, unknown> | null;
-  for (const raw of (routing?.domains as Record<string, unknown>[] | undefined) ?? []) {
-    const id = String(raw.id ?? "");
-    const where = `routing.domains.${id || "?"}`;
-    const members: string[] = [];
-    const selectors = (raw.selectors as Record<string, unknown>[] | undefined) ?? [];
-    const [selector] = selectors;
-    if (selectors.length === 1 && selector && typeof selector.segment === "string") {
-      members.push(selector.segment);
-    } else if (selectors.length === 1 && selector && Array.isArray(selector.any)) {
-      for (const leaf of selector.any as Record<string, unknown>[]) {
-        if (typeof leaf.segment === "string") members.push(leaf.segment);
-        else issues.push(`${where}: selector leaf the builder cannot edit`);
-      }
-    } else {
-      issues.push(`${where}: selector shape is not editable yet`);
-      continue;
-    }
-    const timers = (raw.timers ?? null) as Record<string, unknown> | null;
-    domainCounter += 1;
-    ws.routing_domains.push({
-      domain_id: `domain-${domainCounter}`,
-      label: id,
-      protocol: String(raw.protocol) as DraftRoutingDomain["protocol"],
-      member_segment_ids: members,
-      hello_interval_s: timers ? Number(timers.hello_interval_s) : null,
-      hold_interval_s: timers ? Number(timers.hold_interval_s) : null,
-    });
-  }
-  for (const raw of (routing?.boundaries as Record<string, unknown>[] | undefined) ?? []) {
-    const over = String(raw.over ?? "");
-    const where = `routing.boundaries.${over || "?"}`;
-    const rule = ws.links.find((r) => emittedRuleId(r) === over);
-    const exports = (raw.export as Record<string, unknown>[] | undefined) ?? [];
-    const [out, back] = exports;
-    const domainByEmitted = (emitted: unknown) =>
-      ws.routing_domains.find((d) => emittedDomainId(d) === emitted);
-    const fromDomain = out ? domainByEmitted(out.from) : undefined;
-    const toDomain = out ? domainByEmitted(out.to) : undefined;
-    const exchangeShape = (entry: Record<string, unknown> | undefined) =>
-      entry !== undefined &&
-      _deepEqual(entry.prefixes, { aggregate_of: "originated" }) &&
-      entry.install_via === "peer_loopback" &&
-      typeof entry.export_node_loopbacks === "boolean";
-    if (
-      !rule ||
-      !fromDomain ||
-      !toDomain ||
-      exports.length !== 2 ||
-      !exchangeShape(out) ||
-      !exchangeShape(back) ||
-      back?.from !== out?.to ||
-      back?.to !== out?.from ||
-      back?.export_node_loopbacks !== out?.export_node_loopbacks
-    ) {
-      issues.push(`${where}: boundary shape is not the builder's exchange pattern`);
-      continue;
-    }
-    boundaryCounter += 1;
-    ws.boundaries.push({
-      boundary_id: `boundary-${boundaryCounter}`,
-      over_rule_id: rule.rule_id,
-      adapter: String(raw.adapter) as DraftBoundary["adapter"],
-      from_domain_id: fromDomain.domain_id,
-      to_domain_id: toDomain.domain_id,
-      export_node_loopbacks: Boolean(out?.export_node_loopbacks),
-    });
-  }
-
-  if (issues.length) return { issues };
-  // The fidelity proof: a workspace that does not re-serialize to exactly
-  // the source document refuses — otherwise "editing the running session"
-  // would silently edit something else.
-  const diffs: string[] = [];
-  _diffPaths(document, toSessionDocument(ws), "", diffs, 6);
-  if (diffs.length) {
-    return { issues: diffs.map((p) => `${p}: the builder cannot reproduce this value`) };
-  }
-  reseedCounters(ws);
-  return { workspace: ws };
+/** Mint-id fns for the import path — it builds rules/domains/boundaries inline
+ *  and cannot reach these module-private counters across the seam (P9e). */
+export function mintLinkRuleId(): string {
+  linkCounter += 1;
+  return `link-${linkCounter}`;
+}
+export function mintRoutingDomainId(): string {
+  domainCounter += 1;
+  return `domain-${domainCounter}`;
+}
+export function mintBoundaryId(): string {
+  boundaryCounter += 1;
+  return `boundary-${boundaryCounter}`;
 }

@@ -42,6 +42,11 @@ export interface EditorBuffer {
 
 export type BufferMap = Record<string, EditorBuffer>;
 
+// Deliberately separate from workspaceParseCore's deepEqual (P9e): this is the
+// buffer/stale comparator, and its `===` base treats NaN !== NaN, whereas the
+// import-fidelity deepEqual uses Object.is (NaN === NaN). Draft buffers never
+// carry NaN, so the divergence is immaterial here; keeping them split avoids
+// coupling the buffer comparator to the import comparator's NaN semantics.
 function _bufferDeepEqual(a: unknown, b: unknown): boolean {
   if (a === b) return true;
   if (Array.isArray(a) && Array.isArray(b)) {

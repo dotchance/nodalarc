@@ -14,7 +14,8 @@
  *  button never stays stuck on "Opening…".
  */
 import { useEffect, useState } from "react";
-import { workspaceFromSessionDocument, type Workspace } from "./workspace";
+import { type Workspace } from "./workspace";
+import { workspaceFromSessionDocument } from "./workspaceImport";
 import type { BuilderSessionListEntry } from "./builderTypes";
 
 // The running-session auto-import is entry-scoped, not mount-scoped: keyed on

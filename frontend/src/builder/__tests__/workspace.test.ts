@@ -47,10 +47,10 @@ import {
   stampLanPrefix,
   stampLoopbackAddress,
   toSessionDocument,
-  workspaceFromSessionDocument,
   draftGroundMember,
   newDraftSiteObject,
 } from "../workspace";
+import { workspaceFromSessionDocument } from "../workspaceImport";
 
 function draftWorkspace() {
   const workspace = newWorkspace("My Test Session");

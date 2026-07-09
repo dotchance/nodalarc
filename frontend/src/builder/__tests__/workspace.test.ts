@@ -1584,9 +1584,36 @@ describe("shared document→draft parse core: fork throws, import collects (M2, 
     };
   }
 
+  const START_TIME = "2026-06-08T00:00:00Z";
+  const fullOrbit = (epoch?: string) => ({
+    central_body: "nodalarc:bodies/earth.yaml",
+    shape: { altitude_km: 550 },
+    orientation: { inclination_deg: 53 },
+    phase: { mean_anomaly_deg: 15 },
+    propagator: "j2_mean_elements",
+    ...(epoch ? { epoch } : {}),
+  });
+
   it("(1) fork constellation THROWS on grammar it cannot represent (element-form orbit)", () => {
     const doc = constellationDocument({ orbit: { propagator: "two_body" } }); // no shape
-    expect(() => draftConstellationFromDocuments(doc, null)).toThrow(/element-form/);
+    expect(() => draftConstellationFromDocuments(doc, null, START_TIME)).toThrow(/element-form/);
+  });
+
+  it("(1) fork constellation THROWS when the orbit epoch differs from the session start (no silent phase rebase)", () => {
+    const differs = constellationDocument({ orbit: fullOrbit("2024-01-01T00:00:00Z") });
+    expect(() => draftConstellationFromDocuments(differs, null, START_TIME)).toThrow(/orbit epoch differs/);
+    // A matching epoch (or none declared) is fine — no rebase, no refusal.
+    const matches = constellationDocument({ orbit: fullOrbit(START_TIME) });
+    expect(() => draftConstellationFromDocuments(matches, null, START_TIME)).not.toThrow();
+    const none = constellationDocument({ orbit: fullOrbit() });
+    expect(() => draftConstellationFromDocuments(none, null, START_TIME)).not.toThrow();
+  });
+
+  it("(1) fork constellation THROWS on a non-default node_tags (no silent rewrite to all)", () => {
+    const subset = constellationDocument({ node_tags: [{ tag: "gateway" }] });
+    expect(() => draftConstellationFromDocuments(subset, null, START_TIME)).toThrow(/node_tags/);
+    const all = constellationDocument({ node_tags: [{ tag: "all" }] });
+    expect(() => draftConstellationFromDocuments(all, null, START_TIME)).not.toThrow();
   });
 
   it("(2) fork ground THROWS on a non-site entry", () => {
@@ -1634,7 +1661,7 @@ describe("shared document→draft parse core: fork throws, import collects (M2, 
   });
 
   it("(6) fork constellation SUCCESS: inline circular orbit, geometry, node ref", () => {
-    const draft = draftConstellationFromDocuments(constellationDocument(), null);
+    const draft = draftConstellationFromDocuments(constellationDocument(), null, START_TIME);
     expect(draft.orbit.shape_kind).toBe("circular");
     expect(draft.orbit.altitude_km).toBe(550);
     expect(draft.orbit.inclination_deg).toBe(53);
@@ -1659,7 +1686,7 @@ describe("shared document→draft parse core: fork throws, import collects (M2, 
         propagator: "two_body",
       },
     };
-    const draft = draftConstellationFromDocuments(doc, orbitDoc);
+    const draft = draftConstellationFromDocuments(doc, orbitDoc, START_TIME);
     expect(draft.orbit.altitude_km).toBe(1200); // resolved from the orbit document
     expect(draft.orbit.inclination_deg).toBe(87);
     expect(draft.orbit.propagator).toBe("two_body");
@@ -1685,7 +1712,7 @@ describe("shared document→draft parse core: fork throws, import collects (M2, 
         payloads: [],
       },
     });
-    const draft = draftConstellationFromDocuments(doc, null);
+    const draft = draftConstellationFromDocuments(doc, null, START_TIME);
     expect(draft.orbit.shape_kind).toBe("elliptical");
     expect(draft.orbit.perigee_altitude_km).toBe(500);
     expect(draft.orbit.apogee_altitude_km).toBe(35000);

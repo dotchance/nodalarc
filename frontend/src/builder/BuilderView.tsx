@@ -79,6 +79,7 @@ import {
   draftConstellationFromDocuments,
   draftGroundSetFromDocuments,
   draftNodeFromDocument,
+  emptySessionStartTime,
   draftSiteFromDocument,
   draftTerminalFromDocument,
   completenessFindings,
@@ -913,7 +914,11 @@ export function BuilderView({
         const orbitDocument = orbitRef
           ? (await readCatalogObject(orbitRef)).document
           : null;
-        const draft = draftConstellationFromDocuments(document, orbitDocument);
+        const draft = draftConstellationFromDocuments(
+          document,
+          orbitDocument,
+          workspace?.start_time ?? emptySessionStartTime(),
+        );
         ensureThenCreate(() => {
           clearRefusedWorldBeforeCreate();
           addDraft(draft);
@@ -1762,6 +1767,7 @@ export function BuilderView({
                           const draft = draftConstellationFromDocuments(
                             document,
                             orbitDocument,
+                            workspace?.start_time ?? emptySessionStartTime(),
                           );
                           removeRefSegment(placed.segment_id);
                           addDraft(draft);

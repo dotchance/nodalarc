@@ -82,6 +82,23 @@ export function unsupportedPhasingMode(constellation: Record<string, unknown>): 
     : null;
 }
 
+/** The builder authors a constellation's node_tags as exactly [{tag: "all"}]
+ *  (every node participates); the draft cannot model a subset. Returns a
+ *  description of a non-default node_tags so the fork refuses rather than
+ *  silently rewriting it to "all" (the serializer always emits "all"). */
+export function nonDefaultNodeTags(constellation: Record<string, unknown>): string | null {
+  const tags = constellation.node_tags;
+  if (tags === undefined || tags === null) return null;
+  if (
+    Array.isArray(tags) &&
+    tags.length === 1 &&
+    (tags[0] as Record<string, unknown> | undefined)?.tag === "all"
+  ) {
+    return null;
+  }
+  return JSON.stringify(tags);
+}
+
 /** The constellation geometry fields shared by fork and import — the caller
  *  owns identity, display name, orbit, and node policy. */
 export function constellationGeometry(constellation: Record<string, unknown>): {

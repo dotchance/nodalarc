@@ -20,6 +20,7 @@ import {
   buildDraftOrbit,
   constellationGeometry,
   deepEqual,
+  nonDefaultNodeTags,
   orbitLacksShape,
   parseGroundMember,
   unsupportedPhasingMode,
@@ -421,6 +422,7 @@ export function newRefSegment(ref: string, label: string): RefSegment {
 export function draftConstellationFromDocuments(
   constellationDocument: Record<string, unknown>,
   orbitDocument: Record<string, unknown> | null,
+  sessionStartTime: string,
 ): DraftConstellation {
   const constellation = (
     constellationDocument as { constellation?: Record<string, unknown> }
@@ -430,6 +432,12 @@ export function draftConstellationFromDocuments(
   if (badMode) {
     throw new Error(`phasing mode ${badMode} — walker modes are pending their runtime semantics`);
   }
+  // The draft cannot model a subset node_tags; the serializer always emits
+  // "all". Refuse rather than silently rewrite which nodes participate.
+  const badTags = nonDefaultNodeTags(constellation);
+  if (badTags) {
+    throw new Error(`node_tags ${badTags} — the builder authors node_tags: all`);
+  }
   const orbitRaw =
     typeof constellation.orbit === "string"
       ? ((orbitDocument as { orbit?: Record<string, unknown> } | null)?.orbit ?? null)
@@ -438,6 +446,14 @@ export function draftConstellationFromDocuments(
   if (orbitLacksShape(orbitRaw)) throw new Error("element-form orbits are not editable yet");
   const badPropagator = unsupportedPropagator(orbitRaw);
   if (badPropagator) throw new Error(`propagator ${badPropagator} is not editable yet`);
+  // DraftOrbit has no epoch field — the serializer stamps every orbit at the
+  // session start_time. If the source orbit declares a different epoch, forking
+  // would silently rebase the satellites' phase; refuse, exactly like import.
+  if (String(orbitRaw.epoch ?? sessionStartTime) !== sessionStartTime) {
+    throw new Error(
+      "orbit epoch differs from the session start_time — the builder authors one session epoch",
+    );
+  }
 
   draftCounter += 1;
   const node = constellation.node;
@@ -635,6 +651,13 @@ export function terminalWarnings(draft: DraftTerminal): string[] {
   return warnings;
 }
 
+/** The default session start_time for a fresh workspace: authored "now"
+ *  (whole-minute). Shared with the fork path so a customized block is checked
+ *  against the same session epoch a new workspace would carry. */
+export function emptySessionStartTime(): string {
+  return `${new Date().toISOString().slice(0, 17)}00Z`;
+}
+
 export function newWorkspace(name: string): Workspace {
   return {
     name: identifier(name) || "untitled-session",
@@ -650,7 +673,7 @@ export function newWorkspace(name: string): Workspace {
     // The session starts when it was authored, not at a fixed date in the
     // past: a stale epoch turns the live view's "Now" into a huge sim-time
     // jump the moment the session runs. Whole-minute for readability.
-    start_time: `${new Date().toISOString().slice(0, 17)}00Z`,
+    start_time: emptySessionStartTime(),
     step_seconds: 1,
     compression: 1,
   };

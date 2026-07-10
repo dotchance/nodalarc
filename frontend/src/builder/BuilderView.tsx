@@ -94,6 +94,7 @@ import {
   newDraftSiteObject,
   refGroundMember,
   SCHEDULING_PRESETS,
+  presetForSchedulingBlock,
   toSessionDocument,
   type DraftBoundary,
   type DraftConstellation,
@@ -1834,16 +1835,21 @@ export function BuilderView({
                     ariaLabel={`Scheduling for ${placed.label}`}
                     title="Scheduling intent — writes the full explicit block"
                     className="builder-ground-preset"
-                    value={placed.scheduling_preset}
+                    value={presetForSchedulingBlock(placed.scheduling) ?? ""}
                     onChange={(v) =>
                       updateGroundRef(placed.segment_id, {
-                        scheduling_preset: v as SchedulingPresetKey,
+                        scheduling: SCHEDULING_PRESETS[v as SchedulingPresetKey].block,
                       })
                     }
-                    options={Object.entries(SCHEDULING_PRESETS).map(([key, preset]) => ({
-                      value: key,
-                      label: preset.label,
-                    }))}
+                    options={[
+                      ...(presetForSchedulingBlock(placed.scheduling) === null
+                        ? [{ value: "", label: "Imported block (custom)" }]
+                        : []),
+                      ...Object.entries(SCHEDULING_PRESETS).map(([key, preset]) => ({
+                        value: key,
+                        label: preset.label,
+                      })),
+                    ]}
                   />
                   <IconButton
                     icon="pencil"

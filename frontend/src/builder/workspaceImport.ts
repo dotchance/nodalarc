@@ -25,7 +25,7 @@ import {
   mintRoutingDomainId,
   newDraftGroundSet,
   newWorkspace,
-  presetForSchedulingBlock,
+  SCHEDULING_PRESETS,
   refGroundMember,
   runCounterTransaction,
   toSessionDocument,
@@ -184,10 +184,6 @@ function _importGroundDraft(
     }
   }
   const apply = (raw.apply ?? {}) as Record<string, unknown>;
-  const preset = presetForSchedulingBlock(apply.scheduling);
-  if (preset === null) {
-    issues.push(`segments.${segId}: scheduling block matches no builder preset`);
-  }
   const originated = (apply.originated_prefixes ?? null) as Record<string, unknown> | null;
   const base = newDraftGroundSet(
     stampNodeRef,
@@ -199,21 +195,22 @@ function _importGroundDraft(
     segment_id: segId,
     display_name: String(raw.display_name ?? siteSet.display_name ?? segId),
     members,
-    scheduling_preset: preset ?? base.scheduling_preset,
+    // Grammar data: store the block verbatim, never reduce it to a preset.
+    scheduling: (apply.scheduling as Record<string, unknown> | undefined) ?? base.scheduling,
     originated_ipv4: ((originated?.ipv4 as unknown[] | undefined) ?? []).map(String),
     tags: ((apply.tags as unknown[] | undefined) ?? []).map(String),
   };
   for (const overrideRaw of (raw.overrides as Record<string, unknown>[] | undefined) ?? []) {
     const match = (overrideRaw.match ?? {}) as Record<string, unknown>;
     const member = draft.members.find((m) => identifier(memberSiteId(m)) === match.site);
-    const overridePreset = presetForSchedulingBlock(overrideRaw.scheduling);
-    if (!member || overridePreset === null) {
+    if (!member) {
       issues.push(
-        `segments.${segId}: an override targets ${String(match.site)} with a block the builder cannot edit`,
+        `segments.${segId}: an override targets ${String(match.site)}, which is not a site in this segment`,
       );
       continue;
     }
-    member.scheduling_override = overridePreset;
+    member.scheduling_override =
+      (overrideRaw.scheduling as Record<string, unknown> | undefined) ?? null;
   }
   return issues.length > before ? null : draft;
 }
@@ -312,6 +309,12 @@ function _importSessionDocument(
   }
   const session = (document.session ?? {}) as Record<string, unknown>;
   const ws = newWorkspace(String(session.name ?? "untitled-session"));
+  // Session metadata is carried verbatim (SessionMeta.display_name/description).
+  // Absent → null so the re-emit omits it and the round-trip stays canonical.
+  ws.display_name =
+    session.display_name !== undefined ? String(session.display_name) : null;
+  ws.description =
+    session.description !== undefined ? String(session.description) : null;
   const time = (document.time ?? null) as Record<string, unknown> | null;
   if (time) {
     ws.start_time = String(time.start_time ?? ws.start_time);
@@ -355,15 +358,21 @@ function _importSessionDocument(
       const fromSiteSet = placement.from_site_set;
       if (typeof fromSiteSet === "string") {
         const apply = (raw.apply ?? {}) as Record<string, unknown>;
-        const preset = presetForSchedulingBlock(apply.scheduling);
-        if (preset === null) {
-          issues.push(`segments.${segId}: scheduling block matches no builder preset`);
+        // A referenced site set carries only scheduling; refuse (typed) rather
+        // than silently drop apply fields it cannot round-trip yet.
+        const extraApply = Object.keys(apply).filter((k) => k !== "scheduling");
+        if (extraApply.length > 0) {
+          issues.push(
+            `segments.${segId}: apply.${extraApply[0]} on a referenced site set is not editable yet`,
+          );
         } else {
           ws.ground_refs.push({
             segment_id: segId,
             ref: fromSiteSet,
             label: refStem(fromSiteSet),
-            scheduling_preset: preset,
+            scheduling:
+              (apply.scheduling as Record<string, unknown> | undefined) ??
+              SCHEDULING_PRESETS["leo-fast-handover"].block,
           });
         }
       } else if (typeof fromSiteSet === "object" && fromSiteSet !== null) {

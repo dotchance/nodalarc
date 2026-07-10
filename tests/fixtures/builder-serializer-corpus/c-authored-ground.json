@@ -1,0 +1,183 @@
+{
+  "session": {
+    "name": "corpus-c-ground"
+  },
+  "segments": [
+    {
+      "id": "space-2",
+      "source": {
+        "constellation": {
+          "id": "corpus-c-ground-space-2",
+          "display_name": "Constellation 2",
+          "node": "nodalarc:nodes/space/starlink-v2-mesh.yaml",
+          "orbit": {
+            "id": "space-2-orbit",
+            "central_body": "nodalarc:bodies/earth.yaml",
+            "epoch": "2026-06-08T00:00:00Z",
+            "shape": {
+              "altitude_km": 550
+            },
+            "orientation": {
+              "inclination_deg": 53,
+              "raan_deg": 0,
+              "argument_of_perigee_deg": 0
+            },
+            "phase": {
+              "mean_anomaly_deg": 0
+            },
+            "propagator": "j2_mean_elements",
+            "reference": "session-builder-draft"
+          },
+          "planes": {
+            "count": 3,
+            "raan_spacing_deg": 60
+          },
+          "slots_per_plane": 8,
+          "phasing": {
+            "mode": "evenly_spaced_mean_anomaly",
+            "phase_offset_deg": 0
+          },
+          "node_tags": [
+            {
+              "tag": "all"
+            }
+          ],
+          "reference": "session-builder-draft"
+        }
+      }
+    },
+    {
+      "id": "ground-1",
+      "display_name": "Ground segment 1",
+      "placement": {
+        "from_site_set": {
+          "site_set": {
+            "id": "corpus-c-ground-ground-1",
+            "display_name": "Ground segment 1",
+            "sites": [
+              {
+                "site": {
+                  "id": "denver",
+                  "display_name": "Denver",
+                  "lan": {
+                    "ipv4": "172.20.0.0/24"
+                  },
+                  "nodes": [
+                    {
+                      "id": "gw1",
+                      "model": "nodalarc:nodes/ground/leo-gateway.yaml",
+                      "payloads": {},
+                      "terminals": {
+                        "access_ka": {
+                          "installed_count": 2
+                        }
+                      },
+                      "interfaces": {
+                        "lo0": {
+                          "ipv4": "10.200.0.1/32"
+                        },
+                        "terr0": {
+                          "ipv4": "172.20.0.1/24"
+                        }
+                      }
+                    }
+                  ],
+                  "frame": {
+                    "body_fixed": {
+                      "body": "nodalarc:bodies/earth.yaml"
+                    }
+                  },
+                  "location": {
+                    "lat_deg": 39.7,
+                    "lon_deg": -104.9,
+                    "alt_m": 0
+                  }
+                }
+              }
+            ],
+            "reference": "session-builder-draft"
+          }
+        }
+      },
+      "apply": {
+        "scheduling": {
+          "selection_policy": {
+            "highest_elevation": {}
+          },
+          "handover_policy": {
+            "hysteresis": {
+              "discount_factor": 1.1,
+              "mask_fade_range_deg": 3
+            }
+          },
+          "handover_mode": "mbb",
+          "mbb_overlap_ticks": 30,
+          "mbb_reserve": 1,
+          "handover_concurrency": "one_at_a_time",
+          "ranking_order": [
+            "service_priority",
+            "per_gs_rank",
+            "satellite_ground_terminal_capacity",
+            "lex_pair"
+          ],
+          "mbb_preemption": "off",
+          "successor_abort_policy": "hard_release",
+          "cross_tenant_displacement": "off",
+          "bbm_acquire_timeout_ticks": 1
+        }
+      }
+    }
+  ],
+  "link_rules": [
+    {
+      "id": "ground-to-space",
+      "topology": {
+        "mode": "visible_candidates"
+      },
+      "endpoints": [
+        {
+          "select": {
+            "segment": "ground-1"
+          },
+          "terminal": {
+            "all": [
+              {
+                "role": "access"
+              },
+              {
+                "medium": "rf"
+              }
+            ]
+          },
+          "min_elevation_deg": 25
+        },
+        {
+          "select": {
+            "segment": "space-2"
+          },
+          "terminal": {
+            "all": [
+              {
+                "role": "access"
+              },
+              {
+                "medium": "rf"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "simulation": {
+    "candidate_limits": {
+      "max_pairs_per_rule": 2000,
+      "max_pairs_per_tick": 10000
+    }
+  },
+  "time": {
+    "start_time": "2026-06-08T00:00:00Z",
+    "step_seconds": 1,
+    "compression": 1
+  }
+}

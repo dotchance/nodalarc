@@ -23,3 +23,10 @@ repos:
         entry: uv run python scripts/check-lint-policy.py
         language: system
         pass_filenames: false
+
+      - id: builder-grammar-contract
+        name: builder grammar contract (serializer output resolves + generated vocab fresh)
+        entry: uv run pytest tests/unit/test_builder_serializer_contract.py tests/unit/test_builder_grammar_vocab_generated.py -q
+        language: system
+        pass_filenames: false
+        files: '^(lib/nodalarc/models/.*\.py|frontend/src/builder/(workspace|workspaceImport|workspaceParseCore)\.ts|frontend/src/builder/generated/grammarVocab\.ts|scripts/gen_builder_grammar_vocab\.py|tests/fixtures/builder-serializer-corpus/.*)$'

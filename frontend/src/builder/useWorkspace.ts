@@ -873,7 +873,7 @@ export function useWorkspace() {
    *  APPLIED set (read here, never a stale closure — `commit`'s functional form
    *  sees post-Apply state) still serializes byte-for-byte to the snapshot the
    *  save produced AND is losslessly ref-expressible. The ref REUSES the draft's
-   *  segment_id and carries its scheduling_preset, so every link rule and
+   *  segment_id and carries its scheduling block, so every link rule and
    *  routing-domain membership pointing at the segment stays live; minting a
    *  fresh segment would orphan them. A best-effort mirror of the server's
    *  load-time rehydrate — when the guard blocks, the ref stays inline and the
@@ -890,7 +890,7 @@ export function useWorkspace() {
           segment_id: draft.segment_id,
           ref,
           label: draft.display_name,
-          scheduling_preset: draft.scheduling_preset,
+          scheduling: draft.scheduling,
         };
         return {
           ...prev,

@@ -15,6 +15,7 @@
  */
 
 import type { BuilderWorld, BuilderWorldNode } from "./builderTypes";
+import type { TopologyMode } from "./generated/grammarVocab";
 import {
   defaultLinkRule,
   placedSegments,
@@ -93,7 +94,7 @@ export interface DerivedPhysics {
   medium: LinkMedium;
   /** Mask for the ground endpoint (access rules), from its own terminals. */
   ground_mask_deg: number | null;
-  topology_mode: "visible_candidates" | "nearest_n";
+  topology_mode: Extract<TopologyMode, "visible_candidates" | "nearest_n">;
   topology_n: number;
   /** True when derivation found a formable combination. */
   formable: boolean;

@@ -15,6 +15,7 @@
  */
 
 import { gmstRadians } from "../sim/orbitalMath";
+import type { Propagator, TerminalMedium, TopologyMode } from "./generated/grammarVocab";
 import {
   EARTH_BODY_REF,
   buildDraftOrbit,
@@ -103,7 +104,7 @@ export interface DraftOrbit {
   raan_deg: number;
   argument_of_perigee_deg: number;
   mean_anomaly_deg: number;
-  propagator: "two_body" | "j2_mean_elements";
+  propagator: Extract<Propagator, "two_body" | "j2_mean_elements">;
 }
 
 export interface DraftTerminalMount {
@@ -184,8 +185,9 @@ export interface DraftGroundSite {
   summary: string | null;
   site: DraftSiteObject | null;
   /** Sparse per-site scheduling: null = segment template ("= template");
-   *  a preset key = an override stored as a GroundOverride exception. */
-  scheduling_override: SchedulingPresetKey | null;
+   *  a scheduling block = an override stored as a GroundOverride exception.
+   *  Carried as grammar data (round-trips verbatim), produced by presets. */
+  scheduling_override: Record<string, unknown> | null;
 }
 
 /** The stamp: what bulk paste mints new sites with — a node model and
@@ -211,7 +213,11 @@ export interface DraftGroundSet {
   display_name: string;
   members: DraftGroundSite[];
   stamp: GroundStamp;
-  scheduling_preset: SchedulingPresetKey;
+  /** The ground scheduling block, carried as grammar data — imported and
+   *  emitted verbatim so a session round-trips. Presets (SCHEDULING_PRESETS)
+   *  are only convenient ways to produce this block; the builder never
+   *  reduces a block to a preset label or refuses a non-preset block. */
+  scheduling: Record<string, unknown>;
   /** apply-level originated prefixes (routing injection intent). */
   originated_ipv4: string[];
   tags: string[];
@@ -233,7 +239,7 @@ export interface DraftLinkEndpoint {
   segment_id: string;
   tag: string | null;
   role: MountRole;
-  medium: "rf" | "optical";
+  medium: TerminalMedium;
   min_elevation_deg: number | null;
 }
 
@@ -248,7 +254,7 @@ export interface DraftLinkRule {
   b: DraftLinkEndpoint;
   /** nearest_visible exists in the grammar but is runtime-gated — never
    *  offered here; the resolver walls it with UnsupportedFeature. */
-  topology_mode: "visible_candidates" | "nearest_n";
+  topology_mode: Extract<TopologyMode, "visible_candidates" | "nearest_n">;
   topology_n: number;
   max_range_km: number | null;
 }
@@ -280,6 +286,12 @@ export interface DraftBoundary {
 
 export interface Workspace {
   name: string;
+  /** Session-level human-facing metadata (SessionMeta.display_name /
+   *  description). Carried verbatim so an imported session round-trips its
+   *  labels; null when the session declares none (the grammar defaults them
+   *  to None, so a null is omitted from the emitted session block). */
+  display_name: string | null;
+  description: string | null;
   space: DraftConstellation[];
   /** Library constellations placed by reference (use-this-block). */
   space_refs: RefSegment[];
@@ -544,7 +556,7 @@ export function nodeObjectFromDraft(draft: DraftNode): Record<string, unknown> {
 export interface DraftTerminal {
   id: string;
   display_name: string;
-  medium: "rf" | "optical";
+  medium: TerminalMedium;
   /** rf signal */
   band: string;
   frequency_ghz: number;
@@ -661,6 +673,8 @@ export function emptySessionStartTime(): string {
 export function newWorkspace(name: string): Workspace {
   return {
     name: identifier(name) || "untitled-session",
+    display_name: null,
+    description: null,
     space: [],
     space_refs: [],
     ground: [],
@@ -876,11 +890,11 @@ export const SCHEDULING_PRESETS: Record<
 /** A site set placed by reference, plus the session-owned scheduling intent
  *  (scheduling is a session concern — site-set documents never carry it). */
 export interface RefGroundSet extends RefSegment {
-  scheduling_preset: SchedulingPresetKey;
+  scheduling: Record<string, unknown>;
 }
 
 export function newRefGroundSet(ref: string, label: string): RefGroundSet {
-  return { ...newRefSegment(ref, label), scheduling_preset: "leo-fast-handover" };
+  return { ...newRefSegment(ref, label), scheduling: SCHEDULING_PRESETS["leo-fast-handover"].block };
 }
 
 let groundCounter = 0;
@@ -908,7 +922,7 @@ export function newDraftGroundSet(
       lan_base: `172.${20 + ((groundCounter - 1) % 12)}`,
       loopback_base: `10.${200 + ((groundCounter - 1) % 55)}`,
     },
-    scheduling_preset: "leo-fast-handover",
+    scheduling: SCHEDULING_PRESETS["leo-fast-handover"].block,
     originated_ipv4: [],
     tags: [],
   };
@@ -1343,8 +1357,8 @@ export function siteSetWrapperFromDraft(draft: DraftGroundSet): {
 }
 
 /** Whether a ground draft is losslessly expressible as a RefGroundSet, which
- *  carries only ref + label + scheduling_preset. scheduling_preset IS carried
- *  (so it is not a blocker); the stamp is mint-seed and discarded by design.
+ *  carries only ref + label + the scheduling block. The scheduling block IS
+ *  carried (so it is not a blocker); the stamp is mint-seed and discarded.
  *  What a ref CANNOT hold blocks the swap: a per-member scheduling_override,
  *  originated prefixes, tags. A non-default display_name blocks too — it is
  *  session-owned authorship the swap would knowingly drop; the deep-equal
@@ -1904,7 +1918,7 @@ export function toSessionDocument(workspace: Workspace): Record<string, unknown>
   const groundRefSegments: unknown[] = workspace.ground_refs.map((placed) => ({
     id: identifier(placed.segment_id),
     placement: { from_site_set: placed.ref },
-    apply: { scheduling: SCHEDULING_PRESETS[placed.scheduling_preset].block },
+    apply: { scheduling: placed.scheduling },
   }));
 
   const groundSegments: unknown[] = workspace.ground
@@ -1914,8 +1928,7 @@ export function toSessionDocument(workspace: Workspace): Record<string, unknown>
       .filter((member) => member.scheduling_override !== null)
       .map((member) => ({
         match: { site: identifier(memberSiteId(member)) },
-        scheduling:
-          SCHEDULING_PRESETS[member.scheduling_override as SchedulingPresetKey].block,
+        scheduling: member.scheduling_override,
       }));
     return {
       id: identifier(draft.segment_id),
@@ -1929,7 +1942,7 @@ export function toSessionDocument(workspace: Workspace): Record<string, unknown>
         },
       },
       apply: {
-        scheduling: SCHEDULING_PRESETS[draft.scheduling_preset].block,
+        scheduling: draft.scheduling,
         ...(draft.originated_ipv4.length > 0
           ? { originated_prefixes: { ipv4: draft.originated_ipv4 } }
           : {}),
@@ -2028,7 +2041,11 @@ export function toSessionDocument(workspace: Workspace): Record<string, unknown>
   });
 
   return {
-    session: { name: identifier(workspace.name) || "untitled-session" },
+    session: {
+      name: identifier(workspace.name) || "untitled-session",
+      ...(workspace.display_name !== null ? { display_name: workspace.display_name } : {}),
+      ...(workspace.description !== null ? { description: workspace.description } : {}),
+    },
     segments: [...refSegments, ...segments, ...groundRefSegments, ...groundSegments],
     ...(domains.length > 0
       ? {

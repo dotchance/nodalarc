@@ -40,6 +40,7 @@ const {
   refGroundMember,
   siteObjectFromDraft,
   newWorkspace,
+  SCHEDULING_PRESETS,
 } = await import("../workspace");
 
 const NODE_REF = "user:nodes/gw.yaml";
@@ -216,11 +217,11 @@ describe("lost-edit: async writers read the latest draft (class A — through th
     // The user set this member's per-site scheduling DURING the fork fetch.
     const concurrent = {
       ...g0,
-      members: [{ ...member, scheduling_override: "geo-longest-pass" as const }],
+      members: [{ ...member, scheduling_override: SCHEDULING_PRESETS["geo-longest-pass"].block }],
     };
     const forked = updater(concurrent).members[0]!;
     expect(forked.kind).toBe("draft"); // the fork lands
-    expect(forked.scheduling_override).toBe("geo-longest-pass"); // concurrent override survives
+    expect(forked.scheduling_override).toEqual(SCHEDULING_PRESETS["geo-longest-pass"].block); // concurrent override survives
   });
 
   it("nested GroundEditor→SiteEditor (setNodeModel) preserves a concurrently-added member", async () => {

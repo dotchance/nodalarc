@@ -59,6 +59,7 @@ import {
   parseSiteLines,
   siteSetWrapperFromDraft,
   stampLanPrefix,
+  SCHEDULING_PRESETS,
 } from "../workspace";
 import type { BuilderCatalogEntry } from "../builderTypes";
 import { canDeploy, resetCatalogStores } from "../useBuilderWorld";
@@ -357,7 +358,7 @@ describe("save-to-library convergence wiring", () => {
     const draft = newDraftGroundSet("nodalarc:nodes/ground/gw.yaml", {});
     draft.members = mintSiteMembers(draft, parseSiteLines("Denver, 39.7, -104.9").rows);
     const member = draft.members[0]!;
-    member.scheduling_override = "geo-longest-pass"; // a session-owned block to preserve
+    member.scheduling_override = SCHEDULING_PRESETS["geo-longest-pass"].block; // a session-owned block to preserve
     let updated = draft;
     render(
       <GroundEditor
@@ -380,7 +381,9 @@ describe("save-to-library convergence wiring", () => {
     expect(flipped.member_id).toBe(member.member_id); // never minted fresh
     expect(flipped.ref).toBe("user:sites/x.yaml");
     expect(flipped.site).toBeNull();
-    expect(flipped.scheduling_override).toBe("geo-longest-pass"); // session-owned, preserved
+    expect(flipped.scheduling_override).toEqual(
+      SCHEDULING_PRESETS["geo-longest-pass"].block,
+    ); // session-owned, preserved
   });
 });
 

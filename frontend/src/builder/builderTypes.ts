@@ -8,6 +8,7 @@
  */
 
 import type { SessionEphemeris } from "../sim/ephemeris";
+import type { ForwardingClass, TerminalMedium } from "./generated/grammarVocab";
 
 /** Twin of nodalarc.models.segment_session.SessionMeta. */
 export interface BuilderSessionMeta {
@@ -29,7 +30,7 @@ export interface ResolvedTerminalBlock {
   terminal_id: string;
   owner_node_id: string;
   endpoint_role: string;
-  medium: "rf" | "optical";
+  medium: TerminalMedium;
   source_terminal_id: string | null;
   link_role: string | null;
   count: number;
@@ -71,7 +72,7 @@ export interface BuilderWorldNode {
   slot: number | null;
   tags: string[];
   surface_position: BuilderSurfacePosition | null;
-  forwarding: "routed" | "host" | "bridge" | "control_only" | null;
+  forwarding: ForwardingClass | null;
   terminal_inventory: ResolvedTerminalBlock[];
   interfaces: ResolvedNodeInterfaces | null;
   originated_prefixes: OriginatedPrefixes | null;

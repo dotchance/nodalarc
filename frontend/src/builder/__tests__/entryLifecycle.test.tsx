@@ -226,7 +226,7 @@ describe("convergeGroundToRef — close-time convergence", () => {
     // A NON-default preset so the identity pin's carry-over assertions actually
     // distinguish "carried from the draft" from "silently defaulted" (both the
     // mint and the RefGroundSet default are leo-fast-handover).
-    ground.scheduling_preset = "geo-longest-pass";
+    ground.scheduling = SCHEDULING_PRESETS["geo-longest-pass"].block;
     ground.members = [refGroundMember("nodalarc:sites/denver.yaml", "denver", "Denver", null)];
     built.ground.push(ground);
     const placed = placedSegments(built);
@@ -262,7 +262,7 @@ describe("convergeGroundToRef — close-time convergence", () => {
       segment_id: ground.segment_id,
       ref: REF,
       label: ground.display_name,
-      scheduling_preset: ground.scheduling_preset,
+      scheduling: ground.scheduling,
     });
 
     // In the emitted artifact both references stay live and the scheduling block
@@ -270,7 +270,7 @@ describe("convergeGroundToRef — close-time convergence", () => {
     const doc = toSessionDocument(result.current.workspace as Workspace) as any;
     const seg = emittedRefsSegment(ground.segment_id)(doc);
     expect(seg.placement.from_site_set).toBe(REF);
-    expect(seg.apply.scheduling).toEqual(SCHEDULING_PRESETS[ground.scheduling_preset].block);
+    expect(seg.apply.scheduling).toEqual(ground.scheduling);
     const emittedId = identifier(ground.segment_id);
     expect(
       doc.link_rules.some((r: any) =>
@@ -353,7 +353,7 @@ describe("convergeGroundToRef — close-time convergence", () => {
     // so it can match while the set is NOT ref-expressible. The guard is a
     // separate gate — the set that a ref cannot express stays inline.
     const { ws, ground } = convergeableWorkspace();
-    ground.members[0]!.scheduling_override = "geo-longest-pass";
+    ground.members[0]!.scheduling_override = SCHEDULING_PRESETS["geo-longest-pass"].block;
     // Rebuild the applied set inside the workspace to carry the override.
     const wsWithOverride = { ...ws, ground: [ground] };
     const snapshot = siteSetWrapperFromDraft(ground); // matches (override is invisible to it)

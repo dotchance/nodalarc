@@ -1,0 +1,96 @@
+{
+  "session": {
+    "name": "corpus-d-siteset-ref"
+  },
+  "segments": [
+    {
+      "id": "lib-2",
+      "source": "nodalarc:constellations/earth/leo/earth-leo-ring-36.yaml"
+    },
+    {
+      "id": "corpus-ground-ref",
+      "placement": {
+        "from_site_set": "nodalarc:site-sets/earth/leo/earth-leo-starlink-pop-sites.yaml"
+      },
+      "apply": {
+        "scheduling": {
+          "selection_policy": {
+            "highest_elevation": {}
+          },
+          "handover_policy": {
+            "hysteresis": {
+              "discount_factor": 1.1,
+              "mask_fade_range_deg": 3
+            }
+          },
+          "handover_mode": "mbb",
+          "mbb_overlap_ticks": 30,
+          "mbb_reserve": 1,
+          "handover_concurrency": "one_at_a_time",
+          "ranking_order": [
+            "service_priority",
+            "per_gs_rank",
+            "satellite_ground_terminal_capacity",
+            "lex_pair"
+          ],
+          "mbb_preemption": "off",
+          "successor_abort_policy": "hard_release",
+          "cross_tenant_displacement": "off",
+          "bbm_acquire_timeout_ticks": 1
+        }
+      }
+    }
+  ],
+  "link_rules": [
+    {
+      "id": "pop-sites-to-leo-ring",
+      "topology": {
+        "mode": "visible_candidates"
+      },
+      "endpoints": [
+        {
+          "select": {
+            "segment": "corpus-ground-ref"
+          },
+          "terminal": {
+            "all": [
+              {
+                "role": "access"
+              },
+              {
+                "medium": "rf"
+              }
+            ]
+          },
+          "min_elevation_deg": 25
+        },
+        {
+          "select": {
+            "segment": "lib-2"
+          },
+          "terminal": {
+            "all": [
+              {
+                "role": "access"
+              },
+              {
+                "medium": "rf"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "simulation": {
+    "candidate_limits": {
+      "max_pairs_per_rule": 2000,
+      "max_pairs_per_tick": 10000
+    }
+  },
+  "time": {
+    "start_time": "2026-06-08T00:00:00Z",
+    "step_seconds": 1,
+    "compression": 1
+  }
+}

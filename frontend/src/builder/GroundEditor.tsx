@@ -36,6 +36,7 @@ import {
 } from "./useBuilderWorld";
 import {
   SCHEDULING_PRESETS,
+  presetForSchedulingBlock,
   draftGroundMember,
   draftSiteFromDocument,
   groundWarnings,
@@ -207,14 +208,27 @@ export function GroundEditor({
                       className="builder-ground-preset"
                       ariaLabel={`${member.label} scheduling`}
                       title="Per-site scheduling — only exceptions are stored"
-                      value={member.scheduling_override ?? ""}
+                      value={
+                        member.scheduling_override === null
+                          ? ""
+                          : (presetForSchedulingBlock(member.scheduling_override) ?? "__custom__")
+                      }
                       onChange={(value) =>
                         updateMember(member.member_id, {
-                          scheduling_override: (value || null) as SchedulingPresetKey | null,
+                          scheduling_override:
+                            value === ""
+                              ? null
+                              : value === "__custom__"
+                                ? member.scheduling_override
+                                : SCHEDULING_PRESETS[value as SchedulingPresetKey].block,
                         })
                       }
                       options={[
                         { value: "", label: "= template" },
+                        ...(member.scheduling_override !== null &&
+                        presetForSchedulingBlock(member.scheduling_override) === null
+                          ? [{ value: "__custom__", label: "Imported block (custom)" }]
+                          : []),
                         ...Object.entries(SCHEDULING_PRESETS).map(([key, preset]) => ({
                           value: key,
                           label: preset.label,
@@ -430,20 +444,32 @@ export function GroundEditor({
         title="Scheduling"
         open={openCard === "scheduling"}
         onToggle={() => toggle("scheduling")}
-        summary={SCHEDULING_PRESETS[draft.scheduling_preset].label.split(" — ")[0]}
+        summary={
+          presetForSchedulingBlock(draft.scheduling)
+            ? SCHEDULING_PRESETS[presetForSchedulingBlock(draft.scheduling)!].label.split(" — ")[0]
+            : "Custom (imported)"
+        }
       >
             <SelectField
               stack
               label="intent preset — writes the full explicit block (see YAML)"
               ariaLabel="Scheduling preset"
-              value={draft.scheduling_preset}
+              value={presetForSchedulingBlock(draft.scheduling) ?? ""}
               onChange={(value) =>
-                onUpdate((prev) => ({ ...prev, scheduling_preset: value as SchedulingPresetKey }))
+                onUpdate((prev) => ({
+                  ...prev,
+                  scheduling: SCHEDULING_PRESETS[value as SchedulingPresetKey].block,
+                }))
               }
-              options={Object.entries(SCHEDULING_PRESETS).map(([key, preset]) => ({
-                value: key,
-                label: preset.label,
-              }))}
+              options={[
+                ...(presetForSchedulingBlock(draft.scheduling) === null
+                  ? [{ value: "", label: "Imported block (custom)" }]
+                  : []),
+                ...Object.entries(SCHEDULING_PRESETS).map(([key, preset]) => ({
+                  value: key,
+                  label: preset.label,
+                })),
+              ]}
             />
       </EditorCard>
 

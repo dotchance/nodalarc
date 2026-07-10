@@ -49,6 +49,7 @@ import {
   toSessionDocument,
   draftGroundMember,
   newDraftSiteObject,
+  SCHEDULING_PRESETS,
 } from "../workspace";
 import { workspaceFromSessionDocument } from "../workspaceImport";
 
@@ -101,7 +102,7 @@ describe("toSessionDocument", () => {
       "nodalarc:site-sets/earth/leo/earth-leo-starlink-pop-sites.yaml",
       "Starlink PoPs",
     );
-    placed.scheduling_preset = "geo-longest-pass";
+    placed.scheduling = SCHEDULING_PRESETS["geo-longest-pass"].block;
     workspace.ground_refs.push(placed);
     const doc = toSessionDocument(workspace) as any;
     const ground = doc.segments.find((s: any) => s.placement);
@@ -165,7 +166,7 @@ describe("toSessionDocument", () => {
       draft,
       parseSiteLines("Denver, 39.7, -104.9\nPerth, -31.9, 115.8").rows,
     );
-    draft.members[1]!.scheduling_override = "geo-longest-pass";
+    draft.members[1]!.scheduling_override = SCHEDULING_PRESETS["geo-longest-pass"].block;
     workspace.ground.push(draft);
     const doc = toSessionDocument(workspace) as any;
     const ground = doc.segments.find((s: any) => s.placement);
@@ -798,7 +799,7 @@ describe("workspaceFromSessionDocument — the serializer's inverse", () => {
     siteB.display_name = "Bravo";
     siteB.lat_deg = 45;
     ground.members.push(draftGroundMember(siteA), draftGroundMember(siteB));
-    ground.members[1]!.scheduling_override = "geo-longest-pass";
+    ground.members[1]!.scheduling_override = SCHEDULING_PRESETS["geo-longest-pass"].block;
     ground.originated_ipv4 = ["203.0.113.0/24"];
     ground.tags = ["study"];
     ws.ground.push(ground);
@@ -851,8 +852,8 @@ describe("workspaceFromSessionDocument — the serializer's inverse", () => {
     const result = workspaceFromSessionDocument(document);
     expect(result.workspace!.name).toBe("round-trip-study");
     expect(result.workspace!.space[0]!.display_name).toBe("Shell one");
-    expect(result.workspace!.ground[0]!.members[1]!.scheduling_override).toBe(
-      "geo-longest-pass",
+    expect(result.workspace!.ground[0]!.members[1]!.scheduling_override).toEqual(
+      SCHEDULING_PRESETS["geo-longest-pass"].block,
     );
   });
 
@@ -890,13 +891,20 @@ describe("workspaceFromSessionDocument — the serializer's inverse", () => {
     expect(result.issues!.some((i) => i.includes("epoch"))).toBe(true);
   });
 
-  it("refuses a scheduling block that matches no builder preset", () => {
+  it("carries a scheduling block the builder has no preset for — grammar data, not preset-matched", () => {
     const document = toSessionDocument(authoredWorkspace());
     const segments = document.segments as Record<string, unknown>[];
     const ground = segments.find((s) => s.placement !== undefined)!;
-    (ground.apply as Record<string, unknown>).scheduling = { custom: true };
+    const customBlock = { ranking_order: "selection_score", contact_window_s: 42 };
+    (ground.apply as Record<string, unknown>).scheduling = customBlock;
     const result = workspaceFromSessionDocument(document);
-    expect(result.issues!.some((i) => i.includes("scheduling"))).toBe(true);
+    // The builder is not the scheduling validator; it carries the block verbatim
+    // and re-emits it unchanged. The resolver is the authority on validity.
+    expect(result.issues).toBeUndefined();
+    const reemitted = (
+      toSessionDocument(result.workspace!).segments as Record<string, unknown>[]
+    ).find((s) => s.placement !== undefined)!;
+    expect((reemitted.apply as Record<string, unknown>).scheduling).toEqual(customBlock);
   });
 
   it("an import that would not reproduce the document refuses with the path", () => {
@@ -998,14 +1006,14 @@ describe("workspaceFromSessionDocument — placed refs and inline nodes", () => 
       segment_id: "lib-ground",
       ref: "nodalarc:site-sets/earth/leo/earth-leo-pop-sites.yaml",
       label: "earth-leo-pop-sites",
-      scheduling_preset: "geo-longest-pass",
+      scheduling: SCHEDULING_PRESETS["geo-longest-pass"].block,
     });
     const document = toSessionDocument(ws);
     expect(document.ephemeris).toBeDefined();
     const result = workspaceFromSessionDocument(document);
     expect(result.issues).toBeUndefined();
     expect(toSessionDocument(result.workspace!)).toEqual(document);
-    expect(result.workspace!.ground_refs[0]!.scheduling_preset).toBe("geo-longest-pass");
+    expect(result.workspace!.ground_refs[0]!.scheduling).toEqual(SCHEDULING_PRESETS["geo-longest-pass"].block);
     expect(result.workspace!.space[0]!.node_draft?.terminals[0]?.count).toBe(2);
   });
 });
@@ -1786,7 +1794,7 @@ describe("close-time convergence primitives", () => {
     expect(groundSetIsRefExpressible(expressibleDraft())).toBe(true);
 
     const override = expressibleDraft();
-    override.members[0]!.scheduling_override = "geo-longest-pass";
+    override.members[0]!.scheduling_override = SCHEDULING_PRESETS["geo-longest-pass"].block;
     expect(groundSetIsRefExpressible(override)).toBe(false);
 
     const originated = expressibleDraft();

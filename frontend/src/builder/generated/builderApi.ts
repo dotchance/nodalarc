@@ -32,13 +32,17 @@ export type WizardConstellationSourceKind = "constellation" | "space_node_set" |
 export type WizardTerminalRole = "access" | "isl" | "crosslink" | "backbone";
 export type WizardExtension = "sr" | "te" | "mpls";
 export type WizardAreaStrategy = "flat" | "stripe" | "per_plane";
+export type WizardRoutingProtocol = "isis" | "ospf";
+export type WizardWalkerPattern = "walker_delta" | "walker_star";
+export type WizardRoutingBooleanField = "bfd";
+export type WizardRoutingTimerField = "bfd_detect_multiplier" | "bfd_rx_interval" | "bfd_tx_interval" | "isis_hello_interval" | "isis_hello_multiplier" | "spf_init_delay" | "spf_short_delay" | "spf_long_delay" | "spf_holddown" | "ospf_hello_interval" | "ospf_dead_interval" | "ospf_spf_delay" | "ospf_spf_initial_hold" | "ospf_spf_max_hold";
 export type BuilderVisualDraftMode = "structured" | "opaque_yaml";
 export type BuilderVisualSchedulingPreset = "leo-fast-handover" | "geo-longest-pass";
 export type BuilderVisualPhasingMode = "walker_delta" | "walker_star" | "evenly_spaced_mean_anomaly";
 export type BuilderVisualOrbitShape = "circular" | "elliptical";
 export type BuilderVisualOrbitPropagator = "two_body" | "j2_mean_elements";
 export type BuilderVisualTopologyMode = "visible_candidates" | "nearest_n";
-export type BuilderVisualDraftCommandOperation = "add_generated_space" | "add_ground" | "add_routing_domain" | "add_boundary" | "connect_segments" | "rederive_link" | "set_scheduling_preset";
+export type BuilderVisualDraftCommandOperation = "add_generated_space" | "set_space_population" | "author_inline_space_node" | "add_or_increment_node_terminal" | "add_node_ethernet_port" | "add_ground" | "set_ground_stamp_node_model" | "set_ground_site_node_model" | "add_ground_site_node" | "mint_ground_members" | "add_routing_domain" | "add_boundary" | "connect_segments" | "rederive_link" | "set_scheduling_preset";
 export type BuilderVisualDraftAffectedKind = "space" | "ground" | "routing_domain" | "boundary" | "link" | "ground_member";
 export type CatalogComponentFamily = "bodies" | "terminals" | "payloads" | "orbits" | "nodes" | "sites" | "site-sets" | "constellations" | "space-node-sets";
 export type CatalogDraftPatchOperation = "add" | "replace" | "remove";
@@ -156,7 +160,7 @@ export interface WizardConstellationGeometry {
   readonly description: string;
   readonly altitude_km: number;
   readonly inclination_deg: number;
-  readonly pattern: "walker_delta" | "walker_star";
+  readonly pattern: WizardWalkerPattern;
   readonly planes: number;
   readonly slots_per_plane: number;
   readonly raan_spacing_deg: number;
@@ -188,12 +192,20 @@ export interface WizardConstellationPresetResponse {
   readonly custom_geometry: WizardConstellationCapability;
   readonly custom_geometry_seed: WizardConstellationGeometry;
   readonly custom_geometry_default_node: string;
+  readonly custom_geometry_patterns: ReadonlyArray<WizardWalkerPatternMetadata>;
   readonly orbit_models: ReadonlyArray<WizardOrbitModelMetadata>;
 }
 
 /** Presentation metadata for one backend-supported Wizard orbit choice. */
 export interface WizardOrbitModelMetadata {
   readonly id: WizardOrbitPropagator;
+  readonly label: string;
+  readonly description: string;
+}
+
+/** Presentation facts for one backend-supported custom Walker pattern. */
+export interface WizardWalkerPatternMetadata {
+  readonly id: WizardWalkerPattern;
   readonly label: string;
   readonly description: string;
 }
@@ -245,24 +257,51 @@ export interface WizardAvailableStationResponse {
   readonly stations: ReadonlyArray<WizardAvailableStation>;
 }
 
-/** Extensions and dependency constraints for one Wizard protocol. */
-export interface WizardProtocolExtensionRule {
-  readonly extensions: ReadonlyArray<WizardExtension>;
-  readonly constraints: Readonly<Record<string, ReadonlyArray<WizardExtension>>>;
+/** Backend-owned presentation and field facts for Wizard BFD controls. */
+export interface WizardBfdMetadata {
+  readonly heading: string;
+  readonly enabled_field: "bfd";
+  readonly enable_label: string;
+  readonly enable_description: string;
+  readonly timer_fields: ReadonlyArray<WizardRoutingTimerFieldMetadata>;
 }
 
-/** Closed protocol keys supported by the current Wizard extension surface. */
-export interface WizardProtocolExtensionCatalog {
-  readonly ospf: WizardProtocolExtensionRule;
-  readonly isis: WizardProtocolExtensionRule;
+/** Presentation facts for one backend-supported Wizard extension. */
+export interface WizardExtensionMetadata {
+  readonly id: WizardExtension;
+  readonly label: string;
+  readonly description: string;
+}
+
+/** Presentation and validation facts for one numeric protocol timer control. */
+export interface WizardRoutingTimerFieldMetadata {
+  readonly id: WizardRoutingTimerField;
+  readonly label: string;
+  readonly unit?: string | null;
+  readonly description: string;
+  readonly guidance: string;
+  readonly minimum: number;
+}
+
+/** One selectable routing protocol and its backend-owned Wizard behavior. */
+export interface WizardProtocolMetadata {
+  readonly id: WizardRoutingProtocol;
+  readonly label: string;
+  readonly description: string;
+  readonly extensions: ReadonlyArray<WizardExtension>;
+  readonly extension_constraints: Readonly<Record<string, ReadonlyArray<WizardExtension>>>;
+  readonly timer_label: string;
+  readonly timer_fields: ReadonlyArray<WizardRoutingTimerFieldMetadata>;
+  readonly non_flat_area_warning?: string | null;
 }
 
 /** Closed backend-owned Wizard protocol and area-strategy rules. */
 export interface WizardExtensionRulesResponse {
-  readonly protocols: WizardProtocolExtensionCatalog;
+  readonly protocols: ReadonlyArray<WizardProtocolMetadata>;
+  readonly extensions: ReadonlyArray<WizardExtensionMetadata>;
   readonly area_strategies: ReadonlyArray<WizardAreaStrategy>;
-  readonly available_protocols: ReadonlyArray<"isis" | "ospf">;
   readonly default_area_strategy: WizardAreaStrategy;
+  readonly bfd: WizardBfdMetadata;
   readonly routing_timer_defaults: WizardRoutingTimerIntent;
 }
 
@@ -304,7 +343,7 @@ export interface WizardSessionIntent {
   readonly ground_site_set_ref?: string | null;
   readonly custom_site_refs?: ReadonlyArray<string>;
   readonly orbit_propagator: WizardOrbitPropagator;
-  readonly protocol: "isis" | "ospf";
+  readonly protocol: WizardRoutingProtocol;
   readonly extensions?: ReadonlyArray<WizardExtension>;
   readonly area_strategy?: WizardAreaStrategy;
   readonly routing_timers: WizardRoutingTimerIntent;
@@ -418,6 +457,35 @@ export interface BuilderVisualAddGeneratedSpaceCommand {
   readonly phasing_mode: BuilderVisualPhasingMode;
 }
 
+/** Change one population input and let the backend derive its complete phasing. */
+export interface BuilderVisualSetSpacePopulationCommand {
+  readonly operation: "set_space_population";
+  readonly segment_id: string;
+  readonly phasing_mode?: BuilderVisualPhasingMode | null;
+  readonly planes?: number | null;
+  readonly slots_per_plane?: number | null;
+}
+
+/** Create one backend-seeded inline node for an authored space segment. */
+export interface BuilderVisualAuthorInlineSpaceNodeCommand {
+  readonly operation: "author_inline_space_node";
+  readonly segment_id: string;
+}
+
+/** Mount a selected terminal or increment the matching backend-owned mount. */
+export interface BuilderVisualAddOrIncrementNodeTerminalCommand {
+  readonly operation: "add_or_increment_node_terminal";
+  readonly segment_id: string;
+  readonly terminal_ref: string;
+  readonly role: WizardTerminalRole;
+}
+
+/** Add one uniquely identified Ethernet port to an authored inline node. */
+export interface BuilderVisualAddNodeEthernetPortCommand {
+  readonly operation: "add_node_ethernet_port";
+  readonly segment_id: string;
+}
+
 /** Add one backend-seeded authored ground-segment draft. */
 export interface BuilderVisualAddGroundCommand {
   readonly operation: "add_ground";
@@ -425,6 +493,45 @@ export interface BuilderVisualAddGroundCommand {
   readonly installed?: Readonly<Record<string, number>>;
   readonly boresights?: Readonly<Record<string, BuilderVisualGroundBoresight>>;
   readonly body_ref?: string | null;
+}
+
+/** Select a ground stamp node and derive its installed terminal inventory. */
+export interface BuilderVisualSetGroundStampNodeModelCommand {
+  readonly operation: "set_ground_stamp_node_model";
+  readonly segment_id: string;
+  readonly node_ref: string;
+}
+
+/** Select one authored site's node model and derive its installed inventory. */
+export interface BuilderVisualSetGroundSiteNodeModelCommand {
+  readonly operation: "set_ground_site_node_model";
+  readonly segment_id: string;
+  readonly member_id: string;
+  readonly node_id: string;
+  readonly node_ref: string;
+}
+
+/** Add one backend-seeded node installation to an authored site. */
+export interface BuilderVisualAddGroundSiteNodeCommand {
+  readonly operation: "add_ground_site_node";
+  readonly segment_id: string;
+  readonly member_id: string;
+  readonly node_ref?: string | null;
+}
+
+/** One user-entered surface location awaiting backend-owned site allocation. */
+export interface BuilderVisualGroundSiteIntent {
+  readonly name: string;
+  readonly lat_deg: number;
+  readonly lon_deg: number;
+  readonly alt_m?: number;
+}
+
+/** Mint complete sites and addresses from typed locations and one ground stamp. */
+export interface BuilderVisualMintGroundMembersCommand {
+  readonly operation: "mint_ground_members";
+  readonly segment_id: string;
+  readonly sites: ReadonlyArray<BuilderVisualGroundSiteIntent>;
 }
 
 /** Add one backend-seeded routing domain over uncovered segments. */
@@ -464,7 +571,7 @@ export interface BuilderVisualSetSchedulingPresetCommand {
 export interface BuilderVisualDraftCommandRequest {
   readonly draft: BuilderVisualDraftEnvelope;
   readonly expected_draft_revision: number;
-  readonly command: BuilderVisualAddGeneratedSpaceCommand | BuilderVisualAddGroundCommand | BuilderVisualAddRoutingDomainCommand | BuilderVisualAddBoundaryCommand | BuilderVisualConnectSegmentsCommand | BuilderVisualRederiveLinkCommand | BuilderVisualSetSchedulingPresetCommand;
+  readonly command: BuilderVisualAddGeneratedSpaceCommand | BuilderVisualSetSpacePopulationCommand | BuilderVisualAuthorInlineSpaceNodeCommand | BuilderVisualAddOrIncrementNodeTerminalCommand | BuilderVisualAddNodeEthernetPortCommand | BuilderVisualAddGroundCommand | BuilderVisualSetGroundStampNodeModelCommand | BuilderVisualSetGroundSiteNodeModelCommand | BuilderVisualAddGroundSiteNodeCommand | BuilderVisualMintGroundMembersCommand | BuilderVisualAddRoutingDomainCommand | BuilderVisualAddBoundaryCommand | BuilderVisualConnectSegmentsCommand | BuilderVisualRederiveLinkCommand | BuilderVisualSetSchedulingPresetCommand;
 }
 
 /** One applied command and the next revision of the complete draft. */
@@ -477,6 +584,19 @@ export interface BuilderVisualDraftCommandResult {
   readonly affected_id: string;
   readonly scheduling_preset?: BuilderVisualSchedulingPreset | null;
   readonly notice?: string | null;
+}
+
+/** Walker population intent whose derived angular values remain backend-owned. */
+export interface BuilderVisualWalkerLayoutRequest {
+  readonly pattern: WizardWalkerPattern;
+  readonly planes: number;
+  readonly slots_per_plane: number;
+}
+
+/** Backend-issued angular layout for one Walker population intent. */
+export interface BuilderVisualWalkerLayoutResult {
+  readonly raan_spacing_deg: number;
+  readonly phase_offset_deg: number;
 }
 
 /** Spacecraft access-terminal pointing authored into a node mount. */
@@ -601,7 +721,7 @@ export interface BuilderVisualGroundDraft {
 /** One library site set placed by reference with session scheduling. */
 export interface BuilderVisualGroundReference {
   readonly segment_id?: string;
-  readonly site_set_ref?: CatalogRef | null;
+  readonly site_set_ref?: string | null;
   readonly label?: string;
   readonly scheduling?: Readonly<Record<string, JsonValue>>;
 }
@@ -961,6 +1081,28 @@ export interface CatalogDocumentWriteRequest {
   readonly ref: CatalogRef;
   readonly document: Readonly<Record<string, JsonValue>>;
   readonly expected_revision?: string | null;
+}
+
+/** Add one node terminal mount with backend-generated persisted fields. */
+export interface CatalogDraftAddNodeTerminalMountRequest {
+  readonly draft: CatalogComponentDraftEnvelope;
+  readonly expected_draft_revision: number;
+  readonly terminal_ref: string;
+  readonly role: WizardTerminalRole;
+}
+
+/** Add one node Ethernet port with a backend-generated unique identifier. */
+export interface CatalogDraftAddNodeEthernetPortRequest {
+  readonly draft: CatalogComponentDraftEnvelope;
+  readonly expected_draft_revision: number;
+}
+
+/** Add one explicitly identified node using backend-derived persisted fields. */
+export interface CatalogDraftAddSiteNodeRequest {
+  readonly draft: CatalogComponentDraftEnvelope;
+  readonly expected_draft_revision: number;
+  readonly node_id: string;
+  readonly node_ref: string;
 }
 
 /** One backend-produced component-draft finding at an exact JSON pointer. */

@@ -81,7 +81,7 @@ Null               = ? YAML null scalar ? ;
 Boolean            = ? YAML boolean scalar ? ;
 String             = ? YAML string scalar ? ;
 Identifier         = ? YAML string matching [a-z0-9][a-z0-9_-]* in full ? ;
-RoutingAreaId      = ? nonempty YAML string matching [0-9a-f]+(?:\.[0-9a-f]+)* in full ? ;
+RoutingAreaId      = ? nonempty YAML string matching [0-9a-f]+(\.[0-9a-f]+)* in full ? ;
 NonEmptyToken      = ? nonempty YAML string containing no whitespace ? ;
 Integer            = ? YAML integer scalar, excluding booleans ? ;
 PositiveInteger    = ? Integer greater than zero ? ;
@@ -934,10 +934,16 @@ Link rules declare candidate permission; orbital and terminal physics still
 decide whether a candidate is usable. A node selector and terminal selector
 must each resolve to non-empty compatible sets. Every endpoint terminal
 selector must name exactly one positive role and at most one positive medium.
-The resolver derives the access-versus-fixed link class from endpoint roles and
-resolved segment membership. Any rule with an `access` endpoint uses the access
-path; all other rules use the fixed-link path. There is no authored `class`,
-`kind`, or link-label field.
+After reference resolution, every endpoint must select mounts of exactly one
+actual medium, and the two endpoint media must match. Omitting `medium` does not
+permit an RF-to-optical candidate; the resolver derives the matched medium and
+rejects ambiguous or incompatible selections before candidate generation.
+The resolver derives link class from endpoint roles and resolved endpoint
+bodies. Any rule with an `access` endpoint uses the access path. A non-access
+rule whose possible endpoint pairs are uniformly body-local is an `isl`; one
+whose possible endpoint pairs are uniformly cross-body is `inter_body`. A rule
+that mixes body-local and cross-body pairs is invalid and must be split into
+body-specific rules. There is no authored `class`, `kind`, or link-label field.
 
 `Endpoint.min_elevation_deg` is in `[0, 90]` and is valid only on the ground
 endpoint of an access rule. It is invalid on a space endpoint or any non-access
@@ -1071,8 +1077,8 @@ SpfThrottle = MappingBegin,
               [ "init_delay_ms", NonNegativeInteger ],
               [ "short_delay_ms", NonNegativeInteger ],
               [ "long_delay_ms", NonNegativeInteger ],
-              [ "holddown_ms", NonNegativeInteger ],
-              [ "time_to_learn_ms", NonNegativeInteger ],
+              [ "holddown_ms", ( NonNegativeInteger | Null ) ],
+              [ "time_to_learn_ms", ( NonNegativeInteger | Null ) ],
               MappingEnd ;
 
 BfdConfig = MappingBegin,

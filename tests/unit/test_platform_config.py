@@ -93,7 +93,7 @@ class TestPlatformConfig:
         helm_text = (ROOT / "deploy" / "helm" / "files" / "platform.yaml").read_text(
             encoding="utf-8"
         )
-        namespace_template = "{{ .Values.namespace | quote }}"
+        namespace_template = '"{{ .Values.namespace }}"'
         assert namespace_template in helm_text
         helm_raw = yaml.safe_load(helm_text.replace(namespace_template, '"nodalarc"'))
 

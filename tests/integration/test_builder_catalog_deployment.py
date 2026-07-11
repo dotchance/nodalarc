@@ -22,8 +22,8 @@ from typing import Any
 
 import pytest
 import requests
-import yaml
 from nodalarc.catalog_upload import CatalogUploadSelection, verify_catalog_upload
+from nodalarc.configuration_yaml import load_configuration_yaml
 from nodalarc.kubernetes_runtime_config import CATALOG_UPLOAD_LABEL, read_catalog_upload
 
 pytestmark = [
@@ -502,7 +502,7 @@ def test_builder_user_component_closure_reaches_verified_runtime(
         assert compile_result["save_verdict"]["allowed"] is True
         assert compile_result["deploy_eligibility_after_save"]["allowed"] is True
         compiled_yaml = compile_result["canonical_session_yaml"]
-        compiled_document = yaml.safe_load(compiled_yaml)
+        compiled_document = load_configuration_yaml(compiled_yaml)
         leo_segment = next(
             segment
             for segment in compiled_document["segments"]

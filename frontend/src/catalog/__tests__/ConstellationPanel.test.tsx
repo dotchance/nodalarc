@@ -1,9 +1,14 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { ConstellationPanel } from "../ConstellationPanel";
-import type { ConstellationPreset, OrbitModel, WizardConstellationGeometry } from "../wizardTypes";
+import type {
+  ConstellationPreset,
+  OrbitModel,
+  WalkerPattern,
+  WizardConstellationGeometry,
+} from "../wizardTypes";
 
 const CUSTOM_CAPABILITY: ConstellationPreset["capability"] = {
   source_kind: "custom_geometry",
@@ -27,10 +32,23 @@ const ORBIT_MODELS: OrbitModel[] = [
   { id: "two_body", label: "Keplerian Two-Body", description: "two body" },
   { id: "sgp4_tle", label: "SGP4 / TLE", description: "TLE" },
 ];
+const CUSTOM_PATTERNS: WalkerPattern[] = [
+  { id: "walker_delta", label: "Backend Walker Delta", description: "Delta facts" },
+  { id: "walker_star", label: "Backend Walker Star", description: "Star facts" },
+];
 const AUTHORING_FACTS = {
   customGeometrySeed: CUSTOM_SEED,
   customGeometryDefaultNode: "nodalarc:nodes/space/starlink-v2-mesh.yaml",
+  customGeometryPatterns: CUSTOM_PATTERNS,
   orbitModels: ORBIT_MODELS,
+  onDeriveLayout: async ({ pattern, planes, slots_per_plane }: {
+    pattern: "walker_delta" | "walker_star";
+    planes: number;
+    slots_per_plane: number;
+  }) => ({
+    raan_spacing_deg: (pattern === "walker_star" ? 180 : 360) / planes,
+    phase_offset_deg: Math.round((360 / (planes * slots_per_plane)) * 1000) / 1000,
+  }),
 };
 
 function preset(
@@ -117,22 +135,35 @@ describe("ConstellationPanel", () => {
     expect(onSelect).not.toHaveBeenCalled();
   });
 
-  it("emits typed custom geometry without constructing catalog YAML", () => {
+  it("emits typed custom geometry using backend-issued Walker angles", async () => {
     const onSelect = vi.fn();
+    const onDeriveLayout = vi.fn(async () => ({
+      raan_spacing_deg: 36,
+      phase_offset_deg: 3.273,
+    }));
     render(
       <ConstellationPanel
         presets={[preset("parametric-shell", ["j2_mean_elements", "two_body"], "j2_mean_elements")]}
         customGeometryCapability={CUSTOM_CAPABILITY}
         {...AUTHORING_FACTS}
+        onDeriveLayout={onDeriveLayout}
         selected={null}
         onSelect={onSelect}
       />,
     );
 
     fireEvent.click(screen.getByRole("button", { name: /^Custom/ }));
+    expect(screen.getByRole("option", { name: "Backend Walker Delta" })).toBeTruthy();
+    expect(screen.getByText("Delta facts")).toBeTruthy();
     fireEvent.change(screen.getByRole("spinbutton", { name: "Orbital Planes" }), {
       target: { value: "10" },
     });
+    await waitFor(() => expect(onDeriveLayout).toHaveBeenCalledWith({
+      pattern: "walker_delta",
+      planes: 10,
+      slots_per_plane: 11,
+    }));
+    await screen.findByRole("button", { name: "Use Custom Constellation" });
     fireEvent.click(screen.getByRole("button", { name: "Use Custom Constellation" }));
 
     expect(onSelect).toHaveBeenCalledTimes(1);
@@ -142,7 +173,7 @@ describe("ConstellationPanel", () => {
     expect(selected.capability).toEqual(CUSTOM_CAPABILITY);
     expect(selected.custom_geometry).toEqual({
       display_name: "custom-10x11-550km",
-      description: "10 planes × 11 sats, 550 km, 53° walker-delta",
+      description: "10 planes × 11 sats, 550 km, 53° Backend Walker Delta",
       altitude_km: 550,
       inclination_deg: 53,
       pattern: "walker_delta",
@@ -153,13 +184,18 @@ describe("ConstellationPanel", () => {
     });
   });
 
-  it("derives Walker-star planes across a 180-degree RAAN span", () => {
+  it("uses the backend Walker-star result instead of deriving it locally", async () => {
     const onSelect = vi.fn();
+    const onDeriveLayout = vi.fn(async (intent: { planes: number }) => ({
+      raan_spacing_deg: intent.planes === 6 ? 30 : 45,
+      phase_offset_deg: intent.planes === 6 ? 5.455 : 8.182,
+    }));
     render(
       <ConstellationPanel
         presets={[preset("parametric-shell", ["j2_mean_elements", "two_body"], "j2_mean_elements")]}
         customGeometryCapability={CUSTOM_CAPABILITY}
         {...AUTHORING_FACTS}
+        onDeriveLayout={onDeriveLayout}
         selected={null}
         onSelect={onSelect}
       />,
@@ -169,9 +205,17 @@ describe("ConstellationPanel", () => {
     fireEvent.change(screen.getByRole("combobox", { name: "Pattern" }), {
       target: { value: "walker_star" },
     });
+    await waitFor(() =>
+      expect((screen.getByRole("spinbutton", { name: "RAAN Spacing" }) as HTMLInputElement).value)
+        .toBe("45"),
+    );
     fireEvent.change(screen.getByRole("spinbutton", { name: "Orbital Planes" }), {
       target: { value: "6" },
     });
+    await waitFor(() =>
+      expect((screen.getByRole("spinbutton", { name: "RAAN Spacing" }) as HTMLInputElement).value)
+        .toBe("30"),
+    );
     fireEvent.click(screen.getByRole("button", { name: "Use Custom Constellation" }));
 
     const selected = onSelect.mock.calls[0]![0] as ConstellationPreset;
@@ -179,6 +223,11 @@ describe("ConstellationPanel", () => {
       pattern: "walker_star",
       planes: 6,
       raan_spacing_deg: 30,
+    });
+    expect(onDeriveLayout).toHaveBeenLastCalledWith({
+      pattern: "walker_star",
+      planes: 6,
+      slots_per_plane: 11,
     });
   });
 });

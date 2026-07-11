@@ -12,7 +12,9 @@ from nodalarc.catalog_refs import (
     CatalogFamily,
     CatalogNamespace,
     CatalogRef,
+    NodeRef,
     SessionRef,
+    TerminalRef,
     parse_catalog_reference,
 )
 from nodalarc.catalog_registry import catalog_family_spec
@@ -736,6 +738,49 @@ class CatalogDraftPatchRequest(_CatalogApplicationModel):
     @classmethod
     def _accept_json_commands(cls, value: object) -> object:
         return tuple(value) if isinstance(value, list) else value
+
+
+class CatalogDraftAddSiteNodeRequest(_CatalogApplicationModel):
+    """Add one explicitly identified node using backend-derived persisted fields."""
+
+    draft: CatalogComponentDraftEnvelope
+    expected_draft_revision: int = Field(ge=0)
+    node_id: Identifier
+    node_ref: NodeRef
+
+    @model_validator(mode="after")
+    def _site_draft_only(self) -> CatalogDraftAddSiteNodeRequest:
+        if self.draft.family != "sites":
+            raise ValueError("site-node commands require a sites component draft")
+        return self
+
+
+class CatalogDraftAddNodeTerminalMountRequest(_CatalogApplicationModel):
+    """Add one node terminal mount with backend-generated persisted fields."""
+
+    draft: CatalogComponentDraftEnvelope
+    expected_draft_revision: int = Field(ge=0)
+    terminal_ref: TerminalRef
+    role: MountRole
+
+    @model_validator(mode="after")
+    def _node_draft_only(self) -> CatalogDraftAddNodeTerminalMountRequest:
+        if self.draft.family != "nodes":
+            raise ValueError("node terminal-mount commands require a nodes component draft")
+        return self
+
+
+class CatalogDraftAddNodeEthernetPortRequest(_CatalogApplicationModel):
+    """Add one node Ethernet port with a backend-generated unique identifier."""
+
+    draft: CatalogComponentDraftEnvelope
+    expected_draft_revision: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def _node_draft_only(self) -> CatalogDraftAddNodeEthernetPortRequest:
+        if self.draft.family != "nodes":
+            raise ValueError("node Ethernet-port commands require a nodes component draft")
+        return self
 
 
 class CatalogDraftReplaceObjectRequest(_CatalogApplicationModel):

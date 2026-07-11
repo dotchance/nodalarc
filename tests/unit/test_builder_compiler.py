@@ -8,11 +8,13 @@ from typing import Any
 
 import pytest
 import yaml
+from nodalarc.catalog_refs import CatalogRef
+from nodalarc.catalog_registry import validate_referenced_configuration_document
 from nodalarc.catalog_repository import CatalogReadSnapshot, CatalogScope
 from nodalarc.filesystem_catalog_repository import FilesystemCatalogRepository
 from nodalarc.models.builder_api import BuilderCompileRequest, BuilderDraftEnvelope
 from nodalarc.models.builder_world import BuilderWorld
-from vs_api.builder_compiler import compile_builder_draft
+from vs_api.builder_compiler import canonicalize_persisted_configuration, compile_builder_draft
 
 from tests.builder_world_fixtures import builder_world_preview
 
@@ -91,6 +93,32 @@ def _deep_user_draft(*, node_display_name: str = "User spacecraft"):
         },
     ]
     return session, proposals
+
+
+@pytest.mark.parametrize(
+    ("ref", "document"),
+    (
+        (
+            CatalogRef("user:sessions/wrong-session.yaml"),
+            _load(SIMPLE_SESSION),
+        ),
+        (
+            CatalogRef("user:nodes/wrong-node.yaml"),
+            _load(SHIPPED_NODE),
+        ),
+    ),
+)
+def test_canonicalizer_uses_shared_referenced_document_identity_contract(
+    ref: CatalogRef,
+    document: dict[str, Any],
+) -> None:
+    with pytest.raises(ValueError) as authority_error:
+        validate_referenced_configuration_document(ref, document)
+
+    with pytest.raises(ValueError) as canonicalizer_error:
+        canonicalize_persisted_configuration(ref, document)
+
+    assert str(canonicalizer_error.value) == str(authority_error.value)
 
 
 def test_shipped_simple_no_op_compile_is_saveable_and_deployable(

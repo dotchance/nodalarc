@@ -68,8 +68,6 @@ from nodalarc.models.builder_api import (
     WizardExtensionRulesResponse,
     WizardGroundStationSetPreset,
     WizardGroundStationSetPresetResponse,
-    WizardProtocolExtensionCatalog,
-    WizardProtocolExtensionRule,
     WizardSatelliteTerminalSummary,
     WizardSatelliteTypePreset,
     WizardSatelliteTypePresetResponse,
@@ -3634,19 +3632,9 @@ def list_individual_stations() -> WizardAvailableStationResponse:
 )
 def wizard_extension_rules() -> WizardExtensionRulesResponse:
     """Return the Wizard's backend-owned routing choices and initial controls."""
-    from vs_api.wizard_builder import wizard_routing_timer_defaults
+    from vs_api.wizard_builder import wizard_extension_rules_response
 
-    rule = WizardProtocolExtensionRule(
-        extensions=("sr", "te", "mpls"),
-        constraints={},
-    )
-    return WizardExtensionRulesResponse(
-        protocols=WizardProtocolExtensionCatalog(ospf=rule, isis=rule),
-        area_strategies=("flat", "stripe", "per_plane"),
-        available_protocols=("ospf", "isis"),
-        default_area_strategy="flat",
-        routing_timer_defaults=wizard_routing_timer_defaults(),
-    )
+    return wizard_extension_rules_response()
 
 
 def _error_response(status_code: int, message: str) -> JSONResponse:

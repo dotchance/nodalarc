@@ -152,10 +152,10 @@ def test_backend_visual_commands_own_seeds_and_advance_one_fenced_revision(
             "propagator": "j2_mean_elements",
         },
         "planes": 3,
-        "raan_spacing_deg": 60.0,
+        "raan_spacing_deg": 120.0,
         "slots_per_plane": 8,
         "phasing_mode": "walker_delta",
-        "phase_offset_deg": 0.0,
+        "phase_offset_deg": 15.0,
     }
 
     compiled_space = service.compile(
@@ -263,6 +263,280 @@ def test_backend_visual_commands_own_seeds_and_advance_one_fenced_revision(
         preview_factory=_preview,
     )
     assert independent_result.affected_id == "space-1"
+
+
+def test_backend_command_mints_ground_sites_and_allocates_all_addresses(
+    service: BuilderVisualDraftService,
+) -> None:
+    draft = service.create(BuilderVisualDraftCreateRequest(session_name="backend-mint"))
+    ground_result = service.apply_command(
+        BuilderVisualDraftCommandRequest(
+            draft=draft,
+            expected_draft_revision=0,
+            command={"operation": "add_ground"},
+        ),
+        available_node_count=1_000_000,
+        preview_factory=_preview,
+    )
+    minted = service.apply_command(
+        BuilderVisualDraftCommandRequest(
+            draft=ground_result.draft,
+            expected_draft_revision=1,
+            command={
+                "operation": "mint_ground_members",
+                "segment_id": "ground-1",
+                "sites": [
+                    {"name": "Denver", "lat_deg": 39.7, "lon_deg": -104.9},
+                    {"name": "Perth", "lat_deg": -31.9, "lon_deg": 115.8, "alt_m": 12},
+                ],
+            },
+        ),
+        available_node_count=1_000_000,
+        preview_factory=_preview,
+    )
+
+    assert minted.notice == "minted 2 sites"
+    assert minted.affected_kind == "ground"
+    assert minted.affected_id == "ground-1"
+    assert minted.draft.workspace is not None
+    members = minted.draft.workspace.ground[0].members
+    assert [(member.member_id, member.site_id, member.label) for member in members] == [
+        ("member-1", "site-1", "Denver"),
+        ("member-2", "site-2", "Perth"),
+    ]
+    assert [
+        (
+            member.site.lan_ipv4,
+            member.site.nodes[0].terr0_ipv4,
+            member.site.nodes[0].lo0_ipv4,
+        )
+        for member in members
+        if member.site is not None
+    ] == [
+        ("172.20.0.0/24", "172.20.0.1/24", "10.200.0.1/32"),
+        ("172.20.1.0/24", "172.20.1.1/24", "10.200.0.2/32"),
+    ]
+
+    workspace = minted.draft.workspace
+    ground = workspace.ground[0]
+    without_first = ground.model_copy(update={"members": (ground.members[1],)})
+    revised = minted.draft.model_copy(
+        update={
+            "workspace": workspace.model_copy(update={"ground": (without_first,)}),
+        }
+    )
+    third = service.apply_command(
+        BuilderVisualDraftCommandRequest(
+            draft=revised,
+            expected_draft_revision=2,
+            command={
+                "operation": "mint_ground_members",
+                "segment_id": "ground-1",
+                "sites": [{"name": "Ames", "lat_deg": 42, "lon_deg": -93}],
+            },
+        ),
+        available_node_count=1_000_000,
+        preview_factory=_preview,
+    )
+    assert third.draft.workspace is not None
+    ames = third.draft.workspace.ground[0].members[-1]
+    assert ames.site is not None
+    assert ames.site.lan_ipv4 == "172.20.2.0/24"
+    assert ames.site.nodes[0].terr0_ipv4 == "172.20.2.1/24"
+    assert ames.site.nodes[0].lo0_ipv4 == "10.200.0.3/32"
+
+
+def test_backend_commands_derive_space_transitions_and_ground_installations(
+    service: BuilderVisualDraftService,
+) -> None:
+    draft = service.create(BuilderVisualDraftCreateRequest(session_name="backend-derivation"))
+
+    def apply(command: dict[str, Any]) -> None:
+        nonlocal draft
+        result = service.apply_command(
+            BuilderVisualDraftCommandRequest(
+                draft=draft,
+                expected_draft_revision=draft.draft_revision,
+                command=command,
+            ),
+            available_node_count=1_000_000,
+            preview_factory=_preview,
+        )
+        draft = result.draft
+
+    apply({"operation": "add_generated_space", "phasing_mode": "walker_delta"})
+    apply(
+        {
+            "operation": "set_space_population",
+            "segment_id": "space-1",
+            "phasing_mode": "evenly_spaced_mean_anomaly",
+        }
+    )
+    assert draft.workspace is not None
+    space = draft.workspace.space[0]
+    assert (space.phasing_mode, space.planes, space.raan_spacing_deg, space.phase_offset_deg) == (
+        "evenly_spaced_mean_anomaly",
+        1,
+        360.0,
+        0.0,
+    )
+
+    apply({"operation": "set_space_population", "segment_id": "space-1", "planes": 4})
+    space = draft.workspace.space[0]
+    assert (space.phasing_mode, space.planes, space.raan_spacing_deg, space.phase_offset_deg) == (
+        "walker_delta",
+        4,
+        90.0,
+        11.25,
+    )
+    apply(
+        {
+            "operation": "set_space_population",
+            "segment_id": "space-1",
+            "phasing_mode": "walker_star",
+        }
+    )
+    apply(
+        {
+            "operation": "set_space_population",
+            "segment_id": "space-1",
+            "slots_per_plane": 10,
+        }
+    )
+    space = draft.workspace.space[0]
+    assert (space.phasing_mode, space.planes, space.slots_per_plane) == ("walker_star", 4, 10)
+    assert (space.raan_spacing_deg, space.phase_offset_deg) == (45.0, 9.0)
+
+    apply({"operation": "add_ground"})
+    apply(
+        {
+            "operation": "set_ground_stamp_node_model",
+            "segment_id": "ground-1",
+            "node_ref": "nodalarc:nodes/ground/leo-gateway.yaml",
+        }
+    )
+    ground = draft.workspace.ground[0]
+    assert ground.stamp.installed == {"access_ka": 8}
+    assert ground.stamp.boresights == {
+        "access_ka": BuilderVisualGroundBoresight(mode="local_vertical")
+    }
+
+    apply(
+        {
+            "operation": "mint_ground_members",
+            "segment_id": "ground-1",
+            "sites": [{"name": "Denver", "lat_deg": 39.7, "lon_deg": -104.9}],
+        }
+    )
+    apply(
+        {
+            "operation": "set_ground_site_node_model",
+            "segment_id": "ground-1",
+            "member_id": "member-1",
+            "node_id": "gw1",
+            "node_ref": "nodalarc:nodes/ground/starlink-gateway.yaml",
+        }
+    )
+    member = draft.workspace.ground[0].members[0]
+    assert member.site is not None
+    first_node = member.site.nodes[0]
+    assert first_node.installed == {"access_ka": 64}
+    assert first_node.lo0_ipv4 == "10.200.0.1/32"
+    assert first_node.terr0_ipv4 == "172.20.0.1/24"
+
+    site_with_gap = member.site.model_copy(
+        update={"nodes": (*member.site.nodes, first_node.model_copy(update={"node_id": "gw3"}))}
+    )
+    ground = draft.workspace.ground[0]
+    ground_with_gap = ground.model_copy(
+        update={
+            "members": (
+                ground.members[0].model_copy(update={"site": site_with_gap}),
+                *ground.members[1:],
+            )
+        }
+    )
+    draft = draft.model_copy(
+        update={"workspace": draft.workspace.model_copy(update={"ground": (ground_with_gap,)})}
+    )
+    apply(
+        {
+            "operation": "add_ground_site_node",
+            "segment_id": "ground-1",
+            "member_id": "member-1",
+        }
+    )
+    member = draft.workspace.ground[0].members[0]
+    assert member.site is not None
+    added = member.site.nodes[-1]
+    assert added.node_id == "gw2"
+    assert added.model_ref == "nodalarc:nodes/ground/starlink-gateway.yaml"
+    assert added.installed == {"access_ka": 64}
+    assert added.boresights == {"access_ka": BuilderVisualGroundBoresight(mode="local_vertical")}
+
+
+def test_backend_visual_node_commands_derive_identity_shape_and_counts(
+    service: BuilderVisualDraftService,
+) -> None:
+    draft = service.create(BuilderVisualDraftCreateRequest(session_name="node-command-owned"))
+
+    def apply(command: dict[str, Any]) -> None:
+        nonlocal draft
+        draft = service.apply_command(
+            BuilderVisualDraftCommandRequest(
+                draft=draft,
+                expected_draft_revision=draft.draft_revision,
+                command=command,
+            ),
+            available_node_count=1_000_000,
+            preview_factory=_preview,
+        ).draft
+
+    apply({"operation": "add_generated_space", "phasing_mode": "walker_delta"})
+    apply({"operation": "author_inline_space_node", "segment_id": "space-1"})
+    for _ in range(2):
+        apply(
+            {
+                "operation": "add_or_increment_node_terminal",
+                "segment_id": "space-1",
+                "terminal_ref": ("nodalarc:terminals/rf/rf-ka-starlink-space-gateway.yaml"),
+                "role": "access",
+            }
+        )
+    apply({"operation": "add_node_ethernet_port", "segment_id": "space-1"})
+    apply({"operation": "add_node_ethernet_port", "segment_id": "space-1"})
+
+    assert draft.workspace is not None
+    node = draft.workspace.space[0].node_draft
+    assert node is not None
+    assert (node.id, node.display_name, node.forwarding) == (
+        "space-1-node",
+        "Constellation 1 node",
+        None,
+    )
+    assert node.ethernet == ("terr0", "terr1")
+    assert node.terminals == (
+        BuilderVisualTerminalMount(
+            mount_id="access_0",
+            role="access",
+            terminal_ref="nodalarc:terminals/rf/rf-ka-starlink-space-gateway.yaml",
+            count=2,
+            boresight=BuilderVisualSpaceBoresight(mode="nadir"),
+        ),
+    )
+
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        BuilderVisualDraftCommandRequest.model_validate(
+            {
+                "draft": draft.model_dump(mode="json"),
+                "expected_draft_revision": draft.draft_revision,
+                "command": {
+                    "operation": "add_node_ethernet_port",
+                    "segment_id": "space-1",
+                    "port_id": "browser-owned",
+                },
+            }
+        )
 
 
 def test_structured_labels_do_not_redefine_backend_issued_identifiers(

@@ -103,6 +103,46 @@ def test_typed_route_prepares_direct_and_transitive_user_refs_for_switch(
     assert save.status_code == 200, save.text
     saved = save.json()
 
+    reopened = client.post(
+        "/api/v1/builder/draft/open",
+        json={"source_ref": saved["session"]["ref"]},
+    )
+    assert reopened.status_code == 200, reopened.text
+    assert reopened.json()["session_yaml"] == saved["session"]["canonical_yaml"]
+
+    exported = client.post(
+        "/api/v1/builder/session/export",
+        json={
+            "session_ref": saved["session"]["ref"],
+            "expected_session_revision": saved["session"]["revision"],
+        },
+    )
+    assert exported.status_code == 200, exported.text
+    closure = exported.json()
+    assert closure["root"]["exact_yaml"] == saved["session"]["canonical_yaml"]
+
+    imported = client.post(
+        "/api/v1/builder/session/import",
+        json={
+            "contract_version": closure["contract_version"],
+            "root_ref": closure["session_ref"],
+            "root_yaml": closure["root"]["exact_yaml"],
+            "document_digest": closure["document_digest"],
+            "closure_digest": closure["closure_digest"],
+            "entries": [
+                {
+                    "ref": entry["ref"],
+                    "exact_yaml": entry["exact_yaml"],
+                    "document_digest": entry["document_digest"],
+                }
+                for entry in closure["entries"]
+            ],
+            "commit": True,
+        },
+    )
+    assert imported.status_code == 200, imported.text
+    assert imported.json()["outcome"] == "unchanged"
+
     deploy = client.post(
         "/api/v1/builder/session/deploy",
         json={
@@ -250,6 +290,46 @@ def test_wizard_compile_save_and_deploy_uploads_exact_custom_yaml_closure(
     )
     assert save.status_code == 200, save.text
     saved = save.json()
+
+    reopened = client.post(
+        "/api/v1/builder/draft/open",
+        json={"source_ref": saved["session"]["ref"]},
+    )
+    assert reopened.status_code == 200, reopened.text
+    assert reopened.json()["session_yaml"] == saved["session"]["canonical_yaml"]
+
+    exported = client.post(
+        "/api/v1/builder/session/export",
+        json={
+            "session_ref": saved["session"]["ref"],
+            "expected_session_revision": saved["session"]["revision"],
+        },
+    )
+    assert exported.status_code == 200, exported.text
+    closure = exported.json()
+    assert closure["root"]["exact_yaml"] == saved["session"]["canonical_yaml"]
+
+    imported = client.post(
+        "/api/v1/builder/session/import",
+        json={
+            "contract_version": closure["contract_version"],
+            "root_ref": closure["session_ref"],
+            "root_yaml": closure["root"]["exact_yaml"],
+            "document_digest": closure["document_digest"],
+            "closure_digest": closure["closure_digest"],
+            "entries": [
+                {
+                    "ref": entry["ref"],
+                    "exact_yaml": entry["exact_yaml"],
+                    "document_digest": entry["document_digest"],
+                }
+                for entry in closure["entries"]
+            ],
+            "commit": True,
+        },
+    )
+    assert imported.status_code == 200, imported.text
+    assert imported.json()["outcome"] == "unchanged"
 
     deploy = client.post(
         "/api/v1/builder/session/deploy",

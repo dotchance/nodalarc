@@ -9,7 +9,10 @@ from typing import Any
 import pytest
 import yaml
 from nodalarc.catalog_refs import CatalogRef
-from nodalarc.catalog_registry import CATALOG_FAMILY_REGISTRY
+from nodalarc.catalog_registry import (
+    CATALOG_FAMILY_REGISTRY,
+    validate_referenced_configuration_document,
+)
 from nodalarc.catalog_repository import CatalogNotFoundError, CatalogScope
 from nodalarc.filesystem_catalog_repository import FilesystemCatalogRepository
 from nodalarc.models.builder_catalog_api import (
@@ -69,6 +72,23 @@ def _first_shipped_ref(family: str) -> CatalogRef:
 
 def _canonical_json(fixture: ServiceFixture, ref: str | CatalogRef) -> dict[str, Any]:
     return fixture.service.get_catalog(CatalogGetRequest(ref=CatalogRef(str(ref)))).canonical_json
+
+
+def test_exact_document_validation_uses_shared_reference_identity_contract() -> None:
+    ref = CatalogRef("user:nodes/wrong-node.yaml")
+    document = yaml.safe_load(
+        (SHIPPED_ROOT / "nodes/space/starlink-v2-mesh.yaml").read_text(encoding="utf-8")
+    )
+    content = yaml.safe_dump(document).encode("utf-8")
+
+    with pytest.raises(ValueError) as authority_error:
+        validate_referenced_configuration_document(ref, document)
+
+    with pytest.raises(CatalogAuthoringError) as service_error:
+        service_module._validated_exact_document(ref, content)
+
+    assert service_error.value.refusal.cause_type == "ValueError"
+    assert str(authority_error.value) in service_error.value.refusal.message
 
 
 def _seed_session(

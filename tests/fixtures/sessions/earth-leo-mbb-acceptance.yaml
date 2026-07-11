@@ -1,72 +1,91 @@
-
 session:
   name: earth-leo-mbb-acceptance
-identity:
-  mode: segment_namespaced
+  display_name: Earth LEO MBB acceptance
+  description: Canonical moving-ground-handover acceptance session.
 segments:
 - id: space
-  kind: constellation
-  source: configs/constellations/starlink-176.yaml
-  namespace: space
-  central_body: earth
-  tags:
-  - earth
-  - leo
-  - handover
-  - mbb
+  source: nodalarc:constellations/earth/leo/earth-leo-ring-36.yaml
 - id: ground
-  kind: ground_set
-  source: configs/ground-stations/sets/mbb-test.yaml
-  namespace: ground
-  reference_body: earth
-  scheduling:
-    selection_policy:
-      name: highest-elevation
-      params: {}
-    handover_policy:
-      name: hysteresis
-      params:
-        discount_factor: 1.15
-        mask_fade_range_deg: 5.0
-    handover_mode: mbb
-    mbb_overlap_ticks: 3
-    mbb_reserve: 1
-  tags:
-  - earth
-  - ground
-  - handover
-  - mbb
+  placement:
+    from_site_set: nodalarc:site-sets/earth/leo/earth-leo-starlink-pop-sites.yaml
+  apply:
+    scheduling:
+      selection_policy:
+        highest_elevation: {}
+      handover_policy:
+        hysteresis:
+          discount_factor: 1.15
+          mask_fade_range_deg: 5.0
+      handover_mode: mbb
+      mbb_overlap_ticks: 3
+      mbb_reserve: 1
+      handover_concurrency: one_at_a_time
+      ranking_order:
+      - service_priority
+      - selection_score
+      - satellite_ground_terminal_capacity
+      - lex_pair
+      mbb_preemption: 'off'
+      successor_abort_policy: hard_release
+      cross_tenant_displacement: 'off'
+      bbm_acquire_timeout_ticks: 1
 link_rules:
-- id: ground-access
-  kind: access
-  endpoints:
-  - selector:
-      segment: ground
-    terminal_role: ground
-  - selector:
-      segment: space
-    terminal_role: ground
+- id: ground_access
   topology:
     mode: visible_candidates
+  endpoints:
+  - select:
+      all:
+      - segment: ground
+      - tag: leo
+    terminal:
+      all:
+      - role: access
+      - medium: rf
+    min_elevation_deg: 25
+  - select:
+      segment: space
+    terminal:
+      all:
+      - role: access
+      - medium: rf
+- id: space_isl
+  topology:
+    mode: nearest_n
+    n: 2
+  endpoints:
+  - select: {segment: space}
+    terminal: {all: [{role: isl}, {medium: optical}]}
+  - select: {segment: space}
+    terminal: {all: [{role: isl}, {medium: optical}]}
+addressing:
+  loopbacks:
+  - id: node_loopbacks
+    applies_to:
+      any:
+      - segment: space
+      - segment: ground
+    ipv4_pool: 10.255.0.0/16
+    prefix_length: 32
+    allocation: by_node_order
+routing:
+  domains:
+  - id: mbb_domain
+    protocol: isis
+    selectors:
+    - any:
+      - segment: space
+      - segment: ground
+    area_assignment:
+      strategy: flat
 simulation:
-  schema_version: 2
-  ground_link_model: terminal_physics
   candidate_limits:
-    max_pairs_per_rule: 1056
-orbit:
-  propagator: j2-mean-elements
+    max_pairs_per_rule: 500
+    max_pairs_per_tick: 2000
+time:
+  start_time: '2026-06-08T00:00:00Z'
+  step_seconds: 1
+  compression: 1
 dispatch:
   latency_authority: ome
   max_latency_age_ticks: 1
-  substrate_compensation:
-    measurement_source: node-agent-rtt
-    rtt_to_one_way: half-rtt
-routing:
-  protocol: isis
-  extensions:
-  - traffic-engineering
-  area_assignment:
-    strategy: per-plane
-  bfd: true
-time:
-  step_seconds: 1

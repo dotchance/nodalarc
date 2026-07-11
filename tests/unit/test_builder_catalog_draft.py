@@ -13,6 +13,9 @@ from nodalarc.filesystem_catalog_repository import FilesystemCatalogRepository
 from nodalarc.models.builder_catalog_api import (
     CatalogComponentFamily,
     CatalogDocumentWriteRequest,
+    CatalogDraftAddNodeEthernetPortRequest,
+    CatalogDraftAddNodeTerminalMountRequest,
+    CatalogDraftAddSiteNodeRequest,
     CatalogDraftCompileRequest,
     CatalogDraftNewRequest,
     CatalogDraftOpenRequest,
@@ -218,6 +221,132 @@ def test_specialized_patch_changes_only_the_selected_field_on_an_advanced_site(
         advanced["nodes"][0]["originated_prefixes"]
         == source["site"]["nodes"][0]["originated_prefixes"]
     )
+
+
+def test_site_node_command_uses_explicit_identity_and_backend_derived_shape(
+    tmp_path: Path,
+) -> None:
+    drafts, authoring = _services(tmp_path)
+    node_ref = CatalogRef("nodalarc:nodes/ground/leo-gateway.yaml")
+    node_model = authoring.get_catalog(CatalogGetRequest(ref=node_ref)).canonical_json["node"]
+    opened = drafts.new(CatalogDraftNewRequest(family="sites", object_id="command-site"))
+
+    added = drafts.add_site_node(
+        CatalogDraftAddSiteNodeRequest(
+            draft=opened,
+            expected_draft_revision=opened.draft_revision,
+            node_id="edge-router",
+            node_ref=node_ref,
+        )
+    )
+
+    assert added.draft_revision == opened.draft_revision + 1
+    installed = added.document["site"]["nodes"]
+    assert len(installed) == 1
+    assert installed[0]["id"] == "edge-router"
+    assert installed[0]["model"] == str(node_ref)
+    assert installed[0]["payloads"] == {}
+    assert installed[0]["interfaces"] == {
+        "lo0": {"ipv4": ""},
+        "terr0": {"ipv4": ""},
+    }
+    expected_mounts = {mount["id"]: mount for mount in node_model["terminals"]}
+    assert set(installed[0]["terminals"]) == set(expected_mounts)
+    for mount_id, installation in installed[0]["terminals"].items():
+        assert installation["installed_count"] == expected_mounts[mount_id]["count"]
+        if expected_mounts[mount_id]["role"] == "access":
+            assert installation["capabilities"]["boresight"] == {"mode": "local_vertical"}
+        else:
+            assert "capabilities" not in installation
+
+    with pytest.raises(CatalogAuthoringError) as duplicate:
+        drafts.add_site_node(
+            CatalogDraftAddSiteNodeRequest(
+                draft=added,
+                expected_draft_revision=added.draft_revision,
+                node_id="edge-router",
+                node_ref=node_ref,
+            )
+        )
+    assert duplicate.value.code == "catalog_authoring.conflict"
+
+    terminal_draft = drafts.new(CatalogDraftNewRequest(family="terminals", object_id="not-a-site"))
+    with pytest.raises(ValidationError, match="site-node commands require"):
+        CatalogDraftAddSiteNodeRequest(
+            draft=terminal_draft,
+            expected_draft_revision=terminal_draft.draft_revision,
+            node_id="edge-router",
+            node_ref=node_ref,
+        )
+
+
+def test_node_commands_derive_unique_mount_and_ethernet_shapes(
+    tmp_path: Path,
+) -> None:
+    drafts, _ = _services(tmp_path)
+    opened = drafts.new(CatalogDraftNewRequest(family="nodes", object_id="command-node"))
+    terminal_ref = CatalogRef("nodalarc:terminals/rf/rf-ka-starlink-space-gateway.yaml")
+
+    mounted = drafts.add_node_terminal_mount(
+        CatalogDraftAddNodeTerminalMountRequest(
+            draft=opened,
+            expected_draft_revision=opened.draft_revision,
+            terminal_ref=terminal_ref,
+            role="access",
+        )
+    )
+    mounted_again = drafts.add_node_terminal_mount(
+        CatalogDraftAddNodeTerminalMountRequest(
+            draft=mounted,
+            expected_draft_revision=mounted.draft_revision,
+            terminal_ref=terminal_ref,
+            role="access",
+        )
+    )
+    first_port = drafts.add_node_ethernet_port(
+        CatalogDraftAddNodeEthernetPortRequest(
+            draft=mounted_again,
+            expected_draft_revision=mounted_again.draft_revision,
+        )
+    )
+    second_port = drafts.add_node_ethernet_port(
+        CatalogDraftAddNodeEthernetPortRequest(
+            draft=first_port,
+            expected_draft_revision=first_port.draft_revision,
+        )
+    )
+
+    assert second_port.document["node"]["terminals"] == [
+        {
+            "id": "access_0",
+            "role": "access",
+            "terminal": str(terminal_ref),
+            "count": 1,
+            "boresight": {"mode": "nadir"},
+        },
+        {
+            "id": "access_1",
+            "role": "access",
+            "terminal": str(terminal_ref),
+            "count": 1,
+            "boresight": {"mode": "nadir"},
+        },
+    ]
+    assert second_port.document["node"]["ethernet"] == [
+        {"id": "terr0"},
+        {"id": "terr1"},
+    ]
+
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        CatalogDraftAddNodeTerminalMountRequest.model_validate(
+            {
+                "draft": opened.model_dump(mode="json"),
+                "expected_draft_revision": 0,
+                "terminal_ref": str(terminal_ref),
+                "role": "access",
+                "count": 99,
+            }
+        )
 
 
 def test_default_shipped_customization_never_overwrites_an_existing_user_object(
@@ -522,6 +651,18 @@ def test_openapi_exposes_typed_scope_free_component_draft_routes(
         ),
         "/api/v1/builder/catalog/draft/patch": (
             "CatalogDraftPatchRequest",
+            "CatalogComponentDraftEnvelope",
+        ),
+        "/api/v1/builder/catalog/draft/site-node/add": (
+            "CatalogDraftAddSiteNodeRequest",
+            "CatalogComponentDraftEnvelope",
+        ),
+        "/api/v1/builder/catalog/draft/node-terminal/add": (
+            "CatalogDraftAddNodeTerminalMountRequest",
+            "CatalogComponentDraftEnvelope",
+        ),
+        "/api/v1/builder/catalog/draft/node-ethernet/add": (
+            "CatalogDraftAddNodeEthernetPortRequest",
             "CatalogComponentDraftEnvelope",
         ),
         "/api/v1/builder/catalog/draft/replace-object": (

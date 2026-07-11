@@ -20,6 +20,7 @@ import type {
   WizardAvailableStation,
   WizardExtensionRulesResponse,
   WizardExtension,
+  WizardWalkerPatternMetadata,
 } from "../builder/generated/builderApi";
 
 export type {
@@ -33,6 +34,13 @@ export type {
   WizardAvailableStation,
   WizardExtensionRulesResponse,
   WizardExtension,
+  WizardExtensionMetadata,
+  WizardProtocolMetadata,
+  WizardRoutingBooleanField,
+  WizardRoutingTimerField,
+  WizardRoutingTimerFieldMetadata,
+  WizardWalkerPattern,
+  WizardWalkerPatternMetadata,
 } from "../builder/generated/builderApi";
 
 // --- Library presets (fetched from VS-API) ---
@@ -65,6 +73,7 @@ export type ExtensionRules = WizardExtensionRulesResponse;
 export type Protocol = WizardSessionIntent["protocol"];
 export type OrbitPropagator = WizardOrbitPropagator;
 export type OrbitModel = WizardOrbitModelMetadata;
+export type WalkerPattern = WizardWalkerPatternMetadata;
 export type AreaStrategy = WizardAreaStrategy;
 
 // --- Step model ---

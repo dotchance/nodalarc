@@ -26,6 +26,7 @@ def test_generated_contract_exposes_visual_drafts_and_path_free_session_sources(
     assert "export interface CatalogSessionYamlUploadRequest" in generated
     assert "export interface CatalogComponentDraftEnvelope" in generated
     assert "export interface CatalogDraftPatchRequest" in generated
+    assert "export interface CatalogDraftAddSiteNodeRequest" in generated
     assert "export interface CatalogDraftCompileResult" in generated
     assert "export interface CatalogDraftSaveResult" in generated
     assert "export type CatalogComponentFamily =" in generated
@@ -37,10 +38,18 @@ def test_generated_contract_exposes_visual_drafts_and_path_free_session_sources(
     assert "export interface WizardConstellationPresetResponse" in generated
     assert "export type WizardOrbitPropagator =" in generated
     assert "export type WizardConstellationSourceKind =" in generated
+    assert "export type WizardWalkerPattern =" in generated
+    assert "export interface WizardWalkerPatternMetadata" in generated
     assert "export interface WizardSatelliteTypePresetResponse" in generated
     assert "export interface WizardGroundStationSetPresetResponse" in generated
     assert "export interface WizardAvailableStationResponse" in generated
     assert "export interface WizardExtensionRulesResponse" in generated
+    assert "export interface WizardProtocolMetadata" in generated
+    assert "export interface WizardExtensionMetadata" in generated
+    assert "export interface WizardRoutingTimerFieldMetadata" in generated
+    assert "export type WizardRoutingTimerField =" in generated
+    assert "WizardProtocolExtensionCatalog" not in generated
+    assert "WizardProtocolExtensionRule" not in generated
     assert 'readonly severity: "info" | "note" | "warning" | "error";' in generated
     assert "export type SessionSourceId = CatalogSessionSourceId;" in generated
     assert "LegacySession" not in generated

@@ -131,10 +131,16 @@ def test_visual_draft_command_route_returns_next_revision_and_typed_stale_refusa
     assert applied["affected_kind"] == "space"
     assert applied["affected_id"] == "space-1"
     space = applied["draft"]["workspace"]["space"][0]
-    assert (space["planes"], space["phasing_mode"], space["phase_offset_deg"]) == (
+    assert (
+        space["planes"],
+        space["raan_spacing_deg"],
+        space["phasing_mode"],
+        space["phase_offset_deg"],
+    ) == (
         3,
+        120.0,
         "walker_delta",
-        0.0,
+        15.0,
     )
 
     stale_response = client.post(
@@ -155,6 +161,25 @@ def test_visual_draft_command_route_returns_next_revision_and_typed_stale_refusa
         "collisions": [],
         "cause_type": "BuilderVisualDraftCommandError",
     }
+
+
+def test_walker_layout_route_returns_backend_derived_angles(client: TestClient) -> None:
+    response = client.post(
+        "/api/v1/builder/defaults/walker-layout",
+        json={"pattern": "walker_star", "planes": 6, "slots_per_plane": 20},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "raan_spacing_deg": 30.0,
+        "phase_offset_deg": 3.0,
+    }
+
+    invalid = client.post(
+        "/api/v1/builder/defaults/walker-layout",
+        json={"pattern": "walker_delta", "planes": 1, "slots_per_plane": 20},
+    )
+    assert invalid.status_code == 422
 
 
 def test_visual_open_missing_source_is_a_typed_path_free_404(client: TestClient) -> None:

@@ -11,8 +11,6 @@ import { targetKey } from "../useEditorWindows";
 import {
   emittedDomainId,
   emittedRuleId,
-  mintSiteMembers,
-  parseSiteLines,
   type Workspace,
 } from "../workspace";
 import {
@@ -20,6 +18,7 @@ import {
   newDraftConstellation,
   newDraftGroundSet,
   newWorkspace,
+  testGroundMember,
 } from "./fixtures/workspaceFixtures";
 import type { BuilderResolveError } from "../builderTypes";
 
@@ -29,7 +28,7 @@ function linkedWorkspace(): { ws: Workspace } {
   const ws = newWorkspace("wall-test");
   ws.space.push(newDraftConstellation("nodalarc:nodes/space/x.yaml"));
   const ground = newDraftGroundSet("nodalarc:nodes/ground/gw.yaml", {});
-  ground.members = mintSiteMembers(ground, parseSiteLines("Denver, 39.7, -104.9").rows);
+  ground.members = [testGroundMember(ground, "Denver", 39.7, -104.9)];
   ws.ground.push(ground);
   ws.links.push({
     rule_id: "backend-rule-1",

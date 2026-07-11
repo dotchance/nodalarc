@@ -22,10 +22,15 @@ from nodalarc.models.builder_api import (
     BuilderDraftEnvelope,
     BuilderProposedCatalogDocument,
     JsonDocument,
+    WizardBfdMetadata,
     WizardCompileRequest,
     WizardConstellationGeometry,
     WizardCoverageRequest,
+    WizardExtensionMetadata,
+    WizardExtensionRulesResponse,
     WizardPhysicalIntent,
+    WizardProtocolMetadata,
+    WizardRoutingTimerFieldMetadata,
     WizardRoutingTimerIntent,
     WizardSessionIntent,
 )
@@ -44,6 +49,173 @@ WizardIdentityFactory = Callable[[], str]
 _EARTH_BODY = "nodalarc:bodies/earth.yaml"
 _CUSTOM_EPOCH = "2026-06-08T00:00:00Z"
 _IDENTIFIER_PARTS = re.compile(r"[^a-z0-9_-]+")
+_WIZARD_EXTENSION_METADATA = (
+    WizardExtensionMetadata(
+        id="te",
+        label="Traffic Engineering",
+        description="MPLS-TE extensions that advertise bandwidth and delay.",
+    ),
+    WizardExtensionMetadata(
+        id="mpls",
+        label="MPLS / LDP",
+        description="Label Distribution Protocol for the MPLS forwarding plane.",
+    ),
+    WizardExtensionMetadata(
+        id="sr",
+        label="Segment Routing",
+        description="Source-routed MPLS using SRGB label blocks.",
+    ),
+)
+_WIZARD_BFD_METADATA = WizardBfdMetadata(
+    heading="BFD (Bidirectional Forwarding Detection)",
+    enabled_field="bfd",
+    enable_label="Enable BFD",
+    enable_description=(
+        "Sub-second link failure detection independent of routing protocol hellos."
+    ),
+    timer_fields=(
+        WizardRoutingTimerFieldMetadata(
+            id="bfd_detect_multiplier",
+            label="Detect Multiplier",
+            description=(
+                "Missed BFD packets before declaring failure. Detection time equals "
+                "the multiplier times the interval."
+            ),
+            guidance="Typical: 3 (900ms detection at 300ms interval).",
+            minimum=1,
+        ),
+        WizardRoutingTimerFieldMetadata(
+            id="bfd_rx_interval",
+            label="RX Interval",
+            unit="ms",
+            description="Minimum interval for receiving BFD control packets.",
+            guidance="Aggressive: 100ms. Typical: 300ms.",
+            minimum=1,
+        ),
+        WizardRoutingTimerFieldMetadata(
+            id="bfd_tx_interval",
+            label="TX Interval",
+            unit="ms",
+            description="Minimum interval for transmitting BFD control packets.",
+            guidance="Aggressive: 100ms. Typical: 300ms.",
+            minimum=1,
+        ),
+    ),
+)
+_WIZARD_PROTOCOL_METADATA = (
+    WizardProtocolMetadata(
+        id="ospf",
+        label="OSPF",
+        description="Open Shortest Path First distributed link-state routing.",
+        extensions=("sr", "te", "mpls"),
+        extension_constraints={},
+        timer_label="OSPF Timers",
+        timer_fields=(
+            WizardRoutingTimerFieldMetadata(
+                id="ospf_hello_interval",
+                label="Hello Interval",
+                unit="s",
+                description="Time between OSPF hello packets on each interface.",
+                guidance="LEO: 1s. Terrestrial: 10s (default).",
+                minimum=1,
+            ),
+            WizardRoutingTimerFieldMetadata(
+                id="ospf_dead_interval",
+                label="Dead Interval",
+                unit="s",
+                description="Time without hellos before declaring a neighbor dead.",
+                guidance="Must exceed the hello interval.",
+                minimum=1,
+            ),
+            WizardRoutingTimerFieldMetadata(
+                id="ospf_spf_delay",
+                label="SPF Delay",
+                unit="ms",
+                description="Initial delay before SPF computation after a topology change.",
+                guidance="Aggressive: 50ms. Conservative: 1000ms.",
+                minimum=0,
+            ),
+            WizardRoutingTimerFieldMetadata(
+                id="ospf_spf_initial_hold",
+                label="SPF Initial Hold",
+                unit="ms",
+                description="Minimum time between consecutive SPF runs; doubles on each run.",
+                guidance="LEO: 200ms. Stable networks: 1000-5000ms.",
+                minimum=0,
+            ),
+            WizardRoutingTimerFieldMetadata(
+                id="ospf_spf_max_hold",
+                label="SPF Max Hold",
+                unit="ms",
+                description="Maximum delay between SPF runs during sustained churn.",
+                guidance="LEO: 1000ms. Must not exceed the handover interval.",
+                minimum=0,
+            ),
+        ),
+        non_flat_area_warning=(
+            "OSPF multi-area with dynamic constellation topologies may lose backbone "
+            "contiguity when cross-plane ISLs drop at polar latitudes. Use the flat area "
+            "strategy when contiguous area 0 cannot be guaranteed."
+        ),
+    ),
+    WizardProtocolMetadata(
+        id="isis",
+        label="IS-IS",
+        description="Intermediate System to Intermediate System native CLNS routing.",
+        extensions=("sr", "te", "mpls"),
+        extension_constraints={},
+        timer_label="IS-IS Timers",
+        timer_fields=(
+            WizardRoutingTimerFieldMetadata(
+                id="isis_hello_interval",
+                label="Hello Interval",
+                unit="s",
+                description="Time between IS-IS hello packets.",
+                guidance="LEO: 1s. Terrestrial: 3-10s.",
+                minimum=1,
+            ),
+            WizardRoutingTimerFieldMetadata(
+                id="isis_hello_multiplier",
+                label="Hello Multiplier",
+                description="Missed hellos before declaring a neighbor down.",
+                guidance="Typical: 3, producing 3s dead time with a 1s hello interval.",
+                minimum=1,
+            ),
+            WizardRoutingTimerFieldMetadata(
+                id="spf_init_delay",
+                label="SPF Init Delay",
+                unit="ms",
+                description="Delay before the first SPF computation after a topology change.",
+                guidance="Aggressive: 50ms. Conservative: 1000ms.",
+                minimum=0,
+            ),
+            WizardRoutingTimerFieldMetadata(
+                id="spf_short_delay",
+                label="SPF Short Delay",
+                unit="ms",
+                description="SPF delay for subsequent events within the learning window.",
+                guidance="LEO: 200ms. Stable networks: 1000-5000ms.",
+                minimum=0,
+            ),
+            WizardRoutingTimerFieldMetadata(
+                id="spf_long_delay",
+                label="SPF Long Delay",
+                unit="ms",
+                description="Maximum SPF delay during sustained topology churn.",
+                guidance="LEO: 1000ms. Must not exceed the handover interval.",
+                minimum=0,
+            ),
+            WizardRoutingTimerFieldMetadata(
+                id="spf_holddown",
+                label="SPF Holddown",
+                unit="ms",
+                description="Quiet time before returning the SPF backoff to its initial delay.",
+                guidance="LEO: 2000ms. Terrestrial: 10000-30000ms.",
+                minimum=0,
+            ),
+        ),
+    ),
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -302,6 +474,47 @@ def wizard_routing_timer_defaults() -> WizardRoutingTimerIntent:
     )
 
 
+def wizard_extension_rules_response() -> WizardExtensionRulesResponse:
+    """Return the complete backend-owned Wizard routing inventory and presentation facts."""
+
+    return WizardExtensionRulesResponse(
+        protocols=_WIZARD_PROTOCOL_METADATA,
+        extensions=_WIZARD_EXTENSION_METADATA,
+        area_strategies=("flat", "stripe", "per_plane"),
+        default_area_strategy="flat",
+        bfd=_WIZARD_BFD_METADATA,
+        routing_timer_defaults=wizard_routing_timer_defaults(),
+    )
+
+
+def _validate_routing_choices(intent: WizardSessionIntent) -> None:
+    facts = wizard_extension_rules_response()
+    protocol = next((item for item in facts.protocols if item.id == intent.protocol), None)
+    if protocol is None:
+        raise ValueError(f"Wizard protocol {intent.protocol!r} is not available")
+    unavailable = sorted(set(intent.extensions).difference(protocol.extensions))
+    if unavailable:
+        raise ValueError(
+            f"Wizard protocol {intent.protocol!r} does not support extensions: {unavailable}"
+        )
+    selected = set(intent.extensions)
+    missing = {
+        extension: tuple(
+            dependency
+            for dependency in protocol.extension_constraints.get(extension, ())
+            if dependency not in selected
+        )
+        for extension in intent.extensions
+    }
+    missing = {
+        extension: dependencies for extension, dependencies in missing.items() if dependencies
+    }
+    if missing:
+        raise ValueError(f"Wizard extension dependencies are not satisfied: {missing}")
+    if intent.area_strategy not in facts.area_strategies:
+        raise ValueError(f"Wizard area strategy {intent.area_strategy!r} is not available")
+
+
 def _materialize_graph(root: Path, graph: CatalogDependencyGraph) -> CatalogRoots:
     shipped_root = root / "catalog" / "nodalarc"
     user_root = root / "catalog" / "user"
@@ -471,6 +684,7 @@ def build_wizard_compile_request(
     if not isinstance(snapshot, CatalogReadSnapshot):
         raise TypeError("snapshot must be a CatalogReadSnapshot")
 
+    _validate_routing_choices(request.intent)
     identity = _identifier(identity_factory(), fallback="draft")
     name = _session_name(request.intent, identity)
     intent = request.intent

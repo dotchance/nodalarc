@@ -14,10 +14,7 @@ import { useState } from "react";
 import { Button, IconButton } from "../ui/Button";
 import { BodySelect, EditorCard, EditorName, Field, NumberField, SelectField } from "./editorKit";
 import type { BuilderVisualAuthoringFacts } from "./generated/builderApi";
-import {
-  readCatalogObject,
-  useBuilderCatalog,
-} from "./useBuilderWorld";
+import { useBuilderCatalog } from "./useBuilderWorld";
 import { type DraftSiteNode, type DraftSiteObject } from "./workspace";
 
 interface SiteEditorProps {
@@ -26,6 +23,8 @@ interface SiteEditorProps {
    *  render-closure, so a concurrent edit during an in-flight fetch survives.
    *  Reseed/replace is explicit — `onUpdate(() => replacement)`. */
   onUpdate: (update: (prev: DraftSiteObject) => DraftSiteObject) => void;
+  onSetNodeModel: (nodeId: string, ref: string) => Promise<void>;
+  onAddNode: () => Promise<void>;
   /** Embedded editor close action. */
   onClose?: () => void;
   /** focus the name when a create gesture opened this editor. */
@@ -36,6 +35,8 @@ interface SiteEditorProps {
 export function SiteEditor({
   site,
   onUpdate,
+  onSetNodeModel,
+  onAddNode,
   onClose,
   autoFocusName = false,
   authoring,
@@ -44,11 +45,8 @@ export function SiteEditor({
   const bodies = useBuilderCatalog("bodies");
   const [editorError, setEditorError] = useState<string | null>(null);
 
-  // Match on the stable node_id, never an array index: setNodeModel awaits a
-  // catalog fetch, and a concurrent add/remove during that gap would shift
-  // indices, landing the write on the wrong node (the lost-edit class).
-  // The patch may be a function so a merge (installed counts) reads the
-  // current node from prev, not a stale render closure.
+  // Match on the stable node_id, never an array index. Direct field edits remain
+  // local intent; model selection and installation seeding are backend commands.
   const updateNode = (
     node_id: string,
     patch: Partial<DraftSiteNode> | ((node: DraftSiteNode) => Partial<DraftSiteNode>),
@@ -63,61 +61,22 @@ export function SiteEditor({
     }));
   };
 
-  // Switching a node's model re-seeds its installed mounts from the model's
-  // faceplate — an explicit act, so the reset is expected.
   const setNodeModel = async (node_id: string, ref: string) => {
     setEditorError(null);
     try {
-      const { document } = await readCatalogObject(ref);
-      const node = (document as { node?: Record<string, unknown> }).node;
-      const terminalMounts =
-        (node?.terminals as Record<string, unknown>[] | undefined) ?? [];
-      const mounts = terminalMounts.map((mount) => {
-        if (typeof mount.count !== "number") {
-          throw new Error(`node terminal mount ${String(mount.id)} has no installed count`);
-        }
-        return [String(mount.id), mount.count] as const;
-      });
-      const boresights = terminalMounts
-        .filter((mount) => mount.role === "access")
-        .map(
-          (mount) =>
-            [String(mount.id), { ...authoring.ground_access_boresight }] as const,
-        );
-      updateNode(node_id, {
-        model_ref: ref,
-        installed: Object.fromEntries(mounts),
-        boresights: Object.fromEntries(boresights),
-      });
+      await onSetNodeModel(node_id, ref);
     } catch (e) {
       setEditorError(e instanceof Error ? e.message : String(e));
     }
   };
 
-  const addNode = () => {
-    onUpdate((prev) => {
-      const first = prev.nodes[0];
-      // Pick the first free gw{k} against the taken set — never length+1, which
-      // re-collides after a delete-then-add and would duplicate the
-      // node_id React key.
-      const taken = new Set(prev.nodes.map((node) => node.node_id));
-      let k = 1;
-      while (taken.has(`gw${k}`)) k += 1;
-      return {
-        ...prev,
-        nodes: [
-          ...prev.nodes,
-          {
-            node_id: `gw${k}`,
-            model_ref: first?.model_ref ?? "",
-            installed: first ? { ...first.installed } : {},
-            boresights: first ? { ...first.boresights } : {},
-            lo0_ipv4: "",
-            terr0_ipv4: "",
-          },
-        ],
-      };
-    });
+  const addNode = async () => {
+    setEditorError(null);
+    try {
+      await onAddNode();
+    } catch (e) {
+      setEditorError(e instanceof Error ? e.message : String(e));
+    }
   };
 
   return (
@@ -261,7 +220,7 @@ export function SiteEditor({
         </EditorCard>
       ))}
       <div className="builder-preset-row">
-        <Button onClick={addNode}>+ add node</Button>
+        <Button onClick={() => void addNode()}>+ add node</Button>
       </div>
 
       {editorError && <div className="builder-warning">{editorError}</div>}

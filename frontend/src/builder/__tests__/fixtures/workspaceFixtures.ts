@@ -2,6 +2,7 @@ import type {
   DraftBoundary,
   DraftConstellation,
   DraftGroundSet,
+  DraftGroundSite,
   DraftNode,
   DraftRoutingDomain,
   GroundBoresight,
@@ -14,6 +15,7 @@ let spaceCounter = 0;
 let groundCounter = 0;
 let domainCounter = 0;
 let boundaryCounter = 0;
+let siteCounter = 0;
 
 export function newWorkspace(name: string): Workspace {
   return {
@@ -94,6 +96,44 @@ export function newDraftGroundSet(
     scheduling: {},
     originated_ipv4: [],
     tags: [],
+  };
+}
+
+export function testGroundMember(
+  ground: DraftGroundSet,
+  name: string,
+  latDeg: number,
+  lonDeg: number,
+  addressIndex = 0,
+): DraftGroundSite {
+  siteCounter += 1;
+  const siteId = `test-site-${siteCounter}`;
+  return {
+    member_id: `test-member-${siteCounter}`,
+    kind: "draft",
+    ref: null,
+    site_id: siteId,
+    label: name,
+    summary: null,
+    scheduling_override: null,
+    site: {
+      site_id: siteId,
+      display_name: name,
+      body: ground.stamp.body,
+      lat_deg: latDeg,
+      lon_deg: lonDeg,
+      alt_m: 0,
+      lan_ipv4: `${ground.stamp.lan_base}.${addressIndex}.0/24`,
+      tags: [],
+      nodes: [{
+        node_id: "gw1",
+        model_ref: ground.stamp.node_ref,
+        installed: { ...ground.stamp.installed },
+        boresights: { ...ground.stamp.boresights },
+        lo0_ipv4: `${ground.stamp.loopback_base}.0.${addressIndex + 1}/32`,
+        terr0_ipv4: `${ground.stamp.lan_base}.${addressIndex}.1/24`,
+      }],
+    },
   };
 }
 

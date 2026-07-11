@@ -184,6 +184,10 @@ function visualCommandResponse(request: Record<string, any>) {
   let affectedId = "space-1";
   let schedulingPreset: "leo-fast-handover" | "geo-longest-pass" | null | undefined;
   let notice: string | null = null;
+  const groundInstallation = (nodeRef: string) => ({
+    installed: { access_ka: nodeRef === SECOND_GROUND_NODE ? 64 : 8 },
+    boresights: { access_ka: { mode: "local_vertical" } },
+  });
   if (command.operation === "add_generated_space") {
     const number = workspace.space.length + 1;
     affectedId = `space-${number}`;
@@ -205,11 +209,34 @@ function visualCommandResponse(request: Record<string, any>) {
         propagator: "j2_mean_elements",
       },
       planes: command.phasing_mode === "evenly_spaced_mean_anomaly" ? 1 : 3,
-      raan_spacing_deg: command.phasing_mode === "evenly_spaced_mean_anomaly" ? 360 : 60,
+      raan_spacing_deg: command.phasing_mode === "evenly_spaced_mean_anomaly" ? 360 : 120,
       slots_per_plane: 8,
       phasing_mode: command.phasing_mode,
-      phase_offset_deg: 0,
+      phase_offset_deg: command.phasing_mode === "evenly_spaced_mean_anomaly" ? 0 : 15,
     });
+  } else if (command.operation === "set_space_population") {
+    affectedId = command.segment_id;
+    const space = workspace.space.find(
+      (candidate: { segment_id: string }) => candidate.segment_id === command.segment_id,
+    );
+    let phasingMode = command.phasing_mode ?? space.phasing_mode;
+    let planes = command.planes ?? space.planes;
+    const slotsPerPlane = command.slots_per_plane ?? space.slots_per_plane;
+    if (command.phasing_mode) {
+      planes = phasingMode === "evenly_spaced_mean_anomaly" ? 1 : Math.max(2, planes);
+    } else if (command.planes === 1) {
+      phasingMode = "evenly_spaced_mean_anomaly";
+    } else if (command.planes && phasingMode === "evenly_spaced_mean_anomaly") {
+      phasingMode = "walker_delta";
+    }
+    const singlePlane = phasingMode === "evenly_spaced_mean_anomaly";
+    space.phasing_mode = phasingMode;
+    space.planes = planes;
+    space.slots_per_plane = slotsPerPlane;
+    space.raan_spacing_deg = singlePlane
+      ? 360
+      : (phasingMode === "walker_star" ? 180 : 360) / planes;
+    space.phase_offset_deg = singlePlane ? 0 : 360 / (planes * slotsPerPlane);
   } else if (command.operation === "add_ground") {
     const number = workspace.ground.length + 1;
     affectedKind = "ground";
@@ -231,6 +258,90 @@ function visualCommandResponse(request: Record<string, any>) {
       tags: [],
     });
     schedulingPreset = "leo-fast-handover";
+  } else if (command.operation === "set_ground_stamp_node_model") {
+    affectedKind = "ground";
+    affectedId = command.segment_id;
+    const ground = workspace.ground.find(
+      (candidate: { segment_id: string }) => candidate.segment_id === command.segment_id,
+    );
+    ground.stamp = {
+      ...ground.stamp,
+      node_ref: command.node_ref,
+      ...groundInstallation(command.node_ref),
+    };
+  } else if (command.operation === "set_ground_site_node_model") {
+    affectedKind = "ground_member";
+    affectedId = command.member_id;
+    const ground = workspace.ground.find(
+      (candidate: { segment_id: string }) => candidate.segment_id === command.segment_id,
+    );
+    const member = ground.members.find(
+      (candidate: { member_id: string }) => candidate.member_id === command.member_id,
+    );
+    const node = member.site.nodes.find(
+      (candidate: { node_id: string }) => candidate.node_id === command.node_id,
+    );
+    Object.assign(node, {
+      model_ref: command.node_ref,
+      ...groundInstallation(command.node_ref),
+    });
+  } else if (command.operation === "add_ground_site_node") {
+    affectedKind = "ground_member";
+    affectedId = command.member_id;
+    const ground = workspace.ground.find(
+      (candidate: { segment_id: string }) => candidate.segment_id === command.segment_id,
+    );
+    const member = ground.members.find(
+      (candidate: { member_id: string }) => candidate.member_id === command.member_id,
+    );
+    const taken = new Set(member.site.nodes.map((node: { node_id: string }) => node.node_id));
+    let number = 1;
+    while (taken.has(`gw${number}`)) number += 1;
+    const nodeRef = command.node_ref ?? member.site.nodes[0].model_ref;
+    member.site.nodes.push({
+      node_id: `gw${number}`,
+      model_ref: nodeRef,
+      ...groundInstallation(nodeRef),
+      lo0_ipv4: "",
+      terr0_ipv4: "",
+    });
+  } else if (command.operation === "mint_ground_members") {
+    affectedKind = "ground";
+    affectedId = command.segment_id;
+    const ground = workspace.ground.find(
+      (candidate: { segment_id: string }) => candidate.segment_id === command.segment_id,
+    );
+    for (const [offset, siteIntent] of command.sites.entries()) {
+      const index = ground.members.length + offset;
+      ground.members.push({
+        member_id: `member-${index + 1}`,
+        kind: "draft",
+        ref: null,
+        site_id: `site-${index + 1}`,
+        label: siteIntent.name,
+        summary: null,
+        scheduling_override: null,
+        site: {
+          site_id: `site-${index + 1}`,
+          display_name: siteIntent.name,
+          body: ground.stamp.body,
+          lat_deg: siteIntent.lat_deg,
+          lon_deg: siteIntent.lon_deg,
+          alt_m: siteIntent.alt_m,
+          lan_ipv4: `${ground.stamp.lan_base}.${index}.0/24`,
+          tags: [],
+          nodes: [{
+            node_id: "gw1",
+            model_ref: ground.stamp.node_ref,
+            installed: ground.stamp.installed,
+            boresights: ground.stamp.boresights,
+            lo0_ipv4: `${ground.stamp.loopback_base}.0.${index + 1}/32`,
+            terr0_ipv4: `${ground.stamp.lan_base}.${index}.1/24`,
+          }],
+        },
+      });
+    }
+    notice = `minted ${command.sites.length} sites`;
   } else if (command.operation === "add_routing_domain") {
     affectedKind = "routing_domain";
     affectedId = `domain-${workspace.routing_domains.length + 1}`;
@@ -374,6 +485,7 @@ function catalogDocument(ref: string, family: string, canonicalJson: Record<stri
 }
 
 const GROUND_NODE = "nodalarc:nodes/ground/gateway.yaml";
+const SECOND_GROUND_NODE = "nodalarc:nodes/ground/high-capacity-gateway.yaml";
 const CATALOG_FAMILIES = [
   "bodies",
   "constellations",
@@ -473,7 +585,7 @@ function stubFetch(options?: {
             family === "sessions"
               ? sessions
               : family === "nodes"
-                ? [summary(GROUND_NODE, "nodes")]
+                ? [summary(GROUND_NODE, "nodes"), summary(SECOND_GROUND_NODE, "nodes")]
                 : [],
           next_page_token: null,
         }),
@@ -682,6 +794,108 @@ describe("BuilderView — resolve-loop and world honesty", () => {
         .getAllByRole("button", { name: "Apply" })
         .some((button) => !(button as HTMLButtonElement).disabled),
     ).toBe(true);
+  });
+
+  it("sends population intent and adopts backend-derived phasing values", async () => {
+    const fetchMock = stubFetch();
+    render(<BuilderView {...PROPS} />);
+    fireEvent.click(
+      within(await screen.findByTestId("builder-start")).getByRole("button", {
+        name: /New session/i,
+      }),
+    );
+    fireEvent.click(await screen.findByText("Space segments"));
+    const editor = await screen.findByTestId("builder-editor");
+    fireEvent.click(within(editor).getByRole("button", { name: /Pattern/ }));
+    fireEvent.change(within(editor).getByLabelText("phasing"), {
+      target: { value: "evenly_spaced_mean_anomaly" },
+    });
+
+    await waitFor(() => expect(commandCalls(fetchMock)).toHaveLength(2));
+    expect(JSON.parse(commandCalls(fetchMock)[1]![1].body).command).toEqual({
+      operation: "set_space_population",
+      segment_id: "space-1",
+      phasing_mode: "evenly_spaced_mean_anomaly",
+    });
+    await waitFor(() =>
+      expect((within(editor).getByLabelText("planes") as HTMLInputElement).value).toBe("1"),
+    );
+    expect(editor.textContent).toContain("phase offset 0 deg");
+  });
+
+  it("sends stamp model selection and adopts backend installation facts", async () => {
+    const fetchMock = stubFetch();
+    render(<BuilderView {...PROPS} />);
+    fireEvent.click(
+      within(await screen.findByTestId("builder-start")).getByRole("button", {
+        name: /New session/i,
+      }),
+    );
+    fireEvent.click(await screen.findByText("Ground sites"));
+    const editor = await screen.findByTestId("builder-ground-editor");
+    fireEvent.click(within(editor).getByRole("button", { name: /New-site stamp/ }));
+    fireEvent.change(within(editor).getByLabelText("Stamp node model"), {
+      target: { value: SECOND_GROUND_NODE },
+    });
+
+    await waitFor(() => expect(commandCalls(fetchMock)).toHaveLength(2));
+    expect(JSON.parse(commandCalls(fetchMock)[1]![1].body).command).toEqual({
+      operation: "set_ground_stamp_node_model",
+      segment_id: "ground-1",
+      node_ref: SECOND_GROUND_NODE,
+    });
+    await waitFor(() =>
+      expect(
+        (within(editor).getByRole("spinbutton", { name: /access_ka/ }) as HTMLInputElement).value,
+      ).toBe("64"),
+    );
+  });
+
+  it("sends pasted locations as intent and adopts backend-minted site values", async () => {
+    const fetchMock = stubFetch();
+    render(<BuilderView {...PROPS} />);
+    fireEvent.click(
+      within(await screen.findByTestId("builder-start")).getByRole("button", {
+        name: /New session/i,
+      }),
+    );
+    fireEvent.click(await screen.findByText("Ground sites"));
+    const editor = await screen.findByTestId("builder-ground-editor");
+    fireEvent.change(within(editor).getByPlaceholderText(/paste sites, one per line/i), {
+      target: { value: "Denver, 39.7, -104.9" },
+    });
+    fireEvent.click(within(editor).getByRole("button", { name: "+ mint pasted sites" }));
+
+    await waitFor(() => expect(commandCalls(fetchMock)).toHaveLength(2));
+    expect(JSON.parse(commandCalls(fetchMock)[1]![1].body).command).toEqual({
+      operation: "mint_ground_members",
+      segment_id: "ground-1",
+      sites: [{ name: "Denver", lat_deg: 39.7, lon_deg: -104.9, alt_m: 0 }],
+    });
+    await waitFor(() => expect(editor.textContent).toContain("Denver"));
+    expect(editor.textContent).toContain("172.20.0.0/24");
+
+    fireEvent.click(within(editor).getByRole("button", { name: "Edit Denver" }));
+    fireEvent.change(within(editor).getByLabelText("gw1 model"), {
+      target: { value: SECOND_GROUND_NODE },
+    });
+    await waitFor(() => expect(commandCalls(fetchMock)).toHaveLength(3));
+    expect(JSON.parse(commandCalls(fetchMock)[2]![1].body).command).toEqual({
+      operation: "set_ground_site_node_model",
+      segment_id: "ground-1",
+      member_id: "member-1",
+      node_id: "gw1",
+      node_ref: SECOND_GROUND_NODE,
+    });
+
+    fireEvent.click(within(editor).getByRole("button", { name: "+ add node" }));
+    await waitFor(() => expect(commandCalls(fetchMock)).toHaveLength(4));
+    expect(JSON.parse(commandCalls(fetchMock)[3]![1].body).command).toEqual({
+      operation: "add_ground_site_node",
+      segment_id: "ground-1",
+      member_id: "member-1",
+    });
+    await waitFor(() => expect(editor.textContent).toContain("gw2"));
   });
 
   it("discards a scheduling response when the editor changes in flight", async () => {

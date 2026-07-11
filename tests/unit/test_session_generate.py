@@ -71,6 +71,13 @@ def test_constellation_preset_capabilities_follow_catalog_orbit_and_runtime_supp
     assert response.custom_geometry_seed.pattern == "walker_delta"
     assert response.custom_geometry_seed.planes == 4
     assert str(response.custom_geometry_default_node).startswith("nodalarc:nodes/space/")
+    assert tuple(pattern.id for pattern in response.custom_geometry_patterns) == (
+        "walker_delta",
+        "walker_star",
+    )
+    assert all(
+        pattern.label and pattern.description for pattern in response.custom_geometry_patterns
+    )
     assert tuple(model.id for model in response.orbit_models) == (
         "j2_mean_elements",
         "two_body",

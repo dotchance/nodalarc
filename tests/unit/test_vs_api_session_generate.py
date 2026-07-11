@@ -58,6 +58,7 @@ def test_constellation_presets_expose_backend_runtime_capabilities():
         "custom_geometry",
         "custom_geometry_seed",
         "custom_geometry_default_node",
+        "custom_geometry_patterns",
         "orbit_models",
     }
     presets = {item["name"]: item for item in payload["presets"]}
@@ -84,6 +85,10 @@ def test_constellation_presets_expose_backend_runtime_capabilities():
     assert payload["custom_geometry_seed"]["pattern"] == "walker_delta"
     assert payload["custom_geometry_seed"]["planes"] == 4
     assert payload["custom_geometry_default_node"].startswith("nodalarc:nodes/space/")
+    assert [pattern["id"] for pattern in payload["custom_geometry_patterns"]] == [
+        "walker_delta",
+        "walker_star",
+    ]
     assert [model["id"] for model in payload["orbit_models"]] == [
         "j2_mean_elements",
         "two_body",
@@ -129,10 +134,15 @@ def test_wizard_extension_rules_use_catalog_area_strategy_tokens():
 
     assert response.status_code == 200
     assert response.json()["area_strategies"] == ["flat", "stripe", "per_plane"]
-    assert response.json()["protocols"] == {
-        "ospf": {"extensions": ["sr", "te", "mpls"], "constraints": {}},
-        "isis": {"extensions": ["sr", "te", "mpls"], "constraints": {}},
-    }
+    payload = response.json()
+    assert [protocol["id"] for protocol in payload["protocols"]] == ["ospf", "isis"]
+    assert [extension["id"] for extension in payload["extensions"]] == ["te", "mpls", "sr"]
+    assert all(protocol["extensions"] == ["sr", "te", "mpls"] for protocol in payload["protocols"])
+    assert all(protocol["extension_constraints"] == {} for protocol in payload["protocols"])
+    assert all(protocol["label"] and protocol["description"] for protocol in payload["protocols"])
+    assert all(protocol["timer_fields"] for protocol in payload["protocols"])
+    ospf = next(protocol for protocol in payload["protocols"] if protocol["id"] == "ospf")
+    assert ospf["non_flat_area_warning"]
 
 
 def test_wizard_data_endpoints_publish_closed_response_models():

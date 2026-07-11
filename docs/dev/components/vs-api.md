@@ -102,7 +102,9 @@ Fixed token: set `NODAL_API_KEY` environment variable.
 
 On startup, VS-API:
 1. Polls for a ConstellationSpec CR every 5 seconds until one appears
-2. Reads and resolves session config from the CR's `sessionYaml` field
+2. Reads the exact root document from `spec.sessionYaml`, fetches and verifies
+   the referenced catalog YAML closure selected by `spec.catalogUpload`, and
+   resolves those files through the shared resolver
 3. Subscribes to NATS streams
 4. Begins serving clients
 

@@ -16,8 +16,8 @@ kernel actuation.
 ## What You're Looking At
 
 When NodalArc starts, a session is already running. The default session is
-`earth-leo-simple.yaml`: a 36-satellite Earth LEO starter with OSPF routing and
-MBB-capable Earth ground nodes.
+`earth-leo-simple.yaml`: a 36-satellite Earth LEO starter with default IS-IS
+routing and MBB-capable Earth ground nodes.
 
 On the globe you will see:
 

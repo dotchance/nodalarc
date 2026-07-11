@@ -21,6 +21,7 @@ DEFAULT_PHASING_MODE: BuilderVisualPhasingMode = "walker_delta"
 SINGLE_PLANE_PHASING_MODE: BuilderVisualPhasingMode = "evenly_spaced_mean_anomaly"
 DEFAULT_SCHEDULING_PRESET: BuilderVisualSchedulingPreset = "leo-fast-handover"
 DEFAULT_MOUNT_ROLE: MountRole = "access"
+DEFAULT_TERMINAL_MOUNT_COUNT = 1
 DEFAULT_BODY_REF = BodyRef("nodalarc:bodies/earth.yaml")
 DEFAULT_COMPONENT_IDS: dict[str, str] = {
     "bodies": "my-body",

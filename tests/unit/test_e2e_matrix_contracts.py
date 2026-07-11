@@ -12,8 +12,29 @@ from __future__ import annotations
 from pathlib import Path
 
 import yaml
+from nodalarc.configuration_yaml import load_configuration_yaml
+from nodalarc.models.segment_session import SegmentSessionConfig
+from nodalarc.resolve_session import resolve_session
 
 from tests.integration import e2e_matrix
+
+
+def test_mbb_acceptance_mutation_stays_in_canonical_session_grammar() -> None:
+    rendered = e2e_matrix._acceptance_session_yaml(  # noqa: SLF001
+        session_name="mbb-mutated",
+        mbb_overlap_ticks=17,
+    )
+    document = load_configuration_yaml(rendered)
+
+    parsed = SegmentSessionConfig.model_validate(document)
+    resolved = resolve_session(document)
+    ground = next(segment for segment in document["segments"] if segment["id"] == "ground")
+
+    assert parsed.session.name == "mbb-mutated"
+    assert ground["apply"]["scheduling"]["mbb_overlap_ticks"] == 17
+    assert document["segments"][0]["source"].startswith("nodalarc:")
+    assert resolved.nodes
+    assert resolved.link_candidates
 
 
 def test_mbb_packet_acceptance_requires_successor_fib_overlap() -> None:

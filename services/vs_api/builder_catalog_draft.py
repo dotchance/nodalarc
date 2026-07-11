@@ -30,6 +30,9 @@ from nodalarc.models.builder_catalog_api import (
     CatalogComponentDraftEnvelope,
     CatalogComponentFamily,
     CatalogDocumentWriteRequest,
+    CatalogDraftAddNodeEthernetPortRequest,
+    CatalogDraftAddNodeTerminalMountRequest,
+    CatalogDraftAddSiteNodeRequest,
     CatalogDraftCompileRequest,
     CatalogDraftCompileResult,
     CatalogDraftIssue,
@@ -42,6 +45,7 @@ from nodalarc.models.builder_catalog_api import (
     CatalogDraftSaveResult,
     CatalogOperationRefusal,
 )
+from nodalarc.models.catalog import Node, Terminal
 from nodalarc.runtime_support import RuntimeSupport, UnsupportedFeature
 from pydantic import ValidationError
 
@@ -50,6 +54,7 @@ from .builder_compiler import (
     CanonicalConfigurationDocument,
     canonicalize_persisted_configuration,
 )
+from .builder_visual_defaults import DEFAULT_TERMINAL_MOUNT_COUNT
 from .catalog_context import CatalogContext
 
 _MAX_POINTER_DEPTH = 32
@@ -550,6 +555,218 @@ class BuilderCatalogDraftService:
                     ref=request.draft.target_ref,
                 )
             _apply_command(document, command)
+        return _envelope(
+            draft_revision=request.draft.draft_revision + 1,
+            family=request.draft.family,
+            target_ref=request.draft.target_ref,
+            source_ref=request.draft.source_ref,
+            expected_source_revision=request.draft.expected_source_revision,
+            expected_target_revision=request.draft.expected_target_revision,
+            document=document,
+        )
+
+    def add_site_node(
+        self,
+        request: CatalogDraftAddSiteNodeRequest,
+    ) -> CatalogComponentDraftEnvelope:
+        """Add one SiteNode whose persisted shape is derived by the backend."""
+
+        if not isinstance(request, CatalogDraftAddSiteNodeRequest):
+            raise TypeError("request must be a CatalogDraftAddSiteNodeRequest")
+        self._assert_draft_revision(request.draft, request.expected_draft_revision)
+        snapshot = _snapshot(self._context)
+        self._assert_catalog_revisions(request.draft, snapshot)
+
+        node_document = _get(snapshot, request.node_ref)
+        try:
+            node_model = catalog_family_spec("nodes").validate_document(
+                _canonical_source(node_document)
+            )
+        except (ValidationError, TypeError, ValueError) as error:
+            _refuse(
+                "catalog_authoring.invalid_graph",
+                f"Node reference {request.node_ref} is invalid: {error}",
+                ref=request.draft.target_ref,
+                cause=error,
+            )
+        if not isinstance(node_model, Node):
+            _refuse(
+                "catalog_authoring.invalid_graph",
+                f"Node reference {request.node_ref} does not resolve to a node component",
+                ref=request.draft.target_ref,
+            )
+
+        document = copy.deepcopy(request.draft.document)
+        site = document[_wrapper("sites")]
+        if not isinstance(site, dict):
+            _refuse(
+                "catalog_authoring.invalid_document",
+                "Site component root must be an object before a node can be added",
+                ref=request.draft.target_ref,
+            )
+        nodes = site.get("nodes", [])
+        if not isinstance(nodes, list):
+            _refuse(
+                "catalog_authoring.invalid_document",
+                "Site nodes must be an array before a node can be added",
+                ref=request.draft.target_ref,
+            )
+        node_ids = {
+            node.get("id")
+            for node in nodes
+            if isinstance(node, dict) and isinstance(node.get("id"), str)
+        }
+        if request.node_id in node_ids:
+            _refuse(
+                "catalog_authoring.conflict",
+                f"Site node id already exists: {request.node_id}",
+                ref=request.draft.target_ref,
+            )
+
+        terminals: JsonDocument = {}
+        for mount in node_model.terminals:
+            installation: JsonDocument = {"installed_count": mount.count}
+            if mount.role == "access":
+                installation["capabilities"] = {"boresight": {"mode": "local_vertical"}}
+            terminals[mount.id] = installation
+        nodes.append(
+            {
+                "id": request.node_id,
+                "model": str(request.node_ref),
+                "payloads": {},
+                "terminals": terminals,
+                "interfaces": {
+                    "lo0": {"ipv4": ""},
+                    "terr0": {"ipv4": ""},
+                },
+            }
+        )
+        site["nodes"] = nodes
+        return _envelope(
+            draft_revision=request.draft.draft_revision + 1,
+            family=request.draft.family,
+            target_ref=request.draft.target_ref,
+            source_ref=request.draft.source_ref,
+            expected_source_revision=request.draft.expected_source_revision,
+            expected_target_revision=request.draft.expected_target_revision,
+            document=document,
+        )
+
+    def add_node_terminal_mount(
+        self,
+        request: CatalogDraftAddNodeTerminalMountRequest,
+    ) -> CatalogComponentDraftEnvelope:
+        """Add one complete node mount from explicit terminal and role intent."""
+
+        if not isinstance(request, CatalogDraftAddNodeTerminalMountRequest):
+            raise TypeError("request must be a CatalogDraftAddNodeTerminalMountRequest")
+        self._assert_draft_revision(request.draft, request.expected_draft_revision)
+        snapshot = _snapshot(self._context)
+        self._assert_catalog_revisions(request.draft, snapshot)
+
+        terminal_document = _get(snapshot, request.terminal_ref)
+        try:
+            terminal_model = catalog_family_spec("terminals").validate_document(
+                _canonical_source(terminal_document)
+            )
+        except (ValidationError, TypeError, ValueError) as error:
+            _refuse(
+                "catalog_authoring.invalid_graph",
+                f"Terminal reference {request.terminal_ref} is invalid: {error}",
+                ref=request.draft.target_ref,
+                cause=error,
+            )
+        if not isinstance(terminal_model, Terminal):
+            _refuse(
+                "catalog_authoring.invalid_graph",
+                f"Terminal reference {request.terminal_ref} does not resolve to a terminal component",
+                ref=request.draft.target_ref,
+            )
+
+        document = copy.deepcopy(request.draft.document)
+        node = document[_wrapper("nodes")]
+        if not isinstance(node, dict):
+            _refuse(
+                "catalog_authoring.invalid_document",
+                "Node component root must be an object before a terminal mount can be added",
+                ref=request.draft.target_ref,
+            )
+        mounts = node.get("terminals", [])
+        if not isinstance(mounts, list):
+            _refuse(
+                "catalog_authoring.invalid_document",
+                "Node terminals must be an array before a terminal mount can be added",
+                ref=request.draft.target_ref,
+            )
+        mount_ids = {
+            mount.get("id")
+            for mount in mounts
+            if isinstance(mount, dict) and isinstance(mount.get("id"), str)
+        }
+        mount_index = 0
+        mount_id = f"{request.role}_{mount_index}"
+        while mount_id in mount_ids:
+            mount_index += 1
+            mount_id = f"{request.role}_{mount_index}"
+        mounts.append(
+            {
+                "id": mount_id,
+                "role": request.role,
+                "terminal": str(request.terminal_ref),
+                "count": DEFAULT_TERMINAL_MOUNT_COUNT,
+                **({"boresight": {"mode": "nadir"}} if request.role == "access" else {}),
+            }
+        )
+        node["terminals"] = mounts
+        return _envelope(
+            draft_revision=request.draft.draft_revision + 1,
+            family=request.draft.family,
+            target_ref=request.draft.target_ref,
+            source_ref=request.draft.source_ref,
+            expected_source_revision=request.draft.expected_source_revision,
+            expected_target_revision=request.draft.expected_target_revision,
+            document=document,
+        )
+
+    def add_node_ethernet_port(
+        self,
+        request: CatalogDraftAddNodeEthernetPortRequest,
+    ) -> CatalogComponentDraftEnvelope:
+        """Add one uniquely identified Ethernet port to a node draft."""
+
+        if not isinstance(request, CatalogDraftAddNodeEthernetPortRequest):
+            raise TypeError("request must be a CatalogDraftAddNodeEthernetPortRequest")
+        self._assert_draft_revision(request.draft, request.expected_draft_revision)
+        snapshot = _snapshot(self._context)
+        self._assert_catalog_revisions(request.draft, snapshot)
+
+        document = copy.deepcopy(request.draft.document)
+        node = document[_wrapper("nodes")]
+        if not isinstance(node, dict):
+            _refuse(
+                "catalog_authoring.invalid_document",
+                "Node component root must be an object before an Ethernet port can be added",
+                ref=request.draft.target_ref,
+            )
+        ethernet = node.get("ethernet", [])
+        if not isinstance(ethernet, list):
+            _refuse(
+                "catalog_authoring.invalid_document",
+                "Node ethernet must be an array before an Ethernet port can be added",
+                ref=request.draft.target_ref,
+            )
+        port_ids = {
+            port.get("id")
+            for port in ethernet
+            if isinstance(port, dict) and isinstance(port.get("id"), str)
+        }
+        port_index = 0
+        port_id = f"terr{port_index}"
+        while port_id in port_ids:
+            port_index += 1
+            port_id = f"terr{port_index}"
+        ethernet.append({"id": port_id})
+        node["ethernet"] = ethernet
         return _envelope(
             draft_revision=request.draft.draft_revision + 1,
             family=request.draft.family,

@@ -17,6 +17,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import requests
+from nodalarc.configuration_yaml import load_configuration_yaml
+from nodalarc.models.segment_session import SegmentSessionConfig
 from nodalarc.runtime_naming import gs_bridge_port_name
 
 # Default assumes a local port-forward. Set VS_API_HOST to any reachable LAN
@@ -1365,22 +1367,20 @@ def check_mbb_packet_behavior(
 def _acceptance_session_yaml(
     *,
     session_name: str,
-    clean_kernel_audit_interval_s: float | None = None,
     mbb_overlap_ticks: int | None = None,
 ) -> str:
     import yaml
 
-    data = yaml.safe_load(MBB_ACCEPTANCE_SESSION.read_text())
+    data = load_configuration_yaml(MBB_ACCEPTANCE_SESSION.read_text())
     data.setdefault("session", {})["name"] = session_name
-    if clean_kernel_audit_interval_s is not None:
-        data.setdefault("dispatch", {})["clean_kernel_audit_interval_s"] = (
-            clean_kernel_audit_interval_s
-        )
     if mbb_overlap_ticks is not None:
-        data.setdefault("scheduling", {}).setdefault("ground", {})["mbb_overlap_ticks"] = (
-            mbb_overlap_ticks
-        )
-    return yaml.safe_dump(data, sort_keys=False)
+        ground = next(segment for segment in data["segments"] if segment["id"] == "ground")
+        ground["apply"]["scheduling"]["mbb_overlap_ticks"] = mbb_overlap_ticks
+    validated = SegmentSessionConfig.model_validate(data)
+    return yaml.safe_dump(
+        validated.model_dump(mode="json", by_alias=True, exclude_none=True),
+        sort_keys=False,
+    )
 
 
 def _active_ground_link_with_interfaces(token: str, *, wait_s: int = 180) -> dict | None:
@@ -1563,7 +1563,6 @@ def run_dirty_repair_acceptance() -> dict:
         acceptance_progress("dirty-repair: deploying session")
         yaml_str = _acceptance_session_yaml(
             session_name=f"dirty-repair-{int(time.time())}",
-            clean_kernel_audit_interval_s=2.0,
         )
         evidence["deploy_response"] = deploy_session(token, yaml_str)
         if evidence["deploy_response"].get("status") != "switching":
@@ -2111,10 +2110,8 @@ def catalog_permutations() -> list[dict]:
         if only and path.stem != only:
             continue
         text = path.read_text()
-        import yaml as _yaml
-
         resolved = resolve_session_with_assets(
-            _yaml.safe_load(text),
+            load_configuration_yaml(text),
             catalog_roots=roots,
             source_context=SourceContext(origin="e2e.catalog"),
         ).resolved

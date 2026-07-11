@@ -34,15 +34,10 @@ Both namespaces have the same families and use the same grammar:
 | Session | `sessions/` | Deployable composition of segments, links, routing, time, and policy. |
 
 A reference contains its namespace, family, relative path, and lower-case YAML
-suffix:
-
-```yaml
-source: nodalarc:constellations/earth/leo/earth-leo-ring-36.yaml
-```
-
-```yaml
-terminal: user:terminals/rf/my-ka-terminal.yaml
-```
+suffix. For example, the shipped LEO ring is
+`nodalarc:constellations/earth/leo/earth-leo-ring-36.yaml`. A user-owned
+terminal follows the same shape, such as `user:terminals/rf/my-ka-terminal.yaml`
+after that object has been saved in the user catalog.
 
 Each reusable object file has one top-level wrapper such as `terminal:`,
 `orbit:`, or `site_set:`. Its `id` matches its file stem. A session is not given
@@ -142,13 +137,9 @@ time:
   compression: 1
 ```
 
-The same session may instead reference user-owned components, for example:
-
-```yaml
-segments:
-- id: leo
-  source: user:constellations/earth/leo/my-leo-shell.yaml
-```
+The same session may instead set its space-segment `source` to a saved
+user-owned component such as
+`user:constellations/earth/leo/my-leo-shell.yaml`.
 
 The `user:` constellation can in turn reference any valid mix of shipped and
 user-owned node, orbit, terminal, payload, and body objects.

@@ -1506,6 +1506,19 @@ def _apply_addressing(
             reserved_ipv4, reserved_ipv6 = _existing_loopback_addresses(nodes)
             by_id = {item.node.node_id: item for item in selected}
 
+            for item in selected:
+                current = item.node.interfaces
+                if current is None:
+                    continue
+                _validate_existing_loopback_families_inside_pool(
+                    current.lo0,
+                    ipv4_pool=assignment.ipv4_pool,
+                    ipv6_pool=assignment.ipv6_pool,
+                    prefix_length=assignment.prefix_length,
+                    assignment_id=assignment.id,
+                    node_id=item.node.node_id,
+                )
+
             def _needs(item: _RuntimeNode, family: str) -> bool:
                 interfaces = item.node.interfaces
                 if interfaces is None:
@@ -1807,29 +1820,40 @@ def _resolve_link_rule(rule: LinkRule, runtime_nodes: tuple[_RuntimeNode, ...]) 
         selected = _eval_node_selector(endpoint.select, runtime_nodes)
         if not selected:
             raise SessionResolutionError(f"link rule {rule.id!r} selector matched zero nodes")
-        matching_mounts = {
+        matching_blocks = {
             item.node.node_id: tuple(
-                sorted(
-                    block.terminal_id
-                    for block in item.node.terminal_inventory
-                    if _terminal_matches(block, endpoint.terminal)
-                )
+                block
+                for block in item.node.terminal_inventory
+                if _terminal_matches(block, endpoint.terminal)
             )
             for item in selected
         }
-        compatible = [item for item in selected if matching_mounts[item.node.node_id]]
+        compatible = [item for item in selected if matching_blocks[item.node.node_id]]
         if not compatible:
             raise SessionResolutionError(
                 f"link rule {rule.id!r} terminal selector matched zero compatible mounts"
             )
         distinct_mounts = sorted(
-            {mount_id for item in compatible for mount_id in matching_mounts[item.node.node_id]}
+            {
+                block.terminal_id
+                for item in compatible
+                for block in matching_blocks[item.node.node_id]
+            }
         )
         if terminal_mount is None and len(distinct_mounts) > 1:
             raise SessionResolutionError(
                 f"link rule {rule.id!r} terminal selector matches multiple terminal mounts "
                 f"{distinct_mounts}; select one exact mount"
             )
+        matched_media = sorted(
+            {block.medium for item in compatible for block in matching_blocks[item.node.node_id]}
+        )
+        if len(matched_media) != 1:
+            raise SessionResolutionError(
+                f"link rule {rule.id!r} terminal selector matches multiple terminal media "
+                f"{matched_media}; select one compatible medium"
+            )
+        terminal_medium = matched_media[0]
         # Endpoint coherence: every selected node must share at least one
         # segment label. A node's labels are its segment plus its placement
         # groups — a shared site legitimately answers for every group that
@@ -1857,7 +1881,13 @@ def _resolve_link_rule(rule: LinkRule, runtime_nodes: tuple[_RuntimeNode, ...]) 
             )
         )
         endpoint_nodes.append(tuple(item.node for item in compatible))
-    kind = _derive_link_label(endpoints)
+    if endpoints[0].terminal_medium != endpoints[1].terminal_medium:
+        raise SessionResolutionError(
+            f"link rule {rule.id!r} selects incompatible terminal media: "
+            f"endpoint 0={endpoints[0].terminal_medium!r}, "
+            f"endpoint 1={endpoints[1].terminal_medium!r}"
+        )
+    kind = _derive_link_label(rule.id, endpoints, endpoint_nodes)
     for endpoint_index, (authored, nodes) in enumerate(
         zip(rule.endpoints, endpoint_nodes, strict=True)
     ):
@@ -2273,9 +2303,9 @@ def _enforce_declared_candidate_bounds(
 
     Multi-segment sessions must declare candidate_limits — an all-by-all rule
     over composed segments is exactly the case the budget exists for, and an
-    absent budget must not mean an absent bound. The static per-rule upper
-    bound (mode-aware) is checked against the declared budget before any pair,
-    interface, or rank is built.
+    absent budget must not mean an absent bound. Static mode-aware per-rule and
+    aggregate upper bounds are checked against the declared budget before any
+    pair, interface, or rank is built.
     """
     limits = cfg.simulation.candidate_limits if cfg.simulation is not None else None
     if limits is None:
@@ -2284,6 +2314,7 @@ def _enforce_declared_candidate_bounds(
                 "multi-segment sessions with link rules must declare simulation.candidate_limits"
             )
         return
+    aggregate_bound = 0
     for rule in resolved.link_rules:
         if not rule.enabled:
             continue
@@ -2297,6 +2328,7 @@ def _enforce_declared_candidate_bounds(
             bound = len(rule.topology.pairs or ())
         else:
             continue
+        aggregate_bound += bound
         if bound > limits.max_pairs_per_rule:
             raise SessionResolutionError(
                 f"link rule {rule.rule_id!r} declares a static candidate upper bound of "
@@ -2304,6 +2336,13 @@ def _enforce_declared_candidate_bounds(
                 f"simulation.candidate_limits.max_pairs_per_rule={limits.max_pairs_per_rule} "
                 "before materialization"
             )
+    if aggregate_bound > limits.max_pairs_per_tick:
+        raise SessionResolutionError(
+            "enabled link rules declare a static aggregate candidate upper bound of "
+            f"{aggregate_bound} pairs, exceeding "
+            "simulation.candidate_limits.max_pairs_per_tick="
+            f"{limits.max_pairs_per_tick} before materialization"
+        )
 
 
 def _enforce_candidate_limits(
@@ -2748,16 +2787,40 @@ def _endpoint_terminal_mount(selector: TerminalSelector) -> str | None:
     raise AssertionError("unreachable terminal selector")
 
 
-def _derive_link_label(endpoints: list[ResolvedEndpoint]) -> str:
+def _link_class_body(node: ResolvedNode) -> str:
+    body = node.central_body or node.reference_body
+    if body is None:
+        raise SessionResolutionError(
+            f"cannot derive link class for node {node.node_id!r}: no resolved body"
+        )
+    return body
+
+
+def _derive_link_label(
+    rule_id: str,
+    endpoints: list[ResolvedEndpoint],
+    endpoint_nodes: list[tuple[ResolvedNode, ...]],
+) -> str:
     left, right = endpoints
     # An access-role endpoint makes the rule an access rule regardless of
     # segment arrangement — labeling it "isl" sends it down the wrong
     # interface/candidate path with a misleading failure.
     if left.terminal_role == "access" or right.terminal_role == "access":
         return "access"
-    if left.segment_id == right.segment_id:
+
+    left_bodies = {_link_class_body(node) for node in endpoint_nodes[0]}
+    right_bodies = {_link_class_body(node) for node in endpoint_nodes[1]}
+    body_relations = {
+        left_body == right_body for left_body in left_bodies for right_body in right_bodies
+    }
+    if body_relations == {True}:
         return "isl"
-    return "inter_body"
+    if body_relations == {False}:
+        return "inter_body"
+    raise SessionResolutionError(
+        f"link rule {rule_id!r} mixes same-body and cross-body endpoint pairs; "
+        "split it into body-specific rules so one derived link class applies"
+    )
 
 
 def _constraint_limit_for_node(limit: Any, node: ResolvedNode) -> int:
@@ -2848,13 +2911,26 @@ def _validate_routing_boundaries(
                 f"routing boundary over {boundary.over!r} names an access rule; "
                 "boundaries run over fixed inter-domain links"
             )
-        boundary_rule_ids.add(rule.rule_id)
-        rule_domains = {
-            domain_of_node[node_id]
+        endpoint_domains = tuple(
+            {domain_of_node[node_id] for node_id in endpoint.node_ids}
             for endpoint in rule.endpoints
-            for node_id in endpoint.node_ids
-            if node_id in domain_of_node
-        }
+        )
+        for endpoint_index, resolved_domains in enumerate(endpoint_domains):
+            if len(resolved_domains) != 1:
+                raise SessionResolutionError(
+                    f"routing boundary over {boundary.over!r} endpoint {endpoint_index} "
+                    f"spans routing domains {sorted(resolved_domains)}; each boundary "
+                    "endpoint must resolve wholly to one domain"
+                )
+        left_domain = next(iter(endpoint_domains[0]))
+        right_domain = next(iter(endpoint_domains[1]))
+        if left_domain == right_domain:
+            raise SessionResolutionError(
+                f"routing boundary over {boundary.over!r} has both endpoints in routing "
+                f"domain {left_domain!r}; boundary endpoints must be in opposite domains"
+            )
+        boundary_rule_ids.add(rule.rule_id)
+        rule_domains = {left_domain, right_domain}
         for export in boundary.export:
             for domain_id in (export.from_, export.to):
                 if domain_id not in domains_by_id:

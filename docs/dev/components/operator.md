@@ -12,7 +12,7 @@ The Operator watches for `ConstellationSpec` custom resources and manages the fu
 ## ConstellationSpec CRD
 
 ```yaml
-apiVersion: nodalarc.io/v1
+apiVersion: nodalarc.io/v1alpha1
 kind: ConstellationSpec
 metadata:
   name: current-session
@@ -41,19 +41,36 @@ spec:
       step_seconds: 10
       compression: 1
     ...
+  catalogUpload:
+    upload_id: session-7f3a2c
+    closure_digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+    file_count: 17
 status:
-  phase: Ready       # Creating | Wiring | Ready | Error
-  readyPods: 42
-  podCount: 42
+  phase: Ready
+  sessionName: earth-leo-simple
+  sessionRunId: run-0123456789abcdef0123
+  readyPods: 41
+  wiredPods: 41
+  podCount: 41
   platformHash: abc123
 ```
+
+VS-API writes this CR only after it uploads every catalog YAML file reachable
+from the root session. `sessionYaml` contains that exact root document, while
+`catalogUpload` selects the namespaced ConfigMaps containing the referenced
+`nodalarc:` and `user:` YAML files. The upload ID, closure digest, and file count
+are generated deployment data rather than session-grammar fields.
 
 ## Session Creation Sequence
 
 When a ConstellationSpec CR is created:
 
-1. **Resolve session config** from `spec.sessionYaml` through the shared resolver
-2. **Validate runtime support** - reject unsupported future grammar before pods are valid
+1. **Load runtime inputs** - fetch the catalog YAML files selected by
+   `spec.catalogUpload`, verify their identities and closure digest, and pair
+   them with the exact `spec.sessionYaml` root
+2. **Resolve and validate** - resolve the verified files through the shared
+   resolver and reject invalid grammar or unsupported runtime features before
+   pods are valid
 3. **Compute pod placement** - assign resolved nodes to Kubernetes nodes
 4. **Render FRR configs** - Jinja2 templates receive resolved node, terminal, routing, SID, and prefix facts
 5. **Create ConfigMaps** - one per node with rendered FRR config
@@ -89,14 +106,18 @@ FRR's stock entrypoint (`docker-start`) waits for a sentinel file before startin
 
 ## Platform Hash
 
-`compute_platform_hash()` resolves `spec.sessionYaml` through the shared session resolver and hashes the resolved runtime model plus referenced catalog assets that affect platform services. If the hash differs between old and new session, platform services (OME, Scheduler) are restarted to pick up the new configuration.
+`compute_platform_hash()` hashes the verified resolved runtime model together
+with proof of the exact `sessionYaml` and uploaded catalog closure. If the hash
+differs between the old and new session, platform services (OME, Scheduler) are
+restarted to pick up the new configuration.
 
 The hash intentionally excludes only operator-owned runtime lineage such as `session.run_id`; changes to constellation, ground-site, routing, scheduling, simulation, addressing, placement, or referenced asset contents trigger a platform restart.
 
 ## Error Propagation
 
-`compute_expected_pod_count()` raises on validation errors (invalid segment,
-missing catalog asset, unsupported runtime feature). The handler catches the
+Runtime loading and `compute_expected_pod_count()` raise on validation errors
+(missing or altered upload files, invalid segment, missing catalog asset,
+unsupported runtime feature). The handler catches the
 exception and sets CR `status.phase = "Error"` with the error message. This
 surfaces bad configs immediately instead of silently deploying zero pods.
 

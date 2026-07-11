@@ -133,18 +133,16 @@ export function useWizard() {
   const toggleExtension = useCallback((ext: WizardExtension) => {
     setState((s) => {
       const has = s.extensions.includes(ext);
-      const protoRules = s.protocol === "isis"
-        ? data.rules?.protocols.isis
-        : s.protocol === "ospf"
-          ? data.rules?.protocols.ospf
-          : null;
+      const protoRules = data.rules?.protocols.find((item) => item.id === s.protocol);
       let next = has ? s.extensions.filter((item) => item !== ext) : [...s.extensions, ext];
       if (protoRules) {
         let changed = true;
         while (changed) {
           const selected = new Set(next);
           const filtered = next.filter((item) =>
-            (protoRules.constraints[item] ?? []).every((dependency) => selected.has(dependency))
+            (protoRules.extension_constraints[item] ?? []).every(
+              (dependency) => selected.has(dependency),
+            )
           );
           changed = filtered.length !== next.length;
           next = filtered;
@@ -173,11 +171,7 @@ export function useWizard() {
   const isExtensionAllowed = useCallback(
     (ext: WizardExtension): boolean => {
       if (!data.rules || !state.protocol) return false;
-      const protoRules = state.protocol === "isis"
-        ? data.rules.protocols.isis
-        : state.protocol === "ospf"
-          ? data.rules.protocols.ospf
-          : null;
+      const protoRules = data.rules.protocols.find((item) => item.id === state.protocol);
       if (!protoRules) return false;
       return protoRules.extensions.includes(ext);
     },
@@ -188,12 +182,8 @@ export function useWizard() {
     (ext: WizardExtension): boolean => {
       if (!isExtensionAllowed(ext)) return false;
       if (!data.rules || !state.protocol) return false;
-      const protoRules = state.protocol === "isis"
-        ? data.rules.protocols.isis
-        : state.protocol === "ospf"
-          ? data.rules.protocols.ospf
-          : null;
-      const deps = protoRules?.constraints[ext];
+      const protoRules = data.rules.protocols.find((item) => item.id === state.protocol);
+      const deps = protoRules?.extension_constraints[ext];
       if (!deps) return true;
       return deps.every((d) => state.extensions.includes(d));
     },
@@ -228,6 +218,7 @@ export function useWizard() {
     customConstellationCapability: data.customConstellationCapability,
     customConstellationSeed: data.customConstellationSeed,
     customConstellationDefaultNode: data.customConstellationDefaultNode,
+    customConstellationPatterns: data.customConstellationPatterns,
     orbitModels: data.orbitModels,
     rules: data.rules,
     satelliteTypes: data.satelliteTypes,
@@ -266,6 +257,7 @@ export function useWizard() {
     previewing: api.previewing,
     coveragePreview: api.coveragePreview,
     clearPreview: api.clearPreview,
+    deriveConstellationLayout: api.deriveConstellationLayout,
     continueToProtocol,
     reset,
   };

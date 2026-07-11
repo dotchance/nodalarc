@@ -34,6 +34,9 @@ from nodalarc.models.builder_catalog_api import (
     CatalogDependencyImpact,
     CatalogDependentsRequest,
     CatalogDocumentWriteRequest,
+    CatalogDraftAddNodeEthernetPortRequest,
+    CatalogDraftAddNodeTerminalMountRequest,
+    CatalogDraftAddSiteNodeRequest,
     CatalogDraftCompileRequest,
     CatalogDraftCompileResult,
     CatalogDraftNewRequest,
@@ -63,6 +66,9 @@ from nodalarc.models.builder_visual_api import (
     BuilderVisualDraftCreateRequest,
     BuilderVisualDraftEnvelope,
     BuilderVisualDraftOpenRequest,
+    BuilderVisualWalkerLayoutRequest,
+    BuilderVisualWalkerLayoutResult,
+    derive_walker_layout,
 )
 from starlette.concurrency import run_in_threadpool
 
@@ -140,6 +146,21 @@ class CatalogDraftService(Protocol):
     def open(self, request: CatalogDraftOpenRequest) -> CatalogComponentDraftEnvelope: ...
 
     def patch(self, request: CatalogDraftPatchRequest) -> CatalogComponentDraftEnvelope: ...
+
+    def add_site_node(
+        self,
+        request: CatalogDraftAddSiteNodeRequest,
+    ) -> CatalogComponentDraftEnvelope: ...
+
+    def add_node_terminal_mount(
+        self,
+        request: CatalogDraftAddNodeTerminalMountRequest,
+    ) -> CatalogComponentDraftEnvelope: ...
+
+    def add_node_ethernet_port(
+        self,
+        request: CatalogDraftAddNodeEthernetPortRequest,
+    ) -> CatalogComponentDraftEnvelope: ...
 
     def replace_object(
         self,
@@ -327,6 +348,15 @@ def create_builder_router(
     @router.get("/bootstrap", response_model=BuilderCatalogBootstrap)
     async def bootstrap(context: Context):
         return await invoke_catalog(context, lambda service: service.bootstrap())
+
+    @router.post(
+        "/defaults/walker-layout",
+        response_model=BuilderVisualWalkerLayoutResult,
+    )
+    async def walker_layout(
+        request: BuilderVisualWalkerLayoutRequest,
+    ) -> BuilderVisualWalkerLayoutResult:
+        return derive_walker_layout(request)
 
     @router.post(
         "/draft/new",
@@ -648,6 +678,48 @@ def create_builder_router(
     )
     async def patch_catalog_draft(request: CatalogDraftPatchRequest, context: Context):
         return await invoke_catalog_draft(context, lambda service: service.patch(request))
+
+    @router.post(
+        "/catalog/draft/site-node/add",
+        response_model=CatalogComponentDraftEnvelope,
+        responses=_CATALOG_ERROR_RESPONSES,
+    )
+    async def add_catalog_draft_site_node(
+        request: CatalogDraftAddSiteNodeRequest,
+        context: Context,
+    ):
+        return await invoke_catalog_draft(
+            context,
+            lambda service: service.add_site_node(request),
+        )
+
+    @router.post(
+        "/catalog/draft/node-terminal/add",
+        response_model=CatalogComponentDraftEnvelope,
+        responses=_CATALOG_ERROR_RESPONSES,
+    )
+    async def add_catalog_draft_node_terminal(
+        request: CatalogDraftAddNodeTerminalMountRequest,
+        context: Context,
+    ):
+        return await invoke_catalog_draft(
+            context,
+            lambda service: service.add_node_terminal_mount(request),
+        )
+
+    @router.post(
+        "/catalog/draft/node-ethernet/add",
+        response_model=CatalogComponentDraftEnvelope,
+        responses=_CATALOG_ERROR_RESPONSES,
+    )
+    async def add_catalog_draft_node_ethernet(
+        request: CatalogDraftAddNodeEthernetPortRequest,
+        context: Context,
+    ):
+        return await invoke_catalog_draft(
+            context,
+            lambda service: service.add_node_ethernet_port(request),
+        )
 
     @router.post(
         "/catalog/draft/replace-object",

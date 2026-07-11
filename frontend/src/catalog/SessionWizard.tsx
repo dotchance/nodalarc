@@ -261,6 +261,7 @@ export function SessionWizard({
                   customConstellationCapability={wizard.customConstellationCapability}
                   customConstellationSeed={wizard.customConstellationSeed}
                   customConstellationDefaultNode={wizard.customConstellationDefaultNode}
+                  customConstellationPatterns={wizard.customConstellationPatterns}
                   orbitModels={wizard.orbitModels}
                   satelliteTypes={wizard.satelliteTypes}
                   groundStationSets={wizard.groundStationSets}
@@ -274,6 +275,7 @@ export function SessionWizard({
                   onSelectGroundStationSet={wizard.selectGroundStationSet}
                   onSelectCustomGroundStations={wizard.selectCustomGroundStations}
                   onSelectOrbitPropagator={wizard.selectOrbitPropagator}
+                  onDeriveConstellationLayout={wizard.deriveConstellationLayout}
                   onPreview={wizard.previewCoverage}
                   onContinueWithoutPreview={wizard.continueToProtocol}
                   canPreview={allGroupASelected}

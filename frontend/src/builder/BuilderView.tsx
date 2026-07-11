@@ -19,6 +19,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type ComponentProps,
   type MutableRefObject,
 } from "react";
 import { Scene } from "../globe/r3f/Scene";
@@ -1480,6 +1481,36 @@ export function BuilderView({
         const key = targetKey(target);
         const draft = (buffers[key]?.draft as DraftConstellation | undefined) ?? applied;
         const segWall = wallFor(target);
+        const applySpaceEditorCommand = async (
+          command: BuilderVisualDraftCommandRequest["command"],
+        ) => {
+          const appliedWorkspace = currentWorkspace();
+          const sourceWorkspace = previewWorkspace();
+          if (!appliedWorkspace || !sourceWorkspace) {
+            throw new Error("there is no structured workspace to edit");
+          }
+          const bufferRevision = currentBufferMutationRevision();
+          const result = await executeVisualCommand(
+            command,
+            sourceWorkspace,
+            appliedWorkspace,
+            bufferRevision,
+          );
+          const updated = workspaceFromVisualDraft(result.draft).space.find(
+            (candidate) => candidate.segment_id === draft.segment_id,
+          );
+          if (!updated) throw new Error("VS-API returned no updated space segment");
+          patchBuffer(key, applied, () => updated);
+        };
+        const setPopulation: ComponentProps<typeof ConstellationEditor>["onSetPopulation"] = async (
+          change,
+        ) => {
+          await applySpaceEditorCommand({
+            operation: "set_space_population",
+            segment_id: draft.segment_id,
+            ...change,
+          });
+        };
         return {
           title: draft.display_name,
           content: (
@@ -1501,6 +1532,27 @@ export function BuilderView({
               onConnect={(other) => connect(draft.segment_id, other)}
               draft={draft}
               onUpdate={(update) => patchBuffer(key, applied, update)}
+              onSetPopulation={setPopulation}
+              onAuthorInlineNode={() =>
+                applySpaceEditorCommand({
+                  operation: "author_inline_space_node",
+                  segment_id: draft.segment_id,
+                })
+              }
+              onAddNodeTerminal={(terminalRef, role) =>
+                applySpaceEditorCommand({
+                  operation: "add_or_increment_node_terminal",
+                  segment_id: draft.segment_id,
+                  terminal_ref: terminalRef,
+                  role,
+                })
+              }
+              onAddNodeEthernet={() =>
+                applySpaceEditorCommand({
+                  operation: "add_node_ethernet_port",
+                  segment_id: draft.segment_id,
+                })
+              }
               onUpdateOrbit={(patch) =>
                 patchBuffer(key, applied, (d) => ({
                   ...d,
@@ -1522,6 +1574,27 @@ export function BuilderView({
         const key = targetKey(target);
         const draft = (buffers[key]?.draft as DraftGroundSet | undefined) ?? applied;
         const groundWall = wallFor(target);
+        const applyGroundEditorCommand = async (
+          command: BuilderVisualDraftCommandRequest["command"],
+        ) => {
+          const appliedWorkspace = currentWorkspace();
+          const sourceWorkspace = previewWorkspace();
+          if (!appliedWorkspace || !sourceWorkspace) {
+            throw new Error("there is no structured workspace to edit");
+          }
+          const bufferRevision = currentBufferMutationRevision();
+          const result = await executeVisualCommand(
+            command,
+            sourceWorkspace,
+            appliedWorkspace,
+            bufferRevision,
+          );
+          const updated = workspaceFromVisualDraft(result.draft).ground.find(
+            (candidate) => candidate.segment_id === draft.segment_id,
+          );
+          if (!updated) throw new Error("VS-API returned no updated ground segment");
+          patchBuffer(key, applied, () => updated);
+        };
         return {
           title: draft.display_name,
           content: (
@@ -1546,6 +1619,52 @@ export function BuilderView({
                 schedulingSelections[
                   schedulingSelectionKey(draft.segment_id, memberId)
                 ] ?? null
+              }
+              onMintSites={async (sites) => {
+                const appliedWorkspace = currentWorkspace();
+                const sourceWorkspace = previewWorkspace();
+                if (!appliedWorkspace || !sourceWorkspace) {
+                  throw new Error("there is no structured workspace to edit");
+                }
+                const bufferRevision = currentBufferMutationRevision();
+                const result = await executeVisualCommand(
+                  {
+                    operation: "mint_ground_members",
+                    segment_id: draft.segment_id,
+                    sites,
+                  },
+                  sourceWorkspace,
+                  appliedWorkspace,
+                  bufferRevision,
+                );
+                const updated = workspaceFromVisualDraft(result.draft).ground.find(
+                  (candidate) => candidate.segment_id === draft.segment_id,
+                );
+                if (!updated) throw new Error("VS-API returned no updated ground segment");
+                patchBuffer(key, applied, () => updated);
+              }}
+              onSetStampNodeModel={(ref) =>
+                applyGroundEditorCommand({
+                  operation: "set_ground_stamp_node_model",
+                  segment_id: draft.segment_id,
+                  node_ref: ref,
+                })
+              }
+              onSetSiteNodeModel={(memberId, nodeId, ref) =>
+                applyGroundEditorCommand({
+                  operation: "set_ground_site_node_model",
+                  segment_id: draft.segment_id,
+                  member_id: memberId,
+                  node_id: nodeId,
+                  node_ref: ref,
+                })
+              }
+              onAddSiteNode={(memberId) =>
+                applyGroundEditorCommand({
+                  operation: "add_ground_site_node",
+                  segment_id: draft.segment_id,
+                  member_id: memberId,
+                })
               }
               onSchedulingPreset={async (preset, memberId) => {
                 const appliedWorkspace = currentWorkspace();

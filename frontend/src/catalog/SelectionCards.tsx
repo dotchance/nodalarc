@@ -19,12 +19,17 @@ import type {
   OrbitModel,
   WizardConstellationCapability,
   WizardConstellationGeometry,
+  WalkerPattern,
 } from "./wizardTypes";
 import { SatelliteTypePanel } from "./SatelliteTypePanel";
 import { GroundStationPanel } from "./GroundStationPanel";
 import { ConstellationPanel } from "./ConstellationPanel";
 import { OrbitModelPanel } from "./OrbitModelPanel";
 import { orbitModelLabel } from "./orbitModels";
+import type {
+  BuilderVisualWalkerLayoutRequest,
+  BuilderVisualWalkerLayoutResult,
+} from "../builder/generated/builderApi";
 
 interface SelectionCardsProps {
   // Data
@@ -32,6 +37,7 @@ interface SelectionCardsProps {
   customConstellationCapability: WizardConstellationCapability | null;
   customConstellationSeed: WizardConstellationGeometry | null;
   customConstellationDefaultNode: string | null;
+  customConstellationPatterns: readonly WalkerPattern[];
   orbitModels: readonly OrbitModel[];
   satelliteTypes: SatelliteTypePreset[];
   groundStationSets: GroundStationSet[];
@@ -47,6 +53,9 @@ interface SelectionCardsProps {
   onSelectGroundStationSet: (set: GroundStationSet) => void;
   onSelectCustomGroundStations: (names: string[]) => void;
   onSelectOrbitPropagator: (model: OrbitPropagator) => void;
+  onDeriveConstellationLayout: (
+    intent: BuilderVisualWalkerLayoutRequest,
+  ) => Promise<BuilderVisualWalkerLayoutResult>;
   onPreview: () => void;
   onContinueWithoutPreview: () => void;
   // Preview state
@@ -123,9 +132,11 @@ export function SelectionCards(props: SelectionCardsProps) {
             customGeometryCapability={props.customConstellationCapability}
             customGeometrySeed={props.customConstellationSeed}
             customGeometryDefaultNode={props.customConstellationDefaultNode}
+            customGeometryPatterns={props.customConstellationPatterns}
             orbitModels={props.orbitModels}
             selected={props.constellation}
             onSelect={(p) => { props.onSelectConstellation(p); setActiveCard(null); }}
+            onDeriveLayout={props.onDeriveConstellationLayout}
           />
         </div>
       )}

@@ -54,6 +54,10 @@ describe("useWizardData", () => {
             phase_offset_deg: 8.182,
           },
           custom_geometry_default_node: "nodalarc:nodes/space/starlink-v2-mesh.yaml",
+          custom_geometry_patterns: [
+            { id: "walker_delta", label: "Delta", description: "Delta pattern" },
+            { id: "walker_star", label: "Star", description: "Star pattern" },
+          ],
           orbit_models: [
             { id: "j2_mean_elements", label: "J2", description: "J2" },
             { id: "two_body", label: "Two body", description: "Two body" },
@@ -63,13 +67,42 @@ describe("useWizardData", () => {
       }
       if (path === "/api/v1/wizard/extensions") {
         return Promise.resolve(ok({
-          protocols: {
-            isis: { extensions: ["te"], constraints: {} },
-            ospf: { extensions: ["te"], constraints: {} },
-          },
+          protocols: [
+            {
+              id: "isis",
+              label: "IS-IS",
+              description: "IS-IS",
+              extensions: ["te"],
+              extension_constraints: {},
+              timer_label: "IS-IS Timers",
+              timer_fields: [],
+              non_flat_area_warning: null,
+            },
+            {
+              id: "ospf",
+              label: "OSPF",
+              description: "OSPF",
+              extensions: ["te"],
+              extension_constraints: {},
+              timer_label: "OSPF Timers",
+              timer_fields: [],
+              non_flat_area_warning: "warning",
+            },
+          ],
+          extensions: [{ id: "te", label: "TE", description: "Traffic engineering" }],
           area_strategies: ["flat"],
-          available_protocols: ["isis", "ospf"],
           default_area_strategy: "flat",
+          bfd: {
+            heading: "BFD",
+            enabled_field: "bfd",
+            enable_label: "Enable BFD",
+            enable_description: "Detect failures",
+            timer_fields: [
+              { id: "bfd_detect_multiplier", label: "Multiplier", unit: null, description: "Multiplier", guidance: "Three", minimum: 1 },
+              { id: "bfd_rx_interval", label: "RX", unit: "ms", description: "Receive", guidance: "300", minimum: 1 },
+              { id: "bfd_tx_interval", label: "TX", unit: "ms", description: "Transmit", guidance: "300", minimum: 1 },
+            ],
+          },
           routing_timer_defaults: {
             bfd: false,
             bfd_detect_multiplier: 3,
@@ -115,6 +148,10 @@ describe("useWizardData", () => {
       result.current.customConstellationCapability?.runtime_supported_propagators,
     ).toEqual(["j2_mean_elements", "two_body"]);
     expect(result.current.customConstellationSeed?.planes).toBe(4);
+    expect(result.current.customConstellationPatterns.map((pattern) => pattern.id)).toEqual([
+      "walker_delta",
+      "walker_star",
+    ]);
     expect(result.current.orbitModels.map((model) => model.id)).toEqual([
       "j2_mean_elements",
       "two_body",

@@ -127,6 +127,18 @@ def test_unknown_top_level_session_keys_are_rejected_by_canonical_model() -> Non
         resolve_session(raw)
 
 
+@pytest.mark.parametrize("selector_kind", ["node", "terminal"])
+def test_private_python_selector_spelling_is_rejected(selector_kind: str) -> None:
+    raw = _raw_session()
+    endpoint = raw["link_rules"][0]["endpoints"][0]
+    field = "select" if selector_kind == "node" else "terminal"
+    negated = {"tag": "ground"} if selector_kind == "node" else {"role": "access"}
+    endpoint[field] = {"not_": negated}
+
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        resolve_session(raw)
+
+
 def test_current_catalog_session_resolves_runtime_truth() -> None:
     resolved = resolve_session(
         _raw_session(),
@@ -190,6 +202,48 @@ def test_terminal_selector_accepts_one_explicit_mount() -> None:
 
     rule = next(item for item in resolved.link_rules if item.rule_id == "ground-access")
     assert rule.endpoints[0].terminal_id == "access"
+
+
+def test_role_only_terminal_selectors_derive_selected_medium() -> None:
+    raw = _raw_session(ground_stations={"stations": ["a"]})
+    for endpoint in raw["link_rules"][0]["endpoints"]:
+        endpoint["terminal"] = {"role": "access"}
+
+    resolved = resolve_session(raw)
+
+    rule = next(item for item in resolved.link_rules if item.rule_id == "ground-access")
+    candidate = next(item for item in resolved.link_candidates if item.rule_id == "ground-access")
+    assert tuple(endpoint.terminal_medium for endpoint in rule.endpoints) == ("rf", "rf")
+    assert candidate.terminal_medium == "rf"
+
+
+def test_role_only_terminal_selectors_reject_selected_medium_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    raw = _raw_session(ground_stations={"stations": ["a"]})
+    for endpoint in raw["link_rules"][0]["endpoints"]:
+        endpoint["terminal"] = {"role": "access"}
+    assert raw.ground_node_ref is not None
+    ground_node = raw.read_catalog(raw.ground_node_ref)
+    ground_node["node"]["terminals"][0]["terminal"] = (
+        "nodalarc:terminals/optical/optical-low-orbit-isl.yaml"
+    )
+    raw.write_catalog(raw.ground_node_ref, ground_node)
+
+    def _candidate_generation_must_not_run(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("candidate generation ran before terminal-medium refusal")
+
+    monkeypatch.setattr(
+        resolver_module,
+        "generate_declared_link_candidates",
+        _candidate_generation_must_not_run,
+    )
+
+    with pytest.raises(
+        SessionResolutionError,
+        match=("ground-access.*incompatible terminal media: endpoint 0='optical', endpoint 1='rf'"),
+    ):
+        resolve_session(raw)
 
 
 def test_mapped_max_links_covers_selected_nodes_without_candidates() -> None:
@@ -373,6 +427,75 @@ def test_explicit_area_assignment_rejects_overlapping_plane_mappings() -> None:
         resolve_session(raw)
 
 
+def _configure_split_space_boundary(
+    raw: dict[str, Any],
+    *,
+    left_select: dict[str, Any],
+    right_select: dict[str, Any],
+) -> None:
+    raw["link_rules"][1]["endpoints"][0]["select"] = left_select
+    raw["link_rules"][1]["endpoints"][1]["select"] = right_select
+    raw["routing"] = {
+        "domains": [
+            {
+                "id": "space-plane-0",
+                "protocol": "isis",
+                "selectors": [{"plane": 0}],
+            },
+            {
+                "id": "space-plane-1",
+                "protocol": "isis",
+                "selectors": [{"plane": 1}],
+            },
+            {
+                "id": "ground-domain",
+                "protocol": "isis",
+                "selectors": [{"segment": "ground"}],
+            },
+        ],
+        "boundaries": [
+            {
+                "over": "space-isl",
+                "adapter": "static_ip",
+                "export": [
+                    {
+                        "from": "space-plane-0",
+                        "to": "space-plane-1",
+                        "prefixes": {"aggregate_of": "originated"},
+                    }
+                ],
+            }
+        ],
+    }
+
+
+@pytest.mark.parametrize(
+    ("left_select", "right_select", "mixed_endpoint"),
+    [
+        ({"segment": "space"}, {"segment": "space"}, 0),
+        ({"segment": "space"}, {"plane": 0}, 0),
+        ({"plane": 0}, {"segment": "space"}, 1),
+    ],
+)
+def test_routing_boundary_rejects_endpoint_domain_mixing(
+    left_select: dict[str, Any],
+    right_select: dict[str, Any],
+    mixed_endpoint: int,
+) -> None:
+    raw = _raw_session()
+    _configure_split_space_boundary(
+        raw,
+        left_select=left_select,
+        right_select=right_select,
+    )
+
+    with pytest.raises(
+        SessionResolutionError,
+        match=rf"endpoint {mixed_endpoint} spans routing domains.*resolve wholly to one domain",
+    ):
+        resolve_session(raw)
+
+
 def test_ground_override_must_target_a_site_in_the_selected_site_set() -> None:
     raw = _raw_session()
     raw["segments"][1]["overrides"] = [
@@ -424,6 +547,37 @@ def test_duplicate_loopback_addresses_across_sites_are_rejected() -> None:
     raw.write_catalog(raw.site_refs[1], second_site)
 
     with pytest.raises(ValueError, match="duplicate lo0 ipv4 address"):
+        resolve_session(raw)
+
+
+def _add_ground_loopback_assignment(raw: dict[str, Any], ipv4_pool: str) -> None:
+    raw["addressing"]["loopbacks"].append(
+        {
+            "id": "ground-loopbacks-v4",
+            "applies_to": {"segment": "ground"},
+            "ipv4_pool": ipv4_pool,
+            "prefix_length": 32,
+            "allocation": "by_node_order",
+        }
+    )
+
+
+def test_authored_loopback_inside_selected_assignment_pool_is_preserved() -> None:
+    raw = _raw_session(ground_stations={"stations": [{}]})
+    _add_ground_loopback_assignment(raw, "10.255.0.0/24")
+
+    resolved = resolve_session(raw)
+
+    ground = next(node for node in resolved.nodes if node.kind == "ground_station")
+    assert ground.interfaces is not None
+    assert ground.interfaces.lo0.ipv4 == "10.255.0.1/32"
+
+
+def test_authored_loopback_outside_selected_assignment_pool_is_rejected() -> None:
+    raw = _raw_session(ground_stations={"stations": [{}]})
+    _add_ground_loopback_assignment(raw, "192.0.2.0/24")
+
+    with pytest.raises(SessionResolutionError, match="authored lo0.*outside allocated pool"):
         resolve_session(raw)
 
 
@@ -638,6 +792,36 @@ def test_total_candidate_budget_overflow_fails_before_runtime() -> None:
     raw["simulation"]["candidate_limits"]["max_pairs_per_tick"] = 1
 
     with pytest.raises(SessionResolutionError, match="max_pairs_per_tick"):
+        resolve_session(raw)
+
+
+def test_aggregate_candidate_budget_refuses_many_rules_before_generation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    raw = _raw_session()
+    fixed_rule = raw["link_rules"][1]
+    raw["link_rules"] = [{**deepcopy(fixed_rule), "id": f"space-isl-{index}"} for index in range(6)]
+    raw["simulation"]["candidate_limits"] = {
+        "max_pairs_per_rule": 4,
+        "max_pairs_per_tick": 20,
+    }
+
+    def _candidate_generation_must_not_run(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("candidate generation ran before aggregate budget refusal")
+
+    monkeypatch.setattr(
+        resolver_module,
+        "generate_declared_link_candidates",
+        _candidate_generation_must_not_run,
+    )
+
+    with pytest.raises(
+        SessionResolutionError,
+        match=(
+            "static aggregate candidate upper bound of 24 pairs.*"
+            "max_pairs_per_tick=20 before materialization"
+        ),
+    ):
         resolve_session(raw)
 
 

@@ -7,6 +7,9 @@ vi.mock("../../config", () => ({
 
 const {
   BuilderApiError,
+  addCatalogDraftNodeEthernet,
+  addCatalogDraftNodeTerminal,
+  addCatalogDraftSiteNode,
   applyVisualDraftCommand,
   compileCatalogDraft,
   compileVisualDraft,
@@ -14,6 +17,7 @@ const {
   createVisualDraft,
   customizeVisualDraftChain,
   deployBuilderSession,
+  deriveVisualWalkerLayout,
   exportCatalogSession,
   getBuilderBootstrap,
   getSessionTransition,
@@ -61,6 +65,11 @@ describe("typed Builder API client", () => {
       expected_draft_revision: 9,
       command: { operation: "add_generated_space", phasing_mode: "walker_delta" },
     });
+    await deriveVisualWalkerLayout({
+      pattern: "walker_delta",
+      planes: 4,
+      slots_per_plane: 11,
+    });
     await customizeVisualDraftChain({
       draft,
       segment_id: "space",
@@ -73,6 +82,7 @@ describe("typed Builder API client", () => {
       "http://test:8080/api/v1/builder/draft/open",
       "http://test:8080/api/v1/builder/draft/compile",
       "http://test:8080/api/v1/builder/draft/command",
+      "http://test:8080/api/v1/builder/defaults/walker-layout",
       "http://test:8080/api/v1/builder/draft/customize-chain",
     ]);
     expect(JSON.parse(fetchMock.mock.calls[2]![1].body)).toEqual({ draft });
@@ -80,6 +90,11 @@ describe("typed Builder API client", () => {
       draft,
       expected_draft_revision: 9,
       command: { operation: "add_generated_space", phasing_mode: "walker_delta" },
+    });
+    expect(JSON.parse(fetchMock.mock.calls[4]![1].body)).toEqual({
+      pattern: "walker_delta",
+      planes: 4,
+      slots_per_plane: 11,
     });
   });
 
@@ -192,6 +207,35 @@ describe("typed Builder API client", () => {
       expected_draft_revision: 0,
       commands: [{ operation: "replace", pointer: "/terminal/display_name", value: "Edited" }],
     });
+    await addCatalogDraftSiteNode({
+      draft: {
+        ...draft,
+        family: "sites",
+        target_ref: "user:sites/test-site.yaml",
+        source_ref: "nodalarc:sites/test-site.yaml",
+        document: { site: { id: "test-site" } },
+      },
+      expected_draft_revision: 0,
+      node_id: "gw-explicit",
+      node_ref: "nodalarc:nodes/ground/gateway.yaml",
+    });
+    const nodeDraft = {
+      ...draft,
+      family: "nodes" as const,
+      target_ref: "user:nodes/test-node.yaml",
+      source_ref: "nodalarc:nodes/test-node.yaml",
+      document: { node: { id: "test-node" } },
+    };
+    await addCatalogDraftNodeTerminal({
+      draft: nodeDraft,
+      expected_draft_revision: 0,
+      terminal_ref: "nodalarc:terminals/rf/selected.yaml",
+      role: "access",
+    });
+    await addCatalogDraftNodeEthernet({
+      draft: nodeDraft,
+      expected_draft_revision: 0,
+    });
     await replaceCatalogDraftObject({
       draft,
       expected_draft_revision: 0,
@@ -219,6 +263,9 @@ describe("typed Builder API client", () => {
       "http://test:8080/api/v1/builder/catalog/draft/new",
       "http://test:8080/api/v1/builder/catalog/draft/open",
       "http://test:8080/api/v1/builder/catalog/draft/patch",
+      "http://test:8080/api/v1/builder/catalog/draft/site-node/add",
+      "http://test:8080/api/v1/builder/catalog/draft/node-terminal/add",
+      "http://test:8080/api/v1/builder/catalog/draft/node-ethernet/add",
       "http://test:8080/api/v1/builder/catalog/draft/replace-object",
       "http://test:8080/api/v1/builder/catalog/draft/compile",
       "http://test:8080/api/v1/builder/catalog/draft/save",

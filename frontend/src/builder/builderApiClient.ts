@@ -16,12 +16,17 @@ import type {
   BuilderVisualDraftCreateRequest,
   BuilderVisualDraftEnvelope,
   BuilderVisualDraftOpenRequest,
+  BuilderVisualWalkerLayoutRequest,
+  BuilderVisualWalkerLayoutResult,
   CatalogClosureImportRequest,
   CatalogComponentDraftEnvelope,
   CatalogDeleteRequest,
   CatalogDeleteResult,
   CatalogDependentsRequest,
   CatalogDependencyImpact,
+  CatalogDraftAddNodeEthernetPortRequest,
+  CatalogDraftAddNodeTerminalMountRequest,
+  CatalogDraftAddSiteNodeRequest,
   CatalogDraftCompileRequest,
   CatalogDraftCompileResult,
   CatalogDraftNewRequest,
@@ -117,6 +122,24 @@ export function patchCatalogDraft(
   return request("/catalog/draft/patch", input);
 }
 
+export function addCatalogDraftSiteNode(
+  input: CatalogDraftAddSiteNodeRequest,
+): Promise<CatalogComponentDraftEnvelope> {
+  return request("/catalog/draft/site-node/add", input);
+}
+
+export function addCatalogDraftNodeTerminal(
+  input: CatalogDraftAddNodeTerminalMountRequest,
+): Promise<CatalogComponentDraftEnvelope> {
+  return request("/catalog/draft/node-terminal/add", input);
+}
+
+export function addCatalogDraftNodeEthernet(
+  input: CatalogDraftAddNodeEthernetPortRequest,
+): Promise<CatalogComponentDraftEnvelope> {
+  return request("/catalog/draft/node-ethernet/add", input);
+}
+
 export function replaceCatalogDraftObject(
   input: CatalogDraftReplaceObjectRequest,
 ): Promise<CatalogComponentDraftEnvelope> {
@@ -157,6 +180,12 @@ export function applyVisualDraftCommand(
   input: BuilderVisualDraftCommandRequest,
 ): Promise<BuilderVisualDraftCommandResult> {
   return request("/draft/command", input);
+}
+
+export function deriveVisualWalkerLayout(
+  input: BuilderVisualWalkerLayoutRequest,
+): Promise<BuilderVisualWalkerLayoutResult> {
+  return request("/defaults/walker-layout", input);
 }
 
 export function customizeVisualDraftChain(

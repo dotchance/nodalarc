@@ -17,6 +17,7 @@ from nodalarc.catalog_closure import (
 )
 from nodalarc.catalog_paths import CatalogRoots
 from nodalarc.catalog_refs import CatalogRef
+from nodalarc.catalog_registry import CATALOG_FAMILY_REGISTRY
 
 from tests.catalog_session_fixtures import ISS_TLE_LINE_1, ISS_TLE_LINE_2
 
@@ -351,6 +352,36 @@ def test_collect_references_validates_union_graph_without_a_session_root(
     assert graph.file_count == len(graph.entries)
     assert graph.total_bytes == sum(entry.size_bytes for entry in graph.entries)
     assert graph.closure_digest.startswith("sha256:")
+
+
+def test_complete_shipped_catalog_reference_graph_validates_every_document() -> None:
+    catalog_root = ROOT / "catalog" / "nodalarc"
+    assert {path.name for path in catalog_root.iterdir() if path.is_dir()} == set(
+        CATALOG_FAMILY_REGISTRY
+    )
+    references = tuple(
+        CatalogRef(f"nodalarc:{path.relative_to(catalog_root).as_posix()}")
+        for family in CATALOG_FAMILY_REGISTRY
+        for path in sorted(
+            candidate
+            for candidate in (catalog_root / family).rglob("*")
+            if candidate.is_file() and candidate.suffix.lower() in {".yaml", ".yml"}
+        )
+    )
+
+    graph = CatalogClosureCollector.collect_references(
+        references,
+        FilesystemCatalogReadView(CatalogRoots.from_catalog_root(catalog_root)),
+    )
+
+    assert references
+    assert graph.file_count == len(references)
+    assert {entry.ref for entry in graph.entries} == set(references)
+    assert {entry.family for entry in graph.entries} == {
+        family
+        for family in CATALOG_FAMILY_REGISTRY
+        if any(reference.family == family for reference in references)
+    }
 
 
 def test_dangling_reference_has_typed_chain_evidence(closure_fixture: ClosureFixture) -> None:

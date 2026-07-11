@@ -21,6 +21,7 @@ import {
   render,
   renderHook,
   screen,
+  waitFor,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -39,18 +40,13 @@ import { ConstellationEditor } from "../ConstellationEditor";
 import {
   accessBeamElevationDeg,
 } from "../linkPhysics";
-import {
-  mintSiteMembers,
-  nextMintIndex,
-  parseSiteLines,
-  stampLanPrefix,
-  type DraftSiteObject,
-} from "../workspace";
+import { type DraftSiteObject } from "../workspace";
 import { AUTHORING_FACTS } from "./fixtures/authoringFacts";
 import {
   newDraftConstellation,
   newDraftGroundSet,
   newWorkspace,
+  testGroundMember,
 } from "./fixtures/workspaceFixtures";
 import type { CatalogDocumentSummary } from "../generated/builderApi";
 import { canDeploy } from "../useBuilderWorld";
@@ -202,6 +198,8 @@ describe("EditorCard adoption smoke: current editors render and their cards beha
       <SiteEditor
         authoring={AUTHORING_FACTS}
         site={site}
+        onSetNodeModel={async () => {}}
+        onAddNode={async () => {}}
         onUpdate={(update) => {
           updated = update(updated);
         }}
@@ -223,6 +221,10 @@ describe("EditorCard adoption smoke: current editors render and their cards beha
         workspace={newWorkspace("t")}
         onUpdate={() => {}}
         onUpdateOrbit={() => {}}
+        onSetPopulation={async () => {}}
+        onAuthorInlineNode={async () => {}}
+        onAddNodeTerminal={async () => {}}
+        onAddNodeEthernet={async () => {}}
         onRemove={() => {}}
         onOpenRule={() => {}}
         onConnect={() => {}}
@@ -234,18 +236,21 @@ describe("EditorCard adoption smoke: current editors render and their cards beha
     expect(screen.getByText("planes")).toBeTruthy();
   });
 
-  it("ConstellationEditor authors canonical one-plane phasing atomically", () => {
+  it("ConstellationEditor delegates phasing transitions without authoring defaults", async () => {
     const draft = newDraftConstellation("nodalarc:nodes/space/leo.yaml");
-    let updated = draft;
+    const onUpdate = vi.fn();
+    const onSetPopulation = vi.fn(async () => {});
     render(
       <ConstellationEditor
         authoring={AUTHORING_FACTS}
         draft={draft}
         workspace={newWorkspace("t")}
-        onUpdate={(update) => {
-          updated = update(updated);
-        }}
+        onUpdate={onUpdate}
         onUpdateOrbit={() => {}}
+        onSetPopulation={onSetPopulation}
+        onAuthorInlineNode={async () => {}}
+        onAddNodeTerminal={async () => {}}
+        onAddNodeEthernet={async () => {}}
         onRemove={() => {}}
         onOpenRule={() => {}}
         onConnect={() => {}}
@@ -255,12 +260,37 @@ describe("EditorCard adoption smoke: current editors render and their cards beha
     fireEvent.change(screen.getByLabelText("phasing"), {
       target: { value: "evenly_spaced_mean_anomaly" },
     });
-    expect(updated).toMatchObject({
-      planes: 1,
-      raan_spacing_deg: 360,
+    await waitFor(() => expect(onSetPopulation).toHaveBeenCalledTimes(1));
+    expect(onSetPopulation).toHaveBeenCalledWith({
       phasing_mode: "evenly_spaced_mean_anomaly",
-      phase_offset_deg: 0,
     });
+    expect(onUpdate).not.toHaveBeenCalled();
+  });
+
+  it("ConstellationEditor delegates inline node creation without browser-generated fields", async () => {
+    const onUpdate = vi.fn();
+    const onAuthorInlineNode = vi.fn(async () => {});
+    render(
+      <ConstellationEditor
+        authoring={AUTHORING_FACTS}
+        draft={newDraftConstellation("nodalarc:nodes/space/leo.yaml")}
+        workspace={newWorkspace("t")}
+        onUpdate={onUpdate}
+        onUpdateOrbit={() => {}}
+        onSetPopulation={async () => {}}
+        onAuthorInlineNode={onAuthorInlineNode}
+        onAddNodeTerminal={async () => {}}
+        onAddNodeEthernet={async () => {}}
+        onRemove={() => {}}
+        onOpenRule={() => {}}
+        onConnect={() => {}}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Node/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Author inline node" }));
+    await waitFor(() => expect(onAuthorInlineNode).toHaveBeenCalledTimes(1));
+    expect(onUpdate).not.toHaveBeenCalled();
   });
 });
 
@@ -306,22 +336,24 @@ describe("BodySelect failure contract + node-id collision", () => {
     expect(refresh).toHaveBeenCalled();
   });
 
-  it("adding a node fills the first free gw slot (no collision after a delete)", () => {
+  it("adding a node delegates installation and identifier seeding to VS-API", async () => {
     const base = draftSite();
     // A gap at gw2 (as a delete-then-render would leave): length+1 would re-mint gw3.
     const site = { ...base, nodes: [base.nodes[0]!, { ...base.nodes[0]!, node_id: "gw3" }] };
-    let added = site;
+    const onAddNode = vi.fn(async () => {});
+    const onUpdate = vi.fn();
     render(
       <SiteEditor
         authoring={AUTHORING_FACTS}
         site={site}
-        onUpdate={(update) => {
-          added = update(site);
-        }}
+        onSetNodeModel={async () => {}}
+        onAddNode={onAddNode}
+        onUpdate={onUpdate}
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: "+ add node" }));
-    expect(added.nodes.map((n) => n.node_id)).toEqual(["gw1", "gw3", "gw2"]);
+    await waitFor(() => expect(onAddNode).toHaveBeenCalledTimes(1));
+    expect(onUpdate).not.toHaveBeenCalled();
   });
 
   it("BodySelect lists a catalog body exactly once when the value is already in the catalog", () => {
@@ -345,11 +377,10 @@ describe("BodySelect failure contract + node-id collision", () => {
     expect((screen.getByLabelText("Body") as HTMLSelectElement).value).toBe("catalog:bodies/earth.yaml");
   });
 
-  it("the next-minted-site preview reflects nextMintIndex, not a literal 0", () => {
+  it("submits typed site intent without allocating addresses in the browser", async () => {
     const draft = newDraftGroundSet("nodalarc:nodes/ground/gw.yaml", {});
-    // One already-minted member advances the next index past 0.
-    draft.members = mintSiteMembers(draft, parseSiteLines("Denver, 39.7, -104.9").rows);
-    expect(nextMintIndex(draft)).toBeGreaterThan(0);
+    const onMintSites = vi.fn(async () => {});
+    const onUpdate = vi.fn();
     render(
       <GroundEditor
         authoring={AUTHORING_FACTS}
@@ -361,18 +392,23 @@ describe("BodySelect failure contract + node-id collision", () => {
         selectedSchedulingPreset={null}
         memberSchedulingPreset={() => null}
         onSchedulingPreset={async () => {}}
-        onUpdate={() => {}}
+        onMintSites={onMintSites}
+        onSetStampNodeModel={async () => {}}
+        onSetSiteNodeModel={async () => {}}
+        onAddSiteNode={async () => {}}
+        onUpdate={onUpdate}
         onRemove={() => {}}
       />,
     );
-    // Open the New-site stamp card (Sites is open by default) to reveal the preview.
-    fireEvent.click(screen.getByRole("button", { name: /New-site stamp/ }));
-    const preview = [...document.querySelectorAll(".builder-site-derived")].find((el) =>
-      el.textContent?.includes("next minted site:"),
-    );
-    // The preview shows the NEXT mint's address (index nextMintIndex) — a revert to
-    // the literal 0 would show a different, colliding address and fail this.
-    expect(preview?.textContent).toContain(stampLanPrefix(draft.stamp, nextMintIndex(draft)));
+    fireEvent.change(screen.getByPlaceholderText(/paste sites, one per line/i), {
+      target: { value: "Denver, 39.7, -104.9" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "+ mint pasted sites" }));
+    await waitFor(() => expect(onMintSites).toHaveBeenCalledTimes(1));
+    expect(onMintSites).toHaveBeenCalledWith([
+      { name: "Denver", lat_deg: 39.7, lon_deg: -104.9, alt_m: 0 },
+    ]);
+    expect(onUpdate).not.toHaveBeenCalled();
   });
 });
 
@@ -453,6 +489,10 @@ describe("editor state is keyed by object identity", () => {
       selectedSchedulingPreset: null,
       memberSchedulingPreset: () => null,
       onSchedulingPreset: async () => {},
+      onMintSites: async () => {},
+      onSetStampNodeModel: async () => {},
+      onSetSiteNodeModel: async () => {},
+      onAddSiteNode: async () => {},
       onUpdate: () => {},
       onRemove: () => {},
     };
@@ -749,7 +789,10 @@ describe("the anatomy guide answers what-next in any order", () => {
   it("before the world resolves, the count falls back to the draft, flagged unresolved", () => {
     const ws = newWorkspace("named");
     const ground = newDraftGroundSet("nodalarc:nodes/ground/gw.yaml", {});
-    ground.members = mintSiteMembers(ground, parseSiteLines("Denver, 39.7, -104.9\nAmes, 42, -93").rows);
+    ground.members = [
+      testGroundMember(ground, "Denver", 39.7, -104.9),
+      testGroundMember(ground, "Ames", 42, -93, 1),
+    ];
     ws.ground.push(ground);
     // resolvedSiteCount null → the draft member count (2) with the qualifier.
     render(<BuildGuide {...guideProps(ws, null)} />);

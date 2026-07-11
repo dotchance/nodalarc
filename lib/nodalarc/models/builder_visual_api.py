@@ -8,6 +8,7 @@ save services.
 
 from __future__ import annotations
 
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Annotated, Literal, get_origin
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -18,6 +19,7 @@ from nodalarc.catalog_refs import (
     NodeRef,
     SessionRef,
     SiteRef,
+    SiteSetRef,
     SpaceSourceRef,
     TerminalRef,
     parse_catalog_reference,
@@ -44,7 +46,15 @@ BuilderVisualOrbitPropagator = Literal["two_body", "j2_mean_elements"]
 BuilderVisualTopologyMode = Literal["visible_candidates", "nearest_n"]
 BuilderVisualDraftCommandOperation = Literal[
     "add_generated_space",
+    "set_space_population",
+    "author_inline_space_node",
+    "add_or_increment_node_terminal",
+    "add_node_ethernet_port",
     "add_ground",
+    "set_ground_stamp_node_model",
+    "set_ground_site_node_model",
+    "add_ground_site_node",
+    "mint_ground_members",
     "add_routing_domain",
     "add_boundary",
     "connect_segments",
@@ -258,15 +268,9 @@ class BuilderVisualGroundReference(_BuilderVisualModel):
     """One library site set placed by reference with session scheduling."""
 
     segment_id: str = ""
-    site_set_ref: CatalogRef | None = None
+    site_set_ref: SiteSetRef | None = None
     label: str = ""
     scheduling: JsonDocument = Field(default_factory=dict)
-
-    @model_validator(mode="after")
-    def _site_set_only(self) -> BuilderVisualGroundReference:
-        if self.site_set_ref is not None and self.site_set_ref.family != "site-sets":
-            raise ValueError("site_set_ref must reference the site-sets catalog family")
-        return self
 
 
 class BuilderVisualLinkEndpoint(_BuilderVisualModel):
@@ -401,6 +405,50 @@ class BuilderVisualAddGeneratedSpaceCommand(_BuilderVisualModel):
     phasing_mode: BuilderVisualPhasingMode
 
 
+class BuilderVisualSetSpacePopulationCommand(_BuilderVisualModel):
+    """Change one population input and let the backend derive its complete phasing."""
+
+    operation: Literal["set_space_population"]
+    segment_id: str = Field(min_length=1, max_length=160)
+    phasing_mode: BuilderVisualPhasingMode | None = None
+    planes: int | None = Field(default=None, ge=1)
+    slots_per_plane: int | None = Field(default=None, ge=1)
+
+    @model_validator(mode="after")
+    def _changes_exactly_one_population_input(self) -> BuilderVisualSetSpacePopulationCommand:
+        changes = (
+            self.phasing_mode is not None,
+            self.planes is not None,
+            self.slots_per_plane is not None,
+        )
+        if sum(changes) != 1:
+            raise ValueError("space population command must change exactly one input")
+        return self
+
+
+class BuilderVisualAuthorInlineSpaceNodeCommand(_BuilderVisualModel):
+    """Create one backend-seeded inline node for an authored space segment."""
+
+    operation: Literal["author_inline_space_node"]
+    segment_id: str = Field(min_length=1, max_length=160)
+
+
+class BuilderVisualAddOrIncrementNodeTerminalCommand(_BuilderVisualModel):
+    """Mount a selected terminal or increment the matching backend-owned mount."""
+
+    operation: Literal["add_or_increment_node_terminal"]
+    segment_id: str = Field(min_length=1, max_length=160)
+    terminal_ref: TerminalRef
+    role: MountRole
+
+
+class BuilderVisualAddNodeEthernetPortCommand(_BuilderVisualModel):
+    """Add one uniquely identified Ethernet port to an authored inline node."""
+
+    operation: Literal["add_node_ethernet_port"]
+    segment_id: str = Field(min_length=1, max_length=160)
+
+
 class BuilderVisualAddGroundCommand(_BuilderVisualModel):
     """Add one backend-seeded authored ground-segment draft."""
 
@@ -409,6 +457,50 @@ class BuilderVisualAddGroundCommand(_BuilderVisualModel):
     installed: dict[str, int] = Field(default_factory=dict)
     boresights: dict[str, BuilderVisualGroundBoresight] = Field(default_factory=dict)
     body_ref: BodyRef | None = None
+
+
+class BuilderVisualSetGroundStampNodeModelCommand(_BuilderVisualModel):
+    """Select a ground stamp node and derive its installed terminal inventory."""
+
+    operation: Literal["set_ground_stamp_node_model"]
+    segment_id: str = Field(min_length=1, max_length=160)
+    node_ref: NodeRef
+
+
+class BuilderVisualSetGroundSiteNodeModelCommand(_BuilderVisualModel):
+    """Select one authored site's node model and derive its installed inventory."""
+
+    operation: Literal["set_ground_site_node_model"]
+    segment_id: str = Field(min_length=1, max_length=160)
+    member_id: str = Field(min_length=1, max_length=160)
+    node_id: str = Field(min_length=1, max_length=160)
+    node_ref: NodeRef
+
+
+class BuilderVisualAddGroundSiteNodeCommand(_BuilderVisualModel):
+    """Add one backend-seeded node installation to an authored site."""
+
+    operation: Literal["add_ground_site_node"]
+    segment_id: str = Field(min_length=1, max_length=160)
+    member_id: str = Field(min_length=1, max_length=160)
+    node_ref: NodeRef | None = None
+
+
+class BuilderVisualGroundSiteIntent(_BuilderVisualModel):
+    """One user-entered surface location awaiting backend-owned site allocation."""
+
+    name: str = Field(min_length=1, max_length=160)
+    lat_deg: float = Field(ge=-90, le=90)
+    lon_deg: float = Field(ge=-180, le=180)
+    alt_m: float = 0
+
+
+class BuilderVisualMintGroundMembersCommand(_BuilderVisualModel):
+    """Mint complete sites and addresses from typed locations and one ground stamp."""
+
+    operation: Literal["mint_ground_members"]
+    segment_id: str = Field(min_length=1, max_length=160)
+    sites: tuple[BuilderVisualGroundSiteIntent, ...] = Field(min_length=1, max_length=255)
 
 
 class BuilderVisualAddRoutingDomainCommand(_BuilderVisualModel):
@@ -457,7 +549,15 @@ class BuilderVisualSetSchedulingPresetCommand(_BuilderVisualModel):
 
 BuilderVisualDraftCommand = Annotated[
     BuilderVisualAddGeneratedSpaceCommand
+    | BuilderVisualSetSpacePopulationCommand
+    | BuilderVisualAuthorInlineSpaceNodeCommand
+    | BuilderVisualAddOrIncrementNodeTerminalCommand
+    | BuilderVisualAddNodeEthernetPortCommand
     | BuilderVisualAddGroundCommand
+    | BuilderVisualSetGroundStampNodeModelCommand
+    | BuilderVisualSetGroundSiteNodeModelCommand
+    | BuilderVisualAddGroundSiteNodeCommand
+    | BuilderVisualMintGroundMembersCommand
     | BuilderVisualAddRoutingDomainCommand
     | BuilderVisualAddBoundaryCommand
     | BuilderVisualConnectSegmentsCommand
@@ -465,6 +565,42 @@ BuilderVisualDraftCommand = Annotated[
     | BuilderVisualSetSchedulingPresetCommand,
     Field(discriminator="operation"),
 ]
+
+
+class BuilderVisualWalkerLayoutRequest(_BuilderVisualModel):
+    """Walker population intent whose derived angular values remain backend-owned."""
+
+    pattern: Literal["walker_delta", "walker_star"]
+    planes: int = Field(ge=2)
+    slots_per_plane: int = Field(ge=1)
+
+
+class BuilderVisualWalkerLayoutResult(_BuilderVisualModel):
+    """Backend-issued angular layout for one Walker population intent."""
+
+    raan_spacing_deg: float
+    phase_offset_deg: float
+
+
+def derive_walker_layout(
+    request: BuilderVisualWalkerLayoutRequest,
+) -> BuilderVisualWalkerLayoutResult:
+    """Derive one Walker layout from typed population intent."""
+
+    raan_span = Decimal(180 if request.pattern == "walker_star" else 360)
+    quantizer = Decimal("0.001")
+    raan_spacing = (raan_span / Decimal(request.planes)).quantize(
+        quantizer,
+        rounding=ROUND_HALF_UP,
+    )
+    phase_offset = (Decimal(360) / Decimal(request.planes * request.slots_per_plane)).quantize(
+        quantizer,
+        rounding=ROUND_HALF_UP,
+    )
+    return BuilderVisualWalkerLayoutResult(
+        raan_spacing_deg=float(raan_spacing),
+        phase_offset_deg=float(phase_offset),
+    )
 
 
 class BuilderVisualDraftCommandRequest(_BuilderVisualModel):

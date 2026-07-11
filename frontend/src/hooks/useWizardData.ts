@@ -24,6 +24,7 @@ import type {
   WizardConstellationCapability,
   WizardConstellationGeometry,
   OrbitModel,
+  WalkerPattern,
 } from "../catalog/wizardTypes";
 
 export interface WizardData {
@@ -31,6 +32,7 @@ export interface WizardData {
   customConstellationCapability: WizardConstellationCapability | null;
   customConstellationSeed: WizardConstellationGeometry | null;
   customConstellationDefaultNode: string | null;
+  customConstellationPatterns: WalkerPattern[];
   orbitModels: OrbitModel[];
   rules: ExtensionRules | null;
   satelliteTypes: SatelliteTypePreset[];
@@ -46,6 +48,8 @@ export function useWizardData(): WizardData {
     useState<WizardConstellationGeometry | null>(null);
   const [customConstellationDefaultNode, setCustomConstellationDefaultNode] =
     useState<string | null>(null);
+  const [customConstellationPatterns, setCustomConstellationPatterns] =
+    useState<WalkerPattern[]>([]);
   const [orbitModels, setOrbitModels] = useState<OrbitModel[]>([]);
   const [rules, setRules] = useState<ExtensionRules | null>(null);
   const [satelliteTypes, setSatelliteTypes] = useState<SatelliteTypePreset[]>([]);
@@ -59,6 +63,7 @@ export function useWizardData(): WizardData {
         setCustomConstellationCapability(data.custom_geometry);
         setCustomConstellationSeed(data.custom_geometry_seed);
         setCustomConstellationDefaultNode(data.custom_geometry_default_node);
+        setCustomConstellationPatterns([...data.custom_geometry_patterns]);
         setOrbitModels([...data.orbit_models]);
       })
       .catch(() => {});
@@ -85,6 +90,7 @@ export function useWizardData(): WizardData {
     customConstellationCapability,
     customConstellationSeed,
     customConstellationDefaultNode,
+    customConstellationPatterns,
     orbitModels,
     rules,
     satelliteTypes,

@@ -4,6 +4,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   CatalogComponentDraftEnvelope,
   CatalogComponentFamily,
+  CatalogDraftAddNodeEthernetPortRequest,
+  CatalogDraftAddNodeTerminalMountRequest,
+  CatalogDraftAddSiteNodeRequest,
   CatalogDraftPatchRequest,
   CatalogDraftReplaceObjectRequest,
   CatalogDraftSaveResult,
@@ -14,6 +17,9 @@ import type { CatalogDraftEditorRecovery } from "../structuredDraftRecovery";
 import { AUTHORING_FACTS } from "./fixtures/authoringFacts";
 
 const mocks = vi.hoisted(() => ({
+  addCatalogDraftNodeEthernet: vi.fn(),
+  addCatalogDraftNodeTerminal: vi.fn(),
+  addCatalogDraftSiteNode: vi.fn(),
   patchCatalogDraft: vi.fn(),
   replaceCatalogDraftObject: vi.fn(),
   compileCatalogDraft: vi.fn(),
@@ -21,6 +27,9 @@ const mocks = vi.hoisted(() => ({
   getCatalogDependents: vi.fn(),
 }));
 const {
+  addCatalogDraftNodeEthernet,
+  addCatalogDraftNodeTerminal,
+  addCatalogDraftSiteNode,
   patchCatalogDraft,
   replaceCatalogDraftObject,
   compileCatalogDraft,
@@ -33,8 +42,21 @@ vi.mock("../builderApiClient", () => ({
 }));
 
 vi.mock("../useBuilderWorld", () => ({
-  useBuilderCatalog: () => ({
-    entries: [],
+  useBuilderCatalog: (family: string) => ({
+    entries: family === "nodes"
+      ? [
+          { ref: "nodalarc:nodes/ground/first.yaml", display_name: "First model" },
+          { ref: "nodalarc:nodes/ground/selected.yaml", display_name: "Selected model" },
+        ]
+      : family === "terminals"
+        ? [
+            {
+              ref: "nodalarc:terminals/rf/selected.yaml",
+              namespace: "nodalarc",
+              display_name: "Selected terminal",
+            },
+          ]
+      : [],
     error: null,
     refresh: () => Promise.resolve(),
   }),
@@ -186,6 +208,65 @@ function saveResult(
 }
 
 function installHappyPath() {
+  addCatalogDraftNodeTerminal.mockImplementation(
+    async (request: CatalogDraftAddNodeTerminalMountRequest) => {
+      const document = structuredClone(request.draft.document) as Record<string, any>;
+      document.node.terminals = [
+        ...(document.node.terminals ?? []),
+        {
+          id: `${request.role}_0`,
+          role: request.role,
+          terminal: request.terminal_ref,
+          count: 1,
+          ...(request.role === "access" ? { boresight: { mode: "nadir" } } : {}),
+        },
+      ];
+      return {
+        ...request.draft,
+        draft_revision: request.draft.draft_revision + 1,
+        document,
+        issues: [],
+      };
+    },
+  );
+  addCatalogDraftNodeEthernet.mockImplementation(
+    async (request: CatalogDraftAddNodeEthernetPortRequest) => {
+      const document = structuredClone(request.draft.document) as Record<string, any>;
+      document.node.ethernet = [...(document.node.ethernet ?? []), { id: "terr0" }];
+      return {
+        ...request.draft,
+        draft_revision: request.draft.draft_revision + 1,
+        document,
+        issues: [],
+      };
+    },
+  );
+  addCatalogDraftSiteNode.mockImplementation(
+    async (request: CatalogDraftAddSiteNodeRequest) => {
+      const document = structuredClone(request.draft.document) as Record<string, any>;
+      document.site.nodes = [
+        ...(document.site.nodes ?? []),
+        {
+          id: request.node_id,
+          model: request.node_ref,
+          payloads: {},
+          terminals: {
+            access: {
+              installed_count: 2,
+              capabilities: { boresight: { mode: "local_vertical" } },
+            },
+          },
+          interfaces: { lo0: { ipv4: "" }, terr0: { ipv4: "" } },
+        },
+      ];
+      return {
+        ...request.draft,
+        draft_revision: request.draft.draft_revision + 1,
+        document,
+        issues: [],
+      };
+    },
+  );
   patchCatalogDraft.mockImplementation(async (request: CatalogDraftPatchRequest) =>
     applyPatch(request),
   );
@@ -238,6 +319,99 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("CatalogDraftEditorWindow", () => {
+  it("sends node creation intent and adopts backend-generated mount and port fields", async () => {
+    render(
+      <CatalogDraftEditorWindow
+        initialDraft={draft("nodes", {
+          forwarding: "routed",
+          ethernet: [],
+          terminals: [],
+          payloads: [],
+        })}
+        metadata={metadata("nodes")}
+        onSaved={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("new mount terminal"), {
+      target: { value: "nodalarc:terminals/rf/selected.yaml" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "+ terminal mount" }));
+    await waitFor(() => expect(addCatalogDraftNodeTerminal).toHaveBeenCalledTimes(1));
+    expect(addCatalogDraftNodeTerminal.mock.calls[0]![0]).toMatchObject({
+      expected_draft_revision: 0,
+      terminal_ref: "nodalarc:terminals/rf/selected.yaml",
+      role: "access",
+    });
+    expect(addCatalogDraftNodeTerminal.mock.calls[0]![0]).not.toHaveProperty("id");
+    expect(addCatalogDraftNodeTerminal.mock.calls[0]![0]).not.toHaveProperty("count");
+    expect(addCatalogDraftNodeTerminal.mock.calls[0]![0]).not.toHaveProperty("boresight");
+    expect(await screen.findByText("access_0")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "+ LAN port" }));
+    await waitFor(() => expect(addCatalogDraftNodeEthernet).toHaveBeenCalledTimes(1));
+    expect(addCatalogDraftNodeEthernet.mock.calls[0]![0]).toMatchObject({
+      expected_draft_revision: 1,
+    });
+    expect(addCatalogDraftNodeEthernet.mock.calls[0]![0]).not.toHaveProperty("port_id");
+    expect((await screen.findByLabelText("LAN port") as HTMLInputElement).value).toBe("terr0");
+  });
+
+  it("requires explicit site-node intent and adopts the backend-derived document", async () => {
+    render(
+      <CatalogDraftEditorWindow
+        initialDraft={draft("sites", {
+          lan: { ipv4: "172.30.0.0/24" },
+          nodes: [],
+          frame: { body_fixed: { body: "nodalarc:bodies/earth.yaml" } },
+          location: { lat_deg: 0, lon_deg: 0, alt_m: 0 },
+        })}
+        metadata={metadata("sites")}
+        onSaved={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    const addButton = screen.getByRole("button", { name: "+ add node" }) as HTMLButtonElement;
+    expect(addButton.disabled).toBe(true);
+    fireEvent.change(screen.getByLabelText("node id"), {
+      target: { value: "edge-router" },
+    });
+    expect(addButton.disabled).toBe(true);
+    fireEvent.change(screen.getByLabelText("New site node model"), {
+      target: { value: "nodalarc:nodes/ground/selected.yaml" },
+    });
+    expect(addButton.disabled).toBe(false);
+    fireEvent.click(addButton);
+
+    await waitFor(() => expect(addCatalogDraftSiteNode).toHaveBeenCalledTimes(1));
+    expect(addCatalogDraftSiteNode.mock.calls[0]![0]).toMatchObject({
+      expected_draft_revision: 0,
+      node_id: "edge-router",
+      node_ref: "nodalarc:nodes/ground/selected.yaml",
+    });
+    expect(addCatalogDraftSiteNode.mock.calls[0]![0]).not.toHaveProperty("terminals");
+    await waitFor(() => expect(screen.getByText("edge-router")).toBeTruthy());
+    expect((screen.getByLabelText("access") as HTMLInputElement).value).toBe("2");
+  });
+
+  it("does not interpret inline objects as site-set members", () => {
+    render(
+      <CatalogDraftEditorWindow
+        initialDraft={draft("site-sets", {
+          sites: [{ site: { id: "legacy-inline", display_name: "Legacy inline site" } }],
+        })}
+        metadata={metadata("site-sets")}
+        onSaved={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("invalid site reference 1")).toBeTruthy();
+    expect(screen.queryByText("Legacy inline site")).toBeNull();
+  });
+
   it("patches only the edited terminal field and preserves every advanced source field", async () => {
     const initial = draft("terminals", {
       medium: "rf",

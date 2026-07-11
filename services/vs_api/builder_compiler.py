@@ -19,7 +19,7 @@ from nodalarc.catalog_closure import (
 )
 from nodalarc.catalog_paths import CatalogRoots
 from nodalarc.catalog_refs import CatalogFamily, CatalogRef
-from nodalarc.catalog_registry import catalog_family_spec
+from nodalarc.catalog_registry import validate_referenced_configuration_document
 from nodalarc.catalog_repository import (
     CatalogNotFoundError,
     CatalogReadSnapshot,
@@ -82,22 +82,13 @@ def canonicalize_persisted_configuration(
     """Validate and canonicalize one full persisted configuration document."""
 
     family = cast(CatalogFamily, ref.family)
-    spec = catalog_family_spec(family)
-    model = spec.validate_document(document)
-    identity = model.session.name if family == "sessions" else getattr(model, "id", None)
-    if identity != ref.relative_path.stem:
-        field = "session.name" if family == "sessions" else "object id"
-        raise ValueError(
-            f"{field} {identity!r} must match target filename {ref.relative_path.stem!r}"
-        )
+    wrapper, model = validate_referenced_configuration_document(ref, document)
 
     normalized = cast(
         JsonDocument,
         model.model_dump(mode="json", by_alias=True, exclude_none=True),
     )
-    canonical_json: JsonDocument = (
-        normalized if spec.wrapper is None else {spec.wrapper: normalized}
-    )
+    canonical_json: JsonDocument = normalized if wrapper is None else {wrapper: normalized}
     yaml_bytes = _canonical_yaml(canonical_json)
     return CanonicalConfigurationDocument(
         ref=ref,

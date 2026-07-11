@@ -21,6 +21,7 @@ from pydantic import TypeAdapter
 
 ROOT = Path(__file__).resolve().parents[2]
 GUIDE = ROOT / "docs" / "ops" / "configuration.md"
+GRAMMAR = ROOT / "docs" / "ops" / "configuration-grammar.md"
 SESSIONS_GUIDE = ROOT / "docs" / "user" / "sessions.md"
 ROUTING_EXTENSION_GUIDE = ROOT / "docs" / "dev" / "extending" / "routing-stacks.md"
 REACHABILITY_SESSION = (
@@ -43,6 +44,10 @@ def _first_yaml_block(path: Path):
     return load_configuration_yaml(text.split("```yaml\n", 1)[1].split("\n```", 1)[0])
 
 
+def _guide_yaml_blocks() -> list[str]:
+    return GUIDE.read_text(encoding="utf-8").split("```yaml\n")[1:]
+
+
 def test_complete_session_example_resolves_through_the_shared_authority() -> None:
     document = _yaml_block("## A complete session")
     shipped = load_configuration_yaml(SIMPLE_SESSION.read_text(encoding="utf-8"))
@@ -63,6 +68,31 @@ def test_configuration_guide_defers_the_formal_language_to_one_reference() -> No
     assert "[Configuration Grammar](configuration-grammar.md)" in text
     assert "not an independent field list or a\nsecond grammar" in text
     assert "```ebnf" not in text
+
+
+def test_configuration_grammar_special_sequences_have_balanced_iso_delimiters() -> None:
+    in_ebnf = False
+    for line_number, line in enumerate(
+        GRAMMAR.read_text(encoding="utf-8").splitlines(),
+        start=1,
+    ):
+        if line == "```ebnf":
+            in_ebnf = True
+            continue
+        if in_ebnf and line == "```":
+            in_ebnf = False
+            continue
+        if in_ebnf:
+            assert line.count("?") % 2 == 0, (
+                f"unbalanced ISO EBNF special-sequence delimiter at {GRAMMAR}:{line_number}"
+            )
+
+
+def test_configuration_grammar_documents_nullable_spf_learning_fields() -> None:
+    text = GRAMMAR.read_text(encoding="utf-8")
+
+    assert '[ "holddown_ms", ( NonNegativeInteger | Null ) ]' in text
+    assert '[ "time_to_learn_ms", ( NonNegativeInteger | Null ) ]' in text
 
 
 def test_shipped_session_guide_inventory_matches_the_catalog() -> None:
@@ -98,6 +128,7 @@ def test_routing_extension_example_is_valid_after_registering_its_protocol() -> 
 
 
 def test_component_and_partial_session_examples_are_structurally_valid() -> None:
+    assert len(_guide_yaml_blocks()) == 8
     node_document = _yaml_block("## Sites, nodes, terminals, and addresses", 0)
     site_document = _yaml_block("## Sites, nodes, terminals, and addresses", 1)
     segments = _yaml_block("## Segments")

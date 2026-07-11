@@ -28,19 +28,13 @@ import {
 } from "./editorKit";
 import { SegmentLinksCard } from "./SegmentLinksCard";
 import { SiteEditor } from "./SiteEditor";
-import {
-  readCatalogObject,
-  useBuilderCatalog,
-} from "./useBuilderWorld";
+import { useBuilderCatalog } from "./useBuilderWorld";
 import {
   groundWarnings,
-  mintSiteMembers,
-  nextMintIndex,
   parseSiteLines,
   refGroundMember,
-  stampLanPrefix,
-  stampLoopbackAddress,
   type DraftGroundSet,
+  type ParsedSiteLine,
   type Workspace,
 } from "./workspace";
 import type {
@@ -55,6 +49,10 @@ interface GroundEditorProps {
    *  render-closure, so a concurrent edit during an in-flight model fetch
    *  survives. */
   onUpdate: (update: (prev: DraftGroundSet) => DraftGroundSet) => void;
+  onMintSites: (sites: ParsedSiteLine[]) => Promise<void>;
+  onSetStampNodeModel: (ref: string) => Promise<void>;
+  onSetSiteNodeModel: (memberId: string, nodeId: string, ref: string) => Promise<void>;
+  onAddSiteNode: (memberId: string) => Promise<void>;
   onRemove: () => void;
   /** focus the name when a create gesture opened this editor. */
   autoFocusName?: boolean;
@@ -83,6 +81,10 @@ function tokenList(value: string): string[] {
 export function GroundEditor({
   draft,
   onUpdate,
+  onMintSites,
+  onSetStampNodeModel,
+  onSetSiteNodeModel,
+  onAddSiteNode,
   onRemove,
   autoFocusName = false,
   workspace,
@@ -104,6 +106,7 @@ export function GroundEditor({
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [editingMember, setEditingMember] = useState<string | null>(null);
   const [editorError, setEditorError] = useState<string | null>(null);
+  const [minting, setMinting] = useState(false);
   const warnings = groundWarnings(draft);
 
   const setSchedulingPreset = (
@@ -116,12 +119,20 @@ export function GroundEditor({
     );
   };
 
-  const addPastedSites = () => {
+  const addPastedSites = async () => {
     const { rows, errors } = parseSiteLines(pasteText);
     setPasteErrors(errors);
     if (rows.length > 0) {
-      onUpdate((prev) => ({ ...prev, members: [...prev.members, ...mintSiteMembers(prev, rows)] }));
-      setPasteText("");
+      setMinting(true);
+      setEditorError(null);
+      try {
+        await onMintSites(rows);
+        setPasteText("");
+      } catch (cause) {
+        setEditorError(cause instanceof Error ? cause.message : String(cause));
+      } finally {
+        setMinting(false);
+      }
     }
   };
 
@@ -138,35 +149,10 @@ export function GroundEditor({
     }));
   };
 
-  // Switching the stamp model re-seeds its mounts — affects future mints only.
   const setStampModel = async (ref: string) => {
     setEditorError(null);
     try {
-      const { document } = await readCatalogObject(ref);
-      const node = (document as { node?: Record<string, unknown> }).node;
-      const terminalMounts =
-        (node?.terminals as Record<string, unknown>[] | undefined) ?? [];
-      const mounts = terminalMounts.map((mount) => {
-        if (typeof mount.count !== "number") {
-          throw new Error(`node terminal mount ${String(mount.id)} has no installed count`);
-        }
-        return [String(mount.id), mount.count] as const;
-      });
-      const boresights = terminalMounts
-        .filter((mount) => mount.role === "access")
-        .map(
-          (mount) =>
-            [String(mount.id), { ...authoring.ground_access_boresight }] as const,
-        );
-      onUpdate((prev) => ({
-        ...prev,
-        stamp: {
-          ...prev.stamp,
-          node_ref: ref,
-          installed: Object.fromEntries(mounts),
-          boresights: Object.fromEntries(boresights),
-        },
-      }));
+      await onSetStampNodeModel(ref);
     } catch (e) {
       setEditorError(e instanceof Error ? e.message : String(e));
     }
@@ -276,6 +262,10 @@ export function GroundEditor({
                       <SiteEditor
                         authoring={authoring}
                         site={member.site}
+                        onSetNodeModel={(nodeId, ref) =>
+                          onSetSiteNodeModel(member.member_id, nodeId, ref)
+                        }
+                        onAddNode={() => onAddSiteNode(member.member_id)}
                         onUpdate={(update) =>
                           // Thread SiteEditor's functional update through the
                           // ground's own — find the member in the LATEST members
@@ -308,8 +298,11 @@ export function GroundEditor({
               </div>
             ))}
             <div className="builder-preset-row">
-              <Button onClick={addPastedSites} disabled={pasteText.trim().length === 0}>
-                + mint pasted sites
+              <Button
+                onClick={() => void addPastedSites()}
+                disabled={pasteText.trim().length === 0 || minting}
+              >
+                {minting ? "minting…" : "+ mint pasted sites"}
               </Button>
               <Button active={libraryOpen} onClick={() => setLibraryOpen((open) => !open)}>
                 from library…
@@ -440,11 +433,7 @@ export function GroundEditor({
               }
             />
             <div className="builder-site-derived">
-              {/* The preview must read the SAME next index the mint uses
-                  (nextMintIndex), never a literal 0 — otherwise it lies once the
-                  segment already holds stamp-shaped members. */}
-              next minted site: lan {stampLanPrefix(draft.stamp, nextMintIndex(draft))}, lo0{" "}
-              {stampLoopbackAddress(draft.stamp, nextMintIndex(draft))} …
+              VS-API allocates each minted site's LAN, terr0, and lo0 from this stamp.
             </div>
       </EditorCard>
 

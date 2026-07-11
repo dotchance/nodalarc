@@ -11,9 +11,7 @@ import {
   groundWarnings,
   isCurrentWorkspace,
   linkWarnings,
-  mintSiteMembers,
   newRefSegment,
-  nextMintIndex,
   parseSiteLines,
   reseedCounters,
   routingWarnings,
@@ -24,6 +22,7 @@ import {
   newDraftConstellation,
   newDraftGroundSet,
   newWorkspace,
+  testGroundMember,
 } from "./fixtures/workspaceFixtures";
 
 const SPACE_NODE = "nodalarc:nodes/space/test.yaml";
@@ -65,30 +64,18 @@ describe("workspace interaction state", () => {
 });
 
 describe("ground interaction helpers", () => {
-  it("parses site rows and mints explicit site objects with owned addresses", () => {
-    const ground = newDraftGroundSet(
-      GROUND_NODE,
-      { access: 1 },
-      EARTH_BODY_REF,
-      { access: { mode: "local_vertical" } },
-    );
+  it("parses typed site-location intent without allocating configuration", () => {
     const parsed = parseSiteLines("Denver, 39.7, -104.9\nPerth, -31.9, 115.8");
     expect(parsed.errors).toEqual([]);
-    ground.members = mintSiteMembers(ground, parsed.rows);
-    expect(ground.members).toHaveLength(2);
-    expect(ground.members[0]?.site?.body).toBe(EARTH_BODY_REF);
-    expect(ground.members[0]?.site?.lan_ipv4).not.toBe(
-      ground.members[1]?.site?.lan_ipv4,
-    );
-    expect(nextMintIndex(ground)).toBe(2);
-    expect(ground.members[0]?.site?.nodes[0]?.boresights).toEqual({
-      access: { mode: "local_vertical" },
-    });
+    expect(parsed.rows).toEqual([
+      { name: "Denver", lat_deg: 39.7, lon_deg: -104.9, alt_m: 0 },
+      { name: "Perth", lat_deg: -31.9, lon_deg: 115.8, alt_m: 0 },
+    ]);
   });
 
   it("keeps local guidance advisory while backend compile owns save refusal", () => {
     const ground = newDraftGroundSet(GROUND_NODE, {});
-    ground.members = mintSiteMembers(ground, parseSiteLines("Bad, 95, 181").rows);
+    ground.members = [testGroundMember(ground, "Bad", 95, 181)];
     expect(groundWarnings(ground).join(" ")).toMatch(/latitude|longitude/);
   });
 

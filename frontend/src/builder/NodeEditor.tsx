@@ -31,20 +31,14 @@ function terminalShortName(ref: string): string {
   return ref.split("/").pop()?.replace(".yaml", "") ?? ref;
 }
 
-function nextMountId(draft: DraftNode, role: string): string {
-  const taken = new Set(draft.terminals.map((m) => m.mount_id));
-  for (let index = 0; ; index++) {
-    const candidate = index === 0 ? `${role}_0` : `${role}_${index}`;
-    if (!taken.has(candidate)) return candidate;
-  }
-}
-
 interface NodeEditorProps {
   draft: DraftNode;
   /** Functional-only: the caller reads the LATEST draft, never a stale
    *  render-closure, so a concurrent edit during an in-flight fetch (mounting a
    *  freshly imported/authored terminal) survives. */
   onChange: (update: (prev: DraftNode) => DraftNode) => void;
+  onAddTerminal: (terminalRef: string, role: DraftTerminalMount["role"]) => void;
+  onAddEthernet: () => void;
   /** focus the name when a create gesture opened this editor. */
   autoFocusName?: boolean;
   authoring: BuilderVisualAuthoringFacts;
@@ -53,6 +47,8 @@ interface NodeEditorProps {
 export function NodeEditor({
   draft,
   onChange,
+  onAddTerminal,
+  onAddEthernet,
   autoFocusName = false,
   authoring,
 }: NodeEditorProps) {
@@ -65,35 +61,7 @@ export function NodeEditor({
   const [pickerSource, setPickerSource] = useState<"all" | "user">("all");
 
   const addOrIncrement = (terminalRef: string) => {
-    onChange((prev) => {
-      const existing = prev.terminals.find(
-        (m) => m.terminal_ref === terminalRef && m.role === pickerRole,
-      );
-      if (existing) {
-        return {
-          ...prev,
-          terminals: prev.terminals.map((m) =>
-            m === existing ? { ...m, count: m.count + 1 } : m,
-          ),
-        };
-      }
-      return {
-        ...prev,
-        terminals: [
-          ...prev.terminals,
-          {
-            mount_id: nextMountId(prev, pickerRole),
-            role: pickerRole,
-            terminal_ref: terminalRef,
-            count: 1,
-            boresight:
-              pickerRole === "access"
-                ? { ...authoring.space_access_boresight }
-                : null,
-          },
-        ],
-      };
-    });
+    onAddTerminal(terminalRef, pickerRole);
   };
 
   const updateMount = (mountId: string, patch: Partial<DraftTerminalMount>) => {
@@ -255,16 +223,7 @@ export function NodeEditor({
       </div>
       <div className="builder-preset-row">
         <Button onClick={() => setPickerOpen((v) => !v)}>+ port</Button>
-        <Button
-          onClick={() =>
-            onChange((prev) => {
-              const taken = new Set(prev.ethernet);
-              let index = 0;
-              while (taken.has(`terr${index}`)) index++;
-              return { ...prev, ethernet: [...prev.ethernet, `terr${index}`] };
-            })
-          }
-        >
+        <Button onClick={onAddEthernet}>
           + lan
         </Button>
       </div>

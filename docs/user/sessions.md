@@ -23,9 +23,10 @@ A session is assembled from reusable catalog building blocks:
 - **link rules** — which segment endpoints may form candidate links, and how
   candidates are chosen.
 - **addressing** — address pools for generated nodes (satellites).
-- **routing** — one or more routing domains, each running its own protocol
-  (`isis`, `ospf`, `bgp`, or `static`) over the nodes it selects, with boundaries
-  redistributing between them. A single session can mix protocols.
+- **routing** — one or more routing domains over selected nodes, with boundaries
+  redistributing between them. The grammar defines `isis`, `ospf`, `bgp`, and
+  `static`; the current runtime executes `isis`, `ospf`, and `static` and rejects
+  `bgp` before deployment. A supported session can mix protocols.
 - **time** — simulation start time, step size, and compression.
 
 A link rule says a link is *allowed to be considered*. It does not force the link
@@ -103,8 +104,12 @@ time:
   compression: 1
 ```
 
-You do not author runtime node ids — each node gets one derived from its
-segment, kept short and safe for the routing fabric.
+You do not author runtime node ids directly. Space-node ids are derived from
+the normalized space-segment id and local space-node id. Ground-node ids are
+derived from the normalized catalog site id and its site-owned node id, so a
+ground node keeps the same runtime identity regardless of which ground segment
+places its site. All runtime ids must be globally unique, lower-case DNS-label
+safe, and no longer than 63 characters.
 
 ## Segments
 
@@ -150,19 +155,21 @@ Topology modes:
 | Mode | Meaning |
 |------|---------|
 | `visible_candidates` | Evaluate every visible candidate under the rule, bounded by candidate limits. |
-| `nearest_n` | Build a static candidate set from the nearest `n` endpoint pairs. |
+| `nearest_n` | Rank pairs by physical distance and greedily cap each selected node at `n` candidates; a node may receive fewer when a peer's cap is already full. |
 | `explicit_pairs` | Use the exact declared candidate pairs. |
 
 ## Ground handoff policy
 
-Ground handoff is a property of a ground node, set in the segment's
-`apply.scheduling` (or a per-site override), not the whole session.
+Ground handoff is a property of a ground node. Segment `apply.scheduling`
+supplies the base policy, a ground override may replace it for one site, and
+site-node scheduling may override individual fields.
 
-A node with one usable terminal must use break-before-make. A node with multiple
-compatible terminals can use make-before-break by reserving enough terminal
-capacity for overlap. The allocator never invents overlap where terminal capacity
-does not exist — a configuration that asks for make-before-break without enough
-terminals is reduced to the truthful behavior rather than faked.
+A node with only one unit of usable access-terminal capacity must use
+break-before-make. Make-before-break requires enough installed access-terminal
+tracking capacity for the active link plus the declared `mbb_reserve`; the
+current runtime supports one reserved overlap. An explicit MBB configuration
+with insufficient capacity is rejected before deployment. NodalArc neither
+invents the overlap nor silently reduces the requested policy to BBM.
 
 How many terminals a node has comes from its catalog node model and how many the
 site installs — not from inline session fields.

@@ -399,7 +399,7 @@ def test_helm_namespace_is_one_runtime_authority() -> None:
     assert '"--set-string=namespace=$NAMESPACE"' in installer
     assert '"--set-string=runtimeRelease=$PROJECT_VERSION"' in installer
     assert "|buildTag|runtimeRelease|namespace)" in installer
-    assert "kubernetes_namespace: {{ .Values.namespace | quote }}" in platform_file
+    assert 'kubernetes_namespace: "{{ .Values.namespace }}"' in platform_file
     assert 'tpl (.Files.Get "files/platform.yaml") .' in platform_configmap
     assert "- {{ .Values.namespace | quote }}" in operator_template
     assert 'ENTRYPOINT ["kopf", "run", "-m", "nodalarc_operator"]' in operator_dockerfile

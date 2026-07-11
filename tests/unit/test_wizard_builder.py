@@ -13,6 +13,7 @@ from nodalarc.models.builder_api import WizardCompileRequest, WizardCoverageRequ
 from vs_api.builder_compiler import compile_builder_draft
 from vs_api.wizard_builder import (
     build_wizard_compile_request,
+    wizard_extension_rules_response,
     wizard_preview_inputs,
     wizard_routing_timer_defaults,
 )
@@ -319,6 +320,29 @@ def test_wizard_timer_defaults_come_from_backend_canonical_defaults() -> None:
     assert defaults.ospf_hello_interval == 1
     assert defaults.ospf_dead_interval == 3
     assert defaults.bfd_detect_multiplier == 3
+
+
+def test_wizard_routing_inventory_and_presentation_are_backend_owned() -> None:
+    facts = wizard_extension_rules_response()
+
+    assert tuple(protocol.id for protocol in facts.protocols) == ("ospf", "isis")
+    assert tuple(extension.id for extension in facts.extensions) == ("te", "mpls", "sr")
+    assert all(protocol.label and protocol.description for protocol in facts.protocols)
+    assert all(protocol.timer_label and protocol.timer_fields for protocol in facts.protocols)
+    assert all(extension.label and extension.description for extension in facts.extensions)
+    assert facts.bfd.heading == "BFD (Bidirectional Forwarding Detection)"
+    assert facts.bfd.enable_label == "Enable BFD"
+    assert tuple(field.id for field in facts.bfd.timer_fields) == (
+        "bfd_detect_multiplier",
+        "bfd_rx_interval",
+        "bfd_tx_interval",
+    )
+    assert all(
+        field.label and field.description and field.guidance for field in facts.bfd.timer_fields
+    )
+    assert next(
+        protocol for protocol in facts.protocols if protocol.id == "ospf"
+    ).non_flat_area_warning
 
 
 def test_custom_coverage_preview_materializes_ref_composed_user_sources(tmp_path: Path) -> None:

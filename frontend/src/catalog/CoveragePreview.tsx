@@ -44,11 +44,8 @@ function severityLabel(severity: string): string {
   }
 }
 
-/** Render a single insight (supports both old string format and new typed format). */
-function Insight({ item }: { item: { severity: string; message: string } | string }) {
-  if (typeof item === "string") {
-    return <div className="wizard-insight wizard-insight--note">{item}</div>;
-  }
+/** Render one backend-typed coverage insight. */
+function Insight({ item }: { item: { severity: string; message: string } }) {
   return (
     <div className={`wizard-insight ${severityClass(item.severity)}`}>
       <span className="wizard-insight-icon">{severityLabel(item.severity)}</span>
@@ -62,10 +59,10 @@ export function CoveragePreview({ result, onContinue, onBack }: CoveragePreviewP
   const fColor = feasibilityColor(isl.feasibility_pct);
 
   // Split insights by severity for ordering: errors first, then warnings, then notes/info
-  const errors = result.warnings.filter((w) => typeof w !== "string" && w.severity === "error");
-  const warnings = result.warnings.filter((w) => typeof w !== "string" && w.severity === "warning");
+  const errors = result.warnings.filter((warning) => warning.severity === "error");
+  const warnings = result.warnings.filter((warning) => warning.severity === "warning");
   const notes = result.warnings.filter(
-    (w) => typeof w === "string" || w.severity === "info" || w.severity === "note",
+    (warning) => warning.severity === "info" || warning.severity === "note",
   );
 
   return (

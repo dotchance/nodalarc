@@ -43,7 +43,12 @@ class NodeSelector(BaseModel):
     ``not`` is complement relative to the selector universe.
     """
 
-    model_config = ConfigDict(frozen=True, extra="forbid", populate_by_name=True)
+    model_config = ConfigDict(
+        frozen=True,
+        extra="forbid",
+        validate_by_alias=True,
+        validate_by_name=False,
+    )
 
     all: tuple[NodeSelector, ...] | None = Field(default=None, min_length=1)
     any: tuple[NodeSelector, ...] | None = Field(default=None, min_length=1)
@@ -69,7 +74,12 @@ class NodeSelector(BaseModel):
 class TerminalSelector(BaseModel):
     """Set expression over terminal mounts on the already-selected node set."""
 
-    model_config = ConfigDict(frozen=True, extra="forbid", populate_by_name=True)
+    model_config = ConfigDict(
+        frozen=True,
+        extra="forbid",
+        validate_by_alias=True,
+        validate_by_name=False,
+    )
 
     all: tuple[TerminalSelector, ...] | None = Field(default=None, min_length=1)
     any: tuple[TerminalSelector, ...] | None = Field(default=None, min_length=1)

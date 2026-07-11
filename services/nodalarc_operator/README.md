@@ -6,6 +6,12 @@ write wiring manifests, restart platform pods on session switch.
 
 ## CRD: ConstellationSpec
 
+VS-API creates the resource after uploading the session's referenced catalog
+YAML files as namespaced ConfigMaps. `sessionYaml` remains the exact root
+session document; `catalogUpload` selects the uploaded ordinary-YAML closure
+that contains every referenced `nodalarc:` and `user:` object. The values below
+illustrate the generated CR shape.
+
 ```yaml
 apiVersion: nodalarc.io/v1alpha1
 kind: ConstellationSpec
@@ -40,7 +46,14 @@ spec:
                 - role: access
                 - medium: rf
     ...
+  catalogUpload:
+    upload_id: session-7f3a2c
+    closure_digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+    file_count: 17
 ```
 
 Singleton — only `current-session` is allowed. The Operator handles the
-11-step session switch sequence.
+session switch sequence. It verifies the selected uploaded YAML files and their
+closure digest, resolves them with `sessionYaml` through the shared resolver,
+and refuses a CR that omits `catalogUpload` or references an incomplete or
+altered closure.

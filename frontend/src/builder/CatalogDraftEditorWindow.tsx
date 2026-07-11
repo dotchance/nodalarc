@@ -7,7 +7,7 @@
  * validation, and CAS storage remain backend authority.
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button, IconButton } from "../ui/Button";
 import {
   BodySelect,
@@ -19,6 +19,9 @@ import {
   SelectField,
 } from "./editorKit";
 import {
+  addCatalogDraftNodeEthernet,
+  addCatalogDraftNodeTerminal,
+  addCatalogDraftSiteNode,
   compileCatalogDraft,
   getCatalogDependents,
   patchCatalogDraft,
@@ -293,12 +296,30 @@ interface SpecializedFormProps {
   authoring: BuilderVisualAuthoringFacts;
 }
 
-function NodeForm({ document, wrapper, setValue, authoring }: SpecializedFormProps) {
+interface NodeFormProps extends SpecializedFormProps {
+  addTerminalMount: (
+    role: BuilderVisualAuthoringFacts["default_mount_role"],
+    terminalRef: string,
+  ) => Promise<boolean>;
+  addEthernetPort: () => Promise<boolean>;
+}
+
+function NodeForm({
+  document,
+  wrapper,
+  setValue,
+  authoring,
+  addTerminalMount,
+  addEthernetPort,
+}: NodeFormProps) {
   const root = `/${escapePointerToken(wrapper)}`;
   const terminals = useBuilderCatalog("terminals");
   const mounts = arrayValue(valueAt(document, `${root}/terminals`));
   const ethernet = arrayValue(valueAt(document, `${root}/ethernet`));
   const forwarding = text(valueAt(document, `${root}/forwarding`));
+  const [newMountRole, setNewMountRole] = useState(authoring.default_mount_role);
+  const [newMountTerminal, setNewMountTerminal] = useState("");
+  const [adding, setAdding] = useState(false);
   const replaceMount = (index: number, field: string, value: JsonValue) => {
     const next = cloneJson(mounts);
     const mount = isObject(next[index]) ? next[index] as JsonObject : {};
@@ -378,27 +399,48 @@ function NodeForm({ document, wrapper, setValue, authoring }: SpecializedFormPro
         );
       })}
       <div className="builder-preset-row">
+        <SelectField
+          label="new mount role"
+          value={newMountRole}
+          onChange={(value) =>
+            setNewMountRole(value as BuilderVisualAuthoringFacts["default_mount_role"])
+          }
+          options={authoring.mount_roles.map((choice) => ({
+            value: choice.id,
+            label: choice.label,
+          }))}
+        />
+        <SelectField
+          stack
+          label="new mount terminal"
+          value={newMountTerminal}
+          onChange={setNewMountTerminal}
+          options={[
+            { value: "", label: "select terminal", disabled: true },
+            ...terminals.entries.map((entry) => ({
+              value: entry.ref,
+              label: `${entry.namespace === "user" ? "★ " : ""}${entry.display_name}`,
+            })),
+          ]}
+        />
+      </div>
+      <div className="builder-preset-row">
         <Button
+          disabled={adding || !newMountTerminal}
           onClick={() => {
-            const taken = new Set(mounts.map((value) => isObject(value) ? text(value.id) : ""));
-            let index = 0;
-            while (taken.has(`mount-${index}`)) index += 1;
-            setValue(`${root}/terminals`, [
-              ...mounts,
-              {
-                id: `mount-${index}`,
-                role: authoring.default_mount_role,
-                terminal: "",
-                count: authoring.default_terminal_mount_count,
-              },
-            ]);
+            setAdding(true);
+            void addTerminalMount(newMountRole, newMountTerminal).finally(() =>
+              setAdding(false),
+            );
           }}
         >
           + terminal mount
         </Button>
         <Button
+          disabled={adding}
           onClick={() => {
-            setValue(`${root}/ethernet`, [...ethernet, { id: "" }]);
+            setAdding(true);
+            void addEthernetPort().finally(() => setAdding(false));
           }}
         >
           + LAN port
@@ -436,11 +478,18 @@ function NodeForm({ document, wrapper, setValue, authoring }: SpecializedFormPro
   );
 }
 
-function SiteForm({ document, wrapper, setValue }: SpecializedFormProps) {
+interface SiteFormProps extends SpecializedFormProps {
+  addNode: (nodeId: string, nodeRef: string) => Promise<boolean>;
+}
+
+function SiteForm({ document, wrapper, setValue, addNode }: SiteFormProps) {
   const root = `/${escapePointerToken(wrapper)}`;
   const bodies = useBuilderCatalog("bodies");
   const nodes = useBuilderCatalog("nodes");
   const installedNodes = arrayValue(valueAt(document, `${root}/nodes`));
+  const [newNodeId, setNewNodeId] = useState("");
+  const [newNodeRef, setNewNodeRef] = useState("");
+  const [addingNode, setAddingNode] = useState(false);
   const replaceNode = (index: number, update: (node: JsonObject) => void) => {
     const next = cloneJson(installedNodes);
     const node = isObject(next[index]) ? next[index] as JsonObject : {};
@@ -573,25 +622,42 @@ function SiteForm({ document, wrapper, setValue }: SpecializedFormProps) {
           </EditorCard>
         );
       })}
-      <Button
-        onClick={() => {
-          const taken = new Set(installedNodes.map((value) => isObject(value) ? text(value.id) : ""));
-          let index = 1;
-          while (taken.has(`gw${index}`)) index += 1;
-          setValue(`${root}/nodes`, [
-            ...installedNodes,
-            {
-              id: `gw${index}`,
-              model: nodes.entries[0]?.ref ?? "",
-              payloads: {},
-              terminals: {},
-              interfaces: { lo0: { ipv4: "" }, terr0: { ipv4: "" } },
-            },
-          ]);
-        }}
-      >
-        + add node
-      </Button>
+      <EditorCard title="Add installed node" open>
+        <Field
+          label="node id"
+          value={newNodeId}
+          placeholder="for example, gw1"
+          onChange={setNewNodeId}
+        />
+        <SelectField
+          stack
+          label="node model"
+          ariaLabel="New site node model"
+          value={newNodeRef}
+          onChange={setNewNodeRef}
+          options={[
+            { value: "", label: "select a node model" },
+            ...nodes.entries.map((entry) => ({
+              value: entry.ref,
+              label: entry.display_name ?? entry.ref,
+            })),
+          ]}
+        />
+        <Button
+          disabled={addingNode || !newNodeId.trim() || !newNodeRef}
+          onClick={() => {
+            setAddingNode(true);
+            void addNode(newNodeId.trim(), newNodeRef).then((added) => {
+              if (added) {
+                setNewNodeId("");
+                setNewNodeRef("");
+              }
+            }).finally(() => setAddingNode(false));
+          }}
+        >
+          {addingNode ? "Adding…" : "+ add node"}
+        </Button>
+      </EditorCard>
     </div>
   );
 }
@@ -608,11 +674,7 @@ function SiteSetForm({ document, wrapper, setValue }: SpecializedFormProps) {
         onChange={(value) => setValue(`${root}/display_name`, value)}
       />
       {members.map((member, index) => {
-        const label = typeof member === "string"
-          ? member
-          : isObject(member) && isObject(member.site)
-            ? text(member.site.display_name, text(member.site.id, `inline site ${index + 1}`))
-            : `site ${index + 1}`;
+        const label = typeof member === "string" ? member : `invalid site reference ${index + 1}`;
         return (
           <div className="builder-library-entry" key={`${label}:${index}`}>
             <span className="builder-outline-name">{label}</span>
@@ -799,6 +861,76 @@ export function CatalogDraftEditorWindow({
     return patched;
   };
 
+  const addSiteNode = async (nodeId: string, nodeRef: string): Promise<boolean> => {
+    setBusy("validating");
+    setError(null);
+    try {
+      const patched = await flush(workingDocument);
+      const updated = await addCatalogDraftSiteNode({
+        draft: patched,
+        expected_draft_revision: patched.draft_revision,
+        node_id: nodeId,
+        node_ref: nodeRef,
+      });
+      setDraft(updated);
+      setWorkingDocument(updated.document);
+      setCompileResult(null);
+      return true;
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+      return false;
+    } finally {
+      setBusy("idle");
+    }
+  };
+
+  const addNodeTerminalMount = async (
+    role: BuilderVisualAuthoringFacts["default_mount_role"],
+    terminalRef: string,
+  ): Promise<boolean> => {
+    setBusy("validating");
+    setError(null);
+    try {
+      const patched = await flush(workingDocument);
+      const updated = await addCatalogDraftNodeTerminal({
+        draft: patched,
+        expected_draft_revision: patched.draft_revision,
+        terminal_ref: terminalRef,
+        role,
+      });
+      setDraft(updated);
+      setWorkingDocument(updated.document);
+      setCompileResult(null);
+      return true;
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+      return false;
+    } finally {
+      setBusy("idle");
+    }
+  };
+
+  const addNodeEthernetPort = async (): Promise<boolean> => {
+    setBusy("validating");
+    setError(null);
+    try {
+      const patched = await flush(workingDocument);
+      const updated = await addCatalogDraftNodeEthernet({
+        draft: patched,
+        expected_draft_revision: patched.draft_revision,
+      });
+      setDraft(updated);
+      setWorkingDocument(updated.document);
+      setCompileResult(null);
+      return true;
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+      return false;
+    } finally {
+      setBusy("idle");
+    }
+  };
+
   const validate = async () => {
     setBusy("validating");
     setError(null);
@@ -852,23 +984,22 @@ export function CatalogDraftEditorWindow({
     }
   };
 
-  const form = useMemo(() => {
-    const props = { document: workingDocument, wrapper, setValue, authoring };
-    switch (draft.family) {
-      case "terminals":
-        return <TerminalForm {...props} />;
-      case "nodes":
-        return <NodeForm {...props} />;
-      case "sites":
-        return <SiteForm {...props} />;
-      case "site-sets":
-        return <SiteSetForm {...props} />;
-      default:
-        return null;
-    }
-    // setValue intentionally closes over the current full JSON document.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authoring, draft.family, workingDocument, wrapper]);
+  const formProps = { document: workingDocument, wrapper, setValue, authoring };
+  const form = draft.family === "terminals"
+    ? <TerminalForm {...formProps} />
+    : draft.family === "nodes"
+      ? (
+        <NodeForm
+          {...formProps}
+          addTerminalMount={addNodeTerminalMount}
+          addEthernetPort={addNodeEthernetPort}
+        />
+      )
+      : draft.family === "sites"
+        ? <SiteForm {...formProps} addNode={addSiteNode} />
+        : draft.family === "site-sets"
+          ? <SiteSetForm {...formProps} />
+          : null;
 
   return (
     <div className="builder-inspector-stack" data-testid="catalog-draft-editor">

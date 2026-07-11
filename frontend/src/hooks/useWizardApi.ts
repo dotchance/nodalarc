@@ -13,6 +13,7 @@ import {
   BuilderApiError,
   compileWizardSession,
   deployBuilderSession,
+  deriveVisualWalkerLayout,
   exportCatalogSession,
   previewWizardCoverage,
   saveBuilderSession,
@@ -21,6 +22,8 @@ import type {
   BuilderCompileResult,
   BuilderSessionSaveResult,
   CatalogSessionExport,
+  BuilderVisualWalkerLayoutRequest,
+  BuilderVisualWalkerLayoutResult,
 } from "../builder/generated/builderApi";
 
 export interface WizardApiState {
@@ -52,6 +55,12 @@ export function useWizardApi() {
     setSaved(null);
   }, []);
   const clearPreview = useCallback(() => setCoveragePreview(null), []);
+  const deriveConstellationLayout = useCallback(
+    (
+      intent: BuilderVisualWalkerLayoutRequest,
+    ): Promise<BuilderVisualWalkerLayoutResult> => deriveVisualWalkerLayout(intent),
+    [],
+  );
 
   const generate = useCallback(
     async (state: WizardRuntimeState) => {
@@ -224,6 +233,7 @@ export function useWizardApi() {
     clearError,
     clearYaml,
     clearPreview,
+    deriveConstellationLayout,
     generate,
     deploy,
     exportClosure,

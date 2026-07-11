@@ -2,10 +2,15 @@
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
 /** Constellation selection backed by VS-API catalog and authoring facts. */
 
-import { useState } from "react";
+import { useRef, useState } from "react";
+import type {
+  BuilderVisualWalkerLayoutRequest,
+  BuilderVisualWalkerLayoutResult,
+} from "../builder/generated/builderApi";
 import type {
   ConstellationPreset,
   OrbitModel,
+  WalkerPattern,
   WizardConstellationCapability,
   WizardConstellationGeometry,
 } from "./wizardTypes";
@@ -35,21 +40,6 @@ function Help({ text }: { text: string | undefined }) {
   );
 }
 
-function roundDegrees(value: number): number {
-  return Math.round(value * 1000) / 1000;
-}
-
-function derivedRaanSpacing(
-  pattern: WizardConstellationGeometry["pattern"],
-  planes: number,
-): number {
-  return roundDegrees((pattern === "walker_star" ? 180 : 360) / planes);
-}
-
-function derivedPhaseOffset(planes: number, slotsPerPlane: number): number {
-  return roundDegrees(360 / (planes * slotsPerPlane));
-}
-
 function identifierToken(value: string): string {
   return (
     value
@@ -68,9 +58,9 @@ function customPreset(
   geometry: WizardConstellationGeometry,
   capability: WizardConstellationCapability,
   defaultNode: string,
+  patternLabel: string,
 ): ConstellationPreset {
   const name = `custom-${geometry.planes}x${geometry.slots_per_plane}-${numberToken(geometry.altitude_km)}km`;
-  const patternLabel = geometry.pattern.replace("_", "-");
   return {
     name,
     description: `${geometry.planes} planes × ${geometry.slots_per_plane} sats, ${geometry.altitude_km} km, ${geometry.inclination_deg}° ${patternLabel}`,
@@ -117,14 +107,55 @@ function CustomConstellationForm({
   capability,
   seed,
   defaultNode,
+  patterns,
+  onDeriveLayout,
 }: {
   onSubmit: (preset: ConstellationPreset) => void;
   onCancel: () => void;
   capability: WizardConstellationCapability;
   seed: WizardConstellationGeometry;
   defaultNode: string;
+  patterns: readonly WalkerPattern[];
+  onDeriveLayout: (
+    intent: BuilderVisualWalkerLayoutRequest,
+  ) => Promise<BuilderVisualWalkerLayoutResult>;
 }) {
   const [form, setForm] = useState<WizardConstellationGeometry>({ ...seed });
+  const [deriving, setDeriving] = useState(false);
+  const [deriveError, setDeriveError] = useState<string | null>(null);
+  const deriveSequence = useRef(0);
+  const selectedPattern = patterns.find((pattern) => pattern.id === form.pattern);
+
+  const requestDerivedLayout = (next: WizardConstellationGeometry) => {
+    setForm(next);
+    setDeriveError(null);
+    setDeriving(true);
+    deriveSequence.current += 1;
+    const sequence = deriveSequence.current;
+    const intent = {
+      pattern: next.pattern,
+      planes: next.planes,
+      slots_per_plane: next.slots_per_plane,
+    } satisfies BuilderVisualWalkerLayoutRequest;
+    void onDeriveLayout(intent).then(
+      (derived) => {
+        if (deriveSequence.current !== sequence) return;
+        setForm((current) =>
+          current.pattern === intent.pattern &&
+          current.planes === intent.planes &&
+          current.slots_per_plane === intent.slots_per_plane
+            ? { ...current, ...derived }
+            : current,
+        );
+        setDeriving(false);
+      },
+      (cause) => {
+        if (deriveSequence.current !== sequence) return;
+        setDeriveError(cause instanceof Error ? cause.message : String(cause));
+        setDeriving(false);
+      },
+    );
+  };
 
   const setNumber = (
     field: Exclude<keyof WizardConstellationGeometry, "display_name" | "description" | "pattern">,
@@ -132,25 +163,19 @@ function CustomConstellationForm({
   ) => {
     const value = Number(rawValue);
     if (!Number.isFinite(value)) return;
-    setForm((current) => {
-      const next = { ...current, [field]: value };
-      if (field === "planes" && value > 0) {
-        next.raan_spacing_deg = derivedRaanSpacing(next.pattern, value);
-        next.phase_offset_deg = derivedPhaseOffset(value, next.slots_per_plane);
-      }
-      if (field === "slots_per_plane" && value > 0) {
-        next.phase_offset_deg = derivedPhaseOffset(next.planes, value);
-      }
-      return next;
-    });
+    const next = { ...form, [field]: value };
+    if (field === "planes" || field === "slots_per_plane") {
+      requestDerivedLayout(next);
+    } else {
+      deriveSequence.current += 1;
+      setDeriving(false);
+      setDeriveError(null);
+      setForm(next);
+    }
   };
 
   const setPattern = (pattern: WizardConstellationGeometry["pattern"]) => {
-    setForm((current) => ({
-      ...current,
-      pattern,
-      raan_spacing_deg: derivedRaanSpacing(pattern, current.planes),
-    }));
+    requestDerivedLayout({ ...form, pattern });
   };
 
   return (
@@ -171,13 +196,15 @@ function CustomConstellationForm({
           className="wizard-select" />
       </div>
       <div className="wizard-custom-field">
-        <label>Pattern <Help text={CONSTELLATION_HELP.pattern} /></label>
+        <label>Pattern</label>
         <select aria-label="Pattern" value={form.pattern}
           onChange={(event) => setPattern(event.target.value as WizardConstellationGeometry["pattern"])}
           className="wizard-select">
-          <option value="walker_delta">Walker-delta (co-rotating planes)</option>
-          <option value="walker_star">Walker-star (counter-rotating planes)</option>
+          {patterns.map((pattern) => (
+            <option key={pattern.id} value={pattern.id}>{pattern.label}</option>
+          ))}
         </select>
+        {selectedPattern && <div className="wizard-card-desc">{selectedPattern.description}</div>}
       </div>
       <div className="wizard-custom-field">
         <label>Orbital Planes <Help text={CONSTELLATION_HELP.planes} /></label>
@@ -215,10 +242,16 @@ function CustomConstellationForm({
       <div className="wizard-nav" style={{ marginTop: 16 }}>
         <button className="wizard-nav-btn" onClick={onCancel}>Cancel</button>
         <button className="wizard-nav-btn wizard-nav-btn--primary"
-          onClick={() => onSubmit(customPreset(form, capability, defaultNode))}>
-          Use Custom Constellation
+          disabled={deriving || deriveError !== null || selectedPattern === undefined}
+          onClick={() => {
+            if (selectedPattern) {
+              onSubmit(customPreset(form, capability, defaultNode, selectedPattern.label));
+            }
+          }}>
+          {deriving ? "Deriving layout…" : "Use Custom Constellation"}
         </button>
       </div>
+      {deriveError && <div className="wizard-error">{deriveError}</div>}
     </div>
   );
 }
@@ -228,9 +261,13 @@ interface ConstellationPanelProps {
   customGeometryCapability: WizardConstellationCapability | null;
   customGeometrySeed: WizardConstellationGeometry | null;
   customGeometryDefaultNode: string | null;
+  customGeometryPatterns: readonly WalkerPattern[];
   orbitModels: readonly OrbitModel[];
   selected: ConstellationPreset | null;
   onSelect: (preset: ConstellationPreset) => void;
+  onDeriveLayout: (
+    intent: BuilderVisualWalkerLayoutRequest,
+  ) => Promise<BuilderVisualWalkerLayoutResult>;
 }
 
 export function ConstellationPanel({
@@ -238,15 +275,18 @@ export function ConstellationPanel({
   customGeometryCapability,
   customGeometrySeed,
   customGeometryDefaultNode,
+  customGeometryPatterns,
   orbitModels,
   selected,
   onSelect,
+  onDeriveLayout,
 }: ConstellationPanelProps) {
   const [showCustom, setShowCustom] = useState(false);
   const customFactsReady =
     customGeometryCapability !== null &&
     customGeometrySeed !== null &&
-    customGeometryDefaultNode !== null;
+    customGeometryDefaultNode !== null &&
+    customGeometryPatterns.length > 0;
 
   if (
     showCustom &&
@@ -264,6 +304,8 @@ export function ConstellationPanel({
         capability={customGeometryCapability}
         seed={customGeometrySeed}
         defaultNode={customGeometryDefaultNode}
+        patterns={customGeometryPatterns}
+        onDeriveLayout={onDeriveLayout}
       />
     );
   }

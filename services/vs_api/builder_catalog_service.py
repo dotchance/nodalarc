@@ -23,7 +23,11 @@ from nodalarc.catalog_closure import (
     preserved_catalog_path,
 )
 from nodalarc.catalog_refs import CatalogFamily, CatalogRef
-from nodalarc.catalog_registry import CATALOG_FAMILY_REGISTRY, catalog_family_spec
+from nodalarc.catalog_registry import (
+    CATALOG_FAMILY_REGISTRY,
+    catalog_family_spec,
+    validate_referenced_configuration_document,
+)
 from nodalarc.catalog_repository import (
     CatalogConflictError,
     CatalogDocument,
@@ -163,24 +167,13 @@ def _refuse(
 def _validated_exact_document(ref: CatalogRef, content: bytes) -> BaseModel:
     try:
         data = load_configuration_yaml(content)
-        family = cast(CatalogFamily, ref.family)
-        model = catalog_family_spec(family).validate_document(data)
+        _wrapper, model = validate_referenced_configuration_document(ref, data)
     except (UnicodeError, yaml.YAMLError, ValidationError, TypeError, ValueError) as error:
         _refuse(
             "catalog_authoring.invalid_document",
             f"Catalog document {ref} is invalid: {error}",
             ref=ref,
             cause=error,
-        )
-
-    identity = model.session.name if ref.family == "sessions" else getattr(model, "id", None)
-    if identity != ref.relative_path.stem:
-        field = "session.name" if ref.family == "sessions" else "object id"
-        _refuse(
-            "catalog_authoring.invalid_document",
-            f"Catalog document {ref} {field} {identity!r} must match filename "
-            f"{ref.relative_path.stem!r}",
-            ref=ref,
         )
     return model
 

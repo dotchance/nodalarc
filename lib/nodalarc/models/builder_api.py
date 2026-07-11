@@ -100,6 +100,24 @@ type WizardTerminalRole = MountRole
 WizardExtension = Literal["sr", "te", "mpls"]
 WizardAreaStrategy = Literal["flat", "stripe", "per_plane"]
 WizardRoutingProtocol = Literal["isis", "ospf"]
+WizardWalkerPattern = Literal["walker_delta", "walker_star"]
+WizardRoutingBooleanField = Literal["bfd"]
+WizardRoutingTimerField = Literal[
+    "bfd_detect_multiplier",
+    "bfd_rx_interval",
+    "bfd_tx_interval",
+    "isis_hello_interval",
+    "isis_hello_multiplier",
+    "spf_init_delay",
+    "spf_short_delay",
+    "spf_long_delay",
+    "spf_holddown",
+    "ospf_hello_interval",
+    "ospf_dead_interval",
+    "ospf_spf_delay",
+    "ospf_spf_initial_hold",
+    "ospf_spf_max_hold",
+]
 
 
 class _BuilderApplicationModel(BaseModel):
@@ -310,7 +328,7 @@ class WizardConstellationGeometry(_BuilderApplicationModel):
     description: str = Field(min_length=1, max_length=1024)
     altitude_km: float = Field(ge=160, le=40_000)
     inclination_deg: float = Field(ge=0, le=180)
-    pattern: Literal["walker_delta", "walker_star"]
+    pattern: WizardWalkerPattern
     planes: int = Field(ge=2, le=72)
     slots_per_plane: int = Field(ge=1, le=60)
     raan_spacing_deg: float = Field(ge=0, le=360)
@@ -347,6 +365,14 @@ class WizardOrbitModelMetadata(_BuilderApplicationModel):
     description: str = Field(min_length=1, max_length=1024)
 
 
+class WizardWalkerPatternMetadata(_BuilderApplicationModel):
+    """Presentation facts for one backend-supported custom Walker pattern."""
+
+    id: WizardWalkerPattern
+    label: str = Field(min_length=1, max_length=160)
+    description: str = Field(min_length=1, max_length=1024)
+
+
 class WizardConstellationPreset(_BuilderApplicationModel):
     """One catalog-backed constellation choice exposed to the Wizard."""
 
@@ -375,6 +401,7 @@ class WizardConstellationPresetResponse(_BuilderApplicationModel):
     custom_geometry: WizardConstellationCapability
     custom_geometry_seed: WizardConstellationGeometry
     custom_geometry_default_node: NodeRef
+    custom_geometry_patterns: tuple[WizardWalkerPatternMetadata, ...]
     orbit_models: tuple[WizardOrbitModelMetadata, ...]
 
     @model_validator(mode="after")
@@ -392,6 +419,13 @@ class WizardConstellationPresetResponse(_BuilderApplicationModel):
             raise ValueError("Wizard orbit-model metadata ids must be unique")
         if set(orbit_model_ids) != set(get_args(WizardOrbitPropagator)):
             raise ValueError("Wizard orbit-model metadata must describe every orbit choice")
+        pattern_ids = tuple(pattern.id for pattern in self.custom_geometry_patterns)
+        if len(set(pattern_ids)) != len(pattern_ids):
+            raise ValueError("Wizard Walker-pattern metadata ids must be unique")
+        if set(pattern_ids) != set(get_args(WizardWalkerPattern)):
+            raise ValueError("Wizard Walker-pattern metadata must describe every pattern choice")
+        if self.custom_geometry_seed.pattern not in pattern_ids:
+            raise ValueError("custom geometry seed must use an available Walker pattern")
         return self
 
 
@@ -449,30 +483,73 @@ class WizardAvailableStationResponse(_BuilderApplicationModel):
     stations: tuple[WizardAvailableStation, ...]
 
 
-class WizardProtocolExtensionRule(_BuilderApplicationModel):
-    """Extensions and dependency constraints for one Wizard protocol."""
+class WizardExtensionMetadata(_BuilderApplicationModel):
+    """Presentation facts for one backend-supported Wizard extension."""
 
-    extensions: tuple[WizardExtension, ...]
-    constraints: dict[WizardExtension, tuple[WizardExtension, ...]]
+    id: WizardExtension
+    label: str = Field(min_length=1, max_length=160)
+    description: str = Field(min_length=1, max_length=1024)
+
+
+class WizardRoutingTimerFieldMetadata(_BuilderApplicationModel):
+    """Presentation and validation facts for one numeric protocol timer control."""
+
+    id: WizardRoutingTimerField
+    label: str = Field(min_length=1, max_length=160)
+    unit: str | None = Field(default=None, min_length=1, max_length=32)
+    description: str = Field(min_length=1, max_length=1024)
+    guidance: str = Field(min_length=1, max_length=1024)
+    minimum: int = Field(ge=0)
+
+
+class WizardBfdMetadata(_BuilderApplicationModel):
+    """Backend-owned presentation and field facts for Wizard BFD controls."""
+
+    heading: str = Field(min_length=1, max_length=160)
+    enabled_field: WizardRoutingBooleanField
+    enable_label: str = Field(min_length=1, max_length=160)
+    enable_description: str = Field(min_length=1, max_length=1024)
+    timer_fields: tuple[WizardRoutingTimerFieldMetadata, ...] = Field(min_length=1)
 
     @model_validator(mode="after")
-    def _extensions_and_constraints_are_consistent(self) -> WizardProtocolExtensionRule:
+    def _fields_are_complete_and_unique(self) -> WizardBfdMetadata:
+        timer_ids = [field.id for field in self.timer_fields]
+        if len(set(timer_ids)) != len(timer_ids):
+            raise ValueError("Wizard BFD timer fields must be unique")
+        expected = {"bfd_detect_multiplier", "bfd_rx_interval", "bfd_tx_interval"}
+        if set(timer_ids) != expected:
+            raise ValueError("Wizard BFD metadata must describe every BFD timer field")
+        return self
+
+
+class WizardProtocolMetadata(_BuilderApplicationModel):
+    """One selectable routing protocol and its backend-owned Wizard behavior."""
+
+    id: WizardRoutingProtocol
+    label: str = Field(min_length=1, max_length=160)
+    description: str = Field(min_length=1, max_length=1024)
+    extensions: tuple[WizardExtension, ...]
+    extension_constraints: dict[WizardExtension, tuple[WizardExtension, ...]]
+    timer_label: str = Field(min_length=1, max_length=160)
+    timer_fields: tuple[WizardRoutingTimerFieldMetadata, ...] = Field(min_length=1)
+    non_flat_area_warning: str | None = Field(default=None, min_length=1, max_length=2048)
+
+    @model_validator(mode="after")
+    def _facts_are_consistent(self) -> WizardProtocolMetadata:
         if len(set(self.extensions)) != len(self.extensions):
             raise ValueError("Wizard protocol extensions must be unique")
         available = set(self.extensions)
-        for extension, dependencies in self.constraints.items():
+        for extension, dependencies in self.extension_constraints.items():
             if extension not in available or any(item not in available for item in dependencies):
                 raise ValueError("Wizard extension constraints must reference available extensions")
             if len(set(dependencies)) != len(dependencies):
                 raise ValueError("Wizard extension dependencies must be unique")
+        timer_ids = [field.id for field in self.timer_fields]
+        if len(set(timer_ids)) != len(timer_ids):
+            raise ValueError("Wizard protocol timer fields must be unique")
+        if any(field.startswith("bfd_") for field in timer_ids):
+            raise ValueError("Wizard protocol timer fields must not redefine BFD controls")
         return self
-
-
-class WizardProtocolExtensionCatalog(_BuilderApplicationModel):
-    """Closed protocol keys supported by the current Wizard extension surface."""
-
-    ospf: WizardProtocolExtensionRule
-    isis: WizardProtocolExtensionRule
 
 
 class WizardRoutingTimerIntent(_BuilderApplicationModel):
@@ -499,10 +576,11 @@ class WizardRoutingTimerIntent(_BuilderApplicationModel):
 class WizardExtensionRulesResponse(_BuilderApplicationModel):
     """Closed backend-owned Wizard protocol and area-strategy rules."""
 
-    protocols: WizardProtocolExtensionCatalog
+    protocols: tuple[WizardProtocolMetadata, ...] = Field(min_length=1)
+    extensions: tuple[WizardExtensionMetadata, ...] = Field(min_length=1)
     area_strategies: tuple[WizardAreaStrategy, ...]
-    available_protocols: tuple[WizardRoutingProtocol, ...]
     default_area_strategy: WizardAreaStrategy
+    bfd: WizardBfdMetadata
     routing_timer_defaults: WizardRoutingTimerIntent
 
     @model_validator(mode="after")
@@ -511,8 +589,16 @@ class WizardExtensionRulesResponse(_BuilderApplicationModel):
             raise ValueError("Wizard area strategies must be unique")
         if self.default_area_strategy not in self.area_strategies:
             raise ValueError("default Wizard area strategy must be available")
-        if len(set(self.available_protocols)) != len(self.available_protocols):
+        protocol_ids = [protocol.id for protocol in self.protocols]
+        if len(set(protocol_ids)) != len(protocol_ids):
             raise ValueError("Wizard routing protocols must be unique")
+        if set(protocol_ids) != set(get_args(WizardRoutingProtocol)):
+            raise ValueError("Wizard protocol metadata must describe every protocol choice")
+        extension_ids = [extension.id for extension in self.extensions]
+        if len(set(extension_ids)) != len(extension_ids):
+            raise ValueError("Wizard extension metadata ids must be unique")
+        if set(extension_ids) != set(get_args(WizardExtension)):
+            raise ValueError("Wizard extension metadata must describe every extension choice")
         return self
 
 

@@ -8,22 +8,24 @@
 
 import type {
   BuilderVisualLinkEndpoint,
-  BuilderVisualLinkRule,
   BuilderVisualNode,
-  BuilderVisualOrbit,
   BuilderVisualGroundBoresight,
+  BuilderVisualOrbitPropagator,
+  BuilderVisualOrbitShape,
   BuilderVisualRoutingBoundary,
   BuilderVisualRoutingDomain,
   BuilderVisualSpaceBoresight,
   BuilderVisualSpaceDraft,
   BuilderVisualTerminalMount,
+  BuilderVisualTopologyMode,
 } from "./generated/builderApi";
 
 /** UI labels over generated visual-authoring application types. */
 export type MountRole = NonNullable<BuilderVisualTerminalMount["role"]>;
 export type LinkMedium = NonNullable<BuilderVisualLinkEndpoint["medium"]>;
-export type Propagator = NonNullable<BuilderVisualOrbit["propagator"]>;
-export type TopologyMode = NonNullable<BuilderVisualLinkRule["topology_mode"]>;
+export type OrbitShape = BuilderVisualOrbitShape;
+export type Propagator = BuilderVisualOrbitPropagator;
+export type TopologyMode = BuilderVisualTopologyMode;
 export type Protocol = NonNullable<BuilderVisualRoutingDomain["protocol"]>;
 export type Adapter = NonNullable<BuilderVisualRoutingBoundary["adapter"]>;
 export type Forwarding = NonNullable<BuilderVisualNode["forwarding"]>;
@@ -38,7 +40,7 @@ export interface DraftOrbit {
   /** Circular uses altitude_km; elliptical uses perigee/apogee. One form
    *  serializes (the grammar's OrbitShape variants); the other fields are
    *  kept so switching shape kinds never loses typed values. */
-  shape_kind: "circular" | "elliptical";
+  shape_kind: OrbitShape;
   altitude_km: number;
   perigee_altitude_km: number;
   apogee_altitude_km: number;
@@ -46,7 +48,7 @@ export interface DraftOrbit {
   raan_deg: number;
   argument_of_perigee_deg: number;
   mean_anomaly_deg: number;
-  propagator: Extract<Propagator, "two_body" | "j2_mean_elements">;
+  propagator: Propagator;
 }
 
 export interface DraftTerminalMount {
@@ -198,7 +200,7 @@ export interface DraftLinkRule {
   b: DraftLinkEndpoint;
   /** nearest_visible exists in the grammar but is runtime-gated — never
    *  offered here; the resolver walls it with UnsupportedFeature. */
-  topology_mode: Extract<TopologyMode, "visible_candidates" | "nearest_n">;
+  topology_mode: TopologyMode;
   topology_n: number;
   max_range_km: number | null;
 }
@@ -387,91 +389,6 @@ export interface RefGroundSet extends RefSegment {
 
 let memberCounter = 0;
 
-/** Stamp-derived addressing for minted sites (mint index i). Applied once
- *  at creation and stored explicitly on the site — the site owns it after. */
-export function stampLanPrefix(stamp: GroundStamp, index: number): string {
-  return `${stamp.lan_base}.${index}.0/24`;
-}
-
-function stampTerr0Address(stamp: GroundStamp, index: number): string {
-  return `${stamp.lan_base}.${index}.1/24`;
-}
-
-export function stampLoopbackAddress(stamp: GroundStamp, index: number): string {
-  return `${stamp.loopback_base}.0.${index + 1}/32`;
-}
-
-/** A stamp-derived address matched back to its form and mint index, or null
- *  when the address is not stamp-shaped. Shape is checked before range: an
- *  already-minted address whose octet overflowed (`base.0.256/32`) still
- *  matches its form and reports `inRange: false`, so the overflow stays
- *  visible instead of being parsed away. This is the single stamp-address
- *  parser — mintSiteMembers, nextMintIndex, and the addressing warnings all
- *  read it, so no second parser can drift from these three forms. */
-export interface StampAddressMatch {
-  form: "lan" | "terr0" | "lo0";
-  index: number;
-  inRange: boolean;
-}
-export function matchStampAddress(
-  address: string,
-  stamp: GroundStamp,
-): StampAddressMatch | null {
-  const esc = (base: string) => base.replace(/\./g, "\\.");
-  const lanRe = new RegExp(`^${esc(stamp.lan_base)}\\.(\\d+)\\.0/24$`);
-  const terrRe = new RegExp(`^${esc(stamp.lan_base)}\\.(\\d+)\\.1/24$`);
-  const loRe = new RegExp(`^${esc(stamp.loopback_base)}\\.0\\.(\\d+)/32$`);
-  const inOctet = (value: number) => value >= 0 && value <= 255;
-  const lan = lanRe.exec(address);
-  if (lan) {
-    const octet = Number(lan[1]);
-    return { form: "lan", index: octet, inRange: inOctet(octet) };
-  }
-  const terr = terrRe.exec(address);
-  if (terr) {
-    const octet = Number(terr[1]);
-    return { form: "terr0", index: octet, inRange: inOctet(octet) };
-  }
-  const lo = loRe.exec(address);
-  if (lo) {
-    const octet = Number(lo[1]);
-    return { form: "lo0", index: octet - 1, inRange: inOctet(octet) };
-  }
-  return null;
-}
-
-/** The host portion of a CIDR address, mask-stripped — two addresses collide
- *  when their hosts are equal regardless of prefix length (terr0 `x/24` and
- *  lo0 `x/32` are the same host). */
-export function stampAddressHost(address: string): string {
-  return address.split("/")[0] ?? address;
-}
-
-/** The next free mint index for a ground draft: one past the highest index any
- *  surviving stamp-shaped address already reserves, across lan, terr0, and lo0.
- *  Any single matching form reserves its index — a complete triple is not
- *  required — so deleting a member and minting again never reuses the freed
- *  index and re-collides with a survivor. Custom, hand-edited, and by-ref
- *  members carry no stamp index and are skipped; an empty or all-custom draft
- *  is 0. GroundEditor's "next minted site" preview must read this same
- *  function, never a second count. */
-export function nextMintIndex(draft: DraftGroundSet): number {
-  let max = -1;
-  for (const member of draft.members) {
-    const site = member.site;
-    if (!site) continue;
-    const addresses = [
-      site.lan_ipv4,
-      ...site.nodes.flatMap((node) => [node.lo0_ipv4, node.terr0_ipv4]),
-    ];
-    for (const address of addresses) {
-      const match = matchStampAddress(address, draft.stamp);
-      if (match) max = Math.max(max, match.index);
-    }
-  }
-  return max + 1;
-}
-
 /** The grammar id a member answers to (override matching keys on it). */
 // Re-exported: the moved importer matches override targets by site id;
 // de-exported it while every consumer was internal.
@@ -520,53 +437,6 @@ export function parseSiteLines(text: string): { rows: ParsedSiteLine[]; errors: 
   return { rows, errors };
 }
 
-/** Mint full sites from pasted rows using the segment's stamp — node model,
- *  installed mounts, and derived addressing are applied at creation; each
- *  minted site owns its configuration afterwards. Mint indices continue past
- *  the highest addressing index already in use in the segment (nextMintIndex),
- *  so deleting a member and minting again never reuses a freed index and
- *  re-collides with a survivor. */
-export function mintSiteMembers(
-  draft: DraftGroundSet,
-  rows: ParsedSiteLine[],
-): DraftGroundSite[] {
-  const start = nextMintIndex(draft);
-  return rows.map((row, offset) => {
-    const index = start + offset;
-    memberCounter += 1;
-    const site: DraftSiteObject = {
-      site_id: `site-${memberCounter}`,
-      display_name: row.name,
-      body: draft.stamp.body,
-      lat_deg: row.lat_deg,
-      lon_deg: row.lon_deg,
-      alt_m: row.alt_m,
-      lan_ipv4: stampLanPrefix(draft.stamp, index),
-      tags: [],
-      nodes: [
-        {
-          node_id: "gw1",
-          model_ref: draft.stamp.node_ref,
-          installed: { ...draft.stamp.installed },
-          boresights: { ...draft.stamp.boresights },
-          lo0_ipv4: stampLoopbackAddress(draft.stamp, index),
-          terr0_ipv4: stampTerr0Address(draft.stamp, index),
-        },
-      ],
-    };
-    return {
-      member_id: `member-${memberCounter}`,
-      kind: "draft" as const,
-      ref: null,
-      site_id: site.site_id,
-      label: row.name,
-      summary: null,
-      site,
-      scheduling_override: null,
-    };
-  });
-}
-
 /** A defined site placed by reference — full fidelity, its nodes travel
  *  with it. site_id must be the document's grammar id (read at add time). */
 export function refGroundMember(
@@ -593,26 +463,7 @@ export function refGroundMember(
  *  the off-the-map get flagged, in plain language). */
 export function groundWarnings(draft: DraftGroundSet): string[] {
   const warnings: string[] = [];
-  const validBase = (base: string): boolean => {
-    const octets = base.split(".");
-    return (
-      octets.length === 2 &&
-      octets.every((octet) => {
-        const value = Number(octet);
-        return Number.isInteger(value) && value >= 0 && value <= 255 && octet !== "";
-      })
-    );
-  };
-  if (!validBase(draft.stamp.lan_base)) {
-    warnings.push(`lan base "${draft.stamp.lan_base}" — expected two octets, like 172.20`);
-  }
-  if (!validBase(draft.stamp.loopback_base)) {
-    warnings.push(
-      `loopback base "${draft.stamp.loopback_base}" — expected two octets, like 10.200`,
-    );
-  }
   const seenIds = new Set<string>();
-  const seenHosts = new Set<string>();
   for (const member of draft.members) {
     const id = memberSiteId(member);
     if (seenIds.has(id)) {
@@ -621,36 +472,12 @@ export function groundWarnings(draft: DraftGroundSet): string[] {
     seenIds.add(id);
     const site = member.site;
     if (!site) continue;
-    // Host-address equality is mask-independent and spans families: a terr0
-    // x/24 and a lo0 x/32 are the same host, so a per-family string compare
-    // would miss a lan_base that equals a loopback_base.
-    for (const address of [
-      site.lan_ipv4,
-      ...site.nodes.flatMap((node) => [node.lo0_ipv4, node.terr0_ipv4]),
-    ]) {
-      const host = stampAddressHost(address);
-      if (seenHosts.has(host)) {
-        warnings.push(`${site.display_name}: address ${host} is already used in this segment`);
-      }
-      seenHosts.add(host);
-      const match = matchStampAddress(address, draft.stamp);
-      if (match && !match.inRange) {
-        warnings.push(
-          `${site.display_name}: address ${address} runs past .255 — outside the stamp's addressing range`,
-        );
-      }
-    }
     if (Math.abs(site.lat_deg) > 90) {
       warnings.push(`${site.display_name}: latitude ${site.lat_deg} is off the map (±90)`);
     }
     if (Math.abs(site.lon_deg) > 180) {
       warnings.push(`${site.display_name}: longitude ${site.lon_deg} is off the map (±180)`);
     }
-  }
-  if (nextMintIndex(draft) > 254) {
-    warnings.push(
-      "no addressing room left — the next minted site would run past stamp index 254",
-    );
   }
   return warnings;
 }

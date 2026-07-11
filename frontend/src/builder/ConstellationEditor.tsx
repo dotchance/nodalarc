@@ -15,15 +15,18 @@ import { Button } from "../ui/Button";
 import { BodySelect, EditorCard, EditorName, NumberField, SelectField, SliderField } from "./editorKit";
 import { NodeEditor } from "./NodeEditor";
 import { SegmentLinksCard } from "./SegmentLinksCard";
-import type { BuilderVisualAuthoringFacts } from "./generated/builderApi";
+import type {
+  BuilderVisualAuthoringFacts,
+  BuilderVisualSetSpacePopulationCommand,
+} from "./generated/builderApi";
 import {
   exportCatalogObject,
   useBuilderCatalog,
 } from "./useBuilderWorld";
 import {
   type DraftConstellation,
-  type DraftNode,
   type DraftOrbit,
+  type DraftTerminalMount,
   type PhasingMode,
   type Workspace,
 } from "./workspace";
@@ -36,6 +39,15 @@ interface ConstellationEditorProps {
    *  (NumberFields), never written from an async writer. */
   onUpdate: (update: (prev: DraftConstellation) => DraftConstellation) => void;
   onUpdateOrbit: (patch: Partial<DraftOrbit>) => void;
+  onSetPopulation: (
+    change: Omit<BuilderVisualSetSpacePopulationCommand, "operation" | "segment_id">,
+  ) => Promise<void>;
+  onAuthorInlineNode: () => Promise<void>;
+  onAddNodeTerminal: (
+    terminalRef: string,
+    role: DraftTerminalMount["role"],
+  ) => Promise<void>;
+  onAddNodeEthernet: () => Promise<void>;
   onRemove: () => void;
   /** focus the name when a create gesture opened this editor. */
   autoFocusName?: boolean;
@@ -56,6 +68,10 @@ export function ConstellationEditor({
   draft,
   onUpdate,
   onUpdateOrbit,
+  onSetPopulation,
+  onAuthorInlineNode,
+  onAddNodeTerminal,
+  onAddNodeEthernet,
   onRemove,
   autoFocusName = false,
   workspace,
@@ -64,18 +80,27 @@ export function ConstellationEditor({
   authoring,
 }: ConstellationEditorProps) {
   const [openCard, setOpenCard] = useState<string | null>("orbit");
+  const [editorError, setEditorError] = useState<string | null>(null);
   const nodes = useBuilderCatalog("nodes");
   const bodies = useBuilderCatalog("bodies");
   const phasingLabel =
     authoring.phasing_modes.find((choice) => choice.id === draft.phasing_mode)?.label ??
     draft.phasing_mode;
   const toggle = (id: string) => setOpenCard((prev) => (prev === id ? null : id));
+  const setPopulation = (
+    change: Omit<BuilderVisualSetSpacePopulationCommand, "operation" | "segment_id">,
+  ) => {
+    setEditorError(null);
+    void onSetPopulation(change).catch((cause) =>
+      setEditorError(cause instanceof Error ? cause.message : String(cause)),
+    );
+  };
 
-  const startInlineNode = () => {
-    const node = structuredClone(authoring.default_node) as DraftNode;
-    node.id = `${draft.segment_id}-node`;
-    node.display_name = `${draft.display_name} node`;
-    onUpdate((prev) => ({ ...prev, node_draft: node }));
+  const runNodeCommand = (command: () => Promise<void>) => {
+    setEditorError(null);
+    void command().catch((cause) =>
+      setEditorError(cause instanceof Error ? cause.message : String(cause)),
+    );
   };
 
   return (
@@ -202,25 +227,7 @@ export function ConstellationEditor({
             <SelectField
               label="phasing"
               value={draft.phasing_mode}
-              onChange={(value) =>
-                onUpdate((prev) => {
-                  const phasing_mode = value as PhasingMode;
-                  if (phasing_mode === authoring.single_plane_phasing_mode) {
-                    return {
-                      ...prev,
-                      phasing_mode,
-                      planes: 1,
-                      raan_spacing_deg: 360,
-                      phase_offset_deg: 0,
-                    };
-                  }
-                  return {
-                    ...prev,
-                    phasing_mode,
-                    planes: Math.max(2, prev.planes),
-                  };
-                })
-              }
+              onChange={(value) => setPopulation({ phasing_mode: value as PhasingMode })}
               options={authoring.phasing_modes.map((choice) => ({
                 value: choice.id,
                 label: choice.label,
@@ -229,37 +236,16 @@ export function ConstellationEditor({
             <NumberField
               label="planes"
               value={draft.planes}
-              onChange={(planes) =>
-                onUpdate((prev) => {
-                  const count = Math.max(1, Math.round(planes));
-                  if (count === 1) {
-                    return {
-                      ...prev,
-                      planes: count,
-                      phasing_mode: authoring.single_plane_phasing_mode,
-                      phase_offset_deg: 0,
-                    };
-                  }
-                  return {
-                    ...prev,
-                    planes: count,
-                    phasing_mode:
-                      prev.phasing_mode === authoring.single_plane_phasing_mode
-                        ? authoring.default_phasing_mode
-                        : prev.phasing_mode,
-                  };
-                })
-              }
+              min={1}
+              integer
+              onChange={(planes) => setPopulation({ planes })}
             />
             <NumberField
               label="slots per plane"
               value={draft.slots_per_plane}
-              onChange={(slots_per_plane) =>
-                onUpdate((prev) => ({
-                  ...prev,
-                  slots_per_plane: Math.max(1, Math.round(slots_per_plane)),
-                }))
-              }
+              min={1}
+              integer
+              onChange={(slots_per_plane) => setPopulation({ slots_per_plane })}
             />
             <NumberField
               label="RAAN spacing"
@@ -283,6 +269,8 @@ export function ConstellationEditor({
             )}
       </EditorCard>
 
+      {editorError && <div className="builder-warning">{editorError}</div>}
+
       <EditorCard
         title="Node"
         open={openCard === "node"}
@@ -298,6 +286,10 @@ export function ConstellationEditor({
                 <NodeEditor
                   authoring={authoring}
                   draft={draft.node_draft}
+                  onAddTerminal={(terminalRef, role) =>
+                    runNodeCommand(() => onAddNodeTerminal(terminalRef, role))
+                  }
+                  onAddEthernet={() => runNodeCommand(onAddNodeEthernet)}
                   onChange={(update) =>
                     // Thread NodeEditor's functional update through the
                     // constellation's own, reading the LATEST node_draft so a
@@ -335,7 +327,9 @@ export function ConstellationEditor({
                     }))}
                 />
                 <div className="builder-preset-row">
-                  <Button onClick={startInlineNode}>Author inline node</Button>
+                  <Button onClick={() => runNodeCommand(onAuthorInlineNode)}>
+                    Author inline node
+                  </Button>
                   <Button onClick={() => void exportCatalogObject(draft.node_ref)}>
                     Export file
                   </Button>

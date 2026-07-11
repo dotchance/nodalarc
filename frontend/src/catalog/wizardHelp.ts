@@ -19,11 +19,6 @@ export const CONSTELLATION_HELP: Record<string, string> = {
     "polar coverage, produces counter-rotating planes and the polar seam ISL dropout " +
     "phenomenon. Iridium uses 86.4\u00b0.",
 
-  pattern:
-    "Walker-delta: all planes rotate in the same direction, moderate cross-plane ISL " +
-    "stability. Walker-star: alternating plane direction, produces counter-rotating seam " +
-    "with zero cross-plane ISL at high latitudes.",
-
   planes:
     "Number of orbital planes. More planes improve longitudinal coverage. Total satellites " +
     "= planes \u00d7 satellites per plane.",

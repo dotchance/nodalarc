@@ -27,6 +27,11 @@ from nodalarc.models.builder_api import (
     WizardConstellationPreset,
     WizardConstellationPresetResponse,
     WizardOrbitModelMetadata,
+    WizardWalkerPatternMetadata,
+)
+from nodalarc.models.builder_visual_api import (
+    BuilderVisualWalkerLayoutRequest,
+    derive_walker_layout,
 )
 from nodalarc.models.resolved_session import ResolvedNode, ResolvedSession, SourceContext
 from nodalarc.models.segment_session import RoutingTimers
@@ -61,6 +66,32 @@ _WIZARD_ORBIT_MODELS = (
     ),
 )
 
+_WIZARD_WALKER_PATTERNS = (
+    WizardWalkerPatternMetadata(
+        id="walker_delta",
+        label="Walker-delta",
+        description=(
+            "Co-rotating planes with moderate cross-plane ISL stability and an even "
+            "360-degree RAAN span."
+        ),
+    ),
+    WizardWalkerPatternMetadata(
+        id="walker_star",
+        label="Walker-star",
+        description=(
+            "Counter-rotating seam geometry with a 180-degree RAAN span and high-latitude "
+            "cross-plane ISL transitions."
+        ),
+    ),
+)
+
+_WIZARD_CUSTOM_LAYOUT = derive_walker_layout(
+    BuilderVisualWalkerLayoutRequest(
+        pattern="walker_delta",
+        planes=4,
+        slots_per_plane=11,
+    )
+)
 _WIZARD_CUSTOM_GEOMETRY_SEED = WizardConstellationGeometry(
     display_name="Custom 4x11 shell",
     description="4 planes x 11 satellites, 550 km, 53 degree Walker delta",
@@ -69,8 +100,8 @@ _WIZARD_CUSTOM_GEOMETRY_SEED = WizardConstellationGeometry(
     pattern="walker_delta",
     planes=4,
     slots_per_plane=11,
-    raan_spacing_deg=90,
-    phase_offset_deg=360 / 44,
+    raan_spacing_deg=_WIZARD_CUSTOM_LAYOUT.raan_spacing_deg,
+    phase_offset_deg=_WIZARD_CUSTOM_LAYOUT.phase_offset_deg,
 )
 
 
@@ -292,6 +323,7 @@ def load_constellation_preset_response(
         custom_geometry=custom_geometry_runtime_capability(support),
         custom_geometry_seed=_WIZARD_CUSTOM_GEOMETRY_SEED,
         custom_geometry_default_node=WIZARD_CUSTOM_GEOMETRY_DEFAULT_NODE,
+        custom_geometry_patterns=_WIZARD_WALKER_PATTERNS,
         orbit_models=_WIZARD_ORBIT_MODELS,
     )
 

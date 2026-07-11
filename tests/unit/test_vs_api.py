@@ -135,22 +135,32 @@ class TestLinkTypeDerivation:
         assert (
             _derive_link_type(
                 "isl",
+                resolved_kind="isl",
                 link_rule_id="leo-to-meo",
-                topology_mode="nearest_n",
                 endpoint_segments=("leo", "meo"),
             )
             == "inter_constellation"
         )
 
-    def test_static_cross_body_link_classifies_as_inter_body_relay(self):
+    def test_resolved_cross_body_link_classifies_as_inter_body_relay(self):
         assert (
             _derive_link_type(
                 "isl",
-                link_rule_id="earth-luna-static-relay",
-                topology_mode="static_ip",
+                resolved_kind="inter_body",
+                link_rule_id="earth-luna-relay",
                 endpoint_segments=("earth-relay", "luna-relay"),
             )
             == "inter_body_relay"
+        )
+
+    def test_segment_names_do_not_guess_cross_body_without_resolved_kind(self):
+        assert (
+            _derive_link_type(
+                "isl",
+                link_rule_id="unknown-rule",
+                endpoint_segments=("earth-relay", "luna-relay"),
+            )
+            == "isl"
         )
 
 
@@ -468,6 +478,33 @@ class TestConstellationCRReadiness:
 
 
 class TestSessionContextNetworkIdentity:
+    def test_resolved_link_classes_drive_public_link_types(self):
+        ctx = SessionContext(
+            "run-test-0001",
+            resolution=resolve_session_with_assets(
+                yaml.safe_load(CATALOG_SESSION.read_text()),
+                source_context=SourceContext(origin="test.vs-api"),
+            ),
+            source_id="nodalarc:sessions/earth-leo-heo-geo-luna-reachability.yaml",
+        )
+
+        assert (
+            ctx._public_link_type(
+                "isl",
+                link_rule_id="leo_to_heo",
+                endpoint_segments=("leo_b", "heo_relay"),
+            )
+            == "inter_constellation"
+        )
+        assert (
+            ctx._public_link_type(
+                "isl",
+                link_rule_id="geo_to_luna",
+                endpoint_segments=("geo_relay", "luna_relay"),
+            )
+            == "inter_body_relay"
+        )
+
     def test_exposes_loopback_and_site_prefix_addresses(self, tmp_path):
         session_path = tmp_path / "session.yaml"
         session_path.write_text(_session_yaml_text())

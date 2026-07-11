@@ -526,7 +526,20 @@ test-integration: ## Run integration tests (requires running cluster)
 	uv run pytest tests/integration --tb=short -q
 
 test-runtime-matrix: ## Destructively qualify every shipped session against the live runtime
-	PYTHONUNBUFFERED=1 PYTHONPATH=lib uv run python tests/integration/e2e_matrix.py
+	@VS_API_HOST="$${VS_API_HOST:-$$( \
+		api_node="$$(kubectl get pod -n '$(NAMESPACE)' -l app=nodalarc-vs-api \
+			-o jsonpath='{.items[0].spec.nodeName}')"; \
+		kubectl get node "$$api_node" \
+			-o jsonpath='{.status.addresses[?(@.type=="InternalIP")].address}' \
+	)}"; \
+	if [ -z "$$VS_API_HOST" ]; then \
+		echo "[runtime-matrix] ERROR: unable to discover the VS-API node address" >&2; \
+		exit 1; \
+	fi; \
+	case "$$VS_API_HOST" in *:*) ;; *) VS_API_HOST="$$VS_API_HOST:8080" ;; esac; \
+	echo "[runtime-matrix] VS-API: http://$$VS_API_HOST"; \
+	PYTHONUNBUFFERED=1 PYTHONPATH=lib VS_API_HOST="$$VS_API_HOST" \
+		uv run python tests/integration/e2e_matrix.py
 
 test-builder-e2e: ## Destructively qualify Builder user: closure deployment on the live cluster
 	@echo "[builder-e2e] WARNING: this replaces the active NodalArc session in $(NAMESPACE)."

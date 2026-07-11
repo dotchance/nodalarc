@@ -152,6 +152,15 @@ def test_make_targets_dry_run_cleanly() -> None:
         )
 
 
+def test_runtime_matrix_discovers_vs_api_when_no_override_is_set() -> None:
+    target = _target_body("test-runtime-matrix")
+
+    assert 'VS_API_HOST="$${VS_API_HOST:-$$(' in target
+    assert "app=nodalarc-vs-api" in target
+    assert 'type=="InternalIP"' in target
+    assert 'VS_API_HOST="$$VS_API_HOST"' in target
+
+
 def test_make_configuration_uses_canonical_script_paths() -> None:
     stale_tool_script = re.compile(r"tools/(?:na-|clean-|detect-|check_lint_policy)|tools/.*\.sh")
     for rel_path in ("Makefile", "config.mk.example"):

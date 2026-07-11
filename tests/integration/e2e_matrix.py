@@ -1,8 +1,8 @@
 """E2E validation matrix for every shipped catalog session.
 
-Runs each session: upload exact YAML → deploy via CRD → wait for Ready →
-verify pods + FRR configs + routing convergence + WebSocket snapshots →
-write evidence files.
+Runs each session: byte-verify shipped YAML → guarded catalog switch →
+wait for the exact transition and Ready state → verify pods + FRR configs +
+routing convergence + WebSocket snapshots → write evidence files.
 
 Usage: make test-runtime-matrix
 """
@@ -37,6 +37,13 @@ MBB_BAD_OPS_CODES = {
     "OPERATOR_REPAIR_REQUESTED",
     "OPERATOR_REPAIR_SUCCEEDED",
     "OPERATOR_REPAIR_FAILED",
+}
+
+INTERMITTENT_CONNECTIVITY_WINDOWS = {
+    "earth-leo-polar": {
+        "disconnected_offset_seconds": 120,
+        "settle_seconds": 30,
+    }
 }
 
 
@@ -191,6 +198,79 @@ def deploy_session(token: str, yaml_str: str) -> dict:
         json={"yaml": yaml_str},
         retries=3,
     )
+
+
+def deploy_catalog_session(token: str, perm: dict) -> dict:
+    """Deploy the exact shipped catalog revision represented by one permutation."""
+    session_ref = f"nodalarc:sessions/{perm['id']}.yaml"
+    summaries = request_json("GET", "/api/v1/sessions", token=token)
+    if not isinstance(summaries, list):
+        raise RuntimeError("VS-API session listing was not an array")
+    summary = next(
+        (
+            candidate
+            for candidate in summaries
+            if (candidate.get("source_id") or {}).get("session_ref") == session_ref
+        ),
+        None,
+    )
+    if summary is None:
+        raise RuntimeError(f"VS-API did not list shipped session {session_ref}")
+    if not summary.get("deploy_allowed"):
+        raise RuntimeError(
+            f"VS-API refused shipped session {session_ref}: {summary.get('blockers')}"
+        )
+
+    response = requests.get(
+        f"{BASE_URL}/api/v1/sessions/yaml",
+        params={"session_ref": session_ref},
+        headers=headers(token),
+        timeout=10,
+    )
+    response.raise_for_status()
+    if response.text != perm["session_yaml"]:
+        raise RuntimeError(f"VS-API shipped YAML differs from checkout for {session_ref}")
+
+    required = ("source_revision", "document_digest", "dependency_digest")
+    missing = [field for field in required if not summary.get(field)]
+    if missing:
+        raise RuntimeError(f"VS-API session listing omitted {', '.join(missing)} for {session_ref}")
+    return request_json(
+        "POST",
+        "/api/v1/sessions/switch",
+        token=token,
+        json={
+            "source": {"kind": "catalog", "session_ref": session_ref},
+            "expected_source_revision": summary["source_revision"],
+            "expected_document_digest": summary["document_digest"],
+            "expected_dependency_digest": summary["dependency_digest"],
+        },
+        retries=3,
+    )
+
+
+def wait_for_transition(token: str, operation_id: str, timeout: int = 600) -> dict:
+    """Wait for the exact admitted session transition to reach a terminal state."""
+    deadline = time.monotonic() + timeout
+    last: dict = {}
+    while time.monotonic() < deadline:
+        last = request_json(
+            "GET",
+            f"/api/v1/session-transitions/{operation_id}",
+            token=token,
+            retries=3,
+        )
+        state = last.get("state")
+        if state == "succeeded":
+            return last
+        if state in {"failed", "cancelled"}:
+            return last
+        time.sleep(2)
+    return {
+        "state": "timeout",
+        "failure": {"message": f"transition {operation_id} did not finish within {timeout}s"},
+        "last": last,
+    }
 
 
 def wait_for_ready(token: str, timeout: int = 600) -> dict:
@@ -374,7 +454,7 @@ def _node_loopback_ip(node_id: str, nodes_by_id: dict[str, dict] | None = None) 
     return None
 
 
-def check_ping(token: str, perm: dict) -> dict:
+def check_ping(token: str, perm: dict, *, ground_wait_s: int | None = None) -> dict:
     """Prove routed connectivity for the declared topology.
 
     Ground sessions must prove a ground-originated routed ping and routing adjacency.
@@ -415,7 +495,9 @@ def check_ping(token: str, perm: dict) -> dict:
         ground_probe = _find_routed_ground_probe(
             token,
             protocol=protocol,
-            wait_s=240 if len(bodies) > 1 else 120,
+            wait_s=(
+                ground_wait_s if ground_wait_s is not None else 240 if len(bodies) > 1 else 120
+            ),
             ground_topology=ground_topology,
         )
         if ground_probe and ground_probe.get("result") == "PASS":
@@ -1820,6 +1902,94 @@ def _wait_for_playback_not_seeking(token: str, epoch_id: int, *, wait_s: int = 1
     }
 
 
+def _connectivity_expectation(session_id: str) -> dict:
+    window = INTERMITTENT_CONNECTIVITY_WINDOWS.get(session_id)
+    if window is None:
+        return {"mode": "continuous"}
+    return {"mode": "intermittent", **window}
+
+
+def _seek_playback_and_pause(token: str, target_sim_time: str) -> dict:
+    seek = request_json(
+        "POST",
+        "/api/v1/playback",
+        token=token,
+        json={"action": "seek", "target_sim_time": target_sim_time},
+        retries=3,
+    )
+    if seek.get("state") != "seeking" or "epoch_id" not in seek:
+        return {
+            "result": "FAIL",
+            "reason": "seek was not accepted into seeking state",
+            "seek": seek,
+        }
+    resumed = _wait_for_playback_not_seeking(token, int(seek["epoch_id"]), wait_s=120)
+    if resumed.get("result") != "PASS":
+        return {"result": "FAIL", "reason": resumed.get("reason"), "seek": seek, "resume": resumed}
+    paused = request_json(
+        "POST",
+        "/api/v1/playback",
+        token=token,
+        json={"action": "pause"},
+        retries=3,
+    )
+    if paused.get("state") != "paused" or not paused.get("paused"):
+        return {
+            "result": "FAIL",
+            "reason": "playback did not enter paused state after seek",
+            "seek": seek,
+            "resume": resumed,
+            "pause": paused,
+        }
+    return {"result": "PASS", "seek": seek, "resume": resumed, "pause": paused}
+
+
+def check_intermittent_connectivity(token: str, perm: dict) -> dict:
+    expectation = perm.get("connectivity_expectation") or {}
+    start_time = perm.get("session_start_time")
+    evidence: dict = {"result": "FAIL", "mode": "intermittent_ground_to_ground"}
+    if not start_time:
+        return {**evidence, "reason": "intermittent connectivity check requires session start time"}
+
+    start = _parse_api_datetime(str(start_time))
+    disconnected_target = start + timedelta(seconds=int(expectation["disconnected_offset_seconds"]))
+    settle_seconds = int(expectation.get("settle_seconds", 30))
+
+    try:
+        disconnected_control = _seek_playback_and_pause(token, disconnected_target.isoformat())
+        evidence["disconnected_control"] = disconnected_control
+        if disconnected_control.get("result") != "PASS":
+            evidence["reason"] = "could not establish deterministic disconnected window"
+            return evidence
+        time.sleep(settle_seconds)
+        disconnected_probe = check_ping(token, perm, ground_wait_s=15)
+        evidence["disconnected_probe"] = disconnected_probe
+        if disconnected_probe.get("result") != "FAIL":
+            evidence["reason"] = "intermittent observation window produced a routed path"
+            return evidence
+        if disconnected_probe.get("active_link_count", 0) <= 0:
+            evidence["reason"] = "disconnected window had no active physical links to observe"
+            return evidence
+        evidence["observed_outcome"] = "unreachable"
+        evidence["result"] = "PASS"
+        return evidence
+    finally:
+        evidence["resume_response"] = request_json(
+            "POST",
+            "/api/v1/playback",
+            token=token,
+            json={"action": "resume"},
+            retries=3,
+        )
+
+
+def check_declared_connectivity(token: str, perm: dict) -> dict:
+    expectation = perm.get("connectivity_expectation") or {"mode": "continuous"}
+    if expectation.get("mode") == "intermittent":
+        return check_intermittent_connectivity(token, perm)
+    return check_ping(token, perm)
+
+
 def run_seek_during_mbb_acceptance() -> dict:
     evidence: dict = {
         "id": "P6-SEEK-MBB",
@@ -2010,9 +2180,24 @@ def run_permutation(perm: dict) -> dict:
         evidence["yaml_length"] = len(yaml_str)
 
         # Deploy
-        print("  Deploying via wizard API...")
-        deploy_result = deploy_session(token, yaml_str)
+        print("  Deploying guarded shipped catalog revision...")
+        deploy_result = deploy_catalog_session(token, perm)
         evidence["deploy_response"] = deploy_result
+        operation_id = deploy_result.get("operation_id")
+        if deploy_result.get("status") != "accepted" or not operation_id:
+            evidence["result"] = "FAIL"
+            evidence["error"] = f"Deploy refused: {deploy_result}"
+            print(f"  FAIL: {evidence['error']}")
+            return evidence
+
+        print(f"  Waiting for transition {operation_id}...")
+        transition_result = wait_for_transition(token, str(operation_id), timeout=600)
+        evidence["transition_result"] = transition_result
+        if transition_result.get("state") != "succeeded":
+            evidence["result"] = "FAIL"
+            evidence["error"] = f"Transition failed: {transition_result}"
+            print(f"  FAIL: {evidence['error']}")
+            return evidence
 
         # Wait for Ready
         print("  Waiting for Ready (up to 5 min)...")
@@ -2047,7 +2232,7 @@ def run_permutation(perm: dict) -> dict:
         # Check declared connectivity. Ground sessions must prove a GS-originated path;
         # satellite-only sessions may fall back to an ISL loopback path.
         print("  Checking declared connectivity...")
-        ping_result = check_ping(token, perm)
+        ping_result = check_declared_connectivity(token, perm)
         evidence["ping"] = ping_result
         transit = ""
         if "transit_proven" in ping_result:
@@ -2057,10 +2242,20 @@ def run_permutation(perm: dict) -> dict:
                 f" sep={ping_result.get('separation', '?')}"
                 f" egress={ping_result.get('egress_dev', '?')}"
             )
-        print(
-            f"  Ping: {ping_result.get('result', '?')}"
-            f" ({ping_result.get('src', '?')} -> {ping_result.get('dst', '?')}){transit}"
-        )
+        observed_outcome = ping_result.get("observed_outcome")
+        if observed_outcome:
+            active_links = (ping_result.get("disconnected_probe") or {}).get(
+                "active_link_count", "?"
+            )
+            print(
+                f"  Connectivity: {ping_result.get('result', '?')} "
+                f"(runtime reported {observed_outcome}; active_links={active_links})"
+            )
+        else:
+            print(
+                f"  Ping: {ping_result.get('result', '?')}"
+                f" ({ping_result.get('src', '?')} -> {ping_result.get('dst', '?')}){transit}"
+            )
 
         # Determine pass/fail
         ping_ok = ping_result.get("result") == "PASS" or (
@@ -2078,7 +2273,7 @@ def run_permutation(perm: dict) -> dict:
             f"  {evidence['result']}: {pod_result['running']} pods, "
             f"{routing_result.get('neighbor_count', '?')} neighbors, "
             f"sim_time={'advancing' if ws_result['advancing'] else 'STATIC'}, "
-            f"ping={ping_result.get('result', '?')}"
+            f"connectivity={observed_outcome or ping_result.get('result', '?')}"
         )
 
     except Exception as exc:
@@ -2143,6 +2338,8 @@ def catalog_permutations() -> list[dict]:
                 # the ground-truth predicate for the ping/adjacency checks.
                 "gs": ground_ids,
                 "ground_topology": ground_topology,
+                "session_start_time": str(resolved.time.start_time),
+                "connectivity_expectation": _connectivity_expectation(path.stem),
                 "step_seconds": int(resolved.time.step_seconds),
                 "session_yaml": text,
                 "xfail": False,

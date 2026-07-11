@@ -2,14 +2,15 @@
 # Licensed under the Apache License, Version 2.0. See LICENSE file.
 """Contracts for the e2e matrix acceptance helpers.
 
-These tests keep the cluster-run script honest in the normal unit suite: ground
-sessions cannot pass by skipping ground connectivity, and the MBB packet lane
-hard-gates emulator-side overlap while recording packet loss as routing behavior.
+These tests keep the cluster-run script honest in the normal unit suite: continuous
+sessions require routed proof, intermittent sessions preserve valid unreachable
+outcomes, and the MBB lane records packet loss as routing behavior.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import yaml
 from nodalarc.configuration_yaml import load_configuration_yaml
@@ -17,6 +18,80 @@ from nodalarc.models.segment_session import SegmentSessionConfig
 from nodalarc.resolve_session import resolve_session
 
 from tests.integration import e2e_matrix
+
+
+def test_catalog_deploy_uses_guarded_shipped_revision_and_exact_yaml(monkeypatch) -> None:
+    calls: list[tuple[str, str, dict]] = []
+    session_ref = "nodalarc:sessions/earth-leo-simple.yaml"
+    session_yaml = "session:\n  name: earth-leo-simple\n"
+
+    def fake_request(method: str, path: str, **kwargs):
+        calls.append((method, path, kwargs))
+        if path == "/api/v1/sessions":
+            return [
+                {
+                    "source_id": {"kind": "catalog", "session_ref": session_ref},
+                    "deploy_allowed": True,
+                    "source_revision": "a" * 64,
+                    "document_digest": "b" * 64,
+                    "dependency_digest": "c" * 64,
+                }
+            ]
+        return {
+            "status": "accepted",
+            "operation_id": "0123456789abcdef",
+            "source": {"kind": "catalog", "session_ref": session_ref},
+        }
+
+    monkeypatch.setattr(e2e_matrix, "request_json", fake_request)
+    monkeypatch.setattr(
+        e2e_matrix.requests,
+        "get",
+        lambda *args, **kwargs: SimpleNamespace(
+            text=session_yaml,
+            raise_for_status=lambda: None,
+        ),
+    )
+
+    result = e2e_matrix.deploy_catalog_session(
+        "token",
+        {"id": "earth-leo-simple", "session_yaml": session_yaml},
+    )
+
+    assert result["status"] == "accepted"
+    method, path, kwargs = calls[-1]
+    assert (method, path) == ("POST", "/api/v1/sessions/switch")
+    assert kwargs["json"] == {
+        "source": {"kind": "catalog", "session_ref": session_ref},
+        "expected_source_revision": "a" * 64,
+        "expected_document_digest": "b" * 64,
+        "expected_dependency_digest": "c" * 64,
+    }
+
+
+def test_wait_for_transition_is_bound_to_operation_terminal_state(monkeypatch) -> None:
+    states = iter(
+        [
+            {"state": "switching"},
+            {"state": "succeeded", "runtime": {"session_id": "resolved", "generation": 2}},
+        ]
+    )
+    paths: list[str] = []
+
+    def fake_request(_method: str, path: str, **_kwargs):
+        paths.append(path)
+        return next(states)
+
+    monkeypatch.setattr(e2e_matrix, "request_json", fake_request)
+    monkeypatch.setattr(e2e_matrix.time, "sleep", lambda _seconds: None)
+
+    result = e2e_matrix.wait_for_transition("token", "0123456789abcdef", timeout=5)
+
+    assert result["state"] == "succeeded"
+    assert paths == [
+        "/api/v1/session-transitions/0123456789abcdef",
+        "/api/v1/session-transitions/0123456789abcdef",
+    ]
 
 
 def test_mbb_acceptance_mutation_stays_in_canonical_session_grammar() -> None:
@@ -108,6 +183,56 @@ def test_check_ping_allows_skip_only_for_satellite_only_topology(monkeypatch) ->
 
     assert result["result"] == "SKIP"
     assert result["active_link_count"] == 0
+
+
+def test_connectivity_expectation_marks_only_polar_session_intermittent() -> None:
+    polar = e2e_matrix._connectivity_expectation("earth-leo-polar")  # noqa: SLF001
+    ordinary = e2e_matrix._connectivity_expectation("earth-leo-simple")  # noqa: SLF001
+
+    assert polar == {
+        "mode": "intermittent",
+        "disconnected_offset_seconds": 120,
+        "settle_seconds": 30,
+    }
+    assert ordinary == {"mode": "continuous"}
+
+
+def test_intermittent_connectivity_accepts_proven_runtime_unreachability(monkeypatch) -> None:
+    controls: list[str] = []
+    waits: list[int | None] = []
+
+    def fake_seek(_token: str, target_sim_time: str) -> dict:
+        controls.append(target_sim_time)
+        return {"result": "PASS"}
+
+    def fake_ping(_token: str, _perm: dict, *, ground_wait_s: int | None = None) -> dict:
+        waits.append(ground_wait_s)
+        return {"result": "FAIL", "reason": "no route", "active_link_count": 34}
+
+    monkeypatch.setattr(e2e_matrix, "_seek_playback_and_pause", fake_seek)
+    monkeypatch.setattr(e2e_matrix, "check_ping", fake_ping)
+    monkeypatch.setattr(e2e_matrix.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        e2e_matrix,
+        "request_json",
+        lambda *args, **kwargs: {"state": "playing", "paused": False},
+    )
+
+    result = e2e_matrix.check_intermittent_connectivity(
+        "token",
+        {
+            "session_start_time": "2026-06-08T00:00:00Z",
+            "connectivity_expectation": e2e_matrix._connectivity_expectation(  # noqa: SLF001
+                "earth-leo-polar"
+            ),
+        },
+    )
+
+    assert result["result"] == "PASS"
+    assert result["disconnected_probe"]["result"] == "FAIL"
+    assert result["observed_outcome"] == "unreachable"
+    assert controls == ["2026-06-08T00:02:00+00:00"]
+    assert waits == [15]
 
 
 def test_ground_probe_reaches_candidate_after_first_bounded_sweep(monkeypatch) -> None:

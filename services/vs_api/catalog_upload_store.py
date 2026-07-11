@@ -227,7 +227,9 @@ def _entry_from_config_map(
     name, observed_namespace, uid = _resource_identity(value)
     if observed_namespace != namespace:
         raise ValueError(f"ConfigMap {name} is in namespace {observed_namespace!r}")
-    if _field(value, "api_version", "apiVersion") != "v1" or _field(value, "kind") != "ConfigMap":
+    api_version = _field(value, "api_version", "apiVersion")
+    kind = _field(value, "kind")
+    if api_version not in (None, "v1") or kind not in (None, "ConfigMap"):
         raise ValueError(f"Object {name} is not a v1 ConfigMap")
     if _field(value, "immutable") is True:
         raise ValueError(f"ConfigMap {name} must not be immutable")

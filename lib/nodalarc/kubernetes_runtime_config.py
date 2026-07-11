@@ -165,7 +165,9 @@ def _entry_from_config_map(
             expected=namespace,
             observed=str(observed_namespace),
         )
-    if _field(value, "api_version", "apiVersion") != "v1" or _field(value, "kind") != "ConfigMap":
+    api_version = _field(value, "api_version", "apiVersion")
+    kind = _field(value, "kind")
+    if api_version not in (None, "v1") or kind not in (None, "ConfigMap"):
         raise _error(
             KubernetesRuntimeConfigErrorCode.INVALID_CONFIG_MAP,
             f"Catalog upload object {namespace}/{name} is not a v1 ConfigMap",

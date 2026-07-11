@@ -117,7 +117,7 @@ wait_platform_ready() {
     local timeout="${1:-180}"
     local elapsed=0 deployment_rows total converged
     local ds_generation ds_observed ds_desired ds_current ds_updated ds_ready ds_available
-    local ds_misscheduled
+    local ds_misscheduled session_phase session_message
 
     echo "[$ACTION] Waiting for platform pods (timeout ${timeout}s)..."
     while [ "$elapsed" -lt "$timeout" ]; do
@@ -147,6 +147,24 @@ wait_platform_ready() {
         ds_ready="${ds_ready:-0}"
         ds_available="${ds_available:-0}"
         ds_misscheduled="${ds_misscheduled:-0}"
+
+        session_phase="$(
+            kubectl get constellationspec current-session -n "$NAMESPACE" \
+                -o jsonpath='{.status.phase}' 2>/dev/null || true
+        )"
+        if [ "$session_phase" = "Error" ]; then
+            session_message="$(
+                kubectl get constellationspec current-session -n "$NAMESPACE" \
+                    -o jsonpath='{.status.message}' 2>/dev/null || true
+            )"
+            echo ""
+            echo "[$ACTION] ERROR: current-session is invalid; platform rollout cannot prove readiness." >&2
+            if [ -n "$session_message" ]; then
+                printf '%s\n' "$session_message" >&2
+            fi
+            echo "[$ACTION] Replace it through the normal path: make session DEFAULT_SESSION=<catalog session YAML>" >&2
+            return 1
+        fi
 
         if [ "$total" -gt 0 ] && [ "$converged" -eq "$total" ] \
             && [ "$ds_generation" -eq "$ds_observed" ] \

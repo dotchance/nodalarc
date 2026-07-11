@@ -749,6 +749,10 @@ def test_platform_wait_requires_complete_deployment_and_daemonset_rollouts() -> 
     assert ".status.numberAvailable" in script
     assert ".status.numberMisscheduled" in script
     assert '"$ds_generation" -eq "$ds_observed"' in script
+    assert "-o jsonpath='{.status.phase}'" in script
+    assert "-o jsonpath='{.status.message}'" in script
+    assert "current-session is invalid; platform rollout cannot prove readiness" in script
+    assert "make session DEFAULT_SESSION=<catalog session YAML>" in script
 
 
 def test_status_uses_workload_generation_readiness_not_pod_phase_counts() -> None:

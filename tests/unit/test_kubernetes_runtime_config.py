@@ -150,6 +150,20 @@ def test_fetches_once_and_materializes_exact_ordinary_paths(
     assert proof.run_id == "run-kubernetes-reader-0001"
 
 
+def test_typed_config_maps_without_type_meta_are_accepted(
+    upload: CatalogUpload,
+    tmp_path: Path,
+) -> None:
+    client = _client_for(upload)
+    for config_map in client.config_maps:
+        config_map.api_version = None
+        config_map.kind = None
+
+    loaded = _load(client, upload, tmp_path / "without-type-meta")
+
+    assert loaded.proof.upload_id == upload.upload_id
+
+
 def _deep_user_upload(tmp_path: Path) -> tuple[CatalogUpload, dict[str, bytes]]:
     user_root = tmp_path / "user"
     user_root.mkdir()
@@ -231,6 +245,8 @@ def test_missing_document_is_rejected_by_upload_verification(
 @pytest.mark.parametrize(
     "mutate",
     [
+        lambda config_map: setattr(config_map, "api_version", "v2"),
+        lambda config_map: setattr(config_map, "kind", "Secret"),
         lambda config_map: config_map.metadata.labels.__setitem__("unexpected", "value"),
         lambda config_map: config_map.metadata.annotations.clear(),
         lambda config_map: setattr(config_map, "immutable", True),

@@ -179,6 +179,43 @@ def test_put_creates_one_plain_config_map_per_yaml_and_lists_once(upload: Catalo
     assert observed == expected
 
 
+def test_put_accepts_typed_config_maps_without_type_meta(upload: CatalogUpload) -> None:
+    api = FakeCoreV1Api()
+
+    def omit_type_meta(selected: FakeCoreV1Api) -> None:
+        for config_map in selected.config_maps.values():
+            config_map.api_version = None
+            config_map.kind = None
+
+    api.before_list = omit_type_meta
+
+    receipt = KubernetesCatalogUploadStore(api, NAMESPACE).put(upload)
+
+    assert receipt.selection == upload.selection
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("api_version", "v2"), ("kind", "Secret")],
+)
+def test_put_rejects_contradictory_type_meta(
+    upload: CatalogUpload,
+    field: str,
+    value: str,
+) -> None:
+    api = FakeCoreV1Api()
+
+    def replace_type_meta(selected: FakeCoreV1Api) -> None:
+        setattr(next(iter(selected.config_maps.values())), field, value)
+
+    api.before_list = replace_type_meta
+
+    with pytest.raises(CatalogUploadStoreError) as raised:
+        KubernetesCatalogUploadStore(api, NAMESPACE).put(upload)
+
+    assert raised.value.code is CatalogUploadStoreErrorCode.READBACK_MISMATCH
+
+
 def test_put_cleans_created_files_after_create_or_observer_failure(upload: CatalogUpload) -> None:
     api = FakeCoreV1Api()
     second_name = f"{upload.upload_id}-000001"

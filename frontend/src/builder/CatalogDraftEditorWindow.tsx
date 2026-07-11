@@ -171,12 +171,20 @@ export function catalogDraftFieldCommands(
   return commands;
 }
 
-function text(value: JsonValue | undefined, fallback = ""): string {
-  return typeof value === "string" ? value : fallback;
+function text(value: JsonValue | undefined): string {
+  return typeof value === "string" ? value : "";
 }
 
-function numberValue(value: JsonValue | undefined): number {
-  return typeof value === "number" ? value : 0;
+function numberValue(value: JsonValue | undefined): number | null {
+  return typeof value === "number" ? value : null;
+}
+
+function scaledNumberValue(
+  value: JsonValue | undefined,
+  divisor: number,
+): number | null {
+  const parsed = numberValue(value);
+  return parsed === null ? null : parsed / divisor;
 }
 
 function arrayValue(value: JsonValue | undefined): JsonValue[] {
@@ -192,7 +200,10 @@ function TerminalForm({
   const root = `/${escapePointerToken(wrapper)}`;
   const displayName = text(valueAt(document, `${root}/display_name`));
   const medium = text(valueAt(document, `${root}/medium`));
-  const frequencyGhz = numberValue(valueAt(document, `${root}/signal/frequency_hz`)) / 1e9;
+  const frequencyGhz = scaledNumberValue(
+    valueAt(document, `${root}/signal/frequency_hz`),
+    1e9,
+  );
   const band = text(valueAt(document, `${root}/signal/band`));
   return (
     <div className="builder-inspector-stack" data-testid="catalog-terminal-form">
@@ -349,24 +360,25 @@ function NodeForm({
       />
       {mounts.map((value, index) => {
         const mount = isObject(value) ? value : {};
-        const mountId = text(mount.id, `mount-${index + 1}`);
+        const mountId = text(mount.id);
+        const mountLabel = mountId || "mount id incomplete";
         return (
           <EditorCard
-            key={`${mountId}:${index}`}
-            title={mountId}
+            key={mountId ? `mount:${mountId}` : `index:${index}`}
+            title={mountLabel}
             open
             actions={
               <IconButton
                 icon="x"
                 size={12}
-                label={`Remove ${mountId}`}
+                label={`Remove ${mountLabel}`}
                 onClick={() => setValue(`${root}/terminals`, mounts.filter((_, item) => item !== index))}
               />
             }
           >
             <SelectField
               label="role"
-              ariaLabel={`${mountId} role`}
+              ariaLabel={`${mountLabel} role`}
               value={text(mount.role)}
               onChange={(value) => replaceMount(index, "role", value)}
               options={[
@@ -380,7 +392,7 @@ function NodeForm({
             <SelectField
               stack
               label="terminal"
-              ariaLabel={`${mountId} terminal`}
+              ariaLabel={`${mountLabel} terminal`}
               value={text(mount.terminal)}
               onChange={(value) => replaceMount(index, "terminal", value)}
               options={terminals.entries.map((entry) => ({
@@ -543,21 +555,22 @@ function SiteForm({ document, wrapper, setValue, addNode }: SiteFormProps) {
       />
       {installedNodes.map((value, index) => {
         const node = isObject(value) ? value : {};
-        const nodeId = text(node.id, `node-${index + 1}`);
+        const nodeId = text(node.id);
+        const nodeLabel = nodeId || "node id incomplete";
         const terminals = isObject(node.terminals) ? node.terminals : {};
         const interfaces = isObject(node.interfaces) ? node.interfaces : {};
         const lo0 = isObject(interfaces.lo0) ? interfaces.lo0 : {};
         const terr0 = isObject(interfaces.terr0) ? interfaces.terr0 : {};
         return (
           <EditorCard
-            key={`${nodeId}:${index}`}
-            title={nodeId}
+            key={nodeId ? `node:${nodeId}` : `index:${index}`}
+            title={nodeLabel}
             open
             actions={
               <IconButton
                 icon="x"
                 size={12}
-                label={`Remove ${nodeId}`}
+                label={`Remove ${nodeLabel}`}
                 onClick={() => setValue(`${root}/nodes`, installedNodes.filter((_, item) => item !== index))}
               />
             }
@@ -565,7 +578,7 @@ function SiteForm({ document, wrapper, setValue, addNode }: SiteFormProps) {
             <SelectField
               stack
               label="model"
-              ariaLabel={`${nodeId} model`}
+              ariaLabel={`${nodeLabel} model`}
               value={text(node.model)}
               onChange={(value) => replaceNode(index, (current) => { current.model = value; })}
               options={nodes.entries.map((entry) => ({

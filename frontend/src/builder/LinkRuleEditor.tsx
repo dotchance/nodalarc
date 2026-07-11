@@ -85,14 +85,14 @@ function EndpointCard({
       canForm(selfCap, otherCap, role, choice.id),
     );
   const mediumDisabled = (medium: LinkMedium) =>
-    known && !canForm(selfCap, otherCap, endpoint.role, medium);
+    endpoint.role !== null && known && !canForm(selfCap, otherCap, endpoint.role, medium);
   return (
     <EditorCard
       title={title}
       open
       summary={
         <>
-          {endpoint.role} · {endpoint.medium}
+          {endpoint.role ?? "role incomplete"} · {endpoint.medium ?? "medium incomplete"}
           {endpoint.tag ? ` · tag ${endpoint.tag}` : ""}
         </>
       }

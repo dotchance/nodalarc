@@ -45,7 +45,11 @@ interface ConstellationEditorProps {
   onAuthorInlineNode: () => Promise<void>;
   onAddNodeTerminal: (
     terminalRef: string,
-    role: DraftTerminalMount["role"],
+    role: NonNullable<DraftTerminalMount["role"]>,
+  ) => Promise<void>;
+  onSetNodeTerminalRole: (
+    mountId: string,
+    role: NonNullable<DraftTerminalMount["role"]>,
   ) => Promise<void>;
   onAddNodeEthernet: () => Promise<void>;
   onRemove: () => void;
@@ -59,9 +63,23 @@ interface ConstellationEditorProps {
 }
 
 /** "nodalarc:bodies/luna.yaml" -> "luna" for the card's spec line. */
-function bodyShortName(ref: string): string {
+function bodyShortName(ref: string | null): string {
+  if (ref === null) return "body not selected";
   const base = ref.split("/").pop() ?? ref;
   return base.replace(/\.ya?ml$/, "");
+}
+
+function orbitDistance(value: number | null): string {
+  return value === null ? "incomplete" : String(Math.round(value));
+}
+
+function terminalCountSummary(mounts: DraftTerminalMount[]): string {
+  let count = 0;
+  for (const mount of mounts) {
+    if (mount.count === null) return "terminal count incomplete";
+    count += mount.count;
+  }
+  return `${count} terminals`;
 }
 
 export function ConstellationEditor({
@@ -71,6 +89,7 @@ export function ConstellationEditor({
   onSetPopulation,
   onAuthorInlineNode,
   onAddNodeTerminal,
+  onSetNodeTerminalRole,
   onAddNodeEthernet,
   onRemove,
   autoFocusName = false,
@@ -118,9 +137,13 @@ export function ConstellationEditor({
         summary={
           <>
             {draft.orbit.shape_kind === "circular"
-              ? `${Math.round(draft.orbit.altitude_km)} km circular`
-              : `${Math.round(draft.orbit.perigee_altitude_km)} × ${Math.round(draft.orbit.apogee_altitude_km)} km`}{" "}
-            · {draft.orbit.inclination_deg.toFixed(1)}°
+              ? `${orbitDistance(draft.orbit.altitude_km)} km circular`
+              : draft.orbit.shape_kind === "elliptical"
+                ? `${orbitDistance(draft.orbit.perigee_altitude_km)} × ${orbitDistance(draft.orbit.apogee_altitude_km)} km`
+                : "orbit shape incomplete"}{" "}
+            · {draft.orbit.inclination_deg === null
+              ? "inclination incomplete"
+              : `${draft.orbit.inclination_deg.toFixed(1)}°`}
             {draft.orbit.central_body !== authoring.default_body_ref &&
               ` · ${bodyShortName(draft.orbit.central_body)}`}
           </>
@@ -219,8 +242,11 @@ export function ConstellationEditor({
         onToggle={() => toggle("pattern")}
         summary={
           <>
-            {draft.planes} × {draft.slots_per_plane} ={" "}
-            {draft.planes * draft.slots_per_plane} sats · {phasingLabel}
+            {draft.planes ?? "?"} × {draft.slots_per_plane ?? "?"} ={" "}
+            {draft.planes === null || draft.slots_per_plane === null
+              ? "incomplete"
+              : draft.planes * draft.slots_per_plane}{" "}
+            sats · {phasingLabel}
           </>
         }
       >
@@ -277,8 +303,9 @@ export function ConstellationEditor({
         onToggle={() => toggle("node")}
         summary={
           draft.node_draft
-            ? `${draft.node_draft.display_name} (custom) · ${draft.node_draft.terminals.reduce((s, m) => s + m.count, 0)} terminals`
-            : draft.node_ref.split("/").pop()?.replace(".yaml", "")
+            ? `${draft.node_draft.display_name} (custom) · ${terminalCountSummary(draft.node_draft.terminals)}`
+            : draft.node_ref?.split("/").pop()?.replace(".yaml", "") ??
+              "node model incomplete"
         }
       >
             {draft.node_draft ? (
@@ -288,6 +315,9 @@ export function ConstellationEditor({
                   draft={draft.node_draft}
                   onAddTerminal={(terminalRef, role) =>
                     runNodeCommand(() => onAddNodeTerminal(terminalRef, role))
+                  }
+                  onSetTerminalRole={(mountId, role) =>
+                    runNodeCommand(() => onSetNodeTerminalRole(mountId, role))
                   }
                   onAddEthernet={() => runNodeCommand(onAddNodeEthernet)}
                   onChange={(update) =>
@@ -330,7 +360,12 @@ export function ConstellationEditor({
                   <Button onClick={() => runNodeCommand(onAuthorInlineNode)}>
                     Author inline node
                   </Button>
-                  <Button onClick={() => void exportCatalogObject(draft.node_ref)}>
+                  <Button
+                    disabled={draft.node_ref === null}
+                    onClick={() => {
+                      if (draft.node_ref) void exportCatalogObject(draft.node_ref);
+                    }}
+                  >
                     Export file
                   </Button>
                 </div>

@@ -27,7 +27,8 @@ import {
 } from "./workspace";
 
 
-function terminalShortName(ref: string): string {
+function terminalShortName(ref: string | null): string {
+  if (ref === null) return "terminal incomplete";
   return ref.split("/").pop()?.replace(".yaml", "") ?? ref;
 }
 
@@ -37,7 +38,14 @@ interface NodeEditorProps {
    *  render-closure, so a concurrent edit during an in-flight fetch (mounting a
    *  freshly imported/authored terminal) survives. */
   onChange: (update: (prev: DraftNode) => DraftNode) => void;
-  onAddTerminal: (terminalRef: string, role: DraftTerminalMount["role"]) => void;
+  onAddTerminal: (
+    terminalRef: string,
+    role: NonNullable<DraftTerminalMount["role"]>,
+  ) => void;
+  onSetTerminalRole: (
+    mountId: string,
+    role: NonNullable<DraftTerminalMount["role"]>,
+  ) => void;
   onAddEthernet: () => void;
   /** focus the name when a create gesture opened this editor. */
   autoFocusName?: boolean;
@@ -48,6 +56,7 @@ export function NodeEditor({
   draft,
   onChange,
   onAddTerminal,
+  onSetTerminalRole,
   onAddEthernet,
   autoFocusName = false,
   authoring,
@@ -55,7 +64,9 @@ export function NodeEditor({
   const terminals = useBuilderCatalog("terminals");
   const [openMount, setOpenMount] = useState<string | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
-  const [pickerRole, setPickerRole] = useState<DraftTerminalMount["role"]>(
+  const [pickerRole, setPickerRole] = useState<
+    NonNullable<DraftTerminalMount["role"]>
+  >(
     authoring.default_mount_role,
   );
   const [pickerSource, setPickerSource] = useState<"all" | "user">("all");
@@ -113,7 +124,9 @@ export function NodeEditor({
                 title={name}
                 summary={
                   <>
-                    {mount.role} · ×{mount.count}
+                    {mount.role ?? "role incomplete"} · {mount.count === null
+                      ? "count incomplete"
+                      : `×${mount.count}`}
                     {entry?.summary ? ` · ${entry.summary}` : ""}
                   </>
                 }
@@ -127,13 +140,10 @@ export function NodeEditor({
                   ariaLabel="Mount role"
                   value={mount.role}
                   onChange={(value) =>
-                    updateMount(mount.mount_id, {
-                      role: value as DraftTerminalMount["role"],
-                      boresight:
-                        value === "access"
-                          ? { ...authoring.space_access_boresight }
-                          : null,
-                    })
+                    onSetTerminalRole(
+                      mount.mount_id,
+                      value as NonNullable<DraftTerminalMount["role"]>,
+                    )
                   }
                   options={authoring.mount_roles.map((choice) => ({
                     value: choice.id,

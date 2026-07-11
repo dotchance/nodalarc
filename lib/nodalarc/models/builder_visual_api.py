@@ -24,7 +24,7 @@ from nodalarc.catalog_refs import (
     TerminalRef,
     parse_catalog_reference,
 )
-from nodalarc.model_validation import TerminalMedium
+from nodalarc.model_validation import Identifier, TerminalMedium
 from nodalarc.models.builder_api import (
     BuilderCompileResult,
     BuilderDraftEnvelope,
@@ -45,12 +45,16 @@ BuilderVisualOrbitShape = Literal["circular", "elliptical"]
 BuilderVisualOrbitPropagator = Literal["two_body", "j2_mean_elements"]
 BuilderVisualTopologyMode = Literal["visible_candidates", "nearest_n"]
 BuilderVisualDraftCommandOperation = Literal[
+    "place_space_reference",
+    "place_ground_reference",
     "add_generated_space",
     "set_space_population",
     "author_inline_space_node",
     "add_or_increment_node_terminal",
+    "set_node_terminal_role",
     "add_node_ethernet_port",
     "add_ground",
+    "add_ground_site_reference",
     "set_ground_stamp_node_model",
     "set_ground_site_node_model",
     "add_ground_site_node",
@@ -174,7 +178,7 @@ class BuilderVisualSpaceDraft(_BuilderVisualModel):
     raan_spacing_deg: float | None = None
     slots_per_plane: int | None = None
     phasing_mode: BuilderVisualPhasingMode
-    phase_offset_deg: float
+    phase_offset_deg: float | None = None
 
     @model_validator(mode="after")
     def _phasing_matches_population(self) -> BuilderVisualSpaceDraft:
@@ -185,7 +189,7 @@ class BuilderVisualSpaceDraft(_BuilderVisualModel):
                 raise ValueError(
                     "evenly_spaced_mean_anomaly phasing requires exactly one orbital plane"
                 )
-            if self.phase_offset_deg != 0:
+            if self.phase_offset_deg not in {None, 0}:
                 raise ValueError(
                     "single-plane evenly_spaced_mean_anomaly phasing requires a zero "
                     "phase_offset_deg"
@@ -349,6 +353,8 @@ class BuilderVisualDraftEnvelope(_BuilderVisualModel):
     expected_session_revision: OpaqueRevision | None = None
     expected_catalog_revisions: tuple[BuilderVisualCatalogRevision, ...] = ()
     catalog_documents: tuple[BuilderProposedCatalogDocument, ...] = ()
+    session_name_is_placeholder: bool
+    reserved_authoring_ids: tuple[str, ...]
     workspace: BuilderVisualWorkspace | None = None
     session_yaml: str | None = None
 
@@ -367,13 +373,17 @@ class BuilderVisualDraftEnvelope(_BuilderVisualModel):
             raise ValueError("expected catalog revisions must target unique refs")
         if len({item.ref for item in self.catalog_documents}) != len(self.catalog_documents):
             raise ValueError("visual draft catalog documents must target unique refs")
+        if len(set(self.reserved_authoring_ids)) != len(self.reserved_authoring_ids):
+            raise ValueError("reserved visual authoring identities must be unique")
+        if any(not value or len(value) > 160 for value in self.reserved_authoring_ids):
+            raise ValueError("reserved visual authoring identities must be non-empty and bounded")
         return self
 
 
 class BuilderVisualDraftCreateRequest(_BuilderVisualModel):
     """Request a backend-created blank structured visual draft."""
 
-    session_name: str = "untitled-session"
+    session_name: Identifier | None = None
     display_name: str | None = None
     description: str | None = None
 
@@ -403,6 +413,20 @@ class BuilderVisualAddGeneratedSpaceCommand(_BuilderVisualModel):
     operation: Literal["add_generated_space"]
     node_ref: NodeRef | None = None
     phasing_mode: BuilderVisualPhasingMode
+
+
+class BuilderVisualPlaceSpaceReferenceCommand(_BuilderVisualModel):
+    """Place one existing constellation or space-node-set by catalog reference."""
+
+    operation: Literal["place_space_reference"]
+    source_ref: SpaceSourceRef
+
+
+class BuilderVisualPlaceGroundReferenceCommand(_BuilderVisualModel):
+    """Place one existing site set with backend-owned scheduling."""
+
+    operation: Literal["place_ground_reference"]
+    site_set_ref: SiteSetRef
 
 
 class BuilderVisualSetSpacePopulationCommand(_BuilderVisualModel):
@@ -442,6 +466,15 @@ class BuilderVisualAddOrIncrementNodeTerminalCommand(_BuilderVisualModel):
     role: MountRole
 
 
+class BuilderVisualSetNodeTerminalRoleCommand(_BuilderVisualModel):
+    """Change one inline-node mount role with backend-owned pointing semantics."""
+
+    operation: Literal["set_node_terminal_role"]
+    segment_id: str = Field(min_length=1, max_length=160)
+    mount_id: str = Field(min_length=1, max_length=160)
+    role: MountRole
+
+
 class BuilderVisualAddNodeEthernetPortCommand(_BuilderVisualModel):
     """Add one uniquely identified Ethernet port to an authored inline node."""
 
@@ -457,6 +490,14 @@ class BuilderVisualAddGroundCommand(_BuilderVisualModel):
     installed: dict[str, int] = Field(default_factory=dict)
     boresights: dict[str, BuilderVisualGroundBoresight] = Field(default_factory=dict)
     body_ref: BodyRef | None = None
+
+
+class BuilderVisualAddGroundSiteReferenceCommand(_BuilderVisualModel):
+    """Place one existing site, creating its authored ground segment when needed."""
+
+    operation: Literal["add_ground_site_reference"]
+    segment_id: str | None = Field(default=None, min_length=1, max_length=160)
+    site_ref: SiteRef
 
 
 class BuilderVisualSetGroundStampNodeModelCommand(_BuilderVisualModel):
@@ -548,12 +589,16 @@ class BuilderVisualSetSchedulingPresetCommand(_BuilderVisualModel):
 
 
 BuilderVisualDraftCommand = Annotated[
-    BuilderVisualAddGeneratedSpaceCommand
+    BuilderVisualPlaceSpaceReferenceCommand
+    | BuilderVisualPlaceGroundReferenceCommand
+    | BuilderVisualAddGeneratedSpaceCommand
     | BuilderVisualSetSpacePopulationCommand
     | BuilderVisualAuthorInlineSpaceNodeCommand
     | BuilderVisualAddOrIncrementNodeTerminalCommand
+    | BuilderVisualSetNodeTerminalRoleCommand
     | BuilderVisualAddNodeEthernetPortCommand
     | BuilderVisualAddGroundCommand
+    | BuilderVisualAddGroundSiteReferenceCommand
     | BuilderVisualSetGroundStampNodeModelCommand
     | BuilderVisualSetGroundSiteNodeModelCommand
     | BuilderVisualAddGroundSiteNodeCommand

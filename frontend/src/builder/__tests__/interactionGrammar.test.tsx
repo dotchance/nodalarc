@@ -31,6 +31,7 @@ import {
   EditorName,
   NumberField,
   NullableNumberField,
+  SelectField,
   SliderField,
 } from "../editorKit";
 import { BuildGuide } from "../BuildGuide";
@@ -224,6 +225,7 @@ describe("EditorCard adoption smoke: current editors render and their cards beha
         onSetPopulation={async () => {}}
         onAuthorInlineNode={async () => {}}
         onAddNodeTerminal={async () => {}}
+        onSetNodeTerminalRole={async () => {}}
         onAddNodeEthernet={async () => {}}
         onRemove={() => {}}
         onOpenRule={() => {}}
@@ -250,6 +252,7 @@ describe("EditorCard adoption smoke: current editors render and their cards beha
         onSetPopulation={onSetPopulation}
         onAuthorInlineNode={async () => {}}
         onAddNodeTerminal={async () => {}}
+        onSetNodeTerminalRole={async () => {}}
         onAddNodeEthernet={async () => {}}
         onRemove={() => {}}
         onOpenRule={() => {}}
@@ -280,6 +283,7 @@ describe("EditorCard adoption smoke: current editors render and their cards beha
         onSetPopulation={async () => {}}
         onAuthorInlineNode={onAuthorInlineNode}
         onAddNodeTerminal={async () => {}}
+        onSetNodeTerminalRole={async () => {}}
         onAddNodeEthernet={async () => {}}
         onRemove={() => {}}
         onOpenRule={() => {}}
@@ -393,6 +397,7 @@ describe("BodySelect failure contract + node-id collision", () => {
         memberSchedulingPreset={() => null}
         onSchedulingPreset={async () => {}}
         onMintSites={onMintSites}
+        onAddSiteReference={async () => {}}
         onSetStampNodeModel={async () => {}}
         onSetSiteNodeModel={async () => {}}
         onAddSiteNode={async () => {}}
@@ -406,7 +411,7 @@ describe("BodySelect failure contract + node-id collision", () => {
     fireEvent.click(screen.getByRole("button", { name: "+ mint pasted sites" }));
     await waitFor(() => expect(onMintSites).toHaveBeenCalledTimes(1));
     expect(onMintSites).toHaveBeenCalledWith([
-      { name: "Denver", lat_deg: 39.7, lon_deg: -104.9, alt_m: 0 },
+      { name: "Denver", lat_deg: 39.7, lon_deg: -104.9 },
     ]);
     expect(onUpdate).not.toHaveBeenCalled();
   });
@@ -414,6 +419,47 @@ describe("BodySelect failure contract + node-id collision", () => {
 
 describe("editor kit behavior", () => {
   afterEach(cleanup);
+
+  it.each([null, ""])(
+    "SelectField shows an explicit empty placeholder for %s state",
+    (value) => {
+      render(
+        <SelectField
+          label="backend choice"
+          value={value}
+          onChange={() => {}}
+          options={[{ value: "available", label: "Available" }]}
+        />,
+      );
+
+      const select = screen.getByRole("combobox", { name: "backend choice" });
+      const placeholder = screen.getByRole("option", { name: "Select backend choice" });
+      const available = screen.getByRole("option", { name: "Available" });
+      expect((select as HTMLSelectElement).value).toBe("");
+      expect((placeholder as HTMLOptionElement).disabled).toBe(true);
+      expect((placeholder as HTMLOptionElement).selected).toBe(true);
+      expect((available as HTMLOptionElement).selected).toBe(false);
+    },
+  );
+
+  it("SelectField preserves a caller-owned empty option", () => {
+    render(
+      <SelectField
+        label="pointing"
+        value={null}
+        onChange={() => {}}
+        options={[
+          { value: "", label: "none" },
+          { value: "available", label: "Available" },
+        ]}
+      />,
+    );
+
+    expect(screen.queryByRole("option", { name: "Select pointing" })).toBeNull();
+    expect((screen.getByRole("option", { name: "none" }) as HTMLOptionElement).selected).toBe(
+      true,
+    );
+  });
 
   it("EditorName focuses and selects on create", () => {
     render(<EditorName value="seeded name" onChange={() => {}} autoFocus />);
@@ -490,6 +536,7 @@ describe("editor state is keyed by object identity", () => {
       memberSchedulingPreset: () => null,
       onSchedulingPreset: async () => {},
       onMintSites: async () => {},
+      onAddSiteReference: async () => {},
       onSetStampNodeModel: async () => {},
       onSetSiteNodeModel: async () => {},
       onAddSiteNode: async () => {},
@@ -725,8 +772,13 @@ describe("deferred-clamp number contract (local string draft)", () => {
 
 describe("the anatomy guide answers what-next in any order", () => {
   afterEach(cleanup);
-  const guideProps = (ws: ReturnType<typeof newWorkspace>, resolvedSiteCount: number | null = null) => ({
+  const guideProps = (
+    ws: ReturnType<typeof newWorkspace>,
+    resolvedSiteCount: number | null = null,
+    sessionNameIsPlaceholder = false,
+  ) => ({
     workspace: ws,
+    sessionNameIsPlaceholder,
     saved: null,
     deployed: false,
     resolvedSiteCount,
@@ -738,7 +790,7 @@ describe("the anatomy guide answers what-next in any order", () => {
   });
 
   it("every anatomy row is always on screen, pending or done", () => {
-    render(<BuildGuide {...guideProps(newWorkspace("untitled-session"))} />);
+    render(<BuildGuide {...guideProps(newWorkspace("untitled-session-a1b2"), null, true)} />);
     for (const label of [
       "Space segments",
       "Ground sites",
@@ -753,10 +805,10 @@ describe("the anatomy guide answers what-next in any order", () => {
 
   it("pending rows say why and act; gated rows say what unblocks them", () => {
     const calls: string[] = [];
-    const ws = newWorkspace("untitled-session");
+    const ws = newWorkspace("untitled-session-a1b2");
     render(
       <BuildGuide
-        {...guideProps(ws)}
+        {...guideProps(ws, null, true)}
         onAddConstellation={() => calls.push("space")}
       />,
     );
@@ -765,6 +817,19 @@ describe("the anatomy guide answers what-next in any order", () => {
     // No segments yet: comms intent explains its precondition instead of acting.
     expect(screen.getByText("needs two segments first")).toBeTruthy();
     expect(screen.getByText("add links first")).toBeTruthy();
+  });
+
+  it("uses the backend placeholder fact instead of guessing from the generated name", () => {
+    render(<BuildGuide {...guideProps(newWorkspace("backend-generated-name"), null, true)} />);
+
+    expect(screen.getByText("name it — real time unless you say otherwise")).toBeTruthy();
+    expect(screen.queryByText("backend-generated-name")).toBeNull();
+  });
+
+  it("keeps an empty session name incomplete even when it is not marked as a placeholder", () => {
+    render(<BuildGuide {...guideProps(newWorkspace(""), null, false)} />);
+
+    expect(screen.getByText("name it — real time unless you say otherwise")).toBeTruthy();
   });
 
   it("done rows show counts, not health claims", () => {
@@ -830,6 +895,23 @@ describe("ambiguous artifact wording stays out of the Builder surface", () => {
   });
 });
 
+describe("generated visual workspace authority", () => {
+  it("has no handwritten Workspace or Draft interface tree", () => {
+    const source = readFileSync(join(BUILDER_DIR, "workspace.ts"), "utf-8");
+    expect(source).toContain("MaterializedMutable<BuilderVisualWorkspace>");
+    expect(source).not.toMatch(/export interface (?:Workspace|Draft\w*)\b/);
+  });
+
+  it("has no field-by-field visual workspace converter", () => {
+    const source = readFileSync(join(BUILDER_DIR, "visualWorkspace.ts"), "utf-8");
+    expect(source).not.toContain("visualWorkspaceFromWorkspace");
+    expect(source).not.toContain(".map(");
+    expect(source).not.toContain("session_name: workspace.name");
+    expect(source).not.toContain("source_ref: space.ref");
+    expect(source).not.toContain("site_set_ref: ground.ref");
+  });
+});
+
 describe("the closed vocabularies have one owner", () => {
   // Non-recursive, like the raw-control scan: production builder files are flat (only
   // __tests__ is a subdirectory). A future production subdir would need this
@@ -838,9 +920,9 @@ describe("the closed vocabularies have one owner", () => {
     const offenders: string[] = [];
     for (const entry of readdirSync(BUILDER_DIR)) {
       if (!entry.endsWith(".ts") && !entry.endsWith(".tsx")) continue;
-      if (entry === "workspace.ts") continue; // the owner
-      // builderTypes.ts holds the wire-twin unions as TYPES (a | b | c), not an
-      // offered option list — exempt alongside the owner.
+      // builderTypes.ts holds render-world unions as TYPES (a | b | c), not an
+      // offered option list. Generated visual DTOs and backend authoring facts
+      // own the selectable vocabularies.
       if (entry === "builderTypes.ts") continue;
       const content = readFileSync(join(BUILDER_DIR, entry), "utf-8");
       if (pattern.test(content)) offenders.push(entry);
@@ -856,14 +938,14 @@ describe("the closed vocabularies have one owner", () => {
       vocabularyOffenders(
         /\[\s*"(access|isl|crosslink|backbone)"\s*,\s*"(access|isl|crosslink|backbone)"/,
       ),
-      "role vocabulary re-listed outside workspace.ts",
+      "role vocabulary re-listed outside generated contracts and backend metadata",
     ).toEqual([]);
   });
 
   it("no builder source file re-lists the link media as an array literal", () => {
     expect(
       vocabularyOffenders(/\[\s*"(rf|optical)"\s*,\s*"(rf|optical)"/),
-      "media vocabulary re-listed outside workspace.ts",
+      "media vocabulary re-listed outside generated contracts and backend metadata",
     ).toEqual([]);
   });
 
@@ -871,17 +953,17 @@ describe("the closed vocabularies have one owner", () => {
   // which the bare-string patterns above cannot see. Each vocabulary is checked
   // in BOTH forms — an option-object pair (value:"tok"…value:"tok") and a
   // bare-string array ([ "tok", "tok" ]) — so neither shape can re-list it. The
-  // `satisfies Record<union,…>` maps in workspace.ts are the primary compile-time
-  // catch; this scan is the backstop.
+  // Generated unions and backend metadata are the primary contract; this scan
+  // catches browser-owned option inventories.
   it("no builder source file re-lists the routing protocols", () => {
     const tok = "isis|ospf|bgp|static";
     expect(
       vocabularyOffenders(new RegExp(`value:\\s*"(${tok})"[\\s\\S]{0,80}value:\\s*"(${tok})"`)),
-      "protocol vocabulary re-listed (option objects) outside workspace.ts",
+      "protocol vocabulary re-listed outside generated contracts and backend metadata",
     ).toEqual([]);
     expect(
       vocabularyOffenders(new RegExp(`\\[\\s*"(${tok})"\\s*,\\s*"(${tok})"`)),
-      "protocol vocabulary re-listed (bare array) outside workspace.ts",
+      "protocol array re-listed outside generated contracts and backend metadata",
     ).toEqual([]);
   });
 
@@ -889,11 +971,11 @@ describe("the closed vocabularies have one owner", () => {
     const tok = "static_ip|bgp|dtn_bundle";
     expect(
       vocabularyOffenders(new RegExp(`value:\\s*"(${tok})"[\\s\\S]{0,80}value:\\s*"(${tok})"`)),
-      "adapter vocabulary re-listed (option objects) outside workspace.ts",
+      "adapter vocabulary re-listed outside generated contracts and backend metadata",
     ).toEqual([]);
     expect(
       vocabularyOffenders(new RegExp(`\\[\\s*"(${tok})"\\s*,\\s*"(${tok})"`)),
-      "adapter vocabulary re-listed (bare array) outside workspace.ts",
+      "adapter array re-listed outside generated contracts and backend metadata",
     ).toEqual([]);
   });
 
@@ -901,11 +983,11 @@ describe("the closed vocabularies have one owner", () => {
     const tok = "routed|host|bridge|control_only";
     expect(
       vocabularyOffenders(new RegExp(`value:\\s*"(${tok})"[\\s\\S]{0,80}value:\\s*"(${tok})"`)),
-      "forwarding vocabulary re-listed (option objects) outside workspace.ts",
+      "forwarding vocabulary re-listed outside generated contracts and backend metadata",
     ).toEqual([]);
     expect(
       vocabularyOffenders(new RegExp(`\\[\\s*"(${tok})"\\s*,\\s*"(${tok})"`)),
-      "forwarding vocabulary re-listed (bare array) outside workspace.ts",
+      "forwarding array re-listed outside generated contracts and backend metadata",
     ).toEqual([]);
   });
 });
@@ -1079,13 +1161,16 @@ describe("commitWorkspace: one atomic adoption, one undo entry", () => {
     const { result } = renderHook(() => useWorkspace());
     act(() => result.current.openWorkspace(newWorkspace("alpha")));
     const before = result.current.workspace;
-    expect(before?.name).toBe("alpha");
+    expect(before?.session_name).toBe("alpha");
     act(() =>
-      result.current.commitWorkspace({ ...before!, name: "beta" }, "test-adoption"),
+      result.current.commitWorkspace(
+        { ...before!, session_name: "beta" },
+        "test-adoption",
+      ),
     );
-    expect(result.current.workspace?.name).toBe("beta");
+    expect(result.current.workspace?.session_name).toBe("beta");
     act(() => result.current.undo());
-    expect(result.current.workspace?.name).toBe("alpha");
+    expect(result.current.workspace?.session_name).toBe("alpha");
   });
 });
 
@@ -1105,9 +1190,13 @@ describe("buffer overlays and the stale guard", () => {
     expect(overlaid.space[0]).toBe(edited);
     // The session buffer is a field pick, never the whole workspace.
     const renamed = overlayBuffers(ws, {
-      session: { draft: { name: "picked" }, opened: { name: ws.name }, dirty: true },
+      session: {
+        draft: { session_name: "picked" },
+        opened: { session_name: ws.session_name },
+        dirty: true,
+      },
     });
-    expect(renamed.name).toBe("picked");
+    expect(renamed.session_name).toBe("picked");
     expect(renamed.space).toBe(ws.space);
   });
 
@@ -1141,13 +1230,15 @@ describe("buffer overlays and the stale guard", () => {
     const ws = newWorkspace("session-pick-probe");
     const buffers = {
       session: {
-        draft: { name: "typed" },
-        opened: { name: ws.name },
+        draft: { session_name: "typed" },
+        opened: { session_name: ws.session_name },
         dirty: true,
       },
     };
     expect(staleBufferKeys(ws, buffers)).toEqual([]);
-    expect(staleBufferKeys({ ...ws, name: "renamed-by-undo" }, buffers)).toEqual([
+    expect(
+      staleBufferKeys({ ...ws, session_name: "renamed-by-undo" }, buffers),
+    ).toEqual([
       "session",
     ]);
   });
@@ -1303,8 +1394,8 @@ describe("workspaceForSave: the dialog name never silently undoes a rename", () 
     const ws = newWorkspace("old-name");
     const buffers = {
       session: {
-        draft: { name: "renamed-in-session" },
-        opened: { name: "old-name" },
+        draft: { session_name: "renamed-in-session" },
+        opened: { session_name: "old-name" },
         dirty: true,
       },
     };
@@ -1313,15 +1404,15 @@ describe("workspaceForSave: the dialog name never silently undoes a rename", () 
       dialogName: "old-name",
       nameTouched: false,
     });
-    expect(next.name).toBe("renamed-in-session");
+    expect(next.session_name).toBe("renamed-in-session");
   });
 
   it("a name the user actually typed in the dialog wins over the overlays", () => {
     const ws = newWorkspace("old-name");
     const buffers = {
       session: {
-        draft: { name: "renamed-in-session" },
-        opened: { name: "old-name" },
+        draft: { session_name: "renamed-in-session" },
+        opened: { session_name: "old-name" },
         dirty: true,
       },
     };
@@ -1330,7 +1421,7 @@ describe("workspaceForSave: the dialog name never silently undoes a rename", () 
       dialogName: "typed name",
       nameTouched: true,
     });
-    expect(next.name).toBe("typed name");
+    expect(next.session_name).toBe("typed name");
   });
 
   it("applied-only with an untouched field is the identity", () => {
@@ -1350,6 +1441,6 @@ describe("workspaceForSave: the dialog name never silently undoes a rename", () 
       dialogName: "",
       nameTouched: true,
     });
-    expect(next.name).toBe("");
+    expect(next.session_name).toBe("");
   });
 });

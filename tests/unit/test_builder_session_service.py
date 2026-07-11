@@ -380,6 +380,48 @@ def test_incomplete_or_dangling_draft_writes_nothing(
     assert after.list(namespace="user") == before.list(namespace="user")
 
 
+def test_direct_save_excludes_invalid_stale_orphan_proposals(
+    harness: SaveHarness,
+) -> None:
+    orphan_ref = CatalogRef("user:nodes/orphan-direct-save.yaml")
+    base = _session_request("orphan-direct-save", _load(SIMPLE_SESSION))
+    request = BuilderSessionSaveRequest(
+        draft=BuilderDraftEnvelope(
+            draft_revision=base.draft.draft_revision,
+            state={
+                "session": base.draft.state.session,
+                "catalog_documents": [
+                    {
+                        "ref": orphan_ref,
+                        "document": {
+                            "node": {
+                                "id": "orphan-direct-save",
+                                "unknown": True,
+                            }
+                        },
+                        "expected_revision": f"sha256:{'0' * 64}",
+                    }
+                ],
+            },
+        ),
+        target_ref=base.target_ref,
+    )
+
+    result = _save(request, harness)
+
+    warning = next(
+        issue
+        for issue in result.issues
+        if issue.code == "builder.draft.unreferenced_catalog_documents"
+    )
+    assert warning.blocks == ()
+    assert warning.related_refs == (str(orphan_ref),)
+    committed = harness.repository.snapshot(harness.scope)
+    with pytest.raises(CatalogNotFoundError):
+        committed.get(orphan_ref)
+    assert str(orphan_ref) not in {str(entry.ref) for entry in result.dependency_closure.entries}
+
+
 def test_injected_commit_failure_keeps_active_repository_unchanged(
     harness: SaveHarness,
     monkeypatch: pytest.MonkeyPatch,

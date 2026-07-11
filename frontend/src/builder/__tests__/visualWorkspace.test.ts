@@ -1,7 +1,6 @@
-/** Typed visual DTO mapping only; persisted grammar is backend-owned. */
+/** Direct generated visual DTO state; persisted grammar is backend-owned. */
 
 import { describe, expect, it } from "vitest";
-import { refGroundMember } from "../workspace";
 import {
   defaultBoundary,
   defaultRoutingDomain,
@@ -11,7 +10,6 @@ import {
 } from "./fixtures/workspaceFixtures";
 import {
   structuredDraftFromWorkspace,
-  visualWorkspaceFromWorkspace,
   workspaceFromVisualDraft,
 } from "../visualWorkspace";
 
@@ -24,10 +22,30 @@ function authoredWorkspace() {
   ground.stamp.boresights = { access: { mode: "local_vertical" } };
   ground.segment_id = "ground-stable";
   ground.members = [
-    refGroundMember("nodalarc:sites/denver.yaml", "denver", "Denver", null),
+    {
+      member_id: "member-stable",
+      kind: "ref",
+      ref: "nodalarc:sites/denver.yaml",
+      site_id: "denver",
+      label: "Denver",
+      summary: null,
+      site: null,
+      scheduling_override: null,
+    },
   ];
   workspace.space.push(space);
+  workspace.space_refs.push({
+    segment_id: "space-reference-stable",
+    source_ref: "nodalarc:constellations/reference.yaml",
+    label: "Reference space",
+  });
   workspace.ground.push(ground);
+  workspace.ground_refs.push({
+    segment_id: "ground-reference-stable",
+    site_set_ref: "nodalarc:site-sets/reference.yaml",
+    label: "Reference ground",
+    scheduling: {},
+  });
   const rule = {
     rule_id: "rule-stable",
     label: "Ground access",
@@ -63,7 +81,7 @@ function authoredWorkspace() {
   return workspace;
 }
 
-describe("visual workspace DTO adapter", () => {
+describe("visual workspace DTO identity", () => {
   it("round-trips stable segment, rule, domain, and boundary identities", () => {
     const workspace = authoredWorkspace();
     const draft = {
@@ -71,12 +89,30 @@ describe("visual workspace DTO adapter", () => {
       draft_revision: 3,
       mode: "structured" as const,
       target_ref: "user:sessions/identity-test.yaml",
-      workspace: visualWorkspaceFromWorkspace(workspace),
+      session_name_is_placeholder: false,
+      reserved_authoring_ids: [
+        "space-stable",
+        "ground-stable",
+        "space-ref-stable",
+        "ground-ref-stable",
+        "rule-stable",
+        "domain-stable",
+        "boundary-stable",
+      ],
+      workspace,
     };
 
     const restored = workspaceFromVisualDraft(draft);
     expect(restored.space[0]?.segment_id).toBe("space-stable");
     expect(restored.ground[0]?.segment_id).toBe("ground-stable");
+    expect(restored.space_refs[0]?.source_ref).toBe(
+      "nodalarc:constellations/reference.yaml",
+    );
+    expect(restored.ground_refs[0]?.site_set_ref).toBe(
+      "nodalarc:site-sets/reference.yaml",
+    );
+    expect("ref" in restored.space_refs[0]!).toBe(false);
+    expect("ref" in restored.ground_refs[0]!).toBe(false);
     expect(restored.links[0]?.rule_id).toBe("rule-stable");
     expect(restored.routing_domains[0]?.domain_id).toBe("domain-stable");
     expect(restored.boundaries[0]).toMatchObject({
@@ -92,6 +128,8 @@ describe("visual workspace DTO adapter", () => {
     expect(restored.ground[0]?.stamp.boresights).toEqual({
       access: { mode: "local_vertical" },
     });
+    expect(restored.session_name).toBe("identity-test");
+    expect("name" in restored).toBe(false);
   });
 
   it("updates only visual application state and retains backend-owned fences", () => {
@@ -101,6 +139,16 @@ describe("visual workspace DTO adapter", () => {
       draft_revision: 4,
       mode: "structured" as const,
       target_ref: "user:sessions/identity-test.yaml",
+      session_name_is_placeholder: false,
+      reserved_authoring_ids: [
+        "space-stable",
+        "ground-stable",
+        "space-ref-stable",
+        "ground-ref-stable",
+        "rule-stable",
+        "domain-stable",
+        "boundary-stable",
+      ],
       expected_session_revision: "session-revision",
       expected_catalog_revisions: [
         {
@@ -114,7 +162,7 @@ describe("visual workspace DTO adapter", () => {
           document: { node: { id: "custom" } },
         },
       ],
-      workspace: visualWorkspaceFromWorkspace(workspace),
+      workspace,
     };
 
     const updated = structuredDraftFromWorkspace(base, workspace, 5);
@@ -125,23 +173,30 @@ describe("visual workspace DTO adapter", () => {
     expect(updated.session_yaml).toBeNull();
   });
 
-  it("refuses missing backend semantics instead of selecting browser defaults", () => {
+  it("preserves incomplete backend semantics without selecting browser defaults", () => {
     const workspace = authoredWorkspace();
-    const visual = visualWorkspaceFromWorkspace(workspace);
-    const link = visual.links![0]!;
+    const link = workspace.links[0]!;
     const draft = {
       contract_version: 1 as const,
       draft_revision: 3,
       mode: "structured" as const,
       target_ref: "user:sessions/identity-test.yaml",
+      session_name_is_placeholder: false,
+      reserved_authoring_ids: [
+        "space-stable",
+        "ground-stable",
+        "space-ref-stable",
+        "ground-ref-stable",
+        "rule-stable",
+        "domain-stable",
+        "boundary-stable",
+      ],
       workspace: {
-        ...visual,
+        ...workspace,
         links: [{ ...link, a: { ...link.a, role: null } }],
       },
     };
 
-    expect(() => workspaceFromVisualDraft(draft)).toThrow(
-      "backend visual draft has no workspace.links.0.a.role",
-    );
+    expect(workspaceFromVisualDraft(draft).links[0]?.a.role).toBeNull();
   });
 });

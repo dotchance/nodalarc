@@ -22,6 +22,20 @@ export type CatalogRef = string;
 export type SessionRef = CatalogRef;
 /** Path-free deployable source selected by the browser. */
 export type SessionSourceId = CatalogSessionSourceId;
+/** Runtime validation descriptor for generated backend application DTOs. */
+export type BuilderVisualRuntimeDescriptor =
+  | { readonly kind: "json" }
+  | { readonly kind: "literal"; readonly value: JsonValue }
+  | { readonly kind: "enum"; readonly values: ReadonlyArray<JsonValue> }
+  | { readonly kind: "null" }
+  | { readonly kind: "boolean" }
+  | { readonly kind: "string"; readonly pattern?: string; readonly min_length?: number; readonly max_length?: number }
+  | { readonly kind: "integer" | "number"; readonly minimum?: number; readonly maximum?: number; readonly exclusive_minimum?: number; readonly exclusive_maximum?: number; readonly multiple_of?: number }
+  | { readonly kind: "array"; readonly items: BuilderVisualRuntimeDescriptor; readonly min_items?: number; readonly max_items?: number; readonly unique?: boolean }
+  | { readonly kind: "tuple"; readonly items: ReadonlyArray<BuilderVisualRuntimeDescriptor>; readonly rest: false | BuilderVisualRuntimeDescriptor; readonly min_items?: number; readonly max_items?: number; readonly unique?: boolean }
+  | { readonly kind: "object"; readonly fields: Readonly<Record<string, BuilderVisualRuntimeDescriptor>>; readonly additional: false | BuilderVisualRuntimeDescriptor; readonly patterns?: ReadonlyArray<{ readonly pattern: string; readonly values: BuilderVisualRuntimeDescriptor }> }
+  | { readonly kind: "union"; readonly options: ReadonlyArray<BuilderVisualRuntimeDescriptor>; readonly exclusive: boolean }
+  | { readonly kind: "intersection"; readonly options: ReadonlyArray<BuilderVisualRuntimeDescriptor> };
 
 export type CatalogFamily = "bodies" | "terminals" | "payloads" | "orbits" | "nodes" | "sites" | "site-sets" | "constellations" | "space-node-sets" | "sessions";
 export type BuilderIssueStage = "draft" | "structural" | "reference" | "semantic" | "runtime_support" | "readiness" | "persistence" | "deployment" | "staleness";
@@ -42,7 +56,7 @@ export type BuilderVisualPhasingMode = "walker_delta" | "walker_star" | "evenly_
 export type BuilderVisualOrbitShape = "circular" | "elliptical";
 export type BuilderVisualOrbitPropagator = "two_body" | "j2_mean_elements";
 export type BuilderVisualTopologyMode = "visible_candidates" | "nearest_n";
-export type BuilderVisualDraftCommandOperation = "add_generated_space" | "set_space_population" | "author_inline_space_node" | "add_or_increment_node_terminal" | "add_node_ethernet_port" | "add_ground" | "set_ground_stamp_node_model" | "set_ground_site_node_model" | "add_ground_site_node" | "mint_ground_members" | "add_routing_domain" | "add_boundary" | "connect_segments" | "rederive_link" | "set_scheduling_preset";
+export type BuilderVisualDraftCommandOperation = "place_space_reference" | "place_ground_reference" | "add_generated_space" | "set_space_population" | "author_inline_space_node" | "add_or_increment_node_terminal" | "set_node_terminal_role" | "add_node_ethernet_port" | "add_ground" | "add_ground_site_reference" | "set_ground_stamp_node_model" | "set_ground_site_node_model" | "add_ground_site_node" | "mint_ground_members" | "add_routing_domain" | "add_boundary" | "connect_segments" | "rederive_link" | "set_scheduling_preset";
 export type BuilderVisualDraftAffectedKind = "space" | "ground" | "routing_domain" | "boundary" | "link" | "ground_member";
 export type CatalogComponentFamily = "bodies" | "terminals" | "payloads" | "orbits" | "nodes" | "sites" | "site-sets" | "constellations" | "space-node-sets";
 export type CatalogDraftPatchOperation = "add" | "replace" | "remove";
@@ -450,6 +464,18 @@ export interface BuilderVisualCustomizeChainResult {
   readonly issues?: ReadonlyArray<BuilderIssue>;
 }
 
+/** Place one existing constellation or space-node-set by catalog reference. */
+export interface BuilderVisualPlaceSpaceReferenceCommand {
+  readonly operation: "place_space_reference";
+  readonly source_ref: string;
+}
+
+/** Place one existing site set with backend-owned scheduling. */
+export interface BuilderVisualPlaceGroundReferenceCommand {
+  readonly operation: "place_ground_reference";
+  readonly site_set_ref: string;
+}
+
 /** Add one backend-seeded generated constellation draft. */
 export interface BuilderVisualAddGeneratedSpaceCommand {
   readonly operation: "add_generated_space";
@@ -480,6 +506,14 @@ export interface BuilderVisualAddOrIncrementNodeTerminalCommand {
   readonly role: WizardTerminalRole;
 }
 
+/** Change one inline-node mount role with backend-owned pointing semantics. */
+export interface BuilderVisualSetNodeTerminalRoleCommand {
+  readonly operation: "set_node_terminal_role";
+  readonly segment_id: string;
+  readonly mount_id: string;
+  readonly role: WizardTerminalRole;
+}
+
 /** Add one uniquely identified Ethernet port to an authored inline node. */
 export interface BuilderVisualAddNodeEthernetPortCommand {
   readonly operation: "add_node_ethernet_port";
@@ -493,6 +527,13 @@ export interface BuilderVisualAddGroundCommand {
   readonly installed?: Readonly<Record<string, number>>;
   readonly boresights?: Readonly<Record<string, BuilderVisualGroundBoresight>>;
   readonly body_ref?: string | null;
+}
+
+/** Place one existing site, creating its authored ground segment when needed. */
+export interface BuilderVisualAddGroundSiteReferenceCommand {
+  readonly operation: "add_ground_site_reference";
+  readonly segment_id?: string | null;
+  readonly site_ref: string;
 }
 
 /** Select a ground stamp node and derive its installed terminal inventory. */
@@ -571,7 +612,7 @@ export interface BuilderVisualSetSchedulingPresetCommand {
 export interface BuilderVisualDraftCommandRequest {
   readonly draft: BuilderVisualDraftEnvelope;
   readonly expected_draft_revision: number;
-  readonly command: BuilderVisualAddGeneratedSpaceCommand | BuilderVisualSetSpacePopulationCommand | BuilderVisualAuthorInlineSpaceNodeCommand | BuilderVisualAddOrIncrementNodeTerminalCommand | BuilderVisualAddNodeEthernetPortCommand | BuilderVisualAddGroundCommand | BuilderVisualSetGroundStampNodeModelCommand | BuilderVisualSetGroundSiteNodeModelCommand | BuilderVisualAddGroundSiteNodeCommand | BuilderVisualMintGroundMembersCommand | BuilderVisualAddRoutingDomainCommand | BuilderVisualAddBoundaryCommand | BuilderVisualConnectSegmentsCommand | BuilderVisualRederiveLinkCommand | BuilderVisualSetSchedulingPresetCommand;
+  readonly command: BuilderVisualPlaceSpaceReferenceCommand | BuilderVisualPlaceGroundReferenceCommand | BuilderVisualAddGeneratedSpaceCommand | BuilderVisualSetSpacePopulationCommand | BuilderVisualAuthorInlineSpaceNodeCommand | BuilderVisualAddOrIncrementNodeTerminalCommand | BuilderVisualSetNodeTerminalRoleCommand | BuilderVisualAddNodeEthernetPortCommand | BuilderVisualAddGroundCommand | BuilderVisualAddGroundSiteReferenceCommand | BuilderVisualSetGroundStampNodeModelCommand | BuilderVisualSetGroundSiteNodeModelCommand | BuilderVisualAddGroundSiteNodeCommand | BuilderVisualMintGroundMembersCommand | BuilderVisualAddRoutingDomainCommand | BuilderVisualAddBoundaryCommand | BuilderVisualConnectSegmentsCommand | BuilderVisualRederiveLinkCommand | BuilderVisualSetSchedulingPresetCommand;
 }
 
 /** One applied command and the next revision of the complete draft. */
@@ -652,7 +693,7 @@ export interface BuilderVisualSpaceDraft {
   readonly raan_spacing_deg?: number | null;
   readonly slots_per_plane?: number | null;
   readonly phasing_mode: BuilderVisualPhasingMode;
-  readonly phase_offset_deg: number;
+  readonly phase_offset_deg?: number | null;
 }
 
 /** One library space source placed by reference. */
@@ -796,13 +837,15 @@ export interface BuilderVisualDraftEnvelope {
   readonly expected_session_revision?: string | null;
   readonly expected_catalog_revisions?: ReadonlyArray<BuilderVisualCatalogRevision>;
   readonly catalog_documents?: ReadonlyArray<BuilderProposedCatalogDocument>;
+  readonly session_name_is_placeholder: boolean;
+  readonly reserved_authoring_ids: ReadonlyArray<string>;
   readonly workspace?: BuilderVisualWorkspace | null;
   readonly session_yaml?: string | null;
 }
 
 /** Request a backend-created blank structured visual draft. */
 export interface BuilderVisualDraftCreateRequest {
-  readonly session_name?: string;
+  readonly session_name?: string | null;
   readonly display_name?: string | null;
   readonly description?: string | null;
 }
@@ -1646,3 +1689,3319 @@ export interface CoveragePreviewResult {
   readonly ground_stations: GsPreview;
   readonly warnings: ReadonlyArray<CoverageInsight>;
 }
+
+/** Runtime validator descriptor generated from this backend application DTO. */
+export const BUILDER_VISUAL_DRAFT_ENVELOPE_RUNTIME_DESCRIPTOR = {
+  "kind": "object",
+  "fields": {
+    "contract_version": {
+      "kind": "literal",
+      "value": 1
+    },
+    "draft_revision": {
+      "kind": "integer",
+      "minimum": 0
+    },
+    "mode": {
+      "kind": "enum",
+      "values": [
+        "structured",
+        "opaque_yaml"
+      ]
+    },
+    "target_ref": {
+      "kind": "string",
+      "pattern": "^(?:nodalarc|user):(?:sessions)/(?:[a-z0-9][a-z0-9_-]*/)*[a-z0-9][a-z0-9_-]*\\.(?:yaml|yml)$"
+    },
+    "source_ref": {
+      "kind": "union",
+      "options": [
+        {
+          "kind": "string",
+          "pattern": "^(?:nodalarc|user):(?:sessions)/(?:[a-z0-9][a-z0-9_-]*/)*[a-z0-9][a-z0-9_-]*\\.(?:yaml|yml)$"
+        },
+        {
+          "kind": "null"
+        }
+      ],
+      "exclusive": false
+    },
+    "expected_session_revision": {
+      "kind": "union",
+      "options": [
+        {
+          "kind": "string",
+          "min_length": 1
+        },
+        {
+          "kind": "null"
+        }
+      ],
+      "exclusive": false
+    },
+    "expected_catalog_revisions": {
+      "kind": "array",
+      "items": {
+        "kind": "object",
+        "fields": {
+          "ref": {
+            "kind": "string",
+            "pattern": "^(?:nodalarc|user):(?:bodies|constellations|nodes|orbits|payloads|sessions|site\\-sets|sites|space\\-node\\-sets|terminals)/(?:[a-z0-9][a-z0-9_-]*/)*[a-z0-9][a-z0-9_-]*\\.(?:yaml|yml)$"
+          },
+          "expected_revision": {
+            "kind": "string",
+            "min_length": 1
+          }
+        },
+        "additional": false
+      }
+    },
+    "catalog_documents": {
+      "kind": "array",
+      "items": {
+        "kind": "object",
+        "fields": {
+          "ref": {
+            "kind": "string",
+            "pattern": "^(?:nodalarc|user):(?:bodies|constellations|nodes|orbits|payloads|sessions|site\\-sets|sites|space\\-node\\-sets|terminals)/(?:[a-z0-9][a-z0-9_-]*/)*[a-z0-9][a-z0-9_-]*\\.(?:yaml|yml)$"
+          },
+          "document": {
+            "kind": "object",
+            "fields": {},
+            "additional": {
+              "kind": "json"
+            }
+          },
+          "expected_revision": {
+            "kind": "union",
+            "options": [
+              {
+                "kind": "string",
+                "min_length": 1
+              },
+              {
+                "kind": "null"
+              }
+            ],
+            "exclusive": false
+          }
+        },
+        "additional": false
+      }
+    },
+    "session_name_is_placeholder": {
+      "kind": "boolean"
+    },
+    "reserved_authoring_ids": {
+      "kind": "array",
+      "items": {
+        "kind": "string"
+      }
+    },
+    "workspace": {
+      "kind": "union",
+      "options": [
+        {
+          "kind": "object",
+          "fields": {
+            "session_name": {
+              "kind": "string"
+            },
+            "display_name": {
+              "kind": "union",
+              "options": [
+                {
+                  "kind": "string"
+                },
+                {
+                  "kind": "null"
+                }
+              ],
+              "exclusive": false
+            },
+            "description": {
+              "kind": "union",
+              "options": [
+                {
+                  "kind": "string"
+                },
+                {
+                  "kind": "null"
+                }
+              ],
+              "exclusive": false
+            },
+            "space": {
+              "kind": "array",
+              "items": {
+                "kind": "object",
+                "fields": {
+                  "segment_id": {
+                    "kind": "string"
+                  },
+                  "display_name": {
+                    "kind": "string"
+                  },
+                  "node_ref": {
+                    "kind": "union",
+                    "options": [
+                      {
+                        "kind": "string",
+                        "pattern": "^(?:nodalarc|user):(?:nodes)/(?:[a-z0-9][a-z0-9_-]*/)*[a-z0-9][a-z0-9_-]*\\.(?:yaml|yml)$"
+                      },
+                      {
+                        "kind": "null"
+                      }
+                    ],
+                    "exclusive": false
+                  },
+                  "node_draft": {
+                    "kind": "union",
+                    "options": [
+                      {
+                        "kind": "object",
+                        "fields": {
+                          "id": {
+                            "kind": "string"
+                          },
+                          "display_name": {
+                            "kind": "string"
+                          },
+                          "forwarding": {
+                            "kind": "union",
+                            "options": [
+                              {
+                                "kind": "enum",
+                                "values": [
+                                  "routed",
+                                  "host",
+                                  "bridge",
+                                  "control_only"
+                                ]
+                              },
+                              {
+                                "kind": "null"
+                              }
+                            ],
+                            "exclusive": false
+                          },
+                          "ethernet": {
+                            "kind": "array",
+                            "items": {
+                              "kind": "string"
+                            }
+                          },
+                          "terminals": {
+                            "kind": "array",
+                            "items": {
+                              "kind": "object",
+                              "fields": {
+                                "mount_id": {
+                                  "kind": "string"
+                                },
+                                "role": {
+                                  "kind": "union",
+                                  "options": [
+                                    {
+                                      "kind": "enum",
+                                      "values": [
+                                        "access",
+                                        "isl",
+                                        "crosslink",
+                                        "backbone"
+                                      ]
+                                    },
+                                    {
+                                      "kind": "null"
+                                    }
+                                  ],
+                                  "exclusive": false
+                                },
+                                "terminal_ref": {
+                                  "kind": "union",
+                                  "options": [
+                                    {
+                                      "kind": "string",
+                                      "pattern": "^(?:nodalarc|user):(?:terminals)/(?:[a-z0-9][a-z0-9_-]*/)*[a-z0-9][a-z0-9_-]*\\.(?:yaml|yml)$"
+                                    },
+                                    {
+                                      "kind": "null"
+                                    }
+                                  ],
+                                  "exclusive": false
+                                },
+                                "count": {
+                                  "kind": "union",
+                                  "options": [
+                                    {
+                                      "kind": "integer"
+                                    },
+                                    {
+                                      "kind": "null"
+                                    }
+                                  ],
+                                  "exclusive": false
+                                },
+                                "boresight": {
+                                  "kind": "union",
+                                  "options": [
+                                    {
+                                      "kind": "object",
+                                      "fields": {
+                                        "mode": {
+                                          "kind": "literal",
+                                          "value": "nadir"
+                                        }
+                                      },
+                                      "additional": false
+                                    },
+                                    {
+                                      "kind": "null"
+                                    }
+                                  ],
+                                  "exclusive": false
+                                }
+                              },
+                              "additional": false
+                            }
+                          }
+                        },
+                        "additional": false
+                      },
+                      {
+                        "kind": "null"
+                      }
+                    ],
+                    "exclusive": false
+                  },
+                  "orbit": {
+                    "kind": "object",
+                    "fields": {
+                      "central_body": {
+                        "kind": "union",
+                        "options": [
+                          {
+                            "kind": "string",
+                            "pattern": "^(?:nodalarc|user):(?:bodies)/(?:[a-z0-9][a-z0-9_-]*/)*[a-z0-9][a-z0-9_-]*\\.(?:yaml|yml)$"
+                          },
+                          {
+                            "kind": "null"
+                          }
+                        ],
+                        "exclusive": false
+                      },
+                      "shape_kind": {
+                        "kind": "union",
+                        "options": [
+                          {
+                            "kind": "enum",
+                            "values": [
+                              "circular",
+                              "elliptical"
+                            ]
+                          },
+                          {
+                            "kind": "null"
+                          }
+                        ],
+                        "exclusive": false
+                      },
+                      "altitude_km": {
+                        "kind": "union",
+                        "options": [
+                          {
+                            "kind": "number"
+                          },
+                          {
+                            "kind": "null"
+                          }
+                        ],
+                        "exclusive": false
+                      },
+                      "perigee_altitude_km": {
+                        "kind": "union",
+                        "options": [
+                          {
+                            "kind": "number"
+                          },
+                          {
+                            "kind": "null"
+                          }
+                        ],
+                        "exclusive": false
+                      },
+                      "apogee_altitude_km": {
+                        "kind": "union",
+                        "options": [
+                          {
+                            "kind": "number"
+                          },
+                          {
+                            "kind": "null"
+                          }
+                        ],
+                        "exclusive": false
+                      },
+                      "inclination_deg": {
+                        "kind": "union",
+                        "options": [
+                          {
+                            "kind": "number"
+                          },
+                          {
+                            "kind": "null"
+                          }
+                        ],
+                        "exclusive": false
+                      },
+                      "raan_deg": {
+                        "kind": "union",
+                        "options": [
+                          {
+                            "kind": "number"
+                          },
+                          {
+                            "kind": "null"
+                          }
+                        ],
+                        "exclusive": false
+                      },
+                      "argument_of_perigee_deg": {
+                        "kind": "union",
+                        "options": [
+                          {
+                            "kind": "number"
+                          },
+                          {
+                            "kind": "null"
+                          }
+                        ],
+                        "exclusive": false
+                      },
+                      "mean_anomaly_deg": {
+                        "kind": "union",
+                        "options": [
+                          {
+                            "kind": "number"
+                          },
+                          {
+                            "kind": "null"
+                          }
+                        ],
+                        "exclusive": false
+                      },
+                      "propagator": {
+                        "kind": "union",
+                        "options": [
+                          {
+                            "kind": "enum",
+                            "values": [
+                              "two_body",
+                              "j2_mean_elements"
+                            ]
+                          },
+                          {
+                            "kind": "null"
+                          }
+                        ],
+                        "exclusive": false
+                      }
+                    },
+                    "additional": false
+                  },
+                  "planes": {
+                    "kind": "union",
+                    "options": [
+                      {
+                        "kind": "integer"
+                      },
+                      {
+                        "kind": "null"
+                      }
+                    ],
+                    "exclusive": false
+                  },
+                  "raan_spacing_deg": {
+                    "kind": "union",
+                    "options": [
+                      {
+                        "kind": "number"
+                      },
+                      {
+                        "kind": "null"
+                      }
+                    ],
+                    "exclusive": false
+                  },
+                  "slots_per_plane": {
+                    "kind": "union",
+                    "options": [
+                      {
+                        "kind": "integer"
+                      },
+                      {
+                        "kind": "null"
+                      }
+                    ],
+                    "exclusive": false
+                  },
+                  "phasing_mode": {
+                    "kind": "enum",
+                    "values": [
+                      "walker_delta",
+                      "walker_star",
+                      "evenly_spaced_mean_anomaly"
+                    ]
+                  },
+                  "phase_offset_deg": {
+                    "kind": "union",
+                    "options": [
+                      {
+                        "kind": "number"
+                      },
+                      {
+                        "kind": "null"
+                      }
+                    ],
+                    "exclusive": false
+                  }
+                },
+                "additional": false
+              }
+            },
+            "space_refs": {
+              "kind": "array",
+              "items": {
+                "kind": "object",
+                "fields": {
+                  "segment_id": {
+                    "kind": "string"
+                  },
+                  "source_ref": {
+                    "kind": "union",
+                    "options": [
+                      {
+                        "kind": "string",
+                        "pattern": "^(?:nodalarc|user):(?:constellations|space\\-node\\-sets)/(?:[a-z0-9][a-z0-9_-]*/)*[a-z0-9][a-z0-9_-]*\\.(?:yaml|yml)$"
+                      },
+                      {
+                        "kind": "null"
+                      }
+                    ],
+                    "exclusive": false
+                  },
+                  "label": {
+                    "kind": "string"
+                  }
+                },
+                "additional": false
+              }
+            },
+            "ground": {
+              "kind": "array",
+              "items": {
+                "kind": "object",
+                "fields": {
+                  "segment_id": {
+                    "kind": "string"
+                  },
+                  "display_name": {
+                    "kind": "string"
+                  },
+                  "members": {
+                    "kind": "array",
+                    "items": {
+                      "kind": "object",
+                      "fields": {
+                        "member_id": {
+                          "kind": "string"
+                        },
+                        "kind": {
+                          "kind": "enum",
+                          "values": [
+                            "ref",
+                            "draft"
+                          ]
+                        },
+                        "ref": {
+                          "kind": "union",
+                          "options": [
+                            {
+                              "kind": "string",
+                              "pattern": "^(?:nodalarc|user):(?:sites)/(?:[a-z0-9][a-z0-9_-]*/)*[a-z0-9][a-z0-9_-]*\\.(?:yaml|yml)$"
+                            },
+                            {
+                              "kind": "null"
+                            }
+                          ],
+                          "exclusive": false
+                        },
+                        "site_id": {
+                          "kind": "string"
+                        },
+                        "label": {
+                          "kind": "string"
+                        },
+                        "summary": {
+                          "kind": "union",
+                          "options": [
+                            {
+                              "kind": "string"
+                            },
+                            {
+                              "kind": "null"
+                            }
+                          ],
+                          "exclusive": false
+                        },
+                        "site": {
+                          "kind": "union",
+                          "options": [
+                            {
+                              "kind": "object",
+                              "fields": {
+                                "site_id": {
+                                  "kind": "string"
+                                },
+                                "display_name": {
+                                  "kind": "string"
+                                },
+                                "body": {
+                                  "kind": "union",
+                                  "options": [
+                                    {
+                                      "kind": "string",
+                                      "pattern": "^(?:nodalarc|user):(?:bodies)/(?:[a-z0-9][a-z0-9_-]*/)*[a-z0-9][a-z0-9_-]*\\.(?:yaml|yml)$"
+                                    },
+                                    {
+                                      "kind": "null"
+                                    }
+                                  ],
+                                  "exclusive": false
+                                },
+                                "lat_deg": {
+                                  "kind": "union",
+                                  "options": [
+                                    {
+                                      "kind": "number"
+                                    },
+                                    {
+                                      "kind": "null"
+                                    }
+                                  ],
+                                  "exclusive": false
+                                },
+                                "lon_deg": {
+                                  "kind": "union",
+                                  "options": [
+                                    {
+                                      "kind": "number"
+                                    },
+                                    {
+                                      "kind": "null"
+                                    }
+                                  ],
+                                  "exclusive": false
+                                },
+                                "alt_m": {
+                                  "kind": "union",
+                                  "options": [
+                                    {
+                                      "kind": "number"
+                                    },
+                                    {
+                                      "kind": "null"
+                                    }
+                                  ],
+                                  "exclusive": false
+                                },
+                                "lan_ipv4": {
+                                  "kind": "string"
+                                },
+                                "tags": {
+                                  "kind": "array",
+                                  "items": {
+                                    "kind": "string"
+                                  }
+                                },
+                                "nodes": {
+                                  "kind": "array",
+                                  "items": {
+                                    "kind": "object",
+                                    "fields": {
+                                      "node_id": {
+                                        "kind": "string"
+                                      },
+                                      "model_ref": {
+                                        "kind": "union",
+                                        "options": [
+                                          {
+                                            "kind": "string",
+                                            "pattern": "^(?:nodalarc|user):(?:nodes)/(?:[a-z0-9][a-z0-9_-]*/)*[a-z0-9][a-z0-9_-]*\\.(?:yaml|yml)$"
+                                          },
+                                          {
+                                            "kind": "null"
+                                          }
+                                        ],
+                                        "exclusive": false
+                                      },
+                                      "installed": {
+                                        "kind": "object",
+                                        "fields": {},
+                                        "additional": {
+                                          "kind": "integer"
+                                        }
+                                      },
+                                      "boresights": {
+                                        "kind": "object",
+                                        "fields": {},
+                                        "additional": {
+                                          "kind": "object",
+                                          "fields": {
+                                            "mode": {
+                                              "kind": "literal",
+                                              "value": "local_vertical"
+                                            }
+                                          },
+                                          "additional": false
+                                        }
+                                      },
+                                      "lo0_ipv4": {
+                                        "kind": "string"
+                                      },
+                                      "terr0_ipv4": {
+                                        "kind": "string"
+                                      }
+                                    },
+                                    "additional": false
+                                  }
+                                }
+                              },
+                              "additional": false
+                            },
+                            {
+                              "kind": "null"
+                            }
+                          ],
+                          "exclusive": false
+                        },
+                        "scheduling_override": {
+                          "kind": "union",
+                          "options": [
+                            {
+                              "kind": "object",
+                              "fields": {},
+                              "additional": {
+                                "kind": "json"
+                              }
+                            },
+                            {
+                              "kind": "null"
+                            }
+                          ],
+                          "exclusive": false
+                        }
+                      },
+                      "additional": false
+                    }
+                  },
+                  "stamp": {
+                    "kind": "object",
+                    "fields": {
+                      "node_ref": {
+                        "kind": "union",
+                        "options": [
+                          {
+                            "kind": "string",
+                            "pattern": "^(?:nodalarc|user):(?:nodes)/(?:[a-z0-9][a-z0-9_-]*/)*[a-z0-9][a-z0-9_-]*\\.(?:yaml|yml)$"
+                          },
+                          {
+                            "kind": "null"
+                          }
+                        ],
+                        "exclusive": false
+                      },
+                      "installed": {
+                        "kind": "object",
+                        "fields": {},
+                        "additional": {
+                          "kind": "integer"
+                        }
+                      },
+                      "boresights": {
+                        "kind": "object",
+                        "fields": {},
+                        "additional": {
+                          "kind": "object",
+                          "fields": {
+                            "mode": {
+                              "kind": "literal",
+                              "value": "local_vertical"
+                            }
+                          },
+                          "additional": false
+                        }
+                      },
+                      "body": {
+                        "kind": "union",
+                        "options": [
+                          {
+                            "kind": "string",
+                            "pattern": "^(?:nodalarc|user):(?:bodies)/(?:[a-z0-9][a-z0-9_-]*/)*[a-z0-9][a-z0-9_-]*\\.(?:yaml|yml)$"
+                          },
+                          {
+                            "kind": "null"
+                          }
+                        ],
+                        "exclusive": false
+                      },
+                      "lan_base": {
+                        "kind": "string"
+                      },
+                      "loopback_base": {
+                        "kind": "string"
+                      }
+                    },
+                    "additional": false
+                  },
+                  "scheduling": {
+                    "kind": "object",
+                    "fields": {},
+                    "additional": {
+                      "kind": "json"
+                    }
+                  },
+                  "originated_ipv4": {
+                    "kind": "array",
+                    "items": {
+                      "kind": "string"
+                    }
+                  },
+                  "tags": {
+                    "kind": "array",
+                    "items": {
+                      "kind": "string"
+                    }
+                  }
+                },
+                "additional": false
+              }
+            },
+            "ground_refs": {
+              "kind": "array",
+              "items": {
+                "kind": "object",
+                "fields": {
+                  "segment_id": {
+                    "kind": "string"
+                  },
+                  "site_set_ref": {
+                    "kind": "union",
+                    "options": [
+                      {
+                        "kind": "string",
+                        "pattern": "^(?:nodalarc|user):(?:site\\-sets)/(?:[a-z0-9][a-z0-9_-]*/)*[a-z0-9][a-z0-9_-]*\\.(?:yaml|yml)$"
+                      },
+                      {
+                        "kind": "null"
+                      }
+                    ],
+                    "exclusive": false
+                  },
+                  "label": {
+                    "kind": "string"
+                  },
+                  "scheduling": {
+                    "kind": "object",
+                    "fields": {},
+                    "additional": {
+                      "kind": "json"
+                    }
+                  }
+                },
+                "additional": false
+              }
+            },
+            "links": {
+              "kind": "array",
+              "items": {
+                "kind": "object",
+                "fields": {
+                  "rule_id": {
+                    "kind": "string"
+                  },
+                  "label": {
+                    "kind": "string"
+                  },
+                  "enabled": {
+                    "kind": "boolean"
+                  },
+                  "a": {
+                    "kind": "object",
+                    "fields": {
+                      "segment_id": {
+                        "kind": "string"
+                      },
+                      "tag": {
+                        "kind": "union",
+                        "options": [
+                          {
+                            "kind": "string"
+                          },
+                          {
+                            "kind": "null"
+                          }
+                        ],
+                        "exclusive": false
+                      },
+                      "role": {
+                        "kind": "union",
+                        "options": [
+                          {
+                            "kind": "enum",
+                            "values": [
+                              "access",
+                              "isl",
+                              "crosslink",
+                              "backbone"
+                            ]
+                          },
+                          {
+                            "kind": "null"
+                          }
+                        ],
+                        "exclusive": false
+                      },
+                      "medium": {
+                        "kind": "union",
+                        "options": [
+                          {
+                            "kind": "enum",
+                            "values": [
+                              "rf",
+                              "optical"
+                            ]
+                          },
+                          {
+                            "kind": "null"
+                          }
+                        ],
+                        "exclusive": false
+                      },
+                      "min_elevation_deg": {
+                        "kind": "union",
+                        "options": [
+                          {
+                            "kind": "number"
+                          },
+                          {
+                            "kind": "null"
+                          }
+                        ],
+                        "exclusive": false
+                      }
+                    },
+                    "additional": false
+                  },
+                  "b": {
+                    "kind": "object",
+                    "fields": {
+                      "segment_id": {
+                        "kind": "string"
+                      },
+                      "tag": {
+                        "kind": "union",
+                        "options": [
+                          {
+                            "kind": "string"
+                          },
+                          {
+                            "kind": "null"
+                          }
+                        ],
+                        "exclusive": false
+                      },
+                      "role": {
+                        "kind": "union",
+                        "options": [
+                          {
+                            "kind": "enum",
+                            "values": [
+                              "access",
+                              "isl",
+                              "crosslink",
+                              "backbone"
+                            ]
+                          },
+                          {
+                            "kind": "null"
+                          }
+                        ],
+                        "exclusive": false
+                      },
+                      "medium": {
+                        "kind": "union",
+                        "options": [
+                          {
+                            "kind": "enum",
+                            "values": [
+                              "rf",
+                              "optical"
+                            ]
+                          },
+                          {
+                            "kind": "null"
+                          }
+                        ],
+                        "exclusive": false
+                      },
+                      "min_elevation_deg": {
+                        "kind": "union",
+                        "options": [
+                          {
+                            "kind": "number"
+                          },
+                          {
+                            "kind": "null"
+                          }
+                        ],
+                        "exclusive": false
+                      }
+                    },
+                    "additional": false
+                  },
+                  "topology_mode": {
+                    "kind": "union",
+                    "options": [
+                      {
+                        "kind": "enum",
+                        "values": [
+                          "visible_candidates",
+                          "nearest_n"
+                        ]
+                      },
+                      {
+                        "kind": "null"
+                      }
+                    ],
+                    "exclusive": false
+                  },
+                  "topology_n": {
+                    "kind": "union",
+                    "options": [
+                      {
+                        "kind": "integer"
+                      },
+                      {
+                        "kind": "null"
+                      }
+                    ],
+                    "exclusive": false
+                  },
+                  "max_range_km": {
+                    "kind": "union",
+                    "options": [
+                      {
+                        "kind": "number"
+                      },
+                      {
+                        "kind": "null"
+                      }
+                    ],
+                    "exclusive": false
+                  }
+                },
+                "additional": false
+              }
+            },
+            "routing_domains": {
+              "kind": "array",
+              "items": {
+                "kind": "object",
+                "fields": {
+                  "domain_id": {
+                    "kind": "string"
+                  },
+                  "label": {
+                    "kind": "string"
+                  },
+                  "protocol": {
+                    "kind": "union",
+                    "options": [
+                      {
+                        "kind": "enum",
+                        "values": [
+                          "isis",
+                          "ospf",
+                          "bgp",
+                          "static"
+                        ]
+                      },
+                      {
+                        "kind": "null"
+                      }
+                    ],
+                    "exclusive": false
+                  },
+                  "member_segment_ids": {
+                    "kind": "array",
+                    "items": {
+                      "kind": "string"
+                    }
+                  },
+                  "hello_interval_s": {
+                    "kind": "union",
+                    "options": [
+                      {
+                        "kind": "number"
+                      },
+                      {
+                        "kind": "null"
+                      }
+                    ],
+                    "exclusive": false
+                  },
+                  "hold_interval_s": {
+                    "kind": "union",
+                    "options": [
+                      {
+                        "kind": "number"
+                      },
+                      {
+                        "kind": "null"
+                      }
+                    ],
+                    "exclusive": false
+                  }
+                },
+                "additional": false
+              }
+            },
+            "boundaries": {
+              "kind": "array",
+              "items": {
+                "kind": "object",
+                "fields": {
+                  "boundary_id": {
+                    "kind": "string"
+                  },
+                  "over_rule_id": {
+                    "kind": "string"
+                  },
+                  "adapter": {
+                    "kind": "union",
+                    "options": [
+                      {
+                        "kind": "enum",
+                        "values": [
+                          "static_ip",
+                          "bgp",
+                          "dtn_bundle"
+                        ]
+                      },
+                      {
+                        "kind": "null"
+                      }
+                    ],
+                    "exclusive": false
+                  },
+                  "from_domain_id": {
+                    "kind": "string"
+                  },
+                  "to_domain_id": {
+                    "kind": "string"
+                  },
+                  "export_node_loopbacks": {
+                    "kind": "boolean"
+                  }
+                },
+                "additional": false
+              }
+            },
+            "max_pairs_per_rule": {
+              "kind": "union",
+              "options": [
+                {
+                  "kind": "integer"
+                },
+                {
+                  "kind": "null"
+                }
+              ],
+              "exclusive": false
+            },
+            "max_pairs_per_tick": {
+              "kind": "union",
+              "options": [
+                {
+                  "kind": "integer"
+                },
+                {
+                  "kind": "null"
+                }
+              ],
+              "exclusive": false
+            },
+            "start_time": {
+              "kind": "string"
+            },
+            "step_seconds": {
+              "kind": "union",
+              "options": [
+                {
+                  "kind": "number"
+                },
+                {
+                  "kind": "null"
+                }
+              ],
+              "exclusive": false
+            },
+            "compression": {
+              "kind": "union",
+              "options": [
+                {
+                  "kind": "number"
+                },
+                {
+                  "kind": "null"
+                }
+              ],
+              "exclusive": false
+            }
+          },
+          "additional": false
+        },
+        {
+          "kind": "null"
+        }
+      ],
+      "exclusive": false
+    },
+    "session_yaml": {
+      "kind": "union",
+      "options": [
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "null"
+        }
+      ],
+      "exclusive": false
+    }
+  },
+  "additional": false
+} as const satisfies BuilderVisualRuntimeDescriptor;
+
+/** Runtime validator descriptor generated from this backend application DTO. */
+export const CATALOG_COMPONENT_DRAFT_ENVELOPE_RUNTIME_DESCRIPTOR = {
+  "kind": "object",
+  "fields": {
+    "contract_version": {
+      "kind": "literal",
+      "value": 1
+    },
+    "draft_revision": {
+      "kind": "integer",
+      "minimum": 0
+    },
+    "family": {
+      "kind": "enum",
+      "values": [
+        "bodies",
+        "terminals",
+        "payloads",
+        "orbits",
+        "nodes",
+        "sites",
+        "site-sets",
+        "constellations",
+        "space-node-sets"
+      ]
+    },
+    "target_ref": {
+      "kind": "string",
+      "pattern": "^(?:nodalarc|user):(?:bodies|constellations|nodes|orbits|payloads|sessions|site\\-sets|sites|space\\-node\\-sets|terminals)/(?:[a-z0-9][a-z0-9_-]*/)*[a-z0-9][a-z0-9_-]*\\.(?:yaml|yml)$"
+    },
+    "source_ref": {
+      "kind": "union",
+      "options": [
+        {
+          "kind": "string",
+          "pattern": "^(?:nodalarc|user):(?:bodies|constellations|nodes|orbits|payloads|sessions|site\\-sets|sites|space\\-node\\-sets|terminals)/(?:[a-z0-9][a-z0-9_-]*/)*[a-z0-9][a-z0-9_-]*\\.(?:yaml|yml)$"
+        },
+        {
+          "kind": "null"
+        }
+      ],
+      "exclusive": false
+    },
+    "expected_source_revision": {
+      "kind": "union",
+      "options": [
+        {
+          "kind": "string",
+          "min_length": 1
+        },
+        {
+          "kind": "null"
+        }
+      ],
+      "exclusive": false
+    },
+    "expected_target_revision": {
+      "kind": "union",
+      "options": [
+        {
+          "kind": "string",
+          "min_length": 1
+        },
+        {
+          "kind": "null"
+        }
+      ],
+      "exclusive": false
+    },
+    "document": {
+      "kind": "object",
+      "fields": {},
+      "additional": {
+        "kind": "json"
+      }
+    },
+    "issues": {
+      "kind": "array",
+      "items": {
+        "kind": "object",
+        "fields": {
+          "code": {
+            "kind": "string",
+            "min_length": 1
+          },
+          "stage": {
+            "kind": "enum",
+            "values": [
+              "structural",
+              "reference",
+              "runtime_support"
+            ]
+          },
+          "message": {
+            "kind": "string",
+            "min_length": 1
+          },
+          "pointer": {
+            "kind": "string",
+            "min_length": 1,
+            "max_length": 2048
+          },
+          "blocks": {
+            "kind": "array",
+            "items": {
+              "kind": "enum",
+              "values": [
+                "save",
+                "deploy"
+              ]
+            }
+          }
+        },
+        "additional": false
+      }
+    }
+  },
+  "additional": false
+} as const satisfies BuilderVisualRuntimeDescriptor;
+
+/** Runtime validator descriptor generated from this backend application DTO. */
+export const BUILDER_VISUAL_WORKSPACE_RUNTIME_DESCRIPTOR = {
+  "kind": "object",
+  "fields": {
+    "session_name": {
+      "kind": "string"
+    },
+    "display_name": {
+      "kind": "union",
+      "options": [
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "null"
+        }
+      ],
+      "exclusive": false
+    },
+    "description": {
+      "kind": "union",
+      "options": [
+        {
+          "kind": "string"
+        },
+        {
+          "kind": "null"
+        }
+      ],
+      "exclusive": false
+    },
+    "space": {
+      "kind": "array",
+      "items": {
+        "kind": "object",
+        "fields": {
+          "segment_id": {
+            "kind": "string"
+          },
+          "display_name": {
+            "kind": "string"
+          },
+          "node_ref": {
+            "kind": "union",
+            "options": [
+              {
+                "kind": "string",
+                "pattern": "^(?:nodalarc|user):(?:nodes)/(?:[a-z0-9][a-z0-9_-]*/)*[a-z0-9][a-z0-9_-]*\\.(?:yaml|yml)$"
+              },
+              {
+                "kind": "null"
+              }
+            ],
+            "exclusive": false
+          },
+          "node_draft": {
+            "kind": "union",
+            "options": [
+              {
+                "kind": "object",
+                "fields": {
+                  "id": {
+                    "kind": "string"
+                  },
+                  "display_name": {
+                    "kind": "string"
+                  },
+                  "forwarding": {
+                    "kind": "union",
+                    "options": [
+                      {
+                        "kind": "enum",
+                        "values": [
+                          "routed",
+                          "host",
+                          "bridge",
+                          "control_only"
+                        ]
+                      },
+                      {
+                        "kind": "null"
+                      }
+                    ],
+                    "exclusive": false
+                  },
+                  "ethernet": {
+                    "kind": "array",
+                    "items": {
+                      "kind": "string"
+                    }
+                  },
+                  "terminals": {
+                    "kind": "array",
+                    "items": {
+                      "kind": "object",
+                      "fields": {
+                        "mount_id": {
+                          "kind": "string"
+                        },
+                        "role": {
+                          "kind": "union",
+                          "options": [
+                            {
+                              "kind": "enum",
+                              "values": [
+                                "access",
+                                "isl",
+                                "crosslink",
+                                "backbone"
+                              ]
+                            },
+                            {
+                              "kind": "null"
+                            }
+                          ],
+                          "exclusive": false
+                        },
+                        "terminal_ref": {
+                          "kind": "union",
+                          "options": [
+                            {
+                              "kind": "string",
+                              "pattern": "^(?:nodalarc|user):(?:terminals)/(?:[a-z0-9][a-z0-9_-]*/)*[a-z0-9][a-z0-9_-]*\\.(?:yaml|yml)$"
+                            },
+                            {
+                              "kind": "null"
+                            }
+                          ],
+                          "exclusive": false
+                        },
+                        "count": {
+                          "kind": "union",
+                          "options": [
+                            {
+                              "kind": "integer"
+                            },
+                            {
+                              "kind": "null"
+                            }
+                          ],
+                          "exclusive": false
+                        },
+                        "boresight": {
+                          "kind": "union",
+                          "options": [
+                            {
+                              "kind": "object",
+                              "fields": {
+                                "mode": {
+                                  "kind": "literal",
+                                  "value": "nadir"
+                                }
+                              },
+                              "additional": false
+                            },
+                            {
+                              "kind": "null"
+                            }
+                          ],
+                          "exclusive": false
+                        }
+                      },
+                      "additional": false
+                    }
+                  }
+                },
+                "additional": false
+              },
+              {
+                "kind": "null"
+              }
+            ],
+            "exclusive": false
+          },
+          "orbit": {
+            "kind": "object",
+            "fields": {
+              "central_body": {
+                "kind": "union",
+                "options": [
+                  {
+                    "kind": "string",
+                    "pattern": "^(?:nodalarc|user):(?:bodies)/(?:[a-z0-9][a-z0-9_-]*/)*[a-z0-9][a-z0-9_-]*\\.(?:yaml|yml)$"
+                  },
+                  {
+                    "kind": "null"
+                  }
+                ],
+                "exclusive": false
+              },
+              "shape_kind": {
+                "kind": "union",
+                "options": [
+                  {
+                    "kind": "enum",
+                    "values": [
+                      "circular",
+                      "elliptical"
+                    ]
+                  },
+                  {
+                    "kind": "null"
+                  }
+                ],
+                "exclusive": false
+              },
+              "altitude_km": {
+                "kind": "union",
+                "options": [
+                  {
+                    "kind": "number"
+                  },
+                  {
+                    "kind": "null"
+                  }
+                ],
+                "exclusive": false
+              },
+              "perigee_altitude_km": {
+                "kind": "union",
+                "options": [
+                  {
+                    "kind": "number"
+                  },
+                  {
+                    "kind": "null"
+                  }
+                ],
+                "exclusive": false
+              },
+              "apogee_altitude_km": {
+                "kind": "union",
+                "options": [
+                  {
+                    "kind": "number"
+                  },
+                  {
+                    "kind": "null"
+                  }
+                ],
+                "exclusive": false
+              },
+              "inclination_deg": {
+                "kind": "union",
+                "options": [
+                  {
+                    "kind": "number"
+                  },
+                  {
+                    "kind": "null"
+                  }
+                ],
+                "exclusive": false
+              },
+              "raan_deg": {
+                "kind": "union",
+                "options": [
+                  {
+                    "kind": "number"
+                  },
+                  {
+                    "kind": "null"
+                  }
+                ],
+                "exclusive": false
+              },
+              "argument_of_perigee_deg": {
+                "kind": "union",
+                "options": [
+                  {
+                    "kind": "number"
+                  },
+                  {
+                    "kind": "null"
+                  }
+                ],
+                "exclusive": false
+              },
+              "mean_anomaly_deg": {
+                "kind": "union",
+                "options": [
+                  {
+                    "kind": "number"
+                  },
+                  {
+                    "kind": "null"
+                  }
+                ],
+                "exclusive": false
+              },
+              "propagator": {
+                "kind": "union",
+                "options": [
+                  {
+                    "kind": "enum",
+                    "values": [
+                      "two_body",
+                      "j2_mean_elements"
+                    ]
+                  },
+                  {
+                    "kind": "null"
+                  }
+                ],
+                "exclusive": false
+              }
+            },
+            "additional": false
+          },
+          "planes": {
+            "kind": "union",
+            "options": [
+              {
+                "kind": "integer"
+              },
+              {
+                "kind": "null"
+              }
+            ],
+            "exclusive": false
+          },
+          "raan_spacing_deg": {
+            "kind": "union",
+            "options": [
+              {
+                "kind": "number"
+              },
+              {
+                "kind": "null"
+              }
+            ],
+            "exclusive": false
+          },
+          "slots_per_plane": {
+            "kind": "union",
+            "options": [
+              {
+                "kind": "integer"
+              },
+              {
+                "kind": "null"
+              }
+            ],
+            "exclusive": false
+          },
+          "phasing_mode": {
+            "kind": "enum",
+            "values": [
+              "walker_delta",
+              "walker_star",
+              "evenly_spaced_mean_anomaly"
+            ]
+          },
+          "phase_offset_deg": {
+            "kind": "union",
+            "options": [
+              {
+                "kind": "number"
+              },
+              {
+                "kind": "null"
+              }
+            ],
+            "exclusive": false
+          }
+        },
+        "additional": false
+      }
+    },
+    "space_refs": {
+      "kind": "array",
+      "items": {
+        "kind": "object",
+        "fields": {
+          "segment_id": {
+            "kind": "string"
+          },
+          "source_ref": {
+            "kind": "union",
+            "options": [
+              {
+                "kind": "string",
+                "pattern": "^(?:nodalarc|user):(?:constellations|space\\-node\\-sets)/(?:[a-z0-9][a-z0-9_-]*/)*[a-z0-9][a-z0-9_-]*\\.(?:yaml|yml)$"
+              },
+              {
+                "kind": "null"
+              }
+            ],
+            "exclusive": false
+          },
+          "label": {
+            "kind": "string"
+          }
+        },
+        "additional": false
+      }
+    },
+    "ground": {
+      "kind": "array",
+      "items": {
+        "kind": "object",
+        "fields": {
+          "segment_id": {
+            "kind": "string"
+          },
+          "display_name": {
+            "kind": "string"
+          },
+          "members": {
+            "kind": "array",
+            "items": {
+              "kind": "object",
+              "fields": {
+                "member_id": {
+                  "kind": "string"
+                },
+                "kind": {
+                  "kind": "enum",
+                  "values": [
+                    "ref",
+                    "draft"
+                  ]
+                },
+                "ref": {
+                  "kind": "union",
+                  "options": [
+                    {
+                      "kind": "string",
+                      "pattern": "^(?:nodalarc|user):(?:sites)/(?:[a-z0-9][a-z0-9_-]*/)*[a-z0-9][a-z0-9_-]*\\.(?:yaml|yml)$"
+                    },
+                    {
+                      "kind": "null"
+                    }
+                  ],
+                  "exclusive": false
+                },
+                "site_id": {
+                  "kind": "string"
+                },
+                "label": {
+                  "kind": "string"
+                },
+                "summary": {
+                  "kind": "union",
+                  "options": [
+                    {
+                      "kind": "string"
+                    },
+                    {
+                      "kind": "null"
+                    }
+                  ],
+                  "exclusive": false
+                },
+                "site": {
+                  "kind": "union",
+                  "options": [
+                    {
+                      "kind": "object",
+                      "fields": {
+                        "site_id": {
+                          "kind": "string"
+                        },
+                        "display_name": {
+                          "kind": "string"
+                        },
+                        "body": {
+                          "kind": "union",
+                          "options": [
+                            {
+                              "kind": "string",
+                              "pattern": "^(?:nodalarc|user):(?:bodies)/(?:[a-z0-9][a-z0-9_-]*/)*[a-z0-9][a-z0-9_-]*\\.(?:yaml|yml)$"
+                            },
+                            {
+                              "kind": "null"
+                            }
+                          ],
+                          "exclusive": false
+                        },
+                        "lat_deg": {
+                          "kind": "union",
+                          "options": [
+                            {
+                              "kind": "number"
+                            },
+                            {
+                              "kind": "null"
+                            }
+                          ],
+                          "exclusive": false
+                        },
+                        "lon_deg": {
+                          "kind": "union",
+                          "options": [
+                            {
+                              "kind": "number"
+                            },
+                            {
+                              "kind": "null"
+                            }
+                          ],
+                          "exclusive": false
+                        },
+                        "alt_m": {
+                          "kind": "union",
+                          "options": [
+                            {
+                              "kind": "number"
+                            },
+                            {
+                              "kind": "null"
+                            }
+                          ],
+                          "exclusive": false
+                        },
+                        "lan_ipv4": {
+                          "kind": "string"
+                        },
+                        "tags": {
+                          "kind": "array",
+                          "items": {
+                            "kind": "string"
+                          }
+                        },
+                        "nodes": {
+                          "kind": "array",
+                          "items": {
+                            "kind": "object",
+                            "fields": {
+                              "node_id": {
+                                "kind": "string"
+                              },
+                              "model_ref": {
+                                "kind": "union",
+                                "options": [
+                                  {
+                                    "kind": "string",
+                                    "pattern": "^(?:nodalarc|user):(?:nodes)/(?:[a-z0-9][a-z0-9_-]*/)*[a-z0-9][a-z0-9_-]*\\.(?:yaml|yml)$"
+                                  },
+                                  {
+                                    "kind": "null"
+                                  }
+                                ],
+                                "exclusive": false
+                              },
+                              "installed": {
+                                "kind": "object",
+                                "fields": {},
+                                "additional": {
+                                  "kind": "integer"
+                                }
+                              },
+                              "boresights": {
+                                "kind": "object",
+                                "fields": {},
+                                "additional": {
+                                  "kind": "object",
+                                  "fields": {
+                                    "mode": {
+                                      "kind": "literal",
+                                      "value": "local_vertical"
+                                    }
+                                  },
+                                  "additional": false
+                                }
+                              },
+                              "lo0_ipv4": {
+                                "kind": "string"
+                              },
+                              "terr0_ipv4": {
+                                "kind": "string"
+                              }
+                            },
+                            "additional": false
+                          }
+                        }
+                      },
+                      "additional": false
+                    },
+                    {
+                      "kind": "null"
+                    }
+                  ],
+                  "exclusive": false
+                },
+                "scheduling_override": {
+                  "kind": "union",
+                  "options": [
+                    {
+                      "kind": "object",
+                      "fields": {},
+                      "additional": {
+                        "kind": "json"
+                      }
+                    },
+                    {
+                      "kind": "null"
+                    }
+                  ],
+                  "exclusive": false
+                }
+              },
+              "additional": false
+            }
+          },
+          "stamp": {
+            "kind": "object",
+            "fields": {
+              "node_ref": {
+                "kind": "union",
+                "options": [
+                  {
+                    "kind": "string",
+                    "pattern": "^(?:nodalarc|user):(?:nodes)/(?:[a-z0-9][a-z0-9_-]*/)*[a-z0-9][a-z0-9_-]*\\.(?:yaml|yml)$"
+                  },
+                  {
+                    "kind": "null"
+                  }
+                ],
+                "exclusive": false
+              },
+              "installed": {
+                "kind": "object",
+                "fields": {},
+                "additional": {
+                  "kind": "integer"
+                }
+              },
+              "boresights": {
+                "kind": "object",
+                "fields": {},
+                "additional": {
+                  "kind": "object",
+                  "fields": {
+                    "mode": {
+                      "kind": "literal",
+                      "value": "local_vertical"
+                    }
+                  },
+                  "additional": false
+                }
+              },
+              "body": {
+                "kind": "union",
+                "options": [
+                  {
+                    "kind": "string",
+                    "pattern": "^(?:nodalarc|user):(?:bodies)/(?:[a-z0-9][a-z0-9_-]*/)*[a-z0-9][a-z0-9_-]*\\.(?:yaml|yml)$"
+                  },
+                  {
+                    "kind": "null"
+                  }
+                ],
+                "exclusive": false
+              },
+              "lan_base": {
+                "kind": "string"
+              },
+              "loopback_base": {
+                "kind": "string"
+              }
+            },
+            "additional": false
+          },
+          "scheduling": {
+            "kind": "object",
+            "fields": {},
+            "additional": {
+              "kind": "json"
+            }
+          },
+          "originated_ipv4": {
+            "kind": "array",
+            "items": {
+              "kind": "string"
+            }
+          },
+          "tags": {
+            "kind": "array",
+            "items": {
+              "kind": "string"
+            }
+          }
+        },
+        "additional": false
+      }
+    },
+    "ground_refs": {
+      "kind": "array",
+      "items": {
+        "kind": "object",
+        "fields": {
+          "segment_id": {
+            "kind": "string"
+          },
+          "site_set_ref": {
+            "kind": "union",
+            "options": [
+              {
+                "kind": "string",
+                "pattern": "^(?:nodalarc|user):(?:site\\-sets)/(?:[a-z0-9][a-z0-9_-]*/)*[a-z0-9][a-z0-9_-]*\\.(?:yaml|yml)$"
+              },
+              {
+                "kind": "null"
+              }
+            ],
+            "exclusive": false
+          },
+          "label": {
+            "kind": "string"
+          },
+          "scheduling": {
+            "kind": "object",
+            "fields": {},
+            "additional": {
+              "kind": "json"
+            }
+          }
+        },
+        "additional": false
+      }
+    },
+    "links": {
+      "kind": "array",
+      "items": {
+        "kind": "object",
+        "fields": {
+          "rule_id": {
+            "kind": "string"
+          },
+          "label": {
+            "kind": "string"
+          },
+          "enabled": {
+            "kind": "boolean"
+          },
+          "a": {
+            "kind": "object",
+            "fields": {
+              "segment_id": {
+                "kind": "string"
+              },
+              "tag": {
+                "kind": "union",
+                "options": [
+                  {
+                    "kind": "string"
+                  },
+                  {
+                    "kind": "null"
+                  }
+                ],
+                "exclusive": false
+              },
+              "role": {
+                "kind": "union",
+                "options": [
+                  {
+                    "kind": "enum",
+                    "values": [
+                      "access",
+                      "isl",
+                      "crosslink",
+                      "backbone"
+                    ]
+                  },
+                  {
+                    "kind": "null"
+                  }
+                ],
+                "exclusive": false
+              },
+              "medium": {
+                "kind": "union",
+                "options": [
+                  {
+                    "kind": "enum",
+                    "values": [
+                      "rf",
+                      "optical"
+                    ]
+                  },
+                  {
+                    "kind": "null"
+                  }
+                ],
+                "exclusive": false
+              },
+              "min_elevation_deg": {
+                "kind": "union",
+                "options": [
+                  {
+                    "kind": "number"
+                  },
+                  {
+                    "kind": "null"
+                  }
+                ],
+                "exclusive": false
+              }
+            },
+            "additional": false
+          },
+          "b": {
+            "kind": "object",
+            "fields": {
+              "segment_id": {
+                "kind": "string"
+              },
+              "tag": {
+                "kind": "union",
+                "options": [
+                  {
+                    "kind": "string"
+                  },
+                  {
+                    "kind": "null"
+                  }
+                ],
+                "exclusive": false
+              },
+              "role": {
+                "kind": "union",
+                "options": [
+                  {
+                    "kind": "enum",
+                    "values": [
+                      "access",
+                      "isl",
+                      "crosslink",
+                      "backbone"
+                    ]
+                  },
+                  {
+                    "kind": "null"
+                  }
+                ],
+                "exclusive": false
+              },
+              "medium": {
+                "kind": "union",
+                "options": [
+                  {
+                    "kind": "enum",
+                    "values": [
+                      "rf",
+                      "optical"
+                    ]
+                  },
+                  {
+                    "kind": "null"
+                  }
+                ],
+                "exclusive": false
+              },
+              "min_elevation_deg": {
+                "kind": "union",
+                "options": [
+                  {
+                    "kind": "number"
+                  },
+                  {
+                    "kind": "null"
+                  }
+                ],
+                "exclusive": false
+              }
+            },
+            "additional": false
+          },
+          "topology_mode": {
+            "kind": "union",
+            "options": [
+              {
+                "kind": "enum",
+                "values": [
+                  "visible_candidates",
+                  "nearest_n"
+                ]
+              },
+              {
+                "kind": "null"
+              }
+            ],
+            "exclusive": false
+          },
+          "topology_n": {
+            "kind": "union",
+            "options": [
+              {
+                "kind": "integer"
+              },
+              {
+                "kind": "null"
+              }
+            ],
+            "exclusive": false
+          },
+          "max_range_km": {
+            "kind": "union",
+            "options": [
+              {
+                "kind": "number"
+              },
+              {
+                "kind": "null"
+              }
+            ],
+            "exclusive": false
+          }
+        },
+        "additional": false
+      }
+    },
+    "routing_domains": {
+      "kind": "array",
+      "items": {
+        "kind": "object",
+        "fields": {
+          "domain_id": {
+            "kind": "string"
+          },
+          "label": {
+            "kind": "string"
+          },
+          "protocol": {
+            "kind": "union",
+            "options": [
+              {
+                "kind": "enum",
+                "values": [
+                  "isis",
+                  "ospf",
+                  "bgp",
+                  "static"
+                ]
+              },
+              {
+                "kind": "null"
+              }
+            ],
+            "exclusive": false
+          },
+          "member_segment_ids": {
+            "kind": "array",
+            "items": {
+              "kind": "string"
+            }
+          },
+          "hello_interval_s": {
+            "kind": "union",
+            "options": [
+              {
+                "kind": "number"
+              },
+              {
+                "kind": "null"
+              }
+            ],
+            "exclusive": false
+          },
+          "hold_interval_s": {
+            "kind": "union",
+            "options": [
+              {
+                "kind": "number"
+              },
+              {
+                "kind": "null"
+              }
+            ],
+            "exclusive": false
+          }
+        },
+        "additional": false
+      }
+    },
+    "boundaries": {
+      "kind": "array",
+      "items": {
+        "kind": "object",
+        "fields": {
+          "boundary_id": {
+            "kind": "string"
+          },
+          "over_rule_id": {
+            "kind": "string"
+          },
+          "adapter": {
+            "kind": "union",
+            "options": [
+              {
+                "kind": "enum",
+                "values": [
+                  "static_ip",
+                  "bgp",
+                  "dtn_bundle"
+                ]
+              },
+              {
+                "kind": "null"
+              }
+            ],
+            "exclusive": false
+          },
+          "from_domain_id": {
+            "kind": "string"
+          },
+          "to_domain_id": {
+            "kind": "string"
+          },
+          "export_node_loopbacks": {
+            "kind": "boolean"
+          }
+        },
+        "additional": false
+      }
+    },
+    "max_pairs_per_rule": {
+      "kind": "union",
+      "options": [
+        {
+          "kind": "integer"
+        },
+        {
+          "kind": "null"
+        }
+      ],
+      "exclusive": false
+    },
+    "max_pairs_per_tick": {
+      "kind": "union",
+      "options": [
+        {
+          "kind": "integer"
+        },
+        {
+          "kind": "null"
+        }
+      ],
+      "exclusive": false
+    },
+    "start_time": {
+      "kind": "string"
+    },
+    "step_seconds": {
+      "kind": "union",
+      "options": [
+        {
+          "kind": "number"
+        },
+        {
+          "kind": "null"
+        }
+      ],
+      "exclusive": false
+    },
+    "compression": {
+      "kind": "union",
+      "options": [
+        {
+          "kind": "number"
+        },
+        {
+          "kind": "null"
+        }
+      ],
+      "exclusive": false
+    }
+  },
+  "additional": false
+} as const satisfies BuilderVisualRuntimeDescriptor;
+
+/** Runtime validator descriptor generated from this backend application DTO. */
+export const BUILDER_VISUAL_SPACE_DRAFT_RUNTIME_DESCRIPTOR = {
+  "kind": "object",
+  "fields": {
+    "segment_id": {
+      "kind": "string"
+    },
+    "display_name": {
+      "kind": "string"
+    },
+    "node_ref": {
+      "kind": "union",
+      "options": [
+        {
+          "kind": "string",
+          "pattern": "^(?:nodalarc|user):(?:nodes)/(?:[a-z0-9][a-z0-9_-]*/)*[a-z0-9][a-z0-9_-]*\\.(?:yaml|yml)$"
+        },
+        {
+          "kind": "null"
+        }
+      ],
+      "exclusive": false
+    },
+    "node_draft": {
+      "kind": "union",
+      "options": [
+        {
+          "kind": "object",
+          "fields": {
+            "id": {
+              "kind": "string"
+            },
+            "display_name": {
+              "kind": "string"
+            },
+            "forwarding": {
+              "kind": "union",
+              "options": [
+                {
+                  "kind": "enum",
+                  "values": [
+                    "routed",
+                    "host",
+                    "bridge",
+                    "control_only"
+                  ]
+                },
+                {
+                  "kind": "null"
+                }
+              ],
+              "exclusive": false
+            },
+            "ethernet": {
+              "kind": "array",
+              "items": {
+                "kind": "string"
+              }
+            },
+            "terminals": {
+              "kind": "array",
+              "items": {
+                "kind": "object",
+                "fields": {
+                  "mount_id": {
+                    "kind": "string"
+                  },
+                  "role": {
+                    "kind": "union",
+                    "options": [
+                      {
+                        "kind": "enum",
+                        "values": [
+                          "access",
+                          "isl",
+                          "crosslink",
+                          "backbone"
+                        ]
+                      },
+                      {
+                        "kind": "null"
+                      }
+                    ],
+                    "exclusive": false
+                  },
+                  "terminal_ref": {
+                    "kind": "union",
+                    "options": [
+                      {
+                        "kind": "string",
+                        "pattern": "^(?:nodalarc|user):(?:terminals)/(?:[a-z0-9][a-z0-9_-]*/)*[a-z0-9][a-z0-9_-]*\\.(?:yaml|yml)$"
+                      },
+                      {
+                        "kind": "null"
+                      }
+                    ],
+                    "exclusive": false
+                  },
+                  "count": {
+                    "kind": "union",
+                    "options": [
+                      {
+                        "kind": "integer"
+                      },
+                      {
+                        "kind": "null"
+                      }
+                    ],
+                    "exclusive": false
+                  },
+                  "boresight": {
+                    "kind": "union",
+                    "options": [
+                      {
+                        "kind": "object",
+                        "fields": {
+                          "mode": {
+                            "kind": "literal",
+                            "value": "nadir"
+                          }
+                        },
+                        "additional": false
+                      },
+                      {
+                        "kind": "null"
+                      }
+                    ],
+                    "exclusive": false
+                  }
+                },
+                "additional": false
+              }
+            }
+          },
+          "additional": false
+        },
+        {
+          "kind": "null"
+        }
+      ],
+      "exclusive": false
+    },
+    "orbit": {
+      "kind": "object",
+      "fields": {
+        "central_body": {
+          "kind": "union",
+          "options": [
+            {
+              "kind": "string",
+              "pattern": "^(?:nodalarc|user):(?:bodies)/(?:[a-z0-9][a-z0-9_-]*/)*[a-z0-9][a-z0-9_-]*\\.(?:yaml|yml)$"
+            },
+            {
+              "kind": "null"
+            }
+          ],
+          "exclusive": false
+        },
+        "shape_kind": {
+          "kind": "union",
+          "options": [
+            {
+              "kind": "enum",
+              "values": [
+                "circular",
+                "elliptical"
+              ]
+            },
+            {
+              "kind": "null"
+            }
+          ],
+          "exclusive": false
+        },
+        "altitude_km": {
+          "kind": "union",
+          "options": [
+            {
+              "kind": "number"
+            },
+            {
+              "kind": "null"
+            }
+          ],
+          "exclusive": false
+        },
+        "perigee_altitude_km": {
+          "kind": "union",
+          "options": [
+            {
+              "kind": "number"
+            },
+            {
+              "kind": "null"
+            }
+          ],
+          "exclusive": false
+        },
+        "apogee_altitude_km": {
+          "kind": "union",
+          "options": [
+            {
+              "kind": "number"
+            },
+            {
+              "kind": "null"
+            }
+          ],
+          "exclusive": false
+        },
+        "inclination_deg": {
+          "kind": "union",
+          "options": [
+            {
+              "kind": "number"
+            },
+            {
+              "kind": "null"
+            }
+          ],
+          "exclusive": false
+        },
+        "raan_deg": {
+          "kind": "union",
+          "options": [
+            {
+              "kind": "number"
+            },
+            {
+              "kind": "null"
+            }
+          ],
+          "exclusive": false
+        },
+        "argument_of_perigee_deg": {
+          "kind": "union",
+          "options": [
+            {
+              "kind": "number"
+            },
+            {
+              "kind": "null"
+            }
+          ],
+          "exclusive": false
+        },
+        "mean_anomaly_deg": {
+          "kind": "union",
+          "options": [
+            {
+              "kind": "number"
+            },
+            {
+              "kind": "null"
+            }
+          ],
+          "exclusive": false
+        },
+        "propagator": {
+          "kind": "union",
+          "options": [
+            {
+              "kind": "enum",
+              "values": [
+                "two_body",
+                "j2_mean_elements"
+              ]
+            },
+            {
+              "kind": "null"
+            }
+          ],
+          "exclusive": false
+        }
+      },
+      "additional": false
+    },
+    "planes": {
+      "kind": "union",
+      "options": [
+        {
+          "kind": "integer"
+        },
+        {
+          "kind": "null"
+        }
+      ],
+      "exclusive": false
+    },
+    "raan_spacing_deg": {
+      "kind": "union",
+      "options": [
+        {
+          "kind": "number"
+        },
+        {
+          "kind": "null"
+        }
+      ],
+      "exclusive": false
+    },
+    "slots_per_plane": {
+      "kind": "union",
+      "options": [
+        {
+          "kind": "integer"
+        },
+        {
+          "kind": "null"
+        }
+      ],
+      "exclusive": false
+    },
+    "phasing_mode": {
+      "kind": "enum",
+      "values": [
+        "walker_delta",
+        "walker_star",
+        "evenly_spaced_mean_anomaly"
+      ]
+    },
+    "phase_offset_deg": {
+      "kind": "union",
+      "options": [
+        {
+          "kind": "number"
+        },
+        {
+          "kind": "null"
+        }
+      ],
+      "exclusive": false
+    }
+  },
+  "additional": false
+} as const satisfies BuilderVisualRuntimeDescriptor;
+
+/** Runtime validator descriptor generated from this backend application DTO. */
+export const BUILDER_VISUAL_GROUND_DRAFT_RUNTIME_DESCRIPTOR = {
+  "kind": "object",
+  "fields": {
+    "segment_id": {
+      "kind": "string"
+    },
+    "display_name": {
+      "kind": "string"
+    },
+    "members": {
+      "kind": "array",
+      "items": {
+        "kind": "object",
+        "fields": {
+          "member_id": {
+            "kind": "string"
+          },
+          "kind": {
+            "kind": "enum",
+            "values": [
+              "ref",
+              "draft"
+            ]
+          },
+          "ref": {
+            "kind": "union",
+            "options": [
+              {
+                "kind": "string",
+                "pattern": "^(?:nodalarc|user):(?:sites)/(?:[a-z0-9][a-z0-9_-]*/)*[a-z0-9][a-z0-9_-]*\\.(?:yaml|yml)$"
+              },
+              {
+                "kind": "null"
+              }
+            ],
+            "exclusive": false
+          },
+          "site_id": {
+            "kind": "string"
+          },
+          "label": {
+            "kind": "string"
+          },
+          "summary": {
+            "kind": "union",
+            "options": [
+              {
+                "kind": "string"
+              },
+              {
+                "kind": "null"
+              }
+            ],
+            "exclusive": false
+          },
+          "site": {
+            "kind": "union",
+            "options": [
+              {
+                "kind": "object",
+                "fields": {
+                  "site_id": {
+                    "kind": "string"
+                  },
+                  "display_name": {
+                    "kind": "string"
+                  },
+                  "body": {
+                    "kind": "union",
+                    "options": [
+                      {
+                        "kind": "string",
+                        "pattern": "^(?:nodalarc|user):(?:bodies)/(?:[a-z0-9][a-z0-9_-]*/)*[a-z0-9][a-z0-9_-]*\\.(?:yaml|yml)$"
+                      },
+                      {
+                        "kind": "null"
+                      }
+                    ],
+                    "exclusive": false
+                  },
+                  "lat_deg": {
+                    "kind": "union",
+                    "options": [
+                      {
+                        "kind": "number"
+                      },
+                      {
+                        "kind": "null"
+                      }
+                    ],
+                    "exclusive": false
+                  },
+                  "lon_deg": {
+                    "kind": "union",
+                    "options": [
+                      {
+                        "kind": "number"
+                      },
+                      {
+                        "kind": "null"
+                      }
+                    ],
+                    "exclusive": false
+                  },
+                  "alt_m": {
+                    "kind": "union",
+                    "options": [
+                      {
+                        "kind": "number"
+                      },
+                      {
+                        "kind": "null"
+                      }
+                    ],
+                    "exclusive": false
+                  },
+                  "lan_ipv4": {
+                    "kind": "string"
+                  },
+                  "tags": {
+                    "kind": "array",
+                    "items": {
+                      "kind": "string"
+                    }
+                  },
+                  "nodes": {
+                    "kind": "array",
+                    "items": {
+                      "kind": "object",
+                      "fields": {
+                        "node_id": {
+                          "kind": "string"
+                        },
+                        "model_ref": {
+                          "kind": "union",
+                          "options": [
+                            {
+                              "kind": "string",
+                              "pattern": "^(?:nodalarc|user):(?:nodes)/(?:[a-z0-9][a-z0-9_-]*/)*[a-z0-9][a-z0-9_-]*\\.(?:yaml|yml)$"
+                            },
+                            {
+                              "kind": "null"
+                            }
+                          ],
+                          "exclusive": false
+                        },
+                        "installed": {
+                          "kind": "object",
+                          "fields": {},
+                          "additional": {
+                            "kind": "integer"
+                          }
+                        },
+                        "boresights": {
+                          "kind": "object",
+                          "fields": {},
+                          "additional": {
+                            "kind": "object",
+                            "fields": {
+                              "mode": {
+                                "kind": "literal",
+                                "value": "local_vertical"
+                              }
+                            },
+                            "additional": false
+                          }
+                        },
+                        "lo0_ipv4": {
+                          "kind": "string"
+                        },
+                        "terr0_ipv4": {
+                          "kind": "string"
+                        }
+                      },
+                      "additional": false
+                    }
+                  }
+                },
+                "additional": false
+              },
+              {
+                "kind": "null"
+              }
+            ],
+            "exclusive": false
+          },
+          "scheduling_override": {
+            "kind": "union",
+            "options": [
+              {
+                "kind": "object",
+                "fields": {},
+                "additional": {
+                  "kind": "json"
+                }
+              },
+              {
+                "kind": "null"
+              }
+            ],
+            "exclusive": false
+          }
+        },
+        "additional": false
+      }
+    },
+    "stamp": {
+      "kind": "object",
+      "fields": {
+        "node_ref": {
+          "kind": "union",
+          "options": [
+            {
+              "kind": "string",
+              "pattern": "^(?:nodalarc|user):(?:nodes)/(?:[a-z0-9][a-z0-9_-]*/)*[a-z0-9][a-z0-9_-]*\\.(?:yaml|yml)$"
+            },
+            {
+              "kind": "null"
+            }
+          ],
+          "exclusive": false
+        },
+        "installed": {
+          "kind": "object",
+          "fields": {},
+          "additional": {
+            "kind": "integer"
+          }
+        },
+        "boresights": {
+          "kind": "object",
+          "fields": {},
+          "additional": {
+            "kind": "object",
+            "fields": {
+              "mode": {
+                "kind": "literal",
+                "value": "local_vertical"
+              }
+            },
+            "additional": false
+          }
+        },
+        "body": {
+          "kind": "union",
+          "options": [
+            {
+              "kind": "string",
+              "pattern": "^(?:nodalarc|user):(?:bodies)/(?:[a-z0-9][a-z0-9_-]*/)*[a-z0-9][a-z0-9_-]*\\.(?:yaml|yml)$"
+            },
+            {
+              "kind": "null"
+            }
+          ],
+          "exclusive": false
+        },
+        "lan_base": {
+          "kind": "string"
+        },
+        "loopback_base": {
+          "kind": "string"
+        }
+      },
+      "additional": false
+    },
+    "scheduling": {
+      "kind": "object",
+      "fields": {},
+      "additional": {
+        "kind": "json"
+      }
+    },
+    "originated_ipv4": {
+      "kind": "array",
+      "items": {
+        "kind": "string"
+      }
+    },
+    "tags": {
+      "kind": "array",
+      "items": {
+        "kind": "string"
+      }
+    }
+  },
+  "additional": false
+} as const satisfies BuilderVisualRuntimeDescriptor;
+
+/** Runtime validator descriptor generated from this backend application DTO. */
+export const BUILDER_VISUAL_LINK_RULE_RUNTIME_DESCRIPTOR = {
+  "kind": "object",
+  "fields": {
+    "rule_id": {
+      "kind": "string"
+    },
+    "label": {
+      "kind": "string"
+    },
+    "enabled": {
+      "kind": "boolean"
+    },
+    "a": {
+      "kind": "object",
+      "fields": {
+        "segment_id": {
+          "kind": "string"
+        },
+        "tag": {
+          "kind": "union",
+          "options": [
+            {
+              "kind": "string"
+            },
+            {
+              "kind": "null"
+            }
+          ],
+          "exclusive": false
+        },
+        "role": {
+          "kind": "union",
+          "options": [
+            {
+              "kind": "enum",
+              "values": [
+                "access",
+                "isl",
+                "crosslink",
+                "backbone"
+              ]
+            },
+            {
+              "kind": "null"
+            }
+          ],
+          "exclusive": false
+        },
+        "medium": {
+          "kind": "union",
+          "options": [
+            {
+              "kind": "enum",
+              "values": [
+                "rf",
+                "optical"
+              ]
+            },
+            {
+              "kind": "null"
+            }
+          ],
+          "exclusive": false
+        },
+        "min_elevation_deg": {
+          "kind": "union",
+          "options": [
+            {
+              "kind": "number"
+            },
+            {
+              "kind": "null"
+            }
+          ],
+          "exclusive": false
+        }
+      },
+      "additional": false
+    },
+    "b": {
+      "kind": "object",
+      "fields": {
+        "segment_id": {
+          "kind": "string"
+        },
+        "tag": {
+          "kind": "union",
+          "options": [
+            {
+              "kind": "string"
+            },
+            {
+              "kind": "null"
+            }
+          ],
+          "exclusive": false
+        },
+        "role": {
+          "kind": "union",
+          "options": [
+            {
+              "kind": "enum",
+              "values": [
+                "access",
+                "isl",
+                "crosslink",
+                "backbone"
+              ]
+            },
+            {
+              "kind": "null"
+            }
+          ],
+          "exclusive": false
+        },
+        "medium": {
+          "kind": "union",
+          "options": [
+            {
+              "kind": "enum",
+              "values": [
+                "rf",
+                "optical"
+              ]
+            },
+            {
+              "kind": "null"
+            }
+          ],
+          "exclusive": false
+        },
+        "min_elevation_deg": {
+          "kind": "union",
+          "options": [
+            {
+              "kind": "number"
+            },
+            {
+              "kind": "null"
+            }
+          ],
+          "exclusive": false
+        }
+      },
+      "additional": false
+    },
+    "topology_mode": {
+      "kind": "union",
+      "options": [
+        {
+          "kind": "enum",
+          "values": [
+            "visible_candidates",
+            "nearest_n"
+          ]
+        },
+        {
+          "kind": "null"
+        }
+      ],
+      "exclusive": false
+    },
+    "topology_n": {
+      "kind": "union",
+      "options": [
+        {
+          "kind": "integer"
+        },
+        {
+          "kind": "null"
+        }
+      ],
+      "exclusive": false
+    },
+    "max_range_km": {
+      "kind": "union",
+      "options": [
+        {
+          "kind": "number"
+        },
+        {
+          "kind": "null"
+        }
+      ],
+      "exclusive": false
+    }
+  },
+  "additional": false
+} as const satisfies BuilderVisualRuntimeDescriptor;
+
+/** Runtime validator descriptor generated from this backend application DTO. */
+export const BUILDER_VISUAL_ROUTING_DOMAIN_RUNTIME_DESCRIPTOR = {
+  "kind": "object",
+  "fields": {
+    "domain_id": {
+      "kind": "string"
+    },
+    "label": {
+      "kind": "string"
+    },
+    "protocol": {
+      "kind": "union",
+      "options": [
+        {
+          "kind": "enum",
+          "values": [
+            "isis",
+            "ospf",
+            "bgp",
+            "static"
+          ]
+        },
+        {
+          "kind": "null"
+        }
+      ],
+      "exclusive": false
+    },
+    "member_segment_ids": {
+      "kind": "array",
+      "items": {
+        "kind": "string"
+      }
+    },
+    "hello_interval_s": {
+      "kind": "union",
+      "options": [
+        {
+          "kind": "number"
+        },
+        {
+          "kind": "null"
+        }
+      ],
+      "exclusive": false
+    },
+    "hold_interval_s": {
+      "kind": "union",
+      "options": [
+        {
+          "kind": "number"
+        },
+        {
+          "kind": "null"
+        }
+      ],
+      "exclusive": false
+    }
+  },
+  "additional": false
+} as const satisfies BuilderVisualRuntimeDescriptor;
+
+/** Runtime validator descriptor generated from this backend application DTO. */
+export const BUILDER_VISUAL_ROUTING_BOUNDARY_RUNTIME_DESCRIPTOR = {
+  "kind": "object",
+  "fields": {
+    "boundary_id": {
+      "kind": "string"
+    },
+    "over_rule_id": {
+      "kind": "string"
+    },
+    "adapter": {
+      "kind": "union",
+      "options": [
+        {
+          "kind": "enum",
+          "values": [
+            "static_ip",
+            "bgp",
+            "dtn_bundle"
+          ]
+        },
+        {
+          "kind": "null"
+        }
+      ],
+      "exclusive": false
+    },
+    "from_domain_id": {
+      "kind": "string"
+    },
+    "to_domain_id": {
+      "kind": "string"
+    },
+    "export_node_loopbacks": {
+      "kind": "boolean"
+    }
+  },
+  "additional": false
+} as const satisfies BuilderVisualRuntimeDescriptor;

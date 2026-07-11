@@ -319,6 +319,107 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("CatalogDraftEditorWindow", () => {
+  it("leaves missing catalog numbers empty and preserves nullable frequency conversion", () => {
+    const first = render(
+      <CatalogDraftEditorWindow
+        initialDraft={draft("terminals", {
+          medium: "rf",
+          signal: { band: "ka" },
+          bandwidth_mbps: {},
+          limits: { elevation_deg: {} },
+        })}
+        metadata={metadata("terminals")}
+        onSaved={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    for (const label of [
+      "frequency",
+      "tx bandwidth",
+      "rx bandwidth",
+      "tracking capacity",
+      "max range",
+      "min elevation",
+      "max elevation",
+      "max tracking rate",
+    ]) {
+      expect(
+        (screen.getByLabelText(new RegExp(`^${label}`)) as HTMLInputElement).value,
+      ).toBe("");
+    }
+    first.unmount();
+
+    render(
+      <CatalogDraftEditorWindow
+        initialDraft={draft("sites", {
+          frame: { body_fixed: { body: "nodalarc:bodies/earth.yaml" } },
+          location: {},
+          lan: { ipv4: "" },
+          nodes: [],
+        })}
+        metadata={metadata("sites")}
+        onSaved={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    for (const label of ["latitude", "longitude", "altitude"]) {
+      expect(
+        (screen.getByLabelText(new RegExp(`^${label}`)) as HTMLInputElement).value,
+      ).toBe("");
+    }
+  });
+
+  it("shows missing mount and installed-node identities without inventing ids", () => {
+    const first = render(
+      <CatalogDraftEditorWindow
+        initialDraft={draft("nodes", {
+          forwarding: "routed",
+          ethernet: [],
+          terminals: [
+            {
+              role: "access",
+              terminal: "nodalarc:terminals/rf/selected.yaml",
+            },
+          ],
+        })}
+        metadata={metadata("nodes")}
+        onSaved={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("mount id incomplete")).toBeTruthy();
+    expect((screen.getByLabelText("count") as HTMLInputElement).value).toBe("");
+    expect(document.body.textContent).not.toContain("mount-1");
+    first.unmount();
+
+    render(
+      <CatalogDraftEditorWindow
+        initialDraft={draft("sites", {
+          frame: { body_fixed: { body: "nodalarc:bodies/earth.yaml" } },
+          location: {},
+          lan: { ipv4: "" },
+          nodes: [
+            {
+              model: "nodalarc:nodes/ground/selected.yaml",
+              terminals: { access: {} },
+              interfaces: { lo0: { ipv4: "" }, terr0: { ipv4: "" } },
+            },
+          ],
+        })}
+        metadata={metadata("sites")}
+        onSaved={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("node id incomplete")).toBeTruthy();
+    expect((screen.getByLabelText("access") as HTMLInputElement).value).toBe("");
+    expect(document.body.textContent).not.toContain("node-1");
+  });
+
   it("sends node creation intent and adopts backend-generated mount and port fields", async () => {
     render(
       <CatalogDraftEditorWindow

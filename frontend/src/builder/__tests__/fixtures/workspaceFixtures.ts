@@ -19,7 +19,7 @@ let siteCounter = 0;
 
 export function newWorkspace(name: string): Workspace {
   return {
-    name,
+    session_name: name,
     display_name: null,
     description: null,
     space: [],

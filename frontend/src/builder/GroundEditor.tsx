@@ -32,7 +32,6 @@ import { useBuilderCatalog } from "./useBuilderWorld";
 import {
   groundWarnings,
   parseSiteLines,
-  refGroundMember,
   type DraftGroundSet,
   type ParsedSiteLine,
   type Workspace,
@@ -50,6 +49,7 @@ interface GroundEditorProps {
    *  survives. */
   onUpdate: (update: (prev: DraftGroundSet) => DraftGroundSet) => void;
   onMintSites: (sites: ParsedSiteLine[]) => Promise<void>;
+  onAddSiteReference: (ref: string) => Promise<void>;
   onSetStampNodeModel: (ref: string) => Promise<void>;
   onSetSiteNodeModel: (memberId: string, nodeId: string, ref: string) => Promise<void>;
   onAddSiteNode: (memberId: string) => Promise<void>;
@@ -82,6 +82,7 @@ export function GroundEditor({
   draft,
   onUpdate,
   onMintSites,
+  onAddSiteReference,
   onSetStampNodeModel,
   onSetSiteNodeModel,
   onAddSiteNode,
@@ -137,16 +138,13 @@ export function GroundEditor({
   };
 
   // Place a defined site by reference — full fidelity, its nodes travel.
-  const addFromLibrary = (ref: string, siteId: string, label: string, summary: string | null) => {
+  const addFromLibrary = async (ref: string) => {
     setEditorError(null);
-    if (draft.members.some((member) => member.site_id === siteId)) {
-      setEditorError(`${siteId} is already placed — a site is a place and exists once`);
-      return;
+    try {
+      await onAddSiteReference(ref);
+    } catch (cause) {
+      setEditorError(cause instanceof Error ? cause.message : String(cause));
     }
-    onUpdate((prev) => ({
-      ...prev,
-      members: [...prev.members, refGroundMember(ref, siteId, label, summary)],
-    }));
   };
 
   const setStampModel = async (ref: string) => {
@@ -159,7 +157,7 @@ export function GroundEditor({
   };
 
   const stampLabel =
-    draft.stamp.node_ref.split("/").pop()?.replace(/\.yaml$/, "") || "pick a model";
+    draft.stamp.node_ref?.split("/").pop()?.replace(/\.yaml$/, "") || "pick a model";
 
   return (
     <div className="builder-inspector-stack" data-testid="builder-ground-editor">
@@ -316,14 +314,7 @@ export function GroundEditor({
                       key={entry.ref}
                       className="builder-outline-row"
                       title={`Add ${entry.ref}`}
-                      onClick={() =>
-                        addFromLibrary(
-                          entry.ref,
-                          (entry.ref.split("/").pop() ?? entry.ref).replace(/\.ya?ml$/, ""),
-                          entry.display_name,
-                          entry.summary ?? null,
-                        )
-                      }
+                      onClick={() => void addFromLibrary(entry.ref)}
                     >
                       <span>{entry.display_name}</span>
                       {entry.summary && (

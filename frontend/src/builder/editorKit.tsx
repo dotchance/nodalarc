@@ -128,7 +128,7 @@ export function NumberField({
   integer = false,
 }: {
   label: string;
-  value: number;
+  value: number | null;
   onChange: (value: number) => void;
   min?: number;
   step?: number;
@@ -178,7 +178,7 @@ export function SliderField({
   integer = false,
 }: {
   label: string;
-  value: number;
+  value: number | null;
   onChange: (value: number) => void;
   min: number;
   max: number;
@@ -207,7 +207,8 @@ export function SliderField({
           min={min}
           max={max}
           step={step}
-          value={Math.min(max, Math.max(min, value))}
+          value={value === null ? min : Math.min(max, Math.max(min, value))}
+          disabled={value === null}
           aria-label={`${label} slider`}
           onChange={(e) => {
             const parsed = roundIfInt(e.target.value);
@@ -290,17 +291,25 @@ export function SelectField({
 }: {
   label: string;
   ariaLabel?: string;
-  value: string;
+  value: string | null;
   onChange: (value: string) => void;
   options: SelectOption[];
   stack?: boolean;
 }) {
+  const selectedValue = value ?? "";
+  const needsEmptyPlaceholder =
+    selectedValue === "" && !options.some((option) => option.value === "");
   const select = (
     <select
       aria-label={ariaLabel ?? label}
-      value={value}
+      value={selectedValue}
       onChange={(e) => onChange(e.target.value)}
     >
+      {needsEmptyPlaceholder && (
+        <option value="" disabled>
+          Select {label}
+        </option>
+      )}
       {options.map((option) => (
         <option
           key={option.value}
@@ -345,7 +354,7 @@ export function BodySelect({
 }: {
   label: string;
   ariaLabel: string;
-  value: string;
+  value: string | null;
   onChange: (value: string) => void;
   bodies: {
     entries: CatalogDocumentSummary[];
@@ -354,17 +363,27 @@ export function BodySelect({
   };
   stack?: boolean;
 }) {
-  const loaded: SelectOption[] = bodies.entries
-    .map((entry) => ({ value: entry.ref, label: entry.display_name }));
-  const options: SelectOption[] = loaded.some((option) => option.value === value)
+  const loaded: SelectOption[] = bodies.entries.map((entry) => ({
+    value: entry.ref,
+    label: entry.display_name,
+  }));
+  const selected = value ?? "";
+  const options: SelectOption[] = loaded.some((option) => option.value === selected)
     ? loaded
-    : [{ value, label: value }, ...loaded];
+    : [
+        {
+          value: selected,
+          label: selected || "Select a body",
+          disabled: selected === "",
+        },
+        ...loaded,
+      ];
   return (
     <>
       <SelectField
         label={label}
         ariaLabel={ariaLabel}
-        value={value}
+        value={selected}
         onChange={onChange}
         options={options}
         stack={stack}

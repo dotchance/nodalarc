@@ -17,10 +17,22 @@ interface SessionEditorProps {
   onUpdate: (patch: Partial<Workspace>) => void;
 }
 
+export function timeRateSummary(
+  stepSeconds: number | null,
+  compression: number | null,
+): string {
+  if (stepSeconds === null || compression === null) return "time rate incomplete";
+  if (stepSeconds === 1 && compression === 1) return "real time";
+  return `step ${stepSeconds}s · ×${compression}`;
+}
+
 export function SessionEditor({ workspace, onUpdate }: SessionEditorProps) {
   return (
     <div className="builder-inspector-stack" data-testid="builder-session-editor">
-      <EditorName value={workspace.name} onChange={(name) => onUpdate({ name })} />
+      <EditorName
+        value={workspace.session_name}
+        onChange={(session_name) => onUpdate({ session_name })}
+      />
       <Field
         label="start time"
         value={workspace.start_time}
@@ -29,11 +41,7 @@ export function SessionEditor({ workspace, onUpdate }: SessionEditorProps) {
       <EditorCard
         title="Time rate"
         open
-        summary={
-          workspace.step_seconds === 1 && workspace.compression === 1
-            ? "real time"
-            : `step ${workspace.step_seconds}s · ×${workspace.compression}`
-        }
+        summary={timeRateSummary(workspace.step_seconds, workspace.compression)}
       >
           <NumberField
             label="sim step"
@@ -58,9 +66,10 @@ export function SessionEditor({ workspace, onUpdate }: SessionEditorProps) {
         title="Candidate budget"
         open
         summary={
-          <>
-            {workspace.max_pairs_per_rule} / rule · {workspace.max_pairs_per_tick} / tick
-          </>
+          workspace.max_pairs_per_rule === null ||
+          workspace.max_pairs_per_tick === null
+            ? "candidate budget incomplete"
+            : `${workspace.max_pairs_per_rule} / rule · ${workspace.max_pairs_per_tick} / tick`
         }
       >
           <NumberField

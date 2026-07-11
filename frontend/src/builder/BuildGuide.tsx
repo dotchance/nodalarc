@@ -29,6 +29,7 @@ interface GuideRow {
 
 interface BuildGuideProps {
   workspace: Workspace;
+  sessionNameIsPlaceholder: boolean;
   saved: string | null;
   deployed: boolean;
   /** the honest site count — distinct ground-station namespaces in the
@@ -45,6 +46,7 @@ interface BuildGuideProps {
 
 export function BuildGuide({
   workspace,
+  sessionNameIsPlaceholder,
   saved,
   deployed,
   resolvedSiteCount,
@@ -64,7 +66,7 @@ export function BuildGuide({
   const siteCountQualifier = resolvedSiteCount === null ? " (unresolved)" : "";
   const placed = placedSegments(workspace);
   const firstPlaced = placed[0] ?? null;
-  const named = workspace.name !== "untitled-session";
+  const named = !sessionNameIsPlaceholder && workspace.session_name.trim().length > 0;
 
   const rows: GuideRow[] = [
     {
@@ -129,7 +131,9 @@ export function BuildGuide({
       key: "session",
       label: "Identity & time",
       done: named,
-      detail: named ? `${workspace.name}` : "name it — real time unless you say otherwise",
+      detail: named
+        ? `${workspace.session_name}`
+        : "name it — real time unless you say otherwise",
       why: "The session's name, start time, and time rate. One second per second unless you explicitly change it.",
       action: onOpenSession,
     },

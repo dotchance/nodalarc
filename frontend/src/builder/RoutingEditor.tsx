@@ -50,7 +50,10 @@ export function RoutingDomainEditor({
   authoring,
 }: DomainEditorProps) {
   const placed = placedSegments(workspace);
-  const explicitTimers = domain.hello_interval_s !== null;
+  const timersUseDefaults =
+    domain.hello_interval_s === null && domain.hold_interval_s === null;
+  const timersComplete =
+    domain.hello_interval_s !== null && domain.hold_interval_s !== null;
   const selectedProtocol = authoring.routing_protocols.find(
     (choice) => choice.id === domain.protocol,
   );
@@ -120,14 +123,16 @@ export function RoutingDomainEditor({
           title="Timers"
           open
           summary={
-            explicitTimers
+            timersComplete
               ? `hello ${domain.hello_interval_s}s · hold ${domain.hold_interval_s}s`
-              : "engine defaults"
+              : timersUseDefaults
+                ? "engine defaults"
+                : "timers incomplete"
           }
         >
             <div className="builder-preset-row">
               <Button
-                active={!explicitTimers}
+                active={timersUseDefaults}
                 onClick={() => onUpdate({ hello_interval_s: null, hold_interval_s: null })}
               >
                 engine defaults

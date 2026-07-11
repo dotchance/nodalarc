@@ -54,6 +54,8 @@ describe("typed Builder API client", () => {
       draft_revision: 9,
       mode: "opaque_yaml" as const,
       target_ref: "user:sessions/typed.yaml",
+      session_name_is_placeholder: false,
+      reserved_authoring_ids: [],
       session_yaml: "session:\n  name: typed\n",
     };
 

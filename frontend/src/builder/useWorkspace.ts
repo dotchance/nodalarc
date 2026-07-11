@@ -12,14 +12,11 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  newRefSegment,
   type DraftConstellation,
   type DraftGroundSet,
-  type DraftGroundSite,
   type DraftBoundary,
   type DraftLinkRule,
   type DraftRoutingDomain,
-  type RefGroundSet,
   type Workspace,
 } from "./workspace";
 
@@ -216,8 +213,8 @@ export function workspaceForSave(
   const base = opts.applyAll
     ? overlayBuffers(workspace, buffers, opts.excludeKeys)
     : workspace;
-  const name = opts.nameTouched ? opts.dialogName : base.name;
-  return base.name === name ? base : { ...base, name };
+  const sessionName = opts.nameTouched ? opts.dialogName : base.session_name;
+  return base.session_name === sessionName ? base : { ...base, session_name: sessionName };
 }
 const HISTORY_LIMIT = 100;
 
@@ -261,19 +258,7 @@ export function useWorkspace() {
     commit(past);
   }, []);
 
-  /** Apply a browser-state mutation only after VS-API created the structured draft. */
-  const updateWorkspace = useCallback(
-    (build: (workspace: Workspace) => Workspace) => {
-      commit((prev) => {
-        if (!prev) throw new Error("VS-API must create the structured workspace first");
-        return build(prev);
-      });
-    },
-    [commit],
-  );
-
-  /** Adopt a ready-made workspace (session import). The caller is
-   *  responsible for id-counter reseeding (the importer does it). */
+  /** Adopt a ready-made workspace returned by import or a backend operation. */
   const openWorkspace = useCallback((imported: Workspace) => {
     commit(imported);
   }, []);
@@ -292,7 +277,7 @@ export function useWorkspace() {
       patch: Partial<
         Pick<
           Workspace,
-          | "name"
+          | "session_name"
           | "start_time"
           | "step_seconds"
           | "compression"
@@ -308,37 +293,6 @@ export function useWorkspace() {
 
   const close = useCallback(() => commit(null), []);
   const currentWorkspace = useCallback(() => workspaceRef.current, []);
-
-  // Library "use" gestures are self-ensuring: using a block with no open
-  // workspace starts one - building never dead-ends on missing state.
-  // The Use mutations mint the created/receiving object BEFORE the updater and
-  // return its segment_id (the caller opens that object's editor for a
-  // draft, or reveals its placed row for a ref). Minting outside the updater is
-  // also correct-by-construction — the factories bump an impure module counter,
-  // so minting inside a (StrictMode-double-invoked) updater would allocate two
-  // ids for one object.
-  const addConstellation = useCallback(
-    (draft: DraftConstellation): string => {
-      updateWorkspace((workspace) => ({
-        ...workspace,
-        space: [...workspace.space, draft],
-      }));
-      return draft.segment_id;
-    },
-    [updateWorkspace],
-  );
-
-  const addConstellationRef = useCallback(
-    (ref: string, label: string): string => {
-      const segment = newRefSegment(ref, label);
-      updateWorkspace((workspace) => ({
-        ...workspace,
-        space_refs: [...workspace.space_refs, segment],
-      }));
-      return segment.segment_id;
-    },
-    [updateWorkspace],
-  );
 
   const removeRefSegment = useCallback((segmentId: string) => {
     commit((prev) =>
@@ -372,21 +326,6 @@ export function useWorkspace() {
     [],
   );
 
-  const addGroundRef = useCallback(
-    (ref: string, label: string): string => {
-      const segment: RefGroundSet = {
-        ...newRefSegment(ref, label),
-        scheduling: {},
-      };
-      updateWorkspace((workspace) => ({
-        ...workspace,
-        ground_refs: [...workspace.ground_refs, segment],
-      }));
-      return segment.segment_id;
-    },
-    [updateWorkspace],
-  );
-
   const removeGroundRef = useCallback((segmentId: string) => {
     commit((prev) =>
       prev
@@ -394,44 +333,6 @@ export function useWorkspace() {
         : prev,
     );
   }, []);
-
-  /** Add an authored (or forked) ground segment draft. */
-  /** Place a defined site into the last ground segment draft — self-ensuring:
-   *  with no draft (or no workspace) open, makeDraft starts one, so using a
-   *  site from the Library never dead-ends. */
-  const addGroundMember = useCallback(
-    (
-      member: DraftGroundSite,
-      makeDraft: () => DraftGroundSet,
-    ): { segmentId: string; created: boolean } => {
-      // The receiving set is the last ground draft, or a fresh one when none
-      // exists yet. Decide the branch from the synced ref so the
-      // returned id matches what the updater builds. `created` tells the caller
-      // whether to apply create-focus: focusing (and selecting) the name of an
-      // EXISTING set the member merely joined is a rename footgun.
-      const current = workspaceRef.current;
-      if (!current) throw new Error("VS-API must create the structured workspace first");
-      if (current.ground.length === 0) {
-        const draft = makeDraft();
-        updateWorkspace((workspace) => ({
-          ...workspace,
-          ground: [{ ...draft, members: [member] }],
-        }));
-        return { segmentId: draft.segment_id, created: true };
-      }
-      const receiving = current.ground[current.ground.length - 1]!; // length > 0 checked above
-      updateWorkspace((workspace) => ({
-        ...workspace,
-        ground: workspace.ground.map((draft, index) =>
-          index === workspace.ground.length - 1
-            ? { ...draft, members: [...draft.members, member] }
-            : draft,
-        ),
-      }));
-      return { segmentId: receiving.segment_id, created: false };
-    },
-    [updateWorkspace],
-  );
 
   const updateLinkRule = useCallback((ruleId: string, patch: Partial<DraftLinkRule>) => {
     commit((prev) =>
@@ -551,14 +452,10 @@ export function useWorkspace() {
     updateSession,
     undo,
     close,
-    addConstellation,
-    addConstellationRef,
     removeRefSegment,
     removeConstellation,
     updateConstellation,
-    addGroundRef,
     removeGroundRef,
-    addGroundMember,
     replaceGroundRefWithDraft,
     updateGroundDraft,
     removeGroundDraft,

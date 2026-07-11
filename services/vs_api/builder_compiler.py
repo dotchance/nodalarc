@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import tempfile
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any, cast
 
@@ -99,14 +99,45 @@ def canonicalize_persisted_configuration(
     )
 
 
+class _ReachableProposalValidationError(ValueError):
+    def __init__(
+        self,
+        proposal: BuilderProposedCatalogDocument,
+        index: int,
+        cause: ValidationError | TypeError | ValueError,
+    ) -> None:
+        super().__init__(str(cause))
+        self.proposal = proposal
+        self.index = index
+        self.cause = cause
+
+
 @dataclass(frozen=True, slots=True)
 class _OverlayCatalogReadView(CatalogReadView):
     base: CatalogReadSnapshot
-    proposed: Mapping[CatalogRef, CanonicalConfigurationDocument]
+    proposals: Mapping[CatalogRef, tuple[int, BuilderProposedCatalogDocument]]
+    canonicalized: dict[CatalogRef, CanonicalConfigurationDocument] = field(default_factory=dict)
+    reached: set[CatalogRef] = field(default_factory=set)
 
     def read(self, ref: CatalogRef) -> CatalogReadDocument:
-        document = self.proposed.get(ref)
-        if document is not None:
+        indexed = self.proposals.get(ref)
+        if indexed is not None:
+            self.reached.add(ref)
+            index, proposal = indexed
+            document = self.canonicalized.get(ref)
+            if document is None:
+                try:
+                    document = canonicalize_persisted_configuration(
+                        proposal.ref,
+                        proposal.document,
+                    )
+                except (ValidationError, TypeError, ValueError) as error:
+                    raise _ReachableProposalValidationError(
+                        proposal,
+                        index,
+                        error,
+                    ) from error
+                self.canonicalized[ref] = document
             return CatalogReadDocument(
                 family=document.family,
                 preserved_path=f"catalog/{ref.namespace}/{ref.relative_path.as_posix()}",
@@ -115,9 +146,16 @@ class _OverlayCatalogReadView(CatalogReadView):
         return self.base.read(ref)
 
     def revision(self, ref: CatalogRef) -> str | None:
-        if ref in self.proposed:
+        if ref in self.proposals:
             return None
         return str(self.base.get(ref).revision)
+
+    def reached_proposals(self) -> tuple[BuilderProposedCatalogDocument, ...]:
+        return tuple(
+            proposal
+            for index, proposal in sorted(self.proposals.values(), key=lambda item: item[0])
+            if proposal.ref in self.reached
+        )
 
 
 def _json_pointer(parts: tuple[object, ...]) -> str:
@@ -233,6 +271,53 @@ def _check_proposed_revisions(
                 )
             )
     return issues
+
+
+def _reachable_proposal_validation_issues(
+    error: _ReachableProposalValidationError,
+) -> list[BuilderIssue]:
+    draft_path = f"state.catalog_documents.{error.index}.document"
+    if isinstance(error.cause, ValidationError):
+        return _validation_issues(
+            error.cause,
+            source_ref=str(error.proposal.ref),
+            draft_path=draft_path,
+        )
+    return [
+        _structural_issue(
+            str(error.cause),
+            source_ref=str(error.proposal.ref),
+            draft_path=draft_path,
+        )
+    ]
+
+
+def _scope_request_to_proposals(
+    request: BuilderCompileRequest,
+    proposals: tuple[BuilderProposedCatalogDocument, ...],
+) -> BuilderCompileRequest:
+    state = request.draft.state.model_copy(update={"catalog_documents": proposals})
+    draft = request.draft.model_copy(update={"state": state})
+    return request.model_copy(update={"draft": draft})
+
+
+def _excluded_proposals_issue(
+    request: BuilderCompileRequest,
+    proposals: tuple[BuilderProposedCatalogDocument, ...],
+) -> BuilderIssue:
+    refs = tuple(sorted(str(proposal.ref) for proposal in proposals))
+    return BuilderIssue(
+        code="builder.draft.unreferenced_catalog_documents",
+        stage="draft",
+        severity="warning",
+        message=(
+            "Excluded catalog proposals outside the canonical session dependency closure: "
+            + ", ".join(refs)
+        ),
+        source_ref=str(request.target_ref),
+        draft_path="state.catalog_documents",
+        related_refs=refs,
+    )
 
 
 def _materialize_closure(root: Path, closure: CatalogClosure) -> CatalogRoots:
@@ -366,33 +451,7 @@ def compile_builder_draft(
             )
         )
 
-    proposed: dict[CatalogRef, CanonicalConfigurationDocument] = {}
-    for index, proposal in enumerate(request.draft.state.catalog_documents):
-        try:
-            proposed[proposal.ref] = canonicalize_persisted_configuration(
-                proposal.ref,
-                proposal.document,
-            )
-        except ValidationError as error:
-            issues.extend(
-                _validation_issues(
-                    error,
-                    source_ref=str(proposal.ref),
-                    draft_path=f"state.catalog_documents.{index}.document",
-                )
-            )
-        except (TypeError, ValueError) as error:
-            issues.append(
-                _structural_issue(
-                    str(error),
-                    source_ref=str(proposal.ref),
-                    draft_path=f"state.catalog_documents.{index}.document",
-                )
-            )
-
-    issues.extend(_check_proposed_revisions(request.draft.state.catalog_documents, snapshot))
-
-    if canonical_session is None or len(proposed) != len(request.draft.state.catalog_documents):
+    if canonical_session is None:
         return _compile_result(
             request,
             canonical_session=canonical_session,
@@ -402,25 +461,19 @@ def compile_builder_draft(
             issues=issues,
         )
 
-    overlay = _OverlayCatalogReadView(snapshot, proposed)
-    if proposed:
-        try:
-            CatalogClosureCollector.collect_references(proposed, overlay)
-        except CatalogClosureError as error:
-            issues.append(_reference_issue(error, fallback_ref=str(request.target_ref)))
-            return _compile_result(
-                request,
-                canonical_session=canonical_session,
-                dependency_closure=None,
-                resolved_preview=None,
-                digests=None,
-                issues=issues,
-            )
+    overlay = _OverlayCatalogReadView(
+        snapshot,
+        {
+            proposal.ref: (index, proposal)
+            for index, proposal in enumerate(request.draft.state.catalog_documents)
+        },
+    )
 
     try:
         closure = CatalogClosureCollector.collect(canonical_session.yaml_bytes, overlay)
-    except CatalogClosureError as error:
-        issues.append(_reference_issue(error, fallback_ref=str(request.target_ref)))
+    except _ReachableProposalValidationError as error:
+        issues.extend(_reachable_proposal_validation_issues(error))
+        issues.extend(_check_proposed_revisions(overlay.reached_proposals(), snapshot))
         return _compile_result(
             request,
             canonical_session=canonical_session,
@@ -429,6 +482,29 @@ def compile_builder_draft(
             digests=None,
             issues=issues,
         )
+    except CatalogClosureError as error:
+        issues.append(_reference_issue(error, fallback_ref=str(request.target_ref)))
+        issues.extend(_check_proposed_revisions(overlay.reached_proposals(), snapshot))
+        return _compile_result(
+            request,
+            canonical_session=canonical_session,
+            dependency_closure=None,
+            resolved_preview=None,
+            digests=None,
+            issues=issues,
+        )
+
+    reached_proposals = overlay.reached_proposals()
+    reached_refs = {proposal.ref for proposal in reached_proposals}
+    excluded_proposals = tuple(
+        proposal
+        for proposal in request.draft.state.catalog_documents
+        if proposal.ref not in reached_refs
+    )
+    request = _scope_request_to_proposals(request, reached_proposals)
+    issues.extend(_check_proposed_revisions(reached_proposals, snapshot))
+    if excluded_proposals:
+        issues.append(_excluded_proposals_issue(request, excluded_proposals))
 
     inventory = _closure_inventory(closure, overlay)
     digests = BuilderDigests(

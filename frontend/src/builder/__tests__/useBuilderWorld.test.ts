@@ -7,6 +7,7 @@
  *  after a teardown cannot repaint a world the user has left behind. */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
+import type { BuilderVisualDraftEnvelope } from "../generated/builderApi";
 
 vi.mock("../../config", () => ({
   REST_URL: "http://test:8080",
@@ -44,6 +45,8 @@ function request(marker: string) {
     draft_revision: marker.charCodeAt(0),
     mode: "opaque_yaml" as const,
     target_ref: `user:sessions/${marker.toLowerCase()}.yaml`,
+    session_name_is_placeholder: false,
+    reserved_authoring_ids: [],
     session_yaml: `session:\n  name: ${marker}\n`,
   };
 }
@@ -196,12 +199,47 @@ describe("useBuilderWorld — the resolve loop keeps nothing stale", () => {
     expect(result.current.settledDocumentDigest).toBeNull();
   });
 
+  it("a delayed live compile cannot overwrite a prepared draft adopted after save", async () => {
+    const delayed = deferred<ReturnType<typeof check>>();
+    let compileCall = 0;
+    fetchMock.mockImplementation((url: string) => {
+      if (url.includes("/builder/catalog/list")) return Promise.resolve(sessionsOk);
+      compileCall += 1;
+      return compileCall === 1 ? delayed.promise : Promise.resolve(check("B"));
+    });
+
+    const { result } = renderHook(() => useBuilderWorld());
+    await act(async () => {});
+    act(() => {
+      void result.current.compileDraft(request("A"));
+    });
+    expect(result.current.loading).toBe(true);
+
+    let prepared: Awaited<ReturnType<typeof result.current.compileDraftWithoutAdopting>> | null = null;
+    await act(async () => {
+      prepared = await result.current.compileDraftWithoutAdopting(request("B"));
+    });
+    expect(result.current.loading).toBe(false);
+    act(() => result.current.adoptCompiledDraft(prepared!, true));
+
+    await act(async () => {
+      delayed.resolve(check("A"));
+      await delayed.promise;
+    });
+
+    expect(result.current.currentVisualDraft()?.target_ref).toBe("user:sessions/b.yaml");
+    expect((result.current.world as { marker?: string })?.marker).toBe("B");
+    expect(result.current.loading).toBe(false);
+  });
+
   it("runs and explicitly adopts a typed backend visual command result", async () => {
     const original = {
       contract_version: 1 as const,
       draft_revision: 4,
       mode: "structured" as const,
       target_ref: "user:sessions/commanded.yaml",
+      session_name_is_placeholder: false,
+      reserved_authoring_ids: [],
       workspace: {
         session_name: "commanded",
         display_name: null,
@@ -279,9 +317,106 @@ describe("useBuilderWorld — the resolve loop keeps nothing stale", () => {
       command: { operation: "add_generated_space", phasing_mode: "walker_delta" },
     });
   });
+
+  it("prepares a retargeted draft without adopting it or discarding authoring history", async () => {
+    const original = {
+      contract_version: 1 as const,
+      draft_revision: 4,
+      mode: "structured" as const,
+      target_ref: "user:sessions/original.yaml",
+      session_name_is_placeholder: false,
+      expected_catalog_revisions: [
+        {
+          ref: "user:nodes/original/generated-node.yaml",
+          expected_revision: "generated-revision",
+        },
+      ],
+      catalog_documents: [
+        {
+          ref: "user:terminals/shared/custom-terminal.yaml",
+          expected_revision: "proposal-revision",
+          document: { terminal: { id: "custom-terminal" } },
+        },
+      ],
+      reserved_authoring_ids: ["space-1", "ground-1"],
+      workspace: {
+        session_name: "original",
+        display_name: null,
+        description: null,
+        space: [],
+        space_refs: [],
+        ground: [],
+        ground_refs: [],
+        links: [],
+        routing_domains: [],
+        boundaries: [],
+        max_pairs_per_rule: 2_000,
+        max_pairs_per_tick: 10_000,
+        start_time: "2026-01-01T00:00:00Z",
+        step_seconds: 1,
+        compression: 1,
+      },
+    };
+    fetchMock.mockImplementation((url: string) => {
+      if (url.includes("/builder/catalog/list")) return Promise.resolve(sessionsOk);
+      if (url.includes("/builder/draft/new")) {
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              ...original,
+              draft_revision: 0,
+              target_ref: "user:sessions/renamed.yaml",
+              session_name_is_placeholder: false,
+              expected_catalog_revisions: [],
+              catalog_documents: [],
+              reserved_authoring_ids: [],
+              workspace: { ...original.workspace, session_name: "renamed" },
+            }),
+        });
+      }
+      throw new Error(`unexpected request ${url}`);
+    });
+    const { result } = renderHook(() => useBuilderWorld());
+    await act(async () => {});
+    act(() => result.current.adoptRecoveredStructuredDraft(original));
+
+    let prepared: BuilderVisualDraftEnvelope | undefined;
+    await act(async () => {
+      prepared = await result.current.prepareRetargetDraft("renamed");
+    });
+
+    expect(prepared?.reserved_authoring_ids).toEqual([
+      "space-1",
+      "ground-1",
+    ]);
+    expect(prepared?.expected_catalog_revisions).toEqual([]);
+    expect(prepared?.catalog_documents).toEqual(
+      original.catalog_documents,
+    );
+    expect(prepared?.session_name_is_placeholder).toBe(false);
+    expect(result.current.currentVisualDraft()).toEqual(original);
+  });
 });
 
 describe("lossless YAML draft recovery", () => {
+  const opaqueAutosaveKey = "nodalarc-builder-opaque-yaml-draft";
+
+  const opaqueRecoveryDraft = () => ({
+    contract_version: 1 as const,
+    draft_revision: 7,
+    mode: "opaque_yaml" as const,
+    target_ref: "user:sessions/recovered-opaque.yaml",
+    source_ref: "nodalarc:sessions/source.yaml",
+    expected_session_revision: "source-revision",
+    expected_catalog_revisions: [],
+    catalog_documents: [],
+    session_name_is_placeholder: false,
+    reserved_authoring_ids: ["space-1"],
+    workspace: null,
+    session_yaml: "session:\n  name: recovered-opaque\n",
+  });
+
   beforeEach(() => localStorage.clear());
 
   it("stashes exact edited YAML synchronously and restores it with its refs", async () => {
@@ -298,8 +433,11 @@ describe("lossless YAML draft recovery", () => {
         {
           ref: "user:nodes/exact/custom.yaml",
           document: { node: { id: "custom" } },
+          expected_revision: null,
         },
       ],
+      session_name_is_placeholder: false,
+      reserved_authoring_ids: [],
       workspace: null,
       session_yaml: "# exact\nsession:\n  name: exact\n",
     };
@@ -340,6 +478,95 @@ describe("lossless YAML draft recovery", () => {
       target_ref: "user:sessions/exact.yaml",
       session_yaml: "# exact comment retained\nsession:\n  name: changed\n",
       catalog_documents: openedDraft.catalog_documents,
+    });
+  });
+
+  it("restores intentionally invalid opaque YAML without interpreting it", async () => {
+    const draft = opaqueRecoveryDraft();
+    draft.session_yaml = ": [intentionally unfinished";
+    localStorage.setItem(opaqueAutosaveKey, JSON.stringify({ v: 2, draft }));
+    globalThis.fetch = vi.fn((url: string) => {
+      if (url.includes("/builder/catalog/list")) return Promise.resolve(sessionsOk);
+      throw new Error(`unexpected request ${url}`);
+    }) as unknown as typeof fetch;
+
+    const { result } = renderHook(() => useBuilderWorld());
+    await act(async () => {});
+    act(() => {
+      expect(result.current.restoreOpaqueAutosave()).toEqual({ ok: true });
+    });
+
+    expect(result.current.visualDraft?.session_yaml).toBe(
+      ": [intentionally unfinished",
+    );
+  });
+
+  it("refuses the previous opaque recovery version without compatibility", async () => {
+    localStorage.setItem(
+      opaqueAutosaveKey,
+      JSON.stringify({ v: 1, draft: opaqueRecoveryDraft() }),
+    );
+    globalThis.fetch = vi.fn((url: string) => {
+      if (url.includes("/builder/catalog/list")) return Promise.resolve(sessionsOk);
+      throw new Error(`unexpected request ${url}`);
+    }) as unknown as typeof fetch;
+
+    const { result } = renderHook(() => useBuilderWorld());
+    await act(async () => {});
+
+    expect(result.current.hasOpaqueAutosave()).toBe(false);
+    expect(result.current.restoreOpaqueAutosave()).toEqual({
+      ok: false,
+      reason: "the saved YAML draft could not be read",
+    });
+  });
+
+  it.each([
+    ["missing placeholder fact", (draft: Record<string, unknown>) => {
+      delete draft.session_name_is_placeholder;
+    }],
+    ["missing authoring history", (draft: Record<string, unknown>) => {
+      delete draft.reserved_authoring_ids;
+    }],
+    ["non-integer revision", (draft: Record<string, unknown>) => {
+      draft.draft_revision = "7";
+    }],
+    ["empty revision fence", (draft: Record<string, unknown>) => {
+      draft.expected_session_revision = "";
+    }],
+    ["non-user target", (draft: Record<string, unknown>) => {
+      draft.target_ref = "nodalarc:sessions/recovered-opaque.yaml";
+    }],
+    ["structured workspace", (draft: Record<string, unknown>) => {
+      draft.workspace = {};
+    }],
+    ["session revision in component fences", (draft: Record<string, unknown>) => {
+      draft.expected_catalog_revisions = [
+        { ref: "user:sessions/component.yaml", expected_revision: "revision" },
+      ];
+    }],
+    ["duplicate authoring history", (draft: Record<string, unknown>) => {
+      draft.reserved_authoring_ids = ["space-1", "space-1"];
+    }],
+    ["unknown envelope field", (draft: Record<string, unknown>) => {
+      draft.future_field = true;
+    }],
+  ] as const)("refuses opaque recovery with %s", async (_label, mutate) => {
+    const draft = opaqueRecoveryDraft() as unknown as Record<string, unknown>;
+    mutate(draft);
+    localStorage.setItem(opaqueAutosaveKey, JSON.stringify({ v: 2, draft }));
+    globalThis.fetch = vi.fn((url: string) => {
+      if (url.includes("/builder/catalog/list")) return Promise.resolve(sessionsOk);
+      throw new Error(`unexpected request ${url}`);
+    }) as unknown as typeof fetch;
+
+    const { result } = renderHook(() => useBuilderWorld());
+    await act(async () => {});
+
+    expect(result.current.hasOpaqueAutosave()).toBe(false);
+    expect(result.current.restoreOpaqueAutosave()).toEqual({
+      ok: false,
+      reason: "the saved YAML draft could not be read",
     });
   });
 

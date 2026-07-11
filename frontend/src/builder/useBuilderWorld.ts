@@ -47,9 +47,10 @@ import type {
   CatalogDraftSaveResult,
   SessionRef,
 } from "./generated/builderApi";
+import { isVisualDraftEnvelopeForMode } from "./structuredDraftRecovery";
 
 const OPAQUE_DRAFT_AUTOSAVE_KEY = "nodalarc-builder-opaque-yaml-draft";
-const OPAQUE_DRAFT_AUTOSAVE_VERSION = 1;
+const OPAQUE_DRAFT_AUTOSAVE_VERSION = 2;
 const OPAQUE_DRAFT_AUTOSAVE_DEBOUNCE_MS = 800;
 
 export type OpaqueDraftRestoreResult =
@@ -58,24 +59,23 @@ export type OpaqueDraftRestoreResult =
 
 function _readOpaqueDraft(raw: string): BuilderVisualDraftEnvelope | null {
   try {
-    const parsed = JSON.parse(raw) as {
-      v?: unknown;
-      draft?: Record<string, unknown>;
-    };
-    const draft = parsed.draft;
+    const parsed: unknown = JSON.parse(raw);
     if (
-      parsed.v !== OPAQUE_DRAFT_AUTOSAVE_VERSION ||
-      !draft ||
-      draft.mode !== "opaque_yaml" ||
-      typeof draft.draft_revision !== "number" ||
-      typeof draft.target_ref !== "string" ||
-      !draft.target_ref.startsWith("user:sessions/") ||
-      typeof draft.session_yaml !== "string" ||
-      draft.workspace != null
+      parsed === null ||
+      typeof parsed !== "object" ||
+      Array.isArray(parsed) ||
+      Object.keys(parsed).length !== 2
     ) {
       return null;
     }
-    return draft as unknown as BuilderVisualDraftEnvelope;
+    const recovery = parsed as Record<string, unknown>;
+    if (
+      recovery.v !== OPAQUE_DRAFT_AUTOSAVE_VERSION ||
+      !isVisualDraftEnvelopeForMode(recovery.draft, "opaque_yaml")
+    ) {
+      return null;
+    }
+    return structuredClone(recovery.draft);
   } catch {
     return null;
   }
@@ -664,6 +664,15 @@ export function useBuilderWorld() {
     }
   }, [adoptCompileResult]);
 
+  const compileDraftWithoutAdopting = useCallback(
+    (draft: BuilderVisualDraftEnvelope): Promise<BuilderVisualDraftAssemblyResult> => {
+      resolveSeq.current += 1;
+      setLoading(false);
+      return compileVisualDraft({ draft });
+    },
+    [],
+  );
+
   const createDraft = useCallback(
     async (request: BuilderVisualDraftCreateRequest): Promise<BuilderVisualDraftEnvelope> => {
       const seq = ++resolveSeq.current;
@@ -688,28 +697,31 @@ export function useBuilderWorld() {
     [setVisualDraft],
   );
 
-  const retargetDraft = useCallback(
+  const prepareRetargetDraft = useCallback(
     async (sessionName: string): Promise<BuilderVisualDraftEnvelope> => {
       const current = visualDraftRef.current;
       if (!current || current.mode !== "structured") {
         throw new Error("only structured visual drafts can be retargeted");
       }
-      const seq = ++resolveSeq.current;
       const fresh = await createVisualDraft({ session_name: sessionName });
-      const retargeted: BuilderVisualDraftEnvelope = {
+      return {
         ...fresh,
         draft_revision: current.draft_revision + 1,
         catalog_documents: current.catalog_documents,
-        expected_catalog_revisions: current.expected_catalog_revisions,
+        reserved_authoring_ids: current.reserved_authoring_ids,
       };
-      if (seq === resolveSeq.current) {
-        setOpenedSession(null);
-        setVisualDraft(retargeted);
-        setAssemblyResult(null);
-      }
-      return retargeted;
     },
-    [setVisualDraft],
+    [],
+  );
+
+  const adoptCompiledDraft = useCallback(
+    (result: BuilderVisualDraftAssemblyResult, retargeted: boolean) => {
+      resolveSeq.current += 1;
+      setLoading(false);
+      if (retargeted) setOpenedSession(null);
+      adoptCompileResult(result);
+    },
+    [adoptCompileResult],
   );
 
   const openSession = useCallback(
@@ -889,7 +901,7 @@ export function useBuilderWorld() {
     settledDocumentDigest,
     settledDependencySha256,
     createDraft,
-    retargetDraft,
+    prepareRetargetDraft,
     openSession,
     editOpaqueYaml,
     undoOpaque,
@@ -898,6 +910,8 @@ export function useBuilderWorld() {
     runVisualCommand,
     adoptVisualCommandResult,
     compileDraft,
+    compileDraftWithoutAdopting,
+    adoptCompiledDraft,
     hasOpaqueAutosave,
     stashOpaqueDraft,
     restoreOpaqueAutosave,

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import secrets
 from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import dataclass
@@ -11,7 +12,7 @@ from typing import Any, Literal, cast
 
 import yaml
 from nodalarc.catalog_closure import catalog_document_references
-from nodalarc.catalog_refs import CatalogFamily, CatalogRef, SessionRef
+from nodalarc.catalog_refs import BodyRef, CatalogFamily, CatalogRef, SessionRef
 from nodalarc.catalog_registry import catalog_family_spec
 from nodalarc.catalog_repository import (
     CatalogConflictError,
@@ -34,6 +35,7 @@ from nodalarc.models.builder_visual_api import (
     BuilderVisualAddGeneratedSpaceCommand,
     BuilderVisualAddGroundCommand,
     BuilderVisualAddGroundSiteNodeCommand,
+    BuilderVisualAddGroundSiteReferenceCommand,
     BuilderVisualAddNodeEthernetPortCommand,
     BuilderVisualAddOrIncrementNodeTerminalCommand,
     BuilderVisualAddRoutingDomainCommand,
@@ -52,30 +54,42 @@ from nodalarc.models.builder_visual_api import (
     BuilderVisualGroundBoresight,
     BuilderVisualGroundDraft,
     BuilderVisualGroundMember,
+    BuilderVisualGroundReference,
     BuilderVisualGroundStamp,
     BuilderVisualLinkEndpoint,
     BuilderVisualLinkRule,
     BuilderVisualMintGroundMembersCommand,
     BuilderVisualNode,
     BuilderVisualOrbit,
+    BuilderVisualPlaceGroundReferenceCommand,
+    BuilderVisualPlaceSpaceReferenceCommand,
     BuilderVisualRederiveLinkCommand,
     BuilderVisualRoutingBoundary,
     BuilderVisualRoutingDomain,
     BuilderVisualSetGroundSiteNodeModelCommand,
     BuilderVisualSetGroundStampNodeModelCommand,
+    BuilderVisualSetNodeTerminalRoleCommand,
     BuilderVisualSetSchedulingPresetCommand,
     BuilderVisualSetSpacePopulationCommand,
     BuilderVisualSite,
     BuilderVisualSiteNode,
     BuilderVisualSpaceBoresight,
     BuilderVisualSpaceDraft,
+    BuilderVisualSpaceReference,
     BuilderVisualTerminalMount,
     BuilderVisualWalkerLayoutRequest,
     BuilderVisualWorkspace,
     derive_walker_layout,
 )
 from nodalarc.models.builder_world import BuilderWorld
-from nodalarc.models.catalog import Node, Terminal
+from nodalarc.models.catalog import (
+    Constellation,
+    Node,
+    Site,
+    SiteSet,
+    SpaceNodeSet,
+    Terminal,
+)
 from pydantic import BaseModel, JsonValue
 
 from .builder_compiler import (
@@ -191,11 +205,64 @@ def _placed_segments(workspace: BuilderVisualWorkspace) -> tuple[_PlacedSegment,
     )
 
 
+def _reserved_authoring_ids(
+    workspace: BuilderVisualWorkspace,
+    allocation_history: tuple[str, ...] = (),
+) -> set[str]:
+    reserved = set(allocation_history)
+    reserved.update(_current_and_referenced_authoring_ids(workspace))
+    reserved.discard("")
+    return reserved
+
+
+def _current_and_referenced_authoring_ids(
+    workspace: BuilderVisualWorkspace,
+) -> tuple[str, ...]:
+    return (
+        *(item.segment_id for item in _placed_segments(workspace)),
+        *(endpoint.segment_id for rule in workspace.links for endpoint in (rule.a, rule.b)),
+        *(
+            segment_id
+            for domain in workspace.routing_domains
+            for segment_id in domain.member_segment_ids
+        ),
+        *(item.rule_id for item in workspace.links),
+        *(boundary.over_rule_id for boundary in workspace.boundaries),
+        *(item.domain_id for item in workspace.routing_domains),
+        *(
+            domain_id
+            for boundary in workspace.boundaries
+            for domain_id in (boundary.from_domain_id, boundary.to_domain_id)
+        ),
+        *(item.boundary_id for item in workspace.boundaries),
+    )
+
+
 def _next_number(prefix: str, values: set[str]) -> int:
     number = 1
     while f"{prefix}-{number}" in values:
         number += 1
     return number
+
+
+def _catalog_label(model: BaseModel) -> str:
+    display_name = getattr(model, "display_name", None)
+    if isinstance(display_name, str) and display_name.strip():
+        return display_name.strip()
+    identifier = getattr(model, "id", None)
+    if not isinstance(identifier, str) or not identifier:
+        raise TypeError(f"{type(model).__name__} has no catalog identity")
+    return identifier
+
+
+def _site_summary(site: Site) -> str | None:
+    summary = site.verified.notes if site.verified is not None else None
+    if summary is None:
+        return None
+    normalized = " ".join(summary.split())
+    if len(normalized) > 512:
+        normalized = normalized[:509].rstrip() + "..."
+    return normalized or None
 
 
 def _stamp_base(value: str, *, label: str) -> tuple[int, int]:
@@ -848,6 +915,7 @@ def _assemble_structured(
             ("planes", space.planes),
             ("raan_spacing_deg", space.raan_spacing_deg),
             ("slots_per_plane", space.slots_per_plane),
+            ("phase_offset_deg", space.phase_offset_deg),
         ):
             if value is None or value == "":
                 assembly.issue(
@@ -1315,9 +1383,21 @@ class BuilderVisualDraftService:
         self._clock = clock or (lambda: datetime.now(UTC))
 
     def create(self, request: BuilderVisualDraftCreateRequest) -> BuilderVisualDraftEnvelope:
-        name = _identifier(request.session_name) or "untitled-session"
-        target_ref = SessionRef(f"user:sessions/{name}.yaml")
         snapshot = self._context.repository.snapshot(self._context.scope)
+        session_name_is_placeholder = request.session_name is None
+        if request.session_name is None:
+            for _attempt in range(128):
+                name = f"untitled-session-{secrets.token_hex(6)}"
+                candidate = SessionRef(f"user:sessions/{name}.yaml")
+                try:
+                    snapshot.get(candidate)
+                except CatalogNotFoundError:
+                    break
+            else:
+                raise RuntimeError("Unable to allocate a unique untitled session name")
+        else:
+            name = request.session_name
+        target_ref = SessionRef(f"user:sessions/{name}.yaml")
         try:
             snapshot.get(target_ref)
         except CatalogNotFoundError:
@@ -1333,6 +1413,8 @@ class BuilderVisualDraftService:
             draft_revision=0,
             mode="structured",
             target_ref=target_ref,
+            session_name_is_placeholder=session_name_is_placeholder,
+            reserved_authoring_ids=(),
             workspace=BuilderVisualWorkspace(
                 session_name=name,
                 display_name=request.display_name,
@@ -1385,6 +1467,8 @@ class BuilderVisualDraftService:
             target_ref=target_ref,
             source_ref=request.source_ref,
             expected_session_revision=expected_revision,
+            session_name_is_placeholder=False,
+            reserved_authoring_ids=(),
             session_yaml=session_yaml,
         )
 
@@ -1521,6 +1605,49 @@ class BuilderVisualDraftService:
                 )
         return installed, boresights
 
+    def _new_ground_draft(
+        self,
+        draft: BuilderVisualDraftEnvelope,
+        snapshot: CatalogReadSnapshot,
+        workspace: BuilderVisualWorkspace,
+        *,
+        node_ref: CatalogRef | None = None,
+        installed_counts: dict[str, int] | None = None,
+        authored_boresights: dict[str, BuilderVisualGroundBoresight] | None = None,
+        body_ref: BodyRef | None = None,
+    ) -> BuilderVisualGroundDraft:
+        number = _next_number(
+            "ground",
+            _reserved_authoring_ids(workspace, draft.reserved_authoring_ids),
+        )
+        segment_id = f"ground-{number}"
+        selected_node_ref = self._node_ref_for_command(
+            draft,
+            snapshot,
+            node_ref,
+            placement="ground",
+        )
+        installed, boresights = self._ground_installation_facts(
+            draft,
+            snapshot,
+            selected_node_ref,
+            installed_counts=installed_counts,
+            authored_boresights=authored_boresights,
+        )
+        return BuilderVisualGroundDraft(
+            segment_id=segment_id,
+            display_name=f"Ground segment {number}",
+            stamp=BuilderVisualGroundStamp(
+                node_ref=selected_node_ref,
+                installed=installed,
+                boresights=boresights,
+                body=body_ref or DEFAULT_BODY_REF,
+                lan_base=f"172.{20 + ((number - 1) % 12)}",
+                loopback_base=f"10.{200 + ((number - 1) % 55)}",
+            ),
+            scheduling=scheduling_preset_block(DEFAULT_SCHEDULING_PRESET),
+        )
+
     def _assert_terminal_ref(
         self,
         draft: BuilderVisualDraftEnvelope,
@@ -1594,10 +1721,75 @@ class BuilderVisualDraftService:
         affected_id: str
         notice: str | None = None
         scheduling_preset = None
-
-        if isinstance(command, BuilderVisualAddGeneratedSpaceCommand):
-            segment_ids = {item.segment_id for item in _placed_segments(workspace)}
-            number = _next_number("space", segment_ids)
+        if isinstance(command, BuilderVisualPlaceSpaceReferenceCommand):
+            try:
+                model = self._catalog_model_for_draft(draft, snapshot, command.source_ref)
+            except (CatalogNotFoundError, TypeError, ValueError) as error:
+                raise self._command_error(
+                    draft,
+                    f"Space source reference {command.source_ref} is invalid: {error}",
+                    code="catalog_authoring.invalid_graph",
+                ) from error
+            if not isinstance(model, (Constellation, SpaceNodeSet)):
+                raise self._command_error(
+                    draft,
+                    f"Space source reference {command.source_ref} does not resolve to a "
+                    "constellation or space-node-set component",
+                    code="catalog_authoring.invalid_graph",
+                )
+            number = _next_number(
+                "space",
+                _reserved_authoring_ids(workspace, draft.reserved_authoring_ids),
+            )
+            segment_id = f"space-{number}"
+            space_reference = BuilderVisualSpaceReference(
+                segment_id=segment_id,
+                source_ref=command.source_ref,
+                label=_catalog_label(model),
+            )
+            workspace = workspace.model_copy(
+                update={"space_refs": (*workspace.space_refs, space_reference)}
+            )
+            affected_kind = "space"
+            affected_id = segment_id
+        elif isinstance(command, BuilderVisualPlaceGroundReferenceCommand):
+            try:
+                model = self._catalog_model_for_draft(draft, snapshot, command.site_set_ref)
+            except (CatalogNotFoundError, TypeError, ValueError) as error:
+                raise self._command_error(
+                    draft,
+                    f"Site-set reference {command.site_set_ref} is invalid: {error}",
+                    code="catalog_authoring.invalid_graph",
+                ) from error
+            if not isinstance(model, SiteSet):
+                raise self._command_error(
+                    draft,
+                    f"Site-set reference {command.site_set_ref} does not resolve to a "
+                    "site-set component",
+                    code="catalog_authoring.invalid_graph",
+                )
+            number = _next_number(
+                "ground",
+                _reserved_authoring_ids(workspace, draft.reserved_authoring_ids),
+            )
+            segment_id = f"ground-{number}"
+            ground_reference = BuilderVisualGroundReference(
+                segment_id=segment_id,
+                site_set_ref=command.site_set_ref,
+                label=_catalog_label(model),
+                scheduling=scheduling_preset_block(DEFAULT_SCHEDULING_PRESET),
+            )
+            workspace = workspace.model_copy(
+                update={"ground_refs": (*workspace.ground_refs, ground_reference)}
+            )
+            affected_kind = "ground"
+            affected_id = segment_id
+            scheduling_preset = DEFAULT_SCHEDULING_PRESET
+        elif isinstance(command, BuilderVisualAddGeneratedSpaceCommand):
+            number = _next_number(
+                "space",
+                _reserved_authoring_ids(workspace, draft.reserved_authoring_ids),
+            )
             segment_id = f"space-{number}"
             node_ref = self._node_ref_for_command(
                 draft,
@@ -1658,18 +1850,18 @@ class BuilderVisualDraftService:
                     code="catalog_authoring.invalid_graph",
                 )
             space_index, space = matches[0]
-            if space.planes is None or space.slots_per_plane is None:
-                raise self._command_error(
-                    draft,
-                    "Space population requires planes and slots before phasing can be derived",
-                    code="catalog_authoring.invalid_graph",
-                )
-
             phasing_mode = command.phasing_mode or space.phasing_mode
-            planes = command.planes or space.planes
-            slots_per_plane = command.slots_per_plane or space.slots_per_plane
+            planes = command.planes if command.planes is not None else space.planes
+            slots_per_plane = (
+                command.slots_per_plane
+                if command.slots_per_plane is not None
+                else space.slots_per_plane
+            )
             if command.phasing_mode is not None:
-                planes = 1 if phasing_mode == SINGLE_PLANE_PHASING_MODE else max(2, planes)
+                if phasing_mode == SINGLE_PLANE_PHASING_MODE:
+                    planes = 1
+                elif planes is not None:
+                    planes = max(2, planes)
             elif command.planes is not None:
                 if planes == 1:
                     phasing_mode = SINGLE_PLANE_PHASING_MODE
@@ -1677,10 +1869,16 @@ class BuilderVisualDraftService:
                     phasing_mode = DEFAULT_PHASING_MODE
 
             single_plane = phasing_mode == SINGLE_PLANE_PHASING_MODE
-            walker_layout = (
-                None
-                if single_plane
-                else derive_walker_layout(
+            raan_spacing_deg: float | None
+            phase_offset_deg: float | None
+            if planes is None or slots_per_plane is None:
+                raan_spacing_deg = None
+                phase_offset_deg = None
+            elif single_plane:
+                raan_spacing_deg = 360
+                phase_offset_deg = 0
+            else:
+                walker_layout = derive_walker_layout(
                     BuilderVisualWalkerLayoutRequest(
                         pattern=cast(
                             Literal["walker_delta", "walker_star"],
@@ -1690,19 +1888,16 @@ class BuilderVisualDraftService:
                         slots_per_plane=slots_per_plane,
                     )
                 )
-            )
+                raan_spacing_deg = walker_layout.raan_spacing_deg
+                phase_offset_deg = walker_layout.phase_offset_deg
             spaces = list(workspace.space)
             spaces[space_index] = space.model_copy(
                 update={
                     "phasing_mode": phasing_mode,
                     "planes": planes,
                     "slots_per_plane": slots_per_plane,
-                    "raan_spacing_deg": (
-                        360 if walker_layout is None else walker_layout.raan_spacing_deg
-                    ),
-                    "phase_offset_deg": (
-                        0 if walker_layout is None else walker_layout.phase_offset_deg
-                    ),
+                    "raan_spacing_deg": raan_spacing_deg,
+                    "phase_offset_deg": phase_offset_deg,
                 }
             )
             workspace = workspace.model_copy(update={"space": tuple(spaces)})
@@ -1812,6 +2007,54 @@ class BuilderVisualDraftService:
             workspace = workspace.model_copy(update={"space": tuple(spaces)})
             affected_kind = "space"
             affected_id = command.segment_id
+        elif isinstance(command, BuilderVisualSetNodeTerminalRoleCommand):
+            matches = [
+                (index, space)
+                for index, space in enumerate(workspace.space)
+                if space.segment_id == command.segment_id
+            ]
+            if len(matches) != 1 or matches[0][1].node_draft is None:
+                raise self._command_error(
+                    draft,
+                    f"Authored inline node for {command.segment_id!r} was not found exactly once",
+                    code="catalog_authoring.invalid_graph",
+                )
+            space_index, space = matches[0]
+            assert space.node_draft is not None
+            mount_matches = [
+                (index, mount)
+                for index, mount in enumerate(space.node_draft.terminals)
+                if mount.mount_id == command.mount_id
+            ]
+            if len(mount_matches) != 1:
+                raise self._command_error(
+                    draft,
+                    f"Terminal mount {command.mount_id!r} was not found exactly once",
+                    code="catalog_authoring.invalid_graph",
+                )
+            mount_index, mount = mount_matches[0]
+            terminals = list(space.node_draft.terminals)
+            terminals[mount_index] = mount.model_copy(
+                update={
+                    "role": command.role,
+                    "boresight": (
+                        BuilderVisualSpaceBoresight(mode="nadir")
+                        if command.role == "access"
+                        else None
+                    ),
+                }
+            )
+            spaces = list(workspace.space)
+            spaces[space_index] = space.model_copy(
+                update={
+                    "node_draft": space.node_draft.model_copy(
+                        update={"terminals": tuple(terminals)}
+                    )
+                }
+            )
+            workspace = workspace.model_copy(update={"space": tuple(spaces)})
+            affected_kind = "space"
+            affected_id = command.segment_id
         elif isinstance(command, BuilderVisualAddNodeEthernetPortCommand):
             matches = [
                 (index, space)
@@ -1843,39 +2086,79 @@ class BuilderVisualDraftService:
             affected_kind = "space"
             affected_id = command.segment_id
         elif isinstance(command, BuilderVisualAddGroundCommand):
-            segment_ids = {item.segment_id for item in _placed_segments(workspace)}
-            number = _next_number("ground", segment_ids)
-            segment_id = f"ground-{number}"
-            node_ref = self._node_ref_for_command(
+            ground = self._new_ground_draft(
                 draft,
                 snapshot,
-                command.node_ref,
-                placement="ground",
-            )
-            installed, boresights = self._ground_installation_facts(
-                draft,
-                snapshot,
-                node_ref,
+                workspace,
+                node_ref=command.node_ref,
                 installed_counts=command.installed,
                 authored_boresights=command.boresights,
-            )
-            ground = BuilderVisualGroundDraft(
-                segment_id=segment_id,
-                display_name=f"Ground segment {number}",
-                stamp=BuilderVisualGroundStamp(
-                    node_ref=node_ref,
-                    installed=installed,
-                    boresights=boresights,
-                    body=command.body_ref or DEFAULT_BODY_REF,
-                    lan_base=f"172.{20 + ((number - 1) % 12)}",
-                    loopback_base=f"10.{200 + ((number - 1) % 55)}",
-                ),
-                scheduling=scheduling_preset_block(DEFAULT_SCHEDULING_PRESET),
+                body_ref=command.body_ref,
             )
             workspace = workspace.model_copy(update={"ground": (*workspace.ground, ground)})
             affected_kind = "ground"
-            affected_id = segment_id
+            affected_id = ground.segment_id
             scheduling_preset = DEFAULT_SCHEDULING_PRESET
+        elif isinstance(command, BuilderVisualAddGroundSiteReferenceCommand):
+            try:
+                model = self._catalog_model_for_draft(draft, snapshot, command.site_ref)
+            except (CatalogNotFoundError, TypeError, ValueError) as error:
+                raise self._command_error(
+                    draft,
+                    f"Site reference {command.site_ref} is invalid: {error}",
+                    code="catalog_authoring.invalid_graph",
+                ) from error
+            if not isinstance(model, Site):
+                raise self._command_error(
+                    draft,
+                    f"Site reference {command.site_ref} does not resolve to a site component",
+                    code="catalog_authoring.invalid_graph",
+                )
+            if command.segment_id is None:
+                ground = self._new_ground_draft(draft, snapshot, workspace)
+                workspace = workspace.model_copy(update={"ground": (*workspace.ground, ground)})
+                ground_index = len(workspace.ground) - 1
+                scheduling_preset = DEFAULT_SCHEDULING_PRESET
+            else:
+                matches = [
+                    (index, ground)
+                    for index, ground in enumerate(workspace.ground)
+                    if ground.segment_id == command.segment_id
+                ]
+                if len(matches) != 1:
+                    raise self._command_error(
+                        draft,
+                        f"Authored ground segment {command.segment_id!r} was not found exactly once",
+                        code="catalog_authoring.invalid_graph",
+                    )
+                ground_index, ground = matches[0]
+            if any(
+                member.ref == command.site_ref or member.site_id == model.id
+                for member in ground.members
+            ):
+                raise self._command_error(
+                    draft,
+                    f"Site {model.id!r} is already placed in {command.segment_id!r}",
+                    code="catalog_authoring.invalid_graph",
+                )
+            member_ids = {
+                member.member_id for candidate in workspace.ground for member in candidate.members
+            }
+            member_number = _next_number("member", member_ids)
+            member_id = f"member-{member_number}"
+            member = BuilderVisualGroundMember(
+                member_id=member_id,
+                kind="ref",
+                ref=command.site_ref,
+                site_id=model.id,
+                label=_catalog_label(model),
+                summary=_site_summary(model),
+            )
+            grounds = list(workspace.ground)
+            grounds[ground_index] = ground.model_copy(update={"members": (*ground.members, member)})
+            workspace = workspace.model_copy(update={"ground": tuple(grounds)})
+            affected_kind = "ground_member"
+            affected_id = member_id
         elif isinstance(command, BuilderVisualSetGroundStampNodeModelCommand):
             matches = [
                 (index, ground)
@@ -2129,8 +2412,10 @@ class BuilderVisualDraftService:
             affected_id = command.segment_id
             notice = f"minted {len(minted)} site{'s' if len(minted) != 1 else ''}"
         elif isinstance(command, BuilderVisualAddRoutingDomainCommand):
-            domain_ids = {item.domain_id for item in workspace.routing_domains}
-            number = _next_number("domain", domain_ids)
+            number = _next_number(
+                "domain",
+                _reserved_authoring_ids(workspace, draft.reserved_authoring_ids),
+            )
             domain_id = f"domain-{number}"
             covered = {
                 member
@@ -2153,8 +2438,10 @@ class BuilderVisualDraftService:
             affected_kind = "routing_domain"
             affected_id = domain_id
         elif isinstance(command, BuilderVisualAddBoundaryCommand):
-            boundary_ids = {item.boundary_id for item in workspace.boundaries}
-            number = _next_number("boundary", boundary_ids)
+            number = _next_number(
+                "boundary",
+                _reserved_authoring_ids(workspace, draft.reserved_authoring_ids),
+            )
             boundary_id = f"boundary-{number}"
             first_rule = next(
                 (
@@ -2207,8 +2494,10 @@ class BuilderVisualDraftService:
                 first,
                 second,
             )
-            link_ids = {item.rule_id for item in workspace.links}
-            number = _next_number("link", link_ids)
+            number = _next_number(
+                "link",
+                _reserved_authoring_ids(workspace, draft.reserved_authoring_ids),
+            )
             rule_id = f"link-{number}"
             label = (
                 f"{first.label} mesh"
@@ -2407,9 +2696,14 @@ class BuilderVisualDraftService:
         else:
             raise AssertionError(f"unhandled visual draft command: {type(command).__name__}")
 
+        reserved_authoring_ids = list(draft.reserved_authoring_ids)
+        for authoring_id in _current_and_referenced_authoring_ids(workspace):
+            if authoring_id and authoring_id not in reserved_authoring_ids:
+                reserved_authoring_ids.append(authoring_id)
         updated = draft.model_copy(
             update={
                 "draft_revision": draft.draft_revision + 1,
+                "reserved_authoring_ids": tuple(reserved_authoring_ids),
                 "workspace": workspace,
             }
         )
@@ -2691,6 +2985,7 @@ class BuilderVisualDraftService:
             preview_factory=preview_factory,
         )
         compile_result = _merge_assembly_issues(compile_result, assembly_issues)
+        assembled = compile_result.draft
         save_request = BuilderSessionSaveRequest(
             draft=assembled,
             target_ref=visual_draft.target_ref,

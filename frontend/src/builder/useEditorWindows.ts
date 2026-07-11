@@ -85,7 +85,7 @@ export function targetKey(target: EditorTarget): string {
 function objectTitle(workspace: Workspace, target: EditorTarget): string {
   switch (target.kind) {
     case "session":
-      return `Session · ${workspace.name}`;
+      return `Session · ${workspace.session_name}`;
     case "segment":
       return (
         workspace.space.find((d) => d.segment_id === target.id)?.display_name ?? target.id
@@ -130,7 +130,7 @@ function isObjectTarget(target: EditorTarget): boolean {
 
 export type SessionBuffer = Pick<
   Workspace,
-  | "name"
+  | "session_name"
   | "start_time"
   | "step_seconds"
   | "compression"

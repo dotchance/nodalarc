@@ -8,9 +8,11 @@ from typing import Any
 
 import pytest
 import yaml
-from nodalarc.catalog_repository import CatalogConflictError, CatalogScope
+from nodalarc.catalog_refs import CatalogRef
+from nodalarc.catalog_repository import CatalogConflictError, CatalogNotFoundError, CatalogScope
 from nodalarc.filesystem_catalog_repository import FilesystemCatalogRepository
 from nodalarc.models.builder_visual_api import (
+    BuilderVisualCatalogRevision,
     BuilderVisualCustomizeChainRequest,
     BuilderVisualDraftCommandRequest,
     BuilderVisualDraftCompileRequest,
@@ -92,21 +94,441 @@ def test_backend_creates_the_new_structured_visual_draft(
 ) -> None:
     draft = service.create(
         BuilderVisualDraftCreateRequest(
-            session_name="My Visual Session",
+            session_name="my_visual_session",
             display_name="My visual session",
         )
     )
 
     assert draft.mode == "structured"
-    assert draft.target_ref == "user:sessions/my-visual-session.yaml"
+    assert draft.target_ref == "user:sessions/my_visual_session.yaml"
     assert draft.workspace is not None
-    assert draft.workspace.session_name == "my-visual-session"
+    assert draft.workspace.session_name == "my_visual_session"
     assert draft.workspace.display_name == "My visual session"
     assert draft.workspace.start_time == "2026-07-10T12:34:00Z"
+    assert draft.session_name_is_placeholder is False
     assert draft.session_yaml is None
 
     reposted = BuilderVisualDraftEnvelope.model_validate_json(draft.model_dump_json())
     assert reposted == draft
+
+
+@pytest.mark.parametrize("session_name", ["", "My Visual Session", "_leading"])
+def test_explicit_visual_draft_names_must_be_canonical_identifiers(
+    session_name: str,
+) -> None:
+    with pytest.raises(ValidationError):
+        BuilderVisualDraftCreateRequest(session_name=session_name)
+
+
+def test_backend_generates_unique_names_for_unnamed_visual_drafts(
+    service: BuilderVisualDraftService,
+) -> None:
+    first = service.create(BuilderVisualDraftCreateRequest())
+    second = service.create(BuilderVisualDraftCreateRequest())
+
+    assert first.target_ref != second.target_ref
+    for draft in (first, second):
+        assert draft.workspace is not None
+        name = draft.target_ref.relative_path.stem
+        assert name.startswith("untitled-session-")
+        assert len(name.removeprefix("untitled-session-")) == 12
+        assert draft.workspace.session_name == name
+        assert draft.session_name_is_placeholder is True
+
+
+def test_backend_places_catalog_references_and_derives_catalog_identity(
+    service: BuilderVisualDraftService,
+) -> None:
+    draft = service.create(BuilderVisualDraftCreateRequest(session_name="catalog-placement"))
+
+    def apply(command: dict[str, Any]):
+        nonlocal draft
+        result = service.apply_command(
+            BuilderVisualDraftCommandRequest(
+                draft=draft,
+                expected_draft_revision=draft.draft_revision,
+                command=command,
+            ),
+            available_node_count=1_000_000,
+            preview_factory=_preview,
+        )
+        draft = result.draft
+        return result
+
+    apply(
+        {
+            "operation": "place_space_reference",
+            "source_ref": "nodalarc:constellations/luna/elfo/luna-elfo-relay-2.yaml",
+        }
+    )
+    apply(
+        {
+            "operation": "place_space_reference",
+            "source_ref": "nodalarc:space-node-sets/earth/geo/earth-geo-tdrs-6.yaml",
+        }
+    )
+    ground_ref_result = apply(
+        {
+            "operation": "place_ground_reference",
+            "site_set_ref": "nodalarc:site-sets/luna/luna-surface-sites.yaml",
+        }
+    )
+    authored_ground_result = apply({"operation": "add_ground"})
+    site_result = apply(
+        {
+            "operation": "add_ground_site_reference",
+            "segment_id": authored_ground_result.affected_id,
+            "site_ref": "nodalarc:sites/luna/luna-artemis-base.yaml",
+        }
+    )
+
+    assert draft.workspace is not None
+    assert [placed.model_dump(mode="json") for placed in draft.workspace.space_refs] == [
+        {
+            "segment_id": "space-1",
+            "source_ref": "nodalarc:constellations/luna/elfo/luna-elfo-relay-2.yaml",
+            "label": "Two-node lunar ELFO relay constellation",
+        },
+        {
+            "segment_id": "space-2",
+            "source_ref": "nodalarc:space-node-sets/earth/geo/earth-geo-tdrs-6.yaml",
+            "label": "earth-geo-tdrs-6",
+        },
+    ]
+    ground_ref = draft.workspace.ground_refs[0]
+    assert (ground_ref_result.affected_id, ground_ref.segment_id, ground_ref.label) == (
+        "ground-1",
+        "ground-1",
+        "Luna surface sites",
+    )
+    assert ground_ref.scheduling["handover_mode"] == "mbb"
+    assert ground_ref_result.scheduling_preset == "leo-fast-handover"
+    assert authored_ground_result.affected_id == "ground-2"
+    assert site_result.affected_kind == "ground_member"
+    assert site_result.affected_id == "member-1"
+    member = draft.workspace.ground[0].members[0]
+    assert (member.member_id, member.site_id, member.label) == (
+        "member-1",
+        "luna-artemis-base",
+        "Artemis lunar surface base",
+    )
+    assert member.ref == "nodalarc:sites/luna/luna-artemis-base.yaml"
+    assert member.summary == (
+        "Lunar south-pole surface site for cislunar reachability experiments."
+    )
+
+    with pytest.raises(BuilderVisualDraftCommandError, match="already placed") as duplicate:
+        apply(
+            {
+                "operation": "add_ground_site_reference",
+                "segment_id": "ground-2",
+                "site_ref": "nodalarc:sites/luna/luna-artemis-base.yaml",
+            }
+        )
+    assert duplicate.value.code == "catalog_authoring.invalid_graph"
+
+    with pytest.raises(BuilderVisualDraftCommandError, match="invalid") as missing:
+        apply(
+            {
+                "operation": "place_space_reference",
+                "source_ref": "user:constellations/missing.yaml",
+            }
+        )
+    assert missing.value.code == "catalog_authoring.invalid_graph"
+
+    with pytest.raises(ValidationError, match="constellations or space-node-sets"):
+        BuilderVisualDraftCommandRequest.model_validate(
+            {
+                "draft": draft.model_dump(mode="json"),
+                "expected_draft_revision": draft.draft_revision,
+                "command": {
+                    "operation": "place_space_reference",
+                    "source_ref": "nodalarc:site-sets/luna/luna-surface-sites.yaml",
+                },
+            }
+        )
+
+
+def test_backend_segment_creation_never_reuses_ids_held_by_dangling_intent(
+    service: BuilderVisualDraftService,
+) -> None:
+    draft = service.create(BuilderVisualDraftCreateRequest(session_name="reserved-identities"))
+
+    def apply(command: dict[str, Any], *, source: BuilderVisualDraftEnvelope | None = None):
+        nonlocal draft
+        active = source or draft
+        result = service.apply_command(
+            BuilderVisualDraftCommandRequest(
+                draft=active,
+                expected_draft_revision=active.draft_revision,
+                command=command,
+            ),
+            available_node_count=1_000_000,
+            preview_factory=_preview,
+        )
+        if source is None:
+            draft = result.draft
+        return result
+
+    assert (
+        apply({"operation": "add_generated_space", "phasing_mode": "walker_delta"}).affected_id
+        == "space-1"
+    )
+    assert apply({"operation": "add_ground"}).affected_id == "ground-1"
+    assert draft.workspace is not None
+    stripped = draft.model_copy(
+        update={
+            "workspace": draft.workspace.model_copy(
+                update={
+                    "space": (),
+                    "ground": (),
+                    "links": (
+                        BuilderVisualLinkRule(
+                            rule_id="dangling-space-link",
+                            label="Dangling space link",
+                            a=BuilderVisualLinkEndpoint(
+                                segment_id="space-1",
+                                role="isl",
+                                medium="optical",
+                            ),
+                            b=BuilderVisualLinkEndpoint(
+                                segment_id="space-1",
+                                role="isl",
+                                medium="optical",
+                            ),
+                            topology_mode="nearest_n",
+                            topology_n=1,
+                        ),
+                    ),
+                    "routing_domains": (
+                        BuilderVisualRoutingDomain(
+                            domain_id="dangling-ground-domain",
+                            label="Dangling ground domain",
+                            protocol="isis",
+                            member_segment_ids=("ground-1",),
+                        ),
+                    ),
+                }
+            )
+        }
+    )
+
+    commands = (
+        (
+            {
+                "operation": "place_space_reference",
+                "source_ref": "nodalarc:constellations/luna/elfo/luna-elfo-relay-2.yaml",
+            },
+            "space-2",
+        ),
+        (
+            {"operation": "add_generated_space", "phasing_mode": "walker_delta"},
+            "space-2",
+        ),
+        (
+            {
+                "operation": "place_ground_reference",
+                "site_set_ref": "nodalarc:site-sets/luna/luna-surface-sites.yaml",
+            },
+            "ground-2",
+        ),
+        ({"operation": "add_ground"}, "ground-2"),
+    )
+    for command, expected_id in commands:
+        assert apply(command, source=stripped).affected_id == expected_id
+
+
+def test_backend_authoring_allocation_history_survives_local_segment_deletion(
+    service: BuilderVisualDraftService,
+) -> None:
+    draft = service.create(BuilderVisualDraftCreateRequest(session_name="allocation-history"))
+
+    def apply(command: dict[str, Any], *, source: BuilderVisualDraftEnvelope | None = None):
+        nonlocal draft
+        active = source or draft
+        result = service.apply_command(
+            BuilderVisualDraftCommandRequest(
+                draft=active,
+                expected_draft_revision=active.draft_revision,
+                command=command,
+            ),
+            available_node_count=1_000_000,
+            preview_factory=_preview,
+        )
+        if source is None:
+            draft = result.draft
+        return result
+
+    apply({"operation": "add_generated_space", "phasing_mode": "walker_delta"})
+    apply({"operation": "add_ground"})
+    assert draft.reserved_authoring_ids == ("space-1", "ground-1")
+    assert draft.workspace is not None
+    locally_deleted = draft.model_copy(
+        update={
+            "workspace": draft.workspace.model_copy(
+                update={"space": (), "ground": (), "links": (), "routing_domains": ()}
+            )
+        }
+    )
+
+    commands = (
+        (
+            {
+                "operation": "place_space_reference",
+                "source_ref": "nodalarc:constellations/luna/elfo/luna-elfo-relay-2.yaml",
+            },
+            "space-2",
+        ),
+        (
+            {"operation": "add_generated_space", "phasing_mode": "walker_delta"},
+            "space-2",
+        ),
+        (
+            {
+                "operation": "place_ground_reference",
+                "site_set_ref": "nodalarc:site-sets/luna/luna-surface-sites.yaml",
+            },
+            "ground-2",
+        ),
+        ({"operation": "add_ground"}, "ground-2"),
+    )
+    for command, expected_id in commands:
+        result = apply(command, source=locally_deleted)
+        assert result.affected_id == expected_id
+        assert result.draft.reserved_authoring_ids == (
+            "space-1",
+            "ground-1",
+            expected_id,
+        )
+
+
+def test_backend_never_reuses_topology_ids_or_repairs_dangling_boundaries(
+    service: BuilderVisualDraftService,
+) -> None:
+    draft = service.create(BuilderVisualDraftCreateRequest(session_name="topology-history"))
+
+    def apply(command: dict[str, Any], *, source: BuilderVisualDraftEnvelope | None = None):
+        nonlocal draft
+        active = source or draft
+        result = service.apply_command(
+            BuilderVisualDraftCommandRequest(
+                draft=active,
+                expected_draft_revision=active.draft_revision,
+                command=command,
+            ),
+            available_node_count=1_000_000,
+            preview_factory=_preview,
+        )
+        draft = result.draft
+        return result
+
+    apply({"operation": "add_generated_space", "phasing_mode": "walker_delta"})
+    apply({"operation": "add_ground"})
+    apply({"operation": "add_routing_domain"})
+    apply(
+        {
+            "operation": "connect_segments",
+            "from_segment_id": "space-1",
+            "to_segment_id": "ground-1",
+        }
+    )
+    apply({"operation": "add_boundary"})
+    assert draft.reserved_authoring_ids == (
+        "space-1",
+        "ground-1",
+        "domain-1",
+        "link-1",
+        "boundary-1",
+    )
+    assert draft.workspace is not None
+
+    deleted_topology = draft.model_copy(
+        update={
+            "reserved_authoring_ids": ("space-1", "ground-1", "boundary-1"),
+            "workspace": draft.workspace.model_copy(update={"links": (), "routing_domains": ()}),
+        }
+    )
+    link_result = apply(
+        {
+            "operation": "connect_segments",
+            "from_segment_id": "space-1",
+            "to_segment_id": "ground-1",
+        },
+        source=deleted_topology,
+    )
+    assert link_result.affected_id == "link-2"
+    assert "link-1" in link_result.draft.reserved_authoring_ids
+    assert "domain-1" in link_result.draft.reserved_authoring_ids
+    domain_result = apply({"operation": "add_routing_domain"})
+    assert domain_result.affected_id == "domain-2"
+    assert draft.workspace is not None
+    dangling_boundary = draft.workspace.boundaries[0]
+    assert dangling_boundary.over_rule_id == "link-1"
+    assert dangling_boundary.from_domain_id == "domain-1"
+    assert dangling_boundary.to_domain_id == "domain-1"
+
+    compiled = service.compile(
+        BuilderVisualDraftCompileRequest(draft=draft),
+        available_node_count=1_000_000,
+        preview_factory=_preview,
+    )
+    assert compiled.compile_result.save_verdict.allowed is False
+
+    without_boundaries = draft.model_copy(
+        update={"workspace": draft.workspace.model_copy(update={"boundaries": ()})}
+    )
+    boundary_result = apply({"operation": "add_boundary"}, source=without_boundaries)
+    assert boundary_result.affected_id == "boundary-2"
+
+
+def test_backend_atomically_creates_a_ground_for_a_site_reference(
+    service: BuilderVisualDraftService,
+) -> None:
+    draft = service.create(BuilderVisualDraftCreateRequest(session_name="atomic-site"))
+    result = service.apply_command(
+        BuilderVisualDraftCommandRequest(
+            draft=draft,
+            expected_draft_revision=draft.draft_revision,
+            command={
+                "operation": "add_ground_site_reference",
+                "site_ref": "nodalarc:sites/luna/luna-artemis-base.yaml",
+            },
+        ),
+        available_node_count=1_000_000,
+        preview_factory=_preview,
+    )
+
+    assert result.affected_kind == "ground_member"
+    assert result.affected_id == "member-1"
+    assert result.draft.reserved_authoring_ids == ("ground-1",)
+    assert result.scheduling_preset == "leo-fast-handover"
+    assert result.draft.workspace is not None
+    assert len(result.draft.workspace.ground) == 1
+    ground = result.draft.workspace.ground[0]
+    assert ground.segment_id == "ground-1"
+    assert ground.display_name == "Ground segment 1"
+    assert ground.stamp.body == "nodalarc:bodies/earth.yaml"
+    assert ground.stamp.lan_base == "172.20"
+    assert ground.stamp.loopback_base == "10.200"
+    assert ground.scheduling["handover_mode"] == "mbb"
+    assert ground.members[0].ref == "nodalarc:sites/luna/luna-artemis-base.yaml"
+
+    refused = service.create(BuilderVisualDraftCreateRequest(session_name="atomic-site-refused"))
+    with pytest.raises(BuilderVisualDraftCommandError, match="invalid"):
+        service.apply_command(
+            BuilderVisualDraftCommandRequest(
+                draft=refused,
+                expected_draft_revision=refused.draft_revision,
+                command={
+                    "operation": "add_ground_site_reference",
+                    "site_ref": "user:sites/missing.yaml",
+                },
+            ),
+            available_node_count=1_000_000,
+            preview_factory=_preview,
+        )
+    assert refused.workspace is not None
+    assert refused.workspace.ground == ()
 
 
 def test_backend_visual_commands_own_seeds_and_advance_one_fenced_revision(
@@ -475,6 +897,129 @@ def test_backend_commands_derive_space_transitions_and_ground_installations(
     assert added.boresights == {"access_ka": BuilderVisualGroundBoresight(mode="local_vertical")}
 
 
+def test_backend_repairs_nullable_space_population_one_field_at_a_time(
+    service: BuilderVisualDraftService,
+) -> None:
+    draft = service.create(BuilderVisualDraftCreateRequest(session_name="population-repair"))
+    created = service.apply_command(
+        BuilderVisualDraftCommandRequest(
+            draft=draft,
+            expected_draft_revision=draft.draft_revision,
+            command={"operation": "add_generated_space", "phasing_mode": "walker_delta"},
+        ),
+        available_node_count=1_000_000,
+        preview_factory=_preview,
+    ).draft
+    assert created.workspace is not None
+    incomplete_space = created.workspace.space[0].model_copy(
+        update={
+            "planes": None,
+            "slots_per_plane": None,
+            "raan_spacing_deg": None,
+            "phase_offset_deg": None,
+        }
+    )
+    draft = created.model_copy(
+        update={"workspace": created.workspace.model_copy(update={"space": (incomplete_space,)})}
+    )
+
+    def apply(command: dict[str, Any]) -> BuilderVisualSpaceDraft:
+        nonlocal draft
+        result = service.apply_command(
+            BuilderVisualDraftCommandRequest(
+                draft=draft,
+                expected_draft_revision=draft.draft_revision,
+                command=command,
+            ),
+            available_node_count=1_000_000,
+            preview_factory=_preview,
+        )
+        draft = result.draft
+        assert draft.workspace is not None
+        return draft.workspace.space[0]
+
+    space = apply({"operation": "set_space_population", "segment_id": "space-1", "planes": 4})
+    assert (space.planes, space.slots_per_plane) == (4, None)
+    assert (space.raan_spacing_deg, space.phase_offset_deg) == (None, None)
+
+    space = apply(
+        {
+            "operation": "set_space_population",
+            "segment_id": "space-1",
+            "slots_per_plane": 10,
+        }
+    )
+    assert (space.planes, space.slots_per_plane) == (4, 10)
+    assert (space.raan_spacing_deg, space.phase_offset_deg) == (90.0, 9.0)
+
+    reset = space.model_copy(
+        update={
+            "planes": None,
+            "slots_per_plane": None,
+            "raan_spacing_deg": None,
+            "phase_offset_deg": None,
+        }
+    )
+    assert draft.workspace is not None
+    draft = draft.model_copy(
+        update={"workspace": draft.workspace.model_copy(update={"space": (reset,)})}
+    )
+    space = apply(
+        {
+            "operation": "set_space_population",
+            "segment_id": "space-1",
+            "phasing_mode": "evenly_spaced_mean_anomaly",
+        }
+    )
+    assert (space.phasing_mode, space.planes, space.slots_per_plane) == (
+        "evenly_spaced_mean_anomaly",
+        1,
+        None,
+    )
+    assert (space.raan_spacing_deg, space.phase_offset_deg) == (None, None)
+
+    space = apply(
+        {
+            "operation": "set_space_population",
+            "segment_id": "space-1",
+            "slots_per_plane": 8,
+        }
+    )
+    assert (space.raan_spacing_deg, space.phase_offset_deg) == (360.0, 0.0)
+
+
+def test_backend_reports_missing_phase_offset_as_incomplete_authoring(
+    service: BuilderVisualDraftService,
+) -> None:
+    draft = service.create(BuilderVisualDraftCreateRequest(session_name="missing-phase"))
+    draft = service.apply_command(
+        BuilderVisualDraftCommandRequest(
+            draft=draft,
+            expected_draft_revision=draft.draft_revision,
+            command={"operation": "add_generated_space", "phasing_mode": "walker_delta"},
+        ),
+        available_node_count=1_000_000,
+        preview_factory=_preview,
+    ).draft
+    assert draft.workspace is not None
+    space = draft.workspace.space[0].model_copy(update={"phase_offset_deg": None})
+    draft = draft.model_copy(
+        update={"workspace": draft.workspace.model_copy(update={"space": (space,)})}
+    )
+
+    compiled = service.compile(
+        BuilderVisualDraftCompileRequest(draft=draft),
+        available_node_count=1_000_000,
+        preview_factory=_preview,
+    )
+    assert any(
+        issue.code == "builder.draft.constellation_phase_offset_deg_required"
+        and issue.draft_path == "workspace.space.0.phase_offset_deg"
+        for issue in compiled.assembly_issues
+    )
+    assert compiled.compile_result.save_verdict.allowed is False
+
+
 def test_backend_visual_node_commands_derive_identity_shape_and_counts(
     service: BuilderVisualDraftService,
 ) -> None:
@@ -524,6 +1069,31 @@ def test_backend_visual_node_commands_derive_identity_shape_and_counts(
             boresight=BuilderVisualSpaceBoresight(mode="nadir"),
         ),
     )
+
+    apply(
+        {
+            "operation": "set_node_terminal_role",
+            "segment_id": "space-1",
+            "mount_id": "access_0",
+            "role": "isl",
+        }
+    )
+    node = draft.workspace.space[0].node_draft
+    assert node is not None
+    assert (node.terminals[0].role, node.terminals[0].boresight) == ("isl", None)
+
+    apply(
+        {
+            "operation": "set_node_terminal_role",
+            "segment_id": "space-1",
+            "mount_id": "access_0",
+            "role": "access",
+        }
+    )
+    node = draft.workspace.space[0].node_draft
+    assert node is not None
+    assert node.terminals[0].role == "access"
+    assert node.terminals[0].boresight == BuilderVisualSpaceBoresight(mode="nadir")
 
     with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
         BuilderVisualDraftCommandRequest.model_validate(
@@ -787,6 +1357,8 @@ def test_structured_assembly_creates_ref_composed_component_proposals(
         draft_revision=4,
         mode="structured",
         target_ref="user:sessions/visual-components.yaml",
+        session_name_is_placeholder=False,
+        reserved_authoring_ids=(),
         workspace=workspace,
     )
 
@@ -819,6 +1391,89 @@ def test_structured_assembly_creates_ref_composed_component_proposals(
     authored_node = proposals["user:nodes/visual-components/authored-node.yaml"]["node"]
     assert authored_node["terminals"][0]["boresight"] == {"mode": "nadir"}
     assert result.save_request.draft == result.assembled_draft
+
+
+def test_structured_save_as_reallocates_generated_components_under_the_new_owner(
+    context: CatalogContext,
+    service: BuilderVisualDraftService,
+) -> None:
+    original = service.create(BuilderVisualDraftCreateRequest(session_name="original-owner"))
+    authored = service.apply_command(
+        BuilderVisualDraftCommandRequest(
+            draft=original,
+            expected_draft_revision=original.draft_revision,
+            command={"operation": "add_generated_space", "phasing_mode": "walker_delta"},
+        ),
+        available_node_count=1_000_000,
+        preview_factory=_preview,
+    ).draft
+    compiled_original = service.compile(
+        BuilderVisualDraftCompileRequest(draft=authored),
+        available_node_count=1_000_000,
+        preview_factory=_preview,
+    )
+    saved_original = save_builder_session(
+        compiled_original.save_request,
+        context,
+        available_node_count=1_000_000,
+        preview_factory=_preview,
+    )
+    revisions = {
+        entry.ref: entry.revision
+        for entry in saved_original.dependency_closure.entries
+        if entry.revision is not None
+    }
+    generated_expectations = tuple(
+        BuilderVisualCatalogRevision(
+            ref=proposal.ref,
+            expected_revision=revisions[proposal.ref],
+        )
+        for proposal in compiled_original.assembled_draft.state.catalog_documents
+    )
+    assert generated_expectations
+    saved_visual = authored.model_copy(
+        update={
+            "expected_session_revision": saved_original.session.revision,
+            "expected_catalog_revisions": generated_expectations,
+        }
+    )
+
+    fresh_target = service.create(BuilderVisualDraftCreateRequest(session_name="renamed-owner"))
+    assert saved_visual.workspace is not None
+    retargeted = fresh_target.model_copy(
+        update={
+            "draft_revision": saved_visual.draft_revision + 1,
+            "catalog_documents": saved_visual.catalog_documents,
+            "reserved_authoring_ids": saved_visual.reserved_authoring_ids,
+            "workspace": saved_visual.workspace.model_copy(
+                update={"session_name": "renamed-owner"}
+            ),
+        }
+    )
+    assert retargeted.expected_session_revision is None
+    assert retargeted.expected_catalog_revisions == ()
+
+    compiled_renamed = service.compile(
+        BuilderVisualDraftCompileRequest(draft=retargeted),
+        available_node_count=1_000_000,
+        preview_factory=_preview,
+    )
+    assert compiled_renamed.compile_result.save_verdict.allowed is True
+    assert "builder.draft.unused_revision_expectation" not in {
+        issue.code for issue in compiled_renamed.assembly_issues
+    }
+    proposal_refs = {
+        str(proposal.ref) for proposal in compiled_renamed.assembled_draft.state.catalog_documents
+    }
+    assert proposal_refs
+    assert all("/renamed-owner/" in ref for ref in proposal_refs)
+    saved_renamed = save_builder_session(
+        compiled_renamed.save_request,
+        context,
+        available_node_count=1_000_000,
+        preview_factory=_preview,
+    )
+    assert saved_renamed.session.ref == "user:sessions/renamed-owner.yaml"
 
 
 def test_structured_ground_site_emits_explicit_installation_boresight(
@@ -874,6 +1529,8 @@ def test_structured_ground_site_emits_explicit_installation_boresight(
         draft_revision=1,
         mode="structured",
         target_ref="user:sessions/visual-ground.yaml",
+        session_name_is_placeholder=False,
+        reserved_authoring_ids=(),
         workspace=workspace,
     )
 
@@ -924,6 +1581,8 @@ def test_incomplete_authored_content_is_reported_and_never_filtered(
         draft_revision=1,
         mode="structured",
         target_ref="user:sessions/incomplete-visual.yaml",
+        session_name_is_placeholder=False,
+        reserved_authoring_ids=(),
         workspace=workspace,
     )
 
@@ -1070,6 +1729,8 @@ def test_opaque_mode_preserves_structurally_supported_specialized_fields(
         draft_revision=0,
         mode="opaque_yaml",
         target_ref="user:sessions/opaque-specialized.yaml",
+        session_name_is_placeholder=False,
+        reserved_authoring_ids=(),
         session_yaml=yaml.safe_dump(session),
     )
 
@@ -1159,6 +1820,108 @@ def test_nested_customization_forks_only_the_minimal_ancestor_chain(
     assert set(target_by_family.values()).issubset(saved_refs)
 
 
+def test_orphaned_customize_proposals_are_visible_but_not_fenced_or_saved(
+    context: CatalogContext,
+    service: BuilderVisualDraftService,
+) -> None:
+    opened = service.open(
+        BuilderVisualDraftOpenRequest(source_ref="nodalarc:sessions/earth-leo-simple.yaml")
+    )
+    customized = service.customize_chain(
+        BuilderVisualCustomizeChainRequest(
+            draft=opened,
+            segment_id="leo",
+            leaf_ref="nodalarc:terminals/rf/rf-ka-starlink-space-gateway.yaml",
+        )
+    )
+    assert customized.applied is True
+    proposed_refs = tuple(str(item.ref) for item in customized.draft.catalog_documents)
+    original_session = yaml.safe_load(opened.session_yaml)
+    orphaned_session = yaml.safe_load(customized.draft.session_yaml)
+    orphaned_session["segments"][0]["source"] = original_session["segments"][0]["source"]
+    stale_revision = f"sha256:{'0' * 64}"
+    orphaned = customized.draft.model_copy(
+        update={
+            "draft_revision": customized.draft.draft_revision + 1,
+            "session_yaml": yaml.safe_dump(orphaned_session),
+            "catalog_documents": tuple(
+                proposal.model_copy(
+                    update={
+                        "document": {
+                            proposal.ref.family.removesuffix("s"): {
+                                "id": proposal.ref.relative_path.stem,
+                                "unknown": True,
+                            }
+                        },
+                        "expected_revision": stale_revision,
+                    }
+                )
+                for proposal in customized.draft.catalog_documents
+            ),
+        }
+    )
+
+    compiled_orphaned = service.compile(
+        BuilderVisualDraftCompileRequest(draft=orphaned),
+        available_node_count=1_000_000,
+        preview_factory=_preview,
+    )
+
+    assert compiled_orphaned.visual_draft.catalog_documents == orphaned.catalog_documents
+    assert compiled_orphaned.assembled_draft.state.catalog_documents == ()
+    assert compiled_orphaned.save_request.draft == compiled_orphaned.assembled_draft
+    assert compiled_orphaned.compile_result.draft == compiled_orphaned.assembled_draft
+    assert compiled_orphaned.compile_result.save_verdict.allowed is True
+    warning = next(
+        issue
+        for issue in compiled_orphaned.compile_result.issues
+        if issue.code == "builder.draft.unreferenced_catalog_documents"
+    )
+    assert warning.severity == "warning"
+    assert warning.blocks == ()
+    assert warning.related_refs == tuple(sorted(proposed_refs))
+
+    orphaned_save = save_builder_session(
+        compiled_orphaned.save_request,
+        context,
+        available_node_count=1_000_000,
+        preview_factory=_preview,
+    )
+    after_orphaned_save = context.repository.snapshot(context.scope)
+    for ref in proposed_refs:
+        with pytest.raises(CatalogNotFoundError):
+            after_orphaned_save.get(ref)
+
+    rereferenced = customized.draft.model_copy(
+        update={
+            "draft_revision": orphaned.draft_revision + 1,
+            "expected_session_revision": orphaned_save.session.revision,
+        }
+    )
+    compiled_referenced = service.compile(
+        BuilderVisualDraftCompileRequest(draft=rereferenced),
+        available_node_count=1_000_000,
+        preview_factory=_preview,
+    )
+    assert compiled_referenced.compile_result.save_verdict.allowed is True
+    assert {
+        str(item.ref) for item in compiled_referenced.assembled_draft.state.catalog_documents
+    } == set(proposed_refs)
+
+    referenced_save = save_builder_session(
+        compiled_referenced.save_request,
+        context,
+        available_node_count=1_000_000,
+        preview_factory=_preview,
+    )
+    committed = context.repository.snapshot(context.scope)
+    assert {str(entry.ref) for entry in referenced_save.dependency_closure.entries}.issuperset(
+        proposed_refs
+    )
+    for ref in proposed_refs:
+        assert committed.get(ref).family == CatalogRef(ref).family
+
+
 def test_invalid_opaque_yaml_returns_typed_issues_instead_of_transport_rejection(
     service: BuilderVisualDraftService,
 ) -> None:
@@ -1166,6 +1929,8 @@ def test_invalid_opaque_yaml_returns_typed_issues_instead_of_transport_rejection
         draft_revision=0,
         mode="opaque_yaml",
         target_ref="user:sessions/broken-yaml.yaml",
+        session_name_is_placeholder=False,
+        reserved_authoring_ids=(),
         session_yaml="session: [unterminated",
     )
 

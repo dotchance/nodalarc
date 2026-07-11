@@ -44,8 +44,9 @@ function useHarness() {
  *  pruned by the reconciliation pass (its applied object exists). */
 function withSegment() {
   const { result } = renderHook(() => useHarness());
-  act(() => result.current.ws.openWorkspace(newWorkspace("t")));
-  act(() => result.current.ws.addConstellation(newDraftConstellation(SPACE_NODE)));
+  const workspace = newWorkspace("t");
+  workspace.space.push(newDraftConstellation(SPACE_NODE));
+  act(() => result.current.ws.openWorkspace(workspace));
   const draft = result.current.ws.workspace!.space[0]!;
   return { result, segmentId: draft.segment_id };
 }
@@ -157,10 +158,13 @@ describe("useEditorWindows — buffered editing", () => {
 
   it(" windows are keyed by object identity: distinct objects → distinct windows; re-open refreshes in place", () => {
     const { result } = renderHook(() => useHarness());
-    act(() => result.current.ws.openWorkspace(newWorkspace("t")));
+    const workspace = newWorkspace("t");
     // Two REAL segments, so the reconciliation pass does not prune their windows.
-    act(() => result.current.ws.addConstellation(newDraftConstellation(SPACE_NODE)));
-    act(() => result.current.ws.addConstellation(newDraftConstellation(SPACE_NODE)));
+    workspace.space.push(
+      newDraftConstellation(SPACE_NODE),
+      newDraftConstellation(SPACE_NODE),
+    );
+    act(() => result.current.ws.openWorkspace(workspace));
     const [s0, s1] = result.current.ws.workspace!.space;
     const a: EditorTarget = { kind: "segment", id: s0!.segment_id };
     const b: EditorTarget = { kind: "segment", id: s1!.segment_id };

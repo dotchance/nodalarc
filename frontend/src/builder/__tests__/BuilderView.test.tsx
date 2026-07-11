@@ -7,7 +7,7 @@
  *  test alone cannot see the UI state fixes.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, waitFor, cleanup, within } from "@testing-library/react";
+import { act, render, screen, fireEvent, waitFor, cleanup, within } from "@testing-library/react";
 import type { BuilderVisualDraftEnvelope } from "../generated/builderApi";
 import { AUTHORING_FACTS } from "./fixtures/authoringFacts";
 
@@ -21,7 +21,6 @@ const { BuilderView } = await import("../BuilderView");
 const { resetCatalogStores } = await import("../useBuilderWorld");
 const { catalogEarthFrame } = await import("../../sim/__tests__/bodyModelFixture");
 const { newWorkspace } = await import("./fixtures/workspaceFixtures");
-const { visualWorkspaceFromWorkspace } = await import("../visualWorkspace");
 const {
   CATALOG_DRAFT_RECOVERY_KEY,
   STRUCTURED_AUTOSAVE_KEY,
@@ -58,6 +57,9 @@ function structuredVisualDraft(
     expected_session_revision: null,
     expected_catalog_revisions: [],
     catalog_documents: [],
+    session_name_is_placeholder:
+      sessionName === "untitled-session" || sessionName.startsWith("untitled-session-"),
+    reserved_authoring_ids: [],
     workspace: {
       session_name: sessionName,
       display_name: null,
@@ -80,16 +82,23 @@ function structuredVisualDraft(
 }
 
 function compileResponse(
-  request: { draft: Record<string, any> },
+  request: Record<string, any>,
   preview: unknown = null,
+  forcedBlocker: string | null = null,
 ) {
   const visualDraft = request.draft;
   const emptyGroundIndex = visualDraft.workspace?.ground?.findIndex(
     (ground: { members?: unknown[] }) => (ground.members ?? []).length === 0,
   );
   const incomplete = typeof emptyGroundIndex === "number" && emptyGroundIndex >= 0;
-  const assemblyIssues = incomplete
-    ? [
+  const targetName =
+    String(visualDraft.target_ref).split("/").pop()?.replace(/\.ya?ml$/, "") ?? "";
+  const sessionName =
+    visualDraft.workspace?.session_name ?? (targetName || "draft");
+  const identityMismatch = sessionName !== targetName;
+  const assemblyIssues = [
+    ...(incomplete
+      ? [
         {
           code: "builder.draft.site_set_sites_required",
           stage: "draft",
@@ -100,11 +109,31 @@ function compileResponse(
           draft_path: `workspace.ground.${emptyGroundIndex}.members`,
         },
       ]
-    : [];
-  const sessionName =
-    visualDraft.workspace?.session_name ??
-    String(visualDraft.target_ref).split("/").pop()?.replace(/\.ya?ml$/, "") ??
-    "draft";
+      : []),
+    ...(identityMismatch
+      ? [{
+          code: "builder.draft.session_identity_mismatch",
+          stage: "draft",
+          severity: "error",
+          message: `session.name ${sessionName} does not match target ${targetName}`,
+          blocks: ["save", "deploy"],
+          source_ref: visualDraft.target_ref,
+          draft_path: "workspace.session_name",
+        }]
+      : []),
+    ...(forcedBlocker
+      ? [{
+          code: "builder.draft.forced_test_blocker",
+          stage: "draft",
+          severity: "error",
+          message: forcedBlocker,
+          blocks: ["save", "deploy"],
+          source_ref: visualDraft.target_ref,
+          draft_path: "workspace.session_name",
+        }]
+      : []),
+  ];
+  const blocked = assemblyIssues.length > 0;
   const assembledDraft = {
     contract_version: 1,
     draft_revision: visualDraft.draft_revision,
@@ -124,17 +153,17 @@ function compileResponse(
       total_bytes: 0,
       closure_digest: "dep-draft",
     },
-    resolved_preview: incomplete ? null : preview,
+    resolved_preview: blocked ? null : preview,
     digests: { document: "doc-draft", dependency: "dep-draft" },
     issues: assemblyIssues,
     save_verdict: {
       operation: "save",
-      allowed: !incomplete,
+      allowed: !blocked,
       blockers: assemblyIssues,
     },
     deploy_eligibility_after_save: {
       operation: "deploy",
-      allowed: !incomplete,
+      allowed: !blocked,
       blockers: assemblyIssues,
     },
   };
@@ -144,6 +173,38 @@ function compileResponse(
     save_request: { draft: assembledDraft, target_ref: visualDraft.target_ref },
     compile_result: compileResult,
     assembly_issues: assemblyIssues,
+  });
+}
+
+function saveResponse(request: Record<string, any>) {
+  const ref = String(request.target_ref);
+  const sessionName = ref.split("/").pop()?.replace(/\.ya?ml$/, "") ?? "saved";
+  const revision = `revision-${sessionName}`;
+  const digests = { document: `document-${sessionName}`, dependency: `dependency-${sessionName}` };
+  return jsonResponse({
+    session: {
+      ref,
+      family: "sessions",
+      canonical_yaml: `session:\n  name: ${sessionName}\nsegments: []\n`,
+      canonical_json: { session: { name: sessionName }, segments: [] },
+      content_digest: digests.document,
+      revision,
+    },
+    digests,
+    dependency_closure: {
+      entries: [],
+      file_count: 0,
+      total_bytes: 0,
+      closure_digest: digests.dependency,
+    },
+    deploy_verdict: {
+      allowed: true,
+      session_ref: ref,
+      session_revision: revision,
+      digests,
+      blockers: [],
+    },
+    issues: [],
   });
 }
 
@@ -188,7 +249,114 @@ function visualCommandResponse(request: Record<string, any>) {
     installed: { access_ka: nodeRef === SECOND_GROUND_NODE ? 64 : 8 },
     boresights: { access_ka: { mode: "local_vertical" } },
   });
-  if (command.operation === "add_generated_space") {
+  const refStem = (ref: string) =>
+    (ref.split("/").pop() ?? ref).replace(/\.ya?ml$/, "");
+  if (command.operation === "place_space_reference") {
+    const number = workspace.space.length + workspace.space_refs.length + 1;
+    affectedId = `space-${number}`;
+    workspace.space_refs.push({
+      segment_id: affectedId,
+      source_ref: command.source_ref,
+      label: refStem(command.source_ref),
+    });
+  } else if (command.operation === "place_ground_reference") {
+    const number = workspace.ground.length + workspace.ground_refs.length + 1;
+    affectedKind = "ground";
+    affectedId = `ground-${number}`;
+    workspace.ground_refs.push({
+      segment_id: affectedId,
+      site_set_ref: command.site_set_ref,
+      label: refStem(command.site_set_ref),
+      scheduling: structuredClone(LEO_SCHEDULING),
+    });
+    schedulingPreset = "leo-fast-handover";
+  } else if (command.operation === "add_ground_site_reference") {
+    let ground = workspace.ground.find(
+      (candidate: { segment_id: string }) => candidate.segment_id === command.segment_id,
+    );
+    if (!ground) {
+      const groundNumber = workspace.ground.length + workspace.ground_refs.length + 1;
+      ground = {
+        segment_id: `ground-${groundNumber}`,
+        display_name: `Ground segment ${groundNumber}`,
+        members: [],
+        stamp: {
+          node_ref: GROUND_NODE,
+          installed: {},
+          boresights: {},
+          body: "nodalarc:bodies/earth.yaml",
+          lan_base: `172.${19 + groundNumber}`,
+          loopback_base: `10.${199 + groundNumber}`,
+        },
+        scheduling: structuredClone(LEO_SCHEDULING),
+        originated_ipv4: [],
+        tags: [],
+      };
+      workspace.ground.push(ground);
+      schedulingPreset = "leo-fast-handover";
+    }
+    const number =
+      workspace.ground.reduce(
+        (count: number, candidate: { members: unknown[] }) => count + candidate.members.length,
+        0,
+      ) + 1;
+    const siteId = refStem(command.site_ref);
+    affectedKind = "ground_member";
+    affectedId = `member-${number}`;
+    ground.members.push({
+      member_id: affectedId,
+      kind: "ref",
+      ref: command.site_ref,
+      site_id: siteId,
+      label: siteId,
+      summary: null,
+      site: null,
+      scheduling_override: null,
+    });
+  } else if (command.operation === "author_inline_space_node") {
+    affectedId = command.segment_id;
+    const space = workspace.space.find(
+      (candidate: { segment_id: string }) => candidate.segment_id === command.segment_id,
+    );
+    space.node_ref = null;
+    space.node_draft = {
+      id: `${command.segment_id}-node`,
+      display_name: `${space.display_name} node`,
+      forwarding: null,
+      ethernet: [],
+      terminals: [],
+    };
+  } else if (command.operation === "add_or_increment_node_terminal") {
+    affectedId = command.segment_id;
+    const space = workspace.space.find(
+      (candidate: { segment_id: string }) => candidate.segment_id === command.segment_id,
+    );
+    const existing = space.node_draft.terminals.find(
+      (candidate: { terminal_ref: string; role: string }) =>
+        candidate.terminal_ref === command.terminal_ref && candidate.role === command.role,
+    );
+    if (existing) {
+      existing.count += 1;
+    } else {
+      space.node_draft.terminals.push({
+        mount_id: `${command.role}_0`,
+        role: command.role,
+        terminal_ref: command.terminal_ref,
+        count: 1,
+        boresight: command.role === "access" ? { mode: "nadir" } : null,
+      });
+    }
+  } else if (command.operation === "set_node_terminal_role") {
+    affectedId = command.segment_id;
+    const space = workspace.space.find(
+      (candidate: { segment_id: string }) => candidate.segment_id === command.segment_id,
+    );
+    const mount = space.node_draft.terminals.find(
+      (candidate: { mount_id: string }) => candidate.mount_id === command.mount_id,
+    );
+    mount.role = command.role;
+    mount.boresight = command.role === "access" ? { mode: "nadir" } : null;
+  } else if (command.operation === "add_generated_space") {
     const number = workspace.space.length + 1;
     affectedId = `space-${number}`;
     workspace.space.push({
@@ -327,7 +495,7 @@ function visualCommandResponse(request: Record<string, any>) {
           body: ground.stamp.body,
           lat_deg: siteIntent.lat_deg,
           lon_deg: siteIntent.lon_deg,
-          alt_m: siteIntent.alt_m,
+          alt_m: siteIntent.alt_m ?? 0,
           lan_ipv4: `${ground.stamp.lan_base}.${index}.0/24`,
           tags: [],
           nodes: [{
@@ -531,14 +699,39 @@ function stubFetch(options?: {
   sessions?: ReturnType<typeof summary>[];
   sessionDocument?: Record<string, unknown>;
   sessionPreview?: unknown;
+  newDraft?: BuilderVisualDraftEnvelope;
+  rejectExplicitBlankName?: boolean;
   commandHandler?: (request: Record<string, any>) => Promise<unknown>;
+  compileHandler?: (
+    request: Record<string, any>,
+  ) => ReturnType<typeof jsonResponse> | Promise<ReturnType<typeof jsonResponse>>;
+  saveHandler?: (
+    request: Record<string, any>,
+  ) => ReturnType<typeof jsonResponse> | Promise<ReturnType<typeof jsonResponse>>;
 }) {
   const sessions = options?.sessions ?? [];
+  let blankDraftCount = 0;
   const fetchMock = vi.fn((url: string, init?: { body?: string }) => {
     if (url.includes("/builder/bootstrap")) return Promise.resolve(bootstrapResponse());
     if (url.includes("/builder/draft/new")) {
       const request = init?.body ? JSON.parse(init.body) : {};
-      return Promise.resolve(jsonResponse(structuredVisualDraft(request.session_name)));
+      if (options?.rejectExplicitBlankName && request.session_name === "") {
+        return Promise.resolve(
+          jsonResponse(
+            { detail: [{ msg: "String should match the canonical identifier pattern" }] },
+            false,
+            422,
+          ),
+        );
+      }
+      const sessionName = request.session_name ?? `untitled-session-${++blankDraftCount}`;
+      const responseDraft =
+        options?.newDraft && request.session_name === undefined
+          ? options.newDraft
+          : structuredVisualDraft(sessionName);
+      return Promise.resolve(
+        jsonResponse(structuredClone(responseDraft)),
+      );
     }
     if (url.includes("/builder/draft/open")) {
       const request = init?.body ? JSON.parse(init.body) : {};
@@ -586,14 +779,22 @@ function stubFetch(options?: {
               ? sessions
               : family === "nodes"
                 ? [summary(GROUND_NODE, "nodes"), summary(SECOND_GROUND_NODE, "nodes")]
-                : [],
+                : family === "terminals"
+                  ? [summary("nodalarc:terminals/rf/space-gateway.yaml", "terminals")]
+                  : [],
           next_page_token: null,
         }),
       );
     }
     if (url.includes("/builder/draft/compile")) {
       const request = init?.body ? JSON.parse(init.body) : {};
+      if (options?.compileHandler) return Promise.resolve(options.compileHandler(request));
       return Promise.resolve(compileResponse(request, options?.sessionPreview));
+    }
+    if (url.includes("/builder/session/save")) {
+      const request = init?.body ? JSON.parse(init.body) : {};
+      if (options?.saveHandler) return Promise.resolve(options.saveHandler(request));
+      return Promise.resolve(saveResponse(request));
     }
     if (url.includes("/builder/draft/command")) {
       const request = init?.body ? JSON.parse(init.body) : {};
@@ -620,6 +821,14 @@ const commandCalls = (fetchMock: ReturnType<typeof vi.fn>) =>
   fetchMock.mock.calls.filter((call: unknown[]) =>
     String(call[0]).includes("/builder/draft/command"),
   );
+const newDraftCalls = (fetchMock: ReturnType<typeof vi.fn>) =>
+  fetchMock.mock.calls.filter((call: unknown[]) =>
+    String(call[0]).includes("/builder/draft/new"),
+  );
+const saveCalls = (fetchMock: ReturnType<typeof vi.fn>) =>
+  fetchMock.mock.calls.filter((call: unknown[]) =>
+    String(call[0]).includes("/builder/session/save"),
+  );
 
 beforeEach(() => {
   localStorage.clear();
@@ -636,32 +845,356 @@ describe("BuilderView — resolve-loop and world honesty", () => {
     expect(await screen.findByTestId("builder-start")).toBeTruthy();
   });
 
-  it("mints a fresh backend target for every blank draft and still retargets on rename", async () => {
-    const fetchMock = stubFetch();
+  it("keeps the saved target and fences while a typed rename is reverted", async () => {
+    const savedFoo: BuilderVisualDraftEnvelope = {
+      ...structuredVisualDraft("foo"),
+      source_ref: "user:sessions/foo.yaml",
+      expected_session_revision: "foo-revision",
+      expected_catalog_revisions: [
+        { ref: "user:nodes/foo/generated.yaml", expected_revision: "node-revision" },
+      ],
+      catalog_documents: [
+        {
+          ref: "user:terminals/shared/custom.yaml",
+          expected_revision: "proposal-revision",
+          document: { terminal: { id: "custom" } },
+        },
+      ],
+      reserved_authoring_ids: ["space-1", "ground-1"],
+    };
+    const fetchMock = stubFetch({ newDraft: savedFoo });
     render(<BuilderView {...PROPS} />);
     fireEvent.click(
       within(await screen.findByTestId("builder-start")).getByRole("button", {
         name: /New session/i,
       }),
     );
-    const newDraftCalls = () => fetchMock.mock.calls.filter((call) =>
+    await waitFor(() => expect(compileCalls(fetchMock).length).toBeGreaterThan(0));
+    expect(newDraftCalls(fetchMock)).toHaveLength(1);
+    expect(JSON.parse(newDraftCalls(fetchMock)[0]![1]?.body ?? "{}")).toEqual({});
+
+    fireEvent.click(screen.getByText("Identity & time"));
+    const nameInput = screen.getByLabelText("name");
+    fireEvent.change(nameInput, { target: { value: "bar" } });
+    await waitFor(() => {
+      const calls = compileCalls(fetchMock);
+      const request = JSON.parse(calls[calls.length - 1]?.[1]?.body ?? "{}");
+      expect(request.draft.workspace.session_name).toBe("bar");
+    });
+    let calls = compileCalls(fetchMock);
+    let compiled = JSON.parse(calls[calls.length - 1]?.[1]?.body ?? "{}").draft;
+    expect(compiled).toMatchObject({
+      target_ref: "user:sessions/foo.yaml",
+      expected_session_revision: "foo-revision",
+      expected_catalog_revisions: savedFoo.expected_catalog_revisions,
+      catalog_documents: savedFoo.catalog_documents,
+      reserved_authoring_ids: ["space-1", "ground-1"],
+    });
+    expect(newDraftCalls(fetchMock)).toHaveLength(1);
+
+    fireEvent.change(nameInput, { target: { value: "foo" } });
+    await waitFor(() => {
+      const currentCalls = compileCalls(fetchMock);
+      const request = JSON.parse(currentCalls[currentCalls.length - 1]?.[1]?.body ?? "{}");
+      expect(request.draft.workspace.session_name).toBe("foo");
+    });
+    calls = compileCalls(fetchMock);
+    compiled = JSON.parse(calls[calls.length - 1]?.[1]?.body ?? "{}").draft;
+    expect(compiled).toMatchObject({
+      target_ref: "user:sessions/foo.yaml",
+      expected_session_revision: "foo-revision",
+      catalog_documents: savedFoo.catalog_documents,
+      reserved_authoring_ids: ["space-1", "ground-1"],
+    });
+    expect(newDraftCalls(fetchMock)).toHaveLength(1);
+    expect(screen.getByText("Drafts · foo")).toBeTruthy();
+  });
+
+  it("treats a nonempty local name as authored without guessing backend placeholders", async () => {
+    const fetchMock = stubFetch({ newDraft: structuredVisualDraft("untitled-session-1") });
+    render(<BuilderView {...PROPS} />);
+    fireEvent.click(
+      within(await screen.findByTestId("builder-start")).getByRole("button", {
+        name: /New session/i,
+      }),
+    );
+    await waitFor(() => expect(compileCalls(fetchMock).length).toBeGreaterThan(0));
+
+    fireEvent.click(screen.getByText("Identity & time"));
+    fireEvent.change(screen.getByLabelText("name"), { target: { value: "authored-name" } });
+
+    const guide = screen.getByTestId("builder-guide");
+    expect(await within(guide).findByText("authored-name")).toBeTruthy();
+    expect(within(guide).queryByText("name it — real time unless you say otherwise")).toBeNull();
+    expect(newDraftCalls(fetchMock)).toHaveLength(1);
+  });
+
+  it("leaves the original target in place when Save As compilation is blocked", async () => {
+    const fetchMock = stubFetch({
+      newDraft: {
+        ...structuredVisualDraft("foo"),
+        expected_session_revision: "foo-revision",
+        reserved_authoring_ids: ["space-1"],
+      },
+      compileHandler: (request) =>
+        compileResponse(
+          request,
+          null,
+          request.draft.target_ref === "user:sessions/bar.yaml"
+            ? "the new target is blocked"
+            : null,
+        ),
+    });
+    render(<BuilderView {...PROPS} />);
+    fireEvent.click(
+      within(await screen.findByTestId("builder-start")).getByRole("button", {
+        name: /New session/i,
+      }),
+    );
+    const toolbarSave = await screen.findByRole("button", {
+      name: "Save session to your library",
+    });
+    await waitFor(() => expect((toolbarSave as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(toolbarSave);
+    const dialog = await screen.findByTestId("builder-save-dialog");
+    fireEvent.change(within(dialog).getByLabelText("save as"), { target: { value: "bar" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+
+    expect(await within(dialog).findByText("save failed: the new target is blocked")).toBeTruthy();
+    expect(saveCalls(fetchMock)).toHaveLength(0);
+    expect(screen.getByText("Drafts · foo")).toBeTruthy();
+    expect(newDraftCalls(fetchMock)).toHaveLength(2);
+  });
+
+  it("leaves the original target in place when Save As persistence fails", async () => {
+    const fetchMock = stubFetch({
+      newDraft: {
+        ...structuredVisualDraft("foo"),
+        expected_session_revision: "foo-revision",
+        catalog_documents: [
+          {
+            ref: "user:terminals/shared/custom.yaml",
+            expected_revision: "proposal-revision",
+            document: { terminal: { id: "custom" } },
+          },
+        ],
+        reserved_authoring_ids: ["space-1"],
+      },
+      saveHandler: () => jsonResponse({ detail: "storage refused the write" }, false, 500),
+    });
+    render(<BuilderView {...PROPS} />);
+    fireEvent.click(
+      within(await screen.findByTestId("builder-start")).getByRole("button", {
+        name: /New session/i,
+      }),
+    );
+    const toolbarSave = await screen.findByRole("button", {
+      name: "Save session to your library",
+    });
+    await waitFor(() => expect((toolbarSave as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(toolbarSave);
+    const dialog = await screen.findByTestId("builder-save-dialog");
+    fireEvent.change(within(dialog).getByLabelText("save as"), { target: { value: "bar" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+
+    expect(await within(dialog).findByText("save failed: storage refused the write")).toBeTruthy();
+    expect(saveCalls(fetchMock)).toHaveLength(1);
+    expect(screen.getByText("Drafts · foo")).toBeTruthy();
+    const failedSave = JSON.parse(saveCalls(fetchMock)[0]![1]?.body ?? "{}");
+    expect(failedSave).toMatchObject({
+      target_ref: "user:sessions/bar.yaml",
+    });
+  });
+
+  it("adopts a Save As target only after persistence succeeds", async () => {
+    let releaseSave!: (response: ReturnType<typeof jsonResponse>) => void;
+    const pendingSave = new Promise<ReturnType<typeof jsonResponse>>((resolve) => {
+      releaseSave = resolve;
+    });
+    const fetchMock = stubFetch({
+      newDraft: {
+        ...structuredVisualDraft("foo"),
+        expected_session_revision: "foo-revision",
+        reserved_authoring_ids: ["space-1"],
+      },
+      saveHandler: () => pendingSave,
+    });
+    render(<BuilderView {...PROPS} />);
+    fireEvent.click(
+      within(await screen.findByTestId("builder-start")).getByRole("button", {
+        name: /New session/i,
+      }),
+    );
+    const toolbarSave = await screen.findByRole("button", {
+      name: "Save session to your library",
+    });
+    await waitFor(() => expect((toolbarSave as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(toolbarSave);
+    const dialog = await screen.findByTestId("builder-save-dialog");
+    fireEvent.change(within(dialog).getByLabelText("save as"), { target: { value: "bar" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(saveCalls(fetchMock)).toHaveLength(1));
+    expect(screen.getByText("Drafts · foo")).toBeTruthy();
+    const request = JSON.parse(saveCalls(fetchMock)[0]![1]?.body ?? "{}");
+    await act(async () => {
+      releaseSave(saveResponse(request));
+      await pendingSave;
+    });
+
+    expect(await screen.findByText("Drafts · bar")).toBeTruthy();
+    expect(within(await screen.findByTestId("builder-save-dialog")).getByText(
+      "saved as bar — deploy it with the rocket",
+    )).toBeTruthy();
+  });
+
+  it("keeps a committed-but-unverified Save As target visible and guarded", async () => {
+    stubFetch({
+      newDraft: {
+        ...structuredVisualDraft("foo"),
+        expected_session_revision: "foo-revision",
+      },
+      saveHandler: () =>
+        jsonResponse(
+          {
+            message: "storage verification failed",
+            repository_committed: true,
+            target_ref: "user:sessions/bar.yaml",
+          },
+          false,
+          500,
+        ),
+    });
+    render(<BuilderView {...PROPS} />);
+    fireEvent.click(
+      within(await screen.findByTestId("builder-start")).getByRole("button", {
+        name: /New session/i,
+      }),
+    );
+    const toolbarSave = await screen.findByRole("button", {
+      name: "Save session to your library",
+    });
+    await waitFor(() => expect((toolbarSave as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(toolbarSave);
+    const dialog = await screen.findByTestId("builder-save-dialog");
+    fireEvent.change(within(dialog).getByLabelText("save as"), { target: { value: "bar" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+
+    expect(await screen.findByText("Drafts · bar")).toBeTruthy();
+    expect(within(await screen.findByTestId("builder-save-dialog")).getByText(
+      /save committed, but storage verification failed/,
+    )).toBeTruthy();
+    expect(screen.getByRole("button", {
+      name: /Save committed without verification for user:sessions\/bar.yaml/,
+    })).toBeTruthy();
+  });
+
+  it("refuses a touched blank Save-As name without saving or changing draft identity", async () => {
+    const fetchMock = stubFetch({ rejectExplicitBlankName: true });
+    render(<BuilderView {...PROPS} />);
+    fireEvent.click(
+      within(await screen.findByTestId("builder-start")).getByRole("button", {
+        name: /New session/i,
+      }),
+    );
+
+    const saveToolbarButton = await screen.findByRole("button", {
+      name: "Save session to your library",
+    });
+    await waitFor(() => expect((saveToolbarButton as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(saveToolbarButton);
+
+    const dialog = await screen.findByTestId("builder-save-dialog");
+    const nameInput = within(dialog).getByLabelText("save as");
+    expect((nameInput as HTMLInputElement).value).toBe("untitled-session-1");
+    fireEvent.change(nameInput, { target: { value: "" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+
+    await waitFor(() =>
+      expect(within(dialog).getByText("save failed: request failed (422)")).toBeTruthy(),
+    );
+    const newDraftCalls = fetchMock.mock.calls.filter((call) =>
       String(call[0]).includes("/builder/draft/new"),
     );
-    await waitFor(() => expect(newDraftCalls()).toHaveLength(1));
+    expect(newDraftCalls).toHaveLength(2);
+    expect(JSON.parse(newDraftCalls[1]![1]?.body ?? "{}")).toEqual({ session_name: "" });
+    expect(
+      fetchMock.mock.calls.some((call) => String(call[0]).includes("/builder/session/save")),
+    ).toBe(false);
+    expect(screen.getByText("Drafts · untitled-session-1")).toBeTruthy();
+  });
+
+  it("labels nullable link and routing facts as incomplete in the outline", async () => {
+    const base = structuredVisualDraft("incomplete-outline");
+    const incompleteDraft: BuilderVisualDraftEnvelope = {
+      ...base,
+      workspace: {
+        ...base.workspace!,
+        space_refs: [
+          {
+            segment_id: "space-1",
+            source_ref: "nodalarc:constellations/a.yaml",
+            label: "A",
+          },
+          {
+            segment_id: "space-2",
+            source_ref: "nodalarc:constellations/b.yaml",
+            label: "B",
+          },
+        ],
+        links: [{
+          rule_id: "link-1",
+          label: "A to B",
+          enabled: true,
+          a: {
+            segment_id: "space-1",
+            tag: null,
+            role: null,
+            medium: null,
+            min_elevation_deg: null,
+          },
+          b: {
+            segment_id: "space-2",
+            tag: null,
+            role: "isl",
+            medium: "optical",
+            min_elevation_deg: null,
+          },
+          topology_mode: null,
+          topology_n: null,
+          max_range_km: null,
+        }],
+        routing_domains: [{
+          domain_id: "domain-1",
+          label: "Domain 1",
+          protocol: null,
+          member_segment_ids: ["space-1", "space-2"],
+          hello_interval_s: null,
+          hold_interval_s: null,
+        }],
+        boundaries: [{
+          boundary_id: "boundary-1",
+          over_rule_id: "link-1",
+          adapter: null,
+          from_domain_id: "domain-1",
+          to_domain_id: "domain-1",
+          export_node_loopbacks: true,
+        }],
+      },
+    };
+    stubFetch({ newDraft: incompleteDraft });
+    render(<BuilderView {...PROPS} />);
     fireEvent.click(
-      screen.getByLabelText("New session — blank sheet (any current draft stays under Restore)"),
+      within(await screen.findByTestId("builder-start")).getByRole("button", {
+        name: /New session/i,
+      }),
     );
-    await waitFor(() => expect(newDraftCalls()).toHaveLength(2));
-    const names = newDraftCalls().map((call) =>
-      JSON.parse(call[1]?.body ?? "{}").session_name as string,
-    );
-    expect(names[0]).toMatch(/^untitled-session-/);
-    expect(names[1]).toMatch(/^untitled-session-/);
-    expect(names[1]).not.toBe(names[0]);
-    fireEvent.click(screen.getByText("Identity & time"));
-    fireEvent.change(screen.getByLabelText("name"), { target: { value: "renamed-draft" } });
-    await waitFor(() => expect(newDraftCalls()).toHaveLength(3));
-    expect(JSON.parse(newDraftCalls()[2]![1]?.body ?? "{}").session_name).toBe("renamed-draft");
+
+    const outline = await screen.findByTestId("builder-outline");
+    expect(await within(outline).findByText("role incomplete")).toBeTruthy();
+    expect(within(outline).getByText("protocol incomplete")).toBeTruthy();
+    expect(within(outline).getByText("adapter incomplete")).toBeTruthy();
+    expect(outline.textContent).not.toContain("null");
   });
 
   it("restores the exact structured envelope without minting a replacement draft", async () => {
@@ -688,7 +1221,7 @@ describe("BuilderView — resolve-loop and world honesty", () => {
           },
         },
       ],
-      workspace: visualWorkspaceFromWorkspace(workspace),
+      workspace,
     };
     localStorage.setItem(
       STRUCTURED_AUTOSAVE_KEY,
@@ -823,6 +1356,44 @@ describe("BuilderView — resolve-loop and world honesty", () => {
     expect(editor.textContent).toContain("phase offset 0 deg");
   });
 
+  it("sends only mount-role intent and adopts backend pointing semantics", async () => {
+    const fetchMock = stubFetch();
+    render(<BuilderView {...PROPS} />);
+    fireEvent.click(
+      within(await screen.findByTestId("builder-start")).getByRole("button", {
+        name: /New session/i,
+      }),
+    );
+    fireEvent.click(await screen.findByText("Space segments"));
+    const editor = await screen.findByTestId("builder-editor");
+    fireEvent.click(within(editor).getByRole("button", { name: /Node/ }));
+    fireEvent.click(within(editor).getByRole("button", { name: "Author inline node" }));
+    await waitFor(() => expect(commandCalls(fetchMock)).toHaveLength(2));
+    fireEvent.click(within(editor).getByRole("button", { name: "+ port" }));
+    fireEvent.click(await within(editor).findByRole("button", { name: /space-gateway/ }));
+    await waitFor(() => expect(commandCalls(fetchMock)).toHaveLength(3));
+    fireEvent.click(
+      within(editor).getByRole("button", { name: /space-gatewayaccess/ }),
+    );
+    fireEvent.change(within(editor).getByLabelText("Mount role"), {
+      target: { value: "isl" },
+    });
+
+    await waitFor(() => expect(commandCalls(fetchMock)).toHaveLength(4));
+    expect(JSON.parse(commandCalls(fetchMock)[3]![1].body).command).toEqual({
+      operation: "set_node_terminal_role",
+      segment_id: "space-1",
+      mount_id: "access_0",
+      role: "isl",
+    });
+    await waitFor(() =>
+      expect((within(editor).getByLabelText("Mount role") as HTMLSelectElement).value).toBe(
+        "isl",
+      ),
+    );
+    expect(within(editor).queryByLabelText("spacecraft boresight")).toBeNull();
+  });
+
   it("sends stamp model selection and adopts backend installation facts", async () => {
     const fetchMock = stubFetch();
     render(<BuilderView {...PROPS} />);
@@ -870,7 +1441,7 @@ describe("BuilderView — resolve-loop and world honesty", () => {
     expect(JSON.parse(commandCalls(fetchMock)[1]![1].body).command).toEqual({
       operation: "mint_ground_members",
       segment_id: "ground-1",
-      sites: [{ name: "Denver", lat_deg: 39.7, lon_deg: -104.9, alt_m: 0 }],
+      sites: [{ name: "Denver", lat_deg: 39.7, lon_deg: -104.9 }],
     });
     await waitFor(() => expect(editor.textContent).toContain("Denver"));
     expect(editor.textContent).toContain("172.20.0.0/24");
@@ -1095,12 +1666,16 @@ describe("BuilderView — Library Use places and reveals", () => {
         return [];
     }
   }
-  function stubCatalog() {
+  function stubCatalog(options?: {
+    commandHandler?: (request: Record<string, any>) => Promise<unknown>;
+  }) {
+    let blankDraftCount = 0;
     const fetchMock = vi.fn((url: string, init?: { body?: string }) => {
       if (url.includes("/builder/bootstrap")) return Promise.resolve(bootstrapResponse());
       if (url.includes("/builder/draft/new")) {
         const request = init?.body ? JSON.parse(init.body) : {};
-        return Promise.resolve(jsonResponse(structuredVisualDraft(request.session_name)));
+        const sessionName = request.session_name ?? `untitled-session-${++blankDraftCount}`;
+        return Promise.resolve(jsonResponse(structuredVisualDraft(sessionName)));
       }
       if (url.includes("/builder/catalog/get")) {
         const request = init?.body ? JSON.parse(init.body) : {};
@@ -1156,6 +1731,7 @@ describe("BuilderView — Library Use places and reveals", () => {
       }
       if (url.includes("/builder/draft/command")) {
         const request = init?.body ? JSON.parse(init.body) : {};
+        if (options?.commandHandler) return options.commandHandler(request);
         return Promise.resolve(visualCommandResponse(request));
       }
       return Promise.resolve(jsonResponse({}));
@@ -1170,11 +1746,16 @@ describe("BuilderView — Library Use places and reveals", () => {
   }
 
   it("using a constellation ref places its outline row and flashes exactly it", async () => {
-    stubCatalog();
+    const fetchMock = stubCatalog();
     render(<BuilderView {...PROPS} />);
     await openLibrary();
     // Default family is constellations (a ref). Use its entry.
     fireEvent.click(await screen.findByLabelText("Use: place as a space segment"));
+    await waitFor(() => expect(commandCalls(fetchMock)).toHaveLength(1));
+    expect(JSON.parse(commandCalls(fetchMock)[0]![1].body).command).toEqual({
+      operation: "place_space_reference",
+      source_ref: "nodalarc:constellations/leo.yaml",
+    });
     const outline = screen.getByTestId("builder-outline");
     await within(outline).findByText("leo");
     await waitFor(() => {
@@ -1185,11 +1766,16 @@ describe("BuilderView — Library Use places and reveals", () => {
   });
 
   it("using a site-set ref places its ground row and flashes exactly it", async () => {
-    stubCatalog();
+    const fetchMock = stubCatalog();
     render(<BuilderView {...PROPS} />);
     await openLibrary();
     fireEvent.click(await screen.findByRole("tab", { name: "Site sets" }));
     fireEvent.click(await screen.findByRole("button", { name: "Use: place as ground sites" }));
+    await waitFor(() => expect(commandCalls(fetchMock)).toHaveLength(1));
+    expect(JSON.parse(commandCalls(fetchMock)[0]![1].body).command).toEqual({
+      operation: "place_ground_reference",
+      site_set_ref: "nodalarc:site-sets/gw.yaml",
+    });
     const outline = screen.getByTestId("builder-outline");
     await within(outline).findByText("gw");
     await waitFor(() => {
@@ -1221,13 +1807,42 @@ describe("BuilderView — Library Use places and reveals", () => {
   });
 
   it("using a typed site summary places its ref-derived catalog identity", async () => {
-    stubCatalog();
+    const fetchMock = stubCatalog();
     render(<BuilderView {...PROPS} />);
     await openLibrary();
     fireEvent.click(await screen.findByRole("tab", { name: "Sites" }));
     fireEvent.click(await screen.findByRole("button", { name: "Use: add to a ground segment" }));
+    await waitFor(() => expect(commandCalls(fetchMock)).toHaveLength(1));
+    expect(JSON.parse(commandCalls(fetchMock)[0]![1].body).command).toEqual({
+      operation: "add_ground_site_reference",
+      site_ref: "nodalarc:sites/orphan.yaml",
+    });
     expect(await screen.findByTestId("builder-ground-editor")).toBeTruthy();
     expect(screen.getAllByText("orphan").length).toBeGreaterThan(0);
+  });
+
+  it("a refused site placement leaves no empty ground segment", async () => {
+    const fetchMock = stubCatalog({
+      commandHandler: async () =>
+        jsonResponse(
+          { code: "catalog_authoring.invalid_graph", message: "site unavailable" },
+          false,
+          409,
+        ),
+    });
+    render(<BuilderView {...PROPS} />);
+    await openLibrary();
+    fireEvent.click(await screen.findByRole("tab", { name: "Sites" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Use: add to a ground segment" }));
+
+    expect((await screen.findAllByText("site unavailable")).length).toBeGreaterThan(0);
+    expect(commandCalls(fetchMock)).toHaveLength(1);
+    expect(JSON.parse(commandCalls(fetchMock)[0]![1].body).command).toEqual({
+      operation: "add_ground_site_reference",
+      site_ref: "nodalarc:sites/orphan.yaml",
+    });
+    expect(document.querySelector('[data-segment-id="ground-1"]')).toBeNull();
+    expect(screen.queryByTestId("builder-ground-editor")).toBeNull();
   });
 
   it("customize requires an explicit user identity and opens a lossless backend draft", async () => {

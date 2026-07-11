@@ -60,7 +60,7 @@ import { LinkRuleEditor } from "./LinkRuleEditor";
 import { CatalogDraftEditorWindow } from "./CatalogDraftEditorWindow";
 import { OpenSessionPicker } from "./OpenSessionPicker";
 import { BoundaryEditor, RoutingDomainEditor } from "./RoutingEditor";
-import { SessionEditor } from "./SessionEditor";
+import { SessionEditor, timeRateSummary } from "./SessionEditor";
 import {
   canDeploy,
   announceCatalogDraftSaved,
@@ -78,7 +78,7 @@ import {
   useBuilderWorld,
 } from "./useBuilderWorld";
 import { downloadBlob } from "../ui/downloadBlob";
-import { workspaceForSave, useWorkspace } from "./useWorkspace";
+import { workspaceForSave, useWorkspace, type EditorBuffer } from "./useWorkspace";
 import {
   useEditorWindows,
   targetKey,
@@ -112,9 +112,7 @@ import {
   emittedRuleId,
   linkWarnings,
   placedSegments,
-  reseedCounters,
   routingWarnings,
-  refGroundMember,
   type DraftBoundary,
   type DraftConstellation,
   type DraftGroundSet,
@@ -124,6 +122,7 @@ import {
 } from "./workspace";
 import type {
   BuilderDeployVerdict,
+  BuilderVisualDraftAssemblyResult,
   BuilderVisualAuthoringFacts,
   BuilderVisualSchedulingPreset,
   BuilderVisualDraftCommandRequest,
@@ -157,19 +156,6 @@ interface BuilderViewProps {
   /** The app-level camera/screenshot handle; only one Scene is mounted at a
    *  time, so the builder scene owns it while the builder view is active. */
   actionsRef: MutableRefObject<GlobeActions | null>;
-}
-
-let sessionDraftNonce = 0;
-
-function freshSessionDraftName(): string {
-  sessionDraftNonce += 1;
-  const random =
-    typeof globalThis.crypto?.randomUUID === "function"
-      ? globalThis.crypto.randomUUID()
-      : `${Date.now().toString(36)}-${sessionDraftNonce.toString(36)}-${Math.random()
-          .toString(36)
-          .slice(2)}`;
-  return `untitled-session-${random}-${sessionDraftNonce.toString(36)}`.slice(0, 48);
 }
 
 interface SegmentSummary {
@@ -503,7 +489,7 @@ export function BuilderView({
     settledDocumentDigest,
     settledDependencySha256,
     createDraft,
-    retargetDraft,
+    prepareRetargetDraft,
     openSession,
     editOpaqueYaml,
     undoOpaque,
@@ -512,6 +498,8 @@ export function BuilderView({
     runVisualCommand,
     adoptVisualCommandResult,
     compileDraft,
+    compileDraftWithoutAdopting,
+    adoptCompiledDraft,
     hasOpaqueAutosave,
     stashOpaqueDraft,
     restoreOpaqueAutosave,
@@ -534,13 +522,10 @@ export function BuilderView({
     updateSession,
     undo,
     close: closeWorkspace,
-    addConstellationRef,
     removeRefSegment,
     removeConstellation,
     updateConstellation,
-    addGroundRef,
     removeGroundRef,
-    addGroundMember,
     updateGroundDraft,
     removeGroundDraft,
     updateLinkRule,
@@ -645,6 +630,7 @@ export function BuilderView({
     updateBoundary,
   });
   const [structuredRecoveryRevision, setStructuredRecoveryRevision] = useState(0);
+  const [saveState, setSaveState] = useState<SaveState>({ kind: "idle" });
   const currentStructuredRecovery = () =>
     createStructuredRecovery({ workspace, visualDraft, windows, buffers });
   useEffect(() => {
@@ -686,7 +672,6 @@ export function BuilderView({
       return;
     }
     closeAllWindows();
-    reseedCounters(result.recovery.workspace);
     openWorkspace(result.recovery.workspace);
     restoreRecoveryState(result.recovery.editor);
     setSelection(null);
@@ -712,7 +697,7 @@ export function BuilderView({
     if (workspace) create();
     else
       displace(() => {
-        void createDraft({ session_name: freshSessionDraftName() })
+        void createDraft({})
           .then((draft) => {
             openWorkspace(workspaceFromVisualDraft(draft));
             create();
@@ -736,7 +721,6 @@ export function BuilderView({
   // changes its dependency closure, so both settled digests must recompile.
   const libraryRevision = useLibraryRevision();
   const draftRevision = useRef(0);
-  const retargetedNameRef = useRef<string | null>(null);
   // A Restore that finds no payload (missing/corrupt) surfaces here instead of
   // silently doing nothing; the current workspace and its world stand.
   const [restoreError, setRestoreError] = useState<string | null>(null);
@@ -749,22 +733,9 @@ export function BuilderView({
       workspace.ground_refs.length >
       0;
   useEffect(() => {
-    if (!workspace || visualDraft?.mode !== "structured") return;
+    if (saveState.kind === "saving" || !workspace || visualDraft?.mode !== "structured") return;
     const preview = previewWorkspace();
     if (!preview) return;
-    const targetName =
-      visualDraft.target_ref.split("/").pop()?.replace(/\.ya?ml$/, "") ?? "";
-    if (preview.name !== targetName && retargetedNameRef.current !== preview.name) {
-      const requestedName = preview.name;
-      const timer = setTimeout(() => {
-        retargetedNameRef.current = requestedName;
-        void retargetDraft(requestedName).catch((cause) =>
-          setLibraryError(cause instanceof Error ? cause.message : String(cause)),
-        );
-      }, 300);
-      return () => clearTimeout(timer);
-    }
-    if (preview.name === targetName) retargetedNameRef.current = null;
     draftRevision.current = Math.max(draftRevision.current + 1, visualDraft.draft_revision + 1);
     const draft = structuredDraftFromWorkspace(
       visualDraft,
@@ -784,15 +755,15 @@ export function BuilderView({
     visualDraft?.target_ref,
     visualDraft?.expected_session_revision,
     visualDraft?.catalog_documents?.length,
-    retargetDraft,
+    saveState.kind,
   ]);
 
   useEffect(() => {
-    if (visualDraft?.mode !== "opaque_yaml") return;
+    if (saveState.kind === "saving" || visualDraft?.mode !== "opaque_yaml") return;
     if (assemblyResult?.visual_draft.draft_revision === visualDraft.draft_revision) return;
     const timer = setTimeout(() => void compileDraft(visualDraft), 300);
     return () => clearTimeout(timer);
-  }, [assemblyResult?.visual_draft.draft_revision, compileDraft, visualDraft]);
+  }, [assemblyResult?.visual_draft.draft_revision, compileDraft, saveState.kind, visualDraft]);
 
   // Trust mechanics: Ctrl/Cmd+Z undoes the last workspace mutation unless
   // the user is typing in a field (native input undo wins there). Gated on
@@ -815,7 +786,6 @@ export function BuilderView({
   // the object a create gesture just made — its editor focuses the
   // name once.
   const [freshId, setFreshId] = useState<string | null>(null);
-  const [saveState, setSaveState] = useState<SaveState>({ kind: "idle" });
   const acceptedOperationId =
     saveState.kind === "deploy-accepted" ? saveState.operationId : null;
   const { operation: transitionOperation, error: transitionPollError } =
@@ -887,6 +857,10 @@ export function BuilderView({
     confirmedStaleKeys?: ReadonlySet<string>;
   }) => {
     if (!workspace) return;
+    let preparedAssembly: BuilderVisualDraftAssemblyResult | null = null;
+    let preparedWorkspace: Workspace | null = null;
+    let preparedBuffers: Map<string, EditorBuffer> | null = null;
+    let preparedRetarget = false;
     if (applyAll && staleKeys.size > 0 && confirmedStaleKeys === undefined) {
       // Fail-closed backstop: a bulk apply-and-save with stale windows must
       // pass through the confirm flow, which decides each stale window
@@ -916,29 +890,38 @@ export function BuilderView({
       const appliedBuffers = new Map(
         Object.entries(buffers).filter(([k, b]) => b.dirty && !excludeKeys.has(k)),
       );
+      preparedBuffers = appliedBuffers;
       let next = workspaceForSave(workspace, buffers, {
         applyAll,
         dialogName: name,
         nameTouched,
         excludeKeys,
       });
-      if (visualDraft?.mode !== "structured") {
+      const currentDraft = currentVisualDraft();
+      if (currentDraft?.mode !== "structured") {
         throw new Error("the current draft is not a structured visual session");
       }
       const targetName =
-        visualDraft.target_ref.split("/").pop()?.replace(/\.ya?ml$/, "") ?? "";
-      const base = next.name === targetName ? visualDraft : await retargetDraft(next.name);
+        currentDraft.target_ref.split("/").pop()?.replace(/\.ya?ml$/, "") ?? "";
+      preparedRetarget = next.session_name !== targetName;
+      const base =
+        preparedRetarget
+          ? await prepareRetargetDraft(next.session_name)
+          : currentDraft;
       const backendName =
-        base.target_ref.split("/").pop()?.replace(/\.ya?ml$/, "") ?? next.name;
-      if (next.name !== backendName) next = { ...next, name: backendName };
+        base.target_ref.split("/").pop()?.replace(/\.ya?ml$/, "") ?? next.session_name;
+      if (next.session_name !== backendName) {
+        next = { ...next, session_name: backendName };
+      }
+      preparedWorkspace = next;
       draftRevision.current = Math.max(draftRevision.current + 1, base.draft_revision + 1);
       const draft = structuredDraftFromWorkspace(
         base,
         next,
         draftRevision.current,
       );
-      const assembled = await compileDraft(draft);
-      if (!assembled) throw new Error("the backend did not compile the visual draft");
+      const assembled = await compileDraftWithoutAdopting(draft);
+      preparedAssembly = assembled;
       if (!assembled.compile_result.save_verdict.allowed) {
         throw new Error(
           assembled.compile_result.save_verdict.blockers?.[0]?.message ??
@@ -952,6 +935,7 @@ export function BuilderView({
       if (applyAll) {
         dropAppliedBuffers(appliedBuffers);
       }
+      adoptCompiledDraft(assembled, preparedRetarget);
       const revisions = new Map(
         result.dependency_closure.entries
           .filter((entry) => entry.revision)
@@ -966,7 +950,7 @@ export function BuilderView({
       markSavedRevision(result.session.revision, expectedCatalogRevisions);
       setSaveState({
         kind: "saved",
-        name: next.name,
+        name: next.session_name,
         sessionRef: result.session.ref,
         sessionRevision: result.session.revision,
         deployVerdict: result.deploy_verdict,
@@ -978,6 +962,13 @@ export function BuilderView({
         typeof detail === "object" &&
         (detail as Record<string, unknown>).repository_committed === true
       ) {
+        if (preparedAssembly && preparedWorkspace) {
+          if (preparedWorkspace !== workspace) {
+            commitWorkspace(preparedWorkspace, "save-committed-unverified");
+          }
+          if (applyAll && preparedBuffers) dropAppliedBuffers(preparedBuffers);
+          adoptCompiledDraft(preparedAssembly, preparedRetarget);
+        }
         setSaveState({
           kind: "save-committed-unverified",
           message: e instanceof Error ? e.message : String(e),
@@ -1082,16 +1073,30 @@ export function BuilderView({
   ) => {
     const preset = result.scheduling_preset;
     if (preset === undefined) return;
-    const key =
-      command.operation === "set_scheduling_preset"
-        ? schedulingSelectionKey(
-            command.segment_id,
-            command.member_id ?? undefined,
-            result.draft.target_ref,
-          )
-        : command.operation === "add_ground"
-          ? schedulingSelectionKey(result.affected_id, undefined, result.draft.target_ref)
-          : null;
+    let key: string | null = null;
+    if (command.operation === "set_scheduling_preset") {
+      key = schedulingSelectionKey(
+        command.segment_id,
+        command.member_id ?? undefined,
+        result.draft.target_ref,
+      );
+    } else if (
+      command.operation === "add_ground" ||
+      command.operation === "place_ground_reference"
+    ) {
+      key = schedulingSelectionKey(result.affected_id, undefined, result.draft.target_ref);
+    } else if (
+      command.operation === "add_ground_site_reference" &&
+      command.segment_id === undefined &&
+      result.draft.mode === "structured"
+    ) {
+      const ground = result.draft.workspace?.ground?.find((candidate) =>
+        candidate.members?.some((member) => member.member_id === result.affected_id),
+      );
+      if (ground?.segment_id) {
+        key = schedulingSelectionKey(ground.segment_id, undefined, result.draft.target_ref);
+      }
+    }
     if (!key) return;
     setSchedulingSelections((current) => ({
       ...current,
@@ -1202,23 +1207,23 @@ export function BuilderView({
       // outline row so the placement is visible (ref floor).
       ensureThenCreate(() => {
         clearReadOnlyWorldBeforeCreate();
-        requestOutlineReveal(addConstellationRef(entry.ref, name));
+        void applyWorkspaceCommand({
+          operation: "place_space_reference",
+          source_ref: entry.ref,
+        })
+          .then((result) => requestOutlineReveal(result.affected_id))
+          .catch((cause) =>
+            setLibraryError(cause instanceof Error ? cause.message : String(cause)),
+          );
       }, label);
     } else if (entry.family === "site-sets") {
       ensureThenCreate(() => {
         clearReadOnlyWorldBeforeCreate();
-        if (!authoring) {
-          setLibraryError("Builder authoring facts are unavailable");
-          return;
-        }
-        const segmentId = addGroundRef(entry.ref, name);
-        setLibraryError(null);
         void applyWorkspaceCommand({
-          operation: "set_scheduling_preset",
-          segment_id: segmentId,
-          preset: authoring.default_scheduling_preset,
+          operation: "place_ground_reference",
+          site_set_ref: entry.ref,
         })
-          .then(() => requestOutlineReveal(segmentId))
+          .then((result) => requestOutlineReveal(result.affected_id))
           .catch((cause) =>
             setLibraryError(cause instanceof Error ? cause.message : String(cause)),
           );
@@ -1245,25 +1250,25 @@ export function BuilderView({
           );
       }, label);
     } else if (entry.family === "sites") {
-      const siteId = entryId;
       ensureThenCreate(() => {
         clearReadOnlyWorldBeforeCreate();
         void (async () => {
-          const before = currentWorkspace();
-          const created = !before || before.ground.length === 0;
-          let createdSegmentId: string | null = null;
-          if (created) {
-            const result = await applyWorkspaceCommand({ operation: "add_ground" });
-            createdSegmentId = result.affected_id;
-          }
-          const { segmentId } = addGroundMember(
-            refGroundMember(entry.ref, siteId, entry.display_name, entry.summary ?? null),
-            () => {
-              throw new Error("backend ground command did not create a receiving segment");
-            },
+          const currentGround = currentWorkspace()?.ground ?? [];
+          const ground = currentGround[currentGround.length - 1] ?? null;
+          const result = await applyWorkspaceCommand({
+            operation: "add_ground_site_reference",
+            ...(ground ? { segment_id: ground.segment_id } : {}),
+            site_ref: entry.ref,
+          });
+          const receivingGround = workspaceFromVisualDraft(result.draft).ground.find(
+            (candidate) =>
+              candidate.members.some((member) => member.member_id === result.affected_id),
           );
-          openEditor({ kind: "ground", id: segmentId });
-          if (created && createdSegmentId === segmentId) setFreshId(segmentId);
+          if (!receivingGround) {
+            throw new Error("backend site command returned no receiving ground segment");
+          }
+          openEditor({ kind: "ground", id: receivingGround.segment_id });
+          if (!ground) setFreshId(receivingGround.segment_id);
         })().catch((cause) =>
           setLibraryError(cause instanceof Error ? cause.message : String(cause)),
         );
@@ -1454,7 +1459,7 @@ export function BuilderView({
         if (!workspace) return null;
         const key = targetKey(target);
         const sessionPick: SessionBuffer = {
-          name: workspace.name,
+          session_name: workspace.session_name,
           start_time: workspace.start_time,
           step_seconds: workspace.step_seconds,
           compression: workspace.compression,
@@ -1464,7 +1469,7 @@ export function BuilderView({
         const buf = buffers[key];
         const view = buf ? { ...workspace, ...(buf.draft as SessionBuffer) } : workspace;
         return {
-          title: `Session · ${view.name}`,
+          title: `Session · ${view.session_name}`,
           content: (
             <SessionEditor
               workspace={view}
@@ -1544,6 +1549,14 @@ export function BuilderView({
                   operation: "add_or_increment_node_terminal",
                   segment_id: draft.segment_id,
                   terminal_ref: terminalRef,
+                  role,
+                })
+              }
+              onSetNodeTerminalRole={(mountId, role) =>
+                applySpaceEditorCommand({
+                  operation: "set_node_terminal_role",
+                  segment_id: draft.segment_id,
+                  mount_id: mountId,
                   role,
                 })
               }
@@ -1643,6 +1656,13 @@ export function BuilderView({
                 if (!updated) throw new Error("VS-API returned no updated ground segment");
                 patchBuffer(key, applied, () => updated);
               }}
+              onAddSiteReference={(ref) =>
+                applyGroundEditorCommand({
+                  operation: "add_ground_site_reference",
+                  segment_id: draft.segment_id,
+                  site_ref: ref,
+                })
+              }
               onSetStampNodeModel={(ref) =>
                 applyGroundEditorCommand({
                   operation: "set_ground_stamp_node_model",
@@ -1986,8 +2006,8 @@ export function BuilderView({
             <SaveSessionDialog
               // Remount per workspace identity: the buffered name follows
               // the session being saved, not a previous one.
-              key={workspace.name}
-              workspaceName={workspace.name}
+              key={workspace.session_name}
+              workspaceName={workspace.session_name}
               canSave={canSave}
               blockedReason={saveBlocker}
               saveState={saveState}
@@ -2146,7 +2166,7 @@ export function BuilderView({
                 setSelection(null);
                 closeAllWindows();
                 setSaveState({ kind: "idle" });
-                void createDraft({ session_name: freshSessionDraftName() }).then(
+                void createDraft({}).then(
                   (draft) => openWorkspace(workspaceFromVisualDraft(draft)),
                   (cause) =>
                     setRestoreError(cause instanceof Error ? cause.message : String(cause)),
@@ -2341,7 +2361,14 @@ export function BuilderView({
         )}
         {workspace && (
           <BuildGuide
-            workspace={workspace}
+            workspace={previewWorkspace() ?? workspace}
+            sessionNameIsPlaceholder={
+              visualDraft?.mode === "structured"
+                ? visualDraft.session_name_is_placeholder &&
+                  (previewWorkspace() ?? workspace).session_name ===
+                    (visualDraft.target_ref.split("/").pop() ?? "").replace(/\.ya?ml$/, "")
+                : false
+            }
             saved={saveState.kind === "saved" || saveState.kind === "deploying" || saveState.kind === "deploy-accepted" ? ("name" in saveState ? saveState.name : null) : null}
             deployed={false}
             resolvedSiteCount={world ? distinctGroundStationSites(world.nodes) : null}
@@ -2397,13 +2424,11 @@ export function BuilderView({
           <div className="builder-outline-group" data-testid="builder-drafts">
             <div className="builder-library-entry">
               <span className="builder-outline-kind">
-                Drafts · {workspace.name}
+                Drafts · {workspace.session_name}
               </span>
               <span className="builder-library-actions">
                 <span className="builder-outline-count">
-                  {workspace.step_seconds === 1 && workspace.compression === 1
-                    ? "real time"
-                    : `×${workspace.compression}`}
+                  {timeRateSummary(workspace.step_seconds, workspace.compression)}
                 </span>
                 <IconButton
                   icon="settings"
@@ -2431,11 +2456,12 @@ export function BuilderView({
                     icon="pencil"
                     size={12}
                     label="Customize a nested component through backend-managed forks"
+                    disabled={placed.source_ref === null}
                     onClick={() =>
                       openEditor({
                         kind: "customize-chain",
                         segmentId: placed.segment_id,
-                        rootRef: placed.ref,
+                        rootRef: placed.source_ref ?? "",
                       })
                     }
                   />
@@ -2467,7 +2493,9 @@ export function BuilderView({
                     {draft.display_name}
                   </span>
                   <span className="builder-outline-count">
-                    {draft.planes * draft.slots_per_plane} sat
+                    {draft.planes === null || draft.slots_per_plane === null
+                      ? "incomplete"
+                      : `${draft.planes * draft.slots_per_plane} sat`}
                   </span>
                 </button>
                 <span className="builder-library-actions">
@@ -2523,11 +2551,12 @@ export function BuilderView({
                     icon="pencil"
                     size={12}
                     label="Customize a nested component through backend-managed forks"
+                    disabled={placed.site_set_ref === null}
                     onClick={() =>
                       openEditor({
                         kind: "customize-chain",
                         segmentId: placed.segment_id,
-                        rootRef: placed.ref,
+                        rootRef: placed.site_set_ref ?? "",
                       })
                     }
                   />
@@ -2586,7 +2615,9 @@ export function BuilderView({
                   {rule.label || rule.rule_id}
                 </span>
                 <span className="builder-outline-count">
-                  {rule.a.role}
+                  {rule.a.role === null || rule.b.role === null
+                    ? "role incomplete"
+                    : rule.a.role}
                   {!rule.enabled && " · off"}
                 </span>
               </button>
@@ -2615,7 +2646,9 @@ export function BuilderView({
                   <Icon name="network" size={12} />
                   {domain.label}
                 </span>
-                <span className="builder-outline-count">{domain.protocol}</span>
+                <span className="builder-outline-count">
+                  {domain.protocol ?? "protocol incomplete"}
+                </span>
               </button>
             ))}
             {workspace.boundaries.map((boundary) => {
@@ -2637,7 +2670,9 @@ export function BuilderView({
                     <Icon name="columns-2" size={12} />
                     over {overRule?.label || boundary.over_rule_id}
                   </span>
-                  <span className="builder-outline-count">{boundary.adapter}</span>
+                  <span className="builder-outline-count">
+                    {boundary.adapter ?? "adapter incomplete"}
+                  </span>
                 </button>
               );
             })}
@@ -2922,7 +2957,7 @@ export function BuilderView({
                   setSelection(null);
                   closeAllWindows();
                   setSaveState({ kind: "idle" });
-                  void createDraft({ session_name: freshSessionDraftName() }).then(
+                  void createDraft({}).then(
                     (draft) => openWorkspace(workspaceFromVisualDraft(draft)),
                     (cause) =>
                       setRestoreError(cause instanceof Error ? cause.message : String(cause)),

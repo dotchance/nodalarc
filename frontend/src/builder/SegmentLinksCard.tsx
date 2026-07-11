@@ -47,7 +47,9 @@ export function SegmentLinksCard({
             >
               <span>{rule.label || rule.rule_id}</span>
               <span className="builder-outline-count">
-                {rule.a.role} · {mesh ? "mesh" : label(otherId)}
+                {rule.a.role === null || rule.b.role === null
+                  ? "role incomplete"
+                  : rule.a.role} · {mesh ? "mesh" : label(otherId)}
               </span>
             </button>
           );

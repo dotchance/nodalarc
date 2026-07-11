@@ -382,9 +382,10 @@ def save_builder_session(
         )
 
     try:
+        reachable_proposals = compile_result.draft.state.catalog_documents
         proposed = tuple(
             canonicalize_persisted_configuration(proposal.ref, proposal.document)
-            for proposal in request.draft.state.catalog_documents
+            for proposal in reachable_proposals
         )
         transaction = context.repository.begin(
             context.scope,
@@ -402,7 +403,7 @@ def save_builder_session(
         ) from error
     try:
         for document, proposal in sorted(
-            zip(proposed, request.draft.state.catalog_documents, strict=True),
+            zip(proposed, reachable_proposals, strict=True),
             key=lambda item: str(item[0].ref),
         ):
             transaction.write_bytes(

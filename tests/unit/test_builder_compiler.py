@@ -250,6 +250,54 @@ def test_literal_user_reference_prose_is_not_a_dependency(
     assert all(issue.stage != "reference" for issue in result.issues)
 
 
+def test_invalid_stale_orphan_proposal_is_excluded_without_blocking(
+    snapshot: CatalogReadSnapshot,
+) -> None:
+    orphan_ref = "user:nodes/orphan-spacecraft.yaml"
+    result = _compile(
+        _request(
+            _load(SIMPLE_SESSION),
+            catalog_documents=[
+                {
+                    "ref": orphan_ref,
+                    "document": {"node": {"id": "orphan-spacecraft", "unknown": True}},
+                    "expected_revision": f"sha256:{'0' * 64}",
+                }
+            ],
+        ),
+        snapshot,
+    )
+
+    assert result.save_verdict.allowed is True
+    assert result.draft.state.catalog_documents == ()
+    warning = next(
+        issue
+        for issue in result.issues
+        if issue.code == "builder.draft.unreferenced_catalog_documents"
+    )
+    assert warning.severity == "warning"
+    assert warning.blocks == ()
+    assert warning.related_refs == (orphan_ref,)
+    assert all(issue.stage not in {"structural", "staleness"} for issue in result.issues)
+
+
+def test_invalid_stale_reachable_proposal_blocks_with_typed_issues(
+    snapshot: CatalogReadSnapshot,
+) -> None:
+    session, proposals = _deep_user_draft()
+    proposals[1]["document"] = {"node": {"id": "user-spacecraft", "unknown": True}}
+    proposals[1]["expected_revision"] = f"sha256:{'0' * 64}"
+
+    result = _compile(_request(session, catalog_documents=proposals), snapshot)
+
+    assert result.save_verdict.allowed is False
+    assert any(issue.stage == "structural" for issue in result.issues)
+    assert any(issue.stage == "staleness" for issue in result.issues)
+    assert not any(
+        issue.code == "builder.draft.unreferenced_catalog_documents" for issue in result.issues
+    )
+
+
 def test_incomplete_inner_session_returns_structural_issues(
     snapshot: CatalogReadSnapshot,
 ) -> None:
@@ -333,27 +381,9 @@ def test_canonical_compile_is_idempotent_and_does_not_write(
 def test_stale_proposed_revision_blocks_save_without_hiding_compile_facts(
     snapshot: CatalogReadSnapshot,
 ) -> None:
-    body = {
-        "body": {
-            "id": "missing-revision-body",
-            "display_name": "Missing revision body",
-            "gravitational_parameter_km3_s2": 398600.4418,
-            "mean_radius_km": 6371.0088,
-            "equatorial_radius_km": 6378.137,
-            "polar_radius_km": 6356.752,
-            "reference": "urn:nodalarc:test",
-        }
-    }
-    request = _request(
-        _load(SIMPLE_SESSION),
-        catalog_documents=[
-            {
-                "ref": "user:bodies/missing-revision-body.yaml",
-                "document": body,
-                "expected_revision": f"sha256:{'0' * 64}",
-            }
-        ],
-    )
+    session, proposals = _deep_user_draft()
+    proposals[0]["expected_revision"] = f"sha256:{'0' * 64}"
+    request = _request(session, catalog_documents=proposals)
 
     result = _compile(request, snapshot)
 

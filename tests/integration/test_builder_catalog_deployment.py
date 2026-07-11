@@ -614,7 +614,7 @@ def test_builder_user_component_closure_reaches_verified_runtime(
             },
         )
         assert exported["files"][0] == {
-            "logical_path": "session.yaml",
+            "logical_path": f"catalog/user/{session_ref.removeprefix('user:')}",
             "yaml_text": saved_yaml,
         }
         exported_entries = {

@@ -13,7 +13,7 @@
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Button } from "../ui/Button";
-import type { BuilderCatalogEntry } from "./builderTypes";
+import type { CatalogDocumentSummary } from "./generated/builderApi";
 
 /** The name field every editor leads with. autoFocus fires on mount when
  *  the editor was opened by a create gesture. */
@@ -348,15 +348,14 @@ export function BodySelect({
   value: string;
   onChange: (value: string) => void;
   bodies: {
-    entries: BuilderCatalogEntry[];
+    entries: CatalogDocumentSummary[];
     error: string | null;
     refresh: () => Promise<void>;
   };
   stack?: boolean;
 }) {
   const loaded: SelectOption[] = bodies.entries
-    .filter((entry) => !entry.error)
-    .map((entry) => ({ value: entry.ref, label: entry.display_name ?? entry.id ?? entry.ref }));
+    .map((entry) => ({ value: entry.ref, label: entry.display_name }));
   const options: SelectOption[] = loaded.some((option) => option.value === value)
     ? loaded
     : [{ value, label: value }, ...loaded];

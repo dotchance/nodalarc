@@ -10,7 +10,7 @@
  *  every minted site owns its configuration afterwards). Scheduling is an
  *  intent preset writing the full explicit block, with sparse per-site
  *  overrides ("= template", only exceptions stored). Findings warn, never
- *  block; the resolver's verdict arrives verbatim via resolve-check.
+ *  block; the resolver's verdict arrives verbatim via backend compile.
  */
 
 import { useState } from "react";
@@ -29,35 +29,31 @@ import {
 import { SegmentLinksCard } from "./SegmentLinksCard";
 import { SiteEditor } from "./SiteEditor";
 import {
-  LIBRARY_SAVE_COPY,
   readCatalogObject,
   useBuilderCatalog,
-  useLibrarySave,
 } from "./useBuilderWorld";
 import {
-  SCHEDULING_PRESETS,
-  presetForSchedulingBlock,
-  draftGroundMember,
-  draftSiteFromDocument,
   groundWarnings,
   mintSiteMembers,
   nextMintIndex,
   parseSiteLines,
   refGroundMember,
-  siteSetWrapperFromDraft,
   stampLanPrefix,
   stampLoopbackAddress,
   type DraftGroundSet,
-  type DraftGroundSite,
-  type SchedulingPresetKey,
   type Workspace,
 } from "./workspace";
+import type {
+  BuilderVisualAuthoringFacts,
+  BuilderVisualSchedulingPreset,
+  BuilderVisualSchedulingPresetMetadata,
+} from "./generated/builderApi";
 
 interface GroundEditorProps {
   draft: DraftGroundSet;
   /** Functional-only: the caller reads the LATEST draft, never a stale
-   *  render-closure, so a concurrent edit during an in-flight fetch (forkMember,
-   *  setStampModel, the member save-flip) survives. */
+   *  render-closure, so a concurrent edit during an in-flight model fetch
+   *  survives. */
   onUpdate: (update: (prev: DraftGroundSet) => DraftGroundSet) => void;
   onRemove: () => void;
   /** focus the name when a create gesture opened this editor. */
@@ -66,9 +62,14 @@ interface GroundEditorProps {
   workspace: Workspace;
   onOpenRule: (ruleId: string) => void;
   onConnect: (targetSegmentId: string) => void;
-  /** a save of the whole set to the library, reported up so the bound
-   *  window can converge the set back to this ref on a user close. */
-  onSaved?: (ref: string, savedObject: Record<string, unknown>) => void;
+  schedulingPresets: readonly BuilderVisualSchedulingPresetMetadata[];
+  selectedSchedulingPreset: BuilderVisualSchedulingPreset | null;
+  memberSchedulingPreset: (memberId: string) => BuilderVisualSchedulingPreset | null;
+  onSchedulingPreset: (
+    preset: BuilderVisualSchedulingPreset | null,
+    memberId?: string,
+  ) => Promise<void>;
+  authoring: BuilderVisualAuthoringFacts;
 }
 
 /** Parse a comma/space separated tag or prefix list; empty tokens drop. */
@@ -87,7 +88,11 @@ export function GroundEditor({
   workspace,
   onOpenRule,
   onConnect,
-  onSaved,
+  schedulingPresets,
+  selectedSchedulingPreset,
+  memberSchedulingPreset,
+  onSchedulingPreset,
+  authoring,
 }: GroundEditorProps) {
   const [openCard, setOpenCard] = useState<string | null>("sites");
   const toggle = (id: string) => setOpenCard((prev) => (prev === id ? null : id));
@@ -99,16 +104,16 @@ export function GroundEditor({
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [editingMember, setEditingMember] = useState<string | null>(null);
   const [editorError, setEditorError] = useState<string | null>(null);
-  const librarySave = useLibrarySave("site-sets");
   const warnings = groundWarnings(draft);
 
-  const updateMember = (memberId: string, patch: Partial<DraftGroundSite>) => {
-    onUpdate((prev) => ({
-      ...prev,
-      members: prev.members.map((member) =>
-        member.member_id === memberId ? { ...member, ...patch } : member,
-      ),
-    }));
+  const setSchedulingPreset = (
+    preset: BuilderVisualSchedulingPreset | null,
+    memberId?: string,
+  ) => {
+    setEditorError(null);
+    void onSchedulingPreset(preset, memberId).catch((cause) =>
+      setEditorError(cause instanceof Error ? cause.message : String(cause)),
+    );
   };
 
   const addPastedSites = () => {
@@ -133,50 +138,38 @@ export function GroundEditor({
     }));
   };
 
-  // Customize a referenced site: fork the document into an authored member.
-  const forkMember = async (member: DraftGroundSite) => {
-    setEditorError(null);
-    try {
-      if (!member.ref) return;
-      const { document } = await readCatalogObject(member.ref);
-      const forked = draftGroundMember(draftSiteFromDocument(document));
-      onUpdate((prev) => ({
-        ...prev,
-        // Carry the override from the LATEST matched member, not the click-time
-        // closure — a concurrent per-site scheduling edit during the fork fetch
-        // must survive.
-        members: prev.members.map((m) =>
-          m.member_id === member.member_id
-            ? { ...forked, scheduling_override: m.scheduling_override }
-            : m,
-        ),
-      }));
-      setEditingMember(forked.member_id);
-    } catch (e) {
-      setEditorError(e instanceof Error ? e.message : String(e));
-    }
-  };
-
   // Switching the stamp model re-seeds its mounts — affects future mints only.
   const setStampModel = async (ref: string) => {
     setEditorError(null);
     try {
       const { document } = await readCatalogObject(ref);
       const node = (document as { node?: Record<string, unknown> }).node;
-      const mounts = ((node?.terminals as Record<string, unknown>[] | undefined) ?? []).map(
-        (mount) => [String(mount.id), Number(mount.count ?? 1)] as const,
-      );
+      const terminalMounts =
+        (node?.terminals as Record<string, unknown>[] | undefined) ?? [];
+      const mounts = terminalMounts.map((mount) => {
+        if (typeof mount.count !== "number") {
+          throw new Error(`node terminal mount ${String(mount.id)} has no installed count`);
+        }
+        return [String(mount.id), mount.count] as const;
+      });
+      const boresights = terminalMounts
+        .filter((mount) => mount.role === "access")
+        .map(
+          (mount) =>
+            [String(mount.id), { ...authoring.ground_access_boresight }] as const,
+        );
       onUpdate((prev) => ({
         ...prev,
-        stamp: { ...prev.stamp, node_ref: ref, installed: Object.fromEntries(mounts) },
+        stamp: {
+          ...prev.stamp,
+          node_ref: ref,
+          installed: Object.fromEntries(mounts),
+          boresights: Object.fromEntries(boresights),
+        },
       }));
     } catch (e) {
       setEditorError(e instanceof Error ? e.message : String(e));
     }
-  };
-
-  const saveToLibrary = () => {
-    void librarySave.save(siteSetWrapperFromDraft(draft), onSaved);
   };
 
   const stampLabel =
@@ -211,26 +204,23 @@ export function GroundEditor({
                       value={
                         member.scheduling_override === null
                           ? ""
-                          : (presetForSchedulingBlock(member.scheduling_override) ?? "__custom__")
+                          : (memberSchedulingPreset(member.member_id) ?? "__custom__")
                       }
-                      onChange={(value) =>
-                        updateMember(member.member_id, {
-                          scheduling_override:
-                            value === ""
-                              ? null
-                              : value === "__custom__"
-                                ? member.scheduling_override
-                                : SCHEDULING_PRESETS[value as SchedulingPresetKey].block,
-                        })
-                      }
+                      onChange={(value) => {
+                        if (value === "__custom__") return;
+                        setSchedulingPreset(
+                          value === "" ? null : (value as BuilderVisualSchedulingPreset),
+                          member.member_id,
+                        );
+                      }}
                       options={[
                         { value: "", label: "= template" },
                         ...(member.scheduling_override !== null &&
-                        presetForSchedulingBlock(member.scheduling_override) === null
+                        memberSchedulingPreset(member.member_id) === null
                           ? [{ value: "__custom__", label: "Imported block (custom)" }]
                           : []),
-                        ...Object.entries(SCHEDULING_PRESETS).map(([key, preset]) => ({
-                          value: key,
+                        ...schedulingPresets.map((preset) => ({
+                          value: preset.id,
                           label: preset.label,
                         })),
                       ]}
@@ -245,7 +235,9 @@ export function GroundEditor({
                       }
                       onClick={() => {
                         if (member.kind === "ref") {
-                          void forkMember(member);
+                          setEditorError(
+                            `Customize ${member.ref} from the Library, then update this session to use the new user: reference.`,
+                          );
                         } else {
                           setEditingMember((prev) =>
                             prev === member.member_id ? null : member.member_id,
@@ -282,6 +274,7 @@ export function GroundEditor({
                   editingMember === member.member_id && (
                     <div className="builder-site-embedded">
                       <SiteEditor
+                        authoring={authoring}
                         site={member.site}
                         onUpdate={(update) =>
                           // Thread SiteEditor's functional update through the
@@ -298,15 +291,6 @@ export function GroundEditor({
                             }),
                           }))
                         }
-                        onSaved={(ref) => {
-                          // member-level: this window is bound to the segment,
-                          // not the member, so the authored member converges
-                          // immediately — flip it to a ref in place, keeping its
-                          // member_id and any scheduling_override (updateMember
-                          // patches, never mints).
-                          updateMember(member.member_id, { kind: "ref", ref, site: null });
-                          setEditingMember(null);
-                        }}
                         onClose={() => setEditingMember(null)}
                       />
                     </div>
@@ -334,7 +318,6 @@ export function GroundEditor({
             {libraryOpen && (
               <div className="builder-library-list">
                 {siteCatalog.entries
-                  .filter((entry) => !entry.error && entry.id)
                   .map((entry) => (
                     <button
                       key={entry.ref}
@@ -343,13 +326,13 @@ export function GroundEditor({
                       onClick={() =>
                         addFromLibrary(
                           entry.ref,
-                          entry.id as string,
-                          entry.display_name ?? (entry.id as string),
-                          entry.summary,
+                          (entry.ref.split("/").pop() ?? entry.ref).replace(/\.ya?ml$/, ""),
+                          entry.display_name,
+                          entry.summary ?? null,
                         )
                       }
                     >
-                      <span>{entry.display_name ?? entry.id}</span>
+                      <span>{entry.display_name}</span>
                       {entry.summary && (
                         <span className="builder-outline-count">{entry.summary}</span>
                       )}
@@ -387,30 +370,55 @@ export function GroundEditor({
               value={draft.stamp.node_ref}
               onChange={(ref) => void setStampModel(ref)}
               options={nodes.entries
-                .filter((entry) => !entry.error)
                 .map((entry) => ({
                   value: entry.ref,
-                  label: entry.display_name ?? entry.id ?? entry.ref,
+                  label: entry.display_name,
                 }))}
             />
             {Object.entries(draft.stamp.installed).map(([mount, count]) => (
-              <NumberField
-                key={mount}
-                label={mount}
-                value={count}
-                min={1}
-                integer
-                suffix="installed"
-                onChange={(parsed) =>
-                  onUpdate((prev) => ({
-                    ...prev,
-                    stamp: {
-                      ...prev.stamp,
-                      installed: { ...prev.stamp.installed, [mount]: parsed },
+              <div key={mount}>
+                <NumberField
+                  label={mount}
+                  value={count}
+                  min={1}
+                  integer
+                  suffix="installed"
+                  onChange={(parsed) =>
+                    onUpdate((prev) => ({
+                      ...prev,
+                      stamp: {
+                        ...prev.stamp,
+                        installed: { ...prev.stamp.installed, [mount]: parsed },
+                      },
+                    }))
+                  }
+                />
+                <SelectField
+                  label={`${mount} ground boresight`}
+                  value={draft.stamp.boresights[mount]?.mode ?? ""}
+                  onChange={(mode) =>
+                    onUpdate((prev) => {
+                      const boresights = { ...prev.stamp.boresights };
+                      if (mode === authoring.ground_access_boresight.mode) {
+                        boresights[mount] = { ...authoring.ground_access_boresight };
+                      } else {
+                        delete boresights[mount];
+                      }
+                      return {
+                        ...prev,
+                        stamp: { ...prev.stamp, boresights },
+                      };
+                    })
+                  }
+                  options={[
+                    { value: "", label: "none" },
+                    {
+                      value: authoring.ground_access_boresight.mode,
+                      label: authoring.ground_access_boresight.mode.replace(/_/g, " "),
                     },
-                  }))
-                }
-              />
+                  ]}
+                />
+              </div>
             ))}
             <Field
               label="lan base"
@@ -445,28 +453,25 @@ export function GroundEditor({
         open={openCard === "scheduling"}
         onToggle={() => toggle("scheduling")}
         summary={
-          presetForSchedulingBlock(draft.scheduling)
-            ? SCHEDULING_PRESETS[presetForSchedulingBlock(draft.scheduling)!].label.split(" — ")[0]
-            : "Custom (imported)"
+          schedulingPresets
+            .find((preset) => preset.id === selectedSchedulingPreset)
+            ?.label.split(" — ")[0] ?? "Custom (imported)"
         }
       >
             <SelectField
               stack
               label="intent preset — writes the full explicit block (see YAML)"
               ariaLabel="Scheduling preset"
-              value={presetForSchedulingBlock(draft.scheduling) ?? ""}
-              onChange={(value) =>
-                onUpdate((prev) => ({
-                  ...prev,
-                  scheduling: SCHEDULING_PRESETS[value as SchedulingPresetKey].block,
-                }))
-              }
+              value={selectedSchedulingPreset ?? ""}
+              onChange={(value) => {
+                if (value) setSchedulingPreset(value as BuilderVisualSchedulingPreset);
+              }}
               options={[
-                ...(presetForSchedulingBlock(draft.scheduling) === null
+                ...(selectedSchedulingPreset === null
                   ? [{ value: "", label: "Imported block (custom)" }]
                   : []),
-                ...Object.entries(SCHEDULING_PRESETS).map(([key, preset]) => ({
-                  value: key,
+                ...schedulingPresets.map((preset) => ({
+                  value: preset.id,
                   label: preset.label,
                 })),
               ]}
@@ -517,24 +522,14 @@ export function GroundEditor({
       {editorError && <div className="builder-warning">{editorError}</div>}
 
       <div className="builder-preset-row">
-        <Button
-          onClick={saveToLibrary}
-          disabled={draft.members.length === 0 || librarySave.saving}
-        >
-          {librarySave.label("Save to library")}
-        </Button>
         <Button variant="danger" onClick={onRemove}>
           Discard segment
         </Button>
       </div>
-      {librarySave.state.kind === "saved" && (
-        <div className="builder-library-note" data-testid="library-note">
-          {LIBRARY_SAVE_COPY.savedNote(librarySave.state.ref)}
-        </div>
-      )}
-      {librarySave.state.kind === "failed" && (
-        <div className="builder-warning">{librarySave.state.message}</div>
-      )}
+      <div className="builder-site-derived">
+        Session save persists authored sites through the backend proposal. Reusable site and
+        site-set components are created from the Library.
+      </div>
     </div>
   );
 }

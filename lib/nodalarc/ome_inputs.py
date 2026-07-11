@@ -15,7 +15,6 @@ from dataclasses import dataclass
 from typing import Literal
 
 from nodalarc.body_frames import BodyFrame, body_runtime_support_for
-from nodalarc.constellation_loader import SatelliteNode
 from nodalarc.ephemeris_runtime import (
     SkyfieldBspEphemeris,
     body_states_at,
@@ -24,22 +23,25 @@ from nodalarc.ephemeris_runtime import (
 )
 from nodalarc.link_metadata import LinkRuleMetadata
 from nodalarc.models.addressing import NeighborAssignment
-from nodalarc.models.constellation import GroundTerminal, IslTerminal
 from nodalarc.models.ephemeris import EphemerisConfig
 from nodalarc.models.events import EphemerisBodyFrame
 from nodalarc.models.ground_policy import HandoverPolicySpec, SelectionPolicySpec
-from nodalarc.models.ground_station import (
-    GroundStationConfig,
-    GroundStationFile,
-    GroundTerminalDef,
-)
 from nodalarc.models.resolved_session import (
+    ResolvedAccessTerminalSelection,
     ResolvedBodyFacts,
     ResolvedNode,
     ResolvedSession,
     ResolvedTerminalBlock,
 )
 from nodalarc.models.session import GroundSchedulingConfig
+from nodalarc.ome_runtime import (
+    GroundStation,
+    GroundStationFile,
+    GroundTerminal,
+    IslTerminal,
+    SatelliteGroundTerminal,
+    SatelliteNode,
+)
 from nodalarc.orbital import OrbitalElements
 from nodalarc.propagator import orbital_period_for_body
 
@@ -143,8 +145,11 @@ def build_ome_inputs_from_resolved(resolved: ResolvedSession) -> ResolvedOmeInpu
     """Build OME runtime inputs from the resolved catalog session."""
 
     body_frames = _body_frames_from_resolved(resolved)
+    selected_access = resolved.selected_access_terminals_by_node()
     satellites = [
-        _satellite_from_resolved(node) for node in resolved.nodes if node.kind == "satellite"
+        _satellite_from_resolved(node, selected_access.get(node.node_id, ()))
+        for node in resolved.nodes
+        if node.kind == "satellite"
     ]
     if not satellites:
         raise ValueError("OME requires at least one satellite node")
@@ -154,7 +159,9 @@ def build_ome_inputs_from_resolved(resolved: ResolvedSession) -> ResolvedOmeInpu
     all_ground_nodes = [node for node in resolved.nodes if node.kind == "ground_station"]
     ground_nodes = [node for node in all_ground_nodes if node.node_id in access_ground_ids]
     gs_file = _ground_file_from_resolved(
-        ground_nodes, resolved.effective_ground_min_elevation_by_gs()
+        ground_nodes,
+        resolved.effective_ground_min_elevation_by_gs(),
+        selected_access,
     )
     addressing = ResolvedAddressingView(resolved)
     neighbors = _neighbors_from_resolved(resolved)
@@ -181,7 +188,11 @@ def build_ome_inputs_from_resolved(resolved: ResolvedSession) -> ResolvedOmeInpu
         ground_candidate_satellites_by_gs=ground_candidate_satellites_by_gs,
         node_metadata=_node_metadata(resolved),
         ground_scheduling=ground_scheduling,
-        ground_link_model="geometry_only",
+        ground_link_model=(
+            resolved.simulation.ground_link_model
+            if resolved.simulation is not None
+            else "terminal_physics"
+        ),
         active_bodies=active_bodies,
         body_frames=body_frames,
         body_ephemeris=_body_ephemeris_from_resolved(
@@ -329,15 +340,23 @@ def _runtime_ephemeris_config(resolved: ResolvedSession) -> EphemerisConfig:
     return runtime_config_from_resolved(resolved.ephemeris)
 
 
-def _satellite_from_resolved(node: ResolvedNode) -> SatelliteNode:
+def _satellite_from_resolved(
+    node: ResolvedNode,
+    access_selections: tuple[ResolvedAccessTerminalSelection, ...],
+) -> SatelliteNode:
     if node.orbit is None:
         raise ValueError(f"satellite {node.node_id!r} is missing resolved orbit facts")
     if node.central_body is None:
         raise ValueError(f"satellite {node.node_id!r} is missing resolved central_body")
+    if node.orbit.propagator == "sgp4_tle" and (
+        node.orbit.tle_line_1 is None
+        or node.orbit.tle_line_2 is None
+        or node.orbit.norad_id is None
+    ):
+        raise ValueError(f"satellite {node.node_id!r} is missing resolved TLE facts")
     isl_blocks = [
         block for block in node.terminal_inventory if block.endpoint_role in {"isl", "crosslink"}
     ]
-    access_blocks = [block for block in node.terminal_inventory if block.endpoint_role == "access"]
     return SatelliteNode(
         plane=node.plane or 0,
         slot=node.slot or 0,
@@ -356,40 +375,39 @@ def _satellite_from_resolved(node: ResolvedNode) -> SatelliteNode:
             argument_of_perigee_rad=math.radians(node.orbit.argument_of_perigee_deg),
         ),
         isl_terminal_count=sum(block.count for block in isl_blocks),
-        ground_terminal_count=sum(block.count for block in access_blocks),
+        ground_terminal_count=sum(len(item.interface_indices) for item in access_selections),
         isl_terminals=tuple(_isl_terminal(block) for block in isl_blocks),
-        ground_terminals=tuple(_satellite_ground_terminal(block) for block in access_blocks),
+        ground_terminals=tuple(_satellite_ground_terminal(item) for item in access_selections),
+        tle_line_1=node.orbit.tle_line_1,
+        tle_line_2=node.orbit.tle_line_2,
+        norad_id=node.orbit.norad_id,
         propagator_id=_ome_propagator_id(node.orbit.propagator),
     )
 
 
 def _ground_file_from_resolved(
-    nodes: list[ResolvedNode], min_elevation_by_gs: dict[str, float]
+    nodes: list[ResolvedNode],
+    min_elevation_by_gs: dict[str, float],
+    selected_access: dict[str, tuple[ResolvedAccessTerminalSelection, ...]],
 ) -> GroundStationFile | None:
-    stations: list[GroundStationConfig] = []
+    stations: list[GroundStation] = []
     for node in nodes:
         if node.surface_position is None:
             raise ValueError(f"ground node {node.node_id!r} is missing surface position")
         if node.ground_scheduling is None:
             raise ValueError(f"ground node {node.node_id!r} is missing ground scheduling")
-        access_blocks = [
-            block for block in node.terminal_inventory if block.endpoint_role == "access"
-        ]
-        if not access_blocks:
+        access_selections = selected_access.get(node.node_id, ())
+        if not access_selections:
             continue
         scheduling = _ground_scheduling_config(node.ground_scheduling)
         stations.append(
-            GroundStationConfig(
+            GroundStation(
                 name=node.node_id,
-                source_name=node.local_node_id,
-                site_id=node.segment_id,
-                site_node_id=node.local_node_id,
-                display_name=node.local_node_id,
                 lat_deg=node.surface_position.lat_deg,
                 lon_deg=node.surface_position.lon_deg,
                 alt_m=node.surface_position.alt_m,
                 min_elevation_deg=min_elevation_by_gs[node.node_id],
-                terminals=tuple(_ground_terminal(block) for block in access_blocks),
+                terminals=tuple(_ground_terminal(item) for item in access_selections),
                 tenant_id=node.tenant_id,
                 reference_body=_node_reference_body(node),
                 service_priority=node.service_priority or 10,
@@ -398,7 +416,6 @@ def _ground_file_from_resolved(
                 handover_mode=scheduling.handover_mode,
                 mbb_overlap_ticks=scheduling.mbb_overlap_ticks,
                 mbb_reserve=scheduling.mbb_reserve,
-                tags=list(node.tags),
             )
         )
     if not stations:
@@ -412,11 +429,6 @@ def _single_ome_propagator(resolved: ResolvedSession) -> SessionPropagatorId:
         for node in resolved.nodes
         if node.kind == "satellite" and node.orbit is not None
     }
-    if "sgp4_tle" in propagators:
-        raise ValueError(
-            "OME catalog runtime does not yet materialize TLE records for sgp4_tle; "
-            "refusing to run instead of synthesizing placeholder orbital inputs"
-        )
     if len(propagators) > 1:
         return "mixed"
     return _ome_propagator_id(next(iter(propagators)))
@@ -433,11 +445,12 @@ def _neighbors_from_resolved(
         left = nodes_by_id[candidate.node_a]
         right = nodes_by_id[candidate.node_b]
         link_type = _isl_link_type(left, right)
+        interface_a, interface_b = candidate.fixed_interfaces
         assignments.append(
             (
                 candidate.node_a,
                 NeighborAssignment(
-                    interface=candidate.interface_a,
+                    interface=interface_a,
                     peer_node_id=candidate.node_b,
                     link_type=link_type,
                     priority=candidate.priority,
@@ -449,7 +462,7 @@ def _neighbors_from_resolved(
             (
                 candidate.node_b,
                 NeighborAssignment(
-                    interface=candidate.interface_b,
+                    interface=interface_b,
                     peer_node_id=candidate.node_a,
                     link_type=link_type,
                     priority=candidate.priority,
@@ -522,23 +535,51 @@ def _isl_terminal(block: ResolvedTerminalBlock) -> IslTerminal:
     )
 
 
-def _satellite_ground_terminal(block: ResolvedTerminalBlock) -> GroundTerminal:
-    return GroundTerminal(
+def _satellite_ground_terminal(
+    selection: ResolvedAccessTerminalSelection,
+) -> SatelliteGroundTerminal:
+    block = selection.block
+    return SatelliteGroundTerminal(
         type=block.medium,
         count=block.count,
+        interface_indices=selection.interface_indices,
         bandwidth_mbps=_required(block.bandwidth_mbps, block, "bandwidth_mbps"),
-        max_range_km=block.max_range_km,
+        max_range_km=_required(block.max_range_km, block, "max_range_km"),
+        field_of_regard_deg=_required(
+            block.field_of_regard_deg,
+            block,
+            "field_of_regard_deg",
+        ),
+        max_tracking_rate_deg_s=_required(
+            block.tracking_rate_deg_s,
+            block,
+            "tracking_rate_deg_s",
+        ),
+        boresight=block.boresight,
     )
 
 
-def _ground_terminal(block: ResolvedTerminalBlock) -> GroundTerminalDef:
-    return GroundTerminalDef(
+def _ground_terminal(selection: ResolvedAccessTerminalSelection) -> GroundTerminal:
+    block = selection.block
+    return GroundTerminal(
         id=block.terminal_id,
         type=block.medium,
         count=block.count,
+        interface_indices=selection.interface_indices,
         bandwidth_mbps=_required(block.bandwidth_mbps, block, "bandwidth_mbps"),
         tracking_capacity=block.tracking_capacity or 1,
-        max_range_km=block.max_range_km,
+        max_range_km=_required(block.max_range_km, block, "max_range_km"),
+        field_of_regard_deg=_required(
+            block.field_of_regard_deg,
+            block,
+            "field_of_regard_deg",
+        ),
+        max_tracking_rate_deg_s=_required(
+            block.tracking_rate_deg_s,
+            block,
+            "tracking_rate_deg_s",
+        ),
+        boresight=block.boresight,
     )
 
 

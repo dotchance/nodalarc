@@ -15,7 +15,11 @@ import type { BuilderWorld, BuilderWorldNode } from "../../builderTypes";
 
 type TerminalBlock = BuilderWorldNode["terminal_inventory"][number];
 
-function block(role: string, medium: "rf" | "optical", elev: number | null): TerminalBlock {
+function block(
+  role: TerminalBlock["endpoint_role"],
+  medium: "rf" | "optical",
+  elev: number | null,
+): TerminalBlock {
   return {
     terminal_id: `${role}_0`,
     owner_node_id: "n",
@@ -30,6 +34,7 @@ function block(role: string, medium: "rf" | "optical", elev: number | null): Ter
     field_of_regard_deg: null,
     tracking_rate_deg_s: null,
     bandwidth_mbps: null,
+    boresight: null,
     source_ref: "x",
   };
 }
@@ -50,6 +55,7 @@ function node(
     slot: null,
     tags: [],
     surface_position: null,
+    epoch_position: null,
     forwarding: null,
     terminal_inventory: blocks,
     interfaces: null,

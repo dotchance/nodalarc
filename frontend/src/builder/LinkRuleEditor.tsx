@@ -21,17 +21,15 @@ import {
   NumberField,
   SelectField,
 } from "./editorKit";
-import { canForm, groundMaskSeedNote, type SegmentCapability } from "./linkPhysics";
+import { canForm, type SegmentCapability } from "./linkPhysics";
 import type { BuilderRuleAllocation } from "./builderTypes";
+import type { BuilderVisualAuthoringFacts } from "./generated/builderApi";
 import {
   linkWarnings,
   placedSegments,
   type DraftLinkEndpoint,
   type DraftLinkRule,
   type Workspace,
-  LINK_MEDIA,
-  MOUNT_ROLES,
-  ROLE_DESCRIPTIONS,
   type LinkMedium,
   type MountRole,
 } from "./workspace";
@@ -50,9 +48,9 @@ interface LinkRuleEditorProps {
   autoFocusName?: boolean;
   /** what each segment's faceplates can form (resolver truth). */
   capabilities: Map<string, SegmentCapability>;
-  /** re-point an endpoint — physics re-derive loudly; returns the
-   *  notice sentence to show. */
-  onRepoint: (side: "a" | "b", newSegmentId: string) => string;
+  /** Re-point an endpoint through VS-API and surface its derivation notice. */
+  onRepoint: (side: "a" | "b", newSegmentId: string) => Promise<string>;
+  authoring: BuilderVisualAuthoringFacts;
 }
 
 function EndpointCard({
@@ -63,6 +61,7 @@ function EndpointCard({
   capabilities,
   onUpdate,
   onSegmentChange,
+  authoring,
 }: {
   title: string;
   endpoint: DraftLinkEndpoint;
@@ -71,6 +70,7 @@ function EndpointCard({
   capabilities: Map<string, SegmentCapability>;
   onUpdate: (patch: Partial<DraftLinkEndpoint>) => void;
   onSegmentChange: (newSegmentId: string) => void;
+  authoring: BuilderVisualAuthoringFacts;
 }) {
   const placed = placedSegments(workspace);
   const selfCap = capabilities.get(endpoint.segment_id);
@@ -80,7 +80,10 @@ function EndpointCard({
   // world) means nothing is disabled.
   const known = capabilities.size > 0;
   const roleDisabled = (role: MountRole) =>
-    known && !LINK_MEDIA.some((medium) => canForm(selfCap, otherCap, role, medium));
+    known &&
+    !authoring.link_media.some((choice) =>
+      canForm(selfCap, otherCap, role, choice.id),
+    );
   const mediumDisabled = (medium: LinkMedium) =>
     known && !canForm(selfCap, otherCap, endpoint.role, medium);
   return (
@@ -121,13 +124,13 @@ function EndpointCard({
           ariaLabel={`${title} terminal role`}
           value={endpoint.role}
           onChange={(value) => onUpdate({ role: value as DraftLinkEndpoint["role"] })}
-          options={MOUNT_ROLES.map((role) => ({
-            value: role,
-            label: `${role} \u2014 ${ROLE_DESCRIPTIONS[role]}`,
-            disabled: roleDisabled(role),
-            title: roleDisabled(role)
-              ? `no ${role} terminals on both ends`
-              : ROLE_DESCRIPTIONS[role],
+          options={authoring.mount_roles.map((choice) => ({
+            value: choice.id,
+            label: `${choice.label} \u2014 ${choice.description}`,
+            disabled: roleDisabled(choice.id),
+            title: roleDisabled(choice.id)
+              ? `no ${choice.label} terminals on both ends`
+              : choice.description,
           }))}
         />
         <SelectField
@@ -135,12 +138,12 @@ function EndpointCard({
           ariaLabel={`${title} medium`}
           value={endpoint.medium}
           onChange={(value) => onUpdate({ medium: value as DraftLinkEndpoint["medium"] })}
-          options={LINK_MEDIA.map((medium) => ({
-            value: medium,
-            label: medium,
-            disabled: mediumDisabled(medium),
-            title: mediumDisabled(medium)
-              ? `no ${endpoint.role} ${medium} terminals on both ends`
+          options={authoring.link_media.map((choice) => ({
+            value: choice.id,
+            label: choice.label,
+            disabled: mediumDisabled(choice.id),
+            title: mediumDisabled(choice.id)
+              ? `no ${endpoint.role} ${choice.label} terminals on both ends`
               : undefined,
           }))}
         />
@@ -151,21 +154,6 @@ function EndpointCard({
           value={endpoint.min_elevation_deg}
           onChange={(min_elevation_deg) => onUpdate({ min_elevation_deg })}
         />
-        {(() => {
-          // when the ground mask is the seeded default (no terminal
-          // declares a floor), say so — a value to own, never a derived one.
-          const kind = placed.find((s) => s.segment_id === endpoint.segment_id)?.kind ?? "space";
-          const seedNote = groundMaskSeedNote(selfCap, {
-            role: endpoint.role,
-            kind,
-            min_elevation_deg: endpoint.min_elevation_deg,
-          });
-          return seedNote ? (
-            <div className="builder-site-derived" data-testid="mask-seed-note">
-              {seedNote}
-            </div>
-          ) : null;
-        })()}
     </EditorCard>
   );
 }
@@ -180,11 +168,19 @@ export function LinkRuleEditor({
   capabilities,
   onRepoint,
   allocation,
+  authoring,
 }: LinkRuleEditorProps) {
   const warnings = linkWarnings(workspace);
+  const topologyRequiresN = authoring.topology_modes.find(
+    (choice) => choice.id === rule.topology_mode,
+  )?.requires_n;
   const [rederiveNotice, setRederiveNotice] = useState<string | null>(null);
   const repoint = (side: "a" | "b") => (newSegmentId: string) => {
-    setRederiveNotice(onRepoint(side, newSegmentId));
+    setRederiveNotice("re-deriving through VS-API…");
+    void onRepoint(side, newSegmentId).then(
+      setRederiveNotice,
+      (cause) => setRederiveNotice(cause instanceof Error ? cause.message : String(cause)),
+    );
   };
   return (
     <div className="builder-inspector-stack" data-testid="builder-link-editor">
@@ -202,6 +198,7 @@ export function LinkRuleEditor({
         capabilities={capabilities}
         onUpdate={(patch) => onUpdateEndpoint("a", patch)}
         onSegmentChange={repoint("a")}
+        authoring={authoring}
       />
       <EndpointCard
         title="Endpoint B"
@@ -211,6 +208,7 @@ export function LinkRuleEditor({
         capabilities={capabilities}
         onUpdate={(patch) => onUpdateEndpoint("b", patch)}
         onSegmentChange={repoint("b")}
+        authoring={authoring}
       />
       {rederiveNotice && (
         <div className="builder-library-note" data-testid="rederive-note">
@@ -219,20 +217,17 @@ export function LinkRuleEditor({
       )}
 
       <div className="builder-preset-row" role="radiogroup" aria-label="Topology">
-        <Button
-          active={rule.topology_mode === "visible_candidates"}
-          onClick={() => onUpdate({ topology_mode: "visible_candidates" })}
-        >
-          all visible pairs
-        </Button>
-        <Button
-          active={rule.topology_mode === "nearest_n"}
-          onClick={() => onUpdate({ topology_mode: "nearest_n" })}
-        >
-          nearest N
-        </Button>
+        {authoring.topology_modes.map((choice) => (
+          <Button
+            key={choice.id}
+            active={rule.topology_mode === choice.id}
+            onClick={() => onUpdate({ topology_mode: choice.id })}
+          >
+            {choice.label}
+          </Button>
+        ))}
       </div>
-      {rule.topology_mode === "nearest_n" && (
+      {topologyRequiresN && (
         <NumberField
           label="N"
           value={rule.topology_n}

@@ -1,9 +1,0 @@
-session:
-  name: bad-session
-constellation: configs/constellations/starlink-early-44.yaml
-ground_stations: configs/ground-stations/sets/global.yaml
-routing:
-  protocol: isis
-  extensions: [sr]
-  area_assignment:
-    strategy: stripe

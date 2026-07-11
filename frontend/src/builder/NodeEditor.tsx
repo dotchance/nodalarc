@@ -18,15 +18,10 @@
 import { useState } from "react";
 import { Button } from "../ui/Button";
 import { EditorCard, EditorName, NumberField, SelectField } from "./editorKit";
-import { TerminalEditor } from "./TerminalEditor";
-import { importUserObjectYaml, useBuilderCatalog } from "./useBuilderWorld";
+import type { BuilderVisualAuthoringFacts } from "./generated/builderApi";
+import { useBuilderCatalog } from "./useBuilderWorld";
 import {
-  defaultDraftTerminal,
-  FORWARDING_MODES,
-  MOUNT_ROLES,
-  ROLE_DESCRIPTIONS,
   type DraftNode,
-  type DraftTerminal,
   type DraftTerminalMount,
   type Forwarding,
 } from "./workspace";
@@ -52,16 +47,22 @@ interface NodeEditorProps {
   onChange: (update: (prev: DraftNode) => DraftNode) => void;
   /** focus the name when a create gesture opened this editor. */
   autoFocusName?: boolean;
+  authoring: BuilderVisualAuthoringFacts;
 }
 
-export function NodeEditor({ draft, onChange, autoFocusName = false }: NodeEditorProps) {
+export function NodeEditor({
+  draft,
+  onChange,
+  autoFocusName = false,
+  authoring,
+}: NodeEditorProps) {
   const terminals = useBuilderCatalog("terminals");
   const [openMount, setOpenMount] = useState<string | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
-  const [pickerRole, setPickerRole] = useState<DraftTerminalMount["role"]>("access");
+  const [pickerRole, setPickerRole] = useState<DraftTerminalMount["role"]>(
+    authoring.default_mount_role,
+  );
   const [pickerSource, setPickerSource] = useState<"all" | "user">("all");
-  const [terminalDraft, setTerminalDraft] = useState<DraftTerminal | null>(null);
-  const [importError, setImportError] = useState<string | null>(null);
 
   const addOrIncrement = (terminalRef: string) => {
     onChange((prev) => {
@@ -85,6 +86,10 @@ export function NodeEditor({ draft, onChange, autoFocusName = false }: NodeEdito
             role: pickerRole,
             terminal_ref: terminalRef,
             count: 1,
+            boresight:
+              pickerRole === "access"
+                ? { ...authoring.space_access_boresight }
+                : null,
           },
         ],
       };
@@ -105,25 +110,30 @@ export function NodeEditor({ draft, onChange, autoFocusName = false }: NodeEdito
       <EditorName
         label="node name"
         value={draft.display_name}
-        onChange={(value) => onChange((prev) => ({ ...prev, display_name: value, id: value }))}
+        onChange={(value) =>
+          onChange((prev) => ({
+            ...prev,
+            display_name: value,
+            id: prev.id,
+          }))
+        }
         autoFocus={autoFocusName}
       />
       <SelectField
         label="forwarding"
         ariaLabel="Forwarding class"
-        value={draft.forwarding}
-        onChange={(value) => onChange((prev) => ({ ...prev, forwarding: value as Forwarding }))}
-        options={(Object.keys(FORWARDING_MODES) as Forwarding[]).map((value) => ({
-          value,
-          label: value + (FORWARDING_MODES[value].gated ? " — runtime-gated" : ""),
-        }))}
+        value={draft.forwarding ?? ""}
+        onChange={(value) =>
+          onChange((prev) => ({ ...prev, forwarding: value ? value as Forwarding : null }))
+        }
+        options={[
+          { value: "", label: "select forwarding", disabled: true },
+          ...authoring.forwarding_classes.map((choice) => ({
+            value: choice.id,
+            label: choice.label,
+          })),
+        ]}
       />
-      {FORWARDING_MODES[draft.forwarding]?.gated && (
-        <div className="builder-warning">
-          {draft.forwarding} is structurally valid grammar; today's runtime rejects it
-          with a typed gate at resolve
-        </div>
-      )}
 
       <div className="builder-ports" data-testid="port-list">
         {draft.terminals.map((mount) => {
@@ -149,11 +159,17 @@ export function NodeEditor({ draft, onChange, autoFocusName = false }: NodeEdito
                   ariaLabel="Mount role"
                   value={mount.role}
                   onChange={(value) =>
-                    updateMount(mount.mount_id, { role: value as DraftTerminalMount["role"] })
+                    updateMount(mount.mount_id, {
+                      role: value as DraftTerminalMount["role"],
+                      boresight:
+                        value === "access"
+                          ? { ...authoring.space_access_boresight }
+                          : null,
+                    })
                   }
-                  options={MOUNT_ROLES.map((role) => ({
-                    value: role,
-                    label: `${role} \u2014 ${ROLE_DESCRIPTIONS[role]}`,
+                  options={authoring.mount_roles.map((choice) => ({
+                    value: choice.id,
+                    label: `${choice.label} \u2014 ${choice.description}`,
                   }))}
                 />
                 <SelectField
@@ -162,13 +178,11 @@ export function NodeEditor({ draft, onChange, autoFocusName = false }: NodeEdito
                   ariaLabel="Mount terminal"
                   value={mount.terminal_ref}
                   onChange={(terminal_ref) => updateMount(mount.mount_id, { terminal_ref })}
-                  options={terminals.entries
-                    .filter((e) => !e.error)
-                    .map((e) => ({
-                      value: e.ref,
+                  options={terminals.entries.map((entry) => ({
+                      value: entry.ref,
                       label:
-                        (e.ref.startsWith("user:") ? "\u2605 " : "") +
-                        (e.display_name ?? e.id ?? e.ref),
+                        (entry.ref.startsWith("user:") ? "\u2605 " : "") +
+                        entry.display_name,
                     }))}
                 />
                 {entry?.summary ? (
@@ -181,6 +195,27 @@ export function NodeEditor({ draft, onChange, autoFocusName = false }: NodeEdito
                   integer
                   onChange={(count) => updateMount(mount.mount_id, { count })}
                 />
+                {mount.role === "access" && (
+                  <SelectField
+                    label="spacecraft boresight"
+                    value={mount.boresight?.mode ?? ""}
+                    onChange={(mode) =>
+                      updateMount(mount.mount_id, {
+                        boresight:
+                          mode === authoring.space_access_boresight.mode
+                            ? { ...authoring.space_access_boresight }
+                            : null,
+                      })
+                    }
+                    options={[
+                      { value: "", label: "select pointing" },
+                      {
+                        value: authoring.space_access_boresight.mode,
+                        label: authoring.space_access_boresight.mode,
+                      },
+                    ]}
+                  />
+                )}
                 <Button
                   variant="danger"
                   onClick={() => {
@@ -237,14 +272,14 @@ export function NodeEditor({ draft, onChange, autoFocusName = false }: NodeEdito
       {pickerOpen && (
         <div className="builder-terminal-picker" data-testid="terminal-picker">
           <div className="builder-preset-row" role="radiogroup" aria-label="Port role">
-            {MOUNT_ROLES.map((role) => (
+            {authoring.mount_roles.map((choice) => (
               <Button
-                key={role}
-                active={pickerRole === role}
-                title={ROLE_DESCRIPTIONS[role]}
-                onClick={() => setPickerRole(role)}
+                key={choice.id}
+                active={pickerRole === choice.id}
+                title={choice.description}
+                onClick={() => setPickerRole(choice.id)}
               >
-                {role}
+                {choice.label}
               </Button>
             ))}
             <span role="radiogroup" aria-label="Terminal source">
@@ -258,7 +293,6 @@ export function NodeEditor({ draft, onChange, autoFocusName = false }: NodeEdito
           </div>
           <div className="builder-terminal-picker-list">
             {terminals.entries
-              .filter((entry) => !entry.error)
               .filter(
                 (entry) => pickerSource === "all" || entry.ref.startsWith("user:"),
               )
@@ -266,13 +300,13 @@ export function NodeEditor({ draft, onChange, autoFocusName = false }: NodeEdito
                 <button
                   key={entry.ref}
                   className="builder-outline-row builder-terminal-option"
-                  title={entry.notes ?? entry.ref}
+                  title={entry.ref}
                   onClick={() => addOrIncrement(entry.ref)}
                 >
                   <span className="builder-terminal-option-name">
                     <span>
                       {entry.ref.startsWith("user:") ? "\u2605 " : ""}
-                      {entry.display_name ?? entry.id}
+                      {entry.display_name}
                     </span>
                     <span className="builder-outline-count">add</span>
                   </span>
@@ -281,53 +315,10 @@ export function NodeEditor({ draft, onChange, autoFocusName = false }: NodeEdito
                   )}
                 </button>
               ))}
-            <button
-              className="builder-outline-row"
-              data-testid="new-terminal"
-              onClick={() => setTerminalDraft(defaultDraftTerminal())}
-            >
-              <span>+ new terminal…</span>
-            </button>
-            <label className="builder-outline-row" data-testid="import-terminal">
-              <span>import file…</span>
-              <input
-                type="file"
-                accept=".yaml,.yml"
-                style={{ display: "none" }}
-                onChange={(e) => {
-                  const file = e.target.files?.[0];
-                  if (!file) return;
-                  void file.text().then(async (text) => {
-                    try {
-                      const entry = await importUserObjectYaml(text);
-                      await terminals.refresh();
-                      addOrIncrement(entry.ref);
-                      setImportError(null);
-                    } catch (err) {
-                      setImportError(err instanceof Error ? err.message : String(err));
-                    }
-                  });
-                  e.target.value = "";
-                }}
-              />
-            </label>
-            {importError && <div className="builder-warning">{importError}</div>}
+            <div className="builder-site-derived">
+              Create and customize reusable terminals from the Library.
+            </div>
           </div>
-          {terminalDraft && (
-            <TerminalEditor
-              draft={terminalDraft}
-              onChange={(update) => setTerminalDraft((prev) => (prev ? update(prev) : prev))}
-              catalog={terminals.entries}
-              onSaved={(ref) => {
-                setTerminalDraft(null);
-                void terminals.refresh();
-                // Complete the intent: the freshly authored terminal mounts
-                // immediately with the picker's current role.
-                addOrIncrement(ref);
-              }}
-              onCancel={() => setTerminalDraft(null)}
-            />
-          )}
           {terminals.error && <div className="builder-warning">{terminals.error}</div>}
         </div>
       )}

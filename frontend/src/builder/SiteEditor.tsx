@@ -5,26 +5,20 @@
  *
  *  Authors the grammar's Site object: identity, surface location, LAN,
  *  tags, and 1..N installed nodes (model + installed mounts + lo0/terr0).
- *  Used standalone from the Library (Sites → + new / customize, saves to
- *  user:sites/) and embedded in the ground editor for a segment's authored
- *  members. Findings warn, never block; the resolver stays the validator.
+ *  Used for transient session-authored members. Standalone catalog editing is
+ *  backend-owned by CatalogDraftEditorWindow so this surface never serializes
+ *  or persists a catalog document.
  */
 
 import { useState } from "react";
 import { Button, IconButton } from "../ui/Button";
 import { BodySelect, EditorCard, EditorName, Field, NumberField, SelectField } from "./editorKit";
+import type { BuilderVisualAuthoringFacts } from "./generated/builderApi";
 import {
-  LIBRARY_SAVE_COPY,
   readCatalogObject,
   useBuilderCatalog,
-  useLibrarySave,
 } from "./useBuilderWorld";
-import {
-  identifier,
-  siteObjectFromDraft,
-  type DraftSiteNode,
-  type DraftSiteObject,
-} from "./workspace";
+import { type DraftSiteNode, type DraftSiteObject } from "./workspace";
 
 interface SiteEditorProps {
   site: DraftSiteObject;
@@ -32,13 +26,11 @@ interface SiteEditorProps {
    *  render-closure, so a concurrent edit during an in-flight fetch survives.
    *  Reseed/replace is explicit — `onUpdate(() => replacement)`. */
   onUpdate: (update: (prev: DraftSiteObject) => DraftSiteObject) => void;
-  /** Standalone (Library) mode shows save-to-library + close. */
+  /** Embedded editor close action. */
   onClose?: () => void;
   /** focus the name when a create gesture opened this editor. */
   autoFocusName?: boolean;
-  /** reported when the site is saved to the library. Embedded in a ground
-   *  set, the host converges the authored member to this ref immediately. */
-  onSaved?: (ref: string, savedObject: Record<string, unknown>) => void;
+  authoring: BuilderVisualAuthoringFacts;
 }
 
 export function SiteEditor({
@@ -46,12 +38,11 @@ export function SiteEditor({
   onUpdate,
   onClose,
   autoFocusName = false,
-  onSaved,
+  authoring,
 }: SiteEditorProps) {
   const nodes = useBuilderCatalog("nodes");
   const bodies = useBuilderCatalog("bodies");
   const [editorError, setEditorError] = useState<string | null>(null);
-  const librarySave = useLibrarySave("sites");
 
   // Match on the stable node_id, never an array index: setNodeModel awaits a
   // catalog fetch, and a concurrent add/remove during that gap would shift
@@ -79,10 +70,25 @@ export function SiteEditor({
     try {
       const { document } = await readCatalogObject(ref);
       const node = (document as { node?: Record<string, unknown> }).node;
-      const mounts = ((node?.terminals as Record<string, unknown>[] | undefined) ?? []).map(
-        (mount) => [String(mount.id), Number(mount.count ?? 1)] as const,
-      );
-      updateNode(node_id, { model_ref: ref, installed: Object.fromEntries(mounts) });
+      const terminalMounts =
+        (node?.terminals as Record<string, unknown>[] | undefined) ?? [];
+      const mounts = terminalMounts.map((mount) => {
+        if (typeof mount.count !== "number") {
+          throw new Error(`node terminal mount ${String(mount.id)} has no installed count`);
+        }
+        return [String(mount.id), mount.count] as const;
+      });
+      const boresights = terminalMounts
+        .filter((mount) => mount.role === "access")
+        .map(
+          (mount) =>
+            [String(mount.id), { ...authoring.ground_access_boresight }] as const,
+        );
+      updateNode(node_id, {
+        model_ref: ref,
+        installed: Object.fromEntries(mounts),
+        boresights: Object.fromEntries(boresights),
+      });
     } catch (e) {
       setEditorError(e instanceof Error ? e.message : String(e));
     }
@@ -105,6 +111,7 @@ export function SiteEditor({
             node_id: `gw${k}`,
             model_ref: first?.model_ref ?? "",
             installed: first ? { ...first.installed } : {},
+            boresights: first ? { ...first.boresights } : {},
             lo0_ipv4: "",
             terr0_ipv4: "",
           },
@@ -112,11 +119,6 @@ export function SiteEditor({
       };
     });
   };
-
-  // A standalone (Library) site save has no post-save consequence and passes no
-  // onSaved. Embedded in a ground set the host wires onSaved to converge the
-  // authored member to the saved ref.
-  const saveToLibrary = () => void librarySave.save({ site: siteObjectFromDraft(site) }, onSaved);
 
   return (
     <div className="builder-inspector-stack" data-testid="builder-site-editor">
@@ -126,7 +128,6 @@ export function SiteEditor({
           onUpdate((prev) => ({
             ...prev,
             display_name,
-            site_id: identifier(display_name) || prev.site_id,
           }))
         }
         autoFocus={autoFocusName}
@@ -204,26 +205,48 @@ export function SiteEditor({
               value={node.model_ref}
               onChange={(ref) => void setNodeModel(node.node_id, ref)}
               options={nodes.entries
-                .filter((entry) => !entry.error)
                 .map((entry) => ({
                   value: entry.ref,
-                  label: entry.display_name ?? entry.id ?? entry.ref,
+                  label: entry.display_name,
                 }))}
             />
             {Object.entries(node.installed).map(([mount, count]) => (
-              <NumberField
-                key={mount}
-                label={mount}
-                value={count}
-                min={1}
-                integer
-                suffix="installed"
-                onChange={(parsed) =>
-                  updateNode(node.node_id, (n) => ({
-                    installed: { ...n.installed, [mount]: parsed },
-                  }))
-                }
-              />
+              <div key={mount}>
+                <NumberField
+                  label={mount}
+                  value={count}
+                  min={1}
+                  integer
+                  suffix="installed"
+                  onChange={(parsed) =>
+                    updateNode(node.node_id, (n) => ({
+                      installed: { ...n.installed, [mount]: parsed },
+                    }))
+                  }
+                />
+                <SelectField
+                  label={`${mount} ground boresight`}
+                  value={node.boresights[mount]?.mode ?? ""}
+                  onChange={(mode) =>
+                    updateNode(node.node_id, (current) => {
+                      const boresights = { ...current.boresights };
+                      if (mode === authoring.ground_access_boresight.mode) {
+                        boresights[mount] = { ...authoring.ground_access_boresight };
+                      } else {
+                        delete boresights[mount];
+                      }
+                      return { boresights };
+                    })
+                  }
+                  options={[
+                    { value: "", label: "none" },
+                    {
+                      value: authoring.ground_access_boresight.mode,
+                      label: authoring.ground_access_boresight.mode.replace(/_/g, " "),
+                    },
+                  ]}
+                />
+              </div>
             ))}
             <Field
               label="lo0"
@@ -243,20 +266,7 @@ export function SiteEditor({
 
       {editorError && <div className="builder-warning">{editorError}</div>}
 
-      <div className="builder-preset-row">
-        <Button onClick={saveToLibrary} disabled={librarySave.saving}>
-          {librarySave.label("Save to library")}
-        </Button>
-        {onClose && <Button onClick={onClose}>Close</Button>}
-      </div>
-      {librarySave.state.kind === "saved" && (
-        <div className="builder-library-note" data-testid="library-note">
-          {LIBRARY_SAVE_COPY.savedNote(librarySave.state.ref)}
-        </div>
-      )}
-      {librarySave.state.kind === "failed" && (
-        <div className="builder-warning">{librarySave.state.message}</div>
-      )}
+      {onClose && <Button onClick={onClose}>Close</Button>}
     </div>
   );
 }

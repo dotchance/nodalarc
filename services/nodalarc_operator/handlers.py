@@ -20,19 +20,22 @@ import base64
 import gzip
 import json
 import logging
-from functools import lru_cache
+import os
 
 import kopf
 import kubernetes
-from nodalarc.models.resolved_session import SourceContext
 from nodalarc.nats_channels import sanitize_session_id
-from nodalarc.resolve_session import resolve_session_with_assets
+from nodalarc.runtime_config import RuntimeDeploymentContext
 from nodalarc.session_identity import derive_session_run_id
 
+from nodalarc_operator.runtime_session import OperatorSessionConfig, resolve_operator_session
 from nodalarc_operator.session_deployer import (
     RetryableSessionDependency,
+    build_runtime_deployment_context,
+    build_runtime_session_config_data,
     check_all_pods_running,
     check_old_pods_terminated,
+    check_platform_runtime_ready,
     check_pods_ready,
     check_wiring_complete,
     compute_expected_pod_count,
@@ -125,29 +128,84 @@ def _build_owner_ref(name: str, meta: dict) -> dict:
     }
 
 
-@lru_cache(maxsize=4)
-def _compute_expected_node_ids_cached(_spec_hash: str, session_yaml: str) -> frozenset[str]:
-    """Compute expected pod names from resolver output. Memoized by spec hash.
+def _compute_expected_node_ids(active_session: OperatorSessionConfig) -> frozenset[str]:
+    """Return expected pod names from the reconciliation's verified resolution."""
+    return frozenset(node_id.lower() for node_id in active_session.resolution.resolved.node_ids())
 
-    Cached to avoid re-resolving the same session on every 10-second reconciler
-    tick during scale-down. Resolution errors are fatal to reconciliation; an
-    empty expected set would silently delete or ignore runtime state.
-    """
-    import yaml as _yaml
 
-    resolution = resolve_session_with_assets(
-        _yaml.safe_load(session_yaml),
-        source_context=SourceContext(origin="operator.expected_node_ids"),
+def _resolve_active_session(
+    spec: dict,
+    namespace: str,
+    session_run_id: str,
+) -> OperatorSessionConfig:
+    from nodalarc_operator.session_deployer import _get_v1
+
+    return resolve_operator_session(
+        spec,
+        core_v1=_get_v1(),
+        namespace=namespace,
+        source_origin="operator.reconcile",
+        run_id=session_run_id,
     )
-    return frozenset(node_id.lower() for node_id in resolution.resolved.node_ids())
 
 
-def _compute_expected_node_ids(spec: dict) -> frozenset[str]:
-    """Compute expected node_ids with memoization keyed on spec hash."""
-    session_yaml = spec.get("sessionYaml", "")
-    if not session_yaml:
-        return frozenset()
-    return _compute_expected_node_ids_cached(compute_platform_hash(spec), session_yaml)
+def _runtime_proof_status_fields(
+    active_session: OperatorSessionConfig,
+    deployment_context: RuntimeDeploymentContext,
+) -> dict[str, str]:
+    proof = active_session.proof
+    return {
+        "documentDigest": proof.document_digest,
+        "closureDigest": proof.closure_digest,
+        "resolvedSemanticDigest": proof.resolved_semantic_digest,
+        "runtimeRelease": deployment_context.release,
+        "runtimeBuild": deployment_context.build,
+    }
+
+
+def _runtime_deployment_context(
+    active_session: OperatorSessionConfig,
+    meta: dict,
+    session_run_id: str,
+) -> RuntimeDeploymentContext:
+    return build_runtime_deployment_context(
+        active_session.proof,
+        cr_uid=str(meta.get("uid") or ""),
+        cr_generation=int(meta.get("generation", 0) or 0),
+        session_run_id=session_run_id,
+        release=os.environ.get("NODALARC_RELEASE", ""),
+        build=os.environ.get("NODAL_BUILD", ""),
+    )
+
+
+def _runtime_session_config_matches(
+    namespace: str,
+    active_session: OperatorSessionConfig,
+    deployment_context: RuntimeDeploymentContext,
+) -> bool:
+    """Return true only for the exact mounted inputs of this CR generation."""
+    from nodalarc_operator.session_deployer import _get_v1
+
+    expected = build_runtime_session_config_data(
+        active_session.resolution.resolved,
+        active_session.root_yaml,
+        active_session.catalog_upload,
+        deployment_context,
+    )
+    try:
+        config_map = _get_v1().read_namespaced_config_map("nodalarc-session", namespace)
+    except kubernetes.client.rest.ApiException as exc:
+        if exc.status == 404:
+            return False
+        raise
+    if dict(getattr(config_map, "data", None) or {}) != expected:
+        return False
+    metadata = getattr(config_map, "metadata", None)
+    owner_uids = {
+        str(getattr(reference, "uid", "") or "")
+        for reference in (getattr(metadata, "owner_references", None) or [])
+    }
+    return deployment_context.cr_uid in owner_uids
 
 
 def _delete_obsolete_pods(expected_ids: set[str], namespace: str) -> int:
@@ -173,34 +231,15 @@ def _delete_obsolete_pods(expected_ids: set[str], namespace: str) -> int:
     return deleted
 
 
-def _parse_session_yaml(spec: dict) -> dict | None:
-    """Parse the sessionYaml from the CRD spec once. Returns parsed dict or None."""
-    import yaml
-
-    session_yaml = spec.get("sessionYaml", "")
-    if not session_yaml:
-        return None
-    try:
-        return yaml.safe_load(session_yaml)
-    except Exception as exc:
-        log.error("Failed to parse sessionYaml: %s", exc)
-        return None
-
-
 def _session_name_from_spec(spec: dict) -> str:
-    import yaml as _yaml
+    from nodalarc.configuration_yaml import load_configuration_yaml
+    from nodalarc.models.segment_session import SegmentSessionConfig
 
     session_yaml = spec.get("sessionYaml", "")
     if not session_yaml:
         raise ValueError("spec.sessionYaml is required")
-    raw = _yaml.safe_load(session_yaml) or {}
-    session_meta = raw.get("session") or {}
-    session_name = str(session_meta.get("name") or "")
-    if not session_name:
-        raise ValueError("session.name is required")
-    if session_meta.get("run_id"):
-        raise ValueError("session.run_id is operator-managed and must not be set in session YAML")
-    return session_name
+    document = SegmentSessionConfig.model_validate(load_configuration_yaml(session_yaml))
+    return document.session.name
 
 
 def _runtime_identity(spec: dict, meta: dict) -> tuple[str, str]:
@@ -242,18 +281,11 @@ def _teardown_session_id(spec: dict | None, meta: dict | None, status: dict | No
         return None
 
 
-def _extract_protocol(parsed: dict | None) -> str:
-    """Extract routing protocol from parsed session YAML."""
-    if parsed is None:
-        return "isis"
-    return parsed.get("routing", {}).get("protocol", "isis") or "isis"
-
-
 def _wiring_manifest_matches_spec(
-    spec: dict,
     namespace: str,
     expected_count: int,
     session_run_id: str,
+    desired_platform_hash: str,
 ) -> bool:
     """Return True only when the live wiring manifest matches desired session identity."""
     from nodalarc_operator.session_deployer import _get_v1
@@ -268,7 +300,6 @@ def _wiring_manifest_matches_spec(
     data = cm.data or {}
 
     desired_session_id = sanitize_session_id(session_run_id)
-    desired_hash = compute_platform_hash(spec)
     if data.get("session_id") != desired_session_id:
         log.info(
             "Reconcile: wiring manifest session mismatch (%r != %r), rewriting",
@@ -276,13 +307,13 @@ def _wiring_manifest_matches_spec(
             desired_session_id,
         )
         return False
-    if data.get("platform_hash") != desired_hash:
+    if data.get("platform_hash") != desired_platform_hash:
         log.info(
             "Reconcile: wiring manifest platform hash mismatch for session %s "
             "(stored=%.12s desired=%.12s), rewriting",
             desired_session_id,
             data.get("platform_hash") or "",
-            desired_hash,
+            desired_platform_hash,
         )
         return False
     if data.get("node_count") != str(expected_count):
@@ -337,7 +368,14 @@ def _wiring_manifest_matches_spec(
     return True
 
 
-async def _reconcile_session(spec, name, namespace, meta, status):
+async def _reconcile_session(
+    spec,
+    name,
+    namespace,
+    meta,
+    status,
+    active_session: OperatorSessionConfig | None = None,
+):
     """Converge cluster state toward desired session state.
 
     True desired-state reconciler: computes expected pod count from the CRD
@@ -356,7 +394,6 @@ async def _reconcile_session(spec, name, namespace, meta, status):
     phase = status.get("phase", "")
     owner_ref = _build_owner_ref(name, meta)
     spec_dict = dict(spec)
-    parsed_yaml = await loop.run_in_executor(None, _parse_session_yaml, spec_dict)
     try:
         session_name, session_run_id = await loop.run_in_executor(
             None, _runtime_identity, spec_dict, meta
@@ -381,12 +418,64 @@ async def _reconcile_session(spec, name, namespace, meta, status):
         )
         return
 
+    try:
+        if active_session is None:
+            active_session = await loop.run_in_executor(
+                None,
+                _resolve_active_session,
+                spec_dict,
+                namespace,
+                session_run_id,
+            )
+        elif active_session.proof.run_id != session_run_id:
+            raise ValueError("verified Operator session has the wrong runtime identity")
+        platform_hash = await asyncio.to_thread(
+            compute_platform_hash,
+            spec_dict,
+            active_session=active_session,
+            namespace=namespace,
+        )
+        deployment_context = _runtime_deployment_context(
+            active_session,
+            meta,
+            session_run_id,
+        )
+        runtime_hash = compute_runtime_hash(
+            platform_hash,
+            session_run_id,
+            active_session.proof,
+            deployment_context,
+        )
+        proof_fields = _runtime_proof_status_fields(active_session, deployment_context)
+        status_fields = {**identity_fields, **proof_fields}
+    except Exception as exc:
+        error_msg = str(exc)
+        log.error("Reconcile: invalid session config: %s", error_msg, exc_info=True)
+        _update_status(
+            name,
+            namespace,
+            _with_observed_generation(
+                meta,
+                {
+                    "phase": "Error",
+                    "message": f"Invalid session configuration: {error_msg[:500]}",
+                    **identity_fields,
+                },
+            ),
+        )
+        return
+
     # Compute desired state from spec — this is what makes it a REAL reconciler.
     # No K8s calls, no template rendering — just parse YAML and count nodes.
     # If the session config is invalid, compute_expected_pod_count raises.
     # Set CR phase to Error so VS-API can relay the message to the browser.
     try:
-        expected_count = await loop.run_in_executor(None, compute_expected_pod_count, spec_dict)
+        expected_count = await asyncio.to_thread(
+            compute_expected_pod_count,
+            spec_dict,
+            active_session=active_session,
+            namespace=namespace,
+        )
     except Exception as exc:
         error_msg = str(exc)
         log.error("Reconcile: invalid session config: %s", error_msg, exc_info=True)
@@ -398,13 +487,13 @@ async def _reconcile_session(spec, name, namespace, meta, status):
                 {
                     "phase": "Error",
                     "message": f"Invalid session configuration: {error_msg}",
-                    **identity_fields,
+                    **status_fields,
                 },
             ),
         )
         return
 
-    expected_ids = await loop.run_in_executor(None, _compute_expected_node_ids, spec_dict)
+    expected_ids = _compute_expected_node_ids(active_session)
     if len(expected_ids) != expected_count:
         message = (
             "Expected node identity set does not match expected pod count "
@@ -419,7 +508,7 @@ async def _reconcile_session(spec, name, namespace, meta, status):
                 {
                     "phase": "Error",
                     "message": message,
-                    **identity_fields,
+                    **status_fields,
                 },
             ),
         )
@@ -442,7 +531,7 @@ async def _reconcile_session(spec, name, namespace, meta, status):
                     "phase": "Creating",
                     "message": f"Pruning {deleted_obsolete} pod(s) from a previous session",
                     "podCount": expected_count,
-                    **identity_fields,
+                    **status_fields,
                 },
             ),
         )
@@ -486,7 +575,7 @@ async def _reconcile_session(spec, name, namespace, meta, status):
                     {
                         "phase": "Pending",
                         "message": f"Waiting for {stale_count} old session pods to terminate",
-                        **identity_fields,
+                        **status_fields,
                     },
                 ),
             )
@@ -522,7 +611,7 @@ async def _reconcile_session(spec, name, namespace, meta, status):
                     "phase": "Creating",
                     "message": f"Scaling down: {len(current_ids)} pods exist, {expected_count} expected",
                     "podCount": expected_count,
-                    **identity_fields,
+                    **status_fields,
                 },
             ),
         )
@@ -546,7 +635,7 @@ async def _reconcile_session(spec, name, namespace, meta, status):
                     "phase": "Creating",
                     "message": f"Deploying: {total}/{expected_count} pods exist",
                     "podCount": expected_count,
-                    **identity_fields,
+                    **status_fields,
                 },
             ),
         )
@@ -560,7 +649,7 @@ async def _reconcile_session(spec, name, namespace, meta, status):
                     {
                         "phase": "Creating",
                         "message": msg,
-                        **identity_fields,
+                        **status_fields,
                     },
                 ),
             )
@@ -575,6 +664,8 @@ async def _reconcile_session(spec, name, namespace, meta, status):
                 owner_ref,
                 _progress,
                 session_run_id,
+                active_session,
+                deployment_context,
             )
             await loop.run_in_executor(
                 None, ensure_session_pods, context, namespace, owner_ref, _progress
@@ -589,7 +680,7 @@ async def _reconcile_session(spec, name, namespace, meta, status):
                     {
                         "phase": "Pending",
                         "message": str(exc),
-                        **identity_fields,
+                        **status_fields,
                     },
                 ),
             )
@@ -604,7 +695,7 @@ async def _reconcile_session(spec, name, namespace, meta, status):
                     {
                         "phase": "Error",
                         "message": f"Reconcile deploy failed: {str(exc)[:500]}",
-                        **identity_fields,
+                        **status_fields,
                     },
                 ),
             )
@@ -619,7 +710,7 @@ async def _reconcile_session(spec, name, namespace, meta, status):
                     "phase": "Creating",
                     "podCount": expected_count,
                     "message": f"Pods created, waiting for Running ({expected_count} expected)",
-                    **identity_fields,
+                    **status_fields,
                 },
             ),
         )
@@ -645,7 +736,7 @@ async def _reconcile_session(spec, name, namespace, meta, status):
                     "readyPods": ready,
                     "podCount": expected_count,
                     "message": f"Pods: {ready} running, {expected_count - ready} starting",
-                    **identity_fields,
+                    **status_fields,
                 },
             ),
         )
@@ -665,10 +756,27 @@ async def _reconcile_session(spec, name, namespace, meta, status):
     # entire session. See plan: "wiring gates on Running, not Ready."
 
     # --- Condition 4: Wiring manifest written + wiring complete ---
-    manifest_current = await loop.run_in_executor(
-        None, _wiring_manifest_matches_spec, spec_dict, namespace, expected_count, session_run_id
+    runtime_config_current = await loop.run_in_executor(
+        None,
+        _runtime_session_config_matches,
+        namespace,
+        active_session,
+        deployment_context,
     )
-    if not manifest_current:
+    manifest_current = await loop.run_in_executor(
+        None,
+        _wiring_manifest_matches_spec,
+        namespace,
+        expected_count,
+        session_run_id,
+        platform_hash,
+    )
+    if not manifest_current or not runtime_config_current:
+        refresh_message = (
+            "Writing pod IP addresses and wiring manifest"
+            if not manifest_current
+            else "Refreshing mounted runtime deployment identity"
+        )
         _update_status(
             name,
             namespace,
@@ -678,8 +786,8 @@ async def _reconcile_session(spec, name, namespace, meta, status):
                     "phase": "Creating",
                     "readyPods": ready,
                     "podCount": expected_count,
-                    "message": "Writing pod IP addresses and wiring manifest",
-                    **identity_fields,
+                    "message": refresh_message,
+                    **status_fields,
                 },
             ),
         )
@@ -698,23 +806,30 @@ async def _reconcile_session(spec, name, namespace, meta, status):
                 owner_ref,
                 None,
                 session_run_id,
+                active_session,
+                deployment_context,
             )
-            await loop.run_in_executor(
-                None,
-                write_pod_ips_configmap,
-                namespace,
-                session_run_id,
-                owner_ref,
-                expected_ids,
-            )
-            await loop.run_in_executor(
-                None, write_wiring_manifest, spec_dict, namespace, owner_ref, session_run_id
-            )
+            if not manifest_current:
+                await loop.run_in_executor(
+                    None,
+                    write_pod_ips_configmap,
+                    namespace,
+                    session_run_id,
+                    owner_ref,
+                    expected_ids,
+                )
+                await loop.run_in_executor(
+                    None,
+                    write_wiring_manifest,
+                    spec_dict,
+                    namespace,
+                    owner_ref,
+                    session_run_id,
+                    active_session,
+                    platform_hash,
+                )
 
-            protocol = _extract_protocol(parsed_yaml)
-            await loop.run_in_executor(None, set_nodalpath_mode, namespace, protocol)
-            platform_hash = await loop.run_in_executor(None, compute_platform_hash, spec_dict)
-            runtime_hash = compute_runtime_hash(platform_hash, session_run_id)
+                await loop.run_in_executor(None, set_nodalpath_mode, namespace, "console")
             await loop.run_in_executor(None, restart_platform_pods, namespace, runtime_hash)
         except RetryableSessionDependency as exc:
             log.info("Reconcile: waiting on runtime dependency during refresh: %s", exc)
@@ -728,7 +843,7 @@ async def _reconcile_session(spec, name, namespace, meta, status):
                         "readyPods": ready,
                         "podCount": expected_count,
                         "message": str(exc),
-                        **identity_fields,
+                        **status_fields,
                     },
                 ),
             )
@@ -745,7 +860,7 @@ async def _reconcile_session(spec, name, namespace, meta, status):
                         "readyPods": ready,
                         "podCount": expected_count,
                         "message": f"Runtime refresh failed: {str(exc)[:500]}",
-                        **identity_fields,
+                        **status_fields,
                     },
                 ),
             )
@@ -762,12 +877,16 @@ async def _reconcile_session(spec, name, namespace, meta, status):
                     "podCount": expected_count,
                     "platformHash": platform_hash,
                     "runtimeHash": runtime_hash,
-                    "message": f"All {expected_count} pods running. Node Agent wiring data plane.",
-                    **identity_fields,
+                    "message": (
+                        f"All {expected_count} pods running. Node Agent wiring data plane."
+                        if not manifest_current
+                        else "Runtime configuration refreshed; waiting for verified services."
+                    ),
+                    **status_fields,
                 },
             ),
         )
-        log.info("Reconcile: wiring manifest written, advanced to Wiring")
+        log.info("Reconcile: runtime inputs refreshed, advanced to Wiring")
         return
 
     # Manifest exists — check wiring completion
@@ -791,7 +910,7 @@ async def _reconcile_session(spec, name, namespace, meta, status):
                     "podCount": expected_count,
                     "wiredPods": 0,
                     "message": f"Wiring status invalid: {e}",
-                    **identity_fields,
+                    **status_fields,
                 },
             ),
         )
@@ -815,11 +934,43 @@ async def _reconcile_session(spec, name, namespace, meta, status):
                     "podCount": expected_count,
                     "wiredPods": wired_count,
                     "message": display_msg,
-                    **identity_fields,
+                    **status_fields,
                 },
             ),
         )
         log.debug("Reconcile: wiring in progress (%d/%d)", wired_count, expected_count)
+        return
+
+    try:
+        platform_ready, platform_detail = await loop.run_in_executor(
+            None,
+            check_platform_runtime_ready,
+            namespace,
+            runtime_hash,
+            active_session.proof,
+            deployment_context,
+        )
+    except kubernetes.client.rest.ApiException as exc:
+        log.warning("Reconcile: platform readiness check error: %s", exc)
+        return
+    if not platform_ready:
+        _update_status(
+            name,
+            namespace,
+            _with_observed_generation(
+                meta,
+                {
+                    "phase": "Wiring",
+                    "readyPods": ready,
+                    "podCount": expected_count,
+                    "wiredPods": wired_count,
+                    "platformHash": platform_hash,
+                    "runtimeHash": runtime_hash,
+                    "message": platform_detail,
+                    **status_fields,
+                },
+            ),
+        )
         return
 
     # --- Condition 5: Ready ---
@@ -829,8 +980,6 @@ async def _reconcile_session(spec, name, namespace, meta, status):
             expected_count,
             wired_count,
         )
-    platform_hash = await loop.run_in_executor(None, compute_platform_hash, spec_dict)
-    runtime_hash = compute_runtime_hash(platform_hash, session_run_id)
     _update_status(
         name,
         namespace,
@@ -844,7 +993,7 @@ async def _reconcile_session(spec, name, namespace, meta, status):
                 "platformHash": platform_hash,
                 "runtimeHash": runtime_hash,
                 "message": f"Session ready: {expected_count} pods, {wired_count} wired.",
-                **identity_fields,
+                **status_fields,
             },
         ),
     )
@@ -872,14 +1021,12 @@ async def on_create(spec, name, namespace, meta, **_):
         )
         raise kopf.PermanentError(f"Invalid CR name: {name}")
 
-    initial_platform_hash = await asyncio.to_thread(compute_platform_hash, dict(spec))
     _update_status(
         name,
         namespace,
         {
             "phase": "Pending",
             "observedGeneration": meta.get("generation", 0),
-            "platformHash": initial_platform_hash,
         },
     )
 
@@ -902,35 +1049,6 @@ async def on_update(spec, name, namespace, meta, status, **_):
     if phase == "Error" and _status_observed_current_generation(meta, status):
         log.debug("on_update: session in Error state, skipping")
         return
-
-    new_hash = await asyncio.to_thread(compute_platform_hash, dict(spec))
-    old_hash = status.get("platformHash", "")
-
-    if old_hash and new_hash != old_hash:
-        log.info(
-            "Platform-impacting spec change detected (hash %s → %s), reconciling session resources",
-            old_hash[:8],
-            new_hash[:8],
-        )
-        _update_status(
-            name,
-            namespace,
-            _with_observed_generation(
-                meta,
-                {
-                    "phase": "Creating",
-                    "message": "Session config changed — reconciling session resources",
-                },
-            ),
-        )
-    elif not old_hash:
-        _update_status(
-            name,
-            namespace,
-            {
-                "platformHash": new_hash,
-            },
-        )
 
     await _reconcile_session(spec, name, namespace, meta, status)
 
@@ -973,18 +1091,85 @@ async def wiring_check(spec, name, namespace, meta, status, **_):
     if phase == "Ready":
         try:
             identity_fields = await asyncio.to_thread(_status_identity_fields, dict(spec), meta)
-            platform_hash = await asyncio.to_thread(compute_platform_hash, dict(spec))
-            runtime_hash = compute_runtime_hash(platform_hash, identity_fields["sessionRunId"])
         except Exception:
             await _reconcile_session(spec, name, namespace, meta, status)
+            return
+        try:
+            active_session = await asyncio.to_thread(
+                _resolve_active_session,
+                dict(spec),
+                namespace,
+                identity_fields["sessionRunId"],
+            )
+            platform_hash = await asyncio.to_thread(
+                compute_platform_hash,
+                dict(spec),
+                active_session=active_session,
+                namespace=namespace,
+            )
+            deployment_context = _runtime_deployment_context(
+                active_session,
+                meta,
+                identity_fields["sessionRunId"],
+            )
+            runtime_hash = compute_runtime_hash(
+                platform_hash,
+                identity_fields["sessionRunId"],
+                active_session.proof,
+                deployment_context,
+            )
+            proof_fields = _runtime_proof_status_fields(active_session, deployment_context)
+        except Exception as exc:
+            log.error("Ready session verification failed: %s", exc, exc_info=True)
+            _update_status(
+                name,
+                namespace,
+                _with_observed_generation(
+                    meta,
+                    {
+                        "phase": "Error",
+                        "message": f"Runtime configuration verification failed: {str(exc)[:500]}",
+                        **identity_fields,
+                    },
+                ),
+            )
+            return
+        try:
+            platform_ready, _ = await asyncio.to_thread(
+                check_platform_runtime_ready,
+                namespace,
+                runtime_hash,
+                active_session.proof,
+                deployment_context,
+            )
+        except kubernetes.client.rest.ApiException as exc:
+            log.warning("Ready session platform proof check failed: %s", exc)
+            return
+        if not platform_ready:
+            await _reconcile_session(
+                spec,
+                name,
+                namespace,
+                meta,
+                status,
+                active_session,
+            )
             return
         if (
             status.get("sessionName") != identity_fields["sessionName"]
             or status.get("sessionRunId") != identity_fields["sessionRunId"]
+            or any(status.get(field) != value for field, value in proof_fields.items())
             or status.get("platformHash") != platform_hash
             or status.get("runtimeHash") != runtime_hash
         ):
-            await _reconcile_session(spec, name, namespace, meta, status)
+            await _reconcile_session(
+                spec,
+                name,
+                namespace,
+                meta,
+                status,
+                active_session,
+            )
         return
 
     if phase not in ("Pending", "Creating", "Wiring"):

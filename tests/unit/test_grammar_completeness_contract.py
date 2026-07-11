@@ -52,7 +52,6 @@ GRAMMAR_FIELD_DISPOSITION: dict[str, str] = {
     "segments.node": REJECTED,  # lagrange segment member
     # --- link rules ---
     "link_rules.id": CONSUMED,
-    "link_rules.class": CONSUMED,
     "link_rules.enabled": CONSUMED,
     "link_rules.tags": CONSUMED,
     "link_rules.endpoints.select": CONSUMED,
@@ -100,14 +99,13 @@ GRAMMAR_FIELD_DISPOSITION: dict[str, str] = {
     "ephemeris.kernels.coverage_end": CONSUMED,
     "simulation.candidate_limits.max_pairs_per_rule": CONSUMED,
     "simulation.candidate_limits.max_pairs_per_tick": CONSUMED,
+    "simulation.ground_link_model": CONSUMED,
+    "simulation.acknowledge_geometry_only": CONSUMED,
     "time.start_time": CONSUMED,
     "time.step_seconds": CONSUMED,
     "time.compression": CONSUMED,
     "dispatch.latency_authority": CONSUMED,
     "dispatch.max_latency_age_ticks": CONSUMED,
-    # orbit.default_propagator can never apply (orbit primitives must declare
-    # their propagator) — declared values reject with an explanation.
-    "orbit.default_propagator": REJECTED,
 }
 
 

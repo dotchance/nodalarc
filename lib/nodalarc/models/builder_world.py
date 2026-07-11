@@ -10,91 +10,21 @@ session that has been resolved but not deployed.
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
-from nodalarc.models.events import SessionEphemeris
+from nodalarc.models.catalog import MountRole
+from nodalarc.models.events import NodePosition, SessionEphemeris
+from nodalarc.models.link_rules import LinkLabel
 from nodalarc.models.resolved_session import (
-    LinkKind,
     NodeKind,
     ResolvedNodeInterfaces,
     ResolvedSurfacePosition,
     ResolvedTerminalBlock,
-    TerminalRole,
 )
 from nodalarc.models.segment_session import SessionMeta
 from nodalarc.models.segments import OriginatedPrefixes
-from nodalarc.runtime_support import UnsupportedFeature
-
-
-class BuilderResolveCheck(BaseModel):
-    """Resolve-check result: the world plus the canonical session document.
-
-    ``document_yaml`` is the pane/resolution document — the server-serialized
-    form of the session that resolved, in its authoring shape. It is not the
-    save artifact: a save flattens user-library references first, so the pane
-    YAML and a saved file's bytes are distinct forms of the same session.
-    ``artifact_sha256`` identifies the save artifact — the sha256 of the
-    canonical flattened YAML bytes a save of this document writes
-    (hypothetical on a resolve check, exact on a save). ``document`` is the
-    same session as a parsed mapping for the client's draft importer (it has
-    no YAML parser of its own) — in the AUTHORING form when the caller asked
-    for rehydration (hermetically inlined user-library objects re-referenced
-    while their content still matches the library; identical semantics under
-    the loader contract). Its shape is owned by the session grammar, not
-    this envelope.
-    """
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    world: BuilderWorld
-    document: dict[str, Any]
-    document_yaml: str
-    artifact_sha256: str
-    # Runtime-readiness, the NODE-COUNT-INDEPENDENT subset the UI can gate
-    # on: a session may resolve and save yet be unable to start on the
-    # cluster. NECESSARY, not sufficient — the switch endpoint runs the
-    # operator's full, node-count-aware validator and is authoritative.
-    deploy_ready: bool = True
-    deploy_blockers: tuple[str, ...] = ()
-
-
-class BuilderSaveArtifact(BaseModel):
-    """Grammar-only save result: what a save writes, without a preview world.
-
-    The save path answers only (grammar-valid): a session that resolves
-    canonicalizes and is written, even if its preview world fails or
-    refuses to build. So this carries the canonical bytes and their hash plus
-    the two values the save endpoint reports — the session name and node count
-    — read from the ResolvedSession, never from a built world. It deliberately
-    omits ``world``: building it is the resolve-check's job, not the save's.
-    """
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    document_yaml: str
-    artifact_sha256: str
-    session_name: str
-    node_count: int
-
-
-class BuilderCatalogEntry(BaseModel):
-    """One catalog primitive as a library listing row.
-
-    ``error`` carries the validation failure verbatim when the file does not
-    satisfy its family's grammar — a broken entry is shown, never hidden.
-    """
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    ref: str
-    family: str
-    id: str | None = None
-    display_name: str | None = None
-    notes: str | None = None
-    summary: str | None = None
-    error: str | None = None
 
 
 class BuilderLinkEndpoint(BaseModel):
@@ -103,7 +33,7 @@ class BuilderLinkEndpoint(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     segment_id: str
-    terminal_role: TerminalRole
+    terminal_role: MountRole
     terminal_medium: str | None = None
     min_elevation_deg: float | None = None
     node_ids: tuple[str, ...]
@@ -121,7 +51,7 @@ class BuilderLinkRule(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     rule_id: str
-    kind: LinkKind
+    kind: LinkLabel
     enabled: bool
     endpoints: tuple[BuilderLinkEndpoint, BuilderLinkEndpoint]
     topology_mode: str
@@ -135,7 +65,9 @@ class BuilderWorldNode(BaseModel):
 
     ``kind`` is carried explicitly so no consumer infers it from the
     ephemeris variant shape. Satellite placement (orbital elements, frames)
-    lives only in the ephemeris. Ground placement is the resolver's
+    lives in the ephemeris; ``epoch_position`` is the OME-propagated state
+    used to seed renderers that cannot propagate that ephemeris variant
+    locally. Ground placement is the resolver's
     ``surface_position``: the ephemeris only carries ground nodes that
     participate in space-link physics, while the world contains every
     resolved node — a gateway with no space links still exists.
@@ -155,6 +87,7 @@ class BuilderWorldNode(BaseModel):
     slot: int | None = None
     tags: tuple[str, ...] = ()
     surface_position: ResolvedSurfacePosition | None = None
+    epoch_position: NodePosition | None = None
     forwarding: Literal["routed", "host", "bridge", "control_only"] | None = None
     terminal_inventory: tuple[ResolvedTerminalBlock, ...] = ()
     interfaces: ResolvedNodeInterfaces | None = None
@@ -272,35 +205,6 @@ class BuilderRulePreview(BaseModel):
     capped: bool
     reason_counts: tuple[BuilderPreviewReasonCount, ...] = ()
     drawable_pairs: tuple[BuilderPreviewPair, ...] = ()
-
-
-class BuilderErrorSubject(BaseModel):
-    """The document object a refusal is about: its kind plus the id the
-    client's own serializer emitted — draft-addressable without prose
-    parsing."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    kind: str
-    id: str
-
-
-class BuilderResolveRefusal(BaseModel):
-    """The 422 envelope for a session document the resolver refused.
-
-    ``error`` is the resolver's message verbatim. Scope fields ride along
-    when the refusal carries them: ``subject``/``segment_id``/``node_id``
-    from ``SessionResolutionError``, ``features`` from
-    ``UnsupportedFeatureError``. This model OWNS the envelope schema — the
-    HTTP layer serializes it and the frontend twin is pinned to it."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    error: str
-    subject: BuilderErrorSubject | None = None
-    segment_id: str | None = None
-    node_id: str | None = None
-    features: tuple[UnsupportedFeature, ...] | None = None
 
 
 class BuilderWorldSegment(BaseModel):

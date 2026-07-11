@@ -204,6 +204,23 @@ def _resolved_area_id(domain: ResolvedRoutingDomain, node: ResolvedNode) -> str:
             assignment.gs_area_id if assignment is not None and assignment.gs_area_id else default
         )
     if node.kind != "satellite":
+        if assignment.strategy == "explicit":
+            matches = [
+                mapping.area_id
+                for mapping in assignment.assignments or ()
+                if mapping.ground_stations == "all"
+                or (
+                    isinstance(mapping.ground_stations, tuple)
+                    and node.local_node_id in mapping.ground_stations
+                )
+            ]
+            if len(matches) > 1:
+                raise ValueError(
+                    f"explicit area assignment in domain {domain.domain_id!r} maps ground "
+                    f"station {node.local_node_id!r} more than once"
+                )
+            if matches:
+                return matches[0]
         return assignment.gs_area_id or default
     if node.plane is None:
         raise ValueError(f"node {node.node_id!r} is missing plane for area assignment")
@@ -235,11 +252,12 @@ def _resolved_interface_info(
     for candidate in resolved.link_candidates:
         if candidate.kind == "access":
             continue
+        interface_a, interface_b = candidate.fixed_interfaces
         if candidate.node_a == node.node_id:
-            iface = candidate.interface_a
+            iface = interface_a
             peer_id = candidate.node_b
         elif candidate.node_b == node.node_id:
-            iface = candidate.interface_b
+            iface = interface_b
             peer_id = candidate.node_a
         else:
             continue
@@ -273,10 +291,11 @@ def _resolved_neighbors(resolved: ResolvedSession, node: ResolvedNode) -> dict[s
     for candidate in resolved.link_candidates:
         if candidate.kind == "access":
             continue
+        interface_a, interface_b = candidate.fixed_interfaces
         if candidate.node_a == node.node_id:
-            neighbors[candidate.interface_a] = candidate.node_b
+            neighbors[interface_a] = candidate.node_b
         elif candidate.node_b == node.node_id:
-            neighbors[candidate.interface_b] = candidate.node_a
+            neighbors[interface_b] = candidate.node_a
     return neighbors
 
 
@@ -361,10 +380,11 @@ def _boundary_static_routes(
             for candidate in resolved.link_candidates:
                 if candidate.rule_id != boundary.over:
                     continue
+                interface_a, interface_b = candidate.fixed_interfaces
                 if candidate.node_a == node.node_id:
-                    peer_id, iface = candidate.node_b, candidate.interface_a
+                    peer_id, iface = candidate.node_b, interface_a
                 elif candidate.node_b == node.node_id:
-                    peer_id, iface = candidate.node_a, candidate.interface_b
+                    peer_id, iface = candidate.node_a, interface_b
                 else:
                     continue
                 if peer_id not in from_domain.node_ids:

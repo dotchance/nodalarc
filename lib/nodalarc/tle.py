@@ -4,7 +4,21 @@
 
 from __future__ import annotations
 
+import math
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+
+
+@dataclass(frozen=True, slots=True)
+class TleMeanElements:
+    epoch_unix: float
+    norad_id: int
+    semi_major_axis_km: float
+    eccentricity: float
+    inclination_deg: float
+    raan_deg: float
+    argument_of_perigee_deg: float
+    mean_anomaly_deg: float
 
 
 def tle_norad_id(line_1: str) -> int:
@@ -58,3 +72,39 @@ def tle_epoch_unix(line_1: str) -> float:
 def tle_age_days(line_1: str, sim_epoch_unix: float) -> float:
     """Return absolute age in days between a TLE epoch and simulation epoch."""
     return abs(sim_epoch_unix - tle_epoch_unix(line_1)) / 86400.0
+
+
+def tle_mean_elements(
+    line_1: str,
+    line_2: str,
+    *,
+    gravitational_parameter_km3_s2: float,
+) -> TleMeanElements:
+    """Return TLE mean elements used only for resolved metadata and coarse checks."""
+
+    validate_tle_pair(line_1, line_2)
+    try:
+        inclination_deg = float(line_2[8:16])
+        raan_deg = float(line_2[17:25])
+        eccentricity = float(f"0.{line_2[26:33].strip()}")
+        argument_of_perigee_deg = float(line_2[34:42])
+        mean_anomaly_deg = float(line_2[43:51])
+        mean_motion_rev_day = float(line_2[52:63])
+    except ValueError as exc:
+        raise ValueError(f"Invalid TLE mean-element fields: {line_2!r}") from exc
+    if gravitational_parameter_km3_s2 <= 0:
+        raise ValueError("TLE mean-element derivation requires a positive gravitational parameter")
+    if mean_motion_rev_day <= 0:
+        raise ValueError("TLE mean motion must be positive")
+    mean_motion_rad_s = mean_motion_rev_day * 2.0 * math.pi / 86400.0
+    semi_major_axis_km = (gravitational_parameter_km3_s2 / (mean_motion_rad_s**2)) ** (1.0 / 3.0)
+    return TleMeanElements(
+        epoch_unix=tle_epoch_unix(line_1),
+        norad_id=tle_norad_id(line_1),
+        semi_major_axis_km=semi_major_axis_km,
+        eccentricity=eccentricity,
+        inclination_deg=inclination_deg,
+        raan_deg=raan_deg,
+        argument_of_perigee_deg=argument_of_perigee_deg,
+        mean_anomaly_deg=mean_anomaly_deg,
+    )

@@ -6,14 +6,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from nodalarc.constellation_loader import (
-    clone_satellite_node,
-    expand_constellation,
-    load_constellation,
-)
 from nodalarc.frames import EcefVec3, GeoPosition, Vec3
 from nodalarc.link_metadata import LinkRuleMetadata
-from nodalarc.models.addressing import AddressingScheme
 from nodalarc.models.events import (
     EphemerisNodeFixed,
     EphemerisNodeKeplerian,
@@ -22,11 +16,13 @@ from nodalarc.models.events import (
 )
 from nodalarc.models.ground_policy import HandoverPolicySpec, SelectionPolicySpec
 from nodalarc.models.session import GroundSchedulingConfig
+from nodalarc.ome_runtime import IslTerminal, SatelliteNode
 from ome.event_stream import build_link_state_snapshot, build_session_ephemeris, build_step_context
 from ome.snapshot_builder import LinkSnapshotSource
 
-from tests.conftest import FIXTURES_DIR, load_runtime_ome_test_inputs
-from tests.physics_fixtures import EARTH_TEST_BODY_FRAME, EARTH_TEST_BODY_FRAMES
+from tests.conftest import load_runtime_ome_test_inputs
+from tests.ome_runtime_fixtures import StaticOmeAddressing
+from tests.physics_fixtures import EARTH_TEST_BODY_FRAMES, earth_elements_from_params
 
 
 def _ground_scheduling() -> GroundSchedulingConfig:
@@ -59,24 +55,11 @@ def _load_test_ctx():
 EPOCH = 1735689600.0  # 2025-01-01T00:00:00 UTC
 
 
-def _assign_test_runtime_ids(sats, *, segment_id: str):
-    return [
-        clone_satellite_node(
-            sat,
-            node_id=f"{segment_id}-sat-p{sat.local_plane:02d}s{sat.local_slot:02d}",
-            local_node_id=f"sat-P{sat.local_plane:02d}S{sat.local_slot:02d}",
-            segment_id=segment_id,
-        )
-        for sat in sats
-    ]
-
-
 class TestBuildSessionEphemeris:
     def test_satellite_mapped_to_configured_mean_element_propagator(self):
         ctx, sats, _ = _load_test_ctx()
         eph = build_session_ephemeris(ctx, EPOCH, epoch_id=0)
-        # First satellite should be P00S00 in the space segment namespace.
-        sat = eph.nodes["space-sat-p00s00"]
+        sat = eph.nodes[ctx.addressing.sat_id(0, 0)]
         assert isinstance(sat, EphemerisNodeKeplerian)
         assert sat.type == "keplerian"
         assert sat.plane == 0
@@ -98,7 +81,7 @@ class TestBuildSessionEphemeris:
             body_frames=ctx.body_frames,
         )
         eph = build_session_ephemeris(ctx, EPOCH, epoch_id=0)
-        sat = eph.nodes["space-sat-p00s00"]
+        sat = eph.nodes[ctx.addressing.sat_id(0, 0)]
         assert isinstance(sat, EphemerisNodeKeplerian)
         assert sat.propagator == "j2-mean-elements"
 
@@ -130,33 +113,40 @@ class TestBuildSessionEphemeris:
         assert second.propagator == "j2-mean-elements"
 
     def test_tle_satellite_mapped_to_tle_ephemeris(self):
-        cc = load_constellation(
-            {
-                "mode": "tle",
-                "name": "sample-tle",
-                "tle_file": str(FIXTURES_DIR / "tles/sample.tle"),
-                "filter": {"max_count": 1},
-                "default_terminals": {
-                    "isl": [
-                        {
-                            "type": "optical",
-                            "count": 2,
-                            "max_range_km": 5000,
-                            "bandwidth_mbps": 1000,
-                            "max_tracking_rate_deg_s": 3.0,
-                        }
-                    ],
-                    "ground": [{"type": "rf", "count": 1, "bandwidth_mbps": 1000}],
-                },
-            }
-        )
-        sats = _assign_test_runtime_ids(
-            expand_constellation(cc, body_frame=EARTH_TEST_BODY_FRAME),
-            segment_id="tle",
-        )
+        node_id = "tle-sat-p00s00"
+        sats = [
+            SatelliteNode(
+                plane=0,
+                slot=0,
+                elements=earth_elements_from_params(420.0, 51.6, 21.5, 21.8),
+                isl_terminal_count=2,
+                ground_terminal_count=1,
+                node_id=node_id,
+                local_node_id="sat-P00S00",
+                segment_id="tle",
+                central_body="earth",
+                isl_terminals=(
+                    IslTerminal(
+                        type="optical",
+                        count=2,
+                        max_range_km=5000.0,
+                        bandwidth_mbps=1000.0,
+                        max_tracking_rate_deg_s=3.0,
+                        field_of_regard_deg=360.0,
+                    ),
+                ),
+                tle_line_1=(
+                    "1 25544U 98067A   21075.51041667  .00001264  00000-0  29660-4 0  9993"
+                ),
+                tle_line_2=(
+                    "2 25544  51.6442  21.5417 0002426  95.1670  21.8444 15.48974333273145"
+                ),
+                norad_id=25544,
+            )
+        ]
         ctx = build_step_context(
             satellites=sats,
-            addressing=AddressingScheme(satellites=sats),
+            addressing=StaticOmeAddressing(satellite_ids=(node_id,)),
             gs_file=None,
             neighbors=frozenset(),
             propagator_id="sgp4-tle",

@@ -91,8 +91,8 @@ fi
 
 # --- 2. Move the Helm-owned reference ---------------------------------------
 # --reuse-values keeps every other setting; only this service's image moves,
-# so Kubernetes rolls exactly one workload. buildTag is deliberately NOT
-# touched here: changing it would roll the whole platform.
+# so Kubernetes rolls exactly one workload. buildTag and runtimeRelease are
+# deliberately NOT touched here: changing either would roll proof services.
 echo "[deploy:$logical_name] Setting Helm images.$helm_key=$image ..."
 helm upgrade "$HELM_RELEASE" "$HELM_CHART" --namespace "$NAMESPACE" \
     --reuse-values --set-string "images.$helm_key=$image" >/dev/null

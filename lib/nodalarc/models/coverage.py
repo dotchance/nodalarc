@@ -1,14 +1,20 @@
 # Copyright 2024-2026 .chance (dotchance)
 # Licensed under the Apache License, Version 2.0. See LICENSE file.
-"""Coverage preview models — returned by the preview-coverage endpoint."""
+"""Typed application contracts returned by the coverage-preview endpoint."""
+
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
 
-class IslFailureBreakdown(BaseModel):
-    """Why ISLs fail to form — per-reason counts from visibility checks."""
+class _CoverageApplicationModel(BaseModel):
+    """Closed immutable base for non-grammar Wizard coverage facts."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
+
+
+class IslFailureBreakdown(_CoverageApplicationModel):
+    """Why ISLs fail to form — per-reason counts from visibility checks."""
 
     range_exceeded: int = 0  # terminal max_range_km too short
     tracking_exceeded: int = 0  # angular velocity > max_tracking_rate_deg_s
@@ -18,10 +24,8 @@ class IslFailureBreakdown(BaseModel):
     terminal_exhausted: int = 0  # all terminals allocated to higher-priority peers
 
 
-class IslPreview(BaseModel):
+class IslPreview(_CoverageApplicationModel):
     """ISL link feasibility statistics for one orbital period."""
-
-    model_config = ConfigDict(frozen=True)
 
     total_possible: int
     formed_at_least_once: int
@@ -32,20 +36,16 @@ class IslPreview(BaseModel):
     failure_reasons: IslFailureBreakdown | None = None
 
 
-class GsStationPreview(BaseModel):
+class GsStationPreview(_CoverageApplicationModel):
     """Per-ground-station coverage statistics."""
-
-    model_config = ConfigDict(frozen=True)
 
     coverage_pct: float
     longest_gap_s: float
     reason: str | None = None  # why coverage is poor, if applicable
 
 
-class GsPreview(BaseModel):
+class GsPreview(_CoverageApplicationModel):
     """Ground station coverage statistics for one orbital period."""
-
-    model_config = ConfigDict(frozen=True)
 
     per_station: dict[str, GsStationPreview]
     simultaneous_min: int
@@ -54,7 +54,7 @@ class GsPreview(BaseModel):
     max_gap_s: float
 
 
-class CoverageInsight(BaseModel):
+class CoverageInsight(_CoverageApplicationModel):
     """A single insight about the constellation configuration.
 
     Severity levels:
@@ -64,16 +64,12 @@ class CoverageInsight(BaseModel):
     - "error": configuration problem that will prevent connectivity (e.g., no cross-plane links, station beyond visibility)
     """
 
-    model_config = ConfigDict(frozen=True)
-
-    severity: str  # "info", "note", "warning", "error"
+    severity: Literal["info", "note", "warning", "error"]
     message: str
 
 
-class CoveragePreviewResult(BaseModel):
+class CoveragePreviewResult(_CoverageApplicationModel):
     """Complete coverage preview result."""
-
-    model_config = ConfigDict(frozen=True)
 
     orbital_period_s: float
     preview_step_s: int

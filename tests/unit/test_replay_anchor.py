@@ -12,7 +12,8 @@ the equality has teeth: dropping a seeded field makes it fail.
 
 from __future__ import annotations
 
-import yaml
+from pathlib import Path
+
 from nodalarc.models.session import resolve_session_epoch
 from nodalarc.scheduling_checkpoint import (
     decode_retained_replay_anchor,
@@ -22,8 +23,6 @@ from ome.event_stream import build_step_context, compute_step
 from ome.main import _effective_ground_scheduling_for_runtime, _load_session_config
 from ome.replay_anchor import build_replay_anchor, replay_state_from_anchor
 
-from tests.conftest import build_segment_session_dict
-
 ANCHOR_STEP = 20
 FINAL_STEP = 40
 
@@ -31,16 +30,8 @@ FINAL_STEP = 40
 def _session_ctx(tmp_path):
     session_path = tmp_path / "anchor-equality.yaml"
     session_path.write_text(
-        yaml.dump(
-            build_segment_session_dict(
-                name="anchor-equality",
-                constellation="configs/constellations/demo-36.yaml",
-                ground_stations="configs/ground-stations/sets/demo.yaml",
-                protocol="ospf",
-                orbit_propagator="j2-mean-elements",
-            ),
-            sort_keys=False,
-        )
+        Path("catalog/nodalarc/sessions/earth-leo-simple.yaml").read_text(encoding="utf-8"),
+        encoding="utf-8",
     )
     cfg = _load_session_config(str(session_path), run_id="run-anchor-equality")
     ctx = build_step_context(

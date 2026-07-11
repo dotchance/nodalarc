@@ -6,15 +6,15 @@
 # never restarts it. Session parameters are variables, not reasons to
 # restart; VS-API hot-reloads via SessionContext teardown/creation.
 #
-# catalog/ is the static product catalog: verified primitives and example
-# sessions that ship with each release. Users assemble these like building
-# blocks to define sessions. In a future release, user-uploaded models will be
-# stored on persistent volumes alongside this static catalog.
+# catalog/ is the static read-only product catalog. User-authored catalog YAML
+# is stored through VS-API's scoped repository and uploaded as exact files when
+# a saved session is selected.
 #
 # Runtime data (live snapshots, link state, events) comes from NATS.
 # Platform config comes from a single ConfigMap mount (platform.yaml).
-# VS-API does NOT mount session-scoped ConfigMaps — those are for
-# session pods (FRR containers) that don't have the catalog baked in.
+# VS-API reads the live ConstellationSpec and selected ordinary-YAML ConfigMaps
+# through Kubernetes APIs; it does not resolve a running session from mutable
+# authoring storage after selection.
 #
 # Build context must be the repo root:
 #   docker build -f services/vs_api/Dockerfile -t nodalarc/vs-api:latest .
@@ -53,7 +53,7 @@ RUN pip install --no-cache-dir \
 ENV PYTHONPATH=/app/lib:/app/services:/app
 ENV PYTHONUNBUFFERED=1
 
-# Copy shared library (includes proto/, constellation_loader, models)
+# Copy the shared library, canonical configuration models, and resolver.
 COPY lib/ lib/
 
 # Copy VS-API service
@@ -65,6 +65,9 @@ COPY services/ome/ services/ome/
 # Bake in deployment templates and the static catalog.
 COPY configs/ configs/
 COPY catalog/ catalog/
+
+# Existing published grammar linked by the Builder bootstrap.
+COPY docs/ops/configuration-grammar.md docs/ops/configuration-grammar.md
 
 # HTTP + WebSocket port
 EXPOSE 8080

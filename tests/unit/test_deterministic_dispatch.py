@@ -14,8 +14,11 @@ import json
 from datetime import UTC, datetime
 from unittest.mock import MagicMock
 
-from nodalarc.models.ground_policy import HandoverPolicySpec, SelectionPolicySpec
-from nodalarc.models.ground_station import HysteresisParameters
+from nodalarc.models.ground_policy import (
+    HandoverPolicySpec,
+    HysteresisParameters,
+    SelectionPolicySpec,
+)
 from ome.ground_allocator import allocate_ground_links
 from ome.visibility import GroundVisibility
 
@@ -84,7 +87,7 @@ class TestGroundAllocatorDeterminism:
                 ground_station_ids={gs_id},
                 current_associations={},
                 pending_teardowns={},
-                gs_terminal_counts={gs_id: 1},
+                gs_terminal_indices={gs_id: (0,)},
                 sat_ground_terminals={sat_a: 1, sat_b: 1},
                 sat_ground_terminal_indices_by_body=_sat_body_pools({sat_a: 1, sat_b: 1}),
                 **_policy_kwargs(gs_id),
@@ -135,7 +138,7 @@ class TestGroundAllocatorDeterminism:
             ground_station_ids={gs_id},
             current_associations={},
             pending_teardowns={},
-            gs_terminal_counts={gs_id: 1},
+            gs_terminal_indices={gs_id: (0,)},
             sat_ground_terminals={sat_a: 1, sat_b: 1},
             sat_ground_terminal_indices_by_body=_sat_body_pools({sat_a: 1, sat_b: 1}),
             **_policy_kwargs(gs_id),

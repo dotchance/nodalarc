@@ -16,6 +16,11 @@ engine. For multi-segment sessions, the OME still owns the same truth: which
 candidate links are geometrically and physically valid at the current simulation
 time.
 
+At startup, OME loads the persisted root session and its referenced ordinary
+YAML files through the shared runtime loader. Readiness remains false until the
+files validate, resolve, and match the current deployment identity. This startup
+boundary does not change orbital algorithms or NATS subjects.
+
 ## Threading Model
 
 ```

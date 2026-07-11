@@ -6,6 +6,7 @@
  * so deriving progress from it hangs the overlay forever. */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
+import type { SessionInfo } from "../../types";
 
 vi.mock("../../config", () => ({
   REST_URL: "http://test:8080",
@@ -13,6 +14,18 @@ vi.mock("../../config", () => ({
 }));
 
 const { useSessionSwitcher } = await import("../useSessionSwitcher");
+const digest = `sha256:${"0".repeat(64)}`;
+const session = (name: string): SessionInfo => ({
+  source_id: { kind: "catalog", session_ref: `nodalarc:sessions/${name}.yaml` },
+  name,
+  source: "nodalarc",
+  constellation: "leo",
+  routing_stack: "isis",
+  deploy_allowed: true,
+  source_revision: digest,
+  document_digest: digest,
+  dependency_digest: digest,
+});
 
 describe("useSessionSwitcher", () => {
   let fetchMock: ReturnType<typeof vi.fn>;
@@ -26,19 +39,25 @@ describe("useSessionSwitcher", () => {
 
   it("switchSession sends deploy request", async () => {
     const { result } = renderHook(() => useSessionSwitcher(false));
-    await act(async () => { await result.current.switchSession("catalog/nodalarc/sessions/earth-leo-simple.yaml"); });
+    const selected = session("session-01");
+    await act(async () => { await result.current.switchSession(selected); });
     const switchCall = fetchMock.mock.calls.find(
       (c: unknown[]) => String(c[0]).includes("/sessions/switch"),
     );
     expect(switchCall).toBeTruthy();
     const body = JSON.parse(switchCall![1]!.body as string);
-    expect(body.session).toBe("catalog/nodalarc/sessions/earth-leo-simple.yaml");
+    expect(body).toEqual({
+      source: selected.source_id,
+      expected_source_revision: digest,
+      expected_document_digest: digest,
+      expected_dependency_digest: digest,
+    });
   });
 
   it("no double switch while already switching", async () => {
     const { result } = renderHook(() => useSessionSwitcher(false));
-    await act(async () => { await result.current.switchSession("a.yaml"); });
-    await act(async () => { await result.current.switchSession("b.yaml"); });
+    await act(async () => { await result.current.switchSession(session("session-01")); });
+    await act(async () => { await result.current.switchSession(session("session-02")); });
     const switchCalls = fetchMock.mock.calls.filter(
       (c: unknown[]) => String(c[0]).includes("/sessions/switch"),
     );
@@ -51,7 +70,7 @@ describe("useSessionSwitcher", () => {
       .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve([]) })
       .mockRejectedValueOnce(new Error("network error"));
     const { result } = renderHook(() => useSessionSwitcher(false));
-    await act(async () => { await result.current.switchSession("bad.yaml"); });
+    await act(async () => { await result.current.switchSession(session("session-03")); });
     expect(result.current.switching).toBe(false);
   });
 
@@ -60,7 +79,7 @@ describe("useSessionSwitcher", () => {
       ({ transitioning }) => useSessionSwitcher(transitioning),
       { initialProps: { transitioning: false } },
     );
-    await act(async () => { await result.current.switchSession("test.yaml"); });
+    await act(async () => { await result.current.switchSession(session("session-04")); });
     expect(result.current.switching).toBe(true);
 
     // The websocket lifecycle takes over, then ends — the regression this
@@ -77,7 +96,7 @@ describe("useSessionSwitcher", () => {
       ({ transitioning }) => useSessionSwitcher(transitioning),
       { initialProps: { transitioning: false } },
     );
-    await act(async () => { await result.current.switchSession("test.yaml"); });
+    await act(async () => { await result.current.switchSession(session("session-05")); });
     // No transition seen yet — a rerender without one must not clear.
     rerender({ transitioning: false });
     expect(result.current.switching).toBe(true);

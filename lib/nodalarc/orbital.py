@@ -3,8 +3,8 @@
 """Orbital element types and constructors.
 
 Pure data types and math for Keplerian mean elements. No propagation, no I/O.
-Used by constellation_loader (to build satellite nodes from config) and by
-ome/propagator.py (which adds propagation, ECEF conversion, etc.).
+Resolved session facts are materialized into these elements before the OME
+propagators add time evolution and frame conversion.
 """
 
 from __future__ import annotations

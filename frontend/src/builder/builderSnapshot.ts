@@ -31,10 +31,37 @@ function _satelliteNodeState(
   world: BuilderWorld,
 ): NodeState {
   if (entry.type === "tle") {
-    throw new Error(
-      `builder cannot seed TLE-propagated satellite ${node.node_id}; ` +
-        "SGP4 sessions are not supported in the builder yet",
-    );
+    const position = node.epoch_position;
+    if (!position) {
+      throw new Error(
+        `builder world is missing the authoritative epoch position for TLE satellite ${node.node_id}`,
+      );
+    }
+    return {
+      node_id: node.node_id,
+      node_type: node.kind,
+      lat_deg: position.lat_deg,
+      lon_deg: position.lon_deg,
+      alt_km: position.alt_km,
+      vel_x_km_s: position.vel_x_km_s,
+      vel_y_km_s: position.vel_y_km_s,
+      vel_z_km_s: position.vel_z_km_s,
+      plane: node.plane,
+      slot: node.slot,
+      routing_area: null,
+      neighbor_count: 0,
+      isl_count: 0,
+      gnd_count: 0,
+      prefix: null,
+      min_elevation_deg: null,
+      beam_falloff_exponent: null,
+      reference_body: entry.reference_body,
+      frame_id: entry.frame_id,
+      segment_id: node.segment_id,
+      local_node_id: node.local_node_id,
+      namespace: node.namespace,
+      tags: [...node.tags],
+    };
   }
   const frame = world.ephemeris.body_frames[entry.reference_body];
   if (!frame) {
@@ -72,7 +99,7 @@ function _satelliteNodeState(
     segment_id: node.segment_id,
     local_node_id: node.local_node_id,
     namespace: node.namespace,
-    tags: node.tags,
+    tags: [...node.tags],
   };
 }
 
@@ -104,14 +131,14 @@ function _groundNodeState(node: BuilderWorldNode): NodeState {
     segment_id: node.segment_id,
     local_node_id: node.local_node_id,
     namespace: node.namespace,
-    tags: node.tags,
+    tags: [...node.tags],
   };
 }
 
 /** a ground site's identity is its namespace — one site's several nodes
  *  share it. The honest site count is the number of DISTINCT ground-station
  *  namespaces in the resolved world, not the raw ground-node count. */
-export function distinctGroundStationSites(nodes: BuilderWorldNode[]): number {
+export function distinctGroundStationSites(nodes: ReadonlyArray<BuilderWorldNode>): number {
   return new Set(
     nodes.filter((node) => node.kind === "ground_station").map((node) => node.namespace),
   ).size;

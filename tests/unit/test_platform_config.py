@@ -90,9 +90,12 @@ class TestPlatformConfig:
 
     def test_repo_and_helm_platform_yaml_share_model_contract(self):
         repo_raw = yaml.safe_load((ROOT / "configs" / "platform.yaml").read_text(encoding="utf-8"))
-        helm_raw = yaml.safe_load(
-            (ROOT / "deploy" / "helm" / "files" / "platform.yaml").read_text(encoding="utf-8")
+        helm_text = (ROOT / "deploy" / "helm" / "files" / "platform.yaml").read_text(
+            encoding="utf-8"
         )
+        namespace_template = "{{ .Values.namespace | quote }}"
+        assert namespace_template in helm_text
+        helm_raw = yaml.safe_load(helm_text.replace(namespace_template, '"nodalarc"'))
 
         repo_cfg = PlatformConfig.model_validate(repo_raw["platform"])
         helm_cfg = PlatformConfig.model_validate(helm_raw["platform"])

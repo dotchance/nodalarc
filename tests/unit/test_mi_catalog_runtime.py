@@ -11,16 +11,20 @@ import pytest
 from measurement import mi_main
 from measurement.mi_main import MIService, _mi_stack_config_from_resolved
 from nodalarc.models.resolved_session import ResolvedRoutingDomain
-from nodalarc.resolve_session import resolve_session
 
-from tests.conftest import build_segment_session_dict
+from tests.catalog_session_fixtures import (
+    build_catalog_session_fixture,
+)
+from tests.catalog_session_fixtures import (
+    resolve_catalog_session as resolve_session,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 
 
 def _resolved(*, protocol: str = "isis", run_id: str | None = "run-mi-0001"):
     resolved = resolve_session(
-        build_segment_session_dict(
+        build_catalog_session_fixture(
             name="mi-catalog-runtime",
             constellation={"planes": {"count": 1, "sats_per_plane": 2}},
             ground_stations={"stations": ["a"]},

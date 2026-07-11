@@ -13,10 +13,10 @@ import json
 from pathlib import Path
 
 import pytest
+from nodalarc.configuration_yaml import load_configuration_yaml
 from nodalarc.orbital import elements_from_params_for_radius
 from nodalarc.propagator import orbital_period_for_body
 
-from tests.conftest import build_segment_session_dict
 from tests.physics_fixtures import EARTH_TEST_BODY_FRAME
 
 pytestmark = pytest.mark.integration
@@ -36,49 +36,18 @@ def _custom_example_period_s() -> float:
     return orbital_period_for_body(elements, body_frame)
 
 
-def _optical_ground_stations() -> dict:
-    return {
-        "default_terminals": [
-            {
-                "type": "optical",
-                "count": 1,
-                "bandwidth_mbps": 1000,
-                "tracking_capacity": 1,
-                "max_range_km": 2000,
-                "field_of_regard_deg": 120,
-                "max_tracking_rate_deg_s": 1.5,
-                "boresight": {"mode": "local_vertical"},
-            }
-        ],
-        "default_min_elevation_deg": 25,
-        "default_selection_policy": {"name": "highest-elevation", "params": {}},
-        "default_terrestrial_prefixes": {
-            "ipv4_template": "172.16.{gs_index}.0/24",
-            "ipv6_template": "fd10::{gs_index}:0/112",
-            "metric": 10,
-        },
-        "stations": [
-            {"name": "new-york", "lat_deg": 40.71, "lon_deg": -74.01, "alt_m": 10},
-            {"name": "london", "lat_deg": 51.51, "lon_deg": -0.13, "alt_m": 11},
-        ],
-    }
-
-
 @pytest.fixture
-def four_node_timeline(tmp_path):
-    """Generate custom-example timeline."""
+def ring_timeline(tmp_path):
+    """Generate a canonical 550 km LEO timeline."""
     import tempfile
 
     import yaml
     from ome.main import run as ome_run
 
-    session = build_segment_session_dict(
-        name="rolling-window-test",
-        constellation="configs/constellations/custom-example.yaml",
-        ground_stations=_optical_ground_stations(),
-        protocol="isis",
-        extensions=["sr"],
-        time={"step_seconds": 1},
+    session = load_configuration_yaml(
+        (PROJECT_ROOT / "catalog/nodalarc/sessions/earth-leo-simple.yaml").read_text(
+            encoding="utf-8"
+        )
     )
     with tempfile.NamedTemporaryFile(
         mode="w",
@@ -86,7 +55,7 @@ def four_node_timeline(tmp_path):
         dir=str(PROJECT_ROOT),
         delete=False,
     ) as f:
-        yaml.dump(session, f)
+        yaml.safe_dump(session, f, sort_keys=False)
         session_path = f.name
 
     path = ome_run(session_path, str(tmp_path), run_id="test-rolling-window")
@@ -104,25 +73,25 @@ def _load_events(path):
 
 
 class TestSingleWindowCoverage:
-    def test_timeline_starts_at_zero(self, four_node_timeline):
+    def test_timeline_starts_at_zero(self, ring_timeline):
         """Timeline begins at t=0."""
-        events = _load_events(four_node_timeline)
+        events = _load_events(ring_timeline)
         assert events[0]["timestamp_s"] == 0.0
 
-    def test_timeline_ends_at_orbital_period(self, four_node_timeline):
+    def test_timeline_ends_at_orbital_period(self, ring_timeline):
         """Timeline duration matches the resolved body-frame orbital period."""
-        events = _load_events(four_node_timeline)
+        events = _load_events(ring_timeline)
         expected_period = _custom_example_period_s()
         last_timestamp = max(e["timestamp_s"] for e in events)
-        # Allow ±1 step tolerance (step_seconds=1 for custom-example)
+        # Allow ±1 step tolerance.
         assert abs(last_timestamp - expected_period) < 2.0, (
             f"Last timestamp {last_timestamp:.1f}s should match "
             f"orbital period {expected_period:.1f}s"
         )
 
-    def test_single_window_covers_full_period(self, four_node_timeline):
+    def test_single_window_covers_full_period(self, ring_timeline):
         """Clock ticks span from t=0 to t~=period without gaps > step_seconds."""
-        events = _load_events(four_node_timeline)
+        events = _load_events(ring_timeline)
         clock_ticks = [e for e in events if e["event_type"] == "ClockTick"]
         timestamps = sorted(e["timestamp_s"] for e in clock_ticks)
 
@@ -133,9 +102,9 @@ class TestSingleWindowCoverage:
             gap = timestamps[i] - timestamps[i - 1]
             assert gap <= 1.5, f"Gap of {gap}s at t={timestamps[i]}s exceeds step_seconds"
 
-    def test_events_span_full_duration(self, four_node_timeline):
+    def test_events_span_full_duration(self, ring_timeline):
         """All event types occur across the full timeline duration."""
-        events = _load_events(four_node_timeline)
+        events = _load_events(ring_timeline)
         period = _custom_example_period_s()
 
         # Clock ticks should span from 0 to ~period
@@ -145,10 +114,8 @@ class TestSingleWindowCoverage:
 
         # Visibility events are transition events, not per-tick samples. Their
         # count is therefore a geometry result, not the rolling-window contract:
-        # custom-example currently produces nine ISL gain/loss transitions over
-        # one orbit with the two-station us-conus ground set. This test only
-        # requires enough transitions to prove state changes are present across
-        # the window; ClockTicks above prove dense period coverage.
+        # This only requires enough transitions to prove state changes are
+        # present across the window; ClockTicks above prove dense coverage.
         vis_ts = [e["timestamp_s"] for e in events if e["event_type"] == "VisibilityEvent"]
         assert len(vis_ts) >= 2, f"Expected multiple VisibilityEvents, got {len(vis_ts)}"
         assert min(vis_ts) < period * 0.1, "No early VisibilityEvents"

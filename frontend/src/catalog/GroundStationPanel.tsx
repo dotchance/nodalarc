@@ -17,15 +17,15 @@ function CustomGroundStationsForm({ stations, onSubmit, onCancel }: {
 }) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
-  const toggle = (name: string) => {
+  const toggle = (ref: string) => {
     setSelected((prev) => {
       const next = new Set(prev);
-      if (next.has(name)) next.delete(name); else next.add(name);
+      if (next.has(ref)) next.delete(ref); else next.add(ref);
       return next;
     });
   };
 
-  const selectAll = () => setSelected(new Set(stations.map((s) => s.name)));
+  const selectAll = () => setSelected(new Set(stations.map((s) => s.file)));
   const selectNone = () => setSelected(new Set());
 
   if (stations.length === 0) {
@@ -48,8 +48,8 @@ function CustomGroundStationsForm({ stations, onSubmit, onCancel }: {
       </div>
       <div className="wizard-custom-gs-grid">
         {stations.map((s) => (
-          <label key={s.name} className={`wizard-custom-gs-item ${selected.has(s.name) ? "wizard-custom-gs-item--selected" : ""}`}>
-            <input type="checkbox" checked={selected.has(s.name)} onChange={() => toggle(s.name)} />
+          <label key={s.file} className={`wizard-custom-gs-item ${selected.has(s.file) ? "wizard-custom-gs-item--selected" : ""}`}>
+            <input type="checkbox" checked={selected.has(s.file)} onChange={() => toggle(s.file)} />
             <div>
               <div className="wizard-custom-gs-name">{s.name}</div>
               <div className="wizard-custom-gs-coords">{s.lat_deg.toFixed(1)}, {s.lon_deg.toFixed(1)}</div>
@@ -78,7 +78,7 @@ interface GroundStationPanelProps {
   availableStations: AvailableStation[];
   selected: GroundStationSet | null;
   onSelectSet: (set: GroundStationSet) => void;
-  onSelectCustom: (stationNames: string[]) => void;
+  onSelectCustom: (siteRefs: string[]) => void;
 }
 
 export function GroundStationPanel({

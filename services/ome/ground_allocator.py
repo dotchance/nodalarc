@@ -18,12 +18,12 @@ from typing import Literal
 from nodalarc.models.ground_policy import (
     CrossTenantDisplacementPolicy,
     HandoverPolicySpec,
+    HysteresisParameters,
     MbbPreemptionPolicy,
     RankingComponent,
     SelectionPolicySpec,
     SuccessorAbortPolicy,
 )
-from nodalarc.models.ground_station import HysteresisParameters
 from nodalarc.models.link_decisions import (
     GroundAllocationEvent,
     GroundAllocationEventCategory,
@@ -280,21 +280,6 @@ def _build_candidates(
     return ranked_with_keys, candidate_by_pair, visible_set
 
 
-def _terminal_totals_for_pair(
-    *,
-    pair: tuple[str, str],
-    ground_station_ids: set[str],
-    gs_terminal_counts: Mapping[str, int],
-    sat_ground_terminals: Mapping[str, int],
-) -> tuple[str, str, int, int]:
-    gs_id, sat_id = _ground_and_satellite_ids(pair, ground_station_ids)
-    if gs_id not in gs_terminal_counts:
-        raise ValueError(f"Missing ground terminal count for {gs_id}")
-    if sat_id not in sat_ground_terminals:
-        raise ValueError(f"Missing satellite ground terminal count for {sat_id}")
-    return gs_id, sat_id, gs_terminal_counts[gs_id], sat_ground_terminals[sat_id]
-
-
 def _record_rejection(
     rejected: dict[tuple[str, str], _Rejected],
     pair: tuple[str, str],
@@ -406,13 +391,40 @@ def _normalize_satellite_terminal_pools(
                     f"Satellite {sat_id} target_body={reference_body!r} terminal pool "
                     "contains duplicate indices"
                 )
-            invalid = [idx for idx in pool if idx < 0 or idx >= total]
+            invalid = [idx for idx in pool if idx < 0]
             if invalid:
                 raise ValueError(
                     f"Satellite {sat_id} target_body={reference_body!r} terminal pool "
-                    f"contains out-of-range indices {invalid}; valid range is 0..{total - 1}"
+                    f"contains negative indices {invalid}"
                 )
             normalized[sat_id][str(reference_body)] = pool
+        unique_indices = {index for indices in normalized[sat_id].values() for index in indices}
+        if len(unique_indices) != total:
+            raise ValueError(
+                f"Satellite {sat_id} terminal capacity={total} does not match its "
+                f"global interface index pools {sorted(unique_indices)}"
+            )
+    return normalized
+
+
+def _normalize_ground_terminal_pools(
+    *,
+    gs_terminal_indices: Mapping[str, Sequence[int]],
+) -> dict[str, tuple[int, ...]]:
+    """Validate the selected global ground-interface pool for each station."""
+    normalized: dict[str, tuple[int, ...]] = {}
+    for gs_id, indices in sorted(gs_terminal_indices.items()):
+        pool = tuple(int(index) for index in indices)
+        if not pool:
+            raise ValueError(f"Ground station {gs_id} terminal pool must not be empty")
+        if len(set(pool)) != len(pool):
+            raise ValueError(f"Ground station {gs_id} terminal pool contains duplicate indices")
+        invalid = [index for index in pool if index < 0]
+        if invalid:
+            raise ValueError(
+                f"Ground station {gs_id} terminal pool contains negative indices {invalid}"
+            )
+        normalized[gs_id] = pool
     return normalized
 
 
@@ -437,7 +449,7 @@ def allocate_ground_links(
     ground_station_ids: set[str],
     current_associations: Mapping[tuple[str, str], tuple[int, int]],
     pending_teardowns: MbbTeardownState,
-    gs_terminal_counts: Mapping[str, int],
+    gs_terminal_indices: Mapping[str, Sequence[int]],
     gs_selection_policies: Mapping[str, SelectionPolicySpec],
     gs_min_elevations: Mapping[str, float],
     gs_handover_policies: Mapping[str, HandoverPolicySpec],
@@ -464,12 +476,12 @@ def allocate_ground_links(
     function.
 
     Terminal selection: surviving links keep their indices (sticky). New
-    links take the lowest free index, preferring indices that were idle in
-    the previously published authority state — an index vacated this tick
-    may still be physically wired until the release is actuated, so reusing
-    it forces the handover to break-before-make. When every free index was
-    held last tick (capacity 1, or full churn), the allocator falls back to
-    reuse and the Scheduler's dispatch staging owns ordering the release
+    links take the lowest free allowed global index, preferring indices that
+    were idle in the previously published authority state — an index vacated
+    this tick may still be physically wired until the release is actuated, so
+    reusing it forces the handover to break-before-make. When every free index
+    was held last tick (capacity 1, or full churn), the allocator falls back
+    to reuse and the Scheduler's dispatch staging owns ordering the release
     before the acquire.
     """
 
@@ -493,6 +505,10 @@ def allocate_ground_links(
             "multi-tick BBMGap wait-state algorithm"
         )
     order = _validate_ranking_order(ranking_order)
+    gs_terminal_pools = _normalize_ground_terminal_pools(
+        gs_terminal_indices=gs_terminal_indices,
+    )
+    gs_terminal_counts = {gs_id: len(indices) for gs_id, indices in gs_terminal_pools.items()}
 
     known_gs = set(ground_station_ids) | set(gs_terminal_counts)
     for label, mapping in (
@@ -592,7 +608,6 @@ def allocate_ground_links(
         sat_ground_terminals=sat_ground_terminals,
         sat_ground_terminal_indices_by_body=sat_ground_terminal_indices_by_body,
     )
-
     candidates, candidate_by_pair, visible_set = _build_candidates(
         step=step,
         visible_per_station=visible_per_station,
@@ -632,17 +647,17 @@ def allocate_ground_links(
     drop_current_pairs: set[tuple[str, str]] = set()
 
     def add_existing(pair: tuple[str, str], indices: tuple[int, int]) -> None:
-        gs_id, sat_id, gs_total, sat_total = _terminal_totals_for_pair(
-            pair=pair,
-            ground_station_ids=ground_station_ids,
-            gs_terminal_counts=gs_terminal_counts,
-            sat_ground_terminals=sat_ground_terminals,
-        )
+        gs_id, sat_id = _ground_and_satellite_ids(pair, ground_station_ids)
+        if gs_id not in gs_terminal_pools:
+            raise ValueError(f"Missing ground terminal index pool for {gs_id}")
+        if sat_id not in sat_terminal_pools:
+            raise ValueError(f"Missing satellite ground terminal index pool for {sat_id}")
         gs_idx, sat_idx = indices
-        if not 0 <= gs_idx < gs_total:
-            raise ValueError(f"Association {pair!r} has invalid GS terminal index {gs_idx}")
-        if not 0 <= sat_idx < sat_total:
-            raise ValueError(f"Association {pair!r} has invalid satellite terminal index {sat_idx}")
+        if gs_idx not in gs_terminal_pools[gs_id]:
+            raise ValueError(
+                f"Association {pair!r} uses GS terminal index {gs_idx}, but "
+                f"{gs_id}.terminals allows {gs_terminal_pools[gs_id]}"
+            )
         if gs_idx in gs_occupied.setdefault(gs_id, set()):
             raise ValueError(f"Duplicate GS terminal occupancy {gs_id}.term{gs_idx}")
         reference_body = gs_reference_bodies[gs_id]
@@ -695,11 +710,14 @@ def allocate_ground_links(
     def allocate_new(candidate: _Candidate) -> bool:
         gs_occ = gs_occupied.setdefault(candidate.gs_id, set())
         sat_occ = sat_occupied.setdefault(candidate.sat_id, set())
-        gs_total = gs_terminal_counts[candidate.gs_id]
+        gs_pool = gs_terminal_pools[candidate.gs_id]
         gs_hot = prior_gs_occupancy.get(candidate.gs_id, set())
-        gs_idx = next((i for i in range(gs_total) if i not in gs_occ and i not in gs_hot), None)
+        gs_idx = next(
+            (index for index in gs_pool if index not in gs_occ and index not in gs_hot),
+            None,
+        )
         if gs_idx is None:
-            gs_idx = next((i for i in range(gs_total) if i not in gs_occ), None)
+            gs_idx = next((index for index in gs_pool if index not in gs_occ), None)
         sat_idx = next_sat_terminal_index(candidate)
         if gs_idx is None or sat_idx is None:
             return False

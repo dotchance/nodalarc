@@ -9,9 +9,10 @@ the right place to start. The same grammar also assembles multiple orbital
 regimes, lunar segments, relay nodes, and body-specific ground sites when an
 experiment needs them.
 
-This page is the conceptual tour. For the full authoring reference — every field
-and allowed value — see the [Configuration Reference](../ops/configuration.md)
-and [Configuration Grammar](../ops/configuration-grammar.md).
+This page is the conceptual tour. See the
+[Configuration Guide](../ops/configuration.md) for the authoring workflow and
+the [Configuration Grammar](../ops/configuration-grammar.md) for every field,
+type, allowed value, and constraint.
 
 ## The session model
 
@@ -63,7 +64,23 @@ segments:
   apply:
     scheduling:
       selection_policy: { highest_elevation: {} }
+      handover_policy:
+        hysteresis:
+          discount_factor: 1.1
+          mask_fade_range_deg: 3
       handover_mode: mbb
+      mbb_overlap_ticks: 30
+      mbb_reserve: 1
+      handover_concurrency: one_at_a_time
+      ranking_order:
+      - service_priority
+      - selection_score
+      - satellite_ground_terminal_capacity
+      - lex_pair
+      mbb_preemption: 'off'
+      successor_abort_policy: hard_release
+      cross_tenant_displacement: 'off'
+      bbm_acquire_timeout_ticks: 1
 
 link_rules:
 - id: leo_access
@@ -74,6 +91,11 @@ link_rules:
     min_elevation_deg: 25
   - select:   { segment: leo }
     terminal: { all: [ { role: access }, { medium: rf } ] }
+
+simulation:
+  candidate_limits:
+    max_pairs_per_rule: 500
+    max_pairs_per_tick: 2000
 
 time:
   start_time: '2026-06-08T00:00:00Z'
@@ -93,16 +115,17 @@ A **space segment** references a constellation (or space node set):
   source: nodalarc:constellations/earth/leo/earth-leo-ring-36.yaml
 ```
 
-A **ground segment** places a site set, optionally overlaying scheduling and
-other policy onto the nodes it places:
+A **ground segment** places a site set. It may overlay tags, originated-prefix
+intent, and scheduling onto the nodes it places:
 
 ```yaml
 - id: ground
   placement:
     from_site_set: nodalarc:site-sets/earth/leo/earth-leo-starlink-pop-sites.yaml
-  apply:
-    scheduling: { ... }
 ```
+
+When placed ground nodes participate in enabled access-link candidates, their
+effective scheduling must supply every field shown in the complete example.
 
 A site is a physical place; the nodes inside it are routers with terminals. One
 facility can host several nodes — a Santiago site might carry a LEO Ka gateway

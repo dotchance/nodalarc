@@ -1,6 +1,6 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
-// SGP4 Web Worker — orbital propagation off the main thread.
+// Keplerian/J2 Web Worker — orbital propagation off the main thread.
 // Writes satellite positions into a double-buffered SharedArrayBuffer.
 // Main thread reads the active buffer with zero contention.
 

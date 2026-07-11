@@ -9,18 +9,18 @@ import { describe, expect, it } from "vitest";
 import { wallTarget } from "../wallTarget";
 import { targetKey } from "../useEditorWindows";
 import {
-  defaultLinkRule,
-  defaultRoutingDomain,
   emittedDomainId,
   emittedRuleId,
   mintSiteMembers,
+  parseSiteLines,
+  type Workspace,
+} from "../workspace";
+import {
+  defaultRoutingDomain,
   newDraftConstellation,
   newDraftGroundSet,
   newWorkspace,
-  parseSiteLines,
-  placedSegments,
-  type Workspace,
-} from "../workspace";
+} from "./fixtures/workspaceFixtures";
 import type { BuilderResolveError } from "../builderTypes";
 
 /** A workspace with one space constellation, one populated ground segment, and
@@ -31,13 +31,28 @@ function linkedWorkspace(): { ws: Workspace } {
   const ground = newDraftGroundSet("nodalarc:nodes/ground/gw.yaml", {});
   ground.members = mintSiteMembers(ground, parseSiteLines("Denver, 39.7, -104.9").rows);
   ws.ground.push(ground);
-  const placed = placedSegments(ws);
-  ws.links.push(
-    defaultLinkRule(
-      placed.find((s) => s.kind === "ground")!,
-      placed.find((s) => s.kind === "space")!,
-    ),
-  );
+  ws.links.push({
+    rule_id: "backend-rule-1",
+    label: "Ground access",
+    enabled: true,
+    a: {
+      segment_id: ground.segment_id,
+      tag: null,
+      role: "access",
+      medium: "rf",
+      min_elevation_deg: 25,
+    },
+    b: {
+      segment_id: ws.space[0]!.segment_id,
+      tag: null,
+      role: "access",
+      medium: "rf",
+      min_elevation_deg: null,
+    },
+    topology_mode: "visible_candidates",
+    topology_n: 1,
+    max_range_km: null,
+  });
   return { ws };
 }
 

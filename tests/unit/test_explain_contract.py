@@ -51,7 +51,9 @@ _REASONS_TS = Path(__file__).resolve().parents[2] / "frontend/src/explain/reason
 _FAMILIES_TS = Path(__file__).resolve().parents[2] / "frontend/src/explain/families.ts"
 _TYPES_TS = Path(__file__).resolve().parents[2] / "frontend/src/explain/types.ts"
 _LINK_EVENTS_TS = Path(__file__).resolve().parents[2] / "frontend/src/explain/linkEvents.ts"
-_BUILDER_TYPES_TS = Path(__file__).resolve().parents[2] / "frontend/src/builder/builderTypes.ts"
+_BUILDER_API_TYPES_TS = (
+    Path(__file__).resolve().parents[2] / "frontend/src/builder/generated/builderApi.ts"
+)
 
 # Each backend model and the TS interface that mirrors its wire shape.
 _WIRE_MODELS = [
@@ -77,7 +79,7 @@ def _ts_interface_fields(name: str, path: Path = _TYPES_TS) -> set[str]:
         line = raw.strip()
         if not line or line.startswith(("//", "*", "/")):
             continue
-        field = re.match(r"(\w+)\??\s*:", line)
+        field = re.match(r"(?:readonly\s+)?(\w+)\??\s*:", line)
         if field:
             fields.add(field.group(1))
     return fields
@@ -94,59 +96,18 @@ def test_wire_shape_field_names_match_backend():
 
 
 def test_builder_wire_shape_field_names_match_backend():
-    """Builder wire models ↔ frontend/src/builder/builderTypes.ts twins."""
-    from nodalarc.models.builder_world import (
-        BuilderCatalogEntry,
-        BuilderErrorSubject,
-        BuilderLinkEndpoint,
-        BuilderLinkRule,
-        BuilderNodeInterfaceFacts,
-        BuilderPreviewPair,
-        BuilderPreviewReasonCount,
-        BuilderResolveCheck,
-        BuilderResolveRefusal,
-        BuilderRuleAllocation,
-        BuilderRulePreview,
-        BuilderWorld,
-        BuilderWorldNode,
-    )
-    from nodalarc.models.resolved_session import (
-        ResolvedInterfaceAddress,
-        ResolvedNodeInterfaces,
-        ResolvedSurfacePosition,
-        ResolvedTerminalBlock,
-    )
-    from nodalarc.models.segment_session import SessionMeta
-    from nodalarc.models.segments import OriginatedPrefixes
-    from nodalarc.runtime_support import UnsupportedFeature
+    """Every object in the backend BuilderWorld schema is generated for TypeScript."""
+    from nodalarc.models.builder_world import BuilderWorld
 
-    builder_wire_models = [
-        (BuilderWorld, "BuilderWorld"),
-        (BuilderWorldNode, "BuilderWorldNode"),
-        (BuilderResolveCheck, "BuilderResolveCheck"),
-        (BuilderCatalogEntry, "BuilderCatalogEntry"),
-        (BuilderLinkRule, "BuilderLinkRule"),
-        (BuilderLinkEndpoint, "BuilderLinkEndpoint"),
-        (BuilderRuleAllocation, "BuilderRuleAllocation"),
-        (BuilderNodeInterfaceFacts, "BuilderNodeInterfaceFacts"),
-        (BuilderRulePreview, "BuilderRulePreview"),
-        (BuilderPreviewPair, "BuilderPreviewPair"),
-        (BuilderPreviewReasonCount, "BuilderPreviewReasonCount"),
-        (BuilderResolveRefusal, "BuilderResolveError"),
-        (BuilderErrorSubject, "BuilderErrorSubject"),
-        (UnsupportedFeature, "BuilderUnsupportedFeature"),
-        (SessionMeta, "BuilderSessionMeta"),
-        (ResolvedSurfacePosition, "BuilderSurfacePosition"),
-        (ResolvedTerminalBlock, "ResolvedTerminalBlock"),
-        (ResolvedInterfaceAddress, "ResolvedInterfaceAddress"),
-        (ResolvedNodeInterfaces, "ResolvedNodeInterfaces"),
-        (OriginatedPrefixes, "OriginatedPrefixes"),
-    ]
-    for model, ts_name in builder_wire_models:
-        py_fields = set(model.model_fields)
-        ts_fields = _ts_interface_fields(ts_name, path=_BUILDER_TYPES_TS)
+    schema = BuilderWorld.model_json_schema()
+    object_schemas = {"BuilderWorld": schema, **schema.get("$defs", {})}
+    for ts_name, object_schema in object_schemas.items():
+        if object_schema.get("type") != "object":
+            continue
+        py_fields = set(object_schema.get("properties", {}))
+        ts_fields = _ts_interface_fields(ts_name, path=_BUILDER_API_TYPES_TS)
         assert py_fields == ts_fields, (
-            f"{model.__name__} <-> TS {ts_name} field drift: "
+            f"BuilderWorld schema {ts_name} <-> generated TS field drift: "
             f"py-only={py_fields - ts_fields}, ts-only={ts_fields - py_fields}"
         )
 
@@ -163,6 +124,24 @@ def _literal_values(literal_type: object) -> set[str]:
     if isinstance(literal_type, type) and issubclass(literal_type, StrEnum):
         return {m.value for m in literal_type}
     return set(get_args(literal_type))
+
+
+def _ts_interface_field_literals(interface: str, field: str, *, path: Path) -> set[str]:
+    """Extract string literals from one field in a generated TS interface."""
+    text = path.read_text(encoding="utf-8")
+    interface_match = re.search(
+        rf"export interface {interface} \{{\n(.*?)\n\}}",
+        text,
+        re.DOTALL,
+    )
+    assert interface_match, f"interface {interface} not found in {path}"
+    field_match = re.search(
+        rf"^\s*readonly {field}\??\s*:\s*(.+);$",
+        interface_match.group(1),
+        re.MULTILINE,
+    )
+    assert field_match, f"field {interface}.{field} not found in {path}"
+    return set(re.findall(r'"([^"]+)"', field_match.group(1)))
 
 
 def test_reasons_ts_exists():
@@ -190,16 +169,20 @@ def test_visibility_reject_reasons_match_backend():
 def test_builder_preview_scopes_match_backend():
     from nodalarc.models.builder_world import PreviewScope
 
-    assert _frontend_array("BUILDER_PREVIEW_SCOPES", path=_BUILDER_TYPES_TS) == _literal_values(
-        PreviewScope
-    )
+    assert _ts_interface_field_literals(
+        "BuilderRulePreview",
+        "preview_scope",
+        path=_BUILDER_API_TYPES_TS,
+    ) == _literal_values(PreviewScope)
 
 
 def test_builder_preview_reject_reasons_match_backend():
     from nodalarc.models.builder_world import BuilderPreviewRejectReason
 
-    assert _frontend_array(
-        "BUILDER_PREVIEW_REJECT_REASONS", path=_BUILDER_TYPES_TS
+    assert _ts_interface_field_literals(
+        "BuilderPreviewReasonCount",
+        "reason",
+        path=_BUILDER_API_TYPES_TS,
     ) == _literal_values(BuilderPreviewRejectReason)
 
 
@@ -260,33 +243,3 @@ def test_actuation_explanation_reasons_match_backend():
     # match the frontend list, or a backend rename silently drops the headline to
     # "State unknown" while the registry record orphans.
     assert _frontend_array("ACTUATION_EXPLANATION_REASONS") == set(ACTUATION_EXPLANATION_REASONS)
-
-
-# ---------------------------------------------------------------------------
-# Builder vocabulary twin — the role/medium closed sets the builder offers
-# must be the grammar's, in both directions. The builder once hand-listed
-# roles per surface and drifted (backbone existed in the grammar and the
-# node editor but not the rule editor); the single frontend vocabulary in
-# workspace.ts is only a twin while this pins it to the Python literals.
-# ---------------------------------------------------------------------------
-
-_WORKSPACE_TS = Path(__file__).resolve().parents[2] / "frontend/src/builder/workspace.ts"
-
-
-def _ts_const_array(name: str) -> list[str]:
-    text = _WORKSPACE_TS.read_text(encoding="utf-8")
-    match = re.search(rf"export const {name} = \[([^\]]+)\] as const;", text)
-    assert match, f"{name} literal array not found in workspace.ts"
-    return re.findall(r'"([a-z_]+)"', match.group(1))
-
-
-def test_builder_mount_role_vocabulary_matches_grammar():
-    from nodalarc.models.link_rules import MountRole
-
-    assert set(_ts_const_array("MOUNT_ROLES")) == set(get_args(MountRole))
-
-
-def test_builder_medium_vocabulary_matches_grammar():
-    from nodalarc.models.catalog import TerminalMedium
-
-    assert set(_ts_const_array("LINK_MEDIA")) == set(get_args(TerminalMedium))

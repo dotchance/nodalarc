@@ -106,7 +106,7 @@ class TestTrackingRateCalibration:
 
     def test_tracking_rate_read_from_config(self):
         """Tracking rate is a configured terminal value, not a hardcoded engine constant."""
-        from nodalarc.models.constellation import IslTerminal
+        from nodalarc.ome_runtime import IslTerminal
 
         terminal = IslTerminal(
             type="optical",

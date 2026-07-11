@@ -209,6 +209,7 @@ link_rules:
       all:
       - role: access
       - medium: rf
+      - mount: access_ka
     min_elevation_deg: 5
   - select:
       segment: geo_relay
@@ -216,6 +217,7 @@ link_rules:
       all:
       - role: access
       - medium: rf
+      - mount: access_ka
 - id: luna_access
   topology:
     mode: visible_candidates
@@ -349,6 +351,7 @@ link_rules:
       all:
       - role: access
       - medium: rf
+      - mount: access_ka
     min_elevation_deg: 5
   - select:
       segment: geo_relay
@@ -356,6 +359,7 @@ link_rules:
       all:
       - role: access
       - medium: rf
+      - mount: access_ka
 - id: meo_access
   topology:
     mode: visible_candidates

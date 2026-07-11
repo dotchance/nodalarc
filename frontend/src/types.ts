@@ -5,6 +5,7 @@
  */
 
 import type { ActuationState } from "./explain/reasons";
+import type { CatalogSessionSummary } from "./builder/generated/builderApi";
 
 export interface NodeAddress {
   purpose: "router_loopback" | "site_interface" | "site_prefix";
@@ -243,16 +244,7 @@ export type {
   PlaybackStateMsg,
 } from "./sim/ephemeris";
 
-export interface SessionInfo {
-  name: string;
-  file: string;
-  constellation: string;
-  routing_stack: string;
-  /** The root tier the file lives under — never provenance: the generated
-   *  root holds builder, wizard, and upload outputs alike, all "user". */
-  source: "user" | "nodalarc";
-  active: boolean;
-}
+export type SessionInfo = CatalogSessionSummary;
 
 /** App-level selection state */
 export type SelectionType = "satellite" | "ground_station" | "link" | null;

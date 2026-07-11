@@ -12,8 +12,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from nodalarc.models.ground_policy import HandoverPolicySpec
-from nodalarc.models.ground_station import HysteresisParameters
+from nodalarc.models.ground_policy import HandoverPolicySpec, HysteresisParameters
 from nodalarc.models.link_decisions import GroundUnscheduledReason
 
 from ome.visibility import GroundVisibility

@@ -89,6 +89,77 @@ def test_check_ping_allows_skip_only_for_satellite_only_topology(monkeypatch) ->
     assert result["active_link_count"] == 0
 
 
+def test_ground_probe_reaches_candidate_after_first_bounded_sweep(monkeypatch) -> None:
+    source = "ground-source"
+    destinations = [f"ground-destination-{index:02d}" for index in range(1, 18)]
+    ground_topology = {
+        source: {
+            "site": "source-site",
+            "body": "earth",
+            "lat_deg": 0.0,
+            "lon_deg": 0.0,
+            "wan_ifnames": ["term0"],
+        },
+        **{
+            destination: {
+                "site": f"destination-site-{index:02d}",
+                "body": "earth",
+                "lat_deg": float(index),
+                "lon_deg": float(index),
+                "wan_ifnames": ["term0"],
+            }
+            for index, destination in enumerate(destinations, start=1)
+        },
+    }
+    candidates = [(source, destination) for destination in destinations]
+    active_ground_links = {node_id: [{"state": "active"}] for node_id in ground_topology}
+    command_log: list[str] = []
+
+    monkeypatch.setattr(e2e_matrix, "request_json", lambda *args, **kwargs: {})
+    monkeypatch.setattr(e2e_matrix, "_ground_node_ids", lambda state: destinations)
+    monkeypatch.setattr(e2e_matrix, "_ground_links_by_gs", lambda state: active_ground_links)
+    monkeypatch.setattr(e2e_matrix, "_transit_pairs", lambda *args, **kwargs: candidates)
+    monkeypatch.setattr(e2e_matrix.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        e2e_matrix,
+        "_node_loopback_ip",
+        lambda node_id: f"10.0.0.{destinations.index(node_id) + 1}",
+    )
+
+    def fake_exec(node_id: str, command: str, *, timeout: int = 20) -> dict:
+        del node_id, timeout
+        command_log.append(command)
+        if command.startswith("ip route get"):
+            destination_ip = command.rsplit(" ", 1)[-1]
+            if destination_ip == "10.0.0.17":
+                return {
+                    "rc": 0,
+                    "stdout": f"{destination_ip} via 100.64.0.1 dev term0",
+                    "stderr": "",
+                }
+            return {"rc": 2, "stdout": "", "stderr": "unreachable"}
+        if command.startswith("vtysh"):
+            return {"rc": 0, "stdout": "neighbor Up", "stderr": ""}
+        if command.startswith("ping"):
+            return {"rc": 0, "stdout": "0% packet loss", "stderr": ""}
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr(e2e_matrix, "_kubectl_exec", fake_exec)
+
+    result = e2e_matrix._find_routed_ground_probe(  # noqa: SLF001
+        "token",
+        wait_s=1,
+        ground_topology=ground_topology,
+    )
+
+    assert result is not None
+    assert result["result"] == "PASS"
+    assert result["key"] == f"{source}->{destinations[16]}"
+    assert len([command for command in command_log if command.startswith("ip route get")]) == 17
+    assert len([command for command in command_log if command.startswith("vtysh")]) == 1
+    assert len([command for command in command_log if command.startswith("ping")]) == 1
+
+
 def test_quality_workflow_runs_lint_and_frontend_smoke_as_separate_signals() -> None:
     workflow = yaml.safe_load(Path(".github/workflows/quality.yml").read_text())
     triggers = workflow.get("on", workflow.get(True))

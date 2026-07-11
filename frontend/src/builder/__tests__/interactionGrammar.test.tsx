@@ -21,8 +21,6 @@ import {
   render,
   renderHook,
   screen,
-  waitFor,
-  within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -40,29 +38,22 @@ import { SiteEditor } from "../SiteEditor";
 import { ConstellationEditor } from "../ConstellationEditor";
 import {
   accessBeamElevationDeg,
-  capabilitiesBySegment,
-  connectSegments,
-  deriveLinkPhysics,
-  groundMaskSeedNote,
-  rederiveRule,
-  SEEDED_GROUND_MASK_NOTE,
 } from "../linkPhysics";
 import {
-  identifier,
-  LINK_MEDIA,
   mintSiteMembers,
-  newDraftConstellation,
-  newDraftGroundSet,
-  newDraftSiteObject,
-  newWorkspace,
   nextMintIndex,
   parseSiteLines,
-  siteSetWrapperFromDraft,
   stampLanPrefix,
-  SCHEDULING_PRESETS,
+  type DraftSiteObject,
 } from "../workspace";
-import type { BuilderCatalogEntry } from "../builderTypes";
-import { canDeploy, resetCatalogStores } from "../useBuilderWorld";
+import { AUTHORING_FACTS } from "./fixtures/authoringFacts";
+import {
+  newDraftConstellation,
+  newDraftGroundSet,
+  newWorkspace,
+} from "./fixtures/workspaceFixtures";
+import type { CatalogDocumentSummary } from "../generated/builderApi";
+import { canDeploy } from "../useBuilderWorld";
 import {
   appliedObjectForKey,
   bufferAppliedChanged,
@@ -74,6 +65,53 @@ import {
 import { tinyWorld } from "./fixtures/tinyWorld";
 
 const BUILDER_DIR = join(__dirname, "..");
+
+function draftSite(nodeRef = "nodalarc:nodes/ground/gw.yaml"): DraftSiteObject {
+  return {
+    site_id: "my-site",
+    display_name: "My site",
+    body: "nodalarc:bodies/earth.yaml",
+    lat_deg: 0,
+    lon_deg: 0,
+    alt_m: 0,
+    lan_ipv4: "172.20.0.0/24",
+    tags: [],
+    nodes: [{
+      node_id: "gw1",
+      model_ref: nodeRef,
+      installed: {},
+      boresights: {},
+      lo0_ipv4: "10.200.0.1/32",
+      terr0_ipv4: "172.20.0.1/24",
+    }],
+  };
+}
+
+function catalogSummary(
+  ref: string,
+  family: CatalogDocumentSummary["family"],
+  displayName: string,
+): CatalogDocumentSummary {
+  return {
+    ref,
+    family,
+    namespace: ref.startsWith("user:") ? "user" : "nodalarc",
+    revision: `revision-${ref}`,
+    size_bytes: 100,
+    display_name: displayName,
+    summary: null,
+  };
+}
+
+type DeepMutable<T> = T extends ReadonlyArray<infer Item>
+  ? DeepMutable<Item>[]
+  : T extends object
+    ? { -readonly [Key in keyof T]: DeepMutable<T[Key]> }
+    : T;
+
+function mutableClone<T>(value: T): DeepMutable<T> {
+  return structuredClone(value) as DeepMutable<T>;
+}
 
 describe("builder surfaces compose the kit, never raw controls", () => {
   // The kit DEFINES the controls, so editorKit.tsx is exempt. __tests__ is a
@@ -143,10 +181,13 @@ describe("card anatomy lives only in the kit (EditorCard)", () => {
   });
 });
 
-describe("EditorCard adoption smoke: migrated editors render and their cards behave", () => {
+describe("EditorCard adoption smoke: current editors render and their cards behave", () => {
   beforeEach(() => {
     // The editors read catalogs on mount; the endpoint returns a bare array.
-    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => [] })));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: true, json: async () => ({ generation: "g1", items: [] }) })),
+    );
   });
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -154,11 +195,12 @@ describe("EditorCard adoption smoke: migrated editors render and their cards beh
   });
 
   it("SiteEditor: a multi-node site card carries a working Remove (the actions slot)", () => {
-    const base = newDraftSiteObject("nodalarc:nodes/ground/gw.yaml", {});
+    const base = draftSite();
     const site = { ...base, nodes: [base.nodes[0]!, { ...base.nodes[0]!, node_id: "gw2" }] };
     let updated = site;
     render(
       <SiteEditor
+        authoring={AUTHORING_FACTS}
         site={site}
         onUpdate={(update) => {
           updated = update(updated);
@@ -176,6 +218,7 @@ describe("EditorCard adoption smoke: migrated editors render and their cards beh
   it("ConstellationEditor: a collapsed accordion card opens on head click", () => {
     render(
       <ConstellationEditor
+        authoring={AUTHORING_FACTS}
         draft={newDraftConstellation("nodalarc:nodes/space/leo.yaml")}
         workspace={newWorkspace("t")}
         onUpdate={() => {}}
@@ -190,11 +233,43 @@ describe("EditorCard adoption smoke: migrated editors render and their cards beh
     fireEvent.click(screen.getByRole("button", { name: /Pattern/ }));
     expect(screen.getByText("planes")).toBeTruthy();
   });
+
+  it("ConstellationEditor authors canonical one-plane phasing atomically", () => {
+    const draft = newDraftConstellation("nodalarc:nodes/space/leo.yaml");
+    let updated = draft;
+    render(
+      <ConstellationEditor
+        authoring={AUTHORING_FACTS}
+        draft={draft}
+        workspace={newWorkspace("t")}
+        onUpdate={(update) => {
+          updated = update(updated);
+        }}
+        onUpdateOrbit={() => {}}
+        onRemove={() => {}}
+        onOpenRule={() => {}}
+        onConnect={() => {}}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Pattern/ }));
+    fireEvent.change(screen.getByLabelText("phasing"), {
+      target: { value: "evenly_spaced_mean_anomaly" },
+    });
+    expect(updated).toMatchObject({
+      planes: 1,
+      raan_spacing_deg: 360,
+      phasing_mode: "evenly_spaced_mean_anomaly",
+      phase_offset_deg: 0,
+    });
+  });
 });
 
 describe("BodySelect failure contract + node-id collision", () => {
   beforeEach(() => {
-    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => [] })));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: true, json: async () => ({ generation: "g1", items: [] }) })),
+    );
   });
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -232,12 +307,13 @@ describe("BodySelect failure contract + node-id collision", () => {
   });
 
   it("adding a node fills the first free gw slot (no collision after a delete)", () => {
-    const base = newDraftSiteObject("nodalarc:nodes/ground/gw.yaml", {});
+    const base = draftSite();
     // A gap at gw2 (as a delete-then-render would leave): length+1 would re-mint gw3.
     const site = { ...base, nodes: [base.nodes[0]!, { ...base.nodes[0]!, node_id: "gw3" }] };
     let added = site;
     render(
       <SiteEditor
+        authoring={AUTHORING_FACTS}
         site={site}
         onUpdate={(update) => {
           added = update(site);
@@ -249,16 +325,8 @@ describe("BodySelect failure contract + node-id collision", () => {
   });
 
   it("BodySelect lists a catalog body exactly once when the value is already in the catalog", () => {
-    const entry = (ref: string, display_name: string): BuilderCatalogEntry =>
-      ({
-        ref,
-        family: "bodies",
-        id: ref.split("/").pop() ?? null,
-        display_name,
-        notes: null,
-        summary: null,
-        error: null,
-      }) as BuilderCatalogEntry;
+    const entry = (ref: string, displayName: string): CatalogDocumentSummary =>
+      catalogSummary(ref, "bodies", displayName);
     render(
       <BodySelect
         label="on body"
@@ -284,10 +352,15 @@ describe("BodySelect failure contract + node-id collision", () => {
     expect(nextMintIndex(draft)).toBeGreaterThan(0);
     render(
       <GroundEditor
+        authoring={AUTHORING_FACTS}
         draft={draft}
         workspace={newWorkspace("t")}
         onOpenRule={() => {}}
         onConnect={() => {}}
+        schedulingPresets={[]}
+        selectedSchedulingPreset={null}
+        memberSchedulingPreset={() => null}
+        onSchedulingPreset={async () => {}}
         onUpdate={() => {}}
         onRemove={() => {}}
       />,
@@ -300,90 +373,6 @@ describe("BodySelect failure contract + node-id collision", () => {
     // The preview shows the NEXT mint's address (index nextMintIndex) — a revert to
     // the literal 0 would show a different, colliding address and fail this.
     expect(preview?.textContent).toContain(stampLanPrefix(draft.stamp, nextMintIndex(draft)));
-  });
-});
-
-describe("save-to-library convergence wiring", () => {
-  beforeEach(() => {
-    resetCatalogStores();
-    // The save endpoint returns a family-specific ref; every other catalog read
-    // (the post-save family refresh included) returns an empty list.
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url: string, init?: { body?: string }) => {
-        if (String(url).includes("/builder/catalog/save")) {
-          // useLibrarySave posts the family in the body — echo a ref under it.
-          const family = init?.body ? JSON.parse(init.body).family : "sites";
-          return {
-            ok: true,
-            status: 200,
-            json: async () => ({ ref: `user:${family}/x.yaml`, family }),
-          };
-        }
-        return { ok: true, json: async () => [] };
-      }),
-    );
-  });
-  afterEach(() => {
-    vi.unstubAllGlobals();
-    cleanup();
-  });
-
-  it("saving the whole set reports (ref, wrapper) to onSaved — the window-annotation source", async () => {
-    const draft = newDraftGroundSet("nodalarc:nodes/ground/gw.yaml", {});
-    draft.members = mintSiteMembers(draft, parseSiteLines("Denver, 39.7, -104.9").rows);
-    const onSaved = vi.fn();
-    render(
-      <GroundEditor
-        draft={draft}
-        workspace={newWorkspace("t")}
-        onOpenRule={() => {}}
-        onConnect={() => {}}
-        onUpdate={() => {}}
-        onRemove={() => {}}
-        onSaved={onSaved}
-      />,
-    );
-    fireEvent.click(screen.getByRole("button", { name: "Save to library" }));
-    await waitFor(() => expect(onSaved).toHaveBeenCalled());
-    // The exact wrapper the save posted — so the window stores the same shape the
-    // close-time comparator re-serializes the applied set into.
-    expect(onSaved.mock.calls[0]).toEqual([
-      "user:site-sets/x.yaml",
-      siteSetWrapperFromDraft(draft),
-    ]);
-  });
-
-  it("saving an authored member flips it to a ref in place, keeping member_id + override", async () => {
-    const draft = newDraftGroundSet("nodalarc:nodes/ground/gw.yaml", {});
-    draft.members = mintSiteMembers(draft, parseSiteLines("Denver, 39.7, -104.9").rows);
-    const member = draft.members[0]!;
-    member.scheduling_override = SCHEDULING_PRESETS["geo-longest-pass"].block; // a session-owned block to preserve
-    let updated = draft;
-    render(
-      <GroundEditor
-        draft={draft}
-        workspace={newWorkspace("t")}
-        onOpenRule={() => {}}
-        onConnect={() => {}}
-        onUpdate={(update) => {
-          updated = update(updated);
-        }}
-        onRemove={() => {}}
-      />,
-    );
-    // Open the member's inline editor, then save it to the sites library.
-    fireEvent.click(screen.getByRole("button", { name: `Edit ${member.label}` }));
-    const embedded = screen.getByTestId("builder-site-editor");
-    fireEvent.click(within(embedded).getByRole("button", { name: "Save to library" }));
-    await waitFor(() => expect(updated.members[0]!.kind).toBe("ref"));
-    const flipped = updated.members[0]!;
-    expect(flipped.member_id).toBe(member.member_id); // never minted fresh
-    expect(flipped.ref).toBe("user:sites/x.yaml");
-    expect(flipped.site).toBeNull();
-    expect(flipped.scheduling_override).toEqual(
-      SCHEDULING_PRESETS["geo-longest-pass"].block,
-    ); // session-owned, preserved
   });
 });
 
@@ -434,169 +423,16 @@ describe("editor kit behavior", () => {
   });
 });
 
-describe("connect derives physics from faceplates", () => {
-  function connectWorkspace() {
-    const workspace = newWorkspace("t");
-    workspace.space.push(newDraftConstellation("nodalarc:nodes/space/leo-relay.yaml"));
-    const ground = newDraftGroundSet("nodalarc:nodes/ground/leo-gateway.yaml", {});
-    ground.members = mintSiteMembers(ground, parseSiteLines("Denver, 39.7, -104.9").rows);
-    workspace.ground.push(ground);
-    return { workspace, groundId: ground.segment_id, spaceId: workspace.space[0]!.segment_id };
-  }
-
-  it("ground-to-space derives access, the mask from the ground terminals", () => {
-    const { workspace, groundId, spaceId } = connectWorkspace();
-    const world = tinyWorld(groundId, spaceId);
-    const rule = connectSegments(workspace, world, groundId, spaceId);
-    expect(rule.a.role).toBe("access");
-    expect(rule.a.medium).toBe("rf");
-    // The mask comes from the ground segment's own access terminals.
-    expect(rule.a.min_elevation_deg).toBe(25);
-    expect(rule.b.min_elevation_deg).toBeNull();
-    expect(rule.topology_mode).toBe("visible_candidates");
-  });
-
-  it("self-connect derives the fabric: isl, optical, nearest-2", () => {
-    const { workspace, groundId, spaceId } = connectWorkspace();
-    const world = tinyWorld(groundId, spaceId);
-    const rule = connectSegments(workspace, world, spaceId, spaceId);
-    expect(rule.a.role).toBe("isl");
-    expect(rule.a.medium).toBe("optical");
-    expect(rule.topology_mode).toBe("nearest_n");
-    expect(rule.topology_n).toBe(2);
-  });
-
-  it("unformable pairs say so instead of inventing physics", () => {
-    const { groundId, spaceId } = connectWorkspace();
-    const capabilities = capabilitiesBySegment(tinyWorld(groundId, spaceId));
-    // The ground segment has no crosslink terminals: space-to-space
-    // derivation against it must report formable=false.
-    const physics = deriveLinkPhysics(
-      capabilities,
-      { segment_id: spaceId, kind: "space" },
-      { segment_id: groundId, kind: "space" }, // pretend both space
-    );
-    expect(physics.formable).toBe(false);
-  });
-
-  it("a floorless ground mask is a SEEDED default, said plainly in both carriers", () => {
-    const { workspace, groundId, spaceId } = connectWorkspace();
-    const world = tinyWorld(groundId, spaceId, null); // no terminal declares a floor
-    const rule = connectSegments(workspace, world, groundId, spaceId);
-    // The seed value is applied via the default, not derived from a terminal.
-    expect(rule.a.min_elevation_deg).toBe(25);
-    // Carrier 1 — the editor's seed note (the connect-seed path).
-    const caps = capabilitiesBySegment(world);
-    expect(
-      groundMaskSeedNote(caps.get(groundId), {
-        role: "access",
-        kind: "ground",
-        min_elevation_deg: 25,
-      }),
-    ).toBe("no terminal declares an elevation floor — seeded default 25°");
-    expect(SEEDED_GROUND_MASK_NOTE).toBe("no terminal declares an elevation floor — seeded default 25°");
-    // Carrier 2 — the re-derive notice; a seed reads as a seed, never "derived".
-    const { notice } = rederiveRule(workspace, world, rule, "b", spaceId);
-    expect(notice).toContain("no terminal declares an elevation floor — seeded default 25°");
-    expect(notice).not.toMatch(/· 25° mask/);
-  });
-
-  it("a DECLARED floor is not seeded — the seed note stays off, the notice shows the value", () => {
-    const { workspace, groundId, spaceId } = connectWorkspace();
-    const world = tinyWorld(groundId, spaceId, 25); // the ground terminal declares 25°
-    const rule = connectSegments(workspace, world, groundId, spaceId);
-    const caps = capabilitiesBySegment(world);
-    expect(
-      groundMaskSeedNote(caps.get(groundId), {
-        role: "access",
-        kind: "ground",
-        min_elevation_deg: 25,
-      }),
-    ).toBeNull();
-    const { notice } = rederiveRule(workspace, world, rule, "b", spaceId);
-    expect(notice).toContain("· 25° mask");
-    expect(notice).not.toContain("seeded default");
-  });
-
-  it("the unformable fallback medium comes from the owned vocabulary, not literals", () => {
-    // Empty capabilities -> nothing is formable, so derivation hits the
-    // fallback; its medium must be drawn from LINK_MEDIA (the owned set), the
-    // role-appropriate default, never a re-listed string.
-    const empty = capabilitiesBySegment(null);
-    const access = deriveLinkPhysics(
-      empty,
-      { segment_id: "g", kind: "ground" },
-      { segment_id: "s", kind: "space" },
-    );
-    expect(access.formable).toBe(false);
-    expect(LINK_MEDIA).toContain(access.medium);
-    expect(access.medium).toBe("rf"); // access -> radio, the highest-rank default
-    const fabric = deriveLinkPhysics(
-      empty,
-      { segment_id: "s", kind: "space" },
-      { segment_id: "s", kind: "space" },
-    );
-    expect(fabric.formable).toBe(false);
-    expect(fabric.medium).toBe("optical"); // fabric -> optical, the lowest-rank default
-  });
-
-  // rederiveRule's PATCH (not just its notice) — the physics it writes
-  // when an endpoint moves, and the loud refusal when it cannot re-derive.
-  it("a role flip to isl clears the now-irrelevant elevation mask", () => {
-    const { workspace, groundId, spaceId } = connectWorkspace();
-    const world = tinyWorld(groundId, spaceId);
-    const access = connectSegments(workspace, world, groundId, spaceId); // ground↔space access
-    expect(access.a.min_elevation_deg).toBe(25); // ground side carries the mask
-    // Move the ground endpoint to the space segment → space↔space isl.
-    const { patch } = rederiveRule(workspace, world, access, "a", spaceId);
-    expect(patch.a!.role).toBe("isl");
-    expect(patch.a!.min_elevation_deg).toBeNull(); // the mask is cleared, not carried
-    expect(patch.b!.min_elevation_deg).toBeNull();
-  });
-
-  it("the ground side of a re-derived access rule gets the elevation mask", () => {
-    const { workspace, groundId, spaceId } = connectWorkspace();
-    const world = tinyWorld(groundId, spaceId);
-    const isl = connectSegments(workspace, world, spaceId, spaceId); // space↔space isl, no mask
-    expect(isl.a.min_elevation_deg).toBeNull();
-    // Move endpoint a to the ground segment → access; the ground side gets the mask.
-    const { patch } = rederiveRule(workspace, world, isl, "a", groundId);
-    expect(patch.a!.role).toBe("access");
-    expect(patch.a!.min_elevation_deg).toBe(25); // ground side masked
-    expect(patch.b!.min_elevation_deg).toBeNull(); // space side floorless
-  });
-
-  it("an unformable re-derivation carries the warning, never silent physics", () => {
-    const { workspace, groundId, spaceId } = connectWorkspace();
-    const world = tinyWorld(groundId, spaceId);
-    const rule = connectSegments(workspace, world, groundId, spaceId);
-    // A null world → no capabilities → neither side has matching terminals.
-    const { notice } = rederiveRule(workspace, null, rule, "b", spaceId);
-    expect(notice).toContain("WARNING: neither side has matching terminals");
-  });
-
-  it("re-deriving onto an unplaced segment invents no physics", () => {
-    const { workspace, groundId, spaceId } = connectWorkspace();
-    const world = tinyWorld(groundId, spaceId);
-    const rule = connectSegments(workspace, world, groundId, spaceId);
-    const { patch, notice } = rederiveRule(workspace, world, rule, "b", "not-a-placed-segment");
-    expect(notice).toBe("endpoint changed — pick a placed segment to re-derive physics");
-    expect(patch.b!.segment_id).toBe("not-a-placed-segment"); // the id moves
-    expect(patch.a).toBeUndefined(); // only the changed side
-    expect(patch.topology_mode).toBeUndefined(); // and no fabricated geometry
-  });
-});
-
 describe("editor state is keyed by object identity", () => {
   beforeEach(() => {
     // The catalog fetches behind useBuilderCatalog are irrelevant here — the
     // catalog endpoint returns a bare array (refreshCatalogFamily casts the
-    // response to BuilderCatalogEntry[]), so the stub must too.
+    // response to generated catalog summaries), so the stub must too.
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => ({
         ok: true,
-        json: async () => [],
+        json: async () => ({ generation: "g1", items: [] }),
       })),
     );
   });
@@ -609,9 +445,14 @@ describe("editor state is keyed by object identity", () => {
     const a = newDraftGroundSet("nodalarc:nodes/ground/leo-gateway.yaml", {});
     const b = newDraftGroundSet("nodalarc:nodes/ground/leo-gateway.yaml", {});
     const shared = {
+      authoring: AUTHORING_FACTS,
       workspace: newWorkspace("t"),
       onOpenRule: () => {},
       onConnect: () => {},
+      schedulingPresets: [],
+      selectedSchedulingPreset: null,
+      memberSchedulingPreset: () => null,
+      onSchedulingPreset: async () => {},
       onUpdate: () => {},
       onRemove: () => {},
     };
@@ -696,7 +537,7 @@ describe("beam footprints read the terminals, never a default", () => {
   const world = tinyWorld("gnd", "shell");
 
   it("a declared access floor is the beam's floor; the strictest wins", () => {
-    const node = structuredClone(world.nodes.find((n) => n.segment_id === "gnd")!);
+    const node = mutableClone(world.nodes.find((n) => n.segment_id === "gnd")!);
     node.terminal_inventory[0]!.min_elevation_deg = 10;
     node.terminal_inventory.push({
       ...node.terminal_inventory[0]!,
@@ -707,13 +548,13 @@ describe("beam footprints read the terminals, never a default", () => {
   });
 
   it("an access terminal with no declared floor serves to the horizon", () => {
-    const node = structuredClone(world.nodes.find((n) => n.segment_id === "shell")!);
+    const node = mutableClone(world.nodes.find((n) => n.segment_id === "shell")!);
     for (const block of node.terminal_inventory) block.min_elevation_deg = null;
     expect(accessBeamElevationDeg(node)).toBe(0);
   });
 
   it("no access terminal means no beam, not an invented one", () => {
-    const node = structuredClone(world.nodes.find((n) => n.segment_id === "shell")!);
+    const node = mutableClone(world.nodes.find((n) => n.segment_id === "shell")!);
     node.terminal_inventory = node.terminal_inventory.filter(
       (b) => b.endpoint_role !== "access",
     );
@@ -916,13 +757,9 @@ describe("the anatomy guide answers what-next in any order", () => {
   });
 });
 
-describe("\"artifact\" survives only in save-form contexts", () => {
-  // "Artifact" names the flattened SAVE form (artifact_sha256, the
-  // save dialog). Naming the authoring PANE/document an artifact with a leading
-  // article is a false-state display. Scan every builder file INCLUDING
-  // __tests__ for that article+noun phrase; save-form uses ("saved artifact",
-  // "settled artifact hash", artifact_sha256) carry a word between and never
-  // match. The phrase is built from a variable so this scan never flags itself.
+describe("ambiguous artifact wording stays out of the Builder surface", () => {
+  // Canonical YAML, saved catalog revisions, and dependency digests are distinct
+  // facts. A generic artifact label would collapse those identities.
   const ARTICLE = "the";
   const LEAK = new RegExp(`\\b${ARTICLE} artifact\\b`, "i");
   const leakOffenders = (): string[] => {
@@ -1039,15 +876,11 @@ describe("a save is never a dead end", () => {
       return null;
     }
     render(<Probe />);
-    const entry = {
-      ref: "user:terminals/test-radio.yaml",
-      family: "terminals",
-      id: "test-radio",
-      display_name: "Test radio",
-      notes: null,
-      summary: null,
-      error: null,
-    };
+    const entry = catalogSummary(
+      "user:terminals/test-radio.yaml",
+      "terminals",
+      "Test radio",
+    );
     act(() => requestLibraryReveal(entry));
     expect((latest as { entry: typeof entry }).entry.ref).toBe(
       "user:terminals/test-radio.yaml",
@@ -1087,15 +920,11 @@ describe("a save is never a dead end", () => {
 
   it("each reveal consumer role claims a nonce once, across remounts", async () => {
     const { claimLibraryReveal } = await import("../useBuilderWorld");
-    const entry = {
-      ref: "user:terminals/claim-probe.yaml",
-      family: "terminals",
-      id: "claim-probe",
-      display_name: "Claim probe",
-      notes: null,
-      summary: null,
-      error: null,
-    };
+    const entry = catalogSummary(
+      "user:terminals/claim-probe.yaml",
+      "terminals",
+      "Claim probe",
+    );
     // The registry is module state — a remounted consumer re-running its
     // effect is exactly a second claim of the same nonce, and must get null
     // (per-mount refs replayed the last save on every remount).
@@ -1111,50 +940,69 @@ describe("a save is never a dead end", () => {
   });
 });
 
-describe("deploy gate: artifact truth, runtime-readiness, fail closed", () => {
-  const saved = {
-    savedFile: "/data/generated-sessions/_builder-x.yaml",
-    savedArtifactSha256: "abc",
+describe("deploy gate: saved backend verdict and exact digest truth", () => {
+  const savedVerdict = {
+    allowed: true,
+    session_ref: "user:sessions/x.yaml",
+    session_revision: "revision-x",
+    digests: {
+      document: "doc-x",
+      dependency: "dep-x",
+    },
+    blockers: [],
   };
-  const ready = { deployReady: true, deployBlockers: [] as string[] };
 
-  it("deploys only when the saved artifact matches the settled resolve", () => {
+  it("deploys only when the saved revision matches the settled compile", () => {
     expect(
-      canDeploy({ ...saved, ...ready, settledArtifactSha256: "abc", dirtyWindowCount: 0 }),
+      canDeploy({
+        savedVerdict,
+        settledDocumentDigest: "doc-x",
+        settledDependencyDigest: "dep-x",
+        dirtyWindowCount: 0,
+      }),
     ).toEqual({ ok: true, reason: null });
   });
 
   it("refuses without a save", () => {
     const gate = canDeploy({
-      savedFile: null,
-      savedArtifactSha256: null,
-      settledArtifactSha256: "abc",
+      savedVerdict: null,
+      settledDocumentDigest: "doc-x",
+      settledDependencyDigest: "dep-x",
       dirtyWindowCount: 0,
-      ...ready,
     });
     expect(gate.ok).toBe(false);
     expect(gate.reason).toMatch(/save the session first/);
   });
 
-  it("fails closed when no resolve has settled (cleared or refused)", () => {
+  it("fails closed when no compile has settled (cleared or refused)", () => {
     const gate = canDeploy({
-      ...saved,
-      ...ready,
-      settledArtifactSha256: null,
+      savedVerdict,
+      settledDocumentDigest: null,
+      settledDependencyDigest: null,
       dirtyWindowCount: 0,
     });
     expect(gate.ok).toBe(false);
-    expect(gate.reason).toMatch(/must resolve/);
+    expect(gate.reason).toMatch(/must compile/);
   });
 
-  it("refuses a saved, settled session that cannot start on the cluster", () => {
-    // Every artifact/dirty check passes, but the session is not runtime-ready.
+  it("refuses when the saved backend verdict blocks deployment", () => {
     const gate = canDeploy({
-      ...saved,
-      settledArtifactSha256: "abc",
+      savedVerdict: {
+        ...savedVerdict,
+        allowed: false,
+        blockers: [
+          {
+            code: "readiness.no_satellites",
+            stage: "readiness",
+            severity: "error",
+            message: "no satellites — the session cannot start on the cluster",
+            blocks: ["deploy"],
+          },
+        ],
+      },
+      settledDocumentDigest: "doc-x",
+      settledDependencyDigest: "dep-x",
       dirtyWindowCount: 0,
-      deployReady: false,
-      deployBlockers: ["no satellites — the session cannot start on the cluster"],
     });
     expect(gate.ok).toBe(false);
     expect(gate.reason).toMatch(/no satellites/);
@@ -1162,9 +1010,9 @@ describe("deploy gate: artifact truth, runtime-readiness, fail closed", () => {
 
   it("refuses while windows hold unapplied edits", () => {
     const gate = canDeploy({
-      ...saved,
-      ...ready,
-      settledArtifactSha256: "abc",
+      savedVerdict,
+      settledDocumentDigest: "doc-x",
+      settledDependencyDigest: "dep-x",
       dirtyWindowCount: 2,
     });
     expect(gate.ok).toBe(false);
@@ -1173,9 +1021,9 @@ describe("deploy gate: artifact truth, runtime-readiness, fail closed", () => {
 
   it("names the staleness when the saved copy is behind the edits", () => {
     const gate = canDeploy({
-      ...saved,
-      ...ready,
-      settledArtifactSha256: "def",
+      savedVerdict,
+      settledDocumentDigest: "doc-y",
+      settledDependencyDigest: "dep-x",
       dirtyWindowCount: 0,
     });
     expect(gate.ok).toBe(false);
@@ -1186,7 +1034,7 @@ describe("deploy gate: artifact truth, runtime-readiness, fail closed", () => {
 describe("commitWorkspace: one atomic adoption, one undo entry", () => {
   it("undo after commitWorkspace returns exactly to the pre-commit state", () => {
     const { result } = renderHook(() => useWorkspace());
-    act(() => result.current.startNew("alpha"));
+    act(() => result.current.openWorkspace(newWorkspace("alpha")));
     const before = result.current.workspace;
     expect(before?.name).toBe("alpha");
     act(() =>
@@ -1381,17 +1229,29 @@ describe("save dialog: the name commits once, never per keystroke", () => {
   });
 });
 
-describe("open picker: source is the server's word, not a path sniff", () => {
-  it("OpenSessionPicker groups by entry.source and never sniffs the file path", () => {
+describe("open picker: namespace is the catalog's word, not a path sniff", () => {
+  it("OpenSessionPicker groups by typed namespace and never sniffs a path", () => {
     const source = readFileSync(join(BUILDER_DIR, "OpenSessionPicker.tsx"), "utf-8");
     // The server names each entry's root tier; client-side knowledge of
     // the server's directory layout was the contract drift being removed.
     expect(source).not.toContain("generated-sessions");
-    expect(source).toContain('s.source === "user"');
-    expect(source).toContain('s.source === "nodalarc"');
+    expect(source).toContain('entry.namespace === "user"');
+    expect(source).toContain('entry.namespace === "nodalarc"');
     // The tiers speak the library's own vocabulary.
     expect(source).toContain('group("★ yours"');
     expect(source).toContain('group("nodalarc library"');
+  });
+
+  it("production open/save paths have no retired filesystem or local-parser authority", () => {
+    const view = readFileSync(join(BUILDER_DIR, "BuilderView.tsx"), "utf-8");
+    const world = readFileSync(join(BUILDER_DIR, "useBuilderWorld.ts"), "utf-8");
+    expect(view).not.toContain("useSessionImport");
+    expect(view).not.toContain("workspaceFromSessionDocument");
+    expect(world).not.toContain("/api/v1/sessions");
+    expect(world).not.toContain("/builder/resolve-world");
+    expect(world).toContain("getCatalogDocument");
+    expect(world).toContain("compileVisualDraft");
+    expect(world).not.toContain("compileBuilderDraft");
   });
 });
 
@@ -1427,7 +1287,7 @@ describe("workspaceForSave: the dialog name never silently undoes a rename", () 
       dialogName: "typed name",
       nameTouched: true,
     });
-    expect(next.name).toBe(identifier("typed name"));
+    expect(next.name).toBe("typed name");
   });
 
   it("applied-only with an untouched field is the identity", () => {
@@ -1440,13 +1300,13 @@ describe("workspaceForSave: the dialog name never silently undoes a rename", () 
     expect(next).toBe(ws);
   });
 
-  it("a touched but empty name falls back to the base name, never an empty id", () => {
+  it("a touched empty name is preserved for backend validation", () => {
     const ws = newWorkspace("kept");
     const next = workspaceForSave(ws, {}, {
       applyAll: false,
       dialogName: "",
       nameTouched: true,
     });
-    expect(next.name).toBe("kept");
+    expect(next.name).toBe("");
   });
 });

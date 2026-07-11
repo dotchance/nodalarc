@@ -1,12 +1,10 @@
 # Copyright 2024-2026 .chance (dotchance)
 # Licensed under the Apache License, Version 2.0. See LICENSE file.
-"""Ephemeris manifest grammar.
+"""Resolved ephemeris inputs consumed by runtime propagation.
 
-Earth-only LEO/MEO/GEO sessions do not require ``ephemeris``; Earth-Luna sessions
-do. ``skyfield_bsp`` is the first runtime-supported provider; the others are
-structurally valid but runtime-future. Runtime network download of ephemeris
-files is forbidden — kernels are local, checksum-verified, and must cover the
-session time window.
+The persisted ephemeris language lives in ``models.segment_session``. The
+resolver converts it into these local, checksum-verified runtime values; this
+module does not parse or define session YAML.
 """
 
 from typing import Annotated, Literal
@@ -14,7 +12,7 @@ from typing import Annotated, Literal
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
 from nodalarc.body_frames import FrameBodyName
-from nodalarc.models.segments import Identifier
+from nodalarc.model_validation import Identifier
 
 EphemerisProvider = Literal["skyfield_bsp", "spice_kernel_stack", "operator_supplied_spk"]
 EphemerisQualityTier = Annotated[str, Field(min_length=1)]
@@ -48,7 +46,7 @@ class EphemerisKernel(BaseModel):
 
 
 class EphemerisConfig(BaseModel):
-    """Session ephemeris manifest. Local kernels only; no runtime fetch."""
+    """Resolved local-kernel configuration; no runtime fetch."""
 
     model_config = ConfigDict(extra="forbid")
 

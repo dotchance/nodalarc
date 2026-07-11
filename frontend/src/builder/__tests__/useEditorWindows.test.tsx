@@ -16,7 +16,11 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 import { useEditorWindows, targetKey, type EditorTarget } from "../useEditorWindows";
 import { useWorkspace } from "../useWorkspace";
-import { type DraftConstellation } from "../workspace";
+import type { DraftConstellation } from "../workspace";
+import {
+  newDraftConstellation,
+  newWorkspace,
+} from "./fixtures/workspaceFixtures";
 
 const SPACE_NODE = "nodalarc:nodes/space/x.yaml";
 
@@ -32,7 +36,6 @@ function useHarness() {
     updateLinkRule: ws.updateLinkRule,
     updateRoutingDomain: ws.updateRoutingDomain,
     updateBoundary: ws.updateBoundary,
-    convergeGroundToRef: ws.convergeGroundToRef,
   });
   return { ws, editor };
 }
@@ -41,8 +44,8 @@ function useHarness() {
  *  pruned by the reconciliation pass (its applied object exists). */
 function withSegment() {
   const { result } = renderHook(() => useHarness());
-  act(() => result.current.ws.startNew("t"));
-  act(() => result.current.ws.addConstellation(SPACE_NODE));
+  act(() => result.current.ws.openWorkspace(newWorkspace("t")));
+  act(() => result.current.ws.addConstellation(newDraftConstellation(SPACE_NODE)));
   const draft = result.current.ws.workspace!.space[0]!;
   return { result, segmentId: draft.segment_id };
 }
@@ -117,9 +120,28 @@ describe("useEditorWindows — buffered editing", () => {
     expect(result.current.editor.buffers[key]).toBeUndefined();
   });
 
+  it("exposes a synchronous mutation fence for asynchronous backend commands", () => {
+    const { result, segmentId } = withSegment();
+    const target: EditorTarget = { kind: "segment", id: segmentId };
+    const key = targetKey(target);
+    const applied = result.current.ws.workspace!.space[0]!;
+    act(() => result.current.editor.openEditor(target));
+    const before = result.current.editor.currentBufferMutationRevision();
+    act(() =>
+      result.current.editor.patchBuffer(key, applied, (draft) => ({
+        ...draft,
+        display_name: "changed while awaiting VS-API",
+      })),
+    );
+    const afterEdit = result.current.editor.currentBufferMutationRevision();
+    expect(afterEdit).toBeGreaterThan(before);
+    act(() => result.current.editor.closeWindow(key));
+    expect(result.current.editor.currentBufferMutationRevision()).toBeGreaterThan(afterEdit);
+  });
+
   it("previewWorkspace overlays a dirty session buffer (what the dwell readout reads)", () => {
     const { result } = renderHook(() => useHarness());
-    act(() => result.current.ws.startNew("t"));
+    act(() => result.current.ws.openWorkspace(newWorkspace("t")));
     const future = "2030-01-01T00:00:00+00:00";
     const start = result.current.ws.workspace!.start_time;
     act(() =>
@@ -135,10 +157,10 @@ describe("useEditorWindows — buffered editing", () => {
 
   it(" windows are keyed by object identity: distinct objects → distinct windows; re-open refreshes in place", () => {
     const { result } = renderHook(() => useHarness());
-    act(() => result.current.ws.startNew("t"));
+    act(() => result.current.ws.openWorkspace(newWorkspace("t")));
     // Two REAL segments, so the reconciliation pass does not prune their windows.
-    act(() => result.current.ws.addConstellation(SPACE_NODE));
-    act(() => result.current.ws.addConstellation(SPACE_NODE));
+    act(() => result.current.ws.addConstellation(newDraftConstellation(SPACE_NODE)));
+    act(() => result.current.ws.addConstellation(newDraftConstellation(SPACE_NODE)));
     const [s0, s1] = result.current.ws.workspace!.space;
     const a: EditorTarget = { kind: "segment", id: s0!.segment_id };
     const b: EditorTarget = { kind: "segment", id: s1!.segment_id };

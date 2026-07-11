@@ -156,8 +156,9 @@ def normalize_extensions(extensions: list[str] | tuple[str, ...]) -> tuple[str, 
     """Canonicalize routing-extension aliases to {te, sr, mpls}.
 
     Raises ValueError on unknown or duplicate extensions. This is the owning
-    boundary for the extension vocabulary; both RoutingConfig and resolve_stack
-    route through it so no caller can pass a value the resolver would drop.
+    boundary for the extension vocabulary; the session generator and
+    ``resolve_stack`` route through it so no caller can pass a value the stack
+    resolver would drop.
     """
     normalized: list[str] = []
     for ext in extensions:

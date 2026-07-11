@@ -32,6 +32,11 @@ site:
             max_tracking_rate_deg_s: 0.1
           boresight:
             mode: local_vertical
+      tdrs_ka_sa:
+        installed_count: 2
+        capabilities:
+          boresight:
+            mode: local_vertical
     tags:
     - geo
     interfaces:

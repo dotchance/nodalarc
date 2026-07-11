@@ -8,12 +8,19 @@
  *  renders the resolver's expansion of a session — never a builder-local
  *  view of what a session means.
  *
- *  Authoring: client-side drafts + library refs, serialized through the one
- *  serializer and resolve-checked server-side on every edit; the rendered
- *  world is always the resolver's expansion of the current draft.
+ *  Authoring: client-side drafts + library refs compiled by the backend on
+ *  every edit; the rendered world is always the resolver's expansion.
  */
 
-import { Fragment, useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MutableRefObject,
+} from "react";
 import { Scene } from "../globe/r3f/Scene";
 import { VisualizationErrorBoundary } from "../globe/VisualizationErrorBoundary";
 import { buildRegimeIndex } from "../taxonomy/regime";
@@ -30,35 +37,42 @@ import type {
 import { Icon } from "../ui/icons/Icon";
 import { BuildGuide } from "./BuildGuide";
 import { BuilderInspector } from "./BuilderInspector";
+import {
+  BuilderTransitionStatus,
+  transitionIsTerminal,
+  useBuilderTransitionOperation,
+} from "./BuilderTransitionStatus";
 import { builderSnapshotFromWorld, distinctGroundStationSites } from "./builderSnapshot";
 import { CandidateLines } from "./CandidateLines";
 import { computeCandidates } from "./candidates";
-import { EditorApplyRow, Field, InlineSelect } from "./editorKit";
+import { EditorApplyRow, Field, InlineSelect, PasteArea } from "./editorKit";
 import {
   accessBeamElevationDeg,
   capabilitiesBySegment,
-  connectSegments,
-  rederiveRule,
 } from "./linkPhysics";
 import { CatalogObjectView } from "./CatalogObjectView";
 import { ConstellationEditor } from "./ConstellationEditor";
+import { CustomizeChainEditor } from "./CustomizeChainEditor";
 import { GroundEditor } from "./GroundEditor";
 import { LibraryPanel } from "./LibraryPanel";
 import { LinkRuleEditor } from "./LinkRuleEditor";
-import { LibraryEditorWindow, type LibraryEditorState } from "./LibraryEditorWindow";
+import { CatalogDraftEditorWindow } from "./CatalogDraftEditorWindow";
 import { OpenSessionPicker } from "./OpenSessionPicker";
 import { BoundaryEditor, RoutingDomainEditor } from "./RoutingEditor";
 import { SessionEditor } from "./SessionEditor";
 import {
   canDeploy,
+  announceCatalogDraftSaved,
   claimLibraryReveal,
   claimOutlineReveal,
+  exportSessionClosure,
+  importSessionClosure,
   readCatalogObject,
   requestOutlineReveal,
   useLibraryReveal,
   useLibraryRevision,
-  useLibrarySave,
   useOutlineReveal,
+  useBuilderBootstrap,
   useBuilderCatalog,
   useBuilderWorld,
 } from "./useBuilderWorld";
@@ -70,51 +84,62 @@ import {
   type EditorTarget,
   type SessionBuffer,
 } from "./useEditorWindows";
-import { useSessionImport } from "./useSessionImport";
 import { wallTarget } from "./wallTarget";
 import {
-  defaultDraftNode,
-  defaultDraftTerminal,
-  newDraftConstellation,
-  draftConstellationFromDocuments,
-  draftGroundSetFromDocuments,
-  draftNodeFromDocument,
-  emptySessionStartTime,
-  draftSiteFromDocument,
-  draftTerminalFromDocument,
-  completenessFindings,
-  defaultBoundary,
-  defaultRoutingDomain,
+  createStructuredRecovery,
+  clearCatalogDraftRecovery,
+  hasStructuredRecovery,
+  loadCatalogDraftRecovery,
+  restoreStructuredRecovery,
+  stashStructuredRecovery,
+  STRUCTURED_AUTOSAVE_KEY,
+  STRUCTURED_BACKUP_KEY,
+  writeStructuredAutosave,
+  writeCatalogDraftRecovery,
+  type CatalogDraftEditorRecovery,
+} from "./structuredDraftRecovery";
+import {
+  BuilderApiError,
+  createCatalogDraft,
+  openCatalogDraft,
+} from "./builderApiClient";
+import {
+  structuredDraftFromWorkspace,
+  workspaceFromVisualDraft,
+} from "./visualWorkspace";
+import {
   emittedRuleId,
-  identifier,
   linkWarnings,
   placedSegments,
+  reseedCounters,
   routingWarnings,
-  newDraftGroundSet,
-  newDraftSiteObject,
   refGroundMember,
-  SCHEDULING_PRESETS,
-  presetForSchedulingBlock,
-  toSessionDocument,
   type DraftBoundary,
   type DraftConstellation,
   type DraftGroundSet,
   type DraftLinkRule,
   type DraftRoutingDomain,
-  type SchedulingPresetKey,
+  type Workspace,
 } from "./workspace";
 import type {
-  BuilderCatalogEntry,
-  BuilderSessionListEntry,
-  BuilderWorld,
-} from "./builderTypes";
+  BuilderDeployVerdict,
+  BuilderVisualAuthoringFacts,
+  BuilderVisualSchedulingPreset,
+  BuilderVisualDraftCommandRequest,
+  BuilderVisualDraftCommandResult,
+  CatalogComponentDraftEnvelope,
+  CatalogComponentFamily,
+  CatalogDocumentSummary,
+  SessionRef,
+} from "./generated/builderApi";
+import type { BuilderWorld } from "./builderTypes";
 
 interface BuilderViewProps {
   /** True only while the builder is the shown view. The builder stays mounted
    *  when hidden so drafts, windows, and buffers survive a Live<->Builder
    *  toggle; `active` gates every operator surface that ACTS (the Scene
-   *  subtree per the singleton law, global key listeners, the reveal-open and
-   *  auto-import effects) so a hidden builder never mounts a second Scene or
+   *  subtree per the singleton law, global key listeners, and reveal-open
+   *  effects) so a hidden builder never mounts a second Scene or
    *  intercepts live-mode input. Passive state — autosave, backup, workspace
    *  mutations — keeps running while hidden. */
   active: boolean;
@@ -131,6 +156,19 @@ interface BuilderViewProps {
   /** The app-level camera/screenshot handle; only one Scene is mounted at a
    *  time, so the builder scene owns it while the builder view is active. */
   actionsRef: MutableRefObject<GlobeActions | null>;
+}
+
+let sessionDraftNonce = 0;
+
+function freshSessionDraftName(): string {
+  sessionDraftNonce += 1;
+  const random =
+    typeof globalThis.crypto?.randomUUID === "function"
+      ? globalThis.crypto.randomUUID()
+      : `${Date.now().toString(36)}-${sessionDraftNonce.toString(36)}-${Math.random()
+          .toString(36)
+          .slice(2)}`;
+  return `untitled-session-${random}-${sessionDraftNonce.toString(36)}`.slice(0, 48);
 }
 
 interface SegmentSummary {
@@ -203,9 +241,29 @@ function groupByBody(segments: SegmentSummary[]): [string, SegmentSummary[]][] {
 type SaveState =
   | { kind: "idle" }
   | { kind: "saving" }
-  | { kind: "saved"; name: string; file: string; artifact_sha256: string }
-  | { kind: "deploying"; name: string; file: string; artifact_sha256: string }
-  | { kind: "deployed"; name: string; file: string; artifact_sha256: string }
+  | {
+      kind: "saved";
+      name: string;
+      sessionRef: string;
+      sessionRevision: string;
+      deployVerdict: BuilderDeployVerdict;
+    }
+  | {
+      kind: "deploying";
+      name: string;
+      sessionRef: string;
+      sessionRevision: string;
+      deployVerdict: BuilderDeployVerdict;
+    }
+  | {
+      kind: "deploy-accepted";
+      name: string;
+      sessionRef: string;
+      sessionRevision: string;
+      deployVerdict: BuilderDeployVerdict;
+      operationId: string;
+    }
+  | { kind: "save-committed-unverified"; message: string; sessionRef: string }
   | { kind: "failed"; message: string };
 
 /** Save is a small dialog, not a silent write. The name is buffered here and
@@ -246,7 +304,6 @@ function SaveSessionDialog({
   // opt-in, never a default of a bulk gesture.
   const [confirming, setConfirming] = useState(false);
   const [confirmed, setConfirmed] = useState<Record<string, boolean>>({});
-  const fileId = identifier(name) || workspaceName;
   const saving = saveState.kind === "saving";
   const hasStale = staleList.length > 0;
   const confirmedKeys = () =>
@@ -295,6 +352,12 @@ function SaveSessionDialog({
         {saveState.kind === "failed" && (
           <div className="builder-warning">save failed: {saveState.message}</div>
         )}
+        {saveState.kind === "save-committed-unverified" && (
+          <div className="builder-warning">
+            save committed, but storage verification failed: {saveState.message}. Reopen the
+            session before editing or saving again.
+          </div>
+        )}
         <div className="builder-preset-row">
           <Button
             variant="primary"
@@ -321,8 +384,8 @@ function SaveSessionDialog({
   return (
     <div className="builder-inspector-stack" data-testid="builder-save-dialog">
       <div className="builder-site-derived">
-        Saves to your session library as a resolvable file, listed with every
-        other session and deployable from the rocket.
+        Saves a ref-composed session to your catalog with its exact dependency
+        closure and backend deployment verdict.
       </div>
       <Field
         label="save as"
@@ -332,7 +395,9 @@ function SaveSessionDialog({
           setNameTouched(true);
         }}
       />
-      <div className="builder-site-derived">file id: {fileId}</div>
+      <div className="builder-site-derived">
+        VS-API validates and owns the saved session identifier.
+      </div>
       {!canSave && dirtyWindows === 0 && (
         <div className="builder-warning">
           {blockedReason ?? "the session must resolve before it can be saved"}
@@ -353,6 +418,12 @@ function SaveSessionDialog({
       )}
       {saveState.kind === "failed" && (
         <div className="builder-warning">save failed: {saveState.message}</div>
+      )}
+      {saveState.kind === "save-committed-unverified" && (
+        <div className="builder-warning">
+          save committed, but storage verification failed: {saveState.message}. Reopen the
+          session before editing or saving again.
+        </div>
       )}
       <div className="builder-preset-row">
         {dirtyWindows > 0 ? (
@@ -417,18 +488,33 @@ export function BuilderView({
   const {
     sessions,
     sessionsError,
+    openedSession,
+    visualDraft,
+    currentVisualDraft,
+    assemblyResult,
     world,
     documentYaml,
-    loadedDocument,
-    loadedFile,
     loading,
     error,
     resolveError,
-    settledArtifactSha256,
-    deployReady,
-    deployBlockers,
-    loadSession,
-    resolveDocument,
+    compileResult,
+    compileIssues,
+    settledDocumentDigest,
+    settledDependencySha256,
+    createDraft,
+    retargetDraft,
+    openSession,
+    editOpaqueYaml,
+    undoOpaque,
+    markSavedRevision,
+    customizeChain,
+    runVisualCommand,
+    adoptVisualCommandResult,
+    compileDraft,
+    hasOpaqueAutosave,
+    stashOpaqueDraft,
+    restoreOpaqueAutosave,
+    adoptRecoveredStructuredDraft,
     saveSession,
     deploySession,
     refreshSessions,
@@ -437,102 +523,49 @@ export function BuilderView({
   // Builder-local selection: inspect-only, never shared with the live view's
   // selection (two different worlds must not share a pointer).
   const [selection, setSelection] = useState<Selection | null>(null);
-  // The authoring workspace: client-side drafts, resolve-checked on every
+  // The authoring workspace: client-side drafts, backend-compiled on every
   // edit; the world on screen is always the resolver's expansion of it.
   const {
     workspace,
-    startNew,
+    currentWorkspace,
     openWorkspace,
     commitWorkspace,
     updateSession,
     undo,
-    hasAutosave,
-    restoreAutosave,
-    stashAutosaveToBackup,
-    hasBackup,
-    restoreBackup,
     close: closeWorkspace,
-    addConstellation,
     addConstellationRef,
-    addDraft,
     removeRefSegment,
     removeConstellation,
     updateConstellation,
     addGroundRef,
-    updateGroundRef,
     removeGroundRef,
-    addGroundDraft,
     addGroundMember,
-    replaceGroundRefWithDraft,
     updateGroundDraft,
     removeGroundDraft,
-    convergeGroundToRef,
-    addLinkRule,
     updateLinkRule,
     removeLinkRule,
-    addRoutingDomain,
     updateRoutingDomain,
     removeRoutingDomain,
-    addBoundary,
     updateBoundary,
     removeBoundary,
   } = useWorkspace();
   const nodeCatalog = useBuilderCatalog("nodes");
   const terminalCatalog = useBuilderCatalog("terminals");
+  const builderBootstrap = useBuilderBootstrap();
+  const authoring: BuilderVisualAuthoringFacts | null =
+    builderBootstrap.bootstrap?.authoring ?? null;
+  const schedulingPresets = builderBootstrap.bootstrap?.scheduling_presets ?? [];
+  const [schedulingSelections, setSchedulingSelections] = useState<
+    Record<string, BuilderVisualSchedulingPreset | null>
+  >({});
 
-  // --- Editing the running session ------------------------------------
-  // Entering the builder beside a running session loads that session as
-  // the workspace — rapid iteration between builder and cluster. The one
-  // exception is an unsaved browser draft: autosave overwrites its slot
-  // as soon as any workspace exists, so auto-importing over a draft would
-  // silently destroy it — that case gets an explicit choice instead.
-  const runningSession = sessions.find((s) => s.active) ?? null;
-  // backup refuse/choice: a gesture that would displace the current draft
-  // (New, Open, auto-import adoption) first stashes it. If the stash is
-  // REFUSED — a real, different draft already occupies the backup slot — the
-  // gesture holds here and the choice dialog offers overwrite-or-cancel
-  // instead of silently destroying either draft.
   const [pendingDisplace, setPendingDisplace] = useState<{
     label: string;
     proceed: () => void;
   } | null>(null);
-  /** Run a displacing gesture, preserving the current draft to the backup
-   *  slot first. On a refused stash, hold the gesture for the choice dialog. */
-  const displace = (proceed: () => void, label: string) => {
-    if (stashAutosaveToBackup() === "refused") {
-      setPendingDisplace({ label, proceed });
-      return;
-    }
-    proceed();
-  };
-  /** A self-ensuring creation gesture: with a workspace open, just create
-   *  (the gesture adds to it — no displacement). With none open, creating one
-   *  displaces the prior autosave draft, so route through `displace` — preserve
-   *  it to the backup with the refuse/overwrite choice, never a silent loss. */
-  const ensureThenCreate = (create: () => void, label: string) => {
-    if (workspace) create();
-    else displace(create, label);
-  };
-  // The session entry/import state machine (useSessionImport) — the
-  // running-session auto-import, the picker-opened load, the refused-import
-  // notice, and the imported-from provenance.
-  const { importPending, importIssues, importedFrom, startImport, reset: resetImport } =
-    useSessionImport({
-      active,
-      workspace,
-      runningSession,
-      loadedDocument,
-      loadedFile,
-      loading,
-      loadSession,
-      displace,
-      openWorkspace,
-    });
-  // cross-phase contract: refresh the session list when the builder
-  // regains visibility. After the builder stays mounted, so "regains
-  // visibility" is the active false->true transition, not a remount — the
-  // mount-time fetch only fires on first entry, so a re-entry must refetch or
-  // the running chip and auto-import target go stale on an external switch.
+  // Refresh the typed catalog when the hidden-but-mounted Builder regains
+  // visibility. Catalog rows, not filesystem paths or operational session
+  // guesses, are the session-open authority.
   const prevActiveRef = useRef(active);
   useEffect(() => {
     const wasActive = prevActiveRef.current;
@@ -586,11 +619,11 @@ export function BuilderView({
   const {
     windows,
     openEditor,
-    annotateWindowSaved,
     closeWindow,
     closeAllWindows,
     isOpen,
     buffers,
+    currentBufferMutationRevision,
     patchBuffer,
     revertBuffer,
     applyBuffer,
@@ -600,6 +633,7 @@ export function BuilderView({
     staleList,
     loadCurrentValues,
     dropAppliedBuffers,
+    restoreRecoveryState,
   } = useEditorWindows({
     workspace,
     updateSession,
@@ -608,8 +642,85 @@ export function BuilderView({
     updateLinkRule,
     updateRoutingDomain,
     updateBoundary,
-    convergeGroundToRef,
   });
+  const [structuredRecoveryRevision, setStructuredRecoveryRevision] = useState(0);
+  const currentStructuredRecovery = () =>
+    createStructuredRecovery({ workspace, visualDraft, windows, buffers });
+  useEffect(() => {
+    const recovery = currentStructuredRecovery();
+    if (!recovery) return;
+    const timer = setTimeout(() => {
+      if (writeStructuredAutosave(recovery)) {
+        setStructuredRecoveryRevision((revision) => revision + 1);
+      }
+    }, 800);
+    return () => clearTimeout(timer);
+    // The exact full envelope, applied workspace, and save-relevant buffers are
+    // the recovery identity; no flattened or fresh-draft reconstruction occurs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workspace, visualDraft, windows, buffers]);
+  const hasStructuredAutosave = () => {
+    void structuredRecoveryRevision;
+    return hasStructuredRecovery(STRUCTURED_AUTOSAVE_KEY);
+  };
+  const hasStructuredBackup = () => {
+    void structuredRecoveryRevision;
+    return hasStructuredRecovery(STRUCTURED_BACKUP_KEY);
+  };
+  const stashCurrentStructuredRecovery = (options?: { force?: boolean }) => {
+    const outcome = stashStructuredRecovery(currentStructuredRecovery(), options);
+    if (outcome === "stashed") {
+      setStructuredRecoveryRevision((revision) => revision + 1);
+    }
+    return outcome;
+  };
+  const restoreCurrentStructuredRecovery = () => {
+    const fromBackup = hasStructuredBackup();
+    const result = restoreStructuredRecovery(
+      fromBackup ? STRUCTURED_BACKUP_KEY : STRUCTURED_AUTOSAVE_KEY,
+      { consume: fromBackup },
+    );
+    if (!result.ok) {
+      setRestoreError(result.reason);
+      return;
+    }
+    closeAllWindows();
+    reseedCounters(result.recovery.workspace);
+    openWorkspace(result.recovery.workspace);
+    restoreRecoveryState(result.recovery.editor);
+    setSelection(null);
+    setSaveState({ kind: "idle" });
+    setRestoreError(null);
+    adoptRecoveredStructuredDraft(result.recovery.visualDraft);
+    setStructuredRecoveryRevision((revision) => revision + 1);
+  };
+  /** Run a displacing gesture only after preserving the exact current draft. */
+  const displace = (proceed: () => void, label: string) => {
+    if (visualDraft?.mode === "opaque_yaml") {
+      stashOpaqueDraft();
+      proceed();
+      return;
+    }
+    if (stashCurrentStructuredRecovery() === "refused") {
+      setPendingDisplace({ label, proceed });
+      return;
+    }
+    proceed();
+  };
+  const ensureThenCreate = (create: () => void, label: string) => {
+    if (workspace) create();
+    else
+      displace(() => {
+        void createDraft({ session_name: freshSessionDraftName() })
+          .then((draft) => {
+            openWorkspace(workspaceFromVisualDraft(draft));
+            create();
+          })
+          .catch((cause) =>
+            setLibraryError(cause instanceof Error ? cause.message : String(cause)),
+          );
+      }, label);
+  };
   // The wall's owning editor target (wallTarget). Matched against the
   // preview overlay — the refused document was serialized from it, so a dirty
   // rename must be matched by the dirty draft, not the applied state.
@@ -617,23 +728,18 @@ export function BuilderView({
   /** Inline wall text for one open editor window (null = not this window's). */
   const wallFor = (target: EditorTarget): string | null =>
     wall && targetKey(target) === wall.key ? (resolveError?.error ?? null) : null;
-  // THE edit→resolve loop — the only caller. Serializes applied state plus
+  // THE edit→compile loop — the only caller. Submits applied state plus
   // dirty working copies so the canvas moves while you edit; Apply/Cancel
   // land here too (buffers change) and re-resolve the applied truth. The
   // library revision is a dependency on purpose: a user-catalog mutation
-  // changes what saving this document would write (references dereference
-  // server-side), so the settled artifact hash must re-settle.
+  // changes its dependency closure, so both settled digests must recompile.
   const libraryRevision = useLibraryRevision();
-  // Whether the last preview serialized to a document that emits segments —
-  // the only honest discriminator between "a resolve is coming" and the
-  // all-held-back steady state that fires no resolve ever. A serializer throw
-  // (suffix-exhaustion cap, structurally near-impossible) is a refusal on
-  // the same channel resolver refusals use, never an async crash.
-  const [previewEmits, setPreviewEmits] = useState(false);
-  const [serializeError, setSerializeError] = useState<string | null>(null);
+  const draftRevision = useRef(0);
+  const retargetedNameRef = useRef<string | null>(null);
   // A Restore that finds no payload (missing/corrupt) surfaces here instead of
   // silently doing nothing; the current workspace and its world stand.
   const [restoreError, setRestoreError] = useState<string | null>(null);
+  const [openSessionError, setOpenSessionError] = useState<string | null>(null);
   const hasDrafts =
     !!workspace &&
     workspace.space.length +
@@ -642,41 +748,50 @@ export function BuilderView({
       workspace.ground_refs.length >
       0;
   useEffect(() => {
-    // A pure no-op while no workspace exists: the running-session auto-import
-    // in flight and the refused-import read-only display both depend on the
-    // world surviving until a workspace appears. Clearing here would kill
-    // auto-import and wipe the refused world.
-    if (!workspace) return;
+    if (!workspace || visualDraft?.mode !== "structured") return;
     const preview = previewWorkspace();
     if (!preview) return;
-    let document: Record<string, unknown>;
-    try {
-      document = toSessionDocument(preview);
-    } catch (e) {
-      // Valid YAML or a clear refusal, never an async crash: clear the world
-      // and render the throw as the state.
-      setPreviewEmits(false);
-      setSerializeError(e instanceof Error ? e.message : String(e));
-      clear();
-      return;
+    const targetName =
+      visualDraft.target_ref.split("/").pop()?.replace(/\.ya?ml$/, "") ?? "";
+    if (preview.name !== targetName && retargetedNameRef.current !== preview.name) {
+      const requestedName = preview.name;
+      const timer = setTimeout(() => {
+        retargetedNameRef.current = requestedName;
+        void retargetDraft(requestedName).catch((cause) =>
+          setLibraryError(cause instanceof Error ? cause.message : String(cause)),
+        );
+      }, 300);
+      return () => clearTimeout(timer);
     }
-    setSerializeError(null);
-    const segments = (document.segments as unknown[] | undefined) ?? [];
-    if (segments.length === 0) {
-      // Emits nothing (no drafts, or every draft held back): the world/YAML/
-      // status must stop describing a prior draft. clear() replaces the
-      // content early-return; it never fires a resolve for empty content.
-      setPreviewEmits(false);
-      clear();
-      return;
-    }
-    setPreviewEmits(true);
+    if (preview.name === targetName) retargetedNameRef.current = null;
+    draftRevision.current = Math.max(draftRevision.current + 1, visualDraft.draft_revision + 1);
+    const draft = structuredDraftFromWorkspace(
+      visualDraft,
+      preview,
+      draftRevision.current,
+    );
     const timer = setTimeout(() => {
-      resolveDocument(document);
+      void compileDraft(draft);
     }, 300);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [workspace, buffers, libraryRevision]);
+  }, [
+    workspace,
+    buffers,
+    libraryRevision,
+    visualDraft?.mode,
+    visualDraft?.target_ref,
+    visualDraft?.expected_session_revision,
+    visualDraft?.catalog_documents?.length,
+    retargetDraft,
+  ]);
+
+  useEffect(() => {
+    if (visualDraft?.mode !== "opaque_yaml") return;
+    if (assemblyResult?.visual_draft.draft_revision === visualDraft.draft_revision) return;
+    const timer = setTimeout(() => void compileDraft(visualDraft), 300);
+    return () => clearTimeout(timer);
+  }, [assemblyResult?.visual_draft.draft_revision, compileDraft, visualDraft]);
 
   // Trust mechanics: Ctrl/Cmd+Z undoes the last workspace mutation unless
   // the user is typing in a field (native input undo wins there). Gated on
@@ -690,15 +805,23 @@ export function BuilderView({
       const tag = target?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
       event.preventDefault();
-      undo();
+      if (visualDraft?.mode === "opaque_yaml") undoOpaque();
+      else undo();
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [active, undo]);
+  }, [active, undo, undoOpaque, visualDraft?.mode]);
   // the object a create gesture just made — its editor focuses the
   // name once.
   const [freshId, setFreshId] = useState<string | null>(null);
   const [saveState, setSaveState] = useState<SaveState>({ kind: "idle" });
+  const acceptedOperationId =
+    saveState.kind === "deploy-accepted" ? saveState.operationId : null;
+  const { operation: transitionOperation, error: transitionPollError } =
+    useBuilderTransitionOperation(acceptedOperationId);
+  const transitionInFlight =
+    saveState.kind === "deploy-accepted" &&
+    (transitionOperation === null || !transitionIsTerminal(transitionOperation.state));
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
   // the create-focus marker is one-shot. Drop it once the window it names
   // is gone (a closed window must not re-grab focus if that id reappears), and
@@ -719,16 +842,38 @@ export function BuilderView({
     const t = setTimeout(() => setCopyState("idle"), 2000);
     return () => clearTimeout(t);
   }, [copyState]);
-  // the completeness rail reads this in two places (the guard and the
-  // chip map); compute it once per workspace, not twice per render.
-  const findings = useMemo(
-    () => (workspace ? completenessFindings(workspace) : []),
-    [workspace],
-  );
-  /** One save path for both dialog actions: build the exact document to
-   *  save locally, save it, then adopt it — the saved artifact and the
-   *  adopted workspace cannot diverge, and the race with the async state
-   *  update is unrepresentable. */
+  const findings = useMemo(() => {
+    if (!workspace) return [];
+    return (assemblyResult?.assembly_issues ?? []).map((issue) => {
+      const match = /^workspace\.(space|ground|links|routing_domains|boundaries)\.(\d+)/.exec(
+        issue.draft_path ?? "",
+      );
+      if (!match) return { message: issue.message, target: null as EditorTarget | null };
+      const index = Number(match[2]);
+      const target =
+        match[1] === "space"
+          ? workspace.space[index]
+            ? ({ kind: "segment", id: workspace.space[index]!.segment_id } as const)
+            : null
+          : match[1] === "ground"
+            ? workspace.ground[index]
+              ? ({ kind: "ground", id: workspace.ground[index]!.segment_id } as const)
+              : null
+            : match[1] === "links"
+              ? workspace.links[index]
+                ? ({ kind: "link", id: workspace.links[index]!.rule_id } as const)
+                : null
+              : match[1] === "routing_domains"
+                ? workspace.routing_domains[index]
+                  ? ({ kind: "domain", id: workspace.routing_domains[index]!.domain_id } as const)
+                  : null
+                : workspace.boundaries[index]
+                  ? ({ kind: "boundary", id: workspace.boundaries[index]!.boundary_id } as const)
+                  : null;
+      return { message: issue.message, target };
+    });
+  }, [assemblyResult?.assembly_issues, workspace]);
+  /** One save path for both dialog actions: submit the exact draft, then adopt it. */
   const performSave = async ({
     applyAll,
     name,
@@ -770,205 +915,391 @@ export function BuilderView({
       const appliedBuffers = new Map(
         Object.entries(buffers).filter(([k, b]) => b.dirty && !excludeKeys.has(k)),
       );
-      const next = workspaceForSave(workspace, buffers, {
+      let next = workspaceForSave(workspace, buffers, {
         applyAll,
         dialogName: name,
         nameTouched,
         excludeKeys,
       });
-      const result = await saveSession(toSessionDocument(next));
+      if (visualDraft?.mode !== "structured") {
+        throw new Error("the current draft is not a structured visual session");
+      }
+      const targetName =
+        visualDraft.target_ref.split("/").pop()?.replace(/\.ya?ml$/, "") ?? "";
+      const base = next.name === targetName ? visualDraft : await retargetDraft(next.name);
+      const backendName =
+        base.target_ref.split("/").pop()?.replace(/\.ya?ml$/, "") ?? next.name;
+      if (next.name !== backendName) next = { ...next, name: backendName };
+      draftRevision.current = Math.max(draftRevision.current + 1, base.draft_revision + 1);
+      const draft = structuredDraftFromWorkspace(
+        base,
+        next,
+        draftRevision.current,
+      );
+      const assembled = await compileDraft(draft);
+      if (!assembled) throw new Error("the backend did not compile the visual draft");
+      if (!assembled.compile_result.save_verdict.allowed) {
+        throw new Error(
+          assembled.compile_result.save_verdict.blockers?.[0]?.message ??
+            "the backend blocked this visual draft from saving",
+        );
+      }
+      const result = await saveSession(assembled.save_request);
       if (next !== workspace) {
         commitWorkspace(next, applyAll ? "apply-all-save" : "save-rename");
       }
       if (applyAll) {
         dropAppliedBuffers(appliedBuffers);
       }
+      const revisions = new Map(
+        result.dependency_closure.entries
+          .filter((entry) => entry.revision)
+          .map((entry) => [entry.ref, entry.revision!] as const),
+      );
+      const expectedCatalogRevisions = (
+        assembled.assembled_draft.state.catalog_documents ?? []
+      ).flatMap((proposal) => {
+        const revision = revisions.get(proposal.ref);
+        return revision ? [{ ref: proposal.ref, expected_revision: revision }] : [];
+      });
+      markSavedRevision(result.session.revision, expectedCatalogRevisions);
       setSaveState({
         kind: "saved",
-        name: result.name,
-        file: result.file,
-        artifact_sha256: result.artifact_sha256,
+        name: next.name,
+        sessionRef: result.session.ref,
+        sessionRevision: result.session.revision,
+        deployVerdict: result.deploy_verdict,
       });
     } catch (e) {
-      setSaveState({
-        kind: "failed",
-        message: e instanceof Error ? e.message : String(e),
-      });
+      const detail = e instanceof BuilderApiError ? e.detail : null;
+      if (
+        detail &&
+        typeof detail === "object" &&
+        (detail as Record<string, unknown>).repository_committed === true
+      ) {
+        setSaveState({
+          kind: "save-committed-unverified",
+          message: e instanceof Error ? e.message : String(e),
+          sessionRef: String((detail as Record<string, unknown>).target_ref ?? "saved session"),
+        });
+      } else {
+        setSaveState({
+          kind: "failed",
+          message: e instanceof Error ? e.message : String(e),
+        });
+      }
     }
   };
-  // The deploy gate: server-hash equality between the saved artifact and
-  // the settled resolve of what is on screen, with zero unapplied windows.
+  const performOpaqueSave = async () => {
+    if (visualDraft?.mode !== "opaque_yaml") return;
+    setSaveState({ kind: "saving" });
+    try {
+      const assembled =
+        assemblyResult?.visual_draft.draft_revision === visualDraft.draft_revision
+          ? assemblyResult
+          : await compileDraft(visualDraft);
+      if (!assembled) throw new Error("the backend did not compile the YAML draft");
+      if (!assembled.compile_result.save_verdict.allowed) {
+        throw new Error(
+          assembled.compile_result.save_verdict.blockers?.[0]?.message ??
+            "the backend blocked this YAML draft from saving",
+        );
+      }
+      const result = await saveSession(assembled.save_request);
+      const revisions = new Map(
+        result.dependency_closure.entries
+          .filter((entry) => entry.revision)
+          .map((entry) => [entry.ref, entry.revision!] as const),
+      );
+      const expectedCatalogRevisions = (
+        assembled.assembled_draft.state.catalog_documents ?? []
+      ).flatMap((proposal) => {
+        const revision = revisions.get(proposal.ref);
+        return revision ? [{ ref: proposal.ref, expected_revision: revision }] : [];
+      });
+      markSavedRevision(result.session.revision, expectedCatalogRevisions);
+      setSaveState({
+        kind: "saved",
+        name: result.session.ref.split("/").pop()?.replace(/\.ya?ml$/, "") ?? "session",
+        sessionRef: result.session.ref,
+        sessionRevision: result.session.revision,
+        deployVerdict: result.deploy_verdict,
+      });
+    } catch (cause) {
+      const detail = cause instanceof BuilderApiError ? cause.detail : null;
+      if (
+        detail &&
+        typeof detail === "object" &&
+        (detail as Record<string, unknown>).repository_committed === true
+      ) {
+        setSaveState({
+          kind: "save-committed-unverified",
+          message: cause instanceof Error ? cause.message : String(cause),
+          sessionRef: String((detail as Record<string, unknown>).target_ref ?? "saved session"),
+        });
+      } else {
+        setSaveState({
+          kind: "failed",
+          message: cause instanceof Error ? cause.message : String(cause),
+        });
+      }
+    }
+  };
+  // Deployment requires the saved backend verdict and exact settled digests.
   const deployGate = canDeploy({
-    savedFile:
-      saveState.kind === "saved" || saveState.kind === "deployed" ? saveState.file : null,
-    savedArtifactSha256:
-      saveState.kind === "saved" || saveState.kind === "deployed"
-        ? saveState.artifact_sha256
+    savedVerdict:
+      saveState.kind === "saved" ||
+      saveState.kind === "deploying" ||
+      saveState.kind === "deploy-accepted"
+        ? saveState.deployVerdict
         : null,
-    settledArtifactSha256,
+    settledDocumentDigest,
+    settledDependencyDigest: settledDependencySha256,
     dirtyWindowCount: dirtyWindows,
-    deployReady,
-    deployBlockers,
   });
   // Standalone component authoring (Your library) — independent of sessions.
-  const [libraryEditor, setLibraryEditor] = useState<LibraryEditorState | null>(null);
-  // The fifth save machine (the Library's "New node" window) adopts the shared
-  // hook — gaining the in-flight saving state the hand-rolled copy lacked, so a
-  // double-click no longer double-submits and shows a spurious "Overwrite?".
-  const libraryNodeSave = useLibrarySave("nodes");
+  const [catalogDraftRecovery, setCatalogDraftRecovery] =
+    useState<CatalogDraftEditorRecovery | null>(() => {
+      const recovered = loadCatalogDraftRecovery();
+      return recovered.ok ? recovered.recovery : null;
+    });
+  const [catalogDraft, setCatalogDraft] = useState<CatalogComponentDraftEnvelope | null>(
+    () => catalogDraftRecovery?.draft ?? null,
+  );
   const [libraryError, setLibraryError] = useState<string | null>(null);
+  const visualCommandInFlight = useRef(false);
 
-  // The Library's per-entry gestures. USE places the block in the session
-  // (self-ensuring: no open workspace starts one); EDIT forks it into an
-  // editable draft; clicking the row inspects it.
-  // Third-class member: a Use/Customize gesture self-ensures a
-  // workspace, so when one is created while a refused-import read-only world
-  // is still on screen (world set, workspace null) the stale world would
-  // render behind the new draft. The refused-import state is the only
-  // triggering precondition, so the clear is narrow.
-  const clearRefusedWorldBeforeCreate = () => {
+  const schedulingSelectionKey = (
+    segmentId: string,
+    memberId?: string,
+    targetRef = visualDraft?.target_ref,
+  ) => `${targetRef ?? "no-draft"}|${segmentId}${memberId ? `/${memberId}` : ""}`;
+
+  const rememberSchedulingSelection = (
+    command: BuilderVisualDraftCommandRequest["command"],
+    result: BuilderVisualDraftCommandResult,
+  ) => {
+    const preset = result.scheduling_preset;
+    if (preset === undefined) return;
+    const key =
+      command.operation === "set_scheduling_preset"
+        ? schedulingSelectionKey(
+            command.segment_id,
+            command.member_id ?? undefined,
+            result.draft.target_ref,
+          )
+        : command.operation === "add_ground"
+          ? schedulingSelectionKey(result.affected_id, undefined, result.draft.target_ref)
+          : null;
+    if (!key) return;
+    setSchedulingSelections((current) => ({
+      ...current,
+      [key]: preset,
+    }));
+  };
+
+  const executeVisualCommand = async (
+    command: BuilderVisualDraftCommandRequest["command"],
+    sourceWorkspace: Workspace,
+    appliedWorkspace: Workspace,
+    bufferRevision?: number,
+  ): Promise<BuilderVisualDraftCommandResult> => {
+    if (visualCommandInFlight.current) {
+      throw new Error("another visual command is still being applied");
+    }
+    const baseDraft = currentVisualDraft();
+    if (!baseDraft || baseDraft.mode !== "structured") {
+      throw new Error("visual commands require an open structured session draft");
+    }
+    draftRevision.current = Math.max(
+      draftRevision.current + 1,
+      baseDraft.draft_revision + 1,
+    );
+    const commandDraft = structuredDraftFromWorkspace(
+      baseDraft,
+      sourceWorkspace,
+      draftRevision.current,
+    );
+    visualCommandInFlight.current = true;
+    try {
+      const result = await runVisualCommand({
+        draft: commandDraft,
+        expected_draft_revision: commandDraft.draft_revision,
+        command,
+      });
+      draftRevision.current = Math.max(draftRevision.current, result.draft.draft_revision);
+      if (currentWorkspace() !== appliedWorkspace) {
+        throw new Error("the session changed while the visual command was running; try again");
+      }
+      if (
+        bufferRevision !== undefined &&
+        currentBufferMutationRevision() !== bufferRevision
+      ) {
+        throw new Error("an editor changed while the visual command was running; try again");
+      }
+      return result;
+    } finally {
+      visualCommandInFlight.current = false;
+    }
+  };
+
+  const applyWorkspaceCommand = async (
+    command: BuilderVisualDraftCommandRequest["command"],
+  ): Promise<BuilderVisualDraftCommandResult> => {
+    const applied = currentWorkspace();
+    if (!applied) throw new Error("there is no structured workspace to edit");
+    const result = await executeVisualCommand(command, applied, applied);
+    commitWorkspace(
+      workspaceFromVisualDraft(result.draft),
+      `backend visual command: ${result.operation}`,
+    );
+    adoptVisualCommandResult(result);
+    rememberSchedulingSelection(command, result);
+    return result;
+  };
+
+  const reopenRecoveredCatalogDraft = useRef(catalogDraftRecovery !== null);
+  useEffect(() => {
+    if (!active || !reopenRecoveredCatalogDraft.current || !catalogDraftRecovery) return;
+    reopenRecoveredCatalogDraft.current = false;
+    openEditor({ kind: "library" });
+  }, [active, catalogDraftRecovery, openEditor]);
+  const handleCatalogDraftRecovery = useCallback(
+    (recovery: CatalogDraftEditorRecovery | null) => {
+      setCatalogDraftRecovery(recovery);
+      if (recovery) {
+        setCatalogDraft(recovery.draft);
+        writeCatalogDraftRecovery(recovery);
+      } else {
+        clearCatalogDraftRecovery();
+      }
+    },
+    [],
+  );
+  const discardCatalogDraft = useCallback(() => {
+    clearCatalogDraftRecovery();
+    setCatalogDraftRecovery(null);
+    setCatalogDraft(null);
+    closeWindow("library");
+  }, [closeWindow]);
+
+  // The Library's per-entry gestures. USE places a catalog reference in an
+  // editable session; CUSTOMIZE opens a full backend draft at an explicit
+  // user: target and persists it only when the backend save succeeds. Starting
+  // an editable workspace from a typed read-only open clears that preview.
+  const clearReadOnlyWorldBeforeCreate = () => {
     if (world && !workspace) clear();
   };
 
-  const handleLibraryUse = (entry: BuilderCatalogEntry) => {
+  const handleLibraryUse = (entry: CatalogDocumentSummary) => {
     setLibraryError(null);
-    const label = `using ${entry.display_name ?? entry.id ?? entry.ref}`;
-    const name = entry.display_name ?? entry.id ?? entry.ref;
-    if (entry.family === "constellations") {
+    const entryId = (entry.ref.split("/").pop() ?? entry.ref).replace(/\.ya?ml$/, "");
+    const label = `using ${entry.display_name ?? entryId}`;
+    const name = entry.display_name ?? entryId;
+    if (entry.family === "constellations" || entry.family === "space-node-sets") {
       // REF family: no editor exists for a placed reference (L6) — reveal its
       // outline row so the placement is visible (ref floor).
       ensureThenCreate(() => {
-        clearRefusedWorldBeforeCreate();
+        clearReadOnlyWorldBeforeCreate();
         requestOutlineReveal(addConstellationRef(entry.ref, name));
       }, label);
     } else if (entry.family === "site-sets") {
       ensureThenCreate(() => {
-        clearRefusedWorldBeforeCreate();
-        requestOutlineReveal(addGroundRef(entry.ref, name));
+        clearReadOnlyWorldBeforeCreate();
+        if (!authoring) {
+          setLibraryError("Builder authoring facts are unavailable");
+          return;
+        }
+        const segmentId = addGroundRef(entry.ref, name);
+        setLibraryError(null);
+        void applyWorkspaceCommand({
+          operation: "set_scheduling_preset",
+          segment_id: segmentId,
+          preset: authoring.default_scheduling_preset,
+        })
+          .then(() => requestOutlineReveal(segmentId))
+          .catch((cause) =>
+            setLibraryError(cause instanceof Error ? cause.message : String(cause)),
+          );
       }, label);
     } else if (entry.family === "nodes") {
       // DRAFT family: open the created segment's editor, focused for rename.
       ensureThenCreate(() => {
-        clearRefusedWorldBeforeCreate();
-        const id = addConstellation(entry.ref);
-        openEditor({ kind: "segment", id });
-        setFreshId(id);
+        clearReadOnlyWorldBeforeCreate();
+        if (!authoring) {
+          setLibraryError("Builder authoring facts are unavailable");
+          return;
+        }
+        void applyWorkspaceCommand({
+          operation: "add_generated_space",
+          phasing_mode: authoring.default_phasing_mode,
+          node_ref: entry.ref,
+        })
+          .then((result) => {
+            openEditor({ kind: "segment", id: result.affected_id });
+            setFreshId(result.affected_id);
+          })
+          .catch((cause) =>
+            setLibraryError(cause instanceof Error ? cause.message : String(cause)),
+          );
       }, label);
-    } else if (entry.family === "sites" && entry.id) {
-      const siteId = entry.id;
+    } else if (entry.family === "sites") {
+      const siteId = entryId;
       ensureThenCreate(() => {
-        clearRefusedWorldBeforeCreate();
-        const { segmentId, created } = addGroundMember(
-          refGroundMember(entry.ref, siteId, entry.display_name ?? siteId, entry.summary),
-          () => newDraftGroundSet(defaultGroundNodeRef ?? "", {}),
+        clearReadOnlyWorldBeforeCreate();
+        void (async () => {
+          const before = currentWorkspace();
+          const created = !before || before.ground.length === 0;
+          let createdSegmentId: string | null = null;
+          if (created) {
+            const result = await applyWorkspaceCommand({ operation: "add_ground" });
+            createdSegmentId = result.affected_id;
+          }
+          const { segmentId } = addGroundMember(
+            refGroundMember(entry.ref, siteId, entry.display_name, entry.summary ?? null),
+            () => {
+              throw new Error("backend ground command did not create a receiving segment");
+            },
+          );
+          openEditor({ kind: "ground", id: segmentId });
+          if (created && createdSegmentId === segmentId) setFreshId(segmentId);
+        })().catch((cause) =>
+          setLibraryError(cause instanceof Error ? cause.message : String(cause)),
         );
-        // Open the receiving set's editor either way; create-focus only a set
-        // this Use actually created — never steal focus onto an existing set's
-        // name (a rename footgun).
-        openEditor({ kind: "ground", id: segmentId });
-        if (created) setFreshId(segmentId);
       }, label);
     } else {
-      // Fall-through: a sites entry with no id, or an unknown family — surface it
-      //, never a silent no-op branch.
-      setLibraryError(
-        `cannot use "${name}": ${
-          entry.family === "sites"
-            ? "the site has no id to place"
-            : `unsupported family "${entry.family}"`
-        }`,
-      );
+      setLibraryError(`cannot use "${name}": unsupported family "${entry.family}"`);
     }
   };
 
-  const handleLibraryCustomize = async (entry: BuilderCatalogEntry) => {
+  const handleLibraryCustomize = async (entry: CatalogDocumentSummary, targetRef: string) => {
     setLibraryError(null);
+    if (catalogDraftRecovery) {
+      openEditor({ kind: "library" });
+      if (catalogDraftRecovery.draft.target_ref === targetRef) return;
+      const message = `Finish or discard ${catalogDraftRecovery.draft.target_ref} before opening another component draft.`;
+      setLibraryError(message);
+      throw new Error(message);
+    }
     try {
-      const { document } = await readCatalogObject(entry.ref);
-      if (entry.family === "terminals") {
-        const seeded = draftTerminalFromDocument(document);
-        setLibraryEditor({
-          kind: "terminal",
-          draft: {
-            ...seeded,
-            id: identifier(`${seeded.id}-custom`),
-            display_name: `${seeded.display_name} (custom)`,
-          },
-        });
-        openEditor({ kind: "library" });
-      } else if (entry.family === "nodes") {
-        const seeded = draftNodeFromDocument(document);
-        setLibraryEditor({
-          kind: "node",
-          draft: {
-            ...seeded,
-            id: identifier(`${seeded.id}-custom`),
-            display_name: `${seeded.display_name} (custom)`,
-          },
-        });
-        openEditor({ kind: "library" });
-      } else if (entry.family === "constellations") {
-        const constellation = (document as { constellation?: { orbit?: unknown } })
-          .constellation;
-        const orbitRef =
-          typeof constellation?.orbit === "string" ? constellation.orbit : null;
-        const orbitDocument = orbitRef
-          ? (await readCatalogObject(orbitRef)).document
-          : null;
-        const draft = draftConstellationFromDocuments(
-          document,
-          orbitDocument,
-          workspace?.start_time ?? emptySessionStartTime(),
-        );
-        ensureThenCreate(() => {
-          clearRefusedWorldBeforeCreate();
-          addDraft(draft);
-          openEditor({ kind: "segment", id: draft.segment_id });
-        }, `customizing ${entry.display_name ?? entry.id ?? entry.ref}`);
-      } else if (entry.family === "site-sets") {
-        const draft = await forkGroundSet(entry.ref);
-        ensureThenCreate(() => {
-          clearRefusedWorldBeforeCreate();
-          addGroundDraft(draft);
-          openEditor({ kind: "ground", id: draft.segment_id });
-        }, `customizing ${entry.display_name ?? entry.id ?? entry.ref}`);
-      } else if (entry.family === "sites") {
-        const seeded = draftSiteFromDocument(document);
-        setLibraryEditor({
-          kind: "site",
-          draft: {
-            ...seeded,
-            site_id: identifier(`${seeded.site_id}-custom`),
-            display_name: `${seeded.display_name} (custom)`,
-          },
-        });
-        openEditor({ kind: "library" });
-      }
+      const draft = await openCatalogDraft({
+        source_ref: entry.ref,
+        target_ref: targetRef,
+      });
+      setCatalogDraft(draft);
+      openEditor({ kind: "library" });
     } catch (e) {
-      setLibraryError(e instanceof Error ? e.message : String(e));
+      const message = e instanceof Error ? e.message : String(e);
+      setLibraryError(
+        entry.namespace === "nodalarc" && message.includes("already exists")
+          ? `${message}. Choose a different user: id for this shipped customization.`
+          : message,
+      );
+      throw e;
     }
   };
 
-  /** Fork a site set into an editable ground draft: read the set document,
-   *  then every member site document. Referenced members stay references at
-   *  full fidelity; inline members become editable site drafts. */
-  const forkGroundSet = async (ref: string): Promise<DraftGroundSet> => {
-    const { document } = await readCatalogObject(ref);
-    const memberRefs =
-      (document as { site_set?: { sites?: unknown[] } }).site_set?.sites ?? [];
-    const siteEntries = await Promise.all(
-      memberRefs.map(async (member) => {
-        if (typeof member === "string") {
-          return { ref: member, document: (await readCatalogObject(member)).document };
-        }
-        const inline = member as Record<string, unknown>;
-        return { ref: null, document: "site" in inline ? inline : { site: inline } };
-      }),
-    );
-    return draftGroundSetFromDocuments(document, siteEntries);
-  };
-
-  const handleLibraryInspect = async (entry: BuilderCatalogEntry) => {
+  const handleLibraryInspect = async (entry: CatalogDocumentSummary) => {
     setLibraryError(null);
     try {
       const { document } = await readCatalogObject(entry.ref);
@@ -978,65 +1309,26 @@ export function BuilderView({
     }
   };
 
-  const handleLibraryNew = (family: string) => {
+  const handleLibraryNew = async (family: string, objectId: string) => {
     setLibraryError(null);
-    if (family === "terminals") {
-      setLibraryEditor({ kind: "terminal", draft: defaultDraftTerminal() });
+    const targetRef = `user:${family}/${objectId}.yaml`;
+    if (catalogDraftRecovery) {
       openEditor({ kind: "library" });
-    } else if (family === "nodes") {
-      // A fresh node starts with a clean save machine — otherwise a prior
-      // failed/conflict would carry over (a stale warning, or a silent
-      // overwrite:true on the new node). Matches ConstellationEditor's reset.
-      libraryNodeSave.reset();
-      setLibraryEditor({ kind: "node", draft: defaultDraftNode() });
+      if (catalogDraftRecovery.draft.target_ref === targetRef) return;
+      const message = `Finish or discard ${catalogDraftRecovery.draft.target_ref} before opening another component draft.`;
+      setLibraryError(message);
+      throw new Error(message);
+    }
+    try {
+      const draft = await createCatalogDraft({
+        family: family as CatalogComponentFamily,
+        object_id: objectId,
+      });
+      setCatalogDraft(draft);
       openEditor({ kind: "library" });
-    } else if (family === "constellations" && defaultNodeRef) {
-      const draft = newDraftConstellation(defaultNodeRef);
-      ensureThenCreate(() => {
-        addDraft(draft);
-        openEditor({ kind: "segment", id: draft.segment_id });
-        setFreshId(draft.segment_id);
-      }, "adding a constellation");
-    } else if (family === "sites" && defaultGroundNodeRef) {
-      void (async () => {
-        try {
-          const { document } = await readCatalogObject(defaultGroundNodeRef);
-          const node = (document as { node?: Record<string, unknown> }).node;
-          const mounts = (
-            (node?.terminals as Record<string, unknown>[] | undefined) ?? []
-          ).map((mount) => [String(mount.id), Number(mount.count ?? 1)] as const);
-          setLibraryEditor({
-            kind: "site",
-            draft: newDraftSiteObject(defaultGroundNodeRef, Object.fromEntries(mounts)),
-          });
-          openEditor({ kind: "library" });
-        } catch (e) {
-          setLibraryError(e instanceof Error ? e.message : String(e));
-        }
-      })();
-    } else if (family === "site-sets" && defaultGroundNodeRef) {
-      // Seed installed mounts from the default model's faceplate so the new
-      // segment starts complete; blank-first on sites (paste/gazetteer next).
-      void (async () => {
-        try {
-          const { document } = await readCatalogObject(defaultGroundNodeRef);
-          const node = (document as { node?: Record<string, unknown> }).node;
-          const mounts = (
-            (node?.terminals as Record<string, unknown>[] | undefined) ?? []
-          ).map((mount) => [String(mount.id), Number(mount.count ?? 1)] as const);
-          const draft = newDraftGroundSet(
-            defaultGroundNodeRef,
-            Object.fromEntries(mounts),
-          );
-          ensureThenCreate(() => {
-            addGroundDraft(draft);
-            openEditor({ kind: "ground", id: draft.segment_id });
-            setFreshId(draft.segment_id);
-          }, "adding a ground segment");
-        } catch (e) {
-          setLibraryError(e instanceof Error ? e.message : String(e));
-        }
-      })();
+    } catch (cause) {
+      setLibraryError(cause instanceof Error ? cause.message : String(cause));
+      throw cause;
     }
   };
   // The connect gesture: both endpoints known before the rule
@@ -1085,14 +1377,19 @@ export function BuilderView({
   const connect = (fromSegmentId: string, targetSegmentId: string) => {
     if (!workspace) return;
     setConnectFor(null);
-    try {
-      const rule = connectSegments(workspace, world, fromSegmentId, targetSegmentId);
-      addLinkRule(rule);
-      openEditor({ kind: "link", id: rule.rule_id });
-      setFreshId(rule.rule_id);
-    } catch (e) {
-      setLibraryError(e instanceof Error ? e.message : String(e));
-    }
+    setLibraryError(null);
+    void applyWorkspaceCommand({
+      operation: "connect_segments",
+      from_segment_id: fromSegmentId,
+      to_segment_id: targetSegmentId,
+    })
+      .then((result) => {
+        openEditor({ kind: "link", id: result.affected_id });
+        setFreshId(result.affected_id);
+      })
+      .catch((cause) =>
+        setLibraryError(cause instanceof Error ? cause.message : String(cause)),
+      );
   };
   const connectButton = (segmentId: string, label: string) => (
     <IconButton
@@ -1121,24 +1418,36 @@ export function BuilderView({
       </div>
     ) : null;
 
-  // Default node model for a fresh constellation: prefer the catalog's space
-  // nodes (directory layout is authoring convention, so this is a display
-  // heuristic only — the picker offers every node either way).
-  const defaultNodeRef =
-    nodeCatalog.entries.find((e) => !e.error && e.ref.includes("nodes/space/"))?.ref ??
-    nodeCatalog.entries.find((e) => !e.error)?.ref ??
-    null;
-  // Same heuristic for a fresh ground segment's template node.
-  const defaultGroundNodeRef =
-    nodeCatalog.entries.find((e) => !e.error && e.ref.includes("nodes/ground/"))?.ref ??
-    nodeCatalog.entries.find((e) => !e.error)?.ref ??
-    null;
   /** The body of one floating editor window. Null = the object no longer
    *  exists (undo, removal); the window simply doesn't render. */
   function renderWindow(
     target: EditorTarget,
   ): { title: string; content: React.ReactNode } | null {
-    if (!workspace && target.kind !== "inspect" && target.kind !== "node-view") return null;
+    const standalone = [
+      "inspect",
+      "node-view",
+      "open-session",
+      "source-yaml",
+      "customize-chain",
+      "catalog",
+      "library",
+    ].includes(target.kind);
+    if (!workspace && !standalone) return null;
+    if (
+      !authoring &&
+      ["segment", "ground", "link", "domain", "boundary", "library"].includes(
+        target.kind,
+      )
+    ) {
+      return {
+        title: "Builder unavailable",
+        content: (
+          <div className="builder-warning">
+            Backend authoring facts are unavailable. Retry the Builder bootstrap request.
+          </div>
+        ),
+      };
+    }
     switch (target.kind) {
       case "session": {
         if (!workspace) return null;
@@ -1181,6 +1490,7 @@ export function BuilderView({
               </div>
             )}
             <ConstellationEditor
+              authoring={authoring!}
               key={draft.segment_id}
               autoFocusName={freshId === draft.segment_id}
               // the dwell readout reads the PREVIEW (applied + dirty
@@ -1222,14 +1532,56 @@ export function BuilderView({
               </div>
             )}
             <GroundEditor
+              authoring={authoring!}
               key={draft.segment_id}
               autoFocusName={freshId === draft.segment_id}
               workspace={workspace}
               onOpenRule={openRule}
               onConnect={(other) => connect(draft.segment_id, other)}
+              schedulingPresets={schedulingPresets}
+              selectedSchedulingPreset={
+                schedulingSelections[schedulingSelectionKey(draft.segment_id)] ?? null
+              }
+              memberSchedulingPreset={(memberId) =>
+                schedulingSelections[
+                  schedulingSelectionKey(draft.segment_id, memberId)
+                ] ?? null
+              }
+              onSchedulingPreset={async (preset, memberId) => {
+                const appliedWorkspace = currentWorkspace();
+                const sourceWorkspace = previewWorkspace();
+                if (!appliedWorkspace || !sourceWorkspace) {
+                  throw new Error("there is no structured workspace to edit");
+                }
+                const bufferRevision = currentBufferMutationRevision();
+                const result = await executeVisualCommand(
+                  {
+                    operation: "set_scheduling_preset",
+                    segment_id: draft.segment_id,
+                    preset,
+                    ...(memberId ? { member_id: memberId } : {}),
+                  },
+                  sourceWorkspace,
+                  appliedWorkspace,
+                  bufferRevision,
+                );
+                const updated = workspaceFromVisualDraft(result.draft).ground.find(
+                  (candidate) => candidate.segment_id === draft.segment_id,
+                );
+                if (!updated) throw new Error("VS-API returned no updated ground segment");
+                patchBuffer(key, applied, () => updated);
+                rememberSchedulingSelection(
+                  {
+                    operation: "set_scheduling_preset",
+                    segment_id: draft.segment_id,
+                    preset,
+                    ...(memberId ? { member_id: memberId } : {}),
+                  },
+                  result,
+                );
+              }}
               draft={draft}
               onUpdate={(update) => patchBuffer(key, applied, update)}
-              onSaved={(ref, snapshot) => annotateWindowSaved(key, ref, snapshot)}
               onRemove={() => {
                 removeGroundDraft(draft.segment_id);
                 closeWindow(key);
@@ -1257,22 +1609,37 @@ export function BuilderView({
               </div>
             )}
             <LinkRuleEditor
+              authoring={authoring!}
               key={rule.rule_id}
               autoFocusName={freshId === rule.rule_id}
               workspace={workspace}
               rule={rule}
               capabilities={segmentCapabilities}
               allocation={ruleAllocation}
-              onRepoint={(side, newSegmentId) => {
-                const { patch, notice } = rederiveRule(
-                  workspace,
-                  world,
-                  rule,
-                  side,
-                  newSegmentId,
+              onRepoint={async (side, newSegmentId) => {
+                const appliedWorkspace = currentWorkspace();
+                const sourceWorkspace = previewWorkspace();
+                if (!appliedWorkspace || !sourceWorkspace) {
+                  throw new Error("there is no structured workspace to edit");
+                }
+                const bufferRevision = currentBufferMutationRevision();
+                const result = await executeVisualCommand(
+                  {
+                    operation: "rederive_link",
+                    rule_id: rule.rule_id,
+                    side,
+                    segment_id: newSegmentId,
+                  },
+                  sourceWorkspace,
+                  appliedWorkspace,
+                  bufferRevision,
                 );
-                patchBuffer(key, applied, (r) => ({ ...r, ...patch }));
-                return notice;
+                const updated = workspaceFromVisualDraft(result.draft).links.find(
+                  (candidate) => candidate.rule_id === rule.rule_id,
+                );
+                if (!updated) throw new Error("VS-API returned no rederived link rule");
+                patchBuffer(key, applied, () => updated);
+                return result.notice ?? "link physics rederived by VS-API";
               }}
               onUpdate={(patch) =>
                 patchBuffer(key, applied, (r) => ({ ...r, ...patch }))
@@ -1310,6 +1677,7 @@ export function BuilderView({
               </div>
             )}
             <RoutingDomainEditor
+              authoring={authoring!}
               key={domain.domain_id}
               autoFocusName={freshId === domain.domain_id}
               workspace={workspace}
@@ -1337,6 +1705,7 @@ export function BuilderView({
           title: "Boundary",
           content: (
             <BoundaryEditor
+              authoring={authoring!}
               key={boundary.boundary_id}
               workspace={workspace}
               boundary={boundary}
@@ -1385,25 +1754,82 @@ export function BuilderView({
           ),
         };
       }
+      case "source-yaml": {
+        if (visualDraft?.mode !== "opaque_yaml") return null;
+        return {
+          title: "Edit source YAML",
+          content: (
+            <div className="builder-inspector-stack" data-testid="opaque-yaml-editor">
+              <div className="builder-site-derived">
+                This is the exact source opened by VS-API. Every edit returns to
+                `/draft/compile`; the Session YAML pane remains backend-canonical output.
+              </div>
+              <PasteArea
+                rows={28}
+                value={visualDraft.session_yaml ?? ""}
+                onChange={editOpaqueYaml}
+                placeholder="session YAML"
+              />
+              {(assemblyResult?.assembly_issues ?? []).map((issue) => (
+                <div className="builder-warning" key={`${issue.code}:${issue.message}`}>
+                  {issue.message}
+                </div>
+              ))}
+            </div>
+          ),
+        };
+      }
+      case "customize-chain": {
+        const dependencyRefs =
+          assemblyResult?.compile_result.dependency_closure?.entries
+            .filter((entry) => entry.family !== "sessions")
+            .map((entry) => entry.ref) ?? [];
+        return {
+          title: "Customize referenced component",
+          content: (
+            <CustomizeChainEditor
+              segmentId={target.segmentId}
+              rootRef={target.rootRef}
+              dependencyRefs={dependencyRefs}
+              onCustomize={async (leafRef, targetLeafRef) => {
+                const result = await customizeChain({
+                  segment_id: target.segmentId,
+                  leaf_ref: leafRef,
+                  ...(targetLeafRef ? { target_leaf_ref: targetLeafRef } : {}),
+                });
+                if (result.applied && result.draft.mode === "structured") {
+                  commitWorkspace(
+                    workspaceFromVisualDraft(result.draft),
+                    "customize-chain",
+                  );
+                }
+                if (result.applied) setSaveState({ kind: "idle" });
+                return result;
+              }}
+              onClose={() => closeWindow(targetKey(target))}
+            />
+          ),
+        };
+      }
       case "open-session": {
-        // Open is a picker, not an inline dropdown: your saved sessions and
-        // the shipped NodalArc sessions, each a row you open. Sessions the
-        // editors cannot represent open read-only and say why.
-        const openEntry = (entry: BuilderSessionListEntry) => {
+        // Catalog identity → backend-owned lossless visual draft. The browser
+        // never parses persisted session grammar into its structured workspace.
+        const openEntry = (entry: CatalogDocumentSummary, targetRef?: string) => {
+          setOpenSessionError(null);
           // Preserve the current draft before opening displaces it; a refused
           // stash holds this gesture for the choice dialog.
           displace(() => {
-            // clear before the swap so the previous session's world does
-            // not render during the new load; the load's own resolve owns
-            // failure (error-clears-world), so no conditional guard is needed.
-            clear();
-            closeWorkspace();
-            closeAllWindows();
-            setSelection(null);
-            resetImport();
-            setSaveState({ kind: "idle" });
-            startImport(entry);
-          }, `opening ${entry.name}`);
+            void openSession(entry, targetRef as SessionRef | undefined).then((result) => {
+              if (!result.ok) {
+                setOpenSessionError(result.reason);
+                return;
+              }
+              closeWorkspace();
+              closeAllWindows();
+              setSelection(null);
+              setSaveState({ kind: "idle" });
+            });
+          }, `opening ${entry.display_name}`);
         };
         return {
           title: "Open a session",
@@ -1411,7 +1837,14 @@ export function BuilderView({
             <OpenSessionPicker
               sessions={sessions}
               sessionsError={sessionsError}
+              openError={openSessionError}
               onOpen={openEntry}
+              onExport={exportSessionClosure}
+              onImport={async (payload, commit) => {
+                const result = await importSessionClosure(payload, commit);
+                if (result.outcome === "committed") await refreshSessions();
+                return result;
+              }}
             />
           ),
         };
@@ -1420,7 +1853,14 @@ export function BuilderView({
         // Save is a small dialog, not a silent write: confirm the name it
         // saves under (into your library), then Save. Deploy stays its own
         // toolbar action.
-        const canSave = !!workspace && !!world && !error && !loading;
+        const canSave =
+          !!workspace &&
+          !loading &&
+          assemblyResult?.visual_draft.draft_revision === visualDraft?.draft_revision &&
+          saveState.kind !== "save-committed-unverified" &&
+          compileResult?.save_verdict.allowed === true;
+        const saveBlocker =
+          compileResult?.save_verdict.blockers?.[0]?.message ?? error;
         return {
           title: "Save session",
           content: workspace ? (
@@ -1430,7 +1870,7 @@ export function BuilderView({
               key={workspace.name}
               workspaceName={workspace.name}
               canSave={canSave}
-              blockedReason={error}
+              blockedReason={saveBlocker}
               saveState={saveState}
               dirtyWindows={dirtyWindows}
               staleList={staleList}
@@ -1452,7 +1892,7 @@ export function BuilderView({
             <>
               <LibraryPanel
                 onUse={handleLibraryUse}
-                onCustomize={(entry) => void handleLibraryCustomize(entry)}
+                onCustomize={handleLibraryCustomize}
                 onInspect={(entry) => void handleLibraryInspect(entry)}
                 onNew={handleLibraryNew}
               />
@@ -1462,23 +1902,46 @@ export function BuilderView({
         };
       }
       case "library": {
-        if (!libraryEditor) return null;
-        const title =
-          libraryEditor.kind === "terminal"
-            ? "New terminal"
-            : libraryEditor.kind === "site"
-              ? "New site"
-              : "New node";
+        if (!catalogDraft) return null;
+        const metadata = builderBootstrap.bootstrap?.families.find(
+          (entry) => entry.family === catalogDraft.family,
+        );
+        if (!metadata) {
+          return {
+            title: "Catalog draft",
+            content: <div className="builder-warning">Catalog family metadata is unavailable.</div>,
+          };
+        }
+        const verb =
+          catalogDraft.source_ref && catalogDraft.source_ref !== catalogDraft.target_ref
+            ? "Customize"
+            : catalogDraft.expected_target_revision
+              ? "Edit"
+              : "New";
+        const objectKind = metadata.wrapper?.replace(/_/g, " ") ?? catalogDraft.family;
         return {
-          title,
+          title: `${verb} ${objectKind}`,
           content: (
-            <LibraryEditorWindow
-              editor={libraryEditor}
-              setLibraryEditor={setLibraryEditor}
-              terminalEntries={terminalCatalog.entries}
-              refreshTerminals={terminalCatalog.refresh}
-              closeWindow={closeWindow}
-              nodeSave={libraryNodeSave}
+            <CatalogDraftEditorWindow
+              authoring={authoring!}
+              key={catalogDraft.target_ref}
+              initialDraft={catalogDraft}
+              initialRecovery={catalogDraftRecovery}
+              metadata={metadata}
+              onSaved={async (result) => {
+                setCatalogDraft(result.draft);
+                handleCatalogDraftRecovery(null);
+                await announceCatalogDraftSaved(result);
+              }}
+              onRecoveryChange={handleCatalogDraftRecovery}
+              onDiscard={discardCatalogDraft}
+              onClose={(dirty) => {
+                if (!dirty) {
+                  setCatalogDraft(null);
+                  handleCatalogDraftRecovery(null);
+                }
+                closeWindow("library");
+              }}
             />
           ),
         };
@@ -1540,6 +2003,10 @@ export function BuilderView({
         .map((p) => `${p.rule_id}: ${p.note}`)
         .join("\n")
     : "";
+  const assemblySettled =
+    visualDraft !== null &&
+    assemblyResult?.visual_draft.draft_revision === visualDraft.draft_revision;
+  const hasSavableDraft = workspace !== null || visualDraft?.mode === "opaque_yaml";
 
   return (
     <div className="builder-shell" data-testid="builder-shell">
@@ -1559,9 +2026,12 @@ export function BuilderView({
                 clear();
                 setSelection(null);
                 closeAllWindows();
-                resetImport();
                 setSaveState({ kind: "idle" });
-                startNew("untitled-session");
+                void createDraft({ session_name: freshSessionDraftName() }).then(
+                  (draft) => openWorkspace(workspaceFromVisualDraft(draft)),
+                  (cause) =>
+                    setRestoreError(cause instanceof Error ? cause.message : String(cause)),
+                );
               }, "starting a new session");
             }}
           />
@@ -1569,11 +2039,15 @@ export function BuilderView({
             className="builder-toolbar-btn"
             icon="folder-open"
             size={17}
-            disabled={!!importPending}
-            label={importPending ? "Opening…" : "Open a session — from your library or the NodalArc library"}
+            disabled={loading && openedSession !== null}
+            label={
+              loading && openedSession
+                ? `Opening ${openedSession.display_name}…`
+                : "Open a session — from your library or the NodalArc library"
+            }
             onClick={() => {
-              // the picker's running chip and auto-import target must not
-              // claim a session the cluster switched away from — refetch on open.
+              // Refetch on every open so the picker never offers stale catalog
+              // revisions after another authoring operation.
               void refreshSessions();
               openEditor({ kind: "open-session" });
             }}
@@ -1582,30 +2056,74 @@ export function BuilderView({
             className="builder-toolbar-btn"
             icon="save"
             size={17}
-            disabled={!workspace}
-            label={workspace ? "Save session to your library" : "Nothing to save yet"}
-            onClick={() => openEditor({ kind: "save-session" })}
+            disabled={
+              !hasSavableDraft ||
+              loading ||
+              !assemblySettled ||
+              saveState.kind === "save-committed-unverified" ||
+              compileResult?.save_verdict.allowed !== true
+            }
+            label={
+              !hasSavableDraft
+                ? "Nothing to save yet"
+                : loading
+                  ? "Compile must finish before save"
+                  : !assemblySettled
+                    ? "The latest visual draft must compile before save"
+                  : saveState.kind === "save-committed-unverified"
+                    ? `Save committed without verification for ${saveState.sessionRef}; reopen before saving again`
+                  : compileResult?.save_verdict.allowed === true
+                    ? "Save session to your library"
+                    : (compileResult?.save_verdict.blockers?.[0]?.message ??
+                      "The backend must compile this draft before save")
+            }
+            onClick={() => {
+              if (visualDraft?.mode === "opaque_yaml") void performOpaqueSave();
+              else openEditor({ kind: "save-session" });
+            }}
           />
           <IconButton
             className="builder-toolbar-btn"
             icon="rocket"
             size={17}
-            disabled={!deployGate.ok}
+            disabled={!deployGate.ok || saveState.kind === "deploying" || transitionInFlight}
             label={
-              deployGate.ok && (saveState.kind === "saved" || saveState.kind === "deployed")
-                ? `Deploy ${saveState.file} to cluster — the same switch every NodalArc session uses`
-                : (deployGate.reason ?? "save the session first, then deploy")
+              saveState.kind === "deploying"
+                ? "Deployment request is being accepted"
+                : transitionInFlight
+                  ? `Deployment ${transitionOperation?.state ?? "accepted"}; wait for terminal proof`
+                : deployGate.ok &&
+                    (saveState.kind === "saved" || saveState.kind === "deploy-accepted")
+                  ? `Deploy ${saveState.sessionRef} to cluster`
+                  : (deployGate.reason ?? "save the session first, then deploy")
             }
             onClick={async () => {
-              // The gate is the truth: deploy ships exactly the saved file,
-              // and only while it matches the settled resolve on screen.
               if (!deployGate.ok) return;
-              if (saveState.kind !== "saved" && saveState.kind !== "deployed") return;
-              const { name, file, artifact_sha256 } = saveState;
-              setSaveState({ kind: "deploying", name, file, artifact_sha256 });
+              if (saveState.kind !== "saved" && saveState.kind !== "deploy-accepted") return;
+              if (transitionInFlight) return;
+              const { name, sessionRef, sessionRevision, deployVerdict } = saveState;
+              setSaveState({
+                kind: "deploying",
+                name,
+                sessionRef,
+                sessionRevision,
+                deployVerdict,
+              });
               try {
-                await deploySession(file);
-                setSaveState({ kind: "deployed", name, file, artifact_sha256 });
+                const accepted = await deploySession({
+                  session_ref: sessionRef,
+                  expected_session_revision: sessionRevision,
+                  expected_document_digest: deployVerdict.digests.document,
+                  expected_dependency_digest: deployVerdict.digests.dependency,
+                });
+                setSaveState({
+                  kind: "deploy-accepted",
+                  name,
+                  sessionRef,
+                  sessionRevision,
+                  deployVerdict,
+                  operationId: accepted.operation_id,
+                });
               } catch (e) {
                 setSaveState({
                   kind: "failed",
@@ -1618,32 +2136,38 @@ export function BuilderView({
             className="builder-toolbar-btn"
             icon="history"
             size={17}
-            disabled={!hasBackup() && !hasAutosave()}
+            disabled={!hasStructuredBackup() && !hasStructuredAutosave()}
             label={
-              hasBackup()
+              hasStructuredBackup()
                 ? "Restore — bring back the draft the last Open or New displaced"
-                : hasAutosave()
+                : hasStructuredAutosave()
                   ? "Restore the autosaved draft from this browser"
                   : "Nothing to restore"
             }
+            onClick={restoreCurrentStructuredRecovery}
+          />
+          <IconButton
+            className="builder-toolbar-btn"
+            icon="history"
+            size={17}
+            disabled={!hasOpaqueAutosave()}
+            label={
+              hasOpaqueAutosave()
+                ? "Restore the lossless YAML draft autosaved in this browser"
+                : "No lossless YAML draft to restore"
+            }
             onClick={() => {
-              // clear and reset ONLY when the restore actually swaps
-              // the workspace. On a missing/corrupt/unmigratable payload the
-              // restore refuses with a reason and the stored value survives;
-              // the current world/YAML/status stand (an unchanged workspace
-              // never re-fires the resolve loop, so clear-then-fail would
-              // strand a null world), and the reason surfaces.
-              const result = hasBackup() ? restoreBackup() : restoreAutosave();
-              if (result.ok) {
-                closeAllWindows();
-                setSelection(null);
-                resetImport();
-                setSaveState({ kind: "idle" });
-                setRestoreError(null);
-                clear();
-              } else {
+              const result = restoreOpaqueAutosave();
+              if (!result.ok) {
                 setRestoreError(result.reason);
+                return;
               }
+              closeWorkspace();
+              closeAllWindows();
+              setSelection(null);
+              setSaveState({ kind: "idle" });
+              setRestoreError(null);
+              openEditor({ kind: "source-yaml" });
             }}
           />
         </span>
@@ -1651,18 +2175,35 @@ export function BuilderView({
           className="builder-toolbar-btn"
           icon="library"
           size={17}
-          label="Library — every block you could build with, shipped and yours"
-          onClick={() => openEditor({ kind: "catalog" })}
+          label={
+            catalogDraftRecovery
+              ? `Library — resume unsaved ${catalogDraftRecovery.draft.target_ref}`
+              : "Library — every block you could build with, shipped and yours"
+          }
+          onClick={() => {
+            openEditor({ kind: "catalog" });
+            if (catalogDraftRecovery) openEditor({ kind: "library" });
+          }}
         />
       </div>
       <div className="builder-outline" data-testid="builder-outline">
         <div className="builder-zone-title">World</div>
-        {importIssues && (
-          <div className="builder-warning" data-testid="import-issues">
-            {importIssues.name} cannot be edited in the builder yet:
-            {importIssues.issues.map((issue) => (
-              <div key={issue}>· {issue}</div>
-            ))}
+        {openedSession && visualDraft?.mode === "opaque_yaml" && (
+          <div className="builder-warning" data-testid="opened-session-lossless">
+            {openedSession.display_name} is open in lossless source mode. VS-API
+            owns parsing, canonicalization, component-chain forking, and save assembly.
+            {visualDraft.source_ref && visualDraft.source_ref !== visualDraft.target_ref && (
+              <div className="builder-site-derived">
+                This copy targets {visualDraft.target_ref}. Change session.name in the source YAML
+                to {(visualDraft.target_ref.split("/").pop() ?? "").replace(/\.ya?ml$/, "")} before
+                Save; the backend blocks a mismatched identity.
+              </div>
+            )}
+            <div className="builder-preset-row">
+              <Button onClick={() => openEditor({ kind: "source-yaml" })}>
+                Edit source YAML
+              </Button>
+            </div>
           </div>
         )}
         {workspace && (nodeCatalog.error || terminalCatalog.error) && (
@@ -1682,24 +2223,52 @@ export function BuilderView({
         {workspace && (
           <BuildGuide
             workspace={workspace}
-            saved={saveState.kind === "saved" || saveState.kind === "deploying" || saveState.kind === "deployed" ? ("name" in saveState ? saveState.name : null) : null}
-            deployed={saveState.kind === "deployed"}
+            saved={saveState.kind === "saved" || saveState.kind === "deploying" || saveState.kind === "deploy-accepted" ? ("name" in saveState ? saveState.name : null) : null}
+            deployed={false}
             resolvedSiteCount={world ? distinctGroundStationSites(world.nodes) : null}
             onAddConstellation={() => {
-              if (!defaultNodeRef) return;
-              const draft = newDraftConstellation(defaultNodeRef);
               ensureThenCreate(() => {
-                addDraft(draft);
-                openEditor({ kind: "segment", id: draft.segment_id });
-                setFreshId(draft.segment_id);
+                setLibraryError(null);
+                if (!authoring) {
+                  setLibraryError("Builder authoring facts are unavailable");
+                  return;
+                }
+                void applyWorkspaceCommand({
+                  operation: "add_generated_space",
+                  phasing_mode: authoring.default_phasing_mode,
+                })
+                  .then((result) => {
+                    openEditor({ kind: "segment", id: result.affected_id });
+                    setFreshId(result.affected_id);
+                  })
+                  .catch((cause) =>
+                    setLibraryError(cause instanceof Error ? cause.message : String(cause)),
+                  );
               }, "adding a constellation");
             }}
-            onAddGround={() => handleLibraryNew("site-sets")}
+            onAddGround={() => {
+              ensureThenCreate(() => {
+                setLibraryError(null);
+                void applyWorkspaceCommand({ operation: "add_ground" })
+                  .then((result) => {
+                    openEditor({ kind: "ground", id: result.affected_id });
+                    setFreshId(result.affected_id);
+                  })
+                  .catch((cause) =>
+                    setLibraryError(cause instanceof Error ? cause.message : String(cause)),
+                  );
+              }, "adding a ground segment");
+            }}
             onAddDomain={() => {
-              const domain = defaultRoutingDomain(workspace);
-              addRoutingDomain(domain);
-              openEditor({ kind: "domain", id: domain.domain_id });
-              setFreshId(domain.domain_id);
+              setLibraryError(null);
+              void applyWorkspaceCommand({ operation: "add_routing_domain" })
+                .then((result) => {
+                  openEditor({ kind: "domain", id: result.affected_id });
+                  setFreshId(result.affected_id);
+                })
+                .catch((cause) =>
+                  setLibraryError(cause instanceof Error ? cause.message : String(cause)),
+                );
             }}
             onOpenSession={() => openEditor({ kind: "session" })}
             onOpenSegment={(kind, id) => openEditor({ kind, id })}
@@ -1710,14 +2279,6 @@ export function BuilderView({
             <div className="builder-library-entry">
               <span className="builder-outline-kind">
                 Drafts · {workspace.name}
-                {importedFrom && sessions.find((s) => s.file === importedFrom)?.active && (
-                  <span
-                    className="builder-running-chip"
-                    title="Loaded from the session that was running when this workspace was opened"
-                  >
-                    running
-                  </span>
-                )}
               </span>
               <span className="builder-library-actions">
                 <span className="builder-outline-count">
@@ -1750,33 +2311,13 @@ export function BuilderView({
                   <IconButton
                     icon="pencil"
                     size={12}
-                    label="Customize: fork into an editable draft"
+                    label="Customize a nested component through backend-managed forks"
                     onClick={() =>
-                      void (async () => {
-                        try {
-                          const { document } = await readCatalogObject(placed.ref);
-                          const constellation = (
-                            document as { constellation?: { orbit?: unknown } }
-                          ).constellation;
-                          const orbitRef =
-                            typeof constellation?.orbit === "string"
-                              ? constellation.orbit
-                              : null;
-                          const orbitDocument = orbitRef
-                            ? (await readCatalogObject(orbitRef)).document
-                            : null;
-                          const draft = draftConstellationFromDocuments(
-                            document,
-                            orbitDocument,
-                            workspace?.start_time ?? emptySessionStartTime(),
-                          );
-                          removeRefSegment(placed.segment_id);
-                          addDraft(draft);
-                          openEditor({ kind: "segment", id: draft.segment_id });
-                        } catch (e) {
-                          setLibraryError(e instanceof Error ? e.message : String(e));
-                        }
-                      })()
+                      openEditor({
+                        kind: "customize-chain",
+                        segmentId: placed.segment_id,
+                        rootRef: placed.ref,
+                      })
                     }
                   />
                   <IconButton
@@ -1835,18 +2376,26 @@ export function BuilderView({
                     ariaLabel={`Scheduling for ${placed.label}`}
                     title="Scheduling intent — writes the full explicit block"
                     className="builder-ground-preset"
-                    value={presetForSchedulingBlock(placed.scheduling) ?? ""}
-                    onChange={(v) =>
-                      updateGroundRef(placed.segment_id, {
-                        scheduling: SCHEDULING_PRESETS[v as SchedulingPresetKey].block,
-                      })
+                    value={
+                      schedulingSelections[schedulingSelectionKey(placed.segment_id)] ?? ""
                     }
+                    onChange={(value) => {
+                      if (!value) return;
+                      setLibraryError(null);
+                      void applyWorkspaceCommand({
+                        operation: "set_scheduling_preset",
+                        segment_id: placed.segment_id,
+                        preset: value as BuilderVisualSchedulingPreset,
+                      }).catch((cause) =>
+                        setLibraryError(cause instanceof Error ? cause.message : String(cause)),
+                      );
+                    }}
                     options={[
-                      ...(presetForSchedulingBlock(placed.scheduling) === null
+                      ...(schedulingSelections[schedulingSelectionKey(placed.segment_id)] == null
                         ? [{ value: "", label: "Imported block (custom)" }]
                         : []),
-                      ...Object.entries(SCHEDULING_PRESETS).map(([key, preset]) => ({
-                        value: key,
+                      ...schedulingPresets.map((preset) => ({
+                        value: preset.id,
                         label: preset.label,
                       })),
                     ]}
@@ -1854,17 +2403,13 @@ export function BuilderView({
                   <IconButton
                     icon="pencil"
                     size={12}
-                    label="Customize: fork into an editable draft"
+                    label="Customize a nested component through backend-managed forks"
                     onClick={() =>
-                      void (async () => {
-                        try {
-                          const draft = await forkGroundSet(placed.ref);
-                          replaceGroundRefWithDraft(placed.segment_id, draft);
-                          openEditor({ kind: "ground", id: draft.segment_id });
-                        } catch (e) {
-                          setLibraryError(e instanceof Error ? e.message : String(e));
-                        }
-                      })()
+                      openEditor({
+                        kind: "customize-chain",
+                        segmentId: placed.segment_id,
+                        rootRef: placed.ref,
+                      })
                     }
                   />
                   <IconButton
@@ -1982,10 +2527,17 @@ export function BuilderView({
                 <Button
                   title="A protocol over member segments — seeds over everything"
                   onClick={() => {
-                    const domain = defaultRoutingDomain(workspace);
-                    addRoutingDomain(domain);
-                    openEditor({ kind: "domain", id: domain.domain_id });
-                    setFreshId(domain.domain_id);
+                    setLibraryError(null);
+                    void applyWorkspaceCommand({ operation: "add_routing_domain" })
+                      .then((result) => {
+                        openEditor({ kind: "domain", id: result.affected_id });
+                        setFreshId(result.affected_id);
+                      })
+                      .catch((cause) =>
+                        setLibraryError(
+                          cause instanceof Error ? cause.message : String(cause),
+                        ),
+                      );
                   }}
                 >
                   + domain
@@ -1999,13 +2551,16 @@ export function BuilderView({
                   }
                   title="A controlled exchange over a fixed link rule between two domains"
                   onClick={() => {
-                    const boundary = defaultBoundary(workspace);
-                    const fixed = workspace.links.find(
-                      (rule) => rule.a.role !== "access" && rule.b.role !== "access",
-                    );
-                    if (fixed) boundary.over_rule_id = fixed.rule_id;
-                    addBoundary(boundary);
-                    openEditor({ kind: "boundary", id: boundary.boundary_id });
+                    setLibraryError(null);
+                    void applyWorkspaceCommand({ operation: "add_boundary" })
+                      .then((result) =>
+                        openEditor({ kind: "boundary", id: result.affected_id }),
+                      )
+                      .catch((cause) =>
+                        setLibraryError(
+                          cause instanceof Error ? cause.message : String(cause),
+                        ),
+                      );
                   }}
                 >
                   + boundary
@@ -2018,14 +2573,24 @@ export function BuilderView({
               </div>
             ))}
             <Button
-              disabled={!defaultNodeRef}
               onClick={() => {
-                if (!defaultNodeRef) return;
-                const draft = newDraftConstellation(defaultNodeRef);
                 ensureThenCreate(() => {
-                  addDraft(draft);
-                  openEditor({ kind: "segment", id: draft.segment_id });
-                  setFreshId(draft.segment_id);
+                  setLibraryError(null);
+                  if (!authoring) {
+                    setLibraryError("Builder authoring facts are unavailable");
+                    return;
+                  }
+                  void applyWorkspaceCommand({
+                    operation: "add_generated_space",
+                    phasing_mode: authoring.default_phasing_mode,
+                  })
+                    .then((result) => {
+                      openEditor({ kind: "segment", id: result.affected_id });
+                      setFreshId(result.affected_id);
+                    })
+                    .catch((cause) =>
+                      setLibraryError(cause instanceof Error ? cause.message : String(cause)),
+                    );
                 }, "adding a constellation");
               }}
             >
@@ -2037,15 +2602,18 @@ export function BuilderView({
                 include them in the save
               </div>
             )}
-            {saveState.kind === "deploying" && (
-              <div className="builder-library-note">switching the cluster…</div>
-            )}
-            {saveState.kind === "deployed" && (
-              <div className="builder-library-note" data-testid="deploy-note">
-                switching to {saveState.name} — watch the Live view
-              </div>
-            )}
           </div>
+        )}
+        {saveState.kind === "deploying" && (
+          <div className="builder-library-note">switching the cluster…</div>
+        )}
+        {saveState.kind === "deploy-accepted" && (
+          <BuilderTransitionStatus
+            operationId={saveState.operationId}
+            operation={transitionOperation}
+            pollError={transitionPollError}
+            reviewed={saveState.deployVerdict.digests}
+          />
         )}
         {libraryError && <div className="builder-warning">{libraryError}</div>}
         {sessionsError && (
@@ -2063,30 +2631,49 @@ export function BuilderView({
                 const expanded = expandedSegment === seg.segment_id;
                 return (
                   <div key={seg.segment_id}>
-                    <button
-                      className="builder-outline-row builder-outline-row--segment"
-                      onClick={() => {
-                        actionsRef.current?.focusNode(seg.first_node_id);
-                        if (expandable) {
-                          setExpandedSegment(expanded ? null : seg.segment_id);
-                        }
-                      }}
-                      title={`Fly to ${seg.display_name}`}
+                    <div
+                      className="builder-library-entry"
+                      data-segment-id={seg.segment_id}
                     >
-                      <span
-                        className={`builder-outline-name builder-outline-name--${space ? "space" : "ground"}`}
+                      <button
+                        className="builder-outline-row builder-outline-row--segment"
+                        onClick={() => {
+                          actionsRef.current?.focusNode(seg.first_node_id);
+                          if (expandable) {
+                            setExpandedSegment(expanded ? null : seg.segment_id);
+                          }
+                        }}
+                        title={`Fly to ${seg.display_name}`}
                       >
-                        <Icon name={space ? "orbit" : "satellite-dish"} size={12} />
-                        {seg.display_name}
-                        {expandable ? (expanded ? " ▾" : " ▸") : ""}
-                      </span>
-                      <span className="builder-outline-count">
-                        {seg.satellites > 0 && `${seg.satellites} sat`}
-                        {seg.satellites > 0 && seg.grounds + seg.relays > 0 && " · "}
-                        {seg.grounds > 0 && `${seg.grounds} gs`}
-                        {seg.relays > 0 && ` · ${seg.relays} relay`}
-                      </span>
-                    </button>
+                        <span
+                          className={`builder-outline-name builder-outline-name--${space ? "space" : "ground"}`}
+                        >
+                          <Icon name={space ? "orbit" : "satellite-dish"} size={12} />
+                          {seg.display_name}
+                          {expandable ? (expanded ? " ▾" : " ▸") : ""}
+                        </span>
+                        <span className="builder-outline-count">
+                          {seg.satellites > 0 && `${seg.satellites} sat`}
+                          {seg.satellites > 0 && seg.grounds + seg.relays > 0 && " · "}
+                          {seg.grounds > 0 && `${seg.grounds} gs`}
+                          {seg.relays > 0 && ` · ${seg.relays} relay`}
+                        </span>
+                      </button>
+                      {visualDraft?.mode === "opaque_yaml" && (
+                        <IconButton
+                          icon="pencil"
+                          size={12}
+                          label={`Customize a referenced component under ${seg.display_name}`}
+                          onClick={() =>
+                            openEditor({
+                              kind: "customize-chain",
+                              segmentId: seg.segment_id,
+                              rootRef: "",
+                            })
+                          }
+                        />
+                      )}
+                    </div>
                     {expandable &&
                       expanded &&
                       world?.nodes
@@ -2143,7 +2730,9 @@ export function BuilderView({
               ? resolveError
                 ? "nothing resolves to list — fix the refusal below"
                 : "resolving…"
-              : "No session loaded"}
+              : visualDraft
+                ? "compiling backend visual draft…"
+                : "No session loaded"}
           </div>
         )}
       </div>
@@ -2179,21 +2768,29 @@ export function BuilderView({
           <div className="builder-zone-empty">{snapshotError}</div>
         ) : workspace ? (
           <div className="builder-zone-empty">
-            {resolveError || serializeError
+            {resolveError
               ? `The session does not resolve — the canvas returns when it does. ${truncateError(
-                  resolveError?.error ?? serializeError ?? "",
+                  resolveError.error,
                 )}`
-              : previewEmits
+              : loading
                 ? "Resolving draft…"
                 : hasDrafts
-                  ? "Nothing to emit — the content is held out. See the rail."
-                  : "Add a constellation to begin — the world renders as soon as the draft resolves"}
+                  ? "The backend returned no preview. Review its typed findings."
+                  : "Add a constellation to begin — incomplete content remains in the visual draft"}
+          </div>
+        ) : openedSession ? (
+          <div className="builder-zone-empty">
+            {loading
+              ? `Compiling ${openedSession.display_name} through the backend…`
+              : error
+                ? `The catalog session did not compile. ${truncateError(error)}`
+                : `Backend compiled ${openedSession.display_name}. Edit its lossless source or customize a referenced component.`}
           </div>
         ) : (
           <div className="builder-start-card" data-testid="builder-start">
             <div className="builder-zone-title">Build a session from scratch</div>
             <ol className="builder-start-steps">
-              <li>Add constellations — orbit presets seed values you then own</li>
+              <li>Add constellations — VS-API seeds an editable orbital draft</li>
               <li>Pick or author the hardware — nodes, terminals, your own physics</li>
               <li>Place ground sites and their networks</li>
               <li>Save — a resolvable session file, deployable like any other</li>
@@ -2205,9 +2802,12 @@ export function BuilderView({
                   clear();
                   setSelection(null);
                   closeAllWindows();
-                  resetImport();
                   setSaveState({ kind: "idle" });
-                  startNew("untitled-session");
+                  void createDraft({ session_name: freshSessionDraftName() }).then(
+                    (draft) => openWorkspace(workspaceFromVisualDraft(draft)),
+                    (cause) =>
+                      setRestoreError(cause instanceof Error ? cause.message : String(cause)),
+                  );
                 }, "starting a new session");
               }}
             >
@@ -2318,10 +2918,7 @@ export function BuilderView({
               onClick={() => {
                 const target = finding.target;
                 if (!target) return;
-                if (target.kind === "session") openEditor({ kind: "session" });
-                else if (target.kind === "link") openEditor({ kind: "link", id: target.id });
-                else if (target.kind === "ground") openEditor({ kind: "ground", id: target.id });
-                else openEditor({ kind: "segment", id: target.id });
+                openEditor(target);
               }}
             >
               {finding.message}
@@ -2336,12 +2933,12 @@ export function BuilderView({
             previewing {count(dirtyWindows, "window")} of unapplied edits
           </span>
         )}
-        {error || serializeError ? (
+        {error ? (
           <span
             className="builder-status-item builder-status-item--error"
-            title={error ?? serializeError ?? undefined}
+            title={error}
           >
-            {truncateError(error ?? serializeError ?? "")}
+            {truncateError(error)}
           </span>
         ) : snapshotError ? (
           <span className="builder-status-item builder-status-item--error">
@@ -2371,20 +2968,30 @@ export function BuilderView({
         ) : (
           <span className="builder-status-item">
             {workspace
-              ? previewEmits
+              ? loading
                 ? "resolving draft…"
                 : hasDrafts
-                  ? "nothing to emit — content held out"
+                  ? "backend returned no resolved preview"
                   : "add a constellation to begin"
-              : importPending
-                ? importPending.file === runningSession?.file
-                  ? `loading running session ${importPending.name}…`
-                  : `loading session ${importPending.name}…`
-                : runningSession
-                  ? `running: ${runningSession.name} — not loaded`
-                  : "no session loaded"}
+              : openedSession
+                ? loading
+                  ? `opening ${openedSession.display_name}…`
+                  : `opened ${openedSession.display_name} losslessly`
+                : "no session loaded"}
           </span>
         )}
+        {compileIssues
+          .filter((issue) => issue.severity !== "error")
+          .slice(0, 2)
+          .map((issue) => (
+            <span
+              className="builder-status-item builder-status-item--hint"
+              title={`${issue.stage}: ${issue.code}`}
+              key={`${issue.stage}:${issue.code}:${issue.message}`}
+            >
+              {issue.message}
+            </span>
+          ))}
         {saveState.kind === "saved" && (
           <span className="builder-status-item">
             {deployGate.ok
@@ -2395,6 +3002,11 @@ export function BuilderView({
         {saveState.kind === "failed" && (
           <span className="builder-status-item builder-status-item--error">
             save failed: {saveState.message}
+          </span>
+        )}
+        {saveState.kind === "save-committed-unverified" && (
+          <span className="builder-status-item builder-status-item--error">
+            save committed but unverified for {saveState.sessionRef} — reopen before retrying
           </span>
         )}
         {restoreError && (
@@ -2441,7 +3053,7 @@ export function BuilderView({
                   setPendingDisplace(null);
                   // The overwrite choice: force the stash so the current draft
                   // replaces the backup, then run the held gesture.
-                  stashAutosaveToBackup({ force: true });
+                  stashCurrentStructuredRecovery({ force: true });
                   held.proceed();
                 }}
               >

@@ -20,7 +20,7 @@ platform:
   # Kubernetes namespace where all Nodal Arc pods are deployed
   # (satellites, ground stations, orchestrator, visualization).
   # Must exist before running na-deploy.
-  kubernetes_namespace: nodalarc
+  kubernetes_namespace: "{{ .Values.namespace }}"
 
   # ── Service Ports ───────────────────────────────────────────────────
   #

@@ -12,7 +12,7 @@
  * implementation and one keyboard/pointer behavior.
  */
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { IconButton } from "./Button";
 import { addWindow, raiseWindow, removeWindow, useWindowRank } from "./windowStack";
 
@@ -74,6 +74,7 @@ export function FloatingWindow({
   raiseId,
   children,
 }: FloatingWindowProps) {
+  const titleId = useId();
   const [geom, setGeom] = useState<WindowGeometry>(() => loadGeometry(persistKey, initial));
   const geomRef = useRef(geom);
   geomRef.current = geom;
@@ -159,6 +160,28 @@ export function FloatingWindow({
 
   // Escape closes the focused window.
   const rootRef = useRef<HTMLDivElement>(null);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
+  useLayoutEffect(() => {
+    const root = rootRef.current;
+    if (!root) return;
+    previousFocusRef.current = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
+    // Run after the opening click's native focus default. Focusing during the
+    // synchronous React commit is too early: the browser then puts focus back
+    // on the opener after the event handler returns.
+    const focusTimer = window.setTimeout(() => {
+      const firstControl = root.querySelector<HTMLElement>(
+        ".ui-window-body button:not([disabled]):not([hidden]), .ui-window-body input:not([disabled]):not([hidden]):not([type='hidden']), .ui-window-body select:not([disabled]):not([hidden]), .ui-window-body textarea:not([disabled]):not([hidden]), .ui-window-body [tabindex]:not([tabindex='-1']):not([hidden])",
+      );
+      (firstControl ?? root).focus();
+    }, 50);
+    return () => {
+      window.clearTimeout(focusTimer);
+      const previous = previousFocusRef.current;
+      if (root.contains(document.activeElement) && previous?.isConnected) previous.focus();
+    };
+  }, []);
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
@@ -174,7 +197,8 @@ export function FloatingWindow({
       ref={rootRef}
       className="ui-window"
       role="dialog"
-      aria-label={typeof title === "string" ? title : undefined}
+      aria-labelledby={titleId}
+      tabIndex={-1}
       // Capture so a pointerdown anywhere in the window raises it even when a
       // child (a resize edge) stops propagation. --window-z-bump is the rank.
       onPointerDownCapture={() => raiseWindow(windowId)}
@@ -189,7 +213,7 @@ export function FloatingWindow({
       }
     >
       <header className="ui-window-title" onPointerDown={beginDrag}>
-        <strong className="ui-window-title-text">{title}</strong>
+        <strong id={titleId} className="ui-window-title-text">{title}</strong>
         <div className="ui-window-actions">
           {headerExtras}
           <IconButton icon="x" label="Close" onClick={onClose} />
@@ -197,7 +221,12 @@ export function FloatingWindow({
       </header>
       <div className="ui-window-body">{children}</div>
       {EDGES.map((edge) => (
-        <span key={edge} className={`ui-window-edge ui-window-edge--${edge}`} onPointerDown={beginResize(edge)} />
+        <span
+          key={edge}
+          aria-hidden="true"
+          className={`ui-window-edge ui-window-edge--${edge}`}
+          onPointerDown={beginResize(edge)}
+        />
       ))}
     </div>
   );

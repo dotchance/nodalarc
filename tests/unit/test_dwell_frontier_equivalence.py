@@ -23,9 +23,8 @@ from pathlib import Path
 import ome.ground_visibility_engine as gve
 import pytest
 import yaml
+from nodalarc.configuration_yaml import load_configuration_yaml
 from ome.event_stream import build_step_context, compute_step
-
-from tests.conftest import build_segment_session_dict
 
 
 class _Comparator:
@@ -153,20 +152,20 @@ def test_frontier_matches_oracle_on_catalog_dwell_sessions(monkeypatch, name, st
 def test_frontier_matches_oracle_through_pass_closures(monkeypatch, tmp_path):
     """Fast LEO passes under a dwell policy: closures, memo answers for
     closed pairs, and re-rise invalidation — coverage asserted."""
-    raw = build_segment_session_dict(
-        name="dwell-equivalence-leo",
-        constellation="configs/constellations/demo-36.yaml",
-        ground_stations="configs/ground-stations/sets/demo.yaml",
-        orbit_propagator="j2-mean-elements",
-        scheduling={
+    raw = load_configuration_yaml(
+        Path("catalog/nodalarc/sessions/earth-leo-simple.yaml").read_text(encoding="utf-8")
+    )
+    raw["session"]["name"] = "dwell-equivalence-leo"
+    raw["segments"][1]["apply"]["scheduling"].update(
+        {
             "selection_policy": {"longest_remaining_pass": {"lookahead_horizon_ticks": 30}},
             "handover_policy": {"hard_release": {}},
             "handover_mode": "bbm",
             "mbb_overlap_ticks": 0,
             "mbb_reserve": 0,
-        },
-        time={"step_seconds": 10},
+        }
     )
+    raw["time"]["step_seconds"] = 10
     session_path = tmp_path / "dwell-equivalence-leo.yaml"
     session_path.write_text(yaml.safe_dump(raw, sort_keys=False))
 

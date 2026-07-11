@@ -16,16 +16,23 @@ import type {
   AvailableStation,
   ActiveCard,
   OrbitPropagator,
+  OrbitModel,
+  WizardConstellationCapability,
+  WizardConstellationGeometry,
 } from "./wizardTypes";
 import { SatelliteTypePanel } from "./SatelliteTypePanel";
 import { GroundStationPanel } from "./GroundStationPanel";
 import { ConstellationPanel } from "./ConstellationPanel";
 import { OrbitModelPanel } from "./OrbitModelPanel";
-import { ORBIT_MODEL_OPTIONS } from "./orbitModels";
+import { orbitModelLabel } from "./orbitModels";
 
 interface SelectionCardsProps {
   // Data
   presets: ConstellationPreset[];
+  customConstellationCapability: WizardConstellationCapability | null;
+  customConstellationSeed: WizardConstellationGeometry | null;
+  customConstellationDefaultNode: string | null;
+  orbitModels: readonly OrbitModel[];
   satelliteTypes: SatelliteTypePreset[];
   groundStationSets: GroundStationSet[];
   availableStations: AvailableStation[];
@@ -33,7 +40,7 @@ interface SelectionCardsProps {
   constellation: ConstellationPreset | null;
   satelliteType: SatelliteTypePreset | null;
   groundStationSet: GroundStationSet | null;
-  orbitPropagator: OrbitPropagator;
+  orbitPropagator: OrbitPropagator | null;
   // Callbacks
   onSelectConstellation: (preset: ConstellationPreset) => void;
   onSelectSatelliteType: (preset: SatelliteTypePreset | null) => void;
@@ -72,7 +79,7 @@ const CARDS: { id: CardId; label: string; getStatus: (props: SelectionCardsProps
   {
     id: "orbit-model",
     label: "Orbit Model",
-    getStatus: (p) => ORBIT_MODEL_OPTIONS.find((o) => o.id === p.orbitPropagator)?.label ?? p.orbitPropagator,
+    getStatus: (p) => orbitModelLabel(p.orbitModels, p.orbitPropagator),
   },
 ];
 
@@ -113,6 +120,10 @@ export function SelectionCards(props: SelectionCardsProps) {
           <h2 className="wizard-panel-title">Select Constellation</h2>
           <ConstellationPanel
             presets={props.presets}
+            customGeometryCapability={props.customConstellationCapability}
+            customGeometrySeed={props.customConstellationSeed}
+            customGeometryDefaultNode={props.customConstellationDefaultNode}
+            orbitModels={props.orbitModels}
             selected={props.constellation}
             onSelect={(p) => { props.onSelectConstellation(p); setActiveCard(null); }}
           />
@@ -149,6 +160,7 @@ export function SelectionCards(props: SelectionCardsProps) {
           <h2 className="wizard-panel-title">Select Orbit Model</h2>
           <OrbitModelPanel
             constellation={props.constellation}
+            orbitModels={props.orbitModels}
             selected={props.orbitPropagator}
             onSelect={(m) => { props.onSelectOrbitPropagator(m); setActiveCard(null); }}
           />

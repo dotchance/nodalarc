@@ -39,7 +39,7 @@ RUN pip install --no-cache-dir \
 # Add lib/ and services/ to Python path
 ENV PYTHONPATH=/app/lib:/app/services:/app
 
-# Copy shared library (includes proto/, constellation_loader, geo, models)
+# Copy shared library (includes proto/, canonical configuration models, and geometry helpers)
 COPY lib/ lib/
 
 # Copy scheduler service

@@ -3,12 +3,13 @@
 /**
  * Constellation — all satellites as one InstancedMesh (O(1) draw call at any scale).
  * The snapshot seeds instance slots + colors; every frame
- * each satellite's position is PROPAGATED client-side (the reused SGP4 worker, or the
+ * each Keplerian satellite's position is PROPAGATED client-side (the worker, or the
  * main-thread propagateToSceneXYZ fallback) keyed on the EMA-interpolated sim time — NOT
- * interpolated between snapshot positions. The truth layer (worker, propagateToSceneXYZ,
- * simClock, geoToWorld) is reused verbatim; only the three.js object lifecycle is
- * reimplemented declaratively. Positions are mirrored into the shared registry so links,
- * selection, labels, and the camera read the same per-frame truth.
+ * interpolated between snapshot positions. TLE/SGP4 satellites use backend-propagated
+ * snapshot positions. The truth layer (worker, propagateToSceneXYZ, simClock, geoToWorld)
+ * is reused verbatim; only the three.js object lifecycle is reimplemented declaratively.
+ * Positions are mirrored into the shared registry so links, selection, labels, and the
+ * camera read the same per-frame truth.
  *
  * Lives inside a <Body>, so its instances are in that body's local frame.
  */
@@ -122,17 +123,20 @@ export function Constellation({
         idx = freeSlots.current.pop() ?? countRef.current++;
         satIndex.current.set(node.node_id, idx);
         indexToId.current[idx] = node.node_id;
-        const p = geoToWorld(
-          node.lat_deg,
-          node.lon_deg,
-          node.alt_km,
-          bodyFrame.radiusRender,
-          bodyFrame.kmPerRenderUnit,
-        );
-        _tmpMatrix.makeTranslation(p.x, p.y, p.z);
-        mesh.setMatrixAt(idx, _tmpMatrix);
-        setNodeLocalPosition(node.node_id, bodyId, p.x, p.y, p.z);
       }
+      // Snapshot positions remain authoritative for ephemeris variants the
+      // browser does not propagate locally (currently TLE/SGP4). Keplerian
+      // nodes are overwritten from their distributed ephemeris each frame.
+      const p = geoToWorld(
+        node.lat_deg,
+        node.lon_deg,
+        node.alt_km,
+        bodyFrame.radiusRender,
+        bodyFrame.kmPerRenderUnit,
+      );
+      _tmpMatrix.makeTranslation(p.x, p.y, p.z);
+      mesh.setMatrixAt(idx, _tmpMatrix);
+      setNodeLocalPosition(node.node_id, bodyId, p.x, p.y, p.z);
       // When a GS is selected, the scene blooms for it: candidate sats take their relation's
       // family tone, far/irrelevant sats dim so the eye goes to the candidates (spec on-select).
       // Otherwise the normal colorMode.

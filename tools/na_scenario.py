@@ -22,6 +22,7 @@ from pathlib import Path
 
 import nats
 import yaml
+from nodalarc.configuration_yaml import load_configuration_yaml
 from nodalarc.constants import LOG_FORMAT
 from nodalarc.models.scenario import (
     InjectLinkDownStep,
@@ -34,6 +35,7 @@ from nodalarc.models.scenario import (
     WaitConvergeStep,
     WaitStep,
 )
+from nodalarc.models.segment_session import SegmentSessionConfig
 from nodalarc.nats_channels import (
     NATS_CONNECT_OPTIONS,
     SUBJECT_MI_CONVERGENCE_GATE,
@@ -47,13 +49,9 @@ log = logging.getLogger(__name__)
 
 def _resolve_session_id(session_path: str) -> str:
     """Read session YAML and return the sanitized session ID."""
-    data = yaml.safe_load(Path(session_path).read_text())
-    session_block = data.get("session", {})
-    name = session_block.get("name", "")
-    if not name:
-        log.error("Session YAML has no session.name field")
-        sys.exit(1)
-    return sanitize_session_id(name)
+    data = load_configuration_yaml(Path(session_path).read_text())
+    session = SegmentSessionConfig.model_validate(data)
+    return sanitize_session_id(session.session.name)
 
 
 async def _send_scheduler_cmd(nc: nats.NATS, subject: str, cmd: dict) -> dict:
@@ -160,8 +158,7 @@ def _reconfig(step: ReconfigStep, session_path: str) -> None:
         sys.executable,
         "-m",
         "tools.na_reconfig",
-        "--session",
-        session_path,
+        "--live",
         "--target",
         step.target,
     ]
@@ -187,11 +184,6 @@ async def run_scenario_async(scenario_path: str, session_path: str) -> None:
     nc = await nats.connect(nats_url(), **NATS_CONNECT_OPTIONS)
     log.info("Connected to NATS at %s", nats_url())
 
-    # Check if MI is configured
-    session_data = yaml.safe_load(Path(session_path).read_text())
-    mi_block = session_data.get("mi", {})
-    mi_enabled = mi_block.get("enabled", False)
-
     try:
         for i, step in enumerate(scenario.steps):
             log.info("--- Step %d/%d: %s ---", i + 1, len(scenario.steps), step.action)
@@ -208,15 +200,9 @@ async def run_scenario_async(scenario_path: str, session_path: str) -> None:
                 case RestoreSatelliteStep():
                     await _restore_satellite(nc, subject, step)
                 case WaitConvergeStep():
-                    if not mi_enabled:
-                        log.warning("wait_converge: MI not configured — skipping")
-                    else:
-                        await _wait_converge(nc, step)
+                    await _wait_converge(nc, step)
                 case MeasureStep():
-                    if not mi_enabled:
-                        log.warning("measure: MI not configured — skipping")
-                    else:
-                        await _measure(nc, step)
+                    await _measure(nc, step)
                 case ReconfigStep():
                     _reconfig(step, session_path)
 

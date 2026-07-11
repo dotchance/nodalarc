@@ -12,11 +12,17 @@ import nodalarc.template_vars as template_vars
 import pytest
 from jinja2 import Environment, FileSystemLoader
 from nodalarc.models.resolved_session import ResolvedSession, SourceContext
-from nodalarc.resolve_session import load_session_resolution_from_file, resolve_session
+from nodalarc.resolve_session import load_session_resolution_from_file
 from nodalarc.stack_resolver import domain_extensions, resolve_domain_stack, resolve_stack
 from nodalarc.template_vars import build_template_vars_from_resolved
 
-from tests.conftest import CONFIGS_DIR, build_segment_session_dict
+from tests.catalog_session_fixtures import (
+    build_catalog_session_fixture,
+)
+from tests.catalog_session_fixtures import (
+    resolve_catalog_session as resolve_session,
+)
+from tests.conftest import CONFIGS_DIR
 
 TEMPLATES_DIR = CONFIGS_DIR / "templates" / "frr"
 
@@ -33,7 +39,7 @@ def _raw_session(
     slots: int = 2,
     routing: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    return build_segment_session_dict(
+    return build_catalog_session_fixture(
         name=f"test-{protocol}",
         constellation={"planes": {"count": planes, "sats_per_plane": slots}},
         ground_stations={"stations": [{} for _ in range(2)]},
@@ -171,6 +177,29 @@ def test_ospf_cross_area_link_uses_backbone_area_from_resolved_area_assignment()
     assert any(info["cross_area"] for info in vars_for_node["interface_info"].values())
     ospf = _render("ospfd.conf.j2", vars_for_node)
     assert "ip ospf area 0.0.0.0" in ospf
+
+
+def test_explicit_area_assignment_applies_ground_station_area() -> None:
+    raw = _raw_session(protocol="isis", planes=2, slots=1)
+    site = raw.read_catalog(raw.site_refs[0])["site"]
+    target_local_id = f"{site['id']}-{site['nodes'][0]['id']}"
+    raw["routing"]["domains"][0]["area_assignment"] = {
+        "strategy": "explicit",
+        "gs_area_id": "49.0001",
+        "assignments": [
+            {"planes": [0], "area_id": "49.0001"},
+            {"planes": [1], "area_id": "49.0002"},
+            {"ground_stations": [target_local_id], "area_id": "49.1234"},
+        ],
+    }
+
+    resolved = resolve_session(raw)
+    target = next(node for node in resolved.nodes if node.local_node_id == target_local_id)
+    vars_for_node = _vars_for(resolved, target.node_id)
+
+    assert vars_for_node["area_id"] == "49.1234"
+    isis = _render("isisd.conf.j2", vars_for_node)
+    assert " net 49.1234." in isis
 
 
 def test_resolved_template_vars_fail_loud_when_sr_sid_is_missing() -> None:

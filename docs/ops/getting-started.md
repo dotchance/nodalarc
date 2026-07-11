@@ -149,7 +149,7 @@ Available session configs:
 | `earth-leo-heo-geo-luna-reachability.yaml` | — | Multi-regime LEO, HEO, GEO, lunar relay, and lunar ground reachability |
 
 These examples run IS-IS (the default). OSPF is also supported, selected per
-routing domain — see [Configuration](configuration.md).
+routing domain — see the [Configuration Guide](configuration.md).
 
 ## Step 5: Teardown
 
@@ -245,7 +245,7 @@ These build, load, and restart a single service without tearing down the session
 
 ## Next Steps
 
-- [Configuration](configuration.md) - understand session YAML and building blocks
+- [Configuration Guide](configuration.md) - understand session YAML and building blocks
 - [Multi-Node Deployment](multi-node.md) - for clusters with multiple compute nodes
 - [Scaling](scaling.md) - capacity planning and performance characteristics
 - [Operations](operations.md) - day-to-day management and upgrades

@@ -13,12 +13,16 @@
  */
 
 import { Button } from "../ui/Button";
-import { CheckboxField, EditorCard, EditorName, NumberField, SelectField } from "./editorKit";
 import {
-  ADAPTER_LABELS,
-  isIgp,
+  CheckboxField,
+  EditorCard,
+  EditorName,
+  NullableNumberField,
+  SelectField,
+} from "./editorKit";
+import type { BuilderVisualAuthoringFacts } from "./generated/builderApi";
+import {
   placedSegments,
-  PROTOCOL_LABELS,
   routingWarnings,
   type Adapter,
   type DraftBoundary,
@@ -34,6 +38,7 @@ interface DomainEditorProps {
   onRemove: () => void;
   /** focus the name when a create gesture opened this editor. */
   autoFocusName?: boolean;
+  authoring: BuilderVisualAuthoringFacts;
 }
 
 export function RoutingDomainEditor({
@@ -42,9 +47,13 @@ export function RoutingDomainEditor({
   onUpdate,
   onRemove,
   autoFocusName = false,
+  authoring,
 }: DomainEditorProps) {
   const placed = placedSegments(workspace);
   const explicitTimers = domain.hello_interval_s !== null;
+  const selectedProtocol = authoring.routing_protocols.find(
+    (choice) => choice.id === domain.protocol,
+  );
   return (
     <div className="builder-inspector-stack" data-testid="builder-domain-editor">
       <EditorName
@@ -60,14 +69,17 @@ export function RoutingDomainEditor({
           const protocol = value as Protocol;
           // Timers are IGP-only grammar; clear them on the way out.
           onUpdate(
-            isIgp(protocol)
+            authoring.routing_protocols.find((choice) => choice.id === protocol)
+              ?.timer_fields
               ? { protocol }
               : { protocol, hello_interval_s: null, hold_interval_s: null },
           );
         }}
-        options={(Object.keys(PROTOCOL_LABELS) as Protocol[]).map((value) => ({
-          value,
-          label: PROTOCOL_LABELS[value],
+        options={authoring.routing_protocols.map((choice) => ({
+          value: choice.id,
+          label:
+            choice.label + (choice.runtime_supported ? "" : " — runtime-gated"),
+          title: choice.support_note ?? undefined,
         }))}
       />
 
@@ -103,7 +115,7 @@ export function RoutingDomainEditor({
           </div>
       </EditorCard>
 
-      {isIgp(domain.protocol) && (
+      {selectedProtocol?.timer_fields && (
         <EditorCard
           title="Timers"
           open
@@ -120,33 +132,23 @@ export function RoutingDomainEditor({
               >
                 engine defaults
               </Button>
-              <Button
-                active={explicitTimers}
-                onClick={() => onUpdate({ hello_interval_s: 1, hold_interval_s: 3 })}
-              >
-                explicit
-              </Button>
             </div>
-            {explicitTimers && (
-              <>
-                <NumberField
-                  label="hello"
-                  value={domain.hello_interval_s ?? 1}
-                  min={1}
-                  integer
-                  suffix="s"
-                  onChange={(hello_interval_s) => onUpdate({ hello_interval_s })}
-                />
-                <NumberField
-                  label="hold"
-                  value={domain.hold_interval_s ?? 3}
-                  min={2}
-                  integer
-                  suffix="s"
-                  onChange={(hold_interval_s) => onUpdate({ hold_interval_s })}
-                />
-              </>
-            )}
+            <NullableNumberField
+              label="hello"
+              placeholder="engine default"
+              value={domain.hello_interval_s}
+              min={1}
+              suffix="s"
+              onChange={(hello_interval_s) => onUpdate({ hello_interval_s })}
+            />
+            <NullableNumberField
+              label="hold"
+              placeholder="engine default"
+              value={domain.hold_interval_s}
+              min={1}
+              suffix="s"
+              onChange={(hold_interval_s) => onUpdate({ hold_interval_s })}
+            />
         </EditorCard>
       )}
 
@@ -169,6 +171,7 @@ interface BoundaryEditorProps {
   boundary: DraftBoundary;
   onUpdate: (patch: Partial<DraftBoundary>) => void;
   onRemove: () => void;
+  authoring: BuilderVisualAuthoringFacts;
 }
 
 export function BoundaryEditor({
@@ -176,6 +179,7 @@ export function BoundaryEditor({
   boundary,
   onUpdate,
   onRemove,
+  authoring,
 }: BoundaryEditorProps) {
   // Boundaries run over fixed links; access rules schedule on visibility
   // and are excluded here — the same wall the resolver enforces.
@@ -210,9 +214,11 @@ export function BoundaryEditor({
         ariaLabel="Boundary adapter"
         value={boundary.adapter}
         onChange={(value) => onUpdate({ adapter: value as Adapter })}
-        options={(Object.keys(ADAPTER_LABELS) as Adapter[]).map((value) => ({
-          value,
-          label: ADAPTER_LABELS[value],
+        options={authoring.boundary_adapters.map((choice) => ({
+          value: choice.id,
+          label:
+            choice.label + (choice.runtime_supported ? "" : " — runtime-gated"),
+          title: choice.support_note ?? undefined,
         }))}
       />
       {(["from_domain_id", "to_domain_id"] as const).map((side) => (

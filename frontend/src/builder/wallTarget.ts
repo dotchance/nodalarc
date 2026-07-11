@@ -5,9 +5,8 @@
  *  A resolve refusal names a subject — a link rule, a routing domain, or a
  *  segment. This maps that subject back to the editor window that owns it, so
  *  the wall opens the right editor. It reads the PREVIEW workspace (applied +
- *  dirty overlays) and matches by the serialized subject id via the same
- *  identifier() transform the serializer uses — never by parsing prose or
- *  runtime ids. A subject with no matching draft returns null, and the caller
+ *  dirty overlays) and matches by the stable backend-issued subject id — never
+ *  by parsing labels, prose, or runtime ids. A subject with no matching draft returns null, and the caller
  *  shows the session-level wall instead: a refusal is never dropped.
  */
 import type { BuilderResolveError } from "./builderTypes";

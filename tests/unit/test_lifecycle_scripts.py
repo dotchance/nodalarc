@@ -206,18 +206,24 @@ def test_lifecycle_scripts_print_next_steps() -> None:
         assert marker in (ROOT / rel).read_text()
 
 
-def test_session_readiness_requires_expected_generation_and_pod_counts() -> None:
+def test_session_readiness_requires_reviewed_transition_and_live_pod_counts() -> None:
     script = (ROOT / "scripts/na-session.sh").read_text()
     assert 'PLATFORM_CONFIG="${PLATFORM_CONFIG:-configs/platform.yaml}"' in script
     assert "init_platform_config(Path(sys.argv[3]))" in script
     assert ".runtime_session" not in script
-    assert "compute_expected_pod_count" in script
-    assert "compute_expected_placement_node_count" in script
-    assert "Previous attempt is terminal Error for the same YAML" in script
-    assert "kubectl delete constellationspec current-session" in script
-    assert '{.status.phase}{"|"}{.status.observedGeneration}' in script
-    assert '[ "$ready_pods" = "$expected_pods" ]' in script
-    assert '[ "$pod_count" = "$expected_pods" ]' in script
+    assert "CatalogClosureCollector.collect" in script
+    assert '"$api_base/api/v1/sessions"' in script
+    assert '"$api_base/api/v1/sessions/switch"' in script
+    assert '"$api_base/api/v1/session-transitions/$operation_id"' in script
+    assert '"expected_document_digest"' in script
+    assert '"expected_dependency_digest"' in script
+    assert "kubectl apply" not in script
+    assert "kubectl delete constellationspec current-session" not in script
+    assert '{.metadata.generation}{"|"}{.status.phase}{"|"}{.status.observedGeneration}' in script
+    assert '[ "$current_generation" != "$target_generation" ]' in script
+    assert 'expected_pods="$pod_count"' in script
+    assert '[ "$ready_pods" != "$expected_pods" ]' in script
+    assert '[ "$wired_pods" != "$expected_pods" ]' in script
     assert "live pod count is stale" in script
     assert "Waiting for platform rollout to settle" in script
     assert "Computing placement policy" in script

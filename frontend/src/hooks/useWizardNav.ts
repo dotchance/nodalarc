@@ -50,9 +50,6 @@ export function useWizardNav(
 
   const goBack = useCallback(() => {
     setState((s) => {
-      if (s.step === "review" && s.protocol === "nodalpath") {
-        return { ...s, step: "protocol" as WizardStep };
-      }
       const prev = PREV_STEP[s.step];
       if (prev) return { ...s, step: prev };
       return s;

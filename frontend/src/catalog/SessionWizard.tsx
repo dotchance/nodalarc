@@ -5,7 +5,7 @@
  *  Launch: shipped catalog sessions as dense rows, deployed as-is via the
  *          session switch, plus raw-YAML file deploy.
  *  Build:  the wizard flow (Configuration → Protocol → Options → Review)
- *          composing the same generate/deploy contracts as before.
+ *          compiling, saving, and deploying through Builder authority.
  *
  * The two entry paths are separated structurally instead of stacked in one
  * column; the state machine, gates, and wire payloads are unchanged.
@@ -15,6 +15,7 @@ import { useState, useCallback, useRef } from "react";
 import { useWizard } from "../hooks/useWizard";
 import type { WizardStep } from "./wizardTypes";
 import type { SessionInfo } from "../types";
+import type { CatalogSessionSourceId } from "../builder/generated/builderApi";
 import { REST_URL, authHeaders } from "../config";
 import { apiErrorMessage, apiErrorFromException } from "../ui/apiError";
 import { downloadBlob } from "../ui/downloadBlob";
@@ -32,7 +33,7 @@ interface SessionWizardProps {
   systemNotice?: string;
   /** Shipped catalog sessions, deployable as-is via session switch. */
   sessions: SessionInfo[];
-  onLaunchSession: (file: string) => void;
+  onLaunchSession: (session: SessionInfo) => void;
   /** Feature-gated session-builder entry: navigates to the builder view.
    *  Day-0 authoring needs no deployed session, so this bypasses the
    *  hasEverDeployed close gate — it goes somewhere, not to nothing. */
@@ -56,25 +57,19 @@ export function SessionWizard({
 }: SessionWizardProps) {
   const wizard = useWizard();
   const [view, setView] = useState<"launch" | "build">(sessions.length > 0 ? "launch" : "build");
-  // Any listed session's YAML is downloadable — including the running one.
-  // The canonical serialization comes from the same resolver that runs it.
+  // Any listed session's stored YAML is downloadable, including the running one.
   const [downloadingFile, setDownloadingFile] = useState<string | null>(null);
   const [downloadError, setDownloadError] = useState<string | null>(null);
-  const downloadSessionYaml = useCallback(async (file: string, name: string) => {
+  const downloadSessionYaml = useCallback(async (source: CatalogSessionSourceId, name: string) => {
     setDownloadError(null);
-    setDownloadingFile(file);
+    setDownloadingFile(source.session_ref);
     try {
-      const response = await fetch(`${REST_URL}/api/v1/builder/resolve-world`, {
-        method: "POST",
-        headers: authHeaders({ "Content-Type": "application/json" }),
-        body: JSON.stringify({ session: file }),
-      });
-      // The refusal body is the resolver's own words — surface them verbatim,
-      // never a generic "fetch failed" that hides why the session was rejected.
+      const response = await fetch(
+        `${REST_URL}/api/v1/sessions/yaml?session_ref=${encodeURIComponent(source.session_ref)}`,
+        { headers: authHeaders() },
+      );
       if (!response.ok) throw new Error(await apiErrorMessage(response));
-      const data = (await response.json()) as { document_yaml?: string };
-      if (!data.document_yaml) throw new Error("no document YAML in response");
-      downloadBlob(data.document_yaml, `${name}.yaml`);
+      downloadBlob(await response.text(), `${name}.yaml`);
     } catch (e) {
       setDownloadError(apiErrorFromException(e));
     } finally {
@@ -93,7 +88,7 @@ export function SessionWizard({
       await wizard.generate();
       return;
     }
-    const ok = await wizard.deploy(wizard.generatedYaml);
+    const ok = await wizard.deploy();
     if (ok) {
       onDeployStarted();
     }
@@ -106,7 +101,7 @@ export function SessionWizard({
       setUploadError(null);
       try {
         const text = await file.text();
-        const ok = await wizard.deploy(text);
+        const ok = await wizard.deployUploadedYaml(text);
         if (ok) onDeployStarted();
       } catch (err) {
         setUploadError(err instanceof Error ? err.message : "Upload failed");
@@ -116,11 +111,16 @@ export function SessionWizard({
     [wizard, onDeployStarted],
   );
 
-  const handleDownload = useCallback(() => {
-    if (!wizard.generatedYaml) return;
+  const handleDownload = useCallback(async () => {
+    const portableClosure = await wizard.exportClosure();
+    if (!portableClosure) return;
     const name = wizard.state.constellation?.name ?? "session";
     const proto = wizard.state.protocol ?? "unknown";
-    downloadBlob(wizard.generatedYaml, `${name}-${proto}.yaml`);
+    downloadBlob(
+      JSON.stringify(portableClosure, null, 2),
+      `${name}-${proto}.nodalarc-session-closure.json`,
+      "application/json",
+    );
   }, [wizard]);
 
   const allGroupASelected =
@@ -160,45 +160,52 @@ export function SessionWizard({
           {view === "launch" && (
             <section className="launcher-content" aria-label="Launch a session">
               <p className="launcher-hint">
-                Curated catalog sessions, deployable as-is. Building blocks for your own sessions
-                live in the Build tab.
+                Sessions in your current catalog scope, deployable as authored. Building blocks
+                for your own sessions live in the Build tab.
               </p>
               <div className="launcher-sessions">
                 {sessions.map((s) => (
-                  <div key={s.file} className="launcher-row-shell">
+                  <div key={s.source_id.session_ref} className="launcher-row-shell">
                     <button
                       className="launcher-row"
                       onClick={() => {
-                        if (s.active || deploying) return;
-                        onLaunchSession(s.file);
+                        if (s.active || deploying || !s.deploy_allowed) return;
+                        onLaunchSession(s);
                         onDeployStarted();
                       }}
-                      disabled={s.active || deploying}
-                      title={s.active ? "Already running" : `Deploy ${s.name}`}
+                      disabled={s.active || deploying || !s.deploy_allowed}
+                      title={
+                        s.active
+                          ? "Already running"
+                          : s.deploy_allowed
+                            ? `Deploy ${s.name}`
+                            : s.blockers?.[0]?.message ?? "This session cannot be deployed"
+                      }
                     >
                       <span className="launcher-row-name">{s.name}</span>
                       <span className="launcher-row-desc">{s.constellation}</span>
                       <span className="launcher-row-meta">
                         {s.routing_stack && <Badge>{s.routing_stack}</Badge>}
                         {s.active && <Badge tone="ok">running</Badge>}
+                        {!s.deploy_allowed && <Badge>unavailable</Badge>}
                       </span>
                     </button>
                     <IconButton
                       icon="download"
                       label={`Download ${s.name} YAML`}
                       disabled={downloadingFile !== null}
-                      onClick={() => void downloadSessionYaml(s.file, s.name)}
+                      onClick={() => void downloadSessionYaml(s.source_id, s.name)}
                     />
                   </div>
                 ))}
                 {downloadError && <div className="wizard-error">{downloadError}</div>}
                 {sessions.length === 0 && (
-                  <div className="launcher-empty">No shipped sessions found.</div>
+                  <div className="launcher-empty">No catalog sessions found.</div>
                 )}
               </div>
               <div className="launcher-upload">
                 <Button icon="download" onClick={() => fileInputRef.current?.click()} disabled={deploying}>
-                  Deploy session file…
+                  Import and deploy session YAML…
                 </Button>
                 <input
                   ref={fileInputRef}
@@ -208,7 +215,10 @@ export function SessionWizard({
                   className="launcher-upload-input"
                   aria-label="Session YAML file"
                 />
-                <span className="launcher-hint">Raw session YAML, validated by the same resolver.</span>
+                <span className="launcher-hint">
+                  Referenced components must already exist in your catalog. Import a complete user:
+                  closure in Session Builder.
+                </span>
               </div>
               {uploadError && <div className="wizard-error">{uploadError}</div>}
               {view === "launch" && wizard.error && <div className="wizard-error">{wizard.error}</div>}
@@ -248,6 +258,10 @@ export function SessionWizard({
               {isGroupA && !wizard.coveragePreview && (
                 <SelectionCards
                   presets={wizard.presets}
+                  customConstellationCapability={wizard.customConstellationCapability}
+                  customConstellationSeed={wizard.customConstellationSeed}
+                  customConstellationDefaultNode={wizard.customConstellationDefaultNode}
+                  orbitModels={wizard.orbitModels}
                   satelliteTypes={wizard.satelliteTypes}
                   groundStationSets={wizard.groundStationSets}
                   availableStations={wizard.availableStations}
@@ -280,6 +294,7 @@ export function SessionWizard({
                   <h2 className="wizard-panel-title">Select Routing Protocol</h2>
                   <ProtocolSelection
                     selected={wizard.state.protocol}
+                    rules={wizard.rules}
                     onSelect={wizard.selectProtocol}
                   />
                   <div className="wizard-nav">
@@ -317,9 +332,11 @@ export function SessionWizard({
               {wizard.state.step === "review" && (
                 <ReviewPanel
                   state={wizard.state}
+                  orbitModels={wizard.orbitModels}
                   generatedYaml={wizard.generatedYaml}
                   generating={wizard.generating}
                   deploying={wizard.deploying || deploying}
+                  exporting={wizard.exporting}
                   onBack={wizard.goBack}
                   onDeploy={handleDeploy}
                   onDownload={handleDownload}

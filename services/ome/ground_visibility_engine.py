@@ -9,11 +9,10 @@ from dataclasses import dataclass
 from typing import Literal
 
 from nodalarc.body_frames import BodyFrame
-from nodalarc.constellation_loader import SatelliteNode, satellite_node_id
 from nodalarc.ephemeris_runtime import SkyfieldBspEphemeris, body_states_at
 from nodalarc.frames import EcefVec3, GeoPosition
 from nodalarc.ground_terminals import TerminalPhysicsProfile
-from nodalarc.models.addressing import AddressingScheme
+from nodalarc.ome_runtime import OmeAddressing, SatelliteNode, satellite_node_id
 
 from ome.propagation_engine import PropagatedState, propagate_satellites
 from ome.telemetry import SEG_DWELL, StepTimings
@@ -46,7 +45,7 @@ class GroundPassLookahead:
     """
 
     satellites: tuple[SatelliteNode, ...]
-    addressing: AddressingScheme
+    addressing: OmeAddressing
     epoch_unix: float
     step: int
     step_seconds: int
@@ -190,17 +189,19 @@ def _pair_visible_at(
     )
     kwargs = {"body_frame": body_frame}
     if gs_profile is not None and sat_profile is not None:
-        kwargs = {
-            "gs_max_range_km": gs_profile.max_range_km,
-            "sat_max_range_km": sat_profile.max_range_km,
-            "gs_boresight": gs_profile.boresight,
-            "sat_boresight": sat_profile.boresight,
-            "gs_field_of_regard_deg": gs_profile.field_of_regard_deg,
-            "sat_field_of_regard_deg": sat_profile.field_of_regard_deg,
-            "gs_max_tracking_rate_deg_s": gs_profile.max_tracking_rate_deg_s,
-            "sat_max_tracking_rate_deg_s": sat_profile.max_tracking_rate_deg_s,
-            "sat_velocity_ecef_km_s": state.velocity_ecef_km_s,
-        }
+        kwargs.update(
+            {
+                "gs_max_range_km": gs_profile.max_range_km,
+                "sat_max_range_km": sat_profile.max_range_km,
+                "gs_boresight": gs_profile.boresight,
+                "sat_boresight": sat_profile.boresight,
+                "gs_field_of_regard_deg": gs_profile.field_of_regard_deg,
+                "sat_field_of_regard_deg": sat_profile.field_of_regard_deg,
+                "gs_max_tracking_rate_deg_s": gs_profile.max_tracking_rate_deg_s,
+                "sat_max_tracking_rate_deg_s": sat_profile.max_tracking_rate_deg_s,
+                "sat_velocity_ecef_km_s": state.velocity_ecef_km_s,
+            }
+        )
     return check_ground_visibility(
         gs_ecef,
         gs_geo,

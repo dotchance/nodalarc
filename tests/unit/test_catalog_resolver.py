@@ -9,12 +9,15 @@ from pathlib import Path
 
 import pytest
 import yaml
-from nodalarc.models.catalog import validate_catalog_document
+from nodalarc.catalog_paths import CatalogRoots
+from nodalarc.catalog_registry import validate_catalog_document
+from nodalarc.configuration_yaml import load_configuration_yaml
 from nodalarc.resolve_session import (
     SessionResolutionError,
     load_session_resolution_from_file,
     resolve_session,
 )
+from pydantic import ValidationError
 
 ROOT = Path(__file__).resolve().parents[2]
 CATALOG = ROOT / "catalog" / "nodalarc"
@@ -22,7 +25,7 @@ SESSIONS = ROOT / "catalog" / "nodalarc" / "sessions"
 
 
 def _load(name: str = "earth-leo-simple.yaml") -> dict:
-    return yaml.safe_load((SESSIONS / name).read_text(encoding="utf-8"))
+    return load_configuration_yaml((SESSIONS / name).read_text(encoding="utf-8"))
 
 
 def test_all_shipped_catalog_primitives_validate_through_typed_models() -> None:
@@ -30,17 +33,48 @@ def test_all_shipped_catalog_primitives_validate_through_typed_models() -> None:
     assert paths
 
     for path in paths:
-        validate_catalog_document(yaml.safe_load(path.read_text(encoding="utf-8")))
+        validate_catalog_document(load_configuration_yaml(path.read_text(encoding="utf-8")))
 
 
 def test_catalog_primitive_models_reject_extra_fields() -> None:
-    raw = yaml.safe_load(
+    raw = load_configuration_yaml(
         (CATALOG / "terminals" / "rf" / "rf-ka-leo-access.yaml").read_text(encoding="utf-8")
     )
     raw["terminal"]["driver"] = "frr"
 
     with pytest.raises(ValueError, match="Extra inputs are not permitted"):
         validate_catalog_document(raw)
+
+
+@pytest.mark.parametrize("direction", ["transmit", "receive"])
+def test_terminal_bandwidth_must_be_usable_in_both_directions(direction: str) -> None:
+    raw = load_configuration_yaml(
+        (CATALOG / "terminals" / "rf" / "rf-ka-leo-access.yaml").read_text(encoding="utf-8")
+    )
+    raw["terminal"]["bandwidth_mbps"][direction] = 0
+
+    with pytest.raises(ValueError, match="greater than 0"):
+        validate_catalog_document(raw)
+
+
+def test_constellation_phasing_mode_matches_the_declared_plane_shape() -> None:
+    ring = load_configuration_yaml(
+        (CATALOG / "constellations" / "earth" / "leo" / "earth-leo-ring-36.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    ring["constellation"]["planes"]["count"] = 2
+    with pytest.raises(ValueError, match="requires exactly one orbital plane"):
+        validate_catalog_document(ring)
+
+    walker = load_configuration_yaml(
+        (
+            CATALOG / "constellations" / "earth" / "leo" / "earth-leo-walker-delta-176.yaml"
+        ).read_text(encoding="utf-8")
+    )
+    walker["constellation"]["planes"]["count"] = 1
+    with pytest.raises(ValueError, match="requires at least two planes"):
+        validate_catalog_document(walker)
 
 
 # Every shipped session resolves under the production-default runtime-support
@@ -124,9 +158,11 @@ def test_catalog_resolver_materializes_runtime_domains_and_link_candidates() -> 
     }
     assert resolved.link_candidates
     assert all(candidate.node_a != candidate.node_b for candidate in resolved.link_candidates)
-    assert all(
-        candidate.interface_a and candidate.interface_b for candidate in resolved.link_candidates
-    )
+    fixed_candidates = [
+        candidate for candidate in resolved.link_candidates if candidate.kind != "access"
+    ]
+    assert fixed_candidates
+    assert all(candidate.interface_a and candidate.interface_b for candidate in fixed_candidates)
     assert all(candidate.bandwidth_mbps > 0 for candidate in resolved.link_candidates)
 
     access_candidates = [
@@ -134,11 +170,9 @@ def test_catalog_resolver_materializes_runtime_domains_and_link_candidates() -> 
     ]
     assert access_candidates
     assert resolved.ground_candidate_satellites_by_gs()
-    assert all(
-        candidate.interface_a.startswith(("term", "gnd"))
-        and candidate.interface_b.startswith(("term", "gnd"))
-        for candidate in access_candidates
-    )
+    assert all(candidate.interface_a is None for candidate in access_candidates)
+    assert all(candidate.interface_b is None for candidate in access_candidates)
+    assert set(resolved.link_interface_map()) == {candidate.pair for candidate in fixed_candidates}
 
 
 def test_catalog_resolver_preserves_eccentric_orbit_facts() -> None:
@@ -228,28 +262,43 @@ def test_explicit_routing_domains_must_be_disjoint() -> None:
         resolve_session(raw)
 
 
-def test_placed_ground_node_without_loopback_authority_fails_loudly() -> None:
+def test_placed_ground_node_without_loopback_authority_fails_loudly(tmp_path: Path) -> None:
     raw = _load()
-    site = yaml.safe_load(
+    site = load_configuration_yaml(
         (CATALOG / "sites" / "earth" / "us" / "earth-us-hawthorne.yaml").read_text(encoding="utf-8")
     )
     del site["site"]["nodes"][0]["interfaces"]["lo0"]
-    raw["segments"][1]["placement"]["from_site_set"] = {
-        "site_set": {
-            "id": "broken-site-set",
-            "sites": [site],
-        }
-    }
+
+    user_root = tmp_path / "user"
+    site_path = user_root / "sites" / "earth" / "us" / "earth-us-hawthorne.yaml"
+    site_path.parent.mkdir(parents=True)
+    site_path.write_text(yaml.safe_dump(site, sort_keys=False), encoding="utf-8")
+    site_set_path = user_root / "site-sets" / "broken-site-set.yaml"
+    site_set_path.parent.mkdir(parents=True)
+    site_set_path.write_text(
+        yaml.safe_dump(
+            {
+                "site_set": {
+                    "id": "broken-site-set",
+                    "sites": ["user:sites/earth/us/earth-us-hawthorne.yaml"],
+                }
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    raw["segments"][1]["placement"]["from_site_set"] = "user:site-sets/broken-site-set.yaml"
+    roots = CatalogRoots.from_catalog_root(CATALOG, user_root=user_root)
 
     with pytest.raises(SessionResolutionError, match="invalid catalog object|lo0"):
-        resolve_session(raw)
+        resolve_session(raw, catalog_roots=roots)
 
 
-def test_old_top_level_session_keys_are_rejected() -> None:
+def test_unknown_top_level_session_keys_are_rejected_by_canonical_model() -> None:
     raw = _load()
     raw["constellation"] = "configs/constellations/demo.yaml"
 
-    with pytest.raises(SessionResolutionError, match="retired top-level session key"):
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
         resolve_session(raw)
 
 

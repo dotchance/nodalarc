@@ -28,18 +28,6 @@ def derive_session_run_id(*, session_name: str, owner_uid: str, generation: int)
     return sanitize_session_id(f"run-{digest[:20]}")
 
 
-def require_session_run_id(session: Any) -> str:
-    """Return the deployed runtime identity from a SessionConfig-like object."""
-    session_meta = getattr(session, "session", None)
-    run_id = getattr(session_meta, "run_id", None)
-    if not run_id:
-        name = getattr(session_meta, "name", "")
-        raise ValueError(
-            f"session.run_id is required in deployed runtime session config (session.name={name!r})"
-        )
-    return sanitize_session_id(str(run_id))
-
-
 def require_resolved_session_run_id(resolved: Any) -> str:
     """Return the deployed runtime identity from a ResolvedSession-like object."""
     source_context = getattr(resolved, "source_context", None)

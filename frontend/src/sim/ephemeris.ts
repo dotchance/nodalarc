@@ -42,7 +42,7 @@ export interface EphemerisNodeKeplerian {
   segment_id?: string | null;
   local_node_id?: string | null;
   namespace?: string | null;
-  tags?: string[];
+  tags?: readonly string[];
   reference_body: string;
   frame_id: string;
 }
@@ -57,7 +57,7 @@ export interface EphemerisNodeTLE {
   segment_id?: string | null;
   local_node_id?: string | null;
   namespace?: string | null;
-  tags?: string[];
+  tags?: readonly string[];
   reference_body: string;
   frame_id: string;
 }
@@ -70,7 +70,7 @@ export interface EphemerisNodeFixed {
   segment_id?: string | null;
   local_node_id?: string | null;
   namespace?: string | null;
-  tags?: string[];
+  tags?: readonly string[];
   reference_body: string;
   frame_id: string;
 }
@@ -101,8 +101,8 @@ export interface SessionEphemeris {
   epoch_id: number;
   sim_time: string; // ISO 8601
   epoch_unix: number;
-  nodes: Record<string, EphemerisNode>;
-  body_frames: Record<string, EphemerisBodyFrame>;
+  nodes: Readonly<Record<string, EphemerisNode>>;
+  body_frames: Readonly<Record<string, EphemerisBodyFrame>>;
 }
 
 export interface PlaybackStateMsg {

@@ -5,9 +5,9 @@
  *  Progressive disclosure like the read-only inspector: Orbit and Pattern
  *  cards, one open at a time, closed cards reading as the spec sheet. Every
  *  field is typeable; presets seed raw values the user then owns (never
- *  modes). Orbit sanity findings warn in plain language and never block —
- *  the resolver's verdict arrives through the live resolve-check and is
- *  shown verbatim in the status bar.
+ *  modes). The resolver's verdict arrives through backend compile and is
+ *  shown verbatim in the status bar; this editor does not run separate
+ *  orbital physics.
  */
 
 import { useState } from "react";
@@ -15,24 +15,16 @@ import { Button } from "../ui/Button";
 import { BodySelect, EditorCard, EditorName, NumberField, SelectField, SliderField } from "./editorKit";
 import { NodeEditor } from "./NodeEditor";
 import { SegmentLinksCard } from "./SegmentLinksCard";
+import type { BuilderVisualAuthoringFacts } from "./generated/builderApi";
 import {
-  LIBRARY_SAVE_COPY,
   exportCatalogObject,
-  readCatalogObject,
   useBuilderCatalog,
-  useLibrarySave,
 } from "./useBuilderWorld";
 import {
-  EARTH_BODY_REF,
-  ORBIT_PRESETS,
-  draftNodeFromDocument,
-  dwellLongitudeDeg,
-  identifier,
-  isGeosynchronous,
-  nodeObjectFromDraft,
-  orbitWarnings,
   type DraftConstellation,
+  type DraftNode,
   type DraftOrbit,
+  type PhasingMode,
   type Workspace,
 } from "./workspace";
 
@@ -51,6 +43,7 @@ interface ConstellationEditorProps {
   workspace: Workspace;
   onOpenRule: (ruleId: string) => void;
   onConnect: (targetSegmentId: string) => void;
+  authoring: BuilderVisualAuthoringFacts;
 }
 
 /** "nodalarc:bodies/luna.yaml" -> "luna" for the card's spec line. */
@@ -68,40 +61,21 @@ export function ConstellationEditor({
   workspace,
   onOpenRule,
   onConnect,
+  authoring,
 }: ConstellationEditorProps) {
   const [openCard, setOpenCard] = useState<string | null>("orbit");
   const nodes = useBuilderCatalog("nodes");
   const bodies = useBuilderCatalog("bodies");
-  const warnings = orbitWarnings(draft.orbit);
+  const phasingLabel =
+    authoring.phasing_modes.find((choice) => choice.id === draft.phasing_mode)?.label ??
+    draft.phasing_mode;
   const toggle = (id: string) => setOpenCard((prev) => (prev === id ? null : id));
-  const [forkError, setForkError] = useState<string | null>(null);
-  const librarySave = useLibrarySave("nodes");
 
-  // Fork-to-draft: read the referenced node's document and edit it inline.
-  // The origin ref stays as the fallback; discard just clears the draft.
-  const customizeNode = async () => {
-    setForkError(null);
-    try {
-      const { document } = await readCatalogObject(draft.node_ref);
-      const node_draft = draftNodeFromDocument(document);
-      // A forked copy is a new object: never claim the original's identity.
-      node_draft.id = identifier(`${node_draft.id}-custom`);
-      node_draft.display_name = `${node_draft.display_name} (custom)`;
-      onUpdate((prev) => ({ ...prev, node_draft }));
-      librarySave.reset();
-    } catch (e) {
-      setForkError(e instanceof Error ? e.message : String(e));
-    }
-  };
-
-  // Save the draft to the user catalog and let the segment reference it —
-  // draft → user: ref, the library direction of tweak-ours→yours. The node-ref
-  // rewrite (draft → the new user ref) is this save's own consequence.
-  const saveNodeToLibrary = () => {
-    if (!draft.node_draft) return;
-    void librarySave.save({ node: nodeObjectFromDraft(draft.node_draft) }, (ref) =>
-      onUpdate((prev) => ({ ...prev, node_ref: ref, node_draft: null })),
-    );
+  const startInlineNode = () => {
+    const node = structuredClone(authoring.default_node) as DraftNode;
+    node.id = `${draft.segment_id}-node`;
+    node.display_name = `${draft.display_name} node`;
+    onUpdate((prev) => ({ ...prev, node_draft: node }));
   };
 
   return (
@@ -122,7 +96,7 @@ export function ConstellationEditor({
               ? `${Math.round(draft.orbit.altitude_km)} km circular`
               : `${Math.round(draft.orbit.perigee_altitude_km)} × ${Math.round(draft.orbit.apogee_altitude_km)} km`}{" "}
             · {draft.orbit.inclination_deg.toFixed(1)}°
-            {draft.orbit.central_body !== EARTH_BODY_REF &&
+            {draft.orbit.central_body !== authoring.default_body_ref &&
               ` · ${bodyShortName(draft.orbit.central_body)}`}
           </>
         }
@@ -134,28 +108,16 @@ export function ConstellationEditor({
               onChange={(central_body) => onUpdateOrbit({ central_body })}
               bodies={bodies}
             />
-            {draft.orbit.central_body === EARTH_BODY_REF && (
-              <div className="builder-preset-row">
-                {ORBIT_PRESETS.map((preset) => (
-                  <Button key={preset.label} onClick={() => onUpdateOrbit(preset.orbit)}>
-                    {preset.label}
-                  </Button>
-                ))}
-              </div>
-            )}
             <div className="builder-preset-row" role="radiogroup" aria-label="Orbit shape">
-              <Button
-                active={draft.orbit.shape_kind === "circular"}
-                onClick={() => onUpdateOrbit({ shape_kind: "circular" })}
-              >
-                circular
-              </Button>
-              <Button
-                active={draft.orbit.shape_kind === "elliptical"}
-                onClick={() => onUpdateOrbit({ shape_kind: "elliptical" })}
-              >
-                elliptical
-              </Button>
+              {authoring.orbit_shapes.map((choice) => (
+                <Button
+                  key={choice.id}
+                  active={draft.orbit.shape_kind === choice.id}
+                  onClick={() => onUpdateOrbit({ shape_kind: choice.id })}
+                >
+                  {choice.label}
+                </Button>
+              ))}
             </div>
             {draft.orbit.shape_kind === "circular" ? (
               <SliderField
@@ -224,19 +186,6 @@ export function ConstellationEditor({
               suffix="deg"
               onChange={(mean_anomaly_deg) => onUpdateOrbit({ mean_anomaly_deg })}
             />
-            {isGeosynchronous(draft.orbit) && (
-              <div className="builder-site-derived">
-                first slot dwells over{" "}
-                {(Math.round(dwellLongitudeDeg(draft.orbit, workspace.start_time) * 10) / 10).toFixed(1)}
-                °E at session start (negative is west) — drag mean anomaly to
-                move it; remaining slots space around the ring
-              </div>
-            )}
-            {warnings.map((warning) => (
-              <div className="builder-warning" key={warning}>
-                {warning}
-              </div>
-            ))}
       </EditorCard>
 
       <EditorCard
@@ -246,15 +195,60 @@ export function ConstellationEditor({
         summary={
           <>
             {draft.planes} × {draft.slots_per_plane} ={" "}
-            {draft.planes * draft.slots_per_plane} sats
+            {draft.planes * draft.slots_per_plane} sats · {phasingLabel}
           </>
         }
       >
+            <SelectField
+              label="phasing"
+              value={draft.phasing_mode}
+              onChange={(value) =>
+                onUpdate((prev) => {
+                  const phasing_mode = value as PhasingMode;
+                  if (phasing_mode === authoring.single_plane_phasing_mode) {
+                    return {
+                      ...prev,
+                      phasing_mode,
+                      planes: 1,
+                      raan_spacing_deg: 360,
+                      phase_offset_deg: 0,
+                    };
+                  }
+                  return {
+                    ...prev,
+                    phasing_mode,
+                    planes: Math.max(2, prev.planes),
+                  };
+                })
+              }
+              options={authoring.phasing_modes.map((choice) => ({
+                value: choice.id,
+                label: choice.label,
+              }))}
+            />
             <NumberField
               label="planes"
               value={draft.planes}
               onChange={(planes) =>
-                onUpdate((prev) => ({ ...prev, planes: Math.max(1, Math.round(planes)) }))
+                onUpdate((prev) => {
+                  const count = Math.max(1, Math.round(planes));
+                  if (count === 1) {
+                    return {
+                      ...prev,
+                      planes: count,
+                      phasing_mode: authoring.single_plane_phasing_mode,
+                      phase_offset_deg: 0,
+                    };
+                  }
+                  return {
+                    ...prev,
+                    planes: count,
+                    phasing_mode:
+                      prev.phasing_mode === authoring.single_plane_phasing_mode
+                        ? authoring.default_phasing_mode
+                        : prev.phasing_mode,
+                  };
+                })
               }
             />
             <NumberField
@@ -273,12 +267,20 @@ export function ConstellationEditor({
               suffix="deg"
               onChange={(raan_spacing_deg) => onUpdate((prev) => ({ ...prev, raan_spacing_deg }))}
             />
-            <NumberField
-              label="phase offset"
-              value={draft.phase_offset_deg}
-              suffix="deg"
-              onChange={(phase_offset_deg) => onUpdate((prev) => ({ ...prev, phase_offset_deg }))}
-            />
+            {draft.phasing_mode === authoring.single_plane_phasing_mode ? (
+              <div className="builder-site-derived">
+                phase offset 0 deg — a single plane has no inter-plane offset
+              </div>
+            ) : (
+              <NumberField
+                label="phase offset"
+                value={draft.phase_offset_deg}
+                suffix="deg"
+                onChange={(phase_offset_deg) =>
+                  onUpdate((prev) => ({ ...prev, phase_offset_deg }))
+                }
+              />
+            )}
       </EditorCard>
 
       <EditorCard
@@ -294,6 +296,7 @@ export function ConstellationEditor({
             {draft.node_draft ? (
               <>
                 <NodeEditor
+                  authoring={authoring}
                   draft={draft.node_draft}
                   onChange={(update) =>
                     // Thread NodeEditor's functional update through the
@@ -305,14 +308,11 @@ export function ConstellationEditor({
                     }))
                   }
                 />
+                <div className="builder-site-derived">
+                  This inline node belongs to the session proposal. Create reusable node
+                  components from the Library.
+                </div>
                 <div className="builder-preset-row">
-                  <Button
-                    variant="primary"
-                    onClick={saveNodeToLibrary}
-                    disabled={librarySave.saving}
-                  >
-                    {librarySave.label("Save to library")}
-                  </Button>
                   <Button onClick={() => onUpdate((prev) => ({ ...prev, node_draft: null }))}>
                     Discard customization
                   </Button>
@@ -327,31 +327,21 @@ export function ConstellationEditor({
                   value={draft.node_ref}
                   onChange={(node_ref) => onUpdate((prev) => ({ ...prev, node_ref }))}
                   options={nodes.entries
-                    .filter((entry) => !entry.error)
                     .map((entry) => ({
                       value: entry.ref,
                       label:
                         (entry.ref.startsWith("user:") ? "\u2605 " : "") +
-                        (entry.display_name ?? entry.id ?? entry.ref),
+                        entry.display_name,
                     }))}
                 />
                 <div className="builder-preset-row">
-                  <Button onClick={() => void customizeNode()}>Customize node</Button>
+                  <Button onClick={startInlineNode}>Author inline node</Button>
                   <Button onClick={() => void exportCatalogObject(draft.node_ref)}>
                     Export file
                   </Button>
                 </div>
-                {forkError && <div className="builder-warning">{forkError}</div>}
                 {nodes.error && <div className="builder-warning">{nodes.error}</div>}
               </>
-            )}
-            {librarySave.state.kind === "failed" && (
-              <div className="builder-warning">{librarySave.state.message}</div>
-            )}
-            {librarySave.state.kind === "saved" && (
-              <div className="builder-library-note" data-testid="library-note">
-                {LIBRARY_SAVE_COPY.savedNote(librarySave.state.ref)}
-              </div>
             )}
       </EditorCard>
 

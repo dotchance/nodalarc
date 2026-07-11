@@ -1,8 +1,8 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
-/** Workspace state: the applied session drafts plus undo and autosave.
+/** Workspace state: the applied session drafts plus bounded undo history.
  *
- *  The edit→resolve loop lives in BuilderView, which serializes the
+ *  The edit→compile loop lives in BuilderView, which submits the
  *  workspace with any open windows' working copies overlaid — the canvas
  *  previews what is being edited while the workspace itself only changes on
  *  Apply. The rendered world is always the resolver's expansion of that
@@ -12,15 +12,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  EARTH_BODY_REF,
-  groundSetIsRefExpressible,
-  identifier,
-  newDraftConstellation,
-  reseedCounters,
-  newRefGroundSet,
   newRefSegment,
-  newWorkspace,
-  siteSetWrapperFromDraft,
   type DraftConstellation,
   type DraftGroundSet,
   type DraftGroundSite,
@@ -42,11 +34,8 @@ export interface EditorBuffer {
 
 export type BufferMap = Record<string, EditorBuffer>;
 
-// Deliberately separate from workspaceParseCore's deepEqual: this is the
-// buffer/stale comparator, and its `===` base treats NaN !== NaN, whereas the
-// import-fidelity deepEqual uses Object.is (NaN === NaN). Draft buffers never
-// carry NaN, so the divergence is immaterial here; keeping them split avoids
-// coupling the buffer comparator to the import comparator's NaN semantics.
+// Buffer/stale equality is intentionally local interaction logic. Persisted
+// document equality and canonicalization belong to VS-API.
 function _bufferDeepEqual(a: unknown, b: unknown): boolean {
   if (a === b) return true;
   if (Array.isArray(a) && Array.isArray(b)) {
@@ -227,151 +216,17 @@ export function workspaceForSave(
   const base = opts.applyAll
     ? overlayBuffers(workspace, buffers, opts.excludeKeys)
     : workspace;
-  const name = opts.nameTouched ? identifier(opts.dialogName) || base.name : base.name;
+  const name = opts.nameTouched ? opts.dialogName : base.name;
   return base.name === name ? base : { ...base, name };
 }
-
-const AUTOSAVE_KEY = "nodalarc-builder-draft";
-// The draft a running-session import displaced — preserved, never silently
-// destroyed (autosave overwrites its own slot the moment a workspace
-// exists, so displacement must copy first).
-const BACKUP_KEY = "nodalarc-builder-draft-previous";
-const AUTOSAVE_DEBOUNCE_MS = 800;
 const HISTORY_LIMIT = 100;
-
-// one serialization owner for both slots. Writes carry a versioned
-// envelope so a draft written by an older build migrates on restore instead
-// of loading malformed; reads validate shape and never adopt garbage.
-const ENVELOPE_VERSION = 1;
-
-export type RestoreResult = { ok: true } | { ok: false; reason: string };
-
-/** The one write serializer for autosave and backup. */
-export function serializeWorkspace(workspace: Workspace): string {
-  return JSON.stringify({ v: ENVELOPE_VERSION, workspace });
-}
-
-function _isWorkspaceShape(value: unknown): value is Workspace {
-  if (!value || typeof value !== "object") return false;
-  const w = value as Record<string, unknown>;
-  const isObj = (v: unknown): v is Record<string, unknown> =>
-    !!v && typeof v === "object" && !Array.isArray(v);
-  // The containers must be arrays, AND the entries the migration walks must be
-  // well-formed: each space draft carries an orbit object, each ground draft a
-  // members array. A shape-valid-but-partial payload is unmigratable — refuse
-  // it here rather than adopt a malformed workspace or let the migration throw.
-  return (
-    typeof w.name === "string" &&
-    Array.isArray(w.space) &&
-    w.space.every((d) => isObj(d) && isObj(d.orbit)) &&
-    Array.isArray(w.space_refs) &&
-    Array.isArray(w.ground) &&
-    w.ground.every((d) => isObj(d) && Array.isArray(d.members)) &&
-    Array.isArray(w.ground_refs) &&
-    Array.isArray(w.links) &&
-    Array.isArray(w.routing_domains) &&
-    Array.isArray(w.boundaries)
-  );
-}
-
-/** v0→v1: field-fill only. A draft authored under the Earth-only builder
- *  omits site.body/stamp.body/orbit.central_body; fill the Earth body ref
- *  (a migration default for those drafts, NOT a new-authoring default — it
- *  never touches the multi-body no-hardcode rule). Current-shape drafts,
- *  which already carry the fields, adopt unchanged. */
-function _migrateV0toV1(workspace: Workspace): Workspace {
-  // The shape gate guarantees each space draft has an orbit object and each
-  // ground draft a members array, so this fills body refs without needing to
-  // guard every access; _deserializeWorkspace's try/catch is the final belt.
-  return {
-    ...workspace,
-    space: workspace.space.map((draft) => ({
-      ...draft,
-      orbit: { ...draft.orbit, central_body: draft.orbit.central_body ?? EARTH_BODY_REF },
-    })),
-    ground: workspace.ground.map((draft) => ({
-      ...draft,
-      stamp: { ...draft.stamp, body: draft.stamp?.body ?? EARTH_BODY_REF },
-      members: draft.members.map((member) =>
-        member.site
-          ? { ...member, site: { ...member.site, body: member.site.body ?? EARTH_BODY_REF } }
-          : member,
-      ),
-    })),
-  };
-}
-
-/** The read inverse: detect the envelope (a top-level numeric `v` — impossible
- *  on a bare Workspace), treat ANY bare payload as v0, migrate, and validate
- *  shape before adopting. Unmigratable payloads refuse with a reason and are
- *  never adopted as a malformed workspace. */
-function _deserializeWorkspace(raw: string): RestoreResult & { workspace?: Workspace } {
-  // One try/catch spans parse, shape, AND migrate: any failure — unparsable,
-  // wrong shape, or a partial payload the migration cannot walk — becomes a
-  // typed refusal, never an escaping throw that the ok/reason contract would
-  // otherwise leak past its callers.
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    if (!parsed || typeof parsed !== "object") {
-      return { ok: false, reason: "the saved draft could not be read" };
-    }
-    const payload =
-      typeof (parsed as { v?: unknown }).v === "number"
-        ? (parsed as { workspace?: unknown }).workspace
-        : parsed; // bare payload = v0
-    if (!_isWorkspaceShape(payload)) {
-      return { ok: false, reason: "draft from an older build could not be restored" };
-    }
-    return { ok: true, workspace: _migrateV0toV1(payload) };
-  } catch {
-    return { ok: false, reason: "the saved draft could not be read" };
-  }
-}
-
-/** The canonical payload of a stored slot, version-independent — used to tell
- *  whether two drafts are the SAME (a stash need not refuse an identical
- *  backup) or DIFFERENT (a refuse-choice is owed). Null when the slot is
- *  absent or unreadable. */
-function _slotPayload(raw: string | null): string | null {
-  if (raw === null) return null;
-  const result = _deserializeWorkspace(raw);
-  return result.ok ? JSON.stringify(result.workspace) : null;
-}
-
-/** The outcome of a stash-before-displace: STASHED the current draft, SKIPPED
- *  (nothing worth preserving — pristine or empty), or REFUSED (a real,
- *  different backup already exists and would be lost). A refused stash blocks
- *  the displacing gesture until the user chooses to overwrite or cancel. */
-export type StashOutcome = "stashed" | "skipped" | "refused";
-
-/** Creation logic in one place: the seed workspace when none exists. Pure —
- *  any stash/storage side effect stays OUTSIDE the setWorkspace updater
- *  (StrictMode double-fires updater bodies). */
-function ensureWorkspace(prev: Workspace | null, seedName: string): Workspace {
-  return prev ?? newWorkspace(seedName);
-}
-
-/** A pristine-untitled draft is not a protectable draft: it is newWorkspace
- *  output with nothing authored. It must never trigger a stash (it cannot
- *  displace real work) and is freely overwritable as a backup. */
-function _isPristineUntitled(workspace: Workspace): boolean {
-  return (
-    workspace.space.length === 0 &&
-    workspace.space_refs.length === 0 &&
-    workspace.ground.length === 0 &&
-    workspace.ground_refs.length === 0 &&
-    workspace.links.length === 0 &&
-    workspace.routing_domains.length === 0 &&
-    workspace.boundaries.length === 0
-  );
-}
 
 export function useWorkspace() {
   const [workspace, setWorkspaceState] = useState<Workspace | null>(null);
   // The single mutation path: sync workspaceRef SYNCHRONOUSLY so a
   // live-workspace read (stash) never lags the commit — for BOTH the
-  // value and updater forms — then set React state. Undo history and autosave
-  // observe the state change as before.
+  // value and updater forms — then set React state. Undo history observes the
+  // state change; structured recovery is owned by structuredDraftRecovery.ts.
   const workspaceRef = useRef<Workspace | null>(null);
   const commit = useCallback(
     (update: Workspace | null | ((prev: Workspace | null) => Workspace | null)) => {
@@ -385,8 +240,7 @@ export function useWorkspace() {
     [],
   );
 
-  // Trust mechanics: every mutation lands in a bounded history (undo) and a
-  // debounced localStorage autosave (restore-after-crash/refresh).
+  // Every mutation lands in bounded undo history.
   const historyRef = useRef<(Workspace | null)[]>([]);
   const skipHistoryRef = useRef(false);
   const previousRef = useRef<Workspace | null>(null);
@@ -407,149 +261,16 @@ export function useWorkspace() {
     commit(past);
   }, []);
 
-  useEffect(() => {
-    if (!workspace) return;
-    const timer = setTimeout(() => {
-      try {
-        localStorage.setItem(AUTOSAVE_KEY, serializeWorkspace(workspace));
-      } catch {
-        // Quota/private-mode failures must never break editing.
-      }
-    }, AUTOSAVE_DEBOUNCE_MS);
-    return () => clearTimeout(timer);
-  }, [workspace]);
-
-  /** True when an autosaved draft exists to offer on the start card. */
-  const hasAutosave = useCallback((): boolean => {
-    try {
-      return localStorage.getItem(AUTOSAVE_KEY) !== null;
-    } catch {
-      return false;
-    }
-  }, []);
-
-  /** Preserve the current draft to the backup slot before a gesture displaces
-   *  it (the LIVE workspace, not the up-to-800ms-stale autosave slot).
-   *  Returns whether it stashed, skipped (nothing worth preserving), or
-   *  refused (a real, different backup would be lost) so the caller can offer
-   *  the overwrite/cancel choice. `force` takes the overwrite choice. */
-  const stashAutosaveToBackup = useCallback(
-    (opts?: { force?: boolean }): StashOutcome => {
-      try {
-        const current = workspaceRef.current;
-        let raw: string | null;
-        if (current !== null) {
-          // A pristine-untitled current draft is not protectable — skip
-          // entirely so it never bulldozes an existing backup.
-          if (_isPristineUntitled(current)) return "skipped";
-          raw = serializeWorkspace(current);
-        } else {
-          // No live workspace: preserve the prior autosave slot that the next
-          // workspace's autosave would otherwise overwrite.
-          raw = localStorage.getItem(AUTOSAVE_KEY);
-          if (raw === null) return "skipped";
-          const prior = _deserializeWorkspace(raw);
-          if (prior.ok && prior.workspace && _isPristineUntitled(prior.workspace)) {
-            return "skipped";
-          }
-        }
-        const existing = localStorage.getItem(BACKUP_KEY);
-        const existingRead = existing !== null ? _deserializeWorkspace(existing) : null;
-        const existingPristine =
-          existingRead?.ok && existingRead.workspace
-            ? _isPristineUntitled(existingRead.workspace)
-            : false;
-        const currentPayload = _slotPayload(raw);
-        const existingPayload = _slotPayload(existing);
-        const sameDraft = currentPayload !== null && currentPayload === existingPayload;
-        const freeToOverwrite =
-          opts?.force === true ||
-          existing === null ||
-          existingRead?.ok !== true ||
-          existingPristine ||
-          sameDraft;
-        if (!freeToOverwrite) return "refused";
-        localStorage.setItem(BACKUP_KEY, raw);
-        return "stashed";
-      } catch {
-        // Storage unavailable — nothing to preserve.
-        return "skipped";
-      }
-    },
-    [],
-  );
-
-  const hasBackup = useCallback((): boolean => {
-    try {
-      return localStorage.getItem(BACKUP_KEY) !== null;
-    } catch {
-      return false;
-    }
-  }, []);
-
-  /** The self-ensuring creation path: building a block with no workspace
-   *  starts one. Pure — no side effect inside or around the updater (a side
-   *  effect in an updater double-fires under StrictMode). Preserving the
-   *  displaced draft (stash-if-null, with the refuse/overwrite choice) and
-   *  clearing a refused-import world first are the CALLER's job:
-   *  BuilderView owns the backup-choice dialog and the resolve world, and
-   *  routes a create-from-null through `displace` so the prior draft is never
-   *  silently lost when the backup slot is already occupied. */
-  const createWorkspace = useCallback(
+  /** Apply a browser-state mutation only after VS-API created the structured draft. */
+  const updateWorkspace = useCallback(
     (build: (workspace: Workspace) => Workspace) => {
-      commit((prev) => build(ensureWorkspace(prev, "untitled-session")));
+      commit((prev) => {
+        if (!prev) throw new Error("VS-API must create the structured workspace first");
+        return build(prev);
+      });
     },
     [commit],
   );
-
-  /** Bring the displaced draft back as the workspace. The imported session
-   *  it replaces is server truth and re-importable — nothing is lost. */
-  const restoreBackup = useCallback((): RestoreResult => {
-    let raw: string | null;
-    try {
-      raw = localStorage.getItem(BACKUP_KEY);
-    } catch {
-      raw = null;
-    }
-    if (raw === null) return { ok: false, reason: "there is no draft to restore" };
-    const parsed = _deserializeWorkspace(raw);
-    if (!parsed.ok || !parsed.workspace) {
-      return { ok: false, reason: parsed.ok ? "the saved draft could not be read" : parsed.reason };
-    }
-    reseedCounters(parsed.workspace);
-    // Consume the slot only on success — a draft that cannot be restored is
-    // never silently destroyed.
-    try {
-      localStorage.removeItem(BACKUP_KEY);
-    } catch {
-      // Storage unavailable — the workspace still adopts.
-    }
-    commit(parsed.workspace);
-    return { ok: true };
-  }, [commit]);
-
-  const restoreAutosave = useCallback((): RestoreResult => {
-    let raw: string | null;
-    try {
-      raw = localStorage.getItem(AUTOSAVE_KEY);
-    } catch {
-      raw = null;
-    }
-    if (raw === null) return { ok: false, reason: "there is no draft to restore" };
-    const parsed = _deserializeWorkspace(raw);
-    if (!parsed.ok || !parsed.workspace) {
-      return { ok: false, reason: parsed.ok ? "the saved draft could not be read" : parsed.reason };
-    }
-    // Fresh module counters would re-mint ids the restored draft already
-    // uses — reseed past everything it carries.
-    reseedCounters(parsed.workspace);
-    commit(parsed.workspace);
-    return { ok: true };
-  }, [commit]);
-
-  const startNew = useCallback((name: string) => {
-    commit(newWorkspace(name));
-  }, []);
 
   /** Adopt a ready-made workspace (session import). The caller is
    *  responsible for id-counter reseeding (the importer does it). */
@@ -559,7 +280,7 @@ export function useWorkspace() {
 
   /** Atomic adoption of a next workspace the caller composed from the
    *  current one (apply-all-and-save, save-time rename). Rides the single
-   *  mutation path: exactly one undo entry, normal autosave. Import
+   *  mutation path: exactly one undo entry. Import
    *  adoption stays `openWorkspace`; apply-all must not abuse it. */
   const commitWorkspace = useCallback((next: Workspace, _reason: string) => {
     commit(next);
@@ -586,6 +307,7 @@ export function useWorkspace() {
   );
 
   const close = useCallback(() => commit(null), []);
+  const currentWorkspace = useCallback(() => workspaceRef.current, []);
 
   // Library "use" gestures are self-ensuring: using a block with no open
   // workspace starts one - building never dead-ends on missing state.
@@ -596,35 +318,26 @@ export function useWorkspace() {
   // so minting inside a (StrictMode-double-invoked) updater would allocate two
   // ids for one object.
   const addConstellation = useCallback(
-    (nodeRef: string): string => {
-      const draft = newDraftConstellation(nodeRef);
-      createWorkspace((workspace) => ({
+    (draft: DraftConstellation): string => {
+      updateWorkspace((workspace) => ({
         ...workspace,
         space: [...workspace.space, draft],
       }));
       return draft.segment_id;
     },
-    [createWorkspace],
+    [updateWorkspace],
   );
 
   const addConstellationRef = useCallback(
     (ref: string, label: string): string => {
       const segment = newRefSegment(ref, label);
-      createWorkspace((workspace) => ({
+      updateWorkspace((workspace) => ({
         ...workspace,
         space_refs: [...workspace.space_refs, segment],
       }));
       return segment.segment_id;
     },
-    [createWorkspace],
-  );
-
-  /** Add an already-built draft (a fork of a library block). */
-  const addDraft = useCallback(
-    (draft: DraftConstellation) => {
-      createWorkspace((workspace) => ({ ...workspace, space: [...workspace.space, draft] }));
-    },
-    [createWorkspace],
+    [updateWorkspace],
   );
 
   const removeRefSegment = useCallback((segmentId: string) => {
@@ -661,30 +374,17 @@ export function useWorkspace() {
 
   const addGroundRef = useCallback(
     (ref: string, label: string): string => {
-      const segment = newRefGroundSet(ref, label);
-      createWorkspace((workspace) => ({
+      const segment: RefGroundSet = {
+        ...newRefSegment(ref, label),
+        scheduling: {},
+      };
+      updateWorkspace((workspace) => ({
         ...workspace,
         ground_refs: [...workspace.ground_refs, segment],
       }));
       return segment.segment_id;
     },
-    [createWorkspace],
-  );
-
-  const updateGroundRef = useCallback(
-    (segmentId: string, patch: Partial<RefGroundSet>) => {
-      commit((prev) =>
-        prev
-          ? {
-              ...prev,
-              ground_refs: prev.ground_refs.map((placed) =>
-                placed.segment_id === segmentId ? { ...placed, ...patch } : placed,
-              ),
-            }
-          : prev,
-      );
-    },
-    [],
+    [updateWorkspace],
   );
 
   const removeGroundRef = useCallback((segmentId: string) => {
@@ -696,13 +396,6 @@ export function useWorkspace() {
   }, []);
 
   /** Add an authored (or forked) ground segment draft. */
-  const addGroundDraft = useCallback(
-    (draft: DraftGroundSet) => {
-      createWorkspace((workspace) => ({ ...workspace, ground: [...workspace.ground, draft] }));
-    },
-    [createWorkspace],
-  );
-
   /** Place a defined site into the last ground segment draft — self-ensuring:
    *  with no draft (or no workspace) open, makeDraft starts one, so using a
    *  site from the Library never dead-ends. */
@@ -712,22 +405,22 @@ export function useWorkspace() {
       makeDraft: () => DraftGroundSet,
     ): { segmentId: string; created: boolean } => {
       // The receiving set is the last ground draft, or a fresh one when none
-      // exists yet. Decide the branch from the synced ref (createWorkspace may
-      // ensure a workspace, but a fresh one has no ground either way) so the
+      // exists yet. Decide the branch from the synced ref so the
       // returned id matches what the updater builds. `created` tells the caller
       // whether to apply create-focus: focusing (and selecting) the name of an
       // EXISTING set the member merely joined is a rename footgun.
       const current = workspaceRef.current;
-      if (!current || current.ground.length === 0) {
+      if (!current) throw new Error("VS-API must create the structured workspace first");
+      if (current.ground.length === 0) {
         const draft = makeDraft();
-        createWorkspace((workspace) => ({
+        updateWorkspace((workspace) => ({
           ...workspace,
           ground: [{ ...draft, members: [member] }],
         }));
         return { segmentId: draft.segment_id, created: true };
       }
       const receiving = current.ground[current.ground.length - 1]!; // length > 0 checked above
-      createWorkspace((workspace) => ({
+      updateWorkspace((workspace) => ({
         ...workspace,
         ground: workspace.ground.map((draft, index) =>
           index === workspace.ground.length - 1
@@ -737,14 +430,8 @@ export function useWorkspace() {
       }));
       return { segmentId: receiving.segment_id, created: false };
     },
-    [createWorkspace],
+    [updateWorkspace],
   );
-
-  /** Connect two placed segments (self-ensuring is not needed here: a link
-   *  rule requires segments, so the workspace always exists first). */
-  const addLinkRule = useCallback((rule: DraftLinkRule) => {
-    commit((prev) => (prev ? { ...prev, links: [...prev.links, rule] } : prev));
-  }, []);
 
   const updateLinkRule = useCallback((ruleId: string, patch: Partial<DraftLinkRule>) => {
     commit((prev) =>
@@ -762,12 +449,6 @@ export function useWorkspace() {
   const removeLinkRule = useCallback((ruleId: string) => {
     commit((prev) =>
       prev ? { ...prev, links: prev.links.filter((rule) => rule.rule_id !== ruleId) } : prev,
-    );
-  }, []);
-
-  const addRoutingDomain = useCallback((domain: DraftRoutingDomain) => {
-    commit((prev) =>
-      prev ? { ...prev, routing_domains: [...prev.routing_domains, domain] } : prev,
     );
   }, []);
 
@@ -795,12 +476,6 @@ export function useWorkspace() {
             routing_domains: prev.routing_domains.filter((d) => d.domain_id !== domainId),
           }
         : prev,
-    );
-  }, []);
-
-  const addBoundary = useCallback((boundary: DraftBoundary) => {
-    commit((prev) =>
-      prev ? { ...prev, boundaries: [...prev.boundaries, boundary] } : prev,
     );
   }, []);
 
@@ -868,75 +543,29 @@ export function useWorkspace() {
     );
   }, []);
 
-  /** Close-time convergence: once an authored ground set has been saved to
-   *  the library, collapse it back to a ref of that object — but only if the
-   *  APPLIED set (read here, never a stale closure — `commit`'s functional form
-   *  sees post-Apply state) still serializes byte-for-byte to the snapshot the
-   *  save produced AND is losslessly ref-expressible. The ref REUSES the draft's
-   *  segment_id and carries its scheduling block, so every link rule and
-   *  routing-domain membership pointing at the segment stays live; minting a
-   *  fresh segment would orphan them. A best-effort mirror of the server's
-   *  load-time rehydrate — when the guard blocks, the ref stays inline and the
-   *  server converges it on the next load instead. */
-  const convergeGroundToRef = useCallback(
-    (segmentId: string, ref: string, savedSnapshot: Record<string, unknown>) => {
-      commit((prev) => {
-        if (!prev) return prev;
-        const draft = prev.ground.find((d) => d.segment_id === segmentId);
-        if (!draft) return prev;
-        if (!_bufferDeepEqual(siteSetWrapperFromDraft(draft), savedSnapshot)) return prev;
-        if (!groundSetIsRefExpressible(draft)) return prev;
-        const converged: RefGroundSet = {
-          segment_id: draft.segment_id,
-          ref,
-          label: draft.display_name,
-          scheduling: draft.scheduling,
-        };
-        return {
-          ...prev,
-          ground: prev.ground.filter((d) => d.segment_id !== segmentId),
-          ground_refs: [...prev.ground_refs, converged],
-        };
-      });
-    },
-    [],
-  );
-
   return {
     workspace,
-    startNew,
+    currentWorkspace,
     openWorkspace,
     commitWorkspace,
     updateSession,
     undo,
-    hasAutosave,
-    restoreAutosave,
-    stashAutosaveToBackup,
-    hasBackup,
-    restoreBackup,
     close,
     addConstellation,
     addConstellationRef,
-    addDraft,
     removeRefSegment,
     removeConstellation,
     updateConstellation,
     addGroundRef,
-    updateGroundRef,
     removeGroundRef,
-    addGroundDraft,
     addGroundMember,
     replaceGroundRefWithDraft,
     updateGroundDraft,
     removeGroundDraft,
-    convergeGroundToRef,
-    addLinkRule,
     updateLinkRule,
     removeLinkRule,
-    addRoutingDomain,
     updateRoutingDomain,
     removeRoutingDomain,
-    addBoundary,
     updateBoundary,
     removeBoundary,
   };

@@ -1,10 +1,10 @@
-"""E2E validation matrix — tests 12 constellation/protocol permutations via wizard API.
+"""E2E validation matrix for every shipped catalog session.
 
-Runs each permutation: generate session → deploy via CRD → wait for Ready →
+Runs each session: upload exact YAML → deploy via CRD → wait for Ready →
 verify pods + FRR configs + routing convergence + WebSocket snapshots →
 write evidence files.
 
-Usage: .venv/bin/python3 tests/integration/e2e_matrix.py
+Usage: make test-runtime-matrix
 """
 
 from __future__ import annotations
@@ -25,169 +25,6 @@ VS_API_HOST = os.environ.get("VS_API_HOST", "127.0.0.1:8080")
 BASE_URL = f"http://{VS_API_HOST}"
 KUBECTL = "sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl"
 
-
-# Helper to build inline constellation dicts matching the wizard's geometry presets.
-def _inline(
-    name, alt, inc, pattern, planes, spp, phase, sat_type="starlink-v2", seam=False, seam_lat=70
-):
-    d = {
-        "mode": "parametric",
-        "name": name,
-        "satellite_type": sat_type,
-        "orbit": {"altitude_km": alt, "inclination_deg": inc, "pattern": pattern},
-        "planes": {
-            "count": planes,
-            "sats_per_plane": spp,
-            "raan_spacing_deg": round(360 / planes, 2),
-            "phase_offset_deg": phase,
-        },
-    }
-    if seam:
-        d["polar_seam"] = {"enabled": True, "latitude_threshold_deg": seam_lat}
-    return d
-
-
-# Real-world constellation geometries from the wizard's GEOMETRY_PRESETS
-STARLINK_53 = _inline("starlink-53", 550, 53, "walker-delta", 8, 11, 4.1)
-STARLINK_70 = _inline("starlink-70", 570, 70, "walker-delta", 6, 11, 5.45)
-STARLINK_POLAR = _inline(
-    "starlink-polar", 560, 97.6, "walker-star", 6, 12, 5.0, seam=True, seam_lat=80
-)
-KUIPER_51 = _inline("kuiper-51", 630, 51.9, "walker-delta", 6, 11, 5.45)
-ONEWEB = _inline("oneweb", 1200, 87.9, "walker-star", 6, 10, 6.0, seam=True, seam_lat=75)
-IRIDIUM = _inline(
-    "iridium-next",
-    780,
-    86.4,
-    "walker-star",
-    6,
-    11,
-    5.45,
-    sat_type="iridium-next",
-    seam=True,
-    seam_lat=75,
-)
-TELESAT = _inline("telesat-polar", 1015, 98.98, "walker-star", 6, 13, 4.6, seam=True, seam_lat=80)
-SDA_T1 = _inline("sda-t1", 1000, 80, "walker-star", 6, 10, 6.0, seam=True, seam_lat=70)
-GLOBALSTAR = _inline("globalstar", 1414, 52, "walker-delta", 8, 6, 7.5)
-
-MATRIX = [
-    # --- Inclined LEO constellations (Walker-delta, no polar seam) ---
-    {
-        "id": 1,
-        "constellation": "starlink-early-44",  # preset for defaults
-        "protocol": "isis",
-        "extensions": ["te"],
-        "gs": "configs/ground-stations/sets/global-8.yaml",
-        "custom_constellation": STARLINK_53,
-    },
-    {
-        "id": 2,
-        "constellation": "starlink-early-44",
-        "protocol": "ospf",
-        "extensions": ["te"],
-        "gs": "configs/ground-stations/sets/transatlantic.yaml",
-        "custom_constellation": KUIPER_51,
-    },
-    {
-        "id": 3,
-        "constellation": "starlink-early-44",
-        "protocol": "isis",
-        "extensions": [],
-        "gs": "configs/ground-stations/sets/transpacific.yaml",
-        "custom_constellation": GLOBALSTAR,
-    },
-    # --- Polar/near-polar constellations (Walker-star, polar seam) ---
-    {
-        "id": 4,
-        "constellation": "starlink-early-44",
-        "protocol": "isis",
-        "extensions": ["sr"],
-        "gs": "configs/ground-stations/sets/polar-emphasis.yaml",
-        "custom_constellation": IRIDIUM,
-    },
-    {
-        "id": 5,
-        "constellation": "starlink-early-44",
-        "protocol": "ospf",
-        "extensions": [],
-        "gs": "configs/ground-stations/sets/polar-emphasis.yaml",
-        "custom_constellation": ONEWEB,
-    },
-    {
-        "id": 6,
-        "constellation": "starlink-early-44",
-        "protocol": "isis",
-        "extensions": ["te"],
-        "gs": "configs/ground-stations/sets/global.yaml",
-        "custom_constellation": TELESAT,
-    },
-    # --- Sun-synchronous / high-inclination ---
-    {
-        "id": 7,
-        "constellation": "starlink-early-44",
-        "protocol": "isis",
-        "extensions": ["te"],
-        "gs": ["ashburn", "frankfurt", "tokyo", "sydney"],
-        "custom_constellation": STARLINK_POLAR,
-    },
-    {
-        "id": 8,
-        "constellation": "starlink-early-44",
-        "protocol": "ospf",
-        "extensions": ["te", "mpls"],
-        "gs": "configs/ground-stations/sets/global-8.yaml",
-        "custom_constellation": SDA_T1,
-    },
-    # --- Satellite type override (orthogonal selection) ---
-    {
-        "id": 9,
-        "constellation": "starlink-early-44",
-        "protocol": "isis",
-        "extensions": ["te"],
-        "gs": "configs/ground-stations/sets/transatlantic.yaml",
-        "satellite_type": "iridium-next",
-        "custom_constellation": STARLINK_53,
-    },
-    {
-        "id": 10,
-        "constellation": "starlink-early-44",
-        "protocol": "isis",
-        "extensions": [],
-        "gs": "configs/ground-stations/sets/us-conus.yaml",
-        "satellite_type": "generic-2isl",
-        "custom_constellation": STARLINK_70,
-    },
-    # --- Area strategies ---
-    {
-        "id": 11,
-        "constellation": "starlink-early-44",
-        "protocol": "isis",
-        "extensions": ["te"],
-        "gs": "configs/ground-stations/sets/global.yaml",
-        "area": "per-plane",
-        "custom_constellation": KUIPER_51,
-    },
-    {
-        "id": 12,
-        "constellation": "starlink-early-44",
-        "protocol": "ospf",
-        "extensions": ["te"],
-        "gs": "configs/ground-stations/sets/global-8.yaml",
-        "area": "stripe",
-        "custom_constellation": STARLINK_53,
-    },
-    # --- NodalPath (xfail) ---
-    {
-        "id": 13,
-        "constellation": "starlink-early-44",
-        "protocol": "nodalpath",
-        "extensions": [],
-        "gs": "configs/ground-stations/sets/global.yaml",
-        "custom_constellation": STARLINK_53,
-        "xfail": "NodalPath in-band terrestrial interface not yet implemented.",
-    },
-]
 
 MBB_ACCEPTANCE_SESSION = Path("tests/fixtures/sessions/earth-leo-mbb-acceptance.yaml")
 MBB_BAD_OPS_CODES = {
@@ -343,29 +180,11 @@ def _link_as_sat_sat(
     return None
 
 
-def generate_session(token: str, perm: dict) -> str:
-    """Generate session YAML via wizard API."""
-    body = {
-        "constellation": perm["constellation"],
-        "protocol": perm["protocol"],
-        "extensions": perm.get("extensions", []),
-        "ground_stations": perm["gs"],
-    }
-    if perm.get("area"):
-        body["area_strategy"] = perm["area"]
-    if perm.get("satellite_type"):
-        body["satellite_type"] = perm["satellite_type"]
-    if perm.get("custom_constellation"):
-        body["custom_constellation"] = perm["custom_constellation"]
-    payload = request_json("POST", "/api/v1/session/generate", token=token, json=body, retries=3)
-    return payload.get("yaml", "")
-
-
 def deploy_session(token: str, yaml_str: str) -> dict:
     """Deploy session via wizard API."""
     return request_json(
         "POST",
-        "/api/v1/session/deploy",
+        "/api/v1/session/deploy-from-yaml",
         token=token,
         json={"yaml": yaml_str},
         retries=3,
@@ -963,14 +782,12 @@ def _route_egress_dev(route_stdout: str) -> str | None:
     return None
 
 
-# Probing one pair costs three kubectl execs, so sweeps are bounded — but
-# only AFTER filtering to currently-routable pairs (the source holds an
-# active space link; the destination's SITE holds at least one, since a
-# co-sited peer may carry the final LAN hop while the source-side egress
-# proof still pins the space segment). Without that filter, a distance-
-# first cap silently probes only far pairs whose endpoints are dark and
-# never reaches the connected near pair — observed live on the sparse
-# polar session, where the only routable pair was also the closest.
+# Sweeps stay bounded because every candidate requires a kernel query. A
+# linked source and destination site are only eligible, not necessarily in
+# the same active routing component, so each successive sweep starts after
+# the prior window instead of permanently retrying the first distance-ranked
+# pairs. This matters on the sparse polar session, where the only routable
+# pair can be the closest one.
 _TRANSIT_PAIRS_PER_SWEEP = 16
 
 
@@ -993,6 +810,7 @@ def _find_routed_ground_probe(
     """
     deadline = time.monotonic() + wait_s
     last_reason = "no routed ground probe found"
+    candidate_cursor = 0
     single_site = ground_topology is not None and (
         len({info["site"] for info in ground_topology.values()}) < 2
     )
@@ -1019,7 +837,11 @@ def _find_routed_ground_probe(
                 )
                 time.sleep(3)
                 continue
-            candidates = candidates[:_TRANSIT_PAIRS_PER_SWEEP]
+            candidate_count = len(candidates)
+            sweep_size = min(_TRANSIT_PAIRS_PER_SWEEP, candidate_count)
+            sweep_start = candidate_cursor % candidate_count
+            candidates = (candidates + candidates)[sweep_start : sweep_start + sweep_size]
+            candidate_cursor = (sweep_start + sweep_size) % candidate_count
         else:
             candidates = [(src, dst) for src in sorted(by_gs) for dst in ground_ids if dst != src]
         for src, dst_gs in candidates:
@@ -1028,13 +850,7 @@ def _find_routed_ground_probe(
                 last_reason = f"could not read loopback for {dst_gs}"
                 continue
             route = _kubectl_exec(src, f"ip route get {dst_ip}", timeout=10)
-            neigh = _kubectl_exec(
-                src, f"vtysh -c '{_routing_neighbor_command(protocol)}'", timeout=10
-            )
-            ping = _kubectl_exec(src, f"ping -c 1 -W 5 {dst_ip}", timeout=10)
             fib_ready = route["rc"] == 0 and dst_ip in route["stdout"]
-            neighbor_up = neigh["rc"] == 0 and _routing_neighbor_up(neigh["stdout"], protocol)
-            packet_ready = ping["rc"] == 0 and "0% packet loss" in ping["stdout"]
             egress_dev = _route_egress_dev(route["stdout"]) if fib_ready else None
             if ground_topology is not None:
                 src_info = ground_topology[src]
@@ -1059,6 +875,19 @@ def _find_routed_ground_probe(
                     "egress_dev": egress_dev,
                     "transit_note": "no resolver topology: pair may share a site LAN",
                 }
+            if not fib_ready or not space_egress:
+                last_reason = (
+                    f"{src}->{dst_gs} fib={fib_ready} neighbor=not-checked "
+                    f"packet=not-checked egress={egress_dev}"
+                    + ("" if space_egress else " (egress is not a space-link terminal)")
+                )
+                continue
+            neigh = _kubectl_exec(
+                src, f"vtysh -c '{_routing_neighbor_command(protocol)}'", timeout=10
+            )
+            ping = _kubectl_exec(src, f"ping -c 1 -W 5 {dst_ip}", timeout=10)
+            neighbor_up = neigh["rc"] == 0 and _routing_neighbor_up(neigh["stdout"], protocol)
+            packet_ready = ping["rc"] == 0 and "0% packet loss" in ping["stdout"]
             if fib_ready and neighbor_up and packet_ready and space_egress:
                 return {
                     "result": "PASS",
@@ -2177,12 +2006,8 @@ def run_permutation(perm: dict) -> dict:
             print(f"  Waiting for previous deploy to finish (phase={phase})...")
             time.sleep(5)
 
-        # Generate session YAML
-        print("  Generating session YAML...")
-        # Catalog permutations deploy the shipped segment-grammar session
-        # file verbatim; generated permutations still go through the
-        # wizard endpoint (legacy mode, pre-segment-grammar shapes).
-        yaml_str = perm.get("session_yaml") or generate_session(token, perm)
+        print("  Loading exact shipped session YAML...")
+        yaml_str = perm["session_yaml"]
         evidence["yaml_length"] = len(yaml_str)
 
         # Deploy
@@ -2369,9 +2194,8 @@ def main():
         xpassed = 0
 
         if os.environ.get("NODALARC_ACCEPTANCE_ONLY") != "1":
-            mode = os.environ.get("NODALARC_E2E_MODE", "catalog")
-            active_matrix = catalog_permutations() if mode == "catalog" else MATRIX
-            print(f"Mode: {mode} ({len(active_matrix)} permutations)")
+            active_matrix = catalog_permutations()
+            print(f"Catalog sessions: {len(active_matrix)}")
             for perm in active_matrix:
                 evidence = run_permutation(perm)
                 bucket = _classify_matrix_result(evidence, perm)

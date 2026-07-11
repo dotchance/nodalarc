@@ -46,6 +46,7 @@ endif
 BUILD_DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)
 DOCKER_BUILD_METADATA_ARGS = --build-arg PROJECT_VERSION=$(PROJECT_VERSION) --build-arg VCS_REF=$(GIT_SHA) --build-arg BUILD_DATE=$(BUILD_DATE)
 RUNTIME_CONSTRAINTS ?= build/runtime-constraints.txt
+HELM_CONTRACT_CHART ?= build/helm/nodalarc-contract
 
 # ---------------------------------------------------------------------------
 # Image names
@@ -58,8 +59,10 @@ IMAGE_REF_TAG = $$(MODE='$(MODE)' REGISTRY_HOST='$(REGISTRY_HOST)' TAG='$(TAG)' 
 # Phony targets
 # ---------------------------------------------------------------------------
 
-.PHONY: help all deps build load install reinstall upgrade session lint lint-policy dead-code \
-        test test-integration test-root ensure-frontend-deps \
+.PHONY: help all deps build load install reinstall upgrade session lint lint-policy typecheck format-diff generate-contracts check-contracts dead-code \
+        test test-integration test-runtime-matrix test-builder-e2e \
+        test-root ensure-frontend-deps \
+        render-helm lint-helm check-helm \
         teardown force-teardown reset-platform restart clean clean-deps clean-images \
         clean-registry purge-containerd nuke status check-registry test-backend test-frontend \
         build-frontends build-images ensure-base-images build-base-images \
@@ -89,7 +92,7 @@ help: ## Show this help
 	@echo "  make nuke && make all"
 	@echo ""
 	@echo "Targets:"
-	@grep -E '^[a-zA-Z_-]+:.*?## ' Makefile | sort | \
+	@grep -E '^[a-zA-Z0-9_-]+:.*?## ' Makefile | sort | \
 		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-22s\033[0m %s\n", $$1, $$2}'
 	@echo ""
 	@echo "State transitions:"
@@ -196,6 +199,19 @@ check-registry: ## Report resolved REGISTRY_HOST and verify the registry is reac
 			exit 1; \
 		fi; \
 	fi
+
+# ---------------------------------------------------------------------------
+# Contract validation
+# ---------------------------------------------------------------------------
+
+render-helm: ## Assemble the versioned Helm chart through the Make facade
+	@PROJECT_VERSION='$(PROJECT_VERSION)' bash scripts/na-render-helm-chart.sh deploy/helm '$(HELM_CONTRACT_CHART)' >/dev/null
+
+lint-helm: render-helm ## Lint the exact rendered versioned chart
+	@helm lint '$(HELM_CONTRACT_CHART)'
+
+check-helm: lint-helm ## Render and lint the chart through the Make facade
+	@helm template nodalarc '$(HELM_CONTRACT_CHART)' --namespace '$(NAMESPACE)' --include-crds >/dev/null
 
 # ---------------------------------------------------------------------------
 # Build artifacts
@@ -416,13 +432,47 @@ status: ## Show cluster status (pods, phase, links) + image drift table
 # Lint and static analysis
 # ---------------------------------------------------------------------------
 
-lint: lint-policy ## Run lint, formatting, and high-confidence dead-code checks
+lint: lint-policy typecheck ## Run lint, type, formatting, and high-confidence dead-code checks
 	uv run ruff check .
 	uv run ruff format --check .
 	$(MAKE) dead-code
 
 lint-policy: ## Verify lint policy was not weakened
 	uv run python scripts/check-lint-policy.py
+
+typecheck: ## Type-check Builder and session-configuration authority boundaries
+	uv run mypy --explicit-package-bases \
+		lib/nodalarc/catalog_closure.py \
+		lib/nodalarc/catalog_refs.py \
+		lib/nodalarc/catalog_registry.py \
+		lib/nodalarc/catalog_repository.py \
+		lib/nodalarc/catalog_upload.py \
+		lib/nodalarc/filesystem_catalog_repository.py \
+		lib/nodalarc/prepared_session.py \
+		lib/nodalarc/runtime_config.py \
+		lib/nodalarc/runtime_service_config.py \
+		lib/nodalarc/models/builder_api.py \
+		lib/nodalarc/models/builder_catalog_api.py \
+		lib/nodalarc/models/builder_visual_api.py \
+		lib/nodalarc/models/session_sources.py \
+		services/vs_api/builder_catalog_draft.py \
+		services/vs_api/builder_catalog_service.py \
+		services/vs_api/builder_compiler.py \
+		services/vs_api/builder_session_service.py \
+		services/vs_api/builder_visual_draft.py \
+		services/vs_api/catalog_context.py \
+		services/vs_api/session_deployment.py \
+		services/vs_api/transition_operations.py
+
+format-diff: ## Preview deterministic Ruff import and formatting changes
+	uv run ruff check --select I --fix --diff .
+	uv run ruff format --diff .
+
+generate-contracts: ## Regenerate Builder API transport types
+	uv run python scripts/gen_builder_api_types.py
+
+check-contracts: ## Verify generated Builder API transport types
+	uv run python scripts/gen_builder_api_types.py --check
 
 dead-code: ## Report high-confidence unused code findings
 	uv run vulture lib services tools scripts images --min-confidence 80
@@ -456,6 +506,17 @@ test-frontend: ensure-frontend-deps ## Run frontend unit tests (vitest)
 
 test-integration: ## Run integration tests (requires running cluster)
 	uv run pytest tests/integration --tb=short -q
+
+test-runtime-matrix: ## Destructively qualify every shipped session against the live runtime
+	PYTHONUNBUFFERED=1 PYTHONPATH=lib uv run python tests/integration/e2e_matrix.py
+
+test-builder-e2e: ## Destructively qualify Builder user: closure deployment on the live cluster
+	@echo "[builder-e2e] WARNING: this replaces the active NodalArc session in $(NAMESPACE)."
+	@NODALARC_RUN_BUILDER_E2E=1 \
+		NODALARC_EXPECTED_RUNTIME_RELEASE='$(if $(E2E_RUNTIME_RELEASE),$(E2E_RUNTIME_RELEASE),$(PROJECT_VERSION))' \
+		NODALARC_EXPECTED_RUNTIME_BUILD='$(if $(E2E_RUNTIME_BUILD),$(E2E_RUNTIME_BUILD),$(TAG))' \
+		NAMESPACE='$(NAMESPACE)' \
+		uv run pytest tests/integration/test_builder_catalog_deployment.py --tb=short -q -s
 
 perf-test: ## Run OME performance budgets; artifacts land in perf-results/
 	@echo "[perf-test] Running the OME performance scenario matrix against checked-in budgets."

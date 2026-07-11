@@ -3,10 +3,10 @@
 """Ground terminal helpers.
 
 Ground station terminal definitions describe groups of identical terminals.
-The emulation capacity is therefore `count * tracking_capacity` for each
-terminal block. Keeping this arithmetic and the terminal-physics-profile
-selection in one shared helper prevents the OME, Scheduler, Operator, and
-template renderer from silently disagreeing about terminal capabilities.
+Runtime allocation capacity is the resolver-owned Linux interface pool; a
+terminal capability cannot create additional interfaces implicitly. Keeping
+pool validation and terminal-physics-profile selection in one shared helper
+prevents OME and Scheduler from silently disagreeing about usable mounts.
 """
 
 from __future__ import annotations
@@ -16,14 +16,11 @@ from dataclasses import dataclass
 from typing import Literal, Protocol
 
 from nodalarc.body_frames import SUPPORTED_BODY_NAMES, SupportedSurfaceBody
-from nodalarc.models.ground_station import (
-    GroundStationConfig,
-    GroundStationFile,
-)
 from nodalarc.models.terminal_physics import (
     SatGroundTerminalBoresight,
     TerminalBoresight,
 )
+from nodalarc.ome_runtime import GroundStation, GroundStationFile
 
 
 class GroundTerminalTypeLike(Protocol):
@@ -32,10 +29,12 @@ class GroundTerminalTypeLike(Protocol):
 
 class GroundTerminalCapacityLike(GroundTerminalTypeLike, Protocol):
     count: int
-    tracking_capacity: int
+    interface_indices: tuple[int, ...]
 
 
 class TerminalPhysicsLike(GroundTerminalTypeLike, Protocol):
+    count: int
+    interface_indices: tuple[int, ...]
     max_range_km: float | None
     field_of_regard_deg: float | None
     max_tracking_rate_deg_s: float | None
@@ -74,16 +73,37 @@ class TerminalPhysicsProfile:
 
 
 def ground_terminal_capacity(terminals: Iterable[GroundTerminalCapacityLike]) -> int:
-    """Return total simultaneous satellite links supported by terminal blocks."""
-    total = sum(int(term.count) * int(term.tracking_capacity) for term in terminals)
-    if total <= 0:
-        raise ValueError("ground terminal capacity must be positive")
-    return total
+    """Return allocatable interface capacity for terminal blocks."""
+    return len(ground_terminal_interface_indices(tuple(terminals)))
+
+
+def ground_terminal_interface_indices(
+    terminals: Sequence[GroundTerminalCapacityLike],
+) -> tuple[int, ...]:
+    """Return the global ground-interface pool carried by terminal blocks.
+
+    Runtime inputs carry explicit global indices; allocation never recreates
+    or renumbers them from block order.
+    """
+    if not terminals:
+        raise ValueError("ground terminal interface pool requires at least one terminal")
+    indices = tuple(index for term in terminals for index in term.interface_indices)
+    expected = sum(int(term.count) for term in terminals)
+    if len(indices) != expected:
+        raise ValueError(
+            "ground terminal interface pool does not match expanded terminal count: "
+            f"count={expected}, indices={indices}"
+        )
+    if len(set(indices)) != len(indices):
+        raise ValueError(f"ground terminal interface pool contains duplicate indices: {indices}")
+    if any(index < 0 for index in indices):
+        raise ValueError(f"ground terminal interface pool contains negative indices: {indices}")
+    return indices
 
 
 def station_ground_terminal_capacity(
     gs_file: GroundStationFile,
-    station: GroundStationConfig,
+    station: GroundStation,
 ) -> int:
     """Return a station's effective ground terminal capacity.
 
@@ -123,13 +143,13 @@ def satellite_terminal_index_pools_by_target_body(
 ) -> dict[str, tuple[int, ...]]:
     """Return allocatable satellite ground-terminal indices per target body.
 
-    Satellite ground terminals are expanded in YAML order: a block with
-    ``count: 2`` owns two consecutive terminal indices. In terminal_physics
-    mode, each block must declare a satellite boresight target_body; the
-    allocator may only assign indices from the pool matching the ground
-    station's reference body. In geometry_only mode, terminal boresight
-    constraints are intentionally absent, so each index is eligible for every
-    supported surface body while still consuming one global physical terminal.
+    Each block carries resolver-owned global ``gndN`` indices. In
+    terminal_physics mode, each block must declare a satellite boresight
+    target_body; the allocator may only assign indices from the pool matching
+    the ground station's reference body. In geometry_only mode, terminal
+    boresight constraints are intentionally absent, so each declared index is
+    eligible for every supported surface body while still consuming one global
+    physical terminal.
     """
 
     if total_count < 0:
@@ -139,20 +159,22 @@ def satellite_terminal_index_pools_by_target_body(
 
     pools: dict[str, list[int]] = {}
     if not terminals:
-        if ground_link_model == "terminal_physics":
-            raise ValueError(
-                "terminal_physics ground allocation requires satellite ground terminal "
-                "definitions with boresight.target_body"
-            )
-        all_indices = tuple(range(total_count))
-        return dict.fromkeys(SUPPORTED_BODY_NAMES, all_indices)
+        raise ValueError(
+            "ground allocation requires satellite ground terminal definitions with "
+            "explicit interface_indices"
+        )
 
     next_index = 0
     for block_idx, term in enumerate(terminals):
         count = int(term.count)
         if count <= 0:
             raise ValueError(f"satellite ground terminal block {block_idx} count must be positive")
-        indices = tuple(range(next_index, next_index + count))
+        indices = tuple(term.interface_indices)
+        if len(indices) != count:
+            raise ValueError(
+                f"satellite ground terminal block {block_idx} count={count} does not match "
+                f"interface_indices={indices}"
+            )
         next_index += count
 
         boresight = term.boresight
@@ -176,12 +198,18 @@ def satellite_terminal_index_pools_by_target_body(
             f"ground_terminal_count={total_count}, expanded={next_index}"
         )
 
+    all_indices = {index for indices in pools.values() for index in indices}
+    if len(all_indices) != total_count:
+        raise ValueError(
+            "satellite ground terminal pools do not cover the selected interface capacity: "
+            f"ground_terminal_count={total_count}, indices={sorted(all_indices)}"
+        )
     return {body: tuple(indices) for body, indices in sorted(pools.items())}
 
 
 def station_ground_terminal_type(
     gs_file: GroundStationFile,
-    station: GroundStationConfig,
+    station: GroundStation,
 ) -> str:
     """Return the effective terminal type for a ground station."""
     terminals = station.terminals or gs_file.default_terminals

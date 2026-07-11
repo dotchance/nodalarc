@@ -3,18 +3,19 @@
 from __future__ import annotations
 
 import pytest
-import yaml
 from nodalarc.resolve_session import resolve_session
 from nodalarc.session_generator import (
+    assemble_session_document,
     constellation_source_mode,
-    generate_session_yaml,
+    load_constellation_preset_response,
     load_constellation_presets,
 )
 
+LEO_RING = "nodalarc:constellations/earth/leo/earth-leo-ring-36.yaml"
+
 
 def _generated_session(**kwargs):
-    yaml_text, warnings = generate_session_yaml(**kwargs)
-    raw = yaml.safe_load(yaml_text)
+    raw, warnings = assemble_session_document(**kwargs)
     resolved = resolve_session(raw)
     return raw, resolved, warnings
 
@@ -33,7 +34,48 @@ def test_load_constellation_presets_scans_catalog_constellations() -> None:
     }.issubset(presets)
     assert all(p.constellation.startswith("nodalarc:constellations/") for p in presets.values())
     assert all(p.ground_stations.startswith("nodalarc:site-sets/") for p in presets.values())
-    assert all(p.mode == "constellation" for p in presets.values())
+    assert all(p.capability.source_kind == "constellation" for p in presets.values())
+
+
+def test_constellation_preset_capabilities_follow_catalog_orbit_and_runtime_support() -> None:
+    response = load_constellation_preset_response()
+    presets = {preset.name: preset for preset in response.presets}
+
+    earth = presets["earth-leo-ring-36"]
+    assert earth.capability.runtime_supported_propagators == (
+        "j2_mean_elements",
+        "two_body",
+    )
+    assert earth.capability.default_propagator == "j2_mean_elements"
+    assert earth.capability.unavailable_reason is None
+
+    luna = presets["luna-polar-2"]
+    assert luna.capability.runtime_supported_propagators == (
+        "j2_mean_elements",
+        "two_body",
+    )
+    assert luna.capability.default_propagator == "two_body"
+
+    nrho = presets["luna-nrho-relay-1"]
+    assert nrho.capability.runtime_supported_propagators == ()
+    assert nrho.capability.default_propagator is None
+    assert "crtbp" in str(nrho.capability.unavailable_reason)
+    assert "Kepler elements cannot represent" in str(nrho.capability.unavailable_reason)
+
+    assert response.custom_geometry.source_kind == "custom_geometry"
+    assert response.custom_geometry.runtime_supported_propagators == (
+        "j2_mean_elements",
+        "two_body",
+    )
+    assert response.custom_geometry.default_propagator == "j2_mean_elements"
+    assert response.custom_geometry_seed.pattern == "walker_delta"
+    assert response.custom_geometry_seed.planes == 4
+    assert str(response.custom_geometry_default_node).startswith("nodalarc:nodes/space/")
+    assert tuple(model.id for model in response.orbit_models) == (
+        "j2_mean_elements",
+        "two_body",
+        "sgp4_tle",
+    )
 
 
 def test_constellation_source_mode_reports_catalog_wrapper() -> None:
@@ -46,7 +88,7 @@ def test_constellation_source_mode_reports_catalog_wrapper() -> None:
 
 def test_generate_catalog_session_yaml_round_trips_through_resolver() -> None:
     raw, resolved, warnings = _generated_session(
-        constellation="earth-leo-ring-36",
+        constellation=LEO_RING,
         protocol="isis",
         extensions=["te", "mpls"],
         orbit_propagator="j2_mean_elements",
@@ -80,10 +122,10 @@ def test_generated_space_segment_is_named_by_orbit_regime() -> None:
     # LEO session must produce leo-sat-* ids, matching the shipped sessions'
     # orbit-derived naming, with the rule/pool ids following the segment.
     cases = {
-        "earth-leo-ring-36": "leo",
-        "earth-meo-gps-24": "meo",
-        "earth-geo-ring-8": "geo",
-        "earth-heo-molniya-3": "heo",
+        "nodalarc:constellations/earth/leo/earth-leo-ring-36.yaml": "leo",
+        "nodalarc:constellations/earth/meo/earth-meo-gps-24.yaml": "meo",
+        "nodalarc:constellations/earth/geo/earth-geo-ring-8.yaml": "geo",
+        "nodalarc:constellations/earth/heo/earth-heo-molniya-3.yaml": "heo",
     }
     for constellation, expected in cases.items():
         raw, resolved, _warnings = _generated_session(
@@ -95,6 +137,22 @@ def test_generated_space_segment_is_named_by_orbit_regime() -> None:
         assert raw["segments"][0]["id"] == expected, constellation
         assert raw["link_rules"][0]["id"] == f"{expected}_access"
         assert raw["link_rules"][1]["id"] == f"{expected}_isl"
+        ground_endpoint, space_endpoint = raw["link_rules"][0]["endpoints"]
+        expected_mount = "access_ka"
+        assert {tuple(clause.items())[0] for clause in ground_endpoint["select"]["all"]} == {
+            ("segment", "ground"),
+            ("tag", expected),
+        }
+        assert {tuple(clause.items())[0] for clause in ground_endpoint["terminal"]["all"]} == {
+            ("role", "access"),
+            ("medium", "rf"),
+            ("mount", expected_mount),
+        }
+        assert {tuple(clause.items())[0] for clause in space_endpoint["terminal"]["all"]} == {
+            ("role", "access"),
+            ("medium", "rf"),
+            ("mount", expected_mount),
+        }
         sat_ids = [n.node_id for n in resolved.nodes if n.orbit is not None]
         assert sat_ids and all(node_id.startswith(f"{expected}-") for node_id in sat_ids), (
             constellation,
@@ -102,11 +160,11 @@ def test_generated_space_segment_is_named_by_orbit_regime() -> None:
         )
 
 
-def test_generate_catalog_session_supports_custom_site_set_object() -> None:
+def test_generate_catalog_session_uses_explicit_site_set_reference() -> None:
     presets = load_constellation_presets()
     site_set_ref = presets["earth-leo-ring-36"].ground_stations
     raw, _resolved, _warnings = _generated_session(
-        constellation="earth-leo-ring-36",
+        constellation=LEO_RING,
         protocol="ospf",
         extensions=[],
         orbit_propagator="j2_mean_elements",
@@ -116,169 +174,18 @@ def test_generate_catalog_session_supports_custom_site_set_object() -> None:
     assert raw["segments"][1]["placement"]["from_site_set"] == site_set_ref
 
 
-def test_generate_session_composes_chosen_satellite_primitive() -> None:
-    """Sessions assemble from primitives: the constellation supplies
-    geometry; the chosen space node primitive flies it. The composed
-    constellation is inlined with the swapped node ref and a distinct id,
-    and the result still resolves through the production resolver."""
-    import yaml as _yaml
-    from nodalarc.resolve_session import resolve_session
-
-    text, _warnings = generate_session_yaml(
-        constellation="earth-leo-ring-36",
-        protocol="isis",
-        extensions=[],
-        orbit_propagator="j2_mean_elements",
-        satellite_type="leo-relay",
-    )
-    raw = _yaml.safe_load(text)
-    space_source = raw["segments"][0]["source"]
-    assert isinstance(space_source, dict)
-    body = space_source["constellation"]
-    assert body["node"] == "nodalarc:nodes/space/leo-relay.yaml"
-    assert body["id"].endswith("-leo-relay")
-    resolved = resolve_session(raw)
-    sats = [n for n in resolved.nodes if n.kind == "satellite"]
-    assert sats
-    assert {t.terminal_id for t in sats[0].terminal_inventory} == {
-        "access_ka",
-        "isl_optical",
-        "relay_optical",
-    }
-
-
-def test_generate_session_accepts_builder_custom_constellation_shape() -> None:
-    custom_constellation = {
-        "constellation": {
-            "id": "custom-10x11-550km",
-            "display_name": "Custom 10x11 550 km shell",
-            "node": "nodalarc:nodes/space/starlink-v2-mesh.yaml",
-            "orbit": {
-                "orbit": {
-                    "id": "custom-10x11-550km-orbit-550km-53deg",
-                    "central_body": "nodalarc:bodies/earth.yaml",
-                    "epoch": "2026-06-08T00:00:00Z",
-                    "shape": {"altitude_km": 550},
-                    "orientation": {
-                        "inclination_deg": 53,
-                        "raan_deg": 0,
-                        "argument_of_perigee_deg": 0,
-                    },
-                    "phase": {"mean_anomaly_deg": 0},
-                    "propagator": "j2_mean_elements",
-                    "reference": "user-authored",
-                    "notes": "Custom orbit generated by the session builder.",
-                }
-            },
-            "planes": {"count": 10, "raan_spacing_deg": 36},
-            "slots_per_plane": 11,
-            "phasing": {"mode": "walker_delta", "phase_offset_deg": 3.273},
-            "node_tags": [{"tag": "all"}],
-            "reference": "user-authored",
-            "notes": "Custom constellation generated by the session builder.",
-        }
-    }
-
-    raw, resolved, warnings = _generated_session(
-        constellation="custom-10x11-550km",
-        protocol="isis",
-        extensions=["sr"],
-        orbit_propagator="j2_mean_elements",
-        area_strategy="per_plane",
-        ground_stations="nodalarc:site-sets/earth/leo/earth-leo-starlink-gateway-sites.yaml",
-        satellite_type="starlink-v2-mesh",
-        custom_constellation=custom_constellation,
-    )
-
-    assert warnings == []
-    assert raw["segments"][0]["id"] == "leo"
-    source = raw["segments"][0]["source"]
-    assert source["constellation"]["id"] == "custom-10x11-550km"
-    assert source["constellation"]["slots_per_plane"] == 11
-    assert source["constellation"]["planes"] == {"count": 10, "raan_spacing_deg": 36}
-    assert raw["link_rules"][1]["topology"]["mode"] == "explicit_pairs"
-    assert len(raw["link_rules"][1]["topology"]["pairs"]) == 220
-    assert raw["routing"]["domains"][0]["capabilities"] == {
-        "segment_routing": {"data_plane": "mpls"}
-    }
-    sats = [node for node in resolved.nodes if node.kind == "satellite"]
-    assert len(sats) == 110
-    assert all(node.node_id.startswith("leo-") for node in sats)
-
-
-def test_generate_session_builds_historical_starlink_576_explicit_mesh() -> None:
-    custom_constellation = {
-        "constellation": {
-            "id": "custom-48x12-550km",
-            "display_name": "Custom 48x12 550 km shell",
-            "node": "nodalarc:nodes/space/starlink-v2-mesh.yaml",
-            "orbit": {
-                "orbit": {
-                    "id": "custom-48x12-550km-orbit-550km-53deg",
-                    "central_body": "nodalarc:bodies/earth.yaml",
-                    "epoch": "2026-06-08T00:00:00Z",
-                    "shape": {"altitude_km": 550},
-                    "orientation": {
-                        "inclination_deg": 53,
-                        "raan_deg": 0,
-                        "argument_of_perigee_deg": 0,
-                    },
-                    "phase": {"mean_anomaly_deg": 0},
-                    "propagator": "j2_mean_elements",
-                    "reference": "user-authored",
-                    "notes": "Custom orbit generated by the session builder.",
-                }
-            },
-            "planes": {"count": 48, "raan_spacing_deg": 7.5},
-            "slots_per_plane": 12,
-            "phasing": {"mode": "walker_delta", "phase_offset_deg": 0.625},
-            "node_tags": [{"tag": "all"}],
-            "reference": "user-authored",
-            "notes": "Custom constellation generated by the session builder.",
-        }
-    }
-
-    raw, resolved, warnings = _generated_session(
-        constellation="custom-48x12-550km",
-        protocol="isis",
-        extensions=["sr"],
-        orbit_propagator="j2_mean_elements",
-        area_strategy="per_plane",
-        ground_stations="nodalarc:site-sets/earth/leo/earth-leo-starlink-gateway-sites.yaml",
-        satellite_type="starlink-v2-mesh",
-        custom_constellation=custom_constellation,
-    )
-
-    assert warnings == []
-    assert raw["segments"][0]["id"] == "leo"
-    assert len([node for node in resolved.nodes if node.kind == "satellite"]) == 576
-    topology = raw["link_rules"][1]["topology"]
-    assert topology["mode"] == "explicit_pairs"
-    assert len(topology["pairs"]) == 1152
-
-    degree: dict[str, int] = {}
-    for pair in topology["pairs"]:
-        degree[pair["a"]] = degree.get(pair["a"], 0) + 1
-        degree[pair["b"]] = degree.get(pair["b"], 0) + 1
-    assert len(degree) == 576
-    assert set(degree.values()) == {4}
-
-
-def test_generate_session_rejects_unknown_satellite_primitive() -> None:
-    with pytest.raises(ValueError, match="Unknown satellite primitive"):
-        generate_session_yaml(
+def test_generate_session_requires_catalog_references() -> None:
+    with pytest.raises(ValueError, match="must be a nodalarc:<path> or user:<path> reference"):
+        assemble_session_document(
             constellation="earth-leo-ring-36",
             protocol="isis",
             extensions=[],
             orbit_propagator="j2_mean_elements",
-            satellite_type="not-a-real-node",
         )
 
-
-def test_generate_catalog_session_rejects_retired_ground_station_lists() -> None:
-    with pytest.raises(ValueError, match="ground station name lists are retired"):
-        generate_session_yaml(
-            constellation="earth-leo-ring-36",
+    with pytest.raises(ValueError, match="must be a nodalarc:<path> or user:<path> reference"):
+        assemble_session_document(
+            constellation=LEO_RING,
             protocol="isis",
             extensions=[],
             orbit_propagator="j2_mean_elements",
@@ -288,8 +195,8 @@ def test_generate_catalog_session_rejects_retired_ground_station_lists() -> None
 
 def test_longest_remaining_pass_generation_requires_horizon() -> None:
     with pytest.raises(ValueError, match="ground_selection_lookahead_horizon_ticks"):
-        generate_session_yaml(
-            constellation="earth-leo-ring-36",
+        assemble_session_document(
+            constellation=LEO_RING,
             protocol="isis",
             extensions=[],
             orbit_propagator="j2_mean_elements",
@@ -299,7 +206,7 @@ def test_longest_remaining_pass_generation_requires_horizon() -> None:
 
 def test_longest_remaining_pass_generation_sets_policy() -> None:
     raw, resolved, _warnings = _generated_session(
-        constellation="earth-leo-ring-36",
+        constellation=LEO_RING,
         protocol="isis",
         extensions=[],
         orbit_propagator="j2_mean_elements",
@@ -318,10 +225,10 @@ def test_longest_remaining_pass_generation_sets_policy() -> None:
     )
 
 
-def test_generate_catalog_session_rejects_future_sgp4_runtime_path() -> None:
-    with pytest.raises(ValueError, match="structurally valid future grammar"):
-        generate_session_yaml(
-            constellation="earth-leo-ring-36",
+def test_generate_catalog_session_rejects_sgp4_for_non_tle_source() -> None:
+    with pytest.raises(ValueError, match="does not match the selected constellation"):
+        assemble_session_document(
+            constellation=LEO_RING,
             protocol="isis",
             extensions=[],
             orbit_propagator="sgp4_tle",
@@ -330,7 +237,7 @@ def test_generate_catalog_session_rejects_future_sgp4_runtime_path() -> None:
 
 def test_generated_session_carries_wizard_timers_into_resolved_domain() -> None:
     raw, resolved, warnings = _generated_session(
-        constellation="earth-leo-ring-36",
+        constellation=LEO_RING,
         protocol="isis",
         extensions=[],
         orbit_propagator="j2_mean_elements",
@@ -354,7 +261,7 @@ def test_generated_session_carries_wizard_timers_into_resolved_domain() -> None:
 
 def test_generated_session_with_default_timers_emits_no_timers_block() -> None:
     raw, resolved, _warnings = _generated_session(
-        constellation="earth-leo-ring-36",
+        constellation=LEO_RING,
         protocol="isis",
         extensions=[],
         orbit_propagator="j2_mean_elements",
@@ -366,22 +273,10 @@ def test_generated_session_with_default_timers_emits_no_timers_block() -> None:
     assert resolved.routing_domains[0].timers.hello_interval_s == 1
 
 
-def test_generator_rejects_retired_routing_config_with_timers_pointer() -> None:
-    with pytest.raises(ValueError, match="timers"):
-        generate_session_yaml(
-            constellation="earth-leo-ring-36",
-            protocol="isis",
-            extensions=[],
-            orbit_propagator="j2_mean_elements",
-            ground_stations="nodalarc:site-sets/earth/leo/earth-leo-starlink-pop-sites.yaml",
-            routing_config={"isis_hello_interval": 5},
-        )
-
-
 def test_generator_rejects_propagator_that_does_not_match_catalog_orbits() -> None:
     with pytest.raises(ValueError, match="does not match the selected"):
-        generate_session_yaml(
-            constellation="earth-leo-ring-36",
+        assemble_session_document(
+            constellation=LEO_RING,
             protocol="isis",
             extensions=[],
             orbit_propagator="two_body",

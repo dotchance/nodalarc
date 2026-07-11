@@ -295,8 +295,8 @@ export function Scene({
     setPlaybackPaused(playbackPaused);
   }, [playbackPaused]);
 
-  // Drive the SGP4 worker on ephemeris change (mirrors GlobeView). The Constellation reads
-  // worker positions, falling back to main-thread propagation when the worker is unavailable.
+  // Drive the Keplerian/J2 worker on ephemeris change. The Constellation reads worker
+  // positions, falls back to main-thread propagation, and uses snapshots for TLE nodes.
   useEffect(() => {
     if (!ephemeris) return;
     initWorkerBridge();

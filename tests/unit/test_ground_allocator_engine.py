@@ -4,8 +4,11 @@
 
 from __future__ import annotations
 
-from nodalarc.models.ground_policy import HandoverPolicySpec, SelectionPolicySpec
-from nodalarc.models.ground_station import HysteresisParameters
+from nodalarc.models.ground_policy import (
+    HandoverPolicySpec,
+    HysteresisParameters,
+    SelectionPolicySpec,
+)
 from ome.ground_allocator import allocate_ground_links
 from ome.types import MbbTeardown
 from ome.visibility import GroundVisibility
@@ -73,6 +76,10 @@ def _sat_body_pools(
     }
 
 
+def _gs_pools(gs_terminals: dict[str, int]) -> dict[str, tuple[int, ...]]:
+    return {gs_id: tuple(range(count)) for gs_id, count in gs_terminals.items()}
+
+
 def _allocate(
     visible: list[GroundVisibility],
     *,
@@ -92,7 +99,7 @@ def _allocate(
         ground_station_ids={"gs-A"},
         current_associations=current or {},
         pending_teardowns=pending or {},
-        gs_terminal_counts={"gs-A": gs_terminals},
+        gs_terminal_indices=_gs_pools({"gs-A": gs_terminals}),
         **_policy_kwargs(
             {"gs-A"},
             policy=policy,
@@ -265,7 +272,7 @@ def test_pending_teardown_expires_after_overlap_window():
         ground_station_ids={"gs-A"},
         current_associations={old_pair: (0, 0), new_pair: (1, 0)},
         pending_teardowns={old_pair: MbbTeardown(10, new_pair)},
-        gs_terminal_counts={"gs-A": 2},
+        gs_terminal_indices=_gs_pools({"gs-A": 2}),
         **_policy_kwargs({"gs-A"}, handover_mode="mbb"),
         gs_min_elevations={"gs-A": 25.0},
         gs_service_priorities={"gs-A": 10},
@@ -389,7 +396,7 @@ def test_acquire_avoids_satellite_terminal_vacated_by_another_station():
         ground_station_ids={"gs-A", "gs-B"},
         current_associations={("gs-A", "sat-X"): (0, 0)},
         pending_teardowns={},
-        gs_terminal_counts={"gs-A": 1, "gs-B": 1},
+        gs_terminal_indices=_gs_pools({"gs-A": 1, "gs-B": 1}),
         **_policy_kwargs({"gs-A", "gs-B"}),
         gs_min_elevations={"gs-A": 25.0, "gs-B": 25.0},
         gs_service_priorities={"gs-A": 10, "gs-B": 10},
@@ -432,7 +439,7 @@ def test_new_challenger_avoids_terminal_freed_by_expiring_teardown():
         ground_station_ids={"gs-A"},
         current_associations={old_pair: (0, 0), successor_pair: (1, 0)},
         pending_teardowns={old_pair: MbbTeardown(10, successor_pair)},
-        gs_terminal_counts={"gs-A": 4},
+        gs_terminal_indices=_gs_pools({"gs-A": 4}),
         **_policy_kwargs({"gs-A"}, handover_mode="mbb"),
         gs_min_elevations={"gs-A": 25.0},
         gs_service_priorities={"gs-A": 10},
@@ -495,7 +502,7 @@ def test_unscheduled_pair_sat_capacity_exhausted():
         ground_station_ids={"gs-A", "gs-B"},
         current_associations={},
         pending_teardowns={},
-        gs_terminal_counts={"gs-A": 2, "gs-B": 2},
+        gs_terminal_indices=_gs_pools({"gs-A": 2, "gs-B": 2}),
         **_policy_kwargs({"gs-A", "gs-B"}),
         gs_min_elevations={"gs-A": 25.0, "gs-B": 25.0},
         gs_service_priorities={"gs-A": 10, "gs-B": 10},
@@ -629,7 +636,7 @@ def test_unscheduled_pair_replaced_by_successor_when_teardown_expires():
         ground_station_ids={"gs-A"},
         current_associations={old_pair: (0, 0), new_pair: (1, 0)},
         pending_teardowns={old_pair: MbbTeardown(10, new_pair)},
-        gs_terminal_counts={"gs-A": 2},
+        gs_terminal_indices=_gs_pools({"gs-A": 2}),
         **_policy_kwargs({"gs-A"}, handover_mode="mbb"),
         gs_min_elevations={"gs-A": 25.0},
         gs_service_priorities={"gs-A": 10},
@@ -730,7 +737,7 @@ def test_allocator_rejects_unsupported_multi_overlap_mbb_reserve():
             ground_station_ids={"gs-A"},
             current_associations={},
             pending_teardowns={},
-            gs_terminal_counts={"gs-A": 4},
+            gs_terminal_indices=_gs_pools({"gs-A": 4}),
             **_policy_kwargs({"gs-A"}, handover_mode="mbb", mbb_reserve=2),
             gs_min_elevations={"gs-A": 25.0},
             gs_service_priorities={"gs-A": 10},
@@ -764,7 +771,7 @@ def test_missing_tenant_id_fails_loudly():
             ground_station_ids={"gs-A"},
             current_associations={},
             pending_teardowns={},
-            gs_terminal_counts={"gs-A": 1},
+            gs_terminal_indices=_gs_pools({"gs-A": 1}),
             **_policy_kwargs({"gs-A"}),
             gs_min_elevations={"gs-A": 25.0},
             gs_service_priorities={"gs-A": 10},
@@ -798,7 +805,7 @@ def test_missing_reference_body_fails_loudly():
             ground_station_ids={"gs-A"},
             current_associations={},
             pending_teardowns={},
-            gs_terminal_counts={"gs-A": 1},
+            gs_terminal_indices=_gs_pools({"gs-A": 1}),
             **_policy_kwargs({"gs-A"}),
             gs_min_elevations={"gs-A": 25.0},
             gs_service_priorities={"gs-A": 10},
@@ -872,7 +879,7 @@ def test_default_ranking_order_prefers_candidate_specific_scarce_satellite_capac
         ground_station_ids={"gs-A"},
         current_associations={},
         pending_teardowns={},
-        gs_terminal_counts={"gs-A": 1},
+        gs_terminal_indices=_gs_pools({"gs-A": 1}),
         **_policy_kwargs({"gs-A"}),
         gs_min_elevations={"gs-A": 25.0},
         gs_service_priorities={"gs-A": 10},
@@ -923,7 +930,7 @@ def test_configured_ranking_order_can_prioritize_per_gs_rank_before_service_prio
         ground_station_ids={"gs-A", "gs-B"},
         current_associations={},
         pending_teardowns={},
-        gs_terminal_counts={"gs-A": 1, "gs-B": 1},
+        gs_terminal_indices=_gs_pools({"gs-A": 1, "gs-B": 1}),
         **{
             **_policy_kwargs({"gs-A", "gs-B"}),
             "ranking_order": ("selection_score", "service_priority", "lex_pair"),
@@ -962,7 +969,7 @@ def test_mbb_failed_successor_hard_release_drops_visible_old_pair():
         ground_station_ids={"gs-A"},
         current_associations={old_pair: (0, 0)},
         pending_teardowns={old_pair: MbbTeardown(10, successor_pair)},
-        gs_terminal_counts={"gs-A": 2},
+        gs_terminal_indices=_gs_pools({"gs-A": 2}),
         **_policy_kwargs({"gs-A"}, handover_mode="mbb"),
         gs_min_elevations={"gs-A": 25.0},
         gs_service_priorities={"gs-A": 10},
@@ -1011,7 +1018,7 @@ def test_mbb_visible_successor_missing_from_current_emits_failed_acquire_event()
         ground_station_ids={"gs-A"},
         current_associations={old_pair: (0, 0)},
         pending_teardowns={old_pair: MbbTeardown(10, successor_pair)},
-        gs_terminal_counts={"gs-A": 2},
+        gs_terminal_indices=_gs_pools({"gs-A": 2}),
         **_policy_kwargs({"gs-A"}, handover_mode="mbb"),
         gs_min_elevations={"gs-A": 25.0},
         gs_service_priorities={"gs-A": 10},
@@ -1057,7 +1064,7 @@ def test_mbb_failed_successor_soft_retain_keeps_visible_old_pair():
         ground_station_ids={"gs-A"},
         current_associations={old_pair: (0, 0)},
         pending_teardowns={old_pair: MbbTeardown(10, successor_pair)},
-        gs_terminal_counts={"gs-A": 2},
+        gs_terminal_indices=_gs_pools({"gs-A": 2}),
         **kwargs,
         gs_min_elevations={"gs-A": 25.0},
         gs_service_priorities={"gs-A": 10},
@@ -1123,7 +1130,7 @@ def test_sat_capacity_rechecked_after_same_tick_release_from_other_partition():
         ground_station_ids={"gs-A", "gs-B"},
         current_associations={old_pair: (0, 0)},
         pending_teardowns={},
-        gs_terminal_counts={"gs-A": 1, "gs-B": 1},
+        gs_terminal_indices=_gs_pools({"gs-A": 1, "gs-B": 1}),
         **_policy_kwargs({"gs-A", "gs-B"}, handover_policy="none"),
         gs_min_elevations={"gs-A": 25.0, "gs-B": 25.0},
         gs_service_priorities={"gs-A": 10, "gs-B": 1},
@@ -1160,7 +1167,7 @@ def test_sat_capacity_arbitration_can_displace_lower_rank_same_partition_incumbe
         ground_station_ids={"gs-A", "gs-B"},
         current_associations={incumbent: (0, 0)},
         pending_teardowns={},
-        gs_terminal_counts={"gs-A": 1, "gs-B": 1},
+        gs_terminal_indices=_gs_pools({"gs-A": 1, "gs-B": 1}),
         **_policy_kwargs({"gs-A", "gs-B"}),
         gs_min_elevations={"gs-A": 25.0, "gs-B": 25.0},
         gs_service_priorities={"gs-A": 10, "gs-B": 1},
@@ -1245,7 +1252,7 @@ def test_satellite_terminal_indices_are_allocated_from_matching_reference_body_p
         ground_station_ids={"gs-earth", "gs-luna"},
         current_associations={},
         pending_teardowns={},
-        gs_terminal_counts={"gs-earth": 1, "gs-luna": 1},
+        gs_terminal_indices=_gs_pools({"gs-earth": 1, "gs-luna": 1}),
         **_policy_kwargs({"gs-earth", "gs-luna"}),
         gs_min_elevations={"gs-earth": 25.0, "gs-luna": 25.0},
         gs_service_priorities={"gs-earth": 10, "gs-luna": 1},
@@ -1260,6 +1267,37 @@ def test_satellite_terminal_indices_are_allocated_from_matching_reference_body_p
     assert result.associations[("gs-luna", "sat-relay")] == (0, 1)
     assert result.associations[("gs-earth", "sat-relay")] == (0, 0)
     assert result.unscheduled_pairs == ()
+
+
+def test_allocator_preserves_nonzero_global_access_interface_indices():
+    result = allocate_ground_links(
+        step=0,
+        visible_per_station={
+            "gs-A": [
+                GroundVisibility(
+                    sat_id="sat-relay",
+                    visible=True,
+                    elevation_deg=60.0,
+                    range_km=900.0,
+                    remaining_visible_s=None,
+                    reject_reason="ok",
+                )
+            ]
+        },
+        ground_station_ids={"gs-A"},
+        current_associations={},
+        pending_teardowns={},
+        gs_terminal_indices={"gs-A": (2, 3)},
+        **_policy_kwargs({"gs-A"}),
+        gs_min_elevations={"gs-A": 25.0},
+        gs_service_priorities={"gs-A": 10},
+        gs_tenant_ids={"gs-A": "default"},
+        gs_reference_bodies={"gs-A": "earth"},
+        sat_ground_terminals={"sat-relay": 2},
+        sat_ground_terminal_indices_by_body={"sat-relay": {"earth": (5, 6)}},
+    )
+
+    assert result.associations == {("gs-A", "sat-relay"): (2, 5)}
 
 
 def test_existing_association_with_wrong_body_terminal_index_fails_loudly():
@@ -1285,7 +1323,7 @@ def test_existing_association_with_wrong_body_terminal_index_fails_loudly():
             ground_station_ids={"gs-luna"},
             current_associations={pair: (0, 0)},
             pending_teardowns={},
-            gs_terminal_counts={"gs-luna": 1},
+            gs_terminal_indices=_gs_pools({"gs-luna": 1}),
             **_policy_kwargs({"gs-luna"}),
             gs_min_elevations={"gs-luna": 25.0},
             gs_service_priorities={"gs-luna": 1},
@@ -1319,7 +1357,7 @@ def test_allocator_rejects_unimplemented_multi_tick_bbm_gap_timeout():
             ground_station_ids={"gs-A"},
             current_associations={},
             pending_teardowns={},
-            gs_terminal_counts={"gs-A": 1},
+            gs_terminal_indices=_gs_pools({"gs-A": 1}),
             **{
                 **_policy_kwargs({"gs-A"}),
                 "bbm_acquire_timeout_ticks": 2,

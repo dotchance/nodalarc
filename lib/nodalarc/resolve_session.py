@@ -2,9 +2,8 @@
 # Licensed under the Apache License, Version 2.0. See LICENSE file.
 """Catalog session resolver.
 
-This module is the single authority that turns the catalog configuration
-language into immutable runtime truth. It rejects retired session shapes and
-does not project catalog sessions back into the old session model.
+This module is the single authority that turns the canonical catalog
+configuration language into immutable runtime truth.
 """
 
 from __future__ import annotations
@@ -14,13 +13,15 @@ import math
 import re
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-import yaml
-from pydantic import ValidationError
-
+from nodalarc.body_frames import BodyFrame, body_runtime_support_for
 from nodalarc.catalog_paths import CatalogRoots, resolve_catalog_reference
+from nodalarc.catalog_refs import CatalogRef
+from nodalarc.catalog_registry import validate_referenced_configuration_document
+from nodalarc.configuration_yaml import load_configuration_yaml
 from nodalarc.ephemeris_runtime import (
     EphemerisValidationError,
     runtime_config_from_resolved,
@@ -28,8 +29,6 @@ from nodalarc.ephemeris_runtime import (
     validate_ephemeris_manifest,
 )
 from nodalarc.link_rule_candidates import generate_declared_link_candidates
-from nodalarc.models.builder_world import BuilderNodeInterfaceFacts, BuilderRuleAllocation
-from nodalarc.models.catalog import validate_catalog_document, validate_catalog_value
 from nodalarc.models.identity import IdentityMode
 from nodalarc.models.link_rules import LinkRule, NodeSelector, TerminalSelector
 from nodalarc.models.resolved_session import (
@@ -51,8 +50,15 @@ from nodalarc.models.resolved_session import (
     SidBlock,
     SourceContext,
 )
-from nodalarc.models.segment_session import Dispatch, RoutingTimers, SegmentSessionConfig
+from nodalarc.models.segment_session import (
+    Dispatch,
+    RoutingDomain,
+    RoutingTimers,
+    SegmentSessionConfig,
+)
 from nodalarc.models.segments import GroundOverride, GroundSegment, SegmentClock, SpaceSegment
+from nodalarc.models.terminal_physics import SatGroundTerminalBoresight, TerminalBoresight
+from nodalarc.propagator import propagate_sgp4_tle
 from nodalarc.runtime_naming import validate_runtime_node_id
 from nodalarc.runtime_support import (
     FeatureCategory,
@@ -60,6 +66,7 @@ from nodalarc.runtime_support import (
     UnsupportedFeature,
     UnsupportedFeatureError,
 )
+from nodalarc.tle import tle_mean_elements
 
 _NORMALIZE_RE = re.compile(r"[^a-z0-9-]+")
 _DEFAULT_GENERATED_SPACE_LOOPBACK_IPV4_POOL = ipaddress.ip_network("100.64.0.0/10")
@@ -69,13 +76,10 @@ _DEFAULT_GENERATED_SPACE_LOOPBACK_IPV6_POOL = ipaddress.ip_network("fd00:6e0::/6
 class SessionResolutionError(ValueError):
     """Raised when a catalog session is structurally valid but semantically invalid.
 
-    Refusals are addressed mail, not broadcast: a raise site that knows which
-    authored object failed ships that scope so consumers can land the message
-    on the owning editor. ``subject_id`` is the SERIALIZED object id (the
-    grammar document's id); ``segment_id`` is the draft-addressable scope for
-    node-level walls (raw runtime node ids are not client-routable — the
-    builder has no per-node editors and the world is null at failure time).
-    Unmigrated raise sites ship no scope and behave exactly as before.
+    A raise site that knows which authored object failed may attach its
+    persisted object or segment identity so authoring clients can associate the
+    refusal with the responsible input. Raise sites without that context remain
+    valid unscoped semantic failures.
     """
 
     def __init__(
@@ -136,28 +140,12 @@ def resolve_session_with_assets(
     runtime_support: RuntimeSupport | None = None,
     source_context: SourceContext | None = None,
 ) -> SessionResolution:
-    if not isinstance(raw_session, dict):
-        raise SessionResolutionError("session YAML must parse to a mapping")
-    if "segments" not in raw_session:
-        raise SessionResolutionError("catalog session YAML requires top-level segments")
-    for retired in ("constellation", "ground_stations", "satellite_type"):
-        if retired in raw_session:
-            raise SessionResolutionError(
-                f"retired top-level session key is not supported: {retired}"
-            )
-
     if source_context is not None and not isinstance(source_context, SourceContext):
         raise SessionResolutionError("source_context must be a SourceContext instance")
 
     roots = catalog_roots or default_catalog_roots()
     context = source_context or SourceContext(origin="resolve_session")
-    try:
-        cfg = SegmentSessionConfig.model_validate(raw_session)
-    except ValidationError:
-        raise
-    except Exception as exc:
-        raise SessionResolutionError(f"invalid catalog session: {exc}") from exc
-
+    cfg = SegmentSessionConfig.model_validate(raw_session)
     # The runtime-support gate is mandatory. Production always runs the
     # Earth-Luna profile; callers may only widen/narrow it explicitly. A None
     # here must never mean "skip the typed UnsupportedFeature layer".
@@ -166,8 +154,7 @@ def resolve_session_with_assets(
 
     runtime_nodes = _apply_addressing(cfg, _expand_segments(cfg, roots))
     resolved_nodes = tuple(item.node for item in runtime_nodes)
-    _validate_allocator_wide_scheduling(resolved_nodes)
-    _validate_orbit_default_propagator(cfg, resolved_nodes)
+    _check_ground_scheduling_support(resolved_nodes, support)
     body_facts = _collect_body_facts(runtime_nodes)
     _check_body_support(resolved_nodes, body_facts, support)
     _check_propagator_support(resolved_nodes, support)
@@ -215,6 +202,8 @@ def resolve_session_with_assets(
         time=base_resolved.time,
         source_context=base_resolved.source_context,
     )
+    _validate_access_ground_scheduling(resolved)
+    _validate_allocator_wide_scheduling(resolved)
     return SessionResolution(resolved=resolved, catalog_session=cfg)
 
 
@@ -233,7 +222,7 @@ def load_session_resolution_from_file(
     run_id: str | None = None,
 ) -> SessionResolution:
     path = Path(session_path)
-    raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    raw = load_configuration_yaml(path.read_text(encoding="utf-8"))
     return resolve_session_with_assets(
         raw,
         catalog_roots=catalog_roots,
@@ -246,17 +235,22 @@ def _check_runtime_support(
     cfg: SegmentSessionConfig, support: RuntimeSupport, roots: CatalogRoots
 ) -> None:
     unsupported = []
+    explicit_node_clocks: list[dict[str, Any]] = []
     for segment in cfg.segments:
         if isinstance(segment, GroundSegment):
             kind = "ground_set"
         elif isinstance(segment, SpaceSegment):
             # The segment class does not identify the source wrapper: a
-            # SpaceSegment can carry a constellation, a single space_node, or
-            # a space_node_set, and each is a distinct supported feature. The
-            # gate must key on the loaded wrapper, not the segment class.
+            # SpaceSegment can carry a constellation or space_node_set, and
+            # each is a distinct supported feature. The gate must key on the
+            # loaded wrapper, not the segment class.
             with _segment_scope(segment.id):
-                wrapper, _ = _load_ref_or_object(segment.source, roots)
+                wrapper, source = _load_ref_or_object(segment.source, roots)
             kind = wrapper
+            if wrapper == "space_node_set":
+                explicit_node_clocks.extend(
+                    entry["clock"] for entry in source["nodes"] if entry.get("clock") is not None
+                )
         else:
             kind = "lagrange_point"
         if feature := support.check_segment_kind(kind):
@@ -268,24 +262,40 @@ def _check_runtime_support(
     for domain in cfg.routing.domains if cfg.routing is not None else ():
         if feature := support.check_routing_protocol(domain.protocol):
             unsupported.append(feature)
+        if domain.capabilities is not None:
+            for capability in ("mpls", "segment_routing", "traffic_engineering"):
+                if getattr(domain.capabilities, capability) is not None and (
+                    feature := support.check_routing_capability(domain.protocol, capability)
+                ):
+                    unsupported.append(feature)
     if cfg.addressing is not None:
-        for pool_class in ("point_to_point", "terrestrial_prefixes"):
-            if getattr(cfg.addressing, pool_class) and (
-                feature := support.check_addressing_pool(pool_class)
-            ):
+        for pool_class in ("loopbacks", "point_to_point", "terrestrial_prefixes"):
+            assignments = getattr(cfg.addressing, pool_class) or ()
+            if assignments and (feature := support.check_addressing_pool(pool_class)):
                 unsupported.append(feature)
-        for assignment in cfg.addressing.loopbacks or ():
-            if assignment.allocation not in (None, "by_node_order"):
-                unsupported.append(
-                    support._unsupported(
-                        FeatureCategory.ADDRESSING_POOL,
-                        f"allocation:{assignment.allocation}",
-                        "address pool allocation strategy",
-                    )
-                )
+            for assignment in assignments:
+                allocation = assignment.allocation or "by_node_order"
+                if feature := support.check_address_allocation(allocation):
+                    unsupported.append(feature)
+    for rule in cfg.link_rules or ():
+        if feature := support.check_link_topology(rule.topology.mode):
+            unsupported.append(feature)
+        if rule.constraints is not None:
+            for constraint in (
+                "max_links_per_node",
+                "max_range_km",
+                "require_mutual_visibility",
+            ):
+                if getattr(rule.constraints, constraint) is not None and (
+                    feature := support.check_link_constraint(constraint)
+                ):
+                    unsupported.append(feature)
     for segment in cfg.segments:
         clock = getattr(segment, "clock", None)
         if clock is not None and (feature := support.check_clock_model(clock.model)):
+            unsupported.append(feature)
+    for clock in explicit_node_clocks:
+        if feature := support.check_clock_model(clock["model"]):
             unsupported.append(feature)
     for boundary in (
         cfg.routing.boundaries if cfg.routing is not None and cfg.routing.boundaries else ()
@@ -506,8 +516,21 @@ def _expand_segments(cfg: SegmentSessionConfig, roots: CatalogRoots) -> tuple[_R
                 ordered.extend(_expand_space_segment(segment, roots))
             elif isinstance(segment, GroundSegment):
                 site_set = _load_expected(segment.placement.from_site_set, roots, "site_set")
-                for site_ref in site_set["sites"]:
-                    site = _load_expected(site_ref, roots, "site")
+                sites = tuple(
+                    _load_expected(site_ref, roots, "site") for site_ref in site_set["sites"]
+                )
+                placed_site_ids = {site["id"] for site in sites}
+                unknown_override_sites = sorted(
+                    override.match.site
+                    for override in segment.overrides or ()
+                    if override.match.site not in placed_site_ids
+                )
+                if unknown_override_sites:
+                    raise SessionResolutionError(
+                        f"ground segment {segment.id!r} override targets site id(s) absent "
+                        f"from its selected site set: {unknown_override_sites}"
+                    )
+                for site in sites:
                     site_id = site["id"]
                     placement = placements.get(site_id)
                     if placement is None:
@@ -536,13 +559,19 @@ def _expand_space_segment(segment: SpaceSegment, roots: CatalogRoots) -> list[_R
         return _expand_constellation_segment(segment, source, roots)
     if wrapper == "space_node_set":
         expanded = []
-        for entry in source["nodes"]:
-            expanded.append(_space_node_from_entry(segment, entry, roots))
+        for source_slot, entry in enumerate(source["nodes"]):
+            expanded.append(
+                _space_node_from_entry(
+                    segment,
+                    entry,
+                    roots,
+                    source_slot=source_slot,
+                )
+            )
         return expanded
-    if wrapper == "space_node":
-        return [_space_node_from_entry(segment, source, roots)]
     raise SessionResolutionError(
-        f"space segment {segment.id!r} source must be constellation, space_node, or space_node_set; got {wrapper!r}"
+        f"space segment {segment.id!r} source must be constellation or space_node_set; "
+        f"got {wrapper!r}"
     )
 
 
@@ -600,11 +629,16 @@ def _expand_constellation_segment(
 
 
 def _space_node_from_entry(
-    segment: SpaceSegment, entry: dict[str, Any], roots: CatalogRoots
+    segment: SpaceSegment,
+    entry: dict[str, Any],
+    roots: CatalogRoots,
+    *,
+    source_slot: int,
 ) -> _RuntimeNode:
     node = _load_expected(entry["node"], roots, "node")
     orbit = _load_expected(entry["orbit"], roots, "orbit") if "orbit" in entry else None
-    if orbit is None:
+    tle = entry.get("sgp4_tle")
+    if orbit is None and tle is None:
         raise UnsupportedFeatureError(
             [
                 UnsupportedFeature(
@@ -618,9 +652,30 @@ def _space_node_from_entry(
                 )
             ]
         )
-    body = _load_expected(orbit["central_body"], roots, "body") if orbit is not None else None
+    if tle is not None:
+        body = _load_expected(tle["central_body"], roots, "body")
+        orbit_facts = _tle_orbit_facts(entry["id"], tle, body)
+        plane = 0
+        slot = source_slot
+    else:
+        body = _load_expected(orbit["central_body"], roots, "body")
+        orbit_facts = _orbit_facts(
+            orbit,
+            body,
+            plane=None,
+            slot=None,
+            planes=None,
+            slots_per_plane=None,
+            raan_spacing_deg=0.0,
+            phase_offset_deg=0.0,
+        )
+        plane = None
+        slot = None
     local_id = entry["id"]
     tags = tuple(sorted({*(segment.tags or ()), *(entry.get("tags") or ())}))
+    entry_clock = (
+        SegmentClock.model_validate(entry["clock"]) if entry.get("clock") is not None else None
+    )
     return _RuntimeNode(
         node=_resolved_space_node(
             runtime_id=_runtime_id(segment.id, local_id),
@@ -628,27 +683,68 @@ def _space_node_from_entry(
             segment_id=segment.id,
             source_node=node,
             body=body,
-            orbit=_orbit_facts(
-                orbit,
-                body,
-                plane=None,
-                slot=None,
-                planes=None,
-                slots_per_plane=None,
-                raan_spacing_deg=0.0,
-                phase_offset_deg=0.0,
-            ),
+            orbit=orbit_facts,
             tags=tags,
             roots=roots,
-            clock=segment.clock,
-            plane=None,
-            slot=None,
+            clock=entry_clock or segment.clock,
+            plane=plane,
+            slot=slot,
         ),
         body_facts=(_body_facts_from_catalog(body),),
     )
 
 
+def _tle_orbit_facts(
+    node_id: str,
+    tle: dict[str, Any],
+    body: dict[str, Any],
+) -> ResolvedOrbitFacts:
+    if body["id"] != "earth":
+        raise SessionResolutionError(
+            f"space node {node_id!r} uses sgp4_tle with central body {body['id']!r}; "
+            "SGP4/TLE placement is Earth-only"
+        )
+    line_1 = tle["line_1"]
+    line_2 = tle["line_2"]
+    elements = tle_mean_elements(
+        line_1,
+        line_2,
+        gravitational_parameter_km3_s2=float(body["gravitational_parameter_km3_s2"]),
+    )
+    epoch = datetime.fromtimestamp(elements.epoch_unix, UTC).isoformat().replace("+00:00", "Z")
+    return ResolvedOrbitFacts(
+        orbit_id=f"{node_id}-sgp4-tle",
+        central_body="earth",
+        epoch=epoch,
+        propagator="sgp4_tle",
+        semi_major_axis_km=elements.semi_major_axis_km,
+        eccentricity=elements.eccentricity,
+        inclination_deg=elements.inclination_deg,
+        raan_deg=elements.raan_deg,
+        argument_of_perigee_deg=elements.argument_of_perigee_deg,
+        mean_anomaly_deg=elements.mean_anomaly_deg,
+        tle_line_1=line_1,
+        tle_line_2=line_2,
+        norad_id=elements.norad_id,
+    )
+
+
 _ALLOCATOR_WIDE_SCHEDULING_FIELDS = (
+    "ranking_order",
+    "handover_concurrency",
+    "mbb_preemption",
+    "successor_abort_policy",
+    "cross_tenant_displacement",
+    "bbm_acquire_timeout_ticks",
+)
+
+_REQUIRED_ACCESS_GROUND_SCHEDULING_FIELDS = (
+    "selection_policy",
+    "handover_policy",
+    "handover_mode",
+    "mbb_overlap_ticks",
+    "mbb_reserve",
+    "handover_concurrency",
     "ranking_order",
     "mbb_preemption",
     "successor_abort_policy",
@@ -672,37 +768,87 @@ def _merge_ground_scheduling(
     return merged
 
 
-def _validate_orbit_default_propagator(
-    cfg: SegmentSessionConfig, nodes: tuple[ResolvedNode, ...]
+def _check_ground_scheduling_support(
+    nodes: tuple[ResolvedNode, ...], support: RuntimeSupport
 ) -> None:
-    """orbit.default_propagator is structurally inert — reject it.
+    unsupported: list[UnsupportedFeature] = []
+    seen: set[tuple[FeatureCategory, str]] = set()
 
-    The grammar requires every orbit primitive to declare its propagator, so a
-    session-level default can never apply, and one declared value cannot be
-    honest for mixed-propagator sessions. A field that can never do anything
-    must not validate as if it did.
-    """
-    if cfg.orbit is None or cfg.orbit.default_propagator is None:
-        return
-    actual = sorted({node.orbit.propagator for node in nodes if node.orbit is not None})
-    raise SessionResolutionError(
-        "orbit.default_propagator is inert: orbit primitives always declare their "
-        f"propagator (this session resolves {actual}); remove the orbit block"
-    )
+    def add(feature: UnsupportedFeature | None) -> None:
+        if feature is None or (feature.category, feature.value) in seen:
+            return
+        seen.add((feature.category, feature.value))
+        unsupported.append(feature)
+
+    for node in nodes:
+        scheduling = node.ground_scheduling
+        if scheduling is None:
+            continue
+        if scheduling.handover_concurrency is not None:
+            add(support.check_ground_handover_concurrency(scheduling.handover_concurrency))
+        if scheduling.mbb_reserve is not None:
+            add(support.check_ground_mbb_reserve(scheduling.mbb_reserve))
+        if scheduling.bbm_acquire_timeout_ticks is not None:
+            add(
+                support.check_ground_bbm_acquire_timeout_ticks(scheduling.bbm_acquire_timeout_ticks)
+            )
+    if unsupported:
+        raise UnsupportedFeatureError(unsupported)
 
 
-def _validate_allocator_wide_scheduling(nodes: tuple[ResolvedNode, ...]) -> None:
+def _validate_access_ground_scheduling(resolved: ResolvedSession) -> None:
+    required_ground_ids = set(resolved.ground_candidate_satellites_by_gs())
+    nodes = {node.node_id: node for node in resolved.nodes}
+    for node_id in sorted(required_ground_ids):
+        scheduling = nodes[node_id].ground_scheduling
+        if scheduling is None:
+            raise SessionResolutionError(
+                f"ground station {node_id!r} participates in access candidates and "
+                "requires explicit ground scheduling"
+            )
+        missing = [
+            field
+            for field in _REQUIRED_ACCESS_GROUND_SCHEDULING_FIELDS
+            if getattr(scheduling, field) is None
+        ]
+        if missing:
+            raise SessionResolutionError(
+                f"ground station {node_id!r} participates in access candidates and has "
+                f"incomplete ground scheduling; missing: {', '.join(missing)}"
+            )
+        mode = scheduling.handover_mode
+        overlap_ticks = scheduling.mbb_overlap_ticks
+        reserve = scheduling.mbb_reserve
+        if mode is None or overlap_ticks is None or reserve is None:
+            raise SessionResolutionError(
+                f"ground station {node_id!r} has incomplete handover scheduling"
+            )
+        if mode == "bbm":
+            if overlap_ticks != 0 or reserve != 0:
+                raise SessionResolutionError(
+                    f"ground station {node_id!r} uses BBM and requires "
+                    "mbb_overlap_ticks=0 and mbb_reserve=0"
+                )
+        elif overlap_ticks <= 0 or reserve <= 0:
+            raise SessionResolutionError(
+                f"ground station {node_id!r} uses MBB and requires positive "
+                "mbb_overlap_ticks and mbb_reserve"
+            )
+
+
+def _validate_allocator_wide_scheduling(resolved: ResolvedSession) -> None:
     """Allocator-wide scheduling knobs must be uniform across every ground
     node at resolve time.
 
-    The OME allocator is a single decision-maker; per-node divergence of these
-    fields has no runtime meaning and previously died late with an untyped
-    error at OME-input build.
+    The OME allocator is a single decision-maker for ground nodes that
+    participate in access candidates. Per-node divergence of these fields has
+    no runtime meaning and previously died late at OME-input build.
     """
     baseline: dict[str, Any] | None = None
     baseline_node: str | None = None
-    for node in nodes:
-        if node.kind != "ground_station" or node.ground_scheduling is None:
+    required_ground_ids = set(resolved.ground_candidate_satellites_by_gs())
+    for node in resolved.nodes:
+        if node.node_id not in required_ground_ids or node.ground_scheduling is None:
             continue
         values = {
             field: getattr(node.ground_scheduling, field)
@@ -769,13 +915,20 @@ def _expand_site_placement(placement: _SitePlacement, roots: CatalogRoots) -> li
     # identical-or-reject.
     policies = [_effective_site_policy(segment, site_id) for segment in placement.segments]
     base_scheduling, base_originated, _ = policies[0]
+    clocks = tuple(segment.clock or SegmentClock() for segment in placement.segments)
+    base_clock = clocks[0]
     for index in range(1, len(policies)):
         scheduling, originated, _ = policies[index]
-        if scheduling != base_scheduling or originated != base_originated:
+        if (
+            scheduling != base_scheduling
+            or originated != base_originated
+            or clocks[index] != base_clock
+        ):
             raise SessionResolutionError(
                 f"site {site_id!r} is placed by groups {list(groups)!r} with conflicting "
                 f"apply/override policy (group {groups[index]!r} differs from {groups[0]!r}); "
-                "tags may differ per group, scheduling and originated_prefixes must be identical"
+                "tags may differ per group, but clock, scheduling, and "
+                "originated_prefixes must be identical"
             )
     tags: set[str] = set()
     for _, _, group_tags in policies:
@@ -807,10 +960,6 @@ def _expand_site_placement(placement: _SitePlacement, roots: CatalogRoots) -> li
         )
 
     expanded: list[_RuntimeNode] = []
-    clock = next(
-        (segment.clock for segment in placement.segments if segment.clock is not None),
-        None,
-    )
     for site_node in site["nodes"]:
         source_node = _load_expected(site_node["model"], roots, "node")
         # Ground identity is site-anchored: a node's name never depends on
@@ -818,6 +967,8 @@ def _expand_site_placement(placement: _SitePlacement, roots: CatalogRoots) -> li
         # site-qualified form so `node:` selectors stay unique.
         local_id = f"{site_id}-{site_node['id']}"
         runtime_id = _runtime_id(site_id, site_node["id"])
+        _validate_ethernet_inventory(runtime_id, source_node, ground=True)
+        _validate_payload_installations(runtime_id, source_node, site_node)
         _reject_unsupported_node_payloads(runtime_id, source_node, site_node)
         node_tags = set(tags)
         node_tags.update(site_node.get("tags") or ())
@@ -840,7 +991,13 @@ def _expand_site_placement(placement: _SitePlacement, roots: CatalogRoots) -> li
                     tags=tuple(sorted(node_tags)),
                     tenant_id=site_node.get("tenant_id") or "default",
                     terminal_inventory=tuple(
-                        _terminal_blocks_for_site_node(runtime_id, source_node, site_node, roots)
+                        _terminal_blocks_for_site_node(
+                            runtime_id,
+                            source_node,
+                            site_node,
+                            roots,
+                            body_id=body["id"],
+                        )
                     ),
                     interfaces=_interfaces_from_site_node(site_node),
                     wan_interfaces=tuple(
@@ -856,12 +1013,33 @@ def _expand_site_placement(placement: _SitePlacement, roots: CatalogRoots) -> li
                     forwarding=source_node["forwarding"],
                     service_priority=site_node.get("service_priority"),
                     ground_scheduling=scheduling,
-                    clock=clock or SegmentClock(),
+                    clock=base_clock,
                 ),
                 body_facts=(_body_facts_from_catalog(body),),
             )
         )
     return expanded
+
+
+def _validate_ethernet_inventory(
+    runtime_id: str,
+    source_node: dict[str, Any],
+    *,
+    ground: bool,
+) -> None:
+    declared = {port["id"] for port in source_node["ethernet"]}
+    if ground:
+        if declared != {"terr0"}:
+            raise SessionResolutionError(
+                f"ground node {runtime_id!r} must declare exactly the substrate Ethernet "
+                f"port 'terr0'; got {sorted(declared)}"
+            )
+        return
+    if declared:
+        raise SessionResolutionError(
+            f"space node {runtime_id!r} declares Ethernet port(s) {sorted(declared)}, but "
+            "the current substrate exposes Ethernet only as terr0 on placed ground nodes"
+        )
 
 
 def _resolved_space_node(
@@ -880,6 +1058,7 @@ def _resolved_space_node(
 ) -> ResolvedNode:
     if body is None:
         raise SessionResolutionError(f"space node {runtime_id!r} has no resolved central body")
+    _validate_ethernet_inventory(runtime_id, source_node, ground=False)
     _reject_unsupported_node_payloads(runtime_id, source_node, None)
     return ResolvedNode(
         node_id=runtime_id,
@@ -890,7 +1069,16 @@ def _resolved_space_node(
         frame_id=body["id"],
         central_body=body["id"],
         tags=tags,
-        terminal_inventory=tuple(_terminal_blocks_for_node(runtime_id, source_node, None, roots)),
+        terminal_inventory=tuple(
+            _terminal_blocks_for_node(
+                runtime_id,
+                source_node,
+                None,
+                roots,
+                owner_kind="satellite",
+                body_id=body["id"],
+            )
+        ),
         wan_interfaces=tuple(_wan_interfaces_for_node(runtime_id, source_node)),
         orbit=orbit,
         forwarding=source_node["forwarding"],
@@ -959,8 +1147,8 @@ def _installed_mount_counts(
     ``installs`` is the site placement's terminal map. Absent (space nodes,
     no site customization surface) means the node model's mount counts apply.
     Present means it is exhaustive site truth: a mount without an entry has
-    zero installed, an entry without installed_count takes the model count,
-    and an entry naming an unknown mount is an authoring error.
+    zero installed, each entry requires an explicit installed_count, and an
+    entry naming an unknown mount is an authoring error.
     """
     mounts = {mount["id"]: int(mount["count"]) for mount in source_node["terminals"]}
     if installs is None:
@@ -971,6 +1159,13 @@ def _installed_mount_counts(
             f"node {runtime_id!r} installs terminals for unknown mount(s): {unknown}; "
             f"node model declares {sorted(mounts)}"
         )
+    for mount_id, installation in installs.items():
+        installed_count = int(installation.get("installed_count", mounts[mount_id]))
+        if installed_count > mounts[mount_id]:
+            raise SessionResolutionError(
+                f"node {runtime_id!r} installs {installed_count} terminals for mount "
+                f"{mount_id!r}, but the referenced node model declares {mounts[mount_id]}"
+            )
     return {
         mount_id: int((installs.get(mount_id) or {}).get("installed_count", model_count))
         if mount_id in installs
@@ -984,6 +1179,9 @@ def _terminal_blocks_for_node(
     source_node: dict[str, Any],
     installs: dict[str, Any] | None,
     roots: CatalogRoots,
+    *,
+    owner_kind: str,
+    body_id: str,
 ) -> list[ResolvedTerminalBlock]:
     blocks: list[ResolvedTerminalBlock] = []
     counts = _installed_mount_counts(runtime_id, source_node, installs)
@@ -995,8 +1193,21 @@ def _terminal_blocks_for_node(
         terminal = _load_expected(mount["terminal"], roots, "terminal")
         installed = installs.get(mount["id"], {}) if installs is not None else {}
         capabilities = installed.get("capabilities") or {}
+        _validate_terminal_capability_narrowing(
+            runtime_id,
+            mount["id"],
+            terminal,
+            capabilities,
+        )
         limits = capabilities.get("limits") or terminal["limits"]
         bandwidth = capabilities.get("bandwidth_mbps") or terminal["bandwidth_mbps"]
+        boresight = _effective_terminal_boresight(
+            runtime_id=runtime_id,
+            mount=mount,
+            capabilities=capabilities,
+            owner_kind=owner_kind,
+            body_id=body_id,
+        )
         blocks.append(
             ResolvedTerminalBlock(
                 terminal_id=mount["id"],
@@ -1010,15 +1221,94 @@ def _terminal_blocks_for_node(
                 ),
                 max_range_km=float(capabilities.get("max_range_km", terminal["max_range_km"])),
                 min_elevation_deg=float(limits["elevation_deg"]["min"]),
-                field_of_regard_deg=_field_of_regard_deg(limits),
+                field_of_regard_deg=_field_of_regard_deg(
+                    limits,
+                    access=mount["role"] == "access",
+                ),
                 tracking_rate_deg_s=float(limits["max_tracking_rate_deg_s"]),
                 # Slowest direction governs the usable link rate (codebase
                 # convention) — the optimistic max overstated asymmetric pairs.
                 bandwidth_mbps=float(min(bandwidth["transmit"], bandwidth["receive"])),
-                source_ref=_catalog_source_ref(mount["terminal"], inline_id=terminal["id"]),
+                boresight=boresight,
+                source_ref=str(mount["terminal"]),
             )
         )
     return blocks
+
+
+def _validate_terminal_capability_narrowing(
+    runtime_id: str,
+    mount_id: str,
+    terminal: dict[str, Any],
+    capabilities: dict[str, Any],
+) -> None:
+    bandwidth = capabilities.get("bandwidth_mbps")
+    if bandwidth is not None:
+        for direction in ("transmit", "receive"):
+            if float(bandwidth[direction]) > float(terminal["bandwidth_mbps"][direction]):
+                raise SessionResolutionError(
+                    f"node {runtime_id!r} terminal mount {mount_id!r} {direction} bandwidth "
+                    "override exceeds the referenced terminal capability"
+                )
+
+    tracking_capacity = capabilities.get("tracking_capacity")
+    if tracking_capacity is not None and int(tracking_capacity) > int(
+        terminal["tracking_capacity"]
+    ):
+        raise SessionResolutionError(
+            f"node {runtime_id!r} terminal mount {mount_id!r} tracking_capacity override "
+            "exceeds the referenced terminal capability"
+        )
+
+    max_range_km = capabilities.get("max_range_km")
+    if max_range_km is not None and float(max_range_km) > float(terminal["max_range_km"]):
+        raise SessionResolutionError(
+            f"node {runtime_id!r} terminal mount {mount_id!r} max_range_km override "
+            "exceeds the referenced terminal capability"
+        )
+
+    limits = capabilities.get("limits")
+    if limits is None:
+        return
+    terminal_limits = terminal["limits"]
+    for axis in ("azimuth_deg", "elevation_deg"):
+        if float(limits[axis]["min"]) < float(terminal_limits[axis]["min"]):
+            raise SessionResolutionError(
+                f"node {runtime_id!r} terminal mount {mount_id!r} {axis}.min override "
+                "widens the referenced terminal limits"
+            )
+        if float(limits[axis]["max"]) > float(terminal_limits[axis]["max"]):
+            raise SessionResolutionError(
+                f"node {runtime_id!r} terminal mount {mount_id!r} {axis}.max override "
+                "widens the referenced terminal limits"
+            )
+    if float(limits["max_tracking_rate_deg_s"]) > float(terminal_limits["max_tracking_rate_deg_s"]):
+        raise SessionResolutionError(
+            f"node {runtime_id!r} terminal mount {mount_id!r} max_tracking_rate_deg_s "
+            "override exceeds the referenced terminal limits"
+        )
+
+
+def _validate_payload_installations(
+    runtime_id: str,
+    source_node: dict[str, Any],
+    site_node: dict[str, Any],
+) -> None:
+    mounts = {mount["id"]: int(mount["count"]) for mount in source_node.get("payloads", ())}
+    installations = site_node.get("payloads") or {}
+    unknown = sorted(set(installations) - set(mounts))
+    if unknown:
+        raise SessionResolutionError(
+            f"node {runtime_id!r} installs payloads for unknown mount(s): {unknown}; "
+            f"node model declares {sorted(mounts)}"
+        )
+    for mount_id, installation in installations.items():
+        installed_count = int(installation["installed_count"])
+        if installed_count > mounts[mount_id]:
+            raise SessionResolutionError(
+                f"node {runtime_id!r} installs {installed_count} payloads for mount "
+                f"{mount_id!r}, but the referenced node model declares {mounts[mount_id]}"
+            )
 
 
 def _reject_unsupported_node_payloads(
@@ -1047,27 +1337,95 @@ def _reject_unsupported_node_payloads(
         )
 
 
-def _catalog_source_ref(value: Any, *, inline_id: str) -> str:
-    if isinstance(value, str):
-        return value
-    return f"inline:{inline_id}"
+def _ground_terminal_boresight(value: dict[str, Any]) -> TerminalBoresight:
+    mode = value["mode"]
+    if mode == "local_vertical":
+        return TerminalBoresight(mode=mode)
+    if mode == "configured_topocentric":
+        return TerminalBoresight(
+            mode=mode,
+            configured_az_deg=float(value["azimuth_deg"]),
+            configured_el_deg=float(value["elevation_deg"]),
+        )
+    azimuth = value["azimuth_deg"]
+    elevation = value["elevation_deg"]
+    return TerminalBoresight(
+        mode=mode,
+        min_az_deg=float(azimuth["min"]),
+        max_az_deg=float(azimuth["max"]),
+        min_el_deg=float(elevation["min"]),
+        max_el_deg=float(elevation["max"]),
+    )
 
 
-def _field_of_regard_deg(limits: dict[str, Any]) -> float:
+def _effective_terminal_boresight(
+    *,
+    runtime_id: str,
+    mount: dict[str, Any],
+    capabilities: dict[str, Any],
+    owner_kind: str,
+    body_id: str,
+) -> TerminalBoresight | SatGroundTerminalBoresight | None:
+    declared = mount.get("boresight")
+    installed = capabilities.get("boresight")
+    if mount["role"] != "access":
+        if declared is not None or installed is not None:
+            raise SessionResolutionError(
+                f"node {runtime_id!r} non-access terminal mount {mount['id']!r} "
+                "must not declare an access boresight"
+            )
+        return None
+    if declared is None and owner_kind == "satellite":
+        raise SessionResolutionError(
+            f"satellite {runtime_id!r} access terminal mount {mount['id']!r} "
+            "requires a spacecraft boresight"
+        )
+    if owner_kind == "ground_station":
+        if declared is not None:
+            raise SessionResolutionError(
+                f"ground node {runtime_id!r} access terminal mount {mount['id']!r} "
+                "must declare boresight on the site installation, not the node mount"
+            )
+        if installed is None:
+            raise SessionResolutionError(
+                f"ground node {runtime_id!r} access terminal mount {mount['id']!r} "
+                "requires a site installation boresight"
+            )
+        return _ground_terminal_boresight(installed)
+    if installed is not None:
+        raise SessionResolutionError(
+            f"satellite {runtime_id!r} access terminal mount {mount['id']!r} "
+            "must not use a ground installation boresight"
+        )
+    return SatGroundTerminalBoresight(target_body=body_id, mode=declared["mode"])
+
+
+def _field_of_regard_deg(limits: dict[str, Any], *, access: bool) -> float:
     az = limits["azimuth_deg"]
     el = limits["elevation_deg"]
     az_span = abs(float(az["max"]) - float(az["min"]))
     el_min = float(el["min"])
     el_span = abs(float(el["max"]) - el_min)
-    if az_span >= 360.0:
-        return min(360.0, max(0.0, 2.0 * (90.0 - el_min)))
-    return min(360.0, max(az_span, el_span))
+    result = max(0.0, 2.0 * (90.0 - el_min)) if az_span >= 360.0 else max(az_span, el_span)
+    return min(180.0 if access else 360.0, result)
 
 
 def _terminal_blocks_for_site_node(
-    runtime_id: str, source_node: dict[str, Any], site_node: dict[str, Any], roots: CatalogRoots
+    runtime_id: str,
+    source_node: dict[str, Any],
+    site_node: dict[str, Any],
+    roots: CatalogRoots,
+    *,
+    body_id: str,
 ) -> list[ResolvedTerminalBlock]:
-    return _terminal_blocks_for_node(runtime_id, source_node, site_node["terminals"], roots)
+    return _terminal_blocks_for_node(
+        runtime_id,
+        source_node,
+        site_node["terminals"],
+        roots,
+        owner_kind="ground_station",
+        body_id=body_id,
+    )
 
 
 def _wan_interfaces_for_node(
@@ -1441,16 +1799,36 @@ def _merge_originated_prefixes(
 
 def _resolve_link_rule(rule: LinkRule, runtime_nodes: tuple[_RuntimeNode, ...]) -> ResolvedLinkRule:
     endpoints: list[ResolvedEndpoint] = []
+    endpoint_nodes: list[tuple[ResolvedNode, ...]] = []
     for endpoint in rule.endpoints:
+        terminal_role = _endpoint_terminal_role(endpoint.terminal)
+        terminal_medium = _endpoint_terminal_medium(endpoint.terminal)
+        terminal_mount = _endpoint_terminal_mount(endpoint.terminal)
         selected = _eval_node_selector(endpoint.select, runtime_nodes)
         if not selected:
             raise SessionResolutionError(f"link rule {rule.id!r} selector matched zero nodes")
-        compatible = [
-            item for item in selected if _node_has_terminal_matching(item.node, endpoint.terminal)
-        ]
+        matching_mounts = {
+            item.node.node_id: tuple(
+                sorted(
+                    block.terminal_id
+                    for block in item.node.terminal_inventory
+                    if _terminal_matches(block, endpoint.terminal)
+                )
+            )
+            for item in selected
+        }
+        compatible = [item for item in selected if matching_mounts[item.node.node_id]]
         if not compatible:
             raise SessionResolutionError(
                 f"link rule {rule.id!r} terminal selector matched zero compatible mounts"
+            )
+        distinct_mounts = sorted(
+            {mount_id for item in compatible for mount_id in matching_mounts[item.node.node_id]}
+        )
+        if terminal_mount is None and len(distinct_mounts) > 1:
+            raise SessionResolutionError(
+                f"link rule {rule.id!r} terminal selector matches multiple terminal mounts "
+                f"{distinct_mounts}; select one exact mount"
             )
         # Endpoint coherence: every selected node must share at least one
         # segment label. A node's labels are its segment plus its placement
@@ -1471,15 +1849,35 @@ def _resolve_link_rule(rule: LinkRule, runtime_nodes: tuple[_RuntimeNode, ...]) 
         endpoints.append(
             ResolvedEndpoint(
                 segment_id=endpoint_segment,
-                terminal_role=_endpoint_terminal_role(endpoint.terminal),
-                terminal_medium=_endpoint_terminal_medium(endpoint.terminal),
+                terminal_role=terminal_role,
+                terminal_medium=terminal_medium,
+                terminal_id=terminal_mount,
                 min_elevation_deg=endpoint.min_elevation_deg,
                 node_ids=tuple(item.node.node_id for item in compatible),
             )
         )
+        endpoint_nodes.append(tuple(item.node for item in compatible))
+    kind = _derive_link_label(endpoints)
+    for endpoint_index, (authored, nodes) in enumerate(
+        zip(rule.endpoints, endpoint_nodes, strict=True)
+    ):
+        if authored.min_elevation_deg is None:
+            continue
+        if kind != "access":
+            raise SessionResolutionError(
+                f"link rule {rule.id!r} endpoint {endpoint_index} declares min_elevation_deg, "
+                "but the field is valid only on the ground endpoint of an access rule"
+            )
+        non_ground = sorted(node.node_id for node in nodes if node.kind != "ground_station")
+        if non_ground:
+            raise SessionResolutionError(
+                f"link rule {rule.id!r} endpoint {endpoint_index} declares min_elevation_deg "
+                f"for non-ground node(s): {non_ground}; the field is valid only on the ground "
+                "endpoint of an access rule"
+            )
     return ResolvedLinkRule(
         rule_id=rule.id,
-        kind=rule.class_ or _derive_link_label(endpoints),
+        kind=kind,
         enabled=rule.enabled,
         endpoints=(endpoints[0], endpoints[1]),
         topology=rule.topology,
@@ -1507,6 +1905,7 @@ def _resolve_routing_domains(
             ResolvedRoutingDomain(
                 domain_id="default_domain",
                 protocol="isis",
+                timers=_effective_routing_timers("isis", None),
                 node_ids=routed,
                 capabilities=(),
                 area_assignment=None,
@@ -1521,6 +1920,10 @@ def _resolve_routing_domains(
             )
         if not selected_ids:
             raise SessionResolutionError(f"routing domain {domain.id!r} matched zero nodes")
+        selected_nodes = tuple(
+            item.node for item in runtime_nodes if item.node.node_id in selected_ids
+        )
+        _validate_area_assignment(domain, selected_nodes)
         capabilities: list[str] = []
         if domain.capabilities is not None:
             if domain.capabilities.mpls is not None:
@@ -1533,7 +1936,7 @@ def _resolve_routing_domains(
             ResolvedRoutingDomain(
                 domain_id=domain.id,
                 protocol=domain.protocol,
-                timers=domain.timers or RoutingTimers(),
+                timers=_effective_routing_timers(domain.protocol, domain.timers),
                 node_ids=tuple(sorted(selected_ids)),
                 capabilities=tuple(capabilities),
                 area_assignment=domain.area_assignment,
@@ -1541,6 +1944,124 @@ def _resolve_routing_domains(
         )
     _validate_routing_domain_partition(domains, runtime_nodes)
     return domains
+
+
+def _validate_area_assignment(
+    domain: RoutingDomain,
+    selected_nodes: tuple[ResolvedNode, ...],
+) -> None:
+    assignment = domain.area_assignment
+    if assignment is None or assignment.strategy == "flat":
+        return
+
+    satellites = tuple(node for node in selected_nodes if node.kind == "satellite")
+    if assignment.strategy in {"per_plane", "stripe"} and not satellites:
+        raise SessionResolutionError(
+            f"{assignment.strategy} area assignment in domain {domain.id!r} requires "
+            "at least one selected satellite"
+        )
+    unaddressable_satellites = sorted(node.node_id for node in satellites if node.plane is None)
+    if unaddressable_satellites:
+        raise SessionResolutionError(
+            f"{assignment.strategy} area assignment in domain {domain.id!r} cannot target "
+            "satellite(s) "
+            f"without a resolved plane: {unaddressable_satellites}"
+        )
+    selected_planes = {node.plane for node in satellites if node.plane is not None}
+
+    if assignment.strategy in {"per_plane", "stripe"}:
+        if assignment.strategy == "per_plane":
+            highest_area_index = max(selected_planes) + 1
+        else:
+            assert assignment.planes_per_stripe is not None
+            highest_area_index = max(selected_planes) // assignment.planes_per_stripe + 1
+        maximum = 255 if domain.protocol == "ospf" else 9999
+        if highest_area_index > maximum:
+            raise SessionResolutionError(
+                f"{assignment.strategy} area assignment in domain {domain.id!r} derives "
+                f"area index {highest_area_index}, exceeding the {domain.protocol} "
+                f"derived-area limit {maximum}"
+            )
+        return
+
+    if assignment.strategy != "explicit":
+        raise SessionResolutionError(
+            f"unsupported area assignment strategy {assignment.strategy!r}"
+        )
+
+    ground_by_local_id = {
+        node.local_node_id: node for node in selected_nodes if node.kind == "ground_station"
+    }
+    plane_owner: dict[int, str] = {}
+    ground_owner: dict[str, str] = {}
+    for mapping in assignment.assignments or ():
+        for plane in mapping.planes or ():
+            if plane not in selected_planes:
+                raise SessionResolutionError(
+                    f"explicit area assignment in domain {domain.id!r} targets plane {plane}, "
+                    "but that plane is not selected into the domain"
+                )
+            if existing := plane_owner.get(plane):
+                raise SessionResolutionError(
+                    f"explicit area assignment in domain {domain.id!r} maps plane {plane} "
+                    f"more than once ({existing!r}, {mapping.area_id!r})"
+                )
+            plane_owner[plane] = mapping.area_id
+
+        ground_targets = mapping.ground_stations
+        if ground_targets is None:
+            continue
+        if ground_targets == "all":
+            target_ids = tuple(ground_by_local_id)
+            if not target_ids:
+                raise SessionResolutionError(
+                    f"explicit area assignment in domain {domain.id!r} targets all ground "
+                    "stations, but the domain contains none"
+                )
+        else:
+            unknown = sorted(set(ground_targets) - set(ground_by_local_id))
+            if unknown:
+                raise SessionResolutionError(
+                    f"explicit area assignment in domain {domain.id!r} targets unknown ground "
+                    f"station local_node_id value(s): {unknown}"
+                )
+            target_ids = ground_targets
+        for local_node_id in target_ids:
+            if existing := ground_owner.get(local_node_id):
+                raise SessionResolutionError(
+                    f"explicit area assignment in domain {domain.id!r} maps ground station "
+                    f"{local_node_id!r} more than once ({existing!r}, {mapping.area_id!r})"
+                )
+            ground_owner[local_node_id] = mapping.area_id
+
+    missing_planes = sorted(selected_planes - set(plane_owner))
+    if missing_planes:
+        raise SessionResolutionError(
+            f"explicit area assignment in domain {domain.id!r} has no mapping for "
+            f"selected plane(s): {missing_planes}"
+        )
+
+
+def _effective_routing_timers(
+    protocol: str,
+    timers: RoutingTimers | None,
+) -> RoutingTimers:
+    effective = timers or RoutingTimers()
+    if protocol != "isis":
+        return effective
+    spf = effective.spf
+    return effective.model_copy(
+        update={
+            "spf": spf.model_copy(
+                update={
+                    "holddown_ms": 2000 if spf.holddown_ms is None else spf.holddown_ms,
+                    "time_to_learn_ms": (
+                        500 if spf.time_to_learn_ms is None else spf.time_to_learn_ms
+                    ),
+                }
+            )
+        }
+    )
 
 
 def _validate_routing_domain_partition(
@@ -1639,10 +2160,7 @@ def _eligible_fixed_interfaces(
     node_id: str,
 ) -> list[str]:
     """WAN interfaces on ``node`` whose owning terminal block matches the
-    rule's terminal selector on the side(s) that include the node. The one
-    body behind both fixed-interface allocation and the interface facts the
-    builder displays — two implementations of eligibility would be two
-    truths.
+    rule's terminal selector on the side(s) that include the node.
 
     For fixed (non-access) rules only isl-manifest interfaces are eligible
     — the same constraint ``_validate_fixed_interface_capacity`` enforces.
@@ -1667,63 +2185,6 @@ def _eligible_fixed_interfaces(
     if rule.kind == "access":
         return eligible
     return [name for name in eligible if name.startswith("isl")]
-
-
-def link_rule_interface_facts(
-    resolved: ResolvedSession, cfg: SegmentSessionConfig
-) -> list[BuilderRuleAllocation]:
-    """Per-rule, per-node interface capacity as the allocator sees it.
-
-    Ships to the builder world so every display reports what allocation did
-    rather than re-deriving an approximation (a client-side budget once
-    double-counted mounts across medium selectors). ``used`` counts an
-    interface consumed by ANY fixed rule — the allocator's own accounting.
-    Access rules consume nothing at resolve time; their facts carry the
-    declared candidate universe and access-mount interface counts (see
-    ``BuilderRuleAllocation``).
-    """
-    selectors = _terminal_selectors_by_rule(cfg)
-    node_by_id = {node.node_id: node for node in resolved.nodes}
-    used_by_node: dict[str, set[str]] = {}
-    for candidate in resolved.link_candidates:
-        if candidate.kind == "access":
-            continue
-        used_by_node.setdefault(candidate.node_a, set()).add(candidate.interface_a)
-        used_by_node.setdefault(candidate.node_b, set()).add(candidate.interface_b)
-    facts: list[BuilderRuleAllocation] = []
-    for rule in resolved.link_rules:
-        rule_selectors = selectors.get(rule.rule_id)
-        if rule_selectors is None:
-            continue
-        per_node: list[BuilderNodeInterfaceFacts] = []
-        seen: set[str] = set()
-        for endpoint in rule.endpoints:
-            for node_id in endpoint.node_ids:
-                if node_id in seen:
-                    continue
-                seen.add(node_id)
-                node = node_by_id[node_id]
-                eligible = _eligible_fixed_interfaces(node, rule, rule_selectors, node_id)
-                used = used_by_node.get(node_id, set())
-                free = [name for name in eligible if name not in used]
-                per_node.append(
-                    BuilderNodeInterfaceFacts(
-                        node_id=node_id,
-                        segment_id=node.segment_id,
-                        matching=len(eligible),
-                        free=len(free),
-                    )
-                )
-        allocated = sum(1 for c in resolved.link_candidates if c.rule_id == rule.rule_id)
-        facts.append(
-            BuilderRuleAllocation(
-                rule_id=rule.rule_id,
-                kind=rule.kind,
-                allocated_pairs=allocated,
-                per_node=tuple(per_node),
-            )
-        )
-    return facts
 
 
 def _resolve_link_candidates(
@@ -1764,11 +2225,15 @@ def _resolve_link_candidates(
         left = node_by_id[node_a]
         right = node_by_id[node_b]
         if candidate.kind == "access":
-            iface_a, iface_b = _access_candidate_interfaces(left, right)
+            _validate_access_candidate_endpoints(left, right)
+            iface_a = iface_b = None
         else:
             iface_a = _fixed_iface(node_a, candidate.rule_id)
             iface_b = _fixed_iface(node_b, candidate.rule_id)
         role_a, role_b = _candidate_side_roles(
+            candidate, node_a, node_b, rules_by_id[candidate.rule_id]
+        )
+        terminal_id_a, terminal_id_b = _candidate_side_terminal_ids(
             candidate, node_a, node_b, rules_by_id[candidate.rule_id]
         )
         bandwidth = _candidate_bandwidth_mbps(
@@ -1777,6 +2242,8 @@ def _resolve_link_candidates(
             role_left=role_a,
             role_right=role_b,
             medium=candidate.terminal_medium,
+            terminal_id_left=terminal_id_a,
+            terminal_id_right=terminal_id_b,
         )
         candidates.append(
             ResolvedLinkCandidate(
@@ -1829,7 +2296,7 @@ def _enforce_declared_candidate_bounds(
         elif mode == "explicit_pairs":
             bound = len(rule.topology.pairs or ())
         else:
-            continue  # nearest_visible rejects later with its own typed error
+            continue
         if bound > limits.max_pairs_per_rule:
             raise SessionResolutionError(
                 f"link rule {rule.rule_id!r} declares a static candidate upper bound of "
@@ -1868,7 +2335,7 @@ def _enforce_candidate_limits(
         )
 
 
-def _access_candidate_interfaces(left: ResolvedNode, right: ResolvedNode) -> tuple[str, str]:
+def _validate_access_candidate_endpoints(left: ResolvedNode, right: ResolvedNode) -> None:
     left_ground = left.kind == "ground_station"
     right_ground = right.kind == "ground_station"
     if left_ground == right_ground:
@@ -1888,7 +2355,6 @@ def _access_candidate_interfaces(left: ResolvedNode, right: ResolvedNode) -> tup
             f"central_body={satellite.central_body!r}); ground access visibility is "
             "body-local — use an inter-body relay path instead"
         )
-    return ("term0", "gnd0") if left_ground else ("gnd0", "term0")
 
 
 def _candidate_side_roles(
@@ -1910,6 +2376,27 @@ def _candidate_side_roles(
     return _role_for(node_a), _role_for(node_b)
 
 
+def _candidate_side_terminal_ids(
+    candidate: Any,
+    node_a: str,
+    node_b: str,
+    rule: ResolvedLinkRule,
+) -> tuple[str | None, str | None]:
+    """Map endpoint-ordered exact mount IDs onto candidate pair order."""
+
+    def _terminal_id_for(node_id: str) -> str | None:
+        for endpoint, terminal_id in zip(
+            rule.endpoints, candidate.endpoint_terminal_ids, strict=True
+        ):
+            if node_id in endpoint.node_ids:
+                return terminal_id
+        raise SessionResolutionError(
+            f"candidate node {node_id!r} belongs to neither endpoint of rule {rule.rule_id!r}"
+        )
+
+    return _terminal_id_for(node_a), _terminal_id_for(node_b)
+
+
 def _candidate_bandwidth_mbps(
     left: ResolvedNode,
     right: ResolvedNode,
@@ -1917,32 +2404,57 @@ def _candidate_bandwidth_mbps(
     role_left: str,
     role_right: str,
     medium: str | None,
+    terminal_id_left: str | None,
+    terminal_id_right: str | None,
 ) -> float:
-    left_block = _first_matching_terminal_block(left, role=role_left, medium=medium)
-    right_block = _first_matching_terminal_block(right, role=role_right, medium=medium)
-    if left_block.bandwidth_mbps is None or right_block.bandwidth_mbps is None:
-        raise SessionResolutionError(
-            f"link candidate {left.node_id}<->{right.node_id} is missing bandwidth"
-        )
-    return min(float(left_block.bandwidth_mbps), float(right_block.bandwidth_mbps))
+    left_bandwidth = _matching_terminal_bandwidth_mbps(
+        left,
+        role=role_left,
+        medium=medium,
+        terminal_id=terminal_id_left,
+    )
+    right_bandwidth = _matching_terminal_bandwidth_mbps(
+        right,
+        role=role_right,
+        medium=medium,
+        terminal_id=terminal_id_right,
+    )
+    return min(left_bandwidth, right_bandwidth)
 
 
-def _first_matching_terminal_block(
+def _matching_terminal_bandwidth_mbps(
     node: ResolvedNode,
     *,
     role: str,
     medium: str | None,
-) -> ResolvedTerminalBlock:
+    terminal_id: str | None,
+) -> float:
     matches = [
         block
         for block in node.terminal_inventory
-        if block.endpoint_role == role and (medium is None or block.medium == medium)
+        if block.endpoint_role == role
+        and (medium is None or block.medium == medium)
+        and (terminal_id is None or block.terminal_id == terminal_id)
     ]
     if not matches:
         raise SessionResolutionError(
-            f"node {node.node_id!r} has no terminal block for role={role!r} medium={medium!r}"
+            f"node {node.node_id!r} has no terminal block for role={role!r} "
+            f"medium={medium!r} mount={terminal_id!r}"
         )
-    return matches[0]
+    if any(block.bandwidth_mbps is None for block in matches):
+        raise SessionResolutionError(
+            f"node {node.node_id!r} matching terminal mount is missing bandwidth"
+        )
+    bandwidths = {
+        float(block.bandwidth_mbps) for block in matches if block.bandwidth_mbps is not None
+    }
+    if len(bandwidths) != 1:
+        mounts = [block.terminal_id for block in matches]
+        raise SessionResolutionError(
+            f"node {node.node_id!r} terminal selector matches mounts {mounts} with "
+            f"heterogeneous bandwidths {sorted(bandwidths)}; select one exact mount"
+        )
+    return next(iter(bandwidths))
 
 
 def _validate_fixed_interface_capacity(
@@ -1953,8 +2465,9 @@ def _validate_fixed_interface_capacity(
     for candidate in candidates:
         if candidate.kind == "access":
             continue
-        used.setdefault(candidate.node_a, set()).add(candidate.interface_a)
-        used.setdefault(candidate.node_b, set()).add(candidate.interface_b)
+        interface_a, interface_b = candidate.fixed_interfaces
+        used.setdefault(candidate.node_a, set()).add(interface_a)
+        used.setdefault(candidate.node_b, set()).add(interface_b)
     for node_id, interfaces in used.items():
         available = {
             iface.name
@@ -1977,6 +2490,11 @@ def _validate_fixed_interface_capacity(
 def _pair_rank_map(resolved: ResolvedSession) -> dict[tuple[str, str], float]:
     node_by_id = {node.node_id: node for node in resolved.nodes}
     radius_by_body = {facts.body_id: facts.mean_radius_km for facts in resolved.bodies}
+    tle_positions = _tle_rank_positions(resolved)
+    positions = {
+        node.node_id: _static_rank_position(node, radius_by_body, tle_positions)
+        for node in resolved.nodes
+    }
     ranks: dict[tuple[str, str], float] = {}
     for rule in resolved.link_rules:
         for a in rule.endpoints[0].node_ids:
@@ -1984,15 +2502,21 @@ def _pair_rank_map(resolved: ResolvedSession) -> dict[tuple[str, str], float]:
                 if a == b:
                     continue
                 pair = (a, b) if a < b else (b, a)
-                ranks[pair] = _pair_static_rank(node_by_id[a], node_by_id[b], radius_by_body)
+                ranks[pair] = _pair_static_rank(
+                    node_by_id[a],
+                    node_by_id[b],
+                    positions,
+                )
     return ranks
 
 
 def _pair_static_rank(
-    left: ResolvedNode, right: ResolvedNode, radius_by_body: dict[str, float]
+    left: ResolvedNode,
+    right: ResolvedNode,
+    positions: dict[str, tuple[float, float, float] | None],
 ) -> float:
-    left_pos = _static_rank_position(left, radius_by_body)
-    right_pos = _static_rank_position(right, radius_by_body)
+    left_pos = positions[left.node_id]
+    right_pos = positions[right.node_id]
     if left_pos is None or right_pos is None:
         raise SessionResolutionError(
             f"cannot rank pair {left.node_id}<->{right.node_id} by distance: a node "
@@ -2002,13 +2526,15 @@ def _pair_static_rank(
 
 
 def _static_rank_position(
-    node: ResolvedNode, radius_by_body: dict[str, float]
+    node: ResolvedNode,
+    radius_by_body: dict[str, float],
+    tle_positions: dict[str, tuple[float, float, float]],
 ) -> tuple[float, float, float] | None:
     """Epoch position for nearest-N ranking: orbital state for space nodes,
     body-fixed surface position for placed ground nodes (resolved body radius,
     never a hardcoded constant). A "nearest" rank derived from node-id
     character sums would be geometry theater."""
-    orbital = _orbit_rank_position(node)
+    orbital = tle_positions.get(node.node_id) or _orbit_rank_position(node)
     if orbital is not None:
         return orbital
     if node.surface_position is None:
@@ -2028,10 +2554,57 @@ def _static_rank_position(
     )
 
 
+def _tle_rank_positions(resolved: ResolvedSession) -> dict[str, tuple[float, float, float]]:
+    tle_nodes = [
+        node
+        for node in resolved.nodes
+        if node.orbit is not None and node.orbit.propagator == "sgp4_tle"
+    ]
+    if not tle_nodes:
+        return {}
+    if resolved.time is None:
+        raise SessionResolutionError("SGP4/TLE nearest-node ranking requires session time")
+    epoch_unix = session_epoch_unix(resolved.time)
+    body_facts = {facts.body_id: facts for facts in resolved.bodies}
+    positions: dict[str, tuple[float, float, float]] = {}
+    for node in tle_nodes:
+        orbit = node.orbit
+        if orbit is None or orbit.tle_line_1 is None or orbit.tle_line_2 is None:
+            raise SessionResolutionError(
+                f"space node {node.node_id!r} is missing resolved TLE records"
+            )
+        facts = body_facts.get(orbit.central_body)
+        if facts is None:
+            raise SessionResolutionError(
+                f"space node {node.node_id!r} is missing body facts for {orbit.central_body!r}"
+            )
+        support = body_runtime_support_for(facts.body_id)
+        frame = BodyFrame(
+            name=facts.body_id,
+            mean_radius_km=facts.mean_radius_km,
+            equatorial_radius_km=facts.equatorial_radius_km,
+            polar_radius_km=facts.polar_radius_km,
+            rotation_rate_rad_s=support.rotation_rate_rad_s,
+            gravitational_parameter_km3_s2=facts.gravitational_parameter_km3_s2,
+            j2=support.j2,
+        )
+        position, _velocity, _geodetic = propagate_sgp4_tle(
+            orbit.tle_line_1,
+            orbit.tle_line_2,
+            epoch_unix,
+            0.0,
+            body_frame=frame,
+        )
+        positions[node.node_id] = (position.x, position.y, position.z)
+    return positions
+
+
 def _orbit_rank_position(node: ResolvedNode) -> tuple[float, float, float] | None:
     if node.orbit is None:
         return None
     orbit = node.orbit
+    if orbit.propagator == "sgp4_tle":
+        return None
     mean_rad = math.radians(orbit.mean_anomaly_deg)
     eccentric_anomaly = mean_rad
     if orbit.eccentricity > 0:
@@ -2096,10 +2669,6 @@ def _eval_node_selector(
     raise AssertionError("unreachable node selector")
 
 
-def _node_has_terminal_matching(node: ResolvedNode, selector: TerminalSelector) -> bool:
-    return any(_terminal_matches(block, selector) for block in node.terminal_inventory)
-
-
 def _terminal_matches(block: ResolvedTerminalBlock, selector: TerminalSelector) -> bool:
     if selector.all is not None:
         return all(_terminal_matches(block, child) for child in selector.all)
@@ -2150,6 +2719,35 @@ def _endpoint_terminal_medium(selector: TerminalSelector) -> str | None:
     return next(iter(mediums)) if mediums else None
 
 
+def _endpoint_terminal_mount(selector: TerminalSelector) -> str | None:
+    """Return the mount required by every positive selector branch, if any."""
+    if selector.mount is not None:
+        return selector.mount
+    if selector.not_ is not None or selector.role is not None or selector.medium is not None:
+        return None
+    if selector.all is not None:
+        required = {
+            mount
+            for child in selector.all
+            if (mount := _endpoint_terminal_mount(child)) is not None
+        }
+        if len(required) > 1:
+            raise SessionResolutionError(
+                f"link endpoint terminal selector requires conflicting mounts: {sorted(required)}"
+            )
+        return next(iter(required)) if required else None
+    if selector.any is not None:
+        required = tuple(_endpoint_terminal_mount(child) for child in selector.any)
+        if (
+            required
+            and required[0] is not None
+            and all(mount == required[0] for mount in required[1:])
+        ):
+            return required[0]
+        return None
+    raise AssertionError("unreachable terminal selector")
+
+
 def _derive_link_label(endpoints: list[ResolvedEndpoint]) -> str:
     left, right = endpoints
     # An access-role endpoint makes the rule an access rule regardless of
@@ -2178,8 +2776,7 @@ def _enforce_link_rule_constraints(resolved: ResolvedSession, candidates: tuple[
     """Enforce the runtime-supported subset of link-rule constraints.
 
     ``max_links_per_node`` is a static graph constraint, enforceable here.
-    Range/mutual-visibility constraints are dynamic OME semantics; accepting
-    them before OME consumes them would be a lie, so they reject loudly.
+    Unsupported dynamic constraints are refused by runtime-support preflight.
     """
     nodes = {node.node_id: node for node in resolved.nodes}
     degree: dict[tuple[str, str], int] = {}
@@ -2192,21 +2789,17 @@ def _enforce_link_rule_constraints(resolved: ResolvedSession, candidates: tuple[
         constraints = rule.constraints
         if constraints is None:
             continue
-        unsupported = [
-            name
-            for name, value in (
-                ("max_range_km", constraints.max_range_km),
-                ("require_mutual_visibility", constraints.require_mutual_visibility),
-            )
-            if value is not None
-        ]
-        if unsupported:
-            raise SessionResolutionError(
-                f"link_rule {rule.rule_id!r} uses unsupported runtime constraint(s): "
-                + ", ".join(unsupported)
-            )
         if constraints.max_links_per_node is None:
             continue
+        if not isinstance(constraints.max_links_per_node, int):
+            selected_node_ids = {
+                node_id for endpoint in rule.endpoints for node_id in endpoint.node_ids
+            }
+            for node_id in sorted(selected_node_ids):
+                _constraint_limit_for_node(
+                    constraints.max_links_per_node,
+                    nodes[node_id],
+                )
         for (rule_id, node_id), count in sorted(degree.items()):
             if rule_id != rule.rule_id:
                 continue
@@ -2343,74 +2936,22 @@ def _normalize_token(value: str) -> str:
     return token
 
 
-def segment_display_names(raw: dict[str, Any], *, roots: CatalogRoots) -> dict[str, str]:
-    """Map segment id -> the authored display name of its source object.
-
-    Presentation truth for consumers that show segments to humans (the
-    builder's world tree): the resolver owns the grammar reading of where a
-    display name lives, so no consumer re-learns it. Segments whose name
-    cannot be read are simply absent — callers fall back to the id.
-    """
-    out: dict[str, str] = {}
-    for segment in raw.get("segments") or []:
-        if not isinstance(segment, dict):
-            continue
-        seg_id = segment.get("id")
-        if not isinstance(seg_id, str):
-            continue
-        # A name can live on the segment itself (ground segments), on the
-        # source object (space segments), or on the placed site set.
-        own = segment.get("display_name")
-        if isinstance(own, str) and own:
-            out[seg_id] = own
-            continue
-        source = segment.get("source")
-        try:
-            if source is not None:
-                _, obj = _load_ref_or_object(source, roots)
-            else:
-                placement = segment.get("placement")
-                site_set = placement.get("from_site_set") if isinstance(placement, dict) else None
-                if site_set is None:
-                    continue
-                # Mirror the resolution path exactly: from_site_set also
-                # accepts a bare site-set body (_load_expected), which
-                # _load_ref_or_object would reject.
-                obj = _load_expected(site_set, roots, "site_set")
-        except Exception:
-            continue
-        name = obj.get("display_name") or obj.get("id")
-        if isinstance(name, str) and name:
-            out[seg_id] = name
-    return out
-
-
-def _load_ref_or_object(value: Any, roots: CatalogRoots) -> tuple[str, dict[str, Any]]:
-    if isinstance(value, str):
-        path = resolve_catalog_reference(value, roots)
-        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    elif isinstance(value, dict):
-        data = value
-    else:
-        raise SessionResolutionError(
-            f"expected catalog reference or inline object, got {type(value)!r}"
-        )
+def _load_ref_or_object(value: str, roots: CatalogRoots) -> tuple[str, dict[str, Any]]:
+    if not isinstance(value, str):
+        raise SessionResolutionError(f"expected catalog reference, got {type(value)!r}")
+    ref = value if isinstance(value, CatalogRef) else CatalogRef(value)
+    path = resolve_catalog_reference(ref, roots)
+    data = load_configuration_yaml(path.read_text(encoding="utf-8")) or {}
     try:
-        wrapper, model = validate_catalog_document(data)
+        wrapper, model = validate_referenced_configuration_document(ref, data)
     except Exception as exc:
         raise SessionResolutionError(f"invalid catalog object: {exc}") from exc
+    if wrapper is None:
+        raise SessionResolutionError(f"expected wrapped catalog object, got session {ref!r}")
     return wrapper, model.model_dump(mode="python", by_alias=True, exclude_none=True)
 
 
-def _load_expected(ref: Any, roots: CatalogRoots, expected_wrapper: str) -> dict[str, Any]:
-    if isinstance(ref, dict) and expected_wrapper not in ref:
-        try:
-            model = validate_catalog_value(expected_wrapper, ref)
-        except Exception as exc:
-            raise SessionResolutionError(
-                f"invalid inline catalog object {expected_wrapper!r}: {exc}"
-            ) from exc
-        return model.model_dump(mode="python", by_alias=True, exclude_none=True)
+def _load_expected(ref: str, roots: CatalogRoots, expected_wrapper: str) -> dict[str, Any]:
     wrapper, body = _load_ref_or_object(ref, roots)
     if wrapper != expected_wrapper:
         raise SessionResolutionError(

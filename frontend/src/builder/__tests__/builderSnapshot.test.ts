@@ -10,8 +10,7 @@
 
 import { describe, expect, it } from "vitest";
 import { builderSnapshotFromWorld, distinctGroundStationSites } from "../builderSnapshot";
-import type { BuilderWorld, BuilderWorldNode } from "../builderTypes";
-import type { SessionEphemeris } from "../../sim/ephemeris";
+import type { BuilderWorld, BuilderWorldNode, SessionEphemeris } from "../builderTypes";
 
 const EPOCH_ISO = "2026-06-08T00:00:00+00:00";
 const EPOCH_UNIX = Date.parse(EPOCH_ISO) / 1000;
@@ -53,6 +52,9 @@ const EPHEMERIS: SessionEphemeris = {
       plane: 0,
       slot: 0,
       segment_id: "leo",
+      local_node_id: "sat-p00s00",
+      namespace: "leo",
+      tags: [],
       reference_body: "earth",
       frame_id: "earth",
     },
@@ -62,6 +64,9 @@ const EPHEMERIS: SessionEphemeris = {
       lon_deg: -104.9903,
       alt_km: 1.609,
       segment_id: "ground",
+      local_node_id: "gw1",
+      namespace: "ground",
+      tags: [],
       reference_body: "earth",
       frame_id: "earth",
     },
@@ -88,6 +93,7 @@ const WORLD: BuilderWorld = {
       slot: 0,
       tags: [],
       surface_position: null,
+      epoch_position: null,
       forwarding: "routed",
       terminal_inventory: [],
       interfaces: null,
@@ -103,6 +109,7 @@ const WORLD: BuilderWorld = {
       slot: null,
       tags: ["leo"],
       surface_position: { body: "earth", lat_deg: 39.7392, lon_deg: -104.9903, alt_m: 1609 },
+      epoch_position: null,
       forwarding: "routed",
       terminal_inventory: [],
       interfaces: null,
@@ -120,6 +127,7 @@ const WORLD: BuilderWorld = {
       slot: null,
       tags: ["meo"],
       surface_position: { body: "earth", lat_deg: 39.7392, lon_deg: -104.9903, alt_m: 1609 },
+      epoch_position: null,
       forwarding: "routed",
       terminal_inventory: [],
       interfaces: null,
@@ -147,6 +155,54 @@ describe("builderSnapshotFromWorld", () => {
     expect(sat.alt_km).toBeLessThan(600);
     expect(Number.isFinite(sat.lat_deg)).toBe(true);
     expect(Number.isFinite(sat.lon_deg)).toBe(true);
+  });
+
+  it("seeds TLE satellites from the backend-propagated epoch position", () => {
+    const tleWorld: BuilderWorld = {
+      ...WORLD,
+      ephemeris: {
+        ...EPHEMERIS,
+        nodes: {
+          "tle-sat": {
+            type: "tle",
+            tle_line_1: "1 25544U 98067A   21075.51041667  .00001264  00000-0  29660-4 0  9993",
+            tle_line_2: "2 25544  51.6442  21.5417 0002426  95.1670  21.8444 15.48974333273145",
+            plane: 0,
+            slot: 0,
+            norad_id: 25544,
+            segment_id: "tle",
+            local_node_id: "iss",
+            namespace: "tle",
+            tags: [],
+            reference_body: "earth",
+            frame_id: "earth",
+          },
+        },
+      },
+      nodes: [
+        {
+          ...WORLD.nodes[0]!,
+          node_id: "tle-sat",
+          local_node_id: "iss",
+          segment_id: "tle",
+          namespace: "tle",
+          epoch_position: {
+            lat_deg: 12.5,
+            lon_deg: -44.25,
+            alt_km: 421.75,
+            vel_x_km_s: 1.25,
+            vel_y_km_s: -2.5,
+            vel_z_km_s: 3.75,
+          },
+        },
+      ],
+    };
+
+    const satellite = builderSnapshotFromWorld(tleWorld).nodes[0]!;
+    expect(satellite.lat_deg).toBe(12.5);
+    expect(satellite.lon_deg).toBe(-44.25);
+    expect(satellite.alt_km).toBe(421.75);
+    expect(satellite.vel_z_km_s).toBe(3.75);
   });
 
   it("places grounds from the resolver surface_position", () => {

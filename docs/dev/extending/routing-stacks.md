@@ -70,6 +70,26 @@ segments:
   - id: ground
     placement:
       from_site_set: nodalarc:site-sets/earth/leo/earth-leo-starlink-pop-sites.yaml
+    apply:
+      scheduling:
+        selection_policy: {highest_elevation: {}}
+        handover_policy:
+          hysteresis:
+            discount_factor: 1.1
+            mask_fade_range_deg: 3
+        handover_mode: mbb
+        mbb_overlap_ticks: 30
+        mbb_reserve: 1
+        handover_concurrency: one_at_a_time
+        ranking_order:
+          - service_priority
+          - selection_score
+          - satellite_ground_terminal_capacity
+          - lex_pair
+        mbb_preemption: 'off'
+        successor_abort_policy: hard_release
+        cross_tenant_displacement: 'off'
+        bbm_acquire_timeout_ticks: 1
 link_rules:
   - id: leo_access
     topology: {mode: visible_candidates}
@@ -84,6 +104,10 @@ routing:
     - id: earth_domain
       protocol: yourprotocol
       selectors: [{any: [{segment: leo}, {segment: ground}]}]
+simulation:
+  candidate_limits:
+    max_pairs_per_rule: 500
+    max_pairs_per_tick: 2000
 time:
   start_time: '2026-06-08T00:00:00Z'
   step_seconds: 10

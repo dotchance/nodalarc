@@ -7,6 +7,7 @@ Tests:
 - Handles no-flows-configured case (fixed dwell, no measurement)
 """
 
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from unittest.mock import MagicMock
 
@@ -15,7 +16,13 @@ from measurement.convergence_detector import (
     measure_convergence,
 )
 from nodalarc.models.link_events import LinkDown, LinkUp
-from nodalarc.models.session import ConvergenceConfig
+
+
+@dataclass(frozen=True)
+class _DetectorSettings:
+    stability_period_s: float = 2.0
+    timeout_s: float = 30.0
+    probe_interval_ms: int = 100
 
 
 def _make_link_down(node_a="sat-P00S00", node_b="sat-P00S01"):
@@ -51,7 +58,7 @@ class TestNoFlowsConfigured:
     """Handles no-flows-configured case correctly."""
 
     def test_no_flows_returns_converged(self):
-        config = ConvergenceConfig(
+        config = _DetectorSettings(
             stability_period_s=2.0,
             timeout_s=30.0,
             probe_interval_ms=100,
@@ -69,7 +76,7 @@ class TestNoFlowsConfigured:
         assert result.event_id == "test-001"
 
     def test_no_flows_link_up(self):
-        config = ConvergenceConfig()
+        config = _DetectorSettings()
         result = measure_convergence(
             event_id="test-002",
             link_event=_make_link_up(),
@@ -139,7 +146,7 @@ class TestConvergenceWithFlows:
             "packets_received": 5,
         }
 
-        config = ConvergenceConfig(
+        config = _DetectorSettings(
             stability_period_s=0.1,
             timeout_s=5.0,
             probe_interval_ms=50,
@@ -171,7 +178,7 @@ class TestConvergenceWithFlows:
             "packets_received": 0,
         }
 
-        config = ConvergenceConfig(
+        config = _DetectorSettings(
             stability_period_s=0.1,
             timeout_s=0.5,
             probe_interval_ms=50,
@@ -199,7 +206,7 @@ class TestConvergenceWithFlows:
         mock_client = MagicMock()
         mock_client.burst.side_effect = Exception("connection refused")
 
-        config = ConvergenceConfig(
+        config = _DetectorSettings(
             stability_period_s=0.1,
             timeout_s=0.3,
             probe_interval_ms=50,

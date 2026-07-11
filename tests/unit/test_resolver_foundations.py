@@ -23,8 +23,9 @@ from nodalarc.models.resolved_session import (
     SidBlock,
     SourceContext,
 )
-from nodalarc.models.segment_session import SessionMeta
+from nodalarc.models.segment_session import SessionMeta, TimeConfig
 from nodalarc.models.segments import GroundScheduling
+from nodalarc.models.terminal_physics import TerminalBoresight
 from nodalarc.runtime_support import (
     FeatureCategory,
     RuntimeSupport,
@@ -32,6 +33,8 @@ from nodalarc.runtime_support import (
     UnsupportedFeatureError,
 )
 from pydantic import ValidationError
+
+from tests.catalog_session_fixtures import ISS_TLE_LINE_1, ISS_TLE_LINE_2
 
 
 def _orbit() -> ResolvedOrbitFacts:
@@ -47,6 +50,29 @@ def _orbit() -> ResolvedOrbitFacts:
         argument_of_perigee_deg=0.0,
         mean_anomaly_deg=0.0,
     )
+
+
+def test_resolved_sgp4_orbit_facts_require_exact_scoped_tle_data() -> None:
+    base = _orbit().model_dump(mode="python")
+    with pytest.raises(ValidationError, match="require both TLE lines"):
+        ResolvedOrbitFacts.model_validate({**base, "propagator": "sgp4_tle"})
+
+    sgp4 = ResolvedOrbitFacts.model_validate(
+        {
+            **base,
+            "epoch": "2021-03-16T12:15:00.000288Z",
+            "propagator": "sgp4_tle",
+            "tle_line_1": ISS_TLE_LINE_1,
+            "tle_line_2": ISS_TLE_LINE_2,
+            "norad_id": 25544,
+        }
+    )
+    assert sgp4.tle_line_1 == ISS_TLE_LINE_1
+
+    with pytest.raises(ValidationError, match="must not carry TLE fields"):
+        ResolvedOrbitFacts.model_validate({**sgp4.model_dump(), "propagator": "two_body"})
+    with pytest.raises(ValidationError, match="epoch must match"):
+        ResolvedOrbitFacts.model_validate({**sgp4.model_dump(), "epoch": base["epoch"]})
 
 
 def _surface() -> ResolvedSurfacePosition:
@@ -87,6 +113,7 @@ def _terminal(
     role: str = "isl",
     medium: str = "optical",
     count: int = 1,
+    boresight: TerminalBoresight | None = None,
 ) -> ResolvedTerminalBlock:
     return ResolvedTerminalBlock(
         terminal_id=terminal_id,
@@ -97,6 +124,7 @@ def _terminal(
         tracking_capacity=1,
         max_range_km=5000.0,
         bandwidth_mbps=10000.0,
+        boresight=boresight,
         source_ref=f"test:{terminal_id}",
     )
 
@@ -131,7 +159,14 @@ def _ground(node_id: str = "ground-denver-router", *, segment_id: str = "ground"
         frame_id="earth",
         reference_body="earth",
         terminal_inventory=(
-            _terminal(node_id, terminal_id="access_ka", role="access", medium="rf", count=2),
+            _terminal(
+                node_id,
+                terminal_id="access_ka",
+                role="access",
+                medium="rf",
+                count=2,
+                boresight=TerminalBoresight(mode="local_vertical"),
+            ),
         ),
         interfaces=_interfaces(node_id),
         surface_position=_surface(),
@@ -189,6 +224,11 @@ def _resolved_session(**overrides) -> ResolvedSession:
         "link_candidates": (),
         "routing_domains": domain,
         "sid_blocks": sid_blocks,
+        "time": TimeConfig(
+            start_time="2026-06-08T00:00:00Z",
+            step_seconds=1,
+            compression=1,
+        ),
         "source_context": SourceContext(origin="test"),
     }
     base.update(overrides)
@@ -233,20 +273,27 @@ def test_satellite_requires_orbit_facts() -> None:
         )
 
 
-def test_ground_station_requires_surface_position_and_scheduling() -> None:
-    with pytest.raises(ValidationError, match="ground_scheduling"):
-        ResolvedNode(
-            node_id="gs",
-            local_node_id="gs",
-            segment_id="ground",
-            namespace="ground",
-            kind="ground_station",
-            frame_id="earth",
-            reference_body="earth",
-            terminal_inventory=(_terminal("gs", role="access", medium="rf"),),
-            interfaces=_interfaces(),
-            surface_position=_surface(),
-        )
+def test_ground_station_requires_surface_position_but_scheduling_is_candidate_scoped() -> None:
+    node = ResolvedNode(
+        node_id="gs",
+        local_node_id="gs",
+        segment_id="ground",
+        namespace="ground",
+        kind="ground_station",
+        frame_id="earth",
+        reference_body="earth",
+        terminal_inventory=(
+            _terminal(
+                "gs",
+                role="access",
+                medium="rf",
+                boresight=TerminalBoresight(mode="local_vertical"),
+            ),
+        ),
+        interfaces=_interfaces(),
+        surface_position=_surface(),
+    )
+    assert node.ground_scheduling is None
     with pytest.raises(ValidationError, match="surface_position"):
         ResolvedNode(
             node_id="gs",
@@ -256,7 +303,14 @@ def test_ground_station_requires_surface_position_and_scheduling() -> None:
             kind="ground_station",
             frame_id="earth",
             reference_body="earth",
-            terminal_inventory=(_terminal("gs", role="access", medium="rf"),),
+            terminal_inventory=(
+                _terminal(
+                    "gs",
+                    role="access",
+                    medium="rf",
+                    boresight=TerminalBoresight(mode="local_vertical"),
+                ),
+            ),
             interfaces=_interfaces(),
             ground_scheduling=GroundScheduling(),
         )
@@ -383,8 +437,6 @@ def test_link_candidate_maps_and_ground_candidates() -> None:
         terminal_medium="rf",
         node_a=gs.node_id,
         node_b=sat.node_id,
-        interface_a="term0",
-        interface_b="gnd0",
         bandwidth_mbps=1000,
         topology_mode="visible_candidates",
         priority=0,
@@ -397,9 +449,80 @@ def test_link_candidate_maps_and_ground_candidates() -> None:
         link_candidates=(candidate,),
     )
 
-    assert rs.link_interface_map()[(gs.node_id, sat.node_id)] == ("term0", "gnd0")
+    assert rs.link_interface_map() == {}
     assert rs.link_bandwidth_map()[(gs.node_id, sat.node_id)] == 1000
     assert rs.ground_candidate_satellites_by_gs() == {gs.node_id: (sat.node_id,)}
+
+
+def test_link_interface_map_contains_only_fixed_candidates() -> None:
+    left = _satellite("leo-sat-p00s00")
+    right = _satellite("leo-sat-p00s01")
+    rule = ResolvedLinkRule(
+        rule_id="isl",
+        kind="isl",
+        enabled=True,
+        endpoints=(
+            ResolvedEndpoint(segment_id="leo", terminal_role="isl", node_ids=(left.node_id,)),
+            ResolvedEndpoint(segment_id="leo", terminal_role="isl", node_ids=(right.node_id,)),
+        ),
+        topology=VisibleCandidatesTopology(mode="visible_candidates"),
+    )
+    candidate = ResolvedLinkCandidate(
+        rule_id="isl",
+        kind="isl",
+        terminal_roles=("isl", "isl"),
+        terminal_medium="optical",
+        node_a=left.node_id,
+        node_b=right.node_id,
+        interface_a="isl0",
+        interface_b="isl0",
+        bandwidth_mbps=1000,
+        topology_mode="visible_candidates",
+        priority=0,
+        endpoint_segments=("leo", "leo"),
+    )
+    resolved = _resolved_session(
+        nodes=(left, right),
+        link_rules=(rule,),
+        link_candidates=(candidate,),
+    )
+
+    assert resolved.link_interface_map() == {(left.node_id, right.node_id): ("isl0", "isl0")}
+
+
+def test_access_candidate_rejects_fabricated_fixed_interfaces() -> None:
+    with pytest.raises(ValidationError, match="must not carry fixed interfaces"):
+        ResolvedLinkCandidate(
+            rule_id="access",
+            kind="access",
+            terminal_roles=("access", "access"),
+            terminal_medium="rf",
+            node_a="ground",
+            node_b="sat",
+            interface_a="term0",
+            interface_b="gnd0",
+            bandwidth_mbps=1,
+            topology_mode="visible_candidates",
+            priority=0,
+            endpoint_segments=("ground", "leo"),
+        )
+
+
+def test_fixed_candidate_requires_both_interfaces() -> None:
+    with pytest.raises(ValidationError, match="requires both endpoint interfaces"):
+        ResolvedLinkCandidate(
+            rule_id="isl",
+            kind="isl",
+            terminal_roles=("isl", "isl"),
+            terminal_medium="optical",
+            node_a="sat-a",
+            node_b="sat-b",
+            interface_a="isl0",
+            bandwidth_mbps=1,
+            topology_mode="visible_candidates",
+            priority=0,
+            endpoint_segments=("leo", "leo"),
+        )
 
 
 def test_link_candidate_rejects_self_pair() -> None:
@@ -528,9 +651,9 @@ def test_earth_multi_regime_supports_earth_constellation_and_ground() -> None:
     assert rs.check_reference_body("earth") is None
 
 
-def test_earth_multi_regime_rejects_space_node_with_support_note() -> None:
+def test_earth_multi_regime_rejects_space_node_set_with_support_note() -> None:
     rs = RuntimeSupport.earth_multi_regime()
-    feat = rs.check_segment_kind("space_node")
+    feat = rs.check_segment_kind("space_node_set")
     assert isinstance(feat, UnsupportedFeature)
     assert feat.category is FeatureCategory.SEGMENT_KIND
     assert feat.support_note == "supported by the Earth-Luna runtime"

@@ -63,11 +63,20 @@ DRY_RUN_TARGETS = (
     "status",
     "lint",
     "lint-policy",
+    "typecheck",
+    "format-diff",
+    "generate-contracts",
+    "check-contracts",
+    "render-helm",
+    "lint-helm",
+    "check-helm",
     "dead-code",
     "test",
     "test-backend",
     "test-frontend",
     "test-integration",
+    "test-runtime-matrix",
+    "test-builder-e2e",
     "test-root",
     "teardown",
     "force-teardown",
@@ -326,6 +335,27 @@ def test_dockerfiles_have_oci_attribution_labels() -> None:
             assert expected in text, f"{rel} missing {expected}"
 
 
+def test_runtime_images_include_exact_catalog_loader_files() -> None:
+    dockerfiles = {
+        name: (ROOT / f"services/{name}/Dockerfile").read_text()
+        for name in ("ome", "scheduler", "vs_api", "nodalarc_operator")
+    }
+
+    for name, dockerfile in dockerfiles.items():
+        assert "COPY lib/ lib/" in dockerfile, name
+        assert "COPY catalog/ catalog/" in dockerfile, name
+        assert "kubernetes" in dockerfile, name
+    assert "COPY services/ome/ services/ome/" in dockerfiles["ome"]
+    assert "COPY services/scheduler/ services/scheduler/" in dockerfiles["scheduler"]
+    assert "COPY services/vs_api/ services/vs_api/" in dockerfiles["vs_api"]
+    assert (
+        "COPY services/nodalarc_operator/ services/nodalarc_operator/"
+        in dockerfiles["nodalarc_operator"]
+    )
+    for contract in ("docs/ops/configuration-grammar.md",):
+        assert contract in dockerfiles["vs_api"]
+
+
 def test_helm_templates_do_not_have_duplicate_env_blocks_or_nats_box_latest() -> None:
     for rel in ("deploy/helm/templates/operator-deployment.yaml",):
         text = (ROOT / rel).read_text()
@@ -338,9 +368,7 @@ def test_helm_templates_do_not_have_duplicate_env_blocks_or_nats_box_latest() ->
 
 
 def test_platform_config_mounts_force_pod_rollout_on_config_change() -> None:
-    checksum = (
-        'checksum/platform-config: {{ .Files.Get "files/platform.yaml" | sha256sum | quote }}'
-    )
+    checksum = 'checksum/platform-config: {{ tpl (.Files.Get "files/platform.yaml") . | sha256sum | quote }}'
     platform_mount = "mountPath: /etc/nodalarc/platform.yaml"
 
     checked = []
@@ -361,6 +389,93 @@ def test_platform_config_mounts_force_pod_rollout_on_config_change() -> None:
     ]
 
 
+def test_helm_namespace_is_one_runtime_authority() -> None:
+    installer = (ROOT / "scripts/na-install-platform.sh").read_text()
+    platform_file = (ROOT / "deploy/helm/files/platform.yaml").read_text()
+    platform_configmap = (ROOT / "deploy/helm/templates/platform-configmaps.yaml").read_text()
+    operator_template = (ROOT / "deploy/helm/templates/operator-deployment.yaml").read_text()
+    operator_dockerfile = (ROOT / "services/nodalarc_operator/Dockerfile").read_text()
+
+    assert '"--set-string=namespace=$NAMESPACE"' in installer
+    assert '"--set-string=runtimeRelease=$PROJECT_VERSION"' in installer
+    assert "|buildTag|runtimeRelease|namespace)" in installer
+    assert "kubernetes_namespace: {{ .Values.namespace | quote }}" in platform_file
+    assert 'tpl (.Files.Get "files/platform.yaml") .' in platform_configmap
+    assert "- {{ .Values.namespace | quote }}" in operator_template
+    assert 'ENTRYPOINT ["kopf", "run", "-m", "nodalarc_operator"]' in operator_dockerfile
+
+
+def test_operator_mutation_rbac_is_namespace_bound_and_discovery_is_read_only() -> None:
+    template = (ROOT / "deploy/helm/templates/operator-rbac.yaml").read_text()
+    role_match = re.search(r"kind: Role\n(?P<body>.*?)(?=\n---\n)", template, re.DOTALL)
+    cluster_role_match = re.search(
+        r"kind: ClusterRole\n(?P<body>.*?)(?=\n---\n)",
+        template,
+        re.DOTALL,
+    )
+
+    assert role_match is not None
+    assert cluster_role_match is not None
+    role = role_match.group("body")
+    cluster_role = cluster_role_match.group("body")
+
+    assert "namespace: {{ .Values.namespace }}" in role
+    for resource in (
+        "constellationspecs",
+        "constellationspecs/status",
+        "events",
+        "pods",
+        "pods/exec",
+        "pods/proxy",
+        "configmaps",
+        "secrets",
+        "deployments",
+    ):
+        assert f'resources: ["{resource}"]' in role
+        assert f'resources: ["{resource}"]' not in cluster_role
+
+    assert set(re.findall(r'resources: \["([^"]+)"\]', cluster_role)) == {
+        "customresourcedefinitions",
+        "namespaces",
+        "nodes",
+    }
+    for mutation in ("create", "update", "patch", "delete"):
+        assert f'"{mutation}"' not in cluster_role
+
+
+def test_operator_cluster_discovery_names_are_release_and_namespace_qualified() -> None:
+    template = (ROOT / "deploy/helm/templates/operator-rbac.yaml").read_text()
+
+    assert 'printf "nodalarc-operator-discovery-%s-%s" .Release.Name .Values.namespace' in template
+    assert "name: {{ $operatorDiscoveryName | quote }}" in template
+    assert "name: {{ $operatorDiscoveryBindingName | quote }}" in template
+    assert "kind: ClusterRole\nmetadata:\n  name: nodalarc-operator\n" not in template
+    assert "kind: ClusterRoleBinding\nmetadata:\n  name: nodalarc-operator\n" not in template
+
+
+def test_operator_configmap_rbac_keeps_runtime_mutation_without_watch() -> None:
+    template = (ROOT / "deploy/helm/templates/operator-rbac.yaml").read_text()
+    match = re.search(
+        r'resources:\s+\["configmaps"\]\s+verbs:\s+\[([^\]]+)\]',
+        template,
+    )
+    assert match, "Operator ConfigMap RBAC rule not found"
+
+    verbs = {verb.strip().strip('"') for verb in match.group(1).split(",")}
+    assert verbs == {"create", "update", "delete", "get", "list"}
+
+
+def test_orchestrator_cluster_discovery_names_are_release_and_namespace_qualified() -> None:
+    template = (ROOT / "deploy/helm/templates/management-network.yaml").read_text()
+
+    assert (
+        'printf "nodalarc-orchestrator-cluster-%s-%s" .Release.Name .Values.namespace' in template
+    )
+    assert "name: {{ $orchestratorClusterName | quote }}" in template
+    assert "name: {{ $orchestratorClusterBindingName | quote }}" in template
+    assert "name: nodalarc-orchestrator-cluster\n" not in template
+
+
 def test_orchestrator_rbac_can_list_substrate_status_configmaps() -> None:
     template = (ROOT / "deploy/helm/templates/management-network.yaml").read_text()
     match = re.search(
@@ -372,7 +487,35 @@ def test_orchestrator_rbac_can_list_substrate_status_configmaps() -> None:
     assert match, "orchestrator ConfigMap RBAC rule not found"
 
     verbs = {verb.strip().strip('"') for verb in match.group(1).split(",")}
-    assert {"get", "list", "create", "update", "patch"}.issubset(verbs)
+    assert verbs == {"get", "list"}
+
+
+def test_ome_rbac_can_read_catalog_upload_configmaps() -> None:
+    template = (ROOT / "deploy/helm/templates/ome-rbac.yaml").read_text()
+    match = re.search(
+        r'resources:\s+\["configmaps"\]\s+verbs:\s+\[([^\]]+)\]',
+        template,
+    )
+    assert match, "OME ConfigMap RBAC rule not found"
+
+    verbs = {verb.strip().strip('"') for verb in match.group(1).split(",")}
+    assert verbs == {"get", "list"}
+
+
+def test_vs_api_has_separate_upload_and_lifecycle_rbac() -> None:
+    template = (ROOT / "deploy/helm/templates/management-network.yaml").read_text()
+    deployment = (ROOT / "deploy/helm/templates/vs-api-deployment.yaml").read_text()
+    role = template.split("name: nodalarc-vs-api", 2)[2]
+    match = re.search(
+        r'resources:\s+\["configmaps"\]\s+verbs:\s+\[([^\]]+)\]',
+        role,
+    )
+    assert match, "VS-API ConfigMap RBAC rule not found"
+    verbs = {verb.strip().strip('"') for verb in match.group(1).split(",")}
+
+    assert verbs == {"create", "list", "delete"}
+    assert "serviceAccountName: nodalarc-vs-api" in deployment
+    assert "name: nodalarc-vs-api" in template
 
 
 def test_nats_networkpolicy_allows_host_network_node_cidrs() -> None:
@@ -450,8 +593,138 @@ def test_constellationspec_status_schema_preserves_runtime_identity_fields() -> 
         "properties"
     ]
 
-    for field in ("sessionName", "sessionRunId", "platformHash", "runtimeHash"):
+    for field in (
+        "sessionName",
+        "sessionRunId",
+        "documentDigest",
+        "closureDigest",
+        "resolvedSemanticDigest",
+        "runtimeRelease",
+        "runtimeBuild",
+        "platformHash",
+        "runtimeHash",
+    ):
         assert status_props[field]["type"] == "string"
+    assert "catalogUploadId" not in status_props
+    assert "catalogManifestUid" not in status_props
+
+
+def test_runtime_proof_services_share_product_release_identity() -> None:
+    release_env = (
+        '- name: NODALARC_RELEASE\n              value: {{ required "runtimeRelease is required" '
+        ".Values.runtimeRelease | quote }}"
+    )
+
+    for template in (
+        "operator-deployment.yaml",
+        "ome-deployment.yaml",
+        "scheduler-deployment.yaml",
+        "vs-api-deployment.yaml",
+    ):
+        deployment = (ROOT / "deploy/helm/templates" / template).read_text()
+        assert release_env in deployment
+        assert ".Chart.AppVersion" not in deployment
+        assert "value: {{ .Release.Name | quote }}" not in deployment
+
+
+def test_runtime_services_mount_one_atomic_session_configmap_directory() -> None:
+    for template in ("ome-deployment.yaml", "scheduler-deployment.yaml"):
+        deployment = (ROOT / "deploy/helm/templates" / template).read_text()
+        assert "mountPath: /etc/nodalarc/session-config" in deployment
+        assert "name: nodalarc-session" in deployment
+        assert "subPath: session.yaml" not in deployment
+        assert "subPath: session_run_id" not in deployment
+
+
+def test_constellationspec_catalog_upload_schema_is_required_and_exact() -> None:
+    crd = yaml.safe_load((ROOT / "deploy/helm/crds/constellationspec.yaml").read_text())
+    spec_schema = crd["spec"]["versions"][0]["schema"]["openAPIV3Schema"]["properties"]["spec"]
+    upload = spec_schema["properties"]["catalogUpload"]
+
+    assert set(spec_schema["required"]) == {"sessionYaml", "catalogUpload"}
+    assert spec_schema["additionalProperties"] is False
+    assert upload["additionalProperties"] is False
+    assert "x-kubernetes-preserve-unknown-fields" not in spec_schema
+    assert "x-kubernetes-preserve-unknown-fields" not in upload
+    assert set(upload["required"]) == {"upload_id", "closure_digest", "file_count"}
+    assert set(upload["properties"]) == set(upload["required"])
+    assert upload["properties"]["upload_id"]["pattern"].startswith("^[a-z0-9]")
+    assert upload["properties"]["closure_digest"]["pattern"] == "^sha256:[0-9a-f]{64}$"
+    assert upload["properties"]["file_count"]["minimum"] == 0
+
+
+def test_make_session_uses_the_reviewed_vs_api_catalog_switch_path() -> None:
+    import subprocess
+
+    script_path = ROOT / "scripts/na-session.sh"
+    script = script_path.read_text()
+
+    subprocess.run(["bash", "-n", str(script_path)], check=True)
+    assert "/api/v1/sessions" in script
+    assert "/api/v1/sessions/yaml" in script
+    assert "/api/v1/sessions/switch" in script
+    assert "/api/v1/session-transitions/" in script
+    assert "CatalogClosureCollector.collect" in script
+    assert "kubectl apply" not in script
+    assert "kubectl delete constellationspec" not in script
+    assert "sessionYaml: |" not in script
+
+
+def test_platform_upgrade_applies_and_verifies_crd_before_helm() -> None:
+    script = (ROOT / "scripts/na-install-platform.sh").read_text()
+
+    apply_call = 'apply_constellationspec_crd "$HELM_CHART"'
+    assert 'kubectl apply -f "$crd_path"' in script
+    assert "--for=condition=Established" in script
+    assert "spec.properties.catalogUpload.type" in script
+    assert "catalogUpload.properties.upload_id.type" in script
+    assert "catalogUpload.properties.closure_digest.type" in script
+    assert "catalogUpload.properties.file_count.type" in script
+    assert "status.properties.runtimeRelease.type" in script
+    assert "status.properties.runtimeBuild.type" in script
+    assert script.index(apply_call) < script.index('helm install "$HELM_RELEASE"')
+    assert script.index(apply_call) < script.index('helm upgrade "$HELM_RELEASE"')
+
+
+def test_platform_upgrade_has_no_legacy_session_migration_preflight() -> None:
+    script = (ROOT / "scripts/na-install-platform.sh").read_text()
+
+    image_preflight = 'bash "$ROOT_DIR/scripts/na-image-preflight.sh"'
+    crd_apply = 'apply_constellationspec_crd "$HELM_CHART"'
+    assert "upgrade_preflight_cli" not in script
+    assert "preflight_active_sessions_for_upgrade" not in script
+    assert "switch or migrate" not in script
+    assert script.index(image_preflight) < script.index(crd_apply)
+
+
+def test_platform_wait_requires_complete_deployment_and_daemonset_rollouts() -> None:
+    script = (ROOT / "scripts/na-install-platform.sh").read_text()
+
+    assert "custom-columns=GEN:.metadata.generation,OBS:.status.observedGeneration" in script
+    assert "TOTAL:.status.replicas" in script
+    assert "TERM:.status.terminatingReplicas" in script
+    assert "$1 == $2 && $3 == $4 && $3 == $5 && $3 == $6 && $3 == $7" in script
+    assert ".status.currentNumberScheduled" in script
+    assert ".status.updatedNumberScheduled" in script
+    assert ".status.numberAvailable" in script
+    assert ".status.numberMisscheduled" in script
+    assert '"$ds_generation" -eq "$ds_observed"' in script
+
+
+def test_status_uses_workload_generation_readiness_not_pod_phase_counts() -> None:
+    script = (ROOT / "scripts/na-status.sh").read_text()
+
+    assert "status.get('sessionName')" in script
+    assert "yaml.safe_load" not in script
+    assert "NAME:.metadata.name,GEN:.metadata.generation,OBS:.status.observedGeneration" in script
+    assert "TOTAL:.status.replicas" in script
+    assert "TERM:.status.terminatingReplicas" in script
+    assert "$2 == $3 && $4 == $5 && $4 == $6 && $4 == $7 && $4 == $8" in script
+    assert ".status.currentNumberScheduled" in script
+    assert ".status.updatedNumberScheduled" in script
+    assert ".status.numberMisscheduled" in script
+    assert "deployments converged" in script
+    assert "retained rollout replicas" in script
 
 
 def test_image_tags_are_content_addressed() -> None:
@@ -522,6 +795,7 @@ def test_deploy_script_moves_helm_reference_and_verifies_digest() -> None:
     code = "\n".join(code_lines)
     assert "helm upgrade" in code
     assert "--reuse-values" in code
+    assert "runtimeRelease" not in code
     assert "rollout restart" not in code, (
         "deploys must move the Helm reference, never bounce pods onto a pinned tag"
     )

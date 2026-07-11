@@ -23,6 +23,7 @@ from collections import defaultdict
 from pathlib import Path
 
 import pytest
+from nodalarc.configuration_yaml import load_configuration_yaml
 from nodalarc.resolve_session import load_session_resolution_from_file
 from nodalarc.session_validator import validate_session_readiness
 
@@ -198,31 +199,40 @@ def test_shipped_session_access_rules_all_produce_candidates(path: Path) -> None
     assert silent == [], f"{path.name}: access rules with zero candidates: {silent}"
 
 
-def test_w005_catches_the_fairbanks_class() -> None:
+def test_w005_catches_the_fairbanks_class(tmp_path: Path) -> None:
     """Regression: a 64.8 N site under a 53-degree ring with a 25-degree mask
     must be flagged as impossible. This exact content shipped and produced a
     gateway that deployed, wired, and could never schedule a link."""
     import yaml
 
     session_path = SESSIONS_DIR / "earth-leo-heo-geo-luna-reachability.yaml"
-    raw = yaml.safe_load(session_path.read_text())
+    raw = load_configuration_yaml(session_path.read_bytes())
     set_path = (
         Path(__file__).resolve().parents[2]
         / "catalog/nodalarc/site-sets/earth/leo/earth-leo-starlink-gateway-sites.yaml"
     )
-    site_set = yaml.safe_load(set_path.read_text())
+    site_set = load_configuration_yaml(set_path.read_bytes())
+    site_set["site_set"]["id"] = "test-fairbanks"
     site_set["site_set"]["sites"].append("nodalarc:sites/earth/us/ak/earth-us-ak-fairbanks.yaml")
+    user_root = tmp_path / "catalog" / "user"
+    user_site_set = user_root / "site-sets" / "test-fairbanks.yaml"
+    user_site_set.parent.mkdir(parents=True)
+    user_site_set.write_text(yaml.safe_dump(site_set, sort_keys=False), encoding="utf-8")
     for segment in raw["segments"]:
         placement = segment.get("placement")
         if placement and "starlink" in str(placement.get("from_site_set", "")):
-            placement["from_site_set"] = site_set
+            placement["from_site_set"] = "user:site-sets/test-fairbanks.yaml"
 
+    from nodalarc.catalog_paths import CatalogRoots
     from nodalarc.models.resolved_session import SourceContext
-    from nodalarc.resolve_session import default_catalog_roots, resolve_session
+    from nodalarc.resolve_session import resolve_session
 
     resolved = resolve_session(
         raw,
-        catalog_roots=default_catalog_roots(),
+        catalog_roots=CatalogRoots.from_catalog_root(
+            Path("catalog/nodalarc"),
+            user_root=user_root,
+        ),
         source_context=SourceContext(origin="test.w005", run_id="run-test-0043"),
     )
     findings = validate_session_readiness(resolved, available_node_count=3)
@@ -252,12 +262,10 @@ class TestTickRateContract:
     def test_every_shipped_session_matches_declared_tick(self):
         from pathlib import Path
 
-        import yaml
-
         sessions_dir = Path(__file__).resolve().parents[2] / "catalog/nodalarc/sessions"
         seen = {}
         for path in sorted(sessions_dir.glob("*.yaml")):
-            data = yaml.safe_load(path.read_text())
+            data = load_configuration_yaml(path.read_bytes())
             seen[path.stem] = data["time"]["step_seconds"]
         assert seen == self.DECLARED_TICKS, (
             "shipped-session tick rates diverged from the declared table — "
@@ -267,11 +275,9 @@ class TestTickRateContract:
     def test_dwell_horizons_preserve_two_hour_intent_at_one_hz(self):
         from pathlib import Path
 
-        import yaml
-
         sessions_dir = Path(__file__).resolve().parents[2] / "catalog/nodalarc/sessions"
         for path in sorted(sessions_dir.glob("*.yaml")):
-            data = yaml.safe_load(path.read_text())
+            data = load_configuration_yaml(path.read_bytes())
             step = data["time"]["step_seconds"]
             text = path.read_text()
             for match in __import__("re").finditer(r"lookahead_horizon_ticks: (\d+)", text):

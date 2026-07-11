@@ -6,14 +6,18 @@ from __future__ import annotations
 
 import pytest
 from measurement.flow_manager import resolve_dst_ip
-from nodalarc.resolve_session import resolve_session
 
-from tests.conftest import build_segment_session_dict
+from tests.catalog_session_fixtures import (
+    build_catalog_session_fixture,
+)
+from tests.catalog_session_fixtures import (
+    resolve_catalog_session as resolve_session,
+)
 
 
 def _resolved(stations: list[str] | None = None):
     return resolve_session(
-        build_segment_session_dict(
+        build_catalog_session_fixture(
             name="probe-ip-resolution",
             constellation={"planes": {"count": 1, "sats_per_plane": 2}},
             ground_stations={"stations": stations or ["a", "b"]},

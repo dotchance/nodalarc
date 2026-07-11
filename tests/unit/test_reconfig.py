@@ -7,29 +7,23 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-import yaml
+from nodalarc.resolve_session import resolve_session_with_assets
 
-from tests.conftest import build_segment_session_dict
+from tests.catalog_session_fixtures import build_catalog_session_fixture
 from tools import na_reconfig
 from tools.na_reconfig import _match_target, _validate_plane_target_scope
 
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def _session_file(tmp_path: Path, *, stations: list[str] | None = None) -> Path:
-    session_path = tmp_path / "session.yaml"
-    session_path.write_text(
-        yaml.safe_dump(
-            build_segment_session_dict(
-                name="reconfig-catalog-session",
-                constellation={"planes": {"count": 2, "sats_per_plane": 2}},
-                ground_stations={"stations": stations or ["a", "b"]},
-            ),
-            sort_keys=False,
-        ),
-        encoding="utf-8",
+def _session_resolution(tmp_path: Path, *, stations: list[str] | None = None):
+    fixture = build_catalog_session_fixture(
+        name="reconfig-catalog-session",
+        constellation={"planes": {"count": 2, "sats_per_plane": 2}},
+        ground_stations={"stations": stations or ["a", "b"]},
+        base_path=tmp_path,
     )
-    return session_path
+    return resolve_session_with_assets(fixture, catalog_roots=fixture.roots)
 
 
 class TestMatchTargetAll:
@@ -125,10 +119,12 @@ def test_reconfig_source_does_not_use_old_runtime_projection() -> None:
     assert ".primary_ground_set" not in source
     assert "AddressingScheme" not in source
     assert "build_template_vars(" not in source
+    assert "load_cr_runtime_config" in source
+    assert 'source.add_argument(\n        "--live"' in source
 
 
 def test_reconfig_targets_resolved_ground_nodes(monkeypatch, tmp_path: Path) -> None:
-    session_path = _session_file(tmp_path, stations=["a", "b"])
+    resolution = _session_resolution(tmp_path, stations=["a", "b"])
     pushed: list[str] = []
 
     monkeypatch.setattr(
@@ -137,16 +133,16 @@ def test_reconfig_targets_resolved_ground_nodes(monkeypatch, tmp_path: Path) -> 
         lambda _env, _stack, node_id, _vars: pushed.append(node_id),
     )
 
-    na_reconfig.reconfig(str(session_path), "type:ground_station")
+    na_reconfig.reconfig(None, "type:ground_station", resolution=resolution)
 
     assert pushed == [
-        "earth-test-site-00-router",
-        "earth-test-site-01-router",
+        "reconfig-catalog-session-a-router",
+        "reconfig-catalog-session-b-router",
     ]
 
 
 def test_reconfig_targets_resolved_plane(monkeypatch, tmp_path: Path) -> None:
-    session_path = _session_file(tmp_path, stations=["a"])
+    resolution = _session_resolution(tmp_path, stations=["a"])
     pushed: list[str] = []
 
     monkeypatch.setattr(
@@ -155,16 +151,16 @@ def test_reconfig_targets_resolved_plane(monkeypatch, tmp_path: Path) -> None:
         lambda _env, _stack, node_id, _vars: pushed.append(node_id),
     )
 
-    na_reconfig.reconfig(str(session_path), "plane:1")
+    na_reconfig.reconfig(None, "plane:1", resolution=resolution)
 
     assert pushed == ["space-sat-p01s00", "space-sat-p01s01"]
 
 
 def test_add_flow_resolves_destination_from_resolved_session(monkeypatch, tmp_path: Path) -> None:
-    session_path = _session_file(tmp_path, stations=["a", "b"])
+    resolution = _session_resolution(tmp_path, stations=["a", "b"])
     monkeypatch.setattr(
         "measurement.flow_manager.resolve_src_pod_ip",
-        lambda node_id: "10.42.0.7" if node_id == "earth-test-site-00-router" else None,
+        lambda node_id: "10.42.0.7" if node_id == "reconfig-catalog-session-a-router" else None,
     )
     configured: list[dict] = []
     monkeypatch.setattr(
@@ -173,8 +169,10 @@ def test_add_flow_resolves_destination_from_resolved_session(monkeypatch, tmp_pa
     )
 
     na_reconfig.add_flow(
-        str(session_path),
-        "flow-1:earth-test-site-00-router:earth-test-site-01-router:udp:100:continuous",
+        None,
+        "flow-1:reconfig-catalog-session-a-router:"
+        "reconfig-catalog-session-b-router:udp:100:continuous",
+        resolution=resolution,
     )
 
     assert configured == [
@@ -190,12 +188,12 @@ def test_add_flow_resolves_destination_from_resolved_session(monkeypatch, tmp_pa
 
 
 def test_remove_flow_scans_resolved_ground_node_ids(monkeypatch, tmp_path: Path) -> None:
-    session_path = _session_file(tmp_path, stations=["a", "b"])
+    resolution = _session_resolution(tmp_path, stations=["a", "b"])
     probed: list[str] = []
 
     def fake_resolve_src_pod_ip(node_id: str):
         probed.append(node_id)
-        return "10.42.0.8" if node_id == "earth-test-site-01-router" else None
+        return "10.42.0.8" if node_id == "reconfig-catalog-session-b-router" else None
 
     deleted: list[tuple[str, str]] = []
     monkeypatch.setattr("measurement.flow_manager.resolve_src_pod_ip", fake_resolve_src_pod_ip)
@@ -204,11 +202,11 @@ def test_remove_flow_scans_resolved_ground_node_ids(monkeypatch, tmp_path: Path)
         lambda pod_ip, flow_id: deleted.append((pod_ip, flow_id)),
     )
 
-    na_reconfig.remove_flow(str(session_path), "flow-1")
+    na_reconfig.remove_flow(None, "flow-1", resolution=resolution)
 
     assert probed == [
-        "earth-test-site-00-router",
-        "earth-test-site-01-router",
+        "reconfig-catalog-session-a-router",
+        "reconfig-catalog-session-b-router",
     ]
     assert deleted == [("10.42.0.8", "flow-1")]
 

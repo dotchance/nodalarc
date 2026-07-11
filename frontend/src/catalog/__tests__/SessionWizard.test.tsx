@@ -1,6 +1,6 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
-/** The wizard's shipped-session launcher: catalog sessions deploy as-is.
+/** The wizard's catalog-session launcher: catalog sessions deploy as-is.
  *
  * The session list and switch endpoints are the launch path for worked
  * examples; the wizard must surface them (the wiring was once dropped and
@@ -21,24 +21,38 @@ const { SessionWizard } = await import("../SessionWizard");
 
 const SESSIONS: SessionInfo[] = [
   {
+    source_id: {
+      kind: "catalog",
+      session_ref: "nodalarc:sessions/earth-leo-polar.yaml",
+    },
     name: "earth-leo-polar",
-    file: "catalog/nodalarc/sessions/earth-leo-polar.yaml",
     constellation: "leo",
     routing_stack: "isis",
     source: "nodalarc",
+    deploy_allowed: true,
+    source_revision: "sha256:0000000000000000000000000000000000000000000000000000000000000001",
+    document_digest: "sha256:0000000000000000000000000000000000000000000000000000000000000001",
+    dependency_digest: "sha256:0000000000000000000000000000000000000000000000000000000000000011",
     active: true,
   },
   {
+    source_id: {
+      kind: "catalog",
+      session_ref: "nodalarc:sessions/earth-geo-tdrs.yaml",
+    },
     name: "earth-geo-tdrs",
-    file: "catalog/nodalarc/sessions/earth-geo-tdrs.yaml",
     constellation: "geo",
     routing_stack: "isis",
     source: "nodalarc",
+    deploy_allowed: true,
+    source_revision: "sha256:0000000000000000000000000000000000000000000000000000000000000002",
+    document_digest: "sha256:0000000000000000000000000000000000000000000000000000000000000002",
+    dependency_digest: "sha256:0000000000000000000000000000000000000000000000000000000000000022",
     active: false,
   },
 ];
 
-describe("SessionWizard shipped sessions", () => {
+describe("SessionWizard catalog sessions", () => {
   beforeEach(() => {
     vi.stubGlobal(
       "fetch",
@@ -46,7 +60,7 @@ describe("SessionWizard shipped sessions", () => {
     );
   });
 
-  it("launches an inactive shipped session via the switch path", () => {
+  it("launches an inactive catalog session via the switch path", () => {
     const onLaunchSession = vi.fn();
     const onDeployStarted = vi.fn();
     render(
@@ -60,9 +74,7 @@ describe("SessionWizard shipped sessions", () => {
     );
 
     fireEvent.click(screen.getByText("earth-geo-tdrs"));
-    expect(onLaunchSession).toHaveBeenCalledWith(
-      "catalog/nodalarc/sessions/earth-geo-tdrs.yaml",
-    );
+    expect(onLaunchSession).toHaveBeenCalledWith(SESSIONS[1]);
     expect(onDeployStarted).toHaveBeenCalled();
   });
 
@@ -107,7 +119,7 @@ describe("SessionWizard download errors", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn((url: string) =>
-        url.includes("/builder/resolve-world")
+        url.includes("/sessions/yaml?session_ref=")
           ? Promise.resolve({
               ok: false,
               status: 422,
@@ -125,7 +137,7 @@ describe("SessionWizard download errors", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn((url: string) =>
-        url.includes("/builder/resolve-world")
+        url.includes("/sessions/yaml?session_ref=")
           ? Promise.reject(new Error("Failed to fetch"))
           : Promise.resolve({ ok: true, json: () => Promise.resolve([]) }),
       ),

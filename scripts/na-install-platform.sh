@@ -15,7 +15,7 @@ ALLOW_IMAGE_ARG_OVERRIDE="${ALLOW_IMAGE_ARG_OVERRIDE:-0}"
 KUBECONFIG="${KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}"
 export KUBECONFIG
 
-managed_key_pattern='(^|[[:space:]])--set(-string)?[=[:space:]]*(images\.|imagePullPolicy|buildTag)'
+managed_key_pattern='(^|[[:space:]])--set(-string)?[=[:space:]]*(images\.|imagePullPolicy|buildTag|runtimeRelease|namespace)'
 
 if [ -n "$HELM_EXTRA_ARGS" ] && [[ "$HELM_EXTRA_ARGS" =~ $managed_key_pattern ]]; then
     if [ "$ALLOW_IMAGE_ARG_OVERRIDE" != "1" ]; then
@@ -33,6 +33,10 @@ case "$ACTION" in
         exit 2
         ;;
 esac
+
+if [ -z "$PROJECT_VERSION" ]; then
+    PROJECT_VERSION="$(bash "$ROOT_DIR/scripts/na-project-version.sh")"
+fi
 
 release_exists() {
     helm status "$HELM_RELEASE" -n "$NAMESPACE" >/dev/null 2>&1
@@ -58,27 +62,109 @@ render_chart_if_needed() {
     printf '%s\n' "$chart"
 }
 
+apply_constellationspec_crd() {
+    local chart="$1"
+    local chart_dir="$chart"
+    local crd_path upload_type upload_id_type closure_digest_type file_count_type
+    local runtime_release_type runtime_build_type
+
+    if [[ "$chart_dir" != /* ]]; then
+        chart_dir="$ROOT_DIR/$chart_dir"
+    fi
+    crd_path="$chart_dir/crds/constellationspec.yaml"
+    if [ ! -f "$crd_path" ]; then
+        echo "[$ACTION] ERROR: ConstellationSpec CRD not found at $crd_path" >&2
+        exit 2
+    fi
+
+    echo "[$ACTION] Applying ConstellationSpec CRD before runtime images..."
+    kubectl apply -f "$crd_path"
+    kubectl wait --for=condition=Established \
+        crd/constellationspecs.nodalarc.io --timeout=60s
+    upload_type="$(
+        kubectl get crd constellationspecs.nodalarc.io \
+            -o jsonpath='{.spec.versions[?(@.name=="v1alpha1")].schema.openAPIV3Schema.properties.spec.properties.catalogUpload.type}'
+    )"
+    upload_id_type="$(
+        kubectl get crd constellationspecs.nodalarc.io \
+            -o jsonpath='{.spec.versions[?(@.name=="v1alpha1")].schema.openAPIV3Schema.properties.spec.properties.catalogUpload.properties.upload_id.type}'
+    )"
+    closure_digest_type="$(
+        kubectl get crd constellationspecs.nodalarc.io \
+            -o jsonpath='{.spec.versions[?(@.name=="v1alpha1")].schema.openAPIV3Schema.properties.spec.properties.catalogUpload.properties.closure_digest.type}'
+    )"
+    file_count_type="$(
+        kubectl get crd constellationspecs.nodalarc.io \
+            -o jsonpath='{.spec.versions[?(@.name=="v1alpha1")].schema.openAPIV3Schema.properties.spec.properties.catalogUpload.properties.file_count.type}'
+    )"
+    runtime_release_type="$(
+        kubectl get crd constellationspecs.nodalarc.io \
+            -o jsonpath='{.spec.versions[?(@.name=="v1alpha1")].schema.openAPIV3Schema.properties.status.properties.runtimeRelease.type}'
+    )"
+    runtime_build_type="$(
+        kubectl get crd constellationspecs.nodalarc.io \
+            -o jsonpath='{.spec.versions[?(@.name=="v1alpha1")].schema.openAPIV3Schema.properties.status.properties.runtimeBuild.type}'
+    )"
+    if [ "$upload_type" != "object" ] || [ "$upload_id_type" != "string" ] \
+        || [ "$closure_digest_type" != "string" ] || [ "$file_count_type" != "integer" ] \
+        || [ "$runtime_release_type" != "string" ] || [ "$runtime_build_type" != "string" ]; then
+        echo "[$ACTION] ERROR: served ConstellationSpec schema lacks the exact runtime upload/proof contract" >&2
+        exit 1
+    fi
+}
+
 wait_platform_ready() {
     local timeout="${1:-180}"
-    local elapsed=0 total avail ds_desired ds_ready
+    local elapsed=0 deployment_rows total converged
+    local ds_generation ds_observed ds_desired ds_current ds_updated ds_ready ds_available
+    local ds_misscheduled
 
     echo "[$ACTION] Waiting for platform pods (timeout ${timeout}s)..."
     while [ "$elapsed" -lt "$timeout" ]; do
-        total="$(kubectl get deployments -n "$NAMESPACE" --no-headers 2>/dev/null | wc -l | tr -d ' ')"
-        avail="$(kubectl get deployments -n "$NAMESPACE" --no-headers 2>/dev/null | awk '{if ($4+0 >= 1) c++} END {print c+0}')"
+        deployment_rows="$(
+            kubectl get deployments -n "$NAMESPACE" --no-headers \
+                -o custom-columns=GEN:.metadata.generation,OBS:.status.observedGeneration,DES:.spec.replicas,TOTAL:.status.replicas,UPD:.status.updatedReplicas,READY:.status.readyReplicas,AVAIL:.status.availableReplicas,TERM:.status.terminatingReplicas \
+                2>/dev/null || true
+        )"
+        total="$(printf '%s\n' "$deployment_rows" | awk 'NF {count++} END {print count+0}')"
+        converged="$(
+            printf '%s\n' "$deployment_rows" \
+                | awk '$1 == $2 && $3 == $4 && $3 == $5 && $3 == $6 && $3 == $7 && ($8 == "<none>" || $8 == 0) {count++} END {print count+0}'
+        )"
+        ds_generation="$(kubectl get ds nodalarc-node-agent -n "$NAMESPACE" -o jsonpath='{.metadata.generation}' 2>/dev/null || true)"
+        ds_observed="$(kubectl get ds nodalarc-node-agent -n "$NAMESPACE" -o jsonpath='{.status.observedGeneration}' 2>/dev/null || true)"
         ds_desired="$(kubectl get ds nodalarc-node-agent -n "$NAMESPACE" -o jsonpath='{.status.desiredNumberScheduled}' 2>/dev/null || echo 0)"
+        ds_current="$(kubectl get ds nodalarc-node-agent -n "$NAMESPACE" -o jsonpath='{.status.currentNumberScheduled}' 2>/dev/null || echo 0)"
+        ds_updated="$(kubectl get ds nodalarc-node-agent -n "$NAMESPACE" -o jsonpath='{.status.updatedNumberScheduled}' 2>/dev/null || echo 0)"
         ds_ready="$(kubectl get ds nodalarc-node-agent -n "$NAMESPACE" -o jsonpath='{.status.numberReady}' 2>/dev/null || echo 0)"
+        ds_available="$(kubectl get ds nodalarc-node-agent -n "$NAMESPACE" -o jsonpath='{.status.numberAvailable}' 2>/dev/null || echo 0)"
+        ds_misscheduled="$(kubectl get ds nodalarc-node-agent -n "$NAMESPACE" -o jsonpath='{.status.numberMisscheduled}' 2>/dev/null || echo 0)"
+        ds_generation="${ds_generation:-0}"
+        ds_observed="${ds_observed:-0}"
+        ds_desired="${ds_desired:-0}"
+        ds_current="${ds_current:-0}"
+        ds_updated="${ds_updated:-0}"
+        ds_ready="${ds_ready:-0}"
+        ds_available="${ds_available:-0}"
+        ds_misscheduled="${ds_misscheduled:-0}"
 
-        if [ "$total" -gt 0 ] && [ "$avail" -eq "$total" ] && [ "$ds_ready" -eq "$ds_desired" ] && [ "$ds_desired" -gt 0 ]; then
+        if [ "$total" -gt 0 ] && [ "$converged" -eq "$total" ] \
+            && [ "$ds_generation" -eq "$ds_observed" ] \
+            && [ "$ds_current" -eq "$ds_desired" ] \
+            && [ "$ds_updated" -eq "$ds_desired" ] \
+            && [ "$ds_ready" -eq "$ds_desired" ] \
+            && [ "$ds_available" -eq "$ds_desired" ] \
+            && [ "$ds_misscheduled" -eq 0 ] \
+            && [ "$ds_desired" -gt 0 ]; then
             echo ""
-            echo "[$ACTION] Platform ready: $total deployments available, $ds_ready/$ds_desired Node Agent pods running."
+            echo "[$ACTION] Platform ready: $total deployments converged, $ds_ready/$ds_desired Node Agent pods ready."
             return 0
         fi
 
         sleep 2
         elapsed=$((elapsed + 2))
-        printf '\r[%s]   Deployments: %s/%s available, Node Agents: %s/%s ready (%ss/%ss)' \
-            "$ACTION" "$avail" "$total" "$ds_ready" "$ds_desired" "$elapsed" "$timeout"
+        printf '\r[%s]   Deployments: %s/%s converged, Node Agents: %s/%s updated, %s/%s ready (%ss/%ss)' \
+            "$ACTION" "$converged" "$total" "$ds_updated" "$ds_desired" "$ds_ready" "$ds_desired" "$elapsed" "$timeout"
     done
 
     echo ""
@@ -114,6 +200,7 @@ fi
 
 bash "$ROOT_DIR/scripts/na-image-preflight.sh"
 HELM_CHART="$(render_chart_if_needed "$HELM_CHART")"
+apply_constellationspec_crd "$HELM_CHART"
 
 mapfile -t image_args < <(bash "$ROOT_DIR/scripts/na-images.sh" helm-image-args)
 extra_args=()
@@ -121,11 +208,14 @@ if [ -n "$HELM_EXTRA_ARGS" ]; then
     read -r -a extra_args <<< "$HELM_EXTRA_ARGS"
 fi
 
-helm_args=()
+helm_args=(
+    "--set-string=namespace=$NAMESPACE"
+    "--set-string=runtimeRelease=$PROJECT_VERSION"
+)
 if [ "$ALLOW_IMAGE_ARG_OVERRIDE" = "1" ]; then
-    helm_args=("${image_args[@]}" "${extra_args[@]}")
+    helm_args+=("${image_args[@]}" "${extra_args[@]}")
 else
-    helm_args=("${extra_args[@]}" "${image_args[@]}")
+    helm_args+=("${extra_args[@]}" "${image_args[@]}")
 fi
 
 mapfile -t node_agent_ips < <(

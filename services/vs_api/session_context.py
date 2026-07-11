@@ -33,11 +33,9 @@ import threading
 import time as _time
 from collections import Counter, deque
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Literal
 
 import nats
-import yaml
 from nodalarc.db.queries import insert_ome_lifecycle_event, insert_operator_intervention_event
 from nodalarc.explain import compose_gs_decision_timeline_sample
 from nodalarc.models.decision_explanation import (
@@ -46,7 +44,7 @@ from nodalarc.models.decision_explanation import (
     PendingActuation,
 )
 from nodalarc.models.link_decisions import GroundLinkDecisionSnapshot
-from nodalarc.models.resolved_session import ResolvedNode, SourceContext
+from nodalarc.models.resolved_session import ResolvedNode
 from nodalarc.models.scheduler_ops import ActualLinkSnapshot, ActuationState, parse_actuation_state
 from nodalarc.models.vs_api import (
     AlmanacState,
@@ -77,11 +75,11 @@ from nodalarc.nats_channels import (
     session_ephemeris_subject,
 )
 from nodalarc.platform_config import get_platform_config
-from nodalarc.resolve_session import resolve_session_with_assets
+from nodalarc.resolve_session import SessionResolution
 from pydantic import ValidationError
 
 from vs_api.ops_log import is_operator_visible_ops_event, stamp_ops_event
-from vs_api.session_manager import _routing_label
+from vs_api.resolved_runtime_views import routing_label
 
 log = logging.getLogger(__name__)
 
@@ -99,26 +97,28 @@ class SessionContext:
     does NOT own or close the NATS connection.
     """
 
-    def __init__(self, session_id: str, session_config_path: str) -> None:
+    def __init__(
+        self,
+        session_id: str,
+        *,
+        resolution: SessionResolution,
+        source_id: str,
+    ) -> None:
         if not session_id:
             log.error("FATAL: SessionContext created with empty session_id")
             raise ValueError("session_id is required")
-        if not session_config_path:
-            log.error("FATAL: SessionContext created with empty session_config_path")
-            raise ValueError("session_config_path is required")
+        if not isinstance(resolution, SessionResolution):
+            raise TypeError("resolution must be a SessionResolution")
+        if not source_id:
+            raise ValueError("source_id must be non-empty")
 
         self.session_id = session_id
-        self.session_file = session_config_path
-
-        # Parse session config for metadata through the resolver.
-        session_data = yaml.safe_load(Path(session_config_path).read_text())
-        resolution = resolve_session_with_assets(
-            session_data,
-            source_context=SourceContext(origin="vs_api.session_context"),
-        )
+        self.session_file = ""
+        self.session_source_id = source_id
+        self.session_resolution = resolution
         resolved = resolution.resolved
         platform = self._platform_config()
-        self.routing_stack = _routing_label(resolved)
+        self.routing_stack = routing_label(resolved)
         self.constellation_name = resolved.session.name
 
         # Load GS elevation map and beam falloff
@@ -229,6 +229,8 @@ class SessionContext:
         """
         self.session_id = "test"
         self.session_file = ""
+        self.session_source_id = "test"
+        self.session_resolution = None
         self.routing_stack = "test"
         self.constellation_name = "test"
         self.gs_elevation_map = {}

@@ -15,10 +15,22 @@ from copy import deepcopy
 from pathlib import Path
 
 import pytest
-from nodalarc.resolve_session import SessionResolutionError, resolve_session
-from nodalarc.runtime_support import FeatureCategory, UnsupportedFeatureError
+import yaml
+from nodalarc.catalog_paths import CatalogRoots
+from nodalarc.catalog_refs import CatalogRef
+from nodalarc.resolve_session import SessionResolutionError
+from nodalarc.runtime_support import FeatureCategory, RuntimeSupport, UnsupportedFeatureError
 
-from tests.conftest import build_segment_session_dict
+from tests.catalog_session_fixtures import (
+    CatalogSessionFixture,
+    build_catalog_session_fixture,
+)
+from tests.catalog_session_fixtures import (
+    resolve_catalog_session as resolve_session,
+)
+
+ROOT = Path(__file__).resolve().parents[2]
+SHIPPED_ROOT = ROOT / "catalog" / "nodalarc"
 
 
 def _session(**kwargs) -> dict:
@@ -28,21 +40,7 @@ def _session(**kwargs) -> dict:
         "ground_stations": {"stations": ["a"]},
     }
     defaults.update(kwargs)
-    return build_segment_session_dict(**defaults)
-
-
-def _luna_body() -> dict:
-    return {
-        "body": {
-            "id": "luna",
-            "display_name": "Luna",
-            "gravitational_parameter_km3_s2": 4902.800066,
-            "mean_radius_km": 1737.4,
-            "equatorial_radius_km": 1738.1,
-            "polar_radius_km": 1736.0,
-            "reference": "test-fixture",
-        }
-    }
+    return build_catalog_session_fixture(**defaults)
 
 
 def _sha256(path: Path) -> str:
@@ -53,12 +51,32 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _explicit_node_clock_session(
+    tmp_path: Path,
+    clock: dict,
+) -> tuple[dict, CatalogRoots, str]:
+    user_root = tmp_path / "user"
+    source_path = SHIPPED_ROOT / "space-node-sets" / "earth" / "geo" / "earth-geo-tdrs-6.yaml"
+    source = yaml.safe_load(source_path.read_text(encoding="utf-8"))
+    source["space_node_set"]["id"] = "runtime-clock-nodes"
+    source["space_node_set"]["nodes"][0]["clock"] = clock
+    target = user_root / "space-node-sets" / "runtime-clock-nodes.yaml"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(yaml.safe_dump(source, sort_keys=False), encoding="utf-8")
+
+    session_path = SHIPPED_ROOT / "sessions" / "earth-geo-tdrs.yaml"
+    session = yaml.safe_load(session_path.read_text(encoding="utf-8"))
+    session["segments"][0]["source"] = "user:space-node-sets/runtime-clock-nodes.yaml"
+    roots = CatalogRoots.from_catalog_root(SHIPPED_ROOT, user_root=user_root)
+    return session, roots, source["space_node_set"]["nodes"][0]["id"]
+
+
 def _de440s_manifest(*, sha: str | None = None, coverage_end: str = "2026-07-01T00:00:00Z") -> dict:
     kernel_path = Path("configs/ephemerides/de440s.bsp")
     kernel = {
         "id": "de440s",
         "path": str(kernel_path),
-        "targets": [_luna_body()],
+        "targets": ["nodalarc:bodies/luna.yaml"],
         "frame": "gcrs",
         "coverage_start": "2026-06-01T00:00:00Z",
         "coverage_end": coverage_end,
@@ -67,13 +85,41 @@ def _de440s_manifest(*, sha: str | None = None, coverage_end: str = "2026-07-01T
     return {"provider": "skyfield_bsp", "quality_tier": "de440s", "kernels": [kernel]}
 
 
-def _lunar_constellation(raw: dict) -> dict:
-    orbit = raw["segments"][0]["source"]["constellation"]["orbit"]["orbit"]
-    orbit["central_body"] = _luna_body()
+def _lunar_constellation(raw: CatalogSessionFixture) -> CatalogSessionFixture:
+    assert raw.orbit_ref is not None
+    orbit_document = raw.read_catalog(raw.orbit_ref)
+    orbit = orbit_document["orbit"]
+    orbit["central_body"] = "nodalarc:bodies/luna.yaml"
     orbit["id"] = "luna-low-test"
     orbit["shape"] = {"altitude_km": 100}
     orbit["orientation"]["inclination_deg"] = 90
+    orbit["id"] = raw.orbit_ref.relative_path.stem
+    raw.write_catalog(raw.orbit_ref, orbit_document)
     return raw
+
+
+def _move_ground_sites_to_luna(raw: CatalogSessionFixture) -> None:
+    for site_ref in raw.site_refs:
+        site_document = raw.read_catalog(site_ref)
+        site = site_document["site"]
+        site["frame"]["body_fixed"]["body"] = "nodalarc:bodies/luna.yaml"
+        site["location"] = {"lat_deg": -80.0, "lon_deg": 0.0, "alt_m": 0.0}
+        raw.write_catalog(site_ref, site_document)
+
+
+def test_source_propagator_compatibility_never_downgrades_distinct_physics() -> None:
+    support = RuntimeSupport.earth_luna()
+
+    assert support.compatible_supported_propagators("j2_mean_elements") == (
+        "j2_mean_elements",
+        "two_body",
+    )
+    assert support.compatible_supported_propagators("two_body") == (
+        "j2_mean_elements",
+        "two_body",
+    )
+    assert support.compatible_supported_propagators("sgp4_tle") == ("sgp4_tle",)
+    assert support.compatible_supported_propagators("crtbp") == ()
 
 
 class TestMandatoryGate:
@@ -101,11 +147,20 @@ class TestMandatoryGate:
         resolved = resolve_session(raw)
         assert {d.protocol for d in resolved.routing_domains} == {"static"}
 
+    def test_implemented_igp_capabilities_remain_supported(self) -> None:
+        raw = _session(protocol="isis", extensions=["mpls", "sr", "te"])
+
+        resolved = resolve_session(raw)
+
+        assert resolved.routing_domains[0].capabilities == (
+            "mpls",
+            "segment_routing",
+            "traffic_engineering",
+        )
+
     def test_luna_session_passes_default_earth_luna_gate(self) -> None:
         raw = _lunar_constellation(_session())
-        for site in raw["segments"][1]["placement"]["from_site_set"]["site_set"]["sites"]:
-            site["site"]["frame"]["body_fixed"]["body"] = _luna_body()
-            site["site"]["location"] = {"lat_deg": -80.0, "lon_deg": 0.0, "alt_m": 0.0}
+        _move_ground_sites_to_luna(raw)
         raw["ephemeris"] = _de440s_manifest()
         resolved = resolve_session(raw)
         assert {n.central_body for n in resolved.nodes if n.kind == "satellite"} == {"luna"}
@@ -125,18 +180,14 @@ class TestCrossBodyAccess:
 class TestEphemerisManifestAtResolve:
     def test_checksum_mismatch_fails_at_resolve(self) -> None:
         raw = _lunar_constellation(_session())
-        for site in raw["segments"][1]["placement"]["from_site_set"]["site_set"]["sites"]:
-            site["site"]["frame"]["body_fixed"]["body"] = _luna_body()
-            site["site"]["location"] = {"lat_deg": -80.0, "lon_deg": 0.0, "alt_m": 0.0}
+        _move_ground_sites_to_luna(raw)
         raw["ephemeris"] = _de440s_manifest(sha="0" * 64)
         with pytest.raises(SessionResolutionError, match="checksum mismatch"):
             resolve_session(raw)
 
     def test_stale_coverage_fails_at_resolve(self) -> None:
         raw = _lunar_constellation(_session())
-        for site in raw["segments"][1]["placement"]["from_site_set"]["site_set"]["sites"]:
-            site["site"]["frame"]["body_fixed"]["body"] = _luna_body()
-            site["site"]["location"] = {"lat_deg": -80.0, "lon_deg": 0.0, "alt_m": 0.0}
+        _move_ground_sites_to_luna(raw)
         manifest = _de440s_manifest(coverage_end="2026-06-02T00:00:00Z")
         manifest["kernels"][0]["coverage_start"] = "2026-06-01T00:00:00Z"
         raw["ephemeris"] = manifest
@@ -169,7 +220,20 @@ class TestUnconsumedGrammarClass:
         raw["addressing"]["loopbacks"][0]["allocation"] = "by_attach_index"
         with pytest.raises(UnsupportedFeatureError) as err:
             resolve_session(raw)
-        assert any("by_attach_index" in f.value for f in err.value.features)
+        assert any(
+            f.category == FeatureCategory.ADDRESS_ALLOCATION and f.value == "by_attach_index"
+            for f in err.value.features
+        )
+
+    def test_nearest_visible_topology_rejected_typed(self) -> None:
+        raw = _session()
+        raw["link_rules"][1]["topology"] = {"mode": "nearest_visible"}
+        with pytest.raises(UnsupportedFeatureError) as err:
+            resolve_session(raw)
+        assert any(
+            feature.category == FeatureCategory.LINK_TOPOLOGY and feature.value == "nearest_visible"
+            for feature in err.value.features
+        )
 
     def test_affine_segment_clock_rejected_typed(self) -> None:
         raw = _session()
@@ -188,21 +252,47 @@ class TestUnconsumedGrammarClass:
         sats = [n for n in resolved.nodes if n.kind == "satellite"]
         assert sats and all(n.clock.model == "session" for n in sats)
 
+    def test_affine_explicit_node_clock_rejected_typed(self, tmp_path: Path) -> None:
+        raw, roots, _ = _explicit_node_clock_session(
+            tmp_path,
+            {"model": "affine", "rate": 2.0},
+        )
+        with pytest.raises(UnsupportedFeatureError) as err:
+            resolve_session(raw, catalog_roots=roots)
+        assert any(
+            feature.category == FeatureCategory.CLOCK_MODEL and feature.value == "affine"
+            for feature in err.value.features
+        )
+
+    def test_session_explicit_node_clock_threads_to_resolved_node(self, tmp_path: Path) -> None:
+        raw, roots, local_node_id = _explicit_node_clock_session(
+            tmp_path,
+            {"model": "session"},
+        )
+
+        resolved = resolve_session(raw, catalog_roots=roots)
+        node = next(item for item in resolved.nodes if item.local_node_id == local_node_id)
+
+        assert node.clock.model == "session"
+
     def test_node_payloads_rejected_typed(self) -> None:
         raw = _session()
-        node = raw["segments"][0]["source"]["constellation"]["node"]["node"]
+        assert raw.space_node_ref is not None
+        node_document = raw.read_catalog(raw.space_node_ref)
+        node = node_document["node"]
+        payload_ref = CatalogRef("user:payloads/runtime-support-camera.yaml")
+        raw.create_catalog(
+            payload_ref,
+            {"payload": {"id": payload_ref.relative_path.stem, "terminal_slots": []}},
+        )
         node["payloads"] = [
             {
                 "id": "cam-mount",
                 "count": 1,
-                "payload": {
-                    "payload": {
-                        "id": "cam",
-                        "terminal_slots": [],
-                    }
-                },
+                "payload": str(payload_ref),
             }
         ]
+        raw.write_catalog(raw.space_node_ref, node_document)
         with pytest.raises(UnsupportedFeatureError) as err:
             resolve_session(raw)
         assert any(f.category == FeatureCategory.PAYLOAD for f in err.value.features)
@@ -214,11 +304,28 @@ class TestUnconsumedGrammarClass:
         with pytest.raises(SessionResolutionError, match="exceeding max_links_per_node"):
             resolve_session(raw)
 
-    def test_unconsumed_dynamic_constraints_rejected_loudly(self) -> None:
+    @pytest.mark.parametrize("constraint", ["max_range_km", "require_mutual_visibility"])
+    def test_unconsumed_dynamic_constraints_rejected_typed(self, constraint: str) -> None:
         raw = _session()
-        raw["link_rules"][1]["constraints"] = {"max_range_km": 4000.0}
-        with pytest.raises(SessionResolutionError, match="unsupported runtime constraint"):
+        value = 4000.0 if constraint == "max_range_km" else True
+        raw["link_rules"][1]["constraints"] = {constraint: value}
+        with pytest.raises(UnsupportedFeatureError) as err:
             resolve_session(raw)
+        assert any(
+            feature.category == FeatureCategory.LINK_CONSTRAINT and feature.value == constraint
+            for feature in err.value.features
+        )
+
+    def test_static_routing_capability_rejected_typed(self) -> None:
+        raw = _session(protocol="static")
+        raw["routing"]["domains"][0]["capabilities"] = {"mpls": {}}
+        with pytest.raises(UnsupportedFeatureError) as err:
+            resolve_session(raw)
+        assert any(
+            feature.category == FeatureCategory.ROUTING_CAPABILITY
+            and feature.value == "static:mpls"
+            for feature in err.value.features
+        )
 
     def test_multi_segment_session_requires_candidate_limits(self) -> None:
         raw = _session()
@@ -232,26 +339,22 @@ class TestUnconsumedGrammarClass:
         with pytest.raises(SessionResolutionError, match="before materialization"):
             resolve_session(raw)
 
-    def test_inert_orbit_default_propagator_rejected(self) -> None:
-        raw = _session()
-        raw["orbit"] = {"default_propagator": "j2_mean_elements"}
-        with pytest.raises(SessionResolutionError, match="inert"):
-            resolve_session(raw)
-
     def test_unknown_terminal_install_mount_rejected(self) -> None:
         raw = _session()
-        sites = raw["segments"][1]["placement"]["from_site_set"]["site_set"]["sites"]
-        site_node = sites[0]["site"]["nodes"][0]
+        site_document = raw.read_catalog(raw.site_refs[0])
+        site_node = site_document["site"]["nodes"][0]
         site_node["terminals"]["no-such-mount"] = {"installed_count": 1}
+        raw.write_catalog(raw.site_refs[0], site_document)
         with pytest.raises(SessionResolutionError, match="unknown mount"):
             resolve_session(raw)
 
     def test_allocator_wide_scheduling_divergence_rejected_at_resolve(self) -> None:
         raw = _session(ground_stations={"stations": ["a", "b"]})
-        sites = raw["segments"][1]["placement"]["from_site_set"]["site_set"]["sites"]
-        sites[0]["site"]["nodes"][0]["scheduling"] = {
+        site_document = raw.read_catalog(raw.site_refs[0])
+        site_document["site"]["nodes"][0]["scheduling"] = {
             "ranking_order": ["selection_score", "lex_pair"]
         }
+        raw.write_catalog(raw.site_refs[0], site_document)
         with pytest.raises(SessionResolutionError, match="allocator-wide"):
             resolve_session(raw)
 
@@ -292,7 +395,9 @@ class TestTerminalBindingClass:
 
     def test_fixed_interfaces_come_from_the_selected_terminal_block(self) -> None:
         raw = _session(constellation={"planes": {"count": 1, "sats_per_plane": 2}})
-        node = raw["segments"][0]["source"]["constellation"]["node"]["node"]
+        assert raw.space_node_ref is not None
+        node_document = raw.read_catalog(raw.space_node_ref)
+        node = node_document["node"]
         # Two ISL mounts with different mediums; manifest order puts the rf
         # mount's interface first. The rf terminal definition is cloned from
         # the (rf) access terminal so it stays a valid rf primitive.
@@ -302,20 +407,28 @@ class TestTerminalBindingClass:
             "id": "isl_rf",
             "role": "isl",
             "count": optical_mount["count"],
-            "terminal": deepcopy(access_mount["terminal"]),
+            "terminal": "user:terminals/isl-rf-test.yaml",
         }
-        rf_isl["terminal"]["terminal"]["id"] = "isl-rf-test"
+        rf_terminal = raw.read_catalog(CatalogRef(access_mount["terminal"]))
+        rf_terminal["terminal"]["id"] = "isl-rf-test"
+        raw.create_catalog(CatalogRef(rf_isl["terminal"]), rf_terminal)
         node["terminals"].insert(0, rf_isl)
+        raw.write_catalog(raw.space_node_ref, node_document)
 
         resolved = resolve_session(raw)
         sat = next(n for n in resolved.nodes if n.kind == "satellite")
         name_by_terminal = {w.name: w.terminal_id for w in sat.wan_interfaces}
-        optical_candidates = [c for c in resolved.link_candidates if c.terminal_medium == "optical"]
+        optical_candidates = [
+            candidate
+            for candidate in resolved.link_candidates
+            if candidate.kind != "access" and candidate.terminal_medium == "optical"
+        ]
         assert optical_candidates
         for candidate in optical_candidates:
+            interface_a, interface_b = candidate.fixed_interfaces
             for node_id, iface in (
-                (candidate.node_a, candidate.interface_a),
-                (candidate.node_b, candidate.interface_b),
+                (candidate.node_a, interface_a),
+                (candidate.node_b, interface_b),
             ):
                 owner = name_by_terminal[iface]
                 block = next(
@@ -371,3 +484,13 @@ class TestSharedSitePlacement:
         )
         with pytest.raises(SessionResolutionError, match="conflicting"):
             resolve_session(raw)
+
+    def test_conflicting_group_clocks_for_shared_site_rejected(self) -> None:
+        raw = self._two_group_session()
+        raw["segments"][1]["clock"] = {"model": "affine", "rate": 2.0}
+        support = RuntimeSupport.earth_luna().model_copy(
+            update={"supported_clock_models": frozenset({"session", "affine"})}
+        )
+
+        with pytest.raises(SessionResolutionError, match="clock.*must be identical"):
+            resolve_session(raw, runtime_support=support)

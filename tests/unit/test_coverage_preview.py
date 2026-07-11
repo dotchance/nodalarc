@@ -15,21 +15,17 @@ in the wizard got a Python traceback instead of results.
 from __future__ import annotations
 
 import pytest
-from nodalarc.models.addressing import topology_summary
 from nodalarc.models.coverage import CoveragePreviewResult
-from nodalarc.ome_inputs import build_ome_inputs_from_resolved
-from nodalarc.resolve_session import resolve_session_with_assets
 from nodalarc.session_generator import generated_isl_topology
-from ome.coverage_preview import _preview_segment_session, compute_coverage_preview
+from ome.coverage_preview import compute_coverage_preview
 
 
 @pytest.fixture(scope="module")
 def demo_preview() -> CoveragePreviewResult:
     """Run coverage preview once with the smallest real config."""
     return compute_coverage_preview(
-        constellation_source="nodalarc:constellations/earth/leo/earth-leo-ring-36.yaml",
-        satellite_type_override=None,
-        ground_stations_source="nodalarc:site-sets/earth/leo/earth-leo-starlink-pop-sites.yaml",
+        "nodalarc:constellations/earth/leo/earth-leo-ring-36.yaml",
+        "nodalarc:site-sets/earth/leo/earth-leo-starlink-pop-sites.yaml",
     )
 
 
@@ -37,9 +33,8 @@ def demo_preview() -> CoveragePreviewResult:
 def heo_preview() -> CoveragePreviewResult:
     """Run coverage preview on the shipped eccentric HEO catalog primitives."""
     return compute_coverage_preview(
-        constellation_source="nodalarc:constellations/earth/heo/earth-heo-molniya-3.yaml",
-        satellite_type_override=None,
-        ground_stations_source="nodalarc:site-sets/earth/heo/earth-heo-gateway-sites.yaml",
+        "nodalarc:constellations/earth/heo/earth-heo-molniya-3.yaml",
+        "nodalarc:site-sets/earth/heo/earth-heo-gateway-sites.yaml",
     )
 
 
@@ -117,7 +112,6 @@ def test_missing_constellation_raises():
     with pytest.raises(ValueError, match="constellation is required"):
         compute_coverage_preview(
             None,
-            None,
             "nodalarc:site-sets/earth/leo/earth-leo-starlink-pop-sites.yaml",
         )
 
@@ -127,7 +121,6 @@ def test_missing_ground_stations_raises():
         compute_coverage_preview(
             "nodalarc:constellations/earth/leo/earth-leo-ring-36.yaml",
             None,
-            None,
         )
 
 
@@ -135,7 +128,6 @@ def test_nonexistent_constellation_raises():
     with pytest.raises(FileNotFoundError):
         compute_coverage_preview(
             "nodalarc:constellations/earth/leo/nonexistent.yaml",
-            None,
             "nodalarc:site-sets/earth/leo/earth-leo-starlink-pop-sites.yaml",
         )
 
@@ -144,74 +136,16 @@ def test_nonexistent_ground_stations_raises():
     with pytest.raises(FileNotFoundError):
         compute_coverage_preview(
             "nodalarc:constellations/earth/leo/earth-leo-ring-36.yaml",
-            None,
             "nodalarc:site-sets/earth/leo/nonexistent.yaml",
         )
 
 
-def test_preview_composes_chosen_satellite_primitive():
-    """Preview assembles from primitives exactly like generation: the chosen
-    space node flies the constellation's geometry through the same resolver
-    path; an unknown primitive is a typed rejection, never a fallback."""
-    with pytest.raises(ValueError, match="Unknown satellite primitive"):
+def test_preview_and_topology_require_catalog_references() -> None:
+    with pytest.raises(ValueError, match="must be a nodalarc:<path> or user:<path> reference"):
         compute_coverage_preview(
-            constellation_source="nodalarc:constellations/earth/leo/earth-leo-ring-36.yaml",
-            satellite_type_override="generic-4isl",
-            ground_stations_source="nodalarc:site-sets/earth/leo/earth-leo-starlink-pop-sites.yaml",
+            {"constellation": {}},
+            "nodalarc:site-sets/earth/leo/earth-leo-starlink-pop-sites.yaml",
         )
 
-    result = compute_coverage_preview(
-        constellation_source="nodalarc:constellations/earth/leo/earth-leo-ring-36.yaml",
-        satellite_type_override="leo-relay",
-        ground_stations_source="nodalarc:site-sets/earth/leo/earth-leo-starlink-pop-sites.yaml",
-    )
-    assert result.orbital_period_s > 0
-
-
-def test_preview_uses_historical_starlink_576_cross_plane_mesh() -> None:
-    custom_constellation = {
-        "constellation": {
-            "id": "custom-48x12-550km",
-            "display_name": "Custom 48x12 550 km shell",
-            "node": "nodalarc:nodes/space/starlink-v2-mesh.yaml",
-            "orbit": {
-                "orbit": {
-                    "id": "custom-48x12-550km-orbit-550km-53deg",
-                    "central_body": "nodalarc:bodies/earth.yaml",
-                    "epoch": "2026-06-08T00:00:00Z",
-                    "shape": {"altitude_km": 550},
-                    "orientation": {
-                        "inclination_deg": 53,
-                        "raan_deg": 0,
-                        "argument_of_perigee_deg": 0,
-                    },
-                    "phase": {"mean_anomaly_deg": 0},
-                    "propagator": "j2_mean_elements",
-                    "reference": "user-authored",
-                }
-            },
-            "planes": {"count": 48, "raan_spacing_deg": 7.5},
-            "slots_per_plane": 12,
-            "phasing": {"mode": "walker_delta", "phase_offset_deg": 0.625},
-            "node_tags": [{"tag": "all"}],
-            "reference": "user-authored",
-        }
-    }
-
-    topology = generated_isl_topology(custom_constellation)
-    assert topology is not None
-    assert topology["mode"] == "explicit_pairs"
-    assert len(topology["pairs"]) == 1152
-
-    session = _preview_segment_session(
-        constellation_source=custom_constellation,
-        ground_stations_source="nodalarc:site-sets/earth/leo/earth-leo-starlink-pop-sites.yaml",
-        isl_topology=topology,
-    )
-    resolved = resolve_session_with_assets(session).resolved
-    runtime = build_ome_inputs_from_resolved(resolved)
-    summary = topology_summary(runtime.neighbors)
-
-    assert summary["has_cross_plane"] is True
-    assert summary["max_cross_per_sat"] == 2
-    assert summary["total_unique_pairs"] == 1152
+    with pytest.raises(ValueError, match="must be a nodalarc:<path> or user:<path> reference"):
+        generated_isl_topology({"constellation": {}})

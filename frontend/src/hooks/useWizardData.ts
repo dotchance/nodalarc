@@ -8,17 +8,30 @@
  */
 
 import { useState, useEffect } from "react";
-import { REST_URL, authHeaders } from "../config";
+import {
+  getWizardAvailableStations,
+  getWizardConstellationPresets,
+  getWizardExtensionRules,
+  getWizardGroundStationSets,
+  getWizardSatelliteTypes,
+} from "../builder/builderApiClient";
 import type {
   ConstellationPreset,
   ExtensionRules,
   SatelliteTypePreset,
   GroundStationSet,
   AvailableStation,
+  WizardConstellationCapability,
+  WizardConstellationGeometry,
+  OrbitModel,
 } from "../catalog/wizardTypes";
 
 export interface WizardData {
   presets: ConstellationPreset[];
+  customConstellationCapability: WizardConstellationCapability | null;
+  customConstellationSeed: WizardConstellationGeometry | null;
+  customConstellationDefaultNode: string | null;
+  orbitModels: OrbitModel[];
   rules: ExtensionRules | null;
   satelliteTypes: SatelliteTypePreset[];
   groundStationSets: GroundStationSet[];
@@ -27,37 +40,55 @@ export interface WizardData {
 
 export function useWizardData(): WizardData {
   const [presets, setPresets] = useState<ConstellationPreset[]>([]);
+  const [customConstellationCapability, setCustomConstellationCapability] =
+    useState<WizardConstellationCapability | null>(null);
+  const [customConstellationSeed, setCustomConstellationSeed] =
+    useState<WizardConstellationGeometry | null>(null);
+  const [customConstellationDefaultNode, setCustomConstellationDefaultNode] =
+    useState<string | null>(null);
+  const [orbitModels, setOrbitModels] = useState<OrbitModel[]>([]);
   const [rules, setRules] = useState<ExtensionRules | null>(null);
   const [satelliteTypes, setSatelliteTypes] = useState<SatelliteTypePreset[]>([]);
   const [groundStationSets, setGroundStationSets] = useState<GroundStationSet[]>([]);
   const [availableStations, setAvailableStations] = useState<AvailableStation[]>([]);
 
   useEffect(() => {
-    fetch(`${REST_URL}/api/v1/presets/constellations`, { headers: authHeaders() })
-      .then((r) => r.json())
-      .then((data: ConstellationPreset[]) => setPresets(data))
+    getWizardConstellationPresets()
+      .then((data) => {
+        setPresets(data.presets.map((preset) => ({ ...preset, custom_geometry: null })));
+        setCustomConstellationCapability(data.custom_geometry);
+        setCustomConstellationSeed(data.custom_geometry_seed);
+        setCustomConstellationDefaultNode(data.custom_geometry_default_node);
+        setOrbitModels([...data.orbit_models]);
+      })
       .catch(() => {});
 
-    fetch(`${REST_URL}/api/v1/wizard/extensions`, { headers: authHeaders() })
-      .then((r) => r.json())
-      .then((data: ExtensionRules) => setRules(data))
+    getWizardExtensionRules()
+      .then(setRules)
       .catch(() => {});
 
-    fetch(`${REST_URL}/api/v1/presets/satellite-types`, { headers: authHeaders() })
-      .then((r) => r.json())
-      .then((data: SatelliteTypePreset[]) => setSatelliteTypes(data))
+    getWizardSatelliteTypes()
+      .then((data) => setSatelliteTypes([...data.presets]))
       .catch(() => {});
 
-    fetch(`${REST_URL}/api/v1/presets/ground-stations`, { headers: authHeaders() })
-      .then((r) => r.json())
-      .then((data: GroundStationSet[]) => setGroundStationSets(data))
+    getWizardGroundStationSets()
+      .then((data) => setGroundStationSets(data.presets.map((preset) => ({ ...preset }))))
       .catch(() => {});
 
-    fetch(`${REST_URL}/api/v1/presets/ground-stations/stations`, { headers: authHeaders() })
-      .then((r) => r.json())
-      .then((data: AvailableStation[]) => setAvailableStations(data))
+    getWizardAvailableStations()
+      .then((data) => setAvailableStations([...data.stations]))
       .catch(() => {});
   }, []);
 
-  return { presets, rules, satelliteTypes, groundStationSets, availableStations };
+  return {
+    presets,
+    customConstellationCapability,
+    customConstellationSeed,
+    customConstellationDefaultNode,
+    orbitModels,
+    rules,
+    satelliteTypes,
+    groundStationSets,
+    availableStations,
+  };
 }

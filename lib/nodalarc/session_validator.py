@@ -300,23 +300,6 @@ def _check_ground_mbb_capacity(resolved: ResolvedSession) -> list[ValidationResu
 def _check_ome_runtime_support(resolved: ResolvedSession) -> list[ValidationResult]:
     """Known current OME runtime limits must be visible before deployment."""
     results: list[ValidationResult] = []
-    for node in resolved.nodes:
-        if node.kind != "satellite" or node.orbit is None:
-            continue
-        if node.orbit.propagator == "sgp4_tle":
-            results.append(
-                ValidationResult(
-                    level="error",
-                    code="E020",
-                    message=(
-                        f"Satellite {node.node_id!r} uses sgp4_tle, but TLE records "
-                        "are not yet materialized into the OME input bundle."
-                    ),
-                    remediation="Materialize validated TLE records into ResolvedSession/OME inputs.",
-                    field_path=f"segments.{node.segment_id}.orbit",
-                )
-            )
-
     active_bodies = {
         body
         for node in resolved.nodes

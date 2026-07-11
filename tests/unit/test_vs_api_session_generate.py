@@ -1,87 +1,102 @@
 """Tests for VS-API session generation contract."""
 
-from types import SimpleNamespace
+from pathlib import Path
 
+import pytest
 import vs_api.main as main
 import yaml
-from fastapi.testclient import TestClient
+from nodalarc.catalog_refs import SessionRef
+from vs_api.builder_compiler import canonicalize_persisted_configuration
+from vs_api.catalog_context import create_catalog_context
 from vs_api.main import app
 
-from tests.conftest import build_segment_session_dict
+from tests.asgi_client import ASGITestClient as TestClient
 
 client = TestClient(app)
+ROOT = Path(__file__).resolve().parents[2]
+
+
+@pytest.fixture
+def catalog_client(tmp_path: Path):
+    context = create_catalog_context(
+        session_data_root=tmp_path,
+        shipped_root=ROOT / "catalog/nodalarc",
+    )
+    app.dependency_overrides[main.get_catalog_context] = lambda: context
+    try:
+        yield TestClient(app), context
+    finally:
+        app.dependency_overrides.pop(main.get_catalog_context, None)
 
 
 def _demo_session_with_name(name: str) -> str:
-    return yaml.dump(
-        build_segment_session_dict(
-            name=name,
-            constellation={
-                "planes": {"count": 1, "sats_per_plane": 2},
-            },
-            ground_stations={"stations": ["a"]},
-            protocol="ospf",
-        ),
-        default_flow_style=False,
-        sort_keys=False,
+    raw = yaml.safe_load(
+        (
+            Path(__file__).resolve().parents[2] / "catalog/nodalarc/sessions/earth-leo-simple.yaml"
+        ).read_text(encoding="utf-8")
     )
+    raw["session"]["name"] = name
+    return yaml.safe_dump(raw, default_flow_style=False, sort_keys=False)
 
 
-def test_generate_session_requires_orbit_propagator():
+def test_legacy_generate_endpoint_is_retired():
     response = client.post(
         "/api/v1/session/generate",
-        json={
-            "constellation": "starlink-176",
-            "protocol": "isis",
-            "extensions": ["te", "mpls"],
-        },
+        json={"constellation": "retired", "protocol": "isis"},
     )
 
-    assert response.status_code == 400
-    assert response.json()["error"] == "orbit_propagator is required"
+    assert response.status_code == 404
 
 
-def test_generate_session_writes_selected_orbit_propagator():
-    response = client.post(
-        "/api/v1/session/generate",
-        json={
-            "constellation": "earth-leo-walker-delta-176",
-            "protocol": "isis",
-            "extensions": ["te", "mpls"],
-            "area_strategy": "per_plane",
-            "ground_stations": "nodalarc:site-sets/earth/leo/earth-leo-starlink-pop-sites.yaml",
-            "orbit_propagator": "j2_mean_elements",
-        },
-    )
-
-    assert response.status_code == 200
-    session = yaml.safe_load(response.json()["yaml"])
-    assert "constellation" not in session
-    assert "ground_stations" not in session
-    assert "identity" not in session
-    assert "kind" not in session["segments"][0]
-    assert "kind" not in session["segments"][1]
-    assert session["segments"][0]["source"].startswith("nodalarc:constellations/")
-    assert session["segments"][1]["placement"]["from_site_set"].startswith("nodalarc:site-sets/")
-    assert "orbit" not in session
-    domain = session["routing"]["domains"][0]
-    assert domain["protocol"] == "isis"
-    assert domain["area_assignment"]["strategy"] == "per_plane"
-    assert domain["capabilities"] == {"mpls": {}, "traffic_engineering": {}}
-
-
-def test_constellation_presets_expose_constellation_mode_for_wizard_gating():
+def test_constellation_presets_expose_backend_runtime_capabilities():
     response = client.get("/api/v1/presets/constellations")
 
     assert response.status_code == 200
-    presets = {item["name"]: item for item in response.json()}
-    assert presets["earth-leo-ring-36"]["mode"] == "constellation"
-    assert presets["earth-leo-walker-delta-176"]["mode"] == "constellation"
-    assert presets["earth-leo-polar-36"]["mode"] == "constellation"
-    assert presets["earth-meo-gps-24"]["mode"] == "constellation"
-    assert presets["earth-geo-ring-8"]["mode"] == "constellation"
-    assert presets["earth-heo-molniya-3"]["mode"] == "constellation"
-    assert presets["luna-polar-2"]["mode"] == "constellation"
+    payload = response.json()
+    assert set(payload) == {
+        "presets",
+        "custom_geometry",
+        "custom_geometry_seed",
+        "custom_geometry_default_node",
+        "orbit_models",
+    }
+    presets = {item["name"]: item for item in payload["presets"]}
+
+    earth = presets["earth-leo-ring-36"]["capability"]
+    assert earth == {
+        "source_kind": "constellation",
+        "runtime_supported_propagators": ["j2_mean_elements", "two_body"],
+        "default_propagator": "j2_mean_elements",
+        "unavailable_reason": None,
+    }
+    assert presets["luna-polar-2"]["capability"]["default_propagator"] == "two_body"
+    nrho = presets["luna-nrho-relay-1"]["capability"]
+    assert nrho["runtime_supported_propagators"] == []
+    assert nrho["default_propagator"] is None
+    assert "crtbp" in nrho["unavailable_reason"]
+
+    assert payload["custom_geometry"] == {
+        "source_kind": "custom_geometry",
+        "runtime_supported_propagators": ["j2_mean_elements", "two_body"],
+        "default_propagator": "j2_mean_elements",
+        "unavailable_reason": None,
+    }
+    assert payload["custom_geometry_seed"]["pattern"] == "walker_delta"
+    assert payload["custom_geometry_seed"]["planes"] == 4
+    assert payload["custom_geometry_default_node"].startswith("nodalarc:nodes/space/")
+    assert [model["id"] for model in payload["orbit_models"]] == [
+        "j2_mean_elements",
+        "two_body",
+        "sgp4_tle",
+    ]
+
+
+def test_constellation_preset_openapi_uses_generated_response_contract():
+    operation = app.openapi()["paths"]["/api/v1/presets/constellations"]["get"]
+
+    assert operation["responses"]["200"]["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/WizardConstellationPresetResponse"
+    }
 
 
 def test_wizard_presets_are_catalog_backed_not_retired_config_roots():
@@ -94,15 +109,15 @@ def test_wizard_presets_are_catalog_backed_not_retired_config_roots():
     sites_response = client.get("/api/v1/presets/ground-stations/stations")
 
     assert sat_response.status_code == 200
-    sat_presets = sat_response.json()
+    sat_presets = sat_response.json()["presets"]
     assert sat_presets
     assert all(item["file"].startswith("nodalarc:nodes/space/") for item in sat_presets)
     assert all(item["terminals"] for item in sat_presets)
     assert sets_response.status_code == 200
     assert sites_response.status_code == 200
 
-    site_sets = sets_response.json()
-    sites = sites_response.json()
+    site_sets = sets_response.json()["presets"]
+    sites = sites_response.json()["stations"]
     assert site_sets
     assert sites
     assert all(item["file"].startswith("nodalarc:site-sets/") for item in site_sets)
@@ -114,143 +129,137 @@ def test_wizard_extension_rules_use_catalog_area_strategy_tokens():
 
     assert response.status_code == 200
     assert response.json()["area_strategies"] == ["flat", "stripe", "per_plane"]
+    assert response.json()["protocols"] == {
+        "ospf": {"extensions": ["sr", "te", "mpls"], "constraints": {}},
+        "isis": {"extensions": ["sr", "te", "mpls"], "constraints": {}},
+    }
 
 
-def test_generate_session_rejects_absolute_ground_station_reference():
-    response = client.post(
-        "/api/v1/session/generate",
-        json={
-            "constellation": "earth-leo-ring-36",
-            "protocol": "isis",
-            "extensions": ["te"],
-            "ground_stations": "/tmp/outside",
-            "orbit_propagator": "j2_mean_elements",
-        },
-    )
+def test_wizard_data_endpoints_publish_closed_response_models():
+    paths = {
+        "/api/v1/presets/satellite-types": "WizardSatelliteTypePresetResponse",
+        "/api/v1/presets/ground-stations": "WizardGroundStationSetPresetResponse",
+        "/api/v1/presets/ground-stations/stations": "WizardAvailableStationResponse",
+        "/api/v1/wizard/extensions": "WizardExtensionRulesResponse",
+    }
+    schema = app.openapi()["paths"]
 
-    assert response.status_code == 400
-    assert "nodalarc:<path>" in response.json()["error"]
+    for path, response_model in paths.items():
+        operation = schema[path]["get"]
+        assert operation["responses"]["200"]["content"]["application/json"]["schema"] == {
+            "$ref": f"#/components/schemas/{response_model}"
+        }
 
 
 def test_preview_coverage_rejects_traversal_constellation_reference():
     response = client.post(
         "/api/v1/session/preview-coverage",
         json={
-            "constellation": "nodalarc:../../outside.yaml",
-            "ground_stations": "nodalarc:site-sets/earth/leo/earth-leo-starlink-pop-sites.yaml",
+            "intent": {
+                "constellation_ref": "nodalarc:../../outside.yaml",
+                "ground_site_set_ref": (
+                    "nodalarc:site-sets/earth/leo/earth-leo-starlink-pop-sites.yaml"
+                ),
+                "orbit_propagator": "j2_mean_elements",
+            }
         },
     )
 
-    assert response.status_code == 400
-    assert "traversal" in response.json()["error"]
+    assert response.status_code == 422
+    assert "traversal" in response.text
 
 
-def test_generate_session_rejects_satellite_type_path_syntax():
-    response = client.post(
-        "/api/v1/session/generate",
-        json={
-            "constellation": "earth-leo-ring-36",
-            "protocol": "isis",
-            "extensions": ["te"],
-            "ground_stations": "nodalarc:site-sets/earth/leo/earth-leo-starlink-pop-sites.yaml",
-            "satellite_type": "../starlink-v2",
-            "orbit_propagator": "j2_mean_elements",
-        },
-    )
+def test_preview_coverage_openapi_uses_generated_request_and_response_contracts():
+    operation = app.openapi()["paths"]["/api/v1/session/preview-coverage"]["post"]
 
-    assert response.status_code == 400
-    assert "satellite_type" in response.json()["error"]
+    assert operation["requestBody"]["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/WizardCoverageRequest"
+    }
+    assert operation["responses"]["200"]["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/CoveragePreviewResult"
+    }
 
 
-def test_deploy_sanitizes_yaml_parser_errors():
-    response = client.post("/api/v1/session/deploy", json={"yaml": "session: ["})
+def test_deploy_sanitizes_yaml_parser_errors(catalog_client):
+    scoped_client, _context = catalog_client
+    response = scoped_client.post("/api/v1/session/deploy-from-yaml", json={"yaml": "session: ["})
 
     assert response.status_code == 400
     assert response.json()["error"] == "Invalid session YAML"
 
 
-def test_deploy_rejects_session_name_with_path_separator():
-    response = client.post(
-        "/api/v1/session/deploy",
+def test_deploy_rejects_session_name_with_path_separator(catalog_client):
+    scoped_client, _context = catalog_client
+    response = scoped_client.post(
+        "/api/v1/session/deploy-from-yaml",
         json={"yaml": _demo_session_with_name("../../outside")},
     )
 
-    assert response.status_code == 400
-    assert response.json()["error"] == "Invalid segment session YAML"
+    assert response.status_code == 422
+    assert "ref-composed published grammar" in response.json()["error"]
 
 
-def test_deploy_from_yaml_rejects_session_name_with_path_separator():
-    response = client.post(
+def test_legacy_deploy_alias_is_retired():
+    response = client.post("/api/v1/session/deploy", json={"yaml": "session: {}"})
+
+    assert response.status_code == 404
+
+
+def test_single_file_upload_requires_referenced_user_content(catalog_client):
+    scoped_client, _context = catalog_client
+    raw = yaml.safe_load(
+        (
+            Path(__file__).resolve().parents[2] / "catalog/nodalarc/sessions/earth-leo-simple.yaml"
+        ).read_text(encoding="utf-8")
+    )
+    raw["session"]["name"] = "single-file-user-ref"
+    raw["segments"][0]["source"] = "user:constellations/not-uploaded.yaml"
+
+    response = scoped_client.post(
         "/api/v1/session/deploy-from-yaml",
-        json={"yaml": _demo_session_with_name("name/with/separators")},
+        json={"yaml": yaml.safe_dump(raw, sort_keys=False)},
     )
 
-    assert response.status_code == 400
-    assert response.json()["error"] == "Invalid segment session YAML"
+    assert response.status_code == 422
+    assert "complete closure" in response.json()["error"]
 
 
-def test_deploy_writes_generated_session_outside_catalog_root(monkeypatch, tmp_path):
-    captured: list[str] = []
+def test_upload_saves_canonical_user_catalog_session_and_admits_catalog_deploy(
+    monkeypatch,
+    catalog_client,
+):
+    scoped_client, context = catalog_client
+    captured: list[object] = []
 
-    class FakeSessionManager:
-        status = "ready"
+    async def fake_admit(worker, *, reservation):
+        captured.append(reservation)
+        return "upload-operation-2"
 
-        def rescan(self) -> None:
-            captured.append("rescan")
+    monkeypatch.setattr(main, "_session_manager", object())
+    monkeypatch.setattr(main, "_available_session_node_count", lambda: 7)
+    monkeypatch.setattr(main, "_prepared_transition_reservation", lambda _deployment: "proof")
+    monkeypatch.setattr(main, "_admit_transition", fake_admit)
 
-    async def fake_run_switch(session_path: str) -> None:
-        captured.append(session_path)
-
-    monkeypatch.setattr(main, "_session_manager", FakeSessionManager())
-    monkeypatch.setattr(
-        main,
-        "get_platform_config",
-        lambda: SimpleNamespace(session_data_root=str(tmp_path)),
-    )
-    monkeypatch.setattr(main, "_run_switch", fake_run_switch)
-
-    response = client.post(
-        "/api/v1/session/deploy",
-        json={"yaml": _demo_session_with_name("wizard-generated")},
+    uploaded_yaml = _demo_session_with_name("uploaded-generated")
+    response = scoped_client.post(
+        "/api/v1/session/deploy-from-yaml",
+        json={"yaml": uploaded_yaml},
     )
 
     assert response.status_code == 200
-    session_file = response.json()["session_file"]
-    assert session_file.startswith(str(tmp_path / "generated-sessions"))
-    assert "/catalog/nodalarc/sessions/" not in session_file
-    assert (tmp_path / "generated-sessions").is_dir()
-    assert list((tmp_path / "generated-sessions").glob("_wizard-wizard-generated-*.yaml"))
-    assert captured[0] == "rescan"
-
-
-def test_upload_writes_generated_session_outside_catalog_root(monkeypatch, tmp_path):
-    captured: list[str] = []
-
-    class FakeSessionManager:
-        status = "ready"
-
-        def rescan(self) -> None:
-            captured.append("rescan")
-
-    async def fake_run_switch(session_path: str) -> None:
-        captured.append(session_path)
-
-    monkeypatch.setattr(main, "_session_manager", FakeSessionManager())
-    monkeypatch.setattr(
-        main,
-        "get_platform_config",
-        lambda: SimpleNamespace(session_data_root=str(tmp_path)),
+    assert response.json() == {
+        "status": "accepted",
+        "operation_id": "upload-operation-2",
+        "source": {
+            "kind": "catalog",
+            "session_ref": "user:sessions/uploaded-generated.yaml",
+        },
+    }
+    saved = context.repository.snapshot(context.scope).get("user:sessions/uploaded-generated.yaml")
+    expected = canonicalize_persisted_configuration(
+        SessionRef("user:sessions/uploaded-generated.yaml"),
+        yaml.safe_load(uploaded_yaml),
     )
-    monkeypatch.setattr(main, "_run_switch", fake_run_switch)
-
-    response = client.post(
-        "/api/v1/session/deploy-from-yaml",
-        json={"yaml": _demo_session_with_name("uploaded-generated")},
-    )
-
-    assert response.status_code == 200
-    session_file = response.json()["session_file"]
-    assert session_file.startswith(str(tmp_path / "generated-sessions"))
-    assert "/catalog/nodalarc/sessions/" not in session_file
-    assert list((tmp_path / "generated-sessions").glob("_wizard-uploaded-generated-*.yaml"))
-    assert captured[0] == "rescan"
+    assert saved.content == expected.yaml_bytes
+    assert saved.content != uploaded_yaml.encode("utf-8")
+    assert captured == ["proof"]

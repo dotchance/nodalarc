@@ -4,6 +4,7 @@ PRD 13.10: re-render templates and push to targeted nodes.
 PRD line 822: flow management via --add-flow / --remove-flow.
 
 Usage:
+  python -m tools.na_reconfig --live --target all
   python -m tools.na_reconfig --session <path> --target all
   python -m tools.na_reconfig --session <path> --target plane:3
   python -m tools.na_reconfig --session <path> --target node:space-sat-p03s07
@@ -28,11 +29,60 @@ import yaml
 from jinja2 import Environment, FileSystemLoader
 from nodalarc.constants import LOG_FORMAT
 from nodalarc.models.resolved_session import ResolvedNode, ResolvedRoutingDomain, ResolvedSession
-from nodalarc.resolve_session import load_session_resolution_from_file
+from nodalarc.resolve_session import SessionResolution, load_session_resolution_from_file
 from nodalarc.stack_resolver import resolve_domain_stack
 from nodalarc.template_vars import build_template_vars_from_resolved
 
 log = logging.getLogger(__name__)
+
+
+def load_live_session_resolution(
+    *,
+    namespace: str = "nodalarc",
+    installed_shipped_root: str | Path = "catalog/nodalarc",
+) -> SessionResolution:
+    """Load the selected CR root and exact uploaded catalog closure."""
+    import kubernetes.client
+    import kubernetes.config
+    from nodalarc.cr_runtime_config import load_cr_runtime_config
+
+    try:
+        kubernetes.config.load_incluster_config()
+    except kubernetes.config.ConfigException:
+        kubernetes.config.load_kube_config()
+    custom_objects = kubernetes.client.CustomObjectsApi()
+    core_v1 = kubernetes.client.CoreV1Api()
+    cr = custom_objects.get_namespaced_custom_object(
+        group="nodalarc.io",
+        version="v1alpha1",
+        namespace=namespace,
+        plural="constellationspecs",
+        name="current-session",
+    )
+    status = cr.get("status") or {}
+    run_id = str(status.get("sessionRunId") or "")
+    if not run_id:
+        raise RuntimeError("Current ConstellationSpec has no runtime session identity")
+    runtime = load_cr_runtime_config(
+        cr.get("spec") or {},
+        core_v1=core_v1,
+        namespace=namespace,
+        source_origin="na-reconfig.live",
+        run_id=run_id,
+        installed_shipped_root=installed_shipped_root,
+    )
+    return runtime.resolution
+
+
+def _selected_resolution(
+    session_path: str | None,
+    resolution: SessionResolution | None,
+) -> SessionResolution:
+    if resolution is not None:
+        return resolution
+    if not session_path:
+        raise ValueError("session_path is required when no live resolution is supplied")
+    return load_session_resolution_from_file(session_path, origin="na-reconfig.offline")
 
 
 def _parse_set_args(set_args: list[str] | None) -> dict:
@@ -97,10 +147,15 @@ def _validate_plane_target_scope(target: str, resolved: ResolvedSession) -> None
 
 
 def reconfig(
-    session_path: str, target: str, set_args: list[str] | None = None, vars_file: str | None = None
+    session_path: str | None,
+    target: str,
+    set_args: list[str] | None = None,
+    vars_file: str | None = None,
+    *,
+    resolution: SessionResolution | None = None,
 ) -> None:
     """Re-render and push configs to targeted nodes."""
-    resolution = load_session_resolution_from_file(session_path, origin="na-reconfig")
+    resolution = _selected_resolution(session_path, resolution)
     resolved = resolution.resolved
     sid_by_node = resolution.resolved.sid_index_by_node_id()
 
@@ -229,13 +284,18 @@ def _parse_flow_spec(spec: str) -> dict:
     }
 
 
-def add_flow(session_path: str, flow_spec: str) -> None:
+def add_flow(
+    session_path: str | None,
+    flow_spec: str,
+    *,
+    resolution: SessionResolution | None = None,
+) -> None:
     """Add a probe flow to a running session.
 
     Configures the probe daemon on the source GS pod directly and
     records the flow in the session database.
     """
-    resolution = load_session_resolution_from_file(session_path, origin="na-reconfig")
+    resolution = _selected_resolution(session_path, resolution)
     resolved = resolution.resolved
 
     spec = _parse_flow_spec(flow_spec)
@@ -260,9 +320,14 @@ def add_flow(session_path: str, flow_spec: str) -> None:
     log.info(f"Added flow {flow.flow_id}: {flow.src} -> {flow.dst} ({dst_ip})")
 
 
-def remove_flow(session_path: str, flow_id: str) -> None:
+def remove_flow(
+    session_path: str | None,
+    flow_id: str,
+    *,
+    resolution: SessionResolution | None = None,
+) -> None:
     """Remove a probe flow from a running session."""
-    resolution = load_session_resolution_from_file(session_path, origin="na-reconfig")
+    resolution = _selected_resolution(session_path, resolution)
     resolved = resolution.resolved
 
     # We need to find which GS pod this flow runs on.
@@ -289,7 +354,18 @@ def remove_flow(session_path: str, flow_id: str) -> None:
 def main() -> None:
     logging.basicConfig(format=LOG_FORMAT, level=logging.INFO)
     parser = argparse.ArgumentParser(description="Nodal Arc reconfiguration tool")
-    parser.add_argument("--session", required=True)
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument(
+        "--live",
+        action="store_true",
+        help="Use the current ConstellationSpec and its exact catalog upload",
+    )
+    source.add_argument(
+        "--session",
+        help="Offline shipped-only session YAML path",
+    )
+    parser.add_argument("--namespace", default="nodalarc")
+    parser.add_argument("--installed-shipped-root", default="catalog/nodalarc")
     parser.add_argument(
         "--target", help="Target: all, plane:N, node:ID, area:N, type:satellite|ground_station"
     )
@@ -300,13 +376,27 @@ def main() -> None:
     )
     parser.add_argument("--remove-flow", help="Remove probe flow by flow_id")
     args = parser.parse_args()
+    live_resolution = (
+        load_live_session_resolution(
+            namespace=args.namespace,
+            installed_shipped_root=args.installed_shipped_root,
+        )
+        if args.live
+        else None
+    )
 
     if args.add_flow:
-        add_flow(args.session, args.add_flow)
+        add_flow(args.session, args.add_flow, resolution=live_resolution)
     elif args.remove_flow:
-        remove_flow(args.session, args.remove_flow)
+        remove_flow(args.session, args.remove_flow, resolution=live_resolution)
     elif args.target:
-        reconfig(args.session, args.target, args.set_args, args.vars_file)
+        reconfig(
+            args.session,
+            args.target,
+            args.set_args,
+            args.vars_file,
+            resolution=live_resolution,
+        )
     else:
         parser.error("One of --target, --add-flow, or --remove-flow is required")
 

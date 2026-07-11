@@ -455,3 +455,21 @@ def test_cross_file_method_taint_still_caught():
     }
     v = _violations(srcs)
     assert len(v) == 1 and "reload_all" in v[0]
+
+
+def test_distinct_blocking_method_does_not_taint_generic_get_calls():
+    srcs = {
+        "store.py": (
+            "class Store:\n    def get_operation(self, path):\n        return path.read_text()\n"
+        ),
+        "handler.py": (
+            "async def read_mapping(data):\n"
+            "    return data.get('value')\n"
+            "async def read_operation(store, path):\n"
+            "    return store.get_operation(path)\n"
+        ),
+    }
+    violations = _violations(srcs)
+    assert len(violations) == 1
+    assert "read_operation" in violations[0]
+    assert "data.get" not in violations[0]

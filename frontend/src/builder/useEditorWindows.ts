@@ -11,7 +11,7 @@
  *  hook is the stateful shell that drives them.
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { raiseWindow } from "../ui/windowStack";
 import {
   overlayBuffers,
@@ -43,6 +43,8 @@ export type EditorTarget =
   | { kind: "library" }
   | { kind: "catalog" }
   | { kind: "open-session" }
+  | { kind: "source-yaml" }
+  | { kind: "customize-chain"; segmentId: string; rootRef: string }
   | { kind: "save-session" };
 
 export interface EditorWindow {
@@ -50,11 +52,11 @@ export interface EditorWindow {
   target: EditorTarget;
   x: number;
   y: number;
-  /** The last library save made from this window: the ref and the exact
-   *  wrapper snapshot it stored. A user close converges the bound object back to
-   *  this ref if it still matches. Latest save wins; the annotation dies with
-   *  the window, so a reopened window starts a fresh editing session. */
-  saved?: { ref: string; snapshot: Record<string, unknown> };
+}
+
+export interface EditorWindowsRecoveryState {
+  windows: EditorWindow[];
+  buffers: BufferMap;
 }
 
 export function targetKey(target: EditorTarget): string {
@@ -63,8 +65,11 @@ export function targetKey(target: EditorTarget): string {
     case "library":
     case "catalog":
     case "open-session":
+    case "source-yaml":
     case "save-session":
       return target.kind;
+    case "customize-chain":
+      return `customize:${target.segmentId}`;
     case "inspect":
       return `inspect:${target.ref}`;
     case "node-view":
@@ -133,9 +138,7 @@ export type SessionBuffer = Pick<
   | "max_pairs_per_tick"
 >;
 
-/** The workspace mutators applyBuffer commits into, and the ground convergence
- *  a user close triggers — passed in so the hook stays a pure shell over
- *  useWorkspace's single mutation path. */
+/** The workspace mutators applyBuffer commits into. */
 interface UseEditorWindowsDeps {
   workspace: Workspace | null;
   updateSession: (patch: SessionBuffer) => void;
@@ -144,11 +147,6 @@ interface UseEditorWindowsDeps {
   updateLinkRule: (ruleId: string, draft: DraftLinkRule) => void;
   updateRoutingDomain: (domainId: string, draft: DraftRoutingDomain) => void;
   updateBoundary: (boundaryId: string, draft: DraftBoundary) => void;
-  convergeGroundToRef: (
-    segmentId: string,
-    ref: string,
-    snapshot: Record<string, unknown>,
-  ) => void;
 }
 
 export function useEditorWindows({
@@ -159,11 +157,16 @@ export function useEditorWindows({
   updateLinkRule,
   updateRoutingDomain,
   updateBoundary,
-  convergeGroundToRef,
 }: UseEditorWindowsDeps) {
   // The diagram workspace: editors are floating, anchored windows — many
   // can be open at once, keyed per object (re-open focuses, ).
   const [windows, setWindows] = useState<EditorWindow[]>([]);
+  const [buffers, setBuffers] = useState<BufferMap>({});
+  const bufferMutationRevisionRef = useRef(0);
+  const markBufferMutation = () => {
+    bufferMutationRevisionRef.current += 1;
+  };
+  const currentBufferMutationRevision = () => bufferMutationRevisionRef.current;
   const openEditor = (target: EditorTarget) => {
     const key = targetKey(target);
     // Re-open FOCUSES via the one stacking mechanism — the raise stack,
@@ -184,35 +187,14 @@ export function useEditorWindows({
       return [...prev, { key, target, x: 440 + step * 40, y: 84 + step * 32 }];
     });
   };
-  /** Record a library save against its window: the close-time convergence
-   *  reads this off the bound window. Latest save wins. */
-  const annotateWindowSaved = (key: string, ref: string, snapshot: Record<string, unknown>) => {
-    setWindows((prev) => prev.map((w) => (w.key === key ? { ...w, saved: { ref, snapshot } } : w)));
-  };
   /** Every window teardown goes through here: closing a window removes it
-   *  AND its buffer, always together. `reason` says who closes — a user
-   *  close is a gesture on the object; a teardown close (New/Open/Restore)
-   *  replaces the workspace and must not mutate the outgoing one on the
-   *  way out. Close-time behaviors key on 'user' only. */
-  const closeWindows = (
-    predicate: (w: EditorWindow) => boolean,
-    reason: "user" | "teardown",
-  ) => {
+   *  AND its buffer, always together. */
+  const closeWindows = (predicate: (w: EditorWindow) => boolean) => {
     const closingWindows = windows.filter(predicate);
     const closing = new Set(closingWindows.map((w) => w.key));
     if (closing.size === 0) return;
-    // a user close converges each saved-then-unchanged ground back to its
-    // ref. `convergeGroundToRef` reads the APPLIED set through commit's
-    // functional form, so an OK close (Apply then close, this same batch) sees
-    // the just-applied object; a teardown close never mutates the outgoing one.
-    if (reason === "user") {
-      for (const w of closingWindows) {
-        if (w.target.kind === "ground" && w.saved) {
-          convergeGroundToRef(w.target.id, w.saved.ref, w.saved.snapshot);
-        }
-      }
-    }
     setWindows((prev) => prev.filter((w) => !closing.has(w.key)));
+    markBufferMutation();
     setBuffers((prev) => {
       let changed = false;
       const next = { ...prev };
@@ -225,14 +207,13 @@ export function useEditorWindows({
       return changed ? next : prev;
     });
   };
-  const closeWindow = (key: string) => closeWindows((w) => w.key === key, "user");
-  const closeAllWindows = () => closeWindows(() => true, "teardown");
+  const closeWindow = (key: string) => closeWindows((w) => w.key === key);
+  const closeAllWindows = () => closeWindows(() => true);
   const isOpen = (key: string) => windows.some((w) => w.key === key);
 
   // Buffered editing: an editor window works on a copy of its object; the
   // session only changes on Apply/OK. Cancel and the title-bar X discard —
   // the window says which state it is in, so closing is never a guess.
-  const [buffers, setBuffers] = useState<BufferMap>({});
   /** First edit creates the buffer from the object as rendered ("base");
    *  later edits build on the working copy. "opened" — the Defaults target —
    *  is the window's baseline: the values at window open, advanced to the
@@ -240,6 +221,7 @@ export function useEditorWindows({
    *  a pick, never the whole workspace: applying a stale whole-workspace
    *  clone would silently revert every other window's applied work. */
   const patchBuffer = <T,>(key: string, base: T, fn: (draft: T) => T) => {
+    markBufferMutation();
     setBuffers((prev) => {
       const buf = prev[key];
       const current = (buf?.draft as T | undefined) ?? structuredClone(base);
@@ -248,6 +230,7 @@ export function useEditorWindows({
     });
   };
   const revertBuffer = (key: string) => {
+    markBufferMutation();
     setBuffers((prev) => {
       const buf = prev[key];
       if (!buf) return prev;
@@ -290,6 +273,7 @@ export function useEditorWindows({
       default:
         return;
     }
+    markBufferMutation();
     setBuffers((prev) => {
       const cur = prev[key];
       if (!cur) return prev;
@@ -336,6 +320,7 @@ export function useEditorWindows({
     if (gone.size === 0 && dropClean.length === 0) return;
     if (gone.size > 0) setWindows((prev) => prev.filter((w) => !gone.has(w.key)));
     const drop = new Set([...gone, ...dropClean]);
+    markBufferMutation();
     setBuffers((prev) => {
       let changed = false;
       const next = { ...prev };
@@ -383,6 +368,7 @@ export function useEditorWindows({
       current = appliedObjectForKey(workspace, key);
     }
     if (current === null || current === undefined) return;
+    markBufferMutation();
     setBuffers((prev) => {
       if (!(key in prev)) return prev;
       return {
@@ -399,6 +385,7 @@ export function useEditorWindows({
    *  matched by identity, captured BEFORE the network round-trip. Anything
    *  created or re-edited during the await has a fresh identity and survives. */
   const dropAppliedBuffers = (applied: Map<string, EditorBuffer>) => {
+    markBufferMutation();
     setBuffers((prev) => {
       const kept: BufferMap = {};
       for (const [k, b] of Object.entries(prev)) {
@@ -407,15 +394,20 @@ export function useEditorWindows({
       return kept;
     });
   };
+  const restoreRecoveryState = (state: EditorWindowsRecoveryState) => {
+    setWindows(structuredClone(state.windows));
+    markBufferMutation();
+    setBuffers(structuredClone(state.buffers));
+  };
 
   return {
     windows,
     openEditor,
-    annotateWindowSaved,
     closeWindow,
     closeAllWindows,
     isOpen,
     buffers,
+    currentBufferMutationRevision,
     patchBuffer,
     revertBuffer,
     applyBuffer,
@@ -425,5 +417,6 @@ export function useEditorWindows({
     staleList,
     loadCurrentValues,
     dropAppliedBuffers,
+    restoreRecoveryState,
   };
 }

@@ -112,6 +112,23 @@ def _optional_tree_directory(path: Path, *, label: str) -> Path | None:
     return path
 
 
+def _prepared_tree_root(session_path: Path, installed_root: Path) -> Path:
+    """Return the ordinary-file tree root implied by a session location."""
+
+    resolved_session = session_path.resolve(strict=True)
+    if resolved_session.is_relative_to(installed_root):
+        return session_path.parent
+
+    for sessions_directory in session_path.parents:
+        if sessions_directory.name != "sessions":
+            continue
+        namespace_directory = sessions_directory.parent
+        catalog_directory = namespace_directory.parent
+        if namespace_directory.name in {"nodalarc", "user"} and catalog_directory.name == "catalog":
+            return catalog_directory.parent
+    return session_path.parent
+
+
 def _assert_tree_shipped_assets(tree_root: Path | None, installed_root: Path) -> None:
     if tree_root is None:
         return
@@ -200,12 +217,12 @@ def load_prepared_tree_session_resolution(
 
     ``nodalarc:`` objects always resolve from the installed read-only catalog.
     Any adjacent ``catalog/nodalarc`` copies are exact-byte verified first.
-    ``user:`` objects resolve from ``catalog/user`` beside the session file.
+    ``user:`` objects resolve from the prepared tree's ``catalog/user``.
     """
 
     path = _session_file(session_path)
     installed_root = _installed_shipped_root(installed_shipped_root)
-    tree_catalog_root = path.parent / "catalog"
+    tree_catalog_root = _prepared_tree_root(path, installed_root) / "catalog"
     if tree_catalog_root.exists() and (
         tree_catalog_root.is_symlink() or not tree_catalog_root.is_dir()
     ):

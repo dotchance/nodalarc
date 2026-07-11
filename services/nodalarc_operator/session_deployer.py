@@ -31,7 +31,10 @@ from nodalarc.models.resolved_session import (
     ResolvedSession,
 )
 from nodalarc.nats_channels import sanitize_session_id
-from nodalarc.platform_config import get_platform_config
+from nodalarc.platform_config import (
+    compute_pod_placement,
+    get_platform_config,
+)
 from nodalarc.resolve_session import SessionResolution
 from nodalarc.runtime_config import (
     RUNTIME_DEPLOYMENT_CONTEXT_FILENAME,
@@ -314,80 +317,6 @@ def discover_available_nodes() -> list[str]:
         if not blocked:
             available.append(node.metadata.name)
     return sorted(available)
-
-
-def _deterministic_node(nid: str, available_nodes: list[str]) -> str:
-    """Rendezvous (HRW) hash — minimal migration on node-set changes.
-
-    For each candidate node, compute weight = SHA256(nid:node).
-    Assign to the highest-weight node. Adding the Nth node migrates
-    only ~1/N pods. Removing a node migrates only its pods.
-    """
-    best_node = available_nodes[0]
-    best_weight = -1
-    for node in available_nodes:
-        w = int(hashlib.sha256(f"{nid}:{node}".encode()).hexdigest()[:8], 16)
-        if w > best_weight:
-            best_weight = w
-            best_node = node
-    return best_node
-
-
-def compute_pod_placement(
-    placement: Any,
-    node_vars: dict[str, dict],
-    available_nodes: list[str],
-) -> dict[str, str]:
-    """Compute target node for each pod based on placement policy.
-
-    Args:
-        placement: Platform-owned placement policy.
-        node_vars: {node_id: {node_type, plane, ...}} from template_vars.
-        available_nodes: sorted list of available K3s node names.
-
-    Returns:
-        {node_id: k3s_node_name} mapping.
-    """
-    if not available_nodes:
-        raise ValueError("No available K3s nodes for pod placement")
-
-    if isinstance(placement, Mapping):
-        policy = str(placement.get("policy") or "")
-        planes_per_group_value = placement.get("planes_per_group")
-        if policy == "planeGroupPerNode" and planes_per_group_value is None:
-            raise ValueError("planeGroupPerNode requires planes_per_group")
-        planes_per_group = int(planes_per_group_value or 1)
-    else:
-        policy = str(getattr(placement, "policy", placement))
-        planes_per_group = int(getattr(placement, "planes_per_group", 1) or 1)
-
-    if policy == "allOnOne":
-        target = available_nodes[0]
-        return dict.fromkeys(node_vars, target)
-
-    if policy == "planePerNode":
-        result: dict[str, str] = {}
-        for nid, vars in node_vars.items():
-            if vars.get("node_type") == "ground_station":
-                result[nid] = _deterministic_node(nid, available_nodes)
-            else:
-                plane = vars.get("plane", 0)
-                result[nid] = available_nodes[plane % len(available_nodes)]
-        return result
-
-    if policy == "planeGroupPerNode":
-        ppg = planes_per_group
-        result = {}
-        for nid, vars in node_vars.items():
-            if vars.get("node_type") == "ground_station":
-                result[nid] = _deterministic_node(nid, available_nodes)
-            else:
-                plane = vars.get("plane", 0)
-                group = plane // ppg
-                result[nid] = available_nodes[group % len(available_nodes)]
-        return result
-
-    raise ValueError(f"Unknown placement policy: {policy}")
 
 
 def _node_internal_ips(

@@ -216,8 +216,7 @@ import sys
 import json
 from pathlib import Path
 
-from nodalarc.platform_config import init_platform_config
-from nodalarc_operator.session_deployer import compute_pod_placement
+from nodalarc.platform_config import compute_pod_placement, init_platform_config
 
 pods = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
 available_nodes = [node for node in sys.argv[2].split(",") if node]

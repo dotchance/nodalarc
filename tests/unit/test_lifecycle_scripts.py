@@ -231,6 +231,8 @@ def test_session_readiness_requires_reviewed_transition_and_live_pod_counts() ->
     assert "expected session pods on" in script
     assert "Placement verified" in script
     assert 'grep -E "nodalarc-|nodalpath-|ome-"' in script
+    assert "from nodalarc.platform_config import compute_pod_placement" in script
+    assert "nodalarc_operator.session_deployer" not in script
 
 
 def test_load_next_step_is_state_aware() -> None:

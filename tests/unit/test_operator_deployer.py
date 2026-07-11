@@ -24,6 +24,7 @@ import yaml
 from nodalarc.catalog_upload import CatalogUploadSelection
 from nodalarc.configuration_yaml import load_configuration_yaml
 from nodalarc.models.resolved_session import SourceContext
+from nodalarc.platform_config import _deterministic_node, compute_pod_placement
 from nodalarc.resolve_session import resolve_session_with_assets
 from nodalarc.runtime_config import (
     RuntimeConfigProof,
@@ -35,13 +36,11 @@ from nodalarc.substrate.wiring_status import failed_status, ready_status, status
 from nodalarc_operator.runtime_session import OperatorSessionConfig
 from nodalarc_operator.session_deployer import (
     _create_terminal_ssh_keys,
-    _deterministic_node,
     _required_substrate_pairs,
     check_wiring_complete,
     compute_expected_placement_node_count,
     compute_expected_pod_count,
     compute_platform_hash,
-    compute_pod_placement,
     compute_runtime_hash,
     discover_available_nodes,
     ensure_session_configmaps,

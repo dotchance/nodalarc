@@ -1,6 +1,6 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
-/** Typed catalog session picker and exact-closure transfer surface. */
+/** Typed catalog session picker and ordinary YAML transfer surface. */
 
 import { useState, type ChangeEvent } from "react";
 import { Button, IconButton } from "../ui/Button";
@@ -8,7 +8,8 @@ import { Icon } from "../ui/icons/Icon";
 import { Field } from "./editorKit";
 import type {
   CatalogDocumentSummary,
-  CatalogImportResult,
+  CatalogSessionYamlImportResult,
+  CatalogYamlImportFile,
 } from "./generated/builderApi";
 
 interface OpenSessionPickerProps {
@@ -17,7 +18,10 @@ interface OpenSessionPickerProps {
   openError: string | null;
   onOpen: (entry: CatalogDocumentSummary, targetRef?: string) => void;
   onExport: (entry: CatalogDocumentSummary) => Promise<void>;
-  onImport: (payload: unknown, commit: boolean) => Promise<CatalogImportResult>;
+  onImport: (
+    yamlFiles: readonly CatalogYamlImportFile[],
+    proposalToken: string | null,
+  ) => Promise<CatalogSessionYamlImportResult>;
 }
 
 export function OpenSessionPicker({
@@ -28,8 +32,10 @@ export function OpenSessionPicker({
   onExport,
   onImport,
 }: OpenSessionPickerProps) {
-  const [transferPayload, setTransferPayload] = useState<unknown>(null);
-  const [transferResult, setTransferResult] = useState<CatalogImportResult | null>(null);
+  const [transferYamlFiles, setTransferYamlFiles] = useState<
+    readonly CatalogYamlImportFile[] | null
+  >(null);
+  const [transferResult, setTransferResult] = useState<CatalogSessionYamlImportResult | null>(null);
   const [transferError, setTransferError] = useState<string | null>(null);
   const [transferring, setTransferring] = useState(false);
   const [exportingRef, setExportingRef] = useState<string | null>(null);
@@ -53,20 +59,41 @@ export function OpenSessionPicker({
     return `${base}-${suffix}`;
   };
 
+  const importPathHint = (file: File): string | undefined => {
+    const directoryParts = (file.webkitRelativePath ?? "").replace(/\\/g, "/").split("/");
+    const catalogIndex = directoryParts.indexOf("catalog");
+    if (catalogIndex >= 0) return directoryParts.slice(catalogIndex).join("/");
+    if (/^catalog%2F(?:nodalarc|user)%2F.+\.ya?ml$/i.test(file.name)) {
+      const decoded = decodeURIComponent(file.name);
+      if (/^catalog\/(?:nodalarc|user)\/.+\.ya?ml$/i.test(decoded)) return decoded;
+    }
+    return undefined;
+  };
+
   const proposeImport = async (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.currentTarget.files?.[0];
+    const files = Array.from(event.currentTarget.files ?? []);
     event.currentTarget.value = "";
-    if (!file) return;
+    if (files.length === 0) return;
     setTransferring(true);
     setTransferResult(null);
     setTransferError(null);
     try {
-      const payload: unknown = JSON.parse(await file.text());
-      const result = await onImport(payload, false);
-      setTransferPayload(payload);
+      const yamlFiles = await Promise.all(files.map(async (file) => {
+        const logicalPathHint = importPathHint(file);
+        return {
+          yaml_text: await file.text(),
+          ...(logicalPathHint ? { logical_path_hint: logicalPathHint } : {}),
+        };
+      }));
+      const result = await onImport(yamlFiles, null);
+      const proposalToken = result.proposal_token;
+      if (result.outcome === "proposed" && !proposalToken) {
+        throw new Error("backend proposal did not include its commit token");
+      }
+      setTransferYamlFiles(yamlFiles);
       setTransferResult(result);
     } catch (cause) {
-      setTransferPayload(null);
+      setTransferYamlFiles(null);
       setTransferError(cause instanceof Error ? cause.message : String(cause));
     } finally {
       setTransferring(false);
@@ -74,12 +101,19 @@ export function OpenSessionPicker({
   };
 
   const commitImport = async () => {
-    if (transferPayload === null) return;
+    if (transferYamlFiles === null) return;
+    const proposalToken = transferResult?.proposal_token;
+    if (!proposalToken) {
+      setTransferError("request a fresh backend proposal before importing");
+      return;
+    }
     setTransferring(true);
     setTransferError(null);
     try {
-      setTransferResult(await onImport(transferPayload, true));
+      setTransferResult(await onImport(transferYamlFiles, proposalToken));
     } catch (cause) {
+      setTransferYamlFiles(null);
+      setTransferResult(null);
       setTransferError(cause instanceof Error ? cause.message : String(cause));
     } finally {
       setTransferring(false);
@@ -113,7 +147,7 @@ export function OpenSessionPicker({
                 icon="download"
                 size={12}
                 disabled={exportingRef === entry.ref}
-                label="Export this session and its exact YAML closure"
+                label="Export this session as YAML files"
                 onClick={() => {
                   setExportingRef(entry.ref);
                   setTransferError(null);
@@ -136,13 +170,26 @@ export function OpenSessionPicker({
     <div className="builder-picker" data-testid="builder-open-picker">
       <div className="builder-preset-row">
         <label className="builder-import-label">
-          {transferring ? "checking closure…" : "import exact YAML closure"}
+          {transferring ? "checking YAML…" : "import session YAML files"}
           <input
             hidden
             type="file"
-            accept="application/json,.json,.nodalarc-session.json"
+            accept=".yaml,.yml,text/yaml,application/yaml"
+            multiple
             disabled={transferring}
             onChange={(event) => void proposeImport(event)}
+          />
+        </label>
+        <label className="builder-import-label">
+          import YAML directory
+          <input
+            hidden
+            type="file"
+            accept=".yaml,.yml,text/yaml,application/yaml"
+            multiple
+            disabled={transferring}
+            onChange={(event) => void proposeImport(event)}
+            {...({ webkitdirectory: "" } as Record<string, string>)}
           />
         </label>
       </div>
@@ -150,6 +197,19 @@ export function OpenSessionPicker({
         <div className="builder-warning" data-testid="session-import-proposed">
           Backend validated {transferResult.proposed_writes.length} new YAML file
           {transferResult.proposed_writes.length === 1 ? "" : "s"}.
+          <ul className="builder-import-write-list">
+            {transferResult.proposed_writes.map((write) => (
+              <li key={write.ref}>
+                <code>{write.ref}</code> → <code>{write.logical_path}</code>
+                {write.canonicalization_changed && (
+                  <span> — comments or formatting will be canonicalized</span>
+                )}
+              </li>
+            ))}
+          </ul>
+          {transferResult.proposed_writes.some((write) => write.canonicalization_changed) && (
+            <p>Importing acknowledges the listed canonicalization changes.</p>
+          )}
           <Button variant="primary" disabled={transferring} onClick={() => void commitImport()}>
             Import atomically
           </Button>

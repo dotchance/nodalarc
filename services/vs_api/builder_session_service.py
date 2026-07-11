@@ -402,14 +402,11 @@ def save_builder_session(
             compile_result=compile_result,
         ) from error
     try:
-        for document, proposal in sorted(
-            zip(proposed, reachable_proposals, strict=True),
-            key=lambda item: str(item[0].ref),
-        ):
+        for document in sorted(proposed, key=lambda item: str(item.ref)):
             transaction.write_bytes(
                 document.ref,
                 document.yaml_bytes,
-                expected_revision=proposal.expected_revision,
+                expected_revision=None,
             )
         transaction.write_bytes(
             request.target_ref,

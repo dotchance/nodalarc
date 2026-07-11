@@ -77,10 +77,8 @@ def _deep_request(
     name: str,
     *,
     node_display_name: str = "User spacecraft",
-    expected_revisions: dict[str, str] | None = None,
     expected_session_revision: str | None = None,
 ) -> BuilderSessionSaveRequest:
-    expected = expected_revisions or {}
     session = deepcopy(_load(SIMPLE_SESSION))
     shipped_constellation_ref = session["segments"][0]["source"]
     session["session"]["name"] = name
@@ -114,7 +112,7 @@ def _deep_request(
                     {
                         "ref": ref,
                         "document": document,
-                        "expected_revision": expected.get(ref),
+                        "origin": "generated",
                     }
                     for ref, document in documents
                 ],
@@ -281,50 +279,46 @@ def test_every_shipped_session_saves_and_reopens_as_first_class_user_yaml(
     assert reopened.digests == result.digests
 
 
-def test_create_and_update_cas_changes_only_the_dependency_digest(
+def test_session_save_proposals_cannot_replace_existing_catalog_components(
     harness: SaveHarness,
 ) -> None:
     initial_request = _deep_request("cas-save", node_display_name="First")
     initial = _save(initial_request, harness)
     current = harness.repository.snapshot(harness.scope)
-    revisions = {
-        str(proposal.ref): str(current.get(proposal.ref).revision)
-        for proposal in initial_request.draft.state.catalog_documents
-    }
-
-    stale_revisions = dict(revisions)
-    stale_revisions["user:nodes/cas-save-node.yaml"] = f"sha256:{'0' * 64}"
-    stale_request = _deep_request(
+    stored_node = current.get("user:nodes/cas-save-node.yaml")
+    replacement_request = _deep_request(
         "cas-save",
         node_display_name="Second",
-        expected_revisions=stale_revisions,
         expected_session_revision=initial.session.revision,
     )
-    before_stale = current.generation
-    with pytest.raises(BuilderSessionSaveStaleError) as raised:
-        _save(stale_request, harness)
-    assert raised.value.code is BuilderSessionSaveErrorCode.STALE_WRITE
-    assert harness.repository.snapshot(harness.scope).generation == before_stale
-
-    update_request = _deep_request(
-        "cas-save",
-        node_display_name="Second",
-        expected_revisions=revisions,
-        expected_session_revision=initial.session.revision,
-    )
-    updated = _save(update_request, harness)
-
-    assert updated.digests.document == initial.digests.document
-    assert updated.digests.dependency != initial.digests.dependency
-    assert updated.session.revision == initial.session.revision
-    assert updated.deploy_verdict.allowed is True
+    with pytest.raises(BuilderSessionSaveStaleError) as blocked:
+        _save(replacement_request, harness)
+    assert blocked.value.code is BuilderSessionSaveErrorCode.STALE_WRITE
+    assert any("create-only" in issue.message for issue in blocked.value.evidence.issues)
     assert (
-        harness.repository.snapshot(harness.scope)
-        .read_bytes("user:nodes/cas-save-node.yaml")
-        .decode("utf-8")
-        .find("Second")
-        >= 0
+        harness.repository.snapshot(harness.scope).get("user:nodes/cas-save-node.yaml").content
+        == stored_node.content
     )
+
+    with pytest.raises(ValueError, match="Extra inputs are not permitted"):
+        BuilderSessionSaveRequest.model_validate(
+            {
+                **replacement_request.model_dump(mode="json"),
+                "draft": {
+                    **replacement_request.draft.model_dump(mode="json"),
+                    "state": {
+                        **replacement_request.draft.state.model_dump(mode="json"),
+                        "catalog_documents": [
+                            {
+                                **proposal.model_dump(mode="json"),
+                                "expected_revision": str(stored_node.revision),
+                            }
+                            for proposal in replacement_request.draft.state.catalog_documents
+                        ],
+                    },
+                },
+            }
+        )
 
 
 def test_runtime_unsupported_session_saves_but_cannot_deploy(
@@ -393,13 +387,13 @@ def test_direct_save_excludes_invalid_stale_orphan_proposals(
                 "catalog_documents": [
                     {
                         "ref": orphan_ref,
+                        "origin": "generated",
                         "document": {
                             "node": {
                                 "id": "orphan-direct-save",
                                 "unknown": True,
                             }
                         },
-                        "expected_revision": f"sha256:{'0' * 64}",
                     }
                 ],
             },

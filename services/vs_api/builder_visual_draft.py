@@ -4,15 +4,15 @@ from __future__ import annotations
 
 import re
 import secrets
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Literal, cast
 
 import yaml
-from nodalarc.catalog_closure import catalog_document_references
-from nodalarc.catalog_refs import BodyRef, CatalogFamily, CatalogRef, SessionRef
+from nodalarc.catalog_closure import CatalogClosureCollector, catalog_document_references
+from nodalarc.catalog_refs import BodyRef, CatalogFamily, CatalogRef, SessionRef, SiteRef
 from nodalarc.catalog_registry import catalog_family_spec
 from nodalarc.catalog_repository import (
     CatalogConflictError,
@@ -20,6 +20,7 @@ from nodalarc.catalog_repository import (
     CatalogReadSnapshot,
 )
 from nodalarc.configuration_yaml import load_configuration_yaml
+from nodalarc.marked_yaml import MarkedYamlError, YamlSourceMap, load_marked_yaml
 from nodalarc.models.builder_api import (
     BuilderCompileRequest,
     BuilderCompileResult,
@@ -41,9 +42,13 @@ from nodalarc.models.builder_visual_api import (
     BuilderVisualAddRoutingDomainCommand,
     BuilderVisualAuthorInlineSpaceNodeCommand,
     BuilderVisualConnectSegmentsCommand,
+    BuilderVisualControlMutationRequest,
     BuilderVisualCustomizeChainEntry,
     BuilderVisualCustomizeChainRequest,
     BuilderVisualCustomizeChainResult,
+    BuilderVisualDraftApplyWorkspaceRequest,
+    BuilderVisualDraftApplyYamlRequest,
+    BuilderVisualDraftApplyYamlResult,
     BuilderVisualDraftAssemblyResult,
     BuilderVisualDraftCommandRequest,
     BuilderVisualDraftCommandResult,
@@ -51,6 +56,7 @@ from nodalarc.models.builder_visual_api import (
     BuilderVisualDraftCreateRequest,
     BuilderVisualDraftEnvelope,
     BuilderVisualDraftOpenRequest,
+    BuilderVisualDraftRetargetRequest,
     BuilderVisualGroundBoresight,
     BuilderVisualGroundDraft,
     BuilderVisualGroundMember,
@@ -90,13 +96,37 @@ from nodalarc.models.catalog import (
     SpaceNodeSet,
     Terminal,
 )
-from pydantic import BaseModel, JsonValue
+from nodalarc.models.link_rules import (
+    LinkRule,
+    NearestNTopology,
+    NodeSelector,
+    TerminalSelector,
+    VisibleCandidatesTopology,
+)
+from nodalarc.models.segment_session import (
+    AggregateOf,
+    AreaAssignment,
+    CandidateLimits,
+    RoutingBoundary,
+    RoutingDomain,
+    RoutingTimers,
+    SegmentSessionConfig,
+    SessionMeta,
+    TimeConfig,
+)
+from nodalarc.models.segments import GroundPlacement, GroundSegment, SpaceSegment
+from pydantic import BaseModel, JsonValue, ValidationError
 
 from .builder_compiler import (
     PreviewFactory,
     canonicalize_persisted_configuration,
     compile_builder_draft,
 )
+from .builder_control_mutation import (
+    BuilderControlMutationError,
+    apply_builder_control_mutations,
+)
+from .builder_control_tree import build_session_control_tree
 from .builder_visual_defaults import (
     DEFAULT_BODY_REF,
     DEFAULT_PHASING_MODE,
@@ -125,6 +155,25 @@ _DE440S_EPHEMERIS: JsonDocument = {
     ],
 }
 _DEFAULT_GROUND_MASK_DEG = 25.0
+_BUILDER_GENERATED_COMPONENT_FAMILIES = frozenset(
+    {"constellations", "orbits", "nodes", "site-sets", "sites"}
+)
+BUILDER_VISUAL_SPECIALIZED_FIELDS = frozenset(
+    {
+        (SessionMeta, "name"),
+        (SessionMeta, "display_name"),
+        (SessionMeta, "description"),
+        (TimeConfig, "start_time"),
+        (TimeConfig, "step_seconds"),
+        (TimeConfig, "compression"),
+        (CandidateLimits, "max_pairs_per_rule"),
+        (CandidateLimits, "max_pairs_per_tick"),
+        (SpaceSegment, "id"),
+        (SpaceSegment, "source"),
+        (GroundSegment, "id"),
+        (GroundPlacement, "from_site_set"),
+    }
+)
 
 
 class BuilderVisualDraftConflictError(CatalogConflictError):
@@ -143,13 +192,14 @@ class BuilderVisualDraftCommandError(ValueError):
         message: str,
         *,
         code: Literal[
+            "catalog_authoring.conflict",
             "catalog_authoring.invalid_patch",
             "catalog_authoring.invalid_graph",
             "catalog_authoring.stale_revision",
         ],
         ref: SessionRef,
-        expected_revision: int | None = None,
-        current_revision: int | None = None,
+        expected_revision: int | str | None = None,
+        current_revision: int | str | None = None,
     ) -> None:
         super().__init__(message)
         self.code = code
@@ -170,11 +220,43 @@ def _identifier(value: str) -> str:
     return normalized.strip("-_")[:48]
 
 
+def _assert_visual_draft_ownership(draft: BuilderVisualDraftEnvelope) -> None:
+    if draft.source_ref is None:
+        if draft.expected_session_revision is not None:
+            raise BuilderVisualDraftCommandError(
+                "New visual drafts cannot replace an existing session target",
+                code="catalog_authoring.invalid_graph",
+                ref=draft.target_ref,
+            )
+        return
+    if draft.source_ref == draft.target_ref:
+        if draft.source_ref.namespace != "user" or draft.expected_session_revision is None:
+            raise BuilderVisualDraftCommandError(
+                "In-place visual drafts require a pinned user session revision",
+                code="catalog_authoring.invalid_graph",
+                ref=draft.target_ref,
+            )
+        return
+    if draft.expected_session_revision is not None:
+        raise BuilderVisualDraftCommandError(
+            "Copied visual drafts cannot replace an existing session target",
+            code="catalog_authoring.conflict",
+            ref=draft.target_ref,
+            current_revision=draft.expected_session_revision,
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class _PlacedSegment:
     segment_id: str
     label: str
     kind: Literal["space", "ground"]
+
+
+@dataclass(frozen=True, slots=True)
+class _CatalogProjectionFact:
+    label: str
+    summary: str | None = None
 
 
 @dataclass(slots=True)
@@ -438,6 +520,165 @@ def _issue(
     )
 
 
+def _json_pointer(parts: tuple[object, ...]) -> str:
+    if not parts:
+        return ""
+    return "/" + "/".join(str(part).replace("~", "~0").replace("/", "~1") for part in parts)
+
+
+def _yaml_issue(
+    code: str,
+    message: str,
+    *,
+    target_ref: SessionRef,
+    json_pointer: str | None = None,
+    source_line: int | None = None,
+    source_column: int | None = None,
+) -> BuilderIssue:
+    return BuilderIssue(
+        code=code,
+        stage="structural",
+        severity="error",
+        message=message,
+        blocks=("save", "deploy"),
+        source_ref=str(target_ref),
+        json_pointer=json_pointer,
+        draft_path="session_yaml",
+        source_line=source_line,
+        source_column=source_column,
+    )
+
+
+def _issue_with_yaml_source(
+    issue: BuilderIssue,
+    source_map: YamlSourceMap,
+    *,
+    prefer_key: bool = False,
+) -> BuilderIssue:
+    pointer = issue.json_pointer or ""
+    span = source_map.span_for(pointer, prefer_key=prefer_key)
+    if span is None:
+        return issue
+    return issue.model_copy(
+        update={
+            "source_line": span.start.line,
+            "source_column": span.start.column,
+        }
+    )
+
+
+def _parse_session_yaml_application(
+    target_ref: SessionRef,
+    yaml_text: str,
+) -> tuple[
+    SegmentSessionConfig | None,
+    JsonDocument | None,
+    str | None,
+    YamlSourceMap | None,
+    tuple[BuilderIssue, ...],
+]:
+    try:
+        marked = load_marked_yaml(yaml_text)
+    except (UnicodeError, MarkedYamlError, RecursionError) as error:
+        mark = error.problem_mark if isinstance(error, MarkedYamlError) else None
+        return (
+            None,
+            None,
+            None,
+            None,
+            (
+                _yaml_issue(
+                    "builder.draft.yaml.invalid_syntax",
+                    f"Session YAML is invalid: {error}",
+                    target_ref=target_ref,
+                    source_line=mark.line if mark is not None else None,
+                    source_column=mark.column if mark is not None else None,
+                ),
+            ),
+        )
+
+    try:
+        model = SegmentSessionConfig.model_validate(marked.data)
+    except ValidationError as error:
+        issues = tuple(
+            _issue_with_yaml_source(
+                _yaml_issue(
+                    f"builder.structural.{item['type']}",
+                    item["msg"],
+                    target_ref=target_ref,
+                    json_pointer=_json_pointer(tuple(item["loc"])) or None,
+                ),
+                marked.source_map,
+                prefer_key=item["type"] == "extra_forbidden",
+            )
+            for item in error.errors(include_url=False)
+        )
+        return None, None, None, marked.source_map, issues
+    except (TypeError, ValueError) as error:
+        return (
+            None,
+            None,
+            None,
+            marked.source_map,
+            (
+                _issue_with_yaml_source(
+                    _yaml_issue(
+                        "builder.structural.invalid_document",
+                        str(error),
+                        target_ref=target_ref,
+                    ),
+                    marked.source_map,
+                ),
+            ),
+        )
+
+    if model.session.name != target_ref.relative_path.stem:
+        issue = _issue_with_yaml_source(
+            _yaml_issue(
+                "builder.draft.yaml.fixed_identity",
+                "Session identity is fixed by its user: reference",
+                target_ref=target_ref,
+                json_pointer="/session/name",
+            ),
+            marked.source_map,
+            prefer_key=True,
+        )
+        return None, None, None, marked.source_map, (issue,)
+
+    try:
+        canonical = canonicalize_persisted_configuration(
+            target_ref,
+            cast(
+                JsonDocument,
+                model.model_dump(mode="json", by_alias=True, exclude_none=True),
+            ),
+        )
+    except (ValidationError, TypeError, ValueError) as error:
+        return (
+            None,
+            None,
+            None,
+            marked.source_map,
+            (
+                _issue_with_yaml_source(
+                    _yaml_issue(
+                        "builder.structural.invalid_document",
+                        str(error),
+                        target_ref=target_ref,
+                    ),
+                    marked.source_map,
+                ),
+            ),
+        )
+    return (
+        model,
+        canonical.canonical_json,
+        canonical.yaml_bytes.decode("utf-8"),
+        marked.source_map,
+        (),
+    )
+
+
 def _boundary_exchange(
     source: str,
     target: str,
@@ -449,7 +690,6 @@ def _boundary_exchange(
         "to": target,
         "prefixes": {"aggregate_of": "originated"},
         "export_node_loopbacks": export_node_loopbacks,
-        "install_via": "peer_loopback",
     }
 
 
@@ -458,10 +698,6 @@ class _Assembly:
         self.draft = draft
         self.issues: list[BuilderIssue] = []
         self.proposals: dict[CatalogRef, BuilderProposedCatalogDocument] = {}
-        self.expected_revisions = {
-            item.ref: item.expected_revision for item in draft.expected_catalog_revisions
-        }
-        self.used_expected_revisions: set[CatalogRef] = set()
         self.derived_ids: set[str] = set()
         self.owner = _identifier(draft.target_ref.relative_path.stem) or "untitled-session"
         for proposal in draft.catalog_documents:
@@ -512,29 +748,16 @@ class _Assembly:
         candidate = BuilderProposedCatalogDocument(
             ref=ref,
             document=document,
-            expected_revision=self.expected_revisions.get(ref),
+            origin="generated",
         )
-        if ref in self.expected_revisions:
-            self.used_expected_revisions.add(ref)
         existing = self.proposals.get(ref)
-        if existing is None:
+        if existing is None or existing.origin == "generated":
             self.proposals[ref] = candidate
         elif existing.document != candidate.document:
             self.issue(
                 "builder.draft.component_identity_collision",
                 f"Multiple authored components target {ref} with different content",
                 path,
-            )
-
-    def finish_revision_checks(self) -> None:
-        for ref in sorted(
-            set(self.expected_revisions).difference(self.used_expected_revisions),
-            key=str,
-        ):
-            self.issue(
-                "builder.draft.unused_revision_expectation",
-                f"Revision expectation for {ref} does not match an authored component",
-                "expected_catalog_revisions",
             )
 
 
@@ -603,7 +826,6 @@ def _node_document(
             ],
             "terminals": terminals,
             "payloads": [],
-            "reference": "urn:nodalarc:session-builder-draft",
         }
     }
 
@@ -815,11 +1037,644 @@ def _endpoint_document(
     return document
 
 
-def _assemble_structured(
+def _proposal_documents(
+    proposals: tuple[BuilderProposedCatalogDocument, ...],
+) -> dict[CatalogRef, JsonDocument]:
+    return {proposal.ref: proposal.document for proposal in proposals}
+
+
+def _is_builder_owned_component_ref(ref: CatalogRef, *, owner: str) -> bool:
+    relative_parts = ref.relative_path.parts
+    return (
+        ref.namespace == "user"
+        and ref.family in _BUILDER_GENERATED_COMPONENT_FAMILIES
+        and len(relative_parts) >= 3
+        and relative_parts[1] == owner
+    )
+
+
+def _builder_generated_proposal_refs(
+    proposals: tuple[BuilderProposedCatalogDocument, ...],
+    *,
+    owner: str,
+) -> frozenset[CatalogRef]:
+    """Identify the complete generated proposal graph owned by one session draft."""
+
+    by_ref = {proposal.ref: proposal for proposal in proposals}
+    pending = [
+        proposal.ref
+        for proposal in proposals
+        if _is_builder_owned_component_ref(proposal.ref, owner=owner)
+        and proposal.origin == "generated"
+    ]
+    generated: set[CatalogRef] = set()
+    while pending:
+        ref = pending.pop()
+        if ref in generated:
+            continue
+        generated.add(ref)
+        proposal = by_ref[ref]
+        try:
+            model = catalog_family_spec(cast(CatalogFamily, ref.family)).validate_document(
+                proposal.document
+            )
+        except ValidationError, TypeError, ValueError:
+            continue
+        for dependency in catalog_document_references(model):
+            if (
+                dependency in by_ref
+                and dependency not in generated
+                and _is_builder_owned_component_ref(dependency, owner=owner)
+                and by_ref[dependency].origin == "generated"
+            ):
+                pending.append(dependency)
+    return frozenset(generated)
+
+
+def _stored_catalog_facts(
+    snapshot: CatalogReadSnapshot,
+    root_yaml: bytes,
+) -> dict[CatalogRef, _CatalogProjectionFact]:
+    closure = CatalogClosureCollector.collect(root_yaml, snapshot)
+    catalog_facts: dict[CatalogRef, _CatalogProjectionFact] = {}
+    for entry in closure.entries:
+        stored_document = snapshot.get(entry.ref)
+        parsed = load_configuration_yaml(stored_document.content)
+        if not isinstance(parsed, dict):
+            continue
+        document = cast(JsonDocument, parsed)
+        model = catalog_family_spec(cast(CatalogFamily, entry.ref.family)).validate_document(
+            document
+        )
+        catalog_facts[entry.ref] = _CatalogProjectionFact(
+            label=_catalog_label(model),
+            summary=_site_summary(model) if isinstance(model, Site) else None,
+        )
+    return catalog_facts
+
+
+def _authored_space_projection(
+    segment: SpaceSegment,
+    proposals: dict[CatalogRef, JsonDocument],
+    *,
+    generated_refs: frozenset[CatalogRef],
+) -> BuilderVisualSpaceDraft | None:
+    constellation_ref = CatalogRef(segment.source)
+    constellation_document = proposals.get(constellation_ref)
+    if constellation_document is None or constellation_ref not in generated_refs:
+        return None
+    constellation = constellation_document.get("constellation")
+    if not isinstance(constellation, dict):
+        return None
+    orbit_ref = constellation.get("orbit")
+    node_ref = constellation.get("node")
+    if not isinstance(orbit_ref, str) or not isinstance(node_ref, str):
+        return None
+    orbit_document = proposals.get(CatalogRef(orbit_ref))
+    if orbit_document is None or not isinstance(orbit_document.get("orbit"), dict):
+        return None
+    orbit = cast(JsonDocument, orbit_document["orbit"])
+    shape = orbit.get("shape")
+    orientation = orbit.get("orientation")
+    phase = orbit.get("phase")
+    if (
+        not isinstance(shape, dict)
+        or not isinstance(orientation, dict)
+        or not isinstance(phase, dict)
+    ):
+        return None
+    shape_kind: Literal["circular", "elliptical"] = (
+        "circular" if "altitude_km" in shape else "elliptical"
+    )
+    circular_altitude = shape.get("altitude_km") if shape_kind == "circular" else None
+    node_draft: BuilderVisualNode | None = None
+    parsed_node_ref = CatalogRef(node_ref)
+    proposed_node = proposals.get(parsed_node_ref)
+    if (
+        parsed_node_ref in generated_refs
+        and proposed_node is not None
+        and isinstance(proposed_node.get("node"), dict)
+    ):
+        node = cast(JsonDocument, proposed_node["node"])
+        terminal_mounts: list[BuilderVisualTerminalMount] = []
+        for mount in cast(list[JsonDocument], node.get("terminals", [])):
+            boresight = mount.get("boresight")
+            terminal_mounts.append(
+                BuilderVisualTerminalMount(
+                    mount_id=cast(str, mount.get("id", "")),
+                    role=cast(Any, mount.get("role")),
+                    terminal_ref=cast(Any, mount.get("terminal")),
+                    count=cast(Any, mount.get("count")),
+                    boresight=(
+                        BuilderVisualSpaceBoresight.model_validate(boresight)
+                        if isinstance(boresight, dict)
+                        else None
+                    ),
+                )
+            )
+        node_draft = BuilderVisualNode(
+            id=cast(str, node.get("id", "")),
+            display_name=cast(str, node.get("display_name", "")),
+            forwarding=cast(Any, node.get("forwarding")),
+            ethernet=tuple(
+                cast(str, item.get("id", ""))
+                for item in cast(list[JsonDocument], node.get("ethernet", []))
+            ),
+            terminals=tuple(terminal_mounts),
+        )
+    planes = cast(JsonDocument, constellation.get("planes", {}))
+    phasing = cast(JsonDocument, constellation.get("phasing", {}))
+    return BuilderVisualSpaceDraft(
+        segment_id=segment.id,
+        display_name=cast(
+            str, constellation.get("display_name", segment.display_name or segment.id)
+        ),
+        node_ref=None if node_draft is not None else CatalogRef(node_ref),
+        node_draft=node_draft,
+        orbit=BuilderVisualOrbit(
+            central_body=cast(Any, orbit.get("central_body")),
+            shape_kind=shape_kind,
+            altitude_km=cast(Any, shape.get("altitude_km")),
+            perigee_altitude_km=cast(
+                Any,
+                circular_altitude
+                if circular_altitude is not None
+                else shape.get("perigee_altitude_km"),
+            ),
+            apogee_altitude_km=cast(
+                Any,
+                circular_altitude
+                if circular_altitude is not None
+                else shape.get("apogee_altitude_km"),
+            ),
+            inclination_deg=cast(Any, orientation.get("inclination_deg")),
+            raan_deg=cast(Any, orientation.get("raan_deg")),
+            argument_of_perigee_deg=cast(Any, orientation.get("argument_of_perigee_deg")),
+            mean_anomaly_deg=cast(Any, phase.get("mean_anomaly_deg")),
+            propagator=cast(Any, orbit.get("propagator")),
+        ),
+        planes=cast(Any, planes.get("count")),
+        raan_spacing_deg=cast(Any, planes.get("raan_spacing_deg")),
+        slots_per_plane=cast(Any, constellation.get("slots_per_plane")),
+        phasing_mode=cast(Any, phasing.get("mode")),
+        phase_offset_deg=cast(Any, phasing.get("phase_offset_deg")),
+    )
+
+
+def _address_base(value: object) -> str:
+    if not isinstance(value, str):
+        return ""
+    octets = value.split("/", 1)[0].split(".")
+    return ".".join(octets[:2]) if len(octets) == 4 else ""
+
+
+def _authored_site_projection(document: JsonDocument) -> BuilderVisualSite | None:
+    site = document.get("site")
+    if not isinstance(site, dict):
+        return None
+    frame = site.get("frame")
+    body_fixed = frame.get("body_fixed") if isinstance(frame, dict) else None
+    location = site.get("location")
+    lan = site.get("lan")
+    if (
+        not isinstance(body_fixed, dict)
+        or not isinstance(location, dict)
+        or not isinstance(lan, dict)
+    ):
+        return None
+    nodes: list[BuilderVisualSiteNode] = []
+    for raw_node in cast(list[JsonDocument], site.get("nodes", [])):
+        terminals = raw_node.get("terminals")
+        interfaces = raw_node.get("interfaces")
+        if not isinstance(terminals, dict) or not isinstance(interfaces, dict):
+            return None
+        installed: dict[str, int] = {}
+        boresights: dict[str, BuilderVisualGroundBoresight] = {}
+        for mount_id, raw_installation in terminals.items():
+            if not isinstance(raw_installation, dict):
+                return None
+            installed[mount_id] = cast(int, raw_installation.get("installed_count", 0))
+            capabilities = raw_installation.get("capabilities")
+            boresight = capabilities.get("boresight") if isinstance(capabilities, dict) else None
+            if isinstance(boresight, dict):
+                boresights[mount_id] = BuilderVisualGroundBoresight.model_validate(boresight)
+        lo0 = interfaces.get("lo0")
+        terr0 = interfaces.get("terr0")
+        nodes.append(
+            BuilderVisualSiteNode(
+                node_id=cast(str, raw_node.get("id", "")),
+                model_ref=cast(Any, raw_node.get("model")),
+                installed=installed,
+                boresights=boresights,
+                lo0_ipv4=cast(str, lo0.get("ipv4", "")) if isinstance(lo0, dict) else "",
+                terr0_ipv4=(cast(str, terr0.get("ipv4", "")) if isinstance(terr0, dict) else ""),
+            )
+        )
+    return BuilderVisualSite(
+        site_id=cast(str, site.get("id", "")),
+        display_name=cast(str, site.get("display_name", "")),
+        body=cast(Any, body_fixed.get("body")),
+        lat_deg=cast(Any, location.get("lat_deg")),
+        lon_deg=cast(Any, location.get("lon_deg")),
+        alt_m=cast(Any, location.get("alt_m")),
+        lan_ipv4=cast(str, lan.get("ipv4", "")),
+        tags=tuple(cast(list[str], site.get("tags", []))),
+        nodes=tuple(nodes),
+    )
+
+
+def _authored_ground_projection(
+    segment: GroundSegment,
+    proposals: dict[CatalogRef, JsonDocument],
+    *,
+    generated_refs: frozenset[CatalogRef],
+    catalog_facts: Mapping[CatalogRef, _CatalogProjectionFact],
+    prior: BuilderVisualGroundDraft | None,
+) -> BuilderVisualGroundDraft | None:
+    site_set_ref = CatalogRef(segment.placement.from_site_set)
+    site_set_document = proposals.get(site_set_ref)
+    if site_set_document is None or site_set_ref not in generated_refs:
+        return None
+    site_set = site_set_document.get("site_set")
+    if not isinstance(site_set, dict):
+        return None
+    overrides = {
+        override.match.site: override.scheduling.model_dump(
+            mode="json", by_alias=True, exclude_none=True
+        )
+        for override in segment.overrides or ()
+        if override.scheduling is not None
+    }
+    prior_members_by_ref = (
+        {member.ref: member for member in prior.members if member.ref is not None}
+        if prior is not None
+        else {}
+    )
+    prior_members_by_site = (
+        {member.site_id: member for member in prior.members if member.site_id}
+        if prior is not None
+        else {}
+    )
+    members: list[BuilderVisualGroundMember] = []
+    for index, raw_ref in enumerate(cast(list[str], site_set.get("sites", []))):
+        ref = SiteRef(raw_ref)
+        site = _authored_site_projection(proposals.get(ref, {})) if ref in generated_refs else None
+        site_id = site.site_id if site is not None else ref.relative_path.stem
+        previous = prior_members_by_ref.get(ref) or prior_members_by_site.get(site_id)
+        fact = catalog_facts.get(ref)
+        members.append(
+            BuilderVisualGroundMember(
+                member_id=previous.member_id if previous is not None else f"member-{index + 1}",
+                kind="draft" if site is not None else "ref",
+                ref=None if site is not None else ref,
+                site_id=site_id,
+                label=(
+                    site.display_name
+                    if site is not None
+                    else fact.label
+                    if fact is not None
+                    else previous.label
+                    if previous is not None
+                    else site_id
+                ),
+                summary=(
+                    fact.summary
+                    if site is None and fact is not None
+                    else previous.summary
+                    if site is None and previous is not None
+                    else None
+                ),
+                site=site,
+                scheduling_override=cast(JsonDocument | None, overrides.get(site_id)),
+            )
+        )
+    scheduling = (
+        segment.apply.scheduling.model_dump(mode="json", by_alias=True, exclude_none=True)
+        if segment.apply is not None and segment.apply.scheduling is not None
+        else {}
+    )
+    originated_ipv4 = (
+        segment.apply.originated_prefixes.ipv4
+        if segment.apply is not None and segment.apply.originated_prefixes is not None
+        else None
+    )
+    first_site = next((member.site for member in members if member.site is not None), None)
+    first_node = first_site.nodes[0] if first_site is not None and first_site.nodes else None
+    match = re.fullmatch(r"ground-(\d+)", segment.id)
+    number = int(match.group(1)) if match is not None else 1
+    stamp = (
+        prior.stamp
+        if prior is not None
+        else BuilderVisualGroundStamp(
+            node_ref=first_node.model_ref if first_node is not None else None,
+            installed=first_node.installed if first_node is not None else {},
+            boresights=first_node.boresights if first_node is not None else {},
+            body=first_site.body if first_site is not None else DEFAULT_BODY_REF,
+            lan_base=(
+                _address_base(first_site.lan_ipv4)
+                if first_site is not None
+                else f"172.{20 + ((number - 1) % 12)}"
+            ),
+            loopback_base=(
+                _address_base(first_node.lo0_ipv4)
+                if first_node is not None
+                else f"10.{200 + ((number - 1) % 55)}"
+            ),
+        )
+    )
+    return BuilderVisualGroundDraft(
+        segment_id=segment.id,
+        display_name=segment.display_name or cast(str, site_set.get("display_name", segment.id)),
+        members=tuple(members),
+        stamp=stamp,
+        scheduling=cast(JsonDocument, scheduling),
+        originated_ipv4=tuple(originated_ipv4 or ()),
+        tags=tuple(segment.apply.tags or ()) if segment.apply is not None else (),
+    )
+
+
+def _node_selector_projection(selector: NodeSelector) -> tuple[str, str | None] | None:
+    if selector.segment is not None:
+        return selector.segment, None
+    if selector.all is None or len(selector.all) != 2:
+        return None
+    segment = next((item.segment for item in selector.all if item.segment is not None), None)
+    tag = next((item.tag for item in selector.all if item.tag is not None), None)
+    if segment is None or tag is None:
+        return None
+    if any(item.segment is None and item.tag is None for item in selector.all):
+        return None
+    return segment, tag
+
+
+def _terminal_selector_projection(
+    selector: TerminalSelector,
+) -> tuple[Any, Any] | None:
+    if selector.all is None or len(selector.all) != 2:
+        return None
+    role = next((item.role for item in selector.all if item.role is not None), None)
+    medium = next((item.medium for item in selector.all if item.medium is not None), None)
+    if role is None or medium is None:
+        return None
+    if any(item.role is None and item.medium is None for item in selector.all):
+        return None
+    return role, medium
+
+
+def _link_projection(rule: LinkRule) -> BuilderVisualLinkRule | None:
+    if not isinstance(rule.topology, VisibleCandidatesTopology | NearestNTopology):
+        return None
+    if rule.tags:
+        return None
+    if rule.constraints is not None and (
+        rule.constraints.max_links_per_node is not None
+        or rule.constraints.require_mutual_visibility is not None
+    ):
+        return None
+    endpoints: list[BuilderVisualLinkEndpoint] = []
+    for endpoint in rule.endpoints:
+        node = _node_selector_projection(endpoint.select)
+        terminal = _terminal_selector_projection(endpoint.terminal)
+        if node is None or terminal is None:
+            return None
+        endpoints.append(
+            BuilderVisualLinkEndpoint(
+                segment_id=node[0],
+                tag=node[1],
+                role=terminal[0],
+                medium=terminal[1],
+                min_elevation_deg=endpoint.min_elevation_deg,
+            )
+        )
+    return BuilderVisualLinkRule(
+        rule_id=rule.id,
+        label=rule.id,
+        enabled=rule.enabled,
+        a=endpoints[0],
+        b=endpoints[1],
+        topology_mode=rule.topology.mode,
+        topology_n=rule.topology.n if isinstance(rule.topology, NearestNTopology) else None,
+        max_range_km=rule.constraints.max_range_km if rule.constraints is not None else None,
+    )
+
+
+def _routing_member_segments(domain: RoutingDomain) -> tuple[str, ...] | None:
+    if len(domain.selectors) == 1 and domain.selectors[0].any is not None:
+        selectors = domain.selectors[0].any
+    else:
+        selectors = domain.selectors
+    if any(selector.segment is None for selector in selectors):
+        return None
+    return tuple(cast(str, selector.segment) for selector in selectors)
+
+
+def _routing_domain_projection(domain: RoutingDomain) -> BuilderVisualRoutingDomain | None:
+    members = _routing_member_segments(domain)
+    if members is None:
+        return None
+    if domain.capabilities is not None:
+        return None
+    if domain.protocol in {"isis", "ospf"}:
+        if domain.area_assignment != AreaAssignment(strategy="flat"):
+            return None
+    elif domain.area_assignment is not None:
+        return None
+    if domain.timers is not None and domain.timers != RoutingTimers(
+        hello_interval_s=domain.timers.hello_interval_s,
+        hold_interval_s=domain.timers.hold_interval_s,
+    ):
+        return None
+    return BuilderVisualRoutingDomain(
+        domain_id=domain.id,
+        label=domain.id,
+        protocol=domain.protocol,
+        member_segment_ids=members,
+        hello_interval_s=domain.timers.hello_interval_s if domain.timers is not None else None,
+        hold_interval_s=domain.timers.hold_interval_s if domain.timers is not None else None,
+    )
+
+
+def _routing_boundary_projection(
+    boundary: RoutingBoundary,
+    *,
+    index: int,
+) -> BuilderVisualRoutingBoundary | None:
+    if len(boundary.export) != 2:
+        return None
+    first, second = boundary.export
+    if first.from_ != second.to or first.to != second.from_:
+        return None
+    first_loopbacks = first.export_node_loopbacks
+    second_loopbacks = second.export_node_loopbacks
+    if first_loopbacks != second_loopbacks:
+        return None
+    if any(
+        not isinstance(export.prefixes, AggregateOf)
+        or export.prefixes.aggregate_of != "originated"
+        or export.install_via is not None
+        for export in boundary.export
+    ):
+        return None
+    return BuilderVisualRoutingBoundary(
+        boundary_id=f"boundary-{index + 1}",
+        over_rule_id=boundary.over,
+        adapter=boundary.adapter,
+        from_domain_id=first.from_,
+        to_domain_id=first.to,
+        export_node_loopbacks=first_loopbacks is not False,
+    )
+
+
+def _workspace_from_applied_session(
+    session: SegmentSessionConfig,
+    *,
+    revision: int,
+    proposals: tuple[BuilderProposedCatalogDocument, ...] = (),
+    catalog_facts: Mapping[CatalogRef, _CatalogProjectionFact] | None = None,
+    prior_workspace: BuilderVisualWorkspace | None = None,
+) -> BuilderVisualWorkspace:
+    space_refs: list[BuilderVisualSpaceReference] = []
+    space_drafts: list[BuilderVisualSpaceDraft] = []
+    ground_refs: list[BuilderVisualGroundReference] = []
+    ground_drafts: list[BuilderVisualGroundDraft] = []
+    proposal_documents = _proposal_documents(proposals)
+    generated_refs = frozenset(
+        proposal.ref for proposal in proposals if proposal.origin == "generated"
+    )
+    facts = catalog_facts or {}
+    prior_space_refs = (
+        {item.segment_id: item for item in prior_workspace.space_refs}
+        if prior_workspace is not None
+        else {}
+    )
+    prior_ground_refs = (
+        {item.segment_id: item for item in prior_workspace.ground_refs}
+        if prior_workspace is not None
+        else {}
+    )
+    prior_ground_drafts = (
+        {item.segment_id: item for item in prior_workspace.ground}
+        if prior_workspace is not None
+        else {}
+    )
+    for segment in session.segments:
+        if isinstance(segment, SpaceSegment):
+            authored = _authored_space_projection(
+                segment,
+                proposal_documents,
+                generated_refs=generated_refs,
+            )
+            if authored is None:
+                prior = prior_space_refs.get(segment.id)
+                fact = facts.get(CatalogRef(segment.source))
+                space_refs.append(
+                    BuilderVisualSpaceReference(
+                        segment_id=segment.id,
+                        source_ref=segment.source,
+                        label=(
+                            fact.label
+                            if fact is not None
+                            else prior.label
+                            if prior is not None
+                            else segment.display_name or segment.id
+                        ),
+                    )
+                )
+            else:
+                space_drafts.append(authored)
+        elif isinstance(segment, GroundSegment):
+            scheduling: JsonDocument = {}
+            if segment.apply is not None and segment.apply.scheduling is not None:
+                scheduling = cast(
+                    JsonDocument,
+                    segment.apply.scheduling.model_dump(
+                        mode="json",
+                        by_alias=True,
+                        exclude_none=True,
+                    ),
+                )
+            authored = _authored_ground_projection(
+                segment,
+                proposal_documents,
+                generated_refs=generated_refs,
+                catalog_facts=facts,
+                prior=prior_ground_drafts.get(segment.id),
+            )
+            if authored is None:
+                prior = prior_ground_refs.get(segment.id)
+                fact = facts.get(CatalogRef(segment.placement.from_site_set))
+                ground_refs.append(
+                    BuilderVisualGroundReference(
+                        segment_id=segment.id,
+                        site_set_ref=segment.placement.from_site_set,
+                        label=(
+                            fact.label
+                            if fact is not None
+                            else prior.label
+                            if prior is not None
+                            else segment.display_name or segment.id
+                        ),
+                        scheduling=scheduling,
+                    )
+                )
+            else:
+                ground_drafts.append(authored)
+
+    max_pairs_per_rule: int | None = None
+    max_pairs_per_tick: int | None = None
+    if session.simulation is not None and session.simulation.candidate_limits is not None:
+        limits = session.simulation.candidate_limits
+        max_pairs_per_rule = limits.max_pairs_per_rule
+        max_pairs_per_tick = limits.max_pairs_per_tick
+
+    links = tuple(
+        projected
+        for rule in session.link_rules or ()
+        if (projected := _link_projection(rule)) is not None
+    )
+    routing_domains = tuple(
+        projected
+        for domain in (session.routing.domains if session.routing is not None else ())
+        if (projected := _routing_domain_projection(domain)) is not None
+    )
+    boundaries = tuple(
+        projected
+        for index, boundary in enumerate(
+            session.routing.boundaries or () if session.routing is not None else ()
+        )
+        if (projected := _routing_boundary_projection(boundary, index=index)) is not None
+    )
+    control_tree = build_session_control_tree(
+        session,
+        projection_revision=revision,
+        specialized_fields=BUILDER_VISUAL_SPECIALIZED_FIELDS,
+    ).tree
+    return BuilderVisualWorkspace(
+        session_name=session.session.name,
+        display_name=session.session.display_name,
+        description=session.session.description,
+        space=tuple(space_drafts),
+        space_refs=tuple(space_refs),
+        ground=tuple(ground_drafts),
+        ground_refs=tuple(ground_refs),
+        links=links,
+        routing_domains=routing_domains,
+        boundaries=boundaries,
+        max_pairs_per_rule=max_pairs_per_rule,
+        max_pairs_per_tick=max_pairs_per_tick,
+        start_time=session.time.start_time,
+        step_seconds=session.time.step_seconds,
+        compression=session.time.compression,
+        projection_revision=revision,
+        control_tree=control_tree,
+    )
+
+
+def _assemble_authoring_workspace(
     draft: BuilderVisualDraftEnvelope,
 ) -> tuple[JsonDocument, tuple[BuilderProposedCatalogDocument, ...], tuple[BuilderIssue, ...]]:
-    assert draft.workspace is not None
-    workspace = draft.workspace
+    assert draft.authoring_workspace is not None
+    workspace = draft.authoring_workspace
     assembly = _Assembly(draft)
     target_name = draft.target_ref.relative_path.stem
     authored_name = _identifier(workspace.session_name)
@@ -940,7 +1795,6 @@ def _assemble_structured(
                     "phase_offset_deg": space.phase_offset_deg,
                 },
                 "node_tags": [{"tag": "all"}],
-                "reference": "urn:nodalarc:session-builder-draft",
             }
         }
         assembly.propose(constellation_ref, constellation_document, path=path)
@@ -1035,7 +1889,6 @@ def _assemble_structured(
                     "id": site_set_id,
                     "display_name": ground.display_name,
                     "sites": site_refs,
-                    "reference": "urn:nodalarc:session-builder-draft",
                 }
             },
             path=path,
@@ -1223,31 +2076,356 @@ def _assemble_structured(
     )
     if uses_non_earth:
         session["ephemeris"] = deepcopy(_DE440S_EPHEMERIS)
-    assembly.finish_revision_checks()
     return session, tuple(assembly.proposals.values()), tuple(assembly.issues)
 
 
-def _assemble_opaque(
+def _set_optional_field(document: JsonDocument, key: str, value: JsonValue | None) -> None:
+    if value is None:
+        document.pop(key, None)
+    else:
+        document[key] = value
+
+
+def _overlay_applied_workspace(
     draft: BuilderVisualDraftEnvelope,
-) -> tuple[JsonDocument, tuple[BuilderIssue, ...]]:
-    assert draft.session_yaml is not None
-    issues: list[BuilderIssue] = []
-    try:
-        parsed = load_configuration_yaml(draft.session_yaml)
-        if not isinstance(parsed, dict):
-            raise TypeError("session YAML must contain one mapping document")
-        session = cast(JsonDocument, parsed)
-    except (UnicodeError, yaml.YAMLError, TypeError, ValueError) as error:
-        issues.append(
+    baseline: BuilderVisualWorkspace,
+) -> tuple[JsonDocument, tuple[BuilderProposedCatalogDocument, ...], tuple[BuilderIssue, ...]]:
+    assert draft.applied_session is not None
+    assert draft.authoring_workspace is not None
+    workspace = draft.authoring_workspace
+    candidate, proposals, issues = _assemble_authoring_workspace(draft)
+    session = deepcopy(draft.applied_session)
+
+    if workspace.control_tree is not None and workspace.control_tree != baseline.control_tree:
+        issues = (
+            *issues,
             _issue(
-                "builder.draft.opaque_yaml_invalid",
-                f"Session YAML could not be parsed: {error}",
+                "builder.draft.control_tree_read_only",
+                "Backend-derived controls must match the applied session revision",
                 target_ref=draft.target_ref,
-                draft_path="session_yaml",
-            )
+                draft_path="authoring_workspace.control_tree",
+            ),
         )
-        session = {}
-    return session, tuple(issues)
+
+    session_meta = cast(JsonDocument, session["session"])
+    candidate_meta = cast(JsonDocument, candidate["session"])
+    for workspace_field, canonical_field in (
+        ("session_name", "name"),
+        ("display_name", "display_name"),
+        ("description", "description"),
+    ):
+        if getattr(workspace, workspace_field) != getattr(baseline, workspace_field):
+            _set_optional_field(session_meta, canonical_field, candidate_meta.get(canonical_field))
+
+    session_time = cast(JsonDocument, session["time"])
+    candidate_time = cast(JsonDocument, candidate["time"])
+    for field_name in ("start_time", "step_seconds", "compression"):
+        if getattr(workspace, field_name) != getattr(baseline, field_name):
+            _set_optional_field(session_time, field_name, candidate_time.get(field_name))
+
+    limits_changed = any(
+        getattr(workspace, field_name) != getattr(baseline, field_name)
+        for field_name in ("max_pairs_per_rule", "max_pairs_per_tick")
+    )
+    if limits_changed:
+        simulation = session.get("simulation")
+        if not isinstance(simulation, dict):
+            simulation = {}
+            session["simulation"] = simulation
+        if workspace.max_pairs_per_rule is None and workspace.max_pairs_per_tick is None:
+            simulation.pop("candidate_limits", None)
+            if not simulation:
+                session.pop("simulation", None)
+        else:
+            simulation["candidate_limits"] = {
+                "max_pairs_per_rule": cast(JsonValue, workspace.max_pairs_per_rule),
+                "max_pairs_per_tick": cast(JsonValue, workspace.max_pairs_per_tick),
+            }
+
+    canonical_segments = cast(list[JsonValue], session["segments"])
+    candidate_segments = {
+        cast(str, segment["id"]): segment
+        for segment in cast(list[JsonDocument], candidate["segments"])
+    }
+    baseline_direct_ids = {
+        *(item.segment_id for item in baseline.space_refs),
+        *(item.segment_id for item in baseline.ground_refs),
+    }
+    current_direct_ids = {
+        *(item.segment_id for item in workspace.space_refs),
+        *(item.segment_id for item in workspace.ground_refs),
+    }
+    removed_direct_ids = baseline_direct_ids - current_direct_ids
+    if removed_direct_ids:
+        issues = (
+            *issues,
+            _issue(
+                "builder.draft.placed_segment_identity_read_only",
+                "Placed segment identity cannot be removed or renamed through the flat editor: "
+                + ", ".join(sorted(removed_direct_ids)),
+                target_ref=draft.target_ref,
+                draft_path="authoring_workspace",
+            ),
+        )
+    canonical_by_id = {
+        cast(str, segment["id"]): segment
+        for segment in canonical_segments
+        if isinstance(segment, dict) and isinstance(segment.get("id"), str)
+    }
+    baseline_space = {item.segment_id: item for item in baseline.space_refs}
+    baseline_ground = {item.segment_id: item for item in baseline.ground_refs}
+    for placed in workspace.space_refs:
+        existing = canonical_by_id.get(placed.segment_id)
+        before = baseline_space.get(placed.segment_id)
+        if existing is None:
+            canonical_segments.append(deepcopy(candidate_segments[placed.segment_id]))
+        elif before is not None and placed.source_ref != before.source_ref:
+            existing["source"] = cast(
+                JsonValue,
+                str(placed.source_ref) if placed.source_ref is not None else None,
+            )
+    for placed in workspace.ground_refs:
+        existing = canonical_by_id.get(placed.segment_id)
+        before = baseline_ground.get(placed.segment_id)
+        if existing is None:
+            canonical_segments.append(deepcopy(candidate_segments[placed.segment_id]))
+            continue
+        if before is not None and placed.site_set_ref != before.site_set_ref:
+            placement = cast(JsonDocument, existing["placement"])
+            placement["from_site_set"] = cast(
+                JsonValue,
+                str(placed.site_set_ref) if placed.site_set_ref is not None else None,
+            )
+        if before is not None and placed.scheduling != before.scheduling:
+            apply = existing.get("apply")
+            if not isinstance(apply, dict):
+                apply = {}
+                existing["apply"] = apply
+            if placed.scheduling:
+                apply["scheduling"] = deepcopy(placed.scheduling)
+            else:
+                apply.pop("scheduling", None)
+                if not apply:
+                    existing.pop("apply", None)
+
+    for authored in workspace.space:
+        if authored.segment_id not in canonical_by_id:
+            canonical_segments.append(deepcopy(candidate_segments[authored.segment_id]))
+    baseline_ground_drafts = {ground.segment_id: ground for ground in baseline.ground}
+    for authored in workspace.ground:
+        existing = canonical_by_id.get(authored.segment_id)
+        before = baseline_ground_drafts.get(authored.segment_id)
+        candidate_ground = candidate_segments[authored.segment_id]
+        if existing is None:
+            canonical_segments.append(deepcopy(candidate_ground))
+            continue
+        if before is None:
+            continue
+        if authored.display_name != before.display_name:
+            _set_optional_field(existing, "display_name", candidate_ground.get("display_name"))
+        apply = existing.get("apply")
+        if not isinstance(apply, dict):
+            apply = {}
+            existing["apply"] = apply
+        candidate_apply = candidate_ground.get("apply")
+        if not isinstance(candidate_apply, dict):
+            candidate_apply = {}
+        if authored.scheduling != before.scheduling:
+            _set_optional_field(apply, "scheduling", candidate_apply.get("scheduling"))
+        if authored.tags != before.tags:
+            _set_optional_field(apply, "tags", candidate_apply.get("tags"))
+        if authored.originated_ipv4 != before.originated_ipv4:
+            existing_prefixes = apply.get("originated_prefixes")
+            if not isinstance(existing_prefixes, dict):
+                existing_prefixes = {}
+                apply["originated_prefixes"] = existing_prefixes
+            candidate_prefixes = candidate_apply.get("originated_prefixes")
+            candidate_ipv4 = (
+                candidate_prefixes.get("ipv4") if isinstance(candidate_prefixes, dict) else None
+            )
+            _set_optional_field(existing_prefixes, "ipv4", candidate_ipv4)
+            if not existing_prefixes:
+                apply.pop("originated_prefixes", None)
+        if not apply:
+            existing.pop("apply", None)
+
+        before_overrides = {member.site_id: member.scheduling_override for member in before.members}
+        current_overrides = {
+            member.site_id: member.scheduling_override for member in authored.members
+        }
+        if current_overrides != before_overrides:
+            candidate_overrides = {
+                cast(str, cast(JsonDocument, item.get("match", {})).get("site")): item
+                for item in cast(list[JsonDocument], candidate_ground.get("overrides", []))
+            }
+            existing_overrides = cast(list[JsonDocument], existing.get("overrides", []))
+            merged_overrides: list[JsonDocument] = []
+            seen_sites: set[str] = set()
+            for override in existing_overrides:
+                match = override.get("match")
+                site_id = cast(str, match.get("site")) if isinstance(match, dict) else ""
+                if site_id not in current_overrides:
+                    merged_overrides.append(override)
+                    continue
+                seen_sites.add(site_id)
+                scheduling = current_overrides[site_id]
+                updated_override = deepcopy(override)
+                _set_optional_field(updated_override, "scheduling", deepcopy(scheduling))
+                if set(updated_override) != {"match"}:
+                    merged_overrides.append(updated_override)
+            for site_id, scheduling in current_overrides.items():
+                if site_id not in seen_sites and scheduling is not None:
+                    merged_overrides.append(deepcopy(candidate_overrides[site_id]))
+            if merged_overrides:
+                existing["overrides"] = merged_overrides
+            else:
+                existing.pop("overrides", None)
+
+    baseline_link_ids = {rule.rule_id for rule in baseline.links}
+    current_link_ids = {rule.rule_id for rule in workspace.links}
+    existing_links = [
+        rule
+        for rule in cast(list[JsonDocument], session.get("link_rules", []))
+        if rule.get("id") not in baseline_link_ids - current_link_ids
+    ]
+    candidate_links = {
+        cast(str, rule["id"]): rule
+        for rule in cast(list[JsonDocument], candidate.get("link_rules", []))
+    }
+    baseline_links = {rule.rule_id: rule for rule in baseline.links}
+    current_links = {rule.rule_id: rule for rule in workspace.links}
+    existing_links = [
+        deepcopy(candidate_links[cast(str, rule.get("id"))])
+        if cast(str, rule.get("id")) in baseline_links
+        and cast(str, rule.get("id")) in current_links
+        and current_links[cast(str, rule.get("id"))] != baseline_links[cast(str, rule.get("id"))]
+        else rule
+        for rule in existing_links
+    ]
+    existing_link_ids = {cast(str, rule.get("id")) for rule in existing_links}
+    for rule in workspace.links:
+        if rule.rule_id not in existing_link_ids and rule.rule_id in candidate_links:
+            existing_links.append(deepcopy(candidate_links[rule.rule_id]))
+    if existing_links:
+        session["link_rules"] = existing_links
+    else:
+        session.pop("link_rules", None)
+    candidate_routing = candidate.get("routing")
+    routing = session.get("routing")
+    if not isinstance(routing, dict):
+        routing = {}
+    if isinstance(candidate_routing, dict):
+        baseline_domain_ids = {domain.domain_id for domain in baseline.routing_domains}
+        current_domain_ids = {domain.domain_id for domain in workspace.routing_domains}
+        existing_domains = [
+            domain
+            for domain in cast(list[JsonDocument], routing.get("domains", []))
+            if domain.get("id") not in baseline_domain_ids - current_domain_ids
+        ]
+        candidate_domains = {
+            cast(str, domain["id"]): domain
+            for domain in cast(list[JsonDocument], candidate_routing.get("domains", []))
+        }
+        baseline_domains = {domain.domain_id: domain for domain in baseline.routing_domains}
+        current_domains = {domain.domain_id: domain for domain in workspace.routing_domains}
+        existing_domains = [
+            deepcopy(candidate_domains[cast(str, domain.get("id"))])
+            if cast(str, domain.get("id")) in baseline_domains
+            and cast(str, domain.get("id")) in current_domains
+            and current_domains[cast(str, domain.get("id"))]
+            != baseline_domains[cast(str, domain.get("id"))]
+            else domain
+            for domain in existing_domains
+        ]
+        existing_domain_ids = {cast(str, domain.get("id")) for domain in existing_domains}
+        for domain in workspace.routing_domains:
+            if (
+                domain.domain_id not in existing_domain_ids
+                and domain.domain_id in candidate_domains
+            ):
+                existing_domains.append(deepcopy(candidate_domains[domain.domain_id]))
+        if existing_domains:
+            routing["domains"] = existing_domains
+        else:
+            routing.pop("domains", None)
+
+        baseline_boundary_ids = {boundary.boundary_id for boundary in baseline.boundaries}
+        current_boundary_ids = {boundary.boundary_id for boundary in workspace.boundaries}
+        existing_boundaries = cast(list[JsonDocument], routing.get("boundaries", []))
+        existing_boundaries = [
+            boundary
+            for index, boundary in enumerate(existing_boundaries)
+            if f"boundary-{index + 1}" not in baseline_boundary_ids - current_boundary_ids
+        ]
+        candidate_boundaries = cast(
+            list[JsonDocument],
+            candidate_routing.get("boundaries", []),
+        )
+        baseline_boundaries = {boundary.boundary_id: boundary for boundary in baseline.boundaries}
+        current_boundaries = {boundary.boundary_id: boundary for boundary in workspace.boundaries}
+        existing_boundaries = [
+            deepcopy(candidate_boundaries[index])
+            if f"boundary-{index + 1}" in baseline_boundaries
+            and f"boundary-{index + 1}" in current_boundaries
+            and current_boundaries[f"boundary-{index + 1}"]
+            != baseline_boundaries[f"boundary-{index + 1}"]
+            and index < len(candidate_boundaries)
+            else boundary
+            for index, boundary in enumerate(existing_boundaries)
+        ]
+        for index, boundary in enumerate(workspace.boundaries):
+            if boundary.boundary_id not in baseline_boundary_ids and index < len(
+                candidate_boundaries
+            ):
+                existing_boundaries.append(deepcopy(candidate_boundaries[index]))
+        if existing_boundaries:
+            routing["boundaries"] = existing_boundaries
+        else:
+            routing.pop("boundaries", None)
+    if routing.get("domains"):
+        session["routing"] = routing
+    else:
+        session.pop("routing", None)
+
+    return session, proposals, issues
+
+
+def _assemble_structured(
+    draft: BuilderVisualDraftEnvelope,
+    *,
+    allow_workspace_overlay: bool = False,
+) -> tuple[JsonDocument, tuple[BuilderProposedCatalogDocument, ...], tuple[BuilderIssue, ...]]:
+    if draft.applied_session is None:
+        return _assemble_authoring_workspace(draft)
+    assert draft.applied_workspace is not None
+    assert draft.applied_revision is not None
+    assert draft.authoring_workspace is not None
+    applied_model = SegmentSessionConfig.model_validate(draft.applied_session)
+    baseline = _workspace_from_applied_session(
+        applied_model,
+        revision=draft.applied_revision,
+        proposals=draft.catalog_documents,
+        prior_workspace=draft.applied_workspace,
+    )
+    if draft.applied_workspace != baseline:
+        issue = _issue(
+            "builder.draft.applied_projection_mismatch",
+            "Applied workspace does not match the authoritative canonical session",
+            target_ref=draft.target_ref,
+            draft_path="applied_workspace",
+        )
+        return deepcopy(draft.applied_session), draft.catalog_documents, (issue,)
+    if draft.authoring_workspace == baseline:
+        return deepcopy(draft.applied_session), draft.catalog_documents, ()
+    if not allow_workspace_overlay:
+        issue = _issue(
+            "builder.draft.unapplied_workspace_changes",
+            "Workspace changes must be applied through a typed graphical command",
+            target_ref=draft.target_ref,
+            draft_path="authoring_workspace",
+        )
+        return deepcopy(draft.applied_session), draft.catalog_documents, (issue,)
+    return _overlay_applied_workspace(draft, baseline)
 
 
 def _validated_catalog_model(snapshot: CatalogReadSnapshot, ref: CatalogRef) -> BaseModel:
@@ -1255,6 +2433,49 @@ def _validated_catalog_model(snapshot: CatalogReadSnapshot, ref: CatalogRef) -> 
     data = load_configuration_yaml(document.content)
     family = cast(CatalogFamily, ref.family)
     return catalog_family_spec(family).validate_document(data)
+
+
+def _reachable_projection_inputs(
+    session: SegmentSessionConfig,
+    proposals: tuple[BuilderProposedCatalogDocument, ...],
+    snapshot: CatalogReadSnapshot,
+) -> tuple[
+    tuple[BuilderProposedCatalogDocument, ...],
+    dict[CatalogRef, _CatalogProjectionFact],
+]:
+    proposed_by_ref = {proposal.ref: proposal for proposal in proposals}
+    reached_proposals: set[CatalogRef] = set()
+    visited: set[CatalogRef] = set()
+    catalog_facts: dict[CatalogRef, _CatalogProjectionFact] = {}
+
+    def visit(ref: CatalogRef) -> None:
+        if ref in visited:
+            return
+        visited.add(ref)
+        proposal = proposed_by_ref.get(ref)
+        try:
+            if proposal is None:
+                model = _validated_catalog_model(snapshot, ref)
+            else:
+                reached_proposals.add(ref)
+                model = catalog_family_spec(cast(CatalogFamily, ref.family)).validate_document(
+                    proposal.document
+                )
+        except CatalogNotFoundError, ValidationError, TypeError, ValueError, yaml.YAMLError:
+            return
+        catalog_facts[ref] = _CatalogProjectionFact(
+            label=_catalog_label(model),
+            summary=_site_summary(model) if isinstance(model, Site) else None,
+        )
+        for dependency in catalog_document_references(model):
+            visit(dependency)
+
+    for ref in catalog_document_references(session):
+        visit(ref)
+    return (
+        tuple(proposal for proposal in proposals if proposal.ref in reached_proposals),
+        catalog_facts,
+    )
 
 
 def _dependency_paths(
@@ -1370,6 +2591,122 @@ def _merge_assembly_issues(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class _WorkspaceApplication:
+    draft: BuilderVisualDraftEnvelope
+    session: JsonDocument
+    proposals: tuple[BuilderProposedCatalogDocument, ...]
+    assembly_issues: tuple[BuilderIssue, ...]
+
+
+def _apply_workspace_revision(
+    draft: BuilderVisualDraftEnvelope,
+    workspace: BuilderVisualWorkspace,
+) -> _WorkspaceApplication:
+    reserved_authoring_ids = list(draft.reserved_authoring_ids)
+    for authoring_id in _current_and_referenced_authoring_ids(workspace):
+        if authoring_id and authoring_id not in reserved_authoring_ids:
+            reserved_authoring_ids.append(authoring_id)
+    candidate = draft.model_copy(update={"authoring_workspace": workspace})
+    session, proposals, assembly_issues = _assemble_structured(
+        candidate,
+        allow_workspace_overlay=True,
+    )
+    try:
+        applied_model = SegmentSessionConfig.model_validate(session)
+    except TypeError, ValueError:
+        applied_model = None
+    next_revision = draft.draft_revision + 1
+    if assembly_issues or applied_model is None:
+        projection_status = (
+            "pending_authoring" if draft.applied_session is not None else "incomplete_authoring"
+        )
+        updated = draft.model_copy(
+            update={
+                "draft_revision": next_revision,
+                "projection_status": projection_status,
+                "reserved_authoring_ids": tuple(reserved_authoring_ids),
+                "session_yaml": yaml.safe_dump(session, sort_keys=False),
+                "authoring_workspace": workspace.model_copy(
+                    update={"projection_revision": None, "control_tree": None}
+                ),
+                "catalog_documents": proposals,
+            }
+        )
+    else:
+        applied_session = cast(
+            JsonDocument,
+            applied_model.model_dump(mode="json", by_alias=True, exclude_none=True),
+        )
+        applied_workspace = _workspace_from_applied_session(
+            applied_model,
+            revision=next_revision,
+            proposals=proposals,
+            prior_workspace=workspace,
+        )
+        canonical = canonicalize_persisted_configuration(draft.target_ref, applied_session)
+        updated = draft.model_copy(
+            update={
+                "draft_revision": next_revision,
+                "projection_status": "applied",
+                "reserved_authoring_ids": tuple(reserved_authoring_ids),
+                "session_yaml": canonical.yaml_bytes.decode("utf-8"),
+                "authoring_workspace": applied_workspace,
+                "applied_workspace": applied_workspace,
+                "applied_revision": next_revision,
+                "applied_session": applied_session,
+                "catalog_documents": proposals,
+            }
+        )
+        session = applied_session
+    return _WorkspaceApplication(
+        draft=updated,
+        session=session,
+        proposals=proposals,
+        assembly_issues=assembly_issues,
+    )
+
+
+def _compile_visual_application(
+    visual_draft: BuilderVisualDraftEnvelope,
+    session: JsonDocument,
+    proposals: tuple[BuilderProposedCatalogDocument, ...],
+    assembly_issues: tuple[BuilderIssue, ...],
+    snapshot: CatalogReadSnapshot,
+    *,
+    available_node_count: int,
+    preview_factory: PreviewFactory | None,
+) -> BuilderVisualDraftAssemblyResult:
+    assembled = BuilderDraftEnvelope(
+        draft_revision=visual_draft.draft_revision,
+        state={"session": session, "catalog_documents": proposals},
+    )
+    compile_request = BuilderCompileRequest(
+        draft=assembled,
+        target_ref=visual_draft.target_ref,
+    )
+    compile_result = compile_builder_draft(
+        compile_request,
+        snapshot,
+        available_node_count=available_node_count,
+        preview_factory=preview_factory,
+    )
+    compile_result = _merge_assembly_issues(compile_result, assembly_issues)
+    assembled = compile_result.draft
+    save_request = BuilderSessionSaveRequest(
+        draft=assembled,
+        target_ref=visual_draft.target_ref,
+        expected_session_revision=visual_draft.expected_session_revision,
+    )
+    return BuilderVisualDraftAssemblyResult(
+        visual_draft=visual_draft,
+        assembled_draft=assembled,
+        save_request=save_request,
+        compile_result=compile_result,
+        assembly_issues=assembly_issues,
+    )
+
+
 class BuilderVisualDraftService:
     """Scoped application service over one server-selected catalog context."""
 
@@ -1409,18 +2746,44 @@ class BuilderVisualDraftService:
                 ref=target_ref,
             )
         now = self._clock().astimezone(UTC).replace(second=0, microsecond=0)
+        workspace = BuilderVisualWorkspace(
+            session_name=name,
+            display_name=request.display_name,
+            description=request.description,
+            start_time=now.isoformat().replace("+00:00", "Z"),
+        )
+        session_yaml = yaml.safe_dump(
+            {
+                "session": {
+                    "name": name,
+                    **(
+                        {"display_name": request.display_name}
+                        if request.display_name is not None
+                        else {}
+                    ),
+                    **(
+                        {"description": request.description}
+                        if request.description is not None
+                        else {}
+                    ),
+                },
+                "segments": [],
+                "time": {
+                    "start_time": workspace.start_time,
+                    "step_seconds": workspace.step_seconds,
+                    "compression": workspace.compression,
+                },
+            },
+            sort_keys=False,
+        )
         return BuilderVisualDraftEnvelope(
             draft_revision=0,
-            mode="structured",
+            projection_status="incomplete_authoring",
             target_ref=target_ref,
             session_name_is_placeholder=session_name_is_placeholder,
             reserved_authoring_ids=(),
-            workspace=BuilderVisualWorkspace(
-                session_name=name,
-                display_name=request.display_name,
-                description=request.description,
-                start_time=now.isoformat().replace("+00:00", "Z"),
-            ),
+            session_yaml=session_yaml,
+            authoring_workspace=workspace,
         )
 
     def open(self, request: BuilderVisualDraftOpenRequest) -> BuilderVisualDraftEnvelope:
@@ -1433,17 +2796,6 @@ class BuilderVisualDraftService:
                 if request.source_ref.namespace == "user"
                 else SessionRef(f"user:{request.source_ref.relative_path.as_posix()}")
             )
-            if request.source_ref.namespace == "nodalarc":
-                try:
-                    snapshot.get(target_ref)
-                except CatalogNotFoundError:
-                    pass
-                else:
-                    raise BuilderVisualDraftConflictError(
-                        f"Default session customization target already exists: {target_ref}; "
-                        "choose an explicit new user: session reference",
-                        ref=target_ref,
-                    )
         expected_revision: str | None = None
         try:
             target = snapshot.get(target_ref)
@@ -1451,25 +2803,400 @@ class BuilderVisualDraftService:
             pass
         else:
             expected_revision = str(target.revision)
+        if target_ref == request.source_ref:
+            if request.source_ref.namespace != "user":
+                raise BuilderVisualDraftConflictError(
+                    f"Shipped session {request.source_ref} is read-only",
+                    ref=request.source_ref,
+                )
+        elif expected_revision is not None:
+            raise BuilderVisualDraftConflictError(
+                f"Session customization target already exists: {target_ref}",
+                ref=target_ref,
+            )
         session_yaml = source.content.decode("utf-8")
+        document = load_configuration_yaml(source.content)
+        if not isinstance(document, dict) or not isinstance(document.get("session"), dict):
+            raise ValueError(f"Stored session {request.source_ref} has no session identity")
         if request.source_ref.relative_path.stem != target_ref.relative_path.stem:
-            document = load_configuration_yaml(source.content)
-            if not isinstance(document, dict) or not isinstance(document.get("session"), dict):
-                raise ValueError(f"Stored session {request.source_ref} has no session identity")
             document["session"]["name"] = target_ref.relative_path.stem
             session_yaml = canonicalize_persisted_configuration(
                 target_ref,
                 cast(JsonDocument, document),
             ).yaml_bytes.decode("utf-8")
+        applied_model = SegmentSessionConfig.model_validate(document)
+        applied_session = cast(
+            JsonDocument,
+            applied_model.model_dump(mode="json", by_alias=True, exclude_none=True),
+        )
+        catalog_facts = _stored_catalog_facts(snapshot, source.content)
+        workspace = _workspace_from_applied_session(
+            applied_model,
+            revision=0,
+            catalog_facts=catalog_facts,
+        )
         return BuilderVisualDraftEnvelope(
             draft_revision=0,
-            mode="opaque_yaml",
+            projection_status="applied",
             target_ref=target_ref,
             source_ref=request.source_ref,
             expected_session_revision=expected_revision,
+            catalog_documents=(),
             session_name_is_placeholder=False,
-            reserved_authoring_ids=(),
+            reserved_authoring_ids=tuple(
+                dict.fromkeys(_current_and_referenced_authoring_ids(workspace))
+            ),
             session_yaml=session_yaml,
+            authoring_workspace=workspace,
+            applied_workspace=workspace,
+            applied_revision=0,
+            applied_session=applied_session,
+        )
+
+    def apply_yaml(
+        self,
+        request: BuilderVisualDraftApplyYamlRequest,
+    ) -> BuilderVisualDraftApplyYamlResult:
+        """Apply one exact YAML buffer without creating a second session loader."""
+
+        if not isinstance(request, BuilderVisualDraftApplyYamlRequest):
+            raise TypeError("request must be a BuilderVisualDraftApplyYamlRequest")
+        draft = request.draft
+        _assert_visual_draft_ownership(draft)
+        if request.expected_draft_revision != draft.draft_revision:
+            raise self._command_error(
+                draft,
+                "Visual draft revision changed before the YAML buffer was applied",
+                code="catalog_authoring.stale_revision",
+                expected_revision=request.expected_draft_revision,
+                current_revision=draft.draft_revision,
+            )
+
+        (
+            applied_model,
+            applied_session,
+            canonical_yaml,
+            _source_map,
+            issues,
+        ) = _parse_session_yaml_application(draft.target_ref, request.yaml_text)
+        if applied_model is None or applied_session is None or canonical_yaml is None:
+            updates: dict[str, Any] = {"session_yaml": request.yaml_text}
+            if draft.projection_status == "applied":
+                assert draft.authoring_workspace is not None
+                updates.update(
+                    {
+                        "projection_status": "pending_authoring",
+                        "authoring_workspace": draft.authoring_workspace.model_copy(
+                            update={"projection_revision": None, "control_tree": None}
+                        ),
+                    }
+                )
+            refused = draft.model_copy(update=updates)
+            return BuilderVisualDraftApplyYamlResult(
+                draft=refused,
+                buffer_generation=request.buffer_generation,
+                yaml_text=request.yaml_text,
+                applied=False,
+                canonicalization_required=False,
+                issues=issues,
+            )
+
+        snapshot = self._context.repository.snapshot(self._context.scope)
+        reachable_proposals, catalog_facts = _reachable_projection_inputs(
+            applied_model,
+            draft.catalog_documents,
+            snapshot,
+        )
+        next_revision = draft.draft_revision + 1
+        prior_workspace = draft.applied_workspace or draft.authoring_workspace
+        workspace = _workspace_from_applied_session(
+            applied_model,
+            revision=next_revision,
+            proposals=reachable_proposals,
+            catalog_facts=catalog_facts,
+            prior_workspace=prior_workspace,
+        )
+        reserved_authoring_ids = tuple(
+            dict.fromkeys(
+                (*draft.reserved_authoring_ids, *_current_and_referenced_authoring_ids(workspace))
+            )
+        )
+        updated = draft.model_copy(
+            update={
+                "draft_revision": next_revision,
+                "projection_status": "applied",
+                "catalog_documents": reachable_proposals,
+                "reserved_authoring_ids": reserved_authoring_ids,
+                "session_yaml": request.yaml_text,
+                "authoring_workspace": workspace,
+                "applied_workspace": workspace,
+                "applied_revision": next_revision,
+                "applied_session": applied_session,
+            }
+        )
+        return BuilderVisualDraftApplyYamlResult(
+            draft=updated,
+            buffer_generation=request.buffer_generation,
+            yaml_text=request.yaml_text,
+            applied=True,
+            canonicalization_required=request.yaml_text != canonical_yaml,
+            issues=(),
+        )
+
+    def mutate_controls(
+        self,
+        request: BuilderVisualControlMutationRequest,
+        *,
+        available_node_count: int,
+        preview_factory: PreviewFactory | None = None,
+    ) -> BuilderVisualDraftAssemblyResult:
+        """Apply one canonical control batch and compile its single new revision."""
+
+        if not isinstance(request, BuilderVisualControlMutationRequest):
+            raise TypeError("request must be a BuilderVisualControlMutationRequest")
+        draft = request.draft
+        _assert_visual_draft_ownership(draft)
+        if request.expected_draft_revision != draft.draft_revision:
+            raise self._command_error(
+                draft,
+                "Visual draft revision changed before controls were mutated",
+                code="catalog_authoring.stale_revision",
+                expected_revision=request.expected_draft_revision,
+                current_revision=draft.draft_revision,
+            )
+        if (
+            draft.projection_status != "applied"
+            or draft.applied_session is None
+            or draft.applied_workspace is None
+            or draft.applied_revision is None
+            or draft.authoring_workspace != draft.applied_workspace
+        ):
+            raise self._command_error(
+                draft,
+                "Graphical control mutations require a fully applied draft revision",
+                code="catalog_authoring.invalid_graph",
+            )
+
+        applied_model = SegmentSessionConfig.model_validate(draft.applied_session)
+        control_build = build_session_control_tree(
+            applied_model,
+            projection_revision=draft.applied_revision,
+        )
+        try:
+            candidate = apply_builder_control_mutations(
+                draft.applied_session,
+                control_build.bindings,
+                request.commands,
+            )
+        except BuilderControlMutationError as error:
+            raise self._command_error(draft, str(error)) from error
+        try:
+            candidate_model = SegmentSessionConfig.model_validate(candidate)
+        except (ValidationError, TypeError, ValueError) as error:
+            raise self._command_error(
+                draft,
+                f"Control mutation batch does not produce a valid session: {error}",
+                code="catalog_authoring.invalid_graph",
+            ) from error
+
+        snapshot = self._context.repository.snapshot(self._context.scope)
+        reachable_proposals, catalog_facts = _reachable_projection_inputs(
+            candidate_model,
+            draft.catalog_documents,
+            snapshot,
+        )
+        candidate_session = cast(
+            JsonDocument,
+            candidate_model.model_dump(mode="json", by_alias=True, exclude_none=True),
+        )
+        next_revision = draft.draft_revision + 1
+        workspace = _workspace_from_applied_session(
+            candidate_model,
+            revision=next_revision,
+            proposals=reachable_proposals,
+            catalog_facts=catalog_facts,
+            prior_workspace=draft.applied_workspace,
+        )
+        reserved_authoring_ids = tuple(
+            dict.fromkeys(
+                (*draft.reserved_authoring_ids, *_current_and_referenced_authoring_ids(workspace))
+            )
+        )
+        canonical = canonicalize_persisted_configuration(draft.target_ref, candidate_session)
+        updated = draft.model_copy(
+            update={
+                "draft_revision": next_revision,
+                "projection_status": "applied",
+                "catalog_documents": reachable_proposals,
+                "reserved_authoring_ids": reserved_authoring_ids,
+                "session_yaml": canonical.yaml_bytes.decode("utf-8"),
+                "authoring_workspace": workspace,
+                "applied_workspace": workspace,
+                "applied_revision": next_revision,
+                "applied_session": candidate_session,
+            }
+        )
+        return _compile_visual_application(
+            updated,
+            candidate_session,
+            reachable_proposals,
+            (),
+            snapshot,
+            available_node_count=available_node_count,
+            preview_factory=preview_factory,
+        )
+
+    def apply_workspace(
+        self,
+        request: BuilderVisualDraftApplyWorkspaceRequest,
+        *,
+        available_node_count: int,
+        preview_factory: PreviewFactory | None = None,
+    ) -> BuilderVisualDraftAssemblyResult:
+        """Apply and compile one graphical workspace as a single fenced revision."""
+
+        if not isinstance(request, BuilderVisualDraftApplyWorkspaceRequest):
+            raise TypeError("request must be a BuilderVisualDraftApplyWorkspaceRequest")
+        draft = request.draft
+        _assert_visual_draft_ownership(draft)
+        if request.expected_draft_revision != draft.draft_revision:
+            raise self._command_error(
+                draft,
+                "Visual draft revision changed before the workspace was applied",
+                code="catalog_authoring.stale_revision",
+                expected_revision=request.expected_draft_revision,
+                current_revision=draft.draft_revision,
+            )
+        application = _apply_workspace_revision(draft, request.workspace)
+        snapshot = self._context.repository.snapshot(self._context.scope)
+        return _compile_visual_application(
+            application.draft,
+            application.session,
+            application.proposals,
+            application.assembly_issues,
+            snapshot,
+            available_node_count=available_node_count,
+            preview_factory=preview_factory,
+        )
+
+    def retarget(
+        self,
+        request: BuilderVisualDraftRetargetRequest,
+        *,
+        available_node_count: int,
+        preview_factory: PreviewFactory | None = None,
+    ) -> BuilderVisualDraftAssemblyResult:
+        """Prepare, but do not persist, one draft under a different session identity."""
+
+        if not isinstance(request, BuilderVisualDraftRetargetRequest):
+            raise TypeError("request must be a BuilderVisualDraftRetargetRequest")
+        draft = request.draft
+        _assert_visual_draft_ownership(draft)
+        if request.expected_draft_revision != draft.draft_revision:
+            raise self._command_error(
+                draft,
+                "Visual draft revision changed before the session was retargeted",
+                code="catalog_authoring.stale_revision",
+                expected_revision=request.expected_draft_revision,
+                current_revision=draft.draft_revision,
+            )
+        if draft.authoring_workspace is None:
+            raise self._command_error(
+                draft,
+                "Session retargeting requires a valid graphical projection",
+                code="catalog_authoring.invalid_graph",
+            )
+
+        snapshot = self._context.repository.snapshot(self._context.scope)
+        try:
+            current_target_revision = str(snapshot.get(request.target_ref).revision)
+        except CatalogNotFoundError:
+            pass
+        else:
+            raise BuilderVisualDraftCommandError(
+                f"Session retarget target already exists: {request.target_ref}",
+                code="catalog_authoring.conflict",
+                ref=request.target_ref,
+                current_revision=current_target_revision,
+            )
+
+        old_owner = _identifier(draft.target_ref.relative_path.stem) or "untitled-session"
+        generated_refs = _builder_generated_proposal_refs(
+            draft.catalog_documents,
+            owner=old_owner,
+        )
+        retained_proposals = tuple(
+            proposal for proposal in draft.catalog_documents if proposal.ref not in generated_refs
+        )
+        workspace = draft.authoring_workspace.model_copy(
+            update={
+                "session_name": request.target_ref.relative_path.stem,
+                "projection_revision": None,
+                "control_tree": None,
+            }
+        )
+        candidate = draft.model_copy(
+            update={
+                "target_ref": request.target_ref,
+                "expected_session_revision": None,
+                "catalog_documents": retained_proposals,
+                "session_name_is_placeholder": False,
+                "projection_status": "incomplete_authoring",
+                "authoring_workspace": workspace,
+                "applied_workspace": None,
+                "applied_revision": None,
+                "applied_session": None,
+            }
+        )
+        application = _apply_workspace_revision(candidate, workspace)
+        try:
+            applied_model = SegmentSessionConfig.model_validate(application.session)
+        except TypeError, ValueError:
+            return _compile_visual_application(
+                application.draft,
+                application.session,
+                application.proposals,
+                application.assembly_issues,
+                snapshot,
+                available_node_count=available_node_count,
+                preview_factory=preview_factory,
+            )
+
+        reachable_proposals, _catalog_facts = _reachable_projection_inputs(
+            applied_model,
+            application.proposals,
+            snapshot,
+        )
+        next_revision = application.draft.draft_revision
+        applied_workspace = _workspace_from_applied_session(
+            applied_model,
+            revision=next_revision,
+            proposals=reachable_proposals,
+            prior_workspace=workspace,
+        )
+        applied_session = cast(
+            JsonDocument,
+            applied_model.model_dump(mode="json", by_alias=True, exclude_none=True),
+        )
+        canonical = canonicalize_persisted_configuration(request.target_ref, applied_session)
+        retargeted = application.draft.model_copy(
+            update={
+                "catalog_documents": reachable_proposals,
+                "session_yaml": canonical.yaml_bytes.decode("utf-8"),
+                "authoring_workspace": applied_workspace,
+                "applied_workspace": applied_workspace,
+                "applied_revision": next_revision,
+                "applied_session": applied_session,
+            }
+        )
+        return _compile_visual_application(
+            retargeted,
+            applied_session,
+            reachable_proposals,
+            application.assembly_issues,
+            snapshot,
+            available_node_count=available_node_count,
+            preview_factory=preview_factory,
         )
 
     @staticmethod
@@ -1693,6 +3420,7 @@ class BuilderVisualDraftService:
         """Apply one backend-owned gesture to an exact structured draft revision."""
 
         draft = request.draft
+        _assert_visual_draft_ownership(draft)
         if request.expected_draft_revision != draft.draft_revision:
             raise self._command_error(
                 draft,
@@ -1701,14 +3429,14 @@ class BuilderVisualDraftService:
                 expected_revision=request.expected_draft_revision,
                 current_revision=draft.draft_revision,
             )
-        if draft.mode != "structured" or draft.workspace is None:
+        if draft.authoring_workspace is None:
             raise self._command_error(
                 draft,
-                "Typed visual commands require a structured visual draft",
+                "Typed visual commands require an authoring workspace",
             )
 
         snapshot = self._context.repository.snapshot(self._context.scope)
-        workspace = draft.workspace
+        workspace = draft.authoring_workspace
         command = request.command
         affected_kind: Literal[
             "space",
@@ -2696,17 +4424,7 @@ class BuilderVisualDraftService:
         else:
             raise AssertionError(f"unhandled visual draft command: {type(command).__name__}")
 
-        reserved_authoring_ids = list(draft.reserved_authoring_ids)
-        for authoring_id in _current_and_referenced_authoring_ids(workspace):
-            if authoring_id and authoring_id not in reserved_authoring_ids:
-                reserved_authoring_ids.append(authoring_id)
-        updated = draft.model_copy(
-            update={
-                "draft_revision": draft.draft_revision + 1,
-                "reserved_authoring_ids": tuple(reserved_authoring_ids),
-                "workspace": workspace,
-            }
-        )
+        updated = _apply_workspace_revision(draft, workspace).draft
         return BuilderVisualDraftCommandResult(
             operation=command.operation,
             base_draft_revision=draft.draft_revision,
@@ -2721,8 +4439,17 @@ class BuilderVisualDraftService:
         self,
         request: BuilderVisualCustomizeChainRequest,
     ) -> BuilderVisualCustomizeChainResult:
-        snapshot = self._context.repository.snapshot(self._context.scope)
         draft = request.draft
+        _assert_visual_draft_ownership(draft)
+        if request.expected_draft_revision != draft.draft_revision:
+            raise self._command_error(
+                draft,
+                "Visual draft revision changed before the catalog chain was customized",
+                code="catalog_authoring.stale_revision",
+                expected_revision=request.expected_draft_revision,
+                current_revision=draft.draft_revision,
+            )
+        snapshot = self._context.repository.snapshot(self._context.scope)
 
         def refuse(code: str, message: str, path: str) -> BuilderVisualCustomizeChainResult:
             return BuilderVisualCustomizeChainResult(
@@ -2738,82 +4465,37 @@ class BuilderVisualDraftService:
                 ),
             )
 
-        root_ref: CatalogRef | None = None
-        structured_location: tuple[str, int] | None = None
-        opaque_document: JsonDocument | None = None
-        opaque_segment_index: int | None = None
-        if draft.mode == "structured":
-            assert draft.workspace is not None
-            matches: list[tuple[str, int, CatalogRef | None]] = []
-            matches.extend(
-                ("space", index, placed.source_ref)
-                for index, placed in enumerate(draft.workspace.space_refs)
-                if placed.segment_id == request.segment_id
+        if draft.authoring_workspace is None:
+            return refuse(
+                "builder.draft.no_valid_projection",
+                "Catalog customization requires a valid applied graphical projection",
+                "session_yaml",
             )
-            matches.extend(
-                ("ground", index, placed.site_set_ref)
-                for index, placed in enumerate(draft.workspace.ground_refs)
-                if placed.segment_id == request.segment_id
+        matches: list[tuple[str, int, CatalogRef | None]] = []
+        matches.extend(
+            ("space", index, placed.source_ref)
+            for index, placed in enumerate(draft.authoring_workspace.space_refs)
+            if placed.segment_id == request.segment_id
+        )
+        matches.extend(
+            ("ground", index, placed.site_set_ref)
+            for index, placed in enumerate(draft.authoring_workspace.ground_refs)
+            if placed.segment_id == request.segment_id
+        )
+        if len(matches) != 1:
+            return refuse(
+                "builder.draft.customize_segment_not_unique",
+                f"Placed segment {request.segment_id!r} was not found exactly once",
+                "segment_id",
             )
-            if len(matches) != 1:
-                return refuse(
-                    "builder.draft.customize_segment_not_unique",
-                    f"Placed segment {request.segment_id!r} was not found exactly once",
-                    "segment_id",
-                )
-            kind, index, selected_ref = matches[0]
-            if selected_ref is None:
-                return refuse(
-                    "builder.draft.customize_root_ref_required",
-                    "The selected segment does not contain a catalog root reference",
-                    "segment_id",
-                )
-            root_ref = CatalogRef(selected_ref)
-            structured_location = (kind, index)
-        else:
-            assert draft.session_yaml is not None
-            try:
-                parsed = load_configuration_yaml(draft.session_yaml)
-                if not isinstance(parsed, dict):
-                    raise TypeError("session YAML must contain one mapping")
-                opaque_document = cast(JsonDocument, parsed)
-                segments = opaque_document.get("segments")
-                if not isinstance(segments, list):
-                    raise TypeError("session YAML segments must be an array")
-            except (UnicodeError, yaml.YAMLError, TypeError, ValueError) as error:
-                return refuse(
-                    "builder.draft.customize_session_invalid",
-                    f"The opaque session could not be inspected: {error}",
-                    "session_yaml",
-                )
-            opaque_matches = [
-                (index, segment)
-                for index, segment in enumerate(segments)
-                if isinstance(segment, dict) and segment.get("id") == request.segment_id
-            ]
-            if len(opaque_matches) != 1:
-                return refuse(
-                    "builder.draft.customize_segment_not_unique",
-                    f"Placed segment {request.segment_id!r} was not found exactly once",
-                    "segment_id",
-                )
-            opaque_segment_index, selected = opaque_matches[0]
-            raw_root = selected.get("source")
-            if not isinstance(raw_root, str):
-                placement = selected.get("placement")
-                raw_root = placement.get("from_site_set") if isinstance(placement, dict) else None
-            try:
-                root_ref = CatalogRef(raw_root) if isinstance(raw_root, str) else None
-            except TypeError, ValueError:
-                root_ref = None
-            if root_ref is None:
-                return refuse(
-                    "builder.draft.customize_root_ref_required",
-                    "The selected segment does not contain a catalog root reference",
-                    "segment_id",
-                )
-
-        assert root_ref is not None
+        kind, selected_index, selected_ref = matches[0]
+        if selected_ref is None:
+            return refuse(
+                "builder.draft.customize_root_ref_required",
+                "The selected segment does not contain a catalog root reference",
+                "segment_id",
+            )
+        root_ref = CatalogRef(selected_ref)
         try:
             paths = _dependency_paths(snapshot, root_ref, request.leaf_ref)
         except (CatalogNotFoundError, TypeError, ValueError, yaml.YAMLError) as error:
@@ -2890,6 +4572,7 @@ class BuilderVisualDraftService:
                 proposals.append(
                     BuilderProposedCatalogDocument(
                         ref=target_ref,
+                        origin="customized",
                         document=_forked_document(
                             snapshot,
                             source_ref,
@@ -2906,44 +4589,70 @@ class BuilderVisualDraftService:
             )
 
         root_target = targets[0]
-        if structured_location is not None:
-            assert draft.workspace is not None
-            kind, selected_index = structured_location
-            if kind == "space":
-                space_refs = list(draft.workspace.space_refs)
-                space_refs[selected_index] = space_refs[selected_index].model_copy(
-                    update={"source_ref": root_target}
-                )
-                workspace = draft.workspace.model_copy(update={"space_refs": tuple(space_refs)})
-            else:
-                ground_refs = list(draft.workspace.ground_refs)
-                ground_refs[selected_index] = ground_refs[selected_index].model_copy(
-                    update={"site_set_ref": root_target}
-                )
-                workspace = draft.workspace.model_copy(update={"ground_refs": tuple(ground_refs)})
-            updated = draft.model_copy(
-                update={
-                    "draft_revision": draft.draft_revision + 1,
-                    "workspace": workspace,
-                    "catalog_documents": (*draft.catalog_documents, *proposals),
-                }
+        if kind == "space":
+            space_refs = list(draft.authoring_workspace.space_refs)
+            space_refs[selected_index] = space_refs[selected_index].model_copy(
+                update={"source_ref": root_target}
+            )
+            workspace = draft.authoring_workspace.model_copy(
+                update={"space_refs": tuple(space_refs)}
             )
         else:
-            assert opaque_document is not None and opaque_segment_index is not None
-            segments = cast(list[JsonValue], opaque_document["segments"])
-            selected = cast(dict[str, JsonValue], segments[opaque_segment_index])
-            if isinstance(selected.get("source"), str):
-                selected["source"] = str(root_target)
-            else:
-                placement = cast(dict[str, JsonValue], selected["placement"])
-                placement["from_site_set"] = str(root_target)
-            updated = draft.model_copy(
-                update={
-                    "draft_revision": draft.draft_revision + 1,
-                    "session_yaml": yaml.safe_dump(opaque_document, sort_keys=False),
-                    "catalog_documents": (*draft.catalog_documents, *proposals),
-                }
+            ground_refs = list(draft.authoring_workspace.ground_refs)
+            ground_refs[selected_index] = ground_refs[selected_index].model_copy(
+                update={"site_set_ref": root_target}
             )
+            workspace = draft.authoring_workspace.model_copy(
+                update={"ground_refs": tuple(ground_refs)}
+            )
+        candidate = draft.model_copy(
+            update={
+                "authoring_workspace": workspace,
+                "catalog_documents": (*draft.catalog_documents, *proposals),
+            }
+        )
+        session, reachable_proposals, assembly_issues = _assemble_structured(
+            candidate,
+            allow_workspace_overlay=True,
+        )
+        try:
+            applied_model = SegmentSessionConfig.model_validate(session)
+        except (TypeError, ValueError) as error:
+            return refuse(
+                "builder.draft.customize_projection_invalid",
+                f"Customized graphical projection is not canonical: {error}",
+                "authoring_workspace",
+            )
+        if assembly_issues:
+            return refuse(
+                "builder.draft.customize_projection_invalid",
+                "; ".join(issue.message for issue in assembly_issues),
+                "authoring_workspace",
+            )
+        next_revision = draft.draft_revision + 1
+        applied_session = cast(
+            JsonDocument,
+            applied_model.model_dump(mode="json", by_alias=True, exclude_none=True),
+        )
+        applied_workspace = _workspace_from_applied_session(
+            applied_model,
+            revision=next_revision,
+            proposals=reachable_proposals,
+            prior_workspace=workspace,
+        )
+        canonical = canonicalize_persisted_configuration(draft.target_ref, applied_session)
+        updated = candidate.model_copy(
+            update={
+                "draft_revision": next_revision,
+                "projection_status": "applied",
+                "session_yaml": canonical.yaml_bytes.decode("utf-8"),
+                "authoring_workspace": applied_workspace,
+                "applied_workspace": applied_workspace,
+                "applied_revision": next_revision,
+                "applied_session": applied_session,
+                "catalog_documents": reachable_proposals,
+            }
+        )
         chain = tuple(
             BuilderVisualCustomizeChainEntry(source_ref=source_ref, target_ref=target_ref)
             for source_ref, target_ref in zip(path, targets, strict=True)
@@ -2963,38 +4672,29 @@ class BuilderVisualDraftService:
         available_node_count: int,
         preview_factory: PreviewFactory | None = None,
     ) -> BuilderVisualDraftAssemblyResult:
-        snapshot: CatalogReadSnapshot = self._context.repository.snapshot(self._context.scope)
         visual_draft = request.draft
-        if visual_draft.mode == "structured":
+        _assert_visual_draft_ownership(visual_draft)
+        snapshot: CatalogReadSnapshot = self._context.repository.snapshot(self._context.scope)
+        if visual_draft.authoring_workspace is not None:
             session, proposals, assembly_issues = _assemble_structured(visual_draft)
         else:
-            session, assembly_issues = _assemble_opaque(visual_draft)
-            proposals = visual_draft.catalog_documents
-        assembled = BuilderDraftEnvelope(
-            draft_revision=visual_draft.draft_revision,
-            state={"session": session, "catalog_documents": proposals},
-        )
-        compile_request = BuilderCompileRequest(
-            draft=assembled,
-            target_ref=visual_draft.target_ref,
-        )
-        compile_result = compile_builder_draft(
-            compile_request,
+            assert visual_draft.projection_status == "no_valid_projection"
+            session = {}
+            proposals = ()
+            assembly_issues = (
+                _issue(
+                    "builder.draft.no_valid_projection",
+                    "Session YAML has no valid applied graphical projection",
+                    target_ref=visual_draft.target_ref,
+                    draft_path="session_yaml",
+                ),
+            )
+        return _compile_visual_application(
+            visual_draft,
+            session,
+            proposals,
+            assembly_issues,
             snapshot,
             available_node_count=available_node_count,
             preview_factory=preview_factory,
-        )
-        compile_result = _merge_assembly_issues(compile_result, assembly_issues)
-        assembled = compile_result.draft
-        save_request = BuilderSessionSaveRequest(
-            draft=assembled,
-            target_ref=visual_draft.target_ref,
-            expected_session_revision=visual_draft.expected_session_revision,
-        )
-        return BuilderVisualDraftAssemblyResult(
-            visual_draft=visual_draft,
-            assembled_draft=assembled,
-            save_request=save_request,
-            compile_result=compile_result,
-            assembly_issues=assembly_issues,
         )

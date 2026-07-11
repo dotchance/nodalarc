@@ -1,10 +1,13 @@
+import json
 from copy import deepcopy
 from pathlib import Path
 
 import pytest
 import yaml
+from nodalarc.catalog_refs import SessionRef
 from nodalarc.catalog_repository import CatalogScope
 from nodalarc.filesystem_catalog_repository import FilesystemCatalogRepository
+from nodalarc.prepared_session import PreparedSessionSource, prepare_session_files
 from vs_api.catalog_context import (
     CatalogContext,
     override_catalog_context_for_testing,
@@ -58,15 +61,92 @@ def _draft_with_nested_user_refs() -> dict:
             "catalog_documents": [
                 {
                     "ref": "user:nodes/nested-user-node.yaml",
+                    "origin": "generated",
                     "document": node,
                 },
                 {
                     "ref": "user:constellations/nested-user-ring.yaml",
+                    "origin": "generated",
                     "document": constellation,
                 },
             ],
         },
     }
+
+
+def test_yaml_import_accepts_a_valid_closure_larger_than_one_megabyte(
+    catalog_context: CatalogContext,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import vs_api.main as main
+
+    monkeypatch.setattr(main, "_API_KEY", "")
+    root = yaml.safe_load((SHIPPED_ROOT / "sessions/earth-leo-simple.yaml").read_bytes())
+    root["session"]["name"] = "large-yaml-import"
+    root["segments"][0]["source"] = "user:constellations/large/ring.yaml"
+
+    constellation = yaml.safe_load(
+        (SHIPPED_ROOT / "constellations/earth/leo/earth-leo-ring-36.yaml").read_bytes()
+    )
+    constellation["constellation"]["id"] = "ring"
+    constellation["constellation"]["node"] = "user:nodes/large/node.yaml"
+
+    node = yaml.safe_load((SHIPPED_ROOT / "nodes/space/starlink-v2-mesh.yaml").read_bytes())
+    node["node"]["id"] = "node"
+    terminal_source = yaml.safe_load(
+        (SHIPPED_ROOT / "terminals/rf/rf-ka-leo-access.yaml").read_bytes()
+    )
+    terminal_files = []
+    mounts = []
+    for suffix in ("a", "b", "c"):
+        terminal = deepcopy(terminal_source)
+        terminal["terminal"]["id"] = f"terminal-{suffix}"
+        terminal["terminal"]["notes"] = suffix * 400_000
+        ref = f"user:terminals/large/terminal-{suffix}.yaml"
+        terminal_files.append(
+            {
+                "yaml_text": yaml.safe_dump(terminal, sort_keys=False),
+                "logical_path_hint": f"catalog/user/terminals/large/terminal-{suffix}.yaml",
+            }
+        )
+        mounts.append(
+            {
+                "id": f"access-{suffix}",
+                "role": "access",
+                "terminal": ref,
+                "count": 1,
+            }
+        )
+    node["node"]["terminals"] = mounts
+
+    payload = {
+        "yaml_files": [
+            {
+                "yaml_text": yaml.safe_dump(root, sort_keys=False),
+                "logical_path_hint": "catalog/user/sessions/large-yaml-import.yaml",
+            },
+            {
+                "yaml_text": yaml.safe_dump(constellation, sort_keys=False),
+                "logical_path_hint": "catalog/user/constellations/large/ring.yaml",
+            },
+            {
+                "yaml_text": yaml.safe_dump(node, sort_keys=False),
+                "logical_path_hint": "catalog/user/nodes/large/node.yaml",
+            },
+            *terminal_files,
+        ],
+        "commit": False,
+    }
+    assert len(json.dumps(payload).encode("utf-8")) > main._MAX_BODY_BYTES
+
+    response = TestClient(main.app).post(
+        "/api/v1/builder/session/yaml/import",
+        json=payload,
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["outcome"] == "proposed"
+    assert len(response.json()["proposed_writes"]) == 6
 
 
 def test_typed_route_prepares_direct_and_transitive_user_refs_for_switch(
@@ -111,33 +191,27 @@ def test_typed_route_prepares_direct_and_transitive_user_refs_for_switch(
     assert reopened.json()["session_yaml"] == saved["session"]["canonical_yaml"]
 
     exported = client.post(
-        "/api/v1/builder/session/export",
+        "/api/v1/builder/session/yaml/export",
         json={
             "session_ref": saved["session"]["ref"],
             "expected_session_revision": saved["session"]["revision"],
         },
     )
     assert exported.status_code == 200, exported.text
-    closure = exported.json()
-    assert closure["root"]["exact_yaml"] == saved["session"]["canonical_yaml"]
+    yaml_export = exported.json()
+    assert yaml_export["files"][0]["yaml_text"] == saved["session"]["canonical_yaml"]
 
     imported = client.post(
-        "/api/v1/builder/session/import",
+        "/api/v1/builder/session/yaml/import",
         json={
-            "contract_version": closure["contract_version"],
-            "root_ref": closure["session_ref"],
-            "root_yaml": closure["root"]["exact_yaml"],
-            "document_digest": closure["document_digest"],
-            "closure_digest": closure["closure_digest"],
-            "entries": [
+            "yaml_files": [
                 {
-                    "ref": entry["ref"],
-                    "exact_yaml": entry["exact_yaml"],
-                    "document_digest": entry["document_digest"],
+                    "yaml_text": file["yaml_text"],
+                    "logical_path_hint": file["logical_path"],
                 }
-                for entry in closure["entries"]
+                for file in yaml_export["files"]
             ],
-            "commit": True,
+            "commit": False,
         },
     )
     assert imported.status_code == 200, imported.text
@@ -173,13 +247,7 @@ def test_typed_route_prepares_direct_and_transitive_user_refs_for_switch(
     changed_draft = _draft_with_nested_user_refs()
     changed_draft["draft_revision"] = 8
     changed_draft["state"]["session"]["session"]["description"] = "Changed after review"
-    revisions = {
-        entry["ref"]: entry["revision"]
-        for entry in saved["dependency_closure"]["entries"]
-        if entry.get("revision") is not None
-    }
-    for proposal in changed_draft["state"]["catalog_documents"]:
-        proposal["expected_revision"] = revisions[proposal["ref"]]
+    changed_draft["state"]["catalog_documents"] = []
     changed = client.post(
         "/api/v1/builder/session/save",
         json={
@@ -204,9 +272,10 @@ def test_typed_route_prepares_direct_and_transitive_user_refs_for_switch(
     assert len(captured) == 1
 
 
-def test_wizard_compile_save_and_deploy_uploads_exact_custom_yaml_closure(
+def test_wizard_custom_geometry_sites_and_propagator_yaml_export_reimports_and_resolves(
     catalog_context: CatalogContext,
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     import vs_api.main as main
 
@@ -299,33 +368,47 @@ def test_wizard_compile_save_and_deploy_uploads_exact_custom_yaml_closure(
     assert reopened.json()["session_yaml"] == saved["session"]["canonical_yaml"]
 
     exported = client.post(
-        "/api/v1/builder/session/export",
+        "/api/v1/builder/session/yaml/export",
         json={
             "session_ref": saved["session"]["ref"],
             "expected_session_revision": saved["session"]["revision"],
         },
     )
     assert exported.status_code == 200, exported.text
-    closure = exported.json()
-    assert closure["root"]["exact_yaml"] == saved["session"]["canonical_yaml"]
+    yaml_export = exported.json()
+    assert yaml_export["files"][0]["yaml_text"] == saved["session"]["canonical_yaml"]
+    exported_by_path = {
+        file["logical_path"]: yaml.safe_load(file["yaml_text"]) for file in yaml_export["files"]
+    }
+    orbit_path = next(
+        path for path in exported_by_path if path.startswith("catalog/user/orbits/wizard/")
+    )
+    constellation_path = next(
+        path for path in exported_by_path if path.startswith("catalog/user/constellations/wizard/")
+    )
+    site_set_path = next(
+        path for path in exported_by_path if path.startswith("catalog/user/site-sets/wizard/")
+    )
+    assert exported_by_path[orbit_path]["orbit"]["propagator"] == "j2_mean_elements"
+    assert exported_by_path[constellation_path]["constellation"]["orbit"].startswith(
+        "user:orbits/wizard/"
+    )
+    assert exported_by_path[site_set_path]["site_set"]["sites"] == [
+        "nodalarc:sites/earth/us/earth-us-hawthorne.yaml",
+        "nodalarc:sites/earth/us/co/earth-us-co-denver.yaml",
+    ]
 
     imported = client.post(
-        "/api/v1/builder/session/import",
+        "/api/v1/builder/session/yaml/import",
         json={
-            "contract_version": closure["contract_version"],
-            "root_ref": closure["session_ref"],
-            "root_yaml": closure["root"]["exact_yaml"],
-            "document_digest": closure["document_digest"],
-            "closure_digest": closure["closure_digest"],
-            "entries": [
+            "yaml_files": [
                 {
-                    "ref": entry["ref"],
-                    "exact_yaml": entry["exact_yaml"],
-                    "document_digest": entry["document_digest"],
+                    "yaml_text": file["yaml_text"],
+                    "logical_path_hint": file["logical_path"],
                 }
-                for entry in closure["entries"]
+                for file in yaml_export["files"]
             ],
-            "commit": True,
+            "commit": False,
         },
     )
     assert imported.status_code == 200, imported.text
@@ -353,3 +436,64 @@ def test_wizard_compile_save_and_deploy_uploads_exact_custom_yaml_closure(
     constellation_ref = next(ref for ref in uploaded if ref.startswith("user:constellations/"))
     constellation = yaml.safe_load(uploaded[constellation_ref])
     assert isinstance(constellation["constellation"]["orbit"], str)
+
+    imported_scope = CatalogScope()
+    imported_context = CatalogContext(
+        repository=FilesystemCatalogRepository(
+            shipped_root=SHIPPED_ROOT,
+            scope_roots={imported_scope: tmp_path / "wizard-imported-catalog"},
+        ),
+        scope=imported_scope,
+    )
+    override_catalog_context_for_testing(imported_context)
+    try:
+        import_payload = {
+            "yaml_files": [
+                {
+                    "yaml_text": file["yaml_text"],
+                    "logical_path_hint": file["logical_path"],
+                }
+                for file in yaml_export["files"]
+            ],
+            "commit": False,
+        }
+        proposed = client.post(
+            "/api/v1/builder/session/yaml/import",
+            json=import_payload,
+        )
+        assert proposed.status_code == 200, proposed.text
+        assert proposed.json()["outcome"] == "proposed"
+        committed = client.post(
+            "/api/v1/builder/session/yaml/import",
+            json={
+                **import_payload,
+                "commit": True,
+                "proposal_token": proposed.json()["proposal_token"],
+            },
+        )
+        assert committed.status_code == 200, committed.text
+        assert committed.json()["outcome"] == "committed"
+
+        imported_snapshot = imported_context.repository.snapshot(imported_context.scope)
+        imported_session_ref = SessionRef(saved["session"]["ref"])
+        imported_session = imported_snapshot.get(imported_session_ref)
+        prepared = prepare_session_files(
+            imported_session.content,
+            imported_snapshot,
+            source=PreparedSessionSource(
+                logical_id=imported_session_ref,
+                origin="test.wizard-yaml-import",
+            ),
+            source_revision=str(imported_session.revision),
+            available_node_count=1_000_000,
+        )
+        assert (
+            prepared.resolution.resolved.session.name
+            == yaml.safe_load(saved["session"]["canonical_yaml"])["session"]["name"]
+        )
+        imported_refs = {str(entry.ref) for entry in prepared.catalog_files}
+        assert any(ref.startswith("user:orbits/wizard/") for ref in imported_refs)
+        assert any(ref.startswith("user:constellations/wizard/") for ref in imported_refs)
+        assert any(ref.startswith("user:site-sets/wizard/") for ref in imported_refs)
+    finally:
+        override_catalog_context_for_testing(catalog_context)

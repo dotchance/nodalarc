@@ -96,7 +96,6 @@ from nodalarc.models.builder_catalog_api import (  # noqa: E402
     BuilderVisualRoutingProtocolMetadata,
     BuilderVisualSchedulingPresetMetadata,
     BuilderVisualTopologyModeMetadata,
-    CatalogClosureImportRequest,
     CatalogComponentDraftEnvelope,
     CatalogComponentFamily,
     CatalogDeleteRequest,
@@ -109,8 +108,11 @@ from nodalarc.models.builder_catalog_api import (  # noqa: E402
     CatalogDraftAddNodeEthernetPortRequest,
     CatalogDraftAddNodeTerminalMountRequest,
     CatalogDraftAddSiteNodeRequest,
+    CatalogDraftApplyYamlRequest,
+    CatalogDraftApplyYamlResult,
     CatalogDraftCompileRequest,
     CatalogDraftCompileResult,
+    CatalogDraftControlMutationRequest,
     CatalogDraftIssue,
     CatalogDraftIssueStage,
     CatalogDraftNewRequest,
@@ -118,24 +120,47 @@ from nodalarc.models.builder_catalog_api import (  # noqa: E402
     CatalogDraftPatchCommand,
     CatalogDraftPatchOperation,
     CatalogDraftPatchRequest,
-    CatalogDraftReplaceObjectRequest,
     CatalogDraftSaveRequest,
     CatalogDraftSaveResult,
     CatalogFamilyMetadata,
     CatalogForkRequest,
     CatalogForkResult,
     CatalogGetRequest,
-    CatalogImportCollision,
-    CatalogImportEntry,
-    CatalogImportResult,
-    CatalogImportWrite,
     CatalogListPage,
     CatalogListRequest,
     CatalogMutationResult,
     CatalogOperationRefusal,
-    CatalogSessionExport,
-    CatalogSessionExportRequest,
-    PortableCatalogYaml,
+    CatalogSessionYamlExport,
+    CatalogSessionYamlExportRequest,
+    CatalogSessionYamlImportRequest,
+    CatalogSessionYamlImportResult,
+    CatalogYamlFile,
+    CatalogYamlImportCollision,
+    CatalogYamlImportFile,
+    CatalogYamlImportWrite,
+)
+from nodalarc.models.builder_controls_api import (  # noqa: E402
+    BuilderChoiceBranch,
+    BuilderChoiceControl,
+    BuilderControlMutationOperation,
+    BuilderControlTree,
+    BuilderInsertItemCommand,
+    BuilderInsertMapEntryCommand,
+    BuilderMapControl,
+    BuilderMapEntry,
+    BuilderMoveItemCommand,
+    BuilderObjectControl,
+    BuilderObjectField,
+    BuilderRemoveItemCommand,
+    BuilderRemoveMapEntryCommand,
+    BuilderRenameMapKeyCommand,
+    BuilderScalarConstraints,
+    BuilderScalarControl,
+    BuilderSelectChoiceCommand,
+    BuilderSequenceControl,
+    BuilderSequenceItem,
+    BuilderSetPresentCommand,
+    BuilderSetScalarCommand,
 )
 from nodalarc.models.builder_visual_api import (  # noqa: E402
     BuilderVisualAddBoundaryCommand,
@@ -147,12 +172,15 @@ from nodalarc.models.builder_visual_api import (  # noqa: E402
     BuilderVisualAddOrIncrementNodeTerminalCommand,
     BuilderVisualAddRoutingDomainCommand,
     BuilderVisualAuthorInlineSpaceNodeCommand,
-    BuilderVisualCatalogRevision,
     BuilderVisualConnectSegmentsCommand,
+    BuilderVisualControlMutationRequest,
     BuilderVisualCustomizeChainEntry,
     BuilderVisualCustomizeChainRequest,
     BuilderVisualCustomizeChainResult,
     BuilderVisualDraftAffectedKind,
+    BuilderVisualDraftApplyWorkspaceRequest,
+    BuilderVisualDraftApplyYamlRequest,
+    BuilderVisualDraftApplyYamlResult,
     BuilderVisualDraftAssemblyResult,
     BuilderVisualDraftCommandOperation,
     BuilderVisualDraftCommandRequest,
@@ -160,8 +188,9 @@ from nodalarc.models.builder_visual_api import (  # noqa: E402
     BuilderVisualDraftCompileRequest,
     BuilderVisualDraftCreateRequest,
     BuilderVisualDraftEnvelope,
-    BuilderVisualDraftMode,
     BuilderVisualDraftOpenRequest,
+    BuilderVisualDraftProjectionStatus,
+    BuilderVisualDraftRetargetRequest,
     BuilderVisualGroundBoresight,
     BuilderVisualGroundDraft,
     BuilderVisualGroundMember,
@@ -265,7 +294,7 @@ MODEL_TYPES: tuple[type[BaseModel], ...] = (
     BuilderSessionSaveRequest,
     BuilderSessionSaveResult,
     BuilderSessionSaveRefusal,
-    BuilderVisualCatalogRevision,
+    BuilderVisualControlMutationRequest,
     BuilderVisualCustomizeChainRequest,
     BuilderVisualCustomizeChainEntry,
     BuilderVisualCustomizeChainResult,
@@ -314,6 +343,10 @@ MODEL_TYPES: tuple[type[BaseModel], ...] = (
     BuilderVisualDraftEnvelope,
     BuilderVisualDraftCreateRequest,
     BuilderVisualDraftOpenRequest,
+    BuilderVisualDraftApplyWorkspaceRequest,
+    BuilderVisualDraftApplyYamlRequest,
+    BuilderVisualDraftApplyYamlResult,
+    BuilderVisualDraftRetargetRequest,
     BuilderVisualDraftCompileRequest,
     BuilderVisualDraftAssemblyResult,
     CatalogSessionSourceId,
@@ -342,6 +375,26 @@ MODEL_TYPES: tuple[type[BaseModel], ...] = (
     BuilderVisualTopologyModeMetadata,
     BuilderVisualAuthoringFacts,
     BuilderCatalogBootstrap,
+    BuilderScalarConstraints,
+    BuilderScalarControl,
+    BuilderObjectField,
+    BuilderObjectControl,
+    BuilderChoiceBranch,
+    BuilderChoiceControl,
+    BuilderSequenceItem,
+    BuilderSequenceControl,
+    BuilderMapEntry,
+    BuilderMapControl,
+    BuilderControlTree,
+    BuilderSetScalarCommand,
+    BuilderSetPresentCommand,
+    BuilderSelectChoiceCommand,
+    BuilderInsertItemCommand,
+    BuilderRemoveItemCommand,
+    BuilderMoveItemCommand,
+    BuilderInsertMapEntryCommand,
+    BuilderRemoveMapEntryCommand,
+    BuilderRenameMapKeyCommand,
     CatalogListRequest,
     CatalogDocumentSummary,
     CatalogListPage,
@@ -356,7 +409,9 @@ MODEL_TYPES: tuple[type[BaseModel], ...] = (
     CatalogDraftOpenRequest,
     CatalogDraftPatchCommand,
     CatalogDraftPatchRequest,
-    CatalogDraftReplaceObjectRequest,
+    CatalogDraftControlMutationRequest,
+    CatalogDraftApplyYamlRequest,
+    CatalogDraftApplyYamlResult,
     CatalogDraftCompileRequest,
     CatalogDraftCompileResult,
     CatalogDraftSaveRequest,
@@ -369,14 +424,14 @@ MODEL_TYPES: tuple[type[BaseModel], ...] = (
     CatalogForkResult,
     CatalogDeleteRequest,
     CatalogDeleteResult,
-    CatalogSessionExportRequest,
-    PortableCatalogYaml,
-    CatalogSessionExport,
-    CatalogImportEntry,
-    CatalogClosureImportRequest,
-    CatalogImportWrite,
-    CatalogImportCollision,
-    CatalogImportResult,
+    CatalogSessionYamlExportRequest,
+    CatalogYamlFile,
+    CatalogSessionYamlExport,
+    CatalogYamlImportFile,
+    CatalogSessionYamlImportRequest,
+    CatalogYamlImportWrite,
+    CatalogYamlImportCollision,
+    CatalogSessionYamlImportResult,
     CatalogOperationRefusal,
 )
 
@@ -408,7 +463,14 @@ LITERAL_ALIASES: tuple[tuple[str, tuple[Any, ...]], ...] = (
     ("WizardWalkerPattern", _alias_args(WizardWalkerPattern)),
     ("WizardRoutingBooleanField", _alias_args(WizardRoutingBooleanField)),
     ("WizardRoutingTimerField", _alias_args(WizardRoutingTimerField)),
-    ("BuilderVisualDraftMode", _alias_args(BuilderVisualDraftMode)),
+    (
+        "BuilderVisualDraftProjectionStatus",
+        _alias_args(BuilderVisualDraftProjectionStatus),
+    ),
+    (
+        "BuilderControlMutationOperation",
+        _alias_args(BuilderControlMutationOperation),
+    ),
     ("BuilderVisualSchedulingPreset", _alias_args(BuilderVisualSchedulingPreset)),
     ("BuilderVisualPhasingMode", _alias_args(BuilderVisualPhasingMode)),
     ("BuilderVisualOrbitShape", _alias_args(BuilderVisualOrbitShape)),
@@ -438,6 +500,7 @@ _GENERIC_CONFIGURATION_SCHEMA_REFS = {
     "ValidatedConfigurationJson",
     "ValidatedSessionJson",
 }
+_GENERIC_RUNTIME_SCHEMA_REFS = {"BuilderControlTree"}
 
 
 def _literal(value: Any) -> str:
@@ -506,10 +569,14 @@ def _render_type(schema: dict[str, Any]) -> str:
 
 def _render_model(model: type[BaseModel]) -> list[str]:
     schema = model.model_json_schema()
-    if schema.get("type") != "object" or schema.get("additionalProperties") is not False:
+    root = schema
+    reference = schema.get("$ref")
+    if reference is not None:
+        root = schema.get("$defs", {})[reference.rsplit("/", 1)[-1]]
+    if root.get("type") != "object" or root.get("additionalProperties") is not False:
         raise ValueError(f"{model.__name__} must remain a closed object contract")
 
-    return _render_object_schema(model.__name__, schema)
+    return _render_object_schema(model.__name__, root)
 
 
 def _render_object_schema(
@@ -538,6 +605,7 @@ def _render_object_schema(
 def _runtime_descriptor(
     schema: dict[str, Any],
     definitions: dict[str, Any],
+    resolving_refs: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
     """Describe one backend application DTO's JSON runtime contract."""
 
@@ -545,7 +613,16 @@ def _runtime_descriptor(
         return {"kind": "json"}
     reference = schema.get("$ref")
     if reference is not None:
-        return _runtime_descriptor(definitions[reference.rsplit("/", 1)[-1]], definitions)
+        name = reference.rsplit("/", 1)[-1]
+        if name in _GENERIC_RUNTIME_SCHEMA_REFS:
+            return {"kind": "json"}
+        if name in resolving_refs:
+            return {"kind": "json"}
+        return _runtime_descriptor(
+            definitions[name],
+            definitions,
+            resolving_refs | {name},
+        )
 
     if "const" in schema:
         return {"kind": "literal", "value": schema["const"]}
@@ -556,7 +633,9 @@ def _runtime_descriptor(
     if alternatives is not None:
         return {
             "kind": "union",
-            "options": [_runtime_descriptor(option, definitions) for option in alternatives],
+            "options": [
+                _runtime_descriptor(option, definitions, resolving_refs) for option in alternatives
+            ],
             "exclusive": "oneOf" in schema,
         }
 
@@ -564,7 +643,9 @@ def _runtime_descriptor(
     if intersections is not None:
         return {
             "kind": "intersection",
-            "options": [_runtime_descriptor(option, definitions) for option in intersections],
+            "options": [
+                _runtime_descriptor(option, definitions, resolving_refs) for option in intersections
+            ],
         }
 
     schema_type = schema.get("type")
@@ -572,7 +653,7 @@ def _runtime_descriptor(
         return {
             "kind": "union",
             "options": [
-                _runtime_descriptor({**schema, "type": option}, definitions)
+                _runtime_descriptor({**schema, "type": option}, definitions, resolving_refs)
                 for option in schema_type
             ],
             "exclusive": False,
@@ -608,17 +689,19 @@ def _runtime_descriptor(
         if prefix_items is not None:
             descriptor = {
                 "kind": "tuple",
-                "items": [_runtime_descriptor(item, definitions) for item in prefix_items],
+                "items": [
+                    _runtime_descriptor(item, definitions, resolving_refs) for item in prefix_items
+                ],
                 "rest": (
                     False
                     if schema.get("items") is False
-                    else _runtime_descriptor(schema.get("items", {}), definitions)
+                    else _runtime_descriptor(schema.get("items", {}), definitions, resolving_refs)
                 ),
             }
         else:
             descriptor = {
                 "kind": "array",
-                "items": _runtime_descriptor(schema.get("items", {}), definitions),
+                "items": _runtime_descriptor(schema.get("items", {}), definitions, resolving_refs),
             }
         for source, target in (
             ("minItems", "min_items"),
@@ -634,7 +717,7 @@ def _runtime_descriptor(
         return {
             "kind": "object",
             "fields": {
-                name: _runtime_descriptor(field_schema, definitions)
+                name: _runtime_descriptor(field_schema, definitions, resolving_refs)
                 for name, field_schema in schema.get("properties", {}).items()
             },
             "additional": (
@@ -643,6 +726,7 @@ def _runtime_descriptor(
                 else _runtime_descriptor(
                     additional if isinstance(additional, dict) else {},
                     definitions,
+                    resolving_refs,
                 )
             ),
             **(
@@ -650,7 +734,9 @@ def _runtime_descriptor(
                     "patterns": [
                         {
                             "pattern": pattern,
-                            "values": _runtime_descriptor(value_schema, definitions),
+                            "values": _runtime_descriptor(
+                                value_schema, definitions, resolving_refs
+                            ),
                         }
                         for pattern, value_schema in patterns.items()
                     ]

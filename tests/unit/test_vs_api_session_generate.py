@@ -231,7 +231,7 @@ def test_single_file_upload_requires_referenced_user_content(catalog_client):
     )
 
     assert response.status_code == 422
-    assert "complete closure" in response.json()["error"]
+    assert "user component YAML files" in response.json()["error"]
 
 
 def test_upload_saves_canonical_user_catalog_session_and_admits_catalog_deploy(

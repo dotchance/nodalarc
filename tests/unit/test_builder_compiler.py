@@ -14,6 +14,7 @@ from nodalarc.catalog_repository import CatalogReadSnapshot, CatalogScope
 from nodalarc.filesystem_catalog_repository import FilesystemCatalogRepository
 from nodalarc.models.builder_api import BuilderCompileRequest, BuilderDraftEnvelope
 from nodalarc.models.builder_world import BuilderWorld
+from pydantic import ValidationError
 from vs_api.builder_compiler import canonicalize_persisted_configuration, compile_builder_draft
 
 from tests.builder_world_fixtures import builder_world_preview
@@ -51,7 +52,10 @@ def _request(
             draft_revision=1,
             state={
                 "session": session,
-                "catalog_documents": catalog_documents or [],
+                "catalog_documents": [
+                    {**document, "origin": document.get("origin", "generated")}
+                    for document in (catalog_documents or [])
+                ],
             },
         ),
         target_ref=f"user:sessions/{name}.yaml",
@@ -261,7 +265,6 @@ def test_invalid_stale_orphan_proposal_is_excluded_without_blocking(
                 {
                     "ref": orphan_ref,
                     "document": {"node": {"id": "orphan-spacecraft", "unknown": True}},
-                    "expected_revision": f"sha256:{'0' * 64}",
                 }
             ],
         ),
@@ -281,18 +284,17 @@ def test_invalid_stale_orphan_proposal_is_excluded_without_blocking(
     assert all(issue.stage not in {"structural", "staleness"} for issue in result.issues)
 
 
-def test_invalid_stale_reachable_proposal_blocks_with_typed_issues(
+def test_invalid_reachable_proposal_blocks_with_typed_issues(
     snapshot: CatalogReadSnapshot,
 ) -> None:
     session, proposals = _deep_user_draft()
     proposals[1]["document"] = {"node": {"id": "user-spacecraft", "unknown": True}}
-    proposals[1]["expected_revision"] = f"sha256:{'0' * 64}"
 
     result = _compile(_request(session, catalog_documents=proposals), snapshot)
 
     assert result.save_verdict.allowed is False
     assert any(issue.stage == "structural" for issue in result.issues)
-    assert any(issue.stage == "staleness" for issue in result.issues)
+    assert not any(issue.stage == "staleness" for issue in result.issues)
     assert not any(
         issue.code == "builder.draft.unreferenced_catalog_documents" for issue in result.issues
     )
@@ -378,19 +380,11 @@ def test_canonical_compile_is_idempotent_and_does_not_write(
     assert snapshot.list(namespace="user") == ()
 
 
-def test_stale_proposed_revision_blocks_save_without_hiding_compile_facts(
-    snapshot: CatalogReadSnapshot,
-) -> None:
+def test_proposed_component_revision_fields_are_rejected() -> None:
     session, proposals = _deep_user_draft()
     proposals[0]["expected_revision"] = f"sha256:{'0' * 64}"
-    request = _request(session, catalog_documents=proposals)
-
-    result = _compile(request, snapshot)
-
-    assert result.save_verdict.allowed is False
-    assert result.digests is not None
-    assert result.resolved_preview is not None
-    assert any(issue.stage == "staleness" for issue in result.issues)
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        _request(session, catalog_documents=proposals)
 
 
 def test_expected_preview_failure_is_a_typed_deploy_blocker(

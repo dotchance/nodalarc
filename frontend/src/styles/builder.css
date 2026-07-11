@@ -136,6 +136,13 @@
   gap: var(--space-2);
 }
 
+.builder-shell--gui-locked .builder-outline,
+.builder-shell--gui-locked .builder-canvas,
+.builder-shell--gui-locked .builder-windows > * {
+  pointer-events: none;
+  opacity: 0.62;
+}
+
 .builder-status {
   grid-area: status;
   display: flex;
@@ -299,6 +306,26 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
+}
+
+.catalog-draft-surfaces {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: var(--space-3);
+  align-items: start;
+}
+
+.catalog-draft-fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.catalog-draft-yaml {
+  min-height: 360px;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xxs);
 }
 
 .builder-card {
@@ -496,20 +523,52 @@ button.builder-card-head:hover .builder-card-title {
   padding: var(--space-1) var(--space-2);
 }
 
+.builder-import-write-list {
+  margin: var(--space-1) 0;
+  padding-left: var(--space-4);
+  color: var(--text-secondary);
+}
+
 .builder-card-body select {
   margin: var(--space-1) var(--space-2);
   max-width: 100%;
 }
 
-.builder-yaml-body {
+.builder-yaml-editor {
   flex: 1;
+  min-height: 320px;
+  width: 100%;
+  resize: vertical;
   overflow: auto;
   margin: 0;
   padding: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-main);
   font-family: var(--font-mono);
   font-size: var(--font-size-xxs);
+  line-height: 1.45;
   color: var(--text-primary);
   white-space: pre;
+}
+
+.builder-yaml-editor:focus {
+  border-color: var(--accent-amber);
+  outline: 1px solid var(--accent-amber);
+}
+
+.builder-yaml-editor:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+.builder-yaml-revision {
+  color: var(--text-secondary);
+  font-size: var(--font-size-xxs);
+}
+
+.builder-yaml-revision--error {
+  color: var(--status-fail);
 }
 
 .builder-start-card {

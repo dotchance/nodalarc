@@ -22,11 +22,16 @@ const { resetCatalogStores } = await import("../useBuilderWorld");
 const { catalogEarthFrame } = await import("../../sim/__tests__/bodyModelFixture");
 const { newWorkspace } = await import("./fixtures/workspaceFixtures");
 const {
-  CATALOG_DRAFT_RECOVERY_KEY,
-  STRUCTURED_AUTOSAVE_KEY,
-  serializeCatalogDraftRecovery,
-  serializeStructuredRecovery,
+  getRecoveryTabBinding,
+  recoveryStorageKey,
+  writeCatalogDraftRecovery,
+  writeStructuredAutosave,
 } = await import("../structuredDraftRecovery");
+
+const builderRecoveryScope = () => ({
+  authoringContextBinding: "builder-view-test-context",
+  tabBinding: getRecoveryTabBinding(),
+});
 
 const PROPS = {
   active: true,
@@ -48,36 +53,41 @@ function jsonResponse(body: unknown, ok = true, status = 200) {
 function structuredVisualDraft(
   sessionName = "untitled-session",
 ): BuilderVisualDraftEnvelope {
+  const workspace = {
+    session_name: sessionName,
+    display_name: null,
+    description: null,
+    space: [],
+    space_refs: [],
+    ground: [],
+    ground_refs: [],
+    links: [],
+    routing_domains: [],
+    boundaries: [],
+    max_pairs_per_rule: 2_000,
+    max_pairs_per_tick: 10_000,
+    start_time: "2026-01-01T00:00:00Z",
+    step_seconds: 1,
+    compression: 1,
+    projection_revision: 0,
+    generic_scenes: [],
+  };
   return {
-    contract_version: 1,
+    contract_version: 2,
     draft_revision: 0,
-    mode: "structured",
+    projection_status: "applied",
     target_ref: `user:sessions/${sessionName}.yaml`,
     source_ref: null,
     expected_session_revision: null,
-    expected_catalog_revisions: [],
     catalog_documents: [],
     session_name_is_placeholder:
       sessionName === "untitled-session" || sessionName.startsWith("untitled-session-"),
     reserved_authoring_ids: [],
-    workspace: {
-      session_name: sessionName,
-      display_name: null,
-      description: null,
-      space: [],
-      space_refs: [],
-      ground: [],
-      ground_refs: [],
-      links: [],
-      routing_domains: [],
-      boundaries: [],
-      max_pairs_per_rule: 2_000,
-      max_pairs_per_tick: 10_000,
-      start_time: "2026-01-01T00:00:00Z",
-      step_seconds: 1,
-      compression: 1,
-    },
-    session_yaml: null,
+    session_yaml: `session:\n  name: ${sessionName}\nsegments: []\n`,
+    authoring_workspace: workspace,
+    applied_workspace: workspace,
+    applied_revision: 0,
+    applied_session: { session: { name: sessionName } },
   };
 }
 
@@ -87,14 +97,15 @@ function compileResponse(
   forcedBlocker: string | null = null,
 ) {
   const visualDraft = request.draft;
-  const emptyGroundIndex = visualDraft.workspace?.ground?.findIndex(
+  const visualWorkspace = visualDraft.authoring_workspace ?? visualDraft.applied_workspace;
+  const emptyGroundIndex = visualWorkspace?.ground?.findIndex(
     (ground: { members?: unknown[] }) => (ground.members ?? []).length === 0,
   );
   const incomplete = typeof emptyGroundIndex === "number" && emptyGroundIndex >= 0;
   const targetName =
     String(visualDraft.target_ref).split("/").pop()?.replace(/\.ya?ml$/, "") ?? "";
   const sessionName =
-    visualDraft.workspace?.session_name ?? (targetName || "draft");
+    visualWorkspace?.session_name ?? (targetName || "draft");
   const identityMismatch = sessionName !== targetName;
   const assemblyIssues = [
     ...(incomplete
@@ -239,7 +250,7 @@ const GEO_SCHEDULING = {
 
 function visualCommandResponse(request: Record<string, any>) {
   const draft = structuredClone(request.draft);
-  const workspace = draft.workspace;
+  const workspace = draft.authoring_workspace ?? draft.applied_workspace;
   const command = request.command;
   let affectedKind = "space";
   let affectedId = "space-1";
@@ -616,6 +627,10 @@ function visualCommandResponse(request: Record<string, any>) {
   }
   const baseDraftRevision = draft.draft_revision;
   draft.draft_revision += 1;
+  workspace.projection_revision = draft.draft_revision;
+  draft.authoring_workspace = workspace;
+  draft.applied_workspace = workspace;
+  draft.applied_revision = draft.draft_revision;
   return jsonResponse({
     contract_version: 1,
     operation: command.operation,
@@ -670,6 +685,7 @@ const CATALOG_FAMILIES = [
 function bootstrapResponse() {
   return jsonResponse({
     contract_version: 1,
+    authoring_context_binding: "builder-view-test-context",
     public_grammar_href: "/docs/ops/configuration-grammar.md",
     capabilities: { user_catalog_write: true, deploy_yaml_closure: true },
     families: CATALOG_FAMILIES.map((family) => ({
@@ -739,19 +755,15 @@ function stubFetch(options?: {
       const targetRef = request.target_ref ?? (sourceRef.startsWith("user:")
         ? sourceRef
         : `user:${sourceRef.slice("nodalarc:".length)}`);
+      const targetName = String(targetRef).split("/").pop()?.replace(/\.ya?ml$/, "") ?? "opened";
       return Promise.resolve(
         jsonResponse({
-          contract_version: 1,
-          draft_revision: 0,
-          mode: "opaque_yaml",
+          ...structuredVisualDraft(targetName),
           target_ref: targetRef,
           source_ref: sourceRef,
           expected_session_revision: sourceRef.startsWith("user:")
             ? `revision-${sourceRef}`
             : null,
-          expected_catalog_revisions: [],
-          catalog_documents: [],
-          workspace: null,
           session_yaml: "# exact source\nsession:\n  name: opened\nsegments: []\n",
         }),
       );
@@ -791,6 +803,49 @@ function stubFetch(options?: {
       if (options?.compileHandler) return Promise.resolve(options.compileHandler(request));
       return Promise.resolve(compileResponse(request, options?.sessionPreview));
     }
+    if (url.includes("/builder/draft/apply-workspace")) {
+      const request = init?.body ? JSON.parse(init.body) : {};
+      const revision = Number(request.draft.draft_revision) + 1;
+      const workspace = { ...request.workspace, projection_revision: revision };
+      const nextDraft = {
+        ...request.draft,
+        draft_revision: revision,
+        projection_status: "applied",
+        session_yaml: `session:\n  name: ${workspace.session_name}\nsegments: []\n`,
+        authoring_workspace: workspace,
+        applied_workspace: workspace,
+        applied_revision: revision,
+        applied_session: { session: { name: workspace.session_name }, segments: [] },
+      };
+      return Promise.resolve(compileResponse({ draft: nextDraft }, options?.sessionPreview));
+    }
+    if (url.includes("/builder/draft/retarget")) {
+      const request = init?.body ? JSON.parse(init.body) : {};
+      const revision = Number(request.draft.draft_revision) + 1;
+      const sessionName = String(request.target_ref).split("/").pop()?.replace(/\.ya?ml$/, "");
+      const workspace = {
+        ...request.draft.authoring_workspace,
+        session_name: sessionName,
+        projection_revision: revision,
+      };
+      const nextDraft = {
+        ...request.draft,
+        target_ref: request.target_ref,
+        expected_session_revision: null,
+        draft_revision: revision,
+        projection_status: "applied",
+        session_yaml: `session:\n  name: ${sessionName}\nsegments: []\n`,
+        authoring_workspace: workspace,
+        applied_workspace: workspace,
+        applied_revision: revision,
+        applied_session: { session: { name: sessionName }, segments: [] },
+      };
+      const compileRequest = { draft: nextDraft };
+      if (options?.compileHandler) {
+        return Promise.resolve(options.compileHandler(compileRequest));
+      }
+      return Promise.resolve(compileResponse(compileRequest, options?.sessionPreview));
+    }
     if (url.includes("/builder/session/save")) {
       const request = init?.body ? JSON.parse(init.body) : {};
       if (options?.saveHandler) return Promise.resolve(options.saveHandler(request));
@@ -817,6 +872,14 @@ const compileCalls = (fetchMock: ReturnType<typeof vi.fn>) =>
   fetchMock.mock.calls.filter((call: unknown[]) =>
     String(call[0]).includes("/builder/draft/compile"),
   );
+const workspaceCalls = (fetchMock: ReturnType<typeof vi.fn>) =>
+  fetchMock.mock.calls.filter((call: unknown[]) =>
+    String(call[0]).includes("/builder/draft/apply-workspace"),
+  );
+const retargetCalls = (fetchMock: ReturnType<typeof vi.fn>) =>
+  fetchMock.mock.calls.filter((call: unknown[]) =>
+    String(call[0]).includes("/builder/draft/retarget"),
+  );
 const commandCalls = (fetchMock: ReturnType<typeof vi.fn>) =>
   fetchMock.mock.calls.filter((call: unknown[]) =>
     String(call[0]).includes("/builder/draft/command"),
@@ -832,6 +895,7 @@ const saveCalls = (fetchMock: ReturnType<typeof vi.fn>) =>
 
 beforeEach(() => {
   localStorage.clear();
+  sessionStorage.clear();
 });
 afterEach(() => {
   cleanup();
@@ -845,19 +909,16 @@ describe("BuilderView — resolve-loop and world honesty", () => {
     expect(await screen.findByTestId("builder-start")).toBeTruthy();
   });
 
-  it("keeps the saved target and fences while a typed rename is reverted", async () => {
+  it("keeps the saved target while a typed rename is reverted", async () => {
     const savedFoo: BuilderVisualDraftEnvelope = {
       ...structuredVisualDraft("foo"),
       source_ref: "user:sessions/foo.yaml",
       expected_session_revision: "foo-revision",
-      expected_catalog_revisions: [
-        { ref: "user:nodes/foo/generated.yaml", expected_revision: "node-revision" },
-      ],
       catalog_documents: [
         {
           ref: "user:terminals/shared/custom.yaml",
-          expected_revision: "proposal-revision",
           document: { terminal: { id: "custom" } },
+          origin: "customized",
         },
       ],
       reserved_authoring_ids: ["space-1", "ground-1"],
@@ -877,16 +938,15 @@ describe("BuilderView — resolve-loop and world honesty", () => {
     const nameInput = screen.getByLabelText("name");
     fireEvent.change(nameInput, { target: { value: "bar" } });
     await waitFor(() => {
-      const calls = compileCalls(fetchMock);
+      const calls = workspaceCalls(fetchMock);
       const request = JSON.parse(calls[calls.length - 1]?.[1]?.body ?? "{}");
-      expect(request.draft.workspace.session_name).toBe("bar");
+      expect(request.workspace.session_name).toBe("bar");
     });
-    let calls = compileCalls(fetchMock);
+    let calls = workspaceCalls(fetchMock);
     let compiled = JSON.parse(calls[calls.length - 1]?.[1]?.body ?? "{}").draft;
     expect(compiled).toMatchObject({
       target_ref: "user:sessions/foo.yaml",
       expected_session_revision: "foo-revision",
-      expected_catalog_revisions: savedFoo.expected_catalog_revisions,
       catalog_documents: savedFoo.catalog_documents,
       reserved_authoring_ids: ["space-1", "ground-1"],
     });
@@ -894,11 +954,11 @@ describe("BuilderView — resolve-loop and world honesty", () => {
 
     fireEvent.change(nameInput, { target: { value: "foo" } });
     await waitFor(() => {
-      const currentCalls = compileCalls(fetchMock);
+      const currentCalls = workspaceCalls(fetchMock);
       const request = JSON.parse(currentCalls[currentCalls.length - 1]?.[1]?.body ?? "{}");
-      expect(request.draft.workspace.session_name).toBe("foo");
+      expect(request.workspace.session_name).toBe("foo");
     });
-    calls = compileCalls(fetchMock);
+    calls = workspaceCalls(fetchMock);
     compiled = JSON.parse(calls[calls.length - 1]?.[1]?.body ?? "{}").draft;
     expect(compiled).toMatchObject({
       target_ref: "user:sessions/foo.yaml",
@@ -962,8 +1022,9 @@ describe("BuilderView — resolve-loop and world honesty", () => {
 
     expect(await within(dialog).findByText("save failed: the new target is blocked")).toBeTruthy();
     expect(saveCalls(fetchMock)).toHaveLength(0);
+    expect(retargetCalls(fetchMock)).toHaveLength(1);
     expect(screen.getByText("Drafts · foo")).toBeTruthy();
-    expect(newDraftCalls(fetchMock)).toHaveLength(2);
+    expect(newDraftCalls(fetchMock)).toHaveLength(1);
   });
 
   it("leaves the original target in place when Save As persistence fails", async () => {
@@ -974,8 +1035,8 @@ describe("BuilderView — resolve-loop and world honesty", () => {
         catalog_documents: [
           {
             ref: "user:terminals/shared/custom.yaml",
-            expected_revision: "proposal-revision",
             document: { terminal: { id: "custom" } },
+            origin: "customized",
           },
         ],
         reserved_authoring_ids: ["space-1"],
@@ -999,9 +1060,14 @@ describe("BuilderView — resolve-loop and world honesty", () => {
 
     expect(await within(dialog).findByText("save failed: storage refused the write")).toBeTruthy();
     expect(saveCalls(fetchMock)).toHaveLength(1);
+    expect(retargetCalls(fetchMock)).toHaveLength(1);
     expect(screen.getByText("Drafts · foo")).toBeTruthy();
     const failedSave = JSON.parse(saveCalls(fetchMock)[0]![1]?.body ?? "{}");
     expect(failedSave).toMatchObject({
+      target_ref: "user:sessions/bar.yaml",
+    });
+    expect(JSON.parse(retargetCalls(fetchMock)[0]![1]?.body ?? "{}")).toMatchObject({
+      expected_draft_revision: 0,
       target_ref: "user:sessions/bar.yaml",
     });
   });
@@ -1035,6 +1101,7 @@ describe("BuilderView — resolve-loop and world honesty", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
 
     await waitFor(() => expect(saveCalls(fetchMock)).toHaveLength(1));
+    expect(retargetCalls(fetchMock)).toHaveLength(1);
     expect(screen.getByText("Drafts · foo")).toBeTruthy();
     const request = JSON.parse(saveCalls(fetchMock)[0]![1]?.body ?? "{}");
     await act(async () => {
@@ -1111,13 +1178,13 @@ describe("BuilderView — resolve-loop and world honesty", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
 
     await waitFor(() =>
-      expect(within(dialog).getByText("save failed: request failed (422)")).toBeTruthy(),
+      expect(within(dialog).getByText("save failed: session name is required")).toBeTruthy(),
     );
     const newDraftCalls = fetchMock.mock.calls.filter((call) =>
       String(call[0]).includes("/builder/draft/new"),
     );
-    expect(newDraftCalls).toHaveLength(2);
-    expect(JSON.parse(newDraftCalls[1]![1]?.body ?? "{}")).toEqual({ session_name: "" });
+    expect(newDraftCalls).toHaveLength(1);
+    expect(retargetCalls(fetchMock)).toHaveLength(0);
     expect(
       fetchMock.mock.calls.some((call) => String(call[0]).includes("/builder/session/save")),
     ).toBe(false);
@@ -1126,10 +1193,11 @@ describe("BuilderView — resolve-loop and world honesty", () => {
 
   it("labels nullable link and routing facts as incomplete in the outline", async () => {
     const base = structuredVisualDraft("incomplete-outline");
+    const baseWorkspace = base.authoring_workspace!;
     const incompleteDraft: BuilderVisualDraftEnvelope = {
       ...base,
-      workspace: {
-        ...base.workspace!,
+      authoring_workspace: {
+        ...baseWorkspace,
         space_refs: [
           {
             segment_id: "space-1",
@@ -1181,6 +1249,21 @@ describe("BuilderView — resolve-loop and world honesty", () => {
           export_node_loopbacks: true,
         }],
       },
+      applied_workspace: {
+        ...baseWorkspace,
+        space_refs: [
+          {
+            segment_id: "space-1",
+            source_ref: "nodalarc:constellations/a.yaml",
+            label: "A",
+          },
+          {
+            segment_id: "space-2",
+            source_ref: "nodalarc:constellations/b.yaml",
+            label: "B",
+          },
+        ],
+      },
     };
     stubFetch({ newDraft: incompleteDraft });
     render(<BuilderView {...PROPS} />);
@@ -1199,38 +1282,41 @@ describe("BuilderView — resolve-loop and world honesty", () => {
 
   it("restores the exact structured envelope without minting a replacement draft", async () => {
     const workspace = newWorkspace("recovered-session");
-    const recoveredDraft = {
+    const recoveredDraft: BuilderVisualDraftEnvelope = {
       ...structuredVisualDraft("recovered-session"),
       source_ref: "user:sessions/recovered-session.yaml",
       expected_session_revision: "session-revision-fence",
-      expected_catalog_revisions: [
-        {
-          ref: "user:terminals/recovered-terminal.yaml",
-          expected_revision: "catalog-revision-fence",
-        },
-      ],
       catalog_documents: [
         {
           ref: "user:terminals/recovered-terminal.yaml",
-          expected_revision: "proposal-revision-fence",
           document: {
             terminal: {
               id: "recovered-terminal",
               medium: "rf",
             },
           },
+          origin: "customized",
         },
       ],
-      workspace,
+      authoring_workspace: workspace,
+      applied_workspace: workspace,
     };
-    localStorage.setItem(
-      STRUCTURED_AUTOSAVE_KEY,
-      serializeStructuredRecovery({
+    expect(
+      writeStructuredAutosave({
+        authoringContextBinding: "builder-view-test-context",
         workspace,
         visualDraft: recoveredDraft,
+        yaml: {
+          text: recoveredDraft.session_yaml,
+          appliedText: recoveredDraft.session_yaml,
+          generation: 0,
+          canonicalizationRequired: false,
+          canonicalizationAccepted: false,
+          issues: [],
+        },
         editor: { windows: [], buffers: {} },
-      }),
-    );
+      }, builderRecoveryScope()),
+    ).toBe(true);
 
     const fetchMock = stubFetch();
     render(<BuilderView {...PROPS} />);
@@ -1249,19 +1335,67 @@ describe("BuilderView — resolve-loop and world honesty", () => {
       target_ref: "user:sessions/recovered-session.yaml",
       source_ref: "user:sessions/recovered-session.yaml",
       expected_session_revision: "session-revision-fence",
-      expected_catalog_revisions: [
-        {
-          ref: "user:terminals/recovered-terminal.yaml",
-          expected_revision: "catalog-revision-fence",
-        },
-      ],
       catalog_documents: [
         {
           ref: "user:terminals/recovered-terminal.yaml",
-          expected_revision: "proposal-revision-fence",
+          origin: "customized",
         },
       ],
     });
+  });
+
+  it("restores invalid YAML beside the last valid graphical revision without compiling it", async () => {
+    const workspace = newWorkspace("recovered-invalid");
+    workspace.projection_revision = 3;
+    const recoveredDraft: BuilderVisualDraftEnvelope = {
+      ...structuredVisualDraft("recovered-invalid"),
+      draft_revision: 3,
+      projection_status: "pending_authoring",
+      session_yaml: ": [unfinished",
+      authoring_workspace: { ...workspace, projection_revision: null },
+      applied_workspace: workspace,
+      applied_revision: 3,
+      applied_session: { session: { name: "recovered-invalid" }, segments: [] },
+    };
+    expect(
+      writeStructuredAutosave({
+        authoringContextBinding: "builder-view-test-context",
+        workspace,
+        visualDraft: recoveredDraft,
+        yaml: {
+          text: ": [unfinished",
+          appliedText: "session:\n  name: recovered-invalid\nsegments: []\n",
+          generation: 1,
+          canonicalizationRequired: false,
+          canonicalizationAccepted: false,
+          issues: [
+            {
+              code: "builder.yaml.syntax",
+              stage: "structural",
+              severity: "error",
+              message: "expected a closing bracket",
+              source_line: 1,
+              source_column: 3,
+              blocks: ["save", "deploy"],
+            },
+          ],
+        },
+        editor: { windows: [], buffers: {} },
+      }, builderRecoveryScope()),
+    ).toBe(true);
+    const fetchMock = stubFetch();
+    render(<BuilderView {...PROPS} />);
+    fireEvent.click(
+      await screen.findByLabelText("Restore the autosaved draft from this browser"),
+    );
+    expect(await screen.findByText("Drafts · recovered-invalid")).toBeTruthy();
+    expect(screen.getByTestId("builder-yaml-revision").textContent).toContain(
+      "Showing applied revision 3; buffer generation 1 has errors",
+    );
+    expect(screen.getByTestId("builder-shell").className).toContain(
+      "builder-shell--gui-locked",
+    );
+    expect(compileCalls(fetchMock)).toHaveLength(0);
   });
 
   it("submits incomplete content and shows the backend's typed save blocker", async () => {
@@ -1289,7 +1423,7 @@ describe("BuilderView — resolve-loop and world honesty", () => {
     expect(compileCalls(fetchMock).length).toBeGreaterThan(0);
     const calls = compileCalls(fetchMock);
     const latestCompile = JSON.parse(calls[calls.length - 1]![1].body);
-    expect(latestCompile.draft.workspace.ground).toHaveLength(1);
+    expect(latestCompile.draft.authoring_workspace.ground).toHaveLength(1);
     const status = screen.getByTestId("builder-status").textContent ?? "";
     expect(status).not.toContain("✓ resolves");
     expect(screen.getByTestId("builder-rail").textContent).toContain("Ground sites");
@@ -1703,6 +1837,19 @@ describe("BuilderView — Library Use places and reveals", () => {
             document: {
               terminal: { id, display_name: "Forked terminal", medium: "rf" },
             },
+            projected_yaml: `terminal:\n  display_name: Forked terminal\n  id: ${id}\n  medium: rf\n`,
+            control_tree: {
+              projection_revision: 0,
+              root: {
+                control_id: "ctl_root",
+                json_pointer: "",
+                label: "Terminal",
+                required: true,
+                present: true,
+                model_name: "Terminal",
+                fields: [],
+              },
+            },
             issues: [],
           }),
         );
@@ -1883,22 +2030,34 @@ describe("BuilderView — Library Use places and reveals", () => {
         document: {
           terminal: { id: "recovered-ka", display_name: "Saved name", medium: "rf" },
         },
+        projected_yaml: "terminal:\n  display_name: Saved name\n  id: recovered-ka\n  medium: rf\n",
+        control_tree: {
+          projection_revision: 6,
+          root: {
+            control_id: "ctl_root",
+            json_pointer: "",
+            label: "Terminal",
+            required: true,
+            present: true,
+            model_name: "Terminal",
+            fields: [],
+          },
+        },
         issues: [],
+      },
+      baselineDocument: {
+        terminal: { id: "recovered-ka", display_name: "Saved name", medium: "rf" },
       },
       workingDocument: {
         terminal: { id: "recovered-ka", display_name: "Dirty recovered name", medium: "rf" },
       },
-      advanced: false,
-      advancedText: JSON.stringify({
-        id: "recovered-ka",
-        display_name: "Dirty recovered name",
-        medium: "rf",
-      }, null, 2),
+      yamlText: "terminal:\n  display_name: Saved name\n  id: recovered-ka\n  medium: rf\n",
+      appliedYamlText: "terminal:\n  display_name: Saved name\n  id: recovered-ka\n  medium: rf\n",
+      canonicalizationRequired: false,
+      canonicalizationAccepted: false,
     };
-    localStorage.setItem(
-      CATALOG_DRAFT_RECOVERY_KEY,
-      serializeCatalogDraftRecovery(componentRecovery),
-    );
+    const recoveryScope = builderRecoveryScope();
+    expect(writeCatalogDraftRecovery(componentRecovery, recoveryScope)).toBe(true);
     stubCatalog();
     const first = render(<BuilderView {...PROPS} />);
 
@@ -1909,7 +2068,11 @@ describe("BuilderView — Library Use places and reveals", () => {
       within(screen.getByTestId("catalog-draft-editor")).getByRole("button", { name: "Close" }),
     );
     await waitFor(() => expect(screen.queryByTestId("catalog-terminal-form")).toBeNull());
-    expect(localStorage.getItem(CATALOG_DRAFT_RECOVERY_KEY)).not.toBeNull();
+    expect(localStorage.getItem(recoveryStorageKey(
+      recoveryScope,
+      "catalog",
+      componentRecovery.draft.target_ref,
+    ))).not.toBeNull();
 
     fireEvent.click(screen.getByLabelText(/Library — resume unsaved/));
     expect((within(await screen.findByTestId("catalog-terminal-form")).getByLabelText(

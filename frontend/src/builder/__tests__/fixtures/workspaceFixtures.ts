@@ -34,6 +34,8 @@ export function newWorkspace(name: string): Workspace {
     start_time: "2026-01-01T00:00:00Z",
     step_seconds: 1,
     compression: 1,
+    projection_revision: 0,
+    control_tree: null,
   };
 }
 

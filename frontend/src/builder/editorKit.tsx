@@ -57,6 +57,7 @@ export function Field({
   placeholder,
   suffix,
   stack = false,
+  onBlur,
 }: {
   label: string;
   value: string;
@@ -64,6 +65,7 @@ export function Field({
   placeholder?: string;
   suffix?: string;
   stack?: boolean;
+  onBlur?: () => void;
 }) {
   const input = (
     <input
@@ -71,6 +73,7 @@ export function Field({
       placeholder={placeholder}
       value={value}
       onChange={(e) => onChange(e.target.value)}
+      onBlur={onBlur}
     />
   );
   if (stack) {
@@ -499,17 +502,25 @@ export function PasteArea({
   onChange,
   placeholder,
   rows = 3,
+  ariaLabel,
+  disabled = false,
+  className,
 }: {
   value: string;
   onChange: (value: string) => void;
   placeholder?: string;
   rows?: number;
+  ariaLabel?: string;
+  disabled?: boolean;
+  className?: string;
 }) {
   return (
     <textarea
-      className="builder-paste"
+      aria-label={ariaLabel}
+      className={`builder-paste${className ? ` ${className}` : ""}`}
       placeholder={placeholder}
       value={value}
+      disabled={disabled}
       onChange={(e) => onChange(e.target.value)}
       rows={rows}
     />

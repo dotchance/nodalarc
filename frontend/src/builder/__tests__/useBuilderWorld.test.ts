@@ -1,920 +1,1020 @@
-// Copyright 2024-2026 .chance (dotchance)
-// Licensed under the Apache License, Version 2.0. See LICENSE file.
-/** useBuilderWorld data-layer contract: the resolve loop keeps nothing
- *  stale on screen. A late response for a superseded edit never overwrites a
- *  newer one; a failed resolve clears the world ("the error is the state");
- *  and clear() invalidates any in-flight response so a resolve that lands
- *  after a teardown cannot repaint a world the user has left behind. */
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { renderHook, act } from "@testing-library/react";
-import type { BuilderVisualDraftEnvelope } from "../generated/builderApi";
+/** Session coordinator contract: one backend-issued revision stream. */
+
+import { act, renderHook } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type {
+  BuilderVisualDraftAssemblyResult,
+  BuilderVisualDraftEnvelope,
+} from "../generated/builderApi";
+import { newWorkspace } from "./fixtures/workspaceFixtures";
 
 vi.mock("../../config", () => ({
   REST_URL: "http://test:8080",
   authHeaders: (extra?: Record<string, string>) => ({ ...extra }),
 }));
+vi.mock("../../ui/downloadBlob", () => ({ downloadBlob: vi.fn() }));
 
 const {
-  useBuilderWorld,
-  requestOutlineReveal,
-  useOutlineReveal,
   claimOutlineReveal,
-  importSessionClosure,
+  exportSessionYaml,
+  importSessionYamlFiles,
   requestLibraryReveal,
+  requestOutlineReveal,
+  useBuilderWorld,
   useLibraryReveal,
+  useOutlineReveal,
 } = await import("../useBuilderWorld");
+const { downloadBlob } = await import("../../ui/downloadBlob");
 
 interface Deferred<T> {
   promise: Promise<T>;
-  resolve: (value: T) => void;
-  reject: (reason?: unknown) => void;
-}
-function deferred<T>(): Deferred<T> {
-  let resolve!: (value: T) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
+  resolve(value: T): void;
 }
 
-function request(marker: string) {
+function deferred<T>(): Deferred<T> {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
+function response(payload: unknown) {
   return {
-    contract_version: 1 as const,
-    draft_revision: marker.charCodeAt(0),
-    mode: "opaque_yaml" as const,
-    target_ref: `user:sessions/${marker.toLowerCase()}.yaml`,
-    session_name_is_placeholder: false,
-    reserved_authoring_ids: [],
-    session_yaml: `session:\n  name: ${marker}\n`,
+    ok: true,
+    status: 200,
+    json: () => Promise.resolve(payload),
   };
 }
 
-function check(marker: string) {
-  const visualDraft = request(marker);
+const sessionsResponse = response({
+  generation: "catalog-generation",
+  items: [],
+  next_page_token: null,
+});
+
+function draft(revision = 4): BuilderVisualDraftEnvelope {
+  const workspace = newWorkspace("coordinated");
+  workspace.projection_revision = revision;
+  return {
+    contract_version: 2,
+    draft_revision: revision,
+    projection_status: "applied",
+    target_ref: "user:sessions/coordinated.yaml",
+    source_ref: "user:sessions/coordinated.yaml",
+    expected_session_revision: "session-revision",
+    catalog_documents: [],
+    session_name_is_placeholder: false,
+    reserved_authoring_ids: [],
+    session_yaml: "session:\n  name: coordinated\n",
+    authoring_workspace: workspace,
+    applied_workspace: workspace,
+    applied_revision: revision,
+    applied_session: { session: { name: "coordinated" } },
+  };
+}
+
+function assembly(
+  visualDraft: BuilderVisualDraftEnvelope,
+  marker = `revision-${visualDraft.draft_revision}`,
+): BuilderVisualDraftAssemblyResult {
   const assembledDraft = {
     contract_version: 1 as const,
     draft_revision: visualDraft.draft_revision,
-    state: { session: { session: { name: marker } }, catalog_documents: [] },
-  };
-  const compileResult = {
-    draft: assembledDraft,
-    target_ref: visualDraft.target_ref,
-    canonical_session_yaml: `# ${marker}`,
-    canonical_session_json: { session: { name: marker } },
-    dependency_closure: {
-      entries: [],
-      file_count: 0,
-      total_bytes: 0,
-      closure_digest: `dep-${marker}`,
-    },
-    resolved_preview: { marker, session: { name: marker }, nodes: [] },
-    digests: { document: `sha-${marker}`, dependency: `dep-${marker}` },
-    issues: [],
-    save_verdict: { operation: "save", allowed: true, blockers: [] },
-    deploy_eligibility_after_save: {
-      operation: "deploy",
-      allowed: true,
-      blockers: [],
+    state: {
+      session: visualDraft.applied_session ?? { session: { name: "coordinated" } },
+      catalog_documents: visualDraft.catalog_documents ?? [],
     },
   };
   return {
-    ok: true,
-    json: () =>
-      Promise.resolve({
-        visual_draft: visualDraft,
-        assembled_draft: assembledDraft,
-        save_request: { draft: assembledDraft, target_ref: visualDraft.target_ref },
-        compile_result: compileResult,
-        assembly_issues: [],
-      }),
-  };
+    visual_draft: visualDraft,
+    assembled_draft: assembledDraft,
+    save_request: {
+      draft: assembledDraft,
+      target_ref: visualDraft.target_ref,
+      expected_session_revision: visualDraft.expected_session_revision,
+    },
+    compile_result: {
+      draft: assembledDraft,
+      target_ref: visualDraft.target_ref,
+      canonical_session_yaml: `session:\n  name: coordinated\n# ${marker}\n`,
+      canonical_session_json: visualDraft.applied_session,
+      dependency_closure: {
+        entries: [],
+        file_count: 0,
+        total_bytes: 0,
+        closure_digest: `dependency-${marker}`,
+      },
+      resolved_preview: {
+        marker,
+        session: { name: "coordinated" },
+        nodes: [],
+        segments: [],
+        link_rules: [],
+        routing_domains: [],
+        boundaries: [],
+        ephemeris: { epoch: "2026-01-01T00:00:00Z", nodes: {} },
+      },
+      digests: {
+        document: `document-${marker}`,
+        dependency: `dependency-${marker}`,
+      },
+      issues: [],
+      save_verdict: { operation: "save", allowed: true, blockers: [] },
+      deploy_eligibility_after_save: {
+        operation: "deploy",
+        allowed: true,
+        blockers: [],
+      },
+    },
+    assembly_issues: [],
+  } as unknown as BuilderVisualDraftAssemblyResult;
 }
 
-const sessionsOk = {
-  ok: true,
-  json: () =>
-    Promise.resolve({ generation: "g1", items: [], next_page_token: null }),
-};
-
-describe("useBuilderWorld — the resolve loop keeps nothing stale", () => {
+describe("useBuilderWorld session coordinator", () => {
   let fetchMock: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
     localStorage.clear();
-    fetchMock = vi.fn();
+    fetchMock = vi.fn((url: string) => {
+      if (url.includes("/builder/catalog/list")) return Promise.resolve(sessionsResponse);
+      throw new Error(`unexpected request ${url}`);
+    });
     globalThis.fetch = fetchMock as unknown as typeof fetch;
   });
 
-  it("a late response for a superseded resolve never overwrites the newer one", async () => {
-    const slow = deferred<unknown>();
-    const fast = deferred<unknown>();
-    let resolveCall = 0;
+  it("opens a stored session as a graphical projection and compiles the same revision", async () => {
+    const opened = draft();
     fetchMock.mockImplementation((url: string) => {
-      if (url.includes("/builder/catalog/list")) return Promise.resolve(sessionsOk);
-      resolveCall += 1;
-      return resolveCall === 1 ? slow.promise : fast.promise;
-    });
-
-    const { result } = renderHook(() => useBuilderWorld());
-    await act(async () => {}); // flush the mount sessions fetch
-
-    // Fire A (seq N), then B (seq N+1) before A lands.
-    act(() => {
-      void result.current.compileDraft(request("A"));
-    });
-    act(() => {
-      void result.current.compileDraft(request("B"));
-    });
-
-    // B lands first and is current.
-    await act(async () => {
-      fast.resolve(check("B"));
-      await fast.promise;
-    });
-    expect((result.current.world as { marker?: string })?.marker).toBe("B");
-
-    // A lands late — it is stale (seq N < N+1) and must be discarded.
-    await act(async () => {
-      slow.resolve(check("A"));
-      await slow.promise;
-    });
-    expect((result.current.world as { marker?: string })?.marker).toBe("B");
-    expect(result.current.settledDocumentDigest).toBe("sha-B");
-  });
-
-  it("a failed resolve clears the world — the error is the state", async () => {
-    let resolveCall = 0;
-    fetchMock.mockImplementation((url: string) => {
-      if (url.includes("/builder/catalog/list")) return Promise.resolve(sessionsOk);
-      resolveCall += 1;
-      return resolveCall === 1
-        ? Promise.resolve(check("A"))
-        : Promise.resolve({
-            ok: false,
-            status: 400,
-            json: () => Promise.resolve({ error: "the session does not resolve" }),
-          });
-    });
-
-    const { result } = renderHook(() => useBuilderWorld());
-    await act(async () => {});
-
-    await act(async () => {
-      await result.current.compileDraft(request("A"));
-    });
-    expect((result.current.world as { marker?: string })?.marker).toBe("A");
-
-    await act(async () => {
-      await result.current.compileDraft(request("B"));
-    });
-    expect(result.current.world).toBeNull();
-    expect(result.current.error).toBe("the session does not resolve");
-    expect(result.current.settledDocumentDigest).toBeNull();
-  });
-
-  it("clear() invalidates an in-flight response so it cannot repaint", async () => {
-    const inFlight = deferred<unknown>();
-    fetchMock.mockImplementation((url: string) => {
-      if (url.includes("/builder/catalog/list")) return Promise.resolve(sessionsOk);
-      return inFlight.promise;
-    });
-
-    const { result } = renderHook(() => useBuilderWorld());
-    await act(async () => {});
-
-    act(() => {
-      void result.current.compileDraft(request("A"));
-    });
-    // Tear down before the response lands.
-    act(() => {
-      result.current.clear();
-    });
-    await act(async () => {
-      inFlight.resolve(check("A"));
-      await inFlight.promise;
-    });
-    expect(result.current.world).toBeNull();
-    expect(result.current.settledDocumentDigest).toBeNull();
-  });
-
-  it("a delayed live compile cannot overwrite a prepared draft adopted after save", async () => {
-    const delayed = deferred<ReturnType<typeof check>>();
-    let compileCall = 0;
-    fetchMock.mockImplementation((url: string) => {
-      if (url.includes("/builder/catalog/list")) return Promise.resolve(sessionsOk);
-      compileCall += 1;
-      return compileCall === 1 ? delayed.promise : Promise.resolve(check("B"));
-    });
-
-    const { result } = renderHook(() => useBuilderWorld());
-    await act(async () => {});
-    act(() => {
-      void result.current.compileDraft(request("A"));
-    });
-    expect(result.current.loading).toBe(true);
-
-    let prepared: Awaited<ReturnType<typeof result.current.compileDraftWithoutAdopting>> | null = null;
-    await act(async () => {
-      prepared = await result.current.compileDraftWithoutAdopting(request("B"));
-    });
-    expect(result.current.loading).toBe(false);
-    act(() => result.current.adoptCompiledDraft(prepared!, true));
-
-    await act(async () => {
-      delayed.resolve(check("A"));
-      await delayed.promise;
-    });
-
-    expect(result.current.currentVisualDraft()?.target_ref).toBe("user:sessions/b.yaml");
-    expect((result.current.world as { marker?: string })?.marker).toBe("B");
-    expect(result.current.loading).toBe(false);
-  });
-
-  it("runs and explicitly adopts a typed backend visual command result", async () => {
-    const original = {
-      contract_version: 1 as const,
-      draft_revision: 4,
-      mode: "structured" as const,
-      target_ref: "user:sessions/commanded.yaml",
-      session_name_is_placeholder: false,
-      reserved_authoring_ids: [],
-      workspace: {
-        session_name: "commanded",
-        display_name: null,
-        description: null,
-        space: [],
-        space_refs: [],
-        ground: [],
-        ground_refs: [],
-        links: [],
-        routing_domains: [],
-        boundaries: [],
-        max_pairs_per_rule: 2_000,
-        max_pairs_per_tick: 10_000,
-        start_time: "2026-01-01T00:00:00Z",
-        step_seconds: 1,
-        compression: 1,
-      },
-    };
-    const commanded = {
-      contract_version: 1 as const,
-      operation: "add_generated_space" as const,
-      base_draft_revision: 4,
-      draft: {
-        ...original,
-        draft_revision: 5,
-        workspace: {
-          ...original.workspace,
-          space: [
-            {
-              segment_id: "space-1",
-              display_name: "Constellation 1",
-              node_ref: "nodalarc:nodes/space/relay.yaml",
-              node_draft: null,
-              orbit: {},
-              planes: 3,
-              raan_spacing_deg: 60,
-              slots_per_plane: 8,
-              phasing_mode: "walker_delta",
-              phase_offset_deg: 0,
-            },
-          ],
-        },
-      },
-      affected_kind: "space" as const,
-      affected_id: "space-1",
-      notice: null,
-    };
-    fetchMock.mockImplementation((url: string) => {
-      if (url.includes("/builder/catalog/list")) return Promise.resolve(sessionsOk);
-      if (url.includes("/builder/draft/command")) {
-        return Promise.resolve({ ok: true, json: () => Promise.resolve(commanded) });
+      if (url.includes("/builder/catalog/list")) return Promise.resolve(sessionsResponse);
+      if (url.includes("/builder/draft/open")) return Promise.resolve(response(opened));
+      if (url.includes("/builder/draft/compile")) {
+        return Promise.resolve(response(assembly(opened)));
       }
       throw new Error(`unexpected request ${url}`);
     });
     const { result } = renderHook(() => useBuilderWorld());
-    await act(async () => {});
-    act(() => result.current.adoptRecoveredStructuredDraft(original));
+    await act(async () => undefined);
 
     await act(async () => {
-      const response = await result.current.runVisualCommand({
-        draft: original,
-        expected_draft_revision: 4,
-        command: { operation: "add_generated_space", phasing_mode: "walker_delta" },
-      });
-      result.current.adoptVisualCommandResult(response);
-    });
-
-    expect(result.current.visualDraft).toEqual(commanded.draft);
-    expect(result.current.currentVisualDraft()).toEqual(commanded.draft);
-    const commandCall = fetchMock.mock.calls.find((call) =>
-      String(call[0]).includes("/builder/draft/command"),
-    );
-    expect(JSON.parse(commandCall?.[1]?.body ?? "{}")).toMatchObject({
-      expected_draft_revision: 4,
-      command: { operation: "add_generated_space", phasing_mode: "walker_delta" },
-    });
-  });
-
-  it("prepares a retargeted draft without adopting it or discarding authoring history", async () => {
-    const original = {
-      contract_version: 1 as const,
-      draft_revision: 4,
-      mode: "structured" as const,
-      target_ref: "user:sessions/original.yaml",
-      session_name_is_placeholder: false,
-      expected_catalog_revisions: [
-        {
-          ref: "user:nodes/original/generated-node.yaml",
-          expected_revision: "generated-revision",
-        },
-      ],
-      catalog_documents: [
-        {
-          ref: "user:terminals/shared/custom-terminal.yaml",
-          expected_revision: "proposal-revision",
-          document: { terminal: { id: "custom-terminal" } },
-        },
-      ],
-      reserved_authoring_ids: ["space-1", "ground-1"],
-      workspace: {
-        session_name: "original",
-        display_name: null,
-        description: null,
-        space: [],
-        space_refs: [],
-        ground: [],
-        ground_refs: [],
-        links: [],
-        routing_domains: [],
-        boundaries: [],
-        max_pairs_per_rule: 2_000,
-        max_pairs_per_tick: 10_000,
-        start_time: "2026-01-01T00:00:00Z",
-        step_seconds: 1,
-        compression: 1,
-      },
-    };
-    fetchMock.mockImplementation((url: string) => {
-      if (url.includes("/builder/catalog/list")) return Promise.resolve(sessionsOk);
-      if (url.includes("/builder/draft/new")) {
-        return Promise.resolve({
-          ok: true,
-          json: () =>
-            Promise.resolve({
-              ...original,
-              draft_revision: 0,
-              target_ref: "user:sessions/renamed.yaml",
-              session_name_is_placeholder: false,
-              expected_catalog_revisions: [],
-              catalog_documents: [],
-              reserved_authoring_ids: [],
-              workspace: { ...original.workspace, session_name: "renamed" },
-            }),
-        });
-      }
-      throw new Error(`unexpected request ${url}`);
-    });
-    const { result } = renderHook(() => useBuilderWorld());
-    await act(async () => {});
-    act(() => result.current.adoptRecoveredStructuredDraft(original));
-
-    let prepared: BuilderVisualDraftEnvelope | undefined;
-    await act(async () => {
-      prepared = await result.current.prepareRetargetDraft("renamed");
-    });
-
-    expect(prepared?.reserved_authoring_ids).toEqual([
-      "space-1",
-      "ground-1",
-    ]);
-    expect(prepared?.expected_catalog_revisions).toEqual([]);
-    expect(prepared?.catalog_documents).toEqual(
-      original.catalog_documents,
-    );
-    expect(prepared?.session_name_is_placeholder).toBe(false);
-    expect(result.current.currentVisualDraft()).toEqual(original);
-  });
-});
-
-describe("lossless YAML draft recovery", () => {
-  const opaqueAutosaveKey = "nodalarc-builder-opaque-yaml-draft";
-
-  const opaqueRecoveryDraft = () => ({
-    contract_version: 1 as const,
-    draft_revision: 7,
-    mode: "opaque_yaml" as const,
-    target_ref: "user:sessions/recovered-opaque.yaml",
-    source_ref: "nodalarc:sessions/source.yaml",
-    expected_session_revision: "source-revision",
-    expected_catalog_revisions: [],
-    catalog_documents: [],
-    session_name_is_placeholder: false,
-    reserved_authoring_ids: ["space-1"],
-    workspace: null,
-    session_yaml: "session:\n  name: recovered-opaque\n",
-  });
-
-  beforeEach(() => localStorage.clear());
-
-  it("stashes exact edited YAML synchronously and restores it with its refs", async () => {
-    const sourceRef = "nodalarc:sessions/exact.yaml";
-    const openedDraft = {
-      contract_version: 1 as const,
-      draft_revision: 0,
-      mode: "opaque_yaml" as const,
-      target_ref: "user:sessions/exact.yaml",
-      source_ref: sourceRef,
-      expected_session_revision: null,
-      expected_catalog_revisions: [],
-      catalog_documents: [
-        {
-          ref: "user:nodes/exact/custom.yaml",
-          document: { node: { id: "custom" } },
-          expected_revision: null,
-        },
-      ],
-      session_name_is_placeholder: false,
-      reserved_authoring_ids: [],
-      workspace: null,
-      session_yaml: "# exact\nsession:\n  name: exact\n",
-    };
-    globalThis.fetch = vi.fn((url: string) => {
-      if (url.includes("/builder/catalog/list")) return Promise.resolve(sessionsOk);
-      if (url.includes("/builder/draft/open")) {
-        return Promise.resolve({ ok: true, json: () => Promise.resolve(openedDraft) });
-      }
-      throw new Error(`unexpected request ${url}`);
-    }) as unknown as typeof fetch;
-
-    const { result } = renderHook(() => useBuilderWorld());
-    await act(async () => {});
-    await act(async () => {
-      await result.current.openSession({
-        ref: sourceRef,
-        family: "sessions",
-        namespace: "nodalarc",
-        revision: "source-revision",
-        size_bytes: 32,
-        display_name: "Exact",
-        summary: null,
-      });
-    });
-    act(() => {
-      result.current.editOpaqueYaml("# exact comment retained\nsession:\n  name: changed\n");
-      result.current.stashOpaqueDraft();
-      result.current.clear();
-    });
-    expect(result.current.visualDraft).toBeNull();
-
-    act(() => {
-      expect(result.current.restoreOpaqueAutosave()).toEqual({ ok: true });
-    });
-    expect(result.current.visualDraft).toMatchObject({
-      mode: "opaque_yaml",
-      source_ref: sourceRef,
-      target_ref: "user:sessions/exact.yaml",
-      session_yaml: "# exact comment retained\nsession:\n  name: changed\n",
-      catalog_documents: openedDraft.catalog_documents,
-    });
-  });
-
-  it("restores intentionally invalid opaque YAML without interpreting it", async () => {
-    const draft = opaqueRecoveryDraft();
-    draft.session_yaml = ": [intentionally unfinished";
-    localStorage.setItem(opaqueAutosaveKey, JSON.stringify({ v: 2, draft }));
-    globalThis.fetch = vi.fn((url: string) => {
-      if (url.includes("/builder/catalog/list")) return Promise.resolve(sessionsOk);
-      throw new Error(`unexpected request ${url}`);
-    }) as unknown as typeof fetch;
-
-    const { result } = renderHook(() => useBuilderWorld());
-    await act(async () => {});
-    act(() => {
-      expect(result.current.restoreOpaqueAutosave()).toEqual({ ok: true });
-    });
-
-    expect(result.current.visualDraft?.session_yaml).toBe(
-      ": [intentionally unfinished",
-    );
-  });
-
-  it("refuses the previous opaque recovery version without compatibility", async () => {
-    localStorage.setItem(
-      opaqueAutosaveKey,
-      JSON.stringify({ v: 1, draft: opaqueRecoveryDraft() }),
-    );
-    globalThis.fetch = vi.fn((url: string) => {
-      if (url.includes("/builder/catalog/list")) return Promise.resolve(sessionsOk);
-      throw new Error(`unexpected request ${url}`);
-    }) as unknown as typeof fetch;
-
-    const { result } = renderHook(() => useBuilderWorld());
-    await act(async () => {});
-
-    expect(result.current.hasOpaqueAutosave()).toBe(false);
-    expect(result.current.restoreOpaqueAutosave()).toEqual({
-      ok: false,
-      reason: "the saved YAML draft could not be read",
-    });
-  });
-
-  it.each([
-    ["missing placeholder fact", (draft: Record<string, unknown>) => {
-      delete draft.session_name_is_placeholder;
-    }],
-    ["missing authoring history", (draft: Record<string, unknown>) => {
-      delete draft.reserved_authoring_ids;
-    }],
-    ["non-integer revision", (draft: Record<string, unknown>) => {
-      draft.draft_revision = "7";
-    }],
-    ["empty revision fence", (draft: Record<string, unknown>) => {
-      draft.expected_session_revision = "";
-    }],
-    ["non-user target", (draft: Record<string, unknown>) => {
-      draft.target_ref = "nodalarc:sessions/recovered-opaque.yaml";
-    }],
-    ["structured workspace", (draft: Record<string, unknown>) => {
-      draft.workspace = {};
-    }],
-    ["session revision in component fences", (draft: Record<string, unknown>) => {
-      draft.expected_catalog_revisions = [
-        { ref: "user:sessions/component.yaml", expected_revision: "revision" },
-      ];
-    }],
-    ["duplicate authoring history", (draft: Record<string, unknown>) => {
-      draft.reserved_authoring_ids = ["space-1", "space-1"];
-    }],
-    ["unknown envelope field", (draft: Record<string, unknown>) => {
-      draft.future_field = true;
-    }],
-  ] as const)("refuses opaque recovery with %s", async (_label, mutate) => {
-    const draft = opaqueRecoveryDraft() as unknown as Record<string, unknown>;
-    mutate(draft);
-    localStorage.setItem(opaqueAutosaveKey, JSON.stringify({ v: 2, draft }));
-    globalThis.fetch = vi.fn((url: string) => {
-      if (url.includes("/builder/catalog/list")) return Promise.resolve(sessionsOk);
-      throw new Error(`unexpected request ${url}`);
-    }) as unknown as typeof fetch;
-
-    const { result } = renderHook(() => useBuilderWorld());
-    await act(async () => {});
-
-    expect(result.current.hasOpaqueAutosave()).toBe(false);
-    expect(result.current.restoreOpaqueAutosave()).toEqual({
-      ok: false,
-      reason: "the saved YAML draft could not be read",
-    });
-  });
-
-  it("moves saved customize proposals onto their own optimistic revision fences", async () => {
-    const proposalRef = "user:nodes/exact/custom.yaml";
-    globalThis.fetch = vi.fn((url: string) => {
-      if (url.includes("/builder/catalog/list")) return Promise.resolve(sessionsOk);
-      if (url.includes("/builder/draft/open")) {
-        return Promise.resolve({
-          ok: true,
-          json: () =>
-            Promise.resolve({
-              contract_version: 1,
-              draft_revision: 0,
-              mode: "opaque_yaml",
-              target_ref: "user:sessions/exact.yaml",
-              source_ref: "nodalarc:sessions/exact.yaml",
-              expected_catalog_revisions: [],
-              catalog_documents: [
-                { ref: proposalRef, document: { node: { id: "custom" } } },
-              ],
-              session_yaml: "session:\n  name: exact\n",
-            }),
-        });
-      }
-      throw new Error(`unexpected request ${url}`);
-    }) as unknown as typeof fetch;
-    const { result } = renderHook(() => useBuilderWorld());
-    await act(async () => {});
-    await act(async () => {
-      await result.current.openSession({
-        ref: "nodalarc:sessions/exact.yaml",
-        family: "sessions",
-        namespace: "nodalarc",
-        revision: "source-revision",
-        size_bytes: 24,
-        display_name: "Exact",
-        summary: null,
-      });
-    });
-    act(() => {
-      result.current.markSavedRevision("session-revision", [
-        { ref: proposalRef, expected_revision: "component-revision" },
-        {
-          ref: "user:orbits/exact/generated.yaml",
-          expected_revision: "generated-revision",
-        },
-      ]);
-    });
-    expect(result.current.visualDraft?.catalog_documents).toEqual([
-      {
-        ref: proposalRef,
-        document: { node: { id: "custom" } },
-        expected_revision: "component-revision",
-      },
-    ]);
-    expect(result.current.visualDraft?.expected_catalog_revisions).toEqual([
-      {
-        ref: "user:orbits/exact/generated.yaml",
-        expected_revision: "generated-revision",
-      },
-    ]);
-  });
-
-  it("undo restores the prior exact YAML draft", async () => {
-    globalThis.fetch = vi.fn((url: string) => {
-      if (url.includes("/builder/catalog/list")) return Promise.resolve(sessionsOk);
-      if (url.includes("/builder/draft/open")) {
-        return Promise.resolve({
-          ok: true,
-          json: () =>
-            Promise.resolve({
-              contract_version: 1,
-              draft_revision: 0,
-              mode: "opaque_yaml",
-              target_ref: "user:sessions/undo.yaml",
-              source_ref: "user:sessions/undo.yaml",
-              session_yaml: "session:\n  name: before\n",
-            }),
-        });
-      }
-      throw new Error(`unexpected request ${url}`);
-    }) as unknown as typeof fetch;
-    const { result } = renderHook(() => useBuilderWorld());
-    await act(async () => {});
-    await act(async () => {
-      await result.current.openSession({
-        ref: "user:sessions/undo.yaml",
-        family: "sessions",
+      const openedResult = await result.current.openSession({
+        ref: "user:sessions/coordinated.yaml",
         namespace: "user",
-        revision: "revision-undo",
-        size_bytes: 24,
-        display_name: "Undo",
+        family: "sessions",
+        revision: "session-revision",
+        size_bytes: 32,
+        display_name: "Coordinated",
+        summary: null,
+      });
+      expect(openedResult.ok).toBe(true);
+    });
+
+    expect(result.current.visualDraft?.authoring_workspace?.session_name).toBe("coordinated");
+    expect(result.current.visualDraft?.draft_revision).toBe(4);
+    expect(result.current.yamlBuffer.text).toBe(opened.session_yaml);
+    expect((result.current.world as { marker?: string })?.marker).toBe("revision-4");
+  });
+
+  it("compiles a newly created graphical draft before exposing assembly facts", async () => {
+    const created = draft(0);
+    fetchMock.mockImplementation((url: string) => {
+      if (url.includes("/builder/catalog/list")) return Promise.resolve(sessionsResponse);
+      if (url.includes("/builder/draft/new")) return Promise.resolve(response(created));
+      if (url.includes("/builder/draft/compile")) {
+        return Promise.resolve(response(assembly(created, "created")));
+      }
+      throw new Error(`unexpected request ${url}`);
+    });
+    const { result } = renderHook(() => useBuilderWorld());
+    await act(async () => undefined);
+    await act(async () => {
+      await result.current.createDraft({ session_name: "coordinated" });
+    });
+    expect(result.current.assemblyResult).not.toBeNull();
+    expect((result.current.world as { marker?: string })?.marker).toBe("created");
+  });
+
+  it("keeps exact opened YAML and requires canonicalization before graphical edits", async () => {
+    const opened = { ...draft(), session_yaml: "# hand formatted\nsession: {name: coordinated}\n" };
+    fetchMock.mockImplementation((url: string) => {
+      if (url.includes("/builder/catalog/list")) return Promise.resolve(sessionsResponse);
+      if (url.includes("/builder/draft/open")) return Promise.resolve(response(opened));
+      if (url.includes("/builder/draft/compile")) {
+        return Promise.resolve(response(assembly(opened, "canonical")));
+      }
+      throw new Error(`unexpected request ${url}`);
+    });
+    const { result } = renderHook(() => useBuilderWorld());
+    await act(async () => undefined);
+    await act(async () => {
+      await result.current.openSession({
+        ref: "user:sessions/coordinated.yaml",
+        namespace: "user",
+        family: "sessions",
+        revision: "session-revision",
+        size_bytes: 32,
+        display_name: "Coordinated",
         summary: null,
       });
     });
-    act(() => result.current.editOpaqueYaml("session:\n  name: after\n"));
-    act(() => result.current.undoOpaque());
-    expect(result.current.visualDraft?.session_yaml).toBe("session:\n  name: before\n");
+    expect(result.current.yamlBuffer.text).toBe(opened.session_yaml);
+    expect(result.current.yamlBuffer.canonicalizationRequired).toBe(true);
   });
-});
 
-describe("backend customize-chain adoption", () => {
-  it("rewrites only the placed root while retaining every relationship identity", async () => {
-    const originalDraft = {
-      contract_version: 1 as const,
-      draft_revision: 0,
-      mode: "structured" as const,
-      target_ref: "user:sessions/customize.yaml",
-      catalog_documents: [],
-      workspace: {
-        session_name: "customize",
-        space: [],
-        space_refs: [
-          {
-            segment_id: "segment-stable",
-            source_ref: "nodalarc:constellations/root.yaml",
-            label: "Root",
-          },
-        ],
-        ground: [],
-        ground_refs: [],
-        links: [
-          {
-            rule_id: "rule-stable",
-            label: "Rule",
-            enabled: true,
-            a: { segment_id: "segment-stable", role: "isl", medium: "optical" },
-            b: { segment_id: "segment-stable", role: "isl", medium: "optical" },
-            topology_mode: "nearest_n",
-            topology_n: 2,
-          },
-        ],
-        routing_domains: [
-          {
-            domain_id: "domain-stable",
-            label: "Domain",
-            protocol: "isis",
-            member_segment_ids: ["segment-stable"],
-          },
-        ],
-        boundaries: [
-          {
-            boundary_id: "boundary-stable",
-            over_rule_id: "rule-stable",
-            adapter: "static_ip",
-            from_domain_id: "domain-stable",
-            to_domain_id: "domain-stable",
-            export_node_loopbacks: true,
-          },
-        ],
-        start_time: "2026-01-01T00:00:00Z",
-      },
+  it("discards an open response superseded by a newer session epoch", async () => {
+    const slow = deferred<ReturnType<typeof response>>();
+    const second: BuilderVisualDraftEnvelope = {
+      ...draft(8),
+      target_ref: "user:sessions/second.yaml",
+      source_ref: "user:sessions/second.yaml",
     };
-    let customizeBody: Record<string, any> | null = null;
-    globalThis.fetch = vi.fn((url: string, init?: { body?: string }) => {
-      if (url.includes("/builder/catalog/list")) return Promise.resolve(sessionsOk);
-      if (url.includes("/builder/draft/new")) {
-        return Promise.resolve({ ok: true, json: () => Promise.resolve(originalDraft) });
+    fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+      if (url.includes("/builder/catalog/list")) return Promise.resolve(sessionsResponse);
+      if (url.includes("/builder/draft/open")) {
+        const body = JSON.parse(String(init?.body)) as { source_ref: string };
+        return body.source_ref.endsWith("/first.yaml")
+          ? slow.promise
+          : Promise.resolve(response(second));
       }
-      if (url.includes("/builder/draft/customize-chain")) {
-        customizeBody = init?.body ? JSON.parse(init.body) : null;
-        const updated = {
-          ...originalDraft,
-          draft_revision: 1,
-          catalog_documents: [
+      if (url.includes("/builder/draft/compile")) {
+        return Promise.resolve(response(assembly(second, "second")));
+      }
+      throw new Error(`unexpected request ${url}`);
+    });
+    const { result } = renderHook(() => useBuilderWorld());
+    await act(async () => undefined);
+    let first!: ReturnType<typeof result.current.openSession>;
+    let latest!: ReturnType<typeof result.current.openSession>;
+    act(() => {
+      first = result.current.openSession({
+        ref: "user:sessions/first.yaml",
+        namespace: "user",
+        family: "sessions",
+        revision: "first",
+        size_bytes: 10,
+        display_name: "First",
+        summary: null,
+      });
+      latest = result.current.openSession({
+        ref: "user:sessions/second.yaml",
+        namespace: "user",
+        family: "sessions",
+        revision: "second",
+        size_bytes: 10,
+        display_name: "Second",
+        summary: null,
+      });
+    });
+    await act(async () => {
+      expect(await latest).toMatchObject({ ok: true });
+    });
+    expect(result.current.visualDraft?.target_ref).toBe("user:sessions/second.yaml");
+    expect((result.current.world as { marker?: string })?.marker).toBe("second");
+    await act(async () => {
+      slow.resolve(response(draft(2)));
+      expect(await first).toMatchObject({ ok: false });
+    });
+    expect(result.current.visualDraft?.target_ref).toBe("user:sessions/second.yaml");
+  });
+
+  it("lets a newer keystroke supersede an in-flight YAML application", async () => {
+    const original = draft();
+    const pending = deferred<ReturnType<typeof response>>();
+    fetchMock.mockImplementation((url: string) => {
+      if (url.includes("/builder/catalog/list")) return Promise.resolve(sessionsResponse);
+      if (url.includes("/builder/draft/apply-yaml")) return pending.promise;
+      throw new Error(`unexpected request ${url}`);
+    });
+    const { result } = renderHook(() => useBuilderWorld());
+    await act(async () => undefined);
+    act(() => result.current.adoptRecoveredStructuredDraft(original));
+    act(() => {
+      result.current.editYamlBuffer("session:\n  name: first\n");
+    });
+    let application!: Promise<unknown>;
+    act(() => {
+      application = result.current.applyYamlBuffer(1);
+    });
+    act(() => {
+      expect(result.current.editYamlBuffer("session:\n  name: second\n")).toBe(true);
+    });
+    await act(async () => {
+      pending.resolve(
+        response({
+          draft: { ...original, session_yaml: "session:\n  name: first\n" },
+          buffer_generation: 1,
+          yaml_text: "session:\n  name: first\n",
+          applied: false,
+          canonicalization_required: false,
+          issues: [
             {
-              ref: "user:constellations/customize/root.yaml",
-              document: { constellation: { id: "root" } },
+              code: "builder.yaml.invalid",
+              stage: "structural",
+              severity: "error",
+              message: "invalid",
+              blocks: ["save", "deploy"],
             },
           ],
-          workspace: {
-            ...originalDraft.workspace,
-            space_refs: [
+        }),
+      );
+      await expect(application).rejects.toThrow("session changed");
+    });
+    expect(result.current.yamlBuffer.text).toContain("second");
+    expect(result.current.yamlBuffer.generation).toBe(2);
+    expect(result.current.visualDraft?.draft_revision).toBe(4);
+  });
+
+  it("preserves the last valid world when YAML is refused", async () => {
+    const original = draft();
+    const compiled = assembly(original, "last-valid");
+    fetchMock.mockImplementation((url: string) => {
+      if (url.includes("/builder/catalog/list")) return Promise.resolve(sessionsResponse);
+      if (url.includes("/builder/draft/compile")) return Promise.resolve(response(compiled));
+      if (url.includes("/builder/draft/apply-yaml")) {
+        return Promise.resolve(
+          response({
+            draft: {
+              ...original,
+              projection_status: "pending_authoring",
+              session_yaml: ": [unfinished",
+              authoring_workspace: {
+                ...original.authoring_workspace,
+                projection_revision: null,
+              },
+            },
+            buffer_generation: 1,
+            yaml_text: ": [unfinished",
+            applied: false,
+            canonicalization_required: false,
+            issues: [
               {
-                ...originalDraft.workspace.space_refs[0],
-                source_ref: "user:constellations/customize/root.yaml",
+                code: "builder.yaml.syntax",
+                stage: "structural",
+                severity: "error",
+                message: "expected a closing bracket",
+                source_line: 1,
+                source_column: 3,
+                blocks: ["save", "deploy"],
               },
             ],
-          },
-        };
-        return Promise.resolve({
-          ok: true,
-          json: () =>
-            Promise.resolve({
-              applied: true,
-              draft: updated,
-              root_source_ref: "nodalarc:constellations/root.yaml",
-              root_target_ref: "user:constellations/customize/root.yaml",
-              forked_chain: [
-                {
-                  source_ref: "nodalarc:constellations/root.yaml",
-                  target_ref: "user:constellations/customize/root.yaml",
-                },
-              ],
-              issues: [],
-            }),
-        });
+          }),
+        );
       }
       throw new Error(`unexpected request ${url}`);
-    }) as unknown as typeof fetch;
-
+    });
     const { result } = renderHook(() => useBuilderWorld());
-    await act(async () => {});
+    await act(async () => undefined);
+    act(() => result.current.adoptRecoveredStructuredDraft(original));
     await act(async () => {
-      await result.current.createDraft({ session_name: "customize" });
+      await result.current.compileCurrent();
+    });
+    act(() => result.current.editYamlBuffer(": [unfinished"));
+    await act(async () => {
+      await result.current.applyYamlBuffer(1);
+    });
+
+    expect((result.current.world as { marker?: string })?.marker).toBe("last-valid");
+    expect(result.current.visualDraft?.applied_revision).toBe(4);
+    expect(result.current.yamlBuffer).toMatchObject({
+      text: ": [unfinished",
+      appliedText: original.session_yaml,
+      generation: 1,
+      dirty: true,
+      applied: false,
+    });
+    expect(result.current.yamlBuffer.issues[0]).toMatchObject({
+      source_line: 1,
+      source_column: 3,
+    });
+  });
+
+  it("clears resolved facts when a current compile fails", async () => {
+    const original = draft();
+    let compileCount = 0;
+    fetchMock.mockImplementation((url: string) => {
+      if (url.includes("/builder/catalog/list")) return Promise.resolve(sessionsResponse);
+      if (url.includes("/builder/draft/compile")) {
+        compileCount += 1;
+        return compileCount === 1
+          ? Promise.resolve(response(assembly(original, "valid")))
+          : Promise.resolve({
+              ok: false,
+              status: 422,
+              json: () => Promise.resolve({ detail: "the session does not resolve" }),
+            });
+      }
+      throw new Error(`unexpected request ${url}`);
+    });
+    const { result } = renderHook(() => useBuilderWorld());
+    await act(async () => undefined);
+    act(() => result.current.adoptRecoveredStructuredDraft(original));
+    await act(async () => {
+      await result.current.compileCurrent();
+    });
+    expect(result.current.world).not.toBeNull();
+    await act(async () => {
+      await expect(result.current.compileCurrent()).rejects.toThrow(
+        "the session does not resolve",
+      );
+    });
+    expect(result.current.world).toBeNull();
+    expect(result.current.settledDocumentDigest).toBeNull();
+    expect(result.current.error).toBe("the session does not resolve");
+  });
+
+  it("clear invalidates an in-flight compile before it can repaint", async () => {
+    const pending = deferred<ReturnType<typeof response>>();
+    fetchMock.mockImplementation((url: string) => {
+      if (url.includes("/builder/catalog/list")) return Promise.resolve(sessionsResponse);
+      if (url.includes("/builder/draft/compile")) return pending.promise;
+      throw new Error(`unexpected request ${url}`);
+    });
+    const original = draft();
+    const { result } = renderHook(() => useBuilderWorld());
+    await act(async () => undefined);
+    act(() => result.current.adoptRecoveredStructuredDraft(original));
+    let compiling!: Promise<unknown>;
+    act(() => {
+      compiling = result.current.compileCurrent();
+      result.current.clear();
+    });
+    await act(async () => {
+      pending.resolve(response(assembly(original, "late")));
+      await expect(compiling).rejects.toThrow("session changed");
+    });
+    expect(result.current.visualDraft).toBeNull();
+    expect(result.current.world).toBeNull();
+  });
+
+  it("applies a graphical workspace without minting a client revision", async () => {
+    const original = draft();
+    const next: BuilderVisualDraftEnvelope = {
+      ...draft(5),
+      authoring_workspace: {
+        ...draft(5).authoring_workspace!,
+        description: "server adopted",
+      },
+    };
+    const applied = assembly(next, "workspace");
+    fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+      if (url.includes("/builder/catalog/list")) return Promise.resolve(sessionsResponse);
+      if (url.includes("/builder/draft/apply-workspace")) {
+        const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        expect(body.expected_draft_revision).toBe(4);
+        expect(body.draft).toMatchObject({ draft_revision: 4 });
+        return Promise.resolve(response(applied));
+      }
+      throw new Error(`unexpected request ${url}`);
+    });
+    const { result } = renderHook(() => useBuilderWorld());
+    await act(async () => undefined);
+    act(() => result.current.adoptRecoveredStructuredDraft(original));
+    await act(async () => {
+      await result.current.applyWorkspace({
+        ...original.authoring_workspace!,
+        description: "server adopted",
+      });
+    });
+    expect(result.current.visualDraft?.draft_revision).toBe(5);
+    expect(result.current.yamlBuffer.text).toContain("# workspace");
+  });
+
+  it("routes scalar, choice, sequence, and map controls through one fenced mutation", async () => {
+    const original = draft();
+    const next: BuilderVisualDraftEnvelope = {
+      ...draft(5),
+      authoring_workspace: {
+        ...draft(5).authoring_workspace!,
+        description: "control-mutated",
+      },
+    };
+    const commands = [
+      { operation: "set_scalar" as const, control_id: "ctl_scalar", value: "changed" },
+      { operation: "select_choice" as const, control_id: "ctl_choice", branch_id: "branch" },
+      { operation: "insert_item" as const, control_id: "ctl_sequence", index: 2 },
+      {
+        operation: "insert_map_entry" as const,
+        control_id: "ctl_map",
+        key: "entry",
+      },
+    ];
+    fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+      if (url.includes("/builder/catalog/list")) return Promise.resolve(sessionsResponse);
+      if (url.includes("/builder/draft/control-mutate")) {
+        expect(JSON.parse(String(init?.body))).toEqual({
+          draft: original,
+          expected_draft_revision: 4,
+          commands,
+        });
+        return Promise.resolve(response(assembly(next, "control-mutated")));
+      }
+      throw new Error(`unexpected request ${url}`);
+    });
+    const { result } = renderHook(() => useBuilderWorld());
+    await act(async () => undefined);
+    act(() => result.current.adoptRecoveredStructuredDraft(original));
+    await act(async () => {
+      await result.current.mutateControls(commands);
+    });
+    expect(result.current.visualDraft?.draft_revision).toBe(5);
+    expect(result.current.visualDraft?.authoring_workspace?.description).toBe(
+      "control-mutated",
+    );
+    expect(result.current.yamlBuffer.text).toContain("# control-mutated");
+  });
+
+  it("adopts a typed command and its compile facts atomically", async () => {
+    const original = draft();
+    const commanded: BuilderVisualDraftEnvelope = {
+      ...draft(5),
+      authoring_workspace: {
+        ...draft(5).authoring_workspace!,
+        description: "commanded",
+      },
+    };
+    fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+      if (url.includes("/builder/catalog/list")) return Promise.resolve(sessionsResponse);
+      if (url.includes("/builder/draft/command")) {
+        const body = JSON.parse(String(init?.body));
+        expect(body).toMatchObject({
+          expected_draft_revision: 4,
+          command: { operation: "add_generated_space" },
+        });
+        return Promise.resolve(
+          response({
+            contract_version: 1,
+            operation: "add_generated_space",
+            base_draft_revision: 4,
+            draft: commanded,
+            affected_kind: "space",
+            affected_id: "space-1",
+            notice: null,
+          }),
+        );
+      }
+      if (url.includes("/builder/draft/compile")) {
+        return Promise.resolve(response(assembly(commanded, "commanded")));
+      }
+      throw new Error(`unexpected request ${url}`);
+    });
+    const { result } = renderHook(() => useBuilderWorld());
+    await act(async () => undefined);
+    act(() => result.current.adoptRecoveredStructuredDraft(original));
+    await act(async () => {
+      await result.current.runVisualCommand({
+        operation: "add_generated_space",
+        phasing_mode: "walker_delta",
+      });
+    });
+    expect(result.current.visualDraft?.draft_revision).toBe(5);
+    expect(result.current.visualDraft?.authoring_workspace?.description).toBe("commanded");
+    expect((result.current.world as { marker?: string })?.marker).toBe("commanded");
+  });
+
+  it("rejects a stale save capture before persistence", async () => {
+    const original = draft();
+    const { result } = renderHook(() => useBuilderWorld());
+    await act(async () => undefined);
+    act(() => result.current.adoptRecoveredStructuredDraft(original));
+    const capture = result.current.captureCoordinator();
+    act(() => result.current.editYamlBuffer("session:\n  name: changed\n"));
+    await act(async () => {
+      await expect(
+        result.current.saveSession(assembly(original).save_request, capture),
+      ).rejects.toThrow("session changed");
+    });
+    expect(
+      fetchMock.mock.calls.some(([url]) => String(url).includes("/builder/session/save")),
+    ).toBe(false);
+  });
+
+  it("does not let a delayed save reopen overwrite a newer epoch", async () => {
+    const original = draft();
+    const delayedOpen = deferred<ReturnType<typeof response>>();
+    fetchMock.mockImplementation((url: string) => {
+      if (url.includes("/builder/catalog/list")) return Promise.resolve(sessionsResponse);
+      if (url.includes("/builder/session/save")) {
+        return Promise.resolve(
+          response({
+            session: {
+              ref: original.target_ref,
+              family: "sessions",
+              canonical_yaml: original.session_yaml,
+              canonical_json: original.applied_session,
+              content_digest: "document-saved",
+              revision: "saved-revision",
+            },
+            digests: { document: "document-saved", dependency: "dependency-saved" },
+            dependency_closure: {
+              entries: [],
+              file_count: 0,
+              total_bytes: 0,
+              closure_digest: "dependency-saved",
+            },
+            deploy_verdict: {
+              allowed: true,
+              session_ref: original.target_ref,
+              session_revision: "saved-revision",
+              digests: { document: "document-saved", dependency: "dependency-saved" },
+              blockers: [],
+            },
+            issues: [],
+          }),
+        );
+      }
+      if (url.includes("/builder/draft/open")) return delayedOpen.promise;
+      throw new Error(`unexpected request ${url}`);
+    });
+    const { result } = renderHook(() => useBuilderWorld());
+    await act(async () => undefined);
+    act(() => result.current.adoptRecoveredStructuredDraft(original));
+    const compiled = assembly(original, "save");
+    act(() => {
+      // Capture the compile facts that bind the save request.
+      result.current.adoptRecoveredStructuredDraft(original);
+    });
+    const capture = result.current.captureCoordinator();
+    let saving!: Promise<unknown>;
+    act(() => {
+      saving = result.current.saveSession(compiled.save_request, capture);
+    });
+    await act(async () => undefined);
+    act(() => result.current.clear());
+    await act(async () => {
+      delayedOpen.resolve(response(original));
+      await expect(saving).resolves.toMatchObject({
+        reopenedDraft: null,
+        postCommitError: "the session changed while this operation was running",
+      });
+    });
+    expect(result.current.visualDraft).toBeNull();
+  });
+
+  it("blocks commands and customization while YAML is unapplied", async () => {
+    const original = draft();
+    const { result } = renderHook(() => useBuilderWorld());
+    await act(async () => undefined);
+    act(() => result.current.adoptRecoveredStructuredDraft(original));
+    act(() => result.current.editYamlBuffer("session:\n  name: dirty\n"));
+    await act(async () => {
+      await expect(
+        result.current.runVisualCommand({
+          operation: "add_generated_space",
+          phasing_mode: "walker_delta",
+        }),
+      ).rejects.toThrow("apply or canonicalize");
+      await expect(
+        result.current.customizeChain({
+          segment_id: "space-1",
+          leaf_ref: "nodalarc:nodes/space/relay.yaml",
+        }),
+      ).rejects.toThrow("apply or canonicalize");
+    });
+    expect(
+      fetchMock.mock.calls.some(([url]) =>
+        String(url).includes("/builder/draft/command") ||
+        String(url).includes("/builder/draft/customize-chain"),
+      ),
+    ).toBe(false);
+  });
+
+  it("adopts a customized root while preserving relationship identities", async () => {
+    const workspace = newWorkspace("coordinated");
+    workspace.projection_revision = 4;
+    workspace.space_refs = [
+      {
+        segment_id: "segment-stable",
+        source_ref: "nodalarc:constellations/root.yaml",
+        label: "Root",
+      },
+    ];
+    workspace.links = [
+      {
+        rule_id: "rule-stable",
+        label: "Rule",
+        enabled: true,
+        a: {
+          segment_id: "segment-stable",
+          tag: null,
+          role: "isl",
+          medium: "optical",
+          min_elevation_deg: null,
+        },
+        b: {
+          segment_id: "segment-stable",
+          tag: null,
+          role: "isl",
+          medium: "optical",
+          min_elevation_deg: null,
+        },
+        topology_mode: "nearest_n",
+        topology_n: 2,
+        max_range_km: null,
+      },
+    ];
+    const original: BuilderVisualDraftEnvelope = {
+      ...draft(),
+      authoring_workspace: workspace,
+      applied_workspace: workspace,
+    };
+    const customizedWorkspace = structuredClone(workspace);
+    customizedWorkspace.projection_revision = 5;
+    customizedWorkspace.space_refs[0]!.source_ref =
+      "user:constellations/coordinated/root.yaml";
+    const customized: BuilderVisualDraftEnvelope = {
+      ...original,
+      draft_revision: 5,
+      catalog_documents: [
+        {
+          ref: "user:constellations/coordinated/root.yaml",
+          document: { constellation: { id: "root" } },
+          origin: "customized",
+        },
+      ],
+      authoring_workspace: customizedWorkspace,
+      applied_workspace: customizedWorkspace,
+      applied_revision: 5,
+    };
+    fetchMock.mockImplementation((url: string) => {
+      if (url.includes("/builder/catalog/list")) return Promise.resolve(sessionsResponse);
+      if (url.includes("/builder/draft/customize-chain")) {
+        return Promise.resolve(
+          response({
+            applied: true,
+            draft: customized,
+            root_source_ref: "nodalarc:constellations/root.yaml",
+            root_target_ref: "user:constellations/coordinated/root.yaml",
+            forked_chain: [],
+            issues: [],
+          }),
+        );
+      }
+      if (url.includes("/builder/draft/compile")) {
+        return Promise.resolve(response(assembly(customized, "customized")));
+      }
+      throw new Error(`unexpected request ${url}`);
+    });
+    const { result } = renderHook(() => useBuilderWorld());
+    await act(async () => undefined);
+    act(() => result.current.adoptRecoveredStructuredDraft(original));
+    await act(async () => {
       await result.current.customizeChain({
         segment_id: "segment-stable",
         leaf_ref: "nodalarc:nodes/space/leaf.yaml",
       });
     });
-
-    expect(customizeBody).toMatchObject({
-      segment_id: "segment-stable",
-      leaf_ref: "nodalarc:nodes/space/leaf.yaml",
-      draft: { target_ref: "user:sessions/customize.yaml" },
-    });
-    expect(result.current.visualDraft?.workspace).toMatchObject({
+    expect(result.current.visualDraft?.authoring_workspace).toMatchObject({
       space_refs: [
         {
           segment_id: "segment-stable",
-          source_ref: "user:constellations/customize/root.yaml",
+          source_ref: "user:constellations/coordinated/root.yaml",
         },
       ],
       links: [{ rule_id: "rule-stable" }],
-      routing_domains: [{ domain_id: "domain-stable" }],
-      boundaries: [
-        {
-          boundary_id: "boundary-stable",
-          over_rule_id: "rule-stable",
-          from_domain_id: "domain-stable",
-          to_domain_id: "domain-stable",
-        },
-      ],
     });
+    expect(result.current.visualDraft?.catalog_documents).toHaveLength(1);
   });
 });
 
-describe("exact session closure transfer", () => {
-  it("passes the exported YAML bytes and refs to backend import unchanged", async () => {
-    let posted: Record<string, unknown> | null = null;
-    globalThis.fetch = vi.fn((_url: string, init?: { body?: string }) => {
-      posted = init?.body ? JSON.parse(init.body) : null;
-      return Promise.resolve({
-        ok: true,
-        status: 200,
-        json: () =>
-          Promise.resolve({
-            outcome: "unchanged",
-            generation: "g1",
-            document_digest: "root-digest",
-            closure_digest: "closure-digest",
-            proposed_writes: [],
-            identical_refs: ["user:sessions/test.yaml"],
-            collisions: [],
-          }),
-      });
-    }) as unknown as typeof fetch;
+describe("ordinary YAML session transfer", () => {
+  beforeEach(() => {
+    vi.mocked(downloadBlob).mockReset();
+    delete (globalThis as typeof globalThis & { showDirectoryPicker?: unknown }).showDirectoryPicker;
+  });
 
-    await importSessionClosure(
-      {
-        contract_version: 1,
-        session_ref: "user:sessions/test.yaml",
-        session_revision: "revision-session",
-        generation: "g1",
-        root: {
-          ref: "user:sessions/test.yaml",
-          family: "sessions",
-          preserved_path: "user/sessions/test.yaml",
-          exact_yaml: "session:\n  name: exact\n",
-          document_digest: "root-digest",
-          revision: "revision-session",
-        },
-        entries: [
-          {
-            ref: "user:terminals/exact.yaml",
-            family: "terminals",
-            preserved_path: "user/terminals/exact.yaml",
-            exact_yaml: "terminal:\n  id: exact\n",
-            document_digest: "terminal-digest",
-            revision: "revision-terminal",
-          },
-        ],
-        document_digest: "root-digest",
-        closure_digest: "closure-digest",
-        file_count: 2,
-        total_bytes: 64,
+  it("writes the backend-owned directory tree when the browser supports it", async () => {
+    const writes: Array<[string, string]> = [];
+    const directories = new Map<string, unknown>();
+    const directory = (prefix: string): unknown => ({
+      getDirectoryHandle: async (name: string) => {
+        const path = `${prefix}${name}/`;
+        if (!directories.has(path)) directories.set(path, directory(path));
+        return directories.get(path);
       },
-      false,
-    );
+      getFileHandle: async (name: string) => ({
+        createWritable: async () => ({
+          write: async (content: string) => {
+            writes.push([`${prefix}${name}`, content]);
+          },
+          close: async () => undefined,
+        }),
+      }),
+    });
+    const selected = {
+      getDirectoryHandle: async (name: string, options: { create: boolean }) => {
+        if (!options.create) throw new DOMException("missing", "NotFoundError");
+        return directory(`${name}/`);
+      },
+    };
+    (globalThis as typeof globalThis & { showDirectoryPicker?: unknown }).showDirectoryPicker =
+      vi.fn(async () => selected);
+    globalThis.fetch = vi.fn(() =>
+      Promise.resolve(
+        response({
+          session_ref: "user:sessions/exported.yaml",
+          files: [
+            {
+              logical_path: "catalog/user/sessions/exported.yaml",
+              yaml_text: "session:\n  name: exported\n",
+            },
+            {
+              logical_path: "catalog/user/terminals/rf.yaml",
+              yaml_text: "terminal:\n  id: rf\n",
+            },
+          ],
+        }),
+      ),
+    ) as unknown as typeof fetch;
 
+    await exportSessionYaml({
+      ref: "user:sessions/exported.yaml",
+      namespace: "user",
+      family: "sessions",
+      revision: "revision",
+      size_bytes: 10,
+      display_name: "Exported",
+      summary: null,
+    });
+
+    expect(writes).toEqual([
+      [
+        "exported-nodalarc-session/catalog/user/sessions/exported.yaml",
+        "session:\n  name: exported\n",
+      ],
+      [
+        "exported-nodalarc-session/catalog/user/terminals/rf.yaml",
+        "terminal:\n  id: rf\n",
+      ],
+    ]);
+    expect(downloadBlob).not.toHaveBeenCalled();
+  });
+
+  it("refuses to overwrite an existing export directory", async () => {
+    const selected = {
+      getDirectoryHandle: vi.fn(async () => ({})),
+    };
+    (globalThis as typeof globalThis & { showDirectoryPicker?: unknown }).showDirectoryPicker =
+      vi.fn(async () => selected);
+    globalThis.fetch = vi.fn(() =>
+      Promise.resolve(
+        response({
+          session_ref: "user:sessions/exported.yaml",
+          files: [{
+            logical_path: "catalog/user/sessions/exported.yaml",
+            yaml_text: "session: {}\n",
+          }],
+        }),
+      ),
+    ) as unknown as typeof fetch;
+    await expect(
+      exportSessionYaml({
+        ref: "user:sessions/exported.yaml",
+        namespace: "user",
+        family: "sessions",
+        revision: "revision",
+        size_bytes: 10,
+        display_name: "Exported",
+        summary: null,
+      }),
+    ).rejects.toThrow("export directory already exists");
+    expect(downloadBlob).not.toHaveBeenCalled();
+  });
+
+  it("falls back to one YAML download per file without inventing a container", async () => {
+    globalThis.fetch = vi.fn(() =>
+      Promise.resolve(
+        response({
+          session_ref: "user:sessions/exported.yaml",
+          files: [
+            {
+              logical_path: "catalog/user/sessions/exported.yaml",
+              yaml_text: "session: {}\n",
+            },
+            {
+              logical_path: "catalog/user/nodes/a__b/node.yaml",
+              yaml_text: "node: {}\n",
+            },
+          ],
+        }),
+      ),
+    ) as unknown as typeof fetch;
+    await exportSessionYaml({
+      ref: "user:sessions/exported.yaml",
+      namespace: "user",
+      family: "sessions",
+      revision: "revision",
+      size_bytes: 10,
+      display_name: "Exported",
+      summary: null,
+    });
+    expect(downloadBlob).toHaveBeenNthCalledWith(
+      1,
+      "session: {}\n",
+      "catalog%2Fuser%2Fsessions%2Fexported.yaml",
+    );
+    expect(downloadBlob).toHaveBeenNthCalledWith(
+      2,
+      "node: {}\n",
+      "catalog%2Fuser%2Fnodes%2Fa__b%2Fnode.yaml",
+    );
+  });
+
+  it("imports only YAML texts and commit intent", async () => {
+    let posted: Record<string, unknown> | null = null;
+    globalThis.fetch = vi.fn((_url: string, init?: RequestInit) => {
+      posted = JSON.parse(String(init?.body));
+      return Promise.resolve(
+        response({
+          outcome: "unchanged",
+          generation: "generation",
+          session_ref: "user:sessions/imported.yaml",
+          proposed_writes: [],
+          identical_refs: [],
+          collisions: [],
+        }),
+      );
+    }) as unknown as typeof fetch;
+    await importSessionYamlFiles(
+      [
+        { yaml_text: "session:\n  name: imported\n" },
+        { yaml_text: "terminal:\n  id: rf\n" },
+      ],
+      null,
+    );
     expect(posted).toEqual({
-      contract_version: 1,
-      root_ref: "user:sessions/test.yaml",
-      root_yaml: "session:\n  name: exact\n",
-      document_digest: "root-digest",
-      closure_digest: "closure-digest",
-      entries: [
-        {
-          ref: "user:terminals/exact.yaml",
-          exact_yaml: "terminal:\n  id: exact\n",
-          document_digest: "terminal-digest",
-        },
+      yaml_files: [
+        { yaml_text: "session:\n  name: imported\n" },
+        { yaml_text: "terminal:\n  id: rf\n" },
       ],
       commit: false,
     });
   });
 
-  it("rejects portable closure carriers without contract version 1", async () => {
-    await expect(importSessionClosure({
-      session_ref: "user:sessions/test.yaml",
-      document_digest: "root-digest",
-      closure_digest: "closure-digest",
-      root: { exact_yaml: "session: {}\n" },
-      entries: [],
-    }, false)).rejects.toThrow("missing its typed closure fields");
+  it("commits only with the exact reviewed proposal token", async () => {
+    let posted: Record<string, unknown> | null = null;
+    globalThis.fetch = vi.fn((url: string, init?: RequestInit) => {
+      if (!url.includes("/builder/session/yaml/import")) {
+        return Promise.resolve(response({ generation: "next-generation", entries: [] }));
+      }
+      posted = JSON.parse(String(init?.body));
+      return Promise.resolve(
+        response({
+          outcome: "committed",
+          generation: "next-generation",
+          session_ref: "user:sessions/imported.yaml",
+          proposed_writes: [
+            {
+              ref: "user:sessions/imported.yaml",
+              family: "sessions",
+              logical_path: "catalog/user/sessions/imported.yaml",
+              canonical_yaml: "session:\n  name: imported\n",
+              canonicalization_changed: false,
+            },
+          ],
+          identical_refs: [],
+          collisions: [],
+        }),
+      );
+    }) as unknown as typeof fetch;
+    await importSessionYamlFiles(
+      [{ yaml_text: "session:\n  name: imported\n" }],
+      "reviewed-proposal-token",
+    );
+    expect(posted).toEqual({
+      yaml_files: [{ yaml_text: "session:\n  name: imported\n" }],
+      commit: true,
+      proposal_token: "reviewed-proposal-token",
+    });
   });
 });
 
-describe("outline reveal is a channel separate from the Library reveal", () => {
-  it("consumes an outline reveal once — claim returns it, then null (no replay)", () => {
+describe("outline reveal remains separate from Library reveal", () => {
+  it("consumes each outline reveal once", () => {
     const { result } = renderHook(() => useOutlineReveal());
     act(() => requestOutlineReveal("space-777"));
-    const reveal = result.current;
-    expect(reveal?.segmentId).toBe("space-777");
-    expect(claimOutlineReveal("outline", reveal)?.segmentId).toBe("space-777");
-    // A second claim (e.g. a remount replaying the same reveal) yields nothing.
-    expect(claimOutlineReveal("outline", reveal)).toBeNull();
+    expect(claimOutlineReveal("outline", result.current)?.segmentId).toBe("space-777");
+    expect(claimOutlineReveal("outline", result.current)).toBeNull();
   });
 
-  it("a Library reveal never touches the outline channel", () => {
+  it("does not cross the Library reveal channel", () => {
     const outline = renderHook(() => useOutlineReveal());
-    const before = outline.result.current;
+    const beforeOutline = outline.result.current;
     act(() =>
       requestLibraryReveal({
         ref: "user:sites/x.yaml",
+        namespace: "user",
         family: "sites",
-        id: "x",
-      } as unknown as Parameters<typeof requestLibraryReveal>[0]),
+        revision: "revision",
+        size_bytes: 1,
+        display_name: "x",
+        summary: null,
+      }),
     );
-    // The outline store is unchanged by reference — the reveals do not cross.
-    expect(outline.result.current).toBe(before);
-  });
+    expect(outline.result.current).toBe(beforeOutline);
 
-  it("an outline reveal never touches the Library channel", () => {
     const library = renderHook(() => useLibraryReveal());
-    const before = library.result.current;
+    const beforeLibrary = library.result.current;
     act(() => requestOutlineReveal("ground-42"));
-    expect(library.result.current).toBe(before);
+    expect(library.result.current).toBe(beforeLibrary);
   });
 });

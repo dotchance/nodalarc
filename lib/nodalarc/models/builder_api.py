@@ -137,6 +137,8 @@ class BuilderIssue(_BuilderApplicationModel):
     source_ref: str | None = None
     json_pointer: str | None = None
     draft_path: str | None = None
+    source_line: int | None = Field(default=None, ge=1)
+    source_column: int | None = Field(default=None, ge=1)
     related_refs: tuple[str, ...] = ()
 
     @model_validator(mode="after")
@@ -170,11 +172,11 @@ class BuilderCatalogDocument(_BuilderApplicationModel):
 
 
 class BuilderProposedCatalogDocument(_BuilderApplicationModel):
-    """One complete draft catalog document proposed for a ``user:`` ref."""
+    """One complete new catalog document proposed for a ``user:`` ref."""
 
     ref: CatalogRef
     document: JsonDocument
-    expected_revision: OpaqueRevision | None = None
+    origin: Literal["generated", "customized"]
 
     @model_validator(mode="after")
     def _target_is_a_user_component(self) -> BuilderProposedCatalogDocument:

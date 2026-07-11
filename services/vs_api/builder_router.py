@@ -27,7 +27,6 @@ from nodalarc.models.builder_api import (
 )
 from nodalarc.models.builder_catalog_api import (
     BuilderCatalogBootstrap,
-    CatalogClosureImportRequest,
     CatalogComponentDraftEnvelope,
     CatalogDeleteRequest,
     CatalogDeleteResult,
@@ -37,28 +36,35 @@ from nodalarc.models.builder_catalog_api import (
     CatalogDraftAddNodeEthernetPortRequest,
     CatalogDraftAddNodeTerminalMountRequest,
     CatalogDraftAddSiteNodeRequest,
+    CatalogDraftApplyYamlRequest,
+    CatalogDraftApplyYamlResult,
     CatalogDraftCompileRequest,
     CatalogDraftCompileResult,
+    CatalogDraftControlMutationRequest,
     CatalogDraftNewRequest,
     CatalogDraftOpenRequest,
     CatalogDraftPatchRequest,
-    CatalogDraftReplaceObjectRequest,
     CatalogDraftSaveRequest,
     CatalogDraftSaveResult,
     CatalogForkRequest,
     CatalogForkResult,
     CatalogGetRequest,
-    CatalogImportResult,
     CatalogListPage,
     CatalogListRequest,
     CatalogMutationResult,
     CatalogOperationRefusal,
-    CatalogSessionExport,
-    CatalogSessionExportRequest,
+    CatalogSessionYamlExport,
+    CatalogSessionYamlExportRequest,
+    CatalogSessionYamlImportRequest,
+    CatalogSessionYamlImportResult,
 )
 from nodalarc.models.builder_visual_api import (
+    BuilderVisualControlMutationRequest,
     BuilderVisualCustomizeChainRequest,
     BuilderVisualCustomizeChainResult,
+    BuilderVisualDraftApplyWorkspaceRequest,
+    BuilderVisualDraftApplyYamlRequest,
+    BuilderVisualDraftApplyYamlResult,
     BuilderVisualDraftAssemblyResult,
     BuilderVisualDraftCommandRequest,
     BuilderVisualDraftCommandResult,
@@ -66,6 +72,7 @@ from nodalarc.models.builder_visual_api import (
     BuilderVisualDraftCreateRequest,
     BuilderVisualDraftEnvelope,
     BuilderVisualDraftOpenRequest,
+    BuilderVisualDraftRetargetRequest,
     BuilderVisualWalkerLayoutRequest,
     BuilderVisualWalkerLayoutResult,
     derive_walker_layout,
@@ -104,9 +111,15 @@ class CatalogService(Protocol):
 
     def delete_catalog(self, request: CatalogDeleteRequest) -> CatalogDeleteResult: ...
 
-    def export_session(self, request: CatalogSessionExportRequest) -> CatalogSessionExport: ...
+    def export_session_yaml(
+        self,
+        request: CatalogSessionYamlExportRequest,
+    ) -> CatalogSessionYamlExport: ...
 
-    def import_closure(self, request: CatalogClosureImportRequest) -> CatalogImportResult: ...
+    def import_session_yaml(
+        self,
+        request: CatalogSessionYamlImportRequest,
+    ) -> CatalogSessionYamlImportResult: ...
 
 
 class VisualDraftService(Protocol):
@@ -115,6 +128,35 @@ class VisualDraftService(Protocol):
     def create(self, request: BuilderVisualDraftCreateRequest) -> BuilderVisualDraftEnvelope: ...
 
     def open(self, request: BuilderVisualDraftOpenRequest) -> BuilderVisualDraftEnvelope: ...
+
+    def apply_yaml(
+        self,
+        request: BuilderVisualDraftApplyYamlRequest,
+    ) -> BuilderVisualDraftApplyYamlResult: ...
+
+    def apply_workspace(
+        self,
+        request: BuilderVisualDraftApplyWorkspaceRequest,
+        *,
+        available_node_count: int,
+        preview_factory: PreviewFactory | None = None,
+    ) -> BuilderVisualDraftAssemblyResult: ...
+
+    def retarget(
+        self,
+        request: BuilderVisualDraftRetargetRequest,
+        *,
+        available_node_count: int,
+        preview_factory: PreviewFactory | None = None,
+    ) -> BuilderVisualDraftAssemblyResult: ...
+
+    def mutate_controls(
+        self,
+        request: BuilderVisualControlMutationRequest,
+        *,
+        available_node_count: int,
+        preview_factory: PreviewFactory | None = None,
+    ) -> BuilderVisualDraftAssemblyResult: ...
 
     def customize_chain(
         self,
@@ -147,6 +189,11 @@ class CatalogDraftService(Protocol):
 
     def patch(self, request: CatalogDraftPatchRequest) -> CatalogComponentDraftEnvelope: ...
 
+    def mutate_controls(
+        self,
+        request: CatalogDraftControlMutationRequest,
+    ) -> CatalogComponentDraftEnvelope: ...
+
     def add_site_node(
         self,
         request: CatalogDraftAddSiteNodeRequest,
@@ -162,10 +209,10 @@ class CatalogDraftService(Protocol):
         request: CatalogDraftAddNodeEthernetPortRequest,
     ) -> CatalogComponentDraftEnvelope: ...
 
-    def replace_object(
+    def apply_yaml(
         self,
-        request: CatalogDraftReplaceObjectRequest,
-    ) -> CatalogComponentDraftEnvelope: ...
+        request: CatalogDraftApplyYamlRequest,
+    ) -> CatalogDraftApplyYamlResult: ...
 
     def compile(self, request: CatalogDraftCompileRequest) -> CatalogDraftCompileResult: ...
 
@@ -220,9 +267,9 @@ _CATALOG_REFUSAL_STATUS = {
     "catalog_authoring.impact_mismatch": 409,
     "catalog_authoring.dependents_exist": 409,
     "catalog_authoring.import_limit": 413,
-    "catalog_authoring.import_digest_mismatch": 422,
     "catalog_authoring.import_incomplete": 422,
     "catalog_authoring.import_collision": 409,
+    "catalog_authoring.stale_import_proposal": 409,
     "catalog_authoring.persistence_failed": 503,
 }
 _SAVE_REFUSAL_STATUS = {
@@ -427,6 +474,145 @@ def create_builder_router(
             return _catalog_unavailable_response(error)
 
     @router.post(
+        "/draft/apply-yaml",
+        response_model=BuilderVisualDraftApplyYamlResult,
+        responses=_CATALOG_ERROR_RESPONSES,
+    )
+    async def apply_visual_draft_yaml(
+        request: BuilderVisualDraftApplyYamlRequest,
+        context: Context,
+    ):
+        try:
+            return await run_in_threadpool(
+                selected.visual_draft_service_factory(context).apply_yaml,
+                request,
+            )
+        except BuilderVisualDraftCommandError as error:
+            refusal = CatalogOperationRefusal(
+                code=error.code,
+                message=str(error),
+                ref=str(error.ref),
+                expected_revision=(
+                    str(error.expected_revision) if error.expected_revision is not None else None
+                ),
+                current_revision=(
+                    str(error.current_revision) if error.current_revision is not None else None
+                ),
+                cause_type=type(error).__name__,
+            )
+            return _catalog_refusal_response(CatalogAuthoringError(refusal))
+        except (CatalogRepositoryError, OSError) as error:
+            return _catalog_unavailable_response(error)
+
+    @router.post(
+        "/draft/apply-workspace",
+        response_model=BuilderVisualDraftAssemblyResult,
+        responses=_CATALOG_ERROR_RESPONSES,
+    )
+    async def apply_visual_draft_workspace(
+        request: BuilderVisualDraftApplyWorkspaceRequest,
+        context: Context,
+        available_node_count: NodeCount,
+    ):
+        def apply_workspace() -> BuilderVisualDraftAssemblyResult:
+            return selected.visual_draft_service_factory(context).apply_workspace(
+                request,
+                available_node_count=available_node_count,
+                preview_factory=selected.preview_factory,
+            )
+
+        try:
+            return await run_in_threadpool(apply_workspace)
+        except BuilderVisualDraftCommandError as error:
+            refusal = CatalogOperationRefusal(
+                code=error.code,
+                message=str(error),
+                ref=str(error.ref),
+                expected_revision=(
+                    str(error.expected_revision) if error.expected_revision is not None else None
+                ),
+                current_revision=(
+                    str(error.current_revision) if error.current_revision is not None else None
+                ),
+                cause_type=type(error).__name__,
+            )
+            return _catalog_refusal_response(CatalogAuthoringError(refusal))
+        except (CatalogRepositoryError, OSError) as error:
+            return _catalog_unavailable_response(error)
+
+    @router.post(
+        "/draft/retarget",
+        response_model=BuilderVisualDraftAssemblyResult,
+        responses=_CATALOG_ERROR_RESPONSES,
+    )
+    async def retarget_visual_draft(
+        request: BuilderVisualDraftRetargetRequest,
+        context: Context,
+        available_node_count: NodeCount,
+    ):
+        def retarget() -> BuilderVisualDraftAssemblyResult:
+            return selected.visual_draft_service_factory(context).retarget(
+                request,
+                available_node_count=available_node_count,
+                preview_factory=selected.preview_factory,
+            )
+
+        try:
+            return await run_in_threadpool(retarget)
+        except BuilderVisualDraftCommandError as error:
+            refusal = CatalogOperationRefusal(
+                code=error.code,
+                message=str(error),
+                ref=str(error.ref),
+                expected_revision=(
+                    str(error.expected_revision) if error.expected_revision is not None else None
+                ),
+                current_revision=(
+                    str(error.current_revision) if error.current_revision is not None else None
+                ),
+                cause_type=type(error).__name__,
+            )
+            return _catalog_refusal_response(CatalogAuthoringError(refusal))
+        except (CatalogRepositoryError, OSError) as error:
+            return _catalog_unavailable_response(error)
+
+    @router.post(
+        "/draft/control-mutate",
+        response_model=BuilderVisualDraftAssemblyResult,
+        responses=_CATALOG_ERROR_RESPONSES,
+    )
+    async def mutate_visual_draft_controls(
+        request: BuilderVisualControlMutationRequest,
+        context: Context,
+        available_node_count: NodeCount,
+    ):
+        def mutate_controls() -> BuilderVisualDraftAssemblyResult:
+            return selected.visual_draft_service_factory(context).mutate_controls(
+                request,
+                available_node_count=available_node_count,
+                preview_factory=selected.preview_factory,
+            )
+
+        try:
+            return await run_in_threadpool(mutate_controls)
+        except BuilderVisualDraftCommandError as error:
+            refusal = CatalogOperationRefusal(
+                code=error.code,
+                message=str(error),
+                ref=str(error.ref),
+                expected_revision=(
+                    str(error.expected_revision) if error.expected_revision is not None else None
+                ),
+                current_revision=(
+                    str(error.current_revision) if error.current_revision is not None else None
+                ),
+                cause_type=type(error).__name__,
+            )
+            return _catalog_refusal_response(CatalogAuthoringError(refusal))
+        except (CatalogRepositoryError, OSError) as error:
+            return _catalog_unavailable_response(error)
+
+    @router.post(
         "/draft/compile",
         response_model=BuilderVisualDraftAssemblyResult,
         responses={503: {"model": CatalogOperationRefusal}},
@@ -498,6 +684,20 @@ def create_builder_router(
                 selected.visual_draft_service_factory(context).customize_chain,
                 request,
             )
+        except BuilderVisualDraftCommandError as error:
+            refusal = CatalogOperationRefusal(
+                code=error.code,
+                message=str(error),
+                ref=str(error.ref),
+                expected_revision=(
+                    str(error.expected_revision) if error.expected_revision is not None else None
+                ),
+                current_revision=(
+                    str(error.current_revision) if error.current_revision is not None else None
+                ),
+                cause_type=type(error).__name__,
+            )
+            return _catalog_refusal_response(CatalogAuthoringError(refusal))
         except (CatalogRepositoryError, OSError) as error:
             return _catalog_unavailable_response(error)
 
@@ -680,6 +880,20 @@ def create_builder_router(
         return await invoke_catalog_draft(context, lambda service: service.patch(request))
 
     @router.post(
+        "/catalog/draft/controls/mutate",
+        response_model=CatalogComponentDraftEnvelope,
+        responses=_CATALOG_ERROR_RESPONSES,
+    )
+    async def mutate_catalog_draft_controls(
+        request: CatalogDraftControlMutationRequest,
+        context: Context,
+    ):
+        return await invoke_catalog_draft(
+            context,
+            lambda service: service.mutate_controls(request),
+        )
+
+    @router.post(
         "/catalog/draft/site-node/add",
         response_model=CatalogComponentDraftEnvelope,
         responses=_CATALOG_ERROR_RESPONSES,
@@ -722,17 +936,17 @@ def create_builder_router(
         )
 
     @router.post(
-        "/catalog/draft/replace-object",
-        response_model=CatalogComponentDraftEnvelope,
+        "/catalog/draft/apply-yaml",
+        response_model=CatalogDraftApplyYamlResult,
         responses=_CATALOG_ERROR_RESPONSES,
     )
-    async def replace_catalog_draft_object(
-        request: CatalogDraftReplaceObjectRequest,
+    async def apply_catalog_draft_yaml(
+        request: CatalogDraftApplyYamlRequest,
         context: Context,
     ):
         return await invoke_catalog_draft(
             context,
-            lambda service: service.replace_object(request),
+            lambda service: service.apply_yaml(request),
         )
 
     @router.post(
@@ -768,19 +982,31 @@ def create_builder_router(
         return await invoke_catalog(context, lambda service: service.delete_catalog(request))
 
     @router.post(
-        "/session/export",
-        response_model=CatalogSessionExport,
+        "/session/yaml/export",
+        response_model=CatalogSessionYamlExport,
         responses=_CATALOG_ERROR_RESPONSES,
     )
-    async def export_session(request: CatalogSessionExportRequest, context: Context):
-        return await invoke_catalog(context, lambda service: service.export_session(request))
+    async def export_session_yaml(
+        request: CatalogSessionYamlExportRequest,
+        context: Context,
+    ):
+        return await invoke_catalog(
+            context,
+            lambda service: service.export_session_yaml(request),
+        )
 
     @router.post(
-        "/session/import",
-        response_model=CatalogImportResult,
+        "/session/yaml/import",
+        response_model=CatalogSessionYamlImportResult,
         responses=_CATALOG_ERROR_RESPONSES,
     )
-    async def import_session(request: CatalogClosureImportRequest, context: Context):
-        return await invoke_catalog(context, lambda service: service.import_closure(request))
+    async def import_session_yaml(
+        request: CatalogSessionYamlImportRequest,
+        context: Context,
+    ):
+        return await invoke_catalog(
+            context,
+            lambda service: service.import_session_yaml(request),
+        )
 
     return router

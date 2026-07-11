@@ -11,7 +11,7 @@ from __future__ import annotations
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Annotated, Literal, get_origin
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from nodalarc.catalog_refs import (
     BodyRef,
@@ -34,11 +34,17 @@ from nodalarc.models.builder_api import (
     JsonDocument,
     OpaqueRevision,
 )
+from nodalarc.models.builder_controls_api import BuilderControlMutation, BuilderControlTree
 from nodalarc.models.catalog import ForwardingClass, PhasingMode
 from nodalarc.models.link_rules import MountRole
 from nodalarc.models.segment_session import RoutingBoundaryAdapter, RoutingProtocol
 
-BuilderVisualDraftMode = Literal["structured", "opaque_yaml"]
+BuilderVisualDraftProjectionStatus = Literal[
+    "applied",
+    "incomplete_authoring",
+    "no_valid_projection",
+    "pending_authoring",
+]
 BuilderVisualSchedulingPreset = Literal["leo-fast-handover", "geo-longest-pass"]
 type BuilderVisualPhasingMode = PhasingMode
 BuilderVisualOrbitShape = Literal["circular", "elliptical"]
@@ -94,19 +100,6 @@ class _BuilderVisualModel(BaseModel):
             ):
                 normalized[field_name] = tuple(normalized[field_name])
         return normalized
-
-
-class BuilderVisualCatalogRevision(_BuilderVisualModel):
-    """Expected revision for one component the structured draft may replace."""
-
-    ref: CatalogRef
-    expected_revision: OpaqueRevision
-
-    @model_validator(mode="after")
-    def _component_only(self) -> BuilderVisualCatalogRevision:
-        if self.ref.family == "sessions":
-            raise ValueError("component revision expectations cannot target sessions")
-        return self
 
 
 class BuilderVisualSpaceBoresight(_BuilderVisualModel):
@@ -340,37 +333,113 @@ class BuilderVisualWorkspace(_BuilderVisualModel):
     start_time: str = ""
     step_seconds: float | None = 1.0
     compression: float | None = 1.0
+    projection_revision: int | None = Field(default=None, ge=0)
+    control_tree: BuilderControlTree | None = None
+
+    @model_validator(mode="after")
+    def _control_tree_matches_projection_revision(self) -> BuilderVisualWorkspace:
+        if self.projection_revision is None:
+            if self.control_tree is not None:
+                raise ValueError("unapplied workspaces must not claim a control tree")
+        elif self.control_tree is None:
+            raise ValueError("applied workspaces require a backend-derived control tree")
+        elif self.control_tree.projection_revision != self.projection_revision:
+            raise ValueError("control tree revision must match the workspace projection")
+        return self
 
 
 class BuilderVisualDraftEnvelope(_BuilderVisualModel):
-    """Versioned visual draft in structured or lossless opaque-YAML mode."""
+    """Versioned stateless YAML buffer plus explicit authoring and applied facts."""
 
-    contract_version: Literal[1] = 1
+    contract_version: Literal[2] = 2
     draft_revision: int = Field(ge=0)
-    mode: BuilderVisualDraftMode
+    projection_status: BuilderVisualDraftProjectionStatus
     target_ref: SessionRef
     source_ref: SessionRef | None = None
     expected_session_revision: OpaqueRevision | None = None
-    expected_catalog_revisions: tuple[BuilderVisualCatalogRevision, ...] = ()
     catalog_documents: tuple[BuilderProposedCatalogDocument, ...] = ()
     session_name_is_placeholder: bool
     reserved_authoring_ids: tuple[str, ...]
-    workspace: BuilderVisualWorkspace | None = None
-    session_yaml: str | None = None
+    session_yaml: str
+    authoring_workspace: BuilderVisualWorkspace | None = None
+    applied_workspace: BuilderVisualWorkspace | None = None
+    applied_revision: int | None = Field(default=None, ge=0)
+    applied_session: JsonDocument | None = None
+
+    @field_validator("applied_session")
+    @classmethod
+    def _canonical_applied_session(cls, value: JsonDocument | None) -> JsonDocument | None:
+        if value is None:
+            return None
+        from nodalarc.models.segment_session import SegmentSessionConfig
+
+        return SegmentSessionConfig.model_validate(value).model_dump(
+            mode="json",
+            by_alias=True,
+            exclude_none=True,
+        )
 
     @model_validator(mode="after")
     def _mode_payload_and_authority_are_consistent(self) -> BuilderVisualDraftEnvelope:
         if parse_catalog_reference(self.target_ref).namespace != "user":
             raise ValueError("visual draft targets must use the user: namespace")
-        if self.mode == "structured":
-            if self.workspace is None or self.session_yaml is not None:
-                raise ValueError("structured drafts require workspace and forbid session_yaml")
-        elif self.workspace is not None or self.session_yaml is None:
-            raise ValueError("opaque_yaml drafts require session_yaml and forbid workspace")
-        if len({item.ref for item in self.expected_catalog_revisions}) != len(
-            self.expected_catalog_revisions
+        if self.source_ref == self.target_ref:
+            if self.source_ref is None:
+                raise ValueError("visual draft source identity is inconsistent")
+            if self.expected_session_revision is None:
+                raise ValueError("in-place visual drafts require an expected session revision")
+        elif self.expected_session_revision is not None:
+            raise ValueError(
+                "new and copied visual drafts cannot replace an existing session target"
+            )
+        applied_facts = (
+            self.applied_workspace,
+            self.applied_revision,
+            self.applied_session,
+        )
+        if any(item is None for item in applied_facts) and any(
+            item is not None for item in applied_facts
         ):
-            raise ValueError("expected catalog revisions must target unique refs")
+            raise ValueError("applied revision, canonical session, and workspace are one fact")
+        if self.projection_status == "applied":
+            if any(item is None for item in applied_facts):
+                raise ValueError("applied drafts require canonical session and workspace facts")
+            assert self.applied_workspace is not None and self.applied_revision is not None
+            if self.applied_revision != self.draft_revision:
+                raise ValueError(
+                    "fully applied drafts require matching current and applied revisions"
+                )
+            if self.applied_workspace.projection_revision != self.applied_revision:
+                raise ValueError("applied workspace must be stamped with applied_revision")
+            if self.authoring_workspace != self.applied_workspace:
+                raise ValueError("authoring workspace must equal the last applied workspace")
+        elif self.projection_status == "pending_authoring":
+            if any(item is None for item in applied_facts) or self.authoring_workspace is None:
+                raise ValueError("pending authoring requires both last-applied and authoring facts")
+            assert self.applied_workspace is not None and self.applied_revision is not None
+            if self.applied_revision > self.draft_revision:
+                raise ValueError("applied revision cannot be newer than current draft revision")
+            if self.applied_workspace.projection_revision != self.applied_revision:
+                raise ValueError("last-applied workspace must be stamped with applied_revision")
+            if self.authoring_workspace.projection_revision is not None:
+                raise ValueError("pending authoring workspace must not claim an applied revision")
+        elif self.projection_status == "incomplete_authoring":
+            if any(item is not None for item in applied_facts):
+                raise ValueError("incomplete authoring drafts must not claim applied facts")
+            if self.authoring_workspace is None:
+                raise ValueError("incomplete authoring drafts require an authoring workspace")
+            if self.authoring_workspace.projection_revision is not None:
+                raise ValueError("incomplete authoring workspaces must not claim a revision")
+        elif any(
+            item is not None
+            for item in (
+                self.authoring_workspace,
+                self.applied_workspace,
+                self.applied_revision,
+                self.applied_session,
+            )
+        ):
+            raise ValueError("no-valid-projection drafts must not carry graphical facts")
         if len({item.ref for item in self.catalog_documents}) != len(self.catalog_documents):
             raise ValueError("visual draft catalog documents must target unique refs")
         if len(set(self.reserved_authoring_ids)) != len(self.reserved_authoring_ids):
@@ -389,7 +458,7 @@ class BuilderVisualDraftCreateRequest(_BuilderVisualModel):
 
 
 class BuilderVisualDraftOpenRequest(_BuilderVisualModel):
-    """Open any stored session in lossless opaque-YAML authoring mode."""
+    """Open any stored session as synchronized YAML and graphical projections."""
 
     source_ref: SessionRef
     target_ref: SessionRef | None = None
@@ -399,6 +468,68 @@ class BuilderVisualDraftOpenRequest(_BuilderVisualModel):
         if self.target_ref is not None and self.target_ref.namespace != "user":
             raise ValueError("opened sessions must target a user: session ref")
         return self
+
+
+class BuilderVisualDraftApplyYamlRequest(_BuilderVisualModel):
+    """Apply one exact session YAML buffer to a fenced visual draft revision."""
+
+    draft: BuilderVisualDraftEnvelope
+    expected_draft_revision: int = Field(ge=0)
+    buffer_generation: int = Field(ge=0)
+    yaml_text: str = Field(max_length=1_048_576)
+
+
+class BuilderVisualDraftApplyYamlResult(_BuilderVisualModel):
+    """Applied projection or typed refusal for one exact session YAML buffer."""
+
+    draft: BuilderVisualDraftEnvelope
+    buffer_generation: int = Field(ge=0)
+    yaml_text: str
+    applied: bool
+    canonicalization_required: bool
+    issues: tuple[BuilderIssue, ...] = ()
+
+    @model_validator(mode="after")
+    def _result_matches_buffer_state(self) -> BuilderVisualDraftApplyYamlResult:
+        if self.draft.session_yaml != self.yaml_text:
+            raise ValueError("returned draft must preserve the exact applied YAML buffer")
+        if not self.applied and not self.issues:
+            raise ValueError("refused YAML application requires typed findings")
+        if not self.applied and self.canonicalization_required:
+            raise ValueError("refused YAML cannot require canonicalization")
+        return self
+
+
+class BuilderVisualDraftApplyWorkspaceRequest(_BuilderVisualModel):
+    """Apply one complete graphical workspace to a fenced draft revision."""
+
+    draft: BuilderVisualDraftEnvelope
+    expected_draft_revision: int = Field(ge=0)
+    workspace: BuilderVisualWorkspace
+
+
+class BuilderVisualDraftRetargetRequest(_BuilderVisualModel):
+    """Prepare a fenced draft for saving under one exact user session ref."""
+
+    draft: BuilderVisualDraftEnvelope
+    expected_draft_revision: int = Field(ge=0)
+    target_ref: SessionRef
+
+    @model_validator(mode="after")
+    def _target_is_user_owned(self) -> BuilderVisualDraftRetargetRequest:
+        if self.target_ref.namespace != "user":
+            raise ValueError("retargeted sessions must use the user: namespace")
+        if self.target_ref == self.draft.target_ref:
+            raise ValueError("retargeted sessions must choose a different session ref")
+        return self
+
+
+class BuilderVisualControlMutationRequest(_BuilderVisualModel):
+    """Apply an atomic batch through revision-scoped backend control identities."""
+
+    draft: BuilderVisualDraftEnvelope
+    expected_draft_revision: int = Field(ge=0)
+    commands: tuple[BuilderControlMutation, ...] = Field(min_length=1)
 
 
 class BuilderVisualDraftCompileRequest(_BuilderVisualModel):
@@ -679,6 +810,7 @@ class BuilderVisualCustomizeChainRequest(_BuilderVisualModel):
     """Fork the minimal catalog ancestor path for one placed nested component."""
 
     draft: BuilderVisualDraftEnvelope
+    expected_draft_revision: int = Field(ge=0)
     segment_id: str = Field(min_length=1, max_length=160)
     leaf_ref: CatalogRef
     target_leaf_ref: CatalogRef | None = None

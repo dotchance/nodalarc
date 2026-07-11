@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import hashlib
+from pathlib import PurePosixPath
 from typing import Literal, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
@@ -26,6 +26,7 @@ from nodalarc.models.builder_api import (
     Sha256Digest,
     ValidatedConfigurationJson,
 )
+from nodalarc.models.builder_controls_api import BuilderControlMutation, BuilderControlTree
 from nodalarc.models.builder_visual_api import (
     BuilderVisualGroundBoresight,
     BuilderVisualNode,
@@ -58,9 +59,9 @@ CatalogAuthoringRefusalCode = Literal[
     "catalog_authoring.impact_mismatch",
     "catalog_authoring.dependents_exist",
     "catalog_authoring.import_limit",
-    "catalog_authoring.import_digest_mismatch",
     "catalog_authoring.import_incomplete",
     "catalog_authoring.import_collision",
+    "catalog_authoring.stale_import_proposal",
     "catalog_authoring.persistence_failed",
 ]
 CatalogComponentFamily = Literal[
@@ -77,10 +78,6 @@ CatalogComponentFamily = Literal[
 CatalogDraftPatchOperation = Literal["add", "replace", "remove"]
 CatalogDraftIssueStage = Literal["structural", "reference", "runtime_support"]
 CatalogDraftBlockedOperation = Literal["save", "deploy"]
-
-
-def _yaml_digest(value: str) -> str:
-    return "sha256:" + hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
 class _CatalogApplicationModel(BaseModel):
@@ -259,6 +256,7 @@ class BuilderCatalogBootstrap(_CatalogApplicationModel):
     """Public documentation and catalog metadata needed to start Builder authoring."""
 
     contract_version: Literal[1] = 1
+    authoring_context_binding: str = Field(min_length=1)
     public_grammar_href: str = Field(min_length=1)
     capabilities: BuilderCatalogCapabilities
     families: tuple[CatalogFamilyMetadata, ...]
@@ -447,155 +445,139 @@ class CatalogDeleteResult(_CatalogApplicationModel):
     generation: OpaqueRevision
 
 
-class CatalogSessionExportRequest(_CatalogApplicationModel):
-    """Request an exact portable session closure, optionally revision-fenced."""
+class CatalogSessionYamlExportRequest(_CatalogApplicationModel):
+    """Request ordinary YAML files for one saved session."""
 
     session_ref: SessionRef
     expected_session_revision: OpaqueRevision | None = None
 
 
-class PortableCatalogYaml(_CatalogApplicationModel):
-    """One exact YAML file with its namespace-preserving portable path."""
+class CatalogYamlFile(_CatalogApplicationModel):
+    """One ordinary YAML file and its backend-derived logical path."""
 
-    ref: CatalogRef
-    family: CatalogFamily
-    preserved_path: str = Field(min_length=1)
-    exact_yaml: str = Field(min_length=1)
-    document_digest: Sha256Digest
-    revision: OpaqueRevision
+    logical_path: str = Field(min_length=1)
+    yaml_text: str = Field(min_length=1)
 
     @model_validator(mode="after")
-    def _family_matches_reference(self) -> PortableCatalogYaml:
-        if parse_catalog_reference(self.ref).family != self.family:
-            raise ValueError("portable YAML family must match its reference")
-        expected_path = f"catalog/{self.ref.namespace}/{self.ref.relative_path.as_posix()}"
-        if self.preserved_path != expected_path:
-            raise ValueError("portable YAML path must be derived from its reference")
-        if self.document_digest != _yaml_digest(self.exact_yaml):
-            raise ValueError("portable YAML digest must match its exact bytes")
+    def _path_is_contained_yaml(self) -> CatalogYamlFile:
+        path = PurePosixPath(self.logical_path)
+        if path.is_absolute() or not path.parts or ".." in path.parts:
+            raise ValueError("logical YAML path must be a contained relative path")
+        if path.suffix not in {".yaml", ".yml"}:
+            raise ValueError("logical YAML path must identify a YAML file")
         return self
 
 
-class CatalogSessionExport(_CatalogApplicationModel):
-    """Exact root session and complete dependency closure for portable export."""
+class CatalogSessionYamlExport(_CatalogApplicationModel):
+    """Ordinary root and catalog YAML files for browser-side file writing."""
 
-    contract_version: Literal[1]
     session_ref: SessionRef
     session_revision: OpaqueRevision
-    generation: OpaqueRevision
-    root: PortableCatalogYaml
-    entries: tuple[PortableCatalogYaml, ...]
-    document_digest: Sha256Digest
-    closure_digest: Sha256Digest
-    file_count: int = Field(gt=0)
-    total_bytes: int = Field(gt=0)
+    files: tuple[CatalogYamlFile, ...] = Field(min_length=1)
 
     @model_validator(mode="after")
-    def _inventory_is_self_consistent(self) -> CatalogSessionExport:
-        if self.root.ref != self.session_ref or self.root.family != "sessions":
-            raise ValueError("session export root must match session_ref")
-        if self.root.revision != self.session_revision:
-            raise ValueError("session export root revision must match session_revision")
-        if self.root.document_digest != self.document_digest:
-            raise ValueError("session export document digest must match the root")
-        refs = [entry.ref for entry in self.entries]
-        if self.root.ref in refs or len(set(refs)) != len(refs):
-            raise ValueError("session export refs must be unique")
-        if self.file_count != 1 + len(self.entries):
-            raise ValueError("session export file_count must include root and dependencies")
-        byte_total = len(self.root.exact_yaml.encode("utf-8")) + sum(
-            len(entry.exact_yaml.encode("utf-8")) for entry in self.entries
+    def _paths_are_unique_and_rooted(self) -> CatalogSessionYamlExport:
+        paths = tuple(file.logical_path for file in self.files)
+        expected_root = (
+            f"catalog/{self.session_ref.namespace}/{self.session_ref.relative_path.as_posix()}"
         )
-        if self.total_bytes != byte_total:
-            raise ValueError("session export total_bytes must match exact YAML bytes")
+        if paths[0] != expected_root:
+            raise ValueError("session YAML export must begin with its catalog path")
+        if len(set(paths)) != len(paths):
+            raise ValueError("session YAML export paths must be unique")
+        if any(not path.startswith("catalog/") for path in paths):
+            raise ValueError("YAML export paths must begin with catalog/")
         return self
 
 
-class CatalogImportEntry(_CatalogApplicationModel):
-    """One exact closure dependency supplied without a client-selected path."""
+class CatalogYamlImportFile(_CatalogApplicationModel):
+    """One YAML text with an optional graph-verified placement hint."""
 
-    ref: CatalogRef
-    exact_yaml: str = Field(min_length=1)
-    document_digest: Sha256Digest
+    yaml_text: str = Field(min_length=1)
+    logical_path_hint: str | None = Field(default=None, min_length=1)
 
     @model_validator(mode="after")
-    def _digest_matches_exact_yaml(self) -> CatalogImportEntry:
-        if self.document_digest != _yaml_digest(self.exact_yaml):
-            raise ValueError("import entry digest must match its exact YAML bytes")
+    def _hint_is_contained_yaml(self) -> CatalogYamlImportFile:
+        if self.logical_path_hint is None:
+            return self
+        path = PurePosixPath(self.logical_path_hint)
+        if path.is_absolute() or not path.parts or ".." in path.parts:
+            raise ValueError("logical YAML path hint must be a contained relative path")
+        if path.suffix not in {".yaml", ".yml"}:
+            raise ValueError("logical YAML path hint must identify a YAML file")
         return self
 
 
-class CatalogClosureImportRequest(_CatalogApplicationModel):
-    """Bounded exact transport closure proposed for canonical atomic import."""
+class CatalogSessionYamlImportRequest(_CatalogApplicationModel):
+    """Ordinary YAML files proposed for identity-derived catalog import."""
 
-    contract_version: Literal[1]
-    root_ref: SessionRef
-    root_yaml: str = Field(min_length=1)
-    document_digest: Sha256Digest
-    closure_digest: Sha256Digest
-    entries: tuple[CatalogImportEntry, ...]
+    yaml_files: tuple[CatalogYamlImportFile, ...] = Field(min_length=1)
     commit: bool = False
+    proposal_token: str | None = Field(default=None, min_length=1)
 
-    @field_validator("entries", mode="before")
+    @field_validator("yaml_files", mode="before")
     @classmethod
     def _accept_json_array(cls, value: object) -> object:
         return tuple(value) if isinstance(value, list) else value
 
     @model_validator(mode="after")
-    def _refs_are_unique(self) -> CatalogClosureImportRequest:
-        refs = [entry.ref for entry in self.entries]
-        if self.root_ref in refs or len(set(refs)) != len(refs):
-            raise ValueError("import closure refs must be unique and exclude the root")
+    def _commit_requires_reviewed_proposal(self) -> CatalogSessionYamlImportRequest:
+        if self.commit != (self.proposal_token is not None):
+            raise ValueError(
+                "commit requires a proposal token and proposal requests cannot carry one"
+            )
         return self
 
 
-class CatalogImportWrite(_CatalogApplicationModel):
+class CatalogYamlImportWrite(_CatalogApplicationModel):
     """One canonical user document proposed for transactional creation."""
 
     ref: CatalogRef
     family: CatalogFamily
-    exact_yaml: str = Field(min_length=1)
-    document_digest: Sha256Digest
+    logical_path: str = Field(min_length=1)
+    canonical_yaml: str = Field(min_length=1)
+    canonicalization_changed: bool
 
     @model_validator(mode="after")
-    def _is_user_owned_and_typed(self) -> CatalogImportWrite:
+    def _is_user_owned_and_typed(self) -> CatalogYamlImportWrite:
         parsed = parse_catalog_reference(self.ref)
         if parsed.namespace != "user" or parsed.family != self.family:
             raise ValueError("import writes must be typed user: catalog documents")
-        if self.document_digest != _yaml_digest(self.exact_yaml):
-            raise ValueError("import write digest must match its exact YAML bytes")
+        expected_path = f"catalog/{self.ref.namespace}/{self.ref.relative_path.as_posix()}"
+        if self.logical_path != expected_path:
+            raise ValueError("import write path must be derived from its reference")
         return self
 
 
-class CatalogImportCollision(_CatalogApplicationModel):
+class CatalogYamlImportCollision(_CatalogApplicationModel):
     """Exact identity collision that import will never rename or deep-match."""
 
     ref: CatalogRef
     reason: CatalogImportCollisionReason
-    incoming_digest: Sha256Digest
-    existing_digest: Sha256Digest | None = None
     existing_revision: OpaqueRevision | None = None
 
 
-class CatalogImportResult(_CatalogApplicationModel):
-    """Proposed, committed, unchanged, or blocked exact-closure import result."""
+class CatalogSessionYamlImportResult(_CatalogApplicationModel):
+    """Proposed, committed, unchanged, or blocked YAML-file import result."""
 
+    root_ref: SessionRef
     outcome: CatalogImportOutcome
     generation: OpaqueRevision
-    document_digest: Sha256Digest
-    closure_digest: Sha256Digest
-    proposed_writes: tuple[CatalogImportWrite, ...]
+    proposal_token: str | None = Field(default=None, min_length=1)
+    proposed_writes: tuple[CatalogYamlImportWrite, ...]
     identical_refs: tuple[CatalogRef, ...]
-    collisions: tuple[CatalogImportCollision, ...]
+    collisions: tuple[CatalogYamlImportCollision, ...]
 
     @model_validator(mode="after")
-    def _outcome_matches_contents(self) -> CatalogImportResult:
+    def _outcome_matches_contents(self) -> CatalogSessionYamlImportResult:
         if (self.outcome == "blocked") != bool(self.collisions):
             raise ValueError("blocked import outcome must match collision presence")
         if self.outcome == "unchanged" and self.proposed_writes:
             raise ValueError("unchanged imports cannot contain proposed writes")
         if self.outcome in {"proposed", "committed"} and not self.proposed_writes:
             raise ValueError("proposed or committed imports require a write set")
+        if (self.outcome == "proposed") != (self.proposal_token is not None):
+            raise ValueError("only proposed imports carry a proposal token")
         return self
 
 
@@ -608,7 +590,7 @@ class CatalogOperationRefusal(_CatalogApplicationModel):
     expected_revision: OpaqueRevision | None = None
     current_revision: OpaqueRevision | None = None
     impact: CatalogDependencyImpact | None = None
-    collisions: tuple[CatalogImportCollision, ...] = ()
+    collisions: tuple[CatalogYamlImportCollision, ...] = ()
     cause_type: str | None = None
 
 
@@ -619,6 +601,8 @@ class CatalogDraftIssue(_CatalogApplicationModel):
     stage: CatalogDraftIssueStage
     message: str = Field(min_length=1)
     pointer: str = Field(min_length=1, max_length=2048)
+    source_line: int | None = Field(default=None, ge=1)
+    source_column: int | None = Field(default=None, ge=1)
     blocks: tuple[CatalogDraftBlockedOperation, ...]
 
     @field_validator("blocks", mode="before")
@@ -650,6 +634,8 @@ class CatalogComponentDraftEnvelope(_CatalogApplicationModel):
     expected_source_revision: OpaqueRevision | None = None
     expected_target_revision: OpaqueRevision | None = None
     document: JsonDocument
+    projected_yaml: str = Field(min_length=1)
+    control_tree: BuilderControlTree
     issues: tuple[CatalogDraftIssue, ...]
 
     @field_validator("issues", mode="before")
@@ -670,8 +656,19 @@ class CatalogComponentDraftEnvelope(_CatalogApplicationModel):
                 raise ValueError("component draft source and target families must match")
             if self.expected_source_revision is None:
                 raise ValueError("component draft sources require an expected revision")
+            if self.source_ref == self.target_ref:
+                if source.namespace != "user":
+                    raise ValueError("in-place component drafts must edit a user: source")
+                if self.expected_target_revision != self.expected_source_revision:
+                    raise ValueError(
+                        "in-place component drafts require matching source and target revisions"
+                    )
+            elif self.expected_target_revision is not None:
+                raise ValueError("component fork targets must not already exist")
         elif self.expected_source_revision is not None:
             raise ValueError("expected_source_revision requires source_ref")
+        elif self.expected_target_revision is not None:
+            raise ValueError("new component drafts cannot replace an existing target")
 
         wrapper = catalog_family_spec(self.family).wrapper
         if wrapper is None:
@@ -680,6 +677,8 @@ class CatalogComponentDraftEnvelope(_CatalogApplicationModel):
             raise ValueError("component draft document must retain its family wrapper")
         if self.document[wrapper].get("id") != self.target_ref.relative_path.stem:
             raise ValueError("component draft object id must match target_ref")
+        if self.control_tree.projection_revision != self.draft_revision:
+            raise ValueError("component controls must match the draft revision")
         return self
 
 
@@ -740,6 +739,19 @@ class CatalogDraftPatchRequest(_CatalogApplicationModel):
         return tuple(value) if isinstance(value, list) else value
 
 
+class CatalogDraftControlMutationRequest(_CatalogApplicationModel):
+    """Apply canonical graphical commands under one component draft revision."""
+
+    draft: CatalogComponentDraftEnvelope
+    expected_draft_revision: int = Field(ge=0)
+    commands: tuple[BuilderControlMutation, ...] = Field(min_length=1, max_length=64)
+
+    @field_validator("commands", mode="before")
+    @classmethod
+    def _accept_json_commands(cls, value: object) -> object:
+        return tuple(value) if isinstance(value, list) else value
+
+
 class CatalogDraftAddSiteNodeRequest(_CatalogApplicationModel):
     """Add one explicitly identified node using backend-derived persisted fields."""
 
@@ -783,12 +795,39 @@ class CatalogDraftAddNodeEthernetPortRequest(_CatalogApplicationModel):
         return self
 
 
-class CatalogDraftReplaceObjectRequest(_CatalogApplicationModel):
-    """Parse and replace one advanced component object under backend authority."""
+class CatalogDraftApplyYamlRequest(_CatalogApplicationModel):
+    """Apply one exact YAML buffer under backend grammar authority."""
 
     draft: CatalogComponentDraftEnvelope
     expected_draft_revision: int = Field(ge=0)
-    raw_object_json: str = Field(min_length=2, max_length=1_048_576)
+    yaml_text: str = Field(max_length=1_048_576)
+
+
+class CatalogDraftApplyYamlResult(_CatalogApplicationModel):
+    """Applied projection or typed refusal for one exact YAML buffer."""
+
+    draft: CatalogComponentDraftEnvelope
+    yaml_text: str
+    applied: bool
+    canonicalization_required: bool
+    issues: tuple[CatalogDraftIssue, ...]
+
+    @field_validator("issues", mode="before")
+    @classmethod
+    def _accept_json_issues(cls, value: object) -> object:
+        return tuple(value) if isinstance(value, list) else value
+
+    @model_validator(mode="after")
+    def _result_matches_application_state(self) -> CatalogDraftApplyYamlResult:
+        if self.applied and self.issues != self.draft.issues:
+            raise ValueError("applied YAML findings must match the returned draft")
+        if not self.applied and not self.issues:
+            raise ValueError("refused YAML application requires typed findings")
+        if self.canonicalization_required != (
+            self.applied and self.yaml_text != self.draft.projected_yaml
+        ):
+            raise ValueError("canonicalization verdict must match the applied YAML projection")
+        return self
 
 
 class CatalogDraftCompileRequest(_CatalogApplicationModel):

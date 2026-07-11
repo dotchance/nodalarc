@@ -9,16 +9,20 @@ import type {
   BuilderSessionSaveResult,
   BuilderVisualCustomizeChainRequest,
   BuilderVisualCustomizeChainResult,
+  BuilderVisualControlMutationRequest,
   BuilderVisualDraftAssemblyResult,
+  BuilderVisualDraftApplyWorkspaceRequest,
+  BuilderVisualDraftApplyYamlRequest,
+  BuilderVisualDraftApplyYamlResult,
   BuilderVisualDraftCommandRequest,
   BuilderVisualDraftCommandResult,
   BuilderVisualDraftCompileRequest,
   BuilderVisualDraftCreateRequest,
   BuilderVisualDraftEnvelope,
   BuilderVisualDraftOpenRequest,
+  BuilderVisualDraftRetargetRequest,
   BuilderVisualWalkerLayoutRequest,
   BuilderVisualWalkerLayoutResult,
-  CatalogClosureImportRequest,
   CatalogComponentDraftEnvelope,
   CatalogDeleteRequest,
   CatalogDeleteResult,
@@ -27,20 +31,23 @@ import type {
   CatalogDraftAddNodeEthernetPortRequest,
   CatalogDraftAddNodeTerminalMountRequest,
   CatalogDraftAddSiteNodeRequest,
+  CatalogDraftApplyYamlRequest,
+  CatalogDraftApplyYamlResult,
   CatalogDraftCompileRequest,
   CatalogDraftCompileResult,
+  CatalogDraftControlMutationRequest,
   CatalogDraftNewRequest,
   CatalogDraftOpenRequest,
   CatalogDraftPatchRequest,
-  CatalogDraftReplaceObjectRequest,
   CatalogDraftSaveRequest,
   CatalogDraftSaveResult,
   CatalogGetRequest,
-  CatalogImportResult,
   CatalogListPage,
   CatalogListRequest,
-  CatalogSessionExport,
-  CatalogSessionExportRequest,
+  CatalogSessionYamlExport,
+  CatalogSessionYamlExportRequest,
+  CatalogSessionYamlImportRequest,
+  CatalogSessionYamlImportResult,
   CoveragePreviewResult,
   TransitionOperation,
   WizardCompileRequest,
@@ -122,6 +129,12 @@ export function patchCatalogDraft(
   return request("/catalog/draft/patch", input);
 }
 
+export function mutateCatalogDraftControls(
+  input: CatalogDraftControlMutationRequest,
+): Promise<CatalogComponentDraftEnvelope> {
+  return request("/catalog/draft/controls/mutate", input);
+}
+
 export function addCatalogDraftSiteNode(
   input: CatalogDraftAddSiteNodeRequest,
 ): Promise<CatalogComponentDraftEnvelope> {
@@ -140,10 +153,10 @@ export function addCatalogDraftNodeEthernet(
   return request("/catalog/draft/node-ethernet/add", input);
 }
 
-export function replaceCatalogDraftObject(
-  input: CatalogDraftReplaceObjectRequest,
-): Promise<CatalogComponentDraftEnvelope> {
-  return request("/catalog/draft/replace-object", input);
+export function applyCatalogDraftYaml(
+  input: CatalogDraftApplyYamlRequest,
+): Promise<CatalogDraftApplyYamlResult> {
+  return request("/catalog/draft/apply-yaml", input);
 }
 
 export function compileCatalogDraft(
@@ -174,6 +187,30 @@ export function compileVisualDraft(
   input: BuilderVisualDraftCompileRequest,
 ): Promise<BuilderVisualDraftAssemblyResult> {
   return request("/draft/compile", input);
+}
+
+export function applyVisualDraftYaml(
+  input: BuilderVisualDraftApplyYamlRequest,
+): Promise<BuilderVisualDraftApplyYamlResult> {
+  return request("/draft/apply-yaml", input);
+}
+
+export function applyVisualDraftWorkspace(
+  input: BuilderVisualDraftApplyWorkspaceRequest,
+): Promise<BuilderVisualDraftAssemblyResult> {
+  return request("/draft/apply-workspace", input);
+}
+
+export function mutateVisualDraftControls(
+  input: BuilderVisualControlMutationRequest,
+): Promise<BuilderVisualDraftAssemblyResult> {
+  return request("/draft/control-mutate", input);
+}
+
+export function retargetVisualDraft(
+  input: BuilderVisualDraftRetargetRequest,
+): Promise<BuilderVisualDraftAssemblyResult> {
+  return request("/draft/retarget", input);
 }
 
 export function applyVisualDraftCommand(
@@ -258,14 +295,14 @@ export function deleteCatalogDocument(input: CatalogDeleteRequest): Promise<Cata
   return request("/catalog/delete", input);
 }
 
-export function exportCatalogSession(
-  input: CatalogSessionExportRequest,
-): Promise<CatalogSessionExport> {
-  return request("/session/export", input);
+export function exportCatalogSessionYaml(
+  input: CatalogSessionYamlExportRequest,
+): Promise<CatalogSessionYamlExport> {
+  return request("/session/yaml/export", input);
 }
 
-export function importCatalogSession(
-  input: CatalogClosureImportRequest,
-): Promise<CatalogImportResult> {
-  return request("/session/import", input);
+export function importCatalogSessionYaml(
+  input: CatalogSessionYamlImportRequest,
+): Promise<CatalogSessionYamlImportResult> {
+  return request("/session/yaml/import", input);
 }

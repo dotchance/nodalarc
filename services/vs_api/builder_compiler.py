@@ -234,7 +234,7 @@ def _staleness_issue(
     )
 
 
-def _check_proposed_revisions(
+def _check_proposed_creates(
     proposals: tuple[BuilderProposedCatalogDocument, ...],
     snapshot: CatalogReadSnapshot,
 ) -> list[BuilderIssue]:
@@ -245,29 +245,12 @@ def _check_proposed_revisions(
         except CatalogNotFoundError:
             existing = None
 
-        if proposal.expected_revision is None:
-            if existing is not None:
-                issues.append(
-                    _staleness_issue(
-                        proposal,
-                        f"Catalog document {proposal.ref} already exists; an expected revision "
-                        "is required to replace it",
-                    )
-                )
-        elif existing is None:
+        if existing is not None:
             issues.append(
                 _staleness_issue(
                     proposal,
-                    f"Catalog document {proposal.ref} does not exist at expected revision "
-                    f"{proposal.expected_revision}",
-                )
-            )
-        elif str(existing.revision) != proposal.expected_revision:
-            issues.append(
-                _staleness_issue(
-                    proposal,
-                    f"Catalog document {proposal.ref} is stale: expected "
-                    f"{proposal.expected_revision}, current revision is {existing.revision}",
+                    f"Catalog document {proposal.ref} already exists; session proposals are "
+                    "create-only and existing components must be edited through the catalog",
                 )
             )
     return issues
@@ -473,7 +456,7 @@ def compile_builder_draft(
         closure = CatalogClosureCollector.collect(canonical_session.yaml_bytes, overlay)
     except _ReachableProposalValidationError as error:
         issues.extend(_reachable_proposal_validation_issues(error))
-        issues.extend(_check_proposed_revisions(overlay.reached_proposals(), snapshot))
+        issues.extend(_check_proposed_creates(overlay.reached_proposals(), snapshot))
         return _compile_result(
             request,
             canonical_session=canonical_session,
@@ -484,7 +467,7 @@ def compile_builder_draft(
         )
     except CatalogClosureError as error:
         issues.append(_reference_issue(error, fallback_ref=str(request.target_ref)))
-        issues.extend(_check_proposed_revisions(overlay.reached_proposals(), snapshot))
+        issues.extend(_check_proposed_creates(overlay.reached_proposals(), snapshot))
         return _compile_result(
             request,
             canonical_session=canonical_session,
@@ -502,7 +485,7 @@ def compile_builder_draft(
         if proposal.ref not in reached_refs
     )
     request = _scope_request_to_proposals(request, reached_proposals)
-    issues.extend(_check_proposed_revisions(reached_proposals, snapshot))
+    issues.extend(_check_proposed_creates(reached_proposals, snapshot))
     if excluded_proposals:
         issues.append(_excluded_proposals_issue(request, excluded_proposals))
 

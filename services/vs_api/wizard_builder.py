@@ -382,6 +382,7 @@ def _customize_selected_constellation(
         proposals.append(
             BuilderProposedCatalogDocument(
                 ref=proposed_orbit_ref,
+                origin="generated",
                 document=cast(JsonDocument, {"orbit": orbit}),
             )
         )
@@ -391,6 +392,7 @@ def _customize_selected_constellation(
     proposals.append(
         BuilderProposedCatalogDocument(
             ref=proposed_constellation_ref,
+            origin="generated",
             document=cast(JsonDocument, {"constellation": constellation}),
         )
     )
@@ -570,6 +572,7 @@ def _custom_geometry_sources(
     proposals = (
         BuilderProposedCatalogDocument(
             ref=orbit_ref,
+            origin="generated",
             document=cast(
                 JsonDocument,
                 _custom_orbit_document(
@@ -581,6 +584,7 @@ def _custom_geometry_sources(
         ),
         BuilderProposedCatalogDocument(
             ref=constellation_ref,
+            origin="generated",
             document=cast(
                 JsonDocument,
                 _custom_constellation_document(
@@ -605,6 +609,7 @@ def _ground_source(
     site_set_ref = SiteSetRef(f"user:site-sets/wizard/{site_set_id}.yaml")
     proposal = BuilderProposedCatalogDocument(
         ref=site_set_ref,
+        origin="generated",
         document=cast(
             JsonDocument,
             _custom_site_set_document(intent, site_set_id=site_set_id),

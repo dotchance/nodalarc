@@ -112,15 +112,7 @@ export function SessionWizard({
   );
 
   const handleDownload = useCallback(async () => {
-    const portableClosure = await wizard.exportClosure();
-    if (!portableClosure) return;
-    const name = wizard.state.constellation?.name ?? "session";
-    const proto = wizard.state.protocol ?? "unknown";
-    downloadBlob(
-      JSON.stringify(portableClosure, null, 2),
-      `${name}-${proto}.nodalarc-session-closure.json`,
-      "application/json",
-    );
+    await wizard.exportYaml();
   }, [wizard]);
 
   const allGroupASelected =
@@ -216,8 +208,8 @@ export function SessionWizard({
                   aria-label="Session YAML file"
                 />
                 <span className="launcher-hint">
-                  Referenced components must already exist in your catalog. Import a complete user:
-                  closure in Session Builder.
+                  Referenced components must already exist in your catalog. Import all referenced
+                  user: component YAML files in Session Builder.
                 </span>
               </div>
               {uploadError && <div className="wizard-error">{uploadError}</div>}

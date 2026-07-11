@@ -93,7 +93,7 @@ vi.mock("../useWizardApi", () => ({
     clearPreview: vi.fn(),
     generate: vi.fn(),
     deploy: vi.fn(),
-    exportClosure: vi.fn(),
+    exportYaml: vi.fn(),
     deployUploadedYaml: vi.fn(),
     previewCoverage: vi.fn(),
   }),

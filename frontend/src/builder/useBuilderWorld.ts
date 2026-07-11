@@ -6,21 +6,26 @@ import { useState, useEffect, useCallback, useRef, useSyncExternalStore } from "
 import { downloadBlob } from "../ui/downloadBlob";
 import {
   applyVisualDraftCommand,
+  applyVisualDraftWorkspace,
+  applyVisualDraftYaml,
   compileVisualDraft,
   createVisualDraft,
   customizeVisualDraftChain,
   deleteCatalogDocument,
   deployBuilderSession,
-  exportCatalogSession,
+  exportCatalogSessionYaml,
   getBuilderBootstrap,
   getCatalogDependents,
   getCatalogDocument,
-  importCatalogSession,
+  importCatalogSessionYaml,
   listCatalog,
+  mutateVisualDraftControls,
   openVisualDraft,
+  retargetVisualDraft,
   saveBuilderSession,
 } from "./builderApiClient";
 import type { BuilderResolveError } from "./builderTypes";
+import { writeSessionYamlExport } from "./sessionYamlTransfer";
 import type {
   BuilderCatalogBootstrap,
   BuilderCompileResult,
@@ -33,58 +38,27 @@ import type {
   BuilderSessionDeployRequest,
   BuilderVisualCustomizeChainRequest,
   BuilderVisualCustomizeChainResult,
-  BuilderVisualCatalogRevision,
+  BuilderVisualControlMutationRequest,
   BuilderVisualDraftAssemblyResult,
+  BuilderVisualDraftApplyYamlResult,
   BuilderVisualDraftCommandRequest,
   BuilderVisualDraftCommandResult,
   BuilderVisualDraftCreateRequest,
   BuilderVisualDraftEnvelope,
+  BuilderVisualDraftRetargetRequest,
+  BuilderVisualWorkspace,
   CatalogDocumentSummary,
-  CatalogClosureImportRequest,
   CatalogFamily,
-  CatalogImportResult,
-  CatalogSessionExport,
+  CatalogSessionYamlImportResult,
+  CatalogYamlImportFile,
   CatalogDraftSaveResult,
   SessionRef,
 } from "./generated/builderApi";
-import { isVisualDraftEnvelopeForMode } from "./structuredDraftRecovery";
-
-const OPAQUE_DRAFT_AUTOSAVE_KEY = "nodalarc-builder-opaque-yaml-draft";
-const OPAQUE_DRAFT_AUTOSAVE_VERSION = 2;
-const OPAQUE_DRAFT_AUTOSAVE_DEBOUNCE_MS = 800;
-
-export type OpaqueDraftRestoreResult =
-  | { ok: true }
-  | { ok: false; reason: string };
-
-function _readOpaqueDraft(raw: string): BuilderVisualDraftEnvelope | null {
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    if (
-      parsed === null ||
-      typeof parsed !== "object" ||
-      Array.isArray(parsed) ||
-      Object.keys(parsed).length !== 2
-    ) {
-      return null;
-    }
-    const recovery = parsed as Record<string, unknown>;
-    if (
-      recovery.v !== OPAQUE_DRAFT_AUTOSAVE_VERSION ||
-      !isVisualDraftEnvelopeForMode(recovery.draft, "opaque_yaml")
-    ) {
-      return null;
-    }
-    return structuredClone(recovery.draft);
-  } catch {
-    return null;
-  }
-}
 
 function _recoveredDraftSummary(draft: BuilderVisualDraftEnvelope): CatalogDocumentSummary {
   const ref = draft.source_ref ?? draft.target_ref;
   const displayName = ref.split("/").pop()?.replace(/\.ya?ml$/, "") ?? "YAML draft";
-  const serialized = draft.session_yaml ?? JSON.stringify(draft.workspace ?? {});
+  const serialized = draft.session_yaml;
   return {
     ref,
     family: "sessions",
@@ -395,70 +369,30 @@ export async function exportCatalogObject(ref: string): Promise<void> {
   downloadBlob(document.canonical_yaml, ref.split("/").pop() ?? "object.yaml");
 }
 
-/** Export a session and its exact reference closure as the backend's portable
- *  transfer envelope. The YAML members remain the configuration artifacts;
- *  this JSON is only a browser-friendly carrier for those exact bytes. */
-export async function exportSessionClosure(entry: CatalogDocumentSummary): Promise<void> {
-  const closureExport = await exportCatalogSession({
+/** Export ordinary session and catalog YAML files without introducing a
+ *  user-facing carrier format. Supported browsers preserve the backend-owned
+ *  directory layout; other browsers download each YAML document separately. */
+export async function exportSessionYaml(entry: CatalogDocumentSummary): Promise<void> {
+  const yamlExport = await exportCatalogSessionYaml({
     session_ref: entry.ref as SessionRef,
     expected_session_revision: entry.revision,
   });
-  const filename = `${entry.ref.split("/").pop()?.replace(/\.ya?ml$/, "") ?? "session"}.nodalarc-session-closure.json`;
-  downloadBlob(JSON.stringify(closureExport, null, 2), filename, "application/json");
+  await writeSessionYamlExport(entry.ref, yamlExport.files);
 }
 
-function _closureImportRequest(
-  portableClosure: unknown,
-  commit: boolean,
-): CatalogClosureImportRequest {
-  if (!portableClosure || typeof portableClosure !== "object" || Array.isArray(portableClosure)) {
-    throw new Error("session transfer file must contain one JSON object");
-  }
-  const value = portableClosure as Partial<CatalogSessionExport>;
-  if (
-    value.contract_version !== 1 ||
-    typeof value.session_ref !== "string" ||
-    typeof value.document_digest !== "string" ||
-    typeof value.closure_digest !== "string" ||
-    !value.root ||
-    typeof value.root.exact_yaml !== "string" ||
-    !Array.isArray(value.entries)
-  ) {
-    throw new Error("session transfer file is missing its typed closure fields");
-  }
-  return {
-    contract_version: 1,
-    root_ref: value.session_ref as SessionRef,
-    root_yaml: value.root.exact_yaml,
-    document_digest: value.document_digest,
-    closure_digest: value.closure_digest,
-    entries: value.entries.map((entry) => {
-      if (
-        !entry ||
-        typeof entry.ref !== "string" ||
-        typeof entry.exact_yaml !== "string" ||
-        typeof entry.document_digest !== "string"
-      ) {
-        throw new Error("session transfer file contains an invalid closure entry");
-      }
-      return {
-        ref: entry.ref,
-        exact_yaml: entry.exact_yaml,
-        document_digest: entry.document_digest,
-      };
-    }),
-    commit,
-  };
-}
-
-/** Ask the backend to validate or atomically commit one exact closure. The
- *  browser checks only the transport shape; YAML grammar, identity, graph, and
- *  collision authority remain entirely on the server. */
-export async function importSessionClosure(
-  portableClosure: unknown,
-  commit: boolean,
-): Promise<CatalogImportResult> {
-  const result = await importCatalogSession(_closureImportRequest(portableClosure, commit));
+/** Ask the backend to validate or atomically commit ordinary YAML texts. YAML
+ *  grammar, document identity, reference placement, and collision authority
+ *  remain entirely on the server. */
+export async function importSessionYamlFiles(
+  yamlFiles: readonly CatalogYamlImportFile[],
+  proposalToken: string | null,
+): Promise<CatalogSessionYamlImportResult> {
+  if (yamlFiles.length === 0) throw new Error("select at least one YAML file");
+  const result = await importCatalogSessionYaml({
+    yaml_files: yamlFiles,
+    commit: proposalToken !== null,
+    ...(proposalToken === null ? {} : { proposal_token: proposalToken }),
+  });
   if (result.outcome === "committed") {
     const families = new Set(result.proposed_writes.map((entry) => entry.family));
     for (const family of families) await refreshCatalogFamily(family);
@@ -487,13 +421,74 @@ export async function deleteUserObject(ref: string): Promise<void> {
   _bumpLibraryRevision();
 }
 
+export type SessionDraftWriter =
+  | "create"
+  | "open"
+  | "yaml"
+  | "workspace"
+  | "command"
+  | "customize"
+  | "control"
+  | "retarget"
+  | "compile"
+  | "save";
+
+export interface SessionYamlBufferState {
+  text: string;
+  appliedText: string;
+  generation: number;
+  dirty: boolean;
+  applied: boolean;
+  canonicalizationRequired: boolean;
+  canonicalizationAccepted: boolean;
+  issues: readonly BuilderIssue[];
+}
+
+export interface SessionCoordinatorCapture {
+  epoch: number;
+  draftRevision: number;
+  bufferGeneration: number;
+  documentDigest: string | null;
+  dependencyDigest: string | null;
+}
+
+export interface BuilderSessionSaveAdoption {
+  result: BuilderSessionSaveResult;
+  reopenedDraft: BuilderVisualDraftEnvelope | null;
+  postCommitError: string | null;
+}
+
+const EMPTY_YAML_BUFFER: SessionYamlBufferState = {
+  text: "",
+  appliedText: "",
+  generation: 0,
+  dirty: false,
+  applied: false,
+  canonicalizationRequired: false,
+  canonicalizationAccepted: false,
+  issues: [],
+};
+
+class SupersededSessionOperation extends Error {
+  constructor() {
+    super("the session changed while this operation was running");
+  }
+}
+
 export function useBuilderWorld() {
   const [sessions, setSessions] = useState<CatalogDocumentSummary[]>([]);
   const [sessionsError, setSessionsError] = useState<string | null>(null);
   const [openedSession, setOpenedSession] = useState<CatalogDocumentSummary | null>(null);
   const [visualDraft, setVisualDraftState] = useState<BuilderVisualDraftEnvelope | null>(null);
   const visualDraftRef = useRef<BuilderVisualDraftEnvelope | null>(null);
-  const opaqueHistory = useRef<BuilderVisualDraftEnvelope[]>([]);
+  const [yamlBuffer, setYamlBufferState] = useState<SessionYamlBufferState>(EMPTY_YAML_BUFFER);
+  const yamlBufferRef = useRef<SessionYamlBufferState>(EMPTY_YAML_BUFFER);
+  const [writer, setWriter] = useState<SessionDraftWriter | null>(null);
+  const writerRef = useRef<SessionDraftWriter | null>(null);
+  const writerTokenRef = useRef(0);
+  const activeWriterTokenRef = useRef(0);
+  const epochRef = useRef(0);
+  const writeQueueRef = useRef<Promise<void>>(Promise.resolve());
   const [assemblyResult, setAssemblyResult] = useState<BuilderVisualDraftAssemblyResult | null>(
     null,
   );
@@ -505,7 +500,10 @@ export function useBuilderWorld() {
   const [compileIssues, setCompileIssues] = useState<readonly BuilderIssue[]>([]);
   const [settledDocumentDigest, setSettledDocumentDigest] = useState<string | null>(null);
   const [settledDependencySha256, setSettledDependencySha256] = useState<string | null>(null);
-  const resolveSeq = useRef(0);
+  const settledDigestsRef = useRef<{ document: string | null; dependency: string | null }>({
+    document: null,
+    dependency: null,
+  });
 
   const refreshSessions = useCallback(async () => {
     try {
@@ -536,59 +534,68 @@ export function useBuilderWorld() {
     setVisualDraftState(draft);
   }, []);
 
-  const currentVisualDraft = useCallback(() => visualDraftRef.current, []);
-
-  useEffect(() => {
-    if (visualDraft?.mode !== "opaque_yaml") return;
-    const timer = setTimeout(() => {
-      try {
-        localStorage.setItem(
-          OPAQUE_DRAFT_AUTOSAVE_KEY,
-          JSON.stringify({ v: OPAQUE_DRAFT_AUTOSAVE_VERSION, draft: visualDraft }),
-        );
-      } catch {
-        // Storage quota and privacy-mode failures must never break editing.
-      }
-    }, OPAQUE_DRAFT_AUTOSAVE_DEBOUNCE_MS);
-    return () => clearTimeout(timer);
-  }, [visualDraft]);
-
-  const hasOpaqueAutosave = useCallback((): boolean => {
-    try {
-      const raw = localStorage.getItem(OPAQUE_DRAFT_AUTOSAVE_KEY);
-      return raw !== null && _readOpaqueDraft(raw) !== null;
-    } catch {
-      return false;
-    }
+  const setYamlBuffer = useCallback((next: SessionYamlBufferState) => {
+    yamlBufferRef.current = next;
+    setYamlBufferState(next);
   }, []);
 
-  const stashOpaqueDraft = useCallback((): void => {
-    const current = visualDraftRef.current;
-    if (current?.mode !== "opaque_yaml") return;
-    try {
-      localStorage.setItem(
-        OPAQUE_DRAFT_AUTOSAVE_KEY,
-        JSON.stringify({ v: OPAQUE_DRAFT_AUTOSAVE_VERSION, draft: current }),
-      );
-    } catch {
-      // The displacing gesture remains usable when browser storage is unavailable.
-    }
+  const beginEpoch = useCallback(() => {
+    epochRef.current += 1;
+    writeQueueRef.current = Promise.resolve();
+    writerTokenRef.current += 1;
+    activeWriterTokenRef.current = writerTokenRef.current;
+    writerRef.current = null;
+    setWriter(null);
+    setLoading(false);
+    return epochRef.current;
   }, []);
 
-  const restoreOpaqueAutosave = useCallback((): OpaqueDraftRestoreResult => {
-    let raw: string | null = null;
-    try {
-      raw = localStorage.getItem(OPAQUE_DRAFT_AUTOSAVE_KEY);
-    } catch {
-      return { ok: false, reason: "browser storage is unavailable" };
-    }
-    if (raw === null) return { ok: false, reason: "there is no YAML draft to restore" };
-    const draft = _readOpaqueDraft(raw);
-    if (!draft) return { ok: false, reason: "the saved YAML draft could not be read" };
-    resolveSeq.current += 1;
-    opaqueHistory.current = [];
-    setOpenedSession(_recoveredDraftSummary(draft));
-    setVisualDraft(draft);
+  const assertEpoch = useCallback((epoch: number) => {
+    if (epoch !== epochRef.current) throw new SupersededSessionOperation();
+  }, []);
+
+  const enqueueWriter = useCallback(
+    async <Result,>(
+      kind: SessionDraftWriter,
+      operation: (epoch: number) => Promise<Result>,
+      assertEpochAfter = true,
+    ): Promise<Result> => {
+      const epoch = epochRef.current;
+      let resolveResult!: (result: Result) => void;
+      let rejectResult!: (reason: unknown) => void;
+      const resultPromise = new Promise<Result>((resolve, reject) => {
+        resolveResult = resolve;
+        rejectResult = reject;
+      });
+      writeQueueRef.current = writeQueueRef.current
+        .catch(() => undefined)
+        .then(async () => {
+          const writerToken = ++writerTokenRef.current;
+          activeWriterTokenRef.current = writerToken;
+          try {
+            assertEpoch(epoch);
+            writerRef.current = kind;
+            setWriter(kind);
+            setLoading(true);
+            const result = await operation(epoch);
+            if (assertEpochAfter) assertEpoch(epoch);
+            resolveResult(result);
+          } catch (cause) {
+            rejectResult(cause);
+          } finally {
+            if (activeWriterTokenRef.current === writerToken) {
+              writerRef.current = null;
+              setWriter(null);
+              setLoading(false);
+            }
+          }
+        });
+      return resultPromise;
+    },
+    [assertEpoch],
+  );
+
+  const resetCompileFacts = useCallback(() => {
     setAssemblyResult(null);
     setCompileResult(null);
     setCompileIssues([]);
@@ -597,28 +604,32 @@ export function useBuilderWorld() {
     setResolveError(null);
     setSettledDocumentDigest(null);
     setSettledDependencySha256(null);
-    setLoading(false);
-    return { ok: true };
-  }, [setVisualDraft]);
+    settledDigestsRef.current = { document: null, dependency: null };
+  }, []);
 
-  const adoptRecoveredStructuredDraft = useCallback((draft: BuilderVisualDraftEnvelope) => {
-    if (draft.mode !== "structured") {
-      throw new Error("structured recovery requires a structured visual draft");
-    }
-    resolveSeq.current += 1;
-    opaqueHistory.current = [];
+  const adoptRecoveredStructuredDraft = useCallback((
+    draft: BuilderVisualDraftEnvelope,
+    recoveredYaml?: SessionYamlBufferState,
+  ) => {
+    beginEpoch();
     setOpenedSession(draft.source_ref ? _recoveredDraftSummary(draft) : null);
     setVisualDraft(draft);
-    setAssemblyResult(null);
-    setCompileResult(null);
-    setCompileIssues([]);
-    setWorld(null);
-    setDocumentYaml(null);
-    setResolveError(null);
-    setSettledDocumentDigest(null);
-    setSettledDependencySha256(null);
-    setLoading(false);
-  }, [setVisualDraft]);
+    setYamlBuffer(
+      recoveredYaml ?? {
+        text: draft.session_yaml,
+        appliedText: draft.session_yaml,
+        generation: 0,
+        dirty: false,
+        applied:
+          draft.projection_status === "applied" ||
+          draft.projection_status === "incomplete_authoring",
+        canonicalizationRequired: false,
+        canonicalizationAccepted: false,
+        issues: [],
+      },
+    );
+    resetCompileFacts();
+  }, [beginEpoch, resetCompileFacts, setVisualDraft, setYamlBuffer]);
 
   const adoptCompileResult = useCallback((result: BuilderVisualDraftAssemblyResult) => {
     const compile = result.compile_result;
@@ -633,232 +644,492 @@ export function useBuilderWorld() {
     setWorld(preview ?? null);
     setSettledDocumentDigest(compile.digests?.document ?? null);
     setSettledDependencySha256(compile.digests?.dependency ?? null);
+    settledDigestsRef.current = {
+      document: compile.digests?.document ?? null,
+      dependency: compile.digests?.dependency ?? null,
+    };
     setResolveError(firstError ? { error: firstError.message } : null);
   }, [setVisualDraft]);
 
-  const compileDraft = useCallback(async (
-    draft: BuilderVisualDraftEnvelope,
-  ): Promise<BuilderVisualDraftAssemblyResult | null> => {
-    const seq = ++resolveSeq.current;
-    setLoading(true);
-    setResolveError(null);
-    setAssemblyResult(null);
-    setSettledDocumentDigest(null);
-    setSettledDependencySha256(null);
-    try {
-      const result = await compileVisualDraft({ draft });
-      if (seq !== resolveSeq.current) return null;
-      adoptCompileResult(result);
-      return result;
-    } catch (error) {
-      if (seq !== resolveSeq.current) return null;
-      setWorld(null);
-      setDocumentYaml(null);
-      setAssemblyResult(null);
-      setCompileResult(null);
-      setCompileIssues([]);
-      setResolveError({ error: error instanceof Error ? error.message : String(error) });
-      return null;
-    } finally {
-      if (seq === resolveSeq.current) setLoading(false);
-    }
-  }, [adoptCompileResult]);
-
-  const compileDraftWithoutAdopting = useCallback(
-    (draft: BuilderVisualDraftEnvelope): Promise<BuilderVisualDraftAssemblyResult> => {
-      resolveSeq.current += 1;
-      setLoading(false);
-      return compileVisualDraft({ draft });
-    },
-    [],
-  );
+  const compileCurrent = useCallback(async (): Promise<BuilderVisualDraftAssemblyResult> =>
+    enqueueWriter("compile", async (epoch) => {
+      const draft = visualDraftRef.current;
+      if (!draft) throw new Error("there is no session draft to compile");
+      try {
+        const result = await compileVisualDraft({ draft });
+        assertEpoch(epoch);
+        adoptCompileResult(result);
+        return result;
+      } catch (cause) {
+        assertEpoch(epoch);
+        resetCompileFacts();
+        setResolveError({ error: cause instanceof Error ? cause.message : String(cause) });
+        throw cause;
+      }
+    }), [adoptCompileResult, assertEpoch, enqueueWriter, resetCompileFacts]);
 
   const createDraft = useCallback(
     async (request: BuilderVisualDraftCreateRequest): Promise<BuilderVisualDraftEnvelope> => {
-      const seq = ++resolveSeq.current;
-      setLoading(true);
-      try {
+      beginEpoch();
+      return enqueueWriter("create", async (epoch) => {
         const draft = await createVisualDraft(request);
-        if (seq !== resolveSeq.current) return draft;
-        opaqueHistory.current = [];
+        assertEpoch(epoch);
+        const assembled = await compileVisualDraft({ draft });
+        assertEpoch(epoch);
         setOpenedSession(null);
-        setVisualDraft(draft);
-        setAssemblyResult(null);
-        setCompileResult(null);
-        setCompileIssues([]);
-        setWorld(null);
-        setDocumentYaml(null);
-        setResolveError(null);
+        adoptCompileResult(assembled);
+        const canonical = assembled.compile_result.canonical_session_yaml;
+        setYamlBuffer({
+          text: draft.session_yaml,
+          appliedText: draft.session_yaml,
+          generation: 0,
+          dirty: false,
+          applied:
+            draft.projection_status === "applied" ||
+            draft.projection_status === "incomplete_authoring",
+          canonicalizationRequired: canonical !== null && canonical !== undefined && canonical !== draft.session_yaml,
+          canonicalizationAccepted: false,
+          issues: [],
+        });
         return draft;
-      } finally {
-        if (seq === resolveSeq.current) setLoading(false);
-      }
+      });
     },
-    [setVisualDraft],
-  );
-
-  const prepareRetargetDraft = useCallback(
-    async (sessionName: string): Promise<BuilderVisualDraftEnvelope> => {
-      const current = visualDraftRef.current;
-      if (!current || current.mode !== "structured") {
-        throw new Error("only structured visual drafts can be retargeted");
-      }
-      const fresh = await createVisualDraft({ session_name: sessionName });
-      return {
-        ...fresh,
-        draft_revision: current.draft_revision + 1,
-        catalog_documents: current.catalog_documents,
-        reserved_authoring_ids: current.reserved_authoring_ids,
-      };
-    },
-    [],
-  );
-
-  const adoptCompiledDraft = useCallback(
-    (result: BuilderVisualDraftAssemblyResult, retargeted: boolean) => {
-      resolveSeq.current += 1;
-      setLoading(false);
-      if (retargeted) setOpenedSession(null);
-      adoptCompileResult(result);
-    },
-    [adoptCompileResult],
+    [adoptCompileResult, assertEpoch, beginEpoch, enqueueWriter, setYamlBuffer],
   );
 
   const openSession = useCallback(
     async (
       entry: CatalogDocumentSummary,
       targetRef?: SessionRef,
-    ): Promise<{ ok: true } | { ok: false; reason: string }> => {
-      const seq = ++resolveSeq.current;
-      setLoading(true);
+    ): Promise<{ ok: true; draft: BuilderVisualDraftEnvelope } | { ok: false; reason: string }> => {
+      beginEpoch();
       try {
-        const draft = await openVisualDraft({
-          source_ref: entry.ref as SessionRef,
-          ...(targetRef ? { target_ref: targetRef } : {}),
+        const draft = await enqueueWriter("open", async (epoch) => {
+          const opened = await openVisualDraft({
+            source_ref: entry.ref as SessionRef,
+            ...(targetRef ? { target_ref: targetRef } : {}),
+          });
+          assertEpoch(epoch);
+          const assembled = await compileVisualDraft({ draft: opened });
+          assertEpoch(epoch);
+          setOpenedSession(entry);
+          adoptCompileResult(assembled);
+          const canonical = assembled.compile_result.canonical_session_yaml;
+          setYamlBuffer({
+            text: opened.session_yaml,
+            appliedText: opened.session_yaml,
+            generation: 0,
+            dirty: false,
+            applied: opened.projection_status === "applied",
+            canonicalizationRequired: canonical !== null && canonical !== undefined && canonical !== opened.session_yaml,
+            canonicalizationAccepted: false,
+            issues: [],
+          });
+          return opened;
         });
-        if (seq !== resolveSeq.current) return { ok: false, reason: "session open was superseded" };
-        opaqueHistory.current = [];
-        setOpenedSession(entry);
-        setVisualDraft(draft);
-        setAssemblyResult(null);
-        setWorld(null);
-        setDocumentYaml(null);
-        setResolveError(null);
-        setCompileResult(null);
-        setCompileIssues([]);
-        setSettledDocumentDigest(null);
-        setSettledDependencySha256(null);
-        return { ok: true };
+        return { ok: true, draft };
       } catch (cause) {
         return {
           ok: false,
           reason: cause instanceof Error ? cause.message : String(cause),
         };
-      } finally {
-        if (seq === resolveSeq.current) setLoading(false);
       }
     },
-    [setVisualDraft],
+    [adoptCompileResult, assertEpoch, beginEpoch, enqueueWriter, setYamlBuffer],
   );
 
-  const editOpaqueYaml = useCallback((sessionYaml: string) => {
-    const current = visualDraftRef.current;
-    if (!current || current.mode !== "opaque_yaml") return;
-    opaqueHistory.current.push(current);
-    if (opaqueHistory.current.length > 100) opaqueHistory.current.shift();
-    setVisualDraft({
+  const editYamlBuffer = useCallback((text: string) => {
+    if (writerRef.current !== null && writerRef.current !== "yaml") return false;
+    const current = yamlBufferRef.current;
+    setYamlBuffer({
       ...current,
-      draft_revision: current.draft_revision + 1,
-      session_yaml: sessionYaml,
+      text,
+      generation: current.generation + 1,
+      dirty: text !== current.appliedText,
+      applied: text === current.appliedText && current.applied,
+      issues: text === current.appliedText ? current.issues : [],
     });
-  }, [setVisualDraft]);
+    return true;
+  }, [setYamlBuffer]);
 
-  const undoOpaque = useCallback(() => {
-    const previous = opaqueHistory.current.pop();
-    if (previous) setVisualDraft(previous);
-  }, [setVisualDraft]);
+  const applyYamlBuffer = useCallback(async (
+    expectedGeneration?: number,
+  ): Promise<BuilderVisualDraftApplyYamlResult> =>
+    enqueueWriter("yaml", async (epoch) => {
+      const draft = visualDraftRef.current;
+      const buffer = yamlBufferRef.current;
+      if (!draft) throw new Error("there is no session draft to edit");
+      if (expectedGeneration !== undefined && buffer.generation !== expectedGeneration) {
+        throw new SupersededSessionOperation();
+      }
+      const result = await applyVisualDraftYaml({
+        draft,
+        expected_draft_revision: draft.draft_revision,
+        buffer_generation: buffer.generation,
+        yaml_text: buffer.text,
+      });
+      assertEpoch(epoch);
+      if (result.buffer_generation !== yamlBufferRef.current.generation) {
+        throw new SupersededSessionOperation();
+      }
+      if (!result.applied) {
+        setVisualDraft(result.draft);
+        setYamlBuffer({
+          text: result.yaml_text,
+          appliedText: buffer.appliedText,
+          generation: result.buffer_generation,
+          dirty: result.yaml_text !== buffer.appliedText,
+          applied: false,
+          canonicalizationRequired: false,
+          canonicalizationAccepted: false,
+          issues: result.issues ?? [],
+        });
+        return result;
+      }
+      const assembled = await compileVisualDraft({ draft: result.draft });
+      assertEpoch(epoch);
+      adoptCompileResult(assembled);
+      setYamlBuffer({
+        text: result.yaml_text,
+        appliedText: result.yaml_text,
+        generation: result.buffer_generation,
+        dirty: false,
+        applied: true,
+        canonicalizationRequired: result.canonicalization_required,
+        canonicalizationAccepted: false,
+        issues: result.issues ?? [],
+      });
+      return result;
+    }), [adoptCompileResult, assertEpoch, enqueueWriter, setVisualDraft, setYamlBuffer]);
 
-  const markSavedRevision = useCallback((
-    revision: string,
-    expectedCatalogRevisions: readonly BuilderVisualCatalogRevision[],
-  ) => {
-    const current = visualDraftRef.current;
-    if (!current) return;
-    const revisionsByRef = new Map(
-      expectedCatalogRevisions.map((item) => [item.ref, item.expected_revision] as const),
-    );
-    const proposalRefs = new Set((current.catalog_documents ?? []).map((item) => item.ref));
-    setVisualDraft({
+  const useCanonicalYaml = useCallback(async () => {
+    const canonical = assemblyResult?.compile_result.canonical_session_yaml;
+    if (!canonical) throw new Error("canonical session YAML is not available");
+    const current = yamlBufferRef.current;
+    setYamlBuffer({
       ...current,
-      draft_revision: current.draft_revision + 1,
-      expected_session_revision: revision,
-      // Customize-chain proposals already live in the visual envelope. Their
-      // optimistic fence must travel on the proposal itself because opaque
-      // assembly forwards those proposals unchanged, and structured assembly
-      // preloads them before applying generated-component expectations.
-      catalog_documents: (current.catalog_documents ?? []).map((proposal) => ({
-        ...proposal,
-        expected_revision: revisionsByRef.get(proposal.ref) ?? proposal.expected_revision,
-      })),
-      // Expectations for backend-generated workspace components remain in the
-      // visual expectation list; preloaded proposals above must not appear here
-      // or the assembler correctly reports them as unused expectations.
-      expected_catalog_revisions: expectedCatalogRevisions.filter(
-        (item) => !proposalRefs.has(item.ref),
-      ),
+      text: canonical,
+      generation: current.generation + 1,
+      dirty: canonical !== current.appliedText,
+      canonicalizationAccepted: true,
+      issues: [],
     });
-  }, [setVisualDraft]);
+    return applyYamlBuffer(current.generation + 1);
+  }, [applyYamlBuffer, assemblyResult?.compile_result.canonical_session_yaml, setYamlBuffer]);
+
+  const applyWorkspace = useCallback(async (
+    workspace: BuilderVisualWorkspace,
+  ): Promise<BuilderVisualDraftAssemblyResult> =>
+    enqueueWriter("workspace", async (epoch) => {
+      const draft = visualDraftRef.current;
+      const buffer = yamlBufferRef.current;
+      if (!draft) throw new Error("there is no session draft to edit");
+      if (
+        buffer.dirty ||
+        !buffer.applied ||
+        (buffer.canonicalizationRequired && !buffer.canonicalizationAccepted)
+      ) {
+        throw new Error("apply or canonicalize the YAML buffer before editing graphically");
+      }
+      let result: BuilderVisualDraftAssemblyResult;
+      try {
+        result = await applyVisualDraftWorkspace({
+          draft,
+          expected_draft_revision: draft.draft_revision,
+          workspace,
+        });
+        assertEpoch(epoch);
+      } catch (cause) {
+        assertEpoch(epoch);
+        resetCompileFacts();
+        setResolveError({ error: cause instanceof Error ? cause.message : String(cause) });
+        throw cause;
+      }
+      adoptCompileResult(result);
+      const canonical = result.compile_result.canonical_session_yaml ?? result.visual_draft.session_yaml;
+      setYamlBuffer({
+        text: canonical,
+        appliedText: canonical,
+        generation: buffer.generation + 1,
+        dirty: false,
+        applied: true,
+        canonicalizationRequired: false,
+        canonicalizationAccepted: true,
+        issues: [],
+      });
+      return result;
+    }), [adoptCompileResult, assertEpoch, enqueueWriter, resetCompileFacts, setYamlBuffer]);
 
   const customizeChain = useCallback(
     async (
-      request: Omit<BuilderVisualCustomizeChainRequest, "draft">,
+      request: Omit<
+        BuilderVisualCustomizeChainRequest,
+        "draft" | "expected_draft_revision"
+      >,
     ): Promise<BuilderVisualCustomizeChainResult> => {
-      const current = visualDraftRef.current;
-      if (!current) throw new Error("there is no visual draft to customize");
-      const result = await customizeVisualDraftChain({ ...request, draft: current });
-      if (result.applied) {
-        if (current.mode === "opaque_yaml") opaqueHistory.current.push(current);
-        setVisualDraft(result.draft);
-      }
-      return result;
+      return enqueueWriter("customize", async (epoch) => {
+        const current = visualDraftRef.current;
+        if (!current) throw new Error("there is no visual draft to customize");
+        const buffer = yamlBufferRef.current;
+        if (
+          buffer.dirty ||
+          !buffer.applied ||
+          (buffer.canonicalizationRequired && !buffer.canonicalizationAccepted)
+        ) {
+          throw new Error("apply or canonicalize the YAML buffer before editing graphically");
+        }
+        const result = await customizeVisualDraftChain({
+          ...request,
+          draft: current,
+          expected_draft_revision: current.draft_revision,
+        });
+        assertEpoch(epoch);
+        if (!result.applied) return result;
+        const assembled = await compileVisualDraft({ draft: result.draft });
+        assertEpoch(epoch);
+        adoptCompileResult(assembled);
+        const canonical = assembled.compile_result.canonical_session_yaml ?? result.draft.session_yaml;
+        const nextBuffer = yamlBufferRef.current;
+        setYamlBuffer({
+          text: canonical,
+          appliedText: canonical,
+          generation: nextBuffer.generation + 1,
+          dirty: false,
+          applied: true,
+          canonicalizationRequired: false,
+          canonicalizationAccepted: true,
+          issues: [],
+        });
+        return result;
+      });
     },
-    [setVisualDraft],
+    [adoptCompileResult, assertEpoch, enqueueWriter, setYamlBuffer],
   );
 
   const runVisualCommand = useCallback(
-    (request: BuilderVisualDraftCommandRequest): Promise<BuilderVisualDraftCommandResult> =>
-      applyVisualDraftCommand(request),
-    [],
+    (command: BuilderVisualDraftCommandRequest["command"]): Promise<BuilderVisualDraftCommandResult> =>
+      enqueueWriter("command", async (epoch) => {
+        const draft = visualDraftRef.current;
+        if (!draft) throw new Error("there is no visual draft to edit");
+        const currentBuffer = yamlBufferRef.current;
+        if (
+          currentBuffer.dirty ||
+          !currentBuffer.applied ||
+          (currentBuffer.canonicalizationRequired && !currentBuffer.canonicalizationAccepted)
+        ) {
+          throw new Error("apply or canonicalize the YAML buffer before editing graphically");
+        }
+        const result = await applyVisualDraftCommand({
+          draft,
+          expected_draft_revision: draft.draft_revision,
+          command,
+        });
+        assertEpoch(epoch);
+        const assembled = await compileVisualDraft({ draft: result.draft });
+        assertEpoch(epoch);
+        adoptCompileResult(assembled);
+        const canonical = assembled.compile_result.canonical_session_yaml ?? result.draft.session_yaml;
+        const buffer = yamlBufferRef.current;
+        setYamlBuffer({
+          text: canonical,
+          appliedText: canonical,
+          generation: buffer.generation + 1,
+          dirty: false,
+          applied: true,
+          canonicalizationRequired: false,
+          canonicalizationAccepted: true,
+          issues: [],
+        });
+        return result;
+      }),
+    [adoptCompileResult, assertEpoch, enqueueWriter, setYamlBuffer],
   );
 
-  const adoptVisualCommandResult = useCallback(
-    (result: BuilderVisualDraftCommandResult) => {
-      resolveSeq.current += 1;
-      setVisualDraft(result.draft);
-      setAssemblyResult(null);
-      setCompileResult(null);
-      setCompileIssues([]);
-      setDocumentYaml(null);
-      setResolveError(null);
-      setSettledDocumentDigest(null);
-      setSettledDependencySha256(null);
-      setLoading(false);
-    },
-    [setVisualDraft],
+  const prepareRetarget = useCallback(
+    (
+      targetRef: BuilderVisualDraftRetargetRequest["target_ref"],
+    ): Promise<BuilderVisualDraftAssemblyResult> =>
+      enqueueWriter("retarget", async (epoch) => {
+        const draft = visualDraftRef.current;
+        if (!draft) throw new Error("there is no visual draft to retarget");
+        const buffer = yamlBufferRef.current;
+        if (
+          buffer.dirty ||
+          !buffer.applied ||
+          (buffer.canonicalizationRequired && !buffer.canonicalizationAccepted)
+        ) {
+          throw new Error("apply or canonicalize the YAML buffer before saving under a new name");
+        }
+        const result = await retargetVisualDraft({
+          draft,
+          expected_draft_revision: draft.draft_revision,
+          target_ref: targetRef,
+        });
+        assertEpoch(epoch);
+        return result;
+      }),
+    [assertEpoch, enqueueWriter],
   );
+
+  const mutateControls = useCallback(
+    (commands: BuilderVisualControlMutationRequest["commands"]) =>
+      enqueueWriter("control", async (epoch) => {
+        const draft = visualDraftRef.current;
+        if (!draft) throw new Error("there is no visual draft to edit");
+        const buffer = yamlBufferRef.current;
+        if (
+          buffer.dirty ||
+          !buffer.applied ||
+          (buffer.canonicalizationRequired && !buffer.canonicalizationAccepted)
+        ) {
+          throw new Error("apply or canonicalize the YAML buffer before editing graphically");
+        }
+        const result = await mutateVisualDraftControls({
+          draft,
+          expected_draft_revision: draft.draft_revision,
+          commands,
+        });
+        assertEpoch(epoch);
+        adoptCompileResult(result);
+        const canonical =
+          result.compile_result.canonical_session_yaml ?? result.visual_draft.session_yaml;
+        setYamlBuffer({
+          text: canonical,
+          appliedText: canonical,
+          generation: buffer.generation + 1,
+          dirty: false,
+          applied: true,
+          canonicalizationRequired: false,
+          canonicalizationAccepted: true,
+          issues: [],
+        });
+        return result;
+      }),
+    [adoptCompileResult, assertEpoch, enqueueWriter, setYamlBuffer],
+  );
+
+  const captureCoordinator = useCallback((): SessionCoordinatorCapture => ({
+    epoch: epochRef.current,
+    draftRevision: visualDraftRef.current?.draft_revision ?? -1,
+    bufferGeneration: yamlBufferRef.current.generation,
+    documentDigest: settledDigestsRef.current.document,
+    dependencyDigest: settledDigestsRef.current.dependency,
+  }), []);
+
+  const captureIsCurrent = useCallback((capture: SessionCoordinatorCapture) => {
+    const current = captureCoordinator();
+    return (
+      capture.epoch === current.epoch &&
+      capture.draftRevision === current.draftRevision &&
+      capture.bufferGeneration === current.bufferGeneration &&
+      capture.documentDigest === current.documentDigest &&
+      capture.dependencyDigest === current.dependencyDigest
+    );
+  }, [captureCoordinator]);
 
   const saveSession = useCallback(
-    async (request: BuilderSessionSaveRequest): Promise<BuilderSessionSaveResult> => {
-      const result = await saveBuilderSession(request);
-      for (const family of new Set(result.dependency_closure.entries.map((entry) => entry.family))) {
-        if (family !== "sessions") void refreshCatalogFamily(family);
-      }
-      _bumpLibraryRevision();
-      await refreshSessions();
-      return result;
-    },
-    [refreshSessions],
+    async (
+      request: BuilderSessionSaveRequest,
+      capture: SessionCoordinatorCapture,
+    ): Promise<BuilderSessionSaveAdoption> =>
+      enqueueWriter("save", async (epoch) => {
+        if (!captureIsCurrent(capture)) throw new SupersededSessionOperation();
+        const result = await saveBuilderSession(request);
+        try {
+          assertEpoch(epoch);
+          for (const family of new Set(result.dependency_closure.entries.map((entry) => entry.family))) {
+            if (family !== "sessions") void refreshCatalogFamily(family);
+          }
+          _bumpLibraryRevision();
+          await refreshSessions();
+          assertEpoch(epoch);
+          if (!captureIsCurrent(capture)) {
+            return {
+              result,
+              reopenedDraft: null,
+              postCommitError: "the editor changed after persistence committed",
+            };
+          }
+          const reopened = await openVisualDraft({
+            source_ref: result.session.ref as SessionRef,
+            target_ref: result.session.ref as SessionRef,
+          });
+          assertEpoch(epoch);
+          if (!captureIsCurrent(capture)) {
+            return {
+              result,
+              reopenedDraft: null,
+              postCommitError: "the editor changed before the saved session reopened",
+            };
+          }
+          const assembled = await compileVisualDraft({ draft: reopened });
+          assertEpoch(epoch);
+          adoptCompileResult(assembled);
+          const canonical = assembled.compile_result.canonical_session_yaml ?? reopened.session_yaml;
+          setYamlBuffer({
+            text: canonical,
+            appliedText: canonical,
+            generation: capture.bufferGeneration + 1,
+            dirty: false,
+            applied: true,
+            canonicalizationRequired: false,
+            canonicalizationAccepted: true,
+            issues: [],
+          });
+          setOpenedSession({
+            ref: result.session.ref,
+            family: "sessions",
+            namespace: "user",
+            revision: result.session.revision,
+            size_bytes: new TextEncoder().encode(result.session.canonical_yaml).byteLength,
+            display_name: result.session.ref.split("/").pop()?.replace(/\.ya?ml$/, "") ?? "session",
+            summary: null,
+          });
+          return { result, reopenedDraft: reopened, postCommitError: null };
+        } catch (cause) {
+          return {
+            result,
+            reopenedDraft: null,
+            postCommitError:
+              cause instanceof Error ? cause.message : String(cause),
+          };
+        }
+      }, false),
+    [adoptCompileResult, assertEpoch, captureIsCurrent, enqueueWriter, refreshSessions, setYamlBuffer],
   );
+
+  const adoptCommittedRetarget = useCallback((
+    prepared: BuilderVisualDraftAssemblyResult,
+    saved: {
+      ref: string;
+      revision?: string | null;
+      canonicalYaml?: string | null;
+    },
+  ) => {
+    beginEpoch();
+    adoptCompileResult(prepared);
+    const canonical =
+      prepared.compile_result.canonical_session_yaml ?? prepared.visual_draft.session_yaml;
+    setYamlBuffer({
+      text: canonical,
+      appliedText: canonical,
+      generation: yamlBufferRef.current.generation + 1,
+      dirty: false,
+      applied: true,
+      canonicalizationRequired: false,
+      canonicalizationAccepted: true,
+      issues: [],
+    });
+    setOpenedSession({
+      ref: saved.ref,
+      family: "sessions",
+      namespace: "user",
+      revision: saved.revision ?? "committed-unverified",
+      size_bytes: new TextEncoder().encode(saved.canonicalYaml ?? canonical).byteLength,
+      display_name: saved.ref.split("/").pop()?.replace(/\.ya?ml$/, "") ?? "session",
+      summary: null,
+    });
+  }, [adoptCompileResult, beginEpoch, setYamlBuffer]);
 
   const deploySession = useCallback(
     (request: BuilderSessionDeployRequest): Promise<BuilderSessionDeployAccepted> =>
@@ -869,27 +1140,20 @@ export function useBuilderWorld() {
   /** Drop the current world (e.g. starting a fresh workspace): a stale world
    *  must never render behind a draft that has not resolved yet. */
   const clear = useCallback(() => {
-    resolveSeq.current += 1;
-    setWorld(null);
-    setDocumentYaml(null);
+    beginEpoch();
     setOpenedSession(null);
     setVisualDraft(null);
-    setAssemblyResult(null);
-    setResolveError(null);
-    setCompileResult(null);
-    setCompileIssues([]);
-    setSettledDocumentDigest(null);
-    setSettledDependencySha256(null);
-    setLoading(false);
-    opaqueHistory.current = [];
-  }, [setVisualDraft]);
+    setYamlBuffer(EMPTY_YAML_BUFFER);
+    resetCompileFacts();
+  }, [beginEpoch, resetCompileFacts, setVisualDraft, setYamlBuffer]);
 
   return {
     sessions,
     sessionsError,
     openedSession,
     visualDraft,
-    currentVisualDraft,
+    yamlBuffer,
+    writer,
     assemblyResult,
     world,
     documentYaml,
@@ -901,22 +1165,21 @@ export function useBuilderWorld() {
     settledDocumentDigest,
     settledDependencySha256,
     createDraft,
-    prepareRetargetDraft,
     openSession,
-    editOpaqueYaml,
-    undoOpaque,
-    markSavedRevision,
+    editYamlBuffer,
+    applyYamlBuffer,
+    useCanonicalYaml,
+    applyWorkspace,
     customizeChain,
     runVisualCommand,
-    adoptVisualCommandResult,
-    compileDraft,
-    compileDraftWithoutAdopting,
-    adoptCompiledDraft,
-    hasOpaqueAutosave,
-    stashOpaqueDraft,
-    restoreOpaqueAutosave,
+    mutateControls,
+    prepareRetarget,
+    compileCurrent,
     adoptRecoveredStructuredDraft,
+    captureCoordinator,
+    captureIsCurrent,
     saveSession,
+    adoptCommittedRetarget,
     deploySession,
     refreshSessions,
     clear,

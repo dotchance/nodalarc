@@ -11,17 +11,18 @@ from nodalarc.catalog_registry import CATALOG_FAMILY_REGISTRY
 from nodalarc.catalog_repository import CatalogScope
 from nodalarc.filesystem_catalog_repository import FilesystemCatalogRepository
 from nodalarc.models.builder_catalog_api import (
+    CatalogComponentDraftEnvelope,
     CatalogComponentFamily,
     CatalogDocumentWriteRequest,
     CatalogDraftAddNodeEthernetPortRequest,
     CatalogDraftAddNodeTerminalMountRequest,
     CatalogDraftAddSiteNodeRequest,
+    CatalogDraftApplyYamlRequest,
     CatalogDraftCompileRequest,
     CatalogDraftNewRequest,
     CatalogDraftOpenRequest,
     CatalogDraftPatchCommand,
     CatalogDraftPatchRequest,
-    CatalogDraftReplaceObjectRequest,
     CatalogDraftSaveRequest,
     CatalogGetRequest,
 )
@@ -180,6 +181,49 @@ def test_all_families_open_compile_and_save_without_losing_advanced_fields(
             authoring.get_catalog(CatalogGetRequest(ref=source_ref)).canonical_json
             == source.canonical_json
         )
+
+
+def test_component_forks_cannot_replace_an_existing_user_target(
+    tmp_path: Path,
+) -> None:
+    drafts, authoring = _services(tmp_path)
+    source_ref = _payload_source(authoring)
+    source = authoring.get_catalog(CatalogGetRequest(ref=source_ref))
+    target_ref = CatalogRef("user:payloads/existing-fork-target.yaml")
+    target_document = copy.deepcopy(source.canonical_json)
+    target_document["payload"]["id"] = target_ref.relative_path.stem
+    target = authoring.save_component(
+        CatalogDocumentWriteRequest(ref=target_ref, document=target_document)
+    ).document
+
+    with pytest.raises(CatalogAuthoringError) as occupied:
+        drafts.open(CatalogDraftOpenRequest(source_ref=source_ref, target_ref=target_ref))
+    assert occupied.value.code == "catalog_authoring.conflict"
+
+    editable = drafts.open(CatalogDraftOpenRequest(source_ref=target_ref))
+    forged_fields = {
+        **editable.model_dump(mode="json"),
+        "source_ref": str(source_ref),
+        "expected_source_revision": source.revision,
+    }
+    with pytest.raises(ValidationError, match="fork targets must not already exist"):
+        CatalogComponentDraftEnvelope.model_validate(forged_fields)
+
+    forged = editable.model_copy(
+        update={
+            "source_ref": source_ref,
+            "expected_source_revision": source.revision,
+        }
+    )
+    with pytest.raises(CatalogAuthoringError) as bypass:
+        drafts.compile(
+            CatalogDraftCompileRequest.model_construct(
+                draft=forged,
+                expected_draft_revision=forged.draft_revision,
+            )
+        )
+    assert bypass.value.code == "catalog_authoring.conflict"
+    assert authoring.get_catalog(CatalogGetRequest(ref=target_ref)).revision == target.revision
 
 
 def test_specialized_patch_changes_only_the_selected_field_on_an_advanced_site(
@@ -585,45 +629,80 @@ def test_patch_commands_round_trip_through_strict_json_transport_models(
         )
 
 
-def test_advanced_object_json_is_parsed_identity_checked_and_revisioned_by_backend(
+def test_yaml_buffer_is_parsed_identity_checked_and_revisioned_by_backend(
     tmp_path: Path,
 ) -> None:
     drafts, authoring = _services(tmp_path)
     opened = drafts.open(CatalogDraftOpenRequest(source_ref=_payload_source(authoring)))
-    object_id = opened.target_ref.relative_path.stem
-    replaced = drafts.replace_object(
-        CatalogDraftReplaceObjectRequest(
+    yaml_text = "# exact editor buffer\n" + opened.projected_yaml.replace(
+        "Advanced payload source",
+        "Backend parsed",
+    )
+    result = drafts.apply_yaml(
+        CatalogDraftApplyYamlRequest(
             draft=opened,
             expected_draft_revision=opened.draft_revision,
-            raw_object_json=(
-                '{"id":"' + object_id + '","display_name":"Backend parsed","terminal_slots":[],'
-                '"resource_groups":[],"advanced":{"keep":[1,2,3]}}'
-            ),
+            yaml_text=yaml_text,
         )
     )
 
-    assert replaced.draft_revision == opened.draft_revision + 1
-    assert replaced.expected_source_revision == opened.expected_source_revision
-    assert replaced.expected_target_revision == opened.expected_target_revision
-    assert replaced.document["payload"]["display_name"] == "Backend parsed"
-    assert replaced.document["payload"]["advanced"] == {"keep": [1, 2, 3]}
+    assert result.applied is True
+    assert result.yaml_text == yaml_text
+    assert result.canonicalization_required is True
+    assert result.draft.draft_revision == opened.draft_revision + 1
+    assert result.draft.expected_source_revision == opened.expected_source_revision
+    assert result.draft.expected_target_revision == opened.expected_target_revision
+    assert result.draft.document["payload"]["display_name"] == "Backend parsed"
+    assert result.draft.projected_yaml == opened.projected_yaml.replace(
+        "Advanced payload source",
+        "Backend parsed",
+    )
 
     for raw in (
-        "not-json",
-        "[]",
-        '{"id":"different"}',
-        f'{{"id":"{object_id}","value":NaN}}',
-        f'{{"id":"{object_id}","id":"{object_id}"}}',
+        "",
+        "payload: [",
+        "- not-an-object\n",
+        "terminal:\n  id: wrong-wrapper\n",
+        "payload:\n  id: different\n",
+        "payload:\n  id: component-draft-source\n  when: 2026-01-01\n",
     ):
-        with pytest.raises(CatalogAuthoringError) as invalid:
-            drafts.replace_object(
-                CatalogDraftReplaceObjectRequest(
-                    draft=opened,
-                    expected_draft_revision=opened.draft_revision,
-                    raw_object_json=raw,
-                )
+        refused = drafts.apply_yaml(
+            CatalogDraftApplyYamlRequest(
+                draft=opened,
+                expected_draft_revision=opened.draft_revision,
+                yaml_text=raw,
             )
-        assert invalid.value.code == "catalog_authoring.invalid_document"
+        )
+        assert refused.applied is False
+        assert refused.draft == opened
+        assert refused.yaml_text == raw
+        assert refused.issues
+        assert all(issue.stage == "structural" for issue in refused.issues)
+
+    syntax = drafts.apply_yaml(
+        CatalogDraftApplyYamlRequest(
+            draft=opened,
+            expected_draft_revision=opened.draft_revision,
+            yaml_text="payload: [",
+        )
+    )
+    assert syntax.issues[0].source_line == 1
+    assert syntax.issues[0].source_column is not None
+
+    unknown_yaml = opened.projected_yaml + "  unknown_field: true\n"
+    invalid_model = drafts.apply_yaml(
+        CatalogDraftApplyYamlRequest(
+            draft=opened,
+            expected_draft_revision=opened.draft_revision,
+            yaml_text=unknown_yaml,
+        )
+    )
+    assert invalid_model.applied is False
+    assert invalid_model.draft == opened
+    assert invalid_model.issues[0].code.endswith("extra_forbidden")
+    assert invalid_model.issues[0].pointer == "/payload/unknown_field"
+    assert invalid_model.issues[0].source_line == len(unknown_yaml.splitlines())
+    assert set(invalid_model.issues[0].blocks) == {"save", "deploy"}
 
 
 def test_openapi_exposes_typed_scope_free_component_draft_routes(
@@ -653,6 +732,10 @@ def test_openapi_exposes_typed_scope_free_component_draft_routes(
             "CatalogDraftPatchRequest",
             "CatalogComponentDraftEnvelope",
         ),
+        "/api/v1/builder/catalog/draft/controls/mutate": (
+            "CatalogDraftControlMutationRequest",
+            "CatalogComponentDraftEnvelope",
+        ),
         "/api/v1/builder/catalog/draft/site-node/add": (
             "CatalogDraftAddSiteNodeRequest",
             "CatalogComponentDraftEnvelope",
@@ -665,9 +748,9 @@ def test_openapi_exposes_typed_scope_free_component_draft_routes(
             "CatalogDraftAddNodeEthernetPortRequest",
             "CatalogComponentDraftEnvelope",
         ),
-        "/api/v1/builder/catalog/draft/replace-object": (
-            "CatalogDraftReplaceObjectRequest",
-            "CatalogComponentDraftEnvelope",
+        "/api/v1/builder/catalog/draft/apply-yaml": (
+            "CatalogDraftApplyYamlRequest",
+            "CatalogDraftApplyYamlResult",
         ),
         "/api/v1/builder/catalog/draft/compile": (
             "CatalogDraftCompileRequest",
@@ -685,7 +768,10 @@ def test_openapi_exposes_typed_scope_free_component_draft_routes(
         request_schema = operation["requestBody"]["content"]["application/json"]["schema"]
         response_schema = operation["responses"]["200"]["content"]["application/json"]["schema"]
         assert request_schema["$ref"].endswith(f"/{request_model}")
-        assert response_schema["$ref"].endswith(f"/{response_model}")
+        assert response_schema["$ref"].rsplit("/", 1)[-1] in {
+            response_model,
+            f"{response_model}-Output",
+        }
         observed_names.update(_schema_property_names(request_schema, components))
 
     assert {

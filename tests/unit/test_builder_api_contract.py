@@ -119,7 +119,7 @@ def _draft() -> BuilderDraftEnvelope:
                 {
                     "ref": "user:nodes/router.yaml",
                     "document": {"node": {"id": "router"}},
-                    "expected_revision": "node-rev-1",
+                    "origin": "generated",
                 }
             ],
         },
@@ -292,6 +292,7 @@ def test_draft_catalog_proposals_are_user_owned_unique_components() -> None:
     proposal = {
         "ref": "user:nodes/router.yaml",
         "document": {"node": {}},
+        "origin": "generated",
     }
     draft = BuilderDraftEnvelope(
         draft_revision=0,

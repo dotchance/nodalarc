@@ -22,10 +22,12 @@ from nodalarc.catalog_closure import (
     catalog_document_references,
     preserved_catalog_path,
 )
-from nodalarc.catalog_refs import CatalogFamily, CatalogRef
+from nodalarc.catalog_refs import CatalogFamily, CatalogRef, SessionRef
 from nodalarc.catalog_registry import (
     CATALOG_FAMILY_REGISTRY,
+    CATALOG_WRAPPER_TO_FAMILY,
     catalog_family_spec,
+    validate_catalog_document,
     validate_referenced_configuration_document,
 )
 from nodalarc.catalog_repository import (
@@ -54,7 +56,6 @@ from nodalarc.models.builder_catalog_api import (
     BuilderVisualRoutingProtocolMetadata,
     BuilderVisualSchedulingPresetMetadata,
     BuilderVisualTopologyModeMetadata,
-    CatalogClosureImportRequest,
     CatalogDeleteRequest,
     CatalogDeleteResult,
     CatalogDependencyImpact,
@@ -66,16 +67,18 @@ from nodalarc.models.builder_catalog_api import (
     CatalogForkRequest,
     CatalogForkResult,
     CatalogGetRequest,
-    CatalogImportCollision,
-    CatalogImportResult,
-    CatalogImportWrite,
     CatalogListPage,
     CatalogListRequest,
     CatalogMutationResult,
     CatalogOperationRefusal,
-    CatalogSessionExport,
-    CatalogSessionExportRequest,
-    PortableCatalogYaml,
+    CatalogSessionYamlExport,
+    CatalogSessionYamlExportRequest,
+    CatalogSessionYamlImportRequest,
+    CatalogSessionYamlImportResult,
+    CatalogYamlFile,
+    CatalogYamlImportCollision,
+    CatalogYamlImportFile,
+    CatalogYamlImportWrite,
 )
 from nodalarc.models.builder_visual_api import (
     BuilderVisualGroundBoresight,
@@ -109,6 +112,7 @@ from .catalog_context import CatalogContext
 _DEFAULT_GRAMMAR_HREF = "/docs/ops/configuration-grammar.md"
 _PAGE_TOKEN_VERSION = 1
 _PAGE_TOKEN_PREFIX = "nacp1"
+_IMPORT_PROPOSAL_TOKEN_PREFIX = "naip1"
 _IMPACT_SCHEMA = "nodalarc.catalog-dependency-impact.v1"
 _PROCESS_PAGE_TOKEN_SECRET = secrets.token_bytes(32)
 
@@ -147,7 +151,7 @@ def _refuse(
     expected_revision: str | None = None,
     current_revision: str | None = None,
     impact: CatalogDependencyImpact | None = None,
-    collisions: tuple[CatalogImportCollision, ...] = (),
+    collisions: tuple[CatalogYamlImportCollision, ...] = (),
     cause: BaseException | None = None,
 ) -> NoReturn:
     raise CatalogAuthoringError(
@@ -194,6 +198,195 @@ def _canonical_import_bytes(ref: CatalogRef, content: bytes) -> bytes:
             ref=ref,
             cause=error,
         )
+
+
+@dataclass(frozen=True, slots=True)
+class _UnplacedCatalogYaml:
+    position: int
+    family: CatalogFamily
+    identity: str
+    content: bytes
+    hinted_ref: CatalogRef | None
+
+
+@dataclass(frozen=True, slots=True)
+class _ParsedYamlImport:
+    root_ref: SessionRef
+    root_content: bytes
+    root_ref_hinted: bool
+    components: Mapping[tuple[CatalogFamily, str], tuple[_UnplacedCatalogYaml, ...]]
+
+
+def _hinted_catalog_ref(
+    yaml_file: CatalogYamlImportFile,
+    *,
+    family: CatalogFamily,
+    identity: str,
+) -> CatalogRef | None:
+    hint = yaml_file.logical_path_hint
+    if hint is None:
+        return None
+    parts = hint.split("/")
+    if len(parts) < 4 or parts[0] != "catalog":
+        _refuse(
+            "catalog_authoring.import_incomplete",
+            f"Catalog YAML path hint must have the form catalog/<namespace>/<family>/...: {hint}",
+        )
+    try:
+        ref = CatalogRef(f"{parts[1]}:{'/'.join(parts[2:])}")
+    except ValueError as error:
+        _refuse(
+            "catalog_authoring.import_incomplete",
+            f"Catalog YAML path hint is not a valid catalog reference: {hint}",
+            cause=error,
+        )
+    if ref.family != family or ref.relative_path.stem != identity:
+        _refuse(
+            "catalog_authoring.import_incomplete",
+            f"Catalog YAML path hint {hint} does not match document identity {family}/{identity}",
+            ref=ref,
+        )
+    return ref
+
+
+def _hinted_session_ref(
+    yaml_file: CatalogYamlImportFile,
+    *,
+    session_name: str,
+) -> SessionRef | None:
+    hint = yaml_file.logical_path_hint
+    if hint is None:
+        return None
+    parts = hint.split("/")
+    if len(parts) < 4 or parts[0] != "catalog":
+        _refuse(
+            "catalog_authoring.import_incomplete",
+            f"Session YAML path hint must have the form catalog/<namespace>/sessions/...: {hint}",
+        )
+    try:
+        source_ref = SessionRef(f"{parts[1]}:{'/'.join(parts[2:])}")
+    except ValueError as error:
+        _refuse(
+            "catalog_authoring.import_incomplete",
+            f"Session YAML path hint is not a valid session reference: {hint}",
+            cause=error,
+        )
+    if source_ref.relative_path.stem != session_name:
+        _refuse(
+            "catalog_authoring.import_incomplete",
+            f"Session YAML path hint {hint} does not match session.name {session_name!r}",
+            ref=source_ref,
+        )
+    if source_ref.namespace == "nodalarc":
+        return SessionRef(f"user:{source_ref.relative_path.as_posix()}")
+    return source_ref
+
+
+def _parse_yaml_import(
+    yaml_files: tuple[CatalogYamlImportFile, ...],
+) -> _ParsedYamlImport:
+    roots: list[tuple[SessionRef, bytes, bool]] = []
+    components: dict[tuple[CatalogFamily, str], list[_UnplacedCatalogYaml]] = {}
+    hinted_refs: set[CatalogRef] = set()
+    session_spec = catalog_family_spec("sessions")
+
+    for position, yaml_file in enumerate(yaml_files, start=1):
+        content = yaml_file.yaml_text.encode("utf-8")
+        try:
+            data = load_configuration_yaml(content)
+        except (UnicodeError, yaml.YAMLError) as error:
+            _refuse(
+                "catalog_authoring.invalid_document",
+                f"Imported YAML file {position} cannot be parsed: {error}",
+                cause=error,
+            )
+
+        try:
+            session_model = session_spec.validate_document(data)
+        except (ValidationError, TypeError, ValueError) as session_error:
+            try:
+                wrapper, component_model = validate_catalog_document(data)
+                family = CATALOG_WRAPPER_TO_FAMILY[wrapper]
+                identity = str(component_model.id)
+            except (ValidationError, TypeError, ValueError) as component_error:
+                _refuse(
+                    "catalog_authoring.invalid_document",
+                    f"Imported YAML file {position} is neither a valid session nor a valid "
+                    f"catalog component: session={session_error}; component={component_error}",
+                    cause=component_error,
+                )
+            key = (family, identity)
+            hinted_ref = _hinted_catalog_ref(
+                yaml_file,
+                family=family,
+                identity=identity,
+            )
+            if hinted_ref is not None and hinted_ref in hinted_refs:
+                _refuse(
+                    "catalog_authoring.import_incomplete",
+                    f"Imported YAML files contain duplicate path hint {yaml_file.logical_path_hint}",
+                    ref=hinted_ref,
+                )
+            if hinted_ref is not None:
+                hinted_refs.add(hinted_ref)
+            components.setdefault(key, []).append(
+                _UnplacedCatalogYaml(
+                    position=position,
+                    family=family,
+                    identity=identity,
+                    content=content,
+                    hinted_ref=hinted_ref,
+                )
+            )
+            continue
+
+        hinted_ref = _hinted_session_ref(
+            yaml_file,
+            session_name=session_model.session.name,
+        )
+        root_ref = hinted_ref or SessionRef(f"user:sessions/{session_model.session.name}.yaml")
+        _validated_exact_document(root_ref, content)
+        roots.append((root_ref, content, hinted_ref is not None))
+
+    if len(roots) != 1:
+        _refuse(
+            "catalog_authoring.import_incomplete",
+            f"YAML import requires exactly one session document; found {len(roots)}",
+        )
+    root_ref, root_content, root_ref_hinted = roots[0]
+    return _ParsedYamlImport(
+        root_ref=root_ref,
+        root_content=root_content,
+        root_ref_hinted=root_ref_hinted,
+        components={key: tuple(value) for key, value in components.items()},
+    )
+
+
+def _derive_import_session_ref(
+    snapshot: CatalogReadSnapshot,
+    parsed_ref: SessionRef,
+) -> SessionRef:
+    try:
+        matches = tuple(
+            entry.ref
+            for entry in snapshot.list(namespace="user", family="sessions")
+            if entry.ref.relative_path.stem == parsed_ref.relative_path.stem
+        )
+    except (CatalogRepositoryError, OSError) as error:
+        _refuse(
+            "catalog_authoring.persistence_failed",
+            f"Session identity lookup failed: {error}",
+            ref=parsed_ref,
+            cause=error,
+        )
+    if len(matches) > 1:
+        _refuse(
+            "catalog_authoring.import_incomplete",
+            f"Session identity {parsed_ref.relative_path.stem!r} already exists at multiple "
+            f"user catalog refs: {', '.join(sorted(map(str, matches)))}",
+            ref=parsed_ref,
+        )
+    return SessionRef(str(matches[0])) if matches else parsed_ref
 
 
 def _canonical_document(document: CatalogDocument) -> BuilderCatalogDocument:
@@ -268,15 +461,89 @@ class _GraphState:
     dependencies: Mapping[CatalogRef, frozenset[CatalogRef]]
 
 
+class _ImportPlacementError(ValueError):
+    """Raised when YAML identity cannot determine one referenced catalog path."""
+
+
+@dataclass(slots=True)
+class _IdentityImportReadView:
+    snapshot: CatalogReadSnapshot
+    components: Mapping[tuple[CatalogFamily, str], tuple[_UnplacedCatalogYaml, ...]]
+    assigned_refs: dict[int, CatalogRef]
+    assigned_documents: dict[CatalogRef, bytes]
+
+    def read(self, ref: CatalogRef) -> CatalogReadDocument:
+        family = cast(CatalogFamily, ref.family)
+        key = (family, ref.relative_path.stem)
+        candidates = self.components.get(key, ())
+        exact = tuple(component for component in candidates if component.hinted_ref == ref)
+        unhinted = tuple(
+            component
+            for component in candidates
+            if component.hinted_ref is None and component.position not in self.assigned_refs
+        )
+        if len(exact) == 1:
+            component = exact[0]
+        elif len(exact) > 1:
+            raise _ImportPlacementError(f"Multiple imported YAML files claim {ref}")
+        elif len(unhinted) == 1:
+            component = unhinted[0]
+        elif len(unhinted) > 1:
+            raise _ImportPlacementError(
+                f"Multiple imported YAML files have identity {family}/{ref.relative_path.stem}; "
+                f"supply their exported catalog paths to disambiguate {ref}"
+            )
+        else:
+            assigned = tuple(
+                self.assigned_refs[component.position]
+                for component in candidates
+                if component.position in self.assigned_refs
+            )
+            if assigned:
+                raise _ImportPlacementError(
+                    f"Catalog YAML identity {family}/{ref.relative_path.stem} is referenced by "
+                    f"both {assigned[0]} and {ref}; placement is ambiguous without exported "
+                    "catalog paths"
+                )
+            if ref.namespace == "user":
+                raise _ImportPlacementError(
+                    f"Session references {ref}; expected a supplied YAML file with path hint "
+                    f"{preserved_catalog_path(ref)} or an unambiguous {family}/"
+                    f"{ref.relative_path.stem} document"
+                )
+            try:
+                return self.snapshot.read(ref)
+            except CatalogNotFoundError as error:
+                raise FileNotFoundError(str(ref)) from error
+
+        assigned_ref = self.assigned_refs.get(component.position)
+        if assigned_ref is not None and assigned_ref != ref:
+            raise _ImportPlacementError(
+                f"Catalog YAML identity {family}/{component.identity} is referenced by both "
+                f"{assigned_ref} and {ref}; supply its exported catalog path to disambiguate it"
+            )
+        _validated_exact_document(ref, component.content)
+        self.assigned_refs[component.position] = ref
+        self.assigned_documents[ref] = component.content
+        return CatalogReadDocument(
+            family=family,
+            preserved_path=preserved_catalog_path(ref),
+            yaml_bytes=component.content,
+        )
+
+
 @dataclass(frozen=True, slots=True)
-class _ImportReadView:
+class _OverlayImportReadView:
+    snapshot: CatalogReadSnapshot
     documents: Mapping[CatalogRef, bytes]
 
     def read(self, ref: CatalogRef) -> CatalogReadDocument:
-        try:
-            content = self.documents[ref]
-        except KeyError as error:
-            raise FileNotFoundError(str(ref)) from error
+        content = self.documents.get(ref)
+        if content is None:
+            try:
+                return self.snapshot.read(ref)
+            except CatalogNotFoundError as error:
+                raise FileNotFoundError(str(ref)) from error
         return CatalogReadDocument(
             family=cast(CatalogFamily, ref.family),
             preserved_path=preserved_catalog_path(ref),
@@ -301,6 +568,11 @@ class BuilderCatalogAuthoringService:
             raise ValueError("page_token_secret must contain at least 32 bytes")
         scope_binding = f"{id(context.repository)}:{id(context.scope)}".encode("ascii")
         self._page_key = hmac.new(secret, scope_binding, hashlib.sha256).digest()
+        self._import_proposal_key = hmac.new(
+            secret,
+            b"catalog-import\0" + context.scope_binding.encode("utf-8") + b"\0" + scope_binding,
+            hashlib.sha256,
+        ).digest()
         self._context = context
         self._public_grammar_href = public_grammar_href
         self._graph_cache: tuple[str, _GraphState] | None = None
@@ -333,6 +605,7 @@ class BuilderCatalogAuthoringService:
         )
         runtime = RuntimeSupport.earth_luna()
         return BuilderCatalogBootstrap(
+            authoring_context_binding=self._context.scope_binding,
             public_grammar_href=self._public_grammar_href,
             capabilities=BuilderCatalogCapabilities(),
             families=families,
@@ -844,11 +1117,14 @@ class BuilderCatalogAuthoringService:
             generation=str(committed.generation),
         )
 
-    def export_session(self, request: CatalogSessionExportRequest) -> CatalogSessionExport:
-        """Export exact stored root/dependency bytes and namespace-preserving paths."""
+    def export_session_yaml(
+        self,
+        request: CatalogSessionYamlExportRequest,
+    ) -> CatalogSessionYamlExport:
+        """Return ordinary root and dependency YAML files for browser writing."""
 
-        if not isinstance(request, CatalogSessionExportRequest):
-            raise TypeError("request must be a CatalogSessionExportRequest")
+        if not isinstance(request, CatalogSessionYamlExportRequest):
+            raise TypeError("request must be a CatalogSessionYamlExportRequest")
         snapshot = self._snapshot()
         session = _repository_document(snapshot, request.session_ref)
         if (
@@ -872,48 +1148,36 @@ class BuilderCatalogAuthoringService:
                 cause=error,
             )
 
-        root = PortableCatalogYaml(
-            ref=session.ref,
-            family="sessions",
-            preserved_path=preserved_catalog_path(session.ref),
-            exact_yaml=session.content.decode("utf-8"),
-            document_digest=closure.document_digest,
-            revision=str(session.revision),
+        files = (
+            CatalogYamlFile(
+                logical_path=preserved_catalog_path(request.session_ref),
+                yaml_text=session.content.decode("utf-8"),
+            ),
+            *(
+                CatalogYamlFile(
+                    logical_path=entry.preserved_path,
+                    yaml_text=entry.yaml_bytes.decode("utf-8"),
+                )
+                for entry in closure.entries
+            ),
         )
-        entries = tuple(
-            PortableCatalogYaml(
-                ref=entry.ref,
-                family=entry.family,
-                preserved_path=entry.preserved_path,
-                exact_yaml=entry.yaml_bytes.decode("utf-8"),
-                document_digest=entry.document_digest,
-                revision=str(_repository_document(snapshot, entry.ref).revision),
-            )
-            for entry in closure.entries
-        )
-        return CatalogSessionExport(
-            contract_version=1,
+        return CatalogSessionYamlExport(
             session_ref=request.session_ref,
             session_revision=str(session.revision),
-            generation=str(snapshot.generation),
-            root=root,
-            entries=entries,
-            document_digest=closure.document_digest,
-            closure_digest=closure.closure_digest,
-            file_count=closure.deployment_file_count,
-            total_bytes=closure.deployment_total_bytes,
+            files=files,
         )
 
-    def _validate_import_bounds(self, request: CatalogClosureImportRequest) -> None:
+    def _validate_import_bounds(
+        self,
+        request: CatalogSessionYamlImportRequest,
+    ) -> tuple[bytes, ...]:
         limits = DEFAULT_CATALOG_UPLOAD_LIMITS
-        root_bytes = request.root_yaml.encode("utf-8")
-        entry_bytes = tuple(entry.exact_yaml.encode("utf-8") for entry in request.entries)
+        contents = tuple(yaml_file.yaml_text.encode("utf-8") for yaml_file in request.yaml_files)
         checks = (
-            ("max_root_yaml_bytes", len(root_bytes), limits.max_root_yaml_bytes),
-            ("max_file_count", 1 + len(entry_bytes), limits.max_file_count),
+            ("max_file_count", len(contents), limits.max_file_count),
             (
                 "max_aggregate_bytes",
-                len(root_bytes) + sum(map(len, entry_bytes)),
+                sum(map(len, contents)),
                 limits.max_aggregate_bytes,
             ),
         )
@@ -922,98 +1186,153 @@ class BuilderCatalogAuthoringService:
                 _refuse(
                     "catalog_authoring.import_limit",
                     f"Import exceeds {name}: {actual} > {maximum}",
-                    ref=request.root_ref,
                 )
-        for entry, content in zip(request.entries, entry_bytes, strict=True):
+        for position, content in enumerate(contents, start=1):
             if len(content) > limits.max_file_bytes:
                 _refuse(
                     "catalog_authoring.import_limit",
-                    f"Import document {entry.ref} exceeds max_file_bytes: "
+                    f"Imported YAML file {position} exceeds max_file_bytes: "
                     f"{len(content)} > {limits.max_file_bytes}",
-                    ref=entry.ref,
                 )
+        return contents
 
-    def import_closure(self, request: CatalogClosureImportRequest) -> CatalogImportResult:
-        """Verify exact transport bytes, then atomically import canonical user YAML."""
+    def _import_proposal_token(
+        self,
+        *,
+        snapshot: CatalogReadSnapshot,
+        root_ref: SessionRef,
+        proposed_writes: tuple[CatalogYamlImportWrite, ...],
+        identical_refs: tuple[CatalogRef, ...],
+        collisions: tuple[CatalogYamlImportCollision, ...],
+    ) -> str:
+        payload = _canonical_json_bytes(
+            {
+                "collisions": [
+                    {
+                        "existing_revision": item.existing_revision,
+                        "reason": item.reason,
+                        "ref": str(item.ref),
+                    }
+                    for item in collisions
+                ],
+                "generation": str(snapshot.generation),
+                "identical_refs": [str(ref) for ref in identical_refs],
+                "root_ref": str(root_ref),
+                "version": 1,
+                "writes": [
+                    {
+                        "canonicalization_changed": item.canonicalization_changed,
+                        "content_digest": _sha256(item.canonical_yaml.encode("utf-8")),
+                        "family": item.family,
+                        "logical_path": item.logical_path,
+                        "ref": str(item.ref),
+                    }
+                    for item in proposed_writes
+                ],
+            }
+        )
+        signature = hmac.new(
+            self._import_proposal_key,
+            payload,
+            hashlib.sha256,
+        ).hexdigest()
+        return f"{_IMPORT_PROPOSAL_TOKEN_PREFIX}.{signature}"
 
-        if not isinstance(request, CatalogClosureImportRequest):
-            raise TypeError("request must be a CatalogClosureImportRequest")
+    def import_session_yaml(
+        self,
+        request: CatalogSessionYamlImportRequest,
+    ) -> CatalogSessionYamlImportResult:
+        """Derive YAML placement from typed identity and import atomically."""
+
+        if not isinstance(request, CatalogSessionYamlImportRequest):
+            raise TypeError("request must be a CatalogSessionYamlImportRequest")
         self._validate_import_bounds(request)
-        root_bytes = request.root_yaml.encode("utf-8")
-        if _sha256(root_bytes) != request.document_digest:
+        parsed = _parse_yaml_import(request.yaml_files)
+        limits = DEFAULT_CATALOG_UPLOAD_LIMITS
+        if len(parsed.root_content) > limits.max_root_yaml_bytes:
             _refuse(
-                "catalog_authoring.import_digest_mismatch",
-                "Import root document digest does not match its exact YAML bytes",
-                ref=request.root_ref,
+                "catalog_authoring.import_limit",
+                "Imported session exceeds max_root_yaml_bytes: "
+                f"{len(parsed.root_content)} > {limits.max_root_yaml_bytes}",
+                ref=parsed.root_ref,
             )
 
-        incoming_exact: dict[CatalogRef, bytes] = {}
-        for entry in request.entries:
-            content = entry.exact_yaml.encode("utf-8")
-            if _sha256(content) != entry.document_digest:
-                _refuse(
-                    "catalog_authoring.import_digest_mismatch",
-                    f"Import digest does not match exact YAML bytes for {entry.ref}",
-                    ref=entry.ref,
-                )
-            _validated_exact_document(entry.ref, content)
-            incoming_exact[entry.ref] = content
-        _validated_exact_document(request.root_ref, root_bytes)
-
+        snapshot = self._snapshot()
+        root_ref = (
+            parsed.root_ref
+            if parsed.root_ref_hinted
+            else _derive_import_session_ref(snapshot, parsed.root_ref)
+        )
+        _validated_exact_document(root_ref, parsed.root_content)
+        read_view = _IdentityImportReadView(
+            snapshot=snapshot,
+            components=parsed.components,
+            assigned_refs={},
+            assigned_documents={},
+        )
         try:
-            exact_closure = CatalogClosureCollector.collect(
-                root_bytes,
-                _ImportReadView(incoming_exact),
+            CatalogClosureCollector.collect(parsed.root_content, read_view)
+        except _ImportPlacementError as error:
+            _refuse(
+                "catalog_authoring.import_incomplete",
+                str(error),
+                ref=root_ref,
+                cause=error,
             )
         except CatalogClosureError as error:
             _refuse(
                 "catalog_authoring.invalid_graph",
                 str(error),
-                ref=request.root_ref,
+                ref=root_ref,
                 cause=error,
             )
-        observed_refs = {entry.ref for entry in exact_closure.entries}
-        supplied_refs = set(incoming_exact)
-        if observed_refs != supplied_refs:
-            unexpected = sorted(map(str, supplied_refs - observed_refs))
-            missing = sorted(map(str, observed_refs - supplied_refs))
+
+        unused = sorted(
+            str(component.hinted_ref)
+            if component.hinted_ref is not None
+            else f"{component.family}/{component.identity} (file {component.position})"
+            for components in parsed.components.values()
+            for component in components
+            if component.position not in read_view.assigned_refs
+        )
+        if unused:
             _refuse(
                 "catalog_authoring.import_incomplete",
-                "Import must contain exactly the session dependency closure; "
-                f"unexpected={unexpected}, missing={missing}",
-                ref=request.root_ref,
-            )
-        if exact_closure.closure_digest != request.closure_digest:
-            _refuse(
-                "catalog_authoring.import_digest_mismatch",
-                "Import closure digest does not match the exact typed dependency inventory",
-                ref=request.root_ref,
+                "Imported catalog YAML files are not referenced by the session graph: "
+                + ", ".join(unused),
+                ref=root_ref,
             )
 
         incoming = {
-            ref: _canonical_import_bytes(ref, content) for ref, content in incoming_exact.items()
+            ref: _canonical_import_bytes(ref, content)
+            for ref, content in read_view.assigned_documents.items()
         }
-        canonical_root_bytes = _canonical_import_bytes(request.root_ref, root_bytes)
+        canonical_root_bytes = _canonical_import_bytes(
+            root_ref,
+            parsed.root_content,
+        )
         try:
-            closure = CatalogClosureCollector.collect(
+            CatalogClosureCollector.collect(
                 canonical_root_bytes,
-                _ImportReadView(incoming),
+                _OverlayImportReadView(snapshot=snapshot, documents=incoming),
             )
         except CatalogClosureError as error:
             _refuse(
                 "catalog_authoring.invalid_graph",
-                f"Canonicalized import closure is invalid: {error}",
-                ref=request.root_ref,
+                f"Canonicalized YAML import is invalid: {error}",
+                ref=root_ref,
                 cause=error,
             )
 
-        snapshot = self._snapshot()
-        all_documents = {**incoming, request.root_ref: canonical_root_bytes}
-        proposed: list[CatalogImportWrite] = []
+        all_documents = {**incoming, root_ref: canonical_root_bytes}
+        source_documents = {
+            **read_view.assigned_documents,
+            root_ref: parsed.root_content,
+        }
+        proposed: list[CatalogYamlImportWrite] = []
         identical: list[CatalogRef] = []
-        collisions: list[CatalogImportCollision] = []
+        collisions: list[CatalogYamlImportCollision] = []
         for ref, content in sorted(all_documents.items(), key=lambda item: str(item[0])):
-            incoming_digest = _sha256(content)
             try:
                 existing = snapshot.get(ref)
             except CatalogNotFoundError:
@@ -1029,19 +1348,19 @@ class BuilderCatalogAuthoringService:
             if existing is None:
                 if ref.namespace == "nodalarc":
                     collisions.append(
-                        CatalogImportCollision(
+                        CatalogYamlImportCollision(
                             ref=ref,
                             reason="shipped_missing",
-                            incoming_digest=incoming_digest,
                         )
                     )
                 else:
                     proposed.append(
-                        CatalogImportWrite(
+                        CatalogYamlImportWrite(
                             ref=ref,
                             family=cast(CatalogFamily, ref.family),
-                            exact_yaml=content.decode("utf-8"),
-                            document_digest=incoming_digest,
+                            logical_path=preserved_catalog_path(ref),
+                            canonical_yaml=content.decode("utf-8"),
+                            canonicalization_changed=(source_documents[ref] != content),
                         )
                     )
                 continue
@@ -1049,15 +1368,13 @@ class BuilderCatalogAuthoringService:
                 identical.append(ref)
                 continue
             collisions.append(
-                CatalogImportCollision(
+                CatalogYamlImportCollision(
                     ref=ref,
                     reason=(
                         "shipped_content_mismatch"
                         if ref.namespace == "nodalarc"
                         else "user_content_mismatch"
                     ),
-                    incoming_digest=incoming_digest,
-                    existing_digest=_sha256(existing.content),
                     existing_revision=str(existing.revision),
                 )
             )
@@ -1065,35 +1382,48 @@ class BuilderCatalogAuthoringService:
         proposed_writes = tuple(proposed)
         identical_refs = tuple(sorted(identical, key=str))
         collision_result = tuple(collisions)
+        proposal_token = self._import_proposal_token(
+            snapshot=snapshot,
+            root_ref=root_ref,
+            proposed_writes=proposed_writes,
+            identical_refs=identical_refs,
+            collisions=collision_result,
+        )
+        if request.commit and not hmac.compare_digest(
+            cast(str, request.proposal_token),
+            proposal_token,
+        ):
+            _refuse(
+                "catalog_authoring.stale_import_proposal",
+                "The reviewed YAML import proposal is stale; review the current write set again",
+                ref=root_ref,
+                expected_revision=request.proposal_token,
+                current_revision=proposal_token,
+            )
+        result_fields = {
+            "root_ref": root_ref,
+            "generation": str(snapshot.generation),
+            "proposed_writes": proposed_writes,
+            "identical_refs": identical_refs,
+        }
         if collision_result:
-            return CatalogImportResult(
+            return CatalogSessionYamlImportResult(
                 outcome="blocked",
-                generation=str(snapshot.generation),
-                document_digest=closure.document_digest,
-                closure_digest=closure.closure_digest,
-                proposed_writes=proposed_writes,
-                identical_refs=identical_refs,
                 collisions=collision_result,
+                **result_fields,
             )
         if not proposed_writes:
-            return CatalogImportResult(
+            return CatalogSessionYamlImportResult(
                 outcome="unchanged",
-                generation=str(snapshot.generation),
-                document_digest=closure.document_digest,
-                closure_digest=closure.closure_digest,
-                proposed_writes=(),
-                identical_refs=identical_refs,
                 collisions=(),
+                **result_fields,
             )
         if not request.commit:
-            return CatalogImportResult(
+            return CatalogSessionYamlImportResult(
                 outcome="proposed",
-                generation=str(snapshot.generation),
-                document_digest=closure.document_digest,
-                closure_digest=closure.closure_digest,
-                proposed_writes=proposed_writes,
-                identical_refs=identical_refs,
+                proposal_token=proposal_token,
                 collisions=(),
+                **result_fields,
             )
 
         ordered_writes = sorted(
@@ -1108,44 +1438,43 @@ class BuilderCatalogAuthoringService:
             for item in ordered_writes:
                 transaction.write_bytes(
                     item.ref,
-                    item.exact_yaml.encode("utf-8"),
+                    item.canonical_yaml.encode("utf-8"),
                     expected_revision=None,
                 )
             committed = transaction.commit()
         except CatalogConflictError as error:
             _refuse(
                 "catalog_authoring.conflict",
-                f"Catalog changed while importing the closure: {error}",
-                ref=request.root_ref,
+                f"Catalog changed while importing YAML files: {error}",
+                ref=root_ref,
                 cause=error,
             )
         except CatalogValidationError as error:
             _refuse(
                 "catalog_authoring.invalid_graph",
                 str(error),
-                ref=request.root_ref,
+                ref=root_ref,
                 cause=error,
             )
         except (CatalogRepositoryError, OSError) as error:
             _refuse(
                 "catalog_authoring.persistence_failed",
                 f"Catalog import failed: {error}",
-                ref=request.root_ref,
+                ref=root_ref,
                 cause=error,
             )
         for item in proposed_writes:
             stored = _repository_document(committed, item.ref)
-            if stored.content != item.exact_yaml.encode("utf-8"):
+            if stored.content != item.canonical_yaml.encode("utf-8"):
                 _refuse(
                     "catalog_authoring.persistence_failed",
                     f"Imported document {item.ref} failed exact-byte verification",
                     ref=item.ref,
                 )
-        return CatalogImportResult(
+        return CatalogSessionYamlImportResult(
+            root_ref=root_ref,
             outcome="committed",
             generation=str(committed.generation),
-            document_digest=closure.document_digest,
-            closure_digest=closure.closure_digest,
             proposed_writes=proposed_writes,
             identical_refs=identical_refs,
             collisions=(),

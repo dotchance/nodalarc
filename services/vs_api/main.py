@@ -50,6 +50,7 @@ from nodalarc.catalog_repository import (
     CatalogRepositoryError,
     CatalogValidationError,
 )
+from nodalarc.catalog_upload import DEFAULT_CATALOG_UPLOAD_LIMITS
 from nodalarc.configuration_yaml import load_configuration_yaml
 from nodalarc.cr_runtime_config import RuntimeSessionConfig, load_cr_runtime_config
 from nodalarc.db.queries import (
@@ -1717,6 +1718,8 @@ app.add_middleware(
 
 _audit_log = logging.getLogger("nodal.audit")
 _MAX_BODY_BYTES = 1_048_576  # 1 MB
+_YAML_IMPORT_PATH = "/api/v1/builder/session/yaml/import"
+_YAML_IMPORT_BODY_BYTES = 4 * DEFAULT_CATALOG_UPLOAD_LIMITS.max_aggregate_bytes + 1_048_576
 
 
 from starlette.types import ASGIApp, Receive, Scope, Send
@@ -1747,7 +1750,7 @@ class SecurityHeadersMiddleware:
 
 
 class BodySizeLimitMiddleware:
-    """Reject HTTP requests with bodies larger than _MAX_BODY_BYTES. Passes WebSocket through."""
+    """Bound actual HTTP body bytes before request parsing. Passes WebSocket through."""
 
     def __init__(self, app: ASGIApp) -> None:
         self.app = app
@@ -1756,15 +1759,54 @@ class BodySizeLimitMiddleware:
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
-        from starlette.requests import Request as StarletteRequest
 
-        request = StarletteRequest(scope)
-        content_length = request.headers.get("content-length")
-        if content_length and int(content_length) > _MAX_BODY_BYTES:
+        limit = (
+            _YAML_IMPORT_BODY_BYTES if scope.get("path") == _YAML_IMPORT_PATH else _MAX_BODY_BYTES
+        )
+        content_length = next(
+            (
+                value
+                for name, value in scope.get("headers", ())
+                if name.lower() == b"content-length"
+            ),
+            None,
+        )
+        try:
+            declared_length = int(content_length) if content_length is not None else None
+        except TypeError, ValueError:
+            declared_length = None
+        if declared_length is not None and declared_length > limit:
             response = JSONResponse(status_code=413, content={"error": "Request body too large"})
             await response(scope, receive, send)
             return
-        await self.app(scope, receive, send)
+
+        messages = []
+        received = 0
+        while True:
+            message = await receive()
+            messages.append(message)
+            if message["type"] != "http.request":
+                break
+            received += len(message.get("body", b""))
+            if received > limit:
+                response = JSONResponse(
+                    status_code=413,
+                    content={"error": "Request body too large"},
+                )
+                await response(scope, receive, send)
+                return
+            if not message.get("more_body", False):
+                break
+
+        iterator = iter(messages)
+
+        async def replay_receive():
+            try:
+                return next(iterator)
+            except StopIteration:
+                return await receive()
+
+        await self.app(scope, replay_receive, send)
 
 
 class AuditLogMiddleware:
@@ -3768,7 +3810,7 @@ async def deploy_from_yaml(
             status_code=422,
             content={
                 "error": "Session references unresolved catalog content; "
-                "import the complete closure through Session Builder"
+                "import all referenced user component YAML files through Session Builder"
             },
         )
     except CatalogRepositoryError:

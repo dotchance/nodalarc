@@ -163,7 +163,7 @@ export function LibraryPanel({ onUse, onCustomize, onInspect, onNew }: LibraryPa
   const catalog = useBuilderCatalog(family);
   const [actionError, setActionError] = useState<string | null>(null);
   // The backend decides whether a family can be forked. Every component family
-  // has the full-document JSON fallback even when it has no specialized form.
+  // retains the canonical YAML surface even when it has no specialized form.
   const canCustomize = familyMetadata?.component_fork === true;
   const [forkDraft, setForkDraft] = useState<{
     entry: CatalogDocumentSummary;

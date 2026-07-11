@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import copy
-import json
 import re
 from dataclasses import dataclass
 from typing import Any, NoReturn, cast
@@ -25,6 +24,7 @@ from nodalarc.catalog_repository import (
     CatalogRepositoryError,
 )
 from nodalarc.configuration_yaml import load_configuration_yaml
+from nodalarc.marked_yaml import MarkedYamlError, YamlSourceMap, load_marked_yaml
 from nodalarc.models.builder_api import JsonDocument
 from nodalarc.models.builder_catalog_api import (
     CatalogComponentDraftEnvelope,
@@ -33,27 +33,48 @@ from nodalarc.models.builder_catalog_api import (
     CatalogDraftAddNodeEthernetPortRequest,
     CatalogDraftAddNodeTerminalMountRequest,
     CatalogDraftAddSiteNodeRequest,
+    CatalogDraftApplyYamlRequest,
+    CatalogDraftApplyYamlResult,
     CatalogDraftCompileRequest,
     CatalogDraftCompileResult,
+    CatalogDraftControlMutationRequest,
     CatalogDraftIssue,
     CatalogDraftNewRequest,
     CatalogDraftOpenRequest,
     CatalogDraftPatchCommand,
     CatalogDraftPatchRequest,
-    CatalogDraftReplaceObjectRequest,
     CatalogDraftSaveRequest,
     CatalogDraftSaveResult,
     CatalogOperationRefusal,
 )
-from nodalarc.models.catalog import Node, Terminal
+from nodalarc.models.catalog import (
+    BodyFixedFrame,
+    EthernetPort,
+    InterfaceAddress,
+    Node,
+    Site,
+    SiteLan,
+    SiteLocation,
+    SiteNode,
+    SiteSet,
+    Terminal,
+    TerminalInstallation,
+    TerminalLimits,
+    TerminalMount,
+)
 from nodalarc.runtime_support import RuntimeSupport, UnsupportedFeature
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 from .builder_catalog_service import BuilderCatalogAuthoringService, CatalogAuthoringError
 from .builder_compiler import (
     CanonicalConfigurationDocument,
     canonicalize_persisted_configuration,
 )
+from .builder_control_mutation import (
+    BuilderControlMutationError,
+    apply_builder_control_mutations,
+)
+from .builder_control_tree import BuilderControlTreeBuild, build_model_control_tree
 from .builder_visual_defaults import DEFAULT_TERMINAL_MOUNT_COUNT
 from .catalog_context import CatalogContext
 
@@ -62,17 +83,41 @@ _FORBIDDEN_POINTER_TOKENS = frozenset({".", "..", "__proto__", "constructor", "p
 _ARRAY_INDEX = re.compile(r"^(?:0|[1-9][0-9]*)$")
 
 
-def _reject_json_constant(value: str) -> NoReturn:
-    raise ValueError(f"non-finite JSON number {value!r} is not supported")
+_JSON_DOCUMENT = TypeAdapter(JsonDocument)
 
-
-def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-    result: dict[str, Any] = {}
-    for key, value in pairs:
-        if key in result:
-            raise ValueError(f"duplicate JSON key {key!r} is not supported")
-        result[key] = value
-    return result
+_SPECIALIZED_CATALOG_FIELDS = frozenset(
+    {
+        (Terminal, "display_name"),
+        (Terminal, "medium"),
+        (Terminal, "signal"),
+        (Terminal, "bandwidth_mbps"),
+        (Terminal, "tracking_capacity"),
+        (Terminal, "max_range_km"),
+        (Terminal, "reference"),
+        (TerminalLimits, "elevation_deg"),
+        (TerminalLimits, "max_tracking_rate_deg_s"),
+        (Node, "display_name"),
+        (Node, "forwarding"),
+        (Node, "reference"),
+        (TerminalMount, "role"),
+        (TerminalMount, "terminal"),
+        (TerminalMount, "count"),
+        (EthernetPort, "id"),
+        (Site, "display_name"),
+        (Site, "tags"),
+        (BodyFixedFrame, "body"),
+        (SiteLocation, "lat_deg"),
+        (SiteLocation, "lon_deg"),
+        (SiteLocation, "alt_m"),
+        (SiteLan, "ipv4"),
+        (SiteNode, "model"),
+        (TerminalInstallation, "installed_count"),
+        (InterfaceAddress, "ipv4"),
+        (SiteSet, "display_name"),
+        (SiteSet, "sites"),
+        (SiteSet, "reference"),
+    }
+)
 
 
 def _wrapper(family: CatalogComponentFamily) -> str:
@@ -265,16 +310,20 @@ def _structural_issues(
 ) -> tuple[CatalogDraftIssue, ...]:
     wrapper = _wrapper(family)
     if isinstance(error, ValidationError):
-        return tuple(
-            CatalogDraftIssue(
-                code=f"catalog_draft.structural.{item['type']}",
-                stage="structural",
-                message=item["msg"],
-                pointer=_pointer((wrapper, *item["loc"])),
-                blocks=("save", "deploy"),
+        issues: list[CatalogDraftIssue] = []
+        for item in error.errors(include_url=False):
+            location = tuple(item["loc"])
+            pointer_parts = location if location[:1] == (wrapper,) else (wrapper, *location)
+            issues.append(
+                CatalogDraftIssue(
+                    code=f"catalog_draft.structural.{item['type']}",
+                    stage="structural",
+                    message=item["msg"],
+                    pointer=_pointer(pointer_parts),
+                    blocks=("save", "deploy"),
+                )
             )
-            for item in error.errors(include_url=False)
-        )
+        return tuple(issues)
     return (
         CatalogDraftIssue(
             code="catalog_draft.structural.invalid_document",
@@ -284,6 +333,104 @@ def _structural_issues(
             blocks=("save", "deploy"),
         ),
     )
+
+
+def _yaml_refusal_issue(
+    *,
+    code: str,
+    message: str,
+    pointer: str = "/",
+    source_line: int | None = None,
+    source_column: int | None = None,
+) -> CatalogDraftIssue:
+    return CatalogDraftIssue(
+        code=code,
+        stage="structural",
+        message=message,
+        pointer=pointer,
+        source_line=source_line,
+        source_column=source_column,
+        blocks=("save", "deploy"),
+    )
+
+
+def _issue_with_source(
+    issue: CatalogDraftIssue,
+    source_map: YamlSourceMap,
+) -> CatalogDraftIssue:
+    prefer_key = issue.code.endswith("extra_forbidden")
+    span = source_map.span_for(issue.pointer, prefer_key=prefer_key)
+    if span is None:
+        return issue
+    return CatalogDraftIssue(
+        **{
+            **issue.model_dump(mode="python"),
+            "source_line": span.start.line,
+            "source_column": span.start.column,
+        }
+    )
+
+
+def _parse_yaml_application(
+    family: CatalogComponentFamily,
+    target_ref: CatalogRef,
+    yaml_text: str,
+) -> tuple[JsonDocument | None, YamlSourceMap | None, tuple[CatalogDraftIssue, ...]]:
+    try:
+        marked = load_marked_yaml(yaml_text)
+    except (UnicodeError, MarkedYamlError, RecursionError) as error:
+        mark = error.problem_mark if isinstance(error, MarkedYamlError) else None
+        return (
+            None,
+            None,
+            (
+                _yaml_refusal_issue(
+                    code="catalog_draft.yaml.invalid_syntax",
+                    message=f"Catalog component YAML is invalid: {error}",
+                    source_line=(mark.line if mark is not None else None),
+                    source_column=(mark.column if mark is not None else None),
+                ),
+            ),
+        )
+    try:
+        document = _JSON_DOCUMENT.validate_python(marked.data, strict=True)
+    except ValidationError as error:
+        issues = tuple(
+            _issue_with_source(
+                _yaml_refusal_issue(
+                    code=f"catalog_draft.yaml.{item['type']}",
+                    message=item["msg"],
+                    pointer=_pointer(tuple(item["loc"])),
+                ),
+                marked.source_map,
+            )
+            for item in error.errors(include_url=False)
+        )
+        return None, marked.source_map, issues
+
+    wrapper = _wrapper(family)
+    if set(document) != {wrapper} or not isinstance(document.get(wrapper), dict):
+        issue = _issue_with_source(
+            _yaml_refusal_issue(
+                code="catalog_draft.yaml.invalid_wrapper",
+                message=f"Catalog component YAML must contain only the {wrapper!r} object",
+                pointer=f"/{wrapper}",
+            ),
+            marked.source_map,
+        )
+        return None, marked.source_map, (issue,)
+    expected_id = target_ref.relative_path.stem
+    if document[wrapper].get("id") != expected_id:
+        issue = _issue_with_source(
+            _yaml_refusal_issue(
+                code="catalog_draft.yaml.fixed_identity",
+                message="Component identity is fixed by its user: reference",
+                pointer=f"/{wrapper}/id",
+            ),
+            marked.source_map,
+        )
+        return None, marked.source_map, (issue,)
+    return document, marked.source_map, ()
 
 
 def _analyze(
@@ -347,6 +494,26 @@ def _reference_issues(
     return ()
 
 
+def _control_build(
+    family: CatalogComponentFamily,
+    document: JsonDocument,
+    draft_revision: int,
+) -> BuilderControlTreeBuild:
+    spec = catalog_family_spec(family)
+    if spec.wrapper is None:
+        raise AssertionError("catalog component controls require a wrapped family")
+    return build_model_control_tree(
+        spec.document_model_type,
+        document,
+        projection_revision=draft_revision,
+        root_label=f"{spec.wrapper.replace('_', ' ').title()} component",
+        specialized_fields={
+            *(_SPECIALIZED_CATALOG_FIELDS),
+            (spec.model_type, "id"),
+        },
+    )
+
+
 def _envelope(
     *,
     draft_revision: int,
@@ -357,7 +524,18 @@ def _envelope(
     expected_target_revision: str | None,
     document: JsonDocument,
 ) -> CatalogComponentDraftEnvelope:
-    _, issues = _analyze(family, target_ref, document)
+    canonical, issues = _analyze(family, target_ref, document)
+    projected_yaml = (
+        canonical.yaml_bytes.decode("utf-8")
+        if canonical is not None
+        else yaml.safe_dump(
+            document,
+            allow_unicode=True,
+            default_flow_style=False,
+            sort_keys=True,
+        )
+    )
+    control_build = _control_build(family, document, draft_revision)
     return CatalogComponentDraftEnvelope(
         draft_revision=draft_revision,
         family=family,
@@ -366,6 +544,8 @@ def _envelope(
         expected_source_revision=expected_source_revision,
         expected_target_revision=expected_target_revision,
         document=document,
+        projected_yaml=projected_yaml,
+        control_tree=control_build.tree,
         issues=issues,
     )
 
@@ -461,6 +641,7 @@ class BuilderCatalogDraftService:
         draft: CatalogComponentDraftEnvelope,
         snapshot: CatalogReadSnapshot,
     ) -> None:
+        self._assert_ownership_mode(draft)
         if draft.source_ref is not None:
             current_source = _optional_revision(snapshot, draft.source_ref)
             if current_source != draft.expected_source_revision:
@@ -479,6 +660,45 @@ class BuilderCatalogDraftService:
                 ref=draft.target_ref,
                 expected_revision=draft.expected_target_revision,
                 current_revision=current_target,
+            )
+
+    @staticmethod
+    def _assert_ownership_mode(draft: CatalogComponentDraftEnvelope) -> None:
+        if draft.source_ref is None:
+            if (
+                draft.expected_source_revision is not None
+                or draft.expected_target_revision is not None
+            ):
+                _refuse(
+                    "catalog_authoring.invalid_graph",
+                    "New component drafts cannot carry persisted catalog revisions",
+                    ref=draft.target_ref,
+                )
+            return
+        if draft.source_ref == draft.target_ref:
+            if (
+                draft.source_ref.namespace != "user"
+                or draft.expected_source_revision is None
+                or draft.expected_target_revision != draft.expected_source_revision
+            ):
+                _refuse(
+                    "catalog_authoring.invalid_graph",
+                    "In-place component drafts require one matching user source and target revision",
+                    ref=draft.target_ref,
+                )
+            return
+        if draft.expected_source_revision is None:
+            _refuse(
+                "catalog_authoring.invalid_graph",
+                "Component forks require a pinned source revision",
+                ref=draft.target_ref,
+            )
+        if draft.expected_target_revision is not None:
+            _refuse(
+                "catalog_authoring.conflict",
+                f"Component fork target already exists: {draft.target_ref}",
+                ref=draft.target_ref,
+                current_revision=draft.expected_target_revision,
             )
 
     def new(self, request: CatalogDraftNewRequest) -> CatalogComponentDraftEnvelope:
@@ -516,16 +736,20 @@ class BuilderCatalogDraftService:
                 if request.source_ref.namespace == "user"
                 else CatalogRef(f"user:{request.source_ref.relative_path.as_posix()}")
             )
-            if (
-                request.source_ref.namespace == "nodalarc"
-                and _optional_revision(snapshot, target_ref) is not None
-            ):
+        target_revision = _optional_revision(snapshot, target_ref)
+        if target_ref == request.source_ref:
+            if request.source_ref.namespace != "user":
                 _refuse(
-                    "catalog_authoring.conflict",
-                    f"Default customization target already exists: {target_ref}; "
-                    "choose an explicit new user: reference",
-                    ref=target_ref,
+                    "catalog_authoring.read_only",
+                    f"Shipped catalog document {request.source_ref} is read-only",
+                    ref=request.source_ref,
                 )
+        elif target_revision is not None:
+            _refuse(
+                "catalog_authoring.conflict",
+                f"Catalog customization target already exists: {target_ref}",
+                ref=target_ref,
+            )
         document = copy.deepcopy(_canonical_source(source))
         wrapper = _wrapper(family)
         document[wrapper]["id"] = target_ref.relative_path.stem
@@ -535,7 +759,7 @@ class BuilderCatalogDraftService:
             target_ref=target_ref,
             source_ref=request.source_ref,
             expected_source_revision=str(source.revision),
-            expected_target_revision=_optional_revision(snapshot, target_ref),
+            expected_target_revision=target_revision,
             document=document,
         )
 
@@ -555,6 +779,62 @@ class BuilderCatalogDraftService:
                     ref=request.draft.target_ref,
                 )
             _apply_command(document, command)
+        return _envelope(
+            draft_revision=request.draft.draft_revision + 1,
+            family=request.draft.family,
+            target_ref=request.draft.target_ref,
+            source_ref=request.draft.source_ref,
+            expected_source_revision=request.draft.expected_source_revision,
+            expected_target_revision=request.draft.expected_target_revision,
+            document=document,
+        )
+
+    def mutate_controls(
+        self,
+        request: CatalogDraftControlMutationRequest,
+    ) -> CatalogComponentDraftEnvelope:
+        """Apply one atomic batch through backend-derived component controls."""
+
+        if not isinstance(request, CatalogDraftControlMutationRequest):
+            raise TypeError("request must be a CatalogDraftControlMutationRequest")
+        self._assert_draft_revision(request.draft, request.expected_draft_revision)
+        self._assert_catalog_revisions(request.draft, _snapshot(self._context))
+        control_build = _control_build(
+            request.draft.family,
+            request.draft.document,
+            request.draft.draft_revision,
+        )
+        if request.draft.control_tree != control_build.tree:
+            _refuse(
+                "catalog_authoring.invalid_graph",
+                "Component graphical controls are not the backend projection for this draft",
+                ref=request.draft.target_ref,
+            )
+
+        wrapper = _wrapper(request.draft.family)
+        protected_pointers = {"", f"/{wrapper}", f"/{wrapper}/id"}
+        for command in request.commands:
+            binding = control_build.bindings.get(command.control_id)
+            if binding is not None and binding.json_pointer in protected_pointers:
+                _refuse(
+                    "catalog_authoring.invalid_patch",
+                    "Graphical controls cannot change the family wrapper or object identity",
+                    ref=request.draft.target_ref,
+                )
+        try:
+            candidate = apply_builder_control_mutations(
+                request.draft.document,
+                control_build.bindings,
+                request.commands,
+            )
+            document = _JSON_DOCUMENT.validate_python(candidate, strict=True)
+        except (BuilderControlMutationError, ValidationError, TypeError, ValueError) as error:
+            _refuse(
+                "catalog_authoring.invalid_patch",
+                f"Component graphical mutation is invalid: {error}",
+                ref=request.draft.target_ref,
+                cause=error,
+            )
         return _envelope(
             draft_revision=request.draft.draft_revision + 1,
             family=request.draft.family,
@@ -777,46 +1057,30 @@ class BuilderCatalogDraftService:
             document=document,
         )
 
-    def replace_object(
+    def apply_yaml(
         self,
-        request: CatalogDraftReplaceObjectRequest,
-    ) -> CatalogComponentDraftEnvelope:
-        """Parse advanced JSON and replace only the fixed component wrapper."""
+        request: CatalogDraftApplyYamlRequest,
+    ) -> CatalogDraftApplyYamlResult:
+        """Parse one exact YAML buffer and advance only a graphically safe draft."""
 
-        if not isinstance(request, CatalogDraftReplaceObjectRequest):
-            raise TypeError("request must be a CatalogDraftReplaceObjectRequest")
+        if not isinstance(request, CatalogDraftApplyYamlRequest):
+            raise TypeError("request must be a CatalogDraftApplyYamlRequest")
         self._assert_draft_revision(request.draft, request.expected_draft_revision)
         self._assert_catalog_revisions(request.draft, _snapshot(self._context))
-        try:
-            parsed = json.loads(
-                request.raw_object_json,
-                parse_constant=_reject_json_constant,
-                object_pairs_hook=_unique_json_object,
+        document, source_map, refusal_issues = _parse_yaml_application(
+            request.draft.family,
+            request.draft.target_ref,
+            request.yaml_text,
+        )
+        if document is None:
+            return CatalogDraftApplyYamlResult(
+                draft=request.draft,
+                yaml_text=request.yaml_text,
+                applied=False,
+                canonicalization_required=False,
+                issues=refusal_issues,
             )
-        except (json.JSONDecodeError, RecursionError, ValueError) as error:
-            _refuse(
-                "catalog_authoring.invalid_document",
-                f"Advanced component JSON is invalid: {error}",
-                ref=request.draft.target_ref,
-                cause=error,
-            )
-        if not isinstance(parsed, dict):
-            _refuse(
-                "catalog_authoring.invalid_document",
-                "Advanced component JSON must contain one object",
-                ref=request.draft.target_ref,
-            )
-        wrapper = _wrapper(request.draft.family)
-        expected_id = request.draft.target_ref.relative_path.stem
-        if parsed.get("id") != expected_id:
-            _refuse(
-                "catalog_authoring.invalid_document",
-                "Component identity is fixed by its user: reference",
-                ref=request.draft.target_ref,
-            )
-        document = copy.deepcopy(request.draft.document)
-        document[wrapper] = parsed
-        return _envelope(
+        applied = _envelope(
             draft_revision=request.draft.draft_revision + 1,
             family=request.draft.family,
             target_ref=request.draft.target_ref,
@@ -824,6 +1088,30 @@ class BuilderCatalogDraftService:
             expected_source_revision=request.draft.expected_source_revision,
             expected_target_revision=request.draft.expected_target_revision,
             document=document,
+        )
+        if source_map is not None:
+            applied = CatalogComponentDraftEnvelope(
+                **{
+                    **applied.model_dump(mode="python"),
+                    "issues": tuple(
+                        _issue_with_source(issue, source_map) for issue in applied.issues
+                    ),
+                }
+            )
+        if any(issue.stage == "structural" for issue in applied.issues):
+            return CatalogDraftApplyYamlResult(
+                draft=request.draft,
+                yaml_text=request.yaml_text,
+                applied=False,
+                canonicalization_required=False,
+                issues=applied.issues,
+            )
+        return CatalogDraftApplyYamlResult(
+            draft=applied,
+            yaml_text=request.yaml_text,
+            applied=True,
+            canonicalization_required=request.yaml_text != applied.projected_yaml,
+            issues=applied.issues,
         )
 
     def _compile_at_snapshot(
@@ -843,12 +1131,22 @@ class BuilderCatalogDraftService:
                 *issues,
                 *_reference_issues(snapshot, request.draft.target_ref, canonical),
             )
-        draft = CatalogComponentDraftEnvelope(
-            **{
-                **request.draft.model_dump(mode="python"),
-                "issues": issues,
-            }
+        draft = _envelope(
+            draft_revision=request.draft.draft_revision,
+            family=request.draft.family,
+            target_ref=request.draft.target_ref,
+            source_ref=request.draft.source_ref,
+            expected_source_revision=request.draft.expected_source_revision,
+            expected_target_revision=request.draft.expected_target_revision,
+            document=copy.deepcopy(request.draft.document),
         )
+        if draft.issues != issues:
+            draft = CatalogComponentDraftEnvelope(
+                **{
+                    **draft.model_dump(mode="python"),
+                    "issues": issues,
+                }
+            )
         return CatalogDraftCompileResult(
             draft=draft,
             save_allowed=canonical is not None

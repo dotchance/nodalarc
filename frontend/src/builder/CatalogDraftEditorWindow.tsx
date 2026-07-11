@@ -1,11 +1,4 @@
-/** Backend-owned catalog component editing.
- *
- * The browser retains the complete JSON draft returned by VS-API. Specialized
- * forms mutate only known JSON-pointer fields in that full document; the
- * advanced editor exposes the same JSON application state for every component
- * family. Persisted YAML, canonicalization, grammar validation, reference
- * validation, and CAS storage remain backend authority.
- */
+/** Backend-owned graphical and YAML catalog component editing. */
 
 import { useEffect, useRef, useState } from "react";
 import { Button, IconButton } from "../ui/Button";
@@ -22,12 +15,17 @@ import {
   addCatalogDraftNodeEthernet,
   addCatalogDraftNodeTerminal,
   addCatalogDraftSiteNode,
+  applyCatalogDraftYaml,
   compileCatalogDraft,
   getCatalogDependents,
+  mutateCatalogDraftControls,
   patchCatalogDraft,
-  replaceCatalogDraftObject,
   saveCatalogDraft,
 } from "./builderApiClient";
+import {
+  GraphicalControlTreeEditor,
+  type BuilderControlMutation,
+} from "./GraphicalControlTreeEditor";
 import type { CatalogDraftEditorRecovery } from "./structuredDraftRecovery";
 import { useBuilderCatalog } from "./useBuilderWorld";
 import type {
@@ -35,6 +33,7 @@ import type {
   CatalogComponentDraftEnvelope,
   CatalogDependencyImpact,
   CatalogDraftCompileResult,
+  CatalogDraftIssue,
   CatalogDraftPatchCommand,
   CatalogDraftSaveResult,
   CatalogFamilyMetadata,
@@ -214,6 +213,7 @@ function TerminalForm({
             key={choice.id}
             active={medium === choice.id}
             onClick={() => {
+              if (medium === choice.id) return;
               setValue(`${root}/medium`, choice.id);
               setValue(`${root}/signal`, { ...choice.signal_seed });
             }}
@@ -468,7 +468,11 @@ function NodeForm({
               placeholder="port id"
               onChange={(id) => {
                 const next = cloneJson(ethernet);
-                next[index] = { id };
+                const current = isObject(next[index])
+                  ? cloneJson(next[index]) as JsonObject
+                  : {};
+                current.id = id;
+                next[index] = current;
                 setValue(`${root}/ethernet`, next);
               }}
             />
@@ -499,6 +503,10 @@ function SiteForm({ document, wrapper, setValue, addNode }: SiteFormProps) {
   const bodies = useBuilderCatalog("bodies");
   const nodes = useBuilderCatalog("nodes");
   const installedNodes = arrayValue(valueAt(document, `${root}/nodes`));
+  const frame = valueAt(document, `${root}/frame`);
+  const bodyFixedAuthoring = !isObject(frame)
+    || Object.keys(frame).length === 0
+    || isObject(frame.body_fixed);
   const [newNodeId, setNewNodeId] = useState("");
   const [newNodeRef, setNewNodeRef] = useState("");
   const [addingNode, setAddingNode] = useState(false);
@@ -515,31 +523,39 @@ function SiteForm({ document, wrapper, setValue, addNode }: SiteFormProps) {
         value={text(valueAt(document, `${root}/display_name`))}
         onChange={(value) => setValue(`${root}/display_name`, value)}
       />
-      <BodySelect
-        label="on body"
-        ariaLabel="Site body"
-        value={text(valueAt(document, `${root}/frame/body_fixed/body`))}
-        onChange={(value) => setValue(`${root}/frame/body_fixed/body`, value)}
-        bodies={bodies}
-      />
-      <NumberField
-        label="latitude"
-        suffix="deg"
-        value={numberValue(valueAt(document, `${root}/location/lat_deg`))}
-        onChange={(value) => setValue(`${root}/location/lat_deg`, value)}
-      />
-      <NumberField
-        label="longitude"
-        suffix="deg"
-        value={numberValue(valueAt(document, `${root}/location/lon_deg`))}
-        onChange={(value) => setValue(`${root}/location/lon_deg`, value)}
-      />
-      <NumberField
-        label="altitude"
-        suffix="m"
-        value={numberValue(valueAt(document, `${root}/location/alt_m`))}
-        onChange={(value) => setValue(`${root}/location/alt_m`, value)}
-      />
+      {bodyFixedAuthoring ? (
+        <>
+          <BodySelect
+            label="on body"
+            ariaLabel="Site body"
+            value={text(valueAt(document, `${root}/frame/body_fixed/body`))}
+            onChange={(value) => setValue(`${root}/frame/body_fixed/body`, value)}
+            bodies={bodies}
+          />
+          <NumberField
+            label="latitude"
+            suffix="deg"
+            value={numberValue(valueAt(document, `${root}/location/lat_deg`))}
+            onChange={(value) => setValue(`${root}/location/lat_deg`, value)}
+          />
+          <NumberField
+            label="longitude"
+            suffix="deg"
+            value={numberValue(valueAt(document, `${root}/location/lon_deg`))}
+            onChange={(value) => setValue(`${root}/location/lon_deg`, value)}
+          />
+          <NumberField
+            label="altitude"
+            suffix="m"
+            value={numberValue(valueAt(document, `${root}/location/alt_m`))}
+            onChange={(value) => setValue(`${root}/location/alt_m`, value)}
+          />
+        </>
+      ) : (
+        <div className="builder-site-derived">
+          This site uses a non-body-fixed frame. Its frame fields are edited below.
+        </div>
+      )}
       <Field
         label="site LAN"
         value={text(valueAt(document, `${root}/lan/ipv4`))}
@@ -765,15 +781,29 @@ export function CatalogDraftEditorWindow({
     ? initialRecovery
     : null;
   const [draft, setDraft] = useState(recovered?.draft ?? initialDraft);
+  const draftRef = useRef(recovered?.draft ?? initialDraft);
+  const [baselineDocument, setBaselineDocument] = useState(
+    recovered?.baselineDocument ?? initialDraft.document,
+  );
   const [workingDocument, setWorkingDocument] = useState(
     recovered?.workingDocument ?? initialDraft.document,
   );
   const [compileResult, setCompileResult] = useState<CatalogDraftCompileResult | null>(null);
-  const [advanced, setAdvanced] = useState(recovered?.advanced ?? false);
-  const [advancedText, setAdvancedText] = useState(
-    recovered?.advancedText ?? JSON.stringify(wrapperObject(initialDraft.document, wrapper), null, 2),
+  const [yamlText, setYamlText] = useState(
+    recovered?.yamlText ?? initialDraft.projected_yaml,
   );
-  const [advancedError, setAdvancedError] = useState<string | null>(null);
+  const [appliedYamlText, setAppliedYamlText] = useState(
+    recovered?.appliedYamlText ?? initialDraft.projected_yaml,
+  );
+  const [yamlIssues, setYamlIssues] = useState<ReadonlyArray<CatalogDraftIssue>>([]);
+  const [canonicalizationRequired, setCanonicalizationRequired] = useState(
+    recovered?.canonicalizationRequired ?? false,
+  );
+  const [canonicalizationAccepted, setCanonicalizationAccepted] = useState(
+    recovered?.canonicalizationAccepted ?? false,
+  );
+  const [graphicalSync, setGraphicalSync] = useState<"idle" | "syncing" | "failed">("idle");
+  const [yamlSync, setYamlSync] = useState<"idle" | "syncing" | "failed">("idle");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<"idle" | "validating" | "saving">("idle");
   const [impact, setImpact] = useState<CatalogDependencyImpact | null>(null);
@@ -781,35 +811,48 @@ export function CatalogDraftEditorWindow({
     initialDraft.expected_target_revision ? "loading" : "not-required",
   );
   const [impactAttempt, setImpactAttempt] = useState(0);
-  const preserveRecoveredTextOnMount = useRef(recovered !== null);
-  const specialized = ["terminals", "nodes", "sites", "site-sets"].includes(draft.family);
-  const advancedMode = advanced || !specialized;
-  const canonicalAdvancedText = JSON.stringify(wrapperObject(workingDocument, wrapper), null, 2);
+  const graphicalSyncSequence = useRef(0);
+  const yamlBufferGeneration = useRef(0);
+  const yamlApplyQueue = useRef<Promise<void>>(Promise.resolve());
+  const yamlPendingApply = useRef<{
+    generation: number;
+    promise: Promise<CatalogComponentDraftEnvelope | null>;
+  } | null>(null);
   const fieldDirty = catalogDraftFieldCommands(draft.document, workingDocument, wrapper).length > 0;
-  const advancedTextDirty = advancedMode && advancedText !== canonicalAdvancedText;
-  const dirty = fieldDirty || advancedTextDirty;
-  const issues = compileResult?.issues ?? draft.issues;
-
-  useEffect(() => {
-    if (preserveRecoveredTextOnMount.current) {
-      preserveRecoveredTextOnMount.current = false;
-      return;
-    }
-    setAdvancedText(JSON.stringify(wrapperObject(workingDocument, wrapper), null, 2));
-  }, [workingDocument, wrapper]);
+  const yamlTextDirty = yamlText !== appliedYamlText;
+  const semanticDirty = !jsonEqual(baselineDocument, workingDocument);
+  const dirty = semanticDirty || yamlTextDirty || canonicalizationRequired
+    || canonicalizationAccepted;
+  const graphicalEditingBlocked = yamlTextDirty || canonicalizationRequired;
+  const issues = yamlIssues.length > 0
+    ? yamlIssues
+    : compileResult?.issues ?? draft.issues;
 
   useEffect(() => {
     onRecoveryChange?.(
       dirty
         ? {
             draft,
+            baselineDocument,
             workingDocument,
-            advanced,
-            advancedText,
+            yamlText,
+            appliedYamlText,
+            canonicalizationRequired,
+            canonicalizationAccepted,
           }
         : null,
     );
-  }, [advanced, advancedText, dirty, draft, onRecoveryChange, workingDocument]);
+  }, [
+    appliedYamlText,
+    baselineDocument,
+    canonicalizationAccepted,
+    canonicalizationRequired,
+    dirty,
+    draft,
+    onRecoveryChange,
+    workingDocument,
+    yamlText,
+  ]);
 
   useEffect(() => {
     if (!draft.expected_target_revision) {
@@ -832,33 +875,81 @@ export function CatalogDraftEditorWindow({
   }, [draft.expected_target_revision, draft.target_ref, impactAttempt]);
 
   const setValue = (pointer: string, value: JsonValue) => {
+    if (graphicalEditingBlocked) return;
     setWorkingDocument((current) => setAt(current, pointer, value));
+    setCompileResult(null);
+    setYamlIssues([]);
+  };
+
+  const adoptGraphicalDraft = (updated: CatalogComponentDraftEnvelope) => {
+    yamlBufferGeneration.current += 1;
+    draftRef.current = updated;
+    setDraft(updated);
+    setWorkingDocument(updated.document);
+    setYamlText(updated.projected_yaml);
+    setAppliedYamlText(updated.projected_yaml);
+    setYamlIssues([]);
+    setCanonicalizationRequired(false);
+    setCanonicalizationAccepted(false);
     setCompileResult(null);
   };
 
-  const applyAdvanced = async (): Promise<CatalogComponentDraftEnvelope | null> => {
-    setAdvancedError(null);
-    if (!advancedTextDirty) return draft;
-    try {
-      const replaced = await replaceCatalogDraftObject({
-        draft,
-        expected_draft_revision: draft.draft_revision,
-        raw_object_json: advancedText,
-      });
-      setDraft(replaced);
-      setWorkingDocument(replaced.document);
-      setAdvancedText(JSON.stringify(wrapperObject(replaced.document, wrapper), null, 2));
-      setCompileResult(null);
-      return replaced;
-    } catch (cause) {
-      setAdvancedError(cause instanceof Error ? cause.message : String(cause));
-      return null;
+  const applyYamlBuffer = (
+    buffer: string,
+    generation: number,
+  ): Promise<CatalogComponentDraftEnvelope | null> => {
+    if (yamlPendingApply.current?.generation === generation) {
+      return yamlPendingApply.current.promise;
     }
+    graphicalSyncSequence.current += 1;
+    const run = async (): Promise<CatalogComponentDraftEnvelope | null> => {
+      if (yamlBufferGeneration.current === generation) setYamlSync("syncing");
+      try {
+        const baseDraft = draftRef.current;
+        const result = await applyCatalogDraftYaml({
+          draft: baseDraft,
+          expected_draft_revision: baseDraft.draft_revision,
+          yaml_text: buffer,
+        });
+        if (yamlBufferGeneration.current !== generation) return null;
+        setYamlIssues(result.issues);
+        setYamlSync("idle");
+        if (!result.applied) return null;
+        draftRef.current = result.draft;
+        setDraft(result.draft);
+        setWorkingDocument(result.draft.document);
+        setYamlText(result.yaml_text);
+        setAppliedYamlText(result.yaml_text);
+        setCanonicalizationRequired(result.canonicalization_required);
+        setCanonicalizationAccepted(false);
+        setCompileResult(null);
+        return result.draft;
+      } catch (cause) {
+        if (yamlBufferGeneration.current === generation) {
+          setYamlSync("failed");
+          setError(cause instanceof Error ? cause.message : String(cause));
+        }
+        return null;
+      }
+    };
+    const operation = yamlApplyQueue.current.then(run, run);
+    yamlApplyQueue.current = operation.then(() => undefined, () => undefined);
+    yamlPendingApply.current = { generation, promise: operation };
+    void operation.finally(() => {
+      if (yamlPendingApply.current?.promise === operation) yamlPendingApply.current = null;
+    });
+    return operation;
+  };
+
+  const applyYaml = (): Promise<CatalogComponentDraftEnvelope | null> => {
+    if (!yamlTextDirty) return Promise.resolve(draftRef.current);
+    return applyYamlBuffer(yamlText, yamlBufferGeneration.current);
   };
 
   const flush = async (
     document: Readonly<Record<string, JsonValue>> = workingDocument,
   ): Promise<CatalogComponentDraftEnvelope> => {
+    graphicalSyncSequence.current += 1;
     const commands = catalogDraftFieldCommands(draft.document, document, wrapper);
     if (commands.length === 0) return draft;
     let patched = draft;
@@ -869,10 +960,55 @@ export function CatalogDraftEditorWindow({
         commands: commands.slice(offset, offset + 64),
       });
     }
-    setDraft(patched);
-    setWorkingDocument(patched.document);
+    adoptGraphicalDraft(patched);
     return patched;
   };
+
+  useEffect(() => {
+    if (
+      !fieldDirty
+      || graphicalEditingBlocked
+      || busy !== "idle"
+    ) return;
+    const sequence = graphicalSyncSequence.current + 1;
+    graphicalSyncSequence.current = sequence;
+    const baseDraft = draft;
+    const document = workingDocument;
+    const commands = catalogDraftFieldCommands(baseDraft.document, document, wrapper);
+    const timer = window.setTimeout(() => {
+      setGraphicalSync("syncing");
+      void (async () => {
+        try {
+          let patched = baseDraft;
+          for (let offset = 0; offset < commands.length; offset += 64) {
+            patched = await patchCatalogDraft({
+              draft: patched,
+              expected_draft_revision: patched.draft_revision,
+              commands: commands.slice(offset, offset + 64),
+            });
+          }
+          if (graphicalSyncSequence.current !== sequence) return;
+          adoptGraphicalDraft(patched);
+          setGraphicalSync("idle");
+        } catch (cause) {
+          if (graphicalSyncSequence.current !== sequence) return;
+          setGraphicalSync("failed");
+          setError(cause instanceof Error ? cause.message : String(cause));
+        }
+      })();
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [busy, draft, fieldDirty, graphicalEditingBlocked, workingDocument, wrapper]);
+
+  useEffect(() => {
+    if (!yamlTextDirty || fieldDirty || busy !== "idle") return;
+    const generation = yamlBufferGeneration.current;
+    const buffer = yamlText;
+    const timer = window.setTimeout(() => {
+      void applyYamlBuffer(buffer, generation);
+    }, 400);
+    return () => window.clearTimeout(timer);
+  }, [busy, fieldDirty, yamlText, yamlTextDirty]);
 
   const addSiteNode = async (nodeId: string, nodeRef: string): Promise<boolean> => {
     setBusy("validating");
@@ -885,9 +1021,7 @@ export function CatalogDraftEditorWindow({
         node_id: nodeId,
         node_ref: nodeRef,
       });
-      setDraft(updated);
-      setWorkingDocument(updated.document);
-      setCompileResult(null);
+      adoptGraphicalDraft(updated);
       return true;
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -911,9 +1045,7 @@ export function CatalogDraftEditorWindow({
         terminal_ref: terminalRef,
         role,
       });
-      setDraft(updated);
-      setWorkingDocument(updated.document);
-      setCompileResult(null);
+      adoptGraphicalDraft(updated);
       return true;
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -932,9 +1064,7 @@ export function CatalogDraftEditorWindow({
         draft: patched,
         expected_draft_revision: patched.draft_revision,
       });
-      setDraft(updated);
-      setWorkingDocument(updated.document);
-      setCompileResult(null);
+      adoptGraphicalDraft(updated);
       return true;
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -944,18 +1074,43 @@ export function CatalogDraftEditorWindow({
     }
   };
 
-  const validate = async () => {
+  const mutateControls = async (
+    commands: ReadonlyArray<BuilderControlMutation>,
+  ): Promise<void> => {
+    if (fieldDirty || graphicalEditingBlocked) {
+      throw new Error("Wait for current graphical or YAML edits to finish before changing this field.");
+    }
+    graphicalSyncSequence.current += 1;
     setBusy("validating");
     setError(null);
     try {
-      const patched = advancedMode ? await applyAdvanced() : await flush(workingDocument);
+      const baseDraft = draftRef.current;
+      const updated = await mutateCatalogDraftControls({
+        draft: baseDraft,
+        expected_draft_revision: baseDraft.draft_revision,
+        commands,
+      });
+      adoptGraphicalDraft(updated);
+    } finally {
+      setBusy("idle");
+    }
+  };
+
+  const validate = async () => {
+    graphicalSyncSequence.current += 1;
+    setBusy("validating");
+    setError(null);
+    try {
+      const patched = yamlTextDirty ? await applyYaml() : await flush(workingDocument);
       if (!patched) return;
       const compiled = await compileCatalogDraft({
         draft: patched,
         expected_draft_revision: patched.draft_revision,
       });
+      draftRef.current = compiled.draft;
       setDraft(compiled.draft);
       setWorkingDocument(compiled.draft.document);
+      setYamlIssues([]);
       setCompileResult(compiled);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -969,25 +1124,44 @@ export function CatalogDraftEditorWindow({
       setError("Dependency impact must load before this user component can be overwritten.");
       return;
     }
+    if (canonicalizationRequired) {
+      setError("Acknowledge canonical YAML formatting before saving this component.");
+      return;
+    }
+    graphicalSyncSequence.current += 1;
     setBusy("saving");
     setError(null);
     try {
-      const patched = advancedMode ? await applyAdvanced() : await flush(workingDocument);
+      const patched = yamlTextDirty ? await applyYaml() : await flush(workingDocument);
       if (!patched) return;
+      if (yamlTextDirty && yamlText !== patched.projected_yaml) {
+        setError("Review and acknowledge canonical YAML formatting before saving.");
+        return;
+      }
       const compiled = await compileCatalogDraft({
         draft: patched,
         expected_draft_revision: patched.draft_revision,
       });
+      draftRef.current = compiled.draft;
       setDraft(compiled.draft);
       setWorkingDocument(compiled.draft.document);
+      setYamlIssues([]);
       setCompileResult(compiled);
       if (!compiled.save_allowed) return;
       const saved = await saveCatalogDraft({
         draft: compiled.draft,
         expected_draft_revision: compiled.draft.draft_revision,
       });
+      yamlBufferGeneration.current += 1;
+      draftRef.current = saved.draft;
       setDraft(saved.draft);
+      setBaselineDocument(saved.draft.document);
       setWorkingDocument(saved.draft.document);
+      setYamlText(saved.draft.projected_yaml);
+      setAppliedYamlText(saved.draft.projected_yaml);
+      setYamlIssues([]);
+      setCanonicalizationRequired(false);
+      setCanonicalizationAccepted(false);
       setCompileResult(saved.compile_result);
       await onSaved(saved);
     } catch (cause) {
@@ -1021,42 +1195,122 @@ export function CatalogDraftEditorWindow({
           ? `customizing ${draft.source_ref} as ${draft.target_ref}`
           : `editing ${draft.target_ref}`}
       </div>
-      {specialized && (
-        <div className="builder-preset-row" role="tablist" aria-label="Catalog editor mode">
-          <Button active={!advanced} onClick={() => setAdvanced(false)}>Form</Button>
-          <Button active={advanced} onClick={() => setAdvanced(true)}>Advanced JSON</Button>
+      <div className="catalog-draft-surfaces">
+        <div className="builder-inspector-stack" data-testid="catalog-graphical-editor">
+          <div className="builder-zone-title">Graphical editor</div>
+          {form && (
+            <fieldset
+              className="catalog-draft-fieldset"
+              disabled={busy !== "idle" || graphicalEditingBlocked}
+            >
+              {form}
+            </fieldset>
+          )}
+          <GraphicalControlTreeEditor
+            tree={draft.control_tree}
+            disabled={
+              busy !== "idle"
+              || graphicalEditingBlocked
+              || fieldDirty
+              || graphicalSync === "syncing"
+            }
+            onMutate={mutateControls}
+          />
+          {yamlTextDirty && (
+            <div className="builder-warning" data-testid="catalog-yaml-stale-marker">
+              Showing applied revision {draft.draft_revision}; the YAML buffer has unapplied edits.
+            </div>
+          )}
+          {canonicalizationRequired && (
+            <div className="builder-warning" data-testid="catalog-canonicalization-warning">
+              The applied YAML contains formatting or comments that graphical edits and saves
+              cannot preserve. Review the backend projection before continuing.
+              <div className="builder-preset-row">
+                <Button
+                  disabled={busy !== "idle"}
+                  onClick={() => {
+                    yamlBufferGeneration.current += 1;
+                    setYamlText(draft.projected_yaml);
+                    setAppliedYamlText(draft.projected_yaml);
+                    setYamlIssues(draft.issues);
+                    setCanonicalizationRequired(false);
+                    setCanonicalizationAccepted(true);
+                    setError(null);
+                  }}
+                >
+                  Use canonical YAML
+                </Button>
+              </div>
+            </div>
+          )}
         </div>
-      )}
-      {!advanced && form ? form : (
-        <div className="builder-inspector-stack" data-testid="catalog-advanced-json">
+        <div className="builder-inspector-stack" data-testid="catalog-yaml-editor">
+          <div className="builder-zone-title">Component YAML</div>
           <div className="builder-site-derived">
-            Full backend document object. The id is fixed; VS-API validates every
-            JSON-pointer patch and produces canonical YAML.
+            VS-API parses this exact buffer through the canonical catalog loader. The graphical
+            view changes only after a valid buffer is applied.
           </div>
           <PasteArea
+            ariaLabel="Component YAML"
+            className="catalog-draft-yaml"
             rows={28}
-            value={advancedText}
+            value={yamlText}
+            disabled={busy !== "idle" || fieldDirty || graphicalSync === "syncing"}
             onChange={(value) => {
-              setAdvancedText(value);
-              setAdvancedError(null);
+              graphicalSyncSequence.current += 1;
+              yamlBufferGeneration.current += 1;
+              setYamlText(value);
+              setYamlSync("idle");
+              setYamlIssues([]);
+              setError(null);
             }}
-            placeholder="catalog component JSON"
+            placeholder="catalog component YAML"
           />
-          <Button
-            disabled={busy !== "idle" || !advancedTextDirty}
-            onClick={() => {
-              setBusy("validating");
-              void applyAdvanced().finally(() => setBusy("idle"));
-            }}
-          >
-            Apply JSON edits
-          </Button>
-          {advancedError && <div className="builder-warning">{advancedError}</div>}
+          <div className="builder-preset-row">
+            <Button
+              disabled={busy !== "idle" || !yamlTextDirty || fieldDirty}
+              onClick={() => {
+                setBusy("validating");
+                void applyYaml().finally(() => setBusy("idle"));
+              }}
+            >
+              Apply YAML
+            </Button>
+            <Button
+              disabled={busy !== "idle" || !yamlTextDirty}
+              onClick={() => {
+                graphicalSyncSequence.current += 1;
+                yamlBufferGeneration.current += 1;
+                setYamlText(appliedYamlText);
+                setYamlSync("idle");
+                setYamlIssues([]);
+                setError(null);
+              }}
+            >
+              Revert buffer
+            </Button>
+          </div>
+          {graphicalSync === "syncing" && (
+            <div className="builder-site-derived">updating YAML from graphical edits…</div>
+          )}
+          {graphicalSync === "failed" && (
+            <div className="builder-warning">YAML projection could not be refreshed.</div>
+          )}
+          {yamlSync === "syncing" && (
+            <div className="builder-site-derived">validating YAML and updating the graphical view…</div>
+          )}
+          {yamlSync === "failed" && (
+            <div className="builder-warning">YAML validation could not reach VS-API.</div>
+          )}
         </div>
-      )}
+      </div>
       {issues.map((issue) => (
         <div className="builder-warning" key={`${issue.code}:${issue.pointer}`}>
-          {issue.message} <span className="builder-site-derived">{issue.pointer}</span>
+          {issue.message}{" "}
+          <span className="builder-site-derived">
+            {issue.pointer}
+            {issue.source_line ? ` · line ${issue.source_line}:${issue.source_column ?? 1}` : ""}
+          </span>
         </div>
       ))}
       {impact && (
@@ -1090,12 +1344,6 @@ export function CatalogDraftEditorWindow({
           Structurally valid and savable; current runtime support blocks deployment.
         </div>
       )}
-      {compileResult?.canonical_yaml && (
-        <details>
-          <summary>Backend canonical YAML</summary>
-          <pre className="builder-yaml-body">{compileResult.canonical_yaml}</pre>
-        </details>
-      )}
       {error && <div className="builder-warning">{error}</div>}
       <div className="builder-preset-row">
         <Button disabled={busy !== "idle"} onClick={() => void validate()}>
@@ -1103,7 +1351,12 @@ export function CatalogDraftEditorWindow({
         </Button>
         <Button
           variant="primary"
-          disabled={busy !== "idle" || impactState === "loading" || impactState === "failed"}
+          disabled={
+            busy !== "idle"
+            || canonicalizationRequired
+            || impactState === "loading"
+            || impactState === "failed"
+          }
           onClick={() => void save()}
         >
           {busy === "saving" ? "Saving…" : "Save to library"}

@@ -66,8 +66,8 @@ import {
   announceCatalogDraftSaved,
   claimLibraryReveal,
   claimOutlineReveal,
-  exportSessionClosure,
-  importSessionClosure,
+  exportSessionYaml,
+  importSessionYamlFiles,
   readCatalogObject,
   requestOutlineReveal,
   useLibraryReveal,
@@ -78,7 +78,11 @@ import {
   useBuilderWorld,
 } from "./useBuilderWorld";
 import { downloadBlob } from "../ui/downloadBlob";
-import { workspaceForSave, useWorkspace, type EditorBuffer } from "./useWorkspace";
+import {
+  GraphicalControlTreeEditor,
+  type BuilderControlMutation,
+} from "./GraphicalControlTreeEditor";
+import { workspaceForSave, useWorkspace } from "./useWorkspace";
 import {
   useEditorWindows,
   targetKey,
@@ -89,25 +93,23 @@ import { wallTarget } from "./wallTarget";
 import {
   createStructuredRecovery,
   clearCatalogDraftRecovery,
+  clearStructuredRecoveryScope,
+  getRecoveryTabBinding,
   hasStructuredRecovery,
   loadCatalogDraftRecovery,
   restoreStructuredRecovery,
   stashStructuredRecovery,
-  STRUCTURED_AUTOSAVE_KEY,
-  STRUCTURED_BACKUP_KEY,
   writeStructuredAutosave,
   writeCatalogDraftRecovery,
   type CatalogDraftEditorRecovery,
+  type RecoveryStorageScope,
 } from "./structuredDraftRecovery";
 import {
   BuilderApiError,
   createCatalogDraft,
   openCatalogDraft,
 } from "./builderApiClient";
-import {
-  structuredDraftFromWorkspace,
-  workspaceFromVisualDraft,
-} from "./visualWorkspace";
+import { workspaceFromVisualDraft } from "./visualWorkspace";
 import {
   emittedRuleId,
   linkWarnings,
@@ -122,7 +124,6 @@ import {
 } from "./workspace";
 import type {
   BuilderDeployVerdict,
-  BuilderVisualDraftAssemblyResult,
   BuilderVisualAuthoringFacts,
   BuilderVisualSchedulingPreset,
   BuilderVisualDraftCommandRequest,
@@ -210,6 +211,12 @@ function count(n: number, word: string): string {
  *  status bar) — the owning window's wall carries the full text. */
 function truncateError(text: string, max = 180): string {
   return text.length > max ? `${text.slice(0, max)}\u2026` : text;
+}
+
+function sameWorkspace(left: Workspace | null, right: Workspace | null): boolean {
+  if (left === right) return true;
+  if (!left || !right) return false;
+  return JSON.stringify(left) === JSON.stringify(right);
 }
 
 function groupByBody(segments: SegmentSummary[]): [string, SegmentSummary[]][] {
@@ -477,10 +484,10 @@ export function BuilderView({
     sessionsError,
     openedSession,
     visualDraft,
-    currentVisualDraft,
+    yamlBuffer,
+    writer,
     assemblyResult,
     world,
-    documentYaml,
     loading,
     error,
     resolveError,
@@ -489,22 +496,21 @@ export function BuilderView({
     settledDocumentDigest,
     settledDependencySha256,
     createDraft,
-    prepareRetargetDraft,
     openSession,
-    editOpaqueYaml,
-    undoOpaque,
-    markSavedRevision,
+    editYamlBuffer,
+    applyYamlBuffer,
+    useCanonicalYaml,
+    applyWorkspace,
     customizeChain,
     runVisualCommand,
-    adoptVisualCommandResult,
-    compileDraft,
-    compileDraftWithoutAdopting,
-    adoptCompiledDraft,
-    hasOpaqueAutosave,
-    stashOpaqueDraft,
-    restoreOpaqueAutosave,
+    mutateControls,
+    prepareRetarget,
+    compileCurrent,
     adoptRecoveredStructuredDraft,
+    captureCoordinator,
+    captureIsCurrent,
     saveSession,
+    adoptCommittedRetarget,
     deploySession,
     refreshSessions,
     clear,
@@ -521,7 +527,6 @@ export function BuilderView({
     commitWorkspace,
     updateSession,
     undo,
-    close: closeWorkspace,
     removeRefSegment,
     removeConstellation,
     updateConstellation,
@@ -538,6 +543,25 @@ export function BuilderView({
   const nodeCatalog = useBuilderCatalog("nodes");
   const terminalCatalog = useBuilderCatalog("terminals");
   const builderBootstrap = useBuilderBootstrap();
+  const recoveryTabBinding = useMemo(() => getRecoveryTabBinding(), []);
+  const recoveryScope = useMemo<RecoveryStorageScope | null>(() => {
+    const binding = builderBootstrap.bootstrap?.authoring_context_binding;
+    return binding
+      ? { authoringContextBinding: binding, tabBinding: recoveryTabBinding }
+      : null;
+  }, [builderBootstrap.bootstrap?.authoring_context_binding, recoveryTabBinding]);
+  const priorRecoveryScope = useRef<RecoveryStorageScope | null>(null);
+  useEffect(() => {
+    const previous = priorRecoveryScope.current;
+    if (
+      previous &&
+      recoveryScope &&
+      previous.authoringContextBinding !== recoveryScope.authoringContextBinding
+    ) {
+      clearStructuredRecoveryScope(previous);
+    }
+    priorRecoveryScope.current = recoveryScope;
+  }, [recoveryScope]);
   const authoring: BuilderVisualAuthoringFacts | null =
     builderBootstrap.bootstrap?.authoring ?? null;
   const schedulingPresets = builderBootstrap.bootstrap?.scheduling_presets ?? [];
@@ -632,12 +656,27 @@ export function BuilderView({
   const [structuredRecoveryRevision, setStructuredRecoveryRevision] = useState(0);
   const [saveState, setSaveState] = useState<SaveState>({ kind: "idle" });
   const currentStructuredRecovery = () =>
-    createStructuredRecovery({ workspace, visualDraft, windows, buffers });
+    recoveryScope &&
+    createStructuredRecovery({
+      authoringContextBinding: recoveryScope.authoringContextBinding,
+      workspace,
+      visualDraft,
+      yaml: {
+        text: yamlBuffer.text,
+        appliedText: yamlBuffer.appliedText,
+        generation: yamlBuffer.generation,
+        canonicalizationRequired: yamlBuffer.canonicalizationRequired,
+        canonicalizationAccepted: yamlBuffer.canonicalizationAccepted,
+        issues: yamlBuffer.issues,
+      },
+      windows,
+      buffers,
+    });
   useEffect(() => {
     const recovery = currentStructuredRecovery();
-    if (!recovery) return;
+    if (!recovery || !recoveryScope) return;
     const timer = setTimeout(() => {
-      if (writeStructuredAutosave(recovery)) {
+      if (writeStructuredAutosave(recovery, recoveryScope)) {
         setStructuredRecoveryRevision((revision) => revision + 1);
       }
     }, 800);
@@ -645,26 +684,36 @@ export function BuilderView({
     // The exact full envelope, applied workspace, and save-relevant buffers are
     // the recovery identity; no flattened or fresh-draft reconstruction occurs.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [workspace, visualDraft, windows, buffers]);
+  }, [workspace, visualDraft, yamlBuffer, windows, buffers, recoveryScope]);
   const hasStructuredAutosave = () => {
     void structuredRecoveryRevision;
-    return hasStructuredRecovery(STRUCTURED_AUTOSAVE_KEY);
+    return recoveryScope ? hasStructuredRecovery("autosave", recoveryScope) : false;
   };
   const hasStructuredBackup = () => {
     void structuredRecoveryRevision;
-    return hasStructuredRecovery(STRUCTURED_BACKUP_KEY);
+    return recoveryScope ? hasStructuredRecovery("backup", recoveryScope) : false;
   };
   const stashCurrentStructuredRecovery = (options?: { force?: boolean }) => {
-    const outcome = stashStructuredRecovery(currentStructuredRecovery(), options);
+    if (!recoveryScope) return "skipped" as const;
+    const outcome = stashStructuredRecovery(
+      currentStructuredRecovery(),
+      recoveryScope,
+      options,
+    );
     if (outcome === "stashed") {
       setStructuredRecoveryRevision((revision) => revision + 1);
     }
     return outcome;
   };
   const restoreCurrentStructuredRecovery = () => {
+    if (!recoveryScope) {
+      setRestoreError("Builder recovery is unavailable until backend context loads");
+      return;
+    }
     const fromBackup = hasStructuredBackup();
     const result = restoreStructuredRecovery(
-      fromBackup ? STRUCTURED_BACKUP_KEY : STRUCTURED_AUTOSAVE_KEY,
+      fromBackup ? "backup" : "autosave",
+      recoveryScope,
       { consume: fromBackup },
     );
     if (!result.ok) {
@@ -677,16 +726,21 @@ export function BuilderView({
     setSelection(null);
     setSaveState({ kind: "idle" });
     setRestoreError(null);
-    adoptRecoveredStructuredDraft(result.recovery.visualDraft);
+    adoptRecoveredStructuredDraft(result.recovery.visualDraft, {
+      ...result.recovery.yaml,
+      dirty: result.recovery.yaml.text !== result.recovery.yaml.appliedText,
+      applied: result.recovery.yaml.issues.length === 0,
+    });
+    if (
+      result.recovery.yaml.issues.length === 0 &&
+      result.recovery.yaml.text === result.recovery.yaml.appliedText
+    ) {
+      void compileCurrent();
+    }
     setStructuredRecoveryRevision((revision) => revision + 1);
   };
   /** Run a displacing gesture only after preserving the exact current draft. */
   const displace = (proceed: () => void, label: string) => {
-    if (visualDraft?.mode === "opaque_yaml") {
-      stashOpaqueDraft();
-      proceed();
-      return;
-    }
     if (stashCurrentStructuredRecovery() === "refused") {
       setPendingDisplace({ label, proceed });
       return;
@@ -720,7 +774,6 @@ export function BuilderView({
   // library revision is a dependency on purpose: a user-catalog mutation
   // changes its dependency closure, so both settled digests must recompile.
   const libraryRevision = useLibraryRevision();
-  const draftRevision = useRef(0);
   // A Restore that finds no payload (missing/corrupt) surfaces here instead of
   // silently doing nothing; the current workspace and its world stand.
   const [restoreError, setRestoreError] = useState<string | null>(null);
@@ -732,18 +785,30 @@ export function BuilderView({
       workspace.ground.length +
       workspace.ground_refs.length >
       0;
+  const yamlBlocksGui =
+    yamlBuffer.dirty ||
+    !yamlBuffer.applied ||
+    (yamlBuffer.canonicalizationRequired && !yamlBuffer.canonicalizationAccepted);
   useEffect(() => {
-    if (saveState.kind === "saving" || !workspace || visualDraft?.mode !== "structured") return;
+    if (saveState.kind === "saving" || !workspace || !visualDraft || yamlBlocksGui) return;
     const preview = previewWorkspace();
     if (!preview) return;
-    draftRevision.current = Math.max(draftRevision.current + 1, visualDraft.draft_revision + 1);
-    const draft = structuredDraftFromWorkspace(
-      visualDraft,
-      preview,
-      draftRevision.current,
-    );
+    const projected = visualDraft.authoring_workspace ?? visualDraft.applied_workspace;
+    if (sameWorkspace(preview, projected as Workspace | null)) return;
+    const bufferRevision = currentBufferMutationRevision();
+    const appliedWorkspace = currentWorkspace();
     const timer = setTimeout(() => {
-      void compileDraft(draft);
+      void applyWorkspace(preview)
+        .then((result) => {
+          if (
+            currentBufferMutationRevision() === bufferRevision &&
+            currentWorkspace() === appliedWorkspace &&
+            dirtyWindows === 0
+          ) {
+            openWorkspace(workspaceFromVisualDraft(result.visual_draft));
+          }
+        })
+        .catch(() => undefined);
     }, 300);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -751,19 +816,19 @@ export function BuilderView({
     workspace,
     buffers,
     libraryRevision,
-    visualDraft?.mode,
-    visualDraft?.target_ref,
-    visualDraft?.expected_session_revision,
-    visualDraft?.catalog_documents?.length,
+    visualDraft,
+    yamlBlocksGui,
     saveState.kind,
   ]);
 
   useEffect(() => {
-    if (saveState.kind === "saving" || visualDraft?.mode !== "opaque_yaml") return;
-    if (assemblyResult?.visual_draft.draft_revision === visualDraft.draft_revision) return;
-    const timer = setTimeout(() => void compileDraft(visualDraft), 300);
+    if (!visualDraft || !yamlBuffer.dirty || dirtyWindows > 0) return;
+    const generation = yamlBuffer.generation;
+    const timer = setTimeout(() => {
+      void applyYamlBuffer(generation).catch(() => undefined);
+    }, 500);
     return () => clearTimeout(timer);
-  }, [assemblyResult?.visual_draft.draft_revision, compileDraft, saveState.kind, visualDraft]);
+  }, [applyYamlBuffer, dirtyWindows, visualDraft, yamlBuffer.dirty, yamlBuffer.generation]);
 
   // Trust mechanics: Ctrl/Cmd+Z undoes the last workspace mutation unless
   // the user is typing in a field (native input undo wins there). Gated on
@@ -777,12 +842,11 @@ export function BuilderView({
       const tag = target?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
       event.preventDefault();
-      if (visualDraft?.mode === "opaque_yaml") undoOpaque();
-      else undo();
+      undo();
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [active, undo, undoOpaque, visualDraft?.mode]);
+  }, [active, undo]);
   // the object a create gesture just made — its editor focuses the
   // name once.
   const [freshId, setFreshId] = useState<string | null>(null);
@@ -857,10 +921,6 @@ export function BuilderView({
     confirmedStaleKeys?: ReadonlySet<string>;
   }) => {
     if (!workspace) return;
-    let preparedAssembly: BuilderVisualDraftAssemblyResult | null = null;
-    let preparedWorkspace: Workspace | null = null;
-    let preparedBuffers: Map<string, EditorBuffer> | null = null;
-    let preparedRetarget = false;
     if (applyAll && staleKeys.size > 0 && confirmedStaleKeys === undefined) {
       // Fail-closed backstop: a bulk apply-and-save with stale windows must
       // pass through the confirm flow, which decides each stale window
@@ -873,6 +933,8 @@ export function BuilderView({
       });
       return;
     }
+    let preparedRetargetForSave: Awaited<ReturnType<typeof prepareRetarget>> | null = null;
+    let saveCapture: ReturnType<typeof captureCoordinator> | null = null;
     setSaveState({ kind: "saving" });
     try {
       // Declined stale windows (stale, not confirmed) are excluded from the
@@ -890,64 +952,78 @@ export function BuilderView({
       const appliedBuffers = new Map(
         Object.entries(buffers).filter(([k, b]) => b.dirty && !excludeKeys.has(k)),
       );
-      preparedBuffers = appliedBuffers;
-      let next = workspaceForSave(workspace, buffers, {
+      const next = workspaceForSave(workspace, buffers, {
         applyAll,
         dialogName: name,
         nameTouched,
         excludeKeys,
       });
-      const currentDraft = currentVisualDraft();
-      if (currentDraft?.mode !== "structured") {
-        throw new Error("the current draft is not a structured visual session");
+      if (yamlBlocksGui) {
+        throw new Error("apply valid canonical YAML before saving the graphical session");
       }
-      const targetName =
-        currentDraft.target_ref.split("/").pop()?.replace(/\.ya?ml$/, "") ?? "";
-      preparedRetarget = next.session_name !== targetName;
-      const base =
-        preparedRetarget
-          ? await prepareRetargetDraft(next.session_name)
-          : currentDraft;
-      const backendName =
-        base.target_ref.split("/").pop()?.replace(/\.ya?ml$/, "") ?? next.session_name;
-      if (next.session_name !== backendName) {
-        next = { ...next, session_name: backendName };
+      if (nameTouched && !name.trim()) {
+        throw new Error("session name is required");
       }
-      preparedWorkspace = next;
-      draftRevision.current = Math.max(draftRevision.current + 1, base.draft_revision + 1);
-      const draft = structuredDraftFromWorkspace(
-        base,
-        next,
-        draftRevision.current,
-      );
-      const assembled = await compileDraftWithoutAdopting(draft);
-      preparedAssembly = assembled;
+      const currentTargetName = visualDraft?.target_ref
+        .split("/")
+        .pop()
+        ?.replace(/\.ya?ml$/, "");
+      if (!currentTargetName) throw new Error("the current session target is unavailable");
+      const retargetRequired = next.session_name !== currentTargetName;
+      const workspaceForCurrentTarget = retargetRequired
+        ? { ...next, session_name: currentTargetName }
+        : next;
+      const currentProjection = visualDraft?.authoring_workspace ?? visualDraft?.applied_workspace;
+      let assembled =
+        assemblyResult && sameWorkspace(
+          workspaceForCurrentTarget,
+          currentProjection as Workspace | null,
+        )
+          ? assemblyResult
+          : await applyWorkspace(workspaceForCurrentTarget);
+      const preparedRetarget = retargetRequired
+        ? await prepareRetarget(`user:sessions/${next.session_name}.yaml`)
+        : null;
+      preparedRetargetForSave = preparedRetarget;
+      if (preparedRetarget) assembled = preparedRetarget;
       if (!assembled.compile_result.save_verdict.allowed) {
         throw new Error(
           assembled.compile_result.save_verdict.blockers?.[0]?.message ??
             "the backend blocked this visual draft from saving",
         );
       }
-      const result = await saveSession(assembled.save_request);
+      const capture = captureCoordinator();
+      saveCapture = capture;
+      const saved = await saveSession(assembled.save_request, capture);
+      const result = saved.result;
+      if (!saved.reopenedDraft) {
+        if (preparedRetarget && captureIsCurrent(capture)) {
+          adoptCommittedRetarget(preparedRetarget, {
+            ref: result.session.ref,
+            revision: result.session.revision,
+            canonicalYaml: result.session.canonical_yaml,
+          });
+        }
+        if (next !== workspace) {
+          commitWorkspace(next, "save-committed-unverified");
+        }
+        if (applyAll) dropAppliedBuffers(appliedBuffers);
+        setSaveState({
+          kind: "save-committed-unverified",
+          message:
+            saved.postCommitError ??
+            "the session was saved, but the persisted revision could not be reopened",
+          sessionRef: result.session.ref,
+        });
+        return;
+      }
       if (next !== workspace) {
         commitWorkspace(next, applyAll ? "apply-all-save" : "save-rename");
       }
       if (applyAll) {
         dropAppliedBuffers(appliedBuffers);
       }
-      adoptCompiledDraft(assembled, preparedRetarget);
-      const revisions = new Map(
-        result.dependency_closure.entries
-          .filter((entry) => entry.revision)
-          .map((entry) => [entry.ref, entry.revision!] as const),
-      );
-      const expectedCatalogRevisions = (
-        assembled.assembled_draft.state.catalog_documents ?? []
-      ).flatMap((proposal) => {
-        const revision = revisions.get(proposal.ref);
-        return revision ? [{ ref: proposal.ref, expected_revision: revision }] : [];
-      });
-      markSavedRevision(result.session.revision, expectedCatalogRevisions);
+      openWorkspace(workspaceFromVisualDraft(saved.reopenedDraft));
       setSaveState({
         kind: "saved",
         name: next.session_name,
@@ -962,77 +1038,26 @@ export function BuilderView({
         typeof detail === "object" &&
         (detail as Record<string, unknown>).repository_committed === true
       ) {
-        if (preparedAssembly && preparedWorkspace) {
-          if (preparedWorkspace !== workspace) {
-            commitWorkspace(preparedWorkspace, "save-committed-unverified");
-          }
-          if (applyAll && preparedBuffers) dropAppliedBuffers(preparedBuffers);
-          adoptCompiledDraft(preparedAssembly, preparedRetarget);
+        const committedRef = String(
+          (detail as Record<string, unknown>).target_ref ?? "saved session",
+        );
+        if (
+          preparedRetargetForSave &&
+          saveCapture &&
+          captureIsCurrent(saveCapture)
+        ) {
+          adoptCommittedRetarget(preparedRetargetForSave, { ref: committedRef });
+          openWorkspace(workspaceFromVisualDraft(preparedRetargetForSave.visual_draft));
         }
         setSaveState({
           kind: "save-committed-unverified",
           message: e instanceof Error ? e.message : String(e),
-          sessionRef: String((detail as Record<string, unknown>).target_ref ?? "saved session"),
+          sessionRef: committedRef,
         });
       } else {
         setSaveState({
           kind: "failed",
           message: e instanceof Error ? e.message : String(e),
-        });
-      }
-    }
-  };
-  const performOpaqueSave = async () => {
-    if (visualDraft?.mode !== "opaque_yaml") return;
-    setSaveState({ kind: "saving" });
-    try {
-      const assembled =
-        assemblyResult?.visual_draft.draft_revision === visualDraft.draft_revision
-          ? assemblyResult
-          : await compileDraft(visualDraft);
-      if (!assembled) throw new Error("the backend did not compile the YAML draft");
-      if (!assembled.compile_result.save_verdict.allowed) {
-        throw new Error(
-          assembled.compile_result.save_verdict.blockers?.[0]?.message ??
-            "the backend blocked this YAML draft from saving",
-        );
-      }
-      const result = await saveSession(assembled.save_request);
-      const revisions = new Map(
-        result.dependency_closure.entries
-          .filter((entry) => entry.revision)
-          .map((entry) => [entry.ref, entry.revision!] as const),
-      );
-      const expectedCatalogRevisions = (
-        assembled.assembled_draft.state.catalog_documents ?? []
-      ).flatMap((proposal) => {
-        const revision = revisions.get(proposal.ref);
-        return revision ? [{ ref: proposal.ref, expected_revision: revision }] : [];
-      });
-      markSavedRevision(result.session.revision, expectedCatalogRevisions);
-      setSaveState({
-        kind: "saved",
-        name: result.session.ref.split("/").pop()?.replace(/\.ya?ml$/, "") ?? "session",
-        sessionRef: result.session.ref,
-        sessionRevision: result.session.revision,
-        deployVerdict: result.deploy_verdict,
-      });
-    } catch (cause) {
-      const detail = cause instanceof BuilderApiError ? cause.detail : null;
-      if (
-        detail &&
-        typeof detail === "object" &&
-        (detail as Record<string, unknown>).repository_committed === true
-      ) {
-        setSaveState({
-          kind: "save-committed-unverified",
-          message: cause instanceof Error ? cause.message : String(cause),
-          sessionRef: String((detail as Record<string, unknown>).target_ref ?? "saved session"),
-        });
-      } else {
-        setSaveState({
-          kind: "failed",
-          message: cause instanceof Error ? cause.message : String(cause),
         });
       }
     }
@@ -1051,13 +1076,8 @@ export function BuilderView({
   });
   // Standalone component authoring (Your library) — independent of sessions.
   const [catalogDraftRecovery, setCatalogDraftRecovery] =
-    useState<CatalogDraftEditorRecovery | null>(() => {
-      const recovered = loadCatalogDraftRecovery();
-      return recovered.ok ? recovered.recovery : null;
-    });
-  const [catalogDraft, setCatalogDraft] = useState<CatalogComponentDraftEnvelope | null>(
-    () => catalogDraftRecovery?.draft ?? null,
-  );
+    useState<CatalogDraftEditorRecovery | null>(null);
+  const [catalogDraft, setCatalogDraft] = useState<CatalogComponentDraftEnvelope | null>(null);
   const [libraryError, setLibraryError] = useState<string | null>(null);
   const visualCommandInFlight = useRef(false);
 
@@ -1087,10 +1107,9 @@ export function BuilderView({
       key = schedulingSelectionKey(result.affected_id, undefined, result.draft.target_ref);
     } else if (
       command.operation === "add_ground_site_reference" &&
-      command.segment_id === undefined &&
-      result.draft.mode === "structured"
+      command.segment_id === undefined
     ) {
-      const ground = result.draft.workspace?.ground?.find((candidate) =>
+      const ground = result.draft.authoring_workspace?.ground?.find((candidate) =>
         candidate.members?.some((member) => member.member_id === result.affected_id),
       );
       if (ground?.segment_id) {
@@ -1113,27 +1132,13 @@ export function BuilderView({
     if (visualCommandInFlight.current) {
       throw new Error("another visual command is still being applied");
     }
-    const baseDraft = currentVisualDraft();
-    if (!baseDraft || baseDraft.mode !== "structured") {
-      throw new Error("visual commands require an open structured session draft");
-    }
-    draftRevision.current = Math.max(
-      draftRevision.current + 1,
-      baseDraft.draft_revision + 1,
-    );
-    const commandDraft = structuredDraftFromWorkspace(
-      baseDraft,
-      sourceWorkspace,
-      draftRevision.current,
-    );
     visualCommandInFlight.current = true;
     try {
-      const result = await runVisualCommand({
-        draft: commandDraft,
-        expected_draft_revision: commandDraft.draft_revision,
-        command,
-      });
-      draftRevision.current = Math.max(draftRevision.current, result.draft.draft_revision);
+      const projected = visualDraft?.authoring_workspace ?? visualDraft?.applied_workspace;
+      if (!sameWorkspace(sourceWorkspace, projected as Workspace | null)) {
+        await applyWorkspace(sourceWorkspace);
+      }
+      const result = await runVisualCommand(command);
       if (currentWorkspace() !== appliedWorkspace) {
         throw new Error("the session changed while the visual command was running; try again");
       }
@@ -1159,12 +1164,23 @@ export function BuilderView({
       workspaceFromVisualDraft(result.draft),
       `backend visual command: ${result.operation}`,
     );
-    adoptVisualCommandResult(result);
     rememberSchedulingSelection(command, result);
     return result;
   };
 
-  const reopenRecoveredCatalogDraft = useRef(catalogDraftRecovery !== null);
+  const reopenRecoveredCatalogDraft = useRef(false);
+  useEffect(() => {
+    if (!recoveryScope) {
+      setCatalogDraftRecovery(null);
+      setCatalogDraft(null);
+      return;
+    }
+    const recovered = loadCatalogDraftRecovery(recoveryScope);
+    const recovery = recovered.ok ? recovered.recovery : null;
+    setCatalogDraftRecovery(recovery);
+    setCatalogDraft(recovery?.draft ?? null);
+    reopenRecoveredCatalogDraft.current = recovery !== null;
+  }, [recoveryScope]);
   useEffect(() => {
     if (!active || !reopenRecoveredCatalogDraft.current || !catalogDraftRecovery) return;
     reopenRecoveredCatalogDraft.current = false;
@@ -1174,20 +1190,21 @@ export function BuilderView({
     (recovery: CatalogDraftEditorRecovery | null) => {
       setCatalogDraftRecovery(recovery);
       if (recovery) {
+        if (!recoveryScope) return;
         setCatalogDraft(recovery.draft);
-        writeCatalogDraftRecovery(recovery);
-      } else {
-        clearCatalogDraftRecovery();
+        writeCatalogDraftRecovery(recovery, recoveryScope);
+      } else if (recoveryScope) {
+        clearCatalogDraftRecovery(recoveryScope);
       }
     },
-    [],
+    [recoveryScope],
   );
   const discardCatalogDraft = useCallback(() => {
-    clearCatalogDraftRecovery();
+    if (recoveryScope) clearCatalogDraftRecovery(recoveryScope);
     setCatalogDraftRecovery(null);
     setCatalogDraft(null);
     closeWindow("library");
-  }, [closeWindow]);
+  }, [closeWindow, recoveryScope]);
 
   // The Library's per-entry gestures. USE places a catalog reference in an
   // editable session; CUSTOMIZE opens a full backend draft at an explicit
@@ -1894,29 +1911,7 @@ export function BuilderView({
         };
       }
       case "source-yaml": {
-        if (visualDraft?.mode !== "opaque_yaml") return null;
-        return {
-          title: "Edit source YAML",
-          content: (
-            <div className="builder-inspector-stack" data-testid="opaque-yaml-editor">
-              <div className="builder-site-derived">
-                This is the exact source opened by VS-API. Every edit returns to
-                `/draft/compile`; the Session YAML pane remains backend-canonical output.
-              </div>
-              <PasteArea
-                rows={28}
-                value={visualDraft.session_yaml ?? ""}
-                onChange={editOpaqueYaml}
-                placeholder="session YAML"
-              />
-              {(assemblyResult?.assembly_issues ?? []).map((issue) => (
-                <div className="builder-warning" key={`${issue.code}:${issue.message}`}>
-                  {issue.message}
-                </div>
-              ))}
-            </div>
-          ),
-        };
+        return null;
       }
       case "customize-chain": {
         const dependencyRefs =
@@ -1936,7 +1931,7 @@ export function BuilderView({
                   leaf_ref: leafRef,
                   ...(targetLeafRef ? { target_leaf_ref: targetLeafRef } : {}),
                 });
-                if (result.applied && result.draft.mode === "structured") {
+                if (result.applied) {
                   commitWorkspace(
                     workspaceFromVisualDraft(result.draft),
                     "customize-chain",
@@ -1963,7 +1958,7 @@ export function BuilderView({
                 setOpenSessionError(result.reason);
                 return;
               }
-              closeWorkspace();
+              openWorkspace(workspaceFromVisualDraft(result.draft));
               closeAllWindows();
               setSelection(null);
               setSaveState({ kind: "idle" });
@@ -1978,9 +1973,9 @@ export function BuilderView({
               sessionsError={sessionsError}
               openError={openSessionError}
               onOpen={openEntry}
-              onExport={exportSessionClosure}
-              onImport={async (payload, commit) => {
-                const result = await importSessionClosure(payload, commit);
+              onExport={exportSessionYaml}
+              onImport={async (yamlFiles, proposalToken) => {
+                const result = await importSessionYamlFiles(yamlFiles, proposalToken);
                 if (result.outcome === "committed") await refreshSessions();
                 return result;
               }}
@@ -2145,10 +2140,13 @@ export function BuilderView({
   const assemblySettled =
     visualDraft !== null &&
     assemblyResult?.visual_draft.draft_revision === visualDraft.draft_revision;
-  const hasSavableDraft = workspace !== null || visualDraft?.mode === "opaque_yaml";
+  const hasSavableDraft = workspace !== null && visualDraft !== null;
 
   return (
-    <div className="builder-shell" data-testid="builder-shell">
+    <div
+      className={`builder-shell${yamlBlocksGui ? " builder-shell--gui-locked" : ""}`}
+      data-testid="builder-shell"
+    >
       {/* Session verbs live here, with standard icons — a toolbar, like
           every other application. The rail below is session content only;
           the Library is one surface (its window), opened from here. */}
@@ -2217,8 +2215,7 @@ export function BuilderView({
                       "The backend must compile this draft before save")
             }
             onClick={() => {
-              if (visualDraft?.mode === "opaque_yaml") void performOpaqueSave();
-              else openEditor({ kind: "save-session" });
+              openEditor({ kind: "save-session" });
             }}
           />
           <IconButton
@@ -2285,30 +2282,6 @@ export function BuilderView({
             }
             onClick={restoreCurrentStructuredRecovery}
           />
-          <IconButton
-            className="builder-toolbar-btn"
-            icon="history"
-            size={17}
-            disabled={!hasOpaqueAutosave()}
-            label={
-              hasOpaqueAutosave()
-                ? "Restore the lossless YAML draft autosaved in this browser"
-                : "No lossless YAML draft to restore"
-            }
-            onClick={() => {
-              const result = restoreOpaqueAutosave();
-              if (!result.ok) {
-                setRestoreError(result.reason);
-                return;
-              }
-              closeWorkspace();
-              closeAllWindows();
-              setSelection(null);
-              setSaveState({ kind: "idle" });
-              setRestoreError(null);
-              openEditor({ kind: "source-yaml" });
-            }}
-          />
         </span>
         <IconButton
           className="builder-toolbar-btn"
@@ -2327,10 +2300,10 @@ export function BuilderView({
       </div>
       <div className="builder-outline" data-testid="builder-outline">
         <div className="builder-zone-title">World</div>
-        {openedSession && visualDraft?.mode === "opaque_yaml" && (
+        {openedSession && visualDraft && (
           <div className="builder-warning" data-testid="opened-session-lossless">
-            {openedSession.display_name} is open in lossless source mode. VS-API
-            owns parsing, canonicalization, component-chain forking, and save assembly.
+            {openedSession.display_name} is open as a synchronized graphical and YAML draft.
+            VS-API owns parsing, canonicalization, component-chain forking, and save assembly.
             {visualDraft.source_ref && visualDraft.source_ref !== visualDraft.target_ref && (
               <div className="builder-site-derived">
                 This copy targets {visualDraft.target_ref}. Change session.name in the source YAML
@@ -2338,11 +2311,6 @@ export function BuilderView({
                 Save; the backend blocks a mismatched identity.
               </div>
             )}
-            <div className="builder-preset-row">
-              <Button onClick={() => openEditor({ kind: "source-yaml" })}>
-                Edit source YAML
-              </Button>
-            </div>
           </div>
         )}
         {workspace && (nodeCatalog.error || terminalCatalog.error) && (
@@ -2363,7 +2331,7 @@ export function BuilderView({
           <BuildGuide
             workspace={previewWorkspace() ?? workspace}
             sessionNameIsPlaceholder={
-              visualDraft?.mode === "structured"
+              visualDraft
                 ? visualDraft.session_name_is_placeholder &&
                   (previewWorkspace() ?? workspace).session_name ===
                     (visualDraft.target_ref.split("/").pop() ?? "").replace(/\.ya?ml$/, "")
@@ -2813,7 +2781,7 @@ export function BuilderView({
                           {seg.relays > 0 && ` · ${seg.relays} relay`}
                         </span>
                       </button>
-                      {visualDraft?.mode === "opaque_yaml" && (
+                      {visualDraft && (
                         <IconButton
                           icon="pencil"
                           size={12}
@@ -3014,12 +2982,75 @@ export function BuilderView({
       </div>
       <div className="builder-inspector" data-testid="builder-yaml">
         <div className="builder-zone-title">Session YAML</div>
-        {documentYaml ? (
+        {visualDraft?.authoring_workspace?.control_tree?.root && (
+          <details className="builder-generic-controls" data-testid="session-generic-controls">
+            <summary>Additional graphical fields</summary>
+            <GraphicalControlTreeEditor
+              tree={visualDraft.authoring_workspace.control_tree}
+              disabled={yamlBlocksGui || dirtyWindows > 0 || writer !== null}
+              hideSpecialized
+              onMutate={async (commands: ReadonlyArray<BuilderControlMutation>) => {
+                setLibraryError(null);
+                try {
+                  const result = await mutateControls(commands);
+                  openWorkspace(workspaceFromVisualDraft(result.visual_draft));
+                  setSaveState({ kind: "idle" });
+                } catch (cause) {
+                  setLibraryError(cause instanceof Error ? cause.message : String(cause));
+                  throw cause;
+                }
+              }}
+            />
+          </details>
+        )}
+        {visualDraft ? (
           <>
+            <div
+              className={`builder-yaml-revision${yamlBuffer.issues.length > 0 ? " builder-yaml-revision--error" : ""}`}
+              data-testid="builder-yaml-revision"
+            >
+              {visualDraft.applied_revision !== null && visualDraft.applied_revision !== undefined
+                ? `Showing applied revision ${visualDraft.applied_revision}; buffer generation ${yamlBuffer.generation}${
+                    yamlBuffer.issues.length > 0 ? " has errors" : ""
+                  }`
+                : `Buffer generation ${yamlBuffer.generation} has no valid graphical projection`}
+            </div>
+            {dirtyWindows > 0 && (
+              <div className="builder-site-derived">
+                Apply or discard graphical window edits before editing YAML.
+              </div>
+            )}
+            <PasteArea
+              className="builder-yaml-editor"
+              value={yamlBuffer.text}
+              disabled={dirtyWindows > 0 || (writer !== null && writer !== "yaml")}
+              onChange={editYamlBuffer}
+              ariaLabel="Session YAML"
+              rows={32}
+            />
             <div className="builder-preset-row">
               <Button
+                disabled={
+                  dirtyWindows > 0 ||
+                  writer !== null ||
+                  (!yamlBuffer.dirty && yamlBuffer.issues.length === 0)
+                }
+                onClick={() => void applyYamlBuffer(yamlBuffer.generation)}
+              >
+                {writer === "yaml" ? "Applying…" : "Apply YAML"}
+              </Button>
+              {yamlBuffer.canonicalizationRequired && (
+                <Button
+                  variant="primary"
+                  disabled={writer !== null || dirtyWindows > 0}
+                  onClick={() => void useCanonicalYaml()}
+                >
+                  Use canonical YAML
+                </Button>
+              )}
+              <Button
                 onClick={() => {
-                  const p = navigator.clipboard?.writeText(documentYaml);
+                  const p = navigator.clipboard?.writeText(yamlBuffer.text);
                   if (!p) {
                     setCopyState("failed");
                     return;
@@ -3037,16 +3068,38 @@ export function BuilderView({
                     : "Copy"}
               </Button>
               <Button
-                onClick={() => downloadBlob(documentYaml, `${world?.session.name ?? "session"}.yaml`)}
+                onClick={() =>
+                  downloadBlob(
+                    yamlBuffer.text,
+                    `${world?.session.name ?? workspace?.session_name ?? "session"}.yaml`,
+                  )
+                }
               >
                 Download
               </Button>
             </div>
-            <pre className="builder-yaml-body">{documentYaml}</pre>
+            {yamlBuffer.canonicalizationRequired && (
+              <div className="builder-warning" data-testid="builder-canonicalization-warning">
+                This buffer contains comments or formatting that canonical save and graphical edits
+                cannot preserve. Review and choose Use canonical YAML before continuing graphically or
+                saving.
+              </div>
+            )}
+            {yamlBuffer.issues.map((issue, index) => (
+              <div
+                className="builder-warning"
+                key={`${issue.code}:${issue.json_pointer ?? ""}:${index}`}
+              >
+                {issue.source_line && issue.source_column
+                  ? `Line ${issue.source_line}, column ${issue.source_column}: `
+                  : ""}
+                {issue.message}
+              </div>
+            ))}
           </>
         ) : (
           <div className="builder-zone-empty">
-            The session document appears here as soon as a draft resolves.
+            The session YAML buffer appears here when a draft opens.
           </div>
         )}
       </div>

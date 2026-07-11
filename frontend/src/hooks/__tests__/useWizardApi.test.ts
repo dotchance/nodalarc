@@ -4,6 +4,14 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 import type { WizardRuntimeState } from "../../catalog/wizardTypes";
 
+const { writeSessionYamlExport, downloadBlob } = vi.hoisted(() => ({
+  writeSessionYamlExport: vi.fn(() => Promise.resolve()),
+  downloadBlob: vi.fn(),
+}));
+
+vi.mock("../../builder/sessionYamlTransfer", () => ({ writeSessionYamlExport }));
+vi.mock("../../ui/downloadBlob", () => ({ downloadBlob }));
+
 vi.mock("../../config", () => ({
   REST_URL: "http://test:8080",
   authHeaders: (extra?: Record<string, string>) => ({ ...extra }),
@@ -64,6 +72,8 @@ describe("useWizardApi", () => {
   let fetchMock: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
+    writeSessionYamlExport.mockClear();
+    downloadBlob.mockClear();
     fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       json: () => Promise.resolve({
@@ -266,7 +276,7 @@ describe("useWizardApi", () => {
     expect(JSON.parse(fetchMock.mock.calls[3]![1]!.body as string)).toEqual(deployBody);
   });
 
-  it("saves before exporting the complete exact YAML closure", async () => {
+  it("downloads a proposal-free Wizard session as one ordinary YAML file", async () => {
     const compiled = {
       draft: {
         contract_version: 1,
@@ -278,43 +288,96 @@ describe("useWizardApi", () => {
       save_verdict: { operation: "save", allowed: true, blockers: [] },
       deploy_eligibility_after_save: { operation: "deploy", allowed: true, blockers: [] },
     };
+    fetchMock.mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(compiled) });
+    const { result } = renderHook(() => useWizardApi());
+
+    await act(async () => { await result.current.generate(wizardState()); });
+    let exported = false;
+    await act(async () => { exported = await result.current.exportYaml(); });
+
+    expect(exported).toBe(true);
+    expect(downloadBlob).toHaveBeenCalledWith(
+      compiled.canonical_session_yaml,
+      "wizard-test.yaml",
+    );
+    expect(writeSessionYamlExport).not.toHaveBeenCalled();
+    expect(fetchMock.mock.calls.map((call) => call[0])).toEqual([
+      "http://test:8080/api/v1/builder/wizard/compile",
+    ]);
+  });
+
+  it("saves proposal-bearing Wizard output before exporting its ordinary YAML files", async () => {
+    const compiled = {
+      draft: {
+        contract_version: 1,
+        draft_revision: 1,
+        state: {
+          session: { session: { name: "wizard-custom" } },
+          catalog_documents: [
+            {
+              ref: "user:orbits/wizard/custom-orbit.yaml",
+              document: { orbit: { id: "custom-orbit" } },
+              origin: "generated",
+            },
+          ],
+        },
+      },
+      target_ref: "user:sessions/wizard/wizard-custom.yaml",
+      canonical_session_yaml: "session:\n  name: wizard-custom\n",
+      save_verdict: { operation: "save", allowed: true, blockers: [] },
+      deploy_eligibility_after_save: { operation: "deploy", allowed: true, blockers: [] },
+    };
     const saved = {
       session: {
         ref: compiled.target_ref,
-        revision: `sha256:${"a".repeat(64)}`,
+        revision: "revision-custom",
         canonical_yaml: compiled.canonical_session_yaml,
       },
       digests: {
-        document: `sha256:${"b".repeat(64)}`,
-        dependency: `sha256:${"c".repeat(64)}`,
+        document: `sha256:${"a".repeat(64)}`,
+        dependency: `sha256:${"b".repeat(64)}`,
       },
       deploy_verdict: { allowed: true, blockers: [] },
     };
-    const closure = {
+    const yamlExport = {
       session_ref: compiled.target_ref,
       session_revision: saved.session.revision,
-      root: { exact_yaml: saved.session.canonical_yaml },
-      entries: [{ ref: "user:orbits/wizard/orbit.yaml", exact_yaml: "orbit: {}\n" }],
+      files: [
+        { logical_path: "session.yaml", yaml_text: compiled.canonical_session_yaml },
+        {
+          logical_path: "catalog/user/orbits/wizard/custom-orbit.yaml",
+          yaml_text: "orbit:\n  id: custom-orbit\n",
+        },
+      ],
     };
     fetchMock
       .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(compiled) })
       .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(saved) })
-      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(closure) });
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(yamlExport) });
     const { result } = renderHook(() => useWizardApi());
 
     await act(async () => { await result.current.generate(wizardState()); });
-    let exported = null;
-    await act(async () => { exported = await result.current.exportClosure(); });
+    let exported = false;
+    await act(async () => { exported = await result.current.exportYaml(); });
 
-    expect(exported).toEqual(closure);
+    expect(exported).toBe(true);
     expect(fetchMock.mock.calls.map((call) => call[0])).toEqual([
       "http://test:8080/api/v1/builder/wizard/compile",
       "http://test:8080/api/v1/builder/session/save",
-      "http://test:8080/api/v1/builder/session/export",
+      "http://test:8080/api/v1/builder/session/yaml/export",
     ]);
+    expect(JSON.parse(fetchMock.mock.calls[1]![1]!.body as string)).toEqual({
+      draft: compiled.draft,
+      target_ref: compiled.target_ref,
+    });
     expect(JSON.parse(fetchMock.mock.calls[2]![1]!.body as string)).toEqual({
-      session_ref: compiled.target_ref,
+      session_ref: saved.session.ref,
       expected_session_revision: saved.session.revision,
     });
+    expect(writeSessionYamlExport).toHaveBeenCalledWith(
+      yamlExport.session_ref,
+      yamlExport.files,
+    );
+    expect(downloadBlob).not.toHaveBeenCalled();
   });
 });

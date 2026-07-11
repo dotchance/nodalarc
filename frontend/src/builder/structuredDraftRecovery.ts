@@ -9,6 +9,7 @@ import {
   BUILDER_VISUAL_SPACE_DRAFT_RUNTIME_DESCRIPTOR,
   BUILDER_VISUAL_WORKSPACE_RUNTIME_DESCRIPTOR,
   CATALOG_COMPONENT_DRAFT_ENVELOPE_RUNTIME_DESCRIPTOR,
+  type BuilderIssue,
   type BuilderVisualDraftEnvelope,
   type BuilderVisualRuntimeDescriptor,
   type CatalogComponentDraftEnvelope,
@@ -22,11 +23,81 @@ import {
 import { overlayBuffers, type BufferMap } from "./useWorkspace";
 import type { Workspace } from "./workspace";
 
-export const STRUCTURED_AUTOSAVE_KEY = "nodalarc-builder-draft";
-export const STRUCTURED_BACKUP_KEY = "nodalarc-builder-draft-previous";
-export const STRUCTURED_RECOVERY_VERSION = 4;
-export const CATALOG_DRAFT_RECOVERY_KEY = "nodalarc-builder-catalog-draft";
-export const CATALOG_DRAFT_RECOVERY_VERSION = 1;
+export const STRUCTURED_RECOVERY_VERSION = 2;
+export const CATALOG_DRAFT_RECOVERY_VERSION = 2;
+const RECOVERY_STORAGE_PREFIX = "nodalarc-builder-recovery-v2";
+
+export interface RecoveryStorageScope {
+  authoringContextBinding: string;
+  tabBinding: string;
+}
+
+export type StructuredRecoverySlot = "autosave" | "backup";
+
+let pageBinding: string | null = null;
+
+export function getRecoveryTabBinding(): string {
+  pageBinding ??=
+    globalThis.crypto?.randomUUID?.() ??
+    `page-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  return pageBinding;
+}
+
+function recoveryScopePrefix(scope: RecoveryStorageScope): string {
+  return `${RECOVERY_STORAGE_PREFIX}:${encodeURIComponent(scope.authoringContextBinding)}:${encodeURIComponent(scope.tabBinding)}`;
+}
+
+export function recoveryStorageKey(
+  scope: RecoveryStorageScope,
+  kind: StructuredRecoverySlot | "catalog",
+  targetRef: string,
+): string {
+  return `${recoveryScopePrefix(scope)}:${kind}:${encodeURIComponent(targetRef)}`;
+}
+
+function currentTargetKey(
+  scope: RecoveryStorageScope,
+  kind: StructuredRecoverySlot | "catalog",
+): string {
+  return `${RECOVERY_STORAGE_PREFIX}:${encodeURIComponent(scope.authoringContextBinding)}:current:${kind}`;
+}
+
+interface RecoveryPointer {
+  targetRef: string;
+  storageKey: string;
+}
+
+function currentRecoveryPointer(
+  scope: RecoveryStorageScope,
+  kind: StructuredRecoverySlot | "catalog",
+): RecoveryPointer | null {
+  const raw = sessionStorage.getItem(currentTargetKey(scope, kind));
+  if (!raw) return null;
+  try {
+    const value: unknown = JSON.parse(raw);
+    const expectedPrefix = `${RECOVERY_STORAGE_PREFIX}:${encodeURIComponent(scope.authoringContextBinding)}:`;
+    return isRecord(value) &&
+      typeof value.targetRef === "string" &&
+      typeof value.storageKey === "string" &&
+      value.storageKey.startsWith(expectedPrefix)
+      ? { targetRef: value.targetRef, storageKey: value.storageKey }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function setCurrentRecoveryPointer(
+  scope: RecoveryStorageScope,
+  kind: StructuredRecoverySlot | "catalog",
+  targetRef: string,
+  storageKey: string,
+): void {
+  sessionStorage.setItem(
+    currentTargetKey(scope, kind),
+    JSON.stringify({ targetRef, storageKey }),
+  );
+}
 
 export interface StructuredEditorRecoveryState {
   windows: EditorWindow[];
@@ -34,9 +105,20 @@ export interface StructuredEditorRecoveryState {
 }
 
 export interface StructuredDraftRecovery {
+  authoringContextBinding: string;
   workspace: Workspace;
   visualDraft: BuilderVisualDraftEnvelope;
+  yaml: StructuredYamlRecoveryState;
   editor: StructuredEditorRecoveryState;
+}
+
+export interface StructuredYamlRecoveryState {
+  text: string;
+  appliedText: string;
+  generation: number;
+  canonicalizationRequired: boolean;
+  canonicalizationAccepted: boolean;
+  issues: readonly BuilderIssue[];
 }
 
 export type StructuredRecoveryReadResult =
@@ -47,16 +129,23 @@ export type StructuredStashOutcome = "stashed" | "skipped" | "refused";
 
 export interface CatalogDraftEditorRecovery {
   draft: CatalogComponentDraftEnvelope;
+  baselineDocument: Readonly<Record<string, JsonValue>>;
   workingDocument: Readonly<Record<string, JsonValue>>;
-  advanced: boolean;
-  advancedText: string;
+  yamlText: string;
+  appliedYamlText: string;
+  canonicalizationRequired: boolean;
+  canonicalizationAccepted: boolean;
 }
 
 interface SerializedCatalogDraftEditorRecovery {
+  authoring_context_binding: string;
   draft: CatalogComponentDraftEnvelope;
+  baseline_document: Readonly<Record<string, JsonValue>>;
   working_document: Readonly<Record<string, JsonValue>>;
-  advanced: boolean;
-  advanced_text: string;
+  yaml_text: string;
+  applied_yaml_text: string;
+  canonicalization_required: boolean;
+  canonicalization_accepted: boolean;
 }
 
 export type CatalogDraftRecoveryReadResult =
@@ -281,10 +370,7 @@ function isComponentRef(ref: string): boolean {
   return !ref.includes(":sessions/");
 }
 
-export function isVisualDraftEnvelopeForMode(
-  value: unknown,
-  mode: BuilderVisualDraftEnvelope["mode"],
-): value is BuilderVisualDraftEnvelope {
+export function isVisualDraftEnvelope(value: unknown): value is BuilderVisualDraftEnvelope {
   if (
     !matchesRuntimeDescriptor(
       value,
@@ -295,12 +381,10 @@ export function isVisualDraftEnvelopeForMode(
   }
   const envelope = value as BuilderVisualDraftEnvelope;
   return (
-    envelope.mode === mode &&
     envelope.target_ref.startsWith("user:sessions/") &&
-    uniqueRefs(envelope.expected_catalog_revisions ?? []) &&
-    (envelope.expected_catalog_revisions ?? []).every((item) =>
-      isComponentRef(item.ref),
-    ) &&
+    (envelope.expected_session_revision === null ||
+      envelope.expected_session_revision === undefined ||
+      envelope.source_ref === envelope.target_ref) &&
     uniqueRefs(envelope.catalog_documents ?? []) &&
     (envelope.catalog_documents ?? []).every(
       (item) => item.ref.startsWith("user:") && isComponentRef(item.ref),
@@ -310,14 +394,8 @@ export function isVisualDraftEnvelopeForMode(
     envelope.reserved_authoring_ids.every(
       (authoringId) => authoringId.length > 0 && authoringId.length <= 160,
     ) &&
-    (mode === "structured"
-      ? envelope.workspace !== null && envelope.session_yaml === null
-      : envelope.workspace === null && typeof envelope.session_yaml === "string")
+    typeof envelope.session_yaml === "string"
   );
-}
-
-function isStructuredVisualDraft(value: unknown): value is BuilderVisualDraftEnvelope {
-  return isVisualDraftEnvelopeForMode(value, "structured");
 }
 
 const SESSION_BUFFER_KEYS = [
@@ -524,20 +602,26 @@ function isCatalogDraftEditorRecovery(
   return (
     isRecord(value) &&
     isCatalogDraftEnvelope(value.draft) &&
+    isRecord(value.baseline_document) &&
+    isJsonValue(value.baseline_document) &&
     isRecord(value.working_document) &&
     isJsonValue(value.working_document) &&
-    typeof value.advanced === "boolean" &&
-    typeof value.advanced_text === "string"
+    typeof value.yaml_text === "string" &&
+    typeof value.applied_yaml_text === "string" &&
+    typeof value.canonicalization_required === "boolean" &&
+    typeof value.canonicalization_accepted === "boolean"
   );
 }
 
 export function createStructuredRecovery(input: {
+  authoringContextBinding: string;
   workspace: Workspace | null;
   visualDraft: BuilderVisualDraftEnvelope | null;
+  yaml: StructuredYamlRecoveryState;
   windows: readonly EditorWindow[];
   buffers: BufferMap;
 }): StructuredDraftRecovery | null {
-  if (!input.workspace || input.visualDraft?.mode !== "structured") return null;
+  if (!input.workspace || !input.visualDraft) return null;
   const buffers = Object.fromEntries(
     Object.entries(input.buffers)
       .filter(([, buffer]) => buffer.dirty)
@@ -548,8 +632,10 @@ export function createStructuredRecovery(input: {
     .filter((window) => keys.has(window.key))
     .map((window) => structuredClone(window));
   return {
+    authoringContextBinding: input.authoringContextBinding,
     workspace: structuredClone(input.workspace),
     visualDraft: structuredClone(input.visualDraft),
+    yaml: structuredClone(input.yaml),
     editor: { windows, buffers },
   };
 }
@@ -558,13 +644,49 @@ export function serializeStructuredRecovery(recovery: StructuredDraftRecovery): 
   return JSON.stringify({
     v: STRUCTURED_RECOVERY_VERSION,
     kind: "structured",
+    authoring_context_binding: recovery.authoringContextBinding,
     workspace: recovery.workspace,
     visual_draft: recovery.visualDraft,
+    yaml: recovery.yaml,
     editor: recovery.editor,
   });
 }
 
-export function readStructuredRecovery(raw: string): StructuredRecoveryReadResult {
+function isStructuredYamlRecovery(value: unknown): value is StructuredYamlRecoveryState {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, [
+      "text",
+      "appliedText",
+      "generation",
+      "canonicalizationRequired",
+      "canonicalizationAccepted",
+      "issues",
+    ]) ||
+    typeof value.text !== "string" ||
+    typeof value.appliedText !== "string" ||
+    !Number.isSafeInteger(value.generation) ||
+    (value.generation as number) < 0 ||
+    typeof value.canonicalizationRequired !== "boolean" ||
+    typeof value.canonicalizationAccepted !== "boolean" ||
+    !Array.isArray(value.issues)
+  ) {
+    return false;
+  }
+  return value.issues.every(
+    (issue) =>
+      isRecord(issue) &&
+      typeof issue.code === "string" &&
+      typeof issue.stage === "string" &&
+      typeof issue.severity === "string" &&
+      typeof issue.message === "string",
+  );
+}
+
+export function readStructuredRecovery(
+  raw: string,
+  expectedAuthoringContextBinding?: string,
+): StructuredRecoveryReadResult {
   try {
     const value: unknown = JSON.parse(raw);
     if (!isRecord(value)) return { ok: false, reason: "the saved draft could not be read" };
@@ -572,13 +694,18 @@ export function readStructuredRecovery(raw: string): StructuredRecoveryReadResul
       return { ok: false, reason: `draft recovery version ${String(value.v)} is not supported` };
     }
     if (
-      Object.keys(value).length !== 5 ||
+      Object.keys(value).length !== 7 ||
       value.kind !== "structured" ||
+      typeof value.authoring_context_binding !== "string" ||
+      value.authoring_context_binding.length === 0 ||
+      (expectedAuthoringContextBinding !== undefined &&
+        value.authoring_context_binding !== expectedAuthoringContextBinding) ||
       !matchesRuntimeDescriptor(
         value.workspace,
         BUILDER_VISUAL_WORKSPACE_RUNTIME_DESCRIPTOR,
       ) ||
-      !isStructuredVisualDraft(value.visual_draft) ||
+      !isVisualDraftEnvelope(value.visual_draft) ||
+      !isStructuredYamlRecovery(value.yaml) ||
       !isEditorRecovery(value.editor, value.workspace as Workspace)
     ) {
       return { ok: false, reason: "the saved structured draft is incomplete or invalid" };
@@ -586,8 +713,10 @@ export function readStructuredRecovery(raw: string): StructuredRecoveryReadResul
     return {
       ok: true,
       recovery: {
+        authoringContextBinding: value.authoring_context_binding,
         workspace: structuredClone(value.workspace) as Workspace,
         visualDraft: structuredClone(value.visual_draft),
+        yaml: structuredClone(value.yaml),
         editor: structuredClone(value.editor),
       },
     };
@@ -596,18 +725,32 @@ export function readStructuredRecovery(raw: string): StructuredRecoveryReadResul
   }
 }
 
-export function writeStructuredAutosave(recovery: StructuredDraftRecovery): boolean {
+export function writeStructuredAutosave(
+  recovery: StructuredDraftRecovery,
+  scope: RecoveryStorageScope,
+): boolean {
   try {
-    localStorage.setItem(STRUCTURED_AUTOSAVE_KEY, serializeStructuredRecovery(recovery));
+    if (recovery.authoringContextBinding !== scope.authoringContextBinding) return false;
+    const targetRef = recovery.visualDraft.target_ref;
+    const storageKey = recoveryStorageKey(scope, "autosave", targetRef);
+    localStorage.setItem(
+      storageKey,
+      serializeStructuredRecovery(recovery),
+    );
+    setCurrentRecoveryPointer(scope, "autosave", targetRef, storageKey);
     return true;
   } catch {
     return false;
   }
 }
 
-export function hasStructuredRecovery(key: string): boolean {
+export function hasStructuredRecovery(
+  slot: StructuredRecoverySlot,
+  scope: RecoveryStorageScope,
+): boolean {
   try {
-    return localStorage.getItem(key) !== null;
+    const pointer = currentRecoveryPointer(scope, slot);
+    return pointer !== null && localStorage.getItem(pointer.storageKey) !== null;
   } catch {
     return false;
   }
@@ -615,17 +758,32 @@ export function hasStructuredRecovery(key: string): boolean {
 
 export function stashStructuredRecovery(
   recovery: StructuredDraftRecovery | null,
+  scope: RecoveryStorageScope,
   options?: { force?: boolean },
 ): StructuredStashOutcome {
   try {
+    if (recovery && recovery.authoringContextBinding !== scope.authoringContextBinding) {
+      return "refused";
+    }
+    const autosavePointer = currentRecoveryPointer(scope, "autosave");
     const candidate = recovery
       ? serializeStructuredRecovery(recovery)
-      : localStorage.getItem(STRUCTURED_AUTOSAVE_KEY);
+      : autosavePointer
+        ? localStorage.getItem(autosavePointer.storageKey)
+        : null;
     if (candidate === null) return "skipped";
-    const existing = localStorage.getItem(STRUCTURED_BACKUP_KEY);
+    const parsed = readStructuredRecovery(candidate, scope.authoringContextBinding);
+    if (!parsed.ok) return "refused";
+    const targetRef = parsed.recovery.visualDraft.target_ref;
+    const existingPointer = currentRecoveryPointer(scope, "backup");
+    const existing = existingPointer
+      ? localStorage.getItem(existingPointer.storageKey)
+      : null;
     if (existing === candidate) return "skipped";
     if (existing !== null && options?.force !== true) return "refused";
-    localStorage.setItem(STRUCTURED_BACKUP_KEY, candidate);
+    const storageKey = recoveryStorageKey(scope, "backup", targetRef);
+    localStorage.setItem(storageKey, candidate);
+    setCurrentRecoveryPointer(scope, "backup", targetRef, storageKey);
     return "stashed";
   } catch {
     return "skipped";
@@ -633,21 +791,25 @@ export function stashStructuredRecovery(
 }
 
 export function restoreStructuredRecovery(
-  key: string,
+  slot: StructuredRecoverySlot,
+  scope: RecoveryStorageScope,
   options?: { consume?: boolean },
 ): StructuredRecoveryReadResult {
   let raw: string | null;
+  let pointer: RecoveryPointer | null;
   try {
-    raw = localStorage.getItem(key);
+    pointer = currentRecoveryPointer(scope, slot);
+    raw = pointer ? localStorage.getItem(pointer.storageKey) : null;
   } catch {
     return { ok: false, reason: "browser storage is unavailable" };
   }
   if (raw === null) return { ok: false, reason: "there is no structured draft to restore" };
-  const result = readStructuredRecovery(raw);
+  const result = readStructuredRecovery(raw, scope.authoringContextBinding);
   if (!result.ok) return result;
   if (options?.consume) {
     try {
-      localStorage.removeItem(key);
+      if (pointer !== null) localStorage.removeItem(pointer.storageKey);
+      sessionStorage.removeItem(currentTargetKey(scope, slot));
     } catch {
       // The validated recovery was adopted even if the consumed slot cannot be removed.
     }
@@ -655,18 +817,45 @@ export function restoreStructuredRecovery(
   return result;
 }
 
-export function serializeCatalogDraftRecovery(recovery: CatalogDraftEditorRecovery): string {
+export function clearStructuredRecoveryScope(scope: RecoveryStorageScope): void {
+  try {
+    const prefix = `${recoveryScopePrefix(scope)}:`;
+    const keys = Array.from({ length: localStorage.length }, (_unused, index) =>
+      localStorage.key(index),
+    ).filter((key): key is string => key !== null && key.startsWith(prefix));
+    for (const key of keys) localStorage.removeItem(key);
+    for (const kind of ["autosave", "backup", "catalog"] as const) {
+      const pointer = currentRecoveryPointer(scope, kind);
+      if (pointer) localStorage.removeItem(pointer.storageKey);
+      sessionStorage.removeItem(currentTargetKey(scope, kind));
+    }
+  } catch {
+    return;
+  }
+}
+
+export function serializeCatalogDraftRecovery(
+  recovery: CatalogDraftEditorRecovery,
+  authoringContextBinding = "unbound-recovery",
+): string {
   return JSON.stringify({
     v: CATALOG_DRAFT_RECOVERY_VERSION,
     kind: "catalog-draft",
+    authoring_context_binding: authoringContextBinding,
     draft: recovery.draft,
+    baseline_document: recovery.baselineDocument,
     working_document: recovery.workingDocument,
-    advanced: recovery.advanced,
-    advanced_text: recovery.advancedText,
+    yaml_text: recovery.yamlText,
+    applied_yaml_text: recovery.appliedYamlText,
+    canonicalization_required: recovery.canonicalizationRequired,
+    canonicalization_accepted: recovery.canonicalizationAccepted,
   });
 }
 
-export function readCatalogDraftRecovery(raw: string): CatalogDraftRecoveryReadResult {
+export function readCatalogDraftRecovery(
+  raw: string,
+  expectedAuthoringContextBinding?: string,
+): CatalogDraftRecoveryReadResult {
   try {
     const value: unknown = JSON.parse(raw);
     if (!isRecord(value)) return { ok: false, reason: "the component draft could not be read" };
@@ -677,8 +866,12 @@ export function readCatalogDraftRecovery(raw: string): CatalogDraftRecoveryReadR
       };
     }
     if (
-      Object.keys(value).length !== 6 ||
+      Object.keys(value).length !== 10 ||
       value.kind !== "catalog-draft" ||
+      typeof value.authoring_context_binding !== "string" ||
+      value.authoring_context_binding.length === 0 ||
+      (expectedAuthoringContextBinding !== undefined &&
+        value.authoring_context_binding !== expectedAuthoringContextBinding) ||
       !isCatalogDraftEditorRecovery(value)
     ) {
       return { ok: false, reason: "the saved component draft is incomplete or invalid" };
@@ -687,9 +880,12 @@ export function readCatalogDraftRecovery(raw: string): CatalogDraftRecoveryReadR
       ok: true,
       recovery: {
         draft: structuredClone(value.draft),
+        baselineDocument: structuredClone(value.baseline_document),
         workingDocument: structuredClone(value.working_document),
-        advanced: value.advanced,
-        advancedText: value.advanced_text,
+        yamlText: value.yaml_text,
+        appliedYamlText: value.applied_yaml_text,
+        canonicalizationRequired: value.canonicalization_required,
+        canonicalizationAccepted: value.canonicalization_accepted,
       },
     };
   } catch {
@@ -697,29 +893,42 @@ export function readCatalogDraftRecovery(raw: string): CatalogDraftRecoveryReadR
   }
 }
 
-export function loadCatalogDraftRecovery(): CatalogDraftRecoveryReadResult {
+export function loadCatalogDraftRecovery(
+  scope: RecoveryStorageScope,
+): CatalogDraftRecoveryReadResult {
   try {
-    const raw = localStorage.getItem(CATALOG_DRAFT_RECOVERY_KEY);
+    const pointer = currentRecoveryPointer(scope, "catalog");
+    const raw = pointer ? localStorage.getItem(pointer.storageKey) : null;
     return raw === null
       ? { ok: false, reason: "there is no component draft to restore" }
-      : readCatalogDraftRecovery(raw);
+      : readCatalogDraftRecovery(raw, scope.authoringContextBinding);
   } catch {
     return { ok: false, reason: "browser storage is unavailable" };
   }
 }
 
-export function writeCatalogDraftRecovery(recovery: CatalogDraftEditorRecovery): boolean {
+export function writeCatalogDraftRecovery(
+  recovery: CatalogDraftEditorRecovery,
+  scope: RecoveryStorageScope,
+): boolean {
   try {
-    localStorage.setItem(CATALOG_DRAFT_RECOVERY_KEY, serializeCatalogDraftRecovery(recovery));
+    const storageKey = recoveryStorageKey(scope, "catalog", recovery.draft.target_ref);
+    localStorage.setItem(
+      storageKey,
+      serializeCatalogDraftRecovery(recovery, scope.authoringContextBinding),
+    );
+    setCurrentRecoveryPointer(scope, "catalog", recovery.draft.target_ref, storageKey);
     return true;
   } catch {
     return false;
   }
 }
 
-export function clearCatalogDraftRecovery(): void {
+export function clearCatalogDraftRecovery(scope: RecoveryStorageScope): void {
   try {
-    localStorage.removeItem(CATALOG_DRAFT_RECOVERY_KEY);
+    const pointer = currentRecoveryPointer(scope, "catalog");
+    if (pointer !== null) localStorage.removeItem(pointer.storageKey);
+    sessionStorage.removeItem(currentTargetKey(scope, "catalog"));
   } catch {
     return;
   }

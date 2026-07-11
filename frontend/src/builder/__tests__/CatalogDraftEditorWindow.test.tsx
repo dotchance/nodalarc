@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ComponentProps } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -7,8 +7,9 @@ import type {
   CatalogDraftAddNodeEthernetPortRequest,
   CatalogDraftAddNodeTerminalMountRequest,
   CatalogDraftAddSiteNodeRequest,
+  CatalogDraftApplyYamlRequest,
+  CatalogDraftApplyYamlResult,
   CatalogDraftPatchRequest,
-  CatalogDraftReplaceObjectRequest,
   CatalogDraftSaveResult,
   CatalogFamilyMetadata,
   JsonValue,
@@ -20,21 +21,23 @@ const mocks = vi.hoisted(() => ({
   addCatalogDraftNodeEthernet: vi.fn(),
   addCatalogDraftNodeTerminal: vi.fn(),
   addCatalogDraftSiteNode: vi.fn(),
+  applyCatalogDraftYaml: vi.fn(),
   patchCatalogDraft: vi.fn(),
-  replaceCatalogDraftObject: vi.fn(),
   compileCatalogDraft: vi.fn(),
   saveCatalogDraft: vi.fn(),
   getCatalogDependents: vi.fn(),
+  mutateCatalogDraftControls: vi.fn(),
 }));
 const {
   addCatalogDraftNodeEthernet,
   addCatalogDraftNodeTerminal,
   addCatalogDraftSiteNode,
+  applyCatalogDraftYaml,
   patchCatalogDraft,
-  replaceCatalogDraftObject,
   compileCatalogDraft,
   saveCatalogDraft,
   getCatalogDependents,
+  mutateCatalogDraftControls,
 } = mocks;
 
 vi.mock("../builderApiClient", () => ({
@@ -94,6 +97,39 @@ function metadata(family: CatalogComponentFamily): CatalogFamilyMetadata {
   };
 }
 
+function projectedYaml(document: Readonly<Record<string, JsonValue>>): string {
+  const [wrapper, value] = Object.entries(document)[0] ?? ["component", {}];
+  const object = value && typeof value === "object" && !Array.isArray(value)
+    ? value as Readonly<Record<string, JsonValue>>
+    : {};
+  const lines = [`${wrapper}:`];
+  for (const [key, child] of Object.entries(object)) {
+    if (typeof child === "string" || typeof child === "number" || typeof child === "boolean") {
+      lines.push(`  ${key}: ${String(child)}`);
+    } else if (Array.isArray(child)) {
+      lines.push(`  ${key}: []`);
+    } else {
+      lines.push(`  ${key}: {}`);
+    }
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+function emptyControlTree(revision: number): CatalogComponentDraftEnvelope["control_tree"] {
+  return {
+    projection_revision: revision,
+    root: {
+      control_id: "ctl_00000000000000000000000000000000",
+      json_pointer: "",
+      label: "Catalog component",
+      required: true,
+      present: true,
+      model_name: "tests.CatalogComponent",
+      fields: [],
+    },
+  };
+}
+
 function draft(
   family: CatalogComponentFamily,
   object: Readonly<Record<string, JsonValue>> = {},
@@ -105,6 +141,13 @@ function draft(
 ): CatalogComponentDraftEnvelope {
   const wrapper = WRAPPERS[family];
   const objectId = `test-${family.replace(/s$/, "")}`;
+  const document = {
+    [wrapper]: {
+      id: objectId,
+      display_name: `Test ${family}`,
+      ...object,
+    },
+  };
   return {
     contract_version: 1,
     draft_revision: options.revision ?? 0,
@@ -113,13 +156,9 @@ function draft(
     source_ref: `nodalarc:${family}/source.yaml`,
     expected_source_revision: "revision-source",
     expected_target_revision: options.expectedTargetRevision ?? null,
-    document: {
-      [wrapper]: {
-        id: objectId,
-        display_name: `Test ${family}`,
-        ...object,
-      },
-    },
+    document,
+    projected_yaml: projectedYaml(document),
+    control_tree: emptyControlTree(options.revision ?? 0),
     issues: options.issues ?? [],
   };
 }
@@ -151,10 +190,13 @@ function applyPatch(request: CatalogDraftPatchRequest): CatalogComponentDraftEnv
       parent[final] = structuredClone(command.value);
     }
   }
+  const patchedDocument = document as Readonly<Record<string, JsonValue>>;
   return {
     ...request.draft,
     draft_revision: request.draft.draft_revision + 1,
-    document: document as Readonly<Record<string, JsonValue>>,
+    control_tree: emptyControlTree(request.draft.draft_revision + 1),
+    document: patchedDocument,
+    projected_yaml: projectedYaml(patchedDocument),
     issues: [],
   };
 }
@@ -172,6 +214,7 @@ function saveResult(
   const savedDraft: CatalogComponentDraftEnvelope = {
     ...input,
     draft_revision: input.draft_revision + 1,
+    control_tree: emptyControlTree(input.draft_revision + 1),
     expected_source_revision: revision,
     expected_target_revision: revision,
   };
@@ -208,6 +251,7 @@ function saveResult(
 }
 
 function installHappyPath() {
+  mutateCatalogDraftControls.mockImplementation(async (request) => request.draft);
   addCatalogDraftNodeTerminal.mockImplementation(
     async (request: CatalogDraftAddNodeTerminalMountRequest) => {
       const document = structuredClone(request.draft.document) as Record<string, any>;
@@ -225,6 +269,7 @@ function installHappyPath() {
         ...request.draft,
         draft_revision: request.draft.draft_revision + 1,
         document,
+        projected_yaml: projectedYaml(document),
         issues: [],
       };
     },
@@ -237,6 +282,7 @@ function installHappyPath() {
         ...request.draft,
         draft_revision: request.draft.draft_revision + 1,
         document,
+        projected_yaml: projectedYaml(document),
         issues: [],
       };
     },
@@ -263,6 +309,7 @@ function installHappyPath() {
         ...request.draft,
         draft_revision: request.draft.draft_revision + 1,
         document,
+        projected_yaml: projectedYaml(document),
         issues: [],
       };
     },
@@ -270,16 +317,20 @@ function installHappyPath() {
   patchCatalogDraft.mockImplementation(async (request: CatalogDraftPatchRequest) =>
     applyPatch(request),
   );
-  replaceCatalogDraftObject.mockImplementation(
-    async (request: CatalogDraftReplaceObjectRequest) => {
-      const wrapper = WRAPPERS[request.draft.family];
-      return {
+  applyCatalogDraftYaml.mockImplementation(
+    async (request: CatalogDraftApplyYamlRequest): Promise<CatalogDraftApplyYamlResult> => {
+      const updated = {
         ...request.draft,
         draft_revision: request.draft.draft_revision + 1,
-        document: {
-          ...request.draft.document,
-          [wrapper]: JSON.parse(request.raw_object_json) as JsonValue,
-        },
+        control_tree: emptyControlTree(request.draft.draft_revision + 1),
+        projected_yaml: request.yaml_text,
+        issues: [],
+      };
+      return {
+        draft: updated,
+        yaml_text: request.yaml_text,
+        applied: true,
+        canonicalization_required: false,
         issues: [],
       };
     },
@@ -305,9 +356,9 @@ function installHappyPath() {
   });
 }
 
-async function advancedTextarea(): Promise<HTMLTextAreaElement> {
-  const textarea = screen.getByPlaceholderText("catalog component JSON") as HTMLTextAreaElement;
-  await waitFor(() => expect(textarea.value).toContain('"id"'));
+async function yamlTextarea(): Promise<HTMLTextAreaElement> {
+  const textarea = screen.getByLabelText("Component YAML") as HTMLTextAreaElement;
+  await waitFor(() => expect(textarea.value).toContain("id:"));
   return textarea;
 }
 
@@ -319,6 +370,86 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("CatalogDraftEditorWindow", () => {
+  it("regenerates the YAML buffer from the backend after graphical edits", async () => {
+    render(
+      <CatalogDraftEditorWindow
+        initialDraft={draft("terminals", { medium: "rf" })}
+        metadata={metadata("terminals")}
+        onSaved={() => {}}
+        onClose={() => {}}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("name"), { target: { value: "Graphical edit" } });
+
+    await waitFor(() => expect(patchCatalogDraft).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect((screen.getByLabelText("Component YAML") as HTMLTextAreaElement).value)
+      .toContain("display_name: Graphical edit"));
+    expect(applyCatalogDraftYaml).not.toHaveBeenCalled();
+  });
+
+  it("debounces YAML through VS-API and ignores stale buffer generations", async () => {
+    let resolveFirst: (result: CatalogDraftApplyYamlResult) => void = () => {};
+    let resolveSecond: (result: CatalogDraftApplyYamlResult) => void = () => {};
+    applyCatalogDraftYaml
+      .mockImplementationOnce((_request: CatalogDraftApplyYamlRequest) => new Promise((resolve) => {
+        resolveFirst = resolve;
+      }))
+      .mockImplementationOnce((_request: CatalogDraftApplyYamlRequest) => new Promise((resolve) => {
+        resolveSecond = resolve;
+      }));
+    const initial = draft("terminals", { medium: "rf" });
+    render(
+      <CatalogDraftEditorWindow
+        initialDraft={initial}
+        metadata={metadata("terminals")}
+        onSaved={() => {}}
+        onClose={() => {}}
+      />,
+    );
+    const textarea = await yamlTextarea();
+    const firstYaml = "terminal:\n  display_name: First\n  id: test-terminal\n  medium: rf\n";
+    const secondYaml = "terminal:\n  display_name: Second\n  id: test-terminal\n  medium: rf\n";
+
+    fireEvent.change(textarea, { target: { value: firstYaml } });
+    await waitFor(() => expect(applyCatalogDraftYaml).toHaveBeenCalledTimes(1));
+    fireEvent.change(textarea, { target: { value: secondYaml } });
+    await act(async () => {
+      resolveFirst({
+        draft: {
+          ...initial,
+          draft_revision: 1,
+          document: { terminal: { id: "test-terminal", display_name: "First", medium: "rf" } },
+          projected_yaml: firstYaml,
+        },
+        yaml_text: firstYaml,
+        applied: true,
+        canonicalization_required: false,
+        issues: [],
+      });
+    });
+    await waitFor(() => expect(applyCatalogDraftYaml).toHaveBeenCalledTimes(2));
+    expect((screen.getByLabelText("name") as HTMLInputElement).value).not.toBe("First");
+    await act(async () => {
+      resolveSecond({
+        draft: {
+          ...initial,
+          draft_revision: 1,
+          document: { terminal: { id: "test-terminal", display_name: "Second", medium: "rf" } },
+          projected_yaml: secondYaml,
+        },
+        yaml_text: secondYaml,
+        applied: true,
+        canonicalization_required: false,
+        issues: [],
+      });
+    });
+
+    await waitFor(() => expect((screen.getByLabelText("name") as HTMLInputElement).value)
+      .toBe("Second"));
+    expect(textarea.value).toBe(secondYaml);
+  });
+
   it("leaves missing catalog numbers empty and preserves nullable frequency conversion", () => {
     const first = render(
       <CatalogDraftEditorWindow
@@ -513,6 +644,32 @@ describe("CatalogDraftEditorWindow", () => {
     expect(screen.queryByText("Legacy inline site")).toBeNull();
   });
 
+  it("does not overlay body-fixed fields onto a non-body-fixed site frame", () => {
+    render(
+      <CatalogDraftEditorWindow
+        initialDraft={draft("sites", {
+          frame: {
+            lagrange: {
+              primary: "nodalarc:bodies/earth.yaml",
+              secondary: "nodalarc:bodies/luna.yaml",
+              point: "L1",
+            },
+          },
+          lan: { ipv4: "10.0.0.0/24" },
+          nodes: [],
+        })}
+        metadata={metadata("sites")}
+        onSaved={() => {}}
+        onClose={() => {}}
+      />,
+    );
+
+    expect(screen.queryByLabelText("Site body")).toBeNull();
+    expect(screen.getByText(
+      "This site uses a non-body-fixed frame. Its frame fields are edited below.",
+    )).toBeTruthy();
+  });
+
   it("patches only the edited terminal field and preserves every advanced source field", async () => {
     const initial = draft("terminals", {
       medium: "rf",
@@ -551,6 +708,54 @@ describe("CatalogDraftEditorWindow", () => {
       vendor_extension: { calibration: [1, 2, 3] },
       limits: { vendor_limit: { mode: "keep-me" } },
     });
+  });
+
+  it("does not replace a terminal signal when its active medium is reselected", async () => {
+    const initial = draft("terminals", {
+      medium: "rf",
+      signal: { band: "custom-ka", frequency_hz: 31.25e9 },
+    });
+    render(
+      <CatalogDraftEditorWindow
+        initialDraft={initial}
+        metadata={metadata("terminals")}
+        onSaved={() => {}}
+        onClose={() => {}}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "RF" }));
+
+    await new Promise((resolve) => window.setTimeout(resolve, 350));
+    expect(patchCatalogDraft).not.toHaveBeenCalled();
+    expect((screen.getByLabelText("band") as HTMLInputElement).value).toBe("custom-ka");
+  });
+
+  it("preserves Ethernet port tags when the specialized form renames a port", async () => {
+    const initial = draft("nodes", {
+      forwarding: "routed",
+      terminals: [],
+      ethernet: [{ id: "terr0", tags: ["uplink", "preserve"] }],
+      payloads: [],
+    });
+    render(
+      <CatalogDraftEditorWindow
+        initialDraft={initial}
+        metadata={metadata("nodes")}
+        onSaved={() => {}}
+        onClose={() => {}}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("LAN port"), { target: { value: "terr9" } });
+
+    await waitFor(() => expect(patchCatalogDraft).toHaveBeenCalled());
+    const request = patchCatalogDraft.mock.calls[0]![0] as CatalogDraftPatchRequest;
+    expect(request.commands).toEqual([{
+      operation: "replace",
+      pointer: "/node/ethernet",
+      value: [{ id: "terr9", tags: ["uplink", "preserve"] }],
+    }]);
   });
 
   it("carries the saved user revision fence into a second edit and save", async () => {
@@ -661,7 +866,7 @@ describe("CatalogDraftEditorWindow", () => {
   });
 
   it.each(Object.keys(WRAPPERS) as CatalogComponentFamily[])(
-    "opens, edits, compiles, and saves the full %s document",
+    "opens graphical controls with synchronized YAML and saves the full %s document",
     async (family) => {
       const onSaved = vi.fn();
       render(
@@ -672,22 +877,20 @@ describe("CatalogDraftEditorWindow", () => {
           onClose={() => {}}
         />,
       );
-      if (["terminals", "nodes", "sites", "site-sets"].includes(family)) {
-        fireEvent.click(screen.getByRole("button", { name: "Advanced JSON" }));
-      }
-      const textarea = await advancedTextarea();
-      const object = JSON.parse(textarea.value) as Record<string, unknown>;
-      object.reference = `edited-${family}`;
-      fireEvent.change(textarea, { target: { value: JSON.stringify(object, null, 2) } });
+      expect(screen.queryByText("Advanced JSON")).toBeNull();
+      expect(screen.getByTestId("catalog-graphical-editor")).toBeTruthy();
+      const textarea = await yamlTextarea();
+      const editedYaml = `${WRAPPERS[family]}:\n  id: test-${family.replace(/s$/, "")}\n  reference: edited-${family}\n`;
+      fireEvent.change(textarea, { target: { value: editedYaml } });
       fireEvent.click(screen.getByRole("button", { name: "Save to library" }));
       await waitFor(() => expect(onSaved).toHaveBeenCalledTimes(1));
       expect(compileCatalogDraft).toHaveBeenCalledTimes(1);
       expect(saveCatalogDraft).toHaveBeenCalledTimes(1);
-      expect(replaceCatalogDraftObject).toHaveBeenCalledTimes(1);
+      expect(applyCatalogDraftYaml).toHaveBeenCalledTimes(1);
     },
   );
 
-  it("sends one revision-fenced raw object command for advanced edits", async () => {
+  it("sends one revision-fenced exact YAML buffer without parsing it in the browser", async () => {
     const original = Object.fromEntries(
       Array.from({ length: 70 }, (_, index) => [`field_${index}`, `original-${index}`]),
     );
@@ -700,21 +903,22 @@ describe("CatalogDraftEditorWindow", () => {
         onClose={() => {}}
       />,
     );
-    const textarea = await advancedTextarea();
-    const object = JSON.parse(textarea.value) as Record<string, unknown>;
-    for (let index = 0; index < 70; index += 1) object[`field_${index}`] = `edited-${index}`;
-    fireEvent.change(textarea, { target: { value: JSON.stringify(object) } });
+    const textarea = await yamlTextarea();
+    const yamlText = [
+      "payload:",
+      "  id: test-payload",
+      ...Array.from({ length: 70 }, (_, index) => `  field_${index}: edited-${index}`),
+      "",
+    ].join("\n");
+    fireEvent.change(textarea, { target: { value: yamlText } });
     fireEvent.click(screen.getByRole("button", { name: "Save to library" }));
     await waitFor(() => expect(saveCatalogDraft).toHaveBeenCalledTimes(1));
 
     expect(patchCatalogDraft).not.toHaveBeenCalled();
-    expect(replaceCatalogDraftObject).toHaveBeenCalledTimes(1);
-    const request = replaceCatalogDraftObject.mock.calls[0]![0] as CatalogDraftReplaceObjectRequest;
+    expect(applyCatalogDraftYaml).toHaveBeenCalledTimes(1);
+    const request = applyCatalogDraftYaml.mock.calls[0]![0] as CatalogDraftApplyYamlRequest;
     expect(request.expected_draft_revision).toBe(initial.draft_revision);
-    expect(JSON.parse(request.raw_object_json)).toMatchObject({
-      field_0: "edited-0",
-      field_69: "edited-69",
-    });
+    expect(request.yaml_text).toBe(yamlText);
   });
 
   it("preserves dirty working state and revision fences for close and reload recovery", async () => {
@@ -771,31 +975,101 @@ describe("CatalogDraftEditorWindow", () => {
       .toMatchObject({ draft_revision: 7, expected_target_revision: "revision-target-7" });
   });
 
-  it("surfaces backend advanced JSON refusal without parsing the object locally", async () => {
-    replaceCatalogDraftObject.mockRejectedValueOnce(new Error("Advanced component JSON is invalid"));
+  it("keeps the last graphical projection when backend YAML parsing is refused", async () => {
+    const initial = draft("payloads", { reference: "baseline" });
+    applyCatalogDraftYaml.mockImplementationOnce(async (request: CatalogDraftApplyYamlRequest) => ({
+      draft: request.draft,
+      yaml_text: request.yaml_text,
+      applied: false,
+      canonicalization_required: false,
+      issues: [{
+        code: "catalog_draft.yaml.invalid_syntax",
+        stage: "structural",
+        message: "Catalog component YAML is invalid",
+        pointer: "/",
+        source_line: 2,
+        source_column: 7,
+        blocks: ["save", "deploy"],
+      }],
+    }));
     render(
       <CatalogDraftEditorWindow
-        initialDraft={draft("payloads")}
+        initialDraft={initial}
         metadata={metadata("payloads")}
         onSaved={() => {}}
         onClose={() => {}}
       />,
     );
-    const textarea = await advancedTextarea();
-    fireEvent.change(textarea, { target: { value: "not-json" } });
+    const textarea = await yamlTextarea();
+    fireEvent.change(textarea, { target: { value: "payload:\n  id: [" } });
     fireEvent.click(screen.getByRole("button", { name: "Validate edits" }));
 
-    expect(await screen.findByText("Advanced component JSON is invalid")).toBeTruthy();
+    expect(await screen.findByText(/Catalog component YAML is invalid/)).toBeTruthy();
+    expect(screen.getByText(/line 2:7/)).toBeTruthy();
+    expect(screen.getByTestId("catalog-yaml-stale-marker").textContent)
+      .toContain("Showing applied revision 0");
+    expect(textarea.value).toBe("payload:\n  id: [");
     expect(compileCatalogDraft).not.toHaveBeenCalled();
   });
 
-  it("restores an unfinished advanced raw buffer without canonicalizing it away", async () => {
+  it("requires explicit acknowledgement before canonicalization can enable save", async () => {
+    const initial = draft("terminals", { medium: "rf" });
+    const canonicalYaml = "terminal:\n  display_name: Edited\n  id: test-terminal\n  medium: rf\n";
+    applyCatalogDraftYaml.mockImplementationOnce(async (request: CatalogDraftApplyYamlRequest) => {
+      const updated = {
+        ...request.draft,
+        draft_revision: request.draft.draft_revision + 1,
+        document: {
+          terminal: { id: "test-terminal", display_name: "Edited", medium: "rf" },
+        },
+        projected_yaml: canonicalYaml,
+        issues: [],
+      };
+      return {
+        draft: updated,
+        yaml_text: request.yaml_text,
+        applied: true,
+        canonicalization_required: true,
+        issues: [],
+      };
+    });
+    render(
+      <CatalogDraftEditorWindow
+        initialDraft={initial}
+        metadata={metadata("terminals")}
+        onSaved={() => {}}
+        onClose={() => {}}
+      />,
+    );
+    const textarea = await yamlTextarea();
+    const exactYaml = `# operator note\n${canonicalYaml}`;
+    fireEvent.change(textarea, { target: { value: exactYaml } });
+    fireEvent.click(screen.getByRole("button", { name: "Save to library" }));
+
+    expect(await screen.findByTestId("catalog-canonicalization-warning")).toBeTruthy();
+    expect(textarea.value).toBe(exactYaml);
+    expect(saveCatalogDraft).not.toHaveBeenCalled();
+    expect((screen.getByLabelText("name").closest("fieldset") as HTMLFieldSetElement).disabled)
+      .toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: "Use canonical YAML" }));
+    expect(textarea.value).toBe(canonicalYaml);
+    expect((screen.getByLabelText("name").closest("fieldset") as HTMLFieldSetElement).disabled)
+      .toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "Save to library" }));
+    await waitFor(() => expect(saveCatalogDraft).toHaveBeenCalledTimes(1));
+  });
+
+  it("restores an unfinished YAML buffer without canonicalizing it away", async () => {
     const initial = draft("payloads", { reference: "baseline" }, { revision: 4 });
     const recovery: CatalogDraftEditorRecovery = {
       draft: initial,
+      baselineDocument: initial.document,
       workingDocument: initial.document,
-      advanced: true,
-      advancedText: '{"id":"test-payload","reference":"unfinished',
+      yamlText: "payload:\n  id: test-payload\n  reference: [unfinished",
+      appliedYamlText: initial.projected_yaml,
+      canonicalizationRequired: false,
+      canonicalizationAccepted: false,
     };
     render(
       <CatalogDraftEditorWindow
@@ -807,7 +1081,7 @@ describe("CatalogDraftEditorWindow", () => {
       />,
     );
 
-    expect((await advancedTextarea()).value).toBe(recovery.advancedText);
+    expect((await yamlTextarea()).value).toBe(recovery.yamlText);
   });
 
   it("builds leaf JSON-pointer commands without replacing untouched siblings", () => {

@@ -3,7 +3,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { OpenSessionPicker } from "../OpenSessionPicker";
 import type {
   CatalogDocumentSummary,
-  CatalogImportResult,
+  CatalogSessionYamlImportResult,
+  CatalogYamlImportFile,
 } from "../generated/builderApi";
 
 const session = (ref: string): CatalogDocumentSummary => ({
@@ -13,33 +14,36 @@ const session = (ref: string): CatalogDocumentSummary => ({
   revision: `revision-${ref}`,
   size_bytes: 100,
   display_name: (ref.split("/").pop() ?? ref).replace(/\.ya?ml$/, ""),
-  summary: "one exact session closure",
+  summary: "one session",
 });
 
-const result = (outcome: CatalogImportResult["outcome"]): CatalogImportResult => ({
+const result = (
+  outcome: CatalogSessionYamlImportResult["outcome"],
+): CatalogSessionYamlImportResult => ({
+  root_ref: "user:sessions/imported.yaml",
   outcome,
   generation: "g1",
-  document_digest: "document-digest",
-  closure_digest: "closure-digest",
   proposed_writes:
     outcome === "proposed" || outcome === "committed"
       ? [
           {
             ref: "user:sessions/imported.yaml",
             family: "sessions",
-            exact_yaml: "session: {}\n",
-            document_digest: "document-digest",
+            logical_path: "catalog/user/sessions/imported.yaml",
+            canonical_yaml: "session: {}\n",
+            canonicalization_changed: true,
           },
         ]
       : [],
   identical_refs: [],
   collisions: [],
-});
+  ...(outcome === "proposed" ? { proposal_token: "proposal-token" } : {}),
+} as CatalogSessionYamlImportResult);
 
 afterEach(cleanup);
 
-describe("OpenSessionPicker typed catalog transfer", () => {
-  it("groups typed namespaces and exports the selected exact closure", async () => {
+describe("OpenSessionPicker YAML transfer", () => {
+  it("groups typed namespaces and exports the selected YAML files", async () => {
     const user = session("user:sessions/mine.yaml");
     const shipped = session("nodalarc:sessions/example.yaml");
     const onExport = vi.fn(() => Promise.resolve());
@@ -56,14 +60,22 @@ describe("OpenSessionPicker typed catalog transfer", () => {
 
     expect(screen.getByText("★ yours")).toBeTruthy();
     expect(screen.getByText("nodalarc library")).toBeTruthy();
-    fireEvent.click(screen.getAllByLabelText("Export this session and its exact YAML closure")[0]!);
+    fireEvent.click(screen.getAllByLabelText("Export this session as YAML files")[0]!);
     expect(onExport).toHaveBeenCalledWith(user);
   });
 
   it("preflights before an explicit atomic import commit", async () => {
-    const payload = { session_ref: "user:sessions/imported.yaml" };
+    const yamlFiles = [
+      "session:\n  name: imported\n",
+      "terminal:\n  id: imported-terminal\n",
+    ];
     const onImport = vi
-      .fn<(value: unknown, commit: boolean) => Promise<CatalogImportResult>>()
+      .fn<
+        (
+          value: readonly CatalogYamlImportFile[],
+          proposalToken: string | null,
+        ) => Promise<CatalogSessionYamlImportResult>
+      >()
       .mockResolvedValueOnce(result("proposed"))
       .mockResolvedValueOnce(result("committed"));
     render(
@@ -77,22 +89,120 @@ describe("OpenSessionPicker typed catalog transfer", () => {
       />,
     );
 
-    const file = new File([JSON.stringify(payload)], "session.nodalarc-session.json", {
-      type: "application/json",
+    const sessionFile = new File([yamlFiles[0]!], "session.yaml", {
+      type: "text/yaml",
     });
-    Object.defineProperty(file, "text", {
-      value: () => Promise.resolve(JSON.stringify(payload)),
+    const terminalFile = new File([yamlFiles[1]!], "terminal.yml", {
+      type: "text/yaml",
     });
-    fireEvent.change(screen.getByLabelText("import exact YAML closure"), {
-      target: { files: [file] },
+    Object.defineProperty(sessionFile, "text", {
+      value: () => Promise.resolve(yamlFiles[0]),
+    });
+    Object.defineProperty(terminalFile, "text", {
+      value: () => Promise.resolve(yamlFiles[1]),
+    });
+    fireEvent.change(screen.getByLabelText("import session YAML files"), {
+      target: { files: [sessionFile, terminalFile] },
     });
 
     const proposed = await screen.findByTestId("session-import-proposed");
-    expect(onImport).toHaveBeenNthCalledWith(1, payload, false);
+    const importFiles = yamlFiles.map((yaml_text) => ({ yaml_text }));
+    expect(onImport).toHaveBeenNthCalledWith(1, importFiles, null);
+    expect(proposed.textContent).toContain("user:sessions/imported.yaml");
+    expect(proposed.textContent).toContain("catalog/user/sessions/imported.yaml");
+    expect(proposed.textContent).toContain("comments or formatting will be canonicalized");
     fireEvent.click(screen.getByRole("button", { name: "Import atomically" }));
     await screen.findByTestId("session-import-committed");
-    expect(onImport).toHaveBeenNthCalledWith(2, payload, true);
+    expect(onImport).toHaveBeenNthCalledWith(2, importFiles, "proposal-token");
     expect(proposed).toBeTruthy();
+  });
+
+  it("keeps a stale proposal refusal visible instead of silently reproposing", async () => {
+    const yaml = "session:\n  name: imported\n";
+    const onImport = vi
+      .fn<
+        (
+          value: readonly CatalogYamlImportFile[],
+          proposalToken: string | null,
+        ) => Promise<CatalogSessionYamlImportResult>
+      >()
+      .mockResolvedValueOnce(result("proposed"))
+      .mockRejectedValueOnce(new Error("the reviewed YAML proposal is stale"));
+    render(
+      <OpenSessionPicker
+        sessions={[]}
+        sessionsError={null}
+        openError={null}
+        onOpen={() => undefined}
+        onExport={() => Promise.resolve()}
+        onImport={onImport}
+      />,
+    );
+    const file = new File([yaml], "session.yaml", { type: "text/yaml" });
+    Object.defineProperty(file, "text", { value: () => Promise.resolve(yaml) });
+    fireEvent.change(screen.getByLabelText("import session YAML files"), {
+      target: { files: [file] },
+    });
+    await screen.findByTestId("session-import-proposed");
+    fireEvent.click(screen.getByRole("button", { name: "Import atomically" }));
+    expect(await screen.findByText("the reviewed YAML proposal is stale")).toBeTruthy();
+    expect(onImport).toHaveBeenNthCalledWith(2, [{ yaml_text: yaml }], "proposal-token");
+    expect(screen.queryByRole("button", { name: "Import atomically" })).toBeNull();
+  });
+
+  it("preserves nested directory hints and encoded double-underscore paths", async () => {
+    const sessionYaml = "session:\n  name: imported\n";
+    const firstYaml = "node:\n  id: shared\n";
+    const secondYaml = "node:\n  id: shared\n  display_name: second\n";
+    const onImport = vi.fn(() => Promise.resolve(result("proposed")));
+    render(
+      <OpenSessionPicker
+        sessions={[]}
+        sessionsError={null}
+        openError={null}
+        onOpen={() => undefined}
+        onExport={() => Promise.resolve()}
+        onImport={onImport}
+      />,
+    );
+    const sessionFile = new File([sessionYaml], "imported.yaml");
+    const first = new File([firstYaml], "shared.yaml");
+    const encoded = new File(
+      [secondYaml],
+      "catalog%2Fuser%2Fnodes%2Fa__b%2Fshared.yaml",
+    );
+    Object.defineProperties(sessionFile, {
+      text: { value: () => Promise.resolve(sessionYaml) },
+      webkitRelativePath: {
+        value: "imported-nodalarc-session/catalog/user/sessions/imported.yaml",
+      },
+    });
+    Object.defineProperties(first, {
+      text: { value: () => Promise.resolve(firstYaml) },
+      webkitRelativePath: {
+        value: "imported-nodalarc-session/catalog/user/nodes/first/shared.yaml",
+      },
+    });
+    Object.defineProperty(encoded, "text", { value: () => Promise.resolve(secondYaml) });
+
+    fireEvent.change(screen.getByLabelText("import YAML directory"), {
+      target: { files: [sessionFile, first, encoded] },
+    });
+    await screen.findByTestId("session-import-proposed");
+    expect(onImport).toHaveBeenCalledWith([
+      {
+        yaml_text: sessionYaml,
+        logical_path_hint: "catalog/user/sessions/imported.yaml",
+      },
+      {
+        yaml_text: firstYaml,
+        logical_path_hint: "catalog/user/nodes/first/shared.yaml",
+      },
+      {
+        yaml_text: secondYaml,
+        logical_path_hint: "catalog/user/nodes/a__b/shared.yaml",
+      },
+    ], null);
   });
 
   it("requires an available explicit user target for a shipped session copy", () => {

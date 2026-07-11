@@ -468,7 +468,9 @@ def test_builder_user_component_closure_reaches_verified_runtime(
             "/api/v1/builder/draft/open",
             payload={"source_ref": SOURCE_SESSION_REF, "target_ref": session_ref},
         )
-        assert opened["mode"] == "opaque_yaml"
+        assert opened["projection_status"] == "applied"
+        assert opened["applied_revision"] == opened["draft_revision"]
+        assert opened["authoring_workspace"] == opened["applied_workspace"]
         assert opened["target_ref"] == session_ref
 
         customized = vs_api.request_json(
@@ -484,25 +486,17 @@ def test_builder_user_component_closure_reaches_verified_runtime(
         assert customized["applied"] is True, customized.get("issues")
         forked_refs = [entry["target_ref"] for entry in customized["forked_chain"]]
         assert terminal_ref in forked_refs
-        draft = customized["draft"]
-        terminal_proposal = next(
-            proposal for proposal in draft["catalog_documents"] if proposal["ref"] == terminal_ref
-        )
-        terminal = terminal_proposal["document"]["terminal"]
-        terminal["max_range_km"] = float(terminal["max_range_km"]) + 1
-        terminal["notes"] = f"Builder live qualification component {suffix}."
-        draft["draft_revision"] += 1
 
-        compiled = vs_api.request_json(
+        initial_compiled = vs_api.request_json(
             "POST",
             "/api/v1/builder/draft/compile",
-            payload={"draft": draft},
+            payload={"draft": customized["draft"]},
         )
-        compile_result = compiled["compile_result"]
-        assert compile_result["save_verdict"]["allowed"] is True
-        assert compile_result["deploy_eligibility_after_save"]["allowed"] is True
-        compiled_yaml = compile_result["canonical_session_yaml"]
-        compiled_document = load_configuration_yaml(compiled_yaml)
+        initial_compile_result = initial_compiled["compile_result"]
+        assert initial_compile_result["save_verdict"]["allowed"] is True
+        assert initial_compile_result["deploy_eligibility_after_save"]["allowed"] is True
+        initial_compiled_yaml = initial_compile_result["canonical_session_yaml"]
+        compiled_document = load_configuration_yaml(initial_compiled_yaml)
         leo_segment = next(
             segment
             for segment in compiled_document["segments"]
@@ -511,45 +505,131 @@ def test_builder_user_component_closure_reaches_verified_runtime(
         assert isinstance(leo_segment["source"], str)
         assert leo_segment["source"].startswith("user:constellations/")
 
-        saved = vs_api.request_json(
+        initial_saved = vs_api.request_json(
             "POST",
             "/api/v1/builder/session/save",
-            payload=compiled["save_request"],
+            payload=initial_compiled["save_request"],
         )
-        saved_yaml = saved["session"]["canonical_yaml"]
-        assert saved_yaml == compiled_yaml
-        assert saved["deploy_verdict"]["allowed"] is True
-        closure_refs = {entry["ref"] for entry in saved["dependency_closure"]["entries"]}
-        assert set(forked_refs).issubset(closure_refs)
+        initial_saved_yaml = initial_saved["session"]["canonical_yaml"]
+        assert initial_saved_yaml == initial_compiled_yaml
+        assert initial_saved["deploy_verdict"]["allowed"] is True
+        initial_closure_refs = {
+            entry["ref"] for entry in initial_saved["dependency_closure"]["entries"]
+        }
+        assert set(forked_refs).issubset(initial_closure_refs)
+
+        terminal_draft = vs_api.request_json(
+            "POST",
+            "/api/v1/builder/catalog/draft/open",
+            payload={"source_ref": terminal_ref},
+        )
+        original_max_range = float(terminal_draft["document"]["terminal"]["max_range_km"])
+        terminal_max_range = original_max_range + 1
+        terminal_notes = f"Builder live qualification component {suffix}."
+        patched_terminal = vs_api.request_json(
+            "POST",
+            "/api/v1/builder/catalog/draft/patch",
+            payload={
+                "draft": terminal_draft,
+                "expected_draft_revision": terminal_draft["draft_revision"],
+                "commands": [
+                    {
+                        "operation": "replace",
+                        "pointer": "/terminal/max_range_km",
+                        "value": terminal_max_range,
+                    },
+                    {
+                        "operation": "replace",
+                        "pointer": "/terminal/notes",
+                        "value": terminal_notes,
+                    },
+                ],
+            },
+        )
+        terminal_compile = vs_api.request_json(
+            "POST",
+            "/api/v1/builder/catalog/draft/compile",
+            payload={
+                "draft": patched_terminal,
+                "expected_draft_revision": patched_terminal["draft_revision"],
+            },
+        )
+        assert terminal_compile["save_allowed"] is True, terminal_compile["issues"]
+        saved_terminal = vs_api.request_json(
+            "POST",
+            "/api/v1/builder/catalog/draft/save",
+            payload={
+                "draft": patched_terminal,
+                "expected_draft_revision": patched_terminal["draft_revision"],
+            },
+        )
+        assert (
+            saved_terminal["result"]["document"]["canonical_json"]["terminal"]["max_range_km"]
+            == terminal_max_range
+        )
+        assert (
+            saved_terminal["result"]["document"]["canonical_json"]["terminal"]["notes"]
+            == terminal_notes
+        )
 
         reopened = vs_api.request_json(
             "POST",
             "/api/v1/builder/draft/open",
             payload={"source_ref": session_ref},
         )
-        assert reopened["session_yaml"] == saved_yaml
+        assert reopened["projection_status"] == "applied"
+        assert reopened["session_yaml"] == initial_saved_yaml
+        assert reopened["expected_session_revision"] == initial_saved["session"]["revision"]
+
+        recompiled = vs_api.request_json(
+            "POST",
+            "/api/v1/builder/draft/compile",
+            payload={"draft": reopened},
+        )
+        recompile_result = recompiled["compile_result"]
+        assert recompile_result["save_verdict"]["allowed"] is True
+        assert recompile_result["deploy_eligibility_after_save"]["allowed"] is True
+        assert recompile_result["canonical_session_yaml"] == initial_saved_yaml
+
+        saved = vs_api.request_json(
+            "POST",
+            "/api/v1/builder/session/save",
+            payload=recompiled["save_request"],
+        )
+        saved_yaml = saved["session"]["canonical_yaml"]
+        assert saved_yaml == initial_saved_yaml
+        assert saved["deploy_verdict"]["allowed"] is True
+        assert saved["digests"]["document"] == initial_saved["digests"]["document"]
+        assert saved["digests"]["dependency"] != initial_saved["digests"]["dependency"]
+        closure_refs = {entry["ref"] for entry in saved["dependency_closure"]["entries"]}
+        assert closure_refs == initial_closure_refs
+
         exported = vs_api.request_json(
             "POST",
-            "/api/v1/builder/session/export",
+            "/api/v1/builder/session/yaml/export",
             payload={
                 "session_ref": session_ref,
                 "expected_session_revision": saved["session"]["revision"],
             },
         )
-        assert exported["contract_version"] == 1
-        assert exported["root"]["exact_yaml"] == saved_yaml
-        exported_entries = {entry["ref"]: entry for entry in exported["entries"]}
-        assert terminal_ref in exported_entries
+        assert exported["files"][0] == {
+            "logical_path": "session.yaml",
+            "yaml_text": saved_yaml,
+        }
+        exported_entries = {
+            file["logical_path"]: file["yaml_text"] for file in exported["files"][1:]
+        }
+        terminal_path = f"catalog/user/{terminal_ref.removeprefix('user:')}"
+        assert terminal_path in exported_entries
 
         stored_terminal = vs_api.request_json(
             "POST",
             "/api/v1/builder/catalog/get",
             payload={"ref": terminal_ref},
         )
-        assert stored_terminal["canonical_json"]["terminal"]["max_range_km"] == float(
-            terminal["max_range_km"]
-        )
-        assert exported_entries[terminal_ref]["exact_yaml"] == stored_terminal["canonical_yaml"]
+        assert stored_terminal["canonical_json"]["terminal"]["max_range_km"] == terminal_max_range
+        assert stored_terminal["canonical_json"]["terminal"]["notes"] == terminal_notes
+        assert exported_entries[terminal_path] == stored_terminal["canonical_yaml"]
 
         deploy_request = {
             "session_ref": session_ref,

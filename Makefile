@@ -463,15 +463,19 @@ typecheck: ## Type-check Builder and session-configuration authority boundaries
 		lib/nodalarc/catalog_upload.py \
 		lib/nodalarc/filesystem_catalog_repository.py \
 		lib/nodalarc/prepared_session.py \
+		lib/nodalarc/prepared_tree.py \
 		lib/nodalarc/runtime_config.py \
 		lib/nodalarc/runtime_service_config.py \
 		lib/nodalarc/models/builder_api.py \
 		lib/nodalarc/models/builder_catalog_api.py \
+		lib/nodalarc/models/builder_controls_api.py \
 		lib/nodalarc/models/builder_visual_api.py \
 		lib/nodalarc/models/session_sources.py \
 		services/vs_api/builder_catalog_draft.py \
 		services/vs_api/builder_catalog_service.py \
 		services/vs_api/builder_compiler.py \
+		services/vs_api/builder_control_mutation.py \
+		services/vs_api/builder_control_tree.py \
 		services/vs_api/builder_session_service.py \
 		services/vs_api/builder_visual_draft.py \
 		services/vs_api/catalog_context.py \

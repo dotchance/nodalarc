@@ -91,7 +91,7 @@ export function ReviewPanel({
         <button className="wizard-nav-btn" onClick={onBack}>Back</button>
         {generatedYaml && (
           <button className="wizard-nav-btn" onClick={onDownload} disabled={exporting}>
-            {exporting ? "Saving..." : "Save & Download Closure"}
+            {exporting ? "Preparing..." : "Download YAML"}
           </button>
         )}
         <button

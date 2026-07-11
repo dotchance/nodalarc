@@ -251,7 +251,7 @@ export function useWizard() {
     // API
     generate,
     deploy: api.deploy,
-    exportClosure: api.exportClosure,
+    exportYaml: api.exportYaml,
     deployUploadedYaml: api.deployUploadedYaml,
     previewCoverage,
     previewing: api.previewing,

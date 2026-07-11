@@ -14,14 +14,15 @@ import {
   compileWizardSession,
   deployBuilderSession,
   deriveVisualWalkerLayout,
-  exportCatalogSession,
+  exportCatalogSessionYaml,
   previewWizardCoverage,
   saveBuilderSession,
 } from "../builder/builderApiClient";
+import { writeSessionYamlExport } from "../builder/sessionYamlTransfer";
+import { downloadBlob } from "../ui/downloadBlob";
 import type {
   BuilderCompileResult,
   BuilderSessionSaveResult,
-  CatalogSessionExport,
   BuilderVisualWalkerLayoutRequest,
   BuilderVisualWalkerLayoutResult,
 } from "../builder/generated/builderApi";
@@ -145,26 +146,33 @@ export function useWizardApi() {
     [compiled, saved],
   );
 
-  const exportClosure = useCallback(async (): Promise<CatalogSessionExport | null> => {
-    if (!compiled) {
+  const exportYaml = useCallback(async (): Promise<boolean> => {
+    if (!compiled?.canonical_session_yaml) {
       setError("Generate and review the Wizard session before export");
-      return null;
+      return false;
     }
     setExporting(true);
     setError(null);
     try {
+      if ((compiled.draft.state.catalog_documents?.length ?? 0) === 0) {
+        const filename = compiled.target_ref.split("/").pop() ?? "session.yaml";
+        downloadBlob(compiled.canonical_session_yaml, filename);
+        return true;
+      }
       const exactSaved = saved ?? await saveBuilderSession({
         draft: compiled.draft,
         target_ref: compiled.target_ref,
       });
       setSaved(exactSaved);
-      return await exportCatalogSession({
+      const yamlExport = await exportCatalogSessionYaml({
         session_ref: exactSaved.session.ref,
         expected_session_revision: exactSaved.session.revision,
       });
+      await writeSessionYamlExport(yamlExport.session_ref, yamlExport.files);
+      return true;
     } catch (e) {
       setError(e instanceof BuilderApiError || e instanceof Error ? e.message : "Export failed");
-      return null;
+      return false;
     } finally {
       setExporting(false);
     }
@@ -236,7 +244,7 @@ export function useWizardApi() {
     deriveConstellationLayout,
     generate,
     deploy,
-    exportClosure,
+    exportYaml,
     deployUploadedYaml,
     previewCoverage,
   };

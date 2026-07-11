@@ -10,7 +10,10 @@ const {
   addCatalogDraftNodeEthernet,
   addCatalogDraftNodeTerminal,
   addCatalogDraftSiteNode,
+  applyCatalogDraftYaml,
   applyVisualDraftCommand,
+  applyVisualDraftWorkspace,
+  applyVisualDraftYaml,
   compileCatalogDraft,
   compileVisualDraft,
   createCatalogDraft,
@@ -18,7 +21,7 @@ const {
   customizeVisualDraftChain,
   deployBuilderSession,
   deriveVisualWalkerLayout,
-  exportCatalogSession,
+  exportCatalogSessionYaml,
   getBuilderBootstrap,
   getSessionTransition,
   getWizardAvailableStations,
@@ -26,13 +29,15 @@ const {
   getWizardExtensionRules,
   getWizardGroundStationSets,
   getWizardSatelliteTypes,
-  importCatalogSession,
+  importCatalogSessionYaml,
   listCatalog,
+  mutateCatalogDraftControls,
+  mutateVisualDraftControls,
   openCatalogDraft,
   openVisualDraft,
   patchCatalogDraft,
   previewWizardCoverage,
-  replaceCatalogDraftObject,
+  retargetVisualDraft,
   saveCatalogDraft,
   saveBuilderSession,
 } = await import("../builderApiClient");
@@ -50,18 +55,43 @@ describe("typed Builder API client", () => {
 
   it("uses the generated visual draft routes without a local grammar envelope", async () => {
     const draft = {
-      contract_version: 1 as const,
+      contract_version: 2 as const,
       draft_revision: 9,
-      mode: "opaque_yaml" as const,
+      projection_status: "no_valid_projection" as const,
       target_ref: "user:sessions/typed.yaml",
       session_name_is_placeholder: false,
       reserved_authoring_ids: [],
       session_yaml: "session:\n  name: typed\n",
     };
+    const workspace = {
+      session_name: "typed",
+      projection_revision: 9,
+    };
 
     await createVisualDraft({ session_name: "typed" });
     await openVisualDraft({ source_ref: "nodalarc:sessions/typed.yaml" });
     await compileVisualDraft({ draft });
+    await applyVisualDraftYaml({
+      draft,
+      expected_draft_revision: 9,
+      buffer_generation: 3,
+      yaml_text: draft.session_yaml,
+    });
+    await applyVisualDraftWorkspace({
+      draft,
+      expected_draft_revision: 9,
+      workspace,
+    });
+    await mutateVisualDraftControls({
+      draft,
+      expected_draft_revision: 9,
+      commands: [{ operation: "set_scalar", control_id: "ctl_name", value: "renamed" }],
+    });
+    await retargetVisualDraft({
+      draft,
+      expected_draft_revision: 9,
+      target_ref: "user:sessions/retargeted.yaml",
+    });
     await applyVisualDraftCommand({
       draft,
       expected_draft_revision: 9,
@@ -74,6 +104,7 @@ describe("typed Builder API client", () => {
     });
     await customizeVisualDraftChain({
       draft,
+      expected_draft_revision: 9,
       segment_id: "space",
       leaf_ref: "nodalarc:nodes/space/typed.yaml",
     });
@@ -83,17 +114,21 @@ describe("typed Builder API client", () => {
       "http://test:8080/api/v1/builder/draft/new",
       "http://test:8080/api/v1/builder/draft/open",
       "http://test:8080/api/v1/builder/draft/compile",
+      "http://test:8080/api/v1/builder/draft/apply-yaml",
+      "http://test:8080/api/v1/builder/draft/apply-workspace",
+      "http://test:8080/api/v1/builder/draft/control-mutate",
+      "http://test:8080/api/v1/builder/draft/retarget",
       "http://test:8080/api/v1/builder/draft/command",
       "http://test:8080/api/v1/builder/defaults/walker-layout",
       "http://test:8080/api/v1/builder/draft/customize-chain",
     ]);
     expect(JSON.parse(fetchMock.mock.calls[2]![1].body)).toEqual({ draft });
-    expect(JSON.parse(fetchMock.mock.calls[3]![1].body)).toEqual({
+    expect(JSON.parse(fetchMock.mock.calls[7]![1].body)).toEqual({
       draft,
       expected_draft_revision: 9,
       command: { operation: "add_generated_space", phasing_mode: "walker_delta" },
     });
-    expect(JSON.parse(fetchMock.mock.calls[4]![1].body)).toEqual({
+    expect(JSON.parse(fetchMock.mock.calls[8]![1].body)).toEqual({
       pattern: "walker_delta",
       planes: 4,
       slots_per_plane: 11,
@@ -187,7 +222,7 @@ describe("typed Builder API client", () => {
     expect(fetchMock.mock.calls[0]![1].method).toBe("GET");
   });
 
-  it("uses backend-owned component drafts and exact-closure transfer routes", async () => {
+  it("uses backend-owned component drafts and ordinary YAML transfer routes", async () => {
     const draft = {
       contract_version: 1 as const,
       draft_revision: 0,
@@ -196,6 +231,19 @@ describe("typed Builder API client", () => {
       source_ref: "nodalarc:terminals/ka.yaml",
       expected_source_revision: "revision-source",
       document: { terminal: { id: "my-ka", display_name: "My Ka" } },
+      projected_yaml: "terminal:\n  display_name: My Ka\n  id: my-ka\n",
+      control_tree: {
+        projection_revision: 0,
+        root: {
+          control_id: "ctl_root",
+          json_pointer: "",
+          label: "Terminal",
+          required: true,
+          present: true,
+          model_name: "Terminal",
+          fields: [],
+        },
+      },
       issues: [],
     };
     await getBuilderBootstrap();
@@ -208,6 +256,11 @@ describe("typed Builder API client", () => {
       draft,
       expected_draft_revision: 0,
       commands: [{ operation: "replace", pointer: "/terminal/display_name", value: "Edited" }],
+    });
+    await mutateCatalogDraftControls({
+      draft,
+      expected_draft_revision: 0,
+      commands: [{ operation: "set_scalar", control_id: "ctl_name", value: "Edited" }],
     });
     await addCatalogDraftSiteNode({
       draft: {
@@ -238,24 +291,19 @@ describe("typed Builder API client", () => {
       draft: nodeDraft,
       expected_draft_revision: 0,
     });
-    await replaceCatalogDraftObject({
+    await applyCatalogDraftYaml({
       draft,
       expected_draft_revision: 0,
-      raw_object_json: '{"id":"my-ka","display_name":"Advanced"}',
+      yaml_text: "terminal:\n  display_name: Edited\n  id: my-ka\n",
     });
     await compileCatalogDraft({ draft, expected_draft_revision: 0 });
     await saveCatalogDraft({ draft, expected_draft_revision: 0 });
-    await exportCatalogSession({
+    await exportCatalogSessionYaml({
       session_ref: "user:sessions/test.yaml",
       expected_session_revision: "revision-session",
     });
-    await importCatalogSession({
-      contract_version: 1,
-      root_ref: "user:sessions/test.yaml",
-      root_yaml: "session: {}\n",
-      document_digest: "document-digest",
-      closure_digest: "closure-digest",
-      entries: [],
+    await importCatalogSessionYaml({
+      yaml_files: [{ yaml_text: "session: {}\n" }],
       commit: false,
     });
 
@@ -265,14 +313,15 @@ describe("typed Builder API client", () => {
       "http://test:8080/api/v1/builder/catalog/draft/new",
       "http://test:8080/api/v1/builder/catalog/draft/open",
       "http://test:8080/api/v1/builder/catalog/draft/patch",
+      "http://test:8080/api/v1/builder/catalog/draft/controls/mutate",
       "http://test:8080/api/v1/builder/catalog/draft/site-node/add",
       "http://test:8080/api/v1/builder/catalog/draft/node-terminal/add",
       "http://test:8080/api/v1/builder/catalog/draft/node-ethernet/add",
-      "http://test:8080/api/v1/builder/catalog/draft/replace-object",
+      "http://test:8080/api/v1/builder/catalog/draft/apply-yaml",
       "http://test:8080/api/v1/builder/catalog/draft/compile",
       "http://test:8080/api/v1/builder/catalog/draft/save",
-      "http://test:8080/api/v1/builder/session/export",
-      "http://test:8080/api/v1/builder/session/import",
+      "http://test:8080/api/v1/builder/session/yaml/export",
+      "http://test:8080/api/v1/builder/session/yaml/import",
     ]);
   });
 

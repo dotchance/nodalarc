@@ -1,19 +1,20 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import type { BuilderVisualDraftEnvelope } from "../generated/builderApi";
 import {
-  createStructuredRecovery,
   clearCatalogDraftRecovery,
+  createStructuredRecovery,
+  hasStructuredRecovery,
   loadCatalogDraftRecovery,
   readCatalogDraftRecovery,
   readStructuredRecovery,
+  recoveryStorageKey,
   restoreStructuredRecovery,
-  serializeStructuredRecovery,
   serializeCatalogDraftRecovery,
+  serializeStructuredRecovery,
   stashStructuredRecovery,
-  STRUCTURED_AUTOSAVE_KEY,
-  STRUCTURED_BACKUP_KEY,
+  STRUCTURED_RECOVERY_VERSION,
   writeStructuredAutosave,
   writeCatalogDraftRecovery,
-  CATALOG_DRAFT_RECOVERY_KEY,
 } from "../structuredDraftRecovery";
 import {
   defaultDraftNode,
@@ -23,214 +24,360 @@ import {
 } from "./fixtures/workspaceFixtures";
 import { routingWarnings } from "../workspace";
 
+const AUTHORING_CONTEXT = "structured-recovery-test-context";
+const RECOVERY_SCOPE = {
+  authoringContextBinding: AUTHORING_CONTEXT,
+  tabBinding: "structured-recovery-test-tab",
+};
+
 function recoveryFixture() {
   const workspace = newWorkspace("recover-exact");
-  workspace.space.push(newDraftConstellation("nodalarc:nodes/space/recover.yaml"));
-  workspace.space[0]!.node_draft = defaultDraftNode();
+  workspace.projection_revision = 12;
+  const space = newDraftConstellation("nodalarc:nodes/space/recover.yaml");
+  space.node_draft = defaultDraftNode();
+  workspace.space.push(space);
   workspace.ground.push(newDraftGroundSet("nodalarc:nodes/ground/recover.yaml", {}));
-  const visualDraft = {
-    contract_version: 1 as const,
+  const visualDraft: BuilderVisualDraftEnvelope = {
+    contract_version: 2,
     draft_revision: 12,
-    mode: "structured" as const,
+    projection_status: "pending_authoring",
     target_ref: "user:sessions/recover-exact.yaml",
-    source_ref: "nodalarc:sessions/earth-leo-simple.yaml",
+    source_ref: "user:sessions/recover-exact.yaml",
     expected_session_revision: "session-revision",
-    expected_catalog_revisions: [
-      { ref: "user:orbits/recover/orbit.yaml", expected_revision: "orbit-revision" },
-    ],
-    catalog_documents: [
-      {
-        ref: "user:terminals/recover/terminal.yaml",
-        expected_revision: "terminal-revision",
-        document: { terminal: { id: "terminal", display_name: "Unsaved terminal" } },
-      },
-    ],
+    catalog_documents: [],
     session_name_is_placeholder: false,
-    reserved_authoring_ids: [
-      workspace.space[0]!.segment_id,
-      workspace.ground[0]!.segment_id,
-    ],
-    workspace,
-    session_yaml: null,
+    reserved_authoring_ids: [],
+    session_yaml: "# unfinished\nsession:\n  name: recover-exact\n  bad: [\n",
+    authoring_workspace: { ...workspace, projection_revision: null },
+    applied_workspace: workspace,
+    applied_revision: 12,
+    applied_session: { session: { name: "recover-exact" } },
   };
   const recovery = createStructuredRecovery({
+    authoringContextBinding: AUTHORING_CONTEXT,
     workspace,
     visualDraft,
-    windows: [
-      { key: "session", target: { kind: "session" }, x: 20, y: 30 },
-      { key: "segment:clean", target: { kind: "segment", id: "clean" }, x: 40, y: 50 },
-    ],
-    buffers: {
-      session: {
-        opened: {
-          session_name: "recover-exact",
-          start_time: workspace.start_time,
-          step_seconds: workspace.step_seconds,
-          compression: workspace.compression,
-          max_pairs_per_rule: workspace.max_pairs_per_rule,
-          max_pairs_per_tick: workspace.max_pairs_per_tick,
+    yaml: {
+      text: visualDraft.session_yaml,
+      appliedText: "session:\n  name: recover-exact\n",
+      generation: 7,
+      canonicalizationRequired: false,
+      canonicalizationAccepted: false,
+      issues: [
+        {
+          code: "builder.yaml.syntax",
+          stage: "structural",
+          severity: "error",
+          message: "expected a closing bracket",
+          source_line: 4,
+          source_column: 8,
+          blocks: ["save", "deploy"],
         },
-        draft: {
-          session_name: "recover-renamed",
-          start_time: workspace.start_time,
-          step_seconds: workspace.step_seconds,
-          compression: workspace.compression,
-          max_pairs_per_rule: workspace.max_pairs_per_rule,
-          max_pairs_per_tick: workspace.max_pairs_per_tick,
-        },
-        dirty: true,
-      },
-      "segment:clean": { opened: {}, draft: {}, dirty: false },
+      ],
     },
+    windows: [],
+    buffers: {},
   });
-  if (!recovery) throw new Error("expected structured recovery fixture");
+  if (!recovery) throw new Error("expected recovery fixture");
   return recovery;
 }
 
-function serializedRecoveryFixture(): Record<string, unknown> {
-  return JSON.parse(
-    serializeStructuredRecovery(recoveryFixture()),
-  ) as Record<string, unknown>;
-}
+beforeEach(() => {
+  localStorage.clear();
+  sessionStorage.clear();
+});
 
-function workspaceCopies(
-  serialized: Record<string, unknown>,
-): Array<Record<string, unknown>> {
-  const visualDraft = serialized.visual_draft as { workspace: Record<string, unknown> };
-  return [serialized.workspace as Record<string, unknown>, visualDraft.workspace];
-}
-
-function firstSpaceDraft(workspace: Record<string, unknown>): Record<string, unknown> {
-  return (workspace.space as Array<Record<string, unknown>>)[0]!;
-}
-
-function expectInvalidStructuredRecovery(serialized: Record<string, unknown>): void {
-  expect(readStructuredRecovery(JSON.stringify(serialized))).toEqual({
-    ok: false,
-    reason: "the saved structured draft is incomplete or invalid",
-  });
-}
-
-beforeEach(() => localStorage.clear());
-
-describe("structured Builder draft recovery", () => {
-  it("round-trips the exact visual envelope, proposals, fences, and dirty buffers", () => {
+describe("session Builder recovery v2", () => {
+  it("round-trips the envelope, exact and applied YAML, generation, and issues", () => {
     const recovery = recoveryFixture();
     const result = readStructuredRecovery(serializeStructuredRecovery(recovery));
-
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.recovery.visualDraft).toEqual(recovery.visualDraft);
-    expect(result.recovery.visualDraft.catalog_documents).toEqual(
-      recovery.visualDraft.catalog_documents,
-    );
-    expect(result.recovery.visualDraft.expected_catalog_revisions).toEqual(
-      recovery.visualDraft.expected_catalog_revisions,
-    );
-    expect(result.recovery.visualDraft.expected_session_revision).toBe("session-revision");
-    expect(result.recovery.editor.buffers).toEqual({ session: recovery.editor.buffers.session });
-    expect(result.recovery.editor.windows.map((window) => window.key)).toEqual(["session"]);
+    expect(result.recovery.yaml).toEqual(recovery.yaml);
+    expect(result.recovery.yaml.text).toContain("# unfinished");
+    expect(result.recovery.yaml.appliedText).not.toBe(result.recovery.yaml.text);
   });
 
-  it("refuses every non-current recovery version without interpretation", () => {
-    const result = readStructuredRecovery(
-      JSON.stringify({ v: 3, workspace: recoveryFixture().workspace }),
-    );
-
-    expect(result).toEqual({
+  it("refuses every prior recovery version without compatibility", () => {
+    const serialized = JSON.parse(serializeStructuredRecovery(recoveryFixture())) as Record<
+      string,
+      unknown
+    >;
+    serialized.v = STRUCTURED_RECOVERY_VERSION - 1;
+    expect(readStructuredRecovery(JSON.stringify(serialized))).toEqual({
       ok: false,
-      reason: "draft recovery version 3 is not supported",
+      reason: `draft recovery version ${STRUCTURED_RECOVERY_VERSION - 1} is not supported`,
     });
   });
 
-  it("requires the current visual draft contract version", () => {
-    const serialized = JSON.parse(
-      serializeStructuredRecovery(recoveryFixture()),
-    ) as Record<string, unknown>;
-    const visualDraft = serialized.visual_draft as Record<string, unknown>;
-    delete visualDraft.contract_version;
-
+  it("refuses recovery that omits the YAML coordination state", () => {
+    const serialized = JSON.parse(serializeStructuredRecovery(recoveryFixture())) as Record<
+      string,
+      unknown
+    >;
+    delete serialized.yaml;
     expect(readStructuredRecovery(JSON.stringify(serialized))).toEqual({
       ok: false,
       reason: "the saved structured draft is incomplete or invalid",
     });
   });
 
-  it("requires the current reserved authoring identity inventory", () => {
-    const serialized = serializedRecoveryFixture();
-    const visualDraft = serialized.visual_draft as Record<string, unknown>;
-    delete visualDraft.reserved_authoring_ids;
-
-    expectInvalidStructuredRecovery(serialized);
+  it("autosaves and stashes only the current v2 document", () => {
+    const recovery = recoveryFixture();
+    expect(writeStructuredAutosave(recovery, RECOVERY_SCOPE)).toBe(true);
+    expect(stashStructuredRecovery(null, RECOVERY_SCOPE)).toBe("stashed");
+    const autosaveKey = recoveryStorageKey(
+      RECOVERY_SCOPE,
+      "autosave",
+      recovery.visualDraft.target_ref,
+    );
+    const backupKey = recoveryStorageKey(
+      RECOVERY_SCOPE,
+      "backup",
+      recovery.visualDraft.target_ref,
+    );
+    expect(localStorage.getItem(autosaveKey)).not.toBeNull();
+    expect(localStorage.getItem(backupKey)).not.toBeNull();
+    const restored = restoreStructuredRecovery("backup", RECOVERY_SCOPE, { consume: true });
+    expect(restored.ok).toBe(true);
+    expect(localStorage.getItem(backupKey)).toBeNull();
   });
 
-  it("preserves replacement identities while a deleted topology stays visibly dangling", () => {
+  it("refuses a recovery bound to a different backend authoring context", () => {
+    const raw = serializeStructuredRecovery(recoveryFixture());
+    expect(readStructuredRecovery(raw, "different-context")).toEqual({
+      ok: false,
+      reason: "the saved structured draft is incomplete or invalid",
+    });
+  });
+
+  it("refuses a persisted-session fence attached to a different source ref", () => {
+    const serialized = JSON.parse(
+      serializeStructuredRecovery(recoveryFixture()),
+    ) as Record<string, unknown>;
+    (serialized.visual_draft as Record<string, unknown>).source_ref =
+      "nodalarc:sessions/earth-leo-simple.yaml";
+    expect(readStructuredRecovery(JSON.stringify(serialized), AUTHORING_CONTEXT)).toEqual({
+      ok: false,
+      reason: "the saved structured draft is incomplete or invalid",
+    });
+  });
+
+  it("isolates mutable recovery slots across browser tabs and context changes", () => {
+    const first = recoveryFixture();
+    const second = structuredClone(first);
+    second.yaml.text = `${second.yaml.text}# second tab\n`;
+    const otherTab = { ...RECOVERY_SCOPE, tabBinding: "other-tab" };
+    expect(writeStructuredAutosave(first, RECOVERY_SCOPE)).toBe(true);
+    const firstKey = recoveryStorageKey(
+      RECOVERY_SCOPE,
+      "autosave",
+      first.visualDraft.target_ref,
+    );
+    expect(writeStructuredAutosave(second, otherTab)).toBe(true);
+    const secondKey = recoveryStorageKey(
+      otherTab,
+      "autosave",
+      second.visualDraft.target_ref,
+    );
+    const firstRestored = readStructuredRecovery(
+      localStorage.getItem(firstKey)!,
+      AUTHORING_CONTEXT,
+    );
+    const secondRestored = readStructuredRecovery(
+      localStorage.getItem(secondKey)!,
+      AUTHORING_CONTEXT,
+    );
+    expect(firstRestored.ok && firstRestored.recovery.yaml.text).toBe(first.yaml.text);
+    expect(secondRestored.ok && secondRestored.recovery.yaml.text).toBe(second.yaml.text);
+    expect(firstKey).not.toBe(secondKey);
+    expect(hasStructuredRecovery("autosave", {
+      ...RECOVERY_SCOPE,
+      authoringContextBinding: "different-context",
+    })).toBe(false);
+  });
+
+  it("keeps the last valid workspace and applied revision beside invalid YAML", () => {
+    const result = readStructuredRecovery(serializeStructuredRecovery(recoveryFixture()));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.recovery.visualDraft.projection_status).toBe("pending_authoring");
+    expect(result.recovery.visualDraft.applied_revision).toBe(12);
+    expect(result.recovery.workspace.session_name).toBe("recover-exact");
+    expect(result.recovery.yaml.issues[0]?.source_line).toBe(4);
+  });
+
+  it("round-trips dirty editor buffers without flattening them into the workspace", () => {
+    const base = recoveryFixture();
+    const sessionFields = {
+      session_name: base.workspace.session_name,
+      start_time: base.workspace.start_time,
+      step_seconds: base.workspace.step_seconds,
+      compression: base.workspace.compression,
+      max_pairs_per_rule: base.workspace.max_pairs_per_rule,
+      max_pairs_per_tick: base.workspace.max_pairs_per_tick,
+    };
+    const recovery = createStructuredRecovery({
+      authoringContextBinding: AUTHORING_CONTEXT,
+      workspace: base.workspace,
+      visualDraft: base.visualDraft,
+      yaml: base.yaml,
+      windows: [{ key: "session", target: { kind: "session" }, x: 10, y: 20 }],
+      buffers: {
+        session: {
+          opened: sessionFields,
+          draft: { ...sessionFields, session_name: "dirty-name" },
+          dirty: true,
+        },
+      },
+    });
+    if (!recovery) throw new Error("expected dirty recovery");
+    const result = readStructuredRecovery(serializeStructuredRecovery(recovery));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.recovery.workspace.session_name).toBe("recover-exact");
+    expect(result.recovery.editor.buffers.session?.draft).toMatchObject({
+      session_name: "dirty-name",
+    });
+  });
+
+  it("accepts an explicitly incomplete phase offset", () => {
     const recovery = recoveryFixture();
-    const spaceId = recovery.workspace.space[0]!.segment_id;
-    const groundId = recovery.workspace.ground[0]!.segment_id;
-    recovery.workspace.links = [
-      {
-        rule_id: "link-2",
-        label: "replacement link",
-        enabled: true,
-        a: {
-          segment_id: groundId,
-          tag: null,
-          role: "access",
-          medium: "rf",
-          min_elevation_deg: 25,
-        },
-        b: {
-          segment_id: spaceId,
-          tag: null,
-          role: "access",
-          medium: "rf",
-          min_elevation_deg: null,
-        },
-        topology_mode: "visible_candidates",
-        topology_n: 1,
-        max_range_km: null,
+    recovery.workspace.space[0]!.phase_offset_deg = null;
+    recovery.visualDraft = {
+      ...recovery.visualDraft,
+      authoring_workspace: {
+        ...recovery.visualDraft.authoring_workspace!,
+        space: [{ ...recovery.workspace.space[0]! }],
       },
-    ];
-    recovery.workspace.routing_domains = [
-      {
-        domain_id: "domain-2",
-        label: "replacement domain",
-        protocol: "isis",
-        member_segment_ids: [spaceId, groundId],
-        hello_interval_s: null,
-        hold_interval_s: null,
+      applied_workspace: recovery.workspace,
+    };
+    expect(readStructuredRecovery(serializeStructuredRecovery(recovery)).ok).toBe(true);
+  });
+
+  it.each([
+    ["numeric terminal role", "role", 42],
+    ["string terminal count", "count", "1"],
+  ] as const)("refuses %s in every graphical projection", (_label, field, invalid) => {
+    const recovery = recoveryFixture();
+    const serialized = JSON.parse(serializeStructuredRecovery(recovery)) as Record<
+      string,
+      unknown
+    >;
+    const workspaces = [
+      serialized.workspace,
+      (serialized.visual_draft as Record<string, unknown>).authoring_workspace,
+      (serialized.visual_draft as Record<string, unknown>).applied_workspace,
+    ] as Array<Record<string, unknown>>;
+    for (const workspace of workspaces) {
+      const space = (workspace.space as Array<Record<string, unknown>>)[0]!;
+      const node = space.node_draft as Record<string, unknown>;
+      const mount: Record<string, unknown> = {
+        mount_id: "access-1",
+        role: "access",
+        terminal_ref: "nodalarc:terminals/rf/access.yaml",
+        count: 1,
+        boresight: { mode: "nadir" },
+      };
+      mount[field] = invalid;
+      node.terminals = [mount];
+    }
+    expect(readStructuredRecovery(JSON.stringify(serialized))).toEqual({
+      ok: false,
+      reason: "the saved structured draft is incomplete or invalid",
+    });
+  });
+
+  it.each(["draft", "opened"] as const)(
+    "refuses malformed session buffer %s values",
+    (side) => {
+      const base = recoveryFixture();
+      const fields = {
+        session_name: base.workspace.session_name,
+        start_time: base.workspace.start_time,
+        step_seconds: base.workspace.step_seconds,
+        compression: base.workspace.compression,
+        max_pairs_per_rule: base.workspace.max_pairs_per_rule,
+        max_pairs_per_tick: base.workspace.max_pairs_per_tick,
+      };
+      const recovery = createStructuredRecovery({
+        authoringContextBinding: AUTHORING_CONTEXT,
+        workspace: base.workspace,
+        visualDraft: base.visualDraft,
+        yaml: base.yaml,
+        windows: [{ key: "session", target: { kind: "session" }, x: 0, y: 0 }],
+        buffers: {
+          session: { draft: { ...fields }, opened: { ...fields }, dirty: true },
+        },
+      });
+      if (!recovery) throw new Error("expected session recovery");
+      const serialized = JSON.parse(serializeStructuredRecovery(recovery)) as Record<
+        string,
+        unknown
+      >;
+      const buffer = (
+        (serialized.editor as { buffers: { session: Record<string, unknown> } }).buffers
+          .session[side] as Record<string, unknown>
+      );
+      buffer.step_seconds = "1";
+      expect(readStructuredRecovery(JSON.stringify(serialized))).toEqual({
+        ok: false,
+        reason: "the saved structured draft is incomplete or invalid",
+      });
+    },
+  );
+
+  it("refuses malformed object buffers", () => {
+    const base = recoveryFixture();
+    const segment = structuredClone(base.workspace.space[0]!);
+    const key = `segment:${segment.segment_id}`;
+    const recovery = createStructuredRecovery({
+      authoringContextBinding: AUTHORING_CONTEXT,
+      workspace: base.workspace,
+      visualDraft: base.visualDraft,
+      yaml: base.yaml,
+      windows: [{ key, target: { kind: "segment", id: segment.segment_id }, x: 0, y: 0 }],
+      buffers: {
+        [key]: { draft: segment, opened: structuredClone(segment), dirty: true },
       },
-    ];
+    });
+    if (!recovery) throw new Error("expected object recovery");
+    const serialized = JSON.parse(serializeStructuredRecovery(recovery)) as Record<
+      string,
+      unknown
+    >;
+    const buffer = (
+      (serialized.editor as { buffers: Record<string, { draft: Record<string, unknown> }> })
+        .buffers[key]!.draft
+    );
+    buffer.planes = "3";
+    expect(readStructuredRecovery(JSON.stringify(serialized))).toEqual({
+      ok: false,
+      reason: "the saved structured draft is incomplete or invalid",
+    });
+  });
+
+  it("preserves dangling topology for honest graphical warnings", () => {
+    const recovery = recoveryFixture();
     recovery.workspace.boundaries = [
       {
-        boundary_id: "boundary-1",
-        over_rule_id: "link-1",
+        boundary_id: "dangling",
+        over_rule_id: "missing-rule",
         adapter: "static_ip",
-        from_domain_id: "domain-1",
-        to_domain_id: "domain-1",
+        from_domain_id: "missing-a",
+        to_domain_id: "missing-b",
         export_node_loopbacks: true,
       },
     ];
     recovery.visualDraft = {
       ...recovery.visualDraft,
-      workspace: structuredClone(recovery.workspace),
-      reserved_authoring_ids: [
-        spaceId,
-        groundId,
-        "link-1",
-        "domain-1",
-        "boundary-1",
-        "link-2",
-        "domain-2",
-      ],
+      authoring_workspace: recovery.workspace,
+      applied_workspace: recovery.workspace,
     };
-
     const result = readStructuredRecovery(serializeStructuredRecovery(recovery));
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.recovery.visualDraft.reserved_authoring_ids).toContain("link-1");
-    expect(result.recovery.visualDraft.reserved_authoring_ids).toContain("domain-1");
     expect(routingWarnings(result.recovery.workspace)).toEqual(
       expect.arrayContaining([
         "a boundary rides a link rule that is no longer in the session",
@@ -239,215 +386,50 @@ describe("structured Builder draft recovery", () => {
     );
   });
 
-  it("requires the backend placeholder-name fact", () => {
-    const serialized = serializedRecoveryFixture();
-    const visualDraft = serialized.visual_draft as Record<string, unknown>;
-    delete visualDraft.session_name_is_placeholder;
-
-    expectInvalidStructuredRecovery(serialized);
-  });
-
-  it("accepts an explicitly incomplete phase offset", () => {
-    const serialized = serializedRecoveryFixture();
-    for (const workspace of workspaceCopies(serialized)) {
-      firstSpaceDraft(workspace).phase_offset_deg = null;
-    }
-
-    expect(readStructuredRecovery(JSON.stringify(serialized)).ok).toBe(true);
-  });
-
-  it("refuses identical object corruption in both workspace copies", () => {
-    const serialized = serializedRecoveryFixture();
-    for (const workspace of workspaceCopies(serialized)) {
-      firstSpaceDraft(workspace).display_name = { invalid: true };
-    }
-
-    expectInvalidStructuredRecovery(serialized);
-  });
-
   it.each([
-    ["numeric role", "role", 42],
-    ["string count", "count", "1"],
-  ] as const)("refuses an identical terminal %s in both workspace copies", (_label, key, value) => {
-    const serialized = serializedRecoveryFixture();
-    for (const workspace of workspaceCopies(serialized)) {
-      const node = firstSpaceDraft(workspace).node_draft as Record<string, unknown>;
-      const mount: Record<string, unknown> = {
-        mount_id: "access-1",
-        role: "access",
-        terminal_ref: "nodalarc:terminals/rf/access.yaml",
-        count: 1,
-        boresight: { mode: "nadir" },
-      };
-      mount[key] = value;
-      node.terminals = [mount];
-    }
-
-    expectInvalidStructuredRecovery(serialized);
-  });
-
-  it.each(["draft", "opened"] as const)(
-    "refuses malformed session buffer %s values",
-    (side) => {
-      const serialized = serializedRecoveryFixture();
-      const editor = serialized.editor as {
-        buffers: { session: Record<string, unknown> };
-      };
-      const buffer = editor.buffers.session[side] as Record<string, unknown>;
-      buffer.step_seconds = "1";
-
-      expectInvalidStructuredRecovery(serialized);
-    },
-  );
-
-  it("refuses a session buffer missing one owned field", () => {
-    const serialized = serializedRecoveryFixture();
-    const editor = serialized.editor as {
-      buffers: { session: { draft: Record<string, unknown> } };
-    };
-    delete editor.buffers.session.draft.compression;
-
-    expectInvalidStructuredRecovery(serialized);
-  });
-
-  it.each(["draft", "opened"] as const)(
-    "refuses malformed object buffer %s values",
-    (side) => {
-      const recovery = recoveryFixture();
-      const segment = structuredClone(recovery.workspace.space[0]!);
-      const key = `segment:${segment.segment_id}`;
-      recovery.editor = {
-        windows: [
-          {
-            key,
-            target: { kind: "segment", id: segment.segment_id },
-            x: 40,
-            y: 50,
-          },
-        ],
+    ["corrupt workspace", (value: Record<string, unknown>) => {
+      (value.workspace as Record<string, unknown>).session_name = { invalid: true };
+    }],
+    ["duplicate authoring ids", (value: Record<string, unknown>) => {
+      (value.visual_draft as Record<string, unknown>).reserved_authoring_ids = ["x", "x"];
+    }],
+    ["unknown envelope field", (value: Record<string, unknown>) => {
+      (value.visual_draft as Record<string, unknown>).future_field = true;
+    }],
+    ["non-editable window target", (value: Record<string, unknown>) => {
+      value.editor = {
+        windows: [{ key: "catalog", target: { kind: "catalog" }, x: 0, y: 0 }],
         buffers: {
-          [key]: {
-            draft: structuredClone(segment),
-            opened: structuredClone(segment),
-            dirty: true,
-          },
+          catalog: { opened: {}, draft: {}, dirty: true },
         },
       };
-      const serialized = JSON.parse(
-        serializeStructuredRecovery(recovery),
-      ) as Record<string, unknown>;
-      const editor = serialized.editor as {
-        buffers: Record<string, Record<string, unknown>>;
-      };
-      const buffer = editor.buffers[key]![side] as Record<string, unknown>;
-      buffer.planes = "3";
-
-      expectInvalidStructuredRecovery(serialized);
-    },
-  );
-
-  it("refuses buffers for non-editable window targets", () => {
-    const serialized = serializedRecoveryFixture();
-    const editor = serialized.editor as {
-      windows: Array<Record<string, unknown>>;
-      buffers: Record<string, unknown>;
-    };
-    const sessionBuffer = editor.buffers.session;
-    editor.windows = [
-      { key: "library", target: { kind: "library" }, x: 20, y: 30 },
-    ];
-    editor.buffers = { library: sessionBuffer };
-
-    expectInvalidStructuredRecovery(serialized);
-  });
-
-  it("refuses a visual envelope from before explicit phasing was authored", () => {
+    }],
+  ] as const)("refuses %s in a recovery document", (_label, mutate) => {
     const serialized = JSON.parse(
       serializeStructuredRecovery(recoveryFixture()),
     ) as Record<string, unknown>;
-    const visualDraft = serialized.visual_draft as {
-      workspace: { space: Array<Record<string, unknown>> };
-    };
-    delete visualDraft.workspace.space[0]?.phasing_mode;
-
+    mutate(serialized);
     expect(readStructuredRecovery(JSON.stringify(serialized))).toEqual({
       ok: false,
       reason: "the saved structured draft is incomplete or invalid",
     });
   });
 
-  it.each([
-    ["space segment id", ["space", 0, "segment_id"]],
-    ["space segment label", ["space", 0, "display_name"]],
-    ["inline node ethernet", ["space", 0, "node_draft", "ethernet"]],
-    ["inline node terminals", ["space", 0, "node_draft", "terminals"]],
-    ["orbit central body", ["space", 0, "orbit", "central_body"]],
-    ["ground stamp installations", ["ground", 0, "stamp", "installed"]],
-    ["ground stamp boresights", ["ground", 0, "stamp", "boresights"]],
-    ["ground member inventory", ["ground", 0, "members"]],
-  ] as const)("refuses recovery missing %s from both workspace copies", (_label, path) => {
-    const serialized = JSON.parse(
-      serializeStructuredRecovery(recoveryFixture()),
-    ) as Record<string, unknown>;
-    const applied = serialized.workspace as Record<string, unknown>;
-    const visualDraft = serialized.visual_draft as {
-      workspace: Record<string, unknown>;
-    };
-
-    const removePath = (root: Record<string, unknown>) => {
-      let current: unknown = root;
-      for (const part of path.slice(0, -1)) {
-        if (typeof part === "number") {
-          if (!Array.isArray(current)) throw new Error("expected recovery array");
-          current = current[part];
-        } else {
-          if (current === null || typeof current !== "object" || Array.isArray(current)) {
-            throw new Error("expected recovery object");
-          }
-          current = (current as Record<string, unknown>)[part];
-        }
-      }
-      const final = path[path.length - 1]!;
-      if (typeof final === "number") {
-        if (!Array.isArray(current)) throw new Error("expected recovery array");
-        current.splice(final, 1);
-      } else {
-        if (current === null || typeof current !== "object" || Array.isArray(current)) {
-          throw new Error("expected recovery object");
-        }
-        delete (current as Record<string, unknown>)[final];
-      }
-    };
-
-    removePath(applied);
-    removePath(visualDraft.workspace);
-
-    expect(readStructuredRecovery(JSON.stringify(serialized))).toEqual({
-      ok: false,
-      reason: "the saved structured draft is incomplete or invalid",
-    });
-  });
-
-  it("refuses unknown future versions and preserves the stored slot", () => {
+  it("preserves an invalid stored slot when restoration refuses it", () => {
+    const recovery = recoveryFixture();
+    expect(writeStructuredAutosave(recovery, RECOVERY_SCOPE)).toBe(true);
+    const autosaveKey = recoveryStorageKey(
+      RECOVERY_SCOPE,
+      "autosave",
+      recovery.visualDraft.target_ref,
+    );
     const raw = JSON.stringify({ v: 999, kind: "structured" });
-    localStorage.setItem(STRUCTURED_AUTOSAVE_KEY, raw);
-
-    expect(restoreStructuredRecovery(STRUCTURED_AUTOSAVE_KEY)).toEqual({
+    localStorage.setItem(autosaveKey, raw);
+    expect(restoreStructuredRecovery("autosave", RECOVERY_SCOPE)).toEqual({
       ok: false,
       reason: "draft recovery version 999 is not supported",
     });
-    expect(localStorage.getItem(STRUCTURED_AUTOSAVE_KEY)).toBe(raw);
-  });
-
-  it("backs up the exact current envelope and consumes only a valid restored backup", () => {
-    const recovery = recoveryFixture();
-    expect(writeStructuredAutosave(recovery)).toBe(true);
-    expect(stashStructuredRecovery(recovery)).toBe("stashed");
-
-    const restored = restoreStructuredRecovery(STRUCTURED_BACKUP_KEY, { consume: true });
-    expect(restored.ok).toBe(true);
-    if (restored.ok) expect(restored.recovery.visualDraft).toEqual(recovery.visualDraft);
-    expect(localStorage.getItem(STRUCTURED_BACKUP_KEY)).toBeNull();
+    expect(localStorage.getItem(autosaveKey)).toBe(raw);
   });
 });
 
@@ -464,150 +446,112 @@ describe("catalog component draft recovery", () => {
       document: {
         terminal: { id: "recovered", display_name: "Saved baseline" },
       },
+      projected_yaml: "terminal:\n  id: recovered\n  display_name: Saved baseline\n",
+      control_tree: {
+        projection_revision: 9,
+        root: {
+          control_id: "ctl_root",
+          json_pointer: "",
+          label: "Terminal",
+          required: true,
+          present: true,
+          model_name: "Terminal",
+          fields: [],
+        },
+      },
       issues: [],
+    },
+    baselineDocument: {
+      terminal: { id: "recovered", display_name: "Saved baseline" },
     },
     workingDocument: {
       terminal: { id: "recovered", display_name: "Dirty recovered value" },
     },
-    advanced: true,
-    advancedText: '{"id":"recovered","display_name":"unfinished',
+    yamlText: "# exact\nterminal:\n  id: recovered\n",
+    appliedYamlText: "terminal:\n  id: recovered\n",
+    canonicalizationRequired: true,
+    canonicalizationAccepted: false,
   };
 
-  const serializedCatalogRecovery = (): Record<string, unknown> =>
-    JSON.parse(
-      serializeCatalogDraftRecovery(structuredClone(recovery)),
-    ) as Record<string, unknown>;
-
-  const expectInvalidCatalogRecovery = (serialized: Record<string, unknown>) => {
-    expect(readCatalogDraftRecovery(JSON.stringify(serialized))).toEqual({
-      ok: false,
-      reason: "the saved component draft is incomplete or invalid",
-    });
-  };
-
-  it("round-trips the backend draft, revision fences, working copy, and raw buffer", () => {
+  it("round-trips fences, working copy, exact YAML, and canonicalization state", () => {
     const result = readCatalogDraftRecovery(serializeCatalogDraftRecovery(recovery));
-
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.recovery).toEqual(recovery);
-    expect(result.recovery.draft.draft_revision).toBe(9);
-    expect(result.recovery.draft.expected_source_revision).toBe("source-revision");
-    expect(result.recovery.draft.expected_target_revision).toBe("target-revision");
+    expect(result).toEqual({ ok: true, recovery });
   });
 
-  it("requires the current component draft contract version", () => {
+  it("refuses malformed catalog draft identity without compatibility", () => {
     const serialized = JSON.parse(
       serializeCatalogDraftRecovery(recovery),
     ) as Record<string, unknown>;
-    const draft = serialized.draft as Record<string, unknown>;
-    delete draft.contract_version;
-
+    (serialized.draft as Record<string, unknown>).target_ref =
+      "nodalarc:terminals/recovered.yaml";
     expect(readCatalogDraftRecovery(JSON.stringify(serialized))).toEqual({
       ok: false,
       reason: "the saved component draft is incomplete or invalid",
     });
   });
 
-  it("preserves incomplete working documents and invalid advanced text", () => {
+  it.each([
+    [
+      "unknown issue stage",
+      {
+        code: "catalog.invalid",
+        stage: "semantic",
+        message: "invalid",
+        pointer: "/terminal",
+        blocks: ["save", "deploy"],
+      },
+    ],
+    [
+      "duplicate issue blocks",
+      {
+        code: "catalog.invalid",
+        stage: "structural",
+        message: "invalid",
+        pointer: "/terminal",
+        blocks: ["save", "save"],
+      },
+    ],
+    [
+      "unknown issue field",
+      {
+        code: "catalog.invalid",
+        stage: "structural",
+        message: "invalid",
+        pointer: "/terminal",
+        blocks: ["save", "deploy"],
+        future_field: true,
+      },
+    ],
+  ] as const)("refuses catalog recovery with %s", (_label, issue) => {
+    const serialized = JSON.parse(
+      serializeCatalogDraftRecovery(recovery),
+    ) as Record<string, unknown>;
+    (serialized.draft as Record<string, unknown>).issues = [issue];
+    expect(readCatalogDraftRecovery(JSON.stringify(serialized))).toEqual({
+      ok: false,
+      reason: "the saved component draft is incomplete or invalid",
+    });
+  });
+
+  it("preserves incomplete working state and invalid exact YAML", () => {
     const incomplete = {
       ...recovery,
       workingDocument: {},
-      advancedText: "{ unfinished component",
+      yamlText: "{ unfinished component",
+      canonicalizationRequired: false,
     };
-
-    expect(
-      readCatalogDraftRecovery(serializeCatalogDraftRecovery(incomplete)),
-    ).toEqual({ ok: true, recovery: incomplete });
+    expect(readCatalogDraftRecovery(serializeCatalogDraftRecovery(incomplete))).toEqual({
+      ok: true,
+      recovery: incomplete,
+    });
   });
 
-  it.each([
-    ["unknown family", (draft: Record<string, unknown>) => {
-      draft.family = "routers";
-    }],
-    ["family/ref mismatch", (draft: Record<string, unknown>) => {
-      draft.family = "nodes";
-    }],
-    ["non-user target", (draft: Record<string, unknown>) => {
-      draft.target_ref = "nodalarc:terminals/recovered.yaml";
-    }],
-    ["negative revision", (draft: Record<string, unknown>) => {
-      draft.draft_revision = -1;
-    }],
-    ["empty target revision", (draft: Record<string, unknown>) => {
-      draft.expected_target_revision = "";
-    }],
-    ["source without revision", (draft: Record<string, unknown>) => {
-      draft.expected_source_revision = null;
-    }],
-    ["revision without source", (draft: Record<string, unknown>) => {
-      draft.source_ref = null;
-    }],
-    ["source family mismatch", (draft: Record<string, unknown>) => {
-      draft.source_ref = "nodalarc:nodes/source.yaml";
-    }],
-    ["unknown envelope field", (draft: Record<string, unknown>) => {
-      draft.future_field = true;
-    }],
-  ] as const)("refuses component recovery with %s", (_label, mutate) => {
-    const serialized = serializedCatalogRecovery();
-    const draft = serialized.draft as Record<string, unknown>;
-    mutate(draft);
-
-    expectInvalidCatalogRecovery(serialized);
-  });
-
-  it.each([
-    ["unknown issue stage", {
-      code: "catalog.invalid",
-      stage: "semantic",
-      message: "invalid",
-      pointer: "/terminal",
-      blocks: ["save", "deploy"],
-    }],
-    ["empty issue code", {
-      code: "",
-      stage: "structural",
-      message: "invalid",
-      pointer: "/terminal",
-      blocks: ["save", "deploy"],
-    }],
-    ["wrong runtime-support blocks", {
-      code: "catalog.unsupported",
-      stage: "runtime_support",
-      message: "unsupported",
-      pointer: "/terminal",
-      blocks: ["save"],
-    }],
-    ["duplicate issue blocks", {
-      code: "catalog.invalid",
-      stage: "structural",
-      message: "invalid",
-      pointer: "/terminal",
-      blocks: ["save", "save"],
-    }],
-    ["unknown issue field", {
-      code: "catalog.invalid",
-      stage: "structural",
-      message: "invalid",
-      pointer: "/terminal",
-      blocks: ["save", "deploy"],
-      future_field: true,
-    }],
-  ] as const)("refuses component recovery with %s", (_label, issue) => {
-    const serialized = serializedCatalogRecovery();
-    const draft = serialized.draft as Record<string, unknown>;
-    draft.issues = [issue];
-
-    expectInvalidCatalogRecovery(serialized);
-  });
-
-  it("persists across reload and clears only on explicit completion or discard", () => {
-    expect(writeCatalogDraftRecovery(recovery)).toBe(true);
-    expect(localStorage.getItem(CATALOG_DRAFT_RECOVERY_KEY)).not.toBeNull();
-    expect(loadCatalogDraftRecovery()).toEqual({ ok: true, recovery });
-
-    clearCatalogDraftRecovery();
-    expect(localStorage.getItem(CATALOG_DRAFT_RECOVERY_KEY)).toBeNull();
+  it("persists across reload and clears only on explicit completion", () => {
+    expect(writeCatalogDraftRecovery(recovery, RECOVERY_SCOPE)).toBe(true);
+    const key = recoveryStorageKey(RECOVERY_SCOPE, "catalog", recovery.draft.target_ref);
+    expect(localStorage.getItem(key)).not.toBeNull();
+    expect(loadCatalogDraftRecovery(RECOVERY_SCOPE)).toEqual({ ok: true, recovery });
+    clearCatalogDraftRecovery(RECOVERY_SCOPE);
+    expect(localStorage.getItem(key)).toBeNull();
   });
 });

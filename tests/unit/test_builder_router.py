@@ -171,7 +171,7 @@ def test_router_executes_every_typed_authoring_operation(catalog_context: Catalo
     assert session_impact.json()["delete_allowed"] is True
 
     exported = client.post(
-        "/api/v1/builder/session/export",
+        "/api/v1/builder/session/yaml/export",
         json={
             "session_ref": save_request["target_ref"],
             "expected_session_revision": saved_document["revision"],
@@ -179,29 +179,28 @@ def test_router_executes_every_typed_authoring_operation(catalog_context: Catalo
     )
     assert exported.status_code == 200
     export = exported.json()
-    assert export["root"]["exact_yaml"] == saved_document["canonical_yaml"]
+    assert export["files"][0] == {
+        "logical_path": "catalog/user/sessions/router-session.yaml",
+        "yaml_text": saved_document["canonical_yaml"],
+    }
 
     imported = client.post(
-        "/api/v1/builder/session/import",
+        "/api/v1/builder/session/yaml/import",
         json={
-            "contract_version": 1,
-            "root_ref": export["session_ref"],
-            "root_yaml": export["root"]["exact_yaml"],
-            "document_digest": export["document_digest"],
-            "closure_digest": export["closure_digest"],
-            "entries": [
+            "yaml_files": [
                 {
-                    "ref": entry["ref"],
-                    "exact_yaml": entry["exact_yaml"],
-                    "document_digest": entry["document_digest"],
+                    "yaml_text": file["yaml_text"],
+                    "logical_path_hint": file["logical_path"],
                 }
-                for entry in export["entries"]
+                for file in export["files"]
             ],
             "commit": False,
         },
     )
     assert imported.status_code == 200, imported.text
     assert imported.json()["outcome"] == "unchanged"
+    assert client.post("/api/v1/builder/session/export", json={}).status_code == 404
+    assert client.post("/api/v1/builder/session/import", json={}).status_code == 404
 
     source_ref = _first_shipped_ref("terminals")
     forked = client.post(
@@ -364,7 +363,6 @@ def test_router_compiles_wizard_intent_into_builder_contract(
         ("catalog_authoring.impact_mismatch", 409),
         ("catalog_authoring.dependents_exist", 409),
         ("catalog_authoring.import_limit", 413),
-        ("catalog_authoring.import_digest_mismatch", 422),
         ("catalog_authoring.import_incomplete", 422),
         ("catalog_authoring.import_collision", 409),
         ("catalog_authoring.persistence_failed", 503),

@@ -478,6 +478,7 @@ def test_builder_user_component_closure_reaches_verified_runtime(
             "/api/v1/builder/draft/customize-chain",
             payload={
                 "draft": opened,
+                "expected_draft_revision": opened["draft_revision"],
                 "segment_id": SOURCE_SEGMENT_ID,
                 "leaf_ref": SOURCE_TERMINAL_REF,
                 "target_leaf_ref": terminal_ref,

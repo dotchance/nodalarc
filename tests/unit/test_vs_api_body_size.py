@@ -4,9 +4,9 @@ import asyncio
 from collections.abc import Iterable
 
 from vs_api.main import (
+    _BUILDER_BODY_BYTES,
+    _BUILDER_PATH_PREFIX,
     _MAX_BODY_BYTES,
-    _YAML_IMPORT_BODY_BYTES,
-    _YAML_IMPORT_PATH,
     BodySizeLimitMiddleware,
 )
 
@@ -73,19 +73,19 @@ def test_chunked_body_is_counted_without_content_length() -> None:
     assert body == b""
 
 
-def test_yaml_import_has_its_own_bounded_multi_file_limit() -> None:
+def test_builder_authoring_has_its_own_bounded_body_limit() -> None:
     payload = b"a" * (_MAX_BODY_BYTES + 1)
 
-    status, body = _drive(_YAML_IMPORT_PATH, (payload,))
+    status, body = _drive(f"{_BUILDER_PATH_PREFIX}draft/customize-chain", (payload,))
 
     assert status == 204
     assert body == payload
 
 
-def test_yaml_import_rejects_actual_bytes_above_its_route_limit() -> None:
+def test_builder_authoring_rejects_actual_bytes_above_its_route_limit() -> None:
     status, body = _drive(
-        _YAML_IMPORT_PATH,
-        (b"a" * _YAML_IMPORT_BODY_BYTES, b"b"),
+        f"{_BUILDER_PATH_PREFIX}session/yaml/import",
+        (b"a" * _BUILDER_BODY_BYTES, b"b"),
         declared_length=1,
     )
 

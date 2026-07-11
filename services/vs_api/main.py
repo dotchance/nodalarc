@@ -1718,8 +1718,8 @@ app.add_middleware(
 
 _audit_log = logging.getLogger("nodal.audit")
 _MAX_BODY_BYTES = 1_048_576  # 1 MB
-_YAML_IMPORT_PATH = "/api/v1/builder/session/yaml/import"
-_YAML_IMPORT_BODY_BYTES = 4 * DEFAULT_CATALOG_UPLOAD_LIMITS.max_aggregate_bytes + 1_048_576
+_BUILDER_PATH_PREFIX = "/api/v1/builder/"
+_BUILDER_BODY_BYTES = 4 * DEFAULT_CATALOG_UPLOAD_LIMITS.max_aggregate_bytes + 1_048_576
 
 
 from starlette.types import ASGIApp, Receive, Scope, Send
@@ -1760,9 +1760,8 @@ class BodySizeLimitMiddleware:
             await self.app(scope, receive, send)
             return
 
-        limit = (
-            _YAML_IMPORT_BODY_BYTES if scope.get("path") == _YAML_IMPORT_PATH else _MAX_BODY_BYTES
-        )
+        path = scope.get("path") or ""
+        limit = _BUILDER_BODY_BYTES if path.startswith(_BUILDER_PATH_PREFIX) else _MAX_BODY_BYTES
         content_length = next(
             (
                 value

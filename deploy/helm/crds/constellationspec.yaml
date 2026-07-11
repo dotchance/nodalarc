@@ -16,7 +16,6 @@ spec:
           properties:
             spec:
               type: object
-              additionalProperties: false
               required:
                 - sessionYaml
                 - catalogUpload
@@ -26,7 +25,6 @@ spec:
                   description: Complete session YAML content. The Operator parses this directly.
                 catalogUpload:
                   type: object
-                  additionalProperties: false
                   description: >-
                     Required selection of the ordinary catalog YAML ConfigMaps that the
                     Operator verifies and resolves with sessionYaml.

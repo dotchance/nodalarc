@@ -15,7 +15,6 @@ images:
   natsBox: natsio/nats-box:0.19.3@sha256:fbdf67cb49333afc50e2003c6857845d1ed9cf822d2b886cc5658ebf3c754b07
 
 buildTag: "dev"
-runtimeRelease: "0.0.0+unknown"
 imagePullPolicy: Never  # Single-node: images loaded directly into containerd
 
 # Resource strategy: requests are minimum guaranteed, limits are burst ceiling.

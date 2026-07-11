@@ -18,7 +18,6 @@ from typing import TYPE_CHECKING, NamedTuple
 
 from nodal.logging import configure as _configure_logging
 from nodal.logging import connect as _connect_logging
-from nodalarc.catalog_paths import CatalogRoots
 from nodalarc.link_metadata import LinkRuleMetadata
 from nodalarc.models.events import OpsEvent, PlaybackControlCommand, SchedulingCheckpoint
 from nodalarc.models.ome_lifecycle import (
@@ -31,7 +30,8 @@ from nodalarc.models.session import GroundSchedulingConfig, resolve_session_epoc
 from nodalarc.nats_channels import MAX_TIME_ACCEL, MIN_TIME_ACCEL
 from nodalarc.ome_inputs import ResolvedAddressingView, build_ome_inputs_from_resolved
 from nodalarc.ome_runtime import GroundStationFile, SatelliteNode
-from nodalarc.resolve_session import SessionResolution, load_session_resolution_from_file
+from nodalarc.prepared_tree import load_prepared_tree_session_resolution
+from nodalarc.resolve_session import SessionResolution
 from nodalarc.runtime_service_config import (
     DEFAULT_INSTALLED_SHIPPED_CATALOG_ROOT,
     RuntimeConfigHealth,
@@ -134,9 +134,9 @@ def _load_session_config(
     installed_shipped_root: str | Path = DEFAULT_INSTALLED_SHIPPED_CATALOG_ROOT,
 ) -> _SessionBundle:
     """Load and validate all session config. Pure — no side effects."""
-    resolution = load_session_resolution_from_file(
+    resolution = load_prepared_tree_session_resolution(
         session_path,
-        catalog_roots=CatalogRoots.from_catalog_root(installed_shipped_root),
+        installed_shipped_root=installed_shipped_root,
         origin="ome",
         run_id=run_id,
     )
@@ -373,9 +373,19 @@ async def _handle_playback_control_command(
     }
 
 
-def run(session_path: str, output_dir: str | None = None, *, run_id: str) -> Path:
+def run(
+    session_path: str,
+    output_dir: str | None = None,
+    *,
+    run_id: str,
+    installed_shipped_root: str | Path = DEFAULT_INSTALLED_SHIPPED_CATALOG_ROOT,
+) -> Path:
     """Run the OME pipeline (single window, batch mode) and return the output path."""
-    cfg = _load_session_config(session_path, run_id=run_id)
+    cfg = _load_session_config(
+        session_path,
+        run_id=run_id,
+        installed_shipped_root=installed_shipped_root,
+    )
     _warn_geometry_only_ground_links(cfg.ground_link_model)
     epoch_unix = resolve_session_epoch(cfg.resolved.time)
     _validate_sgp4_tle_inputs(cfg)
@@ -1771,6 +1781,7 @@ def main() -> None:
             args.session,
             args.output_dir,
             run_id=_read_runtime_run_id_file(Path(args.session_run_id_file)),
+            installed_shipped_root=args.installed_shipped_root,
         )
         return
 

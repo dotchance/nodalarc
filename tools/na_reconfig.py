@@ -29,7 +29,8 @@ import yaml
 from jinja2 import Environment, FileSystemLoader
 from nodalarc.constants import LOG_FORMAT
 from nodalarc.models.resolved_session import ResolvedNode, ResolvedRoutingDomain, ResolvedSession
-from nodalarc.resolve_session import SessionResolution, load_session_resolution_from_file
+from nodalarc.prepared_tree import load_prepared_tree_session_resolution
+from nodalarc.resolve_session import SessionResolution
 from nodalarc.stack_resolver import resolve_domain_stack
 from nodalarc.template_vars import build_template_vars_from_resolved
 
@@ -77,12 +78,18 @@ def load_live_session_resolution(
 def _selected_resolution(
     session_path: str | None,
     resolution: SessionResolution | None,
+    *,
+    installed_shipped_root: str | Path = "catalog/nodalarc",
 ) -> SessionResolution:
     if resolution is not None:
         return resolution
     if not session_path:
         raise ValueError("session_path is required when no live resolution is supplied")
-    return load_session_resolution_from_file(session_path, origin="na-reconfig.offline")
+    return load_prepared_tree_session_resolution(
+        session_path,
+        installed_shipped_root=installed_shipped_root,
+        origin="na-reconfig.offline",
+    )
 
 
 def _parse_set_args(set_args: list[str] | None) -> dict:
@@ -153,9 +160,14 @@ def reconfig(
     vars_file: str | None = None,
     *,
     resolution: SessionResolution | None = None,
+    installed_shipped_root: str | Path = "catalog/nodalarc",
 ) -> None:
     """Re-render and push configs to targeted nodes."""
-    resolution = _selected_resolution(session_path, resolution)
+    resolution = _selected_resolution(
+        session_path,
+        resolution,
+        installed_shipped_root=installed_shipped_root,
+    )
     resolved = resolution.resolved
     sid_by_node = resolution.resolved.sid_index_by_node_id()
 
@@ -289,13 +301,18 @@ def add_flow(
     flow_spec: str,
     *,
     resolution: SessionResolution | None = None,
+    installed_shipped_root: str | Path = "catalog/nodalarc",
 ) -> None:
     """Add a probe flow to a running session.
 
     Configures the probe daemon on the source GS pod directly and
     records the flow in the session database.
     """
-    resolution = _selected_resolution(session_path, resolution)
+    resolution = _selected_resolution(
+        session_path,
+        resolution,
+        installed_shipped_root=installed_shipped_root,
+    )
     resolved = resolution.resolved
 
     spec = _parse_flow_spec(flow_spec)
@@ -325,9 +342,14 @@ def remove_flow(
     flow_id: str,
     *,
     resolution: SessionResolution | None = None,
+    installed_shipped_root: str | Path = "catalog/nodalarc",
 ) -> None:
     """Remove a probe flow from a running session."""
-    resolution = _selected_resolution(session_path, resolution)
+    resolution = _selected_resolution(
+        session_path,
+        resolution,
+        installed_shipped_root=installed_shipped_root,
+    )
     resolved = resolution.resolved
 
     # We need to find which GS pod this flow runs on.
@@ -362,7 +384,7 @@ def main() -> None:
     )
     source.add_argument(
         "--session",
-        help="Offline shipped-only session YAML path",
+        help="Offline session YAML path, with an optional adjacent prepared catalog tree",
     )
     parser.add_argument("--namespace", default="nodalarc")
     parser.add_argument("--installed-shipped-root", default="catalog/nodalarc")
@@ -386,9 +408,19 @@ def main() -> None:
     )
 
     if args.add_flow:
-        add_flow(args.session, args.add_flow, resolution=live_resolution)
+        add_flow(
+            args.session,
+            args.add_flow,
+            resolution=live_resolution,
+            installed_shipped_root=args.installed_shipped_root,
+        )
     elif args.remove_flow:
-        remove_flow(args.session, args.remove_flow, resolution=live_resolution)
+        remove_flow(
+            args.session,
+            args.remove_flow,
+            resolution=live_resolution,
+            installed_shipped_root=args.installed_shipped_root,
+        )
     elif args.target:
         reconfig(
             args.session,
@@ -396,6 +428,7 @@ def main() -> None:
             args.set_args,
             args.vars_file,
             resolution=live_resolution,
+            installed_shipped_root=args.installed_shipped_root,
         )
     else:
         parser.error("One of --target, --add-flow, or --remove-flow is required")

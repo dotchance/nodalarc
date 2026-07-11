@@ -70,6 +70,7 @@ DRY_RUN_TARGETS = (
     "render-helm",
     "lint-helm",
     "check-helm",
+    "check-crd-server",
     "dead-code",
     "test",
     "test-backend",
@@ -627,6 +628,18 @@ def test_runtime_proof_services_share_product_release_identity() -> None:
         assert "value: {{ .Release.Name | quote }}" not in deployment
 
 
+def test_runtime_release_has_no_default_and_make_proves_the_required_guard() -> None:
+    values = yaml.safe_load((ROOT / "deploy/helm/values.yaml").read_text())
+    lint_helm = _target_body("lint-helm")
+    check_helm = _target_body("check-helm")
+
+    assert "runtimeRelease" not in values
+    assert "--set-string 'runtimeRelease=$(PROJECT_VERSION)'" in lint_helm
+    assert "--set-string 'runtimeRelease=$(PROJECT_VERSION)'" in check_helm
+    assert 'missing_release_error="$$(helm template' in check_helm
+    assert "runtimeRelease is required" in check_helm
+
+
 def test_runtime_services_mount_one_atomic_session_configmap_directory() -> None:
     for template in ("ome-deployment.yaml", "scheduler-deployment.yaml"):
         deployment = (ROOT / "deploy/helm/templates" / template).read_text()
@@ -642,8 +655,8 @@ def test_constellationspec_catalog_upload_schema_is_required_and_exact() -> None
     upload = spec_schema["properties"]["catalogUpload"]
 
     assert set(spec_schema["required"]) == {"sessionYaml", "catalogUpload"}
-    assert spec_schema["additionalProperties"] is False
-    assert upload["additionalProperties"] is False
+    assert "additionalProperties" not in spec_schema
+    assert "additionalProperties" not in upload
     assert "x-kubernetes-preserve-unknown-fields" not in spec_schema
     assert "x-kubernetes-preserve-unknown-fields" not in upload
     assert set(upload["required"]) == {"upload_id", "closure_digest", "file_count"}
@@ -651,6 +664,33 @@ def test_constellationspec_catalog_upload_schema_is_required_and_exact() -> None
     assert upload["properties"]["upload_id"]["pattern"].startswith("^[a-z0-9]")
     assert upload["properties"]["closure_digest"]["pattern"] == "^sha256:[0-9a-f]{64}$"
     assert upload["properties"]["file_count"]["minimum"] == 0
+
+
+def test_constellationspec_structural_schema_never_mixes_object_schema_forms() -> None:
+    crd = yaml.safe_load((ROOT / "deploy/helm/crds/constellationspec.yaml").read_text())
+    schema = crd["spec"]["versions"][0]["schema"]["openAPIV3Schema"]
+    conflicts: list[str] = []
+
+    def walk(value: object, path: tuple[str, ...]) -> None:
+        if isinstance(value, dict):
+            if "properties" in value and "additionalProperties" in value:
+                conflicts.append(".".join(path))
+            for key, nested in value.items():
+                walk(nested, (*path, str(key)))
+        elif isinstance(value, list):
+            for index, nested in enumerate(value):
+                walk(nested, (*path, str(index)))
+
+    walk(schema, ("openAPIV3Schema",))
+
+    assert conflicts == []
+
+
+def test_make_exposes_server_side_constellationspec_crd_validation() -> None:
+    target = _target_body("check-crd-server")
+
+    assert "kubectl apply --dry-run=server" in target
+    assert "deploy/helm/crds/constellationspec.yaml" in target
 
 
 def test_make_session_uses_the_reviewed_vs_api_catalog_switch_path() -> None:

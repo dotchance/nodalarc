@@ -62,7 +62,7 @@ IMAGE_REF_TAG = $$(MODE='$(MODE)' REGISTRY_HOST='$(REGISTRY_HOST)' TAG='$(TAG)' 
 .PHONY: help all deps build load install reinstall upgrade session lint lint-policy typecheck format-diff generate-contracts check-contracts dead-code \
         test test-integration test-runtime-matrix test-builder-e2e \
         test-root ensure-frontend-deps \
-        render-helm lint-helm check-helm \
+        render-helm lint-helm check-helm check-crd-server \
         teardown force-teardown reset-platform restart clean clean-deps clean-images \
         clean-registry purge-containerd nuke status check-registry test-backend test-frontend \
         build-frontends build-images ensure-base-images build-base-images \
@@ -208,10 +208,24 @@ render-helm: ## Assemble the versioned Helm chart through the Make facade
 	@PROJECT_VERSION='$(PROJECT_VERSION)' bash scripts/na-render-helm-chart.sh deploy/helm '$(HELM_CONTRACT_CHART)' >/dev/null
 
 lint-helm: render-helm ## Lint the exact rendered versioned chart
-	@helm lint '$(HELM_CONTRACT_CHART)'
+	@helm lint '$(HELM_CONTRACT_CHART)' --set-string 'runtimeRelease=$(PROJECT_VERSION)'
 
 check-helm: lint-helm ## Render and lint the chart through the Make facade
-	@helm template nodalarc '$(HELM_CONTRACT_CHART)' --namespace '$(NAMESPACE)' --include-crds >/dev/null
+	@missing_release_error="$$(helm template nodalarc '$(HELM_CONTRACT_CHART)' --namespace '$(NAMESPACE)' --include-crds 2>&1 >/dev/null)"; \
+		status=$$?; \
+		if [ "$$status" -eq 0 ]; then \
+			echo "[check-helm] ERROR: chart rendered without required runtimeRelease" >&2; \
+			exit 1; \
+		fi; \
+		case "$$missing_release_error" in \
+			*"runtimeRelease is required"*) ;; \
+			*) printf '%s\n' "[check-helm] ERROR: missing runtimeRelease failed for an unexpected reason:" "$$missing_release_error" >&2; exit 1 ;; \
+		esac
+	@helm template nodalarc '$(HELM_CONTRACT_CHART)' --namespace '$(NAMESPACE)' --include-crds \
+		--set-string 'runtimeRelease=$(PROJECT_VERSION)' >/dev/null
+
+check-crd-server: ## Validate the ConstellationSpec CRD through the active API server
+	@kubectl apply --dry-run=server -f 'deploy/helm/crds/constellationspec.yaml' >/dev/null
 
 # ---------------------------------------------------------------------------
 # Build artifacts

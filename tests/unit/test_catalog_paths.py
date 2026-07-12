@@ -8,6 +8,7 @@ import pytest
 from nodalarc.catalog_paths import (
     CatalogPathError,
     CatalogRoots,
+    catalog_reference_scheme,
     generated_file_path,
     generated_file_stem,
     resolve_catalog_reference,
@@ -101,8 +102,8 @@ def test_validate_catalog_name_rejects_path_syntax():
 
 
 def test_generated_file_stem_uses_defined_sanitization():
-    assert safe_display_stem(" My Session! ") == "My_Session"
-    assert generated_file_stem(" My Session! ", "abc123") == "My_Session-abc123"
+    assert safe_display_stem(" My Session! ") == "my_session"
+    assert generated_file_stem(" My Session! ", "abc123") == "my_session-abc123"
 
 
 def test_generated_file_stem_rejects_path_names():
@@ -119,3 +120,85 @@ def test_generated_file_path_writes_exclusively_under_root(tmp_path):
         write_text_exclusive(target, "session: {}\n")
 
     assert target.read_text(encoding="utf-8") == "session: {}\n"
+
+
+def _make_two_root_setup(tmp_path, monkeypatch) -> CatalogRoots:
+    monkeypatch.chdir(tmp_path)
+    root = tmp_path / "catalog" / "nodalarc"
+    (root / "nodes" / "space").mkdir(parents=True)
+    (root / "sessions").mkdir(parents=True)
+    user_root = tmp_path / "data" / "user-catalog"
+    (user_root / "nodes").mkdir(parents=True)
+    return CatalogRoots.from_catalog_root(root, user_root=user_root)
+
+
+def test_resolves_user_reference_under_user_root(tmp_path, monkeypatch):
+    roots = _make_two_root_setup(tmp_path, monkeypatch)
+    target = roots.user_root / "nodes" / "my-router.yaml"
+    target.write_text("node: {}\n", encoding="utf-8")
+
+    resolved = resolve_catalog_reference("user:nodes/my-router.yaml", roots)
+
+    assert resolved == target.resolve()
+
+
+def test_resolves_session_references_in_both_catalog_roots(tmp_path, monkeypatch):
+    roots = _make_two_root_setup(tmp_path, monkeypatch)
+    shipped = roots.root / "sessions" / "shipped-session.yaml"
+    shipped.write_text("session: {}\n", encoding="utf-8")
+    user_sessions = roots.user_root / "sessions"
+    user_sessions.mkdir()
+    user = user_sessions / "user-session.yaml"
+    user.write_text("session: {}\n", encoding="utf-8")
+
+    assert (
+        resolve_catalog_reference("nodalarc:sessions/shipped-session.yaml", roots)
+        == shipped.resolve()
+    )
+    assert resolve_catalog_reference("user:sessions/user-session.yaml", roots) == user.resolve()
+
+
+def test_generic_resolver_rejects_unknown_or_noncanonical_family_paths(tmp_path, monkeypatch):
+    roots = _make_two_root_setup(tmp_path, monkeypatch)
+    with pytest.raises(CatalogPathError):
+        resolve_catalog_reference(
+            "nodalarc:Custom_Family/Nested/Example_Name.YML",
+            roots,
+        )
+
+
+def test_catalog_reference_scheme_delegates_namespace_recognition():
+    assert catalog_reference_scheme("nodalarc:nodes/router.yaml") == "nodalarc"
+    assert catalog_reference_scheme("user:nodes/router.yaml") == "user"
+    assert catalog_reference_scheme("catalog:nodes/router.yaml") is None
+
+
+def test_user_reference_rejected_without_configured_user_root(tmp_path, monkeypatch):
+    roots = _make_roots(tmp_path, monkeypatch)
+    with pytest.raises(CatalogPathError, match="user catalog"):
+        resolve_catalog_reference("user:nodes/my-router.yaml", roots)
+
+
+def test_user_reference_cannot_reach_shipped_root(tmp_path, monkeypatch):
+    """The schemes are containment boundaries: a user: token looks only under
+    the user root — a file that exists in the shipped catalog is a miss, not
+    a fallback, when addressed with the user scheme."""
+    roots = _make_two_root_setup(tmp_path, monkeypatch)
+    shipped = roots.root / "nodes" / "space" / "shared-name.yaml"
+    shipped.write_text("node: {}\n", encoding="utf-8")
+
+    with pytest.raises(FileNotFoundError):
+        resolve_catalog_reference("user:nodes/space/shared-name.yaml", roots)
+
+
+def test_user_reference_rejects_traversal_and_symlink_escape(tmp_path, monkeypatch):
+    roots = _make_two_root_setup(tmp_path, monkeypatch)
+    with pytest.raises(CatalogPathError):
+        resolve_catalog_reference("user:../secrets.yaml", roots)
+
+    outside = tmp_path / "outside.yaml"
+    outside.write_text("node: {}\n", encoding="utf-8")
+    link = roots.user_root / "nodes" / "sneaky.yaml"
+    os.symlink(outside, link)
+    with pytest.raises(CatalogPathError):
+        resolve_catalog_reference("user:nodes/sneaky.yaml", roots)

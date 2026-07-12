@@ -2,8 +2,9 @@
 
 from unittest.mock import AsyncMock, patch
 
-from fastapi.testclient import TestClient
 from vs_api.main import app
+
+from tests.asgi_client import ASGITestClient as TestClient
 
 client = TestClient(app)
 

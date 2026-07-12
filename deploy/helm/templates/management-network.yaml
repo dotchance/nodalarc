@@ -1,3 +1,5 @@
+{{- $orchestratorClusterName := printf "nodalarc-orchestrator-cluster-%s-%s" .Release.Name .Values.namespace }}
+{{- $orchestratorClusterBindingName := printf "%s-binding" $orchestratorClusterName }}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -12,24 +14,14 @@ metadata:
 rules:
   - apiGroups: [""]
     resources: ["pods"]
-    verbs: ["get", "list", "watch"]
-  - apiGroups: [""]
-    resources: ["pods/exec"]
-    verbs: ["create", "get"]
+    verbs: ["get", "list"]
   - apiGroups: [""]
     resources: ["configmaps"]
     # Scheduler gates startup on substrate status ConfigMaps selected by label.
-    verbs: ["get", "list", "create", "update", "patch"]
-  # Secrets — read SSH private key for terminal proxy (nodalarc-terminal-keys)
-  - apiGroups: [""]
-    resources: ["secrets"]
-    verbs: ["get"]
+    verbs: ["get", "list"]
   - apiGroups: ["nodalarc.io"]
     resources: ["constellationspecs"]
-    verbs: ["get", "list", "watch", "create", "delete"]
-  - apiGroups: ["nodalarc.io"]
-    resources: ["constellationspecs/status"]
-    verbs: ["get"]
+    verbs: ["get", "list", "watch"]
   # Note: nodes is cluster-scoped — see ClusterRole below
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -46,11 +38,57 @@ subjects:
     name: nodalarc-orchestrator
     namespace: {{ .Values.namespace }}
 ---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: nodalarc-vs-api
+  namespace: {{ .Values.namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: nodalarc-vs-api
+  namespace: {{ .Values.namespace }}
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create", "get"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["create", "list", "delete"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["nodalarc-terminal-keys"]
+    verbs: ["get"]
+  - apiGroups: ["nodalarc.io"]
+    resources: ["constellationspecs"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  - apiGroups: ["nodalarc.io"]
+    resources: ["constellationspecs/status"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: nodalarc-vs-api
+  namespace: {{ .Values.namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: nodalarc-vs-api
+subjects:
+  - kind: ServiceAccount
+    name: nodalarc-vs-api
+    namespace: {{ .Values.namespace }}
+---
 # ClusterRole for cluster-scoped resources (nodes)
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: nodalarc-orchestrator-cluster
+  name: {{ $orchestratorClusterName | quote }}
   labels:
     app.kubernetes.io/managed-by: {{ .Release.Service | quote }}
     app.kubernetes.io/instance: {{ .Release.Name | quote }}
@@ -63,7 +101,7 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: nodalarc-orchestrator-cluster
+  name: {{ $orchestratorClusterBindingName | quote }}
   labels:
     app.kubernetes.io/managed-by: {{ .Release.Service | quote }}
     app.kubernetes.io/instance: {{ .Release.Name | quote }}
@@ -71,8 +109,11 @@ metadata:
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: nodalarc-orchestrator-cluster
+  name: {{ $orchestratorClusterName | quote }}
 subjects:
   - kind: ServiceAccount
     name: nodalarc-orchestrator
+    namespace: {{ .Values.namespace }}
+  - kind: ServiceAccount
+    name: nodalarc-vs-api
     namespace: {{ .Values.namespace }}

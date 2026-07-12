@@ -23,9 +23,13 @@ from typing import Any
 
 from nodal.logging import configure as _configure_logging
 from nodalarc.models.resolved_session import ResolvedSession
-from nodalarc.resolve_session import load_session_resolution_from_file
+from nodalarc.runtime_service_config import (
+    DEFAULT_INSTALLED_SHIPPED_CATALOG_ROOT,
+    RuntimeConfigHealth,
+    load_mounted_runtime_config,
+    start_runtime_health_server,
+)
 from nodalarc.session_identity import (
-    read_runtime_session_run_id_file,
     require_resolved_session_run_id,
 )
 from nodalarc.substrate.manifest_contract import WiringManifest
@@ -40,11 +44,6 @@ from scheduler.substrate_latency import (
 )
 
 log = logging.getLogger(__name__)
-
-
-def _read_runtime_run_id_file(path: Path) -> str:
-    """Read the operator-owned runtime lineage sidecar."""
-    return read_runtime_session_run_id_file(path)
 
 
 def _routing_protocol_label(resolved: ResolvedSession) -> str:
@@ -79,12 +78,11 @@ def _scheduler_capacity_maps(
     gs_terminal_capacities: dict[str, int] = {}
     gs_handover_modes: dict[str, str] = {}
     sat_ground_terminal_capacities: dict[str, int] = {}
+    selected_access = resolved.selected_access_terminals_by_node()
 
     for node in resolved.nodes:
         access_capacity = sum(
-            block.count * (block.tracking_capacity or 0)
-            for block in node.terminal_inventory
-            if block.endpoint_role == "access"
+            len(selection.interface_indices) for selection in selected_access.get(node.node_id, ())
         )
         if node.kind == "ground_station":
             if node.node_id not in required_ground_ids:
@@ -100,9 +98,7 @@ def _scheduler_capacity_maps(
             gs_terminal_capacities[node.node_id] = access_capacity
             gs_handover_modes[node.node_id] = node.ground_scheduling.handover_mode
         elif node.kind == "satellite":
-            sat_capacity = sum(
-                block.count for block in node.terminal_inventory if block.endpoint_role == "access"
-            )
+            sat_capacity = access_capacity
             if node.node_id in required_satellite_ids and sat_capacity <= 0:
                 raise RuntimeError(
                     f"Resolved satellite {node.node_id} has access candidates but no access terminal capacity"
@@ -338,14 +334,19 @@ def wait_for_wiring_manifest_identity(
     raise RuntimeError(f"nodalarc-topology-wiring ConfigMap not found after {timeout_s:.0f}s")
 
 
-def main() -> None:
-    _configure_logging("nodal.arc.scheduler", nats_level=logging.INFO)
+def _build_argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Nodal Arc Scheduler")
     parser.add_argument("--session", required=True, help="Path to session YAML")
     parser.add_argument(
-        "--session-run-id-file",
-        default="/etc/nodalarc/session_run_id",
-        help="Path to operator-owned runtime session run-id sidecar",
+        "--session-config-dir",
+        type=Path,
+        help="Directory-mounted runtime session ConfigMap",
+    )
+    parser.add_argument(
+        "--installed-shipped-root",
+        type=Path,
+        default=DEFAULT_INSTALLED_SHIPPED_CATALOG_ROOT,
+        help="Installed read-only nodalarc catalog root",
     )
     parser.add_argument("--pid-map", help="Path to pid_map.json from na-deploy")
     parser.add_argument(
@@ -353,20 +354,36 @@ def main() -> None:
         default="configs/platform.yaml",
         help="Path to platform configuration YAML",
     )
-    args = parser.parse_args()
+    return parser
+
+
+def main() -> None:
+    _configure_logging("nodal.arc.scheduler", nats_level=logging.INFO)
+    args = _build_argument_parser().parse_args()
 
     from nodalarc.platform_config import init_platform_config
 
     init_platform_config(Path(args.platform_config))
 
-    # Wait for session config to appear (Operator creates it after CRD apply)
     session_file = Path(args.session)
-    while not session_file.is_file():
-        log.debug("Waiting for session config at %s...", args.session)
-        _time.sleep(5)
-    run_id = _read_runtime_run_id_file(Path(args.session_run_id_file))
-    resolution = load_session_resolution_from_file(session_file, origin="scheduler", run_id=run_id)
-    resolved = resolution.resolved
+    session_config_dir = args.session_config_dir or session_file.parent
+    pod_uid = os.environ["POD_UID"]
+    release = os.environ["NODALARC_RELEASE"]
+    build = os.environ["NODAL_BUILD"]
+    runtime_health = RuntimeConfigHealth(session_config_dir, pod_uid=pod_uid)
+    start_runtime_health_server(runtime_health)
+    runtime_config = load_mounted_runtime_config(
+        config_directory=session_config_dir,
+        installed_shipped_root=args.installed_shipped_root,
+        origin="scheduler",
+        namespace=os.environ.get("POD_NAMESPACE"),
+        pod_uid=pod_uid,
+        release=release,
+        build=build,
+        log=log,
+    )
+    resolved = runtime_config.resolution.resolved
+    runtime_health.mark_loaded(runtime_config)
     interface_map = resolved.link_interface_map()
     bandwidth_map = resolved.link_bandwidth_map()
     log.debug("Interface map: %d link pairs", len(interface_map))

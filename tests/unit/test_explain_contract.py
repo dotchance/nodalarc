@@ -1,14 +1,14 @@
 # Copyright 2024-2026 .chance (dotchance)
 # Licensed under the Apache License, Version 2.0. See LICENSE file.
-"""Cross-language contract: the frontend must mirror the REAL backend wire shape
+"""Cross-language contract: the frontend must mirror the real backend wire shape
 and reason vocabularies, not a hand-copied snapshot of itself.
 
 Two drift surfaces are guarded:
-  1. Reason vocabularies — the frontend registry covering its OWN union arrays
+  1. Reason vocabularies — the frontend registry covering its own union arrays
      (registry.test.ts) is tautological if those arrays drift from Python. This
      extracts the authoritative Python reason codes (Literal / StrEnum members) and
      the literal arrays in frontend/src/explain/reasons.ts and asserts they match
-     in BOTH directions.
+     in both directions.
   2. Wire-shape field names — the TS interfaces in frontend/src/explain/types.ts
      are a no-mapping mirror of the backend DecisionExplanationFacts models. A
      snake_case field rename on either side would silently make the frontend read
@@ -51,6 +51,9 @@ _REASONS_TS = Path(__file__).resolve().parents[2] / "frontend/src/explain/reason
 _FAMILIES_TS = Path(__file__).resolve().parents[2] / "frontend/src/explain/families.ts"
 _TYPES_TS = Path(__file__).resolve().parents[2] / "frontend/src/explain/types.ts"
 _LINK_EVENTS_TS = Path(__file__).resolve().parents[2] / "frontend/src/explain/linkEvents.ts"
+_BUILDER_API_TYPES_TS = (
+    Path(__file__).resolve().parents[2] / "frontend/src/builder/generated/builderApi.ts"
+)
 
 # Each backend model and the TS interface that mirrors its wire shape.
 _WIRE_MODELS = [
@@ -66,17 +69,17 @@ _WIRE_MODELS = [
 ]
 
 
-def _ts_interface_fields(name: str) -> set[str]:
+def _ts_interface_fields(name: str, path: Path = _TYPES_TS) -> set[str]:
     """Field names declared in an exported TS interface (skipping comments)."""
-    text = _TYPES_TS.read_text(encoding="utf-8")
+    text = path.read_text(encoding="utf-8")
     match = re.search(rf"export interface {name} \{{\n(.*?)\n\}}", text, re.DOTALL)
-    assert match, f"interface {name} not found in {_TYPES_TS}"
+    assert match, f"interface {name} not found in {path}"
     fields: set[str] = set()
     for raw in match.group(1).splitlines():
         line = raw.strip()
         if not line or line.startswith(("//", "*", "/")):
             continue
-        field = re.match(r"(\w+)\??\s*:", line)
+        field = re.match(r"(?:readonly\s+)?(\w+)\??\s*:", line)
         if field:
             fields.add(field.group(1))
     return fields
@@ -88,6 +91,23 @@ def test_wire_shape_field_names_match_backend():
         ts_fields = _ts_interface_fields(ts_name)
         assert py_fields == ts_fields, (
             f"{model.__name__} <-> TS {ts_name} field drift: "
+            f"py-only={py_fields - ts_fields}, ts-only={ts_fields - py_fields}"
+        )
+
+
+def test_builder_wire_shape_field_names_match_backend():
+    """Every object in the backend BuilderWorld schema is generated for TypeScript."""
+    from nodalarc.models.builder_world import BuilderWorld
+
+    schema = BuilderWorld.model_json_schema()
+    object_schemas = {"BuilderWorld": schema, **schema.get("$defs", {})}
+    for ts_name, object_schema in object_schemas.items():
+        if object_schema.get("type") != "object":
+            continue
+        py_fields = set(object_schema.get("properties", {}))
+        ts_fields = _ts_interface_fields(ts_name, path=_BUILDER_API_TYPES_TS)
+        assert py_fields == ts_fields, (
+            f"BuilderWorld schema {ts_name} <-> generated TS field drift: "
             f"py-only={py_fields - ts_fields}, ts-only={ts_fields - py_fields}"
         )
 
@@ -104,6 +124,24 @@ def _literal_values(literal_type: object) -> set[str]:
     if isinstance(literal_type, type) and issubclass(literal_type, StrEnum):
         return {m.value for m in literal_type}
     return set(get_args(literal_type))
+
+
+def _ts_interface_field_literals(interface: str, field: str, *, path: Path) -> set[str]:
+    """Extract string literals from one field in a generated TS interface."""
+    text = path.read_text(encoding="utf-8")
+    interface_match = re.search(
+        rf"export interface {interface} \{{\n(.*?)\n\}}",
+        text,
+        re.DOTALL,
+    )
+    assert interface_match, f"interface {interface} not found in {path}"
+    field_match = re.search(
+        rf"^\s*readonly {field}\??\s*:\s*(.+);$",
+        interface_match.group(1),
+        re.MULTILINE,
+    )
+    assert field_match, f"field {interface}.{field} not found in {path}"
+    return set(re.findall(r'"([^"]+)"', field_match.group(1)))
 
 
 def test_reasons_ts_exists():
@@ -126,6 +164,38 @@ def test_visibility_reject_reasons_match_backend():
     assert _frontend_array("GROUND_VISIBILITY_REJECT_REASONS") == _literal_values(
         GroundVisibilityRejectReason
     )
+
+
+def test_builder_preview_scopes_match_backend():
+    from nodalarc.models.builder_world import PreviewScope
+
+    assert _ts_interface_field_literals(
+        "BuilderRulePreview",
+        "preview_scope",
+        path=_BUILDER_API_TYPES_TS,
+    ) == _literal_values(PreviewScope)
+
+
+def test_builder_preview_reject_reasons_match_backend():
+    from nodalarc.models.builder_world import BuilderPreviewRejectReason
+
+    assert _ts_interface_field_literals(
+        "BuilderPreviewReasonCount",
+        "reason",
+        path=_BUILDER_API_TYPES_TS,
+    ) == _literal_values(BuilderPreviewRejectReason)
+
+
+def test_builder_preview_reasons_are_runtime_verbatim():
+    """Every builder preview reason except the one server-only bucket is a
+    runtime reject_reason VERBATIM (the full ground+ISL union) — never a renamed
+    dialect."""
+    from nodalarc.models.builder_world import BuilderPreviewRejectReason
+    from nodalarc.models.events import VisibilityRejectReason
+
+    physics = set(get_args(BuilderPreviewRejectReason)) - {"no_geometry"}
+    runtime = _literal_values(VisibilityRejectReason)
+    assert physics <= runtime, f"non-runtime reason tokens: {physics - runtime}"
 
 
 def test_unscheduled_reasons_match_backend():

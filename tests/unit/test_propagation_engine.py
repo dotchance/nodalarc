@@ -7,12 +7,12 @@ from __future__ import annotations
 import math
 
 import pytest
-from nodalarc.constellation_loader import SatelliteNode
-from nodalarc.models.addressing import AddressingScheme
+from nodalarc.ome_runtime import SatelliteNode
 from nodalarc.orbital import OrbitalElements
 from ome.propagation_engine import build_node_positions, propagate_satellites
 from ome.propagator import GeoPosition
 
+from tests.ome_runtime_fixtures import StaticOmeAddressing
 from tests.physics_fixtures import (
     EARTH_ORIGIN_BODY_STATES,
     EARTH_TEST_BODY_FRAMES,
@@ -62,7 +62,7 @@ def _tle_satellite() -> SatelliteNode:
 
 
 def test_propagate_satellites_returns_typed_state_with_model_identity():
-    addressing = AddressingScheme()
+    addressing = StaticOmeAddressing()
     epoch_unix = 1735689600.0
 
     states = propagate_satellites(
@@ -92,7 +92,7 @@ def test_propagate_satellites_returns_typed_state_with_model_identity():
 
 
 def test_j2_propagator_is_explicitly_selectable():
-    addressing = AddressingScheme()
+    addressing = StaticOmeAddressing()
     epoch_unix = 1735689600.0
 
     states = propagate_satellites(
@@ -111,7 +111,7 @@ def test_j2_propagator_is_explicitly_selectable():
 
 
 def test_two_body_propagator_accepts_eccentric_elements():
-    addressing = AddressingScheme()
+    addressing = StaticOmeAddressing()
     epoch_unix = 1735689600.0
     sat = SatelliteNode(
         plane=0,
@@ -148,7 +148,7 @@ def test_two_body_propagator_accepts_eccentric_elements():
 
 
 def test_mixed_session_uses_per_satellite_propagator_ids():
-    addressing = AddressingScheme()
+    addressing = StaticOmeAddressing()
     epoch_unix = 1735689600.0
     two_body = _satellite()
     two_body.propagator_id = "two-body"
@@ -180,7 +180,7 @@ def test_mixed_session_requires_per_satellite_propagator_id():
     with pytest.raises(ValueError, match="requires every satellite"):
         propagate_satellites(
             satellites=[_satellite()],
-            addressing=AddressingScheme(),
+            addressing=StaticOmeAddressing(),
             epoch_unix=1735689600.0,
             dt=0.0,
             propagator_id="mixed",
@@ -192,7 +192,7 @@ def test_sgp4_propagator_requires_tle_record():
     with pytest.raises(ValueError, match="requires a TLE constellation"):
         propagate_satellites(
             satellites=[_satellite()],
-            addressing=AddressingScheme(),
+            addressing=StaticOmeAddressing(),
             epoch_unix=ISS_TLE_EPOCH_UNIX,
             dt=0.0,
             propagator_id="sgp4-tle",
@@ -201,7 +201,7 @@ def test_sgp4_propagator_requires_tle_record():
 
 
 def test_sgp4_propagator_is_explicitly_selectable():
-    addressing = AddressingScheme()
+    addressing = StaticOmeAddressing()
 
     states = propagate_satellites(
         satellites=[_tle_satellite()],
@@ -224,7 +224,7 @@ def test_unknown_propagator_fails_loudly():
     with pytest.raises(ValueError, match="Unsupported OME propagator"):
         propagate_satellites(
             satellites=[_satellite()],
-            addressing=AddressingScheme(),
+            addressing=StaticOmeAddressing(),
             epoch_unix=1735689600.0,
             dt=0.0,
             propagator_id="unknown",
@@ -233,7 +233,7 @@ def test_unknown_propagator_fails_loudly():
 
 
 def test_build_node_positions_preserves_satellite_and_ground_states():
-    addressing = AddressingScheme()
+    addressing = StaticOmeAddressing()
     sat_state = propagate_satellites(
         satellites=[_satellite()],
         addressing=addressing,

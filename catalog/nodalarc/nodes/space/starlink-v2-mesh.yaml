@@ -8,6 +8,8 @@ node:
     role: access
     terminal: nodalarc:terminals/rf/rf-ka-starlink-space-gateway.yaml
     count: 1
+    boresight:
+      mode: nadir
   - id: isl_optical
     role: isl
     terminal: nodalarc:terminals/optical/optical-starlink-space-isl.yaml

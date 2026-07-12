@@ -1,14 +1,6 @@
 # Copyright 2024-2026 .chance (dotchance)
 # Licensed under the Apache License, Version 2.0. See LICENSE file.
-"""Session manager — lists available sessions and orchestrates switching.
-
-Scans catalog session YAML files, provides list with active flag,
-and runs teardown + deploy in a thread executor during switch.
-
-Session recovery: on startup without explicit --session/--db, scans known
-data directories for session-state.json files with live PIDs and recovers
-the newest one automatically.
-"""
+"""Runtime session switch coordinator and process-state recovery."""
 
 from __future__ import annotations
 
@@ -18,13 +10,21 @@ import logging
 import os
 import signal
 import threading
+from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
+from typing import Any, Protocol
 
-import yaml
-from nodalarc.catalog_paths import CatalogPathError
-from nodalarc.models.resolved_session import SourceContext
 from nodalarc.platform_config import get_platform_config
-from nodalarc.resolve_session import resolve_session_with_assets
+
+from .catalog_context import CatalogContext
+from .catalog_upload_store import CatalogUploadResourceEvidence, KubernetesCatalogUploadStore
+from .session_deployment import (
+    PreparedCatalogSessionDeployment,
+    assert_catalog_session_deployment_current,
+    cleanup_unselected_catalog_session_upload,
+    constellation_spec_body,
+    persist_catalog_session_upload,
+)
 
 log = logging.getLogger(__name__)
 
@@ -32,17 +32,29 @@ log = logging.getLogger(__name__)
 # Maximum number of old session directories to keep
 _MAX_KEPT_SESSIONS = 5
 
-
-def _routing_label(resolved) -> str:
-    routing = resolved.routing
-    if routing is None or not routing.domains:
-        return "unrouted"
-    return " + ".join(f"{domain.id}:{domain.protocol}" for domain in routing.domains)
+_CR_GROUP = "nodalarc.io"
+_CR_VERSION = "v1alpha1"
+_CR_PLURAL = "constellationspecs"
+_CR_NAME = "current-session"
 
 
-def _constellation_label(resolved) -> str:
-    segments = sorted({node.segment_id for node in resolved.nodes if node.kind == "satellite"})
-    return " + ".join(segments) if segments else "none"
+class _CustomObjectsSwitchApi(Protocol):
+    def delete_namespaced_custom_object(self, **kwargs: Any) -> Any: ...
+
+    def get_namespaced_custom_object(self, **kwargs: Any) -> dict[str, Any]: ...
+
+    def create_namespaced_custom_object(self, **kwargs: Any) -> Any: ...
+
+
+class _CoreV1PodApi(Protocol):
+    def list_namespaced_pod(self, *args: Any, **kwargs: Any) -> Any: ...
+
+
+_ProgressCallback = Callable[[str], Awaitable[None]]
+_TransitionStartedCallback = Callable[[], Awaitable[None]]
+_UploadResourceObservedCallback = Callable[[CatalogUploadResourceEvidence], None]
+_ConstellationSpecObservedCallback = Callable[[Mapping[str, Any]], Awaitable[None]]
+_DeploymentFreshnessCheck = Callable[[PreparedCatalogSessionDeployment], None]
 
 
 def _cr_status_observes_current_generation(cr: dict) -> bool:
@@ -55,6 +67,29 @@ def _cr_status_observes_current_generation(cr: dict) -> bool:
     except TypeError, ValueError:
         return False
     return generation > 0 and observed_generation == generation
+
+
+def _api_status(exc: BaseException) -> int | None:
+    status = getattr(exc, "status", None)
+    return status if isinstance(status, int) else None
+
+
+def _selected_spec_matches(observed_cr: Mapping[str, Any], intended_cr: Mapping[str, Any]) -> bool:
+    observed_spec = observed_cr.get("spec")
+    intended_spec = intended_cr.get("spec")
+    return isinstance(observed_spec, Mapping) and observed_spec == intended_spec
+
+
+def _selected_catalog_upload_matches(
+    observed_cr: Mapping[str, Any],
+    intended_cr: Mapping[str, Any],
+) -> bool:
+    observed_spec = observed_cr.get("spec")
+    intended_spec = intended_cr.get("spec")
+    if not isinstance(observed_spec, Mapping) or not isinstance(intended_spec, Mapping):
+        return False
+    intended_upload = intended_spec.get("catalogUpload")
+    return intended_upload is not None and observed_spec.get("catalogUpload") == intended_upload
 
 
 def _pid_alive(pid: int) -> bool:
@@ -72,49 +107,17 @@ def _pid_alive(pid: int) -> bool:
 
 
 class SessionManager:
-    """Manages session listing, switching, and status tracking."""
+    """Coordinates prepared catalog-session switches and runtime recovery."""
 
-    def __init__(
-        self,
-        sessions_dir: str,
-        initial_db_path: str | None = None,
-        generated_sessions_dir: str | None = None,
-    ) -> None:
-        self._sessions_dir = Path(sessions_dir)
-        self._generated_sessions_dir = (
-            Path(generated_sessions_dir) if generated_sessions_dir else None
-        )
+    def __init__(self, initial_db_path: str | None = None) -> None:
         self._current_data_dir: Path | None = None
-        self._current_session_file: str | None = None
+        self._current_source_id: str | None = None
         self._status: str = "idle"
         self._status_detail: str = ""
         self._detail_lock = threading.Lock()
-        self._available: list[dict] = []
-        self._session_file_paths: dict[str, Path] = {}
-        self._session_parse_failures: dict[str, str] = {}
 
-        # Derive initial data_dir from db_path parent if provided
         if initial_db_path:
             self._current_data_dir = Path(initial_db_path).parent
-
-        # Scan sessions on init
-        self._available = self.scan_sessions()
-
-    def _scan_roots(self) -> tuple[tuple[Path, bool], ...]:
-        """Return session roots as ``(path, required)`` pairs."""
-        roots: list[tuple[Path, bool]] = [(self._sessions_dir, True)]
-        if self._generated_sessions_dir is not None:
-            roots.append((self._generated_sessions_dir, False))
-        return tuple(roots)
-
-    def _record_session_parse_failure(self, file_key: str, yaml_path: Path, exc: Exception) -> None:
-        """Log a session parse failure when it first appears or changes."""
-        error = str(exc)
-        if self._session_parse_failures.get(file_key) != error:
-            log.warning("Failed to parse session %s: %s", yaml_path, exc)
-        else:
-            log.debug("Repeated session parse failure for %s: %s", yaml_path, exc)
-        self._session_parse_failures[file_key] = error
 
     @property
     def status(self) -> str:
@@ -130,93 +133,13 @@ class SessionManager:
         with self._detail_lock:
             self._status_detail = value
 
-    def scan_sessions(self) -> list[dict]:
-        """Read each segment YAML in sessions_dir, resolve it, return metadata."""
-        results = []
-        session_file_paths: dict[str, Path] = {}
-        active_failures: set[str] = set()
+    @property
+    def active_source_id(self) -> str | None:
+        return self._current_source_id
 
-        for scan_root, required in self._scan_roots():
-            if not scan_root.is_dir():
-                if required:
-                    log.warning(f"Sessions directory not found: {scan_root}")
-                continue
-            root = scan_root.resolve(strict=True)
-
-            for yaml_path in sorted(scan_root.glob("*.yaml")):
-                file_key = str(yaml_path)
-                resolved_path = yaml_path.resolve(strict=True)
-                try:
-                    resolved_path.relative_to(root)
-                except ValueError as exc:
-                    msg = f"Session file escapes sessions root: {yaml_path}"
-                    log.error(msg)
-                    raise CatalogPathError(msg) from exc
-
-                try:
-                    raw = yaml.safe_load(resolved_path.read_text())
-                    resolution = resolve_session_with_assets(
-                        raw,
-                        source_context=SourceContext(origin="vs_api.session_manager"),
-                    )
-                    resolved = resolution.resolved
-                    results.append(
-                        {
-                            "name": resolved.session.name,
-                            "file": file_key,
-                            "constellation": _constellation_label(resolved),
-                            "routing_stack": _routing_label(resolved),
-                        }
-                    )
-                    session_file_paths[file_key] = resolved_path
-                    self._session_parse_failures.pop(file_key, None)
-                except Exception as exc:
-                    active_failures.add(file_key)
-                    self._record_session_parse_failure(file_key, yaml_path, exc)
-        for key in tuple(self._session_parse_failures):
-            if key not in active_failures and key not in session_file_paths:
-                self._session_parse_failures.pop(key, None)
-        self._session_file_paths = session_file_paths
-        return results
-
-    def list_sessions(self) -> list[dict]:
-        """Return available sessions with active flag on current session."""
-        result = [{**s, "active": s["file"] == self._current_session_file} for s in self._available]
-        # If session is ready but no file match (Operator-deployed session), match by name
-        if (
-            self._status == "ready"
-            and not any(s["active"] for s in result)
-            and self._current_session_file
-        ):
-            try:
-                import yaml
-
-                raw = Path(self._current_session_file).read_text()
-                name = yaml.safe_load(raw).get("session", {}).get("name", "")
-                if name:
-                    for s in result:
-                        if s["name"] == name:
-                            s["active"] = True
-                            break
-            except Exception:
-                pass
-        return result
-
-    def set_active(self, session_file: str) -> None:
-        """Mark a session file as the currently active session."""
-        self._current_session_file = session_file
-
-    def rescan(self) -> None:
-        """Re-scan session directory to pick up newly added YAML files."""
-        self._available = self.scan_sessions()
-
-    def _valid_session_files(self) -> set[str]:
-        """Return the set of known session file paths from the initial scan."""
-        return set(self._session_file_paths)
-
-    def _validated_session_path(self, session_path: str) -> Path | None:
-        """Return the resolved path for a scanned session file key."""
-        return self._session_file_paths.get(session_path)
+    def set_active(self, source_id: str) -> None:
+        """Mark one catalog session reference as the active source."""
+        self._current_source_id = source_id
 
     def _collect_data_dirs(self) -> list[Path]:
         """Session data lives under the platform-owned root — a platform fact,
@@ -267,9 +190,6 @@ class SessionManager:
                 )
                 # Update internal state
                 self._current_data_dir = state_file.parent
-                session_config = state.get("session_config", "")
-                if session_config:
-                    self._current_session_file = session_config
                 self._status = "ready"
                 self.status_detail = ""
                 return state
@@ -314,9 +234,8 @@ class SessionManager:
     def cleanup_old_sessions(self, keep: int = _MAX_KEPT_SESSIONS) -> int:
         """Remove old session directories, keeping the newest `keep` per data_dir.
 
-        Only removes directories where all PIDs are dead. Also removes orphan
-        directories that lack session-state.json (partial/failed deploys).
-        Returns count removed.
+        Only state-marked directories with dead recorded processes are eligible.
+        Unknown sibling directories are never inferred to be session artifacts.
         """
         import shutil
 
@@ -327,18 +246,15 @@ class SessionManager:
             if not base.is_dir():
                 continue
 
-            # Separate complete (has session-state.json) from orphan dirs.
-            # The generated-session library lives under the same data root but
-            # is user content with its own lifecycle — never an orphan deploy.
+            # Unknown sibling directories may belong to catalog or operational
+            # storage. Only directories carrying our state marker are owned by
+            # this cleanup path.
             complete = []
-            orphan = []
             for d in base.iterdir():
-                if not d.is_dir() or d.name == "generated-sessions":
+                if not d.is_dir():
                     continue
                 if (d / "session-state.json").exists():
                     complete.append(d)
-                else:
-                    orphan.append(d)
 
             # Sort complete dirs by mtime (newest first), keep newest `keep`
             complete.sort(key=lambda d: d.stat().st_mtime, reverse=True)
@@ -361,181 +277,295 @@ class SessionManager:
                 except Exception as exc:
                     log.warning(f"Failed to remove {subdir}: {exc}")
 
-            # Remove orphan directories (no session-state.json = failed/partial deploy)
-            for subdir in orphan:
-                try:
-                    shutil.rmtree(subdir)
-                    log.info(f"Cleaned up orphan directory: {subdir.name}")
-                    removed += 1
-                except Exception as exc:
-                    log.warning(f"Failed to remove orphan {subdir}: {exc}")
-
         return removed
 
-    async def switch(self, session_path: str, progress_fn=None) -> dict:
-        """Tear down current session and deploy new one via ConstellationSpec CRD.
-
-        Fully async — uses asyncio.sleep for polling, runs K8s API calls
-        in executor to avoid blocking the event loop. Does NOT call any
-        VS-API state callbacks — the caller (_run_switch) owns the
-        SessionContext lifecycle.
-
-        progress_fn: optional async callback(detail: str) called at each
-        significant step so the browser can show real-time progress.
-        """
-
-        import kubernetes.client
-        import kubernetes.config
-
-        # Full multi-session catalog resolution — never on the loop.
-        await asyncio.to_thread(self.rescan)
-        validated_session_path = self._validated_session_path(session_path)
-        if validated_session_path is None:
-            self._status = "error"
-            self.status_detail = f"Unknown session: {Path(session_path).name}"
-            log.error("Rejected switch to unknown session path: %s", session_path)
-            raise ValueError(f"Unknown session: {session_path}")
-
-        def _load_k8s_config() -> None:
-            try:
-                kubernetes.config.load_incluster_config()
-            except kubernetes.config.ConfigException:
-                kubernetes.config.load_kube_config()
-
-        await asyncio.to_thread(_load_k8s_config)
-
-        api = kubernetes.client.CustomObjectsApi()
-        cfg = get_platform_config()
-        ns = cfg.kubernetes_namespace
+    async def _switch_constellation_spec(
+        self,
+        *,
+        source_id: str,
+        cr_body: Mapping[str, Any],
+        custom_objects_api: _CustomObjectsSwitchApi,
+        core_v1_api: _CoreV1PodApi,
+        namespace: str,
+        progress: _ProgressCallback,
+        before_teardown: Callable[[], None] | None = None,
+        selection_started: threading.Event | None = None,
+        constellation_spec_observed: _ConstellationSpecObservedCallback | None = None,
+    ) -> dict:
+        """Apply one already-built CR through the common destructive switch path."""
         loop = asyncio.get_running_loop()
+        await progress("Tearing down current session")
+        log.info("Session switch: deploying %s via CRD", source_id)
+
+        def _delete_existing_cr() -> bool:
+            if before_teardown is not None:
+                before_teardown()
+            try:
+                custom_objects_api.delete_namespaced_custom_object(
+                    group=_CR_GROUP,
+                    version=_CR_VERSION,
+                    namespace=namespace,
+                    plural=_CR_PLURAL,
+                    name=_CR_NAME,
+                )
+            except Exception as exc:
+                if _api_status(exc) == 404:
+                    return False
+                raise
+            return True
+
+        deleted_existing_cr = await loop.run_in_executor(None, _delete_existing_cr)
+        if deleted_existing_cr:
+            log.info("Deleted existing ConstellationSpec CR %s/%s", namespace, _CR_NAME)
+            await progress("Waiting for old session to finalize")
+            old_cr_deleted = False
+            for _ in range(60):
+                try:
+                    await loop.run_in_executor(
+                        None,
+                        lambda: custom_objects_api.get_namespaced_custom_object(
+                            group=_CR_GROUP,
+                            version=_CR_VERSION,
+                            namespace=namespace,
+                            plural=_CR_PLURAL,
+                            name=_CR_NAME,
+                        ),
+                    )
+                    await asyncio.sleep(2)
+                except Exception as exc:
+                    if _api_status(exc) == 404:
+                        old_cr_deleted = True
+                        break
+                    raise
+            if not old_cr_deleted:
+                raise TimeoutError(
+                    "Old ConstellationSpec did not finalize within 120 seconds; "
+                    "refusing to deploy a new session over stale control-plane state"
+                )
+
+            await progress("Waiting for old session pods to terminate")
+            remaining = 0
+            for _ in range(60):
+                pods = await loop.run_in_executor(
+                    None,
+                    lambda: core_v1_api.list_namespaced_pod(
+                        namespace,
+                        label_selector="nodalarc.io/node-id",
+                    ),
+                )
+                remaining = len(pods.items)
+                if remaining == 0:
+                    break
+                await progress(f"Waiting for {remaining} old pods to terminate")
+                await asyncio.sleep(2)
+            if remaining != 0:
+                raise TimeoutError(
+                    f"{remaining} old session pod(s) still exist after 120 seconds; "
+                    "refusing to deploy a new session over stale data-plane state"
+                )
+
+        await progress("Deploying new constellation")
+
+        def _create_cr() -> None:
+            try:
+                custom_objects_api.create_namespaced_custom_object(
+                    group=_CR_GROUP,
+                    version=_CR_VERSION,
+                    namespace=namespace,
+                    plural=_CR_PLURAL,
+                    body=dict(cr_body),
+                )
+            except Exception as create_exc:
+                try:
+                    observed = custom_objects_api.get_namespaced_custom_object(
+                        group=_CR_GROUP,
+                        version=_CR_VERSION,
+                        namespace=namespace,
+                        plural=_CR_PLURAL,
+                        name=_CR_NAME,
+                    )
+                except Exception as observe_exc:
+                    if selection_started is not None and _api_status(observe_exc) != 404:
+                        selection_started.set()
+                    raise create_exc from observe_exc
+                if selection_started is not None and _selected_catalog_upload_matches(
+                    observed,
+                    cr_body,
+                ):
+                    selection_started.set()
+                if _selected_spec_matches(observed, cr_body):
+                    log.warning(
+                        "ConstellationSpec create reported %s, but exact intended spec exists",
+                        type(create_exc).__name__,
+                    )
+                    return
+                raise
+            if selection_started is not None:
+                selection_started.set()
+
+        await loop.run_in_executor(None, _create_cr)
+        log.info("Applied ConstellationSpec CR for %s", source_id)
+        selected_cr = await loop.run_in_executor(
+            None,
+            lambda: custom_objects_api.get_namespaced_custom_object(
+                group=_CR_GROUP,
+                version=_CR_VERSION,
+                namespace=namespace,
+                plural=_CR_PLURAL,
+                name=_CR_NAME,
+            ),
+        )
+        if constellation_spec_observed is not None:
+            await constellation_spec_observed(selected_cr)
+
+        await progress("Waiting for session to deploy")
+        for _ in range(300):
+            cr = await loop.run_in_executor(
+                None,
+                lambda: custom_objects_api.get_namespaced_custom_object(
+                    group=_CR_GROUP,
+                    version=_CR_VERSION,
+                    namespace=namespace,
+                    plural=_CR_PLURAL,
+                    name=_CR_NAME,
+                ),
+            )
+            phase = cr.get("status", {}).get("phase", "")
+            message = cr.get("status", {}).get("message", "")
+            if not _cr_status_observes_current_generation(cr):
+                await progress("Waiting for operator to observe new session spec")
+                await asyncio.sleep(1)
+                continue
+            if message:
+                await progress(message)
+            if phase == "Ready":
+                if constellation_spec_observed is not None:
+                    await constellation_spec_observed(cr)
+                self._current_source_id = source_id
+                return cr
+            if phase == "Error":
+                if constellation_spec_observed is not None:
+                    await constellation_spec_observed(cr)
+                raise RuntimeError(f"Deploy failed: {message}")
+            await asyncio.sleep(1)
+
+        raise TimeoutError("Deploy timed out waiting for session Ready (5 minutes)")
+
+    async def _switch_prepared_session(
+        self,
+        deployment: PreparedCatalogSessionDeployment,
+        *,
+        final_preflight: _DeploymentFreshnessCheck,
+        upload_store: KubernetesCatalogUploadStore,
+        custom_objects_api: _CustomObjectsSwitchApi,
+        core_v1_api: _CoreV1PodApi,
+        namespace: str,
+        progress_fn: _ProgressCallback | None = None,
+        transition_started: _TransitionStartedCallback | None = None,
+        upload_resource_observed: _UploadResourceObservedCallback | None = None,
+        constellation_spec_observed: _ConstellationSpecObservedCallback | None = None,
+    ) -> dict:
+        """Persist and select one exact prepared YAML file closure.
+
+        The caller owns Kubernetes client construction and source authority.
+        Upload readback and the final repository-currentness assertion both
+        complete before the first destructive Kubernetes operation.
+        """
+        if deployment.receipt is not None:
+            raise ValueError("catalog switch requires an unpersisted prepared deployment")
+        persisted = deployment
+        selection_started = threading.Event()
 
         async def _progress(detail: str) -> None:
             self.status_detail = detail
-            if progress_fn:
+            if progress_fn is not None:
                 await progress_fn(detail)
+
+        async def _cleanup_unselected() -> None:
+            if persisted.receipt is None or selection_started.is_set():
+                return
+            try:
+                await asyncio.get_running_loop().run_in_executor(
+                    None,
+                    lambda: cleanup_unselected_catalog_session_upload(persisted, upload_store),
+                )
+            except Exception:
+                log.exception(
+                    "Failed to clean up unselected catalog upload %s",
+                    persisted.upload.selection.upload_id,
+                )
 
         try:
             self._status = "switching"
-            await _progress("Tearing down current session")
-            log.info("Session switch: deploying %s via CRD", session_path)
-
-            # === Delete existing ConstellationSpec CR ===
-            try:
-                await loop.run_in_executor(
-                    None,
-                    lambda: api.delete_namespaced_custom_object(
-                        group="nodalarc.io",
-                        version="v1alpha1",
-                        namespace=ns,
-                        plural="constellationspecs",
-                        name="current-session",
-                    ),
-                )
-                log.info("Deleted existing ConstellationSpec CR %s/current-session", ns)
-
-                await _progress("Waiting for old session to finalize")
-                old_cr_deleted = False
-                for _ in range(60):
-                    try:
-                        await loop.run_in_executor(
-                            None,
-                            lambda: api.get_namespaced_custom_object(
-                                group="nodalarc.io",
-                                version="v1alpha1",
-                                namespace=ns,
-                                plural="constellationspecs",
-                                name="current-session",
-                            ),
-                        )
-                        await asyncio.sleep(2)
-                    except kubernetes.client.rest.ApiException as get_e:
-                        if get_e.status == 404:
-                            old_cr_deleted = True
-                            break
-                        raise
-                if not old_cr_deleted:
-                    raise TimeoutError(
-                        "Old ConstellationSpec did not finalize within 120 seconds; "
-                        "refusing to deploy a new session over stale control-plane state"
-                    )
-
-                await _progress("Waiting for old session pods to terminate")
-                v1 = kubernetes.client.CoreV1Api()
-                remaining = 0
-                for _ in range(60):
-                    pods = await loop.run_in_executor(
-                        None,
-                        lambda: v1.list_namespaced_pod(ns, label_selector="nodalarc.io/node-id"),
-                    )
-                    remaining = len(pods.items)
-                    if remaining == 0:
-                        break
-                    await _progress(f"Waiting for {remaining} old pods to terminate")
-                    await asyncio.sleep(2)
-                if remaining != 0:
-                    raise TimeoutError(
-                        f"{remaining} old session pod(s) still exist after 120 seconds; "
-                        "refusing to deploy a new session over stale data-plane state"
-                    )
-            except kubernetes.client.rest.ApiException as e:
-                if e.status != 404:
-                    raise
-
-            # === Build and apply ConstellationSpec CR ===
-            await _progress("Deploying new constellation")
-            session_yaml_content = await asyncio.to_thread(validated_session_path.read_text)
-            cr_body = {
-                "apiVersion": "nodalarc.io/v1alpha1",
-                "kind": "ConstellationSpec",
-                "metadata": {"name": "current-session", "namespace": ns},
-                "spec": {
-                    "sessionYaml": session_yaml_content,
-                },
-            }
-            await loop.run_in_executor(
+            await _progress("Uploading exact session catalog")
+            persisted = await asyncio.get_running_loop().run_in_executor(
                 None,
-                lambda: api.create_namespaced_custom_object(
-                    group="nodalarc.io",
-                    version="v1alpha1",
-                    namespace=ns,
-                    plural="constellationspecs",
-                    body=cr_body,
+                lambda: persist_catalog_session_upload(
+                    persisted,
+                    upload_store,
+                    resource_observer=upload_resource_observed,
                 ),
             )
-            log.info("Applied ConstellationSpec CR for %s", session_path)
+            await _progress("Verifying exact session catalog")
+            await asyncio.get_running_loop().run_in_executor(
+                None,
+                lambda: final_preflight(persisted),
+            )
+            if transition_started is not None:
+                await transition_started()
 
-            # === Poll CR status until Ready ===
-            await _progress("Waiting for session to deploy")
-            for _ in range(300):
-                cr = await loop.run_in_executor(
-                    None,
-                    lambda: api.get_namespaced_custom_object(
-                        group="nodalarc.io",
-                        version="v1alpha1",
-                        namespace=ns,
-                        plural="constellationspecs",
-                        name="current-session",
-                    ),
-                )
-                phase = cr.get("status", {}).get("phase", "")
-                message = cr.get("status", {}).get("message", "")
-                if not _cr_status_observes_current_generation(cr):
-                    await _progress("Waiting for operator to observe new session spec")
-                    await asyncio.sleep(1)
-                    continue
-                if message:
-                    await _progress(message)
-                if phase == "Ready":
-                    self._current_session_file = session_path
-                    return cr
-                if phase == "Error":
-                    raise RuntimeError(f"Deploy failed: {message}")
-                await asyncio.sleep(1)
+            await _progress("Switching runtime session")
+            cr_body = constellation_spec_body(persisted, namespace=namespace)
 
-            raise TimeoutError("Deploy timed out waiting for session Ready (5 minutes)")
-
+            return await self._switch_constellation_spec(
+                source_id=str(persisted.prepared.source.logical_id),
+                cr_body=cr_body,
+                custom_objects_api=custom_objects_api,
+                core_v1_api=core_v1_api,
+                namespace=namespace,
+                progress=_progress,
+                before_teardown=lambda: final_preflight(persisted),
+                selection_started=selection_started,
+                constellation_spec_observed=constellation_spec_observed,
+            )
+        except asyncio.CancelledError:
+            await _cleanup_unselected()
+            raise
         except Exception as exc:
+            await _cleanup_unselected()
             self._status = "error"
             self.status_detail = str(exc)
-            log.error("Session switch failed: %s", exc)
+            log.error("Catalog session switch failed: %s", exc)
             raise
+
+    async def switch_catalog(
+        self,
+        deployment: PreparedCatalogSessionDeployment,
+        *,
+        context: CatalogContext,
+        upload_store: KubernetesCatalogUploadStore,
+        custom_objects_api: _CustomObjectsSwitchApi,
+        core_v1_api: _CoreV1PodApi,
+        namespace: str,
+        progress_fn: _ProgressCallback | None = None,
+        transition_started: _TransitionStartedCallback | None = None,
+        upload_resource_observed: _UploadResourceObservedCallback | None = None,
+        constellation_spec_observed: _ConstellationSpecObservedCallback | None = None,
+    ) -> dict:
+        """Select one current repository session through the shared file core."""
+
+        return await self._switch_prepared_session(
+            deployment,
+            final_preflight=lambda current: assert_catalog_session_deployment_current(
+                context,
+                current,
+            ),
+            upload_store=upload_store,
+            custom_objects_api=custom_objects_api,
+            core_v1_api=core_v1_api,
+            namespace=namespace,
+            progress_fn=progress_fn,
+            transition_started=transition_started,
+            upload_resource_observed=upload_resource_observed,
+            constellation_spec_observed=constellation_spec_observed,
+        )

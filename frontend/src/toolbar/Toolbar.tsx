@@ -102,6 +102,7 @@ export function Toolbar({
   ];
   if (canSplit) viewVariants.push({ value: "split", label: "Split", icon: "columns-2" });
   viewVariants.push({ value: "dashboard", label: "Dashboard", icon: "layout-dashboard" });
+  viewVariants.push({ value: "builder", label: "Session Builder", icon: "palette" });
 
   return (
     <div className="toolbar">
@@ -137,12 +138,18 @@ export function Toolbar({
         active={showSatPaths}
         onClick={onToggleSatPaths}
       />
-      <ToolBtn
-        label="Segments / filters (Q)"
-        icon="funnel"
-        active={filterOpen}
-        onClick={onToggleFilter}
-      />
+      {/* The filter panel reads the LIVE session snapshot — hidden in the
+          builder view so a running session's segments never read as the
+          builder world's. Every other toggle drives whichever Scene is
+          mounted (live or builder) through the shared display state. */}
+      {viewMode !== "builder" && (
+        <ToolBtn
+          label="Segments / filters (Q)"
+          icon="funnel"
+          active={filterOpen}
+          onClick={onToggleFilter}
+        />
+      )}
       <ToolBtn
         label={`Reference frame: ${referenceFrame === "earth-inertial" ? "Earth-inertial" : "Earth-fixed"} (I)`}
         icon="compass"

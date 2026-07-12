@@ -8,7 +8,7 @@
  * - useWizardApi: generate, deploy, preview-coverage API calls
  */
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import type {
   ConstellationPreset,
   Protocol,
@@ -18,13 +18,12 @@ import type {
   GroundStationSet,
   WizardRuntimeState,
   WizardStep,
+  WizardExtension,
+  AreaStrategy,
 } from "../catalog/wizardTypes";
-import { DEFAULT_ROUTING_TIMERS } from "../catalog/wizardTypes";
 import {
-  DEFAULT_ORBIT_PROPAGATOR,
   constellationUnsupportedReason,
   defaultOrbitPropagatorForConstellation,
-  supportedOrbitModelsForConstellation,
 } from "../catalog/orbitModels";
 import { useWizardData } from "./useWizardData";
 import { useWizardNav } from "./useWizardNav";
@@ -39,12 +38,25 @@ export function useWizard() {
     satelliteType: null,
     groundStationSet: null,
     constellation: null,
-    orbitPropagator: DEFAULT_ORBIT_PROPAGATOR,
+    orbitPropagator: null,
     protocol: null,
     extensions: [],
-    areaStrategy: "flat",
-    routingTimers: { ...DEFAULT_ROUTING_TIMERS },
+    areaStrategy: null,
+    routingTimers: null,
   });
+
+  useEffect(() => {
+    if (!data.rules) return;
+    const defaults = data.rules;
+    setState((current) => {
+      if (current.areaStrategy !== null && current.routingTimers !== null) return current;
+      return {
+        ...current,
+        areaStrategy: current.areaStrategy ?? defaults.default_area_strategy,
+        routingTimers: current.routingTimers ?? { ...defaults.routing_timer_defaults },
+      };
+    });
+  }, [data.rules]);
 
   const nav = useWizardNav(setState);
 
@@ -62,12 +74,16 @@ export function useWizard() {
     api.clearError();
   }, [api]);
 
-  const selectCustomGroundStations = useCallback((stationNames: string[]) => {
+  const selectCustomGroundStations = useCallback((siteRefs: string[]) => {
     const customSet: GroundStationSet = {
       name: "custom",
-      description: `Custom selection: ${stationNames.length} stations`,
-      stations: stationNames,
+      description: `Custom selection: ${siteRefs.length} stations`,
+      stations: siteRefs.map((ref) => {
+        const parts = ref.split("/");
+        return parts[parts.length - 1]?.replace(/\.ya?ml$/i, "") ?? ref;
+      }),
       file: null,
+      custom_site_refs: siteRefs,
     };
     setState((s) => ({ ...s, groundStationSet: customSet }));
     api.clearYaml();
@@ -79,8 +95,8 @@ export function useWizard() {
       return;
     }
     setState((s) => {
-      const supported = supportedOrbitModelsForConstellation(preset).map((option) => option.id);
-      const orbitPropagator = supported.includes(s.orbitPropagator)
+      const supported = preset.capability.runtime_supported_propagators;
+      const orbitPropagator = s.orbitPropagator && supported.includes(s.orbitPropagator)
         ? s.orbitPropagator
         : defaultOrbitPropagatorForConstellation(preset);
       return { ...s, constellation: preset, orbitPropagator };
@@ -91,9 +107,7 @@ export function useWizard() {
 
   const selectOrbitPropagator = useCallback((orbitPropagator: OrbitPropagator) => {
     setState((s) => {
-      const supported = supportedOrbitModelsForConstellation(s.constellation).map(
-        (option) => option.id,
-      );
+      const supported = s.constellation?.capability.runtime_supported_propagators ?? [];
       if (!supported.includes(orbitPropagator)) {
         return s;
       }
@@ -110,29 +124,36 @@ export function useWizard() {
 
   const selectProtocol = useCallback((protocol: Protocol) => {
     setState((s) => {
-      const nextStep: WizardStep = protocol === "nodalpath" ? "review" : "extensions";
-      return { ...s, protocol, extensions: [], step: nextStep };
+      return { ...s, protocol, extensions: [], step: "extensions" as WizardStep };
     });
     api.clearYaml();
     api.clearError();
   }, [api]);
 
-  const toggleExtension = useCallback((ext: string) => {
+  const toggleExtension = useCallback((ext: WizardExtension) => {
     setState((s) => {
       const has = s.extensions.includes(ext);
-      let next = has ? s.extensions.filter((e) => e !== ext) : [...s.extensions, ext];
-      if (has && ext === "te") {
-        next = next.filter((e) => e !== "mpls");
-      }
-      if (!has && ext === "mpls" && !next.includes("te")) {
-        next.push("te");
+      const protoRules = data.rules?.protocols.find((item) => item.id === s.protocol);
+      let next = has ? s.extensions.filter((item) => item !== ext) : [...s.extensions, ext];
+      if (protoRules) {
+        let changed = true;
+        while (changed) {
+          const selected = new Set(next);
+          const filtered = next.filter((item) =>
+            (protoRules.extension_constraints[item] ?? []).every(
+              (dependency) => selected.has(dependency),
+            )
+          );
+          changed = filtered.length !== next.length;
+          next = filtered;
+        }
       }
       return { ...s, extensions: next };
     });
     api.clearYaml();
-  }, [api]);
+  }, [api, data.rules]);
 
-  const setAreaStrategy = useCallback((strategy: string) => {
+  const setAreaStrategy = useCallback((strategy: AreaStrategy) => {
     setState((s) => ({ ...s, areaStrategy: strategy }));
     api.clearYaml();
   }, [api]);
@@ -140,7 +161,7 @@ export function useWizard() {
   const updateTimers = useCallback((patch: Partial<RoutingTimers>) => {
     setState((s) => ({
       ...s,
-      routingTimers: { ...s.routingTimers, ...patch },
+      routingTimers: s.routingTimers ? { ...s.routingTimers, ...patch } : s.routingTimers,
     }));
     api.clearYaml();
   }, [api]);
@@ -148,9 +169,9 @@ export function useWizard() {
   // --- Extension constraint checks ---
 
   const isExtensionAllowed = useCallback(
-    (ext: string): boolean => {
+    (ext: WizardExtension): boolean => {
       if (!data.rules || !state.protocol) return false;
-      const protoRules = data.rules.protocols[state.protocol];
+      const protoRules = data.rules.protocols.find((item) => item.id === state.protocol);
       if (!protoRules) return false;
       return protoRules.extensions.includes(ext);
     },
@@ -158,11 +179,11 @@ export function useWizard() {
   );
 
   const isExtensionEnabled = useCallback(
-    (ext: string): boolean => {
+    (ext: WizardExtension): boolean => {
       if (!isExtensionAllowed(ext)) return false;
       if (!data.rules || !state.protocol) return false;
-      const protoRules = data.rules.protocols[state.protocol];
-      const deps = protoRules?.constraints[ext];
+      const protoRules = data.rules.protocols.find((item) => item.id === state.protocol);
+      const deps = protoRules?.extension_constraints[ext];
       if (!deps) return true;
       return deps.every((d) => state.extensions.includes(d));
     },
@@ -181,19 +202,24 @@ export function useWizard() {
       satelliteType: null,
       groundStationSet: null,
       constellation: null,
-      orbitPropagator: DEFAULT_ORBIT_PROPAGATOR,
+      orbitPropagator: null,
       protocol: null,
       extensions: [],
-      areaStrategy: "flat",
-      routingTimers: { ...DEFAULT_ROUTING_TIMERS },
+      areaStrategy: data.rules?.default_area_strategy ?? null,
+      routingTimers: data.rules ? { ...data.rules.routing_timer_defaults } : null,
     });
     api.clearYaml();
     api.clearError();
-  }, [api]);
+  }, [api, data.rules]);
 
   return {
     // Data
     presets: data.presets,
+    customConstellationCapability: data.customConstellationCapability,
+    customConstellationSeed: data.customConstellationSeed,
+    customConstellationDefaultNode: data.customConstellationDefaultNode,
+    customConstellationPatterns: data.customConstellationPatterns,
+    orbitModels: data.orbitModels,
     rules: data.rules,
     satelliteTypes: data.satelliteTypes,
     groundStationSets: data.groundStationSets,
@@ -202,6 +228,7 @@ export function useWizard() {
     state,
     generating: api.generating,
     deploying: api.deploying,
+    exporting: api.exporting,
     generatedYaml: api.generatedYaml,
     error: api.error,
     // Selection
@@ -224,10 +251,13 @@ export function useWizard() {
     // API
     generate,
     deploy: api.deploy,
+    exportYaml: api.exportYaml,
+    deployUploadedYaml: api.deployUploadedYaml,
     previewCoverage,
     previewing: api.previewing,
     coveragePreview: api.coveragePreview,
     clearPreview: api.clearPreview,
+    deriveConstellationLayout: api.deriveConstellationLayout,
     continueToProtocol,
     reset,
   };

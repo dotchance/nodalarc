@@ -21,11 +21,16 @@ EOF
 }
 
 node_count() {
+    local nodes
     if ! command -v kubectl >/dev/null 2>&1; then
         printf '0\n'
         return
     fi
-    kubectl get nodes --no-headers 2>/dev/null | awk 'END {print NR + 0}'
+    if ! nodes="$(kubectl get nodes --no-headers 2>/dev/null)"; then
+        printf '0\n'
+        return
+    fi
+    printf '%s\n' "$nodes" | awk 'NF {count++} END {print count + 0}'
 }
 
 case "${1:-resolve}" in

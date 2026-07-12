@@ -12,7 +12,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Literal, get_args
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from nodalarc.frozen import FrozenDict, ImmutableStrDict
 
@@ -35,6 +35,29 @@ CrossTenantDisplacementPolicy = Literal["off"]
 
 VALID_SELECTION_POLICY_NAMES: frozenset[str] = frozenset(get_args(SelectionPolicyName))
 VALID_HANDOVER_POLICY_NAMES: frozenset[str] = frozenset(get_args(HandoverPolicyName))
+
+
+class HysteresisParameters(BaseModel):
+    """Parameters for ground-link handover dampening."""
+
+    model_config = ConfigDict(allow_inf_nan=False, extra="forbid")
+
+    discount_factor: float = 1.15
+    mask_fade_range_deg: float = 5.0
+
+    @field_validator("discount_factor")
+    @classmethod
+    def _positive_discount(cls, value: float) -> float:
+        if value < 1.0:
+            raise ValueError(f"discount_factor must be >= 1.0, got {value}")
+        return value
+
+    @field_validator("mask_fade_range_deg")
+    @classmethod
+    def _fade_range(cls, value: float) -> float:
+        if not 0.0 < value <= 90.0:
+            raise ValueError(f"mask_fade_range_deg must be in (0, 90], got {value}")
+        return value
 
 
 SELECTION_POLICY_SCORE_SCALES: dict[str, str] = {

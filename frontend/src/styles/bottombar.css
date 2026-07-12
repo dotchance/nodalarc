@@ -125,6 +125,19 @@
   text-align: center;
 }
 
+/* A shortcut suspended in the builder: dimmed, tagged live-view-only. */
+.help-row--suspended {
+  opacity: 0.45;
+}
+
+.help-row-tag {
+  margin-left: auto;
+  font-size: var(--font-size-xxs);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+}
+
 .help-about {
   margin-top: var(--space-8);
   padding-top: var(--space-5);

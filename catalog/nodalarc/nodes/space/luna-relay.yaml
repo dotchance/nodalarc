@@ -8,6 +8,8 @@ node:
     role: access
     terminal: nodalarc:terminals/rf/rf-s-luna-access.yaml
     count: 1
+    boresight:
+      mode: nadir
   - id: isl_optical
     role: isl
     terminal: nodalarc:terminals/optical/optical-low-orbit-isl.yaml

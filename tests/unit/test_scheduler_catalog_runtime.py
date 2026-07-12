@@ -12,7 +12,6 @@ from nodalarc.resolve_session import load_session_resolution_from_file, resolve_
 from nodalarc.session_identity import require_resolved_session_run_id
 from scheduler.__main__ import (
     _dispatch_timing,
-    _read_runtime_run_id_file,
     _routing_protocol_label,
     _scheduler_capacity_maps,
 )
@@ -30,13 +29,10 @@ def _resolved():
 def test_scheduler_runtime_identity_comes_from_source_context_not_session_yaml(
     tmp_path: Path,
 ) -> None:
-    run_id_file = tmp_path / "session_run_id"
-    run_id_file.write_text("run-test-0001\n", encoding="utf-8")
-
     resolution = load_session_resolution_from_file(
         SESSION,
         origin="test.scheduler",
-        run_id=_read_runtime_run_id_file(run_id_file),
+        run_id="run-test-0001",
     )
 
     assert require_resolved_session_run_id(resolution.resolved) == "run-test-0001"
@@ -95,13 +91,3 @@ def test_scheduler_dispatch_timing_requires_resolved_time_and_dispatch() -> None
         _dispatch_timing(resolved.model_copy(update={"dispatch": None}))
     with pytest.raises(RuntimeError, match="time"):
         _dispatch_timing(resolved.model_copy(update={"time": None}))
-
-
-def test_runtime_run_id_file_fails_loudly_when_missing_or_empty(tmp_path: Path) -> None:
-    with pytest.raises(RuntimeError, match="missing"):
-        _read_runtime_run_id_file(tmp_path / "missing")
-
-    empty = tmp_path / "session_run_id"
-    empty.write_text("\n", encoding="utf-8")
-    with pytest.raises(RuntimeError, match="empty"):
-        _read_runtime_run_id_file(empty)

@@ -13,6 +13,8 @@ import json
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
+from nodalarc.models.segment_session import TimeConfig
+from nodalarc.models.session import resolve_session_epoch
 from nodalarc.nats_channels import MAX_TIME_ACCEL, MIN_TIME_ACCEL
 
 # ---------------------------------------------------------------------------
@@ -21,38 +23,17 @@ from nodalarc.nats_channels import MAX_TIME_ACCEL, MIN_TIME_ACCEL
 
 
 class TestResolveSessionEpoch:
-    """Tests for the default-now helper (R-OME-005)."""
+    """Tests for canonical session epoch derivation."""
 
     def test_returns_configured_time_when_set(self):
-        from nodalarc.models.session import TimeConfig, resolve_session_epoch
-
-        tc = TimeConfig(start_time="2020-01-01T00:00:00+00:00")
+        tc = TimeConfig(
+            start_time="2020-01-01T00:00:00+00:00",
+            step_seconds=1,
+            compression=1,
+        )
         result = resolve_session_epoch(tc)
         expected = datetime(2020, 1, 1, tzinfo=UTC).timestamp()
         assert abs(result - expected) < 1.0
-
-    def test_returns_wall_clock_now_when_none(self):
-        import time
-
-        from nodalarc.models.session import TimeConfig, resolve_session_epoch
-
-        tc = TimeConfig()  # start_time=None
-        before = time.time()
-        result = resolve_session_epoch(tc)
-        after = time.time()
-        assert before <= result <= after + 0.1
-
-    def test_returns_wall_clock_now_when_empty_string(self):
-        """Empty string is falsy — treated same as None."""
-        import time
-
-        from nodalarc.models.session import TimeConfig, resolve_session_epoch
-
-        tc = TimeConfig(start_time="")
-        before = time.time()
-        result = resolve_session_epoch(tc)
-        after = time.time()
-        assert before <= result <= after + 0.1
 
 
 # ---------------------------------------------------------------------------

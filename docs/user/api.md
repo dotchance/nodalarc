@@ -58,14 +58,14 @@ for link in s['links']:
 ```bash
 curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   http://localhost:8080/api/v1/trace \
-  -d '{"src_node": "ground-gs-hawthorne", "dst_node": "ground-gs-frankfurt"}'
+  -d '{"src_node": "earth-us-hawthorne-gw1", "dst_node": "earth-de-frankfurt-gw1"}'
 ```
 
 Returns the hop-by-hop path and total latency:
 
 ```json
 {
-  "hops": ["ground-gs-hawthorne", "space-sat-p02s03", "space-sat-p02s04", "space-sat-p03s04", "ground-gs-frankfurt"],
+  "hops": ["earth-us-hawthorne-gw1", "leo-sat-p02s03", "leo-sat-p02s04", "leo-sat-p03s04", "earth-de-frankfurt-gw1"],
   "success": true,
   "total_latency_ms": 42.3
 }
@@ -116,10 +116,12 @@ The state snapshot contains:
 - **sim_time** / **wall_time** - current simulation and wall-clock time
 - **playback_paused** / **playback_speed** - time control state
 
-Runtime node IDs are session namespaced. A simple LEO session may use
-`space-sat-p00s00`; a multi-regime session may use `leo-sat-p00s00`,
-`meo-sat-p00s00`, `geo-sat-p00s00`, or
-`lunar-site-gs-artemis-surface-router`. Query `/api/v1/state` first and use the
+Runtime node IDs are assigned by the shared resolver. Generated space-node IDs
+combine the segment ID with the generated local node ID, such as
+`leo-sat-p00s00`, `meo-sat-p00s00`, or `geo-sat-p00s00`. Ground-node IDs
+combine the catalog site ID with the installed node ID, such as
+`earth-us-hawthorne-gw1` or `luna-artemis-base-gw1`; the session placement
+segment does not replace the site ID. Query `/api/v1/state` first and use the
 node IDs it returns.
 
 For the full schema with field descriptions, see the [VS-API Reference](../dev/components/vs-api.md) in the developer documentation.

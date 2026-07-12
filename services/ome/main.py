@@ -18,10 +18,8 @@ from typing import TYPE_CHECKING, NamedTuple
 
 from nodal.logging import configure as _configure_logging
 from nodal.logging import connect as _connect_logging
-from nodalarc.constellation_loader import SatelliteNode
 from nodalarc.link_metadata import LinkRuleMetadata
 from nodalarc.models.events import OpsEvent, PlaybackControlCommand, SchedulingCheckpoint
-from nodalarc.models.ground_station import GroundStationFile
 from nodalarc.models.ome_lifecycle import (
     MbbPairAuthority,
     MbbTeardownLifecycleDetails,
@@ -31,11 +29,20 @@ from nodalarc.models.resolved_session import ResolvedSession
 from nodalarc.models.session import GroundSchedulingConfig, resolve_session_epoch
 from nodalarc.nats_channels import MAX_TIME_ACCEL, MIN_TIME_ACCEL
 from nodalarc.ome_inputs import ResolvedAddressingView, build_ome_inputs_from_resolved
-from nodalarc.resolve_session import load_session_resolution_from_file
+from nodalarc.ome_runtime import GroundStationFile, SatelliteNode
+from nodalarc.prepared_tree import load_prepared_tree_session_resolution
+from nodalarc.resolve_session import SessionResolution
+from nodalarc.runtime_service_config import (
+    DEFAULT_INSTALLED_SHIPPED_CATALOG_ROOT,
+    RuntimeConfigHealth,
+    load_mounted_runtime_config,
+    start_runtime_health_server,
+)
 from nodalarc.session_identity import (
     read_runtime_session_run_id_file,
     require_resolved_session_run_id,
 )
+from nodalarc.tle import tle_norad_id, validate_tle_pair
 
 from ome.event_stream import (
     precompute_timeline,
@@ -120,9 +127,24 @@ def _checkpoint_ground_sat_pair(
     return pair if a_is_ground else (pair[1], pair[0])
 
 
-def _load_session_config(session_path: str | Path, *, run_id: str) -> _SessionBundle:
+def _load_session_config(
+    session_path: str | Path,
+    *,
+    run_id: str,
+    installed_shipped_root: str | Path = DEFAULT_INSTALLED_SHIPPED_CATALOG_ROOT,
+) -> _SessionBundle:
     """Load and validate all session config. Pure — no side effects."""
-    resolution = load_session_resolution_from_file(session_path, origin="ome", run_id=run_id)
+    resolution = load_prepared_tree_session_resolution(
+        session_path,
+        installed_shipped_root=installed_shipped_root,
+        origin="ome",
+        run_id=run_id,
+    )
+    return _session_bundle_from_resolution(resolution)
+
+
+def _session_bundle_from_resolution(resolution: SessionResolution) -> _SessionBundle:
+    """Build OME inputs from the already authoritative runtime resolution."""
     resolved = resolution.resolved
     if resolved.time is None:
         raise ValueError("OME requires catalog session time")
@@ -156,20 +178,18 @@ def _load_session_config(session_path: str | Path, *, run_id: str) -> _SessionBu
     )
 
 
-def _enforce_ground_link_model_contract(ground_link_model: str) -> None:
-    """Fail before OME run if geometry-only physics is not explicitly acknowledged."""
-    if ground_link_model != "geometry_only":
-        return
-    logging.warning(
-        "catalog OME ground_link_model=geometry_only: ground links use LOS/elevation and "
-        "declared candidates; terminal range, field-of-regard, and tracking-rate checks are "
-        "not enforced until resolved terminal-physics inputs are wired"
-    )
-
-
 def _read_runtime_run_id_file(path: Path) -> str:
     """Read the operator-owned runtime lineage sidecar."""
     return read_runtime_session_run_id_file(path)
+
+
+def _warn_geometry_only_ground_links(ground_link_model: str) -> None:
+    if ground_link_model != "geometry_only":
+        return
+    logging.warning(
+        "session explicitly acknowledges ground_link_model=geometry_only: ground links "
+        "enforce LOS and elevation, but not terminal range, field-of-regard, or tracking rate"
+    )
 
 
 def _effective_ground_scheduling_for_runtime(
@@ -196,14 +216,29 @@ def _effective_ground_scheduling_for_runtime(
     return ground_scheduling
 
 
-def _validate_sgp4_tle_freshness(cfg: _SessionBundle, epoch_unix: float) -> None:
-    """Fail before dispatch if a selected SGP4 source violates its age budget."""
-    if cfg.propagator_id != "sgp4-tle" and not any(
-        getattr(sat, "propagator_id", None) == "sgp4-tle" for sat in cfg.satellites
-    ):
-        return
-
-    raise ValueError("catalog OME SGP4/TLE runtime inputs are not implemented")
+def _validate_sgp4_tle_inputs(cfg: _SessionBundle) -> None:
+    """Fail before dispatch if selected SGP4 satellites lack exact TLE input."""
+    satellites = [
+        satellite
+        for satellite in cfg.satellites
+        if cfg.propagator_id == "sgp4-tle" or satellite.propagator_id == "sgp4-tle"
+    ]
+    for satellite in satellites:
+        if (
+            satellite.tle_line_1 is None
+            or satellite.tle_line_2 is None
+            or satellite.norad_id is None
+        ):
+            raise ValueError(
+                f"SGP4 satellite {satellite.node_id!r} requires two TLE lines and a NORAD id"
+            )
+        validate_tle_pair(satellite.tle_line_1, satellite.tle_line_2)
+        parsed_norad_id = tle_norad_id(satellite.tle_line_1)
+        if parsed_norad_id != satellite.norad_id:
+            raise ValueError(
+                f"SGP4 satellite {satellite.node_id!r} NORAD id {satellite.norad_id} "
+                f"does not match TLE record {parsed_norad_id}"
+            )
 
 
 def _authority_snapshot_interval_s(
@@ -338,12 +373,22 @@ async def _handle_playback_control_command(
     }
 
 
-def run(session_path: str, output_dir: str | None = None, *, run_id: str) -> Path:
+def run(
+    session_path: str,
+    output_dir: str | None = None,
+    *,
+    run_id: str,
+    installed_shipped_root: str | Path = DEFAULT_INSTALLED_SHIPPED_CATALOG_ROOT,
+) -> Path:
     """Run the OME pipeline (single window, batch mode) and return the output path."""
-    cfg = _load_session_config(session_path, run_id=run_id)
-    _enforce_ground_link_model_contract(cfg.ground_link_model)
+    cfg = _load_session_config(
+        session_path,
+        run_id=run_id,
+        installed_shipped_root=installed_shipped_root,
+    )
+    _warn_geometry_only_ground_links(cfg.ground_link_model)
     epoch_unix = resolve_session_epoch(cfg.resolved.time)
-    _validate_sgp4_tle_freshness(cfg, epoch_unix)
+    _validate_sgp4_tle_inputs(cfg)
     effective_ground_scheduling = _effective_ground_scheduling_for_runtime(cfg.ground_scheduling)
     events = precompute_timeline(
         satellites=cfg.satellites,
@@ -377,31 +422,9 @@ def run(session_path: str, output_dir: str | None = None, *, run_id: str) -> Pat
     return out_path
 
 
-def _start_health_server(port: int = 8081) -> None:
-    """Minimal HTTP health endpoint for K8s readiness/liveness probe.
-
-    Temporary scaffolding — in the end state, health/metrics/observability
-    will be a sidecar container, not application code. This function is
-    isolated and called from one place so it can be trivially removed
-    when the sidecar pattern is adopted.
-    """
-    import contextlib
-    import threading
-    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-
-    class _Handler(BaseHTTPRequestHandler):
-        def do_GET(self):
-            self.send_response(200)
-            self.end_headers()
-            with contextlib.suppress(BrokenPipeError, ConnectionResetError):
-                self.wfile.write(b'{"status":"ok"}')
-
-        def log_message(self, *args):
-            pass
-
-    server = ThreadingHTTPServer(("0.0.0.0", port), _Handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
+def _start_health_server(health: RuntimeConfigHealth, port: int = 8081) -> None:
+    """Start liveness before configuration wait and proof-gated readiness."""
+    start_runtime_health_server(health, port=port)
     logging.debug("Health server listening on :%d", port)
 
 
@@ -691,10 +714,11 @@ def _run_pacing(
         if run_id is None:
             raise RuntimeError("OME pacing requires operator-owned runtime session run-id")
         cfg = _load_session_config(session_path, run_id=run_id)
+    _warn_geometry_only_ground_links(cfg.ground_link_model)
     session = cfg.resolved
     session_id = cfg.session_id
     epoch_unix = resolve_session_epoch(session.time)
-    _validate_sgp4_tle_freshness(cfg, epoch_unix)
+    _validate_sgp4_tle_inputs(cfg)
     compression = session.time.compression if session.time.compression else 1
 
     # Build session-scoped NATS subjects
@@ -1710,9 +1734,7 @@ def _run_pacing(
         shutdown_event.set()
 
 
-def main() -> None:
-    """CLI entry point."""
-    _configure_logging("nodal.arc.ome", nats_level=logging.INFO)
+def _build_argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Nodal Arc Orbital Mechanics Engine")
     parser.add_argument("session", help="Path to session YAML config")
     parser.add_argument(
@@ -1729,9 +1751,26 @@ def main() -> None:
     parser.add_argument(
         "--session-run-id-file",
         default="/etc/nodalarc/session_run_id",
-        help="Path to operator-owned runtime session run-id sidecar",
+        help="Path to operator-owned runtime session run-id sidecar in batch mode",
     )
-    args = parser.parse_args()
+    parser.add_argument(
+        "--session-config-dir",
+        type=Path,
+        help="Directory-mounted runtime session ConfigMap (continuous mode)",
+    )
+    parser.add_argument(
+        "--installed-shipped-root",
+        type=Path,
+        default=DEFAULT_INSTALLED_SHIPPED_CATALOG_ROOT,
+        help="Installed read-only nodalarc catalog root",
+    )
+    return parser
+
+
+def main() -> None:
+    """CLI entry point."""
+    _configure_logging("nodal.arc.ome", nats_level=logging.INFO)
+    args = _build_argument_parser().parse_args()
 
     from nodalarc.platform_config import init_platform_config
 
@@ -1742,6 +1781,7 @@ def main() -> None:
             args.session,
             args.output_dir,
             run_id=_read_runtime_run_id_file(Path(args.session_run_id_file)),
+            installed_shipped_root=args.installed_shipped_root,
         )
         return
 
@@ -1755,17 +1795,25 @@ def main() -> None:
     # K8s liveness probe hits :8081 immediately — if the health server
     # doesn't start until after config loads, the probe fails and K8s
     # kills the pod before it ever gets the config.
-    _start_health_server()
+    session_config_dir = args.session_config_dir or Path(args.session).parent
+    pod_uid = os.environ["POD_UID"]
+    release = os.environ["NODALARC_RELEASE"]
+    build = os.environ["NODAL_BUILD"]
+    runtime_health = RuntimeConfigHealth(session_config_dir, pod_uid=pod_uid)
+    _start_health_server(runtime_health)
 
-    # Parse session config ONCE — both the publisher and pacing threads
-    # need the session_id. The config bundle is passed to _run_pacing
-    # to avoid re-parsing the same file.
-    session_file = Path(args.session)
-    while not session_file.is_file():
-        logging.debug("Waiting for session config at %s...", args.session)
-        time.sleep(5)
-    run_id = _read_runtime_run_id_file(Path(args.session_run_id_file))
-    pre_cfg = _load_session_config(args.session, run_id=run_id)
+    runtime_config = load_mounted_runtime_config(
+        config_directory=session_config_dir,
+        installed_shipped_root=args.installed_shipped_root,
+        origin="ome",
+        namespace=os.environ.get("POD_NAMESPACE"),
+        pod_uid=pod_uid,
+        release=release,
+        build=build,
+        log=logging.getLogger(__name__),
+    )
+    pre_cfg = _session_bundle_from_resolution(runtime_config.resolution)
+    runtime_health.mark_loaded(runtime_config)
     session_id = pre_cfg.session_id
     from nodal.logging import set_session
 

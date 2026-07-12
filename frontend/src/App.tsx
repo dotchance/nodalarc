@@ -28,6 +28,7 @@ import { buildRegimeIndex } from "./taxonomy/regime";
 import { selectionTypeForNode } from "./networkIdentity";
 import { SessionWizard } from "./catalog/SessionWizard";
 import { ShortcutHelp } from "./panels/ShortcutHelp";
+import { BuilderView } from "./builder/BuilderView";
 import { WS_URL, fetchApiKey } from "./config";
 import { setLabelsEnabled, getLabelsEnabled } from "./globe/labels";
 import { setGsLabelsEnabled, getGsLabelsEnabled } from "./globe/groundStations";
@@ -52,6 +53,7 @@ import "./styles/time-controls.css";
 import "./styles/launcher.css";
 import "./styles/wizard.css";
 import "./styles/explain.css";
+import "./styles/builder.css";
 
 const HISTORICAL_WINDOW_MS = 60 * 60 * 1000;
 
@@ -279,7 +281,7 @@ function AppInner() {
     [clearSelection, closeCatalog, showCatalog, hasEverDeployed, toggleView, toggleHistorical, handleFollowNode, handleFrameSelection, handleFrameScene, handleTopView, historicalMode, playback, handlePanelToggle, toggleReferenceFrame, setColorMode, setShowGroundLinks, setShowIslLinks, setShowSatPaths, setShowTrails, setGlobeMode, setCliDrawerOpen, setFilterOpen],
   );
 
-  useKeyboard(keyboardActions);
+  useKeyboard(keyboardActions, viewMode);
 
   const prevViewModeRef = useRef(viewMode);
   useEffect(() => {
@@ -289,6 +291,16 @@ function AppInner() {
       focusCurrentSelection(false);
     }
   }, [viewMode, selection, focusCurrentSelection]);
+
+  // the builder mounts on FIRST entry and then stays mounted, hidden via
+  // display:none on leave — so toggling Live<->Builder preserves the draft,
+  // open windows, and dirty buffers instead of unmounting them. The sticky
+  // latch keeps it from mounting (and auto-importing) before the user has
+  // ever entered the builder.
+  const [builderEntered, setBuilderEntered] = useState(false);
+  useEffect(() => {
+    if (viewMode === "builder") setBuilderEntered(true);
+  }, [viewMode]);
 
   const augmentedSnapshot = useMemo(() => {
     if (!snapshot) return snapshot;
@@ -348,6 +360,9 @@ function AppInner() {
           </div>
         </div>
       )}
+      {/* Live-session banners describe the running session; the builder surface
+          has its own status home. Never let live state read as builder state. */}
+      {viewMode !== "builder" && (
       <div className="banner-stack">
         {!kicked && !connected && hasEverConnected && (
           <div className="connection-banner">Connection lost. Reconnecting...</div>
@@ -366,7 +381,8 @@ function AppInner() {
           </div>
         )}
       </div>
-      {showHelp && <ShortcutHelp onClose={() => setShowHelp(false)} />}
+      )}
+      {showHelp && <ShortcutHelp onClose={() => setShowHelp(false)} viewMode={viewMode} />}
       {(switching || sessionTransitioning) && (
         <div className="session-switching-overlay">
           <div className="switching-box">
@@ -391,6 +407,12 @@ function AppInner() {
           </div>
         </div>
       )}
+      {/* The live globe UNMOUNTS in builder mode (unlike topology/dashboard, which
+          only hide it): simClock, the SGP4 worker bridge, and the position registry
+          are module singletons, and the builder mounts its own Scene over the
+          resolved world. Exactly one Scene may own them; the live Scene re-seeds
+          all three on remount from props + the next snapshot. */}
+      {viewMode !== "builder" && (
       <div
         className={viewMode === "split" ? "split-pane" : "full-pane"}
         style={{ display: (viewMode === "topology" || viewMode === "dashboard") ? "none" : undefined }}
@@ -416,9 +438,10 @@ function AppInner() {
           />
         </VisualizationErrorBoundary>
       </div>
+      )}
       <div
         className={viewMode === "split" ? "split-pane" : "full-pane"}
-        style={{ display: (viewMode === "globe" || viewMode === "dashboard") ? "none" : undefined }}
+        style={{ display: (viewMode === "globe" || viewMode === "dashboard" || viewMode === "builder") ? "none" : undefined }}
       >
         <TopologyView
           regimeById={regimeById}
@@ -434,6 +457,32 @@ function AppInner() {
       {viewMode === "dashboard" && (
         <div className="full-pane" style={{ background: "var(--bg-main)", overflow: "auto" }}>
           <Dashboard snapshot={augmentedSnapshot} />
+        </div>
+      )}
+      {builderEntered && (
+        <div
+          className="full-pane"
+          style={{
+            background: "var(--bg-main)",
+            display: viewMode === "builder" ? undefined : "none",
+          }}
+        >
+          {/* The builder is one operator tool among several: its failures render
+              as a contained fault, never a blank application. */}
+          <VisualizationErrorBoundary onError={handleVisualizationFatalError}>
+          <BuilderView
+            active={viewMode === "builder"}
+            colorMode={colorMode}
+            globeMode={globeMode}
+            referenceFrame={referenceFrame}
+            showSatPaths={showSatPaths}
+            showIslLinks={showIslLinks}
+            showGroundLinks={showGroundLinks}
+            showGroundTracks={showGroundTracks}
+            showTrails={showTrails}
+            actionsRef={globeActionsRef}
+          />
+          </VisualizationErrorBoundary>
         </div>
       )}
       <Toolbar
@@ -460,7 +509,7 @@ function AppInner() {
         onFollowNode={handleFollowNode}
         onScreenshot={handleScreenshot}
       />
-      {selection?.type !== "link" && selection != null && !cliDrawerOpen && (
+      {viewMode !== "builder" && selection?.type !== "link" && selection != null && !cliDrawerOpen && (
         <NodePopover
           snapshot={snapshot}
           selection={selection}
@@ -469,7 +518,7 @@ function AppInner() {
           onOpenCli={() => setCliDrawerOpen(true)}
         />
       )}
-      {cliDrawerOpen && (
+      {viewMode !== "builder" && cliDrawerOpen && (
         <CliDrawer
           open={cliDrawerOpen}
           onClose={() => setCliDrawerOpen(false)}
@@ -477,7 +526,7 @@ function AppInner() {
           selection={selection}
         />
       )}
-      {logPanelOpen && (
+      {viewMode !== "builder" && logPanelOpen && (
         <LogPanel
           events={snapshot?.ops_events ?? []}
           debugEvents={snapshot?.debug_events ?? []}
@@ -486,7 +535,7 @@ function AppInner() {
           onClose={() => setLogPanelOpen(false)}
         />
       )}
-      {filterOpen && (
+      {viewMode !== "builder" && filterOpen && (
         <div className="filter-panel-overlay" onClick={() => setFilterOpen(false)}>
           <div className="filter-panel-drawer" onClick={(e) => e.stopPropagation()}>
             <FilterPanel
@@ -532,7 +581,7 @@ function AppInner() {
     <BottomBar snapshot={snapshot} connected={connected} historicalMode={historicalMode} logPanelOpen={logPanelOpen} onToggleLogPanel={() => setLogPanelOpen((v: boolean) => !v)} />
   );
 
-  const overlayContent = showCatalog ? (
+  const overlayContent = showCatalog && viewMode !== "builder" ? (
     <SessionWizard
       onDeployStarted={() => { setShowCatalog(false); setHasEverDeployed(true); }}
       onClose={hasEverDeployed ? () => setShowCatalog(false) : undefined}
@@ -540,12 +589,13 @@ function AppInner() {
       systemNotice={visualizationError ?? undefined}
       sessions={sessions}
       onLaunchSession={switchSession}
+      onOpenBuilder={() => { setShowCatalog(false); setViewMode("builder"); }}
     />
   ) : undefined;
 
   const historicalEndTime = historicalRangeEnd ?? snapshot?.sim_time ?? new Date().toISOString();
   const historicalStartTime = subtractMsIso(historicalEndTime, HISTORICAL_WINDOW_MS);
-  const historicalControlsContent = historicalMode ? (
+  const historicalControlsContent = historicalMode && viewMode !== "builder" ? (
     <TimeControls
       onSeek={fetchHistorical}
       startTime={historicalStartTime}
@@ -561,13 +611,13 @@ function AppInner() {
     <Shell
       topBar={topBarContent}
       center={centerContent}
-      rightPanel={rightPanelContent}
+      rightPanel={viewMode !== "builder" ? rightPanelContent : null}
       bottomBar={bottomBarContent}
       overlay={overlayContent}
       historicalControls={historicalControlsContent}
-      historicalMode={historicalMode}
+      historicalMode={viewMode !== "builder" && historicalMode}
       centerSplit={viewMode === "split"}
-      panelOpen={panelOpen}
+      panelOpen={viewMode !== "builder" && panelOpen}
       onPanelToggle={handlePanelToggle}
       panelWidth={panelWidth}
       onPanelWidthChange={setPanelWidth}

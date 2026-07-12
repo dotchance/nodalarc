@@ -85,6 +85,25 @@ describe("useAppState", () => {
     expect(clearSelection).toHaveBeenCalled();
   });
 
+  it("entering the builder closes every live overlay and the catalog, keeps selection", () => {
+    const clearSelection = vi.fn();
+    const { result } = renderHook(() => useAppState(makeInputs({ clearSelection })));
+    act(() => {
+      result.current.setCliDrawerOpen(true);
+      result.current.setLogPanelOpen(true);
+      result.current.setFilterOpen(true);
+    });
+    expect(result.current.showCatalog).toBe(true); // open by default
+    act(() => result.current.setViewMode("builder"));
+    expect(result.current.filterOpen).toBe(false);
+    expect(result.current.cliDrawerOpen).toBe(false);
+    expect(result.current.logPanelOpen).toBe(false);
+    expect(result.current.showCatalog).toBe(false);
+    // Selection is preserved — the live NodePopover is render-gated in the
+    // builder, never cleared, so returning to the live view keeps it.
+    expect(clearSelection).not.toHaveBeenCalled();
+  });
+
   // --- Display Defaults ---
 
   it("has correct default toggles", () => {

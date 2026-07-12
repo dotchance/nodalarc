@@ -41,6 +41,7 @@ link_rules:
       all:
       - role: access
       - medium: rf
+      - mount: tdrs_ka_sa
     min_elevation_deg: 5
   - select:
       segment: geo
@@ -48,6 +49,7 @@ link_rules:
       all:
       - role: access
       - medium: rf
+      - mount: ka_sa
 - id: geo_isl
   topology:
     mode: nearest_n

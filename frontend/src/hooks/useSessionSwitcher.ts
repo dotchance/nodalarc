@@ -13,6 +13,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { REST_URL, authHeaders } from "../config";
 import type { SessionInfo } from "../types";
+import type { CatalogSessionSwitchRequest } from "../builder/generated/builderApi";
 
 export function useSessionSwitcher(sessionTransitioning: boolean) {
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
@@ -51,15 +52,27 @@ export function useSessionSwitcher(sessionTransitioning: boolean) {
   }, [switching, sessionTransitioning, fetchSessions]);
 
   const switchSession = useCallback(
-    async (file: string) => {
+    async (session: SessionInfo) => {
       if (switching) return;
+      if (
+        !session.deploy_allowed
+        || !session.source_revision
+        || !session.document_digest
+        || !session.dependency_digest
+      ) return;
       sawTransitionRef.current = false;
       setSwitching(true);
       try {
+        const request: CatalogSessionSwitchRequest = {
+          source: session.source_id,
+          expected_source_revision: session.source_revision,
+          expected_document_digest: session.document_digest,
+          expected_dependency_digest: session.dependency_digest,
+        };
         const resp = await fetch(`${REST_URL}/api/v1/sessions/switch`, {
           method: "POST",
           headers: authHeaders({ "Content-Type": "application/json" }),
-          body: JSON.stringify({ session: file }),
+          body: JSON.stringify(request),
         });
         if (!resp.ok) {
           setSwitching(false);

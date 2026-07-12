@@ -4,10 +4,27 @@
 
 from typing import get_args
 
-from nodalarc.models.ground_policy import HandoverPolicyName, HandoverPolicySpec
-from nodalarc.models.ground_station import HysteresisParameters
+import pytest
+from nodalarc.models.ground_policy import (
+    HandoverPolicyName,
+    HandoverPolicySpec,
+    HysteresisParameters,
+)
 from ome.ground_handover_policies import HOLD_SCORE_FUNCTIONS, HandoverContext, evaluate_handover
 from ome.visibility import GroundVisibility
+
+
+@pytest.mark.parametrize(
+    "parameters",
+    (
+        {"discount_factor": 0.9},
+        {"mask_fade_range_deg": 0.0},
+        {"mask_fade_range_deg": 91.0},
+    ),
+)
+def test_hysteresis_parameters_reject_invalid_runtime_values(parameters):
+    with pytest.raises(ValueError):
+        HysteresisParameters(**parameters)
 
 
 def _visibility(sat_id: str, elevation: float) -> GroundVisibility:

@@ -4,29 +4,30 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Any, Literal
+from typing import Literal
 
 from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
-    NonNegativeInt,
-    PositiveInt,
-    TypeAdapter,
     model_validator,
 )
 
-from nodalarc.model_validation import NonEmptyReference
+from nodalarc.catalog_refs import BodyRef, NodeRef, SiteSetRef, SpaceSourceRef
+from nodalarc.model_validation import (
+    AwareTimestamp,
+    FiniteFloat,
+    Identifier,
+    Ipv4Network,
+    Ipv6Network,
+    NonNegativeFiniteFloat,
+    NonNegativeInteger,
+    PositiveFiniteFloat,
+    PositiveInteger,
+    RelativeAssetPath,
+)
 
-Identifier = Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")]
-RuntimeNodeId = Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9-]*$")]
-TerminalMedium = Literal["rf", "optical"]
-FiniteFloat = Annotated[float, Field(allow_inf_nan=False)]
-PositiveFiniteFloat = Annotated[float, Field(gt=0, allow_inf_nan=False)]
-NonNegativeFiniteFloat = Annotated[float, Field(ge=0, allow_inf_nan=False)]
 LagrangePoint = Literal["l1", "l2", "l3", "l4", "l5"]
-
-CatalogObject = NonEmptyReference | dict[str, Any]
 
 
 class TagsMixin(BaseModel):
@@ -61,8 +62,8 @@ class OriginatedPrefixes(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    ipv4: tuple[NonEmptyReference, ...] | None = None
-    ipv6: tuple[NonEmptyReference, ...] | None = None
+    ipv4: tuple[Ipv4Network, ...] | None = None
+    ipv6: tuple[Ipv6Network, ...] | None = None
 
     @model_validator(mode="after")
     def _not_empty(self) -> OriginatedPrefixes:
@@ -74,7 +75,7 @@ class OriginatedPrefixes(BaseModel):
 class HighestElevationPolicy(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    highest_elevation: dict = Field(default_factory=dict)
+    highest_elevation: dict
 
     @model_validator(mode="after")
     def _empty(self) -> HighestElevationPolicy:
@@ -86,7 +87,7 @@ class HighestElevationPolicy(BaseModel):
 class LowestElevationPolicy(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    lowest_elevation: dict = Field(default_factory=dict)
+    lowest_elevation: dict
 
     @model_validator(mode="after")
     def _empty(self) -> LowestElevationPolicy:
@@ -98,7 +99,7 @@ class LowestElevationPolicy(BaseModel):
 class LongestRemainingPassParams(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    lookahead_horizon_ticks: PositiveInt
+    lookahead_horizon_ticks: PositiveInteger
 
 
 class LongestRemainingPassPolicy(BaseModel):
@@ -126,7 +127,7 @@ class HysteresisPolicy(BaseModel):
 class HardReleasePolicy(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    hard_release: dict = Field(default_factory=dict)
+    hard_release: dict
 
     @model_validator(mode="after")
     def _empty(self) -> HardReleasePolicy:
@@ -152,14 +153,14 @@ class GroundScheduling(BaseModel):
     selection_policy: SelectionPolicy | None = None
     handover_policy: HandoverPolicy | None = None
     handover_mode: Literal["mbb", "bbm"] | None = None
-    mbb_overlap_ticks: NonNegativeInt | None = None
-    mbb_reserve: NonNegativeInt | None = None
+    mbb_overlap_ticks: NonNegativeInteger | None = None
+    mbb_reserve: NonNegativeInteger | None = None
     handover_concurrency: Literal["one_at_a_time", "all_at_once"] | None = None
-    ranking_order: tuple[RankingComponent, ...] | None = None
+    ranking_order: tuple[RankingComponent, ...] | None = Field(default=None, min_length=1)
     mbb_preemption: Literal["off"] | None = None
     successor_abort_policy: Literal["hard_release", "soft_retain"] | None = None
     cross_tenant_displacement: Literal["off"] | None = None
-    bbm_acquire_timeout_ticks: NonNegativeInt | None = None
+    bbm_acquire_timeout_ticks: NonNegativeInteger | None = None
 
     @model_validator(mode="after")
     def _validate_scheduling(self) -> GroundScheduling:
@@ -207,7 +208,7 @@ class GroundOverride(BaseModel):
 class GroundPlacement(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    from_site_set: CatalogObject
+    from_site_set: SiteSetRef
 
 
 class SpaceSegment(BaseModel):
@@ -217,7 +218,7 @@ class SpaceSegment(BaseModel):
     display_name: str | None = None
     tags: tuple[Identifier, ...] | None = None
     clock: SegmentClock | None = None
-    source: CatalogObject
+    source: SpaceSourceRef
 
     @model_validator(mode="after")
     def _unique_tags(self) -> SpaceSegment:
@@ -252,7 +253,7 @@ class GroundSegment(BaseModel):
 class StateVector(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    epoch: str
+    epoch: AwareTimestamp
     frame: Identifier
     position_km: tuple[FiniteFloat, FiniteFloat, FiniteFloat]
     velocity_km_s: tuple[FiniteFloat, FiniteFloat, FiniteFloat]
@@ -267,7 +268,7 @@ class ConfiguredStateLagrange(BaseModel):
 class ApproximateLagrange(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    lagrange_approximation: dict = Field(default_factory=dict)
+    lagrange_approximation: dict
 
     @model_validator(mode="after")
     def _empty(self) -> ApproximateLagrange:
@@ -279,7 +280,7 @@ class ApproximateLagrange(BaseModel):
 class ExternalEphemerisLagrange(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    external_ephemeris: dict[str, NonEmptyReference]
+    external_ephemeris: dict[str, RelativeAssetPath]
 
     @model_validator(mode="after")
     def _path_only(self) -> ExternalEphemerisLagrange:
@@ -289,24 +290,21 @@ class ExternalEphemerisLagrange(BaseModel):
 
 
 LagrangeEphemeris = ConfiguredStateLagrange | ApproximateLagrange | ExternalEphemerisLagrange
-_LAGRANGE_EPHEMERIS_ADAPTER = TypeAdapter(LagrangeEphemeris)
+
+
+class LagrangeFrameBody(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    primary_body: BodyRef
+    secondary_body: BodyRef
+    point: LagrangePoint
+    ephemeris: LagrangeEphemeris
 
 
 class LagrangeFrame(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    lagrange: dict[str, Any]
-
-    @model_validator(mode="after")
-    def _validate_frame(self) -> LagrangeFrame:
-        required = {"primary_body", "secondary_body", "point", "ephemeris"}
-        keys = set(self.lagrange)
-        if keys != required:
-            raise ValueError(f"lagrange frame keys must be {sorted(required)}")
-        if self.lagrange["point"] not in {"l1", "l2", "l3", "l4", "l5"}:
-            raise ValueError("lagrange point must be l1, l2, l3, l4, or l5")
-        _LAGRANGE_EPHEMERIS_ADAPTER.validate_python(self.lagrange["ephemeris"])
-        return self
+    lagrange: LagrangeFrameBody
 
 
 class LagrangeSegment(BaseModel):
@@ -316,7 +314,7 @@ class LagrangeSegment(BaseModel):
     display_name: str | None = None
     tags: tuple[Identifier, ...] | None = None
     clock: SegmentClock | None = None
-    node: CatalogObject
+    node: NodeRef
     frame: LagrangeFrame
 
     @model_validator(mode="after")

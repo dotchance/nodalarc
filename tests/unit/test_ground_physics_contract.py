@@ -12,14 +12,17 @@ import math
 
 import pytest
 from nodalarc.body_frames import BodyFrame
-from nodalarc.constellation_loader import SatelliteNode
 from nodalarc.ground_terminals import TerminalPhysicsProfile
-from nodalarc.models.addressing import AddressingScheme
-from nodalarc.models.constellation import GroundTerminal
 from nodalarc.models.ground_policy import HandoverPolicySpec, SelectionPolicySpec
-from nodalarc.models.ground_station import GroundStationConfig, GroundStationFile, GroundTerminalDef
 from nodalarc.models.session import GroundSchedulingConfig
 from nodalarc.models.terminal_physics import SatGroundTerminalBoresight, TerminalBoresight
+from nodalarc.ome_runtime import (
+    GroundStation,
+    GroundStationFile,
+    GroundTerminal,
+    SatelliteGroundTerminal,
+    SatelliteNode,
+)
 from ome.event_stream import build_step_context, compute_step
 from ome.propagation_engine import propagate_satellites
 from ome.propagator import GeoPosition, Vec3
@@ -30,6 +33,7 @@ from ome.visibility import (
     has_line_of_sight,
 )
 
+from tests.ome_runtime_fixtures import StaticOmeAddressing
 from tests.physics_fixtures import (
     EARTH_ORIGIN_BODY_STATES,
     EARTH_TEST_BODY_FRAME,
@@ -197,7 +201,11 @@ def test_topocentric_angular_velocity_accounts_for_observing_body_rotation(
 
 def test_compute_step_schedules_only_pairs_that_pass_applied_ground_physics():
     epoch_unix = 1704067200.0
-    addressing = AddressingScheme()
+    addressing = StaticOmeAddressing(
+        satellite_ids=(SAT_ID,),
+        ground_station_ids=("gs-overhead",),
+        ground_aliases={"overhead": "gs-overhead"},
+    )
     sat = SatelliteNode(
         plane=0,
         slot=0,
@@ -213,9 +221,10 @@ def test_compute_step_schedules_only_pairs_that_pass_applied_ground_physics():
         ground_terminal_count=1,
         isl_terminals=(),
         ground_terminals=(
-            GroundTerminal(
+            SatelliteGroundTerminal(
                 type="rf",
                 count=1,
+                interface_indices=(0,),
                 bandwidth_mbps=1000.0,
                 max_range_km=2000.0,
                 field_of_regard_deg=120.0,
@@ -239,9 +248,10 @@ def test_compute_step_schedules_only_pairs_that_pass_applied_ground_physics():
     sat_state = propagated[SAT_ID]
     gs_file = GroundStationFile(
         default_terminals=[
-            GroundTerminalDef(
+            GroundTerminal(
                 type="rf",
                 count=1,
+                interface_indices=(0,),
                 bandwidth_mbps=1000.0,
                 tracking_capacity=1,
                 max_range_km=2000.0,
@@ -253,7 +263,7 @@ def test_compute_step_schedules_only_pairs_that_pass_applied_ground_physics():
         default_min_elevation_deg=25.0,
         default_selection_policy=SelectionPolicySpec(name="highest-elevation"),
         stations=[
-            GroundStationConfig(
+            GroundStation(
                 name="overhead",
                 lat_deg=sat_state.geodetic.lat_deg,
                 lon_deg=sat_state.geodetic.lon_deg,

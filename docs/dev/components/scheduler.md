@@ -8,6 +8,12 @@
 
 The Scheduler bridges the OME's orbital model and the kernel's network interfaces. It translates visibility changes into concrete kernel operations that the Node Agent executes.
 
+At startup, the Scheduler loads the same persisted root session and referenced
+ordinary YAML files selected by the active `ConstellationSpec`. Readiness
+remains false until the shared loader verifies the files and current deployment
+identity. This changes configuration delivery only; desired-topology
+reconciliation, Node Agent actuation, and NATS contracts are unchanged.
+
 ## Architecture
 
 Three roles on a single asyncio event loop:

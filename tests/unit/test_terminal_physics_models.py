@@ -6,10 +6,8 @@ from __future__ import annotations
 
 import pytest
 from nodalarc.ground_terminals import TerminalPhysicsProfile
-from nodalarc.models.constellation import GroundTerminal
-from nodalarc.models.ground_station import GroundTerminalDef as StationGroundTerminalDef
-from nodalarc.models.satellite_type import GroundTerminalDef as SatelliteTypeGroundTerminalDef
 from nodalarc.models.terminal_physics import SatGroundTerminalBoresight, TerminalBoresight
+from nodalarc.ome_runtime import GroundTerminal, SatelliteGroundTerminal
 from pydantic import ValidationError
 
 
@@ -48,9 +46,8 @@ def _satellite_terminal(**updates):
 @pytest.mark.parametrize(
     ("model", "factory"),
     [
-        (StationGroundTerminalDef, _station_terminal),
-        (GroundTerminal, _satellite_terminal),
-        (SatelliteTypeGroundTerminalDef, _satellite_terminal),
+        (GroundTerminal, _station_terminal),
+        (SatelliteGroundTerminal, _satellite_terminal),
     ],
 )
 def test_ground_link_field_of_regard_is_a_forward_cone_not_full_sphere(model, factory):

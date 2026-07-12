@@ -13,12 +13,13 @@ commands you would use on a physical router.
 You land directly in the FRR CLI prompt:
 
 ```
-space-sat-p00s00#
+leo-sat-p00s00#
 ```
 
-The exact prompt depends on the session namespace. In a multi-regime session
-you may see nodes such as `leo-sat-p00s00`, `geo-sat-p00s02`, or
-`lunar-site-gs-artemis-surface-router`.
+The prompt uses the resolver-assigned runtime node ID. Generated space nodes use
+the segment ID plus their generated local ID, such as `leo-sat-p00s00` or
+`geo-sat-p00s02`. Ground nodes use the catalog site ID plus the installed node
+ID, such as `earth-us-hawthorne-gw1` or `luna-artemis-base-gw1`.
 
 ![Browser Terminal](../images/user-terminal.png)
 

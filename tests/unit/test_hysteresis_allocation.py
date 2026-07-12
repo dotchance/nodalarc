@@ -10,8 +10,11 @@ terminal occupancy, and pending teardown behavior are covered together.
 from __future__ import annotations
 
 import pytest
-from nodalarc.models.ground_policy import HandoverPolicySpec, SelectionPolicySpec
-from nodalarc.models.ground_station import HysteresisParameters
+from nodalarc.models.ground_policy import (
+    HandoverPolicySpec,
+    HysteresisParameters,
+    SelectionPolicySpec,
+)
 from ome.ground_allocator import (
     _compute_effective_discount,
     _compute_pair_score,
@@ -160,7 +163,7 @@ class TestHysteresisDiscount:
             ground_station_ids={"gs-test"},
             current_associations=current or {},
             pending_teardowns={},
-            gs_terminal_counts={"gs-test": gs_terminals},
+            gs_terminal_indices={"gs-test": tuple(range(gs_terminals))},
             **_policy_kwargs(policy, "mbb" if mbb_reserve > 0 else "bbm"),
             gs_min_elevations={"gs-test": min_elev},
             gs_service_priorities={"gs-test": 10},

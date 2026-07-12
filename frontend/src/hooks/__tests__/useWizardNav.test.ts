@@ -8,7 +8,11 @@
  */
 import { describe, it, expect } from "vitest";
 import { canPreview } from "../useWizardNav";
-import type { WizardState } from "../../catalog/wizardTypes";
+import type {
+  ConstellationPreset,
+  GroundStationSet,
+  WizardState,
+} from "../../catalog/wizardTypes";
 
 function baseState(overrides: Partial<WizardState>): WizardState {
   return {
@@ -32,15 +36,21 @@ const constellation = {
   satellite_count: 176,
   constellation: "nodalarc:constellations/earth/leo/earth-leo-walker-delta-176.yaml",
   ground_stations: "nodalarc:site-sets/earth/leo/earth-leo-starlink-gateway-sites.yaml",
-  mode: "constellation",
-};
+  default_node: "starlink-v2-mesh",
+  capability: {
+    source_kind: "constellation",
+    runtime_supported_propagators: ["j2_mean_elements", "two_body"],
+    default_propagator: "j2_mean_elements",
+    unavailable_reason: null,
+  },
+} satisfies ConstellationPreset;
 
 const groundStationSet = {
   name: "earth-leo-starlink-gateway-sites",
   description: "test",
   stations: ["earth-us-co-denver"],
   file: "nodalarc:site-sets/earth/leo/earth-leo-starlink-gateway-sites.yaml",
-};
+} satisfies GroundStationSet;
 
 describe("canPreview", () => {
   it("is satisfied by constellation plus ground stations alone", () => {

@@ -5,6 +5,7 @@
  */
 
 import type { ActuationState } from "./explain/reasons";
+import type { CatalogSessionSummary } from "./builder/generated/builderApi";
 
 export interface NodeAddress {
   purpose: "router_loopback" | "site_interface" | "site_prefix";
@@ -243,13 +244,7 @@ export type {
   PlaybackStateMsg,
 } from "./sim/ephemeris";
 
-export interface SessionInfo {
-  name: string;
-  file: string;
-  constellation: string;
-  routing_stack: string;
-  active: boolean;
-}
+export type SessionInfo = CatalogSessionSummary;
 
 /** App-level selection state */
 export type SelectionType = "satellite" | "ground_station" | "link" | null;
@@ -260,7 +255,7 @@ export interface Selection {
 }
 
 /** View modes */
-export type ViewMode = "globe" | "topology" | "split" | "dashboard";
+export type ViewMode = "globe" | "topology" | "split" | "dashboard" | "builder";
 export type ColorMode = "regime" | "area" | "plane";
 export type GlobeMode = "blue-marble" | "day-night" | "political";
 

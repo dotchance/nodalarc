@@ -11,127 +11,59 @@ import json
 from pathlib import Path
 
 import pytest
+from nodalarc.configuration_yaml import load_configuration_yaml
 from nodalarc.models.events import (
     ClockTick,
     VisibilityEvent,
 )
-
-from tests.conftest import build_segment_session_dict
 
 pytestmark = pytest.mark.integration
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 
 
-def _optical_ground_stations() -> dict:
-    return {
-        "default_terminals": [
-            {
-                "type": "optical",
-                "count": 1,
-                "bandwidth_mbps": 1000,
-                "tracking_capacity": 1,
-                "max_range_km": 2000,
-                "field_of_regard_deg": 120,
-                "max_tracking_rate_deg_s": 1.5,
-                "boresight": {"mode": "local_vertical"},
-            }
-        ],
-        "default_min_elevation_deg": 25,
-        "default_selection_policy": {"name": "highest-elevation", "params": {}},
-        "default_terrestrial_prefixes": {
-            "ipv4_template": "172.16.{gs_index}.0/24",
-            "ipv6_template": "fd10::{gs_index}:0/112",
-            "metric": 10,
-        },
-        "stations": [
-            {"name": "new-york", "lat_deg": 40.71, "lon_deg": -74.01, "alt_m": 10},
-            {"name": "london", "lat_deg": 51.51, "lon_deg": -0.13, "alt_m": 11},
-        ],
-    }
-
-
-@pytest.fixture
-def four_node_session_path():
-    """Create a temporary session config for custom-example constellation."""
+def _temporary_session(source_name: str, *, step_seconds: int) -> str:
     import tempfile
 
     import yaml
 
-    session = build_segment_session_dict(
-        name="custom-example-test",
-        constellation="configs/constellations/custom-example.yaml",
-        ground_stations=_optical_ground_stations(),
-        protocol="isis",
-        extensions=["sr"],
-        time={"step_seconds": 10},
-    )
+    source = PROJECT_ROOT / "catalog" / "nodalarc" / "sessions" / source_name
+    session = load_configuration_yaml(source.read_text(encoding="utf-8"))
+    session["time"]["step_seconds"] = step_seconds
     with tempfile.NamedTemporaryFile(
         mode="w",
         suffix=".yaml",
         dir=str(PROJECT_ROOT),
         delete=False,
-    ) as f:
-        yaml.dump(session, f)
-        return f.name
+    ) as file_handle:
+        yaml.safe_dump(session, file_handle, sort_keys=False)
+        return file_handle.name
+
+
+@pytest.fixture
+def short_session_path():
+    """Create a temporary canonical session for the short pipeline run."""
+    return _temporary_session("earth-leo-simple.yaml", step_seconds=10)
 
 
 @pytest.fixture
 def sample_session_path():
     """Create a segment-session fixture for the sample timeline."""
-    import tempfile
-
-    import yaml
-
-    session = build_segment_session_dict(
-        name="starlink-176-global-isis-flat",
-        constellation="configs/constellations/starlink-176.yaml",
-        ground_stations="configs/ground-stations/sets/global-8.yaml",
-        protocol="isis",
-        extensions=[],
-        time={"step_seconds": 10},
-    )
-    with tempfile.NamedTemporaryFile(
-        mode="w",
-        suffix=".yaml",
-        dir=str(PROJECT_ROOT),
-        delete=False,
-    ) as f:
-        yaml.dump(session, f)
-        return f.name
+    return _temporary_session("earth-leo-walker.yaml", step_seconds=10)
 
 
 @pytest.fixture
 def polar_seam_session_path():
-    """Create a temporary session config for iridium-66."""
-    import tempfile
-
-    import yaml
-
-    session = build_segment_session_dict(
-        name="iridium-66-test",
-        constellation="configs/constellations/iridium-66.yaml",
-        ground_stations="configs/ground-stations/sets/us-conus.yaml",
-        protocol="isis",
-        extensions=["sr"],
-        time={"step_seconds": 10},
-    )
-    with tempfile.NamedTemporaryFile(
-        mode="w",
-        suffix=".yaml",
-        dir=str(PROJECT_ROOT),
-        delete=False,
-    ) as f:
-        yaml.dump(session, f)
-        return f.name
+    """Create a temporary canonical polar-LEO session."""
+    return _temporary_session("earth-leo-polar.yaml", step_seconds=10)
 
 
 @pytest.fixture
-def four_node_timeline(four_node_session_path, tmp_path):
+def short_timeline(short_session_path, tmp_path):
     from ome.main import run as ome_run
 
-    path = ome_run(four_node_session_path, str(tmp_path), run_id="test-four-node")
-    Path(four_node_session_path).unlink(missing_ok=True)
+    path = ome_run(short_session_path, str(tmp_path), run_id="test-short-pipeline")
+    Path(short_session_path).unlink(missing_ok=True)
     return path
 
 
@@ -162,25 +94,25 @@ def _load_events(path):
     return events
 
 
-class TestFourNodePipeline:
-    def test_timeline_contains_clock_ticks(self, four_node_timeline):
-        events = _load_events(four_node_timeline)
+class TestCanonicalPipeline:
+    def test_timeline_contains_clock_ticks(self, short_timeline):
+        events = _load_events(short_timeline)
         types = {e["event_type"] for e in events}
         assert "ClockTick" in types
 
-    def test_timeline_event_types(self, four_node_timeline):
-        events = _load_events(four_node_timeline)
+    def test_timeline_event_types(self, short_timeline):
+        events = _load_events(short_timeline)
         types = {e["event_type"] for e in events}
         assert types == {"ClockTick", "VisibilityEvent"}
 
-    def test_timeline_contains_visibility_events(self, four_node_timeline):
-        events = _load_events(four_node_timeline)
+    def test_timeline_contains_visibility_events(self, short_timeline):
+        events = _load_events(short_timeline)
         types = {e["event_type"] for e in events}
         assert "VisibilityEvent" in types
 
-    def test_all_events_deserialize(self, four_node_timeline):
+    def test_all_events_deserialize(self, short_timeline):
         """All timeline event types must be recognized and schema-valid."""
-        events = _load_events(four_node_timeline)
+        events = _load_events(short_timeline)
         decoded = []
         for e in events:
             if e["event_type"] == "ClockTick":
@@ -194,9 +126,9 @@ class TestFourNodePipeline:
         assert any(isinstance(event, ClockTick) for event in decoded)
         assert any(isinstance(event, VisibilityEvent) for event in decoded)
 
-    def test_isl_visibility_events_present(self, four_node_timeline):
-        """custom-example has ISL visibility events (4 sats, 2 planes)."""
-        events = _load_events(four_node_timeline)
+    def test_isl_visibility_events_present(self, short_timeline):
+        """The shipped LEO ring produces ISL visibility events."""
+        events = _load_events(short_timeline)
         isl_vis = [
             e
             for e in events
@@ -204,12 +136,12 @@ class TestFourNodePipeline:
         ]
         assert len(isl_vis) > 0
 
-    def test_jsonl_write_read_round_trip(self, four_node_timeline, tmp_path):
+    def test_jsonl_write_read_round_trip(self, short_timeline, tmp_path):
         """Write → Read produces identical data."""
         from ome.event_stream import read_timeline_jsonl
 
-        events = _load_events(four_node_timeline)
-        round_tripped = read_timeline_jsonl(four_node_timeline)
+        events = _load_events(short_timeline)
+        round_tripped = read_timeline_jsonl(short_timeline)
         assert len(round_tripped) == len(events)
         for orig, rt in zip(events, round_tripped):
             assert orig["event_type"] == rt["event_type"]
@@ -237,13 +169,9 @@ class TestStarlinkMiniTerminalExhaustion:
         )
 
 
-class TestPolarSeamDropouts:
+class TestPolarVisibilityTransitions:
     def test_cross_plane_isl_dropouts(self, polar_seam_timeline):
-        """Polar-seam-demo produces cross-plane ISL dropouts at high latitudes.
-
-        Walker-star with polar_seam.enabled=True should cause cross-plane ISL
-        links to drop when satellites cross the polar seam threshold.
-        """
+        """The polar shell produces both ISL gain and loss transitions."""
         events = _load_events(polar_seam_timeline)
         isl_vis = [
             e
@@ -254,4 +182,4 @@ class TestPolarSeamDropouts:
         visible_isls = [e for e in isl_vis if e["data"]["visible"]]
         invisible_isls = [e for e in isl_vis if not e["data"]["visible"]]
         assert len(visible_isls) > 0, "Expected ISL visibility gain events"
-        assert len(invisible_isls) > 0, "Expected ISL dropout events (polar seam)"
+        assert len(invisible_isls) > 0, "Expected ISL loss events"

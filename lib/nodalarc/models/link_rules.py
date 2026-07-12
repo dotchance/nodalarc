@@ -16,24 +16,24 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
-    NonNegativeInt,
-    PositiveInt,
     model_validator,
 )
 
 from nodalarc.frozen import FrozenDict
-from nodalarc.models.segments import FiniteFloat, Identifier, PositiveFiniteFloat, TerminalMedium
+from nodalarc.model_validation import (
+    FiniteFloat,
+    Identifier,
+    NonNegativeInteger,
+    PositiveFiniteFloat,
+    PositiveInteger,
+    StrictBoolean,
+    TerminalMedium,
+)
+from nodalarc.models.catalog import MountRole
 
-MountRole = Literal["access", "isl", "crosslink", "backbone"]
 LinkLabel = Literal["access", "isl", "relay", "backbone", "inter_body"]
 LinkRelation = Literal["intra_segment", "inter_segment", "inter_body"]
 LinkMedium = Literal["rf", "optical", "terrestrial", "mixed"]
-
-# Transitional type names retained for callers while the resolver/runtime are
-# moved to the catalog vocabulary. The values are the catalog mount/link labels,
-# not the retired ground|isl|relay endpoint role set.
-TerminalRole = MountRole
-LinkKind = LinkLabel
 
 
 class NodeSelector(BaseModel):
@@ -43,7 +43,12 @@ class NodeSelector(BaseModel):
     ``not`` is complement relative to the selector universe.
     """
 
-    model_config = ConfigDict(frozen=True, extra="forbid", populate_by_name=True)
+    model_config = ConfigDict(
+        frozen=True,
+        extra="forbid",
+        validate_by_alias=True,
+        validate_by_name=False,
+    )
 
     all: tuple[NodeSelector, ...] | None = Field(default=None, min_length=1)
     any: tuple[NodeSelector, ...] | None = Field(default=None, min_length=1)
@@ -51,8 +56,8 @@ class NodeSelector(BaseModel):
     segment: Identifier | None = None
     tag: Identifier | None = None
     node: Identifier | None = None
-    plane: NonNegativeInt | None = None
-    slot: NonNegativeInt | None = None
+    plane: NonNegativeInteger | None = None
+    slot: NonNegativeInteger | None = None
 
     @model_validator(mode="after")
     def _exactly_one_operator(self) -> NodeSelector:
@@ -69,7 +74,12 @@ class NodeSelector(BaseModel):
 class TerminalSelector(BaseModel):
     """Set expression over terminal mounts on the already-selected node set."""
 
-    model_config = ConfigDict(frozen=True, extra="forbid", populate_by_name=True)
+    model_config = ConfigDict(
+        frozen=True,
+        extra="forbid",
+        validate_by_alias=True,
+        validate_by_name=False,
+    )
 
     all: tuple[TerminalSelector, ...] | None = Field(default=None, min_length=1)
     any: tuple[TerminalSelector, ...] | None = Field(default=None, min_length=1)
@@ -97,7 +107,7 @@ class Endpoint(BaseModel):
 
     select: NodeSelector
     terminal: TerminalSelector
-    min_elevation_deg: FiniteFloat | None = None
+    min_elevation_deg: Annotated[FiniteFloat, Field(ge=0, le=90)] | None = None
 
 
 class VisibleCandidatesTopology(BaseModel):
@@ -116,7 +126,7 @@ class NearestNTopology(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     mode: Literal["nearest_n"]
-    n: PositiveInt
+    n: PositiveInteger
 
 
 class ExplicitPair(BaseModel):
@@ -159,10 +169,12 @@ class LinkRuleConstraints(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     max_links_per_node: (
-        PositiveInt | Annotated[dict[Identifier, PositiveInt], AfterValidator(FrozenDict)] | None
+        PositiveInteger
+        | Annotated[dict[Identifier, PositiveInteger], AfterValidator(FrozenDict)]
+        | None
     ) = None
     max_range_km: PositiveFiniteFloat | None = None
-    require_mutual_visibility: bool | None = None
+    require_mutual_visibility: StrictBoolean | None = None
 
     @model_validator(mode="after")
     def _validate_per_segment_caps(self) -> LinkRuleConstraints:
@@ -183,11 +195,10 @@ class LinkRule(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", populate_by_name=True)
 
     id: Identifier
-    enabled: bool = True
+    enabled: StrictBoolean = True
     endpoints: tuple[Endpoint, Endpoint]
     topology: LinkTopology
     constraints: LinkRuleConstraints | None = None
-    class_: LinkLabel | None = Field(default=None, alias="class")
     tags: tuple[Identifier, ...] | None = None
 
     @model_validator(mode="after")

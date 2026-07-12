@@ -9,9 +9,10 @@ the right place to start. The same grammar also assembles multiple orbital
 regimes, lunar segments, relay nodes, and body-specific ground sites when an
 experiment needs them.
 
-This page is the conceptual tour. For the full authoring reference — every field
-and allowed value — see the [Configuration Reference](../ops/configuration.md)
-and [Configuration Grammar](../ops/configuration-grammar.md).
+This page is the conceptual tour. See the
+[Configuration Guide](../ops/configuration.md) for the authoring workflow and
+the [Configuration Grammar](../ops/configuration-grammar.md) for every field,
+type, allowed value, and constraint.
 
 ## The session model
 
@@ -22,9 +23,10 @@ A session is assembled from reusable catalog building blocks:
 - **link rules** — which segment endpoints may form candidate links, and how
   candidates are chosen.
 - **addressing** — address pools for generated nodes (satellites).
-- **routing** — one or more routing domains, each running its own protocol
-  (`isis`, `ospf`, `bgp`, or `static`) over the nodes it selects, with boundaries
-  redistributing between them. A single session can mix protocols.
+- **routing** — one or more routing domains over selected nodes, with boundaries
+  redistributing between them. The grammar defines `isis`, `ospf`, `bgp`, and
+  `static`; the current runtime executes `isis`, `ospf`, and `static` and rejects
+  `bgp` before deployment. A supported session can mix protocols.
 - **time** — simulation start time, step size, and compression.
 
 A link rule says a link is *allowed to be considered*. It does not force the link
@@ -63,7 +65,23 @@ segments:
   apply:
     scheduling:
       selection_policy: { highest_elevation: {} }
+      handover_policy:
+        hysteresis:
+          discount_factor: 1.1
+          mask_fade_range_deg: 3
       handover_mode: mbb
+      mbb_overlap_ticks: 30
+      mbb_reserve: 1
+      handover_concurrency: one_at_a_time
+      ranking_order:
+      - service_priority
+      - selection_score
+      - satellite_ground_terminal_capacity
+      - lex_pair
+      mbb_preemption: 'off'
+      successor_abort_policy: hard_release
+      cross_tenant_displacement: 'off'
+      bbm_acquire_timeout_ticks: 1
 
 link_rules:
 - id: leo_access
@@ -75,14 +93,23 @@ link_rules:
   - select:   { segment: leo }
     terminal: { all: [ { role: access }, { medium: rf } ] }
 
+simulation:
+  candidate_limits:
+    max_pairs_per_rule: 500
+    max_pairs_per_tick: 2000
+
 time:
   start_time: '2026-06-08T00:00:00Z'
   step_seconds: 10
   compression: 1
 ```
 
-You do not author runtime node ids — each node gets one derived from its
-segment, kept short and safe for the routing fabric.
+You do not author runtime node ids directly. Space-node ids are derived from
+the normalized space-segment id and local space-node id. Ground-node ids are
+derived from the normalized catalog site id and its site-owned node id, so a
+ground node keeps the same runtime identity regardless of which ground segment
+places its site. All runtime ids must be globally unique, lower-case DNS-label
+safe, and no longer than 63 characters.
 
 ## Segments
 
@@ -93,16 +120,17 @@ A **space segment** references a constellation (or space node set):
   source: nodalarc:constellations/earth/leo/earth-leo-ring-36.yaml
 ```
 
-A **ground segment** places a site set, optionally overlaying scheduling and
-other policy onto the nodes it places:
+A **ground segment** places a site set. It may overlay tags, originated-prefix
+intent, and scheduling onto the nodes it places:
 
 ```yaml
 - id: ground
   placement:
     from_site_set: nodalarc:site-sets/earth/leo/earth-leo-starlink-pop-sites.yaml
-  apply:
-    scheduling: { ... }
 ```
+
+When placed ground nodes participate in enabled access-link candidates, their
+effective scheduling must supply every field shown in the complete example.
 
 A site is a physical place; the nodes inside it are routers with terminals. One
 facility can host several nodes — a Santiago site might carry a LEO Ka gateway
@@ -127,19 +155,21 @@ Topology modes:
 | Mode | Meaning |
 |------|---------|
 | `visible_candidates` | Evaluate every visible candidate under the rule, bounded by candidate limits. |
-| `nearest_n` | Build a static candidate set from the nearest `n` endpoint pairs. |
+| `nearest_n` | Rank pairs by physical distance and greedily cap each selected node at `n` candidates; a node may receive fewer when a peer's cap is already full. |
 | `explicit_pairs` | Use the exact declared candidate pairs. |
 
 ## Ground handoff policy
 
-Ground handoff is a property of a ground node, set in the segment's
-`apply.scheduling` (or a per-site override), not the whole session.
+Ground handoff is a property of a ground node. Segment `apply.scheduling`
+supplies the base policy, a ground override may replace it for one site, and
+site-node scheduling may override individual fields.
 
-A node with one usable terminal must use break-before-make. A node with multiple
-compatible terminals can use make-before-break by reserving enough terminal
-capacity for overlap. The allocator never invents overlap where terminal capacity
-does not exist — a configuration that asks for make-before-break without enough
-terminals is reduced to the truthful behavior rather than faked.
+A node with only one unit of usable access-terminal capacity must use
+break-before-make. Make-before-break requires enough installed access-terminal
+tracking capacity for the active link plus the declared `mbb_reserve`; the
+current runtime supports one reserved overlap. An explicit MBB configuration
+with insufficient capacity is rejected before deployment. NodalArc neither
+invents the overlap nor silently reduces the requested policy to BBM.
 
 How many terminals a node has comes from its catalog node model and how many the
 site installs — not from inline session fields.

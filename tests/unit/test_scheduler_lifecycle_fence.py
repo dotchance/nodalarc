@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from nodalarc.models.scheduler_ops import ActuationFailureClass, SchedulerOpsCode
@@ -92,9 +92,15 @@ def _fatal_result(failure_class: ActuationFailureClass, operation: str = "SetLat
 
 
 def _handle(dispatcher: Dispatcher, result: ActuationResult) -> None:
-    asyncio.run(
-        dispatcher._handle_actuation_result(result, sim_time=SIM_TIME, operation_context="latency")
-    )
+    async def run_in_executor_inline(loop, _executor, operation, *args):
+        return operation(*args)
+
+    with patch.object(asyncio.BaseEventLoop, "run_in_executor", run_in_executor_inline):
+        asyncio.run(
+            dispatcher._handle_actuation_result(
+                result, sim_time=SIM_TIME, operation_context="latency"
+            )
+        )
 
 
 def _assert_clean_supersession(dispatcher: Dispatcher) -> None:

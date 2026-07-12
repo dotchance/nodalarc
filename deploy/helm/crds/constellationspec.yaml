@@ -18,10 +18,30 @@ spec:
               type: object
               required:
                 - sessionYaml
+                - catalogUpload
               properties:
                 sessionYaml:
                   type: string
                   description: Complete session YAML content. The Operator parses this directly.
+                catalogUpload:
+                  type: object
+                  description: >-
+                    Required selection of the ordinary catalog YAML ConfigMaps that the
+                    Operator verifies and resolves with sessionYaml.
+                  required:
+                    - upload_id
+                    - closure_digest
+                    - file_count
+                  properties:
+                    upload_id:
+                      type: string
+                      pattern: '^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$'
+                    closure_digest:
+                      type: string
+                      pattern: '^sha256:[0-9a-f]{64}$'
+                    file_count:
+                      type: integer
+                      minimum: 0
             status:
               type: object
               properties:
@@ -52,6 +72,16 @@ spec:
                 platformHash:
                   type: string
                 runtimeHash:
+                  type: string
+                documentDigest:
+                  type: string
+                closureDigest:
+                  type: string
+                resolvedSemanticDigest:
+                  type: string
+                runtimeRelease:
+                  type: string
+                runtimeBuild:
                   type: string
                 lastTransitionTime:
                   type: string

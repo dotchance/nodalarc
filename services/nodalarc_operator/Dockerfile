@@ -38,7 +38,7 @@ RUN pip install --no-cache-dir \
 # Add lib/ and services/ to Python path
 ENV PYTHONPATH=/app/lib:/app/services:/app
 
-# Copy shared library (includes constellation_loader, orbital, models)
+# Copy shared library (includes canonical configuration models and orbital helpers)
 COPY lib/ lib/
 
 # Copy operator service
@@ -48,4 +48,5 @@ COPY services/nodalarc_operator/ services/nodalarc_operator/
 COPY configs/ configs/
 COPY catalog/ catalog/
 
-CMD ["kopf", "run", "-m", "nodalarc_operator", "--namespace", "nodalarc", "--liveness=http://0.0.0.0:8090/healthz"]
+ENTRYPOINT ["kopf", "run", "-m", "nodalarc_operator"]
+CMD ["--namespace", "nodalarc", "--liveness=http://0.0.0.0:8090/healthz"]

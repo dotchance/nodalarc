@@ -20,9 +20,8 @@ from collections import defaultdict
 from typing import Any
 
 from nodalarc.catalog_paths import CatalogRoots
-from nodalarc.constellation_loader import (
-    isl_terminal_for_interface,
-)
+from nodalarc.catalog_refs import SiteSetRef, SpaceSourceRef
+from nodalarc.ephemeris_runtime import session_epoch_unix
 from nodalarc.models.addressing import (
     neighbors_by_node,
     topology_summary,
@@ -37,6 +36,7 @@ from nodalarc.models.coverage import (
 )
 from nodalarc.models.resolved_session import SourceContext
 from nodalarc.ome_inputs import build_ome_inputs_from_resolved
+from nodalarc.ome_runtime import isl_terminal_for_interface
 from nodalarc.propagator import (
     propagate_j2_mean_elements_for_body,
     propagate_keplerian_for_body,
@@ -60,8 +60,8 @@ _FAILURE_SCAN_SAMPLES = 10
 
 def _preview_segment_session(
     *,
-    constellation_source: str | dict,
-    ground_stations_source: str | dict,
+    constellation_source: str,
+    ground_stations_source: str,
     isl_topology: dict[str, Any] | None,
 ) -> dict:
     preview_ground = {
@@ -70,6 +70,17 @@ def _preview_segment_session(
         "handover_mode": "bbm",
         "mbb_overlap_ticks": 0,
         "mbb_reserve": 0,
+        "handover_concurrency": "one_at_a_time",
+        "ranking_order": [
+            "service_priority",
+            "selection_score",
+            "satellite_ground_terminal_capacity",
+            "lex_pair",
+        ],
+        "mbb_preemption": "off",
+        "successor_abort_policy": "hard_release",
+        "cross_tenant_displacement": "off",
+        "bbm_acquire_timeout_ticks": 1,
     }
     link_rules: list[dict[str, Any]] = [
         {
@@ -143,13 +154,17 @@ def _preview_segment_session(
                 "max_pairs_per_tick": 100000,
             },
         },
+        "time": {
+            "start_time": "2026-06-08T00:00:00Z",
+            "step_seconds": 1,
+            "compression": 1,
+        },
     }
 
 
 def compute_coverage_preview(
-    constellation_source: str | dict | None,
-    satellite_type_override: str | None,
-    ground_stations_source: str | list[str] | dict | None,
+    constellation_ref: str | None,
+    ground_site_set_ref: str | None,
     *,
     catalog_roots: CatalogRoots | None = None,
 ) -> CoveragePreviewResult:
@@ -162,24 +177,12 @@ def compute_coverage_preview(
     """
     t0 = time.monotonic()
 
-    if constellation_source is None:
+    if constellation_ref is None:
         raise ValueError("constellation is required for coverage preview")
-    if ground_stations_source is None:
+    if ground_site_set_ref is None:
         raise ValueError("ground_stations is required for coverage preview")
-    if satellite_type_override is not None:
-        # Same composition as session generation: the constellation's geometry
-        # flown by the chosen node primitive, resolved through the same path.
-        from nodalarc.session_generator import merge_constellation_with_satellite_type
-
-        constellation_source = merge_constellation_with_satellite_type(
-            constellation_source,
-            satellite_type_override,
-            catalog_roots,
-        )
-    if isinstance(ground_stations_source, list):
-        raise ValueError(
-            "coverage preview requires a site_set catalog reference or inline site_set"
-        )
+    constellation_source = str(SpaceSourceRef(constellation_ref))
+    ground_stations_source = str(SiteSetRef(ground_site_set_ref))
 
     from nodalarc.session_generator import generated_isl_topology
 
@@ -218,13 +221,14 @@ def compute_coverage_preview(
         "latitude_threshold_deg": 70.0,
     }
     ground_scheduling = runtime.ground_scheduling
+    preview_epoch = session_epoch_unix(resolution.resolved.time)
 
     window = precompute_timeline_window(
         satellites=satellites,
         addressing=addressing,
         gs_file=gs_file,
         neighbors=neighbors,
-        epoch_unix=0.0,
+        epoch_unix=preview_epoch,
         duration_s=period,
         propagator_id=runtime.propagator_id,
         step_seconds=_PREVIEW_STEP_SECONDS,
@@ -254,7 +258,7 @@ def compute_coverage_preview(
         satellites,
         addressing,
         neighbors,
-        0.0,
+        preview_epoch,
         period,
         runtime.propagator_id,
         runtime.body_frames,

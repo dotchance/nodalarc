@@ -14,7 +14,7 @@ supported sets, with no change to call sites.
 
 from enum import StrEnum
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from nodalarc.stack_resolver import SUPPORTED_STACK_PROTOCOLS
 
@@ -29,7 +29,12 @@ class FeatureCategory(StrEnum):
     PROTOCOL_ADAPTER = "protocol_adapter"
     EPHEMERIS_PROVIDER = "ephemeris_provider"
     ROUTING_PROTOCOL = "routing_protocol"
+    ROUTING_CAPABILITY = "routing_capability"
     ADDRESSING_POOL = "addressing_pool"
+    ADDRESS_ALLOCATION = "address_allocation"
+    LINK_TOPOLOGY = "link_topology"
+    LINK_CONSTRAINT = "link_constraint"
+    GROUND_SCHEDULING = "ground_scheduling"
     PAYLOAD = "payload"
     CLOCK_MODEL = "clock_model"
     PROPAGATOR = "propagator"
@@ -37,7 +42,6 @@ class FeatureCategory(StrEnum):
 
 # Informational notes shown with unsupported features.
 FEATURE_SUPPORT_NOTES: dict[tuple[FeatureCategory, str], str] = {
-    (FeatureCategory.SEGMENT_KIND, "space_node"): "supported by the Earth-Luna runtime",
     (FeatureCategory.SEGMENT_KIND, "space_node_set"): "supported by the Earth-Luna runtime",
     (FeatureCategory.SEGMENT_KIND, "lagrange_point"): "future runtime capability",
     (FeatureCategory.CENTRAL_BODY, "luna"): "supported by the Earth-Luna runtime",
@@ -73,6 +77,9 @@ FEATURE_SUPPORT_NOTES: dict[tuple[FeatureCategory, str], str] = {
     (FeatureCategory.PAYLOAD, "payloads"): "future runtime capability",
     (FeatureCategory.CLOCK_MODEL, "session"): "supported clock model",
     (FeatureCategory.CLOCK_MODEL, "affine"): "future runtime capability",
+    (FeatureCategory.GROUND_SCHEDULING, "handover_concurrency:all_at_once"): (
+        "future runtime capability - the current allocator serializes ground handovers"
+    ),
 }
 
 
@@ -108,7 +115,14 @@ class RuntimeSupport(BaseModel):
     supported_protocol_adapters: frozenset[str]
     supported_ephemeris_providers: frozenset[str]
     supported_routing_protocols: frozenset[str]
+    supported_routing_capabilities: frozenset[str]
     supported_addressing_pools: frozenset[str]
+    supported_address_allocation_modes: frozenset[str]
+    supported_link_topologies: frozenset[str]
+    supported_link_constraints: frozenset[str]
+    supported_ground_handover_concurrency: frozenset[str]
+    max_ground_mbb_reserve: int = Field(ge=0)
+    supported_ground_bbm_acquire_timeout_ticks: frozenset[int]
     supported_clock_models: frozenset[str]
     supported_propagators: frozenset[str]
     supports_payloads: bool
@@ -131,7 +145,20 @@ class RuntimeSupport(BaseModel):
             supported_protocol_adapters=frozenset(),
             supported_ephemeris_providers=frozenset(),
             supported_routing_protocols=SUPPORTED_STACK_PROTOCOLS,
+            supported_routing_capabilities=frozenset(
+                f"{protocol}:{capability}"
+                for protocol in ("isis", "ospf")
+                for capability in ("mpls", "segment_routing", "traffic_engineering")
+            ),
             supported_addressing_pools=frozenset({"loopbacks"}),
+            supported_address_allocation_modes=frozenset({"by_node_order"}),
+            supported_link_topologies=frozenset(
+                {"visible_candidates", "nearest_n", "explicit_pairs"}
+            ),
+            supported_link_constraints=frozenset({"max_links_per_node"}),
+            supported_ground_handover_concurrency=frozenset({"one_at_a_time"}),
+            max_ground_mbb_reserve=1,
+            supported_ground_bbm_acquire_timeout_ticks=frozenset({1}),
             supported_clock_models=frozenset({"session"}),
             supported_propagators=frozenset({"two_body", "j2_mean_elements", "sgp4_tle"}),
             supports_payloads=False,
@@ -142,16 +169,27 @@ class RuntimeSupport(BaseModel):
     def earth_luna(cls) -> RuntimeSupport:
         """Earth + Luna runtime with explicit cislunar relay support."""
         return cls(
-            supported_segment_kinds=frozenset(
-                {"constellation", "ground_set", "space_node", "space_node_set"}
-            ),
+            supported_segment_kinds=frozenset({"constellation", "ground_set", "space_node_set"}),
             supported_central_bodies=frozenset({"earth", "luna"}),
             supported_reference_bodies=frozenset({"earth", "luna"}),
             supported_frame_bodies=frozenset({"earth", "luna"}),
             supported_protocol_adapters=frozenset({"static_ip"}),
             supported_ephemeris_providers=frozenset({"skyfield_bsp"}),
             supported_routing_protocols=SUPPORTED_STACK_PROTOCOLS,
+            supported_routing_capabilities=frozenset(
+                f"{protocol}:{capability}"
+                for protocol in ("isis", "ospf")
+                for capability in ("mpls", "segment_routing", "traffic_engineering")
+            ),
             supported_addressing_pools=frozenset({"loopbacks"}),
+            supported_address_allocation_modes=frozenset({"by_node_order"}),
+            supported_link_topologies=frozenset(
+                {"visible_candidates", "nearest_n", "explicit_pairs"}
+            ),
+            supported_link_constraints=frozenset({"max_links_per_node"}),
+            supported_ground_handover_concurrency=frozenset({"one_at_a_time"}),
+            max_ground_mbb_reserve=1,
+            supported_ground_bbm_acquire_timeout_ticks=frozenset({1}),
             supported_clock_models=frozenset({"session"}),
             supported_propagators=frozenset({"two_body", "j2_mean_elements", "sgp4_tle"}),
             supports_payloads=False,
@@ -177,6 +215,25 @@ class RuntimeSupport(BaseModel):
         if propagator in self.supported_propagators:
             return None
         return self._unsupported(FeatureCategory.PROPAGATOR, propagator, "orbit propagator")
+
+    def compatible_supported_propagators(self, source_propagator: str) -> tuple[str, ...]:
+        """Return runtime-supported substitutions that preserve source physics.
+
+        Two-body and J2 catalog orbits share the same authored Keplerian
+        representation and may be deliberately compared. TLE and three-body
+        sources are different physical forms: the Wizard must never make one
+        appear runnable by silently replacing its declared propagator.
+        """
+
+        compatible = {
+            "two_body": ("j2_mean_elements", "two_body"),
+            "j2_mean_elements": ("j2_mean_elements", "two_body"),
+            "sgp4_tle": ("sgp4_tle",),
+            "crtbp": ("crtbp",),
+        }.get(source_propagator, (source_propagator,))
+        return tuple(
+            propagator for propagator in compatible if propagator in self.supported_propagators
+        )
 
     def check_central_body(self, body: str) -> UnsupportedFeature | None:
         if body in self.supported_central_bodies:
@@ -212,15 +269,81 @@ class RuntimeSupport(BaseModel):
             FeatureCategory.ROUTING_PROTOCOL, protocol, "routing domain protocol"
         )
 
+    def check_routing_capability(self, protocol: str, capability: str) -> UnsupportedFeature | None:
+        value = f"{protocol}:{capability}"
+        if value in self.supported_routing_capabilities:
+            return None
+        return self._unsupported(
+            FeatureCategory.ROUTING_CAPABILITY,
+            value,
+            "routing protocol capability",
+        )
+
     def check_addressing_pool(self, pool_class: str) -> UnsupportedFeature | None:
         if pool_class in self.supported_addressing_pools:
             return None
         return self._unsupported(FeatureCategory.ADDRESSING_POOL, pool_class, "addressing pool")
 
+    def check_address_allocation(self, allocation: str) -> UnsupportedFeature | None:
+        if allocation in self.supported_address_allocation_modes:
+            return None
+        return self._unsupported(
+            FeatureCategory.ADDRESS_ALLOCATION,
+            allocation,
+            "address allocation mode",
+        )
+
+    def check_link_topology(self, topology: str) -> UnsupportedFeature | None:
+        if topology in self.supported_link_topologies:
+            return None
+        return self._unsupported(
+            FeatureCategory.LINK_TOPOLOGY,
+            topology,
+            "link topology mode",
+        )
+
+    def check_link_constraint(self, constraint: str) -> UnsupportedFeature | None:
+        if constraint in self.supported_link_constraints:
+            return None
+        return self._unsupported(
+            FeatureCategory.LINK_CONSTRAINT,
+            constraint,
+            "link rule constraint",
+        )
+
+    def check_ground_handover_concurrency(self, mode: str) -> UnsupportedFeature | None:
+        if mode in self.supported_ground_handover_concurrency:
+            return None
+        return self._unsupported(
+            FeatureCategory.GROUND_SCHEDULING,
+            f"handover_concurrency:{mode}",
+            "ground handover concurrency",
+        )
+
+    def check_ground_mbb_reserve(self, reserve: int) -> UnsupportedFeature | None:
+        if reserve <= self.max_ground_mbb_reserve:
+            return None
+        return self._unsupported(
+            FeatureCategory.GROUND_SCHEDULING,
+            f"mbb_reserve:{reserve}",
+            "ground MBB reserve",
+        )
+
+    def check_ground_bbm_acquire_timeout_ticks(
+        self, timeout_ticks: int
+    ) -> UnsupportedFeature | None:
+        if timeout_ticks in self.supported_ground_bbm_acquire_timeout_ticks:
+            return None
+        return self._unsupported(
+            FeatureCategory.GROUND_SCHEDULING,
+            f"bbm_acquire_timeout_ticks:{timeout_ticks}",
+            "ground BBM acquire timeout",
+        )
+
     def check_clock_model(self, model: str) -> UnsupportedFeature | None:
         if model in self.supported_clock_models:
             return None
-        return self._unsupported(FeatureCategory.CLOCK_MODEL, model, "segment clock model")
+        return self._unsupported(FeatureCategory.CLOCK_MODEL, model, "clock model")
 
     def check_payloads(self, has_payloads: bool) -> UnsupportedFeature | None:
         if not has_payloads or self.supports_payloads:

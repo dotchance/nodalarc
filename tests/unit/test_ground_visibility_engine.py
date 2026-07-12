@@ -4,20 +4,25 @@
 
 from __future__ import annotations
 
-import nodalarc.constellation_loader as constellation_loader
 import pytest
 from nodalarc.frames import EcefVec3, GeoPosition, Vec3
 from nodalarc.ground_terminals import TerminalPhysicsProfile
-from nodalarc.models.addressing import AddressingScheme
 from nodalarc.models.ground_policy import HandoverPolicySpec, SelectionPolicySpec
-from nodalarc.models.ground_station import GroundStationConfig, GroundStationFile, GroundTerminalDef
 from nodalarc.models.session import GroundSchedulingConfig
 from nodalarc.models.terminal_physics import SatGroundTerminalBoresight, TerminalBoresight
+from nodalarc.ome_runtime import (
+    GroundStation,
+    GroundStationFile,
+    GroundTerminal,
+    SatelliteGroundTerminal,
+    SatelliteNode,
+)
 from ome.event_stream import build_step_context
 from ome.ground_visibility_engine import GroundPassLookahead, evaluate_ground_visibility
 from ome.propagation_engine import PropagatedState, propagate_satellites
 from ome.visibility import GroundVisibility
 
+from tests.ome_runtime_fixtures import StaticOmeAddressing
 from tests.physics_fixtures import (
     EARTH_ORIGIN_BODY_STATES,
     EARTH_TEST_BODY_FRAME,
@@ -271,9 +276,9 @@ def test_ground_visibility_carries_rejection_reason_for_invisible_pair():
 
 
 def test_longest_remaining_pass_lookahead_uses_real_propagation():
-    addressing = AddressingScheme()
     sat_id = "earth-test-sat-p00s00"
-    satellite = constellation_loader.SatelliteNode(
+    addressing = StaticOmeAddressing(satellite_ids=(sat_id,))
+    satellite = SatelliteNode(
         plane=0,
         slot=0,
         elements=earth_elements_from_params(550.0, 0.0, 0.0, 0.0),
@@ -649,76 +654,58 @@ def test_satellite_profiles_select_matching_target_body_for_cislunar_relay():
     assert decision.reference_body == "luna"
 
 
-def test_cislunar_satellite_type_config_flows_through_build_context_to_engine(
-    tmp_path,
-    monkeypatch,
-):
-    sat_type_dir = tmp_path / "satellite-types"
-    sat_type_dir.mkdir()
-    (sat_type_dir / "cislunar-relay.yaml").write_text(
-        """
-satellite_type:
-  name: cislunar-relay
-  isl_terminals:
-    - type: optical
-      count: 1
-      max_range_km: 5000.0
-      bandwidth_mbps: 100000.0
-      max_tracking_rate_deg_s: 5.0
-  ground_terminals:
-    - type: rf
-      count: 1
-      bandwidth_mbps: 1000.0
-      max_range_km: 2000.0
-      field_of_regard_deg: 120.0
-      max_tracking_rate_deg_s: 6.0
-      boresight:
-        target_body: earth
-        mode: nadir
-    - type: rf
-      count: 1
-      bandwidth_mbps: 1000.0
-      max_range_km: 2000.0
-      field_of_regard_deg: 120.0
-      max_tracking_rate_deg_s: 6.0
-      boresight:
-        target_body: luna
-        mode: nadir
-"""
-    )
-    monkeypatch.setattr(constellation_loader, "_SAT_TYPE_DIR", sat_type_dir)
-    constellation_loader.load_satellite_type.cache_clear()
-
-    constellation = constellation_loader.load_constellation(
-        {
-            "mode": "parametric",
-            "name": "cislunar-config-test",
-            "satellite_type": "cislunar-relay",
-            "orbit": {
-                "altitude_km": 550.0,
-                "inclination_deg": 0.0,
-                "pattern": "walker-delta",
-            },
-            "planes": {
-                "count": 1,
-                "raan_spacing_deg": 360.0,
-                "sats_per_plane": 1,
-                "phase_offset_deg": 0.0,
-            },
-        }
-    )
-    satellites = constellation_loader.expand_constellation(
-        constellation,
-        body_frame=EARTH_TEST_BODY_FRAME,
-    )
+def test_cislunar_resolved_terminal_facts_flow_through_build_context_to_engine():
     sat_id = "earth-relay-sat-p00s00"
-    satellites[0].node_id = sat_id
-    addressing = AddressingScheme()
+    satellites = [
+        SatelliteNode(
+            plane=0,
+            slot=0,
+            elements=earth_elements_from_params(550.0, 0.0, 0.0, 0.0),
+            node_id=sat_id,
+            central_body="earth",
+            isl_terminal_count=0,
+            ground_terminal_count=2,
+            ground_terminals=(
+                SatelliteGroundTerminal(
+                    type="rf",
+                    count=1,
+                    interface_indices=(0,),
+                    bandwidth_mbps=1000.0,
+                    max_range_km=2000.0,
+                    field_of_regard_deg=120.0,
+                    max_tracking_rate_deg_s=6.0,
+                    boresight=SatGroundTerminalBoresight(
+                        target_body="earth",
+                        mode="nadir",
+                    ),
+                ),
+                SatelliteGroundTerminal(
+                    type="rf",
+                    count=1,
+                    interface_indices=(1,),
+                    bandwidth_mbps=1000.0,
+                    max_range_km=2000.0,
+                    field_of_regard_deg=120.0,
+                    max_tracking_rate_deg_s=6.0,
+                    boresight=SatGroundTerminalBoresight(
+                        target_body="luna",
+                        mode="nadir",
+                    ),
+                ),
+            ),
+        )
+    ]
+    addressing = StaticOmeAddressing(
+        satellite_ids=(sat_id,),
+        ground_station_ids=("gs-luna",),
+        ground_aliases={"luna": "gs-luna"},
+    )
     gs_file = GroundStationFile(
         default_terminals=[
-            GroundTerminalDef(
+            GroundTerminal(
                 type="rf",
                 count=1,
+                interface_indices=(0,),
                 bandwidth_mbps=1000.0,
                 tracking_capacity=1,
                 max_range_km=2000.0,
@@ -728,7 +715,7 @@ satellite_type:
             )
         ],
         stations=[
-            GroundStationConfig(
+            GroundStation(
                 name="luna",
                 lat_deg=0.0,
                 lon_deg=0.0,

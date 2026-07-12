@@ -1,12 +1,17 @@
 """Unit tests for VS-API — state management via SessionContext and snapshot construction."""
 
 import json
+import os
 import sqlite3
 from datetime import UTC, datetime
+from functools import cache
 from pathlib import Path
 
 import pytest
 import yaml
+from nodalarc.catalog_closure import FilesystemCatalogReadView
+from nodalarc.catalog_paths import CatalogRoots
+from nodalarc.catalog_upload import CatalogUpload, encode_catalog_upload, sha256_digest
 from nodalarc.db.queries import (
     insert_convergence_result,
     insert_link_up,
@@ -17,6 +22,7 @@ from nodalarc.db.schema import create_tables
 from nodalarc.models.events import EphemerisNodeFixed, EphemerisNodeTLE, SessionEphemeris
 from nodalarc.models.link_events import LinkUp
 from nodalarc.models.metrics import ConvergenceResult
+from nodalarc.models.resolved_session import SourceContext
 from nodalarc.models.vs_api import (
     LinkDecisionTrace,
     LinkState,
@@ -25,15 +31,24 @@ from nodalarc.models.vs_api import (
     StateSnapshot,
 )
 from nodalarc.nats_channels import STREAM_OME_EVENTS
+from nodalarc.prepared_session import (
+    PreparedSessionFiles,
+    PreparedSessionSource,
+    prepare_session_files,
+)
+from nodalarc.project_info import project_version
+from nodalarc.resolve_session import resolve_session_with_assets
 from pydantic import ValidationError
 from vs_api.session_context import SessionContext, _derive_link_type, _link_key
 
+from tests.asgi_client import ASGITestClient as TestClient
 from tests.physics_fixtures import EARTH_TEST_EPHEMERIS_BODY_FRAMES
 
 ISS_TLE_EPOCH = 1615896900.000275
 ISS_TLE_LINE_1 = "1 25544U 98067A   21075.51041667  .00001264  00000-0  29660-4 0  9993"
 ISS_TLE_LINE_2 = "2 25544  51.6442  21.5417 0002426  95.1670  21.8444 15.48974333273145"
 CATALOG_SESSION = Path("catalog/nodalarc/sessions/earth-leo-heo-geo-luna-reachability.yaml")
+SHIPPED_ROOT = Path("catalog/nodalarc")
 
 
 class TestOpsEventVisibility:
@@ -75,7 +90,6 @@ class TestOpsEventVisibility:
 class TestOperatorRepairEndpoint:
     def test_repair_failure_does_not_expose_exception_text(self, monkeypatch):
         import vs_api.main as m
-        from fastapi.testclient import TestClient
 
         class FakeLock:
             def __enter__(self):
@@ -121,22 +135,32 @@ class TestLinkTypeDerivation:
         assert (
             _derive_link_type(
                 "isl",
+                resolved_kind="isl",
                 link_rule_id="leo-to-meo",
-                topology_mode="nearest_n",
                 endpoint_segments=("leo", "meo"),
             )
             == "inter_constellation"
         )
 
-    def test_static_cross_body_link_classifies_as_inter_body_relay(self):
+    def test_resolved_cross_body_link_classifies_as_inter_body_relay(self):
         assert (
             _derive_link_type(
                 "isl",
-                link_rule_id="earth-luna-static-relay",
-                topology_mode="static_ip",
+                resolved_kind="inter_body",
+                link_rule_id="earth-luna-relay",
                 endpoint_segments=("earth-relay", "luna-relay"),
             )
             == "inter_body_relay"
+        )
+
+    def test_segment_names_do_not_guess_cross_body_without_resolved_kind(self):
+        assert (
+            _derive_link_type(
+                "isl",
+                link_rule_id="unknown-rule",
+                endpoint_segments=("earth-relay", "luna-relay"),
+            )
+            == "isl"
         )
 
 
@@ -144,6 +168,63 @@ def _session_yaml_text(name: str = "earth-leo-simple") -> str:
     raw = yaml.safe_load(CATALOG_SESSION.read_text(encoding="utf-8"))
     raw["session"]["name"] = name
     return yaml.dump(raw, sort_keys=False)
+
+
+@cache
+def _runtime_fixture(session_yaml: str, run_id: str) -> tuple[PreparedSessionFiles, CatalogUpload]:
+    root_yaml = session_yaml.encode()
+    prepared = prepare_session_files(
+        root_yaml,
+        FilesystemCatalogReadView(CatalogRoots.from_catalog_root(SHIPPED_ROOT)),
+        source=PreparedSessionSource(
+            logical_id="user:sessions/test-cr-session.yaml",
+            origin="test.vs-api.cr",
+        ),
+        source_revision=sha256_digest(root_yaml),
+        available_node_count=1_000_000,
+        run_id=run_id or None,
+    )
+    return prepared, encode_catalog_upload(prepared, upload_id="test-cr-upload")
+
+
+def _runtime_status_fields(session_yaml: str, run_id: str) -> dict[str, str]:
+    prepared, _upload = _runtime_fixture(session_yaml, run_id)
+    return {
+        "documentDigest": prepared.document_digest,
+        "closureDigest": prepared.closure_digest,
+        "resolvedSemanticDigest": prepared.resolved_semantic_digest,
+        "runtimeRelease": os.environ.get("NODALARC_RELEASE", project_version()),
+        "runtimeBuild": os.environ.get("NODAL_BUILD", "dev"),
+    }
+
+
+class _RuntimeConfigMapReader:
+    def __init__(self, session_yaml: str, run_id: str) -> None:
+        _prepared, upload = _runtime_fixture(session_yaml, run_id)
+        self.items = [
+            {
+                "apiVersion": "v1",
+                "kind": "ConfigMap",
+                "metadata": {
+                    "name": f"test-cr-upload-{index}",
+                    "namespace": "nodalarc",
+                    "labels": {"nodalarc.io/catalog-upload": upload.upload_id},
+                    "annotations": {"nodalarc.io/catalog-ref": str(entry.ref)},
+                },
+                "data": {"document.yaml": entry.yaml_bytes.decode()},
+            }
+            for index, entry in enumerate(upload.catalog_files)
+        ]
+
+    def list_namespaced_config_map(
+        self,
+        namespace: str,
+        *,
+        label_selector: str,
+    ) -> dict[str, list[dict]]:
+        assert namespace == "nodalarc"
+        assert label_selector == "nodalarc.io/catalog-upload=test-cr-upload"
+        return {"items": self.items}
 
 
 def _constellation_cr(
@@ -158,6 +239,7 @@ def _constellation_cr(
     session_run_id: str = "run-test-0001",
     session_name: str | None = "earth-leo-simple",
 ) -> dict:
+    root_yaml = session_yaml if session_yaml is not None else _session_yaml_text()
     status = {
         "phase": phase,
         "observedGeneration": observed_generation,
@@ -165,14 +247,32 @@ def _constellation_cr(
         "podCount": pod_count,
         "wiredPods": wired_pods,
         "sessionRunId": session_run_id,
+        **_runtime_status_fields(root_yaml, session_run_id),
     }
     if session_name is not None:
         status["sessionName"] = session_name
+    _prepared, upload = _runtime_fixture(root_yaml, session_run_id)
     return {
         "metadata": {"generation": generation},
-        "spec": {"sessionYaml": session_yaml if session_yaml is not None else _session_yaml_text()},
+        "spec": {
+            "sessionYaml": root_yaml,
+            "catalogUpload": upload.selection.model_dump(mode="json"),
+        },
         "status": status,
     }
+
+
+def _extract_ready_session(main, cr: dict):
+    spec = cr["spec"]
+    return main._extract_cr_session(
+        cr,
+        require_ready=True,
+        core_v1=_RuntimeConfigMapReader(
+            spec["sessionYaml"],
+            str((cr.get("status") or {}).get("sessionRunId") or ""),
+        ),
+        namespace="nodalarc",
+    )
 
 
 def _make_provenance(**overrides):
@@ -242,7 +342,6 @@ class TestApiAttribution:
 
     def test_about_returns_project_attribution(self):
         import vs_api.main as m
-        from nodalarc.project_info import project_version
 
         payload = m.about()
 
@@ -274,7 +373,7 @@ class TestConstellationCRReadiness:
     def test_extract_ready_cr_session_accepts_current_ready_generation(self):
         import vs_api.main as m
 
-        ready = m._extract_ready_cr_session(_constellation_cr())
+        ready = _extract_ready_session(m, _constellation_cr())
 
         assert ready is not None
         assert ready.session_id == "run-test-0001"
@@ -286,12 +385,15 @@ class TestConstellationCRReadiness:
         import vs_api.main as m
 
         with pytest.raises(ValueError, match="sessionRunId"):
-            m._extract_ready_cr_session(_constellation_cr(session_run_id=""))
+            _extract_ready_session(m, _constellation_cr(session_run_id=""))
 
     def test_extract_ready_cr_session_rejects_observed_generation_mismatch(self):
         import vs_api.main as m
 
-        ready = m._extract_ready_cr_session(_constellation_cr(generation=3, observed_generation=2))
+        ready = _extract_ready_session(
+            m,
+            _constellation_cr(generation=3, observed_generation=2),
+        )
 
         assert ready is None
 
@@ -312,21 +414,21 @@ class TestConstellationCRReadiness:
     def test_extract_ready_cr_session_rejects_non_ready_phase(self):
         import vs_api.main as m
 
-        ready = m._extract_ready_cr_session(_constellation_cr(phase="Wiring"))
+        ready = _extract_ready_session(m, _constellation_cr(phase="Wiring"))
 
         assert ready is None
 
     def test_extract_ready_cr_session_rejects_incomplete_pod_status(self):
         import vs_api.main as m
 
-        ready = m._extract_ready_cr_session(_constellation_cr(ready_pods=42, pod_count=43))
+        ready = _extract_ready_session(m, _constellation_cr(ready_pods=42, pod_count=43))
 
         assert ready is None
 
     def test_extract_ready_cr_session_rejects_incomplete_wiring_status(self):
         import vs_api.main as m
 
-        ready = m._extract_ready_cr_session(_constellation_cr(wired_pods=42, pod_count=43))
+        ready = _extract_ready_session(m, _constellation_cr(wired_pods=42, pod_count=43))
 
         assert ready is None
 
@@ -334,27 +436,87 @@ class TestConstellationCRReadiness:
         import vs_api.main as m
 
         with pytest.raises(ValueError, match="sessionName"):
-            m._extract_ready_cr_session(_constellation_cr(session_name=None))
+            _extract_ready_session(m, _constellation_cr(session_name=None))
 
     def test_extract_ready_cr_session_rejects_session_name_mismatch(self):
         import vs_api.main as m
 
         with pytest.raises(ValueError, match="status.sessionName"):
-            m._extract_ready_cr_session(_constellation_cr(session_name="wrong-name"))
+            _extract_ready_session(m, _constellation_cr(session_name="wrong-name"))
+
+    @pytest.mark.parametrize(
+        "field",
+        (
+            "documentDigest",
+            "closureDigest",
+            "resolvedSemanticDigest",
+            "runtimeRelease",
+            "runtimeBuild",
+        ),
+    )
+    def test_extract_ready_cr_session_rejects_runtime_status_mismatch(self, field: str):
+        import vs_api.main as m
+
+        cr = _constellation_cr()
+        cr["status"][field] = "stale"
+
+        with pytest.raises(ValueError, match=field):
+            _extract_ready_session(m, cr)
 
     def test_extract_ready_cr_session_fails_loudly_without_session_yaml(self):
         import vs_api.main as m
 
+        cr = _constellation_cr()
+        cr["spec"]["sessionYaml"] = ""
         with pytest.raises(ValueError, match="sessionYaml"):
-            m._extract_ready_cr_session(_constellation_cr(session_yaml=""))
+            m._extract_cr_session(
+                cr,
+                require_ready=True,
+                core_v1=object(),
+                namespace="nodalarc",
+            )
 
 
 class TestSessionContextNetworkIdentity:
+    def test_resolved_link_classes_drive_public_link_types(self):
+        ctx = SessionContext(
+            "run-test-0001",
+            resolution=resolve_session_with_assets(
+                yaml.safe_load(CATALOG_SESSION.read_text()),
+                source_context=SourceContext(origin="test.vs-api"),
+            ),
+            source_id="nodalarc:sessions/earth-leo-heo-geo-luna-reachability.yaml",
+        )
+
+        assert (
+            ctx._public_link_type(
+                "isl",
+                link_rule_id="leo_to_heo",
+                endpoint_segments=("leo_b", "heo_relay"),
+            )
+            == "inter_constellation"
+        )
+        assert (
+            ctx._public_link_type(
+                "isl",
+                link_rule_id="geo_to_luna",
+                endpoint_segments=("geo_relay", "luna_relay"),
+            )
+            == "inter_body_relay"
+        )
+
     def test_exposes_loopback_and_site_prefix_addresses(self, tmp_path):
         session_path = tmp_path / "session.yaml"
         session_path.write_text(_session_yaml_text())
 
-        ctx = SessionContext("run-test-0001", str(session_path))
+        ctx = SessionContext(
+            "run-test-0001",
+            resolution=resolve_session_with_assets(
+                yaml.safe_load(session_path.read_text()),
+                source_context=SourceContext(origin="test.vs-api"),
+            ),
+            source_id="test-session",
+        )
 
         addresses = ctx._node_addresses_by_id["earth-us-co-denver-gw1"]
         assert any(
@@ -376,7 +538,11 @@ class TestSessionContextNetworkIdentity:
     def test_resolved_static_ground_nodes_survive_partial_ome_ephemeris(self):
         ctx = SessionContext(
             "run-test-0001",
-            "catalog/nodalarc/sessions/earth-leo-simple.yaml",
+            resolution=resolve_session_with_assets(
+                yaml.safe_load(Path("catalog/nodalarc/sessions/earth-leo-simple.yaml").read_text()),
+                source_context=SourceContext(origin="test.vs-api"),
+            ),
+            source_id="nodalarc:sessions/earth-leo-simple.yaml",
         )
         inactive_id = "earth-us-co-denver-gw2"
         active_id = "earth-us-co-denver-gw1"
@@ -424,7 +590,6 @@ class TestStateSnapshot:
 
     def test_state_endpoint_reports_transition_without_validation_error(self, monkeypatch):
         import vs_api.main as m
-        from fastapi.testclient import TestClient
 
         class FakeSessionManager:
             status = "switching"
@@ -1759,7 +1924,6 @@ class TestLinkDecisionsEndpoint:
 
     def test_returns_404_when_no_session(self, monkeypatch):
         import vs_api.main as m
-        from fastapi.testclient import TestClient
 
         monkeypatch.setattr(m, "_active_context", None)
         r = TestClient(m.app).get("/api/v1/ground-link-decisions")
@@ -1767,7 +1931,6 @@ class TestLinkDecisionsEndpoint:
 
     def test_returns_404_when_no_snapshot_received(self, monkeypatch):
         import vs_api.main as m
-        from fastapi.testclient import TestClient
 
         ctx = SessionContext.__new__(SessionContext)
         ctx._init_state_only()
@@ -1779,7 +1942,6 @@ class TestLinkDecisionsEndpoint:
 
     def test_full_snapshot_returned_without_pair_query(self, monkeypatch):
         import vs_api.main as m
-        from fastapi.testclient import TestClient
 
         monkeypatch.setattr(m, "_active_context", self._make_ctx_with_snapshot())
 
@@ -1796,7 +1958,6 @@ class TestLinkDecisionsEndpoint:
         # pairs (same shape as the full snapshot, fewer rows), so a node card never polls
         # and discards the whole GS×satellite cross-product.
         import vs_api.main as m
-        from fastapi.testclient import TestClient
 
         monkeypatch.setattr(m, "_active_context", self._make_ctx_with_snapshot())
 
@@ -1813,7 +1974,6 @@ class TestLinkDecisionsEndpoint:
 
     def test_node_slice_returns_only_the_satellites_own_pairs(self, monkeypatch):
         import vs_api.main as m
-        from fastapi.testclient import TestClient
 
         monkeypatch.setattr(m, "_active_context", self._make_ctx_with_snapshot())
 
@@ -1827,7 +1987,6 @@ class TestLinkDecisionsEndpoint:
         # A node the snapshot exists but does not cover (e.g. a satellite with no GS
         # visibility this tick) is an honest empty result, NOT the no-snapshot 404.
         import vs_api.main as m
-        from fastapi.testclient import TestClient
 
         monkeypatch.setattr(m, "_active_context", self._make_ctx_with_snapshot())
 
@@ -1839,7 +1998,6 @@ class TestLinkDecisionsEndpoint:
 
     def test_node_slice_404_when_no_snapshot(self, monkeypatch):
         import vs_api.main as m
-        from fastapi.testclient import TestClient
 
         ctx = SessionContext.__new__(SessionContext)
         ctx._init_state_only()
@@ -1850,7 +2008,6 @@ class TestLinkDecisionsEndpoint:
 
     def test_node_is_mutually_exclusive_with_pair_query(self, monkeypatch):
         import vs_api.main as m
-        from fastapi.testclient import TestClient
 
         monkeypatch.setattr(m, "_active_context", self._make_ctx_with_snapshot())
 
@@ -1862,7 +2019,6 @@ class TestLinkDecisionsEndpoint:
 
     def test_per_pair_returns_scheduled_decision_with_null_unscheduled(self, monkeypatch):
         import vs_api.main as m
-        from fastapi.testclient import TestClient
 
         monkeypatch.setattr(m, "_active_context", self._make_ctx_with_snapshot())
 
@@ -1879,7 +2035,6 @@ class TestLinkDecisionsEndpoint:
 
     def test_per_pair_returns_unscheduled_attribution(self, monkeypatch):
         import vs_api.main as m
-        from fastapi.testclient import TestClient
 
         monkeypatch.setattr(m, "_active_context", self._make_ctx_with_snapshot())
 
@@ -1897,7 +2052,6 @@ class TestLinkDecisionsEndpoint:
 
     def test_per_pair_returns_invisible_with_physical_reason(self, monkeypatch):
         import vs_api.main as m
-        from fastapi.testclient import TestClient
 
         monkeypatch.setattr(m, "_active_context", self._make_ctx_with_snapshot())
 
@@ -1913,7 +2067,6 @@ class TestLinkDecisionsEndpoint:
 
     def test_per_pair_unknown_pair_returns_404(self, monkeypatch):
         import vs_api.main as m
-        from fastapi.testclient import TestClient
 
         monkeypatch.setattr(m, "_active_context", self._make_ctx_with_snapshot())
 
@@ -1925,7 +2078,6 @@ class TestLinkDecisionsEndpoint:
 
     def test_one_query_param_alone_returns_400(self, monkeypatch):
         import vs_api.main as m
-        from fastapi.testclient import TestClient
 
         monkeypatch.setattr(m, "_active_context", self._make_ctx_with_snapshot())
 
@@ -1967,7 +2119,6 @@ class TestDecisionTimelineEndpoint:
 
     def test_timeline_rolls_up_recent_gs_decisions(self, monkeypatch):
         import vs_api.main as m
-        from fastapi.testclient import TestClient
 
         monkeypatch.setattr(m, "_active_context", self._make_ctx_with_timeline())
 
@@ -1988,7 +2139,6 @@ class TestDecisionTimelineEndpoint:
 
     def test_timeline_limit_returns_latest_samples(self, monkeypatch):
         import vs_api.main as m
-        from fastapi.testclient import TestClient
 
         monkeypatch.setattr(m, "_active_context", self._make_ctx_with_timeline())
 
@@ -2009,7 +2159,6 @@ class TestDecisionTimelineEndpoint:
         from unittest.mock import MagicMock
 
         import vs_api.main as m
-        from fastapi.testclient import TestClient
 
         ctx = self._make_ctx_with_timeline()
         next_epoch = _decision_snapshot_payload()
@@ -2029,7 +2178,6 @@ class TestDecisionTimelineEndpoint:
 
     def test_timeline_404_without_samples(self, monkeypatch):
         import vs_api.main as m
-        from fastapi.testclient import TestClient
 
         ctx = SessionContext.__new__(SessionContext)
         ctx._init_state_only()
@@ -2298,7 +2446,6 @@ class TestKernelActualRecovery:
         # _actual_links is the proof, not OME's snapshot — so this must read as
         # actuation divergence, never a silently-connected pair.
         import vs_api.main as m
-        from fastapi.testclient import TestClient
 
         ctx = self._ctx_with_snapshot_and_clean_roster()
         assert ctx.actual_kernel_pairs() == frozenset()
@@ -2318,7 +2465,6 @@ class TestKernelActualRecovery:
         # the endpoint's kernel_up is driven by recovered _actual_links — a revert to
         # ctx.links (empty here) would leave this diverged and fail the test.
         import vs_api.main as m
-        from fastapi.testclient import TestClient
 
         ctx = self._ctx_with_snapshot_and_clean_roster()
         self._deliver(
@@ -2394,7 +2540,6 @@ class TestKernelActualRecovery:
         # escalate at fault_after_ms without hardcoding it. The timing is the Scheduler's
         # pending clock, recovered on the retained ActualLinkSnapshot.
         import vs_api.main as m
-        from fastapi.testclient import TestClient
 
         ctx = self._ctx_with_snapshot_and_clean_roster()
         since = datetime(2026, 5, 29, 18, 8, 18, tzinfo=UTC)
@@ -2421,7 +2566,6 @@ class TestKernelActualRecovery:
     def test_endpoint_pair_inspector_composes_the_requested_pair(self, monkeypatch):
         # ?sat=Y composes that exact pair (node_focus="pair"), not the GS auto-focal.
         import vs_api.main as m
-        from fastapi.testclient import TestClient
 
         ctx = self._ctx_with_snapshot_and_clean_roster()
         monkeypatch.setattr(m, "_active_context", ctx)

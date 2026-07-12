@@ -15,8 +15,8 @@ from dataclasses import dataclass
 from typing import Literal
 
 from nodalarc.ground_terminals import station_ground_terminal_capacity
-from nodalarc.models.ground_station import GroundStationConfig, GroundStationFile
 from nodalarc.models.session import GroundSchedulingConfig
+from nodalarc.ome_runtime import GroundStation, GroundStationFile
 
 GroundHandoverMode = Literal["bbm", "mbb"]
 
@@ -35,7 +35,7 @@ class StationHandoverResolution:
     capability_forced_bbm: bool
 
 
-def _station_touched_mbb_surface(station: GroundStationConfig) -> bool:
+def _station_touched_mbb_surface(station: GroundStation) -> bool:
     return any(
         getattr(station, field) is not None
         for field in ("handover_mode", "mbb_overlap_ticks", "mbb_reserve")
@@ -45,7 +45,7 @@ def _station_touched_mbb_surface(station: GroundStationConfig) -> bool:
 def resolve_station_ground_scheduling(
     base: GroundSchedulingConfig,
     gs_file: GroundStationFile,
-    station: GroundStationConfig,
+    station: GroundStation,
     *,
     apply_ground_defaults: bool = True,
 ) -> StationHandoverResolution:

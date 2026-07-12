@@ -1,19 +1,20 @@
 # VS-API is platform infrastructure, not a session-scoped service.
 #
 # It is the user's front door — the browser wizard, WebSocket streaming,
-# REST API, and session orchestrator. It must NEVER be restarted by the
+# REST API, and session orchestrator. It must never be restarted by the
 # Operator during session switches (restart_platform_pods excludes it).
 #
 # Volume mount philosophy:
 #   platform-config  — platform infrastructure config, does not change per session
 #   session-config   — directory mount (auto-updates), bootstrap for dev path only;
 #                      the wizard path reads catalog sessions from catalog/nodalarc/
-#   session-db       — emptyDir for SQLite (future: PVC-backed persistent storage
-#                      for user-uploaded models, session history, and user catalog)
+#   session-db       — PVC-backed session data: the user catalog, builder-saved
+#                      sessions, and the session-history SQLite. User work
+#                      product; survives pod restarts and redeploys.
 #
 # Baseline catalog primitives and deployable session examples are baked into
-# the image under catalog/nodalarc/. User-uploaded models will be stored on
-# persistent volumes in a future release, alongside the static catalog.
+# the image under catalog/nodalarc/; user-authored objects live on the
+# nodalarc-session-data volume alongside them.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -33,9 +34,9 @@ spec:
       labels:
         app: nodalarc-vs-api
       annotations:
-        checksum/platform-config: {{ .Files.Get "files/platform.yaml" | sha256sum | quote }}
+        checksum/platform-config: {{ tpl (.Files.Get "files/platform.yaml") . | sha256sum | quote }}
     spec:
-      serviceAccountName: nodalarc-orchestrator
+      serviceAccountName: nodalarc-vs-api
 {{- if .Values.controlPlaneNode }}
       nodeSelector:
         kubernetes.io/hostname: {{ .Values.controlPlaneNode }}
@@ -62,6 +63,8 @@ spec:
           env:
             - name: NODAL_BUILD
               value: {{ .Values.buildTag | quote }}
+            - name: NODALARC_RELEASE
+              value: {{ required "runtimeRelease is required" .Values.runtimeRelease | quote }}
 {{- if .Values.nats.auth.enabled }}
             - name: NODALARC_NATS_URL
               value: "nats://{{ .Values.nats.auth.users.service.username }}:{{ .Values.nats.auth.users.service.password }}@nodalarc-nats:4222"
@@ -96,4 +99,5 @@ spec:
             name: nodalarc-session
             optional: true
         - name: session-db
-          emptyDir: {}
+          persistentVolumeClaim:
+            claimName: nodalarc-session-data

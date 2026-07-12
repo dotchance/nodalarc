@@ -259,7 +259,7 @@ class GroundVisibilityDecisionWire(BaseModel):
       identify which *terminal definition / constraint profile* the
       visibility check evaluated against — NOT the kernel interface
       name (`term0`, `gnd0`) and NOT the terminal instance index.
-      A satellite type may declare multiple `GroundTerminalDef`
+      A satellite may carry multiple resolved access-terminal blocks.
       entries with different `max_range_km` / boresight values; the
       profile identifier names which definition's constraints applied
       to this decision. Use `None` only when the session is

@@ -1,67 +1,92 @@
+{{- $operatorDiscoveryName := printf "nodalarc-operator-discovery-%s-%s" .Release.Name .Values.namespace }}
+{{- $operatorDiscoveryBindingName := printf "%s-binding" $operatorDiscoveryName }}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: nodalarc-operator
   namespace: {{ .Values.namespace }}
 ---
-# ClusterRole needed for kopf bootstrapping (CRD discovery, namespace listing)
-# and for watching ConstellationSpec CRDs across the namespace
 apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
+kind: Role
 metadata:
   name: nodalarc-operator
-  labels:
-    app.kubernetes.io/managed-by: {{ .Release.Service | quote }}
-    app.kubernetes.io/instance: {{ .Release.Name | quote }}
-    nodalarc.io/managed-by: helm
+  namespace: {{ .Values.namespace }}
 rules:
-  # kopf needs to list CRDs at startup for handler registration
-  - apiGroups: ["apiextensions.k8s.io"]
-    resources: ["customresourcedefinitions"]
-    verbs: ["get", "list", "watch"]
-  # kopf needs namespace listing for its reactor
-  - apiGroups: [""]
-    resources: ["namespaces"]
-    verbs: ["get", "list", "watch"]
-  # Node discovery for pod placement and substrate latency measurement
-  - apiGroups: [""]
-    resources: ["nodes"]
-    verbs: ["get", "list"]
-  # ConstellationSpec CRD operations
+  # ConstellationSpec reconciliation is restricted to this release namespace.
   - apiGroups: ["nodalarc.io"]
     resources: ["constellationspecs"]
     verbs: ["get", "list", "watch", "patch", "update"]
   - apiGroups: ["nodalarc.io"]
     resources: ["constellationspecs/status"]
     verbs: ["update", "patch"]
-  # kopf stores its state in events
+  # kopf stores its state in namespaced events.
   - apiGroups: [""]
     resources: ["events"]
     verbs: ["create"]
-  # Pod and ConfigMap management
+  # Session pod and configuration management is namespace-local.
   - apiGroups: [""]
     resources: ["pods"]
     verbs: ["create", "delete", "get", "list", "patch", "watch"]
-  # Pod exec — Operator touches /etc/frr/.config-ready sentinel in each pod
+  # Pod exec — Operator touches /etc/frr/.config-ready sentinel in each pod.
   - apiGroups: [""]
     resources: ["pods/exec"]
     verbs: ["create", "get"]
+  # Runtime readiness proof — read-only proxy to OME/Scheduler /readyz.
+  - apiGroups: [""]
+    resources: ["pods/proxy"]
+    verbs: ["get"]
   - apiGroups: [""]
     resources: ["configmaps"]
-    verbs: ["create", "update", "delete", "get", "list", "watch"]
-  # Secrets — SSH keypair for terminal access (nodalarc-terminal-keys)
+    verbs: ["create", "update", "delete", "get", "list"]
+  # Secrets — SSH keypair for terminal access (nodalarc-terminal-keys).
   - apiGroups: [""]
     resources: ["secrets"]
     verbs: ["create", "update", "delete", "get", "list"]
-  # Deployment patching (NodalPath mode switch)
+  # Deployment patching (NodalPath mode switch).
   - apiGroups: ["apps"]
     resources: ["deployments"]
     verbs: ["get", "list", "patch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
+kind: RoleBinding
 metadata:
   name: nodalarc-operator
+  namespace: {{ .Values.namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: nodalarc-operator
+subjects:
+  - kind: ServiceAccount
+    name: nodalarc-operator
+    namespace: {{ .Values.namespace }}
+---
+# Cluster-scoped, read-only discovery needed by kopf and placement. The release
+# and namespace are part of the name because Helm release names are only unique
+# within a namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $operatorDiscoveryName | quote }}
+  labels:
+    app.kubernetes.io/managed-by: {{ .Release.Service | quote }}
+    app.kubernetes.io/instance: {{ .Release.Name | quote }}
+    nodalarc.io/managed-by: helm
+rules:
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources: ["customresourcedefinitions"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $operatorDiscoveryBindingName | quote }}
   labels:
     app.kubernetes.io/managed-by: {{ .Release.Service | quote }}
     app.kubernetes.io/instance: {{ .Release.Name | quote }}
@@ -69,7 +94,7 @@ metadata:
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: nodalarc-operator
+  name: {{ $operatorDiscoveryName | quote }}
 subjects:
   - kind: ServiceAccount
     name: nodalarc-operator

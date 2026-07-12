@@ -8,16 +8,21 @@ from pathlib import Path
 
 from nodalarc.models.resolved_session import ResolvedRoutingDomain
 from nodalarc.models.segments import GroundScheduling
-from nodalarc.resolve_session import resolve_session
 from nodalarc.session_validator import build_validation_report, validate_session_readiness
 
-from tests.conftest import build_segment_session_dict
+from tests.catalog_session_fixtures import (
+    build_catalog_session_fixture,
+    install_tle_space_node_set,
+)
+from tests.catalog_session_fixtures import (
+    resolve_catalog_session as resolve_session,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 
 
 def _resolved(**overrides):
-    raw = build_segment_session_dict(
+    raw = build_catalog_session_fixture(
         name=overrides.pop("name", "validator-catalog-session"),
         constellation=overrides.pop(
             "constellation",
@@ -122,9 +127,26 @@ def test_ground_mbb_requires_access_capacity_for_reserve() -> None:
             else block
             for block in node.terminal_inventory
         )
+        access_terminal_ids = {
+            block.terminal_id
+            for block in node.terminal_inventory
+            if block.endpoint_role == "access"
+        }
+        retained_access_interfaces: set[str] = set()
+        wan_interfaces = []
+        for interface in node.wan_interfaces:
+            if interface.terminal_id in access_terminal_ids:
+                if interface.terminal_id in retained_access_interfaces:
+                    continue
+                retained_access_interfaces.add(interface.terminal_id)
+            wan_interfaces.append(interface)
         nodes.append(
             node.model_copy(
-                update={"ground_scheduling": scheduling, "terminal_inventory": terminals}
+                update={
+                    "ground_scheduling": scheduling,
+                    "terminal_inventory": terminals,
+                    "wan_interfaces": tuple(wan_interfaces),
+                }
             )
         )
         updated = True
@@ -136,7 +158,7 @@ def test_ground_mbb_requires_access_capacity_for_reserve() -> None:
     assert any("requests MBB" in result.message for result in results)
 
 
-def test_current_ome_runtime_limits_are_reported_before_deploy() -> None:
+def test_missing_non_earth_ephemeris_is_reported_before_deploy() -> None:
     resolved = _resolved()
     nodes = []
     updated = False
@@ -153,7 +175,6 @@ def test_current_ome_runtime_limits_are_reported_before_deploy() -> None:
                             "central_body": "luna",
                             "orbit_id": "luna-eccentric-test",
                             "eccentricity": 0.25,
-                            "propagator": "sgp4_tle",
                         }
                     ),
                 }
@@ -166,8 +187,21 @@ def test_current_ome_runtime_limits_are_reported_before_deploy() -> None:
 
     assert "E020" in _codes(results)
     messages = "\n".join(result.message for result in results)
-    assert "sgp4_tle" in messages
     assert "non-Earth" in messages
+
+
+def test_complete_sgp4_tle_session_has_no_ome_readiness_error() -> None:
+    raw = build_catalog_session_fixture(
+        name="validator-sgp4",
+        constellation={"planes": {"count": 1, "sats_per_plane": 2}},
+        ground_stations={"stations": ["a"]},
+    )
+    install_tle_space_node_set(raw)
+    resolved = resolve_session(raw)
+
+    results = validate_session_readiness(resolved, available_node_count=100)
+
+    assert "E020" not in _codes(results)
 
 
 def test_available_node_count_warning_is_non_blocking() -> None:
@@ -198,20 +232,18 @@ def test_validation_report_blocks_on_errors() -> None:
 def test_mixed_score_scales_with_selection_score_ranking_fail_the_gate(tmp_path) -> None:
     """E022 belongs at the deploy gate — a session whose ranking compares
     incompatible raw scores must never reach an OME startup crash."""
-    from nodalarc.resolve_session import resolve_session
     from nodalarc.session_validator import validate_session_readiness
 
-    from tests.conftest import build_segment_session_dict
-
-    raw = build_segment_session_dict(
+    raw = build_catalog_session_fixture(
         name="mixed-scales",
         constellation={"planes": {"count": 1, "sats_per_plane": 2}},
         ground_stations={"stations": ["a", "b"]},
     )
-    sites = raw["segments"][1]["placement"]["from_site_set"]["site_set"]["sites"]
-    sites[1]["site"]["nodes"][0]["scheduling"] = {
+    site_document = raw.read_catalog(raw.site_refs[1])
+    site_document["site"]["nodes"][0]["scheduling"] = {
         "selection_policy": {"longest_remaining_pass": {"lookahead_horizon_ticks": 600}},
     }
+    raw.write_catalog(raw.site_refs[1], site_document)
     resolved = resolve_session(raw)
     errors = [
         r
@@ -226,11 +258,12 @@ def test_mixed_score_scales_with_selection_score_ranking_fail_the_gate(tmp_path)
         "per_gs_rank",
         "lex_pair",
     ]
-    sites[1]["site"]["nodes"][0]["scheduling"]["ranking_order"] = [
+    site_document["site"]["nodes"][0]["scheduling"]["ranking_order"] = [
         "service_priority",
         "per_gs_rank",
         "lex_pair",
     ]
+    raw.write_catalog(raw.site_refs[1], site_document)
     resolved = resolve_session(raw)
     errors = [
         r

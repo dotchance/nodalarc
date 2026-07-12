@@ -45,9 +45,7 @@ def _make_tracer(
         }
     if interface_map is None:
         interface_map = {
-            ("gs-alpha", "sat-P00S00"): ("term0", "gnd0"),
             ("sat-P00S00", "sat-P00S01"): ("isl0", "isl0"),
-            ("gs-beta", "sat-P00S01"): ("term0", "gnd0"),
         }
     if pid_map is None:
         pid_map = {
@@ -94,8 +92,8 @@ def test_map_hops():
     assert hops[3].node_id == "gs-beta"
 
 
-def test_build_links():
-    """Build LiveTraceLink list from hop pairs with correct interfaces."""
+def test_build_links_uses_only_known_fixed_interfaces():
+    """Dynamic access hops stay unidentified rather than claiming term0/gnd0."""
     tracer = _make_tracer()
     hops = [
         PathHop(node_id="gs-alpha", node_type="ground_station"),
@@ -107,13 +105,14 @@ def test_build_links():
     assert len(links) == 3
     assert links[0].from_node == "gs-alpha"
     assert links[0].to_node == "sat-P00S00"
-    assert links[0].interface == "term0"
-    assert links[0].link_type == "ground"
+    assert links[0].interface == ""
+    assert links[0].link_type is None
     assert links[1].from_node == "sat-P00S00"
     assert links[1].to_node == "sat-P00S01"
     assert links[1].interface == "isl0"
     assert links[1].link_type == "isl"
-    assert links[2].link_type == "ground"
+    assert links[2].interface == ""
+    assert links[2].link_type is None
 
 
 def test_build_delay_queries():

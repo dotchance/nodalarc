@@ -10,25 +10,39 @@ Uses create_autospec for K8s client mocks to catch signature drift.
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock, create_autospec, patch
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, create_autospec, patch
 
 import kubernetes.client
 import nodalarc_operator.handlers as handlers_mod
 import nodalarc_operator.session_deployer as deployer_mod
 import pytest
+from nodalarc.catalog_upload import CatalogUploadSelection
+from nodalarc.runtime_config import RuntimeConfigProof
+from nodalarc_operator.runtime_session import OperatorSessionConfig
+
+_SESSION_YAML = (
+    Path(__file__).parents[2] / "catalog" / "nodalarc" / "sessions" / "earth-leo-simple.yaml"
+).read_text(encoding="utf-8")
+_INVALID_SESSION_YAML = _SESSION_YAML.replace(
+    "  name: earth-leo-simple\n",
+    "  name: earth-leo-simple\n  run_id: user-owned\n",
+    1,
+)
 
 
 @pytest.fixture(autouse=True)
-def _reset_operator_module_state():
+def _reset_operator_module_state(monkeypatch: pytest.MonkeyPatch):
     """Clear all cached state between tests."""
     deployer_mod._v1 = None
     deployer_mod._apps_v1 = None
     handlers_mod._custom_api = None
+    monkeypatch.setenv("NODALARC_RELEASE", "nodalarc-test")
+    monkeypatch.setenv("NODAL_BUILD", "test-build")
     yield
     deployer_mod._v1 = None
     deployer_mod._apps_v1 = None
     handlers_mod._custom_api = None
-    handlers_mod._compute_expected_node_ids_cached.cache_clear()
 
 
 class _ReconcilerHarness:
@@ -44,6 +58,30 @@ class _ReconcilerHarness:
 
     def expected_ids(self) -> frozenset[str]:
         return frozenset(f"p{i}" for i in range(self.expected_count))
+
+    def active_session(self, spec, _namespace, run_id) -> OperatorSessionConfig:
+        digest = "sha256:" + "a" * 64
+        selection = CatalogUploadSelection(
+            upload_id="operator-test-upload",
+            closure_digest=digest,
+            file_count=0,
+        )
+        return OperatorSessionConfig(
+            resolution=MagicMock(),
+            proof=RuntimeConfigProof(
+                source_origin="test.operator_handlers",
+                run_id=run_id,
+                upload_id=selection.upload_id,
+                document_digest=digest,
+                closure_digest=digest,
+                resolved_semantic_digest=digest,
+                file_count=selection.file_count,
+                total_bytes=1,
+                resolved_node_count=self.expected_count,
+            ),
+            root_yaml=spec["sessionYaml"],
+            catalog_upload=selection,
+        )
 
     def _p(self, name, target, **kwargs):
         p = patch(target, **kwargs)
@@ -64,6 +102,11 @@ class _ReconcilerHarness:
             return_value=self.expected_count,
         )
         self._p(
+            "resolve_active",
+            "nodalarc_operator.handlers._resolve_active_session",
+            side_effect=self.active_session,
+        )
+        self._p(
             "check_ready",
             "nodalarc_operator.handlers.check_pods_ready",
             return_value=(self.expected_count, self.expected_count),
@@ -79,8 +122,18 @@ class _ReconcilerHarness:
             return_value=(True, self.expected_count, None),
         )
         self._p(
+            "platform_ready",
+            "nodalarc_operator.handlers.check_platform_runtime_ready",
+            return_value=(True, "runtime verified"),
+        )
+        self._p(
             "manifest_current",
             "nodalarc_operator.handlers._wiring_manifest_matches_spec",
+            return_value=True,
+        )
+        self._p(
+            "runtime_config_current",
+            "nodalarc_operator.handlers._runtime_session_config_matches",
             return_value=True,
         )
         self._p(
@@ -158,7 +211,16 @@ class _ReconcilerHarness:
 
 
 def _run(coro):
-    asyncio.run(coro)
+    async def _without_thread_scheduling():
+        loop = asyncio.get_running_loop()
+
+        async def _immediate(_executor, function, *args):
+            return function(*args)
+
+        with patch.object(loop, "run_in_executor", new=_immediate):
+            return await coro
+
+    asyncio.run(_without_thread_scheduling())
 
 
 def _last_status(h):
@@ -170,13 +232,49 @@ def _last_status(h):
 
 
 async def _reconcile(h, phase="Ready", **extra_status):
-    spec = {"sessionYaml": "session:\n  name: test\n"}
+    spec = {"sessionYaml": _SESSION_YAML}
     meta = {"name": "current-session", "uid": "test-uid", "generation": 1}
     status = {"phase": phase, "podCount": h.expected_count, **extra_status}
-    await handlers_mod._reconcile_session(spec, "current-session", "nodalarc", meta, status)
+    run_id = handlers_mod._runtime_identity(spec, meta)[1]
+    active_session = h.active_session(spec, "nodalarc", run_id)
+    await handlers_mod._reconcile_session(
+        spec,
+        "current-session",
+        "nodalarc",
+        meta,
+        status,
+        active_session,
+    )
 
 
 class TestReconcileStateMachine:
+    def test_reconcile_resolves_once_and_reuses_the_verified_session(self):
+        spec = {
+            "sessionYaml": _SESSION_YAML,
+            "catalogUpload": {
+                "upload_id": "operator-test-upload",
+                "closure_digest": "sha256:" + "a" * 64,
+                "file_count": 0,
+            },
+        }
+        meta = {"name": "current-session", "uid": "test-uid", "generation": 1}
+
+        with _ReconcilerHarness(expected_count=7) as h:
+            _run(
+                handlers_mod._reconcile_session(
+                    spec,
+                    "current-session",
+                    "nodalarc",
+                    meta,
+                    {"phase": "Wiring", "podCount": 7},
+                )
+            )
+
+            h.mock("resolve_active").assert_called_once()
+            active_session = h.mock("platform_hash").call_args.kwargs["active_session"]
+            assert h.mock("expected_count").call_args.kwargs["active_session"] is active_session
+            assert h.mock("platform_ready").call_args.args[2] is active_session.proof
+
     def test_pending_stale_pods_triggers_cleanup(self):
         with _ReconcilerHarness(expected_count=7) as h:
             h.mock("stale_pods").return_value = 3
@@ -244,6 +342,19 @@ class TestReconcileStateMachine:
             assert status["observedGeneration"] == 1
             assert status["runtimeHash"] == h.mock("restart").call_args.args[1]
 
+    def test_stale_runtime_mount_is_refreshed_without_rewiring(self):
+        with _ReconcilerHarness(expected_count=7) as h:
+            h.mock("runtime_config_current").return_value = False
+            _run(_reconcile(h, phase="Ready"))
+
+            h.mock("ensure_cm").assert_called_once()
+            h.mock("write_wiring").assert_not_called()
+            h.mock("write_ips").assert_not_called()
+            h.mock("restart").assert_called_once()
+            status = _last_status(h)
+            assert status["phase"] == "Wiring"
+            assert "Runtime configuration refreshed" in status["message"]
+
     def test_wiring_complete_sets_ready(self):
         with _ReconcilerHarness(expected_count=7) as h:
             _run(_reconcile(h, phase="Wiring"))
@@ -251,8 +362,26 @@ class TestReconcileStateMachine:
             assert status["phase"] == "Ready"
             assert status["platformHash"] == "abc123"
             assert status["runtimeHash"]
-            assert status["sessionName"] == "test"
+            assert status["sessionName"] == "earth-leo-simple"
             assert status["sessionRunId"].startswith("run-")
+            assert status["documentDigest"].startswith("sha256:")
+            assert status["closureDigest"].startswith("sha256:")
+            assert status["resolvedSemanticDigest"].startswith("sha256:")
+            assert status["runtimeRelease"] == "nodalarc-test"
+            assert status["runtimeBuild"] == "test-build"
+            assert "catalogUploadId" not in status
+            assert "catalogManifestUid" not in status
+
+    def test_ready_waits_for_platform_runtime_proof(self):
+        with _ReconcilerHarness(expected_count=7) as h:
+            h.mock("platform_ready").return_value = (
+                False,
+                "Waiting for OME proof-gated readiness (0/1)",
+            )
+            _run(_reconcile(h, phase="Wiring"))
+            status = _last_status(h)
+            assert status["phase"] == "Wiring"
+            assert status["message"] == "Waiting for OME proof-gated readiness (0/1)"
 
     def test_invalid_config_sets_error(self):
         with _ReconcilerHarness(expected_count=7) as h:
@@ -262,47 +391,38 @@ class TestReconcileStateMachine:
             assert status["phase"] == "Error"
             assert "Bad constellation" in status["message"]
 
-    def test_platform_hash_bootstrap_does_not_claim_observed_generation(self):
+    def test_update_defers_all_status_to_the_single_reconciliation(self):
         with _ReconcilerHarness(expected_count=7) as h:
             with patch(
                 "nodalarc_operator.handlers._reconcile_session", new_callable=AsyncMock
             ) as mock_reconcile:
                 _run(
                     handlers_mod.on_update(
-                        {"sessionYaml": "session:\n  name: test\n"},
+                        {"sessionYaml": _SESSION_YAML},
                         "current-session",
                         "nodalarc",
                         {"name": "current-session", "uid": "test-uid", "generation": 2},
                         {"phase": "Ready"},
                     )
                 )
-            status = _last_status(h)
-            assert status["platformHash"] == "abc123"
-            assert "sessionName" not in status
-            assert "sessionRunId" not in status
-            assert "observedGeneration" not in status
+            h.mock_custom.patch_namespaced_custom_object_status.assert_not_called()
             mock_reconcile.assert_awaited_once()
 
-    def test_platform_hash_change_defers_restart_until_manifest_publication(self):
+    def test_platform_hash_change_is_resolved_inside_reconciliation(self):
         with _ReconcilerHarness(expected_count=7) as h:
             with patch(
                 "nodalarc_operator.handlers._reconcile_session", new_callable=AsyncMock
             ) as mock_reconcile:
                 _run(
                     handlers_mod.on_update(
-                        {"sessionYaml": "session:\n  name: test\n"},
+                        {"sessionYaml": _SESSION_YAML},
                         "current-session",
                         "nodalarc",
                         {"name": "current-session", "uid": "test-uid", "generation": 2},
                         {"phase": "Ready", "platformHash": "old"},
                     )
                 )
-            status = _last_status(h)
-            assert status["phase"] == "Creating"
-            assert status["message"] == "Session config changed — reconciling session resources"
-            assert "platformHash" not in status
-            assert "sessionName" not in status
-            assert "sessionRunId" not in status
+            h.mock_custom.patch_namespaced_custom_object_status.assert_not_called()
             h.mock("restart").assert_not_called()
             mock_reconcile.assert_awaited_once()
 
@@ -310,7 +430,7 @@ class TestReconcileStateMachine:
         with _ReconcilerHarness(expected_count=7) as h:
             _run(
                 handlers_mod.on_update(
-                    {"sessionYaml": "session:\n  name: test\n  run_id: user-owned\n"},
+                    {"sessionYaml": _INVALID_SESSION_YAML},
                     "current-session",
                     "nodalarc",
                     {"name": "current-session", "uid": "test-uid", "generation": 2},
@@ -319,7 +439,8 @@ class TestReconcileStateMachine:
             )
             status = _last_status(h)
             assert status["phase"] == "Error"
-            assert "session.run_id is operator-managed" in status["message"]
+            assert "session.run_id" in status["message"]
+            assert "Extra inputs are not permitted" in status["message"]
 
     def test_on_delete_passes_runtime_identity_from_status(self):
         with _ReconcilerHarness(expected_count=7):
@@ -331,7 +452,7 @@ class TestReconcileStateMachine:
                     handlers_mod.on_delete(
                         "current-session",
                         "nodalarc",
-                        spec={"sessionYaml": "session:\n  name: test\n"},
+                        spec={"sessionYaml": _SESSION_YAML},
                         meta={"name": "current-session", "uid": "test-uid", "generation": 2},
                         status={"sessionRunId": "run-status-0001"},
                     )
@@ -347,7 +468,7 @@ class TestReconcileStateMachine:
             ) as mock_reconcile:
                 _run(
                     handlers_mod.on_update(
-                        {"sessionYaml": "session:\n  name: test\n"},
+                        {"sessionYaml": _SESSION_YAML},
                         "current-session",
                         "nodalarc",
                         {"name": "current-session", "uid": "test-uid", "generation": 2},
@@ -363,16 +484,14 @@ class TestReconcileStateMachine:
             ) as mock_reconcile:
                 _run(
                     handlers_mod.on_update(
-                        {"sessionYaml": "session:\n  name: test\n"},
+                        {"sessionYaml": _SESSION_YAML},
                         "current-session",
                         "nodalarc",
                         {"name": "current-session", "uid": "test-uid", "generation": 2},
                         {"phase": "Error", "observedGeneration": 1, "platformHash": "old"},
                     )
                 )
-            status = _last_status(h)
-            assert status["phase"] == "Creating"
-            assert status["message"] == "Session config changed — reconciling session resources"
+            h.mock_custom.patch_namespaced_custom_object_status.assert_not_called()
             mock_reconcile.assert_awaited_once()
 
     def test_idempotent_on_ready_zero_writes(self):
@@ -462,7 +581,7 @@ class TestReconcileStateMachine:
         ):
             _run(
                 handlers_mod.wiring_check(
-                    {"sessionYaml": "session:\n  name: test\n"},
+                    {"sessionYaml": _SESSION_YAML},
                     "current-session",
                     "nodalarc",
                     {"name": "current-session", "uid": "test-uid", "generation": 1},
@@ -483,7 +602,7 @@ class TestReconcileStateMachine:
 
     def test_ready_timer_repairs_missing_runtime_identity_status(self):
         with _ReconcilerHarness(expected_count=7) as h:
-            spec = {"sessionYaml": "session:\n  name: test\n"}
+            spec = {"sessionYaml": _SESSION_YAML}
             meta = {"name": "current-session", "uid": "test-uid", "generation": 1}
             _run(
                 handlers_mod.wiring_check(
@@ -496,22 +615,15 @@ class TestReconcileStateMachine:
             )
             status = _last_status(h)
             assert status["phase"] == "Ready"
-            assert status["sessionName"] == "test"
+            assert status["sessionName"] == "earth-leo-simple"
             assert status["sessionRunId"].startswith("run-")
             assert status["platformHash"] == "abc123"
             assert status["runtimeHash"]
 
     def test_ready_timer_skips_when_runtime_identity_status_is_current(self):
-        spec = {"sessionYaml": "session:\n  name: test\n"}
+        spec = {"sessionYaml": _SESSION_YAML}
         meta = {"name": "current-session", "uid": "test-uid", "generation": 1}
         identity = handlers_mod._status_identity_fields(spec, meta)
-        runtime_hash = deployer_mod.compute_runtime_hash("abc123", identity["sessionRunId"])
-        status = {
-            "phase": "Ready",
-            "platformHash": "abc123",
-            "runtimeHash": runtime_hash,
-            **identity,
-        }
 
         with (
             _ReconcilerHarness(expected_count=7) as h,
@@ -519,6 +631,28 @@ class TestReconcileStateMachine:
                 "nodalarc_operator.handlers._reconcile_session", new_callable=AsyncMock
             ) as mock_reconcile,
         ):
+            active_session = h.active_session(spec, "nodalarc", identity["sessionRunId"])
+            deployment_context = handlers_mod._runtime_deployment_context(
+                active_session,
+                meta,
+                identity["sessionRunId"],
+            )
+            runtime_hash = deployer_mod.compute_runtime_hash(
+                "abc123",
+                identity["sessionRunId"],
+                active_session.proof,
+                deployment_context,
+            )
+            status = {
+                "phase": "Ready",
+                "platformHash": "abc123",
+                "runtimeHash": runtime_hash,
+                **identity,
+                **handlers_mod._runtime_proof_status_fields(
+                    active_session,
+                    deployment_context,
+                ),
+            }
             _run(
                 handlers_mod.wiring_check(
                     spec,
@@ -530,3 +664,101 @@ class TestReconcileStateMachine:
             )
             mock_reconcile.assert_not_awaited()
             h.mock_custom.patch_namespaced_custom_object_status.assert_not_called()
+
+    def test_ready_timer_reconciles_when_current_platform_proof_disappears(self):
+        spec = {"sessionYaml": _SESSION_YAML}
+        meta = {"name": "current-session", "uid": "test-uid", "generation": 1}
+        identity = handlers_mod._status_identity_fields(spec, meta)
+
+        with (
+            _ReconcilerHarness(expected_count=7) as h,
+            patch(
+                "nodalarc_operator.handlers._reconcile_session", new_callable=AsyncMock
+            ) as mock_reconcile,
+        ):
+            h.mock("platform_ready").return_value = (False, "stale pod proof")
+            active_session = h.active_session(spec, "nodalarc", identity["sessionRunId"])
+            deployment_context = handlers_mod._runtime_deployment_context(
+                active_session,
+                meta,
+                identity["sessionRunId"],
+            )
+            runtime_hash = deployer_mod.compute_runtime_hash(
+                "abc123",
+                identity["sessionRunId"],
+                active_session.proof,
+                deployment_context,
+            )
+            status = {
+                "phase": "Ready",
+                "platformHash": "abc123",
+                "runtimeHash": runtime_hash,
+                **identity,
+                **handlers_mod._runtime_proof_status_fields(
+                    active_session,
+                    deployment_context,
+                ),
+            }
+
+            _run(
+                handlers_mod.wiring_check(
+                    spec,
+                    "current-session",
+                    "nodalarc",
+                    meta,
+                    status,
+                )
+            )
+
+            mock_reconcile.assert_awaited_once()
+
+    @pytest.mark.parametrize(
+        "field",
+        ("documentDigest", "runtimeRelease", "runtimeBuild"),
+    )
+    def test_ready_timer_reconciles_when_runtime_proof_status_is_stale(self, field: str):
+        spec = {"sessionYaml": _SESSION_YAML}
+        meta = {"name": "current-session", "uid": "test-uid", "generation": 1}
+        identity = handlers_mod._status_identity_fields(spec, meta)
+
+        with (
+            _ReconcilerHarness(expected_count=7) as h,
+            patch(
+                "nodalarc_operator.handlers._reconcile_session", new_callable=AsyncMock
+            ) as mock_reconcile,
+        ):
+            active_session = h.active_session(spec, "nodalarc", identity["sessionRunId"])
+            deployment_context = handlers_mod._runtime_deployment_context(
+                active_session,
+                meta,
+                identity["sessionRunId"],
+            )
+            runtime_hash = deployer_mod.compute_runtime_hash(
+                "abc123",
+                identity["sessionRunId"],
+                active_session.proof,
+                deployment_context,
+            )
+            status = {
+                "phase": "Ready",
+                "platformHash": "abc123",
+                "runtimeHash": runtime_hash,
+                **identity,
+                **handlers_mod._runtime_proof_status_fields(
+                    active_session,
+                    deployment_context,
+                ),
+            }
+            status[field] = "stale"
+
+            _run(
+                handlers_mod.wiring_check(
+                    spec,
+                    "current-session",
+                    "nodalarc",
+                    meta,
+                    status,
+                )
+            )
+
+            mock_reconcile.assert_awaited_once()

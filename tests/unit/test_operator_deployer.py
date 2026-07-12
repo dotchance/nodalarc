@@ -1,8 +1,7 @@
 """Unit tests for nodalarc_operator/session_deployer.py.
 
-Tests pure-logic functions and K8s-mocked deploy pipeline. All test inputs
-are inline - no dependency on production config files except one regression
-test per class that explicitly references earth-leo-simple.yaml.
+Tests pure-logic functions and the K8s-mocked deploy pipeline with canonical
+ref-composed sessions and explicit catalog roots.
 
 Uses create_autospec for K8s client mocks to catch signature drift.
 """
@@ -11,6 +10,7 @@ from __future__ import annotations
 
 import base64
 import gzip
+import hashlib
 import json
 import math
 from datetime import UTC, datetime
@@ -21,23 +21,26 @@ import kopf
 import kubernetes.client
 import pytest
 import yaml
-from nodalarc.models.session import (
-    AllOnOnePlacementConfig,
-    PlacementConfig,
-    PlaneGroupPerNodePlacementConfig,
-    PlanePerNodePlacementConfig,
+from nodalarc.catalog_upload import CatalogUploadSelection
+from nodalarc.configuration_yaml import load_configuration_yaml
+from nodalarc.models.resolved_session import SourceContext
+from nodalarc.platform_config import _deterministic_node, compute_pod_placement
+from nodalarc.resolve_session import resolve_session_with_assets
+from nodalarc.runtime_config import (
+    RuntimeConfigProof,
+    RuntimeDeploymentContext,
 )
+from nodalarc.semantic_projection import resolved_session_semantic_digest
 from nodalarc.substrate.manifest_contract import REQUIRED_WIRING_PHASES, WiringManifest
 from nodalarc.substrate.wiring_status import failed_status, ready_status, status_configmap_data
+from nodalarc_operator.runtime_session import OperatorSessionConfig
 from nodalarc_operator.session_deployer import (
     _create_terminal_ssh_keys,
-    _deterministic_node,
     _required_substrate_pairs,
     check_wiring_complete,
     compute_expected_placement_node_count,
     compute_expected_pod_count,
     compute_platform_hash,
-    compute_pod_placement,
     compute_runtime_hash,
     discover_available_nodes,
     ensure_session_configmaps,
@@ -46,9 +49,8 @@ from nodalarc_operator.session_deployer import (
     teardown_session,
     write_wiring_manifest,
 )
-from pydantic import TypeAdapter, ValidationError
 
-from tests.conftest import build_segment_session_dict
+from tests.catalog_session_fixtures import build_catalog_session_fixture
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 
@@ -63,9 +65,47 @@ def _reset_operator_module_state():
     """Clear all cached state between tests."""
     import nodalarc_operator.session_deployer as sd
 
+    def _explicit_test_resolution(spec, active_session, *, namespace, origin, run_id=None):
+        if active_session is not None:
+            return active_session
+        root_yaml = spec.get("sessionYaml")
+        if not isinstance(root_yaml, str) or not root_yaml:
+            raise ValueError("spec.sessionYaml is missing")
+        resolution = resolve_session_with_assets(
+            load_configuration_yaml(root_yaml),
+            catalog_roots=spec.get("_test_catalog_roots"),
+            source_context=SourceContext(origin=origin, run_id=run_id),
+        )
+        digest = "sha256:" + hashlib.sha256(root_yaml.encode()).hexdigest()
+        selection = CatalogUploadSelection(
+            upload_id="operator-test-upload",
+            closure_digest=digest,
+            file_count=0,
+        )
+        return OperatorSessionConfig(
+            resolution=resolution,
+            proof=RuntimeConfigProof(
+                source_origin=origin,
+                run_id=run_id,
+                upload_id=selection.upload_id,
+                document_digest=digest,
+                closure_digest=digest,
+                resolved_semantic_digest=resolved_session_semantic_digest(resolution.resolved),
+                file_count=selection.file_count,
+                total_bytes=len(root_yaml.encode()),
+                resolved_node_count=len(resolution.resolved.nodes),
+            ),
+            root_yaml=root_yaml,
+            catalog_upload=selection,
+        )
+
     sd._v1 = None
     sd._apps_v1 = None
-    yield
+    with patch(
+        "nodalarc_operator.session_deployer._operator_session_config",
+        side_effect=_explicit_test_resolution,
+    ):
+        yield
     sd._v1 = None
     sd._apps_v1 = None
 
@@ -83,19 +123,44 @@ def _make_node_vars(planes=4, sats_per_plane=3, gs_count=2):
     return nv
 
 
+def _test_deployment_context(
+    spec: dict,
+    run_id: str = "run-test-0001",
+    owner_uid: str = "test-uid",
+) -> RuntimeDeploymentContext:
+    root_yaml = spec["sessionYaml"]
+    digest = "sha256:" + hashlib.sha256(root_yaml.encode()).hexdigest()
+    resolution = resolve_session_with_assets(
+        load_configuration_yaml(root_yaml),
+        catalog_roots=spec.get("_test_catalog_roots"),
+        source_context=SourceContext(origin="test.deployment-context", run_id=run_id),
+    )
+    return RuntimeDeploymentContext(
+        cr_uid=owner_uid,
+        cr_generation=1,
+        session_run_id=run_id,
+        upload_id="operator-test-upload",
+        document_digest=digest,
+        closure_digest=digest,
+        resolved_semantic_digest=resolved_session_semantic_digest(resolution.resolved),
+        release="nodalarc-test",
+        build="test-build",
+    )
+
+
 def _make_session_yaml(
-    constellation_path="configs/constellations/demo-36.yaml",
-    gs_path="configs/ground-stations/sets/demo.yaml",
+    constellation_ref="nodalarc:constellations/earth/leo/earth-leo-ring-36.yaml",
+    site_set_ref="nodalarc:site-sets/earth/leo/earth-leo-polar-gateway-sites.yaml",
     protocol="ospf",
     strategy="flat",
     step_seconds=1,
     placement_policy=None,
 ):
     """Build a segment-session YAML string with configurable fields."""
-    d = build_segment_session_dict(
+    d = build_catalog_session_fixture(
         name="test-session",
-        constellation=constellation_path,
-        ground_stations=gs_path,
+        constellation={"planes": {"count": 1, "sats_per_plane": 2}},
+        ground_stations={"stations": ["a"]},
         protocol=protocol,
         extensions=[],
         routing={"area_assignment": {"strategy": strategy}},
@@ -103,7 +168,9 @@ def _make_session_yaml(
     )
     if placement_policy:
         d["placement"] = {"policy": placement_policy}
-    return yaml.dump(d, default_flow_style=False)
+    d["segments"][0]["source"] = constellation_ref
+    d["segments"][1]["placement"]["from_site_set"] = site_set_ref
+    return yaml.safe_dump(dict(d), sort_keys=False)
 
 
 def _make_wiring_manifest(node_ids=("sat-P00S00", "sat-P00S01")):
@@ -166,20 +233,20 @@ class TestPodPlacement:
 
     def test_all_on_one_single_node(self):
         nv = _make_node_vars(planes=2, sats_per_plane=3, gs_count=2)
-        placement = AllOnOnePlacementConfig(policy="allOnOne")
+        placement = {"policy": "allOnOne"}
         result = compute_pod_placement(placement, nv, ["node01"])
         assert all(v == "node01" for v in result.values())
         assert len(result) == len(nv)
 
     def test_all_on_one_ignores_extra_nodes(self):
         nv = _make_node_vars(planes=2, sats_per_plane=3, gs_count=2)
-        placement = AllOnOnePlacementConfig(policy="allOnOne")
+        placement = {"policy": "allOnOne"}
         result = compute_pod_placement(placement, nv, ["node01", "node02", "node03", "node04"])
         assert all(v == "node01" for v in result.values())
 
     def test_plane_per_node_same_plane_same_node(self):
         nv = _make_node_vars(planes=4, sats_per_plane=3, gs_count=0)
-        placement = PlanePerNodePlacementConfig(policy="planePerNode")
+        placement = {"policy": "planePerNode"}
         nodes = ["node01", "node02", "node03", "node04"]
         result = compute_pod_placement(placement, nv, nodes)
         plane0_nodes = {result[nid] for nid, v in nv.items() if v["plane"] == 0}
@@ -190,7 +257,7 @@ class TestPodPlacement:
 
     def test_plane_per_node_wraps_modulo(self):
         nv = _make_node_vars(planes=6, sats_per_plane=2, gs_count=0)
-        placement = PlanePerNodePlacementConfig(policy="planePerNode")
+        placement = {"policy": "planePerNode"}
         nodes = ["node01", "node02", "node03", "node04"]
         result = compute_pod_placement(placement, nv, nodes)
         plane0_node = result["sat-P00S00"]
@@ -199,7 +266,7 @@ class TestPodPlacement:
 
     def test_plane_per_node_gs_uses_hrw(self):
         nv = _make_node_vars(planes=2, sats_per_plane=2, gs_count=7)
-        placement = PlanePerNodePlacementConfig(policy="planePerNode")
+        placement = {"policy": "planePerNode"}
         nodes = ["node01", "node02", "node03", "node04"]
         result = compute_pod_placement(placement, nv, nodes)
         gs_nodes = {result[nid] for nid in nv if nid.startswith("gs-")}
@@ -207,7 +274,7 @@ class TestPodPlacement:
 
     def test_plane_group_per_node_groups(self):
         nv = _make_node_vars(planes=4, sats_per_plane=2, gs_count=0)
-        placement = PlaneGroupPerNodePlacementConfig(policy="planeGroupPerNode", planes_per_group=2)
+        placement = {"policy": "planeGroupPerNode", "planes_per_group": 2}
         nodes = ["node01", "node02", "node03", "node04"]
         result = compute_pod_placement(placement, nv, nodes)
         assert result["sat-P00S00"] == result["sat-P01S00"]
@@ -215,18 +282,26 @@ class TestPodPlacement:
         assert result["sat-P00S00"] != result["sat-P02S00"]
 
     def test_plane_group_per_node_requires_explicit_group_size(self):
-        with pytest.raises(ValidationError, match="planes_per_group"):
-            TypeAdapter(PlacementConfig).validate_python({"policy": "planeGroupPerNode"})
+        with pytest.raises(ValueError, match="planes_per_group"):
+            compute_pod_placement(
+                {"policy": "planeGroupPerNode"},
+                _make_node_vars(planes=1, sats_per_plane=1, gs_count=0),
+                ["node01"],
+            )
 
     def test_no_nodes_raises(self):
         nv = _make_node_vars(planes=1, sats_per_plane=1, gs_count=0)
-        placement = AllOnOnePlacementConfig(policy="allOnOne")
+        placement = {"policy": "allOnOne"}
         with pytest.raises(ValueError, match="No available"):
             compute_pod_placement(placement, nv, [])
 
     def test_unknown_policy_rejected_at_parse_boundary(self):
-        with pytest.raises(ValidationError):
-            TypeAdapter(PlacementConfig).validate_python({"policy": "bogus"})
+        with pytest.raises(ValueError, match="Unknown placement policy"):
+            compute_pod_placement(
+                {"policy": "bogus"},
+                _make_node_vars(planes=1, sats_per_plane=1, gs_count=0),
+                ["node01"],
+            )
 
     def test_tainted_node_excluded(self):
         """discover_available_nodes filters out tainted nodes."""
@@ -405,12 +480,14 @@ class TestPlatformHash:
     def test_different_constellation_different_hash(self):
         spec1 = {
             "sessionYaml": _make_session_yaml(
-                constellation_path="configs/constellations/demo-36.yaml"
+                constellation_ref="nodalarc:constellations/earth/leo/earth-leo-ring-36.yaml"
             )
         }
         spec2 = {
             "sessionYaml": _make_session_yaml(
-                constellation_path="configs/constellations/starlink-176.yaml"
+                constellation_ref=(
+                    "nodalarc:constellations/earth/leo/earth-leo-walker-delta-176.yaml"
+                )
             )
         }
         assert compute_platform_hash(spec1) != compute_platform_hash(spec2)
@@ -462,17 +539,39 @@ class TestPlatformHash:
         with pytest.raises(Exception, match="run_id"):
             compute_platform_hash({"sessionYaml": yaml.dump(with_run_id)})
 
-    def test_empty_session_yaml(self):
-        h1 = compute_platform_hash({"sessionYaml": ""})
-        h2 = compute_platform_hash({})
-        assert isinstance(h1, str) and len(h1) == 64
-        assert isinstance(h2, str) and len(h2) == 64
+    @pytest.mark.parametrize("spec", ({"sessionYaml": ""}, {}))
+    def test_empty_session_yaml_is_rejected(self, spec):
+        with pytest.raises(ValueError, match="sessionYaml is required"):
+            compute_platform_hash(spec)
 
     def test_runtime_hash_includes_run_id(self):
         platform_hash = "a" * 64
         assert compute_runtime_hash(platform_hash, "run-a") != compute_runtime_hash(
             platform_hash, "run-b"
         )
+
+    def test_runtime_hash_includes_deployment_release_and_build(self):
+        platform_hash = "a" * 64
+        digest = "sha256:" + "1" * 64
+        first = RuntimeDeploymentContext(
+            cr_uid="cr-test",
+            cr_generation=1,
+            session_run_id="run-a",
+            upload_id="operator-test-upload",
+            document_digest=digest,
+            closure_digest=digest,
+            resolved_semantic_digest=digest,
+            release="nodalarc-test",
+            build="build-a",
+        )
+        second = RuntimeDeploymentContext.model_validate(
+            {**first.model_dump(mode="json"), "build": "build-b"},
+            strict=True,
+        )
+
+        assert compute_runtime_hash(
+            platform_hash, "run-a", deployment_context=first
+        ) != compute_runtime_hash(platform_hash, "run-a", deployment_context=second)
 
 
 class TestRuntimeIdentityCleanup:
@@ -522,30 +621,30 @@ class TestExpectedPodCount:
     def test_inline_config_count(self):
         spec = {
             "sessionYaml": _make_session_yaml(
-                constellation_path="configs/constellations/demo-36.yaml",
-                gs_path="configs/ground-stations/sets/demo.yaml",
+                constellation_ref=("nodalarc:constellations/earth/leo/earth-leo-ring-36.yaml"),
+                site_set_ref=("nodalarc:site-sets/earth/leo/earth-leo-polar-gateway-sites.yaml"),
             )
         }
         count = compute_expected_pod_count(spec)
         assert count > 0
 
-    def test_demo_36_regression(self):
+    def test_ref_composed_36_satellite_session_regression(self):
         spec = {
             "sessionYaml": _make_session_yaml(
-                constellation_path="configs/constellations/demo-36.yaml",
-                gs_path="configs/ground-stations/sets/demo.yaml",
+                constellation_ref=("nodalarc:constellations/earth/leo/earth-leo-ring-36.yaml"),
+                site_set_ref=("nodalarc:site-sets/earth/leo/earth-leo-polar-gateway-sites.yaml"),
             )
         }
-        assert compute_expected_pod_count(spec) == 43
+        assert compute_expected_pod_count(spec) == 45
 
     def test_missing_session_yaml_raises(self):
         with pytest.raises(ValueError, match="sessionYaml"):
             compute_expected_pod_count({})
 
-    def test_bad_constellation_path_raises(self):
+    def test_dangling_constellation_ref_raises(self):
         spec = {
             "sessionYaml": _make_session_yaml(
-                constellation_path="nodalarc:constellations/no-such-file.yaml"
+                constellation_ref="nodalarc:constellations/no-such-file.yaml"
             )
         }
         with pytest.raises(Exception):
@@ -596,100 +695,39 @@ class TestExpectedPlacementNodeCount:
 
 
 # ---------------------------------------------------------------------------
-# Inline config fixtures (fully self-contained, no external files)
+# Ref-composed catalog fixture
 # ---------------------------------------------------------------------------
 
-# Constellation with inline default_terminals - no satellite_type file reference.
-_INLINE_CONSTELLATION = {
-    "mode": "parametric",
-    "name": "test-4sat",
-    "default_terminals": {
-        "isl": [
-            {
-                "type": "optical",
-                "count": 4,
-                "max_range_km": 5000,
-                "bandwidth_mbps": 100,
-                "max_tracking_rate_deg_s": 3.0,
-                "field_of_regard_deg": 140,
-            }
-        ],
-        "ground": [
-            {
-                "type": "rf",
-                "count": 1,
-                "bandwidth_mbps": 1000,
-                "max_range_km": 2000,
-                "field_of_regard_deg": 120,
-                "max_tracking_rate_deg_s": 1.5,
-                "boresight": {
-                    "target_body": "earth",
-                    "mode": "nadir",
-                },
-            }
-        ],
-    },
-    "orbit": {
-        "altitude_km": 550,
-        "inclination_deg": 53,
-        "pattern": "walker-delta",
-    },
-    "planes": {
-        "count": 2,
-        "raan_spacing_deg": 180,
-        "sats_per_plane": 2,
-        "phase_offset_deg": 90,
-    },
-}
 
-# Ground stations with inline station definitions.
-_INLINE_GROUND_STATIONS = {
-    "default_terminals": [
-        {
-            "type": "rf",
-            "count": 1,
-            "bandwidth_mbps": 1000,
-            "tracking_capacity": 1,
-            "max_range_km": 2000,
-            "field_of_regard_deg": 120,
-            "max_tracking_rate_deg_s": 1.5,
-            "boresight": {
-                "mode": "local_vertical",
-            },
-        }
-    ],
-    "stations": [
-        {"name": "alpha", "lat_deg": 34.0, "lon_deg": -118.0, "alt_m": 20},
-        {"name": "beta", "lat_deg": 50.0, "lon_deg": 8.0, "alt_m": 100},
-    ],
-}
-
-
-def _make_inline_spec(
+def _make_catalog_spec(
     tmp_path,
     protocol="ospf",
     constellation=None,
     ground_stations=None,
     extensions=None,
 ):
-    """Build a fully self-contained CRD spec using tempfiles.
+    """Build a root session plus its real temporary catalog roots."""
+    const = constellation or {"planes": {"count": 2, "sats_per_plane": 2}}
+    gs = ground_stations or {
+        "stations": [
+            {"name": "alpha", "lat_deg": 34.0, "lon_deg": -118.0, "alt_m": 20},
+            {"name": "beta", "lat_deg": 50.0, "lon_deg": 8.0, "alt_m": 100},
+        ]
+    }
 
-    Writes constellation and ground station YAML to tmp_path so
-    load_constellation/load_ground_stations can resolve them.
-    Returns a spec dict with sessionYaml.
-    """
-    const = constellation or _INLINE_CONSTELLATION
-    gs = ground_stations or _INLINE_GROUND_STATIONS
-
-    session = build_segment_session_dict(
+    session = build_catalog_session_fixture(
         name="test-session",
         constellation=const,
         ground_stations=gs,
         protocol=protocol,
         extensions=extensions or [],
         time={"step_seconds": 1},
+        base_path=tmp_path,
     )
-    return {"sessionYaml": yaml.dump(session, default_flow_style=False)}
+    return {
+        "sessionYaml": yaml.safe_dump(dict(session), sort_keys=False),
+        "_test_catalog_roots": session.roots,
+    }
 
 
 def _extract_manifest(mock_v1):
@@ -765,7 +803,7 @@ class TestWiringManifest:
 
     def _build_and_extract(self, tmp_path, spec=None, **kwargs):
         if spec is None:
-            spec = _make_inline_spec(tmp_path, **kwargs)
+            spec = _make_catalog_spec(tmp_path, **kwargs)
         mock_v1 = create_autospec(kubernetes.client.CoreV1Api, instance=True)
         # wiring-status delete returns 404 (normal for fresh deploy)
         mock_v1.delete_namespaced_config_map.side_effect = kubernetes.client.rest.ApiException(
@@ -853,14 +891,14 @@ class TestWiringManifest:
         assert all(node["mpls_enable"] is False for node in manifest["nodes"].values())
 
     def test_manifest_enables_mpls_only_for_mpls_stack(self, tmp_path):
-        spec = _make_inline_spec(tmp_path, protocol="isis", extensions=["te", "mpls"])
+        spec = _make_catalog_spec(tmp_path, protocol="isis", extensions=["te", "mpls"])
         manifest = self._build_and_extract(tmp_path, spec=spec)
 
         assert manifest["nodes"]
         assert all(node["mpls_enable"] is True for node in manifest["nodes"].values())
 
     def test_manifest_requires_runtime_session_id(self, tmp_path):
-        spec = _make_inline_spec(tmp_path)
+        spec = _make_catalog_spec(tmp_path)
 
         with pytest.raises(ValueError, match="session_run_id is required"):
             write_wiring_manifest(spec, "nodalarc", None)
@@ -921,7 +959,7 @@ class TestWiringManifest:
         assert gs_ids == bridge_ids, f"GS nodes {gs_ids} != bridges {bridge_ids}"
 
     def test_manifest_compressed_roundtrip(self, tmp_path):
-        spec = _make_inline_spec(tmp_path)
+        spec = _make_catalog_spec(tmp_path)
         mock_v1 = create_autospec(kubernetes.client.CoreV1Api, instance=True)
         mock_v1.delete_namespaced_config_map.side_effect = kubernetes.client.rest.ApiException(
             status=404
@@ -949,14 +987,8 @@ class TestWiringManifest:
         assert len(manifest["nodes"]) > 0
 
     def test_manifest_size_at_scale(self, tmp_path):
-        large_constellation = dict(_INLINE_CONSTELLATION)
-        large_constellation["planes"] = {
-            "count": 80,
-            "raan_spacing_deg": 4.5,
-            "sats_per_plane": 20,
-            "phase_offset_deg": 0.225,
-        }
-        spec = _make_inline_spec(tmp_path, constellation=large_constellation)
+        large_constellation = {"planes": {"count": 80, "sats_per_plane": 20}}
+        spec = _make_catalog_spec(tmp_path, constellation=large_constellation)
         mock_v1 = create_autospec(kubernetes.client.CoreV1Api, instance=True)
         mock_v1.delete_namespaced_config_map.side_effect = kubernetes.client.rest.ApiException(
             status=404
@@ -1108,7 +1140,7 @@ class TestPreDeployValidationGate:
     def test_zero_candidate_link_rule_blocks_deploy(self, tmp_path):
         # A 1-satellite constellation leaves the ISL rule with zero candidate
         # pairs: resolvable, but not deployable as declared.
-        spec = _make_inline_spec(
+        spec = _make_catalog_spec(
             tmp_path,
             constellation={"planes": {"count": 1, "sats_per_plane": 1}},
         )
@@ -1129,7 +1161,12 @@ class TestPreDeployValidationGate:
         ):
             with pytest.raises(kopf.PermanentError, match="Session validation failed"):
                 ensure_session_configmaps(
-                    spec, "current-session", "nodalarc", owner_ref, session_run_id="run-test-0001"
+                    spec,
+                    "current-session",
+                    "nodalarc",
+                    owner_ref,
+                    session_run_id="run-test-0001",
+                    deployment_context=_test_deployment_context(spec),
                 )
         # Nothing was written before the gate fired.
         mock_v1.create_namespaced_config_map.assert_not_called()
@@ -1140,7 +1177,7 @@ class TestConfigRendering:
 
     def _render_configs(self, tmp_path, protocol="ospf"):
         """Run the full config pipeline and capture rendered ConfigMaps."""
-        spec = _make_inline_spec(tmp_path, protocol=protocol)
+        spec = _make_catalog_spec(tmp_path, protocol=protocol)
         mock_v1 = create_autospec(kubernetes.client.CoreV1Api, instance=True)
         # SSH key creation - return existing secret (already exists path)
         mock_v1.read_namespaced_secret.return_value = _existing_terminal_secret()
@@ -1158,7 +1195,12 @@ class TestConfigRendering:
             ),
         ):
             context = ensure_session_configmaps(
-                spec, "current-session", "nodalarc", owner_ref, session_run_id="run-test-0001"
+                spec,
+                "current-session",
+                "nodalarc",
+                owner_ref,
+                session_run_id="run-test-0001",
+                deployment_context=_test_deployment_context(spec),
             )
 
         # Collect rendered configs from ConfigMap create/patch calls
@@ -1172,7 +1214,7 @@ class TestConfigRendering:
         return configs, context
 
     def test_runtime_session_configmap_records_run_id_without_mutating_yaml(self, tmp_path):
-        spec = _make_inline_spec(tmp_path)
+        spec = _make_catalog_spec(tmp_path)
         mock_v1 = create_autospec(kubernetes.client.CoreV1Api, instance=True)
         mock_v1.read_namespaced_secret.return_value = _existing_terminal_secret()
         owner_ref = {
@@ -1189,7 +1231,12 @@ class TestConfigRendering:
             ),
         ):
             context = ensure_session_configmaps(
-                spec, "current-session", "nodalarc", owner_ref, session_run_id="run-test-0001"
+                spec,
+                "current-session",
+                "nodalarc",
+                owner_ref,
+                session_run_id="run-test-0001",
+                deployment_context=_test_deployment_context(spec),
             )
 
         session_cms = [
@@ -1198,11 +1245,27 @@ class TestConfigRendering:
             if (call[1].get("body") or call[0][1]).metadata.name == "nodalarc-session"
         ]
         assert len(session_cms) == 1
+        assert set(session_cms[0]) == {
+            "session.yaml",
+            "session_run_id",
+            "catalog-upload-selection.json",
+            "deployment-context.json",
+        }
         runtime_yaml = yaml.safe_load(session_cms[0]["session.yaml"])
+        selection = CatalogUploadSelection.model_validate_json(
+            session_cms[0]["catalog-upload-selection.json"],
+            strict=True,
+        )
+        deployment_context = RuntimeDeploymentContext.model_validate_json(
+            session_cms[0]["deployment-context.json"],
+            strict=True,
+        )
         assert context["session_id"] == "run-test-0001"
         assert context["session_run_id"] == "run-test-0001"
         assert "run_id" not in runtime_yaml["session"]
         assert session_cms[0]["session_run_id"] == "run-test-0001"
+        assert selection.upload_id == "operator-test-upload"
+        assert deployment_context.upload_id == selection.upload_id
 
     def test_terminal_keys_are_not_rotated_when_secret_exists(self):
         mock_v1 = create_autospec(kubernetes.client.CoreV1Api, instance=True)
@@ -1344,7 +1407,7 @@ class TestPodSpec:
 
     def _create_pods(self, tmp_path):
         """Run the full pipeline and capture all created pods."""
-        spec = _make_inline_spec(tmp_path)
+        spec = _make_catalog_spec(tmp_path)
         mock_v1 = create_autospec(kubernetes.client.CoreV1Api, instance=True)
         mock_v1.read_namespaced_secret.return_value = _existing_terminal_secret("test-uid-456")
         owner_ref = {
@@ -1371,7 +1434,12 @@ class TestPodSpec:
             ),
         ):
             context = ensure_session_configmaps(
-                spec, "current-session", "nodalarc", owner_ref, session_run_id="run-test-0001"
+                spec,
+                "current-session",
+                "nodalarc",
+                owner_ref,
+                session_run_id="run-test-0001",
+                deployment_context=_test_deployment_context(spec, owner_uid="test-uid-456"),
             )
             ensure_session_pods(context, "nodalarc", owner_ref)
 
@@ -1437,7 +1505,7 @@ class TestPodSpec:
 
     def test_409_conflict_idempotent(self, tmp_path):
         """If create_namespaced_pod raises 409, ensure_session_pods continues."""
-        spec = _make_inline_spec(tmp_path)
+        spec = _make_catalog_spec(tmp_path)
         mock_v1 = create_autospec(kubernetes.client.CoreV1Api, instance=True)
         mock_v1.read_namespaced_secret.return_value = _existing_terminal_secret()
         mock_v1.create_namespaced_pod.side_effect = kubernetes.client.rest.ApiException(status=409)
@@ -1473,13 +1541,18 @@ class TestPodSpec:
             ),
         ):
             context = ensure_session_configmaps(
-                spec, "current-session", "nodalarc", owner_ref, session_run_id="run-test-0001"
+                spec,
+                "current-session",
+                "nodalarc",
+                owner_ref,
+                session_run_id="run-test-0001",
+                deployment_context=_test_deployment_context(spec),
             )
             total = ensure_session_pods(context, "nodalarc", owner_ref)
         assert total > 0
 
     def test_409_conflict_rejects_pod_owned_by_previous_cr(self, tmp_path):
-        spec = _make_inline_spec(tmp_path)
+        spec = _make_catalog_spec(tmp_path)
         mock_v1 = create_autospec(kubernetes.client.CoreV1Api, instance=True)
         mock_v1.read_namespaced_secret.return_value = _existing_terminal_secret()
         mock_v1.create_namespaced_pod.side_effect = kubernetes.client.rest.ApiException(status=409)
@@ -1515,7 +1588,12 @@ class TestPodSpec:
             ),
         ):
             context = ensure_session_configmaps(
-                spec, "current-session", "nodalarc", owner_ref, session_run_id="run-test-0001"
+                spec,
+                "current-session",
+                "nodalarc",
+                owner_ref,
+                session_run_id="run-test-0001",
+                deployment_context=_test_deployment_context(spec),
             )
             with pytest.raises(RuntimeError, match="not owned by the current ConstellationSpec"):
                 ensure_session_pods(context, "nodalarc", owner_ref)

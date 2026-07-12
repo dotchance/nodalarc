@@ -5,7 +5,7 @@ This guide is for infrastructure engineers who deploy and maintain NodalArc on K
 ## Contents
 
 1. [Getting Started](getting-started.md) - Prerequisites, installation, and first deployment
-2. [Configuration](configuration.md) - The catalog model, sessions, link rules, sites, nodes, and terminals
+2. [Configuration Guide](configuration.md) - The catalog model, sessions, link rules, sites, nodes, and terminals
 3. [Configuration Grammar](configuration-grammar.md) - Formal grammar for catalog primitives and sessions
 4. [Multi-Node Deployment](multi-node.md) - Registry setup, pod placement, VXLAN tunnels
 5. [Scaling](scaling.md) - Resource requirements, capacity planning, performance characteristics
@@ -27,7 +27,9 @@ per resolved satellite, relay, or ground node. The platform services are always
 running; session pods are created and destroyed as sessions are deployed or
 torn down.
 
-All inter-service communication uses NATS JetStream. There is no direct HTTP between backend services.
+Runtime facts and commands use NATS and JetStream. Kubernetes lifecycle,
+mounted configuration, and readiness proof use the Kubernetes API and health
+probes; they do not redefine the runtime messaging contracts.
 
 ## Quick Reference
 

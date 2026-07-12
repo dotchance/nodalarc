@@ -20,21 +20,34 @@ from pathlib import Path
 from typing import Any
 
 import kubernetes
-import yaml
 from jinja2 import Environment, FileSystemLoader
+from nodalarc.catalog_upload import (
+    CatalogUploadSelection,
+    canonical_json_bytes,
+)
 from nodalarc.models.resolved_session import (
     ResolvedNode,
     ResolvedRoutingDomain,
     ResolvedSession,
-    SourceContext,
 )
 from nodalarc.nats_channels import sanitize_session_id
-from nodalarc.platform_config import get_platform_config
-from nodalarc.resolve_session import SessionResolution, resolve_session_with_assets
+from nodalarc.platform_config import (
+    compute_pod_placement,
+    get_platform_config,
+)
+from nodalarc.resolve_session import SessionResolution
+from nodalarc.runtime_config import (
+    RUNTIME_DEPLOYMENT_CONTEXT_FILENAME,
+    RuntimeConfigProof,
+    RuntimeDeploymentContext,
+)
+from nodalarc.runtime_service_config import CATALOG_UPLOAD_SELECTION_FILENAME
 from nodalarc.session_identity import require_resolved_session_run_id
 from nodalarc.session_validator import validate_session_readiness
 from nodalarc.stack_resolver import ResolvedStack, resolve_domain_stack, validate_sid_indices
 from nodalarc.template_vars import build_template_vars_from_resolved
+
+from nodalarc_operator.runtime_session import OperatorSessionConfig, resolve_operator_session
 
 log = logging.getLogger(__name__)
 
@@ -76,6 +89,74 @@ def _get_apps_v1() -> kubernetes.client.AppsV1Api:
         kubernetes.config.load_incluster_config()
         _apps_v1 = kubernetes.client.AppsV1Api()
     return _apps_v1
+
+
+def _operator_session_config(
+    spec: Mapping[str, Any],
+    active_session: OperatorSessionConfig | None,
+    *,
+    namespace: str,
+    origin: str,
+    run_id: str | None = None,
+) -> OperatorSessionConfig:
+    """Return a supplied verified result or load one through the sole boundary."""
+    if "catalogUpload" not in spec:
+        raise ValueError("spec.catalogUpload is required")
+    selection = CatalogUploadSelection.model_validate(spec["catalogUpload"], strict=True)
+    if active_session is None:
+        return resolve_operator_session(
+            spec,
+            core_v1=_get_v1(),
+            namespace=namespace,
+            source_origin=origin,
+            run_id=run_id,
+        )
+    if not isinstance(active_session, OperatorSessionConfig):
+        raise TypeError("active_session must be an OperatorSessionConfig")
+    if spec.get("sessionYaml") != active_session.root_yaml:
+        raise ValueError("active_session root YAML does not match spec.sessionYaml")
+    if selection != active_session.catalog_upload:
+        raise ValueError("active_session upload selection does not match spec.catalogUpload")
+    if run_id is not None and active_session.proof.run_id != run_id:
+        raise ValueError("active_session runtime identity does not match session_run_id")
+    return active_session
+
+
+def _proof_hash_fields(proof: RuntimeConfigProof) -> dict[str, str | int]:
+    return {
+        "upload_id": proof.upload_id,
+        "document_digest": proof.document_digest,
+        "closure_digest": proof.closure_digest,
+        "resolved_semantic_digest": proof.resolved_semantic_digest,
+        "file_count": proof.file_count,
+        "total_bytes": proof.total_bytes,
+        "resolved_node_count": proof.resolved_node_count,
+    }
+
+
+def build_runtime_deployment_context(
+    proof: RuntimeConfigProof,
+    *,
+    cr_uid: str,
+    cr_generation: int,
+    session_run_id: str,
+    release: str,
+    build: str,
+) -> RuntimeDeploymentContext:
+    """Fence one resolved content proof to one deployment generation."""
+    if proof.run_id != session_run_id:
+        raise ValueError("runtime proof has the wrong session run ID")
+    return RuntimeDeploymentContext(
+        cr_uid=cr_uid,
+        cr_generation=cr_generation,
+        session_run_id=session_run_id,
+        upload_id=proof.upload_id,
+        document_digest=proof.document_digest,
+        closure_digest=proof.closure_digest,
+        resolved_semantic_digest=proof.resolved_semantic_digest,
+        release=release,
+        build=build,
+    )
 
 
 def _metadata(obj: Any) -> Any:
@@ -236,77 +317,6 @@ def discover_available_nodes() -> list[str]:
         if not blocked:
             available.append(node.metadata.name)
     return sorted(available)
-
-
-def _deterministic_node(nid: str, available_nodes: list[str]) -> str:
-    """Rendezvous (HRW) hash — minimal migration on node-set changes.
-
-    For each candidate node, compute weight = SHA256(nid:node).
-    Assign to the highest-weight node. Adding the Nth node migrates
-    only ~1/N pods. Removing a node migrates only its pods.
-    """
-    best_node = available_nodes[0]
-    best_weight = -1
-    for node in available_nodes:
-        w = int(hashlib.sha256(f"{nid}:{node}".encode()).hexdigest()[:8], 16)
-        if w > best_weight:
-            best_weight = w
-            best_node = node
-    return best_node
-
-
-def compute_pod_placement(
-    placement: Any,
-    node_vars: dict[str, dict],
-    available_nodes: list[str],
-) -> dict[str, str]:
-    """Compute target node for each pod based on placement policy.
-
-    Args:
-        placement: Platform-owned placement policy.
-        node_vars: {node_id: {node_type, plane, ...}} from template_vars.
-        available_nodes: sorted list of available K3s node names.
-
-    Returns:
-        {node_id: k3s_node_name} mapping.
-    """
-    if not available_nodes:
-        raise ValueError("No available K3s nodes for pod placement")
-
-    if isinstance(placement, Mapping):
-        policy = str(placement.get("policy") or "")
-        planes_per_group = int(placement.get("planes_per_group") or 1)
-    else:
-        policy = str(getattr(placement, "policy", placement))
-        planes_per_group = int(getattr(placement, "planes_per_group", 1) or 1)
-
-    if policy == "allOnOne":
-        target = available_nodes[0]
-        return dict.fromkeys(node_vars, target)
-
-    if policy == "planePerNode":
-        result: dict[str, str] = {}
-        for nid, vars in node_vars.items():
-            if vars.get("node_type") == "ground_station":
-                result[nid] = _deterministic_node(nid, available_nodes)
-            else:
-                plane = vars.get("plane", 0)
-                result[nid] = available_nodes[plane % len(available_nodes)]
-        return result
-
-    if policy == "planeGroupPerNode":
-        ppg = planes_per_group
-        result = {}
-        for nid, vars in node_vars.items():
-            if vars.get("node_type") == "ground_station":
-                result[nid] = _deterministic_node(nid, available_nodes)
-            else:
-                plane = vars.get("plane", 0)
-                group = plane // ppg
-                result[nid] = available_nodes[group % len(available_nodes)]
-        return result
-
-    raise ValueError(f"Unknown placement policy: {policy}")
 
 
 def _node_internal_ips(
@@ -517,18 +527,19 @@ def _fixed_link_interfaces_by_node(resolved: ResolvedSession) -> dict[str, list[
     for candidate in resolved.link_candidates:
         if candidate.kind == "access":
             continue
+        interface_a, interface_b = candidate.fixed_interfaces
         by_node.setdefault(candidate.node_a, []).append(
             {
-                "name": candidate.interface_a,
+                "name": interface_a,
                 "peer_node": candidate.node_b,
-                "peer_iface": candidate.interface_b,
+                "peer_iface": interface_b,
             }
         )
         by_node.setdefault(candidate.node_b, []).append(
             {
-                "name": candidate.interface_b,
+                "name": interface_b,
                 "peer_node": candidate.node_a,
-                "peer_iface": candidate.interface_a,
+                "peer_iface": interface_a,
             }
         )
     return {
@@ -595,6 +606,8 @@ def ensure_session_configmaps(
     owner_ref: dict,
     progress_fn: Any | None = None,
     session_run_id: str | None = None,
+    active_session: OperatorSessionConfig | None = None,
+    deployment_context: RuntimeDeploymentContext | None = None,
 ) -> dict:
     """Create/update all ConfigMaps and SSH keys for a session.
 
@@ -638,16 +651,24 @@ def ensure_session_configmaps(
 
     # --- Step 1: Resolve segment session YAML from the CRD spec ---
     _progress("Resolving segment session configuration")
-    session_yaml = spec.get("sessionYaml")
-    if not session_yaml:
-        raise ValueError("spec.sessionYaml is required")
-    raw_session = yaml.safe_load(session_yaml)
-    resolution = resolve_session_with_assets(
-        raw_session,
-        source_context=SourceContext(origin="operator.deploy", run_id=session_run_id),
+    operator_session = _operator_session_config(
+        spec,
+        active_session,
+        namespace=namespace,
+        origin="operator.deploy",
+        run_id=session_run_id,
     )
+    resolution = operator_session.resolution
     if not session_run_id:
         raise ValueError("session_run_id is required to create runtime session ConfigMaps")
+    if not isinstance(deployment_context, RuntimeDeploymentContext):
+        raise TypeError("deployment_context is required to create runtime session ConfigMaps")
+    if deployment_context.cr_uid != str(owner_ref.get("uid") or ""):
+        raise ValueError("deployment_context CR UID does not match the session owner")
+    operator_session.proof.bind_deployment_identity(
+        deployment_context,
+        pod_uid="operator-context-validation",
+    )
     session_id = sanitize_session_id(session_run_id)
     resolved_session = resolution.resolved
     if require_resolved_session_run_id(resolved_session) != session_id:
@@ -756,7 +777,15 @@ def ensure_session_configmaps(
 
     # --- Step 7: Create session-level ConfigMaps ---
     _progress("Creating session-level ConfigMaps")
-    _create_session_configmaps(v1, resolved_session, session_yaml, namespace, owner_ref)
+    _create_session_configmaps(
+        v1,
+        resolved_session,
+        operator_session.root_yaml,
+        operator_session.catalog_upload,
+        deployment_context,
+        namespace,
+        owner_ref,
+    )
 
     # --- Step 7b: Ensure SSH keypair for terminal access ---
     _progress("Ensuring SSH keypair for terminal access")
@@ -780,6 +809,8 @@ def ensure_session_configmaps(
     return {
         "session_id": session_id,
         "session_run_id": session_run_id,
+        "operator_session": operator_session,
+        "deployment_context": deployment_context,
         "resolved_session": resolved_session,
         "node_vars": node_vars,
         "node_stacks": node_stacks,
@@ -924,11 +955,13 @@ def deploy_session(
     owner_ref: dict,
     progress_fn: Any | None = None,
     session_run_id: str | None = None,
+    active_session: OperatorSessionConfig | None = None,
+    deployment_context: RuntimeDeploymentContext | None = None,
 ) -> dict:
     """Deploy a full session from a ConstellationSpec CR spec.
 
     Convenience wrapper that calls ensure_session_configmaps() followed by
-    ensure_session_pods(). Preserves backward compatibility for on_create.
+    ensure_session_pods().
 
     Args:
         spec: The CR's .spec dict.
@@ -941,7 +974,14 @@ def deploy_session(
         Status dict with phase, podCount, readyPods, sessionId, message.
     """
     context = ensure_session_configmaps(
-        spec, name, namespace, owner_ref, progress_fn, session_run_id
+        spec,
+        name,
+        namespace,
+        owner_ref,
+        progress_fn,
+        session_run_id,
+        active_session,
+        deployment_context,
     )
     total_pods = ensure_session_pods(context, namespace, owner_ref, progress_fn)
 
@@ -1016,6 +1056,8 @@ def write_wiring_manifest(
     namespace: str,
     owner_ref: dict | None = None,
     session_run_id: str | None = None,
+    active_session: OperatorSessionConfig | None = None,
+    platform_hash: str | None = None,
 ) -> int:
     """Generate and write the topology wiring manifest ConfigMap.
 
@@ -1032,14 +1074,16 @@ def write_wiring_manifest(
         derive_wiring_generation,
     )
 
-    # Resolve session from CRD spec
-    session_yaml = spec.get("sessionYaml", "")
-    resolution = resolve_session_with_assets(
-        yaml.safe_load(session_yaml),
-        source_context=SourceContext(origin="operator.wiring_manifest", run_id=session_run_id),
-    )
     if not session_run_id:
         raise ValueError("session_run_id is required to write topology wiring manifest")
+    operator_session = _operator_session_config(
+        spec,
+        active_session,
+        namespace=namespace,
+        origin="operator.wiring_manifest",
+        run_id=session_run_id,
+    )
+    resolution = operator_session.resolution
     resolved_session = resolution.resolved
 
     v1 = _get_v1()
@@ -1183,7 +1227,8 @@ def write_wiring_manifest(
         {
             "manifest.json.gz.b64": compressed,
             "session_id": manifest_session_id,
-            "platform_hash": compute_platform_hash(spec),
+            "platform_hash": platform_hash
+            or compute_platform_hash(spec, active_session=operator_session, namespace=namespace),
             "wiring_generation": manifest["wiring_generation"],
             "node_count": str(len(nodes)),
         },
@@ -1262,6 +1307,7 @@ def restart_platform_pods(namespace: str, config_hash: str = "") -> None:
 
     annotation_value = config_hash or datetime.now(UTC).isoformat()
 
+    failures: list[str] = []
     for label in [
         "app=nodalarc-ome",
         "app=nodalarc-scheduler",
@@ -1284,7 +1330,125 @@ def restart_platform_pods(namespace: str, config_hash: str = "") -> None:
                 apps_v1.patch_namespaced_deployment(deploy.metadata.name, namespace, body)
                 log.info("Rolling restart triggered for %s", deploy.metadata.name)
             except kubernetes.client.rest.ApiException as exc:
-                log.warning("Failed to patch deployment %s: %s", deploy.metadata.name, exc)
+                failures.append(f"{deploy.metadata.name}: {exc}")
+    if failures:
+        raise RuntimeError("Failed to restart platform deployment(s): " + "; ".join(failures))
+
+
+def _pod_runtime_proof(
+    v1: kubernetes.client.CoreV1Api,
+    *,
+    namespace: str,
+    pod_name: str,
+) -> RuntimeConfigProof:
+    response = v1.connect_get_namespaced_pod_proxy_with_path(
+        f"{pod_name}:8081",
+        namespace,
+        "readyz",
+        _preload_content=False,
+        _request_timeout=5,
+    )
+    payload = getattr(response, "data", response)
+    if isinstance(payload, bytes):
+        payload = payload.decode("utf-8")
+    if isinstance(payload, str):
+        payload = json.loads(payload)
+    if not isinstance(payload, Mapping):
+        raise ValueError("runtime readiness response is not an object")
+    if payload.get("status") != "ready":
+        raise ValueError("runtime service did not report ready")
+    return RuntimeConfigProof.model_validate(payload.get("proof"), strict=True)
+
+
+def check_platform_runtime_ready(
+    namespace: str,
+    runtime_hash: str,
+    expected_content_proof: RuntimeConfigProof,
+    deployment_context: RuntimeDeploymentContext,
+) -> tuple[bool, str]:
+    """Accept only current OME/Scheduler pods proving this CR generation."""
+    if not runtime_hash:
+        raise ValueError("runtime_hash is required")
+    if expected_content_proof.deployment_identity_bound:
+        raise ValueError("expected_content_proof must be pre-deployment evidence")
+    if not isinstance(deployment_context, RuntimeDeploymentContext):
+        raise TypeError("deployment_context must be a RuntimeDeploymentContext")
+    apps_v1 = _get_apps_v1()
+    v1 = _get_v1()
+    for label, service, origin in (
+        ("app=nodalarc-ome", "OME", "ome"),
+        ("app=nodalarc-scheduler", "Scheduler", "scheduler"),
+    ):
+        deployments = apps_v1.list_namespaced_deployment(namespace, label_selector=label)
+        items = list(getattr(deployments, "items", None) or [])
+        if len(items) != 1:
+            return False, f"Waiting for exactly one {service} Deployment"
+        deployment = items[0]
+        metadata = deployment.metadata
+        spec = deployment.spec
+        status = deployment.status
+        annotations = dict(getattr(spec.template.metadata, "annotations", None) or {})
+        if annotations.get("nodalarc.io/config-hash") != runtime_hash:
+            return False, f"Waiting for {service} runtime template update"
+        generation = int(getattr(metadata, "generation", 0) or 0)
+        observed_generation = int(getattr(status, "observed_generation", 0) or 0)
+        if generation <= 0 or observed_generation < generation:
+            return False, f"Waiting for {service} rollout observation"
+        desired = int(getattr(spec, "replicas", 1) or 1)
+        replicas = int(getattr(status, "replicas", 0) or 0)
+        updated = int(getattr(status, "updated_replicas", 0) or 0)
+        ready = int(getattr(status, "ready_replicas", 0) or 0)
+        available = int(getattr(status, "available_replicas", 0) or 0)
+        unavailable = int(getattr(status, "unavailable_replicas", 0) or 0)
+        terminating = int(getattr(status, "terminating_replicas", 0) or 0)
+        if (
+            replicas != desired
+            or updated != desired
+            or ready != desired
+            or available != desired
+            or unavailable != 0
+            or terminating != 0
+        ):
+            return False, f"Waiting for {service} proof-gated readiness ({ready}/{desired})"
+        pods = v1.list_namespaced_pod(namespace, label_selector=label)
+        current_pods = []
+        for pod in list(getattr(pods, "items", None) or []):
+            pod_metadata = getattr(pod, "metadata", None)
+            pod_annotations = dict(getattr(pod_metadata, "annotations", None) or {})
+            if getattr(pod_metadata, "deletion_timestamp", None) is not None:
+                return False, f"Waiting for retired {service} runtime pod deletion"
+            if pod_annotations.get("nodalarc.io/config-hash") != runtime_hash:
+                return False, f"Waiting for retired {service} runtime pod replacement"
+            current_pods.append(pod)
+        if len(current_pods) != desired:
+            return (
+                False,
+                f"Waiting for {service} current runtime pods ({len(current_pods)}/{desired})",
+            )
+        for pod in current_pods:
+            pod_metadata = getattr(pod, "metadata", None)
+            pod_name = str(getattr(pod_metadata, "name", "") or "")
+            pod_uid = str(getattr(pod_metadata, "uid", "") or "")
+            if not pod_name or not pod_uid:
+                return False, f"Waiting for {service} pod identity"
+            expected = RuntimeConfigProof.model_validate(
+                {
+                    **expected_content_proof.model_dump(mode="json"),
+                    "source_origin": origin,
+                },
+                strict=True,
+            ).bind_deployment_identity(deployment_context, pod_uid=pod_uid)
+            try:
+                observed = _pod_runtime_proof(
+                    v1,
+                    namespace=namespace,
+                    pod_name=pod_name,
+                )
+            except Exception as exc:
+                return False, f"Waiting for {service} runtime proof ({type(exc).__name__})"
+            if observed != expected:
+                return False, f"Waiting for {service} runtime proof to match current deployment"
+    return True, "OME and Scheduler runtime configuration verified"
 
 
 def teardown_session(namespace: str, session_id: str | None = None) -> None:
@@ -1602,14 +1766,19 @@ def _canonical_hash_value(value: Any) -> Any:
     return value
 
 
-def compute_platform_hash(spec: dict) -> str:
+def compute_platform_hash(
+    spec: dict,
+    *,
+    active_session: OperatorSessionConfig | None = None,
+    namespace: str = "nodalarc",
+) -> str:
     """Hash resolved runtime truth for service restart detection.
 
     OME, Scheduler, and NodalPath currently load session truth at startup. Any
     user-authored YAML field or referenced catalog asset that can affect runtime
     computation must therefore change this hash and trigger a platform-pod
     restart. Hashing the raw segment YAML is insufficient because a session can
-    reference constellation, TLE, satellite-type, and ground-station files whose
+    referenced orbit, node, terminal, constellation, site, or site-set files whose
     contents can change while the reference string stays fixed.
 
     The only excluded fields are operator-owned runtime lineage/context
@@ -1622,36 +1791,56 @@ def compute_platform_hash(spec: dict) -> str:
 
     Returns a hex digest string (SHA-256).
     """
-    session_yaml = spec.get("sessionYaml", "")
-    if not session_yaml:
-        return hashlib.sha256(b"").hexdigest()
-    parsed = yaml.safe_load(session_yaml)
-    if not isinstance(parsed, dict):
-        raise ValueError("spec.sessionYaml must parse to a mapping for platform hashing")
-    resolution = resolve_session_with_assets(
-        parsed,
-        source_context=SourceContext(origin="operator.platform_hash"),
+    if not spec.get("sessionYaml"):
+        raise ValueError("spec.sessionYaml is required")
+    operator_session = _operator_session_config(
+        spec,
+        active_session,
+        namespace=namespace,
+        origin="operator.platform_hash",
     )
     canonical_obj = {
-        "resolved": resolution.resolved.model_dump(
+        "resolved": operator_session.resolution.resolved.model_dump(
             mode="json",
             exclude={"source_context": True},
         ),
+        "runtime_config": _proof_hash_fields(operator_session.proof),
     }
     canonical = json.dumps(canonical_obj, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode()).hexdigest()
 
 
-def compute_runtime_hash(platform_hash: str, session_run_id: str) -> str:
+def compute_runtime_hash(
+    platform_hash: str,
+    session_run_id: str,
+    proof: RuntimeConfigProof | None = None,
+    deployment_context: RuntimeDeploymentContext | None = None,
+) -> str:
     """Hash platform config plus immutable runtime lineage for pod restarts."""
     if not platform_hash:
         raise ValueError("platform_hash is required")
     if not session_run_id:
         raise ValueError("session_run_id is required")
-    return hashlib.sha256(f"{platform_hash}:{session_run_id}".encode()).hexdigest()
+    payload: dict[str, Any] = {
+        "platform_hash": platform_hash,
+        "session_run_id": session_run_id,
+    }
+    if proof is not None:
+        payload["runtime_config"] = _proof_hash_fields(proof)
+    if deployment_context is not None:
+        if deployment_context.session_run_id != session_run_id:
+            raise ValueError("deployment_context has the wrong session run ID")
+        payload["deployment_context"] = deployment_context.model_dump(mode="json")
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode()).hexdigest()
 
 
-def compute_expected_pod_count(spec: dict) -> int:
+def compute_expected_pod_count(
+    spec: dict,
+    *,
+    active_session: OperatorSessionConfig | None = None,
+    namespace: str = "nodalarc",
+) -> int:
     """Compute how many session pods SHOULD exist from the CRD spec.
 
     Pure computation — parses sessionYaml, expands constellation, counts
@@ -1661,14 +1850,13 @@ def compute_expected_pod_count(spec: dict) -> int:
     Raises on invalid config — caller sets CR phase to Error with the
     message so the user sees what went wrong in the browser.
     """
-    session_yaml = spec.get("sessionYaml")
-    if not session_yaml:
-        raise ValueError("spec.sessionYaml is missing")
-    resolution = resolve_session_with_assets(
-        yaml.safe_load(session_yaml),
-        source_context=SourceContext(origin="operator.expected_pod_count"),
+    operator_session = _operator_session_config(
+        spec,
+        active_session,
+        namespace=namespace,
+        origin="operator.expected_pod_count",
     )
-    count = len(resolution.resolved.nodes)
+    count = len(operator_session.resolution.resolved.nodes)
     if count == 0:
         raise ValueError(
             "Session expands to 0 nodes — check constellation and ground station configs"
@@ -1703,7 +1891,13 @@ def _placement_node_vars_from_resolution(resolution: SessionResolution) -> dict[
     return node_vars
 
 
-def compute_expected_placement_node_count(spec: dict, available_nodes: list[str]) -> int:
+def compute_expected_placement_node_count(
+    spec: dict,
+    available_nodes: list[str],
+    *,
+    active_session: OperatorSessionConfig | None = None,
+    namespace: str = "nodalarc",
+) -> int:
     """Compute how many Kubernetes nodes the active placement policy should use.
 
     This is the pure equivalent of the operator deployment path's placement step.
@@ -1712,14 +1906,13 @@ def compute_expected_placement_node_count(spec: dict, available_nodes: list[str]
     distribution.
     """
 
-    session_yaml = spec.get("sessionYaml")
-    if not session_yaml:
-        raise ValueError("spec.sessionYaml is missing")
-    resolution = resolve_session_with_assets(
-        yaml.safe_load(session_yaml),
-        source_context=SourceContext(origin="operator.expected_placement"),
+    operator_session = _operator_session_config(
+        spec,
+        active_session,
+        namespace=namespace,
+        origin="operator.expected_placement",
     )
-    node_vars = _placement_node_vars_from_resolution(resolution)
+    node_vars = _placement_node_vars_from_resolution(operator_session.resolution)
     if not node_vars:
         raise ValueError("Session expands to 0 nodes — cannot compute placement")
     placement = compute_pod_placement(
@@ -1927,22 +2120,54 @@ def _create_session_configmaps(
     v1: kubernetes.client.CoreV1Api,
     resolved: ResolvedSession,
     session_yaml: str,
+    catalog_upload: CatalogUploadSelection,
+    deployment_context: RuntimeDeploymentContext,
     namespace: str,
     owner_ref: dict,
 ) -> None:
     """Create session-level ConfigMaps with segment session YAML."""
+    data = build_runtime_session_config_data(
+        resolved,
+        session_yaml,
+        catalog_upload,
+        deployment_context,
+    )
     _create_or_update_configmap(
         v1,
         "nodalarc-session",
         namespace,
-        {
-            "session.yaml": session_yaml,
-            "session_name": resolved.session.name,
-            "session_run_id": require_resolved_session_run_id(resolved),
-        },
+        data,
         owner_ref,
     )
     log.debug("Created session-level ConfigMap")
+
+
+def build_runtime_session_config_data(
+    resolved: ResolvedSession,
+    session_yaml: str,
+    catalog_upload: CatalogUploadSelection,
+    deployment_context: RuntimeDeploymentContext,
+) -> dict[str, str]:
+    """Return the exact mounted runtime inputs for one deployment identity."""
+    if not isinstance(catalog_upload, CatalogUploadSelection):
+        raise TypeError("catalog_upload must be a CatalogUploadSelection")
+    session_run_id = require_resolved_session_run_id(resolved)
+    if deployment_context.session_run_id != session_run_id:
+        raise ValueError("deployment_context has the wrong session run ID")
+    if deployment_context.upload_id != catalog_upload.upload_id:
+        raise ValueError("deployment_context has the wrong catalog upload ID")
+    if deployment_context.closure_digest != catalog_upload.closure_digest:
+        raise ValueError("deployment_context has the wrong catalog closure digest")
+    return {
+        "session.yaml": session_yaml,
+        "session_run_id": session_run_id,
+        CATALOG_UPLOAD_SELECTION_FILENAME: canonical_json_bytes(
+            catalog_upload.model_dump(mode="json")
+        ).decode("utf-8"),
+        RUNTIME_DEPLOYMENT_CONTEXT_FILENAME: canonical_json_bytes(
+            deployment_context.model_dump(mode="json")
+        ).decode("utf-8"),
+    }
 
 
 def _build_sidecar_config(stack: ResolvedStack) -> dict | None:

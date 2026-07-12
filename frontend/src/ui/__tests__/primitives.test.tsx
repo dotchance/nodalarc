@@ -1,7 +1,8 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, screen, fireEvent, cleanup } from "@testing-library/react";
+import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
+import { useState } from "react";
 import { DataTable, type TableColumn, type SortState } from "../DataTable";
 import { FloatingWindow } from "../FloatingWindow";
 import { Tabs } from "../Tabs";
@@ -104,6 +105,38 @@ describe("FloatingWindow", () => {
       </FloatingWindow>,
     );
     expect(container.querySelectorAll(".ui-window-edge")).toHaveLength(8);
+  });
+
+  it("labels the dialog, moves focus inside, and restores its opener", async () => {
+    function Fixture() {
+      const [open, setOpen] = useState(false);
+      return (
+        <>
+          <button onClick={() => setOpen(true)}>Open logs</button>
+          {open && (
+            <FloatingWindow
+              title="Logs"
+              onClose={() => setOpen(false)}
+              initial={{ x: 0, y: 0, w: 300, h: 200 }}
+            >
+              <button>First log action</button>
+            </FloatingWindow>
+          )}
+        </>
+      );
+    }
+
+    render(<Fixture />);
+    const opener = screen.getByRole("button", { name: "Open logs" });
+    opener.focus();
+    fireEvent.click(opener);
+    expect(screen.getByRole("dialog", { name: "Logs" })).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "First log action" })).toBe(document.activeElement);
+    });
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: "Logs" })).toBeNull();
+    expect(opener).toBe(document.activeElement);
   });
 });
 

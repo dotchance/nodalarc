@@ -11,6 +11,47 @@ The VF renders the session visualization in the browser: 3D body view with
 satellite positions, relay nodes, ISL and ground links, body frames, topology
 graph, event log, terminal access, and session wizard.
 
+## Viewer Design Principles
+
+The spacetime view is the primary work surface, not decorative scene chrome.
+It is where an operator understands the experiment: what exists, what can see
+what, what is connected, what is blocked, what changed, and why.
+
+The viewer is multi-body by design. Earth, Luna, and future bodies are peer
+scene targets: camera movement, focus, follow, picking, labels, links, and
+overlays must work from the active body or selected object rather than assuming
+Earth is the permanent center of interaction.
+
+Rendering and interaction belong to a reusable viewer engine layer. NodalArc
+domain tools sit above it:
+
+- **Viewer engine:** bodies, frames, camera modes, picking, glyphs, labels,
+  link rendering, overlays, scene scale, and input handling.
+- **Domain overlays:** routing domains, terminal roles, active/candidate/failed
+  links, latency/loss/bandwidth, health, actuation state, and kernel proof.
+- **Operator tools:** session builder, catalog browser, node inspector, CLI,
+  logs, topology, trace/path tools, and configuration surfaces.
+
+The frontend may compute presentation geometry from authoritative ephemeris,
+but it must not invent operational truth. Link state, reachability, health,
+actuation, routing, and kernel-proof claims come from OME, Scheduler, Node
+Agent, VS-API, or another typed producer. If a fact is not available, the UI
+must show that it is unavailable rather than fabricating it locally.
+
+Display color is semantic, not ornamental. The base taxonomy gives stable
+identity cues such as body, orbital regime, segment, medium, and node class.
+Selectable overlays answer task-specific questions such as link state, latency,
+loss, routing domain, terminal capacity, kernel proof, or actuation health.
+Fault colors are reserved for actual fault states.
+
+Search and focus are primary navigation mechanisms. Large sessions cannot rely on
+manual camera movement. Users must be able to jump to nodes, sites, bodies,
+segments, links, interfaces, routing domains, prefixes, and operational events.
+
+At scale, visual size and interaction size are separate concerns. Glyphs may be
+small for readability, but picking must remain usable through screen-space
+hit testing and explicit focus/follow actions.
+
 ## Architecture
 
 ```

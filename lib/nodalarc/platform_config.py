@@ -7,8 +7,10 @@ Loads from configs/platform.yaml. No fallback defaults in Python code.
 
 from __future__ import annotations
 
+import hashlib
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -103,6 +105,64 @@ class PlatformConfig(BaseModel):
                 "vs_api_actuation_fault_after_ms must exceed vs_api_actuation_expected_latency_ms"
             )
         return self
+
+
+def _deterministic_node(node_id: str, available_nodes: list[str]) -> str:
+    best_node = available_nodes[0]
+    best_weight = -1
+    for node in available_nodes:
+        weight = int(hashlib.sha256(f"{node_id}:{node}".encode()).hexdigest()[:8], 16)
+        if weight > best_weight:
+            best_weight = weight
+            best_node = node
+    return best_node
+
+
+def compute_pod_placement(
+    placement: Any,
+    node_vars: dict[str, dict],
+    available_nodes: list[str],
+) -> dict[str, str]:
+    """Compute Kubernetes node placement from the platform-owned policy."""
+    if not available_nodes:
+        raise ValueError("No available K3s nodes for pod placement")
+
+    if isinstance(placement, Mapping):
+        policy = str(placement.get("policy") or "")
+        planes_per_group_value = placement.get("planes_per_group")
+        if policy == "planeGroupPerNode" and planes_per_group_value is None:
+            raise ValueError("planeGroupPerNode requires planes_per_group")
+        planes_per_group = int(planes_per_group_value or 1)
+    else:
+        policy = str(getattr(placement, "policy", placement))
+        planes_per_group = int(getattr(placement, "planes_per_group", 1) or 1)
+
+    if policy == "allOnOne":
+        target = available_nodes[0]
+        return dict.fromkeys(node_vars, target)
+
+    if policy == "planePerNode":
+        result: dict[str, str] = {}
+        for node_id, variables in node_vars.items():
+            if variables.get("node_type") == "ground_station":
+                result[node_id] = _deterministic_node(node_id, available_nodes)
+            else:
+                plane = variables.get("plane", 0)
+                result[node_id] = available_nodes[plane % len(available_nodes)]
+        return result
+
+    if policy == "planeGroupPerNode":
+        result = {}
+        for node_id, variables in node_vars.items():
+            if variables.get("node_type") == "ground_station":
+                result[node_id] = _deterministic_node(node_id, available_nodes)
+            else:
+                plane = variables.get("plane", 0)
+                group = plane // planes_per_group
+                result[node_id] = available_nodes[group % len(available_nodes)]
+        return result
+
+    raise ValueError(f"Unknown placement policy: {policy}")
 
 
 # --- Module-level singleton ---

@@ -110,8 +110,6 @@ def shared_names(ts_interfaces, py_models) -> set[str]:
 _FRONTEND_ONLY_INTERFACES = {
     # Nodal logging payload appended to StateSnapshot after model serialization.
     "OpsEvent",
-    # Session switcher response is still served by vs_api.session_manager as dicts.
-    "SessionInfo",
     # Local UI selection state, not a backend payload.
     "Selection",
 }

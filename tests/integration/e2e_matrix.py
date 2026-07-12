@@ -1,10 +1,10 @@
-"""E2E validation matrix — tests 12 constellation/protocol permutations via wizard API.
+"""E2E validation matrix for every shipped catalog session.
 
-Runs each permutation: generate session → deploy via CRD → wait for Ready →
-verify pods + FRR configs + routing convergence + WebSocket snapshots →
-write evidence files.
+Runs each session: byte-verify shipped YAML → guarded catalog switch →
+wait for the exact transition and Ready state → verify pods + FRR configs +
+routing convergence + WebSocket snapshots → write evidence files.
 
-Usage: .venv/bin/python3 tests/integration/e2e_matrix.py
+Usage: make test-runtime-matrix
 """
 
 from __future__ import annotations
@@ -17,6 +17,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import requests
+from nodalarc.configuration_yaml import load_configuration_yaml
+from nodalarc.models.segment_session import SegmentSessionConfig
 from nodalarc.runtime_naming import gs_bridge_port_name
 
 # Default assumes a local port-forward. Set VS_API_HOST to any reachable LAN
@@ -25,169 +27,6 @@ VS_API_HOST = os.environ.get("VS_API_HOST", "127.0.0.1:8080")
 BASE_URL = f"http://{VS_API_HOST}"
 KUBECTL = "sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl"
 
-
-# Helper to build inline constellation dicts matching the wizard's geometry presets.
-def _inline(
-    name, alt, inc, pattern, planes, spp, phase, sat_type="starlink-v2", seam=False, seam_lat=70
-):
-    d = {
-        "mode": "parametric",
-        "name": name,
-        "satellite_type": sat_type,
-        "orbit": {"altitude_km": alt, "inclination_deg": inc, "pattern": pattern},
-        "planes": {
-            "count": planes,
-            "sats_per_plane": spp,
-            "raan_spacing_deg": round(360 / planes, 2),
-            "phase_offset_deg": phase,
-        },
-    }
-    if seam:
-        d["polar_seam"] = {"enabled": True, "latitude_threshold_deg": seam_lat}
-    return d
-
-
-# Real-world constellation geometries from the wizard's GEOMETRY_PRESETS
-STARLINK_53 = _inline("starlink-53", 550, 53, "walker-delta", 8, 11, 4.1)
-STARLINK_70 = _inline("starlink-70", 570, 70, "walker-delta", 6, 11, 5.45)
-STARLINK_POLAR = _inline(
-    "starlink-polar", 560, 97.6, "walker-star", 6, 12, 5.0, seam=True, seam_lat=80
-)
-KUIPER_51 = _inline("kuiper-51", 630, 51.9, "walker-delta", 6, 11, 5.45)
-ONEWEB = _inline("oneweb", 1200, 87.9, "walker-star", 6, 10, 6.0, seam=True, seam_lat=75)
-IRIDIUM = _inline(
-    "iridium-next",
-    780,
-    86.4,
-    "walker-star",
-    6,
-    11,
-    5.45,
-    sat_type="iridium-next",
-    seam=True,
-    seam_lat=75,
-)
-TELESAT = _inline("telesat-polar", 1015, 98.98, "walker-star", 6, 13, 4.6, seam=True, seam_lat=80)
-SDA_T1 = _inline("sda-t1", 1000, 80, "walker-star", 6, 10, 6.0, seam=True, seam_lat=70)
-GLOBALSTAR = _inline("globalstar", 1414, 52, "walker-delta", 8, 6, 7.5)
-
-MATRIX = [
-    # --- Inclined LEO constellations (Walker-delta, no polar seam) ---
-    {
-        "id": 1,
-        "constellation": "starlink-early-44",  # preset for defaults
-        "protocol": "isis",
-        "extensions": ["te"],
-        "gs": "configs/ground-stations/sets/global-8.yaml",
-        "custom_constellation": STARLINK_53,
-    },
-    {
-        "id": 2,
-        "constellation": "starlink-early-44",
-        "protocol": "ospf",
-        "extensions": ["te"],
-        "gs": "configs/ground-stations/sets/transatlantic.yaml",
-        "custom_constellation": KUIPER_51,
-    },
-    {
-        "id": 3,
-        "constellation": "starlink-early-44",
-        "protocol": "isis",
-        "extensions": [],
-        "gs": "configs/ground-stations/sets/transpacific.yaml",
-        "custom_constellation": GLOBALSTAR,
-    },
-    # --- Polar/near-polar constellations (Walker-star, polar seam) ---
-    {
-        "id": 4,
-        "constellation": "starlink-early-44",
-        "protocol": "isis",
-        "extensions": ["sr"],
-        "gs": "configs/ground-stations/sets/polar-emphasis.yaml",
-        "custom_constellation": IRIDIUM,
-    },
-    {
-        "id": 5,
-        "constellation": "starlink-early-44",
-        "protocol": "ospf",
-        "extensions": [],
-        "gs": "configs/ground-stations/sets/polar-emphasis.yaml",
-        "custom_constellation": ONEWEB,
-    },
-    {
-        "id": 6,
-        "constellation": "starlink-early-44",
-        "protocol": "isis",
-        "extensions": ["te"],
-        "gs": "configs/ground-stations/sets/global.yaml",
-        "custom_constellation": TELESAT,
-    },
-    # --- Sun-synchronous / high-inclination ---
-    {
-        "id": 7,
-        "constellation": "starlink-early-44",
-        "protocol": "isis",
-        "extensions": ["te"],
-        "gs": ["ashburn", "frankfurt", "tokyo", "sydney"],
-        "custom_constellation": STARLINK_POLAR,
-    },
-    {
-        "id": 8,
-        "constellation": "starlink-early-44",
-        "protocol": "ospf",
-        "extensions": ["te", "mpls"],
-        "gs": "configs/ground-stations/sets/global-8.yaml",
-        "custom_constellation": SDA_T1,
-    },
-    # --- Satellite type override (orthogonal selection) ---
-    {
-        "id": 9,
-        "constellation": "starlink-early-44",
-        "protocol": "isis",
-        "extensions": ["te"],
-        "gs": "configs/ground-stations/sets/transatlantic.yaml",
-        "satellite_type": "iridium-next",
-        "custom_constellation": STARLINK_53,
-    },
-    {
-        "id": 10,
-        "constellation": "starlink-early-44",
-        "protocol": "isis",
-        "extensions": [],
-        "gs": "configs/ground-stations/sets/us-conus.yaml",
-        "satellite_type": "generic-2isl",
-        "custom_constellation": STARLINK_70,
-    },
-    # --- Area strategies ---
-    {
-        "id": 11,
-        "constellation": "starlink-early-44",
-        "protocol": "isis",
-        "extensions": ["te"],
-        "gs": "configs/ground-stations/sets/global.yaml",
-        "area": "per-plane",
-        "custom_constellation": KUIPER_51,
-    },
-    {
-        "id": 12,
-        "constellation": "starlink-early-44",
-        "protocol": "ospf",
-        "extensions": ["te"],
-        "gs": "configs/ground-stations/sets/global-8.yaml",
-        "area": "stripe",
-        "custom_constellation": STARLINK_53,
-    },
-    # --- NodalPath (xfail) ---
-    {
-        "id": 13,
-        "constellation": "starlink-early-44",
-        "protocol": "nodalpath",
-        "extensions": [],
-        "gs": "configs/ground-stations/sets/global.yaml",
-        "custom_constellation": STARLINK_53,
-        "xfail": "NodalPath in-band terrestrial interface not yet implemented.",
-    },
-]
 
 MBB_ACCEPTANCE_SESSION = Path("tests/fixtures/sessions/earth-leo-mbb-acceptance.yaml")
 MBB_BAD_OPS_CODES = {
@@ -199,6 +38,46 @@ MBB_BAD_OPS_CODES = {
     "OPERATOR_REPAIR_SUCCEEDED",
     "OPERATOR_REPAIR_FAILED",
 }
+
+INTERMITTENT_CONNECTIVITY_WINDOWS = {
+    "earth-leo-polar": {
+        "disconnected_offset_seconds": 120,
+        "settle_seconds": 30,
+    }
+}
+
+
+def _run_provenance_from_environment() -> dict[str, str]:
+    fields = {
+        "source_git_sha": os.environ.get("NODALARC_EVIDENCE_SOURCE_GIT_SHA", ""),
+        "source_tree_tag": os.environ.get("NODALARC_EVIDENCE_SOURCE_TAG", ""),
+        "namespace": os.environ.get("NAMESPACE", ""),
+        "expected_runtime_release": os.environ.get("NODALARC_EXPECTED_RUNTIME_RELEASE", ""),
+        "expected_runtime_build": os.environ.get("NODALARC_EXPECTED_RUNTIME_BUILD", ""),
+    }
+    missing = [name for name, value in fields.items() if not value]
+    if missing:
+        raise RuntimeError(
+            "Runtime evidence provenance is incomplete; use make test-runtime-matrix "
+            f"(missing {', '.join(missing)})"
+        )
+    return fields
+
+
+def _runtime_identity_error(provenance: dict[str, str], facts: dict) -> str | None:
+    observed_release = facts.get("release")
+    observed_build = facts.get("build")
+    if (
+        observed_release == provenance["expected_runtime_release"]
+        and observed_build == provenance["expected_runtime_build"]
+    ):
+        return None
+    return (
+        "Transition runtime identity differs from the checkout under test: "
+        f"expected {provenance['expected_runtime_release']} / "
+        f"{provenance['expected_runtime_build']}, observed "
+        f"{observed_release} / {observed_build}"
+    )
 
 
 def _classify_matrix_result(evidence: dict, perm: dict) -> str:
@@ -343,33 +222,88 @@ def _link_as_sat_sat(
     return None
 
 
-def generate_session(token: str, perm: dict) -> str:
-    """Generate session YAML via wizard API."""
-    body = {
-        "constellation": perm["constellation"],
-        "protocol": perm["protocol"],
-        "extensions": perm.get("extensions", []),
-        "ground_stations": perm["gs"],
-    }
-    if perm.get("area"):
-        body["area_strategy"] = perm["area"]
-    if perm.get("satellite_type"):
-        body["satellite_type"] = perm["satellite_type"]
-    if perm.get("custom_constellation"):
-        body["custom_constellation"] = perm["custom_constellation"]
-    payload = request_json("POST", "/api/v1/session/generate", token=token, json=body, retries=3)
-    return payload.get("yaml", "")
-
-
 def deploy_session(token: str, yaml_str: str) -> dict:
     """Deploy session via wizard API."""
     return request_json(
         "POST",
-        "/api/v1/session/deploy",
+        "/api/v1/session/deploy-from-yaml",
         token=token,
         json={"yaml": yaml_str},
         retries=3,
     )
+
+
+def deploy_catalog_session(token: str, perm: dict) -> dict:
+    """Deploy the exact shipped catalog revision represented by one permutation."""
+    session_ref = f"nodalarc:sessions/{perm['id']}.yaml"
+    summaries = request_json("GET", "/api/v1/sessions", token=token)
+    if not isinstance(summaries, list):
+        raise RuntimeError("VS-API session listing was not an array")
+    summary = next(
+        (
+            candidate
+            for candidate in summaries
+            if (candidate.get("source_id") or {}).get("session_ref") == session_ref
+        ),
+        None,
+    )
+    if summary is None:
+        raise RuntimeError(f"VS-API did not list shipped session {session_ref}")
+    if not summary.get("deploy_allowed"):
+        raise RuntimeError(
+            f"VS-API refused shipped session {session_ref}: {summary.get('blockers')}"
+        )
+
+    response = requests.get(
+        f"{BASE_URL}/api/v1/sessions/yaml",
+        params={"session_ref": session_ref},
+        headers=headers(token),
+        timeout=10,
+    )
+    response.raise_for_status()
+    if response.text != perm["session_yaml"]:
+        raise RuntimeError(f"VS-API shipped YAML differs from checkout for {session_ref}")
+
+    required = ("source_revision", "document_digest", "dependency_digest")
+    missing = [field for field in required if not summary.get(field)]
+    if missing:
+        raise RuntimeError(f"VS-API session listing omitted {', '.join(missing)} for {session_ref}")
+    return request_json(
+        "POST",
+        "/api/v1/sessions/switch",
+        token=token,
+        json={
+            "source": {"kind": "catalog", "session_ref": session_ref},
+            "expected_source_revision": summary["source_revision"],
+            "expected_document_digest": summary["document_digest"],
+            "expected_dependency_digest": summary["dependency_digest"],
+        },
+        retries=3,
+    )
+
+
+def wait_for_transition(token: str, operation_id: str, timeout: int = 600) -> dict:
+    """Wait for the exact admitted session transition to reach a terminal state."""
+    deadline = time.monotonic() + timeout
+    last: dict = {}
+    while time.monotonic() < deadline:
+        last = request_json(
+            "GET",
+            f"/api/v1/session-transitions/{operation_id}",
+            token=token,
+            retries=3,
+        )
+        state = last.get("state")
+        if state == "succeeded":
+            return last
+        if state in {"failed", "cancelled"}:
+            return last
+        time.sleep(2)
+    return {
+        "state": "timeout",
+        "failure": {"message": f"transition {operation_id} did not finish within {timeout}s"},
+        "last": last,
+    }
 
 
 def wait_for_ready(token: str, timeout: int = 600) -> dict:
@@ -553,7 +487,7 @@ def _node_loopback_ip(node_id: str, nodes_by_id: dict[str, dict] | None = None) 
     return None
 
 
-def check_ping(token: str, perm: dict) -> dict:
+def check_ping(token: str, perm: dict, *, ground_wait_s: int | None = None) -> dict:
     """Prove routed connectivity for the declared topology.
 
     Ground sessions must prove a ground-originated routed ping and routing adjacency.
@@ -594,7 +528,9 @@ def check_ping(token: str, perm: dict) -> dict:
         ground_probe = _find_routed_ground_probe(
             token,
             protocol=protocol,
-            wait_s=240 if len(bodies) > 1 else 120,
+            wait_s=(
+                ground_wait_s if ground_wait_s is not None else 240 if len(bodies) > 1 else 120
+            ),
             ground_topology=ground_topology,
         )
         if ground_probe and ground_probe.get("result") == "PASS":
@@ -963,14 +899,12 @@ def _route_egress_dev(route_stdout: str) -> str | None:
     return None
 
 
-# Probing one pair costs three kubectl execs, so sweeps are bounded — but
-# only AFTER filtering to currently-routable pairs (the source holds an
-# active space link; the destination's SITE holds at least one, since a
-# co-sited peer may carry the final LAN hop while the source-side egress
-# proof still pins the space segment). Without that filter, a distance-
-# first cap silently probes only far pairs whose endpoints are dark and
-# never reaches the connected near pair — observed live on the sparse
-# polar session, where the only routable pair was also the closest.
+# Sweeps stay bounded because every candidate requires a kernel query. A
+# linked source and destination site are only eligible, not necessarily in
+# the same active routing component, so each successive sweep starts after
+# the prior window instead of permanently retrying the first distance-ranked
+# pairs. This matters on the sparse polar session, where the only routable
+# pair can be the closest one.
 _TRANSIT_PAIRS_PER_SWEEP = 16
 
 
@@ -993,6 +927,7 @@ def _find_routed_ground_probe(
     """
     deadline = time.monotonic() + wait_s
     last_reason = "no routed ground probe found"
+    candidate_cursor = 0
     single_site = ground_topology is not None and (
         len({info["site"] for info in ground_topology.values()}) < 2
     )
@@ -1019,7 +954,11 @@ def _find_routed_ground_probe(
                 )
                 time.sleep(3)
                 continue
-            candidates = candidates[:_TRANSIT_PAIRS_PER_SWEEP]
+            candidate_count = len(candidates)
+            sweep_size = min(_TRANSIT_PAIRS_PER_SWEEP, candidate_count)
+            sweep_start = candidate_cursor % candidate_count
+            candidates = (candidates + candidates)[sweep_start : sweep_start + sweep_size]
+            candidate_cursor = (sweep_start + sweep_size) % candidate_count
         else:
             candidates = [(src, dst) for src in sorted(by_gs) for dst in ground_ids if dst != src]
         for src, dst_gs in candidates:
@@ -1028,13 +967,7 @@ def _find_routed_ground_probe(
                 last_reason = f"could not read loopback for {dst_gs}"
                 continue
             route = _kubectl_exec(src, f"ip route get {dst_ip}", timeout=10)
-            neigh = _kubectl_exec(
-                src, f"vtysh -c '{_routing_neighbor_command(protocol)}'", timeout=10
-            )
-            ping = _kubectl_exec(src, f"ping -c 1 -W 5 {dst_ip}", timeout=10)
             fib_ready = route["rc"] == 0 and dst_ip in route["stdout"]
-            neighbor_up = neigh["rc"] == 0 and _routing_neighbor_up(neigh["stdout"], protocol)
-            packet_ready = ping["rc"] == 0 and "0% packet loss" in ping["stdout"]
             egress_dev = _route_egress_dev(route["stdout"]) if fib_ready else None
             if ground_topology is not None:
                 src_info = ground_topology[src]
@@ -1059,6 +992,19 @@ def _find_routed_ground_probe(
                     "egress_dev": egress_dev,
                     "transit_note": "no resolver topology: pair may share a site LAN",
                 }
+            if not fib_ready or not space_egress:
+                last_reason = (
+                    f"{src}->{dst_gs} fib={fib_ready} neighbor=not-checked "
+                    f"packet=not-checked egress={egress_dev}"
+                    + ("" if space_egress else " (egress is not a space-link terminal)")
+                )
+                continue
+            neigh = _kubectl_exec(
+                src, f"vtysh -c '{_routing_neighbor_command(protocol)}'", timeout=10
+            )
+            ping = _kubectl_exec(src, f"ping -c 1 -W 5 {dst_ip}", timeout=10)
+            neighbor_up = neigh["rc"] == 0 and _routing_neighbor_up(neigh["stdout"], protocol)
+            packet_ready = ping["rc"] == 0 and "0% packet loss" in ping["stdout"]
             if fib_ready and neighbor_up and packet_ready and space_egress:
                 return {
                     "result": "PASS",
@@ -1536,22 +1482,20 @@ def check_mbb_packet_behavior(
 def _acceptance_session_yaml(
     *,
     session_name: str,
-    clean_kernel_audit_interval_s: float | None = None,
     mbb_overlap_ticks: int | None = None,
 ) -> str:
     import yaml
 
-    data = yaml.safe_load(MBB_ACCEPTANCE_SESSION.read_text())
+    data = load_configuration_yaml(MBB_ACCEPTANCE_SESSION.read_text())
     data.setdefault("session", {})["name"] = session_name
-    if clean_kernel_audit_interval_s is not None:
-        data.setdefault("dispatch", {})["clean_kernel_audit_interval_s"] = (
-            clean_kernel_audit_interval_s
-        )
     if mbb_overlap_ticks is not None:
-        data.setdefault("scheduling", {}).setdefault("ground", {})["mbb_overlap_ticks"] = (
-            mbb_overlap_ticks
-        )
-    return yaml.safe_dump(data, sort_keys=False)
+        ground = next(segment for segment in data["segments"] if segment["id"] == "ground")
+        ground["apply"]["scheduling"]["mbb_overlap_ticks"] = mbb_overlap_ticks
+    validated = SegmentSessionConfig.model_validate(data)
+    return yaml.safe_dump(
+        validated.model_dump(mode="json", by_alias=True, exclude_none=True),
+        sort_keys=False,
+    )
 
 
 def _active_ground_link_with_interfaces(token: str, *, wait_s: int = 180) -> dict | None:
@@ -1734,7 +1678,6 @@ def run_dirty_repair_acceptance() -> dict:
         acceptance_progress("dirty-repair: deploying session")
         yaml_str = _acceptance_session_yaml(
             session_name=f"dirty-repair-{int(time.time())}",
-            clean_kernel_audit_interval_s=2.0,
         )
         evidence["deploy_response"] = deploy_session(token, yaml_str)
         if evidence["deploy_response"].get("status") != "switching":
@@ -1992,6 +1935,94 @@ def _wait_for_playback_not_seeking(token: str, epoch_id: int, *, wait_s: int = 1
     }
 
 
+def _connectivity_expectation(session_id: str) -> dict:
+    window = INTERMITTENT_CONNECTIVITY_WINDOWS.get(session_id)
+    if window is None:
+        return {"mode": "continuous"}
+    return {"mode": "intermittent", **window}
+
+
+def _seek_playback_and_pause(token: str, target_sim_time: str) -> dict:
+    seek = request_json(
+        "POST",
+        "/api/v1/playback",
+        token=token,
+        json={"action": "seek", "target_sim_time": target_sim_time},
+        retries=3,
+    )
+    if seek.get("state") != "seeking" or "epoch_id" not in seek:
+        return {
+            "result": "FAIL",
+            "reason": "seek was not accepted into seeking state",
+            "seek": seek,
+        }
+    resumed = _wait_for_playback_not_seeking(token, int(seek["epoch_id"]), wait_s=120)
+    if resumed.get("result") != "PASS":
+        return {"result": "FAIL", "reason": resumed.get("reason"), "seek": seek, "resume": resumed}
+    paused = request_json(
+        "POST",
+        "/api/v1/playback",
+        token=token,
+        json={"action": "pause"},
+        retries=3,
+    )
+    if paused.get("state") != "paused" or not paused.get("paused"):
+        return {
+            "result": "FAIL",
+            "reason": "playback did not enter paused state after seek",
+            "seek": seek,
+            "resume": resumed,
+            "pause": paused,
+        }
+    return {"result": "PASS", "seek": seek, "resume": resumed, "pause": paused}
+
+
+def check_intermittent_connectivity(token: str, perm: dict) -> dict:
+    expectation = perm.get("connectivity_expectation") or {}
+    start_time = perm.get("session_start_time")
+    evidence: dict = {"result": "FAIL", "mode": "intermittent_ground_to_ground"}
+    if not start_time:
+        return {**evidence, "reason": "intermittent connectivity check requires session start time"}
+
+    start = _parse_api_datetime(str(start_time))
+    disconnected_target = start + timedelta(seconds=int(expectation["disconnected_offset_seconds"]))
+    settle_seconds = int(expectation.get("settle_seconds", 30))
+
+    try:
+        disconnected_control = _seek_playback_and_pause(token, disconnected_target.isoformat())
+        evidence["disconnected_control"] = disconnected_control
+        if disconnected_control.get("result") != "PASS":
+            evidence["reason"] = "could not establish deterministic disconnected window"
+            return evidence
+        time.sleep(settle_seconds)
+        disconnected_probe = check_ping(token, perm, ground_wait_s=15)
+        evidence["disconnected_probe"] = disconnected_probe
+        if disconnected_probe.get("result") != "FAIL":
+            evidence["reason"] = "intermittent observation window produced a routed path"
+            return evidence
+        if disconnected_probe.get("active_link_count", 0) <= 0:
+            evidence["reason"] = "disconnected window had no active physical links to observe"
+            return evidence
+        evidence["observed_outcome"] = "unreachable"
+        evidence["result"] = "PASS"
+        return evidence
+    finally:
+        evidence["resume_response"] = request_json(
+            "POST",
+            "/api/v1/playback",
+            token=token,
+            json={"action": "resume"},
+            retries=3,
+        )
+
+
+def check_declared_connectivity(token: str, perm: dict) -> dict:
+    expectation = perm.get("connectivity_expectation") or {"mode": "continuous"}
+    if expectation.get("mode") == "intermittent":
+        return check_intermittent_connectivity(token, perm)
+    return check_ping(token, perm)
+
+
 def run_seek_during_mbb_acceptance() -> dict:
     evidence: dict = {
         "id": "P6-SEEK-MBB",
@@ -2153,6 +2184,7 @@ def run_permutation(perm: dict) -> dict:
         "id": perm_id,
         "label": label,
         "spec": perm,
+        "provenance": perm["run_provenance"],
         "started_at": datetime.now(UTC).isoformat(),
     }
 
@@ -2177,18 +2209,45 @@ def run_permutation(perm: dict) -> dict:
             print(f"  Waiting for previous deploy to finish (phase={phase})...")
             time.sleep(5)
 
-        # Generate session YAML
-        print("  Generating session YAML...")
-        # Catalog permutations deploy the shipped segment-grammar session
-        # file verbatim; generated permutations still go through the
-        # wizard endpoint (legacy mode, pre-segment-grammar shapes).
-        yaml_str = perm.get("session_yaml") or generate_session(token, perm)
+        print("  Loading exact shipped session YAML...")
+        yaml_str = perm["session_yaml"]
         evidence["yaml_length"] = len(yaml_str)
 
         # Deploy
-        print("  Deploying via wizard API...")
-        deploy_result = deploy_session(token, yaml_str)
+        print("  Deploying guarded shipped catalog revision...")
+        deploy_result = deploy_catalog_session(token, perm)
         evidence["deploy_response"] = deploy_result
+        operation_id = deploy_result.get("operation_id")
+        if deploy_result.get("status") != "accepted" or not operation_id:
+            evidence["result"] = "FAIL"
+            evidence["error"] = f"Deploy refused: {deploy_result}"
+            print(f"  FAIL: {evidence['error']}")
+            return evidence
+
+        print(f"  Waiting for transition {operation_id}...")
+        transition_result = wait_for_transition(token, str(operation_id), timeout=600)
+        evidence["transition_result"] = transition_result
+        if transition_result.get("state") != "succeeded":
+            evidence["result"] = "FAIL"
+            evidence["error"] = f"Transition failed: {transition_result}"
+            print(f"  FAIL: {evidence['error']}")
+            return evidence
+        transition_facts = transition_result.get("facts") or {}
+        provenance = perm["run_provenance"]
+        observed_runtime = {
+            "release": transition_facts.get("release"),
+            "build": transition_facts.get("build"),
+            "document_digest": transition_facts.get("document_digest"),
+            "closure_digest": transition_facts.get("closure_digest"),
+            "resolved_semantic_digest": transition_facts.get("resolved_semantic_digest"),
+        }
+        evidence["observed_runtime"] = observed_runtime
+        identity_error = _runtime_identity_error(provenance, transition_facts)
+        if identity_error is not None:
+            evidence["result"] = "FAIL"
+            evidence["error"] = identity_error
+            print(f"  FAIL: {evidence['error']}")
+            return evidence
 
         # Wait for Ready
         print("  Waiting for Ready (up to 5 min)...")
@@ -2223,7 +2282,7 @@ def run_permutation(perm: dict) -> dict:
         # Check declared connectivity. Ground sessions must prove a GS-originated path;
         # satellite-only sessions may fall back to an ISL loopback path.
         print("  Checking declared connectivity...")
-        ping_result = check_ping(token, perm)
+        ping_result = check_declared_connectivity(token, perm)
         evidence["ping"] = ping_result
         transit = ""
         if "transit_proven" in ping_result:
@@ -2233,10 +2292,20 @@ def run_permutation(perm: dict) -> dict:
                 f" sep={ping_result.get('separation', '?')}"
                 f" egress={ping_result.get('egress_dev', '?')}"
             )
-        print(
-            f"  Ping: {ping_result.get('result', '?')}"
-            f" ({ping_result.get('src', '?')} -> {ping_result.get('dst', '?')}){transit}"
-        )
+        observed_outcome = ping_result.get("observed_outcome")
+        if observed_outcome:
+            active_links = (ping_result.get("disconnected_probe") or {}).get(
+                "active_link_count", "?"
+            )
+            print(
+                f"  Connectivity: {ping_result.get('result', '?')} "
+                f"(runtime reported {observed_outcome}; active_links={active_links})"
+            )
+        else:
+            print(
+                f"  Ping: {ping_result.get('result', '?')}"
+                f" ({ping_result.get('src', '?')} -> {ping_result.get('dst', '?')}){transit}"
+            )
 
         # Determine pass/fail
         ping_ok = ping_result.get("result") == "PASS" or (
@@ -2254,7 +2323,7 @@ def run_permutation(perm: dict) -> dict:
             f"  {evidence['result']}: {pod_result['running']} pods, "
             f"{routing_result.get('neighbor_count', '?')} neighbors, "
             f"sim_time={'advancing' if ws_result['advancing'] else 'STATIC'}, "
-            f"ping={ping_result.get('result', '?')}"
+            f"connectivity={observed_outcome or ping_result.get('result', '?')}"
         )
 
     except Exception as exc:
@@ -2286,10 +2355,8 @@ def catalog_permutations() -> list[dict]:
         if only and path.stem != only:
             continue
         text = path.read_text()
-        import yaml as _yaml
-
         resolved = resolve_session_with_assets(
-            _yaml.safe_load(text),
+            load_configuration_yaml(text),
             catalog_roots=roots,
             source_context=SourceContext(origin="e2e.catalog"),
         ).resolved
@@ -2321,6 +2388,8 @@ def catalog_permutations() -> list[dict]:
                 # the ground-truth predicate for the ping/adjacency checks.
                 "gs": ground_ids,
                 "ground_topology": ground_topology,
+                "session_start_time": str(resolved.time.start_time),
+                "connectivity_expectation": _connectivity_expectation(path.stem),
                 "step_seconds": int(resolved.time.step_seconds),
                 "session_yaml": text,
                 "xfail": False,
@@ -2330,25 +2399,21 @@ def catalog_permutations() -> list[dict]:
 
 
 def main():
-    import shutil
-
     print(f"E2E Matrix starting at {datetime.now(UTC).isoformat()}")
     print(f"PID: {os.getpid()}")
 
-    # Clean previous evidence by default. Targeted acceptance runs can append
-    # retained artifacts without destroying prior proof by setting
-    # NODALARC_PRESERVE_EVIDENCE=1.
-    evidence_root = Path("tests/integration/e2e-evidence")
-    preserve_evidence = os.environ.get("NODALARC_PRESERVE_EVIDENCE") == "1"
-    if evidence_root.exists() and not preserve_evidence:
-        shutil.rmtree(evidence_root)
-        print(f"Deleted previous evidence at {evidence_root}")
-    elif preserve_evidence:
-        print(f"Preserving previous evidence at {evidence_root}")
+    provenance = _run_provenance_from_environment()
+    evidence_root = Path(
+        os.environ.get("NODALARC_E2E_EVIDENCE_DIR", "tests/integration/e2e-evidence")
+    )
 
     ts = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
-    evidence_dir = evidence_root / ts
-    evidence_dir.mkdir(parents=True, exist_ok=True)
+    evidence_dir = (
+        evidence_root
+        / "runtime-matrix"
+        / f"{ts}-{provenance['source_git_sha'][:8]}-pid{os.getpid()}"
+    )
+    evidence_dir.mkdir(parents=True, exist_ok=False)
 
     # PID file: signals "running" to external pollers
     pid_file = evidence_root / ".running"
@@ -2369,9 +2434,11 @@ def main():
         xpassed = 0
 
         if os.environ.get("NODALARC_ACCEPTANCE_ONLY") != "1":
-            mode = os.environ.get("NODALARC_E2E_MODE", "catalog")
-            active_matrix = catalog_permutations() if mode == "catalog" else MATRIX
-            print(f"Mode: {mode} ({len(active_matrix)} permutations)")
+            active_matrix = [
+                {**permutation, "run_provenance": provenance}
+                for permutation in catalog_permutations()
+            ]
+            print(f"Catalog sessions: {len(active_matrix)}")
             for perm in active_matrix:
                 evidence = run_permutation(perm)
                 bucket = _classify_matrix_result(evidence, perm)
@@ -2395,6 +2462,7 @@ def main():
 
         if os.environ.get("NODALARC_RUN_MBB_ACCEPTANCE") == "1":
             evidence = run_mbb_acceptance()
+            evidence["provenance"] = provenance
             results.append(evidence)
             evidence_file = evidence_dir / "cj-mbb-packet-behavior.json"
             evidence_file.write_text(json.dumps(evidence, indent=2))
@@ -2405,6 +2473,7 @@ def main():
 
         if os.environ.get("NODALARC_RUN_DIRTY_REPAIR") == "1":
             evidence = run_dirty_repair_acceptance()
+            evidence["provenance"] = provenance
             results.append(evidence)
             evidence_file = evidence_dir / "dirty-repair.json"
             evidence_file.write_text(json.dumps(evidence, indent=2))
@@ -2415,6 +2484,7 @@ def main():
 
         if os.environ.get("NODALARC_RUN_SEEK_MBB") == "1":
             evidence = run_seek_during_mbb_acceptance()
+            evidence["provenance"] = provenance
             results.append(evidence)
             evidence_file = evidence_dir / "seek-during-mbb.json"
             evidence_file.write_text(json.dumps(evidence, indent=2))
@@ -2428,6 +2498,7 @@ def main():
         duration_s = (run_end - run_start).total_seconds()
         summary = {
             "run_token": run_token,
+            "provenance": provenance,
             "start_time": run_start.isoformat(),
             "end_time": run_end.isoformat(),
             "duration_s": round(duration_s, 1),
@@ -2437,7 +2508,13 @@ def main():
             "xfailed": xfailed,
             "xpassed": xpassed,
             "results": [
-                {"id": r["id"], "label": r.get("label"), "result": r["result"]} for r in results
+                {
+                    "id": r["id"],
+                    "label": r.get("label"),
+                    "result": r["result"],
+                    "observed_runtime": r.get("observed_runtime"),
+                }
+                for r in results
             ],
         }
         (evidence_dir / "matrix-summary.json").write_text(json.dumps(summary, indent=2))

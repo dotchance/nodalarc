@@ -12,7 +12,6 @@ from pathlib import Path
 
 import ome.event_stream as ome_event_stream
 import ome.main as ome_main
-import yaml
 from nodalarc.models.events import (
     ClockTick,
     HeartbeatTick,
@@ -41,8 +40,6 @@ from ome.ground_allocator import GroundAllocationResult
 from ome.main import _load_session_config, _run_pacing
 from ome.snapshot_builder import LinkSnapshotSource
 from ome.types import GroundVisibilityDecision, MbbTeardownLifecycleEvent
-
-from tests.conftest import build_segment_session_dict
 
 
 def _as_model(model_cls, payload):
@@ -210,16 +207,8 @@ def _fixed_step_result(
 def _demo_epoch_commit_session_path(tmp_path: Path) -> Path:
     session_path = tmp_path / "earth-leo-simple.yaml"
     session_path.write_text(
-        yaml.dump(
-            build_segment_session_dict(
-                name="earth-leo-simple",
-                constellation="configs/constellations/demo-36.yaml",
-                ground_stations="configs/ground-stations/sets/demo.yaml",
-                protocol="ospf",
-                orbit_propagator="j2-mean-elements",
-            ),
-            sort_keys=False,
-        )
+        Path("catalog/nodalarc/sessions/earth-leo-simple.yaml").read_text(encoding="utf-8"),
+        encoding="utf-8",
     )
     return session_path
 

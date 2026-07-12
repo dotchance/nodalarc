@@ -8,18 +8,26 @@ node:
     role: access
     terminal: nodalarc:terminals/rf/rf-s-tdrs-relay-ma.yaml
     count: 1
+    boresight:
+      mode: nadir
   - id: s_sa
     role: access
     terminal: nodalarc:terminals/rf/rf-s-tdrs-relay-sa.yaml
     count: 2
+    boresight:
+      mode: nadir
   - id: ku_sa
     role: access
     terminal: nodalarc:terminals/rf/rf-ku-tdrs-relay-sa.yaml
     count: 2
+    boresight:
+      mode: nadir
   - id: ka_sa
     role: access
     terminal: nodalarc:terminals/rf/rf-ka-tdrs-relay-sa.yaml
     count: 2
+    boresight:
+      mode: nadir
   - id: isl_optical
     role: isl
     terminal: nodalarc:terminals/optical/optical-high-orbit-isl.yaml

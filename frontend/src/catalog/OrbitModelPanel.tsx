@@ -1,8 +1,7 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
-import type { ConstellationPreset, OrbitPropagator } from "./wizardTypes";
+import type { ConstellationPreset, OrbitModel, OrbitPropagator } from "./wizardTypes";
 import {
-  ORBIT_MODEL_OPTIONS,
   defaultOrbitPropagatorForConstellation,
   orbitModelDisabledReason,
   supportedOrbitModelsForConstellation,
@@ -10,28 +9,31 @@ import {
 
 interface OrbitModelPanelProps {
   constellation: ConstellationPreset | null;
-  selected: OrbitPropagator;
+  orbitModels: readonly OrbitModel[];
+  selected: OrbitPropagator | null;
   onSelect: (model: OrbitPropagator) => void;
 }
 
 export function OrbitModelPanel({
   constellation,
+  orbitModels,
   selected,
   onSelect,
 }: OrbitModelPanelProps) {
   const supported = new Set(
-    supportedOrbitModelsForConstellation(constellation).map((option) => option.id),
+    supportedOrbitModelsForConstellation(constellation, orbitModels).map((option) => option.id),
   );
   const defaultModel = defaultOrbitPropagatorForConstellation(constellation);
 
   return (
     <div className="wizard-orbit-models">
-      {ORBIT_MODEL_OPTIONS.map((option) => {
+      {orbitModels.map((option) => {
         const disabledReason = orbitModelDisabledReason(option, constellation);
         const disabled = !supported.has(option.id);
         return (
           <button
             key={option.id}
+            aria-label={option.label}
             className={`wizard-orbit-model ${selected === option.id ? "wizard-orbit-model--selected" : ""}`}
             onClick={() => !disabled && onSelect(option.id)}
             disabled={disabled}

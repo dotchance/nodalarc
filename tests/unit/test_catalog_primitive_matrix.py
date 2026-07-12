@@ -30,13 +30,18 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-import yaml
+from nodalarc.configuration_yaml import load_configuration_yaml
 from nodalarc.models.resolved_session import SourceContext
-from nodalarc.resolve_session import SessionResolutionError, resolve_session
+from nodalarc.resolve_session import SessionResolutionError
 from nodalarc.runtime_support import UnsupportedFeatureError
 from nodalarc.session_validator import validate_session_readiness
 
-from tests.conftest import build_segment_session_dict
+from tests.catalog_session_fixtures import (
+    build_catalog_session_fixture,
+)
+from tests.catalog_session_fixtures import (
+    resolve_catalog_session as resolve_session,
+)
 
 CATALOG = Path(__file__).resolve().parents[2] / "catalog" / "nodalarc"
 CONSTELLATIONS = sorted((CATALOG / "constellations").rglob("*.yaml"))
@@ -82,7 +87,7 @@ def _catalog_token(path: Path) -> str:
 
 
 def _load(path: Path) -> dict:
-    return yaml.safe_load(path.read_text())
+    return load_configuration_yaml(path.read_bytes())
 
 
 def _central_body_of_constellation(path: Path) -> str:
@@ -105,6 +110,11 @@ def _readiness_errors(resolved) -> list[str]:
     ]
 
 
+def _select_exact_access_mount(raw: dict, mount: str) -> None:
+    for endpoint in raw["link_rules"][0]["endpoints"]:
+        endpoint["terminal"]["all"].append({"mount": mount})
+
+
 def test_primitive_inventory_is_nonempty() -> None:
     assert CONSTELLATIONS and ORBITS and SITES
 
@@ -121,11 +131,12 @@ def test_every_shipped_constellation_has_an_authored_ground_pairing() -> None:
 @pytest.mark.parametrize("path", CONSTELLATIONS, ids=lambda p: p.stem)
 def test_every_constellation_composes_into_a_session(path: Path) -> None:
     body = _central_body_of_constellation(path)
-    raw = build_segment_session_dict(
+    raw = build_catalog_session_fixture(
         name=f"matrix-{path.stem}",
         constellation=_catalog_token(path),
         ground_stations=CONSTELLATION_GROUND_SETS[path.stem],
     )
+    _select_exact_access_mount(raw, "access_s" if body == "luna" else "access_ka")
     if body != "earth":
         raw["ephemeris"] = LUNA_EPHEMERIS
 
@@ -188,7 +199,7 @@ def test_every_site_places_into_a_session(path: Path) -> None:
     body = Path(site["frame"]["body_fixed"]["body"].removeprefix("nodalarc:")).stem
     install = _site_rf_access_install_km(site)
     constellation = _constellation_for_site(body, float(site["location"]["lat_deg"]), install)
-    raw = build_segment_session_dict(
+    raw = build_catalog_session_fixture(
         name=f"matrix-site-{site['id']}",
         constellation=constellation,
         ground_stations={
@@ -199,6 +210,7 @@ def test_every_site_places_into_a_session(path: Path) -> None:
             }
         },
     )
+    _select_exact_access_mount(raw, "access_s" if body == "luna" else "access_ka")
     if body != "earth":
         raw["ephemeris"] = LUNA_EPHEMERIS
 

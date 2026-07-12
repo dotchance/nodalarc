@@ -14,7 +14,6 @@ from __future__ import annotations
 from copy import deepcopy
 
 import pytest
-from nodalarc.resolve_session import resolve_session
 from nodalarc.runtime_naming import LINUX_IFNAME_MAX, is_managed_host_ifname
 from nodalarc.session_validator import validate_session_readiness
 from nodalarc.substrate.manifest_contract import WiringManifest
@@ -22,7 +21,12 @@ from nodalarc.vxlan import compute_site_vni
 from node_agent.site_lan import plan_site_lan
 from pydantic import ValidationError
 
-from tests.conftest import build_segment_session_dict
+from tests.catalog_session_fixtures import (
+    build_catalog_session_fixture,
+)
+from tests.catalog_session_fixtures import (
+    resolve_catalog_session as resolve_session,
+)
 
 
 def _manifest_data() -> dict:
@@ -234,12 +238,13 @@ class TestPlanner:
 
 
 def _two_node_site_session() -> dict:
-    raw = build_segment_session_dict(
+    raw = build_catalog_session_fixture(
         name="site-lan-render",
         constellation={"planes": {"count": 1, "sats_per_plane": 2}},
         ground_stations={"stations": ["a"]},
     )
-    site = raw["segments"][1]["placement"]["from_site_set"]["site_set"]["sites"][0]["site"]
+    site_document = raw.read_catalog(raw.site_refs[0])
+    site = site_document["site"]
     second = deepcopy(site["nodes"][0])
     second["id"] = "gw2"
     second["interfaces"] = {
@@ -247,6 +252,7 @@ def _two_node_site_session() -> dict:
         "terr0": {"ipv4": "172.16.0.2/24", "ipv6": "fd10:0:0::2/64"},
     }
     site["nodes"].append(second)
+    raw.write_catalog(raw.site_refs[0], site_document)
     return raw
 
 
@@ -272,7 +278,7 @@ class TestRenderAndReadiness:
             assert vars_for_node["terr0_igp_active"] is True
 
         single = resolve_session(
-            build_segment_session_dict(
+            build_catalog_session_fixture(
                 name="site-lan-single",
                 constellation={"planes": {"count": 1, "sats_per_plane": 2}},
                 ground_stations={"stations": ["a"]},
@@ -290,15 +296,16 @@ class TestRenderAndReadiness:
 
         # A routed site node with NO terminals (so zero link candidates of
         # its own) must still pass readiness: the wired site LAN is real
-        # adjacency and connectivity validation counts it. Inline fixture,
-        # not a shipped session — shipped content evolves, the invariant
+        # adjacency and connectivity validation counts it. Persisted test
+        # catalog, not a shipped session — shipped content evolves, the invariant
         # does not.
-        raw = build_segment_session_dict(
+        raw = build_catalog_session_fixture(
             name="site-lan-conn",
             constellation={"planes": {"count": 1, "sats_per_plane": 2}},
             ground_stations={"stations": ["a"]},
         )
-        site = raw["segments"][1]["placement"]["from_site_set"]["site_set"]["sites"][0]["site"]
+        site_document = raw.read_catalog(raw.site_refs[0])
+        site = site_document["site"]
         second = deepcopy(site["nodes"][0])
         second["id"] = "gw2"
         second["terminals"] = {}
@@ -307,6 +314,7 @@ class TestRenderAndReadiness:
             "terr0": {"ipv4": "172.16.0.2/24", "ipv6": "fd10:0:0::2/64"},
         }
         site["nodes"].append(second)
+        raw.write_catalog(raw.site_refs[0], site_document)
         resolved = resolve_session(
             raw,
             source_context=SourceContext(origin="test.site_lan", run_id="run-test-0003"),

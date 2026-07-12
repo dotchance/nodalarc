@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
-from nodalarc.constellation_loader import SatelliteNode
-from nodalarc.models.addressing import AddressingScheme, NeighborAssignment
+from nodalarc.models.addressing import NeighborAssignment
 from nodalarc.models.link_decisions import GroundPolicyAudit
+from nodalarc.ome_runtime import SatelliteNode
 from ome.event_stream import StepContext, compute_step
 from ome.isl_engine import IslTerminalConstraints
 from ome.propagation_engine import PropagatedState
 from ome.propagator import EcefVec3, GeoPosition, Vec3
 
+from tests.ome_runtime_fixtures import StaticOmeAddressing
 from tests.physics_fixtures import EARTH_TEST_BODY_FRAMES, earth_elements_from_params
 
 
@@ -23,9 +24,9 @@ def test_cross_plane_isl_uses_cross_plane_tracking_limit(monkeypatch):
     terminals.
     """
 
-    addressing = AddressingScheme()
     node_a = "earth-iridium-sat-p00s00"
     node_b = "earth-iridium-sat-p01s00"
+    addressing = StaticOmeAddressing(satellite_ids=(node_a, node_b))
     sat_a = SatelliteNode(
         0,
         0,
@@ -52,6 +53,7 @@ def test_cross_plane_isl_uses_cross_plane_tracking_limit(monkeypatch):
         gs_positions={},
         gs_min_elevations={},
         gs_terminal_counts={},
+        gs_terminal_indices={},
         gs_selection_policies={},
         gs_selection_policy_names={},
         gs_handover_policies={},

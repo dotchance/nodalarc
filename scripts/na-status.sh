@@ -188,13 +188,35 @@ if [ -z "$PLATFORM" ]; then
     echo "  NOT RUNNING"
     echo "  Run: make install"
 else
-    TOTAL=$(echo "$PLATFORM" | wc -l)
-    RUNNING=$(echo "$PLATFORM" | grep -c Running || true)
-    if [ "$RUNNING" -eq "$TOTAL" ]; then
-        echo "  Running ($RUNNING/$TOTAL platform pods)"
+    DEPLOYMENT_ROWS="$(
+        kubectl get deployments -n "$NAMESPACE" --no-headers \
+            -o custom-columns=NAME:.metadata.name,GEN:.metadata.generation,OBS:.status.observedGeneration,DES:.spec.replicas,TOTAL:.status.replicas,UPD:.status.updatedReplicas,READY:.status.readyReplicas,AVAIL:.status.availableReplicas,TERM:.status.terminatingReplicas \
+            2>/dev/null || true
+    )"
+    DEPLOYMENT_TOTAL="$(printf '%s\n' "$DEPLOYMENT_ROWS" | awk 'NF {count++} END {print count+0}')"
+    DEPLOYMENT_CONVERGED="$(
+        printf '%s\n' "$DEPLOYMENT_ROWS" \
+            | awk '$2 == $3 && $4 == $5 && $4 == $6 && $4 == $7 && $4 == $8 && ($9 == "<none>" || $9 == 0) {count++} END {print count+0}'
+    )"
+    DS_ROW="$(
+        kubectl get ds nodalarc-node-agent -n "$NAMESPACE" --no-headers \
+            -o custom-columns=GEN:.metadata.generation,OBS:.status.observedGeneration,DES:.status.desiredNumberScheduled,CURRENT:.status.currentNumberScheduled,UPD:.status.updatedNumberScheduled,READY:.status.numberReady,AVAIL:.status.numberAvailable,MISSCHEDULED:.status.numberMisscheduled \
+            2>/dev/null || true
+    )"
+    DS_DESIRED="$(printf '%s\n' "$DS_ROW" | awk 'NF {print $3+0}')"
+    DS_READY="$(printf '%s\n' "$DS_ROW" | awk 'NF {print $6+0}')"
+    DS_CONVERGED="$(
+        printf '%s\n' "$DS_ROW" \
+            | awk 'NF && $1 == $2 && $3 == $4 && $3 == $5 && $3 == $6 && $3 == $7 && $8 == 0 {print 1; found=1} END {if (!found) print 0}'
+    )"
+    if [ "$DEPLOYMENT_TOTAL" -gt 0 ] \
+        && [ "$DEPLOYMENT_CONVERGED" -eq "$DEPLOYMENT_TOTAL" ] \
+        && [ "$DS_CONVERGED" -eq 1 ] \
+        && [ "$DS_DESIRED" -gt 0 ]; then
+        echo "  Running ($DEPLOYMENT_CONVERGED/$DEPLOYMENT_TOTAL deployments converged; $DS_READY/$DS_DESIRED Node Agents ready)"
         PLATFORM_HEALTHY=true
     else
-        echo "  DEGRADED ($RUNNING/$TOTAL platform pods running)"
+        echo "  DEGRADED ($DEPLOYMENT_CONVERGED/$DEPLOYMENT_TOTAL deployments converged; $DS_READY/$DS_DESIRED Node Agents ready)"
         IMG_PULL=$(echo "$PLATFORM" | grep -c "ImagePull\|ErrImagePull" || true)
         CRASH=$(echo "$PLATFORM" | grep -c "CrashLoopBackOff\|Error" || true)
 
@@ -221,9 +243,9 @@ else
             echo "  $CRASH pod(s) crashing."
         fi
 
-        PROBLEM_PODS=$(echo "$PLATFORM" | awk '$3 != "Running" {print $1}' || true)
+        PROBLEM_PODS=$(echo "$PLATFORM" | awk '{split($2, ready, "/"); if (ready[1] != ready[2]) print $1}' || true)
         if [ -n "$PROBLEM_PODS" ]; then
-            echo "  Problem pod diagnostics:"
+            echo "  Non-ready pod diagnostics (including retained rollout replicas):"
             while IFS= read -r pod; do
                 [ -n "$pod" ] || continue
                 print_problem_pod_diagnostics "$pod"
@@ -278,7 +300,7 @@ else
         echo "  Run: make session"
         echo "  Override: make session DEFAULT_SESSION=catalog/nodalarc/sessions/<name>.yaml"
     else
-        SESSION_NAME=$(echo "$SESSION" | python3 -c "import json,sys,yaml; d=json.load(sys.stdin); status=d.get('status',{}); name=status.get('sessionId') or yaml.safe_load(d.get('spec',{}).get('sessionYaml','{}')).get('session',{}).get('name','unknown'); print(name)" 2>/dev/null || echo "unknown")
+        SESSION_NAME=$(echo "$SESSION" | python3 -c "import json,sys; d=json.load(sys.stdin); status=d.get('status',{}); print(status.get('sessionName') or status.get('sessionId') or 'unknown')" 2>/dev/null || echo "unknown")
         PHASE=$(echo "$SESSION" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('status',{}).get('phase','Unknown'))" 2>/dev/null || echo "Unknown")
         WIRED=$(echo "$SESSION" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('status',{}).get('wiredPods',0))" 2>/dev/null || echo "0")
         SATS=$(kubectl get pods -n "$NAMESPACE" -l nodalarc.io/role=satellite --no-headers 2>/dev/null | grep -c Running || echo 0)

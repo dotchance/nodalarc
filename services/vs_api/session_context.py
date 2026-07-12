@@ -33,11 +33,9 @@ import threading
 import time as _time
 from collections import Counter, deque
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Literal
 
 import nats
-import yaml
 from nodalarc.db.queries import insert_ome_lifecycle_event, insert_operator_intervention_event
 from nodalarc.explain import compose_gs_decision_timeline_sample
 from nodalarc.models.decision_explanation import (
@@ -46,7 +44,7 @@ from nodalarc.models.decision_explanation import (
     PendingActuation,
 )
 from nodalarc.models.link_decisions import GroundLinkDecisionSnapshot
-from nodalarc.models.resolved_session import ResolvedNode, SourceContext
+from nodalarc.models.resolved_session import ResolvedNode
 from nodalarc.models.scheduler_ops import ActualLinkSnapshot, ActuationState, parse_actuation_state
 from nodalarc.models.vs_api import (
     AlmanacState,
@@ -77,11 +75,11 @@ from nodalarc.nats_channels import (
     session_ephemeris_subject,
 )
 from nodalarc.platform_config import get_platform_config
-from nodalarc.resolve_session import resolve_session_with_assets
+from nodalarc.resolve_session import SessionResolution
 from pydantic import ValidationError
 
 from vs_api.ops_log import is_operator_visible_ops_event, stamp_ops_event
-from vs_api.session_manager import _routing_label
+from vs_api.resolved_runtime_views import routing_label
 
 log = logging.getLogger(__name__)
 
@@ -99,26 +97,28 @@ class SessionContext:
     does NOT own or close the NATS connection.
     """
 
-    def __init__(self, session_id: str, session_config_path: str) -> None:
+    def __init__(
+        self,
+        session_id: str,
+        *,
+        resolution: SessionResolution,
+        source_id: str,
+    ) -> None:
         if not session_id:
             log.error("FATAL: SessionContext created with empty session_id")
             raise ValueError("session_id is required")
-        if not session_config_path:
-            log.error("FATAL: SessionContext created with empty session_config_path")
-            raise ValueError("session_config_path is required")
+        if not isinstance(resolution, SessionResolution):
+            raise TypeError("resolution must be a SessionResolution")
+        if not source_id:
+            raise ValueError("source_id must be non-empty")
 
         self.session_id = session_id
-        self.session_file = session_config_path
-
-        # Parse session config for metadata through the resolver.
-        session_data = yaml.safe_load(Path(session_config_path).read_text())
-        resolution = resolve_session_with_assets(
-            session_data,
-            source_context=SourceContext(origin="vs_api.session_context"),
-        )
+        self.session_file = ""
+        self.session_source_id = source_id
+        self.session_resolution = resolution
         resolved = resolution.resolved
         platform = self._platform_config()
-        self.routing_stack = _routing_label(resolved)
+        self.routing_stack = routing_label(resolved)
         self.constellation_name = resolved.session.name
 
         # Load GS elevation map and beam falloff
@@ -133,6 +133,9 @@ class SessionContext:
             primary_prefix_by_id=self._node_primary_prefix_by_id,
             min_elevation_by_id=self.gs_elevation_map,
         )
+        self._resolved_link_kind_by_rule_id = {
+            rule.rule_id: rule.kind for rule in resolved.link_rules
+        }
         self.beam_falloff_exponent: float = platform.vs_api_visual_beam_falloff_exponent
 
         # Wall-clock actuation-latency contract (platform vs_api_actuation_*) — the
@@ -156,6 +159,8 @@ class SessionContext:
             self._node_primary_prefix_by_id = {}
         if not hasattr(self, "_resolved_static_nodes_by_id"):
             self._resolved_static_nodes_by_id = {}
+        if not hasattr(self, "_resolved_link_kind_by_rule_id"):
+            self._resolved_link_kind_by_rule_id = {}
         self.nodes: dict[str, NodeState] = {}
         self.links: dict[str, LinkState] = {}
         self.link_decision_traces: dict[str, LinkDecisionTrace] = {}
@@ -229,12 +234,15 @@ class SessionContext:
         """
         self.session_id = "test"
         self.session_file = ""
+        self.session_source_id = "test"
+        self.session_resolution = None
         self.routing_stack = "test"
         self.constellation_name = "test"
         self.gs_elevation_map = {}
         self._node_addresses_by_id = {}
         self._node_primary_prefix_by_id = {}
         self._resolved_static_nodes_by_id = {}
+        self._resolved_link_kind_by_rule_id = {}
         self.beam_falloff_exponent = 2.0
         self.actuation_expected_latency_ms = 250.0
         self.actuation_fault_after_ms = 1200.0
@@ -616,16 +624,16 @@ class SessionContext:
                         f"authoritative field(s): {', '.join(missing)}"
                     )
                 key = _link_key(link.node_a, link.node_b)
+                public_link_type = self._public_link_type(
+                    link.link_type,
+                    link_rule_id=link.link_rule_id,
+                    endpoint_segments=link.endpoint_segments,
+                )
                 new_links[key] = LinkState(
                     node_a=link.node_a,
                     node_b=link.node_b,
                     state="active",
-                    link_type=_derive_link_type(
-                        link.link_type,
-                        link_rule_id=link.link_rule_id,
-                        topology_mode=link.topology_mode,
-                        endpoint_segments=link.endpoint_segments,
-                    ),
+                    link_type=public_link_type,
                     link_reason="",
                     latency_ms=link.latency_ms,
                     bandwidth_mbps=link.bandwidth_mbps,
@@ -640,7 +648,11 @@ class SessionContext:
                     teardown_remaining_ticks=link.teardown_remaining_ticks,
                     successor_pair=link.successor_pair,
                 )
-                new_traces[key] = self._trace_from_snapshot_link(link, snapshot)
+                new_traces[key] = self._trace_from_snapshot_link(
+                    link,
+                    snapshot,
+                    link_type=public_link_type,
+                )
 
         with self.state_lock:
             self.links.clear()
@@ -753,18 +765,18 @@ class SessionContext:
                 log.error("Malformed LinkUp — missing %s: %s", field, data)
                 raise ValueError(f"LinkUp missing required field: {field}")
         key = _link_key(node_a, node_b)
-        trace = self._trace_from_link_event(data)
+        public_link_type = self._public_link_type(
+            data["link_type"],
+            link_rule_id=data.get("link_rule_id"),
+            endpoint_segments=data.get("endpoint_segments"),
+        )
+        trace = self._trace_from_link_event(data, link_type=public_link_type)
         with self.state_lock:
             self.links[key] = LinkState(
                 node_a=node_a,
                 node_b=node_b,
                 state="active",
-                link_type=_derive_link_type(
-                    data["link_type"],
-                    link_rule_id=data.get("link_rule_id"),
-                    topology_mode=data.get("topology_mode"),
-                    endpoint_segments=data.get("endpoint_segments"),
-                ),
+                link_type=public_link_type,
                 link_reason=data["reason"],
                 latency_ms=data["latency_ms"],
                 bandwidth_mbps=data["bandwidth_mbps"],
@@ -1356,8 +1368,26 @@ class SessionContext:
         if self.continuous_tracer is not None:
             self.continuous_tracer.notify_topology_change(node_a, node_b)
 
+    def _public_link_type(
+        self,
+        raw_type: str | None,
+        *,
+        link_rule_id: str | None = None,
+        endpoint_segments: tuple[str, str] | list[str] | None = None,
+    ) -> str:
+        return _derive_link_type(
+            raw_type,
+            resolved_kind=(
+                self._resolved_link_kind_by_rule_id.get(link_rule_id)
+                if link_rule_id is not None
+                else None
+            ),
+            link_rule_id=link_rule_id,
+            endpoint_segments=endpoint_segments,
+        )
+
     @staticmethod
-    def _trace_from_snapshot_link(link, snapshot) -> LinkDecisionTrace:
+    def _trace_from_snapshot_link(link, snapshot, *, link_type: str) -> LinkDecisionTrace:
         """Build an OME-authority trace from a full-state snapshot link.
 
         A snapshot proves OME geometry at a specific simulation time. It does
@@ -1367,7 +1397,7 @@ class SessionContext:
         return LinkDecisionTrace(
             node_a=link.node_a,
             node_b=link.node_b,
-            link_type=link.link_type,
+            link_type=link_type,
             state="active",
             interface_a=link.interface_a,
             interface_b=link.interface_b,
@@ -1425,13 +1455,13 @@ class SessionContext:
                 f"event={data['latency_ms']} provenance={provenance['orbital_one_way_ms']}"
             )
 
-    def _trace_from_link_event(self, data: dict) -> LinkDecisionTrace:
+    def _trace_from_link_event(self, data: dict, *, link_type: str) -> LinkDecisionTrace:
         provenance = self._require_provenance(data, "LinkUp")
         self._assert_provenance_matches_event(data, provenance, "LinkUp")
         return LinkDecisionTrace(
             node_a=data["node_a"],
             node_b=data["node_b"],
-            link_type=data["link_type"],
+            link_type=link_type,
             state="active",
             interface_a=data["interface_a"],
             interface_b=data["interface_b"],
@@ -1675,19 +1705,23 @@ def _link_key(node_a: str, node_b: str) -> str:
 def _derive_link_type(
     raw_type: str | None,
     *,
+    resolved_kind: str | None = None,
     link_rule_id: str | None = None,
-    topology_mode: str | None = None,
     endpoint_segments: tuple[str, str] | list[str] | None = None,
 ) -> str:
     if raw_type and raw_type != "isl":
         return raw_type
     if raw_type is None:
         raise ValueError("link_type is required; VS-API does not infer ground links from node IDs")
-    if endpoint_segments is not None and len(endpoint_segments) == 2:
+    if resolved_kind == "inter_body":
+        return "inter_body_relay"
+    if resolved_kind not in (None, "isl"):
+        raise ValueError(
+            f"resolved link kind {resolved_kind!r} cannot classify runtime link_type='isl'"
+        )
+    if resolved_kind == "isl" and endpoint_segments is not None and len(endpoint_segments) == 2:
         a, b = endpoint_segments
         if a != b:
-            if topology_mode == "static_ip":
-                return "inter_body_relay"
             return "inter_constellation"
     if link_rule_id and link_rule_id.endswith(".internal_isl"):
         return "isl"

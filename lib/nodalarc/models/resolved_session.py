@@ -9,18 +9,20 @@ materialized terminal inventory, disjoint SID blocks, and resolved link-rule
 node sets.
 """
 
+from dataclasses import dataclass
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from nodalarc.body_frames import FrameBodyName, SupportedSurfaceBody
 from nodalarc.model_validation import NonEmptyReference
+from nodalarc.models.catalog import MountRole
 from nodalarc.models.identity import IdentityMode
 from nodalarc.models.link_rules import (
-    LinkKind,
+    LinkLabel,
     LinkRuleConstraints,
     LinkTopology,
-    TerminalRole,
 )
 from nodalarc.models.segment_session import (
     Addressing,
@@ -33,6 +35,8 @@ from nodalarc.models.segment_session import (
     TimeConfig,
 )
 from nodalarc.models.segments import GroundScheduling, OriginatedPrefixes, SegmentClock
+from nodalarc.models.terminal_physics import SatGroundTerminalBoresight, TerminalBoresight
+from nodalarc.tle import tle_epoch_unix, tle_norad_id, validate_tle_pair
 
 NodeKind = Literal["satellite", "ground_station", "relay"]
 TerminalMediumLiteral = Literal["rf", "optical"]
@@ -56,6 +60,30 @@ class ResolvedOrbitFacts(BaseModel):
     raan_deg: float = Field(allow_inf_nan=False)
     argument_of_perigee_deg: float = Field(allow_inf_nan=False)
     mean_anomaly_deg: float = Field(allow_inf_nan=False)
+    tle_line_1: str | None = None
+    tle_line_2: str | None = None
+    norad_id: int | None = None
+
+    @model_validator(mode="after")
+    def _tle_scope(self) -> ResolvedOrbitFacts:
+        tle_values = (self.tle_line_1, self.tle_line_2, self.norad_id)
+        if self.propagator != "sgp4_tle":
+            if any(value is not None for value in tle_values):
+                raise ValueError("non-SGP4 orbit facts must not carry TLE fields")
+            return self
+        if self.tle_line_1 is None or self.tle_line_2 is None or self.norad_id is None:
+            raise ValueError("sgp4_tle orbit facts require both TLE lines and norad_id")
+        validate_tle_pair(self.tle_line_1, self.tle_line_2)
+        if tle_norad_id(self.tle_line_1) != self.norad_id:
+            raise ValueError("sgp4_tle norad_id must match TLE line 1")
+        parsed_epoch = datetime.fromisoformat(
+            f"{self.epoch[:-1]}+00:00" if self.epoch.endswith("Z") else self.epoch
+        )
+        if parsed_epoch.tzinfo is None or parsed_epoch.utcoffset() is None:
+            raise ValueError("sgp4_tle epoch must include an explicit UTC offset")
+        if abs(parsed_epoch.timestamp() - tle_epoch_unix(self.tle_line_1)) > 1e-6:
+            raise ValueError("sgp4_tle epoch must match TLE line 1")
+        return self
 
 
 class ResolvedSurfacePosition(BaseModel):
@@ -85,7 +113,7 @@ class ResolvedTerminalBlock(BaseModel):
 
     terminal_id: NonEmptyReference
     owner_node_id: NonEmptyReference
-    endpoint_role: TerminalRole
+    endpoint_role: MountRole
     medium: TerminalMediumLiteral  # rf | optical
     source_terminal_id: NonEmptyReference | None = None
     link_role: NonEmptyReference | None = None
@@ -96,6 +124,7 @@ class ResolvedTerminalBlock(BaseModel):
     field_of_regard_deg: float | None = Field(default=None, gt=0, le=360.0, allow_inf_nan=False)
     tracking_rate_deg_s: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     bandwidth_mbps: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    boresight: TerminalBoresight | SatGroundTerminalBoresight | None = None
     # Provenance for audit/debug only (e.g. "satellite_type:starlink-v2-laser#isl[0]").
     source_ref: NonEmptyReference
 
@@ -199,34 +228,56 @@ class ResolvedBodyFacts(BaseModel):
 
 
 class ResolvedLinkCandidate(BaseModel):
-    """One declared static candidate pair with concrete runtime interfaces."""
+    """One declared candidate pair.
+
+    Fixed links carry resolver-assigned interfaces. Access links do not: OME
+    assigns one of each endpoint's selected global access-interface indices
+    when it schedules an association.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     rule_id: NonEmptyReference
-    kind: LinkKind
+    kind: LinkLabel
     # Endpoint-ordered (parallel to endpoint_segments) — a link may join two
     # different terminal classes, e.g. a LEO isl head to a HEO crosslink head.
-    terminal_roles: tuple[TerminalRole, TerminalRole]
+    terminal_roles: tuple[MountRole, MountRole]
     terminal_medium: TerminalMediumLiteral | None = None
     node_a: NonEmptyReference
     node_b: NonEmptyReference
-    interface_a: NonEmptyReference
-    interface_b: NonEmptyReference
+    interface_a: NonEmptyReference | None = None
+    interface_b: NonEmptyReference | None = None
     bandwidth_mbps: float = Field(gt=0, allow_inf_nan=False)
     topology_mode: NonEmptyReference
     priority: int = Field(ge=0)
     endpoint_segments: tuple[NonEmptyReference, NonEmptyReference]
 
     @model_validator(mode="after")
-    def _pair_is_not_self(self) -> ResolvedLinkCandidate:
+    def _candidate_invariants(self) -> ResolvedLinkCandidate:
         if self.node_a == self.node_b:
             raise ValueError(f"link candidate {self.rule_id!r} has identical endpoints")
+        interfaces = (self.interface_a, self.interface_b)
+        if self.kind == "access":
+            if any(interface is not None for interface in interfaces):
+                raise ValueError(
+                    f"access candidate {self.rule_id!r} must not carry fixed interfaces"
+                )
+        elif any(interface is None for interface in interfaces):
+            raise ValueError(
+                f"fixed link candidate {self.rule_id!r} requires both endpoint interfaces"
+            )
         return self
 
     @property
     def pair(self) -> tuple[str, str]:
         return (self.node_a, self.node_b)
+
+    @property
+    def fixed_interfaces(self) -> tuple[str, str]:
+        """Return the resolver-owned interfaces for a non-access candidate."""
+        if self.interface_a is None or self.interface_b is None:
+            raise ValueError(f"access candidate {self.rule_id!r} has no fixed interfaces")
+        return self.interface_a, self.interface_b
 
 
 class ResolvedNode(BaseModel):
@@ -288,11 +339,34 @@ class ResolvedNode(BaseModel):
                     f"node {self.node_id!r} terminal {block.terminal_id!r} "
                     "requires tracking_capacity"
                 )
+            if block.endpoint_role == "access":
+                if self.kind == "ground_station" and not isinstance(
+                    block.boresight, TerminalBoresight
+                ):
+                    raise ValueError(
+                        f"ground node {self.node_id!r} access terminal "
+                        f"{block.terminal_id!r} requires a ground boresight"
+                    )
+                if self.kind == "satellite":
+                    if not isinstance(block.boresight, SatGroundTerminalBoresight):
+                        raise ValueError(
+                            f"satellite {self.node_id!r} access terminal "
+                            f"{block.terminal_id!r} requires a spacecraft nadir boresight"
+                        )
+                    if block.boresight.target_body != self.central_body:
+                        raise ValueError(
+                            f"satellite {self.node_id!r} access terminal "
+                            f"{block.terminal_id!r} targets {block.boresight.target_body!r}, "
+                            f"not central body {self.central_body!r}"
+                        )
+            elif block.boresight is not None:
+                raise ValueError(
+                    f"node {self.node_id!r} non-access terminal {block.terminal_id!r} "
+                    "must not carry an access boresight"
+                )
         if self.kind == "ground_station":
             if self.reference_body is None:
                 raise ValueError(f"ground station {self.node_id!r} requires reference_body")
-            if self.ground_scheduling is None:
-                raise ValueError(f"ground station {self.node_id!r} requires ground_scheduling")
             if self.surface_position is None:
                 raise ValueError(f"ground station {self.node_id!r} requires surface_position")
         elif self.ground_scheduling is not None:
@@ -314,7 +388,7 @@ class ResolvedEndpoint(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     segment_id: NonEmptyReference
-    terminal_role: TerminalRole
+    terminal_role: MountRole
     terminal_medium: TerminalMediumLiteral | None = None
     terminal_id: NonEmptyReference | None = None
     min_elevation_deg: float | None = Field(default=None, ge=-90.0, le=90.0, allow_inf_nan=False)
@@ -328,6 +402,22 @@ class ResolvedEndpoint(BaseModel):
             raise ValueError(f"endpoint contains duplicate node_id(s): {dupes}")
         return self
 
+    def matches_terminal(self, block: ResolvedTerminalBlock) -> bool:
+        """Return whether one resolved mount satisfies this endpoint."""
+        return (
+            block.endpoint_role == self.terminal_role
+            and (self.terminal_medium is None or block.medium == self.terminal_medium)
+            and (self.terminal_id is None or block.terminal_id == self.terminal_id)
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedAccessTerminalSelection:
+    """One selected access mount and its resolver-owned interface indices."""
+
+    block: ResolvedTerminalBlock
+    interface_indices: tuple[int, ...]
+
 
 class ResolvedLinkRule(BaseModel):
     """A link rule after selector resolution. Candidate generation starts here."""
@@ -335,7 +425,7 @@ class ResolvedLinkRule(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     rule_id: NonEmptyReference
-    kind: LinkKind
+    kind: LinkLabel
     enabled: bool
     endpoints: tuple[ResolvedEndpoint, ResolvedEndpoint]
     topology: LinkTopology
@@ -399,7 +489,7 @@ class ResolvedSession(BaseModel):
     dispatch: Dispatch | None = None
     addressing: Addressing | None = None
     ephemeris: ResolvedEphemeris | None = None
-    time: TimeConfig | None = None
+    time: TimeConfig
     source_context: SourceContext
 
     @model_validator(mode="after")
@@ -572,6 +662,7 @@ class ResolvedSession(BaseModel):
         allocator does not enforce.
         """
         result: dict[str, float] = {}
+        selected = self.selected_access_terminals_by_node()
         node_by_id = {node.node_id: node for node in self.nodes}
         for rule in self.link_rules:
             if rule.kind != "access" or not rule.enabled:
@@ -582,14 +673,10 @@ class ResolvedSession(BaseModel):
                     if node.kind != "ground_station":
                         continue
                     terminal_masks = [
-                        block.min_elevation_deg
-                        for block in node.terminal_inventory
-                        if block.endpoint_role == endpoint.terminal_role
-                        and (
-                            endpoint.terminal_medium is None
-                            or block.medium == endpoint.terminal_medium
-                        )
-                        and block.min_elevation_deg is not None
+                        item.block.min_elevation_deg
+                        for item in selected[node_id]
+                        if endpoint.matches_terminal(item.block)
+                        and item.block.min_elevation_deg is not None
                     ]
                     masks = [
                         value
@@ -602,6 +689,87 @@ class ResolvedSession(BaseModel):
                         )
                     effective = max(float(value) for value in masks)
                     result[node_id] = max(result.get(node_id, effective), effective)
+        return result
+
+    def selected_access_terminals_by_node(
+        self,
+    ) -> dict[str, tuple[ResolvedAccessTerminalSelection, ...]]:
+        """Return enabled access-rule mounts with their global WAN indices.
+
+        Selection is derived once from resolved endpoints. Consumers receive
+        the same mount blocks and the same resolver-created interface identity;
+        filtering a mount must never renumber ``termN`` or ``gndN``.
+        """
+        node_by_id = {node.node_id: node for node in self.nodes}
+        selected_ids: dict[str, set[str]] = {}
+        for rule in self.link_rules:
+            if rule.kind != "access" or not rule.enabled:
+                continue
+            for endpoint in rule.endpoints:
+                for node_id in endpoint.node_ids:
+                    node = node_by_id[node_id]
+                    matches = tuple(
+                        block
+                        for block in node.terminal_inventory
+                        if block.endpoint_role == "access" and endpoint.matches_terminal(block)
+                    )
+                    if not matches:
+                        raise ValueError(
+                            f"access rule {rule.rule_id!r} endpoint for {node_id!r} "
+                            "matches no resolved access terminal mount"
+                        )
+                    selected_ids.setdefault(node_id, set()).update(
+                        block.terminal_id for block in matches
+                    )
+
+        result: dict[str, tuple[ResolvedAccessTerminalSelection, ...]] = {}
+        for node in self.nodes:
+            terminal_ids = selected_ids.get(node.node_id)
+            if not terminal_ids:
+                continue
+            expected_prefix = "term" if node.kind == "ground_station" else "gnd"
+            interfaces_by_terminal: dict[str, list[int]] = {}
+            for interface in node.wan_interfaces:
+                if interface.terminal_id not in terminal_ids:
+                    continue
+                if not interface.name.startswith(expected_prefix):
+                    raise ValueError(
+                        f"selected access interface {node.node_id}:{interface.name} must use "
+                        f"the {expected_prefix!r} prefix"
+                    )
+                suffix = interface.name[len(expected_prefix) :]
+                if not suffix.isdigit():
+                    raise ValueError(
+                        f"selected access interface {node.node_id}:{interface.name} "
+                        "does not end in a numeric global index"
+                    )
+                interfaces_by_terminal.setdefault(interface.terminal_id, []).append(int(suffix))
+
+            selections: list[ResolvedAccessTerminalSelection] = []
+            for block in node.terminal_inventory:
+                if block.terminal_id not in terminal_ids:
+                    continue
+                indices = tuple(interfaces_by_terminal.get(block.terminal_id, ()))
+                if len(indices) != block.count:
+                    raise ValueError(
+                        f"selected access mount {node.node_id}:{block.terminal_id} declares "
+                        f"count={block.count}, but owns global interface indices {indices}"
+                    )
+                if len(set(indices)) != len(indices):
+                    raise ValueError(
+                        f"selected access mount {node.node_id}:{block.terminal_id} owns "
+                        f"duplicate global interface indices {indices}"
+                    )
+                selections.append(
+                    ResolvedAccessTerminalSelection(block=block, interface_indices=indices)
+                )
+            missing = sorted(terminal_ids - {item.block.terminal_id for item in selections})
+            if missing:
+                raise ValueError(
+                    f"selected access mounts for {node.node_id!r} are missing from its "
+                    f"resolved terminal inventory: {missing}"
+                )
+            result[node.node_id] = tuple(selections)
         return result
 
     def ground_index_by_node_id(self) -> dict[str, int]:
@@ -631,10 +799,15 @@ class ResolvedSession(BaseModel):
         return result
 
     def link_interface_map(self) -> dict[tuple[str, str], tuple[str, str]]:
-        """Return concrete interface names keyed by canonical node pair."""
+        """Return resolver-assigned fixed-link interfaces by canonical pair.
+
+        Access interfaces are selected dynamically by OME and therefore never
+        appear in this map.
+        """
         return {
-            candidate.pair: (candidate.interface_a, candidate.interface_b)
+            candidate.pair: candidate.fixed_interfaces
             for candidate in self.link_candidates
+            if candidate.kind != "access"
         }
 
     def link_bandwidth_map(self) -> dict[tuple[str, str], float]:

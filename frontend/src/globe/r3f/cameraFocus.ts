@@ -34,6 +34,37 @@ export function cameraDirectionFromTarget(
   return out.normalize();
 }
 
+export interface AvoidSphere {
+  center: THREE.Vector3;
+  radius: number;
+}
+
+/**
+ * End position for a focus flight: approach from the current camera side,
+ * but never end inside the avoid sphere. A node on a body's far side would
+ * otherwise put the camera underground (direction toward the old camera
+ * passes through the body and the node-focus distance is short); when that
+ * happens, approach along the surface normal at the target instead.
+ */
+export function flightEndPosition(
+  target: THREE.Vector3,
+  cameraPosition: THREE.Vector3,
+  dist: number,
+  avoid: AvoidSphere | null,
+  out: THREE.Vector3,
+): THREE.Vector3 {
+  cameraDirectionFromTarget(cameraPosition, target, out);
+  out.multiplyScalar(dist).add(target);
+  if (avoid && out.distanceTo(avoid.center) < avoid.radius * 1.05) {
+    const normal = target.clone().sub(avoid.center);
+    if (normal.lengthSq() > 1e-6) {
+      normal.normalize();
+      out.copy(target).addScaledVector(normal, dist);
+    }
+  }
+  return out;
+}
+
 export function frameEndpoints(
   a: THREE.Vector3,
   b: THREE.Vector3,

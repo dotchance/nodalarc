@@ -17,22 +17,18 @@ from pathlib import Path
 from typing import Any, Literal
 
 from nodalarc.body_frames import BodyFrame
-from nodalarc.constellation_loader import (
-    SatelliteNode,
-    isl_terminal_for_interface,
-    satellite_node_id,
-)
 from nodalarc.ephemeris_runtime import SkyfieldBspEphemeris, body_states_at
 from nodalarc.ground_handover import resolve_station_ground_scheduling
 from nodalarc.ground_terminals import (
     TerminalPhysicsProfile,
+    ground_terminal_interface_indices,
     ground_terminal_type,
     satellite_terminal_index_pools_by_target_body,
     station_ground_terminal_type,
     terminal_physics_profile,
     terminal_physics_profiles,
 )
-from nodalarc.models.addressing import AddressingScheme, NeighborAssignment, neighbors_by_node
+from nodalarc.models.addressing import NeighborAssignment, neighbors_by_node
 from nodalarc.models.events import (
     ClockTick,
     EphemerisBodyFrame,
@@ -42,10 +38,21 @@ from nodalarc.models.events import (
     NodePosition,
     SessionEphemeris,
 )
-from nodalarc.models.ground_policy import HandoverPolicySpec, RankingComponent, SelectionPolicySpec
-from nodalarc.models.ground_station import GroundStationFile, HysteresisParameters
+from nodalarc.models.ground_policy import (
+    HandoverPolicySpec,
+    HysteresisParameters,
+    RankingComponent,
+    SelectionPolicySpec,
+)
 from nodalarc.models.link_decisions import GroundPolicyAudit
 from nodalarc.models.session import GroundSchedulingConfig
+from nodalarc.ome_runtime import (
+    GroundStationFile,
+    OmeAddressing,
+    SatelliteNode,
+    isl_terminal_for_interface,
+    satellite_node_id,
+)
 
 from ome.event_diff import diff_ground_visibility_events, diff_isl_visibility_events
 from ome.ground_allocator import (
@@ -249,10 +256,11 @@ class StepContext:
     """Session-constant arguments for compute_step(). Built once, reused every step."""
 
     satellites: list[SatelliteNode]
-    addressing: AddressingScheme
+    addressing: OmeAddressing
     gs_positions: dict[str, tuple[EcefVec3, GeoPosition]]
     gs_min_elevations: dict[str, float]
     gs_terminal_counts: dict[str, int]
+    gs_terminal_indices: dict[str, tuple[int, ...]]
     gs_selection_policies: dict[str, SelectionPolicySpec]
     gs_selection_policy_names: dict[str, str]
     gs_handover_policies: dict[str, HandoverPolicySpec]
@@ -273,7 +281,7 @@ class StepContext:
     sat_ground_terminal_indices_by_body: dict[str, dict[str, tuple[int, ...]]]
     # Per-GS tenant scope (Direction 2 — multi-tenant from day one) and
     # reference body (Direction 3 — multi-body from day one). Both
-    # already exist on GroundStationConfig; the StepContext carries them
+    # already exist on resolved ground-station facts; the StepContext carries them
     # so every visibility decision is tenant- and body-attributable.
     gs_tenant_ids: dict[str, str]
     gs_reference_bodies: dict[str, str]
@@ -448,7 +456,7 @@ def _build_policy_audit(
 
 def build_step_context(
     satellites: list[SatelliteNode],
-    addressing: AddressingScheme,
+    addressing: OmeAddressing,
     gs_file: GroundStationFile | None,
     neighbors: frozenset[tuple[str, NeighborAssignment]],
     propagator_id: SessionPropagatorId,
@@ -488,13 +496,16 @@ def build_step_context(
     for sat in satellites:
         nid = satellite_node_id(sat, addressing)
         sat_isl_terminals[nid] = sat.isl_terminal_count
-        sat_ground_terminals[nid] = sat.ground_terminal_count
-        sat_ground_terminal_indices_by_body[nid] = satellite_terminal_index_pools_by_target_body(
-            tuple(sat.ground_terminals),
-            total_count=sat.ground_terminal_count,
-            ground_link_model=terminal_pool_link_model,
-        )
-        if sat.ground_terminals:
+        if has_ground_stations:
+            sat_ground_terminals[nid] = sat.ground_terminal_count
+            sat_ground_terminal_indices_by_body[nid] = (
+                satellite_terminal_index_pools_by_target_body(
+                    tuple(sat.ground_terminals),
+                    total_count=sat.ground_terminal_count,
+                    ground_link_model=terminal_pool_link_model,
+                )
+            )
+        if has_ground_stations and sat.ground_terminals:
             ignored_capacity_fields.extend(
                 _future_capacity_field_paths(
                     tuple(sat.ground_terminals),
@@ -502,12 +513,13 @@ def build_step_context(
                 )
             )
             sat_ground_terminal_types[nid] = ground_terminal_type(sat.ground_terminals)
-            sat_ground_terminal_profiles[nid] = terminal_physics_profiles(
-                tuple(sat.ground_terminals),
-                profile_id=f"{nid}.ground_terminals",
-                endpoint="satellite",
-                require_constraints=require_ground_physics,
-            )
+            if require_ground_physics:
+                sat_ground_terminal_profiles[nid] = terminal_physics_profiles(
+                    tuple(sat.ground_terminals),
+                    profile_id=f"{nid}.ground_terminals",
+                    endpoint="satellite",
+                    require_constraints=True,
+                )
         constraints_by_iface: dict[str, IslTerminalConstraints] = {}
         for idx in range(sat.isl_terminal_count):
             iface = f"isl{idx}"
@@ -524,6 +536,7 @@ def build_step_context(
     gs_positions: dict[str, tuple[EcefVec3, GeoPosition]] = {}
     gs_min_elevations: dict[str, float] = {}
     gs_terminal_counts: dict[str, int] = {}
+    gs_terminal_indices: dict[str, tuple[int, ...]] = {}
     gs_selection_policies: dict[str, SelectionPolicySpec] = {}
     gs_selection_policy_names: dict[str, str] = {}
     gs_handover_policies: dict[str, HandoverPolicySpec] = {}
@@ -571,6 +584,9 @@ def build_step_context(
             gs_terminal_counts[node_id] = station_resolution.terminal_capacity
             gs_terminal_types[node_id] = station_ground_terminal_type(gs_file, station)
             effective_terminals = station.terminals or gs_file.default_terminals
+            gs_terminal_indices[node_id] = ground_terminal_interface_indices(
+                tuple(effective_terminals)
+            )
             if station.terminals is not None:
                 ignored_capacity_fields.extend(
                     _future_capacity_field_paths(
@@ -578,12 +594,13 @@ def build_step_context(
                         base_path=f"ground_stations.stations.{station.name}.terminals",
                     )
                 )
-            gs_terminal_profiles[node_id] = terminal_physics_profile(
-                tuple(effective_terminals),
-                profile_id=f"{node_id}.terminals",
-                endpoint="ground",
-                require_constraints=require_ground_physics,
-            )
+            if require_ground_physics:
+                gs_terminal_profiles[node_id] = terminal_physics_profile(
+                    tuple(effective_terminals),
+                    profile_id=f"{node_id}.terminals",
+                    endpoint="ground",
+                    require_constraints=True,
+                )
             selection_policy = station_scheduling.selection_policy.model_copy(deep=True)
             handover_policy = _normalize_handover_policy(station_scheduling.handover_policy)
             gs_selection_policies[node_id] = selection_policy
@@ -671,6 +688,7 @@ def build_step_context(
         gs_positions=gs_positions,
         gs_min_elevations=gs_min_elevations,
         gs_terminal_counts=gs_terminal_counts,
+        gs_terminal_indices=gs_terminal_indices,
         gs_selection_policies=gs_selection_policies,
         gs_selection_policy_names=gs_selection_policy_names,
         gs_handover_policies=gs_handover_policies,
@@ -905,7 +923,7 @@ def compute_step(
             ground_station_ids=set(ctx.gs_positions),
             current_associations=current_associations,
             pending_teardowns=mbb_pending_teardowns,
-            gs_terminal_counts=ctx.gs_terminal_counts,
+            gs_terminal_indices=ctx.gs_terminal_indices,
             gs_selection_policies=ctx.gs_selection_policies,
             gs_min_elevations=ctx.gs_min_elevations,
             gs_handover_policies=ctx.gs_handover_policies,
@@ -1035,7 +1053,7 @@ def precompute_timeline_window_from_context(
 
 def precompute_timeline_window(
     satellites: list[SatelliteNode],
-    addressing: AddressingScheme,
+    addressing: OmeAddressing,
     gs_file: GroundStationFile | None,
     neighbors: frozenset[tuple[str, NeighborAssignment]],
     epoch_unix: float,
@@ -1096,7 +1114,7 @@ def precompute_timeline_window(
 
 def precompute_timeline(
     satellites: list[SatelliteNode],
-    addressing: AddressingScheme,
+    addressing: OmeAddressing,
     gs_file: GroundStationFile | None,
     neighbors: frozenset[tuple[str, NeighborAssignment]],
     epoch_unix: float,

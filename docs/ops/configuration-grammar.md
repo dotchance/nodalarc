@@ -1,479 +1,1324 @@
 # Configuration Grammar
 
-This is the grammar for the files you author: the catalog primitives and the
-session that assembles them. It is a reference — for a guided walkthrough and
-worked examples, start with the [Configuration Reference](configuration.md).
+This document is the sole public formal definition of the persisted NodalArc
+YAML language: the reusable objects in both catalog namespaces and the session
+that composes them. The strict backend models implement the structural grammar.
+The shared resolver loads references, validates relationships across objects,
+applies the current runtime-support gate, and produces the immutable runtime
+model. The Configuration Guide explains how to use this language; it does not
+define another one.
 
-It covers the common authoring surface. A few advanced and forward-looking
-constructs are omitted for clarity — payload mounts, Lagrange-anchored sites and
-segments, raw state-vector placement, per-segment clocks, and ephemeris/dispatch
-tuning — none of which the shipped sessions use.
+For a practical introduction and complete examples, see the
+[Configuration Guide](configuration.md).
 
-## Notation
+## Validation pipeline
 
-```
-::=          is defined as
-A | B        A or B (choose one)
-[ A ]        A is optional
-A*           zero or more A
-A+           one or more A
-"text"       a literal key or value
-Ref(kind)    a nodalarc: token pointing at a <kind> primitive,
-             e.g. nodalarc:bodies/earth.yaml — or an inline <kind> object
-Integer / Number / String / Bool / URL / CIDR / Identifier
-             scalar types (Identifier is lower-case, digits, '-' and '_')
-```
+Every deployment follows one interpretation path:
 
-Every primitive file contains exactly one top-level object, keyed by its type
-(`body:`, `terminal:`, `orbit:`, `node:`, `site:`, `site_set:`,
-`constellation:`, `space_node_set:`). The object's `id` must equal the file name
-(without `.yaml`).
-
-## References
-
-Any field typed `Ref(kind)` accepts either a catalog token or an inline object of
-that kind. A token resolves a primitive file:
-
-```
-Reference ::= "nodalarc:" Path | InlineObject
+```text
+YAML text
+  -> strict YAML data model
+  -> structural grammar in this document
+  -> catalog reference resolution
+  -> cross-object semantic validation
+  -> current-runtime support validation
+  -> resolved session
 ```
 
-```yaml
-orbit: nodalarc:orbits/earth/leo/earth-leo-starlink.yaml   # token
-# or the same orbit written inline in place of the token
+The YAML loader accepts one document and rejects duplicate mapping keys before
+structural validation. Unknown mapping keys, wrong scalar kinds, invalid closed
+values, malformed references, dangling references, family mismatches, and
+invalid relationships are errors. Runtime-future constructs are part of the
+structural language only where they are listed here; the runtime must reject
+them explicitly rather than ignore or approximate them.
+
+## Formal notation
+
+The productions use the notation defined by ISO/IEC 14977 EBNF: `=` defines a
+production, `;` terminates it, `,` concatenates terms, `|` separates
+alternatives, `[...]` is optional, `{...}` repeats zero or more times, quoted
+text is a terminal, and `?...?` is a special sequence whose recognition is
+delegated to the named scalar validator.
+
+YAML mappings are unordered, so applying a character-stream grammar directly
+to YAML source would incorrectly make field order significant. The EBNF below
+instead operates on a canonical token projection of the parsed YAML data
+model:
+
+- a mapping projects to `MappingBegin`, then each present key and value in the
+  order stated by its production, then `MappingEnd`;
+- a mapping whose production permits dynamic keys projects those entries in
+  lexicographic key order;
+- a sequence projects to `SequenceBegin`, its values in authored order, then
+  `SequenceEnd`;
+- mapping keys and closed string values project as their quoted terminal;
+- other scalar nodes project as one token recognized by the applicable scalar
+  production; and
+- projection fails before EBNF recognition if a mapping contains an unlisted
+  key. Duplicate keys have already failed YAML loading.
+
+This projection is a definition used to state the language precisely. It is
+not a second persisted format, a deployment artifact, or a requirement to
+reorder YAML source. These base productions define the projection markers:
+
+```ebnf
+MappingBegin  = ? beginning of a YAML mapping in the canonical projection ? ;
+MappingEnd    = ? end of a YAML mapping in the canonical projection ? ;
+SequenceBegin = ? beginning of a YAML sequence in the canonical projection ? ;
+SequenceEnd   = ? end of a YAML sequence in the canonical projection ? ;
 ```
 
----
+EBNF is context-free and cannot express numeric comparisons, uniqueness,
+reference resolution, graph acyclicity, set membership, or runtime support.
+Those requirements are stated as normative semantic constraints after the
+relevant productions. The executable models and shared resolver enforce both
+the EBNF structure and those semantic constraints.
+
+## Scalar types
+
+```ebnf
+Null               = ? YAML null scalar ? ;
+Boolean            = ? YAML boolean scalar ? ;
+String             = ? YAML string scalar ? ;
+Identifier         = ? YAML string matching [a-z0-9][a-z0-9_-]* in full ? ;
+RoutingAreaId      = ? nonempty YAML string matching [0-9a-f]+(\.[0-9a-f]+)* in full ? ;
+NonEmptyToken      = ? nonempty YAML string containing no whitespace ? ;
+Integer            = ? YAML integer scalar, excluding booleans ? ;
+PositiveInteger    = ? Integer greater than zero ? ;
+NonNegativeInteger = ? Integer greater than or equal to zero ? ;
+FiniteNumber       = ? finite YAML integer or floating-point scalar, excluding booleans ? ;
+PositiveNumber     = ? FiniteNumber greater than zero ? ;
+NonNegativeNumber  = ? FiniteNumber greater than or equal to zero ? ;
+Url                = ? YAML string accepted by the backend URL validator ? ;
+AwareTimestamp     = ? ISO 8601 YAML string with an explicit UTC offset ? ;
+IPv4Network        = ? canonical IPv4 network string in CIDR notation with no host bits ? ;
+IPv6Network        = ? canonical IPv6 network string in CIDR notation with no host bits ? ;
+IpNetwork          = IPv4Network | IPv6Network ;
+IPv4Interface      = ? IPv4 interface string in CIDR notation ? ;
+IPv6Interface      = ? IPv6 interface string in CIDR notation ? ;
+RelativeAssetPath  = ? contained relative forward-slash path accepted by the backend validator ? ;
+Sha256Hex          = ? lower-case YAML string containing exactly 64 hexadecimal digits ? ;
+Tags               = SequenceBegin, { Identifier }, SequenceEnd ;
+```
+
+All identifiers and closed string values are case-sensitive. Tag values are
+unique within each `Tags` sequence. `RelativeAssetPath` is nonempty and rejects
+roots, backslashes, repeated separators, trailing separators, and empty, dot,
+or parent components.
+
+## Catalog references and documents
+
+Persisted catalog-valued fields contain references only. Inline copies of
+catalog objects are not part of this language.
+
+```ebnf
+BodyRef          = ? catalog reference accepted by BodyRef ? ;
+TerminalRef      = ? catalog reference accepted by TerminalRef ? ;
+PayloadRef       = ? catalog reference accepted by PayloadRef ? ;
+OrbitRef         = ? catalog reference accepted by OrbitRef ? ;
+NodeRef          = ? catalog reference accepted by NodeRef ? ;
+SiteRef          = ? catalog reference accepted by SiteRef ? ;
+SiteSetRef       = ? catalog reference accepted by SiteSetRef ? ;
+ConstellationRef = ? catalog reference accepted by ConstellationRef ? ;
+SpaceNodeSetRef  = ? catalog reference accepted by SpaceNodeSetRef ? ;
+SessionRef       = ? catalog reference accepted by SessionRef ? ;
+SpaceSourceRef   = ConstellationRef | SpaceNodeSetRef ;
+```
+
+Each reference is one YAML string with this exact shape:
+
+```text
+(nodalarc|user):<family>/<component>(/<component>)*.(yaml|yml)
+```
+
+`<component>` matches `[a-z0-9][a-z0-9_-]*`. The required family is `bodies`,
+`terminals`, `payloads`, `orbits`, `nodes`, `sites`, `site-sets`,
+`constellations`, `space-node-sets`, or `sessions`, as selected by the typed
+reference production. Absolute paths, backslashes, empty components, dot
+components, and parent traversal are invalid.
+
+`nodalarc:` identifies shipped, read-only product content. `user:` identifies
+user-owned content. Both namespaces use the same families and grammar. To
+customize a shipped object, create a new `user:` object and change the
+containing reference; never edit the `nodalarc:` object in place.
+
+Every reusable object document has exactly one wrapper. A session document is
+the unwrapped `Session` mapping. `ConfigurationDocument` is the start
+production for one persisted YAML document.
+
+```ebnf
+ConfigurationDocument = BodyDocument
+                      | TerminalDocument
+                      | PayloadDocument
+                      | OrbitDocument
+                      | NodeDocument
+                      | SiteDocument
+                      | SiteSetDocument
+                      | ConstellationDocument
+                      | SpaceNodeSetDocument
+                      | Session ;
+
+BodyDocument          = MappingBegin, "body", Body, MappingEnd ;
+TerminalDocument      = MappingBegin, "terminal", Terminal, MappingEnd ;
+PayloadDocument       = MappingBegin, "payload", Payload, MappingEnd ;
+OrbitDocument         = MappingBegin, "orbit", Orbit, MappingEnd ;
+NodeDocument          = MappingBegin, "node", Node, MappingEnd ;
+SiteDocument          = MappingBegin, "site", Site, MappingEnd ;
+SiteSetDocument       = MappingBegin, "site_set", SiteSet, MappingEnd ;
+ConstellationDocument = MappingBegin, "constellation", Constellation, MappingEnd ;
+SpaceNodeSetDocument  = MappingBegin, "space_node_set", SpaceNodeSet, MappingEnd ;
+```
+
+When a document is loaded through a catalog reference, its object `id` must
+equal the referenced file stem. For a referenced session, `session.name` must
+equal the file stem. Every reference must resolve in its declared namespace and
+family, and the complete transitive reference graph must be acyclic.
 
 ## Body
 
+```ebnf
+Body = MappingBegin,
+       "id", Identifier,
+       "display_name", String,
+       "gravitational_parameter_km3_s2", PositiveNumber,
+       "mean_radius_km", PositiveNumber,
+       "equatorial_radius_km", PositiveNumber,
+       "polar_radius_km", PositiveNumber,
+       "reference", Url,
+       [ "notes", ( String | Null ) ],
+       MappingEnd ;
 ```
-Body ::= {
-  "id": Identifier,
-  "display_name": String,
-  "gravitational_parameter_km3_s2": Number,
-  "mean_radius_km": Number,
-  "equatorial_radius_km": Number,
-  "polar_radius_km": Number,
-  "reference": URL,
-  "notes": String
-}
-```
-
-| Field | Meaning |
-|-------|---------|
-| `gravitational_parameter_km3_s2` | Standard gravitational parameter (GM). |
-| `mean_radius_km` / `equatorial_radius_km` / `polar_radius_km` | Body radii. |
-
----
 
 ## Terminal
 
-A physical link capability that becomes an interface when installed on a node.
+```ebnf
+DirectionalBandwidth = MappingBegin,
+                       "transmit", PositiveNumber,
+                       "receive", PositiveNumber,
+                       MappingEnd ;
 
+RfSignal = MappingBegin,
+           "band", Identifier,
+           "frequency_hz", PositiveNumber,
+           MappingEnd ;
+
+OpticalSignal = MappingBegin,
+                "wavelength_nm", PositiveNumber,
+                MappingEnd ;
+
+AngleRange = MappingBegin,
+             "min", FiniteNumber,
+             "max", FiniteNumber,
+             MappingEnd ;
+
+TerminalLimits = MappingBegin,
+                 "azimuth_deg", AngleRange,
+                 "elevation_deg", AngleRange,
+                 "max_tracking_rate_deg_s", PositiveNumber,
+                 MappingEnd ;
+
+Terminal = MappingBegin,
+           "id", Identifier,
+           "display_name", String,
+           "medium", ( "rf" | "optical" ),
+           "signal", ( RfSignal | OpticalSignal ),
+           "bandwidth_mbps", DirectionalBandwidth,
+           "tracking_capacity", PositiveInteger,
+           "max_range_km", PositiveNumber,
+           "limits", TerminalLimits,
+           "reference", Url,
+           [ "notes", ( String | Null ) ],
+           MappingEnd ;
 ```
-Terminal ::= {
-  "id": Identifier,
-  "display_name": String,
-  "medium": Medium,
-  "signal": RfSignal | OpticalSignal,
-  "bandwidth_mbps": { "transmit": Number, "receive": Number },
-  "tracking_capacity": Integer,
-  "max_range_km": Number,
-  "limits": Limits,
-  "reference": URL,
-  [ "notes": String ]
-}
 
-RfSignal      ::= { "band": Identifier, "frequency_hz": Number }   # band is a free label (e.g. ka, ku, s), not a closed set
-OpticalSignal ::= { "wavelength_nm": Number }
-Limits        ::= {
-  "azimuth_deg":   { "min": Number, "max": Number },
-  "elevation_deg": { "min": Number, "max": Number },
-  "max_tracking_rate_deg_s": Number
-}
+For every `AngleRange`, `max` must be greater than or equal to `min`. An `rf`
+terminal requires `RfSignal`; an `optical` terminal requires `OpticalSignal`.
+A terminal declares physical capability, not a node, address, role, placement,
+or route. `signal` records the authored carrier description. The current
+runtime does not perform an RF link budget or compare frequency, wavelength,
+channelization, or polarization; link-rule terminal selection must therefore
+name the intended compatible mounts explicitly whenever medium alone is
+ambiguous.
+
+The persisted bandwidth is directional, but the current runtime exposes one
+conservative shaped rate per link rather than independent directional rates.
+That rate is the minimum of transmit and receive values across both selected
+endpoint mounts.
+
+## Payload
+
+```ebnf
+TerminalSlot = MappingBegin,
+               "id", Identifier,
+               "terminal", TerminalRef,
+               [ "tags", ( Tags | Null ) ],
+               MappingEnd ;
+
+PayloadResourceGroup = MappingBegin,
+                       "id", Identifier,
+                       "slots", SequenceBegin, Identifier, { Identifier }, SequenceEnd,
+                       "simultaneous_active", PositiveInteger,
+                       MappingEnd ;
+
+Payload = MappingBegin,
+          "id", Identifier,
+          [ "display_name", ( String | Null ) ],
+          "terminal_slots", SequenceBegin, TerminalSlot, { TerminalSlot }, SequenceEnd,
+          [ "resource_groups", SequenceBegin, { PayloadResourceGroup }, SequenceEnd ],
+          [ "reference", ( Url | Null ) ],
+          [ "notes", ( String | Null ) ],
+          MappingEnd ;
 ```
 
-`signal` is `RfSignal` when `medium` is `rf`, `OpticalSignal` when `optical`.
-`tracking_capacity` is how many peers the terminal tracks at once.
-
----
+Omitted `resource_groups` defaults to an empty sequence. Terminal-slot ids and
+resource-group ids are unique within a payload. Every resource-group slot is
+unique and names a declared terminal slot. `simultaneous_active` cannot exceed
+the number of slots in its group.
 
 ## Orbit
 
-```
-Orbit ::= {
-  "id": Identifier,
-  "central_body": Ref(body),
-  "epoch": String,
-  ( "elements": Elements | "shape": Shape ),     # exactly one
-  "orientation": Orientation,
-  "phase": { "mean_anomaly_deg": Number },
-  "propagator": Propagator,
-  "reference": URL,
-  [ "notes": String ]
-}
+```ebnf
+OrbitElements = MappingBegin,
+                "semi_major_axis_km", PositiveNumber,
+                "eccentricity", FiniteNumber,
+                MappingEnd ;
 
-Elements    ::= { "semi_major_axis_km": Number, "eccentricity": Number }
-Shape       ::= { "altitude_km": Number }
-              | { "perigee_altitude_km": Number, "apogee_altitude_km": Number }
-Orientation ::= {
-  "inclination_deg": Number,
-  "raan_deg": Number,
-  "argument_of_perigee_deg": Number
-}
-```
+CircularShape = MappingBegin,
+                "altitude_km", PositiveNumber,
+                MappingEnd ;
 
-Use `elements` for an explicit Keplerian orbit, or `shape` for a circular
-(`altitude_km`) or eccentric (`perigee` + `apogee`) orbit. A non-circular orbit
-needs a propagator that models it (see Allowed Values).
+PerigeeApogeeShape = MappingBegin,
+                     "perigee_altitude_km", PositiveNumber,
+                     "apogee_altitude_km", PositiveNumber,
+                     MappingEnd ;
 
----
+OrbitShape = CircularShape | PerigeeApogeeShape ;
 
-## Node (router model)
+OrbitOrientation = MappingBegin,
+                   "inclination_deg", FiniteNumber,
+                   "raan_deg", FiniteNumber,
+                   "argument_of_perigee_deg", FiniteNumber,
+                   MappingEnd ;
 
-A reusable template. It declares ports and terminal mounts and carries **no**
-addresses and **no** location.
+OrbitPhase = MappingBegin,
+             "mean_anomaly_deg", FiniteNumber,
+             MappingEnd ;
 
-```
-Node ::= {
-  "id": Identifier,
-  "display_name": String,
-  "forwarding": Forwarding,
-  "ethernet": EthernetPort+,
-  "terminals": TerminalMount*,
-  "payloads": [ ],
-  [ "tags": Identifier* ],
-  [ "reference": URL ],
-  [ "notes": String ]
-}
-
-EthernetPort  ::= { "id": Identifier }
-TerminalMount ::= {
-  "id": Identifier,
-  "role": Role,
-  "terminal": Ref(terminal),
-  "count": Integer
-}
+Orbit = MappingBegin,
+        "id", Identifier,
+        "central_body", BodyRef,
+        "epoch", AwareTimestamp,
+        [ "elements", ( OrbitElements | Null ) ],
+        [ "shape", ( OrbitShape | Null ) ],
+        "orientation", OrbitOrientation,
+        "phase", OrbitPhase,
+        "propagator", ( "two_body" | "j2_mean_elements" | "crtbp" ),
+        "reference", Url,
+        [ "notes", ( String | Null ) ],
+        MappingEnd ;
 ```
 
-`count` is how many of that terminal the model *can* carry; a site chooses how
-many to install. `role` is authored here and is closed; the class of any link is
-derived from the roles at its endpoints.
+`OrbitElements.eccentricity` is greater than or equal to zero and less than
+one. In `PerigeeApogeeShape`, `apogee_altitude_km` is greater than or equal to
+`perigee_altitude_km`. Exactly one of `elements` and `shape` must be non-null.
 
----
+There is no session-level orbit-default object. Every orbit declares its own
+propagator. SGP4 is not an `Orbit` propagator because a reusable mean-element
+orbit cannot supply the spacecraft-specific TLE record SGP4 requires. TLE
+placement is declared directly on a `SpaceNode`.
+
+## Node
+
+```ebnf
+EthernetPort = MappingBegin,
+               "id", Identifier,
+               [ "tags", ( Tags | Null ) ],
+               MappingEnd ;
+
+NadirBoresight = MappingBegin,
+                 "mode", "nadir",
+                 MappingEnd ;
+
+TerminalMount = MappingBegin,
+                "id", Identifier,
+                "role", ( "access" | "isl" | "crosslink" | "backbone" ),
+                "terminal", TerminalRef,
+                "count", PositiveInteger,
+                [ "boresight", ( NadirBoresight | Null ) ],
+                [ "tags", ( Tags | Null ) ],
+                MappingEnd ;
+
+PayloadMount = MappingBegin,
+               "id", Identifier,
+               "payload", PayloadRef,
+               "count", PositiveInteger,
+               [ "tags", ( Tags | Null ) ],
+               MappingEnd ;
+
+Node = MappingBegin,
+       "id", Identifier,
+       [ "display_name", ( String | Null ) ],
+       "forwarding", ( "routed" | "host" | "bridge" | "control_only" ),
+       "ethernet", SequenceBegin, { EthernetPort }, SequenceEnd,
+       "terminals", SequenceBegin, { TerminalMount }, SequenceEnd,
+       "payloads", SequenceBegin, { PayloadMount }, SequenceEnd,
+       [ "tags", ( Tags | Null ) ],
+       [ "reference", ( Url | Null ) ],
+       [ "notes", ( String | Null ) ],
+       MappingEnd ;
+```
+
+Ethernet-port ids, terminal-mount ids, and payload-mount ids are independently
+unique within a node. `TerminalMount.boresight` is valid only on an `access`
+mount. A satellite access mount requires `boresight: {mode: nadir}`. A ground
+access mount must omit node-level boresight because its orientation belongs to
+the site installation. A node is a reusable model and contains no location or
+addressing.
+
+The current substrate requires every ground node model to declare exactly one
+Ethernet port named `terr0`, and every space node model to declare no Ethernet
+ports. Terminal mounts produce resolver-owned WAN interfaces instead.
+
+## Shared placement and scheduling types
+
+```ebnf
+FiniteTriple = SequenceBegin,
+               FiniteNumber, FiniteNumber, FiniteNumber,
+               SequenceEnd ;
+
+StateVector = MappingBegin,
+              "epoch", AwareTimestamp,
+              "frame", Identifier,
+              "position_km", FiniteTriple,
+              "velocity_km_s", FiniteTriple,
+              MappingEnd ;
+
+SegmentClock = MappingBegin,
+               [ "model", ( "session" | "affine" ) ],
+               [ "offset_s", ( FiniteNumber | Null ) ],
+               [ "rate", ( PositiveNumber | Null ) ],
+               MappingEnd ;
+```
+
+Omitted `SegmentClock.model` defaults to `session`. A `session` clock forbids
+non-null `offset_s` and `rate`. An `affine` clock requires a non-null `rate`;
+`offset_s` remains optional.
+
+```ebnf
+OriginatedPrefixes = MappingBegin,
+                     [ "ipv4", ( IPv4NetworkSequence | Null ) ],
+                     [ "ipv6", ( IPv6NetworkSequence | Null ) ],
+                     MappingEnd ;
+
+IPv4NetworkSequence = SequenceBegin, { IPv4Network }, SequenceEnd ;
+IPv6NetworkSequence = SequenceBegin, { IPv6Network }, SequenceEnd ;
+
+HighestElevationPolicy = MappingBegin,
+                         "highest_elevation", EmptyMapping,
+                         MappingEnd ;
+
+LowestElevationPolicy = MappingBegin,
+                        "lowest_elevation", EmptyMapping,
+                        MappingEnd ;
+
+LongestRemainingPassPolicy = MappingBegin,
+                             "longest_remaining_pass", MappingBegin,
+                             "lookahead_horizon_ticks", PositiveInteger,
+                             MappingEnd,
+                             MappingEnd ;
+
+SelectionPolicy = HighestElevationPolicy
+                | LowestElevationPolicy
+                | LongestRemainingPassPolicy ;
+
+HysteresisPolicy = MappingBegin,
+                   "hysteresis", MappingBegin,
+                   "discount_factor", PositiveNumber,
+                   "mask_fade_range_deg", NonNegativeNumber,
+                   MappingEnd,
+                   MappingEnd ;
+
+HardReleasePolicy = MappingBegin,
+                    "hard_release", EmptyMapping,
+                    MappingEnd ;
+
+HandoverPolicy = HysteresisPolicy | HardReleasePolicy ;
+
+EmptyMapping = MappingBegin, MappingEnd ;
+
+RankingComponent = "service_priority"
+                 | "selection_score"
+                 | "per_gs_rank"
+                 | "satellite_ground_terminal_capacity"
+                 | "lex_pair" ;
+
+RankingOrder = SequenceBegin,
+               RankingComponent, { RankingComponent },
+               SequenceEnd ;
+
+GroundScheduling = MappingBegin,
+                   [ "selection_policy", ( SelectionPolicy | Null ) ],
+                   [ "handover_policy", ( HandoverPolicy | Null ) ],
+                   [ "handover_mode", ( "mbb" | "bbm" | Null ) ],
+                   [ "mbb_overlap_ticks", ( NonNegativeInteger | Null ) ],
+                   [ "mbb_reserve", ( NonNegativeInteger | Null ) ],
+                   [ "handover_concurrency", ( "one_at_a_time" | "all_at_once" | Null ) ],
+                   [ "ranking_order", ( RankingOrder | Null ) ],
+                   [ "mbb_preemption", ( "off" | Null ) ],
+                   [ "successor_abort_policy", ( "hard_release" | "soft_retain" | Null ) ],
+                   [ "cross_tenant_displacement", ( "off" | Null ) ],
+                   [ "bbm_acquire_timeout_ticks", ( NonNegativeInteger | Null ) ],
+                   MappingEnd ;
+```
+
+`OriginatedPrefixes` must contain at least one prefix across its two families.
+If `ranking_order` is present and non-null, its values are unique and its final
+value is `lex_pair`.
+
+Every ground node participating in an enabled access-link candidate must have
+non-null effective values for every `GroundScheduling` field. A `bbm` node
+requires `mbb_overlap_ticks: 0` and `mbb_reserve: 0`; an `mbb` node requires
+both values to be positive. The effective values of `handover_concurrency`,
+`ranking_order`, `mbb_preemption`, `successor_abort_policy`,
+`cross_tenant_displacement`, and `bbm_acquire_timeout_ticks` must be uniform
+across those access-candidate ground nodes. Ground nodes outside enabled
+access-link candidates may omit scheduling.
 
 ## Site
 
-A physical facility with a LAN and one or more placed nodes. This is where
-addresses live.
+```ebnf
+VerificationMetadata = MappingBegin,
+                       "source", String,
+                       [ "filing", ( String | Null ) ],
+                       [ "reference", ( Url | Null ) ],
+                       [ "confidence", ( Identifier | Null ) ],
+                       [ "notes", ( String | Null ) ],
+                       MappingEnd ;
 
+SiteLan = MappingBegin,
+          [ "ipv4", ( IPv4Network | Null ) ],
+          [ "ipv6", ( IPv6Network | Null ) ],
+          MappingEnd ;
+
+BodyFixedFrame = MappingBegin,
+                 "body_fixed", MappingBegin,
+                 "body", BodyRef,
+                 MappingEnd,
+                 MappingEnd ;
+
+EphemerisAnchorFrame = MappingBegin,
+                       "ephemeris_anchor", MappingBegin,
+                       "frame", Identifier,
+                       MappingEnd,
+                       MappingEnd ;
+
+ConfiguredStateLagrange = MappingBegin,
+                          "configured_state", StateVector,
+                          MappingEnd ;
+
+ApproximateLagrange = MappingBegin,
+                      "lagrange_approximation", EmptyMapping,
+                      MappingEnd ;
+
+ExternalEphemerisLagrange = MappingBegin,
+                            "external_ephemeris", MappingBegin,
+                            "path", RelativeAssetPath,
+                            MappingEnd,
+                            MappingEnd ;
+
+LagrangeEphemeris = ConfiguredStateLagrange
+                  | ApproximateLagrange
+                  | ExternalEphemerisLagrange ;
+
+LagrangeFrame = MappingBegin,
+                "lagrange", MappingBegin,
+                "primary_body", BodyRef,
+                "secondary_body", BodyRef,
+                "point", ( "l1" | "l2" | "l3" | "l4" | "l5" ),
+                "ephemeris", LagrangeEphemeris,
+                MappingEnd,
+                MappingEnd ;
+
+SiteFrame = BodyFixedFrame | LagrangeFrame | EphemerisAnchorFrame ;
+
+SiteLocation = MappingBegin,
+               "lat_deg", FiniteNumber,
+               "lon_deg", FiniteNumber,
+               "alt_m", FiniteNumber,
+               MappingEnd ;
+
+InterfaceAddress = MappingBegin,
+                   [ "ipv4", ( IPv4Interface | Null ) ],
+                   [ "ipv6", ( IPv6Interface | Null ) ],
+                   MappingEnd ;
+
+NodeInterfaces = MappingBegin,
+                 "lo0", InterfaceAddress,
+                 "terr0", InterfaceAddress,
+                 MappingEnd ;
+
+LocalVerticalBoresight = MappingBegin,
+                         "mode", "local_vertical",
+                         MappingEnd ;
+
+ConfiguredTopocentricBoresight = MappingBegin,
+                                 "mode", "configured_topocentric",
+                                 "azimuth_deg", FiniteNumber,
+                                 "elevation_deg", FiniteNumber,
+                                 MappingEnd ;
+
+SteerableEnvelopeBoresight = MappingBegin,
+                             "mode", "steerable_envelope",
+                             "azimuth_deg", AngleRange,
+                             "elevation_deg", AngleRange,
+                             MappingEnd ;
+
+Boresight = LocalVerticalBoresight
+          | ConfiguredTopocentricBoresight
+          | SteerableEnvelopeBoresight ;
+
+TerminalCapabilities = MappingBegin,
+                       [ "bandwidth_mbps", ( DirectionalBandwidth | Null ) ],
+                       [ "tracking_capacity", ( PositiveInteger | Null ) ],
+                       [ "max_range_km", ( PositiveNumber | Null ) ],
+                       [ "limits", ( TerminalLimits | Null ) ],
+                       [ "boresight", ( Boresight | Null ) ],
+                       MappingEnd ;
+
+TerminalInstallation = MappingBegin,
+                       "installed_count", PositiveInteger,
+                       [ "capabilities", ( TerminalCapabilities | Null ) ],
+                       [ "tags", ( Tags | Null ) ],
+                       MappingEnd ;
+
+PayloadInstallation = MappingBegin,
+                      "installed_count", PositiveInteger,
+                      [ "tags", ( Tags | Null ) ],
+                      MappingEnd ;
+
+TerminalInstallationMap = MappingBegin,
+                          { Identifier, TerminalInstallation },
+                          MappingEnd ;
+
+PayloadInstallationMap = MappingBegin,
+                         { Identifier, PayloadInstallation },
+                         MappingEnd ;
+
+SiteNode = MappingBegin,
+           "id", Identifier,
+           [ "display_name", ( String | Null ) ],
+           "model", NodeRef,
+           "terminals", TerminalInstallationMap,
+           "payloads", PayloadInstallationMap,
+           "interfaces", NodeInterfaces,
+           [ "originated_prefixes", ( OriginatedPrefixes | Null ) ],
+           [ "tenant_id", ( Identifier | Null ) ],
+           [ "service_priority", ( PositiveInteger | Null ) ],
+           [ "scheduling", ( GroundScheduling | Null ) ],
+           [ "tags", ( Tags | Null ) ],
+           MappingEnd ;
+
+Site = MappingBegin,
+       "id", Identifier,
+       [ "display_name", ( String | Null ) ],
+       [ "verified", ( VerificationMetadata | Null ) ],
+       "lan", SiteLan,
+       [ "tags", ( Tags | Null ) ],
+       "nodes", SequenceBegin, SiteNode, { SiteNode }, SequenceEnd,
+       "frame", SiteFrame,
+       [ "location", ( SiteLocation | Null ) ],
+       MappingEnd ;
 ```
-Site ::= {
-  "id": Identifier,
-  [ "display_name": String ],
-  [ "verified": Verified ],
-  "lan": Lan,
-  "nodes": SiteNode+,
-  "frame": { "body_fixed": { "body": Ref(body) } },
-  "location": { "lat_deg": Number, "lon_deg": Number, "alt_m": Number },
-  [ "tags": Identifier* ]
-}
 
-Lan ::= { [ "ipv4": CIDR ], [ "ipv6": CIDR ] }     # at least one family
+`SiteLan` and each `InterfaceAddress` must have at least one non-null address
+family. Latitude is in `[-90, 90]`; longitude is in `[-180, 180]`. Site-node
+ids are unique within a site. A body-fixed site requires a non-null `location`;
+a Lagrange- or ephemeris-anchored site requires `location` to be absent or
+null. Interface IP addresses are unique within a site. Each `terr0` address
+requires the same family in `lan` and its host address must fall inside that
+LAN.
 
-SiteNode ::= {
-  "id": Identifier,
-  [ "display_name": String ],
-  "model": Ref(node),
-  "terminals": { Identifier: TerminalInstall }*,   # keyed by mount id
-  "payloads": { },
-  "interfaces": { "lo0": InterfaceAddress, "terr0": InterfaceAddress },
-  [ "originated_prefixes": OriginatedPrefixes ],
-  [ "scheduling": Scheduling ],          # same shape as a ground segment's apply.scheduling
-  [ "tenant_id": Identifier ],
-  [ "service_priority": Integer ],
-  [ "tags": Identifier* ]
-}
+The required `terminals` map is an exhaustive installation inventory, not a
+patch over the referenced node model. An omitted terminal mount has zero
+installed instances at the site. The required `payloads` map records the
+payload installation inventory. Every key in either map must be a mount id
+declared by the referenced model; a present entry requires `installed_count`,
+which cannot exceed the model mount count. Terminal capability overrides may
+narrow, but never increase, the referenced terminal's directional bandwidth,
+tracking capacity, maximum range, azimuth or elevation envelope, or maximum
+tracking rate. Boresight is placement data and does not change the reusable
+terminal. Every installed ground access mount requires a non-null boresight in
+its site capability override; non-access mounts must not declare one.
 
-TerminalInstall  ::= { "installed_count": Integer, [ "capabilities": Capabilities ], [ "tags": Identifier* ] }
-InterfaceAddress ::= { [ "ipv4": CIDR ], [ "ipv6": CIDR ] }
-OriginatedPrefixes ::= { [ "ipv4": CIDR* ], [ "ipv6": CIDR* ] }
-```
-
-- `interfaces` holds only the two **numbered** placement interfaces: `lo0` (the
-  node loopback) and `terr0` (the site-LAN interface, whose address must sit
-  inside `lan` for each family). Terminal-facing `termN` interfaces are derived
-  from installed terminals at runtime, are point-to-point and unnumbered, and are
-  not authored here.
-- `terminals` keys are mount ids from the node model; `installed_count` must not
-  exceed the model mount's `count`. `capabilities` may narrow the model terminal
-  (lower range, tighter mask) but never widen it.
-- `originated_prefixes` lists the prefixes this node injects into routing — the
-  LAN, a default (`0.0.0.0/0` / `::/0`), or any other network. Anything not
-  listed is not advertised. Each family is independent.
-
----
+An omitted `SiteNode.tenant_id` resolves to `default`. An omitted
+`SiteNode.service_priority` remains unset in the resolved session and becomes
+priority `10` when OME builds ground-allocation input. These fields are
+allocator metadata. `tenant_id` is not a catalog namespace, authentication
+identity, or storage-isolation boundary.
 
 ## Site set
 
-```
-SiteSet ::= {
-  "id": Identifier,
-  [ "display_name": String ],
-  "sites": Ref(site)+,
-  [ "tags": Identifier* ],
-  [ "reference": URL ],
-  [ "notes": String ]
-}
+```ebnf
+SiteSet = MappingBegin,
+          "id", Identifier,
+          [ "display_name", ( String | Null ) ],
+          "sites", SequenceBegin, SiteRef, { SiteRef }, SequenceEnd,
+          [ "tags", ( Tags | Null ) ],
+          [ "reference", ( Url | Null ) ],
+          [ "notes", ( String | Null ) ],
+          MappingEnd ;
 ```
 
----
+Site references are unique within a site set.
 
 ## Constellation
 
-Generates many satellites from one node model, one orbit, and a plane/slot
-pattern.
+```ebnf
+PlaneParams = MappingBegin,
+              "count", PositiveInteger,
+              "raan_spacing_deg", NonNegativeNumber,
+              MappingEnd ;
 
+Phasing = MappingBegin,
+          "mode", ( "walker_delta" | "walker_star" | "evenly_spaced_mean_anomaly" ),
+          [ "phase_offset_deg", ( FiniteNumber | Null ) ],
+          MappingEnd ;
+
+NonNegativeIntegerSequence = SequenceBegin,
+                             NonNegativeInteger, { NonNegativeInteger },
+                             SequenceEnd ;
+
+IdentifierSequence = SequenceBegin,
+                     Identifier, { Identifier },
+                     SequenceEnd ;
+
+NodeTagRule = MappingBegin,
+              "tag", Identifier,
+              [ "planes", ( NonNegativeIntegerSequence | Null ) ],
+              [ "slots", ( NonNegativeIntegerSequence | Null ) ],
+              [ "node_ids", ( IdentifierSequence | Null ) ],
+              MappingEnd ;
+
+Constellation = MappingBegin,
+                "id", Identifier,
+                [ "display_name", ( String | Null ) ],
+                "node", NodeRef,
+                "orbit", OrbitRef,
+                "planes", PlaneParams,
+                "slots_per_plane", PositiveInteger,
+                "phasing", Phasing,
+                "node_tags", SequenceBegin, { NodeTagRule }, SequenceEnd,
+                [ "tags", ( Tags | Null ) ],
+                [ "reference", ( Url | Null ) ],
+                [ "notes", ( String | Null ) ],
+                MappingEnd ;
 ```
-Constellation ::= {
-  "id": Identifier,
-  [ "display_name": String ],
-  "node": Ref(node),
-  "orbit": Ref(orbit),
-  "planes": { "count": Integer, "raan_spacing_deg": Number },
-  "slots_per_plane": Integer,
-  "phasing": { "mode": PhasingMode, [ "phase_offset_deg": Number ] },
-  "node_tags": NodeTagRule*,
-  [ "tags": Identifier* ],
-  [ "reference": URL ],
-  [ "notes": String ]
-}
 
-NodeTagRule ::= {
-  "tag": Identifier,
-  [ "planes": Integer* ], [ "slots": Integer* ], [ "node_ids": Identifier* ]
-}
-```
+The `planes`, `slots`, and `node_ids` sequences are individually unique.
+`node_ids` cannot be combined with `planes` or `slots`. Plane and slot indexes
+must exist in the constellation. Generated node ids have the canonical form
+`sat-p<plane>s<slot>`, with the numeric plane and slot each padded to at least
+two digits, and must name an existing plane and slot. A rule with no selector
+fields applies its tag to all generated nodes.
 
-Total satellites = `planes.count` × `slots_per_plane`. A `NodeTagRule` with no
-filter (`{ tag: all }`) tags every generated satellite; filters restrict the tag
-to specific planes, slots, or ids.
-
----
+`evenly_spaced_mean_anomaly` requires exactly one plane and an absent, null, or
+zero `phase_offset_deg`. `walker_delta` and `walker_star` require at least two
+planes and a non-null `phase_offset_deg`.
 
 ## Space node set
 
-A fixed list of individually placed space nodes.
+```ebnf
+Sgp4TlePlacement = MappingBegin,
+                   "central_body", BodyRef,
+                   "line_1", String,
+                   "line_2", String,
+                   MappingEnd ;
 
-```
-SpaceNodeSet ::= { "id": Identifier, "nodes": SpaceNode+, [ "tags": Identifier* ] }
-SpaceNode    ::= { "id": Identifier, "node": Ref(node), "orbit": Orbit, [ "tags": Identifier* ] }
-```
+SpaceNode = MappingBegin,
+            "id", Identifier,
+            "node", NodeRef,
+            [ "orbit", ( OrbitRef | Null ) ],
+            [ "sgp4_tle", ( Sgp4TlePlacement | Null ) ],
+            [ "state_vector", ( StateVector | Null ) ],
+            [ "tags", ( Tags | Null ) ],
+            [ "clock", ( SegmentClock | Null ) ],
+            MappingEnd ;
 
----
-
-## Session
-
-The deployable file. It assembles segments and declares connectivity, routing,
-and time.
-
-```
-Session ::= {
-  "session": { "name": Identifier, [ "display_name": String ], [ "description": String ] },
-  "segments": Segment+,
-  [ "link_rules": LinkRule* ],
-  [ "addressing": Addressing ],
-  [ "routing": Routing ],
-  [ "simulation": Simulation ],
-  [ "time": Time ]
-}
+SpaceNodeSet = MappingBegin,
+               "id", Identifier,
+               "nodes", SequenceBegin, SpaceNode, { SpaceNode }, SequenceEnd,
+               [ "tags", ( Tags | Null ) ],
+               MappingEnd ;
 ```
 
-### Segments
+Exactly one of `SpaceNode.orbit`, `SpaceNode.sgp4_tle`, and
+`SpaceNode.state_vector` must be non-null. TLE lines are nonempty, form one
+valid pair, and identify the same catalog number. The current SGP4 runtime is
+Earth-only, so `sgp4_tle.central_body` must resolve to Earth. Space-node ids are
+unique within a set. `SpaceNode` is embedded in a `SpaceNodeSet`; it is not a
+standalone catalog family. A non-null `SpaceNode.clock` overrides the containing
+space segment's clock for that fixed node; otherwise the node inherits the
+segment clock, or the default `session` clock when neither is declared.
 
-```
-Segment       ::= SpaceSegment | GroundSegment
+## Session and segments
 
-SpaceSegment  ::= {
-  "id": Identifier,
-  "source": Ref(constellation | space_node_set),
-  [ "tags": Identifier* ]
-}
+```ebnf
+SessionMeta = MappingBegin,
+              "name", Identifier,
+              [ "display_name", ( String | Null ) ],
+              [ "description", ( String | Null ) ],
+              MappingEnd ;
 
-GroundSegment ::= {
-  "id": Identifier,
-  "placement": { "from_site_set": Ref(site_set) },
-  [ "apply": GroundApply ],
-  [ "overrides": GroundOverride* ]
-}
+GroundPlacement = MappingBegin,
+                  "from_site_set", SiteSetRef,
+                  MappingEnd ;
 
-GroundApply   ::= {
-  [ "scheduling": Scheduling ],
-  [ "originated_prefixes": OriginatedPrefixes ],
-  [ "tags": Identifier* ]
-}
-```
+GroundApply = MappingBegin,
+              [ "scheduling", ( GroundScheduling | Null ) ],
+              [ "originated_prefixes", ( OriginatedPrefixes | Null ) ],
+              [ "tags", ( Tags | Null ) ],
+              MappingEnd ;
 
-`apply` overlays policy onto every node placed by the segment; `overrides` target
-specific sites. Scheduling fields (selection policy, handover mode, and the
-allocator-wide ordering fields) are detailed in the Configuration Reference.
+GroundOverrideMatch = MappingBegin,
+                      "site", Identifier,
+                      MappingEnd ;
 
-### Link rules
+GroundOverride = MappingBegin,
+                 "match", GroundOverrideMatch,
+                 [ "tags", ( Tags | Null ) ],
+                 [ "scheduling", ( GroundScheduling | Null ) ],
+                 [ "originated_prefixes", ( OriginatedPrefixes | Null ) ],
+                 MappingEnd ;
 
-```
-LinkRule ::= {
-  "id": Identifier,
-  "topology": Topology,
-  "endpoints": [ Endpoint, Endpoint ]      # exactly two
-}
+SpaceSegment = MappingBegin,
+               "id", Identifier,
+               [ "display_name", ( String | Null ) ],
+               [ "tags", ( Tags | Null ) ],
+               [ "clock", ( SegmentClock | Null ) ],
+               "source", SpaceSourceRef,
+               MappingEnd ;
 
-Endpoint ::= {
-  "select": NodeSelector,
-  "terminal": TerminalSelector,
-  [ "min_elevation_deg": Number ]
-}
+GroundSegment = MappingBegin,
+                "id", Identifier,
+                [ "display_name", ( String | Null ) ],
+                [ "tags", ( Tags | Null ) ],
+                [ "clock", ( SegmentClock | Null ) ],
+                "placement", GroundPlacement,
+                [ "apply", ( GroundApply | Null ) ],
+                [ "overrides", ( GroundOverrideSequence | Null ) ],
+                MappingEnd ;
 
-Topology ::= { "mode": "visible_candidates" }
-           | { "mode": "nearest_n", "n": Integer }
-           | { "mode": "explicit_pairs", "pairs": Pair+ }
-           | { "mode": "nearest_visible" }    # grammar-defined, but rejected at runtime today
-```
+GroundOverrideSequence = SequenceBegin, { GroundOverride }, SequenceEnd ;
 
-The link's class is derived from the endpoint roles — there is no `kind` to
-author.
+LagrangeSegment = MappingBegin,
+                  "id", Identifier,
+                  [ "display_name", ( String | Null ) ],
+                  [ "tags", ( Tags | Null ) ],
+                  [ "clock", ( SegmentClock | Null ) ],
+                  "node", NodeRef,
+                  "frame", LagrangeFrame,
+                  MappingEnd ;
 
-### Selectors
-
-Selectors are set expressions. A bare leaf is a complete selector; operators
-compose leaves. Maps and lists never imply an implicit AND/OR — only `all`,
-`any`, and `not` combine.
-
-```
-NodeSelector ::= NodeLeaf
-               | { "all": NodeSelector+ }     # intersection
-               | { "any": NodeSelector+ }     # union
-               | { "not": NodeSelector }      # complement
-NodeLeaf     ::= { "segment": Identifier } | { "tag": Identifier } | { "node": Identifier }
-               | { "plane": Integer } | { "slot": Integer }     # plane/slot apply to constellation nodes
-
-TerminalSelector ::= TerminalLeaf
-               | { "all": TerminalSelector+ } | { "any": TerminalSelector+ } | { "not": TerminalSelector }
-TerminalLeaf     ::= { "role": Role } | { "medium": Medium } | { "mount": Identifier }
-```
-
-Tags participate only as set membership. A tag's text never carries behavior —
-it does not set class, physics, routing, or scheduling. It only names a subset to
-select.
-
-### Addressing
-
-Assigns loopback and point-to-point addresses from pools, by an allocation order,
-to the nodes a selector covers. Used mainly for generated satellites; ground
-nodes carry their own addresses on their site.
-
-```
-Addressing ::= {
-  [ "loopbacks":      AddressPool* ],
-  [ "point_to_point": AddressPool* ],
-  [ "terrestrial_prefixes": AddressPool* ]
-}
-
-AddressPool ::= {
-  "id": Identifier,
-  "applies_to": NodeSelector,
-  [ "ipv4_pool": CIDR ], [ "ipv6_pool": CIDR ],
-  [ "prefix_length": Integer ],
-  [ "allocation": Allocation ]
-}
+Segment = SpaceSegment | GroundSegment | LagrangeSegment ;
 ```
 
-### Routing
+Ground overrides target unique site ids that exist in the segment's selected
+site set. If one physical site is included by multiple ground segments, it is
+instantiated once; scheduling, originated-prefix policy, and effective segment
+clock must agree across those placements, while tags are combined. An omitted
+segment clock is the default `session` clock for this comparison. A ground
+override's non-null scheduling or originated-prefix object replaces the
+corresponding segment-apply object for that site. Site-node scheduling then
+overrides the resulting scheduling field by field; its unset or null fields
+inherit. A site-node's originated prefixes are combined with the effective
+segment-apply or ground-override prefixes rather than replacing them.
 
+## Selectors and link rules
+
+A selector is an explicit set expression. A mapping or sequence does not imply
+AND or OR; only `all`, `any`, and `not` compose sets.
+
+```ebnf
+NodeSelector = MappingBegin,
+               [ "all", ( NodeSelectorSequence | Null ) ],
+               [ "any", ( NodeSelectorSequence | Null ) ],
+               [ "not", ( NodeSelector | Null ) ],
+               [ "segment", ( Identifier | Null ) ],
+               [ "tag", ( Identifier | Null ) ],
+               [ "node", ( Identifier | Null ) ],
+               [ "plane", ( NonNegativeInteger | Null ) ],
+               [ "slot", ( NonNegativeInteger | Null ) ],
+               MappingEnd ;
+
+NodeSelectorSequence = SequenceBegin,
+                       NodeSelector, { NodeSelector },
+                       SequenceEnd ;
+
+TerminalSelector = MappingBegin,
+                   [ "all", ( TerminalSelectorSequence | Null ) ],
+                   [ "any", ( TerminalSelectorSequence | Null ) ],
+                   [ "not", ( TerminalSelector | Null ) ],
+                   [ "role", ( "access" | "isl" | "crosslink" | "backbone" | Null ) ],
+                   [ "medium", ( "rf" | "optical" | Null ) ],
+                   [ "mount", ( Identifier | Null ) ],
+                   MappingEnd ;
+
+TerminalSelectorSequence = SequenceBegin,
+                           TerminalSelector, { TerminalSelector },
+                           SequenceEnd ;
+
+Endpoint = MappingBegin,
+           "select", NodeSelector,
+           "terminal", TerminalSelector,
+           [ "min_elevation_deg", ( FiniteNumber | Null ) ],
+           MappingEnd ;
+
+EndpointPair = SequenceBegin, Endpoint, Endpoint, SequenceEnd ;
+
+VisibleCandidatesTopology = MappingBegin,
+                            "mode", "visible_candidates",
+                            MappingEnd ;
+
+NearestVisibleTopology = MappingBegin,
+                         "mode", "nearest_visible",
+                         MappingEnd ;
+
+NearestNTopology = MappingBegin,
+                   "mode", "nearest_n",
+                   "n", PositiveInteger,
+                   MappingEnd ;
+
+ExplicitPair = MappingBegin,
+               "a", Identifier,
+               "b", Identifier,
+               MappingEnd ;
+
+ExplicitPairsTopology = MappingBegin,
+                        "mode", "explicit_pairs",
+                        "pairs", SequenceBegin, ExplicitPair, { ExplicitPair }, SequenceEnd,
+                        MappingEnd ;
+
+LinkTopology = VisibleCandidatesTopology
+             | NearestVisibleTopology
+             | NearestNTopology
+             | ExplicitPairsTopology ;
+
+MaxLinksPerNodeMap = MappingBegin,
+                     Identifier, PositiveInteger,
+                     { Identifier, PositiveInteger },
+                     MappingEnd ;
+
+MaxLinksPerNode = PositiveInteger | MaxLinksPerNodeMap ;
+
+LinkRuleConstraints = MappingBegin,
+                      [ "max_links_per_node", ( MaxLinksPerNode | Null ) ],
+                      [ "max_range_km", ( PositiveNumber | Null ) ],
+                      [ "require_mutual_visibility", ( Boolean | Null ) ],
+                      MappingEnd ;
+
+LinkRule = MappingBegin,
+           "id", Identifier,
+           [ "enabled", Boolean ],
+           "endpoints", EndpointPair,
+           "topology", LinkTopology,
+           [ "constraints", ( LinkRuleConstraints | Null ) ],
+           [ "tags", ( Tags | Null ) ],
+           MappingEnd ;
 ```
-Routing ::= {
-  "domains": RoutingDomain+,
-  [ "boundaries": RoutingBoundary* ]
-}
 
-RoutingDomain ::= {
-  "id": Identifier,
-  "protocol": Protocol,
-  [ "capabilities": Capabilities ],
-  "selectors": NodeSelector+,
-  [ "area_assignment": { "strategy": AreaStrategy } ],
-  [ "timers": RoutingTimers ]          # isis/ospf domains only
-}
+Each `NodeSelector` and `TerminalSelector` has exactly one non-null field. Each
+`ExplicitPair` has different endpoints, and undirected explicit pairs are
+unique. Omitted `LinkRule.enabled` defaults to `true`.
 
-RoutingTimers ::= {                    # engine defaults apply when omitted
-  [ "hello_interval_s": Integer ],     # default 1
-  [ "hold_interval_s": Integer ],      # default 3; must exceed hello
-  [ "spf": SpfThrottle ],
-  [ "bfd": BfdConfig ]
-}
-SpfThrottle ::= {                      # IETF SPF backoff, milliseconds
-  [ "init_delay_ms": Integer ], [ "short_delay_ms": Integer ],
-  [ "long_delay_ms": Integer ], [ "holddown_ms": Integer ],
-  [ "time_to_learn_ms": Integer ]
-}
-BfdConfig ::= {
-  "enabled": Bool,                     # default false
-  [ "detect_multiplier": Integer ],
-  [ "rx_interval_ms": Integer ], [ "tx_interval_ms": Integer ]
-}
+Link rules declare candidate permission; orbital and terminal physics still
+decide whether a candidate is usable. A node selector and terminal selector
+must each resolve to non-empty compatible sets. Every endpoint terminal
+selector must name exactly one positive role and at most one positive medium.
+After reference resolution, every endpoint must select mounts of exactly one
+actual medium, and the two endpoint media must match. Omitting `medium` does not
+permit an RF-to-optical candidate; the resolver derives the matched medium and
+rejects ambiguous or incompatible selections before candidate generation.
+The resolver derives link class from endpoint roles and resolved endpoint
+bodies. Any rule with an `access` endpoint uses the access path. A non-access
+rule whose possible endpoint pairs are uniformly body-local is an `isl`; one
+whose possible endpoint pairs are uniformly cross-body is `inter_body`. A rule
+that mixes body-local and cross-body pairs is invalid and must be split into
+body-specific rules. There is no authored `class`, `kind`, or link-label field.
 
-RoutingBoundary ::= {
-  "over": Identifier,            # the link rule this boundary rides
-  "adapter": Adapter,
-  "export": ExportRule+
-}
-ExportRule ::= {
-  "from": Identifier, "to": Identifier,
-  "prefixes": ( CIDR* | { "aggregate_of": "originated" } ),
-  [ "export_node_loopbacks": Bool ],
-  [ "install_via": "peer_loopback" | String ]
-}
+`Endpoint.min_elevation_deg` is in `[0, 90]` and is valid only on the ground
+endpoint of an access rule. It is invalid on a space endpoint or any non-access
+rule. For each ground station, the effective OME elevation mask is the maximum
+of the matching installed terminal minimum and every applicable access-rule
+endpoint minimum.
+
+`ExplicitPair.a` and `ExplicitPair.b` are local node ids within the two resolved
+endpoint segments, not resolver-derived runtime node ids. Ground local ids are
+site-qualified. Every pair must resolve inside the rule's selected endpoint
+sets. `nearest_n` applies a deterministic, physical-distance-ranked greedy
+degree cap: no selected node has more than `n` declared candidates, and a node
+may receive fewer when the peer's cap has already been filled.
+
+Every unordered runtime node pair produced by enabled link rules has exactly
+one owning rule; if two rules produce the same pair, resolution fails. Each
+ground terminal may bind to at most one enabled access rule. Access links
+require exactly one ground endpoint and remain local to the ground site's
+reference body. A per-segment `max_links_per_node` map must cover every
+selected node through its segment or placement-group label.
+
+## Addressing
+
+```ebnf
+AddressPoolAssignment = MappingBegin,
+                        "id", Identifier,
+                        "applies_to", NodeSelector,
+                        [ "ipv4_pool", ( IPv4Network | Null ) ],
+                        [ "ipv6_pool", ( IPv6Network | Null ) ],
+                        [ "prefix_length", ( PositiveInteger | Null ) ],
+                        [ "allocation", ( "by_node_order"
+                                        | "by_attach_index"
+                                        | "by_plane_slot"
+                                        | "by_ground_index"
+                                        | Null ) ],
+                        MappingEnd ;
+
+AddressPoolAssignmentSequence = SequenceBegin,
+                                { AddressPoolAssignment },
+                                SequenceEnd ;
+
+Addressing = MappingBegin,
+             [ "loopbacks", ( AddressPoolAssignmentSequence | Null ) ],
+             [ "point_to_point", ( AddressPoolAssignmentSequence | Null ) ],
+             [ "terrestrial_prefixes", ( AddressPoolAssignmentSequence | Null ) ],
+             MappingEnd ;
 ```
 
-A session is multi-protocol by construction: each domain runs its own protocol
-over the nodes its `selectors` cover, so one session can carry IS-IS, OSPF, BGP,
-and static domains at once. Boundaries join two domains and redistribute prefixes
-between them.
+An assignment has at least one non-null pool. A non-null `prefix_length` is not
+shorter than any supplied pool prefix and does not exceed the address-family
+maximum. An executed loopback assignment must match at least one node, declare
+`prefix_length`, fit that prefix inside each selected pool, have enough free
+addresses, and not conflict with authored loopbacks. An omitted or null
+`allocation` is interpreted as `by_node_order`.
 
-### Simulation and time
+Ground-site addresses remain authored on their sites. Generated routed space
+nodes without an explicit loopback assignment receive deterministic
+resolver-owned IPv4 and IPv6 loopbacks. Across the fully resolved session, a
+loopback host address belongs to exactly one node per address family; duplicate
+authored or allocated `lo0` addresses are invalid.
 
+## Routing
+
+```ebnf
+MplsCapability = EmptyMapping ;
+
+SegmentRoutingCapability = MappingBegin,
+                           "data_plane", "mpls",
+                           MappingEnd ;
+
+MplsDataPlaneSequence = SequenceBegin, { "mpls" }, SequenceEnd ;
+
+TrafficEngineeringCapability = MappingBegin,
+                               [ "data_planes", ( MplsDataPlaneSequence | Null ) ],
+                               MappingEnd ;
+
+RoutingCapabilities = MappingBegin,
+                      [ "mpls", ( MplsCapability | Null ) ],
+                      [ "segment_routing", ( SegmentRoutingCapability | Null ) ],
+                      [ "traffic_engineering", ( TrafficEngineeringCapability | Null ) ],
+                      MappingEnd ;
+
+AreaMapping = MappingBegin,
+              [ "planes", ( NonNegativeIntegerSequence | Null ) ],
+              [ "ground_stations", ( "all" | IdentifierSequence | Null ) ],
+              "area_id", RoutingAreaId,
+              MappingEnd ;
+
+AreaMappingSequence = SequenceBegin, { AreaMapping }, SequenceEnd ;
+
+AreaAssignment = MappingBegin,
+                 "strategy", ( "flat" | "per_plane" | "stripe" | "explicit" ),
+                 [ "gs_area_id", ( RoutingAreaId | Null ) ],
+                 [ "planes_per_stripe", ( PositiveInteger | Null ) ],
+                 [ "assignments", ( AreaMappingSequence | Null ) ],
+                 MappingEnd ;
 ```
-Simulation ::= {
-  "candidate_limits": { "max_pairs_per_rule": Integer, "max_pairs_per_tick": Integer }
-}
 
-Time ::= {
-  "start_time": String,        # UTC simulation epoch
-  "step_seconds": Number,      # sim seconds per tick (> 0)
-  "compression": Number        # sim seconds per wall second (> 0; 1 = real time)
-}
+An `AreaMapping` has a non-null `planes` or `ground_stations` target, and each
+sequence is unique. For `flat` and `per_plane`, `planes_per_stripe` and
+`assignments` are absent or null. `stripe` requires `planes_per_stripe` and
+forbids a non-null `assignments`. `explicit` requires non-null `assignments`
+and forbids a non-null `planes_per_stripe`.
+
+Area assignment is valid only for IS-IS and OSPF. An OSPF area id is a
+canonical dotted IPv4 address such as `0.0.0.0`. An IS-IS area id is a
+lower-case token containing one two-hex-digit group followed by zero to six
+four-hex-digit dotted groups, such as `49` or `49.0001`.
+
+With no area assignment, or with `strategy: flat`, every node uses
+`gs_area_id` when it is present; otherwise the default is `49.0001` for IS-IS
+and `0.0.0.0` for OSPF. `per_plane` derives one area per satellite plane and
+uses `gs_area_id` or the protocol default for ground nodes. `stripe` groups
+satellite planes by `planes_per_stripe` and uses the same ground fallback.
+For plane or stripe index `i`, starting at zero, the derived area is
+`49.<i + 1 as four zero-padded decimal digits>` for IS-IS and
+`0.0.0.<i + 1>` for OSPF. For `stripe`, `i` is integer division of the plane
+index by `planes_per_stripe`. Derived OSPF area indexes cannot exceed `255`,
+and derived IS-IS indexes cannot exceed `9999` under the current four-digit
+format. `per_plane` and `stripe` require at least one selected satellite.
+Every satellite selected by a non-flat strategy requires a resolved plane, so
+orbit-placed fixed nodes without plane facts cannot use those strategies. An
+`explicit` assignment may select only ground nodes; when it selects
+satellites, every selected satellite plane must be mapped exactly once. Ground
+station targets are site-qualified local node ids, and duplicate or unknown
+targets are invalid. An explicitly unmapped ground node uses `gs_area_id` or
+the protocol default.
+
+```ebnf
+SpfThrottle = MappingBegin,
+              [ "init_delay_ms", NonNegativeInteger ],
+              [ "short_delay_ms", NonNegativeInteger ],
+              [ "long_delay_ms", NonNegativeInteger ],
+              [ "holddown_ms", ( NonNegativeInteger | Null ) ],
+              [ "time_to_learn_ms", ( NonNegativeInteger | Null ) ],
+              MappingEnd ;
+
+BfdConfig = MappingBegin,
+            [ "enabled", Boolean ],
+            [ "detect_multiplier", PositiveInteger ],
+            [ "rx_interval_ms", PositiveInteger ],
+            [ "tx_interval_ms", PositiveInteger ],
+            MappingEnd ;
+
+RoutingTimers = MappingBegin,
+                [ "hello_interval_s", PositiveInteger ],
+                [ "hold_interval_s", PositiveInteger ],
+                [ "spf", SpfThrottle ],
+                [ "bfd", BfdConfig ],
+                MappingEnd ;
+
+RoutingDomain = MappingBegin,
+                "id", Identifier,
+                "protocol", ( "isis" | "ospf" | "bgp" | "static" ),
+                [ "capabilities", ( RoutingCapabilities | Null ) ],
+                "selectors", SequenceBegin, NodeSelector, { NodeSelector }, SequenceEnd,
+                [ "area_assignment", ( AreaAssignment | Null ) ],
+                [ "timers", ( RoutingTimers | Null ) ],
+                MappingEnd ;
+
+AggregateOf = MappingBegin,
+              "aggregate_of", "originated",
+              MappingEnd ;
+
+IpNetworkSequence = SequenceBegin, { IpNetwork }, SequenceEnd ;
+
+ExportRule = MappingBegin,
+             "from", Identifier,
+             "to", Identifier,
+             "prefixes", ( IpNetworkSequence | AggregateOf ),
+             [ "export_node_loopbacks", ( Boolean | Null ) ],
+             [ "install_via", ( "peer_loopback" | NonEmptyToken | Null ) ],
+             MappingEnd ;
+
+RoutingBoundary = MappingBegin,
+                  "over", Identifier,
+                  "adapter", ( "static_ip" | "bgp" | "dtn_bundle" ),
+                  "export", SequenceBegin, ExportRule, { ExportRule }, SequenceEnd,
+                  MappingEnd ;
+
+Routing = MappingBegin,
+          "domains", SequenceBegin, RoutingDomain, { RoutingDomain }, SequenceEnd,
+          [ "boundaries", ( RoutingBoundarySequence | Null ) ],
+          MappingEnd ;
+
+RoutingBoundarySequence = SequenceBegin, { RoutingBoundary }, SequenceEnd ;
 ```
 
----
+The first three `SpfThrottle` fields default, in field order, to `50`, `200`,
+and `1000` milliseconds. For IS-IS, the resolver supplies `2000` and `500`
+milliseconds when `holddown_ms` and `time_to_learn_ms` are omitted. OSPF
+forbids non-null `holddown_ms` and `time_to_learn_ms`. `BfdConfig` defaults are
+`false`, `3`, `300`, and `300`.
+`RoutingTimers.hello_interval_s` defaults to `1`, `hold_interval_s` defaults to
+`3`, and omitted `spf` and `bfd` fields default to their respective default
+objects. The hold interval must exceed the hello interval. A non-null `timers`
+field is valid only for `isis` and `ospf`.
 
-## Allowed values
+Routing-domain ids are unique. When `routing` is present, every resolved node
+belongs to exactly one domain, and every domain selects at least one node. A
+boundary names an existing enabled non-access link rule and exports between two
+different, existing domains on opposite sides of that rule. Every enabled
+non-access rule spanning multiple domains requires a boundary.
 
-Fields below are closed: only the listed values are valid.
+An export's literal prefix sequence supplies the declared set by address
+family. `aggregate_of: originated` instead derives the `from` domain's authored
+originated prefixes. `export_node_loopbacks: true` adds every routed node
+loopback in that domain. An omitted or null `install_via` is `peer_loopback`;
+the receiving boundary node uses the opposite endpoint's loopback for each
+available address family. A literal prefix family without that peer loopback is
+an error; an aggregate simply has no installable route in that family. A
+non-`peer_loopback` token is passed as the explicit next-hop or interface
+value. Materialization omits a route to the receiving node's own loopback and
+the peer-loopback seed route.
 
-| Field | Values |
-|-------|--------|
-| `medium` (terminal, selector) | `rf`, `optical` |
-| `role` (mount, selector) | `access`, `isl`, `crosslink`, `backbone` |
-| `forwarding` (node) | `routed`, `host`, `bridge`, `control_only` |
-| `propagator` (orbit) | `two_body`, `j2_mean_elements`, `sgp4_tle` |
-| `mode` (phasing) | `walker_delta`, `walker_star`, `evenly_spaced_mean_anomaly` |
-| `mode` (topology) | `visible_candidates`, `nearest_n`, `explicit_pairs` (`nearest_visible` is grammar-defined but rejected at runtime today) |
-| `protocol` (routing domain) | `isis`, `ospf`, `bgp`, `static` (a session with no routing defaults to one `isis` domain) |
-| `adapter` (routing boundary) | `static_ip`, `bgp`, `dtn_bundle` |
-| `strategy` (area assignment) | `flat`, `per_plane`, `stripe`, `explicit` |
-| `allocation` (address pool) | `by_node_order`, `by_attach_index`, `by_plane_slot`, `by_ground_index` |
-| selection policy (scheduling) | `highest_elevation`, `lowest_elevation`, `longest_remaining_pass` |
-| handover mode (scheduling) | `mbb`, `bbm` |
+When `routing` is omitted, the resolver requires at least one node whose model
+has `forwarding: routed` and creates `default_domain`, running IS-IS over every
+such node. It does not place host, bridge, or control-only nodes into that
+default domain.
 
-All values are lower-case `snake_case`. A value outside its list is an error, not
-a silent fallback.
+## Simulation, time, ephemeris, and dispatch
+
+```ebnf
+CandidateLimits = MappingBegin,
+                  "max_pairs_per_rule", PositiveInteger,
+                  "max_pairs_per_tick", PositiveInteger,
+                  MappingEnd ;
+
+Simulation = MappingBegin,
+             [ "candidate_limits", ( CandidateLimits | Null ) ],
+             [ "ground_link_model", ( "geometry_only" | "terminal_physics" ) ],
+             [ "acknowledge_geometry_only", Boolean ],
+             MappingEnd ;
+
+TimeConfig = MappingBegin,
+             "start_time", AwareTimestamp,
+             "step_seconds", PositiveNumber,
+             "compression", PositiveNumber,
+             MappingEnd ;
+
+BodyRefSequence = SequenceBegin, BodyRef, { BodyRef }, SequenceEnd ;
+
+EphemerisKernel = MappingBegin,
+                  "id", Identifier,
+                  "path", RelativeAssetPath,
+                  [ "sha256", ( Sha256Hex | Null ) ],
+                  "targets", BodyRefSequence,
+                  "frame", Identifier,
+                  [ "coverage_start", ( AwareTimestamp | Null ) ],
+                  [ "coverage_end", ( AwareTimestamp | Null ) ],
+                  MappingEnd ;
+
+Ephemeris = MappingBegin,
+            "provider", ( "skyfield_bsp" | "spice_kernel_stack" | "operator_supplied_spk" ),
+            "quality_tier", Identifier,
+            "kernels", SequenceBegin, EphemerisKernel, { EphemerisKernel }, SequenceEnd,
+            MappingEnd ;
+
+Dispatch = MappingBegin,
+           "latency_authority", "ome",
+           "max_latency_age_ticks", PositiveInteger,
+           MappingEnd ;
+
+Session = MappingBegin,
+          "session", SessionMeta,
+          "segments", SequenceBegin, Segment, { Segment }, SequenceEnd,
+          [ "link_rules", ( LinkRuleSequence | Null ) ],
+          [ "addressing", ( Addressing | Null ) ],
+          [ "routing", ( Routing | Null ) ],
+          [ "simulation", ( Simulation | Null ) ],
+          "time", TimeConfig,
+          [ "ephemeris", ( Ephemeris | Null ) ],
+          [ "dispatch", ( Dispatch | Null ) ],
+          MappingEnd ;
+
+LinkRuleSequence = SequenceBegin, { LinkRule }, SequenceEnd ;
+```
+
+Segment ids and link-rule ids are independently unique. A session with more
+than one segment and at least one link rule must declare
+`simulation.candidate_limits`; the static and materialized candidate counts
+must remain within both limits. If `dispatch` is omitted, the resolver supplies
+`latency_authority: ome` and `max_latency_age_ticks: 3`.
+
+`simulation.ground_link_model` defaults to `terminal_physics`, and
+`acknowledge_geometry_only` defaults to `false`. Selecting `geometry_only`
+requires `acknowledge_geometry_only: true`; the acknowledgement is invalid for
+`terminal_physics`. Geometry-only mode is an explicit experimental waiver, not
+an inferred fallback.
+
+Every active body other than Earth requires an ephemeris manifest target. Earth
+state is implicit in the current runtime. The current Skyfield runtime
+additionally requires exactly one local kernel, a matching SHA-256, and both
+coverage fields. `coverage_start` and `coverage_end` must be declared together,
+and `coverage_end` must be later than `coverage_start`. Resolution validates
+that `time.start_time` lies within the inclusive declared coverage; during
+playback, seek, or lookahead, the provider also rejects every requested time
+outside that coverage instead of extrapolating.
+
+## Resolver-wide constraints
+
+The following relationships are semantic parts of the language even though
+they span more than one YAML document and therefore are not expressible by the
+context-free EBNF alone:
+
+- Every reference loads exactly one document of the declared family.
+- A session resolves at least one runtime node and at least one active body.
+- Conflicting physical facts for the same body id are invalid.
+- A `lo0` host address is globally unique per address family across all
+  resolved nodes, independent of which site, segment, or pool supplied it.
+- Runtime node ids are resolver-owned. Space ids are the normalized segment id
+  plus the local space-node id; ground ids are the normalized site id plus the
+  site-node id, independent of which ground segment placed the site.
+  Underscores normalize to hyphens. The result must be globally unique,
+  lower-case DNS-label safe, and no longer than 63 characters; otherwise
+  resolution fails before Kubernetes objects are created.
+- A link endpoint resolves nodes from a coherent segment or shared placement
+  group and finds compatible installed terminal mounts.
+- Each unordered candidate node pair from enabled link rules is owned by
+  exactly one link rule.
+- Runtime node-selector tags come from segment and placement facts: generated
+  space nodes receive space-segment tags, constellation tags, and matching
+  `node_tags`; fixed space nodes receive space-segment and `SpaceNode.tags`;
+  ground nodes receive ground-segment/apply/override, site, and site-node tags.
+  Tags on reusable node models, mounts, site sets, and space-node sets remain
+  catalog metadata. Tag text never defines physics, link class, routing,
+  addressing, scheduling, or actuation.
+- Site-level scheduling overrides segment scheduling field by field. A matching
+  ground override replaces the segment apply value for scheduling and
+  originated-prefix intent; at most one override targets a site.
+- `originated_prefixes` is routing-injection intent. It does not allocate or
+  infer address ownership.
+- Routing failure, lack of convergence, and unreachable destinations remain
+  valid experimental results. Resolution does not fabricate routes or links.
+
+## Current runtime support
+
+Structural validity does not imply that the installed runtime can execute a
+construct. The production Earth-Luna profile currently supports:
+
+- `constellation`, `space_node_set` with orbit- or Earth-TLE-placed nodes, and
+  body-fixed ground-site-set segments;
+- Earth and Luna body facts;
+- `two_body` and `j2_mean_elements` reusable-orbit propagation;
+- Earth `sgp4_tle` placement on fixed space nodes;
+- `session` clocks;
+- `visible_candidates`, `nearest_n`, and `explicit_pairs` topology modes;
+- the `max_links_per_node` link constraint;
+- loopback address pools using `by_node_order` allocation;
+- IS-IS, OSPF, and static FRR routing domains;
+- MPLS, segment routing, and traffic engineering on IS-IS and OSPF domains;
+- `static_ip` routing boundaries;
+- serialized ground handovers with `handover_concurrency: one_at_a_time`, at
+  most one reserved MBB overlap, and one-tick BBM acquisition;
+- `skyfield_bsp` ephemeris.
+
+The following structurally valid constructs are currently rejected before
+runtime execution:
+
+- Lagrange segments and non-body-fixed ground sites;
+- raw state-vector space-node placement;
+- `crtbp` propagation;
+- payload execution;
+- `affine` clocks;
+- `nearest_visible` topology;
+- `max_range_km` and `require_mutual_visibility` link constraints;
+- `handover_concurrency: all_at_once`, `mbb_reserve` above 1, and
+  `bbm_acquire_timeout_ticks` values other than 1;
+- point-to-point and terrestrial-prefix pools;
+- `by_attach_index`, `by_plane_slot`, and `by_ground_index` allocation;
+- BGP routing domains;
+- routing capabilities on BGP or static domains;
+- `bgp` and `dtn_bundle` routing boundaries;
+- `spice_kernel_stack` and `operator_supplied_spk` ephemeris providers;
+- bodies outside the supported Earth-Luna profile.
+
+Unsupported features fail explicitly. They are never silently removed,
+flattened, translated to another feature, or treated as successful execution.

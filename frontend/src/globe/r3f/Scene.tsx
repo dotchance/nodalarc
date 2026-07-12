@@ -45,7 +45,7 @@ import { GroundTracks } from "./GroundTracks";
 import type { Regime } from "../../taxonomy/regime";
 import { Links } from "./Links";
 import { FlowPaths } from "./FlowPaths";
-import { CoverageFootprint } from "./CoverageFootprint";
+import { CoverageFootprint, type BeamFootprints } from "./CoverageFootprint";
 import { Trails } from "./Trails";
 import { AllOrbits } from "./AllOrbits";
 import { OrbitPins } from "./OrbitPins";
@@ -81,6 +81,19 @@ interface SceneProps {
   onSelect: (sel: Selection | null) => void;
   /** Imperative camera/screenshot handle the rest of the app drives (Toolbar, keyboard, fly-to). */
   actionsRef?: MutableRefObject<GlobeActions | null>;
+  /** Ground-selection decision explanation (envelope cone + candidate tinting)
+   *  answers for the running session's scheduler. Surfaces rendering a world
+   *  that is not the running session (the session builder) disable it so the
+   *  scene never explains one world with another world's decisions. */
+  liveExplain?: boolean;
+  /** Extra world-frame layers composed by the hosting surface (domain
+   *  overlays per the viewer layering — e.g. the builder's candidate lines).
+   *  Rendered at scene root alongside links/flows. */
+  worldLayers?: React.ReactNode;
+  /** Beam discs requested by the hosting surface with real terminal data
+   *  (the builder: every satellite of a segment being edited). Absent = the
+   *  selected-satellite disc at the display default. */
+  beamFootprints?: BeamFootprints;
 }
 
 export function Scene({
@@ -100,6 +113,9 @@ export function Scene({
   selection,
   onSelect,
   actionsRef,
+  liveExplain = true,
+  worldLayers,
+  beamFootprints,
 }: SceneProps) {
   // The Earth body group, used by FrameDriver / AllOrbits / OrbitPins to drive its view-frame
   // rotation. <Body> populates this ref AND self-registers its frame in the position registry
@@ -202,10 +218,11 @@ export function Scene({
 
   // On-select decision data, lifted here so the globe is internally single-sourced: the GS
   // envelope cone and the per-sat relation tinting both read from
-  // ONE decision-explanation + ONE ground-candidates fetch for the selected GS — and from the SAME
+  // one decision-explanation + one ground-candidates fetch for the selected GS — and from the same
   // client + classifier the node card uses, so a satellite never reads one family on the glyph and
   // another in the panel. Only fetched when a GS is selected (selectedGsId null otherwise).
-  const selectedGsId = selection?.type === "ground_station" ? selection.id : null;
+  const selectedGsId =
+    liveExplain && selection?.type === "ground_station" ? selection.id : null;
   const simTime = snapshot?.sim_time;
   const facts = useDecisionExplanation(selectedGsId, null, simTime).facts;
   const envelope = facts?.envelope ?? null;
@@ -278,8 +295,8 @@ export function Scene({
     setPlaybackPaused(playbackPaused);
   }, [playbackPaused]);
 
-  // Drive the SGP4 worker on ephemeris change (mirrors GlobeView). The Constellation reads
-  // worker positions, falling back to main-thread propagation when the worker is unavailable.
+  // Drive the Keplerian/J2 worker on ephemeris change. The Constellation reads worker
+  // positions, falls back to main-thread propagation, and uses snapshots for TLE nodes.
   useEffect(() => {
     if (!ephemeris) return;
     initWorkerBridge();
@@ -301,6 +318,7 @@ export function Scene({
             nodes={nodes}
             containerRef={labelContainerRef}
             selectedGsId={selection?.type === "ground_station" ? selection.id : null}
+            selectedNodeId={selection?.id ?? null}
           />
         }
       >
@@ -375,6 +393,7 @@ export function Scene({
           resetKey={constellation ?? "none"}
         />
         <FlowPaths tracedPaths={snapshot?.traced_paths ?? []} />
+        {worldLayers}
         {kmPerRenderUnit !== null && bodies.map((body) => {
           const bodyNodes = nodes.filter((node) => node.reference_body === body.id);
           return (
@@ -414,7 +433,7 @@ export function Scene({
                 onHover={setHover}
               />
               <GroundTracks nodes={bodyNodes} enabled={showGroundTracks} />
-              <CoverageFootprint selection={selection} nodes={bodyNodes} />
+              <CoverageFootprint selection={selection} nodes={bodyNodes} beams={beamFootprints} />
             </Body>
           );
         })}

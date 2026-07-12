@@ -5,14 +5,16 @@
  * Session summary, YAML preview, deploy, and download controls.
  */
 
-import type { WizardRuntimeState } from "./wizardTypes";
-import { ORBIT_MODEL_OPTIONS } from "./orbitModels";
+import type { OrbitModel, WizardRuntimeState } from "./wizardTypes";
+import { orbitModelLabel } from "./orbitModels";
 
 interface ReviewPanelProps {
   state: WizardRuntimeState;
+  orbitModels: readonly OrbitModel[];
   generatedYaml: string | null;
   generating: boolean;
   deploying: boolean;
+  exporting: boolean;
   onBack: () => void;
   onDeploy: () => void;
   onDownload: () => void;
@@ -21,16 +23,17 @@ interface ReviewPanelProps {
 
 export function ReviewPanel({
   state,
+  orbitModels,
   generatedYaml,
   generating,
   deploying,
+  exporting,
   onBack,
   onDeploy,
   onDownload,
   onReset,
 }: ReviewPanelProps) {
-  const orbitModelLabel =
-    ORBIT_MODEL_OPTIONS.find((o) => o.id === state.orbitPropagator)?.label ?? state.orbitPropagator;
+  const selectedOrbitModelLabel = orbitModelLabel(orbitModels, state.orbitPropagator);
 
   return (
     <div className="wizard-panel">
@@ -57,7 +60,7 @@ export function ReviewPanel({
         </div>
         <div className="wizard-review-row">
           <span className="wizard-review-label">Orbit Model</span>
-          <span className="wizard-review-value">{orbitModelLabel}</span>
+            <span className="wizard-review-value">{selectedOrbitModelLabel ?? "-"}</span>
         </div>
         <div className="wizard-review-row">
           <span className="wizard-review-label">Protocol</span>
@@ -69,10 +72,10 @@ export function ReviewPanel({
             <span className="wizard-review-value">{state.extensions.join(", ")}</span>
           </div>
         )}
-        {state.protocol !== "nodalpath" && (
+        {state.protocol && (
           <div className="wizard-review-row">
             <span className="wizard-review-label">Area Strategy</span>
-            <span className="wizard-review-value">{state.areaStrategy}</span>
+            <span className="wizard-review-value">{state.areaStrategy ?? "-"}</span>
           </div>
         )}
       </div>
@@ -87,14 +90,14 @@ export function ReviewPanel({
       <div className="wizard-actions">
         <button className="wizard-nav-btn" onClick={onBack}>Back</button>
         {generatedYaml && (
-          <button className="wizard-nav-btn" onClick={onDownload}>
-            Download YAML
+          <button className="wizard-nav-btn" onClick={onDownload} disabled={exporting}>
+            {exporting ? "Preparing..." : "Download YAML"}
           </button>
         )}
         <button
           className="wizard-nav-btn wizard-nav-btn--primary"
           onClick={onDeploy}
-          disabled={generating || deploying}
+          disabled={generating || deploying || exporting}
         >
           {generating ? "Generating..." : deploying ? "Deploying..." : generatedYaml ? "Deploy" : "Generate & Review"}
         </button>

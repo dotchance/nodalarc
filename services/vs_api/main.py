@@ -18,30 +18,41 @@ import logging
 import os
 import secrets
 import sqlite3
+import threading
 import uuid
+from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import asyncssh
 import httpx
 import nats
-import yaml
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
+from fastapi.staticfiles import StaticFiles
 from nodal.logging import configure as _configure_logging
 from nodal.logging import connect as _connect_logging
-from nodalarc.catalog_paths import (
-    CatalogPathError,
-    CatalogRoots,
-    config_value_for,
-    generated_file_path,
-    generated_file_stem,
-    write_text_exclusive,
+from nodalarc.catalog_closure import CatalogClosureCollector
+from nodalarc.catalog_paths import CatalogPathError, CatalogRoots
+from nodalarc.catalog_refs import SessionRef
+from nodalarc.catalog_registry import (
+    catalog_family_spec,
+    validate_referenced_configuration_document,
 )
+from nodalarc.catalog_repository import (
+    CatalogConflictError,
+    CatalogNotFoundError,
+    CatalogRepositoryError,
+    CatalogValidationError,
+)
+from nodalarc.catalog_upload import DEFAULT_CATALOG_UPLOAD_LIMITS
+from nodalarc.configuration_yaml import load_configuration_yaml
+from nodalarc.cr_runtime_config import RuntimeSessionConfig, load_cr_runtime_config
 from nodalarc.db.queries import (
     insert_snapshot,
     query_convergence_events,
@@ -50,9 +61,28 @@ from nodalarc.db.queries import (
     query_probe_results,
 )
 from nodalarc.db.schema import create_tables
-from nodalarc.models.catalog import validate_catalog_document
-from nodalarc.models.resolved_session import ResolvedSession, SourceContext
+from nodalarc.models.builder_api import (
+    WizardAvailableStation,
+    WizardAvailableStationResponse,
+    WizardConstellationPresetResponse,
+    WizardCoverageRequest,
+    WizardExtensionRulesResponse,
+    WizardGroundStationSetPreset,
+    WizardGroundStationSetPresetResponse,
+    WizardSatelliteTerminalSummary,
+    WizardSatelliteTypePreset,
+    WizardSatelliteTypePresetResponse,
+)
+from nodalarc.models.coverage import CoveragePreviewResult
+from nodalarc.models.resolved_session import ResolvedSession
 from nodalarc.models.scheduler_ops import OperatorRepairCommand
+from nodalarc.models.session_sources import (
+    CatalogSessionSourceId,
+    CatalogSessionSummary,
+    CatalogSessionSwitchAccepted,
+    CatalogSessionSwitchRequest,
+    CatalogSessionYamlUploadRequest,
+)
 from nodalarc.models.vs_api import (
     LinkState,
     NetworkHealth,
@@ -72,9 +102,21 @@ from nodalarc.nats_channels import (
 )
 from nodalarc.platform_config import get_platform_config
 from nodalarc.project_info import project_attribution, project_version
-from nodalarc.resolve_session import resolve_session_with_assets
+from nodalarc.resolve_session import (
+    SessionResolution,
+)
+from nodalarc.runtime_support import UnsupportedFeatureError
 from yaml import YAMLError
 
+from vs_api.catalog_context import CatalogContext, get_catalog_context
+from vs_api.catalog_session_service import CatalogSessionService
+from vs_api.catalog_upload_lifecycle import (
+    reconcile_catalog_upload_lifecycle as reconcile_catalog_upload_resources,
+)
+from vs_api.catalog_upload_store import (
+    CatalogUploadResourceEvidence,
+    KubernetesCatalogUploadStore,
+)
 from vs_api.continuous_tracer import ContinuousTracer
 from vs_api.introspect import VTYSH_COMMANDS, run_vtysh
 from vs_api.ops_log import (
@@ -83,18 +125,36 @@ from vs_api.ops_log import (
     operator_visible_ops_events,
     stamp_ops_event,
 )
+from vs_api.resolved_runtime_views import tracer_node_registry
 from vs_api.session_context import SessionContext, _link_key
 from vs_api.session_manager import SessionManager
 from vs_api.terminal import TerminalManager
+from vs_api.transition_operations import (
+    FilesystemTransitionOperationStore,
+    TransitionConstellationSpecObservation,
+    TransitionOperation,
+    TransitionOperationConflictError,
+    TransitionOperationFacts,
+    TransitionOperationFailure,
+    TransitionOperationNotFoundError,
+    TransitionOperationProvenance,
+    TransitionOperationProvenancePatch,
+    TransitionOperationReservation,
+    TransitionOperationSource,
+    TransitionOperationSourceKind,
+    TransitionOperationState,
+    TransitionOperationStore,
+    TransitionReconciliationDisposition,
+    TransitionRuntimePlan,
+    TransitionRuntimeResult,
+    TransitionRuntimeStatusProof,
+    reconcile_transition_operation,
+    transition_failure_from_exception,
+)
 
 log = logging.getLogger(__name__)
 
 _CATALOG_ROOTS = CatalogRoots.from_catalog_root(Path("catalog/nodalarc"))
-
-
-def _generated_sessions_dir() -> Path:
-    """Return the runtime write root for wizard/upload sessions."""
-    return Path(get_platform_config().session_data_root) / "generated-sessions"
 
 
 def _catalog_ref_for_path(path: Path) -> str:
@@ -230,13 +290,22 @@ _session_manager: SessionManager | None = None
 _nats_connection: nats.NATS | None = None
 _main_event_loop: asyncio.AbstractEventLoop | None = None
 _terminal_manager = TerminalManager()
-_initial_session_file: str = ""  # Set by main() before uvicorn starts
 _active_cr_generation: int | None = None
 _cr_monitor_task: asyncio.Task | None = None
 _session_transition_lock = asyncio.Lock()
+_transition_admission_lock = asyncio.Lock()
+_active_transition_operation_id: str | None = None
+_local_transition_operation_id: str | None = None
+_current_transition_operation_id: ContextVar[str | None] = ContextVar(
+    "current_transition_operation_id",
+    default=None,
+)
+_transition_operation_store: TransitionOperationStore | None = None
+_transition_operation_store_lock = threading.Lock()
 
 _CR_MONITOR_INTERVAL_SECONDS = 2.0
 _CR_CONTEXT_READY_TIMEOUT_SECONDS = 60.0
+_CATALOG_UPLOAD_RECONCILE_INTERVAL_SECONDS = 60.0
 
 # System OpsEvents — meta-session, not cleared on switch
 from collections import deque
@@ -250,6 +319,192 @@ _debug_sub: object | None = None
 _debug_events: deque = deque(maxlen=500)
 
 _KNOWN_DEBUG_SOURCES = ("ome", "scheduler", "node_agent", "operator", "vs_api")
+
+
+def _get_transition_operation_store() -> TransitionOperationStore:
+    """Return the replaceable single-writer store on the existing session PVC."""
+
+    global _transition_operation_store
+    if _transition_operation_store is None:
+        with _transition_operation_store_lock:
+            if _transition_operation_store is None:
+                root = os.environ.get("NODALARC_TRANSITION_OPERATION_ROOT")
+                if not root:
+                    root = str(
+                        Path(get_platform_config().session_data_root) / "transition-operations"
+                    )
+                _transition_operation_store = FilesystemTransitionOperationStore(root)
+    return _transition_operation_store
+
+
+TransitionStoreOperation = Literal[
+    "active",
+    "advance",
+    "get_operation",
+    "reserve",
+    "update_provenance",
+]
+
+
+async def _invoke_transition_store(
+    operation_name: TransitionStoreOperation,
+    /,
+    *args: Any,
+    **kwargs: Any,
+) -> Any:
+    store = _get_transition_operation_store()
+    operation = getattr(store, operation_name)
+    if store.blocking_io:
+        return await asyncio.to_thread(operation, *args, **kwargs)
+    return operation(*args, **kwargs)
+
+
+def _runtime_release_identity() -> str:
+    """Return the release identity shared with Operator runtime proofs."""
+
+    return os.environ.get("NODALARC_RELEASE", project_version())
+
+
+def _runtime_build_identity() -> str:
+    """Return the build identity shared with Operator runtime proofs."""
+
+    return os.environ.get("NODAL_BUILD", "dev")
+
+
+async def _advance_transition_operation(
+    state: TransitionOperationState,
+    *,
+    operation_id: str | None = None,
+    detail: str | None = None,
+    failure: TransitionOperationFailure | None = None,
+    runtime: TransitionRuntimeResult | None = None,
+) -> None:
+    selected_id = operation_id or _current_transition_operation_id.get()
+    if selected_id is None:
+        return
+    normalized_detail = detail.strip()[:512] if detail is not None else None
+    if not normalized_detail:
+        normalized_detail = None
+    await _invoke_transition_store(
+        "advance",
+        selected_id,
+        state,
+        detail=normalized_detail,
+        failure=failure,
+        runtime=runtime,
+    )
+
+
+async def _reconcile_catalog_upload_lifecycle(
+    cr: dict[str, Any] | None,
+    *,
+    core_v1_api: Any,
+    namespace: str,
+) -> None:
+    """Fail-closed reconciliation of upload ownership and bounded GC."""
+
+    async with _transition_admission_lock:
+        active = await _invoke_transition_store("active")
+        store = KubernetesCatalogUploadStore(core_v1_api, namespace)
+        await asyncio.to_thread(
+            reconcile_catalog_upload_resources,
+            store,
+            constellation_spec=cr,
+            active_operation=active,
+        )
+
+
+async def _run_admitted_transition(
+    operation_id: str,
+    worker: Callable[[], Awaitable[TransitionRuntimeResult | None]],
+) -> None:
+    global _active_transition_operation_id, _local_transition_operation_id
+    token = _current_transition_operation_id.set(operation_id)
+    try:
+        await _advance_transition_operation(
+            TransitionOperationState.COLLECTING,
+            detail="Collecting and rechecking the trusted session source",
+        )
+        runtime = await worker()
+        await _advance_transition_operation(
+            TransitionOperationState.SUCCEEDED,
+            detail="Session runtime reached Ready",
+            runtime=runtime,
+        )
+    except asyncio.CancelledError:
+        with contextlib.suppress(Exception):
+            await _advance_transition_operation(
+                TransitionOperationState.CANCELLED,
+                detail="Session transition task was cancelled",
+                failure=TransitionOperationFailure(
+                    code="transition.worker.cancelled",
+                    message="Session transition was cancelled",
+                ),
+            )
+        if _session_manager is not None and _session_manager.status == "switching":
+            _session_manager._status = "error"
+            _session_manager.status_detail = "Session transition cancelled"
+        raise
+    except Exception as exc:
+        with contextlib.suppress(Exception):
+            await _advance_transition_operation(
+                TransitionOperationState.FAILED,
+                detail="Session transition failed",
+                failure=transition_failure_from_exception(exc),
+            )
+        log.error("Admitted session transition failed", exc_info=True)
+    finally:
+        _current_transition_operation_id.reset(token)
+        async with _transition_admission_lock:
+            if _active_transition_operation_id == operation_id:
+                _active_transition_operation_id = None
+            if _local_transition_operation_id == operation_id:
+                _local_transition_operation_id = None
+
+
+async def _admit_transition(
+    worker: Callable[[], Awaitable[TransitionRuntimeResult | None]],
+    *,
+    reservation: TransitionOperationReservation,
+) -> str | None:
+    global _active_transition_operation_id, _local_transition_operation_id
+    async with _transition_admission_lock:
+        operation_id = uuid.uuid4().hex
+        try:
+            await _invoke_transition_store(
+                "reserve",
+                operation_id,
+                reservation,
+            )
+        except TransitionOperationConflictError as exc:
+            _active_transition_operation_id = exc.active_operation_id
+            return None
+        _active_transition_operation_id = operation_id
+        _local_transition_operation_id = operation_id
+        if _session_manager is not None:
+            _session_manager._status = "switching"
+            _session_manager.status_detail = "Transition reserved"
+        coroutine = _run_admitted_transition(operation_id, worker)
+        try:
+            asyncio.create_task(coroutine, name=f"session-transition-{operation_id}")
+        except Exception as exc:
+            coroutine.close()
+            cause_type = type(exc).__name__
+            await _invoke_transition_store(
+                "advance",
+                operation_id,
+                TransitionOperationState.FAILED,
+                detail="Session transition task could not be scheduled",
+                failure=TransitionOperationFailure(
+                    code="transition.scheduling.failed",
+                    message="Session transition could not be scheduled",
+                    cause_type=cause_type,
+                ),
+            )
+            _active_transition_operation_id = None
+            _local_transition_operation_id = None
+            raise
+        return operation_id
 
 
 async def _enable_debug_source(source: str) -> bool:
@@ -611,6 +866,9 @@ class CRSessionIdentity:
     session_name: str
     session_yaml: str
     session: ResolvedSession
+    resolution: SessionResolution
+    runtime_config: RuntimeSessionConfig
+    source_id: str
     generation: int
 
 
@@ -622,17 +880,25 @@ def _as_positive_int(value: Any) -> int | None:
     return parsed if parsed > 0 else None
 
 
-def _parse_session_yaml(session_yaml: str) -> tuple[str, ResolvedSession]:
-    raw = yaml.safe_load(session_yaml)
-    if not raw:
-        raise ValueError("sessionYaml is empty")
-    resolution = resolve_session_with_assets(
-        raw,
-        catalog_roots=_CATALOG_ROOTS,
-        source_context=SourceContext(origin="vs_api.cr"),
+def _load_cr_runtime_session(
+    spec: dict[str, Any],
+    *,
+    namespace: str,
+    run_id: str,
+    core_v1: Any | None = None,
+) -> RuntimeSessionConfig:
+    if "catalogUpload" in spec and core_v1 is None:
+        import kubernetes.client
+
+        core_v1 = kubernetes.client.CoreV1Api()
+    return load_cr_runtime_config(
+        spec,
+        core_v1=core_v1,
+        namespace=namespace,
+        source_origin="vs_api.cr",
+        run_id=run_id,
+        installed_shipped_root=_CATALOG_ROOTS.root,
     )
-    session = resolution.resolved
-    return session.session.name, session
 
 
 def _cr_ready_identity(cr: dict[str, Any]) -> tuple[int, str] | None:
@@ -675,11 +941,14 @@ def _extract_cr_session(
     cr: dict[str, Any],
     *,
     require_ready: bool,
+    core_v1: Any | None = None,
+    namespace: str | None = None,
 ) -> CRSessionIdentity | None:
     """Return the CR session only when status carries current runtime identity.
 
-    Materializes the session from spec.sessionYaml — unbounded CPU work
-    that must never run on the event loop (call via asyncio.to_thread).
+    Materializes the selected root and catalog-upload files, then resolves them.
+    This is unbounded CPU and Kubernetes I/O that must never run on the event
+    loop (call via asyncio.to_thread).
     """
 
     metadata = cr.get("metadata") or {}
@@ -705,7 +974,30 @@ def _extract_cr_session(
     if not session_yaml.strip():
         raise ValueError("Ready ConstellationSpec is missing spec.sessionYaml")
 
-    _display_session_id, session = _parse_session_yaml(session_yaml)
+    runtime_namespace = str(metadata.get("namespace") or namespace or "nodalarc")
+    runtime_config = _load_cr_runtime_session(
+        spec,
+        namespace=runtime_namespace,
+        run_id=session_run_id,
+        core_v1=core_v1,
+    )
+    resolution = runtime_config.resolution
+    session = resolution.resolved
+    proof = runtime_config.proof
+    expected_runtime_status = {
+        "documentDigest": proof.document_digest,
+        "closureDigest": proof.closure_digest,
+        "resolvedSemanticDigest": proof.resolved_semantic_digest,
+        "runtimeRelease": _runtime_release_identity(),
+        "runtimeBuild": _runtime_build_identity(),
+    }
+    for field, expected in expected_runtime_status.items():
+        observed = status.get(field)
+        if observed != expected:
+            raise ValueError(
+                f"ConstellationSpec status.{field} does not match verified runtime configuration "
+                f"({observed!r} != {expected!r})"
+            )
 
     status_name = str(status.get("sessionName") or "")
     if require_ready and not status_name:
@@ -715,11 +1007,19 @@ def _extract_cr_session(
             "ConstellationSpec status.sessionName does not match spec.session.name "
             f"({status_name!r} != {session.session.name!r})"
         )
+    annotations = metadata.get("annotations") or {}
+    source_id = str(
+        annotations.get("nodalarc.io/source-id")
+        or f"constellationspec:{runtime_namespace}/current-session"
+    )
     return CRSessionIdentity(
         session_id=session_run_id,
         session_name=session.session.name,
         session_yaml=session_yaml,
         session=session,
+        resolution=resolution,
+        runtime_config=runtime_config,
+        source_id=source_id,
         generation=generation,
     )
 
@@ -727,6 +1027,94 @@ def _extract_cr_session(
 def _extract_current_cr_session(cr: dict[str, Any]) -> CRSessionIdentity | None:
     """Return any current-generation CR session with a runtime identity."""
     return _extract_cr_session(cr, require_ready=False)
+
+
+async def _reconcile_interrupted_transition(cr: dict[str, Any] | None) -> None:
+    """Reconcile a persisted, non-local operation from trusted live CR state."""
+
+    global _active_transition_operation_id
+    try:
+        active = await _invoke_transition_store("active")
+        if active is None:
+            if _local_transition_operation_id is None:
+                _active_transition_operation_id = None
+            return
+        if active.operation_id == _local_transition_operation_id:
+            return
+        reconciliation = await asyncio.to_thread(reconcile_transition_operation, active, cr)
+        runtime_mismatch = (
+            reconciliation.failure is not None
+            and reconciliation.failure.code == "transition.recovery.runtime_mismatch"
+        )
+        if cr is not None and active.provenance.runtime_plan is not None and not runtime_mismatch:
+            observation = _constellation_spec_observation(cr)
+            active = await _invoke_transition_store(
+                "update_provenance",
+                active.operation_id,
+                TransitionOperationProvenancePatch(constellation_spec=observation),
+            )
+        if reconciliation.disposition is TransitionReconciliationDisposition.STILL_SWITCHING:
+            _active_transition_operation_id = active.operation_id
+            if not (
+                active.state is TransitionOperationState.SWITCHING
+                and active.events[-1].detail == reconciliation.detail
+            ):
+                await _invoke_transition_store(
+                    "advance",
+                    active.operation_id,
+                    TransitionOperationState.SWITCHING,
+                    detail=reconciliation.detail,
+                )
+            return
+        state = {
+            TransitionReconciliationDisposition.SUCCEEDED: TransitionOperationState.SUCCEEDED,
+            TransitionReconciliationDisposition.FAILED: TransitionOperationState.FAILED,
+            TransitionReconciliationDisposition.CANCELLED: TransitionOperationState.CANCELLED,
+        }[reconciliation.disposition]
+        failure = reconciliation.failure
+        runtime = reconciliation.runtime
+        detail = reconciliation.detail
+        if state is TransitionOperationState.SUCCEEDED:
+            try:
+                runtime_namespace = str(
+                    (cr or {}).get("metadata", {}).get("namespace") or "nodalarc"
+                )
+                verified = await asyncio.to_thread(
+                    _extract_cr_session,
+                    cr,
+                    require_ready=True,
+                    namespace=runtime_namespace,
+                )
+                if verified is None:
+                    raise ValueError("Ready runtime identity is not generation-consistent")
+                runtime = TransitionRuntimeResult(
+                    session_id=verified.session_id,
+                    generation=verified.generation,
+                )
+                if runtime != reconciliation.runtime:
+                    raise ValueError("verified runtime identity differs from status proof")
+            except Exception as exc:
+                state = TransitionOperationState.FAILED
+                runtime = None
+                detail = "Selected runtime could not be verified after restart"
+                failure = TransitionOperationFailure(
+                    code="transition.runtime.verification_failed",
+                    message="Selected runtime could not be verified",
+                    cause_type=type(exc).__name__,
+                )
+        await _invoke_transition_store(
+            "advance",
+            active.operation_id,
+            state,
+            detail=detail,
+            failure=failure,
+            runtime=runtime,
+        )
+        _active_transition_operation_id = None
+    except Exception:
+        # Fail closed: an unreadable or unreconciled operation remains active in
+        # the durable store and admission continues to refuse another switch.
+        log.error("Transition operation startup reconciliation failed", exc_info=True)
 
 
 def _cr_status_observes_current_generation(cr: dict[str, Any]) -> bool:
@@ -738,34 +1126,25 @@ def _cr_status_observes_current_generation(cr: dict[str, Any]) -> bool:
     return generation is not None and observed_generation == generation
 
 
-def _write_cr_session_file(ready: CRSessionIdentity) -> Path:
-    path = Path(f"/tmp/_session-{ready.session_id}.yaml")
-    path.write_text(ready.session_yaml, encoding="utf-8")
-    return path
-
-
-def _mark_session_manager_ready(session: ResolvedSession, session_path: Path) -> None:
-    """Steady-state CR reconciliation: status bookkeeping ONLY.
+def _mark_session_manager_ready(_session: ResolvedSession, source_id: str) -> None:
+    """Steady-state CR reconciliation: status bookkeeping only.
 
     This runs on every 2-second trust poll. It must never do unbounded
-    work: a catalog rescan here once meant a multi-second full session
-    resolution per poll ON the event loop, freezing every websocket
-    sender (live incident 2026-06-11). Rescans happen on session
-    activation and on-demand listing, off the loop.
+    work such as catalog listing or session resolution on the event loop.
     """
     if not _session_manager:
         return
-    for available in _session_manager._available:
-        if available.get("name") == session.session.name:
-            _session_manager.set_active(available["file"])
-            break
-    else:
-        _session_manager.set_active(str(session_path))
+    _session_manager.set_active(source_id)
     _session_manager._status = "ready"
     _session_manager.status_detail = ""
 
 
-async def _activate_session_context_from_cr(ready: CRSessionIdentity, source: str) -> None:
+async def _activate_session_context_from_cr(
+    ready: CRSessionIdentity,
+    source: str,
+    *,
+    transition_already_started: bool = False,
+) -> None:
     """Replace VS-API state with the authoritative ready CR session."""
 
     global _active_context, _active_cr_generation
@@ -779,41 +1158,47 @@ async def _activate_session_context_from_cr(ready: CRSessionIdentity, source: st
         and old_ctx.session_id == ready.session_id
         and _active_cr_generation == ready.generation
     ):
-        session_path = await asyncio.to_thread(_write_cr_session_file, ready)
-        _mark_session_manager_ready(ready.session, session_path)
+        _mark_session_manager_ready(ready.session, ready.source_id)
         return
 
     old_session = old_ctx.session_id if old_ctx else None
-    session_path = await asyncio.to_thread(_write_cr_session_file, ready)
 
-    await _publish_system_ops_event(
-        "info",
-        "SESSION_CR_ACTIVATION_INITIATED",
-        f"Activating CR session {ready.session_id}",
-        {
-            "old_session": old_session,
-            "new_session": ready.session_id,
-            "session_name": ready.session_name,
-            "generation": ready.generation,
-            "source": source,
-        },
-    )
-
-    _active_context = None
-    _active_cr_generation = None
-    await _broadcast_to_all(
-        json.dumps(
+    if not transition_already_started:
+        await _publish_system_ops_event(
+            "info",
+            "SESSION_CR_ACTIVATION_INITIATED",
+            f"Activating CR session {ready.session_id}",
             {
-                "msg_type": "session_transitioning",
-                "detail": f"Activating session {ready.session_name}",
-            }
+                "old_session": old_session,
+                "new_session": ready.session_id,
+                "session_name": ready.session_name,
+                "generation": ready.generation,
+                "source": source,
+            },
         )
-    )
-    await _terminal_manager.close_all("Session switched")
-    if old_ctx is not None:
-        await old_ctx.stop()
 
-    new_ctx = await asyncio.to_thread(SessionContext, ready.session_id, str(session_path))
+        _active_context = None
+        _active_cr_generation = None
+        await _broadcast_to_all(
+            json.dumps(
+                {
+                    "msg_type": "session_transitioning",
+                    "detail": f"Activating session {ready.session_name}",
+                }
+            )
+        )
+        await _terminal_manager.close_all("Session switched")
+        if old_ctx is not None:
+            await old_ctx.stop()
+    elif old_ctx is not None:
+        raise RuntimeError("catalog transition callback did not release the old SessionContext")
+
+    new_ctx = await asyncio.to_thread(
+        SessionContext,
+        ready.session_id,
+        resolution=ready.resolution,
+        source_id=ready.source_id,
+    )
     await new_ctx.start(_nats_connection, mode="recovery")
 
     try:
@@ -852,7 +1237,7 @@ async def _activate_session_context_from_cr(ready: CRSessionIdentity, source: st
     from nodal.logging import set_session as _set_log_session
 
     _set_log_session(ready.session_id)
-    _mark_session_manager_ready(ready.session, session_path)
+    _mark_session_manager_ready(ready.session, ready.source_id)
 
     await _publish_system_ops_event(
         "info",
@@ -880,7 +1265,7 @@ async def _activate_session_context_from_cr(ready: CRSessionIdentity, source: st
     )
 
 
-async def _monitor_cr_session(api: Any, namespace: str) -> None:
+async def _monitor_cr_session(api: Any, core_v1_api: Any, namespace: str) -> None:
     """Continuously reconcile VS-API SessionContext with the authoritative CR.
 
     Steady state must stay cheap AND off the event loop: the poll answers
@@ -901,7 +1286,7 @@ async def _monitor_cr_session(api: Any, namespace: str) -> None:
 
     log.info("CR session monitor started")
     cached: CRSessionIdentity | None = None
-    cached_path: Path | None = None
+    next_upload_reconciliation = 0.0
     while True:
         await asyncio.sleep(_CR_MONITOR_INTERVAL_SECONDS)
         try:
@@ -913,6 +1298,15 @@ async def _monitor_cr_session(api: Any, namespace: str) -> None:
                 plural="constellationspecs",
                 name="current-session",
             )
+            await _reconcile_interrupted_transition(cr)
+            now = asyncio.get_running_loop().time()
+            if now >= next_upload_reconciliation:
+                await _reconcile_catalog_upload_lifecycle(
+                    cr,
+                    core_v1_api=core_v1_api,
+                    namespace=namespace,
+                )
+                next_upload_reconciliation = now + _CATALOG_UPLOAD_RECONCILE_INTERVAL_SECONDS
             ident = _cr_ready_identity(cr)
             if ident is None:
                 continue
@@ -924,18 +1318,22 @@ async def _monitor_cr_session(api: Any, namespace: str) -> None:
                 and ctx.session_id == run_id
                 and _active_cr_generation in (None, generation)
                 and cached is not None
-                and cached_path is not None
                 and (cached.generation, cached.session_id) == ident
             ):
                 _active_cr_generation = generation
-                _mark_session_manager_ready(cached.session, cached_path)
+                _mark_session_manager_ready(cached.session, cached.source_id)
                 continue
 
-            ready = await asyncio.to_thread(_extract_ready_cr_session, cr)
+            ready = await asyncio.to_thread(
+                _extract_cr_session,
+                cr,
+                require_ready=True,
+                core_v1=core_v1_api,
+                namespace=namespace,
+            )
             if ready is None:
                 continue
             cached = ready
-            cached_path = await asyncio.to_thread(_write_cr_session_file, ready)
 
             ctx = _active_context
             if (
@@ -944,7 +1342,7 @@ async def _monitor_cr_session(api: Any, namespace: str) -> None:
                 and _active_cr_generation in (None, ready.generation)
             ):
                 _active_cr_generation = ready.generation
-                _mark_session_manager_ready(ready.session, cached_path)
+                _mark_session_manager_ready(ready.session, ready.source_id)
                 continue
 
             if _session_transition_lock.locked():
@@ -958,7 +1356,7 @@ async def _monitor_cr_session(api: Any, namespace: str) -> None:
                     and _active_cr_generation in (None, ready.generation)
                 ):
                     _active_cr_generation = ready.generation
-                    _mark_session_manager_ready(ready.session, cached_path)
+                    _mark_session_manager_ready(ready.session, ready.source_id)
                     continue
 
                 log.info(
@@ -1113,16 +1511,9 @@ async def _nats_subscriber() -> None:
     except Exception as exc:
         log.warning("System OpsEvent subscription failed: %s", exc)
 
-    # Bootstrap session from the ConstellationSpec CR — the single source of truth.
-    # The CR's spec.sessionYaml has the original catalog session YAML. VS-API has
-    # the catalog baked into its image, so nodalarc:<path> references resolve
-    # consistently after restart.
-    #
-    # We do NOT read from ConfigMap mounts. The Operator rewrites paths in the
-    # nodalarc-session ConfigMap for FRR pod consumption (/etc/nodalarc/*.yaml).
-    # Those paths don't exist in VS-API (we removed the subPath mounts). And for
-    # wizard-generated sessions, the original file only existed in the previous
-    # VS-API pod's ephemeral filesystem — it's gone on restart. The CR survives.
+    # Bootstrap from the live ConstellationSpec. Its root YAML and catalogUpload
+    # selection identify the ordinary files that every runtime consumer verifies
+    # and resolves through the shared configuration path.
     import kubernetes.client as _k8s
     import kubernetes.config as _k8s_config
 
@@ -1134,6 +1525,7 @@ async def _nats_subscriber() -> None:
 
     await asyncio.to_thread(_load_k8s_config)
     _cr_api = _k8s.CustomObjectsApi()
+    _cr_core_api = _k8s.CoreV1Api()
     _cr_ns = get_platform_config().kubernetes_namespace
 
     _cr_session: CRSessionIdentity | None = None
@@ -1168,8 +1560,22 @@ async def _nats_subscriber() -> None:
                 plural="constellationspecs",
                 name="current-session",
             )
+            await _reconcile_interrupted_transition(_cr)
+            await _reconcile_catalog_upload_lifecycle(
+                _cr,
+                core_v1_api=_cr_core_api,
+                namespace=_cr_ns,
+            )
             _cr_session = await asyncio.to_thread(_candidate_from_cr, _cr)
         except Exception as exc:
+            if getattr(exc, "status", None) == 404:
+                await _reconcile_interrupted_transition(None)
+                with contextlib.suppress(Exception):
+                    await _reconcile_catalog_upload_lifecycle(
+                        None,
+                        core_v1_api=_cr_core_api,
+                        namespace=_cr_ns,
+                    )
             log.debug("Waiting for runtime session identity from CR: %s", exc)
         if _cr_session is None:
             log.info("No active Ready or wiring runtime session CR — waiting for session to deploy")
@@ -1180,22 +1586,18 @@ async def _nats_subscriber() -> None:
         if _session_manager:
             _session_manager._status = "wiring"
             _session_manager.status_detail = _cr_message or f"Status: {_cr_phase}"
-            for _s in _session_manager._available:
-                if _s.get("name") == _cr_session.session_name:
-                    _session_manager.set_active(_s["file"])
-                    break
+            _session_manager.set_active(_cr_session.source_id)
         if not _started_pending_poll:
             asyncio.ensure_future(_poll_cr_until_ready())
         if _cr_monitor_task is None or _cr_monitor_task.done():
             _cr_monitor_task = asyncio.create_task(
-                _monitor_cr_session(_cr_api, _cr_ns), name="cr-session-monitor"
+                _monitor_cr_session(_cr_api, _cr_core_api, _cr_ns),
+                name="cr-session-monitor",
             )
     elif _cr_phase != "Ready":
         log.info("CR phase=%s has no active session context", _cr_phase)
     else:
         session_id = _cr_session.session_id
-        _tmp_session = Path(f"/tmp/_session-{session_id}.yaml")
-        await asyncio.to_thread(_tmp_session.write_text, _cr_session.session_yaml, encoding="utf-8")
 
         log.info(
             "Bootstrapping session %s from CR (name=%s phase=%s)",
@@ -1207,12 +1609,14 @@ async def _nats_subscriber() -> None:
         if _session_manager:
             _session_manager._status = "ready"
             _session_manager.status_detail = ""
-            for _s in _session_manager._available:
-                if _s.get("name") == _cr_session.session_name:
-                    _session_manager.set_active(_s["file"])
-                    break
+            _session_manager.set_active(_cr_session.source_id)
 
-        ctx = await asyncio.to_thread(SessionContext, session_id, str(_tmp_session))
+        ctx = await asyncio.to_thread(
+            SessionContext,
+            session_id,
+            resolution=_cr_session.resolution,
+            source_id=_cr_session.source_id,
+        )
         await ctx.start(nc, mode="recovery")
         _active_context = ctx
         _active_cr_generation = _cr_session.generation
@@ -1229,7 +1633,8 @@ async def _nats_subscriber() -> None:
 
         if _cr_monitor_task is None or _cr_monitor_task.done():
             _cr_monitor_task = asyncio.create_task(
-                _monitor_cr_session(_cr_api, _cr_ns), name="cr-session-monitor"
+                _monitor_cr_session(_cr_api, _cr_core_api, _cr_ns),
+                name="cr-session-monitor",
             )
 
     # Keep alive until cancelled
@@ -1297,6 +1702,11 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Nodal Arc VS-API", version=project_version(), lifespan=lifespan)
+app.mount(
+    "/docs/ops",
+    StaticFiles(directory=Path(__file__).resolve().parents[2] / "docs" / "ops"),
+    name="configuration-docs",
+)
 app.add_middleware(
     CORSMiddleware,
     # NODAL_CORS_ORIGIN restricts origins in production (e.g. "https://nodal.example.com").
@@ -1308,6 +1718,8 @@ app.add_middleware(
 
 _audit_log = logging.getLogger("nodal.audit")
 _MAX_BODY_BYTES = 1_048_576  # 1 MB
+_BUILDER_PATH_PREFIX = "/api/v1/builder/"
+_BUILDER_BODY_BYTES = 4 * DEFAULT_CATALOG_UPLOAD_LIMITS.max_aggregate_bytes + 1_048_576
 
 
 from starlette.types import ASGIApp, Receive, Scope, Send
@@ -1338,7 +1750,7 @@ class SecurityHeadersMiddleware:
 
 
 class BodySizeLimitMiddleware:
-    """Reject HTTP requests with bodies larger than _MAX_BODY_BYTES. Passes WebSocket through."""
+    """Bound actual HTTP body bytes before request parsing. Passes WebSocket through."""
 
     def __init__(self, app: ASGIApp) -> None:
         self.app = app
@@ -1347,15 +1759,53 @@ class BodySizeLimitMiddleware:
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
-        from starlette.requests import Request as StarletteRequest
 
-        request = StarletteRequest(scope)
-        content_length = request.headers.get("content-length")
-        if content_length and int(content_length) > _MAX_BODY_BYTES:
+        path = scope.get("path") or ""
+        limit = _BUILDER_BODY_BYTES if path.startswith(_BUILDER_PATH_PREFIX) else _MAX_BODY_BYTES
+        content_length = next(
+            (
+                value
+                for name, value in scope.get("headers", ())
+                if name.lower() == b"content-length"
+            ),
+            None,
+        )
+        try:
+            declared_length = int(content_length) if content_length is not None else None
+        except TypeError, ValueError:
+            declared_length = None
+        if declared_length is not None and declared_length > limit:
             response = JSONResponse(status_code=413, content={"error": "Request body too large"})
             await response(scope, receive, send)
             return
-        await self.app(scope, receive, send)
+
+        messages = []
+        received = 0
+        while True:
+            message = await receive()
+            messages.append(message)
+            if message["type"] != "http.request":
+                break
+            received += len(message.get("body", b""))
+            if received > limit:
+                response = JSONResponse(
+                    status_code=413,
+                    content={"error": "Request body too large"},
+                )
+                await response(scope, receive, send)
+                return
+            if not message.get("more_body", False):
+                break
+
+        iterator = iter(messages)
+
+        async def replay_receive():
+            try:
+                return next(iterator)
+            except StopIteration:
+                return await receive()
+
+        await self.app(scope, replay_receive, send)
 
 
 class AuditLogMiddleware:
@@ -2330,43 +2780,13 @@ def _live_trace_grpc(src: str, dst: str, nodes: list, links: list) -> dict | Non
         except Exception:
             return None
 
-    # Build SID -> node_id and prefix maps from the session context.
-    # This loads the actual addressing scheme and ground station configs
-    # so prefixes match what NodalPath installed in the forwarding tables.
     sid_to_node: dict[int, str] = {}
-    try:
-        from pathlib import Path as _Path
-
-        from nodalpath.orchestrator.session_loader import load_session_context
-        from nodalpath.platform import get_nodalpath_config
-
-        np_cfg = get_nodalpath_config()
-        _ctx = _active_context
-        session_path = _Path(_ctx.session_file) if _ctx else None
-        if session_path and session_path.exists():
-            node_reg, _, session_prefixes, _ = load_session_context(session_path)
-            # Populate prefix_by_node from session context
-            for nid, prefix in session_prefixes.items():
-                prefix_by_node[nid] = prefix
-            # Build SID -> node_id from the node registry
-            for nid, node_obj in node_reg.items():
-                sid_to_node[node_obj.sid] = nid
-        else:
-            # Fallback: compute SIDs from plane/slot
-            sats = [n for n in nodes if n.get("node_type") == "satellite"]
-            max_slot = max(n["slot"] for n in sats) if sats else 0
-            spp = max_slot + 1
-            for n in sats:
-                plane = n["plane"]
-                slot = n["slot"]
-                sid = np_cfg.satellite_sid_range_start + (plane * spp + slot) + 1
-                sid_to_node[sid] = n["node_id"]
-            gs_names = sorted(n["node_id"] for n in nodes if n.get("node_type") == "ground_station")
-            for gs_idx, gs_name in enumerate(gs_names):
-                sid = np_cfg.ground_station_sid_range_start + gs_idx
-                sid_to_node[sid] = gs_name
-    except Exception as exc:
-        log.warning(f"Failed to load session context for trace: {exc}")
+    runtime_context = _active_context
+    if runtime_context is not None and runtime_context.session_resolution is not None:
+        prefix_by_node.update(runtime_context._node_primary_prefix_by_id)
+        for node_id, node in tracer_node_registry(runtime_context.session_resolution).items():
+            if node.sid is not None:
+                sid_to_node[node.sid] = node_id
 
     # Find destination prefix
     dst_prefix = prefix_by_node.get(dst)
@@ -2696,55 +3116,22 @@ def _create_continuous_tracer() -> ContinuousTracer:
     """Create a ContinuousTracer from the current session context."""
     cfg = get_platform_config()
 
-    # Load session context
     node_registry: dict = {}
     interface_map: dict = {}
     pid_map: dict = {}
     timeline_path: str | None = None
     trace_mode = "ip"
 
-    _tctx = _active_context
-    _sf = _tctx.session_file if _tctx else ""
-    log.info(
-        "Creating continuous tracer: session_file=%s exists=%s",
-        _sf,
-        Path(_sf).exists() if _sf else False,
-    )
-    if _sf and Path(_sf).exists():
-        # NodalPath is optional and may be installed as a separate package.
-        # Keep VS-API usable when the external path engine is not present.
-        try:
-            from nodalpath.platform import get_nodalpath_config
+    runtime_context = _active_context
+    if runtime_context is not None and runtime_context.session_resolution is not None:
+        node_registry = tracer_node_registry(runtime_context.session_resolution)
+        interface_map = runtime_context.session_resolution.resolved.link_interface_map()
+        log.info(
+            "Loaded resolved trace view: %d nodes, %d interfaces",
+            len(node_registry),
+            len(interface_map),
+        )
 
-            get_nodalpath_config()
-            log.info("NodalPath config already initialized")
-        except RuntimeError:
-            try:
-                from nodalpath.platform import init_nodalpath_config
-
-                init_nodalpath_config(Path("configs/nodalpath.yaml"))
-                log.info("Initialized NodalPath config from configs/nodalpath.yaml")
-            except Exception as exc:
-                log.error("Failed to init NodalPath config: %s", exc)
-        except Exception as exc:
-            log.debug("NodalPath package unavailable for continuous tracer: %s", exc)
-        try:
-            from nodalpath.orchestrator.session_loader import load_session_context
-
-            ctx = load_session_context(Path(_sf))
-            node_registry = ctx[0]
-            interface_map = ctx[1]
-            log.info(
-                "Loaded session context: %d nodes, %d interfaces",
-                len(node_registry),
-                len(interface_map),
-            )
-        except ModuleNotFoundError as exc:
-            log.debug("NodalPath session loader unavailable for continuous tracer: %s", exc)
-        except Exception as exc:
-            log.error("Failed to load session context: %s", exc, exc_info=True)
-
-        # Read pid_map.json
         if _session_manager and _session_manager._current_data_dir:
             pid_path = Path(_session_manager._current_data_dir) / "pid_map.json"
             if pid_path.exists():
@@ -2762,12 +3149,11 @@ def _create_continuous_tracer() -> ContinuousTracer:
                 except Exception as exc:
                     log.warning("Failed to read session-state.json: %s", exc)
 
-        _rsctx = _active_context
-        _rs2 = _rsctx.routing_stack if _rsctx else None
-        if _rs2:
-            if "isis-sr" in _rs2 or "static-sr" in _rs2:
+        routing_stack = runtime_context.routing_stack
+        if routing_stack:
+            if "isis-sr" in routing_stack or "static-sr" in routing_stack:
                 trace_mode = "sr-uniform"
-            elif _rs2.startswith("nodalpath"):
+            elif routing_stack.startswith("nodalpath"):
                 trace_mode = "cspf"
 
     return ContinuousTracer(
@@ -2822,67 +3208,370 @@ def playback_control(body: dict) -> Any:
     return result
 
 
-@app.get("/api/v1/sessions", dependencies=[Depends(_require_api_key)])
-def list_sessions() -> list[dict]:
-    """List available sessions with active flag."""
+@app.get(
+    "/api/v1/sessions",
+    response_model=list[CatalogSessionSummary],
+    dependencies=[Depends(_require_api_key)],
+)
+def list_sessions(
+    catalog_context: CatalogContext = Depends(get_catalog_context),
+) -> tuple[CatalogSessionSummary, ...]:
+    """List shipped and user sessions in the request catalog scope."""
     if _session_manager is None:
-        return []
-    return _session_manager.list_sessions()
+        return ()
+    return CatalogSessionService(catalog_context).list_sessions(
+        active_session_ref=_session_manager.active_source_id,
+        available_node_count=_available_session_node_count(),
+    )
+
+
+@app.get(
+    "/api/v1/sessions/yaml",
+    response_class=Response,
+    dependencies=[Depends(_require_api_key)],
+)
+def download_session_yaml(
+    session_ref: str = Query(...),
+    catalog_context: CatalogContext = Depends(get_catalog_context),
+) -> Response:
+    """Return exact stored YAML for one scoped catalog session reference."""
+    try:
+        root_yaml = CatalogSessionService(catalog_context).read_session_yaml(session_ref)
+    except CatalogNotFoundError:
+        raise HTTPException(status_code=404, detail="Catalog session was not found") from None
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    except CatalogRepositoryError:
+        raise HTTPException(status_code=503, detail="Catalog storage is unavailable") from None
+    return Response(content=root_yaml, media_type="application/yaml")
+
+
+def _available_session_node_count() -> int:
+    """Best-effort count of cluster nodes that run session pods. It only feeds
+    the readiness validator's node-count WARNING, never a deploy refusal, so a
+    failed query falls back high rather than blocking a switch."""
+    try:
+        import kubernetes.client
+
+        nodes = kubernetes.client.CoreV1Api().list_node(
+            label_selector="nodalarc.io/node-agent=true"
+        )
+        return max(1, len(nodes.items))
+    except Exception:
+        return 1_000_000
+
+
+def _prepared_transition_reservation(deployment: Any) -> TransitionOperationReservation:
+    prepared = deployment.prepared
+    repository_generation = deployment.repository_generation
+    selection = deployment.upload.selection
+    return TransitionOperationReservation(
+        source=TransitionOperationSource(
+            kind=TransitionOperationSourceKind.CATALOG_SESSION,
+            logical_id=str(prepared.source.logical_id),
+        ),
+        facts=TransitionOperationFacts(
+            document_digest=prepared.document_digest,
+            closure_digest=prepared.closure_digest,
+            resolved_semantic_digest=prepared.resolved_semantic_digest,
+            file_count=prepared.file_count,
+            total_bytes=prepared.total_bytes,
+            release=_runtime_release_identity(),
+            build=_runtime_build_identity(),
+        ),
+        provenance=TransitionOperationProvenance(
+            source_revision=prepared.source_revision,
+            repository_generation=(
+                str(repository_generation) if repository_generation is not None else None
+            ),
+            upload_id=selection.upload_id,
+            runtime_plan=TransitionRuntimePlan(
+                namespace=get_platform_config().kubernetes_namespace,
+                name="current-session",
+            ),
+        ),
+    )
+
+
+def _nonempty_string(value: Any) -> str | None:
+    return value if isinstance(value, str) and value else None
+
+
+def _as_nonnegative_int(value: Any) -> int | None:
+    try:
+        result = int(value)
+    except TypeError, ValueError:
+        return None
+    return result if result >= 0 else None
+
+
+def _constellation_spec_observation(cr: Any) -> TransitionConstellationSpecObservation:
+    """Normalize exact server-observed CR identity and status proof."""
+
+    if not isinstance(cr, dict):
+        raise TypeError("ConstellationSpec observation must be a mapping")
+    metadata = cr.get("metadata") or {}
+    status = cr.get("status") or {}
+    namespace = _nonempty_string(metadata.get("namespace"))
+    name = _nonempty_string(metadata.get("name"))
+    generation = _as_positive_int(metadata.get("generation"))
+    if namespace is None or name is None or generation is None:
+        raise ValueError("ConstellationSpec observation is missing Kubernetes identity")
+    return TransitionConstellationSpecObservation(
+        namespace=namespace,
+        name=name,
+        generation=generation,
+        status=TransitionRuntimeStatusProof(
+            observed_generation=_as_positive_int(status.get("observedGeneration")),
+            phase=_nonempty_string(status.get("phase")),
+            session_id=_nonempty_string(status.get("sessionRunId")),
+            pod_count=_as_nonnegative_int(status.get("podCount")),
+            ready_pods=_as_nonnegative_int(status.get("readyPods")),
+            wired_pods=_as_nonnegative_int(status.get("wiredPods")),
+            document_digest=_nonempty_string(status.get("documentDigest")),
+            closure_digest=_nonempty_string(status.get("closureDigest")),
+            resolved_semantic_digest=_nonempty_string(status.get("resolvedSemanticDigest")),
+            release=_nonempty_string(status.get("runtimeRelease")),
+            build=_nonempty_string(status.get("runtimeBuild")),
+        ),
+    )
+
+
+async def _deploy_builder_catalog_session(request: Any, catalog_context: Any) -> Any:
+    from nodalarc.catalog_repository import CatalogRepositoryError
+    from nodalarc.models.builder_api import (
+        BuilderSessionDeployAccepted,
+        BuilderSessionDeployRefusal,
+    )
+    from nodalarc.prepared_session import PreparedSessionError
+
+    from vs_api.builder_router import BuilderSessionDeployError
+    from vs_api.session_deployment import (
+        SessionDeploymentPreparationError,
+        prepare_catalog_session_deployment,
+    )
+
+    def refuse(
+        code: str,
+        message: str,
+        *,
+        expected: str | None = None,
+        observed: str | None = None,
+        cause_type: str | None = None,
+    ) -> None:
+        raise BuilderSessionDeployError(
+            BuilderSessionDeployRefusal(
+                code=code,
+                message=message,
+                session_ref=request.session_ref,
+                expected=expected,
+                observed=observed,
+                cause_type=cause_type,
+            )
+        )
+
+    if _session_manager is None:
+        refuse(
+            "builder_session_deploy.repository_unavailable",
+            "Session deployment is unavailable",
+        )
+    available_node_count = await asyncio.to_thread(_available_session_node_count)
+    try:
+        deployment = await asyncio.to_thread(
+            prepare_catalog_session_deployment,
+            catalog_context,
+            session_ref=str(request.session_ref),
+            expected_session_revision=str(request.expected_session_revision),
+            expected_document_digest=str(request.expected_document_digest),
+            expected_closure_digest=str(request.expected_dependency_digest),
+            available_node_count=available_node_count,
+        )
+    except SessionDeploymentPreparationError as exc:
+        code = "builder_session_deploy.stale_source"
+        if exc.code.value.endswith("source_not_found"):
+            code = "builder_session_deploy.source_not_found"
+        elif exc.code.value.endswith("invalid_precondition"):
+            code = "builder_session_deploy.invalid_precondition"
+        refuse(
+            code,
+            exc.evidence.message,
+            expected=exc.evidence.expected,
+            observed=exc.evidence.observed,
+            cause_type=exc.evidence.cause_type,
+        )
+    except PreparedSessionError as exc:
+        code = (
+            "builder_session_deploy.stale_source"
+            if "stale" in exc.code.value
+            else "builder_session_deploy.not_ready"
+        )
+        refuse(
+            code,
+            exc.evidence.message,
+            expected=exc.evidence.expected,
+            observed=exc.evidence.actual,
+            cause_type=exc.evidence.cause_type,
+        )
+    except CatalogRepositoryError as exc:
+        log.error("Builder deployment repository unavailable: %s", type(exc).__name__)
+        refuse(
+            "builder_session_deploy.repository_unavailable",
+            "Catalog repository is unavailable",
+            cause_type=type(exc).__name__,
+        )
+    except UnsupportedFeatureError as exc:
+        refuse(
+            "builder_session_deploy.unsupported",
+            str(exc),
+            cause_type=type(exc).__name__,
+        )
+    except Exception as exc:
+        log.error("Builder deployment preparation failed", exc_info=True)
+        refuse(
+            "builder_session_deploy.preparation_failed",
+            "Session deployment preparation failed",
+            cause_type=type(exc).__name__,
+        )
+
+    operation_id = await _admit_transition(
+        lambda: _run_catalog_switch(deployment, catalog_context),
+        reservation=_prepared_transition_reservation(deployment),
+    )
+    if operation_id is None:
+        refuse(
+            "builder_session_deploy.conflict",
+            "A session transition is already active",
+        )
+    return BuilderSessionDeployAccepted(
+        operation_id=operation_id,
+        source=request,
+    )
+
+
+from vs_api.builder_router import BuilderRouterServices, create_builder_router
+
+app.include_router(
+    create_builder_router(
+        BuilderRouterServices(
+            context_provider=get_catalog_context,
+            available_node_count_provider=lambda: _available_session_node_count(),
+            deploy_callback=_deploy_builder_catalog_session,
+        )
+    ),
+    dependencies=[Depends(_require_api_key)],
+)
+
+
+@app.get(
+    "/api/v1/session-transitions/{operation_id}",
+    response_model=TransitionOperation,
+    dependencies=[Depends(_require_api_key)],
+)
+async def get_session_transition(
+    operation_id: str,
+) -> TransitionOperation:
+    """Return durable, path-free evidence for one opaque transition ID."""
+
+    try:
+        record = await _invoke_transition_store(
+            "get_operation",
+            operation_id,
+        )
+    except TransitionOperationNotFoundError, ValueError:
+        raise HTTPException(status_code=404, detail="Session transition was not found") from None
+    return record.public_view()
 
 
 @app.post(
     "/api/v1/sessions/switch",
-    response_model=None,
+    response_model=CatalogSessionSwitchAccepted,
     dependencies=[Depends(_require_api_key), Depends(_rate_limit_session_switch)],
 )
-async def switch_session(body: dict):
-    """Trigger async session switch. Returns immediately."""
+async def switch_session(
+    body: CatalogSessionSwitchRequest,
+    catalog_context: CatalogContext = Depends(get_catalog_context),
+) -> CatalogSessionSwitchAccepted | Response:
+    """Deploy one reviewed session revision from the request catalog scope."""
+    from vs_api.session_deployment import (
+        SessionDeploymentPreparationError,
+        prepare_catalog_session_deployment,
+    )
+
     if _session_manager is None:
         return JSONResponse(status_code=503, content={"error": "Session manager not initialized"})
-    if _session_manager.status == "switching":
+    try:
+        available_node_count = await asyncio.to_thread(_available_session_node_count)
+        deployment = await asyncio.to_thread(
+            prepare_catalog_session_deployment,
+            catalog_context,
+            session_ref=str(body.source.session_ref),
+            available_node_count=available_node_count,
+            expected_session_revision=str(body.expected_source_revision),
+            expected_document_digest=str(body.expected_document_digest),
+            expected_closure_digest=str(body.expected_dependency_digest),
+        )
+    except SessionDeploymentPreparationError as exc:
+        return JSONResponse(
+            status_code=422,
+            content={"error": exc.evidence.message, "code": exc.code.value},
+        )
+    except CatalogRepositoryError:
+        return JSONResponse(status_code=503, content={"error": "Catalog storage is unavailable"})
+    except UnsupportedFeatureError as exc:
+        return JSONResponse(
+            status_code=422,
+            content={"error": str(exc), "code": "catalog_session.unsupported"},
+        )
+    except Exception as exc:
+        evidence = getattr(exc, "evidence", None)
+        message = getattr(evidence, "message", None) or str(exc)
+        log.info(
+            "Catalog session preparation refused for %s (%s)",
+            body.source.session_ref,
+            type(exc).__name__,
+        )
+        return JSONResponse(
+            status_code=422,
+            content={
+                "error": message,
+                "code": str(
+                    getattr(getattr(exc, "code", None), "value", "catalog_session.invalid")
+                ),
+            },
+        )
+    operation_id = await _admit_transition(
+        lambda: _run_catalog_switch(deployment, catalog_context),
+        reservation=_prepared_transition_reservation(deployment),
+    )
+    if operation_id is None:
         return JSONResponse(status_code=409, content={"error": "Switch already in progress"})
-    session_path = body.get("session", "")
-    if not session_path:
-        return JSONResponse(status_code=400, content={"error": "session field required"})
-    # Rescan session directory so newly added YAML files are recognized.
-    # Full multi-session catalog resolution — never on the loop.
-    await asyncio.to_thread(_session_manager.rescan)
-    valid_files = _session_manager._valid_session_files()
-    if session_path not in valid_files:
-        return JSONResponse(status_code=400, content={"error": "Unknown session file"})
-    asyncio.create_task(_run_switch(session_path))
-    return {"status": "switching"}
+    return CatalogSessionSwitchAccepted(
+        operation_id=operation_id,
+        source=body.source,
+    )
 
 
 # --- Wizard API endpoints ---
 
 
-@app.get("/api/v1/presets/constellations", dependencies=[Depends(_require_api_key)])
-def list_constellation_presets() -> list[dict]:
-    """Return available constellation presets for the wizard."""
-    from nodalarc.session_generator import (
-        constellation_default_node,
-        constellation_source_mode,
-        load_constellation_presets,
-    )
+@app.get(
+    "/api/v1/presets/constellations",
+    dependencies=[Depends(_require_api_key)],
+    response_model=WizardConstellationPresetResponse,
+)
+def list_constellation_presets() -> WizardConstellationPresetResponse:
+    """Return catalog presets with backend-owned runtime capability facts."""
+    from nodalarc.session_generator import load_constellation_preset_response
 
-    presets = load_constellation_presets()
-    return [
-        {
-            "name": p.name,
-            "description": p.description,
-            "satellite_count": p.satellite_count,
-            "constellation": p.constellation,
-            "ground_stations": p.ground_stations,
-            "mode": constellation_source_mode(p.constellation),
-            "default_node": constellation_default_node(p.constellation),
-        }
-        for p in presets.values()
-    ]
+    return load_constellation_preset_response(_CATALOG_ROOTS)
 
 
-@app.get("/api/v1/presets/satellite-types", dependencies=[Depends(_require_api_key)])
-def list_satellite_types() -> list[dict]:
+@app.get(
+    "/api/v1/presets/satellite-types",
+    dependencies=[Depends(_require_api_key)],
+    response_model=WizardSatelliteTypePresetResponse,
+)
+def list_satellite_types() -> WizardSatelliteTypePresetResponse:
     """Return the space node primitives that can fly a constellation.
 
     Sessions assemble from primitives: the constellation supplies geometry
@@ -2892,71 +3581,101 @@ def list_satellite_types() -> list[dict]:
     """
     from nodalarc.session_generator import list_space_node_presets
 
-    return list_space_node_presets(_CATALOG_ROOTS)
+    return WizardSatelliteTypePresetResponse(
+        presets=tuple(
+            WizardSatelliteTypePreset(
+                name=preset["name"],
+                display_name=preset["display_name"],
+                notes=preset["notes"],
+                file=preset["file"],
+                terminals=tuple(
+                    WizardSatelliteTerminalSummary(
+                        id=terminal["id"],
+                        role=terminal["role"],
+                        count=terminal["count"],
+                    )
+                    for terminal in preset["terminals"]
+                ),
+            )
+            for preset in list_space_node_presets(_CATALOG_ROOTS)
+        )
+    )
 
 
-@app.get("/api/v1/presets/ground-stations", dependencies=[Depends(_require_api_key)])
-def list_ground_station_sets() -> list[dict]:
+@app.get(
+    "/api/v1/presets/ground-stations",
+    dependencies=[Depends(_require_api_key)],
+    response_model=WizardGroundStationSetPresetResponse,
+)
+def list_ground_station_sets() -> WizardGroundStationSetPresetResponse:
     """Return available catalog site-set presets for the wizard."""
     gs_sets_dir = _CATALOG_ROOTS.root / "site-sets"
-    results: list[dict] = []
+    results: list[WizardGroundStationSetPreset] = []
     if not gs_sets_dir.is_dir():
-        return results
+        return WizardGroundStationSetPresetResponse(presets=())
     for yaml_path in sorted(gs_sets_dir.rglob("*.yaml")):
-        raw = yaml.safe_load(yaml_path.read_text(encoding="utf-8")) or {}
-        wrapper, model = validate_catalog_document(raw)
+        ref = _catalog_ref_for_path(yaml_path)
+        raw = load_configuration_yaml(yaml_path.read_text(encoding="utf-8")) or {}
+        wrapper, model = validate_referenced_configuration_document(ref, raw)
         if wrapper != "site_set":
             continue
         data = model.model_dump(mode="python", by_alias=True, exclude_none=True)
         results.append(
-            {
-                "name": data["id"],
-                "description": data.get("display_name") or data.get("notes") or "",
-                "stations": [
+            WizardGroundStationSetPreset(
+                name=data["id"],
+                description=data.get("display_name") or data.get("notes") or "",
+                stations=tuple(
                     site.get("site", {}).get("id", "") if isinstance(site, dict) else str(site)
                     for site in data.get("sites", [])
-                ],
-                "file": _catalog_ref_for_path(yaml_path),
-            }
+                ),
+                file=_catalog_ref_for_path(yaml_path),
+            )
         )
-    return results
+    return WizardGroundStationSetPresetResponse(presets=tuple(results))
 
 
-@app.get("/api/v1/presets/ground-stations/stations", dependencies=[Depends(_require_api_key)])
-def list_individual_stations() -> list[dict]:
+@app.get(
+    "/api/v1/presets/ground-stations/stations",
+    dependencies=[Depends(_require_api_key)],
+    response_model=WizardAvailableStationResponse,
+)
+def list_individual_stations() -> WizardAvailableStationResponse:
     """Return all available catalog sites for custom set building."""
     stations_dir = _CATALOG_ROOTS.root / "sites"
-    results: list[dict] = []
+    results: list[WizardAvailableStation] = []
     if not stations_dir.is_dir():
-        return results
+        return WizardAvailableStationResponse(stations=())
     for yaml_path in sorted(stations_dir.rglob("*.yaml")):
-        raw = yaml.safe_load(yaml_path.read_text(encoding="utf-8")) or {}
-        wrapper, model = validate_catalog_document(raw)
+        ref = _catalog_ref_for_path(yaml_path)
+        raw = load_configuration_yaml(yaml_path.read_text(encoding="utf-8")) or {}
+        wrapper, model = validate_referenced_configuration_document(ref, raw)
         if wrapper != "site":
             continue
         site = model.model_dump(mode="python", by_alias=True, exclude_none=True)
         location = site.get("location") or {}
+        if "lat_deg" not in location or "lon_deg" not in location:
+            continue
         results.append(
-            {
-                "name": site["id"],
-                "lat_deg": location.get("lat_deg", 0),
-                "lon_deg": location.get("lon_deg", 0),
-                "file": _catalog_ref_for_path(yaml_path),
-            }
+            WizardAvailableStation(
+                name=site["id"],
+                lat_deg=float(location["lat_deg"]),
+                lon_deg=float(location["lon_deg"]),
+                file=_catalog_ref_for_path(yaml_path),
+            )
         )
-    return results
+    return WizardAvailableStationResponse(stations=tuple(results))
 
 
-@app.get("/api/v1/wizard/extensions", dependencies=[Depends(_require_api_key)])
-def wizard_extension_rules() -> dict:
-    """Return protocol-extension compatibility rules for client-side validation."""
-    return {
-        "protocols": {
-            "ospf": {"extensions": ["sr", "te", "mpls"], "constraints": {"mpls": ["te"]}},
-            "isis": {"extensions": ["sr", "te", "mpls"], "constraints": {"mpls": ["te"]}},
-        },
-        "area_strategies": ["flat", "stripe", "per_plane"],
-    }
+@app.get(
+    "/api/v1/wizard/extensions",
+    dependencies=[Depends(_require_api_key)],
+    response_model=WizardExtensionRulesResponse,
+)
+def wizard_extension_rules() -> WizardExtensionRulesResponse:
+    """Return the Wizard's backend-owned routing choices and initial controls."""
+    from vs_api.wizard_builder import wizard_extension_rules_response
+
+    return wizard_extension_rules_response()
 
 
 def _error_response(status_code: int, message: str) -> JSONResponse:
@@ -2979,81 +3698,38 @@ def _catalog_error(exc: Exception) -> JSONResponse:
     return _error_response(400, message)
 
 
-@app.post("/api/v1/session/generate", dependencies=[Depends(_require_api_key)])
-def generate_session(body: dict) -> dict:
-    """Generate a session YAML from wizard selections."""
-    from nodalarc.session_generator import generate_session_yaml
-
-    constellation = body.get("constellation", "")
-    protocol = body.get("protocol", "")
-    extensions = body.get("extensions", [])
-    area_strategy = body.get("area_strategy", "flat")
-    ground_stations = body.get("ground_stations")
-    satellite_type = body.get("satellite_type")
-    custom_constellation = body.get("custom_constellation")
-    custom_ground_stations = body.get("custom_ground_stations")
-    routing_config = body.get("routing_config")
-    timers = body.get("timers")
-    orbit_propagator = body.get("orbit_propagator")
-    if not constellation or not protocol:
-        return JSONResponse(
-            status_code=400, content={"error": "constellation and protocol are required"}
-        )
-    if not orbit_propagator:
-        return JSONResponse(status_code=400, content={"error": "orbit_propagator is required"})
-    try:
-        yaml_str, warnings = generate_session_yaml(
-            constellation=constellation,
-            protocol=protocol,
-            extensions=extensions,
-            area_strategy=area_strategy,
-            ground_stations=ground_stations,
-            satellite_type=satellite_type,
-            custom_constellation=custom_constellation,
-            custom_ground_stations=custom_ground_stations,
-            routing_config=routing_config,
-            timers=timers,
-            orbit_propagator=orbit_propagator,
-            catalog_roots=_CATALOG_ROOTS,
-        )
-    except CatalogPathError as exc:
-        return _catalog_error(exc)
-    except FileNotFoundError as exc:
-        return _catalog_error(exc)
-    except ValueError as exc:
-        log.info("Invalid session generation request: %s", exc)
-        return _error_response(400, "Invalid session request")
-    return {"yaml": yaml_str, "warnings": warnings}
-
-
-@app.post("/api/v1/session/preview-coverage", dependencies=[Depends(_require_api_key)])
-async def preview_coverage(body: dict) -> dict:
-    """Run OME coverage preview for the given combination.
-
-    Accepts constellation (name or inline dict), satellite_type (name),
-    and ground_stations (set name, station list, or inline dict).
-    Computes visibility at 10-second steps for one orbital period.
-    Returns ISL/GS coverage statistics and warnings.
-    """
-    from functools import partial
-
+@app.post(
+    "/api/v1/session/preview-coverage",
+    response_model=CoveragePreviewResult,
+    dependencies=[Depends(_require_api_key)],
+)
+async def preview_coverage(
+    request: WizardCoverageRequest,
+) -> CoveragePreviewResult | JSONResponse:
+    """Run OME coverage preview from typed Wizard intent and scoped catalog facts."""
+    from nodalarc.catalog_closure import CatalogClosureError
+    from nodalarc.catalog_repository import CatalogRepositoryError
     from ome.coverage_preview import compute_coverage_preview
 
-    constellation = body.get("constellation")
-    ground_stations = body.get("ground_stations")
+    from vs_api.wizard_builder import wizard_preview_inputs
 
-    loop = asyncio.get_event_loop()
+    def compute():
+        context = get_catalog_context()
+        snapshot = context.repository.snapshot(context.scope)
+        with wizard_preview_inputs(request, snapshot) as inputs:
+            return compute_coverage_preview(
+                inputs.constellation_ref,
+                inputs.ground_site_set_ref,
+                catalog_roots=inputs.catalog_roots,
+            )
+
     try:
-        result = await loop.run_in_executor(
-            None,
-            partial(
-                compute_coverage_preview,
-                constellation,
-                body.get("satellite_type"),
-                ground_stations,
-                catalog_roots=_CATALOG_ROOTS,
-            ),
-        )
+        result = await asyncio.to_thread(compute)
+    except CatalogClosureError as exc:
+        log.info("Invalid coverage preview reference: %s", exc)
+        return _error_response(422, exc.evidence.message)
+    except CatalogRepositoryError:
+        return _error_response(503, "Catalog storage is unavailable")
     except CatalogPathError as exc:
         return _catalog_error(exc)
     except FileNotFoundError as exc:
@@ -3064,115 +3740,115 @@ async def preview_coverage(body: dict) -> dict:
     except Exception as exc:
         log.error("Coverage preview internal error: %s", exc, exc_info=True)
         return _error_response(500, "Coverage preview failed")
-    return result.model_dump()
+    return result
 
 
-@app.post("/api/v1/session/deploy", dependencies=[Depends(_require_api_key)])
-async def deploy_generated_session(body: dict) -> dict:
-    """Validate YAML, write to sessions dir, and trigger deploy.
+@app.post(
+    "/api/v1/session/deploy-from-yaml",
+    response_model=CatalogSessionSwitchAccepted,
+    dependencies=[Depends(_require_api_key)],
+)
+async def deploy_from_yaml(
+    body: CatalogSessionYamlUploadRequest,
+    catalog_context: CatalogContext = Depends(get_catalog_context),
+) -> CatalogSessionSwitchAccepted | Response:
+    """Save standard session YAML in the user catalog and deploy that exact ref."""
+    from vs_api.builder_compiler import canonicalize_persisted_configuration
+    from vs_api.session_deployment import (
+        SessionDeploymentPreparationError,
+        prepare_catalog_session_deployment,
+    )
 
-    Validates the FULL session config before creating any K8s resources:
-    schema validation (Pydantic), constellation expansion, ground station
-    loading, and session readiness checks. If any validation fails, the
-    user sees the error immediately — no CR is created, no switch is
-    started, no stuck "Switching session..." state.
-    """
-    import yaml as _yaml
-
-    yaml_str = body.get("yaml", "")
-    if not yaml_str:
-        return JSONResponse(status_code=400, content={"error": "yaml field required"})
+    yaml_str = body.yaml
     try:
-        raw = await asyncio.to_thread(_yaml.safe_load, yaml_str)
-    except YAMLError as exc:
+        raw = await asyncio.to_thread(load_configuration_yaml, yaml_str)
+    except (UnicodeError, YAMLError) as exc:
         log.info("Invalid session YAML rejected: %s", exc)
         return _error_response(400, "Invalid session YAML")
     try:
-        resolution = await asyncio.to_thread(
-            resolve_session_with_assets,
-            raw,
-            catalog_roots=_CATALOG_ROOTS,
-            source_context=SourceContext(origin="vs_api.deploy"),
+        persisted = catalog_family_spec("sessions").validate_document(raw)
+        session_ref = SessionRef(f"user:sessions/{persisted.session.name}.yaml")
+        canonical = canonicalize_persisted_configuration(session_ref, raw)
+    except (TypeError, ValueError) as exc:
+        log.info("Invalid persisted session rejected: %s", exc)
+        return _error_response(
+            422,
+            "Single-file YAML upload must satisfy the ref-composed published grammar",
         )
-    except CatalogPathError as exc:
-        return _catalog_error(exc)
-    except FileNotFoundError as exc:
-        return _catalog_error(exc)
-    except Exception as exc:
-        log.info("Invalid segment session YAML rejected: %s", exc)
-        return _error_response(400, "Invalid segment session YAML")
 
-    # Write the validated segment YAML exactly as supplied. The resolver is the
-    # semantic authority; VS-API must not rewrite it into the old session shape.
+    def persist_session():
+        snapshot = catalog_context.repository.snapshot(catalog_context.scope)
+        transaction = catalog_context.repository.begin(
+            catalog_context.scope,
+            base_generation=snapshot.generation,
+        )
+        try:
+            transaction.write_bytes(
+                session_ref,
+                canonical.yaml_bytes,
+                expected_revision=None,
+            )
+            committed = transaction.commit()
+        except Exception:
+            transaction.abort()
+            raise
+        saved = committed.get(session_ref)
+        closure = CatalogClosureCollector.collect(saved.content, committed)
+        return saved, closure
+
     try:
-        stem = generated_file_stem(resolution.resolved.session.name)
-        session_file = generated_file_path(_generated_sessions_dir(), f"_wizard-{stem}.yaml")
-        await asyncio.to_thread(
-            lambda: write_text_exclusive(session_file, _yaml.dump(raw, default_flow_style=False))
+        saved, closure = await asyncio.to_thread(persist_session)
+    except CatalogConflictError:
+        return JSONResponse(
+            status_code=409,
+            content={"error": f"Catalog session already exists: {session_ref}"},
         )
-    except (CatalogPathError, FileExistsError) as exc:
-        return _catalog_error(exc)
+    except CatalogValidationError as exc:
+        log.info("Uploaded session catalog graph refused: %s", exc)
+        return JSONResponse(
+            status_code=422,
+            content={
+                "error": "Session references unresolved catalog content; "
+                "import all referenced user component YAML files through Session Builder"
+            },
+        )
+    except CatalogRepositoryError:
+        return JSONResponse(status_code=503, content={"error": "Catalog storage is unavailable"})
 
-    # Rescan and deploy
-    if _session_manager is None:
-        return JSONResponse(status_code=503, content={"error": "Session manager not initialized"})
-    if _session_manager.status == "switching":
+    try:
+        available_node_count = await asyncio.to_thread(_available_session_node_count)
+        deployment = await asyncio.to_thread(
+            prepare_catalog_session_deployment,
+            catalog_context,
+            session_ref=str(session_ref),
+            expected_session_revision=str(saved.revision),
+            expected_document_digest=closure.document_digest,
+            expected_closure_digest=closure.closure_digest,
+            available_node_count=available_node_count,
+        )
+    except SessionDeploymentPreparationError as exc:
+        return JSONResponse(
+            status_code=422,
+            content={"error": exc.evidence.message, "code": exc.code.value},
+        )
+    except UnsupportedFeatureError as exc:
+        return JSONResponse(
+            status_code=422,
+            content={"error": str(exc), "code": "catalog_session.unsupported"},
+        )
+    except CatalogRepositoryError:
+        return JSONResponse(status_code=503, content={"error": "Catalog storage is unavailable"})
+
+    operation_id = await _admit_transition(
+        lambda: _run_catalog_switch(deployment, catalog_context),
+        reservation=_prepared_transition_reservation(deployment),
+    )
+    if operation_id is None:
         return JSONResponse(status_code=409, content={"error": "Switch already in progress"})
-    await asyncio.to_thread(_session_manager.rescan)
-    session_file_value = config_value_for(session_file)
-    asyncio.create_task(_run_switch(session_file_value))
-    return {"status": "switching", "session_file": session_file_value}
-
-
-@app.post("/api/v1/session/deploy-from-yaml", dependencies=[Depends(_require_api_key)])
-async def deploy_from_yaml(body: dict) -> dict:
-    """Deploy a self-contained session YAML (e.g., downloaded from a previous session).
-
-    Extracts inline constellation/ground-station definitions, writes
-    ephemeral files, and deploys identically to the wizard path.
-    """
-    import yaml as _yaml
-
-    yaml_str = body.get("yaml", "")
-    if not yaml_str:
-        return JSONResponse(status_code=400, content={"error": "yaml field required"})
-    try:
-        raw = await asyncio.to_thread(_yaml.safe_load, yaml_str)
-    except YAMLError as exc:
-        log.info("Invalid session YAML rejected: %s", exc)
-        return _error_response(400, "Invalid session YAML")
-    try:
-        resolution = await asyncio.to_thread(
-            resolve_session_with_assets,
-            raw,
-            catalog_roots=_CATALOG_ROOTS,
-            source_context=SourceContext(origin="vs_api.upload"),
-        )
-        stem = generated_file_stem(resolution.resolved.session.name)
-    except CatalogPathError as exc:
-        return _catalog_error(exc)
-    except FileNotFoundError as exc:
-        return _catalog_error(exc)
-    except Exception as exc:
-        log.info("Invalid segment session YAML rejected: %s", exc)
-        return _error_response(400, "Invalid segment session YAML")
-
-    session_file = generated_file_path(_generated_sessions_dir(), f"_wizard-{stem}.yaml")
-    try:
-        await asyncio.to_thread(
-            lambda: write_text_exclusive(session_file, _yaml.dump(raw, default_flow_style=False))
-        )
-    except FileExistsError as exc:
-        return _catalog_error(exc)
-
-    if _session_manager is None:
-        return JSONResponse(status_code=503, content={"error": "Session manager not initialized"})
-    if _session_manager.status == "switching":
-        return JSONResponse(status_code=409, content={"error": "Switch already in progress"})
-    await asyncio.to_thread(_session_manager.rescan)
-    session_file_value = config_value_for(session_file)
-    asyncio.create_task(_run_switch(session_file_value))
-    return {"status": "switching", "session_file": session_file_value}
+    return CatalogSessionSwitchAccepted(
+        operation_id=operation_id,
+        source=CatalogSessionSourceId(session_ref=session_ref),
+    )
 
 
 @app.get(
@@ -3208,179 +3884,170 @@ def introspect(body: dict) -> dict:
     return result
 
 
-async def _run_switch(session_path: str) -> None:
+async def _run_catalog_switch(
+    deployment: Any,
+    catalog_context: CatalogContext,
+) -> TransitionRuntimeResult:
     async with _session_transition_lock:
-        await _run_switch_locked(session_path)
+        return await _run_prepared_switch_locked(deployment, catalog_context=catalog_context)
 
 
-async def _run_switch_locked(session_path: str) -> None:
-    """Run session switch — linear async chain on the main event loop.
-
-    All pointer writes to _active_context happen here, on the main
-    event loop. No executor threads, no run_coroutine_threadsafe.
-
-    Flow:
-    a. Null _active_context (broadcast loop stops)
-    b. Push session_transitioning
-    c. Close all terminal SSH sessions
-    d. Stop old context
-    e. SessionManager deploys new CR (async, polls with asyncio.sleep)
-    f. Create new SessionContext, start subscriptions
-    g. Wait for is_ready() with timeout
-    h. Set _active_context = new context
-    i. Push ephemeris + session_ready
-    """
+async def _run_prepared_switch_locked(
+    deployment: Any,
+    *,
+    catalog_context: CatalogContext,
+) -> TransitionRuntimeResult:
     global _active_context, _active_cr_generation
 
-    try:
-        old_ctx = _active_context
-        old_session = old_ctx.session_id if old_ctx else None
+    if _session_manager is None:
+        raise RuntimeError("Session manager is not initialized")
 
+    import kubernetes.client
+    import kubernetes.config
+
+    def _load_k8s_config() -> None:
+        try:
+            kubernetes.config.load_incluster_config()
+        except kubernetes.config.ConfigException:
+            kubernetes.config.load_kube_config()
+
+    await asyncio.to_thread(_load_k8s_config)
+    custom_objects_api = kubernetes.client.CustomObjectsApi()
+    core_v1_api = kubernetes.client.CoreV1Api()
+    namespace = get_platform_config().kubernetes_namespace
+    upload_store = KubernetesCatalogUploadStore(core_v1_api, namespace)
+    old_context = _active_context
+    old_session = old_context.session_id if old_context is not None else None
+    source_id = str(deployment.prepared.source.logical_id)
+    operation_id = _current_transition_operation_id.get()
+
+    def _upload_resource_observed(resource: CatalogUploadResourceEvidence) -> None:
+        if operation_id is None:
+            return
+        _get_transition_operation_store().update_provenance(
+            operation_id,
+            TransitionOperationProvenancePatch(
+                upload_resource_name=resource.name,
+            ),
+        )
+
+    async def _constellation_spec_observed(cr: dict[str, Any]) -> None:
+        if operation_id is None:
+            return
+        observation = _constellation_spec_observation(cr)
+        await _invoke_transition_store(
+            "update_provenance",
+            operation_id,
+            TransitionOperationProvenancePatch(constellation_spec=observation),
+        )
+
+    async def _transition_started() -> None:
+        global _active_context, _active_cr_generation
+
+        await _advance_transition_operation(
+            TransitionOperationState.VERIFYING,
+            detail="Exact uploaded catalog and reviewed source are verified",
+        )
+        await _advance_transition_operation(
+            TransitionOperationState.SWITCHING,
+            detail="Selecting the verified runtime configuration",
+        )
         await _publish_system_ops_event(
             "info",
             "SESSION_SWITCH_INITIATED",
-            f"Session switch initiated: {old_session} → {Path(session_path).stem}",
-            {"old_session": old_session, "new_session_path": session_path},
+            f"Session switch initiated: {old_session} → {source_id}",
+            {"old_session": old_session, "new_session_source": source_id},
         )
-
-        # (a) Null context — broadcast loop stops immediately
+        await _broadcast_to_all(json.dumps({"msg_type": "session_transitioning"}))
+        await _terminal_manager.close_all("Session switched")
+        if old_context is not None:
+            await old_context.stop()
         _active_context = None
         _active_cr_generation = None
-
-        # (b) Notify VF
-        await _broadcast_to_all(json.dumps({"msg_type": "session_transitioning"}))
-
-        # (c) Close all terminal SSH sessions
-        await _terminal_manager.close_all("Session switched")
-
-        # (d) Stop old context
-        if old_ctx is not None:
-            await old_ctx.stop()
-
         await _publish_system_ops_event(
             "info",
             "SESSION_TEARDOWN_COMPLETE",
             f"Old session {old_session} torn down",
         )
 
-        # (e) Deploy new session via K8s CR (fully async).
-        # Progress callback broadcasts status updates to all connected
-        # browsers so the switch overlay shows real-time progress instead
-        # of a static "Switching session..." message.
-        async def _switch_progress(detail: str) -> None:
-            await _broadcast_to_all(
-                json.dumps({"msg_type": "session_transitioning", "detail": detail})
+    async def _switch_progress(detail: str) -> None:
+        if detail == "Uploading exact session catalog":
+            await _advance_transition_operation(
+                TransitionOperationState.UPLOADING,
+                detail=detail,
             )
-
-        ready_cr = await _session_manager.switch(session_path, progress_fn=_switch_progress)
-        ready = await asyncio.to_thread(_extract_ready_cr_session, ready_cr)
-        if ready is None:
-            raise RuntimeError("Operator returned Ready without a current session_run_id")
-
-        # (f) Create new SessionContext
-        session_id = ready.session_id
-        session_path_for_context = await asyncio.to_thread(_write_cr_session_file, ready)
-
-        if _nats_connection is None:
-            log.error("FATAL: No NATS connection for new SessionContext")
-            raise RuntimeError("No NATS connection available")
-
-        new_ctx = await asyncio.to_thread(SessionContext, session_id, str(session_path_for_context))
-        await new_ctx.start(_nats_connection, mode="switch")
-
-        # (g) Wait for first live snapshot
-        try:
-            await asyncio.wait_for(new_ctx._ready.wait(), timeout=30.0)
-        except TimeoutError:
-            log.error(
-                "Session switch timeout — context for session %s not ready after 30s",
-                getattr(new_ctx, "session_id", "?"),
+        elif _current_transition_operation_id.get() is not None:
+            selected_operation_id = _current_transition_operation_id.get()
+            operation = await _invoke_transition_store(
+                "get_operation",
+                selected_operation_id or "",
             )
-            await _publish_system_ops_event(
-                "error",
-                "SESSION_SWITCH_TIMEOUT",
-                "New session did not become ready within 30s",
-                {"session_path": session_path},
-            )
-            await new_ctx.stop()
-            await _broadcast_to_all(
-                json.dumps(
-                    {
-                        "msg_type": "session_failed",
-                        "error": "New session did not become ready within 30s",
-                    }
+            if operation.state is TransitionOperationState.SWITCHING:
+                await _advance_transition_operation(
+                    TransitionOperationState.SWITCHING,
+                    detail=detail,
                 )
-            )
-            if _session_manager:
-                _session_manager._status = "error"
-                _session_manager.status_detail = "Session switch timeout"
-            return
+        await _broadcast_to_all(json.dumps({"msg_type": "session_transitioning", "detail": detail}))
 
-        # (h) Atomic pointer swap — only place _active_context is written
-        _active_context = new_ctx
-        _active_cr_generation = ready.generation
-        from nodal.logging import set_session as _set_log_session
-
-        _set_log_session(session_id)
-        _session_manager._status = "ready"
-        _session_manager.status_detail = ""
-
-        await _publish_system_ops_event(
-            "info",
-            "SESSION_SWITCH_COMPLETE",
-            f"Session switch complete: now running {ready.session_name}",
-            {
-                "session_id": session_id,
-                "session_name": ready.session_name,
-                "generation": ready.generation,
-                "links": len(new_ctx.links),
-            },
+    try:
+        ready_cr = await _session_manager.switch_catalog(
+            deployment,
+            context=catalog_context,
+            upload_store=upload_store,
+            custom_objects_api=custom_objects_api,
+            core_v1_api=core_v1_api,
+            namespace=namespace,
+            progress_fn=_switch_progress,
+            transition_started=_transition_started,
+            upload_resource_observed=_upload_resource_observed,
+            constellation_spec_observed=_constellation_spec_observed,
         )
-
-        # (i) Push ephemeris + session_ready to VF
-        if new_ctx.cached_ephemeris:
-            await _broadcast_to_all(json.dumps(new_ctx.cached_ephemeris))
-        snapshot = _build_snapshot()
-        await _broadcast_to_all(
-            json.dumps(
-                {
-                    "msg_type": "session_ready",
-                    "snapshot": snapshot,
-                }
-            )
+        await _reconcile_catalog_upload_lifecycle(
+            ready_cr,
+            core_v1_api=core_v1_api,
+            namespace=namespace,
         )
-
-        log.info("Session switch complete — %s active (name=%s)", session_id, ready.session_name)
-
+        ready = await asyncio.to_thread(
+            _extract_cr_session,
+            ready_cr,
+            require_ready=True,
+            core_v1=core_v1_api,
+            namespace=namespace,
+        )
+        if ready is None:
+            raise RuntimeError("Operator returned Ready without current runtime identity")
+        await _activate_session_context_from_cr(
+            ready,
+            source="catalog-switch",
+            transition_already_started=True,
+        )
+        return TransitionRuntimeResult(
+            session_id=ready.session_id,
+            generation=ready.generation,
+        )
     except Exception as exc:
-        if _session_manager and _session_manager.status == "switching":
+        log.error("Prepared session switch failed", exc_info=True)
+        if _session_manager.status == "switching":
             _session_manager._status = "error"
-            _session_manager.status_detail = f"Unhandled: {exc}"
-            log.error("_run_switch caught: %s", exc)
+            _session_manager.status_detail = "Session switch failed"
         await _publish_system_ops_event(
             "error",
             "SESSION_SWITCH_FAILED",
-            f"Session switch failed: {exc}",
-            {"session_path": session_path, "error": str(exc)},
+            "Session switch failed",
+            {"session_source": source_id, "error_type": type(exc).__name__},
         )
         await _broadcast_to_all(
-            json.dumps(
-                {
-                    "msg_type": "session_failed",
-                    "error": str(exc),
-                }
-            )
+            json.dumps({"msg_type": "session_failed", "error": "Session switch failed"})
         )
+        raise
 
 
 async def _poll_cr_until_ready() -> None:
     """Poll ConstellationSpec CR until Ready, updating session status_detail.
 
-    Runs as a background task when VS-API starts and finds a CR in
-    Wiring/Creating phase (i.e., the session was deployed via make session
-    or kubectl apply, not through the wizard). Mirrors the polling in
-    session_manager.switch() so the frontend sees progress messages
-    regardless of deploy path.
+    Runs as a background task when VS-API starts and finds the selected CR in
+    Wiring/Creating phase after a process restart. Mirrors the polling in the
+    session manager so the frontend sees progress throughout recovery.
     """
     global _active_context, _active_cr_generation
     log.info("_poll_cr_until_ready: starting background CR polling task")
@@ -3395,7 +4062,9 @@ async def _poll_cr_until_ready() -> None:
 
     await asyncio.to_thread(_load_k8s_config)
     api = kubernetes.client.CustomObjectsApi()
+    core_v1_api = kubernetes.client.CoreV1Api()
     ns = get_platform_config().kubernetes_namespace
+    upload_reconciled = False
 
     for _ in range(600):  # 10 minutes max
         await asyncio.sleep(1)
@@ -3408,6 +4077,14 @@ async def _poll_cr_until_ready() -> None:
                 plural="constellationspecs",
                 name="current-session",
             )
+            await _reconcile_interrupted_transition(cr)
+            if not upload_reconciled:
+                await _reconcile_catalog_upload_lifecycle(
+                    cr,
+                    core_v1_api=core_v1_api,
+                    namespace=ns,
+                )
+                upload_reconciled = True
             phase = cr.get("status", {}).get("phase", "")
             message = cr.get("status", {}).get("message", "")
             status_is_current = _cr_status_observes_current_generation(cr)
@@ -3448,9 +4125,7 @@ async def _poll_cr_until_ready() -> None:
                             return
                 elif ctx is not None and ctx.session_id == ready.session_id:
                     _active_cr_generation = ready.generation
-                    _mark_session_manager_ready(
-                        ready.session, await asyncio.to_thread(_write_cr_session_file, ready)
-                    )
+                    _mark_session_manager_ready(ready.session, ready.source_id)
 
                 ctx = _active_context
                 if ctx:
@@ -3496,11 +4171,6 @@ def main() -> None:
     parser.add_argument("--db", default=None, help="Path to SQLite database (optional)")
     parser.add_argument("--port", type=int, default=None, help="HTTP port")
     parser.add_argument(
-        "--sessions-dir",
-        default="catalog/nodalarc/sessions",
-        help="Directory with catalog session YAMLs",
-    )
-    parser.add_argument(
         "--platform-config", default="configs/platform.yaml", help="Path to platform config YAML"
     )
     args = parser.parse_args()
@@ -3527,163 +4197,61 @@ def main() -> None:
     if args.port is None:
         args.port = get_platform_config().vs_api_http_port
 
-    global _session_manager, _initial_session_file, _pending_cr_poll
+    global _session_manager, _pending_cr_poll
 
-    _session_manager = SessionManager(
-        args.sessions_dir,
-        initial_db_path=args.db,
-        generated_sessions_dir=str(_generated_sessions_dir()),
-    )
+    _session_manager = SessionManager(initial_db_path=args.db)
 
     log.info("VS-API starting [build=%s]", os.environ.get("NODAL_BUILD", "dev"))
 
-    if args.session and args.db:
-        _initial_session_file = args.session
-
-        session_path = Path(args.session)
-        if not session_path.is_file():
-            log.info(f"Session config not found at {args.session} — starting in idle mode")
-            session_data = None
-        else:
-            session_data = yaml.safe_load(session_path.read_text())
-        if session_data:
-            startup_resolution = resolve_session_with_assets(
-                session_data,
-                catalog_roots=_CATALOG_ROOTS,
-                source_context=SourceContext(origin="vs_api.startup"),
-            )
-            # Mark session active
-            _active_path = args.session
-            try:
-                _state_mount = Path("/etc/nodalarc/state/session-state.json")
-                if _state_mount.exists():
-                    _ss = json.loads(_state_mount.read_text())
-                    if _ss.get("session_config"):
-                        _active_path = _ss["session_config"]
-            except Exception:
-                pass
-            _session_manager.set_active(_active_path)
-            _loaded_name = startup_resolution.resolved.session.name
-            if _loaded_name:
-                for _s in _session_manager._available:
-                    if _s.get("name") == _loaded_name:
-                        _session_manager.set_active(_s["file"])
-                        _initial_session_file = _s["file"]
-                        break
-            # Check CR phase — do not claim ready unless the authoritative CR is
-            # Ready and generation/pod/wiring identity checks all pass.
-            _cr_phase = ""
-            _cr_message = ""
-            _cr_ready = None
-            try:
-                import kubernetes.client as _k8s_client
-                import kubernetes.config as _k8s_config
-
-                try:
-                    _k8s_config.load_incluster_config()
-                except _k8s_config.ConfigException:
-                    _k8s_config.load_kube_config()
-                _cr_api = _k8s_client.CustomObjectsApi()
-                _cr = _cr_api.get_namespaced_custom_object(
-                    group="nodalarc.io",
-                    version="v1alpha1",
-                    namespace=get_platform_config().kubernetes_namespace,
-                    plural="constellationspecs",
-                    name="current-session",
-                )
-                _cr_phase = _cr.get("status", {}).get("phase", "")
-                _cr_message = _cr.get("status", {}).get("message", "")
-                if _cr_phase == "Ready":
-                    _cr_ready = _extract_ready_cr_session(_cr)
-            except Exception:
-                pass  # CR may not exist yet — NATS bootstrap will wait for it.
-
-            if _cr_ready is not None:
-                _session_manager._status = "ready"
-                _session_manager.status_detail = ""
-            elif _cr_phase in ("Pending", "Wiring", "Creating"):
-                log.info(f"Session config loaded but CR phase={_cr_phase} — wiring in progress")
-                _session_manager._status = "wiring"
-                _session_manager.status_detail = _cr_message or f"Status: {_cr_phase}"
-                _pending_cr_poll = True
-            elif _cr_phase == "Error":
-                _session_manager._status = "error"
-                _session_manager.status_detail = _cr_message or "Operator reported error"
-            else:
-                _session_manager._status = "idle"
-        else:
-            log.info("No session loaded — VS-API starting in idle mode")
-            # Check if Operator has an active session (CR with phase Ready/Wiring)
-            try:
-                import kubernetes.client
-                import kubernetes.config
-
-                try:
-                    kubernetes.config.load_incluster_config()
-                except kubernetes.config.ConfigException:
-                    kubernetes.config.load_kube_config()
-                api = kubernetes.client.CustomObjectsApi()
-                cr = api.get_namespaced_custom_object(
-                    group="nodalarc.io",
-                    version="v1alpha1",
-                    namespace=get_platform_config().kubernetes_namespace,
-                    plural="constellationspecs",
-                    name="current-session",
-                )
-                phase = cr.get("status", {}).get("phase", "")
-                message = cr.get("status", {}).get("message", "")
-                ready = _extract_ready_cr_session(cr) if phase == "Ready" else None
-                if ready is not None:
-                    log.info("Active ConstellationSpec CR found (phase=Ready)")
-                    _session_manager._status = "ready"
-                    _session_manager.status_detail = ""
-                elif phase in ("Pending", "Wiring", "Creating"):
-                    log.info(
-                        f"Active ConstellationSpec CR found (phase={phase}) — wiring in progress"
-                    )
-                    _session_manager._status = "wiring"
-                    _session_manager.status_detail = message or f"Status: {phase}"
-                    _pending_cr_poll = True
-                elif phase == "Error":
-                    _session_manager._status = "error"
-                    _session_manager.status_detail = message or "Operator reported error"
-                # Try to match session name from mounted config
-                if phase in ("Ready", "Pending", "Wiring", "Creating"):
-                    _sp = Path(args.session)
-                    if _sp.is_file():
-                        _sd = yaml.safe_load(_sp.read_text())
-                        _sn = _sd.get("session", {}).get("name", "") if _sd else ""
-                        if _sn:
-                            for _s in _session_manager._available:
-                                if _s.get("name") == _sn:
-                                    _session_manager.set_active(_s["file"])
-                                    break
-            except Exception:
-                pass  # No CR exists — stay idle
-
-        # Ensure tables exist
+    if args.db:
         conn = sqlite3.connect(args.db)
         create_tables(conn)
         conn.close()
-        log.info(f"Started with explicit session: {args.session}")
-    else:
-        # No explicit session — try to recover a running session
-        recovered = _session_manager.recover_session()
-        if recovered:
-            new_db_path = recovered.get("db_path", "")
-            session_config = recovered.get("session_config", "")
-            if new_db_path and session_config and Path(session_config).exists():
-                _initial_session_file = session_config
-                log.info(
-                    f"Recovered session: {recovered.get('session_id')} (config={session_config})"
-                )
-            else:
-                log.warning(
-                    f"Found live session {recovered.get('session_id')} "
-                    f"but session config or db missing"
-                )
+
+    # The live ConstellationSpec is the sole runtime bootstrap authority. Do
+    # not parse --session with default catalog roots: uploaded user: closures
+    # are selected by spec.catalogUpload and verified by _extract_cr_session.
+    try:
+        import kubernetes.client as _k8s_client
+        import kubernetes.config as _k8s_config
+
+        try:
+            _k8s_config.load_incluster_config()
+        except _k8s_config.ConfigException:
+            _k8s_config.load_kube_config()
+        cr = _k8s_client.CustomObjectsApi().get_namespaced_custom_object(
+            group="nodalarc.io",
+            version="v1alpha1",
+            namespace=get_platform_config().kubernetes_namespace,
+            plural="constellationspecs",
+            name="current-session",
+        )
+        phase = str(cr.get("status", {}).get("phase") or "")
+        message = str(cr.get("status", {}).get("message") or "")
+        if phase == "Ready":
+            ready = _extract_ready_cr_session(cr)
+            if ready is None:
+                raise ValueError("Ready ConstellationSpec lacks verified runtime identity")
+            _session_manager.set_active(ready.source_id)
+            _session_manager._status = "ready"
+            _session_manager.status_detail = ""
+        elif phase in {"Pending", "Wiring", "Creating"}:
+            _session_manager._status = "wiring"
+            _session_manager.status_detail = message or f"Status: {phase}"
+            _pending_cr_poll = True
+        elif phase == "Error":
+            _session_manager._status = "error"
+            _session_manager.status_detail = message or "Operator reported error"
         else:
-            log.info("No running session found — starting idle")
+            _session_manager._status = "idle"
+    except Exception as exc:
+        if getattr(exc, "status", None) == 404:
+            _session_manager._status = "idle"
+            log.info("No runtime ConstellationSpec exists at startup")
+        else:
+            _session_manager._status = "error"
+            _session_manager.status_detail = "Runtime session verification failed"
+            log.error("Runtime ConstellationSpec verification failed", exc_info=True)
 
     uvicorn.run(app, host="0.0.0.0", port=args.port, log_level="info")
 

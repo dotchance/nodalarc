@@ -4,36 +4,63 @@
 
 from __future__ import annotations
 
+import contextlib
+import os
 import re
+import tempfile
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
+
+from nodalarc.catalog_refs import (
+    CatalogRef,
+    CatalogReferenceError,
+    catalog_reference_namespace,
+    is_catalog_name,
+    parse_catalog_reference,
+)
+from nodalarc.catalog_refs import (
+    validate_catalog_name as validate_reference_name,
+)
 
 
 class CatalogPathError(ValueError):
     """Raised when a config path escapes an approved catalog root."""
 
 
-_SAFE_NAME = re.compile(r"^[A-Za-z0-9_-]+$")
-_YAML_SUFFIXES = {".yaml", ".yml"}
-
-
 @dataclass(frozen=True)
 class CatalogRoots:
-    """Approved root for the NodalArc catalog."""
+    """Approved catalog roots.
+
+    ``root`` is the shipped ``nodalarc:`` catalog — immutable content baked
+    into every service image. ``user_root`` is the selected ``user:`` catalog,
+    which may be a writable authoring view or a read-only deployment upload.
+    Callers must supply both roots required by the document they resolve; this
+    type never flattens references or falls back between namespaces.
+    """
 
     root: Path
     sessions: Path
+    user_root: Path | None = None
 
     @classmethod
-    def from_catalog_root(cls, catalog_root: str | Path = "catalog/nodalarc") -> CatalogRoots:
+    def from_catalog_root(
+        cls,
+        catalog_root: str | Path = "catalog/nodalarc",
+        *,
+        user_root: str | Path | None = None,
+    ) -> CatalogRoots:
         root = Path(catalog_root)
-        return cls(root=root, sessions=root / "sessions")
+        return cls(
+            root=root,
+            sessions=root / "sessions",
+            user_root=Path(user_root) if user_root is not None else None,
+        )
 
 
 def safe_display_stem(name: str) -> str:
     """Return the exact display-name stem used for generated files."""
-    return re.sub(r"[^A-Za-z0-9_-]+", "_", name).strip("_")[:48] or "session"
+    return re.sub(r"[^a-z0-9_-]+", "_", name.strip().lower()).strip("_")[:48] or "session"
 
 
 def reject_path_name(name: str, *, label: str = "name") -> None:
@@ -46,19 +73,17 @@ def reject_path_name(name: str, *, label: str = "name") -> None:
 
 def validate_catalog_name(name: str, *, label: str = "name") -> str:
     """Return a catalog object name after rejecting path syntax."""
-    if not isinstance(name, str):
-        raise CatalogPathError(f"{label} must be a string")
-    reject_path_name(name, label=label)
-    if not _SAFE_NAME.fullmatch(name):
-        raise CatalogPathError(f"{label} must contain only [A-Za-z0-9_-]")
-    return name
+    try:
+        return validate_reference_name(name, label=label)
+    except CatalogReferenceError as exc:
+        raise CatalogPathError(str(exc)) from exc
 
 
 def generated_file_stem(display_name: str, write_id: str | None = None) -> str:
     """Return a collision-resistant generated-file stem for one API write."""
     reject_path_name(display_name, label="session.name")
     ident = write_id or uuid.uuid4().hex
-    if not _SAFE_NAME.fullmatch(ident):
+    if not is_catalog_name(ident):
         raise CatalogPathError("write identifier must contain only [A-Za-z0-9_-]")
     return f"{safe_display_stem(display_name)}-{ident}"
 
@@ -72,31 +97,9 @@ def config_value_for(path: Path) -> str:
         return str(resolved)
 
 
-def _reject_unsafe_path_source(source: str, *, label: str) -> Path:
-    if not source:
-        raise CatalogPathError(f"{label} is required")
-    if "\\" in source:
-        raise CatalogPathError(f"{label} must not contain backslash path separators")
-    path = Path(source)
-    if path.is_absolute():
-        raise CatalogPathError(f"{label} must not be absolute")
-    if ".." in path.parts:
-        raise CatalogPathError(f"{label} must not contain path traversal")
-    return path
-
-
-def _validate_yaml_path_reference(path: Path, *, label: str) -> Path:
-    if not path.parts:
-        raise CatalogPathError(f"{label} path is required")
-
-    filename = path.name
-    suffix = Path(filename).suffix.lower()
-    if suffix not in _YAML_SUFFIXES:
-        raise CatalogPathError(f"{label} path must be YAML")
-
-    parts = [validate_catalog_name(part, label=f"{label} directory") for part in path.parts[:-1]]
-    stem = validate_catalog_name(Path(filename).stem, label=f"{label} filename")
-    return Path(*parts, f"{stem}{suffix}")
+def catalog_reference_scheme(source: str | Path) -> str | None:
+    """Return the catalog scheme of a reference token, if it has one."""
+    return catalog_reference_namespace(source)
 
 
 def resolve_catalog_reference(
@@ -105,20 +108,30 @@ def resolve_catalog_reference(
     *,
     label: str = "catalog reference",
 ) -> Path:
-    """Resolve a ``nodalarc:<path>`` token under the catalog root."""
-    raw = str(source)
-    if not raw.startswith("nodalarc:"):
-        raise CatalogPathError(f"{label} must be a nodalarc:<path> reference")
-    relative = raw.split(":", 1)[1]
-    reference = _validate_yaml_path_reference(
-        _reject_unsafe_path_source(relative, label=label), label=label
-    )
-    root_resolved = roots.root.resolve(strict=True)
+    """Resolve a ``nodalarc:<path>`` or ``user:<path>`` token under its root.
+
+    Both schemes get identical path validation and containment; ``user:``
+    additionally requires a configured user root. Callers without one reject
+    user references instead of guessing or falling back.
+    """
+    try:
+        parsed = parse_catalog_reference(CatalogRef(str(source)), label=label)
+    except CatalogReferenceError as exc:
+        raise CatalogPathError(str(exc)) from exc
+
+    if parsed.namespace == "user":
+        if roots.user_root is None:
+            raise CatalogPathError(f"{label} uses the user catalog, which is not available here")
+        root = roots.user_root
+    else:
+        root = roots.root
+    reference = parsed.relative_path
+    root_resolved = root.resolve(strict=True)
     resolved = (root_resolved / reference).resolve(strict=True)
     try:
         resolved.relative_to(root_resolved)
     except ValueError as exc:
-        raise CatalogPathError(f"{label} escapes approved catalog root: {roots.root}") from exc
+        raise CatalogPathError(f"{label} escapes approved catalog root: {root}") from exc
     return resolved
 
 
@@ -157,3 +170,21 @@ def write_text_exclusive(path: Path, text: str) -> None:
     """Write text without overwriting an existing generated file."""
     with path.open("x", encoding="utf-8") as fh:
         fh.write(text)
+
+
+def write_text_atomic(path: Path, text: str) -> None:
+    """Write text atomically, replacing any existing generated file.
+
+    For writes where the filename is the identity (one artifact per name):
+    a temp file in the same directory then os.replace, so readers never see
+    a partial file and a re-save never leaves siblings behind.
+    """
+    fd, tmp_name = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        os.replace(tmp_name, path)
+    except BaseException:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(tmp_name)
+        raise

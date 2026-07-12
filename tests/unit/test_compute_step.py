@@ -141,6 +141,22 @@ class TestComputeStepMatchesWindow:
     def test_context_precompute_uses_exact_context_configuration(self):
         """Context precompute uses the already-normalized StepContext."""
         session, cc, gs_file, sats, addressing, neighbors, ground_candidates = _load_test_session()
+        gs_file = gs_file.model_copy(
+            update={
+                "stations": [
+                    station.model_copy(
+                        update={
+                            "selection_policy": None,
+                            "handover_policy": None,
+                            "handover_mode": None,
+                            "mbb_overlap_ticks": None,
+                            "mbb_reserve": None,
+                        }
+                    )
+                    for station in gs_file.stations
+                ]
+            }
+        )
         epoch_unix = 1704067200.0
         step_seconds = session.time.step_seconds
 
@@ -267,8 +283,8 @@ class TestComputeStepMatchesWindow:
         assert isinstance(positions, dict)
         assert len(positions) > 0
         # Positions should include both satellites and ground stations
-        sat_count = sum(1 for k in positions if k.startswith("space-sat-"))
-        gs_count = sum(1 for k in positions if k.startswith("ground-gs-"))
+        sat_count = sum(1 for node_id in positions if addressing.is_satellite(node_id))
+        gs_count = sum(1 for node_id in positions if addressing.is_ground_segment(node_id))
         assert sat_count > 0
         assert gs_count >= 0  # May be 0 if no GS configured
 

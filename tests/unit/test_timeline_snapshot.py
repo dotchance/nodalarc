@@ -3,39 +3,29 @@
 import json
 
 import pytest
-from nodalarc.constellation_loader import (
-    clone_satellite_node,
-    expand_constellation,
-    load_ground_stations,
-)
-from nodalarc.models.addressing import AddressingScheme, assign_isl_neighbors
-from nodalarc.models.constellation import ConstellationConfig
+from nodalarc.models.addressing import NeighborAssignment
 from nodalarc.models.events import ClockTick, VisibilityEvent
 from nodalarc.models.ground_policy import HandoverPolicySpec, SelectionPolicySpec
 from nodalarc.models.session import GroundSchedulingConfig
+from nodalarc.models.terminal_physics import SatGroundTerminalBoresight, TerminalBoresight
+from nodalarc.ome_runtime import (
+    GroundStation,
+    GroundStationFile,
+    GroundTerminal,
+    IslTerminal,
+    SatelliteGroundTerminal,
+    SatelliteNode,
+)
 from ome.event_stream import (
     precompute_timeline,
     read_timeline_jsonl,
     write_timeline_jsonl,
 )
-from pydantic import TypeAdapter
 
-from tests.physics_fixtures import EARTH_TEST_BODY_FRAME, EARTH_TEST_BODY_FRAMES
+from tests.ome_runtime_fixtures import StaticOmeAddressing
+from tests.physics_fixtures import EARTH_TEST_BODY_FRAMES, earth_elements_from_params
 
-adapter = TypeAdapter(ConstellationConfig)
 EPOCH = 1735689600.0
-
-
-def _assign_timeline_runtime_ids(sats):
-    return [
-        clone_satellite_node(
-            sat,
-            node_id=f"timeline-sat-p{sat.local_plane:02d}s{sat.local_slot:02d}",
-            local_node_id=f"sat-P{sat.local_plane:02d}S{sat.local_slot:02d}",
-            segment_id="timeline",
-        )
-        for sat in sats
-    ]
 
 
 def _ground_scheduling() -> GroundSchedulingConfig:
@@ -45,115 +35,110 @@ def _ground_scheduling() -> GroundSchedulingConfig:
     )
 
 
-def _four_node_constellation() -> ConstellationConfig:
-    return adapter.validate_python(
-        {
-            "mode": "explicit",
-            "name": "four-node",
-            "default_terminals": {
-                "isl": [
-                    {
-                        "type": "optical",
-                        "count": 2,
-                        "max_range_km": 5000,
-                        "bandwidth_mbps": 1000,
-                        "max_tracking_rate_deg_s": 3.0,
-                    }
-                ],
-                "ground": [
-                    {
-                        "type": "optical",
-                        "count": 1,
-                        "bandwidth_mbps": 1000,
-                        "max_range_km": 2000,
-                        "field_of_regard_deg": 120,
-                        "max_tracking_rate_deg_s": 1.5,
-                        "boresight": {"target_body": "earth", "mode": "nadir"},
-                    }
-                ],
-            },
-            "satellites": [
-                {
-                    "plane": 0,
-                    "slot": 0,
-                    "orbit": {
-                        "altitude_km": 550,
-                        "inclination_deg": 53,
-                        "raan_deg": 0,
-                        "true_anomaly_deg": 0,
-                    },
-                },
-                {
-                    "plane": 0,
-                    "slot": 1,
-                    "orbit": {
-                        "altitude_km": 550,
-                        "inclination_deg": 53,
-                        "raan_deg": 0,
-                        "true_anomaly_deg": 180,
-                    },
-                },
-                {
-                    "plane": 1,
-                    "slot": 0,
-                    "orbit": {
-                        "altitude_km": 550,
-                        "inclination_deg": 53,
-                        "raan_deg": 45,
-                        "true_anomaly_deg": 0,
-                    },
-                },
-                {
-                    "plane": 1,
-                    "slot": 1,
-                    "orbit": {
-                        "altitude_km": 550,
-                        "inclination_deg": 53,
-                        "raan_deg": 45,
-                        "true_anomaly_deg": 180,
-                    },
-                },
-            ],
-        }
+def _four_node_runtime():
+    terminal = IslTerminal(
+        type="optical",
+        count=2,
+        max_range_km=5000.0,
+        bandwidth_mbps=1000.0,
+        max_tracking_rate_deg_s=3.0,
+        field_of_regard_deg=360.0,
     )
+    access_terminal = SatelliteGroundTerminal(
+        type="optical",
+        count=1,
+        interface_indices=(0,),
+        bandwidth_mbps=1000.0,
+        max_range_km=2000.0,
+        field_of_regard_deg=120.0,
+        max_tracking_rate_deg_s=1.5,
+        boresight=SatGroundTerminalBoresight(target_body="earth", mode="nadir"),
+    )
+    nodes = []
+    for plane, slot, raan_deg, anomaly_deg in (
+        (0, 0, 0.0, 0.0),
+        (0, 1, 0.0, 180.0),
+        (1, 0, 45.0, 0.0),
+        (1, 1, 45.0, 180.0),
+    ):
+        nodes.append(
+            SatelliteNode(
+                plane=plane,
+                slot=slot,
+                elements=earth_elements_from_params(550.0, 53.0, raan_deg, anomaly_deg),
+                isl_terminal_count=2,
+                ground_terminal_count=1,
+                node_id=f"timeline-sat-p{plane:02d}s{slot:02d}",
+                local_node_id=f"sat-P{plane:02d}S{slot:02d}",
+                segment_id="timeline",
+                central_body="earth",
+                isl_terminals=(terminal,),
+                ground_terminals=(access_terminal,),
+            )
+        )
+
+    by_location = {(node.plane, node.slot): str(node.node_id) for node in nodes}
+    assignments = []
+    for plane, slot in by_location:
+        node_id = by_location[(plane, slot)]
+        assignments.extend(
+            (
+                (
+                    node_id,
+                    NeighborAssignment(
+                        interface="isl0",
+                        peer_node_id=by_location[(plane, 1 - slot)],
+                        link_type="intra_plane_isl",
+                        priority=0,
+                    ),
+                ),
+                (
+                    node_id,
+                    NeighborAssignment(
+                        interface="isl1",
+                        peer_node_id=by_location[(1 - plane, slot)],
+                        link_type="cross_plane_isl",
+                        priority=1,
+                    ),
+                ),
+            )
+        )
+    addressing = StaticOmeAddressing(
+        satellite_ids=tuple(by_location.values()),
+        ground_station_ids=("gs-equator",),
+        ground_aliases={"equator": "gs-equator"},
+    )
+    return nodes, addressing, frozenset(assignments)
 
 
 @pytest.fixture
 def four_node_timeline():
     """Precompute a short timeline for the custom-example constellation."""
-    config = _four_node_constellation()
-    sats = _assign_timeline_runtime_ids(
-        expand_constellation(config, body_frame=EARTH_TEST_BODY_FRAME)
-    )
-    addressing = AddressingScheme(satellites=sats)
-    neighbors = assign_isl_neighbors(config, addressing)
-    gs_file = load_ground_stations(
-        {
-            "default_terminals": [
-                {
-                    "type": "optical",
-                    "count": 1,
-                    "bandwidth_mbps": 1000,
-                    "tracking_capacity": 1,
-                    "max_range_km": 2000,
-                    "field_of_regard_deg": 120,
-                    "max_tracking_rate_deg_s": 1.5,
-                    "boresight": {
-                        "mode": "local_vertical",
-                    },
-                }
-            ],
-            "default_min_elevation_deg": 25,
-            "default_selection_policy": {"name": "highest-elevation", "params": {}},
-            "stations": [
-                {
-                    "name": "equator",
-                    "lat_deg": 0.0,
-                    "lon_deg": 0.0,
-                    "reference_body": "earth",
-                }
-            ],
-        }
+    sats, addressing, neighbors = _four_node_runtime()
+    gs_file = GroundStationFile(
+        default_terminals=[
+            GroundTerminal(
+                type="optical",
+                count=1,
+                interface_indices=(0,),
+                bandwidth_mbps=1000.0,
+                tracking_capacity=1,
+                max_range_km=2000.0,
+                field_of_regard_deg=120.0,
+                max_tracking_rate_deg_s=1.5,
+                boresight=TerminalBoresight(mode="local_vertical"),
+            )
+        ],
+        default_min_elevation_deg=25.0,
+        default_selection_policy=SelectionPolicySpec(name="highest-elevation", params={}),
+        stations=[
+            GroundStation(
+                name="equator",
+                lat_deg=0.0,
+                lon_deg=0.0,
+                reference_body="earth",
+            )
+        ],
     )
 
     events = precompute_timeline(
@@ -247,12 +232,7 @@ class TestJsonLinesIO:
 class TestNoGroundStations:
     def test_timeline_without_gs(self):
         """Timeline works without ground stations."""
-        config = _four_node_constellation()
-        sats = _assign_timeline_runtime_ids(
-            expand_constellation(config, body_frame=EARTH_TEST_BODY_FRAME)
-        )
-        addressing = AddressingScheme(satellites=sats)
-        neighbors = assign_isl_neighbors(config, addressing)
+        sats, addressing, neighbors = _four_node_runtime()
 
         events = precompute_timeline(
             satellites=sats,

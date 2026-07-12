@@ -5,7 +5,13 @@
 from __future__ import annotations
 
 import pytest
-from nodalarc.tle import tle_age_days, tle_epoch_unix, tle_norad_id, validate_tle_pair
+from nodalarc.tle import (
+    tle_age_days,
+    tle_epoch_unix,
+    tle_mean_elements,
+    tle_norad_id,
+    validate_tle_pair,
+)
 
 ISS_TLE_LINE_1 = "1 25544U 98067A   21075.51041667  .00001264  00000-0  29660-4 0  9993"
 ISS_TLE_LINE_2 = "2 25544  51.6442  21.5417 0002426  95.1670  21.8444 15.48974333273145"
@@ -29,3 +35,17 @@ def test_tle_age_days_is_absolute():
     epoch = tle_epoch_unix(ISS_TLE_LINE_1)
     assert tle_age_days(ISS_TLE_LINE_1, epoch + 86400.0) == pytest.approx(1.0)
     assert tle_age_days(ISS_TLE_LINE_1, epoch - 86400.0) == pytest.approx(1.0)
+
+
+def test_tle_mean_elements_preserve_physical_record_metadata():
+    elements = tle_mean_elements(
+        ISS_TLE_LINE_1,
+        ISS_TLE_LINE_2,
+        gravitational_parameter_km3_s2=398600.4418,
+    )
+
+    assert elements.norad_id == 25544
+    assert elements.epoch_unix == pytest.approx(1615896900.000288, abs=1e-6)
+    assert elements.semi_major_axis_km == pytest.approx(6797.9, abs=1.0)
+    assert elements.eccentricity == pytest.approx(0.0002426)
+    assert elements.inclination_deg == pytest.approx(51.6442)

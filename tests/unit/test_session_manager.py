@@ -1,8 +1,7 @@
-"""Tests for session manager — recovery, orphan cleanup, stale directory cleanup."""
+"""Tests for session switching, recovery, and state-marked directory cleanup."""
 
 import asyncio
 import json
-import logging
 import os
 import signal
 from pathlib import Path
@@ -11,7 +10,6 @@ from unittest.mock import patch
 
 import pytest
 import yaml
-from nodalarc.catalog_paths import CatalogPathError
 from vs_api.session_manager import SessionManager, _pid_alive
 
 CATALOG_SESSION = Path("catalog/nodalarc/sessions/earth-leo-heo-geo-luna-reachability.yaml")
@@ -48,72 +46,6 @@ def tmp_sessions(tmp_path, monkeypatch):
         "data_dir": data_dir,
         "session_yaml": session_yaml,
     }
-
-
-class TestSessionCatalog:
-    def test_scan_sessions_reports_resolved_constellation_name(self, tmp_sessions):
-        mgr = SessionManager(str(tmp_sessions["sessions_dir"]))
-
-        sessions = mgr.list_sessions()
-
-        assert len(sessions) == 1
-        assert sessions[0]["name"] == "test-session"
-        assert (
-            sessions[0]["constellation"]
-            == "geo_relay + heo_relay + leo_a + leo_b + luna_relay + meo"
-        )
-        assert sessions[0]["routing_stack"] == "earth_domain:isis + luna_domain:isis"
-
-    def test_scan_sessions_reports_multi_segment_label(self, tmp_path):
-        sessions_dir = tmp_path / "sessions"
-        sessions_dir.mkdir()
-        (sessions_dir / "reachability.yaml").write_text(CATALOG_SESSION.read_text())
-        mgr = SessionManager(str(sessions_dir))
-
-        sessions = mgr.list_sessions()
-
-        assert len(sessions) == 1
-        assert sessions[0]["name"] == "earth-leo-heo-geo-luna-reachability"
-        assert (
-            sessions[0]["constellation"]
-            == "geo_relay + heo_relay + leo_a + leo_b + luna_relay + meo"
-        )
-
-    def test_scan_sessions_includes_generated_root_without_catalog_pollution(self, tmp_path):
-        catalog_sessions = tmp_path / "catalog-sessions"
-        generated_sessions = tmp_path / "generated-sessions"
-        catalog_sessions.mkdir()
-        generated_sessions.mkdir()
-        (catalog_sessions / "catalog.yaml").write_text(
-            _segment_session_yaml("catalog-session", tmp_path)
-        )
-        (generated_sessions / "wizard.yaml").write_text(
-            _segment_session_yaml("wizard-session", tmp_path)
-        )
-
-        mgr = SessionManager(
-            str(catalog_sessions),
-            generated_sessions_dir=str(generated_sessions),
-        )
-
-        sessions = mgr.list_sessions()
-        assert {item["name"] for item in sessions} == {"catalog-session", "wizard-session"}
-        assert str(generated_sessions / "wizard.yaml") in mgr._valid_session_files()
-
-    def test_scan_sessions_deduplicates_unchanged_parse_failures(self, tmp_path, caplog):
-        sessions_dir = tmp_path / "sessions"
-        sessions_dir.mkdir()
-        (sessions_dir / "bad.yaml").write_text("session: [", encoding="utf-8")
-
-        with caplog.at_level(logging.WARNING, logger="vs_api.session_manager"):
-            mgr = SessionManager(str(sessions_dir))
-            mgr.rescan()
-            mgr.rescan()
-
-        warnings = [
-            record for record in caplog.records if "Failed to parse session" in record.getMessage()
-        ]
-        assert len(warnings) == 1
 
 
 def _make_session_dir(data_dir: Path, session_id: str, mi_pid: int = 0, orch_pid: int = 0) -> Path:
@@ -155,7 +87,7 @@ class TestRecoverSession:
         """Recovery returns None when no session configs exist."""
         sessions_dir = tmp_path / "sessions"
         sessions_dir.mkdir()
-        mgr = SessionManager(str(sessions_dir))
+        mgr = SessionManager()
         assert mgr.recover_session() is None
 
     def test_no_live_sessions(self, tmp_sessions):
@@ -166,7 +98,7 @@ class TestRecoverSession:
             mi_pid=4194301,  # Dead PID
             orch_pid=4194302,  # Dead PID
         )
-        mgr = SessionManager(str(tmp_sessions["sessions_dir"]))
+        mgr = SessionManager()
         assert mgr.recover_session() is None
         assert mgr.status == "idle"
 
@@ -179,7 +111,7 @@ class TestRecoverSession:
             mi_pid=my_pid,
             orch_pid=0,
         )
-        mgr = SessionManager(str(tmp_sessions["sessions_dir"]))
+        mgr = SessionManager()
         result = mgr.recover_session()
         assert result is not None
         assert result["session_id"] == "live-session-001"
@@ -207,7 +139,7 @@ class TestRecoverSession:
             orch_pid=my_pid,
         )
 
-        mgr = SessionManager(str(tmp_sessions["sessions_dir"]))
+        mgr = SessionManager()
         result = mgr.recover_session()
         assert result is not None
         assert result["session_id"] == "session-newer"
@@ -234,7 +166,7 @@ class TestRecoverSession:
             orch_pid=4194302,
         )
 
-        mgr = SessionManager(str(tmp_sessions["sessions_dir"]))
+        mgr = SessionManager()
         result = mgr.recover_session()
         assert result is not None
         assert result["session_id"] == "session-live"
@@ -247,42 +179,15 @@ class TestRecoverSession:
             "live-session-002",
             mi_pid=my_pid,
         )
-        mgr = SessionManager(str(tmp_sessions["sessions_dir"]))
+        mgr = SessionManager()
         mgr.recover_session()
         assert mgr._current_data_dir == d
-
-
-class TestSessionPathContainment:
-    def test_scan_fails_on_symlink_escape(self, tmp_path):
-        if not hasattr(os, "symlink"):
-            pytest.skip("symlink not supported on this platform")
-
-        sessions_dir = tmp_path / "sessions"
-        sessions_dir.mkdir()
-        outside = tmp_path / "outside.yaml"
-        outside.write_text(_segment_session_yaml("Outside", tmp_path))
-        try:
-            (sessions_dir / "escape.yaml").symlink_to(outside)
-        except OSError as exc:
-            pytest.skip(f"symlink creation not permitted: {exc}")
-
-        with pytest.raises(CatalogPathError, match="escapes sessions root"):
-            SessionManager(str(sessions_dir))
-
-    def test_valid_session_map_uses_resolved_paths(self, tmp_sessions):
-        mgr = SessionManager(str(tmp_sessions["sessions_dir"]))
-
-        assert str(tmp_sessions["session_yaml"]) in mgr._valid_session_files()
-        assert (
-            mgr._validated_session_path(str(tmp_sessions["session_yaml"]))
-            == tmp_sessions["session_yaml"].resolve()
-        )
 
 
 class TestKillAllSessionProcesses:
     def test_no_sessions(self, tmp_sessions):
         """No-op when no sessions exist."""
-        mgr = SessionManager(str(tmp_sessions["sessions_dir"]))
+        mgr = SessionManager()
         assert mgr.kill_all_session_processes() == 0
 
     def test_kills_live_pids(self, tmp_sessions):
@@ -293,7 +198,7 @@ class TestKillAllSessionProcesses:
             mi_pid=99999,
             orch_pid=99998,
         )
-        mgr = SessionManager(str(tmp_sessions["sessions_dir"]))
+        mgr = SessionManager()
 
         with (
             patch("vs_api.session_manager._pid_alive", return_value=True),
@@ -312,7 +217,7 @@ class TestKillAllSessionProcesses:
             mi_pid=4194301,
             orch_pid=4194302,
         )
-        mgr = SessionManager(str(tmp_sessions["sessions_dir"]))
+        mgr = SessionManager()
         killed = mgr.kill_all_session_processes()
         assert killed == 0
 
@@ -330,7 +235,7 @@ class TestCleanupOldSessions:
             )
             time.sleep(0.02)
 
-        mgr = SessionManager(str(tmp_sessions["sessions_dir"]))
+        mgr = SessionManager()
         removed = mgr.cleanup_old_sessions(keep=3)
         assert removed == 4
 
@@ -361,7 +266,7 @@ class TestCleanupOldSessions:
             )
             time.sleep(0.02)
 
-        mgr = SessionManager(str(tmp_sessions["sessions_dir"]))
+        mgr = SessionManager()
         removed = mgr.cleanup_old_sessions(keep=2)
 
         # Should remove 1 dead one (session-dead-000) but keep session-live-old
@@ -374,15 +279,25 @@ class TestCleanupOldSessions:
         _make_session_dir(tmp_sessions["data_dir"], "session-001")
         _make_session_dir(tmp_sessions["data_dir"], "session-002")
 
-        mgr = SessionManager(str(tmp_sessions["sessions_dir"]))
+        mgr = SessionManager()
         removed = mgr.cleanup_old_sessions(keep=5)
         assert removed == 0
+
+    def test_cleanup_never_infers_unknown_sibling_ownership(self, tmp_sessions):
+        repository = tmp_sessions["data_dir"] / "catalog-repository"
+        repository.mkdir()
+        (repository / "catalog.yaml").write_text("body: {}\n", encoding="utf-8")
+
+        removed = SessionManager().cleanup_old_sessions(keep=0)
+
+        assert removed == 0
+        assert repository.exists()
 
 
 class TestCollectDataDirs:
     def test_collects_from_configs(self, tmp_sessions):
         """Reads the deployment session-data root."""
-        mgr = SessionManager(str(tmp_sessions["sessions_dir"]))
+        mgr = SessionManager()
         dirs = mgr._collect_data_dirs()
         assert len(dirs) == 1
         assert dirs[0] == tmp_sessions["data_dir"]
@@ -392,7 +307,7 @@ class TestCollectDataDirs:
         # Add second session with same data_dir
         yaml2 = tmp_sessions["sessions_dir"] / "test-session-2.yaml"
         yaml2.write_text(_segment_session_yaml("test-session-2", tmp_sessions["data_dir"]))
-        mgr = SessionManager(str(tmp_sessions["sessions_dir"]))
+        mgr = SessionManager()
         dirs = mgr._collect_data_dirs()
         assert len(dirs) == 1
 
@@ -418,6 +333,7 @@ class _SwitchApi:
             }
         ]
         self.created = False
+        self.created_body: dict | None = None
 
     def delete_namespaced_custom_object(self, **_kwargs):
         return {}
@@ -435,10 +351,20 @@ class _SwitchApi:
 
         idx = min(self.post_create_get_count, len(self.post_create_statuses) - 1)
         self.post_create_get_count += 1
-        return self.post_create_statuses[idx]
+        observed = dict(self.post_create_statuses[idx])
+        observed["apiVersion"] = self.created_body["apiVersion"]
+        observed["kind"] = self.created_body["kind"]
+        observed["spec"] = self.created_body["spec"]
+        observed["metadata"] = {
+            **observed.get("metadata", {}),
+            "name": "current-session",
+            "uid": "uid-current-session",
+        }
+        return observed
 
-    def create_namespaced_custom_object(self, **_kwargs):
+    def create_namespaced_custom_object(self, **kwargs):
         self.created = True
+        self.created_body = kwargs["body"]
         return {}
 
 
@@ -457,44 +383,82 @@ async def _no_sleep(_seconds: float) -> None:
     return None
 
 
-def _patch_switch_k8s(monkeypatch, api: _SwitchApi, core: _SwitchCoreV1) -> None:
-    import kubernetes.client
-    import kubernetes.config
+def _run_in_executor_inline(loop, _executor, operation, *args):
+    future = loop.create_future()
+    try:
+        future.set_result(operation(*args))
+    except BaseException as error:
+        future.set_exception(error)
+    return future
 
-    monkeypatch.setattr(kubernetes.config, "load_incluster_config", lambda: None)
-    monkeypatch.setattr(kubernetes.client, "CustomObjectsApi", lambda: api)
-    monkeypatch.setattr(kubernetes.client, "CoreV1Api", lambda: core)
-    monkeypatch.setattr(
-        "vs_api.session_manager.get_platform_config",
-        lambda: SimpleNamespace(kubernetes_namespace="nodalarc"),
-    )
+
+def _patch_switch_waits(monkeypatch) -> None:
     monkeypatch.setattr("vs_api.session_manager.asyncio.sleep", _no_sleep)
+    monkeypatch.setattr(asyncio.BaseEventLoop, "run_in_executor", _run_in_executor_inline)
+
+
+def _switch_body() -> dict:
+    return {
+        "apiVersion": "nodalarc.io/v1alpha1",
+        "kind": "ConstellationSpec",
+        "metadata": {"name": "current-session", "namespace": "nodalarc"},
+        "spec": {
+            "sessionYaml": "session:\n  name: switch-test\n",
+            "catalogUpload": {
+                "upload_id": "catalog-switch-test",
+                "closure_digest": f"sha256:{'0' * 64}",
+                "file_count": 1,
+            },
+        },
+    }
+
+
+async def _switch_progress(manager: SessionManager, detail: str) -> None:
+    manager.status_detail = detail
 
 
 class TestSwitchFailLoud:
     def test_switch_fails_if_old_cr_does_not_finalize(self, tmp_sessions, monkeypatch):
         api = _SwitchApi(old_cr_gets_before_404=None)
         core = _SwitchCoreV1([0])
-        _patch_switch_k8s(monkeypatch, api, core)
-        mgr = SessionManager(str(tmp_sessions["sessions_dir"]))
+        _patch_switch_waits(monkeypatch)
+        mgr = SessionManager()
+        source_id = "nodalarc:sessions/test-session.yaml"
 
         with pytest.raises(TimeoutError, match="Old ConstellationSpec did not finalize"):
-            asyncio.run(mgr.switch(str(tmp_sessions["session_yaml"])))
+            asyncio.run(
+                mgr._switch_constellation_spec(
+                    source_id=source_id,
+                    cr_body=_switch_body(),
+                    custom_objects_api=api,
+                    core_v1_api=core,
+                    namespace="nodalarc",
+                    progress=lambda detail: _switch_progress(mgr, detail),
+                )
+            )
 
         assert api.created is False
-        assert mgr.status == "error"
 
     def test_switch_fails_if_old_session_pods_remain(self, tmp_sessions, monkeypatch):
         api = _SwitchApi(old_cr_gets_before_404=0)
         core = _SwitchCoreV1([2])
-        _patch_switch_k8s(monkeypatch, api, core)
-        mgr = SessionManager(str(tmp_sessions["sessions_dir"]))
+        _patch_switch_waits(monkeypatch)
+        mgr = SessionManager()
+        source_id = "nodalarc:sessions/test-session.yaml"
 
         with pytest.raises(TimeoutError, match="old session pod"):
-            asyncio.run(mgr.switch(str(tmp_sessions["session_yaml"])))
+            asyncio.run(
+                mgr._switch_constellation_spec(
+                    source_id=source_id,
+                    cr_body=_switch_body(),
+                    custom_objects_api=api,
+                    core_v1_api=core,
+                    namespace="nodalarc",
+                    progress=lambda detail: _switch_progress(mgr, detail),
+                )
+            )
 
         assert api.created is False
-        assert mgr.status == "error"
 
     def test_switch_ignores_stale_error_until_operator_observes_generation(
         self, tmp_sessions, monkeypatch
@@ -521,36 +485,20 @@ class TestSwitchFailLoud:
             ],
         )
         core = _SwitchCoreV1([0])
-        _patch_switch_k8s(monkeypatch, api, core)
-        mgr = SessionManager(str(tmp_sessions["sessions_dir"]))
+        _patch_switch_waits(monkeypatch)
+        mgr = SessionManager()
+        source_id = "nodalarc:sessions/test-session.yaml"
 
-        asyncio.run(mgr.switch(str(tmp_sessions["session_yaml"])))
+        asyncio.run(
+            mgr._switch_constellation_spec(
+                source_id=source_id,
+                cr_body=_switch_body(),
+                custom_objects_api=api,
+                core_v1_api=core,
+                namespace="nodalarc",
+                progress=lambda detail: _switch_progress(mgr, detail),
+            )
+        )
 
         assert mgr.status_detail == "ready"
-        assert mgr._current_session_file == str(tmp_sessions["session_yaml"])
-
-
-def test_cleanup_never_classifies_generated_session_library_as_orphan(tmp_path, monkeypatch):
-    """The wizard/upload library lives under the session data root but is user
-    content — orphan cleanup deleting it would destroy saved sessions."""
-    from types import SimpleNamespace as _NS
-
-    from vs_api.session_manager import SessionManager
-
-    data_root = tmp_path / "sessions"
-    generated = data_root / "generated-sessions"
-    generated.mkdir(parents=True)
-    (generated / "_wizard-keep-me.yaml").write_text("session: {}\n", encoding="utf-8")
-    orphan = data_root / "dead-deploy"
-    orphan.mkdir()
-
-    monkeypatch.setattr(
-        "vs_api.session_manager.get_platform_config",
-        lambda: _NS(kubernetes_namespace="nodalarc", session_data_root=str(data_root)),
-    )
-    manager = SessionManager.__new__(SessionManager)
-    manager._available = []
-    removed = SessionManager.cleanup_old_sessions(manager, keep=1)
-
-    assert generated.exists() and (generated / "_wizard-keep-me.yaml").exists()
-    assert removed >= 1 and not orphan.exists()
+        assert mgr.active_source_id == source_id

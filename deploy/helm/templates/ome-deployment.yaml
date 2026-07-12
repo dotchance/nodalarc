@@ -15,8 +15,9 @@ spec:
       labels:
         app: nodalarc-ome
       annotations:
-        checksum/platform-config: {{ .Files.Get "files/platform.yaml" | sha256sum | quote }}
+        checksum/platform-config: {{ tpl (.Files.Get "files/platform.yaml") . | sha256sum | quote }}
     spec:
+      serviceAccountName: nodalarc-ome
 {{- if .Values.controlPlaneNode }}
       nodeSelector:
         kubernetes.io/hostname: {{ .Values.controlPlaneNode }}
@@ -86,6 +87,16 @@ spec:
           env:
             - name: NODAL_BUILD
               value: {{ .Values.buildTag | quote }}
+            - name: NODALARC_RELEASE
+              value: {{ required "runtimeRelease is required" .Values.runtimeRelease | quote }}
+            - name: POD_UID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.uid
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
 {{- if .Values.nats.auth.enabled }}
             - name: NODALARC_NATS_URL
               value: "nats://{{ .Values.nats.auth.users.service.username }}:{{ .Values.nats.auth.users.service.password }}@nodalarc-nats:4222"
@@ -94,16 +105,18 @@ spec:
             - "--continuous"
             - "--platform-config"
             - "/etc/nodalarc/platform.yaml"
-            - "--session-run-id-file"
-            - "/etc/nodalarc/session_run_id"
-            - "/etc/nodalarc/session.yaml"
+            - "--session-config-dir"
+            - "/etc/nodalarc/session-config"
+            - "--installed-shipped-root"
+            - "/app/catalog/nodalarc"
+            - "/etc/nodalarc/session-config/session.yaml"
           ports:
             - containerPort: 8081
               name: health
               protocol: TCP
           readinessProbe:
             httpGet:
-              path: /
+              path: /readyz
               port: 8081
             initialDelaySeconds: 3
             periodSeconds: 5
@@ -113,7 +126,7 @@ spec:
             timeoutSeconds: 5
           livenessProbe:
             httpGet:
-              path: /
+              path: /livez
               port: 8081
             initialDelaySeconds: 30
             periodSeconds: 15
@@ -131,11 +144,7 @@ spec:
               memory: {{ .Values.ome.memoryLimit | default "1Gi" }}
           volumeMounts:
             - name: session-config
-              mountPath: /etc/nodalarc/session.yaml
-              subPath: session.yaml
-            - name: session-config
-              mountPath: /etc/nodalarc/session_run_id
-              subPath: session_run_id
+              mountPath: /etc/nodalarc/session-config
             - name: constellation-config
               mountPath: /etc/nodalarc/constellation.yaml
               subPath: constellation.yaml

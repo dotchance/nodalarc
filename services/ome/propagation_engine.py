@@ -16,11 +16,10 @@ from typing import Literal
 
 import numpy as np
 from nodalarc.body_frames import BodyFrame
-from nodalarc.constellation_loader import SatelliteNode, satellite_node_id
 from nodalarc.ephemeris_runtime import CommonBodyState
 from nodalarc.frames import EcefVec3, EciVec3, Vec3
-from nodalarc.models.addressing import AddressingScheme
 from nodalarc.models.events import NodePosition
+from nodalarc.ome_runtime import OmeAddressing, SatelliteNode, satellite_node_id
 from nodalarc.propagation_kernel import (
     ElementsBatch,
     body_rotation_angle_batch,
@@ -97,7 +96,7 @@ def _satellite_propagator_id(sat, session_propagator_id: SessionPropagatorId) ->
 def propagate_satellites(
     *,
     satellites: list[SatelliteNode],
-    addressing: AddressingScheme,
+    addressing: OmeAddressing,
     epoch_unix: float,
     dt: float,
     propagator_id: SessionPropagatorId,

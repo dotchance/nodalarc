@@ -22,6 +22,7 @@ from pathlib import Path
 
 import nats
 import yaml
+from nodalarc.configuration_yaml import load_configuration_yaml
 from nodalarc.constants import LOG_FORMAT
 from nodalarc.models.scenario import (
     InjectLinkDownStep,
@@ -34,6 +35,7 @@ from nodalarc.models.scenario import (
     WaitConvergeStep,
     WaitStep,
 )
+from nodalarc.models.segment_session import SegmentSessionConfig
 from nodalarc.nats_channels import (
     NATS_CONNECT_OPTIONS,
     SUBJECT_MI_CONVERGENCE_GATE,
@@ -45,15 +47,40 @@ from nodalarc.nats_channels import (
 log = logging.getLogger(__name__)
 
 
+class ScenarioRuntimeUnavailableError(RuntimeError):
+    """Scenario actions cannot run without a runtime availability contract."""
+
+    code = "scenario.mi_unavailable"
+
+    def __init__(self, unavailable_actions: tuple[str, ...]) -> None:
+        self.unavailable_actions = unavailable_actions
+        actions = ", ".join(unavailable_actions)
+        super().__init__(
+            "Measurement Infrastructure runtime availability is undefined; "
+            f"unavailable scenario actions: {actions}"
+        )
+
+
 def _resolve_session_id(session_path: str) -> str:
     """Read session YAML and return the sanitized session ID."""
-    data = yaml.safe_load(Path(session_path).read_text())
-    session_block = data.get("session", {})
-    name = session_block.get("name", "")
-    if not name:
-        log.error("Session YAML has no session.name field")
-        sys.exit(1)
-    return sanitize_session_id(name)
+    data = load_configuration_yaml(Path(session_path).read_text())
+    session = SegmentSessionConfig.model_validate(data)
+    return sanitize_session_id(session.session.name)
+
+
+def _preflight_scenario(scenario: ScenarioConfig) -> None:
+    """Refuse MI-dependent actions before connecting to runtime services."""
+    unavailable_actions = tuple(
+        sorted(
+            {
+                step.action
+                for step in scenario.steps
+                if isinstance(step, (WaitConvergeStep, MeasureStep))
+            }
+        )
+    )
+    if unavailable_actions:
+        raise ScenarioRuntimeUnavailableError(unavailable_actions)
 
 
 async def _send_scheduler_cmd(nc: nats.NATS, subject: str, cmd: dict) -> dict:
@@ -160,8 +187,7 @@ def _reconfig(step: ReconfigStep, session_path: str) -> None:
         sys.executable,
         "-m",
         "tools.na_reconfig",
-        "--session",
-        session_path,
+        "--live",
         "--target",
         step.target,
     ]
@@ -176,21 +202,17 @@ def _reconfig(step: ReconfigStep, session_path: str) -> None:
 
 async def run_scenario_async(scenario_path: str, session_path: str) -> None:
     """Load and execute a scenario YAML file."""
-    session_id = _resolve_session_id(session_path)
-    subject = scenario_inject_subject(session_id)
-
     raw = yaml.safe_load(Path(scenario_path).read_text())
     scenario = ScenarioConfig.model_validate(raw["scenario"])
+    _preflight_scenario(scenario)
+
+    session_id = _resolve_session_id(session_path)
+    subject = scenario_inject_subject(session_id)
     log.info("Scenario: %s — %s", scenario.name, scenario.description)
     log.info("Steps: %d, session_id: %s", len(scenario.steps), session_id)
 
     nc = await nats.connect(nats_url(), **NATS_CONNECT_OPTIONS)
     log.info("Connected to NATS at %s", nats_url())
-
-    # Check if MI is configured
-    session_data = yaml.safe_load(Path(session_path).read_text())
-    mi_block = session_data.get("mi", {})
-    mi_enabled = mi_block.get("enabled", False)
 
     try:
         for i, step in enumerate(scenario.steps):
@@ -208,15 +230,9 @@ async def run_scenario_async(scenario_path: str, session_path: str) -> None:
                 case RestoreSatelliteStep():
                     await _restore_satellite(nc, subject, step)
                 case WaitConvergeStep():
-                    if not mi_enabled:
-                        log.warning("wait_converge: MI not configured — skipping")
-                    else:
-                        await _wait_converge(nc, step)
+                    await _wait_converge(nc, step)
                 case MeasureStep():
-                    if not mi_enabled:
-                        log.warning("measure: MI not configured — skipping")
-                    else:
-                        await _measure(nc, step)
+                    await _measure(nc, step)
                 case ReconfigStep():
                     _reconfig(step, session_path)
 
@@ -238,7 +254,7 @@ def run_scenario(scenario_path: str, session_path: str) -> None:
     asyncio.run(run_scenario_async(scenario_path, session_path))
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(format=LOG_FORMAT, level=logging.INFO)
     parser = argparse.ArgumentParser(description="Nodal Arc Scenario Executor")
     parser.add_argument("--scenario", required=True, help="Path to scenario YAML file")
@@ -246,14 +262,19 @@ def main() -> None:
     parser.add_argument(
         "--platform-config", default="configs/platform.yaml", help="Path to platform config YAML"
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     from nodalarc.platform_config import init_platform_config
 
     init_platform_config(Path(args.platform_config))
 
-    run_scenario(args.scenario, args.session)
+    try:
+        run_scenario(args.scenario, args.session)
+    except ScenarioRuntimeUnavailableError as exc:
+        log.error("%s: %s", exc.code, exc)
+        return 2
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

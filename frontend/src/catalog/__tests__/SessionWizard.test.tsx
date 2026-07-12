@@ -7,7 +7,7 @@
  * left the UI with no way to start a shipped session).
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, cleanup } from "@testing-library/react";
+import { render, screen, fireEvent, cleanup, within } from "@testing-library/react";
 import type { SessionInfo } from "../../types";
 
 afterEach(cleanup);
@@ -99,6 +99,54 @@ describe("SessionWizard catalog sessions", () => {
     fireEvent.click(runningCard!);
     expect(onLaunchSession).not.toHaveBeenCalled();
   });
+
+  it("keeps same-named user and shipped sessions visibly distinct", () => {
+    const shipped: SessionInfo = { ...SESSIONS[1]!, active: true };
+    const user: SessionInfo = {
+      ...shipped,
+      source_id: {
+        kind: "catalog",
+        session_ref: "user:sessions/earth-geo-tdrs.yaml",
+      },
+      source: "user",
+      active: false,
+    };
+    const onLaunchSession = vi.fn();
+    render(
+      <SessionWizard
+        onDeployStarted={vi.fn()}
+        onClose={undefined}
+        deploying={false}
+        sessions={[shipped, user]}
+        onLaunchSession={onLaunchSession}
+      />,
+    );
+
+    const yours = screen.getByRole("region", { name: "User-created sessions" });
+    const provided = screen.getByRole("region", { name: "NodalArc defaults" });
+    expect(within(yours).getByText("user:sessions/earth-geo-tdrs.yaml")).toBeTruthy();
+    expect(within(yours).getByText("user: editable")).toBeTruthy();
+    expect(
+      within(provided).getByText("nodalarc:sessions/earth-geo-tdrs.yaml"),
+    ).toBeTruthy();
+    expect(within(provided).getByText("nodalarc: read-only")).toBeTruthy();
+    expect(
+      within(provided).getByText("earth-geo-tdrs").closest("button")?.disabled,
+    ).toBe(true);
+    expect(
+      within(yours).getByRole("button", {
+        name: "Download user:sessions/earth-geo-tdrs.yaml YAML",
+      }),
+    ).toBeTruthy();
+    expect(
+      within(provided).getByRole("button", {
+        name: "Download nodalarc:sessions/earth-geo-tdrs.yaml YAML",
+      }),
+    ).toBeTruthy();
+
+    fireEvent.click(within(yours).getByText("earth-geo-tdrs"));
+    expect(onLaunchSession).toHaveBeenCalledWith(user);
+  });
 });
 
 describe("SessionWizard download errors", () => {
@@ -112,7 +160,9 @@ describe("SessionWizard download errors", () => {
         onLaunchSession={vi.fn()}
       />,
     );
-    return screen.getByRole("button", { name: "Download earth-leo-polar YAML" });
+    return screen.getByRole("button", {
+      name: "Download nodalarc:sessions/earth-leo-polar.yaml YAML",
+    });
   }
 
   it("shows the resolver's own refusal words when a download is refused (422)", async () => {

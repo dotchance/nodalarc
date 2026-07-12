@@ -2,7 +2,7 @@
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
 /** Session launcher — two working surfaces over one overlay:
  *
- *  Launch: shipped catalog sessions as dense rows, deployed as-is via the
+ *  Launch: user and shipped catalog sessions as dense source-aware rows, deployed via the
  *          session switch, plus raw-YAML file deploy.
  *  Build:  the wizard flow (Configuration → Protocol → Options → Review)
  *          compiling, saving, and deploying through Builder authority.
@@ -31,7 +31,7 @@ interface SessionWizardProps {
   onClose: (() => void) | undefined;
   deploying: boolean;
   systemNotice?: string;
-  /** Shipped catalog sessions, deployable as-is via session switch. */
+  /** Scoped user and shipped catalog sessions, deployable as-is via session switch. */
   sessions: SessionInfo[];
   onLaunchSession: (session: SessionInfo) => void;
   /** Feature-gated session-builder entry: navigates to the builder view.
@@ -78,6 +78,20 @@ export function SessionWizard({
   }, []);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const sessionGroups = [
+    {
+      source: "user" as const,
+      label: "User-created sessions",
+      description: "Editable sessions saved in your user: catalog",
+      sessions: sessions.filter((session) => session.source === "user"),
+    },
+    {
+      source: "nodalarc" as const,
+      label: "NodalArc defaults",
+      description: "Shipped with NodalArc and read-only",
+      sessions: sessions.filter((session) => session.source === "nodalarc"),
+    },
+  ];
 
   const isGroupA = wizard.state.step === "selections"
     || wizard.state.step === "ground-stations"
@@ -152,43 +166,65 @@ export function SessionWizard({
           {view === "launch" && (
             <section className="launcher-content" aria-label="Launch a session">
               <p className="launcher-hint">
-                Sessions in your current catalog scope, deployable as authored. Building blocks
-                for your own sessions live in the Build tab.
+                Sessions in your current catalog scope, separated by ownership and deployed as
+                authored. Use the Wizard or Session Builder to create your own sessions.
               </p>
               <div className="launcher-sessions">
-                {sessions.map((s) => (
-                  <div key={s.source_id.session_ref} className="launcher-row-shell">
-                    <button
-                      className="launcher-row"
-                      onClick={() => {
-                        if (s.active || deploying || !s.deploy_allowed) return;
-                        onLaunchSession(s);
-                        onDeployStarted();
-                      }}
-                      disabled={s.active || deploying || !s.deploy_allowed}
-                      title={
-                        s.active
-                          ? "Already running"
-                          : s.deploy_allowed
-                            ? `Deploy ${s.name}`
-                            : s.blockers?.[0]?.message ?? "This session cannot be deployed"
-                      }
-                    >
-                      <span className="launcher-row-name">{s.name}</span>
-                      <span className="launcher-row-desc">{s.constellation}</span>
-                      <span className="launcher-row-meta">
-                        {s.routing_stack && <Badge>{s.routing_stack}</Badge>}
-                        {s.active && <Badge tone="ok">running</Badge>}
-                        {!s.deploy_allowed && <Badge>unavailable</Badge>}
+                {sessionGroups.map((group) => group.sessions.length > 0 && (
+                  <section
+                    key={group.source}
+                    className="launcher-session-group"
+                    aria-label={group.label}
+                  >
+                    <header className="launcher-session-group-head">
+                      <span>
+                        <span className="launcher-session-group-title">{group.label}</span>
+                        <span className="launcher-session-group-detail">{group.description}</span>
                       </span>
-                    </button>
-                    <IconButton
-                      icon="download"
-                      label={`Download ${s.name} YAML`}
-                      disabled={downloadingFile !== null}
-                      onClick={() => void downloadSessionYaml(s.source_id, s.name)}
-                    />
-                  </div>
+                      <Badge tone={group.source === "user" ? "accent" : "neutral"}>
+                        {group.source === "user" ? "user: editable" : "nodalarc: read-only"}
+                      </Badge>
+                    </header>
+                    <div className="launcher-session-group-rows">
+                      {group.sessions.map((s) => (
+                        <div key={s.source_id.session_ref} className="launcher-row-shell">
+                          <button
+                            className="launcher-row"
+                            onClick={() => {
+                              if (s.active || deploying || !s.deploy_allowed) return;
+                              onLaunchSession(s);
+                              onDeployStarted();
+                            }}
+                            disabled={s.active || deploying || !s.deploy_allowed}
+                            title={
+                              s.active
+                                ? `${s.source_id.session_ref} is already running`
+                                : s.deploy_allowed
+                                  ? `Deploy ${s.source_id.session_ref}`
+                                  : s.blockers?.[0]?.message ?? "This session cannot be deployed"
+                            }
+                          >
+                            <span className="launcher-row-identity">
+                              <span className="launcher-row-name">{s.name}</span>
+                              <span className="launcher-row-ref">{s.source_id.session_ref}</span>
+                            </span>
+                            <span className="launcher-row-desc">{s.constellation}</span>
+                            <span className="launcher-row-meta">
+                              {s.routing_stack && <Badge>{s.routing_stack}</Badge>}
+                              {s.active && <Badge tone="ok">running</Badge>}
+                              {!s.deploy_allowed && <Badge>unavailable</Badge>}
+                            </span>
+                          </button>
+                          <IconButton
+                            icon="download"
+                            label={`Download ${s.source_id.session_ref} YAML`}
+                            disabled={downloadingFile !== null}
+                            onClick={() => void downloadSessionYaml(s.source_id, s.name)}
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  </section>
                 ))}
                 {downloadError && <div className="wizard-error">{downloadError}</div>}
                 {sessions.length === 0 && (

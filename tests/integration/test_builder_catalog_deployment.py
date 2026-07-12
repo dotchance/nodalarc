@@ -1,10 +1,12 @@
 """Live qualification for Builder-authored ``user:`` catalog deployment.
 
-This test intentionally changes the active NodalArc session.  It is excluded
-from the ordinary integration suite unless ``NODALARC_RUN_BUILDER_E2E=1`` is
-set, and it requires the expected release/build identities of the deployment
-under test.  ``make test-builder-e2e`` supplies those identities from the
-current checkout by default.
+This test intentionally changes the active NodalArc session, then restores the
+shipped source session and deletes only the user catalog objects created by the
+run.  It is excluded from the ordinary integration suite unless
+``NODALARC_RUN_BUILDER_E2E=1`` is set, and it requires the expected
+release/build identities of the deployment under test.  ``make
+test-builder-e2e`` supplies those identities from the current checkout by
+default.
 """
 
 from __future__ import annotations
@@ -140,17 +142,20 @@ class _VSAPIEndpoint:
         response.raise_for_status()
         return str(response.json()["token"])
 
-    def request_json(
+    def _request_value(
         self,
         method: str,
         path: str,
         *,
-        expected_status: int = 200,
+        expected_status: int | tuple[int, ...] = 200,
         payload: Mapping[str, Any] | None = None,
         token: str | None = None,
         retries: int = 1,
-    ) -> dict[str, Any]:
+    ) -> tuple[int, Any]:
         last_error: BaseException | None = None
+        expected_statuses = (
+            (expected_status,) if isinstance(expected_status, int) else expected_status
+        )
         for attempt in range(retries):
             try:
                 self.ensure_ready()
@@ -163,21 +168,79 @@ class _VSAPIEndpoint:
                     json=payload,
                     timeout=30,
                 )
-                if response.status_code != expected_status:
+                if response.status_code not in expected_statuses:
                     raise AssertionError(
-                        f"{method} {path} returned {response.status_code}, expected "
-                        f"{expected_status}: {response.text[:1_000]}"
+                        f"{method} {path} returned {response.status_code}, expected one of "
+                        f"{expected_statuses}: {response.text[:1_000]}"
                     )
-                value = response.json()
-                if not isinstance(value, dict):
-                    raise AssertionError(f"{method} {path} did not return a JSON object")
-                return value
+                return response.status_code, response.json()
             except (requests.RequestException, AssertionError) as error:
                 last_error = error
                 if attempt + 1 == retries:
                     raise
                 time.sleep(2)
         raise AssertionError(f"request failed: {last_error}")
+
+    def request_json_response(
+        self,
+        method: str,
+        path: str,
+        *,
+        expected_status: int | tuple[int, ...] = 200,
+        payload: Mapping[str, Any] | None = None,
+        token: str | None = None,
+        retries: int = 1,
+    ) -> tuple[int, dict[str, Any]]:
+        status, value = self._request_value(
+            method,
+            path,
+            expected_status=expected_status,
+            payload=payload,
+            token=token,
+            retries=retries,
+        )
+        if not isinstance(value, dict):
+            raise AssertionError(f"{method} {path} did not return a JSON object")
+        return status, value
+
+    def request_json(
+        self,
+        method: str,
+        path: str,
+        *,
+        expected_status: int | tuple[int, ...] = 200,
+        payload: Mapping[str, Any] | None = None,
+        token: str | None = None,
+        retries: int = 1,
+    ) -> dict[str, Any]:
+        return self.request_json_response(
+            method,
+            path,
+            expected_status=expected_status,
+            payload=payload,
+            token=token,
+            retries=retries,
+        )[1]
+
+    def request_list(
+        self,
+        method: str,
+        path: str,
+        *,
+        expected_status: int = 200,
+        token: str | None = None,
+        retries: int = 1,
+    ) -> list[dict[str, Any]]:
+        _, value = self._request_value(
+            method,
+            path,
+            expected_status=expected_status,
+            token=token,
+            retries=retries,
+        )
+        if not isinstance(value, list) or any(not isinstance(item, dict) for item in value):
+            raise AssertionError(f"{method} {path} did not return a JSON object list")
+        return value
 
 
 @pytest.fixture(scope="module")
@@ -209,6 +272,138 @@ def _wait_for_transition(
             return last
         time.sleep(3)
     raise AssertionError(f"transition {operation_id} did not finish: {last}")
+
+
+class _BuilderE2ECleanupError(AssertionError):
+    def __init__(self, message: str, evidence: Mapping[str, Any]) -> None:
+        super().__init__(message)
+        self.evidence = dict(evidence)
+
+
+def _restore_source_session(endpoint: _VSAPIEndpoint) -> dict[str, Any]:
+    sessions = endpoint.request_list("GET", "/api/v1/sessions", retries=6)
+    matches = [
+        session
+        for session in sessions
+        if (session.get("source_id") or {}).get("session_ref") == SOURCE_SESSION_REF
+    ]
+    if len(matches) != 1:
+        raise AssertionError(
+            f"expected exactly one session summary for {SOURCE_SESSION_REF}, found {len(matches)}"
+        )
+    source = matches[0]
+    if source.get("active") is True:
+        return {"status": "already_active", "session_ref": SOURCE_SESSION_REF}
+    if source.get("deploy_allowed") is not True:
+        raise AssertionError(
+            f"cleanup source {SOURCE_SESSION_REF} is not deployable: {source.get('blockers')}"
+        )
+    required = ("source_revision", "document_digest", "dependency_digest")
+    missing = [field for field in required if not source.get(field)]
+    if missing:
+        raise AssertionError(
+            f"cleanup source {SOURCE_SESSION_REF} omitted guarded deployment facts: {missing}"
+        )
+    request = {
+        "session_ref": SOURCE_SESSION_REF,
+        "expected_session_revision": source["source_revision"],
+        "expected_document_digest": source["document_digest"],
+        "expected_dependency_digest": source["dependency_digest"],
+    }
+    accepted = endpoint.request_json(
+        "POST",
+        "/api/v1/builder/session/deploy",
+        expected_status=202,
+        payload=request,
+    )
+    transition = _wait_for_transition(endpoint, accepted["operation_id"])
+    if transition.get("state") != "succeeded":
+        raise AssertionError(f"cleanup source deployment did not succeed: {transition}")
+    return {
+        "status": "restored",
+        "session_ref": SOURCE_SESSION_REF,
+        "operation_id": accepted["operation_id"],
+        "transition": transition,
+    }
+
+
+def _delete_user_catalog_document(
+    endpoint: _VSAPIEndpoint,
+    ref: str,
+) -> dict[str, Any]:
+    if not ref.startswith("user:"):
+        raise AssertionError(f"cleanup refused to delete non-user catalog ref {ref}")
+    status, document = endpoint.request_json_response(
+        "POST",
+        "/api/v1/builder/catalog/get",
+        expected_status=(200, 404),
+        payload={"ref": ref},
+    )
+    if status == 404:
+        return {"ref": ref, "status": "not_found"}
+    impact = endpoint.request_json(
+        "POST",
+        "/api/v1/builder/catalog/dependents",
+        payload={"ref": ref},
+    )
+    if impact.get("target_revision") != document.get("revision"):
+        raise AssertionError(f"cleanup impact revision changed for {ref}")
+    if impact.get("delete_allowed") is not True:
+        raise AssertionError(
+            f"cleanup deletion remains blocked for {ref}: {impact.get('transitive_dependents')}"
+        )
+    deleted = endpoint.request_json(
+        "POST",
+        "/api/v1/builder/catalog/delete",
+        payload={
+            "ref": ref,
+            "expected_revision": document["revision"],
+            "impact_acknowledgement": impact["acknowledgement"],
+        },
+    )
+    if deleted.get("deleted_ref") != ref:
+        raise AssertionError(f"cleanup deleted the wrong catalog ref for {ref}: {deleted}")
+    return {
+        "ref": ref,
+        "status": "deleted",
+        "revision": deleted["deleted_revision"],
+        "generation": deleted["generation"],
+    }
+
+
+def _cleanup_builder_e2e_catalog(
+    endpoint: _VSAPIEndpoint,
+    *,
+    session_ref: str,
+    forked_refs: tuple[str, ...],
+) -> dict[str, Any]:
+    refs = (session_ref, *forked_refs)
+    if len(set(refs)) != len(refs):
+        raise AssertionError(f"cleanup refs must be unique: {refs}")
+    evidence: dict[str, Any] = {
+        "status": "running",
+        "source_restore": None,
+        "requested_refs": list(refs),
+        "deletions": [],
+    }
+    try:
+        evidence["source_restore"] = _restore_source_session(endpoint)
+        for ref in refs:
+            evidence["deletions"].append(_delete_user_catalog_document(endpoint, ref))
+    except BaseException as error:
+        evidence.update(
+            {
+                "status": "FAIL",
+                "error_type": type(error).__name__,
+                "error": str(error),
+            }
+        )
+        raise _BuilderE2ECleanupError(
+            f"Builder E2E cleanup failed: {type(error).__name__}: {error}",
+            evidence,
+        ) from error
+    evidence["status"] = "PASS"
+    return evidence
 
 
 class _RemoteConfigMapReader:
@@ -463,6 +658,7 @@ def test_builder_user_component_closure_reaches_verified_runtime(
         },
     }
     error: BaseException | None = None
+    forked_refs: tuple[str, ...] = ()
     try:
         bootstrap = vs_api.request_json("GET", "/api/v1/builder/bootstrap")
         assert bootstrap["capabilities"] == {
@@ -492,7 +688,7 @@ def test_builder_user_component_closure_reaches_verified_runtime(
             },
         )
         assert customized["applied"] is True, customized.get("issues")
-        forked_refs = [entry["target_ref"] for entry in customized["forked_chain"]]
+        forked_refs = tuple(entry["target_ref"] for entry in customized["forked_chain"])
         assert terminal_ref in forked_refs
 
         initial_compiled = vs_api.request_json(
@@ -756,6 +952,29 @@ def test_builder_user_component_closure_reaches_verified_runtime(
         )
         raise
     finally:
+        cleanup_error: BaseException | None = None
+        try:
+            evidence["cleanup"] = _cleanup_builder_e2e_catalog(
+                vs_api,
+                session_ref=session_ref,
+                forked_refs=forked_refs,
+            )
+        except BaseException as caught:
+            cleanup_error = caught
+            cleanup_evidence = getattr(caught, "evidence", None)
+            evidence["cleanup"] = cleanup_evidence or {
+                "status": "FAIL",
+                "error_type": type(caught).__name__,
+                "error": str(caught),
+            }
+            if error is None:
+                evidence.update(
+                    {
+                        "result": "FAIL",
+                        "error_type": type(caught).__name__,
+                        "error": str(caught),
+                    }
+                )
         evidence["finished_at"] = datetime.now(UTC).isoformat()
         evidence_root = Path(
             os.environ.get("NODALARC_E2E_EVIDENCE_DIR", "tests/integration/e2e-evidence")
@@ -768,3 +987,7 @@ def test_builder_user_component_closure_reaches_verified_runtime(
         print(f"Builder Kubernetes evidence: {evidence_path}")
         if error is not None:
             print(f"Builder Kubernetes qualification failed: {type(error).__name__}: {error}")
+        if cleanup_error is not None:
+            print(f"Builder Kubernetes cleanup failed: {cleanup_error}")
+            if error is None:
+                raise cleanup_error

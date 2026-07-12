@@ -119,6 +119,103 @@ def _incomplete_draft(
     )
 
 
+def _boundary_overlay_session() -> dict[str, Any]:
+    segment_sources = {
+        "polar": "nodalarc:constellations/earth/leo/earth-leo-polar-36.yaml",
+        "meo": "nodalarc:constellations/earth/meo/earth-meo-gps-24.yaml",
+        "heo": "nodalarc:constellations/earth/heo/earth-heo-molniya-3.yaml",
+        "geo": "nodalarc:constellations/earth/geo/earth-geo-ring-8.yaml",
+    }
+
+    def crosslink(rule_id: str, left: str, right: str) -> dict[str, Any]:
+        terminal = {"all": [{"role": "crosslink"}, {"medium": "optical"}]}
+        return {
+            "id": rule_id,
+            "topology": {"mode": "nearest_n", "n": 1},
+            "endpoints": [
+                {"select": {"segment": left}, "terminal": terminal},
+                {"select": {"segment": right}, "terminal": terminal},
+            ],
+        }
+
+    def exchange(source: str, target: str, install_via: str | None = None) -> dict[str, Any]:
+        export: dict[str, Any] = {
+            "from": source,
+            "to": target,
+            "prefixes": {"aggregate_of": "originated"},
+            "export_node_loopbacks": True,
+        }
+        if install_via is not None:
+            export["install_via"] = install_via
+        return export
+
+    def boundary(
+        over: str,
+        source: str,
+        target: str,
+        install_via: str | None = None,
+    ) -> dict[str, Any]:
+        return {
+            "over": over,
+            "adapter": "static_ip",
+            "export": [
+                exchange(source, target, install_via),
+                exchange(target, source, install_via),
+            ],
+        }
+
+    return {
+        "session": {"name": "boundary-overlay"},
+        "segments": [
+            {"id": segment_id, "source": source} for segment_id, source in segment_sources.items()
+        ],
+        "link_rules": [
+            crosslink("polar_to_meo", "polar", "meo"),
+            crosslink("meo_to_heo", "meo", "heo"),
+            crosslink("heo_to_geo", "heo", "geo"),
+        ],
+        "addressing": {
+            "loopbacks": [
+                {
+                    "id": "node_loopbacks",
+                    "applies_to": {
+                        "any": [{"segment": segment_id} for segment_id in segment_sources]
+                    },
+                    "ipv4_pool": "10.240.0.0/16",
+                    "prefix_length": 32,
+                    "allocation": "by_node_order",
+                }
+            ]
+        },
+        "routing": {
+            "domains": [
+                {
+                    "id": f"{segment_id}_domain",
+                    "protocol": "static",
+                    "selectors": [{"segment": segment_id}],
+                }
+                for segment_id in segment_sources
+            ],
+            "boundaries": [
+                boundary(
+                    "polar_to_meo",
+                    "polar_domain",
+                    "meo_domain",
+                    "peer_loopback",
+                ),
+                boundary("meo_to_heo", "meo_domain", "heo_domain"),
+                boundary("heo_to_geo", "heo_domain", "geo_domain"),
+            ],
+        },
+        "simulation": {"candidate_limits": {"max_pairs_per_rule": 100, "max_pairs_per_tick": 300}},
+        "time": {
+            "start_time": "2026-07-10T00:00:00Z",
+            "step_seconds": 1,
+            "compression": 1,
+        },
+    }
+
+
 def test_backend_creates_an_incomplete_authoring_visual_draft(
     service: BuilderVisualDraftService,
 ) -> None:
@@ -1925,6 +2022,104 @@ def test_incomplete_authored_content_is_reported_and_never_filtered(
     assert "builder.draft.routing_adapter_required" in codes
     assert result.compile_result.save_verdict.allowed is False
     assert all({"save", "deploy"}.issubset(issue.blocks) for issue in result.assembly_issues)
+
+
+def test_graphical_boundary_edit_preserves_unprojected_and_sibling_boundaries(
+    service: BuilderVisualDraftService,
+) -> None:
+    created = service.create(BuilderVisualDraftCreateRequest(session_name="boundary-overlay"))
+    applied = service.apply_yaml(
+        BuilderVisualDraftApplyYamlRequest(
+            draft=created,
+            expected_draft_revision=created.draft_revision,
+            buffer_generation=1,
+            yaml_text=yaml.safe_dump(_boundary_overlay_session(), sort_keys=False),
+        )
+    )
+
+    assert applied.applied is True
+    workspace = applied.draft.authoring_workspace
+    assert workspace is not None
+    assert [boundary.boundary_id for boundary in workspace.boundaries] == [
+        "boundary-2",
+        "boundary-3",
+    ]
+    edited_boundaries = tuple(
+        boundary.model_copy(update={"export_node_loopbacks": False})
+        if boundary.boundary_id == "boundary-2"
+        else boundary
+        for boundary in workspace.boundaries
+    )
+    revised = service.apply_workspace(
+        BuilderVisualDraftApplyWorkspaceRequest(
+            draft=applied.draft,
+            expected_draft_revision=applied.draft.draft_revision,
+            workspace=workspace.model_copy(update={"boundaries": edited_boundaries}),
+        ),
+        available_node_count=1_000_000,
+        preview_factory=_preview,
+    )
+
+    assert revised.assembly_issues == ()
+    assert revised.compile_result.save_verdict.allowed is True, revised.compile_result.issues
+    boundaries = revised.assembled_draft.state.session["routing"]["boundaries"]
+    assert [(boundary["over"], boundary["adapter"]) for boundary in boundaries] == [
+        ("polar_to_meo", "static_ip"),
+        ("meo_to_heo", "static_ip"),
+        ("heo_to_geo", "static_ip"),
+    ]
+    assert boundaries[0]["export"][0]["install_via"] == "peer_loopback"
+    assert [export["export_node_loopbacks"] for export in boundaries[1]["export"]] == [
+        False,
+        False,
+    ]
+    assert [export["export_node_loopbacks"] for export in boundaries[2]["export"]] == [
+        True,
+        True,
+    ]
+
+
+@pytest.mark.parametrize("over_rule_id", ("meo_to_heo", "polar_to_meo"))
+def test_graphical_boundary_edit_refuses_duplicate_boundary_identity(
+    service: BuilderVisualDraftService,
+    over_rule_id: str,
+) -> None:
+    created = service.create(BuilderVisualDraftCreateRequest(session_name="boundary-overlay"))
+    applied = service.apply_yaml(
+        BuilderVisualDraftApplyYamlRequest(
+            draft=created,
+            expected_draft_revision=created.draft_revision,
+            buffer_generation=1,
+            yaml_text=yaml.safe_dump(_boundary_overlay_session(), sort_keys=False),
+        )
+    )
+
+    assert applied.applied is True
+    workspace = applied.draft.authoring_workspace
+    assert workspace is not None
+    assert applied.draft.applied_session is not None
+    original_boundaries = applied.draft.applied_session["routing"]["boundaries"]
+    edited_boundaries = tuple(
+        boundary.model_copy(update={"over_rule_id": over_rule_id})
+        if boundary.boundary_id == "boundary-3"
+        else boundary
+        for boundary in workspace.boundaries
+    )
+    revised = service.apply_workspace(
+        BuilderVisualDraftApplyWorkspaceRequest(
+            draft=applied.draft,
+            expected_draft_revision=applied.draft.draft_revision,
+            workspace=workspace.model_copy(update={"boundaries": edited_boundaries}),
+        ),
+        available_node_count=1_000_000,
+        preview_factory=_preview,
+    )
+
+    assert [issue.code for issue in revised.assembly_issues] == [
+        "builder.draft.routing_boundary_identity_ambiguous"
+    ]
+    assert revised.compile_result.save_verdict.allowed is False
+    assert revised.assembled_draft.state.session["routing"]["boundaries"] == original_boundaries
 
 
 @pytest.mark.parametrize("session_path", SHIPPED_SESSIONS, ids=lambda path: path.stem)

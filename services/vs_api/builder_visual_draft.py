@@ -1525,6 +1525,21 @@ def _routing_boundary_projection(
     )
 
 
+def _projected_boundary_identity(
+    boundary: BuilderVisualRoutingBoundary,
+) -> tuple[str, str | None]:
+    return boundary.over_rule_id, boundary.adapter
+
+
+def _boundary_document_identity(boundary: JsonDocument) -> tuple[str, str | None]:
+    over = boundary.get("over")
+    adapter = boundary.get("adapter")
+    return (
+        over if isinstance(over, str) else "",
+        adapter if isinstance(adapter, str) else None,
+    )
+
+
 def _workspace_from_applied_session(
     session: SegmentSessionConfig,
     *,
@@ -2349,39 +2364,100 @@ def _overlay_applied_workspace(
         else:
             routing.pop("domains", None)
 
-        baseline_boundary_ids = {boundary.boundary_id for boundary in baseline.boundaries}
-        current_boundary_ids = {boundary.boundary_id for boundary in workspace.boundaries}
-        existing_boundaries = cast(list[JsonDocument], routing.get("boundaries", []))
-        existing_boundaries = [
-            boundary
-            for index, boundary in enumerate(existing_boundaries)
-            if f"boundary-{index + 1}" not in baseline_boundary_ids - current_boundary_ids
-        ]
+        raw_boundaries = cast(list[JsonDocument], routing.get("boundaries", []))
         candidate_boundaries = cast(
             list[JsonDocument],
             candidate_routing.get("boundaries", []),
         )
-        baseline_boundaries = {boundary.boundary_id: boundary for boundary in baseline.boundaries}
-        current_boundaries = {boundary.boundary_id: boundary for boundary in workspace.boundaries}
-        existing_boundaries = [
-            deepcopy(candidate_boundaries[index])
-            if f"boundary-{index + 1}" in baseline_boundaries
-            and f"boundary-{index + 1}" in current_boundaries
-            and current_boundaries[f"boundary-{index + 1}"]
-            != baseline_boundaries[f"boundary-{index + 1}"]
-            and index < len(candidate_boundaries)
-            else boundary
-            for index, boundary in enumerate(existing_boundaries)
-        ]
-        for index, boundary in enumerate(workspace.boundaries):
-            if boundary.boundary_id not in baseline_boundary_ids and index < len(
-                candidate_boundaries
-            ):
-                existing_boundaries.append(deepcopy(candidate_boundaries[index]))
-        if existing_boundaries:
-            routing["boundaries"] = existing_boundaries
+        workspace_boundary_ids = tuple(boundary.boundary_id for boundary in workspace.boundaries)
+        raw_boundary_identities = tuple(
+            _boundary_document_identity(boundary) for boundary in raw_boundaries
+        )
+        baseline_boundary_identities = tuple(
+            _projected_boundary_identity(boundary) for boundary in baseline.boundaries
+        )
+        candidate_boundary_identities = tuple(
+            _boundary_document_identity(boundary) for boundary in candidate_boundaries
+        )
+        projection_issue: BuilderIssue | None = None
+        if len(candidate_boundaries) != len(workspace.boundaries):
+            projection_issue = _issue(
+                "builder.draft.routing_boundary_projection_mismatch",
+                "Graphical boundary assembly did not preserve the workspace boundary count",
+                target_ref=draft.target_ref,
+                draft_path="authoring_workspace.boundaries",
+            )
+        elif (
+            len(workspace_boundary_ids) != len(set(workspace_boundary_ids))
+            or len(raw_boundary_identities) != len(set(raw_boundary_identities))
+            or len(baseline_boundary_identities) != len(set(baseline_boundary_identities))
+            or len(candidate_boundary_identities) != len(set(candidate_boundary_identities))
+        ):
+            projection_issue = _issue(
+                "builder.draft.routing_boundary_identity_ambiguous",
+                "Graphical boundary overlay requires unique boundary IDs and "
+                "unique over/adapter pairs",
+                target_ref=draft.target_ref,
+                draft_path="authoring_workspace.boundaries",
+            )
+        elif not set(baseline_boundary_identities).issubset(raw_boundary_identities):
+            projection_issue = _issue(
+                "builder.draft.routing_boundary_projection_mismatch",
+                "A projected boundary no longer identifies exactly one applied boundary",
+                target_ref=draft.target_ref,
+                draft_path="authoring_workspace.boundaries",
+            )
+
+        if projection_issue is not None:
+            issues = (*issues, projection_issue)
         else:
-            routing.pop("boundaries", None)
+            candidate_by_boundary_id = dict(
+                zip(workspace_boundary_ids, candidate_boundaries, strict=True)
+            )
+            current_boundaries = {
+                boundary.boundary_id: boundary for boundary in workspace.boundaries
+            }
+            baseline_by_identity = {
+                _projected_boundary_identity(boundary): boundary for boundary in baseline.boundaries
+            }
+            handled_boundary_ids: set[str] = set()
+            existing_boundaries: list[JsonDocument] = []
+            for boundary in raw_boundaries:
+                baseline_boundary = baseline_by_identity.get(_boundary_document_identity(boundary))
+                if baseline_boundary is None:
+                    existing_boundaries.append(boundary)
+                    continue
+                current_boundary = current_boundaries.get(baseline_boundary.boundary_id)
+                if current_boundary is None:
+                    continue
+                handled_boundary_ids.add(current_boundary.boundary_id)
+                if current_boundary == baseline_boundary:
+                    existing_boundaries.append(boundary)
+                    continue
+                replacement = candidate_by_boundary_id[current_boundary.boundary_id]
+                existing_boundaries.append(deepcopy(replacement))
+            for boundary in workspace.boundaries:
+                if boundary.boundary_id in handled_boundary_ids:
+                    continue
+                candidate = candidate_by_boundary_id[boundary.boundary_id]
+                existing_boundaries.append(deepcopy(candidate))
+            existing_boundary_identities = tuple(
+                _boundary_document_identity(boundary) for boundary in existing_boundaries
+            )
+            if len(existing_boundary_identities) != len(set(existing_boundary_identities)):
+                issues = (
+                    *issues,
+                    _issue(
+                        "builder.draft.routing_boundary_identity_ambiguous",
+                        "Graphical boundary edits would create duplicate over/adapter pairs",
+                        target_ref=draft.target_ref,
+                        draft_path="authoring_workspace.boundaries",
+                    ),
+                )
+            elif existing_boundaries:
+                routing["boundaries"] = existing_boundaries
+            else:
+                routing.pop("boundaries", None)
     if routing.get("domains"):
         session["routing"] = routing
     else:

@@ -125,6 +125,7 @@ import {
 import type {
   BuilderDeployVerdict,
   BuilderVisualAuthoringFacts,
+  BuilderVisualDraftApplyYamlResult,
   BuilderVisualSchedulingPreset,
   BuilderVisualDraftCommandRequest,
   BuilderVisualDraftCommandResult,
@@ -655,6 +656,23 @@ export function BuilderView({
   });
   const [structuredRecoveryRevision, setStructuredRecoveryRevision] = useState(0);
   const [saveState, setSaveState] = useState<SaveState>({ kind: "idle" });
+  const adoptAppliedYaml = useCallback(
+    (result: BuilderVisualDraftApplyYamlResult) => {
+      if (!result.applied) return result;
+      openWorkspace(workspaceFromVisualDraft(result.draft));
+      setSaveState({ kind: "idle" });
+      return result;
+    },
+    [openWorkspace],
+  );
+  const applySessionYaml = useCallback(
+    async (generation?: number) => adoptAppliedYaml(await applyYamlBuffer(generation)),
+    [adoptAppliedYaml, applyYamlBuffer],
+  );
+  const useCanonicalSessionYaml = useCallback(
+    async () => adoptAppliedYaml(await useCanonicalYaml()),
+    [adoptAppliedYaml, useCanonicalYaml],
+  );
   const currentStructuredRecovery = () =>
     recoveryScope &&
     createStructuredRecovery({
@@ -825,10 +843,10 @@ export function BuilderView({
     if (!visualDraft || !yamlBuffer.dirty || dirtyWindows > 0) return;
     const generation = yamlBuffer.generation;
     const timer = setTimeout(() => {
-      void applyYamlBuffer(generation).catch(() => undefined);
+      void applySessionYaml(generation).catch(() => undefined);
     }, 500);
     return () => clearTimeout(timer);
-  }, [applyYamlBuffer, dirtyWindows, visualDraft, yamlBuffer.dirty, yamlBuffer.generation]);
+  }, [applySessionYaml, dirtyWindows, visualDraft, yamlBuffer.dirty, yamlBuffer.generation]);
 
   // Trust mechanics: Ctrl/Cmd+Z undoes the last workspace mutation unless
   // the user is typing in a field (native input undo wins there). Gated on
@@ -3035,7 +3053,7 @@ export function BuilderView({
                   writer !== null ||
                   (!yamlBuffer.dirty && yamlBuffer.issues.length === 0)
                 }
-                onClick={() => void applyYamlBuffer(yamlBuffer.generation)}
+                onClick={() => void applySessionYaml(yamlBuffer.generation)}
               >
                 {writer === "yaml" ? "Applying…" : "Apply YAML"}
               </Button>
@@ -3043,7 +3061,7 @@ export function BuilderView({
                 <Button
                   variant="primary"
                   disabled={writer !== null || dirtyWindows > 0}
-                  onClick={() => void useCanonicalYaml()}
+                  onClick={() => void useCanonicalSessionYaml()}
                 >
                   Use canonical YAML
                 </Button>

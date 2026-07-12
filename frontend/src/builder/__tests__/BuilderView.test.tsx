@@ -95,6 +95,7 @@ function compileResponse(
   request: Record<string, any>,
   preview: unknown = null,
   forcedBlocker: string | null = null,
+  canonicalYaml: string | null = null,
 ) {
   const visualDraft = request.draft;
   const visualWorkspace = visualDraft.authoring_workspace ?? visualDraft.applied_workspace;
@@ -156,7 +157,8 @@ function compileResponse(
   const compileResult = {
     draft: assembledDraft,
     target_ref: visualDraft.target_ref,
-    canonical_session_yaml: `session:\n  name: ${sessionName}\nsegments: []\n`,
+    canonical_session_yaml:
+      canonicalYaml ?? `session:\n  name: ${sessionName}\nsegments: []\n`,
     canonical_session_json: assembledDraft.state.session,
     dependency_closure: {
       entries: [],
@@ -721,6 +723,9 @@ function stubFetch(options?: {
   compileHandler?: (
     request: Record<string, any>,
   ) => ReturnType<typeof jsonResponse> | Promise<ReturnType<typeof jsonResponse>>;
+  applyYamlHandler?: (
+    request: Record<string, any>,
+  ) => ReturnType<typeof jsonResponse> | Promise<ReturnType<typeof jsonResponse>>;
   saveHandler?: (
     request: Record<string, any>,
   ) => ReturnType<typeof jsonResponse> | Promise<ReturnType<typeof jsonResponse>>;
@@ -803,6 +808,13 @@ function stubFetch(options?: {
       if (options?.compileHandler) return Promise.resolve(options.compileHandler(request));
       return Promise.resolve(compileResponse(request, options?.sessionPreview));
     }
+    if (url.includes("/builder/draft/apply-yaml")) {
+      const request = init?.body ? JSON.parse(init.body) : {};
+      if (options?.applyYamlHandler) {
+        return Promise.resolve(options.applyYamlHandler(request));
+      }
+      return Promise.resolve(jsonResponse({}));
+    }
     if (url.includes("/builder/draft/apply-workspace")) {
       const request = init?.body ? JSON.parse(init.body) : {};
       const revision = Number(request.draft.draft_revision) + 1;
@@ -876,6 +888,10 @@ const workspaceCalls = (fetchMock: ReturnType<typeof vi.fn>) =>
   fetchMock.mock.calls.filter((call: unknown[]) =>
     String(call[0]).includes("/builder/draft/apply-workspace"),
   );
+const yamlCalls = (fetchMock: ReturnType<typeof vi.fn>) =>
+  fetchMock.mock.calls.filter((call: unknown[]) =>
+    String(call[0]).includes("/builder/draft/apply-yaml"),
+  );
 const retargetCalls = (fetchMock: ReturnType<typeof vi.fn>) =>
   fetchMock.mock.calls.filter((call: unknown[]) =>
     String(call[0]).includes("/builder/draft/retarget"),
@@ -907,6 +923,172 @@ describe("BuilderView — resolve-loop and world honesty", () => {
     stubFetch();
     render(<BuilderView {...PROPS} />);
     expect(await screen.findByTestId("builder-start")).toBeTruthy();
+  });
+
+  it("adopts byte-canonical YAML before workspace autosync can repost stale state", async () => {
+    const canonicalYaml = [
+      "session:",
+      "  name: yaml-sync",
+      "segments: []",
+      "simulation:",
+      "  candidate_limits:",
+      "    max_pairs_per_rule: 2000",
+      "    max_pairs_per_tick: 10000",
+      "time:",
+      "  start_time: '2026-01-01T00:00:00Z'",
+      "  step_seconds: 1",
+      "  compression: 7",
+      "",
+    ].join("\n");
+    const fetchMock = stubFetch({
+      newDraft: structuredVisualDraft("yaml-sync"),
+      compileHandler: (request) =>
+        compileResponse(
+          request,
+          null,
+          null,
+          request.draft.draft_revision > 0 ? canonicalYaml : null,
+        ),
+      applyYamlHandler: (request) => {
+        const revision = Number(request.draft.draft_revision) + 1;
+        const workspace = {
+          ...request.draft.authoring_workspace,
+          compression: 7,
+          projection_revision: revision,
+        };
+        return jsonResponse({
+          draft: {
+            ...request.draft,
+            draft_revision: revision,
+            projection_status: "applied",
+            session_yaml: request.yaml_text,
+            authoring_workspace: workspace,
+            applied_workspace: workspace,
+            applied_revision: revision,
+            applied_session: {
+              session: { name: "yaml-sync" },
+              segments: [],
+              time: { compression: 7 },
+            },
+          },
+          buffer_generation: request.buffer_generation,
+          yaml_text: request.yaml_text,
+          applied: true,
+          canonicalization_required: false,
+          issues: [],
+        });
+      },
+    });
+    render(<BuilderView {...PROPS} />);
+    fireEvent.click(
+      within(await screen.findByTestId("builder-start")).getByRole("button", {
+        name: /New session/i,
+      }),
+    );
+    await waitFor(() => expect(compileCalls(fetchMock).length).toBeGreaterThan(0));
+
+    fireEvent.change(screen.getByLabelText("Session YAML"), {
+      target: { value: canonicalYaml },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Apply YAML" }));
+
+    await waitFor(() => expect(yamlCalls(fetchMock)).toHaveLength(1));
+    expect(await screen.findByText("step 1s · ×7")).toBeTruthy();
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 700));
+    });
+    expect(workspaceCalls(fetchMock)).toHaveLength(0);
+    expect(screen.getByText("step 1s · ×7")).toBeTruthy();
+  });
+
+  it("adopts formatted YAML and retains its projection through Use canonical YAML", async () => {
+    const formattedYaml = [
+      "# hand-formatted session",
+      "session:",
+      "  name: yaml-canonical",
+      "segments: []",
+      "simulation:",
+      "  candidate_limits: {max_pairs_per_rule: 2000, max_pairs_per_tick: 10000}",
+      "time: {start_time: '2026-01-01T00:00:00Z', step_seconds: 1, compression: 9}",
+      "",
+    ].join("\n");
+    const canonicalYaml = [
+      "session:",
+      "  name: yaml-canonical",
+      "segments: []",
+      "simulation:",
+      "  candidate_limits:",
+      "    max_pairs_per_rule: 2000",
+      "    max_pairs_per_tick: 10000",
+      "time:",
+      "  start_time: '2026-01-01T00:00:00Z'",
+      "  step_seconds: 1",
+      "  compression: 9",
+      "",
+    ].join("\n");
+    const fetchMock = stubFetch({
+      newDraft: structuredVisualDraft("yaml-canonical"),
+      compileHandler: (request) =>
+        compileResponse(
+          request,
+          null,
+          null,
+          request.draft.draft_revision > 0 ? canonicalYaml : null,
+        ),
+      applyYamlHandler: (request) => {
+        const revision = Number(request.draft.draft_revision) + 1;
+        const workspace = {
+          ...request.draft.authoring_workspace,
+          compression: 9,
+          projection_revision: revision,
+        };
+        return jsonResponse({
+          draft: {
+            ...request.draft,
+            draft_revision: revision,
+            projection_status: "applied",
+            session_yaml: request.yaml_text,
+            authoring_workspace: workspace,
+            applied_workspace: workspace,
+            applied_revision: revision,
+            applied_session: {
+              session: { name: "yaml-canonical" },
+              segments: [],
+              time: { compression: 9 },
+            },
+          },
+          buffer_generation: request.buffer_generation,
+          yaml_text: request.yaml_text,
+          applied: true,
+          canonicalization_required: request.yaml_text !== canonicalYaml,
+          issues: [],
+        });
+      },
+    });
+    render(<BuilderView {...PROPS} />);
+    fireEvent.click(
+      within(await screen.findByTestId("builder-start")).getByRole("button", {
+        name: /New session/i,
+      }),
+    );
+    await waitFor(() => expect(compileCalls(fetchMock).length).toBeGreaterThan(0));
+
+    fireEvent.change(screen.getByLabelText("Session YAML"), {
+      target: { value: formattedYaml },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Apply YAML" }));
+
+    expect(await screen.findByText("step 1s · ×9")).toBeTruthy();
+    fireEvent.click(await screen.findByRole("button", { name: "Use canonical YAML" }));
+    await waitFor(() => expect(yamlCalls(fetchMock)).toHaveLength(2));
+    expect((screen.getByLabelText("Session YAML") as HTMLTextAreaElement).value).toBe(
+      canonicalYaml,
+    );
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 700));
+    });
+    expect(workspaceCalls(fetchMock)).toHaveLength(0);
+    expect(screen.getByText("step 1s · ×9")).toBeTruthy();
   });
 
   it("keeps the saved target while a typed rename is reverted", async () => {

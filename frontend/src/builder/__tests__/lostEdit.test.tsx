@@ -4,14 +4,14 @@
  *  backend commands or read the latest local draft through functional updates.
  *
  *  The editor write contracts are functional-only — `onUpdate((prev) => next)` /
- *  `onChange((prev) => next)`. These pins TRIGGER each async writer, CAPTURE the
- *  functional updater it emits, then APPLY that updater to a state carrying a
+ *  `onChange((prev) => next)`. These tests invoke each async writer, capture the
+ *  functional updater it emits, then apply that updater to a state carrying a
  *  concurrent edit. A prev-based updater preserves the concurrent edit; a
  *  stale-closure writer (or a wrong `() => …` replacement) would drop it. This
  *  is deterministic — it proves the contract without racing real timers.
  *
  *  Ground/Site model changes are command delegation only. Node/Terminal edits
- *  remain local React state and retain the lost-edit functional-update pins.
+ *  remain local React state and retain the lost-edit functional-update tests.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";

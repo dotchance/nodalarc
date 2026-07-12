@@ -1,4 +1,4 @@
-"""Restart protection pins for ordinary catalog upload groups."""
+"""Restart protection tests for ordinary catalog upload groups."""
 
 from __future__ import annotations
 

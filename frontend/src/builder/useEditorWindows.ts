@@ -5,8 +5,8 @@
  *  Extracted from BuilderView: the diagram workspace is a set of floating,
  *  per-object editor windows, each editing a copy (buffer) of its object that
  *  the session only adopts on Apply. This hook owns the windows list, the
- *  buffer map, and the reconciliation that keeps open windows honest when
- *  the applied workspace moves underneath them. The pure buffer maths
+ *  buffer map, and reconciliation when the applied workspace changes beneath
+ *  an open window. The pure buffer maths
  *  (overlayBuffers/staleBufferKeys/workspaceForSave) stay in useWorkspace; this
  *  hook is the stateful shell that drives them.
  */
@@ -333,9 +333,8 @@ export function useEditorWindows({
       return changed ? next : prev;
     });
   }, [workspace, windows, buffers]);
-  // The keys of every DIRTY buffer whose applied object moved underneath it —
-  // THE single owner (per-window notice, the save-dialog block, and the stale
-  // count all read this one memo, so they can never disagree).
+  // Every dirty buffer whose applied object changed. Per-window notices, the
+  // save-dialog block, and the stale count all read this memo.
   const staleKeys = useMemo(
     () => (workspace ? new Set(staleBufferKeys(workspace, buffers)) : new Set<string>()),
     [workspace, buffers],

@@ -122,9 +122,8 @@ export function overlayBuffers(
 
 /** The applied object a buffer key names, or null when it no longer exists (or
  *  for the session kind, whose applied view is the field-pick the buffer holds,
- *  not a single object). THE resolver — the reconciliation pass, staleness, and
- *  "Load current values" all key off this one function; a second key→object
- *  resolver would be a place for them to drift. */
+ *  not a single object). Reconciliation, staleness, and "Load current values"
+ *  all use this function. */
 export function appliedObjectForKey(workspace: Workspace, key: string): unknown {
   const sep = key.indexOf(":");
   const kind = sep === -1 ? key : key.slice(0, sep);
@@ -179,8 +178,8 @@ export function bufferAppliedChanged(
  *  a stale working copy over an object the user reverted. A buffer whose object
  *  was DELETED is deliberately NOT "stale": the reconciliation pass prunes its
  *  window and buffer outright, so there is no window left to carry a notice and
- *  nothing to apply into. Keeping the two owners disjoint — prune for gone,
- *  stale for moved-and-present — is what lets them never disagree. */
+ *  nothing to apply into. Deleted objects are pruned separately from objects
+ *  that changed while their editor remained open. */
 export function staleBufferKeys(workspace: Workspace, buffers: BufferMap): string[] {
   const stale: string[] = [];
   for (const [key, buf] of Object.entries(buffers)) {
@@ -220,8 +219,8 @@ const HISTORY_LIMIT = 100;
 
 export function useWorkspace() {
   const [workspace, setWorkspaceState] = useState<Workspace | null>(null);
-  // The single mutation path: sync workspaceRef SYNCHRONOUSLY so a
-  // live-workspace read (stash) never lags the commit — for BOTH the
+  // The mutation path updates workspaceRef synchronously so a live-workspace
+  // read never lags the commit for either the
   // value and updater forms — then set React state. Undo history observes the
   // state change; structured recovery is owned by structuredDraftRecovery.ts.
   const workspaceRef = useRef<Workspace | null>(null);

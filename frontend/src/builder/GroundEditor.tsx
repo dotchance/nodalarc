@@ -2,7 +2,7 @@
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
 /** Ground segment editor — a segment is a combination of defined sites.
  *
- *  A site is a first-class primitive (nodes, terminals, networks at a
+ *  A site contains nodes, terminals, and networks at a
  *  location); members here are either references to defined sites — full
  *  fidelity, their nodes travel with them — or authored site drafts edited
  *  in place with the SiteEditor. Bulk paste mints full sites using the

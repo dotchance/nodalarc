@@ -111,7 +111,7 @@ class CatalogFamilyMetadata(_CatalogApplicationModel):
 
 
 class BuilderCatalogCapabilities(_CatalogApplicationModel):
-    """Factual backend capabilities required by the repaired Builder."""
+    """Backend capabilities available to the Builder."""
 
     user_catalog_write: Literal[True] = True
     deploy_yaml_closure: Literal[True] = True

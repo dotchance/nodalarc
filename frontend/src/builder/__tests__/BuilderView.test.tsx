@@ -1,10 +1,7 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
-/** BuilderView surface contract: the on-screen world is the resolver's
- *  expansion of the current draft, never a stale frame or a false "resolves".
- *  These pins RENDER the view (Scene mocked to a null render, fetch stubbed,
- *  localStorage isolated) and assert the emitted DOM — the data-layer hook
- *  test alone cannot see the UI state fixes.
+/** BuilderView display tests render the view with Scene mocked, fetch stubbed,
+ *  and localStorage isolated. They verify DOM state that hook tests cannot see.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, render, screen, fireEvent, waitFor, cleanup, within } from "@testing-library/react";
@@ -918,7 +915,7 @@ afterEach(() => {
   localStorage.clear();
 });
 
-describe("BuilderView — resolve-loop and world honesty", () => {
+describe("BuilderView resolve and world synchronization", () => {
   it("renders the start card with no session loaded", async () => {
     stubFetch();
     render(<BuilderView {...PROPS} />);
@@ -2089,7 +2086,7 @@ describe("BuilderView — Library Use places and reveals", () => {
     await within(outline).findByText("leo");
     await waitFor(() => {
       const flashed = outline.querySelectorAll(".builder-outline-row--revealed");
-      expect(flashed).toHaveLength(1); // exactly one reveal — not a broadcast (pin 2)
+      expect(flashed).toHaveLength(1);
       expect(flashed[0]?.textContent).toContain("leo");
     });
   });

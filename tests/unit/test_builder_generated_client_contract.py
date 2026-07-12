@@ -1,4 +1,4 @@
-"""Pins for the generated public Builder and transition client contract."""
+"""Tests for the generated public Builder and transition client contract."""
 
 from pathlib import Path
 

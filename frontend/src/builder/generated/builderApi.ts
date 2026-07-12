@@ -1019,7 +1019,7 @@ export interface CatalogFamilyMetadata {
   readonly suggested_object_id?: string | null;
 }
 
-/** Factual backend capabilities required by the repaired Builder. */
+/** Backend capabilities available to the Builder. */
 export interface BuilderCatalogCapabilities {
   readonly user_catalog_write?: true;
   readonly deploy_yaml_closure?: true;
@@ -1665,7 +1665,7 @@ export interface BuilderPreviewPair {
   readonly node_b: string;
 }
 
-/** How many TESTED pairs one reject reason accounts for. ``reason`` is the runtime's reject_reason verbatim (or ``no_geometry``); counts sum over ``pairs_tested`` — never an untested remainder. */
+/** How many tested pairs one reject reason accounts for. ``reason`` is the runtime's reject_reason verbatim (or ``no_geometry``); counts sum over ``pairs_tested`` — never an untested remainder. */
 export interface BuilderPreviewReasonCount {
   readonly reason: "los_blocked" | "range_exceeded" | "elevation_below_min" | "field_of_regard" | "terminal_type_mismatch" | "no_geometry";
   readonly count: number;
@@ -1679,7 +1679,7 @@ export interface BuilderRuleAllocation {
   readonly per_node: ReadonlyArray<BuilderNodeInterfaceFacts>;
 }
 
-/** The server's frozen-epoch visibility verdict for one link rule. NodalArc computes preview geometry through the same OME visibility composites the runtime uses; the builder renders these facts and never runs a second physics engine. ``preview_scope`` says whether geometry ran and, if not, why (``inter_body_pending``/``terrestrial_pending``/``disabled`` are typed walls). Only ``computed`` carries reason counts and drawn pairs. The preview is BOUNDED, not a simulation. ``pairs_total`` is the candidate universe size (a closed-form count, never a materialized pair set); ``pairs_tested`` is the deterministic subset geometry actually ran on (``min(pairs_total, budget)``, first pairs in authored/node-id order — never distance-ranked); ``pairs_drawn`` is how many tested pairs passed (the first such, capped to the draw cap). ``capped`` is true when the preview is partial on either axis (``pairs_tested < pairs_total`` or more passed than were drawn). Reason counts and drawn pairs describe the TESTED subset only. */
+/** The server's frozen-epoch visibility verdict for one link rule. NodalArc computes preview geometry through the same OME visibility composites the runtime uses; the builder renders these facts and never runs a second physics engine. ``preview_scope`` says whether geometry ran and, if not, why. Only ``computed`` carries reason counts and drawn pairs. The preview is bounded, not a simulation. ``pairs_total`` is the candidate universe size (a closed-form count, never a materialized pair set); ``pairs_tested`` is the deterministic subset geometry actually ran on (``min(pairs_total, budget)``, first pairs in authored/node-id order — never distance-ranked); ``pairs_drawn`` is how many tested pairs passed (the first such, capped to the draw cap). ``capped`` is true when the preview is partial on either axis (``pairs_tested < pairs_total`` or more passed than were drawn). Reason counts and drawn pairs describe the tested subset only. */
 export interface BuilderRulePreview {
   readonly rule_id: string;
   readonly kind: string;

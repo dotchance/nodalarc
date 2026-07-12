@@ -137,13 +137,9 @@ import type {
 import type { BuilderWorld } from "./builderTypes";
 
 interface BuilderViewProps {
-  /** True only while the builder is the shown view. The builder stays mounted
-   *  when hidden so drafts, windows, and buffers survive a Live<->Builder
-   *  toggle; `active` gates every operator surface that ACTS (the Scene
-   *  subtree per the singleton law, global key listeners, and reveal-open
-   *  effects) so a hidden builder never mounts a second Scene or
-   *  intercepts live-mode input. Passive state — autosave, backup, workspace
-   *  mutations — keeps running while hidden. */
+  /** True while the Builder is visible. The component stays mounted so drafts,
+   *  windows, and buffers survive view changes. Scene mounting, global key
+   *  listeners, and reveal effects are active only while this flag is true. */
   active: boolean;
   /** Shared display state — the toolbar operates on the builder scene exactly
    *  as it does on the live scene (same Scene component, same toggles). */
@@ -596,8 +592,8 @@ export function BuilderView({
     openEditor({ kind: "catalog" });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active, libraryReveal]);
-  // ref floor: a placed reference has no editor, so its Use scrolls its
-  // outline row into view and flashes it. A SEPARATE consume-once channel from
+  // A placed reference has no editor, so its Use scrolls its outline row into
+  // view and flashes it. A separate consume-once channel from
   // the Library reveal — a placement shows where it landed in the session
   // anatomy, it never opens the Library.
   const outlineReveal = useOutlineReveal();
@@ -786,7 +782,7 @@ export function BuilderView({
   /** Inline wall text for one open editor window (null = not this window's). */
   const wallFor = (target: EditorTarget): string | null =>
     wall && targetKey(target) === wall.key ? (resolveError?.error ?? null) : null;
-  // THE edit→compile loop — the only caller. Submits applied state plus
+  // The edit-to-compile loop submits applied state plus
   // dirty working copies so the canvas moves while you edit; Apply/Cancel
   // land here too (buffers change) and re-resolve the applied truth. The
   // library revision is a dependency on purpose: a user-catalog mutation
@@ -848,7 +844,7 @@ export function BuilderView({
     return () => clearTimeout(timer);
   }, [applySessionYaml, dirtyWindows, visualDraft, yamlBuffer.dirty, yamlBuffer.generation]);
 
-  // Trust mechanics: Ctrl/Cmd+Z undoes the last workspace mutation unless
+  // Ctrl/Cmd+Z undoes the last workspace mutation unless
   // the user is typing in a field (native input undo wins there). Gated on
   // `active`: a hidden-but-mounted builder must never intercept a Ctrl+Z
   // the live view's user intends for something else.
@@ -1238,8 +1234,8 @@ export function BuilderView({
     const label = `using ${entry.display_name ?? entryId}`;
     const name = entry.display_name ?? entryId;
     if (entry.family === "constellations" || entry.family === "space-node-sets") {
-      // REF family: no editor exists for a placed reference (L6) — reveal its
-      // outline row so the placement is visible (ref floor).
+      // No editor exists for a placed reference, so reveal its outline row
+      // after placement.
       ensureThenCreate(() => {
         clearReadOnlyWorldBeforeCreate();
         void applyWorkspaceCommand({
@@ -2955,7 +2951,7 @@ export function BuilderView({
             </Button>
             <div className="builder-zone-empty">
               The toolbar above holds the session verbs — New, Open, Save, Deploy,
-              Restore, Library. Every step round-trips through the real resolver;
+              Restore, Library. Every step round-trips through the shared resolver;
               the YAML pane shows the session document live.
             </div>
           </div>

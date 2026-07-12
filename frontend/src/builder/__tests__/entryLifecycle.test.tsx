@@ -19,7 +19,7 @@ function workspaceWithConstellations(name: string, count: number) {
   return workspace;
 }
 
-describe("— undo trust mechanics", () => {
+describe("workspace undo history", () => {
   it("undo restores the workspace to its state before the last mutation", () => {
     const { result } = renderHook(() => useWorkspace());
     act(() => result.current.openWorkspace(workspaceWithConstellations("undo-restore", 0)));

@@ -135,8 +135,8 @@ function _groundNodeState(node: BuilderWorldNode): NodeState {
   };
 }
 
-/** a ground site's identity is its namespace — one site's several nodes
- *  share it. The honest site count is the number of DISTINCT ground-station
+/** A ground site's identity is its namespace, which all of the site's nodes
+ *  share. The resolved site count is the number of distinct ground-station
  *  namespaces in the resolved world, not the raw ground-node count. */
 export function distinctGroundStationSites(nodes: ReadonlyArray<BuilderWorldNode>): number {
   return new Set(

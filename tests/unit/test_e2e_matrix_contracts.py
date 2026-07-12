@@ -2,7 +2,7 @@
 # Licensed under the Apache License, Version 2.0. See LICENSE file.
 """Contracts for the e2e matrix acceptance helpers.
 
-These tests keep the cluster-run script honest in the normal unit suite: continuous
+These tests exercise the cluster-run script in the normal unit suite: continuous
 sessions require routed proof, intermittent sessions preserve valid unreachable
 outcomes, and the MBB lane records packet loss as routing behavior.
 """

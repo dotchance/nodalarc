@@ -131,11 +131,8 @@ export async function refreshCatalogFamily(family: string): Promise<CatalogDocum
   return store.state.entries;
 }
 
-// --- Save-reveal: a save is never a dead end. -------------------------
-// Every save-to-library announces its result here; the Library surface
-// subscribes and lands on the asset (family tab, visible filter, highlight),
-// and the view opens the Library window. One mechanism at the one choke
-// point every family's save flows through — no per-editor wiring to forget.
+// Save-to-library publishes the saved entry here so the Library can select and
+// highlight it without separate wiring in each editor.
 
 interface LibraryReveal {
   entry: CatalogDocumentSummary;
@@ -197,9 +194,7 @@ let _outlineRevealState: OutlineReveal | null = null;
 const _outlineRevealListeners = new Set<() => void>();
 let _outlineRevealNonce = 0;
 
-/** Reveal a just-placed segment's row in the outline (ref floor: a placed
- *  reference has no editor, so its Use scrolls its row into view and flashes
- *  it). */
+/** Reveal a just-placed reference in the outline because it has no editor. */
 export function requestOutlineReveal(segmentId: string): void {
   _outlineRevealNonce += 1;
   _outlineRevealState = { segmentId, nonce: _outlineRevealNonce };

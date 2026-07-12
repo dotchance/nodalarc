@@ -2,7 +2,7 @@
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
 /** builderSnapshotFromWorld — the resolved-world → Scene-input derivation.
  *
- *  Pins: satellite positions come from epoch propagation with the shared
+ *  Satellite positions come from epoch propagation with the shared
  *  client math; ground positions come from the resolver surface_position
  *  (including nodes the ephemeris omits — the world is the node universe);
  *  the snapshot is frozen at the session epoch.
@@ -221,7 +221,7 @@ describe("builderSnapshotFromWorld", () => {
     expect(snapshot.links).toEqual([]);
   });
 
-  it("fails loudly on a satellite without an ephemeris entry", () => {
+  it("rejects a satellite without an ephemeris entry", () => {
     const broken: BuilderWorld = {
       ...WORLD,
       nodes: WORLD.nodes.map((node) =>

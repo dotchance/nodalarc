@@ -358,7 +358,7 @@ describe("session Builder recovery v2", () => {
     });
   });
 
-  it("preserves dangling topology for honest graphical warnings", () => {
+  it("preserves dangling topology for graphical warnings", () => {
     const recovery = recoveryFixture();
     recovery.workspace.boundaries = [
       {

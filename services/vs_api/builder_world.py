@@ -212,13 +212,13 @@ def segment_display_names(raw: dict[str, Any], *, roots: CatalogRoots) -> dict[s
 # --- Rule preview: server-computed frozen-epoch visibility -------------
 #
 # The builder renders these facts; it never runs a second physics engine. Each
-# rule's geometry is computed through the SAME OME visibility composites the
+# rule's geometry is computed through the same OME visibility composites the
 # runtime uses, at the resolved epoch (dt=0), with the motion-only gates
 # (tracking rate, polar seam) disabled — a preview is one frozen instant, not a
-# simulation. The universe is bounded and the report is honest about the bound.
+# simulation. The report includes the configured pair limit.
 
 #: Deterministic per-rule cap on how many pairs geometry runs over. A preview
-#: PREVIEWS; OME simulates. Beyond this the preview is an honest partial.
+#: Pairs beyond this limit are omitted from the preview.
 _PREVIEW_TESTED_BUDGET = 4000
 #: Cap on drawn pairs shipped per rule — a dense-enough sample to read the
 #: pattern, never the runtime-scale full set.
@@ -236,7 +236,7 @@ def _preview_body_of(node: ResolvedNode) -> str | None:
 
 
 def _preview_scope(rule: ResolvedLinkRule, node_by_id: dict[str, ResolvedNode]) -> str:
-    """Whether a rule's geometry is computed, and if not, the typed wall —
+    """Whether a rule's geometry is computed, and if not, the preview status —
     decided from body/kind/enabled facts alone, no OME. A disabled rule ships no
     geometry; a rule with no satellite endpoint is static-terrestrial (the
     runtime does not visibility-compute it); a rule whose endpoint members
@@ -485,10 +485,10 @@ def _computed_preview(
     for index, (na, nb, candidate) in enumerate(pair_iter):
         if index >= tested:
             break
-        # The verdict is computed on the pair's OWN node order — for a fixed
+        # The result uses the pair's node order. For a fixed
         # pair, node_a carries interface_a and node_b carries interface_b, so
         # each node is judged against its own allocated terminal. Orientation is
-        # a DISPLAY concern only (which endpoint each node belongs to); swapping
+        # a display concern only (which endpoint each node belongs to); swapping
         # nodes for the drawable must never re-pair a node with the other's
         # interface.
         display_a, display_b = na, nb

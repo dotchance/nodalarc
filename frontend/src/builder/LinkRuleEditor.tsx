@@ -75,8 +75,8 @@ function EndpointCard({
   const placed = placedSegments(workspace);
   const selfCap = capabilities.get(endpoint.segment_id);
   const otherCap = capabilities.get(other.segment_id);
-  // honesty: combinations neither side can form render disabled with
-  // the reason — visible, never hidden. No capabilities yet (unresolved
+  // Combinations neither side can form remain visible and disabled with
+  // the reason. No capabilities yet (unresolved
   // world) means nothing is disabled.
   const known = capabilities.size > 0;
   const roleDisabled = (role: MountRole) =>

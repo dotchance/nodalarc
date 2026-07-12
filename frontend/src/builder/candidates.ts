@@ -1,17 +1,10 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
-/** Candidate-pair preview for resolved link rules — a RENDERER of the server's
- *  frozen-epoch visibility facts, never a second physics engine.
+/** Candidate-pair preview for resolved link rules.
  *
- *  NodalArc computes each rule's preview geometry server-side (BuilderRulePreview
- *  on `world.rule_previews`) through the same OME visibility composites the
- *  runtime uses. This module ADAPTS those facts into the canvas's candidate
- *  lines and the editor's rule notes; it decides nothing about geometry. A rule
- *  renders the server's drawn pairs; a rule the server could not compute
- *  (inter-body span, terrestrial run, disabled) carries the server's typed scope
- *  note instead of fake lines; every reject reason and every cap is the server's,
- *  reported verbatim. The one thing left client-side is phrasing — the machine
- *  reason token stays on the wire, the human copy is display only.
+ *  The server computes preview geometry through the OME visibility composites.
+ *  This module maps those results to canvas lines and editor notes. Machine
+ *  reason tokens remain unchanged; only their display text is defined here.
  */
 
 import type { BuilderRulePreview, BuilderWorld } from "./builderTypes";
@@ -52,15 +45,15 @@ const REASON_COPY: Record<string, string> = {
   no_geometry: "with no computable geometry",
 };
 
-/** The typed scope walls, rendered verbatim from the server's preview_scope. */
+/** Notes for preview scopes the server did not compute. */
 const SCOPE_NOTE: Record<string, string> = {
   inter_body_pending: "inter-body span — preview pending, runtime computes contacts",
   terrestrial_pending: "terrestrial run — surface routing preview pending",
   disabled: "rule disabled",
 };
 
-/** The rule note, composed from the server's verdict (the decided mapping):
- *  (a) a non-computed scope is a typed wall superseding everything; (b) a fixed
+/** The rule note, composed from the server's result:
+ *  (a) a non-computed scope supersedes other notes; (b) a fixed
  *  rule the allocator granted nothing states that (the allocator's word, beside
  *  the editor's own allocation facts, not a geometry claim); (c) each reject
  *  reason with its count — carrying the tested/total denominator whenever the

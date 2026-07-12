@@ -11,8 +11,8 @@ import type { ViewMode, ColorMode } from "../types";
  *  `suspendedInBuilder` is the suspend/keep partition: a live-session key is
  *  a no-op in builder mode (the builder has no live session to drive); a shared
  *  display/color/label/camera/help key stays live so the builder consumes the
- *  same display state. This table is the SINGLE source of truth — the help
- *  overlay reads it and a test asserts it equals the handler's actual gate. */
+ *  same display state. The help overlay reads this table, and a test verifies
+ *  that it matches the handler's gate. */
 export const KEYBOARD_SHORTCUTS: readonly {
   keys: string;
   action: string;
@@ -47,7 +47,7 @@ export const KEYBOARD_SHORTCUTS: readonly {
 
 /** The keys whose action is a full no-op in builder mode. e.key values (both
  *  letter cases); Escape is handled specially in the switch (its onCloseCatalog
- *  arm is kept but unreachable in builder). MUST match the partition above. */
+ *  arm is kept but unreachable in builder). This must match the partition above. */
 const SUSPENDED_IN_BUILDER: ReadonlySet<string> = new Set([
   " ",
   "Tab",

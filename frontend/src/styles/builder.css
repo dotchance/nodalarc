@@ -1,19 +1,11 @@
 /* Copyright 2024-2026 .chance (dotchance)
    Licensed under the Apache License, Version 2.0. See LICENSE file. */
-/* Session builder — authoring shell. Zones: outline (left) | world canvas
-   (center) | session YAML pane (right) | completeness rail + status bar
-   (bottom, the single home for counts/validation/gates). Objects are edited
-   in floating windows over the canvas — there is no docked inspector. */
+/* Session Builder layout: outline, world canvas, YAML pane, status rail, and
+   floating editor windows. */
 
 .builder-shell {
   display: grid;
-  /* Left gutter clears the app toolbar (absolute at --space-6, 36px buttons
-     + panel padding) so the outline zone is never occluded. The width is the
-     app toolbar's own geometry — its 36px buttons are not a token, so it stays
-     a documented literal rather than an invented gutter token. It collapses
-     below the tablet tier, where the toolbar geometry changes and the gutter
-     would otherwise be dead space (; the palette overlap it exposes is
-     L4's, not this fix). */
+  /* Clear the absolute app toolbar; collapse this gutter below the tablet tier. */
   padding-left: 88px;
   /* Authoring-mode identity: the amber bar says "you are building, not
      watching the live session" from any zone of the screen. */
@@ -35,8 +27,7 @@
 }
 
 /* Below the tablet tier the app toolbar geometry changes; the left gutter is
-   then dead space, so it collapses. The palette-overlaps-chrome behavior
-   the collapse exposes is a responsive-design decision owned by L4. */
+   then dead space, so it collapses. */
 @media (max-width: 1279px) {
   .builder-shell {
     padding-left: 0;
@@ -836,8 +827,7 @@ button.builder-card-head:hover .builder-card-title {
   font-size: var(--font-size-sm);
 }
 
-/* Terminal picker options carry the capability line — range, rate, slew,
-   and track capacity are planning-critical, not fine print. */
+/* Terminal picker options include range, rate, slew, and track capacity. */
 .builder-terminal-option {
   flex-direction: column;
   align-items: stretch;
@@ -1045,9 +1035,7 @@ button.builder-guide-row:hover {
   }
 }
 
-/* A just-placed reference announces where it landed: its outline row flashes so
-   a Use gesture visibly went somewhere in the session anatomy (ref floor).
-   Reuses the save-flash keyframe — same "it went somewhere" visual language. */
+/* Flash a just-placed reference in the outline. */
 .builder-outline-row--revealed {
   animation: builder-saved-flash 2.4s ease-out;
   border-radius: var(--radius-xs);

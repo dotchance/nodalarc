@@ -124,9 +124,9 @@ class BuilderRuleAllocation(BaseModel):
 
 
 #: How a rule's preview geometry was resolved. Only ``computed`` carries reason
-#: counts and drawn pairs; the other three are typed walls the client renders
-#: verbatim instead of deciding client-side. A module-level alias so the
-#: vocabulary can be pinned against the TS twin (``get_args`` reaches it).
+#: counts and drawn pairs; the client renders the other three statuses without
+#: deciding them client-side. A module-level alias lets tests compare the
+#: vocabulary with the TypeScript union through ``get_args``.
 PreviewScope = Literal[
     "computed",
     "inter_body_pending",
@@ -134,7 +134,7 @@ PreviewScope = Literal[
     "disabled",
 ]
 
-#: The reasons a tested preview pair drew no line, keyed VERBATIM on the
+#: The reasons a tested preview pair drew no line, keyed directly on the
 #: runtime's own visibility reject_reason — never a renamed dialect — plus the
 #: one server-only bucket ``no_geometry`` (an allocated pair with no computable
 #: geometry at the frozen epoch, the old client silent skip). The
@@ -166,7 +166,7 @@ class BuilderPreviewPair(BaseModel):
 
 
 class BuilderPreviewReasonCount(BaseModel):
-    """How many TESTED pairs one reject reason accounts for. ``reason`` is the
+    """How many tested pairs one reject reason accounts for. ``reason`` is the
     runtime's reject_reason verbatim (or ``no_geometry``); counts sum over
     ``pairs_tested`` — never an untested remainder."""
 
@@ -182,17 +182,16 @@ class BuilderRulePreview(BaseModel):
     NodalArc computes preview geometry through the same OME visibility
     composites the runtime uses; the builder renders these facts and never runs
     a second physics engine. ``preview_scope`` says whether geometry ran and, if
-    not, why (``inter_body_pending``/``terrestrial_pending``/``disabled`` are
-    typed walls). Only ``computed`` carries reason counts and drawn pairs.
+    not, why. Only ``computed`` carries reason counts and drawn pairs.
 
-    The preview is BOUNDED, not a simulation. ``pairs_total`` is the candidate
+    The preview is bounded, not a simulation. ``pairs_total`` is the candidate
     universe size (a closed-form count, never a materialized pair set);
     ``pairs_tested`` is the deterministic subset geometry actually ran on
     (``min(pairs_total, budget)``, first pairs in authored/node-id order — never
     distance-ranked); ``pairs_drawn`` is how many tested pairs passed (the first
     such, capped to the draw cap). ``capped`` is true when the preview is partial
     on either axis (``pairs_tested < pairs_total`` or more passed than were
-    drawn). Reason counts and drawn pairs describe the TESTED subset only."""
+    drawn). Reason counts and drawn pairs describe the tested subset only."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 

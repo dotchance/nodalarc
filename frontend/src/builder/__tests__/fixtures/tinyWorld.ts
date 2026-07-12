@@ -3,13 +3,12 @@
 /** A wire-faithful two-segment BuilderWorld for link-physics tests.
  *
  *  One ground station and one satellite, each carrying a terminal inventory the
- *  physics derivation reads. Built from the real wire types — the ground node is
+ *  physics derivation reads. Built from the production wire types: the ground node is
  *  `kind: "ground_station"` (not a mislabelled satellite) and the ephemeris is a
- *  real SessionEphemeris, not a bare `{nodes:{}}` cast — so a test driving off
- *  this fixture exercises the same shapes the resolver actually emits. This is
- *  the SHARED home for wire-shape knowledge; candidates.test.ts deliberately
+ *  SessionEphemeris, not a bare `{nodes:{}}` cast. Tests using this fixture
+ *  exercise the same shapes the resolver emits. candidates.test.ts deliberately
  *  keeps its own physics-tuned numeric fixture (its values are load-bearing for
- *  geometry), a stated non-goal here.
+ *  geometry), which is intentionally outside this fixture.
  */
 import type { BuilderWorld, BuilderWorldNode } from "../../builderTypes";
 

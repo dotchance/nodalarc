@@ -2,10 +2,10 @@
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
 /** Candidate preview — the client renders the server's frozen-epoch verdicts.
  *
- *  There is no client geometry left to pin (it moved server-side; the numeric
+ *  Client geometry moved server-side, with numeric
  *  parity fixtures live in tests/unit/test_builder_world.py). What remains is
  *  the ADAPTER: BuilderRulePreview facts -> canvas candidate lines + editor rule
- *  notes. These pins cover the decided note-mapping table row by row, the
+ *  notes. These tests cover the note-mapping table, the
  *  drawable-pairs passthrough, and the "enabled means computed" mapping the
  *  status bar's dark-rule count relies on.
  */
@@ -101,7 +101,7 @@ describe("adapter: drawable pairs and the dark-rule mapping", () => {
 });
 
 describe("note-mapping table — one row at a time", () => {
-  it("(a) a non-computed scope renders the typed wall, superseding everything", () => {
+  it("(a) a non-computed scope supersedes other notes", () => {
     expect(only(world([preview({ preview_scope: "inter_body_pending" })])).note).toBe(
       "inter-body span — preview pending, runtime computes contacts",
     );

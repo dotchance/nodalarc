@@ -4,16 +4,14 @@
  *
  *  The API's error bodies are the BuilderResolveRefusal JSON envelope
  *  ({ error: string, ... }); when the resolver refuses a document it puts its
- *  own words in `error`. Surfacing those verbatim is a customer-trust
- *  requirement — a generic "request failed" would hide why the session was
+ *  own words in `error`. Surfacing those verbatim preserves the reason the
+ *  session was
  *  rejected. Two entry points under one policy, because a failed request takes
  *  one of two shapes: a Response the server sent, or a rejection with no
  *  Response at all (a network failure).
  *
  *  The resolve/download and catalog paths route through here. Some older call
- *  sites still read the envelope inline with their own domain-specific fallback
- *  ("Generation failed" and the like); those fold in as each is touched — the
- *  goal is one reader, not a claim that there already is one.
+ *  sites still read the envelope inline with their own domain-specific fallback.
  */
 
 /** Shown when a caught fetch rejection carries no message of its own. */

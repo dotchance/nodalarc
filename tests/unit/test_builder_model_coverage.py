@@ -1,4 +1,4 @@
-"""Mechanical coverage discovery for the canonical Builder model graph."""
+"""Coverage discovery for the canonical Builder model graph."""
 
 from __future__ import annotations
 

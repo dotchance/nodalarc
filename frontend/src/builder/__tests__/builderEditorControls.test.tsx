@@ -1,6 +1,6 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
-/** Interaction-grammar conformance.
+/** Builder editor control conformance.
  *
  *  static scan: builder editors compose the editor kit; a raw
  *  <input>/<select>/<textarea> in an editor file is a violation (file
@@ -9,7 +9,7 @@
  *
  *  Kit behavior: EditorName create-focus; NullableNumberField's
  *  empty-means-unset contract; EditorCard anatomy. Object-keyed
- *  state reset is pinned through GroundEditor, the stateful editor.
+ *  state reset is tested through GroundEditor, the stateful editor.
  */
 
 import { readdirSync, readFileSync } from "node:fs";
@@ -949,9 +949,9 @@ describe("the closed vocabularies have one owner", () => {
     ).toEqual([]);
   });
 
-  // the real offenders at HEAD are option-OBJECT arrays ([{value:"isis"},…]),
+  // Option-object arrays ([{value:"isis"},…]) require a separate check because
   // which the bare-string patterns above cannot see. Each vocabulary is checked
-  // in BOTH forms — an option-object pair (value:"tok"…value:"tok") and a
+  // in both forms: an option-object pair (value:"tok"…value:"tok") and a
   // bare-string array ([ "tok", "tok" ]) — so neither shape can re-list it. The
   // Generated unions and backend metadata are the primary contract; this scan
   // catches browser-owned option inventories.
@@ -1366,8 +1366,8 @@ describe("save dialog: the name commits once, never per keystroke", () => {
 describe("open picker: namespace is the catalog's word, not a path sniff", () => {
   it("OpenSessionPicker groups by typed namespace and never sniffs a path", () => {
     const source = readFileSync(join(BUILDER_DIR, "OpenSessionPicker.tsx"), "utf-8");
-    // The server names each entry's root tier; client-side knowledge of
-    // the server's directory layout was the contract drift being removed.
+    // The server names each entry's root tier; the client does not infer it
+    // from the server's directory layout.
     expect(source).not.toContain("generated-sessions");
     expect(source).toContain('entry.namespace === "user"');
     expect(source).toContain('entry.namespace === "nodalarc"');

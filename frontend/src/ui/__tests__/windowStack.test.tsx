@@ -1,9 +1,9 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
-/** The floating-window raise stack: ONE bounded stacking mechanism.
+/** The floating-window raise stack uses bounded ranks.
  *
- *  The store pins the ordering (register-on-top, raise-to-top, remove-collapses,
- *  bounded ranks); the FloatingWindow pin proves the wiring — a pointerdown
+ *  Store tests cover registration, raising, and removal. The FloatingWindow
+ *  test verifies that a pointerdown
  *  raises the window and its --window-z-bump (the z offset within the zWindow
  *  band) reflects the new rank.
  */

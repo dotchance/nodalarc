@@ -1,11 +1,10 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
-/** The editor kit — the only source of editing controls in builder editors.
+/** Shared editing controls for Builder editors.
  *
- *  Interaction-grammar enforcement by construction: every editor
- *  composes these controls, so field anatomy, card anatomy, and control
- *  behavior cannot drift per surface. A raw <input>/<select>/<textarea> in
- *  an editor file fails the static conformance test.
+ *  Every editor composes these controls so field, card, and control behavior
+ *  remains consistent. A raw <input>/<select>/<textarea> in an editor file
+ *  fails the static conformance test.
  *
  *  EditorName carries create-focus (the name field is focused when a
  *  create gesture opens the editor; typing renames immediately).
@@ -95,16 +94,9 @@ export function Field({
   );
 }
 
-/** A number box that keeps a LOCAL STRING DRAFT so a value can be typed through
- *  interim states the committed value must never pass through — empty, a lone
- *  "-", a below-min figure mid-typing. The input binds the draft, not the value
- *  directly (deferred-clamp contract): `commit` fires only when the raw string
- *  is a parseable, in-range number; empty / "-" / below-min update the visible
- *  draft but commit NOTHING (so nothing reaches the buffer or the canvas
- *  preview). On blur the draft is dropped and the box re-syncs to the committed
- *  value — it never auto-commits 0 or the min. When `value` changes externally
- *  (an Apply/Defaults) and the box is not being edited, the draft is null so the
- *  box shows the new value. */
+/** Keep an input string while a number is incomplete or out of range.
+ *  Commit only parseable in-range values, and restore the committed value on
+ *  blur. External value changes appear whenever the field is not being edited. */
 function useNumberDraft(
   value: number | null,
   commit: (raw: string) => void,
@@ -278,8 +270,7 @@ export function NullableNumberField({
 export interface SelectOption {
   value: string;
   label: string;
-  /** Disabled options stay visible with the reason in their title —
-   *  honesty about what cannot be formed, not a hidden restriction. */
+  /** Disabled options stay visible with the reason in their title. */
   disabled?: boolean;
   title?: string;
 }
@@ -341,12 +332,9 @@ export function SelectField({
   );
 }
 
-/** The one bodies-picker: a SelectField over the bodies catalog, hardened for a
- *  failed or still-loading catalog. The current value is ALWAYS an option, so the
- *  field never blanks an existing body — before the catalog loads, on error, or
- *  when the value is not (yet) in the catalog. On a catalog error it renders the
- *  verbatim message and a retry wired to the hook's refresh (the same failure
- *  contract uses), never a bare frozen select. */
+/** Body picker backed by the catalog.
+ *  The current value remains available while the catalog loads or fails, and a
+ *  catalog error includes the backend message and a retry action. */
 export function BodySelect({
   label,
   ariaLabel,
@@ -424,12 +412,9 @@ export function CheckboxField({
   );
 }
 
-/** The one card anatomy: title + spec-sheet summary; closed cards
- *  read as the object's spec. Accordion when onToggle is given (the head is a
- *  <button>); static (always open) when not. `actions` — a header control such
- *  as a Remove button — is allowed only on the STATIC card: interactive content
- *  must never nest inside the accordion's <button> head, so the type forbids
- *  actions together with onToggle. */
+/** Shared editor card with an optional accordion header.
+ *  Header actions are available only on static cards so interactive controls
+ *  are never nested inside an accordion button. */
 type EditorCardProps = {
   title: string;
   summary?: ReactNode;

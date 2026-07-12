@@ -11,8 +11,8 @@
  *  the costliest authoring step, so it is one click.
  *
  *  Runtime-gated forwarding classes (host, bridge, control_only) are
- *  selectable — they are grammar — and labeled as gated; the resolver's
- *  typed wall appears in the status bar the moment the draft resolves.
+ *  selectable because they are part of the grammar, and labeled as gated; the
+ *  resolver response appears in the status bar when the draft resolves.
  */
 
 import { useState } from "react";

@@ -44,12 +44,12 @@ Selectable overlays answer task-specific questions such as link state, latency,
 loss, routing domain, terminal capacity, kernel proof, or actuation health.
 Fault colors are reserved for actual fault states.
 
-Search and focus are first-class navigation. Large sessions cannot rely on
+Search and focus are primary navigation mechanisms. Large sessions cannot rely on
 manual camera movement. Users must be able to jump to nodes, sites, bodies,
 segments, links, interfaces, routing domains, prefixes, and operational events.
 
 At scale, visual size and interaction size are separate concerns. Glyphs may be
-small for visual honesty, but picking must remain usable through screen-space
+small for readability, but picking must remain usable through screen-space
 hit testing and explicit focus/follow actions.
 
 ## Architecture

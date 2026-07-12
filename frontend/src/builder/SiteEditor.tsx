@@ -1,6 +1,6 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
-/** Site editor — a site is a first-class primitive: the terminals, nodes,
+/** Site editor — a site contains the terminals, nodes,
  *  networks, and parameters that make up a location, not just a lat/lon.
  *
  *  Authors the grammar's Site object: identity, surface location, LAN,

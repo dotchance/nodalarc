@@ -1,16 +1,7 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
-/** The session anatomy — what a session is made of, what this one has, and
- *  why each part matters.
- *
- *  Order-free by construction: every row is always visible and always
- *  actionable, so nothing here imposes a sequence — it answers "what could
- *  I do next, and why would I" for a user who builds in any order. Done
- *  rows dim to counts; pending rows carry the accent and say what the part
- *  is FOR in both users' languages (the network engineer's and the
- *  orbital engineer's). States are structural presence only — the resolve
- *  status is the only green in the builder.
- */
+/** Session sections, completion counts, and available editing actions.
+ *  Rows remain visible regardless of authoring order. */
 
 import type { Workspace } from "./workspace";
 import { placedSegments } from "./workspace";
@@ -32,7 +23,7 @@ interface BuildGuideProps {
   sessionNameIsPlaceholder: boolean;
   saved: string | null;
   deployed: boolean;
-  /** the honest site count — distinct ground-station namespaces in the
+  /** Resolved site count — distinct ground-station namespaces in the
    *  resolved world (one site's several nodes share a namespace). null when the
    *  world has not resolved yet; the guide then falls back to the draft count
    *  with an "(unresolved)" qualifier. */

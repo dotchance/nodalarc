@@ -2,15 +2,15 @@
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
 /** useEditorWindows — the floating-editor windows + buffered-edit shell.
  *
- *  These pins cover the HOOK behavior end-to-end against the REAL useWorkspace
+ *  These tests cover the hook with useWorkspace
  *  (so applyBuffer's mutator actually commits and the reconciliation sees
  *  the applied object move): patchBuffer stages a dirty buffer and never
  *  touches the workspace; applyBuffer commits through the matching mutator and
  *  re-bases opened + clears dirty; revertBuffer returns the draft to opened; a
  *  user close discards the window and its buffer together; and previewWorkspace
  *  overlays a dirty session buffer (what the dwell readout reads). The pure
- *  buffer maths (overlayBuffers/staleBufferKeys/workspaceForSave) keep their
- *  landed pins in useWorkspace.test — not re-asserted here.
+ *  buffer maths (overlayBuffers/staleBufferKeys/workspaceForSave) remain
+ *  covered in useWorkspace.test.
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
@@ -159,7 +159,7 @@ describe("useEditorWindows — buffered editing", () => {
   it(" windows are keyed by object identity: distinct objects → distinct windows; re-open refreshes in place", () => {
     const { result } = renderHook(() => useHarness());
     const workspace = newWorkspace("t");
-    // Two REAL segments, so the reconciliation pass does not prune their windows.
+    // Two existing segments keep reconciliation from pruning their windows.
     workspace.space.push(
       newDraftConstellation(SPACE_NODE),
       newDraftConstellation(SPACE_NODE),

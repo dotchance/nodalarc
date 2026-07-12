@@ -1,7 +1,7 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
-/** One error-message policy: the envelope's `error` reaches the user verbatim
- *  (customer-trust), with a status fallback for a non-envelope body and a named
+/** One error-message policy: the envelope's `error` reaches the user verbatim,
+ *  with a status fallback for a non-envelope body and a named
  *  constant for a network failure that carries no Response. */
 import { describe, it, expect } from "vitest";
 import { apiErrorMessage, apiErrorFromException, NETWORK_ERROR_MESSAGE } from "../apiError";

@@ -136,7 +136,18 @@ def _ctx_from_session_file(session_path):
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
-@pytest.mark.parametrize("name,steps", [("earth-geo-tdrs", 20), ("earth-meo-gps", 8)])
+@pytest.mark.parametrize(
+    "name,steps",
+    [
+        ("earth-geo-tdrs", 20),
+        pytest.param(
+            "earth-meo-gps",
+            8,
+            marks=pytest.mark.timeout(60),
+            id="earth-meo-gps-8",
+        ),
+    ],
+)
 def test_frontier_matches_oracle_on_catalog_dwell_sessions(monkeypatch, name, steps):
     """Continuously-visible regimes: frontier extension + horizon caps."""
     ctx, step_seconds, epoch_unix = _ctx_from_session_file(

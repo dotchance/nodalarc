@@ -47,6 +47,39 @@ INTERMITTENT_CONNECTIVITY_WINDOWS = {
 }
 
 
+def _run_provenance_from_environment() -> dict[str, str]:
+    fields = {
+        "source_git_sha": os.environ.get("NODALARC_EVIDENCE_SOURCE_GIT_SHA", ""),
+        "source_tree_tag": os.environ.get("NODALARC_EVIDENCE_SOURCE_TAG", ""),
+        "namespace": os.environ.get("NAMESPACE", ""),
+        "expected_runtime_release": os.environ.get("NODALARC_EXPECTED_RUNTIME_RELEASE", ""),
+        "expected_runtime_build": os.environ.get("NODALARC_EXPECTED_RUNTIME_BUILD", ""),
+    }
+    missing = [name for name, value in fields.items() if not value]
+    if missing:
+        raise RuntimeError(
+            "Runtime evidence provenance is incomplete; use make test-runtime-matrix "
+            f"(missing {', '.join(missing)})"
+        )
+    return fields
+
+
+def _runtime_identity_error(provenance: dict[str, str], facts: dict) -> str | None:
+    observed_release = facts.get("release")
+    observed_build = facts.get("build")
+    if (
+        observed_release == provenance["expected_runtime_release"]
+        and observed_build == provenance["expected_runtime_build"]
+    ):
+        return None
+    return (
+        "Transition runtime identity differs from the checkout under test: "
+        f"expected {provenance['expected_runtime_release']} / "
+        f"{provenance['expected_runtime_build']}, observed "
+        f"{observed_release} / {observed_build}"
+    )
+
+
 def _classify_matrix_result(evidence: dict, perm: dict) -> str:
     """Apply xfail/xpass accounting to one matrix result in place."""
     if evidence.get("result") == "PASS" and perm.get("xfail"):
@@ -2151,6 +2184,7 @@ def run_permutation(perm: dict) -> dict:
         "id": perm_id,
         "label": label,
         "spec": perm,
+        "provenance": perm["run_provenance"],
         "started_at": datetime.now(UTC).isoformat(),
     }
 
@@ -2196,6 +2230,22 @@ def run_permutation(perm: dict) -> dict:
         if transition_result.get("state") != "succeeded":
             evidence["result"] = "FAIL"
             evidence["error"] = f"Transition failed: {transition_result}"
+            print(f"  FAIL: {evidence['error']}")
+            return evidence
+        transition_facts = transition_result.get("facts") or {}
+        provenance = perm["run_provenance"]
+        observed_runtime = {
+            "release": transition_facts.get("release"),
+            "build": transition_facts.get("build"),
+            "document_digest": transition_facts.get("document_digest"),
+            "closure_digest": transition_facts.get("closure_digest"),
+            "resolved_semantic_digest": transition_facts.get("resolved_semantic_digest"),
+        }
+        evidence["observed_runtime"] = observed_runtime
+        identity_error = _runtime_identity_error(provenance, transition_facts)
+        if identity_error is not None:
+            evidence["result"] = "FAIL"
+            evidence["error"] = identity_error
             print(f"  FAIL: {evidence['error']}")
             return evidence
 
@@ -2349,25 +2399,21 @@ def catalog_permutations() -> list[dict]:
 
 
 def main():
-    import shutil
-
     print(f"E2E Matrix starting at {datetime.now(UTC).isoformat()}")
     print(f"PID: {os.getpid()}")
 
-    # Clean previous evidence by default. Targeted acceptance runs can append
-    # retained artifacts without destroying prior proof by setting
-    # NODALARC_PRESERVE_EVIDENCE=1.
-    evidence_root = Path("tests/integration/e2e-evidence")
-    preserve_evidence = os.environ.get("NODALARC_PRESERVE_EVIDENCE") == "1"
-    if evidence_root.exists() and not preserve_evidence:
-        shutil.rmtree(evidence_root)
-        print(f"Deleted previous evidence at {evidence_root}")
-    elif preserve_evidence:
-        print(f"Preserving previous evidence at {evidence_root}")
+    provenance = _run_provenance_from_environment()
+    evidence_root = Path(
+        os.environ.get("NODALARC_E2E_EVIDENCE_DIR", "tests/integration/e2e-evidence")
+    )
 
     ts = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
-    evidence_dir = evidence_root / ts
-    evidence_dir.mkdir(parents=True, exist_ok=True)
+    evidence_dir = (
+        evidence_root
+        / "runtime-matrix"
+        / f"{ts}-{provenance['source_git_sha'][:8]}-pid{os.getpid()}"
+    )
+    evidence_dir.mkdir(parents=True, exist_ok=False)
 
     # PID file: signals "running" to external pollers
     pid_file = evidence_root / ".running"
@@ -2388,7 +2434,10 @@ def main():
         xpassed = 0
 
         if os.environ.get("NODALARC_ACCEPTANCE_ONLY") != "1":
-            active_matrix = catalog_permutations()
+            active_matrix = [
+                {**permutation, "run_provenance": provenance}
+                for permutation in catalog_permutations()
+            ]
             print(f"Catalog sessions: {len(active_matrix)}")
             for perm in active_matrix:
                 evidence = run_permutation(perm)
@@ -2413,6 +2462,7 @@ def main():
 
         if os.environ.get("NODALARC_RUN_MBB_ACCEPTANCE") == "1":
             evidence = run_mbb_acceptance()
+            evidence["provenance"] = provenance
             results.append(evidence)
             evidence_file = evidence_dir / "cj-mbb-packet-behavior.json"
             evidence_file.write_text(json.dumps(evidence, indent=2))
@@ -2423,6 +2473,7 @@ def main():
 
         if os.environ.get("NODALARC_RUN_DIRTY_REPAIR") == "1":
             evidence = run_dirty_repair_acceptance()
+            evidence["provenance"] = provenance
             results.append(evidence)
             evidence_file = evidence_dir / "dirty-repair.json"
             evidence_file.write_text(json.dumps(evidence, indent=2))
@@ -2433,6 +2484,7 @@ def main():
 
         if os.environ.get("NODALARC_RUN_SEEK_MBB") == "1":
             evidence = run_seek_during_mbb_acceptance()
+            evidence["provenance"] = provenance
             results.append(evidence)
             evidence_file = evidence_dir / "seek-during-mbb.json"
             evidence_file.write_text(json.dumps(evidence, indent=2))
@@ -2446,6 +2498,7 @@ def main():
         duration_s = (run_end - run_start).total_seconds()
         summary = {
             "run_token": run_token,
+            "provenance": provenance,
             "start_time": run_start.isoformat(),
             "end_time": run_end.isoformat(),
             "duration_s": round(duration_s, 1),
@@ -2455,7 +2508,13 @@ def main():
             "xfailed": xfailed,
             "xpassed": xpassed,
             "results": [
-                {"id": r["id"], "label": r.get("label"), "result": r["result"]} for r in results
+                {
+                    "id": r["id"],
+                    "label": r.get("label"),
+                    "result": r["result"],
+                    "observed_runtime": r.get("observed_runtime"),
+                }
+                for r in results
             ],
         }
         (evidence_dir / "matrix-summary.json").write_text(json.dumps(summary, indent=2))

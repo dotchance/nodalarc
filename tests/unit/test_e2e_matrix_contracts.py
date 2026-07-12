@@ -20,6 +20,47 @@ from nodalarc.resolve_session import resolve_session
 from tests.integration import e2e_matrix
 
 
+def test_runtime_evidence_provenance_is_complete_and_identity_bound(monkeypatch) -> None:
+    values = {
+        "NODALARC_EVIDENCE_SOURCE_GIT_SHA": "0123456789abcdef",
+        "NODALARC_EVIDENCE_SOURCE_TAG": "01234567-dirty.deadbeef",
+        "NAMESPACE": "nodalarc-test",
+        "NODALARC_EXPECTED_RUNTIME_RELEASE": "0.5.2",
+        "NODALARC_EXPECTED_RUNTIME_BUILD": "01234567-dirty.deadbeef",
+    }
+    for name, value in values.items():
+        monkeypatch.setenv(name, value)
+
+    provenance = e2e_matrix._run_provenance_from_environment()  # noqa: SLF001
+
+    assert provenance == {
+        "source_git_sha": "0123456789abcdef",
+        "source_tree_tag": "01234567-dirty.deadbeef",
+        "namespace": "nodalarc-test",
+        "expected_runtime_release": "0.5.2",
+        "expected_runtime_build": "01234567-dirty.deadbeef",
+    }
+    assert (
+        e2e_matrix._runtime_identity_error(  # noqa: SLF001
+            provenance,
+            {"release": "0.5.2", "build": "01234567-dirty.deadbeef"},
+        )
+        is None
+    )
+    assert "differs from the checkout" in e2e_matrix._runtime_identity_error(  # noqa: SLF001
+        provenance,
+        {"release": "0.5.2", "build": "stale"},
+    )
+
+
+def test_matrix_evidence_preserves_other_run_directories() -> None:
+    source = Path(e2e_matrix.__file__).read_text()
+
+    assert "rmtree(evidence_root)" not in source
+    assert '/ "runtime-matrix"' in source
+    assert "NODALARC_E2E_EVIDENCE_DIR" in source
+
+
 def test_catalog_deploy_uses_guarded_shipped_revision_and_exact_yaml(monkeypatch) -> None:
     calls: list[tuple[str, str, dict]] = []
     session_ref = "nodalarc:sessions/earth-leo-simple.yaml"

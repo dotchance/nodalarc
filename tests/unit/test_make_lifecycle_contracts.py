@@ -154,11 +154,22 @@ def test_make_targets_dry_run_cleanly() -> None:
 
 def test_runtime_matrix_discovers_vs_api_when_no_override_is_set() -> None:
     target = _target_body("test-runtime-matrix")
+    builder = _target_body("test-builder-e2e")
+    clean = _target_body("clean")
 
     assert 'VS_API_HOST="$${VS_API_HOST:-$$(' in target
     assert "app=nodalarc-vs-api" in target
     assert 'type=="InternalIP"' in target
     assert 'VS_API_HOST="$$VS_API_HOST"' in target
+    for evidence_variable in (
+        "NODALARC_EVIDENCE_SOURCE_GIT_SHA",
+        "NODALARC_EVIDENCE_SOURCE_TAG",
+        "NODALARC_EXPECTED_RUNTIME_RELEASE",
+        "NODALARC_EXPECTED_RUNTIME_BUILD",
+    ):
+        assert evidence_variable in target
+        assert evidence_variable in builder
+    assert "tests/integration/e2e-evidence" in clean
 
 
 def test_make_configuration_uses_canonical_script_paths() -> None:

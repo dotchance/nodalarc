@@ -438,10 +438,12 @@ def test_builder_user_component_closure_reaches_verified_runtime(
     namespace = os.environ.get("NAMESPACE", "nodalarc")
     expected_release = os.environ.get("NODALARC_EXPECTED_RUNTIME_RELEASE")
     expected_build = os.environ.get("NODALARC_EXPECTED_RUNTIME_BUILD")
-    if not expected_release or not expected_build:
+    source_git_sha = os.environ.get("NODALARC_EVIDENCE_SOURCE_GIT_SHA")
+    source_tree_tag = os.environ.get("NODALARC_EVIDENCE_SOURCE_TAG")
+    if not expected_release or not expected_build or not source_git_sha or not source_tree_tag:
         pytest.fail(
-            "live qualification requires NODALARC_EXPECTED_RUNTIME_RELEASE and "
-            "NODALARC_EXPECTED_RUNTIME_BUILD"
+            "live qualification requires runtime identity and evidence provenance; "
+            "use make test-builder-e2e"
         )
 
     suffix = uuid.uuid4().hex[:12]
@@ -452,8 +454,13 @@ def test_builder_user_component_closure_reaches_verified_runtime(
         "source_session_ref": SOURCE_SESSION_REF,
         "session_ref": session_ref,
         "terminal_ref": terminal_ref,
-        "expected_runtime_release": expected_release,
-        "expected_runtime_build": expected_build,
+        "provenance": {
+            "source_git_sha": source_git_sha,
+            "source_tree_tag": source_tree_tag,
+            "namespace": namespace,
+            "expected_runtime_release": expected_release,
+            "expected_runtime_build": expected_build,
+        },
     }
     error: BaseException | None = None
     try:
@@ -729,6 +736,15 @@ def test_builder_user_component_closure_reaches_verified_runtime(
                 "runtime_smoke": smoke,
             }
         )
+        evidence["provenance"].update(
+            {
+                "observed_runtime_release": status["runtimeRelease"],
+                "observed_runtime_build": status["runtimeBuild"],
+                "observed_document_digest": status["documentDigest"],
+                "observed_closure_digest": status["closureDigest"],
+                "observed_resolved_semantic_digest": status["resolvedSemanticDigest"],
+            }
+        )
     except BaseException as caught:
         error = caught
         evidence.update(
@@ -744,8 +760,10 @@ def test_builder_user_component_closure_reaches_verified_runtime(
         evidence_root = Path(
             os.environ.get("NODALARC_E2E_EVIDENCE_DIR", "tests/integration/e2e-evidence")
         )
-        evidence_root.mkdir(parents=True, exist_ok=True)
-        evidence_path = evidence_root / f"builder-user-ref-{suffix}.json"
+        started_at = datetime.fromisoformat(evidence["started_at"]).strftime("%Y%m%d-%H%M%S")
+        evidence_dir = evidence_root / "builder" / f"{started_at}-{source_git_sha[:8]}-{suffix}"
+        evidence_dir.mkdir(parents=True, exist_ok=False)
+        evidence_path = evidence_dir / "evidence.json"
         evidence_path.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n")
         print(f"Builder Kubernetes evidence: {evidence_path}")
         if error is not None:

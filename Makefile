@@ -146,19 +146,7 @@ deps: check-deps ## Install Python + Node.js dependencies (idempotent)
 	@echo "[deps] Installing VF frontend dependencies..."
 	cd frontend && npm ci
 	@echo "[deps] Checking for high-severity vulnerabilities..."
-	@cd frontend && HIGH=$$(npm audit --audit-level=high 2>&1 | grep -c "high\|critical" || true); \
-		if [ "$$HIGH" -gt 0 ]; then \
-			echo ""; \
-			echo "========================================================"; \
-			echo "  SECURITY: High-severity npm vulnerabilities detected!"; \
-			echo "  DO NOT deploy this build."; \
-			echo "  Pull the latest source: git pull origin main"; \
-			echo "  If the issue persists, report it."; \
-			echo "========================================================"; \
-			echo ""; \
-			npm audit 2>&1; \
-			exit 1; \
-		fi
+	@node scripts/check-npm-audit.mjs frontend
 	@echo "[deps] Done."
 
 check-deps:

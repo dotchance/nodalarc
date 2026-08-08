@@ -43,6 +43,10 @@ from nodalarc.runtime_service_config import CATALOG_UPLOAD_SELECTION_FILENAME
 from nodalarc.session_identity import require_resolved_session_run_id
 from nodalarc.session_validator import validate_session_readiness
 from nodalarc.stack_resolver import ResolvedStack, resolve_domain_stack, validate_sid_indices
+from nodalarc.substrate.manifest_contract import (
+    POD_OWNER_UID_LABEL,
+    POD_SESSION_RUN_LABEL,
+)
 from nodalarc.template_vars import build_template_vars_from_resolved
 
 from nodalarc_operator.runtime_session import OperatorSessionConfig, resolve_operator_session
@@ -50,8 +54,6 @@ from nodalarc_operator.runtime_session import OperatorSessionConfig, resolve_ope
 log = logging.getLogger(__name__)
 
 SESSION_POD_SELECTOR = "nodalarc.io/node-id"
-POD_SESSION_RUN_LABEL = "nodalarc.io/session-run-id"
-POD_OWNER_UID_LABEL = "nodalarc.io/owner-uid"
 
 
 class RetryableSessionDependency(RuntimeError):
@@ -1178,6 +1180,8 @@ def write_wiring_manifest(
             isl_pairs.add((candidate.node_a, candidate.node_b))
 
     pod_placement = _discover_session_pod_placement(v1, namespace, set(nodes))
+    for manifest_node_id in nodes:
+        nodes[manifest_node_id]["host"] = pod_placement[manifest_node_id]
     k8s_nodes = set(pod_placement.values())
     node_ips = _node_internal_ips(v1, k8s_nodes)
     site_lans = _site_lans_for_manifest(resolved_session, pod_placement, node_ips)
@@ -1200,8 +1204,16 @@ def write_wiring_manifest(
         )
         raise
 
+    manifest_owner_uid = str((owner_ref or {}).get("uid") or "")
+    if not session_run_id or not manifest_owner_uid:
+        raise ValueError(
+            "wiring manifest requires the deployment run identity: "
+            f"session_run_id={session_run_id!r}, owner_uid={manifest_owner_uid!r}"
+        )
     manifest = {
         "session_id": manifest_session_id,
+        "session_run_id": session_run_id,
+        "owner_uid": manifest_owner_uid,
         "wiring_generation": "",
         "required_phases": list(REQUIRED_WIRING_PHASES),
         "nodes": nodes,
@@ -1591,6 +1603,53 @@ def purge_session_runtime_state(namespace: str, session_id: str) -> None:
         raise
 
 
+def _current_session_pods(
+    namespace: str,
+    session_id: str | None = None,
+    owner_ref: dict | None = None,
+    expected_ids: set[str] | frozenset[str] | None = None,
+) -> list:
+    """List session pods filtered to the active CR and runtime identity."""
+    v1 = _get_v1()
+    expected = {node_id.lower() for node_id in expected_ids} if expected_ids else None
+    pods = _list_session_pods(v1, namespace)
+    filtered = []
+    for pod in pods:
+        if expected is not None and _pod_node_id(pod) not in expected:
+            continue
+        if session_id is not None and not _pod_current_for_runtime(pod, session_id, owner_ref):
+            continue
+        filtered.append(pod)
+    return filtered
+
+
+def _pod_network_provisioned(pod) -> bool:
+    """A scheduled pod holding a pod IP: its sandbox network namespace exists.
+
+    This is true from sandbox creation onward, before any container starts,
+    and is exactly the state Node Agent wiring needs.
+    """
+    return bool(pod.spec and pod.spec.node_name and pod.status and pod.status.pod_ip)
+
+
+def _pod_workloads_running(pod) -> bool:
+    """Every authored regular container is actually running.
+
+    Pod phase Running only means at least one container is alive; a
+    multi-container workload (FRR plus an observer, or any authored
+    composition) counts only when each declared regular container has
+    state.running. Readiness probes are deliberately not consulted.
+    """
+    if not pod.status or pod.status.phase != "Running":
+        return False
+    if not pod.spec or not pod.spec.containers:
+        return False
+    statuses = pod.status.container_statuses or []
+    if len(statuses) != len(pod.spec.containers):
+        return False
+    return all(status.state and status.state.running for status in statuses)
+
+
 def check_pods_ready(
     namespace: str,
     session_id: str | None = None,
@@ -1602,18 +1661,9 @@ def check_pods_ready(
     When session_id/owner_ref are supplied, only pods owned by the active CR and
     stamped with the active runtime identity are counted.
     """
-    v1 = _get_v1()
-    expected = {node_id.lower() for node_id in expected_ids} if expected_ids else None
-    pods = _list_session_pods(v1, namespace)
-    filtered = []
-    for pod in pods:
-        if expected is not None and _pod_node_id(pod) not in expected:
-            continue
-        if session_id is not None and not _pod_current_for_runtime(pod, session_id, owner_ref):
-            continue
-        filtered.append(pod)
+    filtered = _current_session_pods(namespace, session_id, owner_ref, expected_ids)
     total = len(filtered)
-    ready = sum(1 for p in filtered if p.status and p.status.phase == "Running")
+    ready = sum(1 for p in filtered if _pod_workloads_running(p))
     return total, ready
 
 
@@ -1650,6 +1700,28 @@ def check_all_pods_running(
     """
     total, ready = check_pods_ready(namespace, session_id, owner_ref, expected_ids)
     return ready >= expected_count, total, ready
+
+
+def check_all_pods_provisioned(
+    namespace: str,
+    expected_count: int,
+    session_id: str | None = None,
+    owner_ref: dict | None = None,
+    expected_ids: set[str] | frozenset[str] | None = None,
+) -> tuple[bool, int, int]:
+    """Check whether every expected session pod has a provisioned network.
+
+    Provisioned means scheduled with an assigned pod IP: the pod sandbox and
+    its network namespace exist. Containers need not have started — wiring
+    must be able to proceed before they do. Returns
+    (all_provisioned, provisioned, running).
+
+    Pure query — no side effects.
+    """
+    filtered = _current_session_pods(namespace, session_id, owner_ref, expected_ids)
+    provisioned = sum(1 for p in filtered if _pod_network_provisioned(p))
+    running = sum(1 for p in filtered if _pod_workloads_running(p))
+    return provisioned >= expected_count, provisioned, running
 
 
 def check_wiring_complete(namespace: str, expected_count: int) -> tuple[bool, int, str | None]:
@@ -2278,12 +2350,104 @@ def _create_session_pod(
         ],
     )
 
+    # Platform wiring gate: authored containers start only after the Node
+    # Agent has wired THIS pod incarnation. The gate observes the existing
+    # wiring proof (only this node's key of the nodalarc-wiring-status
+    # ConfigMap, projected as an optional volume) and exits when the proof
+    # reports ready with a clean kernel AND names this exact incarnation:
+    # the proof's pod_uid must equal this pod's UID (downward API) and the
+    # proof's netns_id must equal the inode of the network namespace the
+    # gate itself runs in. A row written for a replaced pod, a recreated
+    # sandbox, or a previous generation can never release the workload.
+    # The gate never times out: wiring that does not complete must surface
+    # as a pod stuck in Init, not as a workload started on an unwired
+    # network.
+    wiring_gate = kubernetes.client.V1Container(
+        name="wiring-gate",
+        image=_require_env("WIRING_GATE_IMAGE"),
+        image_pull_policy=_require_env("IMAGE_PULL_POLICY"),
+        command=[
+            "bash",
+            "-c",
+            'my_netns="$(readlink /proc/self/ns/net)"\n'
+            'my_netns="${my_netns#net:[}"\n'
+            'my_netns="${my_netns%]}"\n'
+            'status_file="/wiring-status/status.json"\n'
+            'echo "waiting for platform wiring of ${NODE_ID} '
+            '(pod ${POD_UID}, run ${SESSION_RUN_ID}, netns ${my_netns})"\n'
+            "while true; do\n"
+            '  if [ -f "${status_file}" ] && jq -e --arg uid "${POD_UID}" '
+            '--arg run "${SESSION_RUN_ID}" --arg ns "${my_netns}" '
+            '\'.status == "ready" and .dirty_kernel == false '
+            "and .pod_uid == $uid and .session_run_id == $run "
+            "and .netns_id == $ns "
+            'and (.phases | length > 0) and (.phases | all(.status == "ready"))\' '
+            '"${status_file}" > /dev/null 2>&1; then\n'
+            '    echo "wiring ready for ${NODE_ID}"\n'
+            "    exit 0\n"
+            "  fi\n"
+            "  sleep 2\n"
+            "done\n",
+        ],
+        env=[
+            kubernetes.client.V1EnvVar(
+                name="NODE_ID",
+                value_from=kubernetes.client.V1EnvVarSource(
+                    field_ref=kubernetes.client.V1ObjectFieldSelector(
+                        field_path="metadata.labels['nodalarc.io/node-id']"
+                    )
+                ),
+            ),
+            kubernetes.client.V1EnvVar(
+                name="POD_UID",
+                value_from=kubernetes.client.V1EnvVarSource(
+                    field_ref=kubernetes.client.V1ObjectFieldSelector(field_path="metadata.uid")
+                ),
+            ),
+            kubernetes.client.V1EnvVar(
+                name="SESSION_RUN_ID",
+                value_from=kubernetes.client.V1EnvVarSource(
+                    field_ref=kubernetes.client.V1ObjectFieldSelector(
+                        field_path=f"metadata.labels['{POD_SESSION_RUN_LABEL}']"
+                    )
+                ),
+            ),
+        ],
+        security_context=kubernetes.client.V1SecurityContext(
+            capabilities=kubernetes.client.V1Capabilities(drop=["ALL"]),
+            read_only_root_filesystem=True,
+            allow_privilege_escalation=False,
+        ),
+        resources=kubernetes.client.V1ResourceRequirements(
+            requests={"memory": "16Mi", "cpu": "10m"},
+            limits={"memory": "32Mi", "cpu": "100m"},
+        ),
+        volume_mounts=[
+            kubernetes.client.V1VolumeMount(
+                name="wiring-status", mount_path="/wiring-status", read_only=True
+            ),
+        ],
+    )
+
     containers = [frr_container]
     volumes = [
         kubernetes.client.V1Volume(
             name="frr-config",
             config_map=kubernetes.client.V1ConfigMapVolumeSource(
                 name=config_cm_name,
+            ),
+        ),
+        kubernetes.client.V1Volume(
+            name="wiring-status",
+            config_map=kubernetes.client.V1ConfigMapVolumeSource(
+                name="nodalarc-wiring-status",
+                # Project only this node's proof, never the whole multi-node
+                # status document. The proof appears only after the Node
+                # Agent wires; the pod must be creatable before it exists.
+                items=[
+                    kubernetes.client.V1KeyToPath(key=node_id, path="status.json"),
+                ],
+                optional=True,
             ),
         ),
         # Writable tmpfs for FRR runtime (read-only root filesystem)
@@ -2378,6 +2542,7 @@ def _create_session_pod(
         ),
         spec=kubernetes.client.V1PodSpec(
             node_name=target_node,
+            init_containers=[wiring_gate],
             containers=containers,
             volumes=volumes,
             restart_policy="Never",

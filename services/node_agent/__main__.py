@@ -37,6 +37,7 @@ from nodalarc.nats_channels import (
     wiring_progress_subject,
 )
 from nodalarc.substrate.manifest_contract import WiringManifest
+from nodalarc.substrate.wiring_status import rewiring_status
 
 from node_agent import ops_events
 from node_agent.command_contract import RuntimeFence
@@ -45,8 +46,13 @@ from node_agent.reconcile import (
     get_actual_nodalarc_interfaces,
     wiring_status_is_current,
 )
-from node_agent.server import dispatch
-from node_agent.wiring import execute_wiring, write_wiring_status
+from node_agent.server import DispatchGate, dispatch
+from node_agent.wiring import (
+    discover_expected_handles,
+    execute_wiring,
+    expected_local_nodes,
+    write_wiring_status,
+)
 
 log = logging.getLogger(__name__)
 
@@ -194,7 +200,10 @@ async def main() -> None:
     # -----------------------------------------------------------------------
     # Shared state between wiring and request/reply server
     # -----------------------------------------------------------------------
-    shared_pid_map: dict[str, int] = {}
+    from node_agent.pid_discovery import NamespaceHandle, netns_identity
+
+    shared_handles: dict[str, NamespaceHandle] = {}
+    dispatch_gate = DispatchGate()
     current_fence = RuntimeFence(session_id="", wiring_generation="")
     first_wiring_done = asyncio.Event()
 
@@ -211,7 +220,24 @@ async def main() -> None:
             raise RuntimeError(
                 "--pid-map requires NODE_AGENT_SESSION_ID and NODE_AGENT_WIRING_GENERATION"
             )
-        shared_pid_map.update(json.loads(Path(args.pid_map).read_text()))
+        for explicit_node_id, explicit_pid in json.loads(Path(args.pid_map).read_text()).items():
+            explicit_netns = netns_identity(int(explicit_pid))
+            if explicit_netns is None:
+                raise RuntimeError(
+                    f"--pid-map entry {explicit_node_id}={explicit_pid} has no live "
+                    "network namespace"
+                )
+            shared_handles[explicit_node_id] = NamespaceHandle(
+                node_id=explicit_node_id,
+                # Explicitly unmanaged: this path bypasses pod discovery, so
+                # there is no pod or sandbox identity to bind. The netns
+                # identity is real and still verified per request.
+                pod_uid="explicit",
+                sandbox_id="explicit",
+                sandbox_attempt=0,
+                pid=int(explicit_pid),
+                netns_id=explicit_netns,
+            )
         current_fence = explicit_fence
         from node_agent import substrate_monitor as _substrate_monitor
 
@@ -219,7 +245,7 @@ async def main() -> None:
             current_fence.session_id,
             current_fence.wiring_generation,
         )
-        log.info("Loaded pid_map from %s (%d entries)", args.pid_map, len(shared_pid_map))
+        log.info("Loaded pid_map from %s (%d entries)", args.pid_map, len(shared_handles))
         first_wiring_done.set()
 
     # -----------------------------------------------------------------------
@@ -254,14 +280,31 @@ async def main() -> None:
                 rv = cm.metadata.resource_version or ""
 
                 if rv == last_resource_version:
+                    # Steady state: verify the shared handles still name the
+                    # namespaces they were created for. A sandbox recreation
+                    # invalidates a handle even though the pod persists; the
+                    # kernel wiring died with the old namespace, so force a
+                    # rewire of the current manifest.
+                    stale = [
+                        node_id
+                        for node_id, handle in shared_handles.items()
+                        if not _verify_handle(handle)
+                    ]
+                    if stale:
+                        log.warning(
+                            "Namespace handles invalidated for %s — rewiring current manifest",
+                            ", ".join(sorted(stale)),
+                        )
+                        last_resource_version = ""
+                        continue
                     time.sleep(5)
                     continue
 
-                # New manifest detected — immediately clear stale pid_map.
-                # Any BatchLinkUp arriving from this point forward will be
-                # cleanly deferred until wiring completes and PIDs refresh.
-                shared_pid_map.clear()
-
+                # New manifest detected. Handles are NOT withdrawn here:
+                # the transition is owned solely by perform_rewire (or the
+                # no-local/Case B terminal states below), and the fence flip
+                # below already rejects any request from the previous
+                # generation.
                 compressed = cm.data.get("manifest.json.gz.b64")
                 if compressed:
                     import base64
@@ -332,70 +375,63 @@ async def main() -> None:
                             "verification — treating wiring as diverged"
                         )
                         transit_verified = False
-                if transit_verified and wiring_status_is_current(v1, ns, manifest_model):
-                    log.info(
-                        "Wiring verified — status matches manifest (%d nodes), no-op",
-                        len(nodes),
-                    )
-                    _refresh_pids(shared_pid_map)
+                # One validated handle set drives everything below. The
+                # expected-local set comes from the manifest, and discovery
+                # must COMPLETE before any conclusion is drawn or any kernel
+                # state is touched: an incomplete result (including any
+                # transient Kubernetes or CRI failure) leaves the existing
+                # data plane untouched and retries.
+                expected_local = expected_local_nodes(manifest_model)
+                if not expected_local:
+                    log.info("Manifest places no pods on this node — nothing to wire")
+                    if not replace_handles_when_idle(dispatch_gate, shared_handles, {}):
+                        time.sleep(5)
+                        continue
                     loop.call_soon_threadsafe(first_wiring_done.set)
                     last_resource_version = rv
                     time.sleep(5)
                     continue
 
-                # Case A or C
-                actual = get_actual_nodalarc_interfaces()
-                if not actual:
-                    log.info("No kernel state — wiring from scratch (%d nodes)", len(nodes))
-                else:
+                handles = discover_expected_handles(manifest_model, ns, expected_local)
+                if handles is None:
                     log.warning(
-                        "Kernel state diverged (%d interfaces) — cleaning and re-wiring",
-                        len(actual),
+                        "Wiring pending: incomplete handle discovery — existing "
+                        "kernel state left untouched; retrying the current manifest"
                     )
-                    cleaned = clean_nodalarc_kernel_state()
-                    log.info("Cleaned %d stale kernel interfaces", cleaned)
+                    time.sleep(5)
+                    continue
 
-                statuses = execute_wiring(
-                    manifest_model, namespace=ns, progress_fn=_publish_progress
-                )
-
-                if not statuses:
-                    # No local pods on this node — nothing to wire, nothing
-                    # to report. Advance cursor and move on silently.
-                    loop.call_soon_threadsafe(first_wiring_done.set)
-                    last_resource_version = rv
-                else:
-                    ready_count = sum(1 for s in statuses.values() if s.status == "ready")
-                    failed_count = len(statuses) - ready_count
+                # Case B: every local row names the exact live incarnation
+                # and every manifest node is ready — a true no-op.
+                if transit_verified and wiring_status_is_current(v1, ns, manifest_model, handles):
                     log.info(
-                        "Wiring complete: %d ready, %d failed",
-                        ready_count,
-                        failed_count,
+                        "Wiring verified — status matches manifest (%d nodes), no-op",
+                        len(nodes),
                     )
-
-                    # Refresh pid_map BEFORE writing wiring status. Once the
-                    # status is written, the Operator advances to Ready and
-                    # the Scheduler dispatches immediately.
-                    _refresh_pids(shared_pid_map)
-                    write_wiring_status(statuses, manifest_model, namespace=ns)
-                    if failed_count:
-                        raise RuntimeError(
-                            f"wiring failed for {failed_count} local node(s); not accepting requests"
-                        )
+                    if not replace_handles_when_idle(dispatch_gate, shared_handles, handles):
+                        time.sleep(5)
+                        continue
                     loop.call_soon_threadsafe(first_wiring_done.set)
                     last_resource_version = rv
+                    time.sleep(5)
+                    continue
 
-                    # If some pods were skipped (no PID at wiring time),
-                    # retry sysctls and finalization in the background.
-                    all_local = {n for n in nodes if n in shared_pid_map or n in statuses}
-                    missed = all_local - set(statuses.keys())
-                    if missed:
-                        log.warning(
-                            "Wiring partial: %d nodes skipped, retrying in background: %s",
-                            len(missed),
-                            ", ".join(sorted(missed)),
-                        )
-                        _retry_missed_nodes(missed, manifest, ns, shared_pid_map)
+                rewired = perform_rewire(
+                    manifest_model,
+                    ns,
+                    handles,
+                    expected_local,
+                    shared_handles,
+                    dispatch_gate,
+                    progress_fn=_publish_progress,
+                )
+                if rewired is None:
+                    # Drain timed out: nothing was mutated and dispatch was
+                    # restored. Retry the same manifest.
+                    time.sleep(5)
+                    continue
+                loop.call_soon_threadsafe(first_wiring_done.set)
+                last_resource_version = rv
 
             except Exception as exc:
                 if hasattr(exc, "status") and exc.status == 404:
@@ -415,7 +451,7 @@ async def main() -> None:
     # Wait for first wiring pass to complete before accepting requests
     log.debug("Waiting for wiring to complete before accepting NATS requests...")
     await first_wiring_done.wait()
-    log.debug("Wiring ready — pid_map has %d entries", len(shared_pid_map))
+    log.debug("Wiring ready — %d namespace handles", len(shared_handles))
     _require_ready_fence(current_fence)
 
     # -----------------------------------------------------------------------
@@ -426,7 +462,7 @@ async def main() -> None:
     async def _handle_request(msg):
         try:
             response_bytes = await loop.run_in_executor(
-                None, dispatch, msg.data, shared_pid_map, current_fence
+                None, dispatch, msg.data, shared_handles, current_fence, dispatch_gate
             )
             await msg.respond(response_bytes)
         except Exception as exc:
@@ -482,86 +518,117 @@ async def main() -> None:
     log.info("Node Agent stopped")
 
 
-def _refresh_pids(shared_pid_map: dict[str, int]) -> None:
-    """Refresh the shared pid_map from local pod discovery."""
-    try:
-        from node_agent.pid_discovery import discover_local_pod_pids
-
-        new_pids = discover_local_pod_pids()
-        shared_pid_map.clear()
-        shared_pid_map.update(new_pids)
-        log.info("PID map refreshed: %d pods", len(shared_pid_map))
-    except Exception as exc:
-        log.warning("PID refresh failed: %s", exc)
-
-
-def _retry_missed_nodes(
-    missed: set[str],
-    manifest: dict,
+def perform_rewire(
+    manifest_model: WiringManifest,
     namespace: str,
-    shared_pid_map: dict[str, int],
-) -> None:
-    """Retry sysctls + finalization for nodes that were skipped during wiring.
+    handles: dict,
+    expected_local: set[str],
+    shared_handles: dict,
+    dispatch_gate,
+    progress_fn=None,
+) -> dict:
+    """The one rewire transition, in its only legal order.
 
-    Called from the wiring watcher thread when some pods didn't have PIDs
-    at wiring time. Polls for PIDs every 5 seconds up to 60 seconds.
-    Once a PID appears, applies sysctls, removes default route, and locks
-    down cni0 — the same operations as the sysctl and finalization stages.
+    stop/drain dispatch -> publish non-ready -> withdraw handles -> rebuild
+    -> install handles -> publish ready -> resume dispatch. A dispatched
+    batch can therefore never run against half-torn kernel state, and ready
+    proof is never visible while the host is being rebuilt.
 
-    Does NOT create veths or ISL interfaces — those are handled by the
-    Scheduler via BatchLinkUp when the OME makes them visible.
+    A drain timeout mutates NOTHING: dispatch is restored and None is
+    returned so the caller retries later — an in-flight mutation must never
+    overlap a rebuild. Failure paths (failed wiring, failed ready-status
+    write) leave dispatch CLOSED and handles withdrawn and raise; dispatch
+    resumes only after ready status is successfully published.
     """
-    import time
-
-    from node_agent.namespace_ops import _write_sysctl_in_netns
-    from node_agent.pid_discovery import discover_local_pod_pids
-    from node_agent.wiring import finalize_pod_network
-
-    nodes = manifest.get("nodes", {})
-    remaining = set(missed)
-
-    for _attempt in range(12):
-        if not remaining:
-            break
-        time.sleep(5)
-        fresh_pids = discover_local_pod_pids(namespace)
-        shared_pid_map.update(fresh_pids)
-
-        resolved = []
-        for node_id in list(remaining):
-            pid = fresh_pids.get(node_id, 0)
-            if pid == 0:
-                continue
-            node_spec = nodes.get(node_id, {})
-            for key, value in node_spec.get("sysctls", {}).items():
-                err = _write_sysctl_in_netns(pid, key, str(value))
-                if err:
-                    log.warning("Retry sysctl %s=%s failed for %s: %s", key, value, node_id, err)
-            route_err, security_err = finalize_pod_network(pid, node_id)
-            if route_err or security_err:
-                log.warning(
-                    "Retry finalization failed for %s: route=%s security=%s",
+    if not dispatch_gate.drain():
+        log.warning(
+            "Dispatch drain timed out — an operation is still running; "
+            "mutating nothing and retrying later"
+        )
+        dispatch_gate.resume()
+        return None
+    try:
+        write_wiring_status(
+            {
+                node_id: rewiring_status(
                     node_id,
-                    route_err or "ok",
-                    security_err or "ok",
+                    manifest_model,
+                    pod_uid=handles[node_id].pod_uid,
+                    sandbox_id=handles[node_id].sandbox_id,
+                    netns_id=handles[node_id].netns_id,
                 )
-                continue
-            resolved.append(node_id)
-            remaining.discard(node_id)
+                for node_id in expected_local
+            },
+            manifest_model,
+            namespace=namespace,
+        )
+        shared_handles.clear()
 
-        if resolved:
-            log.info(
-                "Late-start nodes recovered [resolved=%s, remaining=%d]",
-                ", ".join(sorted(resolved)),
-                len(remaining),
+        actual = get_actual_nodalarc_interfaces()
+        if not actual:
+            log.info("No kernel state — wiring from scratch (%d nodes)", len(manifest_model.nodes))
+        else:
+            log.warning(
+                "Kernel state diverged (%d interfaces) — cleaning and re-wiring",
+                len(actual),
+            )
+            cleaned = clean_nodalarc_kernel_state()
+            log.info("Cleaned %d stale kernel interfaces", cleaned)
+
+        statuses = execute_wiring(
+            manifest_model, namespace=namespace, handles=handles, progress_fn=progress_fn
+        )
+
+        ready_count = sum(1 for s in statuses.values() if s.status == "ready")
+        failed_count = len(statuses) - ready_count
+        log.info("Wiring complete: %d ready, %d failed", ready_count, failed_count)
+
+        if failed_count:
+            write_wiring_status(statuses, manifest_model, namespace=namespace)
+            raise RuntimeError(
+                f"wiring failed for {failed_count} local node(s); not accepting requests"
             )
 
-    if remaining:
-        log.error(
-            "FATAL: %d nodes never got PIDs after 60s — sysctls and finalization not applied: %s",
-            len(remaining),
-            ", ".join(sorted(remaining)),
-        )
+        shared_handles.update(handles)
+        try:
+            write_wiring_status(statuses, manifest_model, namespace=namespace)
+        except Exception:
+            shared_handles.clear()
+            raise
+    except BaseException:
+        # A destructive rewire failure leaves dispatch CLOSED and handles
+        # withdrawn: the host may hold partial kernel state, and no runtime
+        # mutation may run until a later pass publishes honest ready proof.
+        log.error("Rewire failed — dispatch stays closed until a later pass succeeds")
+        raise
+    dispatch_gate.resume()
+    return statuses
+
+
+def replace_handles_when_idle(dispatch_gate, shared_handles: dict, new_handles: dict) -> bool:
+    """Swap the shared handle map only when dispatch is fully drained.
+
+    The terminal states (no local pods; wiring already current) replace the
+    handle map without a rebuild, and the same rule applies as everywhere
+    else: a request in flight must never observe a half-swapped map. On a
+    drain timeout nothing is touched, dispatch is restored, and False is
+    returned — the caller must not advance and must retry.
+    """
+    if not dispatch_gate.drain():
+        log.warning("Dispatch drain timed out — handle swap deferred; retrying")
+        dispatch_gate.resume()
+        return False
+    shared_handles.clear()
+    shared_handles.update(new_handles)
+    dispatch_gate.resume()
+    return True
+
+
+def _verify_handle(handle) -> bool:
+    """Whether a shared handle still names the namespace it was created for."""
+    from node_agent.pid_discovery import verify_handle
+
+    return verify_handle(handle)
 
 
 if __name__ == "__main__":

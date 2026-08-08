@@ -28,12 +28,34 @@ class NodeWiringStatus(BaseModel):
 
     node_id: str
     session_id: str
+    # The raw deployment-run identity, matching the pod label the Operator
+    # stamps (and re-stamps on same-CR updates). Release gates compare it
+    # verbatim against their own label, so a row written under a previous
+    # run can never release a workload in the current one.
+    session_run_id: str
     wiring_generation: str
+    # The exact pod incarnation this proof was written for. pod_uid is the
+    # Kubernetes pod UID; sandbox_id is the CRI sandbox; netns_id is the
+    # nsfs inode of the network namespace the Node Agent actually wired.
+    # A workload release gate must match its own pod UID and netns inode
+    # against these, so a row from a replaced pod or a recreated sandbox
+    # can never release a workload it did not wire.
+    pod_uid: str
+    sandbox_id: str
+    netns_id: str
     status: PhaseState
     phases: list[WiringPhaseResult]
     dirty_kernel: bool = False
 
-    @field_validator("node_id", "session_id", "wiring_generation")
+    @field_validator(
+        "node_id",
+        "session_id",
+        "session_run_id",
+        "wiring_generation",
+        "pod_uid",
+        "sandbox_id",
+        "netns_id",
+    )
     @classmethod
     def _nonempty(cls, value: str) -> str:
         if not value:
@@ -55,13 +77,55 @@ class NodeWiringStatus(BaseModel):
         return True
 
 
-def ready_status(node_id: str, manifest: WiringManifest) -> NodeWiringStatus:
+def ready_status(
+    node_id: str,
+    manifest: WiringManifest,
+    *,
+    pod_uid: str,
+    sandbox_id: str,
+    netns_id: str,
+) -> NodeWiringStatus:
     return NodeWiringStatus(
         node_id=node_id,
         session_id=manifest.session_id,
+        session_run_id=manifest.session_run_id,
         wiring_generation=manifest.wiring_generation,
+        pod_uid=pod_uid,
+        sandbox_id=sandbox_id,
+        netns_id=netns_id,
         status="ready",
         phases=[WiringPhaseResult(phase=phase, status="ready") for phase in REQUIRED_WIRING_PHASES],
+        dirty_kernel=False,
+    )
+
+
+def rewiring_status(
+    node_id: str,
+    manifest: WiringManifest,
+    *,
+    pod_uid: str,
+    sandbox_id: str,
+    netns_id: str,
+) -> NodeWiringStatus:
+    """Non-ready row published BEFORE a destructive host rebuild.
+
+    Invalidates any previously ready proof for the node so the Scheduler
+    fails closed and the Operator returns the session to Wiring while this
+    host reconciles. Ready rows may reappear only after every phase and the
+    status write succeed.
+    """
+    return NodeWiringStatus(
+        node_id=node_id,
+        session_id=manifest.session_id,
+        session_run_id=manifest.session_run_id,
+        wiring_generation=manifest.wiring_generation,
+        pod_uid=pod_uid,
+        sandbox_id=sandbox_id,
+        netns_id=netns_id,
+        status="wiring",
+        phases=[
+            WiringPhaseResult(phase=phase, status="pending_pid") for phase in REQUIRED_WIRING_PHASES
+        ],
         dirty_kernel=False,
     )
 
@@ -70,6 +134,9 @@ def failed_status(
     node_id: str,
     manifest: WiringManifest,
     *,
+    pod_uid: str,
+    sandbox_id: str,
+    netns_id: str,
     phase: str,
     error_message: str,
     dirty_kernel: bool = False,
@@ -96,7 +163,11 @@ def failed_status(
     return NodeWiringStatus(
         node_id=node_id,
         session_id=manifest.session_id,
+        session_run_id=manifest.session_run_id,
         wiring_generation=manifest.wiring_generation,
+        pod_uid=pod_uid,
+        sandbox_id=sandbox_id,
+        netns_id=netns_id,
         status="dirty_kernel" if dirty_kernel else "failed",
         phases=phases,
         dirty_kernel=dirty_kernel,

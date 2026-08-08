@@ -72,6 +72,7 @@ list_platform_runtime_images() {
 }
 
 list_session_runtime_images() {
+    emit_record session nodalarc base "$(prefix_ref base "$TAG")" required built
     emit_record session nodalarc frr "$(prefix_ref frr "$TAG")" required built
     emit_record session nodalarc probe "$(prefix_ref probe "$TAG")" required built
 }
@@ -129,6 +130,7 @@ helm_image_args() {
 
     printf '%s\n' "--set-string=buildTag=$TAG"
     printf '%s\n' "--set-string=imagePullPolicy=$pull_policy"
+    printf '%s\n' "--set-string=images.base=$(image_for base)"
     printf '%s\n' "--set-string=images.frr=$(image_for frr)"
     printf '%s\n' "--set-string=images.probe=$(image_for probe)"
     printf '%s\n' "--set-string=images.ome=$(image_for ome)"

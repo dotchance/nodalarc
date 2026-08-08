@@ -37,6 +37,7 @@ from nodalarc_operator.runtime_session import OperatorSessionConfig
 from nodalarc_operator.session_deployer import (
     _create_terminal_ssh_keys,
     _required_substrate_pairs,
+    check_all_pods_provisioned,
     check_wiring_complete,
     compute_expected_placement_node_count,
     compute_expected_pod_count,
@@ -178,6 +179,7 @@ def _make_wiring_manifest(node_ids=("sat-P00S00", "sat-P00S01")):
     for index, node_id in enumerate(node_ids):
         nodes[node_id] = {
             "node_type": "satellite",
+            "host": "node02",
             "sysctls": {"net.ipv4.ip_forward": "1"},
             "isl_interfaces": [],
             "gnd_interfaces": [],
@@ -191,6 +193,8 @@ def _make_wiring_manifest(node_ids=("sat-P00S00", "sat-P00S01")):
     return WiringManifest.model_validate(
         {
             "session_id": "test-session",
+            "session_run_id": "run-test-0001",
+            "owner_uid": "owner-uid-1",
             "wiring_generation": "sha256:" + "a" * 64,
             "required_phases": list(REQUIRED_WIRING_PHASES),
             "nodes": nodes,
@@ -379,6 +383,75 @@ class TestDeterministicNode:
         assert _deterministic_node("gs-anything", ["only-node"]) == "only-node"
 
 
+class TestPodNetworkProvisioning:
+    """check_all_pods_provisioned() counts sandbox networks, never containers."""
+
+    @staticmethod
+    def _pod(
+        node_name: str | None,
+        pod_ip: str | None,
+        phase: str,
+        *,
+        containers: int = 1,
+        running: int | None = None,
+    ) -> MagicMock:
+        pod = MagicMock()
+        pod.spec.node_name = node_name
+        pod.spec.containers = [MagicMock() for _ in range(containers)]
+        pod.status.pod_ip = pod_ip
+        pod.status.phase = phase
+        running_count = containers if running is None else running
+        statuses = []
+        for index in range(containers):
+            status = MagicMock()
+            status.state.running = MagicMock() if index < running_count else None
+            statuses.append(status)
+        pod.status.container_statuses = statuses
+        return pod
+
+    def _check(self, pods: list[MagicMock], expected_count: int) -> tuple[bool, int, int]:
+        mock_v1 = MagicMock()
+        mock_v1.list_namespaced_pod.return_value.items = pods
+        with patch("nodalarc_operator.session_deployer._get_v1", return_value=mock_v1):
+            return check_all_pods_provisioned("nodalarc", expected_count)
+
+    def test_scheduled_pods_with_ips_count_before_any_container_runs(self):
+        pods = [
+            self._pod("node02", "10.42.0.5", "Pending"),
+            self._pod("node03", "10.42.1.7", "Pending"),
+        ]
+        all_provisioned, provisioned, running = self._check(pods, expected_count=2)
+        assert all_provisioned is True
+        assert provisioned == 2
+        assert running == 0
+
+    def test_pod_without_ip_is_not_provisioned(self):
+        pods = [self._pod("node02", "10.42.0.5", "Running"), self._pod("node03", None, "Pending")]
+        all_provisioned, provisioned, running = self._check(pods, expected_count=2)
+        assert all_provisioned is False
+        assert provisioned == 1
+        assert running == 1
+
+    def test_unscheduled_pod_is_not_provisioned(self):
+        pods = [self._pod(None, None, "Pending")]
+        all_provisioned, provisioned, running = self._check(pods, expected_count=1)
+        assert all_provisioned is False
+        assert provisioned == 0
+        assert running == 0
+
+    def test_running_requires_every_authored_container(self):
+        """Pod phase Running is not enough: a multi-container workload counts
+        only when each declared regular container has state.running."""
+        half_started = self._pod("node02", "10.42.0.5", "Running", containers=2, running=1)
+        fully_started = self._pod("node03", "10.42.1.7", "Running", containers=2)
+        all_provisioned, provisioned, running = self._check(
+            [half_started, fully_started], expected_count=2
+        )
+        assert all_provisioned is True
+        assert provisioned == 2
+        assert running == 1
+
+
 # ---------------------------------------------------------------------------
 # Class 3: TestWiringCompletion
 # ---------------------------------------------------------------------------
@@ -389,7 +462,16 @@ class TestWiringCompletion:
 
     def test_metadata_keys_are_not_counted_as_wired_nodes(self):
         manifest = _make_wiring_manifest()
-        statuses = {node_id: ready_status(node_id, manifest) for node_id in manifest.nodes}
+        statuses = {
+            node_id: ready_status(
+                node_id,
+                manifest,
+                pod_uid=f"pod-{node_id}",
+                sandbox_id=f"sb-{node_id}",
+                netns_id="4026532100",
+            )
+            for node_id in manifest.nodes
+        }
         status_data = status_configmap_data(statuses, manifest)
         status_data["_progress"] = "Finalized 2/2 pods. Wiring complete."
 
@@ -414,8 +496,19 @@ class TestWiringCompletion:
 
     def test_unknown_status_node_fails_loudly(self):
         manifest = _make_wiring_manifest()
-        statuses = {node_id: ready_status(node_id, manifest) for node_id in manifest.nodes}
-        statuses["sat-P99S99"] = ready_status("sat-P99S99", manifest)
+        statuses = {
+            node_id: ready_status(
+                node_id,
+                manifest,
+                pod_uid=f"pod-{node_id}",
+                sandbox_id=f"sb-{node_id}",
+                netns_id="4026532100",
+            )
+            for node_id in manifest.nodes
+        }
+        statuses["sat-P99S99"] = ready_status(
+            "sat-P99S99", manifest, pod_uid="pod-x", sandbox_id="sb-x", netns_id="4026532100"
+        )
         status_data = status_configmap_data(statuses, manifest)
 
         mock_v1 = create_autospec(kubernetes.client.CoreV1Api, instance=True)
@@ -436,10 +529,22 @@ class TestWiringCompletion:
 
     def test_dirty_kernel_status_names_first_failure(self):
         manifest = _make_wiring_manifest()
-        statuses = {node_id: ready_status(node_id, manifest) for node_id in manifest.nodes}
+        statuses = {
+            node_id: ready_status(
+                node_id,
+                manifest,
+                pod_uid=f"pod-{node_id}",
+                sandbox_id=f"sb-{node_id}",
+                netns_id="4026532100",
+            )
+            for node_id in manifest.nodes
+        }
         statuses["sat-P00S00"] = failed_status(
             "sat-P00S00",
             manifest,
+            pod_uid="pod-sat-P00S00",
+            sandbox_id="sb-sat-P00S00",
+            netns_id="4026532100",
             phase="sysctls",
             error_message="sysctl net.mpls.platform_labels=100000 failed",
             dirty_kernel=True,
@@ -1427,6 +1532,7 @@ class TestPodSpec:
                 "os.environ",
                 {
                     "FRR_IMAGE": "test/frr:1",
+                    "WIRING_GATE_IMAGE": "test/base:1",
                     "PROBE_IMAGE": "test/probe:1",
                     "NODALPATH_FWD_IMAGE": "test/nodalpath-fwd:1",
                     "IMAGE_PULL_POLICY": "Never",
@@ -1467,6 +1573,45 @@ class TestPodSpec:
             assert "NET_ADMIN" in caps, f"Pod {pod.metadata.name} missing NET_ADMIN"
             assert "NET_RAW" in caps, f"Pod {pod.metadata.name} missing NET_RAW"
             assert frr.security_context.read_only_root_filesystem is True
+
+    def test_wiring_gate_init_container_precedes_authored_containers(self, tmp_path):
+        pods = self._create_pods(tmp_path)
+        for pod in pods:
+            inits = pod.spec.init_containers
+            assert inits is not None and len(inits) == 1
+            gate = inits[0]
+            assert gate.name == "wiring-gate"
+            assert gate.image == "test/base:1"
+            assert gate.security_context.capabilities.drop == ["ALL"]
+            assert gate.security_context.read_only_root_filesystem is True
+            assert gate.security_context.allow_privilege_escalation is False
+            env_paths = {e.name: e.value_from.field_ref.field_path for e in gate.env}
+            assert env_paths["NODE_ID"] == "metadata.labels['nodalarc.io/node-id']"
+            assert env_paths["POD_UID"] == "metadata.uid"
+            assert env_paths["SESSION_RUN_ID"] == ("metadata.labels['nodalarc.io/session-run-id']")
+            mounts = {m.name: m for m in gate.volume_mounts}
+            assert mounts["wiring-status"].read_only is True
+            # The release predicate must bind ready+clean to THIS incarnation
+            # and run: pod UID, session run, netns inode, and all phases.
+            script = gate.command[-1]
+            assert '.status == "ready"' in script
+            assert ".dirty_kernel == false" in script
+            assert ".pod_uid == $uid" in script
+            assert ".session_run_id == $run" in script
+            assert ".netns_id == $ns" in script
+            assert 'all(.status == "ready")' in script
+            assert "readlink /proc/self/ns/net" in script
+
+    def test_wiring_status_volume_projects_only_this_nodes_proof(self, tmp_path):
+        pods = self._create_pods(tmp_path)
+        for pod in pods:
+            volume = next(v for v in pod.spec.volumes if v.name == "wiring-status")
+            assert volume.config_map.name == "nodalarc-wiring-status"
+            assert volume.config_map.optional is True
+            items = volume.config_map.items
+            assert items is not None and len(items) == 1
+            assert items[0].key == pod.metadata.labels["nodalarc.io/node-id"]
+            assert items[0].path == "status.json"
 
     def test_labels(self, tmp_path):
         pods = self._create_pods(tmp_path)
@@ -1534,6 +1679,7 @@ class TestPodSpec:
                 "os.environ",
                 {
                     "FRR_IMAGE": "test/frr:1",
+                    "WIRING_GATE_IMAGE": "test/base:1",
                     "PROBE_IMAGE": "test/probe:1",
                     "NODALPATH_FWD_IMAGE": "test/nodalpath-fwd:1",
                     "IMAGE_PULL_POLICY": "Never",
@@ -1581,6 +1727,7 @@ class TestPodSpec:
                 "os.environ",
                 {
                     "FRR_IMAGE": "test/frr:1",
+                    "WIRING_GATE_IMAGE": "test/base:1",
                     "PROBE_IMAGE": "test/probe:1",
                     "NODALPATH_FWD_IMAGE": "test/nodalpath-fwd:1",
                     "IMAGE_PULL_POLICY": "Never",

@@ -20,6 +20,7 @@ ENV NODALARC_VERSION=${PROJECT_VERSION} \
 RUN apt-get update && apt-get install -y --no-install-recommends \
     iproute2 \
     iperf3 \
+    jq \
     tcpdump \
     traceroute \
     iputils-ping \

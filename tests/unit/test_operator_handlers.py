@@ -117,6 +117,11 @@ class _ReconcilerHarness:
             return_value=(True, self.expected_count, self.expected_count),
         )
         self._p(
+            "check_all_provisioned",
+            "nodalarc_operator.handlers.check_all_pods_provisioned",
+            return_value=(True, self.expected_count, self.expected_count),
+        )
+        self._p(
             "check_wiring",
             "nodalarc_operator.handlers.check_wiring_complete",
             return_value=(True, self.expected_count, None),
@@ -311,7 +316,7 @@ class TestReconcileStateMachine:
             assert status["phase"] == "Creating"
             assert status["message"] == "Pruning 4 pod(s) from a previous session"
 
-    def test_all_running_writes_wiring(self):
+    def test_provisioned_pod_networks_write_wiring(self):
         with _ReconcilerHarness(expected_count=7) as h:
             h.mock("manifest_current").return_value = False
             _run(_reconcile(h, phase="Creating"))
@@ -319,12 +324,52 @@ class TestReconcileStateMachine:
             assert h.mock("ensure_cm").call_args.args[5].startswith("run-")
             h.mock("write_wiring").assert_called_once()
             h.mock("write_ips").assert_called_once()
-            h.mock("restart").assert_called_once()
-            assert h.mock("restart").call_args.args[0] == "nodalarc"
-            assert h.mock("restart").call_args.args[1] != "abc123"
+            # Platform services are NOT restarted at publication: they roll
+            # only after wiring completes and all workloads run.
+            h.mock("restart").assert_not_called()
             status = _last_status(h)
             assert status["platformHash"] == "abc123"
-            assert status["runtimeHash"] == h.mock("restart").call_args.args[1]
+            assert status["runtimeHash"]
+
+    def test_wiring_is_written_before_any_pod_runs(self):
+        with _ReconcilerHarness(expected_count=7) as h:
+            h.mock("manifest_current").return_value = False
+            h.mock("check_all_provisioned").return_value = (True, 7, 0)
+            _run(_reconcile(h, phase="Creating"))
+            h.mock("write_wiring").assert_called_once()
+            h.mock("write_ips").assert_called_once()
+
+    def test_unprovisioned_pod_networks_block_wiring_publication(self):
+        with _ReconcilerHarness(expected_count=7) as h:
+            h.mock("manifest_current").return_value = False
+            h.mock("check_all_provisioned").return_value = (False, 3, 0)
+            _run(_reconcile(h, phase="Creating"))
+            h.mock("write_wiring").assert_not_called()
+            h.mock("write_ips").assert_not_called()
+            status = _last_status(h)
+            assert status["phase"] == "Creating"
+            assert "networked" in status["message"]
+
+    def test_wired_session_waits_for_running_before_ready(self):
+        with _ReconcilerHarness(expected_count=7) as h:
+            h.mock("check_all_running").return_value = (False, 7, 5)
+            _run(_reconcile(h, phase="Wiring"))
+            h.mock("platform_ready").assert_not_called()
+            # Platform services must not start consuming a session whose
+            # workloads have not begun.
+            h.mock("restart").assert_not_called()
+            status = _last_status(h)
+            assert status["phase"] == "Wiring"
+            assert status["readyPods"] == 5
+            assert "pods running: 5/7" in status["message"]
+
+    def test_platform_services_roll_only_after_workloads_run(self):
+        with _ReconcilerHarness(expected_count=7) as h:
+            _run(_reconcile(h, phase="Wiring"))
+            h.mock("restart").assert_called_once()
+            assert h.mock("restart").call_args.args[0] == "nodalarc"
+            status = _last_status(h)
+            assert status["phase"] == "Ready"
 
     def test_stale_wiring_manifest_is_rewritten(self):
         with _ReconcilerHarness(expected_count=7) as h:
@@ -334,13 +379,11 @@ class TestReconcileStateMachine:
             assert h.mock("ensure_cm").call_args.args[5].startswith("run-")
             h.mock("write_wiring").assert_called_once()
             h.mock("write_ips").assert_called_once()
-            h.mock("restart").assert_called_once()
-            assert h.mock("restart").call_args.args[0] == "nodalarc"
-            assert h.mock("restart").call_args.args[1] != "abc123"
+            h.mock("restart").assert_not_called()
             status = _last_status(h)
             assert status["phase"] == "Wiring"
             assert status["observedGeneration"] == 1
-            assert status["runtimeHash"] == h.mock("restart").call_args.args[1]
+            assert status["runtimeHash"]
 
     def test_stale_runtime_mount_is_refreshed_without_rewiring(self):
         with _ReconcilerHarness(expected_count=7) as h:
@@ -350,7 +393,7 @@ class TestReconcileStateMachine:
             h.mock("ensure_cm").assert_called_once()
             h.mock("write_wiring").assert_not_called()
             h.mock("write_ips").assert_not_called()
-            h.mock("restart").assert_called_once()
+            h.mock("restart").assert_not_called()
             status = _last_status(h)
             assert status["phase"] == "Wiring"
             assert "Runtime configuration refreshed" in status["message"]
@@ -599,6 +642,48 @@ class TestReconcileStateMachine:
             status = _last_status(h)
             assert status["phase"] == "Error"
             assert "ConfigMap refresh failed" in status["message"]
+
+    def test_ready_timer_reenters_reconciliation_when_a_pod_is_missing(self):
+        """A missing/replaced/non-running pod must take Ready back through
+        normal reconciliation, before any platform-proof fast path."""
+        with (
+            _ReconcilerHarness(expected_count=7) as h,
+            patch(
+                "nodalarc_operator.handlers._reconcile_session", new_callable=AsyncMock
+            ) as mock_reconcile,
+        ):
+            h.mock("check_all_running").return_value = (False, 7, 6)
+            _run(
+                handlers_mod.wiring_check(
+                    {"sessionYaml": _SESSION_YAML},
+                    "current-session",
+                    "nodalarc",
+                    {"name": "current-session", "uid": "test-uid", "generation": 1},
+                    {"phase": "Ready", "podCount": 7},
+                )
+            )
+            mock_reconcile.assert_awaited_once()
+            h.mock("platform_ready").assert_not_called()
+
+    def test_ready_timer_reenters_reconciliation_when_wiring_proof_stale(self):
+        with (
+            _ReconcilerHarness(expected_count=7) as h,
+            patch(
+                "nodalarc_operator.handlers._reconcile_session", new_callable=AsyncMock
+            ) as mock_reconcile,
+        ):
+            h.mock("check_wiring").return_value = (False, 3, "rewiring in progress")
+            _run(
+                handlers_mod.wiring_check(
+                    {"sessionYaml": _SESSION_YAML},
+                    "current-session",
+                    "nodalarc",
+                    {"name": "current-session", "uid": "test-uid", "generation": 1},
+                    {"phase": "Ready", "podCount": 7},
+                )
+            )
+            mock_reconcile.assert_awaited_once()
+            h.mock("platform_ready").assert_not_called()
 
     def test_ready_timer_repairs_missing_runtime_identity_status(self):
         with _ReconcilerHarness(expected_count=7) as h:

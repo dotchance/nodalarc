@@ -10,11 +10,14 @@ from pydantic import ValidationError
 def _manifest():
     return {
         "session_id": "demo",
+        "session_run_id": "run-demo-0001",
+        "owner_uid": "owner-uid-1",
         "wiring_generation": "sha256:" + "a" * 64,
         "required_phases": list(REQUIRED_WIRING_PHASES),
         "nodes": {
             "sat-a": {
                 "node_type": "satellite",
+                "host": "node02",
                 "plane": 0,
                 "slot": 0,
                 "sysctls": {"net.ipv6.conf.all.forwarding": "1"},
@@ -27,6 +30,7 @@ def _manifest():
             },
             "gs-den": {
                 "node_type": "ground_station",
+                "host": "node02",
                 "gs_name": "den",
                 "gs_index": 0,
                 "sysctls": {"net.ipv6.conf.all.forwarding": "1"},
@@ -64,6 +68,8 @@ def test_wiring_generation_canonicalizes_keys_and_ignores_existing_generation() 
         "site_lans": data["site_lans"],
         "isl_link_count": data["isl_link_count"],
         "session_id": data["session_id"],
+        "session_run_id": data["session_run_id"],
+        "owner_uid": data["owner_uid"],
     }
 
     assert derive_wiring_generation(reordered) == first

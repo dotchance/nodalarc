@@ -42,7 +42,7 @@ from node_agent.namespace_ops import (
     configure_interface,
     enable_mpls_input,
 )
-from node_agent.pid_discovery import discover_local_pod_pids
+from node_agent.pid_discovery import NamespaceHandle, discover_local_pod_handles
 
 _IPTABLES_RULES = (
     "*filter\n"
@@ -50,6 +50,33 @@ _IPTABLES_RULES = (
     "-A OUTPUT -o cni0 -j DROP\n"
     "COMMIT\n"
 )
+
+
+def rename_cni_interface(pid: int, node_id: str) -> str | None:
+    """Rename the CNI interface eth0 -> cni0, platform-owned and pre-workload.
+
+    The rename must land before any workload starts so every routing engine
+    learns the interface under its final name (zebra caches interface
+    identity from startup). Idempotent: an already-renamed namespace is a
+    no-op. Returns error string or None.
+    """
+    try:
+
+        def _rename(ipr: IPRoute) -> None:
+            eth = ipr.link_lookup(ifname="eth0")
+            if not eth:
+                if ipr.link_lookup(ifname="cni0"):
+                    return
+                raise RuntimeError("neither eth0 nor cni0 exists in the pod namespace")
+            index = eth[0]
+            ipr.link("set", index=index, state="down")
+            ipr.link("set", index=index, ifname="cni0")
+            ipr.link("set", index=index, state="up")
+
+        _in_namespace(pid, _rename)
+        return None
+    except Exception as exc:
+        return f"{node_id}: {exc}"
 
 
 def remove_default_route(pid: int, node_id: str) -> str | None:
@@ -87,10 +114,12 @@ def lock_down_cni0(pid: int, node_id: str) -> str | None:
 
 
 def finalize_pod_network(pid: int, node_id: str) -> tuple[str | None, str | None]:
-    """Remove the default route and lock down cni0."""
+    """Rename the CNI interface, remove the default route, lock down cni0."""
+    rename_err = rename_cni_interface(pid, node_id)
     route_err = remove_default_route(pid, node_id)
-    security_err = lock_down_cni0(pid, node_id)
-    return route_err, security_err
+    lockdown_err = lock_down_cni0(pid, node_id)
+    security_errors = [err for err in (rename_err, lockdown_err) if err]
+    return route_err, "; ".join(security_errors) if security_errors else None
 
 
 def finalize_pod(pid: int, node_id: str) -> str | None:
@@ -174,21 +203,87 @@ def _cleanup_stale_interfaces(
         )
 
 
+def expected_local_nodes(manifest: WiringManifest) -> set[str]:
+    """The manifest nodes placed on this host — expectation, never discovery."""
+    import os
+
+    local_node = os.environ.get("NODE_NAME", "")
+    if not local_node:
+        raise RuntimeError("NODE_NAME is not set — cannot derive the expected-local pod set")
+    return {node_id for node_id, spec in manifest.nodes.items() if spec.host == local_node}
+
+
+def discover_expected_handles(
+    manifest: WiringManifest,
+    namespace: str,
+    expected_local: set[str],
+    *,
+    max_attempts: int = 30,
+) -> dict[str, NamespaceHandle] | None:
+    """Return one complete validated handle set for the expected-local pods.
+
+    Retries discovery (fenced to the manifest's deployment run) until every
+    expected local pod has a validated handle, or returns None. None means
+    pending: the caller must leave existing kernel state untouched and
+    retry — a transient Kubernetes or CRI failure must never lead to the
+    destruction of a healthy host data plane.
+    """
+    import time
+
+    handles: dict[str, NamespaceHandle] = {}
+    for attempt in range(1, max_attempts + 1):
+        try:
+            handles = discover_local_pod_handles(
+                namespace,
+                session_run_id=manifest.session_run_id,
+                owner_uid=manifest.owner_uid,
+            )
+        except Exception as exc:
+            # A transient Kubernetes or CRI failure is a pending attempt,
+            # never a divergence signal.
+            log.warning("Handle discovery attempt %d failed: %s", attempt, exc)
+            handles = {}
+        missing = expected_local - set(handles.keys())
+        if not missing:
+            return {node_id: handles[node_id] for node_id in expected_local}
+        if attempt % 5 == 1:
+            log.info(
+                "Handle discovery attempt %d: %d/%d expected local pods validated",
+                attempt,
+                len(expected_local) - len(missing),
+                len(expected_local),
+            )
+        if attempt < max_attempts:
+            time.sleep(2)
+    missing = expected_local - set(handles.keys())
+    log.error(
+        "Discovery incomplete: %d/%d expected local pods have no validated handle: %s",
+        len(missing),
+        len(expected_local),
+        ", ".join(sorted(missing)),
+    )
+    return None
+
+
 def execute_wiring(
     manifest: dict[str, Any] | WiringManifest,
     namespace: str,
+    handles: dict[str, NamespaceHandle],
     progress_fn: Callable[[str], None] | None = None,
 ) -> dict[str, NodeWiringStatus]:
     """Execute all data plane wiring operations from a topology manifest.
 
     Args:
         manifest: Parsed wiring manifest from ConfigMap.
-        namespace: K8s namespace for pod discovery.
+        namespace: K8s namespace for status writes.
+        handles: The complete validated handle set for this host's expected
+            pods, from discover_expected_handles. Wiring never discovers
+            independently: the caller resolves one handle set, decides
+            whether destruction is warranted, and passes that exact set in.
         progress_fn: Optional callback for real-time progress via NATS.
 
     Returns:
-        Dict of {node_id: NodeWiringStatus} for local pods that completed or
-        failed required wiring phases.
+        {node_id: NodeWiringStatus} covering exactly the handled pods.
     """
     try:
         manifest_model = (
@@ -206,59 +301,21 @@ def execute_wiring(
     }
     ground_bridges = manifest_model.ground_bridges
 
-    if not nodes:
-        log.warning("Empty wiring manifest — nothing to wire")
+    if not handles:
+        log.info("No handles to wire on this node")
         return {}
 
-    # Discover PIDs for session pods LOCAL to this node only.
-    # The wiring manifest is global (all nodes), but each Node Agent
-    # only wires pods on its own K3s node. Filter expected_nodes to
-    # only include pods that exist locally (NODE_NAME env var filters
-    # the K8s API query in discover_local_pod_pids).
     import os
-    import time
 
     local_node = os.environ.get("NODE_NAME", "")
-    all_manifest_nodes = set(nodes.keys())
-    pid_map: dict[str, int] = {}
-    max_attempts = 30
+    if not local_node:
+        raise RuntimeError("NODE_NAME is not set — cannot identify this host for wiring")
 
-    for attempt in range(1, max_attempts + 1):
-        fresh = discover_local_pod_pids(namespace)
-        pid_map.update(fresh)
-        if attempt == 1 and not pid_map:
-            break
-        expected_nodes = all_manifest_nodes & set(pid_map.keys())
-        if attempt >= 3 and len(pid_map) > 0:
-            prev_count = len(expected_nodes)
-            if prev_count == len(pid_map):
-                break
-        if attempt % 5 == 1:
-            log.debug(
-                "PID discovery attempt %d: %d local pods found (manifest has %d total, node=%s)",
-                attempt,
-                len(pid_map),
-                len(all_manifest_nodes),
-                local_node,
-            )
-        time.sleep(2)
-
-    if not pid_map:
-        log.info("No local session pods on this node — nothing to wire")
-        return {}
-
-    expected_nodes = all_manifest_nodes & set(pid_map.keys())
-    remote_nodes = all_manifest_nodes - set(pid_map.keys())
-    if remote_nodes:
-        log.debug(
-            "%d pods on other nodes (not wired locally)",
-            len(remote_nodes),
-        )
-    log.info("PID discovery: %d local pods found", len(pid_map))
+    pid_map: dict[str, int] = {node_id: handle.pid for node_id, handle in handles.items()}
 
     statuses: dict[str, NodeWiringStatus] = {}
     node_failures: dict[str, tuple[str, str]] = {}
-    total_nodes = len([n for n in nodes if pid_map.get(n, 0) > 0])
+    total_nodes = len(handles)
 
     def _record_failure(node_id: str, phase: str, message: str) -> None:
         node_failures.setdefault(node_id, (phase, message))
@@ -603,19 +660,29 @@ def execute_wiring(
     _write_progress(f"Finalized {finalized}/{total_nodes} pods. Wiring complete.")
 
     # Mark only nodes with all required wiring phases successful as ready.
-    for node_id in nodes:
-        if pid_map.get(node_id, 0) > 0:
-            if node_id in node_failures:
-                phase, message = node_failures[node_id]
-                statuses[node_id] = failed_status(
-                    node_id,
-                    manifest_model,
-                    phase=phase,
-                    error_message=message,
-                    dirty_kernel=True,
-                )
-            else:
-                statuses[node_id] = ready_status(node_id, manifest_model)
+    # Every status row carries the exact pod incarnation that was wired, so
+    # release gates can bind to it.
+    for node_id, handle in handles.items():
+        if node_id in node_failures:
+            phase, message = node_failures[node_id]
+            statuses[node_id] = failed_status(
+                node_id,
+                manifest_model,
+                pod_uid=handle.pod_uid,
+                sandbox_id=handle.sandbox_id,
+                netns_id=handle.netns_id,
+                phase=phase,
+                error_message=message,
+                dirty_kernel=True,
+            )
+        else:
+            statuses[node_id] = ready_status(
+                node_id,
+                manifest_model,
+                pod_uid=handle.pod_uid,
+                sandbox_id=handle.sandbox_id,
+                netns_id=handle.netns_id,
+            )
 
     ready_count = sum(1 for status in statuses.values() if status.status == "ready")
     failed_count = sum(1 for status in statuses.values() if status.status != "ready")

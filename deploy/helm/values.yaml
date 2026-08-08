@@ -2,6 +2,7 @@
 namespace: nodalarc
 
 images:
+  base: nodalarc/base:dev
   frr: nodalarc/frr:dev
   probe: nodalarc/probe:dev
   nodalpathFwd: nodalarc/nodalpath-fwd:dev

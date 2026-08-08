@@ -34,6 +34,12 @@ def derive_wiring_generation(data: dict[str, Any]) -> str:
     return "sha256:" + hashlib.sha256(canonical_manifest_json(material).encode()).hexdigest()
 
 
+# Session pod labels carrying the deployment-run identity. The Operator
+# stamps them at pod creation; Node Agent discovery filters on them.
+POD_SESSION_RUN_LABEL = "nodalarc.io/session-run-id"
+POD_OWNER_UID_LABEL = "nodalarc.io/owner-uid"
+
+
 class _StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -134,6 +140,10 @@ class GroundBridgeSpec(_StrictModel):
 
 class NodeSpec(_StrictModel):
     node_type: Literal["satellite", "ground_station"]
+    # The K3s node hosting this pod, from observed scheduling. Each Node
+    # Agent derives its expected-local set from this field; discovery output
+    # must never define expectation.
+    host: str
     sysctls: dict[str, str]
     isl_interfaces: list[IslInterface]
     gnd_interfaces: list[InterfaceName]
@@ -193,6 +203,11 @@ class NodeSpec(_StrictModel):
 
 class WiringManifest(_StrictModel):
     session_id: str
+    # Deployment-run identity, matching the session pod labels. Node Agent
+    # discovery is fenced to pods carrying exactly this run and owner, so a
+    # stale pod from a previous deployment can never satisfy discovery.
+    session_run_id: str
+    owner_uid: str
     wiring_generation: str
     required_phases: list[str]
     nodes: dict[str, NodeSpec]
@@ -201,7 +216,7 @@ class WiringManifest(_StrictModel):
     site_lans: dict[str, SiteLanSpec]
     isl_link_count: int
 
-    @field_validator("session_id", "wiring_generation")
+    @field_validator("session_id", "session_run_id", "owner_uid", "wiring_generation")
     @classmethod
     def _nonempty(cls, value: str) -> str:
         if not value:

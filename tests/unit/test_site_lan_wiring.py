@@ -32,6 +32,8 @@ from tests.catalog_session_fixtures import (
 def _manifest_data() -> dict:
     return {
         "session_id": "run-test-0001",
+        "session_run_id": "run-test-0001",
+        "owner_uid": "owner-uid-1",
         "wiring_generation": "sha256:" + "a" * 64,
         "required_phases": [
             "managed_interface_cleanup",
@@ -46,6 +48,7 @@ def _manifest_data() -> dict:
         "nodes": {
             "site-a-gw1": {
                 "node_type": "ground_station",
+                "host": "node02",
                 "gs_name": "site-a-gw1",
                 "gs_index": 0,
                 "sysctls": {"net.ipv4.ip_forward": "1"},
@@ -59,6 +62,7 @@ def _manifest_data() -> dict:
             },
             "site-a-gw2": {
                 "node_type": "ground_station",
+                "host": "node02",
                 "gs_name": "site-a-gw2",
                 "gs_index": 1,
                 "sysctls": {"net.ipv4.ip_forward": "1"},

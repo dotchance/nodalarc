@@ -101,6 +101,10 @@ node_workload_profile:
       container: frr
       path: /etc/frr-static/daemons
       read_only: true
+    plan:
+      container: frr
+      path: /etc/frr-plan
+      read_only: true
   routing_realization:
     container: frr
     realizes:

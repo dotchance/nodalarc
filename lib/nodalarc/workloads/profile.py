@@ -232,10 +232,32 @@ class StaticArtifact(BaseModel):
         return validate_mount_path(path)
 
 
+class PlanArtifactMount(BaseModel):
+    """The one profile-declared destination for per-node plan artifacts.
+
+    A plan carries pre-rendered per-node bytes (for example a rendered
+    native configuration set); this slot names exactly which container
+    receives them and where. Without this declaration a profile accepts no
+    plan artifacts — the platform never invents a destination.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    container: DnsLabel
+    path: NonEmptyStr
+    read_only: RequiredTrue
+
+    @field_validator("path")
+    @classmethod
+    def _path_rules(cls, path: str) -> str:
+        return validate_mount_path(path)
+
+
 class ProfileArtifacts(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     static: tuple[StaticArtifact, ...] = Field(default=(), max_length=8)
+    plan: PlanArtifactMount | None = None
 
     @model_validator(mode="after")
     def _artifact_rules(self) -> ProfileArtifacts:
@@ -362,6 +384,14 @@ class NodeWorkloadProfile(BaseModel):
                     f"static artifact references unknown container {artifact.container!r}"
                 )
             mounts_by_container[artifact.container].append(artifact.path)
+
+        if self.artifacts.plan is not None:
+            if self.artifacts.plan.container not in known_containers:
+                raise ValueError(
+                    f"plan artifact mount references unknown container "
+                    f"{self.artifacts.plan.container!r}"
+                )
+            mounts_by_container[self.artifacts.plan.container].append(self.artifacts.plan.path)
 
         for name, paths in mounts_by_container.items():
             for index, path in enumerate(paths):

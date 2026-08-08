@@ -50,6 +50,10 @@ from nodalarc.substrate.manifest_contract import (
 from nodalarc.template_vars import build_template_vars_from_resolved
 
 from nodalarc_operator.runtime_session import OperatorSessionConfig, resolve_operator_session
+from nodalarc_operator.workloads.materializer import (
+    WorkloadComposition,
+    build_session_pod,
+)
 
 log = logging.getLogger(__name__)
 
@@ -2286,20 +2290,19 @@ def _create_session_pod(
     session_id: str,
     target_node: str | None = None,
 ) -> None:
-    """Create a single session pod (satellite or ground station)."""
-    labels: dict[str, str] = {
-        "nodalarc.io/session": "true",
-        "nodalarc.io/node-id": node_id,
-        "nodalarc.io/role": node_type.replace("_", "-"),
-        POD_SESSION_RUN_LABEL: session_id,
-        POD_OWNER_UID_LABEL: str(owner_ref.get("uid") or ""),
-    }
+    """Create a single session pod (satellite or ground station).
+
+    This function produces the built-in FRR composition; the pod itself is
+    assembled by the one shared materializer, which owns identity, the
+    wiring gate, and every other platform concern.
+    """
+    extra_labels: dict[str, str] = {}
     if plane is not None:
-        labels["nodalarc.io/plane"] = str(plane)
+        extra_labels["nodalarc.io/plane"] = str(plane)
     if slot is not None:
-        labels["nodalarc.io/slot"] = str(slot)
+        extra_labels["nodalarc.io/slot"] = str(slot)
     if gs_name:
-        labels["nodalarc.io/gs-name"] = gs_name
+        extra_labels["nodalarc.io/gs-name"] = gs_name
 
     # FRR container — hardened security context:
     #   SYS_ADMIN: required by FRR's ospfd/mgmtd (privs_init requests it)
@@ -2350,104 +2353,12 @@ def _create_session_pod(
         ],
     )
 
-    # Platform wiring gate: authored containers start only after the Node
-    # Agent has wired THIS pod incarnation. The gate observes the existing
-    # wiring proof (only this node's key of the nodalarc-wiring-status
-    # ConfigMap, projected as an optional volume) and exits when the proof
-    # reports ready with a clean kernel AND names this exact incarnation:
-    # the proof's pod_uid must equal this pod's UID (downward API) and the
-    # proof's netns_id must equal the inode of the network namespace the
-    # gate itself runs in. A row written for a replaced pod, a recreated
-    # sandbox, or a previous generation can never release the workload.
-    # The gate never times out: wiring that does not complete must surface
-    # as a pod stuck in Init, not as a workload started on an unwired
-    # network.
-    wiring_gate = kubernetes.client.V1Container(
-        name="wiring-gate",
-        image=_require_env("WIRING_GATE_IMAGE"),
-        image_pull_policy=_require_env("IMAGE_PULL_POLICY"),
-        command=[
-            "bash",
-            "-c",
-            'my_netns="$(readlink /proc/self/ns/net)"\n'
-            'my_netns="${my_netns#net:[}"\n'
-            'my_netns="${my_netns%]}"\n'
-            'status_file="/wiring-status/status.json"\n'
-            'echo "waiting for platform wiring of ${NODE_ID} '
-            '(pod ${POD_UID}, run ${SESSION_RUN_ID}, netns ${my_netns})"\n'
-            "while true; do\n"
-            '  if [ -f "${status_file}" ] && jq -e --arg uid "${POD_UID}" '
-            '--arg run "${SESSION_RUN_ID}" --arg ns "${my_netns}" '
-            '\'.status == "ready" and .dirty_kernel == false '
-            "and .pod_uid == $uid and .session_run_id == $run "
-            "and .netns_id == $ns "
-            'and (.phases | length > 0) and (.phases | all(.status == "ready"))\' '
-            '"${status_file}" > /dev/null 2>&1; then\n'
-            '    echo "wiring ready for ${NODE_ID}"\n'
-            "    exit 0\n"
-            "  fi\n"
-            "  sleep 2\n"
-            "done\n",
-        ],
-        env=[
-            kubernetes.client.V1EnvVar(
-                name="NODE_ID",
-                value_from=kubernetes.client.V1EnvVarSource(
-                    field_ref=kubernetes.client.V1ObjectFieldSelector(
-                        field_path="metadata.labels['nodalarc.io/node-id']"
-                    )
-                ),
-            ),
-            kubernetes.client.V1EnvVar(
-                name="POD_UID",
-                value_from=kubernetes.client.V1EnvVarSource(
-                    field_ref=kubernetes.client.V1ObjectFieldSelector(field_path="metadata.uid")
-                ),
-            ),
-            kubernetes.client.V1EnvVar(
-                name="SESSION_RUN_ID",
-                value_from=kubernetes.client.V1EnvVarSource(
-                    field_ref=kubernetes.client.V1ObjectFieldSelector(
-                        field_path=f"metadata.labels['{POD_SESSION_RUN_LABEL}']"
-                    )
-                ),
-            ),
-        ],
-        security_context=kubernetes.client.V1SecurityContext(
-            capabilities=kubernetes.client.V1Capabilities(drop=["ALL"]),
-            read_only_root_filesystem=True,
-            allow_privilege_escalation=False,
-        ),
-        resources=kubernetes.client.V1ResourceRequirements(
-            requests={"memory": "16Mi", "cpu": "10m"},
-            limits={"memory": "32Mi", "cpu": "100m"},
-        ),
-        volume_mounts=[
-            kubernetes.client.V1VolumeMount(
-                name="wiring-status", mount_path="/wiring-status", read_only=True
-            ),
-        ],
-    )
-
     containers = [frr_container]
     volumes = [
         kubernetes.client.V1Volume(
             name="frr-config",
             config_map=kubernetes.client.V1ConfigMapVolumeSource(
                 name=config_cm_name,
-            ),
-        ),
-        kubernetes.client.V1Volume(
-            name="wiring-status",
-            config_map=kubernetes.client.V1ConfigMapVolumeSource(
-                name="nodalarc-wiring-status",
-                # Project only this node's proof, never the whole multi-node
-                # status document. The proof appears only after the Node
-                # Agent wires; the pod must be creatable before it exists.
-                items=[
-                    kubernetes.client.V1KeyToPath(key=node_id, path="status.json"),
-                ],
-                optional=True,
             ),
         ),
         # Writable tmpfs for FRR runtime (read-only root filesystem)
@@ -2533,30 +2444,16 @@ def _create_session_pod(
         )
         containers.append(probe_container)
 
-    pod = kubernetes.client.V1Pod(
-        metadata=kubernetes.client.V1ObjectMeta(
-            name=pod_name,
-            namespace=namespace,
-            labels=labels,
-            owner_references=[owner_ref],
-        ),
-        spec=kubernetes.client.V1PodSpec(
-            node_name=target_node,
-            init_containers=[wiring_gate],
-            containers=containers,
-            volumes=volumes,
-            restart_policy="Never",
-            automount_service_account_token=False,
-            # Fast DNS timeout: pod IPs have no PTR records in CoreDNS.
-            # Without this, every reverse DNS lookup (traceroute hops, sshd
-            # client lookup, any gethostbyaddr) waits 10+ seconds.
-            dns_config=kubernetes.client.V1PodDNSConfig(
-                options=[
-                    kubernetes.client.V1PodDNSConfigOption(name="timeout", value="1"),
-                    kubernetes.client.V1PodDNSConfigOption(name="attempts", value="1"),
-                ],
-            ),
-        ),
+    pod = build_session_pod(
+        pod_name=pod_name,
+        namespace=namespace,
+        node_id=node_id,
+        role=node_type.replace("_", "-"),
+        session_id=session_id,
+        owner_ref=owner_ref,
+        composition=WorkloadComposition(containers=containers, volumes=volumes),
+        target_node=target_node,
+        extra_labels=extra_labels,
     )
 
     try:

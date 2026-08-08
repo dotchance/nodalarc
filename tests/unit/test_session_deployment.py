@@ -9,6 +9,9 @@ from nodalarc.catalog_refs import CatalogRef
 from nodalarc.catalog_repository import CatalogScope
 from nodalarc.filesystem_catalog_repository import FilesystemCatalogRepository
 from nodalarc.models.builder_api import BuilderDraftEnvelope, BuilderSessionSaveRequest
+from nodalarc.models.session_sources import CatalogSessionSwitchRequest
+from nodalarc.workloads.refs import selection_ref_from_spec
+from pydantic import ValidationError
 from vs_api.builder_compiler import canonicalize_persisted_configuration
 from vs_api.builder_session_service import save_builder_session
 from vs_api.catalog_context import CatalogContext
@@ -233,6 +236,10 @@ def test_persisted_upload_builds_exact_cr_and_cleanup_deletes_unselected_group(
     persisted = persist_catalog_session_upload(prepared, store)  # type: ignore[arg-type]
     body = constellation_spec_body(persisted, namespace="nodalarc")
 
+    # Absent selection: the CR body carries exactly the pre-selection spec —
+    # neither pair field may appear for the built-in FRR default.
+    assert set(body["spec"]) == {"sessionYaml", "catalogUpload"}
+
     assert body["spec"]["sessionYaml"].encode() == saved.session.canonical_yaml.encode()
     assert body["spec"]["catalogUpload"] == persisted.receipt.selection.model_dump(mode="json")
     assert body["spec"]["catalogUpload"] == {
@@ -245,5 +252,67 @@ def test_persisted_upload_builds_exact_cr_and_cleanup_deletes_unselected_group(
         saved.digests.dependency
     )
 
+    # Present selection: exactly the pair, verbatim.
+    selection_ref = selection_ref_from_spec(
+        {
+            "implementationBindingRef": "nodalarc:bindings/frr-observer-everywhere.yaml",
+            "implementationPackageDigest": "sha256:" + "c" * 64,
+        }
+    )
+    selected_body = constellation_spec_body(
+        persisted, namespace="nodalarc", workload_selection=selection_ref
+    )
+    assert set(selected_body["spec"]) == {
+        "sessionYaml",
+        "catalogUpload",
+        "implementationBindingRef",
+        "implementationPackageDigest",
+    }
+    assert (
+        selected_body["spec"]["implementationBindingRef"]
+        == "nodalarc:bindings/frr-observer-everywhere.yaml"
+    )
+    assert selected_body["spec"]["implementationPackageDigest"] == "sha256:" + "c" * 64
+
     cleanup_unselected_catalog_session_upload(persisted, store)  # type: ignore[arg-type]
     assert store.deleted == persisted.upload.selection
+
+
+def test_switch_request_refuses_an_incomplete_selection() -> None:
+    """The API boundary cannot express half a selection."""
+    base = {
+        "source": {"kind": "catalog", "session_ref": "nodalarc:sessions/earth-leo-simple.yaml"},
+        "expected_source_revision": "sha256:" + "a" * 64,
+        "expected_document_digest": "sha256:" + "a" * 64,
+        "expected_dependency_digest": "sha256:" + "a" * 64,
+    }
+    parsed = CatalogSessionSwitchRequest.model_validate(base)
+    assert parsed.workload_selection is None
+
+    complete = CatalogSessionSwitchRequest.model_validate(
+        {
+            **base,
+            "workload_selection": {
+                "binding_ref": "nodalarc:bindings/frr-observer-everywhere.yaml",
+                "package_digest": "sha256:" + "c" * 64,
+            },
+        }
+    )
+    assert complete.workload_selection is not None
+    assert complete.workload_selection.identity() == (
+        "nodalarc:bindings/frr-observer-everywhere.yaml@sha256:" + "c" * 64
+    )
+
+    with pytest.raises(ValidationError):
+        CatalogSessionSwitchRequest.model_validate(
+            {
+                **base,
+                "workload_selection": {
+                    "binding_ref": "nodalarc:bindings/frr-observer-everywhere.yaml"
+                },
+            }
+        )
+    with pytest.raises(ValidationError):
+        CatalogSessionSwitchRequest.model_validate(
+            {**base, "workload_selection": {"package_digest": "sha256:" + "c" * 64}}
+        )

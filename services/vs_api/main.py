@@ -106,6 +106,7 @@ from nodalarc.resolve_session import (
     SessionResolution,
 )
 from nodalarc.runtime_support import UnsupportedFeatureError
+from nodalarc.workloads.refs import SelectionRef
 from yaml import YAMLError
 
 from vs_api.catalog_context import CatalogContext, get_catalog_context
@@ -3540,7 +3541,7 @@ async def switch_session(
             },
         )
     operation_id = await _admit_transition(
-        lambda: _run_catalog_switch(deployment, catalog_context),
+        lambda: _run_catalog_switch(deployment, catalog_context, body.workload_selection),
         reservation=_prepared_transition_reservation(deployment),
     )
     if operation_id is None:
@@ -3887,15 +3888,21 @@ def introspect(body: dict) -> dict:
 async def _run_catalog_switch(
     deployment: Any,
     catalog_context: CatalogContext,
+    workload_selection: SelectionRef | None = None,
 ) -> TransitionRuntimeResult:
     async with _session_transition_lock:
-        return await _run_prepared_switch_locked(deployment, catalog_context=catalog_context)
+        return await _run_prepared_switch_locked(
+            deployment,
+            catalog_context=catalog_context,
+            workload_selection=workload_selection,
+        )
 
 
 async def _run_prepared_switch_locked(
     deployment: Any,
     *,
     catalog_context: CatalogContext,
+    workload_selection: SelectionRef | None = None,
 ) -> TransitionRuntimeResult:
     global _active_context, _active_cr_generation
 
@@ -3997,6 +4004,7 @@ async def _run_prepared_switch_locked(
             custom_objects_api=custom_objects_api,
             core_v1_api=core_v1_api,
             namespace=namespace,
+            workload_selection=workload_selection,
             progress_fn=_switch_progress,
             transition_started=_transition_started,
             upload_resource_observed=_upload_resource_observed,

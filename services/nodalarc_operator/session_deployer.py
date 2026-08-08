@@ -48,11 +48,17 @@ from nodalarc.substrate.manifest_contract import (
     POD_SESSION_RUN_LABEL,
 )
 from nodalarc.template_vars import build_template_vars_from_resolved
+from nodalarc.workloads.refs import BUILTIN_FRR_SELECTION_IDENTITY, selection_ref_from_spec
 
 from nodalarc_operator.runtime_session import OperatorSessionConfig, resolve_operator_session
 from nodalarc_operator.workloads.materializer import (
+    WORKLOAD_SELECTION_ANNOTATION,
     WorkloadComposition,
     build_session_pod,
+)
+from nodalarc_operator.workloads.selection import (
+    WorkloadSelectionError,
+    prepare_workload_selection,
 )
 
 log = logging.getLogger(__name__)
@@ -121,6 +127,8 @@ def _operator_session_config(
         raise ValueError("active_session root YAML does not match spec.sessionYaml")
     if selection != active_session.catalog_upload:
         raise ValueError("active_session upload selection does not match spec.catalogUpload")
+    if selection_ref_from_spec(spec) != active_session.workload_selection:
+        raise ValueError("active_session workload selection does not match the CR's pair")
     if run_id is not None and active_session.proof.run_id != run_id:
         raise ValueError("active_session runtime identity does not match session_run_id")
     return active_session
@@ -218,8 +226,110 @@ def _pod_current_for_runtime(pod: Any, session_id: str, owner_ref: dict | None) 
     )
 
 
+def _pod_selection_identity(pod: Any) -> str:
+    """The pod's stamped built-in-or-explicit selection identity.
+
+    An absent annotation means the identity is unknown, which never matches
+    any desired identity: an unverifiable pod is deleted and recreated.
+    """
+    metadata = _metadata(pod)
+    annotations = getattr(metadata, "annotations", None) or {}
+    return str(annotations.get(WORKLOAD_SELECTION_ANNOTATION) or "")
+
+
+def _ensure_immutable_configmap(
+    v1: kubernetes.client.CoreV1Api,
+    namespace: str,
+    config_map: kubernetes.client.V1ConfigMap,
+) -> None:
+    """Create-or-verify semantics for immutable workload artifact objects.
+
+    An immutable object is never replaced. On 409 the existing object is
+    read back and must match on the complete owner-reference projection,
+    immutability, and exact contents — anything else (an old CR's object,
+    mutated bytes) is a deterministic workload error for this selection.
+    """
+    name = config_map.metadata.name
+    try:
+        v1.create_namespaced_config_map(namespace, config_map)
+        return
+    except kubernetes.client.rest.ApiException as error:
+        if error.status != 409:
+            raise
+    existing = v1.read_namespaced_config_map(name, namespace)
+    expected_ref = config_map.metadata.owner_references[0]
+    expected_projection = [
+        {
+            "api_version": str(expected_ref.get("apiVersion") or ""),
+            "kind": str(expected_ref.get("kind") or ""),
+            "name": str(expected_ref.get("name") or ""),
+            "uid": str(expected_ref.get("uid") or ""),
+            "block_owner_deletion": bool(expected_ref.get("blockOwnerDeletion") or False),
+        }
+    ]
+    existing_projection = [
+        {
+            "api_version": str(getattr(ref, "api_version", "") or ""),
+            "kind": str(getattr(ref, "kind", "") or ""),
+            "name": str(getattr(ref, "name", "") or ""),
+            "uid": str(getattr(ref, "uid", "") or ""),
+            "block_owner_deletion": bool(getattr(ref, "block_owner_deletion", False) or False),
+        }
+        for ref in existing.metadata.owner_references or []
+    ]
+    if existing_projection != expected_projection:
+        raise WorkloadSelectionError(
+            f"workload artifact ConfigMap {name!r} is owned by "
+            f"{existing_projection!r}, not the current CR {expected_projection!r}"
+        )
+    if existing.immutable is not True:
+        raise WorkloadSelectionError(
+            f"workload artifact ConfigMap {name!r} exists but is not immutable"
+        )
+    if (existing.binary_data or {}) != (config_map.binary_data or {}):
+        raise WorkloadSelectionError(
+            f"workload artifact ConfigMap {name!r} exists with different contents"
+        )
+    if (existing.data or {}) != (config_map.data or {}):
+        raise WorkloadSelectionError(
+            f"workload artifact ConfigMap {name!r} exists with unexpected plain data"
+        )
+
+
 def _list_session_pods(v1: kubernetes.client.CoreV1Api, namespace: str) -> list[Any]:
     return list(v1.list_namespaced_pod(namespace, label_selector=SESSION_POD_SELECTOR).items)
+
+
+def _delete_pod_preconditioned(v1: kubernetes.client.CoreV1Api, namespace: str, pod: Any) -> bool:
+    """Delete exactly the observed pod, never a same-name replacement.
+
+    The delete is preconditioned on the observed pod UID: a stale
+    reconciliation pass whose target was already replaced gets a 409 and
+    removes nothing. Returns True when the delete was accepted.
+    """
+    metadata = _metadata(pod)
+    pod_name = str(getattr(metadata, "name", "") or "")
+    pod_uid = str(getattr(metadata, "uid", "") or "")
+    if not pod_name or not pod_uid:
+        raise ValueError("cannot delete a session pod without a name and uid")
+    try:
+        v1.delete_namespaced_pod(
+            pod_name,
+            namespace,
+            body=kubernetes.client.V1DeleteOptions(
+                preconditions=kubernetes.client.V1Preconditions(uid=pod_uid)
+            ),
+        )
+    except kubernetes.client.rest.ApiException as error:
+        if error.status in (404, 409):
+            log.info(
+                "Skipped deleting pod %s: already gone or replaced (HTTP %s)",
+                pod_name,
+                error.status,
+            )
+            return False
+        raise
+    return True
 
 
 def _patch_pod_runtime_identity(
@@ -229,6 +339,12 @@ def _patch_pod_runtime_identity(
     session_id: str,
     owner_ref: dict,
 ) -> None:
+    """Re-stamp a built-in-default pod's runtime identity for an intentional reuse.
+
+    Only built-in-default pods are ever re-stamped; the annotation is written so a
+    pre-feature pod adopted here carries its identity explicitly from now
+    on.
+    """
     metadata = _metadata(pod)
     pod_name = str(getattr(metadata, "name", "") or "")
     if not pod_name:
@@ -238,7 +354,8 @@ def _patch_pod_runtime_identity(
             "labels": {
                 POD_SESSION_RUN_LABEL: session_id,
                 POD_OWNER_UID_LABEL: str(owner_ref.get("uid") or ""),
-            }
+            },
+            "annotations": {WORKLOAD_SELECTION_ANNOTATION: BUILTIN_FRR_SELECTION_IDENTITY},
         }
     }
     v1.patch_namespaced_pod(pod_name, namespace, body)
@@ -249,28 +366,71 @@ def ensure_session_pod_identity(
     expected_ids: set[str] | frozenset[str],
     session_id: str,
     owner_ref: dict,
+    selection_identity: str,
 ) -> int:
     """Stamp same-CR session pods with the current runtime identity.
 
-    A CR generation change may intentionally reuse running pods while refreshing
-    ConfigMaps and rewiring. Pods from a different CR UID are never adopted.
+    A CR generation change may intentionally reuse running LEGACY pods while
+    refreshing ConfigMaps and rewiring. Pods from a different CR UID are
+    never adopted. A pod whose built-in-or-explicit selection identity differs
+    from the CR's current selection is never re-stamped: it is deleted here
+    (UID-preconditioned) and recreated through ordinary reconciliation. A
+    pre-feature pod without the annotation is adopted as built-in default only
+    when the desired selection IS the built-in default. An explicit pod is
+    recreated whenever
+    its run ID changes: its immutable artifacts belong to the previous run's
+    content.
     """
+    if not selection_identity:
+        raise ValueError("selection_identity is required to evaluate session pod identity")
+    desired_is_explicit = selection_identity != BUILTIN_FRR_SELECTION_IDENTITY
     v1 = _get_v1()
     expected = {node_id.lower() for node_id in expected_ids}
     patched = 0
+    replaced = 0
     for pod in _list_session_pods(v1, namespace):
         if _pod_node_id(pod) not in expected:
             continue
         if _pod_deleting(pod) or not _pod_owned_by(pod, owner_ref):
             continue
+        pod_identity = _pod_selection_identity(pod)
+        adoptable_builtin = pod_identity == "" and not desired_is_explicit
+        if pod_identity != selection_identity and not adoptable_builtin:
+            log.info(
+                "Deleting session pod %s: selection identity %r does not match "
+                "the CR's current selection %r",
+                str(getattr(_metadata(pod), "name", "") or ""),
+                pod_identity,
+                selection_identity,
+            )
+            if _delete_pod_preconditioned(v1, namespace, pod):
+                replaced += 1
+            continue
         labels = _labels(pod)
-        if labels.get(POD_SESSION_RUN_LABEL) != session_id or labels.get(
+        run_is_current = labels.get(POD_SESSION_RUN_LABEL) == session_id and labels.get(
             POD_OWNER_UID_LABEL
-        ) != str(owner_ref.get("uid") or ""):
-            _patch_pod_runtime_identity(v1, pod, namespace, session_id, owner_ref)
-            patched += 1
+        ) == str(owner_ref.get("uid") or "")
+        if run_is_current:
+            continue
+        if desired_is_explicit:
+            log.info(
+                "Deleting explicit session pod %s: run changed; its immutable "
+                "artifacts belong to the previous run",
+                str(getattr(_metadata(pod), "name", "") or ""),
+            )
+            if _delete_pod_preconditioned(v1, namespace, pod):
+                replaced += 1
+            continue
+        _patch_pod_runtime_identity(v1, pod, namespace, session_id, owner_ref)
+        patched += 1
     if patched:
         log.info("Stamped %d session pods with runtime identity %s", patched, session_id)
+    if replaced:
+        log.info(
+            "Deleted %d session pods whose selection identity or run differed; "
+            "reconciliation recreates them",
+            replaced,
+        )
     return patched
 
 
@@ -286,6 +446,39 @@ def current_session_pod_node_ids(
         for pod in _list_session_pods(v1, namespace)
         if _pod_current_for_runtime(pod, session_id, owner_ref)
     }
+
+
+def delete_owned_session_pods(namespace: str, owner_ref: dict) -> tuple[int, int]:
+    """Drive this CR UID's session pods toward zero; report what remains.
+
+    The convergent action for a deterministic selection failure: the CR's
+    desired workloads cannot be realized, so leaving previous workloads
+    running would misrepresent session state. Deletes are preconditioned on
+    each observed pod UID, so a stale pass can never remove a replacement
+    pod. Returns (remaining, requested): ``remaining`` counts every owned
+    pod still present — including ones already terminating — so the caller
+    publishes a terminal phase only once zero is observed. Pods of other CR
+    UIDs are untouched.
+    """
+    v1 = _get_v1()
+    remaining = 0
+    requested = 0
+    for pod in _list_session_pods(v1, namespace):
+        if not _pod_owned_by(pod, owner_ref):
+            continue
+        remaining += 1
+        if _pod_deleting(pod):
+            continue
+        if _delete_pod_preconditioned(v1, namespace, pod):
+            requested += 1
+    if requested:
+        log.info(
+            "Requested deletion of %d owned session pods after terminal "
+            "selection failure (%d still present)",
+            requested,
+            remaining,
+        )
+    return remaining, requested
 
 
 def count_stale_session_pods(
@@ -603,6 +796,97 @@ def _publish_validation_ops_events(results: list, namespace: str, session_id: st
         )
 
 
+def _render_frr_configs(node_vars: dict, node_stacks: dict) -> dict[str, dict[str, str]]:
+    """Render every node's FRR configuration from prepared template vars.
+
+    Pure derivation from resolved-session truth: no Kubernetes call, safe
+    to run during write-free preparation.
+    """
+    template_dir = str(Path("configs/templates/frr").resolve())
+    # nosec B701 — these are FRR router config templates, not HTML; autoescape would break config syntax
+    env = Environment(loader=FileSystemLoader(template_dir), keep_trailing_newline=True)
+
+    rendered_configs: dict[str, dict[str, str]] = {}
+
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    def _render_one_node(node_id: str, tpl_vars: dict) -> tuple[str, dict[str, str]]:
+        configs: dict[str, str] = {}
+        node_stack = node_stacks[node_id]
+        for tpl_file in node_stack.template_files:
+            tpl = env.get_template(tpl_file.src)
+            rendered = tpl.render(**tpl_vars)
+            dest_name = Path(tpl_file.dst).name
+            configs[dest_name] = rendered
+        # Generate daemons file
+        if node_stack.daemons:
+            # mgmtd is always required in FRR 10.x — it manages config loading
+            enabled = set(node_stack.daemons) | {"mgmtd"}
+            configs["daemons"] = (
+                "\n".join(f"{d}={'yes' if d in enabled else 'no'}" for d in _ALL_FRR_DAEMONS) + "\n"
+            )
+        # Create unified frr.conf combining all daemon configs.
+        # FRR's config parser treats blank lines inside blocks as implicit "exit",
+        # so we must strip consecutive blank lines from Jinja2 output.
+        frr_conf_parts = []
+        for name_key in ("zebra.conf", "isisd.conf", "ospfd.conf", "pathd.conf", "staticd.conf"):
+            if name_key in configs:
+                frr_conf_parts.append(f"! === {name_key} ===")
+                frr_conf_parts.append(configs[name_key])
+        if frr_conf_parts:
+            raw = "\n".join(frr_conf_parts)
+            # Remove blank lines — FRR's config parser interprets blank lines
+            # inside interface/router blocks as implicit "exit" commands.
+            # Jinja2 {% if %} blocks produce blank lines that break parsing.
+            lines = raw.splitlines()
+            cleaned_lines = [line for line in lines if line.strip() != ""]
+            configs["frr.conf"] = "\n".join(cleaned_lines) + "\n"
+        # Config version hash — NOS-agnostic readiness contract.
+        # The entrypoint writes this to a sentinel file after loading config.
+        # The readiness probe diffs the sentinel against the ConfigMap mount
+        # to verify the running NOS has loaded the intended config version.
+        if "frr.conf" in configs:
+            config_hash = hashlib.sha256(configs["frr.conf"].encode()).hexdigest()[:16]
+            configs["_config_version"] = config_hash
+        return node_id, configs
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        futures = {pool.submit(_render_one_node, nid, vars): nid for nid, vars in node_vars.items()}
+        for fut in as_completed(futures):
+            nid, configs = fut.result()
+            rendered_configs[nid] = configs
+    return rendered_configs
+
+
+def prepare_session_workloads(
+    active_session: OperatorSessionConfig,
+    *,
+    namespace: str,
+    owner_ref: dict,
+):
+    """The COMPLETE write-free workload preparation for one verified session.
+
+    Renders per-node configuration, then loads, digest-verifies, resolves,
+    compiles, and composes every selected node. No Kubernetes call happens
+    here: the reconciler runs this before deleting or reusing any pod, and
+    every failure raises the typed WorkloadSelectionError family. Returns
+    None for a session without a selection.
+    """
+    if active_session.workload_selection is None:
+        return None
+    resolved_session = active_session.resolution.resolved
+    stacks_by_domain = _stack_by_domain(resolved_session)
+    node_vars, node_stacks = _node_vars_from_resolved(resolved_session, stacks_by_domain)
+    rendered_configs = _render_frr_configs(node_vars, node_stacks)
+    return prepare_workload_selection(
+        active_session.workload_selection,
+        resolved_session,
+        rendered_configs,
+        namespace=namespace,
+        owner_ref=owner_ref,
+    )
+
+
 def ensure_session_configmaps(
     spec: dict,
     name: str,
@@ -612,6 +896,7 @@ def ensure_session_configmaps(
     session_run_id: str | None = None,
     active_session: OperatorSessionConfig | None = None,
     deployment_context: RuntimeDeploymentContext | None = None,
+    prepared_workloads=None,
 ) -> dict:
     """Create/update all ConfigMaps and SSH keys for a session.
 
@@ -718,66 +1003,55 @@ def ensure_session_configmaps(
 
     # --- Step 5: Render FRR configs (parallelized) ---
     _progress(f"Rendering FRR configurations for {len(node_vars)} nodes")
-    template_dir = str(Path("configs/templates/frr").resolve())
-    # nosec B701 — these are FRR router config templates, not HTML; autoescape would break config syntax
-    env = Environment(loader=FileSystemLoader(template_dir), keep_trailing_newline=True)
+    rendered_configs = _render_frr_configs(node_vars, node_stacks)
 
-    rendered_configs: dict[str, dict[str, str]] = {}
-
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-
-    def _render_one_node(node_id: str, tpl_vars: dict) -> tuple[str, dict[str, str]]:
-        configs: dict[str, str] = {}
-        node_stack = node_stacks[node_id]
-        for tpl_file in node_stack.template_files:
-            tpl = env.get_template(tpl_file.src)
-            rendered = tpl.render(**tpl_vars)
-            dest_name = Path(tpl_file.dst).name
-            configs[dest_name] = rendered
-        # Generate daemons file
-        if node_stack.daemons:
-            # mgmtd is always required in FRR 10.x — it manages config loading
-            enabled = set(node_stack.daemons) | {"mgmtd"}
-            configs["daemons"] = (
-                "\n".join(f"{d}={'yes' if d in enabled else 'no'}" for d in _ALL_FRR_DAEMONS) + "\n"
+    # --- Step 5b: Explicit workload selection (write-free) ---
+    # Load, resolve, compile, and compose EVERY selected node before the
+    # first Kubernetes write below. Absent selection = built-in FRR default,
+    # unchanged. Any selection failure is terminal — never FRR. The
+    # reconciler runs the same preparation before any pod mutation and
+    # hands the result in; a direct caller computes it here.
+    _progress("Preparing workload selection")
+    if operator_session.workload_selection is None:
+        if prepared_workloads is not None:
+            raise ValueError("prepared workloads supplied for a session without a selection")
+        selected_workloads = None
+    elif prepared_workloads is not None:
+        if (
+            prepared_workloads.package.package_digest
+            != operator_session.workload_selection.package_digest
+        ):
+            raise WorkloadSelectionError(
+                "prepared workloads do not match the session's selected package digest"
             )
-        # Create unified frr.conf combining all daemon configs.
-        # FRR's config parser treats blank lines inside blocks as implicit "exit",
-        # so we must strip consecutive blank lines from Jinja2 output.
-        frr_conf_parts = []
-        for name_key in ("zebra.conf", "isisd.conf", "ospfd.conf", "pathd.conf", "staticd.conf"):
-            if name_key in configs:
-                frr_conf_parts.append(f"! === {name_key} ===")
-                frr_conf_parts.append(configs[name_key])
-        if frr_conf_parts:
-            raw = "\n".join(frr_conf_parts)
-            # Remove blank lines — FRR's config parser interprets blank lines
-            # inside interface/router blocks as implicit "exit" commands.
-            # Jinja2 {% if %} blocks produce blank lines that break parsing.
-            lines = raw.splitlines()
-            cleaned_lines = [line for line in lines if line.strip() != ""]
-            configs["frr.conf"] = "\n".join(cleaned_lines) + "\n"
-        # Config version hash — NOS-agnostic readiness contract.
-        # The entrypoint writes this to a sentinel file after loading config.
-        # The readiness probe diffs the sentinel against the ConfigMap mount
-        # to verify the running NOS has loaded the intended config version.
-        if "frr.conf" in configs:
-            config_hash = hashlib.sha256(configs["frr.conf"].encode()).hexdigest()[:16]
-            configs["_config_version"] = config_hash
-        return node_id, configs
+        selected_workloads = prepared_workloads
+    else:
+        selected_workloads = prepare_workload_selection(
+            operator_session.workload_selection,
+            resolved_session,
+            rendered_configs,
+            namespace=namespace,
+            owner_ref=owner_ref,
+        )
 
-    with ThreadPoolExecutor(max_workers=8) as pool:
-        futures = {pool.submit(_render_one_node, nid, vars): nid for nid, vars in node_vars.items()}
-        for fut in as_completed(futures):
-            nid, configs = fut.result()
-            rendered_configs[nid] = configs
-
-    # --- Step 6: Create per-node FRR config ConfigMaps ---
-    _progress(f"Creating {len(rendered_configs)} FRR config ConfigMaps")
-    for node_id, configs in rendered_configs.items():
-        cm_name = f"frr-config-{node_id.lower()}"
-        _create_or_update_configmap(v1, cm_name, namespace, configs, owner_ref)
-    log.info("Created %d FRR config ConfigMaps", len(rendered_configs))
+    if selected_workloads is None:
+        # --- Step 6: Create per-node FRR config ConfigMaps (built-in FRR default) ---
+        _progress(f"Creating {len(rendered_configs)} FRR config ConfigMaps")
+        for node_id, configs in rendered_configs.items():
+            cm_name = f"frr-config-{node_id.lower()}"
+            _create_or_update_configmap(v1, cm_name, namespace, configs, owner_ref)
+        log.info("Created %d FRR config ConfigMaps", len(rendered_configs))
+    else:
+        # --- Step 6 (explicit path): immutable workload artifact ConfigMaps ---
+        # Rendered configuration travels as plan artifacts inside these
+        # objects; the per-node frr-config ConfigMaps are not written.
+        _progress(f"Creating {len(selected_workloads.composed)} workload artifact ConfigMaps")
+        artifact_count = 0
+        for composed in selected_workloads.composed.values():
+            if composed.artifact_config_map is not None:
+                _ensure_immutable_configmap(v1, namespace, composed.artifact_config_map)
+                artifact_count += 1
+        log.info("Ensured %d workload artifact ConfigMaps", artifact_count)
 
     # --- Step 7: Create session-level ConfigMaps ---
     _progress("Creating session-level ConfigMaps")
@@ -820,6 +1094,7 @@ def ensure_session_configmaps(
         "node_stacks": node_stacks,
         "pod_placement": pod_placement,
         "available_nodes": available_nodes,
+        "workload_selection": selected_workloads,
     }
 
 
@@ -889,6 +1164,7 @@ def ensure_session_pods(
 
     created_pods = 0
     errors = []
+    api_failures: list[kubernetes.client.rest.ApiException] = []
     _pod_creation_done = threading.Event()
 
     # Heartbeat thread: if no pod completes for 10 seconds, update the
@@ -906,27 +1182,47 @@ def ensure_session_pods(
     heartbeat = threading.Thread(target=_heartbeat, daemon=True)
     heartbeat.start()
 
+    selected_workloads = context.get("workload_selection")
+
     with ThreadPoolExecutor(max_workers=16) as pool:
         futures = {}
         for ps in pod_specs:
-            fut = pool.submit(
-                _create_session_pod,
-                v1=v1,
-                pod_name=ps["pod_name"],
-                namespace=namespace,
-                node_id=ps["node_id"],
-                node_type=ps["node_type"],
-                plane=ps["plane"],
-                slot=ps["slot"],
-                gs_name=ps["gs_name"],
-                config_cm_name=ps["config_cm_name"],
-                sidecar_config=ps["sidecar_config"],
-                sidecar_env=ps["sidecar_env"],
-                probe_enabled=ps["probe_enabled"],
-                target_node=ps["target_node"],
-                owner_ref=owner_ref,
-                session_id=session_id,
-            )
+            if selected_workloads is not None:
+                fut = pool.submit(
+                    _create_workload_pod,
+                    v1=v1,
+                    pod_name=ps["pod_name"],
+                    namespace=namespace,
+                    node_id=ps["node_id"],
+                    node_type=ps["node_type"],
+                    plane=ps["plane"],
+                    slot=ps["slot"],
+                    gs_name=ps["gs_name"],
+                    composed=selected_workloads.composed[ps["node_id"]],
+                    target_node=ps["target_node"],
+                    owner_ref=owner_ref,
+                    session_id=session_id,
+                    selection_identity=selected_workloads.identity,
+                )
+            else:
+                fut = pool.submit(
+                    _create_session_pod,
+                    v1=v1,
+                    pod_name=ps["pod_name"],
+                    namespace=namespace,
+                    node_id=ps["node_id"],
+                    node_type=ps["node_type"],
+                    plane=ps["plane"],
+                    slot=ps["slot"],
+                    gs_name=ps["gs_name"],
+                    config_cm_name=ps["config_cm_name"],
+                    sidecar_config=ps["sidecar_config"],
+                    sidecar_env=ps["sidecar_env"],
+                    probe_enabled=ps["probe_enabled"],
+                    target_node=ps["target_node"],
+                    owner_ref=owner_ref,
+                    session_id=session_id,
+                )
             futures[fut] = ps["node_id"]
 
         for fut in as_completed(futures):
@@ -935,6 +1231,10 @@ def ensure_session_pods(
                 fut.result()
                 created_pods += 1
                 _progress(f"Creating session pods: {created_pods}/{total_pods}")
+            except kubernetes.client.rest.ApiException as exc:
+                api_failures.append(exc)
+                errors.append(f"{node_id}: {exc}")
+                log.error("Pod creation failed for %s: %s", node_id, exc)
             except Exception as exc:
                 errors.append(f"{node_id}: {exc}")
                 log.error("Pod creation failed for %s: %s", node_id, exc)
@@ -946,6 +1246,11 @@ def ensure_session_pods(
         displayed = "; ".join(errors[:10])
         if len(errors) > 10:
             displayed += f"; ... and {len(errors) - 10} more"
+        if len(api_failures) == len(errors):
+            # Every failure was a Kubernetes API failure: transient. The
+            # typed exception reaches the reconciler, which stays Creating
+            # and creates the missing pods on the next tick.
+            raise api_failures[0]
         raise RuntimeError(f"Pod creation failed: {displayed}")
     log.info("Created %d session pods (total expected: %d)", created_pods, total_pods)
 
@@ -1873,12 +2178,17 @@ def compute_platform_hash(
         namespace=namespace,
         origin="operator.platform_hash",
     )
+    selection_ref = operator_session.workload_selection
     canonical_obj = {
         "resolved": operator_session.resolution.resolved.model_dump(
             mode="json",
             exclude={"source_context": True},
         ),
         "runtime_config": _proof_hash_fields(operator_session.proof),
+        # The explicit selection pair participates in runtime identity: a
+        # changed binding or package must invalidate cached-session reuse
+        # exactly like changed session truth. None for the built-in default.
+        "workload_selection": selection_ref.identity() if selection_ref else None,
     }
     canonical = json.dumps(canonical_obj, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode()).hexdigest()
@@ -2452,10 +2762,26 @@ def _create_session_pod(
         session_id=session_id,
         owner_ref=owner_ref,
         composition=WorkloadComposition(containers=containers, volumes=volumes),
+        selection_identity=BUILTIN_FRR_SELECTION_IDENTITY,
         target_node=target_node,
         extra_labels=extra_labels,
     )
 
+    _create_pod_with_conflict_check(
+        v1, pod, namespace, pod_name, owner_ref, session_id, BUILTIN_FRR_SELECTION_IDENTITY
+    )
+
+
+def _create_pod_with_conflict_check(
+    v1: kubernetes.client.CoreV1Api,
+    pod: kubernetes.client.V1Pod,
+    namespace: str,
+    pod_name: str,
+    owner_ref: dict,
+    session_id: str,
+    selection_identity: str,
+) -> None:
+    """The one create/409 path every session pod uses, built-in or explicit."""
     try:
         v1.create_namespaced_pod(namespace, pod)
     except kubernetes.client.rest.ApiException as e:
@@ -2467,8 +2793,74 @@ def _create_session_pod(
                 ) from e
             if _pod_deleting(existing):
                 raise RuntimeError(f"Pod {pod_name} already exists and is deleting") from e
+            existing_identity = _pod_selection_identity(existing)
+            desired_is_explicit = selection_identity != BUILTIN_FRR_SELECTION_IDENTITY
+            adoptable_builtin = existing_identity == "" and not desired_is_explicit
+            if existing_identity != selection_identity and not adoptable_builtin:
+                log.info(
+                    "Deleting existing pod %s: selection identity %r does not match "
+                    "the CR's current selection %r; reconciliation recreates it",
+                    pod_name,
+                    existing_identity,
+                    selection_identity,
+                )
+                _delete_pod_preconditioned(v1, namespace, existing)
+                return
             if not _pod_current_for_runtime(existing, session_id, owner_ref):
+                if desired_is_explicit:
+                    log.info(
+                        "Deleting explicit pod %s: run changed; its immutable "
+                        "artifacts belong to the previous run",
+                        pod_name,
+                    )
+                    _delete_pod_preconditioned(v1, namespace, existing)
+                    return
                 _patch_pod_runtime_identity(v1, existing, namespace, session_id, owner_ref)
             log.debug("Pod %s already exists for current runtime, skipping", pod_name)
         else:
             raise
+
+
+def _create_workload_pod(
+    v1: kubernetes.client.CoreV1Api,
+    pod_name: str,
+    namespace: str,
+    node_id: str,
+    node_type: str,
+    plane: int | None,
+    slot: int | None,
+    gs_name: str | None,
+    composed: Any,
+    owner_ref: dict,
+    session_id: str,
+    selection_identity: str,
+    target_node: str | None = None,
+) -> None:
+    """Create one explicitly selected workload pod.
+
+    The composition was produced before any write; this function only
+    assembles through the shared materializer and creates through the same
+    conflict path as the built-in producer.
+    """
+    extra_labels: dict[str, str] = {}
+    if plane is not None:
+        extra_labels["nodalarc.io/plane"] = str(plane)
+    if slot is not None:
+        extra_labels["nodalarc.io/slot"] = str(slot)
+    if gs_name:
+        extra_labels["nodalarc.io/gs-name"] = gs_name
+    pod = build_session_pod(
+        pod_name=pod_name,
+        namespace=namespace,
+        node_id=node_id,
+        role=node_type.replace("_", "-"),
+        session_id=session_id,
+        owner_ref=owner_ref,
+        composition=composed.composition,
+        selection_identity=selection_identity,
+        target_node=target_node,
+        extra_labels=extra_labels,
+    )
+    _create_pod_with_conflict_check(
+        v1, pod, namespace, pod_name, owner_ref, session_id, selection_identity
+    )

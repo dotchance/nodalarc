@@ -120,6 +120,23 @@ image_for() {
     image_for_tag "$1" "$TAG"
 }
 
+workload_dev_overrides() {
+    # Map the shipped workload profiles' placeholder image references to the
+    # tree's real images. Development only: the value reaches the Operator
+    # as WORKLOAD_DEV_IMAGE_OVERRIDES and every substitution is logged as
+    # non-reproducible. Raw JSON: it must NEVER pass through helm --set
+    # parsing, where braces and commas are list syntax. It travels as a
+    # generated values file (workload-dev-overrides-values).
+    local zeros="0000000000000000000000000000000000000000000000000000000000000000"
+    printf '{"registry.example/nodalarc/frr@sha256:%s":"%s","registry.example/nodalarc/base@sha256:%s":"%s"}' \
+        "$zeros" "$(image_for frr)" "$zeros" "$(image_for base)"
+}
+
+workload_dev_overrides_values() {
+    # YAML values fragment carrying the JSON verbatim as one string scalar.
+    printf "workloadDevImageOverrides: '%s'\n" "$(workload_dev_overrides)"
+}
+
 helm_image_args() {
     local pull_policy
     if [ "$MODE_RESOLVED" = "single-node" ]; then
@@ -158,6 +175,7 @@ Commands:
   image-for NAME
   image-for-tag NAME TAG
   helm-image-args
+  workload-dev-overrides-values
 EOF
 }
 
@@ -192,6 +210,7 @@ case "$command" in
         image_for_tag "$2" "$3"
         ;;
     helm-image-args) helm_image_args ;;
+    workload-dev-overrides-values) workload_dev_overrides_values ;;
     -h|--help|help) usage ;;
     *)
         echo "na-images: unknown command '$command'" >&2

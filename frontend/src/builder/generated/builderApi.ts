@@ -20,6 +20,8 @@ export type Sha256Digest = string;
 export type CatalogRef = string;
 /** Catalog reference whose family is sessions. */
 export type SessionRef = CatalogRef;
+/** Workload binding reference resolved against the package source. */
+export type ImplementationBindingRef = CatalogRef;
 /** Path-free deployable source selected by the browser. */
 export type SessionSourceId = CatalogSessionSourceId;
 /** Runtime validation descriptor for generated backend application DTOs. */
@@ -939,12 +941,19 @@ export interface CatalogSessionSummary {
   readonly active?: boolean;
 }
 
+/** The CR's explicit workload selection: one binding, one package digest. External runtime selection metadata — never part of session YAML, and unable to redefine the resolved world. Present as a pair or not at all. */
+export interface SelectionRef {
+  readonly binding_ref: ImplementationBindingRef;
+  readonly package_digest: Sha256Digest;
+}
+
 /** Deploy one reviewed session revision from the request catalog scope. */
 export interface CatalogSessionSwitchRequest {
   readonly source: CatalogSessionSourceId;
   readonly expected_source_revision: Sha256Digest;
   readonly expected_document_digest: Sha256Digest;
   readonly expected_dependency_digest: Sha256Digest;
+  readonly workload_selection?: SelectionRef | null;
 }
 
 /** Accepted catalog deployment operation. */

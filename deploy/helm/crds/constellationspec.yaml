@@ -42,6 +42,23 @@ spec:
                     file_count:
                       type: integer
                       minimum: 0
+                implementationBindingRef:
+                  type: string
+                  pattern: '^(?:nodalarc|user):(?:bindings)/(?:[a-z0-9][a-z0-9_-]*/)*[a-z0-9][a-z0-9_-]*\.(?:yaml|yml)$'
+                  description: >-
+                    Optional explicit workload selection: a typed binding
+                    reference resolved against the workload package source.
+                    External runtime selection metadata — never part of the
+                    session YAML, and always paired with
+                    implementationPackageDigest. An invalid or unavailable
+                    selection is a terminal error, never a fallback.
+                implementationPackageDigest:
+                  type: string
+                  pattern: '^sha256:[0-9a-f]{64}$'
+                  description: >-
+                    The one content digest of the loaded binding/profile/
+                    artifact package this selection was made against. Present
+                    exactly when implementationBindingRef is present.
             status:
               type: object
               properties:

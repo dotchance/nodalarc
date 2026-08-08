@@ -27,6 +27,11 @@ SESSION_LABEL = "nodalarc.io/session"
 NODE_ID_LABEL = "nodalarc.io/node-id"
 ROLE_LABEL = "nodalarc.io/role"
 
+# Platform-owned pod annotation carrying the built-in-or-explicit workload
+# selection identity. The reconciler compares it against the CR's current
+# selection; a differing pod is deleted and recreated, never re-stamped.
+WORKLOAD_SELECTION_ANNOTATION = "nodalarc.io/workload-selection"
+
 WIRING_STATUS_CONFIGMAP = "nodalarc-wiring-status"
 
 _WIRING_GATE_SCRIPT = (
@@ -151,6 +156,7 @@ def build_session_pod(
     session_id: str,
     owner_ref: dict,
     composition: WorkloadComposition,
+    selection_identity: str,
     target_node: str | None = None,
     extra_labels: dict[str, str] | None = None,
 ) -> kubernetes.client.V1Pod:
@@ -159,8 +165,12 @@ def build_session_pod(
     Platform identity and platform names are not composable surface: extra
     labels may not overlap the identity label set, and no authored
     container or volume may use the reserved wiring-gate/wiring-status
-    names.
+    names. Every pod carries its built-in-or-explicit selection identity as a
+    platform-owned annotation; the reconciler never adopts a pod whose
+    annotation differs from the CR's current selection.
     """
+    if not selection_identity:
+        raise ValueError("selection_identity is required on every session pod")
     labels: dict[str, str] = {
         SESSION_LABEL: "true",
         NODE_ID_LABEL: node_id,
@@ -189,6 +199,7 @@ def build_session_pod(
             name=pod_name,
             namespace=namespace,
             labels=labels,
+            annotations={WORKLOAD_SELECTION_ANNOTATION: selection_identity},
             owner_references=[owner_ref],
         ),
         spec=kubernetes.client.V1PodSpec(

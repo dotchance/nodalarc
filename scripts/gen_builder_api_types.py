@@ -237,6 +237,7 @@ from nodalarc.models.session_sources import (  # noqa: E402
     CatalogSessionSwitchRequest,
     CatalogSessionYamlUploadRequest,
 )
+from nodalarc.workloads.refs import ImplementationBindingRef, SelectionRef  # noqa: E402
 from pydantic import BaseModel, TypeAdapter  # noqa: E402
 from vs_api.transition_operations import (  # noqa: E402
     TransitionOperation,
@@ -352,6 +353,7 @@ MODEL_TYPES: tuple[type[BaseModel], ...] = (
     CatalogSessionSourceId,
     CatalogSessionBlocker,
     CatalogSessionSummary,
+    SelectionRef,
     CatalogSessionSwitchRequest,
     CatalogSessionSwitchAccepted,
     CatalogSessionYamlUploadRequest,
@@ -495,6 +497,7 @@ _SHA256_PATTERN = TypeAdapter(Sha256Digest).json_schema()["pattern"]
 _REFERENCE_ALIAS_BY_PATTERN = {
     TypeAdapter(CatalogRef).json_schema()["pattern"]: "CatalogRef",
     TypeAdapter(SessionRef).json_schema()["pattern"]: "SessionRef",
+    TypeAdapter(ImplementationBindingRef).json_schema()["pattern"]: "ImplementationBindingRef",
 }
 _GENERIC_CONFIGURATION_SCHEMA_REFS = {
     "ValidatedConfigurationJson",
@@ -785,6 +788,8 @@ def render() -> str:
         "export type CatalogRef = string;",
         "/** Catalog reference whose family is sessions. */",
         "export type SessionRef = CatalogRef;",
+        "/** Workload binding reference resolved against the package source. */",
+        "export type ImplementationBindingRef = CatalogRef;",
         "/** Path-free deployable source selected by the browser. */",
         "export type SessionSourceId = CatalogSessionSourceId;",
         "/** Runtime validation descriptor for generated backend application DTOs. */",

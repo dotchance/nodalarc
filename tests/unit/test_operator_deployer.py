@@ -33,6 +33,7 @@ from nodalarc.runtime_config import (
 from nodalarc.semantic_projection import resolved_session_semantic_digest
 from nodalarc.substrate.manifest_contract import REQUIRED_WIRING_PHASES, WiringManifest
 from nodalarc.substrate.wiring_status import failed_status, ready_status, status_configmap_data
+from nodalarc.workloads.refs import selection_ref_from_spec
 from nodalarc_operator.runtime_session import OperatorSessionConfig
 from nodalarc_operator.session_deployer import (
     _create_terminal_ssh_keys,
@@ -98,6 +99,7 @@ def _reset_operator_module_state():
             ),
             root_yaml=root_yaml,
             catalog_upload=selection,
+            workload_selection=selection_ref_from_spec(spec),
         )
 
     sd._v1 = None
@@ -875,16 +877,24 @@ def _existing_session_pod(
     node_id="sat-P00S00",
     uid="test-uid",
     run_id="run-test-0001",
+    selection_identity="builtin-frr-default",
+    pod_uid="pod-uid-0001",
 ):
     return kubernetes.client.V1Pod(
         metadata=kubernetes.client.V1ObjectMeta(
             name=pod_name,
+            uid=pod_uid,
             labels={
                 "nodalarc.io/session": "true",
                 "nodalarc.io/node-id": node_id,
                 "nodalarc.io/session-run-id": run_id,
                 "nodalarc.io/owner-uid": uid,
             },
+            annotations=(
+                {"nodalarc.io/workload-selection": selection_identity}
+                if selection_identity is not None
+                else None
+            ),
             owner_references=[
                 kubernetes.client.V1OwnerReference(
                     api_version="nodalarc.io/v1alpha1",
@@ -1503,6 +1513,263 @@ class TestConfigRendering:
 # ---------------------------------------------------------------------------
 
 
+class TestExplicitWorkloadPath:
+    """The explicit selection through the full deployer pipeline."""
+
+    def _run(self, tmp_path):
+        from pathlib import Path as _Path
+
+        from nodalarc.workloads.refs import ImplementationBindingRef
+        from nodalarc.workloads.source import DirectoryPackageSource
+
+        package_root = _Path(__file__).resolve().parents[2] / "configs" / "workloads"
+        digest = (
+            DirectoryPackageSource(package_root)
+            .load(ImplementationBindingRef("nodalarc:bindings/frr-observer-everywhere.yaml"))
+            .package_digest
+        )
+        spec = _make_catalog_spec(tmp_path)
+        spec["implementationBindingRef"] = "nodalarc:bindings/frr-observer-everywhere.yaml"
+        spec["implementationPackageDigest"] = digest
+        mock_v1 = create_autospec(kubernetes.client.CoreV1Api, instance=True)
+        mock_v1.read_namespaced_secret.return_value = _existing_terminal_secret("test-uid-456")
+        owner_ref = {
+            "apiVersion": "nodalarc.io/v1alpha1",
+            "kind": "ConstellationSpec",
+            "name": "current-session",
+            "uid": "test-uid-456",
+            "blockOwnerDeletion": True,
+        }
+        with (
+            patch("nodalarc_operator.session_deployer._get_v1", return_value=mock_v1),
+            patch(
+                "nodalarc_operator.session_deployer.discover_available_nodes",
+                return_value=["node01", "node02"],
+            ),
+            patch.dict(
+                "os.environ",
+                {
+                    "FRR_IMAGE": "test/frr:1",
+                    "WIRING_GATE_IMAGE": "test/base:1",
+                    "PROBE_IMAGE": "test/probe:1",
+                    "NODALPATH_FWD_IMAGE": "test/nodalpath-fwd:1",
+                    "IMAGE_PULL_POLICY": "Never",
+                },
+                clear=False,
+            ),
+        ):
+            context = ensure_session_configmaps(
+                spec,
+                "current-session",
+                "nodalarc",
+                owner_ref,
+                session_run_id="run-test-0001",
+                deployment_context=_test_deployment_context(spec, owner_uid="test-uid-456"),
+            )
+            ensure_session_pods(context, "nodalarc", owner_ref)
+        pods = []
+        for call in mock_v1.create_namespaced_pod.call_args_list:
+            pod = call[1].get("body") or call[0][1]
+            pods.append(pod)
+        config_maps = []
+        for call in mock_v1.create_namespaced_config_map.call_args_list:
+            cm = call[1].get("body") or call[0][1]
+            config_maps.append(cm)
+        return pods, config_maps
+
+    def test_selected_profile_replaces_the_builtin_composition(self, tmp_path):
+        pods, config_maps = self._run(tmp_path)
+        assert pods
+        for pod in pods:
+            names = [container.name for container in pod.spec.containers]
+            assert names == ["frr", "observer"], names
+            assert [c.name for c in pod.spec.init_containers] == ["wiring-gate"]
+            frr = pod.spec.containers[0]
+            mounts = {m.mount_path for m in frr.volume_mounts}
+            # The plan slot is the genuinely consumed config path.
+            assert "/etc/frr-plan" not in mounts
+            assert "/etc/frr-config" in mounts
+        cm_names = [
+            cm.metadata.name for cm in config_maps if hasattr(cm, "metadata") and cm.metadata
+        ]
+        assert not [n for n in cm_names if n and n.startswith("frr-config-")]
+        assert [n for n in cm_names if n and n.startswith("wl-")]
+
+    def test_digest_mismatch_creates_nothing(self, tmp_path):
+        from nodalarc_operator.workloads.selection import WorkloadSelectionError
+
+        spec = _make_catalog_spec(tmp_path)
+        spec["implementationBindingRef"] = "nodalarc:bindings/frr-observer-everywhere.yaml"
+        spec["implementationPackageDigest"] = "sha256:" + "d" * 64
+        mock_v1 = create_autospec(kubernetes.client.CoreV1Api, instance=True)
+        mock_v1.read_namespaced_secret.return_value = _existing_terminal_secret("test-uid-456")
+        owner_ref = {
+            "apiVersion": "nodalarc.io/v1alpha1",
+            "kind": "ConstellationSpec",
+            "name": "current-session",
+            "uid": "test-uid-456",
+            "blockOwnerDeletion": True,
+        }
+        with (
+            patch("nodalarc_operator.session_deployer._get_v1", return_value=mock_v1),
+            patch(
+                "nodalarc_operator.session_deployer.discover_available_nodes",
+                return_value=["node01", "node02"],
+            ),
+            patch.dict(
+                "os.environ",
+                {
+                    "FRR_IMAGE": "test/frr:1",
+                    "WIRING_GATE_IMAGE": "test/base:1",
+                    "PROBE_IMAGE": "test/probe:1",
+                    "NODALPATH_FWD_IMAGE": "test/nodalpath-fwd:1",
+                    "IMAGE_PULL_POLICY": "Never",
+                },
+                clear=False,
+            ),
+            pytest.raises(WorkloadSelectionError, match="desired digest"),
+        ):
+            ensure_session_configmaps(
+                spec,
+                "current-session",
+                "nodalarc",
+                owner_ref,
+                session_run_id="run-test-0001",
+                deployment_context=_test_deployment_context(spec, owner_uid="test-uid-456"),
+            )
+        mock_v1.create_namespaced_pod.assert_not_called()
+        assert not [
+            call
+            for call in mock_v1.create_namespaced_config_map.call_args_list
+            if (call[1].get("body") or call[0][1]).metadata.name.startswith("wl-")
+        ]
+
+
+class TestSelectionIdentityReplacement:
+    """A pod whose selection identity differs is deleted, never re-stamped."""
+
+    OWNER_REF = {
+        "apiVersion": "nodalarc.io/v1alpha1",
+        "kind": "ConstellationSpec",
+        "name": "current-session",
+        "uid": "test-uid",
+        "blockOwnerDeletion": True,
+    }
+    EXPLICIT = "nodalarc:bindings/frr-observer-everywhere.yaml@sha256:" + "a" * 64
+
+    def _identity_pass(self, pods, selection_identity, session_id="run-test-0002"):
+        from nodalarc_operator.session_deployer import ensure_session_pod_identity
+
+        mock_v1 = create_autospec(kubernetes.client.CoreV1Api, instance=True)
+        mock_v1.list_namespaced_pod.return_value = kubernetes.client.V1PodList(items=pods)
+        with patch("nodalarc_operator.session_deployer._get_v1", return_value=mock_v1):
+            patched = ensure_session_pod_identity(
+                "nodalarc",
+                {"sat-p00s00"},
+                session_id,
+                self.OWNER_REF,
+                selection_identity,
+            )
+        return mock_v1, patched
+
+    def _assert_preconditioned_delete(self, mock_v1, pod_name, pod_uid):
+        mock_v1.delete_namespaced_pod.assert_called_once()
+        args, kwargs = mock_v1.delete_namespaced_pod.call_args
+        assert args[0] == pod_name
+        assert args[1] == "nodalarc"
+        assert kwargs["body"].preconditions.uid == pod_uid
+
+    def test_pod_identity_deletes_differing_selection(self):
+        builtin_pod = _existing_session_pod(run_id="run-old-0001")
+        mock_v1, _ = self._identity_pass([builtin_pod], self.EXPLICIT)
+        self._assert_preconditioned_delete(mock_v1, "sat-p00s00", "pod-uid-0001")
+        mock_v1.patch_namespaced_pod.assert_not_called()
+
+    def test_pod_identity_recreates_explicit_on_run_change(self):
+        # Same explicit pair, new run: the pod's immutable artifacts belong
+        # to the previous run's content. Recreated, never re-stamped.
+        explicit_pod = _existing_session_pod(
+            run_id="run-old-0001", selection_identity=self.EXPLICIT
+        )
+        mock_v1, _ = self._identity_pass([explicit_pod], self.EXPLICIT)
+        self._assert_preconditioned_delete(mock_v1, "sat-p00s00", "pod-uid-0001")
+        mock_v1.patch_namespaced_pod.assert_not_called()
+
+    def test_pod_identity_restamps_matching_builtin(self):
+        builtin_pod = _existing_session_pod(run_id="run-old-0001")
+        mock_v1, patched = self._identity_pass([builtin_pod], "builtin-frr-default")
+        assert patched == 1
+        mock_v1.delete_namespaced_pod.assert_not_called()
+        mock_v1.patch_namespaced_pod.assert_called_once()
+
+    def test_prefeature_unannotated_builtin_pod_survives(self):
+        # An Operator upgrade must not restart every pre-feature pod: a pod
+        # without the annotation is adopted as built-in default when the
+        # desired selection IS the built-in default; adoption stamps the
+        # annotation.
+        unannotated = _existing_session_pod(run_id="run-old-0001", selection_identity=None)
+        mock_v1, patched = self._identity_pass([unannotated], "builtin-frr-default")
+        assert patched == 1
+        mock_v1.delete_namespaced_pod.assert_not_called()
+        body = mock_v1.patch_namespaced_pod.call_args[0][2]
+        assert body["metadata"]["annotations"] == {
+            "nodalarc.io/workload-selection": "builtin-frr-default"
+        }
+
+    def test_prefeature_unannotated_pod_is_replaced_for_explicit(self):
+        unannotated = _existing_session_pod(run_id="run-old-0001", selection_identity=None)
+        mock_v1, _ = self._identity_pass([unannotated], self.EXPLICIT)
+        self._assert_preconditioned_delete(mock_v1, "sat-p00s00", "pod-uid-0001")
+        mock_v1.patch_namespaced_pod.assert_not_called()
+
+    def test_conflict_check_deletes_differing_selection(self):
+        from nodalarc_operator.session_deployer import _create_pod_with_conflict_check
+
+        existing = _existing_session_pod()
+        mock_v1 = create_autospec(kubernetes.client.CoreV1Api, instance=True)
+        mock_v1.create_namespaced_pod.side_effect = kubernetes.client.rest.ApiException(status=409)
+        mock_v1.read_namespaced_pod.return_value = existing
+        _create_pod_with_conflict_check(
+            mock_v1,
+            kubernetes.client.V1Pod(),
+            "nodalarc",
+            "sat-p00s00",
+            self.OWNER_REF,
+            "run-test-0001",
+            self.EXPLICIT,
+        )
+        self._assert_preconditioned_delete(mock_v1, "sat-p00s00", "pod-uid-0001")
+        mock_v1.patch_namespaced_pod.assert_not_called()
+
+    def test_delete_owned_reports_remaining_and_preconditions(self):
+        from nodalarc_operator.session_deployer import delete_owned_session_pods
+
+        running = _existing_session_pod(pod_name="sat-a", node_id="sat-A", pod_uid="uid-a")
+        terminating = _existing_session_pod(pod_name="sat-b", node_id="sat-B", pod_uid="uid-b")
+        terminating.metadata.deletion_timestamp = "2026-08-08T00:00:00Z"
+        mock_v1 = create_autospec(kubernetes.client.CoreV1Api, instance=True)
+        mock_v1.list_namespaced_pod.return_value = kubernetes.client.V1PodList(
+            items=[running, terminating]
+        )
+        with patch("nodalarc_operator.session_deployer._get_v1", return_value=mock_v1):
+            remaining, requested = delete_owned_session_pods("nodalarc", self.OWNER_REF)
+        # The terminating pod still counts toward remaining — Error is only
+        # honest once zero owned pods are observed.
+        assert (remaining, requested) == (2, 1)
+        self._assert_preconditioned_delete(mock_v1, "sat-a", "uid-a")
+
+    def test_delete_owned_skips_replaced_pod_on_conflict(self):
+        from nodalarc_operator.session_deployer import delete_owned_session_pods
+
+        running = _existing_session_pod(pod_name="sat-a", node_id="sat-A", pod_uid="uid-a")
+        mock_v1 = create_autospec(kubernetes.client.CoreV1Api, instance=True)
+        mock_v1.list_namespaced_pod.return_value = kubernetes.client.V1PodList(items=[running])
+        mock_v1.delete_namespaced_pod.side_effect = kubernetes.client.rest.ApiException(status=409)
+        with patch("nodalarc_operator.session_deployer._get_v1", return_value=mock_v1):
+            remaining, requested = delete_owned_session_pods("nodalarc", self.OWNER_REF)
+        assert (remaining, requested) == (1, 0)
+
+
 class TestPodSpec:
     """Tests pod creation through ensure_session_pods().
 
@@ -1696,6 +1963,61 @@ class TestPodSpec:
             )
             total = ensure_session_pods(context, "nodalarc", owner_ref)
         assert total > 0
+        # A matching-identity pod is reused, never deleted or recreated.
+        mock_v1.delete_namespaced_pod.assert_not_called()
+
+    def test_partial_create_api_failure_is_retryable(self, tmp_path):
+        """One successful create plus one 500 must stay typed-retryable.
+
+        The reconciler catches the ApiException, remains Creating, and
+        creates the missing pods on the next tick.
+        """
+        spec = _make_catalog_spec(tmp_path)
+        mock_v1 = create_autospec(kubernetes.client.CoreV1Api, instance=True)
+        mock_v1.read_namespaced_secret.return_value = _existing_terminal_secret()
+        calls = {"n": 0}
+
+        def _create(_namespace, _pod):
+            calls["n"] += 1
+            if calls["n"] > 1:
+                raise kubernetes.client.rest.ApiException(status=500)
+
+        mock_v1.create_namespaced_pod.side_effect = _create
+        owner_ref = {
+            "apiVersion": "nodalarc.io/v1alpha1",
+            "kind": "ConstellationSpec",
+            "name": "current-session",
+            "uid": "test-uid",
+            "blockOwnerDeletion": True,
+        }
+        with (
+            patch("nodalarc_operator.session_deployer._get_v1", return_value=mock_v1),
+            patch(
+                "nodalarc_operator.session_deployer.discover_available_nodes",
+                return_value=["node01"],
+            ),
+            patch.dict(
+                "os.environ",
+                {
+                    "FRR_IMAGE": "test/frr:1",
+                    "WIRING_GATE_IMAGE": "test/base:1",
+                    "PROBE_IMAGE": "test/probe:1",
+                    "NODALPATH_FWD_IMAGE": "test/nodalpath-fwd:1",
+                    "IMAGE_PULL_POLICY": "Never",
+                },
+            ),
+        ):
+            context = ensure_session_configmaps(
+                spec,
+                "current-session",
+                "nodalarc",
+                owner_ref,
+                session_run_id="run-test-0001",
+                deployment_context=_test_deployment_context(spec),
+            )
+            with pytest.raises(kubernetes.client.rest.ApiException):
+                ensure_session_pods(context, "nodalarc", owner_ref)
+        assert calls["n"] > 1
 
     def test_409_conflict_rejects_pod_owned_by_previous_cr(self, tmp_path):
         spec = _make_catalog_spec(tmp_path)

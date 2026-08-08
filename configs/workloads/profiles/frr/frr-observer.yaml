@@ -1,0 +1,131 @@
+# The complete built-in FRR-plus-observer workload: one profile containing
+# both cooperating containers. The plan-artifact destination is /etc/frr-config,
+# the path the FRR image genuinely loads configuration from — rendered per-node
+# files (frr.conf, daemons, _config_version) arrive there as plan artifacts.
+# The observer is a zero-capability container sharing the pod network
+# namespace; it periodically logs the interfaces and link state the platform
+# wired, proving observation without any ability to mutate.
+# Image digests are deployment inputs: the dev flow supplies the running
+# tree's images through the explicit operator override; production packages
+# pin real digests here.
+node_workload_profile:
+  schema_version: '1'
+  id: frr-observer
+  description: 'Built-in FRR reference with a zero-capability network observer:
+    the complete two-container composition for one routed node.'
+  volumes:
+  - name: frr-etc
+    kind: ephemeral
+    medium: node
+    size_mi: 8
+  - name: frr-run
+    kind: ephemeral
+    medium: memory
+    size_mi: 8
+  - name: tmp
+    kind: ephemeral
+    medium: memory
+    size_mi: 16
+  - name: var-log
+    kind: ephemeral
+    medium: memory
+    size_mi: 32
+  - name: ssh-config
+    kind: ephemeral
+    medium: memory
+    size_mi: 1
+  - name: operator-home
+    kind: ephemeral
+    medium: memory
+    size_mi: 4
+  workload_containers:
+  - name: frr
+    image: registry.example/nodalarc/frr@sha256:0000000000000000000000000000000000000000000000000000000000000000
+    resources:
+      requests:
+        cpu_m: 10
+        memory_mi: 32
+      limits:
+        cpu_m: 200
+        memory_mi: 128
+    # FRR's measured requirement under drop-ALL translation: the legacy pod
+    # added only NET_ADMIN/NET_RAW/SYS_ADMIN because it kept the runtime's
+    # default capabilities; with the platform dropping ALL, the entrypoint's
+    # chown, sshd startup, identity changes, and daemon management need the
+    # full set restored explicitly.
+    capabilities:
+    - CHOWN
+    - DAC_OVERRIDE
+    - FOWNER
+    - KILL
+    - NET_ADMIN
+    - NET_BIND_SERVICE
+    - NET_RAW
+    - SETGID
+    - SETUID
+    - SYS_ADMIN
+    root_filesystem: read_only
+    volume_mounts:
+    - volume: frr-run
+      path: /var/run/frr
+      read_only: false
+    - volume: frr-etc
+      path: /etc/frr
+      read_only: false
+    - volume: tmp
+      path: /tmp
+      read_only: false
+    - volume: var-log
+      path: /var/log
+      read_only: false
+    - volume: ssh-config
+      path: /etc/ssh
+      read_only: false
+    - volume: operator-home
+      path: /home/operator
+      read_only: false
+  - name: observer
+    image: registry.example/nodalarc/base@sha256:0000000000000000000000000000000000000000000000000000000000000000
+    command:
+    - /bin/bash
+    - -c
+    - while true; do echo "== interfaces $(date -u +%H:%M:%S)"; ip -o link show;
+      ip -o -4 addr show; sleep 30; done
+    resources:
+      requests:
+        cpu_m: 10
+        memory_mi: 16
+      limits:
+        cpu_m: 100
+        memory_mi: 32
+    capabilities: []
+    root_filesystem: read_only
+  artifacts:
+    plan:
+      container: frr
+      path: /etc/frr-config
+      read_only: true
+  routing_realization:
+    container: frr
+    realizes:
+    - protocol: isis
+      capabilities:
+      - mpls
+      - segment_routing
+      - traffic_engineering
+    - protocol: ospf
+      capabilities:
+      - mpls
+      - segment_routing
+      - traffic_engineering
+    - protocol: static
+      capabilities: []
+  readiness:
+    container: frr
+    argv:
+    - /bin/sh
+    - -c
+    - test -f /etc/frr/.config_version && diff -q /etc/frr-config/_config_version
+      /etc/frr/.config_version > /dev/null 2>&1 && vtysh -c 'show version' > /dev/null 2>&1
+    timeout_seconds: 5
+    period_seconds: 5

@@ -221,6 +221,17 @@ HELM_CHART="$(render_chart_if_needed "$HELM_CHART")"
 apply_constellationspec_crd "$HELM_CHART"
 
 mapfile -t image_args < <(bash "$ROOT_DIR/scripts/na-images.sh" helm-image-args)
+
+# Development workload image overrides map the two exact built-in
+# placeholder references to this tree's images, matching the Make-owned
+# image resolution of every other runtime image. The value is a JSON
+# object; helm --set parsing would read its braces and commas as list
+# syntax, so it travels as a generated values file. The chart default
+# stays empty outside this installation path.
+workload_values_file="$(mktemp /tmp/nodalarc-workload-overrides.XXXXXX.yaml)"
+trap 'rm -f "$workload_values_file"' EXIT
+bash "$ROOT_DIR/scripts/na-images.sh" workload-dev-overrides-values > "$workload_values_file"
+image_args+=("--values=$workload_values_file")
 extra_args=()
 if [ -n "$HELM_EXTRA_ARGS" ]; then
     read -r -a extra_args <<< "$HELM_EXTRA_ARGS"

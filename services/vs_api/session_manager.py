@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from nodalarc.platform_config import get_platform_config
+from nodalarc.workloads.refs import SelectionRef
 
 from .catalog_context import CatalogContext
 from .catalog_upload_store import CatalogUploadResourceEvidence, KubernetesCatalogUploadStore
@@ -460,6 +461,7 @@ class SessionManager:
         custom_objects_api: _CustomObjectsSwitchApi,
         core_v1_api: _CoreV1PodApi,
         namespace: str,
+        workload_selection: SelectionRef | None = None,
         progress_fn: _ProgressCallback | None = None,
         transition_started: _TransitionStartedCallback | None = None,
         upload_resource_observed: _UploadResourceObservedCallback | None = None,
@@ -515,7 +517,9 @@ class SessionManager:
                 await transition_started()
 
             await _progress("Switching runtime session")
-            cr_body = constellation_spec_body(persisted, namespace=namespace)
+            cr_body = constellation_spec_body(
+                persisted, namespace=namespace, workload_selection=workload_selection
+            )
 
             return await self._switch_constellation_spec(
                 source_id=str(persisted.prepared.source.logical_id),
@@ -547,6 +551,7 @@ class SessionManager:
         custom_objects_api: _CustomObjectsSwitchApi,
         core_v1_api: _CoreV1PodApi,
         namespace: str,
+        workload_selection: SelectionRef | None = None,
         progress_fn: _ProgressCallback | None = None,
         transition_started: _TransitionStartedCallback | None = None,
         upload_resource_observed: _UploadResourceObservedCallback | None = None,
@@ -564,6 +569,7 @@ class SessionManager:
             custom_objects_api=custom_objects_api,
             core_v1_api=core_v1_api,
             namespace=namespace,
+            workload_selection=workload_selection,
             progress_fn=progress_fn,
             transition_started=transition_started,
             upload_resource_observed=upload_resource_observed,

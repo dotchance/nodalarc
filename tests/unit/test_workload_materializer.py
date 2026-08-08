@@ -39,6 +39,7 @@ def _build(composition: WorkloadComposition, **overrides) -> kubernetes.client.V
         "session_id": "run-test-0001",
         "owner_ref": OWNER_REF,
         "composition": composition,
+        "selection_identity": "builtin-frr-default",
         "target_node": "node02",
     }
     kwargs.update(overrides)

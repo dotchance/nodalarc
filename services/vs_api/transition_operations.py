@@ -20,7 +20,8 @@ from pathlib import Path
 from typing import Annotated, Any, Final, Literal
 
 from nodalarc.catalog_refs import SessionRef
-from nodalarc.catalog_upload import CatalogUploadSelection, sha256_digest
+from nodalarc.catalog_upload import CatalogUploadSelection
+from nodalarc.content_identity import sha256_digest
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 _OPERATION_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{15,127}$")

@@ -17,9 +17,8 @@ from nodalarc.catalog_upload import (
     CatalogUpload,
     CatalogUploadLimits,
     CatalogUploadSelection,
-    canonical_json_bytes,
-    sha256_digest,
 )
+from nodalarc.content_identity import canonical_json_bytes, sha256_digest
 from nodalarc.models.resolved_session import SourceContext
 from nodalarc.runtime_config import (
     ResolvedRuntimeConfig,

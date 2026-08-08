@@ -1,0 +1,15 @@
+# The smallest valid profile: one digest-pinned container, no capabilities,
+# no artifacts, no hooks, no routing realization. The image digest is a
+# structural placeholder.
+node_workload_profile:
+  schema_version: "1"
+  id: zero-capability
+  description: Unrelated zero-capability workload with no platform dependencies.
+  workload_containers:
+  - name: app
+    image: registry.example/busybox@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+    resources:
+      requests: {cpu_m: 10, memory_mi: 16}
+      limits: {cpu_m: 100, memory_mi: 64}
+  routing_realization:
+    none: true

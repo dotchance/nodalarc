@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 import secrets
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Annotated, Any
+from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
@@ -19,12 +17,11 @@ from nodalarc.catalog_closure import (
     catalog_closure_digest,
 )
 from nodalarc.catalog_refs import CatalogRef
+from nodalarc.content_identity import Sha256Digest, sha256_digest
 from nodalarc.prepared_session import PreparedSessionFiles
 
-_SHA256_PATTERN = r"^sha256:[0-9a-f]{64}$"
 _UPLOAD_ID_PATTERN = r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$"
 
-Sha256Digest = Annotated[str, StringConstraints(pattern=_SHA256_PATTERN)]
 UploadId = Annotated[str, StringConstraints(pattern=_UPLOAD_ID_PATTERN)]
 
 
@@ -120,24 +117,6 @@ class CatalogUploadError(ValueError):
     @property
     def code(self) -> CatalogUploadErrorCode:
         return self.evidence.code
-
-
-def sha256_digest(content: bytes) -> str:
-    if not isinstance(content, bytes):
-        raise TypeError("content must be bytes")
-    return "sha256:" + hashlib.sha256(content).hexdigest()
-
-
-def canonical_json_bytes(value: Any) -> bytes:
-    """Return stable JSON for operational evidence outside the YAML file set."""
-
-    return json.dumps(
-        value,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-        allow_nan=False,
-    ).encode("utf-8")
 
 
 def _error(

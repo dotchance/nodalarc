@@ -21,10 +21,8 @@ from typing import Any
 
 import kubernetes
 from jinja2 import Environment, FileSystemLoader
-from nodalarc.catalog_upload import (
-    CatalogUploadSelection,
-    canonical_json_bytes,
-)
+from nodalarc.catalog_upload import CatalogUploadSelection
+from nodalarc.content_identity import canonical_json_bytes
 from nodalarc.models.resolved_session import (
     ResolvedNode,
     ResolvedRoutingDomain,

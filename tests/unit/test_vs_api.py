@@ -11,7 +11,8 @@ import pytest
 import yaml
 from nodalarc.catalog_closure import FilesystemCatalogReadView
 from nodalarc.catalog_paths import CatalogRoots
-from nodalarc.catalog_upload import CatalogUpload, encode_catalog_upload, sha256_digest
+from nodalarc.catalog_upload import CatalogUpload, encode_catalog_upload
+from nodalarc.content_identity import sha256_digest
 from nodalarc.db.queries import (
     insert_convergence_result,
     insert_link_up,

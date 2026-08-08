@@ -1,0 +1,19 @@
+# Structural schema fixture for a static-route realizer profile: it declares
+# NET_ADMIN and realizes static routing with no additional capability. The
+# image digest is a structural placeholder; no running behavior is implemented
+# or claimed by this fixture.
+node_workload_profile:
+  schema_version: "1"
+  id: static-realizer
+  description: Static-route realizer test workload.
+  workload_containers:
+  - name: realizer
+    image: registry.example/nodalarc/static-realizer@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+    resources:
+      requests: {cpu_m: 25, memory_mi: 32}
+      limits: {cpu_m: 250, memory_mi: 128}
+    capabilities: [NET_ADMIN]
+  routing_realization:
+    container: realizer
+    realizes:
+    - {protocol: static, capabilities: []}

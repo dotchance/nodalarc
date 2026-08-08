@@ -5,7 +5,8 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
-from nodalarc.catalog_upload import CatalogUploadSelection, sha256_digest
+from nodalarc.catalog_upload import CatalogUploadSelection
+from nodalarc.content_identity import sha256_digest
 from nodalarc.models.session_sources import (
     CatalogSessionSourceId,
     CatalogSessionSwitchAccepted,

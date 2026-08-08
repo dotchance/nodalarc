@@ -10,12 +10,8 @@ from typing import Any
 import pytest
 from nodalarc.catalog_closure import FilesystemCatalogReadView
 from nodalarc.catalog_paths import CatalogRoots
-from nodalarc.catalog_upload import (
-    CatalogUpload,
-    canonical_json_bytes,
-    encode_catalog_upload,
-    sha256_digest,
-)
+from nodalarc.catalog_upload import CatalogUpload, encode_catalog_upload
+from nodalarc.content_identity import canonical_json_bytes, sha256_digest
 from nodalarc.kubernetes_runtime_config import (
     CATALOG_DOCUMENT_KEY,
     CATALOG_REF_ANNOTATION,

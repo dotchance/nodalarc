@@ -76,15 +76,25 @@ def test_translation_covers_profile_and_delivers_artifacts() -> None:
     assert cm is not None
     assert cm.immutable is True
     assert cm.metadata.owner_references == [OWNER_REF]
-    assert base64.b64decode(cm.binary_data["plan-frr.conf"]) == RENDERED
+    plan_volume = next(v for v in composition.volumes if v.name == "na-plan-artifacts")
+    (item,) = plan_volume.config_map.items
+    assert item.path == "frr.conf"
+    assert base64.b64decode(cm.binary_data[item.key]) == RENDERED
     daemons = (FIXTURES / "profiles" / "frr" / "daemons").read_bytes()
-    assert base64.b64decode(cm.binary_data["static-daemons"]) == daemons
-    assert cm.metadata.name.startswith("wl-sat-a-")
+    frr_static_mount = next(
+        m
+        for c in composition.containers
+        for m in c.volume_mounts
+        if m.mount_path == "/etc/frr-static/daemons"
+    )
+    assert base64.b64decode(cm.binary_data[frr_static_mount.sub_path]) == daemons
+    # Name carries node, CR incarnation, and content identity.
+    assert cm.metadata.name.startswith("wl-sat-a-owneruid")
 
     # Mounts land only at profile-declared destinations.
     frr_mounts = {mount.mount_path: mount for mount in frr.volume_mounts}
     static_mount = frr_mounts["/etc/frr-static/daemons"]
-    assert static_mount.sub_path == "static-daemons"
+    assert static_mount.sub_path.startswith("s-")
     assert static_mount.read_only is True
     plan_mount = frr_mounts["/etc/frr-plan"]
     assert plan_mount.read_only is True
@@ -117,7 +127,74 @@ def test_no_artifacts_means_no_config_map() -> None:
     assert "na-static-artifacts" in volume_names
 
 
-def test_nested_artifact_names_are_refused() -> None:
+def test_nested_artifact_paths_round_trip_through_safe_keys() -> None:
+    """Admitted paths may nest; keys are opaque and safe, and the original
+    path is preserved through the projection."""
     package = _package()
-    with pytest.raises(ValueError, match="flat"):
-        _compose(package=package, plan=_plan(package, artifacts={"conf/frr.conf": b"x"}))
+    composed = _compose(
+        package=package, plan=_plan(package, artifacts={"conf/frr.conf": b"nested"})
+    )
+    plan_volume = next(v for v in composed.composition.volumes if v.name == "na-plan-artifacts")
+    (item,) = plan_volume.config_map.items
+    assert item.path == "conf/frr.conf"
+    assert "/" not in item.key
+    assert base64.b64decode(composed.artifact_config_map.binary_data[item.key]) == b"nested"
+
+
+def test_ephemeral_writable_zero_capability_security_context(tmp_path: Path) -> None:
+    """The admitted security exception translates exactly: drop-all with no
+    adds, writable root, no escalation, exact ephemeral-storage bounds."""
+    import shutil
+
+    import yaml
+
+    root = tmp_path / "package"
+    shutil.copytree(FIXTURES / "profiles", root / "profiles")
+    profile_path = root / "profiles" / "zero-capability.yaml"
+    document = yaml.safe_load(profile_path.read_text())
+    container = document["node_workload_profile"]["workload_containers"][0]
+    container["root_filesystem"] = "ephemeral_writable"
+    container["resources"]["ephemeral_storage_mi"] = {"request": 16, "limit": 64}
+    profile_path.write_text(yaml.safe_dump(document))
+    (root / "bindings").mkdir()
+    (root / "bindings" / "all-zero.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "implementation_binding": {
+                    "schema_version": "1",
+                    "id": "all-zero",
+                    "description": "Bind everything to the writable zero-cap profile.",
+                    "entries": [
+                        {
+                            "id": "everything",
+                            "selector": {"remainder": True},
+                            "profile": "nodalarc:profiles/zero-capability.yaml",
+                        }
+                    ],
+                }
+            }
+        )
+    )
+    package = DirectoryPackageSource(root).load(
+        ImplementationBindingRef("nodalarc:bindings/all-zero.yaml")
+    )
+    selection = WorkloadSelection(
+        binding_ref=package.binding_ref,
+        package_digest=package.package_digest,
+        assignments=(
+            NodeAssignment(
+                node_id="sat-A",
+                entry_id="everything",
+                profile_ref=ProfileRef("nodalarc:profiles/zero-capability.yaml"),
+            ),
+        ),
+    )
+    plan = compile_workload_plan(selection, package, "sat-A")
+    composed = compose_workload(plan, package, namespace="nodalarc", owner_ref=OWNER_REF)
+    (app,) = composed.composition.containers
+    assert app.security_context.capabilities.drop == ["ALL"]
+    assert app.security_context.capabilities.add is None
+    assert app.security_context.read_only_root_filesystem is False
+    assert app.security_context.allow_privilege_escalation is False
+    assert app.resources.requests["ephemeral-storage"] == "16Mi"
+    assert app.resources.limits["ephemeral-storage"] == "64Mi"

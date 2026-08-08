@@ -38,15 +38,16 @@ class ComposedWorkload:
     artifact_config_map: kubernetes.client.V1ConfigMap | None
 
 
-def _artifact_key(name: str) -> str:
-    """ConfigMap keys cannot contain '/'; artifact delivery is flat today.
+def _artifact_key(kind: str, name: str) -> str:
+    """Deterministic opaque ConfigMap key for an artifact path.
 
-    Nested artifact trees get an explicit extension when a real profile
-    needs one; inventing an encoding here would be a silent convention.
+    Admitted package paths allow nesting and characters Kubernetes keys
+    reject; the key is therefore derived, never the path itself. Original
+    paths are preserved through V1KeyToPath.path at projection time, so the
+    admitted path vocabulary is never narrowed here.
     """
-    if "/" in name:
-        raise ValueError(f"artifact name {name!r} is nested; artifact delivery is flat")
-    return name
+    digest = sha256_digest(name.encode())
+    return f"{kind}-{digest[len('sha256:') : len('sha256:') + 16]}"
 
 
 def _artifact_config_map(
@@ -58,9 +59,9 @@ def _artifact_config_map(
 ) -> kubernetes.client.V1ConfigMap | None:
     entries: dict[str, bytes] = {}
     for name, content in loaded.files.items():
-        entries[f"static-{_artifact_key(name)}"] = content
+        entries[_artifact_key("s", name)] = content
     for name, content in plan.plan_artifacts.items():
-        entries[f"plan-{_artifact_key(name)}"] = content
+        entries[_artifact_key("p", name)] = content
     if not entries:
         return None
     import base64
@@ -73,7 +74,17 @@ def _artifact_config_map(
             }
         )
     )
-    name = f"wl-{plan.node_id.lower()}-{content_id[len('sha256:') : len('sha256:') + 12]}"
+    # The name carries the owning CR incarnation alongside the content
+    # identity: identical bytes under a replaced CR must never collide with
+    # an old CR's immutable object.
+    owner_uid = str(owner_ref.get("uid") or "")
+    if not owner_uid:
+        raise ValueError("artifact ConfigMap requires an owner UID")
+    incarnation = owner_uid.replace("-", "")[:8].lower()
+    name = (
+        f"wl-{plan.node_id.lower()}-{incarnation}-"
+        f"{content_id[len('sha256:') : len('sha256:') + 12]}"
+    )
     return kubernetes.client.V1ConfigMap(
         metadata=kubernetes.client.V1ObjectMeta(
             name=name,
@@ -140,7 +151,7 @@ def _container_mounts(
             kubernetes.client.V1VolumeMount(
                 name=STATIC_ARTIFACT_VOLUME,
                 mount_path=artifact.path,
-                sub_path=f"static-{_artifact_key(artifact.file)}",
+                sub_path=_artifact_key("s", artifact.file),
                 read_only=True,
             )
         )
@@ -234,9 +245,7 @@ def compose_workload(
                     config_map=kubernetes.client.V1ConfigMapVolumeSource(
                         name=cm_name,
                         items=[
-                            kubernetes.client.V1KeyToPath(
-                                key=f"plan-{_artifact_key(name)}", path=name
-                            )
+                            kubernetes.client.V1KeyToPath(key=_artifact_key("p", name), path=name)
                             for name in sorted(plan.plan_artifacts)
                         ],
                     ),

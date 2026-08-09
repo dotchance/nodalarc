@@ -956,7 +956,11 @@ class TestWiringManifest:
         assert "ground_bridges" in manifest
         for node_id, node in manifest["nodes"].items():
             assert "node_type" in node, f"{node_id} missing node_type"
-            assert node["node_type"] in ("satellite", "ground_station"), f"{node_id} bad node_type"
+            assert node["node_type"] in (
+                "satellite",
+                "ground_station",
+                "host",
+            ), f"{node_id} bad node_type"
             assert "isl_interfaces" in node, f"{node_id} missing isl_interfaces"
             assert isinstance(node["isl_interfaces"], list), f"{node_id} isl_interfaces not list"
             assert "gnd_interfaces" in node, f"{node_id} missing gnd_interfaces"
@@ -997,6 +1001,53 @@ class TestWiringManifest:
         vnis = [spec["vni"] for spec in manifest["site_lans"].values()]
         assert len(set(vnis)) == len(vnis)
         # The whole manifest still validates through the Node Agent contract.
+        WiringManifest.model_validate(manifest)
+
+    def test_manifest_wires_host_attachment(self, tmp_path):
+        """A processing node's manifest entry: terr0 attachment plus the
+        site router's gateway, no RF interfaces, no ground bridge — and the
+        whole manifest still validates through the Node Agent contract."""
+        manifest = self._build_and_extract(
+            tmp_path,
+            ground_stations={
+                "stations": [
+                    {"name": "alpha", "lat_deg": 34.0, "lon_deg": -118.0, "alt_m": 20},
+                    {"name": "beta", "lat_deg": 50.0, "lon_deg": 8.0, "alt_m": 100},
+                ],
+                "host_endpoints": True,
+            },
+        )
+        hosts = {
+            node_id: node
+            for node_id, node in manifest["nodes"].items()
+            if node["node_type"] == "host"
+        }
+        routers = {
+            node_id: node
+            for node_id, node in manifest["nodes"].items()
+            if node["node_type"] == "ground_station"
+        }
+        assert len(hosts) == 2
+        member_ids = {
+            member["node_id"]
+            for spec in manifest["site_lans"].values()
+            for member in spec["members"]
+        }
+        router_ips = {
+            addr.split("/")[0]
+            for node in routers.values()
+            for addr in (node.get("terrestrial") or {}).get("addresses", ())
+        }
+        for node_id, node in hosts.items():
+            terrestrial = node["terrestrial"]
+            assert terrestrial["addresses"]
+            assert terrestrial["gateway"] in router_ips
+            assert node["isl_interfaces"] == []
+            assert node["gnd_interfaces"] == []
+            assert node_id not in manifest["ground_bridges"]
+            assert node_id in member_ids
+        for node in routers.values():
+            assert (node.get("terrestrial") or {}).get("gateway") is None
         WiringManifest.model_validate(manifest)
 
     def test_manifest_disables_mpls_for_plain_igp(self, tmp_path):

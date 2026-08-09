@@ -2192,7 +2192,7 @@ async def ws_terminal(websocket: WebSocket, node_id: str) -> None:
       Browser → VS-API: {"type": "resize", "cols": 120, "rows": 40}
       VS-API → Browser: {"type": "output", "data": "Codes: K - kernel..."}
     """
-    from vs_api.terminal import TerminalSession, _load_ssh_key, resolve_pod_ip
+    from vs_api.terminal import TerminalSession, _load_ssh_key, resolve_pod_terminal
 
     ws_ip = websocket.client.host if websocket.client else "unknown"
     if _API_KEY:
@@ -2202,12 +2202,32 @@ async def ws_terminal(websocket: WebSocket, node_id: str) -> None:
             await websocket.close(code=4401, reason="Unauthorized")
             return
 
-    # Resolve node_id to pod IP (async — runs K8s API call in thread executor
-    # so it doesn't block active SSH sessions on the event loop)
+    # Resolve node_id to pod IP + terminal surface (async — runs the K8s
+    # API call in a thread executor so it doesn't block active sessions).
     namespace = get_platform_config().kubernetes_namespace
-    pod_ip = await resolve_pod_ip(node_id, namespace)
-    if not pod_ip:
+    resolved = await resolve_pod_terminal(node_id, namespace)
+    if resolved is None:
         await websocket.close(code=4404, reason="Node not found")
+        return
+    pod_ip, terminal_access = resolved
+    if terminal_access != "ssh":
+        # The workload declares no terminal surface: refuse typed and
+        # immediately — never spin dialing a pod that cannot answer.
+        _audit_log.info(f"WS_TERMINAL_NO_SURFACE ip={ws_ip} node={node_id}")
+        await websocket.accept()
+        await websocket.send_text(
+            json.dumps(
+                {
+                    "type": "output",
+                    "data": (
+                        f"\r\nNode {node_id} runs a workload that declares "
+                        "no terminal access.\r\nInspect it with its own "
+                        "logs and tooling instead.\r\n"
+                    ),
+                }
+            )
+        )
+        await websocket.close(code=4409, reason="Workload declares no terminal access")
         return
 
     # Load SSH key (cached in memory after first call — never written to
@@ -2282,12 +2302,18 @@ async def get_node_config(node_id: str) -> Response:
     Opens a temporary SSH session, runs 'show running-config', returns
     the output as a downloadable text file.
     """
-    from vs_api.terminal import TerminalSession, _load_ssh_key, resolve_pod_ip
+    from vs_api.terminal import TerminalSession, _load_ssh_key, resolve_pod_terminal
 
     namespace = get_platform_config().kubernetes_namespace
-    pod_ip = await resolve_pod_ip(node_id, namespace)
-    if not pod_ip:
+    resolved = await resolve_pod_terminal(node_id, namespace)
+    if resolved is None:
         return JSONResponse(status_code=404, content={"error": "Node not found"})
+    pod_ip, terminal_access = resolved
+    if terminal_access != "ssh":
+        return JSONResponse(
+            status_code=409,
+            content={"error": "Workload declares no terminal access"},
+        )
 
     try:
         ssh_key = await asyncio.to_thread(_load_ssh_key, namespace)

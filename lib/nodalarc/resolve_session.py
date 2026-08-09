@@ -36,6 +36,7 @@ from nodalarc.models.resolved_session import (
     ResolvedEndpoint,
     ResolvedEphemeris,
     ResolvedEphemerisKernel,
+    ResolvedHostAttachment,
     ResolvedInterfaceAddress,
     ResolvedLinkCandidate,
     ResolvedLinkRule,
@@ -153,6 +154,7 @@ def resolve_session_with_assets(
     _check_runtime_support(cfg, support, roots)
 
     runtime_nodes = _apply_addressing(cfg, _expand_segments(cfg, roots))
+    runtime_nodes = _derive_host_attachments(runtime_nodes)
     resolved_nodes = tuple(item.node for item in runtime_nodes)
     _check_ground_scheduling_support(resolved_nodes, support)
     body_facts = _collect_body_facts(runtime_nodes)
@@ -973,6 +975,11 @@ def _expand_site_placement(placement: _SitePlacement, roots: CatalogRoots) -> li
         node_tags = set(tags)
         node_tags.update(site_node.get("tags") or ())
         scheduling = _merge_ground_scheduling(site_node.get("scheduling"), base_scheduling)
+        # Ground scheduling governs access-contact allocation; a node with
+        # no terminal mounts (a processing host) participates in no access
+        # rule and holds no scheduling state.
+        if not site_node.get("terminals"):
+            scheduling = None
         originated = _merge_originated_prefixes(
             site_node.get("originated_prefixes"),
             base_originated,
@@ -1950,6 +1957,18 @@ def _resolve_routing_domains(
             )
         if not selected_ids:
             raise SessionResolutionError(f"routing domain {domain.id!r} matched zero nodes")
+        # Routing domains are defined over routed nodes, exactly like the
+        # documented no-routing default: hosts, bridges, and control-only
+        # nodes run no routing protocol and are outside a domain selector's
+        # universe. A domain whose selection contains no routed node is an
+        # authoring error, refused.
+        selected_ids = {
+            item.node.node_id
+            for item in runtime_nodes
+            if item.node.node_id in selected_ids and item.node.forwarding == "routed"
+        }
+        if not selected_ids:
+            raise SessionResolutionError(f"routing domain {domain.id!r} matched zero routed nodes")
         selected_nodes = tuple(
             item.node for item in runtime_nodes if item.node.node_id in selected_ids
         )
@@ -2094,11 +2113,102 @@ def _effective_routing_timers(
     )
 
 
+def _derive_host_attachments(
+    runtime_nodes: tuple[_RuntimeNode, ...],
+) -> tuple[_RuntimeNode, ...]:
+    """Derive substrate attachment facts for host-forwarding nodes.
+
+    A host node attaches to the LAN its authored terr0 address names; its
+    gateway is the routed node whose terr0 shares that subnet. With more
+    than one routed node on the LAN the lowest node id is the gateway,
+    deterministically. Host attachment is substrate configuration derived
+    from existing placement grammar; nothing here is a protocol decision.
+    """
+    routed_lan_ports: list[tuple[str, Any]] = []
+    for item in runtime_nodes:
+        node = item.node
+        if (
+            node.forwarding == "routed"
+            and node.interfaces is not None
+            and node.interfaces.terr0 is not None
+            and node.interfaces.terr0.ipv4
+        ):
+            routed_lan_ports.append(
+                (node.node_id, ipaddress.ip_interface(node.interfaces.terr0.ipv4))
+            )
+    routed_lan_ports.sort(key=lambda entry: entry[0])
+
+    # A session with zero routed nodes refuses at routing-domain
+    # resolution with the documented message; deriving attachments first
+    # would bury that fundamental refusal under a gateway complaint.
+    if not any(item.node.forwarding == "routed" for item in runtime_nodes):
+        return runtime_nodes
+
+    next_nodes: list[_RuntimeNode] = []
+    for item in runtime_nodes:
+        node = item.node
+        if node.forwarding != "host":
+            next_nodes.append(item)
+            continue
+        if (
+            node.interfaces is None
+            or node.interfaces.terr0 is None
+            or not node.interfaces.terr0.ipv4
+        ):
+            if node.kind == "ground_station":
+                raise SessionResolutionError(
+                    f"host node {node.node_id!r} requires terr0 addressing from placement"
+                )
+            # A host-forwarding space node is valid structural grammar with
+            # no derivable LAN attachment; it resolves without one, and any
+            # consumer that needs attachment facts refuses it there.
+            next_nodes.append(item)
+            continue
+        host_port = ipaddress.ip_interface(node.interfaces.terr0.ipv4)
+        gateway = next(
+            (
+                (gateway_id, gateway_port)
+                for gateway_id, gateway_port in routed_lan_ports
+                if gateway_port.network == host_port.network
+            ),
+            None,
+        )
+        if gateway is None:
+            raise SessionResolutionError(
+                f"host node {node.node_id!r} has no routed gateway on its "
+                f"terr0 LAN {host_port.network}"
+            )
+        gateway_id, gateway_port = gateway
+        attached = node.model_copy(
+            update={
+                "host_attachment": ResolvedHostAttachment(
+                    ipv4=str(host_port),
+                    gateway_ipv4=str(gateway_port.ip),
+                    gateway_node_id=gateway_id,
+                )
+            }
+        )
+        next_nodes.append(
+            _RuntimeNode(
+                node=attached,
+                plane=item.plane,
+                slot=item.slot,
+                body_facts=item.body_facts,
+            )
+        )
+    return tuple(next_nodes)
+
+
 def _validate_routing_domain_partition(
     domains: list[ResolvedRoutingDomain],
     runtime_nodes: tuple[_RuntimeNode, ...],
 ) -> None:
-    domain_ids_by_node: dict[str, list[str]] = {item.node.node_id: [] for item in runtime_nodes}
+    # Coverage is owed to routed nodes only: hosts, bridges, and
+    # control-only nodes run no routing protocol and are filtered out of
+    # every domain at selection time.
+    domain_ids_by_node: dict[str, list[str]] = {
+        item.node.node_id: [] for item in runtime_nodes if item.node.forwarding == "routed"
+    }
     for domain in domains:
         for node_id in domain.node_ids:
             if node_id in domain_ids_by_node:
@@ -2106,7 +2216,7 @@ def _validate_routing_domain_partition(
     missing = [node_id for node_id, domain_ids in domain_ids_by_node.items() if not domain_ids]
     if missing:
         raise SessionResolutionError(
-            f"routing domains must cover every resolved node; "
+            f"routing domains must cover every routed node; "
             f"{len(missing)} node{'s are' if len(missing) != 1 else ' is'} in no domain "
             f"(e.g. {', '.join(sorted(missing)[:3])})"
         )

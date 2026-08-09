@@ -1,0 +1,7 @@
+site_set:
+  id: luna-quic-lab-sites
+  display_name: Luna QUIC lab sites
+  sites:
+  - nodalarc:sites/luna/luna-artemis-quic-lab.yaml
+  notes: One lunar surface site pairing the surface gateway with a QUIC
+    server host.

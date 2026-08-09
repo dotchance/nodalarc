@@ -105,6 +105,11 @@ SHIPPED_SESSION_SHAPES = {
     "earth-geo-inmarsat.yaml": (8, 16),
     "earth-geo-tdrs.yaml": (10, 24),
     "earth-leo-heo-geo-luna-reachability.yaml": (132, 587),
+    # 80/153: a full Iridium-class 66-satellite shell (continuous
+    # mid-latitude coverage), GEO ring, lunar ELFO relays, one Earth QUIC
+    # lab and one lunar QUIC lab, each pairing a routed gateway with a
+    # host-forwarding endpoint that joins no routing domain.
+    "earth-luna-quic.yaml": (81, 290),
     # 43/246: four feeder-class bridge sites added (Djibouti, Singapore,
     # Cape Town, Tokyo — authored ranges cover the 780 km shell at the
     # declared mask) and the ISL rule pinned to the 30 physically visible
@@ -297,7 +302,7 @@ def test_explicit_routing_domains_must_cover_every_node() -> None:
     }
 
     with pytest.raises(
-        SessionResolutionError, match="routing domains must cover every resolved node"
+        SessionResolutionError, match="routing domains must cover every routed node"
     ):
         resolve_session(raw)
 

@@ -1,0 +1,50 @@
+# A QUIC server endpoint: one zero-capability container running upstream
+# picoquic (built and published by the independent nodalarc-picoquic
+# project, referenced here by digest). No routing daemon, no plan
+# artifacts; the platform attaches the host to its LAN and gateway at
+# wiring time. Serves synthetic documents over QUIC on UDP 4433 with the
+# image's demo certificates.
+node_workload_profile:
+  schema_version: '1'
+  id: picoquic-server
+  description: 'QUIC server endpoint: upstream picoquic serving synthetic
+    documents on UDP 4433 from a plain processing host.'
+  volumes:
+  - name: tmp
+    kind: ephemeral
+    medium: memory
+    size_mi: 16
+  workload_containers:
+  - name: quic
+    image: node01:5000/nodalarc-picoquic/picoquic@sha256:59c7afd1f1b558163366c09e0df913080ddd24959ff3eb15c0014733e601a941
+    command:
+    - /usr/local/bin/picoquicdemo
+    - -p
+    - '4433'
+    - -c
+    - /etc/picoquic/cert.pem
+    - -k
+    - /etc/picoquic/key.pem
+    resources:
+      requests:
+        cpu_m: 10
+        memory_mi: 32
+      limits:
+        cpu_m: 500
+        memory_mi: 128
+    capabilities: []
+    root_filesystem: read_only
+    volume_mounts:
+    - volume: tmp
+      path: /tmp
+      read_only: false
+  routing_realization:
+    none: true
+  readiness:
+    container: quic
+    argv:
+    - /bin/sh
+    - -c
+    - grep -qi ':1151' /proc/net/udp /proc/net/udp6
+    timeout_seconds: 5
+    period_seconds: 5

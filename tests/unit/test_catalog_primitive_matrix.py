@@ -53,11 +53,13 @@ SITES = sorted((CATALOG / "sites").rglob("*.yaml"))
 CONSTELLATION_GROUND_SETS = {
     "earth-leo-ring-36": "nodalarc:site-sets/earth/leo/earth-leo-starlink-gateway-sites.yaml",
     "earth-leo-polar-36": "nodalarc:site-sets/earth/leo/earth-leo-polar-gateway-sites.yaml",
+    "earth-leo-polar-66": "nodalarc:site-sets/earth/earth-quic-lab-sites.yaml",
     "earth-leo-walker-delta-176": "nodalarc:site-sets/earth/leo/earth-leo-starlink-pop-sites.yaml",
     "earth-meo-gps-24": "nodalarc:site-sets/earth/meo/earth-meo-gateway-sites.yaml",
     "earth-heo-molniya-3": "nodalarc:site-sets/earth/heo/earth-heo-gateway-sites.yaml",
     "earth-geo-ring-8": "nodalarc:site-sets/earth/geo/earth-geo-gateway-sites.yaml",
     "luna-polar-2": "nodalarc:site-sets/luna/luna-surface-sites.yaml",
+    "luna-elfo-relay-1": "nodalarc:site-sets/luna/luna-quic-lab-sites.yaml",
     "luna-elfo-relay-2": "nodalarc:site-sets/luna/luna-surface-sites.yaml",
     "luna-nrho-relay-1": "nodalarc:site-sets/luna/luna-surface-sites.yaml",
 }
@@ -139,6 +141,12 @@ def test_every_constellation_composes_into_a_session(path: Path) -> None:
     _select_exact_access_mount(raw, "access_s" if body == "luna" else "access_ka")
     if body != "earth":
         raw["ephemeris"] = LUNA_EPHEMERIS
+    constellation = _load(path)["constellation"]
+    node_count = int(constellation["planes"]["count"]) * int(constellation["slots_per_plane"])
+    if node_count == 1:
+        # A single-node constellation has no ISL relationship to declare; a
+        # zero-candidate rule is a readiness refusal, honestly.
+        raw["link_rules"] = [rule for rule in raw["link_rules"] if rule["id"] != "space-isl"]
 
     try:
         resolved = _resolve(raw, "run-test-0050")

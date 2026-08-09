@@ -1,0 +1,26 @@
+# A plain application host: one zero-capability container on the substrate,
+# no routing daemon, no plan artifacts, no realization. The profile shape
+# every processing node starts from.
+node_workload_profile:
+  schema_version: '1'
+  id: plain-host
+  description: 'Plain application endpoint: a normal container plugged into
+    the platform-attached network with no routing daemon.'
+  workload_containers:
+  - name: app
+    image: registry.example/nodalarc/base@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+    command:
+    - /bin/sh
+    - -c
+    - sleep infinity
+    resources:
+      requests:
+        cpu_m: 10
+        memory_mi: 16
+      limits:
+        cpu_m: 100
+        memory_mi: 32
+    capabilities: []
+    root_filesystem: read_only
+  routing_realization:
+    none: true

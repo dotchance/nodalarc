@@ -153,6 +153,26 @@ class ResolvedNodeInterfaces(BaseModel):
     terr0: ResolvedInterfaceAddress | None = None
 
 
+class ResolvedHostAttachment(BaseModel):
+    """Substrate-owned attachment facts for one host-forwarding node.
+
+    Derived at resolution from existing placement grammar: the host's LAN
+    address is its authored terr0 assignment, and its gateway is the routed
+    node whose terr0 shares that LAN subnet. Host attachment is substrate
+    configuration — the platform acting as the network's address authority,
+    the way DHCP would — never a protocol-derived forwarding decision. The
+    Node Agent applies these facts at wiring time so the host's containers
+    need no networking capability of their own.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    interface: Literal["terr0"] = "terr0"
+    ipv4: NonEmptyReference
+    gateway_ipv4: NonEmptyReference
+    gateway_node_id: NonEmptyReference
+
+
 class ResolvedWanInterface(BaseModel):
     """Derived unnumbered WAN interface created from a terminal mount."""
 
@@ -313,6 +333,9 @@ class ResolvedNode(BaseModel):
     surface_position: ResolvedSurfacePosition | None = None
     originated_prefixes: OriginatedPrefixes | None = None
     forwarding: Literal["routed", "host", "bridge", "control_only"] | None = None
+    # Present exactly when forwarding == "host": the derived substrate
+    # attachment the Node Agent applies at wiring time.
+    host_attachment: ResolvedHostAttachment | None = None
     service_priority: int | None = Field(default=None, gt=0)
     plane: int | None = Field(default=None, ge=0)
     slot: int | None = Field(default=None, ge=0)

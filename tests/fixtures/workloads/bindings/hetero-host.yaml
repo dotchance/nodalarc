@@ -1,0 +1,13 @@
+# The first heterogeneous binding: host nodes run the plain application
+# profile; every routed node runs the FRR reference. One sky, two kinds.
+implementation_binding:
+  schema_version: "1"
+  id: hetero-host
+  description: Host nodes run the plain application; routed nodes run FRR.
+  entries:
+  - id: hosts
+    selector: {forwarding: host}
+    profile: nodalarc:profiles/apps/plain-host.yaml
+  - id: routers
+    selector: {remainder: true}
+    profile: nodalarc:profiles/frr/frr-reference.yaml

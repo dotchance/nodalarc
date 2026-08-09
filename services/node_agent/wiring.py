@@ -80,15 +80,32 @@ def rename_cni_interface(pid: int, node_id: str) -> str | None:
 
 
 def remove_default_route(pid: int, node_id: str) -> str | None:
-    """Remove the pod default IPv4 route. Returns error string or None."""
+    """Remove the pod's CNI default IPv4 route. Returns error string or None.
+
+    Scoped to the CNI interface (already renamed to cni0 by the time this
+    runs): the function exists to strip Kubernetes' injected default as part
+    of cni0 lockdown. A platform-installed host-attachment default over
+    terr0 is deliberate substrate state and must survive.
+    """
     try:
 
         def _remove_default(ipr: IPRoute) -> bool:
+            cni_links = ipr.link_lookup(ifname="cni0")
+            cni_index = cni_links[0] if cni_links else None
+            removed = False
             for route in ipr.get_routes(family=2):
-                if route.get_attr("RTA_DST") is None and route["dst_len"] == 0:
-                    ipr.route("del", dst="0.0.0.0/0", gateway=route.get_attr("RTA_GATEWAY"))
-                    return True
-            return False
+                if route.get_attr("RTA_DST") is not None or route["dst_len"] != 0:
+                    continue
+                if cni_index is not None and route.get_attr("RTA_OIF") != cni_index:
+                    continue
+                ipr.route(
+                    "del",
+                    dst="0.0.0.0/0",
+                    gateway=route.get_attr("RTA_GATEWAY"),
+                    oif=route.get_attr("RTA_OIF"),
+                )
+                removed = True
+            return removed
 
         _in_namespace(pid, _remove_default)
         return None

@@ -1,0 +1,6 @@
+site_set:
+  id: earth-quic-lab-sites
+  display_name: Earth QUIC lab sites
+  sites:
+  - nodalarc:sites/earth/es/earth-es-madrid-quic-lab.yaml
+  notes: One Earth site pairing a LEO gateway with a QUIC client host.

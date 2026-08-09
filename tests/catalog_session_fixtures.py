@@ -438,10 +438,11 @@ def _persist_ground_set(
         raise ValueError("test site-set documents may contain only catalog references")
 
     station_values: list[object]
-    unknown = set(source) - {"stations"}
+    unknown = set(source) - {"stations", "host_endpoints"}
     if unknown:
         raise ValueError(f"unknown test ground-set parameters: {sorted(unknown)}")
     values = source.get("stations") or ()
+    host_endpoints = bool(source.get("host_endpoints", False))
     station_values = list(values) if isinstance(values, (list, tuple)) else []
     if not station_values:
         station_values = [{}, {}]
@@ -469,6 +470,23 @@ def _persist_ground_set(
             }
         },
     )
+
+    host_node_ref = CatalogRef(f"user:nodes/{session_id}-host-node.yaml")
+    if host_endpoints:
+        _write_yaml(
+            user_root / host_node_ref.relative_path,
+            {
+                "node": {
+                    "id": host_node_ref.relative_path.stem,
+                    "display_name": "Test host endpoint",
+                    "forwarding": "host",
+                    "ethernet": [{"id": "terr0"}],
+                    "terminals": [],
+                    "payloads": [],
+                    "reference": "urn:nodalarc:test-fixture",
+                }
+            },
+        )
 
     site_refs: list[CatalogRef] = []
     for index, station in enumerate(station_values):
@@ -530,7 +548,30 @@ def _persist_ground_set(
                             "service_priority": 10,
                             "tags": ["test_ground"],
                         }
-                    ],
+                    ]
+                    + (
+                        [
+                            {
+                                "id": "endpoint",
+                                "model": str(host_node_ref),
+                                "terminals": {},
+                                "payloads": {},
+                                "interfaces": {
+                                    "lo0": {
+                                        "ipv4": f"10.255.{index}.9/32",
+                                        "ipv6": f"fd00:ff::9{index + 1}/128",
+                                    },
+                                    "terr0": {
+                                        "ipv4": f"172.16.{index}.9/24",
+                                        "ipv6": f"fd10:0:{index}::9/64",
+                                    },
+                                },
+                                "tags": ["test_host"],
+                            }
+                        ]
+                        if host_endpoints
+                        else []
+                    ),
                 }
             },
         )

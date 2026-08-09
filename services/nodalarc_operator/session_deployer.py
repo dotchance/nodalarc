@@ -698,13 +698,46 @@ def _routing_domain_for_node(resolved: ResolvedSession, node_id: str) -> Resolve
     return domains[0]
 
 
+def _host_node_vars(node) -> dict:
+    """Pod-inventory facts for a host-forwarding node.
+
+    Hosts run no routing protocol and receive no FRR rendering; the pod
+    fan-out still needs identity, kind, and placement facts.
+    """
+    vars_for_node: dict = {
+        "node_id": node.node_id,
+        "hostname": node.node_id,
+        "node_type": "satellite" if node.kind == "satellite" else "ground_station",
+    }
+    if node.kind == "ground_station":
+        vars_for_node["gs_name"] = node.local_node_id
+    if node.plane is not None and node.slot is not None:
+        vars_for_node.update({"plane": node.plane, "slot": node.slot})
+    return vars_for_node
+
+
 def _node_vars_from_resolved(
     resolved: ResolvedSession, stacks: Mapping[str, ResolvedStack]
 ) -> tuple[dict[str, dict], dict[str, ResolvedStack]]:
+    """Per-node pod facts for every node; FRR vars and stacks for routed only.
+
+    ``node_vars`` covers EVERY resolved node — it is the pod inventory.
+    ``node_stacks`` covers routed nodes only: hosts run no routing stack,
+    get no rendered configuration, and compose purely from their selected
+    profile.
+    """
     sid_by_node = resolved.sid_index_by_node_id()
     node_vars: dict[str, dict] = {}
     node_stacks: dict[str, ResolvedStack] = {}
     for node in resolved.nodes:
+        if node.forwarding == "host":
+            node_vars[node.node_id] = _host_node_vars(node)
+            continue
+        if node.forwarding not in (None, "routed"):
+            raise ValueError(
+                f"node {node.node_id!r} has forwarding class {node.forwarding!r}, "
+                "which the deployer does not support"
+            )
         domain = _routing_domain_for_node(resolved, node.node_id)
         stack = stacks[domain.domain_id]
         node_sid_index = sid_by_node.get(node.node_id) if stack.segment_routing else None
@@ -851,7 +884,7 @@ def _render_frr_configs(node_vars: dict, node_stacks: dict) -> dict[str, dict[st
         return node_id, configs
 
     with ThreadPoolExecutor(max_workers=8) as pool:
-        futures = {pool.submit(_render_one_node, nid, vars): nid for nid, vars in node_vars.items()}
+        futures = {pool.submit(_render_one_node, nid, node_vars[nid]): nid for nid in node_stacks}
         for fut in as_completed(futures):
             nid, configs = fut.result()
             rendered_configs[nid] = configs
@@ -872,9 +905,27 @@ def prepare_session_workloads(
     every failure raises the typed WorkloadSelectionError family. Returns
     None for a session without a selection.
     """
-    if active_session.workload_selection is None:
-        return None
     resolved_session = active_session.resolution.resolved
+    host_ids = sorted(node.node_id for node in resolved_session.nodes if node.forwarding == "host")
+    if active_session.workload_selection is None:
+        if host_ids:
+            # There is no built-in host workload: the built-in FRR default
+            # composes routers. A session with host nodes deploys only
+            # through an explicit selection whose binding covers them.
+            raise WorkloadSelectionError(
+                "host nodes require an explicit workload selection: " + ", ".join(host_ids[:5])
+            )
+        return None
+    unattached = sorted(
+        node.node_id
+        for node in resolved_session.nodes
+        if node.forwarding == "host" and node.host_attachment is None
+    )
+    if unattached:
+        raise WorkloadSelectionError(
+            "host nodes without derivable attachment are not deployable "
+            "(no LAN segment exposes them yet): " + ", ".join(unattached[:5])
+        )
     stacks_by_domain = _stack_by_domain(resolved_session)
     node_vars, node_stacks = _node_vars_from_resolved(resolved_session, stacks_by_domain)
     rendered_configs = _render_frr_configs(node_vars, node_stacks)
@@ -1015,6 +1066,13 @@ def ensure_session_configmaps(
     if operator_session.workload_selection is None:
         if prepared_workloads is not None:
             raise ValueError("prepared workloads supplied for a session without a selection")
+        host_ids = sorted(
+            node.node_id for node in resolved_session.nodes if node.forwarding == "host"
+        )
+        if host_ids:
+            raise WorkloadSelectionError(
+                "host nodes require an explicit workload selection: " + ", ".join(host_ids[:5])
+            )
         selected_workloads = None
     elif prepared_workloads is not None:
         if (
@@ -1140,8 +1198,8 @@ def ensure_session_pods(
 
     pod_specs: list[dict] = []
     for node_id, vars in node_vars.items():
-        stack = node_stacks[node_id]
-        sidecar_config = _build_sidecar_config(stack)
+        stack = node_stacks.get(node_id)
+        sidecar_config = _build_sidecar_config(stack) if stack is not None else None
         pod_specs.append(
             {
                 "pod_name": node_id.lower(),
@@ -1150,7 +1208,7 @@ def ensure_session_pods(
                 "plane": vars.get("plane"),
                 "slot": vars.get("slot"),
                 "gs_name": vars.get("gs_name"),
-                "config_cm_name": f"frr-config-{node_id.lower()}",
+                "config_cm_name": f"frr-config-{node_id.lower()}" if stack is not None else None,
                 "sidecar_config": sidecar_config,
                 "sidecar_env": _build_sidecar_env(node_id, vars, stack.env)
                 if sidecar_config
@@ -1412,6 +1470,7 @@ def write_wiring_manifest(
             _routing_domain_for_node(resolved_session, node.node_id).domain_id
         ]
         for node in resolved_session.nodes
+        if node.forwarding != "host"
     }
 
     # Platform-level sysctls (protocol-agnostic) merged with stack-provided sysctls.
@@ -1431,6 +1490,30 @@ def write_wiring_manifest(
 
     ground_bridges: dict[str, dict] = {}
     for node in resolved_session.nodes:
+        if node.forwarding == "host":
+            # A processing node: terr0 attachment plus a default gateway,
+            # applied by the Node Agent at wiring. No routing stack, no RF
+            # interfaces, no ground bridge.
+            if node.host_attachment is None:
+                raise ValueError(
+                    f"host node {node.node_id!r} has no derived attachment; not wireable"
+                )
+            nodes[node.node_id] = {
+                "node_type": "host",
+                "sysctls": dict(base_sysctls),
+                "isl_interfaces": [],
+                "gnd_interfaces": [],
+                "terrestrial": {
+                    "addresses": _terr0_manifest_addresses(node),
+                    "site_id": node.namespace,
+                    "gateway": node.host_attachment.gateway_ipv4,
+                },
+                "mpls_enable": False,
+                "segment_routing": False,
+                "mtu": 9000,
+                "remove_default_route": True,
+            }
+            continue
         stack = node_stack_by_id[node.node_id]
         node_sysctls = {**base_sysctls, **stack.sysctls}
         mpls_enable = any(name.startswith("net.mpls.") for name in stack.sysctls)
@@ -2763,6 +2846,7 @@ def _create_session_pod(
         owner_ref=owner_ref,
         composition=WorkloadComposition(containers=containers, volumes=volumes),
         selection_identity=BUILTIN_FRR_SELECTION_IDENTITY,
+        terminal_access="ssh",
         target_node=target_node,
         extra_labels=extra_labels,
     )

@@ -1,0 +1,69 @@
+site:
+  id: luna-artemis-quic-lab
+  display_name: Artemis QUIC lab (surface gateway + server host)
+  verified:
+    source: nodalarc_catalog
+    notes: Lunar south-pole surface site pairing the surface gateway with a
+      processing host that runs the QUIC server endpoint.
+  lan:
+    ipv4: 172.16.153.0/24
+    ipv6: fd00:da7a:99::/64
+  nodes:
+  - id: gw1
+    display_name: Luna Gateway
+    model: nodalarc:nodes/ground/luna-surface-gateway.yaml
+    payloads: {}
+    terminals:
+      access_s:
+        installed_count: 2
+        capabilities:
+          bandwidth_mbps:
+            transmit: 50.0
+            receive: 50.0
+          tracking_capacity: 1
+          max_range_km: 9000.0
+          limits:
+            azimuth_deg:
+              min: -180
+              max: 180
+            elevation_deg:
+              min: 10
+              max: 90
+            max_tracking_rate_deg_s: 0.5
+          boresight:
+            mode: local_vertical
+    interfaces:
+      lo0:
+        ipv4: 10.255.0.242/32
+        ipv6: fd00:da7a:ffff::f2/128
+      terr0:
+        ipv4: 172.16.153.1/24
+        ipv6: fd00:da7a:99::1/64
+    tags:
+    - luna
+    originated_prefixes:
+      ipv4:
+      - 172.16.153.0/24
+      ipv6:
+      - fd00:da7a:99::/64
+  - id: quic-server
+    display_name: QUIC server host
+    model: nodalarc:nodes/ground/processing-host.yaml
+    payloads: {}
+    terminals: {}
+    tags:
+    - quic_server
+    interfaces:
+      lo0:
+        ipv4: 10.255.0.243/32
+        ipv6: fd00:da7a:ffff::f3/128
+      terr0:
+        ipv4: 172.16.153.9/24
+        ipv6: fd00:da7a:99::9/64
+  frame:
+    body_fixed:
+      body: nodalarc:bodies/luna.yaml
+  location:
+    lat_deg: -89.4
+    lon_deg: 30.0
+    alt_m: 0

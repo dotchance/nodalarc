@@ -1,0 +1,43 @@
+# The QUIC client endpoint paired with the earth-luna-quic example session:
+# it repeatedly downloads a 1 MB synthetic document from the lunar server's
+# authored LAN address, back and forth across the moving sky, logging each
+# transfer. Transfer behavior under changing reachability is the workload's
+# own: a failed attempt logs and retries — the platform never masks it.
+node_workload_profile:
+  schema_version: '1'
+  id: picoquic-client
+  description: 'QUIC client endpoint: repeatedly fetches a synthetic
+    document from the lunar QUIC server across the emulated path.'
+  volumes:
+  - name: tmp
+    kind: ephemeral
+    medium: memory
+    size_mi: 16
+  workload_containers:
+  - name: quic
+    image: node01:5000/nodalarc-picoquic/picoquic@sha256:59c7afd1f1b558163366c09e0df913080ddd24959ff3eb15c0014733e601a941
+    command:
+    - /bin/bash
+    - -c
+    - >-
+      while true; do
+      echo "== attempt $(date -u +%H:%M:%SZ)";
+      /usr/local/bin/picoquicdemo -D -n server 172.16.153.9 4433 /1000000;
+      echo "== picoquicdemo exit=$?";
+      sleep 15;
+      done
+    resources:
+      requests:
+        cpu_m: 10
+        memory_mi: 32
+      limits:
+        cpu_m: 500
+        memory_mi: 128
+    capabilities: []
+    root_filesystem: read_only
+    volume_mounts:
+    - volume: tmp
+      path: /tmp
+      read_only: false
+  routing_realization:
+    none: true

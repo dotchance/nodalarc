@@ -1,0 +1,7 @@
+site_set:
+  id: earth-quic-relay-sites
+  display_name: Earth QUIC relay sites
+  sites:
+  - nodalarc:sites/earth/cl/earth-cl-santiago-quic-relay.yaml
+  notes: One dual-gateway site bridging the LEO shell to the GEO ring over
+    its site LAN.

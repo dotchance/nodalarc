@@ -16,7 +16,7 @@ from copy import deepcopy
 import pytest
 from nodalarc.runtime_naming import LINUX_IFNAME_MAX, is_managed_host_ifname
 from nodalarc.session_validator import validate_session_readiness
-from nodalarc.substrate.manifest_contract import WiringManifest
+from nodalarc.substrate.manifest_contract import NodeSpec, WiringManifest
 from nodalarc.vxlan import compute_site_vni
 from node_agent.site_lan import plan_site_lan
 from pydantic import ValidationError
@@ -110,13 +110,55 @@ class TestManifestContract:
         with pytest.raises(ValidationError, match="require site_id"):
             WiringManifest.model_validate(data)
 
-    def test_site_lan_members_must_be_ground_nodes(self) -> None:
+    def test_site_lan_members_must_be_lan_capable(self) -> None:
         data = _manifest_data()
         data["site_lans"]["site-a"]["members"].append(
             {"node_id": "ghost", "k3s_node": "node01", "host_ip": "10.0.0.1"}
         )
-        with pytest.raises(ValidationError, match="non-ground member"):
+        with pytest.raises(ValidationError, match="non-LAN-capable member"):
             WiringManifest.model_validate(data)
+
+    def test_host_nodes_carry_gateway_and_routers_never_do(self) -> None:
+        base = {
+            "node_type": "host",
+            "host": "node01",
+            "sysctls": {"net.ipv4.conf.all.rp_filter": "0"},
+            "isl_interfaces": [],
+            "gnd_interfaces": [],
+            "mpls_enable": False,
+            "segment_routing": False,
+            "mtu": 9000,
+            "remove_default_route": True,
+            "terrestrial": {
+                "addresses": ["172.16.1.9/24"],
+                "site_id": "site-a",
+                "gateway": "172.16.1.1",
+            },
+        }
+        NodeSpec.model_validate(base)
+
+        missing_gateway = {**base, "terrestrial": {**base["terrestrial"], "gateway": None}}
+        with pytest.raises(ValidationError, match="require a terrestrial gateway"):
+            NodeSpec.model_validate(missing_gateway)
+
+        router_with_gateway = {**base, "node_type": "ground_station"}
+        with pytest.raises(ValidationError, match="only host nodes carry"):
+            NodeSpec.model_validate(router_with_gateway)
+
+    def test_plan_threads_gateway_to_member_port(self) -> None:
+        spec, nodes = _manifest_data()["site_lans"]["site-a"], _manifest_data()["nodes"]
+        nodes["site-a-gw1"]["terrestrial"]["gateway"] = "172.16.1.254"
+        plan = plan_site_lan(
+            "site-a",
+            spec,
+            nodes=nodes,
+            pid_map={"site-a-gw1": 111},
+            local_node="node01",
+            local_ip="10.0.0.1",
+            base_mtu=9000,
+        )
+        assert plan is not None
+        assert plan.local_members[0].gateway == "172.16.1.254"
 
     def test_site_lan_vnis_must_be_distinct(self) -> None:
         data = _manifest_data()

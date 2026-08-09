@@ -100,8 +100,16 @@ def _get_k8s_client() -> kubernetes.client.CoreV1Api:
     return _k8s_v1
 
 
-def _resolve_pod_ip_sync(node_id: str, namespace: str) -> str | None:
-    """Synchronous pod IP resolution (runs in thread executor)."""
+TERMINAL_ACCESS_ANNOTATION = "nodalarc.io/terminal-access"
+
+
+def _resolve_pod_terminal_sync(node_id: str, namespace: str) -> tuple[str, str | None] | None:
+    """Synchronous pod IP + terminal-surface resolution (thread executor).
+
+    Returns (pod_ip, terminal_access). A pod without the terminal-access
+    annotation declares no terminal surface: callers refuse immediately
+    instead of dialing a pod that cannot answer.
+    """
     if not _NODE_ID_PATTERN.match(node_id):
         log.warning("Invalid node_id rejected: %r", node_id)
         return None
@@ -112,14 +120,15 @@ def _resolve_pod_ip_sync(node_id: str, namespace: str) -> str | None:
             label_selector=f"nodalarc.io/node-id={node_id}",
         )
         if pods.items and pods.items[0].status.pod_ip:
-            return pods.items[0].status.pod_ip
+            annotations = pods.items[0].metadata.annotations or {}
+            return pods.items[0].status.pod_ip, annotations.get(TERMINAL_ACCESS_ANNOTATION)
     except Exception:
         log.exception("Failed to resolve pod IP for %s", node_id)
     return None
 
 
-async def resolve_pod_ip(node_id: str, namespace: str) -> str | None:
-    """Resolve a constellation node_id to its K8s pod IP.
+async def resolve_pod_terminal(node_id: str, namespace: str) -> tuple[str, str | None] | None:
+    """Resolve a constellation node_id to (pod IP, terminal surface).
 
     Runs the synchronous K8s API call in a thread executor so it doesn't
     block the async event loop (which would stall active SSH sessions).
@@ -127,7 +136,7 @@ async def resolve_pod_ip(node_id: str, namespace: str) -> str | None:
     injection.
     """
     return await asyncio.get_running_loop().run_in_executor(
-        None, _resolve_pod_ip_sync, node_id, namespace
+        None, _resolve_pod_terminal_sync, node_id, namespace
     )
 
 

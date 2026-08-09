@@ -32,6 +32,11 @@ ROLE_LABEL = "nodalarc.io/role"
 # selection; a differing pod is deleted and recreated, never re-stamped.
 WORKLOAD_SELECTION_ANNOTATION = "nodalarc.io/workload-selection"
 
+# Platform-owned pod annotation naming the node's terminal surface. Absent
+# means the workload declares no terminal access and the browser terminal
+# refuses immediately — it never dials a pod that cannot answer.
+TERMINAL_ACCESS_ANNOTATION = "nodalarc.io/terminal-access"
+
 WIRING_STATUS_CONFIGMAP = "nodalarc-wiring-status"
 
 _WIRING_GATE_SCRIPT = (
@@ -157,6 +162,7 @@ def build_session_pod(
     owner_ref: dict,
     composition: WorkloadComposition,
     selection_identity: str,
+    terminal_access: str | None = None,
     target_node: str | None = None,
     extra_labels: dict[str, str] | None = None,
 ) -> kubernetes.client.V1Pod:
@@ -199,7 +205,14 @@ def build_session_pod(
             name=pod_name,
             namespace=namespace,
             labels=labels,
-            annotations={WORKLOAD_SELECTION_ANNOTATION: selection_identity},
+            annotations={
+                WORKLOAD_SELECTION_ANNOTATION: selection_identity,
+                **(
+                    {TERMINAL_ACCESS_ANNOTATION: terminal_access}
+                    if terminal_access is not None
+                    else {}
+                ),
+            },
             owner_references=[owner_ref],
         ),
         spec=kubernetes.client.V1PodSpec(

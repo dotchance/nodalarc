@@ -74,11 +74,18 @@ class TerrestrialSpec(_StrictModel):
     # are present — terr0 is a port on the site's L2 segment, never an
     # isolated interface.
     site_id: str | None = None
+    # Host attachment only: the default-route target the Node Agent installs
+    # in the pod netns at wiring time. Substrate configuration — the platform
+    # acting as the LAN's address authority — never present on a routed
+    # node, whose forwarding system owns every routing decision.
+    gateway: str | None = None
 
     @model_validator(mode="after")
     def _addressed_terr0_belongs_to_a_site(self) -> TerrestrialSpec:
         if self.addresses and not self.site_id:
             raise ValueError("terrestrial addresses require site_id (site LAN membership)")
+        if self.gateway is not None and not self.addresses:
+            raise ValueError("terrestrial gateway requires terr0 addresses")
         return self
 
 
@@ -139,7 +146,7 @@ class GroundBridgeSpec(_StrictModel):
 
 
 class NodeSpec(_StrictModel):
-    node_type: Literal["satellite", "ground_station"]
+    node_type: Literal["satellite", "ground_station", "host"]
     # The K3s node hosting this pod, from observed scheduling. Each Node
     # Agent derives its expected-local set from this field; discovery output
     # must never define expectation.
@@ -163,6 +170,22 @@ class NodeSpec(_StrictModel):
         if not value:
             raise ValueError("sysctls must be explicit")
         return value
+
+    @model_validator(mode="after")
+    def _host_attachment_rules(self) -> NodeSpec:
+        if self.node_type == "host":
+            if self.terrestrial is None or not self.terrestrial.addresses:
+                raise ValueError("host nodes require terrestrial attachment addresses")
+            if self.terrestrial.gateway is None:
+                raise ValueError("host nodes require a terrestrial gateway")
+            if self.isl_interfaces or self.gnd_interfaces:
+                raise ValueError("host nodes carry no ISL or ground interfaces")
+        elif self.terrestrial is not None and self.terrestrial.gateway is not None:
+            raise ValueError(
+                "only host nodes carry a terrestrial gateway; a routed node's "
+                "forwarding system owns its routing decisions"
+            )
+        return self
 
     @field_validator("gnd_interfaces")
     @classmethod
@@ -289,13 +312,20 @@ class WiringManifest(_StrictModel):
                 raise ValueError(
                     f"node {node_id!r} is not a declared member of site LAN {site_id!r}"
                 )
-        ground_nodes = {
-            node_id for node_id, node in self.nodes.items() if node.node_type == "ground_station"
+        # A site LAN's ports are its routers AND its host-attached
+        # processing nodes — every node with terrestrial attachment at the
+        # site. Satellites never appear on a ground segment.
+        lan_capable = {
+            node_id
+            for node_id, node in self.nodes.items()
+            if node.node_type in ("ground_station", "host")
         }
         for site_id, member_ids in members_by_site.items():
-            unknown = sorted(member_ids - ground_nodes)
+            unknown = sorted(member_ids - lan_capable)
             if unknown:
-                raise ValueError(f"site LAN {site_id!r} declares non-ground member(s): {unknown}")
+                raise ValueError(
+                    f"site LAN {site_id!r} declares non-LAN-capable member(s): {unknown}"
+                )
         vnis = [spec.vni for spec in self.site_lans.values()]
         if len(set(vnis)) != len(vnis):
             raise ValueError("site LAN VNIs must be pairwise distinct")

@@ -134,6 +134,10 @@ class MemberPort:
     host_ifname: str
     pod_ifname: str
     addresses: tuple[str, ...]
+    # Host-attachment members only: the default-route target installed in
+    # the pod netns after addressing. None on routed members, whose
+    # forwarding system owns every routing decision.
+    gateway: str | None = None
 
 
 @dataclass(frozen=True)
@@ -191,7 +195,8 @@ def plan_site_lan(
                 f"site LAN {site_id!r} member {node_id!r} is placed on this host "
                 "but has no local pod"
             )
-        addresses = tuple(nodes.get(node_id, {}).get("terrestrial", {}).get("addresses", ()))
+        terrestrial = nodes.get(node_id, {}).get("terrestrial", {}) or {}
+        addresses = tuple(terrestrial.get("addresses", ()))
         if not addresses:
             raise RuntimeError(f"site LAN {site_id!r} member {node_id!r} has no terr0 addresses")
         local_ports.append(
@@ -201,6 +206,7 @@ def plan_site_lan(
                 host_ifname=site_lan_member_host_ifname(vni, index),
                 pod_ifname=site_lan_member_pod_ifname(vni, index),
                 addresses=addresses,
+                gateway=terrestrial.get("gateway"),
             )
         )
 
@@ -359,5 +365,23 @@ def _configure_member_pod(port: MemberPort) -> None:
                     continue
                 raise
         ns_ipr.link("set", index=idx, state="up")
+        if port.gateway is not None:
+            # Host attachment: the platform installs the default route the
+            # way DHCP would — via the site's routed gateway, on-link over
+            # terr0. Verified by readback: an unproven route is a wiring
+            # failure, never a silent absence.
+            ns_ipr.route("replace", dst="default", gateway=port.gateway, oif=idx)
+            routes = ns_ipr.route("get", dst="8.8.8.8")
+            via = {
+                attr[1]
+                for route in routes
+                for attr in route.get("attrs", ())
+                if attr[0] == "RTA_GATEWAY"
+            }
+            if port.gateway not in via:
+                raise RuntimeError(
+                    f"host default route via {port.gateway} on {port.node_id} "
+                    "did not verify after install"
+                )
 
     _in_namespace(port.pid, _op)

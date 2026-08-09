@@ -16,24 +16,21 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from nodalarc.workloads.adapter import SessionContext
 from nodalarc.workloads.plan import compile_workload_plan
 from nodalarc.workloads.refs import SelectionRef
 from nodalarc.workloads.resolution import WorkloadSelection, resolve_node_workloads
 from nodalarc.workloads.source import DirectoryPackageSource, LoadedPackage
 
+from adapters.registry import adapter_for
 from nodalarc_operator.workloads.compose import ComposedWorkload, compose_workload
 
 log = logging.getLogger(__name__)
 
-# The one explicitly named transitional producer: ONLY the built-in
-# FRR-plus-observer profile receives the built-in renderer's per-node output
-# as plan artifacts. Generic compilation and composition know nothing about
-# FRR; this constant is the entire coupling surface, and it is removed when
-# the profile-owned adapter renders natively.
-TRANSITIONAL_FRR_OBSERVER_PROFILE = "nodalarc:profiles/frr/frr-observer.yaml"
-
-# Built-in packages ship inside the operator image beside the FRR templates.
+# Built-in bindings ship inside the operator image; the profiles they reference
+# live in the adapter trees the operator also carries.
 BUILTIN_PACKAGE_ROOT = Path("configs/workloads")
+BUILTIN_PROFILES_ROOT = Path("adapters")
 
 DEV_IMAGE_OVERRIDES_ENV = "WORKLOAD_DEV_IMAGE_OVERRIDES"
 
@@ -115,17 +112,32 @@ def _apply_dev_image_overrides(
             container.image_pull_policy = pull_policy
 
 
-def _transitional_plan_artifacts(
-    profile_ref: str, node_id: str, rendered_configs: dict[str, dict[str, str]]
+def _adapter_plan_artifacts(
+    profile_ref: str, node_id: str, context: SessionContext
 ) -> dict[str, bytes]:
-    if profile_ref != TRANSITIONAL_FRR_OBSERVER_PROFILE:
+    """Render one node's native config through its adapter, as plan artifacts.
+
+    A profile with no registered adapter contributes no artifacts: its
+    containers are fully self-describing. An adapter that returns environment
+    or arguments fails loudly here — per-node env/args delivery is not yet
+    wired into composition, and silently dropping it would misrepresent the
+    node's configuration.
+    """
+    adapter = adapter_for(profile_ref)
+    if adapter is None:
         return {}
-    configs = rendered_configs.get(node_id)
-    if not configs:
+    node = context.resolved.node_by_id(node_id)
+    if node is None:
         raise WorkloadSelectionError(
-            f"transitional FRR producer has no rendered configuration for {node_id!r}"
+            f"selection assigns node {node_id!r}, absent from the resolved session"
         )
-    return {name: text.encode() for name, text in configs.items()}
+    rendered = adapter.render_node(node, context)
+    if rendered.env or rendered.args is not None:
+        raise WorkloadSelectionError(
+            f"adapter for {profile_ref} produced env/args for {node_id!r}, but per-node "
+            "env/args delivery is not yet wired into composition"
+        )
+    return dict(rendered.files)
 
 
 def validate_workload_selection(
@@ -133,6 +145,7 @@ def validate_workload_selection(
     resolved_session,
     *,
     package_root: Path = BUILTIN_PACKAGE_ROOT,
+    profiles_root: Path | None = None,
 ) -> tuple[LoadedPackage, WorkloadSelection] | None:
     """Load, digest-verify, and resolve the selection without any side effect.
 
@@ -145,7 +158,9 @@ def validate_workload_selection(
         return None
 
     try:
-        package = DirectoryPackageSource(package_root).load(selection_ref.binding_ref)
+        package = DirectoryPackageSource(package_root, profiles_root=profiles_root).load(
+            selection_ref.binding_ref
+        )
     except ValueError as error:
         raise WorkloadSelectionError(f"selected package failed to load: {error}") from error
 
@@ -165,32 +180,34 @@ def validate_workload_selection(
 def prepare_workload_selection(
     selection_ref: SelectionRef | None,
     resolved_session,
-    rendered_configs: dict[str, dict[str, str]],
     *,
     namespace: str,
     owner_ref: dict,
     package_root: Path = BUILTIN_PACKAGE_ROOT,
+    profiles_root: Path | None = None,
 ) -> SelectedWorkloads | None:
     """Load, resolve, compile, and compose the entire explicit selection.
 
-    Returns None when the CR carries no selection (built-in FRR default,
-    unchanged).
+    Each node's native configuration is rendered through its adapter and
+    delivered as plan artifacts. Returns None when the CR carries no selection
+    (built-in FRR default, unchanged).
     Every error raises WorkloadSelectionError: terminal for this selection,
     never a fallback.
     """
     validated = validate_workload_selection(
-        selection_ref, resolved_session, package_root=package_root
+        selection_ref, resolved_session, package_root=package_root, profiles_root=profiles_root
     )
     if validated is None:
         return None
     package, selection = validated
 
+    context = SessionContext(resolved=resolved_session)
     overrides = _dev_image_overrides()
     pull_policy = _dev_override_pull_policy() if overrides else ""
     composed: dict[str, ComposedWorkload] = {}
     for assignment in selection.assignments:
-        artifacts = _transitional_plan_artifacts(
-            str(assignment.profile_ref), assignment.node_id, rendered_configs
+        artifacts = _adapter_plan_artifacts(
+            str(assignment.profile_ref), assignment.node_id, context
         )
         plan = compile_workload_plan(
             selection, package, assignment.node_id, plan_artifacts=artifacts

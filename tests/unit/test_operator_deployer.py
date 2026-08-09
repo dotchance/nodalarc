@@ -1607,9 +1607,10 @@ class TestExplicitWorkloadPath:
         from nodalarc.workloads.refs import ImplementationBindingRef
         from nodalarc.workloads.source import DirectoryPackageSource
 
-        package_root = _Path(__file__).resolve().parents[2] / "configs" / "workloads"
+        repo_root = _Path(__file__).resolve().parents[2]
+        package_root = repo_root / "configs" / "workloads"
         digest = (
-            DirectoryPackageSource(package_root)
+            DirectoryPackageSource(package_root, profiles_root=repo_root / "adapters")
             .load(ImplementationBindingRef("nodalarc:bindings/frr-observer-everywhere.yaml"))
             .package_digest
         )

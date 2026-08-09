@@ -20,7 +20,6 @@ from pathlib import Path
 from typing import Any
 
 import kubernetes
-from jinja2 import Environment, FileSystemLoader
 from nodalarc.catalog_upload import CatalogUploadSelection
 from nodalarc.content_identity import canonical_json_bytes
 from nodalarc.models.resolved_session import (
@@ -48,8 +47,11 @@ from nodalarc.substrate.manifest_contract import (
     POD_SESSION_RUN_LABEL,
 )
 from nodalarc.template_vars import build_template_vars_from_resolved
+from nodalarc.workloads.adapter import SessionContext
 from nodalarc.workloads.refs import BUILTIN_FRR_SELECTION_IDENTITY, selection_ref_from_spec
 
+from adapters.frr import FRR_PROFILE_REF
+from adapters.registry import adapter_for
 from nodalarc_operator.runtime_session import OperatorSessionConfig, resolve_operator_session
 from nodalarc_operator.workloads.materializer import (
     TERMINAL_SSH_CONTRACT,
@@ -58,6 +60,7 @@ from nodalarc_operator.workloads.materializer import (
     build_session_pod,
 )
 from nodalarc_operator.workloads.selection import (
+    BUILTIN_PROFILES_ROOT,
     WorkloadSelectionError,
     prepare_workload_selection,
 )
@@ -825,31 +828,6 @@ def _terr0_manifest_addresses(node: ResolvedNode) -> list[str]:
     ]
 
 
-# All known FRR daemons — used to generate the daemons file
-_ALL_FRR_DAEMONS = [
-    "mgmtd",
-    "zebra",
-    "bgpd",
-    "ospfd",
-    "ospf6d",
-    "ripd",
-    "ripngd",
-    "isisd",
-    "pimd",
-    "ldpd",
-    "nhrpd",
-    "eigrpd",
-    "babeld",
-    "sharpd",
-    "pbrd",
-    "bfdd",
-    "fabricd",
-    "vrrpd",
-    "pathd",
-    "staticd",
-]
-
-
 def _publish_validation_ops_events(results: list, namespace: str, session_id: str) -> None:
     """Publish validation results as OpsEvents via the logging system."""
     for r in results:
@@ -864,65 +842,31 @@ def _publish_validation_ops_events(results: list, namespace: str, session_id: st
         )
 
 
-def _render_frr_configs(node_vars: dict, node_stacks: dict) -> dict[str, dict[str, str]]:
-    """Render every node's FRR configuration from prepared template vars.
+def _render_builtin_frr_configs(resolved_session: ResolvedSession) -> dict[str, dict[str, str]]:
+    """Render FRR configuration for the built-in FRR default (no selection).
 
-    Pure derivation from resolved-session truth: no Kubernetes call, safe
-    to run during write-free preparation.
+    The one FRR translator is the FRR adapter; this drives it per routed node
+    and returns the rendered files as text for the legacy per-node frr-config
+    ConfigMaps. This whole no-selection path is removed when the default
+    session selects FRR through a binding like every other workload.
     """
-    template_dir = str(Path("configs/templates/frr").resolve())
-    # nosec B701 — these are FRR router config templates, not HTML; autoescape would break config syntax
-    env = Environment(loader=FileSystemLoader(template_dir), keep_trailing_newline=True)
-
+    adapter = adapter_for(FRR_PROFILE_REF)
+    if adapter is None:
+        raise ValueError("built-in FRR default requires the registered FRR adapter")
+    context = SessionContext(resolved=resolved_session)
     rendered_configs: dict[str, dict[str, str]] = {}
-
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-
-    def _render_one_node(node_id: str, tpl_vars: dict) -> tuple[str, dict[str, str]]:
-        configs: dict[str, str] = {}
-        node_stack = node_stacks[node_id]
-        for tpl_file in node_stack.template_files:
-            tpl = env.get_template(tpl_file.src)
-            rendered = tpl.render(**tpl_vars)
-            dest_name = Path(tpl_file.dst).name
-            configs[dest_name] = rendered
-        # Generate daemons file
-        if node_stack.daemons:
-            # mgmtd is always required in FRR 10.x — it manages config loading
-            enabled = set(node_stack.daemons) | {"mgmtd"}
-            configs["daemons"] = (
-                "\n".join(f"{d}={'yes' if d in enabled else 'no'}" for d in _ALL_FRR_DAEMONS) + "\n"
+    for node in resolved_session.nodes:
+        if node.forwarding == "host":
+            continue
+        if node.forwarding not in (None, "routed"):
+            raise ValueError(
+                f"node {node.node_id!r} has forwarding class {node.forwarding!r}, "
+                "which the built-in FRR default does not support"
             )
-        # Create unified frr.conf combining all daemon configs.
-        # FRR's config parser treats blank lines inside blocks as implicit "exit",
-        # so we must strip consecutive blank lines from Jinja2 output.
-        frr_conf_parts = []
-        for name_key in ("zebra.conf", "isisd.conf", "ospfd.conf", "pathd.conf", "staticd.conf"):
-            if name_key in configs:
-                frr_conf_parts.append(f"! === {name_key} ===")
-                frr_conf_parts.append(configs[name_key])
-        if frr_conf_parts:
-            raw = "\n".join(frr_conf_parts)
-            # Remove blank lines — FRR's config parser interprets blank lines
-            # inside interface/router blocks as implicit "exit" commands.
-            # Jinja2 {% if %} blocks produce blank lines that break parsing.
-            lines = raw.splitlines()
-            cleaned_lines = [line for line in lines if line.strip() != ""]
-            configs["frr.conf"] = "\n".join(cleaned_lines) + "\n"
-        # Config version hash — NOS-agnostic readiness contract.
-        # The entrypoint writes this to a sentinel file after loading config.
-        # The readiness probe diffs the sentinel against the ConfigMap mount
-        # to verify the running NOS has loaded the intended config version.
-        if "frr.conf" in configs:
-            config_hash = hashlib.sha256(configs["frr.conf"].encode()).hexdigest()[:16]
-            configs["_config_version"] = config_hash
-        return node_id, configs
-
-    with ThreadPoolExecutor(max_workers=8) as pool:
-        futures = {pool.submit(_render_one_node, nid, node_vars[nid]): nid for nid in node_stacks}
-        for fut in as_completed(futures):
-            nid, configs = fut.result()
-            rendered_configs[nid] = configs
+        config = adapter.render_node(node, context)
+        rendered_configs[node.node_id] = {
+            name: content.decode() for name, content in config.files.items()
+        }
     return rendered_configs
 
 
@@ -961,15 +905,12 @@ def prepare_session_workloads(
             "host nodes without derivable attachment are not deployable "
             "(no LAN segment exposes them yet): " + ", ".join(unattached[:5])
         )
-    stacks_by_domain = _stack_by_domain(resolved_session)
-    node_vars, node_stacks = _node_vars_from_resolved(resolved_session, stacks_by_domain)
-    rendered_configs = _render_frr_configs(node_vars, node_stacks)
     return prepare_workload_selection(
         active_session.workload_selection,
         resolved_session,
-        rendered_configs,
         namespace=namespace,
         owner_ref=owner_ref,
+        profiles_root=BUILTIN_PROFILES_ROOT,
     )
 
 
@@ -1087,11 +1028,7 @@ def ensure_session_configmaps(
     _progress(f"Building template variables for {total_nodes} nodes")
     node_vars, node_stacks = _node_vars_from_resolved(resolved_session, stacks_by_domain)
 
-    # --- Step 5: Render FRR configs (parallelized) ---
-    _progress(f"Rendering FRR configurations for {len(node_vars)} nodes")
-    rendered_configs = _render_frr_configs(node_vars, node_stacks)
-
-    # --- Step 5b: Explicit workload selection (write-free) ---
+    # --- Step 5: Explicit workload selection (write-free) ---
     # Load, resolve, compile, and compose EVERY selected node before the
     # first Kubernetes write below. Absent selection = built-in FRR default,
     # unchanged. Any selection failure is terminal — never FRR. The
@@ -1122,13 +1059,14 @@ def ensure_session_configmaps(
         selected_workloads = prepare_workload_selection(
             operator_session.workload_selection,
             resolved_session,
-            rendered_configs,
             namespace=namespace,
             owner_ref=owner_ref,
+            profiles_root=BUILTIN_PROFILES_ROOT,
         )
 
     if selected_workloads is None:
         # --- Step 6: Create per-node FRR config ConfigMaps (built-in FRR default) ---
+        rendered_configs = _render_builtin_frr_configs(resolved_session)
         _progress(f"Creating {len(rendered_configs)} FRR config ConfigMaps")
         for node_id, configs in rendered_configs.items():
             cm_name = f"frr-config-{node_id.lower()}"

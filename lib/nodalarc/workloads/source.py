@@ -211,21 +211,45 @@ class WorkloadPackageSource(Protocol):
 class DirectoryPackageSource:
     """Serve packages from one explicitly configured directory root.
 
-    The root is handed in whole; nothing is inferred by scanning. Documents
-    live under their family directories (``bindings/``, ``profiles/``) and a
-    profile's declared files resolve relative to the profile document's own
-    directory.
+    The root is handed in whole; nothing is inferred by scanning. Bindings live
+    under ``bindings/`` beneath the root. Profiles live under ``profiles/``
+    beneath the root as well, unless a separate ``profiles_root`` is configured:
+    then a profile reference's ``profiles/`` family segment is replaced by that
+    root, so each adapter owns its profiles (``adapters/<tech>/…``) while
+    bindings stay put. A profile's declared files always resolve relative to the
+    profile document's own directory.
     """
 
-    def __init__(self, root: Path, *, namespace: CatalogNamespace = "nodalarc") -> None:
+    def __init__(
+        self,
+        root: Path,
+        *,
+        namespace: CatalogNamespace = "nodalarc",
+        profiles_root: Path | None = None,
+    ) -> None:
         self._root = root
+        self._profiles_root = profiles_root
         self._namespace = namespace
 
-    def _contained_read(self, relative: Path, *, what: str, missing_code: PackageLoadCode) -> bytes:
-        """The one read path: every byte served must resolve inside the root."""
+    def _profile_base(self, ref: ProfileRef) -> tuple[Path, Path]:
+        """Resolve one profile reference to a (base root, base-relative path).
+
+        With no configured ``profiles_root`` the classic layout holds: profiles
+        live under the package root at their full family path. With one, the
+        leading ``profiles/`` family segment is dropped and the remainder
+        resolves under the profiles root.
+        """
+        if self._profiles_root is None:
+            return self._root, ref.relative_path
+        return self._profiles_root, Path(*ref.relative_path.parts[1:])
+
+    def _contained_read(
+        self, relative: Path, *, base: Path, what: str, missing_code: PackageLoadCode
+    ) -> bytes:
+        """The one read path: every byte served must resolve inside ``base``."""
         try:
-            resolved_root = self._root.resolve()
-            resolved_target = (self._root / relative).resolve()
+            resolved_root = base.resolve()
+            resolved_target = (base / relative).resolve()
         except OSError as error:
             raise PackageLoadError(
                 missing_code,
@@ -264,8 +288,10 @@ class DirectoryPackageSource:
                 PackageLoadCode.PACKAGE_REF_INVALID,
                 f"profile reference {ref} is outside this source's {self._namespace!r} namespace",
             )
+        base, relative = self._profile_base(ref)
         document_bytes = self._contained_read(
-            ref.relative_path,
+            relative,
+            base=base,
             what="profile document",
             missing_code=PackageLoadCode.PACKAGE_DOCUMENT_MISSING,
         )
@@ -279,10 +305,11 @@ class DirectoryPackageSource:
             )
         profile = admission.profile
         files: dict[str, bytes] = {}
-        profile_dir = ref.relative_path.parent
+        profile_dir = relative.parent
         for artifact in profile.artifacts.static:
             content = self._contained_read(
                 profile_dir / artifact.file,
+                base=base,
                 what=f"profile {ref} file",
                 missing_code=PackageLoadCode.PACKAGE_FILE_MISSING,
             )
@@ -315,6 +342,7 @@ class DirectoryPackageSource:
             )
         document_bytes = self._contained_read(
             binding_ref.relative_path,
+            base=self._root,
             what="binding document",
             missing_code=PackageLoadCode.PACKAGE_DOCUMENT_MISSING,
         )

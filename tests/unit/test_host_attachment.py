@@ -133,15 +133,9 @@ def test_heterogeneous_binding_composes_hosts_without_frr() -> None:
     zero-capability container, no plan artifacts — while routed nodes keep
     the FRR composition, in ONE selection under one sky."""
     resolved = _resolved_with_hosts(name="host-hetero")
-    rendered = {
-        node.node_id: {"frr.conf": f"hostname {node.node_id}\n", "_config_version": "abc"}
-        for node in resolved.nodes
-        if node.forwarding == "routed"
-    }
     selected = prepare_workload_selection(
         _hetero_selection_ref(),
         resolved,
-        rendered,
         namespace="nodalarc",
         owner_ref={"kind": "ConstellationSpec", "name": "s", "uid": "u1"},
         package_root=FIXTURE_PACKAGE_ROOT,

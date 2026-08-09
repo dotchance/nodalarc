@@ -32,6 +32,7 @@ from tests.catalog_session_fixtures import (
 
 ROOT = Path(__file__).resolve().parents[2]
 PACKAGE_ROOT = ROOT / "configs" / "workloads"
+PROFILES_ROOT = ROOT / "adapters"
 BINDING = "nodalarc:bindings/frr-observer-everywhere.yaml"
 OWNER_REF = {"kind": "ConstellationSpec", "name": "s", "uid": "owner-uid-1"}
 
@@ -48,7 +49,9 @@ def resolved() -> ResolvedSession:
 
 def _package_digest() -> str:
     return (
-        DirectoryPackageSource(PACKAGE_ROOT).load(ImplementationBindingRef(BINDING)).package_digest
+        DirectoryPackageSource(PACKAGE_ROOT, profiles_root=PROFILES_ROOT)
+        .load(ImplementationBindingRef(BINDING))
+        .package_digest
     )
 
 
@@ -59,13 +62,6 @@ def _selection_ref(digest: str | None = None):
             "implementationPackageDigest": digest or _package_digest(),
         }
     )
-
-
-def _rendered(resolved: ResolvedSession) -> dict[str, dict[str, str]]:
-    return {
-        node.node_id: {"frr.conf": f"hostname {node.node_id}\n", "_config_version": "abc"}
-        for node in resolved.nodes
-    }
 
 
 def test_selection_pair_is_both_or_neither() -> None:
@@ -97,7 +93,7 @@ def test_crd_schema_patterns_match_the_typed_authority() -> None:
 
 def test_absent_selection_is_builtin_default_path(resolved: ResolvedSession) -> None:
     result = prepare_workload_selection(
-        None, resolved, {}, namespace="nodalarc", owner_ref=OWNER_REF, package_root=PACKAGE_ROOT
+        None, resolved, namespace="nodalarc", owner_ref=OWNER_REF, package_root=PACKAGE_ROOT
     )
     assert result is None
 
@@ -109,17 +105,17 @@ def test_prepared_selection_composes_every_node(
     selected = prepare_workload_selection(
         _selection_ref(),
         resolved,
-        _rendered(resolved),
         namespace="nodalarc",
         owner_ref=OWNER_REF,
         package_root=PACKAGE_ROOT,
+        profiles_root=PROFILES_ROOT,
     )
     assert selected is not None
     assert selected.identity == f"{BINDING}@{_package_digest()}"
     assert set(selected.composed) == {node.node_id for node in resolved.nodes}
     sample = next(iter(selected.composed.values()))
     assert [c.name for c in sample.composition.containers] == ["frr", "observer"]
-    # The transitional producer delivered rendered config as plan artifacts.
+    # The FRR adapter rendered per-node config, delivered as plan artifacts.
     assert sample.artifact_config_map is not None
     plan_keys = [k for k in sample.artifact_config_map.binary_data if k.startswith("p-")]
     assert plan_keys
@@ -130,10 +126,10 @@ def test_digest_mismatch_is_terminal(resolved: ResolvedSession) -> None:
         prepare_workload_selection(
             _selection_ref("sha256:" + "d" * 64),
             resolved,
-            _rendered(resolved),
             namespace="nodalarc",
             owner_ref=OWNER_REF,
             package_root=PACKAGE_ROOT,
+            profiles_root=PROFILES_ROOT,
         )
 
 
@@ -149,10 +145,10 @@ def test_dev_image_override_applies_and_is_explicit(
     selected = prepare_workload_selection(
         _selection_ref(),
         resolved,
-        _rendered(resolved),
         namespace="nodalarc",
         owner_ref=OWNER_REF,
         package_root=PACKAGE_ROOT,
+        profiles_root=PROFILES_ROOT,
     )
     sample = next(iter(selected.composed.values()))
     frr = next(c for c in sample.composition.containers if c.name == "frr")
@@ -179,10 +175,10 @@ def test_dev_image_override_without_pull_policy_is_terminal(
         prepare_workload_selection(
             _selection_ref(),
             resolved,
-            _rendered(resolved),
             namespace="nodalarc",
             owner_ref=OWNER_REF,
             package_root=PACKAGE_ROOT,
+            profiles_root=PROFILES_ROOT,
         )
 
 
@@ -194,10 +190,10 @@ def test_terminal_surfaces_compose_per_profile(resolved: ResolvedSession) -> Non
     selected = prepare_workload_selection(
         _selection_ref(),
         resolved,
-        _rendered(resolved),
         namespace="nodalarc",
         owner_ref=OWNER_REF,
         package_root=PACKAGE_ROOT,
+        profiles_root=PROFILES_ROOT,
     )
     sample = next(iter(selected.composed.values()))
     assert json.loads(sample.terminal_access) == {"surface": "ssh"}
@@ -214,7 +210,7 @@ def test_exec_terminal_contract_composes(resolved_static=None) -> None:
     from nodalarc.workloads.refs import ImplementationBindingRef
     from nodalarc.workloads.source import DirectoryPackageSource
 
-    package = DirectoryPackageSource(PACKAGE_ROOT).load(
+    package = DirectoryPackageSource(PACKAGE_ROOT, profiles_root=PROFILES_ROOT).load(
         ImplementationBindingRef("nodalarc:bindings/earth-luna-quic-lab.yaml")
     )
     loaded = package.profiles["nodalarc:profiles/quic/picoquic-server.yaml"]

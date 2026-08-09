@@ -79,35 +79,67 @@ def rename_cni_interface(pid: int, node_id: str) -> str | None:
         return f"{node_id}: {exc}"
 
 
-def remove_default_route(pid: int, node_id: str) -> str | None:
-    """Remove the pod's CNI default IPv4 route. Returns error string or None.
+def remove_default_route(pid: int, node_id: str, cluster_pod_cidr: str | None = None) -> str | None:
+    """Replace the pod's CNI default route with a scoped management route.
 
-    Scoped to the CNI interface (already renamed to cni0 by the time this
-    runs): the function exists to strip Kubernetes' injected default as part
-    of cni0 lockdown. A platform-installed host-attachment default over
-    terr0 is deliberate substrate state and must survive.
+    The constellation is the data plane: the CNI default must not compete
+    with the routing engine's default. But the management path (the browser
+    terminal reaching this pod cross-node via VS-API, and any control-plane
+    traffic to another node's pods) rides cni0, and a pod can only answer a
+    peer it has a route to. So this drops the CNI default and installs a
+    route to the cluster pod CIDR via the cni0 bridge gateway: the routing
+    engine owns 0.0.0.0/0 while cni0 keeps a path to every pod in the
+    cluster. A host-attachment default over terr0 is deliberate substrate
+    state on a different interface and is untouched.
     """
+    import ipaddress
+
     try:
 
-        def _remove_default(ipr: IPRoute) -> bool:
+        def _replace_default(ipr: IPRoute) -> None:
             cni_links = ipr.link_lookup(ifname="cni0")
-            cni_index = cni_links[0] if cni_links else None
-            removed = False
-            for route in ipr.get_routes(family=2):
-                if route.get_attr("RTA_DST") is not None or route["dst_len"] != 0:
-                    continue
-                if cni_index is not None and route.get_attr("RTA_OIF") != cni_index:
-                    continue
-                ipr.route(
-                    "del",
-                    dst="0.0.0.0/0",
-                    gateway=route.get_attr("RTA_GATEWAY"),
-                    oif=route.get_attr("RTA_OIF"),
-                )
-                removed = True
-            return removed
+            if not cni_links:
+                return
+            cni_index = cni_links[0]
 
-        _in_namespace(pid, _remove_default)
+            # The bridge gateway is deterministic and always present: it is
+            # the first host address of the pod's own cni0 subnet (the CNI
+            # bridge IP). Deriving it here — rather than capturing it from the
+            # CNI default route — means the management route installs whether
+            # that default is still present (fresh wire) or already gone (a
+            # re-wire after the routing engine took the default). The default
+            # is still deleted below when it exists on cni0.
+            # The bridge gateway is the first host address of the pod's
+            # connected cni0 subnet — the scope-link route whose prefix is a
+            # real subnet (dst_len < 32), never a /32 host or broadcast route
+            # (those also carry link scope and would derive a bogus gateway).
+            gateway = None
+            for route in ipr.get_routes(family=2):
+                if route.get_attr("RTA_OIF") != cni_index:
+                    continue
+                dst = route.get_attr("RTA_DST")
+                dst_len = route["dst_len"]
+                if dst is None and dst_len == 0:
+                    ipr.route(
+                        "del",
+                        dst="0.0.0.0/0",
+                        gateway=route.get_attr("RTA_GATEWAY"),
+                        oif=cni_index,
+                    )
+                elif dst is not None and dst_len < 32 and route["scope"] == 253:
+                    subnet = ipaddress.ip_network(f"{dst}/{dst_len}", strict=False)
+                    gateway = str(subnet.network_address + 1)
+
+            if cluster_pod_cidr and gateway:
+                # Idempotent: 'replace' tolerates a route left by a prior pass.
+                ipr.route(
+                    "replace",
+                    dst=cluster_pod_cidr,
+                    gateway=gateway,
+                    oif=cni_index,
+                )
+
+        _in_namespace(pid, _replace_default)
         return None
     except Exception as exc:
         return f"{node_id}: {exc}"
@@ -130,10 +162,12 @@ def lock_down_cni0(pid: int, node_id: str) -> str | None:
         return f"{node_id}: {exc}"
 
 
-def finalize_pod_network(pid: int, node_id: str) -> tuple[str | None, str | None]:
-    """Rename the CNI interface, remove the default route, lock down cni0."""
+def finalize_pod_network(
+    pid: int, node_id: str, cluster_pod_cidr: str | None = None
+) -> tuple[str | None, str | None]:
+    """Rename the CNI interface, scope the default route, lock down cni0."""
     rename_err = rename_cni_interface(pid, node_id)
-    route_err = remove_default_route(pid, node_id)
+    route_err = remove_default_route(pid, node_id, cluster_pod_cidr)
     lockdown_err = lock_down_cni0(pid, node_id)
     security_errors = [err for err in (rename_err, lockdown_err) if err]
     return route_err, "; ".join(security_errors) if security_errors else None
@@ -317,6 +351,7 @@ def execute_wiring(
         for node_id, node in manifest_model.nodes.items()
     }
     ground_bridges = manifest_model.ground_bridges
+    cluster_pod_cidr = manifest_model.cluster_pod_cidr
 
     if not handles:
         log.info("No handles to wire on this node")
@@ -655,7 +690,7 @@ def execute_wiring(
             pid = pid_map.get(node_id, 0)
             if pid == 0:
                 continue
-            fin_futures[pool.submit(finalize_pod_network, pid, node_id)] = node_id
+            fin_futures[pool.submit(finalize_pod_network, pid, node_id, cluster_pod_cidr)] = node_id
         total_to_finalize = len(fin_futures)
         for fut in as_completed(fin_futures):
             nid = fin_futures[fut]

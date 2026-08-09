@@ -235,6 +235,11 @@ class WiringManifest(_StrictModel):
     required_phases: list[str]
     nodes: dict[str, NodeSpec]
     ground_bridges: dict[str, GroundBridgeSpec]
+    # The cluster's covering pod CIDR. The Node Agent installs a management
+    # route to it via the CNI gateway on every session pod, so the browser
+    # terminal and control-plane traffic reach pods on other nodes while the
+    # routing engine owns the default route. Optional for older manifests.
+    cluster_pod_cidr: str | None = None
     required_substrate_pairs: list[RequiredSubstratePair]
     site_lans: dict[str, SiteLanSpec]
     isl_link_count: int

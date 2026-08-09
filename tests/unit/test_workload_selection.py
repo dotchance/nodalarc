@@ -186,6 +186,44 @@ def test_dev_image_override_without_pull_policy_is_terminal(
         )
 
 
+def test_terminal_surfaces_compose_per_profile(resolved: ResolvedSession) -> None:
+    """FRR declares ssh (platform mounts the session key); the QUIC
+    endpoints declare exec; the contract rides the composed workload."""
+    import json
+
+    selected = prepare_workload_selection(
+        _selection_ref(),
+        resolved,
+        _rendered(resolved),
+        namespace="nodalarc",
+        owner_ref=OWNER_REF,
+        package_root=PACKAGE_ROOT,
+    )
+    sample = next(iter(selected.composed.values()))
+    assert json.loads(sample.terminal_access) == {"surface": "ssh"}
+    volumes = {v.name: v for v in sample.composition.volumes}
+    assert "na-terminal-keys" in volumes
+    assert volumes["na-terminal-keys"].secret.secret_name == "nodalarc-terminal-keys"
+    frr = next(c for c in sample.composition.containers if c.name == "frr")
+    key_mounts = [m for m in frr.volume_mounts if m.name == "na-terminal-keys"]
+    assert [m.mount_path for m in key_mounts] == ["/etc/ssh-keys"]
+
+
+def test_exec_terminal_contract_composes(resolved_static=None) -> None:
+
+    from nodalarc.workloads.refs import ImplementationBindingRef
+    from nodalarc.workloads.source import DirectoryPackageSource
+
+    package = DirectoryPackageSource(PACKAGE_ROOT).load(
+        ImplementationBindingRef("nodalarc:bindings/earth-luna-quic-lab.yaml")
+    )
+    loaded = package.profiles["nodalarc:profiles/quic/picoquic-server.yaml"]
+    terminal = loaded.profile.terminal
+    assert terminal is not None
+    assert terminal.surface == "exec"
+    assert list(terminal.command) == ["/bin/bash"]
+
+
 def _immutable_cm(binary_data: dict[str, str]) -> kubernetes.client.V1ConfigMap:
     return kubernetes.client.V1ConfigMap(
         metadata=kubernetes.client.V1ObjectMeta(

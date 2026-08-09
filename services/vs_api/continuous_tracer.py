@@ -222,11 +222,36 @@ class ContinuousTracer:
                 log.error("Trace loop error: %s", exc, exc_info=True)
                 await asyncio.sleep(self._config.trace_interval_seconds)
 
-    def _run_tracepath(self, pod: str, target: str) -> dict:
+    def _run_tracepath(self, pod: str, target: str, on_partial=None) -> dict:
         """Run ICMP traceroute via kubernetes client exec.
 
-        Uses traceroute -I (ICMP) with 250ms per-hop timeout, 1 query per hop.
-        Output is in traceroute format — the tracepath parser handles both.
+        Uses traceroute -I (ICMP), 1 query per hop. The per-hop timeout is an
+        INTEGER number of seconds: the FRR image ships BusyBox traceroute,
+        which rejects a fractional -w (a sub-second value fails the whole
+        command and the trace silently returns nothing).
+
+        The timeout must exceed the CUMULATIVE round-trip time to the farthest
+        hop, because traceroute only stops early when it actually reaches the
+        destination. For an Earth-Luna path the cislunar crosslink adds ~2.56 s
+        RTT on top of the ~0.6 s Earth-side latency, so the lunar hops sit near
+        3.1 s cumulative — just over a 3 s window, which is why a 3 s timeout
+        never reached Luna and instead ran every silent hop out to the max.
+        Four seconds clears the cislunar hops so the trace reaches the
+        destination and stops. -m is bounded to a realistic path length so a
+        genuinely-down path fails fast instead of walking 30 silent hops.
+
+        A responsive hop still returns immediately; only a silent hop costs the
+        full timeout. Output is traceroute format — the tracepath parser
+        handles both.
+
+        This IS the real path: a well-known tool sending real packets through
+        the actual forwarding plane, so its output is trusted ground truth.
+        Slow is acceptable; wrong is not. What is not acceptable is hanging
+        with no output — real traceroute prints each hop as it resolves — so
+        the caller streams partial hops through ``on_partial`` as they arrive.
+        A model/SPF-computed path (what the platform PREDICTS forwarding would
+        do) is a separate thing entirely and must be labeled as a prediction,
+        never shown in place of this measured path.
         """
         import kubernetes.client
         import kubernetes.config
@@ -246,7 +271,7 @@ class ContinuousTracer:
                 pod,
                 ns,
                 container="frr",
-                command=["traceroute", "-I", "-n", "-w", "0.25", "-q", "1", "-m", "30", target],
+                command=["traceroute", "-I", "-n", "-w", "4", "-q", "1", "-m", "20", target],
                 stderr=True,
                 stdout=True,
                 stdin=False,
@@ -255,11 +280,26 @@ class ContinuousTracer:
             )
             stdout = ""
             stderr = ""
+            published_hops = 0
             while resp.is_open():
-                resp.update(timeout=5)
+                # Poll at 2 s so a newly-printed hop reaches the UI within
+                # ~2 s. An idle poll (a slow hop still in flight) just returns
+                # nothing and costs one wasted tick — harmless.
+                resp.update(timeout=2)
                 chunk = resp.read_stdout()
                 if chunk:
                     stdout += chunk
+                    # Stream to the caller each time a new complete hop line
+                    # lands, so the UI grows the path hop by hop instead of
+                    # waiting for the whole (possibly slow) command to finish.
+                    if on_partial is not None:
+                        complete_hops = stdout.count("\n")
+                        if complete_hops > published_hops:
+                            published_hops = complete_hops
+                            try:
+                                on_partial(stdout)
+                            except Exception as exc:  # never let streaming break the trace
+                                log.debug("partial trace callback error: %s", exc)
                 err_chunk = resp.read_stderr()
                 if err_chunk:
                     stderr += err_chunk
@@ -295,6 +335,20 @@ class ContinuousTracer:
             lines.append(f"     Resume: pmtu 9000 hops {last_hop} back {last_hop}")
         return "\n".join(lines) + "\n"
 
+    def _trace_endpoint(self, node):
+        """TEMPORARY: the node to actually run a trace from/to.
+
+        For a routed node this is the node itself. For a host node — which
+        has no routing daemon and no in-container trace tooling — this is the
+        FRR gateway it attaches to. A proper fix would trace the real LAN-to-
+        constellation path; this substitution is a stopgap only.
+        """
+        gateway_id = node.trace_gateway_node_id
+        if gateway_id is None:
+            return node
+        gateway = self._node_registry.get(gateway_id)
+        return gateway if gateway is not None else node
+
     def _trace_tracepath(self, sim_time: str, now: str) -> LiveTraceResult | None:
         """Run forward + reverse tracepath concurrently, then enrich."""
         src_node = self._node_registry.get(self._src)
@@ -302,17 +356,60 @@ class ContinuousTracer:
         if not src_node or not dst_node:
             return None
 
+        # TEMPORARY HACK — host-node trace stopgap. A host-forwarding node
+        # (an application endpoint on a site LAN) runs no routing daemon and
+        # its container ships no trace tooling, so it cannot be a trace
+        # endpoint. Until there is an honest host-aware path view, trace from
+        # the FRR gateway the host attaches to, toward the other endpoint's
+        # gateway. This shows the real CONSTELLATION path but OMITS the
+        # host<->gateway LAN hop at each end, so it is not the true end-to-end
+        # path. Replace with a substrate-truth trace that models the LAN
+        # segment. When neither endpoint is a host, this is a no-op and the
+        # trace runs exactly as before.
+        src_exec = self._trace_endpoint(src_node)
+        dst_exec = self._trace_endpoint(dst_node)
+
+        # Stream the forward path: publish each hop as traceroute prints it so
+        # the UI shows the path growing (hop 1, hop 2, ...) instead of hanging
+        # for a full slow cycle. The partial view carries the forward hops so
+        # far with the reverse still empty; the complete result (with reverse
+        # and full enrichment) replaces it when the cycle finishes.
+        def _publish_partial_forward(raw_traceroute: str) -> None:
+            parsed = parse_tracepath(
+                self._traceroute_to_tracepath(raw_traceroute, dst_exec.loopback_ipv4)
+            )
+            hops = self._map_hops(parsed, src_node)
+            if len(hops) <= 1:
+                return  # only the source seed so far — nothing to show yet
+            self._latest = LiveTraceResult(
+                src=self._src,
+                dst=self._dst,
+                forward=LiveTraceDirection(
+                    hops=hops,
+                    links=self._build_links(hops),
+                    rtt_ms=self._extract_rtt(parsed),
+                    asymmetry_detected=False,
+                ),
+                reverse=LiveTraceDirection(hops=[], links=[], rtt_ms=0.0, asymmetry_detected=False),
+                traced_at=now,
+                sim_time=sim_time,
+                topology_state_id="",
+                method="tracepath",
+                trace_mode=self._trace_mode,
+            )
+
         # Run forward and reverse concurrently (spec line 358)
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
             fwd_future = pool.submit(
                 self._run_tracepath,
-                self._src.lower(),
-                dst_node.loopback_ipv4,
+                src_exec.node_id.lower(),
+                dst_exec.loopback_ipv4,
+                _publish_partial_forward,
             )
             rev_future = pool.submit(
                 self._run_tracepath,
-                self._dst.lower(),
-                src_node.loopback_ipv4,
+                dst_exec.node_id.lower(),
+                src_exec.loopback_ipv4,
             )
             fwd_resp = fwd_future.result()
             rev_resp = rev_future.result()

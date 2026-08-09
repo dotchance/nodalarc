@@ -322,6 +322,46 @@ class ReadinessHook(BaseModel):
         return argv
 
 
+class TerminalSurface(BaseModel):
+    """The profile-declared landing surface for platform terminal access.
+
+    The terminal is a platform concept for every node — key lifecycle, the
+    VS-API proxy, and the browser path are platform-owned — but the landing
+    is the workload's own: ``ssh`` when the image runs an SSH daemon (the
+    platform mounts the session public key at the declared path), ``exec``
+    when the platform should attach a command inside the declared container.
+    A profile without this declaration declines terminal access, and the
+    browser refuses typed instead of dialing a pod that cannot answer.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    surface: Literal["ssh", "exec"]
+    container: DnsLabel
+    # ssh only: the directory where the platform mounts authorized_keys.
+    authorized_keys_path: NonEmptyStr | None = None
+    # exec only: the argv the platform attaches.
+    command: tuple[str, ...] | None = None
+
+    @model_validator(mode="after")
+    def _surface_rules(self) -> TerminalSurface:
+        if self.surface == "ssh":
+            if self.authorized_keys_path is None:
+                raise ValueError("ssh terminal surface requires authorized_keys_path")
+            if self.command is not None:
+                raise ValueError("ssh terminal surface must not declare a command")
+            validate_mount_path(self.authorized_keys_path)
+        else:
+            if self.command is None:
+                raise ValueError("exec terminal surface requires a command")
+            if self.authorized_keys_path is None:
+                pass
+            else:
+                raise ValueError("exec terminal surface must not declare authorized_keys_path")
+            _validate_argv(self.command, field="command")
+        return self
+
+
 class NodeWorkloadProfile(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -336,6 +376,7 @@ class NodeWorkloadProfile(BaseModel):
     artifacts: ProfileArtifacts = ProfileArtifacts()
     routing_realization: RoutingRealization
     readiness: ReadinessHook | None = None
+    terminal: TerminalSurface | None = None
 
     @field_validator("workload_containers", mode="before")
     @classmethod
@@ -385,6 +426,10 @@ class NodeWorkloadProfile(BaseModel):
                 )
             mounts_by_container[artifact.container].append(artifact.path)
 
+        if self.terminal is not None and self.terminal.container not in known_containers:
+            raise ValueError(
+                f"terminal surface references unknown container {self.terminal.container!r}"
+            )
         if self.artifacts.plan is not None:
             if self.artifacts.plan.container not in known_containers:
                 raise ValueError(

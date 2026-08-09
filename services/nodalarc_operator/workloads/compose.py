@@ -25,7 +25,11 @@ from nodalarc_operator.workloads.materializer import WorkloadComposition
 # not use them; the materializer separately reserves wiring-gate/status.
 PLAN_ARTIFACT_VOLUME = "na-plan-artifacts"
 STATIC_ARTIFACT_VOLUME = "na-static-artifacts"
-_RESERVED_VOLUME_NAMES = frozenset({PLAN_ARTIFACT_VOLUME, STATIC_ARTIFACT_VOLUME})
+TERMINAL_KEYS_VOLUME = "na-terminal-keys"
+TERMINAL_KEYS_SECRET = "nodalarc-terminal-keys"
+_RESERVED_VOLUME_NAMES = frozenset(
+    {PLAN_ARTIFACT_VOLUME, STATIC_ARTIFACT_VOLUME, TERMINAL_KEYS_VOLUME}
+)
 
 
 @dataclass(frozen=True)
@@ -36,6 +40,9 @@ class ComposedWorkload:
     # Session-owned, content-addressed artifact ConfigMap (binaryData), or
     # None when the profile ships no artifacts. Created by the reconciler.
     artifact_config_map: kubernetes.client.V1ConfigMap | None
+    # The pod's terminal contract as canonical JSON, or None when the
+    # profile declines terminal access.
+    terminal_access: str | None = None
 
 
 def _artifact_key(kind: str, name: str) -> str:
@@ -164,6 +171,15 @@ def _container_mounts(
                 read_only=True,
             )
         )
+    terminal = profile.terminal
+    if terminal is not None and terminal.surface == "ssh" and terminal.container == container.name:
+        mounts.append(
+            kubernetes.client.V1VolumeMount(
+                name=TERMINAL_KEYS_VOLUME,
+                mount_path=terminal.authorized_keys_path,
+                read_only=True,
+            )
+        )
     return mounts
 
 
@@ -252,6 +268,34 @@ def compose_workload(
                 )
             )
 
+    terminal_access: str | None = None
+    if profile.terminal is not None:
+        if profile.terminal.surface == "ssh":
+            # The platform owns key lifecycle: mount the session public key
+            # where the profile's SSH daemon reads it.
+            volumes.append(
+                kubernetes.client.V1Volume(
+                    name=TERMINAL_KEYS_VOLUME,
+                    secret=kubernetes.client.V1SecretVolumeSource(
+                        secret_name=TERMINAL_KEYS_SECRET,
+                        items=[
+                            kubernetes.client.V1KeyToPath(
+                                key="id_ed25519.pub", path="authorized_keys"
+                            )
+                        ],
+                    ),
+                )
+            )
+            terminal_access = canonical_json_bytes({"surface": "ssh"}).decode()
+        else:
+            terminal_access = canonical_json_bytes(
+                {
+                    "surface": "exec",
+                    "container": profile.terminal.container,
+                    "command": list(profile.terminal.command or ()),
+                }
+            ).decode()
+
     composition = WorkloadComposition(
         containers=[
             _translate_container(container, profile, loaded, plan)
@@ -263,4 +307,8 @@ def compose_workload(
             for container in profile.init_containers
         ],
     )
-    return ComposedWorkload(composition=composition, artifact_config_map=artifact_cm)
+    return ComposedWorkload(
+        composition=composition,
+        artifact_config_map=artifact_cm,
+        terminal_access=terminal_access,
+    )

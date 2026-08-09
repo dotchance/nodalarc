@@ -51,8 +51,11 @@ node_workload_profile:
     # FRR's measured requirement under drop-ALL translation: the legacy pod
     # added only NET_ADMIN/NET_RAW/SYS_ADMIN because it kept the runtime's
     # default capabilities; with the platform dropping ALL, the entrypoint's
-    # chown, sshd startup, identity changes, and daemon management need the
-    # full set restored explicitly.
+    # chown, sshd startup, identity changes, daemon management, and the sshd
+    # privilege-separation chroot into /var/empty need the full set restored
+    # explicitly. SYS_CHROOT is the one the legacy default set carried that
+    # a bare measurement missed: without it every SSH handshake resets when
+    # the pre-auth child cannot chroot.
     capabilities:
     - CHOWN
     - DAC_OVERRIDE
@@ -64,6 +67,7 @@ node_workload_profile:
     - SETGID
     - SETUID
     - SYS_ADMIN
+    - SYS_CHROOT
     root_filesystem: read_only
     volume_mounts:
     - volume: frr-run
@@ -120,6 +124,10 @@ node_workload_profile:
       - traffic_engineering
     - protocol: static
       capabilities: []
+  terminal:
+    surface: ssh
+    container: frr
+    authorized_keys_path: /etc/ssh-keys
   readiness:
     container: frr
     argv:

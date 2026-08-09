@@ -90,6 +90,86 @@ def _manifest_data() -> dict:
     }
 
 
+class _MgmtFakeRoute(dict):
+    """A pyroute2-style route: dict access for scalar fields (dst_len,
+    scope), get_attr for netlink attributes."""
+
+    def __init__(self, dst_len, scope, attrs):
+        super().__init__(dst_len=dst_len, scope=scope)
+        self._attrs = dict(attrs)
+
+    def get_attr(self, key):
+        return self._attrs.get(key)
+
+
+class _MgmtFakeIPRoute:
+    def __init__(self, routes, cni_index=7):
+        self._routes = routes
+        self._cni_index = cni_index
+        self.calls = []
+
+    def link_lookup(self, ifname):
+        return [self._cni_index] if ifname == "cni0" else []
+
+    def get_routes(self, family):
+        return list(self._routes)
+
+    def route(self, action, **kwargs):
+        self.calls.append((action, kwargs))
+
+
+# A pod's cni0 route set: the CNI default (dst_len 0) plus the kernel
+# scope-link subnet route from which the bridge gateway (.1) is derived.
+def _pod_cni_routes(cni_index=7):
+    return [
+        _MgmtFakeRoute(0, 0, {"RTA_GATEWAY": "10.42.12.1", "RTA_OIF": cni_index}),
+        _MgmtFakeRoute(22, 253, {"RTA_DST": "10.42.12.0", "RTA_OIF": cni_index}),
+        # The pod's own /32 (host scope) and the broadcast /32 (link scope):
+        # both must be ignored when deriving the bridge gateway.
+        _MgmtFakeRoute(32, 254, {"RTA_DST": "10.42.12.123", "RTA_OIF": cni_index}),
+        _MgmtFakeRoute(32, 253, {"RTA_DST": "10.42.15.255", "RTA_OIF": cni_index}),
+    ]
+
+
+class TestManagementRoute:
+    """Cross-node terminal path: the CNI default is dropped and a scoped
+    management route to the cluster pod CIDR is installed via the bridge
+    gateway derived from the pod's own cni0 subnet."""
+
+    def _run(self, monkeypatch, cluster_cidr, routes=None):
+        from node_agent import wiring
+
+        ipr = _MgmtFakeIPRoute(_pod_cni_routes() if routes is None else routes)
+        monkeypatch.setattr(wiring, "_in_namespace", lambda pid, fn: fn(ipr))
+        err = wiring.remove_default_route(123, "sat-x", cluster_cidr)
+        assert err is None
+        return ipr.calls
+
+    def test_default_replaced_with_scoped_management_route(self, monkeypatch):
+        calls = self._run(monkeypatch, "10.42.0.0/19")
+        dsts = [(a, k.get("dst")) for a, k in calls]
+        assert ("del", "0.0.0.0/0") in dsts
+        assert ("replace", "10.42.0.0/19") in dsts
+        replace = next(k for a, k in calls if a == "replace")
+        # Gateway derived from the pod's cni0 subnet (10.42.12.0/22 -> .1).
+        assert replace["gateway"] == "10.42.12.1"
+        assert replace["oif"] == 7
+
+    def test_management_route_installs_even_when_default_already_gone(self, monkeypatch):
+        """A re-wire runs after the routing engine took the default: there is
+        no CNI default to capture, but the gateway is still derivable from the
+        cni0 subnet, so the management route is (re)installed."""
+        routes = [_MgmtFakeRoute(22, 253, {"RTA_DST": "10.42.12.0", "RTA_OIF": 7})]
+        calls = self._run(monkeypatch, "10.42.0.0/19", routes=routes)
+        assert not any(a == "del" for a, _ in calls)
+        assert ("replace", "10.42.0.0/19") in [(a, k.get("dst")) for a, k in calls]
+
+    def test_no_management_route_without_cluster_cidr(self, monkeypatch):
+        calls = self._run(monkeypatch, None)
+        assert any(a == "del" for a, _ in calls)
+        assert not any(a == "replace" for a, _ in calls)
+
+
 class TestManifestContract:
     def test_site_lan_manifest_round_trips(self) -> None:
         manifest = WiringManifest.model_validate(_manifest_data())

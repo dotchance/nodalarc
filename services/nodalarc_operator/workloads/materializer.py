@@ -32,10 +32,12 @@ ROLE_LABEL = "nodalarc.io/role"
 # selection; a differing pod is deleted and recreated, never re-stamped.
 WORKLOAD_SELECTION_ANNOTATION = "nodalarc.io/workload-selection"
 
-# Platform-owned pod annotation naming the node's terminal surface. Absent
+# Platform-owned pod annotation carrying the node's terminal contract as
+# canonical JSON ({"surface": "ssh"} or {"surface": "exec", ...}). Absent
 # means the workload declares no terminal access and the browser terminal
 # refuses immediately — it never dials a pod that cannot answer.
 TERMINAL_ACCESS_ANNOTATION = "nodalarc.io/terminal-access"
+TERMINAL_SSH_CONTRACT = '{"surface":"ssh"}'
 
 WIRING_STATUS_CONFIGMAP = "nodalarc-wiring-status"
 

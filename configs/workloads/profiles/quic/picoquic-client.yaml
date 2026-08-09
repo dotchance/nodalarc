@@ -39,5 +39,10 @@ node_workload_profile:
     - volume: tmp
       path: /tmp
       read_only: false
+  terminal:
+    surface: exec
+    container: quic
+    command:
+    - /bin/bash
   routing_realization:
     none: true

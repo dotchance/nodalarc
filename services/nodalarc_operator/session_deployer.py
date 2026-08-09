@@ -52,6 +52,7 @@ from nodalarc.workloads.refs import BUILTIN_FRR_SELECTION_IDENTITY, selection_re
 
 from nodalarc_operator.runtime_session import OperatorSessionConfig, resolve_operator_session
 from nodalarc_operator.workloads.materializer import (
+    TERMINAL_SSH_CONTRACT,
     WORKLOAD_SELECTION_ANNOTATION,
     WorkloadComposition,
     build_session_pod,
@@ -497,6 +498,40 @@ def count_stale_session_pods(
         if not _pod_current_for_runtime(pod, session_id, owner_ref):
             stale += 1
     return stale
+
+
+def _cluster_pod_cidr(v1: kubernetes.client.CoreV1Api) -> str | None:
+    """The minimal IPv4 CIDR covering every node's pod CIDR.
+
+    The Node Agent installs a management route to this block via the CNI
+    gateway so a session pod on any node can answer the browser terminal and
+    control-plane traffic while the routing engine owns the default route.
+    Returns None when no node advertises a pod CIDR (nothing to install).
+    """
+    import ipaddress
+
+    networks: list[ipaddress.IPv4Network] = []
+    for node in v1.list_node().items:
+        cidr = getattr(node.spec, "pod_cidr", None)
+        if not cidr:
+            continue
+        try:
+            network = ipaddress.ip_network(cidr, strict=False)
+        except ValueError:
+            continue
+        if isinstance(network, ipaddress.IPv4Network):
+            networks.append(network)
+    if not networks:
+        return None
+    low = min(int(n.network_address) for n in networks)
+    high = max(int(n.broadcast_address) for n in networks)
+    prefix = 32
+    while prefix >= 0:
+        mask = ((1 << 32) - 1) ^ ((1 << (32 - prefix)) - 1) if prefix else 0
+        if (low & mask) == (high & mask):
+            return str(ipaddress.ip_network((low & mask, prefix)))
+        prefix -= 1
+    return "0.0.0.0/0"
 
 
 def discover_available_nodes() -> list[str]:
@@ -1613,6 +1648,7 @@ def write_wiring_manifest(
         "required_substrate_pairs": required_substrate_pairs,
         "site_lans": site_lans,
         "isl_link_count": len(isl_pairs),
+        "cluster_pod_cidr": _cluster_pod_cidr(v1),
     }
     manifest["wiring_generation"] = derive_wiring_generation(manifest)
 
@@ -2846,7 +2882,7 @@ def _create_session_pod(
         owner_ref=owner_ref,
         composition=WorkloadComposition(containers=containers, volumes=volumes),
         selection_identity=BUILTIN_FRR_SELECTION_IDENTITY,
-        terminal_access="ssh",
+        terminal_access=TERMINAL_SSH_CONTRACT,
         target_node=target_node,
         extra_labels=extra_labels,
     )
@@ -2942,6 +2978,7 @@ def _create_workload_pod(
         owner_ref=owner_ref,
         composition=composed.composition,
         selection_identity=selection_identity,
+        terminal_access=composed.terminal_access,
         target_node=target_node,
         extra_labels=extra_labels,
     )

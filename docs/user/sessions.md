@@ -27,6 +27,9 @@ A session is assembled from reusable catalog building blocks:
   redistributing between them. The grammar defines `isis`, `ospf`, `bgp`, and
   `static`; the current runtime executes `isis`, `ospf`, and `static` and rejects
   `bgp` before deployment. A supported session can mix protocols.
+- **workload profiles** — what each node runs: the catalog profile carrying its
+  complete container composition, taken from the node model, its segment, or
+  the node's own entry.
 - **time** — simulation start time, step size, and compression.
 
 A link rule says a link is *allowed to be considered*. It does not force the link
@@ -174,6 +177,20 @@ invents the overlap nor silently reduces the requested policy to BBM.
 
 How many terminals a node has comes from its catalog node model and how many the
 site installs — not from inline session fields.
+
+## Workload profiles
+
+Every node runs a declared workload. A profile is the complete composition for
+one node and may hold several cooperating containers: an FRR router with an
+observer beside it is one profile, and a QUIC client host is another. The node
+model names a default profile, a segment can override that default for its
+nodes, and a single node's own entry can override both. A session in which any
+node ends up with no profile at any level is rejected at load. NodalArc never
+assumes a workload.
+
+Profiles keep implementation detail out of the session. The session says which
+profile a node runs; the profile and its adapter own the native configuration.
+Session YAML never contains vendor configuration syntax.
 
 ## Switching sessions
 

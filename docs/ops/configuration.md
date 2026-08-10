@@ -25,6 +25,7 @@ Both namespaces have the same families and use the same grammar:
 | Body | `bodies/` | Gravity, radii, and identity of a physical body. |
 | Terminal | `terminals/` | RF or optical communication capability and limits. |
 | Payload | `payloads/` | Reusable terminal slots and shared resource groups. |
+| Profile | `profiles/` | Complete node workload composition: images, containers, adapter, terminal access. |
 | Orbit | `orbits/` | Body reference, epoch, geometry, orientation, and propagator. |
 | Node | `nodes/` | Reusable forwarding model, ports, and terminal or payload mounts. |
 | Site | `sites/` | Facility frame, location, LAN, installed nodes, and concrete addresses. |
@@ -320,6 +321,37 @@ controls.
 advertised merely because it exists. Listing `0.0.0.0/0` or `::/0` explicitly
 originates a default route; omitting a prefix means NodalArc does not inject it.
 
+## Workload profiles
+
+A profile is the complete workload composition for one node: the software the
+node runs. It declares the container image by registry and digest, the primary
+container's command, capabilities, filesystem posture, volumes, mounts, and
+resources, optional sidecar containers, terminal access, readiness behavior,
+and the adapter that renders per-node native configuration. A routing node's
+profile runs one standalone routing stack. An application node's profile is a
+plain container with no routing daemon. The complete field list and every
+constraint are in the [Configuration Grammar](configuration-grammar.md).
+
+A node acquires its profile from the most specific of three statements:
+
+- the node model declares the default for every node built from that model;
+- a segment `profile` overrides the model default for the nodes it resolves;
+- a single space node or site node `profile` overrides both.
+
+A resolved node with no profile statement at any level is rejected before
+deployment. NodalArc has no default workload and no built-in preference for
+any implementation. Inheriting a node-model default is an authored statement,
+because someone wrote it into a reviewable catalog object.
+
+Customize a profile like any other catalog object: copy the shipped object to
+a new `user:` path, change the command, image, capabilities, or resources, and
+reference the new object at the level where it should apply. Forking a profile
+requires no platform code.
+
+The installed models predate this part of the language and still reject
+`profile` fields structurally; the matching model and resolver change follows
+this definition, and worked profile examples land in this guide with it.
+
 ## Address pools
 
 Session-level addressing is primarily for generated space nodes. The current
@@ -406,9 +438,12 @@ routing:
       install_via: peer_loopback
 ```
 
-Every resolved node belongs to exactly one domain when an explicit `routing`
-block is present. A fixed link crossing domain boundaries must have a declared
-boundary over that link rule. The current runtime supports the `static_ip`
+When an explicit `routing` block is present, every node whose effective
+profile renders routing belongs to exactly one domain, and a domain may
+select only nodes whose profile's adapter renders its protocol. Nodes whose
+profiles render no routing, such as hosts, are never domain members; a host
+is reached through the domain of the router serving its network. A fixed link
+crossing domain boundaries must have a declared boundary over that link rule. The current runtime supports the `static_ip`
 boundary adapter; `bgp` and `dtn_bundle` adapters are support-gated.
 
 IS-IS and OSPF domains may declare MPLS, segment routing, and traffic
@@ -430,8 +465,8 @@ current IS-IS format. A ground-only `explicit` assignment is valid; otherwise
 Ground mappings use site-qualified local node ids.
 
 If `routing` is omitted, the resolver creates one `default_domain` running
-IS-IS over every node whose model has `forwarding: routed`. Host, bridge, and
-control-only nodes are not inserted into that default domain.
+IS-IS over every node whose effective profile's adapter renders IS-IS. Nodes
+whose profiles render no routing are not inserted into that default domain.
 
 ## Time and ephemeris
 

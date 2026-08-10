@@ -98,13 +98,20 @@ IPv4Interface      = ? IPv4 interface string in CIDR notation ? ;
 IPv6Interface      = ? IPv6 interface string in CIDR notation ? ;
 RelativeAssetPath  = ? contained relative forward-slash path accepted by the backend validator ? ;
 Sha256Hex          = ? lower-case YAML string containing exactly 64 hexadecimal digits ? ;
+RegistryHost       = ? registry host with optional port accepted by the backend validator ? ;
+PinnedImage        = ? image repository path pinned by one @sha256 digest, accepted by the backend validator ? ;
+MountPath          = ? normalized absolute forward-slash container path accepted by the backend validator ? ;
 Tags               = SequenceBegin, { Identifier }, SequenceEnd ;
 ```
 
 All identifiers and closed string values are case-sensitive. Tag values are
 unique within each `Tags` sequence. `RelativeAssetPath` is nonempty and rejects
 roots, backslashes, repeated separators, trailing separators, and empty, dot,
-or parent components.
+or parent components. `PinnedImage` names an image by repository path and
+SHA-256 digest; a mutable tag is not part of the language. `MountPath` is
+absolute, is not `/`, rejects trailing or repeated separators and dot or
+parent segments, and rejects the reserved `/proc`, `/sys`, `/dev`, and
+`/var/run/secrets` trees.
 
 ## Catalog references and documents
 
@@ -115,6 +122,7 @@ catalog objects are not part of this language.
 BodyRef          = ? catalog reference accepted by BodyRef ? ;
 TerminalRef      = ? catalog reference accepted by TerminalRef ? ;
 PayloadRef       = ? catalog reference accepted by PayloadRef ? ;
+ProfileRef       = ? catalog reference accepted by ProfileRef ? ;
 OrbitRef         = ? catalog reference accepted by OrbitRef ? ;
 NodeRef          = ? catalog reference accepted by NodeRef ? ;
 SiteRef          = ? catalog reference accepted by SiteRef ? ;
@@ -132,7 +140,7 @@ Each reference is one YAML string with this exact shape:
 ```
 
 `<component>` matches `[a-z0-9][a-z0-9_-]*`. The required family is `bodies`,
-`terminals`, `payloads`, `orbits`, `nodes`, `sites`, `site-sets`,
+`terminals`, `payloads`, `profiles`, `orbits`, `nodes`, `sites`, `site-sets`,
 `constellations`, `space-node-sets`, or `sessions`, as selected by the typed
 reference production. Absolute paths, backslashes, empty components, dot
 components, and parent traversal are invalid.
@@ -150,6 +158,7 @@ production for one persisted YAML document.
 ConfigurationDocument = BodyDocument
                       | TerminalDocument
                       | PayloadDocument
+                      | ProfileDocument
                       | OrbitDocument
                       | NodeDocument
                       | SiteDocument
@@ -161,6 +170,7 @@ ConfigurationDocument = BodyDocument
 BodyDocument          = MappingBegin, "body", Body, MappingEnd ;
 TerminalDocument      = MappingBegin, "terminal", Terminal, MappingEnd ;
 PayloadDocument       = MappingBegin, "payload", Payload, MappingEnd ;
+ProfileDocument       = MappingBegin, "profile", Profile, MappingEnd ;
 OrbitDocument         = MappingBegin, "orbit", Orbit, MappingEnd ;
 NodeDocument          = MappingBegin, "node", Node, MappingEnd ;
 SiteDocument          = MappingBegin, "site", Site, MappingEnd ;
@@ -275,6 +285,150 @@ resource-group ids are unique within a payload. Every resource-group slot is
 unique and names a declared terminal slot. `simultaneous_active` cannot exceed
 the number of slots in its group.
 
+## Profile
+
+A profile is the complete workload composition for one node: the software the
+node runs. The top-level image and container fields define the primary
+container. `sidecars` declares additional cooperating containers in the same
+pod. A profile is a reusable catalog object; where a node acquires its profile
+is defined under "Workload profile assignment".
+
+```ebnf
+ArgvSequence = SequenceBegin, String, { String }, SequenceEnd ;
+
+Capability = "AUDIT_WRITE" | "CHOWN" | "DAC_OVERRIDE" | "FOWNER" | "FSETID"
+           | "KILL" | "MKNOD" | "NET_ADMIN" | "NET_BIND_SERVICE" | "NET_RAW"
+           | "SETFCAP" | "SETGID" | "SETPCAP" | "SETUID" | "SYS_ADMIN"
+           | "SYS_CHROOT" ;
+
+CapabilitySequence = SequenceBegin, { Capability }, SequenceEnd ;
+
+ProfileVolume = MappingBegin,
+                "name", Identifier,
+                "kind", "ephemeral",
+                "medium", ( "memory" | "node" ),
+                "size_mi", PositiveInteger,
+                MappingEnd ;
+
+ProfileVolumeSequence = SequenceBegin, { ProfileVolume }, SequenceEnd ;
+
+ProfileMount = MappingBegin,
+               "volume", Identifier,
+               "path", MountPath,
+               [ "read_only", Boolean ],
+               MappingEnd ;
+
+ProfileMountSequence = SequenceBegin, { ProfileMount }, SequenceEnd ;
+
+ResourceAmounts = MappingBegin,
+                  "cpu_m", PositiveInteger,
+                  "memory_mi", PositiveInteger,
+                  MappingEnd ;
+
+ProfileResources = MappingBegin,
+                   "requests", ResourceAmounts,
+                   "limits", ResourceAmounts,
+                   MappingEnd ;
+
+SshTerminalSurface = MappingBegin,
+                     "surface", "ssh",
+                     "authorized_keys_path", MountPath,
+                     MappingEnd ;
+
+ExecTerminalSurface = MappingBegin,
+                      "surface", "exec",
+                      "command", ArgvSequence,
+                      MappingEnd ;
+
+ProfileTerminal = SshTerminalSurface | ExecTerminalSurface ;
+
+ProfileReadiness = MappingBegin,
+                   "argv", ArgvSequence,
+                   "timeout_seconds", PositiveInteger,
+                   "period_seconds", PositiveInteger,
+                   MappingEnd ;
+
+ProfileSidecar = MappingBegin,
+                 "name", Identifier,
+                 [ "registry", ( RegistryHost | Null ) ],
+                 "image", PinnedImage,
+                 [ "command", ( ArgvSequence | Null ) ],
+                 [ "args", ( ArgvSequence | Null ) ],
+                 [ "capabilities", ( CapabilitySequence | Null ) ],
+                 [ "root_filesystem", ( "read_only" | "ephemeral_writable" ) ],
+                 "resources", ProfileResources,
+                 [ "mounts", ( ProfileMountSequence | Null ) ],
+                 MappingEnd ;
+
+ProfileSidecarSequence = SequenceBegin, { ProfileSidecar }, SequenceEnd ;
+
+Profile = MappingBegin,
+          "id", Identifier,
+          [ "display_name", ( String | Null ) ],
+          [ "adapter", ( Identifier | Null ) ],
+          "registry", RegistryHost,
+          "image", PinnedImage,
+          [ "command", ( ArgvSequence | Null ) ],
+          [ "args", ( ArgvSequence | Null ) ],
+          [ "capabilities", ( CapabilitySequence | Null ) ],
+          [ "root_filesystem", ( "read_only" | "ephemeral_writable" ) ],
+          [ "config_mount", ( MountPath | Null ) ],
+          [ "volumes", ( ProfileVolumeSequence | Null ) ],
+          [ "mounts", ( ProfileMountSequence | Null ) ],
+          "resources", ProfileResources,
+          [ "readiness", ( ProfileReadiness | Null ) ],
+          [ "terminal", ( ProfileTerminal | Null ) ],
+          [ "sidecars", ( ProfileSidecarSequence | Null ) ],
+          [ "reference", ( Url | Null ) ],
+          [ "notes", ( String | Null ) ],
+          MappingEnd ;
+```
+
+The image's own entrypoint starts every container. Authored `command` and
+`args` are the profile author's declaration for that image; the platform never
+wraps or substitutes an entrypoint it did not author. An argv sequence has at
+most 64 elements and 4096 total bytes, and every element is nonempty.
+
+The container pull identity is the profile `registry` joined to the
+digest-pinned `image`. `registry` is a profile field because user images
+legitimately live in user registries; two profiles may pull from different
+registries in one session. A sidecar with an omitted or null `registry` uses
+the profile registry.
+
+Omitted `capabilities`, `volumes`, `mounts`, and `sidecars` default to empty
+sequences. Omitted `root_filesystem` defaults to `read_only`. Capability values
+are unique and in ascending order. Volume names are unique within a profile.
+Every mount names a declared volume; an omitted `read_only` defaults to
+`false`. Within any one container, mount destinations must not be equal or
+nested, and `config_mount` counts as a destination of the primary container.
+Sidecar names are unique and never collide with the primary container.
+
+`adapter` names the module that translates resolved per-node facts into the
+image's native configuration. A profile with a null or absent `adapter` has no
+rendering step; its containers receive exactly their authored configuration.
+An adapter delivers configuration three ways, and the image's entrypoint stays
+its own throughout: files mounted at an authored destination, per-node
+environment variables set on the container, and arguments appended to the
+entrypoint. Environment and argument delivery need no authored field. File
+delivery is the one surface that requires an authored destination: a non-null
+`config_mount` names the read-only path where rendered per-node files arrive
+and therefore requires a non-null `adapter`. Which adapter values the
+installed runtime provides, and which protocols each adapter renders, is
+runtime support declared by the adapter modules, not structure; an
+unavailable adapter fails support validation explicitly.
+
+`terminal` declares the landing surface for platform terminal access. An `ssh`
+surface requires the image to run its own SSH daemon; the platform mounts the
+per-session public key at `authorized_keys_path` and proxies to it. An `exec`
+surface attaches the declared command inside the primary container. A profile
+without `terminal` declines terminal access, and the browser refuses the
+terminal for that node instead of dialing a pod that cannot answer.
+
+`readiness` runs `argv` in the primary container on the declared period until
+it succeeds within `timeout_seconds`; the node is not treated as ready before
+that. `resources.limits` must be greater than or equal to `resources.requests`
+per amount, for the profile and for every sidecar.
+
 ## Orbit
 
 ```ebnf
@@ -359,6 +513,7 @@ Node = MappingBegin,
        "id", Identifier,
        [ "display_name", ( String | Null ) ],
        "forwarding", ( "routed" | "host" | "bridge" | "control_only" ),
+       [ "profile", ( ProfileRef | Null ) ],
        "ethernet", SequenceBegin, { EthernetPort }, SequenceEnd,
        "terminals", SequenceBegin, { TerminalMount }, SequenceEnd,
        "payloads", SequenceBegin, { PayloadMount }, SequenceEnd,
@@ -373,7 +528,9 @@ unique within a node. `TerminalMount.boresight` is valid only on an `access`
 mount. A satellite access mount requires `boresight: {mode: nadir}`. A ground
 access mount must omit node-level boresight because its orientation belongs to
 the site installation. A node is a reusable model and contains no location or
-addressing.
+addressing. A node-model `profile` is the authored workload default for every
+node instantiated from the model; "Workload profile assignment" defines how
+segments and individual nodes override it.
 
 The current substrate requires every ground node model to declare exactly one
 Ethernet port named `terr0`, and every space node model to declare no Ethernet
@@ -608,6 +765,7 @@ SiteNode = MappingBegin,
            "id", Identifier,
            [ "display_name", ( String | Null ) ],
            "model", NodeRef,
+           [ "profile", ( ProfileRef | Null ) ],
            "terminals", TerminalInstallationMap,
            "payloads", PayloadInstallationMap,
            "interfaces", NodeInterfaces,
@@ -737,6 +895,7 @@ Sgp4TlePlacement = MappingBegin,
 SpaceNode = MappingBegin,
             "id", Identifier,
             "node", NodeRef,
+            [ "profile", ( ProfileRef | Null ) ],
             [ "orbit", ( OrbitRef | Null ) ],
             [ "sgp4_tle", ( Sgp4TlePlacement | Null ) ],
             [ "state_vector", ( StateVector | Null ) ],
@@ -795,6 +954,7 @@ SpaceSegment = MappingBegin,
                [ "display_name", ( String | Null ) ],
                [ "tags", ( Tags | Null ) ],
                [ "clock", ( SegmentClock | Null ) ],
+               [ "profile", ( ProfileRef | Null ) ],
                "source", SpaceSourceRef,
                MappingEnd ;
 
@@ -803,6 +963,7 @@ GroundSegment = MappingBegin,
                 [ "display_name", ( String | Null ) ],
                 [ "tags", ( Tags | Null ) ],
                 [ "clock", ( SegmentClock | Null ) ],
+                [ "profile", ( ProfileRef | Null ) ],
                 "placement", GroundPlacement,
                 [ "apply", ( GroundApply | Null ) ],
                 [ "overrides", ( GroundOverrideSequence | Null ) ],
@@ -815,6 +976,7 @@ LagrangeSegment = MappingBegin,
                   [ "display_name", ( String | Null ) ],
                   [ "tags", ( Tags | Null ) ],
                   [ "clock", ( SegmentClock | Null ) ],
+                  [ "profile", ( ProfileRef | Null ) ],
                   "node", NodeRef,
                   "frame", LagrangeFrame,
                   MappingEnd ;
@@ -832,6 +994,53 @@ corresponding segment-apply object for that site. Site-node scheduling then
 overrides the resulting scheduling field by field; its unset or null fields
 inherit. A site-node's originated prefixes are combined with the effective
 segment-apply or ground-override prefixes rather than replacing them.
+
+## Workload profile assignment
+
+`profile` is readable at three levels, and resolution takes the most specific
+non-null statement for each node:
+
+1. The node model (`Node.profile`) is the authored default for every node
+   instantiated from that model.
+2. A segment `profile` overrides the model default for every node the segment
+   resolves.
+3. A single node's `profile` (`SpaceNode.profile` for a fixed space node,
+   `SiteNode.profile` for an installed ground node) overrides both.
+
+Every resolved runtime node must have an effective profile. A node with no
+`profile` statement at any level fails resolution; there is no platform
+default workload and no deference to any particular implementation. Inheriting
+a node-model default is an authored statement, never a fallback. The resolved
+session records, for each node, the effective profile reference and the level
+that supplied it.
+
+Whether a node participates in routing is decided by its effective profile,
+never by its node model's forwarding class alone. A profile renders routing
+when its `adapter` names a module that renders routing-protocol
+configuration; which adapters render which protocols is declared by the
+adapter modules and is runtime support. Four rules connect profiles to
+routing:
+
+1. A routing domain may select only nodes whose effective profile's adapter
+   renders the domain's protocol and the capabilities the domain declares. A
+   domain selecting any other node is invalid: the session would direct the
+   platform to render protocol configuration it has no renderer for.
+2. When `routing` is present, every node whose effective profile renders
+   routing belongs to exactly one domain.
+3. A node whose effective profile renders no routing is never a domain member
+   and never appears in a domain selector, whatever its wiring class. A
+   host's relationship to a domain is inferred from its network attachment:
+   the host connects to a network, a router serves that network, and that
+   router's domain learns the host's network from what the router originates.
+4. With `routing` omitted, the default domain forms over every node whose
+   effective profile's adapter renders IS-IS.
+
+These rules validate what the platform renders and delivers. They state
+nothing about protocol behavior: what the running images do with their
+configuration and their connected interfaces is the workload's own, observed
+through measurement, never predicted or asserted by the platform. A profile
+never creates, removes, or reclassifies nodes, links, or physics; it declares
+what the node runs.
 
 ## Selectors and link rules
 
@@ -1142,11 +1351,13 @@ forbids non-null `holddown_ms` and `time_to_learn_ms`. `BfdConfig` defaults are
 objects. The hold interval must exceed the hello interval. A non-null `timers`
 field is valid only for `isis` and `ospf`.
 
-Routing-domain ids are unique. When `routing` is present, every resolved node
-belongs to exactly one domain, and every domain selects at least one node. A
-boundary names an existing enabled non-access link rule and exports between two
-different, existing domains on opposite sides of that rule. Every enabled
-non-access rule spanning multiple domains requires a boundary.
+Routing-domain ids are unique. When `routing` is present, every node whose
+effective profile renders routing belongs to exactly one domain, and every
+domain selects at least one node; "Workload profile assignment" defines which
+nodes a domain may select. A boundary names an existing enabled non-access
+link rule and exports between two different, existing domains on opposite
+sides of that rule. Every enabled non-access rule spanning multiple domains
+requires a boundary.
 
 An export's literal prefix sequence supplies the declared set by address
 family. `aggregate_of: originated` instead derives the `from` domain's authored
@@ -1159,10 +1370,12 @@ non-`peer_loopback` token is passed as the explicit next-hop or interface
 value. Materialization omits a route to the receiving node's own loopback and
 the peer-loopback seed route.
 
-When `routing` is omitted, the resolver requires at least one node whose model
-has `forwarding: routed` and creates `default_domain`, running IS-IS over every
-such node. It does not place host, bridge, or control-only nodes into that
-default domain.
+When `routing` is omitted, the resolver creates `default_domain`, running
+IS-IS over every node whose effective profile's adapter renders IS-IS, and
+requires at least one such node. Nodes whose profiles render no routing are
+not placed into that default domain. A session with no `routing` block whose
+only routing-rendering profiles cannot render IS-IS is invalid; declare
+routing explicitly.
 
 ## Simulation, time, ephemeris, and dispatch
 
@@ -1276,6 +1489,18 @@ context-free EBNF alone:
   originated-prefix intent; at most one override targets a site.
 - `originated_prefixes` is routing-injection intent. It does not allocate or
   infer address ownership.
+- Every resolved node has exactly one effective workload profile, taken from
+  the most specific of its own node entry, its segment, and its node model. A
+  node with no profile statement at any level fails resolution. The resolved
+  session records the effective reference and the supplying level.
+- Routing-domain membership keys on the effective profile: a domain may
+  select only nodes whose profile's adapter renders the domain's protocol,
+  every routing-rendering node belongs to exactly one domain when `routing`
+  is present, and nodes whose profiles render no routing are never domain
+  members. These checks validate platform rendering only; they assert
+  nothing about protocol behavior.
+- Adapter availability is runtime support. Structural validity of an
+  `adapter` value never implies the installed runtime provides that adapter.
 - Routing failure, lack of convergence, and unreachable destinations remain
   valid experimental results. Resolution does not fabricate routes or links.
 
@@ -1318,7 +1543,12 @@ runtime execution:
 - routing capabilities on BGP or static domains;
 - `bgp` and `dtn_bundle` routing boundaries;
 - `spice_kernel_stack` and `operator_supplied_spk` ephemeris providers;
-- bodies outside the supported Earth-Luna profile.
+- bodies outside the supported Earth-Luna profile;
+- the `profiles` family and `profile` assignment fields: this section of the
+  language is defined ahead of the installed models, which still reject the
+  fields structurally; the matching model, resolver, and runtime change
+  follows this definition, including routing-domain coverage re-keyed from
+  the node model's forwarding class to the effective profile.
 
 Unsupported features fail explicitly. They are never silently removed,
 flattened, translated to another feature, or treated as successful execution.

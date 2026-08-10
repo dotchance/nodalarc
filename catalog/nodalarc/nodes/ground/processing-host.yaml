@@ -2,6 +2,7 @@ node:
   id: processing-host
   display_name: Processing host
   forwarding: host
+  profile: nodalarc:profiles/linux-host.yaml
   ethernet:
   - id: terr0
   terminals: []

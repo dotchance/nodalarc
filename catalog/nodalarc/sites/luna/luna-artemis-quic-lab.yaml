@@ -49,6 +49,7 @@ site:
   - id: quic-server
     display_name: QUIC server host
     node: nodalarc:nodes/ground/processing-host.yaml
+    profile: nodalarc:profiles/picoquic-server.yaml
     payloads: {}
     terminals: {}
     tags:

@@ -333,6 +333,12 @@ class ResolvedNode(BaseModel):
     surface_position: ResolvedSurfacePosition | None = None
     originated_prefixes: OriginatedPrefixes | None = None
     forwarding: Literal["routed", "host", "bridge", "control_only"] | None = None
+    # The effective workload profile and the level that supplied it: the
+    # placed node entry, the segment, or the node definition. Resolution
+    # refuses a node with no statement at any level; there is no default
+    # workload.
+    profile: NonEmptyReference
+    profile_level: Literal["node", "segment", "node_definition"]
     # Present exactly when forwarding == "host": the derived substrate
     # attachment the Node Agent applies at wiring time.
     host_attachment: ResolvedHostAttachment | None = None

@@ -2,6 +2,7 @@ node:
   id: meo-gateway
   display_name: Earth MEO gateway router
   forwarding: routed
+  profile: nodalarc:profiles/frr-router.yaml
   ethernet:
   - id: terr0
   terminals:

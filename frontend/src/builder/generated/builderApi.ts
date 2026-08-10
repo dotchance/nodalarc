@@ -671,6 +671,7 @@ export interface BuilderVisualNode {
   readonly id?: string;
   readonly display_name?: string;
   readonly forwarding?: "routed" | "host" | "bridge" | "control_only" | null;
+  readonly profile?: string | null;
   readonly ethernet?: ReadonlyArray<string>;
   readonly terminals?: ReadonlyArray<BuilderVisualTerminalMount>;
 }
@@ -2125,6 +2126,19 @@ export const BUILDER_VISUAL_DRAFT_ENVELOPE_RUNTIME_DESCRIPTOR = {
                             ],
                             "exclusive": false
                           },
+                          "profile": {
+                            "kind": "union",
+                            "options": [
+                              {
+                                "kind": "string",
+                                "pattern": "^(?:nodalarc|user):(?:profiles)/(?:[a-z0-9][a-z0-9_-]*/)*[a-z0-9][a-z0-9_-]*\\.(?:yaml|yml)$"
+                              },
+                              {
+                                "kind": "null"
+                              }
+                            ],
+                            "exclusive": false
+                          },
                           "ethernet": {
                             "kind": "array",
                             "items": {
@@ -3223,6 +3237,19 @@ export const BUILDER_VISUAL_DRAFT_ENVELOPE_RUNTIME_DESCRIPTOR = {
                                   "bridge",
                                   "control_only"
                                 ]
+                              },
+                              {
+                                "kind": "null"
+                              }
+                            ],
+                            "exclusive": false
+                          },
+                          "profile": {
+                            "kind": "union",
+                            "options": [
+                              {
+                                "kind": "string",
+                                "pattern": "^(?:nodalarc|user):(?:profiles)/(?:[a-z0-9][a-z0-9_-]*/)*[a-z0-9][a-z0-9_-]*\\.(?:yaml|yml)$"
                               },
                               {
                                 "kind": "null"
@@ -4519,6 +4546,19 @@ export const BUILDER_VISUAL_WORKSPACE_RUNTIME_DESCRIPTOR = {
                     ],
                     "exclusive": false
                   },
+                  "profile": {
+                    "kind": "union",
+                    "options": [
+                      {
+                        "kind": "string",
+                        "pattern": "^(?:nodalarc|user):(?:profiles)/(?:[a-z0-9][a-z0-9_-]*/)*[a-z0-9][a-z0-9_-]*\\.(?:yaml|yml)$"
+                      },
+                      {
+                        "kind": "null"
+                      }
+                    ],
+                    "exclusive": false
+                  },
                   "ethernet": {
                     "kind": "array",
                     "items": {
@@ -5578,6 +5618,19 @@ export const BUILDER_VISUAL_SPACE_DRAFT_RUNTIME_DESCRIPTOR = {
                     "bridge",
                     "control_only"
                   ]
+                },
+                {
+                  "kind": "null"
+                }
+              ],
+              "exclusive": false
+            },
+            "profile": {
+              "kind": "union",
+              "options": [
+                {
+                  "kind": "string",
+                  "pattern": "^(?:nodalarc|user):(?:profiles)/(?:[a-z0-9][a-z0-9_-]*/)*[a-z0-9][a-z0-9_-]*\\.(?:yaml|yml)$"
                 },
                 {
                   "kind": "null"

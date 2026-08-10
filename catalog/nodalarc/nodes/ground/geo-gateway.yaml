@@ -2,6 +2,7 @@ node:
   id: geo-gateway
   display_name: Earth GEO gateway router
   forwarding: routed
+  profile: nodalarc:profiles/frr-router.yaml
   ethernet:
   - id: terr0
   terminals:

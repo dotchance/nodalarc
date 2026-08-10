@@ -2,6 +2,7 @@ node:
   id: luna-relay
   display_name: Luna orbiter relay node
   forwarding: routed
+  profile: nodalarc:profiles/frr-router.yaml
   ethernet: []
   terminals:
   - id: access_s

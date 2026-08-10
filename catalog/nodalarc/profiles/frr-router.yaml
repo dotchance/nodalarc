@@ -2,9 +2,9 @@
 # frr adapter renders frr.conf, daemons, and _config_version per node from
 # resolved session facts; the rendered files arrive read-only at
 # config_mount, the path the FRR image genuinely loads configuration from.
-# Image digests are deployment inputs: the dev flow supplies the running
-# tree's images through the explicit operator override; production
-# catalogs pin real digests here.
+# Pinned image identities are deployment inputs: the dev flow supplies the
+# running tree images through the explicit operator override; production
+# catalogs pin real image identities here.
 profile:
   id: frr-router
   display_name: FRR reference router

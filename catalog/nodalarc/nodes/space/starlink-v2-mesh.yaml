@@ -2,6 +2,7 @@ node:
   id: starlink-v2-mesh
   display_name: Starlink v2 routed spacecraft
   forwarding: routed
+  profile: nodalarc:profiles/frr-router.yaml
   ethernet: []
   terminals:
   - id: access_ka

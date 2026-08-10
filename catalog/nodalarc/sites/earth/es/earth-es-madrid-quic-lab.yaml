@@ -50,6 +50,7 @@ site:
   - id: quic-client
     display_name: QUIC client host
     node: nodalarc:nodes/ground/processing-host.yaml
+    profile: nodalarc:profiles/picoquic-client.yaml
     payloads: {}
     terminals: {}
     tags:

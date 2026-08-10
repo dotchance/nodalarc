@@ -1,7 +1,7 @@
 # A QUIC server endpoint: one zero-capability container running upstream
 # picoquic (built and published by the independent nodalarc-picoquic
-# project, referenced here by digest). No routing daemon; the platform
-# attaches the host to its LAN and gateway at wiring time. Serves
+# project, referenced here by pinned identity). No routing daemon; the
+# platform attaches the host to its LAN and gateway at wiring time. Serves
 # synthetic documents over QUIC on UDP 4433 with the image's demo
 # certificates.
 profile:

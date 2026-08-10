@@ -365,6 +365,7 @@ def _persist_constellation(
                 "id": space_node_ref.relative_path.stem,
                 "display_name": "Test space router",
                 "forwarding": "routed",
+                "profile": "nodalarc:profiles/frr-router.yaml",
                 "ethernet": [],
                 "terminals": [
                     {
@@ -455,6 +456,7 @@ def _persist_ground_set(
                 "id": ground_node_ref.relative_path.stem,
                 "display_name": "Test ground router",
                 "forwarding": "routed",
+                "profile": "nodalarc:profiles/frr-router.yaml",
                 "ethernet": [{"id": "terr0"}],
                 "terminals": [
                     {
@@ -480,6 +482,7 @@ def _persist_ground_set(
                     "id": host_node_ref.relative_path.stem,
                     "display_name": "Test host endpoint",
                     "forwarding": "host",
+                    "profile": "nodalarc:profiles/linux-host.yaml",
                     "ethernet": [{"id": "terr0"}],
                     "terminals": [],
                     "payloads": [],

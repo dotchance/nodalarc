@@ -71,6 +71,7 @@ export function defaultDraftNode(): DraftNode {
     id: "my-node",
     display_name: "My node",
     forwarding: null,
+    profile: null,
     ethernet: [],
     terminals: [],
   };

@@ -17,6 +17,7 @@ from nodalarc.catalog_refs import (
     BodyRef,
     CatalogRef,
     NodeRef,
+    ProfileRef,
     SessionRef,
     SiteRef,
     SiteSetRef,
@@ -140,6 +141,7 @@ class BuilderVisualNode(_BuilderVisualModel):
     id: str = ""
     display_name: str = ""
     forwarding: ForwardingClass | None = None
+    profile: ProfileRef | None = None
     ethernet: tuple[str, ...] = ()
     terminals: tuple[BuilderVisualTerminalMount, ...] = ()
 

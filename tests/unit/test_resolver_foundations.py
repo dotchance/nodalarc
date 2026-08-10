@@ -131,6 +131,8 @@ def _terminal(
 
 def _satellite(node_id: str = "leo-sat-p00s00", *, segment_id: str = "leo") -> ResolvedNode:
     return ResolvedNode(
+        profile="nodalarc:profiles/frr-router.yaml",
+        profile_level="node_definition",
         node_id=node_id,
         local_node_id=node_id.removeprefix(f"{segment_id}-"),
         segment_id=segment_id,
@@ -151,6 +153,8 @@ def _satellite(node_id: str = "leo-sat-p00s00", *, segment_id: str = "leo") -> R
 
 def _ground(node_id: str = "ground-denver-router", *, segment_id: str = "ground") -> ResolvedNode:
     return ResolvedNode(
+        profile="nodalarc:profiles/frr-router.yaml",
+        profile_level="node_definition",
         node_id=node_id,
         local_node_id="denver-router",
         segment_id=segment_id,
@@ -262,6 +266,8 @@ def test_closed_terminal_role_vocabulary_rejects_old_ground_role() -> None:
 def test_satellite_requires_orbit_facts() -> None:
     with pytest.raises(ValidationError, match="requires orbit facts"):
         ResolvedNode(
+            profile="nodalarc:profiles/frr-router.yaml",
+            profile_level="node_definition",
             node_id="sat",
             local_node_id="sat",
             segment_id="leo",
@@ -275,6 +281,8 @@ def test_satellite_requires_orbit_facts() -> None:
 
 def test_ground_station_requires_surface_position_but_scheduling_is_candidate_scoped() -> None:
     node = ResolvedNode(
+        profile="nodalarc:profiles/frr-router.yaml",
+        profile_level="node_definition",
         node_id="gs",
         local_node_id="gs",
         segment_id="ground",
@@ -296,6 +304,8 @@ def test_ground_station_requires_surface_position_but_scheduling_is_candidate_sc
     assert node.ground_scheduling is None
     with pytest.raises(ValidationError, match="surface_position"):
         ResolvedNode(
+            profile="nodalarc:profiles/frr-router.yaml",
+            profile_level="node_definition",
             node_id="gs",
             local_node_id="gs",
             segment_id="ground",
@@ -329,6 +339,8 @@ def test_terminal_owner_mismatch_rejected() -> None:
     block = _terminal("other-node")
     with pytest.raises(ValidationError, match="owner_node_id"):
         ResolvedNode(
+            profile="nodalarc:profiles/frr-router.yaml",
+            profile_level="node_definition",
             node_id="n",
             local_node_id="n",
             segment_id="leo",
@@ -345,6 +357,8 @@ def test_duplicate_terminal_id_within_node_rejected() -> None:
     block = _terminal("n", terminal_id="dup")
     with pytest.raises(ValidationError, match="duplicate terminal_id"):
         ResolvedNode(
+            profile="nodalarc:profiles/frr-router.yaml",
+            profile_level="node_definition",
             node_id="n",
             local_node_id="n",
             segment_id="leo",

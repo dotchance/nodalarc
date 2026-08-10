@@ -548,6 +548,7 @@ def test_visual_draft_json_materializes_all_authoring_workspace_defaults(
         "id",
         "display_name",
         "forwarding",
+        "profile",
         "ethernet",
         "terminals",
     }

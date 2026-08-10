@@ -589,6 +589,13 @@ def _expand_constellation_segment(
     slots = int(constellation["slots_per_plane"])
     phase_offset = float(constellation["phasing"].get("phase_offset_deg", 0.0))
     tag_rules = tuple(constellation.get("node_tags") or ())
+    profile_ref, profile_level = _effective_profile(
+        described=f"generated nodes in segment {segment.id!r}",
+        placed=None,
+        segment_profile=segment.profile,
+        definition=node.get("profile"),
+        roots=roots,
+    )
     expanded: list[_RuntimeNode] = []
 
     for plane in range(planes):
@@ -621,6 +628,8 @@ def _expand_constellation_segment(
                         clock=segment.clock,
                         plane=plane,
                         slot=slot,
+                        profile=profile_ref,
+                        profile_level=profile_level,
                     ),
                     plane=plane,
                     slot=slot,
@@ -674,6 +683,13 @@ def _space_node_from_entry(
         plane = None
         slot = None
     local_id = entry["id"]
+    profile_ref, profile_level = _effective_profile(
+        described=f"space node {local_id!r} in segment {segment.id!r}",
+        placed=entry.get("profile"),
+        segment_profile=segment.profile,
+        definition=node.get("profile"),
+        roots=roots,
+    )
     tags = tuple(sorted({*(segment.tags or ()), *(entry.get("tags") or ())}))
     entry_clock = (
         SegmentClock.model_validate(entry["clock"]) if entry.get("clock") is not None else None
@@ -691,6 +707,8 @@ def _space_node_from_entry(
             clock=entry_clock or segment.clock,
             plane=plane,
             slot=slot,
+            profile=profile_ref,
+            profile_level=profile_level,
         ),
         body_facts=(_body_facts_from_catalog(body),),
     )
@@ -961,6 +979,18 @@ def _expand_site_placement(placement: _SitePlacement, roots: CatalogRoots) -> li
             "a fixed surface location for placed ground nodes"
         )
 
+    # A shared site is instantiated once; segment profile statements must
+    # agree across every placing group, like scheduling and clock.
+    declared_segment_profiles = {
+        str(placing.profile) for placing in placement.segments if placing.profile is not None
+    }
+    if len(declared_segment_profiles) > 1:
+        raise SessionResolutionError(
+            f"site {site_id!r} is placed by ground segments with conflicting "
+            f"profile statements: {sorted(declared_segment_profiles)}"
+        )
+    segment_profile = next(iter(declared_segment_profiles), None)
+
     expanded: list[_RuntimeNode] = []
     for site_node in site["nodes"]:
         source_node = _load_expected(site_node["node"], roots, "node")
@@ -983,6 +1013,13 @@ def _expand_site_placement(placement: _SitePlacement, roots: CatalogRoots) -> li
         originated = _merge_originated_prefixes(
             site_node.get("originated_prefixes"),
             base_originated,
+        )
+        profile_ref, profile_level = _effective_profile(
+            described=f"ground node {runtime_id!r}",
+            placed=site_node.get("profile"),
+            segment_profile=segment_profile,
+            definition=source_node.get("profile"),
+            roots=roots,
         )
         expanded.append(
             _RuntimeNode(
@@ -1018,6 +1055,8 @@ def _expand_site_placement(placement: _SitePlacement, roots: CatalogRoots) -> li
                     ),
                     originated_prefixes=originated,
                     forwarding=source_node["forwarding"],
+                    profile=profile_ref,
+                    profile_level=profile_level,
                     service_priority=site_node.get("service_priority"),
                     ground_scheduling=scheduling,
                     clock=base_clock,
@@ -1061,6 +1100,8 @@ def _resolved_space_node(
     roots: CatalogRoots,
     plane: int | None,
     slot: int | None,
+    profile: str,
+    profile_level: str,
     clock: SegmentClock | None = None,
 ) -> ResolvedNode:
     if body is None:
@@ -1089,6 +1130,8 @@ def _resolved_space_node(
         wan_interfaces=tuple(_wan_interfaces_for_node(runtime_id, source_node)),
         orbit=orbit,
         forwarding=source_node["forwarding"],
+        profile=profile,
+        profile_level=profile_level,
         plane=plane,
         slot=slot,
         clock=clock or SegmentClock(),
@@ -3135,6 +3178,32 @@ def _load_ref_or_object(value: str, roots: CatalogRoots) -> tuple[str, dict[str,
     if wrapper is None:
         raise SessionResolutionError(f"expected wrapped catalog object, got session {ref!r}")
     return wrapper, model.model_dump(mode="python", by_alias=True, exclude_none=True)
+
+
+def _effective_profile(
+    *,
+    described: str,
+    placed: Any,
+    segment_profile: Any,
+    definition: Any,
+    roots: CatalogRoots,
+) -> tuple[str, str]:
+    """The most specific authored profile statement wins; absence is a refusal."""
+
+    if placed is not None:
+        reference, level = str(placed), "node"
+    elif segment_profile is not None:
+        reference, level = str(segment_profile), "segment"
+    elif definition is not None:
+        reference, level = str(definition), "node_definition"
+    else:
+        raise SessionResolutionError(
+            f"{described} has no workload profile at any level: none on the placed "
+            "entry, none on the segment, and none on the node definition. There is "
+            "no default workload; state what the node runs."
+        )
+    _load_expected(reference, roots, "profile")
+    return reference, level
 
 
 def _load_expected(ref: str, roots: CatalogRoots, expected_wrapper: str) -> dict[str, Any]:

@@ -129,6 +129,7 @@ from .builder_control_mutation import (
 from .builder_control_tree import build_session_control_tree
 from .builder_visual_defaults import (
     DEFAULT_BODY_REF,
+    DEFAULT_NODE_PROFILES,
     DEFAULT_PHASING_MODE,
     DEFAULT_SCHEDULING_PRESET,
     DEFAULT_TERMINAL_MOUNT_COUNT,
@@ -815,11 +816,15 @@ def _node_document(
                 ),
             }
         )
+    profile = node.profile
+    if profile is None and node.forwarding is not None:
+        profile = DEFAULT_NODE_PROFILES.get(node.forwarding)
     return node_id, {
         "node": {
             "id": node_id,
             "display_name": node.display_name,
             "forwarding": cast(JsonValue, node.forwarding),
+            **({"profile": cast(JsonValue, str(profile))} if profile is not None else {}),
             "ethernet": [
                 {"id": assembly.required_identifier(port, path=path, fallback="terr0")}
                 for port in node.ethernet
@@ -1176,6 +1181,7 @@ def _authored_space_projection(
             id=cast(str, node.get("id", "")),
             display_name=cast(str, node.get("display_name", "")),
             forwarding=cast(Any, node.get("forwarding")),
+            profile=cast(Any, node.get("profile")),
             ethernet=tuple(
                 cast(str, item.get("id", ""))
                 for item in cast(list[JsonDocument], node.get("ethernet", []))

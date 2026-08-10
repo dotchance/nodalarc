@@ -12,6 +12,7 @@ these as Pydantic ``AfterValidator``s on the field type.
 from __future__ import annotations
 
 import ipaddress
+import unicodedata
 from datetime import datetime
 from pathlib import PurePosixPath, PureWindowsPath
 from typing import Annotated, Any, Literal
@@ -167,6 +168,38 @@ RelativeAssetPath = Annotated[
     AfterValidator(_relative_asset_path),
     WithJsonSchema({"type": "string", "format": "relative-path"}),
 ]
+
+# Container trees the platform reserves; a profile mount may not land inside them.
+_RESERVED_MOUNT_TREES = ("/proc", "/sys", "/dev", "/var/run/secrets")
+
+
+def _mount_path(value: str) -> str:
+    if "\x00" in value:
+        raise ValueError("mount path must not contain NUL")
+    if not value.startswith("/") or value == "/":
+        raise ValueError(f"mount path must be absolute and not '/': {value!r}")
+    if value.endswith("/"):
+        raise ValueError(f"mount path must not end with '/': {value!r}")
+    if "//" in value:
+        raise ValueError(f"mount path must not contain '//': {value!r}")
+    if not unicodedata.is_normalized("NFC", value):
+        raise ValueError(f"mount path must be NFC-normalized: {value!r}")
+    if any(segment in {".", ".."} for segment in value.split("/")[1:]):
+        raise ValueError(f"mount path must not contain '.' or '..' segments: {value!r}")
+    for reserved in _RESERVED_MOUNT_TREES:
+        if value == reserved or value.startswith(f"{reserved}/"):
+            raise ValueError(f"mount path is under a reserved tree: {value!r}")
+    return value
+
+
+MountPath = Annotated[
+    str,
+    Field(min_length=2),
+    AfterValidator(_mount_path),
+    WithJsonSchema({"type": "string", "format": "mount-path"}),
+]
+PinnedImage = Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9._/-]*@sha256:[0-9a-f]{64}$")]
+RegistryHost = Annotated[str, Field(pattern=r"^[a-z0-9]([a-z0-9.-]*[a-z0-9])?(:[0-9]{1,5})?$")]
 
 
 def nonempty(values: Any) -> Any:

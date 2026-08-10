@@ -13,7 +13,7 @@ from pydantic import (
     model_validator,
 )
 
-from nodalarc.catalog_refs import BodyRef, NodeRef, SiteSetRef, SpaceSourceRef
+from nodalarc.catalog_refs import BodyRef, NodeRef, ProfileRef, SiteSetRef, SpaceSourceRef
 from nodalarc.model_validation import (
     AwareTimestamp,
     FiniteFloat,
@@ -218,6 +218,7 @@ class SpaceSegment(BaseModel):
     display_name: str | None = None
     tags: tuple[Identifier, ...] | None = None
     clock: SegmentClock | None = None
+    profile: ProfileRef | None = None
     source: SpaceSourceRef
 
     @model_validator(mode="after")
@@ -233,6 +234,7 @@ class GroundSegment(BaseModel):
     display_name: str | None = None
     tags: tuple[Identifier, ...] | None = None
     clock: SegmentClock | None = None
+    profile: ProfileRef | None = None
     placement: GroundPlacement
     apply: GroundApply | None = None
     overrides: tuple[GroundOverride, ...] | None = None
@@ -314,6 +316,7 @@ class LagrangeSegment(BaseModel):
     display_name: str | None = None
     tags: tuple[Identifier, ...] | None = None
     clock: SegmentClock | None = None
+    profile: ProfileRef | None = None
     node: NodeRef
     frame: LagrangeFrame
 

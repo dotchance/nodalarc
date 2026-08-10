@@ -15,6 +15,7 @@ CatalogFamily = Literal[
     "bodies",
     "terminals",
     "payloads",
+    "profiles",
     "orbits",
     "nodes",
     "sites",
@@ -206,6 +207,10 @@ class TerminalRef(CatalogRef):
 
 class PayloadRef(CatalogRef):
     allowed_families = frozenset({"payloads"})
+
+
+class ProfileRef(CatalogRef):
+    allowed_families = frozenset({"profiles"})
 
 
 class OrbitRef(CatalogRef):

@@ -27,6 +27,7 @@ DEFAULT_COMPONENT_IDS: dict[str, str] = {
     "bodies": "my-body",
     "terminals": "my-terminal",
     "payloads": "my-payload",
+    "profiles": "my-profile",
     "orbits": "my-orbit",
     "nodes": "my-node",
     "sites": "my-site",

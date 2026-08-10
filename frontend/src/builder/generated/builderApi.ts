@@ -39,7 +39,7 @@ export type BuilderVisualRuntimeDescriptor =
   | { readonly kind: "union"; readonly options: ReadonlyArray<BuilderVisualRuntimeDescriptor>; readonly exclusive: boolean }
   | { readonly kind: "intersection"; readonly options: ReadonlyArray<BuilderVisualRuntimeDescriptor> };
 
-export type CatalogFamily = "bodies" | "terminals" | "payloads" | "orbits" | "nodes" | "sites" | "site-sets" | "constellations" | "space-node-sets" | "sessions";
+export type CatalogFamily = "bodies" | "terminals" | "payloads" | "profiles" | "orbits" | "nodes" | "sites" | "site-sets" | "constellations" | "space-node-sets" | "sessions";
 export type BuilderIssueStage = "draft" | "structural" | "reference" | "semantic" | "runtime_support" | "readiness" | "persistence" | "deployment" | "staleness";
 export type BuilderIssueSeverity = "info" | "warning" | "error";
 export type BuilderBlockedOperation = "save" | "deploy";
@@ -2006,7 +2006,7 @@ export const BUILDER_VISUAL_DRAFT_ENVELOPE_RUNTIME_DESCRIPTOR = {
         "fields": {
           "ref": {
             "kind": "string",
-            "pattern": "^(?:nodalarc|user):(?:bodies|constellations|nodes|orbits|payloads|sessions|site\\-sets|sites|space\\-node\\-sets|terminals)/(?:[a-z0-9][a-z0-9_-]*/)*[a-z0-9][a-z0-9_-]*\\.(?:yaml|yml)$"
+            "pattern": "^(?:nodalarc|user):(?:bodies|constellations|nodes|orbits|payloads|profiles|sessions|site\\-sets|sites|space\\-node\\-sets|terminals)/(?:[a-z0-9][a-z0-9_-]*/)*[a-z0-9][a-z0-9_-]*\\.(?:yaml|yml)$"
           },
           "document": {
             "kind": "object",
@@ -4309,14 +4309,14 @@ export const CATALOG_COMPONENT_DRAFT_ENVELOPE_RUNTIME_DESCRIPTOR = {
     },
     "target_ref": {
       "kind": "string",
-      "pattern": "^(?:nodalarc|user):(?:bodies|constellations|nodes|orbits|payloads|sessions|site\\-sets|sites|space\\-node\\-sets|terminals)/(?:[a-z0-9][a-z0-9_-]*/)*[a-z0-9][a-z0-9_-]*\\.(?:yaml|yml)$"
+      "pattern": "^(?:nodalarc|user):(?:bodies|constellations|nodes|orbits|payloads|profiles|sessions|site\\-sets|sites|space\\-node\\-sets|terminals)/(?:[a-z0-9][a-z0-9_-]*/)*[a-z0-9][a-z0-9_-]*\\.(?:yaml|yml)$"
     },
     "source_ref": {
       "kind": "union",
       "options": [
         {
           "kind": "string",
-          "pattern": "^(?:nodalarc|user):(?:bodies|constellations|nodes|orbits|payloads|sessions|site\\-sets|sites|space\\-node\\-sets|terminals)/(?:[a-z0-9][a-z0-9_-]*/)*[a-z0-9][a-z0-9_-]*\\.(?:yaml|yml)$"
+          "pattern": "^(?:nodalarc|user):(?:bodies|constellations|nodes|orbits|payloads|profiles|sessions|site\\-sets|sites|space\\-node\\-sets|terminals)/(?:[a-z0-9][a-z0-9_-]*/)*[a-z0-9][a-z0-9_-]*\\.(?:yaml|yml)$"
         },
         {
           "kind": "null"

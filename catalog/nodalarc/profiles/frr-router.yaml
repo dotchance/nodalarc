@@ -1,0 +1,98 @@
+# The FRR reference router with a zero-capability observer beside it. The
+# frr adapter renders frr.conf, daemons, and _config_version per node from
+# resolved session facts; the rendered files arrive read-only at
+# config_mount, the path the FRR image genuinely loads configuration from.
+# Image digests are deployment inputs: the dev flow supplies the running
+# tree's images through the explicit operator override; production
+# catalogs pin real digests here.
+profile:
+  id: frr-router
+  display_name: FRR reference router
+  adapter: frr
+  registry: registry.example
+  image: nodalarc/frr@sha256:0000000000000000000000000000000000000000000000000000000000000000
+  capabilities:
+  - CHOWN
+  - DAC_OVERRIDE
+  - FOWNER
+  - KILL
+  - NET_ADMIN
+  - NET_BIND_SERVICE
+  - NET_RAW
+  - SETGID
+  - SETUID
+  - SYS_ADMIN
+  - SYS_CHROOT
+  root_filesystem: read_only
+  config_mount: /etc/frr-config
+  volumes:
+  - name: frr-etc
+    kind: ephemeral
+    medium: node
+    size_mi: 8
+  - name: frr-run
+    kind: ephemeral
+    medium: memory
+    size_mi: 8
+  - name: tmp
+    kind: ephemeral
+    medium: memory
+    size_mi: 16
+  - name: var-log
+    kind: ephemeral
+    medium: memory
+    size_mi: 32
+  - name: ssh-config
+    kind: ephemeral
+    medium: memory
+    size_mi: 1
+  - name: operator-home
+    kind: ephemeral
+    medium: memory
+    size_mi: 4
+  mounts:
+  - volume: frr-etc
+    path: /etc/frr
+  - volume: frr-run
+    path: /var/run/frr
+  - volume: tmp
+    path: /tmp
+  - volume: var-log
+    path: /var/log
+  - volume: ssh-config
+    path: /etc/ssh
+  - volume: operator-home
+    path: /home/operator
+  resources:
+    requests:
+      cpu_m: 10
+      memory_mi: 32
+    limits:
+      cpu_m: 200
+      memory_mi: 128
+  readiness:
+    argv:
+    - /bin/sh
+    - -c
+    - test -f /etc/frr/.config_version && diff -q /etc/frr-config/_config_version
+      /etc/frr/.config_version > /dev/null 2>&1 && vtysh -c 'show version' > /dev/null 2>&1
+    timeout_seconds: 5
+    period_seconds: 5
+  terminal:
+    surface: ssh
+    authorized_keys_path: /etc/ssh-keys
+  sidecars:
+  - name: observer
+    image: nodalarc/base@sha256:0000000000000000000000000000000000000000000000000000000000000000
+    command:
+    - /bin/bash
+    - -c
+    - while true; do echo "== interfaces $(date -u +%H:%M:%S)"; ip -o link show;
+      ip -o -4 addr show; sleep 30; done
+    resources:
+      requests:
+        cpu_m: 10
+        memory_mi: 16
+      limits:
+        cpu_m: 100
+        memory_mi: 32

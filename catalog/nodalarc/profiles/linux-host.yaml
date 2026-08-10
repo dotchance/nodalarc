@@ -1,0 +1,34 @@
+# A plain Linux processing host: no adapter, no rendering step, nothing
+# but its authored composition. With no adapter it renders no routing and
+# can never be selected by a routing domain; the platform attaches it to
+# its LAN and gateway at wiring time and the workload does whatever its
+# command says.
+profile:
+  id: linux-host
+  display_name: Generic Linux host
+  registry: registry.example
+  image: nodalarc/base@sha256:0000000000000000000000000000000000000000000000000000000000000000
+  command:
+  - /bin/bash
+  - -c
+  - sleep infinity
+  root_filesystem: read_only
+  volumes:
+  - name: tmp
+    kind: ephemeral
+    medium: memory
+    size_mi: 16
+  mounts:
+  - volume: tmp
+    path: /tmp
+  resources:
+    requests:
+      cpu_m: 10
+      memory_mi: 16
+    limits:
+      cpu_m: 200
+      memory_mi: 64
+  terminal:
+    surface: exec
+    command:
+    - /bin/bash

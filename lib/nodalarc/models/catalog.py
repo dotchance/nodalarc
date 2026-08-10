@@ -19,7 +19,15 @@ from pydantic import (
     model_validator,
 )
 
-from nodalarc.catalog_refs import BodyRef, NodeRef, OrbitRef, PayloadRef, SiteRef, TerminalRef
+from nodalarc.catalog_refs import (
+    BodyRef,
+    NodeRef,
+    OrbitRef,
+    PayloadRef,
+    ProfileRef,
+    SiteRef,
+    TerminalRef,
+)
 from nodalarc.model_validation import (
     AwareTimestamp,
     FiniteFloat,
@@ -28,10 +36,14 @@ from nodalarc.model_validation import (
     Ipv4Network,
     Ipv6Interface,
     Ipv6Network,
+    MountPath,
     NonNegativeFiniteFloat,
     NonNegativeInteger,
+    PinnedImage,
     PositiveFiniteFloat,
     PositiveInteger,
+    RegistryHost,
+    StrictBoolean,
     TerminalMedium,
 )
 from nodalarc.models.segments import (
@@ -262,6 +274,199 @@ class Payload(_FrozenModel):
         return self
 
 
+LinuxCapability = Literal[
+    "AUDIT_WRITE",
+    "CHOWN",
+    "DAC_OVERRIDE",
+    "FOWNER",
+    "FSETID",
+    "KILL",
+    "MKNOD",
+    "NET_ADMIN",
+    "NET_BIND_SERVICE",
+    "NET_RAW",
+    "SETFCAP",
+    "SETGID",
+    "SETPCAP",
+    "SETUID",
+    "SYS_ADMIN",
+    "SYS_CHROOT",
+]
+RootFilesystem = Literal["read_only", "ephemeral_writable"]
+
+_ARGV_MAX_ELEMENTS = 64
+_ARGV_MAX_TOTAL_BYTES = 4096
+
+
+def _validate_argv(argv: tuple[str, ...], *, field: str) -> None:
+    if not argv:
+        raise ValueError(f"{field} must be a nonempty list")
+    if any(not element or "\x00" in element for element in argv):
+        raise ValueError(f"{field} elements must be nonempty and NUL-free")
+    if len(argv) > _ARGV_MAX_ELEMENTS:
+        raise ValueError(f"{field} exceeds {_ARGV_MAX_ELEMENTS} elements")
+    if sum(len(element.encode()) for element in argv) > _ARGV_MAX_TOTAL_BYTES:
+        raise ValueError(f"{field} exceeds {_ARGV_MAX_TOTAL_BYTES} bytes total")
+
+
+def _validate_capabilities(capabilities: tuple[str, ...]) -> None:
+    if list(capabilities) != sorted(set(capabilities)):
+        raise ValueError("capabilities must be unique and in ascending order")
+
+
+def _mount_paths_conflict(path_a: str, path_b: str) -> bool:
+    return path_a == path_b or path_a.startswith(f"{path_b}/") or path_b.startswith(f"{path_a}/")
+
+
+def _validate_mount_conflicts(paths: list[str], *, owner: str) -> None:
+    for index, path in enumerate(paths):
+        for other in paths[index + 1 :]:
+            if _mount_paths_conflict(path, other):
+                raise ValueError(f"{owner} mount destinations conflict: {path!r} and {other!r}")
+
+
+class ProfileVolume(_FrozenModel):
+    name: Identifier
+    kind: Literal["ephemeral"]
+    medium: Literal["memory", "node"]
+    size_mi: PositiveInteger
+
+
+class ProfileMount(_FrozenModel):
+    volume: Identifier
+    path: MountPath
+    read_only: StrictBoolean = False
+
+
+class ProfileResourceAmounts(_FrozenModel):
+    cpu_m: PositiveInteger
+    memory_mi: PositiveInteger
+
+
+class ProfileResources(_FrozenModel):
+    requests: ProfileResourceAmounts
+    limits: ProfileResourceAmounts
+
+    @model_validator(mode="after")
+    def _limits_cover_requests(self) -> ProfileResources:
+        if self.limits.cpu_m < self.requests.cpu_m:
+            raise ValueError("cpu limit must be >= cpu request")
+        if self.limits.memory_mi < self.requests.memory_mi:
+            raise ValueError("memory limit must be >= memory request")
+        return self
+
+
+class SshTerminalSurface(_FrozenModel):
+    surface: Literal["ssh"]
+    authorized_keys_path: MountPath
+
+
+class ExecTerminalSurface(_FrozenModel):
+    surface: Literal["exec"]
+    command: tuple[str, ...]
+
+    @model_validator(mode="after")
+    def _argv_rules(self) -> ExecTerminalSurface:
+        _validate_argv(self.command, field="terminal command")
+        return self
+
+
+ProfileTerminal = SshTerminalSurface | ExecTerminalSurface
+
+
+class ProfileReadiness(_FrozenModel):
+    argv: tuple[str, ...]
+    timeout_seconds: PositiveInteger
+    period_seconds: PositiveInteger
+
+    @model_validator(mode="after")
+    def _argv_rules(self) -> ProfileReadiness:
+        _validate_argv(self.argv, field="readiness argv")
+        return self
+
+
+class ProfileSidecar(_FrozenModel):
+    name: Identifier
+    registry: RegistryHost | None = None
+    image: PinnedImage
+    command: tuple[str, ...] | None = None
+    args: tuple[str, ...] | None = None
+    capabilities: tuple[LinuxCapability, ...] = ()
+    root_filesystem: RootFilesystem = "read_only"
+    resources: ProfileResources
+    mounts: tuple[ProfileMount, ...] = ()
+
+    @model_validator(mode="after")
+    def _sidecar_rules(self) -> ProfileSidecar:
+        _validate_capabilities(self.capabilities)
+        for field_name in ("command", "args"):
+            argv = getattr(self, field_name)
+            if argv is not None:
+                _validate_argv(argv, field=f"sidecar {field_name}")
+        _validate_mount_conflicts(
+            [mount.path for mount in self.mounts], owner=f"sidecar {self.name!r}"
+        )
+        return self
+
+
+class Profile(_FrozenModel):
+    id: Identifier
+    display_name: str | None = None
+    adapter: Identifier | None = None
+    registry: RegistryHost
+    image: PinnedImage
+    command: tuple[str, ...] | None = None
+    args: tuple[str, ...] | None = None
+    capabilities: tuple[LinuxCapability, ...] = ()
+    root_filesystem: RootFilesystem = "read_only"
+    config_mount: MountPath | None = None
+    volumes: tuple[ProfileVolume, ...] = ()
+    mounts: tuple[ProfileMount, ...] = ()
+    resources: ProfileResources
+    readiness: ProfileReadiness | None = None
+    terminal: ProfileTerminal | None = None
+    sidecars: tuple[ProfileSidecar, ...] = ()
+    reference: Url | None = None
+    notes: str | None = None
+
+    @model_validator(mode="after")
+    def _profile_rules(self) -> Profile:
+        _validate_capabilities(self.capabilities)
+        for field_name in ("command", "args"):
+            argv = getattr(self, field_name)
+            if argv is not None:
+                _validate_argv(argv, field=field_name)
+
+        if self.config_mount is not None and self.adapter is None:
+            raise ValueError("config_mount requires an adapter")
+
+        volume_names = [volume.name for volume in self.volumes]
+        if len(set(volume_names)) != len(volume_names):
+            raise ValueError("profile volume names must be unique")
+        declared_volumes = set(volume_names)
+        for mount in self.mounts:
+            if mount.volume not in declared_volumes:
+                raise ValueError(f"profile mounts undeclared volume {mount.volume!r}")
+        for sidecar in self.sidecars:
+            for mount in sidecar.mounts:
+                if mount.volume not in declared_volumes:
+                    raise ValueError(
+                        f"sidecar {sidecar.name!r} mounts undeclared volume {mount.volume!r}"
+                    )
+
+        primary_paths = [mount.path for mount in self.mounts]
+        if self.config_mount is not None:
+            primary_paths.append(self.config_mount)
+        _validate_mount_conflicts(primary_paths, owner="profile")
+
+        sidecar_names = [sidecar.name for sidecar in self.sidecars]
+        if len(set(sidecar_names)) != len(sidecar_names):
+            raise ValueError("sidecar names must be unique")
+        if self.id in sidecar_names:
+            raise ValueError("a sidecar must not use the profile id as its name")
+        return self
+
+
 class EthernetPort(_FrozenModel):
     id: Identifier
     tags: tuple[Identifier, ...] | None = None
@@ -287,6 +492,7 @@ class Node(_FrozenModel):
     id: Identifier
     display_name: str | None = None
     forwarding: ForwardingClass
+    profile: ProfileRef | None = None
     ethernet: tuple[EthernetPort, ...]
     terminals: tuple[TerminalMount, ...]
     payloads: tuple[PayloadMount, ...]
@@ -397,6 +603,7 @@ class SiteNode(_FrozenModel):
     id: Identifier
     display_name: str | None = None
     model: NodeRef
+    profile: ProfileRef | None = None
     terminals: dict[Identifier, TerminalInstallation]
     payloads: dict[Identifier, PayloadInstallation]
     interfaces: NodeInterfaces
@@ -603,6 +810,7 @@ class Sgp4TlePlacement(_FrozenModel):
 class SpaceNode(_FrozenModel):
     id: Identifier
     node: NodeRef
+    profile: ProfileRef | None = None
     orbit: OrbitRef | None = None
     sgp4_tle: Sgp4TlePlacement | None = None
     state_vector: StateVector | None = None
@@ -644,6 +852,10 @@ class TerminalDocument(_CatalogDocumentRoot):
 
 class PayloadDocument(_CatalogDocumentRoot):
     payload: Payload
+
+
+class ProfileDocument(_CatalogDocumentRoot):
+    profile: Profile
 
 
 class OrbitDocument(_CatalogDocumentRoot):

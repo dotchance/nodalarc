@@ -527,14 +527,14 @@ Ethernet-port ids, terminal-mount ids, and payload-mount ids are independently
 unique within a node. `TerminalMount.boresight` is valid only on an `access`
 mount. A satellite access mount requires `boresight: {mode: nadir}`. A ground
 access mount must omit node-level boresight because its orientation belongs to
-the site installation. A node is a reusable model and contains no location or
-addressing. A node-model `profile` is the authored workload default for every
-node instantiated from the model; "Workload profile assignment" defines how
-segments and individual nodes override it.
+the site installation. A node is a reusable definition and contains no
+location or addressing. A node definition's `profile` is the authored workload
+default for every node instantiated from it; "Workload profile assignment"
+defines how segments and placed nodes override it.
 
-The current substrate requires every ground node model to declare exactly one
-Ethernet port named `terr0`, and every space node model to declare no Ethernet
-ports. Terminal mounts produce resolver-owned WAN interfaces instead.
+The current substrate requires every ground node definition to declare exactly
+one Ethernet port named `terr0`, and every space node definition to declare no
+Ethernet ports. Terminal mounts produce resolver-owned WAN interfaces instead.
 
 ## Shared placement and scheduling types
 
@@ -764,7 +764,7 @@ PayloadInstallationMap = MappingBegin,
 SiteNode = MappingBegin,
            "id", Identifier,
            [ "display_name", ( String | Null ) ],
-           "model", NodeRef,
+           "node", NodeRef,
            [ "profile", ( ProfileRef | Null ) ],
            "terminals", TerminalInstallationMap,
            "payloads", PayloadInstallationMap,
@@ -797,11 +797,11 @@ requires the same family in `lan` and its host address must fall inside that
 LAN.
 
 The required `terminals` map is an exhaustive installation inventory, not a
-patch over the referenced node model. An omitted terminal mount has zero
+patch over the referenced node definition. An omitted terminal mount has zero
 installed instances at the site. The required `payloads` map records the
 payload installation inventory. Every key in either map must be a mount id
-declared by the referenced model; a present entry requires `installed_count`,
-which cannot exceed the model mount count. Terminal capability overrides may
+declared by the referenced node definition; a present entry requires
+`installed_count`, which cannot exceed the definition's mount count. Terminal capability overrides may
 narrow, but never increase, the referenced terminal's directional bandwidth,
 tracking capacity, maximum range, azimuth or elevation envelope, or maximum
 tracking rate. Boresight is placement data and does not change the reusable
@@ -1000,11 +1000,11 @@ segment-apply or ground-override prefixes rather than replacing them.
 `profile` is readable at three levels, and resolution takes the most specific
 non-null statement for each node:
 
-1. The node model (`Node.profile`) is the authored default for every node
-   instantiated from that model.
-2. A segment `profile` overrides the model default for every node the segment
+1. The node definition (`Node.profile`) is the authored default for every
+   node instantiated from it.
+2. A segment `profile` overrides that default for every node the segment
    resolves.
-3. A single node's `profile` (`SpaceNode.profile` for a fixed space node,
+3. A placed node's `profile` (`SpaceNode.profile` for a fixed space node,
    `SiteNode.profile` for an installed ground node) overrides both.
 
 Every resolved runtime node must have an effective profile. A node with no
@@ -1015,7 +1015,7 @@ session records, for each node, the effective profile reference and the level
 that supplied it.
 
 Whether a node participates in routing is decided by its effective profile,
-never by its node model's forwarding class alone. A profile renders routing
+never by its node definition's forwarding class alone. A profile renders routing
 when its `adapter` names a module that renders routing-protocol
 configuration; which adapters render which protocols is declared by the
 adapter modules and is runtime support. Four rules connect profiles to
@@ -1481,8 +1481,8 @@ context-free EBNF alone:
   space nodes receive space-segment tags, constellation tags, and matching
   `node_tags`; fixed space nodes receive space-segment and `SpaceNode.tags`;
   ground nodes receive ground-segment/apply/override, site, and site-node tags.
-  Tags on reusable node models, mounts, site sets, and space-node sets remain
-  catalog metadata. Tag text never defines physics, link class, routing,
+  Tags on reusable node definitions, mounts, site sets, and space-node sets
+  remain catalog metadata. Tag text never defines physics, link class, routing,
   addressing, scheduling, or actuation.
 - Site-level scheduling overrides segment scheduling field by field. A matching
   ground override replaces the segment apply value for scheduling and
@@ -1548,7 +1548,9 @@ runtime execution:
   language is defined ahead of the installed models, which still reject the
   fields structurally; the matching model, resolver, and runtime change
   follows this definition, including routing-domain coverage re-keyed from
-  the node model's forwarding class to the effective profile.
+  the node definition's forwarding class to the effective profile, and the
+  site-node reference field spelled `node` (the installed models still spell
+  it `model`).
 
 Unsupported features fail explicitly. They are never silently removed,
 flattened, translated to another feature, or treated as successful execution.

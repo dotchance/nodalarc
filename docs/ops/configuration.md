@@ -27,7 +27,7 @@ Both namespaces have the same families and use the same grammar:
 | Payload | `payloads/` | Reusable terminal slots and shared resource groups. |
 | Profile | `profiles/` | Complete node workload composition: images, containers, adapter, terminal access. |
 | Orbit | `orbits/` | Body reference, epoch, geometry, orientation, and propagator. |
-| Node | `nodes/` | Reusable forwarding model, ports, and terminal or payload mounts. |
+| Node | `nodes/` | Reusable node definition: forwarding class, ports, mounts, and default profile. |
 | Site | `sites/` | Facility frame, location, LAN, installed nodes, and concrete addresses. |
 | Site set | `site-sets/` | Reusable collection of site references. |
 | Constellation | `constellations/` | Generated population from a node, orbit, planes, slots, and phasing. |
@@ -232,8 +232,9 @@ selected terminal limit and the authored ground-endpoint `min_elevation_deg`.
 
 ## Sites, nodes, terminals, and addresses
 
-A node is a reusable model: a router on a shelf. It has forwarding behavior,
-ports, and mounts, but no address or location.
+A node is a reusable definition: a router on a shelf. It has forwarding
+behavior, ports, mounts, and optionally a default workload profile, but no
+address or location.
 
 ```yaml
 node:
@@ -250,7 +251,7 @@ node:
   payloads: []
 ```
 
-A site installs that model at a physical facility. The placement owns the LAN,
+A site installs that node definition at a physical facility. The placement owns the LAN,
 concrete interface addresses, installed terminal count, and optional
 capability narrowing:
 
@@ -290,6 +291,10 @@ site:
     alt_m: 20
 ```
 
+The site-node field referencing the node definition is spelled `node` in the
+formal grammar; the installed models still spell it `model`, as this example
+shows, and the example changes with the matching model change.
+
 Each placed node authors exactly two numbered interfaces:
 
 - `lo0` is the node loopback.
@@ -297,9 +302,9 @@ Each placed node authors exactly two numbered interfaces:
   address family.
 
 Each interface declares IPv4, IPv6, or both. The site's `terminals` mapping is
-the exhaustive installation inventory: a model mount omitted from that mapping
-has zero installed instances at the site, and `installed_count` cannot exceed
-the model count. Capability overrides may narrow the selected terminal but may
+the exhaustive installation inventory: a mount omitted from that mapping has
+zero installed instances at the site, and `installed_count` cannot exceed the
+node definition's count. Capability overrides may narrow the selected terminal but may
 not widen it. The required `payloads` mapping follows the same mount-inventory
 shape; payload execution is structurally defined but support-gated today.
 
@@ -307,8 +312,8 @@ Installed terminal mounts produce runtime WAN interfaces. Those interfaces are
 derived and currently unnumbered; they borrow the node loopback. Do not author
 `termN`, `islN`, or other derived WAN interfaces in a site.
 
-For the current substrate, a ground node model declares exactly the `terr0`
-Ethernet port and a space node model declares no Ethernet ports. A satellite
+For the current substrate, a ground node definition declares exactly the
+`terr0` Ethernet port and a space node definition declares no Ethernet ports. A satellite
 access mount declares `boresight: {mode: nadir}` on the node mount; a ground
 access mount declares its boresight on the site installation as shown above.
 
@@ -334,13 +339,13 @@ constraint are in the [Configuration Grammar](configuration-grammar.md).
 
 A node acquires its profile from the most specific of three statements:
 
-- the node model declares the default for every node built from that model;
-- a segment `profile` overrides the model default for the nodes it resolves;
-- a single space node or site node `profile` overrides both.
+- the node definition declares the default for every node built from it;
+- a segment `profile` overrides that default for the nodes it resolves;
+- a placed space node or site node `profile` overrides both.
 
 A resolved node with no profile statement at any level is rejected before
 deployment. NodalArc has no default workload and no built-in preference for
-any implementation. Inheriting a node-model default is an authored statement,
+any implementation. Inheriting a node definition's default is an authored statement,
 because someone wrote it into a reviewable catalog object.
 
 Customize a profile like any other catalog object: copy the shipped object to

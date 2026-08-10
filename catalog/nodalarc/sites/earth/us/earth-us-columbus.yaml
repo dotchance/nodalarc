@@ -13,7 +13,7 @@ site:
   nodes:
   - id: gw1
     display_name: LEO Gateway
-    model: nodalarc:nodes/ground/starlink-gateway.yaml
+    node: nodalarc:nodes/ground/starlink-gateway.yaml
     terminals:
       access_ka:
         installed_count: 1

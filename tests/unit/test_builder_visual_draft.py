@@ -972,7 +972,7 @@ def test_backend_commands_derive_space_transitions_and_ground_installations(
     apply({"operation": "add_ground"})
     apply(
         {
-            "operation": "set_ground_stamp_node_model",
+            "operation": "set_ground_stamp_node",
             "segment_id": "ground-1",
             "node_ref": "nodalarc:nodes/ground/leo-gateway.yaml",
         }
@@ -992,7 +992,7 @@ def test_backend_commands_derive_space_transitions_and_ground_installations(
     )
     apply(
         {
-            "operation": "set_ground_site_node_model",
+            "operation": "set_ground_site_node",
             "segment_id": "ground-1",
             "member_id": "member-1",
             "node_id": "gw1",
@@ -1038,7 +1038,7 @@ def test_backend_commands_derive_space_transitions_and_ground_installations(
     assert member.site is not None
     added = member.site.nodes[-1]
     assert added.node_id == "gw2"
-    assert added.model_ref == "nodalarc:nodes/ground/starlink-gateway.yaml"
+    assert added.node_ref == "nodalarc:nodes/ground/starlink-gateway.yaml"
     assert added.installed == {"access_ka": 64}
     assert added.boresights == {"access_ka": BuilderVisualGroundBoresight(mode="local_vertical")}
 
@@ -1920,7 +1920,7 @@ def test_visual_ground_site_emits_explicit_installation_boresight(
                             nodes=(
                                 BuilderVisualSiteNode(
                                     node_id="gw1",
-                                    model_ref="nodalarc:nodes/ground/leo-gateway.yaml",
+                                    node_ref="nodalarc:nodes/ground/leo-gateway.yaml",
                                     installed={"access_ka": 1},
                                     boresights={"access_ka": boresight},
                                     lo0_ipv4="10.200.0.1/32",

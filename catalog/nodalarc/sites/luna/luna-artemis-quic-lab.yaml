@@ -11,7 +11,7 @@ site:
   nodes:
   - id: gw1
     display_name: Luna Gateway
-    model: nodalarc:nodes/ground/luna-surface-gateway.yaml
+    node: nodalarc:nodes/ground/luna-surface-gateway.yaml
     payloads: {}
     terminals:
       access_s:
@@ -48,7 +48,7 @@ site:
       - fd00:da7a:99::/64
   - id: quic-server
     display_name: QUIC server host
-    model: nodalarc:nodes/ground/processing-host.yaml
+    node: nodalarc:nodes/ground/processing-host.yaml
     payloads: {}
     terminals: {}
     tags:

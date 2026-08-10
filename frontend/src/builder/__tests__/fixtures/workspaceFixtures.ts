@@ -129,7 +129,7 @@ export function testGroundMember(
       tags: [],
       nodes: [{
         node_id: "gw1",
-        model_ref: ground.stamp.node_ref,
+        node_ref: ground.stamp.node_ref,
         installed: { ...ground.stamp.installed },
         boresights: { ...ground.stamp.boresights },
         lo0_ipv4: `${ground.stamp.loopback_base}.0.${addressIndex + 1}/32`,

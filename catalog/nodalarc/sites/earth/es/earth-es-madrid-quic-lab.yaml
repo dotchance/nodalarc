@@ -11,7 +11,7 @@ site:
   nodes:
   - id: gw1
     display_name: LEO Gateway
-    model: nodalarc:nodes/ground/leo-gateway.yaml
+    node: nodalarc:nodes/ground/leo-gateway.yaml
     payloads: {}
     terminals:
       access_ka:
@@ -49,7 +49,7 @@ site:
         ipv6: fd00:da7a:b4::1/64
   - id: quic-client
     display_name: QUIC client host
-    model: nodalarc:nodes/ground/processing-host.yaml
+    node: nodalarc:nodes/ground/processing-host.yaml
     payloads: {}
     terminals: {}
     tags:

@@ -1548,9 +1548,7 @@ runtime execution:
   language is defined ahead of the installed models, which still reject the
   fields structurally; the matching model, resolver, and runtime change
   follows this definition, including routing-domain coverage re-keyed from
-  the node definition's forwarding class to the effective profile, and the
-  site-node reference field spelled `node` (the installed models still spell
-  it `model`).
+  the node definition's forwarding class to the effective profile.
 
 Unsupported features fail explicitly. They are never silently removed,
 flattened, translated to another feature, or treated as successful execution.

@@ -72,8 +72,8 @@ from nodalarc.models.builder_visual_api import (
     BuilderVisualRederiveLinkCommand,
     BuilderVisualRoutingBoundary,
     BuilderVisualRoutingDomain,
-    BuilderVisualSetGroundSiteNodeModelCommand,
-    BuilderVisualSetGroundStampNodeModelCommand,
+    BuilderVisualSetGroundSiteNodeCommand,
+    BuilderVisualSetGroundStampNodeCommand,
     BuilderVisualSetNodeTerminalRoleCommand,
     BuilderVisualSetSchedulingPresetCommand,
     BuilderVisualSetSpacePopulationCommand,
@@ -936,11 +936,11 @@ def _site_document(
             path=f"{node_path}.node_id",
             fallback=f"node-{index + 1}",
         )
-        if node.model_ref is None:
+        if node.node_ref is None:
             assembly.issue(
-                "builder.draft.site_node_model_required",
+                "builder.draft.site_node_ref_required",
                 "Installed site nodes require a node model reference",
-                f"{node_path}.model_ref",
+                f"{node_path}.node_ref",
             )
         unknown_boresights = sorted(set(node.boresights).difference(node.installed))
         for mount in unknown_boresights:
@@ -967,8 +967,8 @@ def _site_document(
         nodes.append(
             {
                 "id": node_id,
-                "model": cast(
-                    JsonValue, str(node.model_ref) if node.model_ref is not None else None
+                "node": cast(
+                    JsonValue, str(node.node_ref) if node.node_ref is not None else None
                 ),
                 "payloads": {},
                 "terminals": terminals,
@@ -1263,7 +1263,7 @@ def _authored_site_projection(document: JsonDocument) -> BuilderVisualSite | Non
         nodes.append(
             BuilderVisualSiteNode(
                 node_id=cast(str, raw_node.get("id", "")),
-                model_ref=cast(Any, raw_node.get("model")),
+                node_ref=cast(Any, raw_node.get("node")),
                 installed=installed,
                 boresights=boresights,
                 lo0_ipv4=cast(str, lo0.get("ipv4", "")) if isinstance(lo0, dict) else "",
@@ -1366,7 +1366,7 @@ def _authored_ground_projection(
         prior.stamp
         if prior is not None
         else BuilderVisualGroundStamp(
-            node_ref=first_node.model_ref if first_node is not None else None,
+            node_ref=first_node.node_ref if first_node is not None else None,
             installed=first_node.installed if first_node is not None else {},
             boresights=first_node.boresights if first_node is not None else {},
             body=first_site.body if first_site is not None else DEFAULT_BODY_REF,
@@ -3963,7 +3963,7 @@ class BuilderVisualDraftService:
             workspace = workspace.model_copy(update={"ground": tuple(grounds)})
             affected_kind = "ground_member"
             affected_id = member_id
-        elif isinstance(command, BuilderVisualSetGroundStampNodeModelCommand):
+        elif isinstance(command, BuilderVisualSetGroundStampNodeCommand):
             matches = [
                 (index, ground)
                 for index, ground in enumerate(workspace.ground)
@@ -4002,7 +4002,7 @@ class BuilderVisualDraftService:
             workspace = workspace.model_copy(update={"ground": tuple(grounds)})
             affected_kind = "ground"
             affected_id = command.segment_id
-        elif isinstance(command, BuilderVisualSetGroundSiteNodeModelCommand):
+        elif isinstance(command, BuilderVisualSetGroundSiteNodeCommand):
             matches = [
                 (index, ground)
                 for index, ground in enumerate(workspace.ground)
@@ -4054,7 +4054,7 @@ class BuilderVisualDraftService:
             nodes = list(member.site.nodes)
             nodes[node_index] = node.model_copy(
                 update={
-                    "model_ref": node_ref,
+                    "node_ref": node_ref,
                     "installed": installed,
                     "boresights": boresights,
                 }
@@ -4095,7 +4095,7 @@ class BuilderVisualDraftService:
             member_index, member = member_matches[0]
             assert member.site is not None
             source_ref = command.node_ref or (
-                member.site.nodes[0].model_ref if member.site.nodes else None
+                member.site.nodes[0].node_ref if member.site.nodes else None
             )
             node_ref = self._node_ref_for_command(
                 draft,
@@ -4116,7 +4116,7 @@ class BuilderVisualDraftService:
                 *member.site.nodes,
                 BuilderVisualSiteNode(
                     node_id=f"gw{node_number}",
-                    model_ref=node_ref,
+                    node_ref=node_ref,
                     installed=installed,
                     boresights=boresights,
                 ),
@@ -4190,7 +4190,7 @@ class BuilderVisualDraftService:
                     nodes=(
                         BuilderVisualSiteNode(
                             node_id="gw1",
-                            model_ref=ground.stamp.node_ref,
+                            node_ref=ground.stamp.node_ref,
                             installed=dict(ground.stamp.installed),
                             boresights=dict(ground.stamp.boresights),
                             lo0_ipv4=(f"{ground.stamp.loopback_base}.0.{address_index + 1}/32"),

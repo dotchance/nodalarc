@@ -963,7 +963,7 @@ def _expand_site_placement(placement: _SitePlacement, roots: CatalogRoots) -> li
 
     expanded: list[_RuntimeNode] = []
     for site_node in site["nodes"]:
-        source_node = _load_expected(site_node["model"], roots, "node")
+        source_node = _load_expected(site_node["node"], roots, "node")
         # Ground identity is site-anchored: a node's name never depends on
         # which group(s) placed its site. local_node_id keeps the
         # site-qualified form so `node:` selectors stay unique.

@@ -436,7 +436,7 @@ function visualCommandResponse(request: Record<string, any>) {
       tags: [],
     });
     schedulingPreset = "leo-fast-handover";
-  } else if (command.operation === "set_ground_stamp_node_model") {
+  } else if (command.operation === "set_ground_stamp_node") {
     affectedKind = "ground";
     affectedId = command.segment_id;
     const ground = workspace.ground.find(
@@ -447,7 +447,7 @@ function visualCommandResponse(request: Record<string, any>) {
       node_ref: command.node_ref,
       ...groundInstallation(command.node_ref),
     };
-  } else if (command.operation === "set_ground_site_node_model") {
+  } else if (command.operation === "set_ground_site_node") {
     affectedKind = "ground_member";
     affectedId = command.member_id;
     const ground = workspace.ground.find(
@@ -460,7 +460,7 @@ function visualCommandResponse(request: Record<string, any>) {
       (candidate: { node_id: string }) => candidate.node_id === command.node_id,
     );
     Object.assign(node, {
-      model_ref: command.node_ref,
+      node_ref: command.node_ref,
       ...groundInstallation(command.node_ref),
     });
   } else if (command.operation === "add_ground_site_node") {
@@ -475,10 +475,10 @@ function visualCommandResponse(request: Record<string, any>) {
     const taken = new Set(member.site.nodes.map((node: { node_id: string }) => node.node_id));
     let number = 1;
     while (taken.has(`gw${number}`)) number += 1;
-    const nodeRef = command.node_ref ?? member.site.nodes[0].model_ref;
+    const nodeRef = command.node_ref ?? member.site.nodes[0].node_ref;
     member.site.nodes.push({
       node_id: `gw${number}`,
-      model_ref: nodeRef,
+      node_ref: nodeRef,
       ...groundInstallation(nodeRef),
       lo0_ipv4: "",
       terr0_ipv4: "",
@@ -510,7 +510,7 @@ function visualCommandResponse(request: Record<string, any>) {
           tags: [],
           nodes: [{
             node_id: "gw1",
-            model_ref: ground.stamp.node_ref,
+            node_ref: ground.stamp.node_ref,
             installed: ground.stamp.installed,
             boresights: ground.stamp.boresights,
             lo0_ipv4: `${ground.stamp.loopback_base}.0.${index + 1}/32`,
@@ -1718,13 +1718,13 @@ describe("BuilderView resolve and world synchronization", () => {
     fireEvent.click(await screen.findByText("Ground sites"));
     const editor = await screen.findByTestId("builder-ground-editor");
     fireEvent.click(within(editor).getByRole("button", { name: /New-site stamp/ }));
-    fireEvent.change(within(editor).getByLabelText("Stamp node model"), {
+    fireEvent.change(within(editor).getByLabelText("Stamp node"), {
       target: { value: SECOND_GROUND_NODE },
     });
 
     await waitFor(() => expect(commandCalls(fetchMock)).toHaveLength(2));
     expect(JSON.parse(commandCalls(fetchMock)[1]![1].body).command).toEqual({
-      operation: "set_ground_stamp_node_model",
+      operation: "set_ground_stamp_node",
       segment_id: "ground-1",
       node_ref: SECOND_GROUND_NODE,
     });
@@ -1760,12 +1760,12 @@ describe("BuilderView resolve and world synchronization", () => {
     expect(editor.textContent).toContain("172.20.0.0/24");
 
     fireEvent.click(within(editor).getByRole("button", { name: "Edit Denver" }));
-    fireEvent.change(within(editor).getByLabelText("gw1 model"), {
+    fireEvent.change(within(editor).getByLabelText("gw1 node"), {
       target: { value: SECOND_GROUND_NODE },
     });
     await waitFor(() => expect(commandCalls(fetchMock)).toHaveLength(3));
     expect(JSON.parse(commandCalls(fetchMock)[2]![1].body).command).toEqual({
-      operation: "set_ground_site_node_model",
+      operation: "set_ground_site_node",
       segment_id: "ground-1",
       member_id: "member-1",
       node_id: "gw1",

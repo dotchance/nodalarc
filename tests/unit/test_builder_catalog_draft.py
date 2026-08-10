@@ -272,7 +272,7 @@ def test_site_node_command_uses_explicit_identity_and_backend_derived_shape(
 ) -> None:
     drafts, authoring = _services(tmp_path)
     node_ref = CatalogRef("nodalarc:nodes/ground/leo-gateway.yaml")
-    node_model = authoring.get_catalog(CatalogGetRequest(ref=node_ref)).canonical_json["node"]
+    node_definition = authoring.get_catalog(CatalogGetRequest(ref=node_ref)).canonical_json["node"]
     opened = drafts.new(CatalogDraftNewRequest(family="sites", object_id="command-site"))
 
     added = drafts.add_site_node(
@@ -288,13 +288,13 @@ def test_site_node_command_uses_explicit_identity_and_backend_derived_shape(
     installed = added.document["site"]["nodes"]
     assert len(installed) == 1
     assert installed[0]["id"] == "edge-router"
-    assert installed[0]["model"] == str(node_ref)
+    assert installed[0]["node"] == str(node_ref)
     assert installed[0]["payloads"] == {}
     assert installed[0]["interfaces"] == {
         "lo0": {"ipv4": ""},
         "terr0": {"ipv4": ""},
     }
-    expected_mounts = {mount["id"]: mount for mount in node_model["terminals"]}
+    expected_mounts = {mount["id"]: mount for mount in node_definition["terminals"]}
     assert set(installed[0]["terminals"]) == set(expected_mounts)
     for mount_id, installation in installed[0]["terminals"].items():
         assert installation["installed_count"] == expected_mounts[mount_id]["count"]

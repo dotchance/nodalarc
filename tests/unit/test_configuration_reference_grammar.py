@@ -84,7 +84,7 @@ def _node() -> dict[str, Any]:
 def _site_node() -> dict[str, Any]:
     return {
         "id": "gateway",
-        "model": "nodalarc:nodes/ground/gateway.yaml",
+        "node": "nodalarc:nodes/ground/gateway.yaml",
         "terminals": {},
         "payloads": {},
         "interfaces": {
@@ -327,10 +327,10 @@ REFERENCE_SLOT_CASES = (
         "bodies",
     ),
     ReferenceSlotCase(
-        "site.nodes.model",
+        "site.nodes.node",
         Site,
         _body_fixed_site,
-        ("nodes", 0, "model"),
+        ("nodes", 0, "node"),
         "nodes",
     ),
     ReferenceSlotCase("site_set.sites", SiteSet, _site_set, ("sites", 0), "sites"),

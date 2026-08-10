@@ -10,7 +10,7 @@ site:
   nodes:
   - id: gw1
     display_name: Luna Gateway
-    model: nodalarc:nodes/ground/luna-surface-gateway.yaml
+    node: nodalarc:nodes/ground/luna-surface-gateway.yaml
     payloads: {}
     terminals:
       access_s:

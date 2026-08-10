@@ -350,7 +350,7 @@ export function GroundEditor({
             <SelectField
               stack
               label="node model"
-              ariaLabel="Stamp node model"
+              ariaLabel="Stamp node"
               value={draft.stamp.node_ref}
               onChange={(ref) => void setStampModel(ref)}
               options={nodes.entries

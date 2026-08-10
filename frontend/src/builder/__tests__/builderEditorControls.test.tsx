@@ -75,7 +75,7 @@ function draftSite(nodeRef = "nodalarc:nodes/ground/gw.yaml"): DraftSiteObject {
     tags: [],
     nodes: [{
       node_id: "gw1",
-      model_ref: nodeRef,
+      node_ref: nodeRef,
       installed: {},
       boresights: {},
       lo0_ipv4: "10.200.0.1/32",

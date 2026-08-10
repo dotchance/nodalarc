@@ -79,7 +79,7 @@ def _resolve_site_document(
     if node_document is not None:
         node_ref = "user:nodes/resolver-test-node.yaml"
         node_document["node"]["id"] = "resolver-test-node"
-        site_document["site"]["nodes"][0]["model"] = node_ref
+        site_document["site"]["nodes"][0]["node"] = node_ref
         _write_yaml(user_root / "nodes" / "resolver-test-node.yaml", node_document)
     _write_yaml(user_root / "sites" / "resolver-test-site.yaml", site_document)
     _write_yaml(

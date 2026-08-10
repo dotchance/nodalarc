@@ -61,8 +61,8 @@ BuilderVisualDraftCommandOperation = Literal[
     "add_node_ethernet_port",
     "add_ground",
     "add_ground_site_reference",
-    "set_ground_stamp_node_model",
-    "set_ground_site_node_model",
+    "set_ground_stamp_node",
+    "set_ground_site_node",
     "add_ground_site_node",
     "mint_ground_members",
     "add_routing_domain",
@@ -204,7 +204,7 @@ class BuilderVisualSiteNode(_BuilderVisualModel):
     """One installed node in an editable site object."""
 
     node_id: str = ""
-    model_ref: NodeRef | None = None
+    node_ref: NodeRef | None = None
     installed: dict[str, int] = Field(default_factory=dict)
     boresights: dict[str, BuilderVisualGroundBoresight]
     lo0_ipv4: str = ""
@@ -631,18 +631,18 @@ class BuilderVisualAddGroundSiteReferenceCommand(_BuilderVisualModel):
     site_ref: SiteRef
 
 
-class BuilderVisualSetGroundStampNodeModelCommand(_BuilderVisualModel):
+class BuilderVisualSetGroundStampNodeCommand(_BuilderVisualModel):
     """Select a ground stamp node and derive its installed terminal inventory."""
 
-    operation: Literal["set_ground_stamp_node_model"]
+    operation: Literal["set_ground_stamp_node"]
     segment_id: str = Field(min_length=1, max_length=160)
     node_ref: NodeRef
 
 
-class BuilderVisualSetGroundSiteNodeModelCommand(_BuilderVisualModel):
+class BuilderVisualSetGroundSiteNodeCommand(_BuilderVisualModel):
     """Select one authored site's node model and derive its installed inventory."""
 
-    operation: Literal["set_ground_site_node_model"]
+    operation: Literal["set_ground_site_node"]
     segment_id: str = Field(min_length=1, max_length=160)
     member_id: str = Field(min_length=1, max_length=160)
     node_id: str = Field(min_length=1, max_length=160)
@@ -730,8 +730,8 @@ BuilderVisualDraftCommand = Annotated[
     | BuilderVisualAddNodeEthernetPortCommand
     | BuilderVisualAddGroundCommand
     | BuilderVisualAddGroundSiteReferenceCommand
-    | BuilderVisualSetGroundStampNodeModelCommand
-    | BuilderVisualSetGroundSiteNodeModelCommand
+    | BuilderVisualSetGroundStampNodeCommand
+    | BuilderVisualSetGroundSiteNodeCommand
     | BuilderVisualAddGroundSiteNodeCommand
     | BuilderVisualMintGroundMembersCommand
     | BuilderVisualAddRoutingDomainCommand

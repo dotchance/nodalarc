@@ -264,7 +264,7 @@ site:
     ipv6: fd00:da7a:71::/64
   nodes:
   - id: gw1
-    model: nodalarc:nodes/ground/starlink-gateway.yaml
+    node: nodalarc:nodes/ground/starlink-gateway.yaml
     terminals:
       access_ka:
         installed_count: 8
@@ -290,10 +290,6 @@ site:
     lon_deg: -118.328111
     alt_m: 20
 ```
-
-The site-node field referencing the node definition is spelled `node` in the
-formal grammar; the installed models still spell it `model`, as this example
-shows, and the example changes with the matching model change.
 
 Each placed node authors exactly two numbered interfaces:
 

@@ -10,7 +10,7 @@ site:
   nodes:
   - id: gw1
     display_name: GEO Gateway
-    model: nodalarc:nodes/ground/geo-gateway.yaml
+    node: nodalarc:nodes/ground/geo-gateway.yaml
     payloads: {}
     terminals:
       access_ka:

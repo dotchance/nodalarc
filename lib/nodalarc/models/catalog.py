@@ -602,7 +602,7 @@ class TerminalInstallation(_FrozenModel):
 class SiteNode(_FrozenModel):
     id: Identifier
     display_name: str | None = None
-    model: NodeRef
+    node: NodeRef
     profile: ProfileRef | None = None
     terminals: dict[Identifier, TerminalInstallation]
     payloads: dict[Identifier, PayloadInstallation]

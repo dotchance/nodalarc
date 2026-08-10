@@ -10,7 +10,7 @@ site:
   nodes:
   - id: gw1
     display_name: HEO Gateway
-    model: nodalarc:nodes/ground/heo-gateway.yaml
+    node: nodalarc:nodes/ground/heo-gateway.yaml
     payloads: {}
     terminals:
       access_ka:
@@ -48,7 +48,7 @@ site:
       - fd00:da7a:4f::/64
   - id: gw2
     display_name: LEO Gateway
-    model: nodalarc:nodes/ground/leo-gateway.yaml
+    node: nodalarc:nodes/ground/leo-gateway.yaml
     terminals:
       access_ka:
         installed_count: 2

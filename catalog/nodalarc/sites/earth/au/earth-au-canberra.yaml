@@ -10,7 +10,7 @@ site:
   nodes:
   - id: gw1
     display_name: HEO Gateway
-    model: nodalarc:nodes/ground/heo-gateway.yaml
+    node: nodalarc:nodes/ground/heo-gateway.yaml
     payloads: {}
     terminals:
       access_ka:

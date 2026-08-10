@@ -54,7 +54,7 @@ def _node_data() -> dict[str, Any]:
 def _site_node_data(node_id: str, index: int) -> dict[str, Any]:
     return {
         "id": node_id,
-        "model": "nodalarc:nodes/test.yaml",
+        "node": "nodalarc:nodes/test.yaml",
         "terminals": {},
         "payloads": {},
         "interfaces": {

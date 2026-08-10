@@ -523,7 +523,7 @@ def _persist_ground_set(
                     "nodes": [
                         {
                             "id": "router",
-                            "model": str(ground_node_ref),
+                            "node": str(ground_node_ref),
                             "terminals": {
                                 "access": {
                                     "installed_count": 2,
@@ -553,7 +553,7 @@ def _persist_ground_set(
                         [
                             {
                                 "id": "endpoint",
-                                "model": str(host_node_ref),
+                                "node": str(host_node_ref),
                                 "terminals": {},
                                 "payloads": {},
                                 "interfaces": {

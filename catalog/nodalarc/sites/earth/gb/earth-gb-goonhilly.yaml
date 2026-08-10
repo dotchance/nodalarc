@@ -10,7 +10,7 @@ site:
   nodes:
   - id: gw1
     display_name: MEO Gateway
-    model: nodalarc:nodes/ground/meo-gateway.yaml
+    node: nodalarc:nodes/ground/meo-gateway.yaml
     payloads: {}
     terminals:
       access_ka:

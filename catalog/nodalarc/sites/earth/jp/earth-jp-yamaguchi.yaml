@@ -11,7 +11,7 @@ site:
   nodes:
   - id: gw1
     display_name: GEO Gateway
-    model: nodalarc:nodes/ground/geo-gateway.yaml
+    node: nodalarc:nodes/ground/geo-gateway.yaml
     payloads: {}
     terminals:
       access_ka:
@@ -53,7 +53,7 @@ site:
       - fd00:da7a:35::/64
   - id: gw2
     display_name: MEO Gateway
-    model: nodalarc:nodes/ground/meo-gateway.yaml
+    node: nodalarc:nodes/ground/meo-gateway.yaml
     payloads: {}
     terminals:
       access_ka:

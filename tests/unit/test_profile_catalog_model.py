@@ -246,7 +246,7 @@ def test_profile_is_readable_at_every_assignment_level() -> None:
     site_node = SiteNode.model_validate(
         {
             "id": "host1",
-            "model": "nodalarc:nodes/ground/lab-host.yaml",
+            "node": "nodalarc:nodes/ground/lab-host.yaml",
             "profile": reference,
             "terminals": {},
             "payloads": {},

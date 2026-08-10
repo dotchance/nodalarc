@@ -59,7 +59,7 @@ export type BuilderVisualPhasingMode = "walker_delta" | "walker_star" | "evenly_
 export type BuilderVisualOrbitShape = "circular" | "elliptical";
 export type BuilderVisualOrbitPropagator = "two_body" | "j2_mean_elements";
 export type BuilderVisualTopologyMode = "visible_candidates" | "nearest_n";
-export type BuilderVisualDraftCommandOperation = "place_space_reference" | "place_ground_reference" | "add_generated_space" | "set_space_population" | "author_inline_space_node" | "add_or_increment_node_terminal" | "set_node_terminal_role" | "add_node_ethernet_port" | "add_ground" | "add_ground_site_reference" | "set_ground_stamp_node_model" | "set_ground_site_node_model" | "add_ground_site_node" | "mint_ground_members" | "add_routing_domain" | "add_boundary" | "connect_segments" | "rederive_link" | "set_scheduling_preset";
+export type BuilderVisualDraftCommandOperation = "place_space_reference" | "place_ground_reference" | "add_generated_space" | "set_space_population" | "author_inline_space_node" | "add_or_increment_node_terminal" | "set_node_terminal_role" | "add_node_ethernet_port" | "add_ground" | "add_ground_site_reference" | "set_ground_stamp_node" | "set_ground_site_node" | "add_ground_site_node" | "mint_ground_members" | "add_routing_domain" | "add_boundary" | "connect_segments" | "rederive_link" | "set_scheduling_preset";
 export type BuilderVisualDraftAffectedKind = "space" | "ground" | "routing_domain" | "boundary" | "link" | "ground_member";
 export type CatalogComponentFamily = "bodies" | "terminals" | "payloads" | "orbits" | "nodes" | "sites" | "site-sets" | "constellations" | "space-node-sets";
 export type CatalogDraftPatchOperation = "add" | "replace" | "remove";
@@ -544,15 +544,15 @@ export interface BuilderVisualAddGroundSiteReferenceCommand {
 }
 
 /** Select a ground stamp node and derive its installed terminal inventory. */
-export interface BuilderVisualSetGroundStampNodeModelCommand {
-  readonly operation: "set_ground_stamp_node_model";
+export interface BuilderVisualSetGroundStampNodeCommand {
+  readonly operation: "set_ground_stamp_node";
   readonly segment_id: string;
   readonly node_ref: string;
 }
 
 /** Select one authored site's node model and derive its installed inventory. */
-export interface BuilderVisualSetGroundSiteNodeModelCommand {
-  readonly operation: "set_ground_site_node_model";
+export interface BuilderVisualSetGroundSiteNodeCommand {
+  readonly operation: "set_ground_site_node";
   readonly segment_id: string;
   readonly member_id: string;
   readonly node_id: string;
@@ -619,7 +619,7 @@ export interface BuilderVisualSetSchedulingPresetCommand {
 export interface BuilderVisualDraftCommandRequest {
   readonly draft: BuilderVisualDraftEnvelope;
   readonly expected_draft_revision: number;
-  readonly command: BuilderVisualPlaceSpaceReferenceCommand | BuilderVisualPlaceGroundReferenceCommand | BuilderVisualAddGeneratedSpaceCommand | BuilderVisualSetSpacePopulationCommand | BuilderVisualAuthorInlineSpaceNodeCommand | BuilderVisualAddOrIncrementNodeTerminalCommand | BuilderVisualSetNodeTerminalRoleCommand | BuilderVisualAddNodeEthernetPortCommand | BuilderVisualAddGroundCommand | BuilderVisualAddGroundSiteReferenceCommand | BuilderVisualSetGroundStampNodeModelCommand | BuilderVisualSetGroundSiteNodeModelCommand | BuilderVisualAddGroundSiteNodeCommand | BuilderVisualMintGroundMembersCommand | BuilderVisualAddRoutingDomainCommand | BuilderVisualAddBoundaryCommand | BuilderVisualConnectSegmentsCommand | BuilderVisualRederiveLinkCommand | BuilderVisualSetSchedulingPresetCommand;
+  readonly command: BuilderVisualPlaceSpaceReferenceCommand | BuilderVisualPlaceGroundReferenceCommand | BuilderVisualAddGeneratedSpaceCommand | BuilderVisualSetSpacePopulationCommand | BuilderVisualAuthorInlineSpaceNodeCommand | BuilderVisualAddOrIncrementNodeTerminalCommand | BuilderVisualSetNodeTerminalRoleCommand | BuilderVisualAddNodeEthernetPortCommand | BuilderVisualAddGroundCommand | BuilderVisualAddGroundSiteReferenceCommand | BuilderVisualSetGroundStampNodeCommand | BuilderVisualSetGroundSiteNodeCommand | BuilderVisualAddGroundSiteNodeCommand | BuilderVisualMintGroundMembersCommand | BuilderVisualAddRoutingDomainCommand | BuilderVisualAddBoundaryCommand | BuilderVisualConnectSegmentsCommand | BuilderVisualRederiveLinkCommand | BuilderVisualSetSchedulingPresetCommand;
 }
 
 /** One applied command and the next revision of the complete draft. */
@@ -713,7 +713,7 @@ export interface BuilderVisualSpaceReference {
 /** One installed node in an editable site object. */
 export interface BuilderVisualSiteNode {
   readonly node_id?: string;
-  readonly model_ref?: string | null;
+  readonly node_ref?: string | null;
   readonly installed?: Readonly<Record<string, number>>;
   readonly boresights: Readonly<Record<string, BuilderVisualGroundBoresight>>;
   readonly lo0_ipv4?: string;
@@ -2572,7 +2572,7 @@ export const BUILDER_VISUAL_DRAFT_ENVELOPE_RUNTIME_DESCRIPTOR = {
                                       "node_id": {
                                         "kind": "string"
                                       },
-                                      "model_ref": {
+                                      "node_ref": {
                                         "kind": "union",
                                         "options": [
                                           {
@@ -3677,7 +3677,7 @@ export const BUILDER_VISUAL_DRAFT_ENVELOPE_RUNTIME_DESCRIPTOR = {
                                       "node_id": {
                                         "kind": "string"
                                       },
-                                      "model_ref": {
+                                      "node_ref": {
                                         "kind": "union",
                                         "options": [
                                           {
@@ -4966,7 +4966,7 @@ export const BUILDER_VISUAL_WORKSPACE_RUNTIME_DESCRIPTOR = {
                               "node_id": {
                                 "kind": "string"
                               },
-                              "model_ref": {
+                              "node_ref": {
                                 "kind": "union",
                                 "options": [
                                   {
@@ -6003,7 +6003,7 @@ export const BUILDER_VISUAL_GROUND_DRAFT_RUNTIME_DESCRIPTOR = {
                         "node_id": {
                           "kind": "string"
                         },
-                        "model_ref": {
+                        "node_ref": {
                           "kind": "union",
                           "options": [
                             {

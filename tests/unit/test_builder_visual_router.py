@@ -604,7 +604,7 @@ def test_visual_draft_json_materializes_all_authoring_workspace_defaults(
     }
     assert set(member["site"]["nodes"][0]) == {
         "node_id",
-        "model_ref",
+        "node_ref",
         "installed",
         "boresights",
         "lo0_ipv4",

@@ -10,7 +10,7 @@ site:
   nodes:
   - id: gw1
     display_name: LEO Gateway
-    model: nodalarc:nodes/ground/leo-gateway.yaml
+    node: nodalarc:nodes/ground/leo-gateway.yaml
     payloads: {}
     terminals:
       access_ka:
@@ -48,7 +48,7 @@ site:
         ipv6: fd00:da7a:6::1/64
   - id: gw2
     display_name: MEO Gateway
-    model: nodalarc:nodes/ground/meo-gateway.yaml
+    node: nodalarc:nodes/ground/meo-gateway.yaml
     payloads: {}
     terminals:
       access_ka:

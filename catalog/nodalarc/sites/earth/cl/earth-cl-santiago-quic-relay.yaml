@@ -10,7 +10,7 @@ site:
   nodes:
   - id: gw1
     display_name: LEO Gateway
-    model: nodalarc:nodes/ground/leo-gateway.yaml
+    node: nodalarc:nodes/ground/leo-gateway.yaml
     payloads: {}
     terminals:
       access_ka:
@@ -48,7 +48,7 @@ site:
     - leo
   - id: gw2
     display_name: GEO Gateway
-    model: nodalarc:nodes/ground/geo-gateway.yaml
+    node: nodalarc:nodes/ground/geo-gateway.yaml
     payloads: {}
     terminals:
       access_ka:

@@ -61,7 +61,7 @@ export function SiteEditor({
     }));
   };
 
-  const setNodeModel = async (node_id: string, ref: string) => {
+  const setNodeRef = async (node_id: string, ref: string) => {
     setEditorError(null);
     try {
       await onSetNodeModel(node_id, ref);
@@ -159,10 +159,10 @@ export function SiteEditor({
         >
           <SelectField
               stack
-              label="model"
-              ariaLabel={`${node.node_id} model`}
-              value={node.model_ref}
-              onChange={(ref) => void setNodeModel(node.node_id, ref)}
+              label="node"
+              ariaLabel={`${node.node_id} node`}
+              value={node.node_ref}
+              onChange={(ref) => void setNodeRef(node.node_id, ref)}
               options={nodes.entries
                 .map((entry) => ({
                   value: entry.ref,

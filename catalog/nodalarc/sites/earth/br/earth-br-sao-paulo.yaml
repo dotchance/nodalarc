@@ -3,10 +3,10 @@ site:
   display_name: Sao Paulo gateway (LEO)
   verified:
     source: nodalarc_catalog
-    notes: NodalArc demo site using a named-facility coordinate estimate and explicit emulation addressing.
-  lan:
-    ipv4: 172.16.154.0/24
-    ipv6: fd00:da7a:9a::/64
+    notes: NodalArc demo site using a named-facility coordinate estimate and explicit
+      emulation addressing.
+  ethernet:
+  - id: lan0
   nodes:
   - id: gw1
     display_name: LEO Gateway
@@ -32,18 +32,13 @@ site:
           boresight:
             mode: local_vertical
     interfaces:
-      lo0:
-        ipv4: 10.255.0.160/32
-        ipv6: fd00:da7a:ffff::a0/128
-      terr0:
-        ipv4: 172.16.154.1/24
-        ipv6: fd00:da7a:9a::1/64
+      terr0: lan0
     originated_prefixes:
       ipv4:
-      - 172.16.154.0/24
-      - 0.0.0.0/0
+      - lan0
+      - default
       ipv6:
-      - fd00:da7a:9a::/64
+      - lan0
     tags:
     - leo
   frame:

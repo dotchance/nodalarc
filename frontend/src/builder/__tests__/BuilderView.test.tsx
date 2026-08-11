@@ -295,8 +295,6 @@ function visualCommandResponse(request: Record<string, any>) {
           installed: {},
           boresights: {},
           body: "nodalarc:bodies/earth.yaml",
-          lan_base: `172.${19 + groundNumber}`,
-          loopback_base: `10.${199 + groundNumber}`,
         },
         scheduling: structuredClone(LEO_SCHEDULING),
         originated_ipv4: [],
@@ -428,8 +426,6 @@ function visualCommandResponse(request: Record<string, any>) {
         installed: command.installed ?? {},
         boresights: command.boresights ?? {},
         body: command.body_ref ?? "nodalarc:bodies/earth.yaml",
-        lan_base: `172.${19 + number}`,
-        loopback_base: `10.${199 + number}`,
       },
       scheduling: structuredClone(LEO_SCHEDULING),
       originated_ipv4: [],
@@ -480,8 +476,6 @@ function visualCommandResponse(request: Record<string, any>) {
       node_id: `gw${number}`,
       node_ref: nodeRef,
       ...groundInstallation(nodeRef),
-      lo0_ipv4: "",
-      terr0_ipv4: "",
     });
   } else if (command.operation === "mint_ground_members") {
     affectedKind = "ground";
@@ -506,15 +500,12 @@ function visualCommandResponse(request: Record<string, any>) {
           lat_deg: siteIntent.lat_deg,
           lon_deg: siteIntent.lon_deg,
           alt_m: siteIntent.alt_m ?? 0,
-          lan_ipv4: `${ground.stamp.lan_base}.${index}.0/24`,
           tags: [],
           nodes: [{
             node_id: "gw1",
             node_ref: ground.stamp.node_ref,
             installed: ground.stamp.installed,
             boresights: ground.stamp.boresights,
-            lo0_ipv4: `${ground.stamp.loopback_base}.0.${index + 1}/32`,
-            terr0_ipv4: `${ground.stamp.lan_base}.${index}.1/24`,
           }],
         },
       });
@@ -1757,7 +1748,6 @@ describe("BuilderView resolve and world synchronization", () => {
       sites: [{ name: "Denver", lat_deg: 39.7, lon_deg: -104.9 }],
     });
     await waitFor(() => expect(editor.textContent).toContain("Denver"));
-    expect(editor.textContent).toContain("172.20.0.0/24");
 
     fireEvent.click(within(editor).getByRole("button", { name: "Edit Denver" }));
     fireEvent.change(within(editor).getByLabelText("gw1 node"), {

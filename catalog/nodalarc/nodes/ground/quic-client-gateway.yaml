@@ -1,0 +1,20 @@
+node:
+  id: quic-client-gateway
+  display_name: Earth LEO gateway carrying a QUIC client host
+  forwarding: routed
+  profile: nodalarc:profiles/frr-router.yaml
+  ethernet:
+  - id: terr0
+  terminals:
+  - id: access_ka
+    role: access
+    terminal: nodalarc:terminals/rf/rf-ka-leo-access.yaml
+    count: 8
+  payloads:
+  - id: quic-client
+    payload: nodalarc:payloads/picoquic-client.yaml
+    count: 1
+    attach: terr0
+  reference: https://fcc.report/IBFS/SAT-LOA-20200526-00055/2378671.pdf
+  notes: The leo-gateway model plus a mounted QUIC client host on its LAN
+    port. Site files choose installed terminal and payload counts.

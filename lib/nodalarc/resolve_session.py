@@ -44,6 +44,7 @@ from nodalarc.models.resolved_session import (
     ResolvedLinkRule,
     ResolvedNode,
     ResolvedNodeInterfaces,
+    ResolvedOriginatedPrefixes,
     ResolvedOrbitFacts,
     ResolvedRoutingDomain,
     ResolvedSession,
@@ -123,6 +124,14 @@ class _RuntimeNode:
     # The effective profile's adapter name; None when the profile has none.
     # A node is a router exactly when this adapter renders routing.
     profile_adapter: str | None = None
+    # Ethernet attachment facts pending allocation: one entry per interface
+    # the node's environment joins, (interface_name, site_id, segment_id).
+    # A site-installed node carries one entry per bound port; a mounted
+    # payload carries exactly one, named by its mount's attach port.
+    ethernet_bindings: tuple[tuple[str, str, str], ...] = ()
+    # Symbolic origination intent, resolved to concrete prefixes once
+    # segment subnets are allocated.
+    origination_targets: Any = None
 
 
 def default_catalog_roots() -> CatalogRoots:
@@ -163,7 +172,9 @@ def resolve_session_with_assets(
     support = runtime_support or RuntimeSupport.earth_luna()
     _check_runtime_support(cfg, support, roots)
 
-    runtime_nodes = _apply_addressing(cfg, _expand_segments(cfg, roots))
+    runtime_nodes = _apply_addressing(
+        cfg, tuple(_allocate_segment_addressing(list(_expand_segments(cfg, roots))))
+    )
     runtime_nodes = _derive_host_attachments(runtime_nodes)
     resolved_nodes = tuple(item.node for item in runtime_nodes)
     _check_ground_scheduling_support(resolved_nodes, support)
@@ -1021,9 +1032,8 @@ def _expand_site_placement(placement: _SitePlacement, roots: CatalogRoots) -> li
         # site-qualified form so `node:` selectors stay unique.
         local_id = f"{site_id}-{site_node['id']}"
         runtime_id = _runtime_id(site_id, site_node["id"])
-        _validate_ethernet_inventory(runtime_id, source_node, ground=True)
+        bindings = _validate_port_bindings(runtime_id, source_node, site_node, site)
         _validate_payload_installations(runtime_id, source_node, site_node)
-        _reject_unsupported_node_payloads(runtime_id, source_node, site_node)
         node_tags = set(tags)
         node_tags.update(site_node.get("tags") or ())
         scheduling = _merge_ground_scheduling(site_node.get("scheduling"), base_scheduling)
@@ -1065,7 +1075,7 @@ def _expand_site_placement(placement: _SitePlacement, roots: CatalogRoots) -> li
                             body_id=body["id"],
                         )
                     ),
-                    interfaces=_interfaces_from_site_node(site_node),
+                    interfaces=None,
                     wan_interfaces=tuple(
                         _wan_interfaces_for_site_node(runtime_id, source_node, site_node)
                     ),
@@ -1075,7 +1085,7 @@ def _expand_site_placement(placement: _SitePlacement, roots: CatalogRoots) -> li
                         lon_deg=float(site["location"]["lon_deg"]),
                         alt_m=float(site["location"]["alt_m"]),
                     ),
-                    originated_prefixes=originated,
+                    originated_prefixes=None,
                     forwarding=source_node["forwarding"],
                     profile=profile_ref,
                     profile_level=profile_level,
@@ -1085,9 +1095,142 @@ def _expand_site_placement(placement: _SitePlacement, roots: CatalogRoots) -> li
                 ),
                 body_facts=(_body_facts_from_catalog(body),),
                 profile_adapter=profile_adapter,
+                ethernet_bindings=tuple(
+                    (port, site_id, segment) for port, segment in sorted(bindings.items())
+                ),
+                origination_targets=originated,
+            )
+        )
+        expanded.extend(
+            _expand_ground_payload_members(
+                carrier_runtime_id=runtime_id,
+                carrier_local_id=local_id,
+                site_id=site_id,
+                site=site,
+                site_node=site_node,
+                source_node=source_node,
+                bindings=bindings,
+                groups=groups,
+                body=body,
+                node_tags=node_tags,
+                segment_profile=segment_profile,
+                base_clock=base_clock,
+                roots=roots,
             )
         )
     return expanded
+
+
+def _validate_port_bindings(
+    runtime_id: str,
+    source_node: dict[str, Any],
+    site_node: dict[str, Any],
+    site: dict[str, Any],
+) -> dict[str, str]:
+    """Every Ethernet port the node declares binds to exactly one declared
+    site segment; a binding naming an unknown port refuses."""
+
+    declared_ports = [port["id"] for port in source_node.get("ethernet", ())]
+    bindings = dict(site_node.get("interfaces") or {})
+    unknown_ports = sorted(set(bindings) - set(declared_ports))
+    if unknown_ports:
+        raise SessionResolutionError(
+            f"ground node {runtime_id!r} binds undeclared Ethernet port(s): {unknown_ports}; "
+            f"the node definition declares {sorted(declared_ports)}"
+        )
+    unbound_ports = sorted(set(declared_ports) - set(bindings))
+    if unbound_ports:
+        raise SessionResolutionError(
+            f"ground node {runtime_id!r} leaves declared Ethernet port(s) unbound: "
+            f"{unbound_ports}; every declared port binds to one site segment"
+        )
+    declared_segments = {segment["id"] for segment in site.get("ethernet", ())}
+    unknown_segments = sorted(set(bindings.values()) - declared_segments)
+    if unknown_segments:
+        raise SessionResolutionError(
+            f"ground node {runtime_id!r} binds unknown site segment(s): {unknown_segments}"
+        )
+    return bindings
+
+
+def _expand_ground_payload_members(
+    *,
+    carrier_runtime_id: str,
+    carrier_local_id: str,
+    site_id: str,
+    site: dict[str, Any],
+    site_node: dict[str, Any],
+    source_node: dict[str, Any],
+    bindings: dict[str, str],
+    groups: tuple[str, ...],
+    body: dict[str, Any],
+    node_tags: set[str],
+    segment_profile: str | None,
+    base_clock: Any,
+    roots: CatalogRoots,
+) -> list[_RuntimeNode]:
+    """Expand a site-installed node's populated payload mounts into runtime
+    members: real environments attached to the segment the mount's port
+    binds to, carried by the installing node."""
+
+    members: list[_RuntimeNode] = []
+    installations = site_node.get("payloads") or {}
+    mounts = {mount["id"]: mount for mount in source_node.get("payloads", ())}
+    for mount_id in sorted(installations):
+        installation = installations[mount_id]
+        mount = mounts[mount_id]
+        payload = _load_expected(mount["payload"], roots, "payload")
+        attach = mount["attach"]
+        segment = bindings[attach]
+        member_tags = set(node_tags)
+        member_tags.update(mount.get("tags") or ())
+        member_tags.update(installation.get("tags") or ())
+        for ordinal in range(1, int(installation["installed_count"]) + 1):
+            suffix = mount_id if ordinal == 1 else f"{mount_id}{ordinal}"
+            member_local = f"{carrier_local_id}-{suffix}"
+            member_runtime_id = _runtime_id(site_id, f"{site_node['id']}-{suffix}")
+            profile_ref, profile_level, profile_adapter = _effective_profile(
+                described=f"payload member {member_runtime_id!r}",
+                placed=mount.get("profile"),
+                segment_profile=segment_profile,
+                definition=payload.get("profile"),
+                roots=roots,
+            )
+            members.append(
+                _RuntimeNode(
+                    node=ResolvedNode(
+                        node_id=member_runtime_id,
+                        local_node_id=member_local,
+                        segment_id=groups[0],
+                        namespace=_normalize_token(site_id),
+                        placement_groups=groups,
+                        kind="ground_station",
+                        frame_id=body["id"],
+                        reference_body=body["id"],
+                        tags=tuple(sorted(member_tags)),
+                        tenant_id=site_node.get("tenant_id") or "default",
+                        terminal_inventory=(),
+                        interfaces=None,
+                        wan_interfaces=(),
+                        surface_position=ResolvedSurfacePosition(
+                            body=body["id"],
+                            lat_deg=float(site["location"]["lat_deg"]),
+                            lon_deg=float(site["location"]["lon_deg"]),
+                            alt_m=float(site["location"]["alt_m"]),
+                        ),
+                        originated_prefixes=None,
+                        forwarding=payload["forwarding"],
+                        profile=profile_ref,
+                        profile_level=profile_level,
+                        ground_scheduling=None,
+                        clock=base_clock,
+                    ),
+                    body_facts=(_body_facts_from_catalog(body),),
+                    profile_adapter=profile_adapter,
+                    ethernet_bindings=((attach, site_id, segment),),
+                )
+            )
+    return members
 
 
 def _validate_ethernet_inventory(
@@ -1096,18 +1239,29 @@ def _validate_ethernet_inventory(
     *,
     ground: bool,
 ) -> None:
-    declared = {port["id"] for port in source_node["ethernet"]}
+    """Space Ethernet ports are structural grammar ahead of the runtime.
+
+    A space node's declared ports (its carried buses) become kernel
+    interfaces only when the bus wiring chain lands; until then they fail
+    typed rather than resolve without their segments.
+    """
     if ground:
-        if declared != {"terr0"}:
-            raise SessionResolutionError(
-                f"ground node {runtime_id!r} must declare exactly the substrate Ethernet "
-                f"port 'terr0'; got {sorted(declared)}"
-            )
         return
+    declared = {port["id"] for port in source_node["ethernet"]}
     if declared:
-        raise SessionResolutionError(
-            f"space node {runtime_id!r} declares Ethernet port(s) {sorted(declared)}, but "
-            "the current substrate exposes Ethernet only as terr0 on placed ground nodes"
+        raise UnsupportedFeatureError(
+            [
+                UnsupportedFeature(
+                    category=FeatureCategory.PAYLOAD,
+                    value="space_ethernet",
+                    message=(
+                        f"space node {runtime_id!r} declares Ethernet port(s) "
+                        f"{sorted(declared)}; onboard bus execution is not supported "
+                        "by the current runtime"
+                    ),
+                    support_note="future runtime capability",
+                )
+            ]
         )
 
 
@@ -1387,21 +1541,23 @@ def _validate_payload_installations(
 def _reject_unsupported_node_payloads(
     runtime_id: str, source_node: dict[str, Any], site_node: dict[str, Any] | None
 ) -> None:
-    """Payloads are grammar-valid and runtime-future on every current profile.
+    """Space payload execution is structural grammar ahead of the runtime.
 
-    A node whose capability is authored via payloads must fail typed — it must
-    never appear in the resolved session without that capability.
+    Ground-installed payload mounts expand into runtime members through the
+    site path. A space-placed node's mounts need the bus wiring chain and
+    OME motion sharing; until those land they fail typed rather than
+    resolve without their environments.
     """
-    declared = bool(source_node.get("payloads")) or bool(site_node and site_node.get("payloads"))
-    if declared:
+    del site_node
+    if source_node.get("payloads"):
         raise UnsupportedFeatureError(
             [
                 UnsupportedFeature(
                     category=FeatureCategory.PAYLOAD,
-                    value="payloads",
+                    value="space_payloads",
                     message=(
-                        f"node {runtime_id!r} declares payloads; payload-provided "
-                        "terminals and resource groups are not supported by the "
+                        f"space node {runtime_id!r} mounts payload(s); payload "
+                        "execution on space placements is not supported by the "
                         "current runtime"
                     ),
                     support_note="future runtime capability",
@@ -1545,17 +1701,149 @@ def _wan_interfaces_for_site_node(
     return interfaces
 
 
-def _interfaces_from_site_node(site_node: dict[str, Any]) -> ResolvedNodeInterfaces:
-    lo0 = site_node["interfaces"]["lo0"]
-    terr0 = site_node["interfaces"]["terr0"]
-    return ResolvedNodeInterfaces(
-        lo0=_interface_address(lo0),
-        terr0=_interface_address(terr0),
+_SEGMENT_SUBNET_IPV4_POOL = ipaddress.ip_network("172.16.0.0/12")
+_SEGMENT_SUBNET_IPV6_POOL = ipaddress.ip_network("fd00:da7a::/32")
+_SEGMENT_IPV4_PREFIX = 24
+_SEGMENT_IPV6_PREFIX = 64
+
+
+def _allocate_segment_addressing(nodes: list[_RuntimeNode]) -> list[_RuntimeNode]:
+    """Allocate every Ethernet segment subnet and member address.
+
+    Deterministic by stable ids: segments order by (site, segment id) and
+    receive consecutive subnets from the resolver-owned pools; within a
+    segment, routed environments order before hosts, each class sorted by
+    node id, and receive consecutive host addresses. Loopbacks for
+    ground-placed environments come from the same resolver-owned loopback
+    pools the generated space nodes use. Symbolic origination resolves
+    against the allocated subnets; a target naming a segment the node is
+    not attached to refuses.
+    """
+
+    segment_keys = sorted(
+        {(site_id, segment) for item in nodes for _, site_id, segment in item.ethernet_bindings}
+    )
+    if not segment_keys:
+        return nodes
+
+    ipv4_subnets = _SEGMENT_SUBNET_IPV4_POOL.subnets(new_prefix=_SEGMENT_IPV4_PREFIX)
+    ipv6_subnets = _SEGMENT_SUBNET_IPV6_POOL.subnets(new_prefix=_SEGMENT_IPV6_PREFIX)
+    subnet_by_key: dict[tuple[str, str], tuple[Any, Any]] = {}
+    for key in segment_keys:
+        try:
+            subnet_by_key[key] = (next(ipv4_subnets), next(ipv6_subnets))
+        except StopIteration:  # pragma: no cover - 4096 /24s deep
+            raise SessionResolutionError(
+                f"segment subnet pool exhausted allocating {key[0]}/{key[1]}"
+            ) from None
+
+    def _segment_order(item: _RuntimeNode) -> tuple[int, str]:
+        return (0 if item.node.forwarding == "routed" else 1, item.node.node_id)
+
+    members_by_key: dict[tuple[str, str], list[_RuntimeNode]] = {}
+    for item in nodes:
+        for _, site_id, segment in item.ethernet_bindings:
+            members_by_key.setdefault((site_id, segment), []).append(item)
+
+    address_by_node_segment: dict[tuple[str, tuple[str, str]], tuple[str, str]] = {}
+    for key, members in members_by_key.items():
+        ipv4_net, ipv6_net = subnet_by_key[key]
+        ipv4_hosts = ipv4_net.hosts()
+        ipv6_hosts = ipv6_net.hosts()
+        for item in sorted(members, key=_segment_order):
+            try:
+                ipv4_host = next(ipv4_hosts)
+                ipv6_host = next(ipv6_hosts)
+            except StopIteration:
+                raise SessionResolutionError(
+                    f"segment {key[0]}/{key[1]} has more members than its "
+                    f"allocated subnet holds"
+                ) from None
+            address_by_node_segment[(item.node.node_id, key)] = (
+                f"{ipv4_host}/{_SEGMENT_IPV4_PREFIX}",
+                f"{ipv6_host}/{_SEGMENT_IPV6_PREFIX}",
+            )
+
+    existing_ipv4, existing_ipv6 = _existing_loopback_addresses(nodes)
+    lo_ipv4 = _available_host_addresses(
+        _DEFAULT_GENERATED_SPACE_LOOPBACK_IPV4_POOL, existing_ipv4
+    )
+    lo_ipv6 = _available_host_addresses(
+        _DEFAULT_GENERATED_SPACE_LOOPBACK_IPV6_POOL, existing_ipv6
     )
 
+    next_nodes: list[_RuntimeNode] = []
+    for item in sorted(nodes, key=lambda entry: entry.node.node_id):
+        if not item.ethernet_bindings:
+            next_nodes.append(item)
+            continue
+        ethernet: dict[str, ResolvedInterfaceAddress] = {}
+        bound_segments: dict[str, tuple[str, str]] = {}
+        for interface, site_id, segment in item.ethernet_bindings:
+            key = (site_id, segment)
+            ipv4_address, ipv6_address = address_by_node_segment[(item.node.node_id, key)]
+            ethernet[interface] = ResolvedInterfaceAddress(
+                ipv4=ipv4_address, ipv6=ipv6_address
+            )
+            bound_segments[segment] = key
+        interfaces = ResolvedNodeInterfaces(
+            lo0=ResolvedInterfaceAddress(
+                ipv4=f"{next(lo_ipv4)}/32", ipv6=f"{next(lo_ipv6)}/128"
+            ),
+            ethernet=ethernet,
+        )
+        originated = _resolve_origination(
+            item.node.node_id,
+            item.origination_targets,
+            bound_segments,
+            subnet_by_key,
+        )
+        next_nodes.append(
+            replace(
+                item,
+                node=item.node.model_copy(
+                    update={"interfaces": interfaces, "originated_prefixes": originated}
+                ),
+            )
+        )
+    order = {item.node.node_id: index for index, item in enumerate(nodes)}
+    next_nodes.sort(key=lambda entry: order[entry.node.node_id])
+    return next_nodes
 
-def _interface_address(value: dict[str, str]) -> ResolvedInterfaceAddress:
-    return ResolvedInterfaceAddress(ipv4=value.get("ipv4"), ipv6=value.get("ipv6"))
+
+def _resolve_origination(
+    node_id: str,
+    targets: Any,
+    bound_segments: dict[str, tuple[str, str]],
+    subnet_by_key: dict[tuple[str, str], tuple[Any, Any]],
+) -> ResolvedOriginatedPrefixes | None:
+    if targets is None:
+        return None
+    resolved: dict[str, list[str]] = {}
+    defaults = {"ipv4": "0.0.0.0/0", "ipv6": "::/0"}
+    for family_index, family in enumerate(("ipv4", "ipv6")):
+        entries = getattr(targets, family, None)
+        if not entries:
+            continue
+        prefixes: list[str] = []
+        for entry in entries:
+            if entry == "default":
+                prefixes.append(defaults[family])
+                continue
+            key = bound_segments.get(entry)
+            if key is None:
+                raise SessionResolutionError(
+                    f"node {node_id!r} originates segment {entry!r}, but is not "
+                    "bound or attached to it"
+                )
+            prefixes.append(str(subnet_by_key[key][family_index]))
+        seen: set[str] = set()
+        resolved[family] = [
+            prefix for prefix in prefixes if not (prefix in seen or seen.add(prefix))
+        ]
+    if not resolved:
+        return None
+    return ResolvedOriginatedPrefixes.model_validate(resolved)
 
 
 def _apply_addressing(
@@ -1570,33 +1858,20 @@ def _apply_addressing(
                 raise SessionResolutionError(
                     f"address pool assignment {assignment.id!r} matched zero nodes"
                 )
-            # Pool allocation is need-based and reservation-aware: a node that
-            # already carries an authored address for a family keeps it and
-            # consumes no pool slot, and every address already present in the
-            # session (authored site lo0s included) is excluded from the pool
-            # walk. Positional allocation that ignores authored addresses
-            # mints duplicate router identities.
-            reserved_ipv4, reserved_ipv6 = _existing_loopback_addresses(nodes)
+            # An explicit assignment owns the families it pools: every
+            # selected node's pooled family is allocated from the pool,
+            # replacing any resolver default. Addresses already present
+            # elsewhere in the session are excluded from the pool walk so
+            # no router identity is minted twice.
+            reserved_ipv4, reserved_ipv6 = _existing_loopback_addresses(
+                [item for item in nodes if item.node.node_id not in
+                 {sel.node.node_id for sel in selected}]
+            )
             by_id = {item.node.node_id: item for item in selected}
 
-            for item in selected:
-                current = item.node.interfaces
-                if current is None:
-                    continue
-                _validate_existing_loopback_families_inside_pool(
-                    current.lo0,
-                    ipv4_pool=assignment.ipv4_pool,
-                    ipv6_pool=assignment.ipv6_pool,
-                    prefix_length=assignment.prefix_length,
-                    assignment_id=assignment.id,
-                    node_id=item.node.node_id,
-                )
-
             def _needs(item: _RuntimeNode, family: str) -> bool:
-                interfaces = item.node.interfaces
-                if interfaces is None:
-                    return True
-                return getattr(interfaces.lo0, family) is None
+                del item, family
+                return True
 
             ipv4_ids = (
                 [nid for nid, item in by_id.items() if _needs(item, "ipv4")]
@@ -1771,17 +2046,16 @@ def _merge_loopback_assignment(
     assignment_id: str,
     node_id: str,
 ) -> ResolvedInterfaceAddress:
-    _validate_existing_loopback_families_inside_pool(
-        current,
-        ipv4_pool=ipv4_pool,
-        ipv6_pool=ipv6_pool,
-        prefix_length=prefix_length,
-        assignment_id=assignment_id,
-        node_id=node_id,
-    )
+    """An explicit assignment owns the families it pools.
+
+    Every loopback in the session is resolver-allocated; a family the
+    assignment pools replaces the resolver default, and a family it does
+    not pool keeps the default.
+    """
+    del prefix_length, assignment_id, node_id
     return ResolvedInterfaceAddress(
-        ipv4=current.ipv4 or allocated.ipv4,
-        ipv6=current.ipv6 or allocated.ipv6,
+        ipv4=allocated.ipv4 if ipv4_pool is not None else current.ipv4,
+        ipv6=allocated.ipv6 if ipv6_pool is not None else current.ipv6,
     )
 
 
@@ -1829,35 +2103,6 @@ def _allocate_pool_addresses(
             continue
         addresses.append(f"{address}/{prefix_length}")
     return addresses
-
-
-def _validate_existing_loopback_families_inside_pool(
-    current: ResolvedInterfaceAddress,
-    *,
-    ipv4_pool: str | None,
-    ipv6_pool: str | None,
-    prefix_length: int | None,
-    assignment_id: str,
-    node_id: str,
-) -> None:
-    for family, pool in (("ipv4", ipv4_pool), ("ipv6", ipv6_pool)):
-        if pool is None:
-            continue
-        actual = getattr(current, family)
-        if actual is None:
-            continue
-        pool_net = ipaddress.ip_network(pool, strict=False)
-        actual_iface = ipaddress.ip_interface(actual)
-        if actual_iface.ip not in pool_net:
-            raise SessionResolutionError(
-                f"address pool assignment {assignment_id!r} applies to {node_id!r}, "
-                f"but authored lo0 {actual!r} is outside allocated pool family {family}"
-            )
-        if prefix_length is not None and actual_iface.network.prefixlen != prefix_length:
-            raise SessionResolutionError(
-                f"address pool assignment {assignment_id!r} applies to {node_id!r}, "
-                f"but authored lo0 {actual!r} is not /{prefix_length}"
-            )
 
 
 def _merge_originated_prefixes(
@@ -2192,25 +2437,24 @@ def _derive_host_attachments(
 ) -> tuple[_RuntimeNode, ...]:
     """Derive substrate attachment facts for host-forwarding nodes.
 
-    A host node attaches to the LAN its authored terr0 address names; its
-    gateway is the routed node whose terr0 shares that subnet. With more
-    than one routed node on the LAN the lowest node id is the gateway,
-    deterministically. Host attachment is substrate configuration derived
-    from existing placement grammar; nothing here is a protocol decision.
+    A host node attaches to the segment its allocated Ethernet address
+    names; its gateway is the routed node holding an address on that same
+    subnet. With more than one routed node on the segment the lowest node
+    id is the gateway, deterministically. Host attachment is substrate
+    configuration derived from allocation; nothing here is a protocol
+    decision.
     """
-    routed_lan_ports: list[tuple[str, Any]] = []
+    routed_segment_ports: list[tuple[str, Any]] = []
     for item in runtime_nodes:
         node = item.node
-        if (
-            node.forwarding == "routed"
-            and node.interfaces is not None
-            and node.interfaces.terr0 is not None
-            and node.interfaces.terr0.ipv4
-        ):
-            routed_lan_ports.append(
-                (node.node_id, ipaddress.ip_interface(node.interfaces.terr0.ipv4))
-            )
-    routed_lan_ports.sort(key=lambda entry: entry[0])
+        if node.forwarding != "routed" or node.interfaces is None:
+            continue
+        for address in node.interfaces.ethernet.values():
+            if address.ipv4:
+                routed_segment_ports.append(
+                    (node.node_id, ipaddress.ip_interface(address.ipv4))
+                )
+    routed_segment_ports.sort(key=lambda entry: entry[0])
 
     # A session with zero routed nodes refuses at routing-domain
     # resolution with the documented message; deriving attachments first
@@ -2224,25 +2468,31 @@ def _derive_host_attachments(
         if node.forwarding != "host":
             next_nodes.append(item)
             continue
-        if (
-            node.interfaces is None
-            or node.interfaces.terr0 is None
-            or not node.interfaces.terr0.ipv4
-        ):
+        ethernet = dict(node.interfaces.ethernet) if node.interfaces is not None else {}
+        attach_entry = next(
+            (
+                (name, address)
+                for name, address in sorted(ethernet.items())
+                if address.ipv4
+            ),
+            None,
+        )
+        if attach_entry is None:
             if node.kind == "ground_station":
                 raise SessionResolutionError(
-                    f"host node {node.node_id!r} requires terr0 addressing from placement"
+                    f"host node {node.node_id!r} requires segment addressing from placement"
                 )
             # A host-forwarding space node is valid structural grammar with
-            # no derivable LAN attachment; it resolves without one, and any
-            # consumer that needs attachment facts refuses it there.
+            # no derivable segment attachment; it resolves without one, and
+            # any consumer that needs attachment facts refuses it there.
             next_nodes.append(item)
             continue
-        host_port = ipaddress.ip_interface(node.interfaces.terr0.ipv4)
+        interface_name, host_address = attach_entry
+        host_port = ipaddress.ip_interface(host_address.ipv4)
         gateway = next(
             (
                 (gateway_id, gateway_port)
-                for gateway_id, gateway_port in routed_lan_ports
+                for gateway_id, gateway_port in routed_segment_ports
                 if gateway_port.network == host_port.network
             ),
             None,
@@ -2250,12 +2500,13 @@ def _derive_host_attachments(
         if gateway is None:
             raise SessionResolutionError(
                 f"host node {node.node_id!r} has no routed gateway on its "
-                f"terr0 LAN {host_port.network}"
+                f"segment {host_port.network}"
             )
         gateway_id, gateway_port = gateway
         attached = node.model_copy(
             update={
                 "host_attachment": ResolvedHostAttachment(
+                    interface=interface_name,
                     ipv4=str(host_port),
                     gateway_ipv4=str(gateway_port.ip),
                     gateway_node_id=gateway_id,
@@ -3224,8 +3475,7 @@ def resolve_env_value(
     interfaces: dict[str, Any] = {}
     if node.interfaces is not None:
         interfaces["lo0"] = node.interfaces.lo0
-        if node.interfaces.terr0 is not None:
-            interfaces["terr0"] = node.interfaces.terr0
+        interfaces.update(node.interfaces.ethernet)
     interface = interfaces.get(value_from.interface)
     if interface is None:
         raise SessionResolutionError(

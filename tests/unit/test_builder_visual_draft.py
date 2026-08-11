@@ -644,8 +644,6 @@ def test_backend_atomically_creates_a_ground_for_a_site_reference(
     assert ground.segment_id == "ground-1"
     assert ground.display_name == "Ground segment 1"
     assert ground.stamp.body == "nodalarc:bodies/earth.yaml"
-    assert ground.stamp.lan_base == "172.20"
-    assert ground.stamp.loopback_base == "10.200"
     assert ground.scheduling["handover_mode"] == "mbb"
     assert ground.members[0].ref == "nodalarc:sites/luna/luna-artemis-base.yaml"
 
@@ -735,8 +733,6 @@ def test_backend_visual_commands_own_seeds_and_advance_one_fenced_revision(
     assert ground.stamp.installed
     assert ground.stamp.boresights
     assert {boresight.mode for boresight in ground.stamp.boresights.values()} == {"local_vertical"}
-    assert ground.stamp.lan_base == "172.20"
-    assert ground.stamp.loopback_base == "10.200"
     assert ground.scheduling["handover_mode"] == "mbb"
     assert ground.scheduling["ranking_order"] == [
         "service_priority",
@@ -862,18 +858,12 @@ def test_backend_command_mints_ground_sites_and_allocates_all_addresses(
         ("member-1", "site-1", "Denver"),
         ("member-2", "site-2", "Perth"),
     ]
-    assert [
-        (
-            member.site.lan_ipv4,
-            member.site.nodes[0].terr0_ipv4,
-            member.site.nodes[0].lo0_ipv4,
-        )
+    # Addresses are resolver-allocated at deploy; minted draft sites carry
+    # composition only.
+    assert all(
+        member.site is not None and member.site.nodes[0].node_ref is not None
         for member in members
-        if member.site is not None
-    ] == [
-        ("172.20.0.0/24", "172.20.0.1/24", "10.200.0.1/32"),
-        ("172.20.1.0/24", "172.20.1.1/24", "10.200.0.2/32"),
-    ]
+    )
 
     workspace = minted.draft.authoring_workspace
     ground = workspace.ground[0]
@@ -903,9 +893,7 @@ def test_backend_command_mints_ground_sites_and_allocates_all_addresses(
     assert third.draft.authoring_workspace is not None
     ames = third.draft.authoring_workspace.ground[0].members[-1]
     assert ames.site is not None
-    assert ames.site.lan_ipv4 == "172.20.2.0/24"
-    assert ames.site.nodes[0].terr0_ipv4 == "172.20.2.1/24"
-    assert ames.site.nodes[0].lo0_ipv4 == "10.200.0.3/32"
+    assert ames.site.nodes[0].node_ref is not None
 
 
 def test_backend_commands_derive_space_transitions_and_ground_installations(
@@ -1003,8 +991,7 @@ def test_backend_commands_derive_space_transitions_and_ground_installations(
     assert member.site is not None
     first_node = member.site.nodes[0]
     assert first_node.installed == {"access_ka": 64}
-    assert first_node.lo0_ipv4 == "10.200.0.1/32"
-    assert first_node.terr0_ipv4 == "172.20.0.1/24"
+    assert first_node.node_ref is not None
 
     site_with_gap = member.site.model_copy(
         update={"nodes": (*member.site.nodes, first_node.model_copy(update={"node_id": "gw3"}))}
@@ -1916,15 +1903,12 @@ def test_visual_ground_site_emits_explicit_installation_boresight(
                             lat_deg=39.7,
                             lon_deg=-104.9,
                             alt_m=1600,
-                            lan_ipv4="172.20.1.0/24",
                             nodes=(
                                 BuilderVisualSiteNode(
                                     node_id="gw1",
                                     node_ref="nodalarc:nodes/ground/leo-gateway.yaml",
                                     installed={"access_ka": 1},
                                     boresights={"access_ka": boresight},
-                                    lo0_ipv4="10.200.0.1/32",
-                                    terr0_ipv4="172.20.1.1/24",
                                 ),
                             ),
                         ),
@@ -1935,8 +1919,6 @@ def test_visual_ground_site_emits_explicit_installation_boresight(
                     installed={"access_ka": 1},
                     boresights={"access_ka": boresight},
                     body="nodalarc:bodies/earth.yaml",
-                    lan_base="172.20",
-                    loopback_base="10.200",
                 ),
             ),
         ),

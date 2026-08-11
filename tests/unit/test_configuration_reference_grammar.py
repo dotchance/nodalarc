@@ -48,13 +48,8 @@ def _orbit() -> dict[str, Any]:
 def _payload() -> dict[str, Any]:
     return {
         "id": "test-payload",
-        "terminal_slots": [
-            {
-                "id": "access-slot",
-                "terminal": "nodalarc:terminals/rf/access.yaml",
-            }
-        ],
-        "resource_groups": [],
+        "forwarding": "host",
+        "profile": "nodalarc:profiles/linux-host.yaml",
     }
 
 
@@ -62,7 +57,7 @@ def _node() -> dict[str, Any]:
     return {
         "id": "test-node",
         "forwarding": "routed",
-        "ethernet": [],
+        "ethernet": [{"id": "terr0"}],
         "terminals": [
             {
                 "id": "access",
@@ -76,6 +71,7 @@ def _node() -> dict[str, Any]:
                 "id": "payload",
                 "payload": "nodalarc:payloads/test-payload.yaml",
                 "count": 1,
+                "attach": "terr0",
             }
         ],
     }
@@ -87,17 +83,14 @@ def _site_node() -> dict[str, Any]:
         "node": "nodalarc:nodes/ground/gateway.yaml",
         "terminals": {},
         "payloads": {},
-        "interfaces": {
-            "lo0": {"ipv4": "192.0.2.1/32"},
-            "terr0": {"ipv4": "198.51.100.2/24"},
-        },
+        "interfaces": {"terr0": "lan0"},
     }
 
 
 def _body_fixed_site() -> dict[str, Any]:
     return {
         "id": "test-site",
-        "lan": {"ipv4": "198.51.100.0/24"},
+        "ethernet": [{"id": "lan0"}],
         "nodes": [_site_node()],
         "frame": {"body_fixed": {"body": "nodalarc:bodies/earth.yaml"}},
         "location": {"lat_deg": 0.0, "lon_deg": 0.0, "alt_m": 0.0},
@@ -118,7 +111,7 @@ def _lagrange_frame() -> dict[str, Any]:
 def _lagrange_site() -> dict[str, Any]:
     return {
         "id": "test-lagrange-site",
-        "lan": {"ipv4": "198.51.100.0/24"},
+        "ethernet": [{"id": "lan0"}],
         "nodes": [_site_node()],
         "frame": _lagrange_frame(),
     }
@@ -285,11 +278,11 @@ class ReferenceSlotCase:
 REFERENCE_SLOT_CASES = (
     ReferenceSlotCase("orbit.central_body", Orbit, _orbit, ("central_body",), "bodies"),
     ReferenceSlotCase(
-        "payload.terminal_slots.terminal",
+        "payload.profile",
         Payload,
         _payload,
-        ("terminal_slots", 0, "terminal"),
-        "terminals",
+        ("profile",),
+        "profiles",
     ),
     ReferenceSlotCase(
         "node.terminals.terminal",

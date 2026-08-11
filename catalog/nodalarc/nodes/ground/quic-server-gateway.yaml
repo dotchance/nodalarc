@@ -1,0 +1,20 @@
+node:
+  id: quic-server-gateway
+  display_name: Luna surface gateway carrying a QUIC server host
+  forwarding: routed
+  profile: nodalarc:profiles/frr-router.yaml
+  ethernet:
+  - id: terr0
+  terminals:
+  - id: access_s
+    role: access
+    terminal: nodalarc:terminals/rf/rf-s-luna-access.yaml
+    count: 4
+  payloads:
+  - id: quic-server
+    payload: nodalarc:payloads/picoquic-server.yaml
+    count: 1
+    attach: terr0
+  reference: https://www.nasa.gov/directorates/somd/space-communications-navigation-program/lunanet/
+  notes: The luna-surface-gateway model plus a mounted QUIC server host on
+    its LAN port. Site files choose installed terminal and payload counts.

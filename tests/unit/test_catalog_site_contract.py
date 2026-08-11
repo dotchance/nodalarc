@@ -14,17 +14,8 @@ ROOT = Path(__file__).resolve().parents[2]
 def _payload_data() -> dict[str, Any]:
     return {
         "id": "test-payload",
-        "terminal_slots": [
-            {"id": "slot-a", "terminal": "nodalarc:terminals/test-a.yaml"},
-            {"id": "slot-b", "terminal": "nodalarc:terminals/test-b.yaml"},
-        ],
-        "resource_groups": [
-            {
-                "id": "shared-power",
-                "slots": ["slot-a", "slot-b"],
-                "simultaneous_active": 1,
-            }
-        ],
+        "forwarding": "host",
+        "profile": "nodalarc:profiles/test.yaml",
     }
 
 
@@ -46,34 +37,27 @@ def _node_data() -> dict[str, Any]:
                 "id": "science",
                 "payload": "nodalarc:payloads/test.yaml",
                 "count": 1,
+                "attach": "lan",
             }
         ],
     }
 
 
 def _site_node_data(node_id: str, index: int) -> dict[str, Any]:
+    del index
     return {
         "id": node_id,
         "node": "nodalarc:nodes/test.yaml",
         "terminals": {},
         "payloads": {},
-        "interfaces": {
-            "lo0": {
-                "ipv4": f"10.0.0.{index}/32",
-                "ipv6": f"fd00::{index}/128",
-            },
-            "terr0": {
-                "ipv4": f"172.16.0.{index}/24",
-                "ipv6": f"fd10::{index}/64",
-            },
-        },
+        "interfaces": {"terr0": "lan0"},
     }
 
 
 def _site_data() -> dict[str, Any]:
     return {
         "id": "test-site",
-        "lan": {"ipv4": "172.16.0.0/24", "ipv6": "fd10::/64"},
+        "ethernet": [{"id": "lan0"}],
         "nodes": [_site_node_data("router-a", 1), _site_node_data("router-b", 2)],
         "frame": {"body_fixed": {"body": "nodalarc:bodies/earth.yaml"}},
         "location": {"lat_deg": 0, "lon_deg": 0, "alt_m": 0},
@@ -125,58 +109,35 @@ def test_no_user_catalog_or_obsolete_example_roots_remain() -> None:
 
 
 @pytest.mark.parametrize(
-    ("terminal_slots", "resource_groups", "message"),
+    ("mutation", "message"),
     [
-        (
-            [
-                {"id": "slot-a", "terminal": "nodalarc:terminals/test-a.yaml"},
-                {"id": "slot-a", "terminal": "nodalarc:terminals/test-b.yaml"},
-            ],
-            [],
-            "terminal slot ids must be unique",
-        ),
-        (
-            _payload_data()["terminal_slots"],
-            [
-                {"id": "group", "slots": ["slot-a"], "simultaneous_active": 1},
-                {"id": "group", "slots": ["slot-b"], "simultaneous_active": 1},
-            ],
-            "resource group ids must be unique",
-        ),
-        (
-            _payload_data()["terminal_slots"],
-            [{"id": "group", "slots": ["slot-a", "slot-a"], "simultaneous_active": 1}],
-            "slots must be unique",
-        ),
-        (
-            _payload_data()["terminal_slots"],
-            [{"id": "group", "slots": ["missing"], "simultaneous_active": 1}],
-            "references unknown terminal slot",
-        ),
-        (
-            _payload_data()["terminal_slots"],
-            [
-                {
-                    "id": "group",
-                    "slots": ["slot-a", "slot-b"],
-                    "simultaneous_active": 3,
-                }
-            ],
-            "simultaneous_active must not exceed its slot count",
-        ),
+        ({"forwarding": None}, "forwarding"),
+        ({"profile": None}, "profile"),
+        ({"terminal_slots": []}, "Extra inputs are not permitted"),
+        ({"ethernet": []}, "Extra inputs are not permitted"),
+        ({"payloads": []}, "Extra inputs are not permitted"),
     ],
 )
-def test_payload_relationships_are_enforced_by_canonical_model(
-    terminal_slots: list[dict[str, Any]],
-    resource_groups: list[dict[str, Any]],
+def test_payload_is_a_carried_environment_and_nothing_else(
+    mutation: dict[str, Any],
     message: str,
 ) -> None:
+    # A payload is forwarding + profile. It structurally cannot carry
+    # terminal slots, Ethernet ports, or payload mounts, so composition
+    # cannot recurse.
     payload = _payload_data()
-    payload["terminal_slots"] = terminal_slots
-    payload["resource_groups"] = resource_groups
+    payload.update(mutation)
 
     with pytest.raises(ValidationError, match=message):
         Payload.model_validate(payload)
+
+
+def test_payload_mount_attach_must_name_a_declared_port() -> None:
+    node = _node_data()
+    node["payloads"][0]["attach"] = "bus9"
+
+    with pytest.raises(ValidationError, match="attach must name a declared ethernet port"):
+        Node.model_validate(node)
 
 
 @pytest.mark.parametrize(
@@ -258,27 +219,19 @@ def test_site_node_ids_are_unique() -> None:
         Site.model_validate(site)
 
 
-def test_site_terr0_requires_matching_lan_family() -> None:
+def test_site_segment_ids_are_unique() -> None:
     site = _site_data()
-    del site["lan"]["ipv6"]
+    site["ethernet"].append({"id": "lan0"})
 
-    with pytest.raises(ValidationError, match="terr0 declares ipv6.*does not declare ipv6"):
+    with pytest.raises(ValidationError, match="segment ids must be unique"):
         Site.model_validate(site)
 
 
-def test_site_terr0_address_must_be_inside_declared_lan() -> None:
+def test_site_node_binding_must_name_a_declared_segment() -> None:
     site = _site_data()
-    site["nodes"][1]["interfaces"]["terr0"]["ipv4"] = "172.17.0.2/24"
+    site["nodes"][1]["interfaces"]["terr0"] = "lan9"
 
-    with pytest.raises(ValidationError, match="terr0 ipv4 address.*outside site lan"):
-        Site.model_validate(site)
-
-
-def test_site_rejects_duplicate_installed_addresses() -> None:
-    site = _site_data()
-    site["nodes"][1]["interfaces"]["terr0"]["ipv4"] = "172.16.0.1/25"
-
-    with pytest.raises(ValidationError, match="interface address.*installed more than once"):
+    with pytest.raises(ValidationError, match="binds undeclared segment"):
         Site.model_validate(site)
 
 

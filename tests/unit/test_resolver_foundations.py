@@ -102,7 +102,7 @@ def _interfaces(node_id: str = "ground-denver-router") -> ResolvedNodeInterfaces
     hi, lo = _unique_octets(node_id)
     return ResolvedNodeInterfaces(
         lo0=ResolvedInterfaceAddress(ipv4=f"10.255.{hi}.{lo}/32", ipv6=f"fd00::{hi:x}:{lo:x}/128"),
-        terr0=ResolvedInterfaceAddress(ipv4="172.16.1.1/24", ipv6="fd10::1/64"),
+        ethernet={"terr0": ResolvedInterfaceAddress(ipv4="172.16.1.1/24", ipv6="fd10::1/64")},
     )
 
 

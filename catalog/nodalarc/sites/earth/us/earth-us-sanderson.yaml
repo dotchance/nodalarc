@@ -5,11 +5,12 @@ site:
     source: latitude.to
     filing: SES-LIC-20200505-00498
     confidence: filing
-    notes: 'Longitude corrected from legacy catalog. Legacy site fact: antennas=8. Legacy site fact: antenna_diameter_m=1.52. Legacy site fact: band=Ka. Legacy operational mask was 25 degrees; operational
-      masks belong on link-rule endpoints in the current grammar.'
-  lan:
-    ipv4: 172.16.141.0/24
-    ipv6: fd00:da7a:8d::/64
+    notes: 'Longitude corrected from legacy catalog. Legacy site fact: antennas=8.
+      Legacy site fact: antenna_diameter_m=1.52. Legacy site fact: band=Ka. Legacy
+      operational mask was 25 degrees; operational masks belong on link-rule endpoints
+      in the current grammar.'
+  ethernet:
+  - id: lan0
   nodes:
   - id: gw1
     display_name: LEO Gateway
@@ -35,19 +36,14 @@ site:
             mode: local_vertical
     payloads: {}
     interfaces:
-      lo0:
-        ipv4: 10.255.0.147/32
-        ipv6: fd00:da7a:ffff::93/128
-      terr0:
-        ipv4: 172.16.141.1/24
-        ipv6: fd00:da7a:8d::1/64
+      terr0: lan0
     tags:
     - leo
     originated_prefixes:
       ipv4:
-      - 172.16.141.0/24
+      - lan0
       ipv6:
-      - fd00:da7a:8d::/64
+      - lan0
   frame:
     body_fixed:
       body: nodalarc:bodies/earth.yaml

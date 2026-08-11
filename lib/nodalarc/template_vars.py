@@ -116,7 +116,7 @@ def _terr0_site_peer_count(
     resolved: ResolvedSession, node: ResolvedNode, domain: ResolvedRoutingDomain
 ) -> int:
     """Routed peers sharing this node's site LAN within the same routing domain."""
-    if node.interfaces is None or node.interfaces.terr0 is None:
+    if node.interfaces is None or not node.interfaces.ethernet:
         return 0
     return sum(
         1
@@ -127,7 +127,7 @@ def _terr0_site_peer_count(
         and peer.forwarding == "routed"
         and peer.node_id in domain.node_ids
         and peer.interfaces is not None
-        and peer.interfaces.terr0 is not None
+        and peer.interfaces.ethernet
     )
 
 
@@ -423,11 +423,19 @@ def _boundary_static_routes(
 
 
 def _terr0_template_facts(node: ResolvedNode) -> tuple[list[dict[str, Any]], bool, bool, int]:
-    if node.interfaces is None or node.interfaces.terr0 is None:
+    if node.interfaces is None or not node.interfaces.ethernet:
         return [], False, False, 100
+    entries = sorted(node.interfaces.ethernet.items())
+    if len(entries) > 1 or entries[0][0] != "terr0":
+        raise ValueError(
+            f"ground node {node.node_id!r} carries segment interface(s) "
+            f"{[name for name, _ in entries]}; current FRR rendering supports "
+            "exactly one, named terr0"
+        )
+    segment = entries[0][1]
     addresses: list[dict[str, Any]] = []
     terr0_networks: set[str] = set()
-    for value in (node.interfaces.terr0.ipv4, node.interfaces.terr0.ipv6):
+    for value in (segment.ipv4, segment.ipv6):
         if value is None:
             continue
         iface = ipaddress.ip_interface(value)

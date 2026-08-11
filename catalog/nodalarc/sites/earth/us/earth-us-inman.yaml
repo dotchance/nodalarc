@@ -5,11 +5,11 @@ site:
     source: FCC IBFS
     filing: SES-LIC-20230627-01291
     confidence: filing
-    notes: 'Legacy site fact: antennas=1. Legacy site fact: antenna_diameter_m=1.85. Legacy site fact: band=Ka. Legacy operational mask was 25 degrees; operational masks belong on link-rule endpoints in
-      the current grammar.'
-  lan:
-    ipv4: 172.16.118.0/24
-    ipv6: fd00:da7a:76::/64
+    notes: 'Legacy site fact: antennas=1. Legacy site fact: antenna_diameter_m=1.85.
+      Legacy site fact: band=Ka. Legacy operational mask was 25 degrees; operational
+      masks belong on link-rule endpoints in the current grammar.'
+  ethernet:
+  - id: lan0
   nodes:
   - id: gw1
     display_name: LEO Gateway
@@ -35,19 +35,14 @@ site:
             mode: local_vertical
     payloads: {}
     interfaces:
-      lo0:
-        ipv4: 10.255.0.124/32
-        ipv6: fd00:da7a:ffff::7c/128
-      terr0:
-        ipv4: 172.16.118.1/24
-        ipv6: fd00:da7a:76::1/64
+      terr0: lan0
     tags:
     - leo
     originated_prefixes:
       ipv4:
-      - 172.16.118.0/24
+      - lan0
       ipv6:
-      - fd00:da7a:76::/64
+      - lan0
   frame:
     body_fixed:
       body: nodalarc:bodies/earth.yaml

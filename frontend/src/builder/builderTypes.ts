@@ -18,7 +18,7 @@ export type {
   BuilderWorld,
   BuilderWorldNode,
   BuilderWorldSegment,
-  OriginatedPrefixes,
+  ResolvedOriginatedPrefixes,
   ResolvedInterfaceAddress,
   ResolvedNodeInterfaces,
   ResolvedSurfacePosition,

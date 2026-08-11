@@ -3,16 +3,19 @@ site:
   display_name: Madrid QUIC lab (LEO gateway + client host)
   verified:
     source: nodalarc_catalog
-    notes: NodalArc demo site pairing a LEO gateway with a processing host
-      that runs the QUIC client endpoint.
-  lan:
-    ipv4: 172.16.180.0/24
-    ipv6: fd00:da7a:b4::/64
+    notes: NodalArc demo site pairing a LEO gateway with a processing host that runs
+      the QUIC client endpoint.
+  ethernet:
+  - id: lan0
   nodes:
   - id: gw1
     display_name: LEO Gateway
-    node: nodalarc:nodes/ground/leo-gateway.yaml
-    payloads: {}
+    node: nodalarc:nodes/ground/quic-client-gateway.yaml
+    payloads:
+      quic-client:
+        installed_count: 1
+        tags:
+        - quic_client
     terminals:
       access_ka:
         installed_count: 4
@@ -34,34 +37,14 @@ site:
             mode: local_vertical
     originated_prefixes:
       ipv4:
-      - 172.16.180.0/24
-      - 0.0.0.0/0
+      - lan0
+      - default
       ipv6:
-      - fd00:da7a:b4::/64
+      - lan0
     tags:
     - leo
     interfaces:
-      lo0:
-        ipv4: 10.255.0.240/32
-        ipv6: fd00:da7a:ffff::f0/128
-      terr0:
-        ipv4: 172.16.180.1/24
-        ipv6: fd00:da7a:b4::1/64
-  - id: quic-client
-    display_name: QUIC client host
-    node: nodalarc:nodes/ground/processing-host.yaml
-    profile: nodalarc:profiles/picoquic-client.yaml
-    payloads: {}
-    terminals: {}
-    tags:
-    - quic_client
-    interfaces:
-      lo0:
-        ipv4: 10.255.0.241/32
-        ipv6: fd00:da7a:ffff::f1/128
-      terr0:
-        ipv4: 172.16.180.9/24
-        ipv6: fd00:da7a:b4::9/64
+      terr0: lan0
   frame:
     body_fixed:
       body: nodalarc:bodies/earth.yaml

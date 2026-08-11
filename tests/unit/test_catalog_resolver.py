@@ -256,15 +256,18 @@ def test_generated_space_nodes_get_deterministic_runtime_loopbacks() -> None:
     satellites = [node for node in resolved.nodes if node.kind == "satellite"]
     assert satellites
     assert all(node.interfaces is not None for node in satellites)
+    # Ground environments allocate from the shared pool first (sorted by
+    # node id in the segment-allocation pass), so the first satellites
+    # follow the five simple-session ground routers.
     assert [node.interfaces.lo0.ipv4 for node in satellites[:3] if node.interfaces] == [
-        "100.64.0.1/32",
-        "100.64.0.2/32",
-        "100.64.0.3/32",
+        "100.64.0.6/32",
+        "100.64.0.7/32",
+        "100.64.0.8/32",
     ]
     assert [node.interfaces.lo0.ipv6 for node in satellites[:3] if node.interfaces] == [
-        "fd00:6e0::1/128",
-        "fd00:6e0::2/128",
-        "fd00:6e0::3/128",
+        "fd00:6e0::6/128",
+        "fd00:6e0::7/128",
+        "fd00:6e0::8/128",
     ]
 
 
@@ -328,12 +331,13 @@ def test_explicit_routing_domains_must_be_disjoint() -> None:
         resolve_session(raw)
 
 
-def test_placed_ground_node_without_loopback_authority_fails_loudly(tmp_path: Path) -> None:
+def test_placed_ground_nodes_get_deterministic_allocated_loopbacks(tmp_path: Path) -> None:
+    # Loopback authority is the resolver everywhere; a placed ground node
+    # always receives a deterministic allocated lo0.
     raw = _load()
     site = load_configuration_yaml(
         (CATALOG / "sites" / "earth" / "us" / "earth-us-hawthorne.yaml").read_text(encoding="utf-8")
     )
-    del site["site"]["nodes"][0]["interfaces"]["lo0"]
 
     user_root = tmp_path / "user"
     site_path = user_root / "sites" / "earth" / "us" / "earth-us-hawthorne.yaml"
@@ -356,8 +360,28 @@ def test_placed_ground_node_without_loopback_authority_fails_loudly(tmp_path: Pa
     raw["segments"][1]["placement"]["from_site_set"] = "user:site-sets/broken-site-set.yaml"
     roots = CatalogRoots.from_catalog_root(CATALOG, user_root=user_root)
 
-    with pytest.raises(SessionResolutionError, match="invalid catalog object|lo0"):
-        resolve_session(raw, catalog_roots=roots)
+    resolution = resolve_session(raw, catalog_roots=roots)
+    ground = [
+        node
+        for node in resolution.nodes
+        if node.kind == "ground_station" and node.namespace == "earth-us-hawthorne"
+    ]
+    assert ground
+    for node in ground:
+        assert node.interfaces is not None
+        assert node.interfaces.lo0.ipv4 is not None
+        assert node.interfaces.lo0.ipv6 is not None
+
+    again = resolve_session(raw, catalog_roots=roots)
+    assert {
+        node.node_id: node.interfaces.lo0.ipv4
+        for node in resolution.nodes
+        if node.interfaces is not None
+    } == {
+        node.node_id: node.interfaces.lo0.ipv4
+        for node in again.nodes
+        if node.interfaces is not None
+    }
 
 
 def test_unknown_top_level_session_keys_are_rejected_by_canonical_model() -> None:

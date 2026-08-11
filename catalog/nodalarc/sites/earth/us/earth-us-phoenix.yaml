@@ -5,10 +5,10 @@ site:
     source: FCC IBFS
     filing: SES-STA-20240119-00101
     confidence: filing
-    notes: 32-antenna gateway site modeled as one gateway router with 32 explicit Ka terminal instances.
-  lan:
-    ipv4: 172.16.133.0/24
-    ipv6: fd00:da7a:85::/64
+    notes: 32-antenna gateway site modeled as one gateway router with 32 explicit
+      Ka terminal instances.
+  ethernet:
+  - id: lan0
   nodes:
   - id: gw1
     display_name: LEO Gateway
@@ -34,17 +34,12 @@ site:
             mode: local_vertical
     payloads: {}
     interfaces:
-      lo0:
-        ipv4: 10.255.0.139/32
-        ipv6: fd00:da7a:ffff::8b/128
-      terr0:
-        ipv4: 172.16.133.1/24
-        ipv6: fd00:da7a:85::1/64
+      terr0: lan0
     originated_prefixes:
       ipv4:
-      - 172.16.133.0/24
+      - lan0
       ipv6:
-      - fd00:da7a:85::/64
+      - lan0
     tags:
     - leo
   frame:

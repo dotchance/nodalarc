@@ -754,12 +754,31 @@ def _fixed_link_interfaces_by_node(resolved: ResolvedSession) -> dict[str, list[
     }
 
 
-def _terr0_manifest_addresses(node: ResolvedNode) -> list[str]:
-    if node.interfaces is None or node.interfaces.terr0 is None:
+def _segment_manifest_addresses(node: ResolvedNode) -> list[str]:
+    """The node's single segment interface, as manifest addresses.
+
+    The current substrate wires one terrestrial segment interface per pod,
+    named terr0. Multi-segment nodes and other interface names arrive with
+    the segment wiring expansion; until then they refuse loudly rather
+    than wire something other than what was declared.
+    """
+    if node.interfaces is None or not node.interfaces.ethernet:
         return []
+    entries = sorted(node.interfaces.ethernet.items())
+    if len(entries) > 1:
+        raise ValueError(
+            f"node {node.node_id!r} has {len(entries)} segment interfaces; "
+            "the current substrate wires exactly one"
+        )
+    name, interface = entries[0]
+    if name != "terr0":
+        raise ValueError(
+            f"node {node.node_id!r} segment interface is named {name!r}; "
+            "the current substrate wires terr0 only"
+        )
     return [
         address
-        for address in (node.interfaces.terr0.ipv4, node.interfaces.terr0.ipv6)
+        for address in (interface.ipv4, interface.ipv6)
         if address is not None and ipaddress.ip_interface(address)
     ]
 
@@ -1156,7 +1175,7 @@ def _site_lans_for_manifest(
     for node in resolved.nodes:
         if node.kind != "ground_station":
             continue
-        if node.interfaces is None or node.interfaces.terr0 is None:
+        if node.interfaces is None or not node.interfaces.ethernet:
             continue
         site_id = node.namespace
         if site_id is None:
@@ -1284,7 +1303,7 @@ def write_wiring_manifest(
                 "isl_interfaces": [],
                 "gnd_interfaces": [],
                 "terrestrial": {
-                    "addresses": _terr0_manifest_addresses(node),
+                    "addresses": _segment_manifest_addresses(node),
                     "site_id": node.namespace,
                     "gateway": node.host_attachment.gateway_ipv4,
                 },
@@ -1331,7 +1350,7 @@ def write_wiring_manifest(
                 "isl_interfaces": [],
                 "gnd_interfaces": [{"name": iface.name} for iface in node.wan_interfaces],
                 "terrestrial": {
-                    "addresses": _terr0_manifest_addresses(node),
+                    "addresses": _segment_manifest_addresses(node),
                     # Ground namespace IS the site (site-anchored identity) —
                     # terr0 is a port on that site's LAN segment.
                     "site_id": node.namespace,

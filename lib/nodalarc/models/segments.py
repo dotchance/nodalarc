@@ -18,10 +18,9 @@ from nodalarc.model_validation import (
     AwareTimestamp,
     FiniteFloat,
     Identifier,
-    Ipv4Network,
-    Ipv6Network,
     NonNegativeFiniteFloat,
     NonNegativeInteger,
+    OriginationTarget,
     PositiveFiniteFloat,
     PositiveInteger,
     RelativeAssetPath,
@@ -58,12 +57,18 @@ class SegmentClock(BaseModel):
 
 
 class OriginatedPrefixes(BaseModel):
-    """Routing injection intent for a placed node."""
+    """Routing injection intent for a placed node, expressed symbolically.
+
+    Each entry names a declared Ethernet segment the node is bound or
+    attached to, resolving to that segment's allocated subnet in the list's
+    address family, or the token ``default`` for the default route. No
+    literal prefix appears in configuration.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    ipv4: tuple[Ipv4Network, ...] | None = None
-    ipv6: tuple[Ipv6Network, ...] | None = None
+    ipv4: tuple[OriginationTarget, ...] | None = None
+    ipv6: tuple[OriginationTarget, ...] | None = None
 
     @model_validator(mode="after")
     def _not_empty(self) -> OriginatedPrefixes:

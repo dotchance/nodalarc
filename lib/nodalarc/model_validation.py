@@ -202,6 +202,14 @@ PinnedImage = Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9._/-]*@sha256:[0-9a
 RegistryHost = Annotated[str, Field(pattern=r"^[a-z0-9]([a-z0-9.-]*[a-z0-9])?(:[0-9]{1,5})?$")]
 EnvName = Annotated[str, Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")]
 
+# An Ethernet segment id doubles as a kernel interface name (IFNAMSIZ
+# bounds usable names at 15 bytes).
+SegmentId = Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9_-]*$", max_length=15)]
+
+# One symbolic routing-origination entry: a declared segment id, or the
+# default route.
+OriginationTarget = Annotated[str, Field(pattern=r"^(default|[a-z0-9][a-z0-9_-]*)$", max_length=15)]
+
 
 def nonempty(values: Any) -> Any:
     """A present sequence must be non-empty (``None`` is allowed = filter absent)."""

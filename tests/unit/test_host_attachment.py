@@ -33,13 +33,14 @@ def test_host_nodes_resolve_with_derived_attachment() -> None:
         attachment = host.host_attachment
         assert attachment is not None
         assert attachment.interface == "terr0"
-        # The host's address is its authored terr0 placement.
-        assert attachment.ipv4 == host.interfaces.terr0.ipv4
-        # The gateway is the routed node sharing the site LAN, named by id,
-        # and its address is that node's terr0 without the prefix.
+        # The host's address is its allocated segment assignment.
+        assert attachment.ipv4 == host.interfaces.ethernet["terr0"].ipv4
+        # The gateway is the routed node sharing the segment, named by id,
+        # and its address is that node's segment address without the prefix.
         gateway = routers[attachment.gateway_node_id]
-        assert gateway.interfaces.terr0.ipv4.split("/", 1)[0] == attachment.gateway_ipv4
-        assert attachment.ipv4.split("/", 1)[1] == gateway.interfaces.terr0.ipv4.split("/", 1)[1]
+        gateway_ipv4 = gateway.interfaces.ethernet["terr0"].ipv4
+        assert gateway_ipv4.split("/", 1)[0] == attachment.gateway_ipv4
+        assert attachment.ipv4.split("/", 1)[1] == gateway_ipv4.split("/", 1)[1]
 
 
 def test_routed_nodes_carry_no_attachment() -> None:

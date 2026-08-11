@@ -9,7 +9,7 @@
  *  are presentation only and computed from ephemeris physical facts.
  */
 
-import { useState } from "react";
+import React, { useState } from "react";
 import { KeyValueRow } from "../ui/KeyValueRow";
 import { EditorCard } from "./editorKit";
 import type { EphemerisNode, SessionEphemeris } from "../sim/ephemeris";
@@ -140,12 +140,16 @@ export function BuilderInspector({ node, ephemeris }: BuilderInspectorProps) {
           {node.forwarding && <KeyValueRow label="forwarding">{node.forwarding}</KeyValueRow>}
           {lo0?.ipv4 && <KeyValueRow label="lo0 ipv4">{lo0.ipv4}</KeyValueRow>}
           {lo0?.ipv6 && <KeyValueRow label="lo0 ipv6">{lo0.ipv6}</KeyValueRow>}
-          {node.interfaces?.terr0?.ipv4 && (
-            <KeyValueRow label="terr0 ipv4">{node.interfaces.terr0.ipv4}</KeyValueRow>
-          )}
-          {node.interfaces?.terr0?.ipv6 && (
-            <KeyValueRow label="terr0 ipv6">{node.interfaces.terr0.ipv6}</KeyValueRow>
-          )}
+          {Object.entries(node.interfaces?.ethernet ?? {}).map(([name, address]) => (
+            <React.Fragment key={name}>
+              {address.ipv4 && (
+                <KeyValueRow label={`${name} ipv4`}>{address.ipv4}</KeyValueRow>
+              )}
+              {address.ipv6 && (
+                <KeyValueRow label={`${name} ipv6`}>{address.ipv6}</KeyValueRow>
+              )}
+            </React.Fragment>
+          ))}
           {node.originated_prefixes?.ipv4?.map((prefix) => (
             <KeyValueRow label="originates" key={prefix}>
               {prefix}

@@ -1598,13 +1598,7 @@ runtime execution:
 - `bgp` and `dtn_bundle` routing boundaries;
 - `spice_kernel_stack` and `operator_supplied_spk` ephemeris providers;
 - bodies outside the supported Earth-Luna profile;
-- workload adapters other than `frr`;
-- the amended payload, payload-mount, node-Ethernet, site-segment, and
-  origination grammar on this page (compute payloads, `attach`, space
-  Ethernet ports, `site.ethernet`, port-to-segment bindings, allocated
-  segment addressing, symbolic `originated_prefixes`): defined ahead of the
-  installed models, which still enforce the prior forms; the matching model
-  and resolver change follows this definition.
+- workload adapters other than `frr`.
 
 Unsupported features fail explicitly. They are never silently removed,
 flattened, translated to another feature, or treated as successful execution.

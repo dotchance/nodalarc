@@ -283,13 +283,21 @@ class TestUnconsumedGrammarClass:
         payload_ref = CatalogRef("user:payloads/runtime-support-camera.yaml")
         raw.create_catalog(
             payload_ref,
-            {"payload": {"id": payload_ref.relative_path.stem, "terminal_slots": []}},
+            {
+                "payload": {
+                    "id": payload_ref.relative_path.stem,
+                    "forwarding": "host",
+                    "profile": "nodalarc:profiles/linux-host.yaml",
+                }
+            },
         )
+        node["ethernet"] = [{"id": "bus0"}]
         node["payloads"] = [
             {
                 "id": "cam-mount",
                 "count": 1,
                 "payload": str(payload_ref),
+                "attach": "bus0",
             }
         ]
         raw.write_catalog(raw.space_node_ref, node_document)

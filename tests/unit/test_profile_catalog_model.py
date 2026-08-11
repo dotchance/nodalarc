@@ -278,7 +278,7 @@ def test_profile_is_readable_at_every_assignment_level() -> None:
             "profile": reference,
             "terminals": {},
             "payloads": {},
-            "interfaces": {"lo0": {"ipv4": "10.255.0.2/32"}, "terr0": {"ipv4": "172.16.150.9/24"}},
+            "interfaces": {"terr0": "lan0"},
         }
     )
     assert site_node.profile == reference

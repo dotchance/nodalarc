@@ -3,10 +3,10 @@ site:
   display_name: Frankfurt polar LEO gateway
   verified:
     source: legacy_catalog
-    notes: Polar LEO demo gateway using the researched Frankfurt location and a LEO access terminal sized for the 780 km shell.
-  lan:
-    ipv4: 172.16.21.0/24
-    ipv6: fd00:da7a:15::/64
+    notes: Polar LEO demo gateway using the researched Frankfurt location and a LEO
+      access terminal sized for the 780 km shell.
+  ethernet:
+  - id: lan0
   nodes:
   - id: gw1
     display_name: LEO Gateway
@@ -32,18 +32,13 @@ site:
             mode: local_vertical
     payloads: {}
     interfaces:
-      lo0:
-        ipv4: 10.255.0.24/32
-        ipv6: fd00:da7a:ffff::18/128
-      terr0:
-        ipv4: 172.16.21.1/24
-        ipv6: fd00:da7a:15::1/64
+      terr0: lan0
     originated_prefixes:
       ipv4:
-      - 172.16.21.0/24
-      - 0.0.0.0/0
+      - lan0
+      - default
       ipv6:
-      - fd00:da7a:15::/64
+      - lan0
     tags:
     - leo
   frame:

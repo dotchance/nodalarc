@@ -20,11 +20,11 @@ from nodalarc.models.link_rules import LinkLabel
 from nodalarc.models.resolved_session import (
     NodeKind,
     ResolvedNodeInterfaces,
+    ResolvedOriginatedPrefixes,
     ResolvedSurfacePosition,
     ResolvedTerminalBlock,
 )
 from nodalarc.models.segment_session import SessionMeta
-from nodalarc.models.segments import OriginatedPrefixes
 
 
 class BuilderLinkEndpoint(BaseModel):
@@ -91,7 +91,7 @@ class BuilderWorldNode(BaseModel):
     forwarding: Literal["routed", "host", "bridge", "control_only"] | None = None
     terminal_inventory: tuple[ResolvedTerminalBlock, ...] = ()
     interfaces: ResolvedNodeInterfaces | None = None
-    originated_prefixes: OriginatedPrefixes | None = None
+    originated_prefixes: ResolvedOriginatedPrefixes | None = None
 
 
 class BuilderNodeInterfaceFacts(BaseModel):

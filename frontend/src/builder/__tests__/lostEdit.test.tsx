@@ -87,15 +87,12 @@ function draftSite(): DraftSiteObject {
     lat_deg: 0,
     lon_deg: 0,
     alt_m: 0,
-    lan_ipv4: "172.20.0.0/24",
     tags: [],
     nodes: [{
       node_id: "gw1",
       node_ref: NODE_REF,
       installed: {},
       boresights: {},
-      lo0_ipv4: "10.200.0.1/32",
-      terr0_ipv4: "172.20.0.1/24",
     }],
   };
 }

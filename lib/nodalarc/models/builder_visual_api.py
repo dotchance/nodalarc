@@ -209,8 +209,6 @@ class BuilderVisualSiteNode(_BuilderVisualModel):
     node_ref: NodeRef | None = None
     installed: dict[str, int] = Field(default_factory=dict)
     boresights: dict[str, BuilderVisualGroundBoresight]
-    lo0_ipv4: str = ""
-    terr0_ipv4: str = ""
 
 
 class BuilderVisualSite(_BuilderVisualModel):
@@ -222,7 +220,6 @@ class BuilderVisualSite(_BuilderVisualModel):
     lat_deg: float | None = None
     lon_deg: float | None = None
     alt_m: float | None = None
-    lan_ipv4: str = ""
     tags: tuple[str, ...] = ()
     nodes: tuple[BuilderVisualSiteNode, ...] = ()
 
@@ -247,8 +244,6 @@ class BuilderVisualGroundStamp(_BuilderVisualModel):
     installed: dict[str, int] = Field(default_factory=dict)
     boresights: dict[str, BuilderVisualGroundBoresight]
     body: BodyRef | None = None
-    lan_base: str = ""
-    loopback_base: str = ""
 
 
 class BuilderVisualGroundDraft(_BuilderVisualModel):

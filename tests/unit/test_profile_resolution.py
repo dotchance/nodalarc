@@ -214,8 +214,6 @@ def test_profile_naming_an_unavailable_adapter_is_refused(tmp_path: Path) -> Non
 def test_env_value_from_resolves_and_refuses_honestly(tmp_path: Path) -> None:
     def with_env(site):
         site["nodes"][0]["tags"] = list(site["nodes"][0].get("tags") or []) + ["env_target"]
-        # Make the target genuinely single-stack so the family refusal is real.
-        site["nodes"][0]["interfaces"]["terr0"].pop("ipv6", None)
 
     def profile_with_env(entries):
         document = _user_profile_document("override-profile")
@@ -239,11 +237,13 @@ def test_env_value_from_resolves_and_refuses_honestly(tmp_path: Path) -> None:
     with pytest.raises(SessionResolutionError, match="matches no node"):
         resolve_session(session, catalog_roots=roots)
 
-    no_family = [{"name": "PEER", "value_from": {"tag": "env_target", "interface": "terr0", "family": "ipv6"}}]
-    session, roots = _session_with_user_ground(tmp_path / "nofam", site_mutation=with_env)
-    _write_yaml(tmp_path / "nofam" / "user" / "profiles" / "override-profile.yaml", profile_with_env(no_family))
+    # Allocated segments always carry both families, so the live refusal
+    # for a bad interface reference is the missing-interface one.
+    no_interface = [{"name": "PEER", "value_from": {"tag": "env_target", "interface": "bus7", "family": "ipv4"}}]
+    session, roots = _session_with_user_ground(tmp_path / "noif", site_mutation=with_env)
+    _write_yaml(tmp_path / "noif" / "user" / "profiles" / "override-profile.yaml", profile_with_env(no_interface))
     session["segments"][1]["profile"] = USER_PROFILE
-    with pytest.raises(SessionResolutionError, match="has no ipv6 address"):
+    with pytest.raises(SessionResolutionError, match="has no interface"):
         resolve_session(session, catalog_roots=roots)
 
 
@@ -262,7 +262,10 @@ def test_shipped_quic_session_records_node_level_endpoint_profiles() -> None:
         if "picoquic" in node.profile
     ]
     assert endpoint_nodes
-    assert all(node.profile_level == "node" for node in endpoint_nodes)
+    # Endpoint members inherit their profile from the mounted payload
+    # object, the definition level of the three-level rule.
+    assert all(node.profile_level == "node_definition" for node in endpoint_nodes)
+    assert all("-quic-" in node.node_id for node in endpoint_nodes)
     routers = [node for node in resolution.nodes if node.profile == FRR_PROFILE]
     assert routers
     assert all(node.profile_level == "node_definition" for node in routers)

@@ -4,7 +4,6 @@
 
 from __future__ import annotations
 
-import ipaddress
 import re
 from typing import Annotated, Literal
 
@@ -33,10 +32,6 @@ from nodalarc.model_validation import (
     EnvName,
     FiniteFloat,
     Identifier,
-    Ipv4Interface,
-    Ipv4Network,
-    Ipv6Interface,
-    Ipv6Network,
     MountPath,
     NonNegativeFiniteFloat,
     NonNegativeInteger,
@@ -44,6 +39,7 @@ from nodalarc.model_validation import (
     PositiveFiniteFloat,
     PositiveInteger,
     RegistryHost,
+    SegmentId,
     StrictBoolean,
     TerminalMedium,
 )
@@ -227,52 +223,21 @@ class Orbit(_FrozenModel):
         return self
 
 
-class TerminalSlot(_FrozenModel):
-    id: Identifier
-    terminal: TerminalRef
-    tags: tuple[Identifier, ...] | None = None
-
-
-class PayloadResourceGroup(_FrozenModel):
-    id: Identifier
-    slots: tuple[Identifier, ...] = Field(min_length=1)
-    simultaneous_active: PositiveInteger
-
-
 class Payload(_FrozenModel):
+    """A carried compute environment: what it is and what it runs.
+
+    A payload declares no Ethernet ports, no terminal mounts, and no payload
+    mounts, so payload composition cannot recurse. Where it attaches is its
+    mount's decision.
+    """
+
     id: Identifier
     display_name: str | None = None
-    terminal_slots: tuple[TerminalSlot, ...] = Field(min_length=1)
-    resource_groups: tuple[PayloadResourceGroup, ...] = ()
+    forwarding: Literal["routed", "host"]
+    profile: ProfileRef
+    tags: tuple[Identifier, ...] | None = None
     reference: Url | None = None
     notes: str | None = None
-
-    @model_validator(mode="after")
-    def _valid_resource_groups(self) -> Payload:
-        slot_ids = [slot.id for slot in self.terminal_slots]
-        if len(set(slot_ids)) != len(slot_ids):
-            raise ValueError("payload terminal slot ids must be unique")
-
-        group_ids = [group.id for group in self.resource_groups]
-        if len(set(group_ids)) != len(group_ids):
-            raise ValueError("payload resource group ids must be unique")
-
-        declared_slots = set(slot_ids)
-        for group in self.resource_groups:
-            if len(set(group.slots)) != len(group.slots):
-                raise ValueError(f"payload resource group {group.id!r} slots must be unique")
-            unknown_slots = sorted(set(group.slots) - declared_slots)
-            if unknown_slots:
-                raise ValueError(
-                    f"payload resource group {group.id!r} references unknown terminal "
-                    f"slot(s): {unknown_slots}"
-                )
-            if group.simultaneous_active > len(group.slots):
-                raise ValueError(
-                    f"payload resource group {group.id!r} simultaneous_active must not "
-                    "exceed its slot count"
-                )
-        return self
 
 
 LinuxCapability = Literal[
@@ -500,7 +465,7 @@ class Profile(_FrozenModel):
 
 
 class EthernetPort(_FrozenModel):
-    id: Identifier
+    id: SegmentId
     tags: tuple[Identifier, ...] | None = None
 
 
@@ -516,7 +481,11 @@ class TerminalMount(_FrozenModel):
 class PayloadMount(_FrozenModel):
     id: Identifier
     payload: PayloadRef
+    profile: ProfileRef | None = None
     count: PositiveInteger
+    # The Ethernet port of the mounting node whose segment the mounted
+    # environment joins; also the mounted environment's interface name.
+    attach: SegmentId
     tags: tuple[Identifier, ...] | None = None
 
 
@@ -543,6 +512,14 @@ class Node(_FrozenModel):
         payload_ids = [mount.id for mount in self.payloads]
         if len(set(payload_ids)) != len(payload_ids):
             raise ValueError("node payload mount ids must be unique")
+        undeclared_attach = [
+            mount.id for mount in self.payloads if mount.attach not in set(ethernet_ids)
+        ]
+        if undeclared_attach:
+            raise ValueError(
+                "payload mount attach must name a declared ethernet port: "
+                f"{undeclared_attach}"
+            )
         invalid_boresights = [
             mount.id
             for mount in self.terminals
@@ -561,17 +538,6 @@ class VerificationMetadata(_FrozenModel):
     reference: Url | None = None
     confidence: Identifier | None = None
     notes: str | None = None
-
-
-class SiteLan(_FrozenModel):
-    ipv4: Ipv4Network | None = None
-    ipv6: Ipv6Network | None = None
-
-    @model_validator(mode="after")
-    def _has_address_family(self) -> SiteLan:
-        if self.ipv4 is None and self.ipv6 is None:
-            raise ValueError("site lan requires ipv4 and/or ipv6")
-        return self
 
 
 class BodyFixedFrame(_FrozenModel):
@@ -594,22 +560,6 @@ class SiteLocation(_FrozenModel):
     lat_deg: Annotated[FiniteFloat, Field(ge=-90, le=90)]
     lon_deg: Annotated[FiniteFloat, Field(ge=-180, le=180)]
     alt_m: FiniteFloat
-
-
-class InterfaceAddress(_FrozenModel):
-    ipv4: Ipv4Interface | None = None
-    ipv6: Ipv6Interface | None = None
-
-    @model_validator(mode="after")
-    def _has_address_family(self) -> InterfaceAddress:
-        if self.ipv4 is None and self.ipv6 is None:
-            raise ValueError("interface requires ipv4 and/or ipv6")
-        return self
-
-
-class NodeInterfaces(_FrozenModel):
-    lo0: InterfaceAddress
-    terr0: InterfaceAddress
 
 
 class PayloadInstallation(_FrozenModel):
@@ -638,7 +588,9 @@ class SiteNode(_FrozenModel):
     profile: ProfileRef | None = None
     terminals: dict[Identifier, TerminalInstallation]
     payloads: dict[Identifier, PayloadInstallation]
-    interfaces: NodeInterfaces
+    # Binds each Ethernet port the referenced node definition declares to
+    # one declared site segment, port id to segment id.
+    interfaces: dict[SegmentId, SegmentId]
     originated_prefixes: OriginatedPrefixes | None = None
     tenant_id: Identifier | None = None
     service_priority: PositiveInteger | None = None
@@ -653,7 +605,9 @@ class Site(_FrozenModel):
     id: Identifier
     display_name: str | None = None
     verified: VerificationMetadata | None = None
-    lan: SiteLan
+    # The network segments the site provides, through the same production a
+    # node uses for the segments it carries. Subnets are resolver-allocated.
+    ethernet: tuple[EthernetPort, ...] = Field(min_length=1)
     tags: tuple[Identifier, ...] | None = None
     nodes: tuple[SiteNode, ...] = Field(min_length=1)
     frame: SiteFrame
@@ -668,43 +622,21 @@ class Site(_FrozenModel):
         return self
 
     @model_validator(mode="after")
-    def _valid_node_addresses(self) -> Site:
+    def _valid_segments_and_bindings(self) -> Site:
         node_ids = [node.id for node in self.nodes]
         if len(set(node_ids)) != len(node_ids):
             raise ValueError("site node ids must be unique")
 
-        seen_addresses: dict[tuple[int, str], str] = {}
+        segment_ids = [segment.id for segment in self.ethernet]
+        if len(set(segment_ids)) != len(segment_ids):
+            raise ValueError("site ethernet segment ids must be unique")
+        declared_segments = set(segment_ids)
         for node in self.nodes:
-            for interface_name in ("lo0", "terr0"):
-                interface = getattr(node.interfaces, interface_name)
-                for family in ("ipv4", "ipv6"):
-                    address = getattr(interface, family)
-                    if address is None:
-                        continue
-                    parsed = ipaddress.ip_interface(address)
-                    address_key = (parsed.version, str(parsed.ip))
-                    owner = f"{node.id}.{interface_name}.{family}"
-                    existing_owner = seen_addresses.get(address_key)
-                    if existing_owner is not None:
-                        raise ValueError(
-                            f"site interface address {parsed.ip} is installed more than once: "
-                            f"{existing_owner}, {owner}"
-                        )
-                    seen_addresses[address_key] = owner
-
-                    if interface_name != "terr0":
-                        continue
-                    lan = getattr(self.lan, family)
-                    if lan is None:
-                        raise ValueError(
-                            f"site node {node.id!r} terr0 declares {family} but site lan "
-                            f"does not declare {family}"
-                        )
-                    if parsed.ip not in ipaddress.ip_network(lan):
-                        raise ValueError(
-                            f"site node {node.id!r} terr0 {family} address {parsed.ip} "
-                            f"is outside site lan {lan}"
-                        )
+            unknown_segments = sorted(set(node.interfaces.values()) - declared_segments)
+            if unknown_segments:
+                raise ValueError(
+                    f"site node {node.id!r} binds undeclared segment(s): {unknown_segments}"
+                )
         return self
 
 

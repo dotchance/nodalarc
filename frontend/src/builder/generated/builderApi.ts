@@ -716,8 +716,6 @@ export interface BuilderVisualSiteNode {
   readonly node_ref?: string | null;
   readonly installed?: Readonly<Record<string, number>>;
   readonly boresights: Readonly<Record<string, BuilderVisualGroundBoresight>>;
-  readonly lo0_ipv4?: string;
-  readonly terr0_ipv4?: string;
 }
 
 /** Editable complete site object. */
@@ -728,7 +726,6 @@ export interface BuilderVisualSite {
   readonly lat_deg?: number | null;
   readonly lon_deg?: number | null;
   readonly alt_m?: number | null;
-  readonly lan_ipv4?: string;
   readonly tags?: ReadonlyArray<string>;
   readonly nodes?: ReadonlyArray<BuilderVisualSiteNode>;
 }
@@ -751,8 +748,6 @@ export interface BuilderVisualGroundStamp {
   readonly installed?: Readonly<Record<string, number>>;
   readonly boresights: Readonly<Record<string, BuilderVisualGroundBoresight>>;
   readonly body?: string | null;
-  readonly lan_base?: string;
-  readonly loopback_base?: string;
 }
 
 /** Editable ground segment assembled into site and site-set refs. */
@@ -1709,7 +1704,7 @@ export interface BuilderWorldNode {
   readonly forwarding: "routed" | "host" | "bridge" | "control_only" | null;
   readonly terminal_inventory: ReadonlyArray<ResolvedTerminalBlock>;
   readonly interfaces: ResolvedNodeInterfaces | null;
-  readonly originated_prefixes: OriginatedPrefixes | null;
+  readonly originated_prefixes: ResolvedOriginatedPrefixes | null;
 }
 
 /** One segment as the user named it — the world tree speaks their words, never bare runtime ids. */
@@ -1799,22 +1794,22 @@ export interface NodePosition {
   readonly vel_z_km_s: number;
 }
 
-/** Routing injection intent for a placed node. */
-export interface OriginatedPrefixes {
-  readonly ipv4: ReadonlyArray<string> | null;
-  readonly ipv6: ReadonlyArray<string> | null;
-}
-
 /** A numbered interface address set. */
 export interface ResolvedInterfaceAddress {
   readonly ipv4: string | null;
   readonly ipv6: string | null;
 }
 
-/** Numbered interfaces authored by placement or allocated by the resolver. */
+/** Numbered interfaces allocated by the resolver. `ethernet` maps interface name to addresses: a node environment's own declared port ids, or a mounted payload's single attach-named interface. Every address is allocated on its segment's allocated subnet; nothing here is authored. */
 export interface ResolvedNodeInterfaces {
   readonly lo0: ResolvedInterfaceAddress;
-  readonly terr0: ResolvedInterfaceAddress | null;
+  readonly ethernet: Readonly<Record<string, ResolvedInterfaceAddress>>;
+}
+
+/** Concrete routing-injection facts, resolved from symbolic intent. Authored origination names segments; resolution replaces each name with the segment's allocated subnet (and `default` with the default route), so every downstream consumer reads literal prefixes. */
+export interface ResolvedOriginatedPrefixes {
+  readonly ipv4: ReadonlyArray<string> | null;
+  readonly ipv6: ReadonlyArray<string> | null;
 }
 
 /** Fixed body-surface position for one placed node. */
@@ -2561,9 +2556,6 @@ export const BUILDER_VISUAL_DRAFT_ENVELOPE_RUNTIME_DESCRIPTOR = {
                                   ],
                                   "exclusive": false
                                 },
-                                "lan_ipv4": {
-                                  "kind": "string"
-                                },
                                 "tags": {
                                   "kind": "array",
                                   "items": {
@@ -2611,12 +2603,6 @@ export const BUILDER_VISUAL_DRAFT_ENVELOPE_RUNTIME_DESCRIPTOR = {
                                           },
                                           "additional": false
                                         }
-                                      },
-                                      "lo0_ipv4": {
-                                        "kind": "string"
-                                      },
-                                      "terr0_ipv4": {
-                                        "kind": "string"
                                       }
                                     },
                                     "additional": false
@@ -2700,12 +2686,6 @@ export const BUILDER_VISUAL_DRAFT_ENVELOPE_RUNTIME_DESCRIPTOR = {
                           }
                         ],
                         "exclusive": false
-                      },
-                      "lan_base": {
-                        "kind": "string"
-                      },
-                      "loopback_base": {
-                        "kind": "string"
                       }
                     },
                     "additional": false
@@ -3679,9 +3659,6 @@ export const BUILDER_VISUAL_DRAFT_ENVELOPE_RUNTIME_DESCRIPTOR = {
                                   ],
                                   "exclusive": false
                                 },
-                                "lan_ipv4": {
-                                  "kind": "string"
-                                },
                                 "tags": {
                                   "kind": "array",
                                   "items": {
@@ -3729,12 +3706,6 @@ export const BUILDER_VISUAL_DRAFT_ENVELOPE_RUNTIME_DESCRIPTOR = {
                                           },
                                           "additional": false
                                         }
-                                      },
-                                      "lo0_ipv4": {
-                                        "kind": "string"
-                                      },
-                                      "terr0_ipv4": {
-                                        "kind": "string"
                                       }
                                     },
                                     "additional": false
@@ -3818,12 +3789,6 @@ export const BUILDER_VISUAL_DRAFT_ENVELOPE_RUNTIME_DESCRIPTOR = {
                           }
                         ],
                         "exclusive": false
-                      },
-                      "lan_base": {
-                        "kind": "string"
-                      },
-                      "loopback_base": {
-                        "kind": "string"
                       }
                     },
                     "additional": false
@@ -4981,9 +4946,6 @@ export const BUILDER_VISUAL_WORKSPACE_RUNTIME_DESCRIPTOR = {
                           ],
                           "exclusive": false
                         },
-                        "lan_ipv4": {
-                          "kind": "string"
-                        },
                         "tags": {
                           "kind": "array",
                           "items": {
@@ -5031,12 +4993,6 @@ export const BUILDER_VISUAL_WORKSPACE_RUNTIME_DESCRIPTOR = {
                                   },
                                   "additional": false
                                 }
-                              },
-                              "lo0_ipv4": {
-                                "kind": "string"
-                              },
-                              "terr0_ipv4": {
-                                "kind": "string"
                               }
                             },
                             "additional": false
@@ -5120,12 +5076,6 @@ export const BUILDER_VISUAL_WORKSPACE_RUNTIME_DESCRIPTOR = {
                   }
                 ],
                 "exclusive": false
-              },
-              "lan_base": {
-                "kind": "string"
-              },
-              "loopback_base": {
-                "kind": "string"
               }
             },
             "additional": false
@@ -6031,9 +5981,6 @@ export const BUILDER_VISUAL_GROUND_DRAFT_RUNTIME_DESCRIPTOR = {
                     ],
                     "exclusive": false
                   },
-                  "lan_ipv4": {
-                    "kind": "string"
-                  },
                   "tags": {
                     "kind": "array",
                     "items": {
@@ -6081,12 +6028,6 @@ export const BUILDER_VISUAL_GROUND_DRAFT_RUNTIME_DESCRIPTOR = {
                             },
                             "additional": false
                           }
-                        },
-                        "lo0_ipv4": {
-                          "kind": "string"
-                        },
-                        "terr0_ipv4": {
-                          "kind": "string"
                         }
                       },
                       "additional": false
@@ -6170,12 +6111,6 @@ export const BUILDER_VISUAL_GROUND_DRAFT_RUNTIME_DESCRIPTOR = {
             }
           ],
           "exclusive": false
-        },
-        "lan_base": {
-          "kind": "string"
-        },
-        "loopback_base": {
-          "kind": "string"
         }
       },
       "additional": false

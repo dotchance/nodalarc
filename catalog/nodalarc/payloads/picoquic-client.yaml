@@ -1,0 +1,8 @@
+payload:
+  id: picoquic-client
+  display_name: QUIC client endpoint payload
+  forwarding: host
+  profile: nodalarc:profiles/picoquic-client.yaml
+  notes: A carried host environment running the picoquic client endpoint.
+    Attaches to whichever segment its mount names; addresses arrive from
+    allocation and peers from tagged env facts.

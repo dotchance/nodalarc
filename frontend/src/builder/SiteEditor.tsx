@@ -118,11 +118,6 @@ export function SiteEditor({
         onChange={(alt_m) => onUpdate((prev) => ({ ...prev, alt_m }))}
       />
       <Field
-        label="site lan"
-        value={site.lan_ipv4}
-        onChange={(lan_ipv4) => onUpdate((prev) => ({ ...prev, lan_ipv4: lan_ipv4.trim() }))}
-      />
-      <Field
         label="tags"
         value={site.tags.join(", ")}
         onChange={(value) =>
@@ -207,16 +202,6 @@ export function SiteEditor({
                 />
               </div>
             ))}
-            <Field
-              label="lo0"
-              value={node.lo0_ipv4}
-              onChange={(lo0_ipv4) => updateNode(node.node_id, { lo0_ipv4: lo0_ipv4.trim() })}
-            />
-            <Field
-              label="terr0"
-              value={node.terr0_ipv4}
-              onChange={(terr0_ipv4) => updateNode(node.node_id, { terr0_ipv4: terr0_ipv4.trim() })}
-            />
         </EditorCard>
       ))}
       <div className="builder-preset-row">

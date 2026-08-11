@@ -262,23 +262,23 @@ def test_component_controls_protect_identity_and_accept_incomplete_sequence_edit
         )
     assert identity.value.code == "catalog_authoring.invalid_patch"
 
-    payload = service.new(CatalogDraftNewRequest(family="payloads", object_id="visual-payload"))
-    slots = _control_at(payload.control_tree.root, "/payload/terminal_slots")
-    assert isinstance(slots, BuilderSequenceControl)
+    node_draft = service.new(CatalogDraftNewRequest(family="nodes", object_id="visual-node"))
+    ports = _control_at(node_draft.control_tree.root, "/node/ethernet")
+    assert isinstance(ports, BuilderSequenceControl)
     inserted = service.mutate_controls(
         CatalogDraftControlMutationRequest(
-            draft=payload,
-            expected_draft_revision=payload.draft_revision,
+            draft=node_draft,
+            expected_draft_revision=node_draft.draft_revision,
             commands=(
                 BuilderInsertItemCommand(
                     operation="insert_item",
-                    control_id=slots.control_id,
+                    control_id=ports.control_id,
                     index=0,
                 ),
             ),
         )
     )
-    assert inserted.document == {"payload": {"id": "visual-payload", "terminal_slots": [{}]}}
+    assert inserted.document == {"node": {"id": "visual-node", "ethernet": [{}]}}
     assert inserted.issues
 
     site = service.new(CatalogDraftNewRequest(family="sites", object_id="visual-site"))

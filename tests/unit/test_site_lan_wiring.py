@@ -373,10 +373,7 @@ def _two_node_site_session() -> dict:
     site = site_document["site"]
     second = deepcopy(site["nodes"][0])
     second["id"] = "gw2"
-    second["interfaces"] = {
-        "lo0": {"ipv4": "10.255.0.201/32", "ipv6": "fd00:da7a:ffff::c9/128"},
-        "terr0": {"ipv4": "172.16.0.2/24", "ipv6": "fd10:0:0::2/64"},
-    }
+    second["interfaces"] = {"terr0": "lan0"}
     site["nodes"].append(second)
     raw.write_catalog(raw.site_refs[0], site_document)
     return raw
@@ -435,10 +432,7 @@ class TestRenderAndReadiness:
         second = deepcopy(site["nodes"][0])
         second["id"] = "gw2"
         second["terminals"] = {}
-        second["interfaces"] = {
-            "lo0": {"ipv4": "10.255.0.201/32", "ipv6": "fd00:da7a:ffff::c9/128"},
-            "terr0": {"ipv4": "172.16.0.2/24", "ipv6": "fd10:0:0::2/64"},
-        }
+        second["interfaces"] = {"terr0": "lan0"}
         site["nodes"].append(second)
         raw.write_catalog(raw.site_refs[0], site_document)
         resolved = resolve_session(

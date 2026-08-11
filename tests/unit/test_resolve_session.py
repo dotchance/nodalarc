@@ -537,17 +537,19 @@ def test_link_endpoint_min_elevation_rejects_non_ground_access_semantics(
         resolve_session(raw)
 
 
-def test_duplicate_loopback_addresses_across_sites_are_rejected() -> None:
-    raw = _raw_session()
-    first_site = raw.read_catalog(raw.site_refs[0])
-    second_site = raw.read_catalog(raw.site_refs[1])
-    second_site["site"]["nodes"][0]["interfaces"]["lo0"] = deepcopy(
-        first_site["site"]["nodes"][0]["interfaces"]["lo0"]
-    )
-    raw.write_catalog(raw.site_refs[1], second_site)
+def test_allocated_loopbacks_are_unique_across_the_session() -> None:
+    # Loopbacks are resolver-allocated everywhere; a duplicate router
+    # identity is impossible by construction, and this asserts it across a
+    # multi-site session rather than trusting the allocator implicitly.
+    resolved = resolve_session(_raw_session())
 
-    with pytest.raises(ValueError, match="duplicate lo0 ipv4 address"):
-        resolve_session(raw)
+    seen: set[str] = set()
+    for node in resolved.nodes:
+        assert node.interfaces is not None
+        address = node.interfaces.lo0.ipv4
+        assert address is not None
+        assert address not in seen, f"duplicate lo0 {address}"
+        seen.add(address)
 
 
 def _add_ground_loopback_assignment(raw: dict[str, Any], ipv4_pool: str) -> None:
@@ -562,23 +564,27 @@ def _add_ground_loopback_assignment(raw: dict[str, Any], ipv4_pool: str) -> None
     )
 
 
-def test_authored_loopback_inside_selected_assignment_pool_is_preserved() -> None:
-    raw = _raw_session(ground_stations={"stations": [{}]})
-    _add_ground_loopback_assignment(raw, "10.255.0.0/24")
-
-    resolved = resolve_session(raw)
-
-    ground = next(node for node in resolved.nodes if node.kind == "ground_station")
-    assert ground.interfaces is not None
-    assert ground.interfaces.lo0.ipv4 == "10.255.0.1/32"
-
-
-def test_authored_loopback_outside_selected_assignment_pool_is_rejected() -> None:
+def test_explicit_loopback_assignment_owns_the_pooled_family() -> None:
+    # An explicit assignment replaces the resolver default for the family
+    # it pools, wherever its selector points.
     raw = _raw_session(ground_stations={"stations": [{}]})
     _add_ground_loopback_assignment(raw, "192.0.2.0/24")
 
-    with pytest.raises(SessionResolutionError, match="authored lo0.*outside allocated pool"):
-        resolve_session(raw)
+    resolved = resolve_session(raw)
+
+    import ipaddress
+
+    pool = ipaddress.ip_network("192.0.2.0/24")
+    grounds = [
+        node
+        for node in resolved.nodes
+        if node.kind == "ground_station" and node.forwarding == "routed"
+    ]
+    assert grounds
+    for ground in grounds:
+        assert ground.interfaces is not None
+        assert ground.interfaces.lo0.ipv4 is not None
+        assert ipaddress.ip_interface(ground.interfaces.lo0.ipv4).ip in pool
 
 
 def test_site_terminal_installation_cannot_exceed_node_mount_count(tmp_path: Path) -> None:
@@ -616,6 +622,7 @@ def test_site_payload_installation_cannot_exceed_node_mount_count(tmp_path: Path
             "id": "science",
             "payload": "user:payloads/science.yaml",
             "count": 1,
+            "attach": "terr0",
         }
     ]
     site["site"]["nodes"][0]["payloads"] = {"science": {"installed_count": 2}}

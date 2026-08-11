@@ -215,20 +215,9 @@ def test_every_component_family_noop_fork_preserves_all_fields(tmp_path: Path) -
                         "payload": {
                             "id": "source-payload",
                             "display_name": "Complete payload fixture",
-                            "terminal_slots": [
-                                {
-                                    "id": "access",
-                                    "terminal": str(_first_shipped_ref("terminals")),
-                                    "tags": ["primary"],
-                                }
-                            ],
-                            "resource_groups": [
-                                {
-                                    "id": "shared-power",
-                                    "slots": ["access"],
-                                    "simultaneous_active": 1,
-                                }
-                            ],
+                            "forwarding": "host",
+                            "profile": str(_first_shipped_ref("profiles")),
+                            "tags": ["primary"],
                             "reference": "urn:nodalarc:test",
                             "notes": "Preserve every payload field",
                         }

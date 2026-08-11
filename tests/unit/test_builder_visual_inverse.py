@@ -560,7 +560,7 @@ def test_authored_ground_scheduling_command_preserves_unowned_ipv6_prefixes(
     assert minted.applied_session is not None
     assert minted.applied_revision is not None
     rich = deepcopy(minted.applied_session)
-    rich["segments"][0]["apply"]["originated_prefixes"] = {"ipv6": ["2001:db8:42::/48"]}
+    rich["segments"][0]["apply"]["originated_prefixes"] = {"ipv6": ["lan0"]}
     model = SegmentSessionConfig.model_validate(rich)
     workspace = _workspace_from_applied_session(
         model,
@@ -591,7 +591,7 @@ def test_authored_ground_scheduling_command_preserves_unowned_ipv6_prefixes(
     assert scheduled.applied_session is not None
     apply = scheduled.applied_session["segments"][0]["apply"]
     assert apply["scheduling"]["handover_mode"] == "bbm"
-    assert apply["originated_prefixes"]["ipv6"] == ["2001:db8:42::/48"]
+    assert apply["originated_prefixes"]["ipv6"] == ["lan0"]
 
 
 def test_saved_builder_session_reopens_as_refs_without_reowning_catalog_objects(

@@ -1014,28 +1014,23 @@ a node-model default is an authored statement, never a fallback. The resolved
 session records, for each node, the effective profile reference and the level
 that supplied it.
 
-Whether a node participates in routing is decided by its effective profile,
-never by its node definition's forwarding class alone. A profile renders routing
-when its `adapter` names a module that renders routing-protocol
-configuration; which adapters render which protocols is declared by the
-adapter modules and is runtime support. Four rules connect profiles to
-routing:
+A routing domain is a declaration about routers: one set of nodes sharing a
+single instance of a routing protocol. A node is a router exactly when its
+effective profile's `adapter` renders routing-protocol configuration; which
+adapters render which protocols and capabilities is declared by the adapter
+modules and is runtime support. Domain membership derives from that router
+population: the domain's selectors resolve against the session's nodes, and
+its members are the routers among them whose adapter renders the domain's
+protocol and declared capabilities. A node running no routing workload is
+never a membership candidate, whatever its wiring class; a host is reached
+through the router serving its network, which originates the host's network
+into its own domain.
 
-1. A routing domain may select only nodes whose effective profile's adapter
-   renders the domain's protocol and the capabilities the domain declares. A
-   domain selecting any other node is invalid: the session would direct the
-   platform to render protocol configuration it has no renderer for.
-2. When `routing` is present, every node whose effective profile renders
-   routing belongs to exactly one domain.
-3. A node whose effective profile renders no routing is never a domain member
-   and never appears in a domain selector, whatever its wiring class. A
-   host's relationship to a domain is inferred from its network attachment:
-   the host connects to a network, a router serves that network, and that
-   router's domain learns the host's network from what the router originates.
-4. With `routing` omitted, the default domain forms over every node whose
-   effective profile's adapter renders IS-IS.
+When `routing` is present, every router belongs to exactly one domain, and
+every domain contains at least one member. With `routing` omitted, the
+default domain forms over the routers whose adapter renders IS-IS.
 
-These rules validate what the platform renders and delivers. They state
+These rules govern what the platform renders and delivers. They state
 nothing about protocol behavior: what the running images do with their
 configuration and their connected interfaces is the workload's own, observed
 through measurement, never predicted or asserted by the platform. A profile
@@ -1351,10 +1346,10 @@ forbids non-null `holddown_ms` and `time_to_learn_ms`. `BfdConfig` defaults are
 objects. The hold interval must exceed the hello interval. A non-null `timers`
 field is valid only for `isis` and `ospf`.
 
-Routing-domain ids are unique. When `routing` is present, every node whose
-effective profile renders routing belongs to exactly one domain, and every
-domain selects at least one node; "Workload profile assignment" defines which
-nodes a domain may select. A boundary names an existing enabled non-access
+Routing-domain ids are unique. When `routing` is present, every router
+belongs to exactly one domain, and every domain contains at least one member;
+"Workload profile assignment" defines the router population domain membership
+derives from. A boundary names an existing enabled non-access
 link rule and exports between two different, existing domains on opposite
 sides of that rule. Every enabled non-access rule spanning multiple domains
 requires a boundary.
@@ -1371,11 +1366,9 @@ value. Materialization omits a route to the receiving node's own loopback and
 the peer-loopback seed route.
 
 When `routing` is omitted, the resolver creates `default_domain`, running
-IS-IS over every node whose effective profile's adapter renders IS-IS, and
-requires at least one such node. Nodes whose profiles render no routing are
-not placed into that default domain. A session with no `routing` block whose
-only routing-rendering profiles cannot render IS-IS is invalid; declare
-routing explicitly.
+IS-IS over the routers whose adapter renders IS-IS, and requires at least one
+such node. A session with no `routing` block whose routers cannot render
+IS-IS is invalid; declare routing explicitly.
 
 ## Simulation, time, ephemeris, and dispatch
 
@@ -1493,12 +1486,12 @@ context-free EBNF alone:
   the most specific of its own node entry, its segment, and its node model. A
   node with no profile statement at any level fails resolution. The resolved
   session records the effective reference and the supplying level.
-- Routing-domain membership keys on the effective profile: a domain may
-  select only nodes whose profile's adapter renders the domain's protocol,
-  every routing-rendering node belongs to exactly one domain when `routing`
-  is present, and nodes whose profiles render no routing are never domain
-  members. These checks validate platform rendering only; they assert
-  nothing about protocol behavior.
+- Routing-domain membership derives from the router population: the routers
+  among a domain's selected nodes whose adapter renders the domain protocol
+  and declared capabilities. Every router belongs to exactly one domain when
+  `routing` is present; nodes running no routing workload are never
+  membership candidates. These checks validate platform rendering only; they
+  assert nothing about protocol behavior.
 - Adapter availability is runtime support. Structural validity of an
   `adapter` value never implies the installed runtime provides that adapter.
 - Routing failure, lack of convergence, and unreachable destinations remain

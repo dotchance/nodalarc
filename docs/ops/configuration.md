@@ -439,12 +439,13 @@ routing:
       install_via: peer_loopback
 ```
 
-When an explicit `routing` block is present, every node whose effective
-profile renders routing belongs to exactly one domain, and a domain may
-select only nodes whose profile's adapter renders its protocol. Nodes whose
-profiles render no routing, such as hosts, are never domain members; a host
-is reached through the domain of the router serving its network. A fixed link
-crossing domain boundaries must have a declared boundary over that link rule. The current runtime supports the `static_ip`
+A routing domain is a declaration about routers. When an explicit `routing`
+block is present, every router belongs to exactly one domain, and a domain's
+membership is the routers among its selected nodes whose adapter renders its
+protocol. A host runs no routing protocol and receives no routing
+configuration; it is reached through the router serving its network. A fixed
+link crossing domain boundaries must have a declared boundary over that link
+rule. The current runtime supports the `static_ip`
 boundary adapter; `bgp` and `dtn_bundle` adapters are support-gated.
 
 IS-IS and OSPF domains may declare MPLS, segment routing, and traffic
@@ -466,8 +467,7 @@ current IS-IS format. A ground-only `explicit` assignment is valid; otherwise
 Ground mappings use site-qualified local node ids.
 
 If `routing` is omitted, the resolver creates one `default_domain` running
-IS-IS over every node whose effective profile's adapter renders IS-IS. Nodes
-whose profiles render no routing are not inserted into that default domain.
+IS-IS over the routers whose adapter renders IS-IS.
 
 ## Time and ephemeris
 

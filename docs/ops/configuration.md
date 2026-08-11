@@ -349,6 +349,16 @@ a new `user:` path, change the command, image, capabilities, or resources, and
 reference the new object at the level where it should apply. Forking a profile
 requires no platform code.
 
+A profile declares its containers' environment with `env`. A `value` entry
+sets an authored string. A `value_from` entry sets a platform-resolved fact:
+the address, by interface name and family, of the single node carrying a
+named tag. This is how an application endpoint learns its peer without
+anyone authoring an address: the session tags the server node, the client's
+profile declares `value_from: {tag: ..., interface: terr0, family: ipv4}`,
+and the client's container starts with the resolved address in its
+environment. A tag that matches zero nodes or several, a missing interface,
+or a missing address family refuses the session before anything deploys.
+
 ## Address pools
 
 Session-level addressing is primarily for generated space nodes. The current

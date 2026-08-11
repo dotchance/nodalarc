@@ -101,6 +101,7 @@ Sha256Hex          = ? lower-case YAML string containing exactly 64 hexadecimal 
 RegistryHost       = ? registry host with optional port accepted by the backend validator ? ;
 PinnedImage        = ? image repository path pinned by one @sha256 digest, accepted by the backend validator ? ;
 MountPath          = ? normalized absolute forward-slash container path accepted by the backend validator ? ;
+EnvName            = ? YAML string matching [A-Za-z_][A-Za-z0-9_]* in full ? ;
 Tags               = SequenceBegin, { Identifier }, SequenceEnd ;
 ```
 
@@ -330,6 +331,26 @@ ProfileResources = MappingBegin,
                    "limits", ResourceAmounts,
                    MappingEnd ;
 
+EnvValueFrom = MappingBegin,
+               "tag", Identifier,
+               "interface", Identifier,
+               "family", ( "ipv4" | "ipv6" ),
+               MappingEnd ;
+
+LiteralEnvEntry = MappingBegin,
+                  "name", EnvName,
+                  "value", String,
+                  MappingEnd ;
+
+ResolvedEnvEntry = MappingBegin,
+                   "name", EnvName,
+                   "value_from", EnvValueFrom,
+                   MappingEnd ;
+
+EnvEntry = LiteralEnvEntry | ResolvedEnvEntry ;
+
+EnvSequence = SequenceBegin, { EnvEntry }, SequenceEnd ;
+
 SshTerminalSurface = MappingBegin,
                      "surface", "ssh",
                      "authorized_keys_path", MountPath,
@@ -354,6 +375,7 @@ ProfileSidecar = MappingBegin,
                  "image", PinnedImage,
                  [ "command", ( ArgvSequence | Null ) ],
                  [ "args", ( ArgvSequence | Null ) ],
+                 [ "env", ( EnvSequence | Null ) ],
                  [ "capabilities", ( CapabilitySequence | Null ) ],
                  [ "root_filesystem", ( "read_only" | "ephemeral_writable" ) ],
                  "resources", ProfileResources,
@@ -370,6 +392,7 @@ Profile = MappingBegin,
           "image", PinnedImage,
           [ "command", ( ArgvSequence | Null ) ],
           [ "args", ( ArgvSequence | Null ) ],
+          [ "env", ( EnvSequence | Null ) ],
           [ "capabilities", ( CapabilitySequence | Null ) ],
           [ "root_filesystem", ( "read_only" | "ephemeral_writable" ) ],
           [ "config_mount", ( MountPath | Null ) ],
@@ -388,6 +411,20 @@ The image's own entrypoint starts every container. Authored `command` and
 `args` are the profile author's declaration for that image; the platform never
 wraps or substitutes an entrypoint it did not author. An argv sequence has at
 most 64 elements and 4096 total bytes, and every element is nonempty.
+
+`env` declares the container's environment. Each entry sets one variable into
+the container at creation. A `value` entry carries the authored string. A
+`value_from` entry names one fact of the resolved session: the address, by
+interface name and family, of the single node carrying the named tag. The
+delivered value is the host address without its prefix length. Env names are
+unique within a sequence. A `value_from` entry is invalid when its tag
+matches zero nodes or more than one, when the matched node has no interface
+of the named identifier, or when that interface has no address of the
+requested family; the session does not run. The platform sets environment
+into containers and does nothing else with it: it never reads a container's
+environment, never delivers it to another node, and never changes it on a
+running container. A changed resolved value is a changed workload and
+replaces the pod at reconciliation.
 
 The container pull identity is the profile `registry` joined to the
 digest-pinned `image`. `registry` is a profile field because user images
@@ -1492,6 +1529,10 @@ context-free EBNF alone:
   `routing` is present; nodes running no routing workload are never
   membership candidates. These checks validate platform rendering only; they
   assert nothing about protocol behavior.
+- Every `value_from` entry of every effective profile resolves against the
+  session's nodes: exactly one node carries the tag, that node declares the
+  named interface, and the interface carries the requested address family.
+  Any mismatch refuses resolution.
 - Adapter availability is runtime support. Structural validity of an
   `adapter` value never implies the installed runtime provides that adapter.
 - Routing failure, lack of convergence, and unreachable destinations remain
@@ -1539,7 +1580,10 @@ runtime execution:
 - `bgp` and `dtn_bundle` routing boundaries;
 - `spice_kernel_stack` and `operator_supplied_spk` ephemeris providers;
 - bodies outside the supported Earth-Luna profile;
-- workload adapters other than `frr`.
+- workload adapters other than `frr`;
+- the profile `env` field: defined ahead of the installed models, which
+  still reject it structurally; the matching model and resolver change
+  follows this definition.
 
 Unsupported features fail explicitly. They are never silently removed,
 flattened, translated to another feature, or treated as successful execution.

@@ -12,7 +12,7 @@ import ipaddress
 import math
 import re
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -66,6 +66,8 @@ from nodalarc.runtime_support import (
     RuntimeSupport,
     UnsupportedFeature,
     UnsupportedFeatureError,
+    adapter_renders,
+    adapter_renders_routing,
 )
 from nodalarc.tle import tle_mean_elements
 
@@ -113,6 +115,9 @@ class _RuntimeNode:
     plane: int | None = None
     slot: int | None = None
     body_facts: tuple[ResolvedBodyFacts, ...] = ()
+    # The effective profile's adapter name; None when the profile has none.
+    # A node is a router exactly when this adapter renders routing.
+    profile_adapter: str | None = None
 
 
 def default_catalog_roots() -> CatalogRoots:
@@ -160,6 +165,7 @@ def resolve_session_with_assets(
     body_facts = _collect_body_facts(runtime_nodes)
     _check_body_support(resolved_nodes, body_facts, support)
     _check_propagator_support(resolved_nodes, support)
+    _check_workload_adapter_support(runtime_nodes, support)
     ephemeris = _resolve_ephemeris(cfg, roots, resolved_nodes)
     link_rules = tuple(_resolve_link_rule(rule, runtime_nodes) for rule in cfg.link_rules or ())
     routing_domains = tuple(_resolve_routing_domains(cfg, runtime_nodes))
@@ -589,7 +595,7 @@ def _expand_constellation_segment(
     slots = int(constellation["slots_per_plane"])
     phase_offset = float(constellation["phasing"].get("phase_offset_deg", 0.0))
     tag_rules = tuple(constellation.get("node_tags") or ())
-    profile_ref, profile_level = _effective_profile(
+    profile_ref, profile_level, profile_adapter = _effective_profile(
         described=f"generated nodes in segment {segment.id!r}",
         placed=None,
         segment_profile=segment.profile,
@@ -634,6 +640,7 @@ def _expand_constellation_segment(
                     plane=plane,
                     slot=slot,
                     body_facts=(_body_facts_from_catalog(body),),
+                    profile_adapter=profile_adapter,
                 )
             )
     return expanded
@@ -683,7 +690,7 @@ def _space_node_from_entry(
         plane = None
         slot = None
     local_id = entry["id"]
-    profile_ref, profile_level = _effective_profile(
+    profile_ref, profile_level, profile_adapter = _effective_profile(
         described=f"space node {local_id!r} in segment {segment.id!r}",
         placed=entry.get("profile"),
         segment_profile=segment.profile,
@@ -711,6 +718,7 @@ def _space_node_from_entry(
             profile_level=profile_level,
         ),
         body_facts=(_body_facts_from_catalog(body),),
+        profile_adapter=profile_adapter,
     )
 
 
@@ -1014,7 +1022,7 @@ def _expand_site_placement(placement: _SitePlacement, roots: CatalogRoots) -> li
             site_node.get("originated_prefixes"),
             base_originated,
         )
-        profile_ref, profile_level = _effective_profile(
+        profile_ref, profile_level, profile_adapter = _effective_profile(
             described=f"ground node {runtime_id!r}",
             placed=site_node.get("profile"),
             segment_profile=segment_profile,
@@ -1062,6 +1070,7 @@ def _expand_site_placement(placement: _SitePlacement, roots: CatalogRoots) -> li
                     clock=base_clock,
                 ),
                 body_facts=(_body_facts_from_catalog(body),),
+                profile_adapter=profile_adapter,
             )
         )
     return expanded
@@ -1640,26 +1649,22 @@ def _apply_addressing(
                         node_id=item.node.node_id,
                     )
                     next_nodes.append(
-                        _RuntimeNode(
+                        replace(
+                            item,
                             node=item.node.model_copy(
                                 update={
                                     "interfaces": current.model_copy(update={"lo0": merged_lo0})
                                 }
                             ),
-                            plane=item.plane,
-                            slot=item.slot,
-                            body_facts=item.body_facts,
                         )
                     )
                     continue
                 next_nodes.append(
-                    _RuntimeNode(
+                    replace(
+                        item,
                         node=item.node.model_copy(
                             update={"interfaces": ResolvedNodeInterfaces(lo0=loopback)}
                         ),
-                        plane=item.plane,
-                        slot=item.slot,
-                        body_facts=item.body_facts,
                     )
                 )
             nodes = next_nodes
@@ -1708,11 +1713,9 @@ def _apply_default_generated_space_loopbacks(nodes: list[_RuntimeNode]) -> list[
             ipv6=f"{next(ipv6_iter)}/128",
         )
         next_nodes.append(
-            _RuntimeNode(
+            replace(
+                item,
                 node=node.model_copy(update={"interfaces": ResolvedNodeInterfaces(lo0=loopback)}),
-                plane=item.plane,
-                slot=item.slot,
-                body_facts=item.body_facts,
             )
         )
     return next_nodes
@@ -1966,27 +1969,43 @@ def _resolve_link_rule(rule: LinkRule, runtime_nodes: tuple[_RuntimeNode, ...]) 
     )
 
 
+def _check_workload_adapter_support(
+    runtime_nodes: tuple[_RuntimeNode, ...],
+    support: RuntimeSupport,
+) -> None:
+    for item in runtime_nodes:
+        adapter = item.profile_adapter
+        if adapter is None:
+            continue
+        if feature := support.check_workload_adapter(adapter):
+            raise UnsupportedFeatureError([feature])
+
+
 def _resolve_routing_domains(
     cfg: SegmentSessionConfig,
     runtime_nodes: tuple[_RuntimeNode, ...],
 ) -> list[ResolvedRoutingDomain]:
+    # A routing domain is a declaration about routers. A node is a router
+    # exactly when its profile's adapter renders routing configuration;
+    # membership derives from that router population.
     if cfg.routing is None:
-        # Documented product default: one flat IS-IS domain over every routed
-        # node. Hosts/bridges/control-only nodes run no routing protocol and
-        # must not be invented into one.
-        routed = tuple(
-            sorted(item.node.node_id for item in runtime_nodes if item.node.forwarding == "routed")
+        routers = tuple(
+            sorted(
+                item.node.node_id
+                for item in runtime_nodes
+                if adapter_renders(item.profile_adapter, "isis")
+            )
         )
-        if not routed:
+        if not routers:
             raise SessionResolutionError(
-                "session declares no routing and resolves zero routed nodes"
+                "session declares no routing and resolves zero routers rendering IS-IS"
             )
         return [
             ResolvedRoutingDomain(
                 domain_id="default_domain",
                 protocol="isis",
                 timers=_effective_routing_timers("isis", None),
-                node_ids=routed,
+                node_ids=routers,
                 capabilities=(),
                 area_assignment=None,
             )
@@ -2000,22 +2019,6 @@ def _resolve_routing_domains(
             )
         if not selected_ids:
             raise SessionResolutionError(f"routing domain {domain.id!r} matched zero nodes")
-        # Routing domains are defined over routed nodes, exactly like the
-        # documented no-routing default: hosts, bridges, and control-only
-        # nodes run no routing protocol and are outside a domain selector's
-        # universe. A domain whose selection contains no routed node is an
-        # authoring error, refused.
-        selected_ids = {
-            item.node.node_id
-            for item in runtime_nodes
-            if item.node.node_id in selected_ids and item.node.forwarding == "routed"
-        }
-        if not selected_ids:
-            raise SessionResolutionError(f"routing domain {domain.id!r} matched zero routed nodes")
-        selected_nodes = tuple(
-            item.node for item in runtime_nodes if item.node.node_id in selected_ids
-        )
-        _validate_area_assignment(domain, selected_nodes)
         capabilities: list[str] = []
         if domain.capabilities is not None:
             if domain.capabilities.mpls is not None:
@@ -2024,6 +2027,20 @@ def _resolve_routing_domains(
                 capabilities.append("segment_routing")
             if domain.capabilities.traffic_engineering is not None:
                 capabilities.append("traffic_engineering")
+        # Membership is the routers among the selected nodes whose adapter
+        # renders this domain's protocol and declared capabilities.
+        selected_ids = {
+            item.node.node_id
+            for item in runtime_nodes
+            if item.node.node_id in selected_ids
+            and adapter_renders(item.profile_adapter, domain.protocol, tuple(capabilities))
+        }
+        if not selected_ids:
+            raise SessionResolutionError(f"routing domain {domain.id!r} contains zero routers")
+        selected_nodes = tuple(
+            item.node for item in runtime_nodes if item.node.node_id in selected_ids
+        )
+        _validate_area_assignment(domain, selected_nodes)
         domains.append(
             ResolvedRoutingDomain(
                 domain_id=domain.id,
@@ -2231,14 +2248,7 @@ def _derive_host_attachments(
                 )
             }
         )
-        next_nodes.append(
-            _RuntimeNode(
-                node=attached,
-                plane=item.plane,
-                slot=item.slot,
-                body_facts=item.body_facts,
-            )
-        )
+        next_nodes.append(replace(item, node=attached))
     return tuple(next_nodes)
 
 
@@ -2246,11 +2256,12 @@ def _validate_routing_domain_partition(
     domains: list[ResolvedRoutingDomain],
     runtime_nodes: tuple[_RuntimeNode, ...],
 ) -> None:
-    # Coverage is owed to routed nodes only: hosts, bridges, and
-    # control-only nodes run no routing protocol and are filtered out of
-    # every domain at selection time.
+    # Coverage is owed to the routers: the nodes whose profile's adapter
+    # renders routing configuration.
     domain_ids_by_node: dict[str, list[str]] = {
-        item.node.node_id: [] for item in runtime_nodes if item.node.forwarding == "routed"
+        item.node.node_id: []
+        for item in runtime_nodes
+        if adapter_renders_routing(item.profile_adapter)
     }
     for domain in domains:
         for node_id in domain.node_ids:
@@ -2259,7 +2270,7 @@ def _validate_routing_domain_partition(
     missing = [node_id for node_id, domain_ids in domain_ids_by_node.items() if not domain_ids]
     if missing:
         raise SessionResolutionError(
-            f"routing domains must cover every routed node; "
+            f"routing domains must cover every router; "
             f"{len(missing)} node{'s are' if len(missing) != 1 else ' is'} in no domain "
             f"(e.g. {', '.join(sorted(missing)[:3])})"
         )
@@ -3187,7 +3198,7 @@ def _effective_profile(
     segment_profile: Any,
     definition: Any,
     roots: CatalogRoots,
-) -> tuple[str, str]:
+) -> tuple[str, str, str | None]:
     """The most specific authored profile statement wins; absence is a refusal."""
 
     if placed is not None:
@@ -3202,8 +3213,8 @@ def _effective_profile(
             "entry, none on the segment, and none on the node definition. There is "
             "no default workload; state what the node runs."
         )
-    _load_expected(reference, roots, "profile")
-    return reference, level
+    profile_body = _load_expected(reference, roots, "profile")
+    return reference, level, profile_body.get("adapter")
 
 
 def _load_expected(ref: str, roots: CatalogRoots, expected_wrapper: str) -> dict[str, Any]:

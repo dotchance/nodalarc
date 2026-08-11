@@ -256,7 +256,9 @@ routing:
     - any:
       - segment: leo
       - segment: geo_relay
-      - segment: client_ground
+      - all:
+        - segment: client_ground
+        - tag: leo
       - segment: relay_ground
     area_assignment:
       strategy: flat
@@ -265,7 +267,9 @@ routing:
     selectors:
     - any:
       - segment: luna_relay
-      - segment: luna_ground
+      - all:
+        - segment: luna_ground
+        - tag: luna
     area_assignment:
       strategy: flat
   boundaries:

@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 import yaml
 from nodalarc.resolve_session import CatalogRoots, SessionResolutionError, resolve_session
+from nodalarc.runtime_support import UnsupportedFeatureError
 
 ROOT = Path(__file__).resolve().parents[2]
 SHIPPED_ROOT = ROOT / "catalog" / "nodalarc"
@@ -170,6 +171,43 @@ def test_profile_reference_must_load_a_profile_document(tmp_path: Path) -> None:
     )
 
     with pytest.raises(SessionResolutionError):
+        resolve_session(session, catalog_roots=roots)
+
+
+def test_non_router_workload_on_a_routed_bus_stands_outside_domains(tmp_path: Path) -> None:
+    # The probe-01 pattern: a routed-wired bus running a non-routing workload
+    # resolves, and the node simply is not a router, so no domain contains it.
+    def override_site(site):
+        site["nodes"][0]["profile"] = "nodalarc:profiles/linux-host.yaml"
+
+    session, roots = _session_with_user_ground(tmp_path, site_mutation=override_site)
+    resolution = resolve_session(session, catalog_roots=roots)
+
+    observers = [
+        node
+        for node in resolution.nodes
+        if node.profile == "nodalarc:profiles/linux-host.yaml"
+    ]
+    assert len(observers) == 1
+    member_ids = {
+        node_id for domain in resolution.routing_domains for node_id in domain.node_ids
+    }
+    assert observers[0].node_id not in member_ids
+    routers = [node for node in resolution.nodes if node.profile == FRR_PROFILE]
+    assert routers
+    assert all(router.node_id in member_ids for router in routers)
+
+
+def test_profile_naming_an_unavailable_adapter_is_refused(tmp_path: Path) -> None:
+    def use_bogus_adapter(site):
+        site["nodes"][0]["profile"] = "user:profiles/bogus-adapter.yaml"
+
+    session, roots = _session_with_user_ground(tmp_path, site_mutation=use_bogus_adapter)
+    bogus = _user_profile_document("bogus-adapter")
+    bogus["profile"]["adapter"] = "bogus"
+    _write_yaml(tmp_path / "user" / "profiles" / "bogus-adapter.yaml", bogus)
+
+    with pytest.raises(UnsupportedFeatureError, match="workload adapter 'bogus'"):
         resolve_session(session, catalog_roots=roots)
 
 

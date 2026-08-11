@@ -939,19 +939,21 @@ def test_runtime_node_id_length_fails_before_kubernetes() -> None:
         resolve_session(raw)
 
 
-def test_omitted_routing_requires_at_least_one_routed_node() -> None:
+def test_omitted_routing_requires_at_least_one_router() -> None:
+    # Router-ness derives from the workload profile, never the wiring class:
+    # a session whose profiles render no routing has zero routers.
     raw = _raw_session()
     assert raw.space_node_ref is not None
     assert raw.ground_node_ref is not None
     for node_ref in (raw.space_node_ref, raw.ground_node_ref):
         node_document = raw.read_catalog(node_ref)
-        node_document["node"]["forwarding"] = "host"
+        node_document["node"]["profile"] = "nodalarc:profiles/linux-host.yaml"
         raw.write_catalog(node_ref, node_document)
     raw.pop("routing")
 
     with pytest.raises(
         SessionResolutionError,
-        match="declares no routing and resolves zero routed nodes",
+        match="declares no routing and resolves zero routers",
     ):
         resolve_session(raw)
 

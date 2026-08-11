@@ -302,7 +302,7 @@ def test_explicit_routing_domains_must_cover_every_node() -> None:
     }
 
     with pytest.raises(
-        SessionResolutionError, match="routing domains must cover every routed node"
+        SessionResolutionError, match="routing domains must cover every router"
     ):
         resolve_session(raw)
 

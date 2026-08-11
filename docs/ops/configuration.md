@@ -24,7 +24,7 @@ Both namespaces have the same families and use the same grammar:
 |---|---|---|
 | Body | `bodies/` | Gravity, radii, and identity of a physical body. |
 | Terminal | `terminals/` | RF or optical communication capability and limits. |
-| Payload | `payloads/` | Reusable terminal slots and shared resource groups. |
+| Payload | `payloads/` | A carried compute environment: forwarding class and workload profile. |
 | Profile | `profiles/` | Complete node workload composition: images, containers, adapter, terminal access. |
 | Orbit | `orbits/` | Body reference, epoch, geometry, orientation, and propagator. |
 | Node | `nodes/` | Reusable node definition: forwarding class, ports, mounts, and default profile. |
@@ -251,17 +251,19 @@ node:
   payloads: []
 ```
 
-A site installs that node definition at a physical facility. The placement owns the LAN,
-concrete interface addresses, installed terminal count, and optional
-capability narrowing:
+A site installs that node definition at a physical facility. The site declares
+the network segments it provides with the same `ethernet` form a node uses,
+binds each node port to one of them, and records the installed terminal count
+with optional capability narrowing. No address appears anywhere; segment
+subnets, member addresses, and loopbacks are all resolver-allocated,
+deterministically by stable member id:
 
 ```yaml
 site:
   id: earth-us-hawthorne
   display_name: Hawthorne Gateway Site
-  lan:
-    ipv4: 172.16.113.0/24
-    ipv6: fd00:da7a:71::/64
+  ethernet:
+  - id: lan0
   nodes:
   - id: gw1
     node: nodalarc:nodes/ground/starlink-gateway.yaml
@@ -272,15 +274,10 @@ site:
           boresight: {mode: local_vertical}
     payloads: {}
     interfaces:
-      lo0:
-        ipv4: 10.255.0.119/32
-        ipv6: fd00:da7a:ffff::77/128
-      terr0:
-        ipv4: 172.16.113.1/24
-        ipv6: fd00:da7a:71::1/64
+      terr0: lan0
     originated_prefixes:
-      ipv4: [172.16.113.0/24]
-      ipv6: [fd00:da7a:71::/64]
+      ipv4: [lan0]
+      ipv6: [lan0]
     tags: [leo]
   frame:
     body_fixed:
@@ -291,36 +288,50 @@ site:
     alt_m: 20
 ```
 
-Each placed node authors exactly two numbered interfaces:
+The `interfaces` mapping binds each Ethernet port the node definition
+declares to one declared site segment, port id to segment id. Every declared
+port is bound exactly once. The installed node's kernel interface keeps its
+port id as its name (`terr0` above), whichever segment it binds to, and
+receives an allocated address on that segment's allocated subnet. The node
+loopback is likewise allocated; a site authors no addresses of any kind.
 
-- `lo0` is the node loopback.
-- `terr0` is the site-LAN interface and must be inside the site's LAN for that
-  address family.
+The site's `terminals` mapping is the exhaustive installation inventory: a
+mount omitted from that mapping has zero installed instances at the site, and
+`installed_count` cannot exceed the node definition's count. Capability
+overrides may narrow the selected terminal but may not widen it. The required
+`payloads` mapping follows the same mount-inventory shape, populating the
+payload mounts the node definition declares; payload execution is
+structurally defined but support-gated today.
 
-Each interface declares IPv4, IPv6, or both. The site's `terminals` mapping is
-the exhaustive installation inventory: a mount omitted from that mapping has
-zero installed instances at the site, and `installed_count` cannot exceed the
-node definition's count. Capability overrides may narrow the selected terminal but may
-not widen it. The required `payloads` mapping follows the same mount-inventory
-shape; payload execution is structurally defined but support-gated today.
+A node's Ethernet ports are the segments it carries, through one production
+for ground and space alike: a gateway declares `terr0`, an orbiter can
+declare `bus0` and `bus1`. Each port becomes a kernel interface, named by
+its port id, on the node's own runtime environment. A node also mounts
+payloads: carried compute environments, each a catalog `payload` object
+declaring its forwarding class and workload profile. A payload mount's
+`attach` names the port whose segment the mounted environment joins, and the
+mounted environment's single Ethernet interface is named by that port id.
+This is how a host rides a gateway's LAN or a spacecraft bus without
+declaring anything about its future installation.
 
-Installed terminal mounts produce runtime WAN interfaces. Those interfaces are
-derived and currently unnumbered; they borrow the node loopback. Do not author
-`termN`, `islN`, or other derived WAN interfaces in a site.
-
-For the current substrate, a ground node definition declares exactly the
-`terr0` Ethernet port and a space node definition declares no Ethernet ports. A satellite
-access mount declares `boresight: {mode: nadir}` on the node mount; a ground
-access mount declares its boresight on the site installation as shown above.
+Installed terminal mounts produce runtime WAN interfaces. Those interfaces
+are derived and currently unnumbered; they borrow the node loopback. Do not
+author `termN`, `islN`, or other derived WAN interfaces in a site. A
+satellite access mount declares `boresight: {mode: nadir}` on the node mount;
+a ground access mount declares its boresight on the site installation as
+shown above.
 
 If a site node omits `tenant_id`, the resolver uses `default`. If it omits
 `service_priority`, OME uses priority `10` for ground allocation. These are
 allocation facts, not authentication, catalog ownership, or storage-isolation
 controls.
 
-`originated_prefixes` is explicit routing-injection intent. A LAN is not
-advertised merely because it exists. Listing `0.0.0.0/0` or `::/0` explicitly
-originates a default route; omitting a prefix means NodalArc does not inject it.
+`originated_prefixes` is explicit routing-injection intent, expressed
+symbolically: each entry names a declared segment the node is bound or
+attached to, resolving to that segment's allocated subnet in the list's
+address family, or the token `default` for the default route. A segment is
+not advertised merely because it exists, and no literal prefix appears in
+configuration.
 
 ## Workload profiles
 

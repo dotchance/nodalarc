@@ -259,32 +259,24 @@ endpoint mounts.
 ## Payload
 
 ```ebnf
-TerminalSlot = MappingBegin,
-               "id", Identifier,
-               "terminal", TerminalRef,
-               [ "tags", ( Tags | Null ) ],
-               MappingEnd ;
-
-PayloadResourceGroup = MappingBegin,
-                       "id", Identifier,
-                       "slots", SequenceBegin, Identifier, { Identifier }, SequenceEnd,
-                       "simultaneous_active", PositiveInteger,
-                       MappingEnd ;
-
 Payload = MappingBegin,
           "id", Identifier,
           [ "display_name", ( String | Null ) ],
-          "terminal_slots", SequenceBegin, TerminalSlot, { TerminalSlot }, SequenceEnd,
-          [ "resource_groups", SequenceBegin, { PayloadResourceGroup }, SequenceEnd ],
+          "forwarding", ( "routed" | "host" ),
+          "profile", ProfileRef,
+          [ "tags", ( Tags | Null ) ],
           [ "reference", ( Url | Null ) ],
           [ "notes", ( String | Null ) ],
           MappingEnd ;
 ```
 
-Omitted `resource_groups` defaults to an empty sequence. Terminal-slot ids and
-resource-group ids are unique within a payload. Every resource-group slot is
-unique and names a declared terminal slot. `simultaneous_active` cannot exceed
-the number of slots in its group.
+A payload is a carried compute environment: the runtime environment a node
+hosts on one of its Ethernet segments. It declares what it is (`forwarding`)
+and what it runs (`profile`), nothing else. A payload has no Ethernet ports,
+no terminal mounts, and no payload mounts, so payload composition cannot
+recurse. A payload with `forwarding: routed` whose profile's adapter renders
+routing configuration participates in routing domains through the ordinary
+router-population rule.
 
 ## Profile
 
@@ -542,7 +534,9 @@ TerminalMount = MappingBegin,
 PayloadMount = MappingBegin,
                "id", Identifier,
                "payload", PayloadRef,
+               [ "profile", ( ProfileRef | Null ) ],
                "count", PositiveInteger,
+               "attach", Identifier,
                [ "tags", ( Tags | Null ) ],
                MappingEnd ;
 
@@ -569,9 +563,24 @@ location or addressing. A node definition's `profile` is the authored workload
 default for every node instantiated from it; "Workload profile assignment"
 defines how segments and placed nodes override it.
 
-The current substrate requires every ground node definition to declare exactly
-one Ethernet port named `terr0`, and every space node definition to declare no
-Ethernet ports. Terminal mounts produce resolver-owned WAN interfaces instead.
+A node's Ethernet ports are the network segments it carries. Each declared
+port becomes a kernel interface, named by its port id, on the node's own
+runtime environment; whatever routing engine the node's profile runs sees it
+as an ordinary Ethernet interface. Ground and space node definitions declare
+ports through the same production. Segment subnets, like loopbacks for
+generated space nodes, are resolver-allocated per placed copy; a node never
+authors addresses. Terminal mounts produce resolver-owned WAN interfaces as
+before.
+
+`PayloadMount.attach` names a declared Ethernet port of the mounting node;
+the mounted payload's environment attaches to that segment, and its single
+Ethernet interface is named by the `attach` port id. A mount's `profile`
+overrides the payload's authored profile for that installation. Mounted
+payloads resolve to runtime nodes qualified by the carrier: the carrier's
+runtime id, then the mount id, with a 1-based ordinal suffix when `count`
+exceeds one. Payload execution remains gated runtime support; sessions
+resolving mounted payloads fail with the typed `UnsupportedFeature` until
+every required runtime component supports them.
 
 ## Shared placement and scheduling types
 
@@ -599,13 +608,16 @@ non-null `offset_s` and `rate`. An `affine` clock requires a non-null `rate`;
 `offset_s` remains optional.
 
 ```ebnf
-OriginatedPrefixes = MappingBegin,
-                     [ "ipv4", ( IPv4NetworkSequence | Null ) ],
-                     [ "ipv6", ( IPv6NetworkSequence | Null ) ],
-                     MappingEnd ;
+OriginationTarget = Identifier | "default" ;
 
-IPv4NetworkSequence = SequenceBegin, { IPv4Network }, SequenceEnd ;
-IPv6NetworkSequence = SequenceBegin, { IPv6Network }, SequenceEnd ;
+OriginationTargetSequence = SequenceBegin,
+                            { OriginationTarget },
+                            SequenceEnd ;
+
+OriginatedPrefixes = MappingBegin,
+                     [ "ipv4", ( OriginationTargetSequence | Null ) ],
+                     [ "ipv6", ( OriginationTargetSequence | Null ) ],
+                     MappingEnd ;
 
 HighestElevationPolicy = MappingBegin,
                          "highest_elevation", EmptyMapping,
@@ -665,7 +677,7 @@ GroundScheduling = MappingBegin,
                    MappingEnd ;
 ```
 
-`OriginatedPrefixes` must contain at least one prefix across its two families.
+`OriginatedPrefixes` must contain at least one entry across its two families.
 If `ranking_order` is present and non-null, its values are unique and its final
 value is `lex_pair`.
 
@@ -688,11 +700,6 @@ VerificationMetadata = MappingBegin,
                        [ "confidence", ( Identifier | Null ) ],
                        [ "notes", ( String | Null ) ],
                        MappingEnd ;
-
-SiteLan = MappingBegin,
-          [ "ipv4", ( IPv4Network | Null ) ],
-          [ "ipv6", ( IPv6Network | Null ) ],
-          MappingEnd ;
 
 BodyFixedFrame = MappingBegin,
                  "body_fixed", MappingBegin,
@@ -741,14 +748,8 @@ SiteLocation = MappingBegin,
                "alt_m", FiniteNumber,
                MappingEnd ;
 
-InterfaceAddress = MappingBegin,
-                   [ "ipv4", ( IPv4Interface | Null ) ],
-                   [ "ipv6", ( IPv6Interface | Null ) ],
-                   MappingEnd ;
-
-NodeInterfaces = MappingBegin,
-                 "lo0", InterfaceAddress,
-                 "terr0", InterfaceAddress,
+PortBindingMap = MappingBegin,
+                 { Identifier, Identifier },
                  MappingEnd ;
 
 LocalVerticalBoresight = MappingBegin,
@@ -805,7 +806,7 @@ SiteNode = MappingBegin,
            [ "profile", ( ProfileRef | Null ) ],
            "terminals", TerminalInstallationMap,
            "payloads", PayloadInstallationMap,
-           "interfaces", NodeInterfaces,
+           "interfaces", PortBindingMap,
            [ "originated_prefixes", ( OriginatedPrefixes | Null ) ],
            [ "tenant_id", ( Identifier | Null ) ],
            [ "service_priority", ( PositiveInteger | Null ) ],
@@ -817,7 +818,7 @@ Site = MappingBegin,
        "id", Identifier,
        [ "display_name", ( String | Null ) ],
        [ "verified", ( VerificationMetadata | Null ) ],
-       "lan", SiteLan,
+       "ethernet", SequenceBegin, EthernetPort, { EthernetPort }, SequenceEnd,
        [ "tags", ( Tags | Null ) ],
        "nodes", SequenceBegin, SiteNode, { SiteNode }, SequenceEnd,
        "frame", SiteFrame,
@@ -825,13 +826,21 @@ Site = MappingBegin,
        MappingEnd ;
 ```
 
-`SiteLan` and each `InterfaceAddress` must have at least one non-null address
-family. Latitude is in `[-90, 90]`; longitude is in `[-180, 180]`. Site-node
-ids are unique within a site. A body-fixed site requires a non-null `location`;
-a Lagrange- or ephemeris-anchored site requires `location` to be absent or
-null. Interface IP addresses are unique within a site. Each `terr0` address
-requires the same family in `lan` and its host address must fall inside that
-LAN.
+A site's `ethernet` sequence declares the network segments the site provides,
+through the same production a node uses for the segments it carries. Segment
+ids are unique within a site. A site authors no segment subnets; segment
+subnets and every member address are resolver-allocated, deterministically by
+stable member id. `SiteNode.interfaces` binds each Ethernet port declared by
+the referenced node definition to one declared site segment, port id to
+segment id; every declared port is bound exactly once, and a binding naming
+an undeclared port or segment fails resolution. The installed node's kernel
+interface keeps its port id as its name, whichever segment it binds to.
+Loopbacks are allocated; a site authors no addresses of any kind.
+
+Latitude is in `[-90, 90]`; longitude is in `[-180, 180]`. Site-node ids are
+unique within a site. A body-fixed site requires a non-null `location`; a
+Lagrange- or ephemeris-anchored site requires `location` to be absent or
+null.
 
 The required `terminals` map is an exhaustive installation inventory, not a
 patch over the referenced node definition. An omitted terminal mount has zero
@@ -1038,11 +1047,13 @@ segment-apply or ground-override prefixes rather than replacing them.
 non-null statement for each node:
 
 1. The node definition (`Node.profile`) is the authored default for every
-   node instantiated from it.
+   node instantiated from it. A payload's `profile` is the same authored
+   default for every environment mounted from it.
 2. A segment `profile` overrides that default for every node the segment
    resolves.
 3. A placed node's `profile` (`SpaceNode.profile` for a fixed space node,
-   `SiteNode.profile` for an installed ground node) overrides both.
+   `SiteNode.profile` for an installed ground node) overrides both. A
+   payload mount's `profile` overrides both for that mounted environment.
 
 Every resolved runtime node must have an effective profile. A node with no
 `profile` statement at any level fails resolution; there is no platform
@@ -1236,15 +1247,17 @@ Addressing = MappingBegin,
 An assignment has at least one non-null pool. A non-null `prefix_length` is not
 shorter than any supplied pool prefix and does not exceed the address-family
 maximum. An executed loopback assignment must match at least one node, declare
-`prefix_length`, fit that prefix inside each selected pool, have enough free
-addresses, and not conflict with authored loopbacks. An omitted or null
-`allocation` is interpreted as `by_node_order`.
+`prefix_length`, fit that prefix inside each selected pool, and have enough
+free addresses. An omitted or null `allocation` is interpreted as
+`by_node_order`.
 
-Ground-site addresses remain authored on their sites. Generated routed space
-nodes without an explicit loopback assignment receive deterministic
-resolver-owned IPv4 and IPv6 loopbacks. Across the fully resolved session, a
-loopback host address belongs to exactly one node per address family; duplicate
-authored or allocated `lo0` addresses are invalid.
+No catalog object authors addresses. Ethernet segment subnets (site segments
+and node-carried buses alike), member addresses on those segments, and
+loopbacks are resolver-allocated, deterministically. Nodes without an
+explicit loopback assignment receive deterministic resolver-owned IPv4 and
+IPv6 loopbacks. Across the fully resolved session, a loopback host address
+belongs to exactly one node per address family; duplicate allocated `lo0`
+addresses are invalid.
 
 ## Routing
 
@@ -1517,8 +1530,13 @@ context-free EBNF alone:
 - Site-level scheduling overrides segment scheduling field by field. A matching
   ground override replaces the segment apply value for scheduling and
   originated-prefix intent; at most one override targets a site.
-- `originated_prefixes` is routing-injection intent. It does not allocate or
-  infer address ownership.
+- `originated_prefixes` is routing-injection intent, expressed symbolically:
+  each entry is a declared segment id, resolving to that segment's allocated
+  subnet in the list's address family, or the token `default` for the default
+  route. No literal prefix appears in configuration. A segment id entry must
+  name a segment the originating node is bound or attached to. Origination
+  never allocates or infers address ownership, and a segment is never
+  advertised merely because it exists.
 - Every resolved node has exactly one effective workload profile, taken from
   the most specific of its own node entry, its segment, and its node model. A
   node with no profile statement at any level fails resolution. The resolved
@@ -1580,7 +1598,13 @@ runtime execution:
 - `bgp` and `dtn_bundle` routing boundaries;
 - `spice_kernel_stack` and `operator_supplied_spk` ephemeris providers;
 - bodies outside the supported Earth-Luna profile;
-- workload adapters other than `frr`.
+- workload adapters other than `frr`;
+- the amended payload, payload-mount, node-Ethernet, site-segment, and
+  origination grammar on this page (compute payloads, `attach`, space
+  Ethernet ports, `site.ethernet`, port-to-segment bindings, allocated
+  segment addressing, symbolic `originated_prefixes`): defined ahead of the
+  installed models, which still enforce the prior forms; the matching model
+  and resolver change follows this definition.
 
 Unsupported features fail explicitly. They are never silently removed,
 flattened, translated to another feature, or treated as successful execution.

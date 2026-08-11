@@ -8,7 +8,7 @@ profile:
   id: picoquic-server
   display_name: QUIC server endpoint
   registry: node01:5000
-  image: nodalarc-picoquic/picoquic@sha256:b4e9ba7198d7bf2383fc86e28b825dfa099fcb8481a520d4d271c735ca948fa9
+  image: nodalarc-picoquic/picoquic@sha256:0ce1ef8b27da95fa286d6c1e0db76668323093c7046a44358499d335c7b2041a
   command:
   - /usr/local/bin/picoquicdemo
   - -p

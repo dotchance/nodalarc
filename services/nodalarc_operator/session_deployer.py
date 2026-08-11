@@ -1257,6 +1257,10 @@ def write_wiring_manifest(
         "net.ipv4.conf.default.rp_filter": "0",
         "net.ipv6.conf.all.dad_transmits": "0",
         "net.ipv6.conf.default.dad_transmits": "0",
+        # Unprivileged ICMP echo for every gid: workload containers run with
+        # all capabilities dropped and NoNewPrivs, where a file-capability
+        # ping cannot even exec. Datagram ICMP sockets need no capability.
+        "net.ipv4.ping_group_range": "0 2147483647",
     }
     fixed_interfaces = _fixed_link_interfaces_by_node(resolved_session)
     ground_indices = resolved_session.ground_index_by_node_id()

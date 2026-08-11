@@ -1149,6 +1149,9 @@ class TestWiringManifest:
             assert sysctls.get("net.ipv4.conf.default.rp_filter") == "0", (
                 f"{node_id} missing rp_filter=0 on default"
             )
+            assert sysctls.get("net.ipv4.ping_group_range") == "0 2147483647", (
+                f"{node_id} missing unprivileged ICMP ping_group_range"
+            )
 
     def test_ground_bridges_match_gs_nodes(self, tmp_path):
         manifest = self._build_and_extract(tmp_path)

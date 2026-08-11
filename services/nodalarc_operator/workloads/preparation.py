@@ -27,7 +27,7 @@ from nodalarc_operator.workloads.compose import ComposedWorkload, compose_worklo
 
 log = logging.getLogger("nodalarc.operator.workloads")
 
-DEV_IMAGE_OVERRIDES_ENV = "NODALARC_DEV_IMAGE_OVERRIDES"
+DEV_IMAGE_OVERRIDES_ENV = "WORKLOAD_DEV_IMAGE_OVERRIDES"
 
 
 class WorkloadPreparationError(ValueError):

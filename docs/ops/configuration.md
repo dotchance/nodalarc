@@ -349,10 +349,6 @@ a new `user:` path, change the command, image, capabilities, or resources, and
 reference the new object at the level where it should apply. Forking a profile
 requires no platform code.
 
-The installed models predate this part of the language and still reject
-`profile` fields structurally; the matching model and resolver change follows
-this definition, and worked profile examples land in this guide with it.
-
 ## Address pools
 
 Session-level addressing is primarily for generated space nodes. The current

@@ -1516,7 +1516,9 @@ construct. The production Earth-Luna profile currently supports:
 - `static_ip` routing boundaries;
 - serialized ground handovers with `handover_concurrency: one_at_a_time`, at
   most one reserved MBB overlap, and one-tick BBM acquisition;
-- `skyfield_bsp` ephemeris.
+- `skyfield_bsp` ephemeris;
+- workload profiles at all three assignment levels, with the `frr` adapter
+  and adapter-free application profiles.
 
 The following structurally valid constructs are currently rejected before
 runtime execution:
@@ -1537,11 +1539,7 @@ runtime execution:
 - `bgp` and `dtn_bundle` routing boundaries;
 - `spice_kernel_stack` and `operator_supplied_spk` ephemeris providers;
 - bodies outside the supported Earth-Luna profile;
-- the `profiles` family and `profile` assignment fields: this section of the
-  language is defined ahead of the installed models, which still reject the
-  fields structurally; the matching model, resolver, and runtime change
-  follows this definition, including routing-domain coverage re-keyed from
-  the node definition's forwarding class to the effective profile.
+- workload adapters other than `frr`.
 
 Unsupported features fail explicitly. They are never silently removed,
 flattened, translated to another feature, or treated as successful execution.

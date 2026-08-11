@@ -36,7 +36,6 @@ def _manifest():
                 "sysctls": {"net.ipv6.conf.all.forwarding": "1"},
                 "isl_interfaces": [],
                 "gnd_interfaces": [{"name": "term0"}],
-                "terrestrial": {"addresses": []},
                 "mpls_enable": True,
                 "segment_routing": False,
                 "mtu": 9000,

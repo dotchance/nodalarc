@@ -73,9 +73,11 @@ FEATURE_SUPPORT_NOTES: dict[tuple[FeatureCategory, str], str] = {
         "future runtime capability — WAN interfaces are unnumbered (borrow lo0)"
     ),
     (FeatureCategory.ADDRESSING_POOL, "terrestrial_prefixes"): (
-        "future runtime capability — sites author terr0 addresses directly"
+        "future runtime capability — segment subnets are resolver-allocated"
     ),
-    (FeatureCategory.PAYLOAD, "payloads"): "future runtime capability",
+    (FeatureCategory.PAYLOAD, "space_payload_execution"): (
+        "supported by the Earth-Luna runtime"
+    ),
     (FeatureCategory.CLOCK_MODEL, "session"): "supported clock model",
     (FeatureCategory.CLOCK_MODEL, "affine"): "future runtime capability",
     (FeatureCategory.GROUND_SCHEDULING, "handover_concurrency:all_at_once"): (
@@ -198,7 +200,7 @@ class RuntimeSupport(BaseModel):
             supported_clock_models=frozenset({"session"}),
             supported_propagators=frozenset({"two_body", "j2_mean_elements", "sgp4_tle"}),
             supported_workload_adapters=frozenset({"frr"}),
-            supports_payloads=False,
+            supports_payloads=True,
             ephemeris_required_bodies=frozenset({"luna", "mars"}),
         )
 
@@ -230,7 +232,7 @@ class RuntimeSupport(BaseModel):
             supported_clock_models=frozenset({"session"}),
             supported_propagators=frozenset({"two_body", "j2_mean_elements", "sgp4_tle"}),
             supported_workload_adapters=frozenset({"frr"}),
-            supports_payloads=False,
+            supports_payloads=True,
             ephemeris_required_bodies=frozenset({"luna"}),
         )
 
@@ -389,6 +391,17 @@ class RuntimeSupport(BaseModel):
         return self._unsupported(FeatureCategory.CLOCK_MODEL, model, "clock model")
 
     def check_payloads(self, has_payloads: bool) -> UnsupportedFeature | None:
+        """Gate space-placed onboard execution: bus ports and payload mounts.
+
+        Ground-installed payload mounts execute through the site path;
+        space-placed nodes need the bus wiring chain and motion sharing, so
+        a space node definition declaring Ethernet ports or payload mounts
+        refuses here until the runtime carries them.
+        """
         if not has_payloads or self.supports_payloads:
             return None
-        return self._unsupported(FeatureCategory.PAYLOAD, "payloads", "node payloads")
+        return self._unsupported(
+            FeatureCategory.PAYLOAD,
+            "space_payload_execution",
+            "onboard bus and payload execution on space placements",
+        )

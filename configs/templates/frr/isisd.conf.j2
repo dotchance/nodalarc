@@ -58,18 +58,20 @@ interface lo
  isis passive
 exit
 
-{% if node_type == "ground_station" and terr0_igp_enabled %}
-interface terr0
+{% for segment in segment_interfaces %}
+{% if segment.igp_enabled %}
+interface {{ segment.name }}
  ip router isis NODAL
-{% if not terr0_igp_active %}
+{% if not segment.igp_active %}
  isis passive
 {% endif %}
- isis metric {{ terr0_metric }}
+ isis metric {{ segment.metric }}
 exit
 {% endif %}
+{% endfor %}
 
-{% if node_type == "ground_station" and terr0_default_route %}
+{% if default_route_originate %}
 router isis NODAL
- default-information originate ipv4 level-2 always metric {{ terr0_default_metric }}
+ default-information originate ipv4 level-2 always metric {{ default_route_metric }}
 exit
 {% endif %}

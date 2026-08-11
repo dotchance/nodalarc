@@ -54,7 +54,6 @@ def _manifest_data() -> dict:
                 "sysctls": {"net.ipv4.ip_forward": "1"},
                 "isl_interfaces": [],
                 "gnd_interfaces": [{"name": "term0"}],
-                "terrestrial": {"addresses": ["172.16.1.1/24"], "site_id": "site-a"},
                 "mpls_enable": False,
                 "segment_routing": False,
                 "mtu": 9000,
@@ -68,7 +67,6 @@ def _manifest_data() -> dict:
                 "sysctls": {"net.ipv4.ip_forward": "1"},
                 "isl_interfaces": [],
                 "gnd_interfaces": [{"name": "term0"}],
-                "terrestrial": {"addresses": ["172.16.1.2/24"], "site_id": "site-a"},
                 "mpls_enable": False,
                 "segment_routing": False,
                 "mtu": 9000,
@@ -78,11 +76,23 @@ def _manifest_data() -> dict:
         "ground_bridges": {"site-a-gw1": {}, "site-a-gw2": {}},
         "required_substrate_pairs": [],
         "site_lans": {
-            "site-a": {
+            "site-a-lan0": {
                 "vni": 4242,
                 "members": [
-                    {"node_id": "site-a-gw1", "k3s_node": "node01", "host_ip": "10.0.0.1"},
-                    {"node_id": "site-a-gw2", "k3s_node": "node02", "host_ip": "10.0.0.2"},
+                    {
+                        "node_id": "site-a-gw1",
+                        "interface": "terr0",
+                        "addresses": ["172.16.1.1/24"],
+                        "k3s_node": "node01",
+                        "host_ip": "10.0.0.1",
+                    },
+                    {
+                        "node_id": "site-a-gw2",
+                        "interface": "terr0",
+                        "addresses": ["172.16.1.2/24"],
+                        "k3s_node": "node02",
+                        "host_ip": "10.0.0.2",
+                    },
                 ],
             }
         },
@@ -171,35 +181,37 @@ class TestManagementRoute:
 
 
 class TestManifestContract:
-    def test_site_lan_manifest_round_trips(self) -> None:
+    def test_segment_manifest_round_trips(self) -> None:
         manifest = WiringManifest.model_validate(_manifest_data())
-        spec = manifest.site_lans["site-a"]
+        spec = manifest.site_lans["site-a-lan0"]
         assert spec.vni == 4242
         assert [m.node_id for m in spec.members] == ["site-a-gw1", "site-a-gw2"]
+        assert [m.interface for m in spec.members] == ["terr0", "terr0"]
         assert spec.uplink is None
 
-    def test_addressed_terr0_requires_site_membership(self) -> None:
+    def test_segment_members_must_be_manifest_nodes(self) -> None:
         data = _manifest_data()
-        data["site_lans"]["site-a"]["members"] = data["site_lans"]["site-a"]["members"][:1]
-        with pytest.raises(ValidationError, match="not a declared member"):
-            WiringManifest.model_validate(data)
-
-    def test_addressed_terr0_requires_site_id(self) -> None:
-        data = _manifest_data()
-        del data["nodes"]["site-a-gw1"]["terrestrial"]["site_id"]
-        with pytest.raises(ValidationError, match="require site_id"):
-            WiringManifest.model_validate(data)
-
-    def test_site_lan_members_must_be_lan_capable(self) -> None:
-        data = _manifest_data()
-        data["site_lans"]["site-a"]["members"].append(
-            {"node_id": "ghost", "k3s_node": "node01", "host_ip": "10.0.0.1"}
+        data["site_lans"]["site-a-lan0"]["members"].append(
+            {
+                "node_id": "ghost",
+                "interface": "terr0",
+                "addresses": ["172.16.1.3/24"],
+                "k3s_node": "node01",
+                "host_ip": "10.0.0.1",
+            }
         )
-        with pytest.raises(ValidationError, match="non-LAN-capable member"):
+        with pytest.raises(ValidationError, match="unknown member"):
             WiringManifest.model_validate(data)
 
-    def test_host_nodes_carry_gateway_and_routers_never_do(self) -> None:
-        base = {
+    def test_segment_members_require_addresses(self) -> None:
+        data = _manifest_data()
+        data["site_lans"]["site-a-lan0"]["members"][0]["addresses"] = []
+        with pytest.raises(ValidationError, match="at least 1"):
+            WiringManifest.model_validate(data)
+
+    def test_host_members_carry_gateway_and_routers_never_do(self) -> None:
+        data = _manifest_data()
+        data["nodes"]["site-a-host"] = {
             "node_type": "host",
             "host": "node01",
             "sysctls": {"net.ipv4.conf.all.rp_filter": "0"},
@@ -209,27 +221,35 @@ class TestManifestContract:
             "segment_routing": False,
             "mtu": 9000,
             "remove_default_route": True,
-            "terrestrial": {
-                "addresses": ["172.16.1.9/24"],
-                "site_id": "site-a",
-                "gateway": "172.16.1.1",
-            },
         }
-        NodeSpec.model_validate(base)
+        data["site_lans"]["site-a-lan0"]["members"].append(
+            {
+                "node_id": "site-a-host",
+                "interface": "terr0",
+                "addresses": ["172.16.1.9/24"],
+                "gateway": "172.16.1.1",
+                "k3s_node": "node01",
+                "host_ip": "10.0.0.1",
+            }
+        )
+        WiringManifest.model_validate(data)
 
-        missing_gateway = {**base, "terrestrial": {**base["terrestrial"], "gateway": None}}
-        with pytest.raises(ValidationError, match="require a terrestrial gateway"):
-            NodeSpec.model_validate(missing_gateway)
+        missing_gateway = deepcopy(data)
+        missing_gateway["site_lans"]["site-a-lan0"]["members"][2]["gateway"] = None
+        with pytest.raises(ValidationError, match="requires a segment gateway"):
+            WiringManifest.model_validate(missing_gateway)
 
-        router_with_gateway = {**base, "node_type": "ground_station"}
+        router_with_gateway = deepcopy(data)
+        router_with_gateway["site_lans"]["site-a-lan0"]["members"][0]["gateway"] = "172.16.1.1"
         with pytest.raises(ValidationError, match="only host nodes carry"):
-            NodeSpec.model_validate(router_with_gateway)
+            WiringManifest.model_validate(router_with_gateway)
 
     def test_plan_threads_gateway_to_member_port(self) -> None:
-        spec, nodes = _manifest_data()["site_lans"]["site-a"], _manifest_data()["nodes"]
-        nodes["site-a-gw1"]["terrestrial"]["gateway"] = "172.16.1.254"
+        data = _manifest_data()
+        spec, nodes = data["site_lans"]["site-a-lan0"], data["nodes"]
+        spec["members"][0]["gateway"] = "172.16.1.254"
         plan = plan_site_lan(
-            "site-a",
+            "site-a-lan0",
             spec,
             nodes=nodes,
             pid_map={"site-a-gw1": 111},
@@ -239,29 +259,32 @@ class TestManifestContract:
         )
         assert plan is not None
         assert plan.local_members[0].gateway == "172.16.1.254"
+        assert plan.local_members[0].interface == "terr0"
+        assert plan.local_members[0].addresses == ("172.16.1.1/24",)
 
-    def test_site_lan_vnis_must_be_distinct(self) -> None:
+    def test_segment_vnis_must_be_distinct(self) -> None:
         data = _manifest_data()
-        data["site_lans"]["site-b"] = deepcopy(data["site_lans"]["site-a"])
-        data["site_lans"]["site-b"]["members"] = [
-            {"node_id": "site-a-gw2", "k3s_node": "node02", "host_ip": "10.0.0.2"}
+        data["site_lans"]["site-b-lan0"] = deepcopy(data["site_lans"]["site-a-lan0"])
+        data["site_lans"]["site-b-lan0"]["members"] = [
+            deepcopy(data["site_lans"]["site-a-lan0"]["members"][1])
         ]
-        data["nodes"]["site-a-gw2"]["terrestrial"]["site_id"] = "site-b"
-        data["site_lans"]["site-a"]["members"] = data["site_lans"]["site-a"]["members"][:1]
+        data["site_lans"]["site-a-lan0"]["members"] = data["site_lans"]["site-a-lan0"][
+            "members"
+        ][:1]
         with pytest.raises(ValidationError, match="pairwise distinct"):
             WiringManifest.model_validate(data)
 
     def test_uplink_slot_round_trips(self) -> None:
         data = _manifest_data()
-        data["site_lans"]["site-a"]["uplink"] = {"host": "node03", "interface": "eno2"}
+        data["site_lans"]["site-a-lan0"]["uplink"] = {"host": "node03", "interface": "eno2"}
         manifest = WiringManifest.model_validate(data)
-        assert manifest.site_lans["site-a"].uplink.interface == "eno2"
+        assert manifest.site_lans["site-a-lan0"].uplink.interface == "eno2"
 
 
 class TestPlanner:
     def _spec_and_nodes(self) -> tuple[dict, dict]:
         data = _manifest_data()
-        return data["site_lans"]["site-a"], data["nodes"]
+        return data["site_lans"]["site-a-lan0"], data["nodes"]
 
     def test_partitions_local_members_and_peer_hosts(self) -> None:
         spec, nodes = self._spec_and_nodes()
@@ -398,7 +421,10 @@ class TestRenderAndReadiness:
             vars_for_node = build_template_vars_from_resolved(
                 resolved, node.node_id, stack_variables=stack.template_variables
             )
-            assert vars_for_node["terr0_igp_active"] is True
+            terr0 = next(
+                seg for seg in vars_for_node["segment_interfaces"] if seg["name"] == "terr0"
+            )
+            assert terr0["igp_active"] is True
 
         single = resolve_session(
             build_catalog_session_fixture(
@@ -412,7 +438,10 @@ class TestRenderAndReadiness:
         lone_vars = build_template_vars_from_resolved(
             single, lone.node_id, stack_variables=stack.template_variables
         )
-        assert lone_vars["terr0_igp_active"] is False
+        lone_terr0 = next(
+            seg for seg in lone_vars["segment_interfaces"] if seg["name"] == "terr0"
+        )
+        assert lone_terr0["igp_active"] is False
 
     def test_site_lan_membership_satisfies_domain_connectivity(self) -> None:
         from nodalarc.models.resolved_session import SourceContext
@@ -513,6 +542,7 @@ class TestActuationIdempotency:
         fake = _FakeIPRoute(existing={"sp0000424200": 7}, addr_exists=True)
         monkeypatch.setattr(site_lan, "_in_namespace", lambda pid, fn: fn(fake))
         port = site_lan.MemberPort(
+            interface="terr0",
             node_id="site-a-gw1",
             pid=111,
             host_ifname="sm0000424200",
@@ -531,6 +561,7 @@ class TestActuationIdempotency:
         fake = _FakeIPRoute(existing={"sp0000424200": 7, "terr0": 3})
         monkeypatch.setattr(site_lan, "_in_namespace", lambda pid, fn: fn(fake))
         port = site_lan.MemberPort(
+            interface="terr0",
             node_id="site-a-gw1",
             pid=111,
             host_ifname="sm0000424200",
@@ -564,6 +595,7 @@ class TestActuationIdempotency:
         fake = _Fake(existing={"sp0000424200": 7})
         monkeypatch.setattr(site_lan, "_in_namespace", lambda pid, fn: fn(fake))
         port = site_lan.MemberPort(
+            interface="terr0",
             node_id="site-a-gw1",
             pid=111,
             host_ifname="sm0000424200",

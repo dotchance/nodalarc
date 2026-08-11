@@ -53,17 +53,19 @@ interface {{ iface }}
 exit
 {% endfor %}
 
-{% if node_type == "ground_station" and terr0_igp_enabled %}
-interface terr0
+{% for segment in segment_interfaces %}
+{% if segment.igp_enabled %}
+interface {{ segment.name }}
  ip ospf area {{ area_id }}
-{% if not terr0_igp_active %}
+{% if not segment.igp_active %}
  ip ospf passive
 {% endif %}
 exit
 {% endif %}
+{% endfor %}
 
-{% if node_type == "ground_station" and terr0_default_route %}
+{% if default_route_originate %}
 router ospf
- default-information originate always metric {{ terr0_default_metric }}
+ default-information originate always metric {{ default_route_metric }}
 exit
 {% endif %}

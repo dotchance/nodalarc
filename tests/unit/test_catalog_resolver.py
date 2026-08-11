@@ -109,6 +109,9 @@ SHIPPED_SESSION_SHAPES = {
     # mid-latitude coverage), GEO ring, lunar ELFO relays, one Earth QUIC
     # lab and one lunar QUIC lab, each pairing a routed gateway with a
     # host-forwarding endpoint that joins no routing domain.
+    # 82/290: the quic sky with the lunar relay replaced by a DTN relay
+    # vehicle carrying a uD3TN store-and-forward host on its payload bus.
+    "earth-luna-dtn.yaml": (82, 290),
     "earth-luna-quic.yaml": (81, 290),
     # 43/246: four feeder-class bridge sites added (Djibouti, Singapore,
     # Cape Town, Tokyo — authored ranges cover the 780 km shell at the

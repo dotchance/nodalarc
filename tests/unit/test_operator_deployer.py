@@ -1065,21 +1065,26 @@ class TestWiringManifest:
             for spec in manifest["site_lans"].values()
             for member in spec["members"]
         }
+        members_by_id = {
+            member["node_id"]: member
+            for spec in manifest["site_lans"].values()
+            for member in spec["members"]
+        }
         router_ips = {
             addr.split("/")[0]
-            for node in routers.values()
-            for addr in (node.get("terrestrial") or {}).get("addresses", ())
+            for node_id in routers
+            for addr in members_by_id[node_id]["addresses"]
         }
         for node_id, node in hosts.items():
-            terrestrial = node["terrestrial"]
-            assert terrestrial["addresses"]
-            assert terrestrial["gateway"] in router_ips
+            member = members_by_id[node_id]
+            assert member["addresses"]
+            assert member["gateway"] in router_ips
             assert node["isl_interfaces"] == []
             assert node["gnd_interfaces"] == []
             assert node_id not in manifest["ground_bridges"]
             assert node_id in member_ids
-        for node in routers.values():
-            assert (node.get("terrestrial") or {}).get("gateway") is None
+        for node_id in routers:
+            assert members_by_id[node_id].get("gateway") is None
         WiringManifest.model_validate(manifest)
 
     def test_manifest_disables_mpls_for_plain_igp(self, tmp_path):

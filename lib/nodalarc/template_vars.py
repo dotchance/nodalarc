@@ -35,6 +35,12 @@ def build_template_vars_from_resolved(
         result["node_sid_index"] = node_sid_index
 
     result.update(_timer_template_facts(domain))
+    segment_interfaces, default_route, default_metric = _segment_template_facts(
+        resolved, node, domain
+    )
+    result["segment_interfaces"] = segment_interfaces
+    result["default_route_originate"] = default_route
+    result["default_route_metric"] = default_metric
     result.update(
         {
             "node_id": node.node_id,
@@ -98,37 +104,32 @@ def build_template_vars_from_resolved(
             "isl_count": 0,
         }
     )
-    terr0_addresses, terr0_igp_enabled, default_route, default_metric = _terr0_template_facts(node)
-    result["terr0_addresses"] = terr0_addresses
-    result["terr0_igp_enabled"] = terr0_igp_enabled
-    # Active IGP on terr0 only where the wired site LAN actually has a peer:
-    # ≥2 routed same-domain members at this site run a broadcast adjacency
-    # (DIS/DR election on a real L2 segment); a lone member stays passive —
-    # the honest stub-LAN posture.
-    result["terr0_igp_active"] = _terr0_site_peer_count(resolved, node, domain) >= 1
-    result["terr0_metric"] = 10
-    result["terr0_default_route"] = default_route
-    result["terr0_default_metric"] = default_metric
     return result
 
 
-def _terr0_site_peer_count(
-    resolved: ResolvedSession, node: ResolvedNode, domain: ResolvedRoutingDomain
+def _segment_peer_count(
+    resolved: ResolvedSession,
+    node: ResolvedNode,
+    domain: ResolvedRoutingDomain,
+    interface: str,
 ) -> int:
-    """Routed peers sharing this node's site LAN within the same routing domain."""
-    if node.interfaces is None or not node.interfaces.ethernet:
-        return 0
-    return sum(
-        1
-        for peer in resolved.nodes
-        if peer.node_id != node.node_id
-        and peer.kind == "ground_station"
-        and peer.namespace == node.namespace
-        and peer.forwarding == "routed"
-        and peer.node_id in domain.node_ids
-        and peer.interfaces is not None
-        and peer.interfaces.ethernet
-    )
+    """Routed peers sharing this interface's segment within the same domain."""
+    for segment in resolved.ethernet_segments:
+        member_ids = {member.node_id for member in segment.members}
+        if not any(
+            member.node_id == node.node_id and member.interface == interface
+            for member in segment.members
+        ):
+            continue
+        return sum(
+            1
+            for peer in resolved.nodes
+            if peer.node_id != node.node_id
+            and peer.node_id in member_ids
+            and peer.forwarding == "routed"
+            and peer.node_id in domain.node_ids
+        )
+    return 0
 
 
 def _timer_template_facts(domain: ResolvedRoutingDomain) -> dict[str, Any]:
@@ -422,47 +423,73 @@ def _boundary_static_routes(
     return routes
 
 
-def _terr0_template_facts(node: ResolvedNode) -> tuple[list[dict[str, Any]], bool, bool, int]:
+def _segment_template_facts(
+    resolved: ResolvedSession,
+    node: ResolvedNode,
+    domain: ResolvedRoutingDomain,
+) -> tuple[list[dict[str, Any]], bool, int]:
+    """Per-segment interface facts for any node carrying Ethernet segments.
+
+    A segment joins the IGP exactly when the node originates its allocated
+    prefix; it runs active only where the wired segment has a routed
+    same-domain peer (broadcast adjacency on a real L2 segment) and stays
+    passive otherwise — the honest stub posture.
+    """
     if node.interfaces is None or not node.interfaces.ethernet:
-        return [], False, False, 100
-    entries = sorted(node.interfaces.ethernet.items())
-    if len(entries) > 1 or entries[0][0] != "terr0":
-        raise ValueError(
-            f"ground node {node.node_id!r} carries segment interface(s) "
-            f"{[name for name, _ in entries]}; current FRR rendering supports "
-            "exactly one, named terr0"
-        )
-    segment = entries[0][1]
-    addresses: list[dict[str, Any]] = []
-    terr0_networks: set[str] = set()
-    for value in (segment.ipv4, segment.ipv6):
-        if value is None:
-            continue
-        iface = ipaddress.ip_interface(value)
-        addresses.append({"host_address": value, "metric": 10, "prefix": str(iface.network)})
-        terr0_networks.add(str(iface.network))
+        return [], _originates_default(node), 100
 
+    originated_networks: set[str] = set()
     default_route = False
-    non_default_originated: list[str] = []
     if node.originated_prefixes is not None:
-        for prefix in node.originated_prefixes.ipv4 or ():
-            if ipaddress.ip_network(prefix, strict=False).prefixlen == 0:
-                default_route = True
-            else:
-                non_default_originated.append(prefix)
-        for prefix in node.originated_prefixes.ipv6 or ():
-            if ipaddress.ip_network(prefix, strict=False).prefixlen == 0:
-                default_route = True
-            else:
-                non_default_originated.append(prefix)
+        for family in ("ipv4", "ipv6"):
+            for prefix in getattr(node.originated_prefixes, family) or ():
+                network = ipaddress.ip_network(prefix, strict=False)
+                if network.prefixlen == 0:
+                    default_route = True
+                else:
+                    originated_networks.add(str(network))
 
-    for prefix in non_default_originated:
-        if str(ipaddress.ip_network(prefix, strict=False)) not in terr0_networks:
-            raise ValueError(
-                f"ground node {node.node_id!r} originates non-connected prefix {prefix!r}; "
-                "current FRR rendering supports connected terr0 prefixes and default routes"
+    interfaces: list[dict[str, Any]] = []
+    covered: set[str] = set()
+    for name, segment in sorted(node.interfaces.ethernet.items()):
+        addresses: list[dict[str, Any]] = []
+        networks: set[str] = set()
+        for value in (segment.ipv4, segment.ipv6):
+            if value is None:
+                continue
+            iface = ipaddress.ip_interface(value)
+            addresses.append(
+                {"host_address": value, "metric": 10, "prefix": str(iface.network)}
             )
-    return addresses, bool(non_default_originated), default_route, 100
+            networks.add(str(iface.network))
+        igp_enabled = bool(networks & originated_networks)
+        covered.update(networks & originated_networks)
+        interfaces.append(
+            {
+                "name": name,
+                "addresses": addresses,
+                "metric": 10,
+                "igp_enabled": igp_enabled,
+                "igp_active": _segment_peer_count(resolved, node, domain, name) >= 1,
+            }
+        )
+    uncovered = sorted(originated_networks - covered)
+    if uncovered:
+        raise ValueError(
+            f"node {node.node_id!r} originates non-connected prefix(es) {uncovered}; "
+            "FRR rendering supports connected segment prefixes and default routes"
+        )
+    return interfaces, default_route, 100
+
+
+def _originates_default(node: ResolvedNode) -> bool:
+    if node.originated_prefixes is None:
+        return False
+    return any(
+        ipaddress.ip_network(prefix, strict=False).prefixlen == 0
+        for family in ("ipv4", "ipv6")
+        for prefix in getattr(node.originated_prefixes, family) or ()
+    )
 
 
 def _ip_from_interface(value: str | None, *, field: str) -> str:

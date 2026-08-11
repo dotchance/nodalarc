@@ -548,6 +548,7 @@ Node = MappingBegin,
        "ethernet", SequenceBegin, { EthernetPort }, SequenceEnd,
        "terminals", SequenceBegin, { TerminalMount }, SequenceEnd,
        "payloads", SequenceBegin, { PayloadMount }, SequenceEnd,
+       [ "originated_prefixes", ( OriginatedPrefixes | Null ) ],
        [ "tags", ( Tags | Null ) ],
        [ "reference", ( Url | Null ) ],
        [ "notes", ( String | Null ) ],
@@ -578,9 +579,20 @@ Ethernet interface is named by the `attach` port id. A mount's `profile`
 overrides the payload's authored profile for that installation. Mounted
 payloads resolve to runtime nodes qualified by the carrier: the carrier's
 runtime id, then the mount id, with a 1-based ordinal suffix when `count`
-exceeds one. Payload execution remains gated runtime support; sessions
-resolving mounted payloads fail with the typed `UnsupportedFeature` until
-every required runtime component supports them.
+exceeds one.
+
+A node's `originated_prefixes` is the same symbolic routing-injection
+intent placed nodes carry, restricted to the node's own declared Ethernet
+ports plus `default` — a carrier originates the buses it serves. On a
+ground installation it combines additively with segment-apply, override,
+and site-node origination. A space placement expands every payload mount
+at its declared count (space has no installation map, exactly as space
+terminals install at their declared counts), and members share the
+carrier's motion, grid coordinates, and clock. Onboard execution on space
+placements — declared Ethernet ports or payload mounts on a space-placed
+node definition — remains gated runtime support and fails with the typed
+`UnsupportedFeature` until the bus wiring chain lands; ground-installed
+payload mounts execute today.
 
 ## Shared placement and scheduling types
 

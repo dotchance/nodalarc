@@ -497,6 +497,9 @@ class Node(_FrozenModel):
     ethernet: tuple[EthernetPort, ...]
     terminals: tuple[TerminalMount, ...]
     payloads: tuple[PayloadMount, ...]
+    # Symbolic routing-injection intent for the segments this node carries:
+    # entries name the node's own declared Ethernet ports, or `default`.
+    originated_prefixes: OriginatedPrefixes | None = None
     tags: tuple[Identifier, ...] | None = None
     reference: Url | None = None
     notes: str | None = None
@@ -520,6 +523,21 @@ class Node(_FrozenModel):
                 "payload mount attach must name a declared ethernet port: "
                 f"{undeclared_attach}"
             )
+        if self.originated_prefixes is not None:
+            declared = {*ethernet_ids, "default"}
+            unknown_targets = sorted(
+                {
+                    entry
+                    for family in ("ipv4", "ipv6")
+                    for entry in getattr(self.originated_prefixes, family) or ()
+                    if entry not in declared
+                }
+            )
+            if unknown_targets:
+                raise ValueError(
+                    "node originated_prefixes must name declared ethernet ports "
+                    f"or default: {unknown_targets}"
+                )
         invalid_boresights = [
             mount.id
             for mount in self.terminals

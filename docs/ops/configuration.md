@@ -547,6 +547,7 @@ make session DEFAULT_SESSION=catalog/nodalarc/sessions/earth-leo-walker.yaml
 | `earth-geo-inmarsat` | Representative fixed GEO commercial relay slots. |
 | `earth-geo-tdrs` | Representative fixed GEO relay slots. |
 | `earth-leo-heo-geo-luna-reachability` | Multi-regime Earth-Luna reachability experiment. |
+| `earth-luna-dtn` | The QUIC sky with the lunar relay replaced by a DTN relay vehicle carrying a uD3TN store-and-forward host on its payload bus. |
 | `earth-luna-quic` | Earth-to-Luna QUIC application path with host endpoints at both ends. |
 
 The shipped sessions are examples assembled from a larger reusable catalog.

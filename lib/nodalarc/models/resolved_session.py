@@ -173,6 +173,33 @@ class ResolvedOriginatedPrefixes(BaseModel):
     ipv6: tuple[NonEmptyReference, ...] | None = None
 
 
+class ResolvedSegmentMember(BaseModel):
+    """One environment attached to a resolved Ethernet segment."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    node_id: NonEmptyReference
+    # The kernel interface name inside the member's environment.
+    interface: NonEmptyReference
+
+
+class ResolvedEthernetSegment(BaseModel):
+    """One allocated Ethernet segment: a site LAN or a carried bus.
+
+    `scope_id` names the owner (a site id, or a carrier's runtime node id),
+    `segment_id` the owner's declared segment. Subnets and membership are
+    allocation facts the substrate wires verbatim.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    scope_id: NonEmptyReference
+    segment_id: NonEmptyReference
+    ipv4_subnet: NonEmptyReference
+    ipv6_subnet: NonEmptyReference
+    members: tuple[ResolvedSegmentMember, ...] = Field(min_length=1)
+
+
 class ResolvedHostAttachment(BaseModel):
     """Substrate-owned attachment facts for one host-forwarding node.
 
@@ -532,6 +559,9 @@ class ResolvedSession(BaseModel):
     link_rules: tuple[ResolvedLinkRule, ...]
     link_candidates: tuple[ResolvedLinkCandidate, ...] = ()
     routing_domains: tuple[ResolvedRoutingDomain, ...] = ()
+    # Every allocated Ethernet segment (site LANs and carried buses) with
+    # its membership; the substrate wires these verbatim.
+    ethernet_segments: tuple[ResolvedEthernetSegment, ...] = ()
     sid_blocks: tuple[SidBlock, ...]
     simulation: Simulation | None = None
     routing: Routing | None = None

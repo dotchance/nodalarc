@@ -754,35 +754,6 @@ def _fixed_link_interfaces_by_node(resolved: ResolvedSession) -> dict[str, list[
     }
 
 
-def _segment_manifest_addresses(node: ResolvedNode) -> list[str]:
-    """The node's single segment interface, as manifest addresses.
-
-    The current substrate wires one terrestrial segment interface per pod,
-    named terr0. Multi-segment nodes and other interface names arrive with
-    the segment wiring expansion; until then they refuse loudly rather
-    than wire something other than what was declared.
-    """
-    if node.interfaces is None or not node.interfaces.ethernet:
-        return []
-    entries = sorted(node.interfaces.ethernet.items())
-    if len(entries) > 1:
-        raise ValueError(
-            f"node {node.node_id!r} has {len(entries)} segment interfaces; "
-            "the current substrate wires exactly one"
-        )
-    name, interface = entries[0]
-    if name != "terr0":
-        raise ValueError(
-            f"node {node.node_id!r} segment interface is named {name!r}; "
-            "the current substrate wires terr0 only"
-        )
-    return [
-        address
-        for address in (interface.ipv4, interface.ipv6)
-        if address is not None and ipaddress.ip_interface(address)
-    ]
-
-
 def _publish_validation_ops_events(results: list, namespace: str, session_id: str) -> None:
     """Publish validation results as OpsEvents via the logging system."""
     for r in results:
@@ -1162,55 +1133,77 @@ def _site_lans_for_manifest(
     pod_placement: dict[str, str],
     node_ips: dict[str, str],
 ) -> dict[str, dict]:
-    """Site LAN segments for the wiring manifest.
+    """Ethernet segments for the wiring manifest: site LANs and carried buses.
 
-    Members are ground nodes grouped by site (their namespace), each carrying
-    the operator-assigned Kubernetes node and its host IP so the Node Agent
-    can build per-host bridges and head-end-replicated VXLAN without any
-    placement re-derivation of its own.
+    The resolver's segment table is the single source: every segment's
+    members carry their in-pod interface name, allocated addresses, and the
+    operator-assigned Kubernetes node with its host IP so the Node Agent can
+    build per-host bridges and head-end-replicated VXLAN without any
+    placement or addressing re-derivation of its own.
     """
     from nodalarc.vxlan import compute_site_vni
 
-    members_by_site: dict[str, list[dict]] = {}
-    for node in resolved.nodes:
-        if node.kind != "ground_station":
-            continue
-        if node.interfaces is None or not node.interfaces.ethernet:
-            continue
-        site_id = node.namespace
-        if site_id is None:
-            raise ValueError(f"ground node {node.node_id!r} has no site namespace")
-        k3s_node = pod_placement.get(node.node_id)
-        if not k3s_node:
-            raise ValueError(
-                f"ground node {node.node_id!r} has no discovered pod placement; "
-                "site LAN wiring cannot be derived"
-            )
-        host_ip = node_ips.get(k3s_node)
-        if not host_ip:
-            raise ValueError(
-                f"Kubernetes node {k3s_node!r} (hosting {node.node_id!r}) has no "
-                "InternalIP; site LAN wiring cannot be derived"
-            )
-        members_by_site.setdefault(site_id, []).append(
-            {"node_id": node.node_id, "k3s_node": k3s_node, "host_ip": host_ip}
-        )
-
-    site_lans: dict[str, dict] = {}
+    node_by_id = {node.node_id: node for node in resolved.nodes}
+    segments: dict[str, dict] = {}
     vni_owner: dict[int, str] = {}
-    for site_id in sorted(members_by_site):
-        vni = compute_site_vni(site_id)
+    for segment in resolved.ethernet_segments:
+        segment_key = f"{segment.scope_id}-{segment.segment_id}"
+        members: list[dict] = []
+        for member in segment.members:
+            node = node_by_id.get(member.node_id)
+            if node is None or node.interfaces is None:
+                raise ValueError(
+                    f"segment {segment_key!r} member {member.node_id!r} has no "
+                    "resolved interfaces"
+                )
+            address_set = node.interfaces.ethernet.get(member.interface)
+            if address_set is None:
+                raise ValueError(
+                    f"segment {segment_key!r} member {member.node_id!r} has no "
+                    f"resolved address on {member.interface!r}"
+                )
+            k3s_node = pod_placement.get(member.node_id)
+            if not k3s_node:
+                raise ValueError(
+                    f"segment member {member.node_id!r} has no discovered pod "
+                    "placement; segment wiring cannot be derived"
+                )
+            host_ip = node_ips.get(k3s_node)
+            if not host_ip:
+                raise ValueError(
+                    f"Kubernetes node {k3s_node!r} (hosting {member.node_id!r}) has "
+                    "no InternalIP; segment wiring cannot be derived"
+                )
+            gateway = None
+            attachment = node.host_attachment
+            if attachment is not None and attachment.interface == member.interface:
+                gateway = attachment.gateway_ipv4
+            members.append(
+                {
+                    "node_id": member.node_id,
+                    "interface": member.interface,
+                    "addresses": [
+                        address
+                        for address in (address_set.ipv4, address_set.ipv6)
+                        if address is not None
+                    ],
+                    **({"gateway": gateway} if gateway is not None else {}),
+                    "k3s_node": k3s_node,
+                    "host_ip": host_ip,
+                }
+            )
+        vni = compute_site_vni(segment_key)
         if vni in vni_owner:
             raise ValueError(
-                f"site LAN VNI collision: {site_id!r} and {vni_owner[vni]!r} both "
-                f"hash to VNI {vni}; rename one site"
+                f"segment VNI collision: {segment_key!r} and {vni_owner[vni]!r} both "
+                f"hash to VNI {vni}; rename one"
             )
-        vni_owner[vni] = site_id
-        site_lans[site_id] = {
+        vni_owner[vni] = segment_key
+        segments[segment_key] = {
             "vni": vni,
-            "members": sorted(members_by_site[site_id], key=lambda m: m["node_id"]),
+            "members": sorted(members, key=lambda m: (m["node_id"], m["interface"])),
         }
-    return site_lans
+    return segments
 
 
 def write_wiring_manifest(
@@ -1302,11 +1295,6 @@ def write_wiring_manifest(
                 "sysctls": dict(base_sysctls),
                 "isl_interfaces": [],
                 "gnd_interfaces": [],
-                "terrestrial": {
-                    "addresses": _segment_manifest_addresses(node),
-                    "site_id": node.namespace,
-                    "gateway": node.host_attachment.gateway_ipv4,
-                },
                 "mpls_enable": False,
                 "segment_routing": False,
                 "mtu": 9000,
@@ -1349,12 +1337,6 @@ def write_wiring_manifest(
                 "sysctls": dict(node_sysctls),
                 "isl_interfaces": [],
                 "gnd_interfaces": [{"name": iface.name} for iface in node.wan_interfaces],
-                "terrestrial": {
-                    "addresses": _segment_manifest_addresses(node),
-                    # Ground namespace IS the site (site-anchored identity) —
-                    # terr0 is a port on that site's LAN segment.
-                    "site_id": node.namespace,
-                },
                 "mpls_enable": mpls_enable,
                 "segment_routing": stack.segment_routing,
                 "mtu": 9000,

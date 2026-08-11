@@ -1,0 +1,38 @@
+# A store-and-forward bundle relay: one container running upstream uD3TN
+# (built and published by D3TN, referenced by pinned identity). No routing
+# daemon; the platform attaches the host to its bus and gateway at wiring
+# time. Bundles queue in memory-backed storage while contacts are down.
+profile:
+  id: ud3tn-relay
+  display_name: uD3TN bundle relay
+  registry: registry.gitlab.com
+  image: d3tn/ud3tn-docker-images/ud3tn@sha256:dbc27674995ba527c4e4a10a185e4827bb34a7aa5daac66fb3382cb668762103
+  command:
+  - /ud3tn
+  - --node-id
+  - dtn://relay.dtn/
+  - --bp-version
+  - '7'
+  - --cla
+  - sqlite:file::memory:?cache=shared;mtcp:*,4224
+  - --aap-socket
+  - /run/ud3tn/aap.socket
+  - --aap2-socket
+  - /run/ud3tn/aap2.socket
+  root_filesystem: read_only
+  volumes:
+  - name: run
+    kind: ephemeral
+    medium: memory
+    size_mi: 64
+  mounts:
+  - volume: run
+    path: /run/ud3tn
+    read_only: false
+  terminal:
+    surface: exec
+    command:
+    - /bin/sh
+  resources:
+    requests: {cpu_m: 50, memory_mi: 64}
+    limits: {cpu_m: 500, memory_mi: 256}

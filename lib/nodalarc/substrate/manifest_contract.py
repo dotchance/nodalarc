@@ -68,39 +68,24 @@ class IslInterface(_StrictModel):
         return value
 
 
-class TerrestrialSpec(_StrictModel):
-    addresses: list[str] = Field(default_factory=list)
-    # The site LAN this node's terr0 attaches to. Required whenever addresses
-    # are present — terr0 is a port on the site's L2 segment, never an
-    # isolated interface.
-    site_id: str | None = None
-    # Host attachment only: the default-route target the Node Agent installs
-    # in the pod netns at wiring time. Substrate configuration — the platform
-    # acting as the LAN's address authority — never present on a routed
-    # node, whose forwarding system owns every routing decision.
-    gateway: str | None = None
-
-    @model_validator(mode="after")
-    def _addressed_terr0_belongs_to_a_site(self) -> TerrestrialSpec:
-        if self.addresses and not self.site_id:
-            raise ValueError("terrestrial addresses require site_id (site LAN membership)")
-        if self.gateway is not None and not self.addresses:
-            raise ValueError("terrestrial gateway requires terr0 addresses")
-        return self
-
-
 class SiteLanMember(_StrictModel):
-    """One pod attached to a site LAN, with its operator-assigned placement."""
+    """One environment attached to an Ethernet segment: its in-pod interface
+    name, its allocated addresses, an optional host default-route gateway
+    (substrate configuration, never present for a routed member), and its
+    operator-assigned placement."""
 
     node_id: str
+    interface: str
+    addresses: list[str] = Field(min_length=1)
+    gateway: str | None = None
     k3s_node: str
     host_ip: str
 
-    @field_validator("node_id", "k3s_node", "host_ip")
+    @field_validator("node_id", "interface", "k3s_node", "host_ip")
     @classmethod
     def _member_fields(cls, value: str) -> str:
         if not value:
-            raise ValueError("site LAN member fields must be non-empty")
+            raise ValueError("segment member fields must be non-empty")
         return value
 
 
@@ -162,8 +147,6 @@ class NodeSpec(_StrictModel):
     slot: int | None = None
     gs_name: str | None = None
     gs_index: int | None = None
-    terrestrial: TerrestrialSpec | None = None
-
     @field_validator("sysctls")
     @classmethod
     def _sysctls_required(cls, value: dict[str, str]) -> dict[str, str]:
@@ -173,18 +156,8 @@ class NodeSpec(_StrictModel):
 
     @model_validator(mode="after")
     def _host_attachment_rules(self) -> NodeSpec:
-        if self.node_type == "host":
-            if self.terrestrial is None or not self.terrestrial.addresses:
-                raise ValueError("host nodes require terrestrial attachment addresses")
-            if self.terrestrial.gateway is None:
-                raise ValueError("host nodes require a terrestrial gateway")
-            if self.isl_interfaces or self.gnd_interfaces:
-                raise ValueError("host nodes carry no ISL or ground interfaces")
-        elif self.terrestrial is not None and self.terrestrial.gateway is not None:
-            raise ValueError(
-                "only host nodes carry a terrestrial gateway; a routed node's "
-                "forwarding system owns its routing decisions"
-            )
+        if self.node_type == "host" and (self.isl_interfaces or self.gnd_interfaces):
+            raise ValueError("host nodes carry no ISL or ground interfaces")
         return self
 
     @field_validator("gnd_interfaces")
@@ -291,49 +264,42 @@ class WiringManifest(_StrictModel):
         return self
 
     @model_validator(mode="after")
-    def _site_lans_cover_addressed_terr0(self) -> WiringManifest:
-        """Site LANs and addressed terr0 interfaces must agree exactly.
+    def _segments_declare_known_members(self) -> WiringManifest:
+        """Ethernet segments and manifest nodes must agree exactly.
 
-        Every ground node carrying terrestrial addresses is a member of the
-        site LAN it names, every declared member is a manifest ground node,
-        and VNIs are pairwise distinct — the agent wires precisely what is
-        declared, with no orphan ports and no phantom members.
+        Every declared segment member is a manifest node, host nodes carry
+        exactly one membership with a gateway, and VNIs are pairwise
+        distinct — the agent wires precisely what is declared, with no
+        orphan ports and no phantom members.
         """
-        members_by_site: dict[str, set[str]] = {
-            site_id: {member.node_id for member in spec.members}
-            for site_id, spec in self.site_lans.items()
-        }
+        memberships: dict[str, list[SiteLanMember]] = {}
+        for segment_id, spec in self.site_lans.items():
+            for member in spec.members:
+                if member.node_id not in self.nodes:
+                    raise ValueError(
+                        f"segment {segment_id!r} declares unknown member "
+                        f"{member.node_id!r}"
+                    )
+                memberships.setdefault(member.node_id, []).append(member)
         for node_id, node in self.nodes.items():
-            terrestrial = node.terrestrial
-            if terrestrial is None or not terrestrial.addresses:
-                continue
-            site_id = terrestrial.site_id
-            if site_id not in members_by_site:
+            members = memberships.get(node_id, [])
+            gateways = [member for member in members if member.gateway is not None]
+            if node.node_type == "host":
+                if len(members) != 1:
+                    raise ValueError(
+                        f"host node {node_id!r} requires exactly one segment "
+                        f"membership; got {len(members)}"
+                    )
+                if not gateways:
+                    raise ValueError(f"host node {node_id!r} requires a segment gateway")
+            elif gateways:
                 raise ValueError(
-                    f"node {node_id!r} references site LAN {site_id!r}, "
-                    "which is not declared in site_lans"
-                )
-            if node_id not in members_by_site[site_id]:
-                raise ValueError(
-                    f"node {node_id!r} is not a declared member of site LAN {site_id!r}"
-                )
-        # A site LAN's ports are its routers AND its host-attached
-        # processing nodes — every node with terrestrial attachment at the
-        # site. Satellites never appear on a ground segment.
-        lan_capable = {
-            node_id
-            for node_id, node in self.nodes.items()
-            if node.node_type in ("ground_station", "host")
-        }
-        for site_id, member_ids in members_by_site.items():
-            unknown = sorted(member_ids - lan_capable)
-            if unknown:
-                raise ValueError(
-                    f"site LAN {site_id!r} declares non-LAN-capable member(s): {unknown}"
+                    f"only host nodes carry a segment gateway; a routed node's "
+                    f"forwarding system owns its routing decisions ({node_id!r})"
                 )
         vnis = [spec.vni for spec in self.site_lans.values()]
         if len(set(vnis)) != len(vnis):
-            raise ValueError("site LAN VNIs must be pairwise distinct")
+            raise ValueError("segment VNIs must be pairwise distinct")
         return self
 
     @field_validator("required_substrate_pairs")

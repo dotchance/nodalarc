@@ -39,6 +39,11 @@ class WorkloadPlan:
     # configuration set), file name -> exact bytes. Projected into the
     # profile's config mount; never interpreted by the platform.
     rendered_files: Mapping[str, bytes] = field(default_factory=dict)
+    # Final container environment, name -> value: authored literals plus
+    # platform-resolved facts, computed at preparation. The primary
+    # container's environment, and each sidecar's keyed by sidecar name.
+    env: Mapping[str, str] = field(default_factory=dict)
+    sidecar_env: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not self.node_id:
@@ -53,3 +58,11 @@ class WorkloadPlan:
             validate_rendered_file_name(name)
             if not isinstance(content, bytes):
                 raise TypeError(f"rendered file {name!r} must be bytes")
+        object.__setattr__(self, "env", MappingProxyType(dict(self.env)))
+        object.__setattr__(
+            self,
+            "sidecar_env",
+            MappingProxyType(
+                {name: MappingProxyType(dict(env)) for name, env in self.sidecar_env.items()}
+            ),
+        )

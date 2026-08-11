@@ -153,6 +153,11 @@ def test_every_constellation_composes_into_a_session(path: Path) -> None:
     except UnsupportedFeatureError as exc:
         assert exc.features, f"{path.name}: untyped UnsupportedFeatureError"
         return
+    except SessionResolutionError as exc:
+        # A paired ground set may carry a site whose profile references a
+        # peer by tag with no counterpart in this minimal context.
+        assert "env value_from tag" in str(exc), f"{path.name}: {exc}"
+        return
 
     assert _readiness_errors(resolved) == []
 
@@ -225,9 +230,12 @@ def test_every_site_places_into_a_session(path: Path) -> None:
     try:
         resolved = _resolve(raw, "run-test-0051")
     except SessionResolutionError as exc:
-        # Optical-only / future-segment sites have no rf access mount and
-        # must reject with the typed zero-compatible-mounts reason.
-        assert "zero compatible mounts" in str(exc), f"{path.name}: {exc}"
+        # Two environmental refusals are legitimate in this minimal context:
+        # optical-only / future-segment sites have no rf access mount, and a
+        # site whose profile references a peer by tag has no counterpart in
+        # a single-site session. Both must reject with their typed reason.
+        acceptable = ("zero compatible mounts", "env value_from tag")
+        assert any(marker in str(exc) for marker in acceptable), f"{path.name}: {exc}"
         return
 
     assert _readiness_errors(resolved) == [], f"{path.name}"

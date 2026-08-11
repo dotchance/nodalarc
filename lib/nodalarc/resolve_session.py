@@ -30,7 +30,7 @@ from nodalarc.ephemeris_runtime import (
     validate_ephemeris_manifest,
 )
 from nodalarc.link_rule_candidates import generate_declared_link_candidates
-from nodalarc.models.catalog import Profile
+from nodalarc.models.catalog import EnvValueFrom, Profile, ResolvedEnvEntry
 from nodalarc.models.identity import IdentityMode
 from nodalarc.models.link_rules import LinkRule, NodeSelector, TerminalSelector
 from nodalarc.models.resolved_session import (
@@ -221,6 +221,7 @@ def resolve_session_with_assets(
         reference: Profile.model_validate(_load_expected(reference, roots, "profile"))
         for reference in sorted({node.profile for node in resolved_nodes})
     }
+    _check_profile_env(workload_profiles, resolved_nodes)
     return SessionResolution(
         resolved=resolved,
         catalog_session=cfg,
@@ -3202,6 +3203,62 @@ def _load_ref_or_object(value: str, roots: CatalogRoots) -> tuple[str, dict[str,
     if wrapper is None:
         raise SessionResolutionError(f"expected wrapped catalog object, got session {ref!r}")
     return wrapper, model.model_dump(mode="python", by_alias=True, exclude_none=True)
+
+
+def resolve_env_value(
+    value_from: EnvValueFrom,
+    nodes: tuple[ResolvedNode, ...],
+) -> str:
+    """The address, by interface name and family, of the single tagged node."""
+
+    matches = [node for node in nodes if value_from.tag in node.tags]
+    if not matches:
+        raise SessionResolutionError(f"env value_from tag {value_from.tag!r} matches no node")
+    if len(matches) > 1:
+        examples = ", ".join(sorted(node.node_id for node in matches)[:3])
+        raise SessionResolutionError(
+            f"env value_from tag {value_from.tag!r} matches {len(matches)} nodes "
+            f"(e.g. {examples}); exactly one is required"
+        )
+    node = matches[0]
+    interfaces: dict[str, Any] = {}
+    if node.interfaces is not None:
+        interfaces["lo0"] = node.interfaces.lo0
+        if node.interfaces.terr0 is not None:
+            interfaces["terr0"] = node.interfaces.terr0
+    interface = interfaces.get(value_from.interface)
+    if interface is None:
+        raise SessionResolutionError(
+            f"env value_from tag {value_from.tag!r} matched node {node.node_id!r}, "
+            f"which has no interface {value_from.interface!r}"
+        )
+    address = getattr(interface, value_from.family, None)
+    if address is None:
+        raise SessionResolutionError(
+            f"env value_from: interface {value_from.interface!r} on node "
+            f"{node.node_id!r} has no {value_from.family} address"
+        )
+    return str(ipaddress.ip_interface(address).ip)
+
+
+def _check_profile_env(
+    workload_profiles: Mapping[str, Profile],
+    resolved_nodes: tuple[ResolvedNode, ...],
+) -> None:
+    for reference, profile in sorted(workload_profiles.items()):
+        entries = (
+            *profile.env,
+            *(entry for sidecar in profile.sidecars for entry in sidecar.env),
+        )
+        for entry in entries:
+            if not isinstance(entry, ResolvedEnvEntry):
+                continue
+            try:
+                resolve_env_value(entry.value_from, resolved_nodes)
+            except SessionResolutionError as error:
+                raise SessionResolutionError(
+                    f"profile {reference} env {entry.name!r}: {error}"
+                ) from error
 
 
 def _effective_profile(

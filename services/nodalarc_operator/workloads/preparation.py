@@ -18,6 +18,8 @@ import os
 from dataclasses import dataclass
 
 from nodalarc.content_identity import canonical_json_bytes, sha256_digest
+from nodalarc.models.catalog import LiteralEnvEntry
+from nodalarc.resolve_session import SessionResolutionError, resolve_env_value
 from nodalarc.workloads.adapter import SessionContext
 from nodalarc.workloads.admission import admit_profile
 from nodalarc.workloads.plan import WorkloadPlan
@@ -104,6 +106,26 @@ def _apply_dev_image_overrides(
             container.image_pull_policy = pull_policy
 
 
+def _resolved_env(entries, nodes) -> dict[str, str]:
+    """Compute one container's final environment: literals plus resolved facts.
+
+    The resolver already validated every reference; a failure here is a
+    platform error, never a session error.
+    """
+    values: dict[str, str] = {}
+    for entry in entries:
+        if isinstance(entry, LiteralEnvEntry):
+            values[entry.name] = entry.value
+            continue
+        try:
+            values[entry.name] = resolve_env_value(entry.value_from, nodes)
+        except SessionResolutionError as error:
+            raise WorkloadPreparationError(
+                f"env {entry.name!r} passed resolution but failed preparation: {error}"
+            ) from error
+    return values
+
+
 def prepare_session_workloads(
     resolution,
     *,
@@ -130,6 +152,8 @@ def prepare_session_workloads(
         )
 
     admitted = {}
+    profile_content: dict[str, str] = {}
+    profile_env: dict[str, tuple[dict[str, str], dict[str, dict[str, str]]]] = {}
     for reference, profile in sorted(resolution.workload_profiles.items()):
         admission = admit_profile(
             {"profile": profile.model_dump(mode="json", exclude_none=True)},
@@ -141,6 +165,17 @@ def prepare_session_workloads(
             )
             raise WorkloadPreparationError(f"profile {reference} was not admitted: {details}")
         admitted[reference] = admission.profile
+        profile_content[reference] = sha256_digest(
+            canonical_json_bytes(admission.profile.model_dump(mode="json"))
+        )
+        profile_env[reference] = (
+            _resolved_env(admission.profile.env, resolved.nodes),
+            {
+                sidecar.name: _resolved_env(sidecar.env, resolved.nodes)
+                for sidecar in admission.profile.sidecars
+                if sidecar.env
+            },
+        )
 
     context = SessionContext(resolved=resolved)
     overrides = _dev_image_overrides()
@@ -165,10 +200,13 @@ def prepare_session_workloads(
                     "wired into composition"
                 )
             rendered = dict(config.files)
+        primary_env, sidecar_env = profile_env[node.profile]
         plan = WorkloadPlan(
             node_id=node.node_id,
             profile_ref=node.profile,
             rendered_files=rendered,
+            env=primary_env,
+            sidecar_env=sidecar_env,
         )
         workload = compose_workload(plan, profile, namespace=namespace, owner_ref=owner_ref)
         if overrides:
@@ -176,6 +214,13 @@ def prepare_session_workloads(
         composed[node.node_id] = workload
         identity_payload[node.node_id] = {
             "profile": node.profile,
+            "profile_content": profile_content[node.profile],
+            "env": {
+                "primary": dict(sorted(primary_env.items())),
+                "sidecars": {
+                    name: dict(sorted(env.items())) for name, env in sorted(sidecar_env.items())
+                },
+            },
             "rendered": {name: sha256_digest(data) for name, data in sorted(rendered.items())},
         }
 

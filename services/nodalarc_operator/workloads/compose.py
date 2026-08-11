@@ -130,6 +130,13 @@ def _pull_reference(registry: str, image: str) -> str:
     return f"{registry}/{image}"
 
 
+def _env_list(values) -> list[kubernetes.client.V1EnvVar] | None:
+    return [
+        kubernetes.client.V1EnvVar(name=name, value=value)
+        for name, value in sorted(values.items())
+    ] or None
+
+
 def _primary_container(
     profile: Profile,
     plan: WorkloadPlan,
@@ -168,6 +175,7 @@ def _primary_container(
         image=_pull_reference(profile.registry, profile.image),
         command=list(profile.command) if profile.command is not None else None,
         args=list(profile.args) if profile.args is not None else None,
+        env=_env_list(plan.env),
         security_context=_security_context(profile.capabilities, profile.root_filesystem),
         resources=_resources(profile.resources),
         readiness_probe=probe,
@@ -178,6 +186,7 @@ def _primary_container(
 def _sidecar_container(
     sidecar: ProfileSidecar,
     profile: Profile,
+    plan: WorkloadPlan,
 ) -> kubernetes.client.V1Container:
     mounts = [
         kubernetes.client.V1VolumeMount(
@@ -190,6 +199,7 @@ def _sidecar_container(
         image=_pull_reference(sidecar.registry or profile.registry, sidecar.image),
         command=list(sidecar.command) if sidecar.command is not None else None,
         args=list(sidecar.args) if sidecar.args is not None else None,
+        env=_env_list(plan.sidecar_env.get(sidecar.name, {})),
         security_context=_security_context(sidecar.capabilities, sidecar.root_filesystem),
         resources=_resources(sidecar.resources),
         volume_mounts=mounts or None,
@@ -270,7 +280,7 @@ def compose_workload(
     composition = WorkloadComposition(
         containers=[
             _primary_container(profile, plan),
-            *(_sidecar_container(sidecar, profile) for sidecar in profile.sidecars),
+            *(_sidecar_container(sidecar, profile, plan) for sidecar in profile.sidecars),
         ],
         volumes=volumes,
         init_containers=[],

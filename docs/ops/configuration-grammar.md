@@ -1580,10 +1580,7 @@ runtime execution:
 - `bgp` and `dtn_bundle` routing boundaries;
 - `spice_kernel_stack` and `operator_supplied_spk` ephemeris providers;
 - bodies outside the supported Earth-Luna profile;
-- workload adapters other than `frr`;
-- the profile `env` field: defined ahead of the installed models, which
-  still reject it structurally; the matching model and resolver change
-  follows this definition.
+- workload adapters other than `frr`.
 
 Unsupported features fail explicitly. They are never silently removed,
 flattened, translated to another feature, or treated as successful execution.

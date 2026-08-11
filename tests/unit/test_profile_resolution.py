@@ -211,6 +211,42 @@ def test_profile_naming_an_unavailable_adapter_is_refused(tmp_path: Path) -> Non
         resolve_session(session, catalog_roots=roots)
 
 
+def test_env_value_from_resolves_and_refuses_honestly(tmp_path: Path) -> None:
+    def with_env(site):
+        site["nodes"][0]["tags"] = list(site["nodes"][0].get("tags") or []) + ["env_target"]
+        # Make the target genuinely single-stack so the family refusal is real.
+        site["nodes"][0]["interfaces"]["terr0"].pop("ipv6", None)
+
+    def profile_with_env(entries):
+        document = _user_profile_document("override-profile")
+        document["profile"]["env"] = entries
+        return document
+
+    good = [
+        {"name": "PEER", "value_from": {"tag": "env_target", "interface": "terr0", "family": "ipv4"}},
+        {"name": "MODE", "value": "test"},
+    ]
+    session, roots = _session_with_user_ground(tmp_path, site_mutation=with_env)
+    _write_yaml(tmp_path / "user" / "profiles" / "override-profile.yaml", profile_with_env(good))
+    session["segments"][1]["profile"] = USER_PROFILE
+    resolution = resolve_session(session, catalog_roots=roots)
+    assert resolution.nodes
+
+    bad = [{"name": "PEER", "value_from": {"tag": "absent_tag", "interface": "terr0", "family": "ipv4"}}]
+    session, roots = _session_with_user_ground(tmp_path / "bad", site_mutation=with_env)
+    _write_yaml(tmp_path / "bad" / "user" / "profiles" / "override-profile.yaml", profile_with_env(bad))
+    session["segments"][1]["profile"] = USER_PROFILE
+    with pytest.raises(SessionResolutionError, match="matches no node"):
+        resolve_session(session, catalog_roots=roots)
+
+    no_family = [{"name": "PEER", "value_from": {"tag": "env_target", "interface": "terr0", "family": "ipv6"}}]
+    session, roots = _session_with_user_ground(tmp_path / "nofam", site_mutation=with_env)
+    _write_yaml(tmp_path / "nofam" / "user" / "profiles" / "override-profile.yaml", profile_with_env(no_family))
+    session["segments"][1]["profile"] = USER_PROFILE
+    with pytest.raises(SessionResolutionError, match="has no ipv6 address"):
+        resolve_session(session, catalog_roots=roots)
+
+
 def test_shipped_quic_session_records_node_level_endpoint_profiles() -> None:
     resolution = resolve_session(yaml.safe_load(QUIC_SESSION.read_text(encoding="utf-8")))
 

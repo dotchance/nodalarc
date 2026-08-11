@@ -200,6 +200,7 @@ MountPath = Annotated[
 ]
 PinnedImage = Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9._/-]*@sha256:[0-9a-f]{64}$")]
 RegistryHost = Annotated[str, Field(pattern=r"^[a-z0-9]([a-z0-9.-]*[a-z0-9])?(:[0-9]{1,5})?$")]
+EnvName = Annotated[str, Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")]
 
 
 def nonempty(values: Any) -> Any:

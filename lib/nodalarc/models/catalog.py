@@ -30,6 +30,7 @@ from nodalarc.catalog_refs import (
 )
 from nodalarc.model_validation import (
     AwareTimestamp,
+    EnvName,
     FiniteFloat,
     Identifier,
     Ipv4Interface,
@@ -356,6 +357,33 @@ class ProfileResources(_FrozenModel):
         return self
 
 
+class EnvValueFrom(_FrozenModel):
+    """One resolved fact: the address of the single node carrying the tag."""
+
+    tag: Identifier
+    interface: Identifier
+    family: Literal["ipv4", "ipv6"]
+
+
+class LiteralEnvEntry(_FrozenModel):
+    name: EnvName
+    value: str
+
+
+class ResolvedEnvEntry(_FrozenModel):
+    name: EnvName
+    value_from: EnvValueFrom
+
+
+EnvEntry = LiteralEnvEntry | ResolvedEnvEntry
+
+
+def _validate_env_names(entries: tuple[EnvEntry, ...], *, owner: str) -> None:
+    names = [entry.name for entry in entries]
+    if len(set(names)) != len(names):
+        raise ValueError(f"{owner} env names must be unique")
+
+
 class SshTerminalSurface(_FrozenModel):
     surface: Literal["ssh"]
     authorized_keys_path: MountPath
@@ -391,6 +419,7 @@ class ProfileSidecar(_FrozenModel):
     image: PinnedImage
     command: tuple[str, ...] | None = None
     args: tuple[str, ...] | None = None
+    env: tuple[EnvEntry, ...] = ()
     capabilities: tuple[LinuxCapability, ...] = ()
     root_filesystem: RootFilesystem = "read_only"
     resources: ProfileResources
@@ -403,6 +432,7 @@ class ProfileSidecar(_FrozenModel):
             argv = getattr(self, field_name)
             if argv is not None:
                 _validate_argv(argv, field=f"sidecar {field_name}")
+        _validate_env_names(self.env, owner=f"sidecar {self.name!r}")
         _validate_mount_conflicts(
             [mount.path for mount in self.mounts], owner=f"sidecar {self.name!r}"
         )
@@ -417,6 +447,7 @@ class Profile(_FrozenModel):
     image: PinnedImage
     command: tuple[str, ...] | None = None
     args: tuple[str, ...] | None = None
+    env: tuple[EnvEntry, ...] = ()
     capabilities: tuple[LinuxCapability, ...] = ()
     root_filesystem: RootFilesystem = "read_only"
     config_mount: MountPath | None = None
@@ -436,6 +467,7 @@ class Profile(_FrozenModel):
             argv = getattr(self, field_name)
             if argv is not None:
                 _validate_argv(argv, field=field_name)
+        _validate_env_names(self.env, owner="profile")
 
         if self.config_mount is not None and self.adapter is None:
             raise ValueError("config_mount requires an adapter")

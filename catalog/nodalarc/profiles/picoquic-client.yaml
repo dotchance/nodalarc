@@ -1,22 +1,28 @@
 # QUIC client endpoint: repeatedly downloads a 1 MB synthetic document
-# from the lunar server's authored LAN address, back and forth across the
+# from the lunar server, back and forth across the
 # moving sky, logging each transfer. Transfer behavior under changing
 # reachability is the workload's own: a failed attempt logs and retries;
-# the platform never masks it. The server address is the lab site's
-# authored LAN address today; it becomes an adapter-resolved value when
-# the picoquic adapter lands.
+# the platform never masks it. The server address arrives as QUIC_SERVER,
+# resolved by the platform from whichever node carries the quic_server tag;
+# no address is authored here.
 profile:
   id: picoquic-client
   display_name: QUIC client endpoint
   registry: node01:5000
   image: nodalarc-picoquic/picoquic@sha256:b4e9ba7198d7bf2383fc86e28b825dfa099fcb8481a520d4d271c735ca948fa9
+  env:
+  - name: QUIC_SERVER
+    value_from:
+      tag: quic_server
+      interface: terr0
+      family: ipv4
   command:
   - /bin/bash
   - -c
   - >-
     while true; do
     echo "== attempt $(date -u +%H:%M:%SZ)";
-    /usr/local/bin/picoquicdemo -D -n server 172.16.153.9 4433 /1000000;
+    /usr/local/bin/picoquicdemo -D -n server "$QUIC_SERVER" 4433 /1000000;
     echo "== picoquicdemo exit=$?";
     sleep 15;
     done

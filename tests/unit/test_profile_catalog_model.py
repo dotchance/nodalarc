@@ -186,6 +186,34 @@ def test_sidecar_must_not_reuse_the_profile_id() -> None:
         Profile.model_validate(document)
 
 
+def test_env_entries_set_literals_and_resolved_facts() -> None:
+    document = _app_profile()
+    document["env"] = [
+        {"name": "QUIC_LOG", "value": "1"},
+        {
+            "name": "QUIC_SERVER",
+            "value_from": {"tag": "quic_server", "interface": "terr0", "family": "ipv4"},
+        },
+    ]
+
+    profile = Profile.model_validate(document)
+    assert profile.env[0].value == "1"
+    assert profile.env[1].value_from.tag == "quic_server"
+
+    document["env"].append({"name": "QUIC_LOG", "value": "2"})
+    with pytest.raises(ValidationError, match="env names must be unique"):
+        Profile.model_validate(document)
+
+    with pytest.raises(ValidationError):
+        Profile.model_validate({**_app_profile(), "env": [{"name": "1BAD", "value": "x"}]})
+
+    with pytest.raises(ValidationError):
+        Profile.model_validate(
+            {**_app_profile(), "env": [{"name": "BOTH", "value": "x",
+             "value_from": {"tag": "t", "interface": "terr0", "family": "ipv4"}}]}
+        )
+
+
 def test_terminal_surfaces_are_closed_shapes() -> None:
     document = _app_profile()
     document["terminal"] = {"surface": "ssh", "command": ["/bin/bash"]}

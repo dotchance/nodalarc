@@ -5,17 +5,6 @@ set -euo pipefail
 
 NAMESPACE="${NAMESPACE:-nodalarc}"
 DEFAULT_SESSION="${DEFAULT_SESSION:-catalog/nodalarc/sessions/earth-leo-simple.yaml}"
-# Optional explicit workload selection. Both variables or neither: the pair
-# travels to VS-API as one workload_selection object and lands on the CR as
-# implementationBindingRef/implementationPackageDigest. Unset = the built-in
-# FRR default.
-WORKLOAD_BINDING_REF="${WORKLOAD_BINDING_REF:-}"
-WORKLOAD_PACKAGE_DIGEST="${WORKLOAD_PACKAGE_DIGEST:-}"
-if { [ -n "$WORKLOAD_BINDING_REF" ] && [ -z "$WORKLOAD_PACKAGE_DIGEST" ]; } || \
-   { [ -z "$WORKLOAD_BINDING_REF" ] && [ -n "$WORKLOAD_PACKAGE_DIGEST" ]; }; then
-    echo "[session] ERROR: WORKLOAD_BINDING_REF and WORKLOAD_PACKAGE_DIGEST must be set together or not at all" >&2
-    exit 1
-fi
 PLATFORM_CONFIG="${PLATFORM_CONFIG:-configs/platform.yaml}"
 KUBECONFIG="${KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}"
 SHIPPED_CATALOG_ROOT="${SHIPPED_CATALOG_ROOT:-catalog/nodalarc}"
@@ -426,18 +415,9 @@ payload = {
     "expected_document_digest": sys.argv[3],
     "expected_dependency_digest": sys.argv[4],
 }
-if sys.argv[5]:
-    payload["workload_selection"] = {
-        "binding_ref": sys.argv[5],
-        "package_digest": sys.argv[6],
-    }
 print(json.dumps(payload, separators=(",", ":")))
-' "$session_ref" "$source_revision" "$document_digest" "$dependency_digest" \
-  "$WORKLOAD_BINDING_REF" "$WORKLOAD_PACKAGE_DIGEST"
+' "$session_ref" "$source_revision" "$document_digest" "$dependency_digest"
 )"
-if [ -n "$WORKLOAD_BINDING_REF" ]; then
-    echo "[session] Explicit workload selection: $WORKLOAD_BINDING_REF @ $WORKLOAD_PACKAGE_DIGEST"
-fi
 echo "[session] Requesting a guarded session switch through VS-API..."
 if ! http_status="$(
     curl -sS \

@@ -2,8 +2,8 @@
 # Licensed under the Apache License, Version 2.0. See LICENSE file.
 """The one shared Pod assembly for session workloads.
 
-Every session pod — the built-in FRR composition today, explicit workload
-profiles behind it — is assembled here and only here. The materializer owns
+Every session pod is assembled here and only here, from its node's admitted
+profile composition. The materializer owns
 what the platform owns: pod identity and labels, CR ownership, node pinning,
 the wiring gate that holds authored containers until this exact pod
 incarnation is wired, token and DNS policy, and the restart policy. It

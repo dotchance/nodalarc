@@ -33,7 +33,6 @@ from nodalarc.runtime_config import (
 from nodalarc.semantic_projection import resolved_session_semantic_digest
 from nodalarc.substrate.manifest_contract import REQUIRED_WIRING_PHASES, WiringManifest
 from nodalarc.substrate.wiring_status import failed_status, ready_status, status_configmap_data
-from nodalarc.workloads.refs import selection_ref_from_spec
 from nodalarc_operator.runtime_session import OperatorSessionConfig
 from nodalarc_operator.session_deployer import (
     _create_terminal_ssh_keys,
@@ -99,7 +98,6 @@ def _reset_operator_module_state():
             ),
             root_yaml=root_yaml,
             catalog_upload=selection,
-            workload_selection=selection_ref_from_spec(spec),
         )
 
     sd._v1 = None
@@ -877,7 +875,7 @@ def _existing_session_pod(
     node_id="sat-P00S00",
     uid="test-uid",
     run_id="run-test-0001",
-    selection_identity="builtin-frr-default",
+    selection_identity="profiles@sha256:" + "0" * 64,
     pod_uid="pod-uid-0001",
 ):
     return kubernetes.client.V1Pod(
@@ -1403,14 +1401,19 @@ class TestConfigRendering:
                 deployment_context=_test_deployment_context(spec),
             )
 
-        # Collect rendered configs from ConfigMap create/patch calls
+        # Collect rendered configuration from workload artifact ConfigMaps.
+        import base64 as _base64
+
         configs = {}
         for call in mock_v1.create_namespaced_config_map.call_args_list:
             body = call[1].get("body") or call[0][1]
-            if hasattr(body, "metadata") and hasattr(body, "data"):
+            if hasattr(body, "metadata") and getattr(body, "binary_data", None):
                 name = body.metadata.name if hasattr(body.metadata, "name") else ""
-                if name.startswith("frr-config-"):
-                    configs[name] = body.data
+                if name.startswith("wl-"):
+                    configs[name] = {
+                        key: _base64.b64decode(value).decode()
+                        for key, value in body.binary_data.items()
+                    }
         return configs, context
 
     def test_runtime_session_configmap_records_run_id_without_mutating_yaml(self, tmp_path):
@@ -1565,32 +1568,27 @@ class TestConfigRendering:
 
     def test_isis_config_contains_router_isis(self, tmp_path):
         configs, _ = self._render_configs(tmp_path, protocol="isis")
-        assert len(configs) > 0, "No FRR config ConfigMaps created"
+        assert len(configs) > 0, "No workload artifact ConfigMaps created"
         for cm_name, data in configs.items():
-            if "frr.conf" in data:
-                assert "router isis" in data["frr.conf"], f"{cm_name} missing 'router isis'"
+            assert any("router isis" in text for text in data.values()), (
+                f"{cm_name} missing 'router isis'"
+            )
 
     def test_config_version_hash_present(self, tmp_path):
         configs, _ = self._render_configs(tmp_path)
+        assert configs
         for cm_name, data in configs.items():
-            assert "_config_version" in data, f"{cm_name} missing _config_version"
-            assert len(data["_config_version"]) == 16, f"{cm_name} _config_version wrong length"
+            assert any(len(text) == 16 for text in data.values()), (
+                f"{cm_name} missing a 16-character _config_version artifact"
+            )
 
     def test_config_version_changes_with_content(self, tmp_path):
-        """Different routing configs must produce different _config_version hashes."""
+        """Different routing configs produce different content-addressed names."""
         configs_ospf, _ = self._render_configs(tmp_path, protocol="ospf")
         configs_isis, _ = self._render_configs(tmp_path, protocol="isis")
-        # Pick the same node from both renders
-        ospf_names = sorted(configs_ospf.keys())
-        isis_names = sorted(configs_isis.keys())
-        assert ospf_names == isis_names, "Different node sets for ospf vs isis"
-        first = ospf_names[0]
-        v_ospf = configs_ospf[first]["_config_version"]
-        v_isis = configs_isis[first]["_config_version"]
-        assert v_ospf != v_isis, (
-            f"_config_version identical for ospf and isis ({v_ospf}). "
-            "Hash must be derived from rendered content, not template filename."
-        )
+        assert configs_ospf and configs_isis
+        # Content-addressed names change exactly when rendered content does.
+        assert set(configs_ospf) != set(configs_isis)
 
 
 # ---------------------------------------------------------------------------
@@ -1598,25 +1596,11 @@ class TestConfigRendering:
 # ---------------------------------------------------------------------------
 
 
-class TestExplicitWorkloadPath:
-    """The explicit selection through the full deployer pipeline."""
+class TestOnePathWorkloads:
+    """Every session deploys through resolved profiles — the one path."""
 
     def _run(self, tmp_path):
-        from pathlib import Path as _Path
-
-        from nodalarc.workloads.refs import ImplementationBindingRef
-        from nodalarc.workloads.source import DirectoryPackageSource
-
-        repo_root = _Path(__file__).resolve().parents[2]
-        package_root = repo_root / "configs" / "workloads"
-        digest = (
-            DirectoryPackageSource(package_root, profiles_root=repo_root / "adapters")
-            .load(ImplementationBindingRef("nodalarc:bindings/frr-observer-everywhere.yaml"))
-            .package_digest
-        )
         spec = _make_catalog_spec(tmp_path)
-        spec["implementationBindingRef"] = "nodalarc:bindings/frr-observer-everywhere.yaml"
-        spec["implementationPackageDigest"] = digest
         mock_v1 = create_autospec(kubernetes.client.CoreV1Api, instance=True)
         mock_v1.read_namespaced_secret.return_value = _existing_terminal_secret("test-uid-456")
         owner_ref = {
@@ -1635,10 +1619,7 @@ class TestExplicitWorkloadPath:
             patch.dict(
                 "os.environ",
                 {
-                    "FRR_IMAGE": "test/frr:1",
                     "WIRING_GATE_IMAGE": "test/base:1",
-                    "PROBE_IMAGE": "test/probe:1",
-                    "NODALPATH_FWD_IMAGE": "test/nodalpath-fwd:1",
                     "IMAGE_PULL_POLICY": "Never",
                 },
                 clear=False,
@@ -1663,72 +1644,23 @@ class TestExplicitWorkloadPath:
             config_maps.append(cm)
         return pods, config_maps
 
-    def test_selected_profile_replaces_the_builtin_composition(self, tmp_path):
+    def test_every_pod_composes_from_its_resolved_profile(self, tmp_path):
         pods, config_maps = self._run(tmp_path)
         assert pods
         for pod in pods:
             names = [container.name for container in pod.spec.containers]
-            assert names == ["frr", "observer"], names
+            assert names == ["frr-router", "observer"], names
             assert [c.name for c in pod.spec.init_containers] == ["wiring-gate"]
-            frr = pod.spec.containers[0]
-            mounts = {m.mount_path for m in frr.volume_mounts}
-            # The plan slot is the genuinely consumed config path.
-            assert "/etc/frr-plan" not in mounts
+            primary = pod.spec.containers[0]
+            mounts = {m.mount_path for m in primary.volume_mounts}
             assert "/etc/frr-config" in mounts
+            annotations = pod.metadata.annotations or {}
+            assert annotations["nodalarc.io/workload-selection"].startswith("profiles@sha256:")
         cm_names = [
             cm.metadata.name for cm in config_maps if hasattr(cm, "metadata") and cm.metadata
         ]
         assert not [n for n in cm_names if n and n.startswith("frr-config-")]
         assert [n for n in cm_names if n and n.startswith("wl-")]
-
-    def test_digest_mismatch_creates_nothing(self, tmp_path):
-        from nodalarc_operator.workloads.selection import WorkloadSelectionError
-
-        spec = _make_catalog_spec(tmp_path)
-        spec["implementationBindingRef"] = "nodalarc:bindings/frr-observer-everywhere.yaml"
-        spec["implementationPackageDigest"] = "sha256:" + "d" * 64
-        mock_v1 = create_autospec(kubernetes.client.CoreV1Api, instance=True)
-        mock_v1.read_namespaced_secret.return_value = _existing_terminal_secret("test-uid-456")
-        owner_ref = {
-            "apiVersion": "nodalarc.io/v1alpha1",
-            "kind": "ConstellationSpec",
-            "name": "current-session",
-            "uid": "test-uid-456",
-            "blockOwnerDeletion": True,
-        }
-        with (
-            patch("nodalarc_operator.session_deployer._get_v1", return_value=mock_v1),
-            patch(
-                "nodalarc_operator.session_deployer.discover_available_nodes",
-                return_value=["node01", "node02"],
-            ),
-            patch.dict(
-                "os.environ",
-                {
-                    "FRR_IMAGE": "test/frr:1",
-                    "WIRING_GATE_IMAGE": "test/base:1",
-                    "PROBE_IMAGE": "test/probe:1",
-                    "NODALPATH_FWD_IMAGE": "test/nodalpath-fwd:1",
-                    "IMAGE_PULL_POLICY": "Never",
-                },
-                clear=False,
-            ),
-            pytest.raises(WorkloadSelectionError, match="desired digest"),
-        ):
-            ensure_session_configmaps(
-                spec,
-                "current-session",
-                "nodalarc",
-                owner_ref,
-                session_run_id="run-test-0001",
-                deployment_context=_test_deployment_context(spec, owner_uid="test-uid-456"),
-            )
-        mock_v1.create_namespaced_pod.assert_not_called()
-        assert not [
-            call
-            for call in mock_v1.create_namespaced_config_map.call_args_list
-            if (call[1].get("body") or call[0][1]).metadata.name.startswith("wl-")
-        ]
 
 
 class TestSelectionIdentityReplacement:
@@ -1741,7 +1673,7 @@ class TestSelectionIdentityReplacement:
         "uid": "test-uid",
         "blockOwnerDeletion": True,
     }
-    EXPLICIT = "nodalarc:bindings/frr-observer-everywhere.yaml@sha256:" + "a" * 64
+    EXPLICIT = "profiles@sha256:" + "a" * 64
 
     def _identity_pass(self, pods, selection_identity, session_id="run-test-0002"):
         from nodalarc_operator.session_deployer import ensure_session_pod_identity
@@ -1781,26 +1713,14 @@ class TestSelectionIdentityReplacement:
         self._assert_preconditioned_delete(mock_v1, "sat-p00s00", "pod-uid-0001")
         mock_v1.patch_namespaced_pod.assert_not_called()
 
-    def test_pod_identity_restamps_matching_builtin(self):
-        builtin_pod = _existing_session_pod(run_id="run-old-0001")
-        mock_v1, patched = self._identity_pass([builtin_pod], "builtin-frr-default")
-        assert patched == 1
+    def test_matching_identity_and_run_is_left_alone(self):
+        current = _existing_session_pod(
+            run_id="run-test-0002", selection_identity=self.EXPLICIT
+        )
+        mock_v1, replaced = self._identity_pass([current], self.EXPLICIT)
+        assert replaced == 0
         mock_v1.delete_namespaced_pod.assert_not_called()
-        mock_v1.patch_namespaced_pod.assert_called_once()
-
-    def test_prefeature_unannotated_builtin_pod_survives(self):
-        # An Operator upgrade must not restart every pre-feature pod: a pod
-        # without the annotation is adopted as built-in default when the
-        # desired selection IS the built-in default; adoption stamps the
-        # annotation.
-        unannotated = _existing_session_pod(run_id="run-old-0001", selection_identity=None)
-        mock_v1, patched = self._identity_pass([unannotated], "builtin-frr-default")
-        assert patched == 1
-        mock_v1.delete_namespaced_pod.assert_not_called()
-        body = mock_v1.patch_namespaced_pod.call_args[0][2]
-        assert body["metadata"]["annotations"] == {
-            "nodalarc.io/workload-selection": "builtin-frr-default"
-        }
+        mock_v1.patch_namespaced_pod.assert_not_called()
 
     def test_prefeature_unannotated_pod_is_replaced_for_explicit(self):
         unannotated = _existing_session_pod(run_id="run-old-0001", selection_identity=None)
@@ -1920,7 +1840,7 @@ class TestPodSpec:
         pods = self._create_pods(tmp_path)
         for pod in pods:
             frr = pod.spec.containers[0]
-            assert frr.name == "frr"
+            assert frr.name == "frr-router"
             caps = frr.security_context.capabilities.add
             assert "SYS_ADMIN" in caps, f"Pod {pod.metadata.name} missing SYS_ADMIN"
             assert "NET_ADMIN" in caps, f"Pod {pod.metadata.name} missing NET_ADMIN"
@@ -2003,7 +1923,18 @@ class TestPodSpec:
 
     def test_409_conflict_idempotent(self, tmp_path):
         """If create_namespaced_pod raises 409, ensure_session_pods continues."""
+        from nodalarc_operator.workloads.preparation import (
+            prepare_session_workloads as _prepare,
+        )
+
         spec = _make_catalog_spec(tmp_path)
+        resolution = resolve_session_with_assets(
+            load_configuration_yaml(spec["sessionYaml"]),
+            catalog_roots=spec.get("_test_catalog_roots"),
+        )
+        desired_identity = _prepare(
+            resolution, namespace="nodalarc", owner_ref={"uid": "test-uid"}
+        ).identity
         mock_v1 = create_autospec(kubernetes.client.CoreV1Api, instance=True)
         mock_v1.read_namespaced_secret.return_value = _existing_terminal_secret()
         mock_v1.create_namespaced_pod.side_effect = kubernetes.client.rest.ApiException(status=409)
@@ -2013,6 +1944,7 @@ class TestPodSpec:
                 node_id=pod_name,
                 uid="test-uid",
                 run_id="run-test-0001",
+                selection_identity=desired_identity,
             )
         )
         owner_ref = {

@@ -125,44 +125,27 @@ def test_operator_uses_the_shared_required_selection_once(
     assert loaded.catalog_upload == upload.selection
     assert loaded.proof.upload_id == upload.upload_id
     assert loaded.proof.run_id == "run-operator-runtime-0001"
-    assert loaded.workload_selection is None
     assert client.lists == [(NAMESPACE, f"{CATALOG_UPLOAD_LABEL}={upload.upload_id}")]
 
 
-def test_operator_admits_the_selection_pair_through_the_boundary(
+def test_operator_rejects_the_retired_selection_pair_fields(
     upload: CatalogUpload,
     tmp_path: Path,
 ) -> None:
-    from nodalarc.workloads.refs import SelectionPairError
-
-    digest = "sha256:" + "c" * 64
+    """The CR spec carries the session and its upload, nothing else: the
+    retired selection pair is an unsupported field, not a silent no-op."""
     paired = {
         **_spec(upload),
         "implementationBindingRef": "nodalarc:bindings/frr-observer-everywhere.yaml",
-        "implementationPackageDigest": digest,
+        "implementationPackageDigest": "sha256:" + "c" * 64,
     }
-    loaded = resolve_operator_session(
-        paired,
-        core_v1=_client_for(upload),
-        namespace=NAMESPACE,
-        source_origin="test.operator_runtime_session",
-        run_id="run-operator-runtime-0001",
-        installed_shipped_root=SHIPPED_ROOT,
-        materialization_parent=tmp_path,
-    )
-    assert loaded.workload_selection is not None
-    assert (
-        loaded.workload_selection.identity()
-        == f"nodalarc:bindings/frr-observer-everywhere.yaml@{digest}"
-    )
-
-    half = {**_spec(upload), "implementationPackageDigest": digest}
-    with pytest.raises(SelectionPairError, match="together"):
+    with pytest.raises(ValueError, match="unsupported field"):
         resolve_operator_session(
-            half,
+            paired,
             core_v1=_client_for(upload),
             namespace=NAMESPACE,
             source_origin="test.operator_runtime_session",
+            run_id="run-operator-runtime-0001",
             installed_shipped_root=SHIPPED_ROOT,
             materialization_parent=tmp_path,
         )

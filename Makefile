@@ -331,7 +331,7 @@ session: ## Start a session (DEFAULT_SESSION=...); refuses a drifted platform (F
 			exit 1; \
 		}; \
 	fi
-	@KUBECONFIG='$(KUBECONFIG)' NAMESPACE='$(NAMESPACE)' DEFAULT_SESSION='$(DEFAULT_SESSION)' WORKLOAD_BINDING_REF='$(WORKLOAD_BINDING_REF)' WORKLOAD_PACKAGE_DIGEST='$(WORKLOAD_PACKAGE_DIGEST)' bash scripts/na-session.sh
+	@KUBECONFIG='$(KUBECONFIG)' NAMESPACE='$(NAMESPACE)' DEFAULT_SESSION='$(DEFAULT_SESSION)' bash scripts/na-session.sh
 
 restart: ## Bounce all platform pods on their CURRENT images (no code deploy; use deploy-* to ship code)
 	@echo "[restart] Rolling restart of all platform deployments and daemonsets..."

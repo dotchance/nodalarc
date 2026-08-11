@@ -4,17 +4,9 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
-from nodalarc.resolve_session import SessionResolutionError
-from nodalarc.workloads.refs import ImplementationBindingRef, selection_ref_from_spec
-from nodalarc.workloads.source import DirectoryPackageSource
-from nodalarc_operator.session_deployer import prepare_session_workloads
-from nodalarc_operator.workloads.selection import (
-    WorkloadSelectionError,
-    prepare_workload_selection,
-)
+from nodalarc.resolve_session import SessionResolutionError, resolve_session_with_assets
+from nodalarc_operator.workloads.preparation import prepare_session_workloads
 
 from tests.catalog_session_fixtures import (
     build_catalog_session_fixture,
@@ -110,63 +102,30 @@ def test_domain_matching_only_hosts_is_refused() -> None:
         )
 
 
-FIXTURE_PACKAGE_ROOT = Path(__file__).resolve().parents[1] / "fixtures" / "workloads"
-HETERO_BINDING = "nodalarc:bindings/hetero-host.yaml"
-
-
-def _hetero_selection_ref():
-    digest = (
-        DirectoryPackageSource(FIXTURE_PACKAGE_ROOT)
-        .load(ImplementationBindingRef(HETERO_BINDING))
-        .package_digest
-    )
-    return selection_ref_from_spec(
-        {
-            "implementationBindingRef": HETERO_BINDING,
-            "implementationPackageDigest": digest,
-        }
-    )
-
-
-def test_heterogeneous_binding_composes_hosts_without_frr() -> None:
+def test_one_path_composes_hosts_and_routers_from_their_profiles() -> None:
     """Host nodes compose from the plain application profile — one
-    zero-capability container, no plan artifacts — while routed nodes keep
-    the FRR composition, in ONE selection under one sky."""
-    resolved = _resolved_with_hosts(name="host-hetero")
-    selected = prepare_workload_selection(
-        _hetero_selection_ref(),
-        resolved,
+    zero-capability container, no rendered artifacts — while routed nodes
+    compose FRR with rendered configuration, in ONE session under one sky."""
+    fixture = build_catalog_session_fixture(
+        name="host-hetero",
+        constellation={},
+        ground_stations={"stations": [{}, {}], "host_endpoints": True},
+    )
+    resolution = resolve_session_with_assets(fixture, catalog_roots=fixture.roots)
+    prepared = prepare_session_workloads(
+        resolution,
         namespace="nodalarc",
         owner_ref={"kind": "ConstellationSpec", "name": "s", "uid": "u1"},
-        package_root=FIXTURE_PACKAGE_ROOT,
     )
-    assert selected is not None
-    hosts = {n.node_id for n in resolved.nodes if n.forwarding == "host"}
+
+    hosts = {n.node_id for n in resolution.resolved.nodes if n.forwarding == "host"}
     assert hosts
-    for node_id, composed in selected.composed.items():
+    assert prepared.identity.startswith("profiles@sha256:")
+    for node_id, composed in prepared.composed.items():
         names = [c.name for c in composed.composition.containers]
         if node_id in hosts:
-            assert names == ["app"], names
-            assert composed.artifact_config_map is None or not [
-                k for k in (composed.artifact_config_map.binary_data or {}) if k.startswith("p-")
-            ]
+            assert names == ["linux-host"], names
+            assert composed.artifact_config_map is None
         else:
-            assert "frr" in names
-
-
-def test_builtin_default_refuses_host_nodes() -> None:
-    """No built-in host workload exists: the FRR default path refuses a
-    session with hosts before any write."""
-    from types import SimpleNamespace
-
-    resolved = _resolved_with_hosts(name="host-legacy-refusal")
-    active_session = SimpleNamespace(
-        workload_selection=None,
-        resolution=SimpleNamespace(resolved=resolved),
-    )
-    with pytest.raises(WorkloadSelectionError, match="explicit workload selection"):
-        prepare_session_workloads(
-            active_session,
-            namespace="nodalarc",
-            owner_ref={"kind": "ConstellationSpec", "name": "s", "uid": "u1"},
-        )
+            assert names[0] == "frr-router", names
+            assert composed.artifact_config_map is not None

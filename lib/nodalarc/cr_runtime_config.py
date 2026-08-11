@@ -14,7 +14,6 @@ from nodalarc.models.resolved_session import SourceContext
 from nodalarc.resolve_session import SessionResolution
 from nodalarc.runtime_config import RuntimeConfigProof
 from nodalarc.runtime_service_config import DEFAULT_INSTALLED_SHIPPED_CATALOG_ROOT
-from nodalarc.workloads.refs import SelectionRef, selection_ref_from_spec
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,7 +24,6 @@ class RuntimeSessionConfig:
     proof: RuntimeConfigProof
     root_yaml: str
     catalog_upload: CatalogUploadSelection
-    workload_selection: SelectionRef | None
 
 
 def load_cr_runtime_config(
@@ -46,8 +44,6 @@ def load_cr_runtime_config(
             {
                 "sessionYaml",
                 "catalogUpload",
-                "implementationBindingRef",
-                "implementationPackageDigest",
             }
         )
     )
@@ -55,7 +51,6 @@ def load_cr_runtime_config(
         raise ValueError(
             "runtime session spec contains unsupported field(s): " + ", ".join(unexpected_fields)
         )
-    workload_selection = selection_ref_from_spec(spec)
     root_yaml = spec.get("sessionYaml")
     if not isinstance(root_yaml, str) or not root_yaml:
         raise ValueError("spec.sessionYaml must be a non-empty string")
@@ -91,5 +86,4 @@ def load_cr_runtime_config(
             proof=runtime_config.proof,
             root_yaml=root_yaml,
             catalog_upload=selection,
-            workload_selection=workload_selection,
         )

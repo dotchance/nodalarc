@@ -1,9 +1,0 @@
-# One remainder entry: every resolved node runs the FRR reference profile.
-implementation_binding:
-  schema_version: "1"
-  id: all-frr
-  description: Bind every resolved node to the built-in FRR reference profile.
-  entries:
-  - id: everything
-    selector: {remainder: true}
-    profile: nodalarc:profiles/frr/frr-reference.yaml

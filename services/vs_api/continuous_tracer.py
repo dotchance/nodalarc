@@ -35,6 +35,19 @@ from nodalarc.models.vs_api import TracedPath
 from nodalarc.platform_config import PlatformConfig
 from nodalarc.tracepath_parser import parse_tracepath
 
+_PRIMARY_CONTAINER_CACHE: dict[tuple[str, str], str] = {}
+
+
+def _primary_container(v1, pod: str, ns: str) -> str:
+    """The primary workload container: first in the pod's composition."""
+    key = (ns, pod)
+    cached = _PRIMARY_CONTAINER_CACHE.get(key)
+    if cached is not None:
+        return cached
+    name = v1.read_namespaced_pod(pod, ns).spec.containers[0].name
+    _PRIMARY_CONTAINER_CACHE[key] = name
+    return name
+
 from vs_api.timeline_scanner import TimelineScanner
 
 log = logging.getLogger(__name__)
@@ -270,7 +283,7 @@ class ContinuousTracer:
                 v1.connect_get_namespaced_pod_exec,
                 pod,
                 ns,
-                container="frr",
+                container=_primary_container(v1, pod, ns),
                 command=["traceroute", "-I", "-n", "-w", "4", "-q", "1", "-m", "20", target],
                 stderr=True,
                 stdout=True,

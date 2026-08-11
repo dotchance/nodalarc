@@ -1,6 +1,6 @@
 # Copyright 2024-2026 .chance (dotchance)
 # Licensed under the Apache License, Version 2.0. See LICENSE file.
-"""Translate an admitted workload profile and its plan into Kubernetes data.
+"""Translate an admitted catalog profile and its plan into Kubernetes data.
 
 Pure translation: one admitted profile plus one node's plan becomes a
 WorkloadComposition and the session-owned artifact ConfigMap. No API calls
@@ -15,21 +15,17 @@ from dataclasses import dataclass
 
 import kubernetes.client
 from nodalarc.content_identity import canonical_json_bytes, sha256_digest
+from nodalarc.models.catalog import Profile, ProfileSidecar
 from nodalarc.workloads.plan import WorkloadPlan
-from nodalarc.workloads.profile import NodeWorkloadProfile, ProfileContainer
-from nodalarc.workloads.source import LoadedPackage, LoadedProfile
 
 from nodalarc_operator.workloads.materializer import WorkloadComposition
 
 # Platform-owned volume names inside the composition. Profile volumes may
 # not use them; the materializer separately reserves wiring-gate/status.
 PLAN_ARTIFACT_VOLUME = "na-plan-artifacts"
-STATIC_ARTIFACT_VOLUME = "na-static-artifacts"
 TERMINAL_KEYS_VOLUME = "na-terminal-keys"
 TERMINAL_KEYS_SECRET = "nodalarc-terminal-keys"
-_RESERVED_VOLUME_NAMES = frozenset(
-    {PLAN_ARTIFACT_VOLUME, STATIC_ARTIFACT_VOLUME, TERMINAL_KEYS_VOLUME}
-)
+_RESERVED_VOLUME_NAMES = frozenset({PLAN_ARTIFACT_VOLUME, TERMINAL_KEYS_VOLUME})
 
 
 @dataclass(frozen=True)
@@ -38,45 +34,35 @@ class ComposedWorkload:
 
     composition: WorkloadComposition
     # Session-owned, content-addressed artifact ConfigMap (binaryData), or
-    # None when the profile ships no artifacts. Created by the reconciler.
+    # None when the plan carries no rendered files. Created by the reconciler.
     artifact_config_map: kubernetes.client.V1ConfigMap | None
     # The pod's terminal contract as canonical JSON, or None when the
     # profile declines terminal access.
     terminal_access: str | None = None
 
 
-def _artifact_key(kind: str, name: str) -> str:
-    """Deterministic opaque ConfigMap key for an artifact path.
+def _artifact_key(name: str) -> str:
+    """Deterministic opaque ConfigMap key for a rendered file name."""
 
-    Admitted package paths allow nesting and characters Kubernetes keys
-    reject; the key is therefore derived, never the path itself. Original
-    paths are preserved through V1KeyToPath.path at projection time, so the
-    admitted path vocabulary is never narrowed here.
-    """
     digest = sha256_digest(name.encode())
-    return f"{kind}-{digest[len('sha256:') : len('sha256:') + 16]}"
+    return f"p-{digest[len('sha256:') : len('sha256:') + 16]}"
 
 
 def _artifact_config_map(
     plan: WorkloadPlan,
-    loaded: LoadedProfile,
     *,
     namespace: str,
     owner_ref: dict,
 ) -> kubernetes.client.V1ConfigMap | None:
-    entries: dict[str, bytes] = {}
-    for name, content in loaded.files.items():
-        entries[_artifact_key("s", name)] = content
-    for name, content in plan.plan_artifacts.items():
-        entries[_artifact_key("p", name)] = content
-    if not entries:
+    if not plan.rendered_files:
         return None
     import base64
 
+    entries = {_artifact_key(name): content for name, content in plan.rendered_files.items()}
     content_id = sha256_digest(
         canonical_json_bytes(
             {
-                "package": plan.package_digest,
+                "profile": plan.profile_ref,
                 "entries": {key: sha256_digest(value) for key, value in sorted(entries.items())},
             }
         )
@@ -110,130 +96,124 @@ def _artifact_config_map(
     )
 
 
-def _security_context(container: ProfileContainer) -> kubernetes.client.V1SecurityContext:
+def _security_context(
+    capabilities: tuple[str, ...],
+    root_filesystem: str,
+) -> kubernetes.client.V1SecurityContext:
     """The platform generates the effective security context; profiles only
     ever narrow it through admitted declarations."""
+
     return kubernetes.client.V1SecurityContext(
         capabilities=kubernetes.client.V1Capabilities(
             drop=["ALL"],
-            add=list(container.capabilities) or None,
+            add=list(capabilities) or None,
         ),
-        read_only_root_filesystem=container.root_filesystem == "read_only",
+        read_only_root_filesystem=root_filesystem == "read_only",
         allow_privilege_escalation=False,
     )
 
 
-def _resources(container: ProfileContainer) -> kubernetes.client.V1ResourceRequirements:
-    requests = {
-        "cpu": f"{container.resources.requests.cpu_m}m",
-        "memory": f"{container.resources.requests.memory_mi}Mi",
-    }
-    limits = {
-        "cpu": f"{container.resources.limits.cpu_m}m",
-        "memory": f"{container.resources.limits.memory_mi}Mi",
-    }
-    ephemeral = container.resources.ephemeral_storage_mi
-    if ephemeral is not None:
-        requests["ephemeral-storage"] = f"{ephemeral.request}Mi"
-        limits["ephemeral-storage"] = f"{ephemeral.limit}Mi"
-    return kubernetes.client.V1ResourceRequirements(requests=requests, limits=limits)
+def _resources(resources) -> kubernetes.client.V1ResourceRequirements:
+    return kubernetes.client.V1ResourceRequirements(
+        requests={
+            "cpu": f"{resources.requests.cpu_m}m",
+            "memory": f"{resources.requests.memory_mi}Mi",
+        },
+        limits={
+            "cpu": f"{resources.limits.cpu_m}m",
+            "memory": f"{resources.limits.memory_mi}Mi",
+        },
+    )
 
 
-def _container_mounts(
-    container: ProfileContainer,
-    profile: NodeWorkloadProfile,
-    loaded: LoadedProfile,
+def _pull_reference(registry: str, image: str) -> str:
+    return f"{registry}/{image}"
+
+
+def _primary_container(
+    profile: Profile,
     plan: WorkloadPlan,
-) -> list[kubernetes.client.V1VolumeMount]:
+) -> kubernetes.client.V1Container:
     mounts = [
         kubernetes.client.V1VolumeMount(
             name=mount.volume, mount_path=mount.path, read_only=mount.read_only
         )
-        for mount in container.volume_mounts
+        for mount in profile.mounts
     ]
-    for artifact in profile.artifacts.static:
-        if artifact.container != container.name:
-            continue
-        mounts.append(
-            kubernetes.client.V1VolumeMount(
-                name=STATIC_ARTIFACT_VOLUME,
-                mount_path=artifact.path,
-                sub_path=_artifact_key("s", artifact.file),
-                read_only=True,
-            )
-        )
-    plan_slot = profile.artifacts.plan
-    if plan_slot is not None and plan_slot.container == container.name and plan.plan_artifacts:
+    if profile.config_mount is not None and plan.rendered_files:
         mounts.append(
             kubernetes.client.V1VolumeMount(
                 name=PLAN_ARTIFACT_VOLUME,
-                mount_path=plan_slot.path,
+                mount_path=profile.config_mount,
                 read_only=True,
             )
         )
-    terminal = profile.terminal
-    if terminal is not None and terminal.surface == "ssh" and terminal.container == container.name:
+    if profile.terminal is not None and profile.terminal.surface == "ssh":
         mounts.append(
             kubernetes.client.V1VolumeMount(
                 name=TERMINAL_KEYS_VOLUME,
-                mount_path=terminal.authorized_keys_path,
+                mount_path=profile.terminal.authorized_keys_path,
                 read_only=True,
             )
         )
-    return mounts
-
-
-def _translate_container(
-    container: ProfileContainer,
-    profile: NodeWorkloadProfile,
-    loaded: LoadedProfile,
-    plan: WorkloadPlan,
-) -> kubernetes.client.V1Container:
-    readiness = profile.readiness
     probe = None
-    if readiness is not None and readiness.container == container.name:
+    if profile.readiness is not None:
         probe = kubernetes.client.V1Probe(
-            _exec=kubernetes.client.V1ExecAction(command=list(readiness.argv)),
-            period_seconds=readiness.period_seconds,
-            timeout_seconds=readiness.timeout_seconds,
+            _exec=kubernetes.client.V1ExecAction(command=list(profile.readiness.argv)),
+            period_seconds=profile.readiness.period_seconds,
+            timeout_seconds=profile.readiness.timeout_seconds,
         )
     return kubernetes.client.V1Container(
-        name=container.name,
-        image=container.image,
-        command=list(container.command) if container.command is not None else None,
-        args=list(container.args) if container.args is not None else None,
-        security_context=_security_context(container),
-        resources=_resources(container),
+        name=profile.id,
+        image=_pull_reference(profile.registry, profile.image),
+        command=list(profile.command) if profile.command is not None else None,
+        args=list(profile.args) if profile.args is not None else None,
+        security_context=_security_context(profile.capabilities, profile.root_filesystem),
+        resources=_resources(profile.resources),
         readiness_probe=probe,
-        volume_mounts=_container_mounts(container, profile, loaded, plan) or None,
+        volume_mounts=mounts or None,
+    )
+
+
+def _sidecar_container(
+    sidecar: ProfileSidecar,
+    profile: Profile,
+) -> kubernetes.client.V1Container:
+    mounts = [
+        kubernetes.client.V1VolumeMount(
+            name=mount.volume, mount_path=mount.path, read_only=mount.read_only
+        )
+        for mount in sidecar.mounts
+    ]
+    return kubernetes.client.V1Container(
+        name=sidecar.name,
+        image=_pull_reference(sidecar.registry or profile.registry, sidecar.image),
+        command=list(sidecar.command) if sidecar.command is not None else None,
+        args=list(sidecar.args) if sidecar.args is not None else None,
+        security_context=_security_context(sidecar.capabilities, sidecar.root_filesystem),
+        resources=_resources(sidecar.resources),
+        volume_mounts=mounts or None,
     )
 
 
 def compose_workload(
     plan: WorkloadPlan,
-    package: LoadedPackage,
+    profile: Profile,
     *,
     namespace: str,
     owner_ref: dict,
 ) -> ComposedWorkload:
-    """Translate one node's plan into composition data and owned objects."""
-    if plan.package_digest != package.package_digest:
-        raise ValueError(
-            f"plan was compiled from package {plan.package_digest}, "
-            f"not the loaded package {package.package_digest}"
-        )
-    loaded = package.profiles.get(str(plan.profile_ref))
-    if loaded is None:
-        raise ValueError(f"plan names profile {plan.profile_ref} absent from the loaded package")
-    profile = loaded.profile
+    """Translate one node's plan and admitted profile into composition data."""
 
     reserved = _RESERVED_VOLUME_NAMES & {volume.name for volume in profile.volumes}
     if reserved:
         raise ValueError(f"profile volumes may not use platform names: {sorted(reserved)}")
-    if plan.plan_artifacts and profile.artifacts.plan is None:
-        raise ValueError(f"profile {plan.profile_ref} declares no plan-artifact destination")
+    if plan.rendered_files and profile.config_mount is None:
+        raise ValueError(
+            f"profile {plan.profile_ref} declares no config_mount for rendered files"
+        )
 
-    artifact_cm = _artifact_config_map(plan, loaded, namespace=namespace, owner_ref=owner_ref)
+    artifact_cm = _artifact_config_map(plan, namespace=namespace, owner_ref=owner_ref)
 
     volumes = [
         kubernetes.client.V1Volume(
@@ -246,27 +226,18 @@ def compose_workload(
         for volume in profile.volumes
     ]
     if artifact_cm is not None:
-        cm_name = artifact_cm.metadata.name
-        if loaded.files:
-            volumes.append(
-                kubernetes.client.V1Volume(
-                    name=STATIC_ARTIFACT_VOLUME,
-                    config_map=kubernetes.client.V1ConfigMapVolumeSource(name=cm_name),
-                )
+        volumes.append(
+            kubernetes.client.V1Volume(
+                name=PLAN_ARTIFACT_VOLUME,
+                config_map=kubernetes.client.V1ConfigMapVolumeSource(
+                    name=artifact_cm.metadata.name,
+                    items=[
+                        kubernetes.client.V1KeyToPath(key=_artifact_key(name), path=name)
+                        for name in sorted(plan.rendered_files)
+                    ],
+                ),
             )
-        if plan.plan_artifacts:
-            volumes.append(
-                kubernetes.client.V1Volume(
-                    name=PLAN_ARTIFACT_VOLUME,
-                    config_map=kubernetes.client.V1ConfigMapVolumeSource(
-                        name=cm_name,
-                        items=[
-                            kubernetes.client.V1KeyToPath(key=_artifact_key("p", name), path=name)
-                            for name in sorted(plan.plan_artifacts)
-                        ],
-                    ),
-                )
-            )
+        )
 
     terminal_access: str | None = None
     if profile.terminal is not None:
@@ -291,21 +262,18 @@ def compose_workload(
             terminal_access = canonical_json_bytes(
                 {
                     "surface": "exec",
-                    "container": profile.terminal.container,
+                    "container": profile.id,
                     "command": list(profile.terminal.command or ()),
                 }
             ).decode()
 
     composition = WorkloadComposition(
         containers=[
-            _translate_container(container, profile, loaded, plan)
-            for container in profile.workload_containers
+            _primary_container(profile, plan),
+            *(_sidecar_container(sidecar, profile) for sidecar in profile.sidecars),
         ],
         volumes=volumes,
-        init_containers=[
-            _translate_container(container, profile, loaded, plan)
-            for container in profile.init_containers
-        ],
+        init_containers=[],
     )
     return ComposedWorkload(
         composition=composition,

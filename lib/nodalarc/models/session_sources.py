@@ -8,7 +8,6 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from nodalarc.catalog_refs import SessionRef
 from nodalarc.models.builder_api import Sha256Digest
-from nodalarc.workloads.refs import SelectionRef
 
 
 class _SessionSourceModel(BaseModel):
@@ -56,10 +55,6 @@ class CatalogSessionSwitchRequest(_SessionSourceModel):
     expected_source_revision: Sha256Digest
     expected_document_digest: Sha256Digest
     expected_dependency_digest: Sha256Digest
-    # Optional explicit workload selection: external runtime selection
-    # metadata, never part of session YAML. Omitted = built-in FRR default.
-    # The pair travels as ONE object so half a selection cannot be expressed.
-    workload_selection: SelectionRef | None = None
 
 
 class CatalogSessionSwitchAccepted(_SessionSourceModel):

@@ -30,9 +30,10 @@ if TYPE_CHECKING:
         ResolvedSession,
     )
 
-# The profile this adapter serves. Bindings select FRR by this reference; the
-# explicit registry keys the adapter on it.
-FRR_PROFILE_REF = "nodalarc:profiles/frr/frr-observer.yaml"
+# The adapter's name: the value a profile's `adapter:` field carries, and the
+# key the explicit registry and the runtime-support renderability declaration
+# use.
+FRR_ADAPTER_NAME = "frr"
 
 # FRR templates live beside the platform's other runtime templates, resolved
 # relative to the process working directory (the operator's /app, or the repo
@@ -83,7 +84,7 @@ def _routing_domain_for_node(resolved: ResolvedSession, node_id: str) -> Resolve
 class FrrAdapter:
     """Render one routed node's FRR configuration from resolved truth."""
 
-    profile_ref = FRR_PROFILE_REF
+    name = FRR_ADAPTER_NAME
 
     def __init__(self) -> None:
         self._env: Environment | None = None

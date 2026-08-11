@@ -335,16 +335,21 @@ def test_run_tracepath_streams_partial_hops():
     ]
 
     partials: list[int] = []
+    from types import SimpleNamespace
+
     with (
         patch("kubernetes.config.load_incluster_config"),
-        patch("kubernetes.client.CoreV1Api"),
+        patch("kubernetes.client.CoreV1Api") as core_api,
         patch("kubernetes.stream.stream", return_value=_FakeStream(lines)),
     ):
+        core_api.return_value.read_namespaced_pod.return_value.spec.containers = [
+            SimpleNamespace(name="frr-router")
+        ]
         result = tracer._run_tracepath(
             "gs-alpha", "10.0.0.9", lambda raw: partials.append(raw.count("\n"))
         )
 
-    assert result["ok"] is True
+    assert result["ok"] is True, result
     # on_partial fired incrementally as each new complete line arrived (not
     # once at the end), so the UI would have seen the path grow.
     assert partials == sorted(partials)  # monotonically increasing

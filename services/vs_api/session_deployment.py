@@ -24,7 +24,6 @@ from nodalarc.prepared_session import (
     PreparedSessionSource,
     prepare_session_files,
 )
-from nodalarc.workloads.refs import SelectionRef
 from pydantic import TypeAdapter, ValidationError
 
 from .catalog_context import CatalogContext
@@ -267,13 +266,8 @@ def constellation_spec_body(
     deployment: PreparedCatalogSessionDeployment,
     *,
     namespace: str,
-    workload_selection: SelectionRef | None = None,
 ) -> dict[str, Any]:
-    """Build the exact CR body selected after upload readback succeeds.
-
-    An explicit workload selection appears as the CR field pair; absent
-    selection omits both fields completely (built-in FRR default).
-    """
+    """Build the exact CR body selected after upload readback succeeds."""
     if deployment.receipt is None:
         raise ValueError("catalog upload must be persisted before building the session CR")
     selection = deployment.receipt.selection
@@ -291,9 +285,6 @@ def constellation_spec_body(
         "sessionYaml": deployment.prepared.root_yaml.decode("utf-8"),
         "catalogUpload": selection.model_dump(mode="json"),
     }
-    if workload_selection is not None:
-        spec["implementationBindingRef"] = str(workload_selection.binding_ref)
-        spec["implementationPackageDigest"] = str(workload_selection.package_digest)
     return {
         "apiVersion": "nodalarc.io/v1alpha1",
         "kind": "ConstellationSpec",

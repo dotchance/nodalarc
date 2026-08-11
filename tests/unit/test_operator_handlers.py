@@ -18,15 +18,9 @@ import nodalarc_operator.handlers as handlers_mod
 import nodalarc_operator.session_deployer as deployer_mod
 import pytest
 from nodalarc.catalog_upload import CatalogUploadSelection
-from nodalarc.content_identity import SHA256_DIGEST_PATTERN
 from nodalarc.runtime_config import RuntimeConfigProof
-from nodalarc.workloads.refs import (
-    ImplementationBindingRef,
-    SelectionPairError,
-    selection_ref_from_spec,
-)
 from nodalarc_operator.runtime_session import OperatorSessionConfig
-from nodalarc_operator.workloads.selection import WorkloadSelectionError
+from nodalarc_operator.workloads.preparation import WorkloadPreparationError
 
 _SESSION_YAML = (
     Path(__file__).parents[2] / "catalog" / "nodalarc" / "sessions" / "earth-leo-simple.yaml"
@@ -90,7 +84,6 @@ class _ReconcilerHarness:
             ),
             root_yaml=spec["sessionYaml"],
             catalog_upload=selection,
-            workload_selection=None,
         )
 
     def _p(self, name, target, **kwargs):
@@ -172,11 +165,6 @@ class _ReconcilerHarness:
             return_value=0,
         )
         self._p(
-            "schema_served",
-            "nodalarc_operator.handlers._require_selection_schema_served",
-            return_value=None,
-        )
-        self._p(
             "delete_owned",
             "nodalarc_operator.handlers.delete_owned_session_pods",
             return_value=(0, 0),
@@ -184,7 +172,7 @@ class _ReconcilerHarness:
         self._p(
             "prepare_workloads",
             "nodalarc_operator.handlers.prepare_session_workloads",
-            return_value=None,
+            return_value=MagicMock(identity="profiles@sha256:" + "f" * 64),
         )
         self._p(
             "cr_current",
@@ -282,25 +270,14 @@ async def _reconcile(h, phase="Ready", **extra_status):
     )
 
 
-class TestWorkloadSelectionReconciliation:
-    """The real reconciliation entry path with the selection pair present."""
+class TestWorkloadPreparationReconciliation:
+    """The real reconciliation entry path preparing session workloads."""
 
-    BINDING = "nodalarc:bindings/frr-observer-everywhere.yaml"
-
-    def _session_with_selection(self, h, digest):
-        import dataclasses
-
+    def _session(self, h):
         spec = {"sessionYaml": _SESSION_YAML}
         meta = {"name": "current-session", "uid": "test-uid", "generation": 1}
         run_id = handlers_mod._runtime_identity(spec, meta)[1]
-        base = h.active_session(spec, "nodalarc", run_id)
-        ref = selection_ref_from_spec(
-            {
-                "implementationBindingRef": self.BINDING,
-                "implementationPackageDigest": digest,
-            }
-        )
-        return spec, meta, dataclasses.replace(base, workload_selection=ref)
+        return spec, meta, h.active_session(spec, "nodalarc", run_id)
 
     def _run_reconcile(self, spec, meta, active_session, phase="Ready"):
         _run(
@@ -314,30 +291,23 @@ class TestWorkloadSelectionReconciliation:
             )
         )
 
-    def test_explicit_identity_flows_to_pod_stamping(self):
-        digest = "sha256:" + "b" * 64
+    def test_prepared_identity_flows_to_pod_stamping(self):
         with _ReconcilerHarness(expected_count=7) as h:
-            spec, meta, active_session = self._session_with_selection(h, digest)
-            h.mock("prepare_workloads").return_value = MagicMock()
+            spec, meta, active_session = self._session(h)
+            prepared = MagicMock()
+            h.mock("prepare_workloads").return_value = prepared
             self._run_reconcile(spec, meta, active_session)
             h.mock("prepare_workloads").assert_called_once()
-            assert h.mock("prepare_workloads").call_args[0][0] is active_session
+            assert h.mock("prepare_workloads").call_args[0][0] is active_session.resolution
             identity_arg = h.mock("ensure_pod_identity").call_args[0][4]
-            assert identity_arg == f"{self.BINDING}@{digest}"
+            assert identity_arg is prepared.identity
 
-    def test_builtin_session_stamps_builtin_identity(self):
+    def test_preparation_failure_drains_then_errors_only_at_zero(self):
         with _ReconcilerHarness(expected_count=7) as h:
-            _run(_reconcile(h))
-            identity_arg = h.mock("ensure_pod_identity").call_args[0][4]
-            assert identity_arg == "builtin-frr-default"
-
-    def test_selection_failure_drains_then_errors_only_at_zero(self):
-        digest = "sha256:" + "d" * 64
-        with _ReconcilerHarness(expected_count=7) as h:
-            h.mock("prepare_workloads").side_effect = WorkloadSelectionError(
-                "loaded package digest does not match the CR's desired digest"
+            h.mock("prepare_workloads").side_effect = WorkloadPreparationError(
+                "profile was not admitted"
             )
-            spec, meta, active_session = self._session_with_selection(h, digest)
+            spec, meta, active_session = self._session(h)
 
             # First pass: pods still exist — deletion requested, phase stays
             # Creating, and nothing else mutates.
@@ -359,48 +329,11 @@ class TestWorkloadSelectionReconciliation:
             assert status["phase"] == "Error"
             assert "Workload selection failed" in status["message"]
 
-    def test_selection_pair_error_drains_then_errors(self):
-        spec = {"sessionYaml": _SESSION_YAML}
-        meta = {"name": "current-session", "uid": "test-uid", "generation": 1}
-        with _ReconcilerHarness(expected_count=7) as h:
-            h.mock("resolve_active").side_effect = SelectionPairError(
-                "present together or absent together"
-            )
-            h.mock("delete_owned").return_value = (2, 2)
-            _run(
-                handlers_mod._reconcile_session(
-                    spec,
-                    "current-session",
-                    "nodalarc",
-                    meta,
-                    {"phase": "Ready", "podCount": 7},
-                    None,
-                )
-            )
-            status = _last_status(h)
-            assert status["phase"] == "Creating"
-            assert "removing 2 session pod(s)" in status["message"]
-
-            h.mock("delete_owned").return_value = (0, 0)
-            _run(
-                handlers_mod._reconcile_session(
-                    spec,
-                    "current-session",
-                    "nodalarc",
-                    meta,
-                    {"phase": "Creating", "podCount": 7},
-                    None,
-                )
-            )
-            status = _last_status(h)
-            assert status["phase"] == "Error"
-            assert "Workload selection failed" in status["message"]
-
     def test_deterministic_failure_inside_deploy_drains(self):
         with _ReconcilerHarness(expected_count=7) as h:
             h.mock("current_ids").return_value = frozenset()
             h.mock("check_ready").return_value = (0, 0)
-            h.mock("ensure_cm").side_effect = WorkloadSelectionError(
+            h.mock("ensure_cm").side_effect = WorkloadPreparationError(
                 "workload artifact ConfigMap exists with different contents"
             )
             h.mock("delete_owned").return_value = (5, 5)
@@ -411,11 +344,10 @@ class TestWorkloadSelectionReconciliation:
             assert "removing 5 session pod(s)" in status["message"]
 
     def test_stale_generation_never_deletes(self):
-        digest = "sha256:" + "d" * 64
         with _ReconcilerHarness(expected_count=7) as h:
-            h.mock("prepare_workloads").side_effect = WorkloadSelectionError("digest mismatch")
+            h.mock("prepare_workloads").side_effect = WorkloadPreparationError("not admitted")
             h.mock("cr_current").return_value = False
-            spec, meta, active_session = self._session_with_selection(h, digest)
+            spec, meta, active_session = self._session(h)
             self._run_reconcile(spec, meta, active_session)
             h.mock("delete_owned").assert_not_called()
             assert not h.mock_custom.patch_namespaced_custom_object_status.called
@@ -430,126 +362,6 @@ class TestWorkloadSelectionReconciliation:
             status = _last_status(h)
             assert status["phase"] == "Creating"
             assert "Transient Kubernetes API failure" in status["message"]
-
-    def test_unverified_schema_is_retryable_pending(self):
-        with _ReconcilerHarness(expected_count=7) as h:
-            h.mock("schema_served").side_effect = RuntimeError(
-                "served CRD schema (version v1alpha1) does not carry the workload selection pair"
-            )
-            _run(_reconcile(h))
-            h.mock("delete_owned").assert_not_called()
-            h.mock("ensure_pod_identity").assert_not_called()
-            h.mock("delete_obsolete").assert_not_called()
-            status = _last_status(h)
-            assert status["phase"] == "Pending"
-            assert "Waiting for served CRD schema" in status["message"]
-
-
-class TestServedSchemaVerification:
-    """The served-schema gate verifies presence, type, and exact pattern."""
-
-    GOOD = {
-        "implementationBindingRef": ImplementationBindingRef.json_schema_pattern(),
-        "implementationPackageDigest": SHA256_DIGEST_PATTERN,
-    }
-
-    def _crd(self, properties):
-        from types import SimpleNamespace
-
-        version = SimpleNamespace(
-            name="v1alpha1",
-            served=True,
-            schema=SimpleNamespace(
-                open_apiv3_schema=SimpleNamespace(
-                    properties={"spec": SimpleNamespace(properties=properties)}
-                )
-            ),
-        )
-        return SimpleNamespace(spec=SimpleNamespace(versions=[version]))
-
-    def _props(self, patterns):
-        from types import SimpleNamespace
-
-        return {
-            name: SimpleNamespace(type="string", pattern=pattern)
-            for name, pattern in patterns.items()
-        }
-
-    def test_absent_fields_raise_and_never_cache(self):
-        crd = self._crd(self._props({"somethingElse": "^x$"}))
-        with patch("kubernetes.client.ApiextensionsV1Api") as api_cls:
-            api_cls.return_value.read_custom_resource_definition.return_value = crd
-            with pytest.raises(RuntimeError, match="implementationBindingRef is absent"):
-                handlers_mod._require_selection_schema_served()
-            with pytest.raises(RuntimeError, match="implementationPackageDigest is absent"):
-                handlers_mod._require_selection_schema_served()
-        assert api_cls.return_value.read_custom_resource_definition.call_count == 2
-
-    def test_no_spec_properties_is_distinguished_from_empty(self):
-        from types import SimpleNamespace
-
-        version = SimpleNamespace(
-            name="v1alpha1",
-            served=True,
-            schema=SimpleNamespace(
-                open_apiv3_schema=SimpleNamespace(
-                    properties={"spec": SimpleNamespace(properties=None)}
-                )
-            ),
-        )
-        crd = SimpleNamespace(spec=SimpleNamespace(versions=[version]))
-        with patch("kubernetes.client.ApiextensionsV1Api") as api_cls:
-            api_cls.return_value.read_custom_resource_definition.return_value = crd
-            with pytest.raises(RuntimeError, match="exposes no spec properties"):
-                handlers_mod._require_selection_schema_served()
-
-    def test_wrong_pattern_or_type_raises(self):
-        weak = dict(self.GOOD)
-        weak["implementationBindingRef"] = "^.*$"
-        crd = self._crd(self._props(weak))
-        with patch("kubernetes.client.ApiextensionsV1Api") as api_cls:
-            api_cls.return_value.read_custom_resource_definition.return_value = crd
-            with pytest.raises(RuntimeError, match="expected type='string' pattern="):
-                handlers_mod._require_selection_schema_served()
-
-    def _checked_in_crd(self):
-        """The shipped CRD deserialized into the REAL Kubernetes client model.
-
-        The gate must read the attribute names the deserializer produces,
-        not hand-built fakes: this instance is exactly what a live API
-        server response becomes.
-        """
-        import json
-        from types import SimpleNamespace
-
-        import yaml
-        from kubernetes.client import ApiClient
-
-        crd_path = Path(__file__).parents[2] / "deploy" / "helm" / "crds" / "constellationspec.yaml"
-        response = SimpleNamespace(data=json.dumps(yaml.safe_load(crd_path.read_text())))
-        return ApiClient().deserialize(response, "V1CustomResourceDefinition")
-
-    def test_checked_in_crd_passes_the_served_gate(self):
-        with patch("kubernetes.client.ApiextensionsV1Api") as api_cls:
-            api_cls.return_value.read_custom_resource_definition.return_value = (
-                self._checked_in_crd()
-            )
-            handlers_mod._require_selection_schema_served()
-
-    def test_corrected_schema_recovers_and_caches(self):
-        bad = self._crd(self._props({"somethingElse": "^x$"}))
-        good = self._checked_in_crd()
-        with patch("kubernetes.client.ApiextensionsV1Api") as api_cls:
-            read = api_cls.return_value.read_custom_resource_definition
-            read.return_value = bad
-            with pytest.raises(RuntimeError):
-                handlers_mod._require_selection_schema_served()
-            # The corrected CRD is installed; the next pass recovers.
-            read.return_value = good
-            handlers_mod._require_selection_schema_served()
-            # Success is cached: the second verified call reads nothing.
-            handlers_mod._require_selection_schema_served()
-        assert read.call_count == 2
 
 
 class TestReconcileStateMachine:

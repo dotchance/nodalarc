@@ -47,22 +47,15 @@ from nodalarc.substrate.manifest_contract import (
     POD_SESSION_RUN_LABEL,
 )
 from nodalarc.template_vars import build_template_vars_from_resolved
-from nodalarc.workloads.adapter import SessionContext
-from nodalarc.workloads.refs import BUILTIN_FRR_SELECTION_IDENTITY, selection_ref_from_spec
 
-from adapters.frr import FRR_PROFILE_REF
-from adapters.registry import adapter_for
 from nodalarc_operator.runtime_session import OperatorSessionConfig, resolve_operator_session
 from nodalarc_operator.workloads.materializer import (
-    TERMINAL_SSH_CONTRACT,
     WORKLOAD_SELECTION_ANNOTATION,
-    WorkloadComposition,
     build_session_pod,
 )
-from nodalarc_operator.workloads.selection import (
-    BUILTIN_PROFILES_ROOT,
-    WorkloadSelectionError,
-    prepare_workload_selection,
+from nodalarc_operator.workloads.preparation import (
+    WorkloadPreparationError,
+    prepare_session_workloads,
 )
 
 log = logging.getLogger(__name__)
@@ -131,8 +124,6 @@ def _operator_session_config(
         raise ValueError("active_session root YAML does not match spec.sessionYaml")
     if selection != active_session.catalog_upload:
         raise ValueError("active_session upload selection does not match spec.catalogUpload")
-    if selection_ref_from_spec(spec) != active_session.workload_selection:
-        raise ValueError("active_session workload selection does not match the CR's pair")
     if run_id is not None and active_session.proof.run_id != run_id:
         raise ValueError("active_session runtime identity does not match session_run_id")
     return active_session
@@ -282,20 +273,20 @@ def _ensure_immutable_configmap(
         for ref in existing.metadata.owner_references or []
     ]
     if existing_projection != expected_projection:
-        raise WorkloadSelectionError(
+        raise WorkloadPreparationError(
             f"workload artifact ConfigMap {name!r} is owned by "
             f"{existing_projection!r}, not the current CR {expected_projection!r}"
         )
     if existing.immutable is not True:
-        raise WorkloadSelectionError(
+        raise WorkloadPreparationError(
             f"workload artifact ConfigMap {name!r} exists but is not immutable"
         )
     if (existing.binary_data or {}) != (config_map.binary_data or {}):
-        raise WorkloadSelectionError(
+        raise WorkloadPreparationError(
             f"workload artifact ConfigMap {name!r} exists with different contents"
         )
     if (existing.data or {}) != (config_map.data or {}):
-        raise WorkloadSelectionError(
+        raise WorkloadPreparationError(
             f"workload artifact ConfigMap {name!r} exists with unexpected plain data"
         )
 
@@ -336,35 +327,6 @@ def _delete_pod_preconditioned(v1: kubernetes.client.CoreV1Api, namespace: str, 
     return True
 
 
-def _patch_pod_runtime_identity(
-    v1: kubernetes.client.CoreV1Api,
-    pod: Any,
-    namespace: str,
-    session_id: str,
-    owner_ref: dict,
-) -> None:
-    """Re-stamp a built-in-default pod's runtime identity for an intentional reuse.
-
-    Only built-in-default pods are ever re-stamped; the annotation is written so a
-    pre-feature pod adopted here carries its identity explicitly from now
-    on.
-    """
-    metadata = _metadata(pod)
-    pod_name = str(getattr(metadata, "name", "") or "")
-    if not pod_name:
-        raise ValueError("Cannot patch unnamed session pod")
-    body = {
-        "metadata": {
-            "labels": {
-                POD_SESSION_RUN_LABEL: session_id,
-                POD_OWNER_UID_LABEL: str(owner_ref.get("uid") or ""),
-            },
-            "annotations": {WORKLOAD_SELECTION_ANNOTATION: BUILTIN_FRR_SELECTION_IDENTITY},
-        }
-    }
-    v1.patch_namespaced_pod(pod_name, namespace, body)
-
-
 def ensure_session_pod_identity(
     namespace: str,
     expected_ids: set[str] | frozenset[str],
@@ -372,70 +334,44 @@ def ensure_session_pod_identity(
     owner_ref: dict,
     selection_identity: str,
 ) -> int:
-    """Stamp same-CR session pods with the current runtime identity.
+    """Delete same-CR session pods whose workload identity or run differs.
 
-    A CR generation change may intentionally reuse running LEGACY pods while
-    refreshing ConfigMaps and rewiring. Pods from a different CR UID are
-    never adopted. A pod whose built-in-or-explicit selection identity differs
-    from the CR's current selection is never re-stamped: it is deleted here
-    (UID-preconditioned) and recreated through ordinary reconciliation. A
-    pre-feature pod without the annotation is adopted as built-in default only
-    when the desired selection IS the built-in default. An explicit pod is
-    recreated whenever
-    its run ID changes: its immutable artifacts belong to the previous run's
-    content.
+    Pods from a different CR UID are never adopted. Every session pod carries
+    the prepared workload identity; a pod whose stamp or run ID differs from
+    the desired session is deleted here (UID-preconditioned) and recreated
+    through ordinary reconciliation, because its immutable artifacts belong
+    to other content.
     """
     if not selection_identity:
         raise ValueError("selection_identity is required to evaluate session pod identity")
-    desired_is_explicit = selection_identity != BUILTIN_FRR_SELECTION_IDENTITY
     v1 = _get_v1()
     expected = {node_id.lower() for node_id in expected_ids}
-    patched = 0
     replaced = 0
     for pod in _list_session_pods(v1, namespace):
         if _pod_node_id(pod) not in expected:
             continue
         if _pod_deleting(pod) or not _pod_owned_by(pod, owner_ref):
             continue
-        pod_identity = _pod_selection_identity(pod)
-        adoptable_builtin = pod_identity == "" and not desired_is_explicit
-        if pod_identity != selection_identity and not adoptable_builtin:
-            log.info(
-                "Deleting session pod %s: selection identity %r does not match "
-                "the CR's current selection %r",
-                str(getattr(_metadata(pod), "name", "") or ""),
-                pod_identity,
-                selection_identity,
-            )
-            if _delete_pod_preconditioned(v1, namespace, pod):
-                replaced += 1
-            continue
         labels = _labels(pod)
         run_is_current = labels.get(POD_SESSION_RUN_LABEL) == session_id and labels.get(
             POD_OWNER_UID_LABEL
         ) == str(owner_ref.get("uid") or "")
-        if run_is_current:
+        if _pod_selection_identity(pod) == selection_identity and run_is_current:
             continue
-        if desired_is_explicit:
-            log.info(
-                "Deleting explicit session pod %s: run changed; its immutable "
-                "artifacts belong to the previous run",
-                str(getattr(_metadata(pod), "name", "") or ""),
-            )
-            if _delete_pod_preconditioned(v1, namespace, pod):
-                replaced += 1
-            continue
-        _patch_pod_runtime_identity(v1, pod, namespace, session_id, owner_ref)
-        patched += 1
-    if patched:
-        log.info("Stamped %d session pods with runtime identity %s", patched, session_id)
+        log.info(
+            "Deleting session pod %s: workload identity or run differs from the "
+            "desired session; reconciliation recreates it",
+            str(getattr(_metadata(pod), "name", "") or ""),
+        )
+        if _delete_pod_preconditioned(v1, namespace, pod):
+            replaced += 1
     if replaced:
         log.info(
-            "Deleted %d session pods whose selection identity or run differed; "
+            "Deleted %d session pods whose workload identity or run differed; "
             "reconciliation recreates them",
             replaced,
         )
-    return patched
+    return replaced
 
 
 def current_session_pod_node_ids(
@@ -842,78 +778,6 @@ def _publish_validation_ops_events(results: list, namespace: str, session_id: st
         )
 
 
-def _render_builtin_frr_configs(resolved_session: ResolvedSession) -> dict[str, dict[str, str]]:
-    """Render FRR configuration for the built-in FRR default (no selection).
-
-    The one FRR translator is the FRR adapter; this drives it per routed node
-    and returns the rendered files as text for the legacy per-node frr-config
-    ConfigMaps. This whole no-selection path is removed when the default
-    session selects FRR through a binding like every other workload.
-    """
-    adapter = adapter_for(FRR_PROFILE_REF)
-    if adapter is None:
-        raise ValueError("built-in FRR default requires the registered FRR adapter")
-    context = SessionContext(resolved=resolved_session)
-    rendered_configs: dict[str, dict[str, str]] = {}
-    for node in resolved_session.nodes:
-        if node.forwarding == "host":
-            continue
-        if node.forwarding not in (None, "routed"):
-            raise ValueError(
-                f"node {node.node_id!r} has forwarding class {node.forwarding!r}, "
-                "which the built-in FRR default does not support"
-            )
-        config = adapter.render_node(node, context)
-        rendered_configs[node.node_id] = {
-            name: content.decode() for name, content in config.files.items()
-        }
-    return rendered_configs
-
-
-def prepare_session_workloads(
-    active_session: OperatorSessionConfig,
-    *,
-    namespace: str,
-    owner_ref: dict,
-):
-    """The COMPLETE write-free workload preparation for one verified session.
-
-    Renders per-node configuration, then loads, digest-verifies, resolves,
-    compiles, and composes every selected node. No Kubernetes call happens
-    here: the reconciler runs this before deleting or reusing any pod, and
-    every failure raises the typed WorkloadSelectionError family. Returns
-    None for a session without a selection.
-    """
-    resolved_session = active_session.resolution.resolved
-    host_ids = sorted(node.node_id for node in resolved_session.nodes if node.forwarding == "host")
-    if active_session.workload_selection is None:
-        if host_ids:
-            # There is no built-in host workload: the built-in FRR default
-            # composes routers. A session with host nodes deploys only
-            # through an explicit selection whose binding covers them.
-            raise WorkloadSelectionError(
-                "host nodes require an explicit workload selection: " + ", ".join(host_ids[:5])
-            )
-        return None
-    unattached = sorted(
-        node.node_id
-        for node in resolved_session.nodes
-        if node.forwarding == "host" and node.host_attachment is None
-    )
-    if unattached:
-        raise WorkloadSelectionError(
-            "host nodes without derivable attachment are not deployable "
-            "(no LAN segment exposes them yet): " + ", ".join(unattached[:5])
-        )
-    return prepare_workload_selection(
-        active_session.workload_selection,
-        resolved_session,
-        namespace=namespace,
-        owner_ref=owner_ref,
-        profiles_root=BUILTIN_PROFILES_ROOT,
-    )
-
-
 def ensure_session_configmaps(
     spec: dict,
     name: str,
@@ -1028,61 +892,28 @@ def ensure_session_configmaps(
     _progress(f"Building template variables for {total_nodes} nodes")
     node_vars, node_stacks = _node_vars_from_resolved(resolved_session, stacks_by_domain)
 
-    # --- Step 5: Explicit workload selection (write-free) ---
-    # Load, resolve, compile, and compose EVERY selected node before the
-    # first Kubernetes write below. Absent selection = built-in FRR default,
-    # unchanged. Any selection failure is terminal — never FRR. The
-    # reconciler runs the same preparation before any pod mutation and
+    # --- Step 5: Workload preparation (write-free) ---
+    # Admit, render, and compose EVERY node's effective profile before the
+    # first Kubernetes write below. Any preparation failure is terminal.
+    # The reconciler runs the same preparation before any pod mutation and
     # hands the result in; a direct caller computes it here.
-    _progress("Preparing workload selection")
-    if operator_session.workload_selection is None:
-        if prepared_workloads is not None:
-            raise ValueError("prepared workloads supplied for a session without a selection")
-        host_ids = sorted(
-            node.node_id for node in resolved_session.nodes if node.forwarding == "host"
-        )
-        if host_ids:
-            raise WorkloadSelectionError(
-                "host nodes require an explicit workload selection: " + ", ".join(host_ids[:5])
-            )
-        selected_workloads = None
-    elif prepared_workloads is not None:
-        if (
-            prepared_workloads.package.package_digest
-            != operator_session.workload_selection.package_digest
-        ):
-            raise WorkloadSelectionError(
-                "prepared workloads do not match the session's selected package digest"
-            )
-        selected_workloads = prepared_workloads
-    else:
-        selected_workloads = prepare_workload_selection(
-            operator_session.workload_selection,
-            resolved_session,
+    _progress("Preparing session workloads")
+    if prepared_workloads is None:
+        prepared_workloads = prepare_session_workloads(
+            operator_session.resolution,
             namespace=namespace,
             owner_ref=owner_ref,
-            profiles_root=BUILTIN_PROFILES_ROOT,
         )
 
-    if selected_workloads is None:
-        # --- Step 6: Create per-node FRR config ConfigMaps (built-in FRR default) ---
-        rendered_configs = _render_builtin_frr_configs(resolved_session)
-        _progress(f"Creating {len(rendered_configs)} FRR config ConfigMaps")
-        for node_id, configs in rendered_configs.items():
-            cm_name = f"frr-config-{node_id.lower()}"
-            _create_or_update_configmap(v1, cm_name, namespace, configs, owner_ref)
-        log.info("Created %d FRR config ConfigMaps", len(rendered_configs))
-    else:
-        # --- Step 6 (explicit path): immutable workload artifact ConfigMaps ---
-        # Rendered configuration travels as plan artifacts inside these
-        # objects; the per-node frr-config ConfigMaps are not written.
-        _progress(f"Creating {len(selected_workloads.composed)} workload artifact ConfigMaps")
-        artifact_count = 0
-        for composed in selected_workloads.composed.values():
-            if composed.artifact_config_map is not None:
-                _ensure_immutable_configmap(v1, namespace, composed.artifact_config_map)
-                artifact_count += 1
-        log.info("Ensured %d workload artifact ConfigMaps", artifact_count)
+    # --- Step 6: immutable workload artifact ConfigMaps ---
+    # Rendered configuration travels as plan artifacts inside these objects.
+    _progress(f"Creating {len(prepared_workloads.composed)} workload artifact ConfigMaps")
+    artifact_count = 0
+    for composed in prepared_workloads.composed.values():
+        if composed.artifact_config_map is not None:
+            _ensure_immutable_configmap(v1, namespace, composed.artifact_config_map)
+            artifact_count += 1
+    log.info("Ensured %d workload artifact ConfigMaps", artifact_count)
 
     # --- Step 7: Create session-level ConfigMaps ---
     _progress("Creating session-level ConfigMaps")
@@ -1125,7 +956,7 @@ def ensure_session_configmaps(
         "node_stacks": node_stacks,
         "pod_placement": pod_placement,
         "available_nodes": available_nodes,
-        "workload_selection": selected_workloads,
+        "prepared_workloads": prepared_workloads,
     }
 
 
@@ -1171,8 +1002,6 @@ def ensure_session_pods(
 
     pod_specs: list[dict] = []
     for node_id, vars in node_vars.items():
-        stack = node_stacks.get(node_id)
-        sidecar_config = _build_sidecar_config(stack) if stack is not None else None
         pod_specs.append(
             {
                 "pod_name": node_id.lower(),
@@ -1181,12 +1010,6 @@ def ensure_session_pods(
                 "plane": vars.get("plane"),
                 "slot": vars.get("slot"),
                 "gs_name": vars.get("gs_name"),
-                "config_cm_name": f"frr-config-{node_id.lower()}" if stack is not None else None,
-                "sidecar_config": sidecar_config,
-                "sidecar_env": _build_sidecar_env(node_id, vars, stack.env)
-                if sidecar_config
-                else None,
-                "probe_enabled": False,
                 "target_node": pod_placement.get(node_id),
             }
         )
@@ -1213,47 +1036,27 @@ def ensure_session_pods(
     heartbeat = threading.Thread(target=_heartbeat, daemon=True)
     heartbeat.start()
 
-    selected_workloads = context.get("workload_selection")
+    prepared_workloads = context["prepared_workloads"]
 
     with ThreadPoolExecutor(max_workers=16) as pool:
         futures = {}
         for ps in pod_specs:
-            if selected_workloads is not None:
-                fut = pool.submit(
-                    _create_workload_pod,
-                    v1=v1,
-                    pod_name=ps["pod_name"],
-                    namespace=namespace,
-                    node_id=ps["node_id"],
-                    node_type=ps["node_type"],
-                    plane=ps["plane"],
-                    slot=ps["slot"],
-                    gs_name=ps["gs_name"],
-                    composed=selected_workloads.composed[ps["node_id"]],
-                    target_node=ps["target_node"],
-                    owner_ref=owner_ref,
-                    session_id=session_id,
-                    selection_identity=selected_workloads.identity,
-                )
-            else:
-                fut = pool.submit(
-                    _create_session_pod,
-                    v1=v1,
-                    pod_name=ps["pod_name"],
-                    namespace=namespace,
-                    node_id=ps["node_id"],
-                    node_type=ps["node_type"],
-                    plane=ps["plane"],
-                    slot=ps["slot"],
-                    gs_name=ps["gs_name"],
-                    config_cm_name=ps["config_cm_name"],
-                    sidecar_config=ps["sidecar_config"],
-                    sidecar_env=ps["sidecar_env"],
-                    probe_enabled=ps["probe_enabled"],
-                    target_node=ps["target_node"],
-                    owner_ref=owner_ref,
-                    session_id=session_id,
-                )
+            fut = pool.submit(
+                _create_workload_pod,
+                v1=v1,
+                pod_name=ps["pod_name"],
+                namespace=namespace,
+                node_id=ps["node_id"],
+                node_type=ps["node_type"],
+                plane=ps["plane"],
+                slot=ps["slot"],
+                gs_name=ps["gs_name"],
+                composed=prepared_workloads.composed[ps["node_id"]],
+                target_node=ps["target_node"],
+                owner_ref=owner_ref,
+                session_id=session_id,
+                selection_identity=prepared_workloads.identity,
+            )
             futures[fut] = ps["node_id"]
 
         for fut in as_completed(futures):
@@ -2235,17 +2038,15 @@ def compute_platform_hash(
         namespace=namespace,
         origin="operator.platform_hash",
     )
-    selection_ref = operator_session.workload_selection
     canonical_obj = {
+        # The resolved model carries every node's effective profile, so a
+        # changed workload statement invalidates cached-session reuse exactly
+        # like changed session truth.
         "resolved": operator_session.resolution.resolved.model_dump(
             mode="json",
             exclude={"source_context": True},
         ),
         "runtime_config": _proof_hash_fields(operator_session.proof),
-        # The explicit selection pair participates in runtime identity: a
-        # changed binding or package must invalidate cached-session reuse
-        # exactly like changed session truth. None for the built-in default.
-        "workload_selection": selection_ref.identity() if selection_ref else None,
     }
     canonical = json.dumps(canonical_obj, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode()).hexdigest()
@@ -2611,225 +2412,6 @@ def build_runtime_session_config_data(
     }
 
 
-def _build_sidecar_config(stack: ResolvedStack) -> dict | None:
-    """Build sidecar container config from resolved stack."""
-    if stack.image and stack.image != "frr":
-        if stack.image != "nodalpath-fwd":
-            raise RuntimeError(f"Unsupported sidecar image intent: {stack.image}")
-        return {
-            "name": stack.image,
-            "image": _require_env("NODALPATH_FWD_IMAGE"),
-            "capabilities": stack.security_context_capabilities
-            or ["NET_ADMIN", "NET_RAW", "SYS_ADMIN"],
-        }
-    return None
-
-
-def _build_sidecar_env(node_id: str, vars: dict, env_list: list) -> list[dict] | None:
-    """Build sidecar environment variables with template substitution."""
-    if not env_list:
-        return None
-    result = []
-    for e in env_list:
-        val = e.get("value", "") if isinstance(e, dict) else e.value
-        name = e.get("name", "") if isinstance(e, dict) else e.name
-        val = val.replace("{{ node_id }}", node_id)
-        for k, v in vars.items():
-            val = val.replace("{{ " + k + " }}", str(v))
-        result.append({"name": name, "value": val})
-    return result
-
-
-def _create_session_pod(
-    v1: kubernetes.client.CoreV1Api,
-    pod_name: str,
-    namespace: str,
-    node_id: str,
-    node_type: str,
-    plane: int | None,
-    slot: int | None,
-    gs_name: str | None,
-    config_cm_name: str,
-    sidecar_config: dict | None,
-    sidecar_env: list[dict] | None,
-    probe_enabled: bool,
-    owner_ref: dict,
-    session_id: str,
-    target_node: str | None = None,
-) -> None:
-    """Create a single session pod (satellite or ground station).
-
-    This function produces the built-in FRR composition; the pod itself is
-    assembled by the one shared materializer, which owns identity, the
-    wiring gate, and every other platform concern.
-    """
-    extra_labels: dict[str, str] = {}
-    if plane is not None:
-        extra_labels["nodalarc.io/plane"] = str(plane)
-    if slot is not None:
-        extra_labels["nodalarc.io/slot"] = str(slot)
-    if gs_name:
-        extra_labels["nodalarc.io/gs-name"] = gs_name
-
-    # FRR container — hardened security context:
-    #   SYS_ADMIN: required by FRR's ospfd/mgmtd (privs_init requests it)
-    #   read_only_root_filesystem: writable paths via tmpfs only
-    frr_container = kubernetes.client.V1Container(
-        name="frr",
-        image=_require_env("FRR_IMAGE"),
-        image_pull_policy=_require_env("IMAGE_PULL_POLICY"),
-        security_context=kubernetes.client.V1SecurityContext(
-            capabilities=kubernetes.client.V1Capabilities(
-                add=["NET_ADMIN", "NET_RAW", "SYS_ADMIN"]
-            ),
-            read_only_root_filesystem=True,
-        ),
-        resources=kubernetes.client.V1ResourceRequirements(
-            requests={"memory": "32Mi", "cpu": "10m"},
-            limits={"memory": "128Mi", "cpu": "200m"},
-        ),
-        readiness_probe=kubernetes.client.V1Probe(
-            _exec=kubernetes.client.V1ExecAction(
-                command=[
-                    "sh",
-                    "-c",
-                    "test -f /etc/frr/.config_version && "
-                    "diff -q /etc/frr-config/_config_version /etc/frr/.config_version > /dev/null 2>&1 && "
-                    "vtysh -c 'show version' > /dev/null 2>&1",
-                ],
-            ),
-            initial_delay_seconds=5,
-            period_seconds=5,
-            failure_threshold=6,
-            timeout_seconds=5,
-        ),
-        volume_mounts=[
-            kubernetes.client.V1VolumeMount(
-                name="frr-config",
-                mount_path="/etc/frr-config",
-            ),
-            kubernetes.client.V1VolumeMount(name="frr-run", mount_path="/var/run/frr"),
-            kubernetes.client.V1VolumeMount(name="frr-etc", mount_path="/etc/frr"),
-            kubernetes.client.V1VolumeMount(name="tmp", mount_path="/tmp"),
-            kubernetes.client.V1VolumeMount(name="ssh-config", mount_path="/etc/ssh"),
-            kubernetes.client.V1VolumeMount(name="operator-home", mount_path="/home/operator"),
-            kubernetes.client.V1VolumeMount(name="var-log", mount_path="/var/log"),
-            kubernetes.client.V1VolumeMount(
-                name="ssh-keys", mount_path="/etc/ssh-keys", read_only=True
-            ),
-        ],
-    )
-
-    containers = [frr_container]
-    volumes = [
-        kubernetes.client.V1Volume(
-            name="frr-config",
-            config_map=kubernetes.client.V1ConfigMapVolumeSource(
-                name=config_cm_name,
-            ),
-        ),
-        # Writable tmpfs for FRR runtime (read-only root filesystem)
-        kubernetes.client.V1Volume(
-            name="frr-run",
-            empty_dir=kubernetes.client.V1EmptyDirVolumeSource(medium="Memory"),
-        ),
-        kubernetes.client.V1Volume(
-            name="frr-etc",
-            empty_dir=kubernetes.client.V1EmptyDirVolumeSource(),
-        ),
-        kubernetes.client.V1Volume(
-            name="tmp",
-            empty_dir=kubernetes.client.V1EmptyDirVolumeSource(medium="Memory"),
-        ),
-        kubernetes.client.V1Volume(
-            name="var-log",
-            empty_dir=kubernetes.client.V1EmptyDirVolumeSource(medium="Memory"),
-        ),
-        # Forward-compatible mounts for interactive SSH terminal support.
-        kubernetes.client.V1Volume(
-            name="ssh-config",
-            empty_dir=kubernetes.client.V1EmptyDirVolumeSource(medium="Memory"),
-        ),
-        kubernetes.client.V1Volume(
-            name="operator-home",
-            empty_dir=kubernetes.client.V1EmptyDirVolumeSource(medium="Memory"),
-        ),
-        # SSH public key for terminal access (SSH authorized_keys)
-        kubernetes.client.V1Volume(
-            name="ssh-keys",
-            secret=kubernetes.client.V1SecretVolumeSource(
-                secret_name=TERMINAL_SSH_KEY_RESOURCE_NAME,
-                items=[kubernetes.client.V1KeyToPath(key="id_ed25519.pub", path="authorized_keys")],
-                optional=True,  # Don't fail pod start if terminal keys not yet created
-            ),
-        ),
-    ]
-
-    # Sidecar container (e.g., nodalpath-fwd)
-    if sidecar_config:
-        sidecar_container = kubernetes.client.V1Container(
-            name=sidecar_config["name"],
-            image=sidecar_config["image"],
-            image_pull_policy=_require_env("IMAGE_PULL_POLICY"),
-            security_context=kubernetes.client.V1SecurityContext(
-                capabilities=kubernetes.client.V1Capabilities(
-                    add=sidecar_config.get("capabilities", ["NET_ADMIN", "NET_RAW", "SYS_ADMIN"])
-                )
-            ),
-            resources=kubernetes.client.V1ResourceRequirements(
-                requests={"memory": "32Mi", "cpu": "10m"},
-                limits={"memory": "128Mi", "cpu": "200m"},
-            ),
-        )
-        if sidecar_env:
-            sidecar_container.env = [
-                kubernetes.client.V1EnvVar(name=e["name"], value=e["value"]) for e in sidecar_env
-            ]
-        containers.append(sidecar_container)
-
-    # Probe sidecar for ground stations
-    if node_type == "ground_station" and probe_enabled:
-        probe_container = kubernetes.client.V1Container(
-            name="probe",
-            image=_require_env("PROBE_IMAGE"),
-            image_pull_policy=_require_env("IMAGE_PULL_POLICY"),
-            security_context=kubernetes.client.V1SecurityContext(
-                capabilities=kubernetes.client.V1Capabilities(add=["NET_RAW"])
-            ),
-            env=[
-                kubernetes.client.V1EnvVar(
-                    name="NODALARC_PROBE_BIND_HOST",
-                    value_from=kubernetes.client.V1EnvVarSource(
-                        field_ref=kubernetes.client.V1ObjectFieldSelector(field_path="status.podIP")
-                    ),
-                )
-            ],
-            ports=[kubernetes.client.V1ContainerPort(container_port=9100, name="probe-api")],
-            resources=kubernetes.client.V1ResourceRequirements(
-                limits={"memory": "64Mi", "cpu": "100m"}
-            ),
-        )
-        containers.append(probe_container)
-
-    pod = build_session_pod(
-        pod_name=pod_name,
-        namespace=namespace,
-        node_id=node_id,
-        role=node_type.replace("_", "-"),
-        session_id=session_id,
-        owner_ref=owner_ref,
-        composition=WorkloadComposition(containers=containers, volumes=volumes),
-        selection_identity=BUILTIN_FRR_SELECTION_IDENTITY,
-        terminal_access=TERMINAL_SSH_CONTRACT,
-        target_node=target_node,
-        extra_labels=extra_labels,
-    )
-
-    _create_pod_with_conflict_check(
-        v1, pod, namespace, pod_name, owner_ref, session_id, BUILTIN_FRR_SELECTION_IDENTITY
-    )
-
-
 def _create_pod_with_conflict_check(
     v1: kubernetes.client.CoreV1Api,
     pod: kubernetes.client.V1Pod,
@@ -2839,7 +2421,7 @@ def _create_pod_with_conflict_check(
     session_id: str,
     selection_identity: str,
 ) -> None:
-    """The one create/409 path every session pod uses, built-in or explicit."""
+    """The one create/409 path every session pod uses."""
     try:
         v1.create_namespaced_pod(namespace, pod)
     except kubernetes.client.rest.ApiException as e:
@@ -2847,36 +2429,24 @@ def _create_pod_with_conflict_check(
             existing = v1.read_namespaced_pod(pod_name, namespace)
             if not _pod_owned_by(existing, owner_ref):
                 raise RuntimeError(
-                    f"Pod {pod_name} already exists but is not owned by the current ConstellationSpec"
+                    f"Pod {pod_name} already exists but is not owned by the "
+                    "current ConstellationSpec"
                 ) from e
             if _pod_deleting(existing):
                 raise RuntimeError(f"Pod {pod_name} already exists and is deleting") from e
-            existing_identity = _pod_selection_identity(existing)
-            desired_is_explicit = selection_identity != BUILTIN_FRR_SELECTION_IDENTITY
-            adoptable_builtin = existing_identity == "" and not desired_is_explicit
-            if existing_identity != selection_identity and not adoptable_builtin:
+            if _pod_selection_identity(existing) != selection_identity or not (
+                _pod_current_for_runtime(existing, session_id, owner_ref)
+            ):
                 log.info(
-                    "Deleting existing pod %s: selection identity %r does not match "
-                    "the CR's current selection %r; reconciliation recreates it",
+                    "Deleting existing pod %s: its workload identity or run differs "
+                    "from the desired session; reconciliation recreates it",
                     pod_name,
-                    existing_identity,
-                    selection_identity,
                 )
                 _delete_pod_preconditioned(v1, namespace, existing)
                 return
-            if not _pod_current_for_runtime(existing, session_id, owner_ref):
-                if desired_is_explicit:
-                    log.info(
-                        "Deleting explicit pod %s: run changed; its immutable "
-                        "artifacts belong to the previous run",
-                        pod_name,
-                    )
-                    _delete_pod_preconditioned(v1, namespace, existing)
-                    return
-                _patch_pod_runtime_identity(v1, existing, namespace, session_id, owner_ref)
-            log.debug("Pod %s already exists for current runtime, skipping", pod_name)
-        else:
-            raise
+            log.info("Pod %s already exists with the desired workload and run", pod_name)
+            return
+        raise
 
 
 def _create_workload_pod(

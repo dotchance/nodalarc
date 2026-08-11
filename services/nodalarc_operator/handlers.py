@@ -24,16 +24,9 @@ import os
 
 import kopf
 import kubernetes
-from nodalarc.content_identity import SHA256_DIGEST_PATTERN
 from nodalarc.nats_channels import sanitize_session_id
 from nodalarc.runtime_config import RuntimeDeploymentContext
 from nodalarc.session_identity import derive_session_run_id
-from nodalarc.workloads.refs import (
-    BUILTIN_FRR_SELECTION_IDENTITY,
-    ImplementationBindingRef,
-    SelectionPairError,
-)
-
 from nodalarc_operator.runtime_session import OperatorSessionConfig, resolve_operator_session
 from nodalarc_operator.session_deployer import (
     RetryableSessionDependency,
@@ -61,7 +54,7 @@ from nodalarc_operator.session_deployer import (
     write_pod_ips_configmap,
     write_wiring_manifest,
 )
-from nodalarc_operator.workloads.selection import WorkloadSelectionError
+from nodalarc_operator.workloads.preparation import WorkloadPreparationError
 
 log = logging.getLogger(__name__)
 
@@ -157,69 +150,6 @@ def _resolve_active_session(
         source_origin="operator.reconcile",
         run_id=session_run_id,
     )
-
-
-_EXPECTED_SELECTION_SCHEMA = {
-    "implementationBindingRef": ImplementationBindingRef.json_schema_pattern(),
-    "implementationPackageDigest": SHA256_DIGEST_PATTERN,
-}
-_selection_schema_verified = False
-
-
-def _require_selection_schema_served() -> None:
-    """Refuse to reconcile against a served CRD schema without the pair.
-
-    An older served schema prunes both selection fields; a pruned pair is
-    indistinguishable from a built-in-default CR and would silently become FRR. Each
-    field must be present with the exact string type and pattern of the
-    typed authority — a present-but-different field validates different
-    input than the loader accepts. The check runs before the pair is
-    parsed, is retryable (installing the corrected CRD recovers without
-    touching the CR), and caches only success, once per operator process.
-    """
-    global _selection_schema_verified
-    if _selection_schema_verified:
-        return
-    crd = kubernetes.client.ApiextensionsV1Api().read_custom_resource_definition(
-        "constellationspecs.nodalarc.io"
-    )
-    for version in crd.spec.versions:
-        if not version.served:
-            continue
-        root = getattr(version.schema, "open_apiv3_schema", None)
-        root_properties = getattr(root, "properties", None)
-        spec_schema = None if root_properties is None else root_properties.get("spec")
-        properties = getattr(spec_schema, "properties", None)
-        if properties is None:
-            raise RuntimeError(
-                f"served CRD schema (version {version.name}) exposes no spec "
-                "properties; workload selection fields cannot be verified"
-            )
-        problems = []
-        for field_name, expected_pattern in _EXPECTED_SELECTION_SCHEMA.items():
-            prop = properties.get(field_name)
-            if prop is None:
-                problems.append(f"{field_name} is absent")
-                continue
-            prop_type = getattr(prop, "type", None)
-            prop_pattern = getattr(prop, "pattern", None)
-            if prop_type != "string" or prop_pattern != expected_pattern:
-                problems.append(
-                    f"{field_name} has type={prop_type!r} pattern={prop_pattern!r}; "
-                    f"expected type='string' pattern={expected_pattern!r}"
-                )
-        if problems:
-            raise RuntimeError(
-                f"served CRD schema (version {version.name}) does not carry the "
-                f"workload selection pair: {'; '.join(problems)}. Upgrade the "
-                "installed CRD; reconciliation resumes once it is served."
-            )
-    _selection_schema_verified = True
-
-
-def _selection_identity_for(active_session: OperatorSessionConfig) -> str:
-    selection_ref = active_session.workload_selection
-    return selection_ref.identity() if selection_ref else BUILTIN_FRR_SELECTION_IDENTITY
 
 
 def _cr_generation_is_current(name: str, namespace: str, meta: dict) -> bool:
@@ -539,29 +469,6 @@ async def _reconcile_session(
     owner_ref = _build_owner_ref(name, meta)
     spec_dict = dict(spec)
 
-    # The pair's absence is only trustworthy when the served schema carries
-    # both fields with the exact types and patterns of the typed authority;
-    # verify BEFORE the pair is parsed. A failure here is retryable:
-    # installing the corrected CRD recovers without any mutation of the CR
-    # or its workloads.
-    try:
-        await loop.run_in_executor(None, _require_selection_schema_served)
-    except Exception as exc:
-        error_msg = str(exc)
-        log.warning("Reconcile: served CRD schema not verified: %s", error_msg)
-        _update_status(
-            name,
-            namespace,
-            _with_observed_generation(
-                meta,
-                {
-                    "phase": "Pending",
-                    "message": f"Waiting for served CRD schema: {error_msg[:400]}",
-                },
-            ),
-        )
-        return
-
     try:
         session_name, session_run_id = await loop.run_in_executor(
             None, _runtime_identity, spec_dict, meta
@@ -616,17 +523,6 @@ async def _reconcile_session(
         )
         proof_fields = _runtime_proof_status_fields(active_session, deployment_context)
         status_fields = {**identity_fields, **proof_fields}
-    except SelectionPairError as exc:
-        # Deterministic selection failure: the CR's desired workloads cannot
-        # exist. Leaving previous workloads running under a terminal phase
-        # would misrepresent session state — converge this CR's workloads
-        # to zero, then publish Error once zero is observed.
-        error_msg = str(exc)
-        log.error("Reconcile: invalid workload selection pair: %s", error_msg, exc_info=True)
-        await _converge_selection_failure(
-            loop, name, namespace, meta, owner_ref, identity_fields, error_msg
-        )
-        return
     except Exception as exc:
         error_msg = str(exc)
         log.error("Reconcile: invalid session config: %s", error_msg, exc_info=True)
@@ -651,11 +547,11 @@ async def _reconcile_session(
     try:
         prepared_workloads = await asyncio.to_thread(
             prepare_session_workloads,
-            active_session,
+            active_session.resolution,
             namespace=namespace,
             owner_ref=owner_ref,
         )
-    except WorkloadSelectionError as exc:
+    except WorkloadPreparationError as exc:
         error_msg = str(exc)
         log.error("Reconcile: terminal workload selection failure: %s", error_msg, exc_info=True)
         await _converge_selection_failure(
@@ -742,7 +638,7 @@ async def _reconcile_session(
         expected_ids,
         session_run_id,
         owner_ref,
-        _selection_identity_for(active_session),
+        prepared_workloads.identity,
     )
 
     # --- Condition 1: Old pods terminated ---
@@ -885,7 +781,7 @@ async def _reconcile_session(
                 ),
             )
             return
-        except WorkloadSelectionError as exc:
+        except WorkloadPreparationError as exc:
             error_msg = str(exc)
             log.error(
                 "Reconcile: terminal workload selection failure during deploy: %s",

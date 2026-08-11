@@ -90,12 +90,13 @@ class SessionContext:
 class WorkloadAdapter(Protocol):
     """Translate one resolved node into its image's native configuration.
 
-    ``profile_ref`` is the workload profile this adapter serves; the explicit
-    registry keys on it. ``render_node`` is pure: resolved facts in, native
-    config out, no I/O and no Kubernetes calls.
+    ``name`` is the adapter's identity: the value a profile's ``adapter:``
+    field carries, matching the runtime-support renderability declaration.
+    The explicit registry keys on it. ``render_node`` is pure: resolved facts
+    in, native config out, no I/O and no Kubernetes calls.
     """
 
-    profile_ref: str
+    name: str
 
     def render_node(
         self,

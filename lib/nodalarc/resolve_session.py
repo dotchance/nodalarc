@@ -12,7 +12,8 @@ import ipaddress
 import math
 import re
 from contextlib import contextmanager
-from dataclasses import dataclass, replace
+from collections.abc import Mapping
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -29,6 +30,7 @@ from nodalarc.ephemeris_runtime import (
     validate_ephemeris_manifest,
 )
 from nodalarc.link_rule_candidates import generate_declared_link_candidates
+from nodalarc.models.catalog import Profile
 from nodalarc.models.identity import IdentityMode
 from nodalarc.models.link_rules import LinkRule, NodeSelector, TerminalSelector
 from nodalarc.models.resolved_session import (
@@ -107,6 +109,9 @@ class SessionResolution:
 
     resolved: ResolvedSession
     catalog_session: SegmentSessionConfig
+    # The admitted catalog profiles the resolved nodes reference, keyed by
+    # reference token. Deployment consumes these; it never reloads them.
+    workload_profiles: Mapping[str, Profile] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -212,7 +217,15 @@ def resolve_session_with_assets(
     )
     _validate_access_ground_scheduling(resolved)
     _validate_allocator_wide_scheduling(resolved)
-    return SessionResolution(resolved=resolved, catalog_session=cfg)
+    workload_profiles = {
+        reference: Profile.model_validate(_load_expected(reference, roots, "profile"))
+        for reference in sorted({node.profile for node in resolved_nodes})
+    }
+    return SessionResolution(
+        resolved=resolved,
+        catalog_session=cfg,
+        workload_profiles=workload_profiles,
+    )
 
 
 def _resolve_dispatch(cfg: SegmentSessionConfig) -> Dispatch:

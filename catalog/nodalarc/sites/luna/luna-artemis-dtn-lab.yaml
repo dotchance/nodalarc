@@ -1,0 +1,53 @@
+site:
+  id: luna-artemis-dtn-lab
+  display_name: Artemis DTN lab (surface gateway + DTN endpoint host)
+  verified:
+    source: nodalarc_catalog
+    notes: Lunar south-pole surface site pairing the surface gateway with
+      a host that runs the lunar uD3TN endpoint.
+  ethernet:
+  - id: lan0
+  nodes:
+  - id: gw1
+    display_name: Luna Gateway
+    node: nodalarc:nodes/ground/dtn-luna-gateway.yaml
+    payloads:
+      dtn:
+        installed_count: 1
+        tags:
+        - dtn_luna
+    terminals:
+      access_s:
+        installed_count: 2
+        capabilities:
+          bandwidth_mbps:
+            transmit: 50.0
+            receive: 50.0
+          tracking_capacity: 1
+          max_range_km: 9000.0
+          limits:
+            azimuth_deg:
+              min: -180
+              max: 180
+            elevation_deg:
+              min: 10
+              max: 90
+            max_tracking_rate_deg_s: 0.5
+          boresight:
+            mode: local_vertical
+    interfaces:
+      terr0: lan0
+    tags:
+    - luna
+    originated_prefixes:
+      ipv4:
+      - lan0
+      ipv6:
+      - lan0
+  frame:
+    body_fixed:
+      body: nodalarc:bodies/luna.yaml
+  location:
+    lat_deg: -89.0
+    lon_deg: 60.0
+    alt_m: 0

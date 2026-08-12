@@ -3,7 +3,8 @@ session:
   display_name: Earth to Luna DTN relay path
   description: 'The earth-luna-quic sky with the lunar relay replaced by a DTN relay
     vehicle: an FRR-routed orbiter carrying a uD3TN store-and-forward host on its
-    payload bus. QUIC endpoints and the bundle relay share one sky.'
+    payload bus. QUIC endpoints, uD3TN ground endpoints, and the bundle relay
+    share one sky.'
 segments:
 - id: leo
   source: nodalarc:constellations/earth/leo/earth-leo-polar-66.yaml
@@ -65,6 +66,57 @@ segments:
 - id: luna_ground
   placement:
     from_site_set: nodalarc:site-sets/luna/luna-quic-lab-sites.yaml
+  apply:
+    scheduling:
+      selection_policy:
+        highest_elevation: {}
+      handover_policy:
+        hysteresis:
+          discount_factor: 1.1
+          mask_fade_range_deg: 3.0
+      handover_mode: mbb
+      mbb_overlap_ticks: 30
+      mbb_reserve: 1
+      handover_concurrency: one_at_a_time
+      ranking_order:
+      - service_priority
+      - per_gs_rank
+      - satellite_ground_terminal_capacity
+      - lex_pair
+      mbb_preemption: 'off'
+      successor_abort_policy: hard_release
+      cross_tenant_displacement: 'off'
+      bbm_acquire_timeout_ticks: 1
+- id: dtn_earth_ground
+  placement:
+    from_site_set: nodalarc:site-sets/earth/earth-dtn-lab-sites.yaml
+  apply:
+    scheduling:
+      selection_policy:
+        highest_elevation: {}
+      handover_policy:
+        hysteresis:
+          discount_factor: 1.1
+          mask_fade_range_deg: 3.0
+      handover_mode: mbb
+      mbb_overlap_ticks: 30
+      mbb_reserve: 1
+      handover_concurrency: one_at_a_time
+      ranking_order:
+      - service_priority
+      - per_gs_rank
+      - satellite_ground_terminal_capacity
+      - lex_pair
+      mbb_preemption: 'off'
+      successor_abort_policy: hard_release
+      cross_tenant_displacement: 'off'
+      bbm_acquire_timeout_ticks: 1
+    originated_prefixes:
+      ipv4:
+      - default
+- id: dtn_luna_ground
+  placement:
+    from_site_set: nodalarc:site-sets/luna/luna-dtn-lab-sites.yaml
   apply:
     scheduling:
       selection_policy:
@@ -233,6 +285,44 @@ link_rules:
       all:
       - role: access
       - medium: rf
+- id: dtn_earth_access
+  topology:
+    mode: visible_candidates
+  endpoints:
+  - select:
+      all:
+      - segment: dtn_earth_ground
+      - tag: leo
+    terminal:
+      all:
+      - role: access
+      - medium: rf
+    min_elevation_deg: 10
+  - select:
+      segment: leo
+    terminal:
+      all:
+      - role: access
+      - medium: rf
+- id: dtn_luna_access
+  topology:
+    mode: visible_candidates
+  endpoints:
+  - select:
+      all:
+      - segment: dtn_luna_ground
+      - tag: luna
+    terminal:
+      all:
+      - role: access
+      - medium: rf
+    min_elevation_deg: 10
+  - select:
+      segment: luna_relay
+    terminal:
+      all:
+      - role: access
+      - medium: rf
 addressing:
   loopbacks:
   - id: node_loopbacks
@@ -244,6 +334,8 @@ addressing:
       - segment: client_ground
       - segment: relay_ground
       - segment: luna_ground
+      - segment: dtn_earth_ground
+      - segment: dtn_luna_ground
     ipv4_pool: 10.255.0.0/16
     prefix_length: 32
     allocation: by_node_order
@@ -259,6 +351,9 @@ routing:
         - segment: client_ground
         - tag: leo
       - segment: relay_ground
+      - all:
+        - segment: dtn_earth_ground
+        - tag: leo
     area_assignment:
       strategy: flat
   - id: luna_domain
@@ -268,6 +363,9 @@ routing:
       - segment: luna_relay
       - all:
         - segment: luna_ground
+        - tag: luna
+      - all:
+        - segment: dtn_luna_ground
         - tag: luna
     area_assignment:
       strategy: flat

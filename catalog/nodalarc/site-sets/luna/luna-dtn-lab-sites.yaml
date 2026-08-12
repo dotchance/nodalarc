@@ -1,0 +1,7 @@
+site_set:
+  id: luna-dtn-lab-sites
+  display_name: Luna DTN lab sites
+  sites:
+  - nodalarc:sites/luna/luna-artemis-dtn-lab.yaml
+  notes: One lunar surface site pairing the surface gateway with a uD3TN
+    endpoint host.

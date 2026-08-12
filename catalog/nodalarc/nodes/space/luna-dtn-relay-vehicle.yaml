@@ -10,7 +10,7 @@ node:
   - id: access_s
     role: access
     terminal: nodalarc:terminals/rf/rf-s-luna-access.yaml
-    count: 1
+    count: 2
     boresight:
       mode: nadir
   - id: isl_optical
@@ -24,6 +24,7 @@ node:
   payloads:
   - id: dtn
     payload: nodalarc:payloads/dtn-host.yaml
+    profile: nodalarc:profiles/ud3tn-cislunar-relay.yaml
     count: 1
     attach: bus1
     tags:

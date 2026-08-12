@@ -1,0 +1,72 @@
+# An Earth DTN endpoint: an AAP 2.0 tools container in front of an
+# upstream uD3TN daemon (built and published by D3TN, referenced by pinned
+# identity). At startup the tools container schedules one long static
+# contact toward the cislunar relay, declaring the lunar endpoint
+# reachable through it, then stays running as the node's bundle sink.
+# The relay address arrives as DTN_RELAY, resolved by the platform from
+# whichever node carries the dtn_relay tag; no address is authored here.
+profile:
+  id: ud3tn-earth-endpoint
+  display_name: uD3TN Earth DTN endpoint
+  registry: node01:5000
+  image: nodalarc-ud3tn-tools/tools@sha256:869961d3f3436577ef44c5334aa0f8d9995721056c814067a9cf8fe4ac4c9123
+  env:
+  - name: DTN_RELAY
+    value_from:
+      tag: dtn_relay
+      interface: bus1
+      family: ipv4
+  command:
+  - /bin/bash
+  - -c
+  - >-
+    set -u;
+    S=/run/ud3tn/aap2.socket;
+    until [ -S "$S" ]; do echo "waiting for aap2 socket"; sleep 2; done;
+    until aap2-config --socket "$S" --schedule 1 315360000 1000000
+    --reaches dtn://luna.dtn/ dtn://relay.dtn/ "mtcp:${DTN_RELAY}:4224";
+    do echo "contact configuration failed; retrying"; sleep 5; done;
+    echo "configured contact: dtn://relay.dtn/ at mtcp:${DTN_RELAY}:4224";
+    exec aap2-receive --socket "$S" --agentid bundlesink
+  root_filesystem: read_only
+  volumes:
+  - name: run
+    kind: ephemeral
+    medium: memory
+    size_mi: 64
+  mounts:
+  - volume: run
+    path: /run/ud3tn
+    read_only: false
+  terminal:
+    surface: exec
+    command:
+    - /bin/bash
+    - -l
+  resources:
+    requests: {cpu_m: 10, memory_mi: 32}
+    limits: {cpu_m: 500, memory_mi: 128}
+  sidecars:
+  - name: ud3tn
+    registry: registry.gitlab.com
+    image: d3tn/ud3tn-docker-images/ud3tn@sha256:dbc27674995ba527c4e4a10a185e4827bb34a7aa5daac66fb3382cb668762103
+    command:
+    - /ud3tn
+    - --node-id
+    - dtn://earth.dtn/
+    - --bp-version
+    - '7'
+    - --cla
+    - mtcp:*,4224
+    - --aap-socket
+    - /run/ud3tn/aap.socket
+    - --aap2-socket
+    - /run/ud3tn/aap2.socket
+    root_filesystem: read_only
+    resources:
+      requests: {cpu_m: 50, memory_mi: 64}
+      limits: {cpu_m: 500, memory_mi: 256}
+    mounts:
+    - volume: run
+      path: /run/ud3tn
+      read_only: false

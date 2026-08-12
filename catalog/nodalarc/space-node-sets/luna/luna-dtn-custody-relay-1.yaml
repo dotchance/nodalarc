@@ -1,0 +1,6 @@
+space_node_set:
+  id: luna-dtn-custody-relay-1
+  nodes:
+  - id: sat-p00s00
+    node: nodalarc:nodes/space/luna-dtn-custody-relay-vehicle.yaml
+    orbit: nodalarc:orbits/luna/elfo/luna-elfo-south-apolune.yaml

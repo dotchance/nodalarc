@@ -1,0 +1,108 @@
+# A storage-backed cislunar bundle relay: an AAP 2.0 tools container in
+# front of the upstream uD3TN daemon (built and published by D3TN,
+# referenced by pinned identity). The tools container owns the contact
+# plan as ordinary workload behavior: it probes each peer's mtcp port,
+# holds a direct contact while the peer answers, and swaps the contact
+# to the daemon's sqlite storage CLA when it does not, so bundles are
+# held at the bundle layer instead of dying in a dead TCP connection.
+# When a peer returns, the direct contact is restored and held bundles
+# are recalled from storage. Peer addresses arrive as DTN_EARTH and
+# DTN_LUNA, resolved by the platform from whichever nodes carry the
+# dtn_earth and dtn_luna tags; no address is authored here.
+profile:
+  id: ud3tn-custody-relay
+  display_name: uD3TN storage-backed custody relay
+  registry: node01:5000
+  image: nodalarc-ud3tn-tools/tools@sha256:869961d3f3436577ef44c5334aa0f8d9995721056c814067a9cf8fe4ac4c9123
+  env:
+  - name: DTN_EARTH
+    value_from:
+      tag: dtn_earth
+      interface: terr0
+      family: ipv4
+  - name: DTN_LUNA
+    value_from:
+      tag: dtn_luna
+      interface: terr0
+      family: ipv4
+  command:
+  - /bin/bash
+  - -c
+  - |-
+    set -u
+    S=/run/ud3tn/aap2.socket
+    until [ -S "$S" ]; do echo "waiting for aap2 socket"; sleep 2; done
+    declare -A mode
+    manage() {
+      local eid="$1" ip="$2" key="$3"
+      if timeout 3 bash -c "echo -n >/dev/tcp/$ip/4224" 2>/dev/null; then
+        if [ "${mode[$key]:-}" != direct ]; then
+          aap2-config --socket "$S" --delete "$eid" >/dev/null 2>&1
+          aap2-config --socket "$S" --schedule 1 315360000 1000000 \
+            "$eid" "mtcp:$ip:4224" || return
+          mode[$key]=direct
+          echo "$(date -u +%FT%TZ) $eid reachable: direct contact, recalling stored bundles"
+          aap2-storage-agent --socket "$S" \
+            --storage-agent-eid dtn://relay.dtn/sqlite \
+            push --dest-eid-glob "$eid*" >/dev/null 2>&1
+        fi
+      else
+        if [ "${mode[$key]:-}" != storage ]; then
+          aap2-config --socket "$S" --delete "$eid" >/dev/null 2>&1
+          aap2-config --socket "$S" --schedule 1 315360000 1000000 \
+            "$eid" "sqlite:" || return
+          mode[$key]=storage
+          echo "$(date -u +%FT%TZ) $eid unreachable: bundles held in storage"
+        fi
+      fi
+    }
+    echo "custody contact manager starting"
+    while true; do
+      manage dtn://earth.dtn/ "$DTN_EARTH" earth
+      manage dtn://luna.dtn/ "$DTN_LUNA" luna
+      sleep 10
+    done
+  root_filesystem: read_only
+  volumes:
+  - name: run
+    kind: ephemeral
+    medium: memory
+    size_mi: 64
+  mounts:
+  - volume: run
+    path: /run/ud3tn
+    read_only: false
+  terminal:
+    surface: exec
+    command:
+    - /bin/bash
+    - -l
+  resources:
+    requests: {cpu_m: 10, memory_mi: 32}
+    limits: {cpu_m: 500, memory_mi: 128}
+  sidecars:
+  - name: ud3tn
+    registry: registry.gitlab.com
+    image: d3tn/ud3tn-docker-images/ud3tn@sha256:dbc27674995ba527c4e4a10a185e4827bb34a7aa5daac66fb3382cb668762103
+    command:
+    - /ud3tn
+    - --node-id
+    - dtn://relay.dtn/
+    - --bp-version
+    - '7'
+    - --cla
+    - sqlite:file::memory:?cache=shared;mtcp:*,4224
+    - --aap-socket
+    - /run/ud3tn/aap.socket
+    - --aap2-socket
+    - /run/ud3tn/aap2.socket
+    - --log-level
+    - '4'
+    root_filesystem: read_only
+    resources:
+      requests: {cpu_m: 50, memory_mi: 64}
+      limits: {cpu_m: 500, memory_mi: 256}
+    mounts:
+    - volume: run
+      path: /run/ud3tn
+      read_only: false

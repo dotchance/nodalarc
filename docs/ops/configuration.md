@@ -28,7 +28,7 @@ Both namespaces have the same families and use the same grammar:
 | Profile | `profiles/` | Complete node workload composition: images, containers, adapter, terminal access. |
 | Orbit | `orbits/` | Body reference, epoch, geometry, orientation, and propagator. |
 | Node | `nodes/` | Reusable node definition: forwarding class, ports, mounts, and default profile. |
-| Site | `sites/` | Facility frame, location, LAN, installed nodes, and concrete addresses. |
+| Site | `sites/` | Facility frame, location, provided Ethernet segments, and installed nodes. |
 | Site set | `site-sets/` | Reusable collection of site references. |
 | Constellation | `constellations/` | Generated population from a node, orbit, planes, slots, and phasing. |
 | Space node set | `space-node-sets/` | Fixed list of individually identified space nodes. |
@@ -300,8 +300,8 @@ mount omitted from that mapping has zero installed instances at the site, and
 `installed_count` cannot exceed the node definition's count. Capability
 overrides may narrow the selected terminal but may not widen it. The required
 `payloads` mapping follows the same mount-inventory shape, populating the
-payload mounts the node definition declares; payload execution is
-structurally defined but support-gated today.
+payload mounts the node definition declares; each installed mount runs its
+payload as a member environment on the attached segment.
 
 A node's Ethernet ports are the segments it carries, through one production
 for ground and space alike: a gateway declares `terr0`, an orbiter can
@@ -390,9 +390,9 @@ addressing:
     allocation: by_node_order
 ```
 
-When no loopback assignment covers a generated routed space node, the resolver
-provides deterministic resolver-owned IPv4 and IPv6 loopbacks. Site-placed
-nodes keep their authored loopbacks.
+When no loopback assignment covers a node, the resolver provides
+deterministic resolver-owned IPv4 and IPv6 loopbacks. No catalog object
+authors a loopback.
 
 Point-to-point and terrestrial-prefix pools, and allocation modes other than
 `by_node_order`, are structurally defined but not currently executable. WAN

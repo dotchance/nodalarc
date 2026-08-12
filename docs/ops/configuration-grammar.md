@@ -588,11 +588,12 @@ ground installation it combines additively with segment-apply, override,
 and site-node origination. A space placement expands every payload mount
 at its declared count (space has no installation map, exactly as space
 terminals install at their declared counts), and members share the
-carrier's motion, grid coordinates, and clock. Onboard execution on space
-placements — declared Ethernet ports or payload mounts on a space-placed
-node definition — remains gated runtime support and fails with the typed
-`UnsupportedFeature` until the bus wiring chain lands; ground-installed
-payload mounts execute today.
+carrier's motion, grid coordinates, and clock. The current runtime executes
+onboard composition on space placements: declared Ethernet ports become
+allocated bus segments, and payload mounts expand to member environments
+riding the carrier. Ground-installed payload mounts execute the same way. A
+runtime profile without payload support rejects these constructs with the
+typed `UnsupportedFeature`.
 
 ## Shared placement and scheduling types
 
@@ -1589,7 +1590,9 @@ construct. The production Earth-Luna profile currently supports:
   most one reserved MBB overlap, and one-tick BBM acquisition;
 - `skyfield_bsp` ephemeris;
 - workload profiles at all three assignment levels, with the `frr` adapter
-  and adapter-free application profiles.
+  and adapter-free application profiles;
+- payload mounts and node-carried Ethernet segments, on ground installations
+  and space placements alike.
 
 The following structurally valid constructs are currently rejected before
 runtime execution:
@@ -1597,7 +1600,6 @@ runtime execution:
 - Lagrange segments and non-body-fixed ground sites;
 - raw state-vector space-node placement;
 - `crtbp` propagation;
-- payload execution;
 - `affine` clocks;
 - `nearest_visible` topology;
 - `max_range_km` and `require_mutual_visibility` link constraints;

@@ -2,6 +2,7 @@ node:
   id: leo-gateway
   display_name: Earth LEO gateway router
   forwarding: routed
+  profile: nodalarc:profiles/frr-router.yaml
   ethernet:
   - id: terr0
   terminals:

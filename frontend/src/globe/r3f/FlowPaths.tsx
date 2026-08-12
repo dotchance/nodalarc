@@ -106,7 +106,7 @@ function hasReverse(path: TracedPath): boolean {
  * hops (no segment). Mirrors globe/flowPaths.ts collectHopPositions (which required
  * positions.length >= 6, i.e. >= 2 hops).
  */
-function collectHopPositions(hops: string[], buffer: Float32Array): boolean {
+export function collectHopPositions(hops: string[], buffer: Float32Array): boolean {
   if (hops.length < 2) return false;
   let off = 0;
   for (const hop of hops) {
@@ -155,7 +155,6 @@ export function FlowPaths({ tracedPaths }: FlowPathsProps) {
             const revGeometry = new LineGeometry();
             const revMaterial = makeMaterial(LINK_FLOW_SECONDARY_COLOR, resolution);
             const revLine = new Line2(revGeometry, revMaterial);
-            revLine.computeLineDistances();
             group.add(revLine);
             existing.reverseLine = revLine;
             existing.reverseGeometry = revGeometry;
@@ -175,7 +174,6 @@ export function FlowPaths({ tracedPaths }: FlowPathsProps) {
         resolution,
       );
       const line = new Line2(geometry, material);
-      line.computeLineDistances();
       group.add(line);
 
       const entry: FlowPathEntry = {
@@ -190,7 +188,6 @@ export function FlowPaths({ tracedPaths }: FlowPathsProps) {
         const revGeometry = new LineGeometry();
         const revMaterial = makeMaterial(LINK_FLOW_SECONDARY_COLOR, resolution);
         const revLine = new Line2(revGeometry, revMaterial);
-        revLine.computeLineDistances();
         group.add(revLine);
         entry.reverseLine = revLine;
         entry.reverseGeometry = revGeometry;

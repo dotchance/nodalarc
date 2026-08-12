@@ -71,6 +71,7 @@ export function defaultDraftNode(): DraftNode {
     id: "my-node",
     display_name: "My node",
     forwarding: null,
+    profile: null,
     ethernet: [],
     terminals: [],
   };
@@ -92,8 +93,6 @@ export function newDraftGroundSet(
       installed,
       boresights,
       body,
-      lan_base: `172.${20 + ((groundCounter - 1) % 12)}`,
-      loopback_base: `10.${200 + ((groundCounter - 1) % 55)}`,
     },
     scheduling: {},
     originated_ipv4: [],
@@ -106,7 +105,6 @@ export function testGroundMember(
   name: string,
   latDeg: number,
   lonDeg: number,
-  addressIndex = 0,
 ): DraftGroundSite {
   siteCounter += 1;
   const siteId = `test-site-${siteCounter}`;
@@ -125,15 +123,12 @@ export function testGroundMember(
       lat_deg: latDeg,
       lon_deg: lonDeg,
       alt_m: 0,
-      lan_ipv4: `${ground.stamp.lan_base}.${addressIndex}.0/24`,
       tags: [],
       nodes: [{
         node_id: "gw1",
-        model_ref: ground.stamp.node_ref,
+        node_ref: ground.stamp.node_ref,
         installed: { ...ground.stamp.installed },
         boresights: { ...ground.stamp.boresights },
-        lo0_ipv4: `${ground.stamp.loopback_base}.0.${addressIndex + 1}/32`,
-        terr0_ipv4: `${ground.stamp.lan_base}.${addressIndex}.1/24`,
       }],
     },
   };

@@ -2191,7 +2191,12 @@ async def ws_terminal(websocket: WebSocket, node_id: str) -> None:
       Browser → VS-API: {"type": "resize", "cols": 120, "rows": 40}
       VS-API → Browser: {"type": "output", "data": "Codes: K - kernel..."}
     """
-    from vs_api.terminal import TerminalSession, _load_ssh_key, resolve_pod_ip
+    from vs_api.terminal import (
+        ExecTerminalSession,
+        TerminalSession,
+        _load_ssh_key,
+        resolve_pod_terminal,
+    )
 
     ws_ip = websocket.client.host if websocket.client else "unknown"
     if _API_KEY:
@@ -2201,27 +2206,54 @@ async def ws_terminal(websocket: WebSocket, node_id: str) -> None:
             await websocket.close(code=4401, reason="Unauthorized")
             return
 
-    # Resolve node_id to pod IP (async — runs K8s API call in thread executor
-    # so it doesn't block active SSH sessions on the event loop)
+    # Resolve node_id to pod + terminal contract (async — runs the K8s
+    # API call in a thread executor so it doesn't block active sessions).
     namespace = get_platform_config().kubernetes_namespace
-    pod_ip = await resolve_pod_ip(node_id, namespace)
-    if not pod_ip:
+    resolved = await resolve_pod_terminal(node_id, namespace)
+    if resolved is None:
         await websocket.close(code=4404, reason="Node not found")
         return
-
-    # Load SSH key (cached in memory after first call — never written to
-    # disk). The Secret freshness check is a sync K8s read: off the loop.
-    try:
-        ssh_key = await asyncio.to_thread(_load_ssh_key, namespace)
-    except RuntimeError as e:
-        log.warning("Terminal key error: %s", e)
-        await websocket.close(code=4503, reason=str(e))
+    pod_name, pod_ip, contract = resolved
+    if contract is None:
+        # The workload declares no terminal surface: refuse typed and
+        # immediately — never spin dialing a pod that cannot answer.
+        _audit_log.info(f"WS_TERMINAL_NO_SURFACE ip={ws_ip} node={node_id}")
+        await websocket.accept()
+        await websocket.send_text(
+            json.dumps(
+                {
+                    "type": "output",
+                    "data": (
+                        f"\r\nNode {node_id} runs a workload that declares "
+                        "no terminal access.\r\nInspect it with its own "
+                        "logs and tooling instead.\r\n"
+                    ),
+                }
+            )
+        )
+        await websocket.close(code=4409, reason="Workload declares no terminal access")
         return
 
-    await websocket.accept()
-    _audit_log.info(f"WS_TERMINAL_CONNECT ip={ws_ip} node={node_id} pod_ip={pod_ip}")
+    if contract["surface"] == "ssh":
+        # Load SSH key (cached in memory after first call — never written
+        # to disk). The Secret freshness check is a sync K8s read.
+        try:
+            ssh_key = await asyncio.to_thread(_load_ssh_key, namespace)
+        except RuntimeError as e:
+            log.warning("Terminal key error: %s", e)
+            await websocket.close(code=4503, reason=str(e))
+            return
+        session = TerminalSession(pod_ip, ssh_key)
+    else:
+        session = ExecTerminalSession(
+            namespace, pod_name, contract["container"], contract["command"]
+        )
 
-    session = TerminalSession(pod_ip, ssh_key)
+    await websocket.accept()
+    _audit_log.info(
+        f"WS_TERMINAL_CONNECT ip={ws_ip} node={node_id} pod_ip={pod_ip} "
+        f"surface={contract['surface']}"
+    )
     _term_conn_id: str | None = None
     try:
         await session.connect()
@@ -2281,12 +2313,18 @@ async def get_node_config(node_id: str) -> Response:
     Opens a temporary SSH session, runs 'show running-config', returns
     the output as a downloadable text file.
     """
-    from vs_api.terminal import TerminalSession, _load_ssh_key, resolve_pod_ip
+    from vs_api.terminal import TerminalSession, _load_ssh_key, resolve_pod_terminal
 
     namespace = get_platform_config().kubernetes_namespace
-    pod_ip = await resolve_pod_ip(node_id, namespace)
-    if not pod_ip:
+    resolved = await resolve_pod_terminal(node_id, namespace)
+    if resolved is None:
         return JSONResponse(status_code=404, content={"error": "Node not found"})
+    _pod_name, pod_ip, contract = resolved
+    if contract is None or contract["surface"] != "ssh":
+        return JSONResponse(
+            status_code=409,
+            content={"error": "Configuration export requires an ssh terminal surface"},
+        )
 
     try:
         ssh_key = await asyncio.to_thread(_load_ssh_key, namespace)
@@ -3889,7 +3927,10 @@ async def _run_catalog_switch(
     catalog_context: CatalogContext,
 ) -> TransitionRuntimeResult:
     async with _session_transition_lock:
-        return await _run_prepared_switch_locked(deployment, catalog_context=catalog_context)
+        return await _run_prepared_switch_locked(
+            deployment,
+            catalog_context=catalog_context,
+        )
 
 
 async def _run_prepared_switch_locked(

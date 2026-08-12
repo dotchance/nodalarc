@@ -24,10 +24,11 @@ Both namespaces have the same families and use the same grammar:
 |---|---|---|
 | Body | `bodies/` | Gravity, radii, and identity of a physical body. |
 | Terminal | `terminals/` | RF or optical communication capability and limits. |
-| Payload | `payloads/` | Reusable terminal slots and shared resource groups. |
+| Payload | `payloads/` | A carried compute environment: forwarding class and workload profile. |
+| Profile | `profiles/` | Complete node workload composition: images, containers, adapter, terminal access. |
 | Orbit | `orbits/` | Body reference, epoch, geometry, orientation, and propagator. |
-| Node | `nodes/` | Reusable forwarding model, ports, and terminal or payload mounts. |
-| Site | `sites/` | Facility frame, location, LAN, installed nodes, and concrete addresses. |
+| Node | `nodes/` | Reusable node definition: forwarding class, ports, mounts, and default profile. |
+| Site | `sites/` | Facility frame, location, provided Ethernet segments, and installed nodes. |
 | Site set | `site-sets/` | Reusable collection of site references. |
 | Constellation | `constellations/` | Generated population from a node, orbit, planes, slots, and phasing. |
 | Space node set | `space-node-sets/` | Fixed list of individually identified space nodes. |
@@ -231,8 +232,9 @@ selected terminal limit and the authored ground-endpoint `min_elevation_deg`.
 
 ## Sites, nodes, terminals, and addresses
 
-A node is a reusable model: a router on a shelf. It has forwarding behavior,
-ports, and mounts, but no address or location.
+A node is a reusable definition: a router on a shelf. It has forwarding
+behavior, ports, mounts, and optionally a default workload profile, but no
+address or location.
 
 ```yaml
 node:
@@ -249,20 +251,22 @@ node:
   payloads: []
 ```
 
-A site installs that model at a physical facility. The placement owns the LAN,
-concrete interface addresses, installed terminal count, and optional
-capability narrowing:
+A site installs that node definition at a physical facility. The site declares
+the network segments it provides with the same `ethernet` form a node uses,
+binds each node port to one of them, and records the installed terminal count
+with optional capability narrowing. No address appears anywhere; segment
+subnets, member addresses, and loopbacks are all resolver-allocated,
+deterministically by stable member id:
 
 ```yaml
 site:
   id: earth-us-hawthorne
   display_name: Hawthorne Gateway Site
-  lan:
-    ipv4: 172.16.113.0/24
-    ipv6: fd00:da7a:71::/64
+  ethernet:
+  - id: lan0
   nodes:
   - id: gw1
-    model: nodalarc:nodes/ground/starlink-gateway.yaml
+    node: nodalarc:nodes/ground/starlink-gateway.yaml
     terminals:
       access_ka:
         installed_count: 8
@@ -270,15 +274,10 @@ site:
           boresight: {mode: local_vertical}
     payloads: {}
     interfaces:
-      lo0:
-        ipv4: 10.255.0.119/32
-        ipv6: fd00:da7a:ffff::77/128
-      terr0:
-        ipv4: 172.16.113.1/24
-        ipv6: fd00:da7a:71::1/64
+      terr0: lan0
     originated_prefixes:
-      ipv4: [172.16.113.0/24]
-      ipv6: [fd00:da7a:71::/64]
+      ipv4: [lan0]
+      ipv6: [lan0]
     tags: [leo]
   frame:
     body_fixed:
@@ -289,36 +288,87 @@ site:
     alt_m: 20
 ```
 
-Each placed node authors exactly two numbered interfaces:
+The `interfaces` mapping binds each Ethernet port the node definition
+declares to one declared site segment, port id to segment id. Every declared
+port is bound exactly once. The installed node's kernel interface keeps its
+port id as its name (`terr0` above), whichever segment it binds to, and
+receives an allocated address on that segment's allocated subnet. The node
+loopback is likewise allocated; a site authors no addresses of any kind.
 
-- `lo0` is the node loopback.
-- `terr0` is the site-LAN interface and must be inside the site's LAN for that
-  address family.
+The site's `terminals` mapping is the exhaustive installation inventory: a
+mount omitted from that mapping has zero installed instances at the site, and
+`installed_count` cannot exceed the node definition's count. Capability
+overrides may narrow the selected terminal but may not widen it. The required
+`payloads` mapping follows the same mount-inventory shape, populating the
+payload mounts the node definition declares; each installed mount runs its
+payload as a member environment on the attached segment.
 
-Each interface declares IPv4, IPv6, or both. The site's `terminals` mapping is
-the exhaustive installation inventory: a model mount omitted from that mapping
-has zero installed instances at the site, and `installed_count` cannot exceed
-the model count. Capability overrides may narrow the selected terminal but may
-not widen it. The required `payloads` mapping follows the same mount-inventory
-shape; payload execution is structurally defined but support-gated today.
+A node's Ethernet ports are the segments it carries, through one production
+for ground and space alike: a gateway declares `terr0`, an orbiter can
+declare `bus0` and `bus1`. Each port becomes a kernel interface, named by
+its port id, on the node's own runtime environment. A node also mounts
+payloads: carried compute environments, each a catalog `payload` object
+declaring its forwarding class and workload profile. A payload mount's
+`attach` names the port whose segment the mounted environment joins, and the
+mounted environment's single Ethernet interface is named by that port id.
+This is how a host rides a gateway's LAN or a spacecraft bus without
+declaring anything about its future installation.
 
-Installed terminal mounts produce runtime WAN interfaces. Those interfaces are
-derived and currently unnumbered; they borrow the node loopback. Do not author
-`termN`, `islN`, or other derived WAN interfaces in a site.
-
-For the current substrate, a ground node model declares exactly the `terr0`
-Ethernet port and a space node model declares no Ethernet ports. A satellite
-access mount declares `boresight: {mode: nadir}` on the node mount; a ground
-access mount declares its boresight on the site installation as shown above.
+Installed terminal mounts produce runtime WAN interfaces. Those interfaces
+are derived and currently unnumbered; they borrow the node loopback. Do not
+author `termN`, `islN`, or other derived WAN interfaces in a site. A
+satellite access mount declares `boresight: {mode: nadir}` on the node mount;
+a ground access mount declares its boresight on the site installation as
+shown above.
 
 If a site node omits `tenant_id`, the resolver uses `default`. If it omits
 `service_priority`, OME uses priority `10` for ground allocation. These are
 allocation facts, not authentication, catalog ownership, or storage-isolation
 controls.
 
-`originated_prefixes` is explicit routing-injection intent. A LAN is not
-advertised merely because it exists. Listing `0.0.0.0/0` or `::/0` explicitly
-originates a default route; omitting a prefix means NodalArc does not inject it.
+`originated_prefixes` is explicit routing-injection intent, expressed
+symbolically: each entry names a declared segment the node is bound or
+attached to, resolving to that segment's allocated subnet in the list's
+address family, or the token `default` for the default route. A segment is
+not advertised merely because it exists, and no literal prefix appears in
+configuration.
+
+## Workload profiles
+
+A profile is the complete workload composition for one node: the software the
+node runs. It declares the container image by registry and digest, the primary
+container's command, capabilities, filesystem posture, volumes, mounts, and
+resources, optional sidecar containers, terminal access, readiness behavior,
+and the adapter that renders per-node native configuration. A routing node's
+profile runs one standalone routing stack. An application node's profile is a
+plain container with no routing daemon. The complete field list and every
+constraint are in the [Configuration Grammar](configuration-grammar.md).
+
+A node acquires its profile from the most specific of three statements:
+
+- the node definition declares the default for every node built from it;
+- a segment `profile` overrides that default for the nodes it resolves;
+- a placed space node or site node `profile` overrides both.
+
+A resolved node with no profile statement at any level is rejected before
+deployment. NodalArc has no default workload and no built-in preference for
+any implementation. Inheriting a node definition's default is an authored statement,
+because someone wrote it into a reviewable catalog object.
+
+Customize a profile like any other catalog object: copy the shipped object to
+a new `user:` path, change the command, image, capabilities, or resources, and
+reference the new object at the level where it should apply. Forking a profile
+requires no platform code.
+
+A profile declares its containers' environment with `env`. A `value` entry
+sets an authored string. A `value_from` entry sets a platform-resolved fact:
+the address, by interface name and family, of the single node carrying a
+named tag. This is how an application endpoint learns its peer without
+anyone authoring an address: the session tags the server node, the client's
+profile declares `value_from: {tag: ..., interface: terr0, family: ipv4}`,
+and the client's container starts with the resolved address in its
+environment. A tag that matches zero nodes or several, a missing interface,
+or a missing address family refuses the session before anything deploys.
 
 ## Address pools
 
@@ -340,9 +390,9 @@ addressing:
     allocation: by_node_order
 ```
 
-When no loopback assignment covers a generated routed space node, the resolver
-provides deterministic resolver-owned IPv4 and IPv6 loopbacks. Site-placed
-nodes keep their authored loopbacks.
+When no loopback assignment covers a node, the resolver provides
+deterministic resolver-owned IPv4 and IPv6 loopbacks. No catalog object
+authors a loopback.
 
 Point-to-point and terrestrial-prefix pools, and allocation modes other than
 `by_node_order`, are structurally defined but not currently executable. WAN
@@ -406,9 +456,13 @@ routing:
       install_via: peer_loopback
 ```
 
-Every resolved node belongs to exactly one domain when an explicit `routing`
-block is present. A fixed link crossing domain boundaries must have a declared
-boundary over that link rule. The current runtime supports the `static_ip`
+A routing domain is a declaration about routers. When an explicit `routing`
+block is present, every router belongs to exactly one domain, and a domain's
+membership is the routers among its selected nodes whose adapter renders its
+protocol. A host runs no routing protocol and receives no routing
+configuration; it is reached through the router serving its network. A fixed
+link crossing domain boundaries must have a declared boundary over that link
+rule. The current runtime supports the `static_ip`
 boundary adapter; `bgp` and `dtn_bundle` adapters are support-gated.
 
 IS-IS and OSPF domains may declare MPLS, segment routing, and traffic
@@ -430,8 +484,7 @@ current IS-IS format. A ground-only `explicit` assignment is valid; otherwise
 Ground mappings use site-qualified local node ids.
 
 If `routing` is omitted, the resolver creates one `default_domain` running
-IS-IS over every node whose model has `forwarding: routed`. Host, bridge, and
-control-only nodes are not inserted into that default domain.
+IS-IS over the routers whose adapter renders IS-IS.
 
 ## Time and ephemeris
 
@@ -494,6 +547,9 @@ make session DEFAULT_SESSION=catalog/nodalarc/sessions/earth-leo-walker.yaml
 | `earth-geo-inmarsat` | Representative fixed GEO commercial relay slots. |
 | `earth-geo-tdrs` | Representative fixed GEO relay slots. |
 | `earth-leo-heo-geo-luna-reachability` | Multi-regime Earth-Luna reachability experiment. |
+| `earth-luna-dtn` | The QUIC sky with the lunar relay replaced by a DTN relay vehicle carrying a uD3TN store-and-forward host on its payload bus. |
+| `earth-luna-dtn-custody` | The DTN sky with the relay recomposed for bundle-layer custody: its uD3TN payload manages its own contact plan and holds bundles in storage through occlusions. |
+| `earth-luna-quic` | Earth-to-Luna QUIC application path with host endpoints at both ends. |
 
 The shipped sessions are examples assembled from a larger reusable catalog.
 Six omit explicit routing and therefore use the default IS-IS domain. The

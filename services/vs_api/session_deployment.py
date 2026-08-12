@@ -281,6 +281,10 @@ def constellation_spec_body(
     }
     if deployment.repository_generation is not None:
         annotations["nodalarc.io/catalog-generation"] = str(deployment.repository_generation)
+    spec: dict[str, Any] = {
+        "sessionYaml": deployment.prepared.root_yaml.decode("utf-8"),
+        "catalogUpload": selection.model_dump(mode="json"),
+    }
     return {
         "apiVersion": "nodalarc.io/v1alpha1",
         "kind": "ConstellationSpec",
@@ -289,8 +293,5 @@ def constellation_spec_body(
             "namespace": namespace,
             "annotations": annotations,
         },
-        "spec": {
-            "sessionYaml": deployment.prepared.root_yaml.decode("utf-8"),
-            "catalogUpload": selection.model_dump(mode="json"),
-        },
+        "spec": spec,
     }

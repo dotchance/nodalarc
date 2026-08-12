@@ -27,6 +27,9 @@ A session is assembled from reusable catalog building blocks:
   redistributing between them. The grammar defines `isis`, `ospf`, `bgp`, and
   `static`; the current runtime executes `isis`, `ospf`, and `static` and rejects
   `bgp` before deployment. A supported session can mix protocols.
+- **workload profiles** — what each node runs: the catalog profile carrying its
+  complete container composition, taken from its node definition, its segment,
+  or its own placed entry.
 - **time** — simulation start time, step size, and compression.
 
 A link rule says a link is *allowed to be considered*. It does not force the link
@@ -44,6 +47,7 @@ still decide whether a link is actually active.
 | `earth-geo-inmarsat.yaml` | Representative GEO commercial-relay-style session. |
 | `earth-geo-tdrs.yaml` | Representative GEO relay/TDRS-style session. |
 | `earth-leo-heo-geo-luna-reachability.yaml` | Multi-regime session: LEO, HEO, GEO, a lunar relay, and lunar ground reachability in one experiment. |
+| `earth-luna-quic.yaml` | Earth-to-Luna application path: a QUIC client host on an Earth site reaches a QUIC server host on the lunar surface through LEO, GEO, and cislunar relay hops. |
 
 The reusable parts live under `catalog/nodalarc/` (bodies, terminals, orbits,
 nodes, sites, site sets, constellations); the assembled examples live under
@@ -171,8 +175,22 @@ current runtime supports one reserved overlap. An explicit MBB configuration
 with insufficient capacity is rejected before deployment. NodalArc neither
 invents the overlap nor silently reduces the requested policy to BBM.
 
-How many terminals a node has comes from its catalog node model and how many the
-site installs — not from inline session fields.
+How many terminals a node has comes from its catalog node definition and how
+many the site installs — not from inline session fields.
+
+## Workload profiles
+
+Every node runs a declared workload. A profile is the complete composition for
+one node and may hold several cooperating containers: an FRR router with an
+observer beside it is one profile, and a QUIC client host is another. The node
+definition names a default profile, a segment can override that default for
+its nodes, and a placed node's own entry can override both. A session in which any
+node ends up with no profile at any level is rejected at load. NodalArc never
+assumes a workload.
+
+Profiles keep implementation detail out of the session. The session says which
+profile a node runs; the profile and its adapter own the native configuration.
+Session YAML never contains vendor configuration syntax.
 
 ## Switching sessions
 

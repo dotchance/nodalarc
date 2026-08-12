@@ -141,7 +141,7 @@ def test_isis_ground_renders_numbered_terr0_and_unnumbered_term_interfaces() -> 
 
 def test_default_route_is_originated_from_prefix_intent_not_as_an_interface_address() -> None:
     raw = _raw_session(protocol="isis")
-    raw["segments"][1]["apply"]["originated_prefixes"] = {"ipv4": ["0.0.0.0/0"]}
+    raw["segments"][1]["apply"]["originated_prefixes"] = {"ipv4": ["default"]}
     resolved = resolve_session(raw, source_context=SourceContext(origin="test.frr"))
     vars_for_node = _vars_for(resolved, _first_ground(resolved))
 

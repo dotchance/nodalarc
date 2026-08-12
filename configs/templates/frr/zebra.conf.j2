@@ -38,9 +38,9 @@ interface {{ iface }}
 exit
 {% endfor %}
 
-{% if node_type == "ground_station" and terr0_addresses %}
-interface terr0
-{% for tp in terr0_addresses %}
+{% for segment in segment_interfaces %}
+interface {{ segment.name }}
+{% for tp in segment.addresses %}
 {% if ':' in tp.host_address %}
  ipv6 address {{ tp.host_address }}
 {% else %}
@@ -48,4 +48,4 @@ interface terr0
 {% endif %}
 {% endfor %}
 exit
-{% endif %}
+{% endfor %}

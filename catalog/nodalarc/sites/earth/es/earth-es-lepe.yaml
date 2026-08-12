@@ -4,15 +4,16 @@ site:
   verified:
     source: none
     confidence: geocoded
-    notes: Confirmed operational Starlink gateway. Coordinates are an engineering estimate for the named gateway facility; exact facility coordinates are not from regulatory filing. Legacy operational mask
-      was 25 degrees; operational masks belong on link-rule endpoints in the current grammar.
-  lan:
-    ipv4: 172.16.26.0/24
-    ipv6: fd00:da7a:1a::/64
+    notes: Confirmed operational Starlink gateway. Coordinates are an engineering
+      estimate for the named gateway facility; exact facility coordinates are not
+      from regulatory filing. Legacy operational mask was 25 degrees; operational
+      masks belong on link-rule endpoints in the current grammar.
+  ethernet:
+  - id: lan0
   nodes:
   - id: gw1
     display_name: LEO Gateway
-    model: nodalarc:nodes/ground/starlink-gateway.yaml
+    node: nodalarc:nodes/ground/starlink-gateway.yaml
     terminals:
       access_ka:
         installed_count: 1
@@ -34,19 +35,14 @@ site:
             mode: local_vertical
     payloads: {}
     interfaces:
-      lo0:
-        ipv4: 10.255.0.29/32
-        ipv6: fd00:da7a:ffff::1d/128
-      terr0:
-        ipv4: 172.16.26.1/24
-        ipv6: fd00:da7a:1a::1/64
+      terr0: lan0
     tags:
     - leo
     originated_prefixes:
       ipv4:
-      - 172.16.26.0/24
+      - lan0
       ipv6:
-      - fd00:da7a:1a::/64
+      - lan0
   frame:
     body_fixed:
       body: nodalarc:bodies/earth.yaml

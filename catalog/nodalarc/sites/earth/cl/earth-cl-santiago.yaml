@@ -3,14 +3,15 @@ site:
   display_name: Santiago teleport (LEO + GEO)
   verified:
     source: nodalarc_catalog
-    notes: NodalArc demo site using a named-facility coordinate estimate and explicit emulation addressing. Shared teleport campus; the GEO antenna bridges the LEO gateway LAN to the GEO segment over terr0.
-  lan:
-    ipv4: 172.16.17.0/24
-    ipv6: fd00:da7a:11::/64
+    notes: NodalArc demo site using a named-facility coordinate estimate and explicit
+      emulation addressing. Shared teleport campus; the GEO antenna bridges the LEO
+      gateway LAN to the GEO segment over terr0.
+  ethernet:
+  - id: lan0
   nodes:
   - id: gw1
     display_name: LEO Gateway
-    model: nodalarc:nodes/ground/leo-gateway.yaml
+    node: nodalarc:nodes/ground/leo-gateway.yaml
     payloads: {}
     terminals:
       access_ka:
@@ -32,23 +33,18 @@ site:
           boresight:
             mode: local_vertical
     interfaces:
-      lo0:
-        ipv4: 10.255.0.20/32
-        ipv6: fd00:da7a:ffff::14/128
-      terr0:
-        ipv4: 172.16.17.1/24
-        ipv6: fd00:da7a:11::1/64
+      terr0: lan0
     originated_prefixes:
       ipv4:
-      - 172.16.17.0/24
-      - 0.0.0.0/0
+      - lan0
+      - default
       ipv6:
-      - fd00:da7a:11::/64
+      - lan0
     tags:
     - leo
   - id: gw2
     display_name: GEO Gateway
-    model: nodalarc:nodes/ground/geo-gateway.yaml
+    node: nodalarc:nodes/ground/geo-gateway.yaml
     payloads: {}
     terminals:
       access_ka:
@@ -70,17 +66,12 @@ site:
           boresight:
             mode: local_vertical
     interfaces:
-      lo0:
-        ipv4: 10.255.0.200/32
-        ipv6: fd00:da7a:ffff::c8/128
-      terr0:
-        ipv4: 172.16.17.2/24
-        ipv6: fd00:da7a:11::2/64
+      terr0: lan0
     originated_prefixes:
       ipv4:
-      - 172.16.17.0/24
+      - lan0
       ipv6:
-      - fd00:da7a:11::/64
+      - lan0
     tags:
     - geo
   frame:

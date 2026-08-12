@@ -11,7 +11,8 @@ import pytest
 import yaml
 from nodalarc.catalog_closure import FilesystemCatalogReadView
 from nodalarc.catalog_paths import CatalogRoots
-from nodalarc.catalog_upload import CatalogUpload, encode_catalog_upload, sha256_digest
+from nodalarc.catalog_upload import CatalogUpload, encode_catalog_upload
+from nodalarc.content_identity import sha256_digest
 from nodalarc.db.queries import (
     insert_convergence_result,
     insert_link_up,
@@ -518,22 +519,35 @@ class TestSessionContextNetworkIdentity:
             source_id="test-session",
         )
 
+        resolution = resolve_session_with_assets(
+            yaml.safe_load(session_path.read_text()),
+            source_context=SourceContext(origin="test.vs-api"),
+        )
+        node = next(
+            n for n in resolution.resolved.nodes if n.node_id == "earth-us-co-denver-gw1"
+        )
+        assert node.interfaces is not None
+        lo0_ipv4 = node.interfaces.lo0.ipv4
+        terr0 = node.interfaces.ethernet["terr0"]
+        import ipaddress as _ip
+
+        site_prefix = str(_ip.ip_interface(terr0.ipv4).network)
         addresses = ctx._node_addresses_by_id["earth-us-co-denver-gw1"]
         assert any(
-            a.purpose == "router_loopback" and a.family == "ipv4" and a.address == "10.255.0.104/32"
+            a.purpose == "router_loopback" and a.family == "ipv4" and a.address == lo0_ipv4
             for a in addresses
         )
         assert any(
-            a.purpose == "site_prefix" and a.family == "ipv4" and a.address == "172.16.99.0/24"
+            a.purpose == "site_prefix" and a.family == "ipv4" and a.address == site_prefix
             for a in addresses
         )
         assert any(
             a.purpose == "site_interface"
-            and a.address == "172.16.99.1/24"
+            and a.address == terr0.ipv4
             and a.interface == "terr0"
             for a in addresses
         )
-        assert ctx._node_primary_prefix_by_id["earth-us-co-denver-gw1"] == "172.16.99.0/24"
+        assert ctx._node_primary_prefix_by_id["earth-us-co-denver-gw1"] == site_prefix
 
     def test_resolved_static_ground_nodes_survive_partial_ome_ephemeris(self):
         ctx = SessionContext(
@@ -552,9 +566,23 @@ class TestSessionContextNetworkIdentity:
         assert inactive.node_type == "ground_station"
         assert inactive.lat_deg == pytest.approx(39.7392)
         assert inactive.lon_deg == pytest.approx(-104.9903)
-        assert inactive.prefix == "172.16.99.0/24"
+        resolution = resolve_session_with_assets(
+            yaml.safe_load(Path("catalog/nodalarc/sessions/earth-leo-simple.yaml").read_text()),
+            source_context=SourceContext(origin="test.vs-api"),
+        )
+        resolved_inactive = next(
+            n for n in resolution.resolved.nodes if n.node_id == inactive_id
+        )
+        assert resolved_inactive.interfaces is not None
+        import ipaddress as _ip
+
+        expected_prefix = str(
+            _ip.ip_interface(resolved_inactive.interfaces.ethernet["terr0"].ipv4).network
+        )
+        assert inactive.prefix == expected_prefix
         assert any(
-            address.purpose == "router_loopback" and address.address == "10.255.0.105/32"
+            address.purpose == "router_loopback"
+            and address.address == resolved_inactive.interfaces.lo0.ipv4
             for address in inactive.addresses
         )
 

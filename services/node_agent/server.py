@@ -22,8 +22,56 @@ from node_agent.handlers import (
     handle_kernel_inventory,
     handle_set_latency,
 )
+from node_agent.pid_discovery import NamespaceHandle
 
 log = logging.getLogger(__name__)
+
+
+class DispatchGate:
+    """Serialize runtime dispatch against host rewiring.
+
+    The rewire transition owns a strict ordering: stop and drain dispatch,
+    publish non-ready status, withdraw handles, rebuild, install handles,
+    publish ready, resume. This gate provides the first and last steps:
+    ``try_enter``/``leave`` bracket every dispatched request, and ``drain``
+    blocks new requests then waits for in-flight ones to finish, so a batch
+    can never observe handles or kernel state mid-teardown.
+    """
+
+    def __init__(self) -> None:
+        import threading
+
+        self._lock = threading.Lock()
+        self._draining = False
+        self._inflight = 0
+        self._idle = threading.Event()
+        self._idle.set()
+
+    def try_enter(self) -> bool:
+        with self._lock:
+            if self._draining:
+                return False
+            self._inflight += 1
+            self._idle.clear()
+            return True
+
+    def leave(self) -> None:
+        with self._lock:
+            self._inflight -= 1
+            if self._inflight <= 0:
+                self._idle.set()
+
+    def drain(self, timeout_seconds: float = 30.0) -> bool:
+        """Refuse new dispatch and wait for in-flight work. True if idle."""
+        with self._lock:
+            self._draining = True
+            if self._inflight <= 0:
+                self._idle.set()
+        return self._idle.wait(timeout_seconds)
+
+    def resume(self) -> None:
+        with self._lock:
+            self._draining = False
 
 
 def _publish_transport_event(
@@ -90,14 +138,27 @@ def _kernel_inventory_failure(code: int, message: str, *, dirty_kernel: bool = F
     ).SerializeToString()
 
 
-def dispatch(data: bytes, pid_map: dict[str, int], fence: RuntimeFence) -> bytes:
+_REFUSAL_BUILDERS = {
+    b"BatchLinkDown": _batch_down_failure,
+    b"BatchLinkUp": _batch_up_failure,
+    b"SetLatency": _set_latency_failure,
+    b"KernelInventory": _kernel_inventory_failure,
+}
+
+
+def dispatch(
+    data: bytes,
+    handles: dict[str, NamespaceHandle],
+    fence: RuntimeFence,
+    gate: DispatchGate,
+) -> bytes:
     """Dispatch a NATS request to the appropriate handler.
 
     Message format: type\0payload (null-separated ASCII type + protobuf body).
     Runs in a thread pool executor — handlers use concurrent.futures
     internally for batch parallelism.
 
-    pid_map must be populated before dispatch is called (wiring gate).
+    handles must be populated before dispatch is called (wiring gate).
     """
     sep = data.find(b"\x00")
     if sep < 0:
@@ -112,11 +173,43 @@ def dispatch(data: bytes, pid_map: dict[str, int], fence: RuntimeFence) -> bytes
     msg_type = data[:sep]
     payload = data[sep + 1 :]
 
+    builder = _REFUSAL_BUILDERS.get(msg_type)
+    if builder is not None:
+        # The refusal must decode as the operation the caller sent: each
+        # client parses its operation-specific response type.
+        if not gate.try_enter():
+            return builder(
+                node_agent_pb2.NODE_AGENT_STALE_GENERATION,
+                "host rewiring in progress — dispatch refused until ready proof returns",
+            )
+        try:
+            return _dispatch_operation(msg_type, payload, handles, fence)
+        finally:
+            gate.leave()
+
+    log.warning("Unknown message type: %s", msg_type)
+    _publish_transport_event(
+        code="COMMAND_REJECTED",
+        message=f"Unknown Node Agent command type: {msg_type.decode(errors='replace')}",
+        fence=fence,
+    )
+    return _failure(
+        node_agent_pb2.NODE_AGENT_UNKNOWN_MESSAGE_TYPE,
+        f"unknown message type: {msg_type.decode(errors='replace')}",
+    )
+
+
+def _dispatch_operation(
+    msg_type: bytes,
+    payload: bytes,
+    handles: dict[str, NamespaceHandle],
+    fence: RuntimeFence,
+) -> bytes:
     if msg_type == b"BatchLinkDown":
         try:
             request = node_agent_pb2.BatchLinkDownRequest()
             request.ParseFromString(payload)
-            response = handle_batch_link_down(request, context=None, pid_map=pid_map, fence=fence)
+            response = handle_batch_link_down(request, context=None, handles=handles, fence=fence)
             return response.SerializeToString()
         except DecodeError as exc:
             log.warning("Bad protobuf for %s: %s", msg_type, exc)
@@ -146,7 +239,7 @@ def dispatch(data: bytes, pid_map: dict[str, int], fence: RuntimeFence) -> bytes
         try:
             request = node_agent_pb2.BatchLinkUpRequest()
             request.ParseFromString(payload)
-            response = handle_batch_link_up(request, context=None, pid_map=pid_map, fence=fence)
+            response = handle_batch_link_up(request, context=None, handles=handles, fence=fence)
             return response.SerializeToString()
         except DecodeError as exc:
             log.warning("Bad protobuf for %s: %s", msg_type, exc)
@@ -174,7 +267,7 @@ def dispatch(data: bytes, pid_map: dict[str, int], fence: RuntimeFence) -> bytes
         try:
             request = node_agent_pb2.SetLatencyRequest()
             request.ParseFromString(payload)
-            response = handle_set_latency(request, context=None, pid_map=pid_map, fence=fence)
+            response = handle_set_latency(request, context=None, handles=handles, fence=fence)
             return response.SerializeToString()
         except DecodeError as exc:
             log.warning("Bad protobuf for %s: %s", msg_type, exc)
@@ -204,7 +297,7 @@ def dispatch(data: bytes, pid_map: dict[str, int], fence: RuntimeFence) -> bytes
         try:
             request = node_agent_pb2.KernelInventoryRequest()
             request.ParseFromString(payload)
-            response = handle_kernel_inventory(request, context=None, pid_map=pid_map, fence=fence)
+            response = handle_kernel_inventory(request, context=None, handles=handles, fence=fence)
             return response.SerializeToString()
         except DecodeError as exc:
             log.warning("Bad protobuf for %s: %s", msg_type, exc)
@@ -230,13 +323,4 @@ def dispatch(data: bytes, pid_map: dict[str, int], fence: RuntimeFence) -> bytes
                 dirty_kernel=True,
             )
 
-    log.warning("Unknown message type: %s", msg_type)
-    _publish_transport_event(
-        code="COMMAND_REJECTED",
-        message=f"Unknown Node Agent command type: {msg_type.decode(errors='replace')}",
-        fence=fence,
-    )
-    return _failure(
-        node_agent_pb2.NODE_AGENT_UNKNOWN_MESSAGE_TYPE,
-        f"unknown message type: {msg_type.decode(errors='replace')}",
-    )
+    raise AssertionError(f"unreachable operation type: {msg_type!r}")

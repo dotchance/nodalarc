@@ -41,7 +41,11 @@ def _node_status(
     return NodeWiringStatus(
         node_id=node_id,
         session_id=session_id,
+        session_run_id="run-gate-0001",
         wiring_generation=wiring_generation,
+        pod_uid=f"pod-{node_id}",
+        sandbox_id=f"sb-{node_id}",
+        netns_id="4026532100",
         status=status,
         phases=[
             WiringPhaseResult(phase=phase, status=overrides.get(phase, "ready"))
@@ -106,11 +110,14 @@ class _ManifestK8s:
 def _manifest_configmap() -> SimpleNamespace:
     manifest = {
         "session_id": SESSION_ID,
+        "session_run_id": "run-gate-0001",
+        "owner_uid": "owner-uid-1",
         "wiring_generation": WIRING_GENERATION,
         "required_phases": list(REQUIRED_WIRING_PHASES),
         "nodes": {
             "sat-a": {
                 "node_type": "satellite",
+                "host": "node02",
                 "sysctls": {"net.ipv4.ip_forward": "1"},
                 "isl_interfaces": [],
                 "gnd_interfaces": [],
@@ -275,11 +282,14 @@ def _substrate_manifest(required_pairs: list[RequiredSubstratePair]):
     return WiringManifest.model_validate(
         {
             "session_id": SESSION_ID,
+            "session_run_id": "run-gate-0001",
+            "owner_uid": "owner-uid-1",
             "wiring_generation": WIRING_GENERATION,
             "required_phases": list(REQUIRED_WIRING_PHASES),
             "nodes": {
                 "sat-a": {
                     "node_type": "satellite",
+                    "host": "node02",
                     "sysctls": {"net.ipv4.ip_forward": "1"},
                     "isl_interfaces": [],
                     "gnd_interfaces": [],

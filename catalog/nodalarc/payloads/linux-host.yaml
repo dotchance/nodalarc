@@ -1,0 +1,7 @@
+payload:
+  id: linux-host
+  display_name: Plain Linux host payload
+  forwarding: host
+  profile: nodalarc:profiles/linux-host.yaml
+  notes: A plain application host with no routing daemon, carried on a LAN
+    or bus segment by its mounting node.

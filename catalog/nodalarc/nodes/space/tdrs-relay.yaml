@@ -2,6 +2,7 @@ node:
   id: tdrs-relay
   display_name: TDRS relay satellite node
   forwarding: routed
+  profile: nodalarc:profiles/frr-router.yaml
   ethernet: []
   terminals:
   - id: s_ma

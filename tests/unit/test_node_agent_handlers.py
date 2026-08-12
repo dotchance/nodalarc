@@ -24,11 +24,36 @@ from node_agent.handlers import (
     handle_set_latency,
 )
 
-# All tests pass pid_map={} — an initialized but empty map.
+# All tests pass handles={} — an initialized but empty map.
 # This represents a node where wiring completed but no session pods
-# are scheduled. pid_map=None means wiring never happened and is
+# are scheduled. handles=None means wiring never happened and is
 # rejected by the handler (ValueError).
-EMPTY_PID_MAP: dict[str, int] = {}
+EMPTY_PID_MAP: dict = {}
+
+
+@pytest.fixture(autouse=True)
+def _handles_verify_live(monkeypatch):
+    """Handler tests exercise handler logic; handle liveness has its own tests."""
+    monkeypatch.setattr("node_agent.handlers.verify_handle", lambda handle: True)
+
+
+def _handles(pids: dict[str, int]) -> dict:
+    """Wrap raw PIDs in validated namespace handles for handler calls."""
+    from node_agent.pid_discovery import NamespaceHandle, netns_identity
+
+    wrapped = {}
+    for node_id, pid in pids.items():
+        wrapped[node_id] = NamespaceHandle(
+            node_id=node_id,
+            pod_uid=f"pod-{node_id}",
+            sandbox_id=f"sb-{node_id}",
+            sandbox_attempt=0,
+            pid=pid,
+            netns_id=netns_identity(pid) or "0",
+        )
+    return wrapped
+
+
 FENCE = RuntimeFence(session_id="demo", wiring_generation="sha256:" + "a" * 64)
 
 
@@ -67,13 +92,13 @@ class TestCommandEvents:
 class TestBatchLinkDown:
     def test_cross_node_empty_batch_succeeds(self):
         req = node_agent_pb2.BatchLinkDownRequest(envelope=_env("BatchLinkDown", "test-cross-down"))
-        resp = handle_batch_link_down(req, pid_map=EMPTY_PID_MAP, fence=FENCE)
+        resp = handle_batch_link_down(req, handles=EMPTY_PID_MAP, fence=FENCE)
         assert resp.success is True
         assert resp.interfaces_downed == 0
 
     def test_empty_batch_succeeds(self):
         req = node_agent_pb2.BatchLinkDownRequest(envelope=_env("BatchLinkDown", "test-empty-down"))
-        resp = handle_batch_link_down(req, pid_map=EMPTY_PID_MAP, fence=FENCE)
+        resp = handle_batch_link_down(req, handles=EMPTY_PID_MAP, fence=FENCE)
         assert resp.success is True
         assert resp.interfaces_downed == 0
         assert resp.error_message == ""
@@ -92,7 +117,7 @@ class TestBatchLinkDown:
                 ),
             ],
         )
-        resp = handle_batch_link_down(req, pid_map=EMPTY_PID_MAP, fence=FENCE)
+        resp = handle_batch_link_down(req, handles=EMPTY_PID_MAP, fence=FENCE)
         assert resp.success is False
         assert resp.interfaces_downed == 0
         assert resp.error_message != ""
@@ -123,7 +148,7 @@ class TestBatchLinkDown:
                 ),
             ],
         )
-        resp = handle_batch_link_down(req, pid_map=EMPTY_PID_MAP, fence=FENCE)
+        resp = handle_batch_link_down(req, handles=EMPTY_PID_MAP, fence=FENCE)
         assert resp.success is False
         assert resp.interfaces_downed == 0
         assert len(resp.interface_results) == 2
@@ -132,8 +157,8 @@ class TestBatchLinkDown:
 
     def test_none_pid_map_raises(self):
         req = node_agent_pb2.BatchLinkDownRequest(envelope=_env("BatchLinkDown", "test-none"))
-        with pytest.raises(ValueError, match="pid_map is None"):
-            handle_batch_link_down(req, pid_map=None, fence=FENCE)
+        with pytest.raises(ValueError, match="handles is None"):
+            handle_batch_link_down(req, handles=None, fence=FENCE)
 
     def test_cross_node_ground_cleanup_failure_marks_dirty(self, monkeypatch):
         from node_agent import vxlan
@@ -160,7 +185,7 @@ class TestBatchLinkDown:
             ],
         )
 
-        resp = handle_batch_link_down(req, pid_map={"sat-P00S00": 1234}, fence=FENCE)
+        resp = handle_batch_link_down(req, handles=_handles({"sat-P00S00": 1234}), fence=FENCE)
 
         assert resp.success is False
         assert resp.dirty_kernel is True
@@ -171,13 +196,13 @@ class TestBatchLinkDown:
 class TestBatchLinkUp:
     def test_cross_node_empty_batch_succeeds(self):
         req = node_agent_pb2.BatchLinkUpRequest(envelope=_env("BatchLinkUp", "test-cross-up"))
-        resp = handle_batch_link_up(req, pid_map=EMPTY_PID_MAP, fence=FENCE)
+        resp = handle_batch_link_up(req, handles=EMPTY_PID_MAP, fence=FENCE)
         assert resp.success is True
         assert resp.interfaces_upped == 0
 
     def test_empty_batch_succeeds(self):
         req = node_agent_pb2.BatchLinkUpRequest(envelope=_env("BatchLinkUp", "test-empty-up"))
-        resp = handle_batch_link_up(req, pid_map=EMPTY_PID_MAP, fence=FENCE)
+        resp = handle_batch_link_up(req, handles=EMPTY_PID_MAP, fence=FENCE)
         assert resp.success is True
         assert resp.interfaces_upped == 0
 
@@ -197,7 +222,7 @@ class TestBatchLinkUp:
                 ),
             ],
         )
-        resp = handle_batch_link_up(req, pid_map=EMPTY_PID_MAP, fence=FENCE)
+        resp = handle_batch_link_up(req, handles=EMPTY_PID_MAP, fence=FENCE)
         assert resp.success is False
         assert resp.error_message != ""
         assert len(resp.interface_results) == 1
@@ -207,8 +232,8 @@ class TestBatchLinkUp:
 
     def test_none_pid_map_raises(self):
         req = node_agent_pb2.BatchLinkUpRequest(envelope=_env("BatchLinkUp", "test-none"))
-        with pytest.raises(ValueError, match="pid_map is None"):
-            handle_batch_link_up(req, pid_map=None, fence=FENCE)
+        with pytest.raises(ValueError, match="handles is None"):
+            handle_batch_link_up(req, handles=None, fence=FENCE)
 
     def test_cross_node_ground_applies_and_verifies_local_shaping(self, monkeypatch):
         from node_agent import handlers, kernel_verifier, namespace_ops, substrate_monitor, vxlan
@@ -274,7 +299,7 @@ class TestBatchLinkUp:
             ],
         )
 
-        resp = handle_batch_link_up(req, pid_map={"sat-P00S00": 1234}, fence=FENCE)
+        resp = handle_batch_link_up(req, handles=_handles({"sat-P00S00": 1234}), fence=FENCE)
 
         assert resp.success is True
         assert resp.interface_results[0].verified is True
@@ -326,7 +351,7 @@ class TestBatchLinkUp:
             ],
         )
 
-        resp = handle_batch_link_up(req, pid_map={"sat-P00S00": 1234}, fence=FENCE)
+        resp = handle_batch_link_up(req, handles=_handles({"sat-P00S00": 1234}), fence=FENCE)
 
         assert resp.success is False
         assert resp.dirty_kernel is False
@@ -387,7 +412,7 @@ class TestKernelInventory:
         entry.link_type = node_agent_pb2.LINK_TYPE_ISL
 
         resp = handle_kernel_inventory(
-            self._request(entry), pid_map={"sat-P00S00": 1234}, fence=FENCE
+            self._request(entry), handles=_handles({"sat-P00S00": 1234}), fence=FENCE
         )
 
         assert resp.success is False
@@ -401,7 +426,7 @@ class TestKernelInventory:
         entry.vni = 0
 
         resp = handle_kernel_inventory(
-            self._request(entry), pid_map={"sat-P00S00": 1234}, fence=FENCE
+            self._request(entry), handles=_handles({"sat-P00S00": 1234}), fence=FENCE
         )
 
         assert resp.success is False
@@ -413,7 +438,7 @@ class TestKernelInventory:
         monkeypatch.setattr(ops_events, "publish", lambda **_kwargs: None)
         req = self._request(self._cross_node_entry(remote_node_ip=""))
 
-        resp = handle_kernel_inventory(req, pid_map={"sat-P00S00": 1234}, fence=FENCE)
+        resp = handle_kernel_inventory(req, handles=_handles({"sat-P00S00": 1234}), fence=FENCE)
 
         assert resp.success is False
         assert resp.error_code == node_agent_pb2.NODE_AGENT_INVALID_FIELD
@@ -480,7 +505,7 @@ class TestKernelInventory:
 
         resp = handle_kernel_inventory(
             self._request(self._local_entry()),
-            pid_map={"gs-den": 2222, "sat-P00S00": 1234},
+            handles=_handles({"gs-den": 2222, "sat-P00S00": 1234}),
             fence=FENCE,
         )
 
@@ -518,7 +543,7 @@ class TestKernelInventory:
 
         resp = handle_kernel_inventory(
             self._request(self._cross_node_entry()),
-            pid_map={"sat-P00S00": 1234},
+            handles=_handles({"sat-P00S00": 1234}),
             fence=FENCE,
         )
 
@@ -550,7 +575,7 @@ class TestKernelInventory:
 
         resp = handle_kernel_inventory(
             self._request(self._cross_node_entry(expected_admin_up=False)),
-            pid_map={"sat-P00S00": 1234},
+            handles=_handles({"sat-P00S00": 1234}),
             fence=FENCE,
         )
 
@@ -581,7 +606,7 @@ class TestKernelInventory:
 
         resp = handle_kernel_inventory(
             self._request(self._cross_node_entry()),
-            pid_map={"sat-P00S00": 1234},
+            handles=_handles({"sat-P00S00": 1234}),
             fence=FENCE,
         )
 
@@ -598,7 +623,7 @@ class TestSetLatency:
         monkeypatch.setattr(ops_events, "publish", lambda **kwargs: published.append(kwargs))
 
         req = node_agent_pb2.SetLatencyRequest(envelope=_env("SetLatency", "test-empty-lat"))
-        resp = handle_set_latency(req, pid_map=EMPTY_PID_MAP, fence=FENCE)
+        resp = handle_set_latency(req, handles=EMPTY_PID_MAP, fence=FENCE)
 
         assert resp.success is True
         assert resp.entries_updated == 0
@@ -616,7 +641,7 @@ class TestSetLatency:
                 ),
             ],
         )
-        resp = handle_set_latency(req, pid_map=EMPTY_PID_MAP, fence=FENCE)
+        resp = handle_set_latency(req, handles=EMPTY_PID_MAP, fence=FENCE)
         assert resp.success is False
         assert resp.entries_updated == 0
 
@@ -635,10 +660,30 @@ class TestSetLatency:
                 ),
             ],
         )
-        resp = handle_set_latency(req, pid_map=EMPTY_PID_MAP, fence=FENCE)
+        resp = handle_set_latency(req, handles=EMPTY_PID_MAP, fence=FENCE)
 
         assert resp.success is False
         assert len(published) == 1
         assert published[0]["level"] in {"warning", "critical"}
         assert published[0]["code"] in {"COMMAND_FAILED", "DIRTY_KERNEL"}
         assert published[0]["details"]["command_type"] == "SetLatency"
+
+
+def test_stale_namespace_handle_fails_closed(monkeypatch):
+    """A handle whose namespace died since wiring must refuse the mutation."""
+    monkeypatch.setattr("node_agent.handlers.verify_handle", lambda handle: False)
+    req = node_agent_pb2.SetLatencyRequest(
+        envelope=_env("SetLatency", "test-stale-handle"),
+        entries=[
+            node_agent_pb2.LatencyEntry(
+                node_id="sat-P00S00",
+                interface_name="isl0",
+                latency_ms=5.0,
+                link_type=node_agent_pb2.LINK_TYPE_ISL,
+            ),
+        ],
+    )
+    resp = handle_set_latency(req, handles=_handles({"sat-P00S00": 1234}), fence=FENCE)
+    assert resp.success is False
+    assert resp.entries_updated == 0
+    assert "rewire required" in resp.error_message

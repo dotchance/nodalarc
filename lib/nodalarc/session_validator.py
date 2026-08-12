@@ -231,7 +231,7 @@ def _site_lan_neighbors_by_node(resolved: ResolvedSession) -> dict[str, set[str]
             and node.forwarding == "routed"
             and node.namespace is not None
             and node.interfaces is not None
-            and node.interfaces.terr0 is not None
+            and node.interfaces.ethernet
         ):
             members_by_site.setdefault(node.namespace, []).append(node.node_id)
     neighbors: dict[str, set[str]] = {}

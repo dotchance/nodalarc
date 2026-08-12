@@ -409,12 +409,13 @@ switch_payload="$(
 import json
 import sys
 
-print(json.dumps({
+payload = {
     "source": {"kind": "catalog", "session_ref": sys.argv[1]},
     "expected_source_revision": sys.argv[2],
     "expected_document_digest": sys.argv[3],
     "expected_dependency_digest": sys.argv[4],
-}, separators=(",", ":")))
+}
+print(json.dumps(payload, separators=(",", ":")))
 ' "$session_ref" "$source_revision" "$document_digest" "$dependency_digest"
 )"
 echo "[session] Requesting a guarded session switch through VS-API..."

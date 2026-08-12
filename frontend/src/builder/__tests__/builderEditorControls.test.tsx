@@ -71,15 +71,12 @@ function draftSite(nodeRef = "nodalarc:nodes/ground/gw.yaml"): DraftSiteObject {
     lat_deg: 0,
     lon_deg: 0,
     alt_m: 0,
-    lan_ipv4: "172.20.0.0/24",
     tags: [],
     nodes: [{
       node_id: "gw1",
-      model_ref: nodeRef,
+      node_ref: nodeRef,
       installed: {},
       boresights: {},
-      lo0_ipv4: "10.200.0.1/32",
-      terr0_ipv4: "172.20.0.1/24",
     }],
   };
 }
@@ -856,7 +853,7 @@ describe("the anatomy guide answers what-next in any order", () => {
     const ground = newDraftGroundSet("nodalarc:nodes/ground/gw.yaml", {});
     ground.members = [
       testGroundMember(ground, "Denver", 39.7, -104.9),
-      testGroundMember(ground, "Ames", 42, -93, 1),
+      testGroundMember(ground, "Ames", 42, -93),
     ];
     ws.ground.push(ground);
     // resolvedSiteCount null → the draft member count (2) with the qualifier.

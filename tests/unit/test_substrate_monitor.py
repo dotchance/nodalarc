@@ -98,11 +98,14 @@ def _manifest(
     return WiringManifest.model_validate(
         {
             "session_id": session_id,
+            "session_run_id": "run-mon-0001",
+            "owner_uid": "owner-uid-1",
             "wiring_generation": wiring_generation,
             "required_phases": list(REQUIRED_WIRING_PHASES),
             "nodes": {
                 "sat-a": {
                     "node_type": "satellite",
+                    "host": "node02",
                     "plane": 0,
                     "slot": 0,
                     "sysctls": {"net.ipv6.conf.all.forwarding": "1"},

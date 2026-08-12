@@ -15,6 +15,7 @@ CatalogFamily = Literal[
     "bodies",
     "terminals",
     "payloads",
+    "profiles",
     "orbits",
     "nodes",
     "sites",
@@ -155,17 +156,20 @@ class CatalogRef(str):
         canonical = f"{parsed.namespace}:{parsed.relative_path.as_posix()}"
         return super().__new__(cls, canonical)
 
+    def _parsed(self) -> ParsedCatalogReference:
+        return parse_catalog_reference(self, expected_families=type(self).allowed_families)
+
     @property
     def namespace(self) -> CatalogNamespace:
-        return parse_catalog_reference(self).namespace
+        return self._parsed().namespace
 
     @property
     def family(self) -> str | None:
-        return parse_catalog_reference(self).family
+        return self._parsed().family
 
     @property
     def relative_path(self) -> Path:
-        return parse_catalog_reference(self).relative_path
+        return self._parsed().relative_path
 
     @classmethod
     def __get_pydantic_core_schema__(
@@ -203,6 +207,10 @@ class TerminalRef(CatalogRef):
 
 class PayloadRef(CatalogRef):
     allowed_families = frozenset({"payloads"})
+
+
+class ProfileRef(CatalogRef):
+    allowed_families = frozenset({"profiles"})
 
 
 class OrbitRef(CatalogRef):

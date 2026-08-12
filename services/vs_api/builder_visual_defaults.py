@@ -23,10 +23,18 @@ DEFAULT_SCHEDULING_PRESET: BuilderVisualSchedulingPreset = "leo-fast-handover"
 DEFAULT_MOUNT_ROLE: MountRole = "access"
 DEFAULT_TERMINAL_MOUNT_COUNT = 1
 DEFAULT_BODY_REF = BodyRef("nodalarc:bodies/earth.yaml")
+# Authored defaults for visually composed node definitions, keyed by
+# forwarding class. The statement lands in the saved document where it is
+# visible and forkable; the platform itself never assumes a workload.
+DEFAULT_NODE_PROFILES: dict[str, str] = {
+    "routed": "nodalarc:profiles/frr-router.yaml",
+    "host": "nodalarc:profiles/linux-host.yaml",
+}
 DEFAULT_COMPONENT_IDS: dict[str, str] = {
     "bodies": "my-body",
     "terminals": "my-terminal",
     "payloads": "my-payload",
+    "profiles": "my-profile",
     "orbits": "my-orbit",
     "nodes": "my-node",
     "sites": "my-site",

@@ -2,9 +2,11 @@
 # Licensed under the Apache License, Version 2.0. See LICENSE file.
 """Site LAN wiring: per-host bridge, member veths, VXLAN head-end replication.
 
-A physical site's LAN is static, always-up terrestrial infrastructure created
+An Ethernet segment (a site LAN or a carried bus) is static, always-up
+infrastructure created
 during session wiring — never Scheduler-dispatched, never a visibility link.
-Every member pod's terr0 is a veth port on the site's bridge; hosts that share
+Every member pod's segment interface is a veth port on the segment bridge;
+hosts that share
 a site are joined by a VXLAN port with head-end replication so IGP multicast
 (hellos, DIS election) crosses hosts. Single-member sites get a one-port
 bridge: one shared path, no mode split, and the bridge is also the future
@@ -19,7 +21,7 @@ Kernel layout per host, per site:
                          on, all-zeros FDB entry per peer host (head-end
                          replication for BUM traffic)
     Pod namespace (member i):
-      terr0              veth pod-end, carries the resolved terr0 addresses
+      <interface>        veth pod-end, carries the member's allocated addresses
 
 MTU is uniform at (platform veth MTU - VXLAN overhead) regardless of
 placement: an L2 segment whose MTU depended on which hosts the scheduler
@@ -133,7 +135,13 @@ class MemberPort:
     pid: int
     host_ifname: str
     pod_ifname: str
+    # The kernel interface name inside the member's environment.
+    interface: str
     addresses: tuple[str, ...]
+    # Host-attachment members only: the default-route target installed in
+    # the pod netns after addressing. None on routed members, whose
+    # forwarding system owns every routing decision.
+    gateway: str | None = None
 
 
 @dataclass(frozen=True)
@@ -191,16 +199,25 @@ def plan_site_lan(
                 f"site LAN {site_id!r} member {node_id!r} is placed on this host "
                 "but has no local pod"
             )
-        addresses = tuple(nodes.get(node_id, {}).get("terrestrial", {}).get("addresses", ()))
+        addresses = tuple(member.get("addresses", ()))
         if not addresses:
-            raise RuntimeError(f"site LAN {site_id!r} member {node_id!r} has no terr0 addresses")
+            raise RuntimeError(
+                f"segment {site_id!r} member {node_id!r} declares no addresses"
+            )
+        interface = member.get("interface")
+        if not interface:
+            raise RuntimeError(
+                f"segment {site_id!r} member {node_id!r} declares no interface name"
+            )
         local_ports.append(
             MemberPort(
                 node_id=node_id,
                 pid=pid,
                 host_ifname=site_lan_member_host_ifname(vni, index),
                 pod_ifname=site_lan_member_pod_ifname(vni, index),
+                interface=interface,
                 addresses=addresses,
+                gateway=member.get("gateway"),
             )
         )
 
@@ -341,12 +358,12 @@ def _configure_member_pod(port: MemberPort) -> None:
                 f"site LAN pod interface {port.pod_ifname} missing in ns of {port.node_id}"
             )
         idx = links[0]
-        # A stale terr0 from a prior partial attempt blocks the rename;
+        # A stale interface from a prior partial attempt blocks the rename;
         # remove it — its replacement is the freshly bridged veth.
-        stale = ns_ipr.link_lookup(ifname="terr0")
+        stale = ns_ipr.link_lookup(ifname=port.interface)
         if stale and stale[0] != idx:
             ns_ipr.link("del", index=stale[0])
-        ns_ipr.link("set", index=idx, ifname="terr0")
+        ns_ipr.link("set", index=idx, ifname=port.interface)
         for addr in port.addresses:
             ip_addr, prefixlen = addr.split("/")
             try:
@@ -359,5 +376,23 @@ def _configure_member_pod(port: MemberPort) -> None:
                     continue
                 raise
         ns_ipr.link("set", index=idx, state="up")
+        if port.gateway is not None:
+            # Host attachment: the platform installs the default route the
+            # way DHCP would — via the site's routed gateway, on-link over
+            # terr0. Verified by readback: an unproven route is a wiring
+            # failure, never a silent absence.
+            ns_ipr.route("replace", dst="default", gateway=port.gateway, oif=idx)
+            routes = ns_ipr.route("get", dst="8.8.8.8")
+            via = {
+                attr[1]
+                for route in routes
+                for attr in route.get("attrs", ())
+                if attr[0] == "RTA_GATEWAY"
+            }
+            if port.gateway not in via:
+                raise RuntimeError(
+                    f"host default route via {port.gateway} on {port.node_id} "
+                    "did not verify after install"
+                )
 
     _in_namespace(port.pid, _op)

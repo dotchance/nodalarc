@@ -9,6 +9,8 @@ from nodalarc.catalog_refs import CatalogRef
 from nodalarc.catalog_repository import CatalogScope
 from nodalarc.filesystem_catalog_repository import FilesystemCatalogRepository
 from nodalarc.models.builder_api import BuilderDraftEnvelope, BuilderSessionSaveRequest
+from nodalarc.models.session_sources import CatalogSessionSwitchRequest
+from pydantic import ValidationError
 from vs_api.builder_compiler import canonicalize_persisted_configuration
 from vs_api.builder_session_service import save_builder_session
 from vs_api.catalog_context import CatalogContext
@@ -232,6 +234,10 @@ def test_persisted_upload_builds_exact_cr_and_cleanup_deletes_unselected_group(
     store = Store()
     persisted = persist_catalog_session_upload(prepared, store)  # type: ignore[arg-type]
     body = constellation_spec_body(persisted, namespace="nodalarc")
+
+    # The CR spec is exactly the session and its upload; workload facts are
+    # session truth, never CR fields.
+    assert set(body["spec"]) == {"sessionYaml", "catalogUpload"}
 
     assert body["spec"]["sessionYaml"].encode() == saved.session.canonical_yaml.encode()
     assert body["spec"]["catalogUpload"] == persisted.receipt.selection.model_dump(mode="json")

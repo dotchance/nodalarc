@@ -3,14 +3,14 @@ site:
   display_name: Fucino GEO gateway
   verified:
     source: nodalarc_catalog
-    notes: NodalArc GEO gateway demo site using public location coordinates and explicit emulation addressing.
-  lan:
-    ipv4: 172.16.46.0/24
-    ipv6: fd00:da7a:2e::/64
+    notes: NodalArc GEO gateway demo site using public location coordinates and explicit
+      emulation addressing.
+  ethernet:
+  - id: lan0
   nodes:
   - id: gw1
     display_name: GEO Gateway
-    model: nodalarc:nodes/ground/geo-gateway.yaml
+    node: nodalarc:nodes/ground/geo-gateway.yaml
     payloads: {}
     terminals:
       access_ka:
@@ -37,19 +37,14 @@ site:
           boresight:
             mode: local_vertical
     interfaces:
-      lo0:
-        ipv4: 10.255.0.49/32
-        ipv6: fd00:da7a:ffff::31/128
-      terr0:
-        ipv4: 172.16.46.1/24
-        ipv6: fd00:da7a:2e::1/64
+      terr0: lan0
     tags:
     - geo
     originated_prefixes:
       ipv4:
-      - 172.16.46.0/24
+      - lan0
       ipv6:
-      - fd00:da7a:2e::/64
+      - lan0
   frame:
     body_fixed:
       body: nodalarc:bodies/earth.yaml

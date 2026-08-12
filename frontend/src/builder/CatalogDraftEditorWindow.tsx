@@ -593,10 +593,10 @@ function SiteForm({ document, wrapper, setValue, addNode }: SiteFormProps) {
           >
             <SelectField
               stack
-              label="model"
-              ariaLabel={`${nodeLabel} model`}
-              value={text(node.model)}
-              onChange={(value) => replaceNode(index, (current) => { current.model = value; })}
+              label="node"
+              ariaLabel={`${nodeLabel} node`}
+              value={text(node.node)}
+              onChange={(value) => replaceNode(index, (current) => { current.node = value; })}
               options={nodes.entries.map((entry) => ({
                 value: entry.ref,
                 label: entry.display_name ?? entry.ref,

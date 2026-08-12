@@ -1,0 +1,7 @@
+payload:
+  id: dtn-host
+  display_name: DTN store-and-forward host
+  forwarding: host
+  profile: nodalarc:profiles/ud3tn-relay.yaml
+  notes: A carried host environment running a uD3TN bundle node. Attaches
+    to whichever segment its mount names; addresses arrive from allocation.

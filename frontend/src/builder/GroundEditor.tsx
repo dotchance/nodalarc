@@ -245,7 +245,7 @@ export function GroundEditor({
                     {member.kind === "ref"
                       ? (member.summary ?? member.ref)
                       : member.site
-                        ? `authored · lan ${member.site.lan_ipv4} · ${
+                        ? `authored · ${
                             member.site.nodes.length === 1
                               ? "1 node"
                               : `${member.site.nodes.length} nodes`
@@ -332,7 +332,7 @@ export function GroundEditor({
         onToggle={() => toggle("stamp")}
         summary={
           <>
-            {stampLabel} · lan {draft.stamp.lan_base}.x
+            {stampLabel}
           </>
         }
       >
@@ -350,7 +350,7 @@ export function GroundEditor({
             <SelectField
               stack
               label="node model"
-              ariaLabel="Stamp node model"
+              ariaLabel="Stamp node"
               value={draft.stamp.node_ref}
               onChange={(ref) => void setStampModel(ref)}
               options={nodes.entries
@@ -404,27 +404,9 @@ export function GroundEditor({
                 />
               </div>
             ))}
-            <Field
-              label="lan base"
-              value={draft.stamp.lan_base}
-              suffix=".site.0/24"
-              onChange={(lan_base) =>
-                onUpdate((prev) => ({ ...prev, stamp: { ...prev.stamp, lan_base: lan_base.trim() } }))
-              }
-            />
-            <Field
-              label="loopback base"
-              value={draft.stamp.loopback_base}
-              suffix=".0.n/32"
-              onChange={(loopback_base) =>
-                onUpdate((prev) => ({
-                  ...prev,
-                  stamp: { ...prev.stamp, loopback_base: loopback_base.trim() },
-                }))
-              }
-            />
             <div className="builder-site-derived">
-              VS-API allocates each minted site's LAN, terr0, and lo0 from this stamp.
+              Addresses are resolver-allocated at deploy; minted sites carry
+              composition only.
             </div>
       </EditorCard>
 

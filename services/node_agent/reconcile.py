@@ -50,11 +50,16 @@ def wiring_status_is_current(
     v1,
     namespace: str,
     manifest: WiringManifest,
+    local_handles,
 ) -> bool:
     """Check if nodalarc-wiring-status reflects the current manifest.
 
     Returns True (Case B) if wiring-status exists, matches session and
-    generation, and every manifest node has all required wiring steps ready.
+    generation, every manifest node has all required wiring steps ready, and
+    every local row names the exact live pod incarnation in
+    ``local_handles`` ({node_id: NamespaceHandle}). A row written for a
+    replaced pod or a recreated sandbox fails the binding and forces a
+    rewire.
     """
     try:
         cm = v1.read_namespaced_config_map("nodalarc-wiring-status", namespace)
@@ -68,6 +73,28 @@ def wiring_status_is_current(
         expected_nodes = set(manifest.nodes.keys())
         if not expected_nodes.issubset(statuses.keys()):
             return False
+        for node_id, handle in local_handles.items():
+            row = statuses.get(node_id)
+            if row is None:
+                return False
+            if (
+                row.pod_uid != handle.pod_uid
+                or row.sandbox_id != handle.sandbox_id
+                or row.netns_id != handle.netns_id
+            ):
+                log.warning(
+                    "Wiring row for %s names another pod incarnation "
+                    "(row pod=%s sandbox=%s netns=%s, live pod=%s sandbox=%s netns=%s) "
+                    "— rewire required",
+                    node_id,
+                    row.pod_uid,
+                    row.sandbox_id,
+                    row.netns_id,
+                    handle.pod_uid,
+                    handle.sandbox_id,
+                    handle.netns_id,
+                )
+                return False
         return all(statuses[node_id].ready_for(manifest) for node_id in expected_nodes)
     except Exception as exc:
         log.warning("wiring-status validation failed: %s", exc)

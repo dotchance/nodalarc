@@ -365,6 +365,7 @@ def _persist_constellation(
                 "id": space_node_ref.relative_path.stem,
                 "display_name": "Test space router",
                 "forwarding": "routed",
+                "profile": "nodalarc:profiles/frr-router.yaml",
                 "ethernet": [],
                 "terminals": [
                     {
@@ -438,13 +439,28 @@ def _persist_ground_set(
         raise ValueError("test site-set documents may contain only catalog references")
 
     station_values: list[object]
-    unknown = set(source) - {"stations"}
+    unknown = set(source) - {"stations", "host_endpoints"}
     if unknown:
         raise ValueError(f"unknown test ground-set parameters: {sorted(unknown)}")
     values = source.get("stations") or ()
+    host_endpoints = bool(source.get("host_endpoints", False))
     station_values = list(values) if isinstance(values, (list, tuple)) else []
     if not station_values:
         station_values = [{}, {}]
+
+    host_payload_ref = CatalogRef(f"user:payloads/{session_id}-host-payload.yaml")
+    if host_endpoints:
+        _write_yaml(
+            user_root / host_payload_ref.relative_path,
+            {
+                "payload": {
+                    "id": host_payload_ref.relative_path.stem,
+                    "display_name": "Test host endpoint payload",
+                    "forwarding": "host",
+                    "profile": "nodalarc:profiles/linux-host.yaml",
+                }
+            },
+        )
 
     ground_node_ref = CatalogRef(f"user:nodes/{session_id}-ground-node.yaml")
     _write_yaml(
@@ -454,6 +470,7 @@ def _persist_ground_set(
                 "id": ground_node_ref.relative_path.stem,
                 "display_name": "Test ground router",
                 "forwarding": "routed",
+                "profile": "nodalarc:profiles/frr-router.yaml",
                 "ethernet": [{"id": "terr0"}],
                 "terminals": [
                     {
@@ -464,7 +481,18 @@ def _persist_ground_set(
                         "tags": ["access"],
                     }
                 ],
-                "payloads": [],
+                "payloads": (
+                    [
+                        {
+                            "id": "endpoint",
+                            "payload": str(host_payload_ref),
+                            "count": 1,
+                            "attach": "terr0",
+                        }
+                    ]
+                    if host_endpoints
+                    else []
+                ),
                 "reference": "urn:nodalarc:test-fixture",
             }
         },
@@ -491,10 +519,7 @@ def _persist_ground_set(
                 "site": {
                     "id": site_id,
                     "display_name": f"Test site {index}",
-                    "lan": {
-                        "ipv4": f"172.16.{index}.0/24",
-                        "ipv6": f"fd10:0:{index}::/64",
-                    },
+                    "ethernet": [{"id": "lan0"}],
                     "tags": ["test_ground"],
                     "frame": {"body_fixed": {"body": "nodalarc:bodies/earth.yaml"}},
                     "location": {
@@ -505,27 +530,27 @@ def _persist_ground_set(
                     "nodes": [
                         {
                             "id": "router",
-                            "model": str(ground_node_ref),
+                            "node": str(ground_node_ref),
                             "terminals": {
                                 "access": {
                                     "installed_count": 2,
                                     "capabilities": {"boresight": {"mode": "local_vertical"}},
                                 }
                             },
-                            "payloads": {},
-                            "interfaces": {
-                                "lo0": {
-                                    "ipv4": f"10.255.{index}.1/32",
-                                    "ipv6": f"fd00:ff::{index + 1}/128",
-                                },
-                                "terr0": {
-                                    "ipv4": f"172.16.{index}.1/24",
-                                    "ipv6": f"fd10:0:{index}::1/64",
-                                },
-                            },
+                            "payloads": (
+                                {
+                                    "endpoint": {
+                                        "installed_count": 1,
+                                        "tags": ["test_host"],
+                                    }
+                                }
+                                if host_endpoints
+                                else {}
+                            ),
+                            "interfaces": {"terr0": "lan0"},
                             "originated_prefixes": {
-                                "ipv4": [f"172.16.{index}.0/24"],
-                                "ipv6": [f"fd10:0:{index}::/64"],
+                                "ipv4": ["lan0"],
+                                "ipv6": ["lan0"],
                             },
                             "service_priority": 10,
                             "tags": ["test_ground"],

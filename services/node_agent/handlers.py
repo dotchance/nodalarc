@@ -46,6 +46,7 @@ from node_agent.command_contract import (
 )
 from node_agent.operation_executor import execute_plan
 from node_agent.operation_plan import OperationPlan, OperationStep
+from node_agent.pid_discovery import NamespaceHandle, verify_handle
 
 log = logging.getLogger(__name__)
 
@@ -80,17 +81,28 @@ def _discover_local_ip() -> str:
 
 
 class PidNotFoundError(Exception):
-    """Raised when a node_id has no PID in the Node Agent's pid_map."""
+    """Raised when a node_id has no valid namespace handle."""
 
 
-def _require_pid(node_id: str, pid_map: dict[str, int]) -> int:
-    """Look up PID for node_id. Raises PidNotFoundError if missing."""
-    pid = pid_map.get(node_id, 0)
-    if pid == 0:
+def _require_pid(node_id: str, handles: dict[str, NamespaceHandle]) -> int:
+    """Resolve a node's namespace PID through its validated handle.
+
+    Verifies the handle still names the exact network namespace it was
+    created for before every kernel mutation: a recreated sandbox keeps the
+    pod but destroys the wired namespace, and mutating a stale or reused
+    PID would operate on a namespace this agent never wired.
+    """
+    handle = handles.get(node_id)
+    if handle is None:
         raise PidNotFoundError(
-            f"node_id '{node_id}' not in pid_map — pod not wired or not on this node"
+            f"node_id '{node_id}' has no namespace handle — pod not wired or not on this node"
         )
-    return pid
+    if not verify_handle(handle):
+        raise PidNotFoundError(
+            f"node_id '{node_id}' namespace changed since wiring (sandbox replaced) — "
+            "rewire required"
+        )
+    return handle.pid
 
 
 def _extract_ground_ifaces(iface) -> tuple[str, str]:
@@ -364,7 +376,7 @@ def _set_latency_failure(
 
 
 def _isl_link_down(
-    iface: node_agent_pb2.InterfaceDown, pid_map: dict[str, int] | None = None
+    iface: node_agent_pb2.InterfaceDown, handles: dict[str, NamespaceHandle] | None = None
 ) -> EntryOutcome:
     """Deactivate an ISL link.
 
@@ -407,7 +419,7 @@ def _isl_link_down(
 
 
 def _ground_link_down(
-    iface: node_agent_pb2.InterfaceDown, pid_map: dict[str, int] | None = None
+    iface: node_agent_pb2.InterfaceDown, handles: dict[str, NamespaceHandle] | None = None
 ) -> EntryOutcome:
     """Tear down a ground link.
 
@@ -424,9 +436,9 @@ def _ground_link_down(
     drives carrier which drives FRR behavior.
     """
     try:
-        if pid_map is None:
-            raise ValueError("pid_map is None — wiring not complete?")
-        pm = pid_map
+        if handles is None:
+            raise ValueError("handles is None — wiring not complete?")
+        pm = handles
         sat_pid = _require_pid(iface.sat_id, pm)
         gs_ifname, sat_ifname = _extract_ground_ifaces(iface)
         ground_bridge.detach_from_ground_bridge(
@@ -453,7 +465,7 @@ def _ground_link_down(
 
 
 def _ground_link_up(
-    iface: node_agent_pb2.InterfaceUp, pid_map: dict[str, int] | None = None
+    iface: node_agent_pb2.InterfaceUp, handles: dict[str, NamespaceHandle] | None = None
 ) -> EntryOutcome:
     """Bring up a ground link with bridge attach + shaping.
 
@@ -472,9 +484,9 @@ def _ground_link_up(
     §13.22.6 — v0.72 reversal.
     """
     try:
-        if pid_map is None:
-            raise ValueError("pid_map is None — wiring not complete?")
-        pm = pid_map
+        if handles is None:
+            raise ValueError("handles is None — wiring not complete?")
+        pm = handles
         sat_pid = _require_pid(iface.sat_id, pm)
         gs_pid = _require_pid(iface.gs_id, pm)
         gs_ifname, sat_ifname = _extract_ground_ifaces(iface)
@@ -513,16 +525,16 @@ def _ground_link_up(
 
 
 def _update_latency_entry(
-    entry: node_agent_pb2.LatencyEntry, pid_map: dict[str, int] | None = None
+    entry: node_agent_pb2.LatencyEntry, handles: dict[str, NamespaceHandle] | None = None
 ) -> EntryOutcome:
     """Update netem delay on a single interface.
 
     Uses tc "change" — does NOT touch admin state or re-add qdiscs.
     """
     try:
-        if pid_map is None:
-            raise ValueError("pid_map is None — wiring not complete?")
-        pm = pid_map
+        if handles is None:
+            raise ValueError("handles is None — wiring not complete?")
+        pm = handles
         pid = _require_pid(entry.node_id, pm)
         plan = OperationPlan(
             operation_id=f"SetLatency:{entry.node_id}:{entry.interface_name}",
@@ -567,7 +579,7 @@ def _update_latency_entry(
 def handle_batch_link_down(
     request: node_agent_pb2.BatchLinkDownRequest,
     context=None,
-    pid_map: dict[str, int] | None = None,
+    handles: dict[str, NamespaceHandle] | None = None,
     fence: RuntimeFence | None = None,
 ) -> node_agent_pb2.BatchLinkDownResponse:
     """Handle BatchLinkDown — per-interface locality."""
@@ -596,9 +608,9 @@ def handle_batch_link_down(
 
     # Submit all operations concurrently — each interface carries its own locality
     futures = {}
-    if pid_map is None:
-        raise ValueError("pid_map is None — wiring not complete?")
-    pm = pid_map
+    if handles is None:
+        raise ValueError("handles is None — wiring not complete?")
+    pm = handles
     for iface in request.interfaces:
         if iface.locality == node_agent_pb2.LOCALITY_CROSS_NODE and iface.vni:
             if iface.link_type == node_agent_pb2.LINK_TYPE_GROUND:
@@ -607,7 +619,19 @@ def handle_batch_link_down(
                 is_sat = iface.node_id == iface.sat_id
                 if is_sat:
                     host_ifname = ground_bridge._sat_host_veth(iface.node_id, sat_ifname)
-                    sat_pid = pm.get(iface.node_id, 0)
+                    # Absent handle means the pod side lives on another host
+                    # (legitimate cross-node state); a present handle must
+                    # still verify before its namespace is mutated.
+                    if iface.node_id in pm:
+                        try:
+                            sat_pid = _require_pid(iface.node_id, pm)
+                        except PidNotFoundError as exc:
+                            outcomes[_iface_key(iface)] = _fail(
+                                node_agent_pb2.NODE_AGENT_PID_NOT_FOUND, str(exc)
+                            )
+                            continue
+                    else:
+                        sat_pid = 0
                 else:
                     host_ifname = ground_bridge._gs_host_veth(iface.node_id, gs_ifname)
                     sat_pid = None
@@ -720,7 +744,7 @@ def handle_batch_link_down(
 
 
 def _isl_link_up_carrier_stage(
-    iface: node_agent_pb2.InterfaceUp, pid_map: dict[str, int] | None = None
+    iface: node_agent_pb2.InterfaceUp, handles: dict[str, NamespaceHandle] | None = None
 ) -> EntryOutcome:
     """ISL link-up carrier stage: attach host-side + shaping. No NDP yet.
 
@@ -733,9 +757,9 @@ def _isl_link_up_carrier_stage(
     Returns error string or None.
     """
     try:
-        if pid_map is None:
-            raise ValueError("pid_map is None — wiring not complete?")
-        pid = _require_pid(iface.node_id, pid_map)
+        if handles is None:
+            raise ValueError("handles is None — wiring not complete?")
+        pid = _require_pid(iface.node_id, handles)
         if iface.locality == node_agent_pb2.LOCALITY_LOCAL:
             ground_bridge.attach_isl(
                 iface.node_id,
@@ -778,7 +802,7 @@ def _isl_link_up_carrier_stage(
 def handle_batch_link_up(
     request: node_agent_pb2.BatchLinkUpRequest,
     context=None,
-    pid_map: dict[str, int] | None = None,
+    handles: dict[str, NamespaceHandle] | None = None,
     fence: RuntimeFence | None = None,
 ) -> node_agent_pb2.BatchLinkUpResponse:
     """Handle BatchLinkUp command.
@@ -822,9 +846,9 @@ def handle_batch_link_up(
         )
         return _batch_up_failure(request, code=exc.code, message=exc.message)
 
-    if pid_map is None:
-        raise ValueError("pid_map is None — wiring not complete?")
-    pm = pid_map
+    if handles is None:
+        raise ValueError("handles is None — wiring not complete?")
+    pm = handles
 
     # Validate PIDs before mutation. Per-interface locality:
     # LOCAL GROUND needs both gs_id and sat_id PIDs (bridge ops).
@@ -1087,13 +1111,13 @@ def _kernel_inventory_entry_result(
 
 def _verify_kernel_inventory_entry(
     entry: node_agent_pb2.KernelInventoryEntry,
-    pid_map: dict[str, int] | None = None,
+    handles: dict[str, NamespaceHandle] | None = None,
 ) -> EntryOutcome:
     """Read-only GS-facing verification for actuation recovery."""
     try:
-        if pid_map is None:
-            raise ValueError("pid_map is None — wiring not complete?")
-        pm = pid_map
+        if handles is None:
+            raise ValueError("handles is None — wiring not complete?")
+        pm = handles
         gs_ifname, sat_ifname = _extract_ground_ifaces(entry)
         is_sat = entry.node_id == entry.sat_id
         local_pid = _require_pid(entry.node_id, pm)
@@ -1182,7 +1206,7 @@ def _verify_kernel_inventory_entry(
 def handle_kernel_inventory(
     request: node_agent_pb2.KernelInventoryRequest,
     context=None,
-    pid_map: dict[str, int] | None = None,
+    handles: dict[str, NamespaceHandle] | None = None,
     fence: RuntimeFence | None = None,
 ) -> node_agent_pb2.KernelInventoryResponse:
     """Handle read-only KernelInventory verification."""
@@ -1211,11 +1235,11 @@ def handle_kernel_inventory(
             dirty_kernel=False,
         )
 
-    if pid_map is None:
-        raise ValueError("pid_map is None — wiring not complete?")
+    if handles is None:
+        raise ValueError("handles is None — wiring not complete?")
 
     futures = {
-        _BATCH_POOL.submit(_verify_kernel_inventory_entry, entry, pid_map): entry
+        _BATCH_POOL.submit(_verify_kernel_inventory_entry, entry, handles): entry
         for entry in request.entries
     }
     outcomes: dict[tuple[str, str], EntryOutcome] = {}
@@ -1265,7 +1289,7 @@ def handle_kernel_inventory(
 def handle_set_latency(
     request: node_agent_pb2.SetLatencyRequest,
     context=None,
-    pid_map: dict[str, int] | None = None,
+    handles: dict[str, NamespaceHandle] | None = None,
     fence: RuntimeFence | None = None,
 ) -> node_agent_pb2.SetLatencyResponse:
     """Handle SetLatency command.
@@ -1297,7 +1321,7 @@ def handle_set_latency(
     updated = 0
 
     for entry in request.entries:
-        outcome = _update_latency_entry(entry, pid_map)
+        outcome = _update_latency_entry(entry, handles)
         outcomes.append(outcome)
         if outcome.success:
             updated += 1

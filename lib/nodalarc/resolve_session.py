@@ -12,7 +12,8 @@ import ipaddress
 import math
 import re
 from contextlib import contextmanager
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -29,6 +30,7 @@ from nodalarc.ephemeris_runtime import (
     validate_ephemeris_manifest,
 )
 from nodalarc.link_rule_candidates import generate_declared_link_candidates
+from nodalarc.models.catalog import EnvValueFrom, Profile, ResolvedEnvEntry
 from nodalarc.models.identity import IdentityMode
 from nodalarc.models.link_rules import LinkRule, NodeSelector, TerminalSelector
 from nodalarc.models.resolved_session import (
@@ -36,11 +38,15 @@ from nodalarc.models.resolved_session import (
     ResolvedEndpoint,
     ResolvedEphemeris,
     ResolvedEphemerisKernel,
+    ResolvedHostAttachment,
     ResolvedInterfaceAddress,
     ResolvedLinkCandidate,
     ResolvedLinkRule,
     ResolvedNode,
+    ResolvedEthernetSegment,
     ResolvedNodeInterfaces,
+    ResolvedOriginatedPrefixes,
+    ResolvedSegmentMember,
     ResolvedOrbitFacts,
     ResolvedRoutingDomain,
     ResolvedSession,
@@ -65,6 +71,8 @@ from nodalarc.runtime_support import (
     RuntimeSupport,
     UnsupportedFeature,
     UnsupportedFeatureError,
+    adapter_renders,
+    adapter_renders_routing,
 )
 from nodalarc.tle import tle_mean_elements
 
@@ -104,6 +112,9 @@ class SessionResolution:
 
     resolved: ResolvedSession
     catalog_session: SegmentSessionConfig
+    # The admitted catalog profiles the resolved nodes reference, keyed by
+    # reference token. Deployment consumes these; it never reloads them.
+    workload_profiles: Mapping[str, Profile] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -112,6 +123,17 @@ class _RuntimeNode:
     plane: int | None = None
     slot: int | None = None
     body_facts: tuple[ResolvedBodyFacts, ...] = ()
+    # The effective profile's adapter name; None when the profile has none.
+    # A node is a router exactly when this adapter renders routing.
+    profile_adapter: str | None = None
+    # Ethernet attachment facts pending allocation: one entry per interface
+    # the node's environment joins, (interface_name, site_id, segment_id).
+    # A site-installed node carries one entry per bound port; a mounted
+    # payload carries exactly one, named by its mount's attach port.
+    ethernet_bindings: tuple[tuple[str, str, str], ...] = ()
+    # Symbolic origination intent, resolved to concrete prefixes once
+    # segment subnets are allocated.
+    origination_targets: Any = None
 
 
 def default_catalog_roots() -> CatalogRoots:
@@ -152,12 +174,17 @@ def resolve_session_with_assets(
     support = runtime_support or RuntimeSupport.earth_luna()
     _check_runtime_support(cfg, support, roots)
 
-    runtime_nodes = _apply_addressing(cfg, _expand_segments(cfg, roots))
+    allocated_nodes, ethernet_segments = _allocate_segment_addressing(
+        list(_expand_segments(cfg, roots))
+    )
+    runtime_nodes = _apply_addressing(cfg, tuple(allocated_nodes))
+    runtime_nodes = _derive_host_attachments(runtime_nodes)
     resolved_nodes = tuple(item.node for item in runtime_nodes)
     _check_ground_scheduling_support(resolved_nodes, support)
     body_facts = _collect_body_facts(runtime_nodes)
     _check_body_support(resolved_nodes, body_facts, support)
     _check_propagator_support(resolved_nodes, support)
+    _check_workload_adapter_support(runtime_nodes, support)
     ephemeris = _resolve_ephemeris(cfg, roots, resolved_nodes)
     link_rules = tuple(_resolve_link_rule(rule, runtime_nodes) for rule in cfg.link_rules or ())
     routing_domains = tuple(_resolve_routing_domains(cfg, runtime_nodes))
@@ -172,6 +199,7 @@ def resolve_session_with_assets(
         bodies=body_facts,
         link_rules=link_rules,
         routing_domains=routing_domains,
+        ethernet_segments=ethernet_segments,
         sid_blocks=sid_blocks,
         simulation=cfg.simulation,
         routing=cfg.routing,
@@ -193,6 +221,7 @@ def resolve_session_with_assets(
         link_rules=base_resolved.link_rules,
         link_candidates=candidates,
         routing_domains=base_resolved.routing_domains,
+        ethernet_segments=base_resolved.ethernet_segments,
         sid_blocks=base_resolved.sid_blocks,
         simulation=base_resolved.simulation,
         routing=base_resolved.routing,
@@ -204,7 +233,16 @@ def resolve_session_with_assets(
     )
     _validate_access_ground_scheduling(resolved)
     _validate_allocator_wide_scheduling(resolved)
-    return SessionResolution(resolved=resolved, catalog_session=cfg)
+    workload_profiles = {
+        reference: Profile.model_validate(_load_expected(reference, roots, "profile"))
+        for reference in sorted({node.profile for node in resolved_nodes})
+    }
+    _check_profile_env(workload_profiles, resolved_nodes)
+    return SessionResolution(
+        resolved=resolved,
+        catalog_session=cfg,
+        workload_profiles=workload_profiles,
+    )
 
 
 def _resolve_dispatch(cfg: SegmentSessionConfig) -> Dispatch:
@@ -251,6 +289,21 @@ def _check_runtime_support(
                 explicit_node_clocks.extend(
                     entry["clock"] for entry in source["nodes"] if entry.get("clock") is not None
                 )
+            # Onboard execution on space placements (bus ports, payload
+            # mounts) is structural grammar ahead of the runtime chain.
+            space_node_refs: set[str] = set()
+            if wrapper == "constellation":
+                space_node_refs.add(source["node"])
+            elif wrapper == "space_node_set":
+                space_node_refs.update(entry["node"] for entry in source["nodes"])
+            for node_ref in sorted(space_node_refs):
+                with _segment_scope(segment.id):
+                    node_document = _load_expected(node_ref, roots, "node")
+                onboard = bool(node_document.get("ethernet")) or bool(
+                    node_document.get("payloads")
+                )
+                if feature := support.check_payloads(onboard):
+                    unsupported.append(feature)
         else:
             kind = "lagrange_point"
         if feature := support.check_segment_kind(kind):
@@ -560,7 +613,7 @@ def _expand_space_segment(segment: SpaceSegment, roots: CatalogRoots) -> list[_R
     if wrapper == "space_node_set":
         expanded = []
         for source_slot, entry in enumerate(source["nodes"]):
-            expanded.append(
+            expanded.extend(
                 _space_node_from_entry(
                     segment,
                     entry,
@@ -587,6 +640,13 @@ def _expand_constellation_segment(
     slots = int(constellation["slots_per_plane"])
     phase_offset = float(constellation["phasing"].get("phase_offset_deg", 0.0))
     tag_rules = tuple(constellation.get("node_tags") or ())
+    profile_ref, profile_level, profile_adapter = _effective_profile(
+        described=f"generated nodes in segment {segment.id!r}",
+        placed=None,
+        segment_profile=segment.profile,
+        definition=node.get("profile"),
+        roots=roots,
+    )
     expanded: list[_RuntimeNode] = []
 
     for plane in range(planes):
@@ -596,36 +656,57 @@ def _expand_constellation_segment(
             tags = set(segment.tags or ())
             tags.update(constellation.get("tags") or ())
             tags.update(_node_tags_for(tag_rules, plane=plane, slot=slot, local_id=local_id))
-            expanded.append(
-                _RuntimeNode(
-                    node=_resolved_space_node(
-                        runtime_id=runtime_id,
-                        local_id=local_id,
-                        segment_id=segment.id,
-                        source_node=node,
-                        body=body,
-                        orbit=_orbit_facts(
-                            orbit,
-                            body,
-                            plane=plane,
-                            slot=slot,
-                            planes=planes,
-                            slots_per_plane=slots,
-                            raan_spacing_deg=float(constellation["planes"]["raan_spacing_deg"]),
-                            phase_offset_deg=phase_offset,
-                        ),
-                        tags=tuple(sorted(tags)),
-                        roots=roots,
-                        clock=segment.clock,
+            carrier = _RuntimeNode(
+                node=_resolved_space_node(
+                    runtime_id=runtime_id,
+                    local_id=local_id,
+                    segment_id=segment.id,
+                    source_node=node,
+                    body=body,
+                    orbit=_orbit_facts(
+                        orbit,
+                        body,
                         plane=plane,
                         slot=slot,
+                        planes=planes,
+                        slots_per_plane=slots,
+                        raan_spacing_deg=float(constellation["planes"]["raan_spacing_deg"]),
+                        phase_offset_deg=phase_offset,
                     ),
+                    tags=tuple(sorted(tags)),
+                    roots=roots,
+                    clock=segment.clock,
                     plane=plane,
                     slot=slot,
-                    body_facts=(_body_facts_from_catalog(body),),
+                    profile=profile_ref,
+                    profile_level=profile_level,
+                ),
+                plane=plane,
+                slot=slot,
+                body_facts=(_body_facts_from_catalog(body),),
+                profile_adapter=profile_adapter,
+                ethernet_bindings=_space_carrier_bindings(node, runtime_id),
+                origination_targets=_node_origination_targets(node),
+            )
+            expanded.append(carrier)
+            expanded.extend(
+                _expand_space_payload_members(
+                    carrier=carrier,
+                    source_node=node,
+                    segment_profile=segment.profile,
+                    roots=roots,
                 )
             )
     return expanded
+
+
+def _node_origination_targets(source_node: dict[str, Any]):
+    declared = source_node.get("originated_prefixes")
+    if not declared:
+        return None
+    from nodalarc.models.segments import OriginatedPrefixes
+
+    return OriginatedPrefixes.model_validate(declared)
 
 
 def _space_node_from_entry(
@@ -634,7 +715,7 @@ def _space_node_from_entry(
     roots: CatalogRoots,
     *,
     source_slot: int,
-) -> _RuntimeNode:
+) -> list[_RuntimeNode]:
     node = _load_expected(entry["node"], roots, "node")
     orbit = _load_expected(entry["orbit"], roots, "orbit") if "orbit" in entry else None
     tle = entry.get("sgp4_tle")
@@ -672,13 +753,21 @@ def _space_node_from_entry(
         plane = None
         slot = None
     local_id = entry["id"]
+    profile_ref, profile_level, profile_adapter = _effective_profile(
+        described=f"space node {local_id!r} in segment {segment.id!r}",
+        placed=entry.get("profile"),
+        segment_profile=segment.profile,
+        definition=node.get("profile"),
+        roots=roots,
+    )
     tags = tuple(sorted({*(segment.tags or ()), *(entry.get("tags") or ())}))
     entry_clock = (
         SegmentClock.model_validate(entry["clock"]) if entry.get("clock") is not None else None
     )
-    return _RuntimeNode(
+    runtime_id = _runtime_id(segment.id, local_id)
+    carrier = _RuntimeNode(
         node=_resolved_space_node(
-            runtime_id=_runtime_id(segment.id, local_id),
+            runtime_id=runtime_id,
             local_id=local_id,
             segment_id=segment.id,
             source_node=node,
@@ -689,9 +778,23 @@ def _space_node_from_entry(
             clock=entry_clock or segment.clock,
             plane=plane,
             slot=slot,
+            profile=profile_ref,
+            profile_level=profile_level,
         ),
         body_facts=(_body_facts_from_catalog(body),),
+        profile_adapter=profile_adapter,
+        ethernet_bindings=_space_carrier_bindings(node, runtime_id),
+        origination_targets=_node_origination_targets(node),
     )
+    return [
+        carrier,
+        *_expand_space_payload_members(
+            carrier=carrier,
+            source_node=node,
+            segment_profile=segment.profile,
+            roots=roots,
+        ),
+    ]
 
 
 def _tle_orbit_facts(
@@ -959,23 +1062,47 @@ def _expand_site_placement(placement: _SitePlacement, roots: CatalogRoots) -> li
             "a fixed surface location for placed ground nodes"
         )
 
+    # A shared site is instantiated once; segment profile statements must
+    # agree across every placing group, like scheduling and clock.
+    declared_segment_profiles = {
+        str(placing.profile) for placing in placement.segments if placing.profile is not None
+    }
+    if len(declared_segment_profiles) > 1:
+        raise SessionResolutionError(
+            f"site {site_id!r} is placed by ground segments with conflicting "
+            f"profile statements: {sorted(declared_segment_profiles)}"
+        )
+    segment_profile = next(iter(declared_segment_profiles), None)
+
     expanded: list[_RuntimeNode] = []
     for site_node in site["nodes"]:
-        source_node = _load_expected(site_node["model"], roots, "node")
+        source_node = _load_expected(site_node["node"], roots, "node")
         # Ground identity is site-anchored: a node's name never depends on
         # which group(s) placed its site. local_node_id keeps the
         # site-qualified form so `node:` selectors stay unique.
         local_id = f"{site_id}-{site_node['id']}"
         runtime_id = _runtime_id(site_id, site_node["id"])
-        _validate_ethernet_inventory(runtime_id, source_node, ground=True)
+        bindings = _validate_port_bindings(runtime_id, source_node, site_node, site)
         _validate_payload_installations(runtime_id, source_node, site_node)
-        _reject_unsupported_node_payloads(runtime_id, source_node, site_node)
         node_tags = set(tags)
         node_tags.update(site_node.get("tags") or ())
         scheduling = _merge_ground_scheduling(site_node.get("scheduling"), base_scheduling)
+        # Ground scheduling governs access-contact allocation; a node with
+        # no terminal mounts (a processing host) participates in no access
+        # rule and holds no scheduling state.
+        if not site_node.get("terminals"):
+            scheduling = None
         originated = _merge_originated_prefixes(
             site_node.get("originated_prefixes"),
+            source_node.get("originated_prefixes"),
             base_originated,
+        )
+        profile_ref, profile_level, profile_adapter = _effective_profile(
+            described=f"ground node {runtime_id!r}",
+            placed=site_node.get("profile"),
+            segment_profile=segment_profile,
+            definition=source_node.get("profile"),
+            roots=roots,
         )
         expanded.append(
             _RuntimeNode(
@@ -999,7 +1126,7 @@ def _expand_site_placement(placement: _SitePlacement, roots: CatalogRoots) -> li
                             body_id=body["id"],
                         )
                     ),
-                    interfaces=_interfaces_from_site_node(site_node),
+                    interfaces=None,
                     wan_interfaces=tuple(
                         _wan_interfaces_for_site_node(runtime_id, source_node, site_node)
                     ),
@@ -1009,37 +1136,161 @@ def _expand_site_placement(placement: _SitePlacement, roots: CatalogRoots) -> li
                         lon_deg=float(site["location"]["lon_deg"]),
                         alt_m=float(site["location"]["alt_m"]),
                     ),
-                    originated_prefixes=originated,
+                    originated_prefixes=None,
                     forwarding=source_node["forwarding"],
+                    profile=profile_ref,
+                    profile_level=profile_level,
                     service_priority=site_node.get("service_priority"),
                     ground_scheduling=scheduling,
                     clock=base_clock,
                 ),
                 body_facts=(_body_facts_from_catalog(body),),
+                profile_adapter=profile_adapter,
+                ethernet_bindings=tuple(
+                    (port, site_id, segment) for port, segment in sorted(bindings.items())
+                ),
+                origination_targets=originated,
+            )
+        )
+        expanded.extend(
+            _expand_ground_payload_members(
+                carrier_runtime_id=runtime_id,
+                carrier_local_id=local_id,
+                site_id=site_id,
+                site=site,
+                site_node=site_node,
+                source_node=source_node,
+                bindings=bindings,
+                groups=groups,
+                body=body,
+                node_tags=node_tags,
+                segment_profile=segment_profile,
+                base_clock=base_clock,
+                roots=roots,
             )
         )
     return expanded
 
 
-def _validate_ethernet_inventory(
+def _validate_port_bindings(
     runtime_id: str,
     source_node: dict[str, Any],
-    *,
-    ground: bool,
-) -> None:
-    declared = {port["id"] for port in source_node["ethernet"]}
-    if ground:
-        if declared != {"terr0"}:
-            raise SessionResolutionError(
-                f"ground node {runtime_id!r} must declare exactly the substrate Ethernet "
-                f"port 'terr0'; got {sorted(declared)}"
-            )
-        return
-    if declared:
+    site_node: dict[str, Any],
+    site: dict[str, Any],
+) -> dict[str, str]:
+    """Every Ethernet port the node declares binds to exactly one declared
+    site segment; a binding naming an unknown port refuses."""
+
+    declared_ports = [port["id"] for port in source_node.get("ethernet", ())]
+    bindings = dict(site_node.get("interfaces") or {})
+    unknown_ports = sorted(set(bindings) - set(declared_ports))
+    if unknown_ports:
         raise SessionResolutionError(
-            f"space node {runtime_id!r} declares Ethernet port(s) {sorted(declared)}, but "
-            "the current substrate exposes Ethernet only as terr0 on placed ground nodes"
+            f"ground node {runtime_id!r} binds undeclared Ethernet port(s): {unknown_ports}; "
+            f"the node definition declares {sorted(declared_ports)}"
         )
+    unbound_ports = sorted(set(declared_ports) - set(bindings))
+    if unbound_ports:
+        raise SessionResolutionError(
+            f"ground node {runtime_id!r} leaves declared Ethernet port(s) unbound: "
+            f"{unbound_ports}; every declared port binds to one site segment"
+        )
+    declared_segments = {segment["id"] for segment in site.get("ethernet", ())}
+    unknown_segments = sorted(set(bindings.values()) - declared_segments)
+    if unknown_segments:
+        raise SessionResolutionError(
+            f"ground node {runtime_id!r} binds unknown site segment(s): {unknown_segments}"
+        )
+    return bindings
+
+
+def _expand_ground_payload_members(
+    *,
+    carrier_runtime_id: str,
+    carrier_local_id: str,
+    site_id: str,
+    site: dict[str, Any],
+    site_node: dict[str, Any],
+    source_node: dict[str, Any],
+    bindings: dict[str, str],
+    groups: tuple[str, ...],
+    body: dict[str, Any],
+    node_tags: set[str],
+    segment_profile: str | None,
+    base_clock: Any,
+    roots: CatalogRoots,
+) -> list[_RuntimeNode]:
+    """Expand a site-installed node's populated payload mounts into runtime
+    members: real environments attached to the segment the mount's port
+    binds to, carried by the installing node."""
+
+    members: list[_RuntimeNode] = []
+    installations = site_node.get("payloads") or {}
+    mounts = {mount["id"]: mount for mount in source_node.get("payloads", ())}
+    for mount_id in sorted(installations):
+        installation = installations[mount_id]
+        mount = mounts[mount_id]
+        payload = _load_expected(mount["payload"], roots, "payload")
+        attach = mount["attach"]
+        segment = bindings[attach]
+        member_tags = set(node_tags)
+        member_tags.update(mount.get("tags") or ())
+        member_tags.update(installation.get("tags") or ())
+        for ordinal in range(1, int(installation["installed_count"]) + 1):
+            suffix = mount_id if ordinal == 1 else f"{mount_id}{ordinal}"
+            member_local = f"{carrier_local_id}-{suffix}"
+            member_runtime_id = _runtime_id(site_id, f"{site_node['id']}-{suffix}")
+            profile_ref, profile_level, profile_adapter = _effective_profile(
+                described=f"payload member {member_runtime_id!r}",
+                placed=mount.get("profile"),
+                segment_profile=segment_profile,
+                definition=payload.get("profile"),
+                roots=roots,
+            )
+            members.append(
+                _RuntimeNode(
+                    node=ResolvedNode(
+                        node_id=member_runtime_id,
+                        local_node_id=member_local,
+                        segment_id=groups[0],
+                        namespace=_normalize_token(site_id),
+                        placement_groups=groups,
+                        kind="ground_station",
+                        frame_id=body["id"],
+                        reference_body=body["id"],
+                        tags=tuple(sorted(member_tags)),
+                        tenant_id=site_node.get("tenant_id") or "default",
+                        terminal_inventory=(),
+                        interfaces=None,
+                        wan_interfaces=(),
+                        surface_position=ResolvedSurfacePosition(
+                            body=body["id"],
+                            lat_deg=float(site["location"]["lat_deg"]),
+                            lon_deg=float(site["location"]["lon_deg"]),
+                            alt_m=float(site["location"]["alt_m"]),
+                        ),
+                        originated_prefixes=None,
+                        forwarding=payload["forwarding"],
+                        profile=profile_ref,
+                        profile_level=profile_level,
+                        ground_scheduling=None,
+                        clock=base_clock,
+                    ),
+                    body_facts=(_body_facts_from_catalog(body),),
+                    profile_adapter=profile_adapter,
+                    ethernet_bindings=((attach, site_id, segment),),
+                )
+            )
+    return members
+
+
+def _space_carrier_bindings(source_node: dict[str, Any], carrier_id: str) -> tuple:
+    """A space node's declared ports are the buses it carries: one carrier
+    interface per port, each its own segment scoped to this placed copy."""
+
+    return tuple(
+        (port["id"], carrier_id, port["id"]) for port in source_node.get("ethernet", ())
+    )
 
 
 def _resolved_space_node(
@@ -1054,12 +1305,12 @@ def _resolved_space_node(
     roots: CatalogRoots,
     plane: int | None,
     slot: int | None,
+    profile: str,
+    profile_level: str,
     clock: SegmentClock | None = None,
 ) -> ResolvedNode:
     if body is None:
         raise SessionResolutionError(f"space node {runtime_id!r} has no resolved central body")
-    _validate_ethernet_inventory(runtime_id, source_node, ground=False)
-    _reject_unsupported_node_payloads(runtime_id, source_node, None)
     return ResolvedNode(
         node_id=runtime_id,
         local_node_id=local_id,
@@ -1082,6 +1333,8 @@ def _resolved_space_node(
         wan_interfaces=tuple(_wan_interfaces_for_node(runtime_id, source_node)),
         orbit=orbit,
         forwarding=source_node["forwarding"],
+        profile=profile,
+        profile_level=profile_level,
         plane=plane,
         slot=slot,
         clock=clock or SegmentClock(),
@@ -1311,30 +1564,69 @@ def _validate_payload_installations(
             )
 
 
-def _reject_unsupported_node_payloads(
-    runtime_id: str, source_node: dict[str, Any], site_node: dict[str, Any] | None
-) -> None:
-    """Payloads are grammar-valid and runtime-future on every current profile.
+def _expand_space_payload_members(
+    *,
+    carrier: _RuntimeNode,
+    source_node: dict[str, Any],
+    segment_profile: str | None,
+    roots: CatalogRoots,
+) -> list[_RuntimeNode]:
+    """Expand a space carrier's payload mounts into runtime members.
 
-    A node whose capability is authored via payloads must fail typed — it must
-    never appear in the resolved session without that capability.
+    Every mount is fully populated on a space placement (there is no
+    installation map in space, exactly as space terminals install at their
+    declared counts). Members ride the carrier: same segment, same orbit
+    facts, same plane and slot, attached to the bus segment the mount's
+    port names, with carrier-qualified identity.
     """
-    declared = bool(source_node.get("payloads")) or bool(site_node and site_node.get("payloads"))
-    if declared:
-        raise UnsupportedFeatureError(
-            [
-                UnsupportedFeature(
-                    category=FeatureCategory.PAYLOAD,
-                    value="payloads",
-                    message=(
-                        f"node {runtime_id!r} declares payloads; payload-provided "
-                        "terminals and resource groups are not supported by the "
-                        "current runtime"
+
+    members: list[_RuntimeNode] = []
+    node = carrier.node
+    for mount in sorted(source_node.get("payloads", ()), key=lambda entry: entry["id"]):
+        payload = _load_expected(mount["payload"], roots, "payload")
+        attach = mount["attach"]
+        for ordinal in range(1, int(mount["count"]) + 1):
+            suffix = mount["id"] if ordinal == 1 else f"{mount['id']}{ordinal}"
+            member_local = f"{node.local_node_id}-{suffix}"
+            member_runtime_id = _runtime_id(node.segment_id, member_local)
+            profile_ref, profile_level, profile_adapter = _effective_profile(
+                described=f"payload member {member_runtime_id!r}",
+                placed=mount.get("profile"),
+                segment_profile=segment_profile,
+                definition=payload.get("profile"),
+                roots=roots,
+            )
+            member_tags = set(node.tags)
+            member_tags.update(mount.get("tags") or ())
+            members.append(
+                _RuntimeNode(
+                    node=ResolvedNode(
+                        node_id=member_runtime_id,
+                        local_node_id=member_local,
+                        segment_id=node.segment_id,
+                        namespace=node.node_id,
+                        kind=node.kind,
+                        frame_id=node.frame_id,
+                        central_body=node.central_body,
+                        tags=tuple(sorted(member_tags)),
+                        terminal_inventory=(),
+                        wan_interfaces=(),
+                        orbit=node.orbit,
+                        forwarding=payload["forwarding"],
+                        profile=profile_ref,
+                        profile_level=profile_level,
+                        plane=node.plane,
+                        slot=node.slot,
+                        clock=node.clock,
                     ),
-                    support_note="future runtime capability",
+                    plane=carrier.plane,
+                    slot=carrier.slot,
+                    body_facts=carrier.body_facts,
+                    profile_adapter=profile_adapter,
+                    ethernet_bindings=((attach, node.node_id, attach),),
                 )
-            ]
-        )
+            )
+    return members
 
 
 def _ground_terminal_boresight(value: dict[str, Any]) -> TerminalBoresight:
@@ -1472,17 +1764,169 @@ def _wan_interfaces_for_site_node(
     return interfaces
 
 
-def _interfaces_from_site_node(site_node: dict[str, Any]) -> ResolvedNodeInterfaces:
-    lo0 = site_node["interfaces"]["lo0"]
-    terr0 = site_node["interfaces"]["terr0"]
-    return ResolvedNodeInterfaces(
-        lo0=_interface_address(lo0),
-        terr0=_interface_address(terr0),
+_SEGMENT_SUBNET_IPV4_POOL = ipaddress.ip_network("172.16.0.0/12")
+_SEGMENT_SUBNET_IPV6_POOL = ipaddress.ip_network("fd00:da7a::/32")
+_SEGMENT_IPV4_PREFIX = 24
+_SEGMENT_IPV6_PREFIX = 64
+
+
+def _allocate_segment_addressing(
+    nodes: list[_RuntimeNode],
+) -> tuple[list[_RuntimeNode], tuple[ResolvedEthernetSegment, ...]]:
+    """Allocate every Ethernet segment subnet and member address.
+
+    Deterministic by stable ids: segments order by (site, segment id) and
+    receive consecutive subnets from the resolver-owned pools; within a
+    segment, routed environments order before hosts, each class sorted by
+    node id, and receive consecutive host addresses. Loopbacks for
+    ground-placed environments come from the same resolver-owned loopback
+    pools the generated space nodes use. Symbolic origination resolves
+    against the allocated subnets; a target naming a segment the node is
+    not attached to refuses.
+    """
+
+    segment_keys = sorted(
+        {(site_id, segment) for item in nodes for _, site_id, segment in item.ethernet_bindings}
+    )
+    if not segment_keys:
+        return nodes, ()
+
+    ipv4_subnets = _SEGMENT_SUBNET_IPV4_POOL.subnets(new_prefix=_SEGMENT_IPV4_PREFIX)
+    ipv6_subnets = _SEGMENT_SUBNET_IPV6_POOL.subnets(new_prefix=_SEGMENT_IPV6_PREFIX)
+    subnet_by_key: dict[tuple[str, str], tuple[Any, Any]] = {}
+    for key in segment_keys:
+        try:
+            subnet_by_key[key] = (next(ipv4_subnets), next(ipv6_subnets))
+        except StopIteration:  # pragma: no cover - 4096 /24s deep
+            raise SessionResolutionError(
+                f"segment subnet pool exhausted allocating {key[0]}/{key[1]}"
+            ) from None
+
+    def _segment_order(item: _RuntimeNode) -> tuple[int, str]:
+        return (0 if item.node.forwarding == "routed" else 1, item.node.node_id)
+
+    members_by_key: dict[tuple[str, str], list[_RuntimeNode]] = {}
+    for item in nodes:
+        for _, site_id, segment in item.ethernet_bindings:
+            members_by_key.setdefault((site_id, segment), []).append(item)
+
+    address_by_node_segment: dict[tuple[str, tuple[str, str]], tuple[str, str]] = {}
+    for key, members in members_by_key.items():
+        ipv4_net, ipv6_net = subnet_by_key[key]
+        ipv4_hosts = ipv4_net.hosts()
+        ipv6_hosts = ipv6_net.hosts()
+        for item in sorted(members, key=_segment_order):
+            try:
+                ipv4_host = next(ipv4_hosts)
+                ipv6_host = next(ipv6_hosts)
+            except StopIteration:
+                raise SessionResolutionError(
+                    f"segment {key[0]}/{key[1]} has more members than its "
+                    f"allocated subnet holds"
+                ) from None
+            address_by_node_segment[(item.node.node_id, key)] = (
+                f"{ipv4_host}/{_SEGMENT_IPV4_PREFIX}",
+                f"{ipv6_host}/{_SEGMENT_IPV6_PREFIX}",
+            )
+
+    existing_ipv4, existing_ipv6 = _existing_loopback_addresses(nodes)
+    lo_ipv4 = _available_host_addresses(
+        _DEFAULT_GENERATED_SPACE_LOOPBACK_IPV4_POOL, existing_ipv4
+    )
+    lo_ipv6 = _available_host_addresses(
+        _DEFAULT_GENERATED_SPACE_LOOPBACK_IPV6_POOL, existing_ipv6
     )
 
+    next_nodes: list[_RuntimeNode] = []
+    for item in sorted(nodes, key=lambda entry: entry.node.node_id):
+        if not item.ethernet_bindings:
+            next_nodes.append(item)
+            continue
+        ethernet: dict[str, ResolvedInterfaceAddress] = {}
+        bound_segments: dict[str, tuple[str, str]] = {}
+        for interface, site_id, segment in item.ethernet_bindings:
+            key = (site_id, segment)
+            ipv4_address, ipv6_address = address_by_node_segment[(item.node.node_id, key)]
+            ethernet[interface] = ResolvedInterfaceAddress(
+                ipv4=ipv4_address, ipv6=ipv6_address
+            )
+            bound_segments[segment] = key
+        interfaces = ResolvedNodeInterfaces(
+            lo0=ResolvedInterfaceAddress(
+                ipv4=f"{next(lo_ipv4)}/32", ipv6=f"{next(lo_ipv6)}/128"
+            ),
+            ethernet=ethernet,
+        )
+        originated = _resolve_origination(
+            item.node.node_id,
+            item.origination_targets,
+            bound_segments,
+            subnet_by_key,
+        )
+        next_nodes.append(
+            replace(
+                item,
+                node=item.node.model_copy(
+                    update={"interfaces": interfaces, "originated_prefixes": originated}
+                ),
+            )
+        )
+    order = {item.node.node_id: index for index, item in enumerate(nodes)}
+    next_nodes.sort(key=lambda entry: order[entry.node.node_id])
 
-def _interface_address(value: dict[str, str]) -> ResolvedInterfaceAddress:
-    return ResolvedInterfaceAddress(ipv4=value.get("ipv4"), ipv6=value.get("ipv6"))
+    segment_records: list[ResolvedEthernetSegment] = []
+    for key in segment_keys:
+        ipv4_net, ipv6_net = subnet_by_key[key]
+        segment_records.append(
+            ResolvedEthernetSegment(
+                scope_id=key[0],
+                segment_id=key[1],
+                ipv4_subnet=str(ipv4_net),
+                ipv6_subnet=str(ipv6_net),
+                members=tuple(
+                    ResolvedSegmentMember(node_id=item.node.node_id, interface=interface)
+                    for item in sorted(members_by_key[key], key=_segment_order)
+                    for interface, site_id, segment in item.ethernet_bindings
+                    if (site_id, segment) == key
+                ),
+            )
+        )
+    return next_nodes, tuple(segment_records)
+
+
+def _resolve_origination(
+    node_id: str,
+    targets: Any,
+    bound_segments: dict[str, tuple[str, str]],
+    subnet_by_key: dict[tuple[str, str], tuple[Any, Any]],
+) -> ResolvedOriginatedPrefixes | None:
+    if targets is None:
+        return None
+    resolved: dict[str, list[str]] = {}
+    defaults = {"ipv4": "0.0.0.0/0", "ipv6": "::/0"}
+    for family_index, family in enumerate(("ipv4", "ipv6")):
+        entries = getattr(targets, family, None)
+        if not entries:
+            continue
+        prefixes: list[str] = []
+        for entry in entries:
+            if entry == "default":
+                prefixes.append(defaults[family])
+                continue
+            key = bound_segments.get(entry)
+            if key is None:
+                raise SessionResolutionError(
+                    f"node {node_id!r} originates segment {entry!r}, but is not "
+                    "bound or attached to it"
+                )
+            prefixes.append(str(subnet_by_key[key][family_index]))
+        seen: set[str] = set()
+        resolved[family] = [
+            prefix for prefix in prefixes if not (prefix in seen or seen.add(prefix))
+        ]
+    if not resolved:
+        return None
+    return ResolvedOriginatedPrefixes.model_validate(resolved)
 
 
 def _apply_addressing(
@@ -1497,33 +1941,20 @@ def _apply_addressing(
                 raise SessionResolutionError(
                     f"address pool assignment {assignment.id!r} matched zero nodes"
                 )
-            # Pool allocation is need-based and reservation-aware: a node that
-            # already carries an authored address for a family keeps it and
-            # consumes no pool slot, and every address already present in the
-            # session (authored site lo0s included) is excluded from the pool
-            # walk. Positional allocation that ignores authored addresses
-            # mints duplicate router identities.
-            reserved_ipv4, reserved_ipv6 = _existing_loopback_addresses(nodes)
+            # An explicit assignment owns the families it pools: every
+            # selected node's pooled family is allocated from the pool,
+            # replacing any resolver default. Addresses already present
+            # elsewhere in the session are excluded from the pool walk so
+            # no router identity is minted twice.
+            reserved_ipv4, reserved_ipv6 = _existing_loopback_addresses(
+                [item for item in nodes if item.node.node_id not in
+                 {sel.node.node_id for sel in selected}]
+            )
             by_id = {item.node.node_id: item for item in selected}
 
-            for item in selected:
-                current = item.node.interfaces
-                if current is None:
-                    continue
-                _validate_existing_loopback_families_inside_pool(
-                    current.lo0,
-                    ipv4_pool=assignment.ipv4_pool,
-                    ipv6_pool=assignment.ipv6_pool,
-                    prefix_length=assignment.prefix_length,
-                    assignment_id=assignment.id,
-                    node_id=item.node.node_id,
-                )
-
             def _needs(item: _RuntimeNode, family: str) -> bool:
-                interfaces = item.node.interfaces
-                if interfaces is None:
-                    return True
-                return getattr(interfaces.lo0, family) is None
+                del item, family
+                return True
 
             ipv4_ids = (
                 [nid for nid, item in by_id.items() if _needs(item, "ipv4")]
@@ -1590,26 +2021,22 @@ def _apply_addressing(
                         node_id=item.node.node_id,
                     )
                     next_nodes.append(
-                        _RuntimeNode(
+                        replace(
+                            item,
                             node=item.node.model_copy(
                                 update={
                                     "interfaces": current.model_copy(update={"lo0": merged_lo0})
                                 }
                             ),
-                            plane=item.plane,
-                            slot=item.slot,
-                            body_facts=item.body_facts,
                         )
                     )
                     continue
                 next_nodes.append(
-                    _RuntimeNode(
+                    replace(
+                        item,
                         node=item.node.model_copy(
                             update={"interfaces": ResolvedNodeInterfaces(lo0=loopback)}
                         ),
-                        plane=item.plane,
-                        slot=item.slot,
-                        body_facts=item.body_facts,
                     )
                 )
             nodes = next_nodes
@@ -1658,11 +2085,9 @@ def _apply_default_generated_space_loopbacks(nodes: list[_RuntimeNode]) -> list[
             ipv6=f"{next(ipv6_iter)}/128",
         )
         next_nodes.append(
-            _RuntimeNode(
+            replace(
+                item,
                 node=node.model_copy(update={"interfaces": ResolvedNodeInterfaces(lo0=loopback)}),
-                plane=item.plane,
-                slot=item.slot,
-                body_facts=item.body_facts,
             )
         )
     return next_nodes
@@ -1704,17 +2129,16 @@ def _merge_loopback_assignment(
     assignment_id: str,
     node_id: str,
 ) -> ResolvedInterfaceAddress:
-    _validate_existing_loopback_families_inside_pool(
-        current,
-        ipv4_pool=ipv4_pool,
-        ipv6_pool=ipv6_pool,
-        prefix_length=prefix_length,
-        assignment_id=assignment_id,
-        node_id=node_id,
-    )
+    """An explicit assignment owns the families it pools.
+
+    Every loopback in the session is resolver-allocated; a family the
+    assignment pools replaces the resolver default, and a family it does
+    not pool keeps the default.
+    """
+    del prefix_length, assignment_id, node_id
     return ResolvedInterfaceAddress(
-        ipv4=current.ipv4 or allocated.ipv4,
-        ipv6=current.ipv6 or allocated.ipv6,
+        ipv4=allocated.ipv4 if ipv4_pool is not None else current.ipv4,
+        ipv6=allocated.ipv6 if ipv6_pool is not None else current.ipv6,
     )
 
 
@@ -1764,42 +2188,16 @@ def _allocate_pool_addresses(
     return addresses
 
 
-def _validate_existing_loopback_families_inside_pool(
-    current: ResolvedInterfaceAddress,
-    *,
-    ipv4_pool: str | None,
-    ipv6_pool: str | None,
-    prefix_length: int | None,
-    assignment_id: str,
-    node_id: str,
-) -> None:
-    for family, pool in (("ipv4", ipv4_pool), ("ipv6", ipv6_pool)):
-        if pool is None:
-            continue
-        actual = getattr(current, family)
-        if actual is None:
-            continue
-        pool_net = ipaddress.ip_network(pool, strict=False)
-        actual_iface = ipaddress.ip_interface(actual)
-        if actual_iface.ip not in pool_net:
-            raise SessionResolutionError(
-                f"address pool assignment {assignment_id!r} applies to {node_id!r}, "
-                f"but authored lo0 {actual!r} is outside allocated pool family {family}"
-            )
-        if prefix_length is not None and actual_iface.network.prefixlen != prefix_length:
-            raise SessionResolutionError(
-                f"address pool assignment {assignment_id!r} applies to {node_id!r}, "
-                f"but authored lo0 {actual!r} is not /{prefix_length}"
-            )
+def _merge_originated_prefixes(*sources):
+    """Combine symbolic origination intent from any authoring levels.
 
-
-def _merge_originated_prefixes(
-    node_prefixes: dict[str, Any] | None, apply_prefixes: dict[str, Any] | None
-):
+    Sources are dicts or None; entries combine additively and repeats
+    collapse at resolution.
+    """
     from nodalarc.models.segments import OriginatedPrefixes
 
     data: dict[str, list[str]] = {}
-    for source in (apply_prefixes, node_prefixes):
+    for source in reversed(sources):
         if not source:
             continue
         for family in ("ipv4", "ipv6"):
@@ -1916,27 +2314,43 @@ def _resolve_link_rule(rule: LinkRule, runtime_nodes: tuple[_RuntimeNode, ...]) 
     )
 
 
+def _check_workload_adapter_support(
+    runtime_nodes: tuple[_RuntimeNode, ...],
+    support: RuntimeSupport,
+) -> None:
+    for item in runtime_nodes:
+        adapter = item.profile_adapter
+        if adapter is None:
+            continue
+        if feature := support.check_workload_adapter(adapter):
+            raise UnsupportedFeatureError([feature])
+
+
 def _resolve_routing_domains(
     cfg: SegmentSessionConfig,
     runtime_nodes: tuple[_RuntimeNode, ...],
 ) -> list[ResolvedRoutingDomain]:
+    # A routing domain is a declaration about routers. A node is a router
+    # exactly when its profile's adapter renders routing configuration;
+    # membership derives from that router population.
     if cfg.routing is None:
-        # Documented product default: one flat IS-IS domain over every routed
-        # node. Hosts/bridges/control-only nodes run no routing protocol and
-        # must not be invented into one.
-        routed = tuple(
-            sorted(item.node.node_id for item in runtime_nodes if item.node.forwarding == "routed")
+        routers = tuple(
+            sorted(
+                item.node.node_id
+                for item in runtime_nodes
+                if adapter_renders(item.profile_adapter, "isis")
+            )
         )
-        if not routed:
+        if not routers:
             raise SessionResolutionError(
-                "session declares no routing and resolves zero routed nodes"
+                "session declares no routing and resolves zero routers rendering IS-IS"
             )
         return [
             ResolvedRoutingDomain(
                 domain_id="default_domain",
                 protocol="isis",
                 timers=_effective_routing_timers("isis", None),
-                node_ids=routed,
+                node_ids=routers,
                 capabilities=(),
                 area_assignment=None,
             )
@@ -1950,10 +2364,6 @@ def _resolve_routing_domains(
             )
         if not selected_ids:
             raise SessionResolutionError(f"routing domain {domain.id!r} matched zero nodes")
-        selected_nodes = tuple(
-            item.node for item in runtime_nodes if item.node.node_id in selected_ids
-        )
-        _validate_area_assignment(domain, selected_nodes)
         capabilities: list[str] = []
         if domain.capabilities is not None:
             if domain.capabilities.mpls is not None:
@@ -1962,6 +2372,20 @@ def _resolve_routing_domains(
                 capabilities.append("segment_routing")
             if domain.capabilities.traffic_engineering is not None:
                 capabilities.append("traffic_engineering")
+        # Membership is the routers among the selected nodes whose adapter
+        # renders this domain's protocol and declared capabilities.
+        selected_ids = {
+            item.node.node_id
+            for item in runtime_nodes
+            if item.node.node_id in selected_ids
+            and adapter_renders(item.profile_adapter, domain.protocol, tuple(capabilities))
+        }
+        if not selected_ids:
+            raise SessionResolutionError(f"routing domain {domain.id!r} contains zero routers")
+        selected_nodes = tuple(
+            item.node for item in runtime_nodes if item.node.node_id in selected_ids
+        )
+        _validate_area_assignment(domain, selected_nodes)
         domains.append(
             ResolvedRoutingDomain(
                 domain_id=domain.id,
@@ -2094,11 +2518,102 @@ def _effective_routing_timers(
     )
 
 
+def _derive_host_attachments(
+    runtime_nodes: tuple[_RuntimeNode, ...],
+) -> tuple[_RuntimeNode, ...]:
+    """Derive substrate attachment facts for host-forwarding nodes.
+
+    A host node attaches to the segment its allocated Ethernet address
+    names; its gateway is the routed node holding an address on that same
+    subnet. With more than one routed node on the segment the lowest node
+    id is the gateway, deterministically. Host attachment is substrate
+    configuration derived from allocation; nothing here is a protocol
+    decision.
+    """
+    routed_segment_ports: list[tuple[str, Any]] = []
+    for item in runtime_nodes:
+        node = item.node
+        if node.forwarding != "routed" or node.interfaces is None:
+            continue
+        for address in node.interfaces.ethernet.values():
+            if address.ipv4:
+                routed_segment_ports.append(
+                    (node.node_id, ipaddress.ip_interface(address.ipv4))
+                )
+    routed_segment_ports.sort(key=lambda entry: entry[0])
+
+    # A session with zero routed nodes refuses at routing-domain
+    # resolution with the documented message; deriving attachments first
+    # would bury that fundamental refusal under a gateway complaint.
+    if not any(item.node.forwarding == "routed" for item in runtime_nodes):
+        return runtime_nodes
+
+    next_nodes: list[_RuntimeNode] = []
+    for item in runtime_nodes:
+        node = item.node
+        if node.forwarding != "host":
+            next_nodes.append(item)
+            continue
+        ethernet = dict(node.interfaces.ethernet) if node.interfaces is not None else {}
+        attach_entry = next(
+            (
+                (name, address)
+                for name, address in sorted(ethernet.items())
+                if address.ipv4
+            ),
+            None,
+        )
+        if attach_entry is None:
+            if node.kind == "ground_station":
+                raise SessionResolutionError(
+                    f"host node {node.node_id!r} requires segment addressing from placement"
+                )
+            # A host-forwarding space node is valid structural grammar with
+            # no derivable segment attachment; it resolves without one, and
+            # any consumer that needs attachment facts refuses it there.
+            next_nodes.append(item)
+            continue
+        interface_name, host_address = attach_entry
+        host_port = ipaddress.ip_interface(host_address.ipv4)
+        gateway = next(
+            (
+                (gateway_id, gateway_port)
+                for gateway_id, gateway_port in routed_segment_ports
+                if gateway_port.network == host_port.network
+            ),
+            None,
+        )
+        if gateway is None:
+            raise SessionResolutionError(
+                f"host node {node.node_id!r} has no routed gateway on its "
+                f"segment {host_port.network}"
+            )
+        gateway_id, gateway_port = gateway
+        attached = node.model_copy(
+            update={
+                "host_attachment": ResolvedHostAttachment(
+                    interface=interface_name,
+                    ipv4=str(host_port),
+                    gateway_ipv4=str(gateway_port.ip),
+                    gateway_node_id=gateway_id,
+                )
+            }
+        )
+        next_nodes.append(replace(item, node=attached))
+    return tuple(next_nodes)
+
+
 def _validate_routing_domain_partition(
     domains: list[ResolvedRoutingDomain],
     runtime_nodes: tuple[_RuntimeNode, ...],
 ) -> None:
-    domain_ids_by_node: dict[str, list[str]] = {item.node.node_id: [] for item in runtime_nodes}
+    # Coverage is owed to the routers: the nodes whose profile's adapter
+    # renders routing configuration.
+    domain_ids_by_node: dict[str, list[str]] = {
+        item.node.node_id: []
+        for item in runtime_nodes
+        if adapter_renders_routing(item.profile_adapter)
+    }
     for domain in domains:
         for node_id in domain.node_ids:
             if node_id in domain_ids_by_node:
@@ -2106,7 +2621,7 @@ def _validate_routing_domain_partition(
     missing = [node_id for node_id, domain_ids in domain_ids_by_node.items() if not domain_ids]
     if missing:
         raise SessionResolutionError(
-            f"routing domains must cover every resolved node; "
+            f"routing domains must cover every router; "
             f"{len(missing)} node{'s are' if len(missing) != 1 else ' is'} in no domain "
             f"(e.g. {', '.join(sorted(missing)[:3])})"
         )
@@ -3025,6 +3540,87 @@ def _load_ref_or_object(value: str, roots: CatalogRoots) -> tuple[str, dict[str,
     if wrapper is None:
         raise SessionResolutionError(f"expected wrapped catalog object, got session {ref!r}")
     return wrapper, model.model_dump(mode="python", by_alias=True, exclude_none=True)
+
+
+def resolve_env_value(
+    value_from: EnvValueFrom,
+    nodes: tuple[ResolvedNode, ...],
+) -> str:
+    """The address, by interface name and family, of the single tagged node."""
+
+    matches = [node for node in nodes if value_from.tag in node.tags]
+    if not matches:
+        raise SessionResolutionError(f"env value_from tag {value_from.tag!r} matches no node")
+    if len(matches) > 1:
+        examples = ", ".join(sorted(node.node_id for node in matches)[:3])
+        raise SessionResolutionError(
+            f"env value_from tag {value_from.tag!r} matches {len(matches)} nodes "
+            f"(e.g. {examples}); exactly one is required"
+        )
+    node = matches[0]
+    interfaces: dict[str, Any] = {}
+    if node.interfaces is not None:
+        interfaces["lo0"] = node.interfaces.lo0
+        interfaces.update(node.interfaces.ethernet)
+    interface = interfaces.get(value_from.interface)
+    if interface is None:
+        raise SessionResolutionError(
+            f"env value_from tag {value_from.tag!r} matched node {node.node_id!r}, "
+            f"which has no interface {value_from.interface!r}"
+        )
+    address = getattr(interface, value_from.family, None)
+    if address is None:
+        raise SessionResolutionError(
+            f"env value_from: interface {value_from.interface!r} on node "
+            f"{node.node_id!r} has no {value_from.family} address"
+        )
+    return str(ipaddress.ip_interface(address).ip)
+
+
+def _check_profile_env(
+    workload_profiles: Mapping[str, Profile],
+    resolved_nodes: tuple[ResolvedNode, ...],
+) -> None:
+    for reference, profile in sorted(workload_profiles.items()):
+        entries = (
+            *profile.env,
+            *(entry for sidecar in profile.sidecars for entry in sidecar.env),
+        )
+        for entry in entries:
+            if not isinstance(entry, ResolvedEnvEntry):
+                continue
+            try:
+                resolve_env_value(entry.value_from, resolved_nodes)
+            except SessionResolutionError as error:
+                raise SessionResolutionError(
+                    f"profile {reference} env {entry.name!r}: {error}"
+                ) from error
+
+
+def _effective_profile(
+    *,
+    described: str,
+    placed: Any,
+    segment_profile: Any,
+    definition: Any,
+    roots: CatalogRoots,
+) -> tuple[str, str, str | None]:
+    """The most specific authored profile statement wins; absence is a refusal."""
+
+    if placed is not None:
+        reference, level = str(placed), "node"
+    elif segment_profile is not None:
+        reference, level = str(segment_profile), "segment"
+    elif definition is not None:
+        reference, level = str(definition), "node_definition"
+    else:
+        raise SessionResolutionError(
+            f"{described} has no workload profile at any level: none on the placed "
+            "entry, none on the segment, and none on the node definition. There is "
+            "no default workload; state what the node runs."
+        )
+    profile_body = _load_expected(reference, roots, "profile")
+    return reference, level, profile_body.get("adapter")
 
 
 def _load_expected(ref: str, roots: CatalogRoots, expected_wrapper: str) -> dict[str, Any]:

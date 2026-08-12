@@ -11,7 +11,8 @@ from typing import Any
 import pytest
 from nodalarc.catalog_closure import FilesystemCatalogReadView
 from nodalarc.catalog_paths import CatalogRoots
-from nodalarc.catalog_upload import CatalogUpload, encode_catalog_upload, sha256_digest
+from nodalarc.catalog_upload import CatalogUpload, encode_catalog_upload
+from nodalarc.content_identity import sha256_digest
 from nodalarc.prepared_session import (
     PreparedSessionSource,
     prepare_session_files,

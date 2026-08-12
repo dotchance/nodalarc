@@ -7,11 +7,14 @@ def _manifest() -> WiringManifest:
     return WiringManifest.model_validate(
         {
             "session_id": "demo",
+            "session_run_id": "run-demo-0001",
+            "owner_uid": "owner-uid-1",
             "wiring_generation": "sha256:" + "a" * 64,
             "required_phases": list(REQUIRED_WIRING_PHASES),
             "nodes": {
                 "sat-a": {
                     "node_type": "satellite",
+                    "host": "node02",
                     "plane": 0,
                     "slot": 0,
                     "sysctls": {"net.ipv6.conf.all.forwarding": "1"},
@@ -35,6 +38,9 @@ def test_failed_status_marks_prior_ready_failed_phase_dirty_and_later_pending() 
     status = failed_status(
         "sat-a",
         _manifest(),
+        pod_uid="pod-uid-1",
+        sandbox_id="sb-1",
+        netns_id="4026532100",
         phase="ground_infrastructure",
         error_message="bridge failed",
         dirty_kernel=True,
@@ -55,6 +61,9 @@ def test_failed_status_rejects_unknown_phase() -> None:
         failed_status(
             "sat-a",
             _manifest(),
+            pod_uid="pod-uid-1",
+            sandbox_id="sb-1",
+            netns_id="4026532100",
             phase="not_a_phase",
             error_message="bad phase",
         )

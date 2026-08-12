@@ -87,15 +87,12 @@ function draftSite(): DraftSiteObject {
     lat_deg: 0,
     lon_deg: 0,
     alt_m: 0,
-    lan_ipv4: "172.20.0.0/24",
     tags: [],
     nodes: [{
       node_id: "gw1",
-      model_ref: NODE_REF,
+      node_ref: NODE_REF,
       installed: {},
       boresights: {},
-      lo0_ipv4: "10.200.0.1/32",
-      terr0_ipv4: "172.20.0.1/24",
     }],
   };
 }
@@ -121,7 +118,7 @@ describe("backend-owned ground installation commands", () => {
       />,
     );
     await screen.findByRole("option", { name: /gw/i });
-    fireEvent.change(screen.getByLabelText("gw1 model"), { target: { value: NODE_REF } });
+    fireEvent.change(screen.getByLabelText("gw1 node"), { target: { value: NODE_REF } });
     await waitFor(() => expect(onSetNodeModel).toHaveBeenCalledWith("gw1", NODE_REF));
     expect(onUpdate).not.toHaveBeenCalled();
   });
@@ -156,12 +153,12 @@ describe("backend-owned ground installation commands", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: /New-site stamp/ }));
     await screen.findByRole("option", { name: /gw/i });
-    fireEvent.change(screen.getByLabelText("Stamp node model"), { target: { value: NODE_REF } });
+    fireEvent.change(screen.getByLabelText("Stamp node"), { target: { value: NODE_REF } });
     await waitFor(() => expect(onSetStampNodeModel).toHaveBeenCalledWith(NODE_REF));
 
     fireEvent.click(screen.getByRole("button", { name: /Sites/ }));
     fireEvent.click(screen.getByRole("button", { name: `Edit ${member.label}` }));
-    fireEvent.change(screen.getByLabelText("gw1 model"), { target: { value: NODE_REF } });
+    fireEvent.change(screen.getByLabelText("gw1 node"), { target: { value: NODE_REF } });
     await waitFor(() =>
       expect(onSetSiteNodeModel).toHaveBeenCalledWith(member.member_id, "gw1", NODE_REF),
     );

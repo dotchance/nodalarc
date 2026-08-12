@@ -2,6 +2,7 @@ node:
   id: heo-relay
   display_name: HEO relay satellite node
   forwarding: routed
+  profile: nodalarc:profiles/frr-router.yaml
   ethernet: []
   terminals:
   - id: access_ka

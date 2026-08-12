@@ -35,13 +35,25 @@ export function TraceDialog({ nodes, selectedNodeId, onTraceResult, snapshot }: 
   });
   const nodesById = useMemo(() => new Map(nodes.map((node) => [node.node_id, node])), [nodes]);
 
-  // Get continuous trace result from WebSocket snapshot
+  // Get continuous trace result from WebSocket snapshot. The continuous trace
+  // is a single server-side singleton, so its presence here is the source of
+  // truth for "a trace is running" — NOT the local `continuous` flag, which is
+  // lost when this dialog unmounts (navigating to another node and back). A
+  // trace started earlier keeps rendering in the globe, so the Stop control
+  // must appear whenever the server reports an active trace, from any view.
   const tp = snapshot?.traced_paths?.find(p => p.flow_id === "__continuous_trace__") ?? null;
+  const isTracing = continuous || tp != null;
+
+  // Reflect the running trace's endpoints so the user sees what they're about
+  // to stop even when they returned to this dialog fresh.
+  useEffect(() => {
+    if (tp) { setSrc(tp.src_node); setDst(tp.dst_node); }
+  }, [tp?.src_node, tp?.dst_node]);
 
   // Pass to parent for globe/topo rendering
   useEffect(() => {
-    if (continuous && tp) onTraceResult?.(tp);
-  }, [continuous, tp, onTraceResult]);
+    if (isTracing && tp) onTraceResult?.(tp);
+  }, [isTracing, tp, onTraceResult]);
 
   // Countdown from path_valid_seconds — sim-time delta that resets each trace.
   // Snapshot the value and wall-clock arrival time, tick down by elapsed wall time.
@@ -114,7 +126,7 @@ export function TraceDialog({ nodes, selectedNodeId, onTraceResult, snapshot }: 
         </select>
       </div>
       <div style={{ display: "flex", gap: 6 }}>
-        {!continuous ? (
+        {!isTracing ? (
           <button className="trace-button" onClick={handleTrace} disabled={loading || !src || !dst || src === dst}>
             {loading ? "Starting..." : "Trace"}
           </button>
@@ -128,7 +140,7 @@ export function TraceDialog({ nodes, selectedNodeId, onTraceResult, snapshot }: 
       {error && <div className="trace-error">{error}</div>}
 
       {/* Live trace results */}
-      {continuous && tp && (
+      {isTracing && tp && (
         <div style={{ marginTop: 8 }}>
           {/* Summary line */}
           <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
@@ -165,10 +177,10 @@ export function TraceDialog({ nodes, selectedNodeId, onTraceResult, snapshot }: 
         </div>
       )}
 
-      {continuous && !tp && (
+      {isTracing && !tp && (
         <div style={{ marginTop: 8, fontSize: 11, color: "var(--text-dim)" }}>Tracing path...</div>
       )}
-      {continuous && tp && tp.hops.length <= 1 && (() => {
+      {isTracing && tp && tp.hops.length <= 1 && (() => {
         // Check if src/dst have any active links
         const links = snapshot?.links ?? [];
         const srcLinks = links.filter(l => (l.node_a === src || l.node_b === src) && l.state === "active");

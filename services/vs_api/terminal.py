@@ -100,8 +100,46 @@ def _get_k8s_client() -> kubernetes.client.CoreV1Api:
     return _k8s_v1
 
 
-def _resolve_pod_ip_sync(node_id: str, namespace: str) -> str | None:
-    """Synchronous pod IP resolution (runs in thread executor)."""
+TERMINAL_ACCESS_ANNOTATION = "nodalarc.io/terminal-access"
+
+
+def parse_terminal_contract(annotation: str | None) -> dict | None:
+    """Parse the pod's terminal contract annotation, refusing malformed data.
+
+    Returns the contract dict ({"surface": "ssh"} or
+    {"surface": "exec", "container": ..., "command": [...]}) or None when
+    the workload declares no terminal access.
+    """
+    if not annotation:
+        return None
+    import json as _json
+
+    try:
+        contract = _json.loads(annotation)
+    except ValueError:
+        log.warning("Malformed terminal contract annotation: %r", annotation[:120])
+        return None
+    if not isinstance(contract, dict):
+        return None
+    surface = contract.get("surface")
+    if surface == "ssh":
+        return {"surface": "ssh"}
+    if surface == "exec":
+        container = contract.get("container")
+        command = contract.get("command")
+        if isinstance(container, str) and isinstance(command, list) and command:
+            return {"surface": "exec", "container": container, "command": command}
+    log.warning("Unknown terminal contract: %r", annotation[:120])
+    return None
+
+
+def _resolve_pod_terminal_sync(node_id: str, namespace: str) -> tuple[str, str, dict | None] | None:
+    """Synchronous pod name + IP + terminal-contract resolution.
+
+    Returns (pod_name, pod_ip, contract). A pod without a valid terminal
+    contract declares no terminal surface: callers refuse immediately
+    instead of dialing a pod that cannot answer.
+    """
     if not _NODE_ID_PATTERN.match(node_id):
         log.warning("Invalid node_id rejected: %r", node_id)
         return None
@@ -112,14 +150,17 @@ def _resolve_pod_ip_sync(node_id: str, namespace: str) -> str | None:
             label_selector=f"nodalarc.io/node-id={node_id}",
         )
         if pods.items and pods.items[0].status.pod_ip:
-            return pods.items[0].status.pod_ip
+            pod = pods.items[0]
+            annotations = pod.metadata.annotations or {}
+            contract = parse_terminal_contract(annotations.get(TERMINAL_ACCESS_ANNOTATION))
+            return pod.metadata.name, pod.status.pod_ip, contract
     except Exception:
         log.exception("Failed to resolve pod IP for %s", node_id)
     return None
 
 
-async def resolve_pod_ip(node_id: str, namespace: str) -> str | None:
-    """Resolve a constellation node_id to its K8s pod IP.
+async def resolve_pod_terminal(node_id: str, namespace: str) -> tuple[str, str, dict | None] | None:
+    """Resolve a constellation node_id to (pod name, pod IP, contract).
 
     Runs the synchronous K8s API call in a thread executor so it doesn't
     block the async event loop (which would stall active SSH sessions).
@@ -127,8 +168,87 @@ async def resolve_pod_ip(node_id: str, namespace: str) -> str | None:
     injection.
     """
     return await asyncio.get_running_loop().run_in_executor(
-        None, _resolve_pod_ip_sync, node_id, namespace
+        None, _resolve_pod_terminal_sync, node_id, namespace
     )
+
+
+class ExecTerminalSession:
+    """A terminal attached inside a pod container via the Kubernetes exec
+    API — the landing surface for workloads that run no SSH daemon.
+
+    Mirrors TerminalSession's lifecycle (connect/send/resize/receive/close)
+    so the WebSocket endpoint treats both surfaces identically. The
+    underlying kubernetes-client stream is synchronous; every operation
+    runs in a thread executor.
+    """
+
+    def __init__(self, namespace: str, pod_name: str, container: str, command: list[str]):
+        self._namespace = namespace
+        self._pod_name = pod_name
+        self._container = container
+        self._command = command
+        self._stream = None
+
+    async def connect(self) -> None:
+        from kubernetes.stream import stream as k8s_stream
+
+        def _connect():
+            v1 = _get_k8s_client()
+            return k8s_stream(
+                v1.connect_get_namespaced_pod_exec,
+                self._pod_name,
+                self._namespace,
+                container=self._container,
+                command=self._command,
+                stdin=True,
+                stdout=True,
+                stderr=True,
+                tty=True,
+                _preload_content=False,
+            )
+
+        self._stream = await asyncio.get_running_loop().run_in_executor(None, _connect)
+
+    async def send(self, data: str) -> None:
+        stream = self._stream
+        if stream is None:
+            raise RuntimeError("exec terminal is not connected")
+        await asyncio.get_running_loop().run_in_executor(None, stream.write_stdin, data)
+
+    async def resize(self, cols: int, rows: int) -> None:
+        stream = self._stream
+        if stream is None:
+            return
+        import json as _json
+
+        payload = _json.dumps({"Width": int(cols), "Height": int(rows)})
+        # Channel 4 is the Kubernetes exec resize channel.
+        await asyncio.get_running_loop().run_in_executor(None, stream.write_channel, 4, payload)
+
+    async def read_output(self) -> str | None:
+        """One chunk of terminal output, mirroring TerminalSession."""
+        stream = self._stream
+        if stream is None:
+            return None
+
+        def _read():
+            if not stream.is_open():
+                return None
+            stream.update(timeout=1)
+            out = ""
+            if stream.peek_stdout():
+                out += stream.read_stdout()
+            if stream.peek_stderr():
+                out += stream.read_stderr()
+            return out
+
+        return await asyncio.get_running_loop().run_in_executor(None, _read)
+
+    async def close(self) -> None:
+        stream = self._stream
+        self._stream = None
+        if stream is not None:
+            await asyncio.get_running_loop().run_in_executor(None, stream.close)
 
 
 class TerminalSession:

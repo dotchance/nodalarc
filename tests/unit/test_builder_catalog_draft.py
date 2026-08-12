@@ -70,20 +70,9 @@ def _payload_source(authoring: BuilderCatalogAuthoringService) -> CatalogRef:
                 "payload": {
                     "id": "component-draft-source",
                     "display_name": "Advanced payload source",
-                    "terminal_slots": [
-                        {
-                            "id": "access",
-                            "terminal": str(_first_shipped_ref("terminals")),
-                            "tags": ["primary"],
-                        }
-                    ],
-                    "resource_groups": [
-                        {
-                            "id": "shared-power",
-                            "slots": ["access"],
-                            "simultaneous_active": 1,
-                        }
-                    ],
+                    "forwarding": "host",
+                    "profile": str(_first_shipped_ref("profiles")),
+                    "tags": ["primary"],
                     "reference": "urn:nodalarc:component-draft-test",
                     "notes": "Every payload field must survive",
                 }
@@ -259,7 +248,7 @@ def test_specialized_patch_changes_only_the_selected_field_on_an_advanced_site(
     assert saved.result.document.canonical_json == expected
     advanced = saved.result.document.canonical_json["site"]
     assert advanced["verified"] == source["site"]["verified"]
-    assert advanced["lan"]["ipv6"] == source["site"]["lan"]["ipv6"]
+    assert advanced["ethernet"] == source["site"]["ethernet"]
     assert advanced["nodes"][0]["terminals"] == source["site"]["nodes"][0]["terminals"]
     assert (
         advanced["nodes"][0]["originated_prefixes"]
@@ -272,7 +261,7 @@ def test_site_node_command_uses_explicit_identity_and_backend_derived_shape(
 ) -> None:
     drafts, authoring = _services(tmp_path)
     node_ref = CatalogRef("nodalarc:nodes/ground/leo-gateway.yaml")
-    node_model = authoring.get_catalog(CatalogGetRequest(ref=node_ref)).canonical_json["node"]
+    node_definition = authoring.get_catalog(CatalogGetRequest(ref=node_ref)).canonical_json["node"]
     opened = drafts.new(CatalogDraftNewRequest(family="sites", object_id="command-site"))
 
     added = drafts.add_site_node(
@@ -288,13 +277,10 @@ def test_site_node_command_uses_explicit_identity_and_backend_derived_shape(
     installed = added.document["site"]["nodes"]
     assert len(installed) == 1
     assert installed[0]["id"] == "edge-router"
-    assert installed[0]["model"] == str(node_ref)
+    assert installed[0]["node"] == str(node_ref)
     assert installed[0]["payloads"] == {}
-    assert installed[0]["interfaces"] == {
-        "lo0": {"ipv4": ""},
-        "terr0": {"ipv4": ""},
-    }
-    expected_mounts = {mount["id"]: mount for mount in node_model["terminals"]}
+    assert installed[0]["interfaces"] == {"terr0": "lan0"}
+    expected_mounts = {mount["id"]: mount for mount in node_definition["terminals"]}
     assert set(installed[0]["terminals"]) == set(expected_mounts)
     for mount_id, installation in installed[0]["terminals"].items():
         assert installation["installed_count"] == expected_mounts[mount_id]["count"]

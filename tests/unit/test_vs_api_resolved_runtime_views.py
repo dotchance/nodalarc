@@ -43,3 +43,26 @@ def test_tracer_view_uses_resolved_loopbacks_interfaces_and_sid_indices():
         assert tracer_node.node_type == resolved.kind
         assert "/" not in tracer_node.loopback_ipv4
         assert tracer_node.sid == resolution.resolved.sid_index_by_node_id().get(node_id)
+
+
+def test_tracer_view_names_the_gateway_for_host_nodes():
+    """TEMPORARY host-node trace stopgap: a host node carries its derived FRR
+    gateway so the tracer can run the trace from there; routed nodes carry
+    None."""
+    path = Path("catalog/nodalarc/sessions/earth-luna-quic.yaml")
+    resolution = resolve_session_with_assets(
+        yaml.safe_load(path.read_text(encoding="utf-8")),
+        catalog_roots=CatalogRoots.from_catalog_root("catalog/nodalarc"),
+        source_context=SourceContext(origin="test.vs-api-host-trace"),
+    )
+    registry = tracer_node_registry(resolution)
+
+    hosts = [n for n in resolution.resolved.nodes if n.forwarding == "host"]
+    assert hosts
+    for host in hosts:
+        tracer_node = registry[host.node_id]
+        assert host.host_attachment is not None
+        assert tracer_node.trace_gateway_node_id == host.host_attachment.gateway_node_id
+    # A routed node carries no trace gateway.
+    routed = next(n for n in resolution.resolved.nodes if n.forwarding == "routed")
+    assert registry[routed.node_id].trace_gateway_node_id is None

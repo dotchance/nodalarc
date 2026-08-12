@@ -1,0 +1,42 @@
+node:
+  id: luna-dtn-custody-relay-vehicle
+  display_name: Cislunar storage-backed DTN relay orbiter
+  forwarding: routed
+  profile: nodalarc:profiles/frr-router.yaml
+  ethernet:
+  - id: bus0
+  - id: bus1
+  terminals:
+  - id: access_s
+    role: access
+    terminal: nodalarc:terminals/rf/rf-s-luna-access.yaml
+    count: 2
+    boresight:
+      mode: nadir
+  - id: isl_optical
+    role: isl
+    terminal: nodalarc:terminals/optical/optical-low-orbit-isl.yaml
+    count: 2
+  - id: relay_optical
+    role: crosslink
+    terminal: nodalarc:terminals/optical/optical-cislunar-crosslink.yaml
+    count: 2
+  payloads:
+  - id: dtn
+    payload: nodalarc:payloads/dtn-host.yaml
+    profile: nodalarc:profiles/ud3tn-custody-relay.yaml
+    count: 1
+    attach: bus1
+    tags:
+    - dtn_relay
+  originated_prefixes:
+    ipv4:
+    - bus1
+    ipv6:
+    - bus1
+  reference: https://www.nasa.gov/directorates/somd/space-communications-navigation-program/lunanet/
+  notes: The luna-relay orbiter carrying a storage-backed DTN custody
+    payload on its payload bus. The payload's contact manager holds
+    bundles in storage while a peer is unreachable and recalls them when
+    geometry returns. The router originates the bus so the payload is
+    reachable whenever the vehicle is.

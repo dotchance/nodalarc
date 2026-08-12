@@ -20,6 +20,7 @@ export type Sha256Digest = string;
 export type CatalogRef = string;
 /** Catalog reference whose family is sessions. */
 export type SessionRef = CatalogRef;
+/** Workload binding reference resolved against the package source. */
 /** Path-free deployable source selected by the browser. */
 export type SessionSourceId = CatalogSessionSourceId;
 /** Runtime validation descriptor for generated backend application DTOs. */
@@ -37,7 +38,7 @@ export type BuilderVisualRuntimeDescriptor =
   | { readonly kind: "union"; readonly options: ReadonlyArray<BuilderVisualRuntimeDescriptor>; readonly exclusive: boolean }
   | { readonly kind: "intersection"; readonly options: ReadonlyArray<BuilderVisualRuntimeDescriptor> };
 
-export type CatalogFamily = "bodies" | "terminals" | "payloads" | "orbits" | "nodes" | "sites" | "site-sets" | "constellations" | "space-node-sets" | "sessions";
+export type CatalogFamily = "bodies" | "terminals" | "payloads" | "profiles" | "orbits" | "nodes" | "sites" | "site-sets" | "constellations" | "space-node-sets" | "sessions";
 export type BuilderIssueStage = "draft" | "structural" | "reference" | "semantic" | "runtime_support" | "readiness" | "persistence" | "deployment" | "staleness";
 export type BuilderIssueSeverity = "info" | "warning" | "error";
 export type BuilderBlockedOperation = "save" | "deploy";
@@ -57,7 +58,7 @@ export type BuilderVisualPhasingMode = "walker_delta" | "walker_star" | "evenly_
 export type BuilderVisualOrbitShape = "circular" | "elliptical";
 export type BuilderVisualOrbitPropagator = "two_body" | "j2_mean_elements";
 export type BuilderVisualTopologyMode = "visible_candidates" | "nearest_n";
-export type BuilderVisualDraftCommandOperation = "place_space_reference" | "place_ground_reference" | "add_generated_space" | "set_space_population" | "author_inline_space_node" | "add_or_increment_node_terminal" | "set_node_terminal_role" | "add_node_ethernet_port" | "add_ground" | "add_ground_site_reference" | "set_ground_stamp_node_model" | "set_ground_site_node_model" | "add_ground_site_node" | "mint_ground_members" | "add_routing_domain" | "add_boundary" | "connect_segments" | "rederive_link" | "set_scheduling_preset";
+export type BuilderVisualDraftCommandOperation = "place_space_reference" | "place_ground_reference" | "add_generated_space" | "set_space_population" | "author_inline_space_node" | "add_or_increment_node_terminal" | "set_node_terminal_role" | "add_node_ethernet_port" | "add_ground" | "add_ground_site_reference" | "set_ground_stamp_node" | "set_ground_site_node" | "add_ground_site_node" | "mint_ground_members" | "add_routing_domain" | "add_boundary" | "connect_segments" | "rederive_link" | "set_scheduling_preset";
 export type BuilderVisualDraftAffectedKind = "space" | "ground" | "routing_domain" | "boundary" | "link" | "ground_member";
 export type CatalogComponentFamily = "bodies" | "terminals" | "payloads" | "orbits" | "nodes" | "sites" | "site-sets" | "constellations" | "space-node-sets";
 export type CatalogDraftPatchOperation = "add" | "replace" | "remove";
@@ -542,15 +543,15 @@ export interface BuilderVisualAddGroundSiteReferenceCommand {
 }
 
 /** Select a ground stamp node and derive its installed terminal inventory. */
-export interface BuilderVisualSetGroundStampNodeModelCommand {
-  readonly operation: "set_ground_stamp_node_model";
+export interface BuilderVisualSetGroundStampNodeCommand {
+  readonly operation: "set_ground_stamp_node";
   readonly segment_id: string;
   readonly node_ref: string;
 }
 
 /** Select one authored site's node model and derive its installed inventory. */
-export interface BuilderVisualSetGroundSiteNodeModelCommand {
-  readonly operation: "set_ground_site_node_model";
+export interface BuilderVisualSetGroundSiteNodeCommand {
+  readonly operation: "set_ground_site_node";
   readonly segment_id: string;
   readonly member_id: string;
   readonly node_id: string;
@@ -617,7 +618,7 @@ export interface BuilderVisualSetSchedulingPresetCommand {
 export interface BuilderVisualDraftCommandRequest {
   readonly draft: BuilderVisualDraftEnvelope;
   readonly expected_draft_revision: number;
-  readonly command: BuilderVisualPlaceSpaceReferenceCommand | BuilderVisualPlaceGroundReferenceCommand | BuilderVisualAddGeneratedSpaceCommand | BuilderVisualSetSpacePopulationCommand | BuilderVisualAuthorInlineSpaceNodeCommand | BuilderVisualAddOrIncrementNodeTerminalCommand | BuilderVisualSetNodeTerminalRoleCommand | BuilderVisualAddNodeEthernetPortCommand | BuilderVisualAddGroundCommand | BuilderVisualAddGroundSiteReferenceCommand | BuilderVisualSetGroundStampNodeModelCommand | BuilderVisualSetGroundSiteNodeModelCommand | BuilderVisualAddGroundSiteNodeCommand | BuilderVisualMintGroundMembersCommand | BuilderVisualAddRoutingDomainCommand | BuilderVisualAddBoundaryCommand | BuilderVisualConnectSegmentsCommand | BuilderVisualRederiveLinkCommand | BuilderVisualSetSchedulingPresetCommand;
+  readonly command: BuilderVisualPlaceSpaceReferenceCommand | BuilderVisualPlaceGroundReferenceCommand | BuilderVisualAddGeneratedSpaceCommand | BuilderVisualSetSpacePopulationCommand | BuilderVisualAuthorInlineSpaceNodeCommand | BuilderVisualAddOrIncrementNodeTerminalCommand | BuilderVisualSetNodeTerminalRoleCommand | BuilderVisualAddNodeEthernetPortCommand | BuilderVisualAddGroundCommand | BuilderVisualAddGroundSiteReferenceCommand | BuilderVisualSetGroundStampNodeCommand | BuilderVisualSetGroundSiteNodeCommand | BuilderVisualAddGroundSiteNodeCommand | BuilderVisualMintGroundMembersCommand | BuilderVisualAddRoutingDomainCommand | BuilderVisualAddBoundaryCommand | BuilderVisualConnectSegmentsCommand | BuilderVisualRederiveLinkCommand | BuilderVisualSetSchedulingPresetCommand;
 }
 
 /** One applied command and the next revision of the complete draft. */
@@ -669,6 +670,7 @@ export interface BuilderVisualNode {
   readonly id?: string;
   readonly display_name?: string;
   readonly forwarding?: "routed" | "host" | "bridge" | "control_only" | null;
+  readonly profile?: string | null;
   readonly ethernet?: ReadonlyArray<string>;
   readonly terminals?: ReadonlyArray<BuilderVisualTerminalMount>;
 }
@@ -711,11 +713,9 @@ export interface BuilderVisualSpaceReference {
 /** One installed node in an editable site object. */
 export interface BuilderVisualSiteNode {
   readonly node_id?: string;
-  readonly model_ref?: string | null;
+  readonly node_ref?: string | null;
   readonly installed?: Readonly<Record<string, number>>;
   readonly boresights: Readonly<Record<string, BuilderVisualGroundBoresight>>;
-  readonly lo0_ipv4?: string;
-  readonly terr0_ipv4?: string;
 }
 
 /** Editable complete site object. */
@@ -726,7 +726,6 @@ export interface BuilderVisualSite {
   readonly lat_deg?: number | null;
   readonly lon_deg?: number | null;
   readonly alt_m?: number | null;
-  readonly lan_ipv4?: string;
   readonly tags?: ReadonlyArray<string>;
   readonly nodes?: ReadonlyArray<BuilderVisualSiteNode>;
 }
@@ -749,8 +748,6 @@ export interface BuilderVisualGroundStamp {
   readonly installed?: Readonly<Record<string, number>>;
   readonly boresights: Readonly<Record<string, BuilderVisualGroundBoresight>>;
   readonly body?: string | null;
-  readonly lan_base?: string;
-  readonly loopback_base?: string;
 }
 
 /** Editable ground segment assembled into site and site-set refs. */
@@ -1707,7 +1704,7 @@ export interface BuilderWorldNode {
   readonly forwarding: "routed" | "host" | "bridge" | "control_only" | null;
   readonly terminal_inventory: ReadonlyArray<ResolvedTerminalBlock>;
   readonly interfaces: ResolvedNodeInterfaces | null;
-  readonly originated_prefixes: OriginatedPrefixes | null;
+  readonly originated_prefixes: ResolvedOriginatedPrefixes | null;
 }
 
 /** One segment as the user named it — the world tree speaks their words, never bare runtime ids. */
@@ -1797,22 +1794,22 @@ export interface NodePosition {
   readonly vel_z_km_s: number;
 }
 
-/** Routing injection intent for a placed node. */
-export interface OriginatedPrefixes {
-  readonly ipv4: ReadonlyArray<string> | null;
-  readonly ipv6: ReadonlyArray<string> | null;
-}
-
 /** A numbered interface address set. */
 export interface ResolvedInterfaceAddress {
   readonly ipv4: string | null;
   readonly ipv6: string | null;
 }
 
-/** Numbered interfaces authored by placement or allocated by the resolver. */
+/** Numbered interfaces allocated by the resolver. `ethernet` maps interface name to addresses: a node environment's own declared port ids, or a mounted payload's single attach-named interface. Every address is allocated on its segment's allocated subnet; nothing here is authored. */
 export interface ResolvedNodeInterfaces {
   readonly lo0: ResolvedInterfaceAddress;
-  readonly terr0: ResolvedInterfaceAddress | null;
+  readonly ethernet: Readonly<Record<string, ResolvedInterfaceAddress>>;
+}
+
+/** Concrete routing-injection facts, resolved from symbolic intent. Authored origination names segments; resolution replaces each name with the segment's allocated subnet (and `default` with the default route), so every downstream consumer reads literal prefixes. */
+export interface ResolvedOriginatedPrefixes {
+  readonly ipv4: ReadonlyArray<string> | null;
+  readonly ipv6: ReadonlyArray<string> | null;
 }
 
 /** Fixed body-surface position for one placed node. */
@@ -1997,7 +1994,7 @@ export const BUILDER_VISUAL_DRAFT_ENVELOPE_RUNTIME_DESCRIPTOR = {
         "fields": {
           "ref": {
             "kind": "string",
-            "pattern": "^(?:nodalarc|user):(?:bodies|constellations|nodes|orbits|payloads|sessions|site\\-sets|sites|space\\-node\\-sets|terminals)/(?:[a-z0-9][a-z0-9_-]*/)*[a-z0-9][a-z0-9_-]*\\.(?:yaml|yml)$"
+            "pattern": "^(?:nodalarc|user):(?:bodies|constellations|nodes|orbits|payloads|profiles|sessions|site\\-sets|sites|space\\-node\\-sets|terminals)/(?:[a-z0-9][a-z0-9_-]*/)*[a-z0-9][a-z0-9_-]*\\.(?:yaml|yml)$"
           },
           "document": {
             "kind": "object",
@@ -2109,6 +2106,19 @@ export const BUILDER_VISUAL_DRAFT_ENVELOPE_RUNTIME_DESCRIPTOR = {
                                   "bridge",
                                   "control_only"
                                 ]
+                              },
+                              {
+                                "kind": "null"
+                              }
+                            ],
+                            "exclusive": false
+                          },
+                          "profile": {
+                            "kind": "union",
+                            "options": [
+                              {
+                                "kind": "string",
+                                "pattern": "^(?:nodalarc|user):(?:profiles)/(?:[a-z0-9][a-z0-9_-]*/)*[a-z0-9][a-z0-9_-]*\\.(?:yaml|yml)$"
                               },
                               {
                                 "kind": "null"
@@ -2546,9 +2556,6 @@ export const BUILDER_VISUAL_DRAFT_ENVELOPE_RUNTIME_DESCRIPTOR = {
                                   ],
                                   "exclusive": false
                                 },
-                                "lan_ipv4": {
-                                  "kind": "string"
-                                },
                                 "tags": {
                                   "kind": "array",
                                   "items": {
@@ -2563,7 +2570,7 @@ export const BUILDER_VISUAL_DRAFT_ENVELOPE_RUNTIME_DESCRIPTOR = {
                                       "node_id": {
                                         "kind": "string"
                                       },
-                                      "model_ref": {
+                                      "node_ref": {
                                         "kind": "union",
                                         "options": [
                                           {
@@ -2596,12 +2603,6 @@ export const BUILDER_VISUAL_DRAFT_ENVELOPE_RUNTIME_DESCRIPTOR = {
                                           },
                                           "additional": false
                                         }
-                                      },
-                                      "lo0_ipv4": {
-                                        "kind": "string"
-                                      },
-                                      "terr0_ipv4": {
-                                        "kind": "string"
                                       }
                                     },
                                     "additional": false
@@ -2685,12 +2686,6 @@ export const BUILDER_VISUAL_DRAFT_ENVELOPE_RUNTIME_DESCRIPTOR = {
                           }
                         ],
                         "exclusive": false
-                      },
-                      "lan_base": {
-                        "kind": "string"
-                      },
-                      "loopback_base": {
-                        "kind": "string"
                       }
                     },
                     "additional": false
@@ -3221,6 +3216,19 @@ export const BUILDER_VISUAL_DRAFT_ENVELOPE_RUNTIME_DESCRIPTOR = {
                             ],
                             "exclusive": false
                           },
+                          "profile": {
+                            "kind": "union",
+                            "options": [
+                              {
+                                "kind": "string",
+                                "pattern": "^(?:nodalarc|user):(?:profiles)/(?:[a-z0-9][a-z0-9_-]*/)*[a-z0-9][a-z0-9_-]*\\.(?:yaml|yml)$"
+                              },
+                              {
+                                "kind": "null"
+                              }
+                            ],
+                            "exclusive": false
+                          },
                           "ethernet": {
                             "kind": "array",
                             "items": {
@@ -3651,9 +3659,6 @@ export const BUILDER_VISUAL_DRAFT_ENVELOPE_RUNTIME_DESCRIPTOR = {
                                   ],
                                   "exclusive": false
                                 },
-                                "lan_ipv4": {
-                                  "kind": "string"
-                                },
                                 "tags": {
                                   "kind": "array",
                                   "items": {
@@ -3668,7 +3673,7 @@ export const BUILDER_VISUAL_DRAFT_ENVELOPE_RUNTIME_DESCRIPTOR = {
                                       "node_id": {
                                         "kind": "string"
                                       },
-                                      "model_ref": {
+                                      "node_ref": {
                                         "kind": "union",
                                         "options": [
                                           {
@@ -3701,12 +3706,6 @@ export const BUILDER_VISUAL_DRAFT_ENVELOPE_RUNTIME_DESCRIPTOR = {
                                           },
                                           "additional": false
                                         }
-                                      },
-                                      "lo0_ipv4": {
-                                        "kind": "string"
-                                      },
-                                      "terr0_ipv4": {
-                                        "kind": "string"
                                       }
                                     },
                                     "additional": false
@@ -3790,12 +3789,6 @@ export const BUILDER_VISUAL_DRAFT_ENVELOPE_RUNTIME_DESCRIPTOR = {
                           }
                         ],
                         "exclusive": false
-                      },
-                      "lan_base": {
-                        "kind": "string"
-                      },
-                      "loopback_base": {
-                        "kind": "string"
                       }
                     },
                     "additional": false
@@ -4300,14 +4293,14 @@ export const CATALOG_COMPONENT_DRAFT_ENVELOPE_RUNTIME_DESCRIPTOR = {
     },
     "target_ref": {
       "kind": "string",
-      "pattern": "^(?:nodalarc|user):(?:bodies|constellations|nodes|orbits|payloads|sessions|site\\-sets|sites|space\\-node\\-sets|terminals)/(?:[a-z0-9][a-z0-9_-]*/)*[a-z0-9][a-z0-9_-]*\\.(?:yaml|yml)$"
+      "pattern": "^(?:nodalarc|user):(?:bodies|constellations|nodes|orbits|payloads|profiles|sessions|site\\-sets|sites|space\\-node\\-sets|terminals)/(?:[a-z0-9][a-z0-9_-]*/)*[a-z0-9][a-z0-9_-]*\\.(?:yaml|yml)$"
     },
     "source_ref": {
       "kind": "union",
       "options": [
         {
           "kind": "string",
-          "pattern": "^(?:nodalarc|user):(?:bodies|constellations|nodes|orbits|payloads|sessions|site\\-sets|sites|space\\-node\\-sets|terminals)/(?:[a-z0-9][a-z0-9_-]*/)*[a-z0-9][a-z0-9_-]*\\.(?:yaml|yml)$"
+          "pattern": "^(?:nodalarc|user):(?:bodies|constellations|nodes|orbits|payloads|profiles|sessions|site\\-sets|sites|space\\-node\\-sets|terminals)/(?:[a-z0-9][a-z0-9_-]*/)*[a-z0-9][a-z0-9_-]*\\.(?:yaml|yml)$"
         },
         {
           "kind": "null"
@@ -4503,6 +4496,19 @@ export const BUILDER_VISUAL_WORKSPACE_RUNTIME_DESCRIPTOR = {
                           "bridge",
                           "control_only"
                         ]
+                      },
+                      {
+                        "kind": "null"
+                      }
+                    ],
+                    "exclusive": false
+                  },
+                  "profile": {
+                    "kind": "union",
+                    "options": [
+                      {
+                        "kind": "string",
+                        "pattern": "^(?:nodalarc|user):(?:profiles)/(?:[a-z0-9][a-z0-9_-]*/)*[a-z0-9][a-z0-9_-]*\\.(?:yaml|yml)$"
                       },
                       {
                         "kind": "null"
@@ -4940,9 +4946,6 @@ export const BUILDER_VISUAL_WORKSPACE_RUNTIME_DESCRIPTOR = {
                           ],
                           "exclusive": false
                         },
-                        "lan_ipv4": {
-                          "kind": "string"
-                        },
                         "tags": {
                           "kind": "array",
                           "items": {
@@ -4957,7 +4960,7 @@ export const BUILDER_VISUAL_WORKSPACE_RUNTIME_DESCRIPTOR = {
                               "node_id": {
                                 "kind": "string"
                               },
-                              "model_ref": {
+                              "node_ref": {
                                 "kind": "union",
                                 "options": [
                                   {
@@ -4990,12 +4993,6 @@ export const BUILDER_VISUAL_WORKSPACE_RUNTIME_DESCRIPTOR = {
                                   },
                                   "additional": false
                                 }
-                              },
-                              "lo0_ipv4": {
-                                "kind": "string"
-                              },
-                              "terr0_ipv4": {
-                                "kind": "string"
                               }
                             },
                             "additional": false
@@ -5079,12 +5076,6 @@ export const BUILDER_VISUAL_WORKSPACE_RUNTIME_DESCRIPTOR = {
                   }
                 ],
                 "exclusive": false
-              },
-              "lan_base": {
-                "kind": "string"
-              },
-              "loopback_base": {
-                "kind": "string"
               }
             },
             "additional": false
@@ -5576,6 +5567,19 @@ export const BUILDER_VISUAL_SPACE_DRAFT_RUNTIME_DESCRIPTOR = {
               ],
               "exclusive": false
             },
+            "profile": {
+              "kind": "union",
+              "options": [
+                {
+                  "kind": "string",
+                  "pattern": "^(?:nodalarc|user):(?:profiles)/(?:[a-z0-9][a-z0-9_-]*/)*[a-z0-9][a-z0-9_-]*\\.(?:yaml|yml)$"
+                },
+                {
+                  "kind": "null"
+                }
+              ],
+              "exclusive": false
+            },
             "ethernet": {
               "kind": "array",
               "items": {
@@ -5977,9 +5981,6 @@ export const BUILDER_VISUAL_GROUND_DRAFT_RUNTIME_DESCRIPTOR = {
                     ],
                     "exclusive": false
                   },
-                  "lan_ipv4": {
-                    "kind": "string"
-                  },
                   "tags": {
                     "kind": "array",
                     "items": {
@@ -5994,7 +5995,7 @@ export const BUILDER_VISUAL_GROUND_DRAFT_RUNTIME_DESCRIPTOR = {
                         "node_id": {
                           "kind": "string"
                         },
-                        "model_ref": {
+                        "node_ref": {
                           "kind": "union",
                           "options": [
                             {
@@ -6027,12 +6028,6 @@ export const BUILDER_VISUAL_GROUND_DRAFT_RUNTIME_DESCRIPTOR = {
                             },
                             "additional": false
                           }
-                        },
-                        "lo0_ipv4": {
-                          "kind": "string"
-                        },
-                        "terr0_ipv4": {
-                          "kind": "string"
                         }
                       },
                       "additional": false
@@ -6116,12 +6111,6 @@ export const BUILDER_VISUAL_GROUND_DRAFT_RUNTIME_DESCRIPTOR = {
             }
           ],
           "exclusive": false
-        },
-        "lan_base": {
-          "kind": "string"
-        },
-        "loopback_base": {
-          "kind": "string"
         }
       },
       "additional": false

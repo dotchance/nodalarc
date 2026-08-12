@@ -50,10 +50,8 @@ from nodalarc.models.builder_catalog_api import (
 from nodalarc.models.catalog import (
     BodyFixedFrame,
     EthernetPort,
-    InterfaceAddress,
     Node,
     Site,
-    SiteLan,
     SiteLocation,
     SiteNode,
     SiteSet,
@@ -109,10 +107,8 @@ _SPECIALIZED_CATALOG_FIELDS = frozenset(
         (SiteLocation, "lat_deg"),
         (SiteLocation, "lon_deg"),
         (SiteLocation, "alt_m"),
-        (SiteLan, "ipv4"),
-        (SiteNode, "model"),
+        (SiteNode, "node"),
         (TerminalInstallation, "installed_count"),
-        (InterfaceAddress, "ipv4"),
         (SiteSet, "display_name"),
         (SiteSet, "sites"),
         (SiteSet, "reference"),
@@ -859,7 +855,7 @@ class BuilderCatalogDraftService:
 
         node_document = _get(snapshot, request.node_ref)
         try:
-            node_model = catalog_family_spec("nodes").validate_document(
+            node_definition = catalog_family_spec("nodes").validate_document(
                 _canonical_source(node_document)
             )
         except (ValidationError, TypeError, ValueError) as error:
@@ -869,7 +865,7 @@ class BuilderCatalogDraftService:
                 ref=request.draft.target_ref,
                 cause=error,
             )
-        if not isinstance(node_model, Node):
+        if not isinstance(node_definition, Node):
             _refuse(
                 "catalog_authoring.invalid_graph",
                 f"Node reference {request.node_ref} does not resolve to a node component",
@@ -904,20 +900,34 @@ class BuilderCatalogDraftService:
             )
 
         terminals: JsonDocument = {}
-        for mount in node_model.terminals:
+        for mount in node_definition.terminals:
             installation: JsonDocument = {"installed_count": mount.count}
             if mount.role == "access":
                 installation["capabilities"] = {"boresight": {"mode": "local_vertical"}}
             terminals[mount.id] = installation
+        # Bind every port the node definition declares to the site's first
+        # declared segment; the author rebinds per port as needed. Addresses
+        # are resolver-allocated, so the scaffold carries no address fields.
+        segments = site.get("ethernet", [])
+        first_segment = (
+            segments[0].get("id")
+            if segments and isinstance(segments[0], dict)
+            else None
+        )
+        if first_segment is None:
+            # A bare draft has no segments yet; scaffold the first one so
+            # the added node has something to bind to. The author renames
+            # or extends the segment list before saving.
+            first_segment = "lan0"
+            site["ethernet"] = [{"id": first_segment}]
         nodes.append(
             {
                 "id": request.node_id,
-                "model": str(request.node_ref),
+                "node": str(request.node_ref),
                 "payloads": {},
                 "terminals": terminals,
                 "interfaces": {
-                    "lo0": {"ipv4": ""},
-                    "terr0": {"ipv4": ""},
+                    port.id: first_segment for port in node_definition.ethernet
                 },
             }
         )

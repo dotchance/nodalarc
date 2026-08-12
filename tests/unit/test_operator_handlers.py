@@ -20,6 +20,7 @@ import pytest
 from nodalarc.catalog_upload import CatalogUploadSelection
 from nodalarc.runtime_config import RuntimeConfigProof
 from nodalarc_operator.runtime_session import OperatorSessionConfig
+from nodalarc_operator.workloads.preparation import WorkloadPreparationError
 
 _SESSION_YAML = (
     Path(__file__).parents[2] / "catalog" / "nodalarc" / "sessions" / "earth-leo-simple.yaml"
@@ -37,12 +38,14 @@ def _reset_operator_module_state(monkeypatch: pytest.MonkeyPatch):
     deployer_mod._v1 = None
     deployer_mod._apps_v1 = None
     handlers_mod._custom_api = None
+    handlers_mod._selection_schema_verified = False
     monkeypatch.setenv("NODALARC_RELEASE", "nodalarc-test")
     monkeypatch.setenv("NODAL_BUILD", "test-build")
     yield
     deployer_mod._v1 = None
     deployer_mod._apps_v1 = None
     handlers_mod._custom_api = None
+    handlers_mod._selection_schema_verified = False
 
 
 class _ReconcilerHarness:
@@ -117,6 +120,11 @@ class _ReconcilerHarness:
             return_value=(True, self.expected_count, self.expected_count),
         )
         self._p(
+            "check_all_provisioned",
+            "nodalarc_operator.handlers.check_all_pods_provisioned",
+            return_value=(True, self.expected_count, self.expected_count),
+        )
+        self._p(
             "check_wiring",
             "nodalarc_operator.handlers.check_wiring_complete",
             return_value=(True, self.expected_count, None),
@@ -155,6 +163,21 @@ class _ReconcilerHarness:
             "ensure_pod_identity",
             "nodalarc_operator.handlers.ensure_session_pod_identity",
             return_value=0,
+        )
+        self._p(
+            "delete_owned",
+            "nodalarc_operator.handlers.delete_owned_session_pods",
+            return_value=(0, 0),
+        )
+        self._p(
+            "prepare_workloads",
+            "nodalarc_operator.handlers.prepare_session_workloads",
+            return_value=MagicMock(identity="profiles@sha256:" + "f" * 64),
+        )
+        self._p(
+            "cr_current",
+            "nodalarc_operator.handlers._cr_generation_is_current",
+            return_value=True,
         )
         self._p(
             "stale_pods",
@@ -247,6 +270,100 @@ async def _reconcile(h, phase="Ready", **extra_status):
     )
 
 
+class TestWorkloadPreparationReconciliation:
+    """The real reconciliation entry path preparing session workloads."""
+
+    def _session(self, h):
+        spec = {"sessionYaml": _SESSION_YAML}
+        meta = {"name": "current-session", "uid": "test-uid", "generation": 1}
+        run_id = handlers_mod._runtime_identity(spec, meta)[1]
+        return spec, meta, h.active_session(spec, "nodalarc", run_id)
+
+    def _run_reconcile(self, spec, meta, active_session, phase="Ready"):
+        _run(
+            handlers_mod._reconcile_session(
+                spec,
+                "current-session",
+                "nodalarc",
+                meta,
+                {"phase": phase, "podCount": 7},
+                active_session,
+            )
+        )
+
+    def test_prepared_identity_flows_to_pod_stamping(self):
+        with _ReconcilerHarness(expected_count=7) as h:
+            spec, meta, active_session = self._session(h)
+            prepared = MagicMock()
+            h.mock("prepare_workloads").return_value = prepared
+            self._run_reconcile(spec, meta, active_session)
+            h.mock("prepare_workloads").assert_called_once()
+            assert h.mock("prepare_workloads").call_args[0][0] is active_session.resolution
+            identity_arg = h.mock("ensure_pod_identity").call_args[0][4]
+            assert identity_arg is prepared.identity
+
+    def test_preparation_failure_drains_then_errors_only_at_zero(self):
+        with _ReconcilerHarness(expected_count=7) as h:
+            h.mock("prepare_workloads").side_effect = WorkloadPreparationError(
+                "profile was not admitted"
+            )
+            spec, meta, active_session = self._session(h)
+
+            # First pass: pods still exist — deletion requested, phase stays
+            # Creating, and nothing else mutates.
+            h.mock("delete_owned").return_value = (3, 3)
+            self._run_reconcile(spec, meta, active_session)
+            h.mock("delete_owned").assert_called_once()
+            h.mock("ensure_pod_identity").assert_not_called()
+            h.mock("delete_obsolete").assert_not_called()
+            assert not h.mock("ensure_cm").called
+            assert not h.mock("ensure_pods").called
+            status = _last_status(h)
+            assert status["phase"] == "Creating"
+            assert "removing 3 session pod(s)" in status["message"]
+
+            # Second pass: zero owned pods observed — NOW the phase is Error.
+            h.mock("delete_owned").return_value = (0, 0)
+            self._run_reconcile(spec, meta, active_session)
+            status = _last_status(h)
+            assert status["phase"] == "Error"
+            assert "Workload selection failed" in status["message"]
+
+    def test_deterministic_failure_inside_deploy_drains(self):
+        with _ReconcilerHarness(expected_count=7) as h:
+            h.mock("current_ids").return_value = frozenset()
+            h.mock("check_ready").return_value = (0, 0)
+            h.mock("ensure_cm").side_effect = WorkloadPreparationError(
+                "workload artifact ConfigMap exists with different contents"
+            )
+            h.mock("delete_owned").return_value = (5, 5)
+            _run(_reconcile(h, phase="Creating"))
+            h.mock("delete_owned").assert_called_once()
+            status = _last_status(h)
+            assert status["phase"] == "Creating"
+            assert "removing 5 session pod(s)" in status["message"]
+
+    def test_stale_generation_never_deletes(self):
+        with _ReconcilerHarness(expected_count=7) as h:
+            h.mock("prepare_workloads").side_effect = WorkloadPreparationError("not admitted")
+            h.mock("cr_current").return_value = False
+            spec, meta, active_session = self._session(h)
+            self._run_reconcile(spec, meta, active_session)
+            h.mock("delete_owned").assert_not_called()
+            assert not h.mock_custom.patch_namespaced_custom_object_status.called
+
+    def test_transient_api_failure_stays_creating(self):
+        with _ReconcilerHarness(expected_count=7) as h:
+            h.mock("current_ids").return_value = frozenset()
+            h.mock("check_ready").return_value = (0, 0)
+            h.mock("ensure_cm").side_effect = kubernetes.client.rest.ApiException(status=500)
+            _run(_reconcile(h, phase="Creating"))
+            h.mock("delete_owned").assert_not_called()
+            status = _last_status(h)
+            assert status["phase"] == "Creating"
+            assert "Transient Kubernetes API failure" in status["message"]
+
+
 class TestReconcileStateMachine:
     def test_reconcile_resolves_once_and_reuses_the_verified_session(self):
         spec = {
@@ -311,7 +428,7 @@ class TestReconcileStateMachine:
             assert status["phase"] == "Creating"
             assert status["message"] == "Pruning 4 pod(s) from a previous session"
 
-    def test_all_running_writes_wiring(self):
+    def test_provisioned_pod_networks_write_wiring(self):
         with _ReconcilerHarness(expected_count=7) as h:
             h.mock("manifest_current").return_value = False
             _run(_reconcile(h, phase="Creating"))
@@ -319,12 +436,52 @@ class TestReconcileStateMachine:
             assert h.mock("ensure_cm").call_args.args[5].startswith("run-")
             h.mock("write_wiring").assert_called_once()
             h.mock("write_ips").assert_called_once()
-            h.mock("restart").assert_called_once()
-            assert h.mock("restart").call_args.args[0] == "nodalarc"
-            assert h.mock("restart").call_args.args[1] != "abc123"
+            # Platform services are NOT restarted at publication: they roll
+            # only after wiring completes and all workloads run.
+            h.mock("restart").assert_not_called()
             status = _last_status(h)
             assert status["platformHash"] == "abc123"
-            assert status["runtimeHash"] == h.mock("restart").call_args.args[1]
+            assert status["runtimeHash"]
+
+    def test_wiring_is_written_before_any_pod_runs(self):
+        with _ReconcilerHarness(expected_count=7) as h:
+            h.mock("manifest_current").return_value = False
+            h.mock("check_all_provisioned").return_value = (True, 7, 0)
+            _run(_reconcile(h, phase="Creating"))
+            h.mock("write_wiring").assert_called_once()
+            h.mock("write_ips").assert_called_once()
+
+    def test_unprovisioned_pod_networks_block_wiring_publication(self):
+        with _ReconcilerHarness(expected_count=7) as h:
+            h.mock("manifest_current").return_value = False
+            h.mock("check_all_provisioned").return_value = (False, 3, 0)
+            _run(_reconcile(h, phase="Creating"))
+            h.mock("write_wiring").assert_not_called()
+            h.mock("write_ips").assert_not_called()
+            status = _last_status(h)
+            assert status["phase"] == "Creating"
+            assert "networked" in status["message"]
+
+    def test_wired_session_waits_for_running_before_ready(self):
+        with _ReconcilerHarness(expected_count=7) as h:
+            h.mock("check_all_running").return_value = (False, 7, 5)
+            _run(_reconcile(h, phase="Wiring"))
+            h.mock("platform_ready").assert_not_called()
+            # Platform services must not start consuming a session whose
+            # workloads have not begun.
+            h.mock("restart").assert_not_called()
+            status = _last_status(h)
+            assert status["phase"] == "Wiring"
+            assert status["readyPods"] == 5
+            assert "pods running: 5/7" in status["message"]
+
+    def test_platform_services_roll_only_after_workloads_run(self):
+        with _ReconcilerHarness(expected_count=7) as h:
+            _run(_reconcile(h, phase="Wiring"))
+            h.mock("restart").assert_called_once()
+            assert h.mock("restart").call_args.args[0] == "nodalarc"
+            status = _last_status(h)
+            assert status["phase"] == "Ready"
 
     def test_stale_wiring_manifest_is_rewritten(self):
         with _ReconcilerHarness(expected_count=7) as h:
@@ -334,13 +491,11 @@ class TestReconcileStateMachine:
             assert h.mock("ensure_cm").call_args.args[5].startswith("run-")
             h.mock("write_wiring").assert_called_once()
             h.mock("write_ips").assert_called_once()
-            h.mock("restart").assert_called_once()
-            assert h.mock("restart").call_args.args[0] == "nodalarc"
-            assert h.mock("restart").call_args.args[1] != "abc123"
+            h.mock("restart").assert_not_called()
             status = _last_status(h)
             assert status["phase"] == "Wiring"
             assert status["observedGeneration"] == 1
-            assert status["runtimeHash"] == h.mock("restart").call_args.args[1]
+            assert status["runtimeHash"]
 
     def test_stale_runtime_mount_is_refreshed_without_rewiring(self):
         with _ReconcilerHarness(expected_count=7) as h:
@@ -350,7 +505,7 @@ class TestReconcileStateMachine:
             h.mock("ensure_cm").assert_called_once()
             h.mock("write_wiring").assert_not_called()
             h.mock("write_ips").assert_not_called()
-            h.mock("restart").assert_called_once()
+            h.mock("restart").assert_not_called()
             status = _last_status(h)
             assert status["phase"] == "Wiring"
             assert "Runtime configuration refreshed" in status["message"]
@@ -599,6 +754,48 @@ class TestReconcileStateMachine:
             status = _last_status(h)
             assert status["phase"] == "Error"
             assert "ConfigMap refresh failed" in status["message"]
+
+    def test_ready_timer_reenters_reconciliation_when_a_pod_is_missing(self):
+        """A missing/replaced/non-running pod must take Ready back through
+        normal reconciliation, before any platform-proof fast path."""
+        with (
+            _ReconcilerHarness(expected_count=7) as h,
+            patch(
+                "nodalarc_operator.handlers._reconcile_session", new_callable=AsyncMock
+            ) as mock_reconcile,
+        ):
+            h.mock("check_all_running").return_value = (False, 7, 6)
+            _run(
+                handlers_mod.wiring_check(
+                    {"sessionYaml": _SESSION_YAML},
+                    "current-session",
+                    "nodalarc",
+                    {"name": "current-session", "uid": "test-uid", "generation": 1},
+                    {"phase": "Ready", "podCount": 7},
+                )
+            )
+            mock_reconcile.assert_awaited_once()
+            h.mock("platform_ready").assert_not_called()
+
+    def test_ready_timer_reenters_reconciliation_when_wiring_proof_stale(self):
+        with (
+            _ReconcilerHarness(expected_count=7) as h,
+            patch(
+                "nodalarc_operator.handlers._reconcile_session", new_callable=AsyncMock
+            ) as mock_reconcile,
+        ):
+            h.mock("check_wiring").return_value = (False, 3, "rewiring in progress")
+            _run(
+                handlers_mod.wiring_check(
+                    {"sessionYaml": _SESSION_YAML},
+                    "current-session",
+                    "nodalarc",
+                    {"name": "current-session", "uid": "test-uid", "generation": 1},
+                    {"phase": "Ready", "podCount": 7},
+                )
+            )
+            mock_reconcile.assert_awaited_once()
+            h.mock("platform_ready").assert_not_called()
 
     def test_ready_timer_repairs_missing_runtime_identity_status(self):
         with _ReconcilerHarness(expected_count=7) as h:

@@ -39,7 +39,14 @@ def load_cr_runtime_config(
     """Verify, materialize, and resolve a CR's selected upload once."""
     if not isinstance(spec, Mapping):
         raise TypeError("runtime session spec must be a mapping")
-    unexpected_fields = sorted(set(spec).difference({"sessionYaml", "catalogUpload"}))
+    unexpected_fields = sorted(
+        set(spec).difference(
+            {
+                "sessionYaml",
+                "catalogUpload",
+            }
+        )
+    )
     if unexpected_fields:
         raise ValueError(
             "runtime session spec contains unsupported field(s): " + ", ".join(unexpected_fields)

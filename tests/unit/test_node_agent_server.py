@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from nodalarc.proto import node_agent_pb2
 from node_agent.command_contract import RuntimeFence
-from node_agent.server import dispatch
+from node_agent.server import DispatchGate, dispatch
 
 SESSION_ID = "test-session"
 WIRING_GENERATION = "sha256:" + "a" * 64
@@ -26,8 +26,24 @@ def _env(kind: str, generation: str = WIRING_GENERATION) -> node_agent_pb2.Comma
     )
 
 
+def _handles(pids):
+    from node_agent.pid_discovery import NamespaceHandle, netns_identity
+
+    return {
+        node_id: NamespaceHandle(
+            node_id=node_id,
+            pod_uid=f"pod-{node_id}",
+            sandbox_id=f"sb-{node_id}",
+            sandbox_attempt=0,
+            pid=pid,
+            netns_id=netns_identity(pid) or "0",
+        )
+        for node_id, pid in pids.items()
+    }
+
+
 def test_malformed_frame_returns_structured_failure_response() -> None:
-    raw = dispatch(b"not-a-frame", {}, FENCE)
+    raw = dispatch(b"not-a-frame", {}, FENCE, DispatchGate())
     response = node_agent_pb2.CommandFailureResponse()
     response.ParseFromString(raw)
 
@@ -36,7 +52,7 @@ def test_malformed_frame_returns_structured_failure_response() -> None:
 
 
 def test_unknown_message_type_returns_structured_failure_response() -> None:
-    raw = dispatch(b"Unknown\x00payload", {}, FENCE)
+    raw = dispatch(b"Unknown\x00payload", {}, FENCE, DispatchGate())
     response = node_agent_pb2.CommandFailureResponse()
     response.ParseFromString(raw)
 
@@ -45,7 +61,7 @@ def test_unknown_message_type_returns_structured_failure_response() -> None:
 
 
 def test_bad_protobuf_returns_typed_operation_failure_response() -> None:
-    raw = dispatch(b"BatchLinkUp\x00\xff", {}, FENCE)
+    raw = dispatch(b"BatchLinkUp\x00\xff", {}, FENCE, DispatchGate())
     response = node_agent_pb2.BatchLinkUpResponse()
     response.ParseFromString(raw)
 
@@ -58,7 +74,7 @@ def test_stale_envelope_is_rejected_before_mutation() -> None:
         envelope=_env("BatchLinkDown", generation="sha256:" + "b" * 64)
     )
 
-    raw = dispatch(_frame(b"BatchLinkDown", request), {}, FENCE)
+    raw = dispatch(_frame(b"BatchLinkDown", request), {}, FENCE, DispatchGate())
     response = node_agent_pb2.BatchLinkDownResponse()
     response.ParseFromString(raw)
 
@@ -82,7 +98,9 @@ def test_unspecified_enum_is_rejected_through_full_dispatch_path() -> None:
         ],
     )
 
-    raw = dispatch(_frame(b"BatchLinkUp", request), {"sat-a": 1234}, FENCE)
+    raw = dispatch(
+        _frame(b"BatchLinkUp", request), _handles({"sat-a": 1234}), FENCE, DispatchGate()
+    )
     response = node_agent_pb2.BatchLinkUpResponse()
     response.ParseFromString(raw)
 
@@ -94,7 +112,7 @@ def test_unspecified_enum_is_rejected_through_full_dispatch_path() -> None:
 def test_valid_set_latency_request_dispatches_to_handler() -> None:
     request = node_agent_pb2.SetLatencyRequest(envelope=_env("SetLatency"))
 
-    raw = dispatch(_frame(b"SetLatency", request), {}, FENCE)
+    raw = dispatch(_frame(b"SetLatency", request), {}, FENCE, DispatchGate())
     response = node_agent_pb2.SetLatencyResponse()
     response.ParseFromString(raw)
 

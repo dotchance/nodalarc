@@ -1,0 +1,6 @@
+site_set:
+  id: earth-dtn-lab-sites
+  display_name: Earth DTN lab sites
+  sites:
+  - nodalarc:sites/earth/es/earth-es-madrid-dtn-lab.yaml
+  notes: One Earth site pairing a LEO gateway with a uD3TN endpoint host.

@@ -61,7 +61,7 @@ export function SiteEditor({
     }));
   };
 
-  const setNodeModel = async (node_id: string, ref: string) => {
+  const setNodeRef = async (node_id: string, ref: string) => {
     setEditorError(null);
     try {
       await onSetNodeModel(node_id, ref);
@@ -118,11 +118,6 @@ export function SiteEditor({
         onChange={(alt_m) => onUpdate((prev) => ({ ...prev, alt_m }))}
       />
       <Field
-        label="site lan"
-        value={site.lan_ipv4}
-        onChange={(lan_ipv4) => onUpdate((prev) => ({ ...prev, lan_ipv4: lan_ipv4.trim() }))}
-      />
-      <Field
         label="tags"
         value={site.tags.join(", ")}
         onChange={(value) =>
@@ -159,10 +154,10 @@ export function SiteEditor({
         >
           <SelectField
               stack
-              label="model"
-              ariaLabel={`${node.node_id} model`}
-              value={node.model_ref}
-              onChange={(ref) => void setNodeModel(node.node_id, ref)}
+              label="node"
+              ariaLabel={`${node.node_id} node`}
+              value={node.node_ref}
+              onChange={(ref) => void setNodeRef(node.node_id, ref)}
               options={nodes.entries
                 .map((entry) => ({
                   value: entry.ref,
@@ -207,16 +202,6 @@ export function SiteEditor({
                 />
               </div>
             ))}
-            <Field
-              label="lo0"
-              value={node.lo0_ipv4}
-              onChange={(lo0_ipv4) => updateNode(node.node_id, { lo0_ipv4: lo0_ipv4.trim() })}
-            />
-            <Field
-              label="terr0"
-              value={node.terr0_ipv4}
-              onChange={(terr0_ipv4) => updateNode(node.node_id, { terr0_ipv4: terr0_ipv4.trim() })}
-            />
         </EditorCard>
       ))}
       <div className="builder-preset-row">

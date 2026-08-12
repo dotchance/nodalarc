@@ -1696,14 +1696,14 @@ export function BuilderView({
               }
               onSetStampNodeModel={(ref) =>
                 applyGroundEditorCommand({
-                  operation: "set_ground_stamp_node_model",
+                  operation: "set_ground_stamp_node",
                   segment_id: draft.segment_id,
                   node_ref: ref,
                 })
               }
               onSetSiteNodeModel={(memberId, nodeId, ref) =>
                 applyGroundEditorCommand({
-                  operation: "set_ground_site_node_model",
+                  operation: "set_ground_site_node",
                   segment_id: draft.segment_id,
                   member_id: memberId,
                   node_id: nodeId,

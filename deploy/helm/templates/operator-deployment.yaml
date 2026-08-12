@@ -53,6 +53,14 @@ spec:
               value: {{ .Values.sessionNodeName | quote }}
             - name: FRR_IMAGE
               value: {{ required "images.frr is required" .Values.images.frr | quote }}
+            - name: WIRING_GATE_IMAGE
+              value: {{ required "images.base is required" .Values.images.base | quote }}
+{{- if .Values.workloadDevImageOverrides }}
+            # Explicit, visibly non-reproducible development substitution of
+            # workload profile images. Never set in production installs.
+            - name: WORKLOAD_DEV_IMAGE_OVERRIDES
+              value: {{ .Values.workloadDevImageOverrides | quote }}
+{{- end }}
             - name: PROBE_IMAGE
               value: {{ required "images.probe is required" .Values.images.probe | quote }}
             - name: NODALPATH_FWD_IMAGE

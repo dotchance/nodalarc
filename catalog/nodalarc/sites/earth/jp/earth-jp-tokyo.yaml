@@ -3,14 +3,14 @@ site:
   display_name: Tokyo LEO B gateway
   verified:
     source: nodalarc_catalog
-    notes: NodalArc demo site using a named-facility coordinate estimate and explicit emulation addressing.
-  lan:
-    ipv4: 172.16.52.0/24
-    ipv6: fd00:da7a:34::/64
+    notes: NodalArc demo site using a named-facility coordinate estimate and explicit
+      emulation addressing.
+  ethernet:
+  - id: lan0
   nodes:
   - id: gw1
     display_name: LEO Gateway
-    model: nodalarc:nodes/ground/leo-gateway.yaml
+    node: nodalarc:nodes/ground/leo-gateway.yaml
     payloads: {}
     terminals:
       access_ka:
@@ -32,18 +32,13 @@ site:
           boresight:
             mode: local_vertical
     interfaces:
-      lo0:
-        ipv4: 10.255.0.55/32
-        ipv6: fd00:da7a:ffff::37/128
-      terr0:
-        ipv4: 172.16.52.1/24
-        ipv6: fd00:da7a:34::1/64
+      terr0: lan0
     originated_prefixes:
       ipv4:
-      - 172.16.52.0/24
-      - 0.0.0.0/0
+      - lan0
+      - default
       ipv6:
-      - fd00:da7a:34::/64
+      - lan0
     tags:
     - leo
   frame:

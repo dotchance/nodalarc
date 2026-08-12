@@ -41,7 +41,7 @@ segments:
       bbm_acquire_timeout_ticks: 1
     originated_prefixes:
       ipv4:
-      - 0.0.0.0/0
+      - default
 - id: leo_b_ground
   placement:
     from_site_set: nodalarc:site-sets/earth/leo/earth-leo-oneweb-gateway-sites.yaml
@@ -68,7 +68,7 @@ segments:
       bbm_acquire_timeout_ticks: 1
     originated_prefixes:
       ipv4:
-      - 0.0.0.0/0
+      - default
 - id: heo_ground
   placement:
     from_site_set: nodalarc:site-sets/earth/heo/earth-heo-gateway-sites.yaml

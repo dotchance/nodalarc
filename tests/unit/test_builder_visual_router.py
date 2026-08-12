@@ -548,6 +548,7 @@ def test_visual_draft_json_materializes_all_authoring_workspace_defaults(
         "id",
         "display_name",
         "forwarding",
+        "profile",
         "ethernet",
         "terminals",
     }
@@ -577,8 +578,6 @@ def test_visual_draft_json_materializes_all_authoring_workspace_defaults(
         "installed",
         "boresights",
         "body",
-        "lan_base",
-        "loopback_base",
     }
     member = materialized["ground"][0]["members"][0]
     assert set(member) == {
@@ -598,17 +597,14 @@ def test_visual_draft_json_materializes_all_authoring_workspace_defaults(
         "lat_deg",
         "lon_deg",
         "alt_m",
-        "lan_ipv4",
         "tags",
         "nodes",
     }
     assert set(member["site"]["nodes"][0]) == {
         "node_id",
-        "model_ref",
+        "node_ref",
         "installed",
         "boresights",
-        "lo0_ipv4",
-        "terr0_ipv4",
     }
     assert set(materialized["ground_refs"][0]) == {
         "segment_id",

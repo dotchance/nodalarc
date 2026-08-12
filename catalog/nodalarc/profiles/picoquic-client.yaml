@@ -1,0 +1,48 @@
+# QUIC client endpoint: repeatedly downloads a 1 MB synthetic document
+# from the lunar server, back and forth across the
+# moving sky, logging each transfer. Transfer behavior under changing
+# reachability is the workload's own: a failed attempt logs and retries;
+# the platform never masks it. The server address arrives as QUIC_SERVER,
+# resolved by the platform from whichever node carries the quic_server tag;
+# no address is authored here.
+profile:
+  id: picoquic-client
+  display_name: QUIC client endpoint
+  registry: node01:5000
+  image: nodalarc-picoquic/picoquic@sha256:0ce1ef8b27da95fa286d6c1e0db76668323093c7046a44358499d335c7b2041a
+  env:
+  - name: QUIC_SERVER
+    value_from:
+      tag: quic_server
+      interface: terr0
+      family: ipv4
+  command:
+  - /bin/bash
+  - -c
+  - >-
+    while true; do
+    echo "== attempt $(date -u +%H:%M:%SZ)";
+    /usr/local/bin/picoquicdemo -D -n server "$QUIC_SERVER" 4433 /1000000;
+    echo "== picoquicdemo exit=$?";
+    sleep 15;
+    done
+  root_filesystem: read_only
+  volumes:
+  - name: tmp
+    kind: ephemeral
+    medium: memory
+    size_mi: 16
+  mounts:
+  - volume: tmp
+    path: /tmp
+  resources:
+    requests:
+      cpu_m: 10
+      memory_mi: 32
+    limits:
+      cpu_m: 500
+      memory_mi: 128
+  terminal:
+    surface: exec
+    command:
+    - /bin/bash

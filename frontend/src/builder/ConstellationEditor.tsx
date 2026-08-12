@@ -344,7 +344,7 @@ export function ConstellationEditor({
               <>
                 <SelectField
                   stack
-                  label="model"
+                  label="node"
                   ariaLabel="Node primitive"
                   value={draft.node_ref}
                   onChange={(node_ref) => onUpdate((prev) => ({ ...prev, node_ref }))}

@@ -15,7 +15,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
-from nodalarc.catalog_upload import CatalogUploadSelection, sha256_digest
+from nodalarc.catalog_upload import CatalogUploadSelection
+from nodalarc.content_identity import sha256_digest
 from nodalarc.kubernetes_runtime_config import (
     RUNTIME_CONFIG_PROOF_FILENAME,
     load_kubernetes_runtime_config,

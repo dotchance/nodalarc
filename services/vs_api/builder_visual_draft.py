@@ -72,8 +72,8 @@ from nodalarc.models.builder_visual_api import (
     BuilderVisualRederiveLinkCommand,
     BuilderVisualRoutingBoundary,
     BuilderVisualRoutingDomain,
-    BuilderVisualSetGroundSiteNodeModelCommand,
-    BuilderVisualSetGroundStampNodeModelCommand,
+    BuilderVisualSetGroundSiteNodeCommand,
+    BuilderVisualSetGroundStampNodeCommand,
     BuilderVisualSetNodeTerminalRoleCommand,
     BuilderVisualSetSchedulingPresetCommand,
     BuilderVisualSetSpacePopulationCommand,
@@ -129,6 +129,7 @@ from .builder_control_mutation import (
 from .builder_control_tree import build_session_control_tree
 from .builder_visual_defaults import (
     DEFAULT_BODY_REF,
+    DEFAULT_NODE_PROFILES,
     DEFAULT_PHASING_MODE,
     DEFAULT_SCHEDULING_PRESET,
     DEFAULT_TERMINAL_MOUNT_COUNT,
@@ -345,63 +346,6 @@ def _site_summary(site: Site) -> str | None:
     if len(normalized) > 512:
         normalized = normalized[:509].rstrip() + "..."
     return normalized or None
-
-
-def _stamp_base(value: str, *, label: str) -> tuple[int, int]:
-    parts = value.split(".")
-    if len(parts) != 2:
-        raise ValueError(f"{label} must contain exactly two IPv4 octets")
-    octets: list[int] = []
-    for part in parts:
-        if not part.isdecimal() or str(int(part)) != part:
-            raise ValueError(f"{label} must contain canonical decimal IPv4 octets")
-        octet = int(part)
-        if not 0 <= octet <= 255:
-            raise ValueError(f"{label} octets must be between 0 and 255")
-        octets.append(octet)
-    return octets[0], octets[1]
-
-
-def _matching_stamp_index(
-    address: str,
-    *,
-    lan_base: str,
-    loopback_base: str,
-) -> int | None:
-    patterns = (
-        (rf"^{re.escape(lan_base)}\.(\d+)\.0/24$", 0),
-        (rf"^{re.escape(lan_base)}\.(\d+)\.1/24$", 0),
-        (rf"^{re.escape(loopback_base)}\.0\.(\d+)/32$", -1),
-    )
-    for pattern, adjustment in patterns:
-        match = re.fullmatch(pattern, address)
-        if match is not None:
-            return int(match.group(1)) + adjustment
-    return None
-
-
-def _next_ground_mint_index(ground: BuilderVisualGroundDraft) -> int:
-    highest = -1
-    for member in ground.members:
-        if member.site is None:
-            continue
-        addresses = [
-            member.site.lan_ipv4,
-            *(
-                address
-                for node in member.site.nodes
-                for address in (node.lo0_ipv4, node.terr0_ipv4)
-            ),
-        ]
-        for address in addresses:
-            index = _matching_stamp_index(
-                address,
-                lan_base=ground.stamp.lan_base,
-                loopback_base=ground.stamp.loopback_base,
-            )
-            if index is not None:
-                highest = max(highest, index)
-    return highest + 1
 
 
 def _capabilities_by_segment(world: BuilderWorld | None) -> dict[str, _SegmentCapability]:
@@ -815,11 +759,15 @@ def _node_document(
                 ),
             }
         )
+    profile = node.profile
+    if profile is None and node.forwarding is not None:
+        profile = DEFAULT_NODE_PROFILES.get(node.forwarding)
     return node_id, {
         "node": {
             "id": node_id,
             "display_name": node.display_name,
             "forwarding": cast(JsonValue, node.forwarding),
+            **({"profile": cast(JsonValue, str(profile))} if profile is not None else {}),
             "ethernet": [
                 {"id": assembly.required_identifier(port, path=path, fallback="terr0")}
                 for port in node.ethernet
@@ -920,7 +868,6 @@ def _site_document(
         ("lat_deg", site.lat_deg),
         ("lon_deg", site.lon_deg),
         ("alt_m", site.alt_m),
-        ("lan_ipv4", site.lan_ipv4),
     ):
         if value is None or value == "":
             assembly.issue(
@@ -936,11 +883,11 @@ def _site_document(
             path=f"{node_path}.node_id",
             fallback=f"node-{index + 1}",
         )
-        if node.model_ref is None:
+        if node.node_ref is None:
             assembly.issue(
-                "builder.draft.site_node_model_required",
+                "builder.draft.site_node_ref_required",
                 "Installed site nodes require a node model reference",
-                f"{node_path}.model_ref",
+                f"{node_path}.node_ref",
             )
         unknown_boresights = sorted(set(node.boresights).difference(node.installed))
         for mount in unknown_boresights:
@@ -967,22 +914,19 @@ def _site_document(
         nodes.append(
             {
                 "id": node_id,
-                "model": cast(
-                    JsonValue, str(node.model_ref) if node.model_ref is not None else None
+                "node": cast(
+                    JsonValue, str(node.node_ref) if node.node_ref is not None else None
                 ),
                 "payloads": {},
                 "terminals": terminals,
-                "interfaces": {
-                    "lo0": {"ipv4": node.lo0_ipv4},
-                    "terr0": {"ipv4": node.terr0_ipv4},
-                },
+                "interfaces": {"terr0": "lan0"},
             }
         )
     return site_id, {
         "site": {
             "id": site_id,
             "display_name": site.display_name,
-            "lan": {"ipv4": site.lan_ipv4},
+            "ethernet": [{"id": "lan0"}],
             **({"tags": [_identifier(tag) for tag in site.tags]} if site.tags else {}),
             "nodes": nodes,
             "frame": {
@@ -1176,6 +1120,7 @@ def _authored_space_projection(
             id=cast(str, node.get("id", "")),
             display_name=cast(str, node.get("display_name", "")),
             forwarding=cast(Any, node.get("forwarding")),
+            profile=cast(Any, node.get("profile")),
             ethernet=tuple(
                 cast(str, item.get("id", ""))
                 for item in cast(list[JsonDocument], node.get("ethernet", []))
@@ -1221,13 +1166,6 @@ def _authored_space_projection(
     )
 
 
-def _address_base(value: object) -> str:
-    if not isinstance(value, str):
-        return ""
-    octets = value.split("/", 1)[0].split(".")
-    return ".".join(octets[:2]) if len(octets) == 4 else ""
-
-
 def _authored_site_projection(document: JsonDocument) -> BuilderVisualSite | None:
     site = document.get("site")
     if not isinstance(site, dict):
@@ -1235,12 +1173,7 @@ def _authored_site_projection(document: JsonDocument) -> BuilderVisualSite | Non
     frame = site.get("frame")
     body_fixed = frame.get("body_fixed") if isinstance(frame, dict) else None
     location = site.get("location")
-    lan = site.get("lan")
-    if (
-        not isinstance(body_fixed, dict)
-        or not isinstance(location, dict)
-        or not isinstance(lan, dict)
-    ):
+    if not isinstance(body_fixed, dict) or not isinstance(location, dict):
         return None
     nodes: list[BuilderVisualSiteNode] = []
     for raw_node in cast(list[JsonDocument], site.get("nodes", [])):
@@ -1258,16 +1191,12 @@ def _authored_site_projection(document: JsonDocument) -> BuilderVisualSite | Non
             boresight = capabilities.get("boresight") if isinstance(capabilities, dict) else None
             if isinstance(boresight, dict):
                 boresights[mount_id] = BuilderVisualGroundBoresight.model_validate(boresight)
-        lo0 = interfaces.get("lo0")
-        terr0 = interfaces.get("terr0")
         nodes.append(
             BuilderVisualSiteNode(
                 node_id=cast(str, raw_node.get("id", "")),
-                model_ref=cast(Any, raw_node.get("model")),
+                node_ref=cast(Any, raw_node.get("node")),
                 installed=installed,
                 boresights=boresights,
-                lo0_ipv4=cast(str, lo0.get("ipv4", "")) if isinstance(lo0, dict) else "",
-                terr0_ipv4=(cast(str, terr0.get("ipv4", "")) if isinstance(terr0, dict) else ""),
             )
         )
     return BuilderVisualSite(
@@ -1277,7 +1206,6 @@ def _authored_site_projection(document: JsonDocument) -> BuilderVisualSite | Non
         lat_deg=cast(Any, location.get("lat_deg")),
         lon_deg=cast(Any, location.get("lon_deg")),
         alt_m=cast(Any, location.get("alt_m")),
-        lan_ipv4=cast(str, lan.get("ipv4", "")),
         tags=tuple(cast(list[str], site.get("tags", []))),
         nodes=tuple(nodes),
     )
@@ -1366,20 +1294,10 @@ def _authored_ground_projection(
         prior.stamp
         if prior is not None
         else BuilderVisualGroundStamp(
-            node_ref=first_node.model_ref if first_node is not None else None,
+            node_ref=first_node.node_ref if first_node is not None else None,
             installed=first_node.installed if first_node is not None else {},
             boresights=first_node.boresights if first_node is not None else {},
             body=first_site.body if first_site is not None else DEFAULT_BODY_REF,
-            lan_base=(
-                _address_base(first_site.lan_ipv4)
-                if first_site is not None
-                else f"172.{20 + ((number - 1) % 12)}"
-            ),
-            loopback_base=(
-                _address_base(first_node.lo0_ipv4)
-                if first_node is not None
-                else f"10.{200 + ((number - 1) % 55)}"
-            ),
         )
     )
     return BuilderVisualGroundDraft(
@@ -3445,8 +3363,6 @@ class BuilderVisualDraftService:
                 installed=installed,
                 boresights=boresights,
                 body=body_ref or DEFAULT_BODY_REF,
-                lan_base=f"172.{20 + ((number - 1) % 12)}",
-                loopback_base=f"10.{200 + ((number - 1) % 55)}",
             ),
             scheduling=scheduling_preset_block(DEFAULT_SCHEDULING_PRESET),
         )
@@ -3963,7 +3879,7 @@ class BuilderVisualDraftService:
             workspace = workspace.model_copy(update={"ground": tuple(grounds)})
             affected_kind = "ground_member"
             affected_id = member_id
-        elif isinstance(command, BuilderVisualSetGroundStampNodeModelCommand):
+        elif isinstance(command, BuilderVisualSetGroundStampNodeCommand):
             matches = [
                 (index, ground)
                 for index, ground in enumerate(workspace.ground)
@@ -4002,7 +3918,7 @@ class BuilderVisualDraftService:
             workspace = workspace.model_copy(update={"ground": tuple(grounds)})
             affected_kind = "ground"
             affected_id = command.segment_id
-        elif isinstance(command, BuilderVisualSetGroundSiteNodeModelCommand):
+        elif isinstance(command, BuilderVisualSetGroundSiteNodeCommand):
             matches = [
                 (index, ground)
                 for index, ground in enumerate(workspace.ground)
@@ -4054,7 +3970,7 @@ class BuilderVisualDraftService:
             nodes = list(member.site.nodes)
             nodes[node_index] = node.model_copy(
                 update={
-                    "model_ref": node_ref,
+                    "node_ref": node_ref,
                     "installed": installed,
                     "boresights": boresights,
                 }
@@ -4095,7 +4011,7 @@ class BuilderVisualDraftService:
             member_index, member = member_matches[0]
             assert member.site is not None
             source_ref = command.node_ref or (
-                member.site.nodes[0].model_ref if member.site.nodes else None
+                member.site.nodes[0].node_ref if member.site.nodes else None
             )
             node_ref = self._node_ref_for_command(
                 draft,
@@ -4116,7 +4032,7 @@ class BuilderVisualDraftService:
                 *member.site.nodes,
                 BuilderVisualSiteNode(
                     node_id=f"gw{node_number}",
-                    model_ref=node_ref,
+                    node_ref=node_ref,
                     installed=installed,
                     boresights=boresights,
                 ),
@@ -4143,24 +4059,10 @@ class BuilderVisualDraftService:
                     code="catalog_authoring.invalid_graph",
                 )
             ground_index, ground = matches[0]
-            try:
-                _stamp_base(ground.stamp.lan_base, label="ground LAN stamp base")
-                _stamp_base(ground.stamp.loopback_base, label="ground loopback stamp base")
-            except ValueError as error:
-                raise self._command_error(draft, str(error)) from error
             if ground.stamp.node_ref is None or ground.stamp.body is None:
                 raise self._command_error(
                     draft,
                     "Ground stamp requires a node model and body before sites can be minted",
-                    code="catalog_authoring.invalid_graph",
-                )
-
-            start_index = _next_ground_mint_index(ground)
-            final_index = start_index + len(command.sites) - 1
-            if start_index < 0 or final_index > 254:
-                raise self._command_error(
-                    draft,
-                    "Ground stamp has no remaining IPv4 addressing room for these sites",
                     code="catalog_authoring.invalid_graph",
                 )
 
@@ -4171,8 +4073,7 @@ class BuilderVisualDraftService:
                 member.site_id for candidate in workspace.ground for member in candidate.members
             }
             minted: list[BuilderVisualGroundMember] = []
-            for offset, site_intent in enumerate(command.sites):
-                address_index = start_index + offset
+            for site_intent in command.sites:
                 member_number = _next_number("member", member_ids)
                 member_id = f"member-{member_number}"
                 member_ids.add(member_id)
@@ -4186,15 +4087,12 @@ class BuilderVisualDraftService:
                     lat_deg=site_intent.lat_deg,
                     lon_deg=site_intent.lon_deg,
                     alt_m=site_intent.alt_m,
-                    lan_ipv4=f"{ground.stamp.lan_base}.{address_index}.0/24",
                     nodes=(
                         BuilderVisualSiteNode(
                             node_id="gw1",
-                            model_ref=ground.stamp.node_ref,
+                            node_ref=ground.stamp.node_ref,
                             installed=dict(ground.stamp.installed),
                             boresights=dict(ground.stamp.boresights),
-                            lo0_ipv4=(f"{ground.stamp.loopback_base}.0.{address_index + 1}/32"),
-                            terr0_ipv4=f"{ground.stamp.lan_base}.{address_index}.1/24",
                         ),
                     ),
                 )

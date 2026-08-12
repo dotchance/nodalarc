@@ -1589,15 +1589,15 @@ class SessionContext:
                             interface="lo0",
                         )
                     )
-                if node.interfaces.terr0 is not None:
-                    for address in (node.interfaces.terr0.ipv4, node.interfaces.terr0.ipv6):
+                for interface_name, segment in sorted(node.interfaces.ethernet.items()):
+                    for address in (segment.ipv4, segment.ipv6):
                         if address is None:
                             continue
                         node_addresses.append(
                             cls._node_addr(
                                 purpose="site_interface",
                                 address=address,
-                                interface="terr0",
+                                interface=interface_name,
                             )
                         )
             primary_prefix: str | None = None

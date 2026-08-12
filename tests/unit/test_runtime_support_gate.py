@@ -275,7 +275,12 @@ class TestUnconsumedGrammarClass:
 
         assert node.clock.model == "session"
 
-    def test_node_payloads_rejected_typed(self) -> None:
+    def test_node_payloads_rejected_typed_under_a_narrowed_profile(self) -> None:
+        # Onboard execution is production-supported; the boundary mechanism
+        # must still refuse typed for a runtime profile without it.
+        narrowed = RuntimeSupport.earth_luna().model_copy(
+            update={"supports_payloads": False}
+        )
         raw = _session()
         assert raw.space_node_ref is not None
         node_document = raw.read_catalog(raw.space_node_ref)
@@ -283,18 +288,26 @@ class TestUnconsumedGrammarClass:
         payload_ref = CatalogRef("user:payloads/runtime-support-camera.yaml")
         raw.create_catalog(
             payload_ref,
-            {"payload": {"id": payload_ref.relative_path.stem, "terminal_slots": []}},
+            {
+                "payload": {
+                    "id": payload_ref.relative_path.stem,
+                    "forwarding": "host",
+                    "profile": "nodalarc:profiles/linux-host.yaml",
+                }
+            },
         )
+        node["ethernet"] = [{"id": "bus0"}]
         node["payloads"] = [
             {
                 "id": "cam-mount",
                 "count": 1,
                 "payload": str(payload_ref),
+                "attach": "bus0",
             }
         ]
         raw.write_catalog(raw.space_node_ref, node_document)
         with pytest.raises(UnsupportedFeatureError) as err:
-            resolve_session(raw)
+            resolve_session(raw, runtime_support=narrowed)
         assert any(f.category == FeatureCategory.PAYLOAD for f in err.value.features)
 
     def test_max_links_per_node_is_enforced_at_resolve(self) -> None:

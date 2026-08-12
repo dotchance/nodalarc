@@ -27,12 +27,12 @@ import kubernetes
 from nodalarc.nats_channels import sanitize_session_id
 from nodalarc.runtime_config import RuntimeDeploymentContext
 from nodalarc.session_identity import derive_session_run_id
-
 from nodalarc_operator.runtime_session import OperatorSessionConfig, resolve_operator_session
 from nodalarc_operator.session_deployer import (
     RetryableSessionDependency,
     build_runtime_deployment_context,
     build_runtime_session_config_data,
+    check_all_pods_provisioned,
     check_all_pods_running,
     check_old_pods_terminated,
     check_platform_runtime_ready,
@@ -43,15 +43,18 @@ from nodalarc_operator.session_deployer import (
     compute_runtime_hash,
     count_stale_session_pods,
     current_session_pod_node_ids,
+    delete_owned_session_pods,
     ensure_session_configmaps,
     ensure_session_pod_identity,
     ensure_session_pods,
+    prepare_session_workloads,
     restart_platform_pods,
     set_nodalpath_mode,
     teardown_session,
     write_pod_ips_configmap,
     write_wiring_manifest,
 )
+from nodalarc_operator.workloads.preparation import WorkloadPreparationError
 
 log = logging.getLogger(__name__)
 
@@ -146,6 +149,77 @@ def _resolve_active_session(
         namespace=namespace,
         source_origin="operator.reconcile",
         run_id=session_run_id,
+    )
+
+
+def _cr_generation_is_current(name: str, namespace: str, meta: dict) -> bool:
+    """Re-read the CR and confirm this pass's generation is still live.
+
+    Guards workload zeroing: a pass that observed generation N must not
+    delete pods a newer generation is creating under the same CR UID.
+    """
+    cr = _get_custom_api().get_namespaced_custom_object(
+        group="nodalarc.io",
+        version="v1alpha1",
+        namespace=namespace,
+        plural="constellationspecs",
+        name=name,
+    )
+    live = int((cr.get("metadata") or {}).get("generation", 0) or 0)
+    return live == int(meta.get("generation", 0) or 0)
+
+
+async def _converge_selection_failure(
+    loop,
+    name: str,
+    namespace: str,
+    meta: dict,
+    owner_ref: dict,
+    status_fields: dict,
+    error_msg: str,
+) -> None:
+    """Drive this CR's workloads to zero, then publish Error.
+
+    Deletion requests are UID-preconditioned and issued only while this
+    pass's generation is still live. The phase stays Creating while owned
+    pods remain — including terminating ones — and becomes Error only once
+    zero is observed, so a terminal phase never coexists with running
+    workloads.
+    """
+    if not await loop.run_in_executor(None, _cr_generation_is_current, name, namespace, meta):
+        log.info("Reconcile: skipping workload zeroing; CR generation advanced")
+        return
+    remaining, requested = await loop.run_in_executor(
+        None, delete_owned_session_pods, namespace, owner_ref
+    )
+    if remaining:
+        _update_status(
+            name,
+            namespace,
+            _with_observed_generation(
+                meta,
+                {
+                    "phase": "Creating",
+                    "message": (
+                        f"Workload selection failed: {error_msg[:350]}; "
+                        f"removing {remaining} session pod(s)"
+                    ),
+                    **status_fields,
+                },
+            ),
+        )
+        return
+    _update_status(
+        name,
+        namespace,
+        _with_observed_generation(
+            meta,
+            {
+                "phase": "Error",
+                "message": f"Workload selection failed: {error_msg[:400]}",
+                **status_fields,
+            },
+        ),
     )
 
 
@@ -394,6 +468,7 @@ async def _reconcile_session(
     phase = status.get("phase", "")
     owner_ref = _build_owner_ref(name, meta)
     spec_dict = dict(spec)
+
     try:
         session_name, session_run_id = await loop.run_in_executor(
             None, _runtime_identity, spec_dict, meta
@@ -462,6 +537,25 @@ async def _reconcile_session(
                     **identity_fields,
                 },
             ),
+        )
+        return
+
+    # The COMPLETE write-free preparation — render, load, digest-verify,
+    # resolve, compile, compose — runs BEFORE any pod is deleted or reused
+    # for this generation. A typed failure converges this CR's workloads to
+    # zero, then publishes Error once zero is observed.
+    try:
+        prepared_workloads = await asyncio.to_thread(
+            prepare_session_workloads,
+            active_session.resolution,
+            namespace=namespace,
+            owner_ref=owner_ref,
+        )
+    except WorkloadPreparationError as exc:
+        error_msg = str(exc)
+        log.error("Reconcile: terminal workload selection failure: %s", error_msg, exc_info=True)
+        await _converge_selection_failure(
+            loop, name, namespace, meta, owner_ref, status_fields, error_msg
         )
         return
 
@@ -544,6 +638,7 @@ async def _reconcile_session(
         expected_ids,
         session_run_id,
         owner_ref,
+        prepared_workloads.identity,
     )
 
     # --- Condition 1: Old pods terminated ---
@@ -666,6 +761,7 @@ async def _reconcile_session(
                 session_run_id,
                 active_session,
                 deployment_context,
+                prepared_workloads,
             )
             await loop.run_in_executor(
                 None, ensure_session_pods, context, namespace, owner_ref, _progress
@@ -680,6 +776,35 @@ async def _reconcile_session(
                     {
                         "phase": "Pending",
                         "message": str(exc),
+                        **status_fields,
+                    },
+                ),
+            )
+            return
+        except WorkloadPreparationError as exc:
+            error_msg = str(exc)
+            log.error(
+                "Reconcile: terminal workload selection failure during deploy: %s",
+                error_msg,
+                exc_info=True,
+            )
+            await _converge_selection_failure(
+                loop, name, namespace, meta, owner_ref, status_fields, error_msg
+            )
+            return
+        except kubernetes.client.rest.ApiException as exc:
+            # Transient Kubernetes failure — remain Creating; the timer
+            # re-enters and the ensure pipeline is idempotent.
+            log.warning("Reconcile: transient Kubernetes API failure during deploy: %s", exc)
+            _update_status(
+                name,
+                namespace,
+                _with_observed_generation(
+                    meta,
+                    {
+                        "phase": "Creating",
+                        "message": f"Transient Kubernetes API failure, retrying: {str(exc)[:300]}",
+                        "podCount": expected_count,
                         **status_fields,
                     },
                 ),
@@ -709,23 +834,23 @@ async def _reconcile_session(
                 {
                     "phase": "Creating",
                     "podCount": expected_count,
-                    "message": f"Pods created, waiting for Running ({expected_count} expected)",
+                    "message": f"Pods created, waiting for pod networks ({expected_count} expected)",
                     **status_fields,
                 },
             ),
         )
-        return  # Timer will re-enter to check Running status
+        return  # Timer will re-enter to check network provisioning
 
-    all_ready, total, ready = await loop.run_in_executor(
+    all_provisioned, provisioned, ready = await loop.run_in_executor(
         None,
-        check_all_pods_running,
+        check_all_pods_provisioned,
         namespace,
         expected_count,
         session_run_id,
         owner_ref,
         expected_ids,
     )
-    if not all_ready:
+    if not all_provisioned:
         _update_status(
             name,
             namespace,
@@ -735,25 +860,34 @@ async def _reconcile_session(
                     "phase": "Creating",
                     "readyPods": ready,
                     "podCount": expected_count,
-                    "message": f"Pods: {ready} running, {expected_count - ready} starting",
+                    "message": (
+                        f"Pods: {provisioned} networked, "
+                        f"{expected_count - provisioned} awaiting network"
+                    ),
                     **status_fields,
                 },
             ),
         )
-        log.debug("Reconcile: %d/%d pods running, waiting for all", ready, expected_count)
+        log.debug(
+            "Reconcile: %d/%d pod networks provisioned, waiting for all",
+            provisioned,
+            expected_count,
+        )
         return
 
-    # All pods running — proceed through remaining conditions.
+    # All pod networks provisioned — proceed through remaining conditions.
     #
-    # NOTE: Condition 3 (readiness probe check) is deliberately SKIPPED
-    # as a deployment gate. The readiness probe (vtysh + config version
-    # diff) is for K8s health monitoring, NOT for gating the wiring phase.
-    # At 591 pods, FRR startup takes 30-60s under CPU contention, causing
-    # readiness probe timeouts. The wiring phase doesn't need FRR to be
-    # responsive — it creates kernel interfaces. FRR loads its config
-    # independently and forms adjacencies when the carrier arrives on
-    # wired interfaces. Gating on Ready here blocked deployment for the
-    # entire session. See plan: "wiring gates on Running, not Ready."
+    # NOTE: Wiring publication deliberately gates on provisioned pod
+    # networks (scheduled + pod IP assigned), NOT on Running and NOT on
+    # the readiness probe. The sandbox network namespace exists from pod
+    # provisioning onward, which is all the Node Agent needs; a workload
+    # held behind a pre-start wiring gate can never reach Running before
+    # wiring, so gating on Running would deadlock. The readiness probe
+    # (vtysh + config version diff) remains K8s health monitoring only:
+    # at 591 pods, FRR startup takes 30-60s under CPU contention, and
+    # FRR forms adjacencies when the carrier arrives on wired interfaces
+    # regardless of when it started. All-Running is enforced later,
+    # after wiring completes, before the session is declared Ready.
 
     # --- Condition 4: Wiring manifest written + wiring complete ---
     runtime_config_current = await loop.run_in_executor(
@@ -830,7 +964,10 @@ async def _reconcile_session(
                 )
 
                 await loop.run_in_executor(None, set_nodalpath_mode, namespace, "console")
-            await loop.run_in_executor(None, restart_platform_pods, namespace, runtime_hash)
+            # OME/Scheduler restart deliberately does NOT happen here: the
+            # platform services are restarted only after wiring completes
+            # and every session workload container is Running, so they never
+            # start consuming a session whose workloads have not begun.
         except RetryableSessionDependency as exc:
             log.info("Reconcile: waiting on runtime dependency during refresh: %s", exc)
             _update_status(
@@ -878,7 +1015,8 @@ async def _reconcile_session(
                     "platformHash": platform_hash,
                     "runtimeHash": runtime_hash,
                     "message": (
-                        f"All {expected_count} pods running. Node Agent wiring data plane."
+                        f"All {expected_count} pod networks provisioned. "
+                        "Node Agent wiring data plane."
                         if not manifest_current
                         else "Runtime configuration refreshed; waiting for verified services."
                     ),
@@ -939,6 +1077,47 @@ async def _reconcile_session(
             ),
         )
         log.debug("Reconcile: wiring in progress (%d/%d)", wired_count, expected_count)
+        return
+
+    # Wiring is complete — every session container must be Running before
+    # the session may be declared Ready. Under the earlier provisioned-gate
+    # this is no longer implied, and Ready must never mask starting pods.
+    all_running, _running_total, ready = await loop.run_in_executor(
+        None,
+        check_all_pods_running,
+        namespace,
+        expected_count,
+        session_run_id,
+        owner_ref,
+        expected_ids,
+    )
+    if not all_running:
+        _update_status(
+            name,
+            namespace,
+            _with_observed_generation(
+                meta,
+                {
+                    "phase": "Wiring",
+                    "readyPods": ready,
+                    "podCount": expected_count,
+                    "wiredPods": wired_count,
+                    "message": f"Wired; pods running: {ready}/{expected_count}",
+                    **status_fields,
+                },
+            ),
+        )
+        log.debug("Reconcile: wired, %d/%d pods running", ready, expected_count)
+        return
+
+    # Wired and all workloads Running — now (and only now) roll the
+    # session-scoped platform services onto the new runtime inputs. The
+    # config-hash annotation makes this a no-op on every later pass with
+    # the same runtime hash.
+    try:
+        await loop.run_in_executor(None, restart_platform_pods, namespace, runtime_hash)
+    except kubernetes.client.rest.ApiException as exc:
+        log.warning("Reconcile: platform restart error: %s", exc)
         return
 
     try:
@@ -1134,6 +1313,53 @@ async def wiring_check(spec, name, namespace, meta, status, **_):
                 ),
             )
             return
+        # Ready is a claim about the session, not only the platform: a
+        # missing, replaced, or non-running pod, or wiring proof that is no
+        # longer current, must take the session back through normal
+        # reconciliation instead of remaining advertised as Ready.
+        try:
+            expected_count = await asyncio.to_thread(
+                compute_expected_pod_count, dict(spec), active_session=active_session
+            )
+            expected_ids = _compute_expected_node_ids(active_session)
+            owner_ref = _build_owner_ref(name, meta)
+            all_running, _total, _running = await asyncio.to_thread(
+                check_all_pods_running,
+                namespace,
+                expected_count,
+                identity_fields["sessionRunId"],
+                owner_ref,
+                expected_ids,
+            )
+        except kubernetes.client.rest.ApiException as exc:
+            log.warning("Ready session pod membership check failed: %s", exc)
+            return
+        wiring_ok = False
+        try:
+            wiring_ok, _wired, _progress = await asyncio.to_thread(
+                check_wiring_complete, namespace, expected_count
+            )
+        except kubernetes.client.rest.ApiException as exc:
+            log.warning("Ready session wiring proof check failed: %s", exc)
+            return
+        except ValueError as exc:
+            log.warning("Ready session wiring proof invalid: %s", exc)
+        if not all_running or not wiring_ok:
+            log.warning(
+                "Ready session degraded (all_running=%s, wiring_current=%s) — reconciling",
+                all_running,
+                wiring_ok,
+            )
+            await _reconcile_session(
+                spec,
+                name,
+                namespace,
+                meta,
+                status,
+                active_session,
+            )
+            return
+
         try:
             platform_ready, _ = await asyncio.to_thread(
                 check_platform_runtime_ready,

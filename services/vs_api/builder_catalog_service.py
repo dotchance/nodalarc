@@ -41,6 +41,7 @@ from nodalarc.catalog_repository import (
 )
 from nodalarc.catalog_upload import DEFAULT_CATALOG_UPLOAD_LIMITS
 from nodalarc.configuration_yaml import load_configuration_yaml
+from nodalarc.content_identity import canonical_json_bytes, sha256_digest
 from nodalarc.models.builder_api import BuilderCatalogDocument, JsonDocument
 from nodalarc.models.builder_catalog_api import (
     BuilderCatalogBootstrap,
@@ -127,20 +128,6 @@ class CatalogAuthoringError(RuntimeError):
     @property
     def code(self) -> str:
         return self.refusal.code
-
-
-def _sha256(content: bytes) -> str:
-    return "sha256:" + hashlib.sha256(content).hexdigest()
-
-
-def _canonical_json_bytes(value: Any) -> bytes:
-    return json.dumps(
-        value,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-        allow_nan=False,
-    ).encode("utf-8")
 
 
 def _refuse(
@@ -709,7 +696,7 @@ class BuilderCatalogAuthoringService:
         namespace: str | None,
         cursor: str,
     ) -> str:
-        payload = _canonical_json_bytes(
+        payload = canonical_json_bytes(
             {
                 "cursor": cursor,
                 "family": family,
@@ -882,8 +869,8 @@ class BuilderCatalogAuthoringService:
             for ref in sorted(depths, key=str)
         )
         direct = tuple(item for item in dependents if item.minimum_depth == 1)
-        acknowledgement = _sha256(
-            _canonical_json_bytes(
+        acknowledgement = sha256_digest(
+            canonical_json_bytes(
                 {
                     "schema": _IMPACT_SCHEMA,
                     "target": {
@@ -1205,7 +1192,7 @@ class BuilderCatalogAuthoringService:
         identical_refs: tuple[CatalogRef, ...],
         collisions: tuple[CatalogYamlImportCollision, ...],
     ) -> str:
-        payload = _canonical_json_bytes(
+        payload = canonical_json_bytes(
             {
                 "collisions": [
                     {
@@ -1222,7 +1209,7 @@ class BuilderCatalogAuthoringService:
                 "writes": [
                     {
                         "canonicalization_changed": item.canonicalization_changed,
-                        "content_digest": _sha256(item.canonical_yaml.encode("utf-8")),
+                        "content_digest": sha256_digest(item.canonical_yaml.encode("utf-8")),
                         "family": item.family,
                         "logical_path": item.logical_path,
                         "ref": str(item.ref),

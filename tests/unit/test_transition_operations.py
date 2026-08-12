@@ -4,7 +4,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from nodalarc.catalog_upload import CatalogUploadSelection, sha256_digest
+from nodalarc.catalog_upload import CatalogUploadSelection
+from nodalarc.content_identity import sha256_digest
 from vs_api.catalog_upload_store import (
     CatalogUploadStoreError,
     CatalogUploadStoreErrorCode,

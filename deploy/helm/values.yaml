@@ -1,7 +1,13 @@
 # Default values for Nodal Arc deployment
 namespace: nodalarc
 
+# JSON map of profile image references to replacement references, applied to
+# composed workload containers with loud logging. Development only; empty in
+# production so digest admission is never weakened.
+workloadDevImageOverrides: ""
+
 images:
+  base: nodalarc/base:dev
   frr: nodalarc/frr:dev
   probe: nodalarc/probe:dev
   nodalpathFwd: nodalarc/nodalpath-fwd:dev

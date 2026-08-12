@@ -27,6 +27,7 @@ class _NodeState:
         "node_id",
         "management_ip",
         "_pod_name",
+        "_container",
         "_namespace",
         "last_neighbors",
         "events",
@@ -38,6 +39,7 @@ class _NodeState:
         self.node_id = node_id
         self.management_ip = management_ip
         self._pod_name: str | None = None
+        self._container: str | None = None
         self._namespace: str | None = None
         self.last_neighbors: dict[str, dict[str, str]] = {}
         self.events: list[AdapterEvent] = []
@@ -49,6 +51,34 @@ class _NodeState:
         if self._pod_name is None:
             self._resolve_pod()
         return self._pod_name
+
+    @property
+    def container(self) -> str:
+        """The primary workload container: first in the pod's composition."""
+        if self._container is None:
+            self._resolve_container()
+        if self._container is None:
+            raise RuntimeError(f"primary container unresolved for pod {self.pod_name}")
+        return self._container
+
+    def _resolve_container(self) -> None:
+        result = subprocess.run(
+            [
+                "kubectl",
+                "get",
+                "pod",
+                "-n",
+                self.namespace,
+                self.pod_name,
+                "-o",
+                "jsonpath={.spec.containers[0].name}",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            self._container = result.stdout.strip()
 
     @property
     def namespace(self) -> str:
@@ -188,7 +218,7 @@ class BaseFrrAdapter(abc.ABC):
                 state.namespace,
                 state.pod_name,
                 "-c",
-                "frr",
+                state.container,
                 "--",
                 "vtysh",
                 "-c",
@@ -228,7 +258,7 @@ class BaseFrrAdapter(abc.ABC):
                     state.namespace,
                     state.pod_name,
                     "-c",
-                    "frr",
+                    state.container,
                     "--",
                     "vtysh",
                     "-c",
@@ -324,7 +354,7 @@ class BaseFrrAdapter(abc.ABC):
                     state.namespace,
                     state.pod_name,
                     "-c",
-                    "frr",
+                    state.container,
                     "--",
                     "tail",
                     "-f",

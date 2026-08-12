@@ -72,6 +72,7 @@ list_platform_runtime_images() {
 }
 
 list_session_runtime_images() {
+    emit_record session nodalarc base "$(prefix_ref base "$TAG")" required built
     emit_record session nodalarc frr "$(prefix_ref frr "$TAG")" required built
     emit_record session nodalarc probe "$(prefix_ref probe "$TAG")" required built
 }
@@ -119,6 +120,23 @@ image_for() {
     image_for_tag "$1" "$TAG"
 }
 
+workload_dev_overrides() {
+    # Map the shipped workload profiles' placeholder image references to the
+    # tree's real images. Development only: the value reaches the Operator
+    # as WORKLOAD_DEV_IMAGE_OVERRIDES and every substitution is logged as
+    # non-reproducible. Raw JSON: it must NEVER pass through helm --set
+    # parsing, where braces and commas are list syntax. It travels as a
+    # generated values file (workload-dev-overrides-values).
+    local zeros="0000000000000000000000000000000000000000000000000000000000000000"
+    printf '{"registry.example/nodalarc/frr@sha256:%s":"%s","registry.example/nodalarc/base@sha256:%s":"%s"}' \
+        "$zeros" "$(image_for frr)" "$zeros" "$(image_for base)"
+}
+
+workload_dev_overrides_values() {
+    # YAML values fragment carrying the JSON verbatim as one string scalar.
+    printf "workloadDevImageOverrides: '%s'\n" "$(workload_dev_overrides)"
+}
+
 helm_image_args() {
     local pull_policy
     if [ "$MODE_RESOLVED" = "single-node" ]; then
@@ -129,6 +147,7 @@ helm_image_args() {
 
     printf '%s\n' "--set-string=buildTag=$TAG"
     printf '%s\n' "--set-string=imagePullPolicy=$pull_policy"
+    printf '%s\n' "--set-string=images.base=$(image_for base)"
     printf '%s\n' "--set-string=images.frr=$(image_for frr)"
     printf '%s\n' "--set-string=images.probe=$(image_for probe)"
     printf '%s\n' "--set-string=images.ome=$(image_for ome)"
@@ -156,6 +175,7 @@ Commands:
   image-for NAME
   image-for-tag NAME TAG
   helm-image-args
+  workload-dev-overrides-values
 EOF
 }
 
@@ -190,6 +210,7 @@ case "$command" in
         image_for_tag "$2" "$3"
         ;;
     helm-image-args) helm_image_args ;;
+    workload-dev-overrides-values) workload_dev_overrides_values ;;
     -h|--help|help) usage ;;
     *)
         echo "na-images: unknown command '$command'" >&2

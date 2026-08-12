@@ -139,6 +139,9 @@ def test_shipped_session_renders_template_vars_for_every_node(path: Path) -> Non
 
     resolved = _resolved(path)
     for node in resolved.nodes:
+        if node.forwarding == "host":
+            # Processing hosts run no routing stack and render nothing.
+            continue
         result = build_template_vars_from_resolved(resolved, node.node_id)
         assert result["node_id"] == node.node_id
         if node.kind == "satellite" and (node.plane is None or node.slot is None):
@@ -254,6 +257,9 @@ class TestTickRateContract:
         "earth-leo-walker": 1,
         "earth-meo-gps": 1,
         "earth-leo-heo-geo-luna-reachability": 1,
+        "earth-luna-dtn": 1,
+        "earth-luna-dtn-custody": 1,
+        "earth-luna-quic": 1,
         # GEO-only sessions: near-stationary geometry, deliberate 10 s tick.
         "earth-geo-inmarsat": 10,
         "earth-geo-tdrs": 10,

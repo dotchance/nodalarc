@@ -1,0 +1,23 @@
+node:
+  id: dtn-luna-gateway
+  display_name: Luna surface gateway carrying a DTN endpoint host
+  forwarding: routed
+  profile: nodalarc:profiles/frr-router.yaml
+  ethernet:
+  - id: terr0
+  terminals:
+  - id: access_s
+    role: access
+    terminal: nodalarc:terminals/rf/rf-s-luna-access.yaml
+    count: 4
+  payloads:
+  - id: dtn
+    payload: nodalarc:payloads/dtn-host.yaml
+    profile: nodalarc:profiles/ud3tn-luna-endpoint.yaml
+    count: 1
+    attach: terr0
+  reference: https://datatracker.ietf.org/doc/html/rfc9171
+  notes: The luna-surface-gateway model plus a mounted DTN endpoint host
+    on its LAN port. The mount overrides the payload's default profile
+    with the lunar endpoint composition. Site files choose installed
+    terminal and payload counts.

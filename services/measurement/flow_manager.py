@@ -65,10 +65,10 @@ def resolve_dst_ip(dst_node_id: str, resolved: ResolvedSession) -> str:
             return str(net.network_address)
         return str(net.network_address + 1)
 
-    if node.interfaces is not None and node.interfaces.terr0 is not None:
-        terr0 = node.interfaces.terr0.ipv4
-        if terr0:
-            return str(ipaddress.ip_interface(terr0).ip)
+    if node.interfaces is not None:
+        for _, segment in sorted(node.interfaces.ethernet.items()):
+            if segment.ipv4:
+                return str(ipaddress.ip_interface(segment.ipv4).ip)
 
     raise ValueError(
         f"Cannot resolve probe destination {dst_node_id!r}: no originated IPv4 prefix "

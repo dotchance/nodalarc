@@ -17,6 +17,7 @@ from nodalarc.catalog_refs import (
     BodyRef,
     CatalogRef,
     NodeRef,
+    ProfileRef,
     SessionRef,
     SiteRef,
     SiteSetRef,
@@ -61,8 +62,8 @@ BuilderVisualDraftCommandOperation = Literal[
     "add_node_ethernet_port",
     "add_ground",
     "add_ground_site_reference",
-    "set_ground_stamp_node_model",
-    "set_ground_site_node_model",
+    "set_ground_stamp_node",
+    "set_ground_site_node",
     "add_ground_site_node",
     "mint_ground_members",
     "add_routing_domain",
@@ -140,6 +141,7 @@ class BuilderVisualNode(_BuilderVisualModel):
     id: str = ""
     display_name: str = ""
     forwarding: ForwardingClass | None = None
+    profile: ProfileRef | None = None
     ethernet: tuple[str, ...] = ()
     terminals: tuple[BuilderVisualTerminalMount, ...] = ()
 
@@ -204,11 +206,9 @@ class BuilderVisualSiteNode(_BuilderVisualModel):
     """One installed node in an editable site object."""
 
     node_id: str = ""
-    model_ref: NodeRef | None = None
+    node_ref: NodeRef | None = None
     installed: dict[str, int] = Field(default_factory=dict)
     boresights: dict[str, BuilderVisualGroundBoresight]
-    lo0_ipv4: str = ""
-    terr0_ipv4: str = ""
 
 
 class BuilderVisualSite(_BuilderVisualModel):
@@ -220,7 +220,6 @@ class BuilderVisualSite(_BuilderVisualModel):
     lat_deg: float | None = None
     lon_deg: float | None = None
     alt_m: float | None = None
-    lan_ipv4: str = ""
     tags: tuple[str, ...] = ()
     nodes: tuple[BuilderVisualSiteNode, ...] = ()
 
@@ -245,8 +244,6 @@ class BuilderVisualGroundStamp(_BuilderVisualModel):
     installed: dict[str, int] = Field(default_factory=dict)
     boresights: dict[str, BuilderVisualGroundBoresight]
     body: BodyRef | None = None
-    lan_base: str = ""
-    loopback_base: str = ""
 
 
 class BuilderVisualGroundDraft(_BuilderVisualModel):
@@ -631,18 +628,18 @@ class BuilderVisualAddGroundSiteReferenceCommand(_BuilderVisualModel):
     site_ref: SiteRef
 
 
-class BuilderVisualSetGroundStampNodeModelCommand(_BuilderVisualModel):
+class BuilderVisualSetGroundStampNodeCommand(_BuilderVisualModel):
     """Select a ground stamp node and derive its installed terminal inventory."""
 
-    operation: Literal["set_ground_stamp_node_model"]
+    operation: Literal["set_ground_stamp_node"]
     segment_id: str = Field(min_length=1, max_length=160)
     node_ref: NodeRef
 
 
-class BuilderVisualSetGroundSiteNodeModelCommand(_BuilderVisualModel):
+class BuilderVisualSetGroundSiteNodeCommand(_BuilderVisualModel):
     """Select one authored site's node model and derive its installed inventory."""
 
-    operation: Literal["set_ground_site_node_model"]
+    operation: Literal["set_ground_site_node"]
     segment_id: str = Field(min_length=1, max_length=160)
     member_id: str = Field(min_length=1, max_length=160)
     node_id: str = Field(min_length=1, max_length=160)
@@ -730,8 +727,8 @@ BuilderVisualDraftCommand = Annotated[
     | BuilderVisualAddNodeEthernetPortCommand
     | BuilderVisualAddGroundCommand
     | BuilderVisualAddGroundSiteReferenceCommand
-    | BuilderVisualSetGroundStampNodeModelCommand
-    | BuilderVisualSetGroundSiteNodeModelCommand
+    | BuilderVisualSetGroundStampNodeCommand
+    | BuilderVisualSetGroundSiteNodeCommand
     | BuilderVisualAddGroundSiteNodeCommand
     | BuilderVisualMintGroundMembersCommand
     | BuilderVisualAddRoutingDomainCommand

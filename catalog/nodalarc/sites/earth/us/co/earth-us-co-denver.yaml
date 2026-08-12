@@ -3,14 +3,14 @@ site:
   display_name: Denver gateway (LEO + MEO)
   verified:
     source: nodalarc_catalog
-    notes: NodalArc demo site using a named-facility coordinate estimate and explicit emulation addressing.
-  lan:
-    ipv4: 172.16.99.0/24
-    ipv6: fd00:da7a:63::/64
+    notes: NodalArc demo site using a named-facility coordinate estimate and explicit
+      emulation addressing.
+  ethernet:
+  - id: lan0
   nodes:
   - id: gw1
     display_name: LEO Gateway
-    model: nodalarc:nodes/ground/leo-gateway.yaml
+    node: nodalarc:nodes/ground/leo-gateway.yaml
     payloads: {}
     terminals:
       access_ka:
@@ -32,23 +32,18 @@ site:
           boresight:
             mode: local_vertical
     originated_prefixes:
-      ipv4: &id001
-      - 172.16.99.0/24
-      - 0.0.0.0/0
+      ipv4:
+      - lan0
+      - default
       ipv6:
-      - fd00:da7a:63::/64
+      - lan0
     tags:
     - leo
     interfaces:
-      lo0:
-        ipv4: 10.255.0.104/32
-        ipv6: fd00:da7a:ffff::68/128
-      terr0:
-        ipv4: 172.16.99.1/24
-        ipv6: fd00:da7a:63::1/64
+      terr0: lan0
   - id: gw2
     display_name: MEO Gateway
-    model: nodalarc:nodes/ground/meo-gateway.yaml
+    node: nodalarc:nodes/ground/meo-gateway.yaml
     payloads: {}
     terminals:
       access_ka:
@@ -72,16 +67,13 @@ site:
     tags:
     - meo
     interfaces:
-      lo0:
-        ipv4: 10.255.0.105/32
-        ipv6: fd00:da7a:ffff::69/128
-      terr0:
-        ipv4: 172.16.99.2/24
-        ipv6: fd00:da7a:63::2/64
+      terr0: lan0
     originated_prefixes:
-      ipv4: *id001
+      ipv4:
+      - lan0
+      - default
       ipv6:
-      - fd00:da7a:63::/64
+      - lan0
   frame:
     body_fixed:
       body: nodalarc:bodies/earth.yaml

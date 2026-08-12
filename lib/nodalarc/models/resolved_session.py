@@ -34,7 +34,7 @@ from nodalarc.models.segment_session import (
     Simulation,
     TimeConfig,
 )
-from nodalarc.models.segments import GroundScheduling, OriginatedPrefixes, SegmentClock
+from nodalarc.models.segments import GroundScheduling, SegmentClock
 from nodalarc.models.terminal_physics import SatGroundTerminalBoresight, TerminalBoresight
 from nodalarc.tle import tle_epoch_unix, tle_norad_id, validate_tle_pair
 
@@ -145,12 +145,79 @@ class ResolvedInterfaceAddress(BaseModel):
 
 
 class ResolvedNodeInterfaces(BaseModel):
-    """Numbered interfaces authored by placement or allocated by the resolver."""
+    """Numbered interfaces allocated by the resolver.
+
+    `ethernet` maps interface name to addresses: a node environment's own
+    declared port ids, or a mounted payload's single attach-named
+    interface. Every address is allocated on its segment's allocated
+    subnet; nothing here is authored.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     lo0: ResolvedInterfaceAddress
-    terr0: ResolvedInterfaceAddress | None = None
+    ethernet: dict[NonEmptyReference, ResolvedInterfaceAddress] = Field(default_factory=dict)
+
+
+class ResolvedOriginatedPrefixes(BaseModel):
+    """Concrete routing-injection facts, resolved from symbolic intent.
+
+    Authored origination names segments; resolution replaces each name with
+    the segment's allocated subnet (and `default` with the default route),
+    so every downstream consumer reads literal prefixes.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    ipv4: tuple[NonEmptyReference, ...] | None = None
+    ipv6: tuple[NonEmptyReference, ...] | None = None
+
+
+class ResolvedSegmentMember(BaseModel):
+    """One environment attached to a resolved Ethernet segment."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    node_id: NonEmptyReference
+    # The kernel interface name inside the member's environment.
+    interface: NonEmptyReference
+
+
+class ResolvedEthernetSegment(BaseModel):
+    """One allocated Ethernet segment: a site LAN or a carried bus.
+
+    `scope_id` names the owner (a site id, or a carrier's runtime node id),
+    `segment_id` the owner's declared segment. Subnets and membership are
+    allocation facts the substrate wires verbatim.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    scope_id: NonEmptyReference
+    segment_id: NonEmptyReference
+    ipv4_subnet: NonEmptyReference
+    ipv6_subnet: NonEmptyReference
+    members: tuple[ResolvedSegmentMember, ...] = Field(min_length=1)
+
+
+class ResolvedHostAttachment(BaseModel):
+    """Substrate-owned attachment facts for one host-forwarding node.
+
+    Derived at resolution: the host's segment address is its allocated
+    assignment on the segment its interface joins, and its gateway is the
+    routed node serving that segment. Host attachment is substrate
+    configuration — the platform acting as the network's address authority,
+    the way DHCP would — never a protocol-derived forwarding decision. The
+    Node Agent applies these facts at wiring time so the host's containers
+    need no networking capability of their own.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    interface: NonEmptyReference
+    ipv4: NonEmptyReference
+    gateway_ipv4: NonEmptyReference
+    gateway_node_id: NonEmptyReference
 
 
 class ResolvedWanInterface(BaseModel):
@@ -311,8 +378,17 @@ class ResolvedNode(BaseModel):
     wan_interfaces: tuple[ResolvedWanInterface, ...] = ()
     orbit: ResolvedOrbitFacts | None = None
     surface_position: ResolvedSurfacePosition | None = None
-    originated_prefixes: OriginatedPrefixes | None = None
+    originated_prefixes: ResolvedOriginatedPrefixes | None = None
     forwarding: Literal["routed", "host", "bridge", "control_only"] | None = None
+    # The effective workload profile and the level that supplied it: the
+    # placed node entry, the segment, or the node definition. Resolution
+    # refuses a node with no statement at any level; there is no default
+    # workload.
+    profile: NonEmptyReference
+    profile_level: Literal["node", "segment", "node_definition"]
+    # Present exactly when forwarding == "host": the derived substrate
+    # attachment the Node Agent applies at wiring time.
+    host_attachment: ResolvedHostAttachment | None = None
     service_priority: int | None = Field(default=None, gt=0)
     plane: int | None = Field(default=None, ge=0)
     slot: int | None = Field(default=None, ge=0)
@@ -483,6 +559,9 @@ class ResolvedSession(BaseModel):
     link_rules: tuple[ResolvedLinkRule, ...]
     link_candidates: tuple[ResolvedLinkCandidate, ...] = ()
     routing_domains: tuple[ResolvedRoutingDomain, ...] = ()
+    # Every allocated Ethernet segment (site LANs and carried buses) with
+    # its membership; the substrate wires these verbatim.
+    ethernet_segments: tuple[ResolvedEthernetSegment, ...] = ()
     sid_blocks: tuple[SidBlock, ...]
     simulation: Simulation | None = None
     routing: Routing | None = None

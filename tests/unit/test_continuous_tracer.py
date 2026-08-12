@@ -251,3 +251,107 @@ def test_tracer_accepts_dict_node_registry():
         pid_map={},
     )
     assert tracer._ip_to_node["10.2.0.1"] == "gs-alpha"
+
+
+def test_trace_endpoint_substitutes_gateway_for_host_nodes():
+    """TEMPORARY host-node trace stopgap: a host endpoint traces from its FRR
+    gateway; a routed endpoint traces from itself."""
+    registry = {
+        "madrid-gw": SimpleNamespace(
+            node_id="madrid-gw",
+            node_type="ground_station",
+            sid=24001,
+            loopback_ipv4="10.2.0.1",
+            trace_gateway_node_id=None,
+        ),
+        "quic-client": SimpleNamespace(
+            node_id="quic-client",
+            node_type="host",
+            sid=None,
+            loopback_ipv4="10.255.0.241",
+            trace_gateway_node_id="madrid-gw",
+        ),
+    }
+    tracer = _make_tracer(node_registry=registry)
+
+    # A host node resolves to its gateway for tracing.
+    host = tracer._node_registry["quic-client"]
+    assert tracer._trace_endpoint(host).node_id == "madrid-gw"
+    # A routed node resolves to itself.
+    router = tracer._node_registry["madrid-gw"]
+    assert tracer._trace_endpoint(router).node_id == "madrid-gw"
+
+
+def test_trace_endpoint_falls_back_to_self_when_gateway_missing():
+    """A missing gateway (never expected) must not crash the trace — it falls
+    back to the node itself rather than raising."""
+    registry = {
+        "quic-client": SimpleNamespace(
+            node_id="quic-client",
+            node_type="host",
+            sid=None,
+            loopback_ipv4="10.255.0.241",
+            trace_gateway_node_id="absent-gw",
+        ),
+    }
+    tracer = _make_tracer(node_registry=registry)
+    host = tracer._node_registry["quic-client"]
+    assert tracer._trace_endpoint(host).node_id == "quic-client"
+
+
+def test_run_tracepath_streams_partial_hops():
+    """traceroute output arriving in chunks streams each new complete hop line
+    to on_partial, so the UI grows the path instead of waiting for the whole
+    (possibly slow) command. This is the fix for the 'hangs then dumps' UX."""
+    from unittest.mock import patch
+
+    tracer = _make_tracer()
+
+    class _FakeStream:
+        def __init__(self, lines):
+            self._lines = list(lines)
+            self._open = True
+
+        def is_open(self):
+            return self._open
+
+        def update(self, timeout=5):
+            pass
+
+        def read_stdout(self):
+            if self._lines:
+                return self._lines.pop(0)
+            self._open = False
+            return ""
+
+        def read_stderr(self):
+            return ""
+
+    lines = [
+        "traceroute to 10.0.0.9 (10.0.0.9), 20 hops max\n",
+        " 1  10.2.0.1  5.0 ms\n",
+        " 2  10.0.0.1  120.0 ms\n",
+        " 3  10.0.0.9  2800.0 ms\n",
+    ]
+
+    partials: list[int] = []
+    from types import SimpleNamespace
+
+    with (
+        patch("kubernetes.config.load_incluster_config"),
+        patch("kubernetes.client.CoreV1Api") as core_api,
+        patch("kubernetes.stream.stream", return_value=_FakeStream(lines)),
+    ):
+        core_api.return_value.read_namespaced_pod.return_value.spec.containers = [
+            SimpleNamespace(name="frr-router")
+        ]
+        result = tracer._run_tracepath(
+            "gs-alpha", "10.0.0.9", lambda raw: partials.append(raw.count("\n"))
+        )
+
+    assert result["ok"] is True, result
+    # on_partial fired incrementally as each new complete line arrived (not
+    # once at the end), so the UI would have seen the path grow.
+    assert partials == sorted(partials)  # monotonically increasing
+    assert len(partials) >= 3  # at least once per hop line
+    assert max(partials) >= 4  # header + 3 hop lines all complete

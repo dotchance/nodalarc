@@ -37,6 +37,7 @@ from nodalarc_operator.runtime_session import OperatorSessionConfig
 from nodalarc_operator.session_deployer import (
     _create_terminal_ssh_keys,
     _required_substrate_pairs,
+    check_all_pods_provisioned,
     check_wiring_complete,
     compute_expected_placement_node_count,
     compute_expected_pod_count,
@@ -178,6 +179,7 @@ def _make_wiring_manifest(node_ids=("sat-P00S00", "sat-P00S01")):
     for index, node_id in enumerate(node_ids):
         nodes[node_id] = {
             "node_type": "satellite",
+            "host": "node02",
             "sysctls": {"net.ipv4.ip_forward": "1"},
             "isl_interfaces": [],
             "gnd_interfaces": [],
@@ -191,6 +193,8 @@ def _make_wiring_manifest(node_ids=("sat-P00S00", "sat-P00S01")):
     return WiringManifest.model_validate(
         {
             "session_id": "test-session",
+            "session_run_id": "run-test-0001",
+            "owner_uid": "owner-uid-1",
             "wiring_generation": "sha256:" + "a" * 64,
             "required_phases": list(REQUIRED_WIRING_PHASES),
             "nodes": nodes,
@@ -379,6 +383,75 @@ class TestDeterministicNode:
         assert _deterministic_node("gs-anything", ["only-node"]) == "only-node"
 
 
+class TestPodNetworkProvisioning:
+    """check_all_pods_provisioned() counts sandbox networks, never containers."""
+
+    @staticmethod
+    def _pod(
+        node_name: str | None,
+        pod_ip: str | None,
+        phase: str,
+        *,
+        containers: int = 1,
+        running: int | None = None,
+    ) -> MagicMock:
+        pod = MagicMock()
+        pod.spec.node_name = node_name
+        pod.spec.containers = [MagicMock() for _ in range(containers)]
+        pod.status.pod_ip = pod_ip
+        pod.status.phase = phase
+        running_count = containers if running is None else running
+        statuses = []
+        for index in range(containers):
+            status = MagicMock()
+            status.state.running = MagicMock() if index < running_count else None
+            statuses.append(status)
+        pod.status.container_statuses = statuses
+        return pod
+
+    def _check(self, pods: list[MagicMock], expected_count: int) -> tuple[bool, int, int]:
+        mock_v1 = MagicMock()
+        mock_v1.list_namespaced_pod.return_value.items = pods
+        with patch("nodalarc_operator.session_deployer._get_v1", return_value=mock_v1):
+            return check_all_pods_provisioned("nodalarc", expected_count)
+
+    def test_scheduled_pods_with_ips_count_before_any_container_runs(self):
+        pods = [
+            self._pod("node02", "10.42.0.5", "Pending"),
+            self._pod("node03", "10.42.1.7", "Pending"),
+        ]
+        all_provisioned, provisioned, running = self._check(pods, expected_count=2)
+        assert all_provisioned is True
+        assert provisioned == 2
+        assert running == 0
+
+    def test_pod_without_ip_is_not_provisioned(self):
+        pods = [self._pod("node02", "10.42.0.5", "Running"), self._pod("node03", None, "Pending")]
+        all_provisioned, provisioned, running = self._check(pods, expected_count=2)
+        assert all_provisioned is False
+        assert provisioned == 1
+        assert running == 1
+
+    def test_unscheduled_pod_is_not_provisioned(self):
+        pods = [self._pod(None, None, "Pending")]
+        all_provisioned, provisioned, running = self._check(pods, expected_count=1)
+        assert all_provisioned is False
+        assert provisioned == 0
+        assert running == 0
+
+    def test_running_requires_every_authored_container(self):
+        """Pod phase Running is not enough: a multi-container workload counts
+        only when each declared regular container has state.running."""
+        half_started = self._pod("node02", "10.42.0.5", "Running", containers=2, running=1)
+        fully_started = self._pod("node03", "10.42.1.7", "Running", containers=2)
+        all_provisioned, provisioned, running = self._check(
+            [half_started, fully_started], expected_count=2
+        )
+        assert all_provisioned is True
+        assert provisioned == 2
+        assert running == 1
+
+
 # ---------------------------------------------------------------------------
 # Class 3: TestWiringCompletion
 # ---------------------------------------------------------------------------
@@ -389,7 +462,16 @@ class TestWiringCompletion:
 
     def test_metadata_keys_are_not_counted_as_wired_nodes(self):
         manifest = _make_wiring_manifest()
-        statuses = {node_id: ready_status(node_id, manifest) for node_id in manifest.nodes}
+        statuses = {
+            node_id: ready_status(
+                node_id,
+                manifest,
+                pod_uid=f"pod-{node_id}",
+                sandbox_id=f"sb-{node_id}",
+                netns_id="4026532100",
+            )
+            for node_id in manifest.nodes
+        }
         status_data = status_configmap_data(statuses, manifest)
         status_data["_progress"] = "Finalized 2/2 pods. Wiring complete."
 
@@ -414,8 +496,19 @@ class TestWiringCompletion:
 
     def test_unknown_status_node_fails_loudly(self):
         manifest = _make_wiring_manifest()
-        statuses = {node_id: ready_status(node_id, manifest) for node_id in manifest.nodes}
-        statuses["sat-P99S99"] = ready_status("sat-P99S99", manifest)
+        statuses = {
+            node_id: ready_status(
+                node_id,
+                manifest,
+                pod_uid=f"pod-{node_id}",
+                sandbox_id=f"sb-{node_id}",
+                netns_id="4026532100",
+            )
+            for node_id in manifest.nodes
+        }
+        statuses["sat-P99S99"] = ready_status(
+            "sat-P99S99", manifest, pod_uid="pod-x", sandbox_id="sb-x", netns_id="4026532100"
+        )
         status_data = status_configmap_data(statuses, manifest)
 
         mock_v1 = create_autospec(kubernetes.client.CoreV1Api, instance=True)
@@ -436,10 +529,22 @@ class TestWiringCompletion:
 
     def test_dirty_kernel_status_names_first_failure(self):
         manifest = _make_wiring_manifest()
-        statuses = {node_id: ready_status(node_id, manifest) for node_id in manifest.nodes}
+        statuses = {
+            node_id: ready_status(
+                node_id,
+                manifest,
+                pod_uid=f"pod-{node_id}",
+                sandbox_id=f"sb-{node_id}",
+                netns_id="4026532100",
+            )
+            for node_id in manifest.nodes
+        }
         statuses["sat-P00S00"] = failed_status(
             "sat-P00S00",
             manifest,
+            pod_uid="pod-sat-P00S00",
+            sandbox_id="sb-sat-P00S00",
+            netns_id="4026532100",
             phase="sysctls",
             error_message="sysctl net.mpls.platform_labels=100000 failed",
             dirty_kernel=True,
@@ -770,16 +875,24 @@ def _existing_session_pod(
     node_id="sat-P00S00",
     uid="test-uid",
     run_id="run-test-0001",
+    selection_identity="profiles@sha256:" + "0" * 64,
+    pod_uid="pod-uid-0001",
 ):
     return kubernetes.client.V1Pod(
         metadata=kubernetes.client.V1ObjectMeta(
             name=pod_name,
+            uid=pod_uid,
             labels={
                 "nodalarc.io/session": "true",
                 "nodalarc.io/node-id": node_id,
                 "nodalarc.io/session-run-id": run_id,
                 "nodalarc.io/owner-uid": uid,
             },
+            annotations=(
+                {"nodalarc.io/workload-selection": selection_identity}
+                if selection_identity is not None
+                else None
+            ),
             owner_references=[
                 kubernetes.client.V1OwnerReference(
                     api_version="nodalarc.io/v1alpha1",
@@ -826,6 +939,19 @@ class TestWiringManifest:
                 side_effect=lambda _v1, required: dict.fromkeys(required, "10.0.0.1"),
             ),
         ):
+            mock_v1.list_node.return_value = kubernetes.client.V1NodeList(
+                items=[
+                    kubernetes.client.V1Node(
+                        metadata=kubernetes.client.V1ObjectMeta(name=name),
+                        spec=kubernetes.client.V1NodeSpec(pod_cidr=cidr),
+                    )
+                    for name, cidr in (
+                        ("node01", "10.42.0.0/22"),
+                        ("node02", "10.42.12.0/22"),
+                        ("node03", "10.42.16.0/22"),
+                    )
+                ]
+            )
             write_wiring_manifest(spec, "nodalarc", owner_ref, "run-test-0001")
         return _extract_manifest(mock_v1)
 
@@ -841,7 +967,11 @@ class TestWiringManifest:
         assert "ground_bridges" in manifest
         for node_id, node in manifest["nodes"].items():
             assert "node_type" in node, f"{node_id} missing node_type"
-            assert node["node_type"] in ("satellite", "ground_station"), f"{node_id} bad node_type"
+            assert node["node_type"] in (
+                "satellite",
+                "ground_station",
+                "host",
+            ), f"{node_id} bad node_type"
             assert "isl_interfaces" in node, f"{node_id} missing isl_interfaces"
             assert isinstance(node["isl_interfaces"], list), f"{node_id} isl_interfaces not list"
             assert "gnd_interfaces" in node, f"{node_id} missing gnd_interfaces"
@@ -852,6 +982,27 @@ class TestWiringManifest:
             assert "segment_routing" in node, f"{node_id} missing segment_routing"
             assert "remove_default_route" in node, f"{node_id} missing remove_default_route"
             assert "mtu" in node, f"{node_id} missing mtu"
+
+    def test_manifest_carries_a_cluster_pod_cidr_for_the_management_path(self, tmp_path):
+        """The Node Agent replaces the CNI default with a management route to
+        the cluster pod CIDR so a session pod can answer the browser terminal
+        and control-plane traffic from another node. If the manifest ever
+        omits that CIDR, cross-node terminal access silently breaks — this
+        pins the data into the contract.
+        """
+        import ipaddress
+
+        manifest = self._build_and_extract(tmp_path)
+        cidr = manifest.get("cluster_pod_cidr")
+        assert cidr, "wiring manifest must carry cluster_pod_cidr"
+        covering = ipaddress.ip_network(cidr)
+        # It must cover every node's pod CIDR — the reachability the terminal
+        # depends on cross-node.
+        for node_cidr in ("10.42.0.0/22", "10.42.12.0/22", "10.42.16.0/22"):
+            node_net = ipaddress.ip_network(node_cidr)
+            assert node_net.subnet_of(covering), f"{node_cidr} not covered by {cidr}"
+        # And the whole manifest still validates through the Node Agent contract.
+        WiringManifest.model_validate(manifest)
 
     def test_manifest_declares_site_lans_for_every_addressed_terr0(self, tmp_path):
         manifest = self._build_and_extract(tmp_path)
@@ -882,6 +1033,58 @@ class TestWiringManifest:
         vnis = [spec["vni"] for spec in manifest["site_lans"].values()]
         assert len(set(vnis)) == len(vnis)
         # The whole manifest still validates through the Node Agent contract.
+        WiringManifest.model_validate(manifest)
+
+    def test_manifest_wires_host_attachment(self, tmp_path):
+        """A processing node's manifest entry: terr0 attachment plus the
+        site router's gateway, no RF interfaces, no ground bridge — and the
+        whole manifest still validates through the Node Agent contract."""
+        manifest = self._build_and_extract(
+            tmp_path,
+            ground_stations={
+                "stations": [
+                    {"name": "alpha", "lat_deg": 34.0, "lon_deg": -118.0, "alt_m": 20},
+                    {"name": "beta", "lat_deg": 50.0, "lon_deg": 8.0, "alt_m": 100},
+                ],
+                "host_endpoints": True,
+            },
+        )
+        hosts = {
+            node_id: node
+            for node_id, node in manifest["nodes"].items()
+            if node["node_type"] == "host"
+        }
+        routers = {
+            node_id: node
+            for node_id, node in manifest["nodes"].items()
+            if node["node_type"] == "ground_station"
+        }
+        assert len(hosts) == 2
+        member_ids = {
+            member["node_id"]
+            for spec in manifest["site_lans"].values()
+            for member in spec["members"]
+        }
+        members_by_id = {
+            member["node_id"]: member
+            for spec in manifest["site_lans"].values()
+            for member in spec["members"]
+        }
+        router_ips = {
+            addr.split("/")[0]
+            for node_id in routers
+            for addr in members_by_id[node_id]["addresses"]
+        }
+        for node_id, node in hosts.items():
+            member = members_by_id[node_id]
+            assert member["addresses"]
+            assert member["gateway"] in router_ips
+            assert node["isl_interfaces"] == []
+            assert node["gnd_interfaces"] == []
+            assert node_id not in manifest["ground_bridges"]
+            assert node_id in member_ids
+        for node_id in routers:
+            assert members_by_id[node_id].get("gateway") is None
         WiringManifest.model_validate(manifest)
 
     def test_manifest_disables_mpls_for_plain_igp(self, tmp_path):
@@ -950,6 +1153,9 @@ class TestWiringManifest:
             )
             assert sysctls.get("net.ipv4.conf.default.rp_filter") == "0", (
                 f"{node_id} missing rp_filter=0 on default"
+            )
+            assert sysctls.get("net.ipv4.ping_group_range") == "0 2147483647", (
+                f"{node_id} missing unprivileged ICMP ping_group_range"
             )
 
     def test_ground_bridges_match_gs_nodes(self, tmp_path):
@@ -1203,14 +1409,19 @@ class TestConfigRendering:
                 deployment_context=_test_deployment_context(spec),
             )
 
-        # Collect rendered configs from ConfigMap create/patch calls
+        # Collect rendered configuration from workload artifact ConfigMaps.
+        import base64 as _base64
+
         configs = {}
         for call in mock_v1.create_namespaced_config_map.call_args_list:
             body = call[1].get("body") or call[0][1]
-            if hasattr(body, "metadata") and hasattr(body, "data"):
+            if hasattr(body, "metadata") and getattr(body, "binary_data", None):
                 name = body.metadata.name if hasattr(body.metadata, "name") else ""
-                if name.startswith("frr-config-"):
-                    configs[name] = body.data
+                if name.startswith("wl-"):
+                    configs[name] = {
+                        key: _base64.b64decode(value).decode()
+                        for key, value in body.binary_data.items()
+                    }
         return configs, context
 
     def test_runtime_session_configmap_records_run_id_without_mutating_yaml(self, tmp_path):
@@ -1365,37 +1576,212 @@ class TestConfigRendering:
 
     def test_isis_config_contains_router_isis(self, tmp_path):
         configs, _ = self._render_configs(tmp_path, protocol="isis")
-        assert len(configs) > 0, "No FRR config ConfigMaps created"
+        assert len(configs) > 0, "No workload artifact ConfigMaps created"
         for cm_name, data in configs.items():
-            if "frr.conf" in data:
-                assert "router isis" in data["frr.conf"], f"{cm_name} missing 'router isis'"
+            assert any("router isis" in text for text in data.values()), (
+                f"{cm_name} missing 'router isis'"
+            )
 
     def test_config_version_hash_present(self, tmp_path):
         configs, _ = self._render_configs(tmp_path)
+        assert configs
         for cm_name, data in configs.items():
-            assert "_config_version" in data, f"{cm_name} missing _config_version"
-            assert len(data["_config_version"]) == 16, f"{cm_name} _config_version wrong length"
+            assert any(len(text) == 16 for text in data.values()), (
+                f"{cm_name} missing a 16-character _config_version artifact"
+            )
 
     def test_config_version_changes_with_content(self, tmp_path):
-        """Different routing configs must produce different _config_version hashes."""
+        """Different routing configs produce different content-addressed names."""
         configs_ospf, _ = self._render_configs(tmp_path, protocol="ospf")
         configs_isis, _ = self._render_configs(tmp_path, protocol="isis")
-        # Pick the same node from both renders
-        ospf_names = sorted(configs_ospf.keys())
-        isis_names = sorted(configs_isis.keys())
-        assert ospf_names == isis_names, "Different node sets for ospf vs isis"
-        first = ospf_names[0]
-        v_ospf = configs_ospf[first]["_config_version"]
-        v_isis = configs_isis[first]["_config_version"]
-        assert v_ospf != v_isis, (
-            f"_config_version identical for ospf and isis ({v_ospf}). "
-            "Hash must be derived from rendered content, not template filename."
-        )
+        assert configs_ospf and configs_isis
+        # Content-addressed names change exactly when rendered content does.
+        assert set(configs_ospf) != set(configs_isis)
 
 
 # ---------------------------------------------------------------------------
 # Class 6: TestPodSpec
 # ---------------------------------------------------------------------------
+
+
+class TestOnePathWorkloads:
+    """Every session deploys through resolved profiles — the one path."""
+
+    def _run(self, tmp_path):
+        spec = _make_catalog_spec(tmp_path)
+        mock_v1 = create_autospec(kubernetes.client.CoreV1Api, instance=True)
+        mock_v1.read_namespaced_secret.return_value = _existing_terminal_secret("test-uid-456")
+        owner_ref = {
+            "apiVersion": "nodalarc.io/v1alpha1",
+            "kind": "ConstellationSpec",
+            "name": "current-session",
+            "uid": "test-uid-456",
+            "blockOwnerDeletion": True,
+        }
+        with (
+            patch("nodalarc_operator.session_deployer._get_v1", return_value=mock_v1),
+            patch(
+                "nodalarc_operator.session_deployer.discover_available_nodes",
+                return_value=["node01", "node02"],
+            ),
+            patch.dict(
+                "os.environ",
+                {
+                    "WIRING_GATE_IMAGE": "test/base:1",
+                    "IMAGE_PULL_POLICY": "Never",
+                },
+                clear=False,
+            ),
+        ):
+            context = ensure_session_configmaps(
+                spec,
+                "current-session",
+                "nodalarc",
+                owner_ref,
+                session_run_id="run-test-0001",
+                deployment_context=_test_deployment_context(spec, owner_uid="test-uid-456"),
+            )
+            ensure_session_pods(context, "nodalarc", owner_ref)
+        pods = []
+        for call in mock_v1.create_namespaced_pod.call_args_list:
+            pod = call[1].get("body") or call[0][1]
+            pods.append(pod)
+        config_maps = []
+        for call in mock_v1.create_namespaced_config_map.call_args_list:
+            cm = call[1].get("body") or call[0][1]
+            config_maps.append(cm)
+        return pods, config_maps
+
+    def test_every_pod_composes_from_its_resolved_profile(self, tmp_path):
+        pods, config_maps = self._run(tmp_path)
+        assert pods
+        for pod in pods:
+            names = [container.name for container in pod.spec.containers]
+            assert names == ["frr-router", "observer"], names
+            assert [c.name for c in pod.spec.init_containers] == ["wiring-gate"]
+            primary = pod.spec.containers[0]
+            mounts = {m.mount_path for m in primary.volume_mounts}
+            assert "/etc/frr-config" in mounts
+            annotations = pod.metadata.annotations or {}
+            assert annotations["nodalarc.io/workload-selection"].startswith("profiles@sha256:")
+        cm_names = [
+            cm.metadata.name for cm in config_maps if hasattr(cm, "metadata") and cm.metadata
+        ]
+        assert not [n for n in cm_names if n and n.startswith("frr-config-")]
+        assert [n for n in cm_names if n and n.startswith("wl-")]
+
+
+class TestSelectionIdentityReplacement:
+    """A pod whose selection identity differs is deleted, never re-stamped."""
+
+    OWNER_REF = {
+        "apiVersion": "nodalarc.io/v1alpha1",
+        "kind": "ConstellationSpec",
+        "name": "current-session",
+        "uid": "test-uid",
+        "blockOwnerDeletion": True,
+    }
+    EXPLICIT = "profiles@sha256:" + "a" * 64
+
+    def _identity_pass(self, pods, selection_identity, session_id="run-test-0002"):
+        from nodalarc_operator.session_deployer import ensure_session_pod_identity
+
+        mock_v1 = create_autospec(kubernetes.client.CoreV1Api, instance=True)
+        mock_v1.list_namespaced_pod.return_value = kubernetes.client.V1PodList(items=pods)
+        with patch("nodalarc_operator.session_deployer._get_v1", return_value=mock_v1):
+            patched = ensure_session_pod_identity(
+                "nodalarc",
+                {"sat-p00s00"},
+                session_id,
+                self.OWNER_REF,
+                selection_identity,
+            )
+        return mock_v1, patched
+
+    def _assert_preconditioned_delete(self, mock_v1, pod_name, pod_uid):
+        mock_v1.delete_namespaced_pod.assert_called_once()
+        args, kwargs = mock_v1.delete_namespaced_pod.call_args
+        assert args[0] == pod_name
+        assert args[1] == "nodalarc"
+        assert kwargs["body"].preconditions.uid == pod_uid
+
+    def test_pod_identity_deletes_differing_selection(self):
+        builtin_pod = _existing_session_pod(run_id="run-old-0001")
+        mock_v1, _ = self._identity_pass([builtin_pod], self.EXPLICIT)
+        self._assert_preconditioned_delete(mock_v1, "sat-p00s00", "pod-uid-0001")
+        mock_v1.patch_namespaced_pod.assert_not_called()
+
+    def test_pod_identity_recreates_explicit_on_run_change(self):
+        # Same explicit pair, new run: the pod's immutable artifacts belong
+        # to the previous run's content. Recreated, never re-stamped.
+        explicit_pod = _existing_session_pod(
+            run_id="run-old-0001", selection_identity=self.EXPLICIT
+        )
+        mock_v1, _ = self._identity_pass([explicit_pod], self.EXPLICIT)
+        self._assert_preconditioned_delete(mock_v1, "sat-p00s00", "pod-uid-0001")
+        mock_v1.patch_namespaced_pod.assert_not_called()
+
+    def test_matching_identity_and_run_is_left_alone(self):
+        current = _existing_session_pod(
+            run_id="run-test-0002", selection_identity=self.EXPLICIT
+        )
+        mock_v1, replaced = self._identity_pass([current], self.EXPLICIT)
+        assert replaced == 0
+        mock_v1.delete_namespaced_pod.assert_not_called()
+        mock_v1.patch_namespaced_pod.assert_not_called()
+
+    def test_prefeature_unannotated_pod_is_replaced_for_explicit(self):
+        unannotated = _existing_session_pod(run_id="run-old-0001", selection_identity=None)
+        mock_v1, _ = self._identity_pass([unannotated], self.EXPLICIT)
+        self._assert_preconditioned_delete(mock_v1, "sat-p00s00", "pod-uid-0001")
+        mock_v1.patch_namespaced_pod.assert_not_called()
+
+    def test_conflict_check_deletes_differing_selection(self):
+        from nodalarc_operator.session_deployer import _create_pod_with_conflict_check
+
+        existing = _existing_session_pod()
+        mock_v1 = create_autospec(kubernetes.client.CoreV1Api, instance=True)
+        mock_v1.create_namespaced_pod.side_effect = kubernetes.client.rest.ApiException(status=409)
+        mock_v1.read_namespaced_pod.return_value = existing
+        _create_pod_with_conflict_check(
+            mock_v1,
+            kubernetes.client.V1Pod(),
+            "nodalarc",
+            "sat-p00s00",
+            self.OWNER_REF,
+            "run-test-0001",
+            self.EXPLICIT,
+        )
+        self._assert_preconditioned_delete(mock_v1, "sat-p00s00", "pod-uid-0001")
+        mock_v1.patch_namespaced_pod.assert_not_called()
+
+    def test_delete_owned_reports_remaining_and_preconditions(self):
+        from nodalarc_operator.session_deployer import delete_owned_session_pods
+
+        running = _existing_session_pod(pod_name="sat-a", node_id="sat-A", pod_uid="uid-a")
+        terminating = _existing_session_pod(pod_name="sat-b", node_id="sat-B", pod_uid="uid-b")
+        terminating.metadata.deletion_timestamp = "2026-08-08T00:00:00Z"
+        mock_v1 = create_autospec(kubernetes.client.CoreV1Api, instance=True)
+        mock_v1.list_namespaced_pod.return_value = kubernetes.client.V1PodList(
+            items=[running, terminating]
+        )
+        with patch("nodalarc_operator.session_deployer._get_v1", return_value=mock_v1):
+            remaining, requested = delete_owned_session_pods("nodalarc", self.OWNER_REF)
+        # The terminating pod still counts toward remaining — Error is only
+        # honest once zero owned pods are observed.
+        assert (remaining, requested) == (2, 1)
+        self._assert_preconditioned_delete(mock_v1, "sat-a", "uid-a")
+
+    def test_delete_owned_skips_replaced_pod_on_conflict(self):
+        from nodalarc_operator.session_deployer import delete_owned_session_pods
+
+        running = _existing_session_pod(pod_name="sat-a", node_id="sat-A", pod_uid="uid-a")
+        mock_v1 = create_autospec(kubernetes.client.CoreV1Api, instance=True)
+        mock_v1.list_namespaced_pod.return_value = kubernetes.client.V1PodList(items=[running])
+        mock_v1.delete_namespaced_pod.side_effect = kubernetes.client.rest.ApiException(status=409)
+        with patch("nodalarc_operator.session_deployer._get_v1", return_value=mock_v1):
+            remaining, requested = delete_owned_session_pods("nodalarc", self.OWNER_REF)
+        assert (remaining, requested) == (1, 0)
 
 
 class TestPodSpec:
@@ -1427,6 +1813,7 @@ class TestPodSpec:
                 "os.environ",
                 {
                     "FRR_IMAGE": "test/frr:1",
+                    "WIRING_GATE_IMAGE": "test/base:1",
                     "PROBE_IMAGE": "test/probe:1",
                     "NODALPATH_FWD_IMAGE": "test/nodalpath-fwd:1",
                     "IMAGE_PULL_POLICY": "Never",
@@ -1461,12 +1848,51 @@ class TestPodSpec:
         pods = self._create_pods(tmp_path)
         for pod in pods:
             frr = pod.spec.containers[0]
-            assert frr.name == "frr"
+            assert frr.name == "frr-router"
             caps = frr.security_context.capabilities.add
             assert "SYS_ADMIN" in caps, f"Pod {pod.metadata.name} missing SYS_ADMIN"
             assert "NET_ADMIN" in caps, f"Pod {pod.metadata.name} missing NET_ADMIN"
             assert "NET_RAW" in caps, f"Pod {pod.metadata.name} missing NET_RAW"
             assert frr.security_context.read_only_root_filesystem is True
+
+    def test_wiring_gate_init_container_precedes_authored_containers(self, tmp_path):
+        pods = self._create_pods(tmp_path)
+        for pod in pods:
+            inits = pod.spec.init_containers
+            assert inits is not None and len(inits) == 1
+            gate = inits[0]
+            assert gate.name == "wiring-gate"
+            assert gate.image == "test/base:1"
+            assert gate.security_context.capabilities.drop == ["ALL"]
+            assert gate.security_context.read_only_root_filesystem is True
+            assert gate.security_context.allow_privilege_escalation is False
+            env_paths = {e.name: e.value_from.field_ref.field_path for e in gate.env}
+            assert env_paths["NODE_ID"] == "metadata.labels['nodalarc.io/node-id']"
+            assert env_paths["POD_UID"] == "metadata.uid"
+            assert env_paths["SESSION_RUN_ID"] == ("metadata.labels['nodalarc.io/session-run-id']")
+            mounts = {m.name: m for m in gate.volume_mounts}
+            assert mounts["wiring-status"].read_only is True
+            # The release predicate must bind ready+clean to THIS incarnation
+            # and run: pod UID, session run, netns inode, and all phases.
+            script = gate.command[-1]
+            assert '.status == "ready"' in script
+            assert ".dirty_kernel == false" in script
+            assert ".pod_uid == $uid" in script
+            assert ".session_run_id == $run" in script
+            assert ".netns_id == $ns" in script
+            assert 'all(.status == "ready")' in script
+            assert "readlink /proc/self/ns/net" in script
+
+    def test_wiring_status_volume_projects_only_this_nodes_proof(self, tmp_path):
+        pods = self._create_pods(tmp_path)
+        for pod in pods:
+            volume = next(v for v in pod.spec.volumes if v.name == "wiring-status")
+            assert volume.config_map.name == "nodalarc-wiring-status"
+            assert volume.config_map.optional is True
+            items = volume.config_map.items
+            assert items is not None and len(items) == 1
+            assert items[0].key == pod.metadata.labels["nodalarc.io/node-id"]
+            assert items[0].path == "status.json"
 
     def test_labels(self, tmp_path):
         pods = self._create_pods(tmp_path)
@@ -1505,7 +1931,18 @@ class TestPodSpec:
 
     def test_409_conflict_idempotent(self, tmp_path):
         """If create_namespaced_pod raises 409, ensure_session_pods continues."""
+        from nodalarc_operator.workloads.preparation import (
+            prepare_session_workloads as _prepare,
+        )
+
         spec = _make_catalog_spec(tmp_path)
+        resolution = resolve_session_with_assets(
+            load_configuration_yaml(spec["sessionYaml"]),
+            catalog_roots=spec.get("_test_catalog_roots"),
+        )
+        desired_identity = _prepare(
+            resolution, namespace="nodalarc", owner_ref={"uid": "test-uid"}
+        ).identity
         mock_v1 = create_autospec(kubernetes.client.CoreV1Api, instance=True)
         mock_v1.read_namespaced_secret.return_value = _existing_terminal_secret()
         mock_v1.create_namespaced_pod.side_effect = kubernetes.client.rest.ApiException(status=409)
@@ -1515,6 +1952,7 @@ class TestPodSpec:
                 node_id=pod_name,
                 uid="test-uid",
                 run_id="run-test-0001",
+                selection_identity=desired_identity,
             )
         )
         owner_ref = {
@@ -1534,6 +1972,7 @@ class TestPodSpec:
                 "os.environ",
                 {
                     "FRR_IMAGE": "test/frr:1",
+                    "WIRING_GATE_IMAGE": "test/base:1",
                     "PROBE_IMAGE": "test/probe:1",
                     "NODALPATH_FWD_IMAGE": "test/nodalpath-fwd:1",
                     "IMAGE_PULL_POLICY": "Never",
@@ -1550,6 +1989,61 @@ class TestPodSpec:
             )
             total = ensure_session_pods(context, "nodalarc", owner_ref)
         assert total > 0
+        # A matching-identity pod is reused, never deleted or recreated.
+        mock_v1.delete_namespaced_pod.assert_not_called()
+
+    def test_partial_create_api_failure_is_retryable(self, tmp_path):
+        """One successful create plus one 500 must stay typed-retryable.
+
+        The reconciler catches the ApiException, remains Creating, and
+        creates the missing pods on the next tick.
+        """
+        spec = _make_catalog_spec(tmp_path)
+        mock_v1 = create_autospec(kubernetes.client.CoreV1Api, instance=True)
+        mock_v1.read_namespaced_secret.return_value = _existing_terminal_secret()
+        calls = {"n": 0}
+
+        def _create(_namespace, _pod):
+            calls["n"] += 1
+            if calls["n"] > 1:
+                raise kubernetes.client.rest.ApiException(status=500)
+
+        mock_v1.create_namespaced_pod.side_effect = _create
+        owner_ref = {
+            "apiVersion": "nodalarc.io/v1alpha1",
+            "kind": "ConstellationSpec",
+            "name": "current-session",
+            "uid": "test-uid",
+            "blockOwnerDeletion": True,
+        }
+        with (
+            patch("nodalarc_operator.session_deployer._get_v1", return_value=mock_v1),
+            patch(
+                "nodalarc_operator.session_deployer.discover_available_nodes",
+                return_value=["node01"],
+            ),
+            patch.dict(
+                "os.environ",
+                {
+                    "FRR_IMAGE": "test/frr:1",
+                    "WIRING_GATE_IMAGE": "test/base:1",
+                    "PROBE_IMAGE": "test/probe:1",
+                    "NODALPATH_FWD_IMAGE": "test/nodalpath-fwd:1",
+                    "IMAGE_PULL_POLICY": "Never",
+                },
+            ),
+        ):
+            context = ensure_session_configmaps(
+                spec,
+                "current-session",
+                "nodalarc",
+                owner_ref,
+                session_run_id="run-test-0001",
+                deployment_context=_test_deployment_context(spec),
+            )
+            with pytest.raises(kubernetes.client.rest.ApiException):
+                ensure_session_pods(context, "nodalarc", owner_ref)
+        assert calls["n"] > 1
 
     def test_409_conflict_rejects_pod_owned_by_previous_cr(self, tmp_path):
         spec = _make_catalog_spec(tmp_path)
@@ -1581,6 +2075,7 @@ class TestPodSpec:
                 "os.environ",
                 {
                     "FRR_IMAGE": "test/frr:1",
+                    "WIRING_GATE_IMAGE": "test/base:1",
                     "PROBE_IMAGE": "test/probe:1",
                     "NODALPATH_FWD_IMAGE": "test/nodalpath-fwd:1",
                     "IMAGE_PULL_POLICY": "Never",

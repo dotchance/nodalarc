@@ -4,7 +4,6 @@
 
 from __future__ import annotations
 
-import ipaddress
 import re
 from typing import Annotated, Literal
 
@@ -19,19 +18,29 @@ from pydantic import (
     model_validator,
 )
 
-from nodalarc.catalog_refs import BodyRef, NodeRef, OrbitRef, PayloadRef, SiteRef, TerminalRef
+from nodalarc.catalog_refs import (
+    BodyRef,
+    NodeRef,
+    OrbitRef,
+    PayloadRef,
+    ProfileRef,
+    SiteRef,
+    TerminalRef,
+)
 from nodalarc.model_validation import (
     AwareTimestamp,
+    EnvName,
     FiniteFloat,
     Identifier,
-    Ipv4Interface,
-    Ipv4Network,
-    Ipv6Interface,
-    Ipv6Network,
+    MountPath,
     NonNegativeFiniteFloat,
     NonNegativeInteger,
+    PinnedImage,
     PositiveFiniteFloat,
     PositiveInteger,
+    RegistryHost,
+    SegmentId,
+    StrictBoolean,
     TerminalMedium,
 )
 from nodalarc.models.segments import (
@@ -214,56 +223,249 @@ class Orbit(_FrozenModel):
         return self
 
 
-class TerminalSlot(_FrozenModel):
-    id: Identifier
-    terminal: TerminalRef
-    tags: tuple[Identifier, ...] | None = None
-
-
-class PayloadResourceGroup(_FrozenModel):
-    id: Identifier
-    slots: tuple[Identifier, ...] = Field(min_length=1)
-    simultaneous_active: PositiveInteger
-
-
 class Payload(_FrozenModel):
+    """A carried compute environment: what it is and what it runs.
+
+    A payload declares no Ethernet ports, no terminal mounts, and no payload
+    mounts, so payload composition cannot recurse. Where it attaches is its
+    mount's decision.
+    """
+
     id: Identifier
     display_name: str | None = None
-    terminal_slots: tuple[TerminalSlot, ...] = Field(min_length=1)
-    resource_groups: tuple[PayloadResourceGroup, ...] = ()
+    forwarding: Literal["routed", "host"]
+    profile: ProfileRef
+    tags: tuple[Identifier, ...] | None = None
+    reference: Url | None = None
+    notes: str | None = None
+
+
+LinuxCapability = Literal[
+    "AUDIT_WRITE",
+    "CHOWN",
+    "DAC_OVERRIDE",
+    "FOWNER",
+    "FSETID",
+    "KILL",
+    "MKNOD",
+    "NET_ADMIN",
+    "NET_BIND_SERVICE",
+    "NET_RAW",
+    "SETFCAP",
+    "SETGID",
+    "SETPCAP",
+    "SETUID",
+    "SYS_ADMIN",
+    "SYS_CHROOT",
+]
+RootFilesystem = Literal["read_only", "ephemeral_writable"]
+
+_ARGV_MAX_ELEMENTS = 64
+_ARGV_MAX_TOTAL_BYTES = 4096
+
+
+def _validate_argv(argv: tuple[str, ...], *, field: str) -> None:
+    if not argv:
+        raise ValueError(f"{field} must be a nonempty list")
+    if any(not element or "\x00" in element for element in argv):
+        raise ValueError(f"{field} elements must be nonempty and NUL-free")
+    if len(argv) > _ARGV_MAX_ELEMENTS:
+        raise ValueError(f"{field} exceeds {_ARGV_MAX_ELEMENTS} elements")
+    if sum(len(element.encode()) for element in argv) > _ARGV_MAX_TOTAL_BYTES:
+        raise ValueError(f"{field} exceeds {_ARGV_MAX_TOTAL_BYTES} bytes total")
+
+
+def _validate_capabilities(capabilities: tuple[str, ...]) -> None:
+    if list(capabilities) != sorted(set(capabilities)):
+        raise ValueError("capabilities must be unique and in ascending order")
+
+
+def _mount_paths_conflict(path_a: str, path_b: str) -> bool:
+    return path_a == path_b or path_a.startswith(f"{path_b}/") or path_b.startswith(f"{path_a}/")
+
+
+def _validate_mount_conflicts(paths: list[str], *, owner: str) -> None:
+    for index, path in enumerate(paths):
+        for other in paths[index + 1 :]:
+            if _mount_paths_conflict(path, other):
+                raise ValueError(f"{owner} mount destinations conflict: {path!r} and {other!r}")
+
+
+class ProfileVolume(_FrozenModel):
+    name: Identifier
+    kind: Literal["ephemeral"]
+    medium: Literal["memory", "node"]
+    size_mi: PositiveInteger
+
+
+class ProfileMount(_FrozenModel):
+    volume: Identifier
+    path: MountPath
+    read_only: StrictBoolean = False
+
+
+class ProfileResourceAmounts(_FrozenModel):
+    cpu_m: PositiveInteger
+    memory_mi: PositiveInteger
+
+
+class ProfileResources(_FrozenModel):
+    requests: ProfileResourceAmounts
+    limits: ProfileResourceAmounts
+
+    @model_validator(mode="after")
+    def _limits_cover_requests(self) -> ProfileResources:
+        if self.limits.cpu_m < self.requests.cpu_m:
+            raise ValueError("cpu limit must be >= cpu request")
+        if self.limits.memory_mi < self.requests.memory_mi:
+            raise ValueError("memory limit must be >= memory request")
+        return self
+
+
+class EnvValueFrom(_FrozenModel):
+    """One resolved fact: the address of the single node carrying the tag."""
+
+    tag: Identifier
+    interface: Identifier
+    family: Literal["ipv4", "ipv6"]
+
+
+class LiteralEnvEntry(_FrozenModel):
+    name: EnvName
+    value: str
+
+
+class ResolvedEnvEntry(_FrozenModel):
+    name: EnvName
+    value_from: EnvValueFrom
+
+
+EnvEntry = LiteralEnvEntry | ResolvedEnvEntry
+
+
+def _validate_env_names(entries: tuple[EnvEntry, ...], *, owner: str) -> None:
+    names = [entry.name for entry in entries]
+    if len(set(names)) != len(names):
+        raise ValueError(f"{owner} env names must be unique")
+
+
+class SshTerminalSurface(_FrozenModel):
+    surface: Literal["ssh"]
+    authorized_keys_path: MountPath
+
+
+class ExecTerminalSurface(_FrozenModel):
+    surface: Literal["exec"]
+    command: tuple[str, ...]
+
+    @model_validator(mode="after")
+    def _argv_rules(self) -> ExecTerminalSurface:
+        _validate_argv(self.command, field="terminal command")
+        return self
+
+
+ProfileTerminal = SshTerminalSurface | ExecTerminalSurface
+
+
+class ProfileReadiness(_FrozenModel):
+    argv: tuple[str, ...]
+    timeout_seconds: PositiveInteger
+    period_seconds: PositiveInteger
+
+    @model_validator(mode="after")
+    def _argv_rules(self) -> ProfileReadiness:
+        _validate_argv(self.argv, field="readiness argv")
+        return self
+
+
+class ProfileSidecar(_FrozenModel):
+    name: Identifier
+    registry: RegistryHost | None = None
+    image: PinnedImage
+    command: tuple[str, ...] | None = None
+    args: tuple[str, ...] | None = None
+    env: tuple[EnvEntry, ...] = ()
+    capabilities: tuple[LinuxCapability, ...] = ()
+    root_filesystem: RootFilesystem = "read_only"
+    resources: ProfileResources
+    mounts: tuple[ProfileMount, ...] = ()
+
+    @model_validator(mode="after")
+    def _sidecar_rules(self) -> ProfileSidecar:
+        _validate_capabilities(self.capabilities)
+        for field_name in ("command", "args"):
+            argv = getattr(self, field_name)
+            if argv is not None:
+                _validate_argv(argv, field=f"sidecar {field_name}")
+        _validate_env_names(self.env, owner=f"sidecar {self.name!r}")
+        _validate_mount_conflicts(
+            [mount.path for mount in self.mounts], owner=f"sidecar {self.name!r}"
+        )
+        return self
+
+
+class Profile(_FrozenModel):
+    id: Identifier
+    display_name: str | None = None
+    adapter: Identifier | None = None
+    registry: RegistryHost
+    image: PinnedImage
+    command: tuple[str, ...] | None = None
+    args: tuple[str, ...] | None = None
+    env: tuple[EnvEntry, ...] = ()
+    capabilities: tuple[LinuxCapability, ...] = ()
+    root_filesystem: RootFilesystem = "read_only"
+    config_mount: MountPath | None = None
+    volumes: tuple[ProfileVolume, ...] = ()
+    mounts: tuple[ProfileMount, ...] = ()
+    resources: ProfileResources
+    readiness: ProfileReadiness | None = None
+    terminal: ProfileTerminal | None = None
+    sidecars: tuple[ProfileSidecar, ...] = ()
     reference: Url | None = None
     notes: str | None = None
 
     @model_validator(mode="after")
-    def _valid_resource_groups(self) -> Payload:
-        slot_ids = [slot.id for slot in self.terminal_slots]
-        if len(set(slot_ids)) != len(slot_ids):
-            raise ValueError("payload terminal slot ids must be unique")
+    def _profile_rules(self) -> Profile:
+        _validate_capabilities(self.capabilities)
+        for field_name in ("command", "args"):
+            argv = getattr(self, field_name)
+            if argv is not None:
+                _validate_argv(argv, field=field_name)
+        _validate_env_names(self.env, owner="profile")
 
-        group_ids = [group.id for group in self.resource_groups]
-        if len(set(group_ids)) != len(group_ids):
-            raise ValueError("payload resource group ids must be unique")
+        if self.config_mount is not None and self.adapter is None:
+            raise ValueError("config_mount requires an adapter")
 
-        declared_slots = set(slot_ids)
-        for group in self.resource_groups:
-            if len(set(group.slots)) != len(group.slots):
-                raise ValueError(f"payload resource group {group.id!r} slots must be unique")
-            unknown_slots = sorted(set(group.slots) - declared_slots)
-            if unknown_slots:
-                raise ValueError(
-                    f"payload resource group {group.id!r} references unknown terminal "
-                    f"slot(s): {unknown_slots}"
-                )
-            if group.simultaneous_active > len(group.slots):
-                raise ValueError(
-                    f"payload resource group {group.id!r} simultaneous_active must not "
-                    "exceed its slot count"
-                )
+        volume_names = [volume.name for volume in self.volumes]
+        if len(set(volume_names)) != len(volume_names):
+            raise ValueError("profile volume names must be unique")
+        declared_volumes = set(volume_names)
+        for mount in self.mounts:
+            if mount.volume not in declared_volumes:
+                raise ValueError(f"profile mounts undeclared volume {mount.volume!r}")
+        for sidecar in self.sidecars:
+            for mount in sidecar.mounts:
+                if mount.volume not in declared_volumes:
+                    raise ValueError(
+                        f"sidecar {sidecar.name!r} mounts undeclared volume {mount.volume!r}"
+                    )
+
+        primary_paths = [mount.path for mount in self.mounts]
+        if self.config_mount is not None:
+            primary_paths.append(self.config_mount)
+        _validate_mount_conflicts(primary_paths, owner="profile")
+
+        sidecar_names = [sidecar.name for sidecar in self.sidecars]
+        if len(set(sidecar_names)) != len(sidecar_names):
+            raise ValueError("sidecar names must be unique")
+        if self.id in sidecar_names:
+            raise ValueError("a sidecar must not use the profile id as its name")
         return self
 
 
 class EthernetPort(_FrozenModel):
-    id: Identifier
+    id: SegmentId
     tags: tuple[Identifier, ...] | None = None
 
 
@@ -279,7 +481,11 @@ class TerminalMount(_FrozenModel):
 class PayloadMount(_FrozenModel):
     id: Identifier
     payload: PayloadRef
+    profile: ProfileRef | None = None
     count: PositiveInteger
+    # The Ethernet port of the mounting node whose segment the mounted
+    # environment joins; also the mounted environment's interface name.
+    attach: SegmentId
     tags: tuple[Identifier, ...] | None = None
 
 
@@ -287,9 +493,13 @@ class Node(_FrozenModel):
     id: Identifier
     display_name: str | None = None
     forwarding: ForwardingClass
+    profile: ProfileRef | None = None
     ethernet: tuple[EthernetPort, ...]
     terminals: tuple[TerminalMount, ...]
     payloads: tuple[PayloadMount, ...]
+    # Symbolic routing-injection intent for the segments this node carries:
+    # entries name the node's own declared Ethernet ports, or `default`.
+    originated_prefixes: OriginatedPrefixes | None = None
     tags: tuple[Identifier, ...] | None = None
     reference: Url | None = None
     notes: str | None = None
@@ -305,6 +515,29 @@ class Node(_FrozenModel):
         payload_ids = [mount.id for mount in self.payloads]
         if len(set(payload_ids)) != len(payload_ids):
             raise ValueError("node payload mount ids must be unique")
+        undeclared_attach = [
+            mount.id for mount in self.payloads if mount.attach not in set(ethernet_ids)
+        ]
+        if undeclared_attach:
+            raise ValueError(
+                "payload mount attach must name a declared ethernet port: "
+                f"{undeclared_attach}"
+            )
+        if self.originated_prefixes is not None:
+            declared = {*ethernet_ids, "default"}
+            unknown_targets = sorted(
+                {
+                    entry
+                    for family in ("ipv4", "ipv6")
+                    for entry in getattr(self.originated_prefixes, family) or ()
+                    if entry not in declared
+                }
+            )
+            if unknown_targets:
+                raise ValueError(
+                    "node originated_prefixes must name declared ethernet ports "
+                    f"or default: {unknown_targets}"
+                )
         invalid_boresights = [
             mount.id
             for mount in self.terminals
@@ -323,17 +556,6 @@ class VerificationMetadata(_FrozenModel):
     reference: Url | None = None
     confidence: Identifier | None = None
     notes: str | None = None
-
-
-class SiteLan(_FrozenModel):
-    ipv4: Ipv4Network | None = None
-    ipv6: Ipv6Network | None = None
-
-    @model_validator(mode="after")
-    def _has_address_family(self) -> SiteLan:
-        if self.ipv4 is None and self.ipv6 is None:
-            raise ValueError("site lan requires ipv4 and/or ipv6")
-        return self
 
 
 class BodyFixedFrame(_FrozenModel):
@@ -358,22 +580,6 @@ class SiteLocation(_FrozenModel):
     alt_m: FiniteFloat
 
 
-class InterfaceAddress(_FrozenModel):
-    ipv4: Ipv4Interface | None = None
-    ipv6: Ipv6Interface | None = None
-
-    @model_validator(mode="after")
-    def _has_address_family(self) -> InterfaceAddress:
-        if self.ipv4 is None and self.ipv6 is None:
-            raise ValueError("interface requires ipv4 and/or ipv6")
-        return self
-
-
-class NodeInterfaces(_FrozenModel):
-    lo0: InterfaceAddress
-    terr0: InterfaceAddress
-
-
 class PayloadInstallation(_FrozenModel):
     installed_count: PositiveInteger
     tags: tuple[Identifier, ...] | None = None
@@ -396,10 +602,13 @@ class TerminalInstallation(_FrozenModel):
 class SiteNode(_FrozenModel):
     id: Identifier
     display_name: str | None = None
-    model: NodeRef
+    node: NodeRef
+    profile: ProfileRef | None = None
     terminals: dict[Identifier, TerminalInstallation]
     payloads: dict[Identifier, PayloadInstallation]
-    interfaces: NodeInterfaces
+    # Binds each Ethernet port the referenced node definition declares to
+    # one declared site segment, port id to segment id.
+    interfaces: dict[SegmentId, SegmentId]
     originated_prefixes: OriginatedPrefixes | None = None
     tenant_id: Identifier | None = None
     service_priority: PositiveInteger | None = None
@@ -414,7 +623,9 @@ class Site(_FrozenModel):
     id: Identifier
     display_name: str | None = None
     verified: VerificationMetadata | None = None
-    lan: SiteLan
+    # The network segments the site provides, through the same production a
+    # node uses for the segments it carries. Subnets are resolver-allocated.
+    ethernet: tuple[EthernetPort, ...] = Field(min_length=1)
     tags: tuple[Identifier, ...] | None = None
     nodes: tuple[SiteNode, ...] = Field(min_length=1)
     frame: SiteFrame
@@ -429,43 +640,21 @@ class Site(_FrozenModel):
         return self
 
     @model_validator(mode="after")
-    def _valid_node_addresses(self) -> Site:
+    def _valid_segments_and_bindings(self) -> Site:
         node_ids = [node.id for node in self.nodes]
         if len(set(node_ids)) != len(node_ids):
             raise ValueError("site node ids must be unique")
 
-        seen_addresses: dict[tuple[int, str], str] = {}
+        segment_ids = [segment.id for segment in self.ethernet]
+        if len(set(segment_ids)) != len(segment_ids):
+            raise ValueError("site ethernet segment ids must be unique")
+        declared_segments = set(segment_ids)
         for node in self.nodes:
-            for interface_name in ("lo0", "terr0"):
-                interface = getattr(node.interfaces, interface_name)
-                for family in ("ipv4", "ipv6"):
-                    address = getattr(interface, family)
-                    if address is None:
-                        continue
-                    parsed = ipaddress.ip_interface(address)
-                    address_key = (parsed.version, str(parsed.ip))
-                    owner = f"{node.id}.{interface_name}.{family}"
-                    existing_owner = seen_addresses.get(address_key)
-                    if existing_owner is not None:
-                        raise ValueError(
-                            f"site interface address {parsed.ip} is installed more than once: "
-                            f"{existing_owner}, {owner}"
-                        )
-                    seen_addresses[address_key] = owner
-
-                    if interface_name != "terr0":
-                        continue
-                    lan = getattr(self.lan, family)
-                    if lan is None:
-                        raise ValueError(
-                            f"site node {node.id!r} terr0 declares {family} but site lan "
-                            f"does not declare {family}"
-                        )
-                    if parsed.ip not in ipaddress.ip_network(lan):
-                        raise ValueError(
-                            f"site node {node.id!r} terr0 {family} address {parsed.ip} "
-                            f"is outside site lan {lan}"
-                        )
+            unknown_segments = sorted(set(node.interfaces.values()) - declared_segments)
+            if unknown_segments:
+                raise ValueError(
+                    f"site node {node.id!r} binds undeclared segment(s): {unknown_segments}"
+                )
         return self
 
 
@@ -603,6 +792,7 @@ class Sgp4TlePlacement(_FrozenModel):
 class SpaceNode(_FrozenModel):
     id: Identifier
     node: NodeRef
+    profile: ProfileRef | None = None
     orbit: OrbitRef | None = None
     sgp4_tle: Sgp4TlePlacement | None = None
     state_vector: StateVector | None = None
@@ -644,6 +834,10 @@ class TerminalDocument(_CatalogDocumentRoot):
 
 class PayloadDocument(_CatalogDocumentRoot):
     payload: Payload
+
+
+class ProfileDocument(_CatalogDocumentRoot):
+    profile: Profile
 
 
 class OrbitDocument(_CatalogDocumentRoot):

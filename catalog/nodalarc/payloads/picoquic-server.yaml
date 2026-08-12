@@ -1,0 +1,7 @@
+payload:
+  id: picoquic-server
+  display_name: QUIC server endpoint payload
+  forwarding: host
+  profile: nodalarc:profiles/picoquic-server.yaml
+  notes: A carried host environment serving QUIC on UDP 4433. Attaches to
+    whichever segment its mount names; addresses arrive from allocation.

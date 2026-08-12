@@ -57,6 +57,25 @@ def _assert_qdisc(namespace: str, ifname: str, delay_ms: float) -> None:
     assert f"delay {delay_int}ms" in qdisc or f"delay {float(delay_ms)}ms" in qdisc
 
 
+def _handles(pids: dict[str, int]) -> dict:
+    """Wrap live unshared-process PIDs in validated namespace handles."""
+    from node_agent.pid_discovery import NamespaceHandle, netns_identity
+
+    wrapped = {}
+    for node_id, pid in pids.items():
+        netns = netns_identity(pid)
+        assert netns is not None, f"unshared process {pid} for {node_id} has no netns"
+        wrapped[node_id] = NamespaceHandle(
+            node_id=node_id,
+            pod_uid=f"pod-{node_id}",
+            sandbox_id=f"sb-{node_id}",
+            sandbox_attempt=0,
+            pid=pid,
+            netns_id=netns,
+        )
+    return wrapped
+
+
 @contextmanager
 def _netns(prefix: str) -> Iterator[tuple[str, subprocess.Popen[str]]]:
     suffix = uuid.uuid4().hex[:8]
@@ -137,11 +156,14 @@ def _seed_substrate_measurement(
     manifest = WiringManifest.model_validate(
         {
             "session_id": "root-test",
+            "session_run_id": "run-root-0001",
+            "owner_uid": "owner-uid-1",
             "wiring_generation": generation,
             "required_phases": list(REQUIRED_WIRING_PHASES),
             "nodes": {
                 source_node: {
                     "node_type": "satellite",
+                    "host": "node02",
                     "plane": 0,
                     "slot": 0,
                     "sysctls": {"net.ipv6.conf.all.forwarding": "1"},
@@ -292,7 +314,7 @@ def test_handle_batch_link_up_down_proves_local_isl_kernel_state():
 
             response = handle_batch_link_up(
                 up,
-                pid_map={node_a: proc_a.pid, node_b: proc_b.pid},
+                handles=_handles({node_a: proc_a.pid, node_b: proc_b.pid}),
                 fence=_fence(generation),
             )
 
@@ -326,7 +348,7 @@ def test_handle_batch_link_up_down_proves_local_isl_kernel_state():
             )
             down_response = handle_batch_link_down(
                 down,
-                pid_map={node_a: proc_a.pid, node_b: proc_b.pid},
+                handles=_handles({node_a: proc_a.pid, node_b: proc_b.pid}),
                 fence=_fence(generation),
             )
 
@@ -376,7 +398,7 @@ def test_handle_batch_link_up_down_proves_local_ground_mirred_and_qdisc():
             )
             response = handle_batch_link_up(
                 up,
-                pid_map={gs_id: gs_proc.pid, sat_id: sat_proc.pid},
+                handles=_handles({gs_id: gs_proc.pid, sat_id: sat_proc.pid}),
                 fence=_fence(generation),
             )
 
@@ -404,7 +426,7 @@ def test_handle_batch_link_up_down_proves_local_ground_mirred_and_qdisc():
             )
             down_response = handle_batch_link_down(
                 down,
-                pid_map={gs_id: gs_proc.pid, sat_id: sat_proc.pid},
+                handles=_handles({gs_id: gs_proc.pid, sat_id: sat_proc.pid}),
                 fence=_fence(generation),
             )
 
@@ -466,7 +488,7 @@ def test_handle_batch_link_up_down_proves_cross_node_isl_vxlan_and_qdisc(monkeyp
             )
             response = handle_batch_link_up(
                 up,
-                pid_map={node_id: proc.pid},
+                handles=_handles({node_id: proc.pid}),
                 fence=_fence(generation),
             )
 
@@ -495,7 +517,7 @@ def test_handle_batch_link_up_down_proves_cross_node_isl_vxlan_and_qdisc(monkeyp
             )
             down_response = handle_batch_link_down(
                 down,
-                pid_map={node_id: proc.pid},
+                handles=_handles({node_id: proc.pid}),
                 fence=_fence(generation),
             )
 
@@ -566,7 +588,7 @@ def test_handle_batch_link_up_down_proves_cross_node_ground_vxlan_mirred_and_qdi
             )
             response = handle_batch_link_up(
                 up,
-                pid_map={sat_id: proc.pid},
+                handles=_handles({sat_id: proc.pid}),
                 fence=_fence(generation),
             )
 
@@ -599,7 +621,7 @@ def test_handle_batch_link_up_down_proves_cross_node_ground_vxlan_mirred_and_qdi
             )
             down_response = handle_batch_link_down(
                 down,
-                pid_map={sat_id: proc.pid},
+                handles=_handles({sat_id: proc.pid}),
                 fence=_fence(generation),
             )
 
@@ -654,7 +676,7 @@ def test_handle_set_latency_proves_kernel_qdisc_state():
 
         response = handle_set_latency(
             request,
-            pid_map={"sat-a": proc.pid},
+            handles=_handles({"sat-a": proc.pid}),
             fence=_fence(generation),
         )
 

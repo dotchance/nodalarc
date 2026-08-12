@@ -44,6 +44,10 @@ COPY lib/ lib/
 # Copy operator service
 COPY services/nodalarc_operator/ services/nodalarc_operator/
 
+# Copy workload adapters (technology-specific config translation the operator
+# calls through the explicit registry). /app is already on PYTHONPATH.
+COPY adapters/ adapters/
+
 # Copy deployment templates and static catalog data used by the resolver.
 COPY configs/ configs/
 COPY catalog/ catalog/

@@ -13,6 +13,7 @@ from nodalarc.models.catalog import (
     NodeDocument,
     OrbitDocument,
     PayloadDocument,
+    ProfileDocument,
     SiteDocument,
     SiteSetDocument,
     SpaceNodeSetDocument,
@@ -24,6 +25,7 @@ type ConfigurationDocument = (
     BodyDocument
     | TerminalDocument
     | PayloadDocument
+    | ProfileDocument
     | OrbitDocument
     | NodeDocument
     | SiteDocument
@@ -39,6 +41,7 @@ CONFIGURATION_DOCUMENT_MODELS: MappingProxyType[CatalogFamily, type[BaseModel]] 
         "bodies": BodyDocument,
         "terminals": TerminalDocument,
         "payloads": PayloadDocument,
+        "profiles": ProfileDocument,
         "orbits": OrbitDocument,
         "nodes": NodeDocument,
         "sites": SiteDocument,

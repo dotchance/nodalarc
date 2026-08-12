@@ -2,6 +2,7 @@ node:
   id: starlink-gateway
   display_name: Starlink gateway router
   forwarding: routed
+  profile: nodalarc:profiles/frr-router.yaml
   ethernet:
   - id: terr0
   terminals:

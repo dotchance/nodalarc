@@ -128,6 +128,29 @@ def test_operator_uses_the_shared_required_selection_once(
     assert client.lists == [(NAMESPACE, f"{CATALOG_UPLOAD_LABEL}={upload.upload_id}")]
 
 
+def test_operator_rejects_the_retired_selection_pair_fields(
+    upload: CatalogUpload,
+    tmp_path: Path,
+) -> None:
+    """The CR spec carries the session and its upload, nothing else: the
+    retired selection pair is an unsupported field, not a silent no-op."""
+    paired = {
+        **_spec(upload),
+        "implementationBindingRef": "nodalarc:bindings/frr-observer-everywhere.yaml",
+        "implementationPackageDigest": "sha256:" + "c" * 64,
+    }
+    with pytest.raises(ValueError, match="unsupported field"):
+        resolve_operator_session(
+            paired,
+            core_v1=_client_for(upload),
+            namespace=NAMESPACE,
+            source_origin="test.operator_runtime_session",
+            run_id="run-operator-runtime-0001",
+            installed_shipped_root=SHIPPED_ROOT,
+            materialization_parent=tmp_path,
+        )
+
+
 def test_operator_rejects_missing_or_malformed_selection(
     upload: CatalogUpload,
     tmp_path: Path,

@@ -1,0 +1,54 @@
+site:
+  id: earth-es-madrid-quic-lab
+  display_name: Madrid QUIC lab (LEO gateway + client host)
+  verified:
+    source: nodalarc_catalog
+    notes: NodalArc demo site pairing a LEO gateway with a processing host that runs
+      the QUIC client endpoint.
+  ethernet:
+  - id: lan0
+  nodes:
+  - id: gw1
+    display_name: LEO Gateway
+    node: nodalarc:nodes/ground/quic-client-gateway.yaml
+    payloads:
+      quic-client:
+        installed_count: 1
+        tags:
+        - quic_client
+    terminals:
+      access_ka:
+        installed_count: 4
+        capabilities:
+          bandwidth_mbps:
+            transmit: 1000.0
+            receive: 1000.0
+          tracking_capacity: 1
+          max_range_km: 2500.0
+          limits:
+            azimuth_deg:
+              min: -180
+              max: 180
+            elevation_deg:
+              min: 10
+              max: 90
+            max_tracking_rate_deg_s: 2.5
+          boresight:
+            mode: local_vertical
+    originated_prefixes:
+      ipv4:
+      - lan0
+      - default
+      ipv6:
+      - lan0
+    tags:
+    - leo
+    interfaces:
+      terr0: lan0
+  frame:
+    body_fixed:
+      body: nodalarc:bodies/earth.yaml
+  location:
+    lat_deg: 40.43
+    lon_deg: -3.72
+    alt_m: 700

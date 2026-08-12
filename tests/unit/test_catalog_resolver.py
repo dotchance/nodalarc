@@ -113,6 +113,9 @@ SHIPPED_SESSION_SHAPES = {
     # vehicle carrying a uD3TN store-and-forward host on its payload bus,
     # plus one Earth and one lunar DTN endpoint lab beside the QUIC labs.
     "earth-luna-dtn.yaml": (86, 357),
+    # Same sky and counts as earth-luna-dtn; only the relay composition
+    # differs (storage-backed custody contact manager).
+    "earth-luna-dtn-custody.yaml": (86, 357),
     "earth-luna-quic.yaml": (81, 290),
     # 43/246: four feeder-class bridge sites added (Djibouti, Singapore,
     # Cape Town, Tokyo — authored ranges cover the 780 km shell at the

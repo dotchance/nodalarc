@@ -548,6 +548,7 @@ make session DEFAULT_SESSION=catalog/nodalarc/sessions/earth-leo-walker.yaml
 | `earth-geo-tdrs` | Representative fixed GEO relay slots. |
 | `earth-leo-heo-geo-luna-reachability` | Multi-regime Earth-Luna reachability experiment. |
 | `earth-luna-dtn` | The QUIC sky with the lunar relay replaced by a DTN relay vehicle carrying a uD3TN store-and-forward host on its payload bus. |
+| `earth-luna-dtn-custody` | The DTN sky with the relay recomposed for bundle-layer custody: its uD3TN payload manages its own contact plan and holds bundles in storage through occlusions. |
 | `earth-luna-quic` | Earth-to-Luna QUIC application path with host endpoints at both ends. |
 
 The shipped sessions are examples assembled from a larger reusable catalog.

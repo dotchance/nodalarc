@@ -258,6 +258,7 @@ class TestTickRateContract:
         "earth-meo-gps": 1,
         "earth-leo-heo-geo-luna-reachability": 1,
         "earth-luna-dtn": 1,
+        "earth-luna-dtn-custody": 1,
         "earth-luna-quic": 1,
         # GEO-only sessions: near-stationary geometry, deliberate 10 s tick.
         "earth-geo-inmarsat": 10,

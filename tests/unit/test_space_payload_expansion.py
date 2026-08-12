@@ -94,6 +94,9 @@ def test_space_carrier_expands_buses_members_and_origination() -> None:
         )
         # Members ride the carrier: same segment, same motion, same grid.
         assert member.local_node_id == f"{carrier.local_node_id}-dtn"
+        # A member's namespace is the scope owning its segment: the vehicle,
+        # exactly as ground members carry their site.
+        assert member.namespace == carrier.node_id
         assert member.orbit == carrier.orbit
         assert member.plane == carrier.plane
         assert member.slot == carrier.slot

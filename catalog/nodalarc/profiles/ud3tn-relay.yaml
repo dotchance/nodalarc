@@ -33,6 +33,7 @@ profile:
     surface: exec
     command:
     - /bin/sh
+    - -l
   resources:
     requests: {cpu_m: 50, memory_mi: 64}
     limits: {cpu_m: 500, memory_mi: 256}

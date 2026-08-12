@@ -28,6 +28,17 @@ interface SatelliteDetailProps {
 
 const _ordered = (a: string, b: string): string => [a, b].sort().join("|");
 
+/** A node's complete name within its scope: the resolver-assigned local
+ * id, with the namespace prefix removed where the local id carries it
+ * (site-qualified ground locals). Never a fragment. */
+export function scopeLocalName(n: NodeState): string {
+  const local = n.local_node_id ?? n.node_id;
+  if (n.namespace && local.startsWith(`${n.namespace}-`)) {
+    return local.slice(n.namespace.length + 1);
+  }
+  return local;
+}
+
 function linkTypeLabel(linkType: string | null): string {
   switch (linkType) {
     case "intra_plane_isl": return "intra-area";
@@ -155,8 +166,42 @@ export function SatelliteDetail({ node, snapshot, anchorGsId,
       return { gs, d, status };
     });
 
+  // Members share their scope's namespace, exactly as site members do. A
+  // vehicle differs from a site only in that the scope is itself a node.
+  const scopeId = snapshot.nodes.some((n) => n.node_id === node.namespace)
+    ? (node.namespace as string)
+    : node.node_id;
+  const vehicleMembers = snapshot.nodes
+    .filter(
+      (n) =>
+        n.node_type === "satellite" &&
+        (n.node_id === scopeId || n.namespace === scopeId),
+    )
+    .sort((a, b) => a.node_id.localeCompare(b.node_id));
+
   return (
     <div>
+      {vehicleMembers.length > 1 ? (
+        <div className="site-member-tabs" role="tablist" aria-label={`Vehicle ${scopeId}`}>
+          {vehicleMembers.map((member) => (
+            <button
+              key={member.node_id}
+              type="button"
+              role="tab"
+              aria-selected={member.node_id === node.node_id}
+              className={
+                member.node_id === node.node_id
+                  ? "site-member-tab site-member-tab--active"
+                  : "site-member-tab"
+              }
+              onClick={() => onSelect({ type: "satellite", id: member.node_id })}
+              title={`Select ${member.node_id}`}
+            >
+              {scopeLocalName(member)}
+            </button>
+          ))}
+        </div>
+      ) : null}
       <div className="object-head">
         <span className="object-head-icon"><Icon name="satellite" size={16} /></span>
         <h2>{node.node_id}</h2>

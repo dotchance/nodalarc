@@ -1604,7 +1604,7 @@ def _expand_space_payload_members(
                         node_id=member_runtime_id,
                         local_node_id=member_local,
                         segment_id=node.segment_id,
-                        namespace=node.namespace,
+                        namespace=node.node_id,
                         kind=node.kind,
                         frame_id=node.frame_id,
                         central_body=node.central_body,

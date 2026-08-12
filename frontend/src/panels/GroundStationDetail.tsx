@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import { REST_URL } from "../config";
 import type { NodeState, StateSnapshot, Selection } from "../types";
 import { useDecisionExplanation } from "../explain/useDecisionExplanation";
+import { scopeLocalName } from "./SatelliteDetail";
 import { useDecisionTimeline } from "../explain/useDecisionTimeline";
 import { fetchGroundDecisions, type GroundDecisionsSnapshot } from "../explain/client";
 import { candidateStatus } from "../explain/derive";
@@ -81,9 +82,8 @@ export function GroundStationDetail({ node, snapshot, onSelect }: GroundStationD
   const siteMembers = node.namespace
     ? snapshot.nodes
         .filter((n) => n.node_type === "ground_station" && n.namespace === node.namespace)
-        .map((n) => n.node_id)
-        .sort()
-    : [node.node_id];
+        .sort((a, b) => a.node_id.localeCompare(b.node_id))
+    : [node];
   const nodeAddresses = node.addresses ?? [];
   const loopbacks = nodeAddresses.filter((a) => a.purpose === "router_loopback");
   const siteInterfaces = nodeAddresses.filter((a) => a.purpose === "site_interface");
@@ -164,21 +164,21 @@ export function GroundStationDetail({ node, snapshot, onSelect }: GroundStationD
     <div>
       {siteMembers.length > 1 ? (
         <div className="site-member-tabs" role="tablist" aria-label={`Site ${node.namespace}`}>
-          {siteMembers.map((memberId) => (
+          {siteMembers.map((member) => (
             <button
-              key={memberId}
+              key={member.node_id}
               type="button"
               role="tab"
-              aria-selected={memberId === node.node_id}
+              aria-selected={member.node_id === node.node_id}
               className={
-                memberId === node.node_id
+                member.node_id === node.node_id
                   ? "site-member-tab site-member-tab--active"
                   : "site-member-tab"
               }
-              onClick={() => onSelect({ type: "ground_station", id: memberId })}
-              title={`Select ${memberId}`}
+              onClick={() => onSelect({ type: "ground_station", id: member.node_id })}
+              title={`Select ${member.node_id}`}
             >
-              {memberId.split("-").pop()}
+              {scopeLocalName(member)}
             </button>
           ))}
         </div>

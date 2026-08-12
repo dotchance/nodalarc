@@ -27,7 +27,7 @@ profile:
     --reaches dtn://luna.dtn/ dtn://relay.dtn/ "mtcp:${DTN_RELAY}:4224";
     do echo "contact configuration failed; retrying"; sleep 5; done;
     echo "configured contact: dtn://relay.dtn/ at mtcp:${DTN_RELAY}:4224";
-    exec aap2-receive --socket "$S" --agentid bundlesink
+    exec aap2-receive --socket "$S" --agentid bundlesink --newline -v
   root_filesystem: read_only
   volumes:
   - name: run

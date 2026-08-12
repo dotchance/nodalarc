@@ -278,9 +278,7 @@ class TestUnconsumedGrammarClass:
     def test_node_payloads_rejected_typed_under_a_narrowed_profile(self) -> None:
         # Onboard execution is production-supported; the boundary mechanism
         # must still refuse typed for a runtime profile without it.
-        narrowed = RuntimeSupport.earth_luna().model_copy(
-            update={"supports_payloads": False}
-        )
+        narrowed = RuntimeSupport.earth_luna().model_copy(update={"supports_payloads": False})
         raw = _session()
         assert raw.space_node_ref is not None
         node_document = raw.read_catalog(raw.space_node_ref)

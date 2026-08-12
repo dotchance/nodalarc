@@ -910,9 +910,7 @@ class BuilderCatalogDraftService:
         # are resolver-allocated, so the scaffold carries no address fields.
         segments = site.get("ethernet", [])
         first_segment = (
-            segments[0].get("id")
-            if segments and isinstance(segments[0], dict)
-            else None
+            segments[0].get("id") if segments and isinstance(segments[0], dict) else None
         )
         if first_segment is None:
             # A bare draft has no segments yet; scaffold the first one so
@@ -926,9 +924,7 @@ class BuilderCatalogDraftService:
                 "node": str(request.node_ref),
                 "payloads": {},
                 "terminals": terminals,
-                "interfaces": {
-                    port.id: first_segment for port in node_definition.ethernet
-                },
+                "interfaces": {port.id: first_segment for port in node_definition.ethernet},
             }
         )
         site["nodes"] = nodes

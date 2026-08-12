@@ -9,7 +9,6 @@ import base64
 import pytest
 from nodalarc.models.catalog import Profile
 from nodalarc.workloads.plan import WorkloadPlan
-
 from nodalarc_operator.workloads.compose import (
     PLAN_ARTIFACT_VOLUME,
     TERMINAL_KEYS_VOLUME,
@@ -86,9 +85,7 @@ def _plan(rendered: dict[str, bytes] | None = None) -> WorkloadPlan:
 def test_router_profile_composes_primary_sidecar_and_artifacts() -> None:
     plan = _plan({"frr.conf": b"!", "daemons": b"zebra=yes"})
 
-    composed = compose_workload(
-        plan, _router_profile(), namespace="nodalarc", owner_ref=_OWNER
-    )
+    composed = compose_workload(plan, _router_profile(), namespace="nodalarc", owner_ref=_OWNER)
 
     names = [container.name for container in composed.composition.containers]
     assert names == ["router", "observer"]

@@ -132,8 +132,7 @@ def _pull_reference(registry: str, image: str) -> str:
 
 def _env_list(values) -> list[kubernetes.client.V1EnvVar] | None:
     return [
-        kubernetes.client.V1EnvVar(name=name, value=value)
-        for name, value in sorted(values.items())
+        kubernetes.client.V1EnvVar(name=name, value=value) for name, value in sorted(values.items())
     ] or None
 
 
@@ -219,9 +218,7 @@ def compose_workload(
     if reserved:
         raise ValueError(f"profile volumes may not use platform names: {sorted(reserved)}")
     if plan.rendered_files and profile.config_mount is None:
-        raise ValueError(
-            f"profile {plan.profile_ref} declares no config_mount for rendered files"
-        )
+        raise ValueError(f"profile {plan.profile_ref} declares no config_mount for rendered files")
 
     artifact_cm = _artifact_config_map(plan, namespace=namespace, owner_ref=owner_ref)
 

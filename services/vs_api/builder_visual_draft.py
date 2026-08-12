@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 import secrets
 from collections.abc import Callable, Mapping
 from copy import deepcopy
@@ -914,9 +913,7 @@ def _site_document(
         nodes.append(
             {
                 "id": node_id,
-                "node": cast(
-                    JsonValue, str(node.node_ref) if node.node_ref is not None else None
-                ),
+                "node": cast(JsonValue, str(node.node_ref) if node.node_ref is not None else None),
                 "payloads": {},
                 "terminals": terminals,
                 "interfaces": {"terr0": "lan0"},
@@ -1288,8 +1285,6 @@ def _authored_ground_projection(
     )
     first_site = next((member.site for member in members if member.site is not None), None)
     first_node = first_site.nodes[0] if first_site is not None and first_site.nodes else None
-    match = re.fullmatch(r"ground-(\d+)", segment.id)
-    number = int(match.group(1)) if match is not None else 1
     stamp = (
         prior.stamp
         if prior is not None

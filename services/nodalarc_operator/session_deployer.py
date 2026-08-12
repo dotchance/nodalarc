@@ -23,7 +23,6 @@ import kubernetes
 from nodalarc.catalog_upload import CatalogUploadSelection
 from nodalarc.content_identity import canonical_json_bytes
 from nodalarc.models.resolved_session import (
-    ResolvedNode,
     ResolvedRoutingDomain,
     ResolvedSession,
 )
@@ -981,7 +980,6 @@ def ensure_session_pods(
 
     v1 = _get_v1()
     node_vars = context["node_vars"]
-    node_stacks = context["node_stacks"]
     pod_placement = context["pod_placement"]
     session_id = context["session_id"]
 
@@ -1153,8 +1151,7 @@ def _site_lans_for_manifest(
             node = node_by_id.get(member.node_id)
             if node is None or node.interfaces is None:
                 raise ValueError(
-                    f"segment {segment_key!r} member {member.node_id!r} has no "
-                    "resolved interfaces"
+                    f"segment {segment_key!r} member {member.node_id!r} has no resolved interfaces"
                 )
             address_set = node.interfaces.ethernet.get(member.interface)
             if address_set is None:

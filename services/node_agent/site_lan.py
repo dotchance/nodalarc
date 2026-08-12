@@ -201,14 +201,10 @@ def plan_site_lan(
             )
         addresses = tuple(member.get("addresses", ()))
         if not addresses:
-            raise RuntimeError(
-                f"segment {site_id!r} member {node_id!r} declares no addresses"
-            )
+            raise RuntimeError(f"segment {site_id!r} member {node_id!r} declares no addresses")
         interface = member.get("interface")
         if not interface:
-            raise RuntimeError(
-                f"segment {site_id!r} member {node_id!r} declares no interface name"
-            )
+            raise RuntimeError(f"segment {site_id!r} member {node_id!r} declares no interface name")
         local_ports.append(
             MemberPort(
                 node_id=node_id,

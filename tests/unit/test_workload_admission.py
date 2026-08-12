@@ -44,8 +44,7 @@ def test_schema_failures_carry_typed_field_evidence() -> None:
     assert admission.profile is None
     assert all(evidence.code == "PROFILE_SCHEMA_INVALID" for evidence in admission.rejections)
     assert any(
-        evidence.field_path and "image" in evidence.field_path
-        for evidence in admission.rejections
+        evidence.field_path and "image" in evidence.field_path for evidence in admission.rejections
     )
 
 

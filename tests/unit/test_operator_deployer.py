@@ -1722,9 +1722,7 @@ class TestSelectionIdentityReplacement:
         mock_v1.patch_namespaced_pod.assert_not_called()
 
     def test_matching_identity_and_run_is_left_alone(self):
-        current = _existing_session_pod(
-            run_id="run-test-0002", selection_identity=self.EXPLICIT
-        )
+        current = _existing_session_pod(run_id="run-test-0002", selection_identity=self.EXPLICIT)
         mock_v1, replaced = self._identity_pass([current], self.EXPLICIT)
         assert replaced == 0
         mock_v1.delete_namespaced_pod.assert_not_called()

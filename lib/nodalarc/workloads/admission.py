@@ -93,9 +93,7 @@ def _evidence(
     )
 
 
-def _schema_rejections(
-    error: ValidationError, *, object_ref: str
-) -> list[AdmissionEvidence]:
+def _schema_rejections(error: ValidationError, *, object_ref: str) -> list[AdmissionEvidence]:
     rejections = []
     for entry in error.errors():
         field_path = ".".join(str(part) for part in entry["loc"]) or None

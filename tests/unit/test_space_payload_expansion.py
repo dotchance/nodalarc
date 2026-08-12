@@ -17,9 +17,7 @@ from tests.catalog_session_fixtures import (
 
 # Onboard execution is production-supported; a narrowed profile must still
 # refuse typed — the boundary mechanism outlives any one profile's width.
-NO_ONBOARD_SUPPORT = RuntimeSupport.earth_luna().model_copy(
-    update={"supports_payloads": False}
-)
+NO_ONBOARD_SUPPORT = RuntimeSupport.earth_luna().model_copy(update={"supports_payloads": False})
 
 
 def _fixture_with_vehicle():
@@ -63,8 +61,7 @@ def test_space_onboard_execution_refuses_typed_under_a_narrowed_profile() -> Non
         resolve_catalog_session(raw, runtime_support=NO_ONBOARD_SUPPORT)
 
     assert any(
-        feature.category == FeatureCategory.PAYLOAD
-        and feature.value == "space_payload_execution"
+        feature.category == FeatureCategory.PAYLOAD and feature.value == "space_payload_execution"
         for feature in err.value.features
     )
 
@@ -75,23 +72,17 @@ def test_space_carrier_expands_buses_members_and_origination() -> None:
     resolved = resolve_catalog_session(raw)
 
     carriers = [
-        node
-        for node in resolved.nodes
-        if node.kind == "satellite" and node.forwarding == "routed"
+        node for node in resolved.nodes if node.kind == "satellite" and node.forwarding == "routed"
     ]
     members = [
-        node
-        for node in resolved.nodes
-        if node.kind == "satellite" and node.forwarding == "host"
+        node for node in resolved.nodes if node.kind == "satellite" and node.forwarding == "host"
     ]
     assert len(carriers) == 2
     assert len(members) == 2
 
     subnets_seen: set[str] = set()
     for carrier in carriers:
-        member = next(
-            node for node in members if node.node_id == f"{carrier.node_id}-dtn"
-        )
+        member = next(node for node in members if node.node_id == f"{carrier.node_id}-dtn")
         # Members ride the carrier: same segment, same motion, same grid.
         assert member.local_node_id == f"{carrier.local_node_id}-dtn"
         # A member's namespace is the scope owning its segment: the vehicle,
@@ -130,8 +121,6 @@ def test_space_carrier_expands_buses_members_and_origination() -> None:
             subnets_seen.add(subnet)
 
     # Members join no routing domain; carriers all do.
-    domain_members = {
-        node_id for domain in resolved.routing_domains for node_id in domain.node_ids
-    }
+    domain_members = {node_id for domain in resolved.routing_domains for node_id in domain.node_ids}
     assert all(carrier.node_id in domain_members for carrier in carriers)
     assert all(member.node_id not in domain_members for member in members)

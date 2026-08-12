@@ -11,8 +11,8 @@ from __future__ import annotations
 import ipaddress
 import math
 import re
-from contextlib import contextmanager
 from collections.abc import Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -38,17 +38,17 @@ from nodalarc.models.resolved_session import (
     ResolvedEndpoint,
     ResolvedEphemeris,
     ResolvedEphemerisKernel,
+    ResolvedEthernetSegment,
     ResolvedHostAttachment,
     ResolvedInterfaceAddress,
     ResolvedLinkCandidate,
     ResolvedLinkRule,
     ResolvedNode,
-    ResolvedEthernetSegment,
     ResolvedNodeInterfaces,
-    ResolvedOriginatedPrefixes,
-    ResolvedSegmentMember,
     ResolvedOrbitFacts,
+    ResolvedOriginatedPrefixes,
     ResolvedRoutingDomain,
+    ResolvedSegmentMember,
     ResolvedSession,
     ResolvedSurfacePosition,
     ResolvedTerminalBlock,
@@ -299,9 +299,7 @@ def _check_runtime_support(
             for node_ref in sorted(space_node_refs):
                 with _segment_scope(segment.id):
                     node_document = _load_expected(node_ref, roots, "node")
-                onboard = bool(node_document.get("ethernet")) or bool(
-                    node_document.get("payloads")
-                )
+                onboard = bool(node_document.get("ethernet")) or bool(node_document.get("payloads"))
                 if feature := support.check_payloads(onboard):
                     unsupported.append(feature)
         else:
@@ -1154,7 +1152,6 @@ def _expand_site_placement(placement: _SitePlacement, roots: CatalogRoots) -> li
         )
         expanded.extend(
             _expand_ground_payload_members(
-                carrier_runtime_id=runtime_id,
                 carrier_local_id=local_id,
                 site_id=site_id,
                 site=site,
@@ -1206,7 +1203,6 @@ def _validate_port_bindings(
 
 def _expand_ground_payload_members(
     *,
-    carrier_runtime_id: str,
     carrier_local_id: str,
     site_id: str,
     site: dict[str, Any],
@@ -1288,9 +1284,7 @@ def _space_carrier_bindings(source_node: dict[str, Any], carrier_id: str) -> tup
     """A space node's declared ports are the buses it carries: one carrier
     interface per port, each its own segment scoped to this placed copy."""
 
-    return tuple(
-        (port["id"], carrier_id, port["id"]) for port in source_node.get("ethernet", ())
-    )
+    return tuple((port["id"], carrier_id, port["id"]) for port in source_node.get("ethernet", ()))
 
 
 def _resolved_space_node(
@@ -1821,8 +1815,7 @@ def _allocate_segment_addressing(
                 ipv6_host = next(ipv6_hosts)
             except StopIteration:
                 raise SessionResolutionError(
-                    f"segment {key[0]}/{key[1]} has more members than its "
-                    f"allocated subnet holds"
+                    f"segment {key[0]}/{key[1]} has more members than its allocated subnet holds"
                 ) from None
             address_by_node_segment[(item.node.node_id, key)] = (
                 f"{ipv4_host}/{_SEGMENT_IPV4_PREFIX}",
@@ -1830,12 +1823,8 @@ def _allocate_segment_addressing(
             )
 
     existing_ipv4, existing_ipv6 = _existing_loopback_addresses(nodes)
-    lo_ipv4 = _available_host_addresses(
-        _DEFAULT_GENERATED_SPACE_LOOPBACK_IPV4_POOL, existing_ipv4
-    )
-    lo_ipv6 = _available_host_addresses(
-        _DEFAULT_GENERATED_SPACE_LOOPBACK_IPV6_POOL, existing_ipv6
-    )
+    lo_ipv4 = _available_host_addresses(_DEFAULT_GENERATED_SPACE_LOOPBACK_IPV4_POOL, existing_ipv4)
+    lo_ipv6 = _available_host_addresses(_DEFAULT_GENERATED_SPACE_LOOPBACK_IPV6_POOL, existing_ipv6)
 
     next_nodes: list[_RuntimeNode] = []
     for item in sorted(nodes, key=lambda entry: entry.node.node_id):
@@ -1847,14 +1836,10 @@ def _allocate_segment_addressing(
         for interface, site_id, segment in item.ethernet_bindings:
             key = (site_id, segment)
             ipv4_address, ipv6_address = address_by_node_segment[(item.node.node_id, key)]
-            ethernet[interface] = ResolvedInterfaceAddress(
-                ipv4=ipv4_address, ipv6=ipv6_address
-            )
+            ethernet[interface] = ResolvedInterfaceAddress(ipv4=ipv4_address, ipv6=ipv6_address)
             bound_segments[segment] = key
         interfaces = ResolvedNodeInterfaces(
-            lo0=ResolvedInterfaceAddress(
-                ipv4=f"{next(lo_ipv4)}/32", ipv6=f"{next(lo_ipv6)}/128"
-            ),
+            lo0=ResolvedInterfaceAddress(ipv4=f"{next(lo_ipv4)}/32", ipv6=f"{next(lo_ipv6)}/128"),
             ethernet=ethernet,
         )
         originated = _resolve_origination(
@@ -1947,8 +1932,11 @@ def _apply_addressing(
             # elsewhere in the session are excluded from the pool walk so
             # no router identity is minted twice.
             reserved_ipv4, reserved_ipv6 = _existing_loopback_addresses(
-                [item for item in nodes if item.node.node_id not in
-                 {sel.node.node_id for sel in selected}]
+                [
+                    item
+                    for item in nodes
+                    if item.node.node_id not in {sel.node.node_id for sel in selected}
+                ]
             )
             by_id = {item.node.node_id: item for item in selected}
 
@@ -2537,9 +2525,7 @@ def _derive_host_attachments(
             continue
         for address in node.interfaces.ethernet.values():
             if address.ipv4:
-                routed_segment_ports.append(
-                    (node.node_id, ipaddress.ip_interface(address.ipv4))
-                )
+                routed_segment_ports.append((node.node_id, ipaddress.ip_interface(address.ipv4)))
     routed_segment_ports.sort(key=lambda entry: entry[0])
 
     # A session with zero routed nodes refuses at routing-domain
@@ -2556,11 +2542,7 @@ def _derive_host_attachments(
             continue
         ethernet = dict(node.interfaces.ethernet) if node.interfaces is not None else {}
         attach_entry = next(
-            (
-                (name, address)
-                for name, address in sorted(ethernet.items())
-                if address.ipv4
-            ),
+            ((name, address) for name, address in sorted(ethernet.items()) if address.ipv4),
             None,
         )
         if attach_entry is None:

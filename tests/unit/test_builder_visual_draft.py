@@ -861,8 +861,7 @@ def test_backend_command_mints_ground_sites_and_allocates_all_addresses(
     # Addresses are resolver-allocated at deploy; minted draft sites carry
     # composition only.
     assert all(
-        member.site is not None and member.site.nodes[0].node_ref is not None
-        for member in members
+        member.site is not None and member.site.nodes[0].node_ref is not None for member in members
     )
 
     workspace = minted.draft.authoring_workspace

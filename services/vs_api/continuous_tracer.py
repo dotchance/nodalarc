@@ -48,6 +48,7 @@ def _primary_container(v1, pod: str, ns: str) -> str:
     _PRIMARY_CONTAINER_CACHE[key] = name
     return name
 
+
 from vs_api.timeline_scanner import TimelineScanner
 
 log = logging.getLogger(__name__)

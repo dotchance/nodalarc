@@ -51,7 +51,9 @@ def _session_with_user_ground(
     segment_mutation=None,
 ) -> tuple[dict[str, Any], CatalogRoots]:
     user_root = tmp_path / "user"
-    _write_yaml(user_root / "profiles" / "override-profile.yaml", _user_profile_document("override-profile"))
+    _write_yaml(
+        user_root / "profiles" / "override-profile.yaml", _user_profile_document("override-profile")
+    )
 
     node_document = yaml.safe_load(BASE_NODE.read_text(encoding="utf-8"))
     node_document["node"]["id"] = "profile-test-node"
@@ -140,9 +142,7 @@ def test_conflicting_shared_site_segment_profiles_are_refused(tmp_path: Path) ->
         duplicate["profile"] = FRR_PROFILE
         session["segments"].append(duplicate)
 
-    session, roots = _session_with_user_ground(
-        tmp_path, segment_mutation=add_conflicting_segment
-    )
+    session, roots = _session_with_user_ground(tmp_path, segment_mutation=add_conflicting_segment)
 
     with pytest.raises(SessionResolutionError, match="conflicting\\s+profile statements"):
         resolve_session(session, catalog_roots=roots)
@@ -167,7 +167,15 @@ def test_profile_reference_must_load_a_profile_document(tmp_path: Path) -> None:
     session, roots = _session_with_user_ground(tmp_path / "wrong", site_mutation=wrong_family)
     _write_yaml(
         (tmp_path / "wrong" / "user") / "profiles" / "wrong-family.yaml",
-        {"node": {"id": "wrong-family", "forwarding": "host", "ethernet": [], "terminals": [], "payloads": []}},
+        {
+            "node": {
+                "id": "wrong-family",
+                "forwarding": "host",
+                "ethernet": [],
+                "terminals": [],
+                "payloads": [],
+            }
+        },
     )
 
     with pytest.raises(SessionResolutionError):
@@ -184,14 +192,10 @@ def test_non_router_workload_on_a_routed_bus_stands_outside_domains(tmp_path: Pa
     resolution = resolve_session(session, catalog_roots=roots)
 
     observers = [
-        node
-        for node in resolution.nodes
-        if node.profile == "nodalarc:profiles/linux-host.yaml"
+        node for node in resolution.nodes if node.profile == "nodalarc:profiles/linux-host.yaml"
     ]
     assert len(observers) == 1
-    member_ids = {
-        node_id for domain in resolution.routing_domains for node_id in domain.node_ids
-    }
+    member_ids = {node_id for domain in resolution.routing_domains for node_id in domain.node_ids}
     assert observers[0].node_id not in member_ids
     routers = [node for node in resolution.nodes if node.profile == FRR_PROFILE]
     assert routers
@@ -221,7 +225,10 @@ def test_env_value_from_resolves_and_refuses_honestly(tmp_path: Path) -> None:
         return document
 
     good = [
-        {"name": "PEER", "value_from": {"tag": "env_target", "interface": "terr0", "family": "ipv4"}},
+        {
+            "name": "PEER",
+            "value_from": {"tag": "env_target", "interface": "terr0", "family": "ipv4"},
+        },
         {"name": "MODE", "value": "test"},
     ]
     session, roots = _session_with_user_ground(tmp_path, site_mutation=with_env)
@@ -230,18 +237,30 @@ def test_env_value_from_resolves_and_refuses_honestly(tmp_path: Path) -> None:
     resolution = resolve_session(session, catalog_roots=roots)
     assert resolution.nodes
 
-    bad = [{"name": "PEER", "value_from": {"tag": "absent_tag", "interface": "terr0", "family": "ipv4"}}]
+    bad = [
+        {
+            "name": "PEER",
+            "value_from": {"tag": "absent_tag", "interface": "terr0", "family": "ipv4"},
+        }
+    ]
     session, roots = _session_with_user_ground(tmp_path / "bad", site_mutation=with_env)
-    _write_yaml(tmp_path / "bad" / "user" / "profiles" / "override-profile.yaml", profile_with_env(bad))
+    _write_yaml(
+        tmp_path / "bad" / "user" / "profiles" / "override-profile.yaml", profile_with_env(bad)
+    )
     session["segments"][1]["profile"] = USER_PROFILE
     with pytest.raises(SessionResolutionError, match="matches no node"):
         resolve_session(session, catalog_roots=roots)
 
     # Allocated segments always carry both families, so the live refusal
     # for a bad interface reference is the missing-interface one.
-    no_interface = [{"name": "PEER", "value_from": {"tag": "env_target", "interface": "bus7", "family": "ipv4"}}]
+    no_interface = [
+        {"name": "PEER", "value_from": {"tag": "env_target", "interface": "bus7", "family": "ipv4"}}
+    ]
     session, roots = _session_with_user_ground(tmp_path / "noif", site_mutation=with_env)
-    _write_yaml(tmp_path / "noif" / "user" / "profiles" / "override-profile.yaml", profile_with_env(no_interface))
+    _write_yaml(
+        tmp_path / "noif" / "user" / "profiles" / "override-profile.yaml",
+        profile_with_env(no_interface),
+    )
     session["segments"][1]["profile"] = USER_PROFILE
     with pytest.raises(SessionResolutionError, match="has no interface"):
         resolve_session(session, catalog_roots=roots)
@@ -256,11 +275,7 @@ def test_shipped_quic_session_records_node_level_endpoint_profiles() -> None:
 
     assert any("picoquic-client" in profile for profile in by_profile)
     assert any("picoquic-server" in profile for profile in by_profile)
-    endpoint_nodes = [
-        node
-        for node in resolution.nodes
-        if "picoquic" in node.profile
-    ]
+    endpoint_nodes = [node for node in resolution.nodes if "picoquic" in node.profile]
     assert endpoint_nodes
     # Endpoint members inherit their profile from the mounted payload
     # object, the definition level of the three-level rule.

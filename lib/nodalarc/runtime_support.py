@@ -75,9 +75,7 @@ FEATURE_SUPPORT_NOTES: dict[tuple[FeatureCategory, str], str] = {
     (FeatureCategory.ADDRESSING_POOL, "terrestrial_prefixes"): (
         "future runtime capability — segment subnets are resolver-allocated"
     ),
-    (FeatureCategory.PAYLOAD, "space_payload_execution"): (
-        "supported by the Earth-Luna runtime"
-    ),
+    (FeatureCategory.PAYLOAD, "space_payload_execution"): ("supported by the Earth-Luna runtime"),
     (FeatureCategory.CLOCK_MODEL, "session"): "supported clock model",
     (FeatureCategory.CLOCK_MODEL, "affine"): "future runtime capability",
     (FeatureCategory.GROUND_SCHEDULING, "handover_concurrency:all_at_once"): (

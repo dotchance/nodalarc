@@ -16,7 +16,7 @@ from copy import deepcopy
 import pytest
 from nodalarc.runtime_naming import LINUX_IFNAME_MAX, is_managed_host_ifname
 from nodalarc.session_validator import validate_session_readiness
-from nodalarc.substrate.manifest_contract import NodeSpec, WiringManifest
+from nodalarc.substrate.manifest_contract import WiringManifest
 from nodalarc.vxlan import compute_site_vni
 from node_agent.site_lan import plan_site_lan
 from pydantic import ValidationError
@@ -268,9 +268,9 @@ class TestManifestContract:
         data["site_lans"]["site-b-lan0"]["members"] = [
             deepcopy(data["site_lans"]["site-a-lan0"]["members"][1])
         ]
-        data["site_lans"]["site-a-lan0"]["members"] = data["site_lans"]["site-a-lan0"][
-            "members"
-        ][:1]
+        data["site_lans"]["site-a-lan0"]["members"] = data["site_lans"]["site-a-lan0"]["members"][
+            :1
+        ]
         with pytest.raises(ValidationError, match="pairwise distinct"):
             WiringManifest.model_validate(data)
 
@@ -438,9 +438,7 @@ class TestRenderAndReadiness:
         lone_vars = build_template_vars_from_resolved(
             single, lone.node_id, stack_variables=stack.template_variables
         )
-        lone_terr0 = next(
-            seg for seg in lone_vars["segment_interfaces"] if seg["name"] == "terr0"
-        )
+        lone_terr0 = next(seg for seg in lone_vars["segment_interfaces"] if seg["name"] == "terr0")
         assert lone_terr0["igp_active"] is False
 
     def test_site_lan_membership_satisfies_domain_connectivity(self) -> None:

@@ -9,8 +9,6 @@ from nodalarc.catalog_refs import CatalogRef
 from nodalarc.catalog_repository import CatalogScope
 from nodalarc.filesystem_catalog_repository import FilesystemCatalogRepository
 from nodalarc.models.builder_api import BuilderDraftEnvelope, BuilderSessionSaveRequest
-from nodalarc.models.session_sources import CatalogSessionSwitchRequest
-from pydantic import ValidationError
 from vs_api.builder_compiler import canonicalize_persisted_configuration
 from vs_api.builder_session_service import save_builder_session
 from vs_api.catalog_context import CatalogContext

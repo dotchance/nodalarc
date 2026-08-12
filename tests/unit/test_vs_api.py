@@ -523,9 +523,7 @@ class TestSessionContextNetworkIdentity:
             yaml.safe_load(session_path.read_text()),
             source_context=SourceContext(origin="test.vs-api"),
         )
-        node = next(
-            n for n in resolution.resolved.nodes if n.node_id == "earth-us-co-denver-gw1"
-        )
+        node = next(n for n in resolution.resolved.nodes if n.node_id == "earth-us-co-denver-gw1")
         assert node.interfaces is not None
         lo0_ipv4 = node.interfaces.lo0.ipv4
         terr0 = node.interfaces.ethernet["terr0"]
@@ -542,9 +540,7 @@ class TestSessionContextNetworkIdentity:
             for a in addresses
         )
         assert any(
-            a.purpose == "site_interface"
-            and a.address == terr0.ipv4
-            and a.interface == "terr0"
+            a.purpose == "site_interface" and a.address == terr0.ipv4 and a.interface == "terr0"
             for a in addresses
         )
         assert ctx._node_primary_prefix_by_id["earth-us-co-denver-gw1"] == site_prefix
@@ -570,9 +566,7 @@ class TestSessionContextNetworkIdentity:
             yaml.safe_load(Path("catalog/nodalarc/sessions/earth-leo-simple.yaml").read_text()),
             source_context=SourceContext(origin="test.vs-api"),
         )
-        resolved_inactive = next(
-            n for n in resolution.resolved.nodes if n.node_id == inactive_id
-        )
+        resolved_inactive = next(n for n in resolution.resolved.nodes if n.node_id == inactive_id)
         assert resolved_inactive.interfaces is not None
         import ipaddress as _ip
 

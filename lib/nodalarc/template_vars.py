@@ -458,9 +458,7 @@ def _segment_template_facts(
             if value is None:
                 continue
             iface = ipaddress.ip_interface(value)
-            addresses.append(
-                {"host_address": value, "metric": 10, "prefix": str(iface.network)}
-            )
+            addresses.append({"host_address": value, "metric": 10, "prefix": str(iface.network)})
             networks.add(str(iface.network))
         igp_enabled = bool(networks & originated_networks)
         covered.update(networks & originated_networks)

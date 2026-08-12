@@ -520,8 +520,7 @@ class Node(_FrozenModel):
         ]
         if undeclared_attach:
             raise ValueError(
-                "payload mount attach must name a declared ethernet port: "
-                f"{undeclared_attach}"
+                f"payload mount attach must name a declared ethernet port: {undeclared_attach}"
             )
         if self.originated_prefixes is not None:
             declared = {*ethernet_ids, "default"}

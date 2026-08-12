@@ -481,7 +481,7 @@ check-contracts: ## Verify generated Builder API transport types
 	uv run python scripts/gen_builder_api_types.py --check
 
 dead-code: ## Report high-confidence unused code findings
-	uv run vulture lib services tools scripts images --min-confidence 80
+	uv run vulture lib services tools scripts images adapters --min-confidence 80
 
 # ---------------------------------------------------------------------------
 # Tests

@@ -147,6 +147,7 @@ class NodeSpec(_StrictModel):
     slot: int | None = None
     gs_name: str | None = None
     gs_index: int | None = None
+
     @field_validator("sysctls")
     @classmethod
     def _sysctls_required(cls, value: dict[str, str]) -> dict[str, str]:
@@ -277,8 +278,7 @@ class WiringManifest(_StrictModel):
             for member in spec.members:
                 if member.node_id not in self.nodes:
                     raise ValueError(
-                        f"segment {segment_id!r} declares unknown member "
-                        f"{member.node_id!r}"
+                        f"segment {segment_id!r} declares unknown member {member.node_id!r}"
                     )
                 memberships.setdefault(member.node_id, []).append(member)
         for node_id, node in self.nodes.items():

@@ -4,13 +4,14 @@
 
 from __future__ import annotations
 
-from adapters.registry import _ADAPTERS
 from nodalarc.runtime_support import (
     ADAPTER_RENDERED_CAPABILITIES,
     RuntimeSupport,
     adapter_renders,
     adapter_renders_routing,
 )
+
+from adapters.registry import _ADAPTERS
 
 
 def test_declared_adapters_match_the_registered_adapter_packages() -> None:

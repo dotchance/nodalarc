@@ -209,8 +209,16 @@ def test_env_entries_set_literals_and_resolved_facts() -> None:
 
     with pytest.raises(ValidationError):
         Profile.model_validate(
-            {**_app_profile(), "env": [{"name": "BOTH", "value": "x",
-             "value_from": {"tag": "t", "interface": "terr0", "family": "ipv4"}}]}
+            {
+                **_app_profile(),
+                "env": [
+                    {
+                        "name": "BOTH",
+                        "value": "x",
+                        "value_from": {"tag": "t", "interface": "terr0", "family": "ipv4"},
+                    }
+                ],
+            }
         )
 
 
@@ -266,8 +274,12 @@ def test_profile_is_readable_at_every_assignment_level() -> None:
     assert node.profile == reference
 
     space_node = SpaceNode.model_validate(
-        {"id": "probe-01", "node": "nodalarc:nodes/space/leo-sat.yaml", "profile": reference,
-         "orbit": "nodalarc:orbits/earth/leo-550.yaml"}
+        {
+            "id": "probe-01",
+            "node": "nodalarc:nodes/space/leo-sat.yaml",
+            "profile": reference,
+            "orbit": "nodalarc:orbits/earth/leo-550.yaml",
+        }
     )
     assert space_node.profile == reference
 
@@ -284,14 +296,20 @@ def test_profile_is_readable_at_every_assignment_level() -> None:
     assert site_node.profile == reference
 
     space_segment = SpaceSegment.model_validate(
-        {"id": "leo", "profile": reference,
-         "source": "nodalarc:constellations/earth/leo/earth-leo-ring-36.yaml"}
+        {
+            "id": "leo",
+            "profile": reference,
+            "source": "nodalarc:constellations/earth/leo/earth-leo-ring-36.yaml",
+        }
     )
     assert space_segment.profile == reference
 
     ground_segment = GroundSegment.model_validate(
-        {"id": "ground", "profile": reference,
-         "placement": {"from_site_set": "nodalarc:site-sets/earth/earth-quic-lab-sites.yaml"}}
+        {
+            "id": "ground",
+            "profile": reference,
+            "placement": {"from_site_set": "nodalarc:site-sets/earth/earth-quic-lab-sites.yaml"},
+        }
     )
     assert ground_segment.profile == reference
 

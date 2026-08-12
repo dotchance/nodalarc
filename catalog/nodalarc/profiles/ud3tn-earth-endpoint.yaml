@@ -62,6 +62,8 @@ profile:
     - /run/ud3tn/aap.socket
     - --aap2-socket
     - /run/ud3tn/aap2.socket
+    - --log-level
+    - '4'
     root_filesystem: read_only
     resources:
       requests: {cpu_m: 50, memory_mi: 64}

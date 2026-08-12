@@ -35,7 +35,7 @@ profile:
     declare -A mode
     manage() {
       local eid="$1" ip="$2" key="$3"
-      if timeout 3 bash -c "echo -n >/dev/tcp/$ip/4224" 2>/dev/null; then
+      if timeout 15 bash -c "echo -n >/dev/tcp/$ip/4224" 2>/dev/null; then
         if [ "${mode[$key]:-}" != direct ]; then
           aap2-config --socket "$S" --delete "$eid" >/dev/null 2>&1
           aap2-config --socket "$S" --schedule 1 315360000 1000000 \

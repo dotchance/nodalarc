@@ -159,6 +159,7 @@ def test_engine_batch_path_is_bit_identical_to_scalar_wrapper():
         def __init__(self, name, elements, central_body):
             self.name = name
             self.elements = elements
+            self.elements_epoch_unix = EPOCH
             self.central_body = central_body
             self.tle_line_1 = None
             self.tle_line_2 = None

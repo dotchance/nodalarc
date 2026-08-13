@@ -52,10 +52,88 @@ def _load_test_ctx():
     return ctx, sats, gs_file
 
 
-EPOCH = 1735689600.0  # 2025-01-01T00:00:00 UTC
+# The loaded session's start time: the owned validity anchor of every
+# satellite's working elements. Guarded by test_epoch_matches_the_owned_anchor.
+EPOCH = 1780876800.0  # 2026-06-08T00:00:00 UTC
 
 
 class TestBuildSessionEphemeris:
+    def test_epoch_matches_the_owned_anchor(self):
+        """EPOCH must be the elements' validity anchor, not an arbitrary date.
+
+        A hard-coded 2025 epoch against 2026-anchored elements once blessed
+        a 523-day silent relabeling on the wire. This pins the alignment so
+        a changed session fixture cannot quietly reintroduce it.
+        """
+        ctx, sats, _ = _load_test_ctx()
+        for sat in sats:
+            assert sat.elements_epoch_unix == EPOCH
+
+    def test_wire_elements_are_advanced_to_a_later_epoch(self):
+        """A later wire epoch carries every advanced field, never a relabel.
+
+        All six element fields are asserted, and an eccentric J2 satellite
+        joins the real circular population so every secular component
+        (RAAN, argument of perigee, mean anomaly) provably changes.
+        """
+        import math as _math
+
+        from nodalarc.ome_runtime import SatelliteNode, satellite_propagator_id
+        from nodalarc.orbital import OrbitalElements
+        from nodalarc.propagator import advance_mean_elements
+
+        ctx, sats, _ = _load_test_ctx()
+        eccentric = SatelliteNode(
+            plane=9,
+            slot=9,
+            elements=OrbitalElements(
+                semi_major_axis_km=26_600.0,
+                eccentricity=0.74,
+                inclination_rad=_math.radians(63.4),
+                raan_rad=_math.radians(270.0),
+                argument_of_perigee_rad=_math.radians(270.0),
+                mean_anomaly_rad=_math.radians(10.0),
+            ),
+            elements_epoch_unix=EPOCH,
+            isl_terminal_count=0,
+            ground_terminal_count=0,
+            node_id="earth-test-sat-p09s09",
+            central_body="earth",
+            propagator_id="j2-mean-elements",
+        )
+        probe_sats = [*sats[:3], eccentric]
+        ctx.satellites.append(eccentric)
+        try:
+            shifted = EPOCH + 3600.0
+            eph = build_session_ephemeris(ctx, shifted, epoch_id=1)
+        finally:
+            ctx.satellites.remove(eccentric)
+
+        for sat in probe_sats:
+            nid = sat.node_id or ctx.addressing.sat_id(sat.plane, sat.slot)
+            node = eph.nodes[nid]
+            expected = advance_mean_elements(
+                sat.elements,
+                3600.0,
+                body_frame=ctx.body_frames[sat.central_body],
+                propagator_id=satellite_propagator_id(sat, ctx.propagator_id),
+            )
+            assert node.semi_major_axis_km == expected.semi_major_axis_km
+            assert node.eccentricity == expected.eccentricity
+            assert abs(_math.radians(node.inclination_deg) - expected.inclination_rad) < 1e-12
+            assert abs(_math.radians(node.raan_deg) - expected.raan_rad) < 1e-12
+            assert (
+                abs(_math.radians(node.argument_of_perigee_deg) - expected.argument_of_perigee_rad)
+                < 1e-12
+            )
+            assert abs(_math.radians(node.mean_anomaly_deg) - expected.mean_anomaly_rad) < 1e-12
+            assert node.raan_deg != _math.degrees(sat.elements.raan_rad)
+            assert node.mean_anomaly_deg != _math.degrees(sat.elements.mean_anomaly_rad)
+            if sat.elements.eccentricity > 0.0:
+                assert node.argument_of_perigee_deg != _math.degrees(
+                    sat.elements.argument_of_perigee_rad
+                )
+
     def test_satellite_mapped_to_configured_mean_element_propagator(self):
         ctx, sats, _ = _load_test_ctx()
         eph = build_session_ephemeris(ctx, EPOCH, epoch_id=0)

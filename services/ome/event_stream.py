@@ -53,6 +53,7 @@ from nodalarc.ome_runtime import (
     isl_terminal_for_interface,
     satellite_node_id,
 )
+from nodalarc.propagator import advance_mean_elements
 
 from ome.event_diff import diff_ground_visibility_events, diff_isl_visibility_events
 from ome.ground_allocator import (
@@ -76,6 +77,7 @@ from ome.propagation_engine import (
     PropagatedState,
     SessionPropagatorId,
     build_node_positions,
+    element_anchor_epoch_unix,
     propagate_satellites,
 )
 from ome.propagator import (
@@ -160,14 +162,24 @@ def build_session_ephemeris(
                 **_meta(node_id),
             )
         else:
+            # The wire contract labels these elements as valid at this
+            # ephemeris' epoch_unix, and consumers propagate from that
+            # instant. Derive them there from the owned working photograph;
+            # identity when the epochs align, never a silent relabeling.
+            wire_elements = advance_mean_elements(
+                sat.elements,
+                epoch_unix - element_anchor_epoch_unix(sat, node_id),
+                body_frame=ctx.body_frames[reference_body],
+                propagator_id=sat_propagator_id,
+            )
             nodes[node_id] = EphemerisNodeKeplerian(
                 propagator=sat_propagator_id,
-                semi_major_axis_km=sat.elements.semi_major_axis_km,
-                eccentricity=sat.elements.eccentricity,
-                inclination_deg=math.degrees(sat.elements.inclination_rad),
-                raan_deg=math.degrees(sat.elements.raan_rad),
-                argument_of_perigee_deg=math.degrees(sat.elements.argument_of_perigee_rad),
-                mean_anomaly_deg=math.degrees(sat.elements.mean_anomaly_rad),
+                semi_major_axis_km=wire_elements.semi_major_axis_km,
+                eccentricity=wire_elements.eccentricity,
+                inclination_deg=math.degrees(wire_elements.inclination_rad),
+                raan_deg=math.degrees(wire_elements.raan_rad),
+                argument_of_perigee_deg=math.degrees(wire_elements.argument_of_perigee_rad),
+                mean_anomaly_deg=math.degrees(wire_elements.mean_anomaly_rad),
                 plane=sat.plane,
                 slot=sat.slot,
                 reference_body=reference_body,

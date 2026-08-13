@@ -42,6 +42,7 @@ from nodalarc.ome_runtime import (
     IslTerminal,
     SatelliteGroundTerminal,
     SatelliteNode,
+    retarget_satellites,
 )
 from nodalarc.orbital import OrbitalElements
 from nodalarc.propagator import orbital_period_for_body
@@ -167,6 +168,18 @@ def build_ome_inputs_from_resolved(resolved: ResolvedSession) -> ResolvedOmeInpu
     addressing = ResolvedAddressingView(resolved)
     neighbors = _neighbors_from_resolved(resolved)
     propagator_id = _single_ome_propagator(resolved)
+    # Anchor every working photograph to the session epoch at birth. Every
+    # consumer of these inputs - live pacing, batch timeline, coverage
+    # preview, builder preview - propagates dt from an epoch it supplies;
+    # the elements must be valid there, not at each orbit's own epoch.
+    # Identity when the two coincide, which keeps shipped sessions
+    # bit-identical.
+    retarget_satellites(
+        satellites,
+        session_propagator_id=propagator_id,
+        anchor_epoch_unix=_session_epoch_unix(resolved),
+        body_frames=body_frames,
+    )
     period = max(
         orbital_period_for_body(
             sat.elements,

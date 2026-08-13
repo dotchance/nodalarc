@@ -926,9 +926,10 @@ def _run_pacing(
             _enqueue_ome_lifecycle_ops_event(details)
 
     # Build StepContext for per-step computation (Physicist role)
+    from nodalarc.ome_runtime import retarget_satellites
+
     from ome.event_stream import build_step_context, compute_step
     from ome.ground_visibility_engine import DwellPassState
-    from ome.propagation_engine import retarget_satellites
     from ome.telemetry import (
         SEG_OUTPUT_FILE,
         SEG_PUBLISH_AUTHORITY,

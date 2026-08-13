@@ -2,17 +2,19 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from nodalarc.body_frames import SupportedSurfaceBody
+from nodalarc.body_frames import BodyFrame, SupportedSurfaceBody
 from nodalarc.models.ground_policy import HandoverPolicySpec, SelectionPolicySpec
 from nodalarc.models.terminal_physics import (
     SatGroundTerminalBoresight,
     TerminalBoresight,
 )
 from nodalarc.orbital import OrbitalElements
+from nodalarc.propagator import advance_mean_elements
 
 
 class OmeAddressing(Protocol):
@@ -179,6 +181,7 @@ class SatelliteNode:
         "segment_id",
         "central_body",
         "elements",
+        "elements_epoch_unix",
         "authored_elements",
         "authored_epoch_unix",
         "isl_terminal_count",
@@ -214,6 +217,7 @@ class SatelliteNode:
         propagator_id: str | None = None,
         authored_elements: OrbitalElements | None = None,
         authored_epoch_unix: float | None = None,
+        elements_epoch_unix: float | None = None,
     ) -> None:
         self.plane = plane
         self.slot = slot
@@ -226,6 +230,11 @@ class SatelliteNode:
             raise ValueError("SatelliteNode requires central_body from resolved orbit/body facts")
         self.central_body = central_body
         self.elements = elements
+        # The working photograph's validity instant. Propagation derives each
+        # satellite's elapsed time from this owned anchor, so a caller-
+        # supplied epoch can never silently re-interpret the elements at a
+        # different instant.
+        self.elements_epoch_unix = elements_epoch_unix
         # The authored photograph: elements exactly as declared, valid at the
         # orbit's own epoch. ``elements`` above is the working photograph at
         # the current pacing anchor; re-anchoring derives it from these two
@@ -240,6 +249,66 @@ class SatelliteNode:
         self.tle_line_2 = tle_line_2
         self.norad_id = norad_id
         self.propagator_id = propagator_id
+
+
+def satellite_propagator_id(sat: SatelliteNode, session_propagator_id: str) -> str:
+    """The propagator this satellite integrates under, session default aware."""
+    sat_propagator_id = getattr(sat, "propagator_id", None)
+    if sat_propagator_id is not None:
+        if sat_propagator_id not in (
+            "two-body",
+            "keplerian-circular",
+            "j2-mean-elements",
+            "sgp4-tle",
+        ):
+            raise ValueError(f"Unsupported satellite propagator: {sat_propagator_id!r}")
+        return sat_propagator_id
+    if session_propagator_id == "mixed":
+        raise ValueError("OME mixed propagation requires every satellite to carry propagator_id")
+    return session_propagator_id
+
+
+def retarget_satellites(
+    satellites: list[SatelliteNode],
+    *,
+    session_propagator_id: str,
+    anchor_epoch_unix: float,
+    body_frames: Mapping[str, BodyFrame],
+) -> None:
+    """Re-anchor every satellite's working elements to ``anchor_epoch_unix``.
+
+    The dt propagation model reads ``sat.elements`` as a photograph taken at
+    the anchoring epoch. This derives that photograph from the authored one
+    (``authored_elements`` at ``authored_epoch_unix``) wherever an epoch is
+    established: input construction, session start, seek, and checkpoint
+    recovery. Derivation always starts from the authored photograph, never
+    from the previous working one, so repeated re-anchoring cannot
+    accumulate error. SGP4 satellites are untouched; a TLE carries its own
+    epoch.
+    """
+    for sat in satellites:
+        sat_propagator_id = satellite_propagator_id(sat, session_propagator_id)
+        if sat_propagator_id == "sgp4-tle":
+            continue
+        if sat.authored_elements is None or sat.authored_epoch_unix is None:
+            raise ValueError(
+                f"satellite {sat.node_id!r} has no authored element photograph; "
+                "orbit-placed satellites must carry authored_elements and "
+                "authored_epoch_unix to be re-anchored"
+            )
+        body_frame = body_frames.get(sat.central_body)
+        if body_frame is None:
+            raise ValueError(
+                f"retarget missing body frame for satellite {sat.node_id!r} "
+                f"central_body={sat.central_body!r}"
+            )
+        sat.elements = advance_mean_elements(
+            sat.authored_elements,
+            anchor_epoch_unix - sat.authored_epoch_unix,
+            body_frame=body_frame,
+            propagator_id=sat_propagator_id,
+        )
+        sat.elements_epoch_unix = anchor_epoch_unix
 
 
 def satellite_node_id(satellite: SatelliteNode, _addressing: OmeAddressing) -> str:

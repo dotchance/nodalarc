@@ -38,6 +38,11 @@ from nodalarc.models.resolved_session import SourceContext
 from nodalarc.ome_inputs import build_ome_inputs_from_resolved
 from nodalarc.ome_runtime import isl_terminal_for_interface
 from nodalarc.propagator import (
+    body_fixed_to_geodetic,
+    eci_to_body_fixed,
+    eci_to_body_fixed_velocity,
+    propagate_eci_for_body,
+    propagate_eci_j2_mean_elements_for_body,
     propagate_j2_mean_elements_for_body,
     propagate_keplerian_for_body,
     propagate_sgp4_tle,
@@ -50,6 +55,7 @@ from ome.coverage_insights import (
     generate_insights,
 )
 from ome.event_stream import precompute_timeline_window
+from ome.propagation_engine import element_anchor_epoch_unix
 from ome.visibility import check_isl_visibility
 
 log = logging.getLogger(__name__)
@@ -519,19 +525,55 @@ def _scan_isl_failure_reasons(
                     f"coverage preview mixed propagation requires propagator_id on {nid!r}"
                 )
             if sat_propagator_id in ("two-body", "keplerian-circular"):
-                positions[nid] = propagate_keplerian_for_body(
-                    sat.elements,
-                    epoch_unix,
-                    dt,
-                    body_frame=body_frame,
-                )[:3]
+                anchor = element_anchor_epoch_unix(sat, nid)
+                sim_time = epoch_unix + dt
+                canonical_phase = sim_time - anchor
+                if canonical_phase == dt:
+                    positions[nid] = propagate_keplerian_for_body(
+                        sat.elements,
+                        epoch_unix,
+                        dt,
+                        body_frame=body_frame,
+                    )[:3]
+                else:
+                    pos_inertial, vel_inertial = propagate_eci_for_body(
+                        sat.elements,
+                        canonical_phase,
+                        mu_km3_s2=body_frame.gravitational_parameter_km3_s2,
+                    )
+                    pos_fixed = eci_to_body_fixed(pos_inertial, sim_time, body_frame)
+                    positions[nid] = (
+                        pos_fixed,
+                        eci_to_body_fixed_velocity(
+                            pos_inertial, vel_inertial, sim_time, body_frame
+                        ),
+                        body_fixed_to_geodetic(pos_fixed, body_frame),
+                    )
             elif sat_propagator_id == "j2-mean-elements":
-                positions[nid] = propagate_j2_mean_elements_for_body(
-                    sat.elements,
-                    epoch_unix,
-                    dt,
-                    body_frame=body_frame,
-                )[:3]
+                anchor = element_anchor_epoch_unix(sat, nid)
+                sim_time = epoch_unix + dt
+                canonical_phase = sim_time - anchor
+                if canonical_phase == dt:
+                    positions[nid] = propagate_j2_mean_elements_for_body(
+                        sat.elements,
+                        epoch_unix,
+                        dt,
+                        body_frame=body_frame,
+                    )[:3]
+                else:
+                    pos_inertial, vel_inertial = propagate_eci_j2_mean_elements_for_body(
+                        sat.elements,
+                        canonical_phase,
+                        body_frame=body_frame,
+                    )
+                    pos_fixed = eci_to_body_fixed(pos_inertial, sim_time, body_frame)
+                    positions[nid] = (
+                        pos_fixed,
+                        eci_to_body_fixed_velocity(
+                            pos_inertial, vel_inertial, sim_time, body_frame
+                        ),
+                        body_fixed_to_geodetic(pos_fixed, body_frame),
+                    )
             elif sat_propagator_id == "sgp4-tle":
                 if central_body != "earth":
                     raise ValueError(

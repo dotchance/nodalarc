@@ -19,7 +19,12 @@ from nodalarc.body_frames import BodyFrame
 from nodalarc.ephemeris_runtime import CommonBodyState
 from nodalarc.frames import EcefVec3, EciVec3, Vec3
 from nodalarc.models.events import NodePosition
-from nodalarc.ome_runtime import OmeAddressing, SatelliteNode, satellite_node_id
+from nodalarc.ome_runtime import (
+    OmeAddressing,
+    SatelliteNode,
+    satellite_node_id,
+    satellite_propagator_id,
+)
 from nodalarc.propagation_kernel import (
     ElementsBatch,
     body_rotation_angle_batch,
@@ -27,7 +32,12 @@ from nodalarc.propagation_kernel import (
     eci_to_body_fixed_velocity_batch,
     propagate_eci_batch,
 )
-from nodalarc.propagator import body_fixed_to_geodetic
+from nodalarc.propagator import (
+    body_fixed_to_geodetic,
+    eci_to_body_fixed,
+    eci_to_body_fixed_velocity,
+    propagate_eci_for_body,
+)
 
 from ome.propagator import (
     GeoPosition,
@@ -77,20 +87,25 @@ def _common_vec(origin: Vec3, local_inertial: Vec3) -> EcefVec3:
     )
 
 
-def _satellite_propagator_id(sat, session_propagator_id: SessionPropagatorId) -> PropagatorId:
-    sat_propagator_id = getattr(sat, "propagator_id", None)
-    if sat_propagator_id is not None:
-        if sat_propagator_id not in (
-            "two-body",
-            "keplerian-circular",
-            "j2-mean-elements",
-            "sgp4-tle",
-        ):
-            raise ValueError(f"Unsupported satellite propagator: {sat_propagator_id!r}")
-        return sat_propagator_id
-    if session_propagator_id == "mixed":
-        raise ValueError("OME mixed propagation requires every satellite to carry propagator_id")
-    return session_propagator_id
+def element_anchor_epoch_unix(sat, node_id: str) -> float:
+    """The working elements' validity instant, refused loudly when absent.
+
+    Working elements are valid at ``sat.elements_epoch_unix``. Every
+    consumer derives one authoritative instant ``sim_time = epoch_unix +
+    dt`` and computes canonical phase time as ``sim_time - anchor``; when
+    that equals ``dt`` exactly, ``dt`` itself is used, which is the same
+    number on the same path. The reported timestamp and the evaluated
+    state therefore always describe one instant, and paths whose
+    arithmetic was already exact stay bit-identical.
+    """
+    anchor = getattr(sat, "elements_epoch_unix", None)
+    if anchor is None:
+        raise ValueError(
+            f"satellite {node_id!r} working elements carry no validity epoch; "
+            "propagation derives elapsed time from the owned anchor and "
+            "refuses unanchored keplerian elements"
+        )
+    return anchor
 
 
 def propagate_satellites(
@@ -132,7 +147,7 @@ def propagate_satellites(
     j2_by_body: dict[str, list[int]] = {}
     sat_propagator_ids: list[str] = []
     for index, sat in enumerate(satellites):
-        sat_propagator_ids.append(_satellite_propagator_id(sat, propagator_id))
+        sat_propagator_ids.append(satellite_propagator_id(sat, propagator_id))
         if sat_propagator_ids[-1] == "j2-mean-elements":
             j2_by_body.setdefault(sat.central_body, []).append(index)
 
@@ -148,8 +163,22 @@ def propagate_satellites(
                 f"Propagation missing resolved body primitive facts for central_body={central_body!r} "
                 f"while propagating {first_node_id!r}"
             ) from exc
+        anchor = element_anchor_epoch_unix(satellites[indices[0]], first_node_id)
+        for i in indices[1:]:
+            other = element_anchor_epoch_unix(
+                satellites[i], satellite_node_id(satellites[i], addressing)
+            )
+            if other != anchor:
+                raise ValueError(
+                    f"non-uniform element anchors in one propagation batch for "
+                    f"central_body={central_body!r}: {anchor!r} != {other!r}"
+                )
         batch = ElementsBatch.from_elements([satellites[i].elements for i in indices])
-        eci = propagate_eci_batch(batch, dt_column, body_frame=body_frame)
+        canonical_phase = sim_time_unix - anchor
+        phase_column = (
+            dt_column if canonical_phase == dt else np.array([canonical_phase], dtype=np.float64)
+        )
+        eci = propagate_eci_batch(batch, phase_column, body_frame=body_frame)
         theta = body_rotation_angle_batch(body_frame, time_column)
         bx, by, bz = eci_to_body_fixed_batch(eci.px, eci.py, eci.pz, theta)
         vbx, vby, vbz = eci_to_body_fixed_velocity_batch(
@@ -193,12 +222,26 @@ def propagate_satellites(
         if sat_propagator_id == "j2-mean-elements":
             pos_ecef, vel_ecef, geo, pos_inertial, vel_inertial = j2_states[index]
         elif sat_propagator_id in ("two-body", "keplerian-circular"):
-            pos_ecef, vel_ecef, geo, pos_inertial, vel_inertial = propagate_keplerian_for_body(
-                sat.elements,
-                epoch_unix,
-                dt,
-                body_frame=body_frame,
-            )
+            anchor = element_anchor_epoch_unix(sat, node_id)
+            canonical_phase = sim_time_unix - anchor
+            if canonical_phase == dt:
+                pos_ecef, vel_ecef, geo, pos_inertial, vel_inertial = propagate_keplerian_for_body(
+                    sat.elements,
+                    epoch_unix,
+                    dt,
+                    body_frame=body_frame,
+                )
+            else:
+                pos_inertial, vel_inertial = propagate_eci_for_body(
+                    sat.elements,
+                    canonical_phase,
+                    mu_km3_s2=body_frame.gravitational_parameter_km3_s2,
+                )
+                pos_ecef = eci_to_body_fixed(pos_inertial, sim_time_unix, body_frame)
+                vel_ecef = eci_to_body_fixed_velocity(
+                    pos_inertial, vel_inertial, sim_time_unix, body_frame
+                )
+                geo = body_fixed_to_geodetic(pos_ecef, body_frame)
         else:
             if central_body != "earth":
                 raise ValueError(

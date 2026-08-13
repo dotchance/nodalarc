@@ -63,6 +63,7 @@ def _four_node_runtime():
     ):
         nodes.append(
             SatelliteNode(
+                elements_epoch_unix=EPOCH,
                 plane=plane,
                 slot=slot,
                 elements=earth_elements_from_params(550.0, 53.0, raan_deg, anomaly_deg),

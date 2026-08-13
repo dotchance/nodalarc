@@ -35,7 +35,7 @@ class TestFoldDeterminism:
     def test_fold_determinism_60s(self):
         """60 sim-seconds: batch window vs tick-by-tick produce identical events."""
         session, _cc, gs_file, sats, addressing, neighbors, ground_candidates = _load_test_session()
-        epoch_unix = 1704067200.0
+        epoch_unix = sats[0].elements_epoch_unix
         n_steps = 60
         step_seconds = session.time.step_seconds
 
@@ -96,7 +96,7 @@ class TestFoldDeterminism:
     def test_seek_resets_associations(self):
         """After simulating a seek (clearing state), first tick has no discount."""
         session, _cc, gs_file, sats, addressing, neighbors, ground_candidates = _load_test_session()
-        epoch_unix = 1704067200.0
+        epoch_unix = sats[0].elements_epoch_unix
         step_seconds = session.time.step_seconds
 
         ctx = build_step_context(
@@ -168,7 +168,7 @@ class TestFoldDeterminism:
         """NON-NEGOTIABLE GATE: look-ahead window and tick-by-tick produce
         bit-for-bit identical event sequences from the same seed."""
         session, _cc, gs_file, sats, addressing, neighbors, ground_candidates = _load_test_session()
-        epoch_unix = 1704067200.0
+        epoch_unix = sats[0].elements_epoch_unix
         n_steps = 120
         step_seconds = session.time.step_seconds
 
@@ -261,7 +261,7 @@ class TestFoldDeterminism:
         survives the boundary.
         """
         session, _cc, gs_file, sats, addressing, neighbors, ground_candidates = _load_test_session()
-        epoch_unix = 1704067200.0
+        epoch_unix = sats[0].elements_epoch_unix
         step_seconds = session.time.step_seconds
         boundary = 30
 

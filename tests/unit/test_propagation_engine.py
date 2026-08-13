@@ -41,6 +41,7 @@ def _satellite(node_id: str = SAT_0_ID, slot: int = 0) -> SatelliteNode:
         node_id=node_id,
         central_body="earth",
         elements=earth_elements_from_params(550.0, 53.0, 0.0, 0.0),
+        elements_epoch_unix=1735689600.0,
         isl_terminal_count=2,
         ground_terminal_count=1,
     )
@@ -124,6 +125,7 @@ def test_two_body_propagator_accepts_eccentric_elements():
             argument_of_perigee_rad=math.radians(270.0),
             mean_anomaly_rad=0.0,
         ),
+        elements_epoch_unix=1735689600.0,
         node_id=SAT_0_ID,
         central_body="earth",
         isl_terminal_count=2,
@@ -158,6 +160,7 @@ def test_mixed_session_uses_per_satellite_propagator_ids():
         node_id=SAT_1_ID,
         central_body="earth",
         elements=earth_elements_from_params(550.0, 53.0, 45.0, 20.0),
+        elements_epoch_unix=1735689600.0,
         isl_terminal_count=2,
         ground_terminal_count=1,
         propagator_id="j2-mean-elements",

@@ -209,6 +209,7 @@ def test_compute_step_schedules_only_pairs_that_pass_applied_ground_physics():
     sat = SatelliteNode(
         plane=0,
         slot=0,
+        elements_epoch_unix=1704067200.0,
         elements=earth_elements_from_params(
             altitude_km=550.0,
             inclination_deg=0.0,

@@ -248,6 +248,57 @@ def _apply_perifocal_rotation(
     )
 
 
+def advance_mean_elements(
+    elements: OrbitalElements,
+    dt_s: float,
+    *,
+    body_frame: BodyFrame,
+    propagator_id: str,
+) -> OrbitalElements:
+    """The elements' photograph moved forward by ``dt_s`` seconds.
+
+    The dt propagation model requires elements valid at the pacing epoch.
+    This advances an authored photograph (valid at the orbit's declared
+    epoch) to a new anchor using the same mean rates the propagators
+    integrate, so advancing by ``a`` and propagating ``b`` equals
+    propagating ``a + b``. ``dt_s == 0.0`` returns ``elements`` unchanged,
+    which keeps continuous play bit-identical for sessions whose orbit
+    epoch equals their start time.
+    """
+    if dt_s == 0.0:
+        return elements
+    if propagator_id in ("two-body", "keplerian-circular"):
+        n = math.sqrt(body_frame.gravitational_parameter_km3_s2 / elements.semi_major_axis_km**3)
+        return OrbitalElements(
+            semi_major_axis_km=elements.semi_major_axis_km,
+            inclination_rad=elements.inclination_rad,
+            raan_rad=elements.raan_rad,
+            eccentricity=elements.eccentricity,
+            argument_of_perigee_rad=elements.argument_of_perigee_rad,
+            mean_anomaly_rad=(elements.mean_anomaly_rad + n * dt_s) % math.tau,
+        )
+    if propagator_id == "j2-mean-elements":
+        raan_dot, argument_of_perigee_dot, mean_anomaly_dot = j2_mean_element_secular_rates(
+            elements,
+            body_frame=body_frame,
+        )
+        return OrbitalElements(
+            semi_major_axis_km=elements.semi_major_axis_km,
+            inclination_rad=elements.inclination_rad,
+            raan_rad=(elements.raan_rad + raan_dot * dt_s) % math.tau,
+            eccentricity=elements.eccentricity,
+            argument_of_perigee_rad=(
+                elements.argument_of_perigee_rad + argument_of_perigee_dot * dt_s
+            )
+            % math.tau,
+            mean_anomaly_rad=(elements.mean_anomaly_rad + mean_anomaly_dot * dt_s) % math.tau,
+        )
+    raise ValueError(
+        f"advance_mean_elements cannot advance propagator {propagator_id!r}; "
+        "SGP4/TLE elements carry their own epoch and must not be re-anchored"
+    )
+
+
 def propagate_eci_for_body(
     elements: OrbitalElements,
     dt: float,

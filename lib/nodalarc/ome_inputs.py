@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Literal
 
 from nodalarc.body_frames import BodyFrame, body_runtime_support_for
@@ -340,6 +341,14 @@ def _runtime_ephemeris_config(resolved: ResolvedSession) -> EphemerisConfig:
     return runtime_config_from_resolved(resolved.ephemeris)
 
 
+def _orbit_epoch_unix(raw: str, node_id: str) -> float:
+    """The orbit's declared epoch as unix seconds; refuses naive timestamps."""
+    parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError(f"satellite {node_id!r} orbit epoch {raw!r} lacks an explicit UTC offset")
+    return parsed.timestamp()
+
+
 def _satellite_from_resolved(
     node: ResolvedNode,
     access_selections: tuple[ResolvedAccessTerminalSelection, ...],
@@ -357,6 +366,14 @@ def _satellite_from_resolved(
     isl_blocks = [
         block for block in node.terminal_inventory if block.endpoint_role in {"isl", "crosslink"}
     ]
+    authored_elements = OrbitalElements(
+        semi_major_axis_km=node.orbit.semi_major_axis_km,
+        inclination_rad=math.radians(node.orbit.inclination_deg),
+        raan_rad=math.radians(node.orbit.raan_deg),
+        mean_anomaly_rad=math.radians(node.orbit.mean_anomaly_deg),
+        eccentricity=node.orbit.eccentricity,
+        argument_of_perigee_rad=math.radians(node.orbit.argument_of_perigee_deg),
+    )
     return SatelliteNode(
         plane=node.plane or 0,
         slot=node.slot or 0,
@@ -366,14 +383,9 @@ def _satellite_from_resolved(
         local_node_id=node.local_node_id,
         segment_id=node.segment_id,
         central_body=node.central_body,
-        elements=OrbitalElements(
-            semi_major_axis_km=node.orbit.semi_major_axis_km,
-            inclination_rad=math.radians(node.orbit.inclination_deg),
-            raan_rad=math.radians(node.orbit.raan_deg),
-            mean_anomaly_rad=math.radians(node.orbit.mean_anomaly_deg),
-            eccentricity=node.orbit.eccentricity,
-            argument_of_perigee_rad=math.radians(node.orbit.argument_of_perigee_deg),
-        ),
+        elements=authored_elements,
+        authored_elements=authored_elements,
+        authored_epoch_unix=_orbit_epoch_unix(node.orbit.epoch, node.node_id),
         isl_terminal_count=sum(block.count for block in isl_blocks),
         ground_terminal_count=sum(len(item.interface_indices) for item in access_selections),
         isl_terminals=tuple(_isl_terminal(block) for block in isl_blocks),

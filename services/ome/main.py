@@ -928,6 +928,7 @@ def _run_pacing(
     # Build StepContext for per-step computation (Physicist role)
     from ome.event_stream import build_step_context, compute_step
     from ome.ground_visibility_engine import DwellPassState
+    from ome.propagation_engine import retarget_satellites
     from ome.telemetry import (
         SEG_OUTPUT_FILE,
         SEG_PUBLISH_AUTHORITY,
@@ -1310,6 +1311,18 @@ def _run_pacing(
     else:
         logging.info("No checkpoint found — starting from epoch")
 
+    # The pacing epoch is final here, whether fresh or recovered. Anchor
+    # every satellite's working elements to it: the dt propagation model
+    # requires elements valid at the pacing epoch, and the authored elements
+    # are valid at each orbit's own declared epoch. Identity when the two
+    # coincide, which keeps every shipped session bit-identical.
+    retarget_satellites(
+        step_ctx.satellites,
+        session_propagator_id=step_ctx.propagator_id,
+        anchor_epoch_unix=epoch_unix,
+        body_frames=step_ctx.body_frames,
+    )
+
     # Compute committed state before publishing any authoritative snapshot.
     # Fresh start commits step 0. Warm restart replays to the retained checkpoint
     # step and publishes the final replay StepResult. In both cases the snapshot
@@ -1497,6 +1510,15 @@ def _run_pacing(
                         teardowns=mbb_pending_teardowns,
                     )
                 epoch_unix = seek_to
+                # The pacing epoch moved: re-anchor the element photographs
+                # to the seek target so positions remain a function of sim
+                # time. Derived from authored elements, never accumulated.
+                retarget_satellites(
+                    step_ctx.satellites,
+                    session_propagator_id=step_ctx.propagator_id,
+                    anchor_epoch_unix=epoch_unix,
+                    body_frames=step_ctx.body_frames,
+                )
                 isl_state = {}
                 gs_state = {}
                 dwell_state = {}

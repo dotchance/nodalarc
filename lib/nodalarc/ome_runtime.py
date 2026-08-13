@@ -179,6 +179,8 @@ class SatelliteNode:
         "segment_id",
         "central_body",
         "elements",
+        "authored_elements",
+        "authored_epoch_unix",
         "isl_terminal_count",
         "ground_terminal_count",
         "isl_terminals",
@@ -210,6 +212,8 @@ class SatelliteNode:
         tle_line_2: str | None = None,
         norad_id: int | None = None,
         propagator_id: str | None = None,
+        authored_elements: OrbitalElements | None = None,
+        authored_epoch_unix: float | None = None,
     ) -> None:
         self.plane = plane
         self.slot = slot
@@ -222,6 +226,12 @@ class SatelliteNode:
             raise ValueError("SatelliteNode requires central_body from resolved orbit/body facts")
         self.central_body = central_body
         self.elements = elements
+        # The authored photograph: elements exactly as declared, valid at the
+        # orbit's own epoch. ``elements`` above is the working photograph at
+        # the current pacing anchor; re-anchoring derives it from these two
+        # fields and never accumulates.
+        self.authored_elements = authored_elements
+        self.authored_epoch_unix = authored_epoch_unix
         self.isl_terminal_count = isl_terminal_count
         self.ground_terminal_count = ground_terminal_count
         self.isl_terminals = tuple(isl_terminals or ())

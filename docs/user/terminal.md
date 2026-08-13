@@ -114,7 +114,7 @@ traceroute settings may expire before the emulated path can respond.
 
 ## What You're Actually Seeing
 
-When you run commands in the terminal, you're talking to a real FRRouting instance running inside a Linux container. The routing tables, adjacencies, and forwarding state are computed by the actual FRR code - the same code that runs on physical routers in production networks.
+What the terminal lands in depends on what the node runs. On a router node, you're talking to a real FRRouting instance running inside a Linux container. The routing tables, adjacencies, and forwarding state are computed by the actual FRR code - the same code that runs on physical routers in production networks. On a host node, such as a DTN relay or an application endpoint, the terminal is a shell inside that node's own container, with that workload's own tools.
 
 This means:
 

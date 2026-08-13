@@ -14,8 +14,9 @@ That separation is the architecture.
 
 Kubernetes gives us the rooms. NATS carries the facts between them. The OME
 moves the sky. The Scheduler turns visibility into desired link state. The Node
-Agent touches the host kernel. FRR routes inside the session pods. VS-API
-gathers what happened. VF shows it to a human.
+Agent touches the host kernel. The workloads run inside the session pods,
+routing where a profile says route, storing and forwarding where a profile
+says store. VS-API gathers what happened. VF shows it to a human.
 
 ```
                         +---------------------------------+
@@ -51,11 +52,11 @@ gathers what happened. VF shows it to a human.
                       veth pairs|   |tc netem/tbf
                                 v   v
     +----------+ +----------+ +----------+ +----------+
-    | space-sat-p00s00| space-sat-p00s01| geo-sat-p00s00| ground-gs-hawthorne|
-    |  FRR     | |  FRR     | |  FRR     | |  FRR     |
-    |  IS-IS   | |  IS-IS   | |  IS-IS   | |  IS-IS   |
+    | sat      | | sat      | | dtn host | | ground gw|
+    |  FRR     | |  FRR     | |  uD3TN   | |  FRR     |
+    |  IS-IS   | |  IS-IS   | |  bundles | |  IS-IS   |
     +----------+ +----------+ +----------+ +----------+
-        Session pods - one per satellite, relay, or ground node
+      Session pods - one per satellite, relay, ground node, or carried host
 ```
 
 ## How One Link Becomes Real
@@ -90,10 +91,11 @@ The full cycle looks like this:
    shaping, and ground bridge attachment. It reports success only after
    checking the kernel postcondition for each requested entry.
 
-4. **FRR** inside each session pod reacts to interface state. IS-IS sends
-   hellos, OSPF floods LSAs, supported MPLS labels enter the kernel, and future
-   protocol daemons can be added behind the same interface model. The behavior
-   is protocol implementation behavior, not a model of it.
+4. **Workloads** inside each session pod react to interface state. IS-IS
+   sends hellos, OSPF floods LSAs, supported MPLS labels enter the kernel. A
+   DTN daemon watches its transport contacts come and go. An application
+   endpoint feels its path change. Each node runs what its profile declares,
+   and the behavior is real implementation behavior, not a model of it.
 
 5. **VS-API** subscribes to NATS, aggregates state for clients, serves REST
    requests, and pushes WebSocket updates to browsers.
@@ -126,9 +128,16 @@ The resolver owns:
 
 - structural validation of `segments`, `link_rules`, routing, time, and
   ephemeris fields
-- catalog loading for constellation, node, terminal, and site assets
+- catalog loading for constellation, node, terminal, site, payload, and
+  profile assets
 - runtime node ID allocation, derived per segment and normalized for the fabric
 - terminal inventory materialization
+- payload member expansion: carried hosts become runtime nodes that ride
+  their carrier
+- Ethernet segment, member address, and loopback allocation; nothing in the
+  catalog authors an address
+- effective workload profile resolution, taken from the most specific of
+  node model, segment, and placement
 - link-rule endpoint and candidate validation
 - per-segment SID allocation
 - fail-loud rejection of future grammar that the runtime cannot execute yet
@@ -256,8 +265,8 @@ latency is a dispatch blocker, not a zero-delay default.
 ## Session Lifecycle
 
 A session joins the primitives: constellation geometry, explicit space nodes,
-ground sites, ground nodes, terminal inventories, declared link rules, routing
-stack, placement policy, time model, and optional body ephemeris.
+ground sites, terminal inventories, workload profiles, declared link rules,
+routing domains, placement policy, time model, and optional body ephemeris.
 
 The path from a button click to routing looks like this:
 
@@ -265,8 +274,8 @@ The path from a button click to routing looks like this:
 User clicks Deploy in the wizard
     -> VS-API resolves the segment session and creates a ConstellationSpec CR
     -> Operator watches the CR and resolves the same session runtime view
+    -> Operator composes each node's workload and renders adapter config
     -> Operator creates session pods
-    -> Operator renders FRR configs from templates and resolved node facts
     -> Operator writes the topology wiring manifest
     -> Node Agent detects the manifest and wires interfaces
     -> Node Agent writes typed wiring status for the same session/generation
@@ -282,7 +291,7 @@ User clicks Deploy in the wizard
 The important part is not the number of steps. The important part is ownership.
 The Operator owns pod lifecycle and generated config. The Node Agent owns
 kernel wiring. The OME owns orbital truth. The Scheduler owns reconciliation.
-FRR owns routing.
+The routers own routing, and every workload owns its own behavior.
 
 Keep those boundaries intact.
 

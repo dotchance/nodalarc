@@ -1,8 +1,8 @@
-# NodalArc - Satellite Network Emulation for Orbital Routing
+# NodalArc - Satellite Network Emulation for Orbital Networking
 
-NodalArc is an orbital network emulator for testing real routing stacks against moving satellite topology.
+NodalArc is an orbital network emulator for testing real communications and routing systems against moving satellite topology.
 
-It gives network engineers a lab where satellites move, links appear and disappear, ground exits change, and routers have to live inside that motion.
+It gives network engineers a lab where satellites move, links appear and disappear, ground exits change, and the software under test has to live inside that motion.
 
 ![NodalArc globe view](docs/images/readme-globe.png)
 
@@ -11,9 +11,10 @@ It gives network engineers a lab where satellites move, links appear and disappe
 NodalArc is an emulator, not a packet-level simulator.
 
 Each satellite, relay, and ground node becomes a real Linux network namespace
-running a real routing stack. IS-IS hellos, OSPF LSAs, supported MPLS labels,
-kernel interfaces, carrier transitions, VXLAN links, and `tc` shaping all
-happen in the system that Linux actually runs.
+running whatever its workload profile declares: a routing stack, a DTN bundle
+daemon, an application endpoint. IS-IS hellos, OSPF LSAs, supported MPLS
+labels, kernel interfaces, carrier transitions, VXLAN links, and `tc` shaping
+all happen in the system that Linux actually runs.
 
 The orbital mechanics are not decoration around a static lab. They drive the lab. When two satellites move out of range, the interface drops. When a ground station hands off to a new satellite, the router sees the carrier event. When the distance between two endpoints changes, the link latency changes with it.
 
@@ -24,6 +25,7 @@ NodalArc is for testing questions like:
 - What happens when the same constellation runs under OSPF, IS-IS, SR-MPLS, or centralized path computation?
 - How much of a measurement came from the protocol, and how much came from the lab substrate?
 - When does distributed routing stop being the right model?
+- When a relay loses sight of the surface, where does the bundle wait?
 
 That is the point: give real routers a moving world and watch what they do.
 
@@ -86,7 +88,7 @@ From the browser you can:
 - watch satellites, ISLs, ground links, handoffs, and convergence events
 - inspect individual satellites and ground stations
 - trace paths between nodes
-- open a terminal on a routing instance and run router commands
+- open a terminal on any node: a router CLI on the routers, a shell on the hosts
 
 The browser is not a mock-up. It is connected to the running emulation.
 
@@ -128,11 +130,11 @@ Switch to the topology view when the orbital picture is too physical and you wan
 
 ### 5. Open A Router Terminal
 
-Every satellite and ground station is a routing instance. Open the terminal and run the commands you already know.
+Every satellite and ground station is a real running node. On a router, open the terminal and run the commands you already know. On a host, you get that host's own shell.
 
 ![Router terminal in the browser](docs/images/readme-router-terminal.png)
 
-The terminal is not decorative. This is one shell into one real routing instance among hundreds. Each satellite and ground station has its own namespace, interfaces, routing daemon, neighbors, and forwarding table. The globe is the view. The routers are real.
+The terminal is not decorative. This is one shell into one real node among hundreds. Each satellite and ground station has its own namespace, interfaces, routing daemon, neighbors, and forwarding table. The globe is the view. The routers are real.
 
 ![FRR terminal showing show isis neighbor output](docs/images/readme-router-cli.png)
 
@@ -156,14 +158,17 @@ Once the system is running, you can:
 - run `ping`, `traceroute`, and `iperf` through the emulated constellation
 - inspect routing attempts across multi-segment sessions such as Earth LEO/MEO/GEO,
   cislunar relay, lunar relay, and lunar surface nodes
-- open a browser terminal to any satellite or ground station and use `vtysh`
+- open a browser terminal to any satellite or ground station: `vtysh` on a router, a shell on a host
+- run mixed workloads under one sky: FRR routing, QUIC endpoints, and a DTN store-and-forward relay in the same session
+- watch a DTN relay hold bundles through a lunar occlusion and deliver them when the geometry comes back
 - script experiments through the REST and WebSocket APIs
 - connect external systems to the emulation and watch how they behave
 
 Start small. `earth-leo-simple.yaml` is enough to see the machinery. The Walker
 and polar LEO sessions show why geometry matters. MEO/GEO sessions show the
-longer-range gateway regime. The Earth-Luna sessions show how the same
-building-block model extends into cislunar experiments.
+longer-range gateway regime. The Earth-Luna sessions extend the same building
+blocks into cislunar experiments, up to a relay that holds DTN bundle custody
+through an occlusion and proves it in its own logs.
 
 That is where the interesting questions start.
 
@@ -182,6 +187,8 @@ The router is a container boundary. If a routing stack can run in a container an
 
 The emulator does not care whose CLI is inside the node. It gives the router interfaces, carrier events, latency, bandwidth, and reachability. The router gives back behavior.
 
+The same boundary carries more than routers. A DTN bundle daemon, a QUIC endpoint, a traffic generator: if it runs in a container, a workload profile can put it on a node. NodalArc publishes no router images. Stacks arrive as vendor containers, pinned by digest, from whoever builds them.
+
 That is the point. Real stacks, same sky.
 
 ### Real Kernel Networking
@@ -190,13 +197,16 @@ The Node Agent builds veth pairs and VXLAN tunnels, then shapes them with `tc ne
 
 ### Session Primitives
 
-NodalArc sessions are built from primitives:
+NodalArc sessions are built from catalog primitives:
 
-- satellite types describe hardware: terminals, ranges, bandwidth, tracking limits
+- node models describe hardware: Ethernet ports, terminal mounts, payload mounts
+- terminals describe communications capability: signal, range, bandwidth, tracking limits
 - constellation geometry describes where the satellites move
-- ground sites and ground nodes describe where the network touches a body and
-  what prefixes enter there
-- routing stacks describe what runs inside each node
+- ground sites describe where the network touches a body and which segments it provides
+- workload profiles describe what runs inside each node, router or otherwise
+- payloads describe carried hosts that ride a spacecraft bus or a site LAN
+
+Nobody writes an IP address. The resolver allocates all of it.
 
 Change one primitive and leave the others alone. Same sky, different routing. Same routing, different sky. Same constellation, different ground exits. A clean comparison has one deliberate difference.
 
@@ -225,17 +235,19 @@ VF           React + R3F + Three.js visualization frontend
 NATS         Event bus and durable fact stream
 ```
 
-The boundary matters. OME computes the sky. The Scheduler decides what should exist. The Node Agent proves what Linux actually did. The router owns routing.
+The boundary matters. OME computes the sky. The Scheduler decides what should exist. The Node Agent proves what Linux actually did. The router owns routing, and every other workload owns its own behavior.
 
 ## Project Structure
 
 ```text
 services/       Backend services: OME, Scheduler, Node Agent, VS-API, Operator
+adapters/       Workload adapters that render native config from resolved facts
 frontend/       Visualization frontend: React + R3F + Three.js
 lib/            Shared Python library
-images/         Container images: FRR and probe
+images/         Container images built and loaded with the platform
+catalog/        Shipped catalog: bodies, terminals, orbits, nodes, sites, profiles, payloads, sessions
 deploy/         Helm chart and deployment tooling
-configs/        Constellations, ground stations, satellite types, sessions
+configs/        Runtime templates and platform configuration
 tests/          Unit and integration tests
 docs/           User, operations, and developer documentation
 scripts/        Lifecycle, host bootstrap, and operational scripts

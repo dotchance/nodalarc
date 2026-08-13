@@ -2,12 +2,12 @@
 
 **Location:** `services/nodalarc_operator/`
 **Deployment:** Kubernetes Deployment (1 replica)
-**Entry point:** `services/nodalarc_operator/main.py`
+**Entry point:** `services/nodalarc_operator/__main__.py`
 **Framework:** kopf (Kubernetes Operator Pythonic Framework)
 
 ## Responsibility
 
-The Operator watches for `ConstellationSpec` custom resources and manages the full lifecycle of session pods: creation, configuration delivery, placement, and teardown via garbage collection.
+The Operator watches for `ConstellationSpec` custom resources and manages the full lifecycle of session pods: workload composition, creation, configuration delivery, placement, and teardown via garbage collection.
 
 ## ConstellationSpec CRD
 
@@ -72,11 +72,15 @@ When a ConstellationSpec CR is created:
    resolver and reject invalid grammar or unsupported runtime features before
    pods are valid
 3. **Compute pod placement** - assign resolved nodes to Kubernetes nodes
-4. **Render FRR configs** - Jinja2 templates receive resolved node, terminal, routing, SID, and prefix facts
-5. **Create ConfigMaps** - one per node with rendered FRR config
-6. **Create session pods** - with ownerReference to CR (enables GC cascade)
-7. **Wait for pods Running** - poll until all pods reach Running state
-8. **Deliver FRR config** - exec into each pod, copy configs, touch startup sentinel
+4. **Compose workloads** - resolve each node's effective profile, resolve
+   environment facts, and compose the primary container and sidecars
+5. **Render adapter config** - a profile with an adapter (the frr adapter
+   today) gets per-node native config rendered from resolved facts;
+   adapter-free profiles skip this step
+6. **Create ConfigMaps** - one immutable artifact ConfigMap per node,
+   mounted read-only at the profile's `config_mount`
+7. **Create session pods** - with ownerReference to CR (enables GC cascade)
+8. **Wait for pods Running** - poll until all pods reach Running state
 9. **Write wiring manifest** - `nodalarc-topology-wiring` ConfigMap
 10. **Wait for wiring complete** - Node Agent signals via `nodalarc-wiring-status`
 11. **Advance phase to Ready**
@@ -92,17 +96,14 @@ Pod placement assigns each resolved session node to a Kubernetes node:
 Ground nodes and explicit relay nodes are distributed across nodes regardless of
 orbital-plane policy.
 
-## FRR Config Delivery
+## Workload Config Delivery
 
-FRR's stock entrypoint (`docker-start`) waits for a sentinel file before starting daemons. The Operator:
-1. Creates a ConfigMap with the rendered frr.conf and daemons file
-2. Mounts it at `/etc/frr-config/` in the pod
-3. After pod reaches Running, execs into the container to copy files and touch the sentinel:
-   ```
-   cp /etc/frr-config/frr.conf /etc/frr/frr.conf
-   cp /etc/frr-config/daemons /etc/frr/daemons
-   touch /etc/frr/.setup_complete
-   ```
+The Operator never reaches into a running container. Rendered per-node files
+land in an immutable ConfigMap mounted read-only at the path the profile
+declares as `config_mount`. What happens next belongs to the workload: the
+FRR profile's entrypoint waits for the mount, copies the config into place,
+and watches it for changes. A profile with no adapter gets no rendered files
+and runs exactly what it authored.
 
 ## Platform Hash
 
@@ -131,8 +132,8 @@ The kopf handler on `@kopf.on.delete` performs cleanup that GC doesn't handle (l
 
 | File | Content |
 |------|---------|
-| `main.py` | kopf handlers (create, delete, resume) |
-| `handlers.py` | Reconciliation logic, error handling |
+| `__main__.py` | kopf entry point |
+| `handlers.py` | kopf handlers, reconciliation logic, error handling |
 | `session_deployer.py` | Pod creation, placement, config delivery, wiring |
-| `frr_renderer.py` | Jinja2 template rendering for FRR configs |
-| `platform_hash.py` | Platform hash computation and restart logic |
+| `runtime_session.py` | Verified runtime loading from the uploaded catalog closure |
+| `workloads/` | Profile admission, environment resolution, composition, and adapter rendering |

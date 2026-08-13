@@ -101,6 +101,7 @@ computation, then continuous state updates.
 | GET | `/api/v1/state/{sim_time}` | Historical snapshot nearest to given time |
 | POST | `/api/v1/trace` | Forwarding path trace between two nodes |
 | GET | `/api/v1/links` | Link events with optional time range filter |
+| POST | `/api/v1/playback` | Playback control: pause, resume, set_speed, seek |
 | GET | `/api/v1/health` | Health check (no auth required) |
 | GET | `/api/v1/auth/token` | Get auth token (no auth required) |
 | WS | `/ws/v1/state` | Real-time state stream (~1 Hz) |

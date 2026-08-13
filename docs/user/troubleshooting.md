@@ -31,7 +31,7 @@ Common issues you might encounter when using NodalArc and how to resolve them.
 **Causes:**
 - Links may be toggled off. Press **L** for ISL links, **G** for ground links.
 - The routing protocol is still converging. Wait 30-60 seconds after session deployment.
-- The constellation may be configured with a satellite type that has limited ISL range - satellites may be too far apart.
+- The constellation's node model may carry a terminal with limited ISL range - satellites may be too far apart.
 
 **Try:** Press L and G to ensure links are enabled. Wait for convergence. Check the event log for link_up events.
 

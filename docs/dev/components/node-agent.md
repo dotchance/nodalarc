@@ -61,7 +61,7 @@ def _in_namespace(pid: int, fn: Callable):
 
 ### BatchLinkUp (LOCAL)
 
-1. Bring host-side veth admin UP → carrier arrives on pod-side interface
+1. Bring host-side veth admin UP -> carrier arrives on pod-side interface
 2. Apply tc netem (latency) and tc tbf (bandwidth) on pod-side interface
 3. For ground links: attach to ground bridge via tc mirred redirect
 
@@ -78,7 +78,7 @@ ISL and ground links use different CROSS_NODE paths:
 
 ### BatchLinkDown
 
-1. Bring host-side veth admin DOWN → carrier drops on pod-side
+1. Bring host-side veth admin DOWN -> carrier drops on pod-side
 2. For VXLAN links: remove VXLAN interface and host-side veth
 3. For ground links: remove tc mirred redirect rules and bring the satellite
    pod-side `gndX` DOWN; the ground-node pod interface remains
@@ -152,9 +152,9 @@ the first NATS connection.
 
 The Node Agent is stateless across restarts. On startup, it diffs desired state (from wiring manifest) against actual kernel state:
 
-- No kernel state → wire from scratch (Case A)
-- Kernel matches desired → no-op (Case B)
-- Kernel mismatched → cleanup then wire from scratch (Case C)
+- No kernel state -> wire from scratch (Case A)
+- Kernel matches desired -> no-op (Case B)
+- Kernel mismatched -> cleanup then wire from scratch (Case C)
 
 ## Key Files
 

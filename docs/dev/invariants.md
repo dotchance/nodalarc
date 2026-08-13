@@ -170,7 +170,7 @@ There is no delta/merge logic. The snapshot IS the desired state. This eliminate
 
 ## Master Sim Time on the Wire
 
-All wire-format `sim_time` fields carry **master sim_time** — the OME's pacing clock — never entity-local time. This holds for `VisibilityEvent`, `GroundLinkDecisionSnapshot`, `LinkStateSnapshot`, `ClockTick`, every NATS payload, every SQLite persistence record.
+All wire-format `sim_time` fields carry **master sim_time** - the OME's pacing clock - never entity-local time. This holds for `VisibilityEvent`, `GroundLinkDecisionSnapshot`, `LinkStateSnapshot`, `ClockTick`, every NATS payload, every SQLite persistence record.
 
 Per-entity local time is a **computed view**. A future `entity_local_time(master_time, clock_config)` helper will derive a node's proper time from master sim_time plus its `NodeClockConfig` (per-individual-entity clock skew from oscillator drift, relativistic proper-time delta across bodies, ground-ranging sync events). Each entity carries its own clock characteristics; the delta is a function of master_time + per-entity config, never a stored accumulator.
 
@@ -180,19 +180,19 @@ Today master sim_time equals entity-local for every node. That equivalence is a 
 
 - Where new code touches time, name the parameter `master_sim_time` (or `master_sim_time_unix`), not bare `sim_time`. A future rename is then mechanical.
 - The propagator's time input is "the time this entity's physics integrates against," not "the global sim time."
-- Seek operates on master clock only. Per-entity time is computed, not stored — no per-entity state to reset on seek, in either direction.
+- Seek operates on master clock only. Per-entity time is computed, not stored - no per-entity state to reset on seek, in either direction.
 - Per-entity drift must be deterministic from `(master_time, entity_clock_config)`. No tick-accumulator state on entity records. Arbitrary forward/reverse seek depends on this.
 - No per-entity `epoch_id`. Master epoch is the only epoch.
 
-This invariant exists so a future per-entity clock model is a localized addition — a new helper, a new model — not a wire-format archaeology project across every consumer.
+This invariant exists so a future per-entity clock model is a localized addition - a new helper, a new model - not a wire-format archaeology project across every consumer.
 
 ## Ground Link Carrier Model
 
 Ground terminal carrier (`gnd0`, `gnd1`, ...) is driven by host-side veth state
 - not by explicit admin manipulation inside the pod:
 
-- LinkUp: bring host-side veths UP → carrier arrives on pod `gndX` → FRR forms adjacency
-- LinkDown: bring host-side veths DOWN → carrier drops on pod `gndX` → FRR tears adjacency immediately
+- LinkUp: bring host-side veths UP -> carrier arrives on pod `gndX` -> FRR forms adjacency
+- LinkDown: bring host-side veths DOWN -> carrier drops on pod `gndX` -> FRR tears adjacency immediately
 
 FRR detects carrier loss without waiting for hold timers. This is the fastest convergence path.
 

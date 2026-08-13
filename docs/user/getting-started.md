@@ -49,15 +49,16 @@ for why links are up, down, expected, or faulted.
 
 ### 3. Open a terminal
 
-With a node selected, open the terminal panel. You land in a router CLI on that
-node. Try:
+With a node selected, open the terminal panel. On a router you land in its
+CLI. Try:
 
 - `show ip route` - see the routing table
 - `show isis neighbor` or `show ip ospf neighbor` - see routing adjacencies
 - `show interface brief` - see interface state
 
 This is not a simulated CLI. It is the FRR process running inside that node's
-container.
+container. On a host node, such as a DTN relay or an application endpoint, the
+terminal is that workload's own shell instead.
 
 ### 4. Trace a path
 
@@ -75,8 +76,10 @@ make session DEFAULT_SESSION=catalog/nodalarc/sessions/earth-leo-heo-geo-luna-re
 ```
 
 Try `earth-leo-heo-geo-luna-reachability.yaml` to see multiple Earth orbital
-regimes plus a lunar relay path — Earth, Luna, and a cislunar relay — in the same
-visualization.
+regimes plus a lunar relay path (Earth, Luna, and a cislunar relay) in the same
+visualization. Try `earth-luna-dtn-custody.yaml` to watch mixed workloads share
+one sky: FRR routing, QUIC endpoints, and a DTN relay that holds bundles in
+storage while the Moon's geometry cuts it off.
 
 ## Navigation
 
@@ -150,5 +153,5 @@ lives in the OME and the session ephemeris.
 
 - [Sessions](sessions.md) - session grammar, curated demos, and building blocks
 - [Globe View](globe-view.md) - detailed guide to the 3D visualization
-- [Terminal Access](terminal.md) - using the browser terminal to inspect routers
+- [Terminal Access](terminal.md) - using the browser terminal to inspect nodes
 - [Time Controls](time-controls.md) - pause and speed controls

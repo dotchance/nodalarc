@@ -16,11 +16,11 @@ You should receive an acknowledgment within 72 hours. We will work with you to u
 
 NodalArc is a network emulation platform that runs real routing stacks in containers with kernel-level network manipulation. The following areas are particularly security-relevant:
 
-- **Node Agent** — runs with `hostPID` and performs `nsenter`/`setns` operations across pod namespaces
-- **Session pod hardening** — iptables rules, read-only root filesystem, service account restrictions
-- **VS-API** — HTTP API with optional API key authentication, WebSocket terminal proxy
-- **Operator** — generates Kubernetes resources (pods, secrets, ConfigMaps) from user-submitted session definitions
-- **SSH terminal access** — per-session key generation, proxy through VS-API
+- **Node Agent** - runs with `hostPID` and performs `nsenter`/`setns` operations across pod namespaces
+- **Session pod hardening** - iptables rules, read-only root filesystem, service account restrictions
+- **VS-API** - HTTP API with optional API key authentication, WebSocket terminal proxy
+- **Operator** - generates Kubernetes resources (pods, secrets, ConfigMaps) from user-submitted session definitions
+- **SSH terminal access** - per-session key generation, proxy through VS-API
 
 ## Security Model
 

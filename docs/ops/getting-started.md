@@ -96,7 +96,7 @@ If the platform is already installed, `make all` is the wrong transition because
 - Platform services: OME, Scheduler, Node Agent (DaemonSet), VS-API, Operator, NATS
 - Frontend: VF (nginx serving the React app)
 - Session: 36 satellite pods + 7 Earth ground-node pods
-- ConfigMaps: FRR configs, topology wiring manifest, platform config
+- ConfigMaps: rendered workload configs, topology wiring manifest, platform config
 - Secrets: SSH terminal keys
 - PVC: NATS JetStream file storage
 
@@ -108,7 +108,7 @@ make status
 
 This shows:
 - Pod counts and states
-- Session phase (Creating → Wiring → Ready)
+- Session phase (Creating -> Wiring -> Ready)
 - Active link count
 
 When the session phase shows "Ready" and links are active, the system is fully operational.
@@ -121,7 +121,7 @@ Open http://localhost:3000 to see the visualization. If deploying on a remote ma
 # Quick check: do satellites have routing neighbors?
 NODE=$(sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl get pods -n nodalarc \
   -o name | sed 's#pod/##' | grep '^space-sat-' | head -1)
-sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl exec "$NODE" -n nodalarc -c frr -- \
+sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl exec "$NODE" -n nodalarc -c frr-router -- \
   vtysh -c "show ip ospf neighbor"
 ```
 
@@ -146,10 +146,10 @@ Available session configs:
 | `earth-meo-gps.yaml` | 24 | GPS-altitude MEO starter with long-range RF gateways |
 | `earth-geo-inmarsat.yaml` | 4 | Representative GEO commercial-relay-style starter |
 | `earth-geo-tdrs.yaml` | 6 | Representative GEO relay/TDRS-style starter |
-| `earth-leo-heo-geo-luna-reachability.yaml` | — | Multi-regime LEO, HEO, GEO, lunar relay, and lunar ground reachability |
+| `earth-leo-heo-geo-luna-reachability.yaml` | - | Multi-regime LEO, HEO, GEO, lunar relay, and lunar ground reachability |
 
 These examples run IS-IS (the default). OSPF is also supported, selected per
-routing domain — see the [Configuration Guide](configuration.md).
+routing domain - see the [Configuration Guide](configuration.md).
 
 ## Step 5: Teardown
 
@@ -183,7 +183,7 @@ make all
 
 | Target | Requires sudo | Description |
 |--------|:---:|-------------|
-| `make all` | no | Clean-state pipeline: deps → build → load → install → session → status |
+| `make all` | no | Clean-state pipeline: deps -> build -> load -> install -> session -> status |
 | `make deps` | no | Install Python/Node.js dependencies |
 | `make build` | no | Build frontend and all Docker images |
 | `make load` | no | Import images to K3s or push to registry |

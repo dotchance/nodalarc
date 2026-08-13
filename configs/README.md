@@ -28,7 +28,7 @@ segments:
       from_site_set: nodalarc:site-sets/earth/leo/earth-leo-starlink-pop-sites.yaml
     apply:
       originated_prefixes:
-        ipv4: [0.0.0.0/0]
+        ipv4: [default]
 
 link_rules:
   - id: leo_access

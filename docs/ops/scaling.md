@@ -51,7 +51,7 @@ Platform overhead (OME, Scheduler, NATS, VS-API, Operator, Node Agent) uses appr
 ### Multi-Node Linear Scaling
 
 With `planePerNode` placement:
-- 4 nodes × 32 GB = up to ~6,000 satellites theoretically
+- 4 nodes x 32 GB = up to ~6,000 satellites theoretically
 - Practical limit depends on OME computation time and Scheduler dispatch rate
 
 ### OME Computation Scaling

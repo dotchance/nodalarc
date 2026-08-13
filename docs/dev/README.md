@@ -4,8 +4,8 @@ This guide is for people who are going to touch the machine.
 
 NodalArc works because its pieces do different jobs and do not pretend
 otherwise. The OME moves the sky. The Scheduler decides which links should
-exist. The Node Agent touches the kernel. FRR routes. VS-API gathers state. VF
-draws the result.
+exist. The Node Agent touches the kernel. The workloads run what their
+profiles declare. VS-API gathers state. VF draws the result.
 
 Miss that shape and the code starts to rot. You get a shortcut here, a helper
 there, a second dispatch path because it was convenient at the time, and then

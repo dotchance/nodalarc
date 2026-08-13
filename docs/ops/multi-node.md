@@ -90,10 +90,10 @@ When two pods are on different K8s nodes, the Node Agent creates a VXLAN tunnel 
 
 ```
 Node A                                    Node B
-┌─────────────────┐                      ┌─────────────────┐
-│ space-sat-p00s03 pod  │                      │ space-sat-p01s03 pod  │
-│   isl2 ←────── veth ── vxlan ──────── veth ──────→ isl3 │
-└─────────────────┘      UDP 4789        └─────────────────┘
++-----------------+                      +-----------------+
+| space-sat-p00s03 pod  |                      | space-sat-p01s03 pod  |
+|   isl2 <------- veth -- vxlan -------- veth -------> isl3 |
++-----------------+      UDP 4789        +-----------------+
 ```
 
 The VXLAN tunnel encapsulates Ethernet frames in UDP, carrying them across the physical network between nodes. From the perspective of the FRR routing daemon inside each pod, `isl2`/`isl3` look like normal network interfaces - FRR doesn't know or care that the physical path goes through a VXLAN tunnel.
@@ -113,7 +113,7 @@ The emulated latency is always accurate regardless of the physical network topol
 Per-node capacity is primarily memory-limited:
 
 ```
-Available satellites per node ≈ (node_RAM - 2 GB platform) / 18 MB per satellite
+Available satellites per node ~ (node_RAM - 2 GB platform) / 18 MB per satellite
 ```
 
 | Node RAM | Approximate satellite capacity |
@@ -149,8 +149,8 @@ sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl exec space-sat-p00s05 -n nodal
 | Traffic | Protocol | Port | Between |
 |---------|----------|------|---------|
 | VXLAN tunnels | UDP | 4789 | All compute nodes |
-| NATS | TCP | 4222 | All pods → NATS service |
-| K8s API | TCP | 6443 | All nodes → control plane |
-| Registry | TCP | 5000 (typical) | All nodes → registry |
+| NATS | TCP | 4222 | All pods -> NATS service |
+| K8s API | TCP | 6443 | All nodes -> control plane |
+| Registry | TCP | 5000 (typical) | All nodes -> registry |
 
 Ensure your network firewall allows UDP 4789 between all nodes that will run session pods.

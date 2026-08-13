@@ -55,9 +55,9 @@ hit testing and explicit focus/follow actions.
 ## Architecture
 
 ```
-VS-API WebSocket (~1 Hz) ──→ React state ──→ React Three Fiber scene
-                                │
-SessionEphemeris + body frames ──→ simClock ──→ local propagation ──→ node positions (60fps)
+VS-API WebSocket (~1 Hz) ---> React state ---> React Three Fiber scene
+                                |
+SessionEphemeris + body frames ---> simClock ---> local propagation ---> node positions (60fps)
 ```
 
 Key principle: the VF computes render positions locally from OME-published
@@ -118,8 +118,8 @@ propagation, body rendering, and interpolation.
 `src/hooks/useWebSocket.ts` - manages VS-API WebSocket lifecycle:
 
 1. Connect to `ws://host:8080/ws/v1/state?token=<token>`
-2. First message: `SessionEphemeris` → stored for local propagation
-3. Subsequent messages: `StateSnapshot` at ~1 Hz → update React state
+2. First message: `SessionEphemeris` -> stored for local propagation
+3. Subsequent messages: `StateSnapshot` at ~1 Hz -> update React state
 4. On disconnect: reconnect with backoff
 
 ## State Management
@@ -171,20 +171,20 @@ make deploy-vf
 
 ```
 src/
-├── App.tsx              Main app, state management, keyboard actions
-├── globe/              3D globe rendering
-│   ├── Universe.tsx    R3F canvas shell
-│   ├── Scene.tsx       R3F scene and controls
-│   └── r3f/            R3F scene primitives and batched renderers
-│       ├── Links.tsx   ISL/ground link batch
-│       ├── Trails.tsx  Trail ring buffer batch
-│       ├── AllOrbits.tsx  Orbital path batch
-│       ├── Body.tsx    Body mesh and material selection
-│       ├── BodyFrame.tsx  Segment/body frame registration
-│       └── Earth.tsx   Earth-specific borders, atmosphere, starfield
-├── topology/           2D topology graph view
-├── sim/                Simulation clock, Keplerian propagation
-├── hooks/              React hooks (WebSocket, keyboard, etc.)
-├── components/         UI components (panels, wizard, terminal)
-└── types.ts            Shared TypeScript types
++-- App.tsx              Main app, state management, keyboard actions
++-- globe/              3D globe rendering
+|   +-- Universe.tsx    R3F canvas shell
+|   +-- Scene.tsx       R3F scene and controls
+|   +-- r3f/            R3F scene primitives and batched renderers
+|       +-- Links.tsx   ISL/ground link batch
+|       +-- Trails.tsx  Trail ring buffer batch
+|       +-- AllOrbits.tsx  Orbital path batch
+|       +-- Body.tsx    Body mesh and material selection
+|       +-- BodyFrame.tsx  Segment/body frame registration
+|       +-- Earth.tsx   Earth-specific borders, atmosphere, starfield
++-- topology/           2D topology graph view
++-- sim/                Simulation clock, Keplerian propagation
++-- hooks/              React hooks (WebSocket, keyboard, etc.)
++-- components/         UI components (panels, wizard, terminal)
++-- types.ts            Shared TypeScript types
 ```

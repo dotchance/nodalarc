@@ -105,7 +105,7 @@ Shows pod counts, session phase, and active links.
 sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl get pods -n nodalarc -o wide
 ```
 
-All session pods should be `Running 1/1`. Platform pods should be `Running`. If pods are in `CrashLoopBackOff` or `ImagePullBackOff`, check logs:
+All session pods should be `Running` with every container ready (`2/2` for a typical router pod). Platform pods should be `Running`. If pods are in `CrashLoopBackOff` or `ImagePullBackOff`, check logs:
 
 ```bash
 sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl logs <pod-name> -n nodalarc
@@ -118,7 +118,7 @@ sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl get constellationspec -n nodal
   -o jsonpath='{.items[0].status.phase}'
 ```
 
-Phases: `Creating` → `Wiring` → `Ready`. If stuck in `Creating` for more than 3 minutes, check Operator logs. If stuck in `Wiring`, check Node Agent logs.
+Phases: `Creating` -> `Wiring` -> `Ready`. If stuck in `Creating` for more than 3 minutes, check Operator logs. If stuck in `Wiring`, check Node Agent logs.
 
 ### Service Logs
 
@@ -145,17 +145,17 @@ sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl logs -l app=nodalarc-vs-api -n
 # Check IS-IS adjacencies on a satellite in the current session
 SAT=$(sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl get pods -n nodalarc \
   -o name | sed 's#pod/##' | grep -- '-sat-' | head -1)
-sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl exec "$SAT" -n nodalarc -c frr -- \
+sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl exec "$SAT" -n nodalarc -c frr-router -- \
   vtysh -c "show isis neighbor"
 
 # Check a ground node has adjacencies
 GS=$(sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl get pods -n nodalarc \
   -o name | sed 's#pod/##' | grep -- '-gs-' | head -1)
-sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl exec "$GS" -n nodalarc -c frr -- \
+sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl exec "$GS" -n nodalarc -c frr-router -- \
   vtysh -c "show isis neighbor"
 
 # End-to-end ping through the current routing table
-sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl exec "$GS" -n nodalarc -c frr -- \
+sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl exec "$GS" -n nodalarc -c frr-router -- \
   ping -c 3 -W 5 <destination-loopback-or-prefix>
 ```
 
@@ -166,7 +166,7 @@ SSH keys are generated per session by the Operator:
 - Keypair stored in K8s Secret `nodalarc-terminal-keys`
 - Public key mounted into all session pods
 - Private key read by VS-API for browser terminal proxy
-- Secret has ownerReference on the ConstellationSpec → garbage collected on teardown
+- Secret has ownerReference on the ConstellationSpec -> garbage collected on teardown
 
 Keys are regenerated on every new session deployment. No manual key management needed.
 
@@ -220,6 +220,6 @@ NodalArc stores no persistent user data. All state is ephemeral:
 - Session state lives in memory (OME, Scheduler) and is recomputed on restart
 - NATS JetStream stores recent messages in a PVC but recovery doesn't depend on it
 - VS-API SQLite snapshots are disposable (rebuilt from NATS streams)
-- FRR configs are generated from templates + session YAML at deploy time
+- Workload configs are rendered by the profile's adapter from the resolved session at deploy time
 
 To "back up" a NodalArc installation, you only need the source code and your `config.mk` file. Everything else is generated.

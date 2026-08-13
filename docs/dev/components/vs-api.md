@@ -14,11 +14,11 @@ lifecycle: create, switch, upload, and teardown.
 ## Architecture
 
 ```
-NATS Streams ──subscribe──→ VS-API ──WebSocket/REST──→ Clients
-                                │
-                                ├── Session management (create/switch CR)
-                                ├── Terminal proxy (SSH → WebSocket)
-                                └── SQLite snapshots (historical)
+NATS Streams --subscribe---> VS-API --WebSocket/REST---> Clients
+                                |
+                                +-- Session management (create/switch CR)
+                                +-- Terminal proxy (SSH -> WebSocket)
+                                +-- SQLite snapshots (historical)
 ```
 
 ## What It Subscribes To
@@ -88,7 +88,7 @@ The Operator's `restart_platform_pods` excludes VS-API. It orchestrates the swit
 
 ## Terminal Proxy
 
-Browser terminal access: xterm.js → WebSocket → VS-API → SSH → pod vtysh
+Browser terminal access: xterm.js -> WebSocket -> VS-API -> SSH -> pod vtysh
 
 VS-API reads the SSH private key from `nodalarc-terminal-keys` Secret on first terminal connection (in-memory only). Proxies the SSH session bidirectionally over WebSocket.
 

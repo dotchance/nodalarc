@@ -583,7 +583,7 @@ exceeds one.
 
 A node's `originated_prefixes` is the same symbolic routing-injection
 intent placed nodes carry, restricted to the node's own declared Ethernet
-ports plus `default` — a carrier originates the buses it serves. On a
+ports plus `default` - a carrier originates the buses it serves. On a
 ground installation it combines additively with segment-apply, override,
 and site-node origination. A space placement expands every payload mount
 at its declared count (space has no installation map, exactly as space

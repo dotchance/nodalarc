@@ -8,7 +8,7 @@ This guide is for anyone using NodalArc through the web interface. You don't nee
 2. [Sessions](sessions.md) - Creating, switching, and configuring constellation sessions
 3. [Globe View](globe-view.md) - The 3D visualization: what everything means, how to navigate
 4. [Topology View](topology-view.md) - The network graph view
-5. [Terminal Access](terminal.md) - Using the browser terminal to inspect routers
+5. [Terminal Access](terminal.md) - Using the browser terminal to inspect nodes
 6. [Time Controls](time-controls.md) - Pause, resume, and speed controls
 7. [Keyboard Shortcuts](keyboard-shortcuts.md) - Quick reference
 8. [API for Power Users](api.md) - Scripting and automation via REST/WebSocket
@@ -29,7 +29,7 @@ Everything you see in the visualization corresponds to real network state. When 
 
 You can:
 - **Watch** how routing protocols behave on dynamic satellite topologies
-- **Experiment** with different constellations, routing stacks, ground sites, relay nodes, and segment assemblies
+- **Experiment** with different constellations, routing stacks, workloads, ground sites, relay nodes, and segment assemblies
 - **Measure** convergence time, path latency, and handoff disruption
-- **Inspect** any router's state through an interactive terminal
+- **Inspect** any node's state through an interactive terminal
 - **Automate** experiments through the API

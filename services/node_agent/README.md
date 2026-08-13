@@ -1,4 +1,4 @@
-# Node Agent — DaemonSet
+# Node Agent - DaemonSet
 
 Runs on each K3s node with `hostPID: true` and privileged access.
 Receives BatchLinkUp/Down commands from the Scheduler via NATS request/reply
@@ -18,8 +18,8 @@ payload messages only.
 
 ## Key Rules
 
-- **Never use `NetNS()`** — use `_in_namespace(pid, fn)` from `namespace_ops.py`
-- **Command fence** — every request must carry operation, session, and wiring generation
-- **Wiring gate** — NATS server does not subscribe until typed wiring status is ready
-- **No false green** — success requires per-entry kernel proof; dirty kernel stops dispatch
-- **Stateless** — diffs desired (ConfigMap) vs actual (kernel) on every startup
+- **Never use `NetNS()`** - use `_in_namespace(pid, fn)` from `namespace_ops.py`
+- **Command fence** - every request must carry operation, session, and wiring generation
+- **Wiring gate** - NATS server does not subscribe until typed wiring status is ready
+- **No false green** - success requires per-entry kernel proof; dirty kernel stops dispatch
+- **Stateless** - diffs desired (ConfigMap) vs actual (kernel) on every startup

@@ -19,7 +19,7 @@ NodalArc deploys as a Helm chart on Kubernetes. The platform consists of:
 
 - **6 backend services** - OME (orbital mechanics), Scheduler (topology dispatch), Node Agent (kernel ops), VS-API (API server), Operator (session lifecycle), NATS (messaging)
 - **1 frontend** - VF (visualization), served by nginx
-- **N session pods** - one per satellite, relay, or ground node, each running FRR
+- **N session pods** - one per satellite, relay, ground node, or carried host, each running its profile's workload
 
 A session with 176 satellites and 7 ground nodes creates approximately 192 pods
 total (183 session pods + 9 platform pods). Multi-segment sessions add one pod

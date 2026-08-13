@@ -27,7 +27,7 @@ uv run pytest tests/unit/test_ome_scheduler_contract.py -v --tb=long
 
 | File | What It Tests |
 |------|--------------|
-| `tests/unit/test_ome_scheduler_contract.py` | OME→Scheduler event contract. Must always pass. |
+| `tests/unit/test_ome_scheduler_contract.py` | OME->Scheduler event contract. Must always pass. |
 | `tests/unit/test_scheduler_dispatcher.py` | Reconcile logic, dispatch correctness |
 | `tests/unit/test_node_agent_handlers.py` | BatchLinkUp/Down kernel operations |
 | `tests/unit/test_coverage_preview.py` | Coverage preview pipeline |
@@ -91,7 +91,7 @@ A code change is not verified until:
 - The change is deployed to the cluster (not just edited locally)
 - The behavior is confirmed working (browser, logs, kubectl)
 
-"I edited the code" ≠ "It works."
+"I edited the code" != "It works."
 
 ### Proving a fix
 

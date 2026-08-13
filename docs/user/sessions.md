@@ -4,7 +4,7 @@ A session is a running network experiment. It defines which nodes exist, where
 they are placed, which links are allowed to become candidates, and what routing
 runs inside the nodes.
 
-The simplest session is a single LEO constellation with Earth gateway sites —
+The simplest session is a single LEO constellation with Earth gateway sites -
 the right place to start. The same grammar also assembles multiple orbital
 regimes, lunar segments, relay nodes, and body-specific ground sites when an
 experiment needs them.
@@ -18,22 +18,22 @@ type, allowed value, and constraint.
 
 A session is assembled from reusable catalog building blocks:
 
-- **segments** — groups of nodes: a *space* segment (a constellation or space
+- **segments** - groups of nodes: a *space* segment (a constellation or space
   node set) or a *ground* segment (a set of sites).
-- **link rules** — which segment endpoints may form candidate links, and how
+- **link rules** - which segment endpoints may form candidate links, and how
   candidates are chosen.
-- **addressing** — address pools for generated nodes (satellites).
-- **routing** — one or more routing domains over selected nodes, with boundaries
+- **addressing** - address pools for generated nodes (satellites).
+- **routing** - one or more routing domains over selected nodes, with boundaries
   redistributing between them. The grammar defines `isis`, `ospf`, `bgp`, and
   `static`; the current runtime executes `isis`, `ospf`, and `static` and rejects
   `bgp` before deployment. A supported session can mix protocols.
-- **workload profiles** — what each node runs: the catalog profile carrying its
+- **workload profiles** - what each node runs: the catalog profile carrying its
   complete container composition, taken from its node definition, its segment,
   or its own placed entry.
-- **time** — simulation start time, step size, and compression.
+- **time** - simulation start time, step size, and compression.
 
 A link rule says a link is *allowed to be considered*. It does not force the link
-to exist — geometry, terminal capability, policy, capacity, and actuation proof
+to exist - geometry, terminal capability, policy, capacity, and actuation proof
 still decide whether a link is actually active.
 
 ## Curated demo sessions
@@ -137,10 +137,10 @@ When placed ground nodes participate in enabled access-link candidates, their
 effective scheduling must supply every field shown in the complete example.
 
 A site is a physical place; the nodes inside it are routers with terminals. One
-facility can host several nodes — a Santiago site might carry a LEO Ka gateway
+facility can host several nodes - a Santiago site might carry a LEO Ka gateway
 and a MEO gateway as separate nodes with different terminals and policies. The
 site, its nodes, and their terminals are catalog primitives the segment
-references — you do not write terminals inline in the session.
+references - you do not write terminals inline in the session.
 
 ## Link rules
 
@@ -176,7 +176,7 @@ with insufficient capacity is rejected before deployment. NodalArc neither
 invents the overlap nor silently reduces the requested policy to BBM.
 
 How many terminals a node has comes from its catalog node definition and how
-many the site installs — not from inline session fields.
+many the site installs - not from inline session fields.
 
 ## Workload profiles
 

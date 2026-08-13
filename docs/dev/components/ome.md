@@ -24,11 +24,11 @@ boundary does not change orbital algorithms or NATS subjects.
 ## Threading Model
 
 ```
-┌─────────────────────┐        queue.Queue         ┌─────────────────────┐
-│   Pacing Thread     │ ─────────────────────────→ │  Publisher Thread    │
-│   time.sleep()      │                            │  asyncio event loop  │
-│   orbital mechanics │                            │  NATS JetStream pub  │
-└─────────────────────┘                            └─────────────────────┘
++---------------------+        queue.Queue         +---------------------+
+|   Pacing Thread     | --------------------------> |  Publisher Thread    |
+|   time.sleep()      |                            |  asyncio event loop  |
+|   orbital mechanics |                            |  NATS JetStream pub  |
++---------------------+                            +---------------------+
 ```
 
 **Pacing thread** (synchronous):
@@ -75,11 +75,11 @@ runtime cost.
 
 The OME does not infer cross-segment connectivity from proximity alone.
 `link_rules` declare the candidate universe. Each link's class is derived from
-the roles at its endpoints — authors never write a class:
+the roles at its endpoints - authors never write a class:
 
-- access — body-local ground-to-space access
-- inter-constellation — space-to-space within the same body frame
-- inter-body relay — space-to-space across body frames, carrying an explicit
+- access - body-local ground-to-space access
+- inter-constellation - space-to-space within the same body frame
+- inter-body relay - space-to-space across body frames, carrying an explicit
   protocol boundary
 
 Earth/Luna sessions use a local BSP ephemeris kernel for body positions. The

@@ -7,9 +7,9 @@ How to build alternative frontends, dashboards, or automation tools that consume
 All visualization data flows through the VS-API. Your client connects to VS-API over HTTP/WebSocket. It never talks directly to the OME, Scheduler, or any other backend component.
 
 ```
-OME ──NATS──┐
-Scheduler ──NATS──┤──→ VS-API ──HTTP/WS──→ Your Client
-Node Agent ─────┘
+OME --NATS--+
+Scheduler --NATS--+---> VS-API --HTTP/WS---> Your Client
+Node Agent -----+
 ```
 
 ## Authentication
@@ -33,7 +33,7 @@ ws://host:8080/ws/v1/state?token=$TOKEN
 
 ### Connection sequence
 
-1. Connect → server sends `SessionEphemeris` (node ephemeris plus body/frame facts for local propagation)
+1. Connect -> server sends `SessionEphemeris` (node ephemeris plus body/frame facts for local propagation)
 2. Server sends current `StateSnapshot`
 3. Server broadcasts updated snapshots at ~1 Hz
 

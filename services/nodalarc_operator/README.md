@@ -1,8 +1,9 @@
 # K8s Operator
 
 Watches ConstellationSpec CRDs using [kopf](https://kopf.readthedocs.io/).
-Manages session lifecycle: create satellite/GS pods, render FRR configs,
-write wiring manifests, restart platform pods on session switch.
+Manages session lifecycle: compose each node's workload from its profile,
+render adapter configuration, create session pods, write wiring manifests,
+and restart platform pods on session switch.
 
 ## CRD: ConstellationSpec
 
@@ -52,7 +53,7 @@ spec:
     file_count: 17
 ```
 
-Singleton — only `current-session` is allowed. The Operator handles the
+Singleton - only `current-session` is allowed. The Operator handles the
 session switch sequence. It verifies the selected uploaded YAML files and their
 closure digest, resolves them with `sessionYaml` through the shared resolver,
 and refuses a CR that omits `catalogUpload` or references an incomplete or

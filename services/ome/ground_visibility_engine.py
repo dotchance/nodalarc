@@ -12,14 +12,19 @@ from nodalarc.body_frames import BodyFrame
 from nodalarc.ephemeris_runtime import SkyfieldBspEphemeris, body_states_at
 from nodalarc.frames import EcefVec3, GeoPosition
 from nodalarc.ground_terminals import TerminalPhysicsProfile
-from nodalarc.ome_runtime import OmeAddressing, SatelliteNode, satellite_node_id
+from nodalarc.ome_runtime import (
+    OmeAddressing,
+    SatelliteNode,
+    SessionPropagatorId,
+    satellite_node_id,
+)
 
 from ome.propagation_engine import PropagatedState, propagate_satellites
 from ome.telemetry import SEG_DWELL, StepTimings
 from ome.types import GroundVisibilityDecision, GroundVisibilityDecisionMap
 from ome.visibility import GroundVisibility, check_ground_visibility
 
-TerminalPhysicsProfileSet = TerminalPhysicsProfile | Sequence[TerminalPhysicsProfile]
+type TerminalPhysicsProfileSet = TerminalPhysicsProfile | Sequence[TerminalPhysicsProfile]
 
 
 @dataclass(frozen=True)
@@ -48,12 +53,12 @@ class GroundPassLookahead:
     addressing: OmeAddressing
     epoch_unix: float
     step: int
-    step_seconds: int
+    step_seconds: float
     horizon_ticks: int
     horizon_ticks_by_gs: Mapping[str, int]
     gs_reference_bodies: Mapping[str, str]
     body_frames: Mapping[str, BodyFrame]
-    propagator_id: str
+    propagator_id: SessionPropagatorId
     ground_link_model: Literal["geometry_only", "terminal_physics"] = "terminal_physics"
     gs_terminal_profiles: Mapping[str, TerminalPhysicsProfile] | None = None
     sat_ground_terminal_profiles: Mapping[str, TerminalPhysicsProfileSet] | None = None

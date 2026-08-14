@@ -94,7 +94,7 @@ def test_shipped_session_computes_real_steps(path: Path) -> None:
         active_bodies=cfg.active_bodies,
     )
     epoch_unix = resolve_session_epoch(cfg.resolved.time)
-    step_seconds = int(cfg.resolved.time.step_seconds)
+    step_seconds = float(cfg.resolved.time.step_seconds)
 
     isl_state: dict = {}
     gs_state: dict = {}

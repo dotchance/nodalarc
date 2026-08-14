@@ -211,6 +211,10 @@ def resolve_session_with_assets(
     )
     _enforce_declared_candidate_bounds(cfg, base_resolved)
     _validate_access_terminal_bindings(cfg, base_resolved)
+    _refuse_selected_multi_user_terminals(cfg, base_resolved)
+    _refuse_uncollapsible_access_physics(base_resolved)
+    _refuse_divergent_ground_masks(base_resolved)
+    _refuse_mixed_body_fixed_realizations(base_resolved)
     candidates = tuple(_resolve_link_candidates(base_resolved, cfg))
     _enforce_link_rule_constraints(base_resolved, candidates)
     resolved = ResolvedSession(
@@ -2643,6 +2647,193 @@ def _terminal_selectors_by_rule(
         rule.id: (rule.endpoints[0].terminal, rule.endpoints[1].terminal)
         for rule in cfg.link_rules or ()
     }
+
+
+def _refuse_mixed_body_fixed_realizations(resolved: ResolvedSession) -> None:
+    """One body-fixed frame realization per central body per session.
+
+    Same-body geometry (ISL feasibility, ground visibility, handover
+    ranking across candidate satellites) compares body-fixed vectors
+    directly. Mixing propagators whose realizations disagree puts a ~30 km
+    frame error inside those comparisons while every individual state looks
+    plausible. Grouping is by each satellite's effective propagator after
+    overrides, classified by the realization the implementation declares,
+    never by the session-level propagator string.
+    """
+    from nodalarc.ome_inputs import _ome_propagator_id
+    from nodalarc.ome_runtime import BODY_FIXED_REALIZATION
+
+    by_body: dict[str, dict[str, list[str]]] = {}
+    for node in resolved.nodes:
+        if node.kind != "satellite":
+            continue
+        implementation = _ome_propagator_id(node.orbit.propagator)
+        realization = BODY_FIXED_REALIZATION.get(implementation)
+        if realization is None:
+            raise ValueError(
+                f"propagator {implementation!r} declares no body-fixed frame "
+                "realization; every propagator implementation must be classified "
+                "in BODY_FIXED_REALIZATION before it can participate in a session"
+            )
+        by_body.setdefault(node.central_body, {}).setdefault(realization, []).append(node.node_id)
+
+    unsupported: list[UnsupportedFeature] = []
+    for body, families in sorted(by_body.items()):
+        if len(families) <= 1:
+            continue
+        detail = "; ".join(
+            f"{family}: {node_ids[0]}"
+            + (f" and {len(node_ids) - 1} more" if len(node_ids) > 1 else "")
+            for family, node_ids in sorted(families.items())
+        )
+        unsupported.append(
+            UnsupportedFeature(
+                category=FeatureCategory.FRAME_REALIZATION,
+                value=body,
+                message=(
+                    f"central body {body!r} carries satellites in mixed body-fixed "
+                    f"frame realizations ({detail}); same-body geometry compares "
+                    "vectors from one realization only, so the composition is "
+                    "refused until the propagators share a rotation authority"
+                ),
+                support_note="future runtime capability",
+            )
+        )
+    if unsupported:
+        raise UnsupportedFeatureError(unsupported)
+
+
+def _refuse_uncollapsible_access_physics(resolved: ResolvedSession) -> None:
+    """Terminal-physics sessions must collapse per-endpoint profiles now.
+
+    OME collapses each station's and each satellite's selected access
+    terminals into one physics profile per endpoint. A composition that
+    cannot collapse used to resolve and then die inside build_step_context;
+    the same collapse runs here, at resolve time, so the refusal is typed
+    and reaches deployment, builder preview, and automation alike.
+    """
+    # Mirror the OME input builder's default: absent simulation blocks run
+    # terminal_physics.
+    ground_link_model = (
+        resolved.simulation.ground_link_model
+        if resolved.simulation is not None
+        else "terminal_physics"
+    )
+    if ground_link_model != "terminal_physics":
+        return
+    from nodalarc.ground_terminals import terminal_physics_profile, terminal_physics_profiles
+    from nodalarc.ome_inputs import _ground_terminal, _satellite_ground_terminal
+
+    selected = resolved.selected_access_terminals_by_node()
+    unsupported: list[UnsupportedFeature] = []
+    for node in resolved.nodes:
+        entries = selected.get(node.node_id) or ()
+        if not entries:
+            continue
+        try:
+            if node.kind == "ground_station":
+                terminal_physics_profile(
+                    tuple(_ground_terminal(entry) for entry in entries),
+                    profile_id=f"{node.node_id}.terminals",
+                    endpoint="ground",
+                    require_constraints=True,
+                )
+            elif node.kind == "satellite":
+                terminal_physics_profiles(
+                    tuple(_satellite_ground_terminal(entry) for entry in entries),
+                    profile_id=f"{node.node_id}.ground_terminals",
+                    endpoint="satellite",
+                    require_constraints=True,
+                )
+        except ValueError as error:
+            unsupported.append(
+                UnsupportedFeature(
+                    category=FeatureCategory.TERMINAL_CAPABILITY,
+                    value="heterogeneous_access_physics",
+                    message=(
+                        f"access terminal selection on {node.node_id!r} cannot be "
+                        f"collapsed into one physics profile: {error}"
+                    ),
+                    support_note="future runtime capability",
+                )
+            )
+    if unsupported:
+        raise UnsupportedFeatureError(unsupported)
+
+
+def _refuse_divergent_ground_masks(resolved: ResolvedSession) -> None:
+    """Access rules that give one station different elevation masks are
+    refused. The masks describe different link populations; max-combining
+    them silently suppressed candidates the laxer rule declared. Until
+    masks are carried per rule and candidate, the composition is
+    unsupported.
+    """
+    unsupported: list[UnsupportedFeature] = []
+    for node_id, by_rule in sorted(resolved.ground_min_elevation_by_gs_and_rule().items()):
+        if len(set(by_rule.values())) <= 1:
+            continue
+        detail = ", ".join(f"{rule_id}={mask:g}" for rule_id, mask in sorted(by_rule.items()))
+        unsupported.append(
+            UnsupportedFeature(
+                category=FeatureCategory.LINK_CONSTRAINT,
+                value="per_rule_min_elevation",
+                message=(
+                    f"ground station {node_id!r} receives divergent effective "
+                    f"elevation masks from its access rules ({detail}); the "
+                    "current runtime applies one mask per station"
+                ),
+                support_note="future runtime capability",
+            )
+        )
+    if unsupported:
+        raise UnsupportedFeatureError(unsupported)
+
+
+def _refuse_selected_multi_user_terminals(
+    cfg: SegmentSessionConfig, resolved: ResolvedSession
+) -> None:
+    """A terminal block a link rule selects must be allocatable as declared.
+
+    The runtime allocates one link per terminal interface; a selected block
+    declaring tracking_capacity above one would admit links against beams
+    the kernel never wires. Mounted-but-unselected blocks stay legal: they
+    are inventory, not link behavior, so a multi-user asset remains valid
+    on the shelf and in a node model while no rule selects it.
+    """
+    selectors = _terminal_selectors_by_rule(cfg)
+    node_by_id = {node.node_id: node for node in resolved.nodes}
+    unsupported: list[UnsupportedFeature] = []
+    seen: set[tuple[str, str]] = set()
+    for rule in resolved.link_rules:
+        if not rule.enabled:
+            continue
+        for endpoint, selector in zip(rule.endpoints, selectors[rule.rule_id], strict=True):
+            for node_id in endpoint.node_ids:
+                for block in node_by_id[node_id].terminal_inventory:
+                    if block.tracking_capacity is None or block.tracking_capacity <= 1:
+                        continue
+                    if not _terminal_matches(block, selector):
+                        continue
+                    key = (node_id, block.terminal_id)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    unsupported.append(
+                        UnsupportedFeature(
+                            category=FeatureCategory.TERMINAL_CAPABILITY,
+                            value="tracking_capacity",
+                            message=(
+                                f"link rule {rule.rule_id!r} selects terminal mount "
+                                f"{block.terminal_id!r} on {node_id!r} declaring "
+                                f"tracking_capacity {block.tracking_capacity}; the "
+                                "current runtime allocates one link per terminal "
+                                "interface and cannot honor multi-user tracking"
+                            ),
+                            support_note="future runtime capability",
+                        )
+                    )
+    if unsupported:
+        raise UnsupportedFeatureError(unsupported)
 
 
 def _validate_access_terminal_bindings(

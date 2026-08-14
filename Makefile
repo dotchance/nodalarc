@@ -473,6 +473,8 @@ typecheck: ## Type-check Builder, session-configuration, and OME frame authority
 		lib/nodalarc/geo.py \
 		lib/nodalarc/ome_runtime.py \
 		lib/nodalarc/propagator.py \
+		services/ome/event_stream.py \
+		services/ome/ground_visibility_engine.py \
 		services/ome/isl_engine.py \
 		services/ome/propagation_engine.py \
 		services/ome/snapshot_builder.py \

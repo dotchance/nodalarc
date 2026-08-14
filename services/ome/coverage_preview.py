@@ -364,12 +364,30 @@ def _count_events(events, neighbors, gs_file, addressing, period: float) -> tupl
     gs_active: dict[str, set[str]] = defaultdict(set)
     gs_connected_per_step: list[int] = []
     gs_coverage_steps: dict[str, int] = defaultdict(int)
+    gs_current_gap_steps: dict[str, int] = defaultdict(int)
+    gs_longest_gap_steps: dict[str, int] = defaultdict(int)
 
     if gs_file:
         for station in gs_file.stations:
             gs_coverage_steps[addressing.gs_id(station.name)] = 0
 
     total_steps = 0
+    pending_instant = False
+
+    def _close_interval() -> None:
+        nonlocal total_steps
+        total_steps += 1
+        isl_counts_per_step.append(sum(1 for v in isl_active.values() if v))
+        connected_gs = sum(1 for sats in gs_active.values() if len(sats) > 0)
+        gs_connected_per_step.append(connected_gs)
+        for gs_id in gs_coverage_steps:
+            if len(gs_active.get(gs_id, set())) > 0:
+                gs_coverage_steps[gs_id] += 1
+                gs_current_gap_steps[gs_id] = 0
+            else:
+                gs_current_gap_steps[gs_id] += 1
+                if gs_current_gap_steps[gs_id] > gs_longest_gap_steps[gs_id]:
+                    gs_longest_gap_steps[gs_id] = gs_current_gap_steps[gs_id]
 
     for event in events:
         if event.event_type == "VisibilityEvent":
@@ -391,13 +409,15 @@ def _count_events(events, neighbors, gs_file, addressing, period: float) -> tupl
                     isl_active[key] = False
 
         elif event.event_type == "ClockTick":
-            total_steps += 1
-            isl_counts_per_step.append(sum(1 for v in isl_active.values() if v))
-            connected_gs = sum(1 for sats in gs_active.values() if len(sats) > 0)
-            gs_connected_per_step.append(connected_gs)
-            for gs_id in gs_coverage_steps:
-                if len(gs_active.get(gs_id, set())) > 0:
-                    gs_coverage_steps[gs_id] += 1
+            # A ClockTick precedes its own instant's visibility events, so
+            # the arriving tick closes the PREVIOUS instant, whose
+            # transitions have all been applied by now. Each closed instant
+            # governs one step-long interval; the stream's final instant
+            # bounds the window and carries no duration, so N+1 ticks
+            # measure N intervals.
+            if pending_instant:
+                _close_interval()
+            pending_instant = True
 
     if total_steps == 0:
         total_steps = max(1, int(period / _PREVIEW_STEP_SECONDS))
@@ -419,6 +439,7 @@ def _count_events(events, neighbors, gs_file, addressing, period: float) -> tupl
         "sim_mean": sim_mean,
         "max_gap": 0.0,
         "coverage_steps": gs_coverage_steps,
+        "longest_gap_steps": gs_longest_gap_steps,
         "total_steps": total_steps,
     }
     return isl_stats, gs_stats
@@ -440,6 +461,7 @@ def _build_gs_previews(
 
     total_steps = gs_stats["total_steps"]
     coverage_steps = gs_stats["coverage_steps"]
+    longest_gap_steps = gs_stats["longest_gap_steps"]
     default_min_elev = gs_file.default_min_elevation_deg
 
     for station in gs_file.stations:
@@ -447,7 +469,12 @@ def _build_gs_previews(
         steps_connected = coverage_steps.get(gs_id, 0)
         coverage_pct = (steps_connected / total_steps) * 100.0 if total_steps > 0 else 0.0
         gap_steps = total_steps - steps_connected
-        longest_gap_s = gap_steps * _PREVIEW_STEP_SECONDS if gap_steps > 0 else 0.0
+        total_disconnected_s = gap_steps * _PREVIEW_STEP_SECONDS if gap_steps > 0 else 0.0
+        longest_gap_s = longest_gap_steps.get(gs_id, 0) * _PREVIEW_STEP_SECONDS
+        if longest_gap_s == 0.0 and steps_connected == 0 and gap_steps > 0:
+            # Degenerate no-tick window: nothing was sampled, so the whole
+            # synthesized window is one unsampled gap.
+            longest_gap_s = total_disconnected_s
         min_elev = (
             station.min_elevation_deg if station.min_elevation_deg is not None else default_min_elev
         )
@@ -473,6 +500,7 @@ def _build_gs_previews(
         per_station[station.name] = GsStationPreview(
             coverage_pct=round(coverage_pct, 1),
             longest_gap_s=round(longest_gap_s, 1),
+            total_disconnected_s=round(total_disconnected_s, 1),
             reason=reason,
         )
 

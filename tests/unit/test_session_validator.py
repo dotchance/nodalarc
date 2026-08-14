@@ -47,6 +47,63 @@ def test_validator_reads_resolved_session_without_old_config_imports() -> None:
     assert "expand_constellation" not in source
 
 
+def test_e021_counts_only_rule_selected_interfaces() -> None:
+    """One selected interface plus two unselected mounted interfaces under
+    MBB reserve 1 must fail readiness: OME builds runtime inventory from
+    rule-selected mounts only, so mounted-but-unselected interfaces are
+    capacity no allocation can grant. Counting them validated sessions
+    that starved at runtime."""
+    from copy import deepcopy
+
+    import yaml
+    from nodalarc.configuration_yaml import load_configuration_yaml
+
+    raw = build_catalog_session_fixture(
+        name="validator-selected-capacity",
+        constellation={"planes": {"count": 2, "sats_per_plane": 2}},
+        ground_stations={"stations": ["a"]},
+        scheduling={"handover_mode": "mbb", "mbb_overlap_ticks": 2, "mbb_reserve": 1},
+    )
+
+    node_path = raw.roots.user_root / raw.ground_node_ref.relative_path
+    node_doc = load_configuration_yaml(node_path.read_text(encoding="utf-8"))
+    mounts = node_doc["node"]["terminals"]
+    second = deepcopy(mounts[0])
+    second["id"] = "access2"
+    second["tags"] = ["access2"]
+    mounts.append(second)
+    node_path.write_text(yaml.safe_dump(node_doc), encoding="utf-8")
+
+    site_path = raw.roots.user_root / raw.site_refs[0].relative_path
+    site_doc = load_configuration_yaml(site_path.read_text(encoding="utf-8"))
+    installs = site_doc["site"]["nodes"][0]["terminals"]
+    installs["access"]["installed_count"] = 1
+    installs["access2"] = {
+        "installed_count": 2,
+        "capabilities": {"boresight": {"mode": "local_vertical"}},
+    }
+    site_path.write_text(yaml.safe_dump(site_doc), encoding="utf-8")
+
+    access_rule = next(rule for rule in raw["link_rules"] if rule["id"] == "ground-access")
+    access_rule["endpoints"][0]["terminal"] = {
+        "all": [{"role": "access"}, {"medium": "rf"}, {"mount": "access"}]
+    }
+
+    resolved = resolve_session(raw)
+    results = validate_session_readiness(resolved, available_node_count=100)
+    e021 = [result for result in results if result.code == "E021"]
+    assert e021, "selected capacity 1 under reserve 1 must fail readiness"
+    assert "capacity 1" in e021[0].message
+
+    # Control: raising the SELECTED mount to two interfaces satisfies
+    # reserve 1; the unselected mounts still contribute nothing.
+    installs["access"]["installed_count"] = 2
+    site_path.write_text(yaml.safe_dump(site_doc), encoding="utf-8")
+    resolved = resolve_session(raw)
+    results = validate_session_readiness(resolved, available_node_count=100)
+    assert not [result for result in results if result.code == "E021"]
+
+
 def test_resolved_catalog_session_validates_cleanly() -> None:
     resolved = _resolved()
 

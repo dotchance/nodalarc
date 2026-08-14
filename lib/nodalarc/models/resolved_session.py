@@ -731,16 +731,17 @@ class ResolvedSession(BaseModel):
         """
         return {node.node_id: index for index, node in enumerate(self.nodes)}
 
-    def effective_ground_min_elevation_by_gs(self) -> dict[str, float]:
-        """The single derivation of each ground station's effective elevation
-        mask: per access rule, the max of the matching terminal blocks' masks
-        and the rule endpoint's declared mask, max-combined across rules.
+    def ground_min_elevation_by_gs_and_rule(self) -> dict[str, dict[str, float]]:
+        """Each ground station's effective elevation mask, kept per rule.
 
-        OME enforcement and VS-API display both read this — two derivations
-        of the same mask is how the UI ends up showing a constraint the
-        allocator does not enforce.
+        Within one rule the endpoint's declared mask and the matching
+        terminal blocks' masks all constrain the same links, so their max is
+        that rule's effective mask. Across rules the values describe
+        different link populations and must never be silently merged; the
+        resolver refuses a station whose rules disagree until masks are
+        carried per candidate.
         """
-        result: dict[str, float] = {}
+        result: dict[str, dict[str, float]] = {}
         selected = self.selected_access_terminals_by_node()
         node_by_id = {node.node_id: node for node in self.nodes}
         for rule in self.link_rules:
@@ -766,9 +767,25 @@ class ResolvedSession(BaseModel):
                         raise ValueError(
                             f"no resolved min_elevation_deg for access endpoint {node_id}"
                         )
-                    effective = max(float(value) for value in masks)
-                    result[node_id] = max(result.get(node_id, effective), effective)
+                    result.setdefault(node_id, {})[rule.rule_id] = max(
+                        float(value) for value in masks
+                    )
         return result
+
+    def effective_ground_min_elevation_by_gs(self) -> dict[str, float]:
+        """The single derivation of each ground station's effective elevation
+        mask. The resolver refuses stations whose access rules produce
+        divergent per-rule masks, so the max here collapses values that are
+        already equal.
+
+        OME enforcement and VS-API display both read this — two derivations
+        of the same mask is how the UI ends up showing a constraint the
+        allocator does not enforce.
+        """
+        return {
+            node_id: max(by_rule.values())
+            for node_id, by_rule in self.ground_min_elevation_by_gs_and_rule().items()
+        }
 
     def selected_access_terminals_by_node(
         self,

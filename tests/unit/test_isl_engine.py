@@ -193,6 +193,46 @@ def test_lunar_same_body_isl_uses_lunar_occluder_not_earth_default():
     assert result.reject_reason == "ok"
 
 
+def test_cross_body_occlusion_uses_the_oblate_ellipsoid_not_a_sphere():
+    """A polar-limb ray clearing Earth's ellipsoid by 8.2 km must not read
+    as blocked by an equatorial-radius sphere (13.1 km of false
+    penetration). Rays genuinely inside the ellipsoid, polar or equatorial,
+    still block. Ellipsoids are evaluated under the assumed-axes contract:
+    each body's pole lies on the common-frame z axis."""
+    from ome.isl_engine import _inter_body_occluded
+
+    def cross_body_pair(z_km: float, y_km: float = 0.0):
+        def _cross_state(node_id, body, common, origin):
+            return PropagatedState(
+                node_id=node_id,
+                sim_time_unix=0.0,
+                position_ecef_km=EcefVec3(Vec3(0.0, 0.0, 0.0)),
+                velocity_ecef_km_s=EcefVec3(Vec3(0.0, 0.0, 0.0)),
+                geodetic=GeoPosition(0.0, 0.0, 500.0),
+                propagator_id="two-body",
+                central_body=body,
+                position_common_km=CommonVec3(*common),
+                velocity_common_km_s=CommonVec3(0.0, 0.0, 0.0),
+                body_origin_common_km=CommonVec3(*origin),
+            )
+
+        return (
+            _cross_state("earth-sat", "earth", (-8000.0, y_km, z_km), (0.0, 0.0, 0.0)),
+            _cross_state("luna-sat", "luna", (300000.0, y_km, z_km), (300000.0, 0.0, 0.0)),
+        )
+
+    # z=6365: 8.248 km outside the polar radius, 13.137 km inside the
+    # equatorial sphere the old test substituted.
+    polar_clear = cross_body_pair(6365.0)
+    assert _inter_body_occluded(*polar_clear, body_frames=TEST_BODY_FRAMES) is False
+
+    polar_blocked = cross_body_pair(6350.0)
+    assert _inter_body_occluded(*polar_blocked, body_frames=TEST_BODY_FRAMES) is True
+
+    equatorial_blocked = cross_body_pair(0.0, y_km=6370.0)
+    assert _inter_body_occluded(*equatorial_blocked, body_frames=TEST_BODY_FRAMES) is True
+
+
 def test_symmetric_isl_scheduling_respects_terminal_capacity_and_priority():
     feasible_ab = IslFeasibilityResult(
         pair=("sat-A", "sat-B"),

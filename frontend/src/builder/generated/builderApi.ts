@@ -1899,10 +1899,11 @@ export interface GsPreview {
   readonly max_gap_s: number;
 }
 
-/** Per-ground-station coverage statistics. */
+/** Per-ground-station coverage statistics. The preview samples one finite window; nothing here asserts periodic recurrence. ``longest_gap_s`` is the longest contiguous disconnected run inside that window. Leading and trailing runs count as sampled, and are never merged across the window boundary. ``total_disconnected_s`` is the window's disconnected time summed across every gap. */
 export interface GsStationPreview {
   readonly coverage_pct: number;
   readonly longest_gap_s: number;
+  readonly total_disconnected_s: number;
   readonly reason: string | null;
 }
 

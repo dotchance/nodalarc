@@ -190,7 +190,12 @@ describe("useWizardApi", () => {
       },
       ground_stations: {
         per_station: {
-          hawthorne: { coverage_pct: 42, longest_gap_s: 600, reason: null },
+          hawthorne: {
+            coverage_pct: 42,
+            longest_gap_s: 250,
+            total_disconnected_s: 600,
+            reason: null,
+          },
         },
         simultaneous_min: 0,
         simultaneous_max: 1,

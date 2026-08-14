@@ -7,6 +7,7 @@ from __future__ import annotations
 import math
 
 import pytest
+from nodalarc.frames import CommonVec3
 from nodalarc.models.addressing import NeighborAssignment
 from ome.isl_engine import (
     IslFeasibilityResult,
@@ -37,6 +38,9 @@ def _state(
         geodetic=GeoPosition(0.0, 0.0, 550.0),
         propagator_id="test-fixture",
         central_body=central_body,
+        position_common_km=CommonVec3(*position),
+        velocity_common_km_s=CommonVec3(*velocity),
+        body_origin_common_km=CommonVec3(0.0, 0.0, 0.0),
     )
 
 

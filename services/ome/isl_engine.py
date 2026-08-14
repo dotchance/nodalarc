@@ -14,7 +14,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from nodalarc.body_frames import BodyFrame
-from nodalarc.frames import Vec3
+from nodalarc.frames import CommonVec3, Vec3
 from nodalarc.geo import compute_latency_ms, compute_range_km
 from nodalarc.models.addressing import NeighborAssignment
 
@@ -91,7 +91,7 @@ def _role_allows_link(role: str | None, link_type: str) -> bool:
 def _state_vectors(
     state_a: PropagatedState,
     state_b: PropagatedState,
-) -> tuple[Vec3, Vec3, Vec3, Vec3]:
+) -> tuple[Vec3 | CommonVec3, Vec3 | CommonVec3, Vec3 | CommonVec3, Vec3 | CommonVec3]:
     """Return position/velocity vectors in the frame appropriate for this pair."""
     if state_a.central_body == state_b.central_body:
         return (
@@ -109,10 +109,10 @@ def _state_vectors(
 
 
 def _segment_intersects_sphere(
-    a: Vec3,
-    b: Vec3,
+    a: Vec3 | CommonVec3,
+    b: Vec3 | CommonVec3,
     *,
-    center: Vec3,
+    center: Vec3 | CommonVec3,
     radius_km: float,
 ) -> bool:
     dx = b.x - a.x
@@ -162,7 +162,11 @@ def _inter_body_occluded(
     return False
 
 
-def _off_local_horizontal_rad(pos_common: Vec3, other_common: Vec3, origin_common: Vec3) -> float:
+def _off_local_horizontal_rad(
+    pos_common: Vec3 | CommonVec3,
+    other_common: Vec3 | CommonVec3,
+    origin_common: Vec3 | CommonVec3,
+) -> float:
     los = Vec3(
         other_common.x - pos_common.x,
         other_common.y - pos_common.y,

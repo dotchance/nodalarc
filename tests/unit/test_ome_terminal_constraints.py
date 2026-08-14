@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from nodalarc.frames import CommonVec3
 from nodalarc.models.addressing import NeighborAssignment
 from nodalarc.models.link_decisions import GroundPolicyAudit
 from nodalarc.ome_runtime import SatelliteNode
@@ -169,6 +170,9 @@ def test_cross_plane_isl_uses_cross_plane_tracking_limit(monkeypatch):
                 geodetic=GeoPosition(0.0, 0.0, 550.0),
                 propagator_id="test-fixture",
                 central_body="earth",
+                position_common_km=CommonVec3(*pos_a),
+                velocity_common_km_s=CommonVec3(*vel_a),
+                body_origin_common_km=CommonVec3(0.0, 0.0, 0.0),
             ),
             node_b: PropagatedState(
                 node_id=node_b,
@@ -178,6 +182,9 @@ def test_cross_plane_isl_uses_cross_plane_tracking_limit(monkeypatch):
                 geodetic=GeoPosition(0.0, 0.0, 550.0),
                 propagator_id="test-fixture",
                 central_body="earth",
+                position_common_km=CommonVec3(*pos_b),
+                velocity_common_km_s=CommonVec3(*vel_b),
+                body_origin_common_km=CommonVec3(0.0, 0.0, 0.0),
             ),
         }
 

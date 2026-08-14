@@ -27,7 +27,7 @@ from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from datetime import datetime
 
-from nodalarc.frames import EcefVec3, GeoPosition
+from nodalarc.frames import CommonVec3, EcefVec3, GeoPosition, Vec3
 from nodalarc.geo import compute_latency_ms, compute_range_km
 from nodalarc.link_metadata import LinkRuleMetadata
 from nodalarc.models.link_decisions import (
@@ -138,7 +138,7 @@ def build_link_state_snapshot(
     downstream components to decide whether to invent or reject physics.
     """
     ecef: dict[str, EcefVec3] = {}
-    common: dict[str, EcefVec3] = {}
+    common: dict[str, CommonVec3] = {}
     central_body: dict[str, str] = {}
     for node_id, state in source.propagated_states.items():
         ecef[node_id] = state.position_ecef_km
@@ -153,6 +153,8 @@ def build_link_state_snapshot(
         node_b: str,
         link_type: str,
     ) -> tuple[float, float]:
+        pa: Vec3 | CommonVec3 | None
+        pb: Vec3 | CommonVec3 | None
         if link_type == "isl" and central_body.get(node_a) != central_body.get(node_b):
             pa, pb = common.get(node_a), common.get(node_b)
         else:
@@ -256,6 +258,8 @@ def build_link_state_snapshot(
         range_latency = (
             _link_range_latency(pair[0], pair[1], "ground") if carrier == CarrierState.UP else None
         )
+        gs_ti: int | None
+        sat_ti: int | None
         if carrier == CarrierState.UP:
             if pair not in assoc:
                 raise ValueError(

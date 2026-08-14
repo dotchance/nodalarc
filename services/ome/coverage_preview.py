@@ -608,6 +608,15 @@ def _scan_isl_failure_reasons(
                 if nid not in positions or na.peer_node_id not in positions:
                     continue
 
+                if sat_map[nid].central_body != sat_map[na.peer_node_id].central_body:
+                    raise ValueError(
+                        "coverage preview diagnostics evaluate pairs in "
+                        f"body-fixed coordinates; mixed-body pair {pair} "
+                        f"({sat_map[nid].central_body!r} vs "
+                        f"{sat_map[na.peer_node_id].central_body!r}) is not "
+                        "supported"
+                    )
+
                 pos_a, vel_a, geo_a = positions[nid]
                 pos_b, vel_b, geo_b = positions[na.peer_node_id]
 

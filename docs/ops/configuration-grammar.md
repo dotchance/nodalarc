@@ -1588,7 +1588,8 @@ construct. The production Earth-Luna profile currently supports:
 - `static_ip` routing boundaries;
 - serialized ground handovers with `handover_concurrency: one_at_a_time`, at
   most one reserved MBB overlap, and one-tick BBM acquisition;
-- `skyfield_bsp` ephemeris;
+- `skyfield_bsp` ephemeris, with `frame: gcrs` as the only supported kernel
+  frame;
 - workload profiles at all three assignment levels, with the `frr` adapter
   and adapter-free application profiles;
 - payload mounts and node-carried Ethernet segments, on ground installations
@@ -1611,6 +1612,7 @@ runtime execution:
 - routing capabilities on BGP or static domains;
 - `bgp` and `dtn_bundle` routing boundaries;
 - `spice_kernel_stack` and `operator_supplied_spk` ephemeris providers;
+- ephemeris kernel frames other than `gcrs`;
 - bodies outside the supported Earth-Luna profile;
 - workload adapters other than `frr`.
 

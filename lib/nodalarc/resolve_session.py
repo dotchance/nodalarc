@@ -306,10 +306,12 @@ def _check_runtime_support(
             kind = "lagrange_point"
         if feature := support.check_segment_kind(kind):
             unsupported.append(feature)
-    if cfg.ephemeris is not None and (
-        feature := support.check_ephemeris_provider(cfg.ephemeris.provider)
-    ):
-        unsupported.append(feature)
+    if cfg.ephemeris is not None:
+        if feature := support.check_ephemeris_provider(cfg.ephemeris.provider):
+            unsupported.append(feature)
+        for kernel in cfg.ephemeris.kernels:
+            if feature := support.check_ephemeris_frame(kernel.frame):
+                unsupported.append(feature)
     for domain in cfg.routing.domains if cfg.routing is not None else ():
         if feature := support.check_routing_protocol(domain.protocol):
             unsupported.append(feature)

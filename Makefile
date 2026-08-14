@@ -442,7 +442,7 @@ lint: lint-policy typecheck ## Run lint, type, formatting, and high-confidence d
 lint-policy: ## Verify lint policy was not weakened
 	uv run python scripts/check-lint-policy.py
 
-typecheck: ## Type-check Builder and session-configuration authority boundaries
+typecheck: ## Type-check Builder, session-configuration, and OME frame authority boundaries
 	uv run mypy --explicit-package-bases \
 		lib/nodalarc/catalog_closure.py \
 		lib/nodalarc/catalog_refs.py \
@@ -468,7 +468,15 @@ typecheck: ## Type-check Builder and session-configuration authority boundaries
 		services/vs_api/builder_visual_draft.py \
 		services/vs_api/catalog_context.py \
 		services/vs_api/session_deployment.py \
-		services/vs_api/transition_operations.py
+		services/vs_api/transition_operations.py \
+		lib/nodalarc/frames.py \
+		lib/nodalarc/geo.py \
+		lib/nodalarc/ome_runtime.py \
+		lib/nodalarc/propagator.py \
+		services/ome/isl_engine.py \
+		services/ome/propagation_engine.py \
+		services/ome/snapshot_builder.py \
+		services/ome/visibility.py
 
 format-diff: ## Preview deterministic Ruff import and formatting changes
 	uv run ruff check --select I --fix --diff .

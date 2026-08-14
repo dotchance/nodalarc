@@ -40,16 +40,16 @@ from nodalarc.ome_runtime import (
     GroundStationFile,
     GroundTerminal,
     IslTerminal,
+    PropagatorId,
     SatelliteGroundTerminal,
     SatelliteNode,
+    SessionPropagatorId,
     retarget_satellites,
 )
 from nodalarc.orbital import OrbitalElements
 from nodalarc.propagator import orbital_period_for_body
 
 GroundLinkModel = Literal["geometry_only", "terminal_physics"]
-PropagatorId = Literal["two-body", "keplerian-circular", "j2-mean-elements", "sgp4-tle"]
-SessionPropagatorId = PropagatorId | Literal["mixed"]
 
 
 def _ome_propagator_id(value: str) -> PropagatorId:

@@ -507,7 +507,9 @@ in the current runtime. The current runtime supports `skyfield_bsp`; it requires
 exactly one local kernel with the declared SHA-256. Its coverage start and end
 must be declared together, and the end must be later than the start. The session
 start must lie inside those bounds, and playback, seek, or lookahead outside
-them fails rather than extrapolating.
+them fails rather than extrapolating. Every kernel must declare `frame: gcrs`,
+the frame the provider actually computes. A session declaring any other frame
+is refused as unsupported.
 
 ## Deploying configuration
 

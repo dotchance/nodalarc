@@ -5,6 +5,9 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Literal, Protocol
 
+PropagatorId = Literal["two-body", "keplerian-circular", "j2-mean-elements", "sgp4-tle"]
+SessionPropagatorId = PropagatorId | Literal["mixed"]
+
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from nodalarc.body_frames import BodyFrame, SupportedSurfaceBody
@@ -251,7 +254,9 @@ class SatelliteNode:
         self.propagator_id = propagator_id
 
 
-def satellite_propagator_id(sat: SatelliteNode, session_propagator_id: str) -> str:
+def satellite_propagator_id(
+    sat: SatelliteNode, session_propagator_id: SessionPropagatorId
+) -> PropagatorId:
     """The propagator this satellite integrates under, session default aware."""
     sat_propagator_id = getattr(sat, "propagator_id", None)
     if sat_propagator_id is not None:
@@ -271,7 +276,7 @@ def satellite_propagator_id(sat: SatelliteNode, session_propagator_id: str) -> s
 def retarget_satellites(
     satellites: list[SatelliteNode],
     *,
-    session_propagator_id: str,
+    session_propagator_id: SessionPropagatorId,
     anchor_epoch_unix: float,
     body_frames: Mapping[str, BodyFrame],
 ) -> None:

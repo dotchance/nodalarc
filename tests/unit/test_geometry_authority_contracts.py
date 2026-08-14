@@ -10,7 +10,7 @@ from unittest.mock import MagicMock
 
 import pytest
 from nodalarc.constants import SPEED_OF_LIGHT_KM_S
-from nodalarc.frames import EcefVec3, GeoPosition, Vec3
+from nodalarc.frames import CommonVec3, EcefVec3, GeoPosition, Vec3
 from nodalarc.geo import (
     compute_latency_ms,
     compute_range_km,
@@ -41,14 +41,18 @@ WGS84_B = EARTH_TEST_BODY_FRAME.polar_radius_km
 
 def _propagated_state(node_id: str, lat: float, lon: float, alt_km: float) -> PropagatedState:
     geo = GeoPosition(lat, lon, alt_km)
+    ecef = earth_geodetic_to_ecef(geo)
     return PropagatedState(
         node_id=node_id,
         sim_time_unix=SIM.timestamp(),
-        position_ecef_km=earth_geodetic_to_ecef(geo),
+        position_ecef_km=ecef,
         velocity_ecef_km_s=EcefVec3(Vec3(0.0, 0.0, 0.0)),
         geodetic=geo,
         propagator_id="test-authority",
         central_body="earth",
+        position_common_km=CommonVec3(*ecef),
+        velocity_common_km_s=CommonVec3(0.0, 0.0, 0.0),
+        body_origin_common_km=CommonVec3(0.0, 0.0, 0.0),
     )
 
 

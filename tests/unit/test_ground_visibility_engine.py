@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 import pytest
-from nodalarc.frames import EcefVec3, GeoPosition, Vec3
+from nodalarc.frames import CommonVec3, EcefVec3, GeoPosition, Vec3
 from nodalarc.ground_terminals import TerminalPhysicsProfile
 from nodalarc.models.ground_policy import HandoverPolicySpec, SelectionPolicySpec
 from nodalarc.models.session import GroundSchedulingConfig
@@ -50,14 +50,19 @@ def _ground_scheduling() -> GroundSchedulingConfig:
 
 
 def _state(node_id: str, geo: GeoPosition, velocity: Vec3 | None = None) -> PropagatedState:
+    ecef = earth_geodetic_to_ecef(geo)
+    vel = velocity or Vec3(0.0, 0.0, 0.0)
     return PropagatedState(
         node_id=node_id,
         sim_time_unix=0.0,
-        position_ecef_km=earth_geodetic_to_ecef(geo),
-        velocity_ecef_km_s=EcefVec3(velocity or Vec3(0.0, 0.0, 0.0)),
+        position_ecef_km=ecef,
+        velocity_ecef_km_s=EcefVec3(vel),
         geodetic=geo,
         propagator_id="test-fixture",
         central_body="earth",
+        position_common_km=CommonVec3(*ecef),
+        velocity_common_km_s=CommonVec3(*vel),
+        body_origin_common_km=CommonVec3(0.0, 0.0, 0.0),
     )
 
 
@@ -364,6 +369,9 @@ def test_longest_remaining_pass_populates_sampled_dwell(monkeypatch):
                 GeoPosition(0.0, 0.0, 550.0),
                 "test",
                 "earth",
+                CommonVec3(dt, 1.0, 0.0),
+                CommonVec3(0.0, 0.0, 0.0),
+                CommonVec3(0.0, 0.0, 0.0),
             ),
             "sat-long": PropagatedState(
                 "sat-long",
@@ -373,6 +381,9 @@ def test_longest_remaining_pass_populates_sampled_dwell(monkeypatch):
                 GeoPosition(0.0, 0.0, 550.0),
                 "test",
                 "earth",
+                CommonVec3(dt, 2.0, 0.0),
+                CommonVec3(0.0, 0.0, 0.0),
+                CommonVec3(0.0, 0.0, 0.0),
             ),
         }
 
@@ -396,6 +407,9 @@ def test_longest_remaining_pass_populates_sampled_dwell(monkeypatch):
                 GeoPosition(0.0, 0.0, 550.0),
                 "test",
                 "earth",
+                CommonVec3(0.0, 1.0, 0.0),
+                CommonVec3(0.0, 0.0, 0.0),
+                CommonVec3(0.0, 0.0, 0.0),
             ),
             "sat-long": PropagatedState(
                 "sat-long",
@@ -405,6 +419,9 @@ def test_longest_remaining_pass_populates_sampled_dwell(monkeypatch):
                 GeoPosition(0.0, 0.0, 550.0),
                 "test",
                 "earth",
+                CommonVec3(0.0, 2.0, 0.0),
+                CommonVec3(0.0, 0.0, 0.0),
+                CommonVec3(0.0, 0.0, 0.0),
             ),
         },
         gs_positions={"gs-equator": (earth_geodetic_to_ecef(gs_geo), gs_geo)},
@@ -469,6 +486,9 @@ def test_longest_remaining_pass_uses_each_ground_station_horizon(monkeypatch):
                 GeoPosition(0.0, 0.0, 550.0),
                 "test",
                 "earth",
+                CommonVec3(dt, 0.0, 0.0),
+                CommonVec3(0.0, 0.0, 0.0),
+                CommonVec3(0.0, 0.0, 0.0),
             )
         }
 
@@ -493,6 +513,9 @@ def test_longest_remaining_pass_uses_each_ground_station_horizon(monkeypatch):
                 GeoPosition(0.0, 0.0, 550.0),
                 "test",
                 "earth",
+                CommonVec3(0.0, 0.0, 0.0),
+                CommonVec3(0.0, 0.0, 0.0),
+                CommonVec3(0.0, 0.0, 0.0),
             )
         },
         gs_positions={
@@ -600,6 +623,9 @@ def test_satellite_profiles_select_matching_target_body_for_cislunar_relay():
         GeoPosition(0.0, 0.0, 550.0),
         "test-fixture",
         "luna",
+        CommonVec3(luna_radius + 550.0, 0.0, 0.0),
+        CommonVec3(0.0, 0.0, 0.0),
+        CommonVec3(0.0, 0.0, 0.0),
     )
 
     result = evaluate_ground_visibility(
@@ -751,6 +777,9 @@ def test_cislunar_resolved_terminal_facts_flow_through_build_context_to_engine()
                 GeoPosition(0.0, 0.0, 550.0),
                 "test-fixture",
                 "luna",
+                CommonVec3(luna_radius + 550.0, 0.0, 0.0),
+                CommonVec3(0.0, 0.0, 0.0),
+                CommonVec3(0.0, 0.0, 0.0),
             )
         },
         gs_positions={gs_id: (EcefVec3(Vec3(luna_radius, 0.0, 0.0)), gs_geo)},

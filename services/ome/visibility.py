@@ -18,6 +18,7 @@ import math
 from typing import Literal, NamedTuple
 
 from nodalarc.body_frames import BodyFrame
+from nodalarc.frames import CommonVec3
 from nodalarc.geo import compute_range_km
 from nodalarc.models.link_decisions import (
     GroundVisibilityRejectingEndpoint,
@@ -172,10 +173,10 @@ def compute_elevation_angle(
 
 
 def compute_angular_velocity(
-    pos_a: Vec3,
-    vel_a: Vec3,
-    pos_b: Vec3,
-    vel_b: Vec3,
+    pos_a: Vec3 | CommonVec3,
+    vel_a: Vec3 | CommonVec3,
+    pos_b: Vec3 | CommonVec3,
+    vel_b: Vec3 | CommonVec3,
 ) -> float:
     """Compute angular velocity between two satellites in deg/s.
 
@@ -485,6 +486,8 @@ def check_ground_visibility(
     """
     range_km = compute_range_km(gs_ecef, sat_ecef)
 
+    effective_max_range_km: float | None
+    range_rejecting_endpoint: GroundVisibilityRejectingEndpoint
     if gs_max_range_km is not None or sat_max_range_km is not None:
         effective_max_range_km = min(
             v for v in (gs_max_range_km, sat_max_range_km) if v is not None
@@ -499,10 +502,10 @@ def check_ground_visibility(
         range_rejecting_endpoint = _limiting_endpoint(gs_max_range_km, sat_max_range_km)
     else:
         effective_max_range_km = max_range_km
-        range_rejecting_endpoint: GroundVisibilityRejectingEndpoint = (
-            "both" if max_range_km is not None else "none"
-        )
+        range_rejecting_endpoint = "both" if max_range_km is not None else "none"
 
+    effective_max_tracking_rate_deg_s: float | None
+    tracking_rejecting_endpoint: GroundVisibilityRejectingEndpoint
     if gs_max_tracking_rate_deg_s is not None or sat_max_tracking_rate_deg_s is not None:
         effective_max_tracking_rate_deg_s = min(
             v for v in (gs_max_tracking_rate_deg_s, sat_max_tracking_rate_deg_s) if v is not None
@@ -520,9 +523,7 @@ def check_ground_visibility(
         )
     else:
         effective_max_tracking_rate_deg_s = max_tracking_rate_deg_s
-        tracking_rejecting_endpoint: GroundVisibilityRejectingEndpoint = (
-            "both" if max_tracking_rate_deg_s is not None else "none"
-        )
+        tracking_rejecting_endpoint = "both" if max_tracking_rate_deg_s is not None else "none"
 
     if not has_line_of_sight(gs_ecef, sat_ecef, body_frame):
         return GroundVisibility(
@@ -562,30 +563,31 @@ def check_ground_visibility(
             azimuth_deg=azimuth,
         )
 
-    if gs_boresight is not None and gs_field_of_regard_deg is None:
-        raise ValueError("Ground boresight visibility requires gs_field_of_regard_deg")
-    if gs_boresight is not None and not _ground_for_allows(
-        gs_ecef=gs_ecef,
-        gs_geo=gs_geo,
-        sat_ecef=sat_ecef,
-        boresight=gs_boresight,
-        field_of_regard_deg=gs_field_of_regard_deg,
-    ):
-        return GroundVisibility(
-            sat_id="",
-            visible=False,
-            elevation_deg=elevation,
-            range_km=range_km,
-            remaining_visible_s=None,
-            reject_reason="field_of_regard",
-            rejecting_endpoint="ground",
-            azimuth_deg=azimuth,
-        )
+    if gs_boresight is not None:
+        if gs_field_of_regard_deg is None:
+            raise ValueError("Ground boresight visibility requires gs_field_of_regard_deg")
+        if not _ground_for_allows(
+            gs_ecef=gs_ecef,
+            gs_geo=gs_geo,
+            sat_ecef=sat_ecef,
+            boresight=gs_boresight,
+            field_of_regard_deg=gs_field_of_regard_deg,
+        ):
+            return GroundVisibility(
+                sat_id="",
+                visible=False,
+                elevation_deg=elevation,
+                range_km=range_km,
+                remaining_visible_s=None,
+                reject_reason="field_of_regard",
+                rejecting_endpoint="ground",
+                azimuth_deg=azimuth,
+            )
 
     sat_off_nadir_deg = None
-    if sat_boresight is not None and sat_field_of_regard_deg is None:
-        raise ValueError("Satellite boresight visibility requires sat_field_of_regard_deg")
     if sat_boresight is not None:
+        if sat_field_of_regard_deg is None:
+            raise ValueError("Satellite boresight visibility requires sat_field_of_regard_deg")
         sat_off_nadir_deg = _sat_ground_off_nadir_deg(
             sat_ecef=sat_ecef,
             gs_ecef=gs_ecef,

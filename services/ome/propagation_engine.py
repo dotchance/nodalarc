@@ -12,16 +12,17 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Literal
 
 import numpy as np
 from nodalarc.body_frames import BodyFrame
 from nodalarc.ephemeris_runtime import CommonBodyState
-from nodalarc.frames import EcefVec3, EciVec3, Vec3
+from nodalarc.frames import CommonVec3, EcefVec3, EciVec3, GcrsVec3, Vec3
 from nodalarc.models.events import NodePosition
 from nodalarc.ome_runtime import (
     OmeAddressing,
+    PropagatorId,
     SatelliteNode,
+    SessionPropagatorId,
     satellite_node_id,
     satellite_propagator_id,
 )
@@ -42,11 +43,8 @@ from nodalarc.propagator import (
 from ome.propagator import (
     GeoPosition,
     propagate_keplerian_for_body,
-    propagate_sgp4_tle,
+    propagate_sgp4_tle_states,
 )
-
-PropagatorId = Literal["two-body", "keplerian-circular", "j2-mean-elements", "sgp4-tle"]
-SessionPropagatorId = PropagatorId | Literal["mixed"]
 
 
 @dataclass(frozen=True)
@@ -60,30 +58,45 @@ class PropagatedState:
     geodetic: GeoPosition
     propagator_id: PropagatorId
     central_body: str
-    position_common_km: EcefVec3 | None = None
-    velocity_common_km_s: EcefVec3 | None = None
-    body_origin_common_km: EcefVec3 | None = None
+    position_common_km: CommonVec3
+    velocity_common_km_s: CommonVec3
+    body_origin_common_km: CommonVec3
 
     def __post_init__(self) -> None:
-        if self.position_common_km is None:
-            object.__setattr__(self, "position_common_km", self.position_ecef_km)
-        if self.velocity_common_km_s is None:
-            object.__setattr__(self, "velocity_common_km_s", self.velocity_ecef_km_s)
-        if self.body_origin_common_km is None:
-            object.__setattr__(
-                self,
-                "body_origin_common_km",
-                EcefVec3(Vec3(0.0, 0.0, 0.0)),
-            )
+        # Common-frame slots refuse relabeled vectors at runtime. A plain
+        # Vec3 wearing an EcefVec3 or EciVec3 alias is exactly the
+        # frame-mislabel that once fed Earth-fixed state into cross-body
+        # geometry; only a constructed CommonVec3 passes.
+        for field_name in (
+            "position_common_km",
+            "velocity_common_km_s",
+            "body_origin_common_km",
+        ):
+            value = getattr(self, field_name)
+            if not isinstance(value, CommonVec3):
+                raise TypeError(
+                    f"PropagatedState.{field_name} requires CommonVec3; got "
+                    f"{type(value).__name__}: common-frame state must be "
+                    "constructed from GCRS vectors, never relabeled"
+                )
 
 
-def _common_vec(origin: Vec3, local_inertial: Vec3) -> EcefVec3:
-    return EcefVec3(
-        Vec3(
-            origin.x + local_inertial.x,
-            origin.y + local_inertial.y,
-            origin.z + local_inertial.z,
+def _common_vec(origin: Vec3, local_inertial: GcrsVec3) -> CommonVec3:
+    # The body-centered input must carry GcrsVec3 provenance. EcefVec3 is a
+    # NewType, invisible at runtime, so `pos_inertial = pos_ecef` (the exact
+    # defect that fed ITRS into cross-body geometry) would otherwise still
+    # compose silently. Only a vector deliberately constructed on the common
+    # axes passes.
+    if not isinstance(local_inertial, GcrsVec3):
+        raise TypeError(
+            f"common-frame composition requires GcrsVec3; got "
+            f"{type(local_inertial).__name__}: body-centered state must be "
+            "constructed on GCRS axes, never relabeled from a body-fixed frame"
         )
+    return CommonVec3(
+        origin.x + local_inertial.x,
+        origin.y + local_inertial.y,
+        origin.z + local_inertial.z,
     )
 
 
@@ -145,7 +158,7 @@ def propagate_satellites(
     # the ORIGINAL satellite order, so every downstream value and
     # iteration order is byte-unchanged from the scalar path.
     j2_by_body: dict[str, list[int]] = {}
-    sat_propagator_ids: list[str] = []
+    sat_propagator_ids: list[PropagatorId] = []
     for index, sat in enumerate(satellites):
         sat_propagator_ids.append(satellite_propagator_id(sat, propagator_id))
         if sat_propagator_ids[-1] == "j2-mean-elements":
@@ -221,6 +234,10 @@ def propagate_satellites(
             )
         if sat_propagator_id == "j2-mean-elements":
             pos_ecef, vel_ecef, geo, pos_inertial, vel_inertial = j2_states[index]
+            # Body-equatorial inertial axes enter composition as the common
+            # axes by session contract; the wrap is that deliberate claim.
+            pos_common_axes = GcrsVec3(*pos_inertial)
+            vel_common_axes = GcrsVec3(*vel_inertial)
         elif sat_propagator_id in ("two-body", "keplerian-circular"):
             anchor = element_anchor_epoch_unix(sat, node_id)
             canonical_phase = sim_time_unix - anchor
@@ -242,6 +259,8 @@ def propagate_satellites(
                     pos_inertial, vel_inertial, sim_time_unix, body_frame
                 )
                 geo = body_fixed_to_geodetic(pos_ecef, body_frame)
+            pos_common_axes = GcrsVec3(*pos_inertial)
+            vel_common_axes = GcrsVec3(*vel_inertial)
         else:
             if central_body != "earth":
                 raise ValueError(
@@ -253,17 +272,20 @@ def propagate_satellites(
                     f"Satellite {node_id} has no TLE lines; "
                     "orbit.propagator='sgp4-tle' requires a TLE constellation"
                 )
-            pos_ecef, vel_ecef, geo = propagate_sgp4_tle(
+            sgp4_states = propagate_sgp4_tle_states(
                 sat.tle_line_1,
                 sat.tle_line_2,
                 epoch_unix,
                 dt,
                 body_frame=body_frame,
             )
-            pos_inertial = pos_ecef
-            vel_inertial = vel_ecef
-        pos_common = _common_vec(body_state.position_km, pos_inertial)
-        vel_common = _common_vec(body_state.velocity_km_s, vel_inertial)
+            pos_ecef = sgp4_states.position_itrs
+            vel_ecef = sgp4_states.velocity_itrs
+            geo = sgp4_states.geodetic
+            pos_common_axes = sgp4_states.position_gcrs
+            vel_common_axes = sgp4_states.velocity_gcrs
+        pos_common = _common_vec(body_state.position_km, pos_common_axes)
+        vel_common = _common_vec(body_state.velocity_km_s, vel_common_axes)
         states[node_id] = PropagatedState(
             node_id=node_id,
             sim_time_unix=sim_time_unix,
@@ -271,7 +293,7 @@ def propagate_satellites(
             velocity_ecef_km_s=vel_ecef,
             position_common_km=pos_common,
             velocity_common_km_s=vel_common,
-            body_origin_common_km=EcefVec3(body_state.position_km),
+            body_origin_common_km=CommonVec3(*body_state.position_km),
             central_body=central_body,
             geodetic=geo,
             propagator_id=sat_propagator_id,

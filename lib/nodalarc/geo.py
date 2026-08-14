@@ -12,7 +12,7 @@ import math
 
 from nodalarc.body_frames import BodyFrame
 from nodalarc.constants import SPEED_OF_LIGHT_KM_S
-from nodalarc.frames import EcefVec3, GeoPosition, Vec3
+from nodalarc.frames import CommonVec3, EcefVec3, GeoPosition, Vec3
 
 
 def geodetic_to_body_fixed(
@@ -43,10 +43,10 @@ def geodetic_to_ecef(
 
 
 def compute_range_km(
-    pos_a: Vec3,
-    pos_b: Vec3,
+    pos_a: Vec3 | CommonVec3,
+    pos_b: Vec3 | CommonVec3,
 ) -> float:
-    """Euclidean distance between two ECEF positions in km."""
+    """Euclidean distance in km between two positions in one shared frame."""
     dx = pos_a[0] - pos_b[0]
     dy = pos_a[1] - pos_b[1]
     dz = pos_a[2] - pos_b[2]

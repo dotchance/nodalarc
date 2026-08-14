@@ -24,6 +24,37 @@ EciVec3 = NewType("EciVec3", Vec3)
 EcefVec3 = NewType("EcefVec3", Vec3)
 
 
+class CommonVec3(NamedTuple):
+    """A vector in the session's common frame (Earth-relative GCRS).
+
+    A distinct runtime class, not a NewType alias: a body-fixed or
+    body-inertial Vec3 cannot pass an isinstance check for it, so the
+    frame-relabeling that once fed ITRS into cross-body geometry is
+    refused at construction, not just in static checking.
+    """
+
+    x: float
+    y: float
+    z: float
+
+
+class GcrsVec3(NamedTuple):
+    """A body-centered vector on GCRS axes, before common-frame composition.
+
+    Common-frame composition adds the central body's common-frame origin to
+    a body-centered vector; that input must already be on the common axes.
+    A distinct runtime class for the same reason as CommonVec3: the ITRS
+    output of a propagator cannot flow into composition by relabeling. SGP4
+    constructs these from Skyfield's GCRS evaluation; the two-body and J2
+    propagators construct them from their body-equatorial inertial output,
+    which the session contract composes as the common axes.
+    """
+
+    x: float
+    y: float
+    z: float
+
+
 class GeoPosition(NamedTuple):
     """WGS84 geodetic position."""
 

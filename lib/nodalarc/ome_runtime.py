@@ -8,6 +8,21 @@ from typing import Literal, Protocol
 PropagatorId = Literal["two-body", "keplerian-circular", "j2-mean-elements", "sgp4-tle"]
 SessionPropagatorId = PropagatorId | Literal["mixed"]
 
+BodyFixedRealization = Literal["simplified_gmst", "skyfield_itrs"]
+
+# Which realization of "body-fixed" each propagator implementation emits.
+# The analytic propagators rotate inertial state by the session's simplified
+# GMST model; the SGP4 boundary takes Skyfield's true ITRS. The realizations
+# sit ~30 km apart at LEO radius, so same-body geometry may compare vectors
+# from one family only. Every implementation must declare itself here; the
+# resolver gate refuses a propagator with no declared realization.
+BODY_FIXED_REALIZATION: dict[PropagatorId, BodyFixedRealization] = {
+    "two-body": "simplified_gmst",
+    "keplerian-circular": "simplified_gmst",
+    "j2-mean-elements": "simplified_gmst",
+    "sgp4-tle": "skyfield_itrs",
+}
+
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from nodalarc.body_frames import BodyFrame, SupportedSurfaceBody

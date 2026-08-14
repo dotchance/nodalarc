@@ -108,30 +108,40 @@ def _state_vectors(
     )
 
 
-def _segment_intersects_sphere(
+def _segment_intersects_ellipsoid(
     a: Vec3 | CommonVec3,
     b: Vec3 | CommonVec3,
     *,
     center: Vec3 | CommonVec3,
-    radius_km: float,
+    equatorial_radius_km: float,
+    polar_radius_km: float,
 ) -> bool:
-    dx = b.x - a.x
-    dy = b.y - a.y
-    dz = b.z - a.z
+    # Scaling z by (equatorial/polar) about the center maps the oblate
+    # ellipsoid onto a sphere of equatorial radius; the closest-approach
+    # test runs in that scaled space so the minimizing point is the
+    # ellipsoid's own, not the sphere's.
+    z_scale = equatorial_radius_km / polar_radius_km
+    ax = a.x - center.x
+    ay = a.y - center.y
+    az = (a.z - center.z) * z_scale
+    bx = b.x - center.x
+    by = b.y - center.y
+    bz = (b.z - center.z) * z_scale
+    dx = bx - ax
+    dy = by - ay
+    dz = bz - az
     dd = dx * dx + dy * dy + dz * dz
     if dd == 0.0:
         return False
-    ax = a.x - center.x
-    ay = a.y - center.y
-    az = a.z - center.z
     t = max(0.0, min(1.0, -(ax * dx + ay * dy + az * dz) / dd))
     cx = ax + t * dx
     cy = ay + t * dy
     cz = az + t * dz
     # Same surface-representation tolerance as visibility.has_line_of_sight:
-    # an endpoint sitting numerically ON the sphere (a surface node in an
+    # an endpoint sitting numerically ON the surface (a surface node in an
     # inter-body link) must not read as inside it.
-    return cx * cx + cy * cy + cz * cz < radius_km * radius_km * (1.0 - 1e-12)
+    radius = equatorial_radius_km
+    return cx * cx + cy * cy + cz * cz < radius * radius * (1.0 - 1e-12)
 
 
 def _inter_body_occluded(
@@ -140,23 +150,34 @@ def _inter_body_occluded(
     *,
     body_frames: Mapping[str, BodyFrame],
 ) -> bool:
-    """Return whether the common-frame segment is blocked by either endpoint body."""
+    """Return whether the common-frame segment is blocked by either endpoint body.
+
+    Each body's oblate ellipsoid is evaluated under the current assumed-axes
+    contract: its polar axis is taken to lie along the common-frame z axis.
+    The orientation error this admits is bounded by the body's
+    equatorial-polar radius difference: for Earth (21.4 km oblateness, mean
+    pole within ~0.4 degrees of common z) the limb error is under 0.2 km;
+    for Luna (2.2 km oblateness, pole ~24 degrees off common z) it is under
+    2.2 km. A body-orientation authority replaces this contract when one
+    exists.
+    """
     bodies = {
         state_a.central_body: state_a.body_origin_common_km,
         state_b.central_body: state_b.body_origin_common_km,
     }
     for body_id, origin in bodies.items():
         try:
-            radius = body_frames[body_id].equatorial_radius_km
+            frame = body_frames[body_id]
         except KeyError as exc:
             raise ValueError(
                 f"ISL feasibility is missing resolved body primitive facts for body {body_id!r}"
             ) from exc
-        if _segment_intersects_sphere(
+        if _segment_intersects_ellipsoid(
             state_a.position_common_km,
             state_b.position_common_km,
             center=origin,
-            radius_km=radius,
+            equatorial_radius_km=frame.equatorial_radius_km,
+            polar_radius_km=frame.polar_radius_km,
         ):
             return True
     return False

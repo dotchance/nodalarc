@@ -245,7 +245,7 @@ def _authority_snapshot_interval_s(
     *,
     platform_snapshot_interval_s: float,
     max_latency_age_ticks: int,
-    step_seconds: int,
+    step_seconds: float,
 ) -> float:
     """Bound authoritative snapshots by the Scheduler freshness contract.
 
@@ -398,7 +398,7 @@ def run(
         epoch_unix=epoch_unix,
         duration_s=cfg.period,
         propagator_id=cfg.propagator_id,
-        step_seconds=int(cfg.resolved.time.step_seconds),
+        step_seconds=float(cfg.resolved.time.step_seconds),
         ground_scheduling=effective_ground_scheduling,
         polar_seam_enabled=cfg.polar_seam_enabled,
         latitude_threshold_deg=cfg.latitude_threshold_deg,
@@ -959,7 +959,9 @@ def _run_pacing(
         active_bodies=cfg.active_bodies,
     )
 
-    step_seconds = int(session.time.step_seconds)
+    # Grammar-legal fractional steps execute as declared; truncating here
+    # once ran step_seconds 1.5 as 1 and crashed on 0.5.
+    step_seconds = float(session.time.step_seconds)
     anchor_interval_ticks = max(1, int(300 / step_seconds))
     snapshot_interval_s = _authority_snapshot_interval_s(
         platform_snapshot_interval_s=platform_snapshot_interval_s,
@@ -1180,7 +1182,7 @@ def _run_pacing(
             time.sleep(wall_target - now_mono)
 
     logging.info(
-        "OME starting [build=%s, session_id=%s, sat_count=%d, gs_count=%d, epoch=%s, step=%ds, accel=%.1fx]",
+        "OME starting [build=%s, session_id=%s, sat_count=%d, gs_count=%d, epoch=%s, step=%gs, accel=%.1fx]",
         os.environ.get("NODAL_BUILD", "dev"),
         session_id,
         len(cfg.satellites),

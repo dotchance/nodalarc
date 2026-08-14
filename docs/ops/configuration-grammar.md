@@ -1614,7 +1614,12 @@ runtime execution:
 - `spice_kernel_stack` and `operator_supplied_spk` ephemeris providers;
 - ephemeris kernel frames other than `gcrs`;
 - bodies outside the supported Earth-Luna profile;
-- workload adapters other than `frr`.
+- workload adapters other than `frr`;
+- SGP4 and analytic propagators mixed under one central body, until they
+  share a body-fixed rotation authority;
+- link rules selecting a terminal whose `tracking_capacity` exceeds one;
+- access selections that give one station heterogeneous terminal physics
+  or divergent per-rule elevation masks.
 
 Unsupported features fail explicitly. They are never silently removed,
 flattened, translated to another feature, or treated as successful execution.

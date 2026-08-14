@@ -188,22 +188,22 @@ def build_session_ephemeris(
             )
 
     for gs_id, (_ecef, geo) in ctx.gs_positions.items():
-        reference_body = ctx.gs_reference_bodies.get(gs_id)
-        if reference_body is None:
+        gs_reference_body = ctx.gs_reference_bodies.get(gs_id)
+        if gs_reference_body is None:
             raise ValueError(
                 f"Session ephemeris missing resolved reference_body for ground node {gs_id!r}"
             )
-        if reference_body not in ctx.body_frames:
+        if gs_reference_body not in ctx.body_frames:
             raise ValueError(
                 f"Session ephemeris missing resolved body primitive facts for ground node "
-                f"{gs_id!r} reference_body={reference_body!r}"
+                f"{gs_id!r} reference_body={gs_reference_body!r}"
             )
         nodes[gs_id] = EphemerisNodeFixed(
             lat_deg=geo.lat_deg,
             lon_deg=geo.lon_deg,
             alt_km=geo.alt_km,
-            reference_body=reference_body,
-            frame_id=reference_body,
+            reference_body=gs_reference_body,
+            frame_id=gs_reference_body,
             **_meta(gs_id),
         )
 
@@ -801,7 +801,7 @@ def compute_step(
     ctx: StepContext,
     epoch_unix: float,
     step: int,
-    step_seconds: int,
+    step_seconds: float,
     timestamp_offset: float,
     isl_state: dict[tuple[str, str], tuple[bool, bool]],
     gs_state: dict[tuple[str, str], tuple[bool, bool, str]],
@@ -1003,7 +1003,7 @@ def precompute_timeline_window_from_context(
     ctx: StepContext,
     epoch_unix: float,
     duration_s: float,
-    step_seconds: int = 1,
+    step_seconds: float = 1.0,
     initial_isl_state: dict[tuple[str, str], tuple[bool, bool]] | None = None,
     initial_gs_state: dict[tuple[str, str], tuple[bool, bool, str]] | None = None,
     initial_associations: dict[tuple[str, str], tuple[int, int]] | None = None,
@@ -1071,7 +1071,7 @@ def precompute_timeline_window(
     epoch_unix: float,
     duration_s: float,
     propagator_id: SessionPropagatorId,
-    step_seconds: int = 1,
+    step_seconds: float = 1.0,
     ground_scheduling: GroundSchedulingConfig | None = None,
     polar_seam_enabled: bool = False,
     latitude_threshold_deg: float = 70.0,
@@ -1132,7 +1132,7 @@ def precompute_timeline(
     epoch_unix: float,
     duration_s: float,
     propagator_id: SessionPropagatorId,
-    step_seconds: int = 1,
+    step_seconds: float = 1.0,
     ground_scheduling: GroundSchedulingConfig | None = None,
     polar_seam_enabled: bool = False,
     latitude_threshold_deg: float = 70.0,

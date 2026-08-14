@@ -29,6 +29,8 @@ class FeatureCategory(StrEnum):
     PROTOCOL_ADAPTER = "protocol_adapter"
     EPHEMERIS_PROVIDER = "ephemeris_provider"
     EPHEMERIS_FRAME = "ephemeris_frame"
+    TERMINAL_CAPABILITY = "terminal_capability"
+    FRAME_REALIZATION = "frame_realization"
     ROUTING_PROTOCOL = "routing_protocol"
     ROUTING_CAPABILITY = "routing_capability"
     ADDRESSING_POOL = "addressing_pool"

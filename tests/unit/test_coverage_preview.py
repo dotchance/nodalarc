@@ -79,6 +79,86 @@ def test_per_station_coverage_present(demo_preview):
         assert len(station.reason) > 0
 
 
+def test_gap_intervals_fold_same_instant_events_and_drop_the_endpoint():
+    """Production event order puts each ClockTick before its own instant's
+    visibility events, and window generation emits both window endpoints.
+    Sampling on the tick therefore lagged connectivity by one step and the
+    endpoint tick added a phantom interval: a 20-second window read 30
+    seconds of gap, and a pass connected from t=0 read 66.7% coverage.
+    Intervals between instants are the measure; the final instant bounds
+    the window with no duration of its own."""
+    from types import SimpleNamespace
+
+    from ome.coverage_preview import _PREVIEW_STEP_SECONDS, _count_events
+
+    def tick(t):
+        return SimpleNamespace(event_type="ClockTick", data=SimpleNamespace(t=t))
+
+    def vis(up):
+        return SimpleNamespace(
+            event_type="VisibilityEvent",
+            data=SimpleNamespace(
+                node_a="gs-alpha",
+                node_b="sat-a",
+                link_type="ground",
+                visible=up,
+                scheduled=up,
+            ),
+        )
+
+    gs_file = SimpleNamespace(stations=[SimpleNamespace(name="alpha")])
+    addressing = SimpleNamespace(gs_id=lambda name: f"gs-{name}")
+
+    # 20-second window, never connected: exactly 20 seconds of gap.
+    _, stats = _count_events([tick(0), tick(10), tick(20)], frozenset(), gs_file, addressing, 20.0)
+    assert stats["total_steps"] == 2
+    assert stats["coverage_steps"]["gs-alpha"] == 0
+    assert stats["longest_gap_steps"]["gs-alpha"] * _PREVIEW_STEP_SECONDS == 20
+
+    # Connected from t=0 for the whole window: full coverage, zero gap.
+    _, stats = _count_events(
+        [tick(0), vis(True), tick(10), tick(20)], frozenset(), gs_file, addressing, 20.0
+    )
+    assert stats["total_steps"] == 2
+    assert stats["coverage_steps"]["gs-alpha"] == 2
+    assert stats["longest_gap_steps"]["gs-alpha"] == 0
+
+    # Alternating passes: gaps are the disconnected intervals, longest is
+    # one interval, and the endpoint transition adds nothing.
+    events = [
+        tick(0),
+        vis(True),
+        tick(10),
+        vis(False),
+        tick(20),
+        vis(True),
+        tick(30),
+        vis(False),
+        tick(40),
+    ]
+    _, stats = _count_events(events, frozenset(), gs_file, addressing, 40.0)
+    assert stats["total_steps"] == 4
+    assert stats["coverage_steps"]["gs-alpha"] == 2
+    assert stats["longest_gap_steps"]["gs-alpha"] == 1
+
+
+def test_longest_gap_is_contiguous_not_total(demo_preview):
+    """longest_gap_s once reported total disconnected time. The two are
+    distinct metrics: on the 36-satellite ring at least one station has
+    several separate passes, so its longest contiguous gap is strictly
+    shorter than its summed disconnected time."""
+    stations = demo_preview.ground_stations.per_station.values()
+    for station in stations:
+        assert station.total_disconnected_s >= 0
+        assert station.longest_gap_s <= station.total_disconnected_s
+        if station.coverage_pct >= 100.0:
+            assert station.longest_gap_s == 0.0
+            assert station.total_disconnected_s == 0.0
+    assert any(
+        0.0 < station.longest_gap_s < station.total_disconnected_s for station in stations
+    ), "no station shows multiple separate gaps; the metric distinction is unexercised"
+
+
 def test_demo_36_has_active_isls(demo_preview):
     # 36 sats in one plane with 4 ISL terminals → intra-plane ISLs should form
     assert demo_preview.isl.max_active > 0

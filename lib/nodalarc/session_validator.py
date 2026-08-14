@@ -264,18 +264,25 @@ def _check_segment_routing_indices(resolved: ResolvedSession) -> list[Validation
 def _check_ground_mbb_capacity(resolved: ResolvedSession) -> list[ValidationResult]:
     """MBB ground policy requires enough access capacity on that ground node."""
     results: list[ValidationResult] = []
+    # Allocation grants one link per rule-selected terminal interface. OME
+    # builds runtime inventory from the same selection, so counting every
+    # mounted block credited interfaces no rule can use and validation
+    # admitted sessions that starved at allocation. Stations no access rule
+    # selects never allocate, so they carry nothing to validate here.
+    selected_access = resolved.selected_access_terminals_by_node()
     for node in resolved.nodes:
         if node.kind != "ground_station" or node.ground_scheduling is None:
             continue
         scheduling = node.ground_scheduling
         if scheduling.handover_mode != "mbb":
             continue
+        selections = selected_access.get(node.node_id)
+        if not selections:
+            continue
         reserve = scheduling.mbb_reserve or 0
         required = 1 + reserve
         access_capacity = _terminal_capacity(
-            block.count * (block.tracking_capacity or 0)
-            for block in node.terminal_inventory
-            if block.endpoint_role == "access"
+            len(selection.interface_indices) for selection in selections
         )
         if access_capacity >= required:
             continue

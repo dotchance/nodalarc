@@ -94,6 +94,25 @@ class TestBoundaryGoldens:
         separation = _distance(states.position_itrs, states.position_gcrs)
         assert abs(separation - GOLDEN[dt_s]["separation_km"]) < 1e-3
 
+    def test_the_two_body_fixed_realizations_disagree_by_thirty_km(self):
+        """Why mixed same-body propagator populations are refused: one
+        physical GCRS state lands 30.316 km apart when rotated by the
+        session's simplified GMST model versus Skyfield's true ITRS. The
+        pin documents the gap the frame-realization gate exists to keep
+        out of same-body geometry."""
+        from nodalarc.propagator import eci_to_body_fixed
+
+        states = propagate_sgp4_tle_states(
+            ISS_TLE_LINE_1,
+            ISS_TLE_LINE_2,
+            ISS_TLE_EPOCH_UNIX,
+            0.0,
+            body_frame=EARTH_FRAME,
+        )
+        simplified = eci_to_body_fixed(Vec3(*states.position_gcrs), ISS_TLE_EPOCH_UNIX, EARTH_FRAME)
+        gap_km = _distance(states.position_itrs, simplified)
+        assert abs(gap_km - 30.316087395) < 1e-6
+
     def test_itrs_wrapper_is_unchanged(self):
         """The same-body contract every existing consumer keeps."""
         pos, vel, geo = propagate_sgp4_tle(

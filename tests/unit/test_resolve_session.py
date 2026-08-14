@@ -917,6 +917,195 @@ def test_explicit_pairs_must_stay_inside_resolved_endpoint_selectors() -> None:
         resolve_session(raw)
 
 
+def test_selecting_a_multi_user_terminal_is_refused_but_mounting_one_is_not() -> None:
+    """The shipped TDRS session mounts the 20-user MA terminal but its access
+    rule selects the ka_sa mount, so it resolves. Retargeting the space-side
+    selector at the MA mount must produce a typed terminal-capability
+    refusal: the runtime allocates one link per terminal interface."""
+    from pathlib import Path
+
+    from nodalarc.configuration_yaml import load_configuration_yaml
+    from nodalarc.runtime_support import FeatureCategory, UnsupportedFeatureError
+
+    root = Path(__file__).resolve().parents[2]
+    raw = load_configuration_yaml(
+        (root / "catalog/nodalarc/sessions/earth-geo-tdrs.yaml").read_bytes()
+    )
+    resolve_session(raw)  # mounted-but-unselected MA terminal stays legal
+
+    access_rule = next(rule for rule in raw["link_rules"] if rule["id"] == "geo_access")
+    space_terminal = access_rule["endpoints"][1]["terminal"]
+    assert {"mount": "ka_sa"} in space_terminal["all"]
+    space_terminal["all"] = [
+        {"role": "access"},
+        {"medium": "rf"},
+        {"mount": "s_ma"},
+    ]
+    with pytest.raises(UnsupportedFeatureError) as error:
+        resolve_session(raw)
+    refusals = [
+        feature
+        for feature in error.value.features
+        if feature.category == FeatureCategory.TERMINAL_CAPABILITY
+        and feature.value == "tracking_capacity"
+    ]
+    assert refusals, "no terminal-capability refusal raised"
+    assert "s_ma" in refusals[0].message
+    assert "tracking_capacity 20" in refusals[0].message
+
+
+def test_heterogeneous_selected_access_physics_is_refused_at_resolve() -> None:
+    """A second GEO access rule selecting the gateway's other terminal
+    family used to resolve and then die inside OME step-context
+    construction. The same collapse now runs at resolve time and produces
+    a typed refusal."""
+    from nodalarc.configuration_yaml import load_configuration_yaml
+    from nodalarc.runtime_support import FeatureCategory, UnsupportedFeatureError
+
+    root = Path(__file__).resolve().parents[2]
+    raw = load_configuration_yaml(
+        (root / "catalog/nodalarc/sessions/earth-geo-tdrs.yaml").read_bytes()
+    )
+    raw["link_rules"].append(
+        {
+            "id": "geo_access_alt",
+            "topology": {"mode": "visible_candidates"},
+            "endpoints": [
+                {
+                    "select": {"all": [{"segment": "ground"}, {"tag": "geo"}]},
+                    "terminal": {
+                        "all": [{"role": "access"}, {"medium": "rf"}, {"mount": "access_ka"}]
+                    },
+                    "min_elevation_deg": 5,
+                },
+                {
+                    "select": {"segment": "geo"},
+                    "terminal": {"all": [{"role": "access"}, {"medium": "rf"}, {"mount": "ka_sa"}]},
+                },
+            ],
+        }
+    )
+    with pytest.raises(UnsupportedFeatureError) as error:
+        resolver_module.resolve_session(raw)
+    assert any(
+        feature.category == FeatureCategory.TERMINAL_CAPABILITY
+        and feature.value == "heterogeneous_access_physics"
+        for feature in error.value.features
+    )
+
+
+def test_divergent_per_rule_elevation_masks_are_refused_at_resolve() -> None:
+    """Two access rules with identical terminal hardware but different
+    declared masks used to max-combine silently, suppressing candidates
+    the laxer rule declared. The station now refuses with a typed
+    per-rule mask feature."""
+    from nodalarc.configuration_yaml import load_configuration_yaml
+    from nodalarc.runtime_support import FeatureCategory, UnsupportedFeatureError
+
+    raw = _raw_session(ground_stations={"stations": [{}]})
+
+    node_path = raw.roots.user_root / raw.ground_node_ref.relative_path
+    node_doc = load_configuration_yaml(node_path.read_text(encoding="utf-8"))
+    mounts = node_doc["node"]["terminals"]
+    second = deepcopy(mounts[0])
+    second["id"] = "access2"
+    second["tags"] = ["access2"]
+    mounts.append(second)
+    node_path.write_text(yaml.safe_dump(node_doc), encoding="utf-8")
+
+    site_path = raw.roots.user_root / raw.site_refs[0].relative_path
+    site_doc = load_configuration_yaml(site_path.read_text(encoding="utf-8"))
+    site_doc["site"]["nodes"][0]["terminals"]["access2"] = {
+        "installed_count": 2,
+        "capabilities": {"boresight": {"mode": "local_vertical"}},
+    }
+    site_path.write_text(yaml.safe_dump(site_doc), encoding="utf-8")
+
+    access_rule = next(rule for rule in raw["link_rules"] if rule["id"] == "ground-access")
+    strict = deepcopy(access_rule)
+    strict["id"] = "ground-access-strict"
+    for rule, mount, mask in ((access_rule, "access", 25), (strict, "access2", 40)):
+        ground_endpoint, sat_endpoint = rule["endpoints"]
+        ground_endpoint["terminal"] = {
+            "all": [{"role": "access"}, {"medium": "rf"}, {"mount": mount}]
+        }
+        ground_endpoint["min_elevation_deg"] = mask
+    raw["link_rules"].append(strict)
+
+    with pytest.raises(UnsupportedFeatureError) as error:
+        resolve_session(raw)
+    refusals = [
+        feature
+        for feature in error.value.features
+        if feature.category == FeatureCategory.LINK_CONSTRAINT
+        and feature.value == "per_rule_min_elevation"
+    ]
+    assert refusals, "no per-rule mask refusal raised"
+    assert "ground-access-strict=40" in refusals[0].message
+
+
+def test_mixed_body_fixed_realizations_on_one_body_are_refused() -> None:
+    """An SGP4 satellite (Skyfield ITRS) joining an analytic population
+    (simplified GMST) under one central body is refused at resolve, with
+    the body and both families named. No link rule touches the added
+    segment: the trigger is population coexistence, because ground handover
+    ranking compares candidates across satellites even when no mixed ISL
+    pair exists."""
+    from nodalarc.runtime_support import FeatureCategory, UnsupportedFeatureError
+
+    raw = _raw_session()
+    set_ref = "user:space-node-sets/mixed-frame-tle.yaml"
+    set_path = raw.roots.user_root / "space-node-sets/mixed-frame-tle.yaml"
+    set_path.parent.mkdir(parents=True, exist_ok=True)
+    set_path.write_text(
+        yaml.safe_dump(
+            {
+                "space_node_set": {
+                    "id": "mixed-frame-tle",
+                    "nodes": [
+                        {
+                            "id": "sat-p00s00",
+                            "node": "nodalarc:nodes/space/geo-relay.yaml",
+                            "sgp4_tle": {
+                                "central_body": "nodalarc:bodies/earth.yaml",
+                                "line_1": (
+                                    "1 25544U 98067A   21075.51041667  .00001264"
+                                    "  00000-0  29660-4 0  9993"
+                                ),
+                                "line_2": (
+                                    "2 25544  51.6442  21.5417 0002426  95.1670"
+                                    "  21.8444 15.48974333273145"
+                                ),
+                            },
+                        }
+                    ],
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    raw["segments"].append({"id": "tle", "source": set_ref})
+    for entry in raw["addressing"]["loopbacks"]:
+        selector = entry["applies_to"]
+        entry["applies_to"] = {"any": [selector, {"segment": "tle"}]}
+    for domain in raw["routing"]["domains"]:
+        domain["selectors"].append({"segment": "tle"})
+
+    with pytest.raises(UnsupportedFeatureError) as error:
+        resolve_session(raw)
+    refusals = [
+        feature
+        for feature in error.value.features
+        if feature.category == FeatureCategory.FRAME_REALIZATION and feature.value == "earth"
+    ]
+    assert refusals, "no frame-realization refusal raised"
+    assert "simplified_gmst" in refusals[0].message
+    assert "skyfield_itrs" in refusals[0].message
+    assert not any(
+        rule["id"] not in {"ground-access", "space-isl"} for rule in raw["link_rules"]
+    ), "the trigger must not depend on any rule selecting the TLE segment"
+
+
 def test_nearest_visible_topology_fails_until_runtime_can_apply_it_per_tick() -> None:
     from nodalarc.runtime_support import FeatureCategory, UnsupportedFeatureError
 

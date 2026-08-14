@@ -224,6 +224,44 @@ NET_LINE = re.compile(
 )
 
 
+def test_rendered_nets_never_use_the_reserved_all_zero_system_id() -> None:
+    """The all-zero system id is reserved in IS-IS: FRR floods an LSP from
+    such a router but remote SPF never installs its prefixes, so the node is
+    reachable only by direct neighbors. Rendered through the FRR adapter for
+    every IS-IS domain member of the session that exposed the failure live,
+    no NET may carry it, and the first-resolved node renders the first id."""
+    resolution = load_session_resolution_from_file(
+        Path("catalog/nodalarc/sessions/earth-luna-dtn.yaml")
+    )
+    resolved = resolution.resolved
+    index = resolved.node_index_by_node_id()
+    sid_by_node = resolved.sid_index_by_node_id()
+
+    system_by_node: dict[str, str] = {}
+    for domain in resolved.routing_domains:
+        stack = resolve_domain_stack(domain)
+        for node_id in domain.node_ids:
+            vars_for_node = build_template_vars_from_resolved(
+                resolved,
+                node_id,
+                stack_variables=stack.template_variables,
+                node_sid_index=sid_by_node.get(node_id) if stack.segment_routing else None,
+            )
+            rendered = _render("isisd.conf.j2", vars_for_node)
+            nets = [m for m in map(NET_LINE.match, rendered.splitlines()) if m]
+            assert nets, f"{node_id}: no parseable NET in rendered isisd.conf"
+            for match in nets:
+                assert match.group("system") != "0000.0000.0000", (
+                    f"{node_id} rendered the reserved all-zero IS-IS system id"
+                )
+            system_by_node[node_id] = nets[0].group("system")
+
+    assert system_by_node, "session rendered no IS-IS domain members"
+    first = min(system_by_node, key=lambda node_id: index[node_id])
+    assert index[first] == 0, "fixture no longer places a routed node at index 0"
+    assert system_by_node[first] == "0000.0000.0001"
+
+
 def test_isis_system_ids_are_globally_unique_across_segments() -> None:
     """Four segments share plane/slot numbering in one IS-IS domain; every
     rendered NET must still be unique — identity comes from the resolver,

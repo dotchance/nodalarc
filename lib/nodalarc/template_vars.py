@@ -178,9 +178,14 @@ def _isis_system_id(resolved: ResolvedSession, node: ResolvedNode) -> str:
     Plane/slot restart at zero per segment, so they are never identity. The
     resolution-order node index is unique across the whole session; templates
     consume the formatted value verbatim and derive nothing.
+
+    The id space starts at one, not zero: the all-zero system id is reserved
+    in IS-IS, and FRR floods an LSP from such a router while remote SPF never
+    installs its prefixes, leaving the node reachable only by direct
+    neighbors.
     """
-    index = resolved.node_index_by_node_id()[node.node_id]
-    return f"0000.{(index >> 16) & 0xFFFF:04x}.{index & 0xFFFF:04x}"
+    value = resolved.node_index_by_node_id()[node.node_id] + 1
+    return f"0000.{(value >> 16) & 0xFFFF:04x}.{value & 0xFFFF:04x}"
 
 
 def _single_routing_domain_for_node(

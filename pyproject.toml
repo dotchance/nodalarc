@@ -15,7 +15,7 @@ runtime = [
     "grpcio>=1.74",
     "protobuf>=6.31.1,<7",
     "httpx>=0.28.1",
-    "asyncssh>=2.23.0",
+    "asyncssh>=2.23.1",
 ]
 dev = [
     { include-group = "runtime" },

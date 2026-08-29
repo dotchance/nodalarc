@@ -25,6 +25,16 @@ spec:
         - name: vf
           image: {{ required "images.vf is required" .Values.images.vf | quote }}
           imagePullPolicy: {{ .Values.imagePullPolicy }}
+{{- if or .Values.vf.vsApiUrl .Values.vf.wsUrl }}
+{{- if not (and .Values.vf.vsApiUrl .Values.vf.wsUrl) }}
+{{- fail "vf.vsApiUrl and vf.wsUrl must be set together: one URL rewritten without the other leaves the browser dialing the wrong origin for the missing half" }}
+{{- end }}
+          env:
+            - name: VS_API_URL
+              value: {{ .Values.vf.vsApiUrl | quote }}
+            - name: WS_URL
+              value: {{ .Values.vf.wsUrl | quote }}
+{{- end }}
           ports:
             - containerPort: 80
               hostPort: 3000

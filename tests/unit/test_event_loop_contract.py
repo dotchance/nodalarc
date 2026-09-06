@@ -82,7 +82,6 @@ BLOCKING_TERMINAL_NAMES = {
     "urlopen",
     "load_incluster_config",
     "load_kube_config",
-    "write_text_exclusive",
 }
 
 BLOCKING_ATTR_SUFFIXES = (

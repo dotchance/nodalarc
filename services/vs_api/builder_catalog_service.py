@@ -498,10 +498,7 @@ class _IdentityImportReadView:
                     f"{preserved_catalog_path(ref)} or an unambiguous {family}/"
                     f"{ref.relative_path.stem} document"
                 )
-            try:
-                return self.snapshot.read(ref)
-            except CatalogNotFoundError as error:
-                raise FileNotFoundError(str(ref)) from error
+            return self.snapshot.read(ref)
 
         assigned_ref = self.assigned_refs.get(component.position)
         if assigned_ref is not None and assigned_ref != ref:
@@ -527,10 +524,7 @@ class _OverlayImportReadView:
     def read(self, ref: CatalogRef) -> CatalogReadDocument:
         content = self.documents.get(ref)
         if content is None:
-            try:
-                return self.snapshot.read(ref)
-            except CatalogNotFoundError as error:
-                raise FileNotFoundError(str(ref)) from error
+            return self.snapshot.read(ref)
         return CatalogReadDocument(
             family=cast(CatalogFamily, ref.family),
             preserved_path=preserved_catalog_path(ref),

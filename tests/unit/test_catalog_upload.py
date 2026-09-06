@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 from nodalarc.catalog_closure import (
     CatalogClosureEntry,
+    CatalogDocumentNotFound,
     FilesystemCatalogReadView,
     preserved_catalog_path,
 )
@@ -19,6 +20,7 @@ from nodalarc.catalog_upload import (
     CatalogUploadError,
     CatalogUploadErrorCode,
     CatalogUploadSelection,
+    _UploadReadView,
     encode_catalog_upload,
     sha256_digest,
     verify_catalog_upload,
@@ -166,3 +168,12 @@ def test_every_upload_bound_is_a_typed_refusal(
         encode_catalog_upload(prepared, upload_id="upload-over-limit", limits=limits)
     assert raised.value.code is CatalogUploadErrorCode.LIMIT_EXCEEDED
     assert raised.value.evidence.limit_name == limit_name
+
+
+def test_upload_read_view_reports_a_missing_reference_as_not_found() -> None:
+    ref = CatalogRef("user:nodes/absent.yaml")
+
+    with pytest.raises(CatalogDocumentNotFound) as raised:
+        _UploadReadView(entries={}).read(ref)
+
+    assert raised.value.ref == ref

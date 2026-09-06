@@ -19,7 +19,10 @@ import yaml
 from nodalarc.catalog_closure import (
     CatalogClosureCollector,
     CatalogClosureError,
+    CatalogDocumentNotFound,
     CatalogReadDocument,
+    CatalogReadFailed,
+    CatalogReadRejected,
     preserved_catalog_path,
 )
 from nodalarc.catalog_refs import (
@@ -43,6 +46,7 @@ from nodalarc.catalog_repository import (
     CatalogReadOnlyError,
     CatalogReadSnapshot,
     CatalogRepository,
+    CatalogRepositoryError,
     CatalogRevision,
     CatalogScope,
     CatalogTransactionOrderError,
@@ -277,9 +281,20 @@ class FilesystemCatalogSnapshot(CatalogReadSnapshot):
         try:
             content = _read_exact_file(self._root_for(namespace), parsed_ref.relative_path)
         except CatalogNotFoundError as exc:
-            raise FileNotFoundError(str(parsed_ref)) from exc
+            raise CatalogDocumentNotFound(
+                parsed_ref, f"no catalog document for {parsed_ref}"
+            ) from exc
         except CatalogContainmentError as exc:
-            raise OSError(str(exc)) from exc
+            raise CatalogReadRejected(parsed_ref, str(exc)) from exc
+        except CatalogRepositoryError as exc:
+            raise CatalogReadFailed(parsed_ref, f"could not read {parsed_ref}: {exc}") from exc
+        except FileNotFoundError as exc:
+            # The document passed the existence check and vanished before the read.
+            raise CatalogDocumentNotFound(
+                parsed_ref, f"no catalog document for {parsed_ref}"
+            ) from exc
+        except OSError as exc:
+            raise CatalogReadFailed(parsed_ref, f"could not read {parsed_ref}: {exc}") from exc
         return CatalogReadDocument(
             family=family,
             preserved_path=preserved_catalog_path(parsed_ref),

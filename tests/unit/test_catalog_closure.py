@@ -13,7 +13,11 @@ from nodalarc.catalog_closure import (
     CatalogClosureCollector,
     CatalogClosureError,
     CatalogClosureErrorCode,
+    CatalogDocumentNotFound,
+    CatalogReadDocument,
+    CatalogReadFailed,
     FilesystemCatalogReadView,
+    load_catalog_object,
 )
 from nodalarc.catalog_paths import CatalogRoots
 from nodalarc.catalog_refs import CatalogRef
@@ -396,7 +400,7 @@ def test_dangling_reference_has_typed_chain_evidence(closure_fixture: ClosureFix
     assert raised.value.code is CatalogClosureErrorCode.DANGLING_REFERENCE
     assert raised.value.evidence.ref == "user:constellations/missing.yaml"
     assert raised.value.evidence.dependency_chain == ("user:constellations/missing.yaml",)
-    assert raised.value.evidence.cause_type == "FileNotFoundError"
+    assert raised.value.evidence.cause_type == "CatalogDocumentNotFound"
 
 
 def test_wrong_reference_family_fails_before_reading(closure_fixture: ClosureFixture) -> None:
@@ -463,7 +467,7 @@ def test_filesystem_read_view_rejects_symlink_escape(
 
     assert raised.value.code is CatalogClosureErrorCode.REFERENCE_PATH_REJECTED
     assert raised.value.evidence.ref == "user:constellations/demo-constellation.yaml"
-    assert raised.value.evidence.cause_type == "CatalogPathError"
+    assert raised.value.evidence.cause_type == "CatalogReadRejected"
 
 
 def test_yml_suffix_is_preserved_as_a_catalog_identity(
@@ -528,3 +532,101 @@ def test_every_shipped_session_has_a_complete_strict_exact_byte_closure(
     assert closure.file_count == len(closure.entries)
     assert closure.total_bytes == sum(entry.size_bytes for entry in closure.entries)
     assert all(entry.preserved_path.startswith("catalog/nodalarc/") for entry in closure.entries)
+
+
+def test_load_catalog_object_reads_and_validates_one_reference(
+    closure_fixture: ClosureFixture,
+) -> None:
+    wrapper, model = load_catalog_object(
+        CatalogRef("user:constellations/demo-constellation.yaml"),
+        FilesystemCatalogReadView(closure_fixture.roots),
+    )
+
+    assert wrapper == "constellation"
+    assert type(model).__name__ == "Constellation"
+    assert model.id == "demo-constellation"
+
+
+def test_read_view_reports_a_missing_document_as_not_found(
+    closure_fixture: ClosureFixture,
+) -> None:
+    with pytest.raises(CatalogDocumentNotFound) as raised:
+        FilesystemCatalogReadView(closure_fixture.roots).read(
+            CatalogRef("user:constellations/missing.yaml")
+        )
+
+    assert raised.value.ref == CatalogRef("user:constellations/missing.yaml")
+
+
+def test_load_catalog_object_rejects_bytes_that_are_not_utf8(
+    closure_fixture: ClosureFixture,
+) -> None:
+    ref = CatalogRef("nodalarc:bodies/earth.yaml")
+    utf16 = closure_fixture.contents[str(ref)].decode("utf-8").encode("utf-16")
+
+    class _Utf16View:
+        def read(self, requested: CatalogRef) -> CatalogReadDocument:
+            assert requested == ref
+            return CatalogReadDocument(
+                family="bodies",
+                preserved_path="catalog/nodalarc/bodies/earth.yaml",
+                yaml_bytes=utf16,
+            )
+
+    with pytest.raises(UnicodeDecodeError):
+        load_catalog_object(ref, _Utf16View())
+
+
+def test_filesystem_read_view_reports_a_read_error_as_read_failed(
+    closure_fixture: ClosureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ref = CatalogRef("user:constellations/demo-constellation.yaml")
+
+    def _denied(self: Path) -> bytes:
+        raise PermissionError(f"denied: {self}")
+
+    monkeypatch.setattr(Path, "read_bytes", _denied)
+
+    with pytest.raises(CatalogReadFailed) as raised:
+        FilesystemCatalogReadView(closure_fixture.roots).read(ref)
+
+    assert raised.value.ref == ref
+
+
+def test_collector_maps_a_read_failure_to_read_failed_with_chain_evidence(
+    closure_fixture: ClosureFixture,
+) -> None:
+    failing = CatalogRef("user:constellations/demo-constellation.yaml")
+    inner = FilesystemCatalogReadView(closure_fixture.roots)
+
+    class _FailingView:
+        def read(self, ref: CatalogRef) -> CatalogReadDocument:
+            if ref == failing:
+                raise CatalogReadFailed(ref, "disk unreadable")
+            return inner.read(ref)
+
+    with pytest.raises(CatalogClosureError) as raised:
+        CatalogClosureCollector.collect(closure_fixture.root_yaml, _FailingView())
+
+    assert raised.value.code is CatalogClosureErrorCode.READ_FAILED
+    assert raised.value.evidence.ref == str(failing)
+    assert raised.value.evidence.dependency_chain == (str(failing),)
+    assert raised.value.evidence.cause_type == "CatalogReadFailed"
+
+
+def test_filesystem_read_view_reports_a_read_time_disappearance_as_not_found(
+    closure_fixture: ClosureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ref = CatalogRef("user:constellations/demo-constellation.yaml")
+
+    def _vanished(self: Path) -> bytes:
+        raise FileNotFoundError(f"vanished: {self}")
+
+    monkeypatch.setattr(Path, "read_bytes", _vanished)
+
+    with pytest.raises(CatalogDocumentNotFound) as raised:
+        FilesystemCatalogReadView(closure_fixture.roots).read(ref)
+
+    assert raised.value.ref == ref

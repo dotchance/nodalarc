@@ -13,6 +13,7 @@ from nodalarc.catalog_closure import (
     CatalogClosureCollector,
     CatalogClosureEntry,
     CatalogClosureError,
+    CatalogDocumentNotFound,
     CatalogReadDocument,
     catalog_closure_digest,
 )
@@ -211,7 +212,9 @@ class _UploadReadView:
     entries: dict[CatalogRef, CatalogClosureEntry]
 
     def read(self, ref: CatalogRef) -> CatalogReadDocument:
-        entry = self.entries[ref]
+        entry = self.entries.get(ref)
+        if entry is None:
+            raise CatalogDocumentNotFound(ref, f"upload carries no document for {ref}")
         return CatalogReadDocument(
             family=entry.family,
             preserved_path=entry.preserved_path,

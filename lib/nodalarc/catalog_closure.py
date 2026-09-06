@@ -74,8 +74,39 @@ class CatalogReadDocument:
     yaml_bytes: bytes
 
 
+class CatalogReadError(Exception):
+    """A read view could not return exact bytes for one catalog reference.
+
+    For a failed storage read every ``CatalogReadView`` adapter raises one of
+    the subclasses below, so consumers classify by type and never by message
+    text or by the adapter's storage exceptions. Authoring adapters may also
+    raise their own domain refusals (a proposal that fails canonicalization,
+    an import that cannot be placed); those are not read errors, carry their
+    own evidence, and pass through the closure collector unchanged.
+    """
+
+    def __init__(self, ref: CatalogRef, message: str) -> None:
+        super().__init__(message)
+        self.ref = ref
+
+
+class CatalogDocumentNotFound(CatalogReadError):
+    """The reference is well formed and no document exists for it."""
+
+
+class CatalogReadRejected(CatalogReadError):
+    """The reference was refused before any read: containment or reference grammar."""
+
+
+class CatalogReadFailed(CatalogReadError):
+    """The document exists and its bytes could not be read."""
+
+
 class CatalogReadView(Protocol):
-    """A bounded source of exact YAML bytes for validated catalog refs."""
+    """A bounded source of exact YAML bytes for validated catalog refs.
+
+    ``read`` returns the exact bytes for ``ref`` or raises ``CatalogReadError``.
+    """
 
     def read(self, ref: CatalogRef) -> CatalogReadDocument: ...
 
@@ -94,14 +125,41 @@ class FilesystemCatalogReadView:
     def read(self, ref: CatalogRef) -> CatalogReadDocument:
         family = ref.family
         if family is None:
-            raise CatalogReferenceError(f"catalog reference {ref!r} has no family directory")
+            raise CatalogReadRejected(ref, f"catalog reference {ref!r} has no family directory")
         catalog_family_spec(family)
-        path = resolve_catalog_reference(ref, self.roots, label="catalog closure reference")
+        try:
+            path = resolve_catalog_reference(ref, self.roots, label="catalog closure reference")
+        except (CatalogPathError, CatalogReferenceError) as exc:
+            raise CatalogReadRejected(ref, str(exc)) from exc
+        except FileNotFoundError as exc:
+            raise CatalogDocumentNotFound(ref, f"no catalog document for {ref}") from exc
+        except OSError as exc:
+            raise CatalogReadFailed(ref, f"could not resolve {ref}: {exc}") from exc
+        try:
+            yaml_bytes = path.read_bytes()
+        except FileNotFoundError as exc:
+            # The document resolved and vanished before the read.
+            raise CatalogDocumentNotFound(ref, f"no catalog document for {ref}") from exc
+        except OSError as exc:
+            raise CatalogReadFailed(ref, f"could not read {ref}: {exc}") from exc
         return CatalogReadDocument(
             family=cast(CatalogFamily, family),
             preserved_path=preserved_catalog_path(ref),
-            yaml_bytes=path.read_bytes(),
+            yaml_bytes=yaml_bytes,
         )
+
+
+def load_catalog_object(ref: CatalogRef, view: CatalogReadView) -> tuple[str | None, BaseModel]:
+    """Read one referenced catalog object through ``view`` and validate it.
+
+    Returns the family wrapper key and the validated grammar model. Raises
+    ``CatalogReadError`` when the view cannot supply the bytes, and the
+    decoding, YAML or validation error unchanged when the bytes are not a
+    valid UTF-8 catalog object.
+    """
+    document = view.read(ref)
+    data = load_configuration_yaml(document.yaml_bytes.decode("utf-8")) or {}
+    return validate_referenced_configuration_document(ref, data)
 
 
 @dataclass(frozen=True)
@@ -438,7 +496,7 @@ class _CollectionState:
             return self.read_view.read(ref)
         except CatalogClosureError:
             raise
-        except (CatalogPathError, CatalogReferenceError) as exc:
+        except CatalogReadRejected as exc:
             raise _error(
                 CatalogClosureErrorCode.REFERENCE_PATH_REJECTED,
                 f"Catalog dependency path rejected for {ref}: {exc}",
@@ -447,7 +505,7 @@ class _CollectionState:
                 dependency_chain=dependency_chain,
                 cause=exc,
             ) from exc
-        except (FileNotFoundError, KeyError) as exc:
+        except CatalogDocumentNotFound as exc:
             raise _error(
                 CatalogClosureErrorCode.DANGLING_REFERENCE,
                 f"Catalog dependency not found for {ref}: {exc}",
@@ -456,7 +514,7 @@ class _CollectionState:
                 dependency_chain=dependency_chain,
                 cause=exc,
             ) from exc
-        except OSError as exc:
+        except CatalogReadFailed as exc:
             raise _error(
                 CatalogClosureErrorCode.READ_FAILED,
                 f"Could not read catalog dependency {ref}: {exc}",

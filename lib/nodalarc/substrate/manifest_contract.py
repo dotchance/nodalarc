@@ -241,6 +241,9 @@ class WiringManifest(_StrictModel):
         unknown = set(value) - set(REQUIRED_WIRING_PHASES)
         if unknown:
             raise ValueError(f"required_phases unknown: {', '.join(sorted(unknown))}")
+        if len(value) != len(set(value)):
+            repeated = sorted({phase for phase in value if value.count(phase) > 1})
+            raise ValueError(f"required_phases repeated: {', '.join(repeated)}")
         return value
 
     @field_validator("nodes")

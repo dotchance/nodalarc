@@ -13,6 +13,27 @@ from pydantic import BaseModel, ConfigDict, field_validator
 from nodalarc.substrate.manifest_contract import REQUIRED_WIRING_PHASES, WiringManifest
 
 PhaseState = Literal["pending_pid", "wiring", "ready", "failed", "dirty_kernel"]
+RowState = Literal["ready", "wiring"]
+
+# The phase clause of the workload release gate, rendered from the same closed
+# vocabulary ``ready_for`` applies and shaped like ``WiringPhaseResult``: the
+# phases are a list of records carrying only phase, status and error_message,
+# exactly the required names, each once, each ready. What the model refuses,
+# the clause refuses. The Operator embeds it in the init container's jq
+# predicate.
+_PHASE_RECORD_JQ = (
+    '(type == "object")'
+    ' and ((keys - ["error_message", "phase", "status"]) == [])'
+    ' and ((.phase | type) == "string")'
+    ' and (.status == "ready")'
+    ' and ((has("error_message") | not) or ((.error_message | type) == "string"))'
+)
+READY_PHASE_JQ_CLAUSE = (
+    '((.phases | type) == "array")'
+    f" and ((.phases | length) == {len(REQUIRED_WIRING_PHASES)})"
+    f" and all(.phases[]; {_PHASE_RECORD_JQ})"
+    f" and (([.phases[].phase] | sort) == {json.dumps(sorted(REQUIRED_WIRING_PHASES))})"
+)
 
 
 class WiringPhaseResult(BaseModel):
@@ -21,6 +42,13 @@ class WiringPhaseResult(BaseModel):
     phase: str
     status: PhaseState
     error_message: str = ""
+
+    @field_validator("phase")
+    @classmethod
+    def _known_phase(cls, value: str) -> str:
+        if value not in REQUIRED_WIRING_PHASES:
+            raise ValueError(f"unknown wiring phase: {value}")
+        return value
 
 
 class NodeWiringStatus(BaseModel):
@@ -62,58 +90,54 @@ class NodeWiringStatus(BaseModel):
             raise ValueError("wiring status identity fields must be non-empty")
         return value
 
+    @field_validator("phases")
+    @classmethod
+    def _unique_phases(cls, value: list[WiringPhaseResult]) -> list[WiringPhaseResult]:
+        names = [phase.phase for phase in value]
+        if len(names) != len(set(names)):
+            repeated = sorted({name for name in names if names.count(name) > 1})
+            raise ValueError(f"wiring status phases repeated: {', '.join(repeated)}")
+        return value
+
     def ready_for(self, manifest: WiringManifest) -> bool:
+        """The one readiness rule: this row proves every phase the manifest requires.
+
+        Session and generation must match, the row must be ready and clean,
+        and the row's phases must be exactly the manifest's required phases,
+        every one ready. Unknown and repeated phase names never reach here;
+        they fail validation.
+        """
         if self.session_id != manifest.session_id:
             return False
         if self.wiring_generation != manifest.wiring_generation:
             return False
         if self.status != "ready" or self.dirty_kernel:
             return False
-        phase_map = {phase.phase: phase for phase in self.phases}
-        for required in manifest.required_phases:
-            phase = phase_map.get(required)
-            if phase is None or phase.status != "ready":
-                return False
-        return True
+        if {phase.phase for phase in self.phases} != set(manifest.required_phases):
+            return False
+        return all(phase.status == "ready" for phase in self.phases)
 
 
-def ready_status(
+def wiring_row(
     node_id: str,
     manifest: WiringManifest,
     *,
     pod_uid: str,
     sandbox_id: str,
     netns_id: str,
+    state: RowState,
 ) -> NodeWiringStatus:
-    return NodeWiringStatus(
-        node_id=node_id,
-        session_id=manifest.session_id,
-        session_run_id=manifest.session_run_id,
-        wiring_generation=manifest.wiring_generation,
-        pod_uid=pod_uid,
-        sandbox_id=sandbox_id,
-        netns_id=netns_id,
-        status="ready",
-        phases=[WiringPhaseResult(phase=phase, status="ready") for phase in REQUIRED_WIRING_PHASES],
-        dirty_kernel=False,
-    )
+    """A complete row for one node in one of its two whole states.
 
-
-def rewiring_status(
-    node_id: str,
-    manifest: WiringManifest,
-    *,
-    pod_uid: str,
-    sandbox_id: str,
-    netns_id: str,
-) -> NodeWiringStatus:
-    """Non-ready row published BEFORE a destructive host rebuild.
-
-    Invalidates any previously ready proof for the node so the Scheduler
-    fails closed and the Operator returns the session to Wiring while this
-    host reconciles. Ready rows may reappear only after every phase and the
-    status write succeed.
+    ``ready``: every required phase proved, published after wiring succeeds.
+    ``wiring``: every required phase pending, published before a destructive
+    host rebuild so any earlier ready proof is invalidated, the Scheduler
+    fails closed and the Operator returns the session to Wiring until every
+    phase and the status write succeed again.
     """
+    if state not in ("ready", "wiring"):
+        raise ValueError(f"wiring_row state must be ready or wiring, got {state!r}")
+    phase_state: PhaseState = "ready" if state == "ready" else "pending_pid"
     return NodeWiringStatus(
         node_id=node_id,
         session_id=manifest.session_id,
@@ -122,9 +146,9 @@ def rewiring_status(
         pod_uid=pod_uid,
         sandbox_id=sandbox_id,
         netns_id=netns_id,
-        status="wiring",
+        status=state,
         phases=[
-            WiringPhaseResult(phase=phase, status="pending_pid") for phase in REQUIRED_WIRING_PHASES
+            WiringPhaseResult(phase=phase, status=phase_state) for phase in REQUIRED_WIRING_PHASES
         ],
         dirty_kernel=False,
     )

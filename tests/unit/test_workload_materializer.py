@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import kubernetes.client
 import pytest
+from nodalarc.substrate.wiring_status import READY_PHASE_JQ_CLAUSE
 from nodalarc.workload_target import workload_target_from_pod
 from nodalarc_operator.workloads.materializer import (
     WorkloadComposition,
@@ -133,3 +134,15 @@ def test_primary_container_must_be_one_of_the_declared_containers() -> None:
     )
     with pytest.raises(ValueError, match="names primary container 'frr' but declares"):
         _build(composition)
+
+
+def test_release_gate_phase_clause_is_the_shared_rule() -> None:
+    composition = _single("frr")
+    pod = _build(composition)
+    gate = next(
+        container for container in pod.spec.init_containers if container.name == "wiring-gate"
+    )
+    script = " ".join(gate.args or gate.command or [])
+
+    assert READY_PHASE_JQ_CLAUSE in script
+    assert "length > 0" not in script

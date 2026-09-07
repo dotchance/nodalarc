@@ -130,9 +130,8 @@ def wait_for_wiring_gate(
     *,
     k8s_v1: Any,
     namespace: str,
+    manifest: WiringManifest,
     expected_nodes: set[str],
-    session_id: str,
-    wiring_generation: str,
     timeout_s: float = 120.0,
     poll_s: float = 2.0,
     monotonic: Callable[[], float] = _time.monotonic,
@@ -151,22 +150,15 @@ def wait_for_wiring_gate(
         try:
             cm = k8s_v1.read_namespaced_config_map("nodalarc-wiring-status", namespace)
             _status_session, _status_generation, statuses = parse_status_configmap(cm.data)
-            ready = {
-                node_id
-                for node_id, status in statuses.items()
-                if status.session_id == session_id
-                and status.wiring_generation == wiring_generation
-                and status.status == "ready"
-                and not status.dirty_kernel
-                and all(phase.status == "ready" for phase in status.phases)
-            }
+            ready = {node_id for node_id, status in statuses.items() if status.ready_for(manifest)}
             if expected_nodes.issubset(ready):
                 log.info("Wiring gate passed: %d/%d nodes ready", len(ready), expected_count)
                 return
             current_statuses = {
                 node_id: status
                 for node_id, status in statuses.items()
-                if status.session_id == session_id and status.wiring_generation == wiring_generation
+                if status.session_id == manifest.session_id
+                and status.wiring_generation == manifest.wiring_generation
             }
             failure = failed_status_summary(current_statuses, node_ids=expected_nodes)
             if failure:
@@ -185,15 +177,7 @@ def wait_for_wiring_gate(
     try:
         cm = k8s_v1.read_namespaced_config_map("nodalarc-wiring-status", namespace)
         _status_session, _status_generation, statuses = parse_status_configmap(cm.data)
-        wired = {
-            node_id
-            for node_id, status in statuses.items()
-            if status.session_id == session_id
-            and status.wiring_generation == wiring_generation
-            and status.status == "ready"
-            and not status.dirty_kernel
-            and all(phase.status == "ready" for phase in status.phases)
-        }
+        wired = {node_id for node_id, status in statuses.items() if status.ready_for(manifest)}
     except Exception as exc:
         log.warning("Failed to read wiring status after timeout: %s", exc)
         wired = set()
@@ -429,9 +413,8 @@ def main() -> None:
     wait_for_wiring_gate(
         k8s_v1=k8s_v1,
         namespace=ns,
+        manifest=wiring_manifest,
         expected_nodes=expected_nodes,
-        session_id=session_id,
-        wiring_generation=wiring_manifest.wiring_generation,
     )
     substrate_measurements = wait_for_substrate_gate(
         k8s_v1=k8s_v1,

@@ -24,8 +24,8 @@ from nodalarc.substrate.manifest_contract import WiringManifest
 from nodalarc.substrate.wiring_status import (
     NodeWiringStatus,
     failed_status,
-    ready_status,
     status_configmap_data,
+    wiring_row,
 )
 from pydantic import ValidationError
 from pyroute2 import IPRoute
@@ -728,12 +728,13 @@ def execute_wiring(
                 dirty_kernel=True,
             )
         else:
-            statuses[node_id] = ready_status(
+            statuses[node_id] = wiring_row(
                 node_id,
                 manifest_model,
                 pod_uid=handle.pod_uid,
                 sandbox_id=handle.sandbox_id,
                 netns_id=handle.netns_id,
+                state="ready",
             )
 
     ready_count = sum(1 for status in statuses.values() if status.status == "ready")

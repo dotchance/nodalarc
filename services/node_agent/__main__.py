@@ -37,7 +37,7 @@ from nodalarc.nats_channels import (
     wiring_progress_subject,
 )
 from nodalarc.substrate.manifest_contract import WiringManifest
-from nodalarc.substrate.wiring_status import rewiring_status
+from nodalarc.substrate.wiring_status import wiring_row
 
 from node_agent import ops_events
 from node_agent.command_contract import RuntimeFence
@@ -550,12 +550,13 @@ def perform_rewire(
     try:
         write_wiring_status(
             {
-                node_id: rewiring_status(
+                node_id: wiring_row(
                     node_id,
                     manifest_model,
                     pod_uid=handles[node_id].pod_uid,
                     sandbox_id=handles[node_id].sandbox_id,
                     netns_id=handles[node_id].netns_id,
+                    state="wiring",
                 )
                 for node_id in expected_local
             },

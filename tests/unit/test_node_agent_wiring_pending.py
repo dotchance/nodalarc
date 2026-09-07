@@ -14,9 +14,8 @@ from unittest.mock import patch
 import pytest
 from nodalarc.substrate.manifest_contract import REQUIRED_WIRING_PHASES, WiringManifest
 from nodalarc.substrate.wiring_status import (
-    ready_status,
-    rewiring_status,
     status_configmap_data,
+    wiring_row,
 )
 from node_agent.pid_discovery import NamespaceHandle
 from node_agent.reconcile import wiring_status_is_current
@@ -145,12 +144,13 @@ def test_case_b_binds_rows_to_live_incarnations() -> None:
     manifest = _manifest({"sat-a": LOCAL_NODE})
     wired = {"sat-a": _handle("sat-a")}
     rows = {
-        node_id: ready_status(
+        node_id: wiring_row(
             node_id,
             manifest,
             pod_uid=handle.pod_uid,
             sandbox_id=handle.sandbox_id,
             netns_id=handle.netns_id,
+            state="ready",
         )
         for node_id, handle in wired.items()
     }
@@ -177,12 +177,13 @@ def test_rewiring_rows_invalidate_readiness() -> None:
     """The pre-destruction rows must fail every readiness consumer."""
     manifest = _manifest({"sat-a": LOCAL_NODE})
     handle = _handle("sat-a")
-    row = rewiring_status(
+    row = wiring_row(
         "sat-a",
         manifest,
         pod_uid=handle.pod_uid,
         sandbox_id=handle.sandbox_id,
         netns_id=handle.netns_id,
+        state="wiring",
     )
     assert row.status == "wiring"
     assert row.ready_for(manifest) is False
@@ -233,12 +234,13 @@ def test_rewire_transition_order_is_drain_invalidate_withdraw_rebuild_install_pu
     shared = _Shared(shared)
 
     ready_rows = {
-        "sat-a": ready_status(
+        "sat-a": wiring_row(
             "sat-a",
             manifest,
             pod_uid="pod-sat-a",
             sandbox_id="sb-sat-a",
             netns_id="4026532100",
+            state="ready",
         )
     }
     monkeypatch.setattr(na_main, "write_wiring_status", _fake_write)
@@ -282,12 +284,13 @@ def test_failed_rewire_keeps_handles_withdrawn(monkeypatch: pytest.MonkeyPatch) 
     gate.drain.return_value = True
 
     failed_rows = {
-        "sat-a": rewiring_status(
+        "sat-a": wiring_row(
             "sat-a",
             manifest,
             pod_uid=handle.pod_uid,
             sandbox_id=handle.sandbox_id,
             netns_id=handle.netns_id,
+            state="wiring",
         )
     }
     monkeypatch.setattr(na_main, "write_wiring_status", lambda *a, **k: None)

@@ -35,7 +35,12 @@ from nodalarc.runtime_config import (
 )
 from nodalarc.semantic_projection import resolved_session_semantic_digest
 from nodalarc.substrate.manifest_contract import REQUIRED_WIRING_PHASES, WiringManifest
-from nodalarc.substrate.wiring_status import failed_status, ready_status, status_configmap_data
+from nodalarc.substrate.wiring_status import (
+    READY_PHASE_JQ_CLAUSE,
+    failed_status,
+    status_configmap_data,
+    wiring_row,
+)
 from nodalarc_operator.session_deployer import (
     _create_terminal_ssh_keys,
     _required_substrate_pairs,
@@ -473,12 +478,13 @@ class TestWiringCompletion:
     def test_metadata_keys_are_not_counted_as_wired_nodes(self):
         manifest = _make_wiring_manifest()
         statuses = {
-            node_id: ready_status(
+            node_id: wiring_row(
                 node_id,
                 manifest,
                 pod_uid=f"pod-{node_id}",
                 sandbox_id=f"sb-{node_id}",
                 netns_id="4026532100",
+                state="ready",
             )
             for node_id in manifest.nodes
         }
@@ -507,17 +513,23 @@ class TestWiringCompletion:
     def test_unknown_status_node_fails_loudly(self):
         manifest = _make_wiring_manifest()
         statuses = {
-            node_id: ready_status(
+            node_id: wiring_row(
                 node_id,
                 manifest,
                 pod_uid=f"pod-{node_id}",
                 sandbox_id=f"sb-{node_id}",
                 netns_id="4026532100",
+                state="ready",
             )
             for node_id in manifest.nodes
         }
-        statuses["sat-P99S99"] = ready_status(
-            "sat-P99S99", manifest, pod_uid="pod-x", sandbox_id="sb-x", netns_id="4026532100"
+        statuses["sat-P99S99"] = wiring_row(
+            "sat-P99S99",
+            manifest,
+            pod_uid="pod-x",
+            sandbox_id="sb-x",
+            netns_id="4026532100",
+            state="ready",
         )
         status_data = status_configmap_data(statuses, manifest)
 
@@ -540,12 +552,13 @@ class TestWiringCompletion:
     def test_dirty_kernel_status_names_first_failure(self):
         manifest = _make_wiring_manifest()
         statuses = {
-            node_id: ready_status(
+            node_id: wiring_row(
                 node_id,
                 manifest,
                 pod_uid=f"pod-{node_id}",
                 sandbox_id=f"sb-{node_id}",
                 netns_id="4026532100",
+                state="ready",
             )
             for node_id in manifest.nodes
         }
@@ -1888,7 +1901,7 @@ class TestPodSpec:
             assert ".pod_uid == $uid" in script
             assert ".session_run_id == $run" in script
             assert ".netns_id == $ns" in script
-            assert 'all(.status == "ready")' in script
+            assert READY_PHASE_JQ_CLAUSE in script
             assert "readlink /proc/self/ns/net" in script
 
     def test_wiring_status_volume_projects_only_this_nodes_proof(self, tmp_path):

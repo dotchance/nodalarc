@@ -10,7 +10,7 @@ import json
 from types import SimpleNamespace
 
 import pytest
-from nodalarc.substrate.manifest_contract import REQUIRED_WIRING_PHASES
+from nodalarc.substrate.manifest_contract import REQUIRED_WIRING_PHASES, WiringManifest
 from nodalarc.substrate.measurement_contract import (
     RequiredSubstratePair,
     SubstrateMeasurement,
@@ -107,8 +107,8 @@ class _ManifestK8s:
         return response
 
 
-def _manifest_configmap() -> SimpleNamespace:
-    manifest = {
+def _manifest_dict() -> dict:
+    return {
         "session_id": SESSION_ID,
         "session_run_id": "run-gate-0001",
         "owner_uid": "owner-uid-1",
@@ -134,7 +134,14 @@ def _manifest_configmap() -> SimpleNamespace:
         "required_substrate_pairs": [],
         "isl_link_count": 0,
     }
-    encoded = base64.b64encode(gzip.compress(json.dumps(manifest).encode())).decode()
+
+
+def _manifest_model() -> WiringManifest:
+    return WiringManifest.model_validate(_manifest_dict())
+
+
+def _manifest_configmap() -> SimpleNamespace:
+    encoded = base64.b64encode(gzip.compress(json.dumps(_manifest_dict()).encode())).decode()
     return SimpleNamespace(data={"manifest.json.gz.b64": encoded})
 
 
@@ -186,8 +193,7 @@ def test_wiring_gate_passes_when_all_expected_nodes_are_wired() -> None:
         k8s_v1=k8s,
         namespace="nodalarc",
         expected_nodes={"sat-a", "sat-b"},
-        session_id=SESSION_ID,
-        wiring_generation=WIRING_GENERATION,
+        manifest=_manifest_model(),
         timeout_s=2.0,
         poll_s=0.0,
         sleep=lambda _seconds: None,
@@ -205,8 +211,7 @@ def test_wiring_gate_fails_closed_on_timeout() -> None:
             k8s_v1=_K8s({"sat-a"}),
             namespace="nodalarc",
             expected_nodes={"sat-a", "sat-b"},
-            session_id=SESSION_ID,
-            wiring_generation=WIRING_GENERATION,
+            manifest=_manifest_model(),
             timeout_s=2.0,
             poll_s=0.0,
             monotonic=clock.monotonic,
@@ -222,8 +227,7 @@ def _assert_gate_timeout(status_json: str) -> None:
             k8s_v1=_K8s(statuses={"sat-a": status_json}),
             namespace="nodalarc",
             expected_nodes={"sat-a"},
-            session_id=SESSION_ID,
-            wiring_generation=WIRING_GENERATION,
+            manifest=_manifest_model(),
             timeout_s=2.0,
             poll_s=0.0,
             monotonic=clock.monotonic,
@@ -237,8 +241,7 @@ def test_wiring_gate_rejects_dirty_kernel_status() -> None:
             k8s_v1=_K8s(statuses={"sat-a": _node_status("sat-a", dirty_kernel=True)}),
             namespace="nodalarc",
             expected_nodes={"sat-a"},
-            session_id=SESSION_ID,
-            wiring_generation=WIRING_GENERATION,
+            manifest=_manifest_model(),
             timeout_s=2.0,
             poll_s=0.0,
             sleep=lambda _seconds: None,
@@ -255,6 +258,13 @@ def test_wiring_gate_rejects_session_mismatch() -> None:
 
 def test_wiring_gate_rejects_non_ready_status() -> None:
     _assert_gate_timeout(_node_status("sat-a", status="wiring"))
+
+
+def test_wiring_gate_rejects_partial_phase_list() -> None:
+    """A row proving only some required phases is not ready, however ready they are."""
+    row = NodeWiringStatus.model_validate_json(_node_status("sat-a"))
+    partial = row.model_copy(update={"phases": row.phases[:1]})
+    _assert_gate_timeout(partial.model_dump_json())
 
 
 def test_wiring_gate_rejects_incomplete_phase_status() -> None:

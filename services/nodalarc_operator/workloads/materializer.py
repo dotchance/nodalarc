@@ -22,6 +22,7 @@ from nodalarc.substrate.manifest_contract import (
     POD_OWNER_UID_LABEL,
     POD_SESSION_RUN_LABEL,
 )
+from nodalarc.substrate.wiring_status import READY_PHASE_JQ_CLAUSE
 from nodalarc.workload_target import NODE_ID_LABEL, PRIMARY_CONTAINER_ANNOTATION
 
 SESSION_LABEL = "nodalarc.io/session"
@@ -54,7 +55,7 @@ _WIRING_GATE_SCRIPT = (
     '\'.status == "ready" and .dirty_kernel == false '
     "and .pod_uid == $uid and .session_run_id == $run "
     "and .netns_id == $ns "
-    'and (.phases | length > 0) and (.phases | all(.status == "ready"))\' '
+    f"and {READY_PHASE_JQ_CLAUSE}' "
     '"${status_file}" > /dev/null 2>&1; then\n'
     '    echo "wiring ready for ${NODE_ID}"\n'
     "    exit 0\n"

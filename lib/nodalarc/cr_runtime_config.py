@@ -5,7 +5,7 @@ from __future__ import annotations
 import tempfile
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, get_args
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -52,6 +52,92 @@ class ConstellationSpecSpec(BaseModel):
     def to_cr(self) -> dict[str, Any]:
         """The ``spec`` mapping to write into one ConstellationSpec."""
         return self.model_dump(mode="json", by_alias=True)
+
+
+# The phases the CRD declares (deploy/helm/crds/constellationspec.yaml); a unit
+# test keeps this literal and the CRD enum equal.
+ConstellationSpecPhase = Literal[
+    "Pending", "Rendering", "Creating", "Wiring", "Ready", "Error", "Terminating"
+]
+CONSTELLATION_SPEC_PHASES: tuple[str, ...] = get_args(ConstellationSpecPhase)
+
+
+class ConstellationSpecStatus(BaseModel):
+    """The one shape of ``status`` the Operator writes and every reader parses.
+
+    Every field is optional because the Operator writes status as JSON merge
+    patches: a patch carries only the fields it sets, and a CR observed early
+    in a reconcile, or before any reconcile, legitimately carries few or none.
+    The keys, the types and the phase vocabulary are the CRD's, no stricter:
+    what the API server stores, this parses. Readers normalize empty strings.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+
+    phase: ConstellationSpecPhase | None = None
+    message: str | None = None
+    session_id: str | None = Field(default=None, alias="sessionId")
+    session_name: str | None = Field(default=None, alias="sessionName")
+    session_run_id: str | None = Field(default=None, alias="sessionRunId")
+    pod_count: int | None = Field(default=None, alias="podCount")
+    ready_pods: int | None = Field(default=None, alias="readyPods")
+    wired_pods: int | None = Field(default=None, alias="wiredPods")
+    platform_hash: str | None = Field(default=None, alias="platformHash")
+    runtime_hash: str | None = Field(default=None, alias="runtimeHash")
+    document_digest: str | None = Field(default=None, alias="documentDigest")
+    closure_digest: str | None = Field(default=None, alias="closureDigest")
+    resolved_semantic_digest: str | None = Field(default=None, alias="resolvedSemanticDigest")
+    runtime_release: str | None = Field(default=None, alias="runtimeRelease")
+    runtime_build: str | None = Field(default=None, alias="runtimeBuild")
+    last_transition_time: str | None = Field(default=None, alias="lastTransitionTime")
+    observed_generation: int | None = Field(default=None, alias="observedGeneration")
+
+    @classmethod
+    def from_cr(cls, status: Mapping[str, Any] | None) -> ConstellationSpecStatus:
+        """Validate the ``status`` mapping of one ConstellationSpec; absent is empty."""
+        return cls.model_validate(dict(status or {}), strict=True)
+
+    def to_patch(self) -> dict[str, Any]:
+        """The merge patch this status expresses: only the fields it set."""
+        return self.model_dump(mode="json", by_alias=True, exclude_unset=True)
+
+    def observes_generation(self, generation: object) -> bool:
+        """Whether this status was computed from the given positive CR generation."""
+        if not isinstance(generation, int) or isinstance(generation, bool) or generation <= 0:
+            return False
+        return self.observed_generation == generation
+
+    def carries(self, intended: ConstellationSpecStatus) -> bool:
+        """Whether every field the intended status sets holds the same value here."""
+        return all(
+            getattr(self, name) == getattr(intended, name) for name in intended.model_fields_set
+        )
+
+    def runtime_mismatches(
+        self,
+        *,
+        document_digest: str,
+        closure_digest: str,
+        resolved_semantic_digest: str,
+        release: str,
+        build: str,
+    ) -> tuple[str, ...]:
+        """CR keys of the runtime proof fields that differ from the given values."""
+        pairs = (
+            ("documentDigest", self.document_digest, document_digest),
+            ("closureDigest", self.closure_digest, closure_digest),
+            ("resolvedSemanticDigest", self.resolved_semantic_digest, resolved_semantic_digest),
+            ("runtimeRelease", self.runtime_release, release),
+            ("runtimeBuild", self.runtime_build, build),
+        )
+        return tuple(key for key, observed, expected in pairs if observed != expected)
+
+
+def cr_status_observes_current_generation(cr: Mapping[str, Any]) -> bool:
+    """Whether a CR's status was computed from the CR's current generation."""
+    metadata = cr.get("metadata") or {}
+    status = ConstellationSpecStatus.from_cr(cr.get("status"))
+    return status.observes_generation(metadata.get("generation"))
 
 
 def load_cr_runtime_config(

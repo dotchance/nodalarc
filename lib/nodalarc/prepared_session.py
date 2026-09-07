@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from nodalarc.catalog_closure import (
+    CatalogClosure,
     CatalogClosureCollector,
     CatalogClosureEntry,
     CatalogReadView,
@@ -167,19 +168,33 @@ def _compare_precondition(
         )
 
 
-def prepare_session_files(
-    root_yaml: bytes,
-    read_view: CatalogReadView,
+@dataclass(frozen=True, slots=True)
+class _AdmittedInputs:
+    """Preparation inputs after format validation and the source-revision check."""
+
+    source_revision: str
+    expected_document_digest: str | None
+    expected_closure_digest: str | None
+    available_node_count: int
+    source_context: SourceContext
+
+
+def _admit_inputs(
     *,
     source: PreparedSessionSource,
+    run_id: str | None,
     source_revision: str,
-    expected_source_revision: str | None = None,
-    expected_document_digest: str | None = None,
-    expected_closure_digest: str | None = None,
+    expected_source_revision: str | None,
+    expected_document_digest: str | None,
+    expected_closure_digest: str | None,
     available_node_count: int,
-    run_id: str | None = None,
-) -> PreparedSessionFiles:
-    """Collect, precondition-check, resolve once, and gate one exact file set."""
+) -> _AdmittedInputs:
+    """Validate every input and refuse a stale source before any other work.
+
+    Both preparation entry points admit their inputs here first, so no
+    malformed expectation or bad node count is ever masked by a later
+    failure, and a stale source revision never costs a catalog read.
+    """
     actual_source_revision = _validated_digest(source_revision, label="source_revision")
     expected_revision = (
         _validated_digest(expected_source_revision, label="expected_source_revision")
@@ -200,26 +215,93 @@ def prepare_session_files(
         raise TypeError("available_node_count must be an integer")
     if available_node_count < 0:
         raise ValueError("available_node_count must be non-negative")
-
     source_context = SourceContext(origin=source.origin, run_id=run_id)
-
     _compare_precondition(
         expected_revision,
         actual_source_revision,
         code=PreparedSessionErrorCode.STALE_SOURCE_REVISION,
         label="source revision",
     )
+    return _AdmittedInputs(
+        source_revision=actual_source_revision,
+        expected_document_digest=expected_document,
+        expected_closure_digest=expected_closure,
+        available_node_count=available_node_count,
+        source_context=source_context,
+    )
 
+
+def prepare_session_files(
+    root_yaml: bytes,
+    read_view: CatalogReadView,
+    *,
+    source: PreparedSessionSource,
+    source_revision: str,
+    expected_source_revision: str | None = None,
+    expected_document_digest: str | None = None,
+    expected_closure_digest: str | None = None,
+    available_node_count: int,
+    run_id: str | None = None,
+) -> PreparedSessionFiles:
+    """Admit the inputs, collect, then precondition-check, resolve and gate."""
+    inputs = _admit_inputs(
+        source=source,
+        run_id=run_id,
+        source_revision=source_revision,
+        expected_source_revision=expected_source_revision,
+        expected_document_digest=expected_document_digest,
+        expected_closure_digest=expected_closure_digest,
+        available_node_count=available_node_count,
+    )
     closure = CatalogClosureCollector.collect(root_yaml, read_view)
+    return _prepare_admitted(closure, inputs, source=source)
+
+
+def prepare_collected_session(
+    closure: CatalogClosure,
+    *,
+    source: PreparedSessionSource,
+    source_revision: str,
+    expected_source_revision: str | None = None,
+    expected_document_digest: str | None = None,
+    expected_closure_digest: str | None = None,
+    available_node_count: int,
+    run_id: str | None = None,
+) -> PreparedSessionFiles:
+    """Admit the inputs, then precondition-check, resolve and gate a collected closure.
+
+    The closure is the only content authority: resolution reads the exact
+    bytes it captured, never a live view.
+    """
+    inputs = _admit_inputs(
+        source=source,
+        run_id=run_id,
+        source_revision=source_revision,
+        expected_source_revision=expected_source_revision,
+        expected_document_digest=expected_document_digest,
+        expected_closure_digest=expected_closure_digest,
+        available_node_count=available_node_count,
+    )
+    return _prepare_admitted(closure, inputs, source=source)
+
+
+def _prepare_admitted(
+    closure: CatalogClosure,
+    inputs: _AdmittedInputs,
+    *,
+    source: PreparedSessionSource,
+) -> PreparedSessionFiles:
+    source_context = inputs.source_context
+    actual_source_revision = inputs.source_revision
 
     _compare_precondition(
-        expected_document,
+        inputs.expected_document_digest,
         closure.document_digest,
         code=PreparedSessionErrorCode.STALE_DOCUMENT_DIGEST,
         label="session document digest",
     )
     _compare_precondition(
-        expected_closure,
+        inputs.expected_closure_digest,
         closure.closure_digest,
         code=PreparedSessionErrorCode.STALE_CLOSURE_DIGEST,
         label="dependency closure digest",
@@ -234,7 +316,7 @@ def prepare_session_files(
 
     readiness = validate_session_readiness(
         resolution.resolved,
-        available_node_count=available_node_count,
+        available_node_count=inputs.available_node_count,
     )
     report = build_validation_report(resolution.resolved, readiness)
     if report.errors:

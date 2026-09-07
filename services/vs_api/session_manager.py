@@ -20,6 +20,8 @@ from nodalarc.cr_runtime_config import (
     CR_NAME,
     CR_PLURAL,
     CR_VERSION,
+    ConstellationSpecStatus,
+    cr_status_observes_current_generation,
 )
 from nodalarc.platform_config import get_platform_config
 from pydantic import ValidationError
@@ -58,18 +60,6 @@ _TransitionStartedCallback = Callable[[], Awaitable[None]]
 _UploadResourceObservedCallback = Callable[[CatalogUploadResourceEvidence], None]
 _ConstellationSpecObservedCallback = Callable[[Mapping[str, Any]], Awaitable[None]]
 _DeploymentFreshnessCheck = Callable[[PreparedCatalogSessionDeployment], None]
-
-
-def _cr_status_observes_current_generation(cr: dict) -> bool:
-    """Return true when CR status belongs to the current spec generation."""
-    metadata = cr.get("metadata") or {}
-    status = cr.get("status") or {}
-    try:
-        generation = int(metadata.get("generation", 0))
-        observed_generation = int(status.get("observedGeneration", 0))
-    except TypeError, ValueError:
-        return False
-    return generation > 0 and observed_generation == generation
 
 
 def _api_status(exc: BaseException) -> int | None:
@@ -447,9 +437,10 @@ class SessionManager:
                     name=CR_NAME,
                 ),
             )
-            phase = cr.get("status", {}).get("phase", "")
-            message = cr.get("status", {}).get("message", "")
-            if not _cr_status_observes_current_generation(cr):
+            observed = ConstellationSpecStatus.from_cr(cr.get("status"))
+            phase = observed.phase or ""
+            message = observed.message or ""
+            if not cr_status_observes_current_generation(cr):
                 await progress("Waiting for operator to observe new session spec")
                 await asyncio.sleep(1)
                 continue

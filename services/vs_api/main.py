@@ -63,6 +63,8 @@ from nodalarc.cr_runtime_config import (
     CR_PLURAL,
     CR_VERSION,
     ConstellationSpecSpec,
+    ConstellationSpecStatus,
+    cr_status_observes_current_generation,
     load_cr_runtime_config,
 )
 from nodalarc.db.queries import (
@@ -920,25 +922,21 @@ def _cr_ready_identity(cr: dict[str, Any]) -> tuple[int, str] | None:
     reserved for actual changes and must run off the event loop.
     """
     metadata = cr.get("metadata") or {}
-    status = cr.get("status") or {}
-
+    status = ConstellationSpecStatus.from_cr(cr.get("status"))
     generation = _as_positive_int(metadata.get("generation"))
-    observed_generation = _as_positive_int(status.get("observedGeneration"))
-    if generation is None or observed_generation != generation:
+    if generation is None or not status.observes_generation(generation):
         return None
-    if status.get("phase") != "Ready":
+    if status.phase != "Ready":
         return None
-    ready_pods = _as_positive_int(status.get("readyPods"))
-    pod_count = _as_positive_int(status.get("podCount"))
-    wired_pods = _as_positive_int(status.get("wiredPods"))
-    if pod_count is None or ready_pods != pod_count:
+    # The readiness rule is the reader's: counts must be positive and agree.
+    pod_count = _as_positive_int(status.pod_count)
+    if pod_count is None or _as_positive_int(status.ready_pods) != pod_count:
         return None
-    if wired_pods != pod_count:
+    if _as_positive_int(status.wired_pods) != pod_count:
         return None
-    session_run_id = str(status.get("sessionRunId") or "")
-    if not session_run_id:
+    if not status.session_run_id:
         raise ValueError("Ready ConstellationSpec is missing status.sessionRunId")
-    return generation, sanitize_session_id(session_run_id)
+    return generation, sanitize_session_id(status.session_run_id)
 
 
 def _extract_ready_cr_session(cr: dict[str, Any]) -> CRSessionIdentity | None:
@@ -961,9 +959,8 @@ def _extract_cr_session(
     """
 
     metadata = cr.get("metadata") or {}
-    status = cr.get("status") or {}
+    status = ConstellationSpecStatus.from_cr(cr.get("status"))
     spec = cr.get("spec") or {}
-
     if require_ready:
         ident = _cr_ready_identity(cr)
         if ident is None:
@@ -971,13 +968,11 @@ def _extract_cr_session(
         generation, session_run_id = ident
     else:
         generation = _as_positive_int(metadata.get("generation"))
-        observed_generation = _as_positive_int(status.get("observedGeneration"))
-        if generation is None or observed_generation != generation:
+        if generation is None or not status.observes_generation(generation):
             return None
-        raw_run_id = str(status.get("sessionRunId") or "")
-        if not raw_run_id:
+        if not status.session_run_id:
             return None
-        session_run_id = sanitize_session_id(raw_run_id)
+        session_run_id = sanitize_session_id(status.session_run_id)
 
     session_yaml = ConstellationSpecSpec.from_cr(spec).session_yaml
 
@@ -991,22 +986,19 @@ def _extract_cr_session(
     resolution = runtime_config.resolution
     session = resolution.resolved
     proof = runtime_config.proof
-    expected_runtime_status = {
-        "documentDigest": proof.document_digest,
-        "closureDigest": proof.closure_digest,
-        "resolvedSemanticDigest": proof.resolved_semantic_digest,
-        "runtimeRelease": _runtime_release_identity(),
-        "runtimeBuild": _runtime_build_identity(),
-    }
-    for field, expected in expected_runtime_status.items():
-        observed = status.get(field)
-        if observed != expected:
-            raise ValueError(
-                f"ConstellationSpec status.{field} does not match verified runtime configuration "
-                f"({observed!r} != {expected!r})"
-            )
-
-    status_name = str(status.get("sessionName") or "")
+    mismatches = status.runtime_mismatches(
+        document_digest=proof.document_digest,
+        closure_digest=proof.closure_digest,
+        resolved_semantic_digest=proof.resolved_semantic_digest,
+        release=_runtime_release_identity(),
+        build=_runtime_build_identity(),
+    )
+    if mismatches:
+        raise ValueError(
+            "ConstellationSpec status does not match verified runtime configuration: "
+            + ", ".join(f"status.{key}" for key in mismatches)
+        )
+    status_name = status.session_name or ""
     if require_ready and not status_name:
         raise ValueError("Ready ConstellationSpec is missing status.sessionName")
     if status_name and status_name != session.session.name:
@@ -1122,15 +1114,6 @@ async def _reconcile_interrupted_transition(cr: dict[str, Any] | None) -> None:
         # Fail closed: an unreadable or unreconciled operation remains active in
         # the durable store and admission continues to refuse another switch.
         log.error("Transition operation startup reconciliation failed", exc_info=True)
-
-
-def _cr_status_observes_current_generation(cr: dict[str, Any]) -> bool:
-    """Return true when CR status belongs to the current spec generation."""
-    metadata = cr.get("metadata") or {}
-    status = cr.get("status") or {}
-    generation = _as_positive_int(metadata.get("generation"))
-    observed_generation = _as_positive_int(status.get("observedGeneration"))
-    return generation is not None and observed_generation == generation
 
 
 def _mark_session_manager_ready(_session: ResolvedSession, source_id: str) -> None:
@@ -1541,13 +1524,14 @@ async def _nats_subscriber() -> None:
 
     def _candidate_from_cr(cr: dict[str, Any]) -> CRSessionIdentity | None:
         nonlocal _cr_phase, _cr_message
-        _cr_phase = cr.get("status", {}).get("phase", "")
-        _cr_message = cr.get("status", {}).get("message", "")
+        observed = ConstellationSpecStatus.from_cr(cr.get("status"))
+        _cr_phase = observed.phase or ""
+        _cr_message = observed.message or ""
         if _cr_phase == "Ready":
             return _extract_ready_cr_session(cr)
         if _cr_phase in ("Pending", "Creating", "Wiring"):
             return _extract_current_cr_session(cr)
-        if _cr_phase == "Error" and _cr_status_observes_current_generation(cr):
+        if _cr_phase == "Error" and cr_status_observes_current_generation(cr):
             if _session_manager:
                 _session_manager._status = "error"
                 _session_manager.status_detail = _cr_message or "Operator reported error"
@@ -3356,7 +3340,7 @@ def _constellation_spec_observation(cr: Any) -> TransitionConstellationSpecObser
     if not isinstance(cr, dict):
         raise TypeError("ConstellationSpec observation must be a mapping")
     metadata = cr.get("metadata") or {}
-    status = cr.get("status") or {}
+    status = ConstellationSpecStatus.from_cr(cr.get("status"))
     namespace = _nonempty_string(metadata.get("namespace"))
     name = _nonempty_string(metadata.get("name"))
     generation = _as_positive_int(metadata.get("generation"))
@@ -3367,17 +3351,17 @@ def _constellation_spec_observation(cr: Any) -> TransitionConstellationSpecObser
         name=name,
         generation=generation,
         status=TransitionRuntimeStatusProof(
-            observed_generation=_as_positive_int(status.get("observedGeneration")),
-            phase=_nonempty_string(status.get("phase")),
-            session_id=_nonempty_string(status.get("sessionRunId")),
-            pod_count=_as_nonnegative_int(status.get("podCount")),
-            ready_pods=_as_nonnegative_int(status.get("readyPods")),
-            wired_pods=_as_nonnegative_int(status.get("wiredPods")),
-            document_digest=_nonempty_string(status.get("documentDigest")),
-            closure_digest=_nonempty_string(status.get("closureDigest")),
-            resolved_semantic_digest=_nonempty_string(status.get("resolvedSemanticDigest")),
-            release=_nonempty_string(status.get("runtimeRelease")),
-            build=_nonempty_string(status.get("runtimeBuild")),
+            observed_generation=_as_positive_int(status.observed_generation),
+            phase=status.phase,
+            session_id=status.session_run_id or None,
+            pod_count=_as_nonnegative_int(status.pod_count),
+            ready_pods=_as_nonnegative_int(status.ready_pods),
+            wired_pods=_as_nonnegative_int(status.wired_pods),
+            document_digest=status.document_digest or None,
+            closure_digest=status.closure_digest or None,
+            resolved_semantic_digest=status.resolved_semantic_digest or None,
+            release=status.runtime_release or None,
+            build=status.runtime_build or None,
         ),
     )
 
@@ -4122,9 +4106,10 @@ async def _poll_cr_until_ready() -> None:
                     namespace=ns,
                 )
                 upload_reconciled = True
-            phase = cr.get("status", {}).get("phase", "")
-            message = cr.get("status", {}).get("message", "")
-            status_is_current = _cr_status_observes_current_generation(cr)
+            observed = ConstellationSpecStatus.from_cr(cr.get("status"))
+            phase = observed.phase or ""
+            message = observed.message or ""
+            status_is_current = cr_status_observes_current_generation(cr)
             # Try to load session_id on each tick — the ConfigMap appears
             if _session_manager and phase != "Wiring" and status_is_current:
                 # During Wiring, Node Agent NATS progress owns _status_detail.
@@ -4263,8 +4248,9 @@ def main() -> None:
             plural=CR_PLURAL,
             name=CR_NAME,
         )
-        phase = str(cr.get("status", {}).get("phase") or "")
-        message = str(cr.get("status", {}).get("message") or "")
+        observed = ConstellationSpecStatus.from_cr(cr.get("status"))
+        phase = observed.phase or ""
+        message = observed.message or ""
         if phase == "Ready":
             ready = _extract_ready_cr_session(cr)
             if ready is None:

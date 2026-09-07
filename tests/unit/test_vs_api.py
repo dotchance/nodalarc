@@ -405,14 +405,14 @@ class TestConstellationCRReadiness:
 
         cr = _constellation_cr(phase="Error", generation=3, observed_generation=2)
 
-        assert m._cr_status_observes_current_generation(cr) is False
+        assert m.cr_status_observes_current_generation(cr) is False
 
     def test_generation_current_helper_accepts_current_error_status(self):
         import vs_api.main as m
 
         cr = _constellation_cr(phase="Error", generation=3, observed_generation=3)
 
-        assert m._cr_status_observes_current_generation(cr) is True
+        assert m.cr_status_observes_current_generation(cr) is True
 
     def test_extract_ready_cr_session_rejects_non_ready_phase(self):
         import vs_api.main as m
@@ -427,6 +427,14 @@ class TestConstellationCRReadiness:
         ready = _extract_ready_session(m, _constellation_cr(ready_pods=42, pod_count=43))
 
         assert ready is None
+
+    def test_ready_identity_requires_positive_agreeing_counts(self):
+        import vs_api.main as m
+
+        for count in (-1, 0):
+            cr = _constellation_cr(ready_pods=count, pod_count=count, wired_pods=count)
+            assert m._cr_ready_identity(cr) is None
+        assert m._cr_ready_identity(_constellation_cr()) is not None
 
     def test_extract_ready_cr_session_rejects_incomplete_wiring_status(self):
         import vs_api.main as m

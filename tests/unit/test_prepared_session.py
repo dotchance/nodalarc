@@ -26,11 +26,13 @@ from nodalarc.prepared_session import (
     PreparedSessionErrorCode,
     PreparedSessionFiles,
     PreparedSessionSource,
+    prepare_collected_session,
     prepare_session_files,
 )
 from nodalarc.resolve_session import SessionResolution, resolve_session_with_assets
 from nodalarc.runtime_support import FeatureCategory, UnsupportedFeatureError
 from nodalarc.semantic_projection import resolved_session_semantic_digest
+from pydantic import ValidationError
 
 ROOT = Path(__file__).resolve().parents[2]
 SHIPPED_ROOT = ROOT / "catalog" / "nodalarc"
@@ -461,3 +463,66 @@ def test_resolution_reads_the_captured_closure_not_the_live_view(
     assert resolved_session_semantic_digest(prepared.resolution.resolved) == captured
     always_altered = _MutatingView(prepared_fixture.read_view, ORBIT_REF, altered, altered_from=1)
     assert _semantic_digest(prepared_fixture.root_yaml, always_altered) != captured
+
+
+def test_collected_preparation_is_the_one_implementation(
+    prepared_fixture: PreparedFixture,
+) -> None:
+    """Preparing from a collected closure and preparing from files agree exactly."""
+    closure = _closure(prepared_fixture)
+
+    from_closure = prepare_collected_session(
+        closure,
+        source=prepared_fixture.source,
+        source_revision=prepared_fixture.source_revision,
+        available_node_count=100,
+    )
+    from_files = _prepare(prepared_fixture)
+
+    assert from_closure.document_digest == from_files.document_digest == closure.document_digest
+    assert from_closure.closure_digest == from_files.closure_digest == closure.closure_digest
+    assert from_closure.resolved_semantic_digest == from_files.resolved_semantic_digest
+    assert from_closure.catalog_files == closure.entries
+    assert from_closure.file_count == closure.deployment_file_count
+
+
+@pytest.mark.parametrize(
+    ("override", "expected"),
+    [
+        ({"expected_document_digest": "not-a-digest"}, PreparedSessionErrorCode.INVALID_DIGEST),
+        ({"expected_closure_digest": "sha256:short"}, PreparedSessionErrorCode.INVALID_DIGEST),
+        ({"expected_source_revision": "bad"}, PreparedSessionErrorCode.INVALID_DIGEST),
+        ({"available_node_count": -1}, ValueError),
+        ({"available_node_count": "100"}, TypeError),
+        ({"run_id": ""}, ValidationError),
+    ],
+)
+def test_inputs_are_admitted_before_any_catalog_read(
+    prepared_fixture: PreparedFixture, override: dict, expected
+) -> None:
+    """A malformed expectation or node count is refused before collection, so an
+    unreadable dependency can never mask that refusal."""
+    recording = _RecordingReadView(prepared_fixture.read_view, [])
+    kwargs = {"available_node_count": 100, **override}
+
+    if isinstance(expected, type):
+        with pytest.raises(expected):
+            prepare_session_files(
+                prepared_fixture.root_yaml,
+                recording,
+                source=prepared_fixture.source,
+                source_revision=prepared_fixture.source_revision,
+                **kwargs,
+            )
+    else:
+        with pytest.raises(PreparedSessionError) as raised:
+            prepare_session_files(
+                prepared_fixture.root_yaml,
+                recording,
+                source=prepared_fixture.source,
+                source_revision=prepared_fixture.source_revision,
+                **kwargs,
+            )
+        assert raised.value.code is expected
+
+    assert recording.refs == []

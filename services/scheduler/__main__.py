@@ -22,7 +22,13 @@ from pathlib import Path
 from typing import Any
 
 from nodal.logging import configure as _configure_logging
-from nodalarc.cr_runtime_config import CR_GROUP, CR_NAME, CR_PLURAL, CR_VERSION
+from nodalarc.cr_runtime_config import (
+    CR_GROUP,
+    CR_NAME,
+    CR_PLURAL,
+    CR_VERSION,
+    ConstellationSpecStatus,
+)
 from nodalarc.models.resolved_session import ResolvedSession
 from nodalarc.runtime_service_config import (
     DEFAULT_INSTALLED_SHIPPED_CATALOG_ROOT,
@@ -279,7 +285,7 @@ def _make_lifecycle_identity_reader(
             cr = custom.get_namespaced_custom_object(
                 CR_GROUP, CR_VERSION, namespace, CR_PLURAL, CR_NAME
             )
-            cr_run_id = str((cr.get("status") or {}).get("sessionRunId") or "") or None
+            cr_run_id = ConstellationSpecStatus.from_cr(cr.get("status")).session_run_id or None
         except kubernetes.client.rest.ApiException as exc:
             if exc.status != 404:
                 raise

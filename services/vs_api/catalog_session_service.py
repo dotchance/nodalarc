@@ -12,7 +12,7 @@ from nodalarc.models.session_sources import (
 )
 from nodalarc.prepared_session import (
     PreparedSessionSource,
-    prepare_session_files,
+    prepare_collected_session,
 )
 from nodalarc.runtime_support import UnsupportedFeatureError
 
@@ -64,20 +64,18 @@ class CatalogSessionService:
             document_digest: str | None = None
             closure_digest: str | None = None
             try:
+                # One collection per entry: its digests survive whatever
+                # preparation then refuses, so a blocked row still shows them.
                 closure = CatalogClosureCollector.collect(document.content, snapshot)
                 document_digest = closure.document_digest
                 closure_digest = closure.closure_digest
-                prepared = prepare_session_files(
-                    document.content,
-                    snapshot,
+                prepared = prepare_collected_session(
+                    closure,
                     source=PreparedSessionSource(
                         logical_id=session_ref,
                         origin="vs-api.catalog-session-list",
                     ),
                     source_revision=str(document.revision),
-                    expected_source_revision=str(document.revision),
-                    expected_document_digest=document_digest,
-                    expected_closure_digest=closure_digest,
                     available_node_count=available_node_count,
                 )
                 resolved = prepared.resolution.resolved

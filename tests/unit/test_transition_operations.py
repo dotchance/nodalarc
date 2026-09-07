@@ -469,3 +469,18 @@ def test_untyped_and_timeout_failures_keep_stable_transition_taxonomy() -> None:
     assert transition_failure_from_exception(RuntimeError("private detail")).code == (
         "transition.worker.failed"
     )
+
+
+@pytest.mark.parametrize("count", [-1, 0])
+def test_ready_reconciliation_requires_positive_agreeing_counts(tmp_path: Path, count: int) -> None:
+    store = FilesystemTransitionOperationStore(tmp_path)
+    operation = store.reserve(OPERATION_ID, _reservation())
+    cr = _matching_cr()
+    cr["status"]["podCount"] = count
+    cr["status"]["readyPods"] = count
+    cr["status"]["wiredPods"] = count
+
+    result = reconcile_transition_operation(operation, cr)
+
+    assert result.disposition is TransitionReconciliationDisposition.STILL_SWITCHING
+    assert result.failure is None

@@ -958,3 +958,9 @@ class TestReconcileStateMachine:
             )
 
             mock_reconcile.assert_awaited_once()
+
+
+def test_teardown_session_id_prefers_the_status_identity_and_parses_it() -> None:
+    assert handlers_mod._teardown_session_id(None, None, {"sessionRunId": "run-x"}) == "run-x"
+    assert handlers_mod._teardown_session_id(None, None, None) is None
+    assert handlers_mod._teardown_session_id({}, {}, {"sessionRunId": ""}) is None

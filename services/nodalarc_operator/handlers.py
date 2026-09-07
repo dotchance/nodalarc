@@ -21,6 +21,8 @@ import gzip
 import json
 import logging
 import os
+from collections.abc import Mapping
+from typing import Any
 
 import kopf
 import kubernetes
@@ -31,6 +33,7 @@ from nodalarc.cr_runtime_config import (
     CR_NAME,
     CR_PLURAL,
     CR_VERSION,
+    ConstellationSpecStatus,
     load_cr_runtime_config,
 )
 from nodalarc.nats_channels import sanitize_session_id
@@ -97,8 +100,8 @@ def _get_custom_api() -> kubernetes.client.CustomObjectsApi:
     return _custom_api
 
 
-def _update_status(name: str, namespace: str, status: dict) -> None:
-    """Update the ConstellationSpec CR status subresource."""
+def _update_status(name: str, namespace: str, status: ConstellationSpecStatus) -> None:
+    """Patch the ConstellationSpec status subresource with the fields one status sets."""
     # loop-blocking-ok: small status PATCH at reconcile-event cadence; the
     # operator loop serves no feed consumers, so API-server tail latency
     # degrades only reconcile responsiveness, never a user-facing stream.
@@ -108,25 +111,20 @@ def _update_status(name: str, namespace: str, status: dict) -> None:
         namespace=namespace,
         plural=CR_PLURAL,
         name=name,
-        body={"status": status},
+        body={"status": status.to_patch()},
     )
 
 
-def _with_observed_generation(meta: dict, status: dict) -> dict:
-    """Attach the CR generation this status was computed from."""
-    merged = dict(status)
-    merged["observedGeneration"] = meta.get("generation", 0)
-    return merged
+def _with_observed_generation(meta: dict, status: Mapping[str, Any]) -> ConstellationSpecStatus:
+    """The status patch with the CR generation it was computed from attached."""
+    return ConstellationSpecStatus.from_cr(
+        {**status, "observedGeneration": meta.get("generation", 0)}
+    )
 
 
-def _status_observed_current_generation(meta: dict, status: dict) -> bool:
+def _status_observed_current_generation(meta: dict, status: Mapping[str, Any]) -> bool:
     """Return true when status was computed from this CR generation."""
-    try:
-        generation = int(meta.get("generation", 0))
-        observed_generation = int(status.get("observedGeneration", 0))
-    except TypeError, ValueError:
-        return False
-    return generation > 0 and observed_generation == generation
+    return ConstellationSpecStatus.from_cr(status).observes_generation(meta.get("generation"))
 
 
 def _build_owner_ref(name: str, meta: dict) -> dict:
@@ -355,7 +353,7 @@ def _teardown_session_id(spec: dict | None, meta: dict | None, status: dict | No
     reconciled CRs. If both are unavailable, teardown_session can still derive
     from the ConfigMap while it exists.
     """
-    status_run_id = str((status or {}).get("sessionRunId") or "")
+    status_run_id = ConstellationSpecStatus.from_cr(status).session_run_id or ""
     if status_run_id:
         return status_run_id
     try:
@@ -474,7 +472,7 @@ async def _reconcile_session(
     The kopf timer re-enters periodically to drive progress.
     """
     loop = asyncio.get_running_loop()
-    phase = status.get("phase", "")
+    phase = ConstellationSpecStatus.from_cr(status).phase or ""
     owner_ref = _build_owner_ref(name, meta)
     spec_dict = dict(spec)
 
@@ -1202,21 +1200,16 @@ async def on_create(spec, name, namespace, meta, **_):
         _update_status(
             name,
             namespace,
-            {
-                "phase": "Error",
-                "message": f"Only {CR_NAME!r} is allowed as CR name, got {name!r}",
-            },
+            ConstellationSpecStatus.from_cr(
+                {
+                    "phase": "Error",
+                    "message": f"Only {CR_NAME!r} is allowed as CR name, got {name!r}",
+                }
+            ),
         )
         raise kopf.PermanentError(f"Invalid CR name: {name}")
 
-    _update_status(
-        name,
-        namespace,
-        {
-            "phase": "Pending",
-            "observedGeneration": meta.get("generation", 0),
-        },
-    )
+    _update_status(name, namespace, _with_observed_generation(meta, {"phase": "Pending"}))
 
     # The reconciler handles everything. First invocation kicks off
     # the state machine; the timer drives subsequent ticks.
@@ -1233,7 +1226,7 @@ async def on_update(spec, name, namespace, meta, status, **_):
     - Non-impacting fields (metadata, placement): reconcile without
       restarting platform pods.
     """
-    phase = status.get("phase", "")
+    phase = ConstellationSpecStatus.from_cr(status).phase or ""
     if phase == "Error" and _status_observed_current_generation(meta, status):
         log.debug("on_update: session in Error state, skipping")
         return
@@ -1255,11 +1248,14 @@ async def on_delete(name, namespace, spec=None, meta=None, status=None, **_):
 @kopf.on.resume(CR_PLURAL, group=CR_GROUP)
 async def on_resume(spec, name, namespace, meta, status, **_):
     """Handle Operator restart — reconcile existing session state."""
-    phase = status.get("phase", "")
+    phase = ConstellationSpecStatus.from_cr(status).phase or ""
     log.info("Resuming ConstellationSpec '%s', current phase: %s", name, phase)
 
     if phase == "Error" and _status_observed_current_generation(meta, status):
-        log.info("Operator resume: session in Error state: %s", status.get("message", ""))
+        log.info(
+            "Operator resume: session in Error state: %s",
+            ConstellationSpecStatus.from_cr(status).message or "",
+        )
         return
 
     await _reconcile_session(spec, name, namespace, meta, status)
@@ -1275,7 +1271,7 @@ async def wiring_check(spec, name, namespace, meta, status, **_):
     - Wiring: Node Agent wiring data plane → Ready
     - Ready: repair missing runtime identity fields after operator/CRD upgrades
     """
-    phase = status.get("phase", "")
+    phase = ConstellationSpecStatus.from_cr(status).phase or ""
     if phase == "Ready":
         try:
             identity_fields = await asyncio.to_thread(_status_identity_fields, dict(spec), meta)
@@ -1390,13 +1386,15 @@ async def wiring_check(spec, name, namespace, meta, status, **_):
                 active_session,
             )
             return
-        if (
-            status.get("sessionName") != identity_fields["sessionName"]
-            or status.get("sessionRunId") != identity_fields["sessionRunId"]
-            or any(status.get(field) != value for field, value in proof_fields.items())
-            or status.get("platformHash") != platform_hash
-            or status.get("runtimeHash") != runtime_hash
-        ):
+        intended = ConstellationSpecStatus.from_cr(
+            {
+                **identity_fields,
+                **proof_fields,
+                "platformHash": platform_hash,
+                "runtimeHash": runtime_hash,
+            }
+        )
+        if not ConstellationSpecStatus.from_cr(status).carries(intended):
             await _reconcile_session(
                 spec,
                 name,

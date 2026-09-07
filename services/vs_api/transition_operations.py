@@ -21,7 +21,7 @@ from typing import Annotated, Any, Final, Literal
 
 from nodalarc.catalog_refs import SessionRef
 from nodalarc.content_identity import sha256_digest
-from nodalarc.cr_runtime_config import ConstellationSpecSpec
+from nodalarc.cr_runtime_config import ConstellationSpecSpec, ConstellationSpecStatus
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 _OPERATION_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{15,127}$")
@@ -857,10 +857,10 @@ def reconcile_transition_operation(
             ),
         )
 
+    observed = ConstellationSpecStatus.from_cr(status)
     generation = _positive_int(metadata.get("generation"))
-    observed_generation = _positive_int(status.get("observedGeneration"))
-    phase = str(status.get("phase") or "")
-    if generation is None or observed_generation != generation:
+    phase = observed.phase or ""
+    if generation is None or not observed.observes_generation(generation):
         return TransitionReconciliation(
             disposition=TransitionReconciliationDisposition.STILL_SWITCHING,
             detail="Waiting for the Operator to observe the selected runtime",
@@ -885,23 +885,24 @@ def reconcile_transition_operation(
             detail=f"Selected runtime is in phase {phase}",
         )
 
-    pod_count = _positive_int(status.get("podCount"))
-    ready_pods = _positive_int(status.get("readyPods"))
-    wired_pods = _positive_int(status.get("wiredPods"))
-    if pod_count is None or ready_pods != pod_count or wired_pods != pod_count:
+    pod_count = _positive_int(observed.pod_count)
+    if (
+        pod_count is None
+        or _positive_int(observed.ready_pods) != pod_count
+        or _positive_int(observed.wired_pods) != pod_count
+    ):
         return TransitionReconciliation(
             disposition=TransitionReconciliationDisposition.STILL_SWITCHING,
             detail="Waiting for complete Ready pod and wiring proof",
         )
 
-    expected_status = {
-        "documentDigest": operation.facts.document_digest,
-        "closureDigest": operation.facts.closure_digest,
-        "resolvedSemanticDigest": operation.facts.resolved_semantic_digest,
-        "runtimeRelease": operation.facts.release,
-        "runtimeBuild": operation.facts.build,
-    }
-    if any(status.get(key) != expected for key, expected in expected_status.items()):
+    if observed.runtime_mismatches(
+        document_digest=operation.facts.document_digest,
+        closure_digest=operation.facts.closure_digest,
+        resolved_semantic_digest=operation.facts.resolved_semantic_digest,
+        release=operation.facts.release,
+        build=operation.facts.build,
+    ):
         return TransitionReconciliation(
             disposition=TransitionReconciliationDisposition.FAILED,
             detail="Ready runtime proof does not match the admitted transition",
@@ -910,7 +911,7 @@ def reconcile_transition_operation(
                 message="Runtime proof does not match the admitted transition",
             ),
         )
-    session_id = str(status.get("sessionRunId") or "")
+    session_id = observed.session_run_id or ""
     if not session_id:
         return TransitionReconciliation(
             disposition=TransitionReconciliationDisposition.FAILED,

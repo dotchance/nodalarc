@@ -50,6 +50,7 @@ def load_live_session_resolution(
         CR_NAME,
         CR_PLURAL,
         CR_VERSION,
+        ConstellationSpecStatus,
         load_cr_runtime_config,
     )
 
@@ -66,8 +67,7 @@ def load_live_session_resolution(
         plural=CR_PLURAL,
         name=CR_NAME,
     )
-    status = cr.get("status") or {}
-    run_id = str(status.get("sessionRunId") or "")
+    run_id = ConstellationSpecStatus.from_cr(cr.get("status")).session_run_id or ""
     if not run_id:
         raise RuntimeError("Current ConstellationSpec has no runtime session identity")
     runtime = load_cr_runtime_config(

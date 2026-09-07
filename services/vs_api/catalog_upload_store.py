@@ -8,26 +8,31 @@ from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import Any, Protocol
 
-from nodalarc.catalog_closure import CatalogClosureEntry, preserved_catalog_path
 from nodalarc.catalog_refs import CatalogRef
 from nodalarc.catalog_upload import (
     CatalogUpload,
     CatalogUploadSelection,
-    sha256_digest,
     verify_catalog_upload,
 )
+from nodalarc.kubernetes_runtime_config import (
+    CATALOG_UPLOAD_LABEL,
+    ConfigMapReader,
+    KubernetesRuntimeConfigError,
+    catalog_upload_config_map_identity,
+    config_map_metadata_identity,
+    decode_catalog_upload_config_maps,
+    encode_catalog_upload_config_map,
+    listed_config_maps,
+)
 
-CATALOG_UPLOAD_LABEL = "nodalarc.io/catalog-upload"
-CATALOG_REF_ANNOTATION = "nodalarc.io/catalog-ref"
-CATALOG_DOCUMENT_KEY = "document.yaml"
 DEFAULT_CATALOG_UPLOAD_GC_GRACE = timedelta(minutes=15)
 MAX_CATALOG_UPLOAD_GC_GRACE = timedelta(hours=24)
 
 
-class CoreV1ConfigMapApi(Protocol):
-    def create_namespaced_config_map(self, namespace: str, body: Mapping[str, Any]) -> Any: ...
+class CoreV1ConfigMapApi(ConfigMapReader, Protocol):
+    """The lifecycle transport: the shared list operation plus create and delete."""
 
-    def list_namespaced_config_map(self, namespace: str, *, label_selector: str) -> Any: ...
+    def create_namespaced_config_map(self, namespace: str, body: Mapping[str, Any]) -> Any: ...
 
     def delete_namespaced_config_map(
         self,
@@ -136,80 +141,14 @@ def _error(
     )
 
 
-def _field(value: Any, *names: str) -> Any:
-    if isinstance(value, Mapping):
-        for name in names:
-            if name in value:
-                return value[name]
-        return None
-    for name in names:
-        if hasattr(value, name):
-            return getattr(value, name)
-    return None
-
-
-def _string_mapping(value: Any, *, label: str) -> dict[str, str]:
-    if value is None:
-        return {}
-    if not isinstance(value, Mapping):
-        raise ValueError(f"{label} must be a mapping")
-    result = dict(value)
-    if not all(isinstance(key, str) and isinstance(item, str) for key, item in result.items()):
-        raise ValueError(f"{label} must contain only strings")
-    return result
-
-
-def _resource_name(upload_id: str, order: int) -> str:
-    suffix = f"-{order:06d}"
-    prefix = upload_id[: 63 - len(suffix)].rstrip("-")
-    return prefix + suffix
-
-
-def _config_map_body(
-    *,
-    namespace: str,
-    upload_id: str,
-    order: int,
-    entry: CatalogClosureEntry,
-) -> dict[str, Any]:
-    try:
-        document = entry.yaml_bytes.decode("utf-8")
-    except UnicodeDecodeError as exc:
-        raise _error(
-            CatalogUploadStoreErrorCode.INVALID_UPLOAD,
-            f"Catalog file {entry.ref} is not UTF-8 YAML",
-            upload_id=upload_id,
-            cause=exc,
-        ) from exc
-    return {
-        "apiVersion": "v1",
-        "kind": "ConfigMap",
-        "metadata": {
-            "name": _resource_name(upload_id, order),
-            "namespace": namespace,
-            "labels": {CATALOG_UPLOAD_LABEL: upload_id},
-            "annotations": {CATALOG_REF_ANNOTATION: str(entry.ref)},
-        },
-        "data": {CATALOG_DOCUMENT_KEY: document},
-    }
-
-
-def _metadata(value: Any) -> Any:
-    return _field(value, "metadata")
-
-
-def _resource_identity(value: Any) -> tuple[str, str, str]:
-    metadata = _metadata(value)
-    name = _field(metadata, "name")
-    namespace = _field(metadata, "namespace")
-    uid = _field(metadata, "uid")
-    if not all(isinstance(item, str) and item for item in (name, namespace, uid)):
-        raise ValueError("ConfigMap metadata must contain name, namespace, and UID")
-    return name, namespace, uid
-
-
 def _creation_timestamp(value: Any) -> datetime | None:
-    timestamp = _field(_metadata(value), "creation_timestamp", "creationTimestamp")
+    metadata = (
+        value.get("metadata") if isinstance(value, Mapping) else getattr(value, "metadata", None)
+    )
+    if isinstance(metadata, Mapping):
+        timestamp = metadata.get("creation_timestamp", metadata.get("creationTimestamp"))
+    else:
+        timestamp = getattr(metadata, "creation_timestamp", None)
     if isinstance(timestamp, datetime):
         return timestamp if timestamp.tzinfo is not None else timestamp.replace(tzinfo=UTC)
     if isinstance(timestamp, str):
@@ -219,59 +158,6 @@ def _creation_timestamp(value: Any) -> datetime | None:
             return None
         return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
     return None
-
-
-def _entry_from_config_map(
-    value: Any, *, namespace: str, upload_id: str
-) -> tuple[str, str, CatalogClosureEntry]:
-    name, observed_namespace, uid = _resource_identity(value)
-    if observed_namespace != namespace:
-        raise ValueError(f"ConfigMap {name} is in namespace {observed_namespace!r}")
-    api_version = _field(value, "api_version", "apiVersion")
-    kind = _field(value, "kind")
-    if api_version not in (None, "v1") or kind not in (None, "ConfigMap"):
-        raise ValueError(f"Object {name} is not a v1 ConfigMap")
-    if _field(value, "immutable") is True:
-        raise ValueError(f"ConfigMap {name} must not be immutable")
-    if _field(value, "binary_data", "binaryData") not in (None, {}):
-        raise ValueError(f"ConfigMap {name} must not use binaryData")
-    if _field(_metadata(value), "owner_references", "ownerReferences") not in (None, [], ()):
-        raise ValueError(f"ConfigMap {name} must not use owner references")
-    labels = _string_mapping(_field(_metadata(value), "labels"), label=f"{name} labels")
-    if labels.get(CATALOG_UPLOAD_LABEL) != upload_id:
-        raise ValueError(f"ConfigMap {name} has the wrong upload label")
-    annotations = _string_mapping(
-        _field(_metadata(value), "annotations"),
-        label=f"{name} annotations",
-    )
-    if set(annotations) != {CATALOG_REF_ANNOTATION}:
-        raise ValueError(f"ConfigMap {name} must contain only the catalog ref annotation")
-    ref = CatalogRef(annotations[CATALOG_REF_ANNOTATION])
-    if ref.family is None:
-        raise ValueError(f"ConfigMap {name} catalog ref has no family")
-    data = _string_mapping(_field(value, "data"), label=f"{name} data")
-    if set(data) != {CATALOG_DOCUMENT_KEY}:
-        raise ValueError(f"ConfigMap {name} must contain only {CATALOG_DOCUMENT_KEY}")
-    content = data[CATALOG_DOCUMENT_KEY].encode("utf-8")
-    return (
-        name,
-        uid,
-        CatalogClosureEntry(
-            ref=ref,
-            family=ref.family,
-            preserved_path=preserved_catalog_path(ref),
-            yaml_bytes=content,
-            document_digest=sha256_digest(content),
-            size_bytes=len(content),
-        ),
-    )
-
-
-def _items(response: Any) -> tuple[Any, ...]:
-    items = _field(response, "items")
-    if not isinstance(items, (list, tuple)):
-        raise ValueError("ConfigMap list response has no items")
-    return tuple(items)
 
 
 class KubernetesCatalogUploadStore:
@@ -313,19 +199,30 @@ class KubernetesCatalogUploadStore:
         created: list[CatalogUploadResourceEvidence] = []
         try:
             for order, entry in enumerate(upload.catalog_files):
-                body = _config_map_body(
-                    namespace=self._namespace,
-                    upload_id=upload.upload_id,
-                    order=order,
-                    entry=entry,
-                )
+                try:
+                    body = encode_catalog_upload_config_map(
+                        namespace=self._namespace,
+                        upload_id=upload.upload_id,
+                        order=order,
+                        entry=entry,
+                    )
+                except KubernetesRuntimeConfigError as exc:
+                    raise _error(
+                        CatalogUploadStoreErrorCode.INVALID_UPLOAD,
+                        str(exc),
+                        upload_id=upload.upload_id,
+                        cause=exc,
+                    ) from exc
                 name = body["metadata"]["name"]
                 try:
                     observed = self._client.create_namespaced_config_map(
                         namespace=self._namespace,
                         body=body,
                     )
-                    observed_name, observed_namespace, uid = _resource_identity(observed)
+                    # Register what the server persisted before any content
+                    # rule runs: readback judges the content, cleanup needs
+                    # the identity either way.
+                    identity = config_map_metadata_identity(observed)
                 except Exception as exc:
                     raise _error(
                         CatalogUploadStoreErrorCode.CREATE_FAILED,
@@ -335,7 +232,7 @@ class KubernetesCatalogUploadStore:
                         cause=exc,
                         created_names=(resource.name for resource in created),
                     ) from exc
-                if observed_name != name or observed_namespace != self._namespace:
+                if identity.name != name or identity.namespace != self._namespace:
                     raise _error(
                         CatalogUploadStoreErrorCode.CREATE_FAILED,
                         f"Created ConfigMap identity does not match {self._namespace}/{name}",
@@ -343,7 +240,7 @@ class KubernetesCatalogUploadStore:
                         resource_name=name,
                         created_names=(resource.name for resource in created),
                     )
-                evidence = CatalogUploadResourceEvidence(name=name, ref=entry.ref, uid=uid)
+                evidence = CatalogUploadResourceEvidence(name=name, ref=entry.ref, uid=identity.uid)
                 created.append(evidence)
                 if resource_observer is not None:
                     resource_observer(evidence)
@@ -407,7 +304,7 @@ class KubernetesCatalogUploadStore:
                 namespace=self._namespace,
                 label_selector=f"{CATALOG_UPLOAD_LABEL}={selection.upload_id}",
             )
-            observed = _items(response)
+            items = listed_config_maps(response, namespace=self._namespace)
         except Exception as exc:
             raise _error(
                 CatalogUploadStoreErrorCode.LIST_FAILED,
@@ -416,27 +313,12 @@ class KubernetesCatalogUploadStore:
                 cause=exc,
             ) from exc
 
-        entries: dict[CatalogRef, CatalogClosureEntry] = {}
-        resources: list[CatalogUploadResourceEvidence] = []
-        names: set[str] = set()
         try:
-            for item in observed:
-                name, uid, entry = _entry_from_config_map(
-                    item,
-                    namespace=self._namespace,
-                    upload_id=selection.upload_id,
-                )
-                if name in names:
-                    raise ValueError(f"duplicate ConfigMap name {name}")
-                if entry.ref in entries:
-                    raise ValueError(f"duplicate catalog ref {entry.ref}")
-                names.add(name)
-                entries[entry.ref] = entry
-                resources.append(CatalogUploadResourceEvidence(name=name, ref=entry.ref, uid=uid))
-            upload = CatalogUpload(
-                selection=selection,
+            upload, resources = decode_catalog_upload_config_maps(
+                items,
+                namespace=self._namespace,
                 root_yaml=root_yaml,
-                catalog_files=tuple(entries[ref] for ref in sorted(entries, key=str)),
+                selection=selection,
             )
             verify_catalog_upload(upload)
         except Exception as exc:
@@ -446,7 +328,10 @@ class KubernetesCatalogUploadStore:
                 upload_id=selection.upload_id,
                 cause=exc,
             ) from exc
-        return upload, tuple(sorted(resources, key=lambda item: str(item.ref)))
+        return upload, tuple(
+            CatalogUploadResourceEvidence(name=item.name, ref=item.entry.ref, uid=item.uid)
+            for item in resources
+        )
 
     def delete(
         self, upload: CatalogUpload | CatalogUploadSelection | str
@@ -465,7 +350,7 @@ class KubernetesCatalogUploadStore:
                 namespace=self._namespace,
                 label_selector=f"{CATALOG_UPLOAD_LABEL}={upload_id}",
             )
-            items = _items(response)
+            items = listed_config_maps(response, namespace=self._namespace)
         except Exception as exc:
             raise _error(
                 CatalogUploadStoreErrorCode.LIST_FAILED,
@@ -473,7 +358,7 @@ class KubernetesCatalogUploadStore:
                 upload_id=upload_id,
                 cause=exc,
             ) from exc
-        names = sorted(_resource_identity(item)[0] for item in items)
+        names = sorted(catalog_upload_config_map_identity(item).name for item in items)
         failures = self._cleanup(names)
         if failures:
             raise _error(
@@ -503,7 +388,7 @@ class KubernetesCatalogUploadStore:
                 namespace=self._namespace,
                 label_selector=CATALOG_UPLOAD_LABEL,
             )
-            items = _items(response)
+            items = listed_config_maps(response, namespace=self._namespace)
         except Exception as exc:
             raise _error(
                 CatalogUploadStoreErrorCode.LIST_FAILED,
@@ -511,31 +396,29 @@ class KubernetesCatalogUploadStore:
                 cause=exc,
             ) from exc
 
-        groups: dict[str, list[Any]] = {}
+        groups: dict[str, list[tuple[str, Any]]] = {}
         unsafe_names: list[str] = []
         for item in items:
             try:
-                name, namespace, _uid = _resource_identity(item)
-                labels = _string_mapping(_field(_metadata(item), "labels"), label=f"{name} labels")
-                upload_id = labels.get(CATALOG_UPLOAD_LABEL)
-                if namespace != self._namespace or not upload_id:
-                    unsafe_names.append(name)
-                    continue
-                groups.setdefault(upload_id, []).append(item)
-            except ValueError:
-                name = _field(_metadata(item), "name")
-                unsafe_names.append(str(name or "<unknown>"))
+                identity = catalog_upload_config_map_identity(item)
+            except KubernetesRuntimeConfigError as exc:
+                unsafe_names.append(str(exc.evidence.config_map_name or "<unknown>"))
+                continue
+            if identity.namespace != self._namespace:
+                unsafe_names.append(identity.name)
+                continue
+            groups.setdefault(identity.upload_id, []).append((identity.name, item))
 
         deleted_names: list[str] = []
         active_names: list[str] = []
         grace_names: list[str] = []
         cutoff = current - self._gc_grace
         for upload_id, group in sorted(groups.items()):
-            names = sorted(_resource_identity(item)[0] for item in group)
+            names = sorted(name for name, _item in group)
             if upload_id in active:
                 active_names.extend(names)
                 continue
-            timestamps = tuple(_creation_timestamp(item) for item in group)
+            timestamps = tuple(_creation_timestamp(item) for _name, item in group)
             if any(timestamp is None for timestamp in timestamps):
                 unsafe_names.extend(names)
                 continue

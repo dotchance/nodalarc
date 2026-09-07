@@ -21,6 +21,10 @@ from nodalarc.kubernetes_runtime_config import (
     RUNTIME_CONFIG_PROOF_FILENAME,
     KubernetesRuntimeConfigError,
     KubernetesRuntimeConfigErrorCode,
+    catalog_upload_config_map_identity,
+    catalog_upload_config_map_name,
+    decode_catalog_upload_config_map,
+    encode_catalog_upload_config_map,
     load_kubernetes_runtime_config,
 )
 from nodalarc.models.resolved_session import SourceContext
@@ -89,6 +93,7 @@ def _config_map(entry, *, upload_id: str, order: int) -> SimpleNamespace:
         metadata=SimpleNamespace(
             name=name,
             namespace=NAMESPACE,
+            uid=f"uid-{order}",
             labels={CATALOG_UPLOAD_LABEL: upload_id},
             annotations={CATALOG_REF_ANNOTATION: str(entry.ref)},
             owner_references=None,
@@ -297,3 +302,49 @@ def test_list_failure_is_typed_and_does_not_materialize(
 
     assert raised.value.code is KubernetesRuntimeConfigErrorCode.CONFIG_MAP_FETCH_FAILED
     assert not destination.exists()
+
+
+def test_persisted_config_maps_require_a_uid(upload: CatalogUpload, tmp_path: Path) -> None:
+    client = _client_for(upload)
+    client.config_maps[0].metadata.uid = None
+    destination = tmp_path / "no-uid"
+
+    with pytest.raises(KubernetesRuntimeConfigError) as raised:
+        _load(client, upload, destination)
+
+    assert raised.value.code is KubernetesRuntimeConfigErrorCode.INVALID_CONFIG_MAP
+    assert "lacks a name, namespace or uid" in str(raised.value)
+    assert not destination.exists()
+
+
+def test_encoded_body_decodes_to_the_same_file_once_persisted(upload: CatalogUpload) -> None:
+    for order, entry in enumerate(upload.catalog_files):
+        body = encode_catalog_upload_config_map(
+            namespace=NAMESPACE, upload_id=upload.upload_id, order=order, entry=entry
+        )
+        assert "uid" not in body["metadata"]
+        with pytest.raises(KubernetesRuntimeConfigError, match="lacks a name, namespace or uid"):
+            decode_catalog_upload_config_map(body, namespace=NAMESPACE, upload_id=upload.upload_id)
+
+        persisted = {**body, "metadata": {**body["metadata"], "uid": f"uid-{order}"}}
+        decoded = decode_catalog_upload_config_map(
+            persisted, namespace=NAMESPACE, upload_id=upload.upload_id
+        )
+
+        assert decoded.name == catalog_upload_config_map_name(upload.upload_id, order)
+        assert decoded.uid == f"uid-{order}"
+        assert decoded.entry == entry
+        identity = catalog_upload_config_map_identity(persisted)
+        assert (identity.name, identity.namespace, identity.upload_id) == (
+            decoded.name,
+            NAMESPACE,
+            upload.upload_id,
+        )
+
+
+def test_config_map_names_stay_within_kubernetes_limits() -> None:
+    assert catalog_upload_config_map_name("upload-abc", 7) == "upload-abc-000007"
+    long_name = catalog_upload_config_map_name("u" * 60 + "---", 12)
+    assert len(long_name) <= 63
+    assert long_name.endswith("-000012")
+    assert "--000012" not in long_name

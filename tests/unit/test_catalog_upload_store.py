@@ -13,14 +13,16 @@ from nodalarc.catalog_closure import FilesystemCatalogReadView
 from nodalarc.catalog_paths import CatalogRoots
 from nodalarc.catalog_upload import CatalogUpload, encode_catalog_upload
 from nodalarc.content_identity import sha256_digest
+from nodalarc.kubernetes_runtime_config import (
+    CATALOG_DOCUMENT_KEY,
+    CATALOG_REF_ANNOTATION,
+    CATALOG_UPLOAD_LABEL,
+)
 from nodalarc.prepared_session import (
     PreparedSessionSource,
     prepare_session_files,
 )
 from vs_api.catalog_upload_store import (
-    CATALOG_DOCUMENT_KEY,
-    CATALOG_REF_ANNOTATION,
-    CATALOG_UPLOAD_LABEL,
     CatalogUploadStoreError,
     CatalogUploadStoreErrorCode,
     KubernetesCatalogUploadStore,
@@ -72,6 +74,7 @@ class FakeCoreV1Api:
         self.create_failures: dict[str, int] = {}
         self.delete_failures: dict[str, int] = {}
         self.before_list = None
+        self.after_create = None
         self._uid = 0
 
     def create_namespaced_config_map(self, namespace: str, body: dict[str, Any]):
@@ -88,6 +91,8 @@ class FakeCoreV1Api:
             creation_timestamp=NOW,
         )
         self.config_maps[name] = observed
+        if self.after_create is not None:
+            self.after_create(observed)
         return observed
 
     def list_namespaced_config_map(self, namespace: str, *, label_selector: str):
@@ -239,7 +244,7 @@ def test_put_cleans_created_files_after_create_or_observer_failure(upload: Catal
     assert observed_api.config_maps == {}
 
 
-@pytest.mark.parametrize("mutation", ["missing", "extra", "duplicate", "corrupt"])
+@pytest.mark.parametrize("mutation", ["missing", "extra", "duplicate", "corrupt", "extra_label"])
 def test_readback_strictly_rejects_wrong_file_sets(upload: CatalogUpload, mutation: str) -> None:
     api = FakeCoreV1Api()
 
@@ -254,6 +259,10 @@ def test_readback_strictly_rejects_wrong_file_sets(upload: CatalogUpload, mutati
                 ref="nodalarc:bodies/luna.yaml",
                 content=(SHIPPED_ROOT / "bodies/luna.yaml").read_text(encoding="utf-8"),
             )
+        elif mutation == "extra_label":
+            # The runtime reader refuses any label beyond the upload label;
+            # the readback applies the same rule.
+            selected.config_maps[names[0]].metadata.labels["unexpected"] = "value"
         elif mutation == "duplicate":
             source = selected.config_maps[names[0]]
             duplicate = copy.deepcopy(source)
@@ -341,3 +350,51 @@ def test_constructor_and_inputs_are_strict(upload: CatalogUpload) -> None:
         KubernetesCatalogUploadStore(FakeCoreV1Api(), NAMESPACE).garbage_collect(
             active_upload_ids="active",
         )
+
+
+def test_created_resource_is_registered_before_its_content_is_judged(
+    upload: CatalogUpload,
+) -> None:
+    """A create that persisted an unlabelled resource still registers it: the
+    observer journals it and the readback failure cleans it up."""
+    api = FakeCoreV1Api()
+
+    first = f"{upload.upload_id}-000000"
+
+    def strip_first_label(observed: SimpleNamespace) -> None:
+        if observed.metadata.name == first:
+            observed.metadata.labels.clear()
+
+    api.after_create = strip_first_label
+    journal: list[str] = []
+
+    with pytest.raises(CatalogUploadStoreError) as raised:
+        KubernetesCatalogUploadStore(api, NAMESPACE).put(
+            upload, resource_observer=lambda evidence: journal.append(evidence.name)
+        )
+
+    assert raised.value.code is CatalogUploadStoreErrorCode.READBACK_MISMATCH
+    assert journal[0] == first
+    assert len(journal) == len(upload.catalog_files)
+    assert first in raised.value.evidence.created_names
+    assert raised.value.evidence.cleanup_failures == ()
+    assert api.config_maps == {}
+
+
+def test_readback_list_envelope_faults_are_list_failures(upload: CatalogUpload) -> None:
+    api = FakeCoreV1Api()
+    real_list = api.list_namespaced_config_map
+
+    def list_without_items(namespace: str, *, label_selector: str):
+        response = real_list(namespace, label_selector=label_selector)
+        if len(api.calls) > len(upload.catalog_files):
+            return SimpleNamespace(items=None)
+        return response
+
+    api.list_namespaced_config_map = list_without_items  # type: ignore[method-assign]
+
+    with pytest.raises(CatalogUploadStoreError) as raised:
+        KubernetesCatalogUploadStore(api, NAMESPACE).put(upload)
+
+    assert raised.value.code is CatalogUploadStoreErrorCode.LIST_FAILED
+    assert api.config_maps == {}

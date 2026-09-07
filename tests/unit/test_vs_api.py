@@ -210,6 +210,7 @@ class _RuntimeConfigMapReader:
                 "metadata": {
                     "name": f"test-cr-upload-{index}",
                     "namespace": "nodalarc",
+                    "uid": f"uid-{index}",
                     "labels": {"nodalarc.io/catalog-upload": upload.upload_id},
                     "annotations": {"nodalarc.io/catalog-ref": str(entry.ref)},
                 },

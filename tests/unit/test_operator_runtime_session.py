@@ -85,6 +85,7 @@ def _client_for(upload: CatalogUpload) -> FakeCoreV1:
                 metadata=SimpleNamespace(
                     name=f"{upload.upload_id}-{order:06d}",
                     namespace=NAMESPACE,
+                    uid=f"uid-{order}",
                     labels={CATALOG_UPLOAD_LABEL: upload.upload_id},
                     annotations={CATALOG_REF_ANNOTATION: str(entry.ref)},
                     owner_references=None,

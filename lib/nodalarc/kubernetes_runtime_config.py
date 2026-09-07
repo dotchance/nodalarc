@@ -1,10 +1,15 @@
-"""Kubernetes reader for one selected ordinary-file catalog upload."""
+"""The ConfigMap codec for ordinary-file catalog uploads, and the runtime reader over it.
+
+One upload is one ConfigMap per catalog file: the upload label, the catalog
+ref annotation and the document key. VS-API encodes and persists these;
+every runtime service decodes them here under one rule.
+"""
 
 from __future__ import annotations
 
 import os
 import shutil
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -41,6 +46,7 @@ class ConfigMapReader(Protocol):
 class KubernetesRuntimeConfigErrorCode(StrEnum):
     CONFIG_MAP_FETCH_FAILED = "kubernetes_runtime_config.config_map_fetch_failed"
     INVALID_CONFIG_MAP = "kubernetes_runtime_config.invalid_config_map"
+    INVALID_UPLOAD = "kubernetes_runtime_config.invalid_upload"
     PROOF_WRITE_FAILED = "kubernetes_runtime_config.proof_write_failed"
 
 
@@ -129,7 +135,14 @@ def _string_mapping(
     return result
 
 
-def _items(response: Any, *, namespace: str) -> tuple[Any, ...]:
+def _require_namespace(namespace: object) -> str:
+    if not isinstance(namespace, str) or not namespace.strip():
+        raise TypeError("namespace must be a non-empty string")
+    return namespace
+
+
+def listed_config_maps(response: Any, *, namespace: str) -> tuple[Any, ...]:
+    """The items of one ConfigMap list response."""
     items = _field(response, "items")
     if not isinstance(items, (list, tuple)):
         raise _error(
@@ -140,29 +153,136 @@ def _items(response: Any, *, namespace: str) -> tuple[Any, ...]:
     return tuple(items)
 
 
-def _entry_from_config_map(
+@dataclass(frozen=True, slots=True)
+class ConfigMapMetadataIdentity:
+    """What the API server names a persisted ConfigMap: name, namespace and uid.
+
+    This is the identity a store registers the moment a create returns, before
+    any content rule is applied, so that every persisted resource can be
+    cleaned up whatever else is wrong with it.
+    """
+
+    name: str
+    namespace: str
+    uid: str
+
+
+@dataclass(frozen=True, slots=True)
+class CatalogUploadConfigMapIdentity:
+    """Metadata identity of one upload ConfigMap plus the upload it belongs to."""
+
+    name: str
+    namespace: str
+    uid: str
+    upload_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class CatalogUploadConfigMap:
+    """One persisted upload ConfigMap decoded to the catalog file it carries."""
+
+    name: str
+    uid: str
+    entry: CatalogClosureEntry
+
+
+def catalog_upload_config_map_name(upload_id: str, order: int) -> str:
+    """The name of the ConfigMap carrying one upload's file at one position."""
+    suffix = f"-{order:06d}"
+    prefix = upload_id[: 63 - len(suffix)].rstrip("-")
+    return prefix + suffix
+
+
+def encode_catalog_upload_config_map(
+    *,
+    namespace: str,
+    upload_id: str,
+    order: int,
+    entry: CatalogClosureEntry,
+) -> dict[str, Any]:
+    """The creation body for one catalog file.
+
+    A creation body carries no uid; the API server assigns one, and only the
+    persisted resource decodes.
+    """
+    try:
+        document = entry.yaml_bytes.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise _error(
+            KubernetesRuntimeConfigErrorCode.INVALID_UPLOAD,
+            f"Catalog file {entry.ref} is not UTF-8 YAML",
+            namespace=namespace,
+            cause=exc,
+        ) from exc
+    return {
+        "apiVersion": "v1",
+        "kind": "ConfigMap",
+        "metadata": {
+            "name": catalog_upload_config_map_name(upload_id, order),
+            "namespace": namespace,
+            "labels": {CATALOG_UPLOAD_LABEL: upload_id},
+            "annotations": {CATALOG_REF_ANNOTATION: str(entry.ref)},
+        },
+        "data": {CATALOG_DOCUMENT_KEY: document},
+    }
+
+
+def config_map_metadata_identity(value: Any) -> ConfigMapMetadataIdentity:
+    """Name, namespace and uid of one persisted ConfigMap."""
+    metadata = _field(value, "metadata")
+    name = _field(metadata, "name")
+    namespace = _field(metadata, "namespace")
+    uid = _field(metadata, "uid")
+    if not all(isinstance(item, str) and item for item in (name, namespace, uid)):
+        raise _error(
+            KubernetesRuntimeConfigErrorCode.INVALID_CONFIG_MAP,
+            f"Catalog upload ConfigMap {name!r} lacks a name, namespace or uid",
+            namespace=namespace if isinstance(namespace, str) else None,
+            config_map_name=name if isinstance(name, str) else None,
+        )
+    return ConfigMapMetadataIdentity(name=name, namespace=namespace, uid=uid)
+
+
+def catalog_upload_config_map_identity(value: Any) -> CatalogUploadConfigMapIdentity:
+    """Metadata identity plus the upload id one persisted upload ConfigMap is labelled with."""
+    identity = config_map_metadata_identity(value)
+    labels = _string_mapping(
+        _field(_field(value, "metadata"), "labels"),
+        field_name="metadata.labels",
+        namespace=identity.namespace,
+        name=identity.name,
+    )
+    upload_id = labels.get(CATALOG_UPLOAD_LABEL)
+    if not upload_id:
+        raise _error(
+            KubernetesRuntimeConfigErrorCode.INVALID_CONFIG_MAP,
+            f"Catalog upload ConfigMap {identity.namespace}/{identity.name} carries no "
+            f"{CATALOG_UPLOAD_LABEL} label",
+            namespace=identity.namespace,
+            config_map_name=identity.name,
+        )
+    return CatalogUploadConfigMapIdentity(
+        name=identity.name, namespace=identity.namespace, uid=identity.uid, upload_id=upload_id
+    )
+
+
+def decode_catalog_upload_config_map(
     value: Any,
     *,
     namespace: str,
-    selection: CatalogUploadSelection,
-) -> tuple[str, CatalogClosureEntry]:
-    metadata = _field(value, "metadata")
-    name = _field(metadata, "name")
-    observed_namespace = _field(metadata, "namespace")
-    if not isinstance(name, str) or not name:
-        raise _error(
-            KubernetesRuntimeConfigErrorCode.INVALID_CONFIG_MAP,
-            f"Catalog upload inventory in {namespace} contains an unnamed ConfigMap",
-            namespace=namespace,
-        )
-    if observed_namespace != namespace:
+    upload_id: str,
+) -> CatalogUploadConfigMap:
+    """Decode one persisted upload ConfigMap under the rule every runtime applies."""
+    identity = catalog_upload_config_map_identity(value)
+    name = identity.name
+    if identity.namespace != namespace:
         raise _error(
             KubernetesRuntimeConfigErrorCode.INVALID_CONFIG_MAP,
             f"Catalog upload ConfigMap {name} is not in namespace {namespace}",
             namespace=namespace,
             config_map_name=name,
             expected=namespace,
-            observed=str(observed_namespace),
+            observed=identity.namespace,
         )
     api_version = _field(value, "api_version", "apiVersion")
     kind = _field(value, "kind")
@@ -187,6 +307,7 @@ def _entry_from_config_map(
             namespace=namespace,
             config_map_name=name,
         )
+    metadata = _field(value, "metadata")
     if _field(metadata, "owner_references", "ownerReferences") not in (None, [], ()):
         raise _error(
             KubernetesRuntimeConfigErrorCode.INVALID_CONFIG_MAP,
@@ -200,8 +321,7 @@ def _entry_from_config_map(
         namespace=namespace,
         name=name,
     )
-    expected_labels = {CATALOG_UPLOAD_LABEL: selection.upload_id}
-    if labels != expected_labels:
+    if labels != {CATALOG_UPLOAD_LABEL: upload_id}:
         raise _error(
             KubernetesRuntimeConfigErrorCode.INVALID_CONFIG_MAP,
             f"Catalog upload ConfigMap {namespace}/{name} labels do not match its selection",
@@ -253,14 +373,77 @@ def _entry_from_config_map(
             config_map_name=name,
         )
     content = data[CATALOG_DOCUMENT_KEY].encode("utf-8")
-    return name, CatalogClosureEntry(
-        ref=ref,
-        family=cast(CatalogFamily, ref.family),
-        preserved_path=preserved_catalog_path(ref),
-        yaml_bytes=content,
-        document_digest=sha256_digest(content),
-        size_bytes=len(content),
+    return CatalogUploadConfigMap(
+        name=name,
+        uid=identity.uid,
+        entry=CatalogClosureEntry(
+            ref=ref,
+            family=cast(CatalogFamily, ref.family),
+            preserved_path=preserved_catalog_path(ref),
+            yaml_bytes=content,
+            document_digest=sha256_digest(content),
+            size_bytes=len(content),
+        ),
     )
+
+
+def _validated_selection_inputs(
+    namespace: object, root_yaml: object, selection: object
+) -> tuple[str, bytes, CatalogUploadSelection]:
+    _require_namespace(namespace)
+    if not isinstance(root_yaml, bytes):
+        raise TypeError("root_yaml must be bytes")
+    if not isinstance(selection, CatalogUploadSelection):
+        raise TypeError("selection must be a CatalogUploadSelection")
+    return cast(str, namespace), root_yaml, selection
+
+
+def decode_catalog_upload_config_maps(
+    items: Iterable[Any],
+    *,
+    namespace: str,
+    root_yaml: bytes,
+    selection: CatalogUploadSelection,
+) -> tuple[CatalogUpload, tuple[CatalogUploadConfigMap, ...]]:
+    """Decode the listed ConfigMaps of one selection into the upload and its resources.
+
+    Duplicate names and duplicate refs are refused; resources come back sorted
+    by ref, the order the upload's files carry.
+    """
+    namespace, root_yaml, selection = _validated_selection_inputs(namespace, root_yaml, selection)
+    resources: dict[CatalogRef, CatalogUploadConfigMap] = {}
+    names: set[str] = set()
+    for item in items:
+        resource = decode_catalog_upload_config_map(
+            item,
+            namespace=namespace,
+            upload_id=selection.upload_id,
+        )
+        if resource.name in names:
+            raise _error(
+                KubernetesRuntimeConfigErrorCode.INVALID_CONFIG_MAP,
+                f"Catalog upload {selection.upload_id} contains duplicate ConfigMap name "
+                f"{resource.name}",
+                namespace=namespace,
+                config_map_name=resource.name,
+            )
+        if resource.entry.ref in resources:
+            raise _error(
+                KubernetesRuntimeConfigErrorCode.INVALID_CONFIG_MAP,
+                f"Catalog upload {selection.upload_id} contains duplicate catalog ref "
+                f"{resource.entry.ref}",
+                namespace=namespace,
+                config_map_name=resource.name,
+            )
+        names.add(resource.name)
+        resources[resource.entry.ref] = resource
+    ordered = tuple(resources[ref] for ref in sorted(resources, key=str))
+    upload = CatalogUpload(
+        selection=selection,
+        root_yaml=root_yaml,
+        catalog_files=tuple(resource.entry for resource in ordered),
+    )
+    return upload, ordered
 
 
 def read_catalog_upload(
@@ -271,12 +454,7 @@ def read_catalog_upload(
     selection: CatalogUploadSelection,
 ) -> CatalogUpload:
     """Fetch one selected upload with exactly one label-list request."""
-    if not isinstance(namespace, str) or not namespace.strip():
-        raise TypeError("namespace must be a non-empty string")
-    if not isinstance(root_yaml, bytes):
-        raise TypeError("root_yaml must be bytes")
-    if not isinstance(selection, CatalogUploadSelection):
-        raise TypeError("selection must be a CatalogUploadSelection")
+    namespace, root_yaml, selection = _validated_selection_inputs(namespace, root_yaml, selection)
     try:
         response = client.list_namespaced_config_map(
             namespace=namespace,
@@ -289,36 +467,13 @@ def read_catalog_upload(
             namespace=namespace,
             cause=exc,
         ) from exc
-
-    entries: dict[CatalogRef, CatalogClosureEntry] = {}
-    names: set[str] = set()
-    for item in _items(response, namespace=namespace):
-        name, entry = _entry_from_config_map(
-            item,
-            namespace=namespace,
-            selection=selection,
-        )
-        if name in names:
-            raise _error(
-                KubernetesRuntimeConfigErrorCode.INVALID_CONFIG_MAP,
-                f"Catalog upload {selection.upload_id} contains duplicate ConfigMap name {name}",
-                namespace=namespace,
-                config_map_name=name,
-            )
-        if entry.ref in entries:
-            raise _error(
-                KubernetesRuntimeConfigErrorCode.INVALID_CONFIG_MAP,
-                f"Catalog upload {selection.upload_id} contains duplicate catalog ref {entry.ref}",
-                namespace=namespace,
-                config_map_name=name,
-            )
-        names.add(name)
-        entries[entry.ref] = entry
-    return CatalogUpload(
-        selection=selection,
+    upload, _resources = decode_catalog_upload_config_maps(
+        listed_config_maps(response, namespace=namespace),
+        namespace=namespace,
         root_yaml=root_yaml,
-        catalog_files=tuple(entries[ref] for ref in sorted(entries, key=str)),
+        selection=selection,
     )
+    return upload
 
 
 def write_runtime_config_proof(

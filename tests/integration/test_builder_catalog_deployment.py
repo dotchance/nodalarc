@@ -27,6 +27,12 @@ import requests
 from nodalarc.catalog_upload import CatalogUploadSelection, verify_catalog_upload
 from nodalarc.configuration_yaml import load_configuration_yaml
 from nodalarc.kubernetes_runtime_config import CATALOG_UPLOAD_LABEL, read_catalog_upload
+from nodalarc.workload_target import (
+    NODE_ID_LABEL,
+    WorkloadTargetError,
+    select_live_pod,
+    workload_target_from_pod,
+)
 
 pytestmark = [
     pytest.mark.integration,
@@ -547,6 +553,11 @@ def _wait_for_runtime_smoke(
             payload={"node_id": satellite_id, "command": "show isis neighbor"},
             retries=3,
         )
+        if introspection.get("error") or introspection.get("exit_code") != 0:
+            raise AssertionError(
+                f"introspection failed on {satellite_id} before adjacency could be judged: "
+                f"{introspection}"
+            )
         if "Up" not in str(introspection.get("output") or ""):
             last_detail = "IS-IS adjacency has not converged"
             time.sleep(5)
@@ -558,23 +569,23 @@ def _wait_for_runtime_smoke(
             "-n",
             namespace,
             "-l",
-            f"nodalarc.io/node-id={ground_id}",
+            f"{NODE_ID_LABEL}={ground_id}",
             "-o",
             "json",
         )
-        items = pods.get("items", [])
-        if len(items) != 1:
-            last_detail = f"expected one pod for ground node {ground_id}, found {len(items)}"
-            time.sleep(3)
-            continue
-        pod_name = str(items[0]["metadata"]["name"])
+        try:
+            ground_target = workload_target_from_pod(
+                select_live_pod(pods.get("items", []), ground_id)
+            )
+        except WorkloadTargetError as exc:
+            raise AssertionError(f"ground node workload target unavailable: {exc}") from exc
         ping = _kubectl(
             "exec",
             "-n",
             namespace,
-            pod_name,
+            ground_target.pod_name,
             "-c",
-            "frr",
+            ground_target.container,
             "--",
             "ping",
             "-c",

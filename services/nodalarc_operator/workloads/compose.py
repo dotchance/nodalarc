@@ -280,6 +280,7 @@ def compose_workload(
             *(_sidecar_container(sidecar, profile, plan) for sidecar in profile.sidecars),
         ],
         volumes=volumes,
+        primary_container=profile.id,
         init_containers=[],
     )
     return ComposedWorkload(

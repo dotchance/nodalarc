@@ -9,6 +9,7 @@ from log file tailing, both via kubectl exec.
 from __future__ import annotations
 
 import abc
+import json
 import logging
 import re
 import subprocess
@@ -16,6 +17,7 @@ import threading
 from datetime import UTC, datetime
 
 from nodalarc.models.metrics import AdapterEvent
+from nodalarc.workload_target import WorkloadTargetError, workload_target_from_pod
 
 log = logging.getLogger(__name__)
 
@@ -54,31 +56,23 @@ class _NodeState:
 
     @property
     def container(self) -> str:
-        """The primary workload container: first in the pod's composition."""
+        """The primary workload container the Operator published on the pod."""
         if self._container is None:
-            self._resolve_container()
-        if self._container is None:
-            raise RuntimeError(f"primary container unresolved for pod {self.pod_name}")
+            self._container = self._read_primary_container()
         return self._container
 
-    def _resolve_container(self) -> None:
+    def _read_primary_container(self) -> str:
         result = subprocess.run(
-            [
-                "kubectl",
-                "get",
-                "pod",
-                "-n",
-                self.namespace,
-                self.pod_name,
-                "-o",
-                "jsonpath={.spec.containers[0].name}",
-            ],
+            ["kubectl", "get", "pod", "-n", self.namespace, self.pod_name, "-o", "json"],
             capture_output=True,
             text=True,
             timeout=10,
         )
-        if result.returncode == 0 and result.stdout.strip():
-            self._container = result.stdout.strip()
+        if result.returncode != 0:
+            raise WorkloadTargetError(
+                self.node_id, f"kubectl get pod {self.pod_name} failed: {result.stderr.strip()}"
+            )
+        return workload_target_from_pod(json.loads(result.stdout)).container
 
     @property
     def namespace(self) -> str:

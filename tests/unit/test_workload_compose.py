@@ -20,10 +20,10 @@ _OWNER = {"uid": "11111111-2222-3333-4444-555555555555"}
 PROFILE_REF = "nodalarc:profiles/router.yaml"
 
 
-def _router_profile() -> Profile:
+def _router_profile(profile_id: str = "router") -> Profile:
     return Profile.model_validate(
         {
-            "id": "router",
+            "id": profile_id,
             "adapter": "frr",
             "registry": "registry.example",
             "image": f"nodalarc/frr@sha256:{_DIGEST}",
@@ -89,6 +89,7 @@ def test_router_profile_composes_primary_sidecar_and_artifacts() -> None:
 
     names = [container.name for container in composed.composition.containers]
     assert names == ["router", "observer"]
+    assert composed.composition.primary_container == "router"
     primary = composed.composition.containers[0]
     assert primary.image == f"registry.example/nodalarc/frr@sha256:{_DIGEST}"
     assert primary.security_context.capabilities.add == ["NET_ADMIN", "NET_RAW"]
@@ -112,6 +113,16 @@ def test_router_profile_composes_primary_sidecar_and_artifacts() -> None:
     assert composed.terminal_access == '{"surface":"ssh"}'
 
 
+def test_renamed_router_profile_names_its_primary_container_after_the_profile() -> None:
+    composed = compose_workload(
+        _plan(), _router_profile("custom-router"), namespace="nodalarc", owner_ref=_OWNER
+    )
+
+    names = [container.name for container in composed.composition.containers]
+    assert names == ["custom-router", "observer"]
+    assert composed.composition.primary_container == "custom-router"
+
+
 def test_host_profile_composes_one_plain_container() -> None:
     composed = compose_workload(
         WorkloadPlan(node_id="host-1", profile_ref=PROFILE_REF),
@@ -121,6 +132,7 @@ def test_host_profile_composes_one_plain_container() -> None:
     )
 
     assert len(composed.composition.containers) == 1
+    assert composed.composition.primary_container == "linux-host"
     container = composed.composition.containers[0]
     assert container.image == f"node01:5000/nodalarc/base@sha256:{_DIGEST}"
     assert container.security_context.read_only_root_filesystem is True

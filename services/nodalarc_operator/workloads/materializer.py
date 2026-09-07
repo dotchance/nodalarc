@@ -22,9 +22,9 @@ from nodalarc.substrate.manifest_contract import (
     POD_OWNER_UID_LABEL,
     POD_SESSION_RUN_LABEL,
 )
+from nodalarc.workload_target import NODE_ID_LABEL, PRIMARY_CONTAINER_ANNOTATION
 
 SESSION_LABEL = "nodalarc.io/session"
-NODE_ID_LABEL = "nodalarc.io/node-id"
 ROLE_LABEL = "nodalarc.io/role"
 
 # Platform-owned pod annotation carrying the built-in-or-explicit workload
@@ -77,6 +77,9 @@ class WorkloadComposition:
 
     containers: list[kubernetes.client.V1Container]
     volumes: list[kubernetes.client.V1Volume]
+    # The container running the node's primary workload, named explicitly so
+    # no consumer infers it from position. Published on the pod.
+    primary_container: str
     init_containers: list[kubernetes.client.V1Container] = field(default_factory=list)
 
 
@@ -201,6 +204,12 @@ def build_session_pod(
         raise ValueError("composition may not use the reserved container name 'wiring-gate'")
     if any(volume.name == "wiring-status" for volume in composition.volumes):
         raise ValueError("composition may not use the reserved volume name 'wiring-status'")
+    declared = [container.name for container in composition.containers]
+    if composition.primary_container not in declared:
+        raise ValueError(
+            f"composition names primary container {composition.primary_container!r} "
+            f"but declares {declared}"
+        )
 
     return kubernetes.client.V1Pod(
         metadata=kubernetes.client.V1ObjectMeta(
@@ -209,6 +218,7 @@ def build_session_pod(
             labels=labels,
             annotations={
                 WORKLOAD_SELECTION_ANNOTATION: selection_identity,
+                PRIMARY_CONTAINER_ANNOTATION: composition.primary_container,
                 **(
                     {TERMINAL_ACCESS_ANNOTATION: terminal_access}
                     if terminal_access is not None

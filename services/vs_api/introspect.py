@@ -2,23 +2,25 @@
 # Licensed under the Apache License, Version 2.0. See LICENSE file.
 """FRR introspection — execute whitelisted vtysh commands in node containers.
 
-Uses the kubernetes Python client to exec into FRR containers directly,
-replacing the deploy daemon intermediary.
+Uses the kubernetes Python client to exec into the node's primary workload
+container, which the Operator publishes on the pod.
 """
 
 from __future__ import annotations
 
 import logging
-import re
 
 import kubernetes.client
 import kubernetes.config
 import kubernetes.stream
 from nodalarc.platform_config import get_platform_config
+from nodalarc.workload_target import (
+    WorkloadTargetError,
+    read_workload_target,
+    validate_node_id,
+)
 
 log = logging.getLogger(__name__)
-
-VALID_POD_NAME = re.compile(r"^[a-z0-9][a-z0-9\-]{0,62}$")
 
 VTYSH_COMMANDS = {
     "show isis neighbor",
@@ -46,10 +48,7 @@ def run_vtysh(node_id: str, command: str) -> dict:
         raise ValueError("node_id is required")
     if command not in VTYSH_COMMANDS:
         raise ValueError(f"Command not in whitelist: {command}")
-
-    pod_name = node_id.lower()
-    if not VALID_POD_NAME.match(pod_name):
-        raise ValueError(f"Invalid pod name: {pod_name}")
+    validate_node_id(node_id)
 
     cfg = get_platform_config()
     namespace = cfg.kubernetes_namespace
@@ -62,11 +61,23 @@ def run_vtysh(node_id: str, command: str) -> dict:
     v1 = kubernetes.client.CoreV1Api()
 
     try:
+        target = read_workload_target(v1, namespace, node_id)
+    except WorkloadTargetError as exc:
+        log.warning("Workload target unavailable for %s cmd=%s: %s", node_id, command, exc)
+        return {
+            "node_id": node_id,
+            "command": command,
+            "output": "",
+            "exit_code": -1,
+            "error": f"workload target unavailable: {exc}",
+        }
+
+    try:
         stdout = kubernetes.stream.stream(
             v1.connect_get_namespaced_pod_exec,
-            pod_name,
+            target.pod_name,
             namespace,
-            container="frr",
+            container=target.container,
             command=["vtysh", "-c", command],
             stderr=False,
             stdout=True,

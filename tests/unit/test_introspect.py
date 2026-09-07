@@ -1,16 +1,34 @@
 """Unit tests for vs_api.introspect — whitelist validation and vtysh execution."""
 
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
 from nodalarc.platform_config import get_platform_config
 from vs_api.introspect import VTYSH_COMMANDS, run_vtysh
 
+from tests.unit.test_workload_target import pod_document
+
 
 @pytest.fixture(autouse=True)
 def _mock_k8s_config():
     """Mock kubernetes config loading for all introspect tests."""
     with patch("vs_api.introspect.kubernetes.config.load_incluster_config"):
+        yield
+
+
+@pytest.fixture(autouse=True)
+def _published_target():
+    """Every node the tests name has one live pod publishing ``custom-router``."""
+
+    def list_namespaced_pod(namespace, *, label_selector):
+        node_id = label_selector.split("=", 1)[1]
+        if node_id == "sat-p99s99":
+            return SimpleNamespace(items=[])
+        return SimpleNamespace(items=[pod_document(node_id, uid=f"uid-{node_id}")])
+
+    with patch("vs_api.introspect.kubernetes.client.CoreV1Api") as core:
+        core.return_value.list_namespaced_pod.side_effect = list_namespaced_pod
         yield
 
 
@@ -37,22 +55,28 @@ class TestWhitelist:
             run_vtysh("sat-p00s00", "")
 
 
-class TestPodNameDerivation:
-    """Pod name is node_id lowercased."""
+class TestWorkloadTarget:
+    """The exec lands on the pod and container the Operator published."""
 
     @patch("vs_api.introspect.kubernetes.stream.stream")
-    def test_uppercase_node_id_lowered(self, mock_stream):
-        mock_stream.return_value = ""
-        run_vtysh("sat-P00S00", "show isis neighbor")
-        call_args = mock_stream.call_args
-        assert call_args[0][1] == "sat-p00s00"
-
-    @patch("vs_api.introspect.kubernetes.stream.stream")
-    def test_already_lowercase_unchanged(self, mock_stream):
+    def test_exec_targets_the_published_pod_and_container(self, mock_stream):
         mock_stream.return_value = ""
         run_vtysh("sat-p01s02", "show ip route")
         call_args = mock_stream.call_args
         assert call_args[0][1] == "sat-p01s02"
+        assert call_args[1]["container"] == "custom-router"
+
+    def test_node_id_must_be_a_runtime_identifier(self):
+        with pytest.raises(ValueError, match="invalid node id"):
+            run_vtysh("sat-P00S00", "show isis neighbor")
+
+    @patch("vs_api.introspect.kubernetes.stream.stream")
+    def test_missing_target_is_reported_before_any_exec(self, mock_stream):
+        result = run_vtysh("sat-p99s99", "show isis neighbor")
+        assert result["exit_code"] == -1
+        assert result["error"].startswith("workload target unavailable: sat-p99s99:")
+        assert "found 0" in result["error"]
+        mock_stream.assert_not_called()
 
 
 class TestNodeIdRequired:
@@ -86,7 +110,7 @@ class TestNonZeroExit:
         mock_stream.side_effect = kubernetes.client.rest.ApiException(
             status=404, reason="Not Found"
         )
-        result = run_vtysh("sat-p99s99", "show isis neighbor")
+        result = run_vtysh("sat-p00s00", "show isis neighbor")
         assert result["exit_code"] == -1
         assert result["error"] == "Kubernetes exec failed"
         assert "Not Found" not in result["error"]

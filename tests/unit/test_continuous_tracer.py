@@ -5,6 +5,8 @@ from types import SimpleNamespace
 from nodalarc.models.path import LiveTraceLink, PathHop, TracepathHop, TracepathResult
 from vs_api.continuous_tracer import ContinuousTracer
 
+from tests.unit.test_workload_target import pod_document
+
 
 def _make_tracer(
     node_registry=None,
@@ -335,15 +337,14 @@ def test_run_tracepath_streams_partial_hops():
     ]
 
     partials: list[int] = []
-    from types import SimpleNamespace
 
     with (
         patch("kubernetes.config.load_incluster_config"),
         patch("kubernetes.client.CoreV1Api") as core_api,
         patch("kubernetes.stream.stream", return_value=_FakeStream(lines)),
     ):
-        core_api.return_value.read_namespaced_pod.return_value.spec.containers = [
-            SimpleNamespace(name="frr-router")
+        core_api.return_value.list_namespaced_pod.return_value.items = [
+            pod_document("gs-alpha", primary="frr-router", containers=("observer", "frr-router"))
         ]
         result = tracer._run_tracepath(
             "gs-alpha", "10.0.0.9", lambda raw: partials.append(raw.count("\n"))
@@ -355,3 +356,70 @@ def test_run_tracepath_streams_partial_hops():
     assert partials == sorted(partials)  # monotonically increasing
     assert len(partials) >= 3  # at least once per hop line
     assert max(partials) >= 4  # header + 3 hop lines all complete
+
+
+def test_run_tracepath_reads_the_live_target_on_every_trace():
+    """A replaced pod is traced through its new identity: no name-keyed cache."""
+    from unittest.mock import patch
+
+    tracer = _make_tracer()
+    listings = [
+        [pod_document("gs-alpha", uid="uid-1", primary="frr-router", containers=("frr-router",))],
+        [
+            pod_document(
+                "gs-alpha",
+                uid="uid-1",
+                deleting=True,
+                primary="frr-router",
+                containers=("frr-router",),
+            ),
+            pod_document(
+                "gs-alpha",
+                uid="uid-2",
+                primary="custom-router",
+                containers=("observer", "custom-router"),
+            ),
+        ],
+    ]
+
+    class _DoneStream:
+        def is_open(self):
+            return False
+
+        def read_stdout(self):
+            return ""
+
+        def read_stderr(self):
+            return ""
+
+    with (
+        patch("kubernetes.config.load_incluster_config"),
+        patch("kubernetes.client.CoreV1Api") as core_api,
+        patch("kubernetes.stream.stream", return_value=_DoneStream()) as stream,
+    ):
+        core_api.return_value.list_namespaced_pod.side_effect = [
+            SimpleNamespace(items=items) for items in listings
+        ]
+        first = tracer._run_tracepath("gs-alpha", "10.0.0.9")
+        second = tracer._run_tracepath("gs-alpha", "10.0.0.9")
+
+    assert first["ok"] and second["ok"]
+    containers = [call.kwargs["container"] for call in stream.call_args_list]
+    assert containers == ["frr-router", "custom-router"]
+
+
+def test_run_tracepath_reports_a_missing_target_instead_of_tracing():
+    from unittest.mock import patch
+
+    tracer = _make_tracer()
+    with (
+        patch("kubernetes.config.load_incluster_config"),
+        patch("kubernetes.client.CoreV1Api") as core_api,
+        patch("kubernetes.stream.stream") as stream,
+    ):
+        core_api.return_value.list_namespaced_pod.return_value.items = []
+        result = tracer._run_tracepath("gs-alpha", "10.0.0.9")
+
+    assert result["ok"] is False
+    assert "gs-alpha: expected one live session pod, found 0" in result["error"]
+    stream.assert_not_called()

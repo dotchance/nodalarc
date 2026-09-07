@@ -34,20 +34,7 @@ from nodalarc.models.path import (
 from nodalarc.models.vs_api import TracedPath
 from nodalarc.platform_config import PlatformConfig
 from nodalarc.tracepath_parser import parse_tracepath
-
-_PRIMARY_CONTAINER_CACHE: dict[tuple[str, str], str] = {}
-
-
-def _primary_container(v1, pod: str, ns: str) -> str:
-    """The primary workload container: first in the pod's composition."""
-    key = (ns, pod)
-    cached = _PRIMARY_CONTAINER_CACHE.get(key)
-    if cached is not None:
-        return cached
-    name = v1.read_namespaced_pod(pod, ns).spec.containers[0].name
-    _PRIMARY_CONTAINER_CACHE[key] = name
-    return name
-
+from nodalarc.workload_target import WorkloadTargetError, read_workload_target
 
 from vs_api.timeline_scanner import TimelineScanner
 
@@ -236,8 +223,8 @@ class ContinuousTracer:
                 log.error("Trace loop error: %s", exc, exc_info=True)
                 await asyncio.sleep(self._config.trace_interval_seconds)
 
-    def _run_tracepath(self, pod: str, target: str, on_partial=None) -> dict:
-        """Run ICMP traceroute via kubernetes client exec.
+    def _run_tracepath(self, node_id: str, target: str, on_partial=None) -> dict:
+        """Run ICMP traceroute via kubernetes client exec from one node's workload.
 
         Uses traceroute -I (ICMP), 1 query per hop. The per-hop timeout is an
         INTEGER number of seconds: the FRR image ships BusyBox traceroute,
@@ -280,11 +267,16 @@ class ContinuousTracer:
         ns = self._config.kubernetes_namespace
 
         try:
+            workload = read_workload_target(v1, ns, node_id)
+        except WorkloadTargetError as exc:
+            return {"ok": False, "error": str(exc), "stdout": "", "stderr": ""}
+
+        try:
             resp = kubernetes.stream.stream(
                 v1.connect_get_namespaced_pod_exec,
-                pod,
+                workload.pod_name,
                 ns,
-                container=_primary_container(v1, pod, ns),
+                container=workload.container,
                 command=["traceroute", "-I", "-n", "-w", "4", "-q", "1", "-m", "20", target],
                 stderr=True,
                 stdout=True,
@@ -416,13 +408,13 @@ class ContinuousTracer:
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
             fwd_future = pool.submit(
                 self._run_tracepath,
-                src_exec.node_id.lower(),
+                src_exec.node_id,
                 dst_exec.loopback_ipv4,
                 _publish_partial_forward,
             )
             rev_future = pool.submit(
                 self._run_tracepath,
-                dst_exec.node_id.lower(),
+                dst_exec.node_id,
                 src_exec.loopback_ipv4,
             )
             fwd_resp = fwd_future.result()

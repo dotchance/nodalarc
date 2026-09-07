@@ -26,6 +26,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 
 from nodalarc.proto import node_agent_pb2
+from nodalarc.runtime_naming import vxlan_host_ifnames
 
 from node_agent import (
     ground_bridge,
@@ -939,7 +940,7 @@ def handle_batch_link_up(
                         local_ifname=iface.interface_name,
                     )
                 )
-                vxlan_if, _, _ = vxlan._host_ifnames(iface.vni)
+                vxlan_if = vxlan_host_ifnames(iface.vni).tunnel
                 outcomes[_iface_key(iface)] = _combine_proofs(
                     "CROSS_NODE ground LinkUp verified",
                     [
@@ -1167,7 +1168,7 @@ def _verify_kernel_inventory_entry(
                 )
             elif entry.vni:
                 local_ip = _discover_local_ip()
-                vxlan_if, _, _ = vxlan._host_ifnames(entry.vni)
+                vxlan_if = vxlan_host_ifnames(entry.vni).tunnel
                 proofs.extend(
                     [
                         kernel_verifier.verify_vxlan(

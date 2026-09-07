@@ -3,7 +3,6 @@
 """Named Linux kernel constants used by Node Agent proof code."""
 
 IFF_UP = 0x1
-TC_H_INGRESS = 0xFFFF0000
 TBF_RATE32_MAX_BPS = 0xFFFFFFFF
 
 # Netem delay is configured in microseconds but reported back by pyroute2 as

@@ -15,9 +15,7 @@ echo "Copyright 2024-2026 .chance (dotchance)"
 echo "Official source: https://github.com/dotchance/nodalarc"
 
 cleanup_local_kernel_state() {
-    ip link show 2>/dev/null | grep -oE 'vx[0-9]{5}' | \
-        xargs -r -I{} ip link del {} 2>/dev/null || true
-    ip link show 2>/dev/null | grep -oE 'vh[0-9]{5}' | \
+    ip link show 2>/dev/null | grep -oE 'v[xhp]([0-9a-f]{6}|[0-9]{5})' | \
         xargs -r -I{} ip link del {} 2>/dev/null || true
     ip link show 2>/dev/null | grep -oE '[a-zA-Z0-9_]+_isl_[a-zA-Z0-9_]+' | \
         xargs -r -I{} ip link del {} 2>/dev/null || true
@@ -89,8 +87,7 @@ done
 echo "[3/9] Cleaning host-side kernel state via Node Agent pods..."
 REMOTE_CLEANUP_ERRORS=0
 CLEANUP_SCRIPT='
-ip link show 2>/dev/null | grep -oE "vx[0-9]{5}" | xargs -r -I{} ip link del {} 2>/dev/null
-ip link show 2>/dev/null | grep -oE "vh[0-9]{5}" | xargs -r -I{} ip link del {} 2>/dev/null
+ip link show 2>/dev/null | grep -oE "v[xhp]([0-9a-f]{6}|[0-9]{5})" | xargs -r -I{} ip link del {} 2>/dev/null
 ip link show 2>/dev/null | grep -oE "[a-zA-Z0-9_]+_isl_[a-zA-Z0-9_]+" | xargs -r -I{} ip link del {} 2>/dev/null
 ip link show 2>/dev/null | grep -oE "[a-zA-Z0-9_]+_gnd_[a-zA-Z0-9_]+" | xargs -r -I{} ip link del {} 2>/dev/null
 ip link show 2>/dev/null | grep -oE "_gbr-[a-z0-9_]+" | xargs -r -I{} ip link del {} 2>/dev/null
@@ -196,7 +193,7 @@ fi
 
 # Check no nodalarc kernel state survives (local node)
 VETHS=$(ip link show 2>/dev/null | \
-    grep -E '_isl_|_gnd_|_gbr-|br-gnd-|vx[0-9]{5}|vh[0-9]{5}' || true)
+    grep -E '_isl_|_gnd_|_gbr-|br-gnd-|v[xhp]([0-9a-f]{6}|[0-9]{5})' || true)
 if [ -n "$VETHS" ]; then
     echo "ERROR: Nodalarc kernel interfaces still exist:"
     echo "$VETHS"

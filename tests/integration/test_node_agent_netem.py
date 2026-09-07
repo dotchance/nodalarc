@@ -20,6 +20,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 
 import pytest
+from nodalarc.runtime_naming import vxlan_host_ifnames
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_root]
 
@@ -132,10 +133,10 @@ def _seed_substrate_measurement(
     *,
     source_node: str,
     source_ip: str,
-    target_node: str,
-    target_ip: str,
+    targets: dict[str, str],
     reason: str,
 ) -> None:
+    """Install one substrate snapshot holding a measurement per target node -> IP."""
     from datetime import UTC, datetime, timedelta
     from unittest.mock import MagicMock
 
@@ -146,13 +147,16 @@ def _seed_substrate_measurement(
     )
     from node_agent import substrate_monitor
 
-    pair = RequiredSubstratePair.build(
-        source_node=source_node,
-        source_ip=source_ip,
-        target_node=target_node,
-        target_ip=target_ip,
-        reasons=[reason],
-    )
+    pairs = [
+        RequiredSubstratePair.build(
+            source_node=source_node,
+            source_ip=source_ip,
+            target_node=target_node,
+            target_ip=target_ip,
+            reasons=[reason],
+        )
+        for target_node, target_ip in targets.items()
+    ]
     manifest = WiringManifest.model_validate(
         {
             "session_id": "root-test",
@@ -177,7 +181,7 @@ def _seed_substrate_measurement(
             },
             "ground_bridges": {},
             "site_lans": {},
-            "required_substrate_pairs": [pair.model_dump(mode="json")],
+            "required_substrate_pairs": [pair.model_dump(mode="json") for pair in pairs],
             "isl_link_count": 0,
         }
     )
@@ -442,7 +446,7 @@ def test_handle_batch_link_up_down_proves_cross_node_isl_vxlan_and_qdisc(monkeyp
     _require_netns_tools()
 
     from nodalarc.proto import node_agent_pb2
-    from node_agent import handlers, kernel_verifier, substrate_monitor, vxlan
+    from node_agent import handlers, kernel_verifier, substrate_monitor
     from node_agent.handlers import handle_batch_link_down, handle_batch_link_up
 
     suffix = uuid.uuid4().hex[:6]
@@ -453,7 +457,7 @@ def test_handle_batch_link_up_down_proves_cross_node_isl_vxlan_and_qdisc(monkeyp
     remote_ip = f"198.18.{subnet_octet}.2"
     dummy = f"na-d{suffix}"[:15]
     vni = 10000 + int(suffix[:4], 16)
-    vxlan_if, veth_host, _ = vxlan._host_ifnames(vni)
+    vxlan_if, veth_host, _ = vxlan_host_ifnames(vni)
     monkeypatch.setenv("HOST_IP", local_ip)
     monkeypatch.setattr(handlers, "_local_ip", None)
     _bootstrap_substrate_identity(generation)
@@ -461,8 +465,7 @@ def test_handle_batch_link_up_down_proves_cross_node_isl_vxlan_and_qdisc(monkeyp
         generation,
         source_node="root-local",
         source_ip=local_ip,
-        target_node="root-remote",
-        target_ip=remote_ip,
+        targets={"root-remote": remote_ip},
         reason="isl",
     )
 
@@ -537,7 +540,7 @@ def test_handle_batch_link_up_down_proves_cross_node_ground_vxlan_mirred_and_qdi
     _require_netns_tools()
 
     from nodalarc.proto import node_agent_pb2
-    from node_agent import ground_bridge, handlers, kernel_verifier, substrate_monitor, vxlan
+    from node_agent import ground_bridge, handlers, kernel_verifier, substrate_monitor
     from node_agent.handlers import handle_batch_link_down, handle_batch_link_up
 
     suffix = uuid.uuid4().hex[:6]
@@ -550,7 +553,7 @@ def test_handle_batch_link_up_down_proves_cross_node_ground_vxlan_mirred_and_qdi
     dummy = f"na-d{suffix}"[:15]
     vni = 20000 + int(suffix[:4], 16)
     sat_host = ground_bridge._sat_host_veth(sat_id, "gnd0")
-    vxlan_if, _, _ = vxlan._host_ifnames(vni)
+    vxlan_if, _, _ = vxlan_host_ifnames(vni)
     monkeypatch.setenv("HOST_IP", local_ip)
     monkeypatch.setattr(handlers, "_local_ip", None)
     _bootstrap_substrate_identity(generation)
@@ -558,8 +561,7 @@ def test_handle_batch_link_up_down_proves_cross_node_ground_vxlan_mirred_and_qdi
         generation,
         source_node="root-local",
         source_ip=local_ip,
-        target_node="root-remote",
-        target_ip=remote_ip,
+        targets={"root-remote": remote_ip},
         reason="ground",
     )
 
@@ -696,3 +698,549 @@ def test_handle_set_latency_proves_kernel_qdisc_state():
                 proc.wait(timeout=2)
         subprocess.run(["ip", "link", "del", host_if], capture_output=True, check=False)
         subprocess.run(["ip", "netns", "del", namespace], capture_output=True, check=False)
+
+
+def _host_ifindex(ifname: str) -> int | None:
+    from pyroute2 import IPRoute
+
+    with IPRoute() as ipr:
+        found = ipr.link_lookup(ifname=ifname)
+    return found[0] if found else None
+
+
+def _isl_up(node_id: str, vni: int, remote_ip: str, generation: str, op_id: str):
+    from nodalarc.proto import node_agent_pb2
+
+    return node_agent_pb2.BatchLinkUpRequest(
+        envelope=_env("BatchLinkUp", op_id, generation),
+        interfaces=[
+            node_agent_pb2.InterfaceUp(
+                node_id=node_id,
+                interface_name="isl0",
+                link_type=node_agent_pb2.LINK_TYPE_ISL,
+                locality=node_agent_pb2.LOCALITY_CROSS_NODE,
+                latency_ms=5.0,
+                bandwidth_mbps=1000.0,
+                peer_node_id="sat-remote",
+                peer_interface_name="isl1",
+                remote_node_ip=remote_ip,
+                vni=vni,
+            )
+        ],
+    )
+
+
+def _cross_isl_setup(monkeypatch, suffix: str, *, octet_base: int, remotes: int = 1):
+    """Host identity plus a measured substrate path to ``remotes`` remote hosts."""
+    from node_agent import handlers
+
+    generation = _generation()
+    subnet_octet = int(suffix[:2], 16)
+    local_ip = f"198.{octet_base}.{subnet_octet}.1"
+    remote_ips = tuple(f"198.{octet_base}.{subnet_octet}.{2 + n}" for n in range(remotes))
+    monkeypatch.setenv("HOST_IP", local_ip)
+    monkeypatch.setattr(handlers, "_local_ip", None)
+    _bootstrap_substrate_identity(generation)
+    _seed_substrate_measurement(
+        generation,
+        source_node="root-local",
+        source_ip=local_ip,
+        targets={f"root-remote-{n}": ip for n, ip in enumerate(remote_ips)},
+        reason="isl",
+    )
+    return generation, local_ip, remote_ips
+
+
+def test_cross_node_isl_retry_reuses_the_complete_proven_link(monkeypatch):
+    """A Scheduler retry after a lost acknowledgement finds the whole link and
+    reuses it: same devices, nothing deleted or recreated."""
+    _require_netns_tools()
+    from node_agent import substrate_monitor
+    from node_agent.handlers import handle_batch_link_up
+
+    suffix = uuid.uuid4().hex[:6]
+    node_id = f"sat-r{suffix}"
+    generation, local_ip, (remote_ip,) = _cross_isl_setup(monkeypatch, suffix, octet_base=20)
+    dummy = f"na-d{suffix}"[:15]
+    vni = 30000 + int(suffix[:4], 16)
+    names = vxlan_host_ifnames(vni)
+    try:
+        _create_host_dummy(dummy, f"{local_ip}/24")
+        with _netns("x-retry") as (_namespace, proc):
+            first = handle_batch_link_up(
+                _isl_up(node_id, vni, remote_ip, generation, "root-retry-1"),
+                handles=_handles({node_id: proc.pid}),
+                fence=_fence(generation),
+            )
+            assert first.success is True
+            before = (_host_ifindex(names.tunnel), _host_ifindex(names.host_veth))
+            assert None not in before
+
+            second = handle_batch_link_up(
+                _isl_up(node_id, vni, remote_ip, generation, "root-retry-2"),
+                handles=_handles({node_id: proc.pid}),
+                fence=_fence(generation),
+            )
+
+            assert second.success is True
+            assert second.interface_results[0].verified is True
+            assert (_host_ifindex(names.tunnel), _host_ifindex(names.host_veth)) == before
+    finally:
+        _run_optional("ip", "link", "del", names.host_veth)
+        _run_optional("ip", "link", "del", names.tunnel)
+        _run_optional("ip", "link", "del", dummy)
+        substrate_monitor._reset_for_tests()
+
+
+def test_cross_node_isl_refuses_a_complete_link_to_another_endpoint(monkeypatch):
+    """Under the same names, a whole link to a different remote is another
+    link: the request is refused and that link is left exactly as it was."""
+    _require_netns_tools()
+    from node_agent import substrate_monitor
+    from node_agent.handlers import handle_batch_link_up
+
+    suffix = uuid.uuid4().hex[:6]
+    node_id = f"sat-c{suffix}"
+    generation, local_ip, (remote_ip, other_remote) = _cross_isl_setup(
+        monkeypatch, suffix, octet_base=21, remotes=2
+    )
+    dummy = f"na-d{suffix}"[:15]
+    vni = 40000 + int(suffix[:4], 16)
+    names = vxlan_host_ifnames(vni)
+    try:
+        _create_host_dummy(dummy, f"{local_ip}/24")
+        with _netns("x-conflict") as (_namespace, proc):
+            first = handle_batch_link_up(
+                _isl_up(node_id, vni, other_remote, generation, "root-conflict-1"),
+                handles=_handles({node_id: proc.pid}),
+                fence=_fence(generation),
+            )
+            assert first.success is True
+            before = (_host_ifindex(names.tunnel), _host_ifindex(names.host_veth))
+
+            second = handle_batch_link_up(
+                _isl_up(node_id, vni, remote_ip, generation, "root-conflict-2"),
+                handles=_handles({node_id: proc.pid}),
+                fence=_fence(generation),
+            )
+
+            assert second.interface_results[0].verified is False
+            assert "not the requested link" in second.interface_results[0].error_message
+            assert (_host_ifindex(names.tunnel), _host_ifindex(names.host_veth)) == before
+            assert _run("ip", "-d", "link", "show", names.tunnel).stdout.count(other_remote) == 1
+    finally:
+        _run_optional("ip", "link", "del", names.host_veth)
+        _run_optional("ip", "link", "del", names.tunnel)
+        _run_optional("ip", "link", "del", dummy)
+        substrate_monitor._reset_for_tests()
+
+
+def test_cross_node_isl_refuses_a_partial_link_and_leaves_it(monkeypatch):
+    """A tunnel with no pair under the link's names is partial state: refused, untouched."""
+    _require_netns_tools()
+    from node_agent import substrate_monitor
+    from node_agent.handlers import handle_batch_link_up
+
+    suffix = uuid.uuid4().hex[:6]
+    node_id = f"sat-p{suffix}"
+    generation, local_ip, (remote_ip,) = _cross_isl_setup(monkeypatch, suffix, octet_base=22)
+    dummy = f"na-d{suffix}"[:15]
+    vni = 50000 + int(suffix[:4], 16)
+    names = vxlan_host_ifnames(vni)
+    try:
+        _create_host_dummy(dummy, f"{local_ip}/24")
+        _run(
+            "ip",
+            "link",
+            "add",
+            names.tunnel,
+            "type",
+            "vxlan",
+            "id",
+            str(vni),
+            "local",
+            local_ip,
+            "remote",
+            remote_ip,
+            "dstport",
+            "4789",
+        )
+        before = _host_ifindex(names.tunnel)
+        with _netns("x-partial") as (_namespace, proc):
+            response = handle_batch_link_up(
+                _isl_up(node_id, vni, remote_ip, generation, "root-partial"),
+                handles=_handles({node_id: proc.pid}),
+                fence=_fence(generation),
+            )
+
+            assert response.interface_results[0].verified is False
+            assert "incomplete link" in response.interface_results[0].error_message
+            assert _host_ifindex(names.tunnel) == before
+            assert _host_ifindex(names.host_veth) is None
+    finally:
+        _run_optional("ip", "link", "del", names.host_veth)
+        _run_optional("ip", "link", "del", names.tunnel)
+        _run_optional("ip", "link", "del", dummy)
+        substrate_monitor._reset_for_tests()
+
+
+def test_vnis_folded_together_by_the_retired_rule_coexist_on_one_host(monkeypatch):
+    """VNI 1 and VNI 100000 shared host names under the five-digit rule; both
+    links now stand on one host at once."""
+    _require_netns_tools()
+    from node_agent import kernel_verifier, substrate_monitor
+    from node_agent.handlers import handle_batch_link_up
+
+    suffix = uuid.uuid4().hex[:6]
+    generation, local_ip, (remote_ip,) = _cross_isl_setup(monkeypatch, suffix, octet_base=23)
+    dummy = f"na-d{suffix}"[:15]
+    pairs = {1: f"sat-a{suffix}", 100000: f"sat-b{suffix}"}
+    try:
+        _create_host_dummy(dummy, f"{local_ip}/24")
+        with _netns("x-one") as (_ns_a, proc_a), _netns("x-two") as (_ns_b, proc_b):
+            pids = {pairs[1]: proc_a.pid, pairs[100000]: proc_b.pid}
+            for vni, node_id in pairs.items():
+                response = handle_batch_link_up(
+                    _isl_up(node_id, vni, remote_ip, generation, f"root-fold-{vni}"),
+                    handles=_handles({node_id: pids[node_id]}),
+                    fence=_fence(generation),
+                )
+                assert response.success is True, vni
+            for vni in pairs:
+                assert kernel_verifier.verify_vxlan(
+                    vni, local_ip=local_ip, remote_ip=remote_ip
+                ).verified
+            assert len({vxlan_host_ifnames(vni).tunnel for vni in pairs}) == 2
+    finally:
+        for vni in pairs:
+            names = vxlan_host_ifnames(vni)
+            _run_optional("ip", "link", "del", names.host_veth)
+            _run_optional("ip", "link", "del", names.tunnel)
+        _run_optional("ip", "link", "del", dummy)
+        substrate_monitor._reset_for_tests()
+
+
+def _tc(*args: str) -> str:
+    return _run("tc", *args).stdout
+
+
+def _ingress_state(ifname: str) -> str:
+    """The interface's ingress side as tc reports it: its ingress-parent qdisc and every filter."""
+    qdiscs = [
+        line for line in _tc("qdisc", "show", "dev", ifname).splitlines() if "ffff:fff1" in line
+    ]
+    return "\n".join(qdiscs) + "\n" + _tc("filter", "show", "dev", ifname, "ingress")
+
+
+_FOREIGN_INGRESS = {
+    "redirect elsewhere": lambda dev, other: (
+        _tc("qdisc", "add", "dev", dev, "ingress"),
+        _tc(
+            "filter",
+            "add",
+            "dev",
+            dev,
+            "ingress",
+            "u32",
+            "match",
+            "u32",
+            "0",
+            "0",
+            "action",
+            "mirred",
+            "egress",
+            "redirect",
+            "dev",
+            other,
+        ),
+    ),
+    "direct-action bpf": lambda dev, other: (
+        _tc("qdisc", "add", "dev", dev, "ingress"),
+        _tc("filter", "add", "dev", dev, "ingress", "bpf", "bytecode", "1,6 0 0 0,", "da"),
+    ),
+    "u32 police": lambda dev, other: (
+        _tc("qdisc", "add", "dev", dev, "ingress"),
+        _tc(
+            "filter",
+            "add",
+            "dev",
+            dev,
+            "ingress",
+            "u32",
+            "match",
+            "u32",
+            "0",
+            "0",
+            "police",
+            "rate",
+            "1mbit",
+            "burst",
+            "10k",
+            "drop",
+        ),
+    ),
+    "clsact": lambda dev, other: (_tc("qdisc", "add", "dev", dev, "clsact"),),
+}
+
+
+@pytest.mark.parametrize("occupant", sorted(_FOREIGN_INGRESS))
+def test_cross_node_ground_refuses_an_occupied_local_interface(monkeypatch, occupant):
+    """Whatever occupies the local interface's ingress side, the attach is
+    refused before anything is created and the occupant is left as it was."""
+    _require_netns_tools()
+    from nodalarc.proto import node_agent_pb2
+    from node_agent import ground_bridge, handlers, kernel_verifier, substrate_monitor
+    from node_agent.handlers import handle_batch_link_up
+
+    suffix = uuid.uuid4().hex[:6]
+    sat_id = f"sat-i{suffix}"
+    gs_id = f"gs-i{suffix}"
+    generation = _generation()
+    subnet_octet = int(suffix[:2], 16)
+    local_ip = f"198.24.{subnet_octet}.1"
+    remote_ip = f"198.24.{subnet_octet}.2"
+    dummy = f"na-d{suffix}"[:15]
+    foreign = f"na-f{suffix}"[:15]
+    vni = 60000 + int(suffix[:4], 16)
+    sat_host = ground_bridge._sat_host_veth(sat_id, "gnd0")
+    monkeypatch.setenv("HOST_IP", local_ip)
+    monkeypatch.setattr(handlers, "_local_ip", None)
+    _bootstrap_substrate_identity(generation)
+    _seed_substrate_measurement(
+        generation,
+        source_node="root-local",
+        source_ip=local_ip,
+        targets={"root-remote": remote_ip},
+        reason="ground",
+    )
+    try:
+        _create_host_dummy(dummy, f"{local_ip}/24")
+        _run("ip", "link", "add", foreign, "type", "dummy")
+        with _netns("x-ingress") as (_namespace, proc):
+            ground_bridge.create_satellite_ground_veth(sat_id, proc.pid, "gnd0")
+            _run("ip", "link", "set", sat_host, "up")
+            _FOREIGN_INGRESS[occupant](sat_host, foreign)
+            before = _ingress_state(sat_host)
+            assert before.strip()
+
+            response = handle_batch_link_up(
+                node_agent_pb2.BatchLinkUpRequest(
+                    envelope=_env("BatchLinkUp", "root-ingress-occupied", generation),
+                    interfaces=[
+                        node_agent_pb2.InterfaceUp(
+                            node_id=sat_id,
+                            interface_name="gnd0",
+                            link_type=node_agent_pb2.LINK_TYPE_GROUND,
+                            locality=node_agent_pb2.LOCALITY_CROSS_NODE,
+                            latency_ms=9.0,
+                            bandwidth_mbps=100.0,
+                            gs_id=gs_id,
+                            sat_id=sat_id,
+                            peer_node_id=gs_id,
+                            peer_interface_name="term0",
+                            remote_node_ip=remote_ip,
+                            vni=vni,
+                        )
+                    ],
+                ),
+                handles=_handles({sat_id: proc.pid}),
+                fence=_fence(generation),
+            )
+
+            assert response.interface_results[0].verified is False
+            assert "not the requested link" in response.interface_results[0].error_message
+            assert "incomplete link" in response.interface_results[0].error_message
+            assert kernel_verifier.verify_vxlan_absent(vni).verified
+            assert _ingress_state(sat_host) == before
+    finally:
+        _run_optional("ip", "link", "del", vxlan_host_ifnames(vni).tunnel)
+        _run_optional("ip", "link", "del", sat_host)
+        _run_optional("ip", "link", "del", foreign)
+        _run_optional("ip", "link", "del", dummy)
+        substrate_monitor._reset_for_tests()
+
+
+def _local_ground_up(gs_id: str, sat_id: str, generation: str, op_id: str):
+    from nodalarc.proto import node_agent_pb2
+
+    return node_agent_pb2.BatchLinkUpRequest(
+        envelope=_env("BatchLinkUp", op_id, generation),
+        interfaces=[
+            node_agent_pb2.InterfaceUp(
+                node_id=gs_id,
+                interface_name="term0",
+                link_type=node_agent_pb2.LINK_TYPE_GROUND,
+                locality=node_agent_pb2.LOCALITY_LOCAL,
+                latency_ms=8.0,
+                bandwidth_mbps=100.0,
+                gs_id=gs_id,
+                sat_id=sat_id,
+                peer_node_id=sat_id,
+                peer_interface_name="gnd0",
+            )
+        ],
+    )
+
+
+def test_local_ground_retry_reuses_the_proven_redirect_pair():
+    """A retried local ground LinkUp finds its exact redirects and reuses them."""
+    _require_netns_tools()
+    from node_agent import ground_bridge
+    from node_agent.handlers import handle_batch_link_up
+
+    suffix = uuid.uuid4().hex[:6]
+    gs_id = f"gs-t{suffix}"
+    sat_id = f"sat-t{suffix}"
+    generation = _generation()
+    gs_port = ground_bridge._gs_host_veth(gs_id, "term0")
+    sat_host = ground_bridge._sat_host_veth(sat_id, "gnd0")
+    try:
+        with _netns("gs-t") as (_gs_ns, gs_proc), _netns("sat-t") as (_sat_ns, sat_proc):
+            ground_bridge.create_ground_bridge(gs_id, gs_proc.pid, "term0")
+            ground_bridge.create_satellite_ground_veth(sat_id, sat_proc.pid, "gnd0")
+            handles = _handles({gs_id: gs_proc.pid, sat_id: sat_proc.pid})
+
+            first = handle_batch_link_up(
+                _local_ground_up(gs_id, sat_id, generation, "root-local-retry-1"),
+                handles=handles,
+                fence=_fence(generation),
+            )
+            assert first.success is True
+            before = (_ingress_state(gs_port), _ingress_state(sat_host))
+
+            second = handle_batch_link_up(
+                _local_ground_up(gs_id, sat_id, generation, "root-local-retry-2"),
+                handles=handles,
+                fence=_fence(generation),
+            )
+
+            assert second.success is True
+            assert second.interface_results[0].verified is True
+            assert (_ingress_state(gs_port), _ingress_state(sat_host)) == before
+    finally:
+        _run_optional("ip", "link", "del", gs_port)
+        _run_optional("ip", "link", "del", sat_host)
+
+
+_SELECTED_REDIRECTS = {
+    "protocol all, one destination": (
+        "protocol",
+        "all",
+        "u32",
+        "match",
+        "u32",
+        "0x0a000001",
+        "0xffffffff",
+        "at",
+        "16",
+    ),
+    "protocol ip only": ("protocol", "ip", "u32", "match", "u32", "0", "0"),
+}
+
+
+@pytest.mark.parametrize("restriction", sorted(_SELECTED_REDIRECTS))
+def test_local_ground_refuses_a_redirect_for_selected_packets_only(restriction):
+    """A redirect toward the right destination that applies to selected
+    packets is not the redirect NodalArc installs: refused, left as it was."""
+    _require_netns_tools()
+    from node_agent import ground_bridge
+    from node_agent.handlers import handle_batch_link_up
+
+    suffix = uuid.uuid4().hex[:6]
+    gs_id = f"gs-s{suffix}"
+    sat_id = f"sat-s{suffix}"
+    generation = _generation()
+    gs_port = ground_bridge._gs_host_veth(gs_id, "term0")
+    sat_host = ground_bridge._sat_host_veth(sat_id, "gnd0")
+    try:
+        with _netns("gs-s") as (_gs_ns, gs_proc), _netns("sat-s") as (_sat_ns, sat_proc):
+            ground_bridge.create_ground_bridge(gs_id, gs_proc.pid, "term0")
+            ground_bridge.create_satellite_ground_veth(sat_id, sat_proc.pid, "gnd0")
+            _tc("qdisc", "add", "dev", gs_port, "ingress")
+            _tc(
+                "filter",
+                "add",
+                "dev",
+                gs_port,
+                "ingress",
+                *_SELECTED_REDIRECTS[restriction],
+                "action",
+                "mirred",
+                "egress",
+                "redirect",
+                "dev",
+                sat_host,
+            )
+            ground_bridge._tc_mirred_redirect(sat_host, gs_port)
+            before = (_ingress_state(gs_port), _ingress_state(sat_host))
+
+            response = handle_batch_link_up(
+                _local_ground_up(gs_id, sat_id, generation, "root-local-selected"),
+                handles=_handles({gs_id: gs_proc.pid, sat_id: sat_proc.pid}),
+                fence=_fence(generation),
+            )
+
+            assert response.interface_results[0].verified is False
+            assert "mirred path contested" in response.interface_results[0].error_message
+            assert (_ingress_state(gs_port), _ingress_state(sat_host)) == before
+    finally:
+        _run_optional("ip", "link", "del", gs_port)
+        _run_optional("ip", "link", "del", sat_host)
+
+
+def test_local_ground_refuses_a_redirect_pair_in_another_chain():
+    """The exact redirect pair installed in chain 7 carries no ingress traffic:
+    refused, left as it was."""
+    _require_netns_tools()
+    from node_agent import ground_bridge
+    from node_agent.handlers import handle_batch_link_up
+
+    suffix = uuid.uuid4().hex[:6]
+    gs_id = f"gs-c{suffix}"
+    sat_id = f"sat-c{suffix}"
+    generation = _generation()
+    gs_port = ground_bridge._gs_host_veth(gs_id, "term0")
+    sat_host = ground_bridge._sat_host_veth(sat_id, "gnd0")
+    try:
+        with _netns("gs-c") as (_gs_ns, gs_proc), _netns("sat-c") as (_sat_ns, sat_proc):
+            ground_bridge.create_ground_bridge(gs_id, gs_proc.pid, "term0")
+            ground_bridge.create_satellite_ground_veth(sat_id, sat_proc.pid, "gnd0")
+            for src, dst in ((gs_port, sat_host), (sat_host, gs_port)):
+                _tc("qdisc", "add", "dev", src, "ingress")
+                _tc(
+                    "filter",
+                    "add",
+                    "dev",
+                    src,
+                    "ingress",
+                    "chain",
+                    "7",
+                    "protocol",
+                    "all",
+                    "u32",
+                    "match",
+                    "u32",
+                    "0",
+                    "0",
+                    "action",
+                    "mirred",
+                    "egress",
+                    "redirect",
+                    "dev",
+                    dst,
+                )
+            before = (_ingress_state(gs_port), _ingress_state(sat_host))
+            assert "chain 7" in before[0]
+
+            response = handle_batch_link_up(
+                _local_ground_up(gs_id, sat_id, generation, "root-local-chain"),
+                handles=_handles({gs_id: gs_proc.pid, sat_id: sat_proc.pid}),
+                fence=_fence(generation),
+            )
+
+            assert response.interface_results[0].verified is False
+            assert "mirred path contested" in response.interface_results[0].error_message
+            assert (_ingress_state(gs_port), _ingress_state(sat_host)) == before
+    finally:
+        _run_optional("ip", "link", "del", gs_port)
+        _run_optional("ip", "link", "del", sat_host)

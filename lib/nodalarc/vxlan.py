@@ -9,6 +9,14 @@ from __future__ import annotations
 
 import hashlib
 
+# The 24-bit VXLAN identifier space; 0 and 16777215 are reserved.
+VNI_MIN = 1
+VNI_MAX = 16777214
+# Default destination port for VXLAN (IANA standard).
+VXLAN_DST_PORT = 4789
+# VXLAN overhead: 8 VXLAN + 8 UDP + 20 IP + 14 outer Ethernet = 50 bytes.
+VXLAN_OVERHEAD_BYTES = 50
+
 
 def compute_vni(node_a: str, node_b: str, iface_a: str, iface_b: str) -> int:
     """Deterministic VNI from link identity. Same result on both ends.
@@ -19,7 +27,7 @@ def compute_vni(node_a: str, node_b: str, iface_a: str, iface_b: str) -> int:
     pair = sorted([(node_a, iface_a), (node_b, iface_b)])
     key = f"{pair[0][0]}:{pair[0][1]}:{pair[1][0]}:{pair[1][1]}"
     h = int(hashlib.sha256(key.encode()).hexdigest()[:8], 16)
-    return (h % 16777214) + 1
+    return (h % VNI_MAX) + VNI_MIN
 
 
 def compute_site_vni(site_id: str) -> int:
@@ -30,4 +38,4 @@ def compute_site_vni(site_id: str) -> int:
     validates site VNIs pairwise at manifest build.
     """
     h = int(hashlib.sha256(f"site-lan:{site_id}".encode()).hexdigest()[:8], 16)
-    return (h % 16777214) + 1
+    return (h % VNI_MAX) + VNI_MIN

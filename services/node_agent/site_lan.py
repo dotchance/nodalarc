@@ -42,9 +42,9 @@ from nodalarc.runtime_naming import (
     site_lan_member_pod_ifname,
     site_lan_vxlan_name,
 )
+from nodalarc.vxlan import VXLAN_DST_PORT, VXLAN_OVERHEAD_BYTES
 
 from node_agent.namespace_ops import _get_host_ns_fd, _in_namespace, _libc, _ns_lock
-from node_agent.vxlan import VXLAN_DST_PORT, VXLAN_OVERHEAD_BYTES
 
 log = logging.getLogger(__name__)
 

@@ -12,11 +12,20 @@ from __future__ import annotations
 
 import hashlib
 import re
+from typing import NamedTuple
+
+from nodalarc.vxlan import VNI_MAX, VNI_MIN
 
 K8S_LABEL_VALUE_MAX = 63
 LINUX_IFNAME_MAX = 15
 _RUNTIME_NODE_ID_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$")
 _CURRENT_HOST_IFNAME_RE = re.compile(r"^[isg][0-9a-z]{2}-[0-9a-f]{10}$")
+# VXLAN-carried link devices: tunnel vx, veth host end vh, veth pod end vp,
+# each followed by the VNI as six hex digits over the full 24-bit space.
+_VXLAN_HOST_IFNAME_RE = re.compile(r"^v[xhp][0-9a-f]{6}$")
+# The retired shape folded the VNI into five decimal digits, so two VNIs
+# could share names; cleanup must still recognize devices left under it.
+_RETIRED_VXLAN_HOST_IFNAME_RE = re.compile(r"^v[xhp][0-9]{5}$")
 _ALPHABET = "0123456789abcdefghijklmnopqrstuvwxyz"
 _RETIRED_HOST_IFNAME_PREFIXES = ("_isl_", "_gnd_", "_gbr-", "_na_")
 # Site-LAN host interfaces: bridge sl<vni>, vxlan port sv<vni>, member veth
@@ -80,6 +89,8 @@ def is_managed_host_ifname(name: str) -> bool:
     """
     if _CURRENT_HOST_IFNAME_RE.fullmatch(name):
         return True
+    if _VXLAN_HOST_IFNAME_RE.fullmatch(name) or _RETIRED_VXLAN_HOST_IFNAME_RE.fullmatch(name):
+        return True
     if _SITE_LAN_HOST_IFNAME_RE.fullmatch(name):
         return True
     if name.startswith("br-gnd-"):
@@ -89,6 +100,22 @@ def is_managed_host_ifname(name: str) -> bool:
     # Retired ground bridge port shape, e.g. _g0...; keep this here so cleanup
     # callers do not re-encode old naming knowledge.
     return name.startswith("_g") and len(name) > 2 and name[2:3].isdigit()
+
+
+class VxlanHostNames(NamedTuple):
+    """Host-side device names of one VXLAN-carried link."""
+
+    tunnel: str
+    host_veth: str
+    pod_veth: str
+
+
+def vxlan_host_ifnames(vni: int) -> VxlanHostNames:
+    """The host-side names of one VXLAN-carried link, distinct for every VNI."""
+    if isinstance(vni, bool) or not isinstance(vni, int) or not VNI_MIN <= vni <= VNI_MAX:
+        raise ValueError(f"VNI out of range {VNI_MIN}..{VNI_MAX}: {vni!r}")
+    tag = f"{vni:06x}"
+    return VxlanHostNames(tunnel=f"vx{tag}", host_veth=f"vh{tag}", pod_veth=f"vp{tag}")
 
 
 def site_lan_bridge_name(vni: int) -> str:

@@ -23,7 +23,9 @@ from nodalarc.runtime_naming import (
     satellite_ground_host_name,
 )
 from pyroute2 import IPRoute
+from pyroute2.netlink.rtnl import TC_H_INGRESS
 
+from node_agent import kernel_verifier
 from node_agent.namespace_ops import _in_namespace
 
 log = logging.getLogger(__name__)
@@ -57,13 +59,51 @@ def _sat_host_veth(sat_id: str, sat_ifname: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+def install_redirect_pair(a: str, b: str) -> None:
+    """Join two host-side interfaces with mirred redirects both ways, or reuse the proven pair.
+
+    The one installation policy for redirects. Neither interface carries an
+    ingress qdisc: install both. Both carry exactly the redirect toward the
+    other: reuse. Anything else, whatever occupies the ingress side, is
+    refused as `KernelStateConflict` and nothing is deleted or replaced.
+    """
+    with IPRoute() as ipr:
+        indexes = {}
+        for name in (a, b):
+            found = ipr.link_lookup(ifname=name)
+            if not found:
+                raise FileNotFoundError(f"tc mirred: interface {name} not found")
+            indexes[name] = found[0]
+        occupied: dict[str, str] = {}
+        for name in (a, b):
+            kind = kernel_verifier.ingress_qdisc_kind(ipr, indexes[name])
+            if kind is not None:
+                occupied[name] = kind
+        proofs: tuple[kernel_verifier.Proof, ...] = ()
+        if len(occupied) == 2:
+            proofs = (
+                kernel_verifier.prove_mirred_redirect(ipr, a, b),
+                kernel_verifier.prove_mirred_redirect(ipr, b, a),
+            )
+        if kernel_verifier.reuse_or_refuse(
+            subject=f"redirect {a}<->{b}",
+            absent=not occupied,
+            complete=len(occupied) == 2,
+            proofs=proofs,
+            evidence=tuple(f"{name} ingress ({kind})" for name, kind in occupied.items()),
+        ):
+            log.info("Redirect pair %s<->%s already installed and proven, reusing", a, b)
+            return
+    _tc_mirred_redirect(a, b)
+    _tc_mirred_redirect(b, a)
+
+
 def _tc_mirred_redirect(src: str, dst: str) -> None:
     """Install tc ingress + mirred egress redirect from src to dst.
 
-    Uses pyroute2 native netlink tc calls. No subprocess, no fork.
-    Benchmarked: 1.97ms vs 31ms per install (16x faster).
-
-    Operates in the host network namespace (no setns needed).
+    Create-only: `install_redirect_pair` has established that ``src`` carries
+    no ingress qdisc. Uses pyroute2 native netlink tc calls. No subprocess,
+    no fork. Operates in the host network namespace (no setns needed).
     """
     ipr = IPRoute()
     try:
@@ -74,10 +114,6 @@ def _tc_mirred_redirect(src: str, dst: str) -> None:
         if not dst_idx:
             raise FileNotFoundError(f"tc mirred: destination interface {dst} not found")
 
-        # Delete stale ingress qdisc (idempotent)
-        with contextlib.suppress(Exception):
-            ipr.tc("del", index=src_idx[0], kind="ingress")
-
         # Add ingress qdisc
         ipr.tc("add", index=src_idx[0], kind="ingress")
 
@@ -87,7 +123,7 @@ def _tc_mirred_redirect(src: str, dst: str) -> None:
                 "add-filter",
                 kind="u32",
                 index=src_idx[0],
-                parent=0xFFFF0000,
+                parent=TC_H_INGRESS,
                 protocol=3,  # ETH_P_ALL
                 target=0x00010000,
                 keys=["0x0/0x0+0"],
@@ -176,8 +212,7 @@ def _attach_to_ground_bridge_unlocked(
 
     _in_namespace(sat_pid, _up_sat_iface)
 
-    _tc_mirred_redirect(gs_port, host_veth)
-    _tc_mirred_redirect(host_veth, gs_port)
+    install_redirect_pair(gs_port, host_veth)
 
     log.debug("Attached %s to %s (tc redirect)", sat_id, gs_id)
 
@@ -542,8 +577,7 @@ def create_mediated_isl(
             ipr.close()
 
     # Install bidirectional tc mirred between host-side endpoints (host ns, no setns)
-    _tc_mirred_redirect(host_a, host_b)
-    _tc_mirred_redirect(host_b, host_a)
+    install_redirect_pair(host_a, host_b)
 
     log.debug(
         "Created mediated ISL: ns(%s)/%s [%s] ↔ [%s] ns(%s)/%s (mirred installed)",

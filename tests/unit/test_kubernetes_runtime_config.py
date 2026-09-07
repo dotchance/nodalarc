@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
@@ -33,7 +32,6 @@ from nodalarc.prepared_session import (
     PreparedSessionSource,
     prepare_session_files,
 )
-from nodalarc.runtime_config import RuntimeConfigProof
 
 ROOT = Path(__file__).resolve().parents[2]
 SHIPPED_ROOT = ROOT / "catalog" / "nodalarc"
@@ -142,15 +140,10 @@ def test_fetches_once_and_materializes_exact_ordinary_paths(
     assert loaded.session_path.read_bytes() == prepared.root_yaml
     for entry in prepared.catalog_files:
         assert (destination / entry.preserved_path).read_bytes() == entry.yaml_bytes
-    proof_bytes = (destination / RUNTIME_CONFIG_PROOF_FILENAME).read_bytes()
-    canonical_proof = json.dumps(
-        json.loads(proof_bytes),
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode()
-    assert canonical_proof == proof_bytes
-    proof = RuntimeConfigProof.model_validate_json(proof_bytes)
-    assert proof == loaded.proof
+    # The reader returns the proof; only the mounted owner persists one.
+    assert not (destination / RUNTIME_CONFIG_PROOF_FILENAME).exists()
+    proof = loaded.config.proof
+    assert proof.deployment_identity_bound is False
     assert proof.upload_id == upload.upload_id
     assert proof.run_id == "run-kubernetes-reader-0001"
 
@@ -166,7 +159,7 @@ def test_typed_config_maps_without_type_meta_are_accepted(
 
     loaded = _load(client, upload, tmp_path / "without-type-meta")
 
-    assert loaded.proof.upload_id == upload.upload_id
+    assert loaded.config.proof.upload_id == upload.upload_id
 
 
 def _deep_user_upload(tmp_path: Path) -> tuple[CatalogUpload, dict[str, bytes]]:
@@ -227,7 +220,7 @@ def test_deep_user_references_preserve_user_catalog_paths(tmp_path: Path) -> Non
 
     loaded = _load(_client_for(upload), upload, destination)
 
-    assert loaded.proof.upload_id == upload.upload_id
+    assert loaded.config.proof.upload_id == upload.upload_id
     for relative, content in user_files.items():
         assert (destination / "catalog" / "user" / relative).read_bytes() == content
 

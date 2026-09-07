@@ -14,7 +14,15 @@ from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
 from typing import Any, Protocol
 
+from nodalarc.catalog_upload import CatalogUploadSelection
+from nodalarc.cr_runtime_config import (
+    CR_GROUP,
+    CR_NAME,
+    CR_PLURAL,
+    CR_VERSION,
+)
 from nodalarc.platform_config import get_platform_config
+from pydantic import ValidationError
 
 from .catalog_context import CatalogContext
 from .catalog_upload_store import CatalogUploadResourceEvidence, KubernetesCatalogUploadStore
@@ -31,11 +39,6 @@ log = logging.getLogger(__name__)
 
 # Maximum number of old session directories to keep
 _MAX_KEPT_SESSIONS = 5
-
-_CR_GROUP = "nodalarc.io"
-_CR_VERSION = "v1alpha1"
-_CR_PLURAL = "constellationspecs"
-_CR_NAME = "current-session"
 
 
 class _CustomObjectsSwitchApi(Protocol):
@@ -84,12 +87,26 @@ def _selected_catalog_upload_matches(
     observed_cr: Mapping[str, Any],
     intended_cr: Mapping[str, Any],
 ) -> bool:
+    """Whether the observed CR selects the intended upload.
+
+    This answers one question during ambiguous-create recovery, and only about
+    the selection: a persisted CR whose other fields are incomplete still holds
+    its upload, and the cleanup must not delete it.
+    """
     observed_spec = observed_cr.get("spec")
     intended_spec = intended_cr.get("spec")
     if not isinstance(observed_spec, Mapping) or not isinstance(intended_spec, Mapping):
         return False
-    intended_upload = intended_spec.get("catalogUpload")
-    return intended_upload is not None and observed_spec.get("catalogUpload") == intended_upload
+    try:
+        observed = CatalogUploadSelection.model_validate(
+            observed_spec.get("catalogUpload"), strict=True
+        )
+        intended = CatalogUploadSelection.model_validate(
+            intended_spec.get("catalogUpload"), strict=True
+        )
+    except TypeError, ValidationError:
+        return False
+    return observed == intended
 
 
 def _pid_alive(pid: int) -> bool:
@@ -302,11 +319,11 @@ class SessionManager:
                 before_teardown()
             try:
                 custom_objects_api.delete_namespaced_custom_object(
-                    group=_CR_GROUP,
-                    version=_CR_VERSION,
+                    group=CR_GROUP,
+                    version=CR_VERSION,
                     namespace=namespace,
-                    plural=_CR_PLURAL,
-                    name=_CR_NAME,
+                    plural=CR_PLURAL,
+                    name=CR_NAME,
                 )
             except Exception as exc:
                 if _api_status(exc) == 404:
@@ -316,7 +333,7 @@ class SessionManager:
 
         deleted_existing_cr = await loop.run_in_executor(None, _delete_existing_cr)
         if deleted_existing_cr:
-            log.info("Deleted existing ConstellationSpec CR %s/%s", namespace, _CR_NAME)
+            log.info("Deleted existing ConstellationSpec CR %s/%s", namespace, CR_NAME)
             await progress("Waiting for old session to finalize")
             old_cr_deleted = False
             for _ in range(60):
@@ -324,11 +341,11 @@ class SessionManager:
                     await loop.run_in_executor(
                         None,
                         lambda: custom_objects_api.get_namespaced_custom_object(
-                            group=_CR_GROUP,
-                            version=_CR_VERSION,
+                            group=CR_GROUP,
+                            version=CR_VERSION,
                             namespace=namespace,
-                            plural=_CR_PLURAL,
-                            name=_CR_NAME,
+                            plural=CR_PLURAL,
+                            name=CR_NAME,
                         ),
                     )
                     await asyncio.sleep(2)
@@ -369,20 +386,20 @@ class SessionManager:
         def _create_cr() -> None:
             try:
                 custom_objects_api.create_namespaced_custom_object(
-                    group=_CR_GROUP,
-                    version=_CR_VERSION,
+                    group=CR_GROUP,
+                    version=CR_VERSION,
                     namespace=namespace,
-                    plural=_CR_PLURAL,
+                    plural=CR_PLURAL,
                     body=dict(cr_body),
                 )
             except Exception as create_exc:
                 try:
                     observed = custom_objects_api.get_namespaced_custom_object(
-                        group=_CR_GROUP,
-                        version=_CR_VERSION,
+                        group=CR_GROUP,
+                        version=CR_VERSION,
                         namespace=namespace,
-                        plural=_CR_PLURAL,
-                        name=_CR_NAME,
+                        plural=CR_PLURAL,
+                        name=CR_NAME,
                     )
                 except Exception as observe_exc:
                     if selection_started is not None and _api_status(observe_exc) != 404:
@@ -408,11 +425,11 @@ class SessionManager:
         selected_cr = await loop.run_in_executor(
             None,
             lambda: custom_objects_api.get_namespaced_custom_object(
-                group=_CR_GROUP,
-                version=_CR_VERSION,
+                group=CR_GROUP,
+                version=CR_VERSION,
                 namespace=namespace,
-                plural=_CR_PLURAL,
-                name=_CR_NAME,
+                plural=CR_PLURAL,
+                name=CR_NAME,
             ),
         )
         if constellation_spec_observed is not None:
@@ -423,11 +440,11 @@ class SessionManager:
             cr = await loop.run_in_executor(
                 None,
                 lambda: custom_objects_api.get_namespaced_custom_object(
-                    group=_CR_GROUP,
-                    version=_CR_VERSION,
+                    group=CR_GROUP,
+                    version=CR_VERSION,
                     namespace=namespace,
-                    plural=_CR_PLURAL,
-                    name=_CR_NAME,
+                    plural=CR_PLURAL,
+                    name=CR_NAME,
                 ),
             )
             phase = cr.get("status", {}).get("phase", "")

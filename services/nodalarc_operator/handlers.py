@@ -24,11 +24,19 @@ import os
 
 import kopf
 import kubernetes
+from nodalarc.cr_runtime_config import (
+    CR_API_VERSION,
+    CR_GROUP,
+    CR_KIND,
+    CR_NAME,
+    CR_PLURAL,
+    CR_VERSION,
+    load_cr_runtime_config,
+)
 from nodalarc.nats_channels import sanitize_session_id
-from nodalarc.runtime_config import RuntimeDeploymentContext
+from nodalarc.runtime_config import ResolvedRuntimeConfig, RuntimeDeploymentContext
 from nodalarc.session_identity import derive_session_run_id
 
-from nodalarc_operator.runtime_session import OperatorSessionConfig, resolve_operator_session
 from nodalarc_operator.session_deployer import (
     RetryableSessionDependency,
     build_runtime_deployment_context,
@@ -95,10 +103,10 @@ def _update_status(name: str, namespace: str, status: dict) -> None:
     # operator loop serves no feed consumers, so API-server tail latency
     # degrades only reconcile responsiveness, never a user-facing stream.
     _get_custom_api().patch_namespaced_custom_object_status(
-        group="nodalarc.io",
-        version="v1alpha1",
+        group=CR_GROUP,
+        version=CR_VERSION,
         namespace=namespace,
-        plural="constellationspecs",
+        plural=CR_PLURAL,
         name=name,
         body={"status": status},
     )
@@ -124,15 +132,15 @@ def _status_observed_current_generation(meta: dict, status: dict) -> bool:
 def _build_owner_ref(name: str, meta: dict) -> dict:
     """Build ownerReference dict for garbage collection."""
     return {
-        "apiVersion": "nodalarc.io/v1alpha1",
-        "kind": "ConstellationSpec",
+        "apiVersion": CR_API_VERSION,
+        "kind": CR_KIND,
         "name": name,
         "uid": meta["uid"],
         "blockOwnerDeletion": True,
     }
 
 
-def _compute_expected_node_ids(active_session: OperatorSessionConfig) -> frozenset[str]:
+def _compute_expected_node_ids(active_session: ResolvedRuntimeConfig) -> frozenset[str]:
     """Return expected pod names from the reconciliation's verified resolution."""
     return frozenset(node_id.lower() for node_id in active_session.resolution.resolved.node_ids())
 
@@ -141,10 +149,10 @@ def _resolve_active_session(
     spec: dict,
     namespace: str,
     session_run_id: str,
-) -> OperatorSessionConfig:
+) -> ResolvedRuntimeConfig:
     from nodalarc_operator.session_deployer import _get_v1
 
-    return resolve_operator_session(
+    return load_cr_runtime_config(
         spec,
         core_v1=_get_v1(),
         namespace=namespace,
@@ -160,10 +168,10 @@ def _cr_generation_is_current(name: str, namespace: str, meta: dict) -> bool:
     delete pods a newer generation is creating under the same CR UID.
     """
     cr = _get_custom_api().get_namespaced_custom_object(
-        group="nodalarc.io",
-        version="v1alpha1",
+        group=CR_GROUP,
+        version=CR_VERSION,
         namespace=namespace,
-        plural="constellationspecs",
+        plural=CR_PLURAL,
         name=name,
     )
     live = int((cr.get("metadata") or {}).get("generation", 0) or 0)
@@ -225,7 +233,7 @@ async def _converge_selection_failure(
 
 
 def _runtime_proof_status_fields(
-    active_session: OperatorSessionConfig,
+    active_session: ResolvedRuntimeConfig,
     deployment_context: RuntimeDeploymentContext,
 ) -> dict[str, str]:
     proof = active_session.proof
@@ -239,7 +247,7 @@ def _runtime_proof_status_fields(
 
 
 def _runtime_deployment_context(
-    active_session: OperatorSessionConfig,
+    active_session: ResolvedRuntimeConfig,
     meta: dict,
     session_run_id: str,
 ) -> RuntimeDeploymentContext:
@@ -255,7 +263,7 @@ def _runtime_deployment_context(
 
 def _runtime_session_config_matches(
     namespace: str,
-    active_session: OperatorSessionConfig,
+    active_session: ResolvedRuntimeConfig,
     deployment_context: RuntimeDeploymentContext,
 ) -> bool:
     """Return true only for the exact mounted inputs of this CR generation."""
@@ -263,8 +271,8 @@ def _runtime_session_config_matches(
 
     expected = build_runtime_session_config_data(
         active_session.resolution.resolved,
-        active_session.root_yaml,
-        active_session.catalog_upload,
+        active_session.root_yaml.decode("utf-8"),
+        active_session.selection,
         deployment_context,
     )
     try:
@@ -449,7 +457,7 @@ async def _reconcile_session(
     namespace,
     meta,
     status,
-    active_session: OperatorSessionConfig | None = None,
+    active_session: ResolvedRuntimeConfig | None = None,
 ):
     """Converge cluster state toward desired session state.
 
@@ -1179,7 +1187,7 @@ async def _reconcile_session(
     )
 
 
-@kopf.on.create("constellationspecs", group="nodalarc.io")
+@kopf.on.create(CR_PLURAL, group=CR_GROUP)
 async def on_create(spec, name, namespace, meta, **_):
     """Handle ConstellationSpec CR creation.
 
@@ -1190,13 +1198,13 @@ async def on_create(spec, name, namespace, meta, **_):
     """
     log.info("ConstellationSpec '%s' created in %s", name, namespace)
 
-    if name != "current-session":
+    if name != CR_NAME:
         _update_status(
             name,
             namespace,
             {
                 "phase": "Error",
-                "message": f"Only 'current-session' is allowed as CR name, got '{name}'",
+                "message": f"Only {CR_NAME!r} is allowed as CR name, got {name!r}",
             },
         )
         raise kopf.PermanentError(f"Invalid CR name: {name}")
@@ -1215,7 +1223,7 @@ async def on_create(spec, name, namespace, meta, **_):
     await _reconcile_session(spec, name, namespace, meta, {"phase": "Pending"})
 
 
-@kopf.on.update("constellationspecs", group="nodalarc.io")
+@kopf.on.update(CR_PLURAL, group=CR_GROUP)
 async def on_update(spec, name, namespace, meta, status, **_):
     """Handle CRD spec changes — session switch or config update.
 
@@ -1233,7 +1241,7 @@ async def on_update(spec, name, namespace, meta, status, **_):
     await _reconcile_session(spec, name, namespace, meta, status)
 
 
-@kopf.on.delete("constellationspecs", group="nodalarc.io")
+@kopf.on.delete(CR_PLURAL, group=CR_GROUP)
 async def on_delete(name, namespace, spec=None, meta=None, status=None, **_):
     """Handle ConstellationSpec CR deletion — tear down session."""
     log.info("ConstellationSpec '%s' deleted, tearing down session", name)
@@ -1244,7 +1252,7 @@ async def on_delete(name, namespace, spec=None, meta=None, status=None, **_):
     log.info("Session teardown complete")
 
 
-@kopf.on.resume("constellationspecs", group="nodalarc.io")
+@kopf.on.resume(CR_PLURAL, group=CR_GROUP)
 async def on_resume(spec, name, namespace, meta, status, **_):
     """Handle Operator restart — reconcile existing session state."""
     phase = status.get("phase", "")
@@ -1257,7 +1265,7 @@ async def on_resume(spec, name, namespace, meta, status, **_):
     await _reconcile_session(spec, name, namespace, meta, status)
 
 
-@kopf.timer("constellationspecs", group="nodalarc.io", interval=10.0, idle=10)
+@kopf.timer(CR_PLURAL, group=CR_GROUP, interval=10.0, idle=10)
 async def wiring_check(spec, name, namespace, meta, status, **_):
     """Periodically advance session state via the reconciler.
 

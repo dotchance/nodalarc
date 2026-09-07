@@ -29,13 +29,13 @@ from nodalarc.models.resolved_session import SourceContext
 from nodalarc.platform_config import _deterministic_node, compute_pod_placement
 from nodalarc.resolve_session import resolve_session_with_assets
 from nodalarc.runtime_config import (
+    ResolvedRuntimeConfig,
     RuntimeConfigProof,
     RuntimeDeploymentContext,
 )
 from nodalarc.semantic_projection import resolved_session_semantic_digest
 from nodalarc.substrate.manifest_contract import REQUIRED_WIRING_PHASES, WiringManifest
 from nodalarc.substrate.wiring_status import failed_status, ready_status, status_configmap_data
-from nodalarc_operator.runtime_session import OperatorSessionConfig
 from nodalarc_operator.session_deployer import (
     _create_terminal_ssh_keys,
     _required_substrate_pairs,
@@ -85,7 +85,7 @@ def _reset_operator_module_state():
             closure_digest=digest,
             file_count=0,
         )
-        return OperatorSessionConfig(
+        return ResolvedRuntimeConfig(
             resolution=resolution,
             proof=RuntimeConfigProof(
                 source_origin=origin,
@@ -98,8 +98,8 @@ def _reset_operator_module_state():
                 total_bytes=len(root_yaml.encode()),
                 resolved_node_count=len(resolution.resolved.nodes),
             ),
-            root_yaml=root_yaml,
-            catalog_upload=selection,
+            root_yaml=root_yaml.encode("utf-8"),
+            selection=selection,
         )
 
     sd._v1 = None
@@ -656,7 +656,7 @@ class TestPlatformHash:
 
     @pytest.mark.parametrize("spec", ({"sessionYaml": ""}, {}))
     def test_empty_session_yaml_is_rejected(self, spec):
-        with pytest.raises(ValueError, match="sessionYaml is required"):
+        with pytest.raises(ValueError, match="sessionYaml"):
             compute_platform_hash(spec)
 
     def test_runtime_hash_includes_run_id(self):

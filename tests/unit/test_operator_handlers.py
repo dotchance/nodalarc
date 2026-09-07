@@ -18,8 +18,7 @@ import nodalarc_operator.handlers as handlers_mod
 import nodalarc_operator.session_deployer as deployer_mod
 import pytest
 from nodalarc.catalog_upload import CatalogUploadSelection
-from nodalarc.runtime_config import RuntimeConfigProof
-from nodalarc_operator.runtime_session import OperatorSessionConfig
+from nodalarc.runtime_config import ResolvedRuntimeConfig, RuntimeConfigProof
 from nodalarc_operator.workloads.preparation import WorkloadPreparationError
 
 _SESSION_YAML = (
@@ -62,14 +61,14 @@ class _ReconcilerHarness:
     def expected_ids(self) -> frozenset[str]:
         return frozenset(f"p{i}" for i in range(self.expected_count))
 
-    def active_session(self, spec, _namespace, run_id) -> OperatorSessionConfig:
+    def active_session(self, spec, _namespace, run_id) -> ResolvedRuntimeConfig:
         digest = "sha256:" + "a" * 64
         selection = CatalogUploadSelection(
             upload_id="operator-test-upload",
             closure_digest=digest,
             file_count=0,
         )
-        return OperatorSessionConfig(
+        return ResolvedRuntimeConfig(
             resolution=MagicMock(),
             proof=RuntimeConfigProof(
                 source_origin="test.operator_handlers",
@@ -82,8 +81,8 @@ class _ReconcilerHarness:
                 total_bytes=1,
                 resolved_node_count=self.expected_count,
             ),
-            root_yaml=spec["sessionYaml"],
-            catalog_upload=selection,
+            root_yaml=spec["sessionYaml"].encode("utf-8"),
+            selection=selection,
         )
 
     def _p(self, name, target, **kwargs):

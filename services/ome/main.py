@@ -1837,7 +1837,7 @@ def main() -> None:
         build=build,
         log=logging.getLogger(__name__),
     )
-    pre_cfg = _session_bundle_from_resolution(runtime_config.resolution)
+    pre_cfg = _session_bundle_from_resolution(runtime_config.config.resolution)
     runtime_health.mark_loaded(runtime_config)
     session_id = pre_cfg.session_id
     from nodal.logging import set_session

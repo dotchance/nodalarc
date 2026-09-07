@@ -19,6 +19,7 @@ from nodalarc.catalog_upload import (
     DEFAULT_CATALOG_UPLOAD_LIMITS,
     CatalogUpload,
     CatalogUploadLimits,
+    CatalogUploadSelection,
     UploadId,
     sha256_digest,
     verify_catalog_upload,
@@ -35,6 +36,7 @@ RUNTIME_DEPLOYMENT_CONTEXT_SCHEMA: Final[Literal["nodalarc.runtime-deployment-co
     "nodalarc.runtime-deployment-context.v2"
 )
 RUNTIME_DEPLOYMENT_CONTEXT_FILENAME = "deployment-context.json"
+SESSION_YAML_FILENAME = "session.yaml"
 UNBOUND_RUNTIME_IDENTITY = "unbound:predeployment"
 
 _SHA256_PATTERN = r"^sha256:[0-9a-f]{64}$"
@@ -58,6 +60,26 @@ class RuntimeDeploymentContext(BaseModel):
     resolved_semantic_digest: Sha256Digest
     release: str = Field(min_length=1)
     build: str = Field(min_length=1)
+
+    def content_mismatches(self, proof: RuntimeConfigProof) -> tuple[str, ...]:
+        """Names of the content identity fields on which this context and a proof differ.
+
+        The content identity is the run, the upload and the three digests. It is
+        the one comparison every deployment-bound check makes; deployment
+        identity (CR, pod, release, build) is compared by its owners.
+        """
+        pairs = (
+            ("run_id", self.session_run_id, proof.run_id),
+            ("upload_id", self.upload_id, proof.upload_id),
+            ("document_digest", self.document_digest, proof.document_digest),
+            ("closure_digest", self.closure_digest, proof.closure_digest),
+            (
+                "resolved_semantic_digest",
+                self.resolved_semantic_digest,
+                proof.resolved_semantic_digest,
+            ),
+        )
+        return tuple(name for name, expected, observed in pairs if expected != observed)
 
 
 class RuntimeConfigProof(BaseModel):
@@ -113,22 +135,12 @@ class RuntimeConfigProof(BaseModel):
             raise TypeError("context must be a RuntimeDeploymentContext")
         if not isinstance(pod_uid, str) or not pod_uid.strip():
             raise ValueError("pod_uid must be a non-empty string")
-        expected = {
-            "run_id": self.run_id,
-            "upload_id": self.upload_id,
-            "document_digest": self.document_digest,
-            "closure_digest": self.closure_digest,
-            "resolved_semantic_digest": self.resolved_semantic_digest,
-        }
-        observed = {
-            "run_id": context.session_run_id,
-            "upload_id": context.upload_id,
-            "document_digest": context.document_digest,
-            "closure_digest": context.closure_digest,
-            "resolved_semantic_digest": context.resolved_semantic_digest,
-        }
-        if observed != expected:
-            raise ValueError("deployment context differs from the resolved runtime proof")
+        mismatches = context.content_mismatches(self)
+        if mismatches:
+            raise ValueError(
+                "deployment context differs from the resolved runtime proof: "
+                + ", ".join(mismatches)
+            )
         return RuntimeConfigProof.model_validate(
             {
                 **self.model_dump(mode="json"),
@@ -143,10 +155,24 @@ class RuntimeConfigProof(BaseModel):
 
 @dataclass(frozen=True, slots=True)
 class ResolvedRuntimeConfig:
+    """One verified runtime configuration: the resolution, its proof and its inputs."""
+
     resolution: SessionResolution
     proof: RuntimeConfigProof
-    catalog_roots: CatalogRoots
-    session_path: Path
+    root_yaml: bytes
+    selection: CatalogUploadSelection
+
+
+@dataclass(frozen=True, slots=True)
+class MaterializedRuntimeConfig:
+    """A verified configuration and the directory holding its exact files."""
+
+    config: ResolvedRuntimeConfig
+    destination: Path
+
+    @property
+    def session_path(self) -> Path:
+        return self.destination / SESSION_YAML_FILENAME
 
 
 class RuntimeConfigErrorCode(StrEnum):
@@ -279,7 +305,7 @@ def _write_uploaded_tree(
     root_yaml: bytes,
     entries: tuple[CatalogClosureEntry, ...],
 ) -> CatalogRoots:
-    _write_exact(stage / "session.yaml", root_yaml)
+    _write_exact(stage / SESSION_YAML_FILENAME, root_yaml)
     shipped_root = stage / "catalog" / "nodalarc"
     user_root = stage / "catalog" / "user"
     shipped_root.mkdir(parents=True, exist_ok=False)
@@ -375,7 +401,7 @@ def load_runtime_config(
     installed_shipped_root: str | Path,
     source_context: SourceContext,
     limits: CatalogUploadLimits = DEFAULT_CATALOG_UPLOAD_LIMITS,
-) -> ResolvedRuntimeConfig:
+) -> MaterializedRuntimeConfig:
     """Verify, materialize, and resolve one exact ordinary-file upload."""
     if not isinstance(upload, CatalogUpload):
         raise TypeError("upload must be a CatalogUpload")
@@ -420,13 +446,12 @@ def load_runtime_config(
         if not activated:
             shutil.rmtree(stage, ignore_errors=True)
 
-    final_roots = CatalogRoots.from_catalog_root(
-        target / "catalog" / "nodalarc",
-        user_root=target / "catalog" / "user",
-    )
-    return ResolvedRuntimeConfig(
-        resolution=resolution,
-        proof=proof,
-        catalog_roots=final_roots,
-        session_path=target / "session.yaml",
+    return MaterializedRuntimeConfig(
+        config=ResolvedRuntimeConfig(
+            resolution=resolution,
+            proof=proof,
+            root_yaml=verified.root_yaml,
+            selection=verified.selection,
+        ),
+        destination=target,
     )

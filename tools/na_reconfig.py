@@ -45,7 +45,13 @@ def load_live_session_resolution(
     """Load the selected CR root and exact uploaded catalog closure."""
     import kubernetes.client
     import kubernetes.config
-    from nodalarc.cr_runtime_config import load_cr_runtime_config
+    from nodalarc.cr_runtime_config import (
+        CR_GROUP,
+        CR_NAME,
+        CR_PLURAL,
+        CR_VERSION,
+        load_cr_runtime_config,
+    )
 
     try:
         kubernetes.config.load_incluster_config()
@@ -54,11 +60,11 @@ def load_live_session_resolution(
     custom_objects = kubernetes.client.CustomObjectsApi()
     core_v1 = kubernetes.client.CoreV1Api()
     cr = custom_objects.get_namespaced_custom_object(
-        group="nodalarc.io",
-        version="v1alpha1",
+        group=CR_GROUP,
+        version=CR_VERSION,
         namespace=namespace,
-        plural="constellationspecs",
-        name="current-session",
+        plural=CR_PLURAL,
+        name=CR_NAME,
     )
     status = cr.get("status") or {}
     run_id = str(status.get("sessionRunId") or "")

@@ -20,8 +20,8 @@ from pathlib import Path
 from typing import Annotated, Any, Final, Literal
 
 from nodalarc.catalog_refs import SessionRef
-from nodalarc.catalog_upload import CatalogUploadSelection
 from nodalarc.content_identity import sha256_digest
+from nodalarc.cr_runtime_config import ConstellationSpecSpec
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 _OPERATION_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{15,127}$")
@@ -798,16 +798,15 @@ def reconcile_transition_operation(
     annotations = metadata.get("annotations") or {}
     spec = constellation_spec.get("spec") or {}
     status = constellation_spec.get("status") or {}
-    session_yaml = spec.get("sessionYaml")
-    observed_document_digest = (
-        sha256_digest(session_yaml.encode("utf-8"))
-        if isinstance(session_yaml, str) and session_yaml
-        else None
-    )
+    # A malformed spec is a reconciliation result, never an exception here.
     try:
-        upload = CatalogUploadSelection.model_validate(spec.get("catalogUpload"), strict=True)
+        parsed = ConstellationSpecSpec.from_cr(spec)
     except TypeError, ValueError:
-        upload = None
+        parsed = None
+    observed_document_digest = (
+        sha256_digest(parsed.session_yaml.encode("utf-8")) if parsed is not None else None
+    )
+    upload = parsed.catalog_upload if parsed is not None else None
     expected_annotations = {
         "nodalarc.io/source-kind": "catalog_session",
         "nodalarc.io/source-id": operation.source.logical_id,

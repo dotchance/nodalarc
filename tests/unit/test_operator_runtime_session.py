@@ -11,7 +11,7 @@ import pytest
 from nodalarc.catalog_closure import FilesystemCatalogReadView
 from nodalarc.catalog_paths import CatalogRoots
 from nodalarc.catalog_upload import CatalogUpload, CatalogUploadError, encode_catalog_upload
-from nodalarc.cr_runtime_config import RuntimeSessionConfig
+from nodalarc.cr_runtime_config import load_cr_runtime_config
 from nodalarc.kubernetes_runtime_config import (
     CATALOG_DOCUMENT_KEY,
     CATALOG_REF_ANNOTATION,
@@ -22,11 +22,7 @@ from nodalarc.prepared_session import (
     PreparedSessionSource,
     prepare_session_files,
 )
-
-from services.nodalarc_operator.runtime_session import (
-    OperatorSessionConfig,
-    resolve_operator_session,
-)
+from nodalarc.runtime_config import ResolvedRuntimeConfig
 
 ROOT = Path(__file__).resolve().parents[2]
 SHIPPED_ROOT = ROOT / "catalog" / "nodalarc"
@@ -111,7 +107,7 @@ def test_operator_uses_the_shared_required_selection_once(
 ) -> None:
     client = _client_for(upload)
 
-    loaded = resolve_operator_session(
+    loaded = load_cr_runtime_config(
         _spec(upload),
         core_v1=client,
         namespace=NAMESPACE,
@@ -121,9 +117,10 @@ def test_operator_uses_the_shared_required_selection_once(
         materialization_parent=tmp_path,
     )
 
-    assert OperatorSessionConfig is RuntimeSessionConfig
-    assert loaded.root_yaml.encode("utf-8") == upload.root_yaml
-    assert loaded.catalog_upload == upload.selection
+    assert isinstance(loaded, ResolvedRuntimeConfig)
+    assert loaded.root_yaml == upload.root_yaml
+    assert loaded.selection == upload.selection
+    assert not any(tmp_path.iterdir()), "the CR path leaves no materialization behind"
     assert loaded.proof.upload_id == upload.upload_id
     assert loaded.proof.run_id == "run-operator-runtime-0001"
     assert client.lists == [(NAMESPACE, f"{CATALOG_UPLOAD_LABEL}={upload.upload_id}")]
@@ -140,8 +137,8 @@ def test_operator_rejects_the_retired_selection_pair_fields(
         "implementationBindingRef": "nodalarc:bindings/frr-observer-everywhere.yaml",
         "implementationPackageDigest": "sha256:" + "c" * 64,
     }
-    with pytest.raises(ValueError, match="unsupported field"):
-        resolve_operator_session(
+    with pytest.raises(ValueError, match="Extra inputs are not permitted"):
+        load_cr_runtime_config(
             paired,
             core_v1=_client_for(upload),
             namespace=NAMESPACE,
@@ -158,8 +155,8 @@ def test_operator_rejects_missing_or_malformed_selection(
 ) -> None:
     client = _client_for(upload)
     missing = {"sessionYaml": upload.root_yaml.decode("utf-8")}
-    with pytest.raises(ValueError, match="catalogUpload is required"):
-        resolve_operator_session(
+    with pytest.raises(ValueError, match="catalogUpload"):
+        load_cr_runtime_config(
             missing,
             core_v1=client,
             namespace=NAMESPACE,
@@ -171,7 +168,7 @@ def test_operator_rejects_missing_or_malformed_selection(
     malformed = _spec(upload)
     malformed["catalogUpload"] = None
     with pytest.raises(ValueError):
-        resolve_operator_session(
+        load_cr_runtime_config(
             malformed,
             core_v1=client,
             namespace=NAMESPACE,
@@ -188,7 +185,7 @@ def test_operator_requires_kubernetes_and_rejects_extra_spec_fields(
     tmp_path: Path,
 ) -> None:
     with pytest.raises(ValueError, match="core_v1 is required"):
-        resolve_operator_session(
+        load_cr_runtime_config(
             _spec(upload),
             core_v1=None,  # type: ignore[arg-type]
             namespace=NAMESPACE,
@@ -198,8 +195,8 @@ def test_operator_requires_kubernetes_and_rejects_extra_spec_fields(
         )
 
     unexpected = {**_spec(upload), "legacyMode": True}
-    with pytest.raises(ValueError, match="unsupported field"):
-        resolve_operator_session(
+    with pytest.raises(ValueError, match="Extra inputs are not permitted"):
+        load_cr_runtime_config(
             unexpected,
             core_v1=_client_for(upload),
             namespace=NAMESPACE,
@@ -217,7 +214,7 @@ def test_operator_propagates_corrupt_upload_refusal(
     client.config_maps.pop()
 
     with pytest.raises(CatalogUploadError):
-        resolve_operator_session(
+        load_cr_runtime_config(
             _spec(upload),
             core_v1=client,
             namespace=NAMESPACE,

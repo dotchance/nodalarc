@@ -91,17 +91,18 @@ def test_upload_materializes_exact_paths_and_resolves_once(
 
     assert len(calls) == 1
     assert loaded.session_path.read_bytes() == prepared.root_yaml
-    assert loaded.catalog_roots.root == destination / "catalog" / "nodalarc"
-    assert loaded.catalog_roots.user_root == destination / "catalog" / "user"
+    assert loaded.destination == destination
+    assert loaded.config.root_yaml == prepared.root_yaml
+    assert loaded.config.selection == upload.selection
     for entry in prepared.catalog_files:
         assert (destination / entry.preserved_path).read_bytes() == entry.yaml_bytes
-    assert loaded.proof.upload_id == upload.upload_id
-    assert loaded.proof.document_digest == prepared.document_digest
-    assert loaded.proof.closure_digest == prepared.closure_digest
-    assert loaded.proof.resolved_semantic_digest == prepared.resolved_semantic_digest
-    assert loaded.proof.file_count == len(prepared.catalog_files)
-    assert loaded.proof.total_bytes == prepared.total_bytes
-    assert loaded.resolution.resolved.source_context.session_path is None
+    assert loaded.config.proof.upload_id == upload.upload_id
+    assert loaded.config.proof.document_digest == prepared.document_digest
+    assert loaded.config.proof.closure_digest == prepared.closure_digest
+    assert loaded.config.proof.resolved_semantic_digest == prepared.resolved_semantic_digest
+    assert loaded.config.proof.file_count == len(prepared.catalog_files)
+    assert loaded.config.proof.total_bytes == prepared.total_bytes
+    assert loaded.config.resolution.resolved.source_context.session_path is None
 
 
 def test_invalid_upload_fails_before_resolver_or_materialization(
@@ -232,3 +233,45 @@ def test_runtime_proof_binds_exact_selection_deployment_and_pod_identity() -> No
             context.model_copy(update={"upload_id": "different-upload"}),
             pod_uid="pod-proof-0001",
         )
+
+
+def test_content_mismatches_name_every_differing_field() -> None:
+    digest = "sha256:" + "a" * 64
+    other = "sha256:" + "b" * 64
+    proof = RuntimeConfigProof(
+        source_origin="test.runtime_config",
+        run_id="run-a",
+        upload_id="upload-a",
+        document_digest=digest,
+        closure_digest=digest,
+        resolved_semantic_digest=digest,
+        file_count=1,
+        total_bytes=1,
+        resolved_node_count=1,
+    )
+    matching = RuntimeDeploymentContext(
+        cr_uid="cr-1",
+        cr_generation=1,
+        session_run_id="run-a",
+        upload_id="upload-a",
+        document_digest=digest,
+        closure_digest=digest,
+        resolved_semantic_digest=digest,
+        release="r",
+        build="b",
+    )
+    assert matching.content_mismatches(proof) == ()
+    differing = matching.model_copy(
+        update={
+            "session_run_id": "run-b",
+            "closure_digest": other,
+            "resolved_semantic_digest": other,
+        }
+    )
+    assert differing.content_mismatches(proof) == (
+        "run_id",
+        "closure_digest",
+        "resolved_semantic_digest",
+    )
+    with pytest.raises(ValueError, match="run_id, closure_digest, resolved_semantic_digest"):
+        proof.bind_deployment_identity(differing, pod_uid="pod-1")

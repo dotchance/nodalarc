@@ -463,3 +463,34 @@ def test_catalog_switch_does_not_delete_upload_when_create_result_is_ambiguous_b
     assert ready["status"]["phase"] == "Ready"
     assert api.created_body is not None
     assert store.delete_calls == []
+
+
+def test_ambiguous_create_recovery_judges_the_selection_alone(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A persisted CR observed with an incomplete spec still selects its upload:
+    recovery must keep the upload rather than delete it."""
+    monkeypatch.setattr("vs_api.session_manager.asyncio.sleep", _no_sleep)
+    context = _context(tmp_path)
+    saved = _save_user_session(context)
+    deployment = _prepared(context, saved)
+    manager = _manager(tmp_path)
+    store = _UploadStore()
+
+    class _IncompleteObservation(_CustomObjectsApi):
+        def get_namespaced_custom_object(self, **kwargs: Any) -> dict[str, Any]:
+            observed = super().get_namespaced_custom_object(**kwargs)
+            observed["spec"] = {**observed["spec"], "sessionYaml": ""}
+            return observed
+
+    api = _IncompleteObservation(persist_then_fail_create=True)
+    core = _CoreV1Api()
+
+    # The switch still fails: the observed spec is not the intended spec. What
+    # recovery must not do is delete an upload the persisted CR selects.
+    with pytest.raises(RuntimeError, match="create response lost"):
+        _switch(manager, deployment, context, store, api, core)
+
+    assert api.created_body is not None
+    assert store.delete_calls == []

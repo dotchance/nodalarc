@@ -22,6 +22,7 @@ from typing import Any
 import kubernetes
 from nodalarc.catalog_upload import CatalogUploadSelection
 from nodalarc.content_identity import canonical_json_bytes
+from nodalarc.cr_runtime_config import ConstellationSpecSpec, load_cr_runtime_config
 from nodalarc.models.resolved_session import (
     ResolvedRoutingDomain,
     ResolvedSession,
@@ -34,10 +35,15 @@ from nodalarc.platform_config import (
 from nodalarc.resolve_session import SessionResolution
 from nodalarc.runtime_config import (
     RUNTIME_DEPLOYMENT_CONTEXT_FILENAME,
+    SESSION_YAML_FILENAME,
+    ResolvedRuntimeConfig,
     RuntimeConfigProof,
     RuntimeDeploymentContext,
 )
-from nodalarc.runtime_service_config import CATALOG_UPLOAD_SELECTION_FILENAME
+from nodalarc.runtime_service_config import (
+    CATALOG_UPLOAD_SELECTION_FILENAME,
+    SESSION_RUN_ID_FILENAME,
+)
 from nodalarc.session_identity import require_resolved_session_run_id
 from nodalarc.session_validator import validate_session_readiness
 from nodalarc.stack_resolver import ResolvedStack, resolve_domain_stack, validate_sid_indices
@@ -47,7 +53,6 @@ from nodalarc.substrate.manifest_contract import (
 )
 from nodalarc.template_vars import build_template_vars_from_resolved
 
-from nodalarc_operator.runtime_session import OperatorSessionConfig, resolve_operator_session
 from nodalarc_operator.workloads.materializer import (
     WORKLOAD_SELECTION_ANNOTATION,
     build_session_pod,
@@ -99,29 +104,27 @@ def _get_apps_v1() -> kubernetes.client.AppsV1Api:
 
 def _operator_session_config(
     spec: Mapping[str, Any],
-    active_session: OperatorSessionConfig | None,
+    active_session: ResolvedRuntimeConfig | None,
     *,
     namespace: str,
     origin: str,
     run_id: str | None = None,
-) -> OperatorSessionConfig:
+) -> ResolvedRuntimeConfig:
     """Return a supplied verified result or load one through the sole boundary."""
-    if "catalogUpload" not in spec:
-        raise ValueError("spec.catalogUpload is required")
-    selection = CatalogUploadSelection.model_validate(spec["catalogUpload"], strict=True)
+    parsed = ConstellationSpecSpec.from_cr(spec)
     if active_session is None:
-        return resolve_operator_session(
+        return load_cr_runtime_config(
             spec,
             core_v1=_get_v1(),
             namespace=namespace,
             source_origin=origin,
             run_id=run_id,
         )
-    if not isinstance(active_session, OperatorSessionConfig):
-        raise TypeError("active_session must be an OperatorSessionConfig")
-    if spec.get("sessionYaml") != active_session.root_yaml:
+    if not isinstance(active_session, ResolvedRuntimeConfig):
+        raise TypeError("active_session must be an ResolvedRuntimeConfig")
+    if parsed.session_yaml.encode("utf-8") != active_session.root_yaml:
         raise ValueError("active_session root YAML does not match spec.sessionYaml")
-    if selection != active_session.catalog_upload:
+    if parsed.catalog_upload != active_session.selection:
         raise ValueError("active_session upload selection does not match spec.catalogUpload")
     if run_id is not None and active_session.proof.run_id != run_id:
         raise ValueError("active_session runtime identity does not match session_run_id")
@@ -774,7 +777,7 @@ def ensure_session_configmaps(
     owner_ref: dict,
     progress_fn: Any | None = None,
     session_run_id: str | None = None,
-    active_session: OperatorSessionConfig | None = None,
+    active_session: ResolvedRuntimeConfig | None = None,
     deployment_context: RuntimeDeploymentContext | None = None,
     prepared_workloads=None,
 ) -> dict:
@@ -909,8 +912,8 @@ def ensure_session_configmaps(
     _create_session_configmaps(
         v1,
         resolved_session,
-        operator_session.root_yaml,
-        operator_session.catalog_upload,
+        operator_session.root_yaml.decode("utf-8"),
+        operator_session.selection,
         deployment_context,
         namespace,
         owner_ref,
@@ -1086,7 +1089,7 @@ def deploy_session(
     owner_ref: dict,
     progress_fn: Any | None = None,
     session_run_id: str | None = None,
-    active_session: OperatorSessionConfig | None = None,
+    active_session: ResolvedRuntimeConfig | None = None,
     deployment_context: RuntimeDeploymentContext | None = None,
 ) -> dict:
     """Deploy a full session from a ConstellationSpec CR spec.
@@ -1208,7 +1211,7 @@ def write_wiring_manifest(
     namespace: str,
     owner_ref: dict | None = None,
     session_run_id: str | None = None,
-    active_session: OperatorSessionConfig | None = None,
+    active_session: ResolvedRuntimeConfig | None = None,
     platform_hash: str | None = None,
 ) -> int:
     """Generate and write the topology wiring manifest ConfigMap.
@@ -1649,8 +1652,8 @@ def teardown_session(namespace: str, session_id: str | None = None) -> None:
 
         try:
             cm = v1.read_namespaced_config_map("nodalarc-session", namespace)
-            if cm.data and "session_run_id" in cm.data:
-                session_run_id = str(cm.data.get("session_run_id") or "").strip()
+            if cm.data and SESSION_RUN_ID_FILENAME in cm.data:
+                session_run_id = str(cm.data.get(SESSION_RUN_ID_FILENAME) or "").strip()
                 if not session_run_id:
                     log.error("FATAL: nodalarc-session ConfigMap has empty session_run_id")
                     raise ValueError("session_run_id missing from nodalarc-session ConfigMap")
@@ -2010,7 +2013,7 @@ def _canonical_hash_value(value: Any) -> Any:
 def compute_platform_hash(
     spec: dict,
     *,
-    active_session: OperatorSessionConfig | None = None,
+    active_session: ResolvedRuntimeConfig | None = None,
     namespace: str = "nodalarc",
 ) -> str:
     """Hash resolved runtime truth for service restart detection.
@@ -2032,8 +2035,6 @@ def compute_platform_hash(
 
     Returns a hex digest string (SHA-256).
     """
-    if not spec.get("sessionYaml"):
-        raise ValueError("spec.sessionYaml is required")
     operator_session = _operator_session_config(
         spec,
         active_session,
@@ -2082,7 +2083,7 @@ def compute_runtime_hash(
 def compute_expected_pod_count(
     spec: dict,
     *,
-    active_session: OperatorSessionConfig | None = None,
+    active_session: ResolvedRuntimeConfig | None = None,
     namespace: str = "nodalarc",
 ) -> int:
     """Compute how many session pods SHOULD exist from the CRD spec.
@@ -2139,7 +2140,7 @@ def compute_expected_placement_node_count(
     spec: dict,
     available_nodes: list[str],
     *,
-    active_session: OperatorSessionConfig | None = None,
+    active_session: ResolvedRuntimeConfig | None = None,
     namespace: str = "nodalarc",
 ) -> int:
     """Compute how many Kubernetes nodes the active placement policy should use.
@@ -2403,8 +2404,8 @@ def build_runtime_session_config_data(
     if deployment_context.closure_digest != catalog_upload.closure_digest:
         raise ValueError("deployment_context has the wrong catalog closure digest")
     return {
-        "session.yaml": session_yaml,
-        "session_run_id": session_run_id,
+        SESSION_YAML_FILENAME: session_yaml,
+        SESSION_RUN_ID_FILENAME: session_run_id,
         CATALOG_UPLOAD_SELECTION_FILENAME: canonical_json_bytes(
             catalog_upload.model_dump(mode="json")
         ).decode("utf-8"),

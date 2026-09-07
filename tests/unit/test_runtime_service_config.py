@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from nodalarc import runtime_service_config as runtime_service_module
 from nodalarc.catalog_closure import FilesystemCatalogReadView
 from nodalarc.catalog_paths import CatalogRoots
 from nodalarc.catalog_upload import CatalogUpload, encode_catalog_upload
@@ -16,6 +17,7 @@ from nodalarc.kubernetes_runtime_config import (
     CATALOG_DOCUMENT_KEY,
     CATALOG_REF_ANNOTATION,
     CATALOG_UPLOAD_LABEL,
+    RUNTIME_CONFIG_PROOF_FILENAME,
 )
 from nodalarc.prepared_session import (
     PreparedSessionFiles,
@@ -24,6 +26,7 @@ from nodalarc.prepared_session import (
 )
 from nodalarc.runtime_config import (
     RUNTIME_DEPLOYMENT_CONTEXT_FILENAME,
+    RuntimeConfigProof,
     RuntimeDeploymentContext,
 )
 from nodalarc.runtime_service_config import (
@@ -186,16 +189,16 @@ def test_load_binds_proof_and_health_tracks_the_same_selection(
     )
 
     assert client.lists == [(NAMESPACE, f"{CATALOG_UPLOAD_LABEL}={upload.upload_id}")]
-    assert loaded.proof.deployment_identity_bound is True
-    assert loaded.proof.upload_id == upload.upload_id
-    assert loaded.proof.cr_uid == context.cr_uid
-    assert loaded.proof.pod_uid == "pod-runtime-service-0001"
+    assert loaded.config.proof.deployment_identity_bound is True
+    assert loaded.config.proof.upload_id == upload.upload_id
+    assert loaded.config.proof.cr_uid == context.cr_uid
+    assert loaded.config.proof.pod_uid == "pod-runtime-service-0001"
 
     health = RuntimeConfigHealth(directory, pod_uid="pod-runtime-service-0001")
     health.mark_loaded(loaded)
     readiness = health.readiness()
     assert readiness.ready is True
-    assert readiness.proof == loaded.proof
+    assert readiness.proof == loaded.config.proof
 
     changed = upload.selection.model_copy(update={"upload_id": "different-upload"})
     (directory / CATALOG_UPLOAD_SELECTION_FILENAME).write_bytes(
@@ -243,3 +246,43 @@ def test_health_waits_without_a_mounted_session(tmp_path: Path) -> None:
     readiness = health.readiness()
     assert readiness.ready is True
     assert readiness.detail == "waiting for session"
+
+
+def test_mounted_load_writes_the_bound_proof_exactly_once(
+    upload: CatalogUpload,
+    prepared: PreparedSessionFiles,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    directory = tmp_path / "mounted"
+    context = _context(upload, prepared)
+    _write_mount(directory, upload, context)
+    runtime_parent = tmp_path / "processes"
+    runtime_parent.mkdir()
+    real_write = runtime_service_module.write_runtime_config_proof
+    written: list[tuple[str, bool]] = []
+
+    def counting_write(proof, *, destination):
+        written.append((str(destination), proof.deployment_identity_bound))
+        return real_write(proof, destination=destination)
+
+    monkeypatch.setattr(runtime_service_module, "write_runtime_config_proof", counting_write)
+
+    loaded = load_mounted_runtime_config(
+        config_directory=directory,
+        installed_shipped_root=SHIPPED_ROOT,
+        origin="test.runtime_service_config.once",
+        namespace=NAMESPACE,
+        pod_uid="pod-runtime-service-0002",
+        release=RELEASE,
+        build=BUILD,
+        core_v1=_client_for(upload),
+        runtime_parent=runtime_parent,
+        poll_seconds=0.01,
+    )
+
+    assert written == [(str(loaded.destination), True)]
+    persisted = RuntimeConfigProof.model_validate_json(
+        (loaded.destination / RUNTIME_CONFIG_PROOF_FILENAME).read_bytes()
+    )
+    assert persisted == loaded.config.proof

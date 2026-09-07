@@ -57,7 +57,14 @@ from nodalarc.catalog_repository import (
 )
 from nodalarc.catalog_upload import DEFAULT_CATALOG_UPLOAD_LIMITS
 from nodalarc.configuration_yaml import load_configuration_yaml
-from nodalarc.cr_runtime_config import RuntimeSessionConfig, load_cr_runtime_config
+from nodalarc.cr_runtime_config import (
+    CR_GROUP,
+    CR_NAME,
+    CR_PLURAL,
+    CR_VERSION,
+    ConstellationSpecSpec,
+    load_cr_runtime_config,
+)
 from nodalarc.db.queries import (
     insert_snapshot,
     query_convergence_events,
@@ -110,6 +117,7 @@ from nodalarc.project_info import project_attribution, project_version
 from nodalarc.resolve_session import (
     SessionResolution,
 )
+from nodalarc.runtime_config import ResolvedRuntimeConfig
 from nodalarc.runtime_support import UnsupportedFeatureError
 from yaml import YAMLError
 
@@ -867,7 +875,7 @@ class CRSessionIdentity:
     session_yaml: str
     session: ResolvedSession
     resolution: SessionResolution
-    runtime_config: RuntimeSessionConfig
+    runtime_config: ResolvedRuntimeConfig
     source_id: str
     generation: int
 
@@ -886,8 +894,9 @@ def _load_cr_runtime_session(
     namespace: str,
     run_id: str,
     core_v1: Any | None = None,
-) -> RuntimeSessionConfig:
-    if "catalogUpload" in spec and core_v1 is None:
+) -> ResolvedRuntimeConfig:
+    ConstellationSpecSpec.from_cr(spec)
+    if core_v1 is None:
         import kubernetes.client
 
         core_v1 = kubernetes.client.CoreV1Api()
@@ -970,9 +979,7 @@ def _extract_cr_session(
             return None
         session_run_id = sanitize_session_id(raw_run_id)
 
-    session_yaml = str(spec.get("sessionYaml") or "")
-    if not session_yaml.strip():
-        raise ValueError("Ready ConstellationSpec is missing spec.sessionYaml")
+    session_yaml = ConstellationSpecSpec.from_cr(spec).session_yaml
 
     runtime_namespace = str(metadata.get("namespace") or namespace or "nodalarc")
     runtime_config = _load_cr_runtime_session(
@@ -1010,7 +1017,7 @@ def _extract_cr_session(
     annotations = metadata.get("annotations") or {}
     source_id = str(
         annotations.get("nodalarc.io/source-id")
-        or f"constellationspec:{runtime_namespace}/current-session"
+        or f"constellationspec:{runtime_namespace}/{CR_NAME}"
     )
     return CRSessionIdentity(
         session_id=session_run_id,
@@ -1292,11 +1299,11 @@ async def _monitor_cr_session(api: Any, core_v1_api: Any, namespace: str) -> Non
         try:
             cr = await asyncio.to_thread(
                 api.get_namespaced_custom_object,
-                group="nodalarc.io",
-                version="v1alpha1",
+                group=CR_GROUP,
+                version=CR_VERSION,
                 namespace=namespace,
-                plural="constellationspecs",
-                name="current-session",
+                plural=CR_PLURAL,
+                name=CR_NAME,
             )
             await _reconcile_interrupted_transition(cr)
             now = asyncio.get_running_loop().time()
@@ -1554,11 +1561,11 @@ async def _nats_subscriber() -> None:
         try:
             _cr = await asyncio.to_thread(
                 _cr_api.get_namespaced_custom_object,
-                group="nodalarc.io",
-                version="v1alpha1",
+                group=CR_GROUP,
+                version=CR_VERSION,
                 namespace=_cr_ns,
-                plural="constellationspecs",
-                name="current-session",
+                plural=CR_PLURAL,
+                name=CR_NAME,
             )
             await _reconcile_interrupted_transition(_cr)
             await _reconcile_catalog_upload_lifecycle(
@@ -3325,7 +3332,7 @@ def _prepared_transition_reservation(deployment: Any) -> TransitionOperationRese
             upload_id=selection.upload_id,
             runtime_plan=TransitionRuntimePlan(
                 namespace=get_platform_config().kubernetes_namespace,
-                name="current-session",
+                name=CR_NAME,
             ),
         ),
     )
@@ -4101,11 +4108,11 @@ async def _poll_cr_until_ready() -> None:
         try:
             cr = await asyncio.to_thread(
                 api.get_namespaced_custom_object,
-                group="nodalarc.io",
-                version="v1alpha1",
+                group=CR_GROUP,
+                version=CR_VERSION,
                 namespace=ns,
-                plural="constellationspecs",
-                name="current-session",
+                plural=CR_PLURAL,
+                name=CR_NAME,
             )
             await _reconcile_interrupted_transition(cr)
             if not upload_reconciled:
@@ -4250,11 +4257,11 @@ def main() -> None:
         except _k8s_config.ConfigException:
             _k8s_config.load_kube_config()
         cr = _k8s_client.CustomObjectsApi().get_namespaced_custom_object(
-            group="nodalarc.io",
-            version="v1alpha1",
+            group=CR_GROUP,
+            version=CR_VERSION,
             namespace=get_platform_config().kubernetes_namespace,
-            plural="constellationspecs",
-            name="current-session",
+            plural=CR_PLURAL,
+            name=CR_NAME,
         )
         phase = str(cr.get("status", {}).get("phase") or "")
         message = str(cr.get("status", {}).get("message") or "")

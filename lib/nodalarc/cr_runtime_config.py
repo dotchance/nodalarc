@@ -1,29 +1,57 @@
-"""Shared CR boundary for one exact root session and catalog upload."""
+"""The ConstellationSpec contract: coordinates, the spec, and the CR runtime loader."""
 
 from __future__ import annotations
 
 import tempfile
 from collections.abc import Mapping
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+from pydantic import BaseModel, ConfigDict, Field
 
 from nodalarc.catalog_upload import CatalogUploadSelection
 from nodalarc.kubernetes_runtime_config import ConfigMapReader, load_kubernetes_runtime_config
 from nodalarc.models.resolved_session import SourceContext
-from nodalarc.resolve_session import SessionResolution
-from nodalarc.runtime_config import RuntimeConfigProof
+from nodalarc.runtime_config import ResolvedRuntimeConfig
 from nodalarc.runtime_service_config import DEFAULT_INSTALLED_SHIPPED_CATALOG_ROOT
 
+CR_GROUP = "nodalarc.io"
+CR_VERSION = "v1alpha1"
+CR_API_VERSION = f"{CR_GROUP}/{CR_VERSION}"
+CR_KIND = "ConstellationSpec"
+CR_PLURAL = "constellationspecs"
+CR_NAME = "current-session"
 
-@dataclass(frozen=True, slots=True)
-class RuntimeSessionConfig:
-    """Verified CR input safe to reuse throughout one application operation."""
 
-    resolution: SessionResolution
-    proof: RuntimeConfigProof
-    root_yaml: str
-    catalog_upload: CatalogUploadSelection
+class ConstellationSpecSpec(BaseModel):
+    """The one shape of ``spec`` every writer emits and every reader accepts.
+
+    The wire keys are the CR aliases and nothing else: a spec spelled with the
+    Python field names is refused like any other unknown key.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+
+    session_yaml: str = Field(alias="sessionYaml", min_length=1)
+    catalog_upload: CatalogUploadSelection = Field(alias="catalogUpload")
+
+    @classmethod
+    def of(
+        cls, *, session_yaml: str, catalog_upload: CatalogUploadSelection
+    ) -> ConstellationSpecSpec:
+        """Build the spec a writer will emit."""
+        return cls.model_validate(
+            {"sessionYaml": session_yaml, "catalogUpload": catalog_upload}, strict=True
+        )
+
+    @classmethod
+    def from_cr(cls, spec: Mapping[str, Any]) -> ConstellationSpecSpec:
+        """Validate the ``spec`` mapping of one ConstellationSpec."""
+        return cls.model_validate(spec, strict=True)
+
+    def to_cr(self) -> dict[str, Any]:
+        """The ``spec`` mapping to write into one ConstellationSpec."""
+        return self.model_dump(mode="json", by_alias=True)
 
 
 def load_cr_runtime_config(
@@ -35,55 +63,36 @@ def load_cr_runtime_config(
     run_id: str | None = None,
     installed_shipped_root: str | Path = DEFAULT_INSTALLED_SHIPPED_CATALOG_ROOT,
     materialization_parent: str | Path | None = None,
-) -> RuntimeSessionConfig:
-    """Verify, materialize, and resolve a CR's selected upload once."""
+) -> ResolvedRuntimeConfig:
+    """Verify, materialize, and resolve a CR's selected upload once.
+
+    The materialized files live only for the resolution; what returns carries
+    no path into them.
+    """
     if not isinstance(spec, Mapping):
         raise TypeError("runtime session spec must be a mapping")
-    unexpected_fields = sorted(
-        set(spec).difference(
-            {
-                "sessionYaml",
-                "catalogUpload",
-            }
-        )
-    )
-    if unexpected_fields:
-        raise ValueError(
-            "runtime session spec contains unsupported field(s): " + ", ".join(unexpected_fields)
-        )
-    root_yaml = spec.get("sessionYaml")
-    if not isinstance(root_yaml, str) or not root_yaml:
-        raise ValueError("spec.sessionYaml must be a non-empty string")
+    parsed = ConstellationSpecSpec.from_cr(spec)
     if not isinstance(namespace, str) or not namespace.strip():
         raise ValueError("runtime namespace must be a non-empty string")
     if not isinstance(source_origin, str) or not source_origin.strip():
         raise ValueError("runtime source_origin must be a non-empty string")
-
-    if "catalogUpload" not in spec:
-        raise ValueError("spec.catalogUpload is required")
-    selection = CatalogUploadSelection.model_validate(spec["catalogUpload"], strict=True)
     if core_v1 is None:
         raise ValueError("core_v1 is required")
 
-    root_yaml_bytes = root_yaml.encode("utf-8")
+    root_yaml_bytes = parsed.session_yaml.encode("utf-8")
     parent = Path(materialization_parent) if materialization_parent is not None else None
     with tempfile.TemporaryDirectory(prefix="nodalarc-cr-runtime-", dir=parent) as temporary:
         destination = Path(temporary) / "runtime"
         source_context = SourceContext(origin=source_origin, run_id=run_id)
-        runtime_config = load_kubernetes_runtime_config(
+        materialized = load_kubernetes_runtime_config(
             core_v1,
             namespace=namespace,
             root_yaml=root_yaml_bytes,
-            selection=selection,
+            selection=parsed.catalog_upload,
             destination=destination,
             installed_shipped_root=installed_shipped_root,
             source_context=source_context,
         )
-        if runtime_config.session_path.read_bytes() != root_yaml_bytes:
+        if materialized.session_path.read_bytes() != root_yaml_bytes:
             raise RuntimeError("materialized runtime root differs from spec.sessionYaml")
-        return RuntimeSessionConfig(
-            resolution=runtime_config.resolution,
-            proof=runtime_config.proof,
-            root_yaml=root_yaml,
-            catalog_upload=selection,
-        )
+        return materialized.config

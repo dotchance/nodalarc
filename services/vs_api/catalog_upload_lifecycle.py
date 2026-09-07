@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from nodalarc.catalog_upload import CatalogUploadSelection
+from nodalarc.cr_runtime_config import ConstellationSpecSpec
 
 from .catalog_upload_store import (
     CatalogUploadGarbageCollectionReceipt,
@@ -39,14 +39,10 @@ def _live_upload_id(constellation_spec: Mapping[str, Any] | None) -> str | None:
     spec = constellation_spec.get("spec")
     if not isinstance(spec, Mapping):
         raise ValueError("live ConstellationSpec spec must be a mapping")
-    raw_selection = spec.get("catalogUpload")
-    if raw_selection is None:
+    # A spec without a selection names no live upload; a spec with one must be whole.
+    if spec.get("catalogUpload") is None:
         return None
-    selection = CatalogUploadSelection.model_validate(raw_selection, strict=True)
-    session_yaml = spec.get("sessionYaml")
-    if not isinstance(session_yaml, str) or not session_yaml.strip():
-        raise ValueError("live catalog upload requires non-empty spec.sessionYaml")
-    return selection.upload_id
+    return ConstellationSpecSpec.from_cr(spec).catalog_upload.upload_id
 
 
 def reconcile_catalog_upload_lifecycle(

@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from nodal.logging import configure as _configure_logging
+from nodalarc.cr_runtime_config import CR_GROUP, CR_NAME, CR_PLURAL, CR_VERSION
 from nodalarc.models.resolved_session import ResolvedSession
 from nodalarc.runtime_service_config import (
     DEFAULT_INSTALLED_SHIPPED_CATALOG_ROOT,
@@ -276,7 +277,7 @@ def _make_lifecycle_identity_reader(
     def _read() -> tuple[str | None, tuple[str, str] | None]:
         try:
             cr = custom.get_namespaced_custom_object(
-                "nodalarc.io", "v1alpha1", namespace, "constellationspecs", "current-session"
+                CR_GROUP, CR_VERSION, namespace, CR_PLURAL, CR_NAME
             )
             cr_run_id = str((cr.get("status") or {}).get("sessionRunId") or "") or None
         except kubernetes.client.rest.ApiException as exc:
@@ -382,7 +383,7 @@ def main() -> None:
         build=build,
         log=log,
     )
-    resolved = runtime_config.resolution.resolved
+    resolved = runtime_config.config.resolution.resolved
     runtime_health.mark_loaded(runtime_config)
     interface_map = resolved.link_interface_map()
     bandwidth_map = resolved.link_bandwidth_map()

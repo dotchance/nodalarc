@@ -25,13 +25,13 @@ from nodalarc.kubernetes_runtime_config import (
 from nodalarc.models.resolved_session import SourceContext
 from nodalarc.runtime_config import (
     RUNTIME_DEPLOYMENT_CONTEXT_FILENAME,
-    ResolvedRuntimeConfig,
+    SESSION_YAML_FILENAME,
+    MaterializedRuntimeConfig,
     RuntimeConfigProof,
     RuntimeDeploymentContext,
 )
 from nodalarc.session_identity import read_runtime_session_run_id_file
 
-SESSION_YAML_FILENAME = "session.yaml"
 SESSION_RUN_ID_FILENAME = "session_run_id"
 CATALOG_UPLOAD_SELECTION_FILENAME = "catalog-upload-selection.json"
 DEFAULT_SESSION_CONFIG_DIRECTORY = Path("/etc/nodalarc/session-config")
@@ -144,8 +144,12 @@ def load_mounted_runtime_config(
     poll_seconds: float = 5.0,
     sleep: Callable[[float], None] = time.sleep,
     log: logging.Logger | None = None,
-) -> ResolvedRuntimeConfig:
-    """Load one required upload selection and return its deployment-bound proof."""
+) -> MaterializedRuntimeConfig:
+    """Load one required upload selection and return its deployment-bound proof.
+
+    This is the one place a runtime proof is written: the mounted destination
+    persists it, bound to this pod, CR generation, release and build.
+    """
     if not isinstance(origin, str) or not origin.strip():
         raise TypeError("origin must be a non-empty string")
     if not isinstance(namespace, str) or not namespace.strip():
@@ -174,7 +178,7 @@ def load_mounted_runtime_config(
             raise ValueError("mounted deployment context has the wrong session digest")
         if context.closure_digest != selection.closure_digest:
             raise ValueError("mounted deployment context has the wrong closure digest")
-        runtime_config = load_kubernetes_runtime_config(
+        materialized = load_kubernetes_runtime_config(
             core_v1 if core_v1 is not None else _incluster_core_v1(),
             namespace=namespace,
             root_yaml=mounted.root_yaml,
@@ -183,18 +187,9 @@ def load_mounted_runtime_config(
             installed_shipped_root=installed_shipped_root,
             source_context=source_context,
         )
-        bound = replace(
-            runtime_config,
-            proof=runtime_config.proof.bind_deployment_identity(
-                context,
-                pod_uid=pod_uid,
-            ),
-        )
-        try:
-            write_runtime_config_proof(bound, destination=destination)
-        except Exception:
-            shutil.rmtree(destination, ignore_errors=True)
-            raise
+        bound_proof = materialized.config.proof.bind_deployment_identity(context, pod_uid=pod_uid)
+        bound = replace(materialized, config=replace(materialized.config, proof=bound_proof))
+        write_runtime_config_proof(bound_proof, destination=destination)
         return bound
     except Exception:
         shutil.rmtree(process_root, ignore_errors=True)
@@ -212,10 +207,10 @@ class RuntimeConfigHealth:
         self._proof_path: Path | None = None
         self._lock = threading.Lock()
 
-    def mark_loaded(self, runtime_config: ResolvedRuntimeConfig) -> None:
-        proof_path = runtime_config.session_path.parent / RUNTIME_CONFIG_PROOF_FILENAME
+    def mark_loaded(self, runtime_config: MaterializedRuntimeConfig) -> None:
+        proof_path = runtime_config.destination / RUNTIME_CONFIG_PROOF_FILENAME
         proof = RuntimeConfigProof.model_validate_json(proof_path.read_bytes())
-        if proof != runtime_config.proof:
+        if proof != runtime_config.config.proof:
             raise ValueError("persisted runtime proof differs from the loaded proof")
         with self._lock:
             self._proof_path = proof_path
@@ -268,20 +263,11 @@ class RuntimeConfigHealth:
         }
         if observed_identity != expected_identity:
             return RuntimeConfigReadiness(False, "mounted deployment identity differs from proof")
-        if {
-            "run_id": context.session_run_id,
-            "upload_id": context.upload_id,
-            "document_digest": context.document_digest,
-            "closure_digest": context.closure_digest,
-            "resolved_semantic_digest": context.resolved_semantic_digest,
-        } != {
-            "run_id": proof.run_id,
-            "upload_id": proof.upload_id,
-            "document_digest": proof.document_digest,
-            "closure_digest": proof.closure_digest,
-            "resolved_semantic_digest": proof.resolved_semantic_digest,
-        }:
-            return RuntimeConfigReadiness(False, "mounted deployment context differs from proof")
+        mismatches = context.content_mismatches(proof)
+        if mismatches:
+            return RuntimeConfigReadiness(
+                False, "mounted deployment context differs from proof: " + ", ".join(mismatches)
+            )
         return RuntimeConfigReadiness(True, "runtime configuration verified", proof)
 
 

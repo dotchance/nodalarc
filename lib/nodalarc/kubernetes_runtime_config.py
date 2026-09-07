@@ -8,7 +8,6 @@ every runtime service decodes them here under one rule.
 from __future__ import annotations
 
 import os
-import shutil
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
@@ -26,7 +25,7 @@ from nodalarc.catalog_upload import (
 from nodalarc.content_identity import canonical_json_bytes, sha256_digest
 from nodalarc.models.resolved_session import SourceContext
 from nodalarc.runtime_config import (
-    ResolvedRuntimeConfig,
+    MaterializedRuntimeConfig,
     RuntimeConfigProof,
     load_runtime_config,
 )
@@ -477,15 +476,15 @@ def read_catalog_upload(
 
 
 def write_runtime_config_proof(
-    runtime_config: ResolvedRuntimeConfig,
+    proof: RuntimeConfigProof,
     *,
     destination: str | Path,
 ) -> Path:
-    """Atomically persist the strict runtime proof inside a materialization."""
+    """Atomically persist one strict runtime proof inside a materialization."""
     destination_path = Path(destination)
     proof_path = destination_path / RUNTIME_CONFIG_PROOF_FILENAME
     temporary_path = destination_path / f".{RUNTIME_CONFIG_PROOF_FILENAME}.tmp"
-    content = canonical_json_bytes(runtime_config.proof.model_dump(mode="json"))
+    content = canonical_json_bytes(proof.model_dump(mode="json"))
     file_descriptor: int | None = None
     try:
         file_descriptor = os.open(
@@ -525,25 +524,22 @@ def load_kubernetes_runtime_config(
     installed_shipped_root: str | Path,
     source_context: SourceContext,
     limits: CatalogUploadLimits = DEFAULT_CATALOG_UPLOAD_LIMITS,
-) -> ResolvedRuntimeConfig:
-    """Fetch once, verify the selected upload, materialize, and resolve once."""
+) -> MaterializedRuntimeConfig:
+    """Fetch once, verify the selected upload, materialize, and resolve once.
+
+    The proof is returned, never written here: the owner of a persistent
+    destination writes it, bound to its deployment identity.
+    """
     upload = read_catalog_upload(
         client,
         namespace=namespace,
         root_yaml=root_yaml,
         selection=selection,
     )
-    target = Path(destination)
-    runtime_config = load_runtime_config(
+    return load_runtime_config(
         upload,
-        destination=target,
+        destination=Path(destination),
         installed_shipped_root=installed_shipped_root,
         source_context=source_context,
         limits=limits,
     )
-    try:
-        write_runtime_config_proof(runtime_config, destination=target)
-    except KubernetesRuntimeConfigError:
-        shutil.rmtree(target, ignore_errors=True)
-        raise
-    return runtime_config

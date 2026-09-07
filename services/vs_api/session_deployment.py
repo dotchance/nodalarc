@@ -18,6 +18,7 @@ from nodalarc.catalog_repository import (
     CatalogNotFoundError,
 )
 from nodalarc.catalog_upload import CatalogUpload, encode_catalog_upload
+from nodalarc.cr_runtime_config import CR_API_VERSION, CR_KIND, CR_NAME, ConstellationSpecSpec
 from nodalarc.models.builder_api import Sha256Digest
 from nodalarc.prepared_session import (
     PreparedSessionFiles,
@@ -281,15 +282,15 @@ def constellation_spec_body(
     }
     if deployment.repository_generation is not None:
         annotations["nodalarc.io/catalog-generation"] = str(deployment.repository_generation)
-    spec: dict[str, Any] = {
-        "sessionYaml": deployment.prepared.root_yaml.decode("utf-8"),
-        "catalogUpload": selection.model_dump(mode="json"),
-    }
+    spec = ConstellationSpecSpec.of(
+        session_yaml=deployment.prepared.root_yaml.decode("utf-8"),
+        catalog_upload=selection,
+    ).to_cr()
     return {
-        "apiVersion": "nodalarc.io/v1alpha1",
-        "kind": "ConstellationSpec",
+        "apiVersion": CR_API_VERSION,
+        "kind": CR_KIND,
         "metadata": {
-            "name": "current-session",
+            "name": CR_NAME,
             "namespace": namespace,
             "annotations": annotations,
         },

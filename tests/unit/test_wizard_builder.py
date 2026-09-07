@@ -6,7 +6,8 @@ from pathlib import Path
 
 import pytest
 import yaml
-from nodalarc.catalog_paths import resolve_catalog_reference
+from nodalarc.catalog_closure import CatalogReadView
+from nodalarc.catalog_refs import CatalogRef
 from nodalarc.catalog_repository import CatalogScope
 from nodalarc.filesystem_catalog_repository import FilesystemCatalogRepository
 from nodalarc.models.builder_api import WizardCompileRequest, WizardCoverageRequest
@@ -18,7 +19,7 @@ from vs_api.wizard_builder import (
     wizard_routing_timer_defaults,
 )
 
-from tests.builder_world_fixtures import builder_world_preview
+from tests.builder_world_fixtures import preview_from_resolution
 from tests.catalog_session_fixtures import ISS_TLE_LINE_1, ISS_TLE_LINE_2
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -49,6 +50,10 @@ ROUTING_TIMERS = {
     "ospf_spf_initial_hold": 200,
     "ospf_spf_max_hold": 1000,
 }
+
+
+def _read_document(catalog: CatalogReadView, ref: str) -> dict:
+    return yaml.safe_load(catalog.read(CatalogRef(ref)).yaml_bytes.decode("utf-8"))
 
 
 def _snapshot(
@@ -117,7 +122,7 @@ def _build_and_compile(request: WizardCompileRequest, tmp_path: Path):
         builder_request,
         snapshot,
         available_node_count=1_000_000,
-        preview_factory=lambda raw, _roots: builder_world_preview(raw["session"]["name"]),
+        preview_factory=preview_from_resolution,
     )
     return builder_request, result
 
@@ -146,13 +151,13 @@ def test_wizard_and_builder_compilation_are_canonically_identical(tmp_path: Path
         builder_request,
         snapshot,
         available_node_count=1_000_000,
-        preview_factory=lambda raw, _roots: builder_world_preview(raw["session"]["name"]),
+        preview_factory=preview_from_resolution,
     )
     builder_result = compile_builder_draft(
         builder_request,
         snapshot,
         available_node_count=1_000_000,
-        preview_factory=lambda raw, _roots: builder_world_preview(raw["session"]["name"]),
+        preview_factory=preview_from_resolution,
     )
 
     assert wizard_result.canonical_session_yaml == builder_result.canonical_session_yaml
@@ -365,18 +370,14 @@ def test_custom_coverage_preview_materializes_ref_composed_user_sources(tmp_path
         }
     )
 
-    with wizard_preview_inputs(request, snapshot) as inputs:
-        assert inputs.constellation_ref.startswith("user:constellations/wizard/")
-        assert inputs.ground_site_set_ref.startswith("user:site-sets/wizard/")
-        constellation_path = resolve_catalog_reference(
-            inputs.constellation_ref,
-            inputs.catalog_roots,
-        )
-        constellation = yaml.safe_load(constellation_path.read_text(encoding="utf-8"))
-        assert isinstance(constellation["constellation"]["orbit"], str)
-        assert constellation["constellation"]["orbit"].startswith("user:orbits/wizard/")
-        earth = inputs.catalog_roots.root / "bodies/earth.yaml"
-        assert yaml.safe_load(earth.read_text(encoding="utf-8"))["body"]["id"] == "earth"
+    inputs = wizard_preview_inputs(request, snapshot)
+    assert inputs.constellation_ref.startswith("user:constellations/wizard/")
+    assert inputs.ground_site_set_ref.startswith("user:site-sets/wizard/")
+    constellation = _read_document(inputs.catalog, inputs.constellation_ref)
+    assert isinstance(constellation["constellation"]["orbit"], str)
+    assert constellation["constellation"]["orbit"].startswith("user:orbits/wizard/")
+    earth = _read_document(inputs.catalog, "nodalarc:bodies/earth.yaml")
+    assert earth["body"]["id"] == "earth"
 
 
 def test_coverage_preview_applies_selected_orbit_model(tmp_path: Path) -> None:
@@ -389,16 +390,8 @@ def test_coverage_preview_applies_selected_orbit_model(tmp_path: Path) -> None:
         }
     )
 
-    with wizard_preview_inputs(request, snapshot) as inputs:
-        assert inputs.constellation_ref.startswith("user:constellations/wizard/")
-        constellation_path = resolve_catalog_reference(
-            inputs.constellation_ref,
-            inputs.catalog_roots,
-        )
-        constellation = yaml.safe_load(constellation_path.read_text(encoding="utf-8"))
-        orbit_path = resolve_catalog_reference(
-            constellation["constellation"]["orbit"],
-            inputs.catalog_roots,
-        )
-        orbit = yaml.safe_load(orbit_path.read_text(encoding="utf-8"))["orbit"]
-        assert orbit["propagator"] == "two_body"
+    inputs = wizard_preview_inputs(request, snapshot)
+    assert inputs.constellation_ref.startswith("user:constellations/wizard/")
+    constellation = _read_document(inputs.catalog, inputs.constellation_ref)
+    orbit = _read_document(inputs.catalog, constellation["constellation"]["orbit"])["orbit"]
+    assert orbit["propagator"] == "two_body"

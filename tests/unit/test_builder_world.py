@@ -7,29 +7,34 @@ from pathlib import Path
 
 import pytest
 import yaml
-from nodalarc.catalog_paths import CatalogPathError
+from nodalarc.catalog_closure import FilesystemCatalogReadView
 from nodalarc.models.builder_world import BuilderWorld
 from nodalarc.models.events import EphemerisNodeFixed, EphemerisNodeKeplerian, EphemerisNodeTLE
-from nodalarc.resolve_session import resolve_session
+from nodalarc.resolve_session import resolve_session, resolve_session_with_assets
 from vs_api.builder_world import (
     _builder_rule_allocations,
     _canonical_pairs,
     _closed_pair_count,
-    build_builder_world,
+    world_from_resolution,
 )
 
 from tests.catalog_session_fixtures import (
     build_catalog_session_fixture,
     install_tle_space_node_set,
+    shipped_read_view,
 )
 
-WALKER_REF = "nodalarc:sessions/earth-leo-walker.yaml"
 WALKER_PATH = Path("catalog/nodalarc/sessions/earth-leo-walker.yaml")
+SHIPPED_CATALOG = shipped_read_view()
+
+
+def _world(raw: dict, *, catalog: FilesystemCatalogReadView = SHIPPED_CATALOG) -> BuilderWorld:
+    return world_from_resolution(resolve_session_with_assets(raw, catalog=catalog))
 
 
 @pytest.fixture(scope="module")
 def walker_world() -> BuilderWorld:
-    return build_builder_world(WALKER_REF)
+    return _world(yaml.safe_load(WALKER_PATH.read_text(encoding="utf-8")))
 
 
 def _ground_only_document() -> dict:
@@ -43,7 +48,7 @@ def _ground_only_document() -> dict:
 
 def test_world_node_set_and_kinds_match_resolver(walker_world: BuilderWorld) -> None:
     raw = yaml.safe_load(WALKER_PATH.read_text(encoding="utf-8"))
-    resolved = resolve_session(raw)
+    resolved = resolve_session(raw, catalog=SHIPPED_CATALOG)
     resolved_by_id = {node.node_id: node for node in resolved.nodes}
 
     assert {node.node_id for node in walker_world.nodes} == set(resolved_by_id)
@@ -57,7 +62,7 @@ def test_world_node_set_and_kinds_match_resolver(walker_world: BuilderWorld) -> 
 
 
 def test_ground_only_session_remains_visible_in_preview() -> None:
-    world = build_builder_world(_ground_only_document())
+    world = _world(_ground_only_document())
 
     assert world.nodes
     assert all(node.kind != "satellite" for node in world.nodes)
@@ -82,7 +87,7 @@ def test_world_projects_resolver_hardware_and_links(walker_world: BuilderWorld) 
 
 def test_allocator_projection_uses_resolved_truth_only() -> None:
     raw = yaml.safe_load(WALKER_PATH.read_text(encoding="utf-8"))
-    resolved = resolve_session(raw)
+    resolved = resolve_session(raw, catalog=SHIPPED_CATALOG)
     projected = _builder_rule_allocations(resolved)
     candidates_by_rule = {
         rule.rule_id: sum(
@@ -160,7 +165,7 @@ def test_tle_world_carries_ome_propagated_epoch_positions() -> None:
     )
     install_tle_space_node_set(session)
 
-    world = build_builder_world(dict(session), catalog_roots=session.roots)
+    world = _world(dict(session), catalog=FilesystemCatalogReadView(session.roots))
     satellites = [node for node in world.nodes if node.kind == "satellite"]
 
     assert len(satellites) == 2
@@ -171,10 +176,3 @@ def test_tle_world_carries_ome_propagated_epoch_positions() -> None:
     assert all(
         node.epoch_position is not None and node.epoch_position.alt_km > 0 for node in satellites
     )
-
-
-def test_reference_containment_and_family_are_enforced() -> None:
-    with pytest.raises(CatalogPathError):
-        build_builder_world("nodalarc:../secrets.yaml")
-    with pytest.raises(ValueError):
-        build_builder_world("nodalarc:orbits/earth/leo/earth-leo-starlink.yaml")

@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import yaml
+from nodalarc.catalog_closure import FilesystemCatalogReadView
 from nodalarc.catalog_paths import CatalogRoots
 from nodalarc.models.resolved_session import SourceContext
 from nodalarc.resolve_session import resolve_session_with_assets
@@ -12,7 +13,7 @@ def _resolution():
     path = Path("catalog/nodalarc/sessions/earth-leo-simple.yaml")
     return resolve_session_with_assets(
         yaml.safe_load(path.read_text(encoding="utf-8")),
-        catalog_roots=CatalogRoots.from_catalog_root("catalog/nodalarc"),
+        catalog=FilesystemCatalogReadView(CatalogRoots.from_catalog_root("catalog/nodalarc")),
         source_context=SourceContext(origin="test.vs-api-resolved-view"),
     )
 
@@ -52,7 +53,7 @@ def test_tracer_view_names_the_gateway_for_host_nodes():
     path = Path("catalog/nodalarc/sessions/earth-luna-quic.yaml")
     resolution = resolve_session_with_assets(
         yaml.safe_load(path.read_text(encoding="utf-8")),
-        catalog_roots=CatalogRoots.from_catalog_root("catalog/nodalarc"),
+        catalog=FilesystemCatalogReadView(CatalogRoots.from_catalog_root("catalog/nodalarc")),
         source_context=SourceContext(origin="test.vs-api-host-trace"),
     )
     registry = tracer_node_registry(resolution)

@@ -17,6 +17,7 @@ from nodalarc.models.builder_api import (
     BuilderDraftEnvelope,
     BuilderSessionSaveRequest,
 )
+from nodalarc.prepared_session import prepare_session_files
 from vs_api import builder_session_service as service_module
 from vs_api.builder_compiler import (
     canonicalize_persisted_configuration,
@@ -31,11 +32,13 @@ from vs_api.builder_session_service import (
 )
 from vs_api.catalog_context import CatalogContext
 
-from tests.builder_world_fixtures import builder_world_preview
+from tests.builder_world_fixtures import preview_from_resolution
+from tests.ephemeris_fixtures import KERNEL_DENIAL_STAGES, deny_kernel_access
 
 ROOT = Path(__file__).resolve().parents[2]
 SHIPPED_ROOT = ROOT / "catalog" / "nodalarc"
 SIMPLE_SESSION = SHIPPED_ROOT / "sessions" / "earth-leo-simple.yaml"
+LUNA_SESSION = SHIPPED_ROOT / "sessions" / "earth-luna-dtn.yaml"
 SHIPPED_SESSIONS = tuple(sorted((SHIPPED_ROOT / "sessions").glob("*.yaml")))
 
 
@@ -143,7 +146,7 @@ def _compile(request: BuilderSessionSaveRequest, harness: SaveHarness):
         BuilderCompileRequest(draft=request.draft, target_ref=request.target_ref),
         harness.repository.snapshot(harness.scope),
         available_node_count=1_000_000,
-        preview_factory=lambda raw, _roots: builder_world_preview(raw["session"]["name"]),
+        preview_factory=preview_from_resolution,
     )
 
 
@@ -156,7 +159,7 @@ def _save(
         request,
         harness.context,
         available_node_count=1_000_000,
-        preview_factory=lambda raw, _roots: builder_world_preview(raw["session"]["name"]),
+        preview_factory=preview_from_resolution,
         **kwargs,
     )
 
@@ -271,7 +274,7 @@ def test_every_shipped_session_saves_and_reopens_as_first_class_user_yaml(
         ),
         reopened_snapshot,
         available_node_count=1_000_000,
-        preview_factory=lambda raw, _roots: builder_world_preview(raw["session"]["name"]),
+        preview_factory=preview_from_resolution,
     )
     assert reopened.save_verdict.allowed is True
     assert reopened.deploy_eligibility_after_save.allowed is True
@@ -523,6 +526,36 @@ def test_post_commit_preparation_issue_blocks_only_deploy(
         if issue.code == "builder.persistence.post_commit.preparation"
     )
     assert blocker.stage == "persistence"
+    assert harness.repository.snapshot(harness.scope).read_bytes(request.target_ref) == (
+        result.session.canonical_yaml.encode("utf-8")
+    )
+
+
+@pytest.mark.parametrize("stage", KERNEL_DENIAL_STAGES)
+def test_post_commit_kernel_access_failure_blocks_deploy_and_keeps_the_save(
+    harness: SaveHarness,
+    monkeypatch: pytest.MonkeyPatch,
+    stage: str,
+) -> None:
+    request = _session_request(f"post-commit-kernel-{stage}", _load(LUNA_SESSION))
+    expected: list[tuple[str, str]] = []
+
+    def denying_preparer(*args: Any, **kwargs: Any):
+        # The denial starts with post-commit preparation; compile ran clean.
+        expected.append(deny_kernel_access(monkeypatch, stage))
+        return prepare_session_files(*args, **kwargs)
+
+    result = _save(request, harness, preparer=denying_preparer)
+
+    assert result.deploy_verdict.allowed is False
+    blocker = next(
+        issue
+        for issue in result.deploy_verdict.blockers
+        if issue.code == "builder.semantic.post_commit.session_resolution"
+    )
+    ((diagnostic, injected),) = expected
+    assert diagnostic in blocker.message
+    assert injected in blocker.message
     assert harness.repository.snapshot(harness.scope).read_bytes(request.target_ref) == (
         result.session.canonical_yaml.encode("utf-8")
     )

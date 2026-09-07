@@ -11,10 +11,6 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
-from nodalarc.catalog_paths import CatalogRoots, resolve_catalog_reference
-from nodalarc.catalog_refs import CatalogRef, SessionRef
-from nodalarc.catalog_registry import validate_referenced_configuration_document
-from nodalarc.configuration_yaml import load_configuration_yaml
 from nodalarc.ephemeris_runtime import body_states_at, session_epoch_unix
 from nodalarc.models.builder_world import (
     BuilderLinkEndpoint,
@@ -34,9 +30,6 @@ from nodalarc.ome_inputs import build_ome_inputs_from_resolved, resolved_body_fr
 from nodalarc.resolve_session import (
     SessionResolution,
     SessionResolutionError,
-    SourceContext,
-    default_catalog_roots,
-    resolve_session_with_assets,
 )
 from ome.event_stream import build_session_ephemeris, build_step_context
 from ome.propagation_engine import PropagatedState, propagate_satellites
@@ -156,57 +149,6 @@ def _builder_rule_allocations(resolved: ResolvedSession) -> tuple[BuilderRuleAll
             )
         )
     return tuple(allocations)
-
-
-def _catalog_display_object(
-    value: str,
-    *,
-    roots: CatalogRoots,
-    expected_wrapper: str | None = None,
-) -> dict[str, Any]:
-    """Load one display source through the executable catalog grammar."""
-    ref = CatalogRef(value)
-    path = resolve_catalog_reference(ref, roots)
-    document = load_configuration_yaml(path.read_text(encoding="utf-8")) or {}
-    wrapper, model = validate_referenced_configuration_document(ref, document)
-    if expected_wrapper is not None and wrapper != expected_wrapper:
-        raise ValueError(f"expected catalog object {expected_wrapper!r}, got {wrapper!r}")
-    return model.model_dump(mode="python", by_alias=True, exclude_none=True)
-
-
-def segment_display_names(raw: dict[str, Any], *, roots: CatalogRoots) -> dict[str, str]:
-    """Map segment ids to authored names for the Builder world tree."""
-    names: dict[str, str] = {}
-    for segment in raw.get("segments") or []:
-        if not isinstance(segment, dict):
-            continue
-        segment_id = segment.get("id")
-        if not isinstance(segment_id, str):
-            continue
-        own_name = segment.get("display_name")
-        if isinstance(own_name, str) and own_name:
-            names[segment_id] = own_name
-            continue
-        source = segment.get("source")
-        try:
-            if source is not None:
-                obj = _catalog_display_object(source, roots=roots)
-            else:
-                placement = segment.get("placement")
-                site_set = placement.get("from_site_set") if isinstance(placement, dict) else None
-                if site_set is None:
-                    continue
-                obj = _catalog_display_object(
-                    site_set,
-                    roots=roots,
-                    expected_wrapper="site_set",
-                )
-        except Exception:
-            continue
-        display_name = obj.get("display_name") or obj.get("id")
-        if isinstance(display_name, str) and display_name:
-            names[segment_id] = display_name
-    return names
 
 
 # --- Rule preview: server-computed frozen-epoch visibility -------------
@@ -590,47 +532,6 @@ def _builder_rule_previews(
     return tuple(previews)
 
 
-def build_builder_world(
-    session_source: str | dict[str, Any],
-    *,
-    catalog_roots: CatalogRoots | None = None,
-) -> BuilderWorld:
-    """Resolve a session document and package its world for the builder.
-
-    ``session_source`` is a ``nodalarc:<path>`` catalog reference to a session
-    file, or an already-loaded session document. Resolution failures propagate
-    typed — nothing is rendered on failure.
-    """
-    roots = catalog_roots or default_catalog_roots()
-    return _world_from_raw(_load_session_source(session_source, roots), roots)
-
-
-def _load_session_source(
-    session_source: str | dict[str, Any], roots: CatalogRoots
-) -> dict[str, Any]:
-    if isinstance(session_source, str):
-        path = resolve_catalog_reference(session_source, roots, label="builder session")
-        ref = SessionRef(session_source)
-        raw = load_configuration_yaml(path.read_text(encoding="utf-8"))
-        wrapper, _model = validate_referenced_configuration_document(ref, raw)
-        if wrapper is not None:
-            raise ValueError(f"expected unwrapped session document, got {wrapper!r}")
-    else:
-        raw = session_source
-    if not raw:
-        raise ValueError("builder session source is empty")
-    return raw
-
-
-def _world_from_raw(raw: dict[str, Any], roots: CatalogRoots) -> BuilderWorld:
-    resolution = resolve_session_with_assets(
-        raw,
-        catalog_roots=roots,
-        source_context=SourceContext(origin="builder_world"),
-    )
-    return _world_from_resolution(resolution, roots, raw)
-
-
 def _satellite_less_world_view(
     resolved: ResolvedSession, epoch_unix: float
 ) -> tuple[SessionEphemeris, tuple[BuilderRulePreview, ...]]:
@@ -666,9 +567,8 @@ def _satellite_less_world_view(
     return ephemeris, previews
 
 
-def _world_from_resolution(
-    resolution: SessionResolution, roots: CatalogRoots, raw: dict[str, Any]
-) -> BuilderWorld:
+def world_from_resolution(resolution: SessionResolution) -> BuilderWorld:
+    """Package one resolution as the builder's world; nothing is resolved here."""
     resolved = resolution.resolved
     epoch_unix = session_epoch_unix(resolved.time)
 
@@ -742,10 +642,10 @@ def _world_from_resolution(
         )
         for node in resolved.nodes
     )
-    # The world tree speaks the user's names: Builder presentation reads them
-    # from authored sources through the executable catalog grammar. Runtime
-    # ids stay the identity; the name is presentation.
-    names = segment_display_names(raw, roots=roots)
+    # The world tree speaks the user's names: the resolver recorded each
+    # segment's authored display name. Runtime ids stay the identity; the
+    # name is presentation.
+    names = {segment.segment_id: segment.display_name for segment in resolved.segments}
     seen_segments: list[str] = []
     for node in resolved.nodes:
         if node.segment_id not in seen_segments:

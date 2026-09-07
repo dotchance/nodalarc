@@ -19,6 +19,8 @@ from nodalarc.models.segments import GroundSegment, SpaceSegment
 from nodalarc.resolve_session import resolve_session
 from pydantic import TypeAdapter
 
+from tests.catalog_session_fixtures import shipped_read_view
+
 ROOT = Path(__file__).resolve().parents[2]
 GUIDE = ROOT / "docs" / "ops" / "configuration.md"
 GRAMMAR = ROOT / "docs" / "ops" / "configuration-grammar.md"
@@ -53,7 +55,7 @@ def test_complete_session_example_resolves_through_the_shared_authority() -> Non
     shipped = load_configuration_yaml(SIMPLE_SESSION.read_text(encoding="utf-8"))
 
     session = SegmentSessionConfig.model_validate(document)
-    resolved = resolve_session(document)
+    resolved = resolve_session(document, catalog=shipped_read_view())
 
     assert document == shipped
     assert session.session.name == "earth-leo-simple"
@@ -107,7 +109,7 @@ def test_user_session_guide_example_resolves_through_the_shared_authority() -> N
     document = _first_yaml_block(SESSIONS_GUIDE)
 
     session = SegmentSessionConfig.model_validate(document)
-    resolved = resolve_session(document)
+    resolved = resolve_session(document, catalog=shipped_read_view())
 
     assert session.session.name == "earth-leo-simple"
     assert resolved.session.name == "earth-leo-simple"
@@ -120,7 +122,7 @@ def test_routing_extension_example_is_valid_after_registering_its_protocol() -> 
     document["routing"]["domains"][0]["protocol"] = "isis"
 
     session = SegmentSessionConfig.model_validate(document)
-    resolved = resolve_session(document)
+    resolved = resolve_session(document, catalog=shipped_read_view())
 
     assert session.session.name == "test-newprotocol"
     assert resolved.nodes
@@ -154,12 +156,12 @@ def test_component_and_partial_session_examples_are_structurally_valid() -> None
     assert parsed_addressing.loopbacks[1].prefix_length == 128
     complete = _yaml_block("## A complete session")
     complete["addressing"] = addressing
-    assert resolve_session(complete).nodes
+    assert resolve_session(complete, catalog=shipped_read_view()).nodes
 
     shipped_reachability = load_configuration_yaml(REACHABILITY_SESSION.read_text(encoding="utf-8"))
     assert routing == shipped_reachability["routing"]
     assert Routing.model_validate(routing).domains
-    assert resolve_session(shipped_reachability).routing_domains
+    assert resolve_session(shipped_reachability, catalog=shipped_read_view()).routing_domains
     assert TimeConfig.model_validate(time_config).step_seconds == 1
 
 

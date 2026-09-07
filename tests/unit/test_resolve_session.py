@@ -12,6 +12,7 @@ from typing import Any
 import nodalarc.resolve_session as resolver_module
 import pytest
 import yaml
+from nodalarc.catalog_closure import FilesystemCatalogReadView
 from nodalarc.catalog_paths import CatalogRoots
 from nodalarc.models.link_rules import LinkRuleConstraints
 from nodalarc.models.resolved_session import SourceContext
@@ -24,10 +25,12 @@ from tests.catalog_session_fixtures import (
     ISS_TLE_LINE_1,
     build_catalog_session_fixture,
     install_tle_space_node_set,
+    shipped_read_view,
 )
 from tests.catalog_session_fixtures import (
     resolve_catalog_session as resolve_session,
 )
+from tests.ephemeris_fixtures import KERNEL_DENIAL_STAGES, deny_kernel_access
 
 ROOT = Path(__file__).resolve().parents[2]
 SHIPPED_ROOT = ROOT / "catalog" / "nodalarc"
@@ -96,7 +99,7 @@ def _resolve_site_document(
     ground_segment = next(segment for segment in session["segments"] if "placement" in segment)
     ground_segment["placement"]["from_site_set"] = "user:site-sets/resolver-test-sites.yaml"
     roots = CatalogRoots.from_catalog_root(SHIPPED_ROOT, user_root=user_root)
-    return resolve_session(session, catalog_roots=roots)
+    return resolve_session(session, catalog=FilesystemCatalogReadView(roots))
 
 
 def _terminal_limits(
@@ -986,7 +989,7 @@ def test_heterogeneous_selected_access_physics_is_refused_at_resolve() -> None:
         }
     )
     with pytest.raises(UnsupportedFeatureError) as error:
-        resolver_module.resolve_session(raw)
+        resolver_module.resolve_session(raw, catalog=shipped_read_view())
     assert any(
         feature.category == FeatureCategory.TERMINAL_CAPABILITY
         and feature.value == "heterogeneous_access_physics"
@@ -1232,3 +1235,60 @@ def test_shipped_nrho_constellation_is_future_gated() -> None:
         f.category == FeatureCategory.PROPAGATOR and f.value == "crtbp"
         for f in excinfo.value.features
     )
+
+
+def test_resolved_segments_take_the_source_name_then_its_id(tmp_path: Path) -> None:
+    user_root = tmp_path / "user"
+    constellation = yaml.safe_load(
+        (SHIPPED_ROOT / "constellations/earth/leo/earth-leo-ring-36.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    del constellation["constellation"]["display_name"]
+    constellation["constellation"]["id"] = "unnamed-ring"
+    _write_yaml(user_root / "constellations/unnamed-ring.yaml", constellation)
+    session = yaml.safe_load(SIMPLE_SESSION.read_text(encoding="utf-8"))
+    session["segments"][0]["source"] = "user:constellations/unnamed-ring.yaml"
+    session["segments"][1]["display_name"] = "Authored ground name"
+    catalog = FilesystemCatalogReadView(
+        CatalogRoots.from_catalog_root(SHIPPED_ROOT, user_root=user_root)
+    )
+
+    resolved = resolver_module.resolve_session(session, catalog=catalog)
+    shipped = resolver_module.resolve_session(
+        yaml.safe_load(SIMPLE_SESSION.read_text(encoding="utf-8")), catalog=catalog
+    )
+
+    assert [
+        (segment.segment_id, segment.kind, segment.display_name, segment.source_ref)
+        for segment in resolved.segments
+    ] == [
+        ("leo", "space", "unnamed-ring", "user:constellations/unnamed-ring.yaml"),
+        (
+            "ground",
+            "ground",
+            "Authored ground name",
+            "nodalarc:site-sets/earth/leo/earth-leo-starlink-pop-sites.yaml",
+        ),
+    ]
+    assert [segment.display_name for segment in shipped.segments] == [
+        "Earth LEO simple 36-satellite ring",
+        "Starlink PoP gateway sites",
+    ]
+
+
+@pytest.mark.parametrize("stage", KERNEL_DENIAL_STAGES)
+def test_inaccessible_ephemeris_kernel_is_a_typed_resolution_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    stage: str,
+) -> None:
+    session = yaml.safe_load(
+        (SHIPPED_ROOT / "sessions" / "earth-luna-dtn.yaml").read_text(encoding="utf-8")
+    )
+    diagnostic, injected = deny_kernel_access(monkeypatch, stage)
+
+    with pytest.raises(SessionResolutionError) as raised:
+        resolver_module.resolve_session(session, catalog=shipped_read_view())
+
+    assert diagnostic in str(raised.value)
+    assert injected in str(raised.value)

@@ -19,7 +19,7 @@ import time
 from collections import defaultdict
 from typing import Any
 
-from nodalarc.catalog_paths import CatalogRoots
+from nodalarc.catalog_closure import CatalogReadView
 from nodalarc.catalog_refs import SiteSetRef, SpaceSourceRef
 from nodalarc.ephemeris_runtime import session_epoch_unix
 from nodalarc.models.addressing import (
@@ -172,7 +172,7 @@ def compute_coverage_preview(
     constellation_ref: str | None,
     ground_site_set_ref: str | None,
     *,
-    catalog_roots: CatalogRoots | None = None,
+    catalog: CatalogReadView,
 ) -> CoveragePreviewResult:
     """Compute coverage statistics through the segment-session resolver.
 
@@ -195,11 +195,11 @@ def compute_coverage_preview(
     session_dict = _preview_segment_session(
         constellation_source=constellation_source,
         ground_stations_source=ground_stations_source,
-        isl_topology=generated_isl_topology(constellation_source, catalog_roots),
+        isl_topology=generated_isl_topology(constellation_source, catalog),
     )
     resolution = resolve_session_with_assets(
         session_dict,
-        catalog_roots=catalog_roots,
+        catalog=catalog,
         source_context=SourceContext(origin="coverage_preview"),
     )
 

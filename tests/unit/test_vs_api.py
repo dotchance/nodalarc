@@ -43,6 +43,7 @@ from pydantic import ValidationError
 from vs_api.session_context import SessionContext, _derive_link_type, _link_key
 
 from tests.asgi_client import ASGITestClient as TestClient
+from tests.catalog_session_fixtures import shipped_read_view
 from tests.physics_fixtures import EARTH_TEST_EPHEMERIS_BODY_FRAMES
 
 ISS_TLE_EPOCH = 1615896900.000275
@@ -485,6 +486,7 @@ class TestSessionContextNetworkIdentity:
             resolution=resolve_session_with_assets(
                 yaml.safe_load(CATALOG_SESSION.read_text()),
                 source_context=SourceContext(origin="test.vs-api"),
+                catalog=shipped_read_view(),
             ),
             source_id="nodalarc:sessions/earth-leo-heo-geo-luna-reachability.yaml",
         )
@@ -515,6 +517,7 @@ class TestSessionContextNetworkIdentity:
             resolution=resolve_session_with_assets(
                 yaml.safe_load(session_path.read_text()),
                 source_context=SourceContext(origin="test.vs-api"),
+                catalog=shipped_read_view(),
             ),
             source_id="test-session",
         )
@@ -522,6 +525,7 @@ class TestSessionContextNetworkIdentity:
         resolution = resolve_session_with_assets(
             yaml.safe_load(session_path.read_text()),
             source_context=SourceContext(origin="test.vs-api"),
+            catalog=shipped_read_view(),
         )
         node = next(n for n in resolution.resolved.nodes if n.node_id == "earth-us-co-denver-gw1")
         assert node.interfaces is not None
@@ -551,6 +555,7 @@ class TestSessionContextNetworkIdentity:
             resolution=resolve_session_with_assets(
                 yaml.safe_load(Path("catalog/nodalarc/sessions/earth-leo-simple.yaml").read_text()),
                 source_context=SourceContext(origin="test.vs-api"),
+                catalog=shipped_read_view(),
             ),
             source_id="nodalarc:sessions/earth-leo-simple.yaml",
         )
@@ -565,6 +570,7 @@ class TestSessionContextNetworkIdentity:
         resolution = resolve_session_with_assets(
             yaml.safe_load(Path("catalog/nodalarc/sessions/earth-leo-simple.yaml").read_text()),
             source_context=SourceContext(origin="test.vs-api"),
+            catalog=shipped_read_view(),
         )
         resolved_inactive = next(n for n in resolution.resolved.nodes if n.node_id == inactive_id)
         assert resolved_inactive.interfaces is not None

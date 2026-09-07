@@ -15,9 +15,14 @@ in the wizard got a Python traceback instead of results.
 from __future__ import annotations
 
 import pytest
+from nodalarc.catalog_closure import CatalogDocumentNotFound
 from nodalarc.models.coverage import CoveragePreviewResult
 from nodalarc.session_generator import generated_isl_topology
 from ome.coverage_preview import compute_coverage_preview
+
+from tests.catalog_session_fixtures import shipped_read_view
+
+SHIPPED_CATALOG = shipped_read_view()
 
 
 @pytest.fixture(scope="module")
@@ -26,6 +31,7 @@ def demo_preview() -> CoveragePreviewResult:
     return compute_coverage_preview(
         "nodalarc:constellations/earth/leo/earth-leo-ring-36.yaml",
         "nodalarc:site-sets/earth/leo/earth-leo-starlink-pop-sites.yaml",
+        catalog=SHIPPED_CATALOG,
     )
 
 
@@ -35,6 +41,7 @@ def heo_preview() -> CoveragePreviewResult:
     return compute_coverage_preview(
         "nodalarc:constellations/earth/heo/earth-heo-molniya-3.yaml",
         "nodalarc:site-sets/earth/heo/earth-heo-gateway-sites.yaml",
+        catalog=SHIPPED_CATALOG,
     )
 
 
@@ -193,6 +200,7 @@ def test_missing_constellation_raises():
         compute_coverage_preview(
             None,
             "nodalarc:site-sets/earth/leo/earth-leo-starlink-pop-sites.yaml",
+            catalog=SHIPPED_CATALOG,
         )
 
 
@@ -201,22 +209,25 @@ def test_missing_ground_stations_raises():
         compute_coverage_preview(
             "nodalarc:constellations/earth/leo/earth-leo-ring-36.yaml",
             None,
+            catalog=SHIPPED_CATALOG,
         )
 
 
 def test_nonexistent_constellation_raises():
-    with pytest.raises(FileNotFoundError):
+    with pytest.raises(CatalogDocumentNotFound):
         compute_coverage_preview(
             "nodalarc:constellations/earth/leo/nonexistent.yaml",
             "nodalarc:site-sets/earth/leo/earth-leo-starlink-pop-sites.yaml",
+            catalog=SHIPPED_CATALOG,
         )
 
 
 def test_nonexistent_ground_stations_raises():
-    with pytest.raises(FileNotFoundError):
+    with pytest.raises(CatalogDocumentNotFound):
         compute_coverage_preview(
             "nodalarc:constellations/earth/leo/earth-leo-ring-36.yaml",
             "nodalarc:site-sets/earth/leo/nonexistent.yaml",
+            catalog=SHIPPED_CATALOG,
         )
 
 
@@ -225,7 +236,8 @@ def test_preview_and_topology_require_catalog_references() -> None:
         compute_coverage_preview(
             {"constellation": {}},
             "nodalarc:site-sets/earth/leo/earth-leo-starlink-pop-sites.yaml",
+            catalog=SHIPPED_CATALOG,
         )
 
     with pytest.raises(ValueError, match="must be a nodalarc:<path> or user:<path> reference"):
-        generated_isl_topology({"constellation": {}})
+        generated_isl_topology({"constellation": {}}, SHIPPED_CATALOG)

@@ -8,16 +8,18 @@ from typing import Any
 
 import pytest
 import yaml
+from nodalarc.catalog_closure import CatalogReadDocument
 from nodalarc.catalog_refs import CatalogRef
 from nodalarc.catalog_registry import validate_referenced_configuration_document
 from nodalarc.catalog_repository import CatalogReadSnapshot, CatalogScope
 from nodalarc.filesystem_catalog_repository import FilesystemCatalogRepository
 from nodalarc.models.builder_api import BuilderCompileRequest, BuilderDraftEnvelope
 from nodalarc.models.builder_world import BuilderWorld
+from nodalarc.resolve_session import SessionResolution
 from pydantic import ValidationError
 from vs_api.builder_compiler import canonicalize_persisted_configuration, compile_builder_draft
 
-from tests.builder_world_fixtures import builder_world_preview
+from tests.builder_world_fixtures import builder_world_preview, preview_from_resolution
 
 ROOT = Path(__file__).resolve().parents[2]
 SHIPPED_ROOT = ROOT / "catalog" / "nodalarc"
@@ -39,6 +41,51 @@ def snapshot(tmp_path_factory: pytest.TempPathFactory) -> CatalogReadSnapshot:
         scope_roots={scope: tmp_path_factory.mktemp("builder-compiler-user")},
     )
     return repository.snapshot(scope)
+
+
+ORBIT_REF = CatalogRef("nodalarc:orbits/earth/leo/earth-leo-starlink.yaml")
+
+
+class _MutatingSnapshot(CatalogReadSnapshot):
+    """Pinned snapshot whose orbit bytes change after the first read."""
+
+    def __init__(self, base: CatalogReadSnapshot, altered: bytes) -> None:
+        self._base = base
+        self._altered = altered
+        self.reads = 0
+
+    @property
+    def scope(self):
+        return self._base.scope
+
+    @property
+    def generation(self):
+        return self._base.generation
+
+    def read_bytes(self, ref):
+        return self._base.read_bytes(ref)
+
+    def read(self, ref: CatalogRef) -> CatalogReadDocument:
+        document = self._base.read(ref)
+        if ref != ORBIT_REF:
+            return document
+        self.reads += 1
+        if self.reads == 1:
+            return document
+        return CatalogReadDocument(
+            family=document.family,
+            preserved_path=document.preserved_path,
+            yaml_bytes=self._altered,
+        )
+
+    def get(self, ref):
+        return self._base.get(ref)
+
+    def list(self, *args, **kwargs):
+        return self._base.list(*args, **kwargs)
+
+    def export_documents(self, *args, **kwargs):
+        return self._base.export_documents(*args, **kwargs)
 
 
 def _request(
@@ -70,7 +117,7 @@ def _compile(
         request,
         snapshot,
         available_node_count=1_000_000,
-        preview_factory=lambda raw, _roots: builder_world_preview(raw["session"]["name"]),
+        preview_factory=preview_from_resolution,
     )
 
 
@@ -390,7 +437,7 @@ def test_proposed_component_revision_fields_are_rejected() -> None:
 def test_expected_preview_failure_is_a_typed_deploy_blocker(
     snapshot: CatalogReadSnapshot,
 ) -> None:
-    def unavailable(_raw: dict[str, Any], _roots: object):
+    def unavailable(_resolution: SessionResolution):
         raise ValueError("preview physics unavailable")
 
     result = compile_builder_draft(
@@ -407,3 +454,27 @@ def test_expected_preview_failure_is_a_typed_deploy_blocker(
     )
     assert issue.stage == "readiness"
     assert issue.blocks == ("deploy",)
+
+
+def test_compile_resolves_the_captured_closure_not_the_live_snapshot(
+    snapshot: CatalogReadSnapshot,
+) -> None:
+    orbit = yaml.safe_load(snapshot.read(ORBIT_REF).yaml_bytes.decode("utf-8"))
+    authored_altitude_km = orbit["orbit"]["shape"]["altitude_km"]
+    orbit["orbit"]["shape"]["altitude_km"] = authored_altitude_km + 650
+    live = _MutatingSnapshot(snapshot, yaml.safe_dump(orbit, sort_keys=False).encode("utf-8"))
+
+    result = compile_builder_draft(
+        _request(_load(SIMPLE_SESSION)),
+        live,
+        available_node_count=1_000_000,
+    )
+
+    assert live.reads == 1
+    assert [issue for issue in result.issues if issue.severity == "error"] == []
+    assert isinstance(result.resolved_preview, BuilderWorld)
+    satellites = [node for node in result.resolved_preview.nodes if node.kind == "satellite"]
+    assert satellites
+    for node in satellites:
+        assert node.epoch_position is not None
+        assert abs(node.epoch_position.alt_km - authored_altitude_km) < 100

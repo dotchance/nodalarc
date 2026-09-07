@@ -109,13 +109,22 @@ def _resolve_local_path(path: str, *, base_dir: Path | None = None) -> Path:
         return resolved.resolve(strict=True)
     except FileNotFoundError as exc:
         raise EphemerisValidationError(f"ephemeris kernel file does not exist: {path}") from exc
+    except OSError as exc:
+        raise EphemerisValidationError(
+            f"ephemeris kernel path could not be resolved: {path}: {exc}"
+        ) from exc
 
 
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
-    with path.open("rb") as fh:
-        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
-            digest.update(chunk)
+    try:
+        with path.open("rb") as fh:
+            for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+                digest.update(chunk)
+    except OSError as exc:
+        raise EphemerisValidationError(
+            f"ephemeris kernel file could not be read: {path}: {exc}"
+        ) from exc
     return digest.hexdigest()
 
 

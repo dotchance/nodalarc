@@ -22,6 +22,7 @@ from tests.catalog_session_fixtures import (
     build_catalog_session_fixture,
     install_tle_space_node_set,
     resolve_catalog_session,
+    shipped_read_view,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -34,6 +35,7 @@ def resolved():
         SESSION,
         origin="test.semantic_projection",
         run_id="run-characterization-0001",
+        catalog=shipped_read_view(),
     ).resolved
 
 

@@ -21,6 +21,8 @@ import kopf
 import kubernetes.client
 import pytest
 import yaml
+from nodalarc.catalog_closure import FilesystemCatalogReadView
+from nodalarc.catalog_paths import CatalogRoots
 from nodalarc.catalog_upload import CatalogUploadSelection
 from nodalarc.configuration_yaml import load_configuration_yaml
 from nodalarc.models.resolved_session import SourceContext
@@ -74,7 +76,7 @@ def _reset_operator_module_state():
             raise ValueError("spec.sessionYaml is missing")
         resolution = resolve_session_with_assets(
             load_configuration_yaml(root_yaml),
-            catalog_roots=spec.get("_test_catalog_roots"),
+            catalog=_spec_catalog(spec),
             source_context=SourceContext(origin=origin, run_id=run_id),
         )
         digest = "sha256:" + hashlib.sha256(root_yaml.encode()).hexdigest()
@@ -111,6 +113,14 @@ def _reset_operator_module_state():
     sd._apps_v1 = None
 
 
+def _spec_catalog(spec: dict) -> FilesystemCatalogReadView:
+    """Read the shipped catalog unless the test spec carries its own roots."""
+    roots = spec.get("_test_catalog_roots")
+    if roots is None:
+        roots = CatalogRoots.from_catalog_root("catalog/nodalarc")
+    return FilesystemCatalogReadView(roots)
+
+
 def _make_node_vars(planes=4, sats_per_plane=3, gs_count=2):
     """Build minimal node_vars dict for placement tests.
     Pure dict construction - no file I/O, no K8s, no constellation expansion."""
@@ -133,7 +143,7 @@ def _test_deployment_context(
     digest = "sha256:" + hashlib.sha256(root_yaml.encode()).hexdigest()
     resolution = resolve_session_with_assets(
         load_configuration_yaml(root_yaml),
-        catalog_roots=spec.get("_test_catalog_roots"),
+        catalog=_spec_catalog(spec),
         source_context=SourceContext(origin="test.deployment-context", run_id=run_id),
     )
     return RuntimeDeploymentContext(
@@ -1936,7 +1946,7 @@ class TestPodSpec:
         spec = _make_catalog_spec(tmp_path)
         resolution = resolve_session_with_assets(
             load_configuration_yaml(spec["sessionYaml"]),
-            catalog_roots=spec.get("_test_catalog_roots"),
+            catalog=_spec_catalog(spec),
         )
         desired_identity = _prepare(
             resolution, namespace="nodalarc", owner_ref={"uid": "test-uid"}

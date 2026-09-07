@@ -13,7 +13,7 @@ from typing import Annotated, Final, Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
-from nodalarc.catalog_closure import CatalogClosureEntry
+from nodalarc.catalog_closure import CatalogClosureEntry, ClosureReadView
 from nodalarc.catalog_paths import CatalogPathError, CatalogRoots, resolve_catalog_reference
 from nodalarc.catalog_upload import (
     DEFAULT_CATALOG_UPLOAD_LIMITS,
@@ -358,13 +358,12 @@ def _activate_stage(stage: Path, destination: Path) -> None:
 
 
 def _resolve_once(
-    root_yaml: bytes,
-    roots: CatalogRoots,
+    upload: CatalogUpload,
     source_context: SourceContext,
 ) -> SessionResolution:
     return resolve_session_with_assets(
-        _raw_session(root_yaml),
-        catalog_roots=roots,
+        _raw_session(upload.root_yaml),
+        catalog=ClosureReadView.of(upload.catalog_files),
         source_context=source_context,
     )
 
@@ -396,8 +395,8 @@ def load_runtime_config(
     stage = _stage_directory(target)
     activated = False
     try:
-        stage_roots = _write_uploaded_tree(stage, verified.root_yaml, verified.catalog_files)
-        resolution = _resolve_once(verified.root_yaml, stage_roots, context)
+        _write_uploaded_tree(stage, verified.root_yaml, verified.catalog_files)
+        resolution = _resolve_once(verified, context)
         proof = RuntimeConfigProof(
             source_origin=str(context.origin),
             run_id=str(context.run_id) if context.run_id is not None else None,

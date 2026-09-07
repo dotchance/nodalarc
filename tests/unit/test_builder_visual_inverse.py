@@ -31,7 +31,7 @@ from vs_api.builder_visual_draft import (
 )
 from vs_api.catalog_context import CatalogContext
 
-from tests.builder_world_fixtures import builder_world_preview
+from tests.builder_world_fixtures import preview_from_resolution
 
 ROOT = Path(__file__).resolve().parents[2]
 SHIPPED_ROOT = ROOT / "catalog" / "nodalarc"
@@ -95,7 +95,7 @@ def test_open_projects_and_no_edit_compiles_every_shipped_session_canonically(
     compiled = service.compile(
         BuilderVisualDraftCompileRequest(draft=opened),
         available_node_count=1_000_000,
-        preview_factory=lambda raw, _roots: builder_world_preview(raw["session"]["name"]),
+        preview_factory=preview_from_resolution,
     )
     expected_document = yaml.safe_load(session_path.read_bytes())
     expected = canonicalize_persisted_configuration(opened.target_ref, expected_document)
@@ -164,7 +164,7 @@ def test_runtime_unsupported_valid_session_opens_and_remains_saveable(
     compiled = service.compile(
         BuilderVisualDraftCompileRequest(draft=opened),
         available_node_count=1_000_000,
-        preview_factory=lambda raw, _roots: builder_world_preview(raw["session"]["name"]),
+        preview_factory=preview_from_resolution,
     )
 
     assert opened.projection_status == "applied"
@@ -354,7 +354,7 @@ def test_yaml_apply_accepts_runtime_gated_grammar_and_compile_blocks_only_deploy
     compiled = service.compile(
         BuilderVisualDraftCompileRequest(draft=applied.draft),
         available_node_count=1_000_000,
-        preview_factory=lambda raw, _roots: builder_world_preview(raw["session"]["name"]),
+        preview_factory=preview_from_resolution,
     )
 
     assert applied.applied is True
@@ -388,7 +388,7 @@ def test_yaml_apply_accepts_structurally_valid_missing_refs_for_later_compile_re
     compiled = service.compile(
         BuilderVisualDraftCompileRequest(draft=applied.draft),
         available_node_count=1_000_000,
-        preview_factory=lambda raw, _roots: builder_world_preview(raw["session"]["name"]),
+        preview_factory=preview_from_resolution,
     )
 
     assert applied.applied is True
@@ -414,7 +414,7 @@ def test_workspace_apply_advances_once_and_compiles_the_exact_applied_revision(
             workspace=workspace,
         ),
         available_node_count=1_000_000,
-        preview_factory=lambda raw, _roots: builder_world_preview(raw["session"]["name"]),
+        preview_factory=preview_from_resolution,
     )
 
     assert result.visual_draft.draft_revision == opened.draft_revision + 1
@@ -445,7 +445,7 @@ def test_workspace_apply_retains_last_applied_facts_when_graph_is_incomplete(
             workspace=workspace,
         ),
         available_node_count=1_000_000,
-        preview_factory=lambda raw, _roots: builder_world_preview(raw["session"]["name"]),
+        preview_factory=preview_from_resolution,
     )
 
     assert result.visual_draft.draft_revision == opened.draft_revision + 1
@@ -509,7 +509,7 @@ def test_workspace_apply_preserves_runtime_gated_fields_and_blocks_only_deploy(
             workspace=workspace,
         ),
         available_node_count=1_000_000,
-        preview_factory=lambda raw, _roots: builder_world_preview(raw["session"]["name"]),
+        preview_factory=preview_from_resolution,
     )
 
     assert result.visual_draft.projection_status == "applied"
@@ -609,7 +609,7 @@ def test_saved_builder_session_reopens_as_refs_without_reowning_catalog_objects(
                 command=command,
             ),
             available_node_count=1_000_000,
-            preview_factory=lambda raw, _roots: builder_world_preview(raw["session"]["name"]),
+            preview_factory=preview_from_resolution,
         ).draft
 
     apply_command({"operation": "add_generated_space", "phasing_mode": "walker_delta"})
@@ -624,7 +624,7 @@ def test_saved_builder_session_reopens_as_refs_without_reowning_catalog_objects(
     compiled = service.compile(
         BuilderVisualDraftCompileRequest(draft=draft),
         available_node_count=1_000_000,
-        preview_factory=lambda raw, _roots: builder_world_preview(raw["session"]["name"]),
+        preview_factory=preview_from_resolution,
     )
     assert compiled.compile_result.save_verdict.allowed, tuple(
         (issue.code, issue.message) for issue in compiled.compile_result.save_verdict.blockers
@@ -633,7 +633,7 @@ def test_saved_builder_session_reopens_as_refs_without_reowning_catalog_objects(
         compiled.save_request,
         context,
         available_node_count=1_000_000,
-        preview_factory=lambda raw, _roots: builder_world_preview(raw["session"]["name"]),
+        preview_factory=preview_from_resolution,
     )
 
     component_ref = next(
@@ -672,7 +672,7 @@ def test_saved_builder_session_reopens_as_refs_without_reowning_catalog_objects(
     no_op = service.compile(
         BuilderVisualDraftCompileRequest(draft=opened),
         available_node_count=1_000_000,
-        preview_factory=lambda raw, _roots: builder_world_preview(raw["session"]["name"]),
+        preview_factory=preview_from_resolution,
     )
     assert no_op.assembly_issues == ()
     assert no_op.compile_result.canonical_session_yaml == saved.session.canonical_yaml
@@ -686,18 +686,18 @@ def test_saved_builder_session_reopens_as_refs_without_reowning_catalog_objects(
             ),
         ),
         available_node_count=1_000_000,
-        preview_factory=lambda raw, _roots: builder_world_preview(raw["session"]["name"]),
+        preview_factory=preview_from_resolution,
     ).visual_draft
     recompiled = service.compile(
         BuilderVisualDraftCompileRequest(draft=edited),
         available_node_count=1_000_000,
-        preview_factory=lambda raw, _roots: builder_world_preview(raw["session"]["name"]),
+        preview_factory=preview_from_resolution,
     )
     resaved = save_builder_session(
         recompiled.save_request,
         context,
         available_node_count=1_000_000,
-        preview_factory=lambda raw, _roots: builder_world_preview(raw["session"]["name"]),
+        preview_factory=preview_from_resolution,
     )
 
     assert resaved.session.ref == saved.session.ref

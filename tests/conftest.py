@@ -76,8 +76,12 @@ def load_runtime_segment_test_resolution(*, origin: str, name: str = "earth-leo-
     """Resolve the shipped runtime-complete catalog session used by unit tests."""
     from nodalarc.resolve_session import load_session_resolution_from_file
 
+    from tests.catalog_session_fixtures import shipped_read_view
+
     session_path = PROJECT_ROOT / "catalog" / "nodalarc" / "sessions" / f"{name}.yaml"
-    return load_session_resolution_from_file(session_path, origin=origin)
+    return load_session_resolution_from_file(
+        session_path, catalog=shipped_read_view(), origin=origin
+    )
 
 
 def load_runtime_ome_test_inputs(*, origin: str, name: str = "earth-leo-simple"):

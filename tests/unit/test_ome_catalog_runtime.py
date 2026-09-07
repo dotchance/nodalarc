@@ -27,6 +27,7 @@ from tests.catalog_session_fixtures import (
     build_catalog_session_fixture,
     install_tle_space_node_set,
     resolve_catalog_session,
+    shipped_read_view,
 )
 
 
@@ -257,7 +258,7 @@ def test_generic_selector_rejects_heterogeneous_geo_ground_mounts(
     session_path.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
 
     with pytest.raises(SessionResolutionError, match="matches multiple terminal mounts"):
-        load_session_resolution_from_file(session_path)
+        load_session_resolution_from_file(session_path, catalog=shipped_read_view())
 
 
 def test_ome_maps_resolved_two_body_to_truthful_runtime_propagator_id(tmp_path: Path) -> None:
@@ -305,6 +306,7 @@ def test_ome_inputs_ignore_ground_nodes_without_declared_access_candidates() -> 
         Path("catalog/nodalarc/sessions/earth-leo-simple.yaml"),
         origin="test.ome",
         run_id="run-ome-0001",
+        catalog=shipped_read_view(),
     ).resolved
 
     inactive_ground_node = "earth-us-co-denver-gw2"

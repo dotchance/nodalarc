@@ -17,6 +17,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import requests
+from nodalarc.catalog_closure import FilesystemCatalogReadView
 from nodalarc.configuration_yaml import load_configuration_yaml
 from nodalarc.models.segment_session import SegmentSessionConfig
 from nodalarc.runtime_naming import gs_bridge_port_name
@@ -2357,7 +2358,7 @@ def catalog_permutations() -> list[dict]:
         text = path.read_text()
         resolved = resolve_session_with_assets(
             load_configuration_yaml(text),
-            catalog_roots=roots,
+            catalog=FilesystemCatalogReadView(roots),
             source_context=SourceContext(origin="e2e.catalog"),
         ).resolved
         protocols = sorted({d.protocol for d in resolved.routing_domains})

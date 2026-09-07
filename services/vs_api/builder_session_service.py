@@ -7,7 +7,12 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import cast
 
-from nodalarc.catalog_closure import CatalogClosure, CatalogClosureCollector, CatalogClosureError
+from nodalarc.catalog_closure import (
+    CatalogClosure,
+    CatalogClosureCollector,
+    CatalogClosureError,
+    CatalogReadError,
+)
 from nodalarc.catalog_refs import SessionRef
 from nodalarc.catalog_repository import (
     CatalogConflictError,
@@ -294,7 +299,7 @@ def _prepare_saved_session(
                 stage="semantic",
             ),
         )
-    except (FileNotFoundError, OSError, ValueError) as error:
+    except (CatalogReadError, ValueError) as error:
         return None, (
             _post_commit_issue(
                 "builder.persistence.post_commit.preparation",

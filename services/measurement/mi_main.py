@@ -25,6 +25,8 @@ from pathlib import Path
 
 import nats
 from nodal.logging import configure as _configure_logging
+from nodalarc.catalog_closure import FilesystemCatalogReadView
+from nodalarc.catalog_paths import CatalogRoots
 from nodalarc.db.queries import (
     insert_adapter_event,
     insert_convergence_result,
@@ -404,8 +406,11 @@ def main() -> None:
 
     # Load through the catalog resolver so MI observes the same runtime view as
     # OME/Scheduler/Operator. The run id is operator-owned lineage, not YAML.
+    # The shipped catalog root the resolver read implicitly before it took a
+    # read view; the measurement service is deferred and keeps that root.
     resolution = load_session_resolution_from_file(
         Path(args.session),
+        catalog=FilesystemCatalogReadView(CatalogRoots.from_catalog_root("catalog/nodalarc")),
         origin="mi",
         run_id=read_runtime_session_run_id_file(Path(args.session_run_id_file)),
     )

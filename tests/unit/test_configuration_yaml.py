@@ -22,6 +22,8 @@ from nodalarc.resolve_session import SessionResolutionError, resolve_session
 from nodalarc.runtime_support import FeatureCategory, UnsupportedFeatureError
 from pydantic import ValidationError
 
+from tests.catalog_session_fixtures import shipped_read_view
+
 ROOT = Path(__file__).resolve().parents[2]
 SIMPLE_SESSION = ROOT / "catalog" / "nodalarc" / "sessions" / "earth-leo-simple.yaml"
 
@@ -126,7 +128,7 @@ def test_access_candidate_requires_complete_explicit_ground_scheduling() -> None
     del scheduling["ranking_order"]
 
     with pytest.raises(SessionResolutionError, match="incomplete ground scheduling.*ranking_order"):
-        resolve_session(document)
+        resolve_session(document, catalog=shipped_read_view())
 
 
 def test_ground_without_access_candidates_does_not_require_scheduling() -> None:
@@ -135,7 +137,7 @@ def test_ground_without_access_candidates_does_not_require_scheduling() -> None:
     del ground["apply"]["scheduling"]
     document["link_rules"] = [rule for rule in document["link_rules"] if rule["id"] != "leo_access"]
 
-    resolved = resolve_session(document)
+    resolved = resolve_session(document, catalog=shipped_read_view())
 
     assert resolved.ground_candidate_satellites_by_gs() == {}
     assert any(
@@ -159,7 +161,7 @@ def test_future_ground_scheduling_is_typed_runtime_unsupported(
     scheduling[field] = value
 
     with pytest.raises(UnsupportedFeatureError) as caught:
-        resolve_session(deepcopy(document))
+        resolve_session(deepcopy(document), catalog=shipped_read_view())
 
     assert any(
         feature.category == FeatureCategory.GROUND_SCHEDULING and feature.value == feature_value

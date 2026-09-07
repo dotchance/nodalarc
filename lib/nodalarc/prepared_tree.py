@@ -10,6 +10,7 @@ from nodalarc.catalog_closure import (
     CatalogClosureCollector,
     CatalogClosureError,
     CatalogClosureErrorCode,
+    CatalogReadError,
     FilesystemCatalogReadView,
 )
 from nodalarc.catalog_paths import CatalogPathError, CatalogRoots
@@ -249,12 +250,12 @@ def load_prepared_tree_session_resolution(
     try:
         return load_session_resolution_from_file(
             path,
-            catalog_roots=roots,
+            catalog=FilesystemCatalogReadView(roots),
             runtime_support=runtime_support,
             origin=origin,
             run_id=run_id,
         )
-    except (FileNotFoundError, NotADirectoryError, CatalogPathError) as exc:
+    except (CatalogReadError, FileNotFoundError, NotADirectoryError, CatalogPathError) as exc:
         _raise_typed_missing_reference(
             path.read_bytes(),
             roots,

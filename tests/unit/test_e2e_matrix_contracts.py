@@ -17,6 +17,7 @@ from nodalarc.configuration_yaml import load_configuration_yaml
 from nodalarc.models.segment_session import SegmentSessionConfig
 from nodalarc.resolve_session import resolve_session
 
+from tests.catalog_session_fixtures import shipped_read_view
 from tests.integration import e2e_matrix
 
 
@@ -143,7 +144,7 @@ def test_mbb_acceptance_mutation_stays_in_canonical_session_grammar() -> None:
     document = load_configuration_yaml(rendered)
 
     parsed = SegmentSessionConfig.model_validate(document)
-    resolved = resolve_session(document)
+    resolved = resolve_session(document, catalog=shipped_read_view())
     ground = next(segment for segment in document["segments"] if segment["id"] == "ground")
 
     assert parsed.session.name == "mbb-mutated"

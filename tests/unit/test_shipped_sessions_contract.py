@@ -23,9 +23,12 @@ from collections import defaultdict
 from pathlib import Path
 
 import pytest
+from nodalarc.catalog_closure import FilesystemCatalogReadView
 from nodalarc.configuration_yaml import load_configuration_yaml
 from nodalarc.resolve_session import load_session_resolution_from_file
 from nodalarc.session_validator import validate_session_readiness
+
+from tests.catalog_session_fixtures import shipped_read_view
 
 SESSIONS_DIR = Path(__file__).resolve().parents[2] / "catalog" / "nodalarc" / "sessions"
 SESSION_PATHS = sorted(SESSIONS_DIR.glob("*.yaml"))
@@ -33,7 +36,7 @@ SESSION_PATHS = sorted(SESSIONS_DIR.glob("*.yaml"))
 
 def _resolved(path: Path):
     return load_session_resolution_from_file(
-        path, origin="test.shipped_sessions", run_id="run-test-0042"
+        path, origin="test.shipped_sessions", run_id="run-test-0042", catalog=shipped_read_view()
     ).resolved
 
 
@@ -232,9 +235,11 @@ def test_w005_catches_the_fairbanks_class(tmp_path: Path) -> None:
 
     resolved = resolve_session(
         raw,
-        catalog_roots=CatalogRoots.from_catalog_root(
-            Path("catalog/nodalarc"),
-            user_root=user_root,
+        catalog=FilesystemCatalogReadView(
+            CatalogRoots.from_catalog_root(
+                Path("catalog/nodalarc"),
+                user_root=user_root,
+            )
         ),
         source_context=SourceContext(origin="test.w005", run_id="run-test-0043"),
     )

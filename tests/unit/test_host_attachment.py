@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import pytest
+from nodalarc.catalog_closure import FilesystemCatalogReadView
 from nodalarc.resolve_session import SessionResolutionError, resolve_session_with_assets
 from nodalarc_operator.workloads.preparation import prepare_session_workloads
 
@@ -112,7 +113,9 @@ def test_one_path_composes_hosts_and_routers_from_their_profiles() -> None:
         constellation={},
         ground_stations={"stations": [{}, {}], "host_endpoints": True},
     )
-    resolution = resolve_session_with_assets(fixture, catalog_roots=fixture.roots)
+    resolution = resolve_session_with_assets(
+        fixture, catalog=FilesystemCatalogReadView(fixture.roots)
+    )
     prepared = prepare_session_workloads(
         resolution,
         namespace="nodalarc",

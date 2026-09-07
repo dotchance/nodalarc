@@ -16,12 +16,13 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
+
+from pydantic import ValidationError
 
 from nodalarc.body_frames import BodyFrame, body_runtime_support_for
-from nodalarc.catalog_paths import CatalogRoots, resolve_catalog_reference
+from nodalarc.catalog_closure import CatalogReadView, load_catalog_object
 from nodalarc.catalog_refs import CatalogRef
-from nodalarc.catalog_registry import validate_referenced_configuration_document
 from nodalarc.configuration_yaml import load_configuration_yaml
 from nodalarc.ephemeris_runtime import (
     EphemerisValidationError,
@@ -48,6 +49,7 @@ from nodalarc.models.resolved_session import (
     ResolvedOrbitFacts,
     ResolvedOriginatedPrefixes,
     ResolvedRoutingDomain,
+    ResolvedSegment,
     ResolvedSegmentMember,
     ResolvedSession,
     ResolvedSurfacePosition,
@@ -136,20 +138,16 @@ class _RuntimeNode:
     origination_targets: Any = None
 
 
-def default_catalog_roots() -> CatalogRoots:
-    return CatalogRoots.from_catalog_root("catalog/nodalarc")
-
-
 def resolve_session(
     raw_session: dict[str, Any],
     *,
-    catalog_roots: CatalogRoots | None = None,
+    catalog: CatalogReadView,
     runtime_support: RuntimeSupport | None = None,
     source_context: SourceContext | None = None,
 ) -> ResolvedSession:
     return resolve_session_with_assets(
         raw_session,
-        catalog_roots=catalog_roots,
+        catalog=catalog,
         runtime_support=runtime_support,
         source_context=source_context,
     ).resolved
@@ -158,25 +156,23 @@ def resolve_session(
 def resolve_session_with_assets(
     raw_session: dict[str, Any],
     *,
-    catalog_roots: CatalogRoots | None = None,
+    catalog: CatalogReadView,
     runtime_support: RuntimeSupport | None = None,
     source_context: SourceContext | None = None,
 ) -> SessionResolution:
     if source_context is not None and not isinstance(source_context, SourceContext):
         raise SessionResolutionError("source_context must be a SourceContext instance")
 
-    roots = catalog_roots or default_catalog_roots()
     context = source_context or SourceContext(origin="resolve_session")
     cfg = SegmentSessionConfig.model_validate(raw_session)
     # The runtime-support gate is mandatory. Production always runs the
     # Earth-Luna profile; callers may only widen/narrow it explicitly. A None
     # here must never mean "skip the typed UnsupportedFeature layer".
     support = runtime_support or RuntimeSupport.earth_luna()
-    _check_runtime_support(cfg, support, roots)
+    _check_runtime_support(cfg, support, catalog)
 
-    allocated_nodes, ethernet_segments = _allocate_segment_addressing(
-        list(_expand_segments(cfg, roots))
-    )
+    expanded_nodes, segments = _expand_segments(cfg, catalog)
+    allocated_nodes, ethernet_segments = _allocate_segment_addressing(list(expanded_nodes))
     runtime_nodes = _apply_addressing(cfg, tuple(allocated_nodes))
     runtime_nodes = _derive_host_attachments(runtime_nodes)
     resolved_nodes = tuple(item.node for item in runtime_nodes)
@@ -185,7 +181,7 @@ def resolve_session_with_assets(
     _check_body_support(resolved_nodes, body_facts, support)
     _check_propagator_support(resolved_nodes, support)
     _check_workload_adapter_support(runtime_nodes, support)
-    ephemeris = _resolve_ephemeris(cfg, roots, resolved_nodes)
+    ephemeris = _resolve_ephemeris(cfg, catalog, resolved_nodes)
     link_rules = tuple(_resolve_link_rule(rule, runtime_nodes) for rule in cfg.link_rules or ())
     routing_domains = tuple(_resolve_routing_domains(cfg, runtime_nodes))
     _validate_routing_boundaries(cfg, routing_domains, link_rules)
@@ -195,6 +191,7 @@ def resolve_session_with_assets(
     base_resolved = ResolvedSession(
         identity_mode=IdentityMode.SEGMENT_NAMESPACED,
         session=cfg.session,
+        segments=segments,
         nodes=resolved_nodes,
         bodies=body_facts,
         link_rules=link_rules,
@@ -220,6 +217,7 @@ def resolve_session_with_assets(
     resolved = ResolvedSession(
         identity_mode=base_resolved.identity_mode,
         session=base_resolved.session,
+        segments=base_resolved.segments,
         nodes=base_resolved.nodes,
         bodies=base_resolved.bodies,
         link_rules=base_resolved.link_rules,
@@ -238,7 +236,7 @@ def resolve_session_with_assets(
     _validate_access_ground_scheduling(resolved)
     _validate_allocator_wide_scheduling(resolved)
     workload_profiles = {
-        reference: Profile.model_validate(_load_expected(reference, roots, "profile"))
+        reference: Profile.model_validate(_load_expected(reference, catalog, "profile"))
         for reference in sorted({node.profile for node in resolved_nodes})
     }
     _check_profile_env(workload_profiles, resolved_nodes)
@@ -258,7 +256,7 @@ def _resolve_dispatch(cfg: SegmentSessionConfig) -> Dispatch:
 def load_session_resolution_from_file(
     session_path: str | Path,
     *,
-    catalog_roots: CatalogRoots | None = None,
+    catalog: CatalogReadView,
     runtime_support: RuntimeSupport | None = None,
     origin: str = "file",
     run_id: str | None = None,
@@ -267,14 +265,14 @@ def load_session_resolution_from_file(
     raw = load_configuration_yaml(path.read_text(encoding="utf-8"))
     return resolve_session_with_assets(
         raw,
-        catalog_roots=catalog_roots,
+        catalog=catalog,
         runtime_support=runtime_support,
         source_context=SourceContext(origin=origin, session_path=str(path), run_id=run_id),
     )
 
 
 def _check_runtime_support(
-    cfg: SegmentSessionConfig, support: RuntimeSupport, roots: CatalogRoots
+    cfg: SegmentSessionConfig, support: RuntimeSupport, catalog: CatalogReadView
 ) -> None:
     unsupported = []
     explicit_node_clocks: list[dict[str, Any]] = []
@@ -287,7 +285,7 @@ def _check_runtime_support(
             # each is a distinct supported feature. The gate must key on the
             # loaded wrapper, not the segment class.
             with _segment_scope(segment.id):
-                wrapper, source = _load_ref_or_object(segment.source, roots)
+                wrapper, source = _load_ref_or_object(segment.source, catalog)
             kind = wrapper
             if wrapper == "space_node_set":
                 explicit_node_clocks.extend(
@@ -302,7 +300,7 @@ def _check_runtime_support(
                 space_node_refs.update(entry["node"] for entry in source["nodes"])
             for node_ref in sorted(space_node_refs):
                 with _segment_scope(segment.id):
-                    node_document = _load_expected(node_ref, roots, "node")
+                    node_document = _load_expected(node_ref, catalog, "node")
                 onboard = bool(node_document.get("ethernet")) or bool(node_document.get("payloads"))
                 if feature := support.check_payloads(onboard):
                     unsupported.append(feature)
@@ -461,7 +459,7 @@ def _collect_body_facts(runtime_nodes: tuple[_RuntimeNode, ...]) -> tuple[Resolv
 
 def _resolve_ephemeris(
     cfg: SegmentSessionConfig,
-    roots: CatalogRoots,
+    catalog: CatalogReadView,
     nodes: tuple[ResolvedNode, ...],
 ) -> ResolvedEphemeris | None:
     active_bodies = _active_bodies(nodes)
@@ -478,7 +476,7 @@ def _resolve_ephemeris(
     manifest_targets: set[str] = {"earth"}
     for kernel in cfg.ephemeris.kernels:
         targets = tuple(
-            sorted({_ephemeris_target_body_id(target, roots) for target in kernel.targets})
+            sorted({_ephemeris_target_body_id(target, catalog) for target in kernel.targets})
         )
         manifest_targets.update(targets)
         kernels.append(
@@ -522,8 +520,8 @@ def _resolve_ephemeris(
     return resolved_ephemeris
 
 
-def _ephemeris_target_body_id(target: Any, roots: CatalogRoots) -> str:
-    body = _load_expected(target, roots, "body")
+def _ephemeris_target_body_id(target: Any, catalog: CatalogReadView) -> str:
+    body = _load_expected(target, catalog, "body")
     return str(body["id"])
 
 
@@ -564,17 +562,56 @@ def _segment_scope(segment_id: str):
         ) from exc
 
 
-def _expand_segments(cfg: SegmentSessionConfig, roots: CatalogRoots) -> tuple[_RuntimeNode, ...]:
+def _segment_record(
+    segment: SpaceSegment | GroundSegment,
+    *,
+    kind: Literal["space", "ground"],
+    source_ref: str,
+    source: dict[str, Any],
+) -> ResolvedSegment:
+    """Record one authored segment with the name an authoring surface shows.
+
+    The name is the segment's own ``display_name``, else the referenced
+    constellation, space node set or site set's ``display_name``, else that
+    object's id.
+    """
+    authored = source.get("display_name")
+    display_name = (
+        segment.display_name
+        or (authored if isinstance(authored, str) and authored else None)
+        or str(source["id"])
+    )
+    return ResolvedSegment(
+        segment_id=segment.id,
+        kind=kind,
+        display_name=display_name,
+        source_ref=source_ref,
+    )
+
+
+def _expand_segments(
+    cfg: SegmentSessionConfig, catalog: CatalogReadView
+) -> tuple[tuple[_RuntimeNode, ...], tuple[ResolvedSegment, ...]]:
+    """Expand every segment into runtime nodes and record each segment once."""
     ordered: list[_RuntimeNode | _SiteMarker] = []
     placements: dict[str, _SitePlacement] = {}
+    segments: list[ResolvedSegment] = []
     for segment in cfg.segments:
         with _segment_scope(segment.id):
             if isinstance(segment, SpaceSegment):
-                ordered.extend(_expand_space_segment(segment, roots))
+                space_nodes, record = _expand_space_segment(segment, catalog)
+                ordered.extend(space_nodes)
+                segments.append(record)
             elif isinstance(segment, GroundSegment):
-                site_set = _load_expected(segment.placement.from_site_set, roots, "site_set")
+                site_set_ref = str(segment.placement.from_site_set)
+                site_set = _load_expected(site_set_ref, catalog, "site_set")
+                segments.append(
+                    _segment_record(
+                        segment, kind="ground", source_ref=site_set_ref, source=site_set
+                    )
+                )
                 sites = tuple(
-                    _load_expected(site_ref, roots, "site") for site_ref in site_set["sites"]
+                    _load_expected(site_ref, catalog, "site") for site_ref in site_set["sites"]
                 )
                 placed_site_ids = {site["id"] for site in sites}
                 unknown_override_sites = sorted(
@@ -602,18 +639,22 @@ def _expand_segments(cfg: SegmentSessionConfig, roots: CatalogRoots) -> tuple[_R
     nodes: list[_RuntimeNode] = []
     for entry in ordered:
         if isinstance(entry, _SiteMarker):
-            nodes.extend(_expand_site_placement(placements[entry.site_id], roots))
+            nodes.extend(_expand_site_placement(placements[entry.site_id], catalog))
         else:
             nodes.append(entry)
     if not nodes:
         raise SessionResolutionError("session resolves to zero runtime nodes")
-    return tuple(nodes)
+    return tuple(nodes), tuple(segments)
 
 
-def _expand_space_segment(segment: SpaceSegment, roots: CatalogRoots) -> list[_RuntimeNode]:
-    wrapper, source = _load_ref_or_object(segment.source, roots)
+def _expand_space_segment(
+    segment: SpaceSegment, catalog: CatalogReadView
+) -> tuple[list[_RuntimeNode], ResolvedSegment]:
+    source_ref = str(segment.source)
+    wrapper, source = _load_ref_or_object(source_ref, catalog)
+    record = _segment_record(segment, kind="space", source_ref=source_ref, source=source)
     if wrapper == "constellation":
-        return _expand_constellation_segment(segment, source, roots)
+        return _expand_constellation_segment(segment, source, catalog), record
     if wrapper == "space_node_set":
         expanded = []
         for source_slot, entry in enumerate(source["nodes"]):
@@ -621,11 +662,11 @@ def _expand_space_segment(segment: SpaceSegment, roots: CatalogRoots) -> list[_R
                 _space_node_from_entry(
                     segment,
                     entry,
-                    roots,
+                    catalog,
                     source_slot=source_slot,
                 )
             )
-        return expanded
+        return expanded, record
     raise SessionResolutionError(
         f"space segment {segment.id!r} source must be constellation or space_node_set; "
         f"got {wrapper!r}"
@@ -635,11 +676,11 @@ def _expand_space_segment(segment: SpaceSegment, roots: CatalogRoots) -> list[_R
 def _expand_constellation_segment(
     segment: SpaceSegment,
     constellation: dict[str, Any],
-    roots: CatalogRoots,
+    catalog: CatalogReadView,
 ) -> list[_RuntimeNode]:
-    node = _load_expected(constellation["node"], roots, "node")
-    orbit = _load_expected(constellation["orbit"], roots, "orbit")
-    body = _load_expected(orbit["central_body"], roots, "body")
+    node = _load_expected(constellation["node"], catalog, "node")
+    orbit = _load_expected(constellation["orbit"], catalog, "orbit")
+    body = _load_expected(orbit["central_body"], catalog, "body")
     planes = int(constellation["planes"]["count"])
     slots = int(constellation["slots_per_plane"])
     phase_offset = float(constellation["phasing"].get("phase_offset_deg", 0.0))
@@ -649,7 +690,7 @@ def _expand_constellation_segment(
         placed=None,
         segment_profile=segment.profile,
         definition=node.get("profile"),
-        roots=roots,
+        catalog=catalog,
     )
     expanded: list[_RuntimeNode] = []
 
@@ -678,7 +719,7 @@ def _expand_constellation_segment(
                         phase_offset_deg=phase_offset,
                     ),
                     tags=tuple(sorted(tags)),
-                    roots=roots,
+                    catalog=catalog,
                     clock=segment.clock,
                     plane=plane,
                     slot=slot,
@@ -698,7 +739,7 @@ def _expand_constellation_segment(
                     carrier=carrier,
                     source_node=node,
                     segment_profile=segment.profile,
-                    roots=roots,
+                    catalog=catalog,
                 )
             )
     return expanded
@@ -716,12 +757,12 @@ def _node_origination_targets(source_node: dict[str, Any]):
 def _space_node_from_entry(
     segment: SpaceSegment,
     entry: dict[str, Any],
-    roots: CatalogRoots,
+    catalog: CatalogReadView,
     *,
     source_slot: int,
 ) -> list[_RuntimeNode]:
-    node = _load_expected(entry["node"], roots, "node")
-    orbit = _load_expected(entry["orbit"], roots, "orbit") if "orbit" in entry else None
+    node = _load_expected(entry["node"], catalog, "node")
+    orbit = _load_expected(entry["orbit"], catalog, "orbit") if "orbit" in entry else None
     tle = entry.get("sgp4_tle")
     if orbit is None and tle is None:
         raise UnsupportedFeatureError(
@@ -738,12 +779,12 @@ def _space_node_from_entry(
             ]
         )
     if tle is not None:
-        body = _load_expected(tle["central_body"], roots, "body")
+        body = _load_expected(tle["central_body"], catalog, "body")
         orbit_facts = _tle_orbit_facts(entry["id"], tle, body)
         plane = 0
         slot = source_slot
     else:
-        body = _load_expected(orbit["central_body"], roots, "body")
+        body = _load_expected(orbit["central_body"], catalog, "body")
         orbit_facts = _orbit_facts(
             orbit,
             body,
@@ -762,7 +803,7 @@ def _space_node_from_entry(
         placed=entry.get("profile"),
         segment_profile=segment.profile,
         definition=node.get("profile"),
-        roots=roots,
+        catalog=catalog,
     )
     tags = tuple(sorted({*(segment.tags or ()), *(entry.get("tags") or ())}))
     entry_clock = (
@@ -778,7 +819,7 @@ def _space_node_from_entry(
             body=body,
             orbit=orbit_facts,
             tags=tags,
-            roots=roots,
+            catalog=catalog,
             clock=entry_clock or segment.clock,
             plane=plane,
             slot=slot,
@@ -796,7 +837,7 @@ def _space_node_from_entry(
             carrier=carrier,
             source_node=node,
             segment_profile=segment.profile,
-            roots=roots,
+            catalog=catalog,
         ),
     ]
 
@@ -1011,7 +1052,9 @@ def _effective_site_policy(
     return scheduling, originated, tuple(tags)
 
 
-def _expand_site_placement(placement: _SitePlacement, roots: CatalogRoots) -> list[_RuntimeNode]:
+def _expand_site_placement(
+    placement: _SitePlacement, catalog: CatalogReadView
+) -> list[_RuntimeNode]:
     site = placement.site
     site_id = site["id"]
     groups = tuple(segment.id for segment in placement.segments)
@@ -1059,7 +1102,7 @@ def _expand_site_placement(placement: _SitePlacement, roots: CatalogRoots) -> li
             ]
         )
     body_ref = frame["body_fixed"]["body"]
-    body = _load_expected(body_ref, roots, "body")
+    body = _load_expected(body_ref, catalog, "body")
     if site.get("location") is None:
         raise SessionResolutionError(
             f"site {site_id!r} is not body-fixed; runtime support requires "
@@ -1080,7 +1123,7 @@ def _expand_site_placement(placement: _SitePlacement, roots: CatalogRoots) -> li
 
     expanded: list[_RuntimeNode] = []
     for site_node in site["nodes"]:
-        source_node = _load_expected(site_node["node"], roots, "node")
+        source_node = _load_expected(site_node["node"], catalog, "node")
         # Ground identity is site-anchored: a node's name never depends on
         # which group(s) placed its site. local_node_id keeps the
         # site-qualified form so `node:` selectors stay unique.
@@ -1106,7 +1149,7 @@ def _expand_site_placement(placement: _SitePlacement, roots: CatalogRoots) -> li
             placed=site_node.get("profile"),
             segment_profile=segment_profile,
             definition=source_node.get("profile"),
-            roots=roots,
+            catalog=catalog,
         )
         expanded.append(
             _RuntimeNode(
@@ -1126,7 +1169,7 @@ def _expand_site_placement(placement: _SitePlacement, roots: CatalogRoots) -> li
                             runtime_id,
                             source_node,
                             site_node,
-                            roots,
+                            catalog,
                             body_id=body["id"],
                         )
                     ),
@@ -1169,7 +1212,7 @@ def _expand_site_placement(placement: _SitePlacement, roots: CatalogRoots) -> li
                 node_tags=node_tags,
                 segment_profile=segment_profile,
                 base_clock=base_clock,
-                roots=roots,
+                catalog=catalog,
             )
         )
     return expanded
@@ -1220,7 +1263,7 @@ def _expand_ground_payload_members(
     node_tags: set[str],
     segment_profile: str | None,
     base_clock: Any,
-    roots: CatalogRoots,
+    catalog: CatalogReadView,
 ) -> list[_RuntimeNode]:
     """Expand a site-installed node's populated payload mounts into runtime
     members: real environments attached to the segment the mount's port
@@ -1232,7 +1275,7 @@ def _expand_ground_payload_members(
     for mount_id in sorted(installations):
         installation = installations[mount_id]
         mount = mounts[mount_id]
-        payload = _load_expected(mount["payload"], roots, "payload")
+        payload = _load_expected(mount["payload"], catalog, "payload")
         attach = mount["attach"]
         segment = bindings[attach]
         member_tags = set(node_tags)
@@ -1247,7 +1290,7 @@ def _expand_ground_payload_members(
                 placed=mount.get("profile"),
                 segment_profile=segment_profile,
                 definition=payload.get("profile"),
-                roots=roots,
+                catalog=catalog,
             )
             members.append(
                 _RuntimeNode(
@@ -1302,7 +1345,7 @@ def _resolved_space_node(
     body: dict[str, Any] | None,
     orbit: ResolvedOrbitFacts,
     tags: tuple[str, ...],
-    roots: CatalogRoots,
+    catalog: CatalogReadView,
     plane: int | None,
     slot: int | None,
     profile: str,
@@ -1325,7 +1368,7 @@ def _resolved_space_node(
                 runtime_id,
                 source_node,
                 None,
-                roots,
+                catalog,
                 owner_kind="satellite",
                 body_id=body["id"],
             )
@@ -1431,7 +1474,7 @@ def _terminal_blocks_for_node(
     runtime_id: str,
     source_node: dict[str, Any],
     installs: dict[str, Any] | None,
-    roots: CatalogRoots,
+    catalog: CatalogReadView,
     *,
     owner_kind: str,
     body_id: str,
@@ -1443,7 +1486,7 @@ def _terminal_blocks_for_node(
         if count == 0:
             # Not installed at this placement — no inventory, no interfaces.
             continue
-        terminal = _load_expected(mount["terminal"], roots, "terminal")
+        terminal = _load_expected(mount["terminal"], catalog, "terminal")
         installed = installs.get(mount["id"], {}) if installs is not None else {}
         capabilities = installed.get("capabilities") or {}
         _validate_terminal_capability_narrowing(
@@ -1569,7 +1612,7 @@ def _expand_space_payload_members(
     carrier: _RuntimeNode,
     source_node: dict[str, Any],
     segment_profile: str | None,
-    roots: CatalogRoots,
+    catalog: CatalogReadView,
 ) -> list[_RuntimeNode]:
     """Expand a space carrier's payload mounts into runtime members.
 
@@ -1583,7 +1626,7 @@ def _expand_space_payload_members(
     members: list[_RuntimeNode] = []
     node = carrier.node
     for mount in sorted(source_node.get("payloads", ()), key=lambda entry: entry["id"]):
-        payload = _load_expected(mount["payload"], roots, "payload")
+        payload = _load_expected(mount["payload"], catalog, "payload")
         attach = mount["attach"]
         for ordinal in range(1, int(mount["count"]) + 1):
             suffix = mount["id"] if ordinal == 1 else f"{mount['id']}{ordinal}"
@@ -1594,7 +1637,7 @@ def _expand_space_payload_members(
                 placed=mount.get("profile"),
                 segment_profile=segment_profile,
                 definition=payload.get("profile"),
-                roots=roots,
+                catalog=catalog,
             )
             member_tags = set(node.tags)
             member_tags.update(mount.get("tags") or ())
@@ -1706,7 +1749,7 @@ def _terminal_blocks_for_site_node(
     runtime_id: str,
     source_node: dict[str, Any],
     site_node: dict[str, Any],
-    roots: CatalogRoots,
+    catalog: CatalogReadView,
     *,
     body_id: str,
 ) -> list[ResolvedTerminalBlock]:
@@ -1714,7 +1757,7 @@ def _terminal_blocks_for_site_node(
         runtime_id,
         source_node,
         site_node["terminals"],
-        roots,
+        catalog,
         owner_kind="ground_station",
         body_id=body_id,
     )
@@ -3702,15 +3745,18 @@ def _normalize_token(value: str) -> str:
     return token
 
 
-def _load_ref_or_object(value: str, roots: CatalogRoots) -> tuple[str, dict[str, Any]]:
+def _load_ref_or_object(value: str, catalog: CatalogReadView) -> tuple[str, dict[str, Any]]:
+    """Load one wrapped catalog object through the read view as a plain mapping.
+
+    ``CatalogReadError`` propagates unchanged: the view could not supply the
+    bytes, and the caller decides how to report the missing dependency.
+    """
     if not isinstance(value, str):
         raise SessionResolutionError(f"expected catalog reference, got {type(value)!r}")
     ref = value if isinstance(value, CatalogRef) else CatalogRef(value)
-    path = resolve_catalog_reference(ref, roots)
-    data = load_configuration_yaml(path.read_text(encoding="utf-8")) or {}
     try:
-        wrapper, model = validate_referenced_configuration_document(ref, data)
-    except Exception as exc:
+        wrapper, model = load_catalog_object(ref, catalog)
+    except (ValidationError, ValueError, TypeError) as exc:
         raise SessionResolutionError(f"invalid catalog object: {exc}") from exc
     if wrapper is None:
         raise SessionResolutionError(f"expected wrapped catalog object, got session {ref!r}")
@@ -3778,7 +3824,7 @@ def _effective_profile(
     placed: Any,
     segment_profile: Any,
     definition: Any,
-    roots: CatalogRoots,
+    catalog: CatalogReadView,
 ) -> tuple[str, str, str | None]:
     """The most specific authored profile statement wins; absence is a refusal."""
 
@@ -3794,12 +3840,12 @@ def _effective_profile(
             "entry, none on the segment, and none on the node definition. There is "
             "no default workload; state what the node runs."
         )
-    profile_body = _load_expected(reference, roots, "profile")
+    profile_body = _load_expected(reference, catalog, "profile")
     return reference, level, profile_body.get("adapter")
 
 
-def _load_expected(ref: str, roots: CatalogRoots, expected_wrapper: str) -> dict[str, Any]:
-    wrapper, body = _load_ref_or_object(ref, roots)
+def _load_expected(ref: str, catalog: CatalogReadView, expected_wrapper: str) -> dict[str, Any]:
+    wrapper, body = _load_ref_or_object(ref, catalog)
     if wrapper != expected_wrapper:
         raise SessionResolutionError(
             f"expected catalog object {expected_wrapper!r}, got {wrapper!r}"

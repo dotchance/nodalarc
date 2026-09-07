@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 import hashlib
-import tempfile
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from pathlib import Path, PurePosixPath
 from typing import Any, cast
 
 import yaml
@@ -15,9 +13,9 @@ from nodalarc.catalog_closure import (
     CatalogClosureCollector,
     CatalogClosureError,
     CatalogReadDocument,
+    CatalogReadError,
     CatalogReadView,
 )
-from nodalarc.catalog_paths import CatalogRoots
 from nodalarc.catalog_refs import CatalogFamily, CatalogRef
 from nodalarc.catalog_registry import validate_referenced_configuration_document
 from nodalarc.catalog_repository import (
@@ -48,7 +46,7 @@ from nodalarc.semantic_projection import resolved_session_semantic_digest
 from nodalarc.session_validator import validate_session_readiness
 from pydantic import ValidationError
 
-PreviewFactory = Callable[[dict[str, Any], CatalogRoots], BuilderWorld]
+PreviewFactory = Callable[[SessionResolution], BuilderWorld]
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,7 +111,7 @@ class _ReachableProposalValidationError(ValueError):
 
 
 @dataclass(frozen=True, slots=True)
-class _OverlayCatalogReadView(CatalogReadView):
+class OverlayCatalogReadView(CatalogReadView):
     base: CatalogReadSnapshot
     proposals: Mapping[CatalogRef, tuple[int, BuilderProposedCatalogDocument]]
     canonicalized: dict[CatalogRef, CanonicalConfigurationDocument] = field(default_factory=dict)
@@ -303,36 +301,15 @@ def _excluded_proposals_issue(
     )
 
 
-def _materialize_closure(root: Path, closure: CatalogClosure) -> CatalogRoots:
-    shipped_root = root / "catalog" / "nodalarc"
-    user_root = root / "catalog" / "user"
-    shipped_root.mkdir(parents=True)
-    user_root.mkdir(parents=True)
-    for entry in closure.entries:
-        relative = PurePosixPath(entry.preserved_path)
-        if (
-            relative.is_absolute()
-            or ".." in relative.parts
-            or len(relative.parts) < 3
-            or relative.parts[0] != "catalog"
-            or relative.parts[1] not in {"nodalarc", "user"}
-        ):
-            raise ValueError(f"invalid preserved catalog path {entry.preserved_path!r}")
-        destination = root.joinpath(*relative.parts)
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_bytes(entry.yaml_bytes)
-    return CatalogRoots.from_catalog_root(shipped_root, user_root=user_root)
+def _default_preview(resolution: SessionResolution) -> BuilderWorld:
+    from vs_api.builder_world import world_from_resolution
 
-
-def _default_preview(raw_session: dict[str, Any], roots: CatalogRoots) -> BuilderWorld:
-    from vs_api.builder_world import build_builder_world
-
-    return build_builder_world(raw_session, catalog_roots=roots)
+    return world_from_resolution(resolution)
 
 
 def _closure_inventory(
     closure: CatalogClosure,
-    overlay: _OverlayCatalogReadView,
+    overlay: OverlayCatalogReadView,
 ) -> DependencyClosureInventory:
     entries = tuple(
         DependencyClosureEntry(
@@ -444,7 +421,7 @@ def compile_builder_draft(
             issues=issues,
         )
 
-    overlay = _OverlayCatalogReadView(
+    overlay = OverlayCatalogReadView(
         snapshot,
         {
             proposal.ref: (index, proposal)
@@ -497,14 +474,113 @@ def compile_builder_draft(
 
     resolution: SessionResolution | None = None
     preview: BuilderWorld | None = None
-    with tempfile.TemporaryDirectory(prefix="nodalarc-builder-compile-") as temporary:
-        roots = _materialize_closure(Path(temporary), closure)
+    try:
+        resolution = resolve_session_with_assets(
+            cast(dict[str, Any], canonical_session.canonical_json),
+            catalog=closure.read_view(),
+            runtime_support=runtime_support,
+            source_context=SourceContext(origin="builder.compile"),
+        )
+    except UnsupportedFeatureError as error:
+        for feature in error.features:
+            issues.append(
+                BuilderIssue(
+                    code=(f"builder.runtime_support.{feature.category.value}.{feature.value}"),
+                    stage="runtime_support",
+                    severity="error",
+                    message=feature.message,
+                    blocks=("deploy",),
+                    source_ref=str(request.target_ref),
+                )
+            )
+    except ValidationError as error:
+        issues.extend(
+            _validation_issues(
+                error,
+                source_ref=str(request.target_ref),
+                draft_path="state.session",
+            )
+        )
+    except SessionResolutionError as error:
+        issues.append(
+            BuilderIssue(
+                code="builder.semantic.session_resolution",
+                stage="semantic",
+                severity="error",
+                message=str(error),
+                blocks=("save", "deploy"),
+                source_ref=str(request.target_ref),
+                related_refs=tuple(
+                    value
+                    for value in (error.subject_id, error.segment_id, error.node_id)
+                    if value is not None
+                ),
+            )
+        )
+    except CatalogReadError as error:
+        issues.append(
+            BuilderIssue(
+                code="builder.reference.resolver_read",
+                stage="reference",
+                severity="error",
+                message=str(error),
+                blocks=("save", "deploy"),
+                source_ref=str(request.target_ref),
+            )
+        )
+    except ValueError as error:
+        issues.append(
+            BuilderIssue(
+                code="builder.semantic.invalid_session",
+                stage="semantic",
+                severity="error",
+                message=str(error),
+                blocks=("save", "deploy"),
+                source_ref=str(request.target_ref),
+            )
+        )
+
+    if resolution is not None:
+        readiness = validate_session_readiness(
+            resolution.resolved,
+            available_node_count=available_node_count,
+        )
+        for result in readiness:
+            if result.level not in {"error", "warning"}:
+                raise ValueError(f"readiness validator returned unknown level {result.level!r}")
+            blocks = ("deploy",) if result.level == "error" else ()
+            issues.append(
+                BuilderIssue(
+                    code=f"builder.readiness.{result.code}",
+                    stage="readiness",
+                    severity=cast(Any, result.level),
+                    message=result.message,
+                    blocks=blocks,
+                    source_ref=str(request.target_ref),
+                    draft_path=result.field_path,
+                )
+            )
+        if not any(node.kind == "satellite" for node in resolution.resolved.nodes):
+            issues.append(
+                BuilderIssue(
+                    code="builder.readiness.no_satellites",
+                    stage="readiness",
+                    severity="error",
+                    message="The session contains no satellites and cannot start",
+                    blocks=("deploy",),
+                    source_ref=str(request.target_ref),
+                    draft_path="state.session.segments",
+                )
+            )
         try:
-            resolution = resolve_session_with_assets(
-                cast(dict[str, Any], canonical_session.canonical_json),
-                catalog_roots=roots,
-                runtime_support=runtime_support,
-                source_context=SourceContext(origin="builder.compile"),
+            preview = (preview_factory or _default_preview)(resolution)
+        except ValidationError as error:
+            issues.extend(
+                _validation_issues(
+                    error,
+                    source_ref=str(request.target_ref),
+                    draft_path="state.session",
+                )
             )
         except UnsupportedFeatureError as error:
             for feature in error.features:
@@ -518,35 +594,11 @@ def compile_builder_draft(
                         source_ref=str(request.target_ref),
                     )
                 )
-        except ValidationError as error:
-            issues.extend(
-                _validation_issues(
-                    error,
-                    source_ref=str(request.target_ref),
-                    draft_path="state.session",
-                )
-            )
         except SessionResolutionError as error:
             issues.append(
                 BuilderIssue(
-                    code="builder.semantic.session_resolution",
+                    code="builder.semantic.preview_resolution",
                     stage="semantic",
-                    severity="error",
-                    message=str(error),
-                    blocks=("save", "deploy"),
-                    source_ref=str(request.target_ref),
-                    related_refs=tuple(
-                        value
-                        for value in (error.subject_id, error.segment_id, error.node_id)
-                        if value is not None
-                    ),
-                )
-            )
-        except FileNotFoundError as error:
-            issues.append(
-                BuilderIssue(
-                    code="builder.reference.resolver_read",
-                    stage="reference",
                     severity="error",
                     message=str(error),
                     blocks=("save", "deploy"),
@@ -556,96 +608,14 @@ def compile_builder_draft(
         except ValueError as error:
             issues.append(
                 BuilderIssue(
-                    code="builder.semantic.invalid_session",
-                    stage="semantic",
+                    code="builder.readiness.preview_unavailable",
+                    stage="readiness",
                     severity="error",
-                    message=str(error),
-                    blocks=("save", "deploy"),
+                    message=f"Runtime preview could not be built: {error}",
+                    blocks=("deploy",),
                     source_ref=str(request.target_ref),
                 )
             )
-
-        if resolution is not None:
-            readiness = validate_session_readiness(
-                resolution.resolved,
-                available_node_count=available_node_count,
-            )
-            for result in readiness:
-                if result.level not in {"error", "warning"}:
-                    raise ValueError(f"readiness validator returned unknown level {result.level!r}")
-                blocks = ("deploy",) if result.level == "error" else ()
-                issues.append(
-                    BuilderIssue(
-                        code=f"builder.readiness.{result.code}",
-                        stage="readiness",
-                        severity=cast(Any, result.level),
-                        message=result.message,
-                        blocks=blocks,
-                        source_ref=str(request.target_ref),
-                        draft_path=result.field_path,
-                    )
-                )
-            if not any(node.kind == "satellite" for node in resolution.resolved.nodes):
-                issues.append(
-                    BuilderIssue(
-                        code="builder.readiness.no_satellites",
-                        stage="readiness",
-                        severity="error",
-                        message="The session contains no satellites and cannot start",
-                        blocks=("deploy",),
-                        source_ref=str(request.target_ref),
-                        draft_path="state.session.segments",
-                    )
-                )
-            try:
-                preview = (preview_factory or _default_preview)(
-                    cast(dict[str, Any], canonical_session.canonical_json),
-                    roots,
-                )
-            except ValidationError as error:
-                issues.extend(
-                    _validation_issues(
-                        error,
-                        source_ref=str(request.target_ref),
-                        draft_path="state.session",
-                    )
-                )
-            except UnsupportedFeatureError as error:
-                for feature in error.features:
-                    issues.append(
-                        BuilderIssue(
-                            code=(
-                                f"builder.runtime_support.{feature.category.value}.{feature.value}"
-                            ),
-                            stage="runtime_support",
-                            severity="error",
-                            message=feature.message,
-                            blocks=("deploy",),
-                            source_ref=str(request.target_ref),
-                        )
-                    )
-            except SessionResolutionError as error:
-                issues.append(
-                    BuilderIssue(
-                        code="builder.semantic.preview_resolution",
-                        stage="semantic",
-                        severity="error",
-                        message=str(error),
-                        blocks=("save", "deploy"),
-                        source_ref=str(request.target_ref),
-                    )
-                )
-            except ValueError as error:
-                issues.append(
-                    BuilderIssue(
-                        code="builder.readiness.preview_unavailable",
-                        stage="readiness",
-                        severity="error",
-                        message=f"Runtime preview could not be built: {error}",
-                        blocks=("deploy",),
-                        source_ref=str(request.target_ref),
-                    )
-                )
 
     if resolution is not None:
         digests = BuilderDigests(

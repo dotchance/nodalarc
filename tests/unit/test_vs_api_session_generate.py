@@ -48,8 +48,9 @@ def test_legacy_generate_endpoint_is_retired():
     assert response.status_code == 404
 
 
-def test_constellation_presets_expose_backend_runtime_capabilities():
-    response = client.get("/api/v1/presets/constellations")
+def test_constellation_presets_expose_backend_runtime_capabilities(catalog_client):
+    scoped_client, _context = catalog_client
+    response = scoped_client.get("/api/v1/presets/constellations")
 
     assert response.status_code == 200
     payload = response.json()
@@ -104,14 +105,15 @@ def test_constellation_preset_openapi_uses_generated_response_contract():
     }
 
 
-def test_wizard_presets_are_catalog_backed_not_retired_config_roots():
+def test_wizard_presets_are_catalog_backed_not_retired_config_roots(catalog_client):
+    scoped_client, _context = catalog_client
     # Satellite presets are catalog space-node PRIMITIVES (sessions assemble
     # from primitives — the constellation is geometry plus a default node,
     # and any catalog node can be composed in). The retired config-root
     # satellite-type overrides stay gone; this list must never be empty.
-    sat_response = client.get("/api/v1/presets/satellite-types")
-    sets_response = client.get("/api/v1/presets/ground-stations")
-    sites_response = client.get("/api/v1/presets/ground-stations/stations")
+    sat_response = scoped_client.get("/api/v1/presets/satellite-types")
+    sets_response = scoped_client.get("/api/v1/presets/ground-stations")
+    sites_response = scoped_client.get("/api/v1/presets/ground-stations/stations")
 
     assert sat_response.status_code == 200
     sat_presets = sat_response.json()["presets"]

@@ -16,13 +16,15 @@ from scheduler.__main__ import (
     _scheduler_capacity_maps,
 )
 
+from tests.catalog_session_fixtures import shipped_read_view
+
 ROOT = Path(__file__).resolve().parents[2]
 SESSION = ROOT / "catalog" / "nodalarc" / "sessions" / "earth-leo-heo-geo-luna-reachability.yaml"
 
 
 def _resolved():
     return load_session_resolution_from_file(
-        SESSION, origin="test.scheduler", run_id="run-test-0001"
+        SESSION, origin="test.scheduler", run_id="run-test-0001", catalog=shipped_read_view()
     ).resolved
 
 
@@ -30,9 +32,7 @@ def test_scheduler_runtime_identity_comes_from_source_context_not_session_yaml(
     tmp_path: Path,
 ) -> None:
     resolution = load_session_resolution_from_file(
-        SESSION,
-        origin="test.scheduler",
-        run_id="run-test-0001",
+        SESSION, origin="test.scheduler", run_id="run-test-0001", catalog=shipped_read_view()
     )
 
     assert require_resolved_session_run_id(resolution.resolved) == "run-test-0001"
@@ -40,7 +40,9 @@ def test_scheduler_runtime_identity_comes_from_source_context_not_session_yaml(
 
 
 def test_resolved_runtime_identity_fails_loud_without_operator_run_id() -> None:
-    resolved = resolve_session(yaml.safe_load(SESSION.read_text(encoding="utf-8")))
+    resolved = resolve_session(
+        yaml.safe_load(SESSION.read_text(encoding="utf-8")), catalog=shipped_read_view()
+    )
 
     with pytest.raises(ValueError, match="source_context.run_id"):
         require_resolved_session_run_id(resolved)

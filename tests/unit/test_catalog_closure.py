@@ -23,7 +23,12 @@ from nodalarc.catalog_paths import CatalogRoots
 from nodalarc.catalog_refs import CatalogRef
 from nodalarc.catalog_registry import CATALOG_FAMILY_REGISTRY
 
-from tests.catalog_session_fixtures import ISS_TLE_LINE_1, ISS_TLE_LINE_2
+from tests.catalog_session_fixtures import (
+    ISS_TLE_LINE_1,
+    ISS_TLE_LINE_2,
+    SHIPPED_ROOT,
+    shipped_read_view,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -630,3 +635,21 @@ def test_filesystem_read_view_reports_a_read_time_disappearance_as_not_found(
         FilesystemCatalogReadView(closure_fixture.roots).read(ref)
 
     assert raised.value.ref == ref
+
+
+def test_closure_read_view_serves_only_the_captured_bytes() -> None:
+    root_yaml = (SHIPPED_ROOT / "sessions" / "earth-leo-simple.yaml").read_bytes()
+    closure = CatalogClosureCollector.collect(root_yaml, shipped_read_view())
+
+    view = closure.read_view()
+
+    assert closure.entries
+    for entry in closure.entries:
+        document = view.read(entry.ref)
+        assert document.yaml_bytes == entry.yaml_bytes
+        assert document.family == entry.family
+        assert document.preserved_path == entry.preserved_path
+    absent = CatalogRef("user:nodes/absent.yaml")
+    with pytest.raises(CatalogDocumentNotFound) as raised:
+        view.read(absent)
+    assert raised.value.ref == absent

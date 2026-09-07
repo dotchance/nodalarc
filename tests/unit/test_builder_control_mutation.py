@@ -44,7 +44,7 @@ from vs_api.builder_visual_draft import (
 )
 from vs_api.catalog_context import CatalogContext
 
-from tests.builder_world_fixtures import builder_world_preview
+from tests.builder_world_fixtures import preview_from_resolution
 
 ROOT = Path(__file__).resolve().parents[2]
 SHIPPED_ROOT = ROOT / "catalog" / "nodalarc"
@@ -116,7 +116,7 @@ def _mutate(service, draft, *commands):
             commands=commands,
         ),
         available_node_count=1_000_000,
-        preview_factory=lambda raw, _roots: builder_world_preview(raw["session"]["name"]),
+        preview_factory=preview_from_resolution,
     )
 
 
@@ -494,7 +494,7 @@ def test_pending_workspace_can_be_completed_without_residual_tree_deadlock(
             workspace=invalid.authoring_workspace,
         ),
         available_node_count=1_000_000,
-        preview_factory=lambda raw, _roots: builder_world_preview(raw["session"]["name"]),
+        preview_factory=preview_from_resolution,
     )
 
     assert completed.visual_draft.projection_status == "applied"

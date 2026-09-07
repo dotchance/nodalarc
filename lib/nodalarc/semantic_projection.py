@@ -453,6 +453,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
+    from nodalarc.catalog_closure import FilesystemCatalogReadView
     from nodalarc.catalog_paths import CatalogRoots
     from nodalarc.resolve_session import load_session_resolution_from_file
 
@@ -462,7 +463,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     resolved = load_session_resolution_from_file(
         args.session,
-        catalog_roots=roots,
+        catalog=FilesystemCatalogReadView(roots),
         origin="semantic_projection",
     ).resolved
     if args.digest_only:

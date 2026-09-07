@@ -18,6 +18,7 @@ from nodalarc.template_vars import build_template_vars_from_resolved
 
 from tests.catalog_session_fixtures import (
     build_catalog_session_fixture,
+    shipped_read_view,
 )
 from tests.catalog_session_fixtures import (
     resolve_catalog_session as resolve_session,
@@ -231,7 +232,7 @@ def test_rendered_nets_never_use_the_reserved_all_zero_system_id() -> None:
     every IS-IS domain member of the session that exposed the failure live,
     no NET may carry it, and the first-resolved node renders the first id."""
     resolution = load_session_resolution_from_file(
-        Path("catalog/nodalarc/sessions/earth-luna-dtn.yaml")
+        Path("catalog/nodalarc/sessions/earth-luna-dtn.yaml"), catalog=shipped_read_view()
     )
     resolved = resolution.resolved
     index = resolved.node_index_by_node_id()
@@ -267,7 +268,8 @@ def test_isis_system_ids_are_globally_unique_across_segments() -> None:
     rendered NET must still be unique — identity comes from the resolver,
     never from per-segment indices."""
     resolution = load_session_resolution_from_file(
-        Path("catalog/nodalarc/sessions/earth-leo-heo-geo-luna-reachability.yaml")
+        Path("catalog/nodalarc/sessions/earth-leo-heo-geo-luna-reachability.yaml"),
+        catalog=shipped_read_view(),
     )
     resolved = resolution.resolved
 
@@ -357,7 +359,8 @@ def test_boundary_exports_materialize_on_flagship_border_nodes() -> None:
     boundary exports must render as installable static routes plus IGP
     redistribution on the border nodes — declared intent, materialized."""
     resolved = load_session_resolution_from_file(
-        Path("catalog/nodalarc/sessions/earth-leo-heo-geo-luna-reachability.yaml")
+        Path("catalog/nodalarc/sessions/earth-leo-heo-geo-luna-reachability.yaml"),
+        catalog=shipped_read_view(),
     ).resolved
 
     boundary = resolved.routing.boundaries[0]
@@ -413,7 +416,7 @@ def test_boundary_exports_materialize_on_flagship_border_nodes() -> None:
 
 def test_non_border_nodes_render_no_boundary_routes_or_redistribution() -> None:
     resolved = load_session_resolution_from_file(
-        Path("catalog/nodalarc/sessions/earth-leo-simple.yaml")
+        Path("catalog/nodalarc/sessions/earth-leo-simple.yaml"), catalog=shipped_read_view()
     ).resolved
     vars_for_node = _vars_for(resolved, _first_satellite(resolved))
     assert vars_for_node["boundary_static_routes"] == []

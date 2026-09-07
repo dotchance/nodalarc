@@ -13,8 +13,7 @@ from nodalarc.catalog_closure import (
     CatalogClosureCollector,
     CatalogClosureEntry,
     CatalogClosureError,
-    CatalogDocumentNotFound,
-    CatalogReadDocument,
+    ClosureReadView,
     catalog_closure_digest,
 )
 from nodalarc.catalog_refs import CatalogRef
@@ -207,21 +206,6 @@ def _check_bounds(
         )
 
 
-@dataclass(frozen=True, slots=True)
-class _UploadReadView:
-    entries: dict[CatalogRef, CatalogClosureEntry]
-
-    def read(self, ref: CatalogRef) -> CatalogReadDocument:
-        entry = self.entries.get(ref)
-        if entry is None:
-            raise CatalogDocumentNotFound(ref, f"upload carries no document for {ref}")
-        return CatalogReadDocument(
-            family=entry.family,
-            preserved_path=entry.preserved_path,
-            yaml_bytes=entry.yaml_bytes,
-        )
-
-
 def _new_upload_id() -> str:
     return f"upload-{secrets.token_hex(12)}"
 
@@ -308,7 +292,7 @@ def verify_catalog_upload(
     try:
         closure = CatalogClosureCollector.collect(
             upload.root_yaml,
-            _UploadReadView(entries_by_ref),
+            ClosureReadView(entries_by_ref),
         )
     except (CatalogClosureError, KeyError) as exc:
         raise _error(

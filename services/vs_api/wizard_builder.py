@@ -4,19 +4,13 @@ from __future__ import annotations
 
 import re
 import secrets
-import tempfile
 from collections.abc import Callable
-from contextlib import contextmanager
 from dataclasses import dataclass
-from pathlib import Path, PurePosixPath
 from typing import Any, cast
 
-from nodalarc.catalog_closure import CatalogClosureCollector, CatalogDependencyGraph
-from nodalarc.catalog_paths import CatalogRoots, resolve_catalog_reference
+from nodalarc.catalog_closure import CatalogClosureCollector, CatalogReadView, load_catalog_object
 from nodalarc.catalog_refs import CatalogRef, SiteSetRef, SpaceSourceRef
-from nodalarc.catalog_registry import validate_referenced_configuration_document
 from nodalarc.catalog_repository import CatalogReadSnapshot
-from nodalarc.configuration_yaml import load_configuration_yaml
 from nodalarc.models.builder_api import (
     BuilderCompileRequest,
     BuilderDraftEnvelope,
@@ -42,7 +36,7 @@ from nodalarc.session_generator import (
     custom_geometry_runtime_capability,
 )
 
-from .builder_compiler import canonicalize_persisted_configuration
+from .builder_compiler import OverlayCatalogReadView
 
 WizardIdentityFactory = Callable[[], str]
 
@@ -224,7 +218,7 @@ class WizardPreviewInputs:
 
     constellation_ref: SpaceSourceRef
     ground_site_set_ref: SiteSetRef
-    catalog_roots: CatalogRoots
+    catalog: CatalogReadView
 
 
 def _default_identity() -> str:
@@ -313,11 +307,11 @@ def _custom_orbit_document(
     }
 
 
-def _validate_orbit_capability(intent: WizardPhysicalIntent, roots: CatalogRoots) -> None:
+def _validate_orbit_capability(intent: WizardPhysicalIntent, catalog: CatalogReadView) -> None:
     capability = (
         custom_geometry_runtime_capability()
         if intent.custom_constellation is not None
-        else constellation_source_runtime_capability(str(intent.constellation_ref), roots)
+        else constellation_source_runtime_capability(str(intent.constellation_ref), catalog)
     )
     if intent.orbit_propagator in capability.runtime_supported_propagators:
         return
@@ -328,11 +322,9 @@ def _validate_orbit_capability(intent: WizardPhysicalIntent, roots: CatalogRoots
     raise ValueError(reason)
 
 
-def _catalog_document(ref: str, roots: CatalogRoots) -> tuple[str, dict[str, Any]]:
+def _catalog_document(ref: str, catalog: CatalogReadView) -> tuple[str, dict[str, Any]]:
     parsed = CatalogRef(ref)
-    path = resolve_catalog_reference(parsed, roots)
-    raw = load_configuration_yaml(path.read_text(encoding="utf-8"))
-    wrapper, model = validate_referenced_configuration_document(parsed, raw)
+    wrapper, model = load_catalog_object(parsed, catalog)
     if wrapper is None:
         raise ValueError(f"expected wrapped catalog object, got session {parsed!r}")
     return wrapper, model.model_dump(mode="json", by_alias=True, exclude_none=True)
@@ -340,7 +332,7 @@ def _catalog_document(ref: str, roots: CatalogRoots) -> tuple[str, dict[str, Any
 
 def _customize_selected_constellation(
     intent: WizardPhysicalIntent,
-    roots: CatalogRoots,
+    catalog: CatalogReadView,
     *,
     constellation_id: str,
     orbit_id: str,
@@ -354,7 +346,7 @@ def _customize_selected_constellation(
             )
         return intent.constellation_ref, ()
 
-    wrapper, constellation = _catalog_document(str(intent.constellation_ref), roots)
+    wrapper, constellation = _catalog_document(str(intent.constellation_ref), catalog)
     if wrapper != "constellation":
         raise ValueError("selected constellation reference must resolve to a constellation")
 
@@ -363,7 +355,7 @@ def _customize_selected_constellation(
     orbit_ref = constellation.get("orbit")
     if not isinstance(orbit_ref, str):
         raise ValueError("selected persisted constellation must reference one orbit document")
-    orbit_wrapper, orbit = _catalog_document(orbit_ref, roots)
+    orbit_wrapper, orbit = _catalog_document(orbit_ref, catalog)
     if orbit_wrapper != "orbit":
         raise ValueError("selected constellation orbit reference must resolve to an orbit")
     propagator_changes = orbit.get("propagator") != intent.orbit_propagator
@@ -517,33 +509,10 @@ def _validate_routing_choices(intent: WizardSessionIntent) -> None:
         raise ValueError(f"Wizard area strategy {intent.area_strategy!r} is not available")
 
 
-def _materialize_graph(root: Path, graph: CatalogDependencyGraph) -> CatalogRoots:
-    shipped_root = root / "catalog" / "nodalarc"
-    user_root = root / "catalog" / "user"
-    shipped_root.mkdir(parents=True)
-    user_root.mkdir(parents=True)
-    for entry in graph.entries:
-        relative = PurePosixPath(entry.preserved_path)
-        destination = root.joinpath(*relative.parts)
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_bytes(entry.yaml_bytes)
-    return CatalogRoots.from_catalog_root(shipped_root, user_root=user_root)
-
-
-def _materialize_proposals(
-    roots: CatalogRoots,
-    proposals: tuple[BuilderProposedCatalogDocument, ...],
+def _assert_selected_refs_resolve(
+    intent: WizardPhysicalIntent, snapshot: CatalogReadSnapshot
 ) -> None:
-    if roots.user_root is None:
-        raise ValueError("Wizard proposal materialization requires a user catalog root")
-    for proposal in proposals:
-        destination = roots.user_root.joinpath(*proposal.ref.relative_path.parts)
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        canonical = canonicalize_persisted_configuration(proposal.ref, proposal.document)
-        destination.write_bytes(canonical.yaml_bytes)
-
-
-def _selected_graph(intent: WizardPhysicalIntent, snapshot: CatalogReadSnapshot):
+    """Refuse early, with closure evidence, when a selected reference is dangling."""
     refs: list[CatalogRef] = []
     if intent.constellation_ref is not None:
         refs.append(intent.constellation_ref)
@@ -555,7 +524,16 @@ def _selected_graph(intent: WizardPhysicalIntent, snapshot: CatalogReadSnapshot)
         refs.append(intent.ground_site_set_ref)
     else:
         refs.extend(intent.custom_site_refs)
-    return CatalogClosureCollector.collect_references(refs, snapshot)
+    CatalogClosureCollector.collect_references(refs, snapshot)
+
+
+def _overlay(
+    snapshot: CatalogReadSnapshot, proposals: tuple[BuilderProposedCatalogDocument, ...]
+) -> CatalogReadView:
+    return OverlayCatalogReadView(
+        base=snapshot,
+        proposals={proposal.ref: (index, proposal) for index, proposal in enumerate(proposals)},
+    )
 
 
 def _custom_geometry_sources(
@@ -620,11 +598,11 @@ def _ground_source(
 
 def _wizard_sources(
     intent: WizardPhysicalIntent,
-    roots: CatalogRoots,
+    catalog: CatalogReadView,
     *,
     name: str,
 ) -> tuple[SpaceSourceRef, SiteSetRef, tuple[BuilderProposedCatalogDocument, ...]]:
-    _validate_orbit_capability(intent, roots)
+    _validate_orbit_capability(intent, catalog)
     constellation_id = f"{name}-constellation"
     orbit_id = f"{name}-orbit"
     site_set_id = f"{name}-sites"
@@ -637,22 +615,20 @@ def _wizard_sources(
     else:
         constellation_ref, space_proposals = _customize_selected_constellation(
             intent,
-            roots,
+            catalog,
             constellation_id=constellation_id,
             orbit_id=orbit_id,
         )
     ground_ref, ground_proposals = _ground_source(intent, site_set_id=site_set_id)
     proposals = (*space_proposals, *ground_proposals)
-    _materialize_proposals(roots, proposals)
     return constellation_ref, ground_ref, proposals
 
 
-@contextmanager
 def wizard_preview_inputs(
     request: WizardCoverageRequest,
     snapshot: CatalogReadSnapshot,
-):
-    """Materialize selected scope facts for one non-persistent OME preview."""
+) -> WizardPreviewInputs:
+    """Select the scope facts for one non-persistent OME preview; nothing is written."""
 
     if not isinstance(request, WizardCoverageRequest):
         raise TypeError("request must be a WizardCoverageRequest")
@@ -660,20 +636,17 @@ def wizard_preview_inputs(
         raise TypeError("snapshot must be a CatalogReadSnapshot")
 
     intent = request.intent
-    graph = _selected_graph(intent, snapshot)
-
-    with tempfile.TemporaryDirectory(prefix="nodalarc-wizard-preview-") as temporary:
-        roots = _materialize_graph(Path(temporary), graph)
-        constellation_ref, ground_site_set_ref, _proposals = _wizard_sources(
-            intent,
-            roots,
-            name=f"wizard-preview-{_default_identity()}",
-        )
-        yield WizardPreviewInputs(
-            constellation_ref=constellation_ref,
-            ground_site_set_ref=ground_site_set_ref,
-            catalog_roots=roots,
-        )
+    _assert_selected_refs_resolve(intent, snapshot)
+    constellation_ref, ground_site_set_ref, proposals = _wizard_sources(
+        intent,
+        snapshot,
+        name=f"wizard-preview-{_default_identity()}",
+    )
+    return WizardPreviewInputs(
+        constellation_ref=constellation_ref,
+        ground_site_set_ref=ground_site_set_ref,
+        catalog=_overlay(snapshot, proposals),
+    )
 
 
 def build_wizard_compile_request(
@@ -693,26 +666,23 @@ def build_wizard_compile_request(
     identity = _identifier(identity_factory(), fallback="draft")
     name = _session_name(request.intent, identity)
     intent = request.intent
-    graph = _selected_graph(intent, snapshot)
-
-    with tempfile.TemporaryDirectory(prefix="nodalarc-wizard-draft-") as temporary:
-        roots = _materialize_graph(Path(temporary), graph)
-        constellation_ref, ground_site_set_ref, proposals = _wizard_sources(
-            intent,
-            roots,
-            name=name,
-        )
-        raw, _warnings = assemble_session_document(
-            constellation=str(constellation_ref),
-            protocol=intent.protocol,
-            extensions=list(intent.extensions),
-            orbit_propagator=intent.orbit_propagator,
-            area_strategy=intent.area_strategy,
-            ground_stations=str(ground_site_set_ref),
-            timers=_routing_timers(intent),
-            session_name=name,
-            catalog_roots=roots,
-        )
+    _assert_selected_refs_resolve(intent, snapshot)
+    constellation_ref, ground_site_set_ref, proposals = _wizard_sources(
+        intent,
+        snapshot,
+        name=name,
+    )
+    raw, _warnings = assemble_session_document(
+        constellation=str(constellation_ref),
+        protocol=intent.protocol,
+        extensions=list(intent.extensions),
+        orbit_propagator=intent.orbit_propagator,
+        area_strategy=intent.area_strategy,
+        ground_stations=str(ground_site_set_ref),
+        timers=_routing_timers(intent),
+        session_name=name,
+        catalog=_overlay(snapshot, proposals),
+    )
 
     if not isinstance(raw, dict):
         raise ValueError("Session preset assembly did not produce a session mapping")

@@ -3,18 +3,14 @@
 from __future__ import annotations
 
 import re
-import tempfile
 from dataclasses import dataclass
 from enum import StrEnum
-from pathlib import Path, PurePosixPath
 
 from nodalarc.catalog_closure import (
-    CatalogClosure,
     CatalogClosureCollector,
     CatalogClosureEntry,
     CatalogReadView,
 )
-from nodalarc.catalog_paths import CatalogRoots
 from nodalarc.catalog_refs import SessionRef
 from nodalarc.configuration_yaml import load_configuration_yaml
 from nodalarc.models.events import ValidationReport, ValidationResult
@@ -171,52 +167,6 @@ def _compare_precondition(
         )
 
 
-def _materialization_target(root: Path, preserved_path: str) -> Path:
-    relative = PurePosixPath(preserved_path)
-    if relative.is_absolute() or ".." in relative.parts:
-        raise ValueError(f"preserved path is not contained: {preserved_path!r}")
-    if len(relative.parts) < 3 or relative.parts[0] != "catalog":
-        raise ValueError(f"preserved path is not a catalog path: {preserved_path!r}")
-    if relative.parts[1] not in {"nodalarc", "user"}:
-        raise ValueError(f"preserved path has unknown namespace: {preserved_path!r}")
-    target = root.joinpath(*relative.parts)
-    try:
-        target.resolve(strict=False).relative_to(root.resolve(strict=True))
-    except ValueError as exc:
-        raise ValueError(
-            f"preserved path escapes materialization root: {preserved_path!r}"
-        ) from exc
-    return target
-
-
-def _write_exact(path: Path, content: bytes) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(content)
-    if path.read_bytes() != content:
-        raise OSError(f"exact-byte verification failed for {path.name}")
-
-
-def _materialize(closure: CatalogClosure, root: Path) -> CatalogRoots:
-    try:
-        _write_exact(root / "session.yaml", closure.root_yaml)
-        shipped_root = root / "catalog" / "nodalarc"
-        user_root = root / "catalog" / "user"
-        shipped_root.mkdir(parents=True, exist_ok=True)
-        user_root.mkdir(parents=True, exist_ok=True)
-        for entry in closure.entries:
-            _write_exact(
-                _materialization_target(root, entry.preserved_path),
-                entry.yaml_bytes,
-            )
-        return CatalogRoots.from_catalog_root(shipped_root, user_root=user_root)
-    except (OSError, ValueError) as exc:
-        raise _error(
-            PreparedSessionErrorCode.MATERIALIZATION_FAILED,
-            f"Could not materialize exact prepared session files: {exc}",
-            cause=exc,
-        ) from exc
-
-
 def prepare_session_files(
     root_yaml: bytes,
     read_view: CatalogReadView,
@@ -275,14 +225,12 @@ def prepare_session_files(
         label="dependency closure digest",
     )
 
-    with tempfile.TemporaryDirectory(prefix="nodalarc-prepared-") as temp_dir:
-        roots = _materialize(closure, Path(temp_dir))
-        raw_session = load_configuration_yaml(closure.root_yaml)
-        resolution = resolve_session_with_assets(
-            raw_session,
-            catalog_roots=roots,
-            source_context=source_context,
-        )
+    raw_session = load_configuration_yaml(closure.root_yaml)
+    resolution = resolve_session_with_assets(
+        raw_session,
+        catalog=closure.read_view(),
+        source_context=source_context,
+    )
 
     readiness = validate_session_readiness(
         resolution.resolved,

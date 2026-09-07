@@ -40,6 +40,7 @@ from nodalarc.models.builder_visual_api import (
 )
 from nodalarc.models.builder_world import BuilderWorld, BuilderWorldNode
 from nodalarc.models.resolved_session import ResolvedTerminalBlock
+from nodalarc.resolve_session import SessionResolution
 from pydantic import ValidationError
 from vs_api.builder_compiler import canonicalize_persisted_configuration
 from vs_api.builder_session_service import save_builder_session
@@ -74,8 +75,8 @@ def service(context: CatalogContext) -> BuilderVisualDraftService:
     )
 
 
-def _preview(raw: dict[str, Any], _roots: object) -> BuilderWorld:
-    return builder_world_preview(raw["session"]["name"])
+def _preview(resolution: SessionResolution) -> BuilderWorld:
+    return builder_world_preview(resolution.resolved.session.name)
 
 
 def _orbit() -> BuilderVisualOrbit:
@@ -1448,8 +1449,8 @@ def test_connect_command_uses_backend_resolved_terminal_facts(
         )
         draft = result.draft
 
-    def resolved_preview(raw: dict[str, Any], _roots: object) -> BuilderWorld:
-        base = builder_world_preview(raw["session"]["name"])
+    def resolved_preview(resolution: SessionResolution) -> BuilderWorld:
+        base = builder_world_preview(resolution.resolved.session.name)
         nodes = tuple(
             BuilderWorldNode(
                 node_id=f"{segment_id}-node",

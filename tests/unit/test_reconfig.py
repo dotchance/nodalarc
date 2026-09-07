@@ -7,9 +7,10 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from nodalarc.catalog_closure import FilesystemCatalogReadView
 from nodalarc.resolve_session import resolve_session_with_assets
 
-from tests.catalog_session_fixtures import build_catalog_session_fixture
+from tests.catalog_session_fixtures import build_catalog_session_fixture, shipped_read_view
 from tools import na_reconfig
 from tools.na_reconfig import _match_target, _validate_plane_target_scope
 
@@ -23,7 +24,7 @@ def _session_resolution(tmp_path: Path, *, stations: list[str] | None = None):
         ground_stations={"stations": stations or ["a", "b"]},
         base_path=tmp_path,
     )
-    return resolve_session_with_assets(fixture, catalog_roots=fixture.roots)
+    return resolve_session_with_assets(fixture, catalog=FilesystemCatalogReadView(fixture.roots))
 
 
 class TestMatchTargetAll:
@@ -219,7 +220,8 @@ def test_bare_plane_target_refused_on_multi_space_segment_sessions(tmp_path) -> 
     from nodalarc.resolve_session import load_session_resolution_from_file
 
     resolved = load_session_resolution_from_file(
-        Path("catalog/nodalarc/sessions/earth-leo-heo-geo-luna-reachability.yaml")
+        Path("catalog/nodalarc/sessions/earth-leo-heo-geo-luna-reachability.yaml"),
+        catalog=shipped_read_view(),
     ).resolved
 
     with pytest.raises(RuntimeError, match="ambiguous across space segments"):

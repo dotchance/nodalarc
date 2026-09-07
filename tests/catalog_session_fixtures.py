@@ -9,9 +9,12 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from nodalarc.catalog_closure import FilesystemCatalogReadView
 from nodalarc.catalog_paths import CatalogRoots, resolve_catalog_reference
 from nodalarc.catalog_refs import CatalogRef
+from nodalarc.catalog_repository import CatalogReadSnapshot, CatalogScope
 from nodalarc.configuration_yaml import load_configuration_yaml
+from nodalarc.filesystem_catalog_repository import FilesystemCatalogRepository
 from nodalarc.models.resolved_session import SourceContext
 from nodalarc.resolve_session import resolve_session
 
@@ -21,6 +24,23 @@ ISS_TLE_LINE_1 = "1 25544U 98067A   21075.51041667  .00001264  00000-0  29660-4 
 ISS_TLE_LINE_2 = "2 25544  51.6442  21.5417 0002426  95.1670  21.8444 15.48974333273145"
 VANGUARD_TLE_LINE_1 = "1 00005U 58002B   00179.78495062  .00000023  00000-0  28098-4 0  4753"
 VANGUARD_TLE_LINE_2 = "2 00005  34.2682 348.7242 1859667 331.7664  19.3264 10.82419157413667"
+
+
+def shipped_read_view() -> FilesystemCatalogReadView:
+    """Read view over the shipped catalog checked into this tree."""
+
+    return FilesystemCatalogReadView(CatalogRoots.from_catalog_root(SHIPPED_ROOT))
+
+
+def shipped_snapshot(user_root: Path) -> CatalogReadSnapshot:
+    """Repository snapshot over the shipped catalog plus one empty user scope."""
+
+    scope = CatalogScope()
+    repository = FilesystemCatalogRepository(
+        shipped_root=SHIPPED_ROOT,
+        scope_roots={scope: user_root},
+    )
+    return repository.snapshot(scope)
 
 
 def _catalog_id(value: object, default: str) -> str:
@@ -98,10 +118,11 @@ def resolve_catalog_session(
         source_context = kwargs.pop("source_context", None)
         return resolve_session(
             session,
-            catalog_roots=session.roots,
+            catalog=FilesystemCatalogReadView(session.roots),
             source_context=source_context or SourceContext(origin=origin, run_id=run_id),
             **kwargs,
         )
+    kwargs.setdefault("catalog", shipped_read_view())
     return resolve_session(session, **kwargs)
 
 

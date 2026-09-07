@@ -73,11 +73,11 @@ def test_upload_materializes_exact_paths_and_resolves_once(
     calls = []
 
     def tracking_resolver(raw_session, **kwargs):
-        roots = kwargs["catalog_roots"]
-        assert roots.root.is_dir()
-        assert roots.user_root.is_dir()
+        catalog = kwargs["catalog"]
+        for entry in upload.catalog_files:
+            assert catalog.read(entry.ref).yaml_bytes == entry.yaml_bytes
         assert kwargs["source_context"].session_path is None
-        calls.append(roots)
+        calls.append(catalog)
         return resolver(raw_session, **kwargs)
 
     monkeypatch.setattr(runtime_module, "resolve_session_with_assets", tracking_resolver)

@@ -547,6 +547,22 @@ class SourceContext(BaseModel):
     run_id: NonEmptyReference | None = None
 
 
+class ResolvedSegment(BaseModel):
+    """One authored segment as the resolver placed it: identity plus presentation.
+
+    ``display_name`` is presentation metadata for authoring surfaces. It is the
+    segment's own authored name, else the referenced catalog object's, else
+    the segment id, and the semantic projection does not read it.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    segment_id: str
+    kind: Literal["space", "ground"]
+    display_name: str
+    source_ref: str
+
+
 class ResolvedSession(BaseModel):
     """The single authoritative runtime view consumed by every service."""
 
@@ -554,6 +570,7 @@ class ResolvedSession(BaseModel):
 
     identity_mode: IdentityMode
     session: SessionMeta
+    segments: tuple[ResolvedSegment, ...] = ()
     nodes: tuple[ResolvedNode, ...]
     bodies: tuple[ResolvedBodyFacts, ...]
     link_rules: tuple[ResolvedLinkRule, ...]

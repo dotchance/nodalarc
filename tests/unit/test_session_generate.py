@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from nodalarc.catalog_repository import CatalogReadSnapshot
 from nodalarc.resolve_session import resolve_session
 from nodalarc.session_generator import (
     assemble_session_document,
@@ -11,17 +12,27 @@ from nodalarc.session_generator import (
     load_constellation_presets,
 )
 
+from tests.catalog_session_fixtures import shipped_read_view, shipped_snapshot
+
 LEO_RING = "nodalarc:constellations/earth/leo/earth-leo-ring-36.yaml"
+SHIPPED_CATALOG = shipped_read_view()
+
+
+@pytest.fixture(scope="module")
+def snapshot(tmp_path_factory: pytest.TempPathFactory) -> CatalogReadSnapshot:
+    return shipped_snapshot(tmp_path_factory.mktemp("session-generate-user"))
 
 
 def _generated_session(**kwargs):
-    raw, warnings = assemble_session_document(**kwargs)
-    resolved = resolve_session(raw)
+    raw, warnings = assemble_session_document(catalog=SHIPPED_CATALOG, **kwargs)
+    resolved = resolve_session(raw, catalog=SHIPPED_CATALOG)
     return raw, resolved, warnings
 
 
-def test_load_constellation_presets_scans_catalog_constellations() -> None:
-    presets = load_constellation_presets()
+def test_load_constellation_presets_scans_catalog_constellations(
+    snapshot: CatalogReadSnapshot,
+) -> None:
+    presets = load_constellation_presets(snapshot)
 
     assert {
         "earth-leo-ring-36",
@@ -37,8 +48,10 @@ def test_load_constellation_presets_scans_catalog_constellations() -> None:
     assert all(p.capability.source_kind == "constellation" for p in presets.values())
 
 
-def test_constellation_preset_capabilities_follow_catalog_orbit_and_runtime_support() -> None:
-    response = load_constellation_preset_response()
+def test_constellation_preset_capabilities_follow_catalog_orbit_and_runtime_support(
+    snapshot: CatalogReadSnapshot,
+) -> None:
+    response = load_constellation_preset_response(snapshot)
     presets = {preset.name: preset for preset in response.presets}
 
     earth = presets["earth-leo-ring-36"]
@@ -87,10 +100,12 @@ def test_constellation_preset_capabilities_follow_catalog_orbit_and_runtime_supp
 
 def test_constellation_source_mode_reports_catalog_wrapper() -> None:
     assert (
-        constellation_source_mode("nodalarc:constellations/earth/leo/earth-leo-ring-36.yaml")
+        constellation_source_mode(
+            "nodalarc:constellations/earth/leo/earth-leo-ring-36.yaml", SHIPPED_CATALOG
+        )
         == "constellation"
     )
-    assert constellation_source_mode("/tmp/outside.yaml") is None
+    assert constellation_source_mode("/tmp/outside.yaml", SHIPPED_CATALOG) is None
 
 
 def test_generate_catalog_session_yaml_round_trips_through_resolver() -> None:
@@ -167,8 +182,10 @@ def test_generated_space_segment_is_named_by_orbit_regime() -> None:
         )
 
 
-def test_generate_catalog_session_uses_explicit_site_set_reference() -> None:
-    presets = load_constellation_presets()
+def test_generate_catalog_session_uses_explicit_site_set_reference(
+    snapshot: CatalogReadSnapshot,
+) -> None:
+    presets = load_constellation_presets(snapshot)
     site_set_ref = presets["earth-leo-ring-36"].ground_stations
     raw, _resolved, _warnings = _generated_session(
         constellation=LEO_RING,
@@ -184,6 +201,7 @@ def test_generate_catalog_session_uses_explicit_site_set_reference() -> None:
 def test_generate_session_requires_catalog_references() -> None:
     with pytest.raises(ValueError, match="must be a nodalarc:<path> or user:<path> reference"):
         assemble_session_document(
+            catalog=SHIPPED_CATALOG,
             constellation="earth-leo-ring-36",
             protocol="isis",
             extensions=[],
@@ -192,6 +210,7 @@ def test_generate_session_requires_catalog_references() -> None:
 
     with pytest.raises(ValueError, match="must be a nodalarc:<path> or user:<path> reference"):
         assemble_session_document(
+            catalog=SHIPPED_CATALOG,
             constellation=LEO_RING,
             protocol="isis",
             extensions=[],
@@ -203,6 +222,7 @@ def test_generate_session_requires_catalog_references() -> None:
 def test_longest_remaining_pass_generation_requires_horizon() -> None:
     with pytest.raises(ValueError, match="ground_selection_lookahead_horizon_ticks"):
         assemble_session_document(
+            catalog=SHIPPED_CATALOG,
             constellation=LEO_RING,
             protocol="isis",
             extensions=[],
@@ -235,6 +255,7 @@ def test_longest_remaining_pass_generation_sets_policy() -> None:
 def test_generate_catalog_session_rejects_sgp4_for_non_tle_source() -> None:
     with pytest.raises(ValueError, match="does not match the selected constellation"):
         assemble_session_document(
+            catalog=SHIPPED_CATALOG,
             constellation=LEO_RING,
             protocol="isis",
             extensions=[],
@@ -283,6 +304,7 @@ def test_generated_session_with_default_timers_emits_no_timers_block() -> None:
 def test_generator_rejects_propagator_that_does_not_match_catalog_orbits() -> None:
     with pytest.raises(ValueError, match="does not match the selected"):
         assemble_session_document(
+            catalog=SHIPPED_CATALOG,
             constellation=LEO_RING,
             protocol="isis",
             extensions=[],

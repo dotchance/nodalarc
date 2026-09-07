@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from nodalarc.models.builder_world import BuilderWorld
 from nodalarc.models.events import SessionEphemeris
 from nodalarc.models.segment_session import SessionMeta
+from nodalarc.resolve_session import SessionResolution
 
 
 def builder_world_preview(session_name: str = "preview") -> BuilderWorld:
@@ -24,3 +25,9 @@ def builder_world_preview(session_name: str = "preview") -> BuilderWorld:
         ),
         nodes=(),
     )
+
+
+def preview_from_resolution(resolution: SessionResolution) -> BuilderWorld:
+    """Preview factory stub: name the stub world after the resolved session."""
+
+    return builder_world_preview(resolution.resolved.session.name)

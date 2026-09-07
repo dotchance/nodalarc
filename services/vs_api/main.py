@@ -37,16 +37,21 @@ from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from nodal.logging import configure as _configure_logging
 from nodal.logging import connect as _connect_logging
-from nodalarc.catalog_closure import CatalogClosureCollector
-from nodalarc.catalog_paths import CatalogPathError, CatalogRoots
+from nodalarc.catalog_closure import (
+    CatalogClosureCollector,
+    CatalogDocumentNotFound,
+    CatalogReadFailed,
+    CatalogReadRejected,
+    load_catalog_object,
+)
 from nodalarc.catalog_refs import SessionRef
 from nodalarc.catalog_registry import (
     catalog_family_spec,
-    validate_referenced_configuration_document,
 )
 from nodalarc.catalog_repository import (
     CatalogConflictError,
     CatalogNotFoundError,
+    CatalogReadSnapshot,
     CatalogRepositoryError,
     CatalogValidationError,
 )
@@ -154,12 +159,7 @@ from vs_api.transition_operations import (
 
 log = logging.getLogger(__name__)
 
-_CATALOG_ROOTS = CatalogRoots.from_catalog_root(Path("catalog/nodalarc"))
-
-
-def _catalog_ref_for_path(path: Path) -> str:
-    rel = path.resolve(strict=True).relative_to(_CATALOG_ROOTS.root.resolve(strict=True))
-    return "nodalarc:" + rel.as_posix()
+_INSTALLED_SHIPPED_ROOT = Path("catalog/nodalarc")
 
 
 # --- Authentication ---
@@ -897,7 +897,7 @@ def _load_cr_runtime_session(
         namespace=namespace,
         source_origin="vs_api.cr",
         run_id=run_id,
-        installed_shipped_root=_CATALOG_ROOTS.root,
+        installed_shipped_root=_INSTALLED_SHIPPED_ROOT,
     )
 
 
@@ -3592,16 +3592,23 @@ async def switch_session(
 # --- Wizard API endpoints ---
 
 
+def _shipped_snapshot(context: CatalogContext) -> CatalogReadSnapshot:
+    """One request's pinned catalog snapshot; presets list the shipped namespace."""
+    return context.repository.snapshot(context.scope)
+
+
 @app.get(
     "/api/v1/presets/constellations",
     dependencies=[Depends(_require_api_key)],
     response_model=WizardConstellationPresetResponse,
 )
-def list_constellation_presets() -> WizardConstellationPresetResponse:
+def list_constellation_presets(
+    catalog_context: CatalogContext = Depends(get_catalog_context),
+) -> WizardConstellationPresetResponse:
     """Return catalog presets with backend-owned runtime capability facts."""
     from nodalarc.session_generator import load_constellation_preset_response
 
-    return load_constellation_preset_response(_CATALOG_ROOTS)
+    return load_constellation_preset_response(_shipped_snapshot(catalog_context))
 
 
 @app.get(
@@ -3609,7 +3616,9 @@ def list_constellation_presets() -> WizardConstellationPresetResponse:
     dependencies=[Depends(_require_api_key)],
     response_model=WizardSatelliteTypePresetResponse,
 )
-def list_satellite_types() -> WizardSatelliteTypePresetResponse:
+def list_satellite_types(
+    catalog_context: CatalogContext = Depends(get_catalog_context),
+) -> WizardSatelliteTypePresetResponse:
     """Return the space node primitives that can fly a constellation.
 
     Sessions assemble from primitives: the constellation supplies geometry
@@ -3635,7 +3644,7 @@ def list_satellite_types() -> WizardSatelliteTypePresetResponse:
                     for terminal in preset["terminals"]
                 ),
             )
-            for preset in list_space_node_presets(_CATALOG_ROOTS)
+            for preset in list_space_node_presets(_shipped_snapshot(catalog_context))
         )
     )
 
@@ -3645,16 +3654,14 @@ def list_satellite_types() -> WizardSatelliteTypePresetResponse:
     dependencies=[Depends(_require_api_key)],
     response_model=WizardGroundStationSetPresetResponse,
 )
-def list_ground_station_sets() -> WizardGroundStationSetPresetResponse:
+def list_ground_station_sets(
+    catalog_context: CatalogContext = Depends(get_catalog_context),
+) -> WizardGroundStationSetPresetResponse:
     """Return available catalog site-set presets for the wizard."""
-    gs_sets_dir = _CATALOG_ROOTS.root / "site-sets"
+    snapshot = _shipped_snapshot(catalog_context)
     results: list[WizardGroundStationSetPreset] = []
-    if not gs_sets_dir.is_dir():
-        return WizardGroundStationSetPresetResponse(presets=())
-    for yaml_path in sorted(gs_sets_dir.rglob("*.yaml")):
-        ref = _catalog_ref_for_path(yaml_path)
-        raw = load_configuration_yaml(yaml_path.read_text(encoding="utf-8")) or {}
-        wrapper, model = validate_referenced_configuration_document(ref, raw)
+    for entry in snapshot.list(namespace="nodalarc", family="site-sets"):
+        wrapper, model = load_catalog_object(entry.ref, snapshot)
         if wrapper != "site_set":
             continue
         data = model.model_dump(mode="python", by_alias=True, exclude_none=True)
@@ -3666,7 +3673,7 @@ def list_ground_station_sets() -> WizardGroundStationSetPresetResponse:
                     site.get("site", {}).get("id", "") if isinstance(site, dict) else str(site)
                     for site in data.get("sites", [])
                 ),
-                file=_catalog_ref_for_path(yaml_path),
+                file=str(entry.ref),
             )
         )
     return WizardGroundStationSetPresetResponse(presets=tuple(results))
@@ -3677,16 +3684,14 @@ def list_ground_station_sets() -> WizardGroundStationSetPresetResponse:
     dependencies=[Depends(_require_api_key)],
     response_model=WizardAvailableStationResponse,
 )
-def list_individual_stations() -> WizardAvailableStationResponse:
+def list_individual_stations(
+    catalog_context: CatalogContext = Depends(get_catalog_context),
+) -> WizardAvailableStationResponse:
     """Return all available catalog sites for custom set building."""
-    stations_dir = _CATALOG_ROOTS.root / "sites"
+    snapshot = _shipped_snapshot(catalog_context)
     results: list[WizardAvailableStation] = []
-    if not stations_dir.is_dir():
-        return WizardAvailableStationResponse(stations=())
-    for yaml_path in sorted(stations_dir.rglob("*.yaml")):
-        ref = _catalog_ref_for_path(yaml_path)
-        raw = load_configuration_yaml(yaml_path.read_text(encoding="utf-8")) or {}
-        wrapper, model = validate_referenced_configuration_document(ref, raw)
+    for entry in snapshot.list(namespace="nodalarc", family="sites"):
+        wrapper, model = load_catalog_object(entry.ref, snapshot)
         if wrapper != "site":
             continue
         site = model.model_dump(mode="python", by_alias=True, exclude_none=True)
@@ -3698,7 +3703,7 @@ def list_individual_stations() -> WizardAvailableStationResponse:
                 name=site["id"],
                 lat_deg=float(location["lat_deg"]),
                 lon_deg=float(location["lon_deg"]),
-                file=_catalog_ref_for_path(yaml_path),
+                file=str(entry.ref),
             )
         )
     return WizardAvailableStationResponse(stations=tuple(results))
@@ -3720,22 +3725,6 @@ def _error_response(status_code: int, message: str) -> JSONResponse:
     return JSONResponse(status_code=status_code, content={"error": message})
 
 
-def _catalog_error(exc: Exception) -> JSONResponse:
-    if isinstance(exc, CatalogPathError):
-        message = (
-            exc.args[0]
-            if exc.args and isinstance(exc.args[0], str)
-            else "Invalid catalog reference"
-        )
-    elif isinstance(exc, FileExistsError):
-        message = "Catalog file already exists"
-    elif isinstance(exc, FileNotFoundError):
-        message = "Catalog reference not found"
-    else:
-        message = "Invalid catalog reference"
-    return _error_response(400, message)
-
-
 @app.post(
     "/api/v1/session/preview-coverage",
     response_model=CoveragePreviewResult,
@@ -3754,24 +3743,24 @@ async def preview_coverage(
     def compute():
         context = get_catalog_context()
         snapshot = context.repository.snapshot(context.scope)
-        with wizard_preview_inputs(request, snapshot) as inputs:
-            return compute_coverage_preview(
-                inputs.constellation_ref,
-                inputs.ground_site_set_ref,
-                catalog_roots=inputs.catalog_roots,
-            )
+        inputs = wizard_preview_inputs(request, snapshot)
+        return compute_coverage_preview(
+            inputs.constellation_ref,
+            inputs.ground_site_set_ref,
+            catalog=inputs.catalog,
+        )
 
     try:
         result = await asyncio.to_thread(compute)
     except CatalogClosureError as exc:
         log.info("Invalid coverage preview reference: %s", exc)
         return _error_response(422, exc.evidence.message)
-    except CatalogRepositoryError:
+    except CatalogRepositoryError, CatalogReadFailed:
         return _error_response(503, "Catalog storage is unavailable")
-    except CatalogPathError as exc:
-        return _catalog_error(exc)
-    except FileNotFoundError as exc:
-        return _catalog_error(exc)
+    except CatalogDocumentNotFound:
+        return _error_response(400, "Catalog reference not found")
+    except CatalogReadRejected as exc:
+        return _error_response(400, str(exc))
     except ValueError as exc:
         log.info("Invalid coverage preview request: %s", exc)
         return _error_response(400, "Coverage preview request is invalid")

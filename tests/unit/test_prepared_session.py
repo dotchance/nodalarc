@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass, fields
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 import yaml
@@ -14,11 +13,14 @@ from nodalarc.catalog_closure import (
     CatalogClosureCollector,
     CatalogClosureError,
     CatalogClosureErrorCode,
+    CatalogReadDocument,
     CatalogReadView,
+    ClosureReadView,
     FilesystemCatalogReadView,
 )
 from nodalarc.catalog_paths import CatalogRoots
 from nodalarc.catalog_refs import CatalogRef, SessionRef
+from nodalarc.configuration_yaml import load_configuration_yaml
 from nodalarc.prepared_session import (
     PreparedSessionError,
     PreparedSessionErrorCode,
@@ -26,8 +28,9 @@ from nodalarc.prepared_session import (
     PreparedSessionSource,
     prepare_session_files,
 )
-from nodalarc.resolve_session import SessionResolution
+from nodalarc.resolve_session import SessionResolution, resolve_session_with_assets
 from nodalarc.runtime_support import FeatureCategory, UnsupportedFeatureError
+from nodalarc.semantic_projection import resolved_session_semantic_digest
 
 ROOT = Path(__file__).resolve().parents[2]
 SHIPPED_ROOT = ROOT / "catalog" / "nodalarc"
@@ -114,6 +117,44 @@ def prepared_fixture(tmp_path: Path) -> PreparedFixture:
     )
 
 
+ORBIT_REF = CatalogRef("nodalarc:orbits/earth/leo/earth-leo-starlink.yaml")
+
+
+@dataclass
+class _MutatingView:
+    """Serve one reference's altered bytes from the ``altered_from`` read on."""
+
+    base: CatalogReadView
+    ref: CatalogRef
+    altered: bytes
+    altered_from: int
+    reads: int = 0
+
+    def read(self, ref: CatalogRef) -> CatalogReadDocument:
+        document = self.base.read(ref)
+        if ref != self.ref:
+            return document
+        self.reads += 1
+        if self.reads < self.altered_from:
+            return document
+        return CatalogReadDocument(
+            family=document.family,
+            preserved_path=document.preserved_path,
+            yaml_bytes=self.altered,
+        )
+
+
+def _altered_orbit_bytes(view: CatalogReadView, altitude_km: float) -> bytes:
+    orbit = yaml.safe_load(view.read(ORBIT_REF).yaml_bytes.decode("utf-8"))
+    orbit["orbit"]["shape"]["altitude_km"] = altitude_km
+    return yaml.safe_dump(orbit, sort_keys=False).encode("utf-8")
+
+
+def _semantic_digest(root_yaml: bytes, catalog: CatalogReadView) -> str:
+    resolution = resolve_session_with_assets(load_configuration_yaml(root_yaml), catalog=catalog)
+    return resolved_session_semantic_digest(resolution.resolved)
+
+
 def _closure(fixture: PreparedFixture):
     return CatalogClosureCollector.collect(fixture.root_yaml, fixture.read_view)
 
@@ -145,19 +186,17 @@ def test_prepares_deep_user_refs_exactly_and_resolves_once(
 ) -> None:
     closure = _closure(prepared_fixture)
     resolver = prepared_module.resolve_session_with_assets
-    calls: list[Path] = []
+    calls: list[object] = []
 
     def tracking_resolver(raw_session, **kwargs):
-        roots = kwargs["catalog_roots"]
+        catalog = kwargs["catalog"]
         source_context = kwargs["source_context"]
-        temp_root = roots.root.parents[1]
-        assert (temp_root / "session.yaml").read_bytes() == prepared_fixture.root_yaml
         for entry in closure.entries:
-            assert (temp_root / entry.preserved_path).read_bytes() == entry.yaml_bytes
+            assert catalog.read(entry.ref).yaml_bytes == entry.yaml_bytes
         assert source_context.origin == prepared_fixture.source.origin
         assert source_context.run_id == "run-prepared-0001"
         assert source_context.session_path is None
-        calls.append(temp_root)
+        calls.append(catalog)
         return resolver(raw_session, **kwargs)
 
     monkeypatch.setattr(prepared_module, "resolve_session_with_assets", tracking_resolver)
@@ -165,7 +204,6 @@ def test_prepares_deep_user_refs_exactly_and_resolves_once(
     prepared = _prepare(prepared_fixture, available_node_count=1)
 
     assert len(calls) == 1
-    assert not calls[0].exists()
     assert isinstance(prepared, PreparedSessionFiles)
     assert isinstance(prepared.resolution, SessionResolution)
     assert isinstance(prepared.source.logical_id, SessionRef)
@@ -225,15 +263,7 @@ def test_stale_preconditions_stop_at_the_earliest_authoritative_boundary(
         resolver_calls.append((args, kwargs))
         raise AssertionError("resolver must not run for stale preparation")
 
-    def forbidden_temp_dir(*args, **kwargs):
-        raise AssertionError("temp materialization must not run for stale preparation")
-
     monkeypatch.setattr(prepared_module, "resolve_session_with_assets", forbidden_resolver)
-    monkeypatch.setattr(
-        prepared_module,
-        "tempfile",
-        SimpleNamespace(TemporaryDirectory=forbidden_temp_dir),
-    )
 
     cases = (
         (
@@ -367,7 +397,7 @@ def test_resolved_semantic_digest_excludes_logical_source_and_run_provenance(
         ("corrupt", CatalogClosureErrorCode.INVALID_DEPENDENCY_YAML),
     ],
 )
-def test_missing_or_corrupt_dependency_fails_before_resolver_or_temp_mutation(
+def test_missing_or_corrupt_dependency_fails_before_the_resolver(
     prepared_fixture: PreparedFixture,
     monkeypatch: pytest.MonkeyPatch,
     failure: str,
@@ -384,11 +414,6 @@ def test_missing_or_corrupt_dependency_fails_before_resolver_or_temp_mutation(
         raise AssertionError("preparation crossed the corrupt-closure boundary")
 
     monkeypatch.setattr(prepared_module, "resolve_session_with_assets", forbidden)
-    monkeypatch.setattr(
-        prepared_module,
-        "tempfile",
-        SimpleNamespace(TemporaryDirectory=forbidden),
-    )
 
     with pytest.raises(CatalogClosureError) as raised:
         prepare_session_files(
@@ -414,3 +439,25 @@ def test_source_identity_rejects_non_session_refs_and_invalid_origin() -> None:
             logical_id="user:sessions/import-0003.yaml",
             origin="   ",
         )
+
+
+def test_resolution_reads_the_captured_closure_not_the_live_view(
+    prepared_fixture: PreparedFixture,
+) -> None:
+    altered = _altered_orbit_bytes(prepared_fixture.read_view, altitude_km=1200)
+    live = _MutatingView(prepared_fixture.read_view, ORBIT_REF, altered, altered_from=2)
+
+    prepared = prepare_session_files(
+        prepared_fixture.root_yaml,
+        live,
+        source=prepared_fixture.source,
+        source_revision=prepared_fixture.source_revision,
+        available_node_count=100,
+    )
+
+    # Collection read the orbit once; resolution never returned to the live view.
+    assert live.reads == 1
+    captured = _semantic_digest(prepared.root_yaml, ClosureReadView.of(prepared.catalog_files))
+    assert resolved_session_semantic_digest(prepared.resolution.resolved) == captured
+    always_altered = _MutatingView(prepared_fixture.read_view, ORBIT_REF, altered, altered_from=1)
+    assert _semantic_digest(prepared_fixture.root_yaml, always_altered) != captured

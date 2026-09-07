@@ -18,6 +18,8 @@ from nodalarc.propagator import (
     propagate_eci_j2_mean_elements_for_body,
 )
 
+from tests.catalog_session_fixtures import shipped_read_view
+
 MU_LUNA = 4902.800118
 MU_EARTH = 398600.4418
 
@@ -283,7 +285,9 @@ class TestConstructionAuthority:
         )
         if start_time is not None:
             document["time"]["start_time"] = start_time
-        return build_ome_inputs_from_resolved(resolve_session(document))
+        return build_ome_inputs_from_resolved(
+            resolve_session(document, catalog=shipped_read_view())
+        )
 
     def test_matching_epochs_keep_the_authored_object(self):
         inputs = self._inputs()

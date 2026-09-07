@@ -12,15 +12,10 @@ import json
 from pathlib import Path
 from typing import Any
 
-from nodalarc.catalog_paths import (
-    CatalogRoots,
-    resolve_catalog_reference,
-    resolve_site_set_reference,
-    validate_catalog_name,
-)
+from nodalarc.catalog_closure import CatalogReadView, load_catalog_object
+from nodalarc.catalog_paths import validate_catalog_name
 from nodalarc.catalog_refs import CatalogRef, SiteSetRef, SpaceSourceRef
-from nodalarc.catalog_registry import validate_referenced_configuration_document
-from nodalarc.configuration_yaml import load_configuration_yaml
+from nodalarc.catalog_repository import CatalogReadSnapshot
 from nodalarc.models.builder_api import (
     WizardConstellationCapability,
     WizardConstellationGeometry,
@@ -105,20 +100,9 @@ _WIZARD_CUSTOM_GEOMETRY_SEED = WizardConstellationGeometry(
 )
 
 
-def _default_catalog_roots() -> CatalogRoots:
-    return CatalogRoots.from_catalog_root(Path("catalog/nodalarc"))
-
-
-def _catalog_ref_for_path(path: Path, roots: CatalogRoots) -> str:
-    rel = path.resolve(strict=True).relative_to(roots.root.resolve(strict=True))
-    return "nodalarc:" + rel.as_posix()
-
-
-def _load_catalog_document(ref: str, roots: CatalogRoots) -> tuple[str, dict[str, Any]]:
+def _load_catalog_document(ref: str, catalog: CatalogReadView) -> tuple[str, dict[str, Any]]:
     parsed = CatalogRef(ref)
-    path = resolve_catalog_reference(parsed, roots)
-    raw = load_configuration_yaml(path.read_text(encoding="utf-8")) or {}
-    wrapper, model = validate_referenced_configuration_document(parsed, raw)
+    wrapper, model = load_catalog_object(parsed, catalog)
     if wrapper is None:
         raise ValueError(f"expected wrapped catalog object, got session {parsed!r}")
     return wrapper, model.model_dump(mode="python", by_alias=True, exclude_none=True)
@@ -126,12 +110,12 @@ def _load_catalog_document(ref: str, roots: CatalogRoots) -> tuple[str, dict[str
 
 def constellation_source_runtime_capability(
     source: str,
-    roots: CatalogRoots,
+    catalog: CatalogReadView,
     runtime_support: RuntimeSupport | None = None,
 ) -> WizardConstellationCapability:
     support = runtime_support or RuntimeSupport.earth_luna()
     source_ref = SpaceSourceRef(source)
-    source_kind, source_value = _load_catalog_document(str(source_ref), roots)
+    source_kind, source_value = _load_catalog_document(str(source_ref), catalog)
     if source_kind not in {"constellation", "space_node_set"}:
         raise ValueError(
             "Wizard constellation source must resolve to a constellation or space_node_set, "
@@ -159,17 +143,17 @@ def constellation_source_runtime_capability(
     orbits: list[dict[str, Any]] = []
     bodies: list[dict[str, Any]] = []
     for orbit_ref in orbit_refs:
-        orbit_kind, orbit = _load_catalog_document(orbit_ref, roots)
+        orbit_kind, orbit = _load_catalog_document(orbit_ref, catalog)
         if orbit_kind != "orbit":
             raise ValueError(f"space source orbit must resolve to orbit, got {orbit_kind!r}")
-        body_kind, body = _load_catalog_document(orbit["central_body"], roots)
+        body_kind, body = _load_catalog_document(orbit["central_body"], catalog)
         if body_kind != "body":
             raise ValueError(f"orbit central body must resolve to body, got {body_kind!r}")
         orbits.append(orbit)
         bodies.append(body)
 
     for tle in tle_placements:
-        body_kind, body = _load_catalog_document(tle["central_body"], roots)
+        body_kind, body = _load_catalog_document(tle["central_body"], catalog)
         if body_kind != "body":
             raise ValueError(f"TLE central body must resolve to body, got {body_kind!r}")
         bodies.append(body)
@@ -282,17 +266,16 @@ def _satellite_count(wrapper: str, value: dict[str, Any]) -> int:
 
 
 def load_constellation_presets(
-    catalog_roots: CatalogRoots | None = None,
+    snapshot: CatalogReadSnapshot,
     *,
     runtime_support: RuntimeSupport | None = None,
 ) -> dict[str, ConstellationPreset]:
-    """Scan catalog constellation primitives and return wizard cards."""
-    roots = catalog_roots or _default_catalog_roots()
+    """List the shipped constellation primitives as wizard cards."""
     support = runtime_support or RuntimeSupport.earth_luna()
     results: dict[str, ConstellationPreset] = {}
-    for yaml_path in sorted((roots.root / "constellations").rglob("*.yaml")):
-        ref = _catalog_ref_for_path(yaml_path, roots)
-        wrapper, value = _load_catalog_document(ref, roots)
+    for entry in snapshot.list(namespace="nodalarc", family="constellations"):
+        ref = str(entry.ref)
+        wrapper, value = _load_catalog_document(ref, snapshot)
         if wrapper != "constellation":
             continue
         preset = ConstellationPreset(
@@ -301,23 +284,22 @@ def load_constellation_presets(
             satellite_count=_satellite_count(wrapper, value),
             constellation=ref,
             ground_stations=_default_ground_sites_for_constellation(ref),
-            default_node=constellation_default_node(ref, roots),
-            capability=constellation_source_runtime_capability(ref, roots, support),
+            default_node=constellation_default_node(ref, snapshot),
+            capability=constellation_source_runtime_capability(ref, snapshot, support),
         )
         results[preset.name] = preset
     return results
 
 
 def load_constellation_preset_response(
-    catalog_roots: CatalogRoots | None = None,
+    snapshot: CatalogReadSnapshot,
     *,
     runtime_support: RuntimeSupport | None = None,
 ) -> WizardConstellationPresetResponse:
     """Return the closed Wizard preset catalog and backend capability facts."""
 
-    roots = catalog_roots or _default_catalog_roots()
     support = runtime_support or RuntimeSupport.earth_luna()
-    presets = load_constellation_presets(roots, runtime_support=support)
+    presets = load_constellation_presets(snapshot, runtime_support=support)
     return WizardConstellationPresetResponse(
         presets=tuple(presets.values()),
         custom_geometry=custom_geometry_runtime_capability(support),
@@ -330,12 +312,11 @@ def load_constellation_preset_response(
 
 def constellation_source_mode(
     source: str | Path,
-    catalog_roots: CatalogRoots | None = None,
+    catalog: CatalogReadView,
 ) -> str | None:
     """Return the catalog wrapper for a constellation-like source."""
-    roots = catalog_roots or _default_catalog_roots()
     try:
-        wrapper, _value = _load_catalog_document(str(SpaceSourceRef(str(source))), roots)
+        wrapper, _value = _load_catalog_document(str(SpaceSourceRef(str(source))), catalog)
     except Exception:
         return None
     return wrapper
@@ -352,8 +333,8 @@ def _routing_capabilities(extensions: tuple[str, ...]) -> dict[str, Any] | None:
     return capabilities or None
 
 
-def _space_node_isl_count(node_ref: str, roots: CatalogRoots) -> int:
-    wrapper, node = _load_catalog_document(node_ref, roots)
+def _space_node_isl_count(node_ref: str, catalog: CatalogReadView) -> int:
+    wrapper, node = _load_catalog_document(node_ref, catalog)
     if wrapper != "node":
         raise ValueError(f"constellation node reference must resolve to node, got {wrapper!r}")
     return sum(
@@ -402,11 +383,10 @@ def _walker_mesh_pairs(
 
 def generated_isl_topology(
     constellation_source: str,
-    catalog_roots: CatalogRoots | None = None,
+    catalog: CatalogReadView,
 ) -> dict[str, Any] | None:
-    roots = catalog_roots or _default_catalog_roots()
     source_ref = SpaceSourceRef(constellation_source)
-    wrapper, body = _load_catalog_document(str(source_ref), roots)
+    wrapper, body = _load_catalog_document(str(source_ref), catalog)
     if wrapper != "constellation":
         return None
     node_ref = body.get("node")
@@ -416,7 +396,7 @@ def generated_isl_topology(
         planes=int(body["planes"]["count"]),
         slots_per_plane=int(body["slots_per_plane"]),
         raan_spacing_deg=float(body["planes"]["raan_spacing_deg"]),
-        isl_terminal_count=_space_node_isl_count(node_ref, roots),
+        isl_terminal_count=_space_node_isl_count(node_ref, catalog),
     )
     if not pairs:
         return None
@@ -574,11 +554,10 @@ def assemble_session_document(
     ground_policy: str = "highest_elevation",
     ground_selection_lookahead_horizon_ticks: int = 0,
     session_name: str | None = None,
-    catalog_roots: CatalogRoots | None = None,
+    catalog: CatalogReadView,
 ) -> tuple[dict[str, Any], list[str]]:
     """Assemble one ref-composed session document from catalog choices."""
     warnings: list[str] = []
-    roots = catalog_roots or _default_catalog_roots()
     protocol = validate_catalog_name(protocol, label="protocol")
     normalized_extensions = normalize_extensions(tuple(extensions))
     resolve_stack(protocol, list(normalized_extensions))
@@ -588,7 +567,7 @@ def assemble_session_document(
         raise UnsupportedFeatureError([unsupported])
 
     constellation_ref = SpaceSourceRef(constellation)
-    source_wrapper, _source = _load_catalog_document(str(constellation_ref), roots)
+    source_wrapper, _source = _load_catalog_document(str(constellation_ref), catalog)
     expected_wrapper = (
         "constellation" if constellation_ref.family == "constellations" else "space_node_set"
     )
@@ -600,10 +579,12 @@ def assemble_session_document(
     ground_ref = SiteSetRef(
         ground_stations or _default_ground_sites_for_constellation(str(constellation_ref))
     )
-    resolve_site_set_reference(str(ground_ref), roots)
+    ground_wrapper, _ground = _load_catalog_document(str(ground_ref), catalog)
+    if ground_wrapper != "site_set":
+        raise ValueError(f"ground placement must resolve to a site_set, got {ground_wrapper!r}")
     constellation_value = str(constellation_ref)
     ground_value = str(ground_ref)
-    isl_topology = generated_isl_topology(constellation_value, roots)
+    isl_topology = generated_isl_topology(constellation_value, catalog)
 
     ext_suffix = "-".join(normalized_extensions) if normalized_extensions else "plain"
     resolved_session_name = validate_catalog_name(
@@ -753,7 +734,7 @@ def assemble_session_document(
     provisional_session = _session_dict("space", access_mount=None)
     provisional_resolved = resolve_session(
         provisional_session,
-        catalog_roots=roots,
+        catalog=catalog,
         source_context=SourceContext(origin="session_generator"),
     )
     # Name the space segment after its orbit regime (resolved orbit facts are
@@ -768,7 +749,7 @@ def assemble_session_document(
     session_dict = _session_dict(space_id, access_mount=access_mount)
     resolved = resolve_session(
         session_dict,
-        catalog_roots=roots,
+        catalog=catalog,
         source_context=SourceContext(origin="session_generator"),
     )
     # The requested propagator must be what the selected catalog content
@@ -802,51 +783,42 @@ def _timers_block(timers: dict | None) -> dict:
 
 def constellation_default_node(
     source: str,
-    catalog_roots: CatalogRoots | None = None,
+    catalog: CatalogReadView,
 ) -> str | None:
     """The node primitive id a constellation flies when none is chosen."""
-    roots = catalog_roots or _default_catalog_roots()
     try:
-        source_ref = SpaceSourceRef(source)
-        path = resolve_catalog_reference(source_ref, roots)
-        raw = load_configuration_yaml(path.read_text(encoding="utf-8")) or {}
-        wrapper, model = validate_referenced_configuration_document(source_ref, raw)
+        wrapper, body = _load_catalog_document(str(SpaceSourceRef(source)), catalog)
     except Exception:
         return None
     if wrapper != "constellation":
         return None
-    body = model.model_dump(mode="python", by_alias=True, exclude_none=True)
     node_ref = body.get("node")
     if not isinstance(node_ref, str):
         return None
     return Path(node_ref).stem
 
 
-def list_space_node_presets(catalog_roots: CatalogRoots | None = None) -> list[dict[str, Any]]:
+def list_space_node_presets(snapshot: CatalogReadSnapshot) -> list[dict[str, Any]]:
     """Space node primitives available to fly a constellation's geometry.
 
     Sessions assemble from primitives: a constellation is geometry (orbit,
     planes, phasing) plus a default node; which satellite actually flies it
     is a separate primitive choice. This lists the candidates.
     """
-    roots = catalog_roots or _default_catalog_roots()
-    nodes_dir = roots.root / "nodes" / "space"
     results: list[dict[str, Any]] = []
-    if not nodes_dir.is_dir():
-        return results
-    for path in sorted(nodes_dir.glob("*.yaml")):
-        ref = CatalogRef(_catalog_ref_for_path(path, roots))
-        raw = load_configuration_yaml(path.read_text(encoding="utf-8")) or {}
-        wrapper, model = validate_referenced_configuration_document(ref, raw)
+    for entry in snapshot.list(namespace="nodalarc", family="nodes"):
+        parts = entry.ref.relative_path.parts
+        if parts[:2] != ("nodes", "space") or len(parts) != 3:
+            continue
+        wrapper, data = _load_catalog_document(str(entry.ref), snapshot)
         if wrapper != "node":
             continue
-        data = model.model_dump(mode="python", by_alias=True, exclude_none=True)
         results.append(
             {
                 "name": data["id"],
                 "display_name": data.get("display_name") or data["id"],
                 "notes": data.get("notes") or "",
-                "file": f"nodalarc:nodes/space/{path.name}",
+                "file": str(entry.ref),
                 "terminals": [
                     {
                         "id": mount["id"],

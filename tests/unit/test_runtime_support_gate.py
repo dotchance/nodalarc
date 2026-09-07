@@ -16,6 +16,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from nodalarc.catalog_closure import FilesystemCatalogReadView
 from nodalarc.catalog_paths import CatalogRoots
 from nodalarc.catalog_refs import CatalogRef
 from nodalarc.resolve_session import SessionResolutionError
@@ -258,7 +259,7 @@ class TestUnconsumedGrammarClass:
             {"model": "affine", "rate": 2.0},
         )
         with pytest.raises(UnsupportedFeatureError) as err:
-            resolve_session(raw, catalog_roots=roots)
+            resolve_session(raw, catalog=FilesystemCatalogReadView(roots))
         assert any(
             feature.category == FeatureCategory.CLOCK_MODEL and feature.value == "affine"
             for feature in err.value.features
@@ -270,7 +271,7 @@ class TestUnconsumedGrammarClass:
             {"model": "session"},
         )
 
-        resolved = resolve_session(raw, catalog_roots=roots)
+        resolved = resolve_session(raw, catalog=FilesystemCatalogReadView(roots))
         node = next(item for item in resolved.nodes if item.local_node_id == local_node_id)
 
         assert node.clock.model == "session"

@@ -9,8 +9,12 @@ from typing import Any
 
 import pytest
 import yaml
-from nodalarc.resolve_session import CatalogRoots, SessionResolutionError, resolve_session
+from nodalarc.catalog_closure import CatalogDocumentNotFound, FilesystemCatalogReadView
+from nodalarc.catalog_paths import CatalogRoots
+from nodalarc.resolve_session import SessionResolutionError, resolve_session
 from nodalarc.runtime_support import UnsupportedFeatureError
+
+from tests.catalog_session_fixtures import shipped_read_view
 
 ROOT = Path(__file__).resolve().parents[2]
 SHIPPED_ROOT = ROOT / "catalog" / "nodalarc"
@@ -83,7 +87,9 @@ def _session_with_user_ground(
 
 
 def test_every_shipped_simple_session_node_inherits_its_definition_default() -> None:
-    resolution = resolve_session(yaml.safe_load(SIMPLE_SESSION.read_text(encoding="utf-8")))
+    resolution = resolve_session(
+        yaml.safe_load(SIMPLE_SESSION.read_text(encoding="utf-8")), catalog=shipped_read_view()
+    )
 
     assert resolution.nodes
     for node in resolution.nodes:
@@ -96,7 +102,7 @@ def test_segment_profile_overrides_the_node_definition(tmp_path: Path) -> None:
         ground_segment["profile"] = USER_PROFILE
 
     session, roots = _session_with_user_ground(tmp_path, segment_mutation=override_segment)
-    resolution = resolve_session(session, catalog_roots=roots)
+    resolution = resolve_session(session, catalog=FilesystemCatalogReadView(roots))
 
     ground = [node for node in resolution.nodes if node.kind == "ground_station"]
     assert ground
@@ -117,7 +123,7 @@ def test_placed_node_profile_overrides_segment_and_definition(tmp_path: Path) ->
     session, roots = _session_with_user_ground(
         tmp_path, segment_mutation=override_segment, site_mutation=override_site
     )
-    resolution = resolve_session(session, catalog_roots=roots)
+    resolution = resolve_session(session, catalog=FilesystemCatalogReadView(roots))
 
     overridden = [node for node in resolution.nodes if node.profile == USER_PROFILE]
     assert len(overridden) == 1
@@ -131,7 +137,7 @@ def test_missing_profile_at_every_level_is_refused(tmp_path: Path) -> None:
     session, roots = _session_with_user_ground(tmp_path, node_mutation=strip_default)
 
     with pytest.raises(SessionResolutionError, match="no workload profile at any level"):
-        resolve_session(session, catalog_roots=roots)
+        resolve_session(session, catalog=FilesystemCatalogReadView(roots))
 
 
 def test_conflicting_shared_site_segment_profiles_are_refused(tmp_path: Path) -> None:
@@ -145,7 +151,7 @@ def test_conflicting_shared_site_segment_profiles_are_refused(tmp_path: Path) ->
     session, roots = _session_with_user_ground(tmp_path, segment_mutation=add_conflicting_segment)
 
     with pytest.raises(SessionResolutionError, match="conflicting\\s+profile statements"):
-        resolve_session(session, catalog_roots=roots)
+        resolve_session(session, catalog=FilesystemCatalogReadView(roots))
 
 
 def test_profile_reference_must_load_a_profile_document(tmp_path: Path) -> None:
@@ -158,8 +164,8 @@ def test_profile_reference_must_load_a_profile_document(tmp_path: Path) -> None:
 
     session, roots = _session_with_user_ground(tmp_path, site_mutation=dangling)
 
-    with pytest.raises(FileNotFoundError):
-        resolve_session(session, catalog_roots=roots)
+    with pytest.raises(CatalogDocumentNotFound):
+        resolve_session(session, catalog=FilesystemCatalogReadView(roots))
 
     def wrong_family(site):
         site["nodes"][0]["profile"] = "user:profiles/wrong-family.yaml"
@@ -179,7 +185,7 @@ def test_profile_reference_must_load_a_profile_document(tmp_path: Path) -> None:
     )
 
     with pytest.raises(SessionResolutionError):
-        resolve_session(session, catalog_roots=roots)
+        resolve_session(session, catalog=FilesystemCatalogReadView(roots))
 
 
 def test_non_router_workload_on_a_routed_bus_stands_outside_domains(tmp_path: Path) -> None:
@@ -189,7 +195,7 @@ def test_non_router_workload_on_a_routed_bus_stands_outside_domains(tmp_path: Pa
         site["nodes"][0]["profile"] = "nodalarc:profiles/linux-host.yaml"
 
     session, roots = _session_with_user_ground(tmp_path, site_mutation=override_site)
-    resolution = resolve_session(session, catalog_roots=roots)
+    resolution = resolve_session(session, catalog=FilesystemCatalogReadView(roots))
 
     observers = [
         node for node in resolution.nodes if node.profile == "nodalarc:profiles/linux-host.yaml"
@@ -212,7 +218,7 @@ def test_profile_naming_an_unavailable_adapter_is_refused(tmp_path: Path) -> Non
     _write_yaml(tmp_path / "user" / "profiles" / "bogus-adapter.yaml", bogus)
 
     with pytest.raises(UnsupportedFeatureError, match="workload adapter 'bogus'"):
-        resolve_session(session, catalog_roots=roots)
+        resolve_session(session, catalog=FilesystemCatalogReadView(roots))
 
 
 def test_env_value_from_resolves_and_refuses_honestly(tmp_path: Path) -> None:
@@ -234,7 +240,7 @@ def test_env_value_from_resolves_and_refuses_honestly(tmp_path: Path) -> None:
     session, roots = _session_with_user_ground(tmp_path, site_mutation=with_env)
     _write_yaml(tmp_path / "user" / "profiles" / "override-profile.yaml", profile_with_env(good))
     session["segments"][1]["profile"] = USER_PROFILE
-    resolution = resolve_session(session, catalog_roots=roots)
+    resolution = resolve_session(session, catalog=FilesystemCatalogReadView(roots))
     assert resolution.nodes
 
     bad = [
@@ -249,7 +255,7 @@ def test_env_value_from_resolves_and_refuses_honestly(tmp_path: Path) -> None:
     )
     session["segments"][1]["profile"] = USER_PROFILE
     with pytest.raises(SessionResolutionError, match="matches no node"):
-        resolve_session(session, catalog_roots=roots)
+        resolve_session(session, catalog=FilesystemCatalogReadView(roots))
 
     # Allocated segments always carry both families, so the live refusal
     # for a bad interface reference is the missing-interface one.
@@ -263,11 +269,13 @@ def test_env_value_from_resolves_and_refuses_honestly(tmp_path: Path) -> None:
     )
     session["segments"][1]["profile"] = USER_PROFILE
     with pytest.raises(SessionResolutionError, match="has no interface"):
-        resolve_session(session, catalog_roots=roots)
+        resolve_session(session, catalog=FilesystemCatalogReadView(roots))
 
 
 def test_shipped_quic_session_records_node_level_endpoint_profiles() -> None:
-    resolution = resolve_session(yaml.safe_load(QUIC_SESSION.read_text(encoding="utf-8")))
+    resolution = resolve_session(
+        yaml.safe_load(QUIC_SESSION.read_text(encoding="utf-8")), catalog=shipped_read_view()
+    )
 
     by_profile: dict[str, list[str]] = {}
     for node in resolution.nodes:

@@ -22,6 +22,8 @@ from nodalarc.frames import CommonVec3, EcefVec3, Vec3
 from nodalarc.geo import compute_latency_ms
 from nodalarc.propagator import propagate_sgp4_tle, propagate_sgp4_tle_states
 
+from tests.catalog_session_fixtures import shipped_read_view
+
 ISS_TLE_LINE_1 = "1 25544U 98067A   21075.51041667  .00001264  00000-0  29660-4 0  9993"
 ISS_TLE_LINE_2 = "2 25544  51.6442  21.5417 0002426  95.1670  21.8444 15.48974333273145"
 ISS_TLE_EPOCH_UNIX = 1615896900.000275
@@ -205,7 +207,7 @@ def _earth_luna_world():
     document = load_configuration_yaml(
         (root / "catalog/nodalarc/sessions/earth-luna-dtn.yaml").read_bytes()
     )
-    resolved = resolve_session(document)
+    resolved = resolve_session(document, catalog=shipped_read_view())
     return build_ome_inputs_from_resolved(resolved), resolved
 
 
@@ -472,7 +474,7 @@ class TestEphemerisFrameGate:
         )
         document["ephemeris"]["kernels"][0]["frame"] = "icrf"
         with pytest.raises(UnsupportedFeatureError) as excinfo:
-            resolve_session(document)
+            resolve_session(document, catalog=shipped_read_view())
         frame_refusals = [
             f
             for f in excinfo.value.features

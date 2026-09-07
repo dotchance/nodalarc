@@ -197,6 +197,37 @@ class CatalogClosure:
     def deployment_total_bytes(self) -> int:
         return len(self.root_yaml) + self.total_bytes
 
+    def read_view(self) -> ClosureReadView:
+        """The read view over exactly the bytes this closure captured."""
+        return ClosureReadView.of(self.entries)
+
+
+@dataclass(frozen=True, slots=True)
+class ClosureReadView:
+    """Read view over exactly the bytes one collected closure captured.
+
+    A resolution that follows a collection must read the captured bytes, never
+    the live source again. A source that changes between the two steps would
+    otherwise let the certified files and the resolution describe different
+    experiments.
+    """
+
+    entries: Mapping[CatalogRef, CatalogClosureEntry]
+
+    @classmethod
+    def of(cls, entries: Iterable[CatalogClosureEntry]) -> ClosureReadView:
+        return cls({entry.ref: entry for entry in entries})
+
+    def read(self, ref: CatalogRef) -> CatalogReadDocument:
+        entry = self.entries.get(ref)
+        if entry is None:
+            raise CatalogDocumentNotFound(ref, f"captured closure carries no document for {ref}")
+        return CatalogReadDocument(
+            family=entry.family,
+            preserved_path=entry.preserved_path,
+            yaml_bytes=entry.yaml_bytes,
+        )
+
 
 def _sha256(value: bytes) -> str:
     return "sha256:" + hashlib.sha256(value).hexdigest()

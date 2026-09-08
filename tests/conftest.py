@@ -15,6 +15,21 @@ FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
 
 @pytest.fixture(autouse=True, scope="session")
+def _nats_url_environment():
+    """The NATS URL every test process would get from the chart; tests of the
+    reader's refusal clear it themselves with monkeypatch.delenv."""
+    import os
+
+    previous = os.environ.get("NODALARC_NATS_URL")
+    os.environ["NODALARC_NATS_URL"] = "nats://unit-test-nats.invalid:4222"
+    yield
+    if previous is None:
+        os.environ.pop("NODALARC_NATS_URL", None)
+    else:
+        os.environ["NODALARC_NATS_URL"] = previous
+
+
+@pytest.fixture(autouse=True, scope="session")
 def _init_platform_config():
     """Initialize PlatformConfig for all tests from standard values."""
     from nodalarc.platform_config import PlatformConfig, init_platform_config, reset_platform_config
@@ -59,7 +74,6 @@ def _init_platform_config():
         host_inotify_max_user_instances=512,
         host_file_descriptor_limit=65536,
         # Unit tests must not silently bind to a developer's live local NATS.
-        nats_url="nats://unit-test-nats.invalid:4222",
     )
     init_platform_config(cfg)
     yield

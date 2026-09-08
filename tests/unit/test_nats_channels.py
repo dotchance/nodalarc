@@ -171,43 +171,22 @@ def test_stream_table_and_purge_filters_follow_the_roots(monkeypatch):
     )
 
 
-def _chart_acl_lists() -> dict[str, tuple[tuple[str, ...], tuple[str, ...]]]:
-    """The publish and subscribe lists the chart renders today, keyed by values user key."""
+def test_chart_templates_author_no_subject_patterns():
+    """The chart consumes the rendered inventory; it names no stream, subject or ACL pattern itself."""
     import re
     from pathlib import Path
 
-    text = (
-        Path(__file__).resolve().parents[2] / "deploy/helm/templates/nats-configmap.yaml"
-    ).read_text()
-    found: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {}
-    for block in re.finditer(
-        r"user: \{\{ \.Values\.nats\.auth\.users\.(\w+)\.username \| quote \}\}.*?"
-        r"publish: \[(.*?)\],\s*subscribe: \[(.*?)\]",
-        text,
-        re.S,
-    ):
-        key, publish, subscribe = block.groups()
-
-        def parse(raw: str) -> tuple[str, ...]:
-            return tuple(
-                dict.fromkeys(item.strip().strip('"') for item in raw.split(",") if item.strip())
-            )
-
-        found[key] = (parse(publish), parse(subscribe))
-    return found
-
-
-def test_acl_inventory_reproduces_the_chart_policy_as_it_stands():
-    """Until the chart renders from the registry, the registry must equal the chart, entry for entry."""
-    chart = _chart_acl_lists()
-    assert (
-        set(chart)
-        == {user.key for user in nc.NATS_USERS}
-        == {"admin", "scheduler", "nodeAgent", "service"}
-    )
-    for user in nc.NATS_USERS:
-        assert user.publish == chart[user.key][0], user.key
-        assert user.subscribe == chart[user.key][1], user.key
+    templates = Path(__file__).resolve().parents[2] / "deploy/helm/templates"
+    for path in sorted(templates.glob("*.yaml")):
+        text = "\n".join(
+            line for line in path.read_text().splitlines() if not line.lstrip().startswith("#")
+        )
+        assert not re.search(
+            r"nodalarc\.(ome|links|session|scheduler|ops|debug|mi|nodalpath|agent|ome_control|logging)[.>*\"]",
+            text,
+        ), path.name
+        assert not re.search(r"\bNODALARC_(OME|LINKS|SESSION|OPS|DEBUG|MI)\b", text), path.name
+        assert "nodalarc-nats:4222" not in text, path.name
 
 
 def test_every_acl_pattern_is_a_registry_root_or_nats_infrastructure():
@@ -228,3 +207,130 @@ def test_every_acl_pattern_is_a_registry_root_or_nats_infrastructure():
             assert pattern in ("$JS.API.>", "_INBOX.>", "nodalarc.>") or any(
                 pattern.startswith(f"{root}.") for root in roots
             ), (user.key, pattern)
+
+
+def test_nats_url_comes_from_the_environment_only(monkeypatch):
+    monkeypatch.setenv("NODALARC_NATS_URL", " nats://user:pw@nats.example:4333 ")
+    assert nc.nats_url() == "nats://user:pw@nats.example:4333"
+
+
+@pytest.mark.parametrize("value", [None, "", "   "])
+def test_nats_url_refuses_an_unset_or_blank_variable(monkeypatch, value):
+    """The suite-wide environment fixture must not conceal this boundary: cleared here."""
+    if value is None:
+        monkeypatch.delenv("NODALARC_NATS_URL", raising=False)
+    else:
+        monkeypatch.setenv("NODALARC_NATS_URL", value)
+
+    with pytest.raises(RuntimeError, match="NODALARC_NATS_URL is not set"):
+        nc.nats_url()
+
+
+def test_platform_config_carries_no_nats_url():
+    from nodalarc.platform_config import PlatformConfig
+
+    assert "nats_url" not in PlatformConfig.model_fields
+
+
+def test_messaging_inventory_is_the_stream_and_user_tables():
+    import yaml
+
+    rendered = yaml.safe_load(nc.render_messaging_inventory())
+
+    assert rendered == nc.messaging_inventory()
+    assert [s["name"] for s in rendered["streams"]] == [s.name for s in nc.STREAMS]
+    assert [s["subjects"] for s in rendered["streams"]] == [s.subjects for s in nc.STREAMS]
+    assert [u["key"] for u in rendered["users"]] == [u.key for u in nc.NATS_USERS]
+    for user, row in zip(nc.NATS_USERS, rendered["users"], strict=True):
+        assert tuple(row["publish"]) == user.publish
+        assert tuple(row["subscribe"]) == user.subscribe
+
+
+def test_renderer_command_writes_the_inventory_to_stdout():
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    import yaml
+
+    root = Path(__file__).resolve().parents[2]
+    env = {**os.environ, "PYTHONPATH": str(root / "lib")}
+    out = subprocess.run(
+        [sys.executable, "-m", "nodalarc.nats_channels", "--render-messaging"],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=env,
+        cwd=root,
+    ).stdout
+
+    assert yaml.safe_load(out) == nc.messaging_inventory()
+    refused = subprocess.run(
+        [sys.executable, "-m", "nodalarc.nats_channels"],
+        capture_output=True,
+        text=True,
+        env=env,
+        cwd=root,
+    )
+    assert refused.returncode != 0
+
+
+def test_chart_retention_is_keyed_by_the_deployed_stream_names():
+    """Retention is deployment configuration; it must name exactly the registry's streams."""
+    from pathlib import Path
+
+    import yaml
+
+    values = yaml.safe_load(
+        (Path(__file__).resolve().parents[2] / "deploy/helm/values.yaml").read_text()
+    )
+    retention = values["nats"]["streamRetention"]
+
+    assert set(retention) == {s.name for s in nc.STREAMS}
+    for name, entry in retention.items():
+        assert set(entry) == {"maxMsgsPerSubject", "maxAge", "maxBytes"}, name
+
+
+def _inventory_with(**changes):
+    import copy
+
+    inventory = copy.deepcopy(nc.messaging_inventory())
+    for path, value in changes.items():
+        target = inventory
+        keys = path.split(".")
+        for key in keys[:-1]:
+            target = target[int(key)] if key.isdigit() else target[key]
+        last = keys[-1]
+        if last.isdigit():
+            target[int(last)] = value
+        else:
+            target[last] = value
+    return inventory
+
+
+def test_producer_validation_accepts_the_registry_tables():
+    nc.validate_messaging_inventory(nc.messaging_inventory())
+
+
+@pytest.mark.parametrize(
+    ("changes", "label"),
+    [
+        ({"streams": []}, "no streams"),
+        ({"users": []}, "no users"),
+        ({"streams": True}, "streams not a list"),
+        ({"streams.0.subjects": True}, "subjects not a string"),
+        ({"streams.0.subjects": ["nodalarc.ome.>"]}, "subjects a list"),
+        ({"streams.0.subjects": "nodalarc.ome.visibility"}, "subjects not a root wildcard"),
+        ({"streams.0.name": "ome"}, "stream name not NODALARC_*"),
+        ({"users.0.key": "no such"}, "user key not a values key"),
+        ({"users.0.publish": "nodalarc.>"}, "publish not a list"),
+        ({"users.0.publish": [1]}, "pattern not a string"),
+        ({"users.0.publish": ["nodalarc..ops"]}, "empty token"),
+        ({"users.0.publish": ["nodalarc.>.ops"]}, "misplaced wildcard"),
+    ],
+)
+def test_producer_validation_refuses_what_the_chart_would_refuse(changes, label):
+    with pytest.raises(nc.MessagingInventoryError):
+        nc.validate_messaging_inventory(_inventory_with(**changes))
+    assert label

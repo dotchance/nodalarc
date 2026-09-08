@@ -30,55 +30,36 @@ spec:
           args:
             - |
               echo "Waiting for NATS..."
-{{- if .Values.nats.auth.enabled }}
-              NATS_URL="nats://{{ .Values.nats.auth.users.admin.username }}:{{ .Values.nats.auth.users.admin.password }}@nodalarc-nats:4222"
-{{- else }}
-              NATS_URL="nats://nodalarc-nats:4222"
+{{- $messaging := fromYaml (include "nodalarc.nats-messaging" .) }}
+{{- $streamNames := list }}
+{{- range $messaging.streams }}{{ $streamNames = append $streamNames .name }}{{ end }}
+{{- if not (kindIs "map" .Values.nats.streamRetention) }}{{ fail "nats.streamRetention is missing: this release predates the retention table; run make upgrade (which carries the chart values) before make deploy-<service>, which reuses the release's values" }}{{ end }}
+{{- range $name, $entry := .Values.nats.streamRetention }}
+{{- if not (has $name $streamNames) }}{{ fail (printf "nats.streamRetention.%s names no deployed stream" $name) }}{{ end }}
+{{- if not (kindIs "map" $entry) }}{{ fail (printf "nats.streamRetention.%s must be a mapping" $name) }}{{ end }}
+{{- range $field := list "maxMsgsPerSubject" "maxBytes" }}
+{{- $value := index $entry $field }}
+{{- if not (or (kindIs "int64" $value) (kindIs "int" $value) (kindIs "float64" $value)) }}{{ fail (printf "nats.streamRetention.%s.%s must be an integer, got %v" $name $field $value) }}{{ end }}
+{{- if ne (printf "%v" ($value | float64)) (printf "%v" ($value | int64 | float64)) }}{{ fail (printf "nats.streamRetention.%s.%s must be an integer, got %v" $name $field $value) }}{{ end }}
 {{- end }}
+{{- if or (not (kindIs "string" $entry.maxAge)) (not (regexMatch "^([0-9]+(ns|us|ms|s|m|h))+$" ($entry.maxAge | toString))) }}{{ fail (printf "nats.streamRetention.%s.maxAge must be a duration such as 3h12m, got %v" $name $entry.maxAge) }}{{ end }}
+{{- end }}
+              NATS_URL={{ include "nodalarc.nats-url" (dict "Values" .Values "user" "admin" "hostNetwork" false) | quote }}
               until nats server check connection -s "$NATS_URL" 2>/dev/null; do
                 sleep 1
               done
               echo "NATS ready. Creating streams..."
-              nats stream add NODALARC_OME \
+{{- range $messaging.streams }}
+{{- $retention := index $.Values.nats.streamRetention .name | required (printf "nats.streamRetention.%s is required" .name) }}
+              nats stream add {{ .name }} \
                 --server="$NATS_URL" \
-                --subjects="nodalarc.ome.>" \
+                --subjects={{ .subjects | quote }} \
                 --storage=file --retention=limits \
-                --max-msgs-per-subject=-1 \
-                --max-age=3h12m \
-                --max-bytes=134217728 \
+                --max-msgs-per-subject={{ $retention.maxMsgsPerSubject | int64 }} \
+                --max-age={{ $retention.maxAge }} \
+                --max-bytes={{ $retention.maxBytes | int64 }} \
                 --defaults 2>/dev/null || true
-              nats stream add NODALARC_LINKS \
-                --server="$NATS_URL" \
-                --subjects="nodalarc.links.>" \
-                --storage=file --retention=limits \
-                --max-msgs-per-subject=1 \
-                --max-age=3h12m \
-                --max-bytes=67108864 \
-                --defaults 2>/dev/null || true
-              nats stream add NODALARC_SESSION \
-                --server="$NATS_URL" \
-                --subjects="nodalarc.session.>" \
-                --storage=file --retention=limits \
-                --max-msgs-per-subject=1 \
-                --max-age=3h12m \
-                --max-bytes=67108864 \
-                --defaults 2>/dev/null || true
-              nats stream add NODALARC_OPS \
-                --server="$NATS_URL" \
-                --subjects="nodalarc.ops.>" \
-                --storage=file --retention=limits \
-                --max-msgs-per-subject=-1 \
-                --max-age=4h \
-                --max-bytes=134217728 \
-                --defaults 2>/dev/null || true
-              nats stream add NODALARC_DEBUG \
-                --server="$NATS_URL" \
-                --subjects="nodalarc.debug.>" \
-                --storage=file --retention=limits \
-                --max-msgs-per-subject=500 \
-                --max-age=5m \
-                --max-bytes=67108864 \
-                --defaults 2>/dev/null || true
+{{- end }}
               echo "Streams ready."
       containers:
         - name: ome
@@ -97,10 +78,8 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
-{{- if .Values.nats.auth.enabled }}
             - name: NODALARC_NATS_URL
-              value: "nats://{{ .Values.nats.auth.users.service.username }}:{{ .Values.nats.auth.users.service.password }}@nodalarc-nats:4222"
-{{- end }}
+              value: {{ include "nodalarc.nats-url" (dict "Values" .Values "user" "service" "hostNetwork" false) | quote }}
           args:
             - "--continuous"
             - "--platform-config"

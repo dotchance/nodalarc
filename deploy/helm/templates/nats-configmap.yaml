@@ -13,41 +13,22 @@ data:
     http_port: 8222
     max_payload: 8MB
 {{- if .Values.nats.auth.enabled }}
+{{- $messaging := fromYaml (include "nodalarc.nats-messaging" .) }}
 
     authorization {
       users = [
+{{- $last := sub (len $messaging.users) 1 }}
+{{- range $i, $user := $messaging.users }}
+{{- $account := index $.Values.nats.auth.users $user.key | required (printf "nats.auth.users.%s is required" $user.key) }}
         {
-          user: {{ .Values.nats.auth.users.admin.username | quote }}
-          password: {{ .Values.nats.auth.users.admin.password | quote }}
+          user: {{ $account.username | quote }}
+          password: {{ $account.password | quote }}
           permissions: {
-            publish: ["$JS.API.>", "_INBOX.>", "nodalarc.>"],
-            subscribe: ["$JS.API.>", "_INBOX.>", "nodalarc.>"]
+            publish: [{{ range $j, $p := $user.publish }}{{ if $j }}, {{ end }}{{ $p | quote }}{{ end }}],
+            subscribe: [{{ range $j, $p := $user.subscribe }}{{ if $j }}, {{ end }}{{ $p | quote }}{{ end }}]
           }
-        },
-        {
-          user: {{ .Values.nats.auth.users.scheduler.username | quote }}
-          password: {{ .Values.nats.auth.users.scheduler.password | quote }}
-          permissions: {
-            publish: ["$JS.API.>", "_INBOX.>", "nodalarc.agent.*", "nodalarc.links.>", "nodalarc.ops.>"],
-            subscribe: ["$JS.API.>", "_INBOX.>", "nodalarc.ome.>", "nodalarc.session.>", "nodalarc.links.>", "nodalarc.scheduler.>"]
-          }
-        },
-        {
-          user: {{ .Values.nats.auth.users.nodeAgent.username | quote }}
-          password: {{ .Values.nats.auth.users.nodeAgent.password | quote }}
-          permissions: {
-            publish: ["_INBOX.>", "nodalarc.agent.progress.*", "nodalarc.links.*.substrate", "nodalarc.ops.>"],
-            subscribe: ["nodalarc.agent.*"]
-          }
-        },
-        {
-          user: {{ .Values.nats.auth.users.service.username | quote }}
-          password: {{ .Values.nats.auth.users.service.password | quote }}
-          permissions: {
-            publish: ["$JS.API.>", "_INBOX.>", "nodalarc.ome.>", "nodalarc.ome_control.>", "nodalarc.scheduler.>", "nodalarc.session.>", "nodalarc.mi.>", "nodalarc.nodalpath.>", "nodalarc.debug.>", "nodalarc.ops.>"],
-            subscribe: ["$JS.API.>", "_INBOX.>", "nodalarc.ome.>", "nodalarc.session.>", "nodalarc.links.>", "nodalarc.mi.>", "nodalarc.nodalpath.>", "nodalarc.debug.>", "nodalarc.ops.>", "nodalarc.agent.progress.*", "nodalarc.ome_control.>", "nodalarc.mi.>"]
-          }
-        }
+        }{{ if lt $i $last }},{{ end }}
+{{- end }}
       ]
     }
 {{- end }}

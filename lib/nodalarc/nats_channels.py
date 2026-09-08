@@ -443,26 +443,121 @@ NATS_CONNECT_OPTIONS: dict = {
 }
 
 
+NATS_URL_ENV = "NODALARC_NATS_URL"
+
+
 def nats_url() -> str:
-    """Get NATS server URL from platform config.
+    """The NATS server URL this process connects to, from ``NODALARC_NATS_URL`` only.
 
-    ``NODALARC_NATS_URL`` may be set by deployment templates to provide
-    service-specific NATS credentials for subject authorization.
-
-    Falls back to localhost if platform config is not initialized
-    (test environment, development).
+    The chart sets the variable for every workload (host-network address,
+    port and per-service credentials included); a process outside the
+    cluster sets it itself. There is no default: an unset or blank value
+    is refused here, before any connection attempt.
     """
     import os
 
-    env_url = os.environ.get("NODALARC_NATS_URL", "").strip()
-    if env_url:
-        return env_url
-    try:
-        from nodalarc.platform_config import get_platform_config
+    url = os.environ.get(NATS_URL_ENV, "").strip()
+    if not url:
+        raise RuntimeError(
+            f"{NATS_URL_ENV} is not set; the chart sets it for every workload and a "
+            "process outside the cluster must export it (nats://[user:pass@]host:port)"
+        )
+    return url
 
-        return get_platform_config().nats_url
-    except RuntimeError:
-        return "nats://localhost:4222"
+
+def messaging_inventory() -> dict[str, list[dict[str, object]]]:
+    """The deployed-stream and authorization inventories, as plain data for the chart."""
+    return {
+        "streams": [{"name": s.name, "subjects": s.subjects} for s in STREAMS],
+        "users": [
+            {"key": u.key, "publish": list(u.publish), "subscribe": list(u.subscribe)}
+            for u in NATS_USERS
+        ],
+    }
+
+
+_STREAM_NAME_RE = re.compile(r"^NODALARC_[A-Z]+$")
+_ROOT_WILDCARD_RE = re.compile(r"^nodalarc\.[a-z_]+\.>$")
+_USER_KEY_RE = re.compile(r"^[a-zA-Z]+$")
+# A subject pattern: dot-separated non-empty tokens, `*` only as a whole token, `>` only last.
+_SUBJECT_PATTERN_RE = re.compile(r"^(\$?[A-Za-z0-9_-]+|\*)(\.(\$?[A-Za-z0-9_-]+|\*))*(\.>)?$")
+
+
+class MessagingInventoryError(ValueError):
+    """The messaging inventory would not be accepted by the chart's consumers."""
+
+
+def validate_messaging_inventory(inventory: dict[str, list[dict[str, object]]]) -> None:
+    """Refuse an inventory the chart would refuse, before it is rendered.
+
+    The chart's consumers apply the same rules at render time and refuse on
+    their own; this check proves the producer's output and never stands in
+    for that refusal.
+    """
+    streams = inventory.get("streams")
+    users = inventory.get("users")
+    if not isinstance(streams, list) or not streams:
+        raise MessagingInventoryError("streams must be a non-empty list")
+    if not isinstance(users, list) or not users:
+        raise MessagingInventoryError("users must be a non-empty list")
+    for stream in streams:
+        if not isinstance(stream, dict):
+            raise MessagingInventoryError("every stream must be a mapping")
+        name, subjects = stream.get("name"), stream.get("subjects")
+        if not isinstance(name, str) or not _STREAM_NAME_RE.match(name):
+            raise MessagingInventoryError(f"stream name {name!r} is not a NODALARC_* name")
+        if not isinstance(subjects, str) or not _ROOT_WILDCARD_RE.match(subjects):
+            raise MessagingInventoryError(
+                f"stream {name} subject pattern {subjects!r} is not a root wildcard"
+            )
+    for user in users:
+        if not isinstance(user, dict):
+            raise MessagingInventoryError("every user must be a mapping")
+        key = user.get("key")
+        if not isinstance(key, str) or not _USER_KEY_RE.match(key):
+            raise MessagingInventoryError(f"user key {key!r} is not a values key")
+        for field in ("publish", "subscribe"):
+            patterns = user.get(field)
+            if not isinstance(patterns, list):
+                raise MessagingInventoryError(f"user {key} {field} must be a list")
+            for pattern in patterns:
+                if not isinstance(pattern, str) or not _SUBJECT_PATTERN_RE.match(pattern):
+                    raise MessagingInventoryError(
+                        f"user {key} {field} entry {pattern!r} is not a subject pattern"
+                    )
+
+
+def render_messaging_inventory() -> str:
+    """The chart's ``files/nats-messaging.yaml``; ``scripts/na-render-helm-chart.sh`` writes it."""
+    import yaml
+
+    inventory = messaging_inventory()
+    validate_messaging_inventory(inventory)
+    return yaml.safe_dump(inventory, sort_keys=False)
+
+
+def _main(argv: list[str] | None = None) -> int:
+    import argparse
+    import sys
+
+    parser = argparse.ArgumentParser(
+        prog="python -m nodalarc.nats_channels",
+        description="Render the NATS messaging inventory the chart consumes.",
+    )
+    parser.add_argument(
+        "--render-messaging",
+        action="store_true",
+        help="write the streams and users inventory as YAML to stdout",
+    )
+    args = parser.parse_args(argv)
+    if not args.render_messaging:
+        parser.error("nothing to do: pass --render-messaging")
+    sys.stdout.write(render_messaging_inventory())
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(_main())
 
 
 def node_agent_subject(node_id: str) -> str:

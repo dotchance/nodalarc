@@ -256,7 +256,11 @@ def run_scenario(scenario_path: str, session_path: str) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     _configure_logging("nodal.arc.tools.na_scenario", nats_level=None, stream=sys.stderr)
-    parser = argparse.ArgumentParser(description="Nodal Arc Scenario Executor")
+    parser = argparse.ArgumentParser(
+        description="Nodal Arc Scenario Executor",
+        epilog="NODALARC_NATS_URL must be exported (nats://[user:pass@]host:port); "
+        "there is no default NATS address.",
+    )
     parser.add_argument("--scenario", required=True, help="Path to scenario YAML file")
     parser.add_argument("--session", required=True, help="Path to session YAML (required)")
     parser.add_argument(

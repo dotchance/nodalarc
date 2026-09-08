@@ -70,6 +70,32 @@ nats:
   # every node. scripts/na-install-platform.sh sets this to the control-plane
   # node InternalIP and enables a matching NATS hostPort.
   hostNetworkHost: ""
+  # Retention per deployed stream, keyed by the stream name the registry
+  # declares (lib/nodalarc/nats_channels.py). The stream names and subject
+  # patterns themselves are rendered into the chart at assembly time; a
+  # stream without retention here, or retention naming no stream, fails
+  # the render.
+  streamRetention:
+    NODALARC_OME:
+      maxMsgsPerSubject: -1
+      maxAge: "3h12m"
+      maxBytes: 134217728
+    NODALARC_LINKS:
+      maxMsgsPerSubject: 1
+      maxAge: "3h12m"
+      maxBytes: 67108864
+    NODALARC_SESSION:
+      maxMsgsPerSubject: 1
+      maxAge: "3h12m"
+      maxBytes: 67108864
+    NODALARC_OPS:
+      maxMsgsPerSubject: -1
+      maxAge: "4h"
+      maxBytes: 134217728
+    NODALARC_DEBUG:
+      maxMsgsPerSubject: 500
+      maxAge: "5m"
+      maxBytes: 67108864
   memoryLimit: 2Gi
   memoryRequest: 256Mi
   cpuLimit: "8"

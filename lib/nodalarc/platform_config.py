@@ -29,7 +29,6 @@ class PlatformConfig(BaseModel):
     kubernetes_namespace: str
 
     # NATS JetStream
-    nats_url: str = "nats://nodalarc-nats:4222"
     ome_link_state_snapshot_interval_s: float = 5.0
 
     # HTTP/WebSocket service ports

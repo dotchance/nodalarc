@@ -545,16 +545,21 @@ def test_nats_networkpolicy_allows_host_network_node_cidrs() -> None:
 
 
 def test_host_network_node_agents_use_host_reachable_nats_endpoint() -> None:
+    """The DaemonSet asks for the host-network address in both places it connects from:
+    its own URL and its wait container; the one URL helper honours that flag."""
     values = (ROOT / "deploy/helm/values.yaml").read_text()
     nats = (ROOT / "deploy/helm/templates/nats-deployment.yaml").read_text()
     node_agent = (ROOT / "deploy/helm/templates/node-agent-daemonset.yaml").read_text()
     nats_init = (ROOT / "deploy/helm/templates/_nats-init.yaml").read_text()
+    helpers = (ROOT / "deploy/helm/templates/_nats.yaml").read_text()
 
     assert "hostNetworkHost" in values
     assert "hostPort: {{ .Values.nats.clientPort }}" in nats
-    assert '"hostNetwork" true' in node_agent
-    assert "NODALARC_NATS_URL" in node_agent
-    assert "$natsHost" in nats_init
+    assert node_agent.count('"hostNetwork" true') == 2
+    assert '"Files" .Files "hostNetwork" true' in node_agent
+    assert '"user" "nodeAgent" "hostNetwork" true' in node_agent
+    assert '"hostNetwork" $hostNetwork' in nats_init
+    assert "if and .hostNetwork .Values.nats.hostNetworkHost" in helpers
 
 
 def test_node_agent_can_load_host_mpls_kernel_modules() -> None:
@@ -583,12 +588,16 @@ def test_remote_containerd_purge_uses_node_agent_runtime_socket_contract() -> No
 
 
 def test_required_nats_streams_are_persistent() -> None:
+    """Every deployed stream comes from the registry's table and is created with file storage."""
+    from nodalarc.nats_channels import STREAMS
+
     ome = (ROOT / "deploy/helm/templates/ome-deployment.yaml").read_text()
 
-    assert "nats stream add NODALARC_OPS" in ome
-    assert "nats stream add NODALARC_DEBUG" in ome
-    assert "nats stream add NODALARC_SESSION \\" in ome
-    assert ome.count("nats stream add NODALARC_SESSION") == 1
+    assert {"NODALARC_OPS", "NODALARC_DEBUG", "NODALARC_SESSION"} <= {s.name for s in STREAMS}
+    assert "range $messaging.streams" in ome
+    assert ome.count("nats stream add {{ .name }}") == 1
+    assert "nats stream add NODALARC_" not in ome
+    assert "--storage=file --retention=limits" in ome
     assert "--storage=memory" not in ome
 
 

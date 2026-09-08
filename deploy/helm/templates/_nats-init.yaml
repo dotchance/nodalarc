@@ -1,13 +1,11 @@
-{{/* Init container that waits for NATS JetStream streams to exist.
-     Used by every consumer pod (Scheduler, VS-API, Node Agent).
-     Ensures streams are created by the OME init container before
-     any consumer starts subscribing. */}}
+{{/* Init container that waits for every deployed NATS JetStream stream to exist.
+     Used by every consumer pod (Scheduler, VS-API, Node Agent). Ensures the
+     streams are created by the OME init container before any consumer starts
+     subscribing. Callers pass the root context, or a dict carrying Values,
+     Files and hostNetwork. */}}
 {{- define "nodalarc.nats-wait-init" }}
 {{- $hostNetwork := .hostNetwork | default false }}
-{{- $natsHost := "nodalarc-nats" }}
-{{- if and $hostNetwork .Values.nats.hostNetworkHost }}
-{{- $natsHost = .Values.nats.hostNetworkHost }}
-{{- end }}
+{{- $messaging := fromYaml (include "nodalarc.nats-messaging" .) }}
 - name: wait-nats-streams
   image: {{ required "images.natsBox is required" .Values.images.natsBox | quote }}
   imagePullPolicy: {{ .Values.imagePullPolicy }}
@@ -15,16 +13,10 @@
   args:
     - |
       echo "Waiting for NATS streams..."
-{{- if .Values.nats.auth.enabled }}
-      NATS_URL="nats://{{ .Values.nats.auth.users.admin.username }}:{{ .Values.nats.auth.users.admin.password }}@{{ $natsHost }}:{{ .Values.nats.clientPort }}"
-{{- else }}
-      NATS_URL="nats://{{ $natsHost }}:{{ .Values.nats.clientPort }}"
-{{- end }}
+      NATS_URL={{ include "nodalarc.nats-url" (dict "Values" .Values "user" "admin" "hostNetwork" $hostNetwork) | quote }}
+      STREAMS="{{ range $messaging.streams }}{{ .name }} {{ end }}"
       DEADLINE=$(($(date +%s) + 30))
-      until nats stream info NODALARC_OME --server="$NATS_URL" 2>/dev/null && \
-            nats stream info NODALARC_LINKS --server="$NATS_URL" 2>/dev/null && \
-            nats stream info NODALARC_SESSION --server="$NATS_URL" 2>/dev/null && \
-            nats stream info NODALARC_DEBUG --server="$NATS_URL" 2>/dev/null; do
+      until ok=1; for s in $STREAMS; do nats stream info "$s" --server="$NATS_URL" >/dev/null 2>&1 || ok=0; done; [ "$ok" = 1 ]; do
         if [ "$(date +%s)" -ge "$DEADLINE" ]; then
           echo "FATAL: NATS streams not found after 30s. Aborting."
           exit 1

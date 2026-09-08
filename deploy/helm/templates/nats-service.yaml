@@ -1,4 +1,4 @@
-# NATS ClusterIP Service — all components connect to nats://nodalarc-nats:4222
+# NATS ClusterIP Service; every workload connects through NODALARC_NATS_URL, rendered from nats.clientPort.
 apiVersion: v1
 kind: Service
 metadata:

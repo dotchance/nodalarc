@@ -54,6 +54,7 @@ __all__ = [
     "set_session",
     "set_tenant",
     "get_logger",
+    "uvicorn_settings",
 ]
 
 _nodal_filter: NodalFilter | None = None
@@ -201,6 +202,18 @@ async def connect(nc: Any) -> None:
             exc,
         )
         raise
+
+
+def uvicorn_settings() -> dict[str, None]:
+    """The `uvicorn.run` arguments that keep uvicorn out of logging configuration.
+
+    Uvicorn installs its own handlers from `log_config` and, separately,
+    resets its child loggers' levels from `log_level`; both would give
+    severity and formatting a second owner. With both None, uvicorn's
+    loggers propagate to the root this package configured, under the
+    third-party policy `configure()` applies to them.
+    """
+    return {"log_config": None, "log_level": None}
 
 
 def set_session(session_id: str) -> None:

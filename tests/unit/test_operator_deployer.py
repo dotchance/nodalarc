@@ -53,7 +53,6 @@ from nodalarc_operator.session_deployer import (
     discover_available_nodes,
     ensure_session_configmaps,
     ensure_session_pods,
-    session_runtime_purge_targets,
     teardown_session,
     write_wiring_manifest,
 )
@@ -708,15 +707,6 @@ class TestRuntimeIdentityCleanup:
 
         assert "configs/constellations/_ephemeral" not in source
         assert "configs/ground-stations/_ephemeral" not in source
-
-    def test_purge_targets_are_session_scoped(self):
-        targets = session_runtime_purge_targets("run-test-0001")
-
-        assert targets
-        for _stream, subject in targets:
-            assert "run-test-0001" in subject
-            assert subject.endswith(".>")
-            assert subject != ">"
 
     def test_teardown_purges_before_deleting_identity_configmap(self):
         mock_v1 = create_autospec(kubernetes.client.CoreV1Api, instance=True)

@@ -873,3 +873,49 @@ class TestSetNatsLevel:
         deep_log.debug("deep nested debug")
 
         assert len(handler._deque) == 1
+
+
+class TestUvicornBoundary:
+    """Uvicorn's own configuration step must leave the shared severity policy in place."""
+
+    @staticmethod
+    def _levels():
+        return {
+            name: logging.getLevelName(logging.getLogger(name).level)
+            for name in ("uvicorn.error", "uvicorn.access")
+        }
+
+    def test_shared_settings_survive_uvicorn_configure_logging(self):
+        import uvicorn
+        from nodal.logging import uvicorn_settings
+
+        diagnostics = io.StringIO()
+        configure("nodal.arc.vs_api", nats_level=None, stream=diagnostics)
+        assert self._levels() == {"uvicorn.error": "WARNING", "uvicorn.access": "WARNING"}
+
+        async def app(scope, receive, send):  # pragma: no cover - never served
+            pass
+
+        uvicorn.Config(app, **uvicorn_settings()).configure_logging()
+
+        assert self._levels() == {"uvicorn.error": "WARNING", "uvicorn.access": "WARNING"}
+        logging.getLogger("uvicorn.error").info("Uvicorn running on http://0.0.0.0:8080")
+        logging.getLogger("uvicorn.access").info('"GET /api/v1/health" 200')
+        logging.getLogger("uvicorn.error").warning("worker restarted")
+        out = diagnostics.getvalue()
+        assert "Uvicorn running" not in out
+        assert "/api/v1/health" not in out
+        assert "worker restarted" in out
+
+    def test_a_uvicorn_log_level_would_take_severity_over(self):
+        """The negative shape the settings exist to prevent."""
+        import uvicorn
+
+        configure("nodal.arc.vs_api", nats_level=None, stream=io.StringIO())
+
+        async def app(scope, receive, send):  # pragma: no cover - never served
+            pass
+
+        uvicorn.Config(app, log_config=None, log_level="info").configure_logging()
+
+        assert self._levels() == {"uvicorn.error": "INFO", "uvicorn.access": "INFO"}

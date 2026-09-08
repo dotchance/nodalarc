@@ -30,4 +30,4 @@ stable.
 
 ## Scope notes (current code)
 
-- MI does not subscribe to `SUBJECT_LINK_UP` / `SUBJECT_LINK_DOWN`. Link-state history lives in the `NODALARC_LINKS` JetStream stream itself; extending MI to mirror those into SQLite is tracked as a follow-up, not a current responsibility.
+- MI does not subscribe to the link up and down subjects (`link_up_subject(session_id)` / `link_down_subject(session_id)`). Link-state history lives in the `NODALARC_LINKS` JetStream stream itself; extending MI to mirror those into SQLite is tracked as a follow-up, not a current responsibility.

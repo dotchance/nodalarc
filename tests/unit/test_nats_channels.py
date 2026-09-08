@@ -187,9 +187,12 @@ def _chart_acl_lists() -> dict[str, tuple[tuple[str, ...], tuple[str, ...]]]:
         re.S,
     ):
         key, publish, subscribe = block.groups()
-        parse = lambda s: tuple(
-            dict.fromkeys(item.strip().strip('"') for item in s.split(",") if item.strip())
-        )
+
+        def parse(raw: str) -> tuple[str, ...]:
+            return tuple(
+                dict.fromkeys(item.strip().strip('"') for item in raw.split(",") if item.strip())
+            )
+
         found[key] = (parse(publish), parse(subscribe))
     return found
 

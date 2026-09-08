@@ -37,6 +37,7 @@ from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from nodal.logging import configure as _configure_logging
 from nodal.logging import connect as _connect_logging
+from nodal.logging import uvicorn_settings as _uvicorn_logging_settings
 from nodalarc.catalog_closure import (
     CatalogClosureCollector,
     CatalogDocumentNotFound,
@@ -110,9 +111,12 @@ from nodalarc.nats_channels import (
     STREAM_DEBUG_EVENTS,
     STREAM_OPS_EVENTS,
     debug_ctrl_subject,
+    debug_subscribe_all_subject,
     nats_url,
+    ops_subscribe_all_subject,
     sanitize_session_id,
     scheduler_repair_subject,
+    wiring_progress_subscribe_subject,
 )
 from nodalarc.platform_config import get_platform_config
 from nodalarc.project_info import project_attribution, project_version
@@ -565,7 +569,7 @@ async def _enable_debug_source(source: str) -> bool:
             from nats.js.api import DeliverPolicy
 
             _debug_sub = await js.subscribe(
-                "nodalarc.debug.>",
+                debug_subscribe_all_subject(),
                 stream=STREAM_DEBUG_EVENTS,
                 ordered_consumer=True,
                 deliver_policy=DeliverPolicy.NEW,
@@ -1474,7 +1478,7 @@ async def _nats_subscriber() -> None:
             pass
 
     try:
-        await nc.subscribe("nodalarc.agent.progress.*", cb=_on_wiring_progress)
+        await nc.subscribe(wiring_progress_subscribe_subject(), cb=_on_wiring_progress)
     except Exception as exc:
         log.warning("Wiring progress subscription failed: %s", exc)
 
@@ -1492,7 +1496,7 @@ async def _nats_subscriber() -> None:
         from nats.js.api import DeliverPolicy
 
         await js.subscribe(
-            "nodalarc.ops.>",
+            ops_subscribe_all_subject(),
             stream=STREAM_OPS_EVENTS,
             ordered_consumer=True,
             deliver_policy=DeliverPolicy.LAST_PER_SUBJECT,
@@ -4276,7 +4280,7 @@ def main() -> None:
             _session_manager.status_detail = "Runtime session verification failed"
             log.error("Runtime ConstellationSpec verification failed", exc_info=True)
 
-    uvicorn.run(app, host="0.0.0.0", port=args.port, log_level="info")
+    uvicorn.run(app, host="0.0.0.0", port=args.port, **_uvicorn_logging_settings())
 
 
 if __name__ == "__main__":

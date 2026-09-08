@@ -57,6 +57,7 @@ from nodalarc.models.vs_api import (
 )
 from nodalarc.nats_channels import (
     STREAM_LINK_EVENTS,
+    STREAM_MI_EVENTS,
     STREAM_OME_EVENTS,
     STREAM_OPS_EVENTS,
     STREAM_SESSION_EVENTS,
@@ -435,7 +436,7 @@ class SessionContext:
                 self._subscriptions.append(
                     await js.subscribe(
                         almanac_event_subject(sid),
-                        stream="NODALARC_MI",
+                        stream=STREAM_MI_EVENTS,
                         ordered_consumer=True,
                         deliver_policy=DeliverPolicy.NEW,
                         cb=self._on_almanac,

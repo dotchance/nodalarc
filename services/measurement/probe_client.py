@@ -13,9 +13,14 @@ import urllib.error
 import urllib.request
 from typing import Any
 
-from nodalarc.nats_channels import probe_daemon_port
+from nodalarc.platform_config import get_platform_config
 
 log = logging.getLogger(__name__)
+
+
+def probe_daemon_port() -> int:
+    """HTTP port for the per-pod probe daemon sidecar, from the platform configuration."""
+    return get_platform_config().probe_daemon_http_api_port
 
 
 def _url(pod_ip: str, path: str) -> str:

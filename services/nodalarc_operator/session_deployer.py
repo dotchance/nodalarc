@@ -27,7 +27,7 @@ from nodalarc.models.resolved_session import (
     ResolvedRoutingDomain,
     ResolvedSession,
 )
-from nodalarc.nats_channels import sanitize_session_id
+from nodalarc.nats_channels import sanitize_session_id, session_purge_filters
 from nodalarc.platform_config import (
     compute_pod_placement,
     get_platform_config,
@@ -1699,34 +1699,6 @@ def teardown_session(namespace: str, session_id: str | None = None) -> None:
     log.debug("Cleaned up %d FRR config ConfigMaps", len(cms.items))
 
 
-def session_runtime_purge_targets(session_id: str) -> tuple[tuple[str, str], ...]:
-    """Return retained JetStream stream/subject filters for one session.
-
-    Current subjects are session-scoped. Future tenant support must add the
-    tenant segment in this one place before multiple tenants can share NATS.
-    Until then, callers must never purge a stream without a session filter.
-    """
-    from nodalarc.nats_channels import (
-        STREAM_DEBUG_EVENTS,
-        STREAM_LINK_EVENTS,
-        STREAM_MI_EVENTS,
-        STREAM_OME_EVENTS,
-        STREAM_OPS_EVENTS,
-        STREAM_SESSION_EVENTS,
-        sanitize_session_id,
-    )
-
-    sid = sanitize_session_id(session_id)
-    return (
-        (STREAM_OME_EVENTS, f"nodalarc.ome.{sid}.>"),
-        (STREAM_LINK_EVENTS, f"nodalarc.links.{sid}.>"),
-        (STREAM_SESSION_EVENTS, f"nodalarc.session.{sid}.>"),
-        (STREAM_MI_EVENTS, f"nodalarc.mi.{sid}.>"),
-        (STREAM_OPS_EVENTS, f"nodalarc.ops.{sid}.>"),
-        (STREAM_DEBUG_EVENTS, f"nodalarc.debug.{sid}.>"),
-    )
-
-
 def _is_missing_stream_error(exc: Exception) -> bool:
     text = f"{type(exc).__name__}: {exc}".lower()
     return "stream not found" in text or "stream not found" in repr(exc).lower()
@@ -1753,7 +1725,7 @@ def purge_session_runtime_state(namespace: str, session_id: str) -> None:
             try:
                 js = nc.jetstream()
                 failures: list[str] = []
-                for stream, subject_filter in session_runtime_purge_targets(session_id):
+                for stream, subject_filter in session_purge_filters(session_id):
                     try:
                         await js.purge_stream(stream, subject=subject_filter)
                         log.debug("Purged %s in %s: %s", stream, namespace, subject_filter)

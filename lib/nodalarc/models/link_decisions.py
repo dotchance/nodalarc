@@ -243,8 +243,8 @@ terminal_physics."""
 class GroundVisibilityDecisionWire(BaseModel):
     """Per-pair ground visibility decision in wire form.
 
-    Published as part of `GroundLinkDecisionSnapshot` on the
-    `SUBJECT_GROUND_LINK_DECISION_SNAPSHOT` NATS subject
+    Published as part of `GroundLinkDecisionSnapshot` on the subject
+    `ground_link_decision_snapshot_subject(session_id)` builds
     (``nodalarc.links.<session>.ground_decisions``).
 
     Every field is required at construction. `applied_*` fields use
@@ -470,7 +470,7 @@ class GroundLinkDecisionSnapshot(BaseModel):
     absent pair as "the OME ignored it" — it may simply be an ISL
     pair this snapshot does not cover.
 
-    Published on `SUBJECT_GROUND_LINK_DECISION_SNAPSHOT` (same
+    Published on `ground_link_decision_snapshot_subject(session_id)` (same
     `sim_time` and `snapshot_seq` as the corresponding
     `LinkStateSnapshot`, for pairing).
 

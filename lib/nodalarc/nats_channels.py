@@ -5,11 +5,12 @@
 All NATS subject strings and stream names live here. No component
 invents its own subjects or stream names.
 
-Session-scoped subjects: services use the function builders (e.g.
-``ome_visibility_subject(session_id)``) to publish/subscribe to
-session-specific subjects. The ``SUBJECT_*`` constants use
-``_DEFAULT_SESSION_ID`` ("default") for test compatibility and
-migration — they are NOT for production services.
+Every subject starts with one of the declared roots, and every builder
+computes from its root at call time. Session-scoped subjects come from the
+function builders (e.g. ``ome_visibility_subject(session_id)``); the few
+session-independent request/reply subjects are constants. The stream table
+and the user table are the deployed-stream and authorization inventories
+the chart renders from.
 """
 
 from __future__ import annotations
@@ -20,8 +21,6 @@ from typing import NamedTuple
 # ---------------------------------------------------------------------------
 # Session ID
 # ---------------------------------------------------------------------------
-
-_DEFAULT_SESSION_ID = "default"
 
 # NATS uses dots as segment separators and ``*``/``>`` as wildcards.
 # A session_id containing any of these would break subject routing.
@@ -187,11 +186,6 @@ def session_purge_filters(session_id: str, *, tenant_id: str = "") -> tuple[tupl
 def ome_visibility_subject(session_id: str) -> str:
     """OME visibility event subject for a specific session."""
     return f"{ROOT_OME}.{session_id}.visibility"
-
-
-def ome_snapshot_subject(session_id: str) -> str:
-    """DEPRECATED — OME snapshot subject for a specific session."""
-    return f"{ROOT_OME}.{session_id}.snapshot"
 
 
 def ome_clock_subject(session_id: str) -> str:
@@ -362,48 +356,6 @@ def almanac_event_subject(session_id: str) -> str:
     return f"{ROOT_NODALPATH}.{session_id}.almanac"
 
 
-# ---------------------------------------------------------------------------
-# Legacy SUBJECT_* constants — use _DEFAULT_SESSION_ID for backward compat
-#
-# These exist for test compatibility and code that doesn't yet have access
-# to the session_id. Services MUST use the function builders above.
-# ---------------------------------------------------------------------------
-
-# OME publications (JetStream — retained)
-SUBJECT_OME_ALL = "nodalarc.ome.>"
-SUBJECT_VISIBILITY_EVENT = ome_visibility_subject(_DEFAULT_SESSION_ID)
-# DEPRECATED (PRD v0.71): No component publishes or subscribes to Snapshot.
-# Position data distributed via SessionEphemeris on NODALARC_SESSION stream.
-SUBJECT_SNAPSHOT = ome_snapshot_subject(_DEFAULT_SESSION_ID)
-SUBJECT_CLOCK_TICK = ome_clock_subject(_DEFAULT_SESSION_ID)
-SUBJECT_HEARTBEAT = ome_heartbeat_subject(_DEFAULT_SESSION_ID)
-
-# Link state (JetStream — retained, replace-not-merge)
-SUBJECT_LINK_STATE_SNAPSHOT = link_state_snapshot_subject(_DEFAULT_SESSION_ID)
-SUBJECT_GROUND_LINK_DECISION_SNAPSHOT = ground_link_decision_snapshot_subject(_DEFAULT_SESSION_ID)
-SUBJECT_LINK_UP = link_up_subject(_DEFAULT_SESSION_ID)
-SUBJECT_LINK_DOWN = link_down_subject(_DEFAULT_SESSION_ID)
-SUBJECT_LATENCY_UPDATE = latency_update_subject(_DEFAULT_SESSION_ID)
-
-# Session-level state (JetStream — MaxMsgsPerSubject=1 on NODALARC_SESSION)
-SUBJECT_SESSION_EPHEMERIS = session_ephemeris_subject(_DEFAULT_SESSION_ID)
-SUBJECT_PLAYBACK_STATE = playback_state_subject(_DEFAULT_SESSION_ID)
-SUBJECT_SCHEDULING_CHECKPOINT = scheduling_checkpoint_subject(_DEFAULT_SESSION_ID)
-SUBJECT_SCHEDULER_REPAIR = scheduler_repair_subject(_DEFAULT_SESSION_ID)
-
-# MI publications (JetStream — retained)
-SUBJECT_CONVERGENCE_RESULT = convergence_result_subject(_DEFAULT_SESSION_ID)
-SUBJECT_PROBE_RESULT = probe_result_subject(_DEFAULT_SESSION_ID)
-SUBJECT_ADAPTER_EVENT = adapter_event_subject(_DEFAULT_SESSION_ID)
-
-# NodalPath publications (JetStream — retained)
-SUBJECT_ALMANAC_EVENT = almanac_event_subject(_DEFAULT_SESSION_ID)
-
-# Ops events (JetStream — memory storage, 4h retention)
-# Ops events — session-scoped to prevent cross-session telemetry leaks
-SUBJECT_OPS_EVENT = f"nodalarc.ops.{_DEFAULT_SESSION_ID}.>"
-
-
 def _scoped_event_subject(
     root: str, session_id: str, source: str, code: str, *, tenant_id: str
 ) -> str:
@@ -489,20 +441,6 @@ NATS_CONNECT_OPTIONS: dict = {
     "ping_interval": 10,
     "max_outstanding_pings": 3,
 }
-
-
-def probe_daemon_port() -> int:
-    """HTTP port for the per-pod probe daemon sidecar."""
-    from nodalarc.platform_config import get_platform_config
-
-    return get_platform_config().probe_daemon_http_api_port
-
-
-def nodalpath_console_port() -> int:
-    """HTTP port for the NodalPath console server."""
-    from nodalarc.platform_config import get_platform_config
-
-    return get_platform_config().nodalpath_console_http_port
 
 
 def nats_url() -> str:

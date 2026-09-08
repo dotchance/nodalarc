@@ -33,8 +33,8 @@ All NATS subject strings are defined in `lib/nodalarc/nats_channels.py`. No lite
 
 ```python
 # Good
-from nodalarc.nats_channels import SUBJECT_VISIBILITY_EVENT
-await nc.publish(SUBJECT_VISIBILITY_EVENT, data)
+from nodalarc.nats_channels import ome_visibility_subject
+await nc.publish(ome_visibility_subject(session_id), data)
 
 # Bad - literal strings
 await nc.publish("nodalarc.ome.visibility", data)

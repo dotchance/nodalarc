@@ -25,9 +25,8 @@ from nodalarc.models.link_decisions import (
     UnscheduledPair,
 )
 from nodalarc.nats_channels import (
-    SUBJECT_GROUND_LINK_DECISION_SNAPSHOT,
-    SUBJECT_LINK_STATE_SNAPSHOT,
     ground_link_decision_snapshot_subject,
+    link_state_snapshot_subject,
 )
 from ome.types import GroundVisibilityDecision
 from pydantic import ValidationError
@@ -636,7 +635,7 @@ class TestCrossTypeSemantics:
 
 
 class TestLinkDecisionSnapshotSubject:
-    """SUBJECT_GROUND_LINK_DECISION_SNAPSHOT lives on the NODALARC_LINKS
+    """The ground decision snapshot subject lives on the NODALARC_LINKS
     stream (already MaxMsgsPerSubject=1). The subject pattern parallels
     ``link_state_snapshot_subject`` so both snapshots retain together
     per session; pairing between them is by (epoch_id, snapshot_seq,
@@ -646,9 +645,6 @@ class TestLinkDecisionSnapshotSubject:
         subj = ground_link_decision_snapshot_subject("starlink-prod")
         assert subj == "nodalarc.links.starlink-prod.ground_decisions"
 
-    def test_legacy_constant_uses_default_session(self) -> None:
-        assert SUBJECT_GROUND_LINK_DECISION_SNAPSHOT == "nodalarc.links.default.ground_decisions"
-
     def test_decision_subject_lives_on_links_stream(self) -> None:
         """Both decision and state snapshots share the
         `nodalarc.links.{session}.*` namespace so they live on the
@@ -656,7 +652,9 @@ class TestLinkDecisionSnapshotSubject:
         NOT pairing — pairing happens explicitly by
         (epoch_id, snapshot_seq, sim_time) in the consumer; see
         scheduler.dispatcher.paired_decision_snapshot."""
-        assert SUBJECT_LINK_STATE_SNAPSHOT.startswith("nodalarc.links.")
-        assert SUBJECT_GROUND_LINK_DECISION_SNAPSHOT.startswith("nodalarc.links.")
+        state = link_state_snapshot_subject("starlink-prod")
+        decisions = ground_link_decision_snapshot_subject("starlink-prod")
+        assert state.startswith("nodalarc.links.")
+        assert decisions.startswith("nodalarc.links.")
         # Different terminal segments — separate subjects within the stream
-        assert SUBJECT_GROUND_LINK_DECISION_SNAPSHOT != SUBJECT_LINK_STATE_SNAPSHOT
+        assert decisions != state

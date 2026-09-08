@@ -61,8 +61,8 @@ case "$MODE" in
         ;;
 esac
 
-if [ -n "$REGISTRY_PREFIX" ] && [ -z "$REGISTRY_HOST" ]; then
-    echo "na-mode: REGISTRY_PREFIX is set without REGISTRY_HOST; set REGISTRY_HOST instead" >&2
+if [ -n "$REGISTRY_PREFIX" ]; then
+    echo "na-mode: REGISTRY_PREFIX is not a setting; the lifecycle scripts derive the prefix from REGISTRY_HOST" >&2
     exit 2
 fi
 

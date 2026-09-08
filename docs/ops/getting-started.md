@@ -185,7 +185,7 @@ make all
 |--------|:---:|-------------|
 | `make all` | no | Clean-state pipeline: deps -> build -> load -> install -> session -> status |
 | `make deps` | no | Install Python/Node.js dependencies |
-| `make build` | no | Build frontend and all Docker images |
+| `make build` | no | Build all Docker images |
 | `make load` | no | Import images to K3s or push to registry |
 | `make install` | no | Helm install the platform chart; refuses existing platform state |
 | `make upgrade` | no | In-place Helm upgrade for an existing platform |

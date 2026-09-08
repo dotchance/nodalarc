@@ -65,7 +65,7 @@ sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl exec deploy/nodalarc-vf -- \
 | Target | What It Does |
 |--------|--------------|
 | `make all` | Clean-state pipeline: deps -> build -> load -> install -> session -> status |
-| `make build` | Build frontend + all Docker images |
+| `make build` | Build all Docker images |
 | `make load` | Import images into K3s or push them to the registry |
 | `make install` | Install the platform; refuses existing platform state |
 | `make upgrade` | In-place Helm upgrade for an existing platform |

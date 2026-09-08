@@ -154,9 +154,9 @@ def test_runtime_matrix_discovers_vs_api_when_no_override_is_set() -> None:
     builder = _target_body("test-builder-e2e")
     clean = _target_body("clean")
 
-    assert 'VS_API_HOST="$${VS_API_HOST:-$$(' in target
-    assert "app=nodalarc-vs-api" in target
-    assert 'type=="InternalIP"' in target
+    assert 'VS_API_HOST="$${VS_API_HOST:-}"' in target
+    assert "discover_vs_api" in target
+    assert "jsonpath" not in target
     assert 'VS_API_HOST="$$VS_API_HOST"' in target
     for evidence_variable in (
         "NODALARC_EVIDENCE_SOURCE_GIT_SHA",
@@ -915,3 +915,81 @@ def test_no_escape_control_remains_in_the_facade() -> None:
         "HELM_CONTRACT_CHART",
     ):
         assert not any(name in source for source in sources), name
+
+
+def test_registry_prefix_is_refused_at_parse_time() -> None:
+    """A prefix from config.mk or the environment reaches no script; make refuses it."""
+    result = subprocess.run(
+        ["make", "-n", "--no-print-directory", "help"],
+        cwd=ROOT,
+        env=_make_env(REGISTRY_HOST="registry.local:5000", REGISTRY_PREFIX="registry.local:5000/"),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert "REGISTRY_PREFIX is not a setting" in result.stderr
+    assert "REGISTRY_PREFIX ?=" not in _makefile()
+
+
+def test_image_paths_compile_the_frontend_once() -> None:
+    """build and build-vf leave the host bundle to build-frontends; Docker compiles the image's."""
+    makefile = _makefile()
+    assert re.search(r"^build: deps build-images", makefile, re.M)
+    assert re.search(r"^build-vf: ##", makefile, re.M)
+    assert re.search(r"^build-frontends: ##", makefile, re.M)
+    assert "dist/" in (ROOT / "frontend/.dockerignore").read_text().split()
+
+
+def _stub_tool(path: Path, name: str, body: str) -> None:
+    script = path / name
+    script.write_text(f"#!/usr/bin/env bash\nset -euo pipefail\n{body}\n")
+    script.chmod(0o755)
+
+
+def _runtime_matrix_host_fragment() -> str:
+    """The expanded recipe up to the matrix invocation, as /bin/sh receives it."""
+    expanded = _dry_run_make("test-runtime-matrix")
+    fragment = expanded[: expanded.index("PYTHONUNBUFFERED=1")]
+    return fragment + 'printf "HOST=%s\\n" "$VS_API_HOST"\n'
+
+
+def _run_host_fragment(tmp_path: Path, **env: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["/bin/sh", "-c", _runtime_matrix_host_fragment()],
+        cwd=ROOT,
+        env={**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}", **env},
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
+def test_runtime_matrix_uses_an_explicit_host_without_discovery(tmp_path: Path) -> None:
+    _stub_tool(tmp_path, "kubectl", 'echo "must not be called: kubectl $*" >&2; exit 99')
+    result = _run_host_fragment(tmp_path, VS_API_HOST="192.0.2.10")
+    assert result.returncode == 0, result.stderr
+    assert "HOST=192.0.2.10:8080" in result.stdout
+    assert "must not be called" not in result.stderr
+    result = _run_host_fragment(tmp_path, VS_API_HOST="192.0.2.10:9000")
+    assert "HOST=192.0.2.10:9000" in result.stdout
+
+
+def test_runtime_matrix_discovers_the_host_through_the_shared_library(tmp_path: Path) -> None:
+    """The /bin/sh recipe isolates the Bash library and receives only the host."""
+    _stub_tool(
+        tmp_path,
+        "kubectl",
+        """
+case "$1 $2" in
+  "get pod") printf 'node02'; exit 0 ;;
+  "get node") printf '192.0.2.22'; exit 0 ;;
+esac
+exit 1
+""",
+    )
+    _stub_tool(tmp_path, "curl", 'printf \'{"token": "t"}\'')
+    result = _run_host_fragment(tmp_path, VS_API_HOST="")
+    assert result.returncode == 0, result.stderr
+    assert "HOST=192.0.2.22:8080" in result.stdout
+    assert "[runtime-matrix] VS-API ready: http://192.0.2.22:8080" in result.stderr

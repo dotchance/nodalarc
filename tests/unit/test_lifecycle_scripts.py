@@ -69,6 +69,17 @@ exit 1
     assert "multi-node cluster detected" in result.stderr
 
 
+def test_mode_resolver_refuses_a_registry_prefix_even_with_a_host(tmp_path: Path) -> None:
+    """The prefix is derived from the host; a supplied prefix is refused, never ignored."""
+    result = _run(
+        ["bash", "scripts/na-mode.sh", "--no-cluster"],
+        env={"REGISTRY_HOST": "registry.local:5000", "REGISTRY_PREFIX": "registry.local:5000/"},
+        path_dir=tmp_path,
+    )
+    assert result.returncode == 2, result.stderr
+    assert "REGISTRY_PREFIX is not a setting" in result.stderr
+
+
 def test_image_inventory_generates_runtime_helm_args_without_cluster() -> None:
     result = _run(
         ["bash", "scripts/na-images.sh", "helm-image-args"],
@@ -753,3 +764,19 @@ def test_deploy_service_refuses_to_carry_chart_changes(tmp_path: Path) -> None:
     assert "cannot carry chart changes" in result.stderr
     assert "files/platform.yaml" in result.stderr
     assert "must not be called" not in result.stderr
+
+
+def test_vs_api_discovery_counts_request_time_toward_its_deadline(tmp_path: Path) -> None:
+    """Slow requests must consume the deadline; a loop that counts only its sleeps would not stop."""
+    import time
+
+    _stub(tmp_path, "kubectl", "sleep 3\nexit 1")
+    started = time.monotonic()
+    result = _lib_call(
+        'discover_vs_api nodalarc 4; echo "rc=$?"',
+        path_dir=tmp_path,
+    )
+    wall = time.monotonic() - started
+    assert result.stdout.rstrip().endswith("rc=1"), result.stdout + result.stderr
+    assert "not reachable after" in result.stderr
+    assert wall < 8, f"discovery ran {wall:.1f}s against a 4s deadline"

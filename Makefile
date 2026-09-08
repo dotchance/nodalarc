@@ -16,17 +16,17 @@ K3S_NODE        ?= nodal
 SUDO_CTR        ?= sudo
 MODE            ?= auto
 REGISTRY_HOST   ?= $(shell bash scripts/detect-registry.sh 2>/dev/null)
-REGISTRY_PREFIX ?= $(if $(filter single-node,$(MODE)),,$(if $(REGISTRY_HOST),$(REGISTRY_HOST)/,))
 DEFAULT_SESSION ?= catalog/nodalarc/sessions/earth-leo-simple.yaml
 NAMESPACE       ?= nodalarc
 TEST_ROOT_PYTHON ?= .venv/bin/python
 
 export KUBECONFIG
 
+# The image prefix is derived from REGISTRY_HOST by scripts/na-mode.sh; it is
+# not configurable. A prefix from config.mk or the environment is refused
+# here, and the script refuses one for direct invocation.
 ifneq ($(strip $(REGISTRY_PREFIX)),)
-ifeq ($(strip $(REGISTRY_HOST)),)
-$(error REGISTRY_PREFIX is set without REGISTRY_HOST; set REGISTRY_HOST instead)
-endif
+$(error REGISTRY_PREFIX is not a setting; the lifecycle scripts derive the prefix from REGISTRY_HOST)
 endif
 
 # Image tag: content identity, not just HEAD identity.
@@ -169,8 +169,7 @@ check-registry: ## Report resolved REGISTRY_HOST and verify the registry is reac
 		echo "[check-registry]   Set REGISTRY_HOST (or populate /etc/rancher/k3s/registries.yaml"; \
 		echo "[check-registry]   with a mirror entry) to enable multi-node mode."; \
 	else \
-		echo "[check-registry] REGISTRY_HOST   = $(REGISTRY_HOST)"; \
-		echo "[check-registry] REGISTRY_PREFIX = $(REGISTRY_PREFIX)"; \
+		echo "[check-registry] REGISTRY_HOST = $(REGISTRY_HOST)"; \
 		printf "[check-registry] Probing http://%s/v2/_catalog ... " "$(REGISTRY_HOST)"; \
 		if curl -sf --max-time 5 "http://$(REGISTRY_HOST)/v2/_catalog" >/dev/null 2>&1; then \
 			echo "OK"; \
@@ -201,7 +200,7 @@ check-crd-server: ## Validate the ConstellationSpec CRD through the active API s
 # Docker images tagged with the current git SHA. They do not install anything
 # into Kubernetes.
 
-build: deps build-frontends build-images ## Build frontend dist + all Docker images
+build: deps build-images ## Build all Docker images
 	@echo "[build] All images built with tag $(TAG)."
 	@echo "[build] Next: make load"
 
@@ -258,7 +257,7 @@ build-operator: _runtime-constraints ## Build Operator image
 build-measurement: _runtime-constraints ## Build MI (Measurement) image
 	docker build $(DOCKER_BUILD_METADATA_ARGS) -f services/measurement/Dockerfile -t "$(call IMAGE_REF,measurement)" -t "$(call IMAGE_REF_TAG,measurement,latest)" .
 
-build-vf: build-frontends ## Build VF (visualization) image
+build-vf: ## Build VF (visualization) image (compiles the frontend in its build stage)
 	docker build $(DOCKER_BUILD_METADATA_ARGS) --build-arg BUILD_HASH=$(GIT_SHA) -t "$(call IMAGE_REF,vf)" -t "$(call IMAGE_REF_TAG,vf,latest)" frontend/
 
 # ---------------------------------------------------------------------------
@@ -499,15 +498,9 @@ test-integration: ## Run integration tests (requires running cluster)
 	uv run pytest tests/integration --tb=short -q
 
 test-runtime-matrix: ## Destructively qualify every shipped session against the live runtime
-	@VS_API_HOST="$${VS_API_HOST:-$$( \
-		api_node="$$(kubectl get pod -n '$(NAMESPACE)' -l app=nodalarc-vs-api \
-			-o jsonpath='{.items[0].spec.nodeName}')"; \
-		kubectl get node "$$api_node" \
-			-o jsonpath='{.status.addresses[?(@.type=="InternalIP")].address}' \
-	)}"; \
+	@VS_API_HOST="$${VS_API_HOST:-}"; \
 	if [ -z "$$VS_API_HOST" ]; then \
-		echo "[runtime-matrix] ERROR: unable to discover the VS-API node address" >&2; \
-		exit 1; \
+		VS_API_HOST="$$(LIB_PREFIX=runtime-matrix bash -c '. scripts/na-lib.sh && discover_vs_api "$$1" 120 >&2 && printf "%s" "$${api_base#http://}"' _ '$(NAMESPACE)')" || exit 1; \
 	fi; \
 	case "$$VS_API_HOST" in *:*) ;; *) VS_API_HOST="$$VS_API_HOST:8080" ;; esac; \
 	echo "[runtime-matrix] VS-API: http://$$VS_API_HOST"; \

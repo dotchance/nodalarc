@@ -30,7 +30,8 @@ HELM_EXTRA_ARGS ?=
 
 # --- Multi-node setup ---
 # REGISTRY_HOST is the hostname:port Kubernetes nodes pull from.
-# REGISTRY_PREFIX is derived by the Makefile; do not set it independently.
+# The image prefix is derived from REGISTRY_HOST by the lifecycle scripts;
+# a REGISTRY_PREFIX setting is refused.
 #
 # Empty REGISTRY_HOST means single-node direct import.
 # Non-empty REGISTRY_HOST means registry-backed image distribution.

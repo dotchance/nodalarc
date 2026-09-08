@@ -9,6 +9,10 @@ PLATFORM_CONFIG="${PLATFORM_CONFIG:-configs/platform.yaml}"
 KUBECONFIG="${KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}"
 SHIPPED_CATALOG_ROOT="${SHIPPED_CATALOG_ROOT:-catalog/nodalarc}"
 export KUBECONFIG
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=scripts/na-lib.sh
+. "$ROOT_DIR/scripts/na-lib.sh"
+LIB_PREFIX="session"
 
 if [ ! -f "$DEFAULT_SESSION" ]; then
     echo "[session] ERROR: session file does not exist: $DEFAULT_SESSION" >&2
@@ -58,76 +62,21 @@ echo "[session] Placement policy: $placement_policy"
 
 wait_platform_ready() {
     local timeout="${1:-120}"
-    local elapsed=0 total avail ds_desired ds_ready not_running
-
+    local elapsed=0
     echo "[session] Waiting for platform rollout to settle (timeout ${timeout}s)..."
     while [ "$elapsed" -lt "$timeout" ]; do
-        total="$(kubectl get deployments -n "$NAMESPACE" --no-headers 2>/dev/null | wc -l | tr -d ' ')"
-        avail="$(kubectl get deployments -n "$NAMESPACE" --no-headers 2>/dev/null | awk '{if ($4+0 >= 1) c++} END {print c+0}')"
-        ds_desired="$(kubectl get ds nodalarc-node-agent -n "$NAMESPACE" -o jsonpath='{.status.desiredNumberScheduled}' 2>/dev/null || echo 0)"
-        ds_ready="$(kubectl get ds nodalarc-node-agent -n "$NAMESPACE" -o jsonpath='{.status.numberReady}' 2>/dev/null || echo 0)"
-        not_running="$(
-            kubectl get pods -n "$NAMESPACE" --no-headers 2>/dev/null \
-                | grep -E "nodalarc-|nodalpath-|ome-" \
-                | grep -v Running \
-                | grep -v Completed || true
-        )"
-
-        if [ "$total" -gt 0 ] \
-            && [ "$avail" -eq "$total" ] \
-            && [ "$ds_ready" -eq "$ds_desired" ] \
-            && [ "$ds_desired" -gt 0 ] \
-            && [ -z "$not_running" ]; then
+        if platform_converged "$NAMESPACE"; then
             echo ""
-            echo "[session] Platform ready: $total deployments available, $ds_ready/$ds_desired Node Agent pods running."
+            echo "[session] Platform ready: $PLATFORM_CONVERGED_SUMMARY."
             return 0
         fi
-
         sleep 2
         elapsed=$((elapsed + 2))
-        printf '\r[session]   Platform: deployments %s/%s, Node Agents %s/%s ready (%ss/%ss)' \
-            "$avail" "$total" "$ds_ready" "$ds_desired" "$elapsed" "$timeout"
+        printf '\r[session]   %s (%ss/%ss)' "$PLATFORM_CONVERGED_SUMMARY" "$elapsed" "$timeout"
     done
-
     echo ""
     echo "[session] ERROR: platform rollout did not settle after ${timeout}s" >&2
-    if [ -n "${not_running:-}" ]; then
-        echo "$not_running" >&2
-    fi
-    exit 1
-}
-
-discover_vs_api() {
-    local timeout="${1:-120}"
-    local elapsed=0 api_node api_ip token_json
-
-    echo "[session] Discovering VS-API (timeout ${timeout}s)..."
-    while [ "$elapsed" -lt "$timeout" ]; do
-        api_node="$(kubectl get pod -n "$NAMESPACE" -l app=nodalarc-vs-api -o jsonpath='{.items[0].spec.nodeName}' 2>/dev/null || true)"
-        api_ip=""
-        if [ -n "$api_node" ]; then
-            api_ip="$(kubectl get node "$api_node" -o jsonpath='{.status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null || true)"
-        fi
-        if [ -n "$api_ip" ]; then
-            token_json="$(curl -fsS "http://$api_ip:8080/api/v1/auth/token" 2>/dev/null || true)"
-            api_token="$(
-                printf '%s' "$token_json" \
-                    | python3 -c 'import json, sys; print(json.load(sys.stdin).get("token", ""))' \
-                        2>/dev/null || true
-            )"
-            if [ -n "$api_token" ]; then
-                api_base="http://$api_ip:8080"
-                echo "[session] VS-API ready: $api_base"
-                return 0
-            fi
-        fi
-        sleep 2
-        elapsed=$((elapsed + 2))
-        printf '\r[session]   VS-API not reachable yet (%ss/%ss)' "$elapsed" "$timeout"
-    done
-
-    echo ""
-    echo "[session] ERROR: VS-API was not reachable after ${timeout}s" >&2
+    printf '%s' "$PLATFORM_PROBLEMS" >&2
     exit 1
 }
 
@@ -303,7 +252,7 @@ if [ "$waited" -gt 0 ]; then
     echo ""
 fi
 
-discover_vs_api 120
+discover_vs_api "$NAMESPACE" 120
 
 echo "[session] Reviewing the installed catalog closure..."
 if ! http_status="$(

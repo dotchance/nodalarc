@@ -36,27 +36,21 @@ fi
 logical_name="$1"
 resource="$2"
 
-helm_key_for() {
-    case "$1" in
-        ome) echo "ome" ;;
-        scheduler) echo "scheduler" ;;
-        node-agent) echo "nodeAgent" ;;
-        vs-api) echo "vsApi" ;;
-        operator) echo "operator" ;;
-        vf) echo "vf" ;;
-        frr) echo "frr" ;;
-        probe) echo "probe" ;;
-        *)
-            echo "na-deploy-service: no Helm image key for logical name '$1'" >&2
-            exit 2
-            ;;
-    esac
-}
+# shellcheck source=scripts/na-lib.sh
+. "$ROOT_DIR/scripts/na-lib.sh"
+LIB_PREFIX="deploy:$logical_name"
 
+# The inventory owns the Helm key and the Kubernetes resource of every
+# service. The resource argument still arrives from the Makefile target;
+# until that argument goes, it must agree with the owner.
+owned_resource="$(bash "$ROOT_DIR/scripts/na-images.sh" resource-for "$logical_name")"
+if [ "$resource" != "$owned_resource" ]; then
+    echo "[deploy:$logical_name] ERROR: resource argument '$resource' disagrees with the inventory's '$owned_resource'" >&2
+    exit 2
+fi
+helm_key="$(bash "$ROOT_DIR/scripts/na-images.sh" helm-key-for "$logical_name")"
 image="$(bash "$ROOT_DIR/scripts/na-images.sh" image-for "$logical_name")"
-helm_key="$(helm_key_for "$logical_name")"
-record="$(bash "$ROOT_DIR/scripts/na-mode.sh")"
-IFS=$'\t' read -r MODE_RESOLVED REGISTRY_HOST_RESOLVED REGISTRY_PREFIX_RESOLVED NODE_COUNT MIRROR_THIRD_PARTY_RESOLVED <<< "$record"
+mode_record_load "$(bash "$ROOT_DIR/scripts/na-mode.sh")"
 
 if ! kubectl get "$resource" -n "$NAMESPACE" >/dev/null 2>&1; then
     echo "[deploy:$logical_name] ERROR: resource does not exist: $resource in namespace $NAMESPACE" >&2

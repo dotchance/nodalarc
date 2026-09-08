@@ -766,21 +766,31 @@ def test_platform_upgrade_has_no_legacy_session_migration_preflight() -> None:
 
 
 def test_platform_wait_requires_complete_deployment_and_daemonset_rollouts() -> None:
-    script = (ROOT / "scripts/na-install-platform.sh").read_text()
+    """One readiness rule, in scripts/na-lib.sh, applied by the installer, the session
+    script and the status script; none of them keeps a copy."""
+    lib = (ROOT / "scripts/na-lib.sh").read_text()
+    installer = (ROOT / "scripts/na-install-platform.sh").read_text()
+    session = (ROOT / "scripts/na-session.sh").read_text()
+    status = (ROOT / "scripts/na-status.sh").read_text()
 
-    assert "custom-columns=GEN:.metadata.generation,OBS:.status.observedGeneration" in script
-    assert "TOTAL:.status.replicas" in script
-    assert "TERM:.status.terminatingReplicas" in script
-    assert "$1 == $2 && $3 == $4 && $3 == $5 && $3 == $6 && $3 == $7" in script
-    assert ".status.currentNumberScheduled" in script
-    assert ".status.updatedNumberScheduled" in script
-    assert ".status.numberAvailable" in script
-    assert ".status.numberMisscheduled" in script
-    assert '"$ds_generation" -eq "$ds_observed"' in script
-    assert "-o jsonpath='{.status.phase}'" in script
-    assert "-o jsonpath='{.status.message}'" in script
-    assert "current-session is invalid; platform rollout cannot prove readiness" in script
-    assert "make session DEFAULT_SESSION=<catalog session YAML>" in script
+    assert "custom-columns=GEN:.metadata.generation,OBS:.status.observedGeneration" in lib
+    assert "TOTAL:.status.replicas" in lib
+    assert "TERM:.status.terminatingReplicas" in lib
+    assert lib.count("$1 == $2 && $3 == $4 && $3 == $5 && $3 == $6 && $3 == $7") == 2
+    assert ".status.currentNumberScheduled" in lib
+    assert ".status.updatedNumberScheduled" in lib
+    assert ".status.numberAvailable" in lib
+    assert ".status.numberMisscheduled" in lib
+    assert "list-platform-resources" in lib
+    assert "-o jsonpath='{.status.phase}'" in lib
+    assert "-o jsonpath='{.status.message}'" in lib
+    for consumer in (installer, session, status):
+        assert 'platform_converged "$NAMESPACE"' in consumer
+        assert "custom-columns=GEN:" not in consumer
+        assert "availableReplicas" not in consumer
+    assert 'session_failed "$NAMESPACE"' in installer
+    assert "current-session is invalid; platform rollout cannot prove readiness" in installer
+    assert "make session DEFAULT_SESSION=<catalog session YAML>" in installer
 
 
 def test_status_uses_workload_generation_readiness_not_pod_phase_counts() -> None:
@@ -788,14 +798,9 @@ def test_status_uses_workload_generation_readiness_not_pod_phase_counts() -> Non
 
     assert "status.get('sessionName')" in script
     assert "yaml.safe_load" not in script
-    assert "NAME:.metadata.name,GEN:.metadata.generation,OBS:.status.observedGeneration" in script
-    assert "TOTAL:.status.replicas" in script
-    assert "TERM:.status.terminatingReplicas" in script
-    assert "$2 == $3 && $4 == $5 && $4 == $6 && $4 == $7 && $4 == $8" in script
-    assert ".status.currentNumberScheduled" in script
-    assert ".status.updatedNumberScheduled" in script
-    assert ".status.numberMisscheduled" in script
-    assert "deployments converged" in script
+    assert 'platform_converged "$NAMESPACE"' in script
+    assert "PLATFORM_CONVERGED_SUMMARY" in script
+    assert "custom-columns=NAME:.metadata.name,GEN:" not in script
     assert "retained rollout replicas" in script
 
 

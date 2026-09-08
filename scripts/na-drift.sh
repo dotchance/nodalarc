@@ -19,21 +19,21 @@ NAMESPACE="${NAMESPACE:-nodalarc}"
 export TAG="${TAG:-$(bash "$ROOT_DIR/scripts/na-tag.sh")}"
 CHECK_MODE="${1:-}"
 
-# logical-name : k8s resource (kept in step with the Makefile deploy targets)
-SERVICES=(
-    "ome:deployment/ome"
-    "scheduler:deployment/nodalarc-scheduler"
-    "node-agent:daemonset/nodalarc-node-agent"
-    "vs-api:deployment/nodalarc-vs-api"
-    "operator:deployment/nodalarc-operator"
-    "vf:deployment/nodalarc-vf"
-)
-
+# The service list comes from the image inventory: every required workload
+# the tree builds (pinned upstream images have no tree tag to drift from).
+# The gate never passes on an inventory it could not read: a failed or empty
+# read is drift, because nothing was checked.
+if ! resources="$(bash "$ROOT_DIR/scripts/na-images.sh" list-platform-resources)" || [ -z "$resources" ]; then
+    echo "Platform drift cannot be checked: the image inventory did not answer." >&2
+    exit 1
+fi
 drifted=0
 rows=""
-for entry in "${SERVICES[@]}"; do
-    logical="${entry%%:*}"
-    resource="${entry#*:}"
+checked=0
+while IFS=$'\t' read -r logical resource source; do
+    [ -n "$logical" ] || continue
+    [ "$source" = "built" ] || continue
+    checked=$((checked + 1))
     tree_ref="$(bash "$ROOT_DIR/scripts/na-images.sh" image-for "$logical" 2>/dev/null || echo "?")"
     deployed_ref="$(kubectl get "$resource" -n "$NAMESPACE" \
         -o jsonpath='{.spec.template.spec.containers[?(@.name!="wait-nats-streams")].image}' 2>/dev/null \
@@ -51,7 +51,11 @@ for entry in "${SERVICES[@]}"; do
         drifted=1
     fi
     rows+="$logical|${tree_ref##*:}|${deployed_ref##*:}|$marker"$'\n'
-done
+done <<< "$resources"
+if [ "$checked" -eq 0 ]; then
+    echo "Platform drift cannot be checked: the image inventory names no built workload." >&2
+    exit 1
+fi
 
 # Session pods (FRR et al) change rarely by design; show the deployed FRR
 # tag for visibility without gating on it.

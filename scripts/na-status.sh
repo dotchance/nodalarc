@@ -6,6 +6,9 @@ set -euo pipefail
 
 NAMESPACE="${NAMESPACE:-nodalarc}"
 DEFAULT_SESSION="${DEFAULT_SESSION:-catalog/nodalarc/sessions/earth-leo-simple.yaml}"
+# shellcheck source=scripts/na-lib.sh
+. "$(dirname "$0")/na-lib.sh"
+LIB_PREFIX="status"
 REGISTRY_HOST="${REGISTRY_HOST:-}"
 TAG="${TAG:-dev}"
 
@@ -188,35 +191,12 @@ if [ -z "$PLATFORM" ]; then
     echo "  NOT RUNNING"
     echo "  Run: make install"
 else
-    DEPLOYMENT_ROWS="$(
-        kubectl get deployments -n "$NAMESPACE" --no-headers \
-            -o custom-columns=NAME:.metadata.name,GEN:.metadata.generation,OBS:.status.observedGeneration,DES:.spec.replicas,TOTAL:.status.replicas,UPD:.status.updatedReplicas,READY:.status.readyReplicas,AVAIL:.status.availableReplicas,TERM:.status.terminatingReplicas \
-            2>/dev/null || true
-    )"
-    DEPLOYMENT_TOTAL="$(printf '%s\n' "$DEPLOYMENT_ROWS" | awk 'NF {count++} END {print count+0}')"
-    DEPLOYMENT_CONVERGED="$(
-        printf '%s\n' "$DEPLOYMENT_ROWS" \
-            | awk '$2 == $3 && $4 == $5 && $4 == $6 && $4 == $7 && $4 == $8 && ($9 == "<none>" || $9 == 0) {count++} END {print count+0}'
-    )"
-    DS_ROW="$(
-        kubectl get ds nodalarc-node-agent -n "$NAMESPACE" --no-headers \
-            -o custom-columns=GEN:.metadata.generation,OBS:.status.observedGeneration,DES:.status.desiredNumberScheduled,CURRENT:.status.currentNumberScheduled,UPD:.status.updatedNumberScheduled,READY:.status.numberReady,AVAIL:.status.numberAvailable,MISSCHEDULED:.status.numberMisscheduled \
-            2>/dev/null || true
-    )"
-    DS_DESIRED="$(printf '%s\n' "$DS_ROW" | awk 'NF {print $3+0}')"
-    DS_READY="$(printf '%s\n' "$DS_ROW" | awk 'NF {print $6+0}')"
-    DS_CONVERGED="$(
-        printf '%s\n' "$DS_ROW" \
-            | awk 'NF && $1 == $2 && $3 == $4 && $3 == $5 && $3 == $6 && $3 == $7 && $8 == 0 {print 1; found=1} END {if (!found) print 0}'
-    )"
-    if [ "$DEPLOYMENT_TOTAL" -gt 0 ] \
-        && [ "$DEPLOYMENT_CONVERGED" -eq "$DEPLOYMENT_TOTAL" ] \
-        && [ "$DS_CONVERGED" -eq 1 ] \
-        && [ "$DS_DESIRED" -gt 0 ]; then
-        echo "  Running ($DEPLOYMENT_CONVERGED/$DEPLOYMENT_TOTAL deployments converged; $DS_READY/$DS_DESIRED Node Agents ready)"
+    if platform_converged "$NAMESPACE"; then
+        echo "  Running ($PLATFORM_CONVERGED_SUMMARY)"
         PLATFORM_HEALTHY=true
     else
-        echo "  DEGRADED ($DEPLOYMENT_CONVERGED/$DEPLOYMENT_TOTAL deployments converged; $DS_READY/$DS_DESIRED Node Agents ready)"
+        echo "  DEGRADED ($PLATFORM_CONVERGED_SUMMARY)"
+        printf '%s' "$PLATFORM_PROBLEMS" | sed 's/^/    /'
         IMG_PULL=$(echo "$PLATFORM" | grep -c "ImagePull\|ErrImagePull" || true)
         CRASH=$(echo "$PLATFORM" | grep -c "CrashLoopBackOff\|Error" || true)
 

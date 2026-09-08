@@ -11,8 +11,10 @@ else
     SUDO_CTR_CMD=()
 fi
 
-record="$(bash "$ROOT_DIR/scripts/na-mode.sh")"
-IFS=$'\t' read -r MODE_RESOLVED REGISTRY_HOST_RESOLVED REGISTRY_PREFIX_RESOLVED NODE_COUNT MIRROR_THIRD_PARTY_RESOLVED <<< "$record"
+# shellcheck source=scripts/na-lib.sh
+. "$ROOT_DIR/scripts/na-lib.sh"
+LIB_PREFIX="preflight"
+mode_record_load "$(bash "$ROOT_DIR/scripts/na-mode.sh")"
 
 image_available_in_containerd() {
     local image="$1"

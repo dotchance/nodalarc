@@ -13,10 +13,13 @@ export KUBECONFIG
 
 usage() {
     cat <<'EOF'
-usage: na-mode.sh [resolve]
+usage: na-mode.sh [resolve] [--no-cluster]
 
-Prints one tab-separated record:
-mode<TAB>registry_host<TAB>registry_prefix<TAB>node_count<TAB>mirror_third_party
+Prints one key=value record, one key per line:
+mode, registry_host, registry_prefix, node_count, mirror_third_party
+
+--no-cluster skips registry discovery and the node count (node_count=0);
+it is for commands that must not touch the cluster.
 EOF
 }
 
@@ -33,18 +36,22 @@ node_count() {
     printf '%s\n' "$nodes" | awk 'NF {count++} END {print count + 0}'
 }
 
-case "${1:-resolve}" in
-    resolve) ;;
-    -h|--help|help)
-        usage
-        exit 0
-        ;;
-    *)
-        echo "na-mode: unknown command: $1" >&2
-        usage >&2
-        exit 2
-        ;;
-esac
+NO_CLUSTER=0
+for arg in "$@"; do
+    case "$arg" in
+        resolve) ;;
+        --no-cluster) NO_CLUSTER=1 ;;
+        -h|--help|help)
+            usage
+            exit 0
+            ;;
+        *)
+            echo "na-mode: unknown command: $arg" >&2
+            usage >&2
+            exit 2
+            ;;
+    esac
+done
 
 case "$MODE" in
     auto|single-node|multi-node) ;;
@@ -59,15 +66,18 @@ if [ -n "$REGISTRY_PREFIX" ] && [ -z "$REGISTRY_HOST" ]; then
     exit 2
 fi
 
-if [ -z "$REGISTRY_HOST" ] && [ "$MODE" = "auto" ]; then
-    detected="$(bash "$ROOT_DIR/scripts/detect-registry.sh" 2>/dev/null || true)"
-    if [ -n "$detected" ]; then
-        REGISTRY_HOST="$detected"
-        echo "na-mode: inferred REGISTRY_HOST=$REGISTRY_HOST from K3s registries.yaml" >&2
+if [ "$NO_CLUSTER" -eq 1 ]; then
+    NODE_COUNT=0
+else
+    if [ -z "$REGISTRY_HOST" ] && [ "$MODE" = "auto" ]; then
+        detected="$(bash "$ROOT_DIR/scripts/detect-registry.sh" 2>/dev/null || true)"
+        if [ -n "$detected" ]; then
+            REGISTRY_HOST="$detected"
+            echo "na-mode: inferred REGISTRY_HOST=$REGISTRY_HOST from K3s registries.yaml" >&2
+        fi
     fi
+    NODE_COUNT="$(node_count)"
 fi
-
-NODE_COUNT="$(node_count)"
 
 case "$MODE" in
     single-node)
@@ -101,7 +111,7 @@ case "$MODE" in
         ;;
 esac
 
-printf '%s\t%s\t%s\t%s\t%s\n' \
+printf 'mode=%s\nregistry_host=%s\nregistry_prefix=%s\nnode_count=%s\nmirror_third_party=%s\n' \
     "$RESOLVED_MODE" \
     "$RESOLVED_HOST" \
     "$RESOLVED_PREFIX" \

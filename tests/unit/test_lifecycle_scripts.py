@@ -226,11 +226,12 @@ def test_session_readiness_requires_reviewed_transition_and_live_pod_counts() ->
     assert '[ "$wired_pods" != "$expected_pods" ]' in script
     assert "live pod count is stale" in script
     assert "Waiting for platform rollout to settle" in script
+    assert 'platform_converged "$NAMESPACE"' in script
+    assert "availableReplicas" not in script
     assert "Computing placement policy" in script
     assert "verify_session_placement" in script
     assert "expected session pods on" in script
     assert "Placement verified" in script
-    assert 'grep -E "nodalarc-|nodalpath-|ome-"' in script
     assert "from nodalarc.platform_config import compute_pod_placement" in script
     assert "nodalarc_operator.session_deployer" not in script
 
@@ -251,3 +252,222 @@ def test_install_passes_node_agent_host_network_cidrs_to_helm() -> None:
     assert "nats.hostNetworkHost=$nats_host" in script
     assert "/32" in script
     assert "/128" in script
+
+
+def _lib_call(body: str, *, path_dir: Path, env: dict[str, str] | None = None):
+    """Run a snippet with scripts/na-lib.sh sourced, the way the lifecycle scripts do."""
+    return _run(["bash", "-c", f". scripts/na-lib.sh; {body}"], env=env, path_dir=path_dir)
+
+
+def test_mode_record_keeps_empty_registry_fields(tmp_path: Path) -> None:
+    """A single-node record has an empty host and prefix; the parser must not collapse them."""
+    result = _lib_call(
+        'mode_record_load "$(bash scripts/na-mode.sh --no-cluster)"; '
+        'printf "%s|%s|%s|%s\n" "$MODE_RESOLVED" "$REGISTRY_HOST_RESOLVED" "$REGISTRY_PREFIX_RESOLVED" "$NODE_COUNT"',
+        env={"MODE": "single-node"},
+        path_dir=tmp_path,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "single-node|||0"
+
+
+def test_mode_record_multi_node_without_cluster(tmp_path: Path) -> None:
+    result = _lib_call(
+        'mode_record_load "$(bash scripts/na-mode.sh --no-cluster)"; '
+        'printf "%s|%s|%s\n" "$MODE_RESOLVED" "$REGISTRY_HOST_RESOLVED" "$REGISTRY_PREFIX_RESOLVED"',
+        env={"MODE": "auto", "REGISTRY_HOST": "registry.local:5000"},
+        path_dir=tmp_path,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "multi-node|registry.local:5000|registry.local:5000/"
+
+
+def test_unknown_mode_is_refused_on_the_no_cluster_path() -> None:
+    result = _run(
+        ["bash", "scripts/na-images.sh", "list-build-images"],
+        env={"NA_IMAGES_NO_CLUSTER": "1", "MODE": "bogus"},
+    )
+    assert result.returncode != 0
+    assert "MODE must be auto, single-node, or multi-node" in result.stderr
+
+
+def test_mode_record_parser_refuses_a_foreign_key(tmp_path: Path) -> None:
+    result = _lib_call(
+        'mode_record_load "mode=single-node\nnode_count=0\nregistry=x"', path_dir=tmp_path
+    )
+    assert result.returncode != 0
+    assert "unknown mode record key" in result.stderr
+
+
+def _kubectl_stub(path: Path, rows: dict[str, str]) -> None:
+    """A kubectl that answers `get deployment NAME` and `get daemonset NAME` from ROWS
+    (resource -> custom-columns row); a resource absent from ROWS fails like kubectl does."""
+    cases = "\n".join(
+        f'  "{kind} {name}") printf "%s\\n" "{row}"; exit 0 ;;'
+        for (kind, name), row in rows.items()
+    )
+    _stub(
+        path,
+        "kubectl",
+        f"""
+case "$2 $3" in
+{cases}
+  *) exit 1 ;;
+esac
+""",
+    )
+
+
+_CONVERGED_DEPLOYMENT = "1 1 1 1 1 1 1 <none>"
+_ROLLING_DEPLOYMENT = "2 1 1 2 1 1 1 <none>"
+_CONVERGED_DAEMONSET = "1 1 3 3 3 3 3 0"
+_REQUIRED = {
+    ("deployment", "ome"),
+    ("deployment", "nodalarc-scheduler"),
+    ("daemonset", "nodalarc-node-agent"),
+    ("deployment", "nodalarc-vs-api"),
+    ("deployment", "nodalarc-operator"),
+    ("deployment", "nodalarc-vf"),
+    ("deployment", "nodalarc-nats"),
+}
+
+
+def _all_converged() -> dict[tuple[str, str], str]:
+    return {
+        key: (_CONVERGED_DAEMONSET if key[0] == "daemonset" else _CONVERGED_DEPLOYMENT)
+        for key in _REQUIRED
+    }
+
+
+def test_platform_converged_when_every_required_workload_is_converged(tmp_path: Path) -> None:
+    _kubectl_stub(tmp_path, _all_converged())
+    result = _lib_call(
+        'platform_converged nodalarc; rc=$?; echo "rc=$rc $PLATFORM_CONVERGED_SUMMARY"; exit 0',
+        env={"NA_IMAGES_NO_CLUSTER": "1"},
+        path_dir=tmp_path,
+    )
+    assert result.stdout.strip() == "rc=0 6/6 deployments converged; 3/3 Node Agents ready", (
+        result.stderr
+    )
+
+
+def test_platform_not_converged_when_a_required_workload_is_missing(tmp_path: Path) -> None:
+    """A missing required deployment must not disappear from the count."""
+    rows = _all_converged()
+    del rows[("deployment", "nodalarc-nats")]
+    _kubectl_stub(tmp_path, rows)
+    result = _lib_call(
+        'platform_converged nodalarc; rc=$?; echo "rc=$rc $PLATFORM_CONVERGED_SUMMARY"; printf "%s" "$PLATFORM_PROBLEMS"; exit 0',
+        env={"NA_IMAGES_NO_CLUSTER": "1"},
+        path_dir=tmp_path,
+    )
+    assert result.stdout.startswith("rc=1 5/6 deployments converged"), result.stdout
+    assert "nats: deployment/nodalarc-nats is missing" in result.stdout
+
+
+def test_platform_not_converged_while_a_workload_rolls(tmp_path: Path) -> None:
+    rows = _all_converged()
+    rows[("deployment", "nodalarc-vs-api")] = _ROLLING_DEPLOYMENT
+    _kubectl_stub(tmp_path, rows)
+    result = _lib_call(
+        'platform_converged nodalarc; rc=$?; echo "rc=$rc"; printf "%s" "$PLATFORM_PROBLEMS"; exit 0',
+        env={"NA_IMAGES_NO_CLUSTER": "1"},
+        path_dir=tmp_path,
+    )
+    assert result.stdout.startswith("rc=1"), result.stdout
+    assert "vs-api: deployment/nodalarc-vs-api is not converged" in result.stdout
+
+
+def test_deploy_service_refuses_a_resource_that_disagrees_with_the_inventory(
+    tmp_path: Path,
+) -> None:
+    """The refusal precedes every docker, helm and kubectl call."""
+    for tool in ("docker", "helm", "kubectl"):
+        _stub(tmp_path, tool, 'echo "must not be called: $0 $*" >&2; exit 99')
+    result = _run(
+        ["bash", "scripts/na-deploy-service.sh", "ome", "deployment/nodalarc-ome"],
+        env={"NA_IMAGES_NO_CLUSTER": "1", "PROJECT_VERSION": "0+test"},
+        path_dir=tmp_path,
+    )
+    assert result.returncode == 2, result.stderr
+    assert "disagrees with the inventory's 'deployment/ome'" in result.stderr
+    assert "must not be called" not in result.stderr
+
+
+def _scripts_copy_with_failing_inventory(tmp_path: Path) -> Path:
+    """A copy of scripts/ whose na-images.sh fails before emitting any record."""
+    import shutil
+
+    root = tmp_path / "tree"
+    shutil.copytree(ROOT / "scripts", root / "scripts")
+    (root / "scripts" / "na-images.sh").write_text(
+        "#!/usr/bin/env bash\necho 'na-images: broken' >&2\nexit 2\n"
+    )
+    return root
+
+
+def _run_in_tree(args: list[str], *, path_dir: Path) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        args,
+        cwd=ROOT,
+        env={**os.environ, "PATH": f"{path_dir}:{os.environ['PATH']}", "TAG": "abc123"},
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
+def test_drift_gate_fails_when_the_inventory_does_not_answer(tmp_path: Path) -> None:
+    """Nothing checked is drift: the --check gate must not pass on a failed inventory."""
+    root = _scripts_copy_with_failing_inventory(tmp_path)
+    _stub(tmp_path, "kubectl", "exit 0")
+    result = _run_in_tree(
+        ["bash", str(root / "scripts" / "na-drift.sh"), "--check"], path_dir=tmp_path
+    )
+    assert result.returncode != 0
+    assert "inventory did not answer" in result.stderr
+
+
+def test_platform_converged_fails_when_the_inventory_does_not_answer(tmp_path: Path) -> None:
+    root = _scripts_copy_with_failing_inventory(tmp_path)
+    _kubectl_stub(tmp_path, _all_converged())
+    result = _run_in_tree(
+        [
+            "bash",
+            "-c",
+            f'. {root}/scripts/na-lib.sh; platform_converged nodalarc; echo "rc=$?"; printf "%s" "$PLATFORM_PROBLEMS"',
+        ],
+        path_dir=tmp_path,
+    )
+    assert result.stdout.startswith("rc=1"), result.stdout
+    assert "no workload was checked" in result.stdout
+
+
+def test_static_inventory_lookups_touch_neither_registry_nor_cluster(tmp_path: Path) -> None:
+    """The required population and the Helm key are table facts; resolving them must not
+    need a registry or a cluster, or session readiness would inherit that dependency."""
+    _stub(tmp_path, "kubectl", 'echo "kubectl must not be called: $*" >&2; exit 1')
+    for command in (
+        ["list-platform-resources"],
+        ["resource-for", "vs-api"],
+        ["helm-key-for", "vs-api"],
+    ):
+        result = _run(
+            ["bash", "scripts/na-images.sh", *command],
+            env={"MODE": "multi-node", "REGISTRY_HOST": ""},
+            path_dir=tmp_path,
+        )
+        assert result.returncode == 0, (command, result.stderr)
+        assert "must not be called" not in result.stderr
+    result = _run(
+        ["bash", "scripts/na-images.sh", "image-for", "vs-api"],
+        env={"MODE": "multi-node", "REGISTRY_HOST": ""},
+        path_dir=tmp_path,
+    )
+    assert result.returncode != 0, "an image reference still needs the transport mode"
+
+
+def test_drift_service_list_comes_from_the_inventory() -> None:
+    script = (ROOT / "scripts/na-drift.sh").read_text()
+    assert "SERVICES=(" not in script
+    assert "list-platform-resources" in script

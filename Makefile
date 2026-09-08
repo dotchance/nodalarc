@@ -19,7 +19,6 @@ REGISTRY_HOST   ?= $(shell bash scripts/detect-registry.sh 2>/dev/null)
 REGISTRY_PREFIX ?= $(if $(filter single-node,$(MODE)),,$(if $(REGISTRY_HOST),$(REGISTRY_HOST)/,))
 DEFAULT_SESSION ?= catalog/nodalarc/sessions/earth-leo-simple.yaml
 NAMESPACE       ?= nodalarc
-HELM_EXTRA_ARGS ?=
 TEST_ROOT_PYTHON ?= .venv/bin/python
 
 export KUBECONFIG
@@ -46,7 +45,6 @@ endif
 BUILD_DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)
 DOCKER_BUILD_METADATA_ARGS = --build-arg PROJECT_VERSION=$(PROJECT_VERSION) --build-arg VCS_REF=$(GIT_SHA) --build-arg BUILD_DATE=$(BUILD_DATE)
 RUNTIME_CONSTRAINTS ?= build/runtime-constraints.txt
-HELM_CONTRACT_CHART ?= build/helm/nodalarc-contract
 
 # ---------------------------------------------------------------------------
 # Image names
@@ -62,7 +60,7 @@ IMAGE_REF_TAG = $$(MODE='$(MODE)' REGISTRY_HOST='$(REGISTRY_HOST)' TAG='$(TAG)' 
 .PHONY: help all deps build load install reinstall upgrade session lint lint-policy typecheck format-diff generate-contracts check-contracts dead-code \
         test test-integration test-runtime-matrix test-builder-e2e \
         test-root ensure-frontend-deps \
-        render-helm lint-helm check-helm check-crd-server \
+        check-crd-server \
         teardown force-teardown reset-platform restart clean clean-deps clean-images \
         clean-registry purge-containerd nuke status check-registry test-backend test-frontend \
         build-frontends build-images ensure-base-images build-base-images \
@@ -192,26 +190,6 @@ check-registry: ## Report resolved REGISTRY_HOST and verify the registry is reac
 # Contract validation
 # ---------------------------------------------------------------------------
 
-render-helm: ## Assemble the versioned Helm chart through the Make facade
-	@PROJECT_VERSION='$(PROJECT_VERSION)' bash scripts/na-render-helm-chart.sh deploy/helm '$(HELM_CONTRACT_CHART)' >/dev/null
-
-lint-helm: render-helm ## Lint the exact rendered versioned chart
-	@helm lint '$(HELM_CONTRACT_CHART)' --set-string 'runtimeRelease=$(PROJECT_VERSION)'
-
-check-helm: lint-helm ## Render and lint the chart through the Make facade
-	@missing_release_error="$$(helm template nodalarc '$(HELM_CONTRACT_CHART)' --namespace '$(NAMESPACE)' --include-crds 2>&1 >/dev/null)"; \
-		status=$$?; \
-		if [ "$$status" -eq 0 ]; then \
-			echo "[check-helm] ERROR: chart rendered without required runtimeRelease" >&2; \
-			exit 1; \
-		fi; \
-		case "$$missing_release_error" in \
-			*"runtimeRelease is required"*) ;; \
-			*) printf '%s\n' "[check-helm] ERROR: missing runtimeRelease failed for an unexpected reason:" "$$missing_release_error" >&2; exit 1 ;; \
-		esac
-	@helm template nodalarc '$(HELM_CONTRACT_CHART)' --namespace '$(NAMESPACE)' --include-crds \
-		--set-string 'runtimeRelease=$(PROJECT_VERSION)' >/dev/null
-
 check-crd-server: ## Validate the ConstellationSpec CRD through the active API server
 	@kubectl apply --dry-run=server -f 'deploy/helm/crds/constellationspec.yaml' >/dev/null
 
@@ -308,10 +286,10 @@ load: ## Import images into K3s (single-node) or push to registry (multi-node)
 # common footgun where no nodes carry the nodalarc.io/node-agent=true
 # label and the DaemonSet silently schedules zero pods.
 install: ## Helm install the platform chart; refuses existing platform state
-	@ACTION=install MODE='$(MODE)' REGISTRY_HOST='$(REGISTRY_HOST)' TAG='$(TAG)' PROJECT_VERSION='$(PROJECT_VERSION)' SUDO_CTR='$(SUDO_CTR)' KUBECONFIG='$(KUBECONFIG)' NAMESPACE='$(NAMESPACE)' HELM_EXTRA_ARGS='$(HELM_EXTRA_ARGS)' bash scripts/na-install-platform.sh
+	@ACTION=install MODE='$(MODE)' REGISTRY_HOST='$(REGISTRY_HOST)' TAG='$(TAG)' PROJECT_VERSION='$(PROJECT_VERSION)' SUDO_CTR='$(SUDO_CTR)' KUBECONFIG='$(KUBECONFIG)' NAMESPACE='$(NAMESPACE)' bash scripts/na-install-platform.sh
 
 reinstall: ## Explicit destructive reinstall through official teardown
-	@ACTION=reinstall MODE='$(MODE)' REGISTRY_HOST='$(REGISTRY_HOST)' TAG='$(TAG)' PROJECT_VERSION='$(PROJECT_VERSION)' SUDO_CTR='$(SUDO_CTR)' KUBECONFIG='$(KUBECONFIG)' NAMESPACE='$(NAMESPACE)' HELM_EXTRA_ARGS='$(HELM_EXTRA_ARGS)' bash scripts/na-install-platform.sh
+	@ACTION=reinstall MODE='$(MODE)' REGISTRY_HOST='$(REGISTRY_HOST)' TAG='$(TAG)' PROJECT_VERSION='$(PROJECT_VERSION)' SUDO_CTR='$(SUDO_CTR)' KUBECONFIG='$(KUBECONFIG)' NAMESPACE='$(NAMESPACE)' bash scripts/na-install-platform.sh
 
 # ---------------------------------------------------------------------------
 # Session lifecycle and platform restarts
@@ -321,16 +299,13 @@ reinstall: ## Explicit destructive reinstall through official teardown
 # is healthy. restart is a blunt operational tool for already-installed
 # platform pods; it does not change Helm values or session state.
 
-session: ## Start a session (DEFAULT_SESSION=...); refuses a drifted platform (FORCE_SESSION=1 overrides)
-	@if [ "$(FORCE_SESSION)" != "1" ]; then \
-		MODE='$(MODE)' KUBECONFIG='$(KUBECONFIG)' NAMESPACE='$(NAMESPACE)' REGISTRY_HOST='$(REGISTRY_HOST)' TAG='$(TAG)' bash scripts/na-drift.sh --check || { \
-			echo ""; \
-			echo "[session] REFUSED: the platform is not running this tree's images."; \
-			echo "[session] Next: make deploy-<service> or make build && make load && make upgrade,"; \
-			echo "[session]       or FORCE_SESSION=1 make session to deploy against the drifted platform anyway."; \
-			exit 1; \
-		}; \
-	fi
+session: ## Start a session (DEFAULT_SESSION=...); refuses a drifted platform
+	@MODE='$(MODE)' KUBECONFIG='$(KUBECONFIG)' NAMESPACE='$(NAMESPACE)' REGISTRY_HOST='$(REGISTRY_HOST)' TAG='$(TAG)' bash scripts/na-drift.sh --check || { \
+		echo ""; \
+		echo "[session] REFUSED: the platform is not running this tree's images."; \
+		echo "[session] Next: make deploy-<service> or make build && make load && make upgrade."; \
+		exit 1; \
+	}
 	@KUBECONFIG='$(KUBECONFIG)' NAMESPACE='$(NAMESPACE)' DEFAULT_SESSION='$(DEFAULT_SESSION)' bash scripts/na-session.sh
 
 restart: ## Bounce all platform pods on their CURRENT images (no code deploy; use deploy-* to ship code)
@@ -362,7 +337,7 @@ restart: ## Bounce all platform pods on their CURRENT images (no code deploy; us
 #   git commit → make build && make load && make upgrade
 
 upgrade: ## In-place Helm upgrade (updates image tags, no teardown)
-	@ACTION=upgrade MODE='$(MODE)' REGISTRY_HOST='$(REGISTRY_HOST)' TAG='$(TAG)' PROJECT_VERSION='$(PROJECT_VERSION)' SUDO_CTR='$(SUDO_CTR)' KUBECONFIG='$(KUBECONFIG)' NAMESPACE='$(NAMESPACE)' HELM_EXTRA_ARGS='$(HELM_EXTRA_ARGS)' bash scripts/na-install-platform.sh
+	@ACTION=upgrade MODE='$(MODE)' REGISTRY_HOST='$(REGISTRY_HOST)' TAG='$(TAG)' PROJECT_VERSION='$(PROJECT_VERSION)' SUDO_CTR='$(SUDO_CTR)' KUBECONFIG='$(KUBECONFIG)' NAMESPACE='$(NAMESPACE)' bash scripts/na-install-platform.sh
 
 # ---------------------------------------------------------------------------
 # Iterative service deploys
@@ -539,8 +514,8 @@ test-runtime-matrix: ## Destructively qualify every shipped session against the 
 	PYTHONUNBUFFERED=1 PYTHONPATH=lib VS_API_HOST="$$VS_API_HOST" \
 		NODALARC_EVIDENCE_SOURCE_GIT_SHA='$(GIT_SHA)' \
 		NODALARC_EVIDENCE_SOURCE_TAG='$(TAG)' \
-		NODALARC_EXPECTED_RUNTIME_RELEASE='$(if $(E2E_RUNTIME_RELEASE),$(E2E_RUNTIME_RELEASE),$(PROJECT_VERSION))' \
-		NODALARC_EXPECTED_RUNTIME_BUILD='$(if $(E2E_RUNTIME_BUILD),$(E2E_RUNTIME_BUILD),$(TAG))' \
+		NODALARC_EXPECTED_RUNTIME_RELEASE='$(PROJECT_VERSION)' \
+		NODALARC_EXPECTED_RUNTIME_BUILD='$(TAG)' \
 		NAMESPACE='$(NAMESPACE)' \
 		uv run python tests/integration/e2e_matrix.py
 
@@ -549,8 +524,8 @@ test-builder-e2e: ## Destructively qualify Builder user: closure deployment on t
 	@NODALARC_RUN_BUILDER_E2E=1 \
 		NODALARC_EVIDENCE_SOURCE_GIT_SHA='$(GIT_SHA)' \
 		NODALARC_EVIDENCE_SOURCE_TAG='$(TAG)' \
-		NODALARC_EXPECTED_RUNTIME_RELEASE='$(if $(E2E_RUNTIME_RELEASE),$(E2E_RUNTIME_RELEASE),$(PROJECT_VERSION))' \
-		NODALARC_EXPECTED_RUNTIME_BUILD='$(if $(E2E_RUNTIME_BUILD),$(E2E_RUNTIME_BUILD),$(TAG))' \
+		NODALARC_EXPECTED_RUNTIME_RELEASE='$(PROJECT_VERSION)' \
+		NODALARC_EXPECTED_RUNTIME_BUILD='$(TAG)' \
 		NAMESPACE='$(NAMESPACE)' \
 		uv run pytest tests/integration/test_builder_catalog_deployment.py --tb=short -q -s
 

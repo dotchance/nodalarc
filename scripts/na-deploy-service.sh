@@ -15,7 +15,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 NAMESPACE="${NAMESPACE:-nodalarc}"
 HELM_RELEASE="${HELM_RELEASE:-nodalarc}"
-HELM_CHART="${HELM_CHART:-deploy/helm}"
+HELM_CHART="deploy/helm"
 # The chart ships Chart.yaml.in; render it the same way install/upgrade do.
 if [ -f "$ROOT_DIR/$HELM_CHART/Chart.yaml.in" ] || [ -f "$HELM_CHART/Chart.yaml.in" ]; then
     PROJECT_VERSION="${PROJECT_VERSION:-$(bash "$ROOT_DIR/scripts/na-project-version.sh")}"

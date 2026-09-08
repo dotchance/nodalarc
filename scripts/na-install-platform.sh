@@ -8,23 +8,10 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ACTION="${ACTION:-${1:-install}}"
 NAMESPACE="${NAMESPACE:-nodalarc}"
 HELM_RELEASE="${HELM_RELEASE:-nodalarc}"
-HELM_CHART="${HELM_CHART:-deploy/helm}"
-HELM_EXTRA_ARGS="${HELM_EXTRA_ARGS:-}"
+HELM_CHART="deploy/helm"
 PROJECT_VERSION="${PROJECT_VERSION:-}"
-ALLOW_IMAGE_ARG_OVERRIDE="${ALLOW_IMAGE_ARG_OVERRIDE:-0}"
 KUBECONFIG="${KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}"
 export KUBECONFIG
-
-managed_key_pattern='(^|[[:space:]])--set(-string)?[=[:space:]]*(images\.|imagePullPolicy|buildTag|runtimeRelease|namespace)'
-
-if [ -n "$HELM_EXTRA_ARGS" ] && [[ "$HELM_EXTRA_ARGS" =~ $managed_key_pattern ]]; then
-    if [ "$ALLOW_IMAGE_ARG_OVERRIDE" != "1" ]; then
-        echo "[install] ERROR: HELM_EXTRA_ARGS overrides managed runtime image values." >&2
-        echo "[install] Runtime images are owned by scripts/na-images.sh. Set ALLOW_IMAGE_ARG_OVERRIDE=1 only for explicit diagnostics." >&2
-        exit 2
-    fi
-    echo "[install] Runtime image contract bypassed by ALLOW_IMAGE_ARG_OVERRIDE=1." >&2
-fi
 
 case "$ACTION" in
     install|upgrade|reinstall) ;;
@@ -232,20 +219,12 @@ workload_values_file="$(mktemp /tmp/nodalarc-workload-overrides.XXXXXX.yaml)"
 trap 'rm -f "$workload_values_file"' EXIT
 bash "$ROOT_DIR/scripts/na-images.sh" workload-dev-overrides-values > "$workload_values_file"
 image_args+=("--values=$workload_values_file")
-extra_args=()
-if [ -n "$HELM_EXTRA_ARGS" ]; then
-    read -r -a extra_args <<< "$HELM_EXTRA_ARGS"
-fi
 
 helm_args=(
     "--set-string=namespace=$NAMESPACE"
     "--set-string=runtimeRelease=$PROJECT_VERSION"
+    "${image_args[@]}"
 )
-if [ "$ALLOW_IMAGE_ARG_OVERRIDE" = "1" ]; then
-    helm_args+=("${image_args[@]}" "${extra_args[@]}")
-else
-    helm_args+=("${extra_args[@]}" "${image_args[@]}")
-fi
 
 mapfile -t node_agent_ips < <(
     kubectl get nodes -l nodalarc.io/node-agent=true \

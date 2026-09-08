@@ -67,9 +67,6 @@ DRY_RUN_TARGETS = (
     "format-diff",
     "generate-contracts",
     "check-contracts",
-    "render-helm",
-    "lint-helm",
-    "check-helm",
     "check-crd-server",
     "dead-code",
     "test",
@@ -419,7 +416,6 @@ def test_helm_namespace_is_one_runtime_authority() -> None:
 
     assert '"--set-string=namespace=$NAMESPACE"' in installer
     assert '"--set-string=runtimeRelease=$PROJECT_VERSION"' in installer
-    assert "|buildTag|runtimeRelease|namespace)" in installer
     assert 'kubernetes_namespace: "{{ .Values.namespace }}"' in platform_file
     assert 'tpl (.Files.Get "files/platform.yaml") .' in platform_configmap
     assert "- {{ .Values.namespace | quote }}" in operator_template
@@ -648,16 +644,19 @@ def test_runtime_proof_services_share_product_release_identity() -> None:
         assert "value: {{ .Release.Name | quote }}" not in deployment
 
 
-def test_runtime_release_has_no_default_and_make_proves_the_required_guard() -> None:
+def test_runtime_release_has_no_default_and_the_installer_supplies_it() -> None:
+    """The chart requires runtimeRelease; only the installer supplies it, from the tree."""
     values = yaml.safe_load((ROOT / "deploy/helm/values.yaml").read_text())
-    lint_helm = _target_body("lint-helm")
-    check_helm = _target_body("check-helm")
+    installer = (ROOT / "scripts/na-install-platform.sh").read_text()
+    guarded = [
+        path.name
+        for path in sorted((ROOT / "deploy/helm/templates").glob("*.yaml"))
+        if 'required "runtimeRelease is required" .Values.runtimeRelease' in path.read_text()
+    ]
 
     assert "runtimeRelease" not in values
-    assert "--set-string 'runtimeRelease=$(PROJECT_VERSION)'" in lint_helm
-    assert "--set-string 'runtimeRelease=$(PROJECT_VERSION)'" in check_helm
-    assert 'missing_release_error="$$(helm template' in check_helm
-    assert "runtimeRelease is required" in check_helm
+    assert guarded, "no template guards runtimeRelease"
+    assert '"--set-string=runtimeRelease=$PROJECT_VERSION"' in installer
 
 
 def test_runtime_services_mount_one_atomic_session_configmap_directory() -> None:
@@ -868,13 +867,32 @@ def test_deploy_script_moves_helm_reference_and_verifies_digest() -> None:
     )
 
 
-def test_session_refuses_drifted_platform_unless_forced() -> None:
+def test_session_refuses_drifted_platform_unconditionally() -> None:
     """make session must not deploy a session onto a platform that is not
     running this tree's images - testing against stale services looks like
-    testing your change when it is not."""
+    testing your change when it is not - and no flag turns that refusal off."""
     from pathlib import Path
 
     makefile = (Path(__file__).resolve().parents[2] / "Makefile").read_text()
     session_block = makefile.split("session:")[1].split("\n\n")[0]
     assert "na-drift.sh --check" in session_block
-    assert "FORCE_SESSION" in session_block
+    assert "FORCE_SESSION" not in session_block
+
+
+def test_no_escape_control_remains_in_the_facade() -> None:
+    """Install, upgrade and deploy take no caller-supplied Helm arguments, no alternate
+    chart, no drift override and no qualification-expectation override."""
+    sources = [
+        (ROOT / "Makefile").read_text(),
+        (ROOT / "scripts/na-install-platform.sh").read_text(),
+        (ROOT / "scripts/na-deploy-service.sh").read_text(),
+    ]
+    for name in (
+        "HELM_EXTRA_ARGS",
+        "ALLOW_IMAGE_ARG_OVERRIDE",
+        "FORCE_SESSION",
+        "E2E_RUNTIME_RELEASE",
+        "E2E_RUNTIME_BUILD",
+        "HELM_CONTRACT_CHART",
+    ):
+        assert not any(name in source for source in sources), name

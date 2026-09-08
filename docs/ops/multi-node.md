@@ -28,7 +28,7 @@ Edit `config.mk`:
 REGISTRY_HOST ?= myregistry.local:5000
 ```
 
-With `REGISTRY_HOST` set, `make load` pushes NodalArc runtime images to the registry instead of importing locally. Helm image values are generated from the shared runtime image inventory, so do not duplicate image overrides in `HELM_EXTRA_ARGS`.
+With `REGISTRY_HOST` set, `make load` pushes NodalArc runtime images to the registry instead of importing locally. Helm image values are generated from the shared runtime image inventory; the installer accepts no other Helm arguments.
 
 ### 3. Build and deploy
 

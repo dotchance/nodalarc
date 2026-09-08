@@ -409,14 +409,19 @@ def test_platform_config_mounts_force_pod_rollout_on_config_change() -> None:
 
 def test_helm_namespace_is_one_runtime_authority() -> None:
     installer = (ROOT / "scripts/na-install-platform.sh").read_text()
-    platform_file = (ROOT / "deploy/helm/files/platform.yaml").read_text()
+    assembler = (ROOT / "scripts/na-render-helm-chart.sh").read_text()
     platform_configmap = (ROOT / "deploy/helm/templates/platform-configmaps.yaml").read_text()
     operator_template = (ROOT / "deploy/helm/templates/operator-deployment.yaml").read_text()
     operator_dockerfile = (ROOT / "services/nodalarc_operator/Dockerfile").read_text()
 
     assert '"--set-string=namespace=$NAMESPACE"' in installer
     assert '"--set-string=runtimeRelease=$PROJECT_VERSION"' in installer
-    assert 'kubernetes_namespace: "{{ .Values.namespace }}"' in platform_file
+    assert (
+        "python -m nodalarc.platform_config --render-chart-copy configs/platform.yaml" in assembler
+    )
+    model_module = (ROOT / "lib/nodalarc/platform_config.py").read_text()
+    assert "CHART_NAMESPACE_VALUE = '\"{{ .Values.namespace }}\"'" in model_module
+    assert not (ROOT / "deploy/helm/files/platform.yaml").exists()
     assert 'tpl (.Files.Get "files/platform.yaml") .' in platform_configmap
     assert "- {{ .Values.namespace | quote }}" in operator_template
     assert 'ENTRYPOINT ["kopf", "run", "-m", "nodalarc_operator"]' in operator_dockerfile

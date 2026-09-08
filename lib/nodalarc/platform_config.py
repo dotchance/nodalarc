@@ -19,53 +19,32 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 class PlatformConfig(BaseModel):
     """Frozen Pydantic model for platform configuration.
 
-    All fields are required — no defaults. The YAML file is the single
-    source of truth. If a field is missing, Pydantic raises ValidationError.
+    Every field here is read by a service or a script; a key the model does
+    not declare is refused, and a declared key that is missing from the file
+    fails validation. The YAML file is the single source of truth.
     """
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     # Kubernetes
     kubernetes_namespace: str
 
     # NATS JetStream
-    ome_link_state_snapshot_interval_s: float = 5.0
+    ome_link_state_snapshot_interval_s: float = Field(gt=0)
 
     # HTTP/WebSocket service ports
     vs_api_http_port: int
-    vf_static_file_server_port: int
     nodalpath_console_http_port: int
 
     # Container-internal service ports
     nodalpath_fwd_grpc_port: int
-    nodalpath_fwd_netconf_port: int
     probe_daemon_http_api_port: int
     probe_daemon_udp_data_port: int
 
-    # Deploy daemon
-    deploy_daemon_unix_socket_path: str
-
-    # Container filesystem paths
     session_data_root: str
-    frr_config_directory_in_container: str
-    frr_config_ready_sentinel_path: str
 
-    # Network infrastructure
     veth_interface_mtu_bytes: int
-    mpls_kernel_max_platform_labels: int
 
-    # Operational timeouts (seconds)
-    pod_ready_timeout_seconds: int
-    pod_termination_timeout_seconds: int
-    deploy_operation_timeout_seconds: int
-    deploy_daemon_accept_timeout_seconds: int
-    frr_config_delivery_settle_seconds: int
-
-    # Parallel execution
-    kubectl_exec_max_parallel_workers: int
-
-    # VS-API operational limits
-    vs_api_max_websocket_connections: int
     vs_api_visual_beam_falloff_exponent: float = Field(gt=0)
     vs_api_actuation_expected_latency_ms: float = Field(gt=0)
     vs_api_actuation_fault_after_ms: float = Field(gt=0)
@@ -76,16 +55,11 @@ class PlatformConfig(BaseModel):
     vs_api_playback_max_requests_per_minute: int
     vs_api_session_switch_max_requests_per_minute: int
     vs_api_introspect_max_response_bytes: int
-    vs_api_introspect_command_timeout_seconds: int
 
     # Continuous trace intervals
     trace_interval_seconds: float
     trace_interval_fast_seconds: float
     trace_fast_window_seconds: float
-
-    # System tuning
-    host_inotify_max_user_instances: int
-    host_file_descriptor_limit: int
 
     # Service host resolution — for inter-service HTTP calls (not NATS).
     # Keys: service names (vs-api, nodalpath, etc.). Values: hostnames.
@@ -201,3 +175,88 @@ def reset_platform_config() -> None:
     """Reset the singleton (for tests only)."""
     global _config
     _config = None
+
+
+CHART_NAMESPACE_VALUE = '"{{ .Values.namespace }}"'
+_TEMPLATED_FORMS = (None, '"', "'")
+
+
+def _single_entry(node: yaml.MappingNode, key: str) -> tuple[yaml.ScalarNode, yaml.Node]:
+    entries = [
+        (key_node, value_node)
+        for key_node, value_node in node.value
+        if isinstance(key_node, yaml.ScalarNode) and key_node.value == key
+    ]
+    if len(entries) != 1:
+        raise ValueError(f"{key!r} must appear exactly once, found {len(entries)}")
+    return entries[0]
+
+
+def render_chart_copy(source_text: str) -> str:
+    """The chart's copy of the platform file: the shipped text, validated, with
+    the value of ``platform.kubernetes_namespace`` templated to the release
+    namespace.
+
+    Validity is the model's, applied to the file as it is. The field is
+    located as a YAML node, so its key may be quoted or spaced freely and a
+    trailing comment survives. The value must be a plain or quoted scalar on
+    one line; a block scalar, anchor, alias or tag is refused before any
+    output, since replacing part of such a value would not yield the same
+    document with one value changed.
+    """
+    loader = yaml.SafeLoader(source_text)
+    try:
+        root = loader.get_single_node()
+        data = loader.construct_document(root) if root is not None else None
+    finally:
+        loader.dispose()
+    if (
+        not isinstance(root, yaml.MappingNode)
+        or not isinstance(data, dict)
+        or "platform" not in data
+    ):
+        raise ValueError("platform configuration must be a mapping with a 'platform' key")
+    PlatformConfig.model_validate(data["platform"])
+    _, platform_node = _single_entry(root, "platform")
+    if not isinstance(platform_node, yaml.MappingNode):
+        raise ValueError("'platform' must be a mapping")
+    key_node, value_node = _single_entry(platform_node, "kubernetes_namespace")
+    unsupported = ValueError(
+        "platform.kubernetes_namespace must be a plain or quoted scalar on one line; "
+        "block scalars, anchors, aliases and tags are not templated"
+    )
+    if not isinstance(value_node, yaml.ScalarNode) or value_node.style not in _TEMPLATED_FORMS:
+        raise unsupported
+    start, end = value_node.start_mark.index, value_node.end_mark.index
+    if value_node.start_mark.line != value_node.end_mark.line or start <= key_node.end_mark.index:
+        raise unsupported
+    lead = source_text[start]
+    if (value_node.style is None and lead in "&!*") or (
+        value_node.style is not None and lead != value_node.style
+    ):
+        raise unsupported
+    return source_text[:start] + CHART_NAMESPACE_VALUE + source_text[end:]
+
+
+def _main(argv: list[str] | None = None) -> int:
+    import argparse
+    import sys
+
+    parser = argparse.ArgumentParser(
+        prog="python -m nodalarc.platform_config",
+        description="Render the chart's copy of the platform configuration.",
+    )
+    parser.add_argument(
+        "--render-chart-copy",
+        metavar="PATH",
+        help="validate PATH and write it to stdout with kubernetes_namespace templated",
+    )
+    args = parser.parse_args(argv)
+    if not args.render_chart_copy:
+        parser.error("nothing to do: pass --render-chart-copy PATH")
+    sys.stdout.write(render_chart_copy(Path(args.render_chart_copy).read_text(encoding="utf-8")))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(_main())

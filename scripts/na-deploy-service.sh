@@ -58,6 +58,18 @@ if ! kubectl get "$resource" -n "$NAMESPACE" >/dev/null 2>&1; then
     exit 1
 fi
 
+# A single-service deploy moves one image and nothing else. The assembled
+# chart carries the shared configuration every platform pod mounts; if it
+# differs from the release's chart, applying it would roll untouched pods
+# onto configuration their images were not built for. That change goes
+# through make upgrade, which moves every image with it.
+if ! release_chart_matches "$NAMESPACE" "$HELM_RELEASE" "$HELM_CHART"; then
+    echo "[deploy:$logical_name] ERROR: the chart differs from the deployed release; a single-service deploy cannot carry chart changes." >&2
+    printf '%s\n' "$RELEASE_CHART_DIFF" | sed 's/^/  /' >&2
+    echo "[deploy:$logical_name] Next: make build && make load && make upgrade (every image moves with the chart)." >&2
+    exit 1
+fi
+
 if ! docker image inspect "$image" >/dev/null 2>&1; then
     echo "[deploy:$logical_name] ERROR: local image is missing: $image" >&2
     echo "[deploy:$logical_name] Next: make build-$logical_name (or make build)." >&2

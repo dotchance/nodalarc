@@ -20,27 +20,15 @@ ROOT = Path(__file__).resolve().parents[2]
 def _valid_config_dict() -> dict:
     return {
         "kubernetes_namespace": "nodalarc",
+        "ome_link_state_snapshot_interval_s": 5.0,
         "default_service_host": "127.0.0.1",
         "vs_api_http_port": 8080,
-        "vf_static_file_server_port": 8081,
         "nodalpath_console_http_port": 3100,
         "nodalpath_fwd_grpc_port": 50051,
-        "nodalpath_fwd_netconf_port": 830,
         "probe_daemon_http_api_port": 9100,
         "probe_daemon_udp_data_port": 19100,
-        "deploy_daemon_unix_socket_path": "/tmp/nodal-deploy.sock",
         "session_data_root": "/var/nodalarc/sessions",
-        "frr_config_directory_in_container": "/etc/frr",
-        "frr_config_ready_sentinel_path": "/etc/frr/.config-ready",
         "veth_interface_mtu_bytes": 9000,
-        "mpls_kernel_max_platform_labels": 100000,
-        "pod_ready_timeout_seconds": 600,
-        "pod_termination_timeout_seconds": 120,
-        "deploy_operation_timeout_seconds": 600,
-        "deploy_daemon_accept_timeout_seconds": 660,
-        "frr_config_delivery_settle_seconds": 5,
-        "kubectl_exec_max_parallel_workers": 20,
-        "vs_api_max_websocket_connections": 50,
         "vs_api_visual_beam_falloff_exponent": 2.0,
         "vs_api_actuation_expected_latency_ms": 250.0,
         "vs_api_actuation_fault_after_ms": 1200.0,
@@ -51,12 +39,9 @@ def _valid_config_dict() -> dict:
         "vs_api_playback_max_requests_per_minute": 30,
         "vs_api_session_switch_max_requests_per_minute": 5,
         "vs_api_introspect_max_response_bytes": 65536,
-        "vs_api_introspect_command_timeout_seconds": 15,
         "trace_interval_seconds": 3.0,
         "trace_interval_fast_seconds": 1.0,
         "trace_fast_window_seconds": 30.0,
-        "host_inotify_max_user_instances": 512,
-        "host_file_descriptor_limit": 65536,
     }
 
 
@@ -88,19 +73,104 @@ class TestPlatformConfig:
         assert cfg.service_host("nodalpath") == "nodalpath"
         assert cfg.service_host("unknown") == "127.0.0.1"
 
-    def test_repo_and_helm_platform_yaml_share_model_contract(self):
-        repo_raw = yaml.safe_load((ROOT / "configs" / "platform.yaml").read_text(encoding="utf-8"))
-        helm_text = (ROOT / "deploy" / "helm" / "files" / "platform.yaml").read_text(
-            encoding="utf-8"
+    def test_shipped_platform_yaml_declares_exactly_the_model(self):
+        """The file is the single source: every model field is in it and nothing else is."""
+        raw = yaml.safe_load((ROOT / "configs" / "platform.yaml").read_text(encoding="utf-8"))
+        cfg = PlatformConfig.model_validate(raw["platform"])
+        assert set(raw["platform"]) == set(cfg.model_dump())
+
+    def test_declared_setting_missing_from_the_file_is_refused(self):
+        d = _valid_config_dict()
+        del d["ome_link_state_snapshot_interval_s"]
+        with pytest.raises(ValidationError):
+            PlatformConfig(**d)
+
+    def test_unknown_key_is_refused(self):
+        with pytest.raises(ValidationError):
+            PlatformConfig(**{**_valid_config_dict(), "ome_full_state_snapshot_interval_s": 10})
+
+    def test_chart_copy_templates_the_namespace_field_by_meaning(self):
+        from nodalarc.platform_config import CHART_NAMESPACE_VALUE, render_chart_copy
+
+        shipped = (ROOT / "configs" / "platform.yaml").read_text(encoding="utf-8")
+        rendered = render_chart_copy(shipped)
+        assert rendered.count(f"kubernetes_namespace: {CHART_NAMESPACE_VALUE}") == 1
+        assert rendered.replace(CHART_NAMESPACE_VALUE, "nodalarc") == shipped
+        forms = {
+            'kubernetes_namespace: "nodalarc"': f"kubernetes_namespace: {CHART_NAMESPACE_VALUE}",
+            "kubernetes_namespace:   'nodalarc'  # the release namespace": (
+                f"kubernetes_namespace:   {CHART_NAMESPACE_VALUE}  # the release namespace"
+            ),
+            '"kubernetes_namespace": nodalarc': f'"kubernetes_namespace": {CHART_NAMESPACE_VALUE}',
+            "kubernetes_namespace : nodalarc": f"kubernetes_namespace : {CHART_NAMESPACE_VALUE}",
+            "kubernetes_namespace:\n    nodalarc": f"kubernetes_namespace:\n    {CHART_NAMESPACE_VALUE}",
+        }
+        for source_form, expected in forms.items():
+            out = render_chart_copy(shipped.replace("kubernetes_namespace: nodalarc", source_form))
+            assert expected in out, source_form
+            resolved = yaml.safe_load(out.replace(CHART_NAMESPACE_VALUE, '"rendered-ns"'))
+            assert resolved["platform"]["kubernetes_namespace"] == "rendered-ns", source_form
+        reindented = shipped.replace("\n  ", "\n    ")
+        assert f"    kubernetes_namespace: {CHART_NAMESPACE_VALUE}" in render_chart_copy(reindented)
+
+    def test_chart_copy_refuses_an_invalid_file(self):
+        from nodalarc.platform_config import render_chart_copy
+
+        shipped = (ROOT / "configs" / "platform.yaml").read_text(encoding="utf-8")
+        with pytest.raises(ValidationError):
+            render_chart_copy(shipped + "  not_a_setting: 1\n")
+        with pytest.raises(ValidationError):
+            render_chart_copy(
+                shipped.replace("kubernetes_namespace: nodalarc", "namespace: nodalarc")
+            )
+        with pytest.raises(ValueError, match="exactly once"):
+            render_chart_copy(
+                shipped.replace(
+                    "kubernetes_namespace: nodalarc",
+                    "kubernetes_namespace: nodalarc\n  kubernetes_namespace: nodalarc",
+                )
+            )
+
+    def test_chart_copy_refuses_value_forms_it_cannot_template(self):
+        """Valid YAML whose value is not one scalar on one line is refused before output."""
+        from nodalarc.platform_config import render_chart_copy
+
+        shipped = (ROOT / "configs" / "platform.yaml").read_text(encoding="utf-8")
+        for form in (
+            "kubernetes_namespace: >-\n    nodalarc",
+            "kubernetes_namespace: |-\n    nodalarc",
+            "kubernetes_namespace: nodalarc\n    continued",
+            "kubernetes_namespace: &ns nodalarc",
+            "kubernetes_namespace: !!str nodalarc",
+        ):
+            text = shipped.replace("kubernetes_namespace: nodalarc", form)
+            assert yaml.safe_load(text)["platform"]["kubernetes_namespace"]
+            with pytest.raises(ValueError, match="not templated"):
+                render_chart_copy(text)
+        aliased = "anchored: &ns nodalarc\n" + shipped.replace(
+            "kubernetes_namespace: nodalarc", "kubernetes_namespace: *ns"
         )
-        namespace_template = '"{{ .Values.namespace }}"'
-        assert namespace_template in helm_text
-        helm_raw = yaml.safe_load(helm_text.replace(namespace_template, '"nodalarc"'))
+        assert yaml.safe_load(aliased)["platform"]["kubernetes_namespace"] == "nodalarc"
+        with pytest.raises(ValueError, match="not templated"):
+            render_chart_copy(aliased)
 
-        repo_cfg = PlatformConfig.model_validate(repo_raw["platform"])
-        helm_cfg = PlatformConfig.model_validate(helm_raw["platform"])
+    def test_assembled_chart_copy_is_the_shipped_file_with_the_namespace_templated(self, tmp_path):
+        import os
+        import subprocess
 
-        assert set(repo_cfg.model_dump()) == set(helm_cfg.model_dump())
+        out = tmp_path / "chart"
+        subprocess.run(
+            ["bash", str(ROOT / "scripts/na-render-helm-chart.sh"), "deploy/helm", str(out)],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+            env={**os.environ, "PROJECT_VERSION": "0+test"},
+        )
+        rendered = (out / "files" / "platform.yaml").read_text(encoding="utf-8")
+        shipped = (ROOT / "configs" / "platform.yaml").read_text(encoding="utf-8")
+        assert rendered.replace('"{{ .Values.namespace }}"', "nodalarc") == shipped
+        assert not (ROOT / "deploy/helm/files/platform.yaml").exists()
 
 
 class TestSingleton:

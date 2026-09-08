@@ -1,15 +1,12 @@
 # Helm Chart Files
 
-Files in this directory are copies of `configs/` files that the Helm chart
-mounts into pods at deploy time. Helm cannot reference paths outside its chart
-directory, so these copies are required.
+Nothing in this directory is hand-maintained. `scripts/na-render-helm-chart.sh`
+renders every file here into the assembled chart on each install, upgrade and
+single-service deploy:
 
-## Keeping in Sync
+| Rendered file | Source |
+|---------------|--------|
+| `platform.yaml` | `configs/platform.yaml`, with `kubernetes_namespace` templated to `.Values.namespace` |
+| `nats-messaging.yaml` | the NATS registry, `lib/nodalarc/nats_channels.py` |
 
-When the source files change, the copies here must be updated:
-
-| Source | Copy |
-|--------|------|
-| `configs/platform.yaml` | `deploy/helm/files/platform.yaml` |
-
-Future work: generate these from a single source of truth at build time.
+The templates read them with `.Files.Get`; the source chart contains only this file.

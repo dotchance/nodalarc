@@ -471,3 +471,285 @@ def test_drift_service_list_comes_from_the_inventory() -> None:
     script = (ROOT / "scripts/na-drift.sh").read_text()
     assert "SERVICES=(" not in script
     assert "list-platform-resources" in script
+
+
+def _chart_identity():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "na_chart_identity", ROOT / "scripts" / "na-chart-identity.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _release_payload(chart_dir: Path, *, digest: str | None, values: dict | None = None) -> str:
+    """One Helm release payload whose stored chart is CHART_DIR.
+
+    Helm stores templates and files as exact bytes, chart metadata (with its
+    annotations) as given, and values as a map: the chart defaults after an
+    install, the defaults merged with the release configuration after a
+    --reuse-values upgrade. DIGEST None models a chart that recorded none.
+    """
+    import base64
+    import gzip
+    import json
+
+    import yaml
+
+    entries = []
+    for sub in ("templates", "files", "crds"):
+        for path in sorted((chart_dir / sub).rglob("*")):
+            if path.is_file():
+                entries.append(
+                    {
+                        "name": str(path.relative_to(chart_dir)),
+                        "data": base64.b64encode(path.read_bytes()).decode(),
+                    }
+                )
+    metadata: dict = {"name": "nodalarc", "version": "0+test"}
+    if digest is not None:
+        metadata["annotations"] = {"nodalarc.io/chart-digest": digest}
+    release = {
+        "chart": {
+            "metadata": metadata,
+            "templates": [e for e in entries if e["name"].startswith("templates/")],
+            "files": [e for e in entries if not e["name"].startswith("templates/")],
+            "values": values
+            if values is not None
+            else yaml.safe_load((chart_dir / "values.yaml").read_text()),
+        }
+    }
+    return base64.b64encode(base64.b64encode(gzip.compress(json.dumps(release).encode()))).decode()
+
+
+def _release_secrets_stub(path: Path, revisions: list[tuple[int, str, str]]) -> None:
+    """A kubectl serving the release's Helm secrets, one per (version, status, payload)."""
+    import json
+
+    items = [
+        {
+            "metadata": {
+                "name": f"sh.helm.release.v1.nodalarc.v{version}",
+                "labels": {
+                    "owner": "helm",
+                    "name": "nodalarc",
+                    "version": str(version),
+                    "status": status,
+                },
+            },
+            "data": {"release": payload},
+        }
+        for version, status, payload in revisions
+    ]
+    secrets = path / "release-secrets.json"
+    secrets.write_text(json.dumps({"items": items}))
+    _stub(
+        path,
+        "kubectl",
+        f"""
+case "$1 $2" in
+  "get secrets") cat "{secrets}"; exit 0 ;;
+  "get deployment/ome") exit 0 ;;
+esac
+exit 1
+""",
+    )
+
+
+def _assembled_chart(tmp_path: Path, name: str = "chart") -> Path:
+    out = tmp_path / name
+    subprocess.run(
+        ["bash", str(ROOT / "scripts/na-render-helm-chart.sh"), "deploy/helm", str(out)],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "PROJECT_VERSION": "0+test"},
+    )
+    return out
+
+
+def _changed_chart(tmp_path: Path, relative: str, text: str) -> Path:
+    """A second assembly with one content file rewritten, as a later tree would produce."""
+    import shutil
+
+    changed = tmp_path / "chart-changed"
+    shutil.copytree(_assembled_chart(tmp_path, "chart-source"), changed)
+    (changed / relative).write_text(text)
+    return changed
+
+
+def _guard(tmp_path: Path, chart: Path) -> subprocess.CompletedProcess[str]:
+    return _lib_call(
+        f'release_chart_matches nodalarc nodalarc "{chart}"; echo "rc=$?"; printf "%s" "$RELEASE_CHART_DIFF"',
+        path_dir=tmp_path,
+    )
+
+
+def test_assembled_chart_records_its_content_digest(tmp_path: Path) -> None:
+    import yaml
+
+    chart = _assembled_chart(tmp_path)
+    metadata = yaml.safe_load((chart / "Chart.yaml").read_text())
+    assert metadata["annotations"]["nodalarc.io/chart-digest"] == _chart_identity().chart_digest(
+        chart
+    )
+    assert metadata["version"] == "0+test"
+
+
+def test_release_chart_matches_the_deployed_revision(tmp_path: Path) -> None:
+    chart = _assembled_chart(tmp_path)
+    digest = _chart_identity().chart_digest(chart)
+    _release_secrets_stub(tmp_path, [(1, "deployed", _release_payload(chart, digest=digest))])
+    result = _guard(tmp_path, chart)
+    assert result.stdout.strip() == "rc=0", result.stderr
+
+
+def test_release_chart_matches_after_a_reuse_values_deploy(tmp_path: Path) -> None:
+    """After a single-service deploy Helm stores the defaults merged with the release
+    configuration (images, build identity, namespace); the chart is unchanged."""
+    import yaml
+
+    chart = _assembled_chart(tmp_path)
+    digest = _chart_identity().chart_digest(chart)
+    merged = yaml.safe_load((chart / "values.yaml").read_text())
+    merged.update(
+        {
+            "namespace": "nodalarc",
+            "buildTag": "abc123",
+            "runtimeRelease": "0.7.1+31.gabc123",
+            "images": {**(merged.get("images") or {}), "ome": "registry:5000/nodalarc/ome:abc123"},
+        }
+    )
+    _release_secrets_stub(
+        tmp_path,
+        [
+            (1, "superseded", _release_payload(chart, digest=digest)),
+            (2, "deployed", _release_payload(chart, digest=digest, values=merged)),
+        ],
+    )
+    result = _guard(tmp_path, chart)
+    assert result.stdout.strip() == "rc=0", result.stdout + result.stderr
+
+
+def test_release_chart_selects_the_newest_revision_numerically(tmp_path: Path) -> None:
+    """Revision 10 follows revision 9; a lexical order would compare against 9."""
+    chart = _assembled_chart(tmp_path)
+    digest = _chart_identity().chart_digest(chart)
+    _release_secrets_stub(
+        tmp_path,
+        [
+            (9, "superseded", _release_payload(chart, digest="sha256:stale")),
+            (10, "deployed", _release_payload(chart, digest=digest)),
+        ],
+    )
+    result = _guard(tmp_path, chart)
+    assert result.stdout.strip() == "rc=0", result.stdout + result.stderr
+
+
+def test_release_chart_refuses_when_the_newest_revision_is_not_deployed(tmp_path: Path) -> None:
+    """A failed or pending newest revision does not establish which chart runs."""
+    chart = _assembled_chart(tmp_path)
+    digest = _chart_identity().chart_digest(chart)
+    for status in ("failed", "pending-upgrade"):
+        _release_secrets_stub(
+            tmp_path,
+            [
+                (9, "deployed", _release_payload(chart, digest=digest)),
+                (10, status, _release_payload(chart, digest=digest)),
+            ],
+        )
+        result = _guard(tmp_path, chart)
+        assert result.stdout.startswith("rc=1"), result.stdout + result.stderr
+        assert f"revision 10 is '{status}', not deployed" in result.stdout
+
+
+def test_release_chart_differs_when_the_shared_configuration_changed(tmp_path: Path) -> None:
+    """A trimmed platform.yaml in the assembled chart must be refused, naming the file."""
+    deployed = _changed_chart(tmp_path, "files/platform.yaml", "platform:\n  old: true\n")
+    chart = _assembled_chart(tmp_path)
+    _release_secrets_stub(
+        tmp_path,
+        [
+            (
+                1,
+                "deployed",
+                _release_payload(deployed, digest=_chart_identity().chart_digest(deployed)),
+            )
+        ],
+    )
+    result = _guard(tmp_path, chart)
+    assert result.stdout.startswith("rc=1"), result.stdout + result.stderr
+    assert "files/platform.yaml" in result.stdout
+    assert "values.yaml" not in result.stdout
+
+
+def test_release_chart_differs_when_default_values_changed(tmp_path: Path) -> None:
+    deployed = _changed_chart(tmp_path, "values.yaml", "ome:\n  replicas: 2\n")
+    chart = _assembled_chart(tmp_path)
+    _release_secrets_stub(
+        tmp_path,
+        [
+            (
+                1,
+                "deployed",
+                _release_payload(deployed, digest=_chart_identity().chart_digest(deployed)),
+            )
+        ],
+    )
+    result = _guard(tmp_path, chart)
+    assert result.stdout.startswith("rc=1"), result.stdout + result.stderr
+    assert result.stdout.rstrip().endswith("values.yaml")
+    assert "files/" not in result.stdout and "templates/" not in result.stdout
+
+
+def test_release_chart_refuses_a_release_without_a_recorded_digest(tmp_path: Path) -> None:
+    chart = _assembled_chart(tmp_path)
+    _release_secrets_stub(tmp_path, [(1, "deployed", _release_payload(chart, digest=None))])
+    result = _guard(tmp_path, chart)
+    assert result.stdout.startswith("rc=1"), result.stdout + result.stderr
+    assert "records no nodalarc.io/chart-digest" in result.stdout
+
+
+def test_release_chart_refuses_when_no_release_exists(tmp_path: Path) -> None:
+    chart = _assembled_chart(tmp_path)
+    _release_secrets_stub(tmp_path, [])
+    result = _guard(tmp_path, chart)
+    assert result.stdout.startswith("rc=1"), result.stdout + result.stderr
+    assert "no Helm release secrets" in result.stdout
+
+
+def test_release_chart_comparison_failure_is_a_refusal(tmp_path: Path) -> None:
+    """An unreadable release payload must not report a matching chart."""
+    chart = _assembled_chart(tmp_path)
+    _release_secrets_stub(tmp_path, [(1, "deployed", "not-a-release")])
+    result = _guard(tmp_path, chart)
+    assert result.stdout.startswith("rc=1"), result.stdout + result.stderr
+    assert "comparison failed" in result.stdout
+
+
+def test_deploy_service_refuses_to_carry_chart_changes(tmp_path: Path) -> None:
+    for tool in ("docker", "helm"):
+        _stub(tmp_path, tool, 'echo "must not be called: $0 $*" >&2; exit 99')
+    deployed = _changed_chart(tmp_path, "files/platform.yaml", "platform:\n  old: true\n")
+    _release_secrets_stub(
+        tmp_path,
+        [
+            (
+                1,
+                "deployed",
+                _release_payload(deployed, digest=_chart_identity().chart_digest(deployed)),
+            )
+        ],
+    )
+    result = _run(
+        ["bash", "scripts/na-deploy-service.sh", "ome", "deployment/ome"],
+        env={"NA_IMAGES_NO_CLUSTER": "1", "MODE": "single-node", "PROJECT_VERSION": "0+test"},
+        path_dir=tmp_path,
+    )
+    assert result.returncode == 1, result.stderr
+    assert "cannot carry chart changes" in result.stderr
+    assert "files/platform.yaml" in result.stderr
+    assert "must not be called" not in result.stderr

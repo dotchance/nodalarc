@@ -16,6 +16,10 @@
 #                                sets SESSION_FAILED_MESSAGE
 #   discover_vs_api NS TIMEOUT   sets api_base and api_token from the live VS-API
 #                                pod's node address; LIB_PREFIX names the caller
+#   release_chart_matches NS RELEASE CHART_DIR
+#                                0 when the newest Helm release revision is
+#                                deployed and recorded the assembled chart's
+#                                digest; sets RELEASE_CHART_DIFF otherwise
 
 NA_LIB_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LIB_PREFIX="${LIB_PREFIX:-lifecycle}"
@@ -109,6 +113,30 @@ platform_converged() {
     done <<< "$resources"
     PLATFORM_CONVERGED_SUMMARY="$dep_converged/$dep_total deployments converged; $DS_READY/$DS_DESIRED Node Agents ready"
     [ "$dep_total" -gt 0 ] && [ -z "$PLATFORM_PROBLEMS" ]
+}
+
+release_chart_matches() {
+    # release_chart_matches NS RELEASE CHART_DIR -> 0 when the newest revision
+    # of the Helm release is deployed and its chart recorded the assembled
+    # chart's digest (scripts/na-chart-identity.py). Any other outcome (no
+    # release, newest revision not deployed, no recorded digest, unreadable
+    # payload, difference) returns 1 with the reason in RELEASE_CHART_DIFF.
+    # Reads the release secrets; no helm invocation.
+    local ns="$1" release="$2" chart_dir="$3" secrets_file rc=0
+    RELEASE_CHART_DIFF=""
+    secrets_file="$(mktemp)"
+    if ! kubectl get secrets -n "$ns" -l "owner=helm,name=$release" -o json > "$secrets_file" 2>/dev/null; then
+        rm -f "$secrets_file"
+        RELEASE_CHART_DIFF="Helm release secrets for $release in namespace $ns could not be read"
+        return 1
+    fi
+    RELEASE_CHART_DIFF="$(cd "$NA_LIB_ROOT" && uv run --quiet python scripts/na-chart-identity.py release-check "$chart_dir" "$secrets_file" "$ns" "$release" 2>&1)" || rc=$?
+    rm -f "$secrets_file"
+    case "$rc" in
+        0) return 0 ;;
+        3) return 1 ;;
+        *) RELEASE_CHART_DIFF="release chart comparison failed (exit $rc): $RELEASE_CHART_DIFF"; return 1 ;;
+    esac
 }
 
 session_failed() {

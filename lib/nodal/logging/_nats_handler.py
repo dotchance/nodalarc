@@ -25,6 +25,7 @@ import time
 from typing import Any
 
 from nodal.logging._formatter import OpsEventFormatter
+from nodalarc.nats_channels import debug_event_subject, ops_event_subject
 
 
 class NatsHandler(logging.Handler):
@@ -66,7 +67,7 @@ class NatsHandler(logging.Handler):
     def emit(self, record: logging.LogRecord) -> None:
         try:
             payload = self._ops_formatter.format(record).encode("utf-8")
-            subject = self._build_subject(record)
+            subject = self.subject_for(record)
             self._deque.append((subject, payload))
 
             if self._loop is not None and self._event is not None:
@@ -75,27 +76,20 @@ class NatsHandler(logging.Handler):
         except Exception:
             self.handleError(record)
 
-    def _build_subject(self, record: logging.LogRecord) -> str:
-        tenant = getattr(record, "nodal_tenant", "")
-        session = getattr(record, "nodal_session", "")
-        source = getattr(record, "nodal_source", self._source)
-        code = getattr(record, "nodal_code", "")
-        code_lower = code.lower() if code else ""
+    def subject_for(self, record: logging.LogRecord) -> str:
+        """The registry subject this record publishes to: debug root below INFO, ops root above.
 
-        stream_prefix = "nodalarc.debug" if record.levelno < logging.INFO else "nodalarc.ops"
-
-        if not tenant and not session:
-            base = f"{stream_prefix}._infra.{source}"
-        elif not tenant and session:
-            base = f"{stream_prefix}.{session}.{source}"
-        elif tenant and not session:
-            base = f"{stream_prefix}.{tenant}._tenant.{source}"
-        else:
-            base = f"{stream_prefix}.{tenant}.{session}.{source}"
-
-        if code_lower:
-            return f"{base}.{code_lower}"
-        return base
+        The registry sanitizes the session segment; a session id it cannot
+        route raises here and the record reaches ``handleError`` instead
+        of an unroutable subject.
+        """
+        build = debug_event_subject if record.levelno < logging.INFO else ops_event_subject
+        return build(
+            getattr(record, "nodal_session", ""),
+            getattr(record, "nodal_source", self._source),
+            getattr(record, "nodal_code", ""),
+            tenant_id=getattr(record, "nodal_tenant", ""),
+        )
 
     async def connect(self, nc: Any) -> None:
         """Enable NATS publishing. Call after NATS connection established."""

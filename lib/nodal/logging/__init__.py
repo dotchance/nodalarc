@@ -2,9 +2,10 @@
 # Licensed under the Apache License, Version 2.0. See LICENSE file.
 """Nodal Unified Logging Library.
 
-Standard Python logging with dual output (stdout + NATS OpsEvents)
-and structured record enrichment. One configure() call at service
-startup — every log.info/warning/error call works automatically.
+Standard Python logging with dual output (a diagnostic stream, stdout by
+default, plus NATS OpsEvents) and structured record enrichment. One
+configure() call at process startup — every log.info/warning/error call
+works automatically. Subjects come from ``nodalarc.nats_channels``.
 
 Usage::
 
@@ -40,11 +41,12 @@ from __future__ import annotations
 import atexit
 import logging
 import sys
-from typing import Any
+from typing import Any, TextIO
 
 from nodal.logging._filter import NodalFilter
 from nodal.logging._formatter import HumanFormatter, JsonFormatter
 from nodal.logging._nats_handler import NatsHandler
+from nodalarc.nats_channels import debug_ctrl_subject
 
 __all__ = [
     "configure",
@@ -81,12 +83,13 @@ def configure(
     tenant_id: str = "",
     session_id: str = "",
     stdout_format: str = "human",
-    nats_level: int = logging.WARNING,
+    nats_level: int | None = logging.WARNING,
     stdout_level: int = logging.INFO,
+    stream: TextIO | None = None,
 ) -> None:
     """Configure the Nodal logging system.
 
-    Call once at service startup. Replaces logging.basicConfig().
+    Call once at process startup. Replaces logging.basicConfig().
     Idempotent — safe to call again (removes previous handlers first).
 
     Args:
@@ -94,8 +97,11 @@ def configure(
         tenant_id: Tenant scope for OpsEvents (empty = infrastructure).
         session_id: Session scope for OpsEvents.
         stdout_format: "human" for terminal, "json" for log aggregation.
-        nats_level: Minimum level for NATS OpsEvent publishing.
-        stdout_level: Minimum level for stdout output.
+        nats_level: Minimum level for NATS OpsEvent publishing; None installs
+            no NATS handler (a process that never connects, such as a CLI tool).
+        stdout_level: Minimum level for the diagnostic stream.
+        stream: The diagnostic stream; stdout by default. A CLI tool whose
+            report goes to stdout passes ``sys.stderr``.
     """
     global _nodal_filter, _nats_handler, _atexit_registered
 
@@ -106,11 +112,11 @@ def configure(
     for f in root.filters[:]:
         root.removeFilter(f)
 
-    root.setLevel(min(nats_level, stdout_level))
+    root.setLevel(stdout_level if nats_level is None else min(nats_level, stdout_level))
 
     _nodal_filter = NodalFilter(service, tenant_id=tenant_id, session_id=session_id)
 
-    stdout_handler = logging.StreamHandler(sys.stdout)
+    stdout_handler = logging.StreamHandler(sys.stdout if stream is None else stream)
     stdout_handler.setLevel(stdout_level)
     stdout_handler.addFilter(_nodal_filter)
     if stdout_format == "json":
@@ -119,9 +125,12 @@ def configure(
         stdout_handler.setFormatter(HumanFormatter())
     root.addHandler(stdout_handler)
 
-    _nats_handler = NatsHandler(service, level=nats_level)
-    _nats_handler.addFilter(_nodal_filter)
-    root.addHandler(_nats_handler)
+    if nats_level is None:
+        _nats_handler = None
+    else:
+        _nats_handler = NatsHandler(service, level=nats_level)
+        _nats_handler.addFilter(_nodal_filter)
+        root.addHandler(_nats_handler)
 
     for name in _THIRD_PARTY_LOGGERS:
         logging.getLogger(name).setLevel(logging.WARNING)
@@ -141,57 +150,57 @@ async def connect(nc: Any) -> None:
     enable/disable DEBUG publishing via NATS request/reply. The
     logging library owns this — no service code changes needed.
     """
-    if _nats_handler is not None:
-        await _nats_handler.connect(nc)
+    if _nodal_filter is None or _nats_handler is None:
+        raise RuntimeError(
+            "nodal.logging.connect() needs configure() with a NATS level; "
+            "this process was configured without a NATS handler"
+        )
+    await _nats_handler.connect(nc)
 
-    if _nodal_filter is not None and _nats_handler is not None:
-        import json
+    import json
 
-        source = _nodal_filter._source
-        subject = f"nodalarc.logging.debug_ctrl.{source}"
-        _log = logging.getLogger(__name__)
+    subject = debug_ctrl_subject(_nodal_filter._source)
+    _log = logging.getLogger(__name__)
 
-        async def _handle_debug_ctrl(msg):
-            try:
-                cmd = json.loads(msg.data)
-            except Exception as exc:
-                _log.error("Malformed debug_ctrl message: %s", exc)
-                await msg.respond(
-                    json.dumps({"status": "error", "error": f"malformed: {exc}"}).encode()
-                )
-                return
-
-            action = cmd.get("action")
-            try:
-                if action == "enable":
-                    _nats_handler.set_nats_level(logging.DEBUG)
-                    _log.info("Debug logging enabled by operator")
-                    await msg.respond(json.dumps({"status": "ok", "level": "debug"}).encode())
-                elif action == "disable":
-                    _nats_handler.set_nats_level(logging.INFO)
-                    _log.info("Debug logging disabled")
-                    await msg.respond(json.dumps({"status": "ok", "level": "info"}).encode())
-                else:
-                    _log.error("Unknown debug_ctrl action: %s", action)
-                    await msg.respond(
-                        json.dumps(
-                            {"status": "error", "error": f"unknown action: {action}"}
-                        ).encode()
-                    )
-            except Exception as exc:
-                _log.error("Failed to change debug level: %s", exc)
-                await msg.respond(json.dumps({"status": "error", "error": str(exc)}).encode())
-
+    async def _handle_debug_ctrl(msg):
         try:
-            await nc.subscribe(subject, cb=_handle_debug_ctrl)
-            _log.debug("Debug control active on %s", subject)
+            cmd = json.loads(msg.data)
         except Exception as exc:
-            _log.error(
-                "FATAL: Cannot subscribe to debug control %s: %s",
-                subject,
-                exc,
+            _log.error("Malformed debug_ctrl message: %s", exc)
+            await msg.respond(
+                json.dumps({"status": "error", "error": f"malformed: {exc}"}).encode()
             )
-            raise
+            return
+
+        action = cmd.get("action")
+        try:
+            if action == "enable":
+                _nats_handler.set_nats_level(logging.DEBUG)
+                _log.info("Debug logging enabled by operator")
+                await msg.respond(json.dumps({"status": "ok", "level": "debug"}).encode())
+            elif action == "disable":
+                _nats_handler.set_nats_level(logging.INFO)
+                _log.info("Debug logging disabled")
+                await msg.respond(json.dumps({"status": "ok", "level": "info"}).encode())
+            else:
+                _log.error("Unknown debug_ctrl action: %s", action)
+                await msg.respond(
+                    json.dumps({"status": "error", "error": f"unknown action: {action}"}).encode()
+                )
+        except Exception as exc:
+            _log.error("Failed to change debug level: %s", exc)
+            await msg.respond(json.dumps({"status": "error", "error": str(exc)}).encode())
+
+    try:
+        await nc.subscribe(subject, cb=_handle_debug_ctrl)
+        _log.debug("Debug control active on %s", subject)
+    except Exception as exc:
+        _log.error(
+            "FATAL: Cannot subscribe to debug control %s: %s",
+            subject,
+            exc,
+        )
+        raise
 
 
 def set_session(session_id: str) -> None:

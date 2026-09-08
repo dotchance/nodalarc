@@ -15,6 +15,7 @@ migration — they are NOT for production services.
 from __future__ import annotations
 
 import re
+from typing import NamedTuple
 
 # ---------------------------------------------------------------------------
 # Session ID
@@ -45,14 +46,138 @@ def sanitize_session_id(raw: str) -> str:
 # Stream names
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Subject roots. Every subject NodalArc publishes or subscribes starts with one
+# of these; the stream table and the chart's inventory are built from them.
+# ---------------------------------------------------------------------------
+
+ROOT_OME = "nodalarc.ome"
+ROOT_LINKS = "nodalarc.links"
+ROOT_SESSION = "nodalarc.session"
+ROOT_SCHEDULER = "nodalarc.scheduler"
+ROOT_OPS = "nodalarc.ops"
+ROOT_DEBUG = "nodalarc.debug"
+ROOT_MI = "nodalarc.mi"
+ROOT_NODALPATH = "nodalarc.nodalpath"
+ROOT_AGENT = "nodalarc.agent"
+ROOT_OME_CONTROL = "nodalarc.ome_control"
+ROOT_LOGGING = "nodalarc.logging"
+
 STREAM_OME_EVENTS = "NODALARC_OME"
 STREAM_LINK_EVENTS = "NODALARC_LINKS"
-STREAM_MI_EVENTS = "NODALARC_MI"
 STREAM_SESSION_EVENTS = "NODALARC_SESSION"
 STREAM_OPS_EVENTS = "NODALARC_OPS"
 STREAM_DEBUG_EVENTS = "NODALARC_DEBUG"
+# Declared for the measurement and NodalPath integrations; no chart creates
+# it today (the deployment gap is OS-13; the almanac subscription that names
+# it is OS-02). It is not part of the deployed-stream table below.
+STREAM_MI_EVENTS = "NODALARC_MI"
 
-DEBUG_CTRL_SUBJECT_PREFIX = "nodalarc.logging.debug_ctrl"
+
+class StreamSpec(NamedTuple):
+    """One deployed JetStream stream: its name and the subject pattern it captures."""
+
+    name: str
+    subjects: str
+
+
+# The streams the platform deploys, with the subject pattern each captures.
+# Retention is deployment configuration and lives in the chart values.
+STREAMS: tuple[StreamSpec, ...] = (
+    StreamSpec(STREAM_OME_EVENTS, f"{ROOT_OME}.>"),
+    StreamSpec(STREAM_LINK_EVENTS, f"{ROOT_LINKS}.>"),
+    StreamSpec(STREAM_SESSION_EVENTS, f"{ROOT_SESSION}.>"),
+    StreamSpec(STREAM_OPS_EVENTS, f"{ROOT_OPS}.>"),
+    StreamSpec(STREAM_DEBUG_EVENTS, f"{ROOT_DEBUG}.>"),
+)
+
+
+class NatsUser(NamedTuple):
+    """One NATS account the chart provisions: its values key and the patterns it may use."""
+
+    key: str
+    publish: tuple[str, ...]
+    subscribe: tuple[str, ...]
+
+
+_JETSTREAM_API = "$JS.API.>"
+_INBOX = "_INBOX.>"
+_EVERYTHING = "nodalarc.>"
+
+# The authorization policy the chart renders when NATS auth is enabled,
+# reproduced as it stands today, gaps included: the node-agent user is not
+# granted the debug root it publishes to nor the debug-control subject it
+# subscribes to (an auth finding, deferred; nats.auth is a support decision).
+NATS_USERS: tuple[NatsUser, ...] = (
+    NatsUser("admin", (_JETSTREAM_API, _INBOX, _EVERYTHING), (_JETSTREAM_API, _INBOX, _EVERYTHING)),
+    NatsUser(
+        "scheduler",
+        (_JETSTREAM_API, _INBOX, f"{ROOT_AGENT}.*", f"{ROOT_LINKS}.>", f"{ROOT_OPS}.>"),
+        (
+            _JETSTREAM_API,
+            _INBOX,
+            f"{ROOT_OME}.>",
+            f"{ROOT_SESSION}.>",
+            f"{ROOT_LINKS}.>",
+            f"{ROOT_SCHEDULER}.>",
+        ),
+    ),
+    NatsUser(
+        "nodeAgent",
+        (_INBOX, f"{ROOT_AGENT}.progress.*", f"{ROOT_LINKS}.*.substrate", f"{ROOT_OPS}.>"),
+        (f"{ROOT_AGENT}.*",),
+    ),
+    NatsUser(
+        "service",
+        (
+            _JETSTREAM_API,
+            _INBOX,
+            f"{ROOT_OME}.>",
+            f"{ROOT_OME_CONTROL}.>",
+            f"{ROOT_SCHEDULER}.>",
+            f"{ROOT_SESSION}.>",
+            f"{ROOT_MI}.>",
+            f"{ROOT_NODALPATH}.>",
+            f"{ROOT_DEBUG}.>",
+            f"{ROOT_OPS}.>",
+        ),
+        (
+            _JETSTREAM_API,
+            _INBOX,
+            f"{ROOT_OME}.>",
+            f"{ROOT_SESSION}.>",
+            f"{ROOT_LINKS}.>",
+            f"{ROOT_MI}.>",
+            f"{ROOT_NODALPATH}.>",
+            f"{ROOT_DEBUG}.>",
+            f"{ROOT_OPS}.>",
+            f"{ROOT_AGENT}.progress.*",
+            f"{ROOT_OME_CONTROL}.>",
+        ),
+    ),
+)
+
+
+class TenantScopeUnsupported(ValueError):
+    """A tenant-scoped subject operation was requested; subjects are session-scoped today."""
+
+
+def session_purge_filters(session_id: str, *, tenant_id: str = "") -> tuple[tuple[str, str], ...]:
+    """The (stream, subject filter) pairs that purge one session from every deployed stream.
+
+    Subjects are session-scoped today: the session segment follows the root
+    directly. Tenant support must add the tenant segment in this one place
+    before tenants share NATS; until then a tenant scope is refused, and
+    callers never purge a stream without a session filter.
+    """
+    if tenant_id:
+        raise TenantScopeUnsupported(
+            f"tenant-scoped purge is not implemented (tenant_id={tenant_id!r}); "
+            "the tenant segment must be added to session_purge_filters first"
+        )
+    sid = sanitize_session_id(session_id)
+    return tuple((stream.name, f"{stream.subjects[:-1]}{sid}.>") for stream in STREAMS)
+
 
 # ---------------------------------------------------------------------------
 # Session-scoped subject builders — primary API for services
@@ -61,22 +186,22 @@ DEBUG_CTRL_SUBJECT_PREFIX = "nodalarc.logging.debug_ctrl"
 
 def ome_visibility_subject(session_id: str) -> str:
     """OME visibility event subject for a specific session."""
-    return f"nodalarc.ome.{session_id}.visibility"
+    return f"{ROOT_OME}.{session_id}.visibility"
 
 
 def ome_snapshot_subject(session_id: str) -> str:
     """DEPRECATED — OME snapshot subject for a specific session."""
-    return f"nodalarc.ome.{session_id}.snapshot"
+    return f"{ROOT_OME}.{session_id}.snapshot"
 
 
 def ome_clock_subject(session_id: str) -> str:
     """OME clock tick subject for a specific session."""
-    return f"nodalarc.ome.{session_id}.clock"
+    return f"{ROOT_OME}.{session_id}.clock"
 
 
 def ome_heartbeat_subject(session_id: str) -> str:
     """OME heartbeat subject for a specific session."""
-    return f"nodalarc.ome.{session_id}.heartbeat"
+    return f"{ROOT_OME}.{session_id}.heartbeat"
 
 
 def ome_all_subject(session_id: str | None = None) -> str:
@@ -86,13 +211,13 @@ def ome_all_subject(session_id: str | None = None) -> str:
     Without: ``nodalarc.ome.>`` (all sessions — for cross-session consumers)
     """
     if session_id:
-        return f"nodalarc.ome.{session_id}.>"
-    return "nodalarc.ome.>"
+        return f"{ROOT_OME}.{session_id}.>"
+    return f"{ROOT_OME}.>"
 
 
 def link_state_snapshot_subject(session_id: str) -> str:
     """Link state snapshot subject for a specific session."""
-    return f"nodalarc.links.{session_id}.state"
+    return f"{ROOT_LINKS}.{session_id}.state"
 
 
 def ground_link_decision_snapshot_subject(session_id: str) -> str:
@@ -125,22 +250,22 @@ def ground_link_decision_snapshot_subject(session_id: str) -> str:
     shared stream as pairing is wrong and will deliver mismatched
     state/decision pairs on restart or restream.
     """
-    return f"nodalarc.links.{session_id}.ground_decisions"
+    return f"{ROOT_LINKS}.{session_id}.ground_decisions"
 
 
 def link_up_subject(session_id: str) -> str:
     """Link up event subject for a specific session."""
-    return f"nodalarc.links.{session_id}.up"
+    return f"{ROOT_LINKS}.{session_id}.up"
 
 
 def link_down_subject(session_id: str) -> str:
     """Link down event subject for a specific session."""
-    return f"nodalarc.links.{session_id}.down"
+    return f"{ROOT_LINKS}.{session_id}.down"
 
 
 def latency_update_subject(session_id: str) -> str:
     """Latency update subject for a specific session."""
-    return f"nodalarc.links.{session_id}.latency"
+    return f"{ROOT_LINKS}.{session_id}.latency"
 
 
 def actuation_state_subject(session_id: str, gs_id: str) -> str:
@@ -154,12 +279,12 @@ def actuation_state_subject(session_id: str, gs_id: str) -> str:
     per-GS health roster via LAST_PER_SUBJECT on (re)subscribe instead of missing
     the one-time startup roster.
     """
-    return f"nodalarc.links.{session_id}.actuation.{gs_id}"
+    return f"{ROOT_LINKS}.{session_id}.actuation.{gs_id}"
 
 
 def actuation_state_subscribe_subject(session_id: str) -> str:
     """Wildcard for recovering every ground station's retained actuation state."""
-    return f"nodalarc.links.{session_id}.actuation.>"
+    return f"{ROOT_LINKS}.{session_id}.actuation.>"
 
 
 def actual_links_subject(session_id: str, scheduler_instance_id: str) -> str:
@@ -179,62 +304,62 @@ def actual_links_subject(session_id: str, scheduler_instance_id: str) -> str:
     redesign the dispatcher already notes). ``scheduler_instance_id`` is
     ``{hostname}-{pid}-{ms}`` — no dots, so it is a single safe subject token.
     """
-    return f"nodalarc.links.{session_id}.actual.{scheduler_instance_id}"
+    return f"{ROOT_LINKS}.{session_id}.actual.{scheduler_instance_id}"
 
 
 def actual_links_subscribe_subject(session_id: str) -> str:
     """Wildcard for recovering every Scheduler instance's kernel-actual link set."""
-    return f"nodalarc.links.{session_id}.actual.>"
+    return f"{ROOT_LINKS}.{session_id}.actual.>"
 
 
 def session_ephemeris_subject(session_id: str) -> str:
     """Session ephemeris subject for a specific session."""
-    return f"nodalarc.session.{session_id}.ephemeris"
+    return f"{ROOT_SESSION}.{session_id}.ephemeris"
 
 
 def playback_state_subject(session_id: str) -> str:
     """Playback state subject for a specific session."""
-    return f"nodalarc.session.{session_id}.playback_state"
+    return f"{ROOT_SESSION}.{session_id}.playback_state"
 
 
 def scheduling_checkpoint_subject(session_id: str) -> str:
     """Scheduling checkpoint subject for a specific session."""
-    return f"nodalarc.session.{session_id}.scheduling_checkpoint"
+    return f"{ROOT_SESSION}.{session_id}.scheduling_checkpoint"
 
 
 def replay_anchor_subject(session_id: str) -> str:
     """Bounded-replay anchor subject for a specific session."""
-    return f"nodalarc.session.{session_id}.replay_anchor"
+    return f"{ROOT_SESSION}.{session_id}.replay_anchor"
 
 
 def scenario_inject_subject(session_id: str) -> str:
     """Scenario injection subject for a specific session (core NATS request/reply)."""
-    return f"nodalarc.scheduler.{session_id}.scenario"
+    return f"{ROOT_SCHEDULER}.{session_id}.scenario"
 
 
 def scheduler_repair_subject(session_id: str) -> str:
     """Explicit operator repair command subject for one Scheduler session."""
-    return f"nodalarc.scheduler.{session_id}.repair"
+    return f"{ROOT_SCHEDULER}.{session_id}.repair"
 
 
 def convergence_result_subject(session_id: str) -> str:
     """MI convergence result subject for a specific session."""
-    return f"nodalarc.mi.{session_id}.convergence"
+    return f"{ROOT_MI}.{session_id}.convergence"
 
 
 def probe_result_subject(session_id: str) -> str:
     """MI probe result subject for a specific session."""
-    return f"nodalarc.mi.{session_id}.probe"
+    return f"{ROOT_MI}.{session_id}.probe"
 
 
 def adapter_event_subject(session_id: str) -> str:
     """MI adapter event subject for a specific session."""
-    return f"nodalarc.mi.{session_id}.adapter"
+    return f"{ROOT_MI}.{session_id}.adapter"
 
 
 def almanac_event_subject(session_id: str) -> str:
     """NodalPath almanac event subject for a specific session."""
-    return f"nodalarc.nodalpath.{session_id}.almanac"
+    return f"{ROOT_NODALPATH}.{session_id}.almanac"
 
 
 # ---------------------------------------------------------------------------
@@ -279,39 +404,62 @@ SUBJECT_ALMANAC_EVENT = almanac_event_subject(_DEFAULT_SESSION_ID)
 SUBJECT_OPS_EVENT = f"nodalarc.ops.{_DEFAULT_SESSION_ID}.>"
 
 
-def ops_event_subject(session_id: str, source: str, code: str = "", *, tenant_id: str = "") -> str:
-    """Build a scoped ops event subject.
+def _scoped_event_subject(
+    root: str, session_id: str, source: str, code: str, *, tenant_id: str
+) -> str:
+    """The one scope hierarchy under an event root.
 
-    Subject hierarchy:
-      - Infrastructure (no tenant, no session): nodalarc.ops._infra.{source}[.{code}]
-      - Tenant (tenant, no session): nodalarc.ops.{tenant}._tenant.{source}[.{code}]
-      - Session (no tenant): nodalarc.ops.{session}.{source}[.{code}]
-      - Session (with tenant): nodalarc.ops.{tenant}.{session}.{source}[.{code}]
+    - Infrastructure (no tenant, no session): {root}._infra.{source}[.{code}]
+    - Tenant (tenant, no session): {root}.{tenant}._tenant.{source}[.{code}]
+    - Session (no tenant): {root}.{session}.{source}[.{code}]
+    - Session (with tenant): {root}.{tenant}.{session}.{source}[.{code}]
     """
     code_lower = code.lower() if code else ""
     if not tenant_id and not session_id:
-        base = f"nodalarc.ops._infra.{source}"
+        base = f"{root}._infra.{source}"
     elif not tenant_id:
-        base = f"nodalarc.ops.{sanitize_session_id(session_id)}.{source}"
+        base = f"{root}.{sanitize_session_id(session_id)}.{source}"
     elif not session_id:
-        base = f"nodalarc.ops.{tenant_id}._tenant.{source}"
+        base = f"{root}.{tenant_id}._tenant.{source}"
     else:
-        base = f"nodalarc.ops.{tenant_id}.{sanitize_session_id(session_id)}.{source}"
+        base = f"{root}.{tenant_id}.{sanitize_session_id(session_id)}.{source}"
 
     if code_lower:
         return f"{base}.{code_lower}"
     return base
 
 
+def ops_event_subject(session_id: str, source: str, code: str = "", *, tenant_id: str = "") -> str:
+    """Build a scoped ops event subject (INFO and above; see `_scoped_event_subject`)."""
+    return _scoped_event_subject(ROOT_OPS, session_id, source, code, tenant_id=tenant_id)
+
+
+def debug_event_subject(
+    session_id: str, source: str, code: str = "", *, tenant_id: str = ""
+) -> str:
+    """Build a scoped debug event subject (below INFO), the same hierarchy under the debug root."""
+    return _scoped_event_subject(ROOT_DEBUG, session_id, source, code, tenant_id=tenant_id)
+
+
 def ops_subscribe_subject(session_id: str, *, tenant_id: str = "") -> str:
     """Wildcard subject for subscribing to all ops events for a session."""
     if not tenant_id and not session_id:
-        return "nodalarc.ops._infra.>"
+        return f"{ROOT_OPS}._infra.>"
     if not tenant_id:
-        return f"nodalarc.ops.{sanitize_session_id(session_id)}.>"
+        return f"{ROOT_OPS}.{sanitize_session_id(session_id)}.>"
     if not session_id:
-        return f"nodalarc.ops.{tenant_id}._tenant.>"
-    return f"nodalarc.ops.{tenant_id}.{sanitize_session_id(session_id)}.>"
+        return f"{ROOT_OPS}.{tenant_id}._tenant.>"
+    return f"{ROOT_OPS}.{tenant_id}.{sanitize_session_id(session_id)}.>"
+
+
+def ops_subscribe_all_subject() -> str:
+    """Wildcard subject for every ops event of every scope (the VS-API system log)."""
+    return f"{ROOT_OPS}.>"
+
+
+def debug_subscribe_all_subject() -> str:
+    """Wildcard subject for every debug event of every scope (the VS-API debug stream)."""
+    return f"{ROOT_DEBUG}.>"
 
 
 # Request/reply subjects (NATS core, not JetStream)
@@ -319,14 +467,9 @@ def ops_subscribe_subject(session_id: str, *, tenant_id: str = "") -> str:
 # Subject is in ome_control namespace — deliberately outside
 # the "nodalarc.ome.>" JetStream-captured wildcard so request/reply
 # messages are not stream-retained.
-SUBJECT_PLAYBACK_CONTROL = "nodalarc.ome_control.playback"
-SUBJECT_MI_TRACE = "nodalarc.mi.trace"
-SUBJECT_MI_CONVERGENCE_GATE = "nodalarc.mi.convergence_gate"
-SUBJECT_NODE_AGENT = "nodalarc.agent.{node_id}"
-
-# Wiring progress — transient core NATS (not JetStream, no retention).
-# Hierarchical per-node subject: VS-API subscribes to wildcard nodalarc.agent.progress.*
-SUBJECT_WIRING_PROGRESS = "nodalarc.agent.progress.{node_id}"
+SUBJECT_PLAYBACK_CONTROL = f"{ROOT_OME_CONTROL}.playback"
+SUBJECT_MI_TRACE = f"{ROOT_MI}.trace"
+SUBJECT_MI_CONVERGENCE_GATE = f"{ROOT_MI}.convergence_gate"
 
 # Playback speed bounds — safety clamp on the OME Pacemaker's time_accel.
 # Below MIN, callers should use pause() rather than extreme slow-motion;
@@ -385,13 +528,22 @@ def nats_url() -> str:
 
 
 def node_agent_subject(node_id: str) -> str:
-    """Build per-node subject for Node Agent request/reply."""
-    return SUBJECT_NODE_AGENT.format(node_id=node_id)
+    """Build per-node subject for Node Agent request/reply (NATS core, not JetStream)."""
+    return f"{ROOT_AGENT}.{node_id}"
 
 
 def wiring_progress_subject(node_id: str) -> str:
-    """Build per-node subject for wiring progress updates."""
-    return SUBJECT_WIRING_PROGRESS.format(node_id=node_id)
+    """Build per-node subject for wiring progress updates.
+
+    Transient core NATS (not JetStream, no retention). Hierarchical per
+    node so the VS-API subscribes once to `wiring_progress_subscribe_subject()`.
+    """
+    return f"{ROOT_AGENT}.progress.{node_id}"
+
+
+def wiring_progress_subscribe_subject() -> str:
+    """Wildcard subject for the wiring progress of every node."""
+    return f"{ROOT_AGENT}.progress.*"
 
 
 def debug_ctrl_subject(source: str) -> str:
@@ -401,4 +553,4 @@ def debug_ctrl_subject(source: str) -> str:
     logging library in the target service subscribes and responds.
     Core NATS, not JetStream: no retention and no stream.
     """
-    return f"{DEBUG_CTRL_SUBJECT_PREFIX}.{source}"
+    return f"{ROOT_LOGGING}.debug_ctrl.{source}"

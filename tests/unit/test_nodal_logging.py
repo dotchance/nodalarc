@@ -14,25 +14,13 @@ import sys
 import pytest
 from nodal.logging import (
     configure,
+    connect,
     set_session,
     set_tenant,
 )
 from nodal.logging._filter import NodalFilter, _pascal_to_upper_snake
 from nodal.logging._formatter import HumanFormatter, JsonFormatter, OpsEventFormatter
 from nodal.logging._nats_handler import NatsHandler
-
-
-@pytest.fixture(autouse=True)
-def _clean_root_logger():
-    """Save and restore root logger state between tests."""
-    root = logging.getLogger()
-    old_handlers = root.handlers[:]
-    old_filters = root.filters[:]
-    old_level = root.level
-    yield
-    root.handlers = old_handlers
-    root.filters = old_filters
-    root.level = old_level
 
 
 def _make_record(
@@ -393,7 +381,7 @@ class TestNatsHandler:
         record.nodal_source = "ome"
         record.nodal_code = "STARTUP"
 
-        subject = handler._build_subject(record)
+        subject = handler.subject_for(record)
         assert subject == "nodalarc.ops._infra.ome.startup"
 
     def test_subject_session_scope(self):
@@ -404,7 +392,7 @@ class TestNatsHandler:
         record.nodal_source = "ome"
         record.nodal_code = "RECOVERY"
 
-        subject = handler._build_subject(record)
+        subject = handler.subject_for(record)
         assert subject == "nodalarc.ops.demo-36.ome.recovery"
 
     def test_subject_tenant_session_scope(self):
@@ -415,7 +403,7 @@ class TestNatsHandler:
         record.nodal_source = "ome"
         record.nodal_code = "RECOVERY"
 
-        subject = handler._build_subject(record)
+        subject = handler.subject_for(record)
         assert subject == "nodalarc.ops.acme.demo-36.ome.recovery"
 
     def test_subject_tenant_only_scope(self):
@@ -426,7 +414,7 @@ class TestNatsHandler:
         record.nodal_source = "operator"
         record.nodal_code = "DEPLOY"
 
-        subject = handler._build_subject(record)
+        subject = handler.subject_for(record)
         assert subject == "nodalarc.ops.acme._tenant.operator.deploy"
 
     def test_subject_no_code(self):
@@ -437,12 +425,51 @@ class TestNatsHandler:
         record.nodal_source = "ome"
         record.nodal_code = ""
 
-        subject = handler._build_subject(record)
+        subject = handler.subject_for(record)
         assert subject == "nodalarc.ops.demo-36.ome"
+
+    def test_subject_debug_root_below_info(self):
+        handler = NatsHandler("nodal.arc.ome")
+        record = _make_record(level=logging.DEBUG)
+        record.nodal_tenant = ""
+        record.nodal_session = "demo-36"
+        record.nodal_source = "ome"
+        record.nodal_code = "TICK"
+
+        assert handler.subject_for(record) == "nodalarc.debug.demo-36.ome.tick"
+
+    def test_subject_session_segment_is_sanitized_like_every_other_subject(self):
+        handler = NatsHandler("nodal.arc.ome")
+        record = _make_record()
+        record.nodal_tenant = ""
+        record.nodal_session = "run.2026"
+        record.nodal_source = "ome"
+        record.nodal_code = ""
+
+        assert handler.subject_for(record) == "nodalarc.ops.run-2026.ome"
 
 
 class TestConfigure:
     """configure() sets up root logger with correct handlers."""
+
+    def test_no_nats_level_installs_no_nats_handler(self):
+        configure("nodal.arc.tools.na_report", nats_level=None)
+        root = logging.getLogger()
+        assert not any(isinstance(h, NatsHandler) for h in root.handlers)
+        assert root.level == logging.INFO
+
+    def test_connect_refuses_a_process_configured_without_nats(self):
+        import asyncio
+
+        configure("nodal.arc.tools.na_report", nats_level=None)
+        with pytest.raises(RuntimeError, match="without a NATS handler"):
+            asyncio.run(connect(object()))
+
+    def test_diagnostic_stream_is_selectable(self):
+        diagnostics = io.StringIO()
+        configure("nodal.arc.tools.na_report", nats_level=None, stream=diagnostics)
+        logging.getLogger("tools.na_report").warning("report skipped: no session")
+        assert "report skipped: no session" in diagnostics.getvalue()
 
     def test_sets_up_two_handlers(self):
         configure("nodal.arc.ome")

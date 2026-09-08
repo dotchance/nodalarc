@@ -18,7 +18,7 @@ import sqlite3
 import sys
 from pathlib import Path
 
-from nodalarc.constants import LOG_FORMAT
+from nodal.logging import configure as _configure_logging
 
 log = logging.getLogger(__name__)
 
@@ -305,7 +305,7 @@ def run_compare(session_paths: list[str], report_type: str) -> str:
 
 
 def main() -> None:
-    logging.basicConfig(format=LOG_FORMAT, level=logging.INFO)
+    _configure_logging("nodal.arc.tools.na_compare", nats_level=None, stream=sys.stderr)
 
     parser = argparse.ArgumentParser(
         description="Nodal Arc Cross-Session Comparison Tool",

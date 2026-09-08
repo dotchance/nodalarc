@@ -27,7 +27,7 @@ from pathlib import Path
 
 import yaml
 from jinja2 import Environment, FileSystemLoader
-from nodalarc.constants import LOG_FORMAT
+from nodal.logging import configure as _configure_logging
 from nodalarc.models.resolved_session import ResolvedNode, ResolvedRoutingDomain, ResolvedSession
 from nodalarc.prepared_tree import load_prepared_tree_session_resolution
 from nodalarc.resolve_session import SessionResolution
@@ -380,7 +380,7 @@ def remove_flow(
 
 
 def main() -> None:
-    logging.basicConfig(format=LOG_FORMAT, level=logging.INFO)
+    _configure_logging("nodal.arc.tools.na_reconfig", nats_level=None, stream=sys.stderr)
     parser = argparse.ArgumentParser(description="Nodal Arc reconfiguration tool")
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument(

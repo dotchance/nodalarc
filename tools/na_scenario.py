@@ -22,8 +22,8 @@ from pathlib import Path
 
 import nats
 import yaml
+from nodal.logging import configure as _configure_logging
 from nodalarc.configuration_yaml import load_configuration_yaml
-from nodalarc.constants import LOG_FORMAT
 from nodalarc.models.scenario import (
     InjectLinkDownStep,
     InjectLinkUpStep,
@@ -255,7 +255,7 @@ def run_scenario(scenario_path: str, session_path: str) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    logging.basicConfig(format=LOG_FORMAT, level=logging.INFO)
+    _configure_logging("nodal.arc.tools.na_scenario", nats_level=None, stream=sys.stderr)
     parser = argparse.ArgumentParser(description="Nodal Arc Scenario Executor")
     parser.add_argument("--scenario", required=True, help="Path to scenario YAML file")
     parser.add_argument("--session", required=True, help="Path to session YAML (required)")

@@ -67,6 +67,29 @@ def _init_platform_config():
 
 
 @pytest.fixture(autouse=True)
+def _restore_process_logging():
+    """Restore the process-wide logging configuration after every test.
+
+    `nodal.logging.configure` replaces the root logger's handlers (a CLI
+    tool's `main()` calls it); without this, a handler bound to a capture
+    stream pytest has closed would outlive the test that created it.
+    """
+    import logging
+
+    from nodal import logging as nodal_logging
+
+    root = logging.getLogger()
+    handlers, filters, level = root.handlers[:], root.filters[:], root.level
+    nodal_filter, nats_handler = nodal_logging._nodal_filter, nodal_logging._nats_handler
+    yield
+    root.handlers = handlers
+    root.filters = filters
+    root.setLevel(level)  # through the API: it invalidates every logger's enablement cache
+    nodal_logging._nodal_filter = nodal_filter
+    nodal_logging._nats_handler = nats_handler
+
+
+@pytest.fixture(autouse=True)
 def _node_agent_ops_spool_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     """Keep Node Agent pre-init OpsEvent spooling inside the test temp dir."""
     monkeypatch.setenv("NODE_AGENT_OPS_SPOOL", str(tmp_path / "node-agent-ops-events.jsonl"))

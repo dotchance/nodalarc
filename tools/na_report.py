@@ -19,7 +19,7 @@ import sys
 from pathlib import Path
 from statistics import median
 
-from nodalarc.constants import LOG_FORMAT
+from nodal.logging import configure as _configure_logging
 from nodalarc.db.queries import (
     get_metadata,
     query_convergence_events,
@@ -285,7 +285,7 @@ def run_report(db_path: str, report_type: str) -> str:
 
 
 def main() -> None:
-    logging.basicConfig(format=LOG_FORMAT, level=logging.INFO)
+    _configure_logging("nodal.arc.tools.na_report", nats_level=None, stream=sys.stderr)
 
     parser = argparse.ArgumentParser(
         description="Nodal Arc Single-Session Report Tool",

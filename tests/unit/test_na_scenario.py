@@ -72,8 +72,9 @@ def test_async_runner_refuses_before_session_nats_or_scheduler_mutation(
 
 
 def test_cli_returns_deterministic_nonzero_for_unavailable_actions(
-    tmp_path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    tmp_path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    """The refusal is reported on stderr, the tool's diagnostic channel; stdout stays clean."""
     scenario_path = tmp_path / "scenario.yaml"
     scenario_path.write_text(
         yaml.safe_dump(
@@ -95,5 +96,7 @@ def test_cli_returns_deterministic_nonzero_for_unavailable_actions(
     )
 
     assert exit_code == 2
-    assert "scenario.mi_unavailable" in caplog.text
-    assert "unavailable scenario actions: measure, wait_converge" in caplog.text
+    captured = capsys.readouterr()
+    assert "scenario.mi_unavailable" in captured.err
+    assert captured.out == ""
+    assert "unavailable scenario actions: measure, wait_converge" in captured.err

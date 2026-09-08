@@ -63,7 +63,3 @@ class ConstellationPattern(StrEnum):
 
 class TimeMode(StrEnum):
     REALTIME = "realtime"
-
-
-# Logging format (Section 13.2)
-LOG_FORMAT: str = "%(asctime)s %(name)s %(levelname)s %(message)s"

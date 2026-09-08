@@ -7,51 +7,18 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from enum import StrEnum
 from typing import Any
 
-from nodalarc.models.scheduler_ops import ActuationState, SchedulerOpsCode
+from nodalarc.models.scheduler_ops import (
+    ActuationFailureClass,
+    ActuationState,
+    RecoveryStatus,
+    SchedulerOpsCode,
+)
 from nodalarc.proto import node_agent_pb2
 
 LinkPair = tuple[str, str]
 InterfaceAck = tuple[str, str, str]
-
-
-class ActuationFailureClass(StrEnum):
-    NONE = "none"
-    FENCE = "fence"
-    GROUND_CLEAN_FAILURE = "ground_clean_failure"
-    GROUND_KERNEL_DIRTY = "ground_kernel_dirty"
-    GROUND_UNKNOWN = "ground_unknown"
-    # The prover could not be reached at all (no responders / transport
-    # timeout). For a MUTATING command this still implies conservative
-    # unknown/dirty handling; for a READ-ONLY proof it is evidence of
-    # nothing - "could not observe" must never be reported as "observed
-    # divergence".
-    AGENT_UNREACHABLE = "agent_unreachable"
-    ISL_FAILURE = "isl_failure"
-
-
-@dataclass(frozen=True, slots=True)
-class RecoveryStatus:
-    verify_attempt_count: int = 0
-    last_verify_result: str | None = None
-    next_verify_after: datetime | None = None
-    verify_exhausted: bool = False
-    operator_action_required: bool = False
-    active_intervention_id: str | None = None
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "verify_attempt_count": self.verify_attempt_count,
-            "last_verify_result": self.last_verify_result,
-            "next_verify_after": self.next_verify_after.isoformat()
-            if self.next_verify_after
-            else None,
-            "verify_exhausted": self.verify_exhausted,
-            "operator_action_required": self.operator_action_required,
-            "active_intervention_id": self.active_intervention_id,
-        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,19 +43,6 @@ class GroundActuationState:
             )
         if not isinstance(self.reason_code, SchedulerOpsCode):
             raise TypeError(f"reason_code must be SchedulerOpsCode, got {self.reason_code!r}")
-
-    def to_notice(self) -> dict[str, Any]:
-        return {
-            "gs_id": self.gs_id,
-            "actuation_state": self.state.value,
-            "since": self.since.isoformat(),
-            "reason_code": self.reason_code.value,
-            "blocking_new_ground_link_up": self.blocking_new_ground_link_up,
-            "affected_pairs": [list(pair) for pair in sorted(self.affected_pairs)],
-            "stale_pairs": [list(pair) for pair in sorted(self.stale_pairs)],
-            "recovery_status": self.recovery.to_dict(),
-            "last_event": self.node_agent_results[-1] if self.node_agent_results else {},
-        }
 
 
 @dataclass(frozen=True, slots=True)

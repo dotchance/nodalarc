@@ -69,6 +69,10 @@ class ActuationFailureClass(StrEnum):
     GROUND_CLEAN_FAILURE = "ground_clean_failure"
     GROUND_KERNEL_DIRTY = "ground_kernel_dirty"
     GROUND_UNKNOWN = "ground_unknown"
+    # The prover could not be reached at all (no responders, transport
+    # timeout). For a mutating command this still implies conservative
+    # unknown or dirty handling; for a read-only proof it is evidence of
+    # nothing: "could not observe" is never reported as observed divergence.
     AGENT_UNREACHABLE = "agent_unreachable"
     ISL_FAILURE = "isl_failure"
     OPS_PUBLISH_FAILURE = "ops_publish_failure"

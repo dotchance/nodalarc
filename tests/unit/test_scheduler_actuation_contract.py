@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import json
 from datetime import UTC, datetime, timedelta
@@ -12,19 +13,19 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from nodalarc.models.scheduler_ops import (
     ActualLinkSnapshot,
+    ActuationFailureClass,
     ActuationState,
     OperatorRepairCommand,
+    RecoveryStatus,
     SchedulerOpsCode,
 )
 from nodalarc.nats_channels import actual_links_subject, actuation_state_subject
 from nodalarc.proto import node_agent_pb2
 from scheduler.actuation import (
-    ActuationFailureClass,
     ActuationResult,
     AgentCommandResult,
     GroundActuationState,
     PairActuationResult,
-    RecoveryStatus,
     build_actuation_result,
     classify_agent_response,
 )
@@ -1010,6 +1011,11 @@ def test_authority_subset_violation_halts_callback_path_and_queues_sentinel() ->
     assert d._running is False
     assert d._dispatch_blocked_reason.startswith("C-A authority subset violation")
     assert d._dispatch_queue.get_nowait() is None
+    assert _published_ops_codes(d._js.publish) == ["AUTHORITY_SUBSET_VIOLATION"]
+    details = _published_ops_details(d._js.publish)[0]
+    assert details["failure_class"] == "authority_invariant"
+    assert details["operation"] == "unit-test"
+    assert details["affected_pairs"] == [["gs-multi", "sat-old"]]
 
 
 def test_clean_kernel_audit_verifies_scheduler_actual_links_without_state_change() -> None:
@@ -1509,3 +1515,101 @@ def test_degraded_agent_slows_transport_reprove_but_never_exhausts() -> None:
     # Backoff switched to the degraded cadence.
     delta = state.recovery.next_verify_after - d._now()
     assert delta.total_seconds() > d._transport_retry_delay_s
+
+
+def test_published_recovery_status_carries_every_field_with_datetime_and_null() -> None:
+    """The recovery record reaches the ops subject as the owner's model, all six
+    fields, with datetimes in ISO form and absent values as null."""
+    d = _make_dispatcher_with_two_terminal_gs()
+    d._js.publish = AsyncMock()
+    base = datetime(2026, 5, 27, 12, 0, 10, tzinfo=UTC)
+    with_time = GroundActuationState(
+        gs_id="gs-multi",
+        state=ActuationState.KERNEL_DIRTY,
+        reason_code=SchedulerOpsCode.KERNEL_DIRTY,
+        recovery=RecoveryStatus(
+            verify_attempt_count=2,
+            last_verify_result="failed",
+            next_verify_after=base,
+            verify_exhausted=False,
+            operator_action_required=False,
+            active_intervention_id="repair-1",
+        ),
+    )
+    without_time = GroundActuationState(
+        gs_id="gs-multi",
+        state=ActuationState.ACTUATION_BLOCKED,
+        reason_code=SchedulerOpsCode.KERNEL_VERIFY_EXHAUSTED,
+        recovery=RecoveryStatus(
+            verify_attempt_count=5,
+            last_verify_result=None,
+            next_verify_after=None,
+            verify_exhausted=True,
+            operator_action_required=True,
+            active_intervention_id=None,
+        ),
+    )
+    for state in (with_time, without_time):
+        details = d._actuation_details(
+            gs_id="gs-multi",
+            operation="unit",
+            failure_class=ActuationFailureClass.GROUND_KERNEL_DIRTY,
+            sim_time=SIM_TIME,
+            state_before=state,
+            state_after=state,
+        )
+        assert details.recovery_status is state.recovery
+        asyncio.run(
+            d._publish_scheduler_ops(
+                code=SchedulerOpsCode.KERNEL_DIRTY, message="unit", details=details
+            )
+        )
+    published = _published_ops_details(d._js.publish)
+    assert [row["failure_class"] for row in published] == ["ground_kernel_dirty"] * 2
+    assert published[0]["recovery_status"] == {
+        "verify_attempt_count": 2,
+        "last_verify_result": "failed",
+        "next_verify_after": "2026-05-27T12:00:10Z",
+        "verify_exhausted": False,
+        "operator_action_required": False,
+        "active_intervention_id": "repair-1",
+    }
+    assert published[1]["recovery_status"] == {
+        "verify_attempt_count": 5,
+        "last_verify_result": None,
+        "next_verify_after": None,
+        "verify_exhausted": True,
+        "operator_action_required": True,
+        "active_intervention_id": None,
+    }
+
+
+def _names_imported_from_scheduler_actuation(source: str) -> set[str]:
+    """Every name a module imports from scheduler.actuation, whatever the import's layout."""
+    return {
+        alias.name
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.ImportFrom) and node.module == "scheduler.actuation"
+        for alias in node.names
+    }
+
+
+def test_actuation_vocabulary_has_one_owner() -> None:
+    """The failure-class enum and the recovery record are defined once, in
+    nodalarc.models.scheduler_ops, and every consumer imports them from there."""
+    from pathlib import Path
+
+    vocabulary = {"ActuationFailureClass", "RecoveryStatus"}
+    assert _names_imported_from_scheduler_actuation(
+        "from scheduler.actuation import (\n    ActuationResult,\n    RecoveryStatus,\n)\n"
+    ) == {"ActuationResult", "RecoveryStatus"}
+    root = Path(__file__).resolve().parents[2]
+    scheduler_sources = sorted((root / "services" / "scheduler").glob("*.py"))
+    for source in scheduler_sources:
+        tree = ast.parse(source.read_text())
+        defined = {node.name for node in ast.walk(tree) if isinstance(node, ast.ClassDef)}
+        assert not (defined & vocabulary), (source, defined & vocabulary)
+    consumers = [*scheduler_sources, *sorted((root / "tests").rglob("*.py"))]
+    for source in consumers:
+        imported = _names_imported_from_scheduler_actuation(source.read_text())
+        assert not (imported & vocabulary), (source, imported & vocabulary)

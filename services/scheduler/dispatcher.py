@@ -60,18 +60,14 @@ from nodalarc.models.link_events import LinkDecisionProvenance
 from nodalarc.models.link_state import LinkStateSnapshot
 from nodalarc.models.scheduler_ops import (
     ActualLinkSnapshot,
+    ActuationFailureClass,
     ActuationOpsDetails,
     ActuationState,
     OperatorRepairCommand,
     OperatorRepairResponse,
     PendingActuationPair,
+    RecoveryStatus,
     SchedulerOpsCode,
-)
-from nodalarc.models.scheduler_ops import (
-    ActuationFailureClass as OpsActuationFailureClass,
-)
-from nodalarc.models.scheduler_ops import (
-    RecoveryStatus as OpsRecoveryStatus,
 )
 from nodalarc.nats_channels import (
     NATS_CONNECT_OPTIONS,
@@ -99,13 +95,9 @@ from nodalarc.substrate.measurement_contract import RequiredSubstratePair, Subst
 from pydantic import ValidationError
 
 from scheduler.actuation import (
-    ActuationFailureClass,
     ActuationResult,
     GroundActuationState,
     next_verify_time,
-)
-from scheduler.actuation import (
-    RecoveryStatus as SchedulerRecoveryStatus,
 )
 from scheduler.agent_health import AgentHealthTracker, AgentHealthTransition
 from scheduler.agent_pool import AgentPool
@@ -1189,30 +1181,6 @@ class Dispatcher:
             self._gs_actuation[gs_id] = state
         return state
 
-    @staticmethod
-    def _ops_failure_class(failure: ActuationFailureClass) -> OpsActuationFailureClass:
-        mapping = {
-            ActuationFailureClass.NONE: OpsActuationFailureClass.NONE,
-            ActuationFailureClass.FENCE: OpsActuationFailureClass.FENCE,
-            ActuationFailureClass.GROUND_CLEAN_FAILURE: OpsActuationFailureClass.GROUND_CLEAN_FAILURE,
-            ActuationFailureClass.GROUND_KERNEL_DIRTY: OpsActuationFailureClass.GROUND_KERNEL_DIRTY,
-            ActuationFailureClass.GROUND_UNKNOWN: OpsActuationFailureClass.GROUND_UNKNOWN,
-            ActuationFailureClass.AGENT_UNREACHABLE: OpsActuationFailureClass.AGENT_UNREACHABLE,
-            ActuationFailureClass.ISL_FAILURE: OpsActuationFailureClass.ISL_FAILURE,
-        }
-        return mapping[failure]
-
-    @staticmethod
-    def _ops_recovery(recovery: SchedulerRecoveryStatus) -> OpsRecoveryStatus:
-        return OpsRecoveryStatus(
-            verify_attempt_count=recovery.verify_attempt_count,
-            last_verify_result=recovery.last_verify_result,
-            next_verify_after=recovery.next_verify_after,
-            verify_exhausted=recovery.verify_exhausted,
-            operator_action_required=recovery.operator_action_required,
-            active_intervention_id=recovery.active_intervention_id,
-        )
-
     def _actuation_details(
         self,
         *,
@@ -1231,7 +1199,7 @@ class Dispatcher:
         affected = set(affected_pairs or set())
         before_value = state_before.state.value if state_before else "unknown"
         after_value = state_after.state.value if state_after else before_value
-        recovery = state_after.recovery if state_after else SchedulerRecoveryStatus()
+        recovery = state_after.recovery if state_after else RecoveryStatus()
         return ActuationOpsDetails(
             session_id=self._session_id,
             wiring_generation=self._wiring_generation,
@@ -1242,7 +1210,7 @@ class Dispatcher:
             snapshot_seq=self._last_snapshot_seq,
             gs_id=gs_id,
             operation=operation,
-            failure_class=self._ops_failure_class(failure_class),
+            failure_class=failure_class,
             remediation=remediation,
             affected_pairs=self._pair_rows(affected),
             desired_pairs_for_gs=self._pair_rows(set(self._desired_ground_pairs_for_gs(gs_id)))
@@ -1259,7 +1227,7 @@ class Dispatcher:
             node_agent_results=result.node_agent_details() if result else [],
             actuation_state_before=before_value,
             actuation_state_after=after_value,
-            recovery_status=self._ops_recovery(recovery),
+            recovery_status=recovery,
             intervention_id=intervention_id,
             reason=reason,
         )
@@ -1498,10 +1466,10 @@ class Dispatcher:
         details = self._actuation_details(
             gs_id=None,
             operation=location,
-            failure_class=ActuationFailureClass.FENCE,
+            failure_class=ActuationFailureClass.AUTHORITY_INVARIANT,
             affected_pairs=violations,
             reason="Scheduler desired state is not a subset of OME visible+scheduled authority",
-        ).model_copy(update={"failure_class": OpsActuationFailureClass.AUTHORITY_INVARIANT})
+        )
         await self._halt_dispatcher(
             reason=f"C-A authority subset violation at {location}: {sorted(violations)}",
             code=SchedulerOpsCode.AUTHORITY_SUBSET_VIOLATION,
@@ -1700,7 +1668,7 @@ class Dispatcher:
             gs_id, set(affected_pairs) | set(self._actual_ground_pairs_for_gs(gs_id))
         )
         prior_attempts = before.recovery.verify_attempt_count
-        recovery = SchedulerRecoveryStatus(
+        recovery = RecoveryStatus(
             verify_attempt_count=prior_attempts,
             last_verify_result=before.recovery.last_verify_result,
             next_verify_after=next_verify_time(max(1, prior_attempts + 1), now=self._now),
@@ -2021,7 +1989,7 @@ class Dispatcher:
                 )
                 else self._transport_retry_delay_s
             )
-            recovery = SchedulerRecoveryStatus(
+            recovery = RecoveryStatus(
                 verify_attempt_count=state_before.recovery.verify_attempt_count,
                 last_verify_result="agent_unreachable",
                 next_verify_after=self._now() + timedelta(seconds=retry_delay_s),
@@ -2088,7 +2056,7 @@ class Dispatcher:
 
         attempts = state_before.recovery.verify_attempt_count + 1
         exhausted = attempts >= self._max_kernel_verify_attempts
-        recovery = SchedulerRecoveryStatus(
+        recovery = RecoveryStatus(
             verify_attempt_count=attempts,
             last_verify_result="failed",
             next_verify_after=None if exhausted else next_verify_time(attempts + 1, now=self._now),
@@ -2753,7 +2721,7 @@ class Dispatcher:
             return
 
         self._repair_original_states[cmd.intervention_id] = state
-        active_recovery = SchedulerRecoveryStatus(
+        active_recovery = RecoveryStatus(
             verify_attempt_count=0,
             last_verify_result=state.recovery.last_verify_result,
             next_verify_after=None,
@@ -2814,7 +2782,7 @@ class Dispatcher:
         actual_before = frozenset(self._actual_links)
         pending_before = frozenset(self._pending_since)
         before = self._repair_original_states.pop(cmd.intervention_id, self._ground_state(gs_id))
-        active_recovery = SchedulerRecoveryStatus(
+        active_recovery = RecoveryStatus(
             verify_attempt_count=0,
             last_verify_result=before.recovery.last_verify_result,
             next_verify_after=None,
@@ -2970,7 +2938,7 @@ class Dispatcher:
             )
         except Exception as exc:
             current = self._ground_state(gs_id)
-            failed_recovery = SchedulerRecoveryStatus(
+            failed_recovery = RecoveryStatus(
                 verify_attempt_count=0,
                 last_verify_result="operator_repair_failed",
                 next_verify_after=next_verify_time(1, now=self._now),

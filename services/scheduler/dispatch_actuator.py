@@ -18,6 +18,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from nodalarc.models.link_events import LatencyUpdate, LinkDown, LinkUp
+from nodalarc.models.scheduler_ops import ActuationFailureClass
 from nodalarc.proto import node_agent_pb2
 from nodalarc.vxlan import compute_vni
 
@@ -244,8 +245,6 @@ async def _send_latency_to_agent(
 def _merge_agent_results(
     *, addr: str, operation: str, results: list[AgentCommandResult]
 ) -> AgentCommandResult:
-    from scheduler.actuation import ActuationFailureClass
-
     if not results:
         return AgentCommandResult(
             agent_addr=addr,

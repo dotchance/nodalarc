@@ -30,6 +30,7 @@ from nodalarc.models.link_state import (
     LinkStateSnapshot,
     RoutingState,
 )
+from nodalarc.models.scheduler_ops import ActuationFailureClass
 from nodalarc.nats_channels import (
     link_state_snapshot_subject,
     ome_clock_subject,
@@ -40,7 +41,6 @@ from nodalarc.nats_channels import (
 )
 from nodalarc.platform_config import init_platform_config
 from scheduler.actuation import (
-    ActuationFailureClass,
     ActuationResult,
     AgentCommandResult,
     PairActuationResult,

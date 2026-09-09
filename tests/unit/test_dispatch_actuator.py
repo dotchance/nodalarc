@@ -9,11 +9,18 @@ import json
 import logging
 from datetime import UTC, datetime
 
+import pytest
 from nodalarc.models.link_events import LinkDecisionProvenance
+from nodalarc.models.scheduler_ops import ActuationFailureClass
 from nodalarc.proto import node_agent_pb2
 from scheduler.desired_state import ActiveLinkInfo
 from scheduler.dispatch_actuator import (
     MAX_NODE_AGENT_INTERFACES_PER_COMMAND,
+    _send_batch_down_to_agent,
+    _send_batch_up_to_agent,
+    _send_chunked_command,
+    _send_kernel_inventory_to_agent,
+    _send_latency_to_agent,
     send_authoritative_latency_updates,
     send_batch_up,
 )
@@ -420,3 +427,334 @@ def test_ground_latency_update_updates_both_local_shaped_interfaces():
     }
     assert len(js.published) == 1
     assert datetime.fromisoformat(js.published[0][1]["sim_time"].replace("Z", "+00:00")) == SIM_TIME
+
+
+# --- one command sender: request shape and failure paths per operation ---
+
+
+def _ok_results(items, result_type):
+    return [
+        result_type(
+            node_id=item.node_id, interface_name=item.interface_name, success=True, verified=True
+        )
+        for item in items
+    ]
+
+
+class _RecordingStub:
+    """Answers every operation with success and records the requests in order."""
+
+    def __init__(self) -> None:
+        self.requests: list = []
+
+    async def async_batch_link_down(self, req):
+        self.requests.append(req)
+        return node_agent_pb2.BatchLinkDownResponse(
+            success=True,
+            interface_results=_ok_results(req.interfaces, node_agent_pb2.InterfaceResult),
+        )
+
+    async def async_batch_link_up(self, req):
+        self.requests.append(req)
+        return node_agent_pb2.BatchLinkUpResponse(
+            success=True,
+            interface_results=_ok_results(req.interfaces, node_agent_pb2.InterfaceResult),
+        )
+
+    async def async_set_latency(self, req):
+        self.requests.append(req)
+        return node_agent_pb2.SetLatencyResponse(
+            success=True, entry_results=_ok_results(req.entries, node_agent_pb2.LatencyResult)
+        )
+
+    async def async_kernel_inventory(self, req):
+        self.requests.append(req)
+        return node_agent_pb2.KernelInventoryResponse(
+            success=True,
+            entry_results=_ok_results(req.entries, node_agent_pb2.KernelInventoryEntryResult),
+        )
+
+
+class _OneStubPool:
+    def __init__(self, stub) -> None:
+        self.stub = stub
+        self.lookups: list[str] = []
+
+    def get_stub(self, agent_addr: str):
+        self.lookups.append(agent_addr)
+        return self.stub
+
+
+def _items(kind, count: int):
+    return [kind(node_id=f"n{i:03d}", interface_name="isl0") for i in range(count)]
+
+
+def _senders(pool, count: int):
+    sim_iso = SIM_TIME.isoformat()
+    common = {"pool": pool, "session_id": SESSION_ID, "wiring_generation": WIRING_GENERATION}
+    return {
+        "BatchLinkDown": (
+            lambda: _send_batch_down_to_agent(
+                addr="agent-x",
+                interfaces=_items(node_agent_pb2.InterfaceDown, count),
+                sim_iso=sim_iso,
+                **common,
+            ),
+            node_agent_pb2.BatchLinkDownRequest,
+            f"{sim_iso}-down-agent-x",
+            "interfaces",
+        ),
+        "BatchLinkUp": (
+            lambda: _send_batch_up_to_agent(
+                addr="agent-x",
+                interfaces=_items(node_agent_pb2.InterfaceUp, count),
+                sim_iso=sim_iso,
+                **common,
+            ),
+            node_agent_pb2.BatchLinkUpRequest,
+            f"{sim_iso}-up-agent-x",
+            "interfaces",
+        ),
+        "SetLatency": (
+            lambda: _send_latency_to_agent(
+                agent_addr="agent-x",
+                entries=_items(node_agent_pb2.LatencyEntry, count),
+                sim_time=SIM_TIME,
+                **common,
+            ),
+            node_agent_pb2.SetLatencyRequest,
+            f"{sim_iso}-latency-agent-x",
+            "entries",
+        ),
+        "KernelInventory": (
+            lambda: _send_kernel_inventory_to_agent(
+                addr="agent-x",
+                entries=_items(node_agent_pb2.KernelInventoryEntry, count),
+                sim_iso=sim_iso,
+                gs_id="gs-den",
+                **common,
+            ),
+            node_agent_pb2.KernelInventoryRequest,
+            f"{sim_iso}-kernel-inventory-gs-den-agent-x",
+            "entries",
+        ),
+    }
+
+
+def test_every_sender_preserves_its_request_shape_across_chunks():
+    count = MAX_NODE_AGENT_INTERFACES_PER_COMMAND + 1
+    for operation in ("BatchLinkDown", "BatchLinkUp", "SetLatency", "KernelInventory"):
+        stub = _RecordingStub()
+        pool = _OneStubPool(stub)
+        start, request_type, base, item_field = _senders(pool, count)[operation]
+        result = asyncio.run(start())
+        assert pool.lookups == ["agent-x"]
+        assert [type(req) for req in stub.requests] == [request_type, request_type]
+        assert [req.envelope.operation_id for req in stub.requests] == [
+            f"{base}-part001of002",
+            f"{base}-part002of002",
+        ]
+        assert {req.envelope.operation_kind for req in stub.requests} == {operation}
+        assert {req.envelope.session_id for req in stub.requests} == {SESSION_ID}
+        assert {req.envelope.wiring_generation for req in stub.requests} == {WIRING_GENERATION}
+        assert [len(getattr(req, item_field)) for req in stub.requests] == [
+            MAX_NODE_AGENT_INTERFACES_PER_COMMAND,
+            1,
+        ]
+        field_names = {field.name for field in request_type.DESCRIPTOR.fields}
+        if operation == "SetLatency":
+            assert "target_sim_time" not in field_names
+        else:
+            assert {req.target_sim_time for req in stub.requests} == {SIM_TIME.isoformat()}
+        if operation == "KernelInventory":
+            assert {req.gs_id for req in stub.requests} == {"gs-den"}
+        assert result.failure_class == ActuationFailureClass.NONE
+        assert len(result.success_acks) == count
+        assert len(result.details["chunks"]) == 2
+
+
+def test_single_chunk_result_passes_through_and_empty_input_sends_nothing():
+    for operation in ("BatchLinkDown", "BatchLinkUp", "SetLatency", "KernelInventory"):
+        stub = _RecordingStub()
+        pool = _OneStubPool(stub)
+        start, _request_type, base, _field = _senders(pool, 3)[operation]
+        result = asyncio.run(start())
+        assert [req.envelope.operation_id for req in stub.requests] == [base]
+        assert "chunks" not in result.details
+        assert len(result.details["interface_results"]) == 3
+        assert result.details["requested"] == result.details["returned"]
+
+        stub = _RecordingStub()
+        pool = _OneStubPool(stub)
+        start, _request_type, _base, _field = _senders(pool, 0)[operation]
+        result = asyncio.run(start())
+        assert stub.requests == []
+        assert result.requested == ()
+        assert result.failure_class == ActuationFailureClass.NONE
+        assert result.details == {"agent_addr": "agent-x", "operation": operation, "chunks": []}
+
+
+class _MixedStub(_RecordingStub):
+    """First chunk: one interface fails cleanly. Second chunk: transport error."""
+
+    async def async_batch_link_up(self, req):
+        self.requests.append(req)
+        if len(self.requests) == 2:
+            raise RuntimeError("transport lost")
+        results = []
+        for index, iface in enumerate(req.interfaces):
+            ok = index != 0
+            results.append(
+                node_agent_pb2.InterfaceResult(
+                    node_id=iface.node_id,
+                    interface_name=iface.interface_name,
+                    success=ok,
+                    verified=ok,
+                    error_message="" if ok else "boom",
+                )
+            )
+        return node_agent_pb2.BatchLinkUpResponse(success=False, interface_results=results)
+
+
+def test_sender_continues_after_a_failed_chunk_and_merges_every_chunks_evidence():
+    stub = _MixedStub()
+    pool = _OneStubPool(stub)
+    count = MAX_NODE_AGENT_INTERFACES_PER_COMMAND + 2
+    result = asyncio.run(
+        _send_batch_up_to_agent(
+            addr="agent-x",
+            interfaces=_items(node_agent_pb2.InterfaceUp, count),
+            pool=pool,
+            sim_iso=SIM_TIME.isoformat(),
+            session_id=SESSION_ID,
+            wiring_generation=WIRING_GENERATION,
+        )
+    )
+    assert len(stub.requests) == 2, (
+        "the second chunk is sent after the first is classified as failed"
+    )
+    first_acks = {
+        ("agent-x", iface.node_id, iface.interface_name) for iface in stub.requests[0].interfaces
+    } - {("agent-x", "n000", "isl0")}
+    assert result.success_acks == frozenset(first_acks)
+    assert result.failure_class == ActuationFailureClass.AGENT_UNREACHABLE
+    assert result.dirty_kernel is True
+    assert result.unknown_outcome is True
+    assert result.fence_failure is False
+    assert len(result.requested) == count
+    chunks = result.details["chunks"]
+    assert [chunk["error_code"] for chunk in chunks] == [
+        "NODE_AGENT_ERROR_UNSPECIFIED",
+        "TRANSPORT",
+    ]
+    assert chunks[0]["interface_results"][0]["error_message"] == "boom"
+    assert chunks[1]["error_message"] == "transport lost"
+    assert chunks[1]["requested"] == [["n064", "isl0"], ["n065", "isl0"]]
+    assert stub.requests[0].interfaces[0].node_id == "n000"
+    assert result.details["error_message"] == "transport lost"
+    assert len(result.details["interface_results"]) == MAX_NODE_AGENT_INTERFACES_PER_COMMAND
+
+
+class _CancellingStub(_RecordingStub):
+    async def async_batch_link_up(self, req):
+        raise asyncio.CancelledError()
+
+
+def test_cancellation_and_construction_errors_propagate_unclassified():
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(
+            _send_batch_up_to_agent(
+                addr="agent-x",
+                interfaces=_items(node_agent_pb2.InterfaceUp, 1),
+                pool=_OneStubPool(_CancellingStub()),
+                sim_iso=SIM_TIME.isoformat(),
+                session_id=SESSION_ID,
+                wiring_generation=WIRING_GENERATION,
+            )
+        )
+
+    stub = _RecordingStub()
+
+    def _broken_request(_envelope, _chunk):
+        raise ValueError("cannot build")
+
+    with pytest.raises(ValueError, match="cannot build"):
+        asyncio.run(
+            _send_chunked_command(
+                addr="agent-x",
+                items=_items(node_agent_pb2.InterfaceUp, 1),
+                pool=_OneStubPool(stub),
+                operation="BatchLinkUp",
+                operation_id_base="base",
+                session_id=SESSION_ID,
+                wiring_generation=WIRING_GENERATION,
+                build_request=_broken_request,
+                send=lambda s, req: s.async_batch_link_up(req),
+            )
+        )
+    assert stub.requests == []
+
+    class _NoStubPool:
+        def get_stub(self, _addr):
+            raise LookupError("no agent")
+
+    with pytest.raises(LookupError, match="no agent"):
+        asyncio.run(
+            _send_batch_up_to_agent(
+                addr="agent-x",
+                interfaces=_items(node_agent_pb2.InterfaceUp, 1),
+                pool=_NoStubPool(),
+                sim_iso=SIM_TIME.isoformat(),
+                session_id=SESSION_ID,
+                wiring_generation=WIRING_GENERATION,
+            )
+        )
+
+
+class _HandshakeStub(_Stub):
+    """agent-n1's request waits until agent-n2's request has arrived."""
+
+    def __init__(self, name: str, arrived: asyncio.Event) -> None:
+        super().__init__()
+        self.name = name
+        self.arrived = arrived
+
+    async def async_batch_link_up(self, req):
+        if self.name == "agent-n1":
+            await asyncio.wait_for(self.arrived.wait(), timeout=2)
+        else:
+            self.arrived.set()
+        return await super().async_batch_link_up(req)
+
+
+def test_agents_are_sent_concurrently_while_each_agents_chunks_stay_in_order():
+    async def _run():
+        arrived = asyncio.Event()
+        stubs = {name: _HandshakeStub(name, arrived) for name in ("agent-n1", "agent-n2")}
+
+        class _HandshakePool:
+            def get_stub(self, agent_addr: str):
+                return stubs[agent_addr]
+
+        pool = _HandshakePool()
+        desired = {("n1", "n2"): _desired()[next(iter(_desired()))]}
+        return await send_batch_up(
+            pairs=set(desired),
+            desired=desired,
+            locator=_Locator(),
+            pool=pool,
+            js=_Js(),
+            subj_link_up="links.up",
+            sim_iso=SIM_TIME.isoformat(),
+            sim_time=SIM_TIME,
+            gs_capacities={},
+            latency_compensation=_compensation,
+            validate_authority_freshness=_validate,
+            link_provenance=_provenance,
+            session_id=SESSION_ID,
+            wiring_generation=WIRING_GENERATION,
+        ), stubs
+
+    result, stubs = asyncio.run(_run())
+    assert result.failed_pairs == set()
+    assert len(stubs["agent-n1"].requests) == 1 and len(stubs["agent-n2"].requests) == 1

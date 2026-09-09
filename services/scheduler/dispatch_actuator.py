@@ -13,7 +13,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from datetime import UTC, datetime
 from typing import Any
 
@@ -108,34 +108,42 @@ def _gs_id_for_pair(pair: LinkPair, gs_capacities: Mapping[str, int], link_type:
     return pair[0] if pair[0] in gs_capacities else pair[1]
 
 
-async def _send_batch_down_to_agent(
+async def _send_chunked_command(
     *,
     addr: str,
-    interfaces: list[node_agent_pb2.InterfaceDown],
+    items: list,
     pool: Any,
-    sim_iso: str,
+    operation: str,
+    operation_id_base: str,
     session_id: str,
     wiring_generation: str,
+    build_request: Callable[[node_agent_pb2.CommandEnvelope, list], Any],
+    send: Callable[[Any, Any], Awaitable[Any]],
 ) -> AgentCommandResult:
-    operation = "BatchLinkDown"
-    chunks = list(_chunks(interfaces))
+    """Send one operation to one agent, chunk by chunk in order, and merge.
+
+    Each chunk is fenced by the same session and wiring generation and named
+    by `_chunked_operation_id`. Only the send and the reply's classification
+    sit inside the failure boundary: a stub lookup or request construction
+    error propagates, and so does cancellation. A chunk classified as failed
+    does not stop the chunks after it; every chunk's evidence reaches the
+    merged result.
+    """
+    chunks = list(_chunks(items))
     chunk_results: list[AgentCommandResult] = []
     stub = pool.get_stub(addr)
     for chunk_index, chunk in chunks:
-        req = node_agent_pb2.BatchLinkDownRequest(
-            envelope=node_agent_pb2.CommandEnvelope(
-                operation_id=_chunked_operation_id(
-                    f"{sim_iso}-down-{addr}", chunk_index, len(chunks)
-                ),
+        req = build_request(
+            node_agent_pb2.CommandEnvelope(
+                operation_id=_chunked_operation_id(operation_id_base, chunk_index, len(chunks)),
                 session_id=session_id,
                 wiring_generation=wiring_generation,
                 operation_kind=operation,
             ),
-            target_sim_time=sim_iso,
-            interfaces=chunk,
+            chunk,
         )
         try:
-            result = await stub.async_batch_link_down(req)
+            result = await send(stub, req)
             classified = classify_agent_response(
                 result=result,
                 requested_interfaces=chunk,
@@ -151,6 +159,30 @@ async def _send_batch_down_to_agent(
             )
         chunk_results.append(classified)
     return _merge_agent_results(addr=addr, operation=operation, results=chunk_results)
+
+
+async def _send_batch_down_to_agent(
+    *,
+    addr: str,
+    interfaces: list[node_agent_pb2.InterfaceDown],
+    pool: Any,
+    sim_iso: str,
+    session_id: str,
+    wiring_generation: str,
+) -> AgentCommandResult:
+    return await _send_chunked_command(
+        addr=addr,
+        items=interfaces,
+        pool=pool,
+        operation="BatchLinkDown",
+        operation_id_base=f"{sim_iso}-down-{addr}",
+        session_id=session_id,
+        wiring_generation=wiring_generation,
+        build_request=lambda envelope, chunk: node_agent_pb2.BatchLinkDownRequest(
+            envelope=envelope, target_sim_time=sim_iso, interfaces=chunk
+        ),
+        send=lambda stub, req: stub.async_batch_link_down(req),
+    )
 
 
 async def _send_batch_up_to_agent(
@@ -162,40 +194,19 @@ async def _send_batch_up_to_agent(
     session_id: str,
     wiring_generation: str,
 ) -> AgentCommandResult:
-    operation = "BatchLinkUp"
-    chunks = list(_chunks(interfaces))
-    chunk_results: list[AgentCommandResult] = []
-    stub = pool.get_stub(addr)
-    for chunk_index, chunk in chunks:
-        req = node_agent_pb2.BatchLinkUpRequest(
-            envelope=node_agent_pb2.CommandEnvelope(
-                operation_id=_chunked_operation_id(
-                    f"{sim_iso}-up-{addr}", chunk_index, len(chunks)
-                ),
-                session_id=session_id,
-                wiring_generation=wiring_generation,
-                operation_kind=operation,
-            ),
-            target_sim_time=sim_iso,
-            interfaces=chunk,
-        )
-        try:
-            result = await stub.async_batch_link_up(req)
-            classified = classify_agent_response(
-                result=result,
-                requested_interfaces=chunk,
-                agent_addr=addr,
-                operation=operation,
-            )
-        except Exception as exc:
-            classified = classify_agent_exception(
-                exc=exc,
-                requested_interfaces=chunk,
-                agent_addr=addr,
-                operation=operation,
-            )
-        chunk_results.append(classified)
-    return _merge_agent_results(addr=addr, operation=operation, results=chunk_results)
+    return await _send_chunked_command(
+        addr=addr,
+        items=interfaces,
+        pool=pool,
+        operation="BatchLinkUp",
+        operation_id_base=f"{sim_iso}-up-{addr}",
+        session_id=session_id,
+        wiring_generation=wiring_generation,
+        build_request=lambda envelope, chunk: node_agent_pb2.BatchLinkUpRequest(
+            envelope=envelope, target_sim_time=sim_iso, interfaces=chunk
+        ),
+        send=lambda stub, req: stub.async_batch_link_up(req),
+    )
 
 
 async def _send_latency_to_agent(
@@ -207,39 +218,19 @@ async def _send_latency_to_agent(
     session_id: str,
     wiring_generation: str,
 ) -> AgentCommandResult:
-    operation = "SetLatency"
-    chunks = list(_chunks(entries))
-    chunk_results: list[AgentCommandResult] = []
-    stub = pool.get_stub(agent_addr)
-    for chunk_index, chunk in chunks:
-        req = node_agent_pb2.SetLatencyRequest(
-            envelope=node_agent_pb2.CommandEnvelope(
-                operation_id=_chunked_operation_id(
-                    f"{sim_time.isoformat()}-latency-{agent_addr}", chunk_index, len(chunks)
-                ),
-                session_id=session_id,
-                wiring_generation=wiring_generation,
-                operation_kind=operation,
-            ),
-            entries=chunk,
-        )
-        try:
-            result = await stub.async_set_latency(req)
-            classified = classify_agent_response(
-                result=result,
-                requested_interfaces=chunk,
-                agent_addr=agent_addr,
-                operation=operation,
-            )
-        except Exception as exc:
-            classified = classify_agent_exception(
-                exc=exc,
-                requested_interfaces=chunk,
-                agent_addr=agent_addr,
-                operation=operation,
-            )
-        chunk_results.append(classified)
-    return _merge_agent_results(addr=agent_addr, operation=operation, results=chunk_results)
+    return await _send_chunked_command(
+        addr=agent_addr,
+        items=entries,
+        pool=pool,
+        operation="SetLatency",
+        operation_id_base=f"{sim_time.isoformat()}-latency-{agent_addr}",
+        session_id=session_id,
+        wiring_generation=wiring_generation,
+        build_request=lambda envelope, chunk: node_agent_pb2.SetLatencyRequest(
+            envelope=envelope, entries=chunk
+        ),
+        send=lambda stub, req: stub.async_set_latency(req),
+    )
 
 
 def _merge_agent_results(
@@ -424,41 +415,19 @@ async def _send_kernel_inventory_to_agent(
     wiring_generation: str,
     gs_id: str,
 ) -> AgentCommandResult:
-    operation = "KernelInventory"
-    chunks = list(_chunks(entries))
-    chunk_results: list[AgentCommandResult] = []
-    stub = pool.get_stub(addr)
-    for chunk_index, chunk in chunks:
-        req = node_agent_pb2.KernelInventoryRequest(
-            envelope=node_agent_pb2.CommandEnvelope(
-                operation_id=_chunked_operation_id(
-                    f"{sim_iso}-kernel-inventory-{gs_id}-{addr}", chunk_index, len(chunks)
-                ),
-                session_id=session_id,
-                wiring_generation=wiring_generation,
-                operation_kind=operation,
-            ),
-            target_sim_time=sim_iso,
-            gs_id=gs_id,
-            entries=chunk,
-        )
-        try:
-            result = await stub.async_kernel_inventory(req)
-            classified = classify_agent_response(
-                result=result,
-                requested_interfaces=chunk,
-                agent_addr=addr,
-                operation=operation,
-            )
-        except Exception as exc:
-            classified = classify_agent_exception(
-                exc=exc,
-                requested_interfaces=chunk,
-                agent_addr=addr,
-                operation=operation,
-            )
-        chunk_results.append(classified)
-    return _merge_agent_results(addr=addr, operation=operation, results=chunk_results)
+    return await _send_chunked_command(
+        addr=addr,
+        items=entries,
+        pool=pool,
+        operation="KernelInventory",
+        operation_id_base=f"{sim_iso}-kernel-inventory-{gs_id}-{addr}",
+        session_id=session_id,
+        wiring_generation=wiring_generation,
+        build_request=lambda envelope, chunk: node_agent_pb2.KernelInventoryRequest(
+            envelope=envelope, target_sim_time=sim_iso, gs_id=gs_id, entries=chunk
+        ),
+        send=lambda stub, req: stub.async_kernel_inventory(req),
+    )
 
 
 async def verify_ground_kernel_inventory(

@@ -1,0 +1,16 @@
+# TEMPORARY test fixture. Site set with a two-terminal Hawthorne copy for the MBB
+# acceptance session only. Do not ship; do not reference from product sessions. The
+# correct fix is a 36-satellite acceptance session that exercises MBB with the shipped
+# stations. Delete this file with the site set that references it when that lands.
+site_set:
+  id: earth-leo-mbb-acceptance-sites
+  display_name: TEMPORARY MBB acceptance sites (two-terminal Hawthorne)
+  sites:
+  - user:sites/earth/us/earth-us-hawthorne.yaml
+  - nodalarc:sites/earth/us/co/earth-us-co-denver.yaml
+  - nodalarc:sites/earth/us/va/earth-us-va-ashburn.yaml
+  - nodalarc:sites/earth/de/earth-de-frankfurt.yaml
+  notes: 'TEMPORARY test-specific site set for the MBB acceptance: the shipped Starlink
+    PoP set with Hawthorne replaced by a two-terminal copy. The proper fix is an acceptance
+    session whose geometry exercises MBB with the shipped stations; delete this set
+    and the user site when it lands.'

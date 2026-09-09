@@ -1,0 +1,61 @@
+# TEMPORARY test fixture. Two-terminal copy of the shipped Hawthorne site for the MBB
+# acceptance session only. Do not ship; do not reference from product sessions. The
+# correct fix is a 36-satellite acceptance session that exercises MBB with the shipped
+# stations. Delete this file with the site set that references it when that lands.
+site:
+  id: earth-us-hawthorne
+  display_name: Hawthorne Gateway Site (TEMPORARY two-terminal MBB acceptance copy)
+  verified:
+    source: FCC IBFS
+    filing: SES-LIC-20200210-00150
+    confidence: filing
+    notes: 'TEMPORARY test-specific copy of nodalarc:sites/earth/us/earth-us-hawthorne.yaml
+      for the MBB acceptance only: installed_count reduced from 8 to 2 so the 36-satellite
+      ring brings this station to its MBB steady limit. Not a product asset. The proper
+      fix is an acceptance session whose geometry exercises MBB with the shipped stations;
+      when that lands, delete this file and the site set that references it. Legacy
+      site fact: antennas=8. Legacy site fact: antenna_diameter_m=1.52. Legacy site
+      fact: band=Ka. Legacy operational mask was 25 degrees; operational masks belong
+      on link-rule endpoints in the current grammar.'
+  ethernet:
+  - id: lan0
+  nodes:
+  - id: gw1
+    display_name: LEO Gateway
+    node: nodalarc:nodes/ground/starlink-gateway.yaml
+    terminals:
+      access_ka:
+        installed_count: 2
+        capabilities:
+          bandwidth_mbps:
+            transmit: 5000
+            receive: 5000
+          tracking_capacity: 1
+          max_range_km: 1250
+          limits:
+            azimuth_deg:
+              min: -180
+              max: 180
+            elevation_deg:
+              min: 30.0
+              max: 90
+            max_tracking_rate_deg_s: 1.5
+          boresight:
+            mode: local_vertical
+    payloads: {}
+    interfaces:
+      terr0: lan0
+    tags:
+    - leo
+    originated_prefixes:
+      ipv4:
+      - lan0
+      ipv6:
+      - lan0
+  frame:
+    body_fixed:
+      body: nodalarc:bodies/earth.yaml
+  location:
+    lat_deg: 33.9175
+    lon_deg: -118.328111
+    alt_m: 20

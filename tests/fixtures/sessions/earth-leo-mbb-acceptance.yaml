@@ -7,7 +7,10 @@ segments:
   source: nodalarc:constellations/earth/leo/earth-leo-ring-36.yaml
 - id: ground
   placement:
-    from_site_set: nodalarc:site-sets/earth/leo/earth-leo-starlink-pop-sites.yaml
+    # TEMPORARY: a test-specific site set with a two-terminal Hawthorne so the 36-satellite
+    # ring reaches an MBB steady limit. The proper fix is a 36-satellite acceptance session
+    # that exercises MBB with the shipped stations (ID-23); restore the shipped set then.
+    from_site_set: user:site-sets/earth/leo/earth-leo-mbb-acceptance-sites.yaml
   apply:
     scheduling:
       selection_policy:

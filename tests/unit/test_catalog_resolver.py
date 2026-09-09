@@ -23,7 +23,7 @@ from nodalarc.resolve_session import (
 from nodalarc.session_validator import validate_session_readiness
 from pydantic import ValidationError
 
-from tests.catalog_session_fixtures import shipped_read_view
+from tests.catalog_session_fixtures import fixture_read_view, shipped_read_view
 
 ROOT = Path(__file__).resolve().parents[2]
 CATALOG = ROOT / "catalog" / "nodalarc"
@@ -470,7 +470,7 @@ def test_every_active_session_fixture_resolves_through_shared_authority() -> Non
     assert paths
 
     for path in paths:
-        resolution = load_session_resolution_from_file(path, catalog=shipped_read_view())
+        resolution = load_session_resolution_from_file(path, catalog=fixture_read_view())
         assert resolution.resolved.nodes, path.name
         assert resolution.resolved.link_candidates, path.name
         findings = validate_session_readiness(

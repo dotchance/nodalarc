@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import time
 from datetime import UTC, datetime, timedelta
@@ -21,6 +22,13 @@ from nodalarc.catalog_closure import FilesystemCatalogReadView
 from nodalarc.configuration_yaml import load_configuration_yaml
 from nodalarc.models.segment_session import SegmentSessionConfig
 from nodalarc.runtime_naming import gs_bridge_port_name
+from nodalarc.workload_target import (
+    NODE_ID_LABEL,
+    WorkloadTarget,
+    WorkloadTargetError,
+    select_live_pod,
+    workload_target_from_pod,
+)
 
 # Default assumes a local port-forward. Set VS_API_HOST to any reachable LAN
 # address or service DNS name when testing a distributed deployment.
@@ -30,6 +38,18 @@ KUBECTL = "sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl"
 
 
 MBB_ACCEPTANCE_SESSION = Path("tests/fixtures/sessions/earth-leo-mbb-acceptance.yaml")
+# TEMPORARY (ID-23): the acceptance session references test-specific `user:` catalog
+# objects, a two-terminal copy of the shipped Hawthorne site and a site set that
+# carries it, so the 36-satellite ring brings one station to its MBB steady limit.
+# The proper fix is a 36-satellite acceptance session that exercises MBB with the
+# shipped stations; when it lands, delete these fixtures and this block, and point
+# the session back at the shipped site set. Written to the runtime's `user:` catalog
+# through the builder API before each acceptance deploy; never shipped.
+ACCEPTANCE_USER_CATALOG_ROOT = Path("tests/fixtures/catalog/user")
+ACCEPTANCE_USER_CATALOG_REFS = (
+    "user:sites/earth/us/earth-us-hawthorne.yaml",
+    "user:site-sets/earth/leo/earth-leo-mbb-acceptance-sites.yaml",
+)
 MBB_BAD_OPS_CODES = {
     "KERNEL_DIRTY",
     "ACTUATION_BLOCKED",
@@ -193,6 +213,323 @@ def _router_loopback_from_node(node: dict | None) -> str | None:
     return None
 
 
+def _published_loopback_ip(node_id: str, nodes_by_id: dict[str, dict]) -> str | None:
+    """The node's IPv4 router loopback as the resolver published it on the
+    VS-API state. There is no other source: a node without a published
+    loopback has no probe identity, and no command is run to guess one."""
+    return _router_loopback_from_node(nodes_by_id.get(node_id))
+
+
+def _workload_target(node_id: str) -> tuple[WorkloadTarget | None, str | None]:
+    """The node's live pod and primary workload container, as the Operator
+    published them. The pod is selected by the node-id label, never by a
+    name derived from the id; exactly one live pod must exist; the
+    annotation must name a declared container; and the pod's label must be
+    the requested node. Any other outcome is a typed reason, not a guess."""
+    import subprocess
+
+    listing = subprocess.run(
+        f"{KUBECTL} get pods -n nodalarc -l {NODE_ID_LABEL}={node_id} -o json",
+        capture_output=True,
+        text=True,
+        timeout=20,
+        shell=True,
+    )
+    if listing.returncode != 0:
+        return None, f"pod listing for {node_id} failed: {listing.stderr.strip()[-200:]}"
+    try:
+        items = json.loads(listing.stdout).get("items") or []
+    except ValueError:
+        return None, f"pod listing for {node_id} was not JSON"
+    try:
+        target = workload_target_from_pod(select_live_pod(items, node_id))
+    except WorkloadTargetError as exc:
+        return None, str(exc)
+    if target.node_id != node_id:
+        return (
+            None,
+            f"pod {target.pod_name!r} is labelled for node {target.node_id!r}, not {node_id!r}",
+        )
+    return target, None
+
+
+def _workload_exec(node_id: str, command: str, *, timeout: int = 20) -> dict:
+    """Run one command in the node's published primary workload container.
+
+    The target is resolved on every call, so a replaced pod is never reached
+    through a stale name. The exit status classifies nothing: each probe
+    step decides what it observed by parsing the tool's own output. A
+    target that cannot be resolved is reported in ``resolution_error`` and
+    nothing is executed.
+    """
+    import subprocess
+
+    target, error = _workload_target(node_id)
+    if target is None:
+        return {
+            "rc": None,
+            "stdout": "",
+            "stderr": "",
+            "target": None,
+            "resolution_error": error,
+        }
+    result = subprocess.run(
+        f"{KUBECTL} exec -n {target.namespace} {target.pod_name} "
+        f"-c {target.container} -- {command}",
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        shell=True,
+    )
+    return {
+        "rc": result.returncode,
+        "stdout": result.stdout[-4000:],
+        "stderr": result.stderr[-1000:],
+        "target": {"pod": target.pod_name, "container": target.container},
+        "resolution_error": None,
+    }
+
+
+# Kernel answers that are evidence of *no route*: ENETUNREACH and EHOSTUNREACH
+# in the wording of glibc ("Network is unreachable", "No route to host") and
+# of musl ("Network unreachable", "Host is unreachable"), which the Alpine
+# router image uses. Every other RTNETLINK answer (Operation not permitted,
+# Invalid argument, ...) is a failed probe.
+ROUTING_UNREACHABLE_ANSWERS = (
+    "Network is unreachable",
+    "Network unreachable",
+    "No route to host",
+    "Host is unreachable",
+)
+
+
+def _route_observation(result: dict, dst_ip: str) -> dict:
+    """What `ip route get DST` observed: a route (positive), a recognized
+    no-route answer (negative), or nothing usable (unobserved)."""
+    if result.get("resolution_error"):
+        return {"observed": False, "positive": False, "reason": result["resolution_error"]}
+    stdout = result.get("stdout") or ""
+    stderr = result.get("stderr") or ""
+    egress = _route_egress_dev(stdout)
+    if dst_ip in stdout and egress:
+        return {"observed": True, "positive": True, "egress_dev": egress, "reason": "route present"}
+    for answer in ROUTING_UNREACHABLE_ANSWERS:
+        if f"RTNETLINK answers: {answer}" in stderr or f"RTNETLINK answers: {answer}" in stdout:
+            return {
+                "observed": True,
+                "positive": False,
+                "egress_dev": None,
+                "reason": f"kernel answered {answer}",
+            }
+    return {
+        "observed": False,
+        "positive": False,
+        "egress_dev": None,
+        "reason": (
+            f"route query for {dst_ip} produced no observation "
+            f"(rc={result.get('rc')}): {(stderr or stdout).strip()[-160:]}"
+        ),
+    }
+
+
+_DAEMON_REFUSAL_MARKERS = ("failed to connect to any daemons", "Exiting:", "% ")
+_NEIGHBOR_TABLE_MARKERS = {
+    "isis": ("System Id", "Area "),
+    "ospf": ("Neighbor ID",),
+}
+
+
+def _adjacency_observation(result: dict, protocol: str) -> dict:
+    """What the routing daemon's neighbor query observed: a table with an
+    adjacency in the up state (positive), a table without one (negative),
+    or no table at all (unobserved: vtysh absent, daemon refused, unusable)."""
+    if result.get("resolution_error"):
+        return {"observed": False, "positive": False, "reason": result["resolution_error"]}
+    stdout = result.get("stdout") or ""
+    stderr = result.get("stderr") or ""
+    combined = stdout + "\n" + stderr
+    if any(marker in combined for marker in _DAEMON_REFUSAL_MARKERS):
+        return {
+            "observed": False,
+            "positive": False,
+            "reason": f"routing daemon query refused: {combined.strip()[-160:]}",
+        }
+    markers = _NEIGHBOR_TABLE_MARKERS["ospf" if protocol == "ospf" else "isis"]
+    if not any(marker in stdout for marker in markers):
+        return {
+            "observed": False,
+            "positive": False,
+            "reason": (
+                f"neighbor query produced no table (rc={result.get('rc')}): "
+                f"{combined.strip()[-160:]}"
+            ),
+        }
+    up = _routing_neighbor_up(stdout, protocol)
+    return {
+        "observed": True,
+        "positive": up,
+        "reason": "adjacency up" if up else "neighbor table has no adjacency in the up state",
+    }
+
+
+_PING_STATISTICS = re.compile(
+    r"(\d+) packets transmitted, (\d+) (?:packets )?received,.*?(\d+(?:\.\d+)?)% packet loss"
+)
+
+
+def _parse_ping_statistics(stdout: str) -> dict | None:
+    """The numbers of ping's statistics line, or None when ping printed none.
+
+    The line is an observation only when its numbers agree: at least one
+    packet transmitted, no more received than transmitted, and the printed
+    loss percentage matching the counts (ping rounds to a whole percent).
+    A line that fails those checks is returned with ``consistent`` False and
+    the ``problem`` named, and no caller treats it as an observation.
+    """
+    for line in stdout.splitlines():
+        match = _PING_STATISTICS.search(line)
+        if not match:
+            continue
+        transmitted, received = int(match.group(1)), int(match.group(2))
+        loss_pct = float(match.group(3))
+        problem = None
+        if transmitted <= 0:
+            problem = "no packet was transmitted"
+        elif received > transmitted:
+            problem = f"{received} received exceeds {transmitted} transmitted"
+        else:
+            expected_loss = (transmitted - received) * 100.0 / transmitted
+            if abs(loss_pct - expected_loss) > 1.0:
+                problem = f"{loss_pct:g}% loss contradicts {received} of {transmitted} received"
+        return {
+            "transmitted": transmitted,
+            "received": received,
+            "loss_pct": loss_pct,
+            "loss_class": _packet_loss_class(transmitted, received) if problem is None else None,
+            "consistent": problem is None,
+            "problem": problem,
+            "stats": line.strip(),
+        }
+    return None
+
+
+def _packet_loss_class(transmitted: int, received: int) -> str:
+    if transmitted > 0 and received == transmitted:
+        return "zero_loss"
+    if received == 0:
+        return "total_loss"
+    return "partial_loss"
+
+
+def _ping_unreachable_answer(stdout: str, stderr: str) -> str | None:
+    """A recognized no-route answer printed by ping itself (`ping: ...`), never
+    one that appears inside an exec or runtime diagnostic."""
+    for line in (stdout + "\n" + stderr).splitlines():
+        text = line.strip()
+        if not text.startswith("ping:"):
+            continue
+        for answer in ROUTING_UNREACHABLE_ANSWERS:
+            if answer in text:
+                return answer
+    return None
+
+
+def _packet_observation(result: dict) -> dict:
+    """What a synchronous ping observed. Consistent completed statistics, or a
+    no-route answer printed by ping, are observations; anything else is
+    unobserved. The sequence-only reading belongs to the interrupted handover
+    window and is never a completed observation here."""
+    if result.get("resolution_error"):
+        return {"observed": False, "positive": False, "reason": result["resolution_error"]}
+    stdout = result.get("stdout") or ""
+    stderr = result.get("stderr") or ""
+    stats = _parse_ping_statistics(stdout)
+    if stats is not None and not stats["consistent"]:
+        return {
+            "observed": False,
+            "positive": False,
+            "replies": False,
+            "loss_class": None,
+            "stats": stats["stats"],
+            "reason": f"ping statistics are not a valid observation: {stats['problem']}",
+        }
+    if stats is not None:
+        return {
+            "observed": True,
+            "positive": stats["loss_class"] == "zero_loss",
+            "replies": stats["received"] > 0,
+            "loss_class": stats["loss_class"],
+            "stats": stats["stats"],
+            "reason": f"ping {stats['loss_class']}: {stats['stats']}",
+        }
+    answer = _ping_unreachable_answer(stdout, stderr)
+    if answer is not None:
+        return {
+            "observed": True,
+            "positive": False,
+            "replies": False,
+            "loss_class": "total_loss",
+            "stats": "network unreachable",
+            "reason": f"ping answered {answer}",
+        }
+    return {
+        "observed": False,
+        "positive": False,
+        "replies": False,
+        "loss_class": None,
+        "stats": "",
+        "reason": (
+            f"ping produced no statistics (rc={result.get('rc')}): "
+            f"{(stderr or stdout).strip()[-160:]}"
+        ),
+    }
+
+
+def _sweep_verdict(attempts: list[dict], no_probe_reason: str) -> dict:
+    """The FAIL of a probe sweep that found no proof. Disconnection is a
+    conclusion only when every executed probe was fully observed and
+    negative; one failed probe, or none executed, is a failed probe. Every
+    attempt and every distinct failure reason is retained in the evidence."""
+    failures = [a for a in attempts if a.get("kind") == "probe_failure"]
+    negatives = [a for a in attempts if a.get("kind") == "observed_negative"]
+    counts = {
+        "attempt_count": len(attempts),
+        "probe_failure_count": len(failures),
+        "observed_negative_count": len(negatives),
+    }
+    if failures:
+        reasons: list[str] = []
+        for attempt in failures:
+            if attempt["reason"] not in reasons:
+                reasons.append(attempt["reason"])
+        summary = "; ".join(reasons[:3])
+        if len(reasons) > 3:
+            summary += f"; and {len(reasons) - 3} more distinct reasons"
+        return {
+            "result": "FAIL",
+            "failure_kind": "probe",
+            "reason": f"probe failed ({len(failures)} of {len(attempts)} attempts): {summary}",
+            "probe_failure_reasons": reasons,
+            "attempts": attempts,
+            **counts,
+        }
+    if negatives:
+        return {
+            "result": "FAIL",
+            "failure_kind": "connectivity",
+            "reason": f"{negatives[-1]['reason']} ({len(negatives)} attempts, all observed negative)",
+            "attempts": attempts,
+            **counts,
+        }
+    return {
+        "result": "FAIL",
+        "failure_kind": "probe",
+        "reason": f"no probe executed: {no_probe_reason}",
+        "attempts": attempts,
+        **counts,
+    }
+
+
 def _link_as_ground_sat(
     link: dict,
     nodes_by_id: dict[str, dict],
@@ -232,6 +569,62 @@ def deploy_session(token: str, yaml_str: str) -> dict:
         json={"yaml": yaml_str},
         retries=3,
     )
+
+
+def deploy_yaml_and_wait(
+    token: str,
+    yaml_str: str,
+    *,
+    timeout: int = 600,
+    provenance: dict[str, str] | None = None,
+) -> dict:
+    """Deploy session YAML through the VS-API and wait for the admitted
+    transition to finish, the same contract the catalog path uses: the
+    deploy answers with an operation id, the transition's terminal state
+    decides, and the transition's runtime facts must name the checkout
+    under test. Returns PASS with the responses and the observed runtime,
+    or FAIL with a reason."""
+    deploy_response = deploy_session(token, yaml_str)
+    operation_id = deploy_response.get("operation_id")
+    if deploy_response.get("status") != "accepted" or not operation_id:
+        return {
+            "result": "FAIL",
+            "reason": f"Deploy rejected: {deploy_response}",
+            "deploy_response": deploy_response,
+        }
+    transition = wait_for_transition(token, operation_id, timeout=timeout)
+    if transition.get("state") != "succeeded":
+        return {
+            "result": "FAIL",
+            "reason": f"Transition {transition.get('state')}: {transition.get('failure')}",
+            "deploy_response": deploy_response,
+            "transition": transition,
+        }
+    facts = transition.get("facts") or {}
+    observed_runtime = {
+        "release": facts.get("release"),
+        "build": facts.get("build"),
+        "document_digest": facts.get("document_digest"),
+        "closure_digest": facts.get("closure_digest"),
+        "resolved_semantic_digest": facts.get("resolved_semantic_digest"),
+    }
+    identity_error = _runtime_identity_error(
+        provenance if provenance is not None else _run_provenance_from_environment(), facts
+    )
+    if identity_error is not None:
+        return {
+            "result": "FAIL",
+            "reason": identity_error,
+            "deploy_response": deploy_response,
+            "transition": transition,
+            "observed_runtime": observed_runtime,
+        }
+    return {
+        "result": "PASS",
+        "deploy_response": deploy_response,
+        "transition": transition,
+        "observed_runtime": observed_runtime,
+    }
 
 
 def deploy_catalog_session(token: str, perm: dict) -> dict:
@@ -471,23 +864,6 @@ def check_websocket(token: str, step_seconds: int = 1) -> dict:
     }
 
 
-def _node_loopback_ip(node_id: str, nodes_by_id: dict[str, dict] | None = None) -> str | None:
-    """Return the configured loopback IP without deriving identity from node_id text."""
-
-    if nodes_by_id is not None:
-        configured = _router_loopback_from_node(nodes_by_id.get(node_id))
-        if configured:
-            return configured
-
-    out = _kubectl_exec(node_id, "ip -4 -o addr show lo", timeout=10)
-    if out["rc"] != 0:
-        return None
-    for part in out["stdout"].split():
-        if part.startswith("10.") and "/" in part:
-            return part.split("/", 1)[0]
-    return None
-
-
 def check_ping(token: str, perm: dict, *, ground_wait_s: int | None = None) -> dict:
     """Prove routed connectivity for the declared topology.
 
@@ -495,8 +871,6 @@ def check_ping(token: str, perm: dict, *, ground_wait_s: int | None = None) -> d
     Satellite-only sessions fall back to an ISL loopback ping. SKIP is valid only when
     the session declares no ground endpoint and no connected satellite pair exists.
     """
-    import subprocess
-
     protocol = perm["protocol"]
     if protocol == "nodalpath":
         return check_nodalpath_mpls(token, perm)
@@ -516,6 +890,7 @@ def check_ping(token: str, perm: dict, *, ground_wait_s: int | None = None) -> d
         if declares_ground and not gs_nodes:
             return {
                 "result": "FAIL",
+                "failure_kind": "probe",
                 "mode": "ground_to_ground",
                 "reason": "declared ground topology materialized no ground nodes",
                 "ground_declared": True,
@@ -543,6 +918,7 @@ def check_ping(token: str, perm: dict, *, ground_wait_s: int | None = None) -> d
         if not (ground_probe and ground_probe.get("result") == "SINGLE_SITE"):
             return {
                 "result": "FAIL",
+                "failure_kind": (ground_probe or {}).get("failure_kind", "probe"),
                 "mode": "ground_to_ground",
                 "reason": (ground_probe or {}).get("reason", "ground connectivity was not proven"),
                 "ground_declared": declares_ground,
@@ -583,49 +959,55 @@ def check_ping(token: str, perm: dict, *, ground_wait_s: int | None = None) -> d
             "active_link_count": len(active_links),
         }
 
-    dst_ip = _node_loopback_ip(dst, nodes_by_id)
+    dst_ip = _published_loopback_ip(dst, nodes_by_id)
     if not dst_ip:
-        return {"result": "FAIL", "reason": f"Cannot derive IP for {dst}", "src": src, "dst": dst}
+        return {
+            "result": "FAIL",
+            "failure_kind": "probe",
+            "reason": f"no published router loopback for {dst}",
+            "src": src,
+            "dst": dst,
+        }
 
-    # Ping with retries
-    attempts = []
+    # Ping with retries; a reply proves the path, statistics are the observation.
+    attempts: list[dict] = []
     deadline = time.monotonic() + 120  # 2 minutes
     while time.monotonic() < deadline:
-        result = subprocess.run(
-            f"{KUBECTL} exec -n nodalarc {src.lower()} -c frr -- ping -c 3 -W 5 {dst_ip}",
-            capture_output=True,
-            text=True,
-            timeout=30,
-            shell=True,
-        )
-        attempts.append(
-            {
-                "elapsed_s": round(120 - (deadline - time.monotonic()), 1),
-                "rc": result.returncode,
-                "stdout": result.stdout[-300:],
-            }
-        )
-        if "bytes from" in result.stdout or "0% packet loss" in result.stdout:
-            stats = ""
-            for line in result.stdout.splitlines():
-                if "packets transmitted" in line:
-                    stats = line.strip()
+        ping = _workload_exec(src, f"ping -c 3 -W 5 {dst_ip}", timeout=30)
+        observation = _packet_observation(ping)
+        attempt = {
+            "candidate": f"{src}->{dst}",
+            "elapsed_s": round(120 - (deadline - time.monotonic()), 1),
+            "rc": ping["rc"],
+            "stdout": ping["stdout"][-300:],
+            "reason": observation["reason"],
+            "kind": (
+                "probe_failure"
+                if not observation["observed"]
+                else "observed_positive"
+                if observation.get("replies")
+                else "observed_negative"
+            ),
+        }
+        attempts.append(attempt)
+        if attempt["kind"] == "observed_positive":
             return {
                 "result": "PASS",
                 "src": src,
                 "dst": dst,
                 "dst_ip": dst_ip,
-                "stats": stats,
+                "stats": observation["stats"],
+                "loss_class": observation["loss_class"],
                 "attempts": len(attempts),
             }
         time.sleep(10)
 
     return {
-        "result": "FAIL",
+        **_sweep_verdict(attempts, "satellite ping never ran"),
         "src": src,
         "dst": dst,
         "dst_ip": dst_ip,
-        "attempts": len(attempts),
+        "attempt_count": len(attempts),
         "last_stdout": attempts[-1]["stdout"] if attempts else "",
     }
 
@@ -636,41 +1018,51 @@ def check_nodalpath_mpls(token: str, perm: dict) -> dict:
     NodalPath installs MPLS routes in the kernel via pyroute2 (not through FRR),
     so we check 'ip -f mpls route show' via kubectl exec (not vtysh introspect).
     """
-    import subprocess
-
     deadline = time.monotonic() + 120
-    attempts = 0
+    attempts: list[dict] = []
     output = ""
     nodes = request_json("GET", "/api/v1/state", token=token).get("nodes", [])
     sat = next(iter(_satellite_nodes(nodes)), None)
     if sat is None:
-        return {"result": "FAIL", "protocol": "nodalpath", "reason": "no satellites found"}
-    pod_name = sat["node_id"].lower()
+        return {
+            "result": "FAIL",
+            "failure_kind": "probe",
+            "protocol": "nodalpath",
+            "reason": "no satellites found",
+        }
+    node_id = sat["node_id"]
     while time.monotonic() < deadline:
-        result = subprocess.run(
-            f"{KUBECTL} exec -n nodalarc {pod_name} -c frr -- ip -f mpls route show",
-            capture_output=True,
-            text=True,
-            timeout=10,
-            shell=True,
-        )
-        output = result.stdout
+        result = _workload_exec(node_id, "ip -f mpls route show", timeout=10)
+        output = result["stdout"]
+        if result["resolution_error"] or result["rc"] != 0:
+            attempts.append(
+                {
+                    "candidate": node_id,
+                    "kind": "probe_failure",
+                    "reason": result["resolution_error"]
+                    or f"mpls route query failed (rc={result['rc']}): {result['stderr'][-160:]}",
+                }
+            )
+            time.sleep(15)
+            continue
         mpls_lines = len([l for l in output.splitlines() if l.strip()])
-        attempts += 1
         if mpls_lines > 0:
             return {
                 "result": "PASS",
                 "protocol": "nodalpath",
                 "mpls_entries": mpls_lines,
-                "attempts": attempts,
+                "attempts": len(attempts) + 1,
             }
+        attempts.append(
+            {"candidate": node_id, "kind": "observed_negative", "reason": "mpls table is empty"}
+        )
         time.sleep(15)
 
     return {
-        "result": "FAIL",
+        **_sweep_verdict(attempts, "mpls route query never ran"),
         "protocol": "nodalpath",
         "mpls_entries": 0,
-        "attempts": attempts,
+        "attempt_count": len(attempts),
         "last_output": output[:500],
     }
 
@@ -689,27 +1081,15 @@ def _active_ground_pair(token: str) -> tuple[str, str, str] | None:
         if pair is None:
             continue
         gs_id, sat_id = pair
-        dst_ip = _node_loopback_ip(sat_id, nodes_by_id)
+        dst_ip = _published_loopback_ip(sat_id, nodes_by_id)
         if dst_ip:
             return gs_id, sat_id, dst_ip
     return None
 
 
 def _kubectl_exec(node_id: str, command: str, *, timeout: int = 20) -> dict:
-    import subprocess
-
-    result = subprocess.run(
-        f"{KUBECTL} exec -n nodalarc {node_id.lower()} -c frr -- {command}",
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-        shell=True,
-    )
-    return {
-        "rc": result.returncode,
-        "stdout": result.stdout[-1000:],
-        "stderr": result.stderr[-1000:],
-    }
+    """Run a command in the node's published primary workload container."""
+    return _workload_exec(node_id, command, timeout=timeout)
 
 
 def _run_shell(command: str, *, timeout: int = 20) -> dict:
@@ -737,8 +1117,17 @@ def _host_ground_ifname(gs_id: str, gs_ifname: str) -> str:
 
 def _force_ground_host_interface_down(gs_id: str, gs_ifname: str, *, timeout: int = 20) -> dict:
     host_ifname = _host_ground_ifname(gs_id, gs_ifname)
+    target, error = _workload_target(gs_id)
+    if target is None:
+        return {
+            "rc": 1,
+            "stdout": "",
+            "stderr": f"workload target for {gs_id}: {error}",
+            "host_ifname": host_ifname,
+            "node_name": "",
+        }
     node_result = _run_shell(
-        f"{KUBECTL} get pod -n nodalarc {gs_id.lower()} -o jsonpath={{.spec.nodeName}}",
+        f"{KUBECTL} get pod -n {target.namespace} {target.pod_name} -o jsonpath={{.spec.nodeName}}",
         timeout=timeout,
     )
     node_name = node_result["stdout"]
@@ -927,8 +1316,9 @@ def _find_routed_ground_probe(
     ``transit_proven: False``: the LAN alone can satisfy every check.
     """
     deadline = time.monotonic() + wait_s
-    last_reason = "no routed ground probe found"
+    no_probe_reason = "no routed ground probe candidate"
     candidate_cursor = 0
+    attempts: list[dict] = []
     single_site = ground_topology is not None and (
         len({info["site"] for info in ground_topology.values()}) < 2
     )
@@ -939,6 +1329,7 @@ def _find_routed_ground_probe(
         }
     while time.monotonic() < deadline:
         state = request_json("GET", "/api/v1/state", token=token)
+        nodes_by_id = _nodes_by_id(state.get("nodes", []))
         ground_ids = _ground_node_ids(state)
         by_gs = _ground_links_by_gs(state)
         if ground_topology is not None:
@@ -949,7 +1340,7 @@ def _find_routed_ground_probe(
                 if ground_topology.get(dst, {}).get("site") in linked_sites
             ]
             if not candidates:
-                last_reason = (
+                no_probe_reason = (
                     "no transit-capable probe pair: no ground node with an active "
                     "space link pairs with a linked ground site elsewhere"
                 )
@@ -963,13 +1354,26 @@ def _find_routed_ground_probe(
         else:
             candidates = [(src, dst) for src in sorted(by_gs) for dst in ground_ids if dst != src]
         for src, dst_gs in candidates:
-            dst_ip = _node_loopback_ip(dst_gs)
+            key = f"{src}->{dst_gs}"
+            dst_ip = _published_loopback_ip(dst_gs, nodes_by_id)
             if not dst_ip:
-                last_reason = f"could not read loopback for {dst_gs}"
+                attempts.append(
+                    {
+                        "candidate": key,
+                        "kind": "probe_failure",
+                        "reason": f"no published router loopback for {dst_gs}",
+                    }
+                )
                 continue
             route = _kubectl_exec(src, f"ip route get {dst_ip}", timeout=10)
-            fib_ready = route["rc"] == 0 and dst_ip in route["stdout"]
-            egress_dev = _route_egress_dev(route["stdout"]) if fib_ready else None
+            route_obs = _route_observation(route, dst_ip)
+            if not route_obs["observed"]:
+                attempts.append(
+                    {"candidate": key, "kind": "probe_failure", "reason": route_obs["reason"]}
+                )
+                continue
+            fib_ready = route_obs["positive"]
+            egress_dev = route_obs.get("egress_dev")
             if ground_topology is not None:
                 src_info = ground_topology[src]
                 dst_info = ground_topology[dst_gs]
@@ -994,24 +1398,46 @@ def _find_routed_ground_probe(
                     "transit_note": "no resolver topology: pair may share a site LAN",
                 }
             if not fib_ready or not space_egress:
-                last_reason = (
-                    f"{src}->{dst_gs} fib={fib_ready} neighbor=not-checked "
-                    f"packet=not-checked egress={egress_dev}"
-                    + ("" if space_egress else " (egress is not a space-link terminal)")
+                attempts.append(
+                    {
+                        "candidate": key,
+                        "kind": "observed_negative",
+                        "reason": (
+                            f"{key}: no route ({route_obs['reason']})"
+                            if not fib_ready
+                            else f"{key}: route via {egress_dev} is not a space-link terminal"
+                        ),
+                        "observation": {"route": route_obs["reason"], "egress_dev": egress_dev},
+                        "route_stdout": route["stdout"][-300:],
+                        "route_stderr": route["stderr"][-300:],
+                    }
                 )
                 continue
             neigh = _kubectl_exec(
                 src, f"vtysh -c '{_routing_neighbor_command(protocol)}'", timeout=10
             )
             ping = _kubectl_exec(src, f"ping -c 1 -W 5 {dst_ip}", timeout=10)
-            neighbor_up = neigh["rc"] == 0 and _routing_neighbor_up(neigh["stdout"], protocol)
-            packet_ready = ping["rc"] == 0 and "0% packet loss" in ping["stdout"]
+            neigh_obs = _adjacency_observation(neigh, protocol)
+            ping_obs = _packet_observation(ping)
+            if not neigh_obs["observed"] or not ping_obs["observed"]:
+                attempts.append(
+                    {
+                        "candidate": key,
+                        "kind": "probe_failure",
+                        "reason": "; ".join(
+                            obs["reason"] for obs in (neigh_obs, ping_obs) if not obs["observed"]
+                        ),
+                    }
+                )
+                continue
+            neighbor_up = neigh_obs["positive"]
+            packet_ready = ping_obs["positive"]
             if fib_ready and neighbor_up and packet_ready and space_egress:
                 return {
                     "result": "PASS",
                     "mode": "ground_to_ground",
                     "protocol": protocol,
-                    "key": f"{src}->{dst_gs}",
+                    "key": key,
                     "src": src,
                     "dst_gs": dst_gs,
                     "dst": dst_gs,
@@ -1020,22 +1446,35 @@ def _find_routed_ground_probe(
                     "fib_ready": fib_ready,
                     "neighbor_up": neighbor_up,
                     "packet_ready": packet_ready,
+                    "packet_stats": ping_obs["stats"],
                     **transit_fields,
                     "route_stdout": route["stdout"],
                     "isis_stdout": neigh["stdout"],
                     "ping_stdout": ping["stdout"],
                 }
-            last_reason = (
-                f"{src}->{dst_gs} fib={fib_ready} neighbor={neighbor_up} "
-                f"packet={packet_ready} egress={egress_dev}"
-                + ("" if space_egress else " (egress is not a space-link terminal)")
+            attempts.append(
+                {
+                    "candidate": key,
+                    "kind": "observed_negative",
+                    "reason": (
+                        f"{key}: route via {egress_dev}, "
+                        f"adjacency {'up' if neighbor_up else 'not up'}, {ping_obs['reason']}"
+                    ),
+                    "observation": {
+                        "route": route_obs["reason"],
+                        "egress_dev": egress_dev,
+                        "adjacency": neigh_obs["reason"],
+                        "packets": ping_obs["reason"],
+                    },
+                }
             )
         time.sleep(3)
-    return {"result": "FAIL", "reason": last_reason}
+    return _sweep_verdict(attempts, no_probe_reason)
 
 
 def _find_all_routed_ground_probes(token: str, *, protocol: str = "isis") -> list[dict]:
     state = request_json("GET", "/api/v1/state", token=token)
+    nodes_by_id = _nodes_by_id(state.get("nodes", []))
     ground_ids = _ground_node_ids(state)
     by_gs = _ground_links_by_gs(state)
     probes: list[dict] = []
@@ -1043,7 +1482,7 @@ def _find_all_routed_ground_probes(token: str, *, protocol: str = "isis") -> lis
         for dst_gs in ground_ids:
             if dst_gs == src:
                 continue
-            dst_ip = _node_loopback_ip(dst_gs)
+            dst_ip = _published_loopback_ip(dst_gs, nodes_by_id)
             if not dst_ip:
                 continue
             route = _kubectl_exec(src, f"ip route get {dst_ip}", timeout=10)
@@ -1051,9 +1490,12 @@ def _find_all_routed_ground_probes(token: str, *, protocol: str = "isis") -> lis
                 src, f"vtysh -c '{_routing_neighbor_command(protocol)}'", timeout=10
             )
             ping = _kubectl_exec(src, f"ping -c 1 -W 5 {dst_ip}", timeout=10)
-            fib_ready = route["rc"] == 0 and dst_ip in route["stdout"]
-            neighbor_up = neigh["rc"] == 0 and _routing_neighbor_up(neigh["stdout"], protocol)
-            packet_ready = ping["rc"] == 0 and "0% packet loss" in ping["stdout"]
+            route_obs = _route_observation(route, dst_ip)
+            neigh_obs = _adjacency_observation(neigh, protocol)
+            ping_obs = _packet_observation(ping)
+            fib_ready = route_obs["observed"] and route_obs["positive"]
+            neighbor_up = neigh_obs["observed"] and neigh_obs["positive"]
+            packet_ready = ping_obs["observed"] and ping_obs["positive"]
             if fib_ready and neighbor_up and packet_ready:
                 probes.append(
                     {
@@ -1158,25 +1600,36 @@ def _select_terminal_probe(
 
 
 def _ping_packet_outcome(stdout: str, stderr: str, returncode: int | None) -> dict:
-    stats = ""
-    for line in stdout.splitlines():
-        if "packets transmitted" in line:
-            stats = line.strip()
-            zero_loss = "0% packet loss" in line
-            return {
-                "packet_outcome": "zero_loss" if zero_loss else "loss_observed",
-                "zero_loss": zero_loss,
-                "protocol_observed": True,
-                "stats": stats,
-                "reply_count": None,
-                "missing_ranges": [],
-            }
-    if "Network unreachable" in stderr or "Network unreachable" in stdout:
+    statistics = _parse_ping_statistics(stdout)
+    if statistics is not None and not statistics["consistent"]:
+        return {
+            "packet_outcome": "probe_error",
+            "zero_loss": False,
+            "loss_class": None,
+            "protocol_observed": False,
+            "stats": f"{statistics['stats']} ({statistics['problem']})",
+            "reply_count": None,
+            "missing_ranges": [],
+            "returncode": returncode,
+        }
+    if statistics is not None:
+        zero_loss = statistics["loss_class"] == "zero_loss"
+        return {
+            "packet_outcome": "zero_loss" if zero_loss else "loss_observed",
+            "zero_loss": zero_loss,
+            "loss_class": statistics["loss_class"],
+            "protocol_observed": True,
+            "stats": statistics["stats"],
+            "reply_count": statistics["received"],
+            "missing_ranges": [],
+        }
+    answer = _ping_unreachable_answer(stdout, stderr)
+    if answer is not None:
         return {
             "packet_outcome": "routing_unreachable",
             "zero_loss": False,
             "protocol_observed": True,
-            "stats": "network unreachable",
+            "stats": f"ping answered {answer}",
             "reply_count": None,
             "missing_ranges": [],
         }
@@ -1224,14 +1677,6 @@ def _ping_packet_outcome(stdout: str, stderr: str, returncode: int | None) -> di
     }
 
 
-def _route_dev(route_stdout: str) -> str | None:
-    parts = route_stdout.split()
-    for idx, part in enumerate(parts[:-1]):
-        if part == "dev":
-            return parts[idx + 1]
-    return None
-
-
 def _successor_interface(active_links: list[dict]) -> str | None:
     gained = [link for link in active_links if link.get("link_reason") == "vis_gained"]
     if len(gained) == 1:
@@ -1263,12 +1708,25 @@ def _run_mbb_packet_window(token: str, *, count: int = 1200, interval_s: float =
     selected_key: str | None = None
     terminal_seen_at: float | None = None
 
+    targets: dict[str, WorkloadTarget] = {}
+    for probe in probes:
+        target, error = _workload_target(probe["src"])
+        if target is None:
+            return {
+                "result": "FAIL",
+                "failure_kind": "probe",
+                "reason": f"workload target for {probe['src']}: {error}",
+                "probes": probes,
+            }
+        targets[probe["key"]] = target
+
     for probe in probes:
         key = probe["key"]
         src = probe["src"]
         dst_ip = probe["dst_ip"]
+        target = targets[key]
         cmd = (
-            f"{KUBECTL} exec -n nodalarc {src.lower()} -c frr -- "
+            f"{KUBECTL} exec -n {target.namespace} {target.pod_name} -c {target.container} -- "
             f"ping -c {count} -i {interval_s} -W 1 {dst_ip}"
         )
         proc_started_mono[key] = time.monotonic()
@@ -1293,17 +1751,17 @@ def _run_mbb_packet_window(token: str, *, count: int = 1200, interval_s: float =
                 if successor_if is None:
                     continue
                 neigh = _kubectl_exec(src, "vtysh -c 'show isis neighbor'", timeout=10)
-                neighbor_up = neigh["rc"] == 0 and "Up" in neigh["stdout"]
+                neigh_obs = _adjacency_observation(neigh, "isis")
+                neighbor_up = neigh_obs["observed"] and neigh_obs["positive"]
                 for probe in probes_by_src[src]:
                     key = probe["key"]
                     if key in overlap_by_key:
                         continue
                     fib = _kubectl_exec(src, f"ip route get {probe['dst_ip']}", timeout=10)
-                    route_dev = _route_dev(fib["stdout"])
+                    fib_obs = _route_observation(fib, probe["dst_ip"])
+                    route_dev = fib_obs.get("egress_dev")
                     successor_fib_ready = (
-                        fib["rc"] == 0
-                        and probe["dst_ip"] in fib["stdout"]
-                        and route_dev == successor_if
+                        fib_obs["observed"] and fib_obs["positive"] and route_dev == successor_if
                     )
                     overlap_observed_mono = time.monotonic()
                     overlap_by_key[key] = {
@@ -1478,6 +1936,73 @@ def check_mbb_packet_behavior(
         "max_wait_s": max_wait_s,
         "attempts": attempts,
     }
+
+
+def _catalog_get(token: str, ref: str) -> tuple[int, dict]:
+    """One builder catalog read; 404 is an answer (absent), not an error."""
+    response = requests.post(
+        f"{BASE_URL}/api/v1/builder/catalog/get",
+        headers=headers(token),
+        json={"ref": ref},
+        timeout=10,
+    )
+    if response.status_code not in (200, 404):
+        raise RuntimeError(
+            f"catalog get {ref} returned {response.status_code}: {response.text[:300]}"
+        )
+    return response.status_code, (response.json() if response.status_code == 200 else {})
+
+
+def _ensure_acceptance_catalog(token: str) -> dict[str, dict]:
+    """TEMPORARY (ID-23): write the acceptance's test-specific `user:` objects.
+
+    Each fixture document under ACCEPTANCE_USER_CATALOG_ROOT is written to the
+    runtime's user catalog through the builder's write route: created when
+    absent, replaced at its current revision when it differs, reused when it
+    is already identical. Returns what happened per ref for the evidence.
+    """
+    outcomes: dict[str, dict] = {}
+    for ref in ACCEPTANCE_USER_CATALOG_REFS:
+        relative = ref.split(":", 1)[1]
+        document = load_configuration_yaml(
+            (ACCEPTANCE_USER_CATALOG_ROOT / relative).read_text(encoding="utf-8")
+        )
+        status, existing = _catalog_get(token, ref)
+        if status == 200 and existing.get("canonical_json") == document:
+            outcomes[ref] = {"action": "reused", "revision": existing.get("revision")}
+            continue
+        written = request_json(
+            "POST",
+            "/api/v1/builder/catalog/write",
+            token=token,
+            json={
+                "ref": ref,
+                "document": document,
+                "expected_revision": existing.get("revision") if status == 200 else None,
+            },
+        )
+        result = (written or {}).get("document") or {}
+        if result.get("ref") != ref or not result.get("revision"):
+            raise RuntimeError(f"catalog write for {ref} was not accepted: {written}")
+        outcomes[ref] = {
+            "action": "updated" if status == 200 else "created",
+            "revision": result["revision"],
+        }
+    return outcomes
+
+
+def _prepare_acceptance_session(
+    token: str,
+    *,
+    session_name: str,
+    mbb_overlap_ticks: int | None = None,
+) -> tuple[str, dict[str, dict]]:
+    """The acceptance session YAML, after its TEMPORARY user catalog objects exist."""
+    catalog = _ensure_acceptance_catalog(token)
+    return (
+        _acceptance_session_yaml(session_name=session_name, mbb_overlap_ticks=mbb_overlap_ticks),
+        catalog,
+    )
 
 
 def _acceptance_session_yaml(
@@ -1677,13 +2202,17 @@ def run_dirty_repair_acceptance() -> dict:
         acceptance_progress("dirty-repair: acquiring token")
         token = get_token()
         acceptance_progress("dirty-repair: deploying session")
-        yaml_str = _acceptance_session_yaml(
+        yaml_str, evidence["acceptance_catalog"] = _prepare_acceptance_session(
+            token,
             session_name=f"dirty-repair-{int(time.time())}",
         )
-        evidence["deploy_response"] = deploy_session(token, yaml_str)
-        if evidence["deploy_response"].get("status") != "switching":
+        deployed = deploy_yaml_and_wait(token, yaml_str)
+        evidence["deploy_response"] = deployed["deploy_response"]
+        evidence["transition"] = deployed.get("transition")
+        evidence["observed_runtime"] = deployed.get("observed_runtime")
+        if deployed["result"] != "PASS":
             evidence["result"] = "FAIL"
-            evidence["error"] = f"Deploy rejected: {evidence['deploy_response']}"
+            evidence["error"] = deployed["reason"]
             return evidence
         acceptance_progress("dirty-repair: waiting for session readiness")
         ready_result = wait_for_ready(token, timeout=600)
@@ -2001,6 +2530,12 @@ def check_intermittent_connectivity(token: str, perm: dict) -> dict:
         if disconnected_probe.get("result") != "FAIL":
             evidence["reason"] = "intermittent observation window produced a routed path"
             return evidence
+        if disconnected_probe.get("failure_kind") != "connectivity":
+            evidence["reason"] = (
+                "disconnected window probe did not complete an observation: "
+                f"{disconnected_probe.get('reason')}"
+            )
+            return evidence
         if disconnected_probe.get("active_link_count", 0) <= 0:
             evidence["reason"] = "disconnected window had no active physical links to observe"
             return evidence
@@ -2036,15 +2571,19 @@ def run_seek_during_mbb_acceptance() -> dict:
     try:
         acceptance_progress("seek-mbb: acquiring token")
         token = get_token()
-        yaml_str = _acceptance_session_yaml(
+        yaml_str, evidence["acceptance_catalog"] = _prepare_acceptance_session(
+            token,
             session_name=f"seek-mbb-{int(time.time())}",
             mbb_overlap_ticks=600,
         )
         acceptance_progress("seek-mbb: deploying session")
-        evidence["deploy_response"] = deploy_session(token, yaml_str)
-        if evidence["deploy_response"].get("status") != "switching":
+        deployed = deploy_yaml_and_wait(token, yaml_str)
+        evidence["deploy_response"] = deployed["deploy_response"]
+        evidence["transition"] = deployed.get("transition")
+        evidence["observed_runtime"] = deployed.get("observed_runtime")
+        if deployed["result"] != "PASS":
             evidence["result"] = "FAIL"
-            evidence["error"] = f"Deploy rejected: {evidence['deploy_response']}"
+            evidence["error"] = deployed["reason"]
             return evidence
         ready_result = wait_for_ready(token, timeout=600)
         evidence["ready_result"] = ready_result
@@ -2135,15 +2674,19 @@ def run_mbb_acceptance() -> dict:
         return {**evidence, "result": "ERROR", "error": "MBB acceptance session missing"}
     try:
         token = get_token()
-        yaml_str = _acceptance_session_yaml(
+        yaml_str, evidence["acceptance_catalog"] = _prepare_acceptance_session(
+            token,
             session_name=f"cj-mbb-{int(time.time())}",
             mbb_overlap_ticks=60,
         )
         evidence["yaml_length"] = len(yaml_str)
-        evidence["deploy_response"] = deploy_session(token, yaml_str)
-        if evidence["deploy_response"].get("status") != "switching":
+        deployed = deploy_yaml_and_wait(token, yaml_str)
+        evidence["deploy_response"] = deployed["deploy_response"]
+        evidence["transition"] = deployed.get("transition")
+        evidence["observed_runtime"] = deployed.get("observed_runtime")
+        if deployed["result"] != "PASS":
             evidence["result"] = "FAIL"
-            evidence["error"] = f"Deploy rejected: {evidence['deploy_response']}"
+            evidence["error"] = deployed["reason"]
             return evidence
         acceptance_progress("seek-mbb: waiting for session readiness")
         ready_result = wait_for_ready(token, timeout=600)

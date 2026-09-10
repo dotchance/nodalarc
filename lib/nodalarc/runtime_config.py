@@ -304,7 +304,7 @@ def _write_uploaded_tree(
     stage: Path,
     root_yaml: bytes,
     entries: tuple[CatalogClosureEntry, ...],
-) -> CatalogRoots:
+) -> None:
     _write_exact(stage / SESSION_YAML_FILENAME, root_yaml)
     shipped_root = stage / "catalog" / "nodalarc"
     user_root = stage / "catalog" / "user"
@@ -312,7 +312,6 @@ def _write_uploaded_tree(
     user_root.mkdir(parents=True, exist_ok=False)
     for entry in entries:
         _write_exact(_contained_target(stage, entry.preserved_path), entry.yaml_bytes)
-    return CatalogRoots.from_catalog_root(shipped_root, user_root=user_root)
 
 
 def _assert_shipped_assets(upload: CatalogUpload, installed_shipped_root: Path) -> None:

@@ -187,10 +187,7 @@ def _raise_typed_missing_reference(
         CatalogClosureCollector.collect(root_yaml, FilesystemCatalogReadView(roots))
     except CatalogClosureError as diagnostic:
         evidence = diagnostic.evidence
-        missing = evidence.code is CatalogClosureErrorCode.DANGLING_REFERENCE or (
-            evidence.code is CatalogClosureErrorCode.READ_FAILED
-            and evidence.cause_type in {"FileNotFoundError", "NotADirectoryError"}
-        )
+        missing = evidence.code is CatalogClosureErrorCode.DANGLING_REFERENCE
         if missing and evidence.ref is not None:
             ref = CatalogRef(evidence.ref)
             root = user_root if ref.namespace == "user" else roots.root

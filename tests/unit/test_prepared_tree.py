@@ -7,6 +7,11 @@ from pathlib import Path
 
 import pytest
 from nodalarc import prepared_tree as prepared_tree_module
+from nodalarc.catalog_closure import (
+    CatalogClosureError,
+    CatalogClosureErrorCode,
+    CatalogReadFailed,
+)
 from nodalarc.prepared_tree import (
     PreparedTreeError,
     PreparedTreeErrorCode,
@@ -171,6 +176,39 @@ def test_user_reference_without_adjacent_tree_names_conventional_path(tmp_path: 
     assert raised.value.code is PreparedTreeErrorCode.MISSING_CATALOG_REFERENCE
     assert raised.value.evidence.ref == str(source.constellation_ref)
     assert raised.value.evidence.expected_path == str(expected_path)
+
+
+def test_file_in_place_of_a_referenced_directory_is_a_read_failure(tmp_path: Path) -> None:
+    """A filesystem fault beneath a valid user root stays a typed read failure.
+
+    The referenced document's family directory is replaced by a regular file,
+    so the read view raises ``CatalogReadFailed`` over ``NotADirectoryError``.
+    The prepared-tree diagnostic must pass that closure error outward with
+    code ``READ_FAILED`` and its typed cause, never reclassify it as a
+    missing reference.
+    """
+
+    session_path, source = _prepared_user_tree(tmp_path)
+    assert source.constellation_ref is not None
+    family_directory = (
+        session_path.parent / "catalog" / "user" / source.constellation_ref.relative_path.parent
+    )
+    shutil.rmtree(family_directory)
+    family_directory.write_bytes(b"not a directory\n")
+
+    with pytest.raises(CatalogClosureError) as raised:
+        load_prepared_tree_session_resolution(
+            session_path,
+            installed_shipped_root=SHIPPED_ROOT,
+        )
+
+    assert raised.value.code is CatalogClosureErrorCode.READ_FAILED
+    assert raised.value.evidence.ref == str(source.constellation_ref)
+    assert raised.value.evidence.cause_type == "CatalogReadFailed"
+    resolver_cause = raised.value.__cause__
+    assert isinstance(resolver_cause, CatalogReadFailed)
+    assert resolver_cause.ref == source.constellation_ref
+    assert isinstance(resolver_cause.__cause__, NotADirectoryError)
 
 
 def test_exact_tree_shipped_copy_is_verified_then_installed_catalog_resolves(

@@ -11,6 +11,7 @@ from nodalarc.catalog_paths import (
     resolve_catalog_reference,
     validate_catalog_name,
 )
+from nodalarc.catalog_refs import CatalogReferenceError
 
 
 def _make_roots(tmp_path, monkeypatch) -> CatalogRoots:
@@ -68,7 +69,7 @@ def test_resolves_nodalarc_site_set_reference_under_catalog_root(tmp_path, monke
 def test_catalog_reference_rejects_non_token_or_unsafe_paths(tmp_path, monkeypatch, source):
     roots = _make_roots(tmp_path, monkeypatch)
 
-    with pytest.raises(CatalogPathError):
+    with pytest.raises(CatalogReferenceError):
         resolve_catalog_reference(source, roots)
 
 
@@ -84,7 +85,7 @@ def test_rejects_symlink_escape_under_catalog_root(tmp_path, monkeypatch):
     except OSError as exc:
         pytest.skip(f"symlink creation not permitted: {exc}")
 
-    with pytest.raises(CatalogPathError):
+    with pytest.raises(CatalogReferenceError):
         resolve_catalog_reference(
             "nodalarc:constellations/earth/leo/escape.yaml", roots, label="constellation"
         )
@@ -136,7 +137,7 @@ def test_resolves_session_references_in_both_catalog_roots(tmp_path, monkeypatch
 
 def test_generic_resolver_rejects_unknown_or_noncanonical_family_paths(tmp_path, monkeypatch):
     roots = _make_two_root_setup(tmp_path, monkeypatch)
-    with pytest.raises(CatalogPathError):
+    with pytest.raises(CatalogReferenceError):
         resolve_catalog_reference(
             "nodalarc:Custom_Family/Nested/Example_Name.YML",
             roots,
@@ -145,7 +146,7 @@ def test_generic_resolver_rejects_unknown_or_noncanonical_family_paths(tmp_path,
 
 def test_user_reference_rejected_without_configured_user_root(tmp_path, monkeypatch):
     roots = _make_roots(tmp_path, monkeypatch)
-    with pytest.raises(CatalogPathError, match="user catalog"):
+    with pytest.raises(CatalogReferenceError, match="user catalog"):
         resolve_catalog_reference("user:nodes/my-router.yaml", roots)
 
 
@@ -163,12 +164,12 @@ def test_user_reference_cannot_reach_shipped_root(tmp_path, monkeypatch):
 
 def test_user_reference_rejects_traversal_and_symlink_escape(tmp_path, monkeypatch):
     roots = _make_two_root_setup(tmp_path, monkeypatch)
-    with pytest.raises(CatalogPathError):
+    with pytest.raises(CatalogReferenceError):
         resolve_catalog_reference("user:../secrets.yaml", roots)
 
     outside = tmp_path / "outside.yaml"
     outside.write_text("node: {}\n", encoding="utf-8")
     link = roots.user_root / "nodes" / "sneaky.yaml"
     os.symlink(outside, link)
-    with pytest.raises(CatalogPathError):
+    with pytest.raises(CatalogReferenceError):
         resolve_catalog_reference("user:nodes/sneaky.yaml", roots)

@@ -14,7 +14,8 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 from nodalarc.catalog_closure import CatalogClosureEntry, ClosureReadView
-from nodalarc.catalog_paths import CatalogPathError, CatalogRoots, resolve_catalog_reference
+from nodalarc.catalog_paths import CatalogRoots, resolve_catalog_reference
+from nodalarc.catalog_refs import CatalogReferenceError
 from nodalarc.catalog_upload import (
     DEFAULT_CATALOG_UPLOAD_LIMITS,
     CatalogUpload,
@@ -326,7 +327,7 @@ def _assert_shipped_assets(upload: CatalogUpload, installed_shipped_root: Path) 
                 label="uploaded shipped catalog asset",
             )
             installed_bytes = installed_path.read_bytes()
-        except (CatalogPathError, OSError) as exc:
+        except (CatalogReferenceError, OSError) as exc:
             raise _error(
                 RuntimeConfigErrorCode.SHIPPED_ASSET_MISMATCH,
                 f"Uploaded shipped asset {entry.ref} is not present in the installed catalog",

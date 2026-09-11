@@ -13,7 +13,7 @@ from typing import Any, Protocol, cast
 import yaml
 from pydantic import BaseModel, ValidationError
 
-from nodalarc.catalog_paths import CatalogPathError, CatalogRoots, resolve_catalog_reference
+from nodalarc.catalog_paths import CatalogRoots, resolve_catalog_reference
 from nodalarc.catalog_refs import (
     CatalogFamily,
     CatalogRef,
@@ -129,7 +129,7 @@ class FilesystemCatalogReadView:
         catalog_family_spec(family)
         try:
             path = resolve_catalog_reference(ref, self.roots, label="catalog closure reference")
-        except (CatalogPathError, CatalogReferenceError) as exc:
+        except CatalogReferenceError as exc:
             raise CatalogReadRejected(ref, str(exc)) from exc
         except FileNotFoundError as exc:
             raise CatalogDocumentNotFound(ref, f"no catalog document for {ref}") from exc

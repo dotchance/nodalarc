@@ -68,14 +68,13 @@ def resolve_catalog_reference(
     additionally requires a configured user root. Callers without one reject
     user references instead of guessing or falling back.
     """
-    try:
-        parsed = parse_catalog_reference(CatalogRef(str(source)), label=label)
-    except CatalogReferenceError as exc:
-        raise CatalogPathError(str(exc)) from exc
+    parsed = parse_catalog_reference(CatalogRef(str(source)), label=label)
 
     if parsed.namespace == "user":
         if roots.user_root is None:
-            raise CatalogPathError(f"{label} uses the user catalog, which is not available here")
+            raise CatalogReferenceError(
+                f"{label} uses the user catalog, which is not available here"
+            )
         root = roots.user_root
     else:
         root = roots.root
@@ -85,5 +84,5 @@ def resolve_catalog_reference(
     try:
         resolved.relative_to(root_resolved)
     except ValueError as exc:
-        raise CatalogPathError(f"{label} escapes approved catalog root: {root}") from exc
+        raise CatalogReferenceError(f"{label} escapes approved catalog root: {root}") from exc
     return resolved

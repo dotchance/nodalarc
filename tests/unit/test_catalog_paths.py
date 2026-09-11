@@ -9,7 +9,6 @@ from nodalarc.catalog_paths import (
     CatalogPathError,
     CatalogRoots,
     resolve_catalog_reference,
-    resolve_site_set_reference,
     validate_catalog_name,
 )
 
@@ -42,9 +41,10 @@ def test_resolves_nodalarc_site_set_reference_under_catalog_root(tmp_path, monke
     target = roots.root / "site-sets" / "earth" / "leo" / "earth-leo-sites.yaml"
     target.write_text("site_set: {}\n", encoding="utf-8")
 
-    resolved = resolve_site_set_reference(
+    resolved = resolve_catalog_reference(
         "nodalarc:site-sets/earth/leo/earth-leo-sites.yaml",
         roots,
+        label="ground placement",
     )
 
     assert resolved == target.resolve()

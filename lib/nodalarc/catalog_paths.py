@@ -87,8 +87,3 @@ def resolve_catalog_reference(
     except ValueError as exc:
         raise CatalogPathError(f"{label} escapes approved catalog root: {root}") from exc
     return resolved
-
-
-def resolve_site_set_reference(source: str | Path, roots: CatalogRoots) -> Path:
-    """Resolve a site-set catalog token."""
-    return resolve_catalog_reference(source, roots, label="ground placement")

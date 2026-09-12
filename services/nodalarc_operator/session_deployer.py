@@ -143,31 +143,6 @@ def _proof_hash_fields(proof: RuntimeConfigProof) -> dict[str, str | int]:
     }
 
 
-def build_runtime_deployment_context(
-    proof: RuntimeConfigProof,
-    *,
-    cr_uid: str,
-    cr_generation: int,
-    session_run_id: str,
-    release: str,
-    build: str,
-) -> RuntimeDeploymentContext:
-    """Fence one resolved content proof to one deployment generation."""
-    if proof.run_id != session_run_id:
-        raise ValueError("runtime proof has the wrong session run ID")
-    return RuntimeDeploymentContext(
-        cr_uid=cr_uid,
-        cr_generation=cr_generation,
-        session_run_id=session_run_id,
-        upload_id=proof.upload_id,
-        document_digest=proof.document_digest,
-        closure_digest=proof.closure_digest,
-        resolved_semantic_digest=proof.resolved_semantic_digest,
-        release=release,
-        build=build,
-    )
-
-
 def _metadata(obj: Any) -> Any:
     return getattr(obj, "metadata", None)
 

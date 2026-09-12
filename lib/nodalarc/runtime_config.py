@@ -62,6 +62,32 @@ class RuntimeDeploymentContext(BaseModel):
     release: str = Field(min_length=1)
     build: str = Field(min_length=1)
 
+    @classmethod
+    def from_proof(
+        cls,
+        proof: RuntimeConfigProof,
+        *,
+        cr_uid: str,
+        cr_generation: int,
+        session_run_id: str,
+        release: str,
+        build: str,
+    ) -> RuntimeDeploymentContext:
+        """Fence one resolved content proof to one deployment generation."""
+        if proof.run_id != session_run_id:
+            raise ValueError("runtime proof has the wrong session run ID")
+        return cls(
+            cr_uid=cr_uid,
+            cr_generation=cr_generation,
+            session_run_id=session_run_id,
+            upload_id=proof.upload_id,
+            document_digest=proof.document_digest,
+            closure_digest=proof.closure_digest,
+            resolved_semantic_digest=proof.resolved_semantic_digest,
+            release=release,
+            build=build,
+        )
+
     def content_mismatches(self, proof: RuntimeConfigProof) -> tuple[str, ...]:
         """Names of the content identity fields on which this context and a proof differ.
 

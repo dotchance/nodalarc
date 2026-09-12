@@ -235,6 +235,52 @@ def test_runtime_proof_binds_exact_selection_deployment_and_pod_identity() -> No
         )
 
 
+def test_from_proof_fences_the_run_id_and_copies_the_content_identity() -> None:
+    digest = "sha256:" + "a" * 64
+    proof = RuntimeConfigProof(
+        source_origin="test.runtime_config",
+        run_id="run-a",
+        upload_id="upload-a",
+        document_digest=digest,
+        closure_digest=digest,
+        resolved_semantic_digest=digest,
+        file_count=1,
+        total_bytes=1,
+        resolved_node_count=1,
+    )
+
+    context = RuntimeDeploymentContext.from_proof(
+        proof,
+        cr_uid="cr-1",
+        cr_generation=2,
+        session_run_id="run-a",
+        release="r",
+        build="b",
+    )
+
+    assert context == RuntimeDeploymentContext(
+        cr_uid="cr-1",
+        cr_generation=2,
+        session_run_id="run-a",
+        upload_id="upload-a",
+        document_digest=digest,
+        closure_digest=digest,
+        resolved_semantic_digest=digest,
+        release="r",
+        build="b",
+    )
+    assert context.content_mismatches(proof) == ()
+    with pytest.raises(ValueError, match="wrong session run ID"):
+        RuntimeDeploymentContext.from_proof(
+            proof,
+            cr_uid="cr-1",
+            cr_generation=2,
+            session_run_id="run-b",
+            release="r",
+            build="b",
+        )
+
+
 def test_content_mismatches_name_every_differing_field() -> None:
     digest = "sha256:" + "a" * 64
     other = "sha256:" + "b" * 64

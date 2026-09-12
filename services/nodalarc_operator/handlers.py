@@ -42,7 +42,6 @@ from nodalarc.session_identity import derive_session_run_id
 
 from nodalarc_operator.session_deployer import (
     RetryableSessionDependency,
-    build_runtime_deployment_context,
     build_runtime_session_config_data,
     check_all_pods_provisioned,
     check_all_pods_running,
@@ -249,7 +248,7 @@ def _runtime_deployment_context(
     meta: dict,
     session_run_id: str,
 ) -> RuntimeDeploymentContext:
-    return build_runtime_deployment_context(
+    return RuntimeDeploymentContext.from_proof(
         active_session.proof,
         cr_uid=str(meta.get("uid") or ""),
         cr_generation=int(meta.get("generation", 0) or 0),

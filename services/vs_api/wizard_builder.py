@@ -8,7 +8,11 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, cast
 
-from nodalarc.catalog_closure import CatalogClosureCollector, CatalogReadView, load_catalog_object
+from nodalarc.catalog_closure import (
+    CatalogClosureCollector,
+    CatalogReadView,
+    load_wrapped_catalog_object,
+)
 from nodalarc.catalog_refs import CatalogRef, SiteSetRef, SpaceSourceRef
 from nodalarc.catalog_repository import CatalogReadSnapshot
 from nodalarc.models.builder_api import (
@@ -322,14 +326,6 @@ def _validate_orbit_capability(intent: WizardPhysicalIntent, catalog: CatalogRea
     raise ValueError(reason)
 
 
-def _catalog_document(ref: str, catalog: CatalogReadView) -> tuple[str, dict[str, Any]]:
-    parsed = CatalogRef(ref)
-    wrapper, model = load_catalog_object(parsed, catalog)
-    if wrapper is None:
-        raise ValueError(f"expected wrapped catalog object, got session {parsed!r}")
-    return wrapper, model.model_dump(mode="json", by_alias=True, exclude_none=True)
-
-
 def _customize_selected_constellation(
     intent: WizardPhysicalIntent,
     catalog: CatalogReadView,
@@ -346,7 +342,9 @@ def _customize_selected_constellation(
             )
         return intent.constellation_ref, ()
 
-    wrapper, constellation = _catalog_document(str(intent.constellation_ref), catalog)
+    wrapper, constellation = load_wrapped_catalog_object(
+        str(intent.constellation_ref), catalog, dump_mode="json"
+    )
     if wrapper != "constellation":
         raise ValueError("selected constellation reference must resolve to a constellation")
 
@@ -355,7 +353,7 @@ def _customize_selected_constellation(
     orbit_ref = constellation.get("orbit")
     if not isinstance(orbit_ref, str):
         raise ValueError("selected persisted constellation must reference one orbit document")
-    orbit_wrapper, orbit = _catalog_document(orbit_ref, catalog)
+    orbit_wrapper, orbit = load_wrapped_catalog_object(orbit_ref, catalog, dump_mode="json")
     if orbit_wrapper != "orbit":
         raise ValueError("selected constellation orbit reference must resolve to an orbit")
     propagator_changes = orbit.get("propagator") != intent.orbit_propagator

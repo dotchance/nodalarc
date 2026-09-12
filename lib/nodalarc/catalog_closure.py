@@ -8,7 +8,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import PurePosixPath
-from typing import Any, Protocol, cast
+from typing import Any, Literal, Protocol, cast
 
 import yaml
 from pydantic import BaseModel, ValidationError
@@ -160,6 +160,25 @@ def load_catalog_object(ref: CatalogRef, view: CatalogReadView) -> tuple[str | N
     document = view.read(ref)
     data = load_configuration_yaml(document.yaml_bytes.decode("utf-8")) or {}
     return validate_referenced_configuration_document(ref, data)
+
+
+def load_wrapped_catalog_object(
+    ref: CatalogRef | str,
+    view: CatalogReadView,
+    *,
+    dump_mode: Literal["python", "json"],
+) -> tuple[str, dict[str, Any]]:
+    """Read one wrapped catalog object and return its wrapper key and dumped data.
+
+    A session document has no family wrapper and is refused with ``ValueError``.
+    ``dump_mode`` selects the value types of the returned mapping: ``python``
+    keeps model values, ``json`` yields JSON-native ones.
+    """
+    parsed = ref if isinstance(ref, CatalogRef) else CatalogRef(ref)
+    wrapper, model = load_catalog_object(parsed, view)
+    if wrapper is None:
+        raise ValueError(f"expected wrapped catalog object, got session {parsed!r}")
+    return wrapper, model.model_dump(mode=dump_mode, by_alias=True, exclude_none=True)
 
 
 @dataclass(frozen=True)

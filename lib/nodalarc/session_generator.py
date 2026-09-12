@@ -13,8 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from nodalarc.catalog_closure import CatalogReadView, load_catalog_object
-from nodalarc.catalog_paths import validate_catalog_name
-from nodalarc.catalog_refs import CatalogRef, SiteSetRef, SpaceSourceRef
+from nodalarc.catalog_refs import CatalogRef, SiteSetRef, SpaceSourceRef, validate_catalog_name
 from nodalarc.catalog_repository import CatalogReadSnapshot
 from nodalarc.models.builder_api import (
     WizardConstellationCapability,

@@ -12,13 +12,6 @@ from nodalarc.catalog_refs import (
     CatalogReferenceError,
     parse_catalog_reference,
 )
-from nodalarc.catalog_refs import (
-    validate_catalog_name as validate_reference_name,
-)
-
-
-class CatalogPathError(ValueError):
-    """Raised when a config path escapes an approved catalog root."""
 
 
 @dataclass(frozen=True)
@@ -46,14 +39,6 @@ class CatalogRoots:
             root=Path(catalog_root),
             user_root=Path(user_root) if user_root is not None else None,
         )
-
-
-def validate_catalog_name(name: str, *, label: str = "name") -> str:
-    """Return a catalog object name after rejecting path syntax."""
-    try:
-        return validate_reference_name(name, label=label)
-    except CatalogReferenceError as exc:
-        raise CatalogPathError(str(exc)) from exc
 
 
 def resolve_catalog_reference(

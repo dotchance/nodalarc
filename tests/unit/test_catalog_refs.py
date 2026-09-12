@@ -27,6 +27,7 @@ from nodalarc.catalog_refs import (
     TerminalRef,
     catalog_reference_namespace,
     parse_catalog_reference,
+    validate_catalog_name,
 )
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
@@ -197,6 +198,14 @@ def test_generic_reference_requires_a_registered_family() -> None:
 def test_reference_parser_rejects_unsafe_or_non_catalog_tokens(token: str) -> None:
     with pytest.raises(CatalogReferenceError):
         parse_catalog_reference(token)
+
+
+def test_validate_catalog_name_rejects_path_syntax() -> None:
+    assert validate_catalog_name("earth-leo-ring-36") == "earth-leo-ring-36"
+    with pytest.raises(CatalogReferenceError):
+        validate_catalog_name("../outside")
+    with pytest.raises(CatalogReferenceError):
+        validate_catalog_name("bad name")
 
 
 def test_catalog_reference_namespace_only_recognizes_supported_prefixes() -> None:

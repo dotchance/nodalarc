@@ -5,12 +5,7 @@ from __future__ import annotations
 import os
 
 import pytest
-from nodalarc.catalog_paths import (
-    CatalogPathError,
-    CatalogRoots,
-    resolve_catalog_reference,
-    validate_catalog_name,
-)
+from nodalarc.catalog_paths import CatalogRoots, resolve_catalog_reference
 from nodalarc.catalog_refs import CatalogReferenceError
 
 
@@ -89,14 +84,6 @@ def test_rejects_symlink_escape_under_catalog_root(tmp_path, monkeypatch):
         resolve_catalog_reference(
             "nodalarc:constellations/earth/leo/escape.yaml", roots, label="constellation"
         )
-
-
-def test_validate_catalog_name_rejects_path_syntax():
-    assert validate_catalog_name("earth-leo-ring-36") == "earth-leo-ring-36"
-    with pytest.raises(CatalogPathError):
-        validate_catalog_name("../outside")
-    with pytest.raises(CatalogPathError):
-        validate_catalog_name("bad name")
 
 
 def _make_two_root_setup(tmp_path, monkeypatch) -> CatalogRoots:

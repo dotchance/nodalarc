@@ -15,7 +15,7 @@ from nodalarc.catalog_repository import CatalogReadSnapshot, CatalogScope
 from nodalarc.filesystem_catalog_repository import FilesystemCatalogRepository
 from nodalarc.models.builder_api import BuilderCompileRequest, BuilderDraftEnvelope
 from nodalarc.models.builder_world import BuilderWorld
-from nodalarc.resolve_session import SessionResolution
+from nodalarc.resolve_session import SessionResolution, SessionResolutionError
 from pydantic import ValidationError
 from vs_api.builder_compiler import canonicalize_persisted_configuration, compile_builder_draft
 
@@ -454,6 +454,34 @@ def test_expected_preview_failure_is_a_typed_deploy_blocker(
     )
     assert issue.stage == "readiness"
     assert issue.blocks == ("deploy",)
+
+
+def test_inconsistent_preview_pair_blocks_save_and_deploy(
+    snapshot: CatalogReadSnapshot,
+) -> None:
+    """The preview's fail-closed refusal is a semantic issue, unlike plain unavailability."""
+
+    def inconsistent(_resolution: SessionResolution):
+        raise SessionResolutionError(
+            "link rule 'isl': allocated pair matches neither endpoint orientation"
+        )
+
+    result = compile_builder_draft(
+        _request(_load(SIMPLE_SESSION)),
+        snapshot,
+        available_node_count=1_000_000,
+        preview_factory=inconsistent,
+    )
+
+    assert result.save_verdict.allowed is False
+    assert result.deploy_eligibility_after_save.allowed is False
+    issue = next(
+        issue for issue in result.issues if issue.code == "builder.semantic.preview_resolution"
+    )
+    assert issue.stage == "semantic"
+    assert issue.blocks == ("save", "deploy")
+    assert result.resolved_preview is None
+    assert result.digests is not None
 
 
 def test_compile_resolves_the_captured_closure_not_the_live_snapshot(

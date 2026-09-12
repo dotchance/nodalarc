@@ -10,6 +10,7 @@ from pathlib import Path
 from nodalarc.catalog_refs import (
     CatalogRef,
     CatalogReferenceError,
+    CatalogReferenceErrorCode,
     parse_catalog_reference,
 )
 
@@ -58,7 +59,8 @@ def resolve_catalog_reference(
     if parsed.namespace == "user":
         if roots.user_root is None:
             raise CatalogReferenceError(
-                f"{label} uses the user catalog, which is not available here"
+                f"{label} uses the user catalog, which is not available here",
+                code=CatalogReferenceErrorCode.PATH_REJECTED,
             )
         root = roots.user_root
     else:
@@ -69,5 +71,8 @@ def resolve_catalog_reference(
     try:
         resolved.relative_to(root_resolved)
     except ValueError as exc:
-        raise CatalogReferenceError(f"{label} escapes approved catalog root: {root}") from exc
+        raise CatalogReferenceError(
+            f"{label} escapes approved catalog root: {root}",
+            code=CatalogReferenceErrorCode.PATH_REJECTED,
+        ) from exc
     return resolved

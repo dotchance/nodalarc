@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 from typing import ClassVar, Literal, Self, get_args
 
@@ -31,8 +32,20 @@ _SAFE_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 _YAML_SUFFIXES = {".yaml", ".yml"}
 
 
+class CatalogReferenceErrorCode(StrEnum):
+    """Why a catalog-reference token was refused."""
+
+    NOT_A_REFERENCE = "catalog_reference.not_a_reference"
+    PATH_REJECTED = "catalog_reference.path_rejected"
+    FAMILY_MISMATCH = "catalog_reference.family_mismatch"
+
+
 class CatalogReferenceError(ValueError):
     """Raised when a catalog-reference token is structurally invalid."""
+
+    def __init__(self, message: str, *, code: CatalogReferenceErrorCode) -> None:
+        super().__init__(message)
+        self.code = code
 
 
 @dataclass(frozen=True)
@@ -64,15 +77,23 @@ def validate_catalog_name(value: str, *, label: str = "name") -> str:
     """Validate one catalog path component without changing its spelling."""
 
     if not isinstance(value, str):
-        raise CatalogReferenceError(f"{label} must be a string")
+        raise CatalogReferenceError(
+            f"{label} must be a string", code=CatalogReferenceErrorCode.PATH_REJECTED
+        )
     if "/" in value or "\\" in value:
-        raise CatalogReferenceError(f"{label} must not contain path separators")
+        raise CatalogReferenceError(
+            f"{label} must not contain path separators",
+            code=CatalogReferenceErrorCode.PATH_REJECTED,
+        )
     if value == ".." or ".." in Path(value).parts:
-        raise CatalogReferenceError(f"{label} must not contain path traversal")
+        raise CatalogReferenceError(
+            f"{label} must not contain path traversal", code=CatalogReferenceErrorCode.PATH_REJECTED
+        )
     if not is_catalog_name(value):
         raise CatalogReferenceError(
             f"{label} must start with a lowercase letter or digit and contain only "
-            "lowercase letters, digits, '-' and '_'"
+            "lowercase letters, digits, '-' and '_'",
+            code=CatalogReferenceErrorCode.PATH_REJECTED,
         )
     return value
 
@@ -93,31 +114,53 @@ def parse_catalog_reference(
     raw = str(source)
     namespace = catalog_reference_namespace(raw)
     if namespace is None:
-        raise CatalogReferenceError(f"{label} must be a nodalarc:<path> or user:<path> reference")
+        raise CatalogReferenceError(
+            f"{label} must be a nodalarc:<path> or user:<path> reference",
+            code=CatalogReferenceErrorCode.NOT_A_REFERENCE,
+        )
 
     relative = raw.split(":", 1)[1]
     if not relative:
-        raise CatalogReferenceError(f"{label} is required")
+        raise CatalogReferenceError(
+            f"{label} is required", code=CatalogReferenceErrorCode.PATH_REJECTED
+        )
     if "\\" in relative:
-        raise CatalogReferenceError(f"{label} must not contain backslash path separators")
+        raise CatalogReferenceError(
+            f"{label} must not contain backslash path separators",
+            code=CatalogReferenceErrorCode.PATH_REJECTED,
+        )
     raw_parts = relative.split("/")
     if any(part == "" for part in raw_parts):
-        raise CatalogReferenceError(f"{label} must not contain empty path components")
+        raise CatalogReferenceError(
+            f"{label} must not contain empty path components",
+            code=CatalogReferenceErrorCode.PATH_REJECTED,
+        )
     if any(part == "." for part in raw_parts):
-        raise CatalogReferenceError(f"{label} must not contain dot path components")
+        raise CatalogReferenceError(
+            f"{label} must not contain dot path components",
+            code=CatalogReferenceErrorCode.PATH_REJECTED,
+        )
 
     path = Path(relative)
     if path.is_absolute():
-        raise CatalogReferenceError(f"{label} must not be absolute")
+        raise CatalogReferenceError(
+            f"{label} must not be absolute", code=CatalogReferenceErrorCode.PATH_REJECTED
+        )
     if ".." in path.parts:
-        raise CatalogReferenceError(f"{label} must not contain path traversal")
+        raise CatalogReferenceError(
+            f"{label} must not contain path traversal", code=CatalogReferenceErrorCode.PATH_REJECTED
+        )
     if not path.parts:
-        raise CatalogReferenceError(f"{label} path is required")
+        raise CatalogReferenceError(
+            f"{label} path is required", code=CatalogReferenceErrorCode.PATH_REJECTED
+        )
 
     filename = path.name
     suffix = Path(filename).suffix
     if suffix not in _YAML_SUFFIXES:
-        raise CatalogReferenceError(f"{label} path must be YAML")
+        raise CatalogReferenceError(
+            f"{label} path must be YAML", code=CatalogReferenceErrorCode.PATH_REJECTED
+        )
 
     parts = [validate_catalog_name(part, label=f"{label} directory") for part in path.parts[:-1]]
     stem = validate_catalog_name(Path(filename).stem, label=f"{label} filename")
@@ -126,7 +169,10 @@ def parse_catalog_reference(
 
     if expected_families is not None and family not in expected_families:
         expected = " or ".join(sorted(expected_families))
-        raise CatalogReferenceError(f"{label} must reference the {expected} catalog family")
+        raise CatalogReferenceError(
+            f"{label} must reference the {expected} catalog family",
+            code=CatalogReferenceErrorCode.FAMILY_MISMATCH,
+        )
 
     return ParsedCatalogReference(
         namespace=namespace,

@@ -18,9 +18,11 @@ from nodalarc.catalog_refs import (
     CatalogFamily,
     CatalogRef,
     CatalogReferenceError,
+    CatalogReferenceErrorCode,
     catalog_reference_namespace,
 )
 from nodalarc.catalog_registry import (
+    CatalogDocumentWrapperError,
     catalog_family_spec,
     validate_referenced_configuration_document,
 )
@@ -287,29 +289,45 @@ def _reference_from_validation(error: BaseException) -> str | None:
     return None
 
 
+# Precedence when one validation failure carries several typed refusals:
+# family, then path, then not-a-reference.
+_REFERENCE_CODES: dict[CatalogReferenceErrorCode, CatalogClosureErrorCode] = {
+    CatalogReferenceErrorCode.FAMILY_MISMATCH: CatalogClosureErrorCode.REFERENCE_FAMILY_MISMATCH,
+    CatalogReferenceErrorCode.PATH_REJECTED: CatalogClosureErrorCode.REFERENCE_PATH_REJECTED,
+    CatalogReferenceErrorCode.NOT_A_REFERENCE: CatalogClosureErrorCode.INVALID_REFERENCE,
+}
+
+
+def _reference_refusals(error: BaseException) -> tuple[CatalogReferenceError, ...]:
+    """Return the typed reference refusals a validation failure carries.
+
+    Pydantic keeps the exception a field validator raised under
+    ``errors()[i]["ctx"]["error"]``; a refusal raised outside a model is the
+    error itself.
+    """
+    if isinstance(error, CatalogReferenceError):
+        return (error,)
+    if not isinstance(error, ValidationError):
+        return ()
+    refusals: list[CatalogReferenceError] = []
+    for item in error.errors():
+        cause = item.get("ctx", {}).get("error")
+        if isinstance(cause, CatalogReferenceError):
+            refusals.append(cause)
+    return tuple(refusals)
+
+
 def _validation_error_code(
     error: BaseException,
     *,
     root: bool,
 ) -> CatalogClosureErrorCode:
-    message = str(error)
-    if "requires wrapper" in message or "exactly one top-level object wrapper" in message:
+    if isinstance(error, CatalogDocumentWrapperError):
         return CatalogClosureErrorCode.FAMILY_WRAPPER_MISMATCH
-    if "catalog family" in message:
-        return CatalogClosureErrorCode.REFERENCE_FAMILY_MISMATCH
-    path_evidence = (
-        "path traversal",
-        "must not be absolute",
-        "backslash path separators",
-        "path separators",
-        "path must be YAML",
-        "directory must contain only",
-        "filename must contain only",
-    )
-    if any(token in message for token in path_evidence):
-        return CatalogClosureErrorCode.REFERENCE_PATH_REJECTED
-    if "must be a nodalarc:<path> or user:<path> reference" in message:
-        return CatalogClosureErrorCode.INVALID_REFERENCE
+    refused = {refusal.code for refusal in _reference_refusals(error)}
+    for reference_code, closure_code in _REFERENCE_CODES.items():
+        if reference_code in refused:
+            return closure_code
     return (
         CatalogClosureErrorCode.INVALID_SESSION_ROOT
         if root

@@ -436,6 +436,7 @@ def test_wrong_document_wrapper_reports_family_evidence(closure_fixture: Closure
     assert raised.value.code is CatalogClosureErrorCode.FAMILY_WRAPPER_MISMATCH
     assert raised.value.evidence.ref == "user:constellations/demo-constellation.yaml"
     assert raised.value.evidence.family == "constellations"
+    assert raised.value.evidence.cause_type == "CatalogDocumentWrapperError"
 
 
 def test_traversal_reference_is_rejected_as_typed_path_evidence(
@@ -451,6 +452,115 @@ def test_traversal_reference_is_rejected_as_typed_path_evidence(
 
     assert raised.value.code is CatalogClosureErrorCode.REFERENCE_PATH_REJECTED
     assert raised.value.evidence.ref == "user:constellations/../escape.yaml"
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "user:constellations/Bad Name.yaml",
+        "user:constellations//demo-constellation.yaml",
+        "user:constellations/./demo-constellation.yaml",
+        "user:",
+    ],
+)
+def test_malformed_reference_paths_are_rejected_as_typed_path_evidence(
+    closure_fixture: ClosureFixture,
+    source: str,
+) -> None:
+    root_yaml = _yaml_bytes(_session_document(source))
+
+    with pytest.raises(CatalogClosureError) as raised:
+        CatalogClosureCollector.collect(
+            root_yaml,
+            FilesystemCatalogReadView(closure_fixture.roots),
+        )
+
+    assert raised.value.code is CatalogClosureErrorCode.REFERENCE_PATH_REJECTED
+    assert raised.value.evidence.ref == source
+
+
+def test_dependency_with_a_bad_name_component_is_rejected_as_typed_path_evidence(
+    closure_fixture: ClosureFixture,
+) -> None:
+    constellation = _constellation_document()
+    constellation["constellation"]["orbit"] = "nodalarc:orbits/Demo Orbit.yaml"
+    _write_ref(
+        closure_fixture.roots,
+        "user:constellations/demo-constellation.yaml",
+        document=constellation,
+    )
+
+    with pytest.raises(CatalogClosureError) as raised:
+        _collect(closure_fixture)
+
+    assert raised.value.code is CatalogClosureErrorCode.REFERENCE_PATH_REJECTED
+    assert raised.value.evidence.ref == "nodalarc:orbits/Demo Orbit.yaml"
+    assert raised.value.evidence.family == "constellations"
+    assert raised.value.evidence.cause_type == "ValidationError"
+
+
+def test_reference_without_a_namespace_is_an_invalid_reference(
+    closure_fixture: ClosureFixture,
+) -> None:
+    root_yaml = _yaml_bytes(_session_document("constellations/demo-constellation.yaml"))
+
+    with pytest.raises(CatalogClosureError) as raised:
+        CatalogClosureCollector.collect(
+            root_yaml,
+            FilesystemCatalogReadView(closure_fixture.roots),
+        )
+
+    assert raised.value.code is CatalogClosureErrorCode.INVALID_REFERENCE
+    assert raised.value.evidence.ref is None
+
+
+@pytest.mark.parametrize(
+    ("source", "target", "expected"),
+    [
+        (
+            "user:nodes/demo-node.yaml",
+            "nodalarc:bodies/../earth.yaml",
+            CatalogClosureErrorCode.REFERENCE_FAMILY_MISMATCH,
+        ),
+        (
+            "constellations/demo-constellation.yaml",
+            "nodalarc:bodies/../earth.yaml",
+            CatalogClosureErrorCode.REFERENCE_PATH_REJECTED,
+        ),
+    ],
+)
+def test_several_typed_refusals_classify_by_precedence(
+    closure_fixture: ClosureFixture,
+    source: str,
+    target: str,
+    expected: CatalogClosureErrorCode,
+) -> None:
+    session = _session_document(source)
+    session["ephemeris"]["kernels"][0]["targets"] = [target]
+
+    with pytest.raises(CatalogClosureError) as raised:
+        CatalogClosureCollector.collect(
+            _yaml_bytes(session),
+            FilesystemCatalogReadView(closure_fixture.roots),
+        )
+
+    assert raised.value.code is expected
+
+
+def test_classification_does_not_read_the_refused_input_text(
+    closure_fixture: ClosureFixture,
+) -> None:
+    session = _session_document()
+    session["time"]["step_seconds"] = "path traversal"
+
+    with pytest.raises(CatalogClosureError) as raised:
+        CatalogClosureCollector.collect(
+            _yaml_bytes(session),
+            FilesystemCatalogReadView(closure_fixture.roots),
+        )
+
+    assert raised.value.code is CatalogClosureErrorCode.INVALID_SESSION_ROOT
+    assert raised.value.evidence.ref is None
 
 
 def test_filesystem_read_view_rejects_symlink_escape(

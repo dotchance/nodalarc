@@ -14,6 +14,10 @@ from nodalarc.models.configuration import CONFIGURATION_DOCUMENT_MODELS
 from nodalarc.models.segment_session import SegmentSessionConfig
 
 
+class CatalogDocumentWrapperError(ValueError):
+    """The document's single top-level wrapper is missing or names another family."""
+
+
 @dataclass(frozen=True)
 class CatalogFamilySpec:
     family: CatalogFamily
@@ -31,10 +35,12 @@ class CatalogFamilySpec:
         if not isinstance(data, dict):
             raise ValueError("catalog document must be a mapping")
         if len(data) != 1:
-            raise ValueError("catalog document must contain exactly one top-level object wrapper")
+            raise CatalogDocumentWrapperError(
+                "catalog document must contain exactly one top-level object wrapper"
+            )
         wrapper = next(iter(data))
         if wrapper != self.wrapper:
-            raise ValueError(
+            raise CatalogDocumentWrapperError(
                 f"catalog family {self.family!r} requires wrapper {self.wrapper!r}, "
                 f"found {wrapper!r}"
             )
@@ -134,7 +140,9 @@ def validate_catalog_document(data: Any) -> tuple[str, BaseModel]:
     if not isinstance(data, dict):
         raise ValueError("catalog document must be a mapping")
     if len(data) != 1:
-        raise ValueError("catalog document must contain exactly one top-level object wrapper")
+        raise CatalogDocumentWrapperError(
+            "catalog document must contain exactly one top-level object wrapper"
+        )
     wrapper = next(iter(data))
     try:
         family = CATALOG_WRAPPER_TO_FAMILY[wrapper]

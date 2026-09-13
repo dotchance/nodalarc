@@ -225,18 +225,21 @@ async def _converge_selection_failure(
     )
 
 
-def _runtime_proof_status_fields(
+def _runtime_proof_status(
     active_session: ResolvedRuntimeConfig,
     deployment_context: RuntimeDeploymentContext,
-) -> dict[str, str]:
+) -> ConstellationSpecStatus:
+    """The status fields that publish the deployed proof and release identity."""
     proof = active_session.proof
-    return {
-        "documentDigest": proof.document_digest,
-        "closureDigest": proof.closure_digest,
-        "resolvedSemanticDigest": proof.resolved_semantic_digest,
-        "runtimeRelease": deployment_context.release,
-        "runtimeBuild": deployment_context.build,
-    }
+    return ConstellationSpecStatus.from_cr(
+        {
+            "documentDigest": proof.document_digest,
+            "closureDigest": proof.closure_digest,
+            "resolvedSemanticDigest": proof.resolved_semantic_digest,
+            "runtimeRelease": deployment_context.release,
+            "runtimeBuild": deployment_context.build,
+        }
+    )
 
 
 def _runtime_deployment_context(
@@ -523,7 +526,7 @@ async def _reconcile_session(
             active_session.proof,
             deployment_context,
         )
-        proof_fields = _runtime_proof_status_fields(active_session, deployment_context)
+        proof_fields = _runtime_proof_status(active_session, deployment_context).to_patch()
         status_fields = {**identity_fields, **proof_fields}
     except Exception as exc:
         error_msg = str(exc)
@@ -1296,7 +1299,7 @@ async def wiring_check(spec, name, namespace, meta, status, **_):
                 active_session.proof,
                 deployment_context,
             )
-            proof_fields = _runtime_proof_status_fields(active_session, deployment_context)
+            proof_fields = _runtime_proof_status(active_session, deployment_context).to_patch()
         except Exception as exc:
             log.error("Ready session verification failed: %s", exc, exc_info=True)
             _update_status(

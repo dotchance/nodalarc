@@ -844,10 +844,10 @@ class TestReconcileStateMachine:
                 "platformHash": "abc123",
                 "runtimeHash": runtime_hash,
                 **identity,
-                **handlers_mod._runtime_proof_status_fields(
+                **handlers_mod._runtime_proof_status(
                     active_session,
                     deployment_context,
-                ),
+                ).to_patch(),
             }
             _run(
                 handlers_mod.wiring_check(
@@ -890,10 +890,10 @@ class TestReconcileStateMachine:
                 "platformHash": "abc123",
                 "runtimeHash": runtime_hash,
                 **identity,
-                **handlers_mod._runtime_proof_status_fields(
+                **handlers_mod._runtime_proof_status(
                     active_session,
                     deployment_context,
-                ),
+                ).to_patch(),
             }
 
             _run(
@@ -940,10 +940,10 @@ class TestReconcileStateMachine:
                 "platformHash": "abc123",
                 "runtimeHash": runtime_hash,
                 **identity,
-                **handlers_mod._runtime_proof_status_fields(
+                **handlers_mod._runtime_proof_status(
                     active_session,
                     deployment_context,
-                ),
+                ).to_patch(),
             }
             status[field] = "stale"
 

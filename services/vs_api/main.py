@@ -932,11 +932,7 @@ def _cr_ready_identity(cr: dict[str, Any]) -> tuple[int, str] | None:
         return None
     if status.phase != "Ready":
         return None
-    # The readiness rule is the reader's: counts must be positive and agree.
-    pod_count = _as_positive_int(status.pod_count)
-    if pod_count is None or _as_positive_int(status.ready_pods) != pod_count:
-        return None
-    if _as_positive_int(status.wired_pods) != pod_count:
+    if status.ready_pod_count() is None:
         return None
     if not status.session_run_id:
         raise ValueError("Ready ConstellationSpec is missing status.sessionRunId")

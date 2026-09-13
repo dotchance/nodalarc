@@ -885,12 +885,7 @@ def reconcile_transition_operation(
             detail=f"Selected runtime is in phase {phase}",
         )
 
-    pod_count = _positive_int(observed.pod_count)
-    if (
-        pod_count is None
-        or _positive_int(observed.ready_pods) != pod_count
-        or _positive_int(observed.wired_pods) != pod_count
-    ):
+    if observed.ready_pod_count() is None:
         return TransitionReconciliation(
             disposition=TransitionReconciliationDisposition.STILL_SWITCHING,
             detail="Waiting for complete Ready pod and wiring proof",

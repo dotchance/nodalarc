@@ -150,6 +150,23 @@ def test_status_outside_the_contract_is_refused(status: dict, fragment: str) -> 
     assert fragment in str(raised.value)
 
 
+@pytest.mark.parametrize(
+    ("counts", "expected"),
+    [
+        ({"podCount": 3, "readyPods": 3, "wiredPods": 3}, 3),
+        ({"podCount": 3, "readyPods": 2, "wiredPods": 3}, None),
+        ({"podCount": 3, "readyPods": 3, "wiredPods": 2}, None),
+        ({"podCount": 0, "readyPods": 0, "wiredPods": 0}, None),
+        ({"podCount": 3, "readyPods": 3}, None),
+        ({}, None),
+    ],
+)
+def test_ready_pod_count_requires_equal_positive_counts(
+    counts: dict[str, int], expected: int | None
+) -> None:
+    assert ConstellationSpecStatus.from_cr(counts).ready_pod_count() == expected
+
+
 def test_carries_compares_only_the_fields_the_intended_status_sets() -> None:
     live = ConstellationSpecStatus.from_cr(
         {"phase": "Ready", "sessionName": "a", "sessionRunId": "run-1", "podCount": 4}

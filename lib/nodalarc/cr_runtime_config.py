@@ -107,6 +107,19 @@ class ConstellationSpecStatus(BaseModel):
             return False
         return self.observed_generation == generation
 
+    def ready_pod_count(self) -> int | None:
+        """The pod count when every pod is ready and wired, else ``None``.
+
+        Readiness needs a positive pod count with the ready and wired counts
+        equal to it; an absent or differing count means not ready.
+        """
+        count = self.pod_count
+        if count is None or count <= 0:
+            return None
+        if self.ready_pods != count or self.wired_pods != count:
+            return None
+        return count
+
     def carries(self, intended: ConstellationSpecStatus) -> bool:
         """Whether every field the intended status sets holds the same value here."""
         return all(

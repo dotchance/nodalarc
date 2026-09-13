@@ -22,6 +22,7 @@ import kubernetes.config
 from nodalarc.runtime_naming import is_managed_host_ifname
 from nodalarc.substrate.manifest_contract import WiringManifest
 from nodalarc.substrate.wiring_status import (
+    WIRING_STATUS_CONFIGMAP,
     NodeWiringStatus,
     failed_status,
     status_configmap_data,
@@ -387,7 +388,7 @@ def execute_wiring(
         # K8s PATCH fallback (for Operator CR status updates)
         try:
             v1.patch_namespaced_config_map(
-                "nodalarc-wiring-status",
+                WIRING_STATUS_CONFIGMAP,
                 namespace,
                 {"data": {"_progress": phase_msg}},
             )
@@ -395,7 +396,7 @@ def execute_wiring(
             if e.status == 404:
                 body = kubernetes.client.V1ConfigMap(
                     metadata=kubernetes.client.V1ObjectMeta(
-                        name="nodalarc-wiring-status",
+                        name=WIRING_STATUS_CONFIGMAP,
                         namespace=namespace,
                         labels={"nodalarc.io/managed-by": "node-agent"},
                     ),
@@ -765,7 +766,7 @@ def write_wiring_status(
 
     try:
         v1.patch_namespaced_config_map(
-            "nodalarc-wiring-status",
+            WIRING_STATUS_CONFIGMAP,
             namespace,
             {"data": status_configmap_data(statuses, manifest)},
         )
@@ -774,7 +775,7 @@ def write_wiring_status(
             # ConfigMap doesn't exist — create it
             body = kubernetes.client.V1ConfigMap(
                 metadata=kubernetes.client.V1ObjectMeta(
-                    name="nodalarc-wiring-status",
+                    name=WIRING_STATUS_CONFIGMAP,
                     namespace=namespace,
                     labels={"nodalarc.io/managed-by": "node-agent"},
                 ),

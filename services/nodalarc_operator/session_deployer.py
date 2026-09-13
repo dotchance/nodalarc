@@ -51,6 +51,7 @@ from nodalarc.substrate.manifest_contract import (
     POD_OWNER_UID_LABEL,
     POD_SESSION_RUN_LABEL,
 )
+from nodalarc.substrate.wiring_status import WIRING_STATUS_CONFIGMAP
 from nodalarc.template_vars import build_template_vars_from_resolved
 from nodalarc.workload_target import NODE_ID_LABEL
 
@@ -1221,7 +1222,7 @@ def write_wiring_manifest(
     # Without this, the Node Agent sees old wiring-status as "current" and
     # hits Case B (no-op) instead of Case A (wire from scratch).
     try:
-        v1.delete_namespaced_config_map("nodalarc-wiring-status", namespace)
+        v1.delete_namespaced_config_map(WIRING_STATUS_CONFIGMAP, namespace)
         log.debug("Deleted stale nodalarc-wiring-status")
     except kubernetes.client.rest.ApiException as e:
         if e.status != 404:
@@ -1654,7 +1655,7 @@ def teardown_session(namespace: str, session_id: str | None = None) -> None:
         "nodalarc-ground-stations",
         "nodalarc-pod-ips",
         "nodalarc-topology-wiring",
-        "nodalarc-wiring-status",
+        WIRING_STATUS_CONFIGMAP,
     ]:
         try:
             v1.delete_namespaced_config_map(cm_name, namespace)
@@ -1886,7 +1887,7 @@ def check_wiring_complete(namespace: str, expected_count: int) -> tuple[bool, in
         )
 
     try:
-        cm = v1.read_namespaced_config_map("nodalarc-wiring-status", namespace)
+        cm = v1.read_namespaced_config_map(WIRING_STATUS_CONFIGMAP, namespace)
         data = dict(cm.data) if cm.data else {}
         status_session_id, status_generation, statuses = parse_status_configmap(data)
     except kubernetes.client.rest.ApiException as e:

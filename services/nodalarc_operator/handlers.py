@@ -121,11 +121,6 @@ def _with_observed_generation(meta: dict, status: Mapping[str, Any]) -> Constell
     )
 
 
-def _status_observed_current_generation(meta: dict, status: Mapping[str, Any]) -> bool:
-    """Return true when status was computed from this CR generation."""
-    return ConstellationSpecStatus.from_cr(status).observes_generation(meta.get("generation"))
-
-
 def _build_owner_ref(name: str, meta: dict) -> dict:
     """Build ownerReference dict for garbage collection."""
     return {
@@ -1225,8 +1220,9 @@ async def on_update(spec, name, namespace, meta, status, **_):
     - Non-impacting fields (metadata, placement): reconcile without
       restarting platform pods.
     """
-    phase = ConstellationSpecStatus.from_cr(status).phase or ""
-    if phase == "Error" and _status_observed_current_generation(meta, status):
+    observed = ConstellationSpecStatus.from_cr(status)
+    phase = observed.phase or ""
+    if phase == "Error" and observed.observes_generation(meta.get("generation")):
         log.debug("on_update: session in Error state, skipping")
         return
 
@@ -1247,14 +1243,12 @@ async def on_delete(name, namespace, spec=None, meta=None, status=None, **_):
 @kopf.on.resume(CR_PLURAL, group=CR_GROUP)
 async def on_resume(spec, name, namespace, meta, status, **_):
     """Handle Operator restart — reconcile existing session state."""
-    phase = ConstellationSpecStatus.from_cr(status).phase or ""
+    observed = ConstellationSpecStatus.from_cr(status)
+    phase = observed.phase or ""
     log.info("Resuming ConstellationSpec '%s', current phase: %s", name, phase)
 
-    if phase == "Error" and _status_observed_current_generation(meta, status):
-        log.info(
-            "Operator resume: session in Error state: %s",
-            ConstellationSpecStatus.from_cr(status).message or "",
-        )
+    if phase == "Error" and observed.observes_generation(meta.get("generation")):
+        log.info("Operator resume: session in Error state: %s", observed.message or "")
         return
 
     await _reconcile_session(spec, name, namespace, meta, status)

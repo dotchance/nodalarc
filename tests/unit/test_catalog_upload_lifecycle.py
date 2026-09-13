@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 from nodalarc.catalog_upload import CatalogUploadSelection
+from pydantic import ValidationError
 from vs_api.catalog_upload_lifecycle import reconcile_catalog_upload_lifecycle
 from vs_api.catalog_upload_store import CatalogUploadGarbageCollectionReceipt
 
@@ -74,6 +75,19 @@ def test_lifecycle_runs_gc_without_live_or_pending_uploads() -> None:
 
     assert receipt.protected_upload_ids == ()
     assert store.calls == [()]
+
+
+def test_persisted_spec_without_a_selection_is_refused_before_gc() -> None:
+    store = RecordingStore()
+
+    with pytest.raises(ValidationError):
+        reconcile_catalog_upload_lifecycle(
+            store,
+            constellation_spec={"spec": {"sessionYaml": "session:\n  name: test\n"}},
+            active_operation=None,
+        )
+
+    assert store.calls == []
 
 
 def test_invalid_live_or_terminal_authority_fails_before_gc() -> None:

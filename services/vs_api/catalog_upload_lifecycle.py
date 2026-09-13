@@ -39,9 +39,6 @@ def _live_upload_id(constellation_spec: Mapping[str, Any] | None) -> str | None:
     spec = constellation_spec.get("spec")
     if not isinstance(spec, Mapping):
         raise ValueError("live ConstellationSpec spec must be a mapping")
-    # A spec without a selection names no live upload; a spec with one must be whole.
-    if spec.get("catalogUpload") is None:
-        return None
     return ConstellationSpecSpec.from_cr(spec).catalog_upload.upload_id
 
 

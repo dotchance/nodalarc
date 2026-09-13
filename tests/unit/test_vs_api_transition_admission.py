@@ -1,16 +1,40 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
-from nodalarc.catalog_upload import CatalogUploadSelection
+from kubernetes.client.rest import ApiException
+from nodalarc.catalog_closure import CatalogClosureEntry
+from nodalarc.catalog_refs import CatalogRef
+from nodalarc.catalog_upload import CatalogUpload, CatalogUploadSelection
 from nodalarc.content_identity import sha256_digest
+from nodalarc.kubernetes_runtime_config import (
+    CATALOG_DOCUMENT_KEY,
+    CATALOG_REF_ANNOTATION,
+    CATALOG_UPLOAD_LABEL,
+    KubernetesRuntimeConfigError,
+    KubernetesRuntimeConfigErrorCode,
+    encode_catalog_upload_config_map,
+    read_catalog_upload,
+)
 from nodalarc.models.session_sources import (
     CatalogSessionSourceId,
     CatalogSessionSwitchAccepted,
     CatalogSessionSwitchRequest,
+)
+from nodalarc.runtime_config import (
+    RuntimeConfigError,
+    RuntimeConfigErrorCode,
+    _assert_shipped_assets,
+)
+from vs_api.catalog_upload_store import (
+    CatalogUploadStoreError,
+    CatalogUploadStoreErrorCode,
+    CatalogUploadStoreErrorEvidence,
 )
 from vs_api.session_deployment import (
     SessionDeploymentPreparationError,
@@ -496,3 +520,308 @@ def test_live_worker_is_not_reconciled_against_old_cr(monkeypatch) -> None:
         assert store.get_operation(operation_id).state is TransitionOperationState.SUCCEEDED
 
     asyncio.run(exercise())
+
+
+# --- the restart poll: transport failures keep polling, everything else is terminal ---
+
+POLL_NOW = datetime(2026, 9, 13, 12, 0, tzinfo=UTC)
+STALE_NAMES = ("stale-000000", "stale-000001")
+
+
+class _ScriptedCustomObjectsApi:
+    def __init__(self, ticks) -> None:
+        self.ticks = list(ticks)
+        self.calls = 0
+
+    def get_namespaced_custom_object(self, **_kwargs):
+        self.calls += 1
+        tick = self.ticks.pop(0)
+        if isinstance(tick, BaseException):
+            raise tick
+        return tick
+
+
+class _ScriptedCoreV1Api:
+    def __init__(self, *, list_results=(), delete_failures=None) -> None:
+        self.list_results = list(list_results)
+        self.list_calls = 0
+        self.delete_calls: list[str] = []
+        self.delete_failures = dict(delete_failures or {})
+
+    def list_namespaced_config_map(self, namespace: str, *, label_selector: str):
+        self.list_calls += 1
+        result = self.list_results.pop(0)
+        if isinstance(result, BaseException):
+            raise result
+        return result
+
+    def delete_namespaced_config_map(self, name: str, namespace: str, body) -> None:
+        self.delete_calls.append(name)
+        failure = self.delete_failures.get(name)
+        if failure is not None:
+            raise failure
+
+
+def _stale_config_map(name: str) -> SimpleNamespace:
+    return SimpleNamespace(
+        api_version="v1",
+        kind="ConfigMap",
+        metadata=SimpleNamespace(
+            name=name,
+            namespace="nodalarc",
+            uid=f"uid-{name}",
+            labels={CATALOG_UPLOAD_LABEL: "stale"},
+            annotations={CATALOG_REF_ANNOTATION: "nodalarc:bodies/earth.yaml"},
+            creation_timestamp=POLL_NOW - timedelta(days=2),
+        ),
+        immutable=None,
+        data={CATALOG_DOCUMENT_KEY: "body: {}\n"},
+        binary_data=None,
+    )
+
+
+def _stale_list() -> SimpleNamespace:
+    return SimpleNamespace(items=[_stale_config_map(name) for name in STALE_NAMES])
+
+
+def _polled_cr(status: dict) -> dict:
+    return {
+        "metadata": {"namespace": "nodalarc", "name": "current-session", "generation": 9},
+        "spec": {
+            "sessionYaml": ROOT_YAML,
+            "catalogUpload": _catalog_selection("catalog-live").model_dump(mode="json"),
+        },
+        "status": status,
+    }
+
+
+def _wiring_cr() -> dict:
+    return _polled_cr({"observedGeneration": 9, "phase": "Wiring", "message": "Wiring 1/4"})
+
+
+def _operator_error_cr() -> dict:
+    return _polled_cr({"observedGeneration": 9, "phase": "Error", "message": "operator refused"})
+
+
+def _run_poll(monkeypatch, main, *, custom, core) -> SimpleNamespace:
+    import kubernetes.client
+    import kubernetes.config
+
+    _install_store(monkeypatch, main)
+    manager = SimpleNamespace(_status="wiring", status_detail="")
+    monkeypatch.setattr(main, "_session_manager", manager)
+    monkeypatch.setattr(
+        main,
+        "get_platform_config",
+        lambda: SimpleNamespace(kubernetes_namespace="nodalarc"),
+    )
+    monkeypatch.setattr(kubernetes.config, "load_incluster_config", lambda: None)
+    monkeypatch.setattr(kubernetes.client, "CustomObjectsApi", lambda: custom)
+    monkeypatch.setattr(kubernetes.client, "CoreV1Api", lambda: core)
+
+    async def no_sleep(_seconds) -> None:
+        return None
+
+    async def inline(fn, *args, **kwargs):
+        return fn(*args, **kwargs)
+
+    monkeypatch.setattr(main.asyncio, "sleep", no_sleep)
+    monkeypatch.setattr(main.asyncio, "to_thread", inline)
+    asyncio.run(main._poll_cr_until_ready())
+    return manager
+
+
+def _assert_polling_continued(manager: SimpleNamespace, custom: _ScriptedCustomObjectsApi) -> None:
+    assert custom.calls == 2
+    assert manager._status == "error"
+    assert manager.status_detail == "operator refused"
+
+
+def _assert_terminal(
+    manager: SimpleNamespace, custom: _ScriptedCustomObjectsApi, prefix: str
+) -> None:
+    assert custom.calls == 1
+    assert manager._status == "error"
+    assert manager.status_detail.startswith(prefix)
+    assert "timed out" not in manager.status_detail
+
+
+def test_poll_continues_past_a_connection_failure_in_the_upload_gc_list(monkeypatch) -> None:
+    import vs_api.main as main
+
+    custom = _ScriptedCustomObjectsApi([_wiring_cr(), _operator_error_cr()])
+    core = _ScriptedCoreV1Api(
+        list_results=[ConnectionError("connection refused"), SimpleNamespace(items=[])],
+    )
+
+    manager = _run_poll(monkeypatch, main, custom=custom, core=core)
+
+    _assert_polling_continued(manager, custom)
+    assert core.list_calls == 2
+
+
+def test_poll_ends_on_a_malformed_upload_gc_list_response(monkeypatch, caplog) -> None:
+    import vs_api.main as main
+
+    custom = _ScriptedCustomObjectsApi([_wiring_cr()])
+    core = _ScriptedCoreV1Api(list_results=[SimpleNamespace(items=None)])
+
+    with caplog.at_level("ERROR", logger="vs_api.main"):
+        manager = _run_poll(monkeypatch, main, custom=custom, core=core)
+
+    _assert_terminal(
+        manager,
+        custom,
+        "CatalogUploadStoreError: Could not list catalog upload resources",
+    )
+    assert "has no items" in manager.status_detail
+    assert any(
+        "nodalarc/current-session failed: CatalogUploadStoreError" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+@pytest.mark.parametrize("logic_failure_first", [False, True])
+def test_poll_ends_when_any_failed_delete_is_not_transport(
+    monkeypatch, logic_failure_first
+) -> None:
+    import vs_api.main as main
+
+    failures = [ApiException(status=500, reason="server error"), ValueError("not transport")]
+    if logic_failure_first:
+        failures.reverse()
+    custom = _ScriptedCustomObjectsApi([_wiring_cr()])
+    core = _ScriptedCoreV1Api(
+        list_results=[_stale_list()],
+        delete_failures=dict(zip(STALE_NAMES, failures, strict=True)),
+    )
+
+    manager = _run_poll(monkeypatch, main, custom=custom, core=core)
+
+    _assert_terminal(
+        manager,
+        custom,
+        "CatalogUploadStoreError: Could not garbage-collect catalog upload stale",
+    )
+    assert core.delete_calls == list(STALE_NAMES)
+
+
+def test_poll_continues_when_every_failed_delete_is_transport(monkeypatch) -> None:
+    import vs_api.main as main
+
+    custom = _ScriptedCustomObjectsApi([_wiring_cr(), _operator_error_cr()])
+    core = _ScriptedCoreV1Api(
+        list_results=[_stale_list(), SimpleNamespace(items=[])],
+        delete_failures={
+            name: ApiException(status=500, reason="server error") for name in STALE_NAMES
+        },
+    )
+
+    manager = _run_poll(monkeypatch, main, custom=custom, core=core)
+
+    _assert_polling_continued(manager, custom)
+    assert core.delete_calls == list(STALE_NAMES)
+
+
+def test_poll_continues_past_a_raw_api_failure_reading_the_cr(monkeypatch) -> None:
+    import vs_api.main as main
+
+    custom = _ScriptedCustomObjectsApi(
+        [ApiException(status=503, reason="unavailable"), _operator_error_cr()]
+    )
+    core = _ScriptedCoreV1Api(list_results=[SimpleNamespace(items=[])])
+
+    manager = _run_poll(monkeypatch, main, custom=custom, core=core)
+
+    _assert_polling_continued(manager, custom)
+
+
+def test_poll_ends_on_a_strict_status_parse_failure(monkeypatch) -> None:
+    import vs_api.main as main
+
+    custom = _ScriptedCustomObjectsApi(
+        [_polled_cr({"observedGeneration": 9, "phase": "Wiring", "readyPods": "many"})]
+    )
+    core = _ScriptedCoreV1Api(list_results=[SimpleNamespace(items=[])])
+
+    manager = _run_poll(monkeypatch, main, custom=custom, core=core)
+
+    _assert_terminal(manager, custom, "ValidationError:")
+    assert "readyPods" in manager.status_detail
+
+
+def _closure_entry(yaml_bytes: bytes) -> CatalogClosureEntry:
+    return CatalogClosureEntry(
+        ref=CatalogRef("nodalarc:bodies/earth.yaml"),
+        family="bodies",
+        preserved_path="bodies/earth.yaml",
+        yaml_bytes=yaml_bytes,
+        document_digest=sha256_digest(yaml_bytes),
+        size_bytes=len(yaml_bytes),
+    )
+
+
+def test_poll_rule_descends_through_the_upload_fetch_wrapper_to_a_transport_root() -> None:
+    import vs_api.main as main
+
+    class _RefusingReader:
+        def list_namespaced_config_map(self, namespace: str, *, label_selector: str):
+            raise ApiException(status=503, reason="unavailable")
+
+    with pytest.raises(KubernetesRuntimeConfigError) as raised:
+        read_catalog_upload(
+            _RefusingReader(),
+            namespace="nodalarc",
+            root_yaml=ROOT_YAML.encode(),
+            selection=_catalog_selection("catalog-live"),
+        )
+
+    assert raised.value.code is KubernetesRuntimeConfigErrorCode.CONFIG_MAP_FETCH_FAILED
+    assert main._poll_failure_is_transport(raised.value) is True
+
+
+def test_poll_rule_treats_an_upload_content_refusal_as_terminal() -> None:
+    import vs_api.main as main
+
+    with pytest.raises(KubernetesRuntimeConfigError) as raised:
+        encode_catalog_upload_config_map(
+            namespace="nodalarc",
+            upload_id="catalog-live",
+            order=0,
+            entry=_closure_entry(b"\xff\xfe"),
+        )
+
+    assert raised.value.code is KubernetesRuntimeConfigErrorCode.INVALID_UPLOAD
+    assert main._poll_failure_is_transport(raised.value) is False
+
+
+def test_poll_rule_treats_a_shipped_asset_refusal_over_a_missing_file_as_terminal(
+    tmp_path: Path,
+) -> None:
+    import vs_api.main as main
+
+    upload = CatalogUpload(
+        selection=_catalog_selection("catalog-live"),
+        root_yaml=ROOT_YAML.encode(),
+        catalog_files=(_closure_entry(b"body: {}\n"),),
+    )
+
+    with pytest.raises(RuntimeConfigError) as raised:
+        _assert_shipped_assets(upload, tmp_path)
+
+    assert raised.value.code is RuntimeConfigErrorCode.SHIPPED_ASSET_MISMATCH
+    assert isinstance(raised.value.__cause__, FileNotFoundError)
+    assert main._poll_failure_is_transport(raised.value) is False
+
+
+def test_poll_rule_requires_a_retained_cause_behind_a_transport_wrapper() -> None:
+    import vs_api.main as main
+
+    orphan = CatalogUploadStoreError(
+        CatalogUploadStoreErrorEvidence(
+            code=CatalogUploadStoreErrorCode.LIST_FAILED,
+            message="no cause retained",
+        )
+    )
+
+    assert main._poll_failure_is_transport(orphan) is False

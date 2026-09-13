@@ -35,11 +35,13 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request, WebSocket, 
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
+from kubernetes.client.rest import ApiException
 from nodal.logging import configure as _configure_logging
 from nodal.logging import connect as _connect_logging
 from nodal.logging import uvicorn_settings as _uvicorn_logging_settings
 from nodalarc.catalog_closure import (
     CatalogClosureCollector,
+    CatalogClosureError,
     CatalogDocumentNotFound,
     CatalogReadFailed,
     CatalogReadRejected,
@@ -76,6 +78,10 @@ from nodalarc.db.queries import (
     query_probe_results,
 )
 from nodalarc.db.schema import create_tables
+from nodalarc.kubernetes_runtime_config import (
+    KubernetesRuntimeConfigError,
+    KubernetesRuntimeConfigErrorCode,
+)
 from nodalarc.models.builder_api import (
     WizardAvailableStation,
     WizardAvailableStationResponse,
@@ -123,8 +129,9 @@ from nodalarc.project_info import project_attribution, project_version
 from nodalarc.resolve_session import (
     SessionResolution,
 )
-from nodalarc.runtime_config import ResolvedRuntimeConfig
+from nodalarc.runtime_config import ResolvedRuntimeConfig, RuntimeConfigError
 from nodalarc.runtime_support import UnsupportedFeatureError
+from urllib3.exceptions import HTTPError as TransportHTTPError
 from yaml import YAMLError
 
 from vs_api.catalog_context import CatalogContext, get_catalog_context
@@ -134,6 +141,8 @@ from vs_api.catalog_upload_lifecycle import (
 )
 from vs_api.catalog_upload_store import (
     CatalogUploadResourceEvidence,
+    CatalogUploadStoreError,
+    CatalogUploadStoreErrorCode,
     KubernetesCatalogUploadStore,
 )
 from vs_api.continuous_tracer import ContinuousTracer
@@ -4063,6 +4072,43 @@ async def _run_prepared_switch_locked(
         raise
 
 
+_TYPED_REFUSALS = (
+    CatalogClosureError,
+    CatalogUploadStoreError,
+    KubernetesRuntimeConfigError,
+    RuntimeConfigError,
+)
+_TRANSPORT_WRAPPER_CODES = frozenset(
+    {
+        CatalogUploadStoreErrorCode.LIST_FAILED,
+        CatalogUploadStoreErrorCode.DELETE_FAILED,
+        KubernetesRuntimeConfigErrorCode.CONFIG_MAP_FETCH_FAILED,
+    }
+)
+_TRANSPORT_ROOTS = (ApiException, TransportHTTPError, OSError)
+
+
+def _poll_failure_is_transport(exc: BaseException) -> bool:
+    """Decide whether one poll-tick failure is transport, so polling continues.
+
+    The caught exception and its ``__cause__`` chain are judged from the
+    outside in, at the first link that can decide. A typed refusal whose code
+    names a transport wrapper (an upload list or delete, a ConfigMap fetch)
+    defers to its retained cause. Any other typed refusal is an explicit
+    content or configuration refusal and is terminal, whatever it wraps. An
+    exception group is transport only when every member is. A Kubernetes API,
+    HTTP or OS error is transport. Anything else, including a strict model
+    parse failure or an error with no cause, is terminal.
+    """
+    if isinstance(exc, _TYPED_REFUSALS):
+        if exc.code not in _TRANSPORT_WRAPPER_CODES:
+            return False
+        return exc.__cause__ is not None and _poll_failure_is_transport(exc.__cause__)
+    if isinstance(exc, BaseExceptionGroup):
+        return all(_poll_failure_is_transport(member) for member in exc.exceptions)
+    return isinstance(exc, _TRANSPORT_ROOTS)
+
+
 async def _poll_cr_until_ready() -> None:
     """Poll ConstellationSpec CR until Ready, updating session status_detail.
 
@@ -4164,7 +4210,20 @@ async def _poll_cr_until_ready() -> None:
                 log.error("CR reached Error during wiring: %s", message)
                 return
         except Exception as exc:
-            log.warning("_poll_cr_until_ready: %s", exc)
+            if _poll_failure_is_transport(exc):
+                log.warning("_poll_cr_until_ready: transport failure, polling continues: %s", exc)
+                continue
+            log.error(
+                "_poll_cr_until_ready: %s/%s failed: %s: %s",
+                ns,
+                CR_NAME,
+                type(exc).__name__,
+                exc,
+            )
+            if _session_manager:
+                _session_manager._status = "error"
+                _session_manager.status_detail = f"{type(exc).__name__}: {exc}"
+            return
 
     if _session_manager:
         _session_manager._status = "error"

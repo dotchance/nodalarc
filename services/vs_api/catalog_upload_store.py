@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Collection, Mapping
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
@@ -267,7 +267,9 @@ class KubernetesCatalogUploadStore:
                 resources=tuple(sorted(observed_resources, key=lambda item: str(item.ref))),
             )
         except Exception as exc:
-            cleanup_failures = self._cleanup(resource.name for resource in created)
+            cleanup_failures = _failed_delete_names(
+                self._cleanup(resource.name for resource in created)
+            )
             if isinstance(exc, CatalogUploadStoreError):
                 evidence = exc.evidence
                 raise CatalogUploadStoreError(
@@ -361,12 +363,15 @@ class KubernetesCatalogUploadStore:
         names = sorted(catalog_upload_config_map_identity(item).name for item in items)
         failures = self._cleanup(names)
         if failures:
+            failed_names = _failed_delete_names(failures)
+            group = _failed_delete_group(failures)
             raise _error(
                 CatalogUploadStoreErrorCode.DELETE_FAILED,
-                f"Could not delete catalog upload {upload_id}: {', '.join(failures)}",
+                f"Could not delete catalog upload {upload_id}: {', '.join(failed_names)}",
                 upload_id=upload_id,
-                cleanup_failures=failures,
-            )
+                cause=group,
+                cleanup_failures=failed_names,
+            ) from group
         return CatalogUploadDeleteReceipt(upload_id=upload_id, deleted_names=tuple(names))
 
     def garbage_collect(
@@ -427,12 +432,16 @@ class KubernetesCatalogUploadStore:
                 continue
             failures = self._cleanup(names)
             if failures:
+                failed_names = _failed_delete_names(failures)
+                group = _failed_delete_group(failures)
                 raise _error(
                     CatalogUploadStoreErrorCode.DELETE_FAILED,
-                    f"Could not garbage-collect catalog upload {upload_id}: " + ", ".join(failures),
+                    f"Could not garbage-collect catalog upload {upload_id}: "
+                    + ", ".join(failed_names),
                     upload_id=upload_id,
-                    cleanup_failures=failures,
-                )
+                    cause=group,
+                    cleanup_failures=failed_names,
+                ) from group
             deleted_names.extend(names)
 
         return CatalogUploadGarbageCollectionReceipt(
@@ -443,8 +452,9 @@ class KubernetesCatalogUploadStore:
             unsafe_names=tuple(sorted(unsafe_names)),
         )
 
-    def _cleanup(self, names: Collection[str]) -> tuple[str, ...]:
-        failures: list[str] = []
+    def _cleanup(self, names: Collection[str]) -> tuple[tuple[str, Exception], ...]:
+        """Delete each named ConfigMap; return every non-404 failure with its exception."""
+        failures: list[tuple[str, Exception]] = []
         for name in names:
             try:
                 self._client.delete_namespaced_config_map(
@@ -454,5 +464,14 @@ class KubernetesCatalogUploadStore:
                 )
             except Exception as exc:
                 if getattr(exc, "status", None) != 404:
-                    failures.append(name)
+                    failures.append((name, exc))
         return tuple(failures)
+
+
+def _failed_delete_names(failures: Sequence[tuple[str, Exception]]) -> tuple[str, ...]:
+    return tuple(name for name, _exc in failures)
+
+
+def _failed_delete_group(failures: Sequence[tuple[str, Exception]]) -> ExceptionGroup[Exception]:
+    """Every failed delete of one upload group, retained together as the cause."""
+    return ExceptionGroup("catalog upload deletes failed", [exc for _name, exc in failures])

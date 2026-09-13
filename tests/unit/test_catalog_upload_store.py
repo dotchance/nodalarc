@@ -398,3 +398,71 @@ def test_readback_list_envelope_faults_are_list_failures(upload: CatalogUpload) 
 
     assert raised.value.code is CatalogUploadStoreErrorCode.LIST_FAILED
     assert api.config_maps == {}
+
+
+def _group_statuses(error: CatalogUploadStoreError) -> tuple[int, ...]:
+    cause = error.__cause__
+    assert isinstance(cause, ExceptionGroup)
+    return tuple(member.status for member in cause.exceptions)
+
+
+def test_delete_retains_every_failed_delete_as_the_chained_cause(upload: CatalogUpload) -> None:
+    api = FakeCoreV1Api()
+    store = KubernetesCatalogUploadStore(api, NAMESPACE)
+    receipt = store.put(upload)
+    first, second = receipt.created_names[0], receipt.created_names[1]
+    api.delete_failures[first] = 500
+    api.delete_failures[second] = 503
+
+    with pytest.raises(CatalogUploadStoreError) as raised:
+        store.delete(upload.selection)
+
+    assert raised.value.code is CatalogUploadStoreErrorCode.DELETE_FAILED
+    assert raised.value.evidence.cleanup_failures == (first, second)
+    assert raised.value.evidence.cause_type == "ExceptionGroup"
+    assert _group_statuses(raised.value) == (500, 503)
+    assert set(api.config_maps) == {first, second}
+
+
+def test_gc_retains_every_failed_delete_as_the_chained_cause() -> None:
+    api = FakeCoreV1Api()
+    for order in range(2):
+        api.seed(
+            name=f"stale-00000{order}",
+            upload_id="stale",
+            ref="nodalarc:bodies/earth.yaml",
+            content="body: {}\n",
+        )
+    api.delete_failures["stale-000000"] = 500
+    api.delete_failures["stale-000001"] = 409
+
+    with pytest.raises(CatalogUploadStoreError) as raised:
+        KubernetesCatalogUploadStore(api, NAMESPACE).garbage_collect(
+            active_upload_ids=set(),
+            now=NOW,
+        )
+
+    assert raised.value.code is CatalogUploadStoreErrorCode.DELETE_FAILED
+    assert raised.value.evidence.upload_id == "stale"
+    assert raised.value.evidence.cleanup_failures == ("stale-000000", "stale-000001")
+    assert _group_statuses(raised.value) == (500, 409)
+
+
+def test_put_cleanup_failures_stay_names_behind_the_create_failure(upload: CatalogUpload) -> None:
+    api = FakeCoreV1Api()
+    first = f"{upload.upload_id}-000000"
+    second = f"{upload.upload_id}-000001"
+    api.create_failures[second] = 500
+    api.delete_failures[first] = 503
+
+    with pytest.raises(CatalogUploadStoreError) as raised:
+        KubernetesCatalogUploadStore(api, NAMESPACE).put(upload)
+
+    assert raised.value.code is CatalogUploadStoreErrorCode.CREATE_FAILED
+    assert raised.value.evidence.created_names == (first,)
+    assert raised.value.evidence.cleanup_failures == (first,)
+    create_failure = raised.value.__cause__
+    assert isinstance(create_failure, CatalogUploadStoreError)
+    assert create_failure.code is CatalogUploadStoreErrorCode.CREATE_FAILED
+    assert isinstance(create_failure.__cause__, FakeApiError)
+    assert create_failure.__cause__.status == 500

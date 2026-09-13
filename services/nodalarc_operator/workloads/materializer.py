@@ -23,7 +23,11 @@ from nodalarc.substrate.manifest_contract import (
     POD_SESSION_RUN_LABEL,
 )
 from nodalarc.substrate.wiring_status import READY_PHASE_JQ_CLAUSE
-from nodalarc.workload_target import NODE_ID_LABEL, PRIMARY_CONTAINER_ANNOTATION
+from nodalarc.workload_target import (
+    NODE_ID_LABEL,
+    PRIMARY_CONTAINER_ANNOTATION,
+    TERMINAL_ACCESS_ANNOTATION,
+)
 
 SESSION_LABEL = "nodalarc.io/session"
 ROLE_LABEL = "nodalarc.io/role"
@@ -33,11 +37,6 @@ ROLE_LABEL = "nodalarc.io/role"
 # selection; a differing pod is deleted and recreated, never re-stamped.
 WORKLOAD_SELECTION_ANNOTATION = "nodalarc.io/workload-selection"
 
-# Platform-owned pod annotation carrying the node's terminal contract as
-# canonical JSON ({"surface": "ssh"} or {"surface": "exec", ...}). Absent
-# means the workload declares no terminal access and the browser terminal
-# refuses immediately — it never dials a pod that cannot answer.
-TERMINAL_ACCESS_ANNOTATION = "nodalarc.io/terminal-access"
 TERMINAL_SSH_CONTRACT = '{"surface":"ssh"}'
 
 WIRING_STATUS_CONFIGMAP = "nodalarc-wiring-status"

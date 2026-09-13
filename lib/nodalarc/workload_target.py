@@ -18,6 +18,11 @@ from pydantic import BaseModel, ConfigDict
 
 NODE_ID_LABEL = "nodalarc.io/node-id"
 PRIMARY_CONTAINER_ANNOTATION = "nodalarc.io/primary-container"
+# Platform-owned pod annotation carrying the node's terminal contract as
+# canonical JSON ({"surface": "ssh"} or {"surface": "exec", ...}). Absent
+# means the workload declares no terminal access and the browser terminal
+# refuses immediately; it never dials a pod that cannot answer.
+TERMINAL_ACCESS_ANNOTATION = "nodalarc.io/terminal-access"
 
 _NODE_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9\-]{0,62}$")
 

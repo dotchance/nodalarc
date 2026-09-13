@@ -23,6 +23,7 @@ import logging
 
 import asyncssh
 import kubernetes.client
+from nodalarc.workload_target import TERMINAL_ACCESS_ANNOTATION
 from starlette.websockets import WebSocket
 
 log = logging.getLogger(__name__)
@@ -98,9 +99,6 @@ def _get_k8s_client() -> kubernetes.client.CoreV1Api:
         kubernetes.config.load_incluster_config()
         _k8s_v1 = kubernetes.client.CoreV1Api()
     return _k8s_v1
-
-
-TERMINAL_ACCESS_ANNOTATION = "nodalarc.io/terminal-access"
 
 
 def parse_terminal_contract(annotation: str | None) -> dict | None:

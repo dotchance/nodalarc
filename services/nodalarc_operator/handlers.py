@@ -39,6 +39,7 @@ from nodalarc.cr_runtime_config import (
 from nodalarc.nats_channels import sanitize_session_id
 from nodalarc.runtime_config import ResolvedRuntimeConfig, RuntimeDeploymentContext
 from nodalarc.session_identity import derive_session_run_id
+from nodalarc.workload_target import NODE_ID_LABEL
 
 from nodalarc_operator.session_deployer import (
     RetryableSessionDependency,
@@ -292,7 +293,7 @@ def _delete_obsolete_pods(expected_ids: set[str], namespace: str) -> int:
     from nodalarc_operator.session_deployer import _get_v1
 
     v1 = _get_v1()
-    pods = v1.list_namespaced_pod(namespace, label_selector="nodalarc.io/node-id")
+    pods = v1.list_namespaced_pod(namespace, label_selector=NODE_ID_LABEL)
     deleted = 0
     for pod in pods.items:
         pod_name = pod.metadata.name

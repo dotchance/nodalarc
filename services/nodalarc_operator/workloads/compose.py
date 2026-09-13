@@ -16,6 +16,7 @@ from dataclasses import dataclass
 import kubernetes.client
 from nodalarc.content_identity import canonical_json_bytes, sha256_digest
 from nodalarc.models.catalog import Profile, ProfileSidecar
+from nodalarc.workload_target import NODE_ID_LABEL
 from nodalarc.workloads.plan import WorkloadPlan
 
 from nodalarc_operator.workloads.materializer import WorkloadComposition
@@ -85,7 +86,7 @@ def _artifact_config_map(
             labels={
                 "nodalarc.io/session": "true",
                 "nodalarc.io/config-type": "workload-artifacts",
-                "nodalarc.io/node-id": plan.node_id,
+                NODE_ID_LABEL: plan.node_id,
             },
             owner_references=[owner_ref],
         ),

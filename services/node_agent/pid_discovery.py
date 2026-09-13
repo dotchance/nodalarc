@@ -37,6 +37,7 @@ from nodalarc.substrate.manifest_contract import (
     POD_OWNER_UID_LABEL,
     POD_SESSION_RUN_LABEL,
 )
+from nodalarc.workload_target import NODE_ID_LABEL
 
 log = logging.getLogger(__name__)
 
@@ -272,7 +273,7 @@ def discover_local_pod_handles(
     candidates: dict[str, tuple[str, str | None]] = {}
     duplicates: set[str] = set()
     for pod in pods.items:
-        node_id = pod.metadata.labels.get("nodalarc.io/node-id")
+        node_id = pod.metadata.labels.get(NODE_ID_LABEL)
         if not node_id:
             continue
         if node_id in candidates:

@@ -4219,6 +4219,7 @@ async def _poll_cr_until_ready() -> None:
                 CR_NAME,
                 type(exc).__name__,
                 exc,
+                exc_info=exc,
             )
             if _session_manager:
                 _session_manager._status = "error"

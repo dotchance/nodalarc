@@ -683,7 +683,7 @@ def test_poll_ends_on_a_malformed_upload_gc_list_response(monkeypatch, caplog) -
 
 @pytest.mark.parametrize("logic_failure_first", [False, True])
 def test_poll_ends_when_any_failed_delete_is_not_transport(
-    monkeypatch, logic_failure_first
+    monkeypatch, caplog, logic_failure_first
 ) -> None:
     import vs_api.main as main
 
@@ -696,7 +696,8 @@ def test_poll_ends_when_any_failed_delete_is_not_transport(
         delete_failures=dict(zip(STALE_NAMES, failures, strict=True)),
     )
 
-    manager = _run_poll(monkeypatch, main, custom=custom, core=core)
+    with caplog.at_level("ERROR", logger="vs_api.main"):
+        manager = _run_poll(monkeypatch, main, custom=custom, core=core)
 
     _assert_terminal(
         manager,
@@ -704,6 +705,14 @@ def test_poll_ends_when_any_failed_delete_is_not_transport(
         "CatalogUploadStoreError: Could not garbage-collect catalog upload stale",
     )
     assert core.delete_calls == list(STALE_NAMES)
+    failure_records = [
+        record for record in caplog.records if "nodalarc/current-session failed" in record.message
+    ]
+    assert len(failure_records) == 1
+    assert failure_records[0].exc_info is not None
+    assert "server error" in caplog.text
+    assert "not transport" in caplog.text
+    assert "catalog upload deletes failed" in caplog.text
 
 
 def test_poll_continues_when_every_failed_delete_is_transport(monkeypatch) -> None:

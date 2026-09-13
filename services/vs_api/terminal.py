@@ -23,7 +23,7 @@ import logging
 
 import asyncssh
 import kubernetes.client
-from nodalarc.workload_target import TERMINAL_ACCESS_ANNOTATION
+from nodalarc.workload_target import NODE_ID_LABEL, TERMINAL_ACCESS_ANNOTATION
 from starlette.websockets import WebSocket
 
 log = logging.getLogger(__name__)
@@ -145,7 +145,7 @@ def _resolve_pod_terminal_sync(node_id: str, namespace: str) -> tuple[str, str, 
         v1 = _get_k8s_client()
         pods = v1.list_namespaced_pod(
             namespace,
-            label_selector=f"nodalarc.io/node-id={node_id}",
+            label_selector=f"{NODE_ID_LABEL}={node_id}",
         )
         if pods.items and pods.items[0].status.pod_ip:
             pod = pods.items[0]

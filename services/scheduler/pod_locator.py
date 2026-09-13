@@ -22,6 +22,8 @@ from __future__ import annotations
 import json
 import logging
 
+from nodalarc.workload_target import NODE_ID_LABEL
+
 log = logging.getLogger(__name__)
 
 
@@ -140,7 +142,7 @@ class PodLocationMap:
             kubernetes.config.load_kube_config()
 
         v1 = kubernetes.client.CoreV1Api()
-        pods = v1.list_namespaced_pod(namespace, label_selector="nodalarc.io/node-id")
+        pods = v1.list_namespaced_pod(namespace, label_selector=NODE_ID_LABEL)
         expected = set(expected_node_ids or ())
         if expected_node_ids is not None and not expected:
             raise ValueError("expected_node_ids must not be empty")
@@ -148,7 +150,7 @@ class PodLocationMap:
         for pod in pods.items:
             # Canonical node ID from label — NOT from pod.metadata.name
             labels = dict(getattr(pod.metadata, "labels", None) or {})
-            node_id = labels.get("nodalarc.io/node-id")
+            node_id = labels.get(NODE_ID_LABEL)
             if not node_id:
                 continue
             if expected_node_ids is not None and node_id not in expected:

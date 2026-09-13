@@ -24,6 +24,7 @@ from nodalarc.cr_runtime_config import (
     cr_status_observes_current_generation,
 )
 from nodalarc.platform_config import get_platform_config
+from nodalarc.workload_target import NODE_ID_LABEL
 from pydantic import ValidationError
 
 from .catalog_context import CatalogContext
@@ -357,7 +358,7 @@ class SessionManager:
                     None,
                     lambda: core_v1_api.list_namespaced_pod(
                         namespace,
-                        label_selector="nodalarc.io/node-id",
+                        label_selector=NODE_ID_LABEL,
                     ),
                 )
                 remaining = len(pods.items)

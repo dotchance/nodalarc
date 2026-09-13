@@ -52,6 +52,7 @@ from nodalarc.substrate.manifest_contract import (
     POD_SESSION_RUN_LABEL,
 )
 from nodalarc.template_vars import build_template_vars_from_resolved
+from nodalarc.workload_target import NODE_ID_LABEL
 
 from nodalarc_operator.workloads.materializer import (
     WORKLOAD_SELECTION_ANNOTATION,
@@ -63,8 +64,6 @@ from nodalarc_operator.workloads.preparation import (
 )
 
 log = logging.getLogger(__name__)
-
-SESSION_POD_SELECTOR = "nodalarc.io/node-id"
 
 
 class RetryableSessionDependency(RuntimeError):
@@ -154,7 +153,7 @@ def _labels(obj: Any) -> dict[str, str]:
 
 def _pod_node_id(pod: Any) -> str:
     labels = _labels(pod)
-    node_id = str(labels.get("nodalarc.io/node-id") or "")
+    node_id = str(labels.get(NODE_ID_LABEL) or "")
     if node_id:
         return node_id.lower()
     metadata = _metadata(pod)
@@ -269,7 +268,7 @@ def _ensure_immutable_configmap(
 
 
 def _list_session_pods(v1: kubernetes.client.CoreV1Api, namespace: str) -> list[Any]:
-    return list(v1.list_namespaced_pod(namespace, label_selector=SESSION_POD_SELECTOR).items)
+    return list(v1.list_namespaced_pod(namespace, label_selector=NODE_ID_LABEL).items)
 
 
 def _delete_pod_preconditioned(v1: kubernetes.client.CoreV1Api, namespace: str, pod: Any) -> bool:
@@ -493,12 +492,12 @@ def _discover_session_pod_placement(
     expected_node_ids: set[str],
 ) -> dict[str, str]:
     """Read actual session pod placement from Running pod specs."""
-    pods = v1.list_namespaced_pod(namespace, label_selector="nodalarc.io/node-id")
+    pods = v1.list_namespaced_pod(namespace, label_selector=NODE_ID_LABEL)
     placement: dict[str, str] = {}
     duplicates: list[str] = []
     for pod in pods.items:
         labels = pod.metadata.labels or {}
-        node_id = labels.get("nodalarc.io/node-id", "")
+        node_id = labels.get(NODE_ID_LABEL, "")
         if node_id not in expected_node_ids:
             continue
         k8s_node = pod.spec.node_name or ""
@@ -2125,7 +2124,7 @@ def check_pods_ready_condition(namespace: str) -> tuple[int, int]:
     Returns (total, ready_count).
     """
     v1 = _get_v1()
-    pods = v1.list_namespaced_pod(namespace, label_selector="nodalarc.io/node-id")
+    pods = v1.list_namespaced_pod(namespace, label_selector=NODE_ID_LABEL)
     total = len(pods.items)
     ready = 0
     for pod in pods.items:
@@ -2157,7 +2156,7 @@ def write_pod_ips_configmap(
             continue
         if session_id is not None and not _pod_current_for_runtime(pod, session_id, owner_ref):
             continue
-        node_id = pod.metadata.labels.get("nodalarc.io/node-id", "")
+        node_id = pod.metadata.labels.get(NODE_ID_LABEL, "")
         if node_id and pod.status and pod.status.pod_ip:
             ip_map[node_id] = pod.status.pod_ip
     data = {"pod-ips.json": json.dumps(ip_map)}

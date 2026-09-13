@@ -57,6 +57,7 @@ from nodalarc.session_identity import (
     require_resolved_session_run_id,
 )
 from nodalarc.stack_resolver import ResolvedStack, resolve_domain_stack
+from nodalarc.workload_target import NODE_ID_LABEL
 
 from measurement.adapters import create_adapter
 from measurement.convergence_gate import ConvergenceGate
@@ -86,7 +87,7 @@ def _discover_pods(namespace: str | None = None) -> list[dict[str, str]]:
                 "-n",
                 namespace,
                 "-l",
-                "nodalarc.io/node-id",
+                NODE_ID_LABEL,
                 "-o",
                 "json",
             ],
@@ -103,7 +104,7 @@ def _discover_pods(namespace: str | None = None) -> list[dict[str, str]]:
             labels = item.get("metadata", {}).get("labels", {})
             pods.append(
                 {
-                    "node_id": labels.get("nodalarc.io/node-id", ""),
+                    "node_id": labels.get(NODE_ID_LABEL, ""),
                     "pod_name": item["metadata"]["name"],
                     "role": labels.get("nodalarc.io/role", ""),
                     "pod_ip": item.get("status", {}).get("podIP", ""),

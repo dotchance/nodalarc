@@ -1693,21 +1693,29 @@ def teardown_session(namespace: str, session_ids: Sequence[str]) -> None:
         "nodalarc-topology-wiring",
         WIRING_STATUS_CONFIGMAP,
     ]:
-        try:
-            v1.delete_namespaced_config_map(cm_name, namespace)
-            log.debug("Deleted ConfigMap %s", cm_name)
-        except kubernetes.client.rest.ApiException as e:
-            if e.status != 404:
-                log.warning("Failed to delete ConfigMap %s: %s", cm_name, e)
+        _delete_configmap_or_absent(v1, cm_name, namespace)
 
     # Delete per-node FRR config ConfigMaps
-    from contextlib import suppress
-
     cms = v1.list_namespaced_config_map(namespace, label_selector="nodalarc.io/config-type=frr")
     for cm in cms.items:
-        with suppress(kubernetes.client.rest.ApiException):
-            v1.delete_namespaced_config_map(cm.metadata.name, namespace)
+        _delete_configmap_or_absent(v1, cm.metadata.name, namespace)
     log.debug("Cleaned up %d FRR config ConfigMaps", len(cms.items))
+
+
+def _delete_configmap_or_absent(v1: kubernetes.client.CoreV1Api, name: str, namespace: str) -> None:
+    """Delete one ConfigMap; absence is fine, any other API failure propagates.
+
+    Teardown runs under the delete finalizer: a failed delete that is only
+    logged would let the finalizer release with cleanup incomplete.
+    """
+    try:
+        v1.delete_namespaced_config_map(name, namespace)
+        log.debug("Deleted ConfigMap %s", name)
+    except kubernetes.client.rest.ApiException as exc:
+        if exc.status == 404:
+            return
+        log.error("Failed to delete ConfigMap %s during teardown: %s", name, exc)
+        raise
 
 
 def _is_missing_stream_error(exc: Exception) -> bool:

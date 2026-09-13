@@ -1068,6 +1068,66 @@ def test_on_delete_refuses_a_session_pod_with_a_foreign_owner() -> None:
         harness.mock_v1.delete_namespaced_config_map.assert_not_called()
 
 
+def _run_on_delete_with_real_teardown(
+    harness: _ReconcilerHarness,
+    *,
+    delete_side_effect,
+) -> tuple[MagicMock, MagicMock]:
+    """Run on_delete with the real teardown_session against the fake API: one
+    owned pod naming run-a, no run-id ConfigMaps, no FRR ConfigMaps."""
+    harness.mock_v1.list_namespaced_pod.return_value = SimpleNamespace(
+        items=[_session_pod("run-a")]
+    )
+    harness.mock_v1.read_namespaced_config_map.side_effect = kubernetes.client.rest.ApiException(
+        status=404
+    )
+    harness.mock_v1.list_namespaced_config_map.return_value = SimpleNamespace(items=[])
+    harness.mock_v1.delete_namespaced_config_map.side_effect = delete_side_effect
+    with (
+        patch("nodalarc_operator.session_deployer.purge_session_runtime_state") as purge,
+        patch("nodalarc_operator.handlers.set_nodalpath_mode") as nodalpath_mode,
+    ):
+        _run(
+            handlers_mod.on_delete(
+                "current-session",
+                "nodalarc",
+                spec={"sessionYaml": _SESSION_YAML},
+                meta={"name": "current-session", "uid": _OWNER_UID, "generation": 2},
+                status=None,
+            )
+        )
+    return purge, nodalpath_mode
+
+
+def test_on_delete_propagates_a_failed_configmap_delete() -> None:
+    """A non-404 delete failure in the sweep must reach kopf so the finalizer
+    stays; cleanup is never reported complete over a ConfigMap that remains."""
+
+    def _delete(name: str, namespace: str) -> None:
+        if name == "nodalarc-constellation":
+            raise kubernetes.client.rest.ApiException(status=500)
+
+    with _ReconcilerHarness(expected_count=7) as harness:
+        with pytest.raises(kubernetes.client.rest.ApiException):
+            _run_on_delete_with_real_teardown(harness, delete_side_effect=_delete)
+        harness.mock_v1.delete_namespaced_config_map.assert_any_call(
+            "nodalarc-constellation", "nodalarc"
+        )
+
+
+def test_on_delete_tolerates_absent_configmaps_in_the_sweep() -> None:
+    def _absent(name: str, namespace: str) -> None:
+        raise kubernetes.client.rest.ApiException(status=404)
+
+    with _ReconcilerHarness(expected_count=7) as harness:
+        purge, nodalpath_mode = _run_on_delete_with_real_teardown(
+            harness, delete_side_effect=_absent
+        )
+
+    purge.assert_called_once_with("nodalarc", "run-a")
+    nodalpath_mode.assert_called_once_with("nodalarc", "console")
+
+
 def test_on_delete_refuses_an_owned_record_without_its_run_id() -> None:
     with _ReconcilerHarness(expected_count=7) as harness:
         with pytest.raises(ValueError, match="carries no"):

@@ -30,6 +30,13 @@ _INVALID_SESSION_YAML = _SESSION_YAML.replace(
     "  name: earth-leo-simple\n  run_id: user-owned\n",
     1,
 )
+_SELECTION = {
+    "upload_id": "operator-test-upload",
+    "closure_digest": "sha256:" + "a" * 64,
+    "file_count": 0,
+}
+_SPEC = {"sessionYaml": _SESSION_YAML, "catalogUpload": _SELECTION}
+_INVALID_SPEC = {"sessionYaml": _INVALID_SESSION_YAML, "catalogUpload": _SELECTION}
 
 
 @pytest.fixture(autouse=True)
@@ -255,7 +262,7 @@ def _last_status(h):
 
 
 async def _reconcile(h, phase="Ready", **extra_status):
-    spec = {"sessionYaml": _SESSION_YAML}
+    spec = _SPEC
     meta = {"name": "current-session", "uid": "test-uid", "generation": 1}
     status = {"phase": phase, "podCount": h.expected_count, **extra_status}
     run_id = handlers_mod._runtime_identity(spec, meta)[1]
@@ -274,7 +281,7 @@ class TestWorkloadPreparationReconciliation:
     """The real reconciliation entry path preparing session workloads."""
 
     def _session(self, h):
-        spec = {"sessionYaml": _SESSION_YAML}
+        spec = _SPEC
         meta = {"name": "current-session", "uid": "test-uid", "generation": 1}
         run_id = handlers_mod._runtime_identity(spec, meta)[1]
         return spec, meta, h.active_session(spec, "nodalarc", run_id)
@@ -366,14 +373,7 @@ class TestWorkloadPreparationReconciliation:
 
 class TestReconcileStateMachine:
     def test_reconcile_resolves_once_and_reuses_the_verified_session(self):
-        spec = {
-            "sessionYaml": _SESSION_YAML,
-            "catalogUpload": {
-                "upload_id": "operator-test-upload",
-                "closure_digest": "sha256:" + "a" * 64,
-                "file_count": 0,
-            },
-        }
+        spec = _SPEC
         meta = {"name": "current-session", "uid": "test-uid", "generation": 1}
 
         with _ReconcilerHarness(expected_count=7) as h:
@@ -553,7 +553,7 @@ class TestReconcileStateMachine:
             ) as mock_reconcile:
                 _run(
                     handlers_mod.on_update(
-                        {"sessionYaml": _SESSION_YAML},
+                        _SPEC,
                         "current-session",
                         "nodalarc",
                         {"name": "current-session", "uid": "test-uid", "generation": 2},
@@ -570,7 +570,7 @@ class TestReconcileStateMachine:
             ) as mock_reconcile:
                 _run(
                     handlers_mod.on_update(
-                        {"sessionYaml": _SESSION_YAML},
+                        _SPEC,
                         "current-session",
                         "nodalarc",
                         {"name": "current-session", "uid": "test-uid", "generation": 2},
@@ -585,7 +585,7 @@ class TestReconcileStateMachine:
         with _ReconcilerHarness(expected_count=7) as h:
             _run(
                 handlers_mod.on_update(
-                    {"sessionYaml": _INVALID_SESSION_YAML},
+                    _INVALID_SPEC,
                     "current-session",
                     "nodalarc",
                     {"name": "current-session", "uid": "test-uid", "generation": 2},
@@ -596,6 +596,22 @@ class TestReconcileStateMachine:
             assert status["phase"] == "Error"
             assert "session.run_id" in status["message"]
             assert "Extra inputs are not permitted" in status["message"]
+
+    def test_on_update_spec_without_a_selection_reaches_error_status(self):
+        with _ReconcilerHarness(expected_count=7) as h:
+            _run(
+                handlers_mod.on_update(
+                    {"sessionYaml": _SESSION_YAML},
+                    "current-session",
+                    "nodalarc",
+                    {"name": "current-session", "uid": "test-uid", "generation": 2},
+                    {"phase": "Ready", "platformHash": "old"},
+                )
+            )
+            status = _last_status(h)
+            assert status["phase"] == "Error"
+            assert "catalogUpload" in status["message"]
+            assert "Field required" in status["message"]
 
     def test_on_delete_with_no_owned_session_objects_sweeps_only(self):
         """Absence of every owned record proves nothing was deployed: the
@@ -613,7 +629,7 @@ class TestReconcileStateMachine:
             ) as mock_reconcile:
                 _run(
                     handlers_mod.on_update(
-                        {"sessionYaml": _SESSION_YAML},
+                        _SPEC,
                         "current-session",
                         "nodalarc",
                         {"name": "current-session", "uid": "test-uid", "generation": 2},
@@ -629,7 +645,7 @@ class TestReconcileStateMachine:
             ) as mock_reconcile:
                 _run(
                     handlers_mod.on_update(
-                        {"sessionYaml": _SESSION_YAML},
+                        _SPEC,
                         "current-session",
                         "nodalarc",
                         {"name": "current-session", "uid": "test-uid", "generation": 2},
@@ -726,7 +742,7 @@ class TestReconcileStateMachine:
         ):
             _run(
                 handlers_mod.wiring_check(
-                    {"sessionYaml": _SESSION_YAML},
+                    _SPEC,
                     "current-session",
                     "nodalarc",
                     {"name": "current-session", "uid": "test-uid", "generation": 1},
@@ -757,7 +773,7 @@ class TestReconcileStateMachine:
             h.mock("check_all_running").return_value = (False, 7, 6)
             _run(
                 handlers_mod.wiring_check(
-                    {"sessionYaml": _SESSION_YAML},
+                    _SPEC,
                     "current-session",
                     "nodalarc",
                     {"name": "current-session", "uid": "test-uid", "generation": 1},
@@ -777,7 +793,7 @@ class TestReconcileStateMachine:
             h.mock("check_wiring").return_value = (False, 3, "rewiring in progress")
             _run(
                 handlers_mod.wiring_check(
-                    {"sessionYaml": _SESSION_YAML},
+                    _SPEC,
                     "current-session",
                     "nodalarc",
                     {"name": "current-session", "uid": "test-uid", "generation": 1},
@@ -789,7 +805,7 @@ class TestReconcileStateMachine:
 
     def test_ready_timer_repairs_missing_runtime_identity_status(self):
         with _ReconcilerHarness(expected_count=7) as h:
-            spec = {"sessionYaml": _SESSION_YAML}
+            spec = _SPEC
             meta = {"name": "current-session", "uid": "test-uid", "generation": 1}
             _run(
                 handlers_mod.wiring_check(
@@ -808,7 +824,7 @@ class TestReconcileStateMachine:
             assert status["runtimeHash"]
 
     def test_ready_timer_skips_when_runtime_identity_status_is_current(self):
-        spec = {"sessionYaml": _SESSION_YAML}
+        spec = _SPEC
         meta = {"name": "current-session", "uid": "test-uid", "generation": 1}
         identity = handlers_mod._status_identity_fields(spec, meta)
 
@@ -853,7 +869,7 @@ class TestReconcileStateMachine:
             h.mock_custom.patch_namespaced_custom_object_status.assert_not_called()
 
     def test_ready_timer_reconciles_when_current_platform_proof_disappears(self):
-        spec = {"sessionYaml": _SESSION_YAML}
+        spec = _SPEC
         meta = {"name": "current-session", "uid": "test-uid", "generation": 1}
         identity = handlers_mod._status_identity_fields(spec, meta)
 
@@ -904,7 +920,7 @@ class TestReconcileStateMachine:
         ("documentDigest", "runtimeRelease", "runtimeBuild"),
     )
     def test_ready_timer_reconciles_when_runtime_proof_status_is_stale(self, field: str):
-        spec = {"sessionYaml": _SESSION_YAML}
+        spec = _SPEC
         meta = {"name": "current-session", "uid": "test-uid", "generation": 1}
         identity = handlers_mod._status_identity_fields(spec, meta)
 
@@ -1013,7 +1029,7 @@ def _run_on_delete(
             handlers_mod.on_delete(
                 "current-session",
                 "nodalarc",
-                spec={"sessionYaml": _SESSION_YAML},
+                spec=_SPEC,
                 meta={"name": "current-session", "uid": _OWNER_UID, "generation": 2},
                 status={"phase": "not-a-phase"},
             )
@@ -1091,7 +1107,7 @@ def _run_on_delete_with_real_teardown(
             handlers_mod.on_delete(
                 "current-session",
                 "nodalarc",
-                spec={"sessionYaml": _SESSION_YAML},
+                spec=_SPEC,
                 meta={"name": "current-session", "uid": _OWNER_UID, "generation": 2},
                 status=None,
             )

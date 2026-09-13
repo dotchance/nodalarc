@@ -33,6 +33,7 @@ from nodalarc.cr_runtime_config import (
     CR_NAME,
     CR_PLURAL,
     CR_VERSION,
+    ConstellationSpecSpec,
     ConstellationSpecStatus,
     load_cr_runtime_config,
 )
@@ -315,9 +316,7 @@ def _session_name_from_spec(spec: dict) -> str:
     from nodalarc.configuration_yaml import load_configuration_yaml
     from nodalarc.models.segment_session import SegmentSessionConfig
 
-    session_yaml = spec.get("sessionYaml", "")
-    if not session_yaml:
-        raise ValueError("spec.sessionYaml is required")
+    session_yaml = ConstellationSpecSpec.from_cr(spec).session_yaml
     document = SegmentSessionConfig.model_validate(load_configuration_yaml(session_yaml))
     return document.session.name
 

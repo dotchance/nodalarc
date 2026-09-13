@@ -13,6 +13,7 @@ import yaml
 from nodalarc.catalog_repository import CatalogScope
 from nodalarc.filesystem_catalog_repository import FilesystemCatalogRepository
 from nodalarc.models.builder_api import BuilderDraftEnvelope, BuilderSessionSaveRequest
+from pydantic import ValidationError
 from vs_api.builder_session_service import save_builder_session
 from vs_api.catalog_context import CatalogContext
 from vs_api.catalog_upload_store import (
@@ -492,5 +493,36 @@ def test_ambiguous_create_recovery_judges_the_selection_alone(
     with pytest.raises(RuntimeError, match="create response lost"):
         _switch(manager, deployment, context, store, api, core)
 
+    assert api.created_body is not None
+    assert store.delete_calls == []
+
+
+def test_ambiguous_create_recovery_keeps_the_upload_when_the_selection_is_unreadable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Unreadable does not establish absent: a persisted CR whose selection the
+    strict model refuses may still hold the upload, so recovery keeps it and
+    reports the create failure with the refusal attached."""
+    monkeypatch.setattr("vs_api.session_manager.asyncio.sleep", _no_sleep)
+    context = _context(tmp_path)
+    saved = _save_user_session(context)
+    deployment = _prepared(context, saved)
+    manager = _manager(tmp_path)
+    store = _UploadStore()
+
+    class _UnreadableSelection(_CustomObjectsApi):
+        def get_namespaced_custom_object(self, **kwargs: Any) -> dict[str, Any]:
+            observed = super().get_namespaced_custom_object(**kwargs)
+            observed["spec"] = {**observed["spec"], "catalogUpload": {"unexpected": True}}
+            return observed
+
+    api = _UnreadableSelection(persist_then_fail_create=True)
+    core = _CoreV1Api()
+
+    with pytest.raises(RuntimeError, match="create response lost") as raised:
+        _switch(manager, deployment, context, store, api, core)
+
+    assert isinstance(raised.value.__cause__, ValidationError)
     assert api.created_body is not None
     assert store.delete_calls == []

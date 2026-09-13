@@ -82,21 +82,19 @@ def _selected_catalog_upload_matches(
 
     This answers one question during ambiguous-create recovery, and only about
     the selection: a persisted CR whose other fields are incomplete still holds
-    its upload, and the cleanup must not delete it.
+    its upload, and the cleanup must not delete it. A selection the strict
+    model refuses raises that refusal: unreadable does not establish absent.
     """
     observed_spec = observed_cr.get("spec")
     intended_spec = intended_cr.get("spec")
     if not isinstance(observed_spec, Mapping) or not isinstance(intended_spec, Mapping):
         return False
-    try:
-        observed = CatalogUploadSelection.model_validate(
-            observed_spec.get("catalogUpload"), strict=True
-        )
-        intended = CatalogUploadSelection.model_validate(
-            intended_spec.get("catalogUpload"), strict=True
-        )
-    except TypeError, ValidationError:
-        return False
+    observed = CatalogUploadSelection.model_validate(
+        observed_spec.get("catalogUpload"), strict=True
+    )
+    intended = CatalogUploadSelection.model_validate(
+        intended_spec.get("catalogUpload"), strict=True
+    )
     return observed == intended
 
 
@@ -396,11 +394,18 @@ class SessionManager:
                     if selection_started is not None and _api_status(observe_exc) != 404:
                         selection_started.set()
                     raise create_exc from observe_exc
-                if selection_started is not None and _selected_catalog_upload_matches(
-                    observed,
-                    cr_body,
-                ):
-                    selection_started.set()
+                if selection_started is not None:
+                    try:
+                        selects_intended_upload = _selected_catalog_upload_matches(
+                            observed, cr_body
+                        )
+                    except (TypeError, ValidationError) as refusal:
+                        # Unreadable does not establish absent: the persisted CR
+                        # may select the upload, so keep it and report the create.
+                        selection_started.set()
+                        raise create_exc from refusal
+                    if selects_intended_upload:
+                        selection_started.set()
                 if _selected_spec_matches(observed, cr_body):
                     log.warning(
                         "ConstellationSpec create reported %s, but exact intended spec exists",

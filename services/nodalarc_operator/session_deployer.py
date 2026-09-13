@@ -2388,12 +2388,15 @@ def build_runtime_session_config_data(
     if not isinstance(catalog_upload, CatalogUploadSelection):
         raise TypeError("catalog_upload must be a CatalogUploadSelection")
     session_run_id = require_resolved_session_run_id(resolved)
-    if deployment_context.session_run_id != session_run_id:
-        raise ValueError("deployment_context has the wrong session run ID")
-    if deployment_context.upload_id != catalog_upload.upload_id:
-        raise ValueError("deployment_context has the wrong catalog upload ID")
-    if deployment_context.closure_digest != catalog_upload.closure_digest:
-        raise ValueError("deployment_context has the wrong catalog closure digest")
+    mismatches = deployment_context.mounted_input_mismatches(
+        run_id=session_run_id,
+        selection=catalog_upload,
+        root_yaml=session_yaml.encode("utf-8"),
+    )
+    if mismatches:
+        raise ValueError(
+            "deployment_context differs from the runtime session inputs: " + ", ".join(mismatches)
+        )
     return {
         SESSION_YAML_FILENAME: session_yaml,
         SESSION_RUN_ID_FILENAME: session_run_id,

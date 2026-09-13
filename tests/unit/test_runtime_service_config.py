@@ -221,7 +221,7 @@ def test_context_selection_mismatch_refuses_before_kubernetes_fetch(
     runtime_parent = tmp_path / "processes"
     runtime_parent.mkdir()
 
-    with pytest.raises(ValueError, match="wrong upload ID"):
+    with pytest.raises(ValueError, match="mounted inputs: upload_id$"):
         load_mounted_runtime_config(
             config_directory=directory,
             installed_shipped_root=SHIPPED_ROOT,

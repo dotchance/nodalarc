@@ -170,14 +170,16 @@ def load_mounted_runtime_config(
             raise ValueError("mounted deployment release differs from the running service")
         if context.build != build:
             raise ValueError("mounted deployment build differs from the running service")
-        if context.session_run_id != mounted.run_id:
-            raise ValueError("mounted deployment context has the wrong session run ID")
-        if context.upload_id != selection.upload_id:
-            raise ValueError("mounted deployment context has the wrong upload ID")
-        if context.document_digest != sha256_digest(mounted.root_yaml):
-            raise ValueError("mounted deployment context has the wrong session digest")
-        if context.closure_digest != selection.closure_digest:
-            raise ValueError("mounted deployment context has the wrong closure digest")
+        mismatches = context.mounted_input_mismatches(
+            run_id=mounted.run_id,
+            selection=selection,
+            root_yaml=mounted.root_yaml,
+        )
+        if mismatches:
+            raise ValueError(
+                "mounted deployment context differs from the mounted inputs: "
+                + ", ".join(mismatches)
+            )
         materialized = load_kubernetes_runtime_config(
             core_v1 if core_v1 is not None else _incluster_core_v1(),
             namespace=namespace,

@@ -108,6 +108,29 @@ class RuntimeDeploymentContext(BaseModel):
         )
         return tuple(name for name, expected, observed in pairs if expected != observed)
 
+    def mounted_input_mismatches(
+        self,
+        *,
+        run_id: str,
+        selection: CatalogUploadSelection,
+        root_yaml: bytes,
+    ) -> tuple[str, ...]:
+        """Names of the mounted inputs this context does not describe.
+
+        The mounted inputs are the run id file, the selection file and the
+        session YAML mounted beside the context from one ConfigMap. The
+        Operator checks them before writing that ConfigMap and on every
+        reconcile pass; a runtime service checks them before fetching the
+        upload the selection names.
+        """
+        pairs = (
+            ("run_id", self.session_run_id, run_id),
+            ("upload_id", self.upload_id, selection.upload_id),
+            ("closure_digest", self.closure_digest, selection.closure_digest),
+            ("document_digest", self.document_digest, sha256_digest(root_yaml)),
+        )
+        return tuple(name for name, expected, observed in pairs if expected != observed)
+
 
 class RuntimeConfigProof(BaseModel):
     """Closed evidence that exact uploaded files produced one resolution."""

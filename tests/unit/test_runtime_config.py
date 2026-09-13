@@ -321,3 +321,36 @@ def test_content_mismatches_name_every_differing_field() -> None:
     )
     with pytest.raises(ValueError, match="run_id, closure_digest, resolved_semantic_digest"):
         proof.bind_deployment_identity(differing, pod_uid="pod-1")
+
+
+def test_mounted_input_mismatches_name_every_differing_input_in_order() -> None:
+    root_yaml = b"session:\n  name: mounted\n"
+    digest = "sha256:" + "a" * 64
+    other = "sha256:" + "b" * 64
+    context = RuntimeDeploymentContext(
+        cr_uid="cr-1",
+        cr_generation=1,
+        session_run_id="run-a",
+        upload_id="upload-a",
+        document_digest=_digest(root_yaml),
+        closure_digest=digest,
+        resolved_semantic_digest=digest,
+        release="r",
+        build="b",
+    )
+    selection = CatalogUploadSelection(upload_id="upload-a", closure_digest=digest, file_count=1)
+
+    assert (
+        context.mounted_input_mismatches(run_id="run-a", selection=selection, root_yaml=root_yaml)
+        == ()
+    )
+    assert context.mounted_input_mismatches(
+        run_id="run-b",
+        selection=CatalogUploadSelection(upload_id="upload-b", closure_digest=other, file_count=1),
+        root_yaml=root_yaml + b"# changed\n",
+    ) == ("run_id", "upload_id", "closure_digest", "document_digest")
+    assert context.mounted_input_mismatches(
+        run_id="run-a",
+        selection=selection,
+        root_yaml=root_yaml + b"# changed\n",
+    ) == ("document_digest",)

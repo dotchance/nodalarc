@@ -59,6 +59,7 @@ from nodalarc_operator.session_deployer import (
     ensure_session_configmaps,
     ensure_session_pod_identity,
     ensure_session_pods,
+    owned_session_run_ids,
     prepare_session_workloads,
     restart_platform_pods,
     set_nodalpath_mode,
@@ -340,24 +341,6 @@ def _status_identity_fields(spec: dict, meta: dict) -> dict:
         "sessionName": session_name,
         "sessionRunId": session_run_id,
     }
-
-
-def _teardown_session_id(spec: dict | None, meta: dict | None, status: dict | None) -> str | None:
-    """Return the best available runtime identity for delete cleanup.
-
-    Delete retries must not depend solely on nodalarc-session still existing.
-    The CR status is the first choice because it records the runtime identity
-    actually deployed. Deriving from spec/meta is a second choice for partially
-    reconciled CRs. If both are unavailable, teardown_session can still derive
-    from the ConfigMap while it exists.
-    """
-    status_run_id = ConstellationSpecStatus.from_cr(status).session_run_id or ""
-    if status_run_id:
-        return status_run_id
-    try:
-        return _runtime_identity(dict(spec or {}), dict(meta or {}))[1]
-    except Exception:
-        return None
 
 
 def _wiring_manifest_matches_spec(
@@ -1235,11 +1218,24 @@ async def on_update(spec, name, namespace, meta, status, **_):
 
 @kopf.on.delete(CR_PLURAL, group=CR_GROUP)
 async def on_delete(name, namespace, spec=None, meta=None, status=None, **_):
-    """Handle ConstellationSpec CR deletion — tear down session."""
+    """Handle ConstellationSpec CR deletion: tear down what this CR deployed.
+
+    The deployed identity is proven from the resources this CR owns (session
+    pods and the two run-id-bearing ConfigMaps), never read from the CR status
+    or derived from the desired generation. A session object with another
+    owner, or an owned record without its run id, raises, so kopf retries and
+    the finalizer stays; absence of every such object means nothing was
+    deployed and only the ConfigMap sweep runs.
+    """
     log.info("ConstellationSpec '%s' deleted, tearing down session", name)
     loop = asyncio.get_running_loop()
-    session_id = await loop.run_in_executor(None, _teardown_session_id, spec, meta, status)
-    await loop.run_in_executor(None, teardown_session, namespace, session_id)
+    owner_ref = _build_owner_ref(name, dict(meta or {}))
+    run_ids = await loop.run_in_executor(None, owned_session_run_ids, namespace, owner_ref)
+    if run_ids:
+        log.info("Owned session resources name run ids %s; purging each", ", ".join(run_ids))
+    else:
+        log.info("No owned session resources; sweeping session ConfigMaps only")
+    await loop.run_in_executor(None, teardown_session, namespace, run_ids)
     await loop.run_in_executor(None, set_nodalpath_mode, namespace, "console")
     log.info("Session teardown complete")
 

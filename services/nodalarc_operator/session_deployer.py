@@ -13,7 +13,7 @@ import ipaddress
 import json
 import logging
 import os
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import fields, is_dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -270,6 +270,63 @@ def _ensure_immutable_configmap(
 
 def _list_session_pods(v1: kubernetes.client.CoreV1Api, namespace: str) -> list[Any]:
     return list(v1.list_namespaced_pod(namespace, label_selector=NODE_ID_LABEL).items)
+
+
+_OWNED_RUN_ID_CONFIGMAPS: tuple[tuple[str, str], ...] = (
+    ("nodalarc-session", SESSION_RUN_ID_FILENAME),
+    ("nodalarc-topology-wiring", "session_id"),
+)
+
+
+def owned_session_run_ids(namespace: str, owner_ref: dict) -> tuple[str, ...]:
+    """The distinct run ids of the session resources one ConstellationSpec owns.
+
+    The identity is read from the records that carry it, never from the CR's
+    status or desired generation: every session pod, terminating pods included
+    (after a generation change the superseded run id can survive only on one),
+    and the two session ConfigMaps that name a run id, each accepted only when
+    its owner reference names the CR. A session object with another owner, or
+    an owned record without its run id, is a refusal: deletion must not proceed
+    on an identity it cannot prove. An empty result means nothing is deployed
+    under this CR. Every value passes through ``sanitize_session_id`` because
+    the pod label and the wiring key are sanitized at write and the session key
+    is raw.
+    """
+    v1 = _get_v1()
+    owner_uid = str(owner_ref.get("uid") or "")
+    run_ids: set[str] = set()
+    for pod in _list_session_pods(v1, namespace):
+        metadata = _metadata(pod)
+        pod_name = str(getattr(metadata, "name", "") or "")
+        if not _pod_owned_by(pod, owner_ref):
+            raise ValueError(
+                f"session pod {pod_name!r} is not owned by ConstellationSpec {owner_uid!r}"
+            )
+        labels = dict(getattr(metadata, "labels", None) or {})
+        run_id = str(labels.get(POD_SESSION_RUN_LABEL) or "").strip()
+        if not run_id:
+            raise ValueError(
+                f"owned session pod {pod_name!r} carries no {POD_SESSION_RUN_LABEL} label"
+            )
+        run_ids.add(sanitize_session_id(run_id))
+    for cm_name, key in _OWNED_RUN_ID_CONFIGMAPS:
+        try:
+            cm = v1.read_namespaced_config_map(cm_name, namespace)
+        except kubernetes.client.rest.ApiException as exc:
+            if exc.status == 404:
+                continue
+            raise
+        # The ownership predicate reads metadata.owner_references, the same
+        # shape on a ConfigMap as on a pod.
+        if not _pod_owned_by(cm, owner_ref):
+            raise ValueError(
+                f"ConfigMap {cm_name!r} is not owned by ConstellationSpec {owner_uid!r}"
+            )
+        value = str((cm.data or {}).get(key) or "").strip()
+        if not value:
+            raise ValueError(f"owned ConfigMap {cm_name!r} carries no {key!r}")
+        run_ids.add(sanitize_session_id(value))
+    return tuple(sorted(run_ids))
 
 
 def _delete_pod_preconditioned(v1: kubernetes.client.CoreV1Api, namespace: str, pod: Any) -> bool:
@@ -1610,43 +1667,22 @@ def check_platform_runtime_ready(
     return True, "OME and Scheduler runtime configuration verified"
 
 
-def teardown_session(namespace: str, session_id: str | None = None) -> None:
-    """Clean up session ConfigMaps (pods are garbage-collected via ownerReferences).
+def teardown_session(namespace: str, session_ids: Sequence[str]) -> None:
+    """Purge every deployed run id, then clean up the session ConfigMaps.
 
-    Args:
-        namespace: K8s namespace.
-        session_id: Session identifier for JetStream purge. If not provided,
-            derived from the nodalarc-session ConfigMap (which must still exist).
-            Callers that know the session_id should pass it explicitly.
+    Pods are garbage-collected through their owner references. ``session_ids``
+    are the run ids the caller proved from the owned resources
+    (``owned_session_run_ids``); an empty sequence means nothing was deployed
+    and only the ConfigMap sweep runs.
     """
     v1 = _get_v1()
-
-    # Derive session_id from ConfigMap if not provided by caller.
-    if session_id is None:
-        from nodalarc.nats_channels import sanitize_session_id
-
-        try:
-            cm = v1.read_namespaced_config_map("nodalarc-session", namespace)
-            if cm.data and SESSION_RUN_ID_FILENAME in cm.data:
-                session_run_id = str(cm.data.get(SESSION_RUN_ID_FILENAME) or "").strip()
-                if not session_run_id:
-                    log.error("FATAL: nodalarc-session ConfigMap has empty session_run_id")
-                    raise ValueError("session_run_id missing from nodalarc-session ConfigMap")
-                session_id = sanitize_session_id(session_run_id)
-            else:
-                log.error(
-                    "FATAL: nodalarc-session ConfigMap has no session_run_id data — cannot determine session_id for teardown"
-                )
-                raise ValueError("nodalarc-session ConfigMap missing session_run_id")
-        except (ValueError, kubernetes.client.rest.ApiException) as exc:
-            log.error("FATAL: Cannot derive session_id for teardown: %s", exc)
-            raise
-    log.info("Teardown session_id: %s", session_id)
+    log.info("Teardown run ids: %s", ", ".join(session_ids) or "(none)")
 
     # Purge retained runtime state before deleting the ConfigMaps that can be
     # used to rediscover the session identity on retry. If NATS is unavailable,
-    # the delete finalizer must be retryable with the same session_id.
-    purge_session_runtime_state(namespace, session_id)
+    # the delete finalizer must be retryable with the same run ids.
+    for session_id in session_ids:
+        purge_session_runtime_state(namespace, session_id)
 
     # Delete session-level ConfigMaps
     for cm_name in [

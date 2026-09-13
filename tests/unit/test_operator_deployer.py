@@ -710,9 +710,6 @@ class TestRuntimeIdentityCleanup:
 
     def test_teardown_purges_before_deleting_identity_configmap(self):
         mock_v1 = create_autospec(kubernetes.client.CoreV1Api, instance=True)
-        mock_v1.read_namespaced_config_map.return_value = kubernetes.client.V1ConfigMap(
-            data={"session_run_id": "run-test-0001"}
-        )
 
         with (
             patch("nodalarc_operator.session_deployer._get_v1", return_value=mock_v1),
@@ -722,10 +719,31 @@ class TestRuntimeIdentityCleanup:
             ) as purge,
         ):
             with pytest.raises(RuntimeError, match="nats unavailable"):
-                teardown_session("nodalarc")
+                teardown_session("nodalarc", ("run-test-0001",))
 
         purge.assert_called_once_with("nodalarc", "run-test-0001")
         mock_v1.delete_namespaced_config_map.assert_not_called()
+
+    def test_teardown_purges_every_run_id_before_the_sweep(self):
+        mock_v1 = create_autospec(kubernetes.client.CoreV1Api, instance=True)
+        mock_v1.list_namespaced_config_map.return_value = MagicMock(items=[])
+        order: list[tuple[str, str]] = []
+        mock_v1.delete_namespaced_config_map.side_effect = lambda name, namespace: order.append(
+            ("delete", name)
+        )
+
+        with (
+            patch("nodalarc_operator.session_deployer._get_v1", return_value=mock_v1),
+            patch(
+                "nodalarc_operator.session_deployer.purge_session_runtime_state",
+                side_effect=lambda namespace, session_id: order.append(("purge", session_id)),
+            ),
+        ):
+            teardown_session("nodalarc", ("run-a", "run-b"))
+
+        assert order[:2] == [("purge", "run-a"), ("purge", "run-b")]
+        assert all(kind == "delete" for kind, _ in order[2:])
+        assert ("delete", "nodalarc-session") in order
 
 
 # ---------------------------------------------------------------------------

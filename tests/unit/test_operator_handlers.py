@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, create_autospec, patch
 
 import kubernetes.client
@@ -596,23 +597,13 @@ class TestReconcileStateMachine:
             assert "session.run_id" in status["message"]
             assert "Extra inputs are not permitted" in status["message"]
 
-    def test_on_delete_passes_runtime_identity_from_status(self):
-        with _ReconcilerHarness(expected_count=7):
-            with (
-                patch("nodalarc_operator.handlers.teardown_session") as teardown,
-                patch("nodalarc_operator.handlers.set_nodalpath_mode") as nodalpath_mode,
-            ):
-                _run(
-                    handlers_mod.on_delete(
-                        "current-session",
-                        "nodalarc",
-                        spec={"sessionYaml": _SESSION_YAML},
-                        meta={"name": "current-session", "uid": "test-uid", "generation": 2},
-                        status={"sessionRunId": "run-status-0001"},
-                    )
-                )
+    def test_on_delete_with_no_owned_session_objects_sweeps_only(self):
+        """Absence of every owned record proves nothing was deployed: the
+        status is not read, no purge runs, and the ConfigMap sweep still runs."""
+        with _ReconcilerHarness(expected_count=7) as harness:
+            teardown, nodalpath_mode = _run_on_delete(harness, pods=[], configmaps={})
 
-        teardown.assert_called_once_with("nodalarc", "run-status-0001")
+        teardown.assert_called_once_with("nodalarc", ())
         nodalpath_mode.assert_called_once_with("nodalarc", "console")
 
     def test_current_error_generation_is_terminal_until_user_changes_spec(self):
@@ -960,7 +951,129 @@ class TestReconcileStateMachine:
             mock_reconcile.assert_awaited_once()
 
 
-def test_teardown_session_id_prefers_the_status_identity_and_parses_it() -> None:
-    assert handlers_mod._teardown_session_id(None, None, {"sessionRunId": "run-x"}) == "run-x"
-    assert handlers_mod._teardown_session_id(None, None, None) is None
-    assert handlers_mod._teardown_session_id({}, {}, {"sessionRunId": ""}) is None
+_OWNER_UID = "test-uid"
+
+
+def _owner_references(uid: str) -> list[SimpleNamespace]:
+    return [SimpleNamespace(uid=uid, name="current-session")]
+
+
+def _session_pod(
+    run_id: str | None,
+    *,
+    owner_uid: str = _OWNER_UID,
+    terminating: bool = False,
+) -> SimpleNamespace:
+    labels = {"nodalarc.io/node-id": f"node-{run_id or 'unlabelled'}"}
+    if run_id is not None:
+        labels["nodalarc.io/session-run-id"] = run_id
+    return SimpleNamespace(
+        metadata=SimpleNamespace(
+            name=f"pod-{run_id or 'unlabelled'}",
+            labels=labels,
+            owner_references=_owner_references(owner_uid),
+            deletion_timestamp="2026-09-13T00:00:00Z" if terminating else None,
+        )
+    )
+
+
+def _session_configmap(
+    name: str,
+    data: dict[str, str],
+    *,
+    owner_uid: str = _OWNER_UID,
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        metadata=SimpleNamespace(name=name, owner_references=_owner_references(owner_uid)),
+        data=data,
+    )
+
+
+def _run_on_delete(
+    harness: _ReconcilerHarness,
+    *,
+    pods: list[SimpleNamespace],
+    configmaps: dict[str, SimpleNamespace],
+) -> tuple[MagicMock, MagicMock]:
+    """Run on_delete against fake owned resources; the CR status is deliberately
+    one the strict model refuses, proving the handler never reads it."""
+    harness.mock_v1.list_namespaced_pod.return_value = SimpleNamespace(items=list(pods))
+
+    def _read(name: str, namespace: str) -> SimpleNamespace:
+        if name in configmaps:
+            return configmaps[name]
+        raise kubernetes.client.rest.ApiException(status=404)
+
+    harness.mock_v1.read_namespaced_config_map.side_effect = _read
+    with (
+        patch("nodalarc_operator.handlers.teardown_session") as teardown,
+        patch("nodalarc_operator.handlers.set_nodalpath_mode") as nodalpath_mode,
+    ):
+        _run(
+            handlers_mod.on_delete(
+                "current-session",
+                "nodalarc",
+                spec={"sessionYaml": _SESSION_YAML},
+                meta={"name": "current-session", "uid": _OWNER_UID, "generation": 2},
+                status={"phase": "not-a-phase"},
+            )
+        )
+    return teardown, nodalpath_mode
+
+
+def test_on_delete_purges_the_one_owned_run_id_then_sweeps() -> None:
+    with _ReconcilerHarness(expected_count=7) as harness:
+        teardown, _ = _run_on_delete(harness, pods=[_session_pod("run-a")], configmaps={})
+
+    teardown.assert_called_once_with("nodalarc", ("run-a",))
+
+
+def test_on_delete_purges_every_distinct_owned_run_id() -> None:
+    with _ReconcilerHarness(expected_count=7) as harness:
+        teardown, _ = _run_on_delete(
+            harness,
+            pods=[_session_pod("run-a"), _session_pod("run-b"), _session_pod("run-a")],
+            configmaps={},
+        )
+
+    teardown.assert_called_once_with("nodalarc", ("run-a", "run-b"))
+
+
+def test_on_delete_reads_a_superseded_run_id_from_a_terminating_pod() -> None:
+    """After a generation change the old run id survives only on a terminating
+    owned pod while the ConfigMaps name the new run: both are purged."""
+    with _ReconcilerHarness(expected_count=7) as harness:
+        teardown, _ = _run_on_delete(
+            harness,
+            pods=[_session_pod("run-a", terminating=True)],
+            configmaps={
+                "nodalarc-session": _session_configmap(
+                    "nodalarc-session", {"session_run_id": "run-b"}
+                ),
+                "nodalarc-topology-wiring": _session_configmap(
+                    "nodalarc-topology-wiring", {"session_id": "run-b"}
+                ),
+            },
+        )
+
+    teardown.assert_called_once_with("nodalarc", ("run-a", "run-b"))
+
+
+def test_on_delete_refuses_a_session_pod_with_a_foreign_owner() -> None:
+    with _ReconcilerHarness(expected_count=7) as harness:
+        with pytest.raises(ValueError, match="not owned by ConstellationSpec"):
+            _run_on_delete(
+                harness, pods=[_session_pod("run-a", owner_uid="other-uid")], configmaps={}
+            )
+        harness.mock_v1.delete_namespaced_config_map.assert_not_called()
+
+
+def test_on_delete_refuses_an_owned_record_without_its_run_id() -> None:
+    with _ReconcilerHarness(expected_count=7) as harness:
+        with pytest.raises(ValueError, match="carries no"):
+            _run_on_delete(
+                harness,
+                pods=[],
+                configmaps={"nodalarc-session": _session_configmap("nodalarc-session", {})},
+            )
+        harness.mock_v1.delete_namespaced_config_map.assert_not_called()

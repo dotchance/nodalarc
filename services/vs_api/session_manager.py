@@ -87,8 +87,10 @@ def _selected_catalog_upload_matches(
     """
     observed_spec = observed_cr.get("spec")
     intended_spec = intended_cr.get("spec")
-    if not isinstance(observed_spec, Mapping) or not isinstance(intended_spec, Mapping):
-        return False
+    if not isinstance(observed_spec, Mapping):
+        raise TypeError("observed ConstellationSpec spec is not a mapping")
+    if not isinstance(intended_spec, Mapping):
+        raise TypeError("intended ConstellationSpec spec is not a mapping")
     observed = CatalogUploadSelection.model_validate(
         observed_spec.get("catalogUpload"), strict=True
     )

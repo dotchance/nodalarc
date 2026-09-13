@@ -526,3 +526,33 @@ def test_ambiguous_create_recovery_keeps_the_upload_when_the_selection_is_unread
     assert isinstance(raised.value.__cause__, ValidationError)
     assert api.created_body is not None
     assert store.delete_calls == []
+
+
+def test_ambiguous_create_recovery_keeps_the_upload_when_the_spec_is_unreadable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An observed CR whose spec is not even a mapping is unreadable, not
+    absent: recovery keeps the upload and reports the create failure."""
+    monkeypatch.setattr("vs_api.session_manager.asyncio.sleep", _no_sleep)
+    context = _context(tmp_path)
+    saved = _save_user_session(context)
+    deployment = _prepared(context, saved)
+    manager = _manager(tmp_path)
+    store = _UploadStore()
+
+    class _UnreadableSpec(_CustomObjectsApi):
+        def get_namespaced_custom_object(self, **kwargs: Any) -> dict[str, Any]:
+            observed = super().get_namespaced_custom_object(**kwargs)
+            observed["spec"] = None
+            return observed
+
+    api = _UnreadableSpec(persist_then_fail_create=True)
+    core = _CoreV1Api()
+
+    with pytest.raises(RuntimeError, match="create response lost") as raised:
+        _switch(manager, deployment, context, store, api, core)
+
+    assert isinstance(raised.value.__cause__, TypeError)
+    assert api.created_body is not None
+    assert store.delete_calls == []

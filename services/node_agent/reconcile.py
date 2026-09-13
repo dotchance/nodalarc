@@ -15,7 +15,7 @@ import logging
 
 from nodalarc.runtime_naming import is_managed_host_ifname
 from nodalarc.substrate.manifest_contract import WiringManifest
-from nodalarc.substrate.wiring_status import parse_status_configmap
+from nodalarc.substrate.wiring_status import WIRING_STATUS_CONFIGMAP, parse_status_configmap
 from pyroute2 import IPRoute
 
 log = logging.getLogger(__name__)
@@ -62,7 +62,7 @@ def wiring_status_is_current(
     rewire.
     """
     try:
-        cm = v1.read_namespaced_config_map("nodalarc-wiring-status", namespace)
+        cm = v1.read_namespaced_config_map(WIRING_STATUS_CONFIGMAP, namespace)
         if not cm.data:
             return False
         session_id, generation, statuses = parse_status_configmap(cm.data)

@@ -22,7 +22,7 @@ from nodalarc.substrate.manifest_contract import (
     POD_OWNER_UID_LABEL,
     POD_SESSION_RUN_LABEL,
 )
-from nodalarc.substrate.wiring_status import READY_PHASE_JQ_CLAUSE
+from nodalarc.substrate.wiring_status import READY_PHASE_JQ_CLAUSE, WIRING_STATUS_CONFIGMAP
 from nodalarc.workload_target import (
     NODE_ID_LABEL,
     PRIMARY_CONTAINER_ANNOTATION,
@@ -38,8 +38,6 @@ ROLE_LABEL = "nodalarc.io/role"
 WORKLOAD_SELECTION_ANNOTATION = "nodalarc.io/workload-selection"
 
 TERMINAL_SSH_CONTRACT = '{"surface":"ssh"}'
-
-WIRING_STATUS_CONFIGMAP = "nodalarc-wiring-status"
 
 _WIRING_GATE_SCRIPT = (
     'my_netns="$(readlink /proc/self/ns/net)"\n'

@@ -15,6 +15,10 @@ from nodalarc.substrate.manifest_contract import REQUIRED_WIRING_PHASES, WiringM
 PhaseState = Literal["pending_pid", "wiring", "ready", "failed", "dirty_kernel"]
 RowState = Literal["ready", "wiring"]
 
+# The ConfigMap the Node Agent writes the wiring rows into and every reader
+# addresses; one name for the resource whose data shape this module owns.
+WIRING_STATUS_CONFIGMAP = "nodalarc-wiring-status"
+
 # The phase clause of the workload release gate, rendered from the same closed
 # vocabulary ``ready_for`` applies and shaped like ``WiringPhaseResult``: the
 # phases are a list of records carrying only phase, status and error_message,

@@ -40,7 +40,11 @@ from nodalarc.session_identity import (
     require_resolved_session_run_id,
 )
 from nodalarc.substrate.manifest_contract import WiringManifest
-from nodalarc.substrate.wiring_status import failed_status_summary, parse_status_configmap
+from nodalarc.substrate.wiring_status import (
+    WIRING_STATUS_CONFIGMAP,
+    failed_status_summary,
+    parse_status_configmap,
+)
 
 from scheduler.agent_pool import AgentPool
 from scheduler.dispatcher import Dispatcher, DispatcherSuperseded
@@ -148,7 +152,7 @@ def wait_for_wiring_gate(
     deadline = monotonic() + timeout_s
     while monotonic() < deadline:
         try:
-            cm = k8s_v1.read_namespaced_config_map("nodalarc-wiring-status", namespace)
+            cm = k8s_v1.read_namespaced_config_map(WIRING_STATUS_CONFIGMAP, namespace)
             _status_session, _status_generation, statuses = parse_status_configmap(cm.data)
             ready = {node_id for node_id, status in statuses.items() if status.ready_for(manifest)}
             if expected_nodes.issubset(ready):
@@ -175,7 +179,7 @@ def wait_for_wiring_gate(
         sleep(poll_s)
 
     try:
-        cm = k8s_v1.read_namespaced_config_map("nodalarc-wiring-status", namespace)
+        cm = k8s_v1.read_namespaced_config_map(WIRING_STATUS_CONFIGMAP, namespace)
         _status_session, _status_generation, statuses = parse_status_configmap(cm.data)
         wired = {node_id for node_id, status in statuses.items() if status.ready_for(manifest)}
     except Exception as exc:

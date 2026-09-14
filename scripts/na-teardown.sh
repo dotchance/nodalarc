@@ -44,19 +44,6 @@ echo "=== NodalArc Teardown ==="
 echo "Copyright 2024-2026 .chance (dotchance)"
 echo "Official source: https://github.com/dotchance/nodalarc"
 
-cleanup_local_kernel_state() {
-    ip link show 2>/dev/null | grep -oE 'v[xhp]([0-9a-f]{6}|[0-9]{5})' | \
-        xargs -r -I{} ip link del {} 2>/dev/null || true
-    ip link show 2>/dev/null | grep -oE '[a-zA-Z0-9_]+_isl_[a-zA-Z0-9_]+' | \
-        xargs -r -I{} ip link del {} 2>/dev/null || true
-    ip link show 2>/dev/null | grep -oE '[a-zA-Z0-9_]+_gnd_[a-zA-Z0-9_]+' | \
-        xargs -r -I{} ip link del {} 2>/dev/null || true
-    ip link show 2>/dev/null | grep -oE '_gbr-[a-z0-9_]+' | \
-        xargs -r -I{} ip link del {} 2>/dev/null || true
-    ip link show type bridge 2>/dev/null | grep -oE 'br-gnd-[a-z0-9_]+' | \
-        xargs -r -I{} ip link del {} 2>/dev/null || true
-}
-
 # The Node Agent's cleaner (python -m node_agent.reconcile --clean) prints one
 # JSON report and exits 0 only when it verified the host clean. One parser
 # judges every report, remote and local: the required fields and their types
@@ -179,7 +166,6 @@ if [ "$NAMESPACE_STATE" = absent ]; then
         nodalarc-node-agent nodalarc-scheduler --ignore-not-found 2>/dev/null || true
     kubectl delete clusterrole,clusterrolebinding \
         -l nodalarc.io/managed-by=helm 2>/dev/null || true
-    cleanup_local_kernel_state
     LOCAL_UNVERIFIED=0
     local_host_cleanup || LOCAL_UNVERIFIED=1
     echo "  Namespace absent: no Node Agent can run the host cleaner, so remote host state is NOT verified here."
@@ -196,7 +182,7 @@ fi
 # Step 1: Delete ConstellationSpec CRs — try graceful first, force-strip
 # kopf finalizers if it hangs. The Operator may not be running (crashed,
 # image pull failure, post-reboot), so graceful delete can block forever.
-echo "[1/9] Deleting ConstellationSpec resources..."
+echo "[1/8] Deleting ConstellationSpec resources..."
 if kubectl get constellationspec -n "$NAMESPACE" --no-headers 2>/dev/null | grep -q .; then
     # Strip kopf finalizers from all CRs so delete doesn't hang
     for CR in $(kubectl get constellationspec -n "$NAMESPACE" -o name 2>/dev/null); do
@@ -209,7 +195,7 @@ fi
 
 # Step 2: Wait for session pods to terminate. Force-delete stuck pods
 # (ImagePullBackOff, CrashLoopBackOff, Unknown) after timeout.
-echo "[2/9] Waiting for session pods to terminate..."
+echo "[2/8] Waiting for session pods to terminate..."
 TIMEOUT=60
 ELAPSED=0
 while true; do
@@ -235,8 +221,10 @@ done
 # whichever agent pods happen to exist, and readiness is not a filter: a
 # NotReady node can still hold session devices. This runs BEFORE Helm
 # uninstall deletes the DaemonSet pods; if any host is unverified the
-# teardown refuses below, so the next run keeps its means of retrying.
-echo "[3/9] Cleaning host-side kernel state via the Node Agent cleaner on every labelled host..."
+# teardown refuses below, so the next run keeps its means of retrying. The
+# cleaner is the one implementation: it recognizes every managed name
+# through runtime_naming, and its report is the only judgement.
+echo "[3/8] Cleaning host-side kernel state via the Node Agent cleaner on every labelled host..."
 UNVERIFIED_HOSTS=""
 if ! REQUIRED_HOSTS="$(kubectl get nodes -l nodalarc.io/node-agent=true \
         -o custom-columns=NAME:.metadata.name --no-headers 2>/dev/null)"; then
@@ -280,31 +268,6 @@ done
 LOCAL_UNVERIFIED=0
 local_host_cleanup || LOCAL_UNVERIFIED=1
 
-# Legacy regex cleanup, remote and local, stays in place until the cleaner
-# above has been proven on every host through a full teardown; it never
-# decides the judgement made above.
-REMOTE_CLEANUP_ERRORS=0
-CLEANUP_SCRIPT='
-ip link show 2>/dev/null | grep -oE "v[xhp]([0-9a-f]{6}|[0-9]{5})" | xargs -r -I{} ip link del {} 2>/dev/null
-ip link show 2>/dev/null | grep -oE "[a-zA-Z0-9_]+_isl_[a-zA-Z0-9_]+" | xargs -r -I{} ip link del {} 2>/dev/null
-ip link show 2>/dev/null | grep -oE "[a-zA-Z0-9_]+_gnd_[a-zA-Z0-9_]+" | xargs -r -I{} ip link del {} 2>/dev/null
-ip link show 2>/dev/null | grep -oE "_gbr-[a-z0-9_]+" | xargs -r -I{} ip link del {} 2>/dev/null
-ip link show type bridge 2>/dev/null | grep -oE "br-gnd-[a-z0-9_]+" | xargs -r -I{} ip link del {} 2>/dev/null
-echo done
-'
-if [ -n "$AGENT_PODS" ]; then
-    while IFS= read -r line; do
-        [ -z "$line" ] && continue
-        NODE_NAME=$(echo "$line" | awk '{print $1}')
-        POD_NAME=$(echo "$line" | awk '{print $2}')
-        if ! kubectl exec "$POD_NAME" -n "$NAMESPACE" -c node-agent -- \
-            sh -c "$CLEANUP_SCRIPT" >/dev/null 2>&1; then
-            echo "  legacy regex cleanup exec failed on $NODE_NAME via $POD_NAME" >&2
-        fi
-    done <<< "$AGENT_PODS"
-fi
-cleanup_local_kernel_state
-
 # Refuse before uninstalling the Node Agents when any host is unverified:
 # uninstalling them would take away the next teardown's means of retrying.
 if [ "$LOCAL_UNVERIFIED" -ne 0 ]; then
@@ -319,18 +282,18 @@ if [ -n "$UNVERIFIED_HOSTS" ]; then
 fi
 
 # Step 4: Helm uninstall — removes all Helm-managed resources including DaemonSet
-echo "[4/9] Helm uninstall..."
+echo "[4/8] Helm uninstall..."
 helm uninstall nodalarc -n "$NAMESPACE" \
     --ignore-not-found --timeout=120s 2>/dev/null || true
 
 # Step 5: Wait for DaemonSet pod to actually terminate
-echo "[5/9] Waiting for Node Agent DaemonSet pod to terminate..."
+echo "[5/8] Waiting for Node Agent DaemonSet pod to terminate..."
 kubectl wait pod -n "$NAMESPACE" \
     -l app=nodalarc-node-agent \
     --for=delete --timeout=60s 2>/dev/null || true
 
 # Step 6: Delete namespace — strip finalizers if stuck
-echo "[6/9] Deleting namespace..."
+echo "[6/8] Deleting namespace..."
 kubectl delete namespace "$NAMESPACE" --timeout=30s 2>/dev/null || true
 # If still stuck (Terminating), force-remove finalizers
 if kubectl get namespace "$NAMESPACE" 2>/dev/null | grep -q Terminating; then
@@ -342,7 +305,7 @@ if kubectl get namespace "$NAMESPACE" 2>/dev/null | grep -q Terminating; then
 fi
 
 # Step 7: Delete cluster-scoped resources
-echo "[7/9] Deleting cluster-scoped resources..."
+echo "[7/8] Deleting cluster-scoped resources..."
 # CRD may also be stuck due to finalizers on orphaned instances
 kubectl patch crd constellationspecs.nodalarc.io \
     -p '{"metadata":{"finalizers":[]}}' --type=merge 2>/dev/null || true
@@ -360,18 +323,12 @@ kubectl delete clusterrolebinding \
 kubectl delete clusterrole,clusterrolebinding \
     -l nodalarc.io/managed-by=helm 2>/dev/null || true
 
-# Step 8: Local kernel state catch-all (in case Step 3 exec failed)
-echo "[8/9] Final local kernel state cleanup..."
-cleanup_local_kernel_state
-
-# Step 9: Verify — nothing should remain
-echo "[9/9] Verifying clean state..."
+# Step 8: Verify — nothing should remain. Host kernel state on every
+# labelled host and on this workstation was verified absent by the Node
+# Agent cleaner's reports in step 3, before uninstall; the checks here cover
+# the cluster objects.
+echo "[8/8] Verifying clean state..."
 ERRORS=0
-
-if [ "${REMOTE_CLEANUP_ERRORS:-0}" -gt 0 ]; then
-    echo "ERROR: Remote host cleanup was incomplete"
-    ERRORS=$((ERRORS+1))
-fi
 
 # Check no nodalarc pods survive
 PODS=$(kubectl get pods -A 2>/dev/null | grep nodalarc | grep -v Terminating || true)
@@ -390,15 +347,6 @@ fi
 # Check no nodalarc CRD survives
 if kubectl get crd constellationspecs.nodalarc.io &>/dev/null 2>&1; then
     echo "ERROR: ConstellationSpec CRD still exists"
-    ERRORS=$((ERRORS+1))
-fi
-
-# Check no nodalarc kernel state survives (local node)
-VETHS=$(ip link show 2>/dev/null | \
-    grep -E '_isl_|_gnd_|_gbr-|br-gnd-|v[xhp]([0-9a-f]{6}|[0-9]{5})' || true)
-if [ -n "$VETHS" ]; then
-    echo "ERROR: Nodalarc kernel interfaces still exist:"
-    echo "$VETHS"
     ERRORS=$((ERRORS+1))
 fi
 

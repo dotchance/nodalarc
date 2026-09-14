@@ -258,6 +258,38 @@ def link_attrs(ipr, ifname: str):
     return ipr.get_links(idxs[0])[0]
 
 
+@dataclass(frozen=True, slots=True)
+class PodVethEnd:
+    """What a pod namespace holds under a link's interface name."""
+
+    ifindex: int
+    kind: str | None
+    peer_ifindex: int | None
+    mtu: int | None
+
+
+def pod_veth_end(pid: int, ifname: str) -> PodVethEnd | None:
+    """Read the pod end of a link before any host-namespace work.
+
+    Entering the pod namespace takes the same non-reentrant lock the host
+    work holds, so a caller reads the pod end first and proves it against
+    the host device afterwards.
+    """
+
+    def _read(ns_ipr):
+        link = link_attrs(ns_ipr, ifname)
+        if link is None:
+            return None
+        return PodVethEnd(
+            ifindex=int(link["index"]),
+            kind=linkinfo_attrs(link).get("IFLA_INFO_KIND"),
+            peer_ifindex=link.get_attr("IFLA_LINK"),
+            mtu=link.get_attr("IFLA_MTU"),
+        )
+
+    return run_in_pod_namespace(pid, _read)
+
+
 def prove_vxlan_device(ipr, vxlan_if: str, *, vni: int, local_ip: str, remote_ip: str) -> Proof:
     """The tunnel device exists and carries exactly the requested endpoints."""
     link = link_attrs(ipr, vxlan_if)

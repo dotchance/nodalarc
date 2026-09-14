@@ -364,6 +364,75 @@ def test_handle_batch_link_up_down_proves_local_isl_kernel_state():
         _run_optional("ip", "link", "del", host_b)
 
 
+def test_local_isl_retry_reuses_the_proven_endpoints_and_leaves_the_pod_side_alone():
+    """Creating the same mediated ISL twice finds both endpoints complete and
+    proven and reuses them: same host devices, and a pod interface the
+    workload shut down stays down."""
+    _require_netns_tools()
+    from node_agent import ground_bridge
+
+    suffix = uuid.uuid4().hex[:6]
+    node_a = f"sat-u{suffix}a"
+    node_b = f"sat-u{suffix}b"
+    host_a = ground_bridge._isl_host_name(node_a, 0)
+    host_b = ground_bridge._isl_host_name(node_b, 1)
+    try:
+        with _netns("isl-ra") as (ns_a, proc_a), _netns("isl-rb") as (_ns_b, proc_b):
+            first = ground_bridge.create_mediated_isl(
+                proc_a.pid, proc_b.pid, "isl0", "isl1", node_a, node_b, mtu=1400
+            )
+            before = (_host_ifindex(host_a), _host_ifindex(host_b))
+            assert None not in before
+            _run("ip", "netns", "exec", ns_a, "ip", "link", "set", "isl0", "down")
+
+            second = ground_bridge.create_mediated_isl(
+                proc_a.pid, proc_b.pid, "isl0", "isl1", node_a, node_b, mtu=1400
+            )
+
+            assert second == first == (host_a, host_b)
+            assert (_host_ifindex(host_a), _host_ifindex(host_b)) == before
+            pod_link = _run("ip", "netns", "exec", ns_a, "ip", "-o", "link", "show", "isl0").stdout
+            assert "UP" not in pod_link.split(">")[0].split("<")[1].split(",")
+            assert "mtu 1400" in pod_link
+    finally:
+        _run_optional("ip", "link", "del", host_a)
+        _run_optional("ip", "link", "del", host_b)
+
+
+def test_local_isl_refuses_a_partial_endpoint_and_leaves_it():
+    """A host veth under the endpoint's name with no pod peer is partial
+    state: refused, and left exactly as it was."""
+    _require_netns_tools()
+    from node_agent import ground_bridge
+    from node_agent.kernel_verifier import KernelStateConflict
+
+    suffix = uuid.uuid4().hex[:6]
+    node_a = f"sat-q{suffix}a"
+    node_b = f"sat-q{suffix}b"
+    host_a = ground_bridge._isl_host_name(node_a, 0)
+    host_b = ground_bridge._isl_host_name(node_b, 1)
+    stray_peer = f"na-s{suffix}"[:15]
+    try:
+        _run("ip", "link", "add", host_a, "type", "veth", "peer", "name", stray_peer)
+        before = _host_ifindex(host_a)
+        with _netns("isl-pa") as (ns_a, proc_a), _netns("isl-pb") as (_ns_b, proc_b):
+            with pytest.raises(KernelStateConflict) as raised:
+                ground_bridge.create_mediated_isl(
+                    proc_a.pid, proc_b.pid, "isl0", "isl1", node_a, node_b, mtu=1400
+                )
+
+            assert "incomplete link" in raised.value.failures
+            assert _host_ifindex(host_a) == before
+            assert _host_ifindex(stray_peer) is not None
+            assert _host_ifindex(host_b) is None
+            listed = _run("ip", "netns", "exec", ns_a, "ip", "-o", "link", "show").stdout
+            assert "isl0" not in listed
+    finally:
+        _run_optional("ip", "link", "del", host_a)
+        _run_optional("ip", "link", "del", stray_peer)
+        _run_optional("ip", "link", "del", host_b)
+
+
 def test_handle_batch_link_up_down_proves_local_ground_mirred_and_qdisc():
     _require_netns_tools()
 

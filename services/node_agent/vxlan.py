@@ -51,40 +51,12 @@ _CLONE_NEWNET = 0x40000000
 
 
 @dataclass(frozen=True, slots=True)
-class _PodVethEnd:
-    """What the pod namespace holds under the link's interface name."""
-
-    ifindex: int
-    kind: str | None
-    peer_ifindex: int | None
-    mtu: int | None
-
-
-def _pod_veth_end(pid: int, ifname: str) -> _PodVethEnd | None:
-    """Read the pod end before the host work: entering a namespace takes the
-    same non-reentrant lock the host work holds."""
-
-    def _read(ns_ipr):
-        link = kernel_verifier.link_attrs(ns_ipr, ifname)
-        if link is None:
-            return None
-        return _PodVethEnd(
-            ifindex=int(link["index"]),
-            kind=kernel_verifier.linkinfo_attrs(link).get("IFLA_INFO_KIND"),
-            peer_ifindex=link.get_attr("IFLA_LINK"),
-            mtu=link.get_attr("IFLA_MTU"),
-        )
-
-    return _in_namespace(pid, _read)
-
-
-@dataclass(frozen=True, slots=True)
 class _LinkInventory:
     """What exists under a link's names: host devices, occupied ingress sides, the pod end."""
 
     devices: frozenset[str]
     ingress: Mapping[str, str]  # host interface -> kind of the qdisc on its ingress parent
-    pod_end: _PodVethEnd | None
+    pod_end: kernel_verifier.PodVethEnd | None
     pod_ifname: str | None
 
     @property
@@ -108,7 +80,7 @@ def _inventory(
     *,
     devices: tuple[str, ...],
     ingress_of: tuple[str, ...],
-    pod_end: _PodVethEnd | None = None,
+    pod_end: kernel_verifier.PodVethEnd | None = None,
     pod_ifname: str | None = None,
 ) -> _LinkInventory:
     found_devices = frozenset(name for name in devices if ipr.link_lookup(ifname=name))
@@ -167,7 +139,7 @@ def create_vxlan_link(
         mtu = get_platform_config().veth_interface_mtu_bytes - VXLAN_OVERHEAD_BYTES
 
     names: VxlanHostNames = vxlan_host_ifnames(vni)
-    pod_end = _pod_veth_end(pid, ifname)
+    pod_end = kernel_verifier.pod_veth_end(pid, ifname)
 
     # Get the target pod's namespace fd (while we can still see /proc/{pid})
     pod_ns_fd = os.open(f"/proc/{pid}/ns/net", os.O_RDONLY)

@@ -16,6 +16,7 @@ import logging
 import os
 import threading
 from collections import defaultdict
+from collections.abc import Iterator
 
 from nodalarc.runtime_naming import (
     gs_bridge_port_name,
@@ -492,6 +493,22 @@ def create_satellite_ground_veth(
     return (host_name, ifname)
 
 
+@contextlib.contextmanager
+def _pod_netns_fd(pid: int) -> Iterator[int]:
+    """The network namespace fd of a pod, open for the duration of a proof."""
+    fd = os.open(f"/proc/{pid}/ns/net", os.O_RDONLY)
+    try:
+        yield fd
+    finally:
+        os.close(fd)
+
+
+def _temporary_veth_names() -> tuple[str, str]:
+    """Fresh temporary names for one veth pair minted in the host namespace."""
+    rand = os.urandom(3).hex()
+    return f"_na_h{rand}"[:15], f"_na_n{rand}"[:15]
+
+
 def create_mediated_isl(
     pid_a: int,
     pid_b: int,
@@ -504,12 +521,20 @@ def create_mediated_isl(
     """Create a host-mediated ISL: two veth pairs through the host namespace.
 
     Creates:
-      pod-A: ifname_a ←veth→ host: _isl_{a_short}_{a_idx}
-      pod-B: ifname_b ←veth→ host: _isl_{b_short}_{b_idx}
+      pod-A: ifname_a <-veth-> host: _isl_{a_short}_{a_idx}
+      pod-B: ifname_b <-veth-> host: _isl_{b_short}_{b_idx}
 
     Installs bidirectional tc mirred redirect between host-side endpoints.
-    Pod-side interfaces are brought admin UP immediately (host-side stays
-    DOWN → pod-side enters LOWERLAYERDOWN).
+    Pod-side interfaces are brought admin UP at creation (host-side stays
+    DOWN, so the pod side enters LOWERLAYERDOWN until LinkUp).
+
+    Each endpoint is under the one policy for kernel state found under a
+    link's names: absent, create; complete and proven (a veth whose peer is
+    the pod interface, both ends at the requested MTU), reuse with nothing
+    configured; partial, conflicting or unprovable, refuse without taking
+    over. Administrative state is outside the proof at both ends: LinkUp and
+    LinkDown own the host end after creation and the workload owns the pod
+    end.
 
     "One jump" design: ALL pod-side work for each endpoint is batched into
     a single _in_namespace call (rename, MTU, admin UP, MAC, IPv6 autoconfig).
@@ -531,28 +556,75 @@ def create_mediated_isl(
         (pid_a, ifname_a, host_a, node_id_a),
         (pid_b, ifname_b, host_b, node_id_b),
     ]:
+        subject = f"ISL {node_id}/{ifname}"
+        # The pod end is read before any host work: entering the pod
+        # namespace takes the lock the host work would hold.
+        pod_end = kernel_verifier.pod_veth_end(pid, ifname)
         ipr = IPRoute()
         try:
-            # Idempotent: skip if host side already exists
-            if ipr.link_lookup(ifname=host_name):
-                log.debug("ISL host veth %s already exists, skipping", host_name)
+            host_idx = ipr.link_lookup(ifname=host_name)
+            complete = bool(host_idx) and pod_end is not None
+            proofs: tuple[kernel_verifier.Proof, ...] = ()
+            if complete and pod_end is not None:
+                with _pod_netns_fd(pid) as pod_ns_fd:
+                    proofs = (
+                        kernel_verifier.prove_veth_peer(
+                            ipr, host_name, peer_ns_fd=pod_ns_fd, peer_ifindex=pod_end.ifindex
+                        ),
+                        kernel_verifier.prove_link_mtu(ipr, host_name, mtu=mtu),
+                    )
+                if pod_end.kind != "veth":
+                    proofs += (kernel_verifier.Proof.fail(f"pod {ifname} is not veth"),)
+                if pod_end.peer_ifindex != host_idx[0]:
+                    proofs += (
+                        kernel_verifier.Proof.fail(
+                            f"pod {ifname} peer index mismatch",
+                            f"expected_ifindex={host_idx[0]}",
+                            f"actual_ifindex={pod_end.peer_ifindex}",
+                        ),
+                    )
+                if pod_end.mtu != mtu:
+                    proofs += (
+                        kernel_verifier.Proof.fail(
+                            f"pod {ifname} MTU mismatch",
+                            f"device={ifname}",
+                            f"expected={mtu}",
+                            f"observed={pod_end.mtu}",
+                        ),
+                    )
+            evidence = tuple(
+                item
+                for item in (
+                    host_name if host_idx else None,
+                    f"{ifname}@pod" if pod_end is not None else None,
+                )
+                if item is not None
+            )
+            if kernel_verifier.reuse_or_refuse(
+                subject=subject,
+                absent=not host_idx and pod_end is None,
+                complete=complete,
+                proofs=proofs,
+                evidence=evidence,
+            ):
+                log.info("Mediated ISL endpoint %s already complete and proven, reusing", subject)
                 continue
 
-            # Create veth pair with temp names in host namespace
-            rand = os.urandom(3).hex()
-            tmp_host = f"_na_h{rand}"[:15]
-            tmp_ns = f"_na_n{rand}"[:15]
-
-            for tmp in [tmp_host, tmp_ns]:
-                stale = ipr.link_lookup(ifname=tmp)
-                if stale:
-                    ipr.link("del", index=stale[0])
+            # Create the veth pair under temporary names in the host namespace.
+            # A device already under a temporary name is somebody's state: refuse,
+            # never delete it. Teardown and Case C cleanup remove it by prefix.
+            tmp_host, tmp_ns = _temporary_veth_names()
+            occupied = tuple(tmp for tmp in (tmp_host, tmp_ns) if ipr.link_lookup(ifname=tmp))
+            if occupied:
+                raise kernel_verifier.KernelStateConflict(
+                    subject, occupied, ("temporary name occupied",)
+                )
 
             ipr.link("add", ifname=tmp_host, peer={"ifname": tmp_ns}, kind="veth")
 
-            # Host end: rename, set MTU — leave admin DOWN
-            host_idx = ipr.link_lookup(ifname=tmp_host)[0]
-            ipr.link("set", index=host_idx, ifname=host_name, mtu=mtu)
+            # Host end: rename, set MTU, leave admin DOWN
+            host_index = ipr.link_lookup(ifname=tmp_host)[0]
+            ipr.link("set", index=host_index, ifname=host_name, mtu=mtu)
 
             # Move pod end into target namespace
             ns_idx = ipr.link_lookup(ifname=tmp_ns)[0]

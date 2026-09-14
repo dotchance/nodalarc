@@ -57,6 +57,7 @@ class _PodVethEnd:
     ifindex: int
     kind: str | None
     peer_ifindex: int | None
+    mtu: int | None
 
 
 def _pod_veth_end(pid: int, ifname: str) -> _PodVethEnd | None:
@@ -71,6 +72,7 @@ def _pod_veth_end(pid: int, ifname: str) -> _PodVethEnd | None:
             ifindex=int(link["index"]),
             kind=kernel_verifier.linkinfo_attrs(link).get("IFLA_INFO_KIND"),
             peer_ifindex=link.get_attr("IFLA_LINK"),
+            mtu=link.get_attr("IFLA_MTU"),
         )
 
     return _in_namespace(pid, _read)
@@ -199,9 +201,26 @@ def create_vxlan_link(
                         ),
                         kernel_verifier.prove_mirred_redirect(ipr, names.tunnel, names.host_veth),
                         kernel_verifier.prove_mirred_redirect(ipr, names.host_veth, names.tunnel),
+                        # Facts NodalArc set once at creation on its own host devices:
+                        # the MTU on both, and admin UP. The pod interface's MTU is
+                        # NodalArc's too; its admin state is the workload's and is
+                        # neither proven nor touched here.
+                        kernel_verifier.prove_link_mtu(ipr, names.tunnel, mtu=mtu),
+                        kernel_verifier.prove_link_mtu(ipr, names.host_veth, mtu=mtu),
+                        kernel_verifier.prove_link_admin_up(ipr, names.tunnel),
+                        kernel_verifier.prove_link_admin_up(ipr, names.host_veth),
                     )
                     if pod_end.kind != "veth":
                         proofs += (kernel_verifier.Proof.fail(f"pod {ifname} is not veth"),)
+                    if pod_end.mtu != mtu:
+                        proofs += (
+                            kernel_verifier.Proof.fail(
+                                f"pod {ifname} MTU mismatch",
+                                f"device={ifname}",
+                                f"expected={mtu}",
+                                f"observed={pod_end.mtu}",
+                            ),
+                        )
                     host_index = ipr.link_lookup(ifname=names.host_veth)[0]
                     if pod_end.peer_ifindex != host_index:
                         proofs += (
@@ -378,6 +397,10 @@ def attach_cross_node_ground(
                     ),
                     kernel_verifier.prove_mirred_redirect(ipr, names.tunnel, local_host_ifname),
                     kernel_verifier.prove_mirred_redirect(ipr, local_host_ifname, names.tunnel),
+                    # Host-side admin UP on the tunnel and the local host interface,
+                    # the state creation sets below; nothing is configured on reuse.
+                    kernel_verifier.prove_link_admin_up(ipr, names.tunnel),
+                    kernel_verifier.prove_link_admin_up(ipr, local_host_ifname),
                 )
             reuse = kernel_verifier.reuse_or_refuse(
                 subject=f"VNI {vni}",

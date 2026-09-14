@@ -349,6 +349,38 @@ def prove_veth_peer(ipr, host_ifname: str, *, peer_ns_fd: int, peer_ifindex: int
     )
 
 
+def prove_link_mtu(ipr, ifname: str, *, mtu: int) -> Proof:
+    """The interface carries exactly the MTU NodalArc set on it at creation."""
+    link = link_attrs(ipr, ifname)
+    if link is None:
+        return Proof.fail(f"{ifname} missing", f"device={ifname}")
+    observed = link.get_attr("IFLA_MTU")
+    if observed != mtu:
+        return Proof.fail(
+            f"{ifname} MTU mismatch",
+            f"device={ifname}",
+            f"expected={mtu}",
+            f"observed={observed}",
+        )
+    return Proof.ok(f"{ifname} MTU verified", f"device={ifname}", f"mtu={mtu}")
+
+
+def prove_link_admin_up(ipr, ifname: str) -> Proof:
+    """The interface is administratively UP, the state NodalArc set on it at creation.
+
+    Only NodalArc-owned host devices are proven this way; a pod interface's
+    administrative state belongs to the workload after creation.
+    """
+    link = link_attrs(ipr, ifname)
+    if link is None:
+        return Proof.fail(f"{ifname} missing", f"device={ifname}")
+    if not int(link.get("flags", 0)) & IFF_UP:
+        return Proof.fail(
+            f"{ifname} admin state mismatch", f"device={ifname}", "expected=UP", "observed=DOWN"
+        )
+    return Proof.ok(f"{ifname} admin UP verified", f"device={ifname}")
+
+
 class KernelStateConflict(RuntimeError):
     """Kernel state exists under a link's names and is not proven to be that link.
 

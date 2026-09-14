@@ -775,6 +775,9 @@ def test_cross_node_isl_retry_reuses_the_complete_proven_link(monkeypatch):
             assert first.success is True
             before = (_host_ifindex(names.tunnel), _host_ifindex(names.host_veth))
             assert None not in before
+            # The workload owns the pod interface's admin state after creation:
+            # a shutdown there survives the retry and does not refuse it.
+            _run("ip", "netns", "exec", _namespace, "ip", "link", "set", "isl0", "down")
 
             second = handle_batch_link_up(
                 _isl_up(node_id, vni, remote_ip, generation, "root-retry-2"),
@@ -785,6 +788,56 @@ def test_cross_node_isl_retry_reuses_the_complete_proven_link(monkeypatch):
             assert second.success is True
             assert second.interface_results[0].verified is True
             assert (_host_ifindex(names.tunnel), _host_ifindex(names.host_veth)) == before
+            pod_link = _run("ip", "netns", "exec", _namespace, "ip", "-o", "link", "show", "isl0")
+            assert "UP" not in pod_link.stdout.split(">")[0].split("<")[1].split(",")
+            host_veth = _run("ip", "-o", "link", "show", names.host_veth).stdout
+            assert "UP" in host_veth.split(">")[0].split("<")[1].split(",")
+    finally:
+        _run_optional("ip", "link", "del", names.host_veth)
+        _run_optional("ip", "link", "del", names.tunnel)
+        _run_optional("ip", "link", "del", dummy)
+        substrate_monitor._reset_for_tests()
+
+
+def test_cross_node_isl_refuses_a_complete_link_whose_pod_mtu_differs(monkeypatch):
+    """The pod interface's MTU is a fact NodalArc set at creation; a link whose
+    pod end carries another MTU is not the requested link and is refused with
+    the device and both MTUs named, nothing reconfigured."""
+    _require_netns_tools()
+    from node_agent import substrate_monitor
+    from node_agent.handlers import handle_batch_link_up
+
+    suffix = uuid.uuid4().hex[:6]
+    node_id = f"sat-m{suffix}"
+    generation, local_ip, (remote_ip,) = _cross_isl_setup(monkeypatch, suffix, octet_base=24)
+    dummy = f"na-d{suffix}"[:15]
+    vni = 60000 + int(suffix[:4], 16)
+    names = vxlan_host_ifnames(vni)
+    try:
+        _create_host_dummy(dummy, f"{local_ip}/24")
+        with _netns("x-mtu") as (_namespace, proc):
+            first = handle_batch_link_up(
+                _isl_up(node_id, vni, remote_ip, generation, "root-mtu-1"),
+                handles=_handles({node_id: proc.pid}),
+                fence=_fence(generation),
+            )
+            assert first.success is True
+            before = (_host_ifindex(names.tunnel), _host_ifindex(names.host_veth))
+            _run("ip", "netns", "exec", _namespace, "ip", "link", "set", "isl0", "mtu", "1200")
+
+            second = handle_batch_link_up(
+                _isl_up(node_id, vni, remote_ip, generation, "root-mtu-2"),
+                handles=_handles({node_id: proc.pid}),
+                fence=_fence(generation),
+            )
+
+            assert second.interface_results[0].verified is False
+            message = second.interface_results[0].error_message
+            assert "not the requested link" in message
+            assert "pod isl0 MTU mismatch" in message
+            assert (_host_ifindex(names.tunnel), _host_ifindex(names.host_veth)) == before
+            pod_link = _run("ip", "netns", "exec", _namespace, "ip", "-o", "link", "show", "isl0")
+            assert "mtu 1200" in pod_link.stdout
     finally:
         _run_optional("ip", "link", "del", names.host_veth)
         _run_optional("ip", "link", "del", names.tunnel)

@@ -486,3 +486,66 @@ def test_verify_qdisc_sentinel_skips_delay_but_still_proves_presence_and_rate(mo
     monkeypatch.setattr(kernel_verifier, "run_in_pod_namespace", _no_netem)
     missing = kernel_verifier.verify_qdisc(1234, "term0", delay_ms=-1.0, rate_mbps=1000.0)
     assert missing.verified is False
+
+
+class _LinkIpr:
+    """Links by name, as the lock-free proof primitives read them."""
+
+    def __init__(self, links: dict[str, _Nl]) -> None:
+        self._names = list(links)
+        self._links = links
+
+    def link_lookup(self, *, ifname: str):
+        return [self._names.index(ifname) + 1] if ifname in self._links else []
+
+    def get_links(self, idx: int):
+        return [self._links[self._names[idx - 1]]]
+
+
+def _link(*, mtu: int | None = 1450, up: bool = True) -> _Nl:
+    attrs = [("IFLA_MTU", mtu)] if mtu is not None else []
+    return _Nl(attrs=attrs, flags=kernel_verifier.IFF_UP if up else 0)
+
+
+def test_prove_link_mtu_names_device_and_both_mtus_on_a_mismatch():
+    ipr = _LinkIpr({"vx00abcd": _link(mtu=1500)})
+
+    proof = kernel_verifier.prove_link_mtu(ipr, "vx00abcd", mtu=1450)
+
+    assert proof.verified is False
+    assert proof.summary == "vx00abcd MTU mismatch"
+    assert proof.evidence == ("device=vx00abcd", "expected=1450", "observed=1500")
+
+
+def test_prove_link_mtu_accepts_the_requested_mtu_and_refuses_an_unreported_one():
+    assert (
+        kernel_verifier.prove_link_mtu(
+            _LinkIpr({"vh00abcd": _link()}), "vh00abcd", mtu=1450
+        ).verified
+        is True
+    )
+    unreported = kernel_verifier.prove_link_mtu(
+        _LinkIpr({"vh00abcd": _link(mtu=None)}), "vh00abcd", mtu=1450
+    )
+    assert unreported.verified is False
+    assert "observed=None" in unreported.evidence
+    assert (
+        kernel_verifier.prove_link_mtu(_LinkIpr({}), "vh00abcd", mtu=1450).summary
+        == "vh00abcd missing"
+    )
+
+
+def test_prove_link_admin_up_refuses_a_down_or_missing_host_device():
+    assert (
+        kernel_verifier.prove_link_admin_up(
+            _LinkIpr({"vx00abcd": _link(up=True)}), "vx00abcd"
+        ).verified
+        is True
+    )
+    down = kernel_verifier.prove_link_admin_up(_LinkIpr({"vx00abcd": _link(up=False)}), "vx00abcd")
+    assert down.verified is False
+    assert down.summary == "vx00abcd admin state mismatch"
+    assert down.evidence == ("device=vx00abcd", "expected=UP", "observed=DOWN")
+    assert (
+        kernel_verifier.prove_link_admin_up(_LinkIpr({}), "vx00abcd").summary == "vx00abcd missing"
+    )

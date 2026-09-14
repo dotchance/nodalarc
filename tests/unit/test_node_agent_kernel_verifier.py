@@ -131,6 +131,15 @@ def _u32_table(handle: int = 0x80000000, chain: int = 0):
     )
 
 
+def _without(mapping: dict, *fields: str) -> dict:
+    """A copy of one selector or key mapping with the named fields absent, as a partial dump."""
+    return {key: value for key, value in mapping.items() if key not in fields}
+
+
+def _sel_with_key(key: dict):
+    return {**_sel(), "keys": [key]}
+
+
 def _sel(*, nkeys: int = 1, mask: int = 0, val: int = 0, flags: int = 1):
     return {
         "flags": flags,
@@ -305,6 +314,26 @@ def test_verify_mirred_names_the_chain_of_an_entry_outside_chain_zero(monkeypatc
         ),
         (_shape(_redirect_rule(20, sel=_sel(nkeys=2))), "ingress", "a two-key selector"),
         (_shape(_redirect_rule(20, sel=_sel(flags=0))), "ingress", "a non-terminal selector"),
+        (
+            _shape(_redirect_rule(20, sel=_without(_sel(), "off"))),
+            "ingress",
+            "a selector the dump returned without its offset field",
+        ),
+        (
+            _shape(_redirect_rule(20, sel=_without(_sel(), "flags"))),
+            "ingress",
+            "a selector the dump returned without its flags",
+        ),
+        (
+            _shape(_redirect_rule(20, sel=_sel_with_key(_without(_sel()["keys"][0], "key_mask")))),
+            "ingress",
+            "a key the dump returned without its mask",
+        ),
+        (
+            _shape(_redirect_rule(20, sel=_without(_sel(), "keys"))),
+            "ingress",
+            "a selector the dump returned without its keys",
+        ),
         (_shape(_redirect_rule(20, info=_INFO_IP)), "ingress", "a redirect at protocol ip only"),
         (
             _shape(_redirect_rule(20), _bpf_direct_action_filter()),

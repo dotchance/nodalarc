@@ -440,17 +440,32 @@ def _filter_chain(filt) -> int | None:
     return None
 
 
+_U32_SELECTOR_OFFSET_FIELDS = ("off", "offshift", "offmask", "offoff", "hoff", "hmask")
+_U32_KEY_FIELDS = ("key_mask", "key_val", "key_off", "key_offmask")
+
+
 def _match_all_terminal(sel) -> bool:
-    if not isinstance(sel, dict) or sel.get("nkeys") != 1:
+    """The kernel reported exactly the one-key match-all terminal selector NodalArc installs.
+
+    Every selector and key field must be present in the dump. A field the
+    netlink reply did not carry is never read as zero, so a selector the
+    kernel did not fully report is not a match-all selector.
+    """
+    if not isinstance(sel, dict):
         return False
-    if not sel.get("flags", 0) & _U32_TERMINAL:
+    if any(field not in sel for field in ("flags", "nkeys", *_U32_SELECTOR_OFFSET_FIELDS)):
         return False
-    if any(
-        sel.get(field, 0) for field in ("off", "offshift", "offmask", "offoff", "hoff", "hmask")
-    ):
+    if sel["nkeys"] != 1 or not sel["flags"] & _U32_TERMINAL:
         return False
-    key = sel["keys"][0]
-    return not any(key.get(field, 0) for field in ("key_mask", "key_val", "key_off", "key_offmask"))
+    if any(sel[field] for field in _U32_SELECTOR_OFFSET_FIELDS):
+        return False
+    keys = sel.get("keys")
+    if not isinstance(keys, list) or len(keys) != 1 or not isinstance(keys[0], dict):
+        return False
+    key = keys[0]
+    if any(field not in key for field in _U32_KEY_FIELDS):
+        return False
+    return not any(key[field] for field in _U32_KEY_FIELDS)
 
 
 def _single_redirect_to(act, dst_index: int) -> bool:

@@ -1050,3 +1050,19 @@ def test_teardown_stops_before_any_mutation_when_the_namespace_lookup_fails(
     assert calls == ["get namespace nodalarc -o name"]
     assert "verified clean" not in result.stdout
     assert "Teardown complete" not in result.stdout
+
+
+def test_teardown_refuses_an_unexpected_node_name_before_using_it(tmp_path: Path) -> None:
+    """A node name from the inventory that is not a DNS name never reaches a
+    scratch file name or an exec; the host counts as unverified."""
+    result, helm_calls = _teardown_run(
+        tmp_path,
+        nodes=["node01", "node02", "../etc"],
+        agents=_THREE_AGENTS,
+        reports=_THREE_CLEAN,
+    )
+
+    assert result.returncode == 1
+    assert "unexpected node name in the host inventory: '../etc'" in result.stderr
+    assert "host cleanup unverified on: <unexpected-node-name>" in result.stderr
+    assert not helm_calls.exists()

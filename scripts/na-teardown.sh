@@ -10,6 +10,36 @@ NAMESPACE="${NAMESPACE:-nodalarc}"
 KUBECONFIG="${KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}"
 export KUBECONFIG
 
+# One private scratch directory for captured diagnostics, created by mktemp
+# under the system temp root and validated before use. Nothing else in this
+# script removes files: the single EXIT trap re-validates the path it was
+# given (non-empty, an absolute path under the temp root, no glob or space
+# characters, still a directory) and removes only that directory.
+TEARDOWN_TMP_ROOT="${TMPDIR:-/tmp}"
+TEARDOWN_TMP="$(mktemp -d "${TEARDOWN_TMP_ROOT%/}/na-teardown.XXXXXXXX")"
+case "$TEARDOWN_TMP" in
+    "${TEARDOWN_TMP_ROOT%/}"/na-teardown.????????) ;;
+    *)
+        echo "ERROR: refusing to use scratch directory '$TEARDOWN_TMP' (unexpected shape)" >&2
+        exit 1
+        ;;
+esac
+if [ ! -d "$TEARDOWN_TMP" ] || [[ "$TEARDOWN_TMP" == *[\*\?\[\ ]* ]]; then
+    echo "ERROR: refusing to use scratch directory '$TEARDOWN_TMP'" >&2
+    exit 1
+fi
+remove_scratch_directory() {
+    local dir="${TEARDOWN_TMP:-}"
+    case "$dir" in
+        "${TEARDOWN_TMP_ROOT%/}"/na-teardown.????????) ;;
+        *) return 0 ;;
+    esac
+    if [ -d "$dir" ] && [[ "$dir" != *[\*\?\[\ ]* ]]; then
+        rm -rf -- "$dir"
+    fi
+}
+trap remove_scratch_directory EXIT
+
 echo "=== NodalArc Teardown ==="
 echo "Copyright 2024-2026 .chance (dotchance)"
 echo "Official source: https://github.com/dotchance/nodalarc"
@@ -108,22 +138,20 @@ judge_cleanup_report() {
 # The workstation's own host state, through the same cleaner with the
 # repository's paths set explicitly (uv run does not inherit them).
 local_host_cleanup() {
-    local out rc=0 err
-    err="$(mktemp)"
+    local out rc=0
+    local err="$TEARDOWN_TMP/local-cleaner.err"
     out="$(PYTHONPATH=lib:services uv run python -m node_agent.reconcile --clean 2>"$err")" || rc=$?
     if ! judge_cleanup_report "local:$(hostname)" "$rc" <<< "$out"; then
         sed 's/^/    /' "$err" >&2
-        rm -f "$err"
         return 1
     fi
-    rm -f "$err"
 }
 
 # Namespace presence is established, never assumed: only the API server's
 # NotFound answer means absent. Any other failed lookup (an unreachable API,
 # a permission failure, a timeout) keeps its diagnostic and stops the
 # teardown before any mutation, local or remote.
-NS_LOOKUP_ERR="$(mktemp)"
+NS_LOOKUP_ERR="$TEARDOWN_TMP/namespace-lookup.err"
 if kubectl get namespace "$NAMESPACE" -o name >/dev/null 2>"$NS_LOOKUP_ERR"; then
     NAMESPACE_STATE=present
 elif grep -q "(NotFound)" "$NS_LOOKUP_ERR"; then
@@ -131,11 +159,9 @@ elif grep -q "(NotFound)" "$NS_LOOKUP_ERR"; then
 else
     echo "ERROR: could not determine whether namespace $NAMESPACE exists; nothing was touched:" >&2
     sed 's/^/    /' "$NS_LOOKUP_ERR" >&2
-    rm -f "$NS_LOOKUP_ERR"
     echo "Teardown incomplete. Fix the above before deploying." >&2
     exit 1
 fi
-rm -f "$NS_LOOKUP_ERR"
 
 if [ "$NAMESPACE_STATE" = absent ]; then
     echo "Namespace $NAMESPACE does not exist — nothing to tear down."
@@ -221,6 +247,14 @@ if ! AGENT_PODS="$(kubectl get pods -n "$NAMESPACE" -l app=nodalarc-node-agent \
     AGENT_PODS=""
 fi
 for HOST in $REQUIRED_HOSTS; do
+    # A node name is a DNS name; anything else never reaches a file name or an exec.
+    case "$HOST" in
+        ""|*[!a-zA-Z0-9.-]*|.*|-*)
+            echo "  ERROR: unexpected node name in the host inventory: '$HOST'" >&2
+            UNVERIFIED_HOSTS="$UNVERIFIED_HOSTS <unexpected-node-name>"
+            continue
+            ;;
+    esac
     POD_NAME="$(printf '%s\n' "$AGENT_PODS" | awk -v h="$HOST" '$1 == h {print $2; exit}')"
     if [ -z "$POD_NAME" ]; then
         echo "  ERROR: $HOST: no Node Agent pod on this host; its kernel state is unverified" >&2
@@ -228,7 +262,7 @@ for HOST in $REQUIRED_HOSTS; do
         continue
     fi
     echo "  Cleaning $HOST via $POD_NAME..."
-    EXEC_ERR="$(mktemp)"
+    EXEC_ERR="$TEARDOWN_TMP/cleaner-$HOST.err"
     RC=0
     OUT="$(kubectl exec "$POD_NAME" -n "$NAMESPACE" -c node-agent -- \
         python -m node_agent.reconcile --clean 2>"$EXEC_ERR")" || RC=$?
@@ -236,7 +270,6 @@ for HOST in $REQUIRED_HOSTS; do
         sed 's/^/    /' "$EXEC_ERR" >&2
         UNVERIFIED_HOSTS="$UNVERIFIED_HOSTS $HOST"
     fi
-    rm -f "$EXEC_ERR"
 done
 LOCAL_UNVERIFIED=0
 local_host_cleanup || LOCAL_UNVERIFIED=1

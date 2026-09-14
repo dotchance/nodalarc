@@ -19,6 +19,7 @@ from nodalarc.proto import node_agent_pb2
 from nodalarc.vxlan import compute_vni
 
 from scheduler.desired_state import ActiveLinkInfo
+from scheduler.dispatch_planner import GroundEndpoints, ground_endpoints
 from scheduler.latency_compensator import LatencyCompensation
 
 LinkPair = tuple[str, str]
@@ -59,25 +60,14 @@ def _ack_key(agent_addr: str, iface_msg) -> InterfaceAck:
     return (agent_addr, iface_msg.node_id, iface_msg.interface_name)
 
 
-def _ground_ids(
-    pair: LinkPair,
-    gs_capacities: Mapping[str, int],
-) -> tuple[str, str]:
-    node_a, node_b = pair
-    gs_id = node_a if node_a in gs_capacities else node_b
-    sat_id = node_b if node_a in gs_capacities else node_a
-    return gs_id, sat_id
-
-
-def _ground_ifaces(
-    pair: LinkPair,
-    info: ActiveLinkInfo,
-    gs_capacities: Mapping[str, int],
-) -> tuple[str, str]:
-    node_a, _node_b = pair
-    gs_iface = info.interface_a if node_a in gs_capacities else info.interface_b
-    sat_iface = info.interface_b if node_a in gs_capacities else info.interface_a
-    return gs_iface, sat_iface
+def required_ground_endpoints(
+    pair: LinkPair, info: ActiveLinkInfo, gs_capacities: Mapping[str, int]
+) -> GroundEndpoints:
+    """The endpoints of a ground-typed link; a link without a station is refused."""
+    endpoints = ground_endpoints(pair, info, gs_capacities)
+    if endpoints is None:
+        raise RuntimeError(f"ground link {pair} has no ground station endpoint")
+    return endpoints
 
 
 def build_link_down_batch_plan(
@@ -109,8 +99,9 @@ def build_link_down_batch_plan(
             continue
 
         if info.link_type == "ground":
-            gs_id, sat_id = _ground_ids(pair, gs_capacities)
-            gs_iface, sat_iface = _ground_ifaces(pair, info, gs_capacities)
+            gs_id, sat_id, gs_iface, sat_iface = required_ground_endpoints(
+                pair, info, gs_capacities
+            )
             vni = (
                 compute_vni(gs_id, sat_id, gs_iface, sat_iface)
                 if locality == node_agent_pb2.LOCALITY_CROSS_NODE
@@ -237,8 +228,9 @@ def build_link_up_batch_plan(
         info.netem_one_way_ms = netem_ms
 
         if info.link_type == "ground":
-            gs_id, sat_id = _ground_ids(pair, gs_capacities)
-            gs_iface, sat_iface = _ground_ifaces(pair, info, gs_capacities)
+            gs_id, sat_id, gs_iface, sat_iface = required_ground_endpoints(
+                pair, info, gs_capacities
+            )
             vni = (
                 compute_vni(gs_id, sat_id, gs_iface, sat_iface)
                 if locality == node_agent_pb2.LOCALITY_CROSS_NODE

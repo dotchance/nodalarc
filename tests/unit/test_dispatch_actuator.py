@@ -758,3 +758,334 @@ def test_agents_are_sent_concurrently_while_each_agents_chunks_stay_in_order():
     result, stubs = asyncio.run(_run())
     assert result.failed_pairs == set()
     assert len(stubs["agent-n1"].requests) == 1 and len(stubs["agent-n2"].requests) == 1
+
+
+# --- one ground-endpoint decision: the builders preserve every field on both orderings ---
+
+
+class _CrossLocator(_Locator):
+    def __init__(self, node_ips: dict[str, str]) -> None:
+        self._node_ips = node_ips
+
+    def link_locality(self, _node_a: str, _node_b: str) -> int:
+        return node_agent_pb2.LOCALITY_CROSS_NODE
+
+    def node_ip(self, k3s_node: str) -> str | None:
+        return self._node_ips.get(k3s_node)
+
+
+GS, SAT = "gs-den", "sat-a"
+CAPACITIES = {GS: 1}
+NODE_IPS = {"k3s-gs-den": "10.0.0.1", "k3s-sat-a": "10.0.0.2"}
+
+
+def _ground_info(pair: tuple[str, str]) -> ActiveLinkInfo:
+    # interface_a belongs to pair[0]: the station carries term0, the satellite gnd0.
+    station_first = pair[0] == GS
+    return ActiveLinkInfo(
+        interface_a="term0" if station_first else "gnd0",
+        interface_b="gnd0" if station_first else "term0",
+        latency_ms=10.0,
+        bandwidth_mbps=1000.0,
+        link_type="ground",
+        range_km=2997.92458,
+        authority_sim_time=SIM_TIME,
+        authority_source="snapshot",
+        authority_sequence=7,
+    )
+
+
+def _fields(msg, names):
+    return {name: getattr(msg, name) for name in names}
+
+
+_UP_FIELDS = (
+    "node_id",
+    "interface_name",
+    "peer_node_id",
+    "peer_interface_name",
+    "link_type",
+    "gs_id",
+    "sat_id",
+    "locality",
+    "remote_node_ip",
+    "vni",
+    "latency_ms",
+    "bandwidth_mbps",
+)
+_DOWN_FIELDS = (
+    "node_id",
+    "interface_name",
+    "peer_node_id",
+    "peer_interface_name",
+    "link_type",
+    "gs_id",
+    "sat_id",
+    "locality",
+    "remote_node_ip",
+    "vni",
+)
+_INVENTORY_FIELDS = _DOWN_FIELDS + ("latency_ms", "bandwidth_mbps", "expected_admin_up")
+
+
+def _expected_ground_messages(*, locality: int, cross_vni: int, up: bool):
+    """The exact per-agent messages for the gs-den <-> sat-a ground link, as the
+    unmigrated builders produced them: one message to the satellite's agent for a
+    local link, one to each agent for a cross-host link."""
+    common = {
+        "link_type": node_agent_pb2.LINK_TYPE_GROUND,
+        "gs_id": GS,
+        "sat_id": SAT,
+        "locality": locality,
+    }
+    extra = {"latency_ms": 9.0, "bandwidth_mbps": 1000.0} if up else {}
+    if locality == node_agent_pb2.LOCALITY_LOCAL:
+        return {
+            "agent-sat-a": [
+                {
+                    **common,
+                    **extra,
+                    "node_id": GS,
+                    "interface_name": "term0",
+                    "peer_node_id": SAT,
+                    "peer_interface_name": "gnd0",
+                    "remote_node_ip": "",
+                    "vni": 0,
+                },
+            ]
+        }
+    return {
+        "agent-sat-a": [
+            {
+                **common,
+                **extra,
+                "node_id": SAT,
+                "interface_name": "gnd0",
+                "peer_node_id": GS,
+                "peer_interface_name": "term0",
+                "remote_node_ip": "10.0.0.1",
+                "vni": cross_vni,
+            },
+        ],
+        "agent-gs-den": [
+            {
+                **common,
+                **extra,
+                "node_id": GS,
+                "interface_name": "term0",
+                "peer_node_id": SAT,
+                "peer_interface_name": "gnd0",
+                "remote_node_ip": "10.0.0.2",
+                "vni": cross_vni,
+            },
+        ],
+    }
+
+
+@pytest.mark.parametrize("pair", [(GS, SAT), (SAT, GS)], ids=["station-first", "satellite-first"])
+@pytest.mark.parametrize(
+    "locality",
+    [node_agent_pb2.LOCALITY_LOCAL, node_agent_pb2.LOCALITY_CROSS_NODE],
+    ids=["local", "cross-host"],
+)
+def test_ground_batch_plans_preserve_endpoints_interfaces_and_fields(pair, locality):
+    from nodalarc.vxlan import compute_vni
+    from scheduler.node_agent_batches import build_link_down_batch_plan, build_link_up_batch_plan
+
+    locator = _Locator() if locality == node_agent_pb2.LOCALITY_LOCAL else _CrossLocator(NODE_IPS)
+    cross_vni = compute_vni(GS, SAT, "term0", "gnd0")
+    info = _ground_info(pair)
+
+    up = build_link_up_batch_plan(
+        pairs={pair},
+        desired={pair: info},
+        locator=locator,
+        gs_capacities=CAPACITIES,
+        compensation_for_pair=_compensation,
+    )
+    assert {
+        agent: [_fields(m, _UP_FIELDS) for m in msgs] for agent, msgs in up.agent_ifaces.items()
+    } == (_expected_ground_messages(locality=locality, cross_vni=cross_vni, up=True))
+    down = build_link_down_batch_plan(
+        pairs={pair}, actual_links={pair: info}, locator=locator, gs_capacities=CAPACITIES
+    )
+    assert {
+        agent: [_fields(m, _DOWN_FIELDS) for m in msgs] for agent, msgs in down.agent_ifaces.items()
+    } == (_expected_ground_messages(locality=locality, cross_vni=cross_vni, up=False))
+    expected_acks = {
+        (agent, m["node_id"], m["interface_name"])
+        for agent, msgs in _expected_ground_messages(
+            locality=locality, cross_vni=cross_vni, up=False
+        ).items()
+        for m in msgs
+    }
+    assert up.pair_agent_ifaces[pair] == expected_acks
+    assert down.pair_agent_ifaces[pair] == expected_acks
+
+
+@pytest.mark.parametrize("pair", [(GS, SAT), (SAT, GS)], ids=["station-first", "satellite-first"])
+@pytest.mark.parametrize(
+    "locality",
+    [node_agent_pb2.LOCALITY_LOCAL, node_agent_pb2.LOCALITY_CROSS_NODE],
+    ids=["local", "cross-host"],
+)
+def test_ground_inventory_entries_preserve_endpoints_interfaces_and_fields(pair, locality):
+    from nodalarc.vxlan import compute_vni
+    from scheduler.dispatch_actuator import _ground_inventory_entries_for_pair
+
+    locator = _Locator() if locality == node_agent_pb2.LOCALITY_LOCAL else _CrossLocator(NODE_IPS)
+    info = _ground_info(pair)
+    info.netem_one_way_ms = 9.0
+
+    entries, acks = _ground_inventory_entries_for_pair(
+        pair=pair, info=info, expected_admin_up=True, locator=locator, gs_capacities=CAPACITIES
+    )
+
+    expected = _expected_ground_messages(
+        locality=locality, cross_vni=compute_vni(GS, SAT, "term0", "gnd0"), up=True
+    )
+    expected = {
+        agent: [{**m, "expected_admin_up": True} for m in msgs] for agent, msgs in expected.items()
+    }
+    assert {
+        agent: [_fields(e, _INVENTORY_FIELDS) for e in es] for agent, es in entries.items()
+    } == expected
+    assert acks == {
+        (agent, m["node_id"], m["interface_name"]) for agent, msgs in expected.items() for m in msgs
+    }
+
+
+@pytest.mark.parametrize("pair", [(GS, SAT), (SAT, GS)], ids=["station-first", "satellite-first"])
+@pytest.mark.parametrize(
+    "locality",
+    [node_agent_pb2.LOCALITY_LOCAL, node_agent_pb2.LOCALITY_CROSS_NODE],
+    ids=["local", "cross-host"],
+)
+def test_ground_latency_update_preserves_per_side_entries(pair, locality):
+    locator = _Locator() if locality == node_agent_pb2.LOCALITY_LOCAL else _CrossLocator(NODE_IPS)
+    pool = _Pool()
+
+    result = asyncio.run(
+        send_authoritative_latency_updates(
+            pairs={pair},
+            desired={pair: _ground_info(pair)},
+            locator=locator,
+            pool=pool,
+            js=_Js(),
+            subj_latency="links.latency",
+            sim_time=SIM_TIME,
+            gs_capacities=CAPACITIES,
+            latency_compensation=_compensation,
+            validate_authority_freshness=_validate,
+            link_provenance=_provenance,
+            session_id=SESSION_ID,
+            wiring_generation=WIRING_GENERATION,
+        )
+    )
+
+    assert result.succeeded_pairs == {pair}
+    observed = {
+        agent: sorted(
+            (e.node_id, e.interface_name, e.latency_ms, e.gs_id, e.sat_id)
+            for req in stub.requests
+            for e in req.entries
+        )
+        for agent, stub in pool.stubs.items()
+    }
+    if locality == node_agent_pb2.LOCALITY_LOCAL:
+        assert observed == {
+            "agent-sat-a": [(GS, "term0", 9.0, GS, SAT), (SAT, "gnd0", 9.0, GS, SAT)]
+        }
+    else:
+        assert observed == {
+            "agent-sat-a": [(SAT, "gnd0", 9.0, GS, SAT)],
+            "agent-gs-den": [(GS, "term0", 9.0, GS, SAT)],
+        }
+
+
+def test_ground_side_and_its_accessors_agree_on_every_pair_shape():
+    from scheduler.dispatch_planner import (
+        GroundEndpoints,
+        ground_endpoints,
+        ground_side,
+        gs_id_for_pair,
+        sat_id_for_gs_pair,
+    )
+
+    info = _ground_info((GS, SAT))
+    assert ground_side((GS, SAT), CAPACITIES) == 0 and ground_side((SAT, GS), CAPACITIES) == 1
+    assert (
+        gs_id_for_pair((SAT, GS), CAPACITIES) == GS
+        and sat_id_for_gs_pair((SAT, GS), CAPACITIES) == SAT
+    )
+    assert ground_endpoints((GS, SAT), info, CAPACITIES) == GroundEndpoints(
+        GS, SAT, "term0", "gnd0"
+    )
+    assert ground_endpoints((SAT, GS), _ground_info((SAT, GS)), CAPACITIES) == GroundEndpoints(
+        GS, SAT, "term0", "gnd0"
+    )
+    # Two stations: the first endpoint is the station, the rule every accessor already applied.
+    two = {"gs-den": 1, "gs-sfo": 1}
+    assert ground_side(("gs-den", "gs-sfo"), two) == 0
+    assert (
+        gs_id_for_pair(("gs-den", "gs-sfo"), two) == "gs-den"
+        and sat_id_for_gs_pair(("gs-den", "gs-sfo"), two) == "gs-sfo"
+    )
+    assert ground_endpoints(("gs-den", "gs-sfo"), info, two) == GroundEndpoints(
+        "gs-den", "gs-sfo", "term0", "gnd0"
+    )
+    # No station: every accessor answers None.
+    assert ground_side((SAT, "sat-b"), CAPACITIES) is None
+    assert (
+        gs_id_for_pair((SAT, "sat-b"), CAPACITIES) is None
+        and sat_id_for_gs_pair((SAT, "sat-b"), CAPACITIES) is None
+    )
+    assert ground_endpoints((SAT, "sat-b"), info, CAPACITIES) is None
+
+
+def test_a_ground_link_without_a_station_is_refused_by_every_builder():
+    """The declared behavior change: a ground-typed link whose pair has no station
+    no longer silently takes node_b as the station."""
+    from scheduler.dispatch_actuator import _ground_inventory_entries_for_pair
+    from scheduler.node_agent_batches import build_link_down_batch_plan, build_link_up_batch_plan
+
+    pair = (SAT, "sat-b")
+    info = _ground_info((GS, SAT))
+    with pytest.raises(RuntimeError, match="has no ground station endpoint"):
+        build_link_up_batch_plan(
+            pairs={pair},
+            desired={pair: info},
+            locator=_Locator(),
+            gs_capacities=CAPACITIES,
+            compensation_for_pair=_compensation,
+        )
+    with pytest.raises(RuntimeError, match="has no ground station endpoint"):
+        build_link_down_batch_plan(
+            pairs={pair}, actual_links={pair: info}, locator=_Locator(), gs_capacities=CAPACITIES
+        )
+    with pytest.raises(RuntimeError, match="has no ground station endpoint"):
+        _ground_inventory_entries_for_pair(
+            pair=pair,
+            info=info,
+            expected_admin_up=True,
+            locator=_Locator(),
+            gs_capacities=CAPACITIES,
+        )
+    with pytest.raises(RuntimeError, match="has no ground station endpoint"):
+        asyncio.run(
+            send_authoritative_latency_updates(
+                pairs={pair},
+                desired={pair: info},
+                locator=_Locator(),
+                pool=_Pool(),
+                js=_Js(),
+                subj_latency="links.latency",
+                sim_time=SIM_TIME,
+                gs_capacities=CAPACITIES,
+                latency_compensation=_compensation,
+                validate_authority_freshness=_validate,
+                link_provenance=_provenance,
+                session_id=SESSION_ID,
+                wiring_generation=WIRING_GENERATION,
+            )
+        )

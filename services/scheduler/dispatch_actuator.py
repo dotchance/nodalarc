@@ -31,8 +31,13 @@ from scheduler.actuation import (
     classify_agent_response,
 )
 from scheduler.desired_state import ActiveLinkInfo
+from scheduler.dispatch_planner import gs_id_for_pair
 from scheduler.latency_compensator import LatencyCompensation
-from scheduler.node_agent_batches import build_link_down_batch_plan, build_link_up_batch_plan
+from scheduler.node_agent_batches import (
+    build_link_down_batch_plan,
+    build_link_up_batch_plan,
+    required_ground_endpoints,
+)
 
 log = logging.getLogger(__name__)
 
@@ -103,9 +108,8 @@ def _chunked_operation_id(base: str, chunk_index: int, chunk_count: int) -> str:
 
 
 def _gs_id_for_pair(pair: LinkPair, gs_capacities: Mapping[str, int], link_type: str) -> str | None:
-    if link_type != "ground":
-        return None
-    return pair[0] if pair[0] in gs_capacities else pair[1]
+    """The station of a ground pair, None for any other link type."""
+    return gs_id_for_pair(pair, gs_capacities) if link_type == "ground" else None
 
 
 async def _send_chunked_command(
@@ -335,10 +339,7 @@ def _ground_inventory_entries_for_pair(
     if info.link_type != "ground":
         raise ValueError(f"KernelInventory is ground-only; got {pair} type={info.link_type!r}")
     node_a, node_b = pair
-    gs_id = node_a if node_a in gs_capacities else node_b
-    sat_id = node_b if node_a in gs_capacities else node_a
-    gs_iface = info.interface_a if node_a in gs_capacities else info.interface_b
-    sat_iface = info.interface_b if node_a in gs_capacities else info.interface_a
+    gs_id, sat_id, gs_iface, sat_iface = required_ground_endpoints(pair, info, gs_capacities)
     locality = locator.link_locality(node_a, node_b)
     if locality is None:
         raise RuntimeError(
@@ -730,10 +731,9 @@ async def send_authoritative_latency_updates(
         info.netem_one_way_ms = netem_ms
 
         if info.link_type == "ground":
-            gs_id = node_a if node_a in gs_capacities else node_b
-            sat_id = node_b if node_a in gs_capacities else node_a
-            gs_iface = info.interface_a if node_a in gs_capacities else info.interface_b
-            sat_iface = info.interface_b if node_a in gs_capacities else info.interface_a
+            gs_id, sat_id, gs_iface, sat_iface = required_ground_endpoints(
+                pair, info, gs_capacities
+            )
             locality = locator.link_locality(node_a, node_b)
             if locality is None:
                 raise RuntimeError(

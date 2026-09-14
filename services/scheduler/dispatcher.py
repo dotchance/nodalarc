@@ -1136,18 +1136,11 @@ class Dispatcher:
     ) -> list[list[str]]:
         return [[a, b] for a, b in sorted(pairs)]
 
-    def _ground_gs_id(self, pair: tuple[str, str]) -> str | None:
-        if pair[0] in self._gs_capacities:
-            return pair[0]
-        if pair[1] in self._gs_capacities:
-            return pair[1]
-        return None
-
     def _actual_ground_pairs_for_gs(self, gs_id: str) -> dict[tuple[str, str], ActiveLinkInfo]:
         return {
             pair: info
             for pair, info in self._actual_links.items()
-            if info.link_type == "ground" and self._ground_gs_id(pair) == gs_id
+            if info.link_type == "ground" and gs_id_for_pair(pair, self._gs_capacities) == gs_id
         }
 
     def _desired_ground_pairs_for_gs(self, gs_id: str) -> dict[tuple[str, str], ActiveLinkInfo]:
@@ -1155,14 +1148,14 @@ class Dispatcher:
         return {
             pair: info
             for pair, info in effective.items()
-            if info.link_type == "ground" and self._ground_gs_id(pair) == gs_id
+            if info.link_type == "ground" and gs_id_for_pair(pair, self._gs_capacities) == gs_id
         }
 
     def _ome_visible_scheduled_pairs_for_gs(self, gs_id: str) -> set[tuple[str, str]]:
         return {
             pair
             for pair, (visible, scheduled, _state) in self._ome_view.items()
-            if visible and scheduled and self._ground_gs_id(pair) == gs_id
+            if visible and scheduled and gs_id_for_pair(pair, self._gs_capacities) == gs_id
         }
 
     def _effective_desired_links(self) -> dict[tuple[str, str], ActiveLinkInfo]:
@@ -1482,7 +1475,7 @@ class Dispatcher:
             if (
                 info is not None
                 and info.link_type == "ground"
-                and self._ground_gs_id(pair) == gs_id
+                and gs_id_for_pair(pair, self._gs_capacities) == gs_id
             ):
                 self._gs_stale_link_infos[pair] = info
 
@@ -1495,7 +1488,7 @@ class Dispatcher:
             if pair not in expected_up
         }
         for pair, info in self._gs_stale_link_infos.items():
-            if pair not in expected_up and self._ground_gs_id(pair) == gs_id:
+            if pair not in expected_up and gs_id_for_pair(pair, self._gs_capacities) == gs_id:
                 expected_down[pair] = info
         return expected_down
 
@@ -1614,7 +1607,7 @@ class Dispatcher:
         self._gs_stale_link_infos = {
             pair: info
             for pair, info in self._gs_stale_link_infos.items()
-            if self._ground_gs_id(pair) != gs_id
+            if gs_id_for_pair(pair, self._gs_capacities) != gs_id
         }
         details = self._actuation_details(
             gs_id=gs_id,
@@ -1893,7 +1886,7 @@ class Dispatcher:
         allowed: set[tuple[str, str]] = set()
         blocked: set[tuple[str, str]] = set()
         for pair in pairs:
-            gs_id = self._ground_gs_id(pair)
+            gs_id = gs_id_for_pair(pair, self._gs_capacities)
             if gs_id is None:
                 allowed.add(pair)
                 continue
@@ -1925,7 +1918,7 @@ class Dispatcher:
         allowed: set[tuple[str, str]] = set()
         blocked: set[tuple[str, str]] = set()
         for pair in pairs:
-            gs_id = self._ground_gs_id(pair)
+            gs_id = gs_id_for_pair(pair, self._gs_capacities)
             if gs_id is None:
                 allowed.add(pair)
                 continue
@@ -2327,7 +2320,7 @@ class Dispatcher:
                 self._teardown_pairs.discard(pair)
             elif vis.visible and not vis.scheduled:
                 if vis.link_type == "ground" and pair in self._teardown_pairs:
-                    gs_id = self._ground_gs_id(pair)
+                    gs_id = gs_id_for_pair(pair, self._gs_capacities)
                     self._pending_fold_diagnostics.append(
                         {
                             "code": SchedulerOpsCode.OLD_PAIR_DROPPED_WITHOUT_SUCCESSOR.value,
@@ -2804,7 +2797,7 @@ class Dispatcher:
         teardown = self._actual_ground_pairs_for_gs(gs_id)
         for pair in before.stale_pairs:
             info = self._gs_stale_link_infos.get(pair)
-            if info is not None and self._ground_gs_id(pair) == gs_id:
+            if info is not None and gs_id_for_pair(pair, self._gs_capacities) == gs_id:
                 teardown.setdefault(pair, info)
         start_details = self._actuation_details(
             gs_id=gs_id,

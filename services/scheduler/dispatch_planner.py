@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import NamedTuple
 
 from scheduler.desired_state import ActiveLinkInfo
 
@@ -59,20 +60,53 @@ def diff_link_state(
     )
 
 
-def gs_id_for_pair(pair: tuple[str, str], gs_capacities: Mapping[str, int]) -> str | None:
+def ground_side(pair: tuple[str, str], gs_capacities: Mapping[str, int]) -> int | None:
+    """Which endpoint of a pair is the ground station: 0 or 1, None when neither is.
+
+    The one selection decision every ground-endpoint accessor derives from. When
+    both endpoints are stations the first is selected, the rule the accessors
+    have always applied; desired-state construction never produces such a pair.
+    """
     if pair[0] in gs_capacities:
-        return pair[0]
+        return 0
     if pair[1] in gs_capacities:
-        return pair[1]
+        return 1
     return None
+
+
+def gs_id_for_pair(pair: tuple[str, str], gs_capacities: Mapping[str, int]) -> str | None:
+    side = ground_side(pair, gs_capacities)
+    return None if side is None else pair[side]
 
 
 def sat_id_for_gs_pair(pair: tuple[str, str], gs_capacities: Mapping[str, int]) -> str | None:
-    if pair[0] in gs_capacities:
-        return pair[1]
-    if pair[1] in gs_capacities:
-        return pair[0]
-    return None
+    side = ground_side(pair, gs_capacities)
+    return None if side is None else pair[1 - side]
+
+
+class GroundEndpoints(NamedTuple):
+    """The station, the satellite and their interfaces for one ground pair."""
+
+    gs_id: str
+    sat_id: str
+    gs_iface: str
+    sat_iface: str
+
+
+def ground_endpoints(
+    pair: tuple[str, str], info: ActiveLinkInfo, gs_capacities: Mapping[str, int]
+) -> GroundEndpoints | None:
+    """The ground pair's endpoints and interfaces from the one selection decision.
+
+    ``info.interface_a`` belongs to ``pair[0]`` and ``interface_b`` to ``pair[1]``.
+    None when neither endpoint is a station; a builder handed a ground-typed
+    link that answers None refuses it.
+    """
+    side = ground_side(pair, gs_capacities)
+    if side is None:
+        return None
+    interfaces = (info.interface_a, info.interface_b)
+    return GroundEndpoints(pair[side], pair[1 - side], interfaces[side], interfaces[1 - side])
 
 
 def interface_colliding_downs(

@@ -796,11 +796,18 @@ case "$1" in
           error)
             echo "Unable to connect to the server: dial tcp 192.168.10.201:6443: connect: connection refused" >&2
             exit 1 ;;
+          error-notfound-text)
+            echo "error: error loading config file \\"/home/dev/(NotFound).kubeconfig\\": yaml: line 3: mapping values are not allowed in this context" >&2
+            exit 1 ;;
           absent)
+            if printf '%s\\n' "$@" | grep -q -- "--ignore-not-found"; then exit 0; fi
             echo "Error from server (NotFound): namespaces \\"$3\\" not found" >&2
             exit 1 ;;
         esac
-        if [ -f "$STATE_DIR/ns-deleted" ]; then exit 1; fi
+        if [ -f "$STATE_DIR/ns-deleted" ]; then
+          if printf '%s\\n' "$@" | grep -q -- "--ignore-not-found"; then exit 0; fi
+          exit 1
+        fi
         printf 'namespace/%s\\n' "$3"; exit 0 ;;
       constellationspec) exit 0 ;;
       pods)
@@ -861,7 +868,11 @@ def _teardown_run(
 
     ``nodes`` are the hosts carrying the placement label; ``agents`` maps a host
     to its Node Agent pod; ``reports`` maps a pod to the cleaner's stdout and
-    exit code; ``local`` is the workstation cleaner's stdout and exit code.
+    exit code; ``local`` is the workstation cleaner's stdout and exit code;
+    ``namespace`` is what the lookup answers: ``present``, ``absent`` (a
+    successful lookup printing nothing under --ignore-not-found), ``error``
+    (an unreachable API server) or ``error-notfound-text`` (a kubeconfig
+    parse error whose text happens to contain "(NotFound)").
     """
     state = tmp_path / "state"
     state.mkdir()
@@ -1029,25 +1040,34 @@ def test_teardown_without_a_namespace_claims_no_remote_verification(tmp_path: Pa
     assert not helm_calls.exists()
 
 
+@pytest.mark.parametrize(
+    ("answer", "retained"),
+    [
+        ("error", "connection refused"),
+        ("error-notfound-text", "error loading config file"),
+    ],
+)
 def test_teardown_stops_before_any_mutation_when_the_namespace_lookup_fails(
-    tmp_path: Path,
+    tmp_path: Path, answer: str, retained: str
 ) -> None:
-    """A failed lookup is not absence: the API answer is kept, nothing is
-    deleted anywhere, no host is queried, and the local cleaner does not run."""
+    """A failed lookup is not absence, whatever its text says: the answer is
+    kept, nothing is deleted anywhere, no host is queried, and the local
+    cleaner does not run."""
     result, helm_calls = _teardown_run(
         tmp_path,
         nodes=_THREE_HOSTS,
         agents=_THREE_AGENTS,
         reports=_THREE_CLEAN,
-        namespace="error",
+        namespace=answer,
     )
 
     assert result.returncode == 1
     assert "could not determine whether namespace nodalarc exists" in result.stderr
-    assert "connection refused" in result.stderr
+    assert retained in result.stderr
+    assert "does not exist" not in result.stdout
     assert not helm_calls.exists()
     calls = (tmp_path / "state" / "kubectl.calls").read_text().splitlines()
-    assert calls == ["get namespace nodalarc -o name"]
+    assert calls == ["get namespace nodalarc --ignore-not-found -o name"]
     assert "verified clean" not in result.stdout
     assert "Teardown complete" not in result.stdout
 

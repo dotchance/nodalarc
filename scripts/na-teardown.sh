@@ -147,21 +147,27 @@ local_host_cleanup() {
     fi
 }
 
-# Namespace presence is established, never assumed: only the API server's
-# NotFound answer means absent. Any other failed lookup (an unreachable API,
-# a permission failure, a timeout) keeps its diagnostic and stops the
-# teardown before any mutation, local or remote.
+# Namespace presence is established by the lookup's result, never by the
+# text of a diagnostic: with --ignore-not-found a successful lookup prints
+# the namespace when it exists and nothing when it does not. Any failed
+# lookup (an unreachable API, a permission failure, a broken kubeconfig)
+# keeps its diagnostic and stops the teardown before any mutation.
 NS_LOOKUP_ERR="$TEARDOWN_TMP/namespace-lookup.err"
-if kubectl get namespace "$NAMESPACE" -o name >/dev/null 2>"$NS_LOOKUP_ERR"; then
-    NAMESPACE_STATE=present
-elif grep -q "(NotFound)" "$NS_LOOKUP_ERR"; then
-    NAMESPACE_STATE=absent
-else
+if ! NS_LOOKUP_OUT="$(kubectl get namespace "$NAMESPACE" --ignore-not-found -o name 2>"$NS_LOOKUP_ERR")"; then
     echo "ERROR: could not determine whether namespace $NAMESPACE exists; nothing was touched:" >&2
     sed 's/^/    /' "$NS_LOOKUP_ERR" >&2
     echo "Teardown incomplete. Fix the above before deploying." >&2
     exit 1
 fi
+case "$NS_LOOKUP_OUT" in
+    "namespace/$NAMESPACE") NAMESPACE_STATE=present ;;
+    "") NAMESPACE_STATE=absent ;;
+    *)
+        echo "ERROR: unexpected namespace lookup result '$NS_LOOKUP_OUT'; nothing was touched" >&2
+        echo "Teardown incomplete. Fix the above before deploying." >&2
+        exit 1
+        ;;
+esac
 
 if [ "$NAMESPACE_STATE" = absent ]; then
     echo "Namespace $NAMESPACE does not exist — nothing to tear down."

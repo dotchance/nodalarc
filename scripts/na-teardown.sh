@@ -119,8 +119,25 @@ local_host_cleanup() {
     rm -f "$err"
 }
 
-# Bail early if namespace doesn't exist
-if ! kubectl get namespace "$NAMESPACE" &>/dev/null; then
+# Namespace presence is established, never assumed: only the API server's
+# NotFound answer means absent. Any other failed lookup (an unreachable API,
+# a permission failure, a timeout) keeps its diagnostic and stops the
+# teardown before any mutation, local or remote.
+NS_LOOKUP_ERR="$(mktemp)"
+if kubectl get namespace "$NAMESPACE" -o name >/dev/null 2>"$NS_LOOKUP_ERR"; then
+    NAMESPACE_STATE=present
+elif grep -q "(NotFound)" "$NS_LOOKUP_ERR"; then
+    NAMESPACE_STATE=absent
+else
+    echo "ERROR: could not determine whether namespace $NAMESPACE exists; nothing was touched:" >&2
+    sed 's/^/    /' "$NS_LOOKUP_ERR" >&2
+    rm -f "$NS_LOOKUP_ERR"
+    echo "Teardown incomplete. Fix the above before deploying." >&2
+    exit 1
+fi
+rm -f "$NS_LOOKUP_ERR"
+
+if [ "$NAMESPACE_STATE" = absent ]; then
     echo "Namespace $NAMESPACE does not exist — nothing to tear down."
     # Still clean cluster-scoped resources and local kernel state.
     kubectl delete crd constellationspecs.nodalarc.io --ignore-not-found 2>/dev/null || true

@@ -791,8 +791,17 @@ case "$1" in
   get)
     case "$2" in
       namespace)
-        if [ -f "$STATE_DIR/ns-deleted" ] || [ "${NS_PRESENT:-1}" != "1" ]; then exit 1; fi
-        printf '%s Active 1d\\n' "$3"; exit 0 ;;
+        printf '%s\\n' "$*" >> "$STATE_DIR/kubectl.calls"
+        case "${NS_LOOKUP:-present}" in
+          error)
+            echo "Unable to connect to the server: dial tcp 192.168.10.201:6443: connect: connection refused" >&2
+            exit 1 ;;
+          absent)
+            echo "Error from server (NotFound): namespaces \\"$3\\" not found" >&2
+            exit 1 ;;
+        esac
+        if [ -f "$STATE_DIR/ns-deleted" ]; then exit 1; fi
+        printf 'namespace/%s\\n' "$3"; exit 0 ;;
       constellationspec) exit 0 ;;
       pods)
         if printf '%s\\n' "$@" | grep -q "app=nodalarc-node-agent"; then
@@ -800,6 +809,7 @@ case "$1" in
         fi
         exit 0 ;;
       nodes)
+        printf '%s\\n' "$*" >> "$STATE_DIR/kubectl.calls"
         if [ "${INVENTORY_OK:-1}" != "1" ]; then echo "inventory unavailable" >&2; exit 1; fi
         printf '%s\\n' "$NODE_ROWS"; exit 0 ;;
       crd) exit 1 ;;
@@ -813,6 +823,7 @@ case "$1" in
     fi
     exit 0 ;;
   delete)
+    printf '%s\\n' "$*" >> "$STATE_DIR/kubectl.calls"
     if [ "$2" = "namespace" ]; then touch "$STATE_DIR/ns-deleted"; fi
     exit 0 ;;
 esac
@@ -843,7 +854,7 @@ def _teardown_run(
     agents: dict[str, str],
     reports: dict[str, tuple[str, int]],
     local: tuple[str, int] | None = None,
-    namespace_present: bool = True,
+    namespace: str = "present",
     inventory_ok: bool = True,
 ) -> tuple[subprocess.CompletedProcess[str], Path]:
     """Run scripts/na-teardown.sh with stubbed kubectl, helm, uv and ip.
@@ -868,7 +879,7 @@ def _teardown_run(
         ["bash", "scripts/na-teardown.sh"],
         env={
             "STATE_DIR": str(state),
-            "NS_PRESENT": "1" if namespace_present else "0",
+            "NS_LOOKUP": namespace,
             "INVENTORY_OK": "1" if inventory_ok else "0",
             "NODE_ROWS": "\n".join(nodes),
             "AGENT_ROWS": "\n".join(f"{host} {pod}" for host, pod in agents.items()),
@@ -1007,7 +1018,7 @@ def test_teardown_without_a_namespace_claims_no_remote_verification(tmp_path: Pa
         nodes=_THREE_HOSTS,
         agents={},
         reports={},
-        namespace_present=False,
+        namespace="absent",
     )
 
     assert result.returncode == 0, result.stderr
@@ -1016,3 +1027,26 @@ def test_teardown_without_a_namespace_claims_no_remote_verification(tmp_path: Pa
     assert "Teardown complete (namespace absent; remote host state not verified)." in result.stdout
     assert "Cluster is clean" not in result.stdout
     assert not helm_calls.exists()
+
+
+def test_teardown_stops_before_any_mutation_when_the_namespace_lookup_fails(
+    tmp_path: Path,
+) -> None:
+    """A failed lookup is not absence: the API answer is kept, nothing is
+    deleted anywhere, no host is queried, and the local cleaner does not run."""
+    result, helm_calls = _teardown_run(
+        tmp_path,
+        nodes=_THREE_HOSTS,
+        agents=_THREE_AGENTS,
+        reports=_THREE_CLEAN,
+        namespace="error",
+    )
+
+    assert result.returncode == 1
+    assert "could not determine whether namespace nodalarc exists" in result.stderr
+    assert "connection refused" in result.stderr
+    assert not helm_calls.exists()
+    calls = (tmp_path / "state" / "kubectl.calls").read_text().splitlines()
+    assert calls == ["get namespace nodalarc -o name"]
+    assert "verified clean" not in result.stdout
+    assert "Teardown complete" not in result.stdout

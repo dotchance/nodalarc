@@ -18,7 +18,7 @@ from nodalarc.substrate.wiring_status import (
     wiring_row,
 )
 from node_agent.pid_discovery import NamespaceHandle
-from node_agent.reconcile import wiring_status_is_current
+from node_agent.reconcile import HostCleanupReport, wiring_status_is_current
 from node_agent.wiring import (
     discover_expected_handles,
     execute_wiring,
@@ -60,6 +60,12 @@ def _manifest(hosts: dict[str, str]) -> WiringManifest:
     )
 
 
+def _clean_report(*, removed: tuple[str, ...] = ()) -> HostCleanupReport:
+    return HostCleanupReport(
+        host="node02", removed=removed, failed=(), remaining=(), verification_completed=True
+    )
+
+
 def _handle(node_id: str, netns_id: str = "4026532100") -> NamespaceHandle:
     return NamespaceHandle(
         node_id=node_id,
@@ -84,7 +90,7 @@ def test_incomplete_discovery_returns_none_and_touches_nothing(
             "node_agent.wiring.discover_local_pod_handles",
             return_value={"sat-a": _handle("sat-a")},
         ),
-        patch("node_agent.reconcile.clean_nodalarc_kernel_state") as clean,
+        patch("node_agent.reconcile.clean_and_verify_host_state") as clean,
         patch("node_agent.namespace_ops._in_namespace") as in_ns,
     ):
         result = discover_expected_handles(manifest, "testns", {"sat-a", "sat-b"})
@@ -248,7 +254,9 @@ def test_rewire_transition_order_is_drain_invalidate_withdraw_rebuild_install_pu
         na_main, "get_actual_nodalarc_interfaces", lambda: order.append("inspect") or {"isl0"}
     )
     monkeypatch.setattr(
-        na_main, "clean_nodalarc_kernel_state", lambda: order.append("cleanup") or 1
+        na_main,
+        "clean_and_verify_host_state",
+        lambda: order.append("cleanup") or _clean_report(removed=("isl0",)),
     )
     monkeypatch.setattr(
         na_main,
@@ -340,6 +348,74 @@ def test_dispatch_gate_drain_waits_for_inflight() -> None:
     assert result["idle"] is True
 
 
+@pytest.mark.parametrize(
+    ("report", "reason"),
+    [
+        (
+            HostCleanupReport(
+                host="node02",
+                removed=("isl0",),
+                failed=(("vx00abcd", "NetlinkError 16: (16, 'Device or resource busy')"),),
+                remaining=("vx00abcd",),
+                verification_completed=True,
+            ),
+            "a failed delete",
+        ),
+        (
+            HostCleanupReport(
+                host="node02",
+                removed=("isl0",),
+                failed=(),
+                remaining=("vh00abcd",),
+                verification_completed=True,
+            ),
+            "residue after the deletes",
+        ),
+        (
+            HostCleanupReport(
+                host="node02",
+                removed=("isl0",),
+                failed=(),
+                remaining=(),
+                verification_completed=False,
+                verification_error="OSError: [Errno 24] Too many open files",
+            ),
+            "a verification that could not complete",
+        ),
+    ],
+)
+def test_unclean_cleanup_report_refuses_to_wire_and_keeps_handles_withdrawn(
+    monkeypatch: pytest.MonkeyPatch, report: HostCleanupReport, reason: str
+) -> None:
+    """Wiring from scratch over a failed, incomplete or unverified cleanup is
+    refused through the rewire failure path: nothing is wired, handles stay
+    withdrawn and dispatch stays closed."""
+    from unittest.mock import MagicMock
+
+    from node_agent import __main__ as na_main
+
+    manifest = _manifest({"sat-a": LOCAL_NODE})
+    handle = _handle("sat-a")
+    shared: dict = {"sat-a": handle}
+    gate = MagicMock()
+    gate.drain.return_value = True
+    execute = MagicMock()
+    monkeypatch.setattr(na_main, "write_wiring_status", lambda *a, **k: None)
+    monkeypatch.setattr(na_main, "get_actual_nodalarc_interfaces", lambda: {"isl0"})
+    monkeypatch.setattr(na_main, "clean_and_verify_host_state", lambda: report)
+    monkeypatch.setattr(na_main, "execute_wiring", execute)
+
+    with pytest.raises(RuntimeError, match="not wiring over residue") as raised:
+        na_main.perform_rewire(manifest, "testns", {"sat-a": handle}, {"sat-a"}, shared, gate)
+
+    assert reason
+    assert f"remaining={list(report.remaining)}" in str(raised.value)
+    assert f"verification_completed={report.verification_completed}" in str(raised.value)
+    execute.assert_not_called()
+    assert shared == {}
+    gate.resume.assert_not_called()
+
+
 def test_drain_timeout_mutates_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
     """An in-flight mutation must never overlap a rebuild: on drain timeout
     the transition performs zero mutations and restores dispatch."""
@@ -357,7 +433,7 @@ def test_drain_timeout_mutates_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
     clean = MagicMock()
     execute = MagicMock()
     monkeypatch.setattr(na_main, "write_wiring_status", write)
-    monkeypatch.setattr(na_main, "clean_nodalarc_kernel_state", clean)
+    monkeypatch.setattr(na_main, "clean_and_verify_host_state", clean)
     monkeypatch.setattr(na_main, "get_actual_nodalarc_interfaces", MagicMock())
     monkeypatch.setattr(na_main, "execute_wiring", execute)
 

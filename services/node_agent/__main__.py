@@ -42,7 +42,7 @@ from nodalarc.substrate.wiring_status import wiring_row
 from node_agent import ops_events
 from node_agent.command_contract import RuntimeFence
 from node_agent.reconcile import (
-    clean_nodalarc_kernel_state,
+    clean_and_verify_host_state,
     get_actual_nodalarc_interfaces,
     wiring_status_is_current,
 )
@@ -437,10 +437,18 @@ async def main() -> None:
                 if hasattr(exc, "status") and exc.status == 404:
                     if last_resource_version:
                         log.info("Wiring manifest removed — cleaning kernel state")
-                        actual = get_actual_nodalarc_interfaces()
-                        if actual:
-                            clean_nodalarc_kernel_state()
-                        last_resource_version = ""
+                        report = clean_and_verify_host_state()
+                        if report.clean:
+                            log.info(
+                                "Host cleanup verified clean: removed=%s", list(report.removed)
+                            )
+                            last_resource_version = ""
+                        else:
+                            # Not handled: the next pass of this path tries again.
+                            log.error(
+                                "Host cleanup did not verify clean; retrying on the next pass: %s",
+                                report.model_dump_json(),
+                            )
                 else:
                     log.warning("Wiring watcher error: %s", exc)
             time.sleep(5)
@@ -573,8 +581,23 @@ def perform_rewire(
                 "Kernel state diverged (%d interfaces) — cleaning and re-wiring",
                 len(actual),
             )
-            cleaned = clean_nodalarc_kernel_state()
-            log.info("Cleaned %d stale kernel interfaces", cleaned)
+            report = clean_and_verify_host_state()
+            if not report.clean:
+                # Wiring from scratch over residue, a failed delete or an
+                # unverified host is refused; the failure path below keeps
+                # dispatch closed and the watcher retries the manifest.
+                log.error(
+                    "Host cleanup did not verify clean; not wiring over residue: %s",
+                    report.model_dump_json(),
+                )
+                raise RuntimeError(
+                    "host cleanup did not verify clean; not wiring over residue: "
+                    f"failed={list(report.failed)} remaining={list(report.remaining)} "
+                    f"verification_completed={report.verification_completed} "
+                    f"enumeration_error={report.enumeration_error!r} "
+                    f"verification_error={report.verification_error!r}"
+                )
+            log.info("Cleaned %d stale kernel interfaces", len(report.removed))
 
         statuses = execute_wiring(
             manifest_model, namespace=namespace, handles=handles, progress_fn=progress_fn

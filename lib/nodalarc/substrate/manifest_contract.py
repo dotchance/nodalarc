@@ -11,6 +11,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from nodalarc.substrate.measurement_contract import RequiredSubstratePair
+from nodalarc.vxlan import VNI_MAX, VNI_MIN
 
 REQUIRED_WIRING_PHASES: tuple[str, ...] = (
     "managed_interface_cleanup",
@@ -106,7 +107,7 @@ class SiteLanSpec(_StrictModel):
     """One physical site's LAN segment: per-host bridge, members as bridge
     ports, VXLAN head-end replication between hosts that carry members."""
 
-    vni: int = Field(ge=1, le=16777214)
+    vni: int = Field(ge=VNI_MIN, le=VNI_MAX)
     members: list[SiteLanMember] = Field(min_length=1)
     uplink: SiteLanUplink | None = None
 

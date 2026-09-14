@@ -424,14 +424,29 @@ class KernelStateConflict(RuntimeError):
     rather than to the link being requested.
     """
 
-    def __init__(self, subject: str, present: tuple[str, ...], failures: tuple[str, ...]) -> None:
+    def __init__(
+        self,
+        subject: str,
+        present: tuple[str, ...],
+        failures: tuple[str, ...],
+        failure_evidence: tuple[tuple[str, ...], ...] = (),
+    ) -> None:
+        """``failures`` are the failed proofs' summaries; ``failure_evidence`` holds
+        each one's evidence in the same order, so the values a proof compared
+        (device, expected, observed) reach the caller and the outward reply."""
+        padded = failure_evidence + ((),) * (len(failures) - len(failure_evidence))
+        rendered = [
+            f"{summary} [{', '.join(evidence)}]" if evidence else summary
+            for summary, evidence in zip(failures, padded, strict=True)
+        ]
         super().__init__(
             f"{subject}: existing kernel state is not the requested link "
-            f"(present: {', '.join(present)}; failed: {', '.join(failures)})"
+            f"(present: {', '.join(present)}; failed: {'; '.join(rendered)})"
         )
         self.subject = subject
         self.present = present
         self.failures = failures
+        self.failure_evidence = padded
 
 
 def reuse_or_refuse(
@@ -450,11 +465,15 @@ def reuse_or_refuse(
     """
     if absent:
         return False
-    failures = tuple(proof.summary for proof in proofs if not proof.verified)
+    failed = tuple(proof for proof in proofs if not proof.verified)
+    failures = tuple(proof.summary for proof in failed)
+    failure_evidence = tuple(proof.evidence for proof in failed)
     if not complete:
-        raise KernelStateConflict(subject, evidence, ("incomplete link",) + failures)
+        raise KernelStateConflict(
+            subject, evidence, ("incomplete link",) + failures, ((),) + failure_evidence
+        )
     if failures:
-        raise KernelStateConflict(subject, evidence, failures)
+        raise KernelStateConflict(subject, evidence, failures, failure_evidence)
     return True
 
 

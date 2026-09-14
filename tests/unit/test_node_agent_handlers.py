@@ -361,6 +361,58 @@ class TestBatchLinkUp:
         assert "Substrate measurement unavailable" in resp.interface_results[0].error_message
 
 
+class TestKernelStateRefusalReply:
+    def test_cross_node_isl_refusal_reply_carries_the_proof_values(self, monkeypatch):
+        from node_agent import handlers, substrate_monitor, vxlan
+        from node_agent.kernel_verifier import KernelStateConflict
+
+        monkeypatch.setenv("HOST_IP", "10.0.0.1")
+        monkeypatch.setattr(handlers, "_local_ip", None)
+        monkeypatch.setattr(
+            substrate_monitor, "require_fresh_measurement_for_remote_ip", lambda remote_ip: None
+        )
+
+        def _refuse(*args, **kwargs):
+            raise KernelStateConflict(
+                "VNI 1001",
+                ("vx0003e9", "vh0003e9", "isl0@pod"),
+                ("pod isl0 MTU mismatch",),
+                (("device=isl0", "expected=1500", "observed=1200"),),
+            )
+
+        monkeypatch.setattr(vxlan, "create_vxlan_link", _refuse)
+
+        req = node_agent_pb2.BatchLinkUpRequest(
+            envelope=_env("BatchLinkUp", "test-cross-isl-refusal-values"),
+            interfaces=[
+                node_agent_pb2.InterfaceUp(
+                    node_id="sat-P00S00",
+                    interface_name="isl0",
+                    link_type=node_agent_pb2.LINK_TYPE_ISL,
+                    locality=node_agent_pb2.LOCALITY_CROSS_NODE,
+                    latency_ms=4.5,
+                    bandwidth_mbps=100.0,
+                    peer_node_id="sat-P00S01",
+                    peer_interface_name="isl1",
+                    remote_node_ip="10.0.0.2",
+                    vni=1001,
+                )
+            ],
+        )
+
+        resp = handle_batch_link_up(req, handles=_handles({"sat-P00S00": 1234}), fence=FENCE)
+
+        assert resp.success is False
+        result = resp.interface_results[0]
+        assert result.success is False
+        assert result.verified is False
+        assert "not the requested link" in result.error_message
+        assert "pod isl0 MTU mismatch [device=isl0, expected=1500, observed=1200]" in (
+            result.error_message
+        )
+        assert "present: vx0003e9, vh0003e9, isl0@pod" in result.error_message
+
+
 class TestKernelInventory:
     def _request(
         self, entry: node_agent_pb2.KernelInventoryEntry

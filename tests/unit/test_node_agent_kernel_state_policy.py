@@ -44,7 +44,9 @@ def test_complete_but_unproven_refuses() -> None:
 
     assert raised.value.subject == "VNI 7"
     assert raised.value.failures == ("tunnel endpoint mismatch",)
+    assert raised.value.failure_evidence == (("expected=x", "actual=y"),)
     assert "not the requested link" in str(raised.value)
+    assert "tunnel endpoint mismatch [expected=x, actual=y]" in str(raised.value)
 
 
 def test_partial_refuses_and_names_what_exists() -> None:
@@ -55,6 +57,8 @@ def test_partial_refuses_and_names_what_exists() -> None:
 
     assert raised.value.present == ("vx000007",)
     assert raised.value.failures == ("incomplete link",)
+    assert raised.value.failure_evidence == ((),)
+    assert str(raised.value).endswith("failed: incomplete link)")
 
 
 def test_evidence_wording_decides_nothing() -> None:
@@ -186,7 +190,9 @@ def _mediated(
     pod_setups: list[int] = []
     redirects: list[tuple[str, str]] = []
     monkeypatch.setattr(ground_bridge, "IPRoute", lambda: ipr)
-    monkeypatch.setattr(kernel_verifier, "pod_veth_end", lambda pid, ifname: pod_ends.get(ifname))
+    monkeypatch.setattr(
+        kernel_verifier, "pod_veth_end", lambda pid, ifname: pod_ends.get(ifname), raising=False
+    )
     monkeypatch.setattr(
         kernel_verifier,
         "prove_veth_peer",
@@ -207,9 +213,14 @@ def _mediated(
             )
         ),
     )
-    monkeypatch.setattr(ground_bridge, "_pod_netns_fd", lambda pid: contextlib.nullcontext(99))
     monkeypatch.setattr(
-        ground_bridge, "_temporary_veth_names", lambda: ("_na_hfixed", "_na_nfixed")
+        ground_bridge, "_pod_netns_fd", lambda pid: contextlib.nullcontext(99), raising=False
+    )
+    monkeypatch.setattr(
+        ground_bridge,
+        "_temporary_veth_names",
+        lambda: ("_na_hfixed", "_na_nfixed"),
+        raising=False,
     )
     monkeypatch.setattr(ground_bridge, "_in_namespace", lambda pid, fn: pod_setups.append(pid))
     monkeypatch.setattr(
@@ -278,6 +289,10 @@ def test_create_mediated_isl_refuses_an_unproven_endpoint_without_creating(
 
     assert failure in raised.value.failures
     assert raised.value.subject == "ISL sat-a/isl0"
+    if failure == "pod isl0 MTU mismatch":
+        assert "pod isl0 MTU mismatch [device=isl0, expected=1500, observed=1200]" in str(
+            raised.value
+        )
     assert ipr.calls == []
     assert pod_setups == [] and redirects == []
 

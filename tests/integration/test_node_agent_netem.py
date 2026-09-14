@@ -903,7 +903,8 @@ def test_cross_node_isl_refuses_a_complete_link_whose_pod_mtu_differs(monkeypatc
             assert second.interface_results[0].verified is False
             message = second.interface_results[0].error_message
             assert "not the requested link" in message
-            assert "pod isl0 MTU mismatch" in message
+            assert "pod isl0 MTU mismatch [device=isl0, expected=" in message
+            assert "observed=1200]" in message
             assert (_host_ifindex(names.tunnel), _host_ifindex(names.host_veth)) == before
             pod_link = _run("ip", "netns", "exec", _namespace, "ip", "-o", "link", "show", "isl0")
             assert "mtu 1200" in pod_link.stdout

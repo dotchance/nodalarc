@@ -370,7 +370,9 @@ def attach_cross_node_ground(
                     kernel_verifier.prove_mirred_redirect(ipr, names.tunnel, local_host_ifname),
                     kernel_verifier.prove_mirred_redirect(ipr, local_host_ifname, names.tunnel),
                     # Host-side admin UP on the tunnel and the local host interface,
-                    # the state creation sets below; nothing is configured on reuse.
+                    # the state creation sets below. Nothing host-side is configured
+                    # on reuse; the satellite-side bring-UP further down is the
+                    # existing ground-LinkUp step and runs on both paths.
                     kernel_verifier.prove_link_admin_up(ipr, names.tunnel),
                     kernel_verifier.prove_link_admin_up(ipr, local_host_ifname),
                 )

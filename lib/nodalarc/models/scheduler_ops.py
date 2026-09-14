@@ -2,10 +2,11 @@
 # Licensed under the Apache License, Version 2.0. See LICENSE file.
 """Scheduler operational contracts for actuation trust.
 
-These models are the typed producer-side shape for Scheduler OpsEvent details,
-VS-API actuation health, and explicit operator repair commands. OpsEvent keeps a
-free-form ``details`` dict for wire compatibility; Scheduler code constructs
-that dict from these models so actuation-failure states are not ad hoc strings.
+These models are the typed producer-side shape for Scheduler OpsEvent details
+and explicit operator repair commands. OpsEvent keeps a free-form ``details``
+dict for wire compatibility; Scheduler code constructs that dict from these
+models so actuation-failure states are not ad hoc strings. VS-API's actuation
+health payload has its own contract in ``nodalarc.models.vs_api``.
 """
 
 from __future__ import annotations
@@ -15,8 +16,6 @@ from enum import StrEnum
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
-
-InstanceHealthStatus = Literal["clean", "degraded", "dirty", "unknown"]
 
 
 class ActuationState(StrEnum):
@@ -180,52 +179,6 @@ class ActualLinkSnapshot(BaseModel):
     emitted_at: datetime
 
 
-class ActuationNotice(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    gs_id: str
-    actuation_state: ActuationState
-    reason_code: SchedulerOpsCode
-    message: str
-    since: datetime
-    blocking_new_ground_link_up: bool
-    affected_pairs: list[list[str]] = Field(default_factory=list)
-    desired_pairs_for_gs: list[list[str]] = Field(default_factory=list)
-    actual_pairs_for_gs: list[list[str]] = Field(default_factory=list)
-    ome_visible_scheduled_pairs_for_gs: list[list[str]] = Field(default_factory=list)
-    recovery_status: RecoveryStatus = Field(default_factory=RecoveryStatus)
-    last_event: dict[str, Any] = Field(default_factory=dict)
-
-
-class ActuationHealthGroundStation(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    gs_id: str
-    actuation_state: ActuationState
-    since: datetime | None = None
-    reason_code: SchedulerOpsCode | None = None
-    blocking_new_ground_link_up: bool
-    recovery_status: RecoveryStatus = Field(default_factory=RecoveryStatus)
-    last_event: dict[str, Any] = Field(default_factory=dict)
-
-
-class ActuationHealthInstance(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    scheduler_instance_id: str
-    hostname: str
-    status: InstanceHealthStatus
-    ground_stations: list[ActuationHealthGroundStation]
-
-
-class ActuationHealthResponse(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    session_id: str
-    wiring_generation: str
-    scheduler_instances: list[ActuationHealthInstance]
-
-
 class OperatorRepairCommand(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -243,20 +196,3 @@ class OperatorRepairResponse(BaseModel):
     status: Literal["accepted", "rejected", "error"]
     intervention_id: str
     message: str
-
-
-class OperatorInterventionRecord(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    intervention_id: str
-    session_id: str
-    wiring_generation: str
-    scheduler_instance_id: str
-    hostname: str
-    gs_id: str
-    reason: str
-    status: str
-    requested_at: datetime
-    updated_at: datetime
-    repair_authority_pairs: list[list[str]] = Field(default_factory=list)
-    details: dict[str, Any] = Field(default_factory=dict)

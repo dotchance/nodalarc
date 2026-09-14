@@ -19,6 +19,7 @@ from nodalarc.models.scheduler_ops import (
     RecoveryStatus,
     SchedulerOpsCode,
 )
+from nodalarc.models.vs_api import ActuationHealth
 from nodalarc.nats_channels import actual_links_subject, actuation_state_subject
 from nodalarc.proto import node_agent_pb2
 from scheduler.actuation import (
@@ -1613,3 +1614,62 @@ def test_actuation_vocabulary_has_one_owner() -> None:
     for source in consumers:
         imported = _names_imported_from_scheduler_actuation(source.read_text())
         assert not (imported & vocabulary), (source, imported & vocabulary)
+
+
+def _actuation_state_event(*, instance: str, gs_id: str, code: str, after: str) -> dict:
+    return {
+        "timestamp": "2026-05-27T12:00:00+00:00",
+        "session_id": "test",
+        "source": "scheduler",
+        "hostname": f"{instance}-host",
+        "level": "info",
+        "code": code,
+        "message": f"{gs_id} {after}",
+        "details": {
+            "session_id": "test",
+            "wiring_generation": "sha256:" + "a" * 64,
+            "scheduler_instance_id": instance,
+            "hostname": f"{instance}-host",
+            "gs_id": gs_id,
+            "operation": "KernelInventory",
+            "failure_class": "none",
+            "actuation_state_after": after,
+            "recovery_status": RecoveryStatus().model_dump(mode="json"),
+        },
+    }
+
+
+def test_ops_health_payloads_validate_against_the_vs_api_contract(monkeypatch) -> None:
+    """Both payloads the health route returns are instances of the one published
+    contract, ``nodalarc.models.vs_api.ActuationHealth``; the Scheduler side
+    defines no health shape of its own."""
+    from vs_api import main as vs_api_main
+    from vs_api.session_context import SessionContext
+
+    monkeypatch.setattr(vs_api_main, "_active_context", None)
+    without_session = ActuationHealth.model_validate(vs_api_main.get_ops_health())
+    assert without_session == ActuationHealth(session_id="", wiring_generation="")
+
+    ctx = SessionContext.__new__(SessionContext)
+    ctx._init_state_only()
+    ctx._update_actuation_notice(
+        _actuation_state_event(
+            instance="sched-1", gs_id="gs-den", code="ACTUATION_CLEAN", after="clean"
+        )
+    )
+    ctx._update_actuation_notice(
+        _actuation_state_event(
+            instance="sched-1", gs_id="gs-svl", code="KERNEL_DIRTY", after="kernel_dirty"
+        )
+    )
+    with_session = ActuationHealth.model_validate(ctx.build_actuation_health())
+    (instance,) = with_session.scheduler_instances
+    assert (instance.scheduler_instance_id, instance.status) == ("sched-1", "dirty")
+    assert [
+        (gs.gs_id, gs.actuation_state, gs.blocking_new_ground_link_up)
+        for gs in instance.ground_stations
+    ] == [
+        ("gs-den", ActuationState.CLEAN, False),
+        ("gs-svl", ActuationState.KERNEL_DIRTY, True),
+    ]
+    assert with_session.wiring_generation == "sha256:" + "a" * 64

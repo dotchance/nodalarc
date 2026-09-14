@@ -1231,11 +1231,9 @@ class Dispatcher:
         code: SchedulerOpsCode,
         message: str,
         level: str = "error",
-        details: ActuationOpsDetails | dict | None = None,
+        details: ActuationOpsDetails | None = None,
     ) -> None:
-        details_dict = (
-            details.model_dump(mode="json") if hasattr(details, "model_dump") else details
-        )
+        details_dict = None if details is None else details.model_dump(mode="json")
         event = OpsEvent(
             timestamp=self._now(),
             session_id=self._session_id,
@@ -1438,7 +1436,7 @@ class Dispatcher:
         *,
         reason: str,
         code: SchedulerOpsCode,
-        details: ActuationOpsDetails | dict | None = None,
+        details: ActuationOpsDetails | None = None,
     ) -> None:
         self._dispatch_blocked_reason = reason
         self._running = False

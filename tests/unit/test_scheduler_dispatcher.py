@@ -21,6 +21,7 @@ from nodalarc.models.link_state import (
     LinkStateSnapshot,
     RoutingState,
 )
+from nodalarc.models.scheduler_ops import ActuationFailureClass, SchedulerOpsCode
 from nodalarc.proto import node_agent_pb2
 from nodalarc.substrate.measurement_contract import SubstrateMeasurement
 from scheduler.dispatcher import ActiveLinkInfo, Dispatcher
@@ -719,3 +720,50 @@ class TestDispatcherLiveDispatch:
             asyncio.run(d._send_authoritative_latency_updates({pair}, desired, sim_time))
 
         assert not pool.get_stub.return_value.async_set_latency.called
+
+
+def _published_ops_events(publish: AsyncMock) -> list[dict]:
+    events = []
+    for call in publish.await_args_list:
+        subject, payload = call.args[0], call.args[1]
+        if ".ops." in subject:
+            events.append(json.loads(payload.decode()))
+    return events
+
+
+def test_scheduler_ops_details_are_the_typed_model_or_absent():
+    """An OpsEvent's details are the JSON dump of the ActuationOpsDetails the
+    producer built, or null when the producer passed none; there is no
+    third shape."""
+    d, _pool = _make_dispatcher()
+
+    asyncio.run(d._publish_scheduler_ops(code=SchedulerOpsCode.ACTUATION_HALTED, message="none"))
+    details = d._actuation_details(
+        gs_id="gs-ashburn",
+        operation="unit",
+        failure_class=ActuationFailureClass.GROUND_KERNEL_DIRTY,
+        affected_pairs={("gs-ashburn", "sat-P00S00")},
+        reason="unit reason",
+    )
+    asyncio.run(
+        d._publish_scheduler_ops(
+            code=SchedulerOpsCode.KERNEL_DIRTY, message="typed", details=details
+        )
+    )
+    with pytest.raises(RuntimeError, match="halted for the test"):
+        asyncio.run(
+            d._halt_dispatcher(
+                reason="halted for the test",
+                code=SchedulerOpsCode.ACTUATION_HALTED,
+                details=details,
+            )
+        )
+
+    events = _published_ops_events(d._js.publish)
+    assert [(e["code"], e["details"]) for e in events] == [
+        ("ACTUATION_HALTED", None),
+        ("KERNEL_DIRTY", details.model_dump(mode="json")),
+        ("ACTUATION_HALTED", details.model_dump(mode="json")),
+    ]
+    assert events[1]["details"]["affected_pairs"] == [["gs-ashburn", "sat-P00S00"]]
+    assert events[1]["details"]["reason"] == "unit reason"

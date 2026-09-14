@@ -27,6 +27,98 @@ cleanup_local_kernel_state() {
         xargs -r -I{} ip link del {} 2>/dev/null || true
 }
 
+# The Node Agent's cleaner (python -m node_agent.reconcile --clean) prints one
+# JSON report and exits 0 only when it verified the host clean. One parser
+# judges every report, remote and local: the required fields and their types
+# are checked explicitly, and a host counts as verified only when the cleaner
+# exited 0 AND its report is valid and clean. Exit zero alone proves nothing.
+read -r -d '' CLEANUP_REPORT_PARSER <<'PY' || true
+import json
+import sys
+
+label, rc = sys.argv[1], sys.argv[2]
+lines = [line for line in sys.stdin.read().splitlines() if line.strip()]
+if not lines:
+    print(f"{label}: no report")
+    sys.exit(1)
+try:
+    report = json.loads(lines[-1])
+except ValueError as exc:
+    print(f"{label}: unparseable report: {exc}")
+    sys.exit(1)
+if not isinstance(report, dict):
+    print(f"{label}: invalid report: not an object")
+    sys.exit(1)
+
+
+def field(name, kinds):
+    if name not in report or not isinstance(report[name], kinds):
+        print(f"{label}: invalid report: field {name!r} missing or of the wrong type")
+        sys.exit(1)
+    return report[name]
+
+
+host = field("host", str)
+removed = field("removed", list)
+failed = field("failed", list)
+remaining = field("remaining", list)
+verification_completed = field("verification_completed", bool)
+for name in ("enumeration_error", "verification_error"):
+    if name not in report or not (report[name] is None or isinstance(report[name], str)):
+        print(f"{label}: invalid report: field {name!r} missing or of the wrong type")
+        sys.exit(1)
+if not all(isinstance(item, str) for item in removed + remaining) or not all(
+    isinstance(item, list) and len(item) == 2 and all(isinstance(part, str) for part in item)
+    for item in failed
+):
+    print(f"{label}: invalid report: list fields carry the wrong element types")
+    sys.exit(1)
+detail = (
+    f"failed={failed} remaining={remaining} verification_completed={verification_completed} "
+    f"enumeration_error={report['enumeration_error']!r} "
+    f"verification_error={report['verification_error']!r}"
+)
+if rc != "0":
+    print(f"{label}: cleaner exited {rc} on host={host}: {detail}")
+    sys.exit(1)
+clean = (
+    not failed
+    and not remaining
+    and verification_completed
+    and report["enumeration_error"] is None
+)
+if clean:
+    print(f"{label}: verified clean host={host} removed={len(removed)}")
+    sys.exit(0)
+print(f"{label}: UNCLEAN host={host}: {detail}")
+sys.exit(1)
+PY
+
+# judge_cleanup_report LABEL RC < raw-cleaner-stdout ; prints the verdict, returns 0 only when verified clean
+judge_cleanup_report() {
+    local label="$1" rc="$2" verdict
+    if verdict="$(python3 -c "$CLEANUP_REPORT_PARSER" "$label" "$rc")"; then
+        echo "  $verdict"
+        return 0
+    fi
+    echo "  ERROR: $verdict" >&2
+    return 1
+}
+
+# The workstation's own host state, through the same cleaner with the
+# repository's paths set explicitly (uv run does not inherit them).
+local_host_cleanup() {
+    local out rc=0 err
+    err="$(mktemp)"
+    out="$(PYTHONPATH=lib:services uv run python -m node_agent.reconcile --clean 2>"$err")" || rc=$?
+    if ! judge_cleanup_report "local:$(hostname)" "$rc" <<< "$out"; then
+        sed 's/^/    /' "$err" >&2
+        rm -f "$err"
+        return 1
+    fi
+    rm -f "$err"
+}
+
 # Bail early if namespace doesn't exist
 if ! kubectl get namespace "$NAMESPACE" &>/dev/null; then
     echo "Namespace $NAMESPACE does not exist — nothing to tear down."
@@ -39,7 +131,15 @@ if ! kubectl get namespace "$NAMESPACE" &>/dev/null; then
     kubectl delete clusterrole,clusterrolebinding \
         -l nodalarc.io/managed-by=helm 2>/dev/null || true
     cleanup_local_kernel_state
-    echo "=== Teardown complete. Cluster is clean. ==="
+    LOCAL_UNVERIFIED=0
+    local_host_cleanup || LOCAL_UNVERIFIED=1
+    echo "  Namespace absent: no Node Agent can run the host cleaner, so remote host state is NOT verified here."
+    echo "  Check the hosts independently (read-only ip link show on every labelled host) before relying on them."
+    if [ "$LOCAL_UNVERIFIED" -ne 0 ]; then
+        echo "Teardown incomplete: the local host cleanup did not verify clean." >&2
+        exit 1
+    fi
+    echo "=== Teardown complete (namespace absent; remote host state not verified). ==="
     echo "[teardown] Next: make install && make session, or make nuke for square-one reset."
     exit 0
 fi
@@ -80,11 +180,53 @@ while true; do
     fi
 done
 
-# Step 3: Clean host-side kernel state on ALL nodes via Node Agent DaemonSet
-# The Node Agent runs with hostNetwork on every node — kubectl exec operates
-# on the host's network namespace. Clean VXLAN, veth, and bridge interfaces
-# BEFORE Helm uninstall deletes the DaemonSet pods.
-echo "[3/9] Cleaning host-side kernel state via Node Agent pods..."
+# Step 3: Clean host-side kernel state on EVERY host that carries the Node
+# Agent placement label, through the Node Agent's own cleaner, and judge each
+# host by its report. The required host set comes from the label, never from
+# whichever agent pods happen to exist, and readiness is not a filter: a
+# NotReady node can still hold session devices. This runs BEFORE Helm
+# uninstall deletes the DaemonSet pods; if any host is unverified the
+# teardown refuses below, so the next run keeps its means of retrying.
+echo "[3/9] Cleaning host-side kernel state via the Node Agent cleaner on every labelled host..."
+UNVERIFIED_HOSTS=""
+if ! REQUIRED_HOSTS="$(kubectl get nodes -l nodalarc.io/node-agent=true \
+        -o custom-columns=NAME:.metadata.name --no-headers 2>/dev/null)"; then
+    echo "  ERROR: could not read the Node Agent host inventory (nodes labelled nodalarc.io/node-agent=true)" >&2
+    UNVERIFIED_HOSTS="<host inventory unreadable>"
+    REQUIRED_HOSTS=""
+elif [ -z "$REQUIRED_HOSTS" ]; then
+    echo "  ERROR: no node carries the nodalarc.io/node-agent=true label; remote host cleanup cannot be verified" >&2
+    UNVERIFIED_HOSTS="<no labelled host>"
+fi
+if ! AGENT_PODS="$(kubectl get pods -n "$NAMESPACE" -l app=nodalarc-node-agent \
+        -o custom-columns=NODE:.spec.nodeName,NAME:.metadata.name --no-headers 2>/dev/null)"; then
+    echo "  ERROR: could not list the Node Agent pods" >&2
+    AGENT_PODS=""
+fi
+for HOST in $REQUIRED_HOSTS; do
+    POD_NAME="$(printf '%s\n' "$AGENT_PODS" | awk -v h="$HOST" '$1 == h {print $2; exit}')"
+    if [ -z "$POD_NAME" ]; then
+        echo "  ERROR: $HOST: no Node Agent pod on this host; its kernel state is unverified" >&2
+        UNVERIFIED_HOSTS="$UNVERIFIED_HOSTS $HOST"
+        continue
+    fi
+    echo "  Cleaning $HOST via $POD_NAME..."
+    EXEC_ERR="$(mktemp)"
+    RC=0
+    OUT="$(kubectl exec "$POD_NAME" -n "$NAMESPACE" -c node-agent -- \
+        python -m node_agent.reconcile --clean 2>"$EXEC_ERR")" || RC=$?
+    if ! judge_cleanup_report "$HOST" "$RC" <<< "$OUT"; then
+        sed 's/^/    /' "$EXEC_ERR" >&2
+        UNVERIFIED_HOSTS="$UNVERIFIED_HOSTS $HOST"
+    fi
+    rm -f "$EXEC_ERR"
+done
+LOCAL_UNVERIFIED=0
+local_host_cleanup || LOCAL_UNVERIFIED=1
+
+# Legacy regex cleanup, remote and local, stays in place until the cleaner
+# above has been proven on every host through a full teardown; it never
+# decides the judgement made above.
 REMOTE_CLEANUP_ERRORS=0
 CLEANUP_SCRIPT='
 ip link show 2>/dev/null | grep -oE "v[xhp]([0-9a-f]{6}|[0-9]{5})" | xargs -r -I{} ip link del {} 2>/dev/null
@@ -94,27 +236,31 @@ ip link show 2>/dev/null | grep -oE "_gbr-[a-z0-9_]+" | xargs -r -I{} ip link de
 ip link show type bridge 2>/dev/null | grep -oE "br-gnd-[a-z0-9_]+" | xargs -r -I{} ip link del {} 2>/dev/null
 echo done
 '
-NA_PODS=$(kubectl get pods -n "$NAMESPACE" -l app=nodalarc-node-agent \
-    --no-headers -o custom-columns=NAME:.metadata.name,NODE:.spec.nodeName 2>/dev/null || true)
-if [ -n "$NA_PODS" ]; then
+if [ -n "$AGENT_PODS" ]; then
     while IFS= read -r line; do
-        POD_NAME=$(echo "$line" | awk '{print $1}')
-        NODE_NAME=$(echo "$line" | awk '{print $2}')
-        echo "  Cleaning $NODE_NAME via $POD_NAME..."
+        [ -z "$line" ] && continue
+        NODE_NAME=$(echo "$line" | awk '{print $1}')
+        POD_NAME=$(echo "$line" | awk '{print $2}')
         if ! kubectl exec "$POD_NAME" -n "$NAMESPACE" -c node-agent -- \
-            sh -c "$CLEANUP_SCRIPT" 2>/dev/null; then
-            echo "  ERROR: exec failed on $POD_NAME" >&2
-            REMOTE_CLEANUP_ERRORS=$((REMOTE_CLEANUP_ERRORS+1))
+            sh -c "$CLEANUP_SCRIPT" >/dev/null 2>&1; then
+            echo "  legacy regex cleanup exec failed on $NODE_NAME via $POD_NAME" >&2
         fi
-    done <<< "$NA_PODS"
-else
-    echo "  ERROR: no Node Agent pods found; remote host cleanup was not performed" >&2
-    REMOTE_CLEANUP_ERRORS=$((REMOTE_CLEANUP_ERRORS+1))
+    done <<< "$AGENT_PODS"
 fi
-
-# Local cleanup (belt and suspenders — also covers the control plane node
-# in case no Node Agent pod was scheduled here)
 cleanup_local_kernel_state
+
+# Refuse before uninstalling the Node Agents when any host is unverified:
+# uninstalling them would take away the next teardown's means of retrying.
+if [ "$LOCAL_UNVERIFIED" -ne 0 ]; then
+    UNVERIFIED_HOSTS="$UNVERIFIED_HOSTS local:$(hostname)"
+fi
+if [ -n "$UNVERIFIED_HOSTS" ]; then
+    echo "" >&2
+    echo "ERROR: host cleanup unverified on:${UNVERIFIED_HOSTS}" >&2
+    echo "Refusing to uninstall the Node Agents; the next teardown needs them to retry remote cleanup." >&2
+    echo "Teardown incomplete. Fix the above before deploying." >&2
+    exit 1
+fi
 
 # Step 4: Helm uninstall — removes all Helm-managed resources including DaemonSet
 echo "[4/9] Helm uninstall..."

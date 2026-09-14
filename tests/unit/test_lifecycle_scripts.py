@@ -6,6 +6,8 @@ import os
 import subprocess
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -780,3 +782,237 @@ def test_vs_api_discovery_counts_request_time_toward_its_deadline(tmp_path: Path
     assert result.stdout.rstrip().endswith("rc=1"), result.stdout + result.stderr
     assert "not reachable after" in result.stderr
     assert wall < 8, f"discovery ran {wall:.1f}s against a 4s deadline"
+
+
+# --- teardown: the Node Agent cleaner on every labelled host, judged per host ---
+
+_KUBECTL_TEARDOWN = """
+case "$1" in
+  get)
+    case "$2" in
+      namespace)
+        if [ -f "$STATE_DIR/ns-deleted" ] || [ "${NS_PRESENT:-1}" != "1" ]; then exit 1; fi
+        printf '%s Active 1d\\n' "$3"; exit 0 ;;
+      constellationspec) exit 0 ;;
+      pods)
+        if printf '%s\\n' "$@" | grep -q "app=nodalarc-node-agent"; then
+          printf '%s\\n' "$AGENT_ROWS"; exit 0
+        fi
+        exit 0 ;;
+      nodes)
+        if [ "${INVENTORY_OK:-1}" != "1" ]; then echo "inventory unavailable" >&2; exit 1; fi
+        printf '%s\\n' "$NODE_ROWS"; exit 0 ;;
+      crd) exit 1 ;;
+    esac
+    exit 0 ;;
+  exec)
+    pod="$2"
+    if printf '%s\\n' "$@" | grep -q "node_agent.reconcile"; then
+      cat "$STATE_DIR/$pod.out" 2>/dev/null || true
+      exit "$(cat "$STATE_DIR/$pod.rc" 2>/dev/null || echo 0)"
+    fi
+    exit 0 ;;
+  delete)
+    if [ "$2" = "namespace" ]; then touch "$STATE_DIR/ns-deleted"; fi
+    exit 0 ;;
+esac
+exit 0
+"""
+
+
+def _report(host: str, **overrides) -> str:
+    import json
+
+    report = {
+        "host": host,
+        "removed": [],
+        "failed": [],
+        "remaining": [],
+        "verification_completed": True,
+        "enumeration_error": None,
+        "verification_error": None,
+    }
+    report.update(overrides)
+    return json.dumps(report) + "\n"
+
+
+def _teardown_run(
+    tmp_path: Path,
+    *,
+    nodes: list[str],
+    agents: dict[str, str],
+    reports: dict[str, tuple[str, int]],
+    local: tuple[str, int] | None = None,
+    namespace_present: bool = True,
+    inventory_ok: bool = True,
+) -> tuple[subprocess.CompletedProcess[str], Path]:
+    """Run scripts/na-teardown.sh with stubbed kubectl, helm, uv and ip.
+
+    ``nodes`` are the hosts carrying the placement label; ``agents`` maps a host
+    to its Node Agent pod; ``reports`` maps a pod to the cleaner's stdout and
+    exit code; ``local`` is the workstation cleaner's stdout and exit code.
+    """
+    state = tmp_path / "state"
+    state.mkdir()
+    for pod, (out, rc) in reports.items():
+        (state / f"{pod}.out").write_text(out)
+        (state / f"{pod}.rc").write_text(str(rc))
+    local_out, local_rc = local if local is not None else (_report("nodal-dev"), 0)
+    (state / "local.out").write_text(local_out)
+    (state / "local.rc").write_text(str(local_rc))
+    _stub(tmp_path, "kubectl", _KUBECTL_TEARDOWN)
+    _stub(tmp_path, "helm", 'printf "%s\\n" "$*" >> "$STATE_DIR/helm.calls"; exit 0')
+    _stub(tmp_path, "uv", 'cat "$STATE_DIR/local.out"; exit "$(cat "$STATE_DIR/local.rc")"')
+    _stub(tmp_path, "ip", "exit 0")
+    result = _run(
+        ["bash", "scripts/na-teardown.sh"],
+        env={
+            "STATE_DIR": str(state),
+            "NS_PRESENT": "1" if namespace_present else "0",
+            "INVENTORY_OK": "1" if inventory_ok else "0",
+            "NODE_ROWS": "\n".join(nodes),
+            "AGENT_ROWS": "\n".join(f"{host} {pod}" for host, pod in agents.items()),
+            "KUBECONFIG": str(tmp_path / "kubeconfig"),
+        },
+        path_dir=tmp_path,
+    )
+    return result, state / "helm.calls"
+
+
+_THREE_HOSTS = ["node01", "node02", "node03"]
+_THREE_AGENTS = {"node01": "na-1", "node02": "na-2", "node03": "na-3"}
+_THREE_CLEAN = {
+    "na-1": (_report("node01", removed=["vx00abcd"]), 0),
+    "na-2": (_report("node02"), 0),
+    "na-3": (_report("node03"), 0),
+}
+
+
+def test_teardown_verifies_every_labelled_host_then_uninstalls(tmp_path: Path) -> None:
+    result, helm_calls = _teardown_run(
+        tmp_path, nodes=_THREE_HOSTS, agents=_THREE_AGENTS, reports=_THREE_CLEAN
+    )
+
+    assert result.returncode == 0, result.stderr
+    for host in _THREE_HOSTS:
+        assert f"{host}: verified clean host={host}" in result.stdout
+    assert "node01: verified clean host=node01 removed=1" in result.stdout
+    assert "local:" in result.stdout and "verified clean host=nodal-dev" in result.stdout
+    assert helm_calls.exists() and "uninstall nodalarc" in helm_calls.read_text()
+    assert "Teardown complete. Cluster is clean." in result.stdout
+
+
+def test_teardown_refuses_before_uninstall_when_a_labelled_host_has_no_agent(
+    tmp_path: Path,
+) -> None:
+    """Two Ready hosts report clean; the third host carries the label but is
+    NotReady and has no agent pod: its state is unverified, so the teardown
+    refuses before uninstalling the agents."""
+    result, helm_calls = _teardown_run(
+        tmp_path,
+        nodes=_THREE_HOSTS,
+        agents={"node01": "na-1", "node02": "na-2"},
+        reports={"na-1": _THREE_CLEAN["na-1"], "na-2": _THREE_CLEAN["na-2"]},
+    )
+
+    assert result.returncode == 1
+    assert "node01: verified clean" in result.stdout
+    assert "node02: verified clean" in result.stdout
+    assert "node03: no Node Agent pod on this host" in result.stderr
+    assert "host cleanup unverified on: node03" in result.stderr
+    assert "Refusing to uninstall the Node Agents" in result.stderr
+    assert not helm_calls.exists()
+
+
+@pytest.mark.parametrize(
+    ("report", "rc", "expected"),
+    [
+        ("not json at all\n", 0, "node02: unparseable report"),
+        ("", 0, "node02: no report"),
+        (
+            _report("node02", remaining=["vx00abcd"]),
+            1,
+            "node02: cleaner exited 1 on host=node02: failed=[] remaining=['vx00abcd']",
+        ),
+        (
+            _report("node02", failed=[["vh00abcd", "NetlinkError: (16, 'busy')"]]),
+            1,
+            "node02: cleaner exited 1 on host=node02: failed=[['vh00abcd'",
+        ),
+        (
+            _report("node02", remaining=["vx00abcd"]),
+            0,
+            "node02: UNCLEAN host=node02: failed=[] remaining=['vx00abcd']",
+        ),
+        (_report("node02"), 1, "node02: cleaner exited 1 on host=node02"),
+        (_report("node02", verification_completed="yes"), 0, "node02: invalid report"),
+        (
+            _report("node02", verification_completed=False, verification_error="OSError: boom"),
+            1,
+            "verification_error='OSError: boom'",
+        ),
+    ],
+)
+def test_teardown_refuses_an_invalid_unclean_or_failed_host_report(
+    tmp_path: Path, report: str, rc: int, expected: str
+) -> None:
+    result, helm_calls = _teardown_run(
+        tmp_path,
+        nodes=_THREE_HOSTS,
+        agents=_THREE_AGENTS,
+        reports={**_THREE_CLEAN, "na-2": (report, rc)},
+    )
+
+    assert result.returncode == 1
+    assert expected in result.stderr
+    assert "host cleanup unverified on: node02" in result.stderr
+    assert not helm_calls.exists()
+
+
+def test_teardown_refuses_when_the_host_inventory_cannot_be_read(tmp_path: Path) -> None:
+    result, helm_calls = _teardown_run(
+        tmp_path,
+        nodes=_THREE_HOSTS,
+        agents=_THREE_AGENTS,
+        reports=_THREE_CLEAN,
+        inventory_ok=False,
+    )
+
+    assert result.returncode == 1
+    assert "could not read the Node Agent host inventory" in result.stderr
+    assert "host cleanup unverified on:<host inventory unreadable>" in result.stderr
+    assert not helm_calls.exists()
+
+
+def test_teardown_refuses_when_the_local_cleaner_does_not_verify(tmp_path: Path) -> None:
+    result, helm_calls = _teardown_run(
+        tmp_path,
+        nodes=_THREE_HOSTS,
+        agents=_THREE_AGENTS,
+        reports=_THREE_CLEAN,
+        local=(_report("nodal-dev", remaining=["_na_hdeadbe"]), 1),
+    )
+
+    assert result.returncode == 1
+    assert "cleaner exited 1 on host=nodal-dev: failed=[] remaining=['_na_hdeadbe']" in (
+        result.stderr
+    )
+    assert "host cleanup unverified on: local:" in result.stderr
+    assert not helm_calls.exists()
+
+
+def test_teardown_without_a_namespace_claims_no_remote_verification(tmp_path: Path) -> None:
+    result, helm_calls = _teardown_run(
+        tmp_path,
+        nodes=_THREE_HOSTS,
+        agents={},
+        reports={},
+        namespace_present=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "remote host state is NOT verified here" in result.stdout
+    assert "verified clean host=nodal-dev" in result.stdout
+    assert "Teardown complete (namespace absent; remote host state not verified)." in result.stdout
+    assert "Cluster is clean" not in result.stdout
+    assert not helm_calls.exists()

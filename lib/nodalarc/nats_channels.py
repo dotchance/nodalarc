@@ -68,8 +68,9 @@ STREAM_SESSION_EVENTS = "NODALARC_SESSION"
 STREAM_OPS_EVENTS = "NODALARC_OPS"
 STREAM_DEBUG_EVENTS = "NODALARC_DEBUG"
 # Declared for the measurement and NodalPath integrations; no chart creates
-# it today (the deployment gap is OS-13; the almanac subscription that names
-# it is OS-02). It is not part of the deployed-stream table below.
+# it today: its deployment waits on the deferred measurement work, and the
+# almanac subscription that names it is a recorded NodalPath leftover. It is
+# not part of the deployed-stream table below.
 STREAM_MI_EVENTS = "NODALARC_MI"
 
 

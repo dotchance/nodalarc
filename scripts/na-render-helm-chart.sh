@@ -62,7 +62,6 @@ fi
 # The NATS messaging inventory (deployed streams and authorization patterns)
 # is authored once, in lib/nodalarc/nats_channels.py, and rendered here into
 # the assembled chart; the source chart never carries a copy.
-mkdir -p "$output_dir/files"
 messaging="$output_dir/files/nats-messaging.yaml"
 (cd "$ROOT_DIR" && PYTHONPATH=lib uv run --quiet python -m nodalarc.nats_channels --render-messaging) > "$messaging"
 if [[ ! -s "$messaging" ]]; then

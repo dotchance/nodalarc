@@ -26,7 +26,7 @@
 {{- end -}}
 {{- range $messaging.users -}}
 {{- if not (kindIs "map" .) }}{{ fail "files/nats-messaging.yaml: every user must be a mapping" }}{{ end -}}
-{{- if or (not (kindIs "string" .key)) (not (regexMatch "^[a-zA-Z]+$" (.key | toString))) }}{{ fail (printf "files/nats-messaging.yaml: user key %v is not a values key" .key) }}{{ end -}}
+{{- if or (not (kindIs "string" .key)) (not (regexMatch "^[a-zA-Z]+$" (.key | toString))) }}{{ fail (printf "files/nats-messaging.yaml: user key %v is not a letters-only key" .key) }}{{ end -}}
 {{- $user := . -}}
 {{- range $list := list "publish" "subscribe" -}}
 {{- $patterns := index $user $list -}}

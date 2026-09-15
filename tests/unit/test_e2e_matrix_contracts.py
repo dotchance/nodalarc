@@ -1546,3 +1546,14 @@ def test_station_sampler_reads_adjacency_and_route_through_the_observation_parse
     assert source.count("def _route_egress_dev") == 1 and "def _route_dev" not in source
     # the gate's overlap input is fixed at first sighting, before the terminal event
     assert "src in terminal_by_src:\n                    continue" in window
+
+
+def test_cj_is_a_default_matrix_entry_and_the_other_lanes_keep_their_opt_ins() -> None:
+    source = Path(e2e_matrix.__file__).read_text()
+    main = source.split("def main(")[1]
+    assert "NODALARC_RUN_MBB_ACCEPTANCE" not in source
+    assert "run_mbb_acceptance(provenance)" in main
+    assert "acceptance-cj-mbb-routing-packet-observation.json" in main
+    cj = main.split("run_mbb_acceptance(provenance)")[0].rsplit("\n", 6)[0]
+    assert "NODALARC_RUN_DIRTY_REPAIR" in main and "NODALARC_RUN_SEEK_MBB" in main
+    assert 'os.environ.get("NODALARC_RUN' not in cj.rsplit("\n", 3)[-1]

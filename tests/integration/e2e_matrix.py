@@ -3473,16 +3473,22 @@ def main():
                 evidence_file = evidence_dir / f"perm-{eid_label}-{label}.json"
                 evidence_file.write_text(json.dumps(evidence, indent=2))
 
-        if os.environ.get("NODALARC_RUN_MBB_ACCEPTANCE") == "1":
-            evidence = run_mbb_acceptance(provenance)
-            evidence["provenance"] = provenance
-            results.append(evidence)
-            evidence_file = evidence_dir / "cj-mbb-packet-behavior.json"
-            evidence_file.write_text(json.dumps(evidence, indent=2))
-            if evidence["result"] == "PASS":
-                passed += 1
-            else:
-                failed += 1
+        # C-J, the MBB handover acceptance on the shipped walker, is a default
+        # entry of the matrix: a named test-only step whose result counts like
+        # every shipped session's. A matrix without it is incomplete.
+        print(f"\n{'=' * 60}")
+        print("Acceptance C-J: mbb-routing-packet-observation (earth-leo-walker)")
+        print(f"{'=' * 60}")
+        evidence = run_mbb_acceptance(provenance)
+        evidence["provenance"] = provenance
+        results.append(evidence)
+        evidence_file = evidence_dir / "acceptance-cj-mbb-routing-packet-observation.json"
+        evidence_file.write_text(json.dumps(evidence, indent=2))
+        if evidence["result"] == "PASS":
+            passed += 1
+        else:
+            failed += 1
+        print(f"  C-J: {evidence['result']}")
 
         if os.environ.get("NODALARC_RUN_DIRTY_REPAIR") == "1":
             evidence = run_dirty_repair_acceptance(provenance)

@@ -27,10 +27,11 @@ LIB_PREFIX="deploy:$logical_name"
 
 # The inventory owns each service's Kubernetes workload and Helm image key.
 # A name it does not map to a workload cannot be deployed, and an inventory
-# that does not answer is a refusal; both happen here, before the chart is
-# assembled and before any docker, helm or kubectl call.
-if ! resource="$(bash "$ROOT_DIR/scripts/na-images.sh" resource-for "$logical_name")"; then
-    echo "[deploy:$logical_name] ERROR: deployment is unavailable: the inventory maps '$logical_name' to no Kubernetes workload (reason above)." >&2
+# that does not answer, or answers with nothing, is a refusal; both happen
+# here, before the chart is assembled and before any docker, helm or kubectl
+# call. The exit status alone is not the answer: an empty reply is refused.
+if ! resource="$(bash "$ROOT_DIR/scripts/na-images.sh" resource-for "$logical_name")" || [ -z "$resource" ]; then
+    echo "[deploy:$logical_name] ERROR: deployment is unavailable: the inventory maps '$logical_name' to no Kubernetes workload (reason above, or an empty answer)." >&2
     exit 2
 fi
 helm_key="$(bash "$ROOT_DIR/scripts/na-images.sh" helm-key-for "$logical_name")"

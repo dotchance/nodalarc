@@ -443,8 +443,27 @@ def test_deploy_service_refuses_a_name_without_a_workload_before_any_tool_call(
     assert "must not be called" not in result.stderr
 
 
-def test_deploy_service_refuses_when_the_inventory_does_not_answer(tmp_path: Path) -> None:
-    root = _scripts_copy_with_failing_inventory(tmp_path)
+def _scripts_copy_with_empty_inventory(tmp_path: Path) -> Path:
+    """A copy of scripts/ whose na-images.sh exits 0 and prints nothing for every lookup."""
+    import shutil
+
+    root = tmp_path / "tree-empty"
+    shutil.copytree(ROOT / "scripts", root / "scripts")
+    (root / "scripts" / "na-images.sh").write_text("#!/usr/bin/env bash\nexit 0\n")
+    return root
+
+
+@pytest.mark.parametrize("answer", ["failure", "empty"])
+def test_deploy_service_refuses_when_the_inventory_does_not_answer(
+    tmp_path: Path, answer: str
+) -> None:
+    """A non-zero inventory and a successful inventory that prints nothing are both refused
+    at the boundary, before the chart assembly and before any tool call; the exit status
+    alone is not the answer."""
+    if answer == "failure":
+        root = _scripts_copy_with_failing_inventory(tmp_path)
+    else:
+        root = _scripts_copy_with_empty_inventory(tmp_path)
     for tool in ("docker", "helm", "kubectl", "uv"):
         _stub(tmp_path, tool, 'echo "must not be called: $0 $*" >&2; exit 99')
     result = _run_in_tree(
@@ -452,8 +471,39 @@ def test_deploy_service_refuses_when_the_inventory_does_not_answer(tmp_path: Pat
     )
 
     assert result.returncode == 2, result.stderr
-    assert "na-images: broken" in result.stderr
+    if answer == "failure":
+        assert "na-images: broken" in result.stderr
     assert "deployment is unavailable" in result.stderr
+    assert "must not be called" not in result.stderr
+    assert "resource does not exist" not in result.stderr
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        ["bash", "scripts/na-teardown.sh"],
+        ["bash", "scripts/na-deploy-service.sh", "ome"],
+        ["bash", "scripts/na-install-platform.sh", "install"],
+        ["bash", "scripts/na-load-images.sh"],
+    ],
+    ids=["teardown", "deploy-service", "install", "load"],
+)
+def test_release_name_override_is_refused_at_script_entry(
+    tmp_path: Path, command: list[str]
+) -> None:
+    """A HELM_RELEASE in the environment of a direct invocation is refused by the library the
+    script sources first, before any docker, helm, kubectl or uv call (so before the chart
+    assembly in deploy-service and before either namespace branch in teardown)."""
+    for tool in ("docker", "helm", "kubectl", "uv", "ip"):
+        _stub(tmp_path, tool, 'echo "must not be called: $0 $*" >&2; exit 99')
+    result = _run(
+        command,
+        env={"HELM_RELEASE": "other", "PROJECT_VERSION": "0+test", "NA_IMAGES_NO_CLUSTER": "1"},
+        path_dir=tmp_path,
+    )
+
+    assert result.returncode == 2, result.stderr
+    assert "HELM_RELEASE is not a setting; the release name is fixed to nodalarc" in result.stderr
     assert "must not be called" not in result.stderr
 
 

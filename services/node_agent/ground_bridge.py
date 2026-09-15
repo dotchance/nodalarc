@@ -17,6 +17,7 @@ import os
 import threading
 from collections import defaultdict
 from collections.abc import Iterator
+from dataclasses import dataclass
 
 from nodalarc.runtime_naming import (
     gs_bridge_port_name,
@@ -363,18 +364,42 @@ def detach_isl(
 # ---------------------------------------------------------------------------
 
 
+@dataclass(frozen=True, slots=True)
+class PodVeth:
+    """One pod-side interface and its host end, with the creator's decision.
+
+    ``created`` is True when this call made the pair and False when an
+    existing pair was left as found. The caller configures what was created
+    and only verifies what already existed.
+    """
+
+    host_name: str
+    ifname: str
+    created: bool
+
+
+@dataclass(frozen=True, slots=True)
+class MediatedIsl:
+    """Both ends of a host-mediated ISL, each with the creator's decision."""
+
+    host_a: str
+    host_b: str
+    created_a: bool
+    created_b: bool
+
+
 def create_ground_bridge(
     gs_id: str,
     gs_pid: int,
     ifname: str,
     mtu: int | None = None,
-) -> str:
+) -> PodVeth:
     """Create GS-side veth pair for ground link. Idempotent.
 
     Creates a veth pair: host end (_gbr-{gs}-{idx}) stays in host ns (DOWN),
     GS end moved into GS namespace as {ifname} (DOWN).
 
-    Returns host-side veth name.
+    Returns the pair with ``created`` saying whether this call made it.
     """
     if mtu is None:
         from nodalarc.platform_config import get_platform_config
@@ -387,7 +412,7 @@ def create_ground_bridge(
     try:
         if ipr.link_lookup(ifname=gs_port):
             log.debug("GS port %s already exists", gs_port)
-            return gs_port
+            return PodVeth(gs_port, ifname, created=False)
 
         _target_ifname = ifname
 
@@ -396,7 +421,7 @@ def create_ground_bridge(
 
         if _in_namespace(gs_pid, _check_iface):
             log.debug("%s already exists in GS ns(%s)", ifname, gs_pid)
-            return gs_port
+            return PodVeth(gs_port, ifname, created=False)
 
         rand = os.urandom(3).hex()
         tmp_host = f"_na_h{rand}"[:15]
@@ -427,7 +452,7 @@ def create_ground_bridge(
     finally:
         ipr.close()
 
-    return gs_port
+    return PodVeth(gs_port, ifname, created=True)
 
 
 def create_satellite_ground_veth(
@@ -435,10 +460,10 @@ def create_satellite_ground_veth(
     sat_pid: int,
     ifname: str,
     mtu: int | None = None,
-) -> tuple[str, str]:
+) -> PodVeth:
     """Pre-create satellite ground veth pair at deploy time. Idempotent.
 
-    Returns (host_side_name, ifname).
+    Returns the pair with ``created`` saying whether this call made it.
     """
     if mtu is None:
         from nodalarc.platform_config import get_platform_config
@@ -451,7 +476,7 @@ def create_satellite_ground_veth(
     try:
         if ipr.link_lookup(ifname=host_name):
             log.debug("Satellite ground veth %s already exists", host_name)
-            return (host_name, ifname)
+            return PodVeth(host_name, ifname, created=False)
 
         _target_ifname = ifname
 
@@ -460,7 +485,7 @@ def create_satellite_ground_veth(
 
         if _in_namespace(sat_pid, _check_iface):
             log.debug("%s already exists in sat ns(%s)", ifname, sat_pid)
-            return (host_name, ifname)
+            return PodVeth(host_name, ifname, created=False)
 
         rand = os.urandom(3).hex()
         tmp_host = f"_na_h{rand}"[:15]
@@ -490,7 +515,7 @@ def create_satellite_ground_veth(
         ipr.close()
 
     log.debug("Created satellite ground veth %s ↔ %s in ns(%s)", host_name, ifname, sat_pid)
-    return (host_name, ifname)
+    return PodVeth(host_name, ifname, created=True)
 
 
 @contextlib.contextmanager
@@ -517,7 +542,7 @@ def create_mediated_isl(
     node_id_a: str,
     node_id_b: str,
     mtu: int | None = None,
-) -> tuple[str, str]:
+) -> MediatedIsl:
     """Create a host-mediated ISL: two veth pairs through the host namespace.
 
     Creates:
@@ -540,7 +565,7 @@ def create_mediated_isl(
     a single _in_namespace call (rename, MTU, admin UP, MAC, IPv6 autoconfig).
     Total setns hops per ISL pair: 2 (one per endpoint).
 
-    Returns (host_name_a, host_name_b).
+    Returns both host names with, per endpoint, whether this call created it.
     """
     from node_agent.namespace_ops import configure_interface
 
@@ -551,6 +576,7 @@ def create_mediated_isl(
 
     host_a = _isl_host_name(node_id_a, _isl_idx_from_ifname(ifname_a))
     host_b = _isl_host_name(node_id_b, _isl_idx_from_ifname(ifname_b))
+    created: dict[str, bool] = {}
 
     for pid, ifname, host_name, node_id in [
         (pid_a, ifname_a, host_a, node_id_a),
@@ -608,6 +634,7 @@ def create_mediated_isl(
                 evidence=evidence,
             ):
                 log.info("Mediated ISL endpoint %s already complete and proven, reusing", subject)
+                created[host_name] = False
                 continue
 
             # Create the veth pair under temporary names in the host namespace.
@@ -645,6 +672,7 @@ def create_mediated_isl(
                 configure_interface(_p, _if, _nid, ipr=ns_ipr)
 
             _in_namespace(pid, _setup_pod_side)
+            created[host_name] = True
         finally:
             ipr.close()
 
@@ -660,4 +688,4 @@ def create_mediated_isl(
         pid_b,
         ifname_b,
     )
-    return (host_a, host_b)
+    return MediatedIsl(host_a, host_b, created[host_a], created[host_b])

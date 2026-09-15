@@ -237,14 +237,14 @@ def _pod_end(*, peer: int, mtu: int = 1500, kind: str = "veth") -> kernel_verifi
     return kernel_verifier.PodVethEnd(ifindex=7, kind=kind, peer_ifindex=peer, mtu=mtu)
 
 
-def _create() -> tuple[str, str]:
+def _create() -> ground_bridge.MediatedIsl:
     return ground_bridge.create_mediated_isl(11, 22, "isl0", "isl1", "sat-a", "sat-b", mtu=1500)
 
 
 def test_create_mediated_isl_creates_both_endpoints_when_absent(monkeypatch) -> None:
     ipr, pod_setups, redirects = _mediated(monkeypatch, present={}, pod_ends={})
 
-    assert _create() == (HOST_A, HOST_B)
+    assert _create() == ground_bridge.MediatedIsl(HOST_A, HOST_B, True, True)
     assert [op for op, _ in ipr.calls if op == "add"] == ["add", "add"]
     assert pod_setups == [11, 22]
     assert redirects == [(HOST_A, HOST_B)]
@@ -257,7 +257,7 @@ def test_create_mediated_isl_reuses_a_proven_endpoint_without_touching_its_pod_s
         monkeypatch, present={HOST_A: 5}, pod_ends={"isl0": _pod_end(peer=5)}
     )
 
-    assert _create() == (HOST_A, HOST_B)
+    assert _create() == ground_bridge.MediatedIsl(HOST_A, HOST_B, False, True)
     assert [op for op, _ in ipr.calls if op == "add"] == ["add"]
     assert pod_setups == [22]
     assert redirects == [(HOST_A, HOST_B)]

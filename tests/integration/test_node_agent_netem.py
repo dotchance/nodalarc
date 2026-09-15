@@ -389,7 +389,10 @@ def test_local_isl_retry_reuses_the_proven_endpoints_and_leaves_the_pod_side_alo
                 proc_a.pid, proc_b.pid, "isl0", "isl1", node_a, node_b, mtu=1400
             )
 
-            assert second == first == (host_a, host_b)
+            assert (first.host_a, first.host_b) == (host_a, host_b)
+            assert (second.host_a, second.host_b) == (host_a, host_b)
+            assert (first.created_a, first.created_b) == (True, True)
+            assert (second.created_a, second.created_b) == (False, False)
             assert (_host_ifindex(host_a), _host_ifindex(host_b)) == before
             pod_link = _run("ip", "netns", "exec", ns_a, "ip", "-o", "link", "show", "isl0").stdout
             assert "UP" not in pod_link.split(">")[0].split("<")[1].split(",")

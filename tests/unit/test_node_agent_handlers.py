@@ -326,7 +326,7 @@ class TestBatchLinkUp:
         monkeypatch.setattr(
             vxlan,
             "create_vxlan_link",
-            lambda *args, **kwargs: calls.append(("create", args, kwargs)),
+            lambda *args, **kwargs: calls.append(("create", args, kwargs)) or True,
         )
         monkeypatch.setattr(
             substrate_monitor,

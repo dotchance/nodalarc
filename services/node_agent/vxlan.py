@@ -113,8 +113,12 @@ def create_vxlan_link(
     remote_ip: str,
     vni: int,
     mtu: int | None = None,
-) -> None:
+) -> bool:
     """Create a VXLAN-backed interface in a pod namespace, or reuse the proven one.
+
+    Returns True when the link was created by this call and False when a
+    complete, proven link was reused; the caller configures what it created
+    and only verifies what it reused.
 
     1. Enter host namespace
     2. Create VXLAN interface (UDP endpoint to remote node)
@@ -216,7 +220,7 @@ def create_vxlan_link(
                         vni,
                         " ".join(found.describe()),
                     )
-                    return
+                    return False
 
                 # 1. Create VXLAN interface
                 ipr.link(
@@ -283,6 +287,7 @@ def create_vxlan_link(
         names.host_veth,
         names.pod_veth,
     )
+    return True
 
 
 def destroy_vxlan_link(pid: int, ifname: str, vni: int) -> None:

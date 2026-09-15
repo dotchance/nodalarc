@@ -30,8 +30,9 @@ def create_cross_node_vxlan(
     local_ip: str,
     remote_ip: str,
     vni: int,
-) -> None:
-    vxlan.create_vxlan_link(
+) -> bool:
+    """Create the cross-node link; True when created here, False when reused."""
+    return vxlan.create_vxlan_link(
         pid=pid,
         ifname=ifname,
         local_ip=local_ip,

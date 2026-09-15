@@ -886,6 +886,32 @@ def test_image_tags_are_content_addressed() -> None:
         assert tag() != clean, "untracked files must dirty the tag"
 
 
+def test_deploy_targets_name_the_service_only() -> None:
+    """The inventory owns each service's workload; no deploy target names a resource."""
+    makefile = _makefile()
+    deploy_region = makefile[makefile.index("define _deploy-service") : makefile.index("# Status")]
+
+    assert "bash scripts/na-deploy-service.sh $1\n" in deploy_region
+    assert "$2" not in deploy_region
+    assert "deployment/" not in deploy_region and "daemonset/" not in deploy_region
+    calls = re.findall(r"\$\(call _deploy-service,([a-z-]+)\)", deploy_region)
+    assert calls == [
+        "ome",
+        "scheduler",
+        "node-agent",
+        "vs-api",
+        "operator",
+        "vf",
+        "ome",
+        "scheduler",
+        "node-agent",
+        "vs-api",
+        "operator",
+        "vf",
+        "measurement",
+    ]
+
+
 def test_deploy_script_moves_helm_reference_and_verifies_digest() -> None:
     """A deploy must MOVE the Helm-owned image reference and PROVE the
     cluster runs what was pushed. `rollout restart` re-pulls whatever tag the

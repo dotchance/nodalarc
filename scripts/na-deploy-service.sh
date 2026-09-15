@@ -16,6 +16,26 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 NAMESPACE="${NAMESPACE:-nodalarc}"
 # shellcheck source=scripts/na-lib.sh
 . "$ROOT_DIR/scripts/na-lib.sh"
+
+if [ "$#" -ne 1 ]; then
+    echo "usage: na-deploy-service.sh IMAGE_LOGICAL_NAME" >&2
+    exit 2
+fi
+
+logical_name="$1"
+LIB_PREFIX="deploy:$logical_name"
+
+# The inventory owns each service's Kubernetes workload and Helm image key.
+# A name it does not map to a workload cannot be deployed, and an inventory
+# that does not answer is a refusal; both happen here, before the chart is
+# assembled and before any docker, helm or kubectl call.
+if ! resource="$(bash "$ROOT_DIR/scripts/na-images.sh" resource-for "$logical_name")"; then
+    echo "[deploy:$logical_name] ERROR: deployment is unavailable: the inventory maps '$logical_name' to no Kubernetes workload (reason above)." >&2
+    exit 2
+fi
+helm_key="$(bash "$ROOT_DIR/scripts/na-images.sh" helm-key-for "$logical_name")"
+image="$(bash "$ROOT_DIR/scripts/na-images.sh" image-for "$logical_name")"
+
 HELM_CHART="deploy/helm"
 # The chart ships Chart.yaml.in; render it the same way install/upgrade do.
 if [ -f "$ROOT_DIR/$HELM_CHART/Chart.yaml.in" ] || [ -f "$HELM_CHART/Chart.yaml.in" ]; then
@@ -29,26 +49,6 @@ else
     SUDO_CTR_CMD=()
 fi
 
-if [ "$#" -ne 2 ]; then
-    echo "usage: na-deploy-service.sh IMAGE_LOGICAL_NAME K8S_RESOURCE" >&2
-    exit 2
-fi
-
-logical_name="$1"
-resource="$2"
-
-LIB_PREFIX="deploy:$logical_name"
-
-# The inventory owns the Helm key and the Kubernetes resource of every
-# service. The resource argument still arrives from the Makefile target;
-# until that argument goes, it must agree with the owner.
-owned_resource="$(bash "$ROOT_DIR/scripts/na-images.sh" resource-for "$logical_name")"
-if [ "$resource" != "$owned_resource" ]; then
-    echo "[deploy:$logical_name] ERROR: resource argument '$resource' disagrees with the inventory's '$owned_resource'" >&2
-    exit 2
-fi
-helm_key="$(bash "$ROOT_DIR/scripts/na-images.sh" helm-key-for "$logical_name")"
-image="$(bash "$ROOT_DIR/scripts/na-images.sh" image-for "$logical_name")"
 mode_record_load "$(bash "$ROOT_DIR/scripts/na-mode.sh")"
 
 if ! kubectl get "$resource" -n "$NAMESPACE" >/dev/null 2>&1; then

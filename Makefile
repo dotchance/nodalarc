@@ -370,37 +370,37 @@ upgrade: ## In-place Helm upgrade (updates image tags, no teardown)
 # all-services path that also refreshes buildTag and chart values.
 
 define _deploy-service
-	@MODE='$(MODE)' REGISTRY_HOST='$(REGISTRY_HOST)' TAG='$(TAG)' SUDO_CTR='$(SUDO_CTR)' KUBECONFIG='$(KUBECONFIG)' NAMESPACE='$(NAMESPACE)' bash scripts/na-deploy-service.sh $1 $2
+	@MODE='$(MODE)' REGISTRY_HOST='$(REGISTRY_HOST)' TAG='$(TAG)' SUDO_CTR='$(SUDO_CTR)' KUBECONFIG='$(KUBECONFIG)' NAMESPACE='$(NAMESPACE)' bash scripts/na-deploy-service.sh $1
 endef
 
 deploy-all: build-ome build-scheduler build-node-agent build-vs-api build-operator build-vf ## Build + push + Helm-move + digest-verify every platform service
-	$(call _deploy-service,ome,deployment/ome)
-	$(call _deploy-service,scheduler,deployment/nodalarc-scheduler)
-	$(call _deploy-service,node-agent,daemonset/nodalarc-node-agent)
-	$(call _deploy-service,vs-api,deployment/nodalarc-vs-api)
-	$(call _deploy-service,operator,deployment/nodalarc-operator)
-	$(call _deploy-service,vf,deployment/nodalarc-vf)
+	$(call _deploy-service,ome)
+	$(call _deploy-service,scheduler)
+	$(call _deploy-service,node-agent)
+	$(call _deploy-service,vs-api)
+	$(call _deploy-service,operator)
+	$(call _deploy-service,vf)
 
 deploy-ome: build-ome ## Build + push + Helm-move + digest-verify OME
-	$(call _deploy-service,ome,deployment/ome)
+	$(call _deploy-service,ome)
 
 deploy-scheduler: build-scheduler ## Build + push + Helm-move + digest-verify Scheduler
-	$(call _deploy-service,scheduler,deployment/nodalarc-scheduler)
+	$(call _deploy-service,scheduler)
 
 deploy-node-agent: build-node-agent ## Build + push + Helm-move + digest-verify Node Agent
-	$(call _deploy-service,node-agent,daemonset/nodalarc-node-agent)
+	$(call _deploy-service,node-agent)
 
 deploy-vs-api: build-vs-api ## Build + push + Helm-move + digest-verify VS-API
-	$(call _deploy-service,vs-api,deployment/nodalarc-vs-api)
+	$(call _deploy-service,vs-api)
 
 deploy-operator: build-operator ## Build + push + Helm-move + digest-verify Operator
-	$(call _deploy-service,operator,deployment/nodalarc-operator)
+	$(call _deploy-service,operator)
 
 deploy-vf: build-vf ## Build + push + Helm-move + digest-verify VF
-	$(call _deploy-service,vf,deployment/nodalarc-vf)
+	$(call _deploy-service,vf)
 
 deploy-measurement: build-measurement ## Build + push + Helm-move + digest-verify MI (requires MI in the chart)
-	$(call _deploy-service,measurement,deployment/nodalarc-measurement)
+	$(call _deploy-service,measurement)
 
 # ---------------------------------------------------------------------------
 # Status

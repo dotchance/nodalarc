@@ -391,48 +391,69 @@ def test_platform_not_converged_while_a_workload_rolls(tmp_path: Path) -> None:
     assert "vs-api: deployment/nodalarc-vs-api is not converged" in result.stdout
 
 
-def test_deploy_service_refuses_a_resource_that_disagrees_with_the_inventory(
-    tmp_path: Path,
-) -> None:
-    """The refusal precedes every docker, helm and kubectl call."""
-    for tool in ("docker", "helm", "kubectl"):
+def test_deploy_service_selects_the_workload_from_the_inventory(tmp_path: Path) -> None:
+    """The Makefile passes the logical name only; the script resolves the workload from the
+    inventory and addresses exactly that resource before any docker or helm call."""
+    for tool in ("docker", "helm"):
         _stub(tmp_path, tool, 'echo "must not be called: $0 $*" >&2; exit 99')
+    _stub(tmp_path, "kubectl", 'printf "%s\\n" "$*" >> "$STATE_DIR/kubectl.calls"; exit 1')
     result = _run(
-        ["bash", "scripts/na-deploy-service.sh", "ome", "deployment/nodalarc-ome"],
-        env={"NA_IMAGES_NO_CLUSTER": "1", "PROJECT_VERSION": "0+test"},
+        ["bash", "scripts/na-deploy-service.sh", "node-agent"],
+        env={
+            "NA_IMAGES_NO_CLUSTER": "1",
+            "MODE": "single-node",
+            "PROJECT_VERSION": "0+test",
+            "STATE_DIR": str(tmp_path),
+        },
         path_dir=tmp_path,
     )
-    assert result.returncode == 2, result.stderr
-    assert "disagrees with the inventory's 'deployment/ome'" in result.stderr
+
+    assert result.returncode == 1, result.stderr
+    assert "resource does not exist: daemonset/nodalarc-node-agent" in result.stderr
+    calls = (tmp_path / "kubectl.calls").read_text().splitlines()
+    assert any(call.startswith("get daemonset/nodalarc-node-agent") for call in calls), calls
     assert "must not be called" not in result.stderr
 
 
 @pytest.mark.parametrize(
-    "command",
+    ("name", "reason"),
     [
-        ["bash", "scripts/na-teardown.sh"],
-        ["bash", "scripts/na-deploy-service.sh", "ome", "deployment/ome"],
-        ["bash", "scripts/na-install-platform.sh", "install"],
-        ["bash", "scripts/na-load-images.sh"],
+        ("measurement", "no Kubernetes resource for logical name 'measurement'"),
+        ("nats-box", "no Kubernetes resource for logical name 'nats-box'"),
+        ("bogus", "unknown logical image 'bogus'"),
     ],
-    ids=["teardown", "deploy-service", "install", "load"],
 )
-def test_release_name_override_is_refused_at_script_entry(
-    tmp_path: Path, command: list[str]
+def test_deploy_service_refuses_a_name_without_a_workload_before_any_tool_call(
+    tmp_path: Path, name: str, reason: str
 ) -> None:
-    """A HELM_RELEASE in the environment of a direct invocation is refused by the library the
-    script sources first, before any docker, helm, kubectl or uv call (so before the chart
-    assembly in deploy-service and before either namespace branch in teardown)."""
-    for tool in ("docker", "helm", "kubectl", "uv", "ip"):
+    """An optional image row without a workload (MI, deferred), a pulled image without a
+    workload and an unknown name are refused with the inventory's reason; no chart is
+    assembled and no docker, helm, kubectl or uv call happens."""
+    for tool in ("docker", "helm", "kubectl", "uv"):
         _stub(tmp_path, tool, 'echo "must not be called: $0 $*" >&2; exit 99')
     result = _run(
-        command,
-        env={"HELM_RELEASE": "other", "PROJECT_VERSION": "0+test", "NA_IMAGES_NO_CLUSTER": "1"},
+        ["bash", "scripts/na-deploy-service.sh", name],
+        env={"NA_IMAGES_NO_CLUSTER": "1", "PROJECT_VERSION": "0+test"},
         path_dir=tmp_path,
     )
 
     assert result.returncode == 2, result.stderr
-    assert "HELM_RELEASE is not a setting; the release name is fixed to nodalarc" in result.stderr
+    assert reason in result.stderr
+    assert "deployment is unavailable" in result.stderr
+    assert "must not be called" not in result.stderr
+
+
+def test_deploy_service_refuses_when_the_inventory_does_not_answer(tmp_path: Path) -> None:
+    root = _scripts_copy_with_failing_inventory(tmp_path)
+    for tool in ("docker", "helm", "kubectl", "uv"):
+        _stub(tmp_path, tool, 'echo "must not be called: $0 $*" >&2; exit 99')
+    result = _run_in_tree(
+        ["bash", str(root / "scripts" / "na-deploy-service.sh"), "ome"], path_dir=tmp_path
+    )
+
+    assert result.returncode == 2, result.stderr
+    assert "na-images: broken" in result.stderr
+    assert "deployment is unavailable" in result.stderr
     assert "must not be called" not in result.stderr
 
 
@@ -798,7 +819,7 @@ def test_deploy_service_refuses_to_carry_chart_changes(tmp_path: Path) -> None:
         ],
     )
     result = _run(
-        ["bash", "scripts/na-deploy-service.sh", "ome", "deployment/ome"],
+        ["bash", "scripts/na-deploy-service.sh", "ome"],
         env={"NA_IMAGES_NO_CLUSTER": "1", "MODE": "single-node", "PROJECT_VERSION": "0+test"},
         path_dir=tmp_path,
     )

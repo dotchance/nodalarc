@@ -6,6 +6,10 @@
 # This script must be run to completion before any new deploy.
 
 set -euo pipefail
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=scripts/na-lib.sh
+. "$ROOT_DIR/scripts/na-lib.sh"
+LIB_PREFIX="teardown"
 NAMESPACE="${NAMESPACE:-nodalarc}"
 KUBECONFIG="${KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}"
 export KUBECONFIG
@@ -283,7 +287,7 @@ fi
 
 # Step 4: Helm uninstall — removes all Helm-managed resources including DaemonSet
 echo "[4/8] Helm uninstall..."
-helm uninstall nodalarc -n "$NAMESPACE" \
+helm uninstall "$HELM_RELEASE_NAME" -n "$NAMESPACE" \
     --ignore-not-found --timeout=120s 2>/dev/null || true
 
 # Step 5: Wait for DaemonSet pod to actually terminate

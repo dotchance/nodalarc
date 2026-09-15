@@ -14,7 +14,8 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 NAMESPACE="${NAMESPACE:-nodalarc}"
-HELM_RELEASE="${HELM_RELEASE:-nodalarc}"
+# shellcheck source=scripts/na-lib.sh
+. "$ROOT_DIR/scripts/na-lib.sh"
 HELM_CHART="deploy/helm"
 # The chart ships Chart.yaml.in; render it the same way install/upgrade do.
 if [ -f "$ROOT_DIR/$HELM_CHART/Chart.yaml.in" ] || [ -f "$HELM_CHART/Chart.yaml.in" ]; then
@@ -36,8 +37,6 @@ fi
 logical_name="$1"
 resource="$2"
 
-# shellcheck source=scripts/na-lib.sh
-. "$ROOT_DIR/scripts/na-lib.sh"
 LIB_PREFIX="deploy:$logical_name"
 
 # The inventory owns the Helm key and the Kubernetes resource of every
@@ -63,7 +62,7 @@ fi
 # differs from the release's chart, applying it would roll untouched pods
 # onto configuration their images were not built for. That change goes
 # through make upgrade, which moves every image with it.
-if ! release_chart_matches "$NAMESPACE" "$HELM_RELEASE" "$HELM_CHART"; then
+if ! release_chart_matches "$NAMESPACE" "$HELM_RELEASE_NAME" "$HELM_CHART"; then
     echo "[deploy:$logical_name] ERROR: the chart differs from the deployed release; a single-service deploy cannot carry chart changes." >&2
     printf '%s\n' "$RELEASE_CHART_DIFF" | sed 's/^/  /' >&2
     echo "[deploy:$logical_name] Next: make build && make load && make upgrade (every image moves with the chart)." >&2
@@ -100,7 +99,7 @@ fi
 # so Kubernetes rolls exactly one workload. buildTag and runtimeRelease are
 # deliberately NOT touched here: changing either would roll proof services.
 echo "[deploy:$logical_name] Setting Helm images.$helm_key=$image ..."
-helm upgrade "$HELM_RELEASE" "$HELM_CHART" --namespace "$NAMESPACE" \
+helm upgrade "$HELM_RELEASE_NAME" "$HELM_CHART" --namespace "$NAMESPACE" \
     --reuse-values --set-string "images.$helm_key=$image" >/dev/null
 echo "[deploy:$logical_name] Helm release updated."
 

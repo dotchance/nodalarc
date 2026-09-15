@@ -6,7 +6,6 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SUDO_CTR="${SUDO_CTR:-sudo}"
 NAMESPACE="${NAMESPACE:-nodalarc}"
-HELM_RELEASE="${HELM_RELEASE:-nodalarc}"
 KUBECONFIG="${KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}"
 export KUBECONFIG
 if [ -n "$SUDO_CTR" ]; then
@@ -42,7 +41,7 @@ push_image() {
 }
 
 print_next_step() {
-    if helm status "$HELM_RELEASE" -n "$NAMESPACE" >/dev/null 2>&1; then
+    if helm status "$HELM_RELEASE_NAME" -n "$NAMESPACE" >/dev/null 2>&1; then
         echo "[load] Next: make upgrade, or make reinstall && make session for a destructive platform refresh."
     elif kubectl get namespace "$NAMESPACE" >/dev/null 2>&1; then
         echo "[load] Next: make teardown or make reinstall; make install will refuse the existing namespace."

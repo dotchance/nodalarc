@@ -29,6 +29,13 @@ ifneq ($(strip $(REGISTRY_PREFIX)),)
 $(error REGISTRY_PREFIX is not a setting; the lifecycle scripts derive the prefix from REGISTRY_HOST)
 endif
 
+# The Helm release name is fixed to nodalarc (scripts/na-lib.sh). A
+# HELM_RELEASE from config.mk or the environment is refused here, and the
+# library refuses one for direct script invocation.
+ifneq ($(strip $(HELM_RELEASE)),)
+$(error HELM_RELEASE is not a setting; the release name is fixed to nodalarc)
+endif
+
 # Image tag: content identity, not just HEAD identity.
 # Clean tree -> <sha>; dirty tree -> <sha>-<diffhash> (scripts/na-tag.sh).
 # Two different trees can never share a tag, so the registry can never serve
@@ -564,6 +571,8 @@ teardown: ## Full teardown — pods, namespace, cluster resources, kernel state
 
 force-teardown: ## Break-glass Kubernetes removal only; does not verify host cleanup
 	@echo "[force-teardown] BREAK-GLASS: deterministic cleanup will not be performed."
+	@# The release name literal below is the one copy outside scripts/na-lib.sh:
+	@# a /bin/sh recipe cannot source the library. The name is fixed to nodalarc.
 	@helm uninstall nodalarc -n $(NAMESPACE) --ignore-not-found --timeout=120s 2>/dev/null || true
 	@kubectl delete namespace $(NAMESPACE) --timeout=30s 2>/dev/null || true
 	@echo "[force-teardown] Next: make nuke to verify square-one cleanup before redeploying."

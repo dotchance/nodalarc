@@ -10,7 +10,6 @@ ACTION="${ACTION:-${1:-install}}"
 . "$ROOT_DIR/scripts/na-lib.sh"
 LIB_PREFIX="$ACTION"
 NAMESPACE="${NAMESPACE:-nodalarc}"
-HELM_RELEASE="${HELM_RELEASE:-nodalarc}"
 HELM_CHART="deploy/helm"
 PROJECT_VERSION="${PROJECT_VERSION:-}"
 KUBECONFIG="${KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}"
@@ -29,7 +28,7 @@ if [ -z "$PROJECT_VERSION" ]; then
 fi
 
 release_exists() {
-    helm status "$HELM_RELEASE" -n "$NAMESPACE" >/dev/null 2>&1
+    helm status "$HELM_RELEASE_NAME" -n "$NAMESPACE" >/dev/null 2>&1
 }
 
 namespace_exists() {
@@ -215,12 +214,12 @@ fi
 
 if [ "$ACTION" = "install" ]; then
     echo "[install] Installing Helm chart..."
-    helm install "$HELM_RELEASE" "$HELM_CHART" --namespace "$NAMESPACE" --create-namespace "${helm_args[@]}"
+    helm install "$HELM_RELEASE_NAME" "$HELM_CHART" --namespace "$NAMESPACE" --create-namespace "${helm_args[@]}"
     wait_platform_ready 180
     echo "[install] Next: make session"
 else
     echo "[upgrade] Upgrading Helm release..."
-    helm upgrade "$HELM_RELEASE" "$HELM_CHART" --namespace "$NAMESPACE" "${helm_args[@]}"
+    helm upgrade "$HELM_RELEASE_NAME" "$HELM_CHART" --namespace "$NAMESPACE" "${helm_args[@]}"
     wait_platform_ready 120
     echo "[upgrade] Next: make status"
 fi

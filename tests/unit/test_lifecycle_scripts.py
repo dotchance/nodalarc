@@ -407,6 +407,35 @@ def test_deploy_service_refuses_a_resource_that_disagrees_with_the_inventory(
     assert "must not be called" not in result.stderr
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        ["bash", "scripts/na-teardown.sh"],
+        ["bash", "scripts/na-deploy-service.sh", "ome", "deployment/ome"],
+        ["bash", "scripts/na-install-platform.sh", "install"],
+        ["bash", "scripts/na-load-images.sh"],
+    ],
+    ids=["teardown", "deploy-service", "install", "load"],
+)
+def test_release_name_override_is_refused_at_script_entry(
+    tmp_path: Path, command: list[str]
+) -> None:
+    """A HELM_RELEASE in the environment of a direct invocation is refused by the library the
+    script sources first, before any docker, helm, kubectl or uv call (so before the chart
+    assembly in deploy-service and before either namespace branch in teardown)."""
+    for tool in ("docker", "helm", "kubectl", "uv", "ip"):
+        _stub(tmp_path, tool, 'echo "must not be called: $0 $*" >&2; exit 99')
+    result = _run(
+        command,
+        env={"HELM_RELEASE": "other", "PROJECT_VERSION": "0+test", "NA_IMAGES_NO_CLUSTER": "1"},
+        path_dir=tmp_path,
+    )
+
+    assert result.returncode == 2, result.stderr
+    assert "HELM_RELEASE is not a setting; the release name is fixed to nodalarc" in result.stderr
+    assert "must not be called" not in result.stderr
+
+
 def _scripts_copy_with_failing_inventory(tmp_path: Path) -> Path:
     """A copy of scripts/ whose na-images.sh fails before emitting any record."""
     import shutil

@@ -7,6 +7,7 @@ import re
 import subprocess
 from pathlib import Path
 
+import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -771,8 +772,8 @@ def test_platform_upgrade_applies_and_verifies_crd_before_helm() -> None:
     assert "catalogUpload.properties.file_count.type" in script
     assert "status.properties.runtimeRelease.type" in script
     assert "status.properties.runtimeBuild.type" in script
-    assert script.index(apply_call) < script.index('helm install "$HELM_RELEASE"')
-    assert script.index(apply_call) < script.index('helm upgrade "$HELM_RELEASE"')
+    assert script.index(apply_call) < script.index('helm install "$HELM_RELEASE_NAME"')
+    assert script.index(apply_call) < script.index('helm upgrade "$HELM_RELEASE_NAME"')
 
 
 def test_platform_upgrade_has_no_legacy_session_migration_preflight() -> None:
@@ -931,6 +932,38 @@ def test_no_escape_control_remains_in_the_facade() -> None:
         "HELM_CONTRACT_CHART",
     ):
         assert not any(name in source for source in sources), name
+
+
+@pytest.mark.parametrize("carrier", ["environment", "command-line"])
+def test_helm_release_is_refused_at_parse_time(carrier: str) -> None:
+    """The release name is fixed; a HELM_RELEASE from config.mk (a make variable, as the
+    command-line assignment sets one) or the environment fails make before any recipe."""
+    args = ["make", "-n", "--no-print-directory", "help"]
+    env = _make_env()
+    if carrier == "environment":
+        env["HELM_RELEASE"] = "other"
+    else:
+        args.append("HELM_RELEASE=other")
+    result = subprocess.run(args, cwd=ROOT, env=env, text=True, capture_output=True, check=False)
+
+    assert result.returncode != 0
+    assert "HELM_RELEASE is not a setting" in result.stderr
+    assert result.stdout == ""
+
+
+def test_release_name_has_one_owner() -> None:
+    """scripts/na-lib.sh defines the release name once; no script reads HELM_RELEASE as a
+    setting, and the force-teardown recipe is the one literal outside the library."""
+    library = (ROOT / "scripts/na-lib.sh").read_text()
+    scripts = {p.name: p.read_text() for p in (ROOT / "scripts").glob("*.sh")}
+
+    assert library.count('HELM_RELEASE_NAME="nodalarc"') == 1
+    for name, text in scripts.items():
+        if name == "na-lib.sh":
+            continue  # the library reads HELM_RELEASE once, to refuse it
+        assert "HELM_RELEASE" not in text.replace("HELM_RELEASE_NAME", ""), name
+        assert "uninstall nodalarc" not in text, name
+    assert _makefile().count("helm uninstall nodalarc") == 1
 
 
 def test_registry_prefix_is_refused_at_parse_time() -> None:

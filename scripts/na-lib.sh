@@ -16,6 +16,7 @@
 #                                sets SESSION_FAILED_MESSAGE
 #   discover_vs_api NS TIMEOUT   sets api_base and api_token from the live VS-API
 #                                pod's node address; LIB_PREFIX names the caller
+#   HELM_RELEASE_NAME            the one Helm release name, nodalarc
 #   release_chart_matches NS RELEASE CHART_DIR
 #                                0 when the newest Helm release revision is
 #                                deployed and recorded the assembled chart's
@@ -23,6 +24,18 @@
 
 NA_LIB_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LIB_PREFIX="${LIB_PREFIX:-lifecycle}"
+
+# The Helm release name is fixed: end users never see Helm, and every
+# lifecycle path names one release. HELM_RELEASE is not a setting; a value
+# set anywhere is refused here, at the entry of every script that sources
+# this file, before any docker, helm or kubectl call. The Makefile refuses
+# it at parse time for config.mk and the environment. The force-teardown
+# recipe's literal is the one copy outside this file (a /bin/sh recipe).
+if [ -n "${HELM_RELEASE:-}" ]; then
+    echo "na-lib: HELM_RELEASE is not a setting; the release name is fixed to nodalarc" >&2
+    exit 2
+fi
+HELM_RELEASE_NAME="nodalarc"
 
 mode_record_load() {
     local line key value

@@ -73,6 +73,7 @@ def _handles(pids: dict[str, int]) -> dict:
             sandbox_attempt=0,
             pid=pid,
             netns_id=netns,
+            mpls_enable=False,
         )
     return wrapped
 

@@ -314,6 +314,9 @@ session: ## Start a session (DEFAULT_SESSION=...); refuses a drifted platform
 	@KUBECONFIG='$(KUBECONFIG)' NAMESPACE='$(NAMESPACE)' DEFAULT_SESSION='$(DEFAULT_SESSION)' bash scripts/na-session.sh
 
 restart: ## Bounce all platform pods on their CURRENT images (no code deploy; use deploy-* to ship code)
+	@# This population is deliberate: the six platform workloads and never NATS,
+	@# whose restart would drop every client connection for no code change. It
+	@# differs from the inventory's platform resources by that one exclusion.
 	@echo "[restart] Rolling restart of all platform deployments and daemonsets..."
 	@for dep in ome nodalarc-scheduler nodalarc-vs-api nodalarc-operator nodalarc-vf; do \
 		kubectl get deployment/$$dep -n $(NAMESPACE) >/dev/null; \
@@ -399,7 +402,7 @@ deploy-operator: build-operator ## Build + push + Helm-move + digest-verify Oper
 deploy-vf: build-vf ## Build + push + Helm-move + digest-verify VF
 	$(call _deploy-service,vf)
 
-deploy-measurement: build-measurement ## Build + push + Helm-move + digest-verify MI (requires MI in the chart)
+deploy-measurement: build-measurement ## Build the MI image; deployment is unavailable while MI is deferred (the inventory maps no workload)
 	$(call _deploy-service,measurement)
 
 # ---------------------------------------------------------------------------

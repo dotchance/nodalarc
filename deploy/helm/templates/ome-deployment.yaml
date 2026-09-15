@@ -29,6 +29,7 @@ spec:
           command: ["sh", "-c"]
           args:
             - |
+              set -e
               echo "Waiting for NATS..."
 {{- $messaging := fromYaml (include "nodalarc.nats-messaging" .) }}
 {{- $streamNames := list }}
@@ -58,7 +59,7 @@ spec:
                 --max-msgs-per-subject={{ $retention.maxMsgsPerSubject | int64 }} \
                 --max-age={{ $retention.maxAge }} \
                 --max-bytes={{ $retention.maxBytes | int64 }} \
-                --defaults 2>/dev/null || true
+                --defaults
 {{- end }}
               echo "Streams ready."
       containers:

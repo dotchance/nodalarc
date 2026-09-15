@@ -606,6 +606,22 @@ def test_required_nats_streams_are_persistent() -> None:
     assert "--storage=memory" not in ome
 
 
+def test_stream_initializer_reports_a_creation_failure_instead_of_readiness() -> None:
+    """The init container exits non-zero on the first failed stream creation, with the
+    CLI's diagnostic in its log, and prints its ready line only after every stream was
+    created. The three suppressions this pins as removed hid every failure before."""
+    ome = (ROOT / "deploy/helm/templates/ome-deployment.yaml").read_text()
+    script = ome.split("- |\n", 1)[1].split("      containers:\n", 1)[0]
+    shell_lines = [line.strip() for line in script.splitlines() if not line.startswith("{{")]
+
+    assert shell_lines[0] == "set -e"
+    assert "|| true" not in script
+    assert "--defaults 2>/dev/null" not in script
+    assert script.count("2>/dev/null") == 1, "only the connection wait quiets its probe"
+    assert shell_lines.index("--defaults") < shell_lines.index('echo "Streams ready."')
+    assert script.index("{{- end }}") < script.index('echo "Streams ready."')
+
+
 def test_platform_install_renders_versioned_helm_chart() -> None:
     script = (ROOT / "scripts/na-install-platform.sh").read_text()
     renderer = (ROOT / "scripts/na-render-helm-chart.sh").read_text()

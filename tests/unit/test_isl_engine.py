@@ -19,6 +19,7 @@ from ome.propagation_engine import PropagatedState
 from ome.propagator import EcefVec3, GeoPosition, Vec3
 
 from tests.physics_fixtures import EARTH_TEST_BODY_FRAME, LUNA_TEST_BODY_FRAME
+from tests.seam_reference import DeclaredShell, state
 
 TEST_BODY_FRAMES = {"earth": EARTH_TEST_BODY_FRAME, "luna": LUNA_TEST_BODY_FRAME}
 
@@ -132,6 +133,39 @@ def test_cross_plane_feasibility_applies_cross_plane_tracking_limit():
     assert result.applied_max_tracking_rate_deg_s == 2.5
     assert result.terminal_role_a == "cross-plane"
     assert result.terminal_role_b == "cross-plane"
+
+
+def test_cross_plane_tracking_recovery_restores_feasibility():
+    """Through the engine, the seam-crossing pass at the declared-parameter
+    reference's samples: feasible, tracking_exceeded with the applied limit
+    while range permits, feasible again."""
+    shell = DeclaredShell(780.0, 86.4, 31.6, 6, 15.0)
+    for t_s, expected in ((2870, "ok"), (2890, "tracking_exceeded"), (2910, "ok")):
+        pos_a, vel_a = state(shell, 5, 0, t_s)
+        pos_b, vel_b = state(shell, 0, 2, t_s)
+        feasibility = evaluate_isl_feasibility(
+            node_order=["sat-A", "sat-B"],
+            sat_states={
+                "sat-A": _state("sat-A", Vec3(*pos_a), Vec3(*vel_a)),
+                "sat-B": _state("sat-B", Vec3(*pos_b), Vec3(*vel_b)),
+            },
+            by_node={
+                "sat-A": [_assignment("isl0", "sat-B", "cross_plane_isl", 1)],
+                "sat-B": [_assignment("isl0", "sat-A", "cross_plane_isl", 1)],
+            },
+            terminal_constraints={
+                "sat-A": {"isl0": _constraints("cross-plane", tracking=2.0, max_range_km=6000.0)},
+                "sat-B": {"isl0": _constraints("cross-plane", tracking=2.0, max_range_km=6000.0)},
+            },
+            polar_seam_enabled=False,
+            latitude_threshold_deg=70.0,
+            body_frames=TEST_BODY_FRAMES,
+        )
+        result = feasibility[("sat-A", "sat-B")]
+        assert result.reject_reason == expected, (t_s, result)
+        assert result.feasible == (expected == "ok")
+        assert result.applied_max_tracking_rate_deg_s == 2.0
+        assert result.range_km < 400.0
 
 
 def test_terminal_role_mismatch_is_auditable_rejection():

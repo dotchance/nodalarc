@@ -27,6 +27,7 @@ from tests.physics_fixtures import (
     earth_propagate_eci,
     earth_propagate_keplerian,
 )
+from tests.seam_reference import DeclaredShell, encounter, state, verdict
 
 EPOCH = 1735689600.0
 
@@ -289,6 +290,83 @@ class TestIslVisibility:
         )
         assert not result.visible
         assert result.reason == "range_exceeded"
+
+    def test_range_exceedance_and_recovery_follow_the_seam_reference(self):
+        """The shipped polar shell's counter-rotating seam pair, at times the
+        declared-parameter reference model puts just inside, just outside and
+        back inside the terminal's 6000 km range; the reference computes the
+        states, the production check decides."""
+        shell = DeclaredShell(780.0, 86.4, 31.6, 6, 10.0)
+        expected = [(700, "ok"), (1500, "range_exceeded"), (3720, "ok")]
+        for t_s, reason in expected:
+            pos_a, vel_a = state(shell, 5, 0, t_s)
+            pos_b, vel_b = state(shell, 0, 0, t_s)
+            reference_range, reference_rate, clear = encounter(shell, (5, 0), (0, 0), t_s)
+            assert clear
+            assert reference_rate < 2.0
+            assert (
+                verdict(
+                    reference_range, reference_rate, clear, max_range_km=6000.0, max_rate_deg_s=2.0
+                )
+                == reason
+            )
+            result = check_isl_visibility(
+                Vec3(*pos_a),
+                Vec3(*vel_a),
+                Vec3(*pos_b),
+                Vec3(*vel_b),
+                max_range_km=6000.0,
+                max_tracking_rate_deg_s=2.0,
+                body_frame=EARTH_TEST_BODY_FRAME,
+            )
+            assert result.reason == reason, (t_s, result)
+            assert result.visible == (reason == "ok")
+            assert abs(result.range_km - reference_range) < 1.0
+
+    def test_tracking_exceedance_and_recovery_with_range_and_line_of_sight_permitting(self):
+        """The seam-crossing shell's close pass: line of sight clear and range
+        two orders of magnitude inside the limit at every sample, so the
+        tracking rate is the one binding constraint, exceeded then recovered."""
+        shell = DeclaredShell(780.0, 86.4, 31.6, 6, 15.0)
+        expected = [(2870, "ok", 1.26), (2890, "tracking_exceeded", 3.60), (2910, "ok", 1.55)]
+        for t_s, reason, reference_rate in expected:
+            pos_a, vel_a = state(shell, 5, 0, t_s)
+            pos_b, vel_b = state(shell, 0, 2, t_s)
+            range_km, rate, clear = encounter(shell, (5, 0), (0, 2), t_s)
+            assert clear and range_km < 400.0, (t_s, range_km)
+            assert abs(rate - reference_rate) < 0.02, (t_s, rate)
+            result = check_isl_visibility(
+                Vec3(*pos_a),
+                Vec3(*vel_a),
+                Vec3(*pos_b),
+                Vec3(*vel_b),
+                max_range_km=6000.0,
+                max_tracking_rate_deg_s=2.0,
+                body_frame=EARTH_TEST_BODY_FRAME,
+            )
+            assert result.reason == reason, (t_s, result)
+            assert abs(result.angular_velocity_deg_s - rate) < 0.02, (t_s, result)
+            assert result.range_km < 400.0
+
+    def test_seam_closest_approach_of_the_range_experiment_stays_feasible(self):
+        """The range experiment's closest approach (1954 km, 0.43 deg/s) is feasible:
+        the shipped phasing never lets tracking bind, which is why that session
+        is range coverage only."""
+        shell = DeclaredShell(780.0, 86.4, 31.6, 6, 10.0)
+        pos_a, vel_a = state(shell, 5, 0, 1090)
+        pos_b, vel_b = state(shell, 0, 0, 1090)
+        result = check_isl_visibility(
+            Vec3(*pos_a),
+            Vec3(*vel_a),
+            Vec3(*pos_b),
+            Vec3(*vel_b),
+            max_range_km=6000.0,
+            max_tracking_rate_deg_s=2.0,
+            body_frame=EARTH_TEST_BODY_FRAME,
+        )
+        assert result.visible and result.reason == "ok"
+        assert 1900.0 < result.range_km < 2000.0
+        assert 0.40 < result.angular_velocity_deg_s < 0.46
 
     def test_polar_seam_cutoff(self):
         """Cross-plane ISL at polar latitude should be blocked by polar seam config."""

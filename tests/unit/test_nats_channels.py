@@ -334,3 +334,77 @@ def test_producer_validation_refuses_what_the_chart_would_refuse(changes, label)
     with pytest.raises(nc.MessagingInventoryError):
         nc.validate_messaging_inventory(_inventory_with(**changes))
     assert label
+
+
+_ROOT = __import__("pathlib").Path(__file__).resolve().parents[2]
+
+
+def _go_unescape(literal: str) -> str:
+    """Undo the two escapes a Go interpreted string needs for these regexes: ``\\\\`` and ``\\"``."""
+    out: list[str] = []
+    index = 0
+    while index < len(literal):
+        char = literal[index]
+        if char == "\\":
+            escaped = literal[index + 1]
+            assert escaped in ("\\", '"'), literal
+            out.append(escaped)
+            index += 2
+        else:
+            out.append(char)
+            index += 1
+    return "".join(out)
+
+
+def _regex_match_literals(template_text: str) -> list[str]:
+    import re
+
+    return [
+        _go_unescape(match.group(1))
+        for line in template_text.splitlines()
+        for match in re.finditer(r'regexMatch "((?:[^"\\]|\\.)*)"', line)
+    ]
+
+
+def test_chart_regexes_equal_the_producer_regexes():
+    """The chart's render-time refusals and the producer's validation apply one rule set,
+    written once in Go template text and once in Python on either side of the chart
+    boundary. This guard pins that deliberate duplication: four sites, four patterns."""
+    literals = _regex_match_literals((_ROOT / "deploy/helm/templates/_nats.yaml").read_text())
+
+    assert literals == [
+        nc._STREAM_NAME_RE.pattern,
+        nc._ROOT_WILDCARD_RE.pattern,
+        nc._USER_KEY_RE.pattern,
+        nc._SUBJECT_PATTERN_RE.pattern,
+    ]
+
+
+def _values():
+    import yaml
+
+    return yaml.safe_load((_ROOT / "deploy/helm/values.yaml").read_text())
+
+
+def test_checked_in_retention_passes_the_initializer_field_rules():
+    """The template refuses a retention entry at render time; the checked-in table must pass
+    the template's own rules, read from the template so no third copy of them exists."""
+    import re
+
+    template = (_ROOT / "deploy/helm/templates/ome-deployment.yaml").read_text()
+    (age_line,) = [line for line in template.splitlines() if "$entry.maxAge | toString" in line]
+    (age_pattern,) = _regex_match_literals(age_line)
+    (fields_line,) = [line for line in template.splitlines() if "range $field := list" in line]
+    integer_fields = re.findall(r'"([A-Za-z]+)"', fields_line.split("list", 1)[1])
+
+    assert integer_fields == ["maxMsgsPerSubject", "maxBytes"]
+    for name, entry in _values()["nats"]["streamRetention"].items():
+        assert re.fullmatch(age_pattern, entry["maxAge"]), (name, entry["maxAge"])
+        for field in integer_fields:
+            value = entry[field]
+            assert isinstance(value, int) and not isinstance(value, bool), (name, field, value)
+
+
+def test_values_auth_users_equal_the_inventory_users():
+    """The shipped credentials correspond exactly to the registry's user table."""
+    assert set(_values()["nats"]["auth"]["users"]) == {user.key for user in nc.NATS_USERS}

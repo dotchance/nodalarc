@@ -10,6 +10,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+from tests.unit.test_lifecycle_scripts import _stub
+
 ROOT = Path(__file__).resolve().parents[2]
 
 DOCKERFILES = (
@@ -1021,12 +1023,6 @@ def test_image_paths_compile_the_frontend_once() -> None:
     assert "dist/" in (ROOT / "frontend/.dockerignore").read_text().split()
 
 
-def _stub_tool(path: Path, name: str, body: str) -> None:
-    script = path / name
-    script.write_text(f"#!/usr/bin/env bash\nset -euo pipefail\n{body}\n")
-    script.chmod(0o755)
-
-
 def _runtime_matrix_host_fragment() -> str:
     """The expanded recipe up to the matrix invocation, as /bin/sh receives it."""
     expanded = _dry_run_make("test-runtime-matrix")
@@ -1046,7 +1042,7 @@ def _run_host_fragment(tmp_path: Path, **env: str) -> subprocess.CompletedProces
 
 
 def test_runtime_matrix_uses_an_explicit_host_without_discovery(tmp_path: Path) -> None:
-    _stub_tool(tmp_path, "kubectl", 'echo "must not be called: kubectl $*" >&2; exit 99')
+    _stub(tmp_path, "kubectl", 'echo "must not be called: kubectl $*" >&2; exit 99')
     result = _run_host_fragment(tmp_path, VS_API_HOST="192.0.2.10")
     assert result.returncode == 0, result.stderr
     assert "HOST=192.0.2.10:8080" in result.stdout
@@ -1057,7 +1053,7 @@ def test_runtime_matrix_uses_an_explicit_host_without_discovery(tmp_path: Path) 
 
 def test_runtime_matrix_discovers_the_host_through_the_shared_library(tmp_path: Path) -> None:
     """The /bin/sh recipe isolates the Bash library and receives only the host."""
-    _stub_tool(
+    _stub(
         tmp_path,
         "kubectl",
         """
@@ -1068,7 +1064,7 @@ esac
 exit 1
 """,
     )
-    _stub_tool(tmp_path, "curl", 'printf \'{"token": "t"}\'')
+    _stub(tmp_path, "curl", 'printf \'{"token": "t"}\'')
     result = _run_host_fragment(tmp_path, VS_API_HOST="")
     assert result.returncode == 0, result.stderr
     assert "HOST=192.0.2.22:8080" in result.stdout

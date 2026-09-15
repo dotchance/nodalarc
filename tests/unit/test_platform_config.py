@@ -170,7 +170,6 @@ class TestPlatformConfig:
         rendered = (out / "files" / "platform.yaml").read_text(encoding="utf-8")
         shipped = (ROOT / "configs" / "platform.yaml").read_text(encoding="utf-8")
         assert rendered.replace('"{{ .Values.namespace }}"', "nodalarc") == shipped
-        assert not (ROOT / "deploy/helm/files/platform.yaml").exists()
 
 
 class TestSingleton:

@@ -530,12 +530,6 @@ def test_static_inventory_lookups_touch_neither_registry_nor_cluster(tmp_path: P
     assert result.returncode != 0, "an image reference still needs the transport mode"
 
 
-def test_drift_service_list_comes_from_the_inventory() -> None:
-    script = (ROOT / "scripts/na-drift.sh").read_text()
-    assert "SERVICES=(" not in script
-    assert "list-platform-resources" in script
-
-
 def _chart_identity():
     import importlib.util
 

@@ -1145,35 +1145,84 @@ def _force_ground_host_interface_down(gs_id: str, gs_ifname: str, *, timeout: in
     }
 
 
+MBB_LIFECYCLE_CODE = "MBB_TEARDOWN_TERMINAL"
+_OCCURRENCE_FIELDS = (
+    "session_id",
+    "epoch_id",
+    "allocator_step",
+    "snapshot_seq",
+    "teardown_id",
+    "terminal_outcome",
+)
+
+
+def _lifecycle_occurrences(events: list[dict]) -> list[dict]:
+    """The OME's MBB lifecycle records grouped into distinct occurrences.
+
+    ``teardown_id`` alone names only the old and successor pairs and can recur,
+    so an occurrence is scoped by run (session id), epoch, allocator step and
+    snapshot as well. Every raw record is kept under its occurrence; a group
+    with more than one record is a duplicate publication, and one whose
+    records disagree in their details is flagged as conflicting. Nothing here
+    changes what the runtime publishes."""
+    groups: dict[tuple, dict] = {}
+    for event in events:
+        if event.get("source") != "ome" or event.get("code") != MBB_LIFECYCLE_CODE:
+            continue
+        details = event.get("details") or {}
+        key = tuple(details.get(field) for field in _OCCURRENCE_FIELDS)
+        group = groups.setdefault(
+            key,
+            {
+                "occurrence": dict(zip(_OCCURRENCE_FIELDS, key, strict=True)),
+                "gs_id": details.get("gs_id"),
+                "records": [],
+                "record_count": 0,
+                "duplicate_records": False,
+                "conflicting_records": False,
+            },
+        )
+        group["records"].append(event)
+        group["record_count"] += 1
+        group["duplicate_records"] = group["record_count"] > 1
+        first = group["records"][0].get("details") or {}
+        if details != first:
+            group["conflicting_records"] = True
+    return list(groups.values())
+
+
 def check_mbb_lifecycle_and_ops(token: str, *, wait_s: int = 180) -> dict:
     deadline = time.monotonic() + wait_s
     last_events: list[dict] = []
     while time.monotonic() < deadline:
         events = request_json("GET", "/api/v1/ops/events?limit=500", token=token)
         last_events = events
-        lifecycle = [
-            event
-            for event in events
-            if event.get("source") == "ome" and event.get("code") == "MBB_TEARDOWN_TERMINAL"
-        ]
+        occurrences = _lifecycle_occurrences(events)
         completed = [
-            event
-            for event in lifecycle
-            if (event.get("details") or {}).get("terminal_outcome") == "teardown_completed"
+            group
+            for group in occurrences
+            if group["occurrence"]["terminal_outcome"] == "teardown_completed"
         ]
         bad = [event for event in events if event.get("code") in MBB_BAD_OPS_CODES]
         if completed or bad:
             return {
                 "result": "PASS" if completed and not bad else "FAIL",
-                "lifecycle_count": len(lifecycle),
+                "lifecycle_record_count": sum(group["record_count"] for group in occurrences),
+                "lifecycle_occurrence_count": len(occurrences),
                 "completed_count": len(completed),
+                "duplicate_record_groups": [
+                    group for group in occurrences if group["duplicate_records"]
+                ],
+                "conflicting_record_groups": [
+                    group for group in occurrences if group["conflicting_records"]
+                ],
                 "bad_ops_codes": [event.get("code") for event in bad],
-                "last_lifecycle": lifecycle[-3:],
+                "occurrences": occurrences,
             }
         time.sleep(5)
     return {
         "result": "FAIL",
-        "reason": f"No completed MBB lifecycle event within {wait_s}s",
+        "reason": f"No completed MBB lifecycle occurrence within {wait_s}s",
         "event_count": len(last_events),
     }
 
@@ -1282,6 +1331,7 @@ def _find_routed_ground_probe(
     protocol: str = "isis",
     wait_s: int = 180,
     ground_topology: dict[str, dict] | None = None,
+    sources: list[str] | None = None,
 ) -> dict | None:
     """Find one ground-originated routed proof.
 
@@ -1310,11 +1360,13 @@ def _find_routed_ground_probe(
         nodes_by_id = _nodes_by_id(state.get("nodes", []))
         ground_ids = _ground_node_ids(state)
         by_gs = _ground_links_by_gs(state)
+        # ``sources`` restricts the probe's origin to the named ground nodes.
+        srcs = sorted(gw for gw in by_gs if sources is None or gw in sources)
         if ground_topology is not None:
             linked_sites = {ground_topology[gw]["site"] for gw in by_gs if gw in ground_topology}
             candidates = [
                 (src, dst)
-                for src, dst in _transit_pairs(ground_topology, sorted(by_gs), ground_ids)
+                for src, dst in _transit_pairs(ground_topology, srcs, ground_ids)
                 if ground_topology.get(dst, {}).get("site") in linked_sites
             ]
             if not candidates:
@@ -1330,7 +1382,7 @@ def _find_routed_ground_probe(
             candidates = (candidates + candidates)[sweep_start : sweep_start + sweep_size]
             candidate_cursor = (sweep_start + sweep_size) % candidate_count
         else:
-            candidates = [(src, dst) for src in sorted(by_gs) for dst in ground_ids if dst != src]
+            candidates = [(src, dst) for src in srcs for dst in ground_ids if dst != src]
         for src, dst_gs in candidates:
             key = f"{src}->{dst_gs}"
             dst_ip = _published_loopback_ip(dst_gs, nodes_by_id)
@@ -1450,56 +1502,100 @@ def _find_routed_ground_probe(
     return _sweep_verdict(attempts, no_probe_reason)
 
 
-def _find_all_routed_ground_probes(token: str, *, protocol: str = "isis") -> list[dict]:
+def _mbb_probe_sources(perm: dict) -> list[str]:
+    """Stations whose resolved MBB steady limit is one: every handover there
+    is an MBB overlap, so the handover the window observes is the one under
+    test. Read from the resolver's per-station facts, never from names."""
+    return sorted(
+        node_id
+        for node_id, station in (perm.get("mbb_stations") or {}).items()
+        if station.get("handover_mode") == "mbb" and station.get("steady_limit") == 1
+    )
+
+
+def _find_all_routed_ground_probes(token: str, perm: dict, *, protocol: str = "isis") -> list[dict]:
+    """One monitored flow per limit-one MBB station: from that station to the
+    most distant other-site gateway whose route leaves by a space-link terminal
+    and is adjacent and answering right now. Same-site pairs never qualify."""
     state = request_json("GET", "/api/v1/state", token=token)
     nodes_by_id = _nodes_by_id(state.get("nodes", []))
     ground_ids = _ground_node_ids(state)
     by_gs = _ground_links_by_gs(state)
+    topology = perm["ground_topology"]
     probes: list[dict] = []
-    for src in sorted(by_gs):
-        for dst_gs in ground_ids:
-            if dst_gs == src:
-                continue
+    for src in _mbb_probe_sources(perm):
+        if src not in by_gs or src not in topology:
+            continue
+        for _src, dst_gs in _transit_pairs(topology, [src], ground_ids):
             dst_ip = _published_loopback_ip(dst_gs, nodes_by_id)
             if not dst_ip:
                 continue
             route = _kubectl_exec(src, f"ip route get {dst_ip}", timeout=10)
+            route_obs = _route_observation(route, dst_ip)
+            egress_dev = route_obs.get("egress_dev")
+            if not (route_obs["observed"] and route_obs["positive"]):
+                continue
+            if egress_dev not in topology[src]["wan_ifnames"]:
+                continue
             neigh = _kubectl_exec(
                 src, f"vtysh -c '{_routing_neighbor_command(protocol)}'", timeout=10
             )
             ping = _kubectl_exec(src, f"ping -c 1 -W 5 {dst_ip}", timeout=10)
-            route_obs = _route_observation(route, dst_ip)
             neigh_obs = _adjacency_observation(neigh, protocol)
             ping_obs = _packet_observation(ping)
-            fib_ready = route_obs["observed"] and route_obs["positive"]
-            neighbor_up = neigh_obs["observed"] and neigh_obs["positive"]
-            packet_ready = ping_obs["observed"] and ping_obs["positive"]
-            if fib_ready and neighbor_up and packet_ready:
-                probes.append(
-                    {
-                        "mode": "ground_to_ground",
-                        "protocol": protocol,
-                        "key": f"{src}->{dst_gs}",
-                        "src": src,
-                        "dst_gs": dst_gs,
-                        "dst_ip": dst_ip,
-                        "active_ground_links": by_gs[src],
-                        "fib_ready": fib_ready,
-                        "neighbor_up": neighbor_up,
-                        "packet_ready": packet_ready,
-                        "route_stdout": route["stdout"],
-                        "isis_stdout": neigh["stdout"],
-                        "ping_stdout": ping["stdout"],
-                    }
-                )
+            if not (neigh_obs["observed"] and neigh_obs["positive"]):
+                continue
+            if not (ping_obs["observed"] and ping_obs["positive"]):
+                continue
+            probes.append(
+                {
+                    "mode": "ground_to_ground",
+                    "protocol": protocol,
+                    "key": f"{src}->{dst_gs}",
+                    "src": src,
+                    "dst_gs": dst_gs,
+                    "dst_ip": dst_ip,
+                    "src_site": topology[src]["site"],
+                    "dst_site": topology[dst_gs]["site"],
+                    "egress_dev": egress_dev,
+                    "transit_proven": True,
+                    "steady_limit": perm["mbb_stations"][src]["steady_limit"],
+                    "mbb_overlap_ticks": perm["mbb_stations"][src]["mbb_overlap_ticks"],
+                    "active_ground_links": by_gs[src],
+                    "route_stdout": route["stdout"],
+                    "isis_stdout": neigh["stdout"],
+                    "ping_stdout": ping["stdout"],
+                }
+            )
+            break
     return probes
 
 
-def check_mbb_convergence_preconditions(token: str) -> dict:
-    probe = _find_routed_ground_probe(token, wait_s=180)
-    if not probe or probe.get("result") == "FAIL":
-        return probe or {"result": "FAIL", "reason": "No routed ground probe found"}
-    return {"result": "PASS", **probe}
+def check_mbb_convergence_preconditions(token: str, perm: dict) -> dict:
+    """The monitored flow itself is the precondition: a limit-one MBB station
+    with an installed route to another site's gateway that leaves by a
+    space-link terminal, adjacent and answering."""
+    sources = _mbb_probe_sources(perm)
+    rule = {
+        "sources": sources,
+        "requires": "different site, space-link egress, adjacency up, one reply",
+    }
+    if not sources:
+        return {
+            "result": "FAIL",
+            "reason": "the resolved session has no MBB station with a steady limit of one",
+            "probe_rule": rule,
+        }
+    probe = _find_routed_ground_probe(
+        token, wait_s=180, ground_topology=perm["ground_topology"], sources=sources
+    )
+    if not probe or probe.get("result") != "PASS":
+        return {
+            **(probe or {"result": "FAIL", "reason": "No routed ground probe found"}),
+            "result": "FAIL",
+            "probe_rule": rule,
+        }
+    return {"result": "PASS", "probe_rule": rule, **probe}
 
 
 def _sequence_ranges(seqs: list[int]) -> list[list[int]]:
@@ -1662,29 +1758,398 @@ def _successor_interface(active_links: list[dict]) -> str | None:
     return None
 
 
-def _run_mbb_packet_window(token: str, *, count: int = 1200, interval_s: float = 0.2) -> dict:
-    import signal
-    import subprocess
+def _isis_neighbor_rows(stdout: str) -> list[dict]:
+    """Every adjacency row of `show isis neighbor`, one per neighbor and
+    interface, so the successor's and the incumbent's adjacencies are read
+    individually instead of as "some adjacency is Up"."""
+    rows: list[dict] = []
+    for line in stdout.splitlines():
+        parts = line.split()
+        if len(parts) < 4 or parts[0] in ("System", "Area") or not parts[2].isdigit():
+            continue
+        rows.append(
+            {"system_id": parts[0], "interface": parts[1], "level": parts[2], "state": parts[3]}
+        )
+    return rows
 
-    probes = _find_all_routed_ground_probes(token)
+
+def _adjacency_on(rows: list[dict], interface: str | None) -> dict | None:
+    if interface is None:
+        return None
+    return next((row for row in rows if row["interface"] == interface), None)
+
+
+class _PingObserver:
+    """One monitored flow's packets: BusyBox ping in the published container,
+    every output line stamped with the harness's receipt time as it arrives.
+    BusyBox ping exits on the first unroutable answer, so after an early exit
+    the observer starts the next instance, up to a bound, and the exit and the
+    gap are stamped records inside a continuing observation. Every instance's
+    lines, exit status and identity are kept; sequences restart with every
+    instance. Receipt stamps are not send stamps."""
+
+    def __init__(
+        self,
+        key: str,
+        target: WorkloadTarget,
+        dst_ip: str,
+        *,
+        count: int,
+        interval_s: float,
+        max_restarts: int = 20,
+        restart_delay_s: float = 0.5,
+    ) -> None:
+        import threading
+
+        self.key = key
+        self.target = target
+        self.dst_ip = dst_ip
+        self.count = count
+        self.interval_s = interval_s
+        self.max_restarts = max_restarts
+        self.restart_delay_s = restart_delay_s
+        self.instances: list[dict] = []
+        self.restart_limit_reached = False
+        self._stop = threading.Event()
+        self._proc = None
+        self._thread = threading.Thread(target=self._run, name=f"ping-{key}", daemon=True)
+
+    @property
+    def command(self) -> str:
+        return (
+            f"{KUBECTL} exec -n {self.target.namespace} {self.target.pod_name} "
+            f"-c {self.target.container} -- "
+            f"ping -c {self.count} -i {self.interval_s} -W 1 {self.dst_ip}"
+        )
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def finished(self) -> bool:
+        return not self._thread.is_alive()
+
+    def _run(self) -> None:
+        instance = 0
+        while not self._stop.is_set():
+            self._run_instance(instance)
+            if self._stop.is_set():
+                break
+            if instance >= self.max_restarts:
+                self.restart_limit_reached = True
+                break
+            instance += 1
+            self._stop.wait(self.restart_delay_s)
+
+    def _run_instance(self, instance: int) -> None:
+        import subprocess
+        import threading
+
+        record = {
+            "instance": instance,
+            "command": self.command,
+            "started_wall": datetime.now(UTC).isoformat(),
+            "ended_wall": None,
+            "returncode": None,
+            "stopped_by_harness": False,
+            "lines": [],
+        }
+        self.instances.append(record)
+        proc = subprocess.Popen(
+            self.command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            shell=True,
+            start_new_session=True,
+        )
+        self._proc = proc
+        readers = [
+            threading.Thread(target=self._pump, args=(proc.stdout, "stdout", record), daemon=True),
+            threading.Thread(target=self._pump, args=(proc.stderr, "stderr", record), daemon=True),
+        ]
+        for reader in readers:
+            reader.start()
+        proc.wait()
+        for reader in readers:
+            reader.join(timeout=5)
+        record["returncode"] = proc.returncode
+        record["ended_wall"] = datetime.now(UTC).isoformat()
+        record["stopped_by_harness"] = self._stop.is_set()
+        self._proc = None
+
+    @staticmethod
+    def _pump(stream, name: str, record: dict) -> None:
+        if stream is None:
+            return
+        for line in iter(stream.readline, ""):
+            record["lines"].append(
+                {
+                    "receipt_wall": datetime.now(UTC).isoformat(),
+                    "stream": name,
+                    "text": line.rstrip("\n"),
+                }
+            )
+        stream.close()
+
+    def stop(self, *, grace_s: float = 15.0) -> None:
+        import signal
+
+        self._stop.set()
+        proc = self._proc
+        if proc is not None and proc.poll() is None:
+            try:
+                os.killpg(proc.pid, signal.SIGINT)
+            except ProcessLookupError, PermissionError:
+                pass
+        self._thread.join(timeout=grace_s)
+        proc = self._proc
+        if proc is not None and proc.poll() is None:
+            proc.kill()
+            self._thread.join(timeout=5)
+
+
+RECEIPT_STAMP_NOTE = (
+    "receipt stamps are the harness's arrival times, not send times; contiguity of "
+    "retained replies is not evidence of continuity"
+)
+
+
+def _instance_observation(record: dict) -> dict:
+    """What one ping instance showed, in four distinct classes: replies (with
+    the sequences missing between the retained ones), explicit unreachable
+    answers printed by ping, observer failures (anything else on stderr, such
+    as a kubectl or exec diagnostic), and nothing at all."""
+    replies: list[dict] = []
+    unreachable: list[dict] = []
+    observer_failures: list[dict] = []
+    stdout_text: list[str] = []
+    for line in record["lines"]:
+        text = line["text"]
+        if line["stream"] == "stdout":
+            stdout_text.append(text)
+        stripped = text.strip()
+        if stripped.startswith("ping:"):
+            for answer in ROUTING_UNREACHABLE_ANSWERS:
+                if answer in stripped:
+                    unreachable.append({**line, "answer": answer})
+                    break
+            continue
+        if line["stream"] == "stdout" and "bytes from" in text and "seq=" in text:
+            try:
+                seq = int(text.split("seq=", 1)[1].split(None, 1)[0])
+            except ValueError:
+                continue
+            replies.append({"seq": seq, "receipt_wall": line["receipt_wall"]})
+        elif line["stream"] == "stderr" and stripped:
+            observer_failures.append(line)
+    seqs = sorted(reply["seq"] for reply in replies)
+    missing_within = sorted(set(range(seqs[0], seqs[-1] + 1)) - set(seqs)) if seqs else []
+    return {
+        "instance": record["instance"],
+        "started_wall": record["started_wall"],
+        "ended_wall": record["ended_wall"],
+        "returncode": record["returncode"],
+        "stopped_by_harness": record["stopped_by_harness"],
+        "reply_count": len(replies),
+        "first_reply": replies[0] if replies else None,
+        "last_reply": replies[-1] if replies else None,
+        "reply_seq_ranges": _sequence_ranges(seqs),
+        "missing_seq_ranges_within_retained_replies": _sequence_ranges(missing_within),
+        "unreachable_answers": unreachable,
+        "observer_failures": observer_failures,
+        "statistics": _parse_ping_statistics("\n".join(stdout_text)),
+        "protocol_observed": bool(replies or unreachable),
+    }
+
+
+def _probe_packet_observation(instances: list[dict]) -> dict:
+    """One flow's packet evidence across every ping instance of a window."""
+    observations = [_instance_observation(record) for record in instances]
+    restart_gaps = []
+    for earlier, later in zip(observations, observations[1:], strict=False):
+        gap_s = None
+        if earlier["ended_wall"] and later["started_wall"]:
+            gap_s = (
+                datetime.fromisoformat(later["started_wall"])
+                - datetime.fromisoformat(earlier["ended_wall"])
+            ).total_seconds()
+        restart_gaps.append(
+            {
+                "after_instance": earlier["instance"],
+                "ended_wall": earlier["ended_wall"],
+                "next_started_wall": later["started_wall"],
+                "unobserved_gap_s": gap_s,
+            }
+        )
+    reply_count = sum(item["reply_count"] for item in observations)
+    unreachable = [answer for item in observations for answer in item["unreachable_answers"]]
+    failures = [failure for item in observations for failure in item["observer_failures"]]
+    missing = any(item["missing_seq_ranges_within_retained_replies"] for item in observations)
+    if unreachable:
+        outcome = "routing_unreachable"
+    elif reply_count == 0 and failures:
+        outcome = "probe_error"
+    elif reply_count == 0:
+        outcome = "no_replies"
+    elif missing or len(observations) > 1:
+        outcome = "loss_observed"
+    else:
+        outcome = "no_loss_observed_within_retained_replies"
+    return {
+        "instances": observations,
+        "instance_count": len(observations),
+        "restart_gaps": restart_gaps,
+        "reply_count": reply_count,
+        "unreachable_answers": unreachable,
+        "observer_failures": failures,
+        "packet_outcome": outcome,
+        "protocol_observed": any(item["protocol_observed"] for item in observations),
+        "stats": (
+            f"{reply_count} replies in {len(observations)} instance(s); "
+            f"{len(unreachable)} unreachable answer(s); {len(failures)} observer failure(s); "
+            f"{len(restart_gaps)} restart gap(s)"
+        ),
+        "note": RECEIPT_STAMP_NOTE,
+    }
+
+
+def _sample_station(token: str, src: str, probes: list[dict], *, protocol: str = "isis") -> dict:
+    """One receipt-stamped reading of a station: its active ground links and
+    the decision epoch from the VS-API, every adjacency row from the routing
+    daemon, and the kernel route of each monitored flow. Records when the
+    reads started and finished; claims no finer precision."""
+    started = datetime.now(UTC)
+    try:
+        state = request_json("GET", "/api/v1/state", token=token)
+        decisions = request_json("GET", "/api/v1/ground-link-decisions", token=token)
+    except Exception as exc:  # the read itself failed; a stamped observer failure
+        return {
+            "read_started_wall": started.isoformat(),
+            "read_finished_wall": datetime.now(UTC).isoformat(),
+            "src": src,
+            "sample_error": f"VS-API read failed: {exc}",
+        }
+    links = _ground_links_by_gs(state).get(src, [])
+    neigh = _kubectl_exec(src, f"vtysh -c '{_routing_neighbor_command(protocol)}'", timeout=10)
+    routes = {}
+    for probe in probes:
+        route = _kubectl_exec(src, f"ip route get {probe['dst_ip']}", timeout=10)
+        observation = _route_observation(route, probe["dst_ip"])
+        routes[probe["key"]] = {**observation, "stdout": route["stdout"], "stderr": route["stderr"]}
+    finished = datetime.now(UTC)
+    return {
+        "read_started_wall": started.isoformat(),
+        "read_finished_wall": finished.isoformat(),
+        "src": src,
+        "sim_time": state.get("sim_time"),
+        "decision_snapshot_seq": decisions.get("snapshot_seq"),
+        "decision_sim_time": decisions.get("sim_time"),
+        "epoch_id": decisions.get("epoch_id"),
+        "allocation_events": decisions.get("allocation_events", []),
+        "active_ground_links": links,
+        "successor_interface": _successor_interface(links),
+        "neighbors": _isis_neighbor_rows(neigh["stdout"]),
+        "neighbor_observation": _adjacency_observation(neigh, protocol),
+        "isis_stdout": neigh["stdout"],
+        "routes": routes,
+    }
+
+
+def _overlap_gate_fields(sample: dict, probe: dict) -> dict | None:
+    """The gate's overlap input, read from one sample in which the station
+    holds two active ground links with one successor: the kernel route's
+    egress for the monitored flow and the successor's own adjacency. None when
+    the sample shows no overlap."""
+    links = sample.get("active_ground_links") or []
+    if len(links) < 2:
+        return None
+    successor_if = _successor_interface(links)
+    if successor_if is None:
+        return None
+    route = (sample.get("routes") or {}).get(probe["key"]) or {}
+    route_dev = route.get("egress_dev")
+    rows = sample.get("neighbors") or []
+    successor_row = _adjacency_on(rows, successor_if)
+    incumbent_rows = [row for row in rows if row["interface"] != successor_if]
+    return {
+        "sim_time": sample.get("sim_time"),
+        "read_started_wall": sample.get("read_started_wall"),
+        "read_finished_wall": sample.get("read_finished_wall"),
+        "decision_snapshot_seq": sample.get("decision_snapshot_seq"),
+        "active_ground_links": links,
+        "successor_interface": successor_if,
+        "route_dev": route_dev,
+        "successor_fib_ready": bool(
+            route.get("observed") and route.get("positive") and route_dev == successor_if
+        ),
+        "successor_adjacency": successor_row,
+        "neighbor_up": bool(successor_row and successor_row["state"] == "Up"),
+        "incumbent_adjacencies": incumbent_rows,
+        "isis_stdout": sample.get("isis_stdout"),
+        "fib_stdout": route.get("stdout"),
+    }
+
+
+def _event_identity(event: dict) -> str:
+    seq = event.get("seq")
+    if seq is not None:
+        return f"seq:{seq}"
+    return json.dumps(event, sort_keys=True, default=str)
+
+
+def _link_events_for(token: str, nodes: set[str], *, start_sim: str | None) -> list[dict]:
+    """The Scheduler's LinkUp and LinkDown records touching the monitored
+    stations since the window began, with their original sim and wall times:
+    the successor's LinkUp and the incumbent's LinkDown, as published after
+    proof, not as inferred."""
+    query = f"/api/v1/links?start={start_sim}" if start_sim else "/api/v1/links"
+    try:
+        events = request_json("GET", query, token=token)
+    except Exception as exc:
+        return [{"link_events_error": str(exc)}]
+    return [
+        event
+        for event in events
+        if isinstance(event, dict)
+        and (event.get("node_a") in nodes or event.get("node_b") in nodes)
+    ]
+
+
+def _run_mbb_packet_window(
+    token: str,
+    perm: dict,
+    *,
+    count: int = 1200,
+    interval_s: float = 0.2,
+    cadence_s: float = 1.0,
+    post_terminal_s: float = 10.0,
+) -> dict:
+    """One packet window over every monitored flow, recorded as a timeline.
+
+    Per second, and at every event, the window samples each monitored station
+    (links, adjacencies, routes) and reads the ops events; the ping observers
+    stream their lines with receipt stamps and restart after early exits.
+    Allocator decisions, Scheduler link events, routing observations and
+    packets stay distinct records. The gate's overlap input is the first
+    sample that shows the overlap, taken before the teardown event arrived; a
+    later sample never satisfies it retroactively. The window keeps sampling
+    for ``post_terminal_s`` after the teardown event so the route and the
+    packets after the teardown are on the same timeline, as information."""
+    probes = _find_all_routed_ground_probes(token, perm)
     if not probes:
-        return {"result": "FAIL", "reason": "No routed ground probes found"}
+        return {
+            "result": "FAIL",
+            "reason": "No routed ground probe from a limit-one MBB station",
+            "probe_rule": {"sources": _mbb_probe_sources(perm)},
+        }
 
     started_at = datetime.now(UTC)
-    deadline = time.monotonic() + min(max(count * interval_s + 30, 120), 300)
-    procs: dict[str, subprocess.Popen] = {}
-    proc_started_mono: dict[str, float] = {}
-    proc_started_wall: dict[str, str] = {}
+    window_s = min(max(count * interval_s + 30, 120), 300)
+    deadline = time.monotonic() + window_s
     probe_by_key = {probe["key"]: probe for probe in probes}
     probes_by_src: dict[str, list[dict]] = {}
     for probe in probes:
         probes_by_src.setdefault(probe["src"], []).append(probe)
-    overlap_by_key: dict[str, dict] = {}
-    terminal_by_src: dict[str, dict] = {}
-    terminal_observation_by_key: dict[str, dict] = {}
-    bad_events: list[dict] = []
-    selected_key: str | None = None
-    terminal_seen_at: float | None = None
 
     targets: dict[str, WorkloadTarget] = {}
     for probe in probes:
@@ -1698,156 +2163,171 @@ def _run_mbb_packet_window(token: str, *, count: int = 1200, interval_s: float =
             }
         targets[probe["key"]] = target
 
-    for probe in probes:
-        key = probe["key"]
-        src = probe["src"]
-        dst_ip = probe["dst_ip"]
-        target = targets[key]
-        cmd = (
-            f"{KUBECTL} exec -n {target.namespace} {target.pod_name} -c {target.container} -- "
-            f"ping -c {count} -i {interval_s} -W 1 {dst_ip}"
+    observers = {
+        probe["key"]: _PingObserver(
+            probe["key"], targets[probe["key"]], probe["dst_ip"], count=count, interval_s=interval_s
         )
-        proc_started_mono[key] = time.monotonic()
-        proc_started_wall[key] = datetime.now(UTC).isoformat()
-        procs[key] = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            shell=True,
-            start_new_session=True,
-        )
+        for probe in probes
+    }
+    for observer in observers.values():
+        observer.start()
 
+    samples: list[dict] = []
+    ops_events: dict[str, dict] = {}
+    bad_events: list[dict] = []
+    overlap_by_key: dict[str, dict] = {}
+    terminal_by_src: dict[str, dict] = {}
+    terminal_receipt_mono: float | None = None
+    missed_intervals = 0
+    next_due = time.monotonic()
     try:
         while time.monotonic() < deadline:
-            state = request_json("GET", "/api/v1/state", token=token)
-            by_gs = _ground_links_by_gs(state)
-            for src, active_for_src in by_gs.items():
-                if src not in probes_by_src or len(active_for_src) < 2:
+            for src, probes_for_src in probes_by_src.items():
+                sample = _sample_station(token, src, probes_for_src)
+                sample["index"] = len(samples)
+                samples.append(sample)
+                if sample.get("sample_error") or src in terminal_by_src:
                     continue
-                successor_if = _successor_interface(active_for_src)
-                if successor_if is None:
-                    continue
-                neigh = _kubectl_exec(src, "vtysh -c 'show isis neighbor'", timeout=10)
-                neigh_obs = _adjacency_observation(neigh, "isis")
-                neighbor_up = neigh_obs["observed"] and neigh_obs["positive"]
-                for probe in probes_by_src[src]:
-                    key = probe["key"]
-                    if key in overlap_by_key:
+                for probe in probes_for_src:
+                    if probe["key"] in overlap_by_key:
                         continue
-                    fib = _kubectl_exec(src, f"ip route get {probe['dst_ip']}", timeout=10)
-                    fib_obs = _route_observation(fib, probe["dst_ip"])
-                    route_dev = fib_obs.get("egress_dev")
-                    successor_fib_ready = (
-                        fib_obs["observed"] and fib_obs["positive"] and route_dev == successor_if
-                    )
-                    overlap_observed_mono = time.monotonic()
-                    overlap_by_key[key] = {
-                        "sim_time": state.get("sim_time"),
-                        "observed_wall_time": datetime.now(UTC).isoformat(),
-                        "estimated_ping_seq": int(
-                            (overlap_observed_mono - proc_started_mono[key]) / interval_s
-                        ),
-                        "active_ground_links": active_for_src,
-                        "successor_interface": successor_if,
-                        "route_dev": route_dev,
-                        "neighbor_up": neighbor_up,
-                        "successor_fib_ready": successor_fib_ready,
-                        "isis_stdout": neigh["stdout"],
-                        "fib_stdout": fib["stdout"],
+                    gate = _overlap_gate_fields(sample, probe)
+                    if gate is not None:
+                        overlap_by_key[probe["key"]] = {**gate, "sample_index": sample["index"]}
+            try:
+                events = request_json("GET", "/api/v1/ops/events?limit=500", token=token)
+            except Exception as exc:
+                samples.append(
+                    {
+                        "index": len(samples),
+                        "read_started_wall": datetime.now(UTC).isoformat(),
+                        "sample_error": f"ops events read failed: {exc}",
                     }
-
-            events = request_json("GET", "/api/v1/ops/events?limit=500", token=token)
+                )
+                events = []
+            receipt = datetime.now(UTC).isoformat()
             for event in events:
                 if not _event_at_or_after(event, started_at):
                     continue
+                identity = _event_identity(event)
+                if identity in ops_events:
+                    continue
+                ops_events[identity] = {**event, "receipt_wall": receipt}
                 if event.get("code") in MBB_BAD_OPS_CODES:
                     bad_events.append(event)
                 details = event.get("details") or {}
                 src = details.get("gs_id")
                 if (
                     event.get("source") == "ome"
-                    and event.get("code") == "MBB_TEARDOWN_TERMINAL"
+                    and event.get("code") == MBB_LIFECYCLE_CODE
                     and src in probes_by_src
                     and details.get("terminal_outcome") == "teardown_completed"
+                    and src not in terminal_by_src
                 ):
-                    terminal_by_src[src] = event
-                    selected_terminal_key, selected_overlap = _select_terminal_probe(
-                        probes_by_src[src], overlap_by_key
-                    )
-                    if selected_terminal_key is None:
-                        continue
-                    observed_mono = time.monotonic()
-                    for probe in probes_by_src[src]:
-                        key = probe["key"]
-                        overlap = overlap_by_key.get(key)
-                        terminal_observation_by_key[key] = {
-                            "event_timestamp": event.get("timestamp"),
-                            "observed_wall_time": datetime.now(UTC).isoformat(),
-                            "estimated_ping_seq": int(
-                                (observed_mono - proc_started_mono[key]) / interval_s
-                            ),
-                            "routing_layer_outcome": _routing_layer_outcome(overlap),
-                        }
-                    if selected_key is None:
-                        selected_key = selected_terminal_key
-                        terminal_seen_at = observed_mono
-                        if selected_overlap is None:
-                            overlap_by_key.setdefault(
-                                selected_terminal_key,
-                                {
-                                    "observed_wall_time": datetime.now(UTC).isoformat(),
-                                    "routing_layer_outcome": "overlap_not_sampled",
-                                    "successor_fib_ready": False,
-                                },
-                            )
-            if selected_key is not None and terminal_seen_at is not None:
-                if time.monotonic() - terminal_seen_at >= 5:
+                    terminal_by_src[src] = {
+                        "event": event,
+                        "receipt_wall": receipt,
+                        "sample_index_at_receipt": len(samples),
+                    }
+                    if terminal_receipt_mono is None:
+                        terminal_receipt_mono = time.monotonic()
+            if terminal_receipt_mono is not None:
+                if time.monotonic() - terminal_receipt_mono >= post_terminal_s:
                     break
-            if all(proc.poll() is not None for proc in procs.values()):
+            if all(observer.finished() for observer in observers.values()):
                 break
-            time.sleep(0.5)
+            next_due += cadence_s
+            now = time.monotonic()
+            if now > next_due:
+                skipped = int((now - next_due) // cadence_s) + 1
+                missed_intervals += skipped
+                next_due += skipped * cadence_s
+            else:
+                time.sleep(next_due - now)
     finally:
-        outputs: dict[str, dict] = {}
-        for key, proc in procs.items():
-            if proc.poll() is None:
-                try:
-                    os.killpg(proc.pid, signal.SIGINT)
-                except ProcessLookupError:
-                    pass
-            try:
-                stdout, stderr = proc.communicate(timeout=15)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                stdout, stderr = proc.communicate(timeout=5)
-            packet_result = _ping_packet_outcome(stdout, stderr, proc.returncode)
-            outputs[key] = {
-                **packet_result,
-                "returncode": proc.returncode,
-                "started_wall_time": proc_started_wall[key],
-                "overlap_observation": overlap_by_key.get(key),
-                "terminal_observation": terminal_observation_by_key.get(key),
-                "stdout": stdout[-4000:],
-                "stderr": stderr[-1000:],
-            }
+        for observer in observers.values():
+            observer.stop()
+    ended_at = datetime.now(UTC)
 
-    if selected_key is None:
-        return {
-            "result": "FAIL",
-            "reason": "No probed GS completed an MBB teardown during the packet window",
-            "probes": probes,
-            "overlap_by_key": overlap_by_key,
-            "terminal_gs_ids": sorted(terminal_by_src),
-            "bad_ops_codes": [event.get("code") for event in bad_events],
-            "probe_outputs": outputs,
+    first_sim = next((sample.get("sim_time") for sample in samples if sample.get("sim_time")), None)
+    link_events = _link_events_for(token, set(probes_by_src), start_sim=first_sim)
+    lifecycle = _lifecycle_occurrences(list(ops_events.values()))
+
+    outputs: dict[str, dict] = {}
+    for key, observer in observers.items():
+        probe = probe_by_key[key]
+        terminal = terminal_by_src.get(probe["src"])
+        overlap = overlap_by_key.get(key)
+        post_teardown_route = None
+        if terminal is not None and overlap is not None:
+            for sample in samples[terminal["sample_index_at_receipt"] :]:
+                route = (sample.get("routes") or {}).get(key) or {}
+                if route.get("egress_dev") == overlap["successor_interface"]:
+                    post_teardown_route = {
+                        "sample_index": sample["index"],
+                        "sim_time": sample.get("sim_time"),
+                        "read_finished_wall": sample.get("read_finished_wall"),
+                        "egress_dev": route.get("egress_dev"),
+                        "note": "information only; a post-teardown sample never satisfies the overlap requirement",
+                    }
+                    break
+        outputs[key] = {
+            **_probe_packet_observation(observer.instances),
+            "command": observer.command,
+            "restart_limit_reached": observer.restart_limit_reached,
+            "overlap_observation": overlap,
+            "terminal_observation": (
+                None
+                if terminal is None
+                else {
+                    "event_timestamp": terminal["event"].get("timestamp"),
+                    "receipt_wall": terminal["receipt_wall"],
+                    "sample_index_at_receipt": terminal["sample_index_at_receipt"],
+                    "routing_layer_outcome": _routing_layer_outcome(overlap),
+                }
+            ),
+            "post_teardown_route_observation": post_teardown_route,
         }
 
-    overlap = overlap_by_key.get(selected_key)
+    collector = {
+        "cadence_s": cadence_s,
+        "sample_count": len(samples),
+        "missed_intervals": missed_intervals,
+        "window_s": window_s,
+        "started_wall": started_at.isoformat(),
+        "ended_wall": ended_at.isoformat(),
+        "post_terminal_s": post_terminal_s,
+        "note": RECEIPT_STAMP_NOTE,
+    }
+    retained = {
+        "probes": probes,
+        "probe_outputs": outputs,
+        "overlap_by_key": overlap_by_key,
+        "timeline": samples,
+        "ops_events": list(ops_events.values()),
+        "link_events": link_events,
+        "lifecycle_occurrences": lifecycle,
+        "bad_ops_codes": [event.get("code") for event in bad_events],
+        "collector": collector,
+    }
+    if not terminal_by_src:
+        return {
+            "result": "FAIL",
+            "reason": "No probed station completed an MBB teardown during the packet window",
+            "terminal_gs_ids": [],
+            **retained,
+        }
+
+    terminal_src = min(terminal_by_src, key=lambda src: terminal_by_src[src]["receipt_wall"])
+    selected_key, overlap = _select_terminal_probe(probes_by_src[terminal_src], overlap_by_key)
+    if overlap is None:
+        overlap = {
+            "routing_layer_outcome": "overlap_not_sampled",
+            "successor_fib_ready": False,
+        }
     output = outputs[selected_key]
-    overlap_ready = bool(overlap and overlap.get("successor_fib_ready"))
     passed = _mbb_packet_window_passed(output, overlap, bad_events)
     probe = probe_by_key[selected_key]
-    terminal_observation = terminal_observation_by_key.get(selected_key)
     return {
         "result": "PASS" if passed else "FAIL",
         "src": probe["src"],
@@ -1857,31 +2337,32 @@ def _run_mbb_packet_window(token: str, *, count: int = 1200, interval_s: float =
         "interval_s": interval_s,
         "stats": output["stats"],
         "packet_outcome": output["packet_outcome"],
-        "zero_loss": output["zero_loss"],
         "protocol_observed": output["protocol_observed"],
+        "reply_count": output["reply_count"],
         "overlap_required": True,
-        "overlap_ready": overlap_ready,
+        "overlap_ready": bool(overlap.get("successor_fib_ready")),
         "packet_loss_policy": "recorded_not_gated",
-        "reply_count": output.get("reply_count"),
-        "missing_ranges": output.get("missing_ranges"),
         "overlap_proof": overlap,
         "routing_layer_outcome": _routing_layer_outcome(overlap),
-        "terminal_event": terminal_by_src.get(probe["src"]),
-        "terminal_observation": terminal_observation,
-        "packet_handover_correlation": _packet_handover_correlation(output, terminal_observation),
-        "bad_ops_codes": [event.get("code") for event in bad_events],
-        "stdout": output["stdout"],
-        "stderr": output["stderr"],
+        "terminal_event": terminal_by_src[terminal_src]["event"],
+        "terminal_observation": output["terminal_observation"],
+        "post_teardown_route_observation": output["post_teardown_route_observation"],
+        "terminal_gs_ids": sorted(terminal_by_src),
+        **retained,
     }
 
 
 def check_mbb_packet_behavior(
     token: str,
+    perm: dict,
     *,
     count: int = 1200,
     interval_s: float = 0.2,
     max_wait_s: int = 900,
 ) -> dict:
+    """Repeated packet windows until one is graded at a completed teardown or
+    the time runs out. Every attempt is retained in full, the failed ones
+    included, whatever a later attempt shows."""
     deadline = time.monotonic() + max_wait_s
     attempts: list[dict] = []
     while time.monotonic() < deadline:
@@ -1889,25 +2370,10 @@ def check_mbb_packet_behavior(
         if remaining_s < 60:
             break
         window_count = min(count, max(300, int(min(remaining_s, 300) / interval_s)))
-        evidence = _run_mbb_packet_window(token, count=window_count, interval_s=interval_s)
-        attempts.append(
-            {
-                "result": evidence.get("result"),
-                "reason": evidence.get("reason"),
-                "src": evidence.get("src"),
-                "dst_gs": evidence.get("dst_gs"),
-                "stats": evidence.get("stats"),
-                "packet_outcome": evidence.get("packet_outcome"),
-                "terminal_gs_ids": evidence.get("terminal_gs_ids"),
-                "routing_layer_outcome": evidence.get("routing_layer_outcome"),
-            }
-        )
-        if evidence.get("result") == "PASS":
-            evidence["attempts"] = attempts
-            return evidence
-        if evidence.get("terminal_event") is not None:
-            evidence["attempts"] = attempts
-            return evidence
+        evidence = _run_mbb_packet_window(token, perm, count=window_count, interval_s=interval_s)
+        attempts.append(evidence)
+        if evidence.get("result") == "PASS" or evidence.get("terminal_event") is not None:
+            return {**evidence, "attempts": attempts}
     return {
         "result": "FAIL",
         "reason": "No qualifying MBB handover packet observation before timeout",
@@ -2692,8 +3158,8 @@ def run_mbb_acceptance(provenance: dict[str, str] | None = None) -> dict:
 
         time.sleep(30)
         token = get_token()
-        evidence["convergence_preconditions"] = check_mbb_convergence_preconditions(token)
-        evidence["mbb_packet_behavior"] = check_mbb_packet_behavior(token)
+        evidence["convergence_preconditions"] = check_mbb_convergence_preconditions(token, perm)
+        evidence["mbb_packet_behavior"] = check_mbb_packet_behavior(token, perm)
         evidence["lifecycle_and_ops"] = check_mbb_lifecycle_and_ops(token)
         passed = all(
             evidence[key].get("result") == "PASS"

@@ -807,81 +807,6 @@ def test_ground_probe_records_the_kernel_answer_and_runs_nothing_without_a_publi
     assert "RTNETLINK answers: Network unreachable" in negative["route_stderr"]
 
 
-class _FakeProc:
-    def __init__(self, stdout: str) -> None:
-        self._stdout = stdout
-        self.pid = 4242
-        self.returncode = 0
-        self.communicated = False
-
-    def poll(self):
-        return 0
-
-    def communicate(self, timeout=None):
-        self.communicated = True
-        return self._stdout, ""
-
-    def kill(self):
-        raise AssertionError("kill must not be needed for a finished probe")
-
-
-def test_handover_packet_window_targets_the_published_container(monkeypatch) -> None:
-    started: list[dict] = []
-
-    def fake_popen(cmd, **kwargs):
-        started.append({"cmd": cmd, **kwargs})
-        return _FakeProc(
-            "64 bytes from 100.64.0.2: seq=0 ttl=64 time=1.0 ms\n64 bytes from 100.64.0.2: seq=1 ttl=64 time=1.0 ms\n2 packets transmitted, 2 packets received, 0% packet loss\n"
-        )
-
-    probe = {"key": "gs-a->gs-b", "src": "gs-a", "dst_gs": "gs-b", "dst_ip": "100.64.0.2"}
-    target = e2e_matrix.WorkloadTarget(
-        node_id="gs-a", namespace="nodalarc", pod_name="gs-a", pod_uid="u", container="frr-router"
-    )
-    monkeypatch.setattr(e2e_matrix, "_find_all_routed_ground_probes", lambda token: [probe])
-    monkeypatch.setattr(e2e_matrix, "_workload_target", lambda node_id: (target, None))
-    monkeypatch.setattr(subprocess, "Popen", fake_popen)
-    monkeypatch.setattr(
-        e2e_matrix,
-        "request_json",
-        lambda method, path, **k: [] if "ops/events" in path else {"nodes": [], "links": []},
-    )
-    monkeypatch.setattr(e2e_matrix.time, "sleep", lambda _s: None)
-
-    result = e2e_matrix._run_mbb_packet_window("token", count=2, interval_s=0.2)  # noqa: SLF001
-
-    assert len(started) == 1
-    assert (
-        " exec -n nodalarc gs-a -c frr-router -- ping -c 2 -i 0.2 -W 1 100.64.0.2"
-        in started[0]["cmd"]
-    )
-    assert started[0]["start_new_session"] is True
-    assert "-c frr " not in started[0]["cmd"] and "gs-a.lower" not in started[0]["cmd"]
-    output = result["probe_outputs"]["gs-a->gs-b"]
-    assert output["packet_outcome"] == "zero_loss" and output["reply_count"] == 2
-
-
-def test_handover_packet_window_starts_nothing_when_a_target_is_unresolved(monkeypatch) -> None:
-    probe = {"key": "gs-a->gs-b", "src": "gs-a", "dst_gs": "gs-b", "dst_ip": "100.64.0.2"}
-    monkeypatch.setattr(e2e_matrix, "_find_all_routed_ground_probes", lambda token: [probe])
-    monkeypatch.setattr(
-        e2e_matrix,
-        "_workload_target",
-        lambda node_id: (None, "expected one live session pod, found 0: []"),
-    )
-    monkeypatch.setattr(
-        subprocess,
-        "Popen",
-        lambda *a, **k: (_ for _ in ()).throw(AssertionError("Popen must not start")),
-    )
-
-    result = e2e_matrix._run_mbb_packet_window("token", count=2, interval_s=0.2)  # noqa: SLF001
-
-    assert result["result"] == "FAIL"
-    assert result["failure_kind"] == "probe"
-    assert "expected one live session pod" in result["reason"]
-
-
 def test_handover_window_decides_pings_no_route_answer_with_the_one_reader() -> None:
     """The interrupted-window parser and the synchronous probes share one decision
     about a no-route answer: only a line ping printed, in either C library's wording."""
@@ -899,18 +824,6 @@ def test_handover_window_decides_pings_no_route_answer_with_the_one_reader() -> 
         assert unobserved["packet_outcome"] == "probe_error", diagnostic
     source = Path(e2e_matrix.__file__).read_text()
     assert source.count('"Network unreachable" in') == 0
-
-
-def test_handover_overlap_reads_adjacency_and_route_through_the_observation_parsers(
-    monkeypatch,
-) -> None:
-    """The MBB overlap sample uses the same readers as every other probe: no inline
-    'Up' substring, no second route parser."""
-    source = Path(e2e_matrix.__file__).read_text()
-    window = source.split("def _run_mbb_packet_window")[1].split("\ndef ")[0]
-    assert '"Up" in' not in window
-    assert "_adjacency_observation(" in window and "_route_observation(" in window
-    assert source.count("def _route_egress_dev") == 1 and "def _route_dev" not in source
 
 
 # --- the MBB acceptance lanes run the shipped walker unchanged ---
@@ -1098,3 +1011,538 @@ def test_invalidation_proof_requires_the_pairs_the_epoch_and_the_requested_targe
     assert not matches(event(epoch_id=5), **kwargs)
     assert not matches(event(seek_target_sim_time="2026-06-08T00:10:35Z"), **kwargs)
     assert not matches(event(seek_target_sim_time=None), **kwargs)
+
+
+# --- the MBB packet window is a timeline: streaming observers, per-second samples ---
+
+
+class _FakePopen:
+    """A scripted ping process: one (stdout, stderr, returncode) per instance."""
+
+    scripts: list[tuple[str, str, int]] = []
+    started: list[dict] = []
+
+    def __init__(self, cmd, **kwargs) -> None:
+        import io
+
+        stdout, stderr, rc = type(self).scripts.pop(0)
+        type(self).started.append({"cmd": cmd, **kwargs})
+        self.stdout = io.StringIO(stdout)
+        self.stderr = io.StringIO(stderr)
+        self.pid = 4242
+        self.returncode = rc
+
+    def wait(self):
+        return self.returncode
+
+    def poll(self):
+        return self.returncode
+
+    def kill(self):
+        raise AssertionError("kill must not be needed for a finished probe")
+
+
+def _target(node_id: str = "gs-a"):
+    return e2e_matrix.WorkloadTarget(
+        node_id=node_id, namespace="nodalarc", pod_name=node_id, pod_uid="u", container="frr-router"
+    )
+
+
+_REPLIES = "".join(f"64 bytes from 100.64.0.2: seq={n} ttl=64 time=1.0 ms\n" for n in range(2))
+
+
+def test_ping_observer_stamps_every_line_and_restarts_after_an_unroutable_exit(monkeypatch) -> None:
+    _FakePopen.scripts = [
+        (_REPLIES, "ping: sendto: Network unreachable\n", 1),
+        (_REPLIES + "2 packets transmitted, 2 packets received, 0% packet loss\n", "", 0),
+    ]
+    _FakePopen.started = []
+    monkeypatch.setattr(subprocess, "Popen", _FakePopen)
+    monkeypatch.setattr(e2e_matrix.os, "killpg", lambda pid, sig: None)
+
+    observer = e2e_matrix._PingObserver(  # noqa: SLF001
+        "gs-a->gs-b",
+        _target(),
+        "100.64.0.2",
+        count=2,
+        interval_s=0.2,
+        max_restarts=1,
+        restart_delay_s=0,
+    )
+    observer.start()
+    observer._thread.join(timeout=5)  # noqa: SLF001
+    assert observer.finished()
+    assert observer.restart_limit_reached is True
+    assert (
+        " exec -n nodalarc gs-a -c frr-router -- ping -c 2 -i 0.2 -W 1 100.64.0.2"
+        in observer.command
+    )
+    assert _FakePopen.started[0]["start_new_session"] is True
+    assert [record["instance"] for record in observer.instances] == [0, 1]
+    assert [record["returncode"] for record in observer.instances] == [1, 0]
+    assert all(line["receipt_wall"] for record in observer.instances for line in record["lines"])
+
+    packets = e2e_matrix._probe_packet_observation(observer.instances)  # noqa: SLF001
+    assert packets["instance_count"] == 2 and packets["reply_count"] == 4
+    assert packets["packet_outcome"] == "routing_unreachable"
+    assert [answer["answer"] for answer in packets["unreachable_answers"]] == [
+        "Network unreachable"
+    ]
+    assert packets["observer_failures"] == []
+    assert len(packets["restart_gaps"]) == 1 and packets["restart_gaps"][0]["after_instance"] == 0
+    assert packets["protocol_observed"] is True
+    # sequences restart with every instance and are kept per instance
+    assert [item["reply_seq_ranges"] for item in packets["instances"]] == [[[0, 1]], [[0, 1]]]
+    assert "not send times" in packets["note"]
+
+
+def test_instance_observation_keeps_loss_unreachable_observer_failure_and_silence_apart() -> None:
+    def record(lines):
+        return {
+            "instance": 0,
+            "started_wall": "2026-09-15T00:00:00+00:00",
+            "ended_wall": "2026-09-15T00:00:05+00:00",
+            "returncode": 1,
+            "stopped_by_harness": False,
+            "lines": [
+                {"receipt_wall": "t", "stream": stream, "text": text} for stream, text in lines
+            ],
+        }
+
+    observe = e2e_matrix._instance_observation  # noqa: SLF001
+    lossy = observe(
+        record(
+            [
+                ("stdout", "64 bytes from 100.64.0.2: seq=0 ttl=64 time=1.0 ms"),
+                ("stdout", "64 bytes from 100.64.0.2: seq=1 ttl=64 time=1.0 ms"),
+                ("stdout", "64 bytes from 100.64.0.2: seq=3 ttl=64 time=1.0 ms"),
+            ]
+        )
+    )
+    assert lossy["reply_count"] == 3
+    assert lossy["missing_seq_ranges_within_retained_replies"] == [[2, 2]]
+    assert lossy["protocol_observed"] is True and lossy["unreachable_answers"] == []
+
+    unreachable = observe(record([("stderr", "ping: sendto: Network is unreachable")]))
+    assert unreachable["unreachable_answers"][0]["answer"] == "Network is unreachable"
+    assert unreachable["protocol_observed"] is True and unreachable["observer_failures"] == []
+
+    diagnostic = observe(
+        record(
+            [("stderr", 'error: unable to upgrade connection: container not found ("frr-router")')]
+        )
+    )
+    assert diagnostic["observer_failures"] and diagnostic["protocol_observed"] is False
+    assert diagnostic["unreachable_answers"] == []
+
+    silent = observe(record([]))
+    assert silent["reply_count"] == 0 and silent["protocol_observed"] is False
+
+    aggregate = e2e_matrix._probe_packet_observation  # noqa: SLF001
+    assert (
+        aggregate([record([("stderr", "Network is unreachable (kubectl)")])])["packet_outcome"]
+        == "probe_error"
+    )
+    assert aggregate([record([])])["packet_outcome"] == "no_replies"
+
+
+def test_isis_neighbor_rows_identify_each_adjacency_individually() -> None:
+    table = (
+        "Area NODAL:\n"
+        " System Id           Interface   L  State         Holdtime SNPA\n"
+        " space-sat-p00s07    term0       3  Initializing  2        2020.2020.2020\n"
+        " space-sat-p00s08    term1       3  Up            3        2020.2020.2020\n"
+    )
+    rows = e2e_matrix._isis_neighbor_rows(table)  # noqa: SLF001
+    assert [(row["system_id"], row["interface"], row["state"]) for row in rows] == [
+        ("space-sat-p00s07", "term0", "Initializing"),
+        ("space-sat-p00s08", "term1", "Up"),
+    ]
+    assert e2e_matrix._adjacency_on(rows, "term0")["state"] == "Initializing"  # noqa: SLF001
+    assert e2e_matrix._adjacency_on(rows, "term9") is None  # noqa: SLF001
+    assert e2e_matrix._adjacency_on(rows, None) is None  # noqa: SLF001
+
+
+def _sample(*, links, neighbors, route_dev, sim="2026-06-08T00:14:56Z"):
+    table = "Area NODAL:\n System Id  Interface  L  State  Holdtime SNPA\n" + "".join(
+        f" sat-{iface}   {iface}   3  {state}  3  2020.2020.2020\n" for iface, state in neighbors
+    )
+    return {
+        "sim_time": sim,
+        "read_started_wall": "2026-09-15T00:00:00+00:00",
+        "read_finished_wall": "2026-09-15T00:00:01+00:00",
+        "decision_snapshot_seq": 906,
+        "active_ground_links": links,
+        "neighbors": e2e_matrix._isis_neighbor_rows(table),  # noqa: SLF001
+        "neighbor_observation": {"observed": True, "positive": True},
+        "isis_stdout": table,
+        "routes": {
+            "gs-a->gs-b": {
+                "observed": route_dev is not None,
+                "positive": route_dev is not None,
+                "egress_dev": route_dev,
+                "stdout": f"100.64.0.2 dev {route_dev}" if route_dev else "",
+            }
+        },
+    }
+
+
+_OVERLAP_LINKS = [
+    {
+        "node_a": "gs-a",
+        "node_b": "sat-1",
+        "interface_a": "term1",
+        "link_reason": "",
+        "scheduling_state": "teardown",
+        "teardown_remaining_ticks": 20,
+    },
+    {
+        "node_a": "gs-a",
+        "node_b": "sat-2",
+        "interface_a": "term0",
+        "link_reason": "vis_gained",
+        "scheduling_state": "active",
+    },
+]
+_PROBE = {"key": "gs-a->gs-b", "src": "gs-a", "dst_gs": "gs-b", "dst_ip": "100.64.0.2"}
+
+
+def test_overlap_gate_fields_read_the_flow_route_and_the_successors_own_adjacency() -> None:
+    gate = e2e_matrix._overlap_gate_fields  # noqa: SLF001
+    incumbent_route = gate(
+        _sample(
+            links=_OVERLAP_LINKS,
+            neighbors=[("term0", "Initializing"), ("term1", "Up")],
+            route_dev="term1",
+        ),
+        _PROBE,
+    )
+    assert incumbent_route["successor_interface"] == "term0"
+    assert (
+        incumbent_route["route_dev"] == "term1" and incumbent_route["successor_fib_ready"] is False
+    )
+    # the successor's own adjacency decides neighbor_up, not the incumbent's
+    assert incumbent_route["neighbor_up"] is False
+    assert incumbent_route["successor_adjacency"]["state"] == "Initializing"
+    assert [row["interface"] for row in incumbent_route["incumbent_adjacencies"]] == ["term1"]
+    assert e2e_matrix._routing_layer_outcome(incumbent_route) == "successor_adjacency_not_up"  # noqa: SLF001
+
+    successor_route = gate(
+        _sample(
+            links=_OVERLAP_LINKS, neighbors=[("term0", "Up"), ("term1", "Up")], route_dev="term0"
+        ),
+        _PROBE,
+    )
+    assert successor_route["successor_fib_ready"] is True and successor_route["neighbor_up"] is True
+
+    assert (
+        gate(
+            _sample(links=_OVERLAP_LINKS[:1], neighbors=[("term1", "Up")], route_dev="term1"),
+            _PROBE,
+        )
+        is None
+    )
+
+
+def _lifecycle(
+    seq, *, step=905, snapshot=906, outcome="teardown_completed", message="done", epoch=1
+):
+    return {
+        "seq": seq,
+        "source": "ome",
+        "code": "MBB_TEARDOWN_TERMINAL",
+        "timestamp": "2026-09-14T23:53:34.180304Z",
+        "details": {
+            "session_id": "run-1",
+            "epoch_id": epoch,
+            "allocator_step": step,
+            "snapshot_seq": snapshot,
+            "teardown_id": "gs-a:sat-1->gs-a:sat-2",
+            "gs_id": "gs-a",
+            "terminal_outcome": outcome,
+            "message": message,
+        },
+    }
+
+
+def test_lifecycle_occurrences_are_scoped_by_run_epoch_step_and_snapshot_and_keep_raw_records() -> (
+    None
+):
+    events = [
+        _lifecycle(1),
+        _lifecycle(2),  # the same occurrence published twice
+        _lifecycle(3, step=990, snapshot=991),  # the same teardown_id recurring later
+        _lifecycle(4, step=990, snapshot=991, message="different wording"),  # conflicting duplicate
+        {"source": "scheduler", "code": "ACTUATION_CLEAN", "details": {}},
+    ]
+    groups = e2e_matrix._lifecycle_occurrences(events)  # noqa: SLF001
+    assert len(groups) == 2
+    first, second = groups
+    assert (
+        first["record_count"] == 2
+        and first["duplicate_records"]
+        and not first["conflicting_records"]
+    )
+    assert [record["seq"] for record in first["records"]] == [1, 2]
+    assert second["record_count"] == 2 and second["conflicting_records"] is True
+    assert (
+        first["occurrence"]["allocator_step"] == 905
+        and second["occurrence"]["allocator_step"] == 990
+    )
+
+
+def test_lifecycle_check_counts_distinct_completed_occurrences_not_records(monkeypatch) -> None:
+    monkeypatch.setattr(e2e_matrix, "request_json", lambda *a, **k: [_lifecycle(1), _lifecycle(2)])
+    result = e2e_matrix.check_mbb_lifecycle_and_ops("t", wait_s=1)
+    assert result["result"] == "PASS"
+    assert result["completed_count"] == 1
+    assert result["lifecycle_record_count"] == 2 and result["lifecycle_occurrence_count"] == 1
+    assert len(result["duplicate_record_groups"]) == 1 and result["conflicting_record_groups"] == []
+
+
+def test_probe_sources_are_the_resolved_limit_one_mbb_stations() -> None:
+    perm = e2e_matrix.acceptance_permutation(_PROVENANCE)
+    assert e2e_matrix._mbb_probe_sources(perm) == [  # noqa: SLF001
+        "earth-de-frankfurt-gw1",
+        "earth-us-co-denver-gw2",
+        "earth-us-va-ashburn-gw1",
+    ]
+
+
+def test_all_routed_probes_come_from_limit_one_stations_to_other_sites_by_space_egress(
+    monkeypatch,
+) -> None:
+    perm = e2e_matrix.acceptance_permutation(_PROVENANCE)
+    nodes = [
+        {
+            "node_id": gw,
+            "node_type": "ground_station",
+            "addresses": [
+                {"purpose": "router_loopback", "family": "ipv4", "address": f"10.255.0.{n}/32"}
+            ],
+        }
+        for n, gw in enumerate(sorted(perm["ground_topology"]), start=10)
+    ] + [{"node_id": "sat-1", "node_type": "satellite"}]
+    links = [
+        {
+            "node_a": gw,
+            "node_b": "sat-1",
+            "state": "active",
+            "interface_a": "term0",
+            "interface_b": "gnd0",
+        }
+        for gw in ("earth-us-va-ashburn-gw1", "earth-us-hawthorne-gw1", "earth-us-co-denver-gw2")
+    ]
+    monkeypatch.setattr(
+        e2e_matrix, "request_json", lambda *a, **k: {"nodes": nodes, "links": links}
+    )
+    table = "Area NODAL:\n System Id  Interface  L  State  Holdtime SNPA\n sat-1  term0  3  Up  3  2020.2020.2020\n"
+
+    def fake_exec(node_id, command, *, timeout=20):
+        if command.startswith("ip route get"):
+            dev = "terr0" if node_id == "earth-us-co-denver-gw2" else "term0"
+            dst = command.split()[-1]
+            return {
+                "rc": 0,
+                "stdout": f"{dst} via 10.0.0.1 dev {dev} src 10.0.0.2",
+                "stderr": "",
+                "target": {},
+                "resolution_error": None,
+            }
+        if command.startswith("vtysh"):
+            return {"rc": 0, "stdout": table, "stderr": "", "target": {}, "resolution_error": None}
+        return {
+            "rc": 0,
+            "stdout": "1 packets transmitted, 1 packets received, 0% packet loss\n",
+            "stderr": "",
+            "target": {},
+            "resolution_error": None,
+        }
+
+    monkeypatch.setattr(e2e_matrix, "_kubectl_exec", fake_exec)
+
+    probes = e2e_matrix._find_all_routed_ground_probes("t", perm)  # noqa: SLF001
+
+    assert [probe["src"] for probe in probes] == ["earth-us-va-ashburn-gw1"]
+    probe = probes[0]
+    assert probe["dst_site"] != probe["src_site"] and probe["egress_dev"] == "term0"
+    assert probe["transit_proven"] is True and probe["steady_limit"] == 1
+    # Denver gw2 routed over the site LAN: excluded; Hawthorne has steady limit 7: never a source.
+
+
+class _FakeObserver:
+    def __init__(self, key, target, dst_ip, *, count, interval_s, **kwargs) -> None:
+        self.key = key
+        self.instances = [
+            {
+                "instance": 0,
+                "started_wall": "2026-09-15T00:00:00+00:00",
+                "ended_wall": "2026-09-15T00:00:09+00:00",
+                "returncode": 0,
+                "stopped_by_harness": True,
+                "lines": [
+                    {
+                        "receipt_wall": "t",
+                        "stream": "stdout",
+                        "text": f"64 bytes from {dst_ip}: seq={n} ttl=64 time=1.0 ms",
+                    }
+                    for n in range(5)
+                ],
+            }
+        ]
+        self.restart_limit_reached = False
+        self.command = f"ping {dst_ip}"
+        self.stopped = False
+
+    def start(self):
+        pass
+
+    def finished(self):
+        return self.stopped
+
+    def stop(self, *, grace_s=15.0):
+        self.stopped = True
+
+
+def test_packet_window_grades_the_first_overlap_sample_and_never_a_post_teardown_one(
+    monkeypatch,
+) -> None:
+    import itertools
+
+    perm = {
+        "ground_topology": {"gs-a": {}},
+        "mbb_stations": {"gs-a": {"steady_limit": 1, "handover_mode": "mbb"}},
+    }
+    before = [
+        _sample(
+            links=_OVERLAP_LINKS[1:],
+            neighbors=[("term1", "Up")],
+            route_dev="term1",
+            sim="2026-06-08T00:14:50Z",
+        ),
+        _sample(
+            links=_OVERLAP_LINKS, neighbors=[("term0", "Up"), ("term1", "Up")], route_dev="term1"
+        ),
+        _sample(
+            links=_OVERLAP_LINKS,
+            neighbors=[("term0", "Up"), ("term1", "Up")],
+            route_dev="term1",
+            sim="2026-06-08T00:14:57Z",
+        ),
+    ]
+    after = _sample(
+        links=_OVERLAP_LINKS[1:],
+        neighbors=[("term0", "Up")],
+        route_dev="term0",
+        sim="2026-06-08T00:15:06Z",
+    )
+    samples = itertools.chain(before, itertools.repeat(after))
+    lifecycle = [_lifecycle(1), _lifecycle(2)]
+    event_batches = itertools.chain([[], []], itertools.repeat(lifecycle))
+    monkeypatch.setattr(e2e_matrix, "_find_all_routed_ground_probes", lambda token, perm: [_PROBE])
+    monkeypatch.setattr(e2e_matrix, "_workload_target", lambda node_id: (_target(), None))
+    monkeypatch.setattr(e2e_matrix, "_PingObserver", _FakeObserver)
+    monkeypatch.setattr(
+        e2e_matrix,
+        "_sample_station",
+        lambda token, src, probes, protocol="isis": dict(next(samples)),
+    )
+    monkeypatch.setattr(
+        e2e_matrix,
+        "request_json",
+        lambda method, path, **k: next(event_batches) if "ops/events" in path else [],
+    )
+    monkeypatch.setattr(
+        e2e_matrix,
+        "_link_events_for",
+        lambda token, nodes, *, start_sim: [{"event_type": "link_down", "node_a": "gs-a"}],
+    )
+    monkeypatch.setattr(e2e_matrix, "_event_at_or_after", lambda event, started_at: True)
+    monkeypatch.setattr(e2e_matrix.time, "sleep", lambda _s: None)
+
+    result = e2e_matrix._run_mbb_packet_window(  # noqa: SLF001
+        "t", perm, count=5, interval_s=0.2, post_terminal_s=0.05
+    )
+
+    assert result["result"] == "FAIL"
+    # the gate's input is the first overlap sighting (index 1), route still on the incumbent
+    assert result["overlap_proof"]["sample_index"] == 1
+    assert result["overlap_proof"]["successor_fib_ready"] is False
+    assert result["routing_layer_outcome"] == "fib_still_points_to_other_interface"
+    # the route moved to the successor after the teardown: recorded, never gating
+    post = result["post_teardown_route_observation"]
+    assert post["egress_dev"] == "term0" and post["sample_index"] >= 3
+    assert "never satisfies" in post["note"]
+    assert result["terminal_event"]["seq"] == 1
+    assert result["terminal_observation"]["sample_index_at_receipt"] == 3
+    assert [sample["index"] for sample in result["timeline"][:4]] == [0, 1, 2, 3]
+    assert len(result["timeline"]) >= 4
+    assert len(result["ops_events"]) == 2 and len(result["lifecycle_occurrences"]) == 1
+    assert result["lifecycle_occurrences"][0]["duplicate_records"] is True
+    assert result["link_events"] == [{"event_type": "link_down", "node_a": "gs-a"}]
+    assert result["probe_outputs"]["gs-a->gs-b"]["reply_count"] == 5
+    assert result["collector"]["sample_count"] == len(result["timeline"])
+    assert result["collector"]["cadence_s"] == 1.0
+    assert result["packet_loss_policy"] == "recorded_not_gated"
+
+
+def test_packet_window_starts_nothing_when_a_target_is_unresolved(monkeypatch) -> None:
+    monkeypatch.setattr(e2e_matrix, "_find_all_routed_ground_probes", lambda token, perm: [_PROBE])
+    monkeypatch.setattr(
+        e2e_matrix,
+        "_workload_target",
+        lambda node_id: (None, "expected one live session pod, found 0: []"),
+    )
+    monkeypatch.setattr(
+        e2e_matrix,
+        "_PingObserver",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("no observer")),
+    )
+
+    result = e2e_matrix._run_mbb_packet_window("t", {}, count=2, interval_s=0.2)  # noqa: SLF001
+
+    assert result["result"] == "FAIL" and result["failure_kind"] == "probe"
+    assert "expected one live session pod" in result["reason"]
+
+
+def test_packet_behavior_retains_every_attempt_in_full(monkeypatch) -> None:
+    windows = iter(
+        [
+            {
+                "result": "FAIL",
+                "reason": "No probed station completed an MBB teardown during the packet window",
+                "timeline": [{"index": 0}],
+                "terminal_event": None,
+            },
+            {
+                "result": "PASS",
+                "timeline": [{"index": 0}, {"index": 1}],
+                "terminal_event": {"seq": 9},
+            },
+        ]
+    )
+    monkeypatch.setattr(
+        e2e_matrix,
+        "_run_mbb_packet_window",
+        lambda token, perm, *, count, interval_s: next(windows),
+    )
+    monkeypatch.setattr(e2e_matrix.time, "sleep", lambda _s: None)
+
+    result = e2e_matrix.check_mbb_packet_behavior("t", {}, max_wait_s=900)
+
+    assert result["result"] == "PASS"
+    assert len(result["attempts"]) == 2
+    assert result["attempts"][0]["result"] == "FAIL" and result["attempts"][0]["timeline"] == [
+        {"index": 0}
+    ]
+
+
+def test_station_sampler_reads_adjacency_and_route_through_the_observation_parsers() -> None:
+    source = Path(e2e_matrix.__file__).read_text()
+    sampler = source.split("def _sample_station")[1].split("\ndef ")[0]
+    window = source.split("def _run_mbb_packet_window")[1].split("\ndef ")[0]
+    assert "_adjacency_observation(" in sampler and "_route_observation(" in sampler
+    assert '"Up" in' not in window and '"Up" in' not in sampler
+    assert source.count("def _route_egress_dev") == 1 and "def _route_dev" not in source
+    # the gate's overlap input is fixed at first sighting, before the terminal event
+    assert "src in terminal_by_src:\n                    continue" in window

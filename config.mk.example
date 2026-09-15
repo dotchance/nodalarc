@@ -5,9 +5,6 @@
 # K3s kubeconfig path
 KUBECONFIG ?= /etc/rancher/k3s/k3s.yaml
 
-# K3s node name (used for nodeSelector in Helm)
-K3S_NODE ?= nodal
-
 # Whether sudo is needed for containerd image import
 # Set to empty string if your user can access the containerd socket directly
 SUDO_CTR ?= sudo
@@ -21,12 +18,6 @@ MODE ?= auto
 
 # Default session for `make session`
 DEFAULT_SESSION ?= catalog/nodalarc/sessions/earth-leo-simple.yaml
-
-# Extra Helm arguments for non-image chart values.
-# Runtime image values are generated from scripts/na-images.sh. Do not put
-# images.*, imagePullPolicy, or buildTag overrides here unless explicitly
-# running with ALLOW_IMAGE_ARG_OVERRIDE=1 for diagnostics.
-HELM_EXTRA_ARGS ?=
 
 # --- Multi-node setup ---
 # REGISTRY_HOST is the hostname:port Kubernetes nodes pull from.

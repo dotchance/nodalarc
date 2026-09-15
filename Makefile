@@ -12,7 +12,6 @@
 # ---------------------------------------------------------------------------
 
 KUBECONFIG      ?= /etc/rancher/k3s/k3s.yaml
-K3S_NODE        ?= nodal
 SUDO_CTR        ?= sudo
 MODE            ?= auto
 REGISTRY_HOST   ?= $(shell bash scripts/detect-registry.sh 2>/dev/null)

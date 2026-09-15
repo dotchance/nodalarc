@@ -923,6 +923,7 @@ def test_no_escape_control_remains_in_the_facade() -> None:
     chart, no drift override and no qualification-expectation override."""
     sources = [
         (ROOT / "Makefile").read_text(),
+        (ROOT / "config.mk.example").read_text(),
         (ROOT / "scripts/na-install-platform.sh").read_text(),
         (ROOT / "scripts/na-deploy-service.sh").read_text(),
     ]
@@ -933,6 +934,7 @@ def test_no_escape_control_remains_in_the_facade() -> None:
         "E2E_RUNTIME_RELEASE",
         "E2E_RUNTIME_BUILD",
         "HELM_CONTRACT_CHART",
+        "K3S_NODE",
     ):
         assert not any(name in source for source in sources), name
 

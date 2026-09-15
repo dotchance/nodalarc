@@ -328,6 +328,10 @@ def test_producer_validation_accepts_the_registry_tables():
         ({"users.0.publish": [1]}, "pattern not a string"),
         ({"users.0.publish": ["nodalarc..ops"]}, "empty token"),
         ({"users.0.publish": ["nodalarc.>.ops"]}, "misplaced wildcard"),
+        ({"streams.0.name": "NODALARC_OME\n"}, "stream name with a trailing newline"),
+        ({"streams.0.subjects": "nodalarc.ome.>\n"}, "subjects with a trailing newline"),
+        ({"users.0.key": "admin\n"}, "user key with a trailing newline"),
+        ({"users.0.publish": ["nodalarc.>\n"]}, "pattern with a trailing newline"),
     ],
 )
 def test_producer_validation_refuses_what_the_chart_would_refuse(changes, label):

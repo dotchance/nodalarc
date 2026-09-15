@@ -504,9 +504,9 @@ def validate_messaging_inventory(inventory: dict[str, list[dict[str, object]]]) 
         if not isinstance(stream, dict):
             raise MessagingInventoryError("every stream must be a mapping")
         name, subjects = stream.get("name"), stream.get("subjects")
-        if not isinstance(name, str) or not _STREAM_NAME_RE.match(name):
+        if not isinstance(name, str) or not _STREAM_NAME_RE.fullmatch(name):
             raise MessagingInventoryError(f"stream name {name!r} is not a NODALARC_* name")
-        if not isinstance(subjects, str) or not _ROOT_WILDCARD_RE.match(subjects):
+        if not isinstance(subjects, str) or not _ROOT_WILDCARD_RE.fullmatch(subjects):
             raise MessagingInventoryError(
                 f"stream {name} subject pattern {subjects!r} is not a root wildcard"
             )
@@ -514,14 +514,14 @@ def validate_messaging_inventory(inventory: dict[str, list[dict[str, object]]]) 
         if not isinstance(user, dict):
             raise MessagingInventoryError("every user must be a mapping")
         key = user.get("key")
-        if not isinstance(key, str) or not _USER_KEY_RE.match(key):
+        if not isinstance(key, str) or not _USER_KEY_RE.fullmatch(key):
             raise MessagingInventoryError(f"user key {key!r} is not a values key")
         for field in ("publish", "subscribe"):
             patterns = user.get(field)
             if not isinstance(patterns, list):
                 raise MessagingInventoryError(f"user {key} {field} must be a list")
             for pattern in patterns:
-                if not isinstance(pattern, str) or not _SUBJECT_PATTERN_RE.match(pattern):
+                if not isinstance(pattern, str) or not _SUBJECT_PATTERN_RE.fullmatch(pattern):
                     raise MessagingInventoryError(
                         f"user {key} {field} entry {pattern!r} is not a subject pattern"
                     )

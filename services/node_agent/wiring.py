@@ -36,7 +36,7 @@ from node_agent.ground_bridge import (
     create_mediated_isl,
     create_satellite_ground_veth,
 )
-from node_agent.mpls import load_mpls_kernel_modules
+from node_agent.mpls import ensure_mpls_kernel_support
 from node_agent.namespace_ops import (
     _in_namespace,
     _write_sysctl_in_netns,
@@ -414,6 +414,24 @@ def execute_wiring(
     _write_progress(f"Cleaning stale interfaces for {total_nodes} nodes")
     _cleanup_stale_interfaces(pid_map, nodes, progress_fn=progress_fn)
 
+    # MPLS kernel support, established before its first use. Once per host per
+    # wiring attempt that needs it; the kernel's current state decides, nothing
+    # is cached. A refused node keeps this diagnostic as its failure and gets
+    # no MPLS sysctl write anywhere below (the sysctl loop, the ISL enable, the
+    # ground-interface enable); its other wiring is unchanged.
+    requires_mpls = any(bool(node_spec.get("mpls_enable")) for node_spec in nodes.values())
+    mpls_refused: set[str] = set()
+    if requires_mpls:
+        support = ensure_mpls_kernel_support()
+        if support.available:
+            log.info("MPLS kernel support verified: %s", support.diagnostic())
+        else:
+            message = f"MPLS kernel support unavailable: {support.diagnostic()}"
+            for node_id, node_spec in nodes.items():
+                if node_spec.get("mpls_enable") and pid_map.get(node_id, 0):
+                    _record_failure(node_id, "mpls", message)
+                    mpls_refused.add(node_id)
+
     # Configure sysctls in each pod namespace (via os.setns).
     sysctl_ok = 0
     sysctl_skipped = []
@@ -423,6 +441,8 @@ def execute_wiring(
             sysctl_skipped.append(node_id)
             continue
         for key, value in node_spec.get("sysctls", {}).items():
+            if node_id in mpls_refused and key.startswith("net.mpls."):
+                continue
             err = _write_sysctl_in_netns(pid, key, str(value))
             if err:
                 _record_failure(node_id, "sysctls", f"sysctl {key}={value} failed: {err}")
@@ -501,18 +521,16 @@ def execute_wiring(
                 _record_failure(nid_a, "isl_interfaces", f"mediated ISL to {nid_b}: {exc}")
                 _record_failure(nid_b, "isl_interfaces", f"mediated ISL to {nid_a}: {exc}")
     log.info("Created %d host-mediated ISL pairs", len(created_links))
-    requires_mpls = any(bool(node_spec.get("mpls_enable")) for node_spec in nodes.values())
     if requires_mpls:
-        load_mpls_kernel_modules()
         _write_progress(f"Created {len(created_links)} ISL pairs. Enabling MPLS...")
     else:
         _write_progress(f"Created {len(created_links)} ISL pairs. MPLS not requested.")
 
-    # Enable MPLS input on ISL interfaces (parallelized).
+    # Enable MPLS input on ISL interfaces (parallelized); never on a refused node.
     mpls_tasks = []
     for node_id, node_spec in nodes.items():
         pid = pid_map.get(node_id, 0)
-        if pid == 0 or not node_spec.get("mpls_enable"):
+        if pid == 0 or not node_spec.get("mpls_enable") or node_id in mpls_refused:
             continue
         for iface in node_spec.get("isl_interfaces", []):
             mpls_tasks.append((pid, iface["name"], node_id))
@@ -567,7 +585,7 @@ def execute_wiring(
                 continue
             gs_node = nodes.get(gs_id, {})
             gs_ifaces = gs_node["gnd_interfaces"]
-            gs_mpls = gs_node.get("mpls_enable", False)
+            gs_mpls = bool(gs_node.get("mpls_enable", False)) and gs_id not in mpls_refused
             gnd_futures[
                 pool.submit(_create_ground_bridge_task, gs_id, gs_pid, gs_ifaces, gs_mpls)
             ] = gs_id
@@ -579,7 +597,7 @@ def execute_wiring(
             if pid == 0:
                 continue
             sat_ifaces = node_spec["gnd_interfaces"]
-            sat_mpls = node_spec.get("mpls_enable", False)
+            sat_mpls = bool(node_spec.get("mpls_enable", False)) and node_id not in mpls_refused
             gnd_futures[
                 pool.submit(_create_sat_ground_task, node_id, pid, sat_ifaces, sat_mpls)
             ] = node_id

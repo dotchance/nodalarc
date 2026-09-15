@@ -45,6 +45,7 @@ from node_agent.command_contract import (
     validate_set_latency_request,
     worst_error_code,
 )
+from node_agent.mpls import configure_mpls_input
 from node_agent.operation_executor import execute_plan
 from node_agent.operation_plan import OperationPlan, OperationStep
 from node_agent.pid_discovery import NamespaceHandle, verify_handle
@@ -104,6 +105,11 @@ def _require_pid(node_id: str, handles: dict[str, NamespaceHandle]) -> int:
             "rewire required"
         )
     return handle.pid
+
+
+def _requires_mpls(node_id: str, handles: dict[str, NamespaceHandle]) -> bool:
+    """The manifest's MPLS requirement for a node, as bound to its published handle."""
+    return handles[node_id].mpls_enable
 
 
 def _extract_ground_ifaces(iface) -> tuple[str, str]:
@@ -504,21 +510,24 @@ def _ground_link_up(
         )
         gs_port = ground_bridge._gs_host_veth(iface.gs_id, gs_ifname)
         sat_host = ground_bridge._sat_host_veth(iface.sat_id, sat_ifname)
-        return _combine_proofs(
-            "LOCAL ground LinkUp verified",
-            [
-                kernel_verifier.verify_host_interface_state(gs_port, admin_up=True),
-                kernel_verifier.verify_host_interface_state(sat_host, admin_up=True),
-                kernel_verifier.verify_mirred(gs_port, sat_host),
-                kernel_verifier.verify_mirred(sat_host, gs_port),
-                kernel_verifier.verify_qdisc(
-                    gs_pid, gs_ifname, delay_ms=iface.latency_ms, rate_mbps=iface.bandwidth_mbps
-                ),
-                kernel_verifier.verify_qdisc(
-                    sat_pid, sat_ifname, delay_ms=iface.latency_ms, rate_mbps=iface.bandwidth_mbps
-                ),
-            ],
-        )
+        proofs = [
+            kernel_verifier.verify_host_interface_state(gs_port, admin_up=True),
+            kernel_verifier.verify_host_interface_state(sat_host, admin_up=True),
+            kernel_verifier.verify_mirred(gs_port, sat_host),
+            kernel_verifier.verify_mirred(sat_host, gs_port),
+            kernel_verifier.verify_qdisc(
+                gs_pid, gs_ifname, delay_ms=iface.latency_ms, rate_mbps=iface.bandwidth_mbps
+            ),
+            kernel_verifier.verify_qdisc(
+                sat_pid, sat_ifname, delay_ms=iface.latency_ms, rate_mbps=iface.bandwidth_mbps
+            ),
+        ]
+        # Each endpoint by its own manifest requirement.
+        if _requires_mpls(iface.gs_id, pm):
+            proofs.append(kernel_verifier.verify_mpls_input(gs_pid, gs_ifname))
+        if _requires_mpls(iface.sat_id, pm):
+            proofs.append(kernel_verifier.verify_mpls_input(sat_pid, sat_ifname))
+        return _combine_proofs("LOCAL ground LinkUp verified", proofs)
     except Exception as exc:
         msg = f"Ground up failed {iface.gs_id}<->{iface.sat_id}: {exc}"
         log.warning(msg)
@@ -780,6 +789,8 @@ def _isl_link_up_carrier_stage(
                 rate_mbps=iface.bandwidth_mbps,
             ),
         ]
+        if _requires_mpls(iface.node_id, handles):
+            proofs.append(kernel_verifier.verify_mpls_input(pid, iface.interface_name))
         if iface.locality == node_agent_pb2.LOCALITY_LOCAL:
             host_a = ground_bridge._isl_host_name(
                 iface.node_id, ground_bridge._isl_idx_from_ifname(iface.interface_name)
@@ -941,21 +952,25 @@ def handle_batch_link_up(
                     )
                 )
                 vxlan_if = vxlan_host_ifnames(iface.vni).tunnel
+                ground_proofs = [
+                    kernel_verifier.verify_vxlan(
+                        iface.vni, local_ip=local_ip, remote_ip=iface.remote_node_ip
+                    ),
+                    kernel_verifier.verify_mirred(vxlan_if, host_ifname),
+                    kernel_verifier.verify_mirred(host_ifname, vxlan_if),
+                    kernel_verifier.verify_qdisc(
+                        local_pid,
+                        iface.interface_name,
+                        delay_ms=iface.latency_ms,
+                        rate_mbps=iface.bandwidth_mbps,
+                    ),
+                ]
+                if _requires_mpls(iface.node_id, pm):
+                    ground_proofs.append(
+                        kernel_verifier.verify_mpls_input(local_pid, iface.interface_name)
+                    )
                 outcomes[_iface_key(iface)] = _combine_proofs(
-                    "CROSS_NODE ground LinkUp verified",
-                    [
-                        kernel_verifier.verify_vxlan(
-                            iface.vni, local_ip=local_ip, remote_ip=iface.remote_node_ip
-                        ),
-                        kernel_verifier.verify_mirred(vxlan_if, host_ifname),
-                        kernel_verifier.verify_mirred(host_ifname, vxlan_if),
-                        kernel_verifier.verify_qdisc(
-                            local_pid,
-                            iface.interface_name,
-                            delay_ms=iface.latency_ms,
-                            rate_mbps=iface.bandwidth_mbps,
-                        ),
-                    ],
+                    "CROSS_NODE ground LinkUp verified", ground_proofs
                 )
             except Exception as exc:
                 msg = f"VXLAN ground attach failed {iface.node_id}/{iface.interface_name}: {exc}"
@@ -969,7 +984,7 @@ def handle_batch_link_up(
             # ISL: create full VXLAN + veth pair into pod namespace
             try:
                 pid = _require_pid(iface.node_id, pm)
-                vxlan.create_vxlan_link(
+                created = vxlan.create_vxlan_link(
                     pid=pid,
                     ifname=iface.interface_name,
                     local_ip=local_ip,
@@ -985,6 +1000,17 @@ def handle_batch_link_up(
                         local_ifname=iface.interface_name,
                     )
                 )
+                if _requires_mpls(iface.node_id, pm):
+                    # The creating operation configures what it created and
+                    # only verifies what it reused; a mismatch on reuse is a
+                    # refusal. The read-back reaches the reply in the carrier
+                    # stage's proofs.
+                    configure_mpls_input(
+                        pid,
+                        iface.interface_name,
+                        created=created,
+                        subject=f"VNI {iface.vni} {iface.node_id}/{iface.interface_name}",
+                    )
                 proof = kernel_verifier.verify_vxlan(
                     iface.vni, local_ip=local_ip, remote_ip=iface.remote_node_ip
                 )
@@ -1129,6 +1155,25 @@ def _verify_kernel_inventory_entry(
         )
         local_ifname = sat_ifname if is_sat else gs_ifname
 
+        def _mpls_proofs() -> list[kernel_verifier.Proof]:
+            """Each endpoint's MPLS input by its own manifest requirement; the pod
+            interfaces exist in both expected states."""
+            found: list[kernel_verifier.Proof] = []
+            if entry.locality == node_agent_pb2.LOCALITY_LOCAL:
+                if _requires_mpls(entry.gs_id, pm):
+                    found.append(
+                        kernel_verifier.verify_mpls_input(_require_pid(entry.gs_id, pm), gs_ifname)
+                    )
+                if _requires_mpls(entry.sat_id, pm):
+                    found.append(
+                        kernel_verifier.verify_mpls_input(
+                            _require_pid(entry.sat_id, pm), sat_ifname
+                        )
+                    )
+            elif _requires_mpls(entry.node_id, pm):
+                found.append(kernel_verifier.verify_mpls_input(local_pid, local_ifname))
+            return found
+
         if entry.expected_admin_up:
             proofs = [
                 kernel_verifier.verify_host_interface_state(host_ifname, admin_up=True),
@@ -1178,6 +1223,7 @@ def _verify_kernel_inventory_entry(
                         kernel_verifier.verify_mirred(vxlan_if, host_ifname),
                     ]
                 )
+            proofs.extend(_mpls_proofs())
             return _combine_proofs("KernelInventory expected-up verified", proofs)
 
         proofs = [
@@ -1197,6 +1243,7 @@ def _verify_kernel_inventory_entry(
             )
         elif entry.vni:
             proofs.append(kernel_verifier.verify_vxlan_absent(entry.vni))
+        proofs.extend(_mpls_proofs())
         return _combine_proofs("KernelInventory expected-down verified", proofs)
     except Exception as exc:
         msg = f"KernelInventory failed {entry.node_id}/{entry.interface_name}: {exc}"

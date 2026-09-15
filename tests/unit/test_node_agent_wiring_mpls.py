@@ -1,10 +1,13 @@
 # Copyright 2024-2026 .chance (dotchance)
 # Licensed under the Apache License, Version 2.0. See LICENSE file.
-"""MPLS kernel support is established before its first use, once per wiring attempt.
+"""MPLS at wiring: kernel support before first use, then per-interface MPLS input
+owned by the operation that creates the interface and read back before ready.
 
 A refused node keeps the capability diagnostic as its failure and receives no
-MPLS sysctl write anywhere: not in the sysctl loop, not on its ISL interfaces,
-not on its ground interfaces. Everything else about the attempt is unchanged.
+MPLS sysctl write anywhere. An interface this attempt created is written and
+read back; one it reused is read and a mismatch refused; an entry whose peer is
+on another host is never touched here. Every MPLS failure lands under the
+``mpls`` phase; everything else about the attempt is unchanged.
 """
 
 from __future__ import annotations
@@ -14,7 +17,9 @@ from unittest.mock import patch
 
 import pytest
 from nodalarc.substrate.manifest_contract import REQUIRED_WIRING_PHASES, WiringManifest
-from node_agent.mpls import CapabilityProbe, ModuleLoad, MplsSupport
+from node_agent.ground_bridge import MediatedIsl, PodVeth
+from node_agent.kernel_verifier import KernelStateConflict, Proof
+from node_agent.mpls import CapabilityProbe, ModuleLoad, MplsInputError, MplsSupport
 from node_agent.pid_discovery import NamespaceHandle
 from node_agent.wiring import execute_wiring
 
@@ -22,9 +27,10 @@ LOCAL_NODE = "node02"
 MPLS_SYSCTLS = {"net.ipv4.ip_forward": "1", "net.mpls.platform_labels": "1048575"}
 
 
-def _manifest(*, mpls: bool = True) -> WiringManifest:
-    """Two MPLS satellites joined by one ISL, one MPLS ground station with one ground
-    interface, and one satellite that never asked for MPLS."""
+def _manifest(*, mpls: bool = True, cross_peer: bool = False) -> WiringManifest:
+    """Two MPLS satellites joined by one local ISL, one MPLS ground station with one
+    ground interface, one satellite that never asked for MPLS, and optionally a
+    peer on another host reachable only through a cross-host ISL."""
     sysctls = MPLS_SYSCTLS if mpls else {"net.ipv4.ip_forward": "1"}
     satellite = {
         "node_type": "satellite",
@@ -37,12 +43,11 @@ def _manifest(*, mpls: bool = True) -> WiringManifest:
         "remove_default_route": False,
         "plane": 0,
     }
+    sat_a_isls = [{"name": "isl0", "peer_node": "sat-b", "peer_iface": "isl0"}]
+    if cross_peer:
+        sat_a_isls.append({"name": "isl1", "peer_node": "sat-d", "peer_iface": "isl0"})
     nodes = {
-        "sat-a": {
-            **satellite,
-            "slot": 0,
-            "isl_interfaces": [{"name": "isl0", "peer_node": "sat-b", "peer_iface": "isl0"}],
-        },
+        "sat-a": {**satellite, "slot": 0, "isl_interfaces": sat_a_isls},
         "sat-b": {
             **satellite,
             "slot": 1,
@@ -69,6 +74,13 @@ def _manifest(*, mpls: bool = True) -> WiringManifest:
             "remove_default_route": False,
         },
     }
+    if cross_peer:
+        nodes["sat-d"] = {
+            **satellite,
+            "host": "node03",
+            "slot": 3,
+            "isl_interfaces": [{"name": "isl0", "peer_node": "sat-a", "peer_iface": "isl1"}],
+        }
     return WiringManifest.model_validate(
         {
             "session_id": "test-session",
@@ -80,7 +92,7 @@ def _manifest(*, mpls: bool = True) -> WiringManifest:
             "ground_bridges": {"gs-x": {}},
             "site_lans": {},
             "required_substrate_pairs": [],
-            "isl_link_count": 1,
+            "isl_link_count": 2 if cross_peer else 1,
         }
     )
 
@@ -122,44 +134,77 @@ def _support(*, available: bool) -> MplsSupport:
     )
 
 
-class _Run:
-    """One execute_wiring call with every kernel-touching phase replaced by recorders."""
+def _phase(status, name: str):
+    return next(phase for phase in status.phases if phase.phase == name)
 
-    def __init__(self, monkeypatch: pytest.MonkeyPatch, support: MplsSupport | None) -> None:
+
+class _Run:
+    """One execute_wiring call with every kernel-touching phase replaced by recorders.
+
+    ``created`` is the mediated ISL creator's answer for (end a, end b);
+    ``ground_created`` the ground creators' answer; ``configure_failures`` maps
+    (pid, ifname) to the exception the MPLS input step raises there;
+    ``ground_creator_failure`` makes the ground bridge creator itself fail.
+    """
+
+    def __init__(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        support: MplsSupport | None,
+        *,
+        created: tuple[bool, bool] = (True, True),
+        ground_created: bool = True,
+        configure_failures: dict[tuple[int, str], Exception] | None = None,
+        ground_creator_failure: Exception | None = None,
+    ) -> None:
         monkeypatch.setenv("NODE_NAME", LOCAL_NODE)
         self.calls: list[tuple] = []
         self.support = support
+        self.created = created
+        self.ground_created = ground_created
+        self.configure_failures = configure_failures or {}
+        self.ground_creator_failure = ground_creator_failure
 
     def __enter__(self) -> _Run:
         calls = self.calls
+        run = self
 
         def sysctl(pid, key, value, already_in_ns=False):
             calls.append(("sysctl", pid, key, value))
             return None
 
-        def mpls_input(pid, ifname):
-            calls.append(("enable_mpls_input", pid, ifname))
+        def configure(pid, ifname, *, created, subject):
+            calls.append(("configure_mpls_input", pid, ifname, created, subject))
+            failure = run.configure_failures.get((pid, ifname))
+            if failure is not None:
+                raise failure
+            return Proof.ok(f"mpls input enabled on {ifname}", f"device={ifname}", "observed=1")
 
         def check(**_kwargs):
             calls.append(("ensure_mpls_kernel_support",))
-            return self.support
+            return run.support
+
+        def mediated(pid_a, pid_b, ifname_a, ifname_b, *, node_id_a, node_id_b):
+            calls.append(("create_mediated_isl", node_id_a, ifname_a, node_id_b, ifname_b))
+            return MediatedIsl("host-a", "host-b", run.created[0], run.created[1])
+
+        def ground_bridge(gs_id, gs_pid, *, ifname):
+            calls.append(("create_ground_bridge", gs_id, ifname))
+            if run.ground_creator_failure is not None:
+                raise run.ground_creator_failure
+            return PodVeth(f"_gbr-{gs_id}", ifname, created=run.ground_created)
+
+        def sat_ground(node_id, pid, *, ifname):
+            calls.append(("create_satellite_ground_veth", node_id, ifname))
+            return PodVeth(f"_gnd-{node_id}", ifname, created=run.ground_created)
 
         self._patches = [
             patch("node_agent.wiring._cleanup_stale_interfaces", lambda *a, **k: None),
             patch("node_agent.wiring._write_sysctl_in_netns", sysctl),
-            patch("node_agent.wiring.enable_mpls_input", mpls_input),
-            patch(
-                "node_agent.wiring.create_mediated_isl",
-                lambda *a, **k: calls.append(("create_mediated_isl", a[2], a[3])),
-            ),
-            patch(
-                "node_agent.wiring.create_ground_bridge",
-                lambda *a, **k: calls.append(("create_ground_bridge", k.get("ifname"))),
-            ),
-            patch(
-                "node_agent.wiring.create_satellite_ground_veth",
-                lambda *a, **k: calls.append(("create_satellite_ground_veth",)),
-            ),
+            patch("node_agent.wiring.configure_mpls_input", configure),
+            patch("node_agent.wiring.create_mediated_isl", mediated),
+            patch("node_agent.wiring.create_ground_bridge", ground_bridge),
+            patch("node_agent.wiring.create_satellite_ground_veth", sat_ground),
             patch("node_agent.wiring.configure_interface", lambda *a, **k: None),
             patch("node_agent.wiring.finalize_pod_network", lambda *a, **k: (None, None)),
             patch("node_agent.wiring.ensure_mpls_kernel_support", check),
@@ -179,6 +224,9 @@ class _Run:
     def wire(self, manifest: WiringManifest, *, mpls: bool = True):
         return execute_wiring(manifest, namespace="testns", handles=_handles(mpls=mpls))
 
+    def configured(self) -> list[tuple]:
+        return [c[1:] for c in self.calls if c[0] == "configure_mpls_input"]
+
 
 def test_support_check_runs_once_before_the_first_sysctl_write(monkeypatch) -> None:
     with _Run(monkeypatch, _support(available=True)) as run:
@@ -195,12 +243,11 @@ def test_unavailable_support_refuses_every_mpls_node_and_writes_no_mpls_sysctl(m
 
     for node_id in ("sat-a", "sat-b", "gs-x"):
         status = statuses[node_id]
-        assert status.status != "ready", node_id
-        mpls_phase = next(phase for phase in status.phases if phase.phase == "mpls")
         # Every recorded wiring failure reports through the existing failure path,
         # which marks the node dirty_kernel; the refusal changes nothing there.
         assert status.status == "dirty_kernel", (node_id, status)
         assert status.dirty_kernel is True
+        mpls_phase = _phase(status, "mpls")
         assert mpls_phase.status == "dirty_kernel", (node_id, mpls_phase)
         message = mpls_phase.error_message
         assert message.startswith("MPLS kernel support unavailable: "), message
@@ -211,35 +258,142 @@ def test_unavailable_support_refuses_every_mpls_node_and_writes_no_mpls_sysctl(m
 
     mpls_writes = [c for c in run.calls if c[0] == "sysctl" and c[2].startswith("net.mpls.")]
     assert mpls_writes == []
-    assert [c for c in run.calls if c[0] == "enable_mpls_input"] == []
+    assert run.configured() == []
     # unrelated behavior unchanged: the forwarding sysctl, the ISL and the ground bridge still happen
     assert ("sysctl", 4002, "net.ipv4.ip_forward", "1") in run.calls
     assert ("sysctl", 4000, "net.ipv4.ip_forward", "1") in run.calls
-    assert ("create_mediated_isl", "isl0", "isl0") in run.calls
-    assert ("create_ground_bridge", "gnd0") in run.calls
+    assert ("create_mediated_isl", "sat-a", "isl0", "sat-b", "isl0") in run.calls
+    assert ("create_ground_bridge", "gs-x", "gnd0") in run.calls
 
 
-def test_available_support_after_a_failed_modprobe_proceeds_with_every_mpls_write(
-    monkeypatch,
-) -> None:
-    """The encapsulation module would not load but the kernel has the capability built in."""
+def test_created_interfaces_are_configured_and_read_back_before_ready(monkeypatch) -> None:
+    """Both ends of the created ISL and the created ground interface get the MPLS
+    input step with the creator's decision; the node without MPLS gets nothing."""
     with _Run(monkeypatch, _support(available=True)) as run:
         statuses = run.wire(_manifest())
 
     assert all(status.status == "ready" for status in statuses.values()), statuses
+    assert sorted(run.configured()) == [
+        (4000, "isl0", True, "ISL sat-a/isl0"),
+        (4001, "isl0", True, "ISL sat-b/isl0"),
+        (4003, "gnd0", True, "ground gs-x/gnd0"),
+    ]
     assert ("sysctl", 4000, "net.mpls.platform_labels", "1048575") in run.calls
     assert ("sysctl", 4003, "net.mpls.platform_labels", "1048575") in run.calls
-    enables = sorted(c[1:] for c in run.calls if c[0] == "enable_mpls_input")
-    assert enables == [(4000, "isl0"), (4001, "isl0"), (4003, "gnd0")]
+    kinds = [call[0] for call in run.calls]
+    assert kinds.index("create_mediated_isl") < kinds.index("configure_mpls_input")
 
 
-def test_wiring_without_an_mpls_node_never_checks(monkeypatch) -> None:
+def test_reused_interfaces_are_verified_with_the_creators_decision(monkeypatch) -> None:
+    with _Run(
+        monkeypatch, _support(available=True), created=(False, True), ground_created=False
+    ) as run:
+        statuses = run.wire(_manifest())
+
+    assert all(status.status == "ready" for status in statuses.values())
+    assert sorted(run.configured()) == [
+        (4000, "isl0", False, "ISL sat-a/isl0"),
+        (4001, "isl0", True, "ISL sat-b/isl0"),
+        (4003, "gnd0", False, "ground gs-x/gnd0"),
+    ]
+
+
+def test_cross_host_isl_entries_are_never_touched_at_wiring(monkeypatch) -> None:
+    """sat-a's isl1 leads to a peer on another host: no interface exists yet, so no
+    MPLS write, no read and no failure; the local pair still gets its step."""
+    with _Run(monkeypatch, _support(available=True)) as run:
+        statuses = run.wire(_manifest(cross_peer=True))
+
+    assert statuses["sat-a"].status == "ready"
+    assert [c for c in run.calls if c[0] == "create_mediated_isl"] == [
+        ("create_mediated_isl", "sat-a", "isl0", "sat-b", "isl0")
+    ]
+    assert (4000, "isl1") not in {(pid, ifname) for pid, ifname, *_ in run.configured()}
+    assert (4000, "isl0", True, "ISL sat-a/isl0") in run.configured()
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected_text"),
+    [
+        (
+            MplsInputError("ISL sat-a/isl0", "isl0", "write failed: [Errno 2] No such file"),
+            "write failed: [Errno 2] No such file",
+        ),
+        (
+            MplsInputError(
+                "ISL sat-a/isl0",
+                "isl0",
+                "written but not read back: mpls input disabled on isl0",
+                ("device=isl0", "expected=1", "observed=0"),
+            ),
+            "written but not read back: mpls input disabled on isl0 [device=isl0, expected=1, observed=0]",
+        ),
+        (
+            KernelStateConflict(
+                "ISL sat-a/isl0",
+                ("isl0@pod",),
+                ("mpls input disabled on isl0",),
+                (("device=isl0", "expected=1", "observed=0"),),
+            ),
+            "existing kernel state is not the requested link (present: isl0@pod; failed: mpls input disabled on isl0 [device=isl0, expected=1, observed=0])",
+        ),
+    ],
+    ids=["write-failed", "written-but-read-back-zero", "reused-mismatch-refused"],
+)
+def test_isl_mpls_step_failures_land_under_the_mpls_phase(
+    monkeypatch, failure, expected_text
+) -> None:
+    with _Run(
+        monkeypatch, _support(available=True), configure_failures={(4000, "isl0"): failure}
+    ) as run:
+        statuses = run.wire(_manifest())
+
+    failed = statuses["sat-a"]
+    assert failed.status == "dirty_kernel"
+    mpls_phase = _phase(failed, "mpls")
+    assert mpls_phase.status == "dirty_kernel"
+    assert expected_text in mpls_phase.error_message, mpls_phase.error_message
+    assert _phase(failed, "isl_interfaces").status == "ready"
+    assert statuses["sat-b"].status == "ready"
+    assert statuses["gs-x"].status == "ready"
+
+
+def test_ground_mpls_step_failure_is_mpls_and_ground_creator_failure_stays_ground(
+    monkeypatch,
+) -> None:
+    failure = MplsInputError("ground gs-x/gnd0", "gnd0", "write failed: Operation not permitted")
+    with _Run(
+        monkeypatch, _support(available=True), configure_failures={(4003, "gnd0"): failure}
+    ) as run:
+        statuses = run.wire(_manifest())
+    gs = statuses["gs-x"]
+    assert gs.status == "dirty_kernel"
+    assert _phase(gs, "mpls").status == "dirty_kernel"
+    assert "write failed: Operation not permitted" in _phase(gs, "mpls").error_message
+    # The failure is attributed to mpls, not to the ground creation.
+    assert _phase(gs, "ground_infrastructure").error_message == ""
+    assert _phase(gs, "ground_infrastructure").status != "dirty_kernel"
+
+    with _Run(
+        monkeypatch,
+        _support(available=True),
+        ground_creator_failure=RuntimeError("veth add failed"),
+    ) as run:
+        statuses = run.wire(_manifest())
+    gs = statuses["gs-x"]
+    assert _phase(gs, "ground_infrastructure").status == "dirty_kernel"
+    assert "veth add failed" in _phase(gs, "ground_infrastructure").error_message
+    assert (4003, "gnd0") not in {(pid, ifname) for pid, ifname, *_ in run.configured()}
+
+
+def test_wiring_without_an_mpls_node_never_checks_or_configures(monkeypatch) -> None:
     with _Run(monkeypatch, None) as run:
         statuses = run.wire(_manifest(mpls=False), mpls=False)
 
     assert all(status.status == "ready" for status in statuses.values())
     assert [c for c in run.calls if c[0] == "ensure_mpls_kernel_support"] == []
     assert [c for c in run.calls if c[0] == "sysctl" and c[2].startswith("net.mpls.")] == []
+    assert run.configured() == []
 
 
 def test_every_wiring_attempt_checks_the_kernel_again(monkeypatch) -> None:

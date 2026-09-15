@@ -549,3 +549,43 @@ def test_prove_link_admin_up_refuses_a_down_or_missing_host_device():
     assert (
         kernel_verifier.prove_link_admin_up(_LinkIpr({}), "vx00abcd").summary == "vx00abcd missing"
     )
+
+
+def test_verify_mpls_input_reads_the_switch_inside_the_pod_namespace(monkeypatch):
+    seen: list[int] = []
+
+    def _fake_run_in_pod_namespace(pid, fn):
+        seen.append(pid)
+        return "1"
+
+    monkeypatch.setattr(kernel_verifier, "run_in_pod_namespace", _fake_run_in_pod_namespace)
+
+    proof = kernel_verifier.verify_mpls_input(1234, "isl0")
+
+    assert seen == [1234]
+    assert proof.verified is True
+    assert proof.summary == "mpls input enabled on isl0"
+    assert proof.evidence == ("device=isl0", "key=net.mpls.conf.isl0.input", "observed=1")
+
+
+def test_verify_mpls_input_zero_fails_with_expected_and_observed(monkeypatch):
+    monkeypatch.setattr(kernel_verifier, "run_in_pod_namespace", lambda pid, fn: "0")
+
+    proof = kernel_verifier.verify_mpls_input(1234, "gnd0")
+
+    assert proof.verified is False
+    assert proof.summary == "mpls input disabled on gnd0"
+    assert "expected=1" in proof.evidence and "observed=0" in proof.evidence
+
+
+def test_verify_mpls_input_unreadable_switch_keeps_the_error(monkeypatch):
+    def _missing(pid, fn):
+        raise FileNotFoundError(2, "No such file or directory")
+
+    monkeypatch.setattr(kernel_verifier, "run_in_pod_namespace", _missing)
+
+    proof = kernel_verifier.verify_mpls_input(1234, "isl3")
+
+    assert proof.verified is False
+    assert proof.summary == "mpls input unreadable on isl3"
+    assert "error=No such file or directory" in proof.evidence

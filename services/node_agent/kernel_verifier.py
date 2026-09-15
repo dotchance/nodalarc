@@ -16,8 +16,10 @@ from pyroute2.netlink.rtnl import TC_H_INGRESS
 
 from node_agent.kernel_constants import (
     IFF_UP,
+    MPLS_INPUT_ENABLED,
     NETEM_TICK_TOLERANCE,
     TBF_RATE32_MAX_BPS,
+    mpls_input_sysctl,
 )
 from node_agent.namespace_runner import run_in_host_namespace, run_in_pod_namespace
 from node_agent.tc_units import delay_ms_to_netem_us, netem_us_to_ticks
@@ -62,6 +64,45 @@ def verify_pod_interface_exists(pid: int, ifname: str) -> Proof:
     if not rows:
         return Proof.fail(f"pod interface {ifname} missing", f"pid={pid}")
     return Proof.ok(f"pod interface {ifname} exists", f"pid={pid}", rows[0]["raw"])
+
+
+def verify_mpls_input(pid: int, ifname: str) -> Proof:
+    """Read a pod interface's MPLS input switch back from the kernel.
+
+    The switch lives under the pod namespace's own sysctl tree, so the read
+    happens inside that namespace. An unreadable switch is not evidence of
+    anything and fails with the error kept.
+    """
+    key = mpls_input_sysctl(ifname)
+    path = "/proc/sys/" + key.replace(".", "/")
+
+    def _read(_ipr) -> str:
+        with open(path, encoding="ascii") as handle:
+            return handle.read().strip()
+
+    try:
+        observed = run_in_pod_namespace(pid, _read)
+    except OSError as exc:
+        return Proof.fail(
+            f"mpls input unreadable on {ifname}",
+            f"device={ifname}",
+            f"key={key}",
+            f"error={exc.strerror or exc}",
+        )
+    if observed != MPLS_INPUT_ENABLED:
+        return Proof.fail(
+            f"mpls input disabled on {ifname}",
+            f"device={ifname}",
+            f"key={key}",
+            f"expected={MPLS_INPUT_ENABLED}",
+            f"observed={observed}",
+        )
+    return Proof.ok(
+        f"mpls input enabled on {ifname}",
+        f"device={ifname}",
+        f"key={key}",
+        f"observed={observed}",
+    )
 
 
 def verify_host_interface_state(ifname: str, *, admin_up: bool | None = None) -> Proof:

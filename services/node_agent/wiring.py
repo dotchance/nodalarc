@@ -36,12 +36,11 @@ from node_agent.ground_bridge import (
     create_mediated_isl,
     create_satellite_ground_veth,
 )
-from node_agent.mpls import ensure_mpls_kernel_support
+from node_agent.mpls import configure_mpls_input, ensure_mpls_kernel_support
 from node_agent.namespace_ops import (
     _in_namespace,
     _write_sysctl_in_netns,
     configure_interface,
-    enable_mpls_input,
 )
 from node_agent.pid_discovery import NamespaceHandle, discover_local_pod_handles
 
@@ -499,6 +498,10 @@ def execute_wiring(
             seen_pairs.add(pair)
 
     created_links: set[tuple[str, str]] = set()
+    # Every ISL endpoint this attempt created or reused, with the creator's
+    # decision, for the MPLS step below. Entries whose peer lives on another
+    # host are not here: their interfaces are created at LinkUp.
+    isl_endpoints: list[tuple[str, int, str, bool]] = []
     with ThreadPoolExecutor(max_workers=8) as pool:
         futures = {}
         for pid_a, pid_b, ifname_a, ifname_b, nid_a, nid_b in isl_tasks:
@@ -511,12 +514,14 @@ def execute_wiring(
                 node_id_a=nid_a,
                 node_id_b=nid_b,
             )
-            futures[fut] = (nid_a, nid_b)
+            futures[fut] = (nid_a, nid_b, pid_a, pid_b, ifname_a, ifname_b)
         total_isls = len(futures)
         for fut in as_completed(futures):
-            nid_a, nid_b = futures[fut]
+            nid_a, nid_b, pid_a, pid_b, ifname_a, ifname_b = futures[fut]
             try:
-                fut.result()
+                isl = fut.result()
+                isl_endpoints.append((nid_a, pid_a, ifname_a, isl.created_a))
+                isl_endpoints.append((nid_b, pid_b, ifname_b, isl.created_b))
                 created_links.add((min(nid_a, nid_b), max(nid_a, nid_b)))
                 if len(created_links) % 25 == 0 or len(created_links) == total_isls:
                     _write_progress(
@@ -531,30 +536,38 @@ def execute_wiring(
     else:
         _write_progress(f"Created {len(created_links)} ISL pairs. MPLS not requested.")
 
-    # Enable MPLS input on ISL interfaces (parallelized); never on a refused node.
-    mpls_tasks = []
-    for node_id, node_spec in nodes.items():
-        pid = pid_map.get(node_id, 0)
-        if pid == 0 or not node_spec.get("mpls_enable") or node_id in mpls_refused:
-            continue
-        for iface in node_spec.get("isl_interfaces", []):
-            mpls_tasks.append((pid, iface["name"], node_id))
-
+    # MPLS input on the ISL endpoints this attempt created or reused, for the
+    # nodes that require it (parallelized); a created endpoint is written and
+    # read back, a reused one is read and a mismatch refused; never on a
+    # refused node, never on an interface that does not exist yet.
+    mpls_endpoints = [
+        (nid, pid, ifname, created)
+        for nid, pid, ifname, created in isl_endpoints
+        if nodes[nid].get("mpls_enable") and nid not in mpls_refused
+    ]
+    mpls_verified = 0
     with ThreadPoolExecutor(max_workers=8) as pool:
         futures = {
-            pool.submit(enable_mpls_input, pid, ifname): (nid, ifname)
-            for pid, ifname, nid in mpls_tasks
+            pool.submit(
+                configure_mpls_input, pid, ifname, created=created, subject=f"ISL {nid}/{ifname}"
+            ): (nid, ifname)
+            for nid, pid, ifname, created in mpls_endpoints
         }
         for fut in as_completed(futures):
             nid, ifname = futures[fut]
             try:
                 fut.result()
+                mpls_verified += 1
             except Exception as exc:
-                _record_failure(nid, "mpls", f"MPLS enable failed {ifname}: {exc}")
-    log.info("MPLS input enabled on %d ISL interfaces", len(mpls_tasks))
+                _record_failure(nid, "mpls", str(exc))
+    log.info(
+        "MPLS input configured and read back on %d of %d ISL endpoints",
+        mpls_verified,
+        len(mpls_endpoints),
+    )
     if requires_mpls:
         _write_progress(
-            f"MPLS enabled on {len(mpls_tasks)} interfaces. Creating ground infrastructure..."
+            f"MPLS input verified on {mpls_verified} ISL endpoints. Creating ground infrastructure..."
         )
     else:
         _write_progress("Creating ground infrastructure...")
@@ -565,21 +578,30 @@ def execute_wiring(
     # brings it admin UP (no `shutdown` in config). With no host-side veth
     # connected, gnd0 enters LOWERLAYERDOWN (admin UP, no carrier).
 
+    class _MplsStepFailed(Exception):
+        """The ground interface exists; its MPLS input step failed. Recorded under ``mpls``."""
+
+    def _ground_mpls(pid: int, ifname: str, node_id: str, created: bool) -> None:
+        try:
+            configure_mpls_input(pid, ifname, created=created, subject=f"ground {node_id}/{ifname}")
+        except Exception as exc:
+            raise _MplsStepFailed(str(exc)) from exc
+
     def _create_ground_bridge_task(gs_id: str, gs_pid: int, gnd_ifaces: list, mpls: bool) -> None:
         for iface_spec in gnd_ifaces:
             ifname = iface_spec["name"]
-            create_ground_bridge(gs_id, gs_pid, ifname=ifname)
+            veth = create_ground_bridge(gs_id, gs_pid, ifname=ifname)
             configure_interface(gs_pid, ifname, gs_id)
             if mpls:
-                enable_mpls_input(gs_pid, ifname)
+                _ground_mpls(gs_pid, ifname, gs_id, veth.created)
 
     def _create_sat_ground_task(node_id: str, pid: int, gnd_ifaces: list, mpls: bool) -> None:
         for iface_spec in gnd_ifaces:
             ifname = iface_spec["name"]
-            create_satellite_ground_veth(node_id, pid, ifname=ifname)
+            veth = create_satellite_ground_veth(node_id, pid, ifname=ifname)
             configure_interface(pid, ifname, node_id)
             if mpls:
-                enable_mpls_input(pid, ifname)
+                _ground_mpls(pid, ifname, node_id, veth.created)
 
     with ThreadPoolExecutor(max_workers=8) as pool:
         gnd_futures = {}
@@ -617,6 +639,8 @@ def execute_wiring(
                     gs_created += 1
                 else:
                     sat_gnd_created += 1
+            except _MplsStepFailed as exc:
+                _record_failure(nid, "mpls", str(exc))
             except Exception as exc:
                 _record_failure(nid, "ground_infrastructure", str(exc))
     log.info(

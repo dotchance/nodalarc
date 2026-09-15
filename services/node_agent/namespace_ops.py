@@ -292,15 +292,3 @@ def configure_interface(pid: int, ifname: str, node_id: str, ipr: IPRoute | None
     else:
         _in_namespace(pid, _do_configure)
     log.debug("Configured %s in ns(%d): mac=%s, ipv6_autoconfig=off", ifname, pid, mac)
-
-
-def enable_mpls_input(pid: int, ifname: str) -> None:
-    """Enable MPLS input on an interface inside a namespace."""
-    err = _write_sysctl_in_netns(pid, f"net.mpls.conf.{ifname}.input", "1")
-    if err:
-        log.error(
-            "Failed to enable MPLS input for %s in ns(%d): %s — MPLS forwarding will not work on this interface",
-            ifname,
-            pid,
-            err,
-        )

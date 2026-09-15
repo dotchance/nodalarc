@@ -1782,11 +1782,12 @@ def _adjacency_on(rows: list[dict], interface: str | None) -> dict | None:
 class _PingObserver:
     """One monitored flow's packets: BusyBox ping in the published container,
     every output line stamped with the harness's receipt time as it arrives.
-    BusyBox ping exits on the first unroutable answer, so after an early exit
-    the observer starts the next instance, up to a bound, and the exit and the
-    gap are stamped records inside a continuing observation. Every instance's
-    lines, exit status and identity are kept; sequences restart with every
-    instance. Receipt stamps are not send stamps."""
+    BusyBox ping exits on the first unroutable answer, so whenever an instance
+    exits while the window is still open, early or at its count, the observer
+    starts the next instance, up to a bound, and the exit and the gap between
+    instances are stamped records inside a continuing observation. Every
+    instance's lines, exit status and identity are kept; sequences restart
+    with every instance. Receipt stamps are not send stamps."""
 
     def __init__(
         self,

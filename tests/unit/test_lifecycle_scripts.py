@@ -601,6 +601,17 @@ def _guard(tmp_path: Path, chart: Path) -> subprocess.CompletedProcess[str]:
     )
 
 
+def test_assembled_chart_carries_the_rendered_messaging_inventory(tmp_path: Path) -> None:
+    """The assembler writes the registry's messaging inventory into the output chart;
+    the source chart carries no copy, so the chart consumes what the tree authored."""
+    from nodalarc.nats_channels import render_messaging_inventory
+
+    chart = _assembled_chart(tmp_path)
+
+    assert (chart / "files/nats-messaging.yaml").read_text() == render_messaging_inventory()
+    assert not (ROOT / "deploy/helm/files/nats-messaging.yaml").exists()
+
+
 def test_assembled_chart_records_its_content_digest(tmp_path: Path) -> None:
     import yaml
 

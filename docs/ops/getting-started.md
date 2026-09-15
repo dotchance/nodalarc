@@ -143,6 +143,8 @@ Available session configs:
 | `earth-leo-simple.yaml` | 36 | Default. MBB-capable single-shell LEO starter |
 | `earth-leo-walker.yaml` | 176 | Walker-delta LEO starter |
 | `earth-leo-polar.yaml` | 36 | Polar LEO starter with high-latitude gateway sites |
+| `earth-leo-polar-seam.yaml` | 36 | Polar seam experiment: range-driven seam link transitions |
+| `earth-leo-polar-seam-tracking.yaml` | 36 | Polar seam experiment: tracking-limit exceedance and recovery |
 | `earth-meo-gps.yaml` | 24 | GPS-altitude MEO starter with long-range RF gateways |
 | `earth-geo-inmarsat.yaml` | 4 | Representative GEO commercial-relay-style starter |
 | `earth-geo-tdrs.yaml` | 6 | Representative GEO relay/TDRS-style starter |

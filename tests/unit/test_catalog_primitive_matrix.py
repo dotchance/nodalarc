@@ -53,6 +53,7 @@ SITES = sorted((CATALOG / "sites").rglob("*.yaml"))
 CONSTELLATION_GROUND_SETS = {
     "earth-leo-ring-36": "nodalarc:site-sets/earth/leo/earth-leo-starlink-gateway-sites.yaml",
     "earth-leo-polar-36": "nodalarc:site-sets/earth/leo/earth-leo-polar-gateway-sites.yaml",
+    "earth-leo-polar-36-seam-crossing": "nodalarc:site-sets/earth/leo/earth-leo-polar-gateway-sites.yaml",
     "earth-leo-polar-66": "nodalarc:site-sets/earth/earth-quic-lab-sites.yaml",
     "earth-leo-walker-delta-176": "nodalarc:site-sets/earth/leo/earth-leo-starlink-pop-sites.yaml",
     "earth-meo-gps-24": "nodalarc:site-sets/earth/meo/earth-meo-gateway-sites.yaml",

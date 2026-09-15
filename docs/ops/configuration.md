@@ -545,6 +545,8 @@ make session DEFAULT_SESSION=catalog/nodalarc/sessions/earth-leo-walker.yaml
 | `earth-leo-simple` | Single 36-satellite LEO ring with gateway sites. |
 | `earth-leo-walker` | Walker-delta LEO shell. |
 | `earth-leo-polar` | Polar LEO shell with high-latitude gateway sites. |
+| `earth-leo-polar-seam` | Polar LEO shell with the Walker-star seam pairs added: six counter-rotating links that come and go by range twice per orbit. |
+| `earth-leo-polar-seam-tracking` | Polar LEO shell phased for close seam crossings: the seam links exceed the terminal's tracking rate for about 30 s per pass and recover. |
 | `earth-meo-gps` | GPS-altitude MEO shell. |
 | `earth-geo-inmarsat` | Representative fixed GEO commercial relay slots. |
 | `earth-geo-tdrs` | Representative fixed GEO relay slots. |
@@ -554,7 +556,7 @@ make session DEFAULT_SESSION=catalog/nodalarc/sessions/earth-leo-walker.yaml
 | `earth-luna-quic` | Earth-to-Luna QUIC application path with host endpoints at both ends. |
 
 The shipped sessions are examples assembled from a larger reusable catalog.
-Six omit explicit routing and therefore use the default IS-IS domain. The
+Eight omit explicit routing and therefore use the default IS-IS domain. The
 Earth-Luna reachability session demonstrates explicit multiple domains and a
 `static_ip` boundary. A deployed session may legitimately converge slowly or
 remain unreachable; NodalArc does not repair an experimental routing result.

@@ -259,6 +259,8 @@ class TestTickRateContract:
     DECLARED_TICKS = {
         "earth-leo-simple": 1,
         "earth-leo-polar": 1,
+        "earth-leo-polar-seam": 1,
+        "earth-leo-polar-seam-tracking": 1,
         "earth-leo-walker": 1,
         "earth-meo-gps": 1,
         "earth-leo-heo-geo-luna-reachability": 1,

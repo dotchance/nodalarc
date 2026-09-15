@@ -43,6 +43,8 @@ still decide whether a link is actually active.
 | `earth-leo-simple.yaml` | Default Earth LEO starter: 36-satellite ring, gateway sites, MBB-capable access. |
 | `earth-leo-walker.yaml` | Walker-delta LEO shell. |
 | `earth-leo-polar.yaml` | Polar LEO shell with high-latitude gateway sites. |
+| `earth-leo-polar-seam.yaml` | Polar LEO shell with the Walker-star seam pairs added: six counter-rotating links that come and go by range twice per orbit. |
+| `earth-leo-polar-seam-tracking.yaml` | Polar LEO shell phased for close seam crossings: the seam links exceed the terminal's tracking rate for about 30 s per pass and recover. |
 | `earth-meo-gps.yaml` | GPS-altitude MEO geometry with long-range RF gateways. |
 | `earth-geo-inmarsat.yaml` | Representative GEO commercial-relay-style session. |
 | `earth-geo-tdrs.yaml` | Representative GEO relay/TDRS-style session. |

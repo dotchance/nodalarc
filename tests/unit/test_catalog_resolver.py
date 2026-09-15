@@ -127,6 +127,12 @@ SHIPPED_SESSION_SHAPES = {
     # carries inter-chain connectivity (BBM bridge gateways hold steady
     # multi-links; MBB's reserve would forbid bridging).
     "earth-leo-polar.yaml": (45, 282),
+    # 45/288: the polar sky plus the six counter-rotating seam pairs (plane 5
+    # to plane 0, same slot), a range-transition experiment.
+    "earth-leo-polar-seam.yaml": (45, 288),
+    # 45/258: the seam-crossing phasing of the same shell with only the six
+    # two-slot-offset seam pairs, a tracking-limit experiment.
+    "earth-leo-polar-seam-tracking.yaml": (45, 258),
     "earth-leo-simple.yaml": (41, 180),
     # 1056 = 880 + 176: the ISL rule moved from nearest_n (176 degree-capped
     # pairs, a disconnected graph) to the explicit 352-pair grid.
